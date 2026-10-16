@@ -1,0 +1,227 @@
+TOFU ?= tofu
+MODULES := management-cluster
+# Where `make image` pushes the controller's image and `make capmox-image` capmox's; KO_FLAGS such
+# as --tags or --insecure-registry.
+IMAGE ?= ghcr.io/kubehenge/kubehenge
+CAPMOX_IMAGE ?= ghcr.io/kubehenge/cluster-api-provider-proxmox
+KO_FLAGS ?=
+
+.PHONY: build web dist index image capmox-image lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-templates e2e-volumes e2e-interface e2e-appliance
+.PHONY: fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker unit-go unit-web unit-tofu tofu-init
+# Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
+# each step's output is printed together once it ends.
+MAKEFLAGS += --jobs=$(shell getconf _NPROCESSORS_ONLN) --output-sync=target
+# The symbol table and DWARF go: a third of the binary, and stack traces keep their names without them.
+LDFLAGS := -s -w -buildid=
+
+build: web
+	CGO_ENABLED=0 go build -trimpath -ldflags='$(LDFLAGS)' -o bin/kubehenge ./cmd/kubehenge
+
+# The frontend's packages, installed again only when the lockfile changes.
+web/node_modules/.package-lock.json: web/package-lock.json
+	cd web && npm ci --no-fund --no-audit
+	touch $@
+
+# The web interface's frontend, built into pkg/ui/dist, which the binary embeds, and built again only
+# when a source changes. Vite empties the directory first, so nothing may compile pkg/ui meanwhile:
+# every Go step waits for this one. .keep is what lets Go compile pkg/ui before the first build.
+WEB_SOURCES := $(shell find web/src -type f) web/index.html web/package.json web/tsconfig.json web/vite.config.ts
+pkg/ui/dist/index.html: web/node_modules/.package-lock.json $(WEB_SOURCES)
+	cd web && npm run build
+	touch pkg/ui/dist/.keep
+
+web: pkg/ui/dist/index.html
+
+# The appliance's release archive, which appliance/install.sh installs: the binary, the
+# management-cluster module with the charts it installs, the shared Headlamp (its server and
+# frontend, taken from its Linux release) and the service units.
+# The release key the appliance verifies upgrades with is pkg/release/release.pub unless RELEASE_KEY
+# names another (base64 Ed25519 public key).
+VERSION ?= 0.1.0
+RELEASE_KEY ?= $(shell cat pkg/release/release.pub 2>/dev/null)
+RELEASE_LDFLAGS = $(LDFLAGS) -X github.com/kubehenge/kubehenge/pkg/release.Version=$(VERSION) -X github.com/kubehenge/kubehenge/pkg/release.publicKey=$(RELEASE_KEY)
+# The controller image the release's chart runs, by digest (repository@sha256:...); unset, the chart
+# names it by its version's tag.
+CONTROLLER_IMAGE ?=
+HEADLAMP_VERSION := 0.46.0
+HEADLAMP_SHA256 := 1747c5de63963be925ded64dc2a5308144d260e43452855169bc771f03846434
+HEADLAMP_TARBALL := dist/cache/Headlamp-$(HEADLAMP_VERSION)-linux-x64.tar.gz
+UNITS := kubehenge.service kubehenge-update.service kubehenge-update.path kubehenge-headlamp.service kubehenge-headlamp.socket kubehenge-headlamp-proxy.service
+dist: web
+	rm -rf dist/stage && mkdir -p dist/stage/bin dist/stage/share/kubehenge/appliance dist/stage/share/kubehenge/headlamp/plugins dist/cache
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='$(RELEASE_LDFLAGS)' \
+		-o dist/stage/bin/kubehenge ./cmd/kubehenge
+	tar -cf - --exclude=.terraform --exclude=tests --exclude='*.tfstate*' --exclude='*.go' management-cluster charts | tar -xf - -C dist/stage/share/kubehenge
+	if [ -n '$(CONTROLLER_IMAGE)' ]; then \
+		sed -i 's|^image: ""$$|image: "$(CONTROLLER_IMAGE)"|' dist/stage/share/kubehenge/charts/kubehenge/values.yaml && \
+		grep -qxF 'image: "$(CONTROLLER_IMAGE)"' dist/stage/share/kubehenge/charts/kubehenge/values.yaml; \
+	fi
+	test -f $(HEADLAMP_TARBALL) || curl -fsSL --proto '=https' -o $(HEADLAMP_TARBALL) \
+		https://github.com/kubernetes-sigs/headlamp/releases/download/v$(HEADLAMP_VERSION)/Headlamp-$(HEADLAMP_VERSION)-linux-x64.tar.gz
+	echo '$(HEADLAMP_SHA256)  $(HEADLAMP_TARBALL)' | sha256sum -c --quiet - || { rm -f $(HEADLAMP_TARBALL); exit 1; }
+	tar -xzf $(HEADLAMP_TARBALL) -C dist/stage/share/kubehenge/headlamp --strip-components=2 \
+		$(foreach f,headlamp-server frontend LICENSE NOTICE,Headlamp-$(HEADLAMP_VERSION)-linux-x64/resources/$(f))
+	cp $(addprefix appliance/,$(UNITS)) dist/stage/share/kubehenge/appliance/
+	mkdir -p dist/stage/share/kubehenge/pve-entry
+	cp pve-entry/install.sh pve-entry/kubehenge-entry.js pve-entry/README.md dist/stage/share/kubehenge/pve-entry/
+	cp LICENSE dist/stage/share/kubehenge/
+	printf '%s\n' '$(VERSION)' > dist/stage/share/kubehenge/VERSION
+	# Modes are set here, not taken from the build machine's file system, which may keep none.
+	tar -cf dist/stage.tar --owner=0 --group=0 --sort=name --mode=u=rwX,go=rX \
+		--exclude=./bin/kubehenge --exclude=./share/kubehenge/headlamp/headlamp-server -C dist/stage .
+	tar -rf dist/stage.tar --owner=0 --group=0 --mode=0755 -C dist/stage ./bin/kubehenge ./share/kubehenge/headlamp/headlamp-server
+	gzip -n -c dist/stage.tar > dist/kubehenge_$(VERSION)_linux_amd64.tar.gz && rm dist/stage.tar
+	cd dist && sha256sum kubehenge_$(VERSION)_linux_amd64.tar.gz > kubehenge_$(VERSION)_SHA256SUMS
+	rm -rf dist/stage
+	# The install script carries the version and checksum of the archive it installs.
+	sed -e 's/^KUBEHENGE_VERSION=.*/KUBEHENGE_VERSION=$(VERSION)/' \
+		-e "s/^KUBEHENGE_SHA256=.*/KUBEHENGE_SHA256=$$(cut -d' ' -f1 dist/kubehenge_$(VERSION)_SHA256SUMS)/" \
+		appliance/install.sh > dist/install.sh
+	cd dist && sha256sum install.sh >> kubehenge_$(VERSION)_SHA256SUMS
+
+# The release index to sign: the previous release's (PREVIOUS, its .sig beside it), checked against
+# the release key, with this release added. Run after dist.
+TOFU_VERSION = $(shell sed -n 's/^TOFU_VERSION=//p' appliance/install.sh)
+TOFU_SHA256 = $(shell sed -n 's/^TOFU_SHA256=//p' appliance/install.sh)
+index:
+	CGO_ENABLED=0 go build -trimpath -ldflags='$(RELEASE_LDFLAGS)' -o bin/kubehenge-release ./cmd/kubehenge
+	bin/kubehenge-release release index $(if $(PREVIOUS),--previous $(PREVIOUS)) --version $(VERSION) \
+		--url https://github.com/kubehenge/kubehenge/releases/download/v$(VERSION)/kubehenge_$(VERSION)_linux_amd64.tar.gz \
+		--sha256 $$(sed -n 's/  kubehenge_$(VERSION)_linux_amd64.tar.gz$$//p' dist/kubehenge_$(VERSION)_SHA256SUMS) \
+		--tofu-version $(TOFU_VERSION) \
+		--tofu-url https://github.com/opentofu/opentofu/releases/download/v$(TOFU_VERSION)/tofu_$(TOFU_VERSION)_linux_amd64.tar.gz \
+		--tofu-sha256 $(TOFU_SHA256) > dist/index.json
+
+# Builds and pushes the image the management cluster runs the controller from, and prints its
+# reference by digest.
+image: web
+	KO_DOCKER_REPO=$(IMAGE) ko build --bare $(KO_FLAGS) ./cmd/kubehenge
+
+# Builds and pushes the capmox image the management cluster runs (capmox_build in
+# management-cluster/versions.tf), checks its digest and prints its reference by digest.
+capmox-image:
+	sh hack/capmox-image.sh $(CAPMOX_IMAGE) $(KO_FLAGS)
+
+# Lint and static tier: Go, the frontend, Terraform/OpenTofu, Helm charts, shell, the workflows,
+# YAML, Markdown and the e2e image's Dockerfile, each at its strictest settings; the files are the
+# repository's own, as git lists them.
+lint: lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker
+
+FILES = git ls-files --cached --others --exclude-standard
+SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh appliance/*.sh pve-entry/*.sh hack/*.sh
+# Run from their package indexes at these versions, which check each download's hash.
+YAMLLINT := uvx yamllint@1.38.0
+ZIZMOR := uvx zizmor@1.31.1
+MARKDOWNLINT := npx --yes markdownlint-cli2@0.23.3
+
+# Rewrites what the format checks below would refuse.
+fmt: web/node_modules/.package-lock.json
+	golangci-lint fmt ./...
+	$(TOFU) fmt -recursive
+	shfmt -w $(SHELL_SCRIPTS)
+	cd web && npm run fmt
+	npm --prefix web exec --no -- oxfmt -c web/.oxfmtrc.json pve-entry
+
+# For both systems the code builds for: the appliance and images on Linux, the tests also on Windows.
+# Without cgo, as the binary is built, and so that a cross-system check needs no C toolchain.
+lint-go: web
+	go mod tidy -diff
+	CGO_ENABLED=0 GOOS=linux golangci-lint run ./...
+	CGO_ENABLED=0 GOOS=windows golangci-lint run ./...
+
+# oxfmt's check, type-aware oxlint and TypeScript's check; the build leaves the types to this step.
+# The Proxmox VE entry's script is plain JavaScript, checked with the interface's tools.
+lint-web: web/node_modules/.package-lock.json
+	cd web && npm run lint
+	npm --prefix web exec --no -- oxfmt --check -c web/.oxfmtrc.json pve-entry
+	npm --prefix web exec --no -- oxlint -c pve-entry/.oxlintrc.json --deny-warnings --report-unused-disable-directives pve-entry
+
+tofu-init:
+	set -e; for m in $(MODULES); do $(TOFU) -chdir=$$m init -backend=false -input=false >/dev/null; done
+
+lint-tofu: tofu-init
+	$(TOFU) fmt -check -recursive -diff
+	set -e; for m in $(MODULES); do \
+		$(TOFU) -chdir=$$m validate; \
+		tflint --chdir=$$m --recursive --config=$(CURDIR)/.tflint.hcl; \
+	done
+
+# With the values they are installed with, which their schemas check.
+lint-helm:
+	helm lint --strict charts/kubehenge --values pkg/provisioner/testdata/integration-values.yaml
+	helm lint --strict management-cluster/charts/cluster-api-providers --set image=ghcr.io/kubehenge/kubehenge:v$(VERSION)
+
+lint-shell:
+	shellcheck -x -P SCRIPTDIR -o all -S style $(SHELL_SCRIPTS)
+	shfmt -d $(SHELL_SCRIPTS)
+	@# A checkout on a file system without modes records none, and the workflows run scripts directly.
+	@git ls-files -s '*.sh' | awk '$$1 != "100755" { print $$4 ": not executable in git; git update-index --chmod=+x " $$4; bad = 1 } END { exit bad }'
+
+# zizmor runs its online audits too when GH_TOKEN is set.
+lint-actions:
+	actionlint .github/workflows/*.yml
+	$(ZIZMOR) --persona=auditor .github/workflows/
+
+lint-yaml:
+	$(YAMLLINT) --strict $$($(FILES) '*.yml' '*.yaml' ':!:*/templates/*')
+
+lint-markdown:
+	$(MARKDOWNLINT) $$($(FILES) '*.md')
+
+lint-docker:
+	hadolint --failure-threshold style test/e2e/pve/Dockerfile
+
+# Unit tier: the Go packages, under the race detector, the frontend, and each Terraform/OpenTofu
+# configuration against mocked providers.
+unit: unit-go unit-web unit-tofu
+
+unit-go: web
+	go test -race ./...
+
+unit-web: web/node_modules/.package-lock.json
+	cd web && npm test
+
+unit-tofu: tofu-init
+	set -e; for m in $(MODULES); do $(TOFU) -chdir=$$m test; done
+
+test: lint unit
+
+# Integration tier: the chart and the controllers against a real API server, envtest's kube-apiserver
+# and etcd, with the CRDs of the releases the management cluster installs; no Proxmox VE, no
+# containers. Its assets are fetched once, into Go's own directory.
+INTEGRATION_ASSETS ?= $(subst \,/,$(shell go env GOPATH))/kubehenge-integration
+integration: web
+	hack/integration-assets.sh $(INTEGRATION_ASSETS)
+	KUBEBUILDER_ASSETS=$(INTEGRATION_ASSETS)/bin KUBEHENGE_INTEGRATION_CRDS=$(INTEGRATION_ASSETS)/crds \
+		go test -tags integration -count=1 -run '^TestIntegration' ./pkg/...
+
+# End-to-end tier: needs a Proxmox VE host. DIR is a root configuration applying management-cluster/.
+e2e-management-cluster:
+	TOFU=$(TOFU) test/e2e/management-cluster.sh $(DIR)
+
+e2e-management-cluster-upgrade:
+	TOFU=$(TOFU) test/e2e/management-cluster-upgrade.sh $(DIR)
+
+# Against the management cluster in KUBECONFIG; settings in test/e2e/workload-cluster.sh.
+e2e-workload-cluster:
+	test/e2e/workload-cluster.sh $(CLASS) $(VERSION) $(UPGRADE)
+
+# Against the management cluster in KUBECONFIG; settings in test/e2e/rancher.sh.
+e2e-rancher:
+	test/e2e/rancher.sh
+
+# Settings come from KUBEHENGE_PROXMOX_* and KUBEHENGE_E2E_*; see pkg/templates/e2e_test.go.
+e2e-templates:
+	go test -tags e2e -timeout 2h -count=1 -v -run TestTemplatesEndToEnd ./pkg/templates/
+
+# Against the management cluster in KUBECONFIG (an admin kubeconfig) at KUBEHENGE_E2E_API_ENDPOINT.
+e2e-interface:
+	go test -tags e2e -timeout 10m -count=1 -v -run TestInterfaceKubeconfigEndToEnd ./pkg/appliance/
+
+# As root on a Proxmox VE node, with two releases from `make dist`; settings in test/e2e/appliance.sh.
+e2e-appliance:
+	test/e2e/appliance.sh $(RELEASE) $(NEWER) $(SETTINGS)
+
+# Settings come from KUBEHENGE_PROXMOX_* and KUBEHENGE_E2E_*; see pkg/provisioner/e2e_test.go.
+e2e-volumes:
+	go test -tags e2e -timeout 30m -count=1 -v -run TestVolumesEndToEnd ./pkg/provisioner/

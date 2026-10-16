@@ -1,0 +1,233 @@
+{{- $class := "kubehenge-kubeadm" }}
+{{- $clusterSpec := include "kubehenge.proxmoxClusterSpec" . }}
+{{- /* Placeholder tags: patches select the template of each machine's Kubernetes version. */}}
+{{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "kubeadm" "kubehenge" "ubuntu-26.04")) }}
+{{- $controlPlaneSpec := include "kubehenge.kubeadmControlPlaneSpec" . }}
+{{- $workerSpec := include "kubehenge.kubeadmWorkerSpec" . }}
+{{- $clusterName := include "kubehenge.hashedName" (dict "name" $class "spec" $clusterSpec) }}
+{{- $machineName := include "kubehenge.hashedName" (dict "name" (printf "%s-machine" $class) "spec" $machineSpec) }}
+{{- $controlPlaneName := include "kubehenge.hashedName" (dict "name" (printf "%s-control-plane" $class) "spec" $controlPlaneSpec) }}
+{{- $workerName := include "kubehenge.hashedName" (dict "name" (printf "%s-worker" $class) "spec" $workerSpec) }}
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: ClusterClass
+metadata:
+  name: {{ $class }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # kubeadm brings no CNI: Kubehenge's controller installs the one the cni variable names.
+    kubehenge.dev/cni: cilium,calico
+    # kubeadm's own service range, and the pod range the controller gives the CNI, for a Cluster
+    # that sets none.
+    kubehenge.dev/default-pods: 10.244.0.0/16
+    kubehenge.dev/default-services: 10.96.0.0/12
+    {{- if .Values.proxmox.ha }}
+    # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
+    kubehenge.dev/proxmox-ha: "true"
+    {{- end }}
+spec:
+  infrastructure:
+    templateRef:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+      kind: ProxmoxClusterTemplate
+      name: {{ $clusterName }}
+  controlPlane:
+    templateRef:
+      apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+      kind: KubeadmControlPlaneTemplate
+      name: {{ $controlPlaneName }}
+    machineInfrastructure:
+      templateRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+        kind: ProxmoxMachineTemplate
+        name: {{ $machineName }}
+    naming:
+      template: {{ "{{ .cluster.name }}-control-plane-{{ .random }}" | quote }}
+    healthCheck:
+      {{- include "kubehenge.healthCheck" "controlPlane" | nindent 6 }}
+  workers:
+    machineDeployments:
+      - class: worker
+        naming:
+          template: {{ "{{ .cluster.name }}-{{ .machineDeployment.topologyName }}-{{ .random }}" | quote }}
+        bootstrap:
+          templateRef:
+            apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+            kind: KubeadmConfigTemplate
+            name: {{ $workerName }}
+        infrastructure:
+          templateRef:
+            apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+            kind: ProxmoxMachineTemplate
+            name: {{ $machineName }}
+        healthCheck:
+          {{- include "kubehenge.healthCheck" "workers" | nindent 10 }}
+  variables:
+    {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "controlPlaneMinMemoryMiB" 2048 "clusters" .Values.clusters) | nindent 4 }}
+    {{- include "kubehenge.addonVariables" . | nindent 4 }}
+    {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
+    {{- include "kubehenge.oidcVariable" . | nindent 4 }}
+    - name: cni
+      required: true
+      schema:
+        openAPIV3Schema:
+          type: string
+          description: The CNI plugin, fixed once the cluster exists. kubeadm has none of its own, so one is chosen for every cluster.
+          enum: [cilium, calico]
+          {{- include "kubehenge.cniFixed" . | nindent 10 }}
+  patches:
+    {{- include "kubehenge.proxmoxPatches" . | nindent 4 }}
+    {{- range $role, $sel := dict "control-plane" (dict "selector" (dict "controlPlane" true) "version" ".builtin.controlPlane.version") "worker" (dict "selector" (dict "machineDeploymentClass" (dict "names" (list "worker"))) "version" ".builtin.machineDeployment.version") }}
+    - name: kubeadm-{{ $role }}-template
+      definitions:
+        - selector:
+            apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+            kind: ProxmoxMachineTemplate
+            matchResources:
+              {{- toYaml $sel.selector | nindent 14 }}
+          jsonPatches:
+            # The template `kubehenge template create kubeadm` builds for the machine's version.
+            - op: replace
+              path: /spec/template/spec/templateSelector/matchTags
+              valueFrom:
+                template: |
+                  - kubeadm
+                  - kubehenge
+                  - kubernetes-{{ printf "{{ %s }}" $sel.version }}
+                  - ubuntu-26.04
+    {{- end }}
+    - name: kubeadm-control-plane
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: KubeadmControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/kubeadmConfigSpec/files/-
+              valueFrom:
+                template: |
+                  {{- include "kubehenge.kubeVipFile" (dict "path" "/etc/kubernetes/manifests/kube-vip.yaml" "kubeconfig" "/etc/kubernetes/admin.conf") | nindent 18 }}
+    - name: kubeadm-oidc
+      enabledIf: {{ include "kubehenge.oidcEnabled" . }}
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: KubeadmControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/kubeadmConfigSpec/files/-
+              valueFrom:
+                template: |
+                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/etc/kubernetes/authentication-config.yaml") | nindent 18 }}
+            - op: add
+              path: /spec/template/spec/kubeadmConfigSpec/clusterConfiguration
+              value:
+                apiServer:
+                  extraArgs:
+                    - name: authentication-config
+                      value: /etc/kubernetes/authentication-config.yaml
+                  extraVolumes:
+                    - name: authentication-config
+                      hostPath: /etc/kubernetes/authentication-config.yaml
+                      mountPath: /etc/kubernetes/authentication-config.yaml
+                      readOnly: true
+                      pathType: File
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+kind: ProxmoxClusterTemplate
+metadata:
+  name: {{ $clusterName }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- $clusterSpec | nindent 2 }}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+kind: ProxmoxMachineTemplate
+metadata:
+  name: {{ $machineName }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- $machineSpec | nindent 2 }}
+---
+{{ include "kubehenge.classTemplates" (dict "class" $class "namespace" .Release.Namespace "templates" (list
+  (dict "apiVersion" "controlplane.cluster.x-k8s.io/v1beta2" "kind" "KubeadmControlPlaneTemplate" "name" $controlPlaneName "spec" $controlPlaneSpec)
+  (dict "apiVersion" "bootstrap.cluster.x-k8s.io/v1beta2" "kind" "KubeadmConfigTemplate" "name" $workerName "spec" $workerSpec)
+)) }}
+
+{{- define "kubehenge.kubeadmNodeRegistration" -}}
+nodeRegistration:
+  kubeletExtraArgs:
+    # The Proxmox VE cloud controller manager initialises the nodes.
+    - name: cloud-provider
+      value: external
+    # capmox names a machine by its VM's SMBIOS UUID, which cloud-init reads as the instance ID.
+    - name: provider-id
+      value: proxmox://{{ "{{ ds.meta_data.instance_id }}" }}
+{{- end -}}
+
+{{/*
+The kubelet's node IP. With an external cloud provider the kubelet sets no node addresses of its
+own; the Proxmox VE cloud controller manager takes them from the IP the kubelet was given, and
+without one the API server can reach no kubelet (logs, exec, and kubeadm's etcd checks fail).
+RKE2 and k3s pass the address of the default route's interface; kubeadm leaves it to the node, so
+it is found the same way before kubeadm runs. 192.0.2.1 is a documentation address: the route
+lookup sends nothing.
+*/}}
+{{- define "kubehenge.kubeadmNodeIPFile" -}}
+- path: /etc/kubehenge/node-ip.sh
+  owner: root:root
+  permissions: "0700"
+  content: |
+    #!/bin/sh
+    set -eu
+    ip=$(ip -4 -o route get 192.0.2.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p')
+    [ -n "$ip" ]
+    printf 'KUBELET_EXTRA_ARGS=--node-ip=%s\n' "$ip" > /etc/default/kubelet
+{{- end -}}
+
+{{- define "kubehenge.kubeadmControlPlaneSpec" -}}
+template:
+  spec:
+    kubeadmConfigSpec:
+      initConfiguration:
+        {{- include "kubehenge.kubeadmNodeRegistration" . | nindent 8 }}
+      joinConfiguration:
+        {{- include "kubehenge.kubeadmNodeRegistration" . | nindent 8 }}
+      files:
+        # kubeadm init grants admin.conf its rights through the API server kube-vip has yet to put
+        # behind the virtual IP, so on the first node kube-vip starts with super-admin.conf
+        # (kube-vip/kube-vip#684) and is moved back to admin.conf once init is done, rather than
+        # keep credentials that bypass authorisation for the life of the node.
+        - path: /etc/kubehenge/kube-vip-credentials.sh
+          owner: root:root
+          permissions: "0700"
+          content: |
+            #!/bin/sh
+            set -eu
+            [ -f /run/kubeadm/kubeadm.yaml ] || exit 0
+            case "$1" in
+                init) from=admin.conf to=super-admin.conf ;;
+                done) from=super-admin.conf to=admin.conf ;;
+            esac
+            sed -i "s#path: /etc/kubernetes/$from#path: /etc/kubernetes/$to#" /etc/kubernetes/manifests/kube-vip.yaml
+        {{- include "kubehenge.kubeadmNodeIPFile" . | nindent 8 }}
+      preKubeadmCommands:
+        - /etc/kubehenge/node-ip.sh
+        - /etc/kubehenge/kube-vip-credentials.sh init
+      postKubeadmCommands:
+        - /etc/kubehenge/kube-vip-credentials.sh done
+{{- end -}}
+
+{{- define "kubehenge.kubeadmWorkerSpec" -}}
+template:
+  spec:
+    joinConfiguration:
+      {{- include "kubehenge.kubeadmNodeRegistration" . | nindent 6 }}
+    files:
+      {{- include "kubehenge.kubeadmNodeIPFile" . | nindent 6 }}
+    preKubeadmCommands:
+      - /etc/kubehenge/node-ip.sh
+{{- end -}}

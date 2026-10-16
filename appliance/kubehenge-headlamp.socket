@@ -1,0 +1,11 @@
+[Unit]
+Description=Headlamp for Kubehenge's clusters, started by its first connection
+Documentation=https://github.com/kubehenge/kubehenge
+PartOf=kubehenge.service
+# An upgrade restarts Headlamp from an earlier unit that listened here itself; the socket binds
+# only once that has let go of the port.
+After=kubehenge-headlamp.service
+
+[Socket]
+ListenStream=127.0.0.1:4466
+Service=kubehenge-headlamp-proxy.service

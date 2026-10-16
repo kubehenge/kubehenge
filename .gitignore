@@ -1,0 +1,25 @@
+/bin/
+/dist/
+# Test binaries from `go test -c` and profiles from `go test -cpuprofile`.
+*.test
+*.test.exe
+*.prof
+
+# The frontend's dependencies and build, which `make web` produces; .keep lets Go compile without it.
+/web/node_modules/
+/pkg/ui/dist/*
+!/pkg/ui/dist/.keep
+
+# Terraform/OpenTofu working files, state and inputs: state and variables hold credentials.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+
+# Cluster credentials; the source files of that name are code.
+kubeconfig*
+talosconfig*
+!*.go
+*.pem

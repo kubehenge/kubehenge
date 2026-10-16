@@ -1,0 +1,507 @@
+package provisioner
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/yaml"
+)
+
+const (
+	// workloadSecret is the Secret the cloud controller manager and the CSI plugin read their
+	// configuration and the Proxmox VE CA from, in each workload cluster.
+	workloadSecret = "kubehenge-proxmox" //nolint:gosec // a Secret's name, not a credential
+	// proxmoxCAKey holds the Proxmox VE CA in workloadSecret.
+	proxmoxCAKey = "ca.crt"
+	secretKind   = "Secret"
+
+	// The add-ons' names, which name their cluster variables, proxies and releases too.
+	headlampAddon    = "headlamp"
+	rancherAddon     = "rancher"
+	certManagerAddon = "cert-manager"
+	// rancherNamespace is the namespace Rancher's chart has to be installed in.
+	rancherNamespace = "cattle-system"
+
+	// The CNIs Kubehenge installs, as the cni variable names them.
+	cniCilium = "cilium"
+	cniCalico = "calico"
+)
+
+// Charts locates the Helm charts installed into clusters: the cloud controller manager and CSI
+// plugin into every one, a CNI into those whose distribution has none of its own, and the add-ons
+// a cluster switches on.
+type Charts struct {
+	CCM      Chart
+	CSI      Chart
+	Cilium   Chart
+	Calico   Chart
+	Headlamp Chart
+	// HeadlampImage is the image tag with its digest; the chart names its image by tag only.
+	HeadlampImage string
+	CertManager   Chart
+	Rancher       Chart
+}
+
+// Addons are the add-ons a cluster switches on through its variables.
+type Addons struct {
+	Headlamp Headlamp
+	Rancher  Rancher
+}
+
+// addonsOf reads a cluster's add-on variables.
+func addonsOf(cluster *clusterv1.Cluster) (Addons, error) {
+	var a Addons
+	var err error
+	if a.Headlamp, _, err = optionalVariable[Headlamp](cluster, headlampAddon); err != nil {
+		return a, err
+	}
+	a.Rancher, err = rancherOf(cluster)
+	return a, err
+}
+
+// rancherOf reads a cluster's rancher variable, the zero value if it has none.
+func rancherOf(cluster *clusterv1.Cluster) (Rancher, error) {
+	r, _, err := optionalVariable[Rancher](cluster, rancherAddon)
+	return r, err
+}
+
+// rancherProxies name the proxies of Rancher's own cluster, which go when it is switched off.
+func rancherProxies(cluster *clusterv1.Cluster) []string {
+	return []string{cluster.Name + "-rancher", cluster.Name + "-cert-manager"}
+}
+
+// rancherValues: Rancher makes its own CA through cert-manager and the agents trust only that CA,
+// pinned by its checksum in the manifest each cluster gets. Its server URL is fixed to hostname,
+// without which it makes no registration manifest. Up to three replicas, as many as there are
+// nodes; the admin's first password is generated into the bootstrap-secret Secret, never put into
+// values. Rancher's chart gives a start two minutes, which its first start on one small node can
+// overrun while it registers its CRDs; every kill begins that again, so the window is ten minutes,
+// and liveness keeps its own.
+func rancherValues(r Rancher) map[string]any {
+	const (
+		// A negative count is the chart's "up to": as many replicas as nodes, at most three.
+		replicas      = -3
+		probeTimeout  = 5
+		probePeriod   = 10
+		probeFailures = 60
+	)
+	return map[string]any{
+		"hostname":     r.Hostname,
+		"replicas":     replicas,
+		"agentTLSMode": "strict",
+		"ingress":      map[string]any{"tls": map[string]any{"source": "rancher"}},
+		"extraEnv":     []any{map[string]any{"name": "CATTLE_SERVER_URL", "value": "https://" + r.Hostname}},
+		"startupProbe": map[string]any{"timeoutSeconds": probeTimeout, "periodSeconds": probePeriod, "failureThreshold": probeFailures},
+	}
+}
+
+// Headlamp is a cluster's headlamp variable.
+type Headlamp struct {
+	Enabled   bool   `json:"enabled"`
+	Hostname  string `json:"hostname,omitempty"`
+	TLSSecret string `json:"tlsSecret,omitempty"`
+}
+
+// Chart is one Helm chart.
+type Chart struct {
+	Repository string
+	Name       string
+	Version    string
+}
+
+// ParseChart reads <repository>/<name>:<version>, such as
+// oci://ghcr.io/sergelogvinov/charts/proxmox-csi-plugin:0.5.12 or https://helm.cilium.io/cilium:1.20.2.
+func ParseChart(s string) (Chart, error) {
+	at := strings.LastIndex(s, ":")
+	slash := strings.LastIndex(s, "/")
+	if slash < 0 || at <= slash+1 || at == len(s)-1 {
+		return Chart{}, fmt.Errorf("%q is not <repository>/<name>:<version>", s)
+	}
+	return Chart{Repository: s[:slash], Name: s[slash+1 : at], Version: s[at+1:]}, nil
+}
+
+// CNIAnnotation on a ClusterClass lists, comma-separated, the values of its cni variable that name
+// a CNI Kubehenge installs rather than the distribution.
+const CNIAnnotation = "kubehenge.dev/cni"
+
+// CNIForwardingAnnotation "true" on a ClusterClass lets pods forward packets, for distributions
+// whose own components route inside pods, such as k3s's servicelb.
+const CNIForwardingAnnotation = "kubehenge.dev/cni-container-forwarding"
+
+// CNI is the pod network Kubehenge installs into a cluster; the zero value installs none.
+type CNI struct {
+	// Name is cilium or calico.
+	Name string
+	// Pods is the pod range for a Cluster that names none, its distribution's own default.
+	Pods string
+	// ContainerForwarding is CNIForwardingAnnotation.
+	ContainerForwarding bool
+}
+
+// Endpoint is how workload clusters reach the Proxmox VE API.
+type Endpoint struct {
+	// URL is the API's address, such as https://pve.example.org:8006.
+	URL string
+	// CA is the PEM certificate that signed the API's certificate.
+	CA string
+}
+
+type proxmoxConfig struct {
+	Features proxmoxFeatures  `json:"features"`
+	Clusters []proxmoxCluster `json:"clusters"`
+}
+
+type proxmoxFeatures struct {
+	Provider       string `json:"provider"`
+	ControllerVMID int    `json:"controllerVmID,omitempty"`
+}
+
+type proxmoxCluster struct {
+	URL         string `json:"url"`
+	Insecure    bool   `json:"insecure"`
+	TokenID     string `json:"token_id"`
+	TokenSecret string `json:"token_secret"`
+	Region      string `json:"region"`
+}
+
+// resourceSetSecret wraps the workload cluster's Secret for a ClusterResourceSet, which applies
+// every key of its Secret as a manifest.
+func resourceSetSecret(cluster *clusterv1.Cluster, endpoint Endpoint, c Credentials) (*corev1.Secret, error) {
+	pve := proxmoxCluster{URL: endpoint.URL + "/api2/json", TokenID: c.TokenID, TokenSecret: c.TokenSecret, Region: c.Region}
+	// capmox names machines proxmox://<SMBIOS UUID>, which only the capmox provider mode matches.
+	ccm, err := yaml.Marshal(proxmoxConfig{Features: proxmoxFeatures{Provider: "capmox"}, Clusters: []proxmoxCluster{pve}})
+	if err != nil {
+		return nil, fmt.Errorf("encoding the cloud controller manager's configuration: %w", err)
+	}
+	csi, err := yaml.Marshal(proxmoxConfig{
+		Features: proxmoxFeatures{Provider: "capmox", ControllerVMID: c.VolumeOwner},
+		Clusters: []proxmoxCluster{pve},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encoding the CSI plugin's configuration: %w", err)
+	}
+	inner := &corev1.Secret{
+		APIVersion: "v1",
+		Kind:       secretKind,
+		Name:       workloadSecret,
+		Namespace:  metav1.NamespaceSystem,
+		Type:       corev1.SecretTypeOpaque,
+		StringData: map[string]string{"ccm.yaml": string(ccm), "csi.yaml": string(csi), proxmoxCAKey: endpoint.CA},
+	}
+	manifest, err := yaml.Marshal(inner)
+	if err != nil {
+		return nil, fmt.Errorf("encoding the workload cluster's Secret: %w", err)
+	}
+	return &corev1.Secret{
+		Name: cluster.Name + "-proxmox", Namespace: cluster.Namespace,
+		Type: addonsv1.ClusterResourceSetSecretType,
+		Data: map[string][]byte{workloadSecret + ".yaml": manifest},
+	}, nil
+}
+
+// podRange is the CNI's pod range: the Cluster's own, or else the one the distribution's own
+// components assume, kube-proxy's cluster CIDR among them.
+func podRange(cluster *clusterv1.Cluster, cni CNI) (string, error) {
+	if blocks := cluster.Spec.ClusterNetwork.Pods.CIDRBlocks; len(blocks) > 0 {
+		return blocks[0], nil
+	}
+	if cni.Pods == "" {
+		return "", fmt.Errorf("cluster %s/%s: no pod range for the CNI", cluster.Namespace, cluster.Name)
+	}
+	return cni.Pods, nil
+}
+
+func calicoResourcesName(cluster *clusterv1.Cluster) string {
+	return cluster.Name + "-calico"
+}
+
+// calicoResources wraps, for the ClusterResourceSet, the resources the Tigera operator installs
+// Calico from, as its chart's defaults have them. The chart would render them before the operator
+// has created their CRDs, which a Helm release cannot wait for; a ClusterResourceSet retries until
+// they exist. Nor can Helm install the CRDs first: Calico's CRD chart is larger than the 1 MiB
+// Secret a Helm release is kept in.
+func calicoResources(cluster *clusterv1.Cluster, cni CNI) (*corev1.Secret, error) {
+	pods, err := podRange(cluster, cni)
+	if err != nil {
+		return nil, err
+	}
+	network := map[string]any{"ipPools": []any{map[string]any{"cidr": pods, "encapsulation": "VXLANCrossSubnet"}}}
+	if cni.ContainerForwarding {
+		network["containerIPForwarding"] = "Enabled"
+	}
+	resources := []map[string]any{
+		{"kind": "Installation", "spec": map[string]any{
+			"cni":           map[string]any{"type": "Calico"},
+			"calicoNetwork": network,
+			// Calico's CSI driver, for its own volume types, which Kubehenge does not use.
+			"kubeletVolumePluginPath": "None",
+		}},
+		{"kind": "APIServer", "spec": map[string]any{}},
+		{"kind": "Goldmane", "spec": map[string]any{}},
+		{"kind": "Whisker", "spec": map[string]any{}},
+	}
+	var manifest []byte
+	for _, r := range resources {
+		r["apiVersion"] = "operator.tigera.io/v1"
+		r["metadata"] = map[string]any{"name": "default"}
+		doc, err := yaml.Marshal(r)
+		if err != nil {
+			return nil, fmt.Errorf("encoding Calico's %s: %w", r["kind"], err)
+		}
+		manifest = append(append(manifest, "---\n"...), doc...)
+	}
+	return &corev1.Secret{
+		Name: calicoResourcesName(cluster), Namespace: cluster.Namespace,
+		Type: addonsv1.ClusterResourceSetSecretType,
+		Data: map[string][]byte{"calico.yaml": manifest},
+	}, nil
+}
+
+// clusterResourceSet applies the cluster's Proxmox VE Secret and, when Kubehenge installs Calico,
+// Calico's resources; each is retried on its own until it applies.
+func clusterResourceSet(cluster *clusterv1.Cluster, cni CNI) *addonsv1.ClusterResourceSet {
+	resources := []addonsv1.ResourceRef{{Kind: secretKind, Name: cluster.Name + "-proxmox"}}
+	if cni.Name == cniCalico {
+		resources = append(resources, addonsv1.ResourceRef{Kind: secretKind, Name: calicoResourcesName(cluster)})
+	}
+	return &addonsv1.ClusterResourceSet{
+		Name: cluster.Name + "-proxmox", Namespace: cluster.Namespace,
+		Spec: addonsv1.ClusterResourceSetSpec{
+			ClusterSelector: metav1.LabelSelector{MatchLabels: map[string]string{clusterv1.ClusterNameLabel: cluster.Name}},
+			Resources:       resources,
+			// Reapplied when a Secret changes, such as when a lost token is replaced.
+			Strategy: string(addonsv1.ClusterResourceSetStrategyReconcile),
+		},
+	}
+}
+
+// headlampValues keep Headlamp without rights of its own: every user signs in with their own token
+// or through OIDC. Its service account token stays mounted only because Headlamp reads the API
+// server's address and CA through it; the account is bound to no role. Plugins are those in the
+// image, nothing fetched at run time.
+func headlampValues(image string, h Headlamp) map[string]any {
+	// The image's own user and group.
+	const user, group = 100, 101
+	values := map[string]any{
+		"image":              map[string]any{"tag": image},
+		"clusterRoleBinding": map[string]any{"create": false},
+		"config":             map[string]any{"oidc": map[string]any{"secret": map[string]any{"create": false}}},
+		"pluginsManager":     map[string]any{"enabled": false},
+		// The chart's own default leaves out what Pod Security's restricted level requires.
+		"securityContext": map[string]any{
+			"runAsNonRoot":             true,
+			"runAsUser":                user,
+			"runAsGroup":               group,
+			"privileged":               false,
+			"allowPrivilegeEscalation": false,
+			"readOnlyRootFilesystem":   true,
+			"capabilities":             map[string]any{"drop": []any{"ALL"}},
+			"seccompProfile":           map[string]any{"type": "RuntimeDefault"},
+		},
+		"resources": map[string]any{
+			"requests": map[string]any{"cpu": "10m", "memory": "64Mi"},
+			"limits":   map[string]any{"memory": "256Mi"},
+		},
+	}
+	if h.Hostname != "" {
+		tls := map[string]any{"hosts": []any{h.Hostname}}
+		if h.TLSSecret != "" {
+			tls["secretName"] = h.TLSSecret
+		}
+		values["ingress"] = map[string]any{
+			"enabled": true,
+			"hosts":   []any{map[string]any{"host": h.Hostname, "paths": []any{map[string]any{"path": "/", "type": "Prefix"}}}},
+			"tls":     []any{tls},
+		}
+	}
+	return values
+}
+
+var helmChartProxyGVK = schema.GroupVersionKind{Group: "addons.cluster.x-k8s.io", Version: "v1alpha1", Kind: "HelmChartProxy"}
+
+// headlampProxy names the cluster's Headlamp proxy, which goes again when Headlamp is switched off.
+func headlampProxy(cluster *clusterv1.Cluster) string {
+	return cluster.Name + "-headlamp"
+}
+
+// toleration tolerates a taint of any value.
+func toleration(key string, effect corev1.TaintEffect) map[string]any {
+	return map[string]any{"key": key, "operator": string(corev1.TolerationOpExists), "effect": string(effect)}
+}
+
+// proxmoxValues are the values of the two charts that talk to Proxmox VE: the cloud controller
+// manager's and the CSI plugin's.
+func proxmoxValues(storage string) (map[string]any, map[string]any) {
+	// The charts have no CA setting; this replaces the image's trust store with the Proxmox VE CA,
+	// the only server either talks to besides the in-cluster API, which uses its own CA.
+	ca := map[string]any{
+		"extraVolumes": []any{map[string]any{
+			"name":   "proxmox-ca",
+			"secret": map[string]any{"secretName": workloadSecret, "items": []any{map[string]any{"key": proxmoxCAKey, "path": proxmoxCAKey}}},
+		}},
+		"extraVolumeMounts": []any{map[string]any{
+			"name": "proxmox-ca", "mountPath": "/etc/ssl/certs/ca-certificates.crt", "subPath": proxmoxCAKey, "readOnly": true,
+		}},
+	}
+	// The CCM and the CSI plugin's controller are what mount the cluster's Proxmox VE token (the
+	// CSI node plugin needs none); kept to the control-plane nodes, no worker ever holds it.
+	controlPlane := map[string]any{"nodeAffinity": map[string]any{"requiredDuringSchedulingIgnoredDuringExecution": map[string]any{
+		"nodeSelectorTerms": []any{map[string]any{"matchExpressions": []any{map[string]any{
+			"key": controlPlaneRole, "operator": string(corev1.NodeSelectorOpExists),
+		}}}},
+	}}}
+	controlPlaneTolerations := func(more ...any) []any {
+		return append([]any{
+			toleration(controlPlaneTaint.Key, controlPlaneTaint.Effect),
+			toleration("node-role.kubernetes.io/etcd", corev1.TaintEffectNoExecute),
+		}, more...)
+	}
+	ccm := map[string]any{ //nolint:gosec // names a Secret
+		"existingConfigSecret":    workloadSecret,
+		"existingConfigSecretKey": "ccm.yaml",
+		// On the host's network: nodes are initialised before the CNI runs, and a CNI that waits
+		// for initialised nodes (RKE2's Calico schedules Typha only there) would otherwise leave a
+		// CCM on the pod network unable to reach Proxmox VE, and the cluster stuck.
+		"useDaemonSet": true,
+		"affinity":     controlPlane,
+		"tolerations":  controlPlaneTolerations(toleration("node.cloudprovider.kubernetes.io/uninitialized", corev1.TaintEffectNoSchedule)),
+	}
+	csi := map[string]any{
+		"affinity":                controlPlane,
+		"tolerations":             controlPlaneTolerations(),
+		"existingConfigSecret":    workloadSecret,
+		"existingConfigSecretKey": "csi.yaml",
+		"storageClass": []any{map[string]any{
+			"name":          "proxmox",
+			"storage":       storage,
+			"reclaimPolicy": string(corev1.PersistentVolumeReclaimDelete),
+			"fstype":        "ext4",
+			"annotations":   map[string]any{"storageclass.kubernetes.io/is-default-class": strconv.FormatBool(true)},
+		}},
+	}
+	for k, v := range ca {
+		ccm[k], csi[k] = v, v
+	}
+	return ccm, csi
+}
+
+// helmChartProxies installs the cloud controller manager and the CSI plugin into the cluster, the
+// CNI named by cni unless none is, and the add-ons switched on. The Add-on Provider for Helm
+// selects only Clusters in a proxy's own namespace, so each cluster gets its own proxies beside it.
+func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, storage string, cni CNI, addons Addons) ([]*unstructured.Unstructured, error) {
+	ccm, csi := proxmoxValues(storage)
+	type proxy struct {
+		suffix, release, namespace string
+		chart                      Chart
+		values                     map[string]any
+	}
+	wanted := []proxy{
+		{"proxmox-ccm", "proxmox-cloud-controller-manager", metav1.NamespaceSystem, charts.CCM, ccm},
+		{"proxmox-csi", "proxmox-csi-plugin", metav1.NamespaceSystem, charts.CSI, csi},
+	}
+	switch cni.Name {
+	case "":
+	case cniCilium:
+		pods, err := podRange(cluster, cni)
+		if err != nil {
+			return nil, err
+		}
+		wanted = append(wanted, proxy{"cni", cniCilium, metav1.NamespaceSystem, charts.Cilium, map[string]any{
+			"ipam":     map[string]any{"mode": "cluster-pool", "operator": map[string]any{"clusterPoolIPv4PodCIDRList": []any{pods}}},
+			"operator": map[string]any{"replicas": 1},
+		}})
+	case cniCalico:
+		// Only the operator: it creates Calico's CRDs itself, and calicoResources brings the
+		// resources of them that the chart would otherwise render before they exist.
+		off := map[string]any{"enabled": false}
+		wanted = append(wanted, proxy{"cni", cniCalico, "tigera-operator", charts.Calico, map[string]any{
+			"manageCRDs": true, "installation": off, "apiServer": off, "goldmane": off, "whisker": off,
+		}})
+	default:
+		return nil, fmt.Errorf("cluster %s/%s: no chart for CNI %q", cluster.Namespace, cluster.Name, cni.Name)
+	}
+	if addons.Headlamp.Enabled {
+		wanted = append(wanted, proxy{headlampAddon, headlampAddon, headlampAddon, charts.Headlamp, headlampValues(charts.HeadlampImage, addons.Headlamp)})
+	}
+	if addons.Rancher.Install {
+		if addons.Rancher.Hostname == "" {
+			return nil, fmt.Errorf("cluster %s/%s: Rancher needs a hostname", cluster.Namespace, cluster.Name)
+		}
+		wanted = append(wanted,
+			proxy{certManagerAddon, certManagerAddon, certManagerAddon, charts.CertManager, map[string]any{"crds": map[string]any{"enabled": true}}},
+			proxy{rancherAddon, rancherAddon, rancherNamespace, charts.Rancher, rancherValues(addons.Rancher)},
+		)
+	}
+
+	var proxies []*unstructured.Unstructured
+	for _, p := range wanted {
+		values, err := yaml.Marshal(p.values)
+		if err != nil {
+			return nil, fmt.Errorf("encoding the values of %s: %w", p.release, err)
+		}
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(helmChartProxyGVK)
+		u.SetName(cluster.Name + "-" + p.suffix)
+		u.SetNamespace(cluster.Namespace)
+		u.Object["spec"] = map[string]any{
+			"clusterSelector": map[string]any{"matchLabels": map[string]any{clusterv1.ClusterNameLabel: cluster.Name}},
+			"repoURL":         p.chart.Repository,
+			"chartName":       p.chart.Name,
+			"version":         p.chart.Version,
+			"releaseName":     p.release,
+			"namespace":       p.namespace,
+			"options":         map[string]any{"install": map[string]any{"createNamespace": true}},
+			// Values are plain text in HelmReleaseProxy objects; they hold no secret, only where it is.
+			"valuesTemplate": string(values),
+		}
+		proxies = append(proxies, u)
+	}
+	return proxies, nil
+}
+
+func credentialsSecretName(cluster *clusterv1.Cluster) string {
+	return cluster.Name + "-proxmox-token"
+}
+
+// credentialsSecret keeps what Ensure returned, so that later reconciles neither replace the token
+// nor create a second volume owner.
+func credentialsSecret(cluster *clusterv1.Cluster, c Credentials, ready bool) *corev1.Secret {
+	return &corev1.Secret{
+		Name: credentialsSecretName(cluster), Namespace: cluster.Namespace,
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			"tokenID":         []byte(c.TokenID),
+			"tokenSecret":     []byte(c.TokenSecret),
+			"volumeOwner":     []byte(strconv.Itoa(c.VolumeOwner)),
+			"volumeOwnerNode": []byte(c.VolumeOwnerNode),
+			"region":          []byte(c.Region),
+			"ready":           []byte(strconv.FormatBool(ready)),
+		},
+	}
+}
+
+func credentialsFrom(s *corev1.Secret) (Credentials, error) {
+	owner, err := strconv.Atoi(string(s.Data["volumeOwner"]))
+	if err != nil {
+		return Credentials{}, fmt.Errorf("secret %s/%s: volumeOwner: %w", s.Namespace, s.Name, err)
+	}
+	return Credentials{
+		TokenID:         string(s.Data["tokenID"]),
+		TokenSecret:     string(s.Data["tokenSecret"]),
+		VolumeOwner:     owner,
+		VolumeOwnerNode: string(s.Data["volumeOwnerNode"]),
+		Region:          string(s.Data["region"]),
+	}, nil
+}
+
+// isReady reports whether a credentials Secret marks the cluster's objects as all in place.
+func isReady(s *corev1.Secret) bool {
+	return string(s.Data["ready"]) == "true"
+}

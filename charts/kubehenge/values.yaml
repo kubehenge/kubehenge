@@ -1,0 +1,96 @@
+---
+# Digest of the chart's files. The management cluster's module sets it: the Helm provider upgrades a
+# release only when its chart's version or its values change.
+chartDigest: ""
+
+# Proxmox VE pool the management cluster's Cluster API token manages. Each workload cluster's VMs go
+# into a pool of their own nested under it, named <workloadPool>/<namespace>.<cluster name>.
+workloadPool: kubehenge
+
+# Namespaces of the Cluster API providers only one ClusterClass's clusters use, by class. Their
+# controllers run only while a cluster is built from it: the controller scales them to none when the
+# last one is gone, and back up before the next one's control plane and bootstrap templates are
+# applied, which need their webhooks.
+providerNamespaces:
+  kubehenge-kubeadm: [kubeadm-bootstrap-system, kubeadm-control-plane-system]
+  kubehenge-rke2: [rke2-bootstrap-system, rke2-control-plane-system]
+  kubehenge-k3s: [k3s-bootstrap-system, k3s-control-plane-system]
+
+interface:
+  # Namespace the web interface creates clusters in; it changes and hands out kubeconfigs only of
+  # the clusters there. Their pools are <workloadPool>/<namespace>.<cluster name>.
+  namespace: clusters
+
+# What clusters may use on Proxmox VE: the storages for their disks and volumes, and the bridges
+# their nodes attach to, which the management cluster's Cluster API token has rights on. The
+# ClusterClasses refuse any other; empty lists leave the choice to Proxmox VE's own checks.
+clusters:
+  storages: []
+  bridges: []
+
+# OpenID Connect providers every new cluster's API server trusts unless the cluster names its own
+# (its oidc variable): a list of {issuerURL, clientID, usernameClaim, usernamePrefix, groupsClaim,
+# groupsPrefix, scopes, certificateAuthority}. Tokens and certificates work beside them.
+clusterOIDC: []
+
+# Kubehenge's controller image; empty means the one this chart was released with.
+image: ""
+
+proxmox:
+  # The Proxmox VE API, such as https://pve.example.org:8006. Required.
+  url: ""
+  # Secret in the release namespace with the controller's API token (key token, as
+  # user@realm!name=secret) and the CA that signed the API's certificate (key ca.crt).
+  secret: kubehenge-proxmox
+  # Group each cluster's Proxmox VE user joins, holding the storage and node rights clusters share.
+  clusterGroup: kubehenge-clusters
+  # Role each cluster's user gets on its own pool.
+  clusterRole: kubehenge-cluster
+  # Node for the VMs that own clusters' volumes; empty means the first online node.
+  volumeOwnerNode: ""
+  # Region the clusters see Proxmox VE as (topology.kubernetes.io/region); empty means the Proxmox
+  # VE cluster's name, or the node's when it is not clustered.
+  region: ""
+  # Whether the controller keeps clusters' control-plane VMs apart with Proxmox VE HA, signing in
+  # for it with the API token under the secret's key ha-token, which needs Sys.Audit and Sys.Console
+  # on /.
+  ha: false
+
+# Installed into clusters: the Proxmox VE cloud controller manager and CSI plugin into every one,
+# the CNI chosen for a cluster whose distribution has none of its own (kubeadm), and the add-ons a
+# cluster switches on.
+addons:
+  headlamp:
+    repository: https://kubernetes-sigs.github.io/headlamp
+    chart: headlamp
+    version: 0.46.0
+    # The chart names its image by tag only.
+    image: v0.46.0@sha256:8a0ef97527544baa2b35825940ddf4db6e2d09c30cd5aa31fd269ff604cc8b75
+  rancher:
+    repository: https://releases.rancher.com/server-charts/stable
+    chart: rancher
+    version: 2.15.2
+    # Kubernetes minor versions this Rancher release runs on (its chart's kubeVersion and support
+    # matrix); the cluster that installs it is held within them.
+    kubernetes: 34-36
+  # Installed with Rancher, which makes its CA and certificate through it.
+  certManager:
+    repository: https://charts.jetstack.io
+    chart: cert-manager
+    version: v1.21.2
+  cloudControllerManager:
+    repository: oci://ghcr.io/sergelogvinov/charts
+    chart: proxmox-cloud-controller-manager
+    version: 0.2.32
+  csiPlugin:
+    repository: oci://ghcr.io/sergelogvinov/charts
+    chart: proxmox-csi-plugin
+    version: 0.5.12
+  cilium:
+    repository: https://helm.cilium.io
+    chart: cilium
+    version: 1.20.3
+  calico:
+    repository: https://docs.tigera.io/calico/charts
+    chart: tigera-operator
+    version: v3.33.0

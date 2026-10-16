@@ -1,0 +1,32 @@
+{{- /*
+Plain release objects, not hooks: uninstalling this release deletes the providers while the operator
+still runs to remove their finalizers, and Helm waits until they are gone.
+*/ -}}
+{{- range $ns := .Values.namespaces }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+{{- end }}
+{{- range $name, $secret := .Values.secrets }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  namespace: {{ $secret.namespace }}
+type: Opaque
+stringData:
+  {{- toYaml $secret.data | nindent 2 }}
+{{- end }}
+{{- range .Values.providers }}
+---
+apiVersion: operator.cluster.x-k8s.io/v1alpha2
+kind: {{ .kind }}
+metadata:
+  name: {{ .name }}
+  namespace: {{ .namespace }}
+spec:
+  {{- toYaml .spec | nindent 2 }}
+{{- end }}

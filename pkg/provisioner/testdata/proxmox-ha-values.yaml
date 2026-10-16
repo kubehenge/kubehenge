@@ -1,0 +1,4 @@
+---
+# On top of integration-values.yaml: the module's values with proxmox_ha.
+proxmox:
+  ha: true

@@ -1,0 +1,332 @@
+{{- $name := "kubehenge-controller" }}
+{{- $extension := "kubehenge-extension" }}
+{{- $tls := printf "%s-tls" $extension }}
+{{- $labels := dict "app.kubernetes.io/name" $name "app.kubernetes.io/instance" .Release.Name }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+rules:
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [clusters]
+    verbs: [get, list, watch, patch, update]
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [clusterclasses]
+    verbs: [get, list, watch]
+  # With Proxmox VE HA, a pre-terminate hook holds a control-plane Machine's deletion until its VM is
+  # out of HA, and marking a ProxmoxMachine has capmox find its VM on the node HA moved it to. Without
+  # it, the controller takes back the hooks it set.
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [machines]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [infrastructure.cluster.x-k8s.io]
+    resources: [proxmoxmachines]
+    verbs: [get, list, watch, patch]
+  # Each cluster's token and the ClusterResourceSet Secret delivering it live in the cluster's
+  # namespace, which can be any.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, create, update, patch]
+  - apiGroups: [addons.cluster.x-k8s.io]
+    resources: [clusterresourcesets]
+    verbs: [get, list, watch, create, update, patch]
+  # delete: an add-on switched off for a cluster goes with its proxy.
+  - apiGroups: [addons.cluster.x-k8s.io]
+    resources: [helmchartproxies]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # What the controller refuses to do for a cluster is reported as an event on it.
+  - apiGroups: [events.k8s.io]
+    resources: [events]
+    verbs: [create, patch]
+  # Marking its own ExtensionConfig has Cluster API rediscover the hooks a new version serves.
+  - apiGroups: [runtime.cluster.x-k8s.io]
+    resources: [extensionconfigs]
+    resourceNames: [kubehenge]
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+  # The ClusterClasses' control-plane and bootstrap templates, applied while a cluster uses their
+  # distribution and removed with the last one; touching the class has Cluster API look at it
+  # again, as it does not watch templates. The kubeadm class also carries the Kubernetes versions
+  # its VM templates exist for, which the interface offers.
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list, watch]
+  - apiGroups: [controlplane.cluster.x-k8s.io]
+    resources: [kubeadmcontrolplanetemplates, rke2controlplanetemplates, kthreescontrolplanetemplates]
+    verbs: [create, patch, deletecollection]
+  - apiGroups: [bootstrap.cluster.x-k8s.io]
+    resources: [kubeadmconfigtemplates, rke2configtemplates, kthreesconfigtemplates]
+    verbs: [create, patch, deletecollection]
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [clusterclasses]
+    resourceNames: {{ keys .Values.providerNamespaces | sortAlpha | toJson }}
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+{{- /*
+A distribution's providers run only while a cluster uses them. The scale subresource changes a
+replica count and nothing else, so this is all the controller may do to them.
+*/}}
+{{- range $class, $namespaces := .Values.providerNamespaces }}
+{{- range $namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ . }}
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments/scale]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- toYaml $labels | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- toYaml $labels | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $name }}
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: {{ .Values.image | default (printf "ghcr.io/kubehenge/kubehenge:v%s" .Chart.AppVersion) }}
+          args:
+            - controller
+            - --workload-pool={{ .Values.workloadPool }}
+            - --cluster-group={{ .Values.proxmox.clusterGroup }}
+            - --cluster-role={{ .Values.proxmox.clusterRole }}
+            {{- with .Values.proxmox.volumeOwnerNode }}
+            - --volume-owner-node={{ . }}
+            {{- end }}
+            {{- with .Values.proxmox.region }}
+            - --region={{ . }}
+            {{- end }}
+            {{- range $flag, $chart := dict "ccm-chart" .Values.addons.cloudControllerManager "csi-chart" .Values.addons.csiPlugin "cilium-chart" .Values.addons.cilium "calico-chart" .Values.addons.calico "headlamp-chart" .Values.addons.headlamp "rancher-chart" .Values.addons.rancher "cert-manager-chart" .Values.addons.certManager }}
+            - --{{ $flag }}={{ $chart.repository }}/{{ $chart.chart }}:{{ $chart.version }}
+            {{- end }}
+            - --headlamp-image={{ .Values.addons.headlamp.image }}
+            - --rancher-kubernetes={{ .Values.addons.rancher.kubernetes }}
+            - --proxmox-ca=/etc/kubehenge/proxmox/ca.crt
+            {{- range $class, $namespaces := .Values.providerNamespaces }}
+            - --class-providers={{ $class }}={{ join "," $namespaces }}
+            {{- end }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: KUBEHENGE_PROXMOX_URL
+              value: {{ required "proxmox.url is required" .Values.proxmox.url | quote }}
+            - name: KUBEHENGE_PROXMOX_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.proxmox.secret }}
+                  key: token
+            {{- if .Values.proxmox.ha }}
+            - name: KUBEHENGE_PROXMOX_HA_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.proxmox.secret }}
+                  key: ha-token
+            {{- end }}
+          ports:
+            - name: extension
+              containerPort: 9443
+            - name: health
+              containerPort: 8081
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: proxmox
+              mountPath: /etc/kubehenge/proxmox
+              readOnly: true
+            - name: tls
+              mountPath: /etc/kubehenge/tls
+              readOnly: true
+      volumes:
+        - name: proxmox
+          secret:
+            secretName: {{ .Values.proxmox.secret }}
+            items:
+              - key: ca.crt
+                path: ca.crt
+        - name: tls
+          secret:
+            secretName: {{ $tls }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $extension }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    {{- toYaml $labels | nindent 4 }}
+  ports:
+    - port: 443
+      targetPort: extension
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $extension }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $extension }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ $tls }}
+  dnsNames:
+    - {{ $extension }}.{{ .Release.Namespace }}.svc
+  issuerRef:
+    kind: Issuer
+    name: {{ $extension }}
+---
+# Cluster API calls the controller's lifecycle hooks, trusting the CA cert-manager writes into the
+# certificate's Secret.
+apiVersion: runtime.cluster.x-k8s.io/v1beta2
+kind: ExtensionConfig
+metadata:
+  name: kubehenge
+  annotations:
+    runtime.cluster.x-k8s.io/inject-ca-from-secret: {{ .Release.Namespace }}/{{ $tls }}
+spec:
+  clientConfig:
+    service:
+      name: {{ $extension }}
+      namespace: {{ .Release.Namespace }}
+      port: 443
+---
+# The controller checks Kubehenge's clusters as they are created and changed (pkg/provisioner's
+# ClusterValidator). Ignored while the controller is away: the check guards sizing and the one
+# Rancher, and BeforeClusterCreate still refuses at creation, so nothing else in the management
+# cluster waits on it.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: kubehenge
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ $extension }}
+webhooks:
+  - name: clusters.kubehenge.dev
+    admissionReviewVersions: [v1]
+    sideEffects: None
+    failurePolicy: Ignore
+    timeoutSeconds: 5
+    clientConfig:
+      service:
+        name: {{ $extension }}
+        namespace: {{ .Release.Namespace }}
+        path: /validate-cluster
+        port: 443
+    rules:
+      - apiGroups: [cluster.x-k8s.io]
+        apiVersions: [v1beta2]
+        operations: [CREATE, UPDATE]
+        resources: [clusters]

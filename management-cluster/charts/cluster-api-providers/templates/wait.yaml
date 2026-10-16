@@ -1,0 +1,65 @@
+{{- /*
+The operator installs each provider after Helm has created its object, so Helm's own wait returns while
+the providers' webhooks are still starting and anything applied next is refused. This Job holds the
+release until the operator has applied every provider's current spec and each provider's Deployment
+has rolled out (`kubehenge wait providers`).
+*/ -}}
+{{- $hook := dict "helm.sh/hook" "post-install,post-upgrade" "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wait-for-providers
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+    helm.sh/hook-weight: "-1"
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-wait-for-providers
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+    helm.sh/hook-weight: "-1"
+rules:
+  - apiGroups: [operator.cluster.x-k8s.io]
+    resources: [coreproviders, bootstrapproviders, controlplaneproviders, infrastructureproviders, ipamproviders, addonproviders]
+    verbs: [list]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-wait-for-providers
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+    helm.sh/hook-weight: "-1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}-wait-for-providers
+subjects:
+  - kind: ServiceAccount
+    name: wait-for-providers
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wait-for-providers
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+spec:
+  backoffLimit: 0
+  # Past the command's own timeout, so that the Job fails with the command's account of why.
+  activeDeadlineSeconds: {{ add .Values.waitTimeoutSeconds 60 }}
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: wait-for-providers
+      automountServiceAccountToken: true
+      {{- include "cluster-api-providers.waitPod" (list . (list "providers")) | nindent 6 }}

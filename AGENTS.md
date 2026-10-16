@@ -1,0 +1,22 @@
+# Kubehenge
+
+Kubernetes for Proxmox VE: Cluster API underneath, kubeadm, RKE2 or k3s per cluster (Talos to follow, `docs/roadmap.md`), optional add-ons, and a web interface that signs in with Proxmox VE users. It installs as a small LXC appliance whose interface creates and looks after a Talos management cluster.
+
+The engineering rules are in `CONTRIBUTING.md` and apply in full. Read it first, then `docs/architecture.md` and `docs/testing.md`.
+
+## Layout
+
+| Path | What |
+| --- | --- |
+| `cmd/kubehenge`, `pkg/` | the `kubehenge` binary: controller, web interface backend, appliance updater, CLI |
+| `web/` | the interface's React/TypeScript frontend, embedded in the binary |
+| `charts/kubehenge` | the ClusterClasses and the controller |
+| `management-cluster/` | Terraform/OpenTofu module for the Talos management cluster |
+| `appliance/` | the LXC appliance's install script |
+| `pve-entry/` | the opt-in Proxmox VE interface entry |
+| `test/e2e/` | end-to-end tests against a Proxmox VE host |
+| `docs/` | architecture, install, testing, releasing, roadmap |
+
+## Checks
+
+`make lint unit` before every change is handed back: Go under the race detector, the frontend, the charts, the module and the shell scripts. The end-to-end targets (`make e2e-*`, `docs/testing.md`) need a Proxmox VE host and run in CI.

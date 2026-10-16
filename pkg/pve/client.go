@@ -1,0 +1,138 @@
+// Package pve connects to the Proxmox VE API.
+package pve
+
+import (
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/luthermonson/go-proxmox"
+)
+
+// Config locates the Proxmox VE API and how to sign in.
+type Config struct {
+	// URL is the API's address, such as https://pve.example.org:8006.
+	URL string
+	// Token is an API token as user@realm!name=secret.
+	Token string
+	// CAFile is a PEM file with the CA that signed the API's certificate. Empty means the system's
+	// trust store; certificate verification is never skipped.
+	CAFile string
+}
+
+// Connect returns a client for the API that signs in with the token. It makes no request.
+func Connect(cfg Config) (*proxmox.Client, error) {
+	id, secret, ok := strings.Cut(cfg.Token, "=")
+	if !ok || !strings.Contains(id, "!") || secret == "" {
+		return nil, errors.New("the Proxmox VE API token must be user@realm!name=secret")
+	}
+	base, httpClient, err := cfg.transport()
+	if err != nil {
+		return nil, err
+	}
+	httpClient.Transport = statusChecked{httpClient.Transport}
+	return proxmox.NewClient(base, proxmox.WithHTTPClient(httpClient), proxmox.WithAPIToken(id, secret)), nil
+}
+
+// ConnectSession returns a client for the API that acts with a user's session ticket, for work
+// done on behalf of a signed-in user. It makes no request.
+func ConnectSession(cfg Config, t *Ticket) (*proxmox.Client, error) {
+	if t == nil || t.Ticket == "" || t.CSRF == "" {
+		return nil, errors.New("a Proxmox VE session ticket with its CSRF token is needed")
+	}
+	base, httpClient, err := cfg.transport()
+	if err != nil {
+		return nil, err
+	}
+	httpClient.Transport = statusChecked{httpClient.Transport}
+	return proxmox.NewClient(base, proxmox.WithHTTPClient(httpClient), proxmox.WithSession(t.Ticket, t.CSRF)), nil
+}
+
+// statusChecked turns into an error every answer go-proxmox would take as success without
+// looking. go-proxmox fails only on 400, 500 and 501 and maps 401 and 403 to ErrNotAuthorized, so a
+// 502 to 504 from a proxy in front of the API, or a 595 or 596 when pveproxy cannot reach the node
+// a call is forwarded to, would otherwise read as a write that happened.
+type statusChecked struct{ next http.RoundTripper }
+
+func (s statusChecked) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := s.next.RoundTrip(req)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // a RoundTripper passes its transport's error on; http.Client adds the method and URL
+	}
+	switch c := resp.StatusCode; {
+	case c >= 200 && c < 300, c == http.StatusBadRequest, c == http.StatusUnauthorized, c == http.StatusForbidden,
+		c == http.StatusInternalServerError, c == http.StatusNotImplemented:
+		return resp, nil
+	}
+	_ = resp.Body.Close()
+	return nil, &APIError{Method: req.Method, Path: req.URL.Path, Status: resp.Status}
+}
+
+// transport returns the API's base URL and an HTTP client that verifies its certificate.
+func (cfg Config) transport() (string, *http.Client, error) {
+	u, err := url.Parse(cfg.URL)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return "", nil, fmt.Errorf("the Proxmox VE URL %q must be https://host[:port]", cfg.URL)
+	}
+	var pem []byte
+	if cfg.CAFile != "" {
+		if pem, err = os.ReadFile(cfg.CAFile); err != nil {
+			return "", nil, fmt.Errorf("the Proxmox VE CA: %w", err)
+		}
+	}
+	t, err := sharedTransport(pem)
+	if err != nil {
+		return "", nil, fmt.Errorf("%s: %w", cfg.CAFile, err)
+	}
+	return strings.TrimSuffix(u.String(), "/") + "/api2/json", &http.Client{Timeout: requestTimeout, Transport: t}, nil
+}
+
+const (
+	requestTimeout = 5 * time.Minute
+	// idleConnsPerHost keeps the connections in use reusable: the interface asks about up to eight
+	// clusters at once and the controller reconciles four, while Go's default of two idle
+	// connections per host would close most of them after each request.
+	idleConnsPerHost = 16
+)
+
+// transports holds one connection pool per CA, keyed by its PEM ("" for the system's trust store),
+// shared by every client: each new connection costs pveproxy a TLS handshake, and the credentials
+// go with each request, never with the connection.
+var transports = struct {
+	sync.Mutex
+
+	byPEM map[string]*http.Transport
+}{byPEM: map[string]*http.Transport{}}
+
+func sharedTransport(pem []byte) (*http.Transport, error) {
+	transports.Lock()
+	defer transports.Unlock()
+	if t, ok := transports.byPEM[string(pem)]; ok {
+		return t, nil
+	}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	if len(pem) > 0 {
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, errors.New("no PEM certificate in it")
+		}
+		tlsConfig.RootCAs = pool
+	}
+	defaults, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, errors.New("http.DefaultTransport has been replaced by one that cannot be cloned")
+	}
+	t := defaults.Clone()
+	t.TLSClientConfig = tlsConfig
+	t.Proxy = http.ProxyFromEnvironment
+	t.MaxIdleConnsPerHost = idleConnsPerHost
+	transports.byPEM[string(pem)] = t
+	return t, nil
+}

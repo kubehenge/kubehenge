@@ -1,0 +1,479 @@
+import { maxWorkers } from "./ClusterDetail";
+import { defaultMinutes, defaultStart, describe, type UpgradeMode, type UpgradePolicy } from "./ClusterUpgrades";
+import { addressBits, addressCount, inList, ipv4, isVLAN, list, rangeProblem, whole } from "./network";
+import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
+import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
+import type { Bridge, ClusterClass, CreateRequest, OIDCProvider, Schema, Storage } from "./types";
+import { browserZone, distributionName, filled, registeredWithRancher, sentence } from "./ui";
+import { quantity, record, texts } from "./values";
+
+export const steps = ["General", "Network", "Machines", "Add-ons", "Identity providers", "Confirm"] as const;
+export type Step = (typeof steps)[number];
+
+export interface Machine {
+  cores: number;
+  memoryMiB: number;
+  diskGiB: number;
+}
+
+// What a machine starts with when its class names no default.
+const defaultMachine: Machine = { cores: 2, memoryMiB: 4096, diskGiB: 30 };
+
+// The least memory a machine takes when its class names no minimum, and the steps Proxmox VE
+// counts it in.
+export const minMemoryMiB = 1024;
+export const memoryStepMiB = 8;
+
+const mibPerGiB = 1024;
+
+export interface Form {
+  name: string;
+  className: string;
+  version: string;
+  controlPlaneReplicas: number;
+  workerReplicas: number;
+  endpoint: string;
+  bridge: string;
+  vlan: string;
+  addresses: string;
+  prefix: number;
+  gateway: string;
+  dnsServers: string;
+  pods: string;
+  services: string;
+  storage: string;
+  place: Place;
+  proxmoxHA: boolean;
+  controlPlaneMachine: Machine;
+  workerMachine: Machine;
+  cni: string;
+  headlamp: boolean;
+  headlampHostname: string;
+  rancherInstall: boolean;
+  rancherHostname: string;
+  rancherRegister: boolean;
+  oidc: OIDCProvider[];
+  upgradeMode: UpgradeMode;
+}
+
+/** newUpgrades is the policy a new cluster starts with: every day from 02:00 for four hours, in the browser's time zone. */
+export const newUpgrades = (mode: Form["upgradeMode"], timeZone: string): UpgradePolicy =>
+  mode === "off" ? { mode } : { mode, window: { start: defaultStart, durationMinutes: defaultMinutes, timeZone } };
+
+export const versionExamples: Record<string, string> = {
+  rke2: "v1.36.5+rke2r1",
+  k3s: "v1.36.5+k3s1",
+  kubeadm: "v1.36.5",
+};
+
+export function variable(c: ClusterClass | undefined, name: string): Schema | undefined {
+  return c?.variables.find((v) => v.name === name)?.schema;
+}
+
+function machineDefaults(s: Schema | undefined): Machine {
+  const d = record(s?.default);
+  return {
+    cores: quantity(d["cores"]) ?? defaultMachine.cores,
+    memoryMiB: quantity(d["memoryMiB"]) ?? defaultMachine.memoryMiB,
+    diskGiB: quantity(d["diskGiB"]) ?? defaultMachine.diskGiB,
+  };
+}
+
+/** newForm is the wizard before anything is chosen. */
+export const newForm = (): Form => ({
+  name: "",
+  className: "",
+  version: "",
+  controlPlaneReplicas: 1,
+  workerReplicas: 1,
+  endpoint: "",
+  bridge: "",
+  vlan: "",
+  addresses: "",
+  prefix: 24,
+  gateway: "",
+  dnsServers: "",
+  pods: "",
+  services: "",
+  storage: "",
+  place: anyNode,
+  proxmoxHA: true,
+  controlPlaneMachine: machineDefaults(undefined),
+  workerMachine: machineDefaults(undefined),
+  cni: "",
+  headlamp: false,
+  headlampHostname: "",
+  rancherInstall: false,
+  rancherHostname: "",
+  rancherRegister: true,
+  oidc: [],
+  upgradeMode: "off",
+});
+
+/**
+ * withClass chooses a distribution's class, bringing its defaults, but only into what the user has
+ * not set: a choice made on a later step stays, unless the new distribution does not offer it.
+ */
+export function withClass(f: Form, c: ClusterClass | undefined, kept: (k: keyof Form) => boolean): Form {
+  const cni = variable(c, "cni");
+  const cniDefault = typeof cni?.default === "string" ? cni.default : "";
+  return {
+    ...f,
+    className: c?.name ?? "",
+    version: f.version && c && new RegExp(c.versionFormat.pattern, "u").test(f.version) ? f.version : "",
+    cni: kept("cni") && (cni?.enum ?? []).includes(f.cni) ? f.cni : cniDefault,
+    controlPlaneMachine: kept("controlPlaneMachine")
+      ? f.controlPlaneMachine
+      : machineDefaults(variable(c, "controlPlaneMachine")),
+    workerMachine: kept("workerMachine") ? f.workerMachine : machineDefaults(variable(c, "workerMachine")),
+    oidc: kept("oidc") ? f.oidc : oidcProviders(variable(c, "oidc")?.default),
+  };
+}
+
+// request turns the form into the API's request, with only the variables the class defines.
+export function request(form: Form, c: ClusterClass): CreateRequest {
+  const defined = new Set(c.variables.map((v) => v.name));
+  const network: Record<string, unknown> = {
+    bridge: form.bridge,
+    addresses: list(form.addresses),
+    prefix: form.prefix,
+    gateway: form.gateway,
+    dnsServers: list(form.dnsServers),
+  };
+  if (form.vlan) {
+    network["vlan"] = Number(form.vlan);
+  }
+  const variables: Record<string, unknown> = {
+    controlPlaneEndpoint: form.endpoint,
+    network,
+    storage: form.storage,
+    controlPlaneMachine: form.controlPlaneMachine,
+    workerMachine: form.workerMachine,
+  };
+  const nodes = allowedNodes(form.place);
+  if (nodes !== undefined) {
+    variables["allowedNodes"] = nodes;
+  }
+  // Left out, the class's default has the cluster take part once HA applies to it.
+  if (!form.proxmoxHA) {
+    variables["proxmoxHA"] = false;
+  }
+  if (form.cni) {
+    variables["cni"] = form.cni;
+  }
+  if (form.headlamp) {
+    variables["headlamp"] = form.headlampHostname
+      ? { enabled: true, hostname: form.headlampHostname }
+      : { enabled: true };
+  }
+  if (form.rancherInstall) {
+    variables["rancher"] = { install: true, hostname: form.rancherHostname };
+  } else if (!form.rancherRegister) {
+    variables["rancher"] = { register: false };
+  }
+  variables["oidc"] = cleanProviders(form.oidc);
+  if (form.upgradeMode !== "off") {
+    variables["upgrades"] = newUpgrades(form.upgradeMode, browserZone());
+  }
+  const req: CreateRequest = {
+    name: form.name,
+    class: c.name,
+    version: form.version,
+    controlPlaneReplicas: form.controlPlaneReplicas,
+    workerReplicas: form.workerReplicas,
+    variables: Object.fromEntries(Object.entries(variables).filter(([k]) => defined.has(k))),
+  };
+  if (form.pods) {
+    req.pods = [form.pods];
+  }
+  if (form.services) {
+    req.services = [form.services];
+  }
+  return req;
+}
+
+const gib = (mib: number): string => (mib % mibPerGiB === 0 ? `${mib / mibPerGiB} GiB` : `${mib} MiB`);
+const machine = (m: Machine): string =>
+  `${m.cores} ${m.cores === 1 ? "core" : "cores"}, ${gib(m.memoryMiB)} memory, ${m.diskGiB} GiB disk`;
+
+function rancherChoice(form: Form): string {
+  if (form.rancherInstall) {
+    return `Installed here, at ${form.rancherHostname}`;
+  }
+  return form.rancherRegister ? registeredWithRancher : "Not registered";
+}
+
+// summary is what the Confirm step shows: each setting by its name, as the user chose it; Proxmox
+// VE HA only where it applies.
+export function summary(form: Form, c: ClusterClass, haOffered = false): [string, string][] {
+  const defined = new Set(c.variables.map((v) => v.name));
+  const rows: [string, string][] = [
+    ["Name", form.name],
+    ["Distribution", distributionName(c.distribution)],
+    ["Kubernetes version", form.version],
+    ["Control-plane nodes", String(form.controlPlaneReplicas)],
+    ["Workers", String(form.workerReplicas)],
+    ["Bridge", form.vlan ? `${form.bridge}, VLAN ${form.vlan}` : form.bridge],
+    ["API address", form.endpoint],
+    ["Node addresses", list(form.addresses).join(", ")],
+    ["Prefix length and gateway", `/${form.prefix}, ${form.gateway}`],
+    ["DNS servers", list(form.dnsServers).join(", ")],
+    ["Pod range", form.pods || "Chosen clear of the nodes' network"],
+    ["Service range", form.services || "Chosen clear of the nodes' network"],
+    ["Storage", form.storage],
+  ];
+  if (defined.has("allowedNodes")) {
+    rows.push(["Placement", placeText(form.place)]);
+  }
+  if (haOffered) {
+    rows.push(["Proxmox VE HA", haText(form.proxmoxHA)]);
+  }
+  rows.push(
+    ["Control-plane machines", machine(form.controlPlaneMachine)],
+    ["Worker machines", machine(form.workerMachine)],
+  );
+  if (defined.has("cni")) {
+    rows.push(["Pod network", form.cni || "The distribution's own"]);
+  }
+  if (defined.has("headlamp")) {
+    rows.push([
+      "Headlamp",
+      form.headlamp ? `On${form.headlampHostname ? `, at ${form.headlampHostname}` : ""}` : "Off",
+    ]);
+  }
+  if (defined.has("rancher")) {
+    rows.push(["Rancher", rancherChoice(form)]);
+  }
+  if (defined.has("upgrades")) {
+    const upgrades = newUpgrades(form.upgradeMode, browserZone());
+    rows.push(["Automatic upgrades", describe(upgrades)]);
+  }
+  if (defined.has("oidc")) {
+    const providers = cleanProviders(form.oidc);
+    rows.push([
+      "Identity providers",
+      providers.length > 0 ? providers.map((p) => p.issuerURL).join(", ") : "None: tokens and certificates only",
+    ]);
+  }
+  return rows;
+}
+
+// rancherMinimumCores is what Rancher's documentation asks of every node of its cluster; the
+// controller refuses fewer.
+export const rancherMinimumCores = 4;
+
+// FieldKey names a field of the wizard a problem belongs to.
+export type FieldKey =
+  | "name"
+  | "class"
+  | "version"
+  | "controlPlaneReplicas"
+  | "workerReplicas"
+  | "bridge"
+  | "vlan"
+  | "endpoint"
+  | "addresses"
+  | "prefix"
+  | "gateway"
+  | "dnsServers"
+  | "pods"
+  | "services"
+  | "storage"
+  | "placement"
+  | "controlPlaneMachine"
+  | "workerMachine"
+  | "cni"
+  | "rancherHostname"
+  | "headlampHostname"
+  | "oidc";
+
+type Problems = Partial<Record<FieldKey, string>>;
+
+function generalProblems(form: Form, c: ClusterClass | undefined): Problems {
+  const p: Problems = {};
+  if (!/^[a-z](?:[-a-z0-9]{0,38}[a-z0-9])?$/u.test(form.name)) {
+    p.name =
+      "Lowercase letters, digits and dashes, starting with a letter and ending with a letter or digit, at most 40 characters.";
+  }
+  if (!c) {
+    p.class = "Choose a distribution.";
+  } else if (filled(c.noTemplate)) {
+    p.class = sentence(c.noTemplate);
+  } else if (!new RegExp(c.versionFormat.pattern, "u").test(form.version)) {
+    p.version = `${distributionName(c.distribution)} versions look like ${versionExamples[c.distribution] ?? "v1.36.5"}.`;
+  }
+  if (!whole(form.workerReplicas, 0, maxWorkers)) {
+    p.workerReplicas = `A whole number from 0 to ${maxWorkers}.`;
+  }
+  return p;
+}
+
+function addressProblems(form: Form): Problems {
+  const p: Problems = {};
+  const entries = list(form.addresses);
+  const { count, bad } = addressCount(entries, form.gateway, form.prefix);
+  // A rollout makes each new node before it removes an old one.
+  const needed = form.controlPlaneReplicas + form.workerReplicas + 1;
+  if (entries.length === 0) {
+    p.addresses = "At least one range, network or address.";
+  } else if (bad !== undefined) {
+    p.addresses = `${bad} is no address, range or network inside the gateway's network.`;
+  } else if (count < needed) {
+    p.addresses = `${count} given; the nodes need ${needed}, one more than there are for rollouts.`;
+  }
+  if (!ipv4.test(form.endpoint)) {
+    p.endpoint = "An IPv4 address.";
+  } else if (inList(form.endpoint, entries)) {
+    p.endpoint = "Not one of the node addresses, which the nodes take.";
+  } else if (addressCount([form.endpoint], form.gateway, form.prefix).bad !== undefined) {
+    p.endpoint = "Inside the gateway's network.";
+  }
+  return p;
+}
+
+function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
+  const p: Problems = {};
+  if (!form.bridge) {
+    p.bridge = "Choose a bridge.";
+  }
+  if (form.vlan && !isVLAN(form.vlan)) {
+    p.vlan = "1 to 4094.";
+  }
+  if (!whole(form.prefix, 1, addressBits)) {
+    p.prefix = "1 to 32.";
+  }
+  if (!ipv4.test(form.gateway)) {
+    p.gateway = "An IPv4 address.";
+  }
+  Object.assign(p, addressProblems(form));
+  if (list(form.dnsServers).length === 0) {
+    p.dnsServers = "At least one.";
+  } else if (list(form.dnsServers).some((d) => !ipv4.test(d))) {
+    p.dnsServers = "IPv4 addresses.";
+  }
+  for (const [key, v] of [
+    ["pods", form.pods],
+    ["services", form.services],
+  ] as const) {
+    const problem = v ? rangeProblem(v) : undefined;
+    if (problem !== undefined) {
+      p[key] = problem;
+    }
+  }
+  if (c?.variables.find((v) => v.name === "cni")?.required === true && !form.cni) {
+    p.cni = "Choose a pod network.";
+  }
+  return p;
+}
+
+function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
+  const p: Problems = {};
+  if (!form.storage) {
+    p.storage = "Choose a storage.";
+  }
+  const placement = variable(c, "allowedNodes") ? placeProblem(form.place) : undefined;
+  if (placement !== undefined) {
+    p.placement = placement;
+  }
+  for (const [key, m] of [
+    ["controlPlaneMachine", form.controlPlaneMachine],
+    ["workerMachine", form.workerMachine],
+  ] as const) {
+    const schema = variable(c, key)?.properties;
+    const minMemory = schema?.["memoryMiB"]?.minimum ?? minMemoryMiB;
+    const minDisk = schema?.["diskGiB"]?.minimum ?? 1;
+    if (!whole(m.cores, 1)) {
+      p[key] = "A whole number of cores, at least one.";
+    } else if (
+      form.rancherInstall &&
+      m.cores < rancherMinimumCores &&
+      (key === "controlPlaneMachine" || form.workerReplicas > 0)
+    ) {
+      p[key] = `At least ${rancherMinimumCores} cores, which Rancher needs on every node.`;
+    } else if (!whole(m.memoryMiB, minMemory) || m.memoryMiB % memoryStepMiB !== 0) {
+      p[key] = `Memory of at least ${minMemory} MiB, in steps of ${memoryStepMiB}.`;
+    } else if (!whole(m.diskGiB, minDisk)) {
+      p[key] = `A whole number of GiB of disk, at least ${minDisk}.`;
+    }
+  }
+  return p;
+}
+
+// fieldProblems says, by field, what keeps a step from being complete.
+export function fieldProblems(step: Step, form: Form, c: ClusterClass | undefined): Problems {
+  switch (step) {
+    case "General": {
+      return generalProblems(form, c);
+    }
+    case "Network": {
+      return networkProblems(form, c);
+    }
+    case "Machines": {
+      return machineProblems(form, c);
+    }
+    case "Add-ons": {
+      return form.rancherInstall && !form.rancherHostname ? { rancherHostname: "Rancher needs a host name." } : {};
+    }
+    case "Identity providers": {
+      const o = oidcProblems(form.oidc);
+      return o.length > 0 ? { oidc: o.join(" ") } : {};
+    }
+    case "Confirm": {
+      break;
+    }
+  }
+  return {};
+}
+
+// problems lists what keeps a step from being complete.
+export function problems(step: Step, form: Form, c: ClusterClass | undefined): string[] {
+  return Object.values(fieldProblems(step, form, c));
+}
+
+const minorOf = (v: string): number => Number(/^v1\.(?<minor>\d+)\./u.exec(v)?.groups?.["minor"] ?? 0);
+
+// versionLabel marks the stable release, and those of minors newer than it.
+export function versionLabel(v: string, stable: string | undefined): string {
+  if (!filled(stable)) {
+    return v;
+  }
+  if (v === stable) {
+    return `${v} (stable)`;
+  }
+  return minorOf(v) > minorOf(stable) ? `${v} (newer than stable)` : v;
+}
+
+// offeredBridges are the bridges a cluster may attach to: the class's list when it has one, with
+// what the nodes say of each, else every bridge a node lists. A bridge the user cannot list is
+// still offered; the server checks SDN.Use on it.
+export function offeredBridges(byNode: Record<string, Bridge[]>, allowed: string[] | undefined): Bridge[] {
+  const seen = new Map<string, Bridge>();
+  for (const b of Object.values(byNode).flat()) {
+    const known = seen.get(b.bridge);
+    if (!known || (!known.usable && b.usable)) {
+      seen.set(b.bridge, b);
+    }
+  }
+  if (!allowed) {
+    return [...seen.values()];
+  }
+  return allowed.map((name) => seen.get(name) ?? { bridge: name, node: "", vlanAware: false, usable: true });
+}
+
+// offeredStorages are the storages, once each, that take disks, the user may use and the class
+// allows.
+export function offeredStorages(storages: Storage[], allowed: string[] | undefined): Storage[] {
+  const seen = new Map<string, Storage>();
+  for (const s of storages) {
+    if (s.usable && !seen.has(s.storage)) {
+      seen.set(s.storage, s);
+    }
+  }
+  return [...seen.values()].filter((s) => !allowed || allowed.includes(s.storage));
+}
+
+// The class lists the bridges and storages clusters may use; without such a list, what any node
+// offers.
+export const classBridges = (c: ClusterClass | undefined): string[] | undefined =>
+  texts(variable(c, "network")?.properties?.["bridge"]?.enum);
+export const classStorages = (c: ClusterClass | undefined): string[] | undefined => texts(variable(c, "storage")?.enum);

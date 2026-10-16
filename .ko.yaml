@@ -1,0 +1,13 @@
+---
+builds:
+  - id: kubehenge
+    main: ./cmd/kubehenge
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    # As the Makefile's LDFLAGS: a third smaller, stack traces still named.
+    ldflags:
+      - -s
+      - -w
+      - -buildid=

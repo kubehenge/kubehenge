@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["workloadPool", "providerNamespaces", "interface", "clusters", "clusterOIDC", "image", "proxmox", "addons"],
+  "properties": {
+    "chartDigest": {
+      "description": "Digest of the chart's files, which the management cluster's module passes so that a changed chart upgrades the release whatever its version says.",
+      "type": "string"
+    },
+    "workloadPool": {
+      "description": "Proxmox VE pool the management cluster's Cluster API token manages, nested at most one level.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?$"
+    },
+    "providerNamespaces": {
+      "description": "Namespaces of the Cluster API providers only one ClusterClass's clusters use, by class.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "$ref": "#/$defs/name" },
+        "uniqueItems": true
+      }
+    },
+    "interface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace"],
+      "properties": {
+        "namespace": { "$ref": "#/$defs/name" }
+      }
+    },
+    "clusters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["storages", "bridges"],
+      "properties": {
+        "storages": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "bridges": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+      }
+    },
+    "clusterOIDC": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["issuerURL", "clientID"],
+        "properties": {
+          "issuerURL": { "type": "string", "pattern": "^https://", "maxLength": 2048 },
+          "clientID": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "usernameClaim": { "type": "string", "minLength": 1 },
+          "usernamePrefix": { "$ref": "#/$defs/oidcPrefix" },
+          "groupsClaim": { "type": "string", "minLength": 1 },
+          "groupsPrefix": { "$ref": "#/$defs/oidcPrefix" },
+          "scopes": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+          "certificateAuthority": { "type": "string", "pattern": "-----BEGIN CERTIFICATE-----" }
+        }
+      }
+    },
+    "image": {
+      "description": "Kubehenge's controller image; empty means the one this chart was released with.",
+      "type": "string"
+    },
+    "proxmox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "secret", "clusterGroup", "clusterRole", "volumeOwnerNode", "region", "ha"],
+      "properties": {
+        "url": { "type": "string", "pattern": "^https://[^/]+" },
+        "secret": { "$ref": "#/$defs/name" },
+        "clusterGroup": { "type": "string", "minLength": 1 },
+        "clusterRole": { "type": "string", "minLength": 1 },
+        "volumeOwnerNode": { "type": "string" },
+        "region": { "type": "string" },
+        "ha": { "type": "boolean" }
+      }
+    },
+    "addons": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["headlamp", "rancher", "certManager", "cloudControllerManager", "csiPlugin", "cilium", "calico"],
+      "properties": {
+        "headlamp": {
+          "allOf": [{ "$ref": "#/$defs/chart" }],
+          "required": ["image"],
+          "properties": {
+            "image": {
+              "description": "Headlamp's image by tag and digest, as the chart names it.",
+              "type": "string",
+              "pattern": "^v[0-9][^@]*@sha256:[0-9a-f]{64}$"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "rancher": {
+          "allOf": [{ "$ref": "#/$defs/chart" }],
+          "required": ["kubernetes"],
+          "properties": {
+            "kubernetes": {
+              "description": "Kubernetes minor versions the Rancher release runs on, as <min>-<max>.",
+              "type": "string",
+              "pattern": "^[0-9]+-[0-9]+$"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "certManager": { "$ref": "#/$defs/chartOnly" },
+        "cloudControllerManager": { "$ref": "#/$defs/chartOnly" },
+        "csiPlugin": { "$ref": "#/$defs/chartOnly" },
+        "cilium": { "$ref": "#/$defs/chartOnly" },
+        "calico": { "$ref": "#/$defs/chartOnly" }
+      }
+    }
+  },
+  "$defs": {
+    "name": {
+      "description": "A Kubernetes object or namespace name.",
+      "type": "string",
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+      "maxLength": 63
+    },
+    "oidcPrefix": {
+      "type": "string",
+      "maxLength": 64,
+      "not": { "pattern": "^system:" }
+    },
+    "chart": {
+      "type": "object",
+      "required": ["repository", "chart", "version"],
+      "properties": {
+        "repository": { "type": "string", "pattern": "^(https|oci)://" },
+        "chart": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+" }
+      }
+    },
+    "chartOnly": {
+      "allOf": [{ "$ref": "#/$defs/chart" }],
+      "unevaluatedProperties": false
+    }
+  }
+}

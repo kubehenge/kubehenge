@@ -1,0 +1,128 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "unicorn", "oxc", "promise", "react", "react-perf", "jsx-a11y", "import"],
+  // Every category but restriction, which bans language features one by one (async, optional
+  // chaining, spread), and nursery, whose rules are unfinished. The restriction rules below that
+  // typescript-eslint's strict configurations hold are turned on one by one.
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "pedantic": "error",
+    "perf": "error",
+    "style": "error"
+  },
+  "rules": {
+    "eslint/complexity": "error",
+    "eslint/eqeqeq": "error",
+    "eslint/no-alert": "error",
+    "eslint/no-console": "error",
+    "eslint/no-empty-function": "error",
+    "eslint/no-param-reassign": "error",
+    "eslint/no-var": "error",
+    "eslint/no-void": ["error", { "allowAsStatement": true }],
+    "typescript/explicit-module-boundary-types": "error",
+    "typescript/no-empty-object-type": "error",
+    "typescript/no-explicit-any": "error",
+    "typescript/no-invalid-void-type": "error",
+    "typescript/no-namespace": "error",
+    "typescript/no-non-null-assertion": "error",
+    "typescript/use-unknown-in-catch-callback-variable": "error",
+    "unicorn/prefer-number-properties": "error",
+
+    "eslint/curly": ["error", "all"],
+    "eslint/func-style": ["error", "declaration", { "allowArrowFunctions": true }],
+    "eslint/no-magic-numbers": [
+      "error",
+      { "ignore": [-1, 0, 1, 2], "ignoreArrayIndexes": true, "ignoreDefaultValues": true }
+    ],
+    "eslint/one-var": ["error", "never"],
+    "typescript/no-confusing-void-expression": ["error", { "ignoreArrowShorthand": true }],
+    "react/state-in-constructor": ["error", "never"],
+    // The formatter writes number literals, its hexadecimal digits in lower case.
+    "unicorn/number-literal-case": "off",
+    // Named after the component it holds, whose acronym stays in capitals.
+    "unicorn/filename-case": [
+      "error",
+      { "cases": { "kebabCase": true, "pascalCase": true }, "ignore": ["^OIDCProviders\\.tsx$"] }
+    ],
+    // Without the types it reads setError(undefined) as useless, which React's setters require.
+    "unicorn/no-useless-undefined": ["error", { "checkArguments": false }],
+    // Not "error", which the components' own error state already is.
+    "unicorn/catch-error-name": ["error", { "name": "err" }],
+    "import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }],
+    // Types imported inline beside values, and `import type` where only types are, which
+    // verbatimModuleSyntax would otherwise keep as an empty import.
+    "typescript/consistent-type-imports": ["error", { "fixStyle": "inline-type-imports" }],
+    "typescript/no-import-type-side-effects": "error",
+    "import/consistent-type-specifier-style": "off",
+
+    // The automatic JSX runtime (tsconfig "jsx": "react-jsx") needs no React in scope.
+    "react/react-in-jsx-scope": "off",
+    // Asks for a useCallback or useMemo around every inline prop; React only gains from that for
+    // memoised children, which this interface has none of.
+    "react-perf/jsx-no-new-function-as-prop": "off",
+    "react-perf/jsx-no-new-object-as-prop": "off",
+    "react-perf/jsx-no-new-array-as-prop": "off",
+    "react-perf/jsx-no-jsx-as-prop": "off",
+    // Deep Readonly for every parameter, DOM events and React props included, which their own
+    // types do not offer.
+    "typescript/prefer-readonly-parameter-types": "off",
+    // typescript/require-await is the same rule with the types to tell a thenable apart.
+    "eslint/require-await": "off",
+    // Lengths count JSX layout and test suites, not complexity, which eslint/complexity bounds.
+    "eslint/max-lines": "off",
+    "eslint/max-lines-per-function": "off",
+    "eslint/max-statements": "off",
+    "react/jsx-max-depth": "off",
+    // Flags the apostrophes of English prose, which React renders as written.
+    "react/no-unescaped-entities": "off",
+    // Names of one letter for a callback's event or index are as clear as they get.
+    "eslint/id-length": "off",
+    // Order of keys, imports and comments' first letters: the formatter sorts imports, and keys
+    // follow meaning, comments often start with an identifier.
+    "eslint/sort-keys": "off",
+    "eslint/sort-imports": "off",
+    "eslint/capitalized-comments": "off",
+    // A ternary is the expression form of an if, and React renders conditionally with it.
+    "eslint/no-ternary": "off",
+    // unicorn/no-nested-ternary allows what eslint/no-nested-ternary forbids.
+    "unicorn/no-nested-ternary": "off",
+    // Named exports throughout, exported where they are declared.
+    "import/no-named-export": "off",
+    "import/prefer-default-export": "off",
+    "import/group-exports": "off",
+    "import/exports-last": "off",
+    // React and the DOM speak null: refs, empty renders, absent elements.
+    "unicorn/no-null": "off",
+    // The interface runs only in a browser, where window is the global it means.
+    "unicorn/prefer-global-this": "off",
+    // Asks `let x = undefined` of what unicorn/no-useless-undefined forbids it for; TypeScript
+    // already refuses a read before the assignment.
+    "eslint/init-declarations": "off"
+  },
+  "overrides": [
+    {
+      // Only here: vitest's rules read a component's own describe() as a test suite's.
+      "files": ["**/*.test.ts", "**/*.test.tsx"],
+      "plugins": ["vitest"],
+      "rules": {
+        // Tests spell out the values they check.
+        "eslint/no-magic-numbers": "off",
+        // A test of a whole page checks all it shows; eslint/complexity still bounds the test.
+        "vitest/max-expects": "off",
+        // The tests await what they check, which expect.assertions would only repeat.
+        "vitest/prefer-expect-assertions": "off",
+        // The tests import from vitest, which globals: false asks for; the opposite rule is on.
+        "vitest/no-importing-vitest-globals": "off"
+      }
+    },
+    {
+      "files": ["vite.config.ts"],
+      "rules": {
+        // The build's own configuration runs in Node.
+        "import/no-nodejs-modules": "off"
+      }
+    }
+  ],
+  "ignorePatterns": ["node_modules"]
+}

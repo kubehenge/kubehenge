@@ -1,0 +1,33 @@
+[Unit]
+Description=Upgrade Kubehenge to a signed newer release
+Documentation=https://github.com/kubehenge/kubehenge
+After=network-online.target
+Wants=network-online.target
+
+# Runs as root because it replaces the software the interface runs as an unprivileged user; it
+# acts only on a signed release newer than the installed one.
+[Service]
+Type=oneshot
+# The interface's own settings, so that a KUBEHENGE_RELEASE_INDEX mirror applies to both; the index
+# is checked against the release key built into the binary wherever it comes from.
+EnvironmentFile=/etc/kubehenge/appliance.env
+ExecStart=/usr/local/bin/kubehenge update --spool /var/lib/kubehenge-update
+TimeoutStartSec=15min
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/usr/local/bin /usr/local/share /etc/systemd/system /var/lib/kubehenge-update
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native

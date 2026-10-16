@@ -1,0 +1,16 @@
+---
+# The chart's values as the management-cluster module sets them, for the integration tier.
+workloadPool: kubehenge
+providerNamespaces:
+  kubehenge-kubeadm: [capi-kubeadm-bootstrap-system, capi-kubeadm-control-plane-system]
+  kubehenge-rke2: [rke2-bootstrap-system, rke2-control-plane-system]
+  kubehenge-k3s: [k3s-bootstrap-system, k3s-control-plane-system]
+clusters:
+  storages: [local-lvm]
+  bridges: [vmbr0]
+proxmox:
+  url: https://pve.example.org:8006
+  secret: kubehenge-proxmox
+  clusterGroup: kubehenge-clusters
+  clusterRole: KubehengeClusterVMs
+  ha: false

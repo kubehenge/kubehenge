@@ -1,0 +1,67 @@
+{{- /*
+Helm creates and patches the providers through the operator's webhooks, which fail closed. After the
+management cluster's nodes restart, as on a Talos upgrade, the operator's pod is replaced only once
+the cluster's controllers notice that the old one ended, and until then the webhooks' Service still
+points at the old pod's address. This Job holds the release until the webhooks answer: a server-side
+dry run of a provider object goes through them and stores nothing. The pod's readiness cannot
+serve, as the old pod's status may still read ready when the API server is back.
+*/ -}}
+{{- $hook := dict "helm.sh/hook" "pre-install,pre-upgrade" "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wait-for-operator
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+    helm.sh/hook-weight: "-1"
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: wait-for-operator
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+    helm.sh/hook-weight: "-1"
+rules:
+  # Only ever with dryRun, which `kubehenge wait operator` sets.
+  - apiGroups: [operator.cluster.x-k8s.io]
+    resources: [addonproviders]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: wait-for-operator
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+    helm.sh/hook-weight: "-1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: wait-for-operator
+subjects:
+  - kind: ServiceAccount
+    name: wait-for-operator
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wait-for-operator
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+spec:
+  backoffLimit: 0
+  # Past the command's own timeout, so that the Job fails with the command's account of why.
+  activeDeadlineSeconds: {{ add .Values.waitTimeoutSeconds 60 }}
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: wait-for-operator
+      automountServiceAccountToken: true
+      {{- include "cluster-api-providers.waitPod" (list . (list "operator" (printf "--namespace=%s" .Release.Namespace))) | nindent 6 }}

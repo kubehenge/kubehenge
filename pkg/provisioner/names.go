@@ -1,0 +1,102 @@
+// Package provisioner gives each workload cluster its own corner of Proxmox VE before Cluster API
+// creates any of its VMs: a pool for the VMs, a user and token scoped to that pool for the
+// cluster's cloud controller manager and CSI plugin, and a VM that owns the cluster's volumes. It
+// delivers the token to the cluster, and removes it all once the cluster's VMs are gone.
+package provisioner
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"regexp"
+	"strings"
+)
+
+const (
+	// Proxmox VE's limit on the part of a user ID before the realm.
+	maxUserName = 64
+	// A VM name is a DNS name; one label keeps it valid.
+	maxVMName = 63
+)
+
+// Characters Proxmox VE allows in pool and user names, other than the separators added here.
+var poolSegment = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// Names are the Proxmox VE objects of one workload cluster.
+type Names struct {
+	// Pool holds the cluster's VMs, nested under the workload pool. The ClusterClasses place the
+	// VMs in the same pool, so the two must agree: <workload pool>/<namespace>.<name>.
+	Pool string
+	// User signs in only through Token, carries the cluster's ACLs and belongs to the clusters'
+	// group, which holds the storage and node rights all clusters share.
+	User string
+	// Token is the token's ID without the user, as Proxmox VE's API addresses it.
+	Token string
+	// VolumeOwner names the VM that owns the cluster's volumes.
+	VolumeOwner string
+}
+
+// Proxmox VE nests pools three deep; each cluster's pool takes the last level.
+const maxWorkloadPoolDepth = 2
+
+// ValidWorkloadPool tells whether pool can hold the clusters' pools: a pool name, nested at most
+// one level.
+func ValidWorkloadPool(pool string) error {
+	segments := strings.Split(pool, "/")
+	if len(segments) > maxWorkloadPoolDepth {
+		return fmt.Errorf("workload pool %q is nested %d deep; Proxmox VE leaves room for the clusters' pools under at most %d", pool, len(segments), maxWorkloadPoolDepth)
+	}
+	for _, s := range segments {
+		if !poolSegment.MatchString(s) {
+			return fmt.Errorf("workload pool %q is not a Proxmox VE pool name", pool)
+		}
+	}
+	return nil
+}
+
+// NamesFor returns the names for the cluster namespace/name. A namespace holds no dot, so
+// <namespace>.<name> is unique where <namespace>-<name> would not be.
+func NamesFor(workloadPool, namespace, name string) (Names, error) {
+	if err := ValidWorkloadPool(workloadPool); err != nil {
+		return Names{}, err
+	}
+	if !poolSegment.MatchString(namespace) || !poolSegment.MatchString(name) {
+		return Names{}, fmt.Errorf("cluster %s/%s: name holds characters a Proxmox VE pool cannot", namespace, name)
+	}
+	id := namespace + "." + name
+	sum := sha256.Sum256([]byte(id))
+	digest := hex.EncodeToString(sum[:])
+	// A user name holds no "/", which a nested workload pool does. "~" stands in for it: Proxmox VE
+	// allows it in a user name but not in a pool's, so the workload pools a/b and a-b, of two
+	// management clusters on one Proxmox VE, never give their clusters the same users.
+	prefix := strings.ReplaceAll(workloadPool, "/", "~")
+	user := prefix + "." + id
+	if len(user) > maxUserName {
+		user = prefix + "." + digest[:16]
+	}
+	if len(user) > maxUserName || !userName.MatchString(user) {
+		return Names{}, fmt.Errorf("workload pool %q cannot name the clusters' Proxmox VE users", workloadPool)
+	}
+	// The owner is recognised by its name, so the name carries the whole cluster identity: two
+	// clusters of one name in different namespaces must never take each other's owner, whose
+	// removal deletes every volume it owns.
+	suffix := "-" + digest[:8] + "-volumes"
+	owner := name
+	if len(owner) > maxVMName-len(suffix) {
+		owner = owner[:maxVMName-len(suffix)]
+	}
+	return Names{
+		Pool:        workloadPool + "/" + id,
+		User:        user + "@pve",
+		Token:       "cluster",
+		VolumeOwner: owner + suffix,
+	}, nil
+}
+
+// Characters Proxmox VE allows in the user part of a user ID.
+var userName = regexp.MustCompile(`^[^\s:/]+$`)
+
+// TokenID is the full token ID, user@realm!token.
+func (n Names) TokenID() string {
+	return n.User + "!" + n.Token
+}

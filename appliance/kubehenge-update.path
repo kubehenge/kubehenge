@@ -1,0 +1,9 @@
+[Unit]
+Description=Kubehenge upgrade requests from the interface
+
+[Path]
+PathExistsGlob=/var/lib/kubehenge-update/requests/*.json
+Unit=kubehenge-update.service
+
+[Install]
+WantedBy=paths.target

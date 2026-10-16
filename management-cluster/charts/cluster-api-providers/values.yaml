@@ -1,0 +1,15 @@
+---
+# Digest of the chart's files. The module sets it: the Helm provider upgrades a release only when
+# its chart's version or its values change.
+chartDigest: ""
+
+namespaces: []
+providers: []
+secrets: {}
+
+# Kubehenge's controller image, whose `kubehenge wait` the release's hooks run.
+image: ""
+
+# How long the release waits, before its changes, for the operator's webhooks to answer, and after
+# them for every provider to be installed and rolled out.
+waitTimeoutSeconds: 600

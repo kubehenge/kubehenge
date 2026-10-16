@@ -1,0 +1,16 @@
+# proxmox_api_token and proxmox_ca_certificate are best passed as TF_VAR_ environment variables.
+
+proxmox_endpoint = "https://pve.example.org:8006"
+proxmox_nodes    = ["pve"]
+
+image_datastore     = "local"
+vm_datastore        = "local-lvm"
+bootstrap_datastore = "local"
+workload_datastores = ["local-lvm"]
+bridge              = "vmbr0"
+workload_bridges    = ["vmbr0"]
+
+node_addresses = ["192.0.2.11/24"]
+api_address    = "192.0.2.10"
+gateway        = "192.0.2.1"
+dns_servers    = ["192.0.2.1"]

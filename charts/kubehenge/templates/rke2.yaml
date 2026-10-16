@@ -1,0 +1,167 @@
+{{- $class := "kubehenge-rke2" }}
+{{- $clusterSpec := include "kubehenge.proxmoxClusterSpec" . }}
+{{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "cloud-image" "kubehenge" "ubuntu-26.04") "serviceJoins" true) }}
+{{- $controlPlaneSpec := include "kubehenge.rke2ControlPlaneSpec" . }}
+{{- $workerSpec := include "kubehenge.rke2WorkerSpec" . }}
+{{- $clusterName := include "kubehenge.hashedName" (dict "name" $class "spec" $clusterSpec) }}
+{{- $machineName := include "kubehenge.hashedName" (dict "name" (printf "%s-machine" $class) "spec" $machineSpec) }}
+{{- $controlPlaneName := include "kubehenge.hashedName" (dict "name" (printf "%s-control-plane" $class) "spec" $controlPlaneSpec) }}
+{{- $workerName := include "kubehenge.hashedName" (dict "name" (printf "%s-worker" $class) "spec" $workerSpec) }}
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: ClusterClass
+metadata:
+  name: {{ $class }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # RKE2's own ranges, for a Cluster that sets none.
+    kubehenge.dev/default-pods: 10.42.0.0/16
+    kubehenge.dev/default-services: 10.43.0.0/16
+    {{- if .Values.proxmox.ha }}
+    # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
+    kubehenge.dev/proxmox-ha: "true"
+    {{- end }}
+spec:
+  infrastructure:
+    templateRef:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+      kind: ProxmoxClusterTemplate
+      name: {{ $clusterName }}
+  controlPlane:
+    templateRef:
+      apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+      kind: RKE2ControlPlaneTemplate
+      name: {{ $controlPlaneName }}
+    machineInfrastructure:
+      templateRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+        kind: ProxmoxMachineTemplate
+        name: {{ $machineName }}
+    naming:
+      template: {{ "{{ .cluster.name }}-control-plane-{{ .random }}" | quote }}
+    healthCheck:
+      {{- include "kubehenge.healthCheck" "controlPlane" | nindent 6 }}
+  workers:
+    machineDeployments:
+      - class: worker
+        naming:
+          template: {{ "{{ .cluster.name }}-{{ .machineDeployment.topologyName }}-{{ .random }}" | quote }}
+        bootstrap:
+          templateRef:
+            apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+            kind: RKE2ConfigTemplate
+            name: {{ $workerName }}
+        infrastructure:
+          templateRef:
+            apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+            kind: ProxmoxMachineTemplate
+            name: {{ $machineName }}
+        healthCheck:
+          {{- include "kubehenge.healthCheck" "workers" | nindent 10 }}
+  variables:
+    {{- /* RKE2's static pods request 2 GiB between them (etcd, API server, controller manager, scheduler, kube-proxy). */}}
+    {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "controlPlaneMinMemoryMiB" 3072 "clusters" .Values.clusters) | nindent 4 }}
+    {{- include "kubehenge.addonVariables" . | nindent 4 }}
+    {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
+    {{- include "kubehenge.oidcVariable" . | nindent 4 }}
+    - name: cni
+      required: false
+      schema:
+        openAPIV3Schema:
+          type: string
+          description: The CNI plugin, fixed once the cluster exists. RKE2's own default is canal.
+          enum: [canal, calico, cilium]
+          default: canal
+          {{- include "kubehenge.cniFixed" . | nindent 10 }}
+  patches:
+    {{- include "kubehenge.proxmoxPatches" . | nindent 4 }}
+    - name: rke2-control-plane
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: RKE2ControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/files
+              valueFrom:
+                template: |
+                  -{{- include "kubehenge.kubeVipFile" (dict "path" "/var/lib/rancher/rke2/agent/pod-manifests/kube-vip.yaml" "kubeconfig" "/etc/rancher/rke2/rke2.yaml") | nindent 22 }}
+            - op: add
+              path: /spec/template/spec/serverConfig/cni
+              valueFrom:
+                variable: cni
+    - name: rke2-oidc
+      enabledIf: {{ include "kubehenge.oidcEnabled" . }}
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: RKE2ControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/files/-
+              valueFrom:
+                template: |
+                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/etc/rancher/rke2/authentication-config.yaml") | nindent 18 }}
+            # RKE2 mounts every file an argument names into the API server's static pod; mounting it
+            # again as an extra mount makes the pod invalid (a mount path must be unique).
+            - op: add
+              path: /spec/template/spec/serverConfig/kubeAPIServer
+              value:
+                extraArgs:
+                  - authentication-config=/etc/rancher/rke2/authentication-config.yaml
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+kind: ProxmoxClusterTemplate
+metadata:
+  name: {{ $clusterName }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- $clusterSpec | nindent 2 }}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+kind: ProxmoxMachineTemplate
+metadata:
+  name: {{ $machineName }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- $machineSpec | nindent 2 }}
+---
+{{ include "kubehenge.classTemplates" (dict "class" $class "namespace" .Release.Namespace "templates" (list
+  (dict "apiVersion" "controlplane.cluster.x-k8s.io/v1beta2" "kind" "RKE2ControlPlaneTemplate" "name" $controlPlaneName "spec" $controlPlaneSpec)
+  (dict "apiVersion" "bootstrap.cluster.x-k8s.io/v1beta2" "kind" "RKE2ConfigTemplate" "name" $workerName "spec" $workerSpec)
+)) }}
+
+{{- define "kubehenge.rke2AgentConfig" -}}
+agentConfig:
+  kubelet:
+    extraArgs:
+      # capmox names a machine by its VM's SMBIOS UUID, which cloud-init reads as the instance ID.
+      - provider-id=proxmox://{{ "{{ ds.meta_data.instance_id }}" }}
+  {{- if .controlPlane }}
+  {{- include "kubehenge.controlPlaneTaints" . | nindent 2 }}
+  {{- end }}
+{{- end -}}
+
+{{- define "kubehenge.rke2ControlPlaneSpec" -}}
+template:
+  spec:
+    {{- include "kubehenge.rke2AgentConfig" (dict "controlPlane" true) | nindent 4 }}
+    serverConfig:
+      # The Proxmox VE cloud controller manager initialises the nodes instead of RKE2's own.
+      cloudProviderName: external
+      disableComponents:
+        kubernetesComponents: [cloudController]
+    rolloutStrategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxSurge: 1
+{{- end -}}
+
+{{- define "kubehenge.rke2WorkerSpec" -}}
+template:
+  spec:
+    {{- include "kubehenge.rke2AgentConfig" (dict) | nindent 4 }}
+{{- end -}}

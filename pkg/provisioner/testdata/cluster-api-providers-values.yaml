@@ -1,0 +1,246 @@
+---
+# The management-cluster module's values for the cluster-api-providers chart, with its tests'
+# variables; its tests hold the module to them.
+image: registry.example/kubehenge:integration
+namespaces:
+  - kubehenge-system
+  - capi-system
+  - kubeadm-bootstrap-system
+  - rke2-bootstrap-system
+  - k3s-bootstrap-system
+  - kubeadm-control-plane-system
+  - rke2-control-plane-system
+  - k3s-control-plane-system
+  - proxmox-infrastructure-system
+  - in-cluster-ipam-system
+  - helm-addon-system
+providers:
+  - kind: CoreProvider
+    name: cluster-api
+    namespace: capi-system
+    spec:
+      configSecret:
+        name: cluster-api-variables
+        namespace: kubehenge-system
+      deployment:
+        containers:
+          - name: manager
+            resources:
+              requests:
+                cpu: 10m
+                memory: 128Mi
+      manager:
+        leaderElection: &leases
+          leaderElect: true
+          leaseDuration: 60s
+          renewDeadline: 40s
+          resourceLock: ""
+          resourceName: ""
+          resourceNamespace: ""
+          retryPeriod: 10s
+      patches:
+        - patch: &capi-config-hash |
+            "spec":
+              "template":
+                "metadata":
+                  "annotations":
+                    "kubehenge.dev/config-hash": "6d1e5a900121eabba8ba18fdc62ba1f8ffce2fb6fa85d4bc2c197b8e3a09c6b9"
+          target:
+            kind: Deployment
+      version: v1.14.3
+  - kind: BootstrapProvider
+    name: kubeadm
+    namespace: kubeadm-bootstrap-system
+    spec:
+      deployment:
+        containers:
+          - name: manager
+            resources:
+              requests:
+                cpu: 10m
+                memory: 64Mi
+      manager:
+        leaderElection: *leases
+      patches:
+        - patch: &left-to-scaling |
+            "spec":
+              "replicas": null
+          target:
+            kind: Deployment
+      version: v1.14.3
+  - kind: BootstrapProvider
+    name: rke2
+    namespace: rke2-bootstrap-system
+    spec:
+      deployment:
+        containers:
+          - name: manager
+            resources:
+              requests:
+                cpu: 10m
+                memory: 64Mi
+      manager:
+        leaderElection: *leases
+      patches:
+        - patch: *left-to-scaling
+          target:
+            kind: Deployment
+      version: v0.26.0
+  - kind: BootstrapProvider
+    name: k3s
+    namespace: k3s-bootstrap-system
+    spec:
+      deployment:
+        containers:
+          - name: manager
+            resources:
+              requests:
+                cpu: 10m
+                memory: 64Mi
+      fetchConfig:
+        url: https://github.com/k3s-io/cluster-api-k3s/releases/latest/bootstrap-components.yaml
+      patches:
+        - patch: *left-to-scaling
+          target:
+            kind: Deployment
+      version: v0.4.0
+  - kind: ControlPlaneProvider
+    name: kubeadm
+    namespace: kubeadm-control-plane-system
+    spec:
+      configSecret:
+        name: cluster-api-variables
+        namespace: kubehenge-system
+      deployment:
+        containers:
+          - name: manager
+            resources:
+              requests:
+                cpu: 10m
+                memory: 64Mi
+      manager:
+        leaderElection: *leases
+      patches:
+        - patch: *capi-config-hash
+          target:
+            kind: Deployment
+        - patch: *left-to-scaling
+          target:
+            kind: Deployment
+      version: v1.14.3
+  - kind: ControlPlaneProvider
+    name: rke2
+    namespace: rke2-control-plane-system
+    spec:
+      manager:
+        leaderElection: *leases
+      patches:
+        - patch: *left-to-scaling
+          target:
+            kind: Deployment
+      version: v0.26.0
+  - kind: ControlPlaneProvider
+    name: k3s
+    namespace: k3s-control-plane-system
+    spec:
+      deployment:
+        containers:
+          - name: manager
+            resources:
+              requests:
+                cpu: 10m
+                memory: 64Mi
+      fetchConfig:
+        url: https://github.com/k3s-io/cluster-api-k3s/releases/latest/control-plane-components.yaml
+      patches:
+        - patch: *left-to-scaling
+          target:
+            kind: Deployment
+      version: v0.4.0
+  - kind: InfrastructureProvider
+    name: proxmox
+    namespace: proxmox-infrastructure-system
+    spec:
+      configSecret:
+        name: capmox-variables
+        namespace: proxmox-infrastructure-system
+      deployment:
+        containers:
+          - imageUrl: ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:07d0062f41980afce99c9e5adec5472d60340de42c798124542d8bffaa8ebdbe
+            name: manager
+      manager:
+        leaderElection: *leases
+      patches:
+        - patch: |
+            - "op": "add"
+              "path": "/spec/template/spec/containers/0/args/-"
+              "value": "--proxmox-insecure=false"
+            - "op": "add"
+              "path": "/spec/template/spec/containers/0/args/-"
+              "value": "--proxmox-root-cert-file=/etc/proxmox-ca/ca.crt"
+            - "op": "add"
+              "path": "/spec/template/spec/containers/0/volumeMounts/-"
+              "value":
+                "mountPath": "/etc/proxmox-ca"
+                "name": "proxmox-ca"
+                "readOnly": true
+            - "op": "add"
+              "path": "/spec/template/spec/volumes/-"
+              "value":
+                "name": "proxmox-ca"
+                "secret":
+                  "secretName": "proxmox-ca"
+          target:
+            kind: Deployment
+            name: capmox-controller-manager
+        - patch: |
+            "spec":
+              "template":
+                "metadata":
+                  "annotations":
+                    "kubehenge.dev/config-hash": "f8aadfb66592dc8e21958e712e9cc1e6e56fe5b878d6e01876b07098c264b5ce"
+          target:
+            kind: Deployment
+      version: v0.9.1
+  - kind: IPAMProvider
+    name: in-cluster
+    namespace: in-cluster-ipam-system
+    spec:
+      version: v1.1.1
+  - kind: AddonProvider
+    name: helm
+    namespace: helm-addon-system
+    spec:
+      deployment:
+        containers:
+          - name: manager
+            resources:
+              requests:
+                cpu: 10m
+                memory: 64Mi
+      manager:
+        leaderElection: *leases
+      version: v0.6.4
+secrets:
+  capmox-variables:
+    data:
+      ClusterTopology: "true"
+      PROXMOX_TOKEN: kubehenge-cluster-api@pve!capmox
+      PROXMOX_URL: https://pve.example.org:8006
+    namespace: proxmox-infrastructure-system
+  cluster-api-variables:
+    data:
+      CLUSTER_TOPOLOGY: "true"
+      EXP_RUNTIME_SDK: "true"
+    namespace: kubehenge-system
+  kubehenge-proxmox:
+    data:
+      ca.crt: &ca |
+        -----BEGIN CERTIFICATE-----
+        MIIB
+        -----END CERTIFICATE-----
+    namespace: kubehenge-system
+  proxmox-ca:
+    data:
+      ca.crt: *ca
+    namespace: proxmox-infrastructure-system

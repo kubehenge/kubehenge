@@ -1,0 +1,8 @@
+---
+apiVersion: v2
+name: cluster-api-providers
+description: >-
+  The Cluster API providers of a Kubehenge management cluster, as Cluster API Operator objects with
+  their namespaces and variables.
+type: application
+version: 0.5.0

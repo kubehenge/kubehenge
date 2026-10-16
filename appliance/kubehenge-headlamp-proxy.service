@@ -1,0 +1,34 @@
+[Unit]
+Description=Passes connections to Headlamp, starting it on the first and letting it stop once unused
+Documentation=https://github.com/kubehenge/kubehenge
+Requires=kubehenge-headlamp.service kubehenge-headlamp.socket
+After=kubehenge-headlamp.service kubehenge-headlamp.socket
+PartOf=kubehenge.service
+
+# Headlamp holds well over 100 MB of the appliance's memory, for whoever has it open. This exits once
+# no connection has been open for a quarter of an hour, and Headlamp, needed by nothing else then,
+# stops with it. An open Headlamp page keeps connections open, and the interface closes its idle
+# ones after 90 s.
+[Service]
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd --exit-idle-time=15min 127.0.0.1:4467
+DynamicUser=yes
+
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+UMask=0077
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native

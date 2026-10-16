@@ -1,0 +1,3 @@
+* text=auto eol=lf
+# Signed upstream files: any change of bytes breaks their signatures.
+pkg/templates/testdata/** -text

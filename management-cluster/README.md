@@ -1,0 +1,58 @@
+# Management cluster
+
+One Terraform/OpenTofu apply creates Kubehenge's management cluster on Proxmox VE: Talos Linux VMs running Kubernetes, with Cluster API and every provider Kubehenge uses installed and ready to create clusters.
+
+## What it creates
+
+On Proxmox VE:
+
+- **Three pools.** One for the management cluster's own VMs, one for the VMs of the clusters it creates, and one for the VM templates those clusters are cloned from.
+- **A user and API token for Cluster API,** with only what it needs: it can audit nodes, manage VMs in the workload pool and the clusters' pools nested in it, clone templates from the template pool, allocate disk space on the listed storages, use the listed bridges, and write cloud-init ISOs to one storage. It cannot see or touch the management cluster's own VMs.
+- **A user and API token for Kubehenge's controller,** which may create pools inside the workload pool, users in the clusters' group, ACLs on those pools and the VMs that own clusters' volumes, move and configure VMs in the workload pool, and use the listed storages as the clusters do (to delete a removed cluster's volumes on node-local storage), and nothing else.
+- **With `proxmox_ha`, a user and API token for Proxmox VE HA,** holding `Sys.Audit` and `Sys.Console` on `/`, which amounts to a root shell on every node; the controller uses it only to keep each cluster's control-plane VMs apart with HA resources and rules ([install](../docs/install.md#proxmox-ve-ha)).
+- **A group for the clusters' own users,** allowed to use space on the listed storages and to read the nodes. Each cluster's user, created by the controller, adds rights on its own pool only ([architecture](../docs/architecture.md#each-clusters-own-corner-of-proxmox-ve)).
+- **The Talos disk image,** built by the Talos Image Factory with the QEMU guest agent.
+- **One, three or five VMs,** each a Talos control-plane node, with static addresses and a virtual IP in front of the Kubernetes API.
+
+In the cluster:
+
+- cert-manager.
+- The Cluster API Operator, and through it Cluster API core (with the ClusterClass and Runtime SDK features on), the Proxmox VE infrastructure provider (`capmox`), the bootstrap and control-plane providers for kubeadm, RKE2 and k3s (Talos's join with a Talos ClusterClass), the in-cluster IP address manager, and the Add-on Provider for Helm.
+- The `kubehenge` chart (`../charts/kubehenge`): Kubehenge's ClusterClasses and its controller.
+
+`registry_mirrors` points the nodes at image registry mirrors, for networks without direct access to the public registries. `cluster_oidc` lists OpenID Connect providers every new workload cluster's API server trusts unless the cluster names its own; tokens and certificates keep working beside them. `capmox` verifies the Proxmox VE API's certificate against the CA you give it; upstream's default is to skip that check. The nodes do not report to Sidero's public discovery service.
+
+## Before you apply
+
+- **Proxmox VE 9.** The storage named in `image_datastore` must allow the `import` content type (Datacenter, Storage, Edit, Content).
+- **An API token with administrator rights** for this configuration, for example `pveum user token add root@pam kubehenge --privsep 0`. It creates users, roles, pools and VMs. Or an administrator's session instead: leave `proxmox_api_token` unset and put a ticket and its CSRF token from `POST /access/ticket` in `PROXMOX_VE_AUTH_TICKET` and `PROXMOX_VE_CSRF_PREVENTION_TOKEN`, as Kubehenge's appliance does; a ticket lasts two hours, so the apply must finish within that.
+- **The Proxmox VE CA certificate,** `/etc/pve/pve-root-ca.pem` on any node unless you replaced the API's certificate. The machine running Terraform/OpenTofu must trust it too (add it to the system's trust store), since the Proxmox VE provider verifies the API's certificate.
+- **Free addresses** for the nodes and the API's virtual IP, all in one subnet on the bridge.
+- **Pod and service ranges that the network does not use.** The defaults are Kubernetes' own, 10.244.0.0/16 for pods and 10.96.0.0/12 (10.96.0.0 to 10.111.255.255) for services; if the nodes' subnet is inside either, set `pod_subnets` or `service_subnets`. The plan refuses overlapping ranges, since Talos ignores node addresses inside them.
+- **Network access:** the machine running Terraform/OpenTofu reaches the nodes on ports 50000 (Talos API) and 6443 (Kubernetes API); the nodes reach the internet for images and provider manifests.
+
+## Apply
+
+```sh
+cp terraform.tfvars.example terraform.tfvars   # then fill it in
+export TF_VAR_proxmox_api_token='root@pam!kubehenge=...'
+export TF_VAR_proxmox_ca_certificate="$(cat pve-root-ca.pem)"
+tofu init
+tofu apply
+tofu output -raw kubeconfig > kubeconfig
+tofu output -raw talosconfig > talosconfig
+```
+
+`terraform` works the same as `tofu`, from version 1.11.
+
+The state holds the cluster's secrets and its administrator credentials. Keep it in an encrypted backend, or use OpenTofu's state encryption.
+
+## Upgrade
+
+Changing `node_cores` or `node_memory_mb` updates the VMs without rebooting them; each node takes the new size at its next reboot, which a Talos upgrade does one node at a time.
+
+The versions of Talos, Kubernetes and every provider are pinned together in `versions.tf`, as the set Kubehenge has tested. A newer Kubehenge release raises them; applying it upgrades Talos node by node (each drained first when there are several), Kubernetes component by component, and each provider through the operator. `version_overrides` holds a component back below the tested set. capmox at its tested release runs Kubehenge's reproducible build of a later upstream commit (`capmox_build` in `versions.tf`, [releasing.md](../docs/releasing.md)). `provider_images` runs a provider's controller from another image, keyed `"<kind>/<name>"` (`"InfrastructureProvider/proxmox"`): a registry mirror, or a build carrying a fix its release does not have yet; the provider's manifests still come from its version.
+
+## Remove
+
+Delete the clusters the management cluster created first, so their VMs are removed with them, and the templates in the template pool (`kubehenge template delete`), since Proxmox VE keeps a pool that still holds VMs. Then `tofu destroy`. Destroy removes the management cluster's VMs, the Talos image, the pools, the group, the Cluster API and controller users and their tokens.

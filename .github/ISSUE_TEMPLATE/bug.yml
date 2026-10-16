@@ -1,0 +1,51 @@
+---
+name: Bug
+description: Something in Kubehenge does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Leave out passwords, API tokens, kubeconfigs and anything else secret; redact addresses you
+        do not want public.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it
+      description: The smallest set of steps that shows it.
+  - type: input
+    id: kubehenge
+    attributes:
+      label: Kubehenge version
+      description: >-
+        On the interface's Administration page, or `kubehenge --version` in the appliance.
+    validations:
+      required: true
+  - type: input
+    id: proxmox
+    attributes:
+      label: Proxmox VE version
+      description: "`pveversion`"
+    validations:
+      required: true
+  - type: dropdown
+    id: distribution
+    attributes:
+      label: Distribution of the affected cluster
+      options: [kubeadm, RKE2, k3s, not about a workload cluster]
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >-
+        The interface's log (`journalctl -u kubehenge` in the appliance), the controller's
+        (`kubectl -n kubehenge-system logs deploy/kubehenge-controller` in the management cluster),
+        or the relevant part of either.
+      render: text

@@ -1,0 +1,21 @@
+---
+name: Feature
+description: Something Kubehenge should do and does not.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you need
+      description: The problem you have, before any solution; who has it and how often.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How it could work
+      description: Optional. What you would expect to see or run.
+  - type: textarea
+    id: today
+    attributes:
+      label: What you do today instead

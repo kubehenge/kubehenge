@@ -1,0 +1,8 @@
+{
+  "config": {
+    "default": true,
+    // Each paragraph is one line, which editors wrap; reflowing to a width would make every later
+    // edit rewrite the whole paragraph in the diff.
+    "MD013": false
+  }
+}

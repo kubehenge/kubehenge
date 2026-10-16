@@ -1,0 +1,727 @@
+/* Kubehenge's own theme, in the spirit of Proxmox VE's interface: compact, grey panels, blue
+   accents, light and dark following the system. */
+
+:root {
+  --bg: #f1f1f1;
+  --panel: #ffffff;
+  --panel-head: #f5f5f5;
+  --border: #cfcfcf;
+  --text: #1f1f1f;
+  --muted: #666666;
+  /* Text colours are at least 4.5:1 against what they sit on (WCAG AA for 13 px text). */
+  --accent: #1f6fb2;
+  --accent-fill: #1f6fb2;
+  --accent-text: #ffffff;
+  --row-alt: #fafafa;
+  --row-hover: #e6f1fa;
+  --progress: #d9a400;
+  --error: #c9302c;
+  --danger: #c9302c;
+  --input-bg: #ffffff;
+  /* A form reads down one column this wide, however wide the page: no control runs on for a
+     whole screen. */
+  --form-width: 820px;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1b1b;
+    --panel: #262626;
+    --panel-head: #2f2f2f;
+    --border: #3d3d3d;
+    --text: #e2e2e2;
+    --muted: #9a9a9a;
+    --accent: #4a9fdc;
+    --accent-fill: #2b6ca3;
+    --error: #ff6b66;
+    --danger: #ff6b66;
+    --row-alt: #2a2a2a;
+    --row-hover: #20384b;
+    --input-bg: #1f1f1f;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+h2,
+h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+button,
+.button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-head);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 4px 12px;
+  cursor: pointer;
+  display: inline-block;
+  line-height: 18px;
+}
+
+button:hover:not(:disabled),
+.button:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.primary,
+.button.primary {
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: var(--accent-text);
+}
+
+button.danger {
+  color: var(--danger);
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 4px 6px;
+  line-height: 18px;
+  width: 100%;
+}
+
+/* As tall as a button, so a row of fields and buttons lines up. */
+input:not([type="checkbox"], [type="radio"]),
+select {
+  height: 28px;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  width: auto;
+  flex: none;
+  margin: 0;
+}
+
+/* A value shown but fixed reads as text, not as a box to type in. */
+input:read-only:not([type="checkbox"], [type="radio"]),
+textarea:read-only,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  color: var(--muted);
+  background: transparent;
+}
+
+input:focus,
+select:focus,
+textarea:focus,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.pad {
+  padding: 12px;
+}
+
+output.notice {
+  display: block;
+}
+
+/* A wide table scrolls on its own in a narrow window. */
+.scroll {
+  overflow-x: auto;
+}
+
+.loading {
+  color: var(--muted);
+  text-align: center;
+  padding: 48px 12px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* Shell */
+
+.shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.02em;
+}
+
+.user {
+  color: var(--muted);
+}
+
+.nav {
+  display: flex;
+  gap: 2px;
+}
+
+.nav a {
+  padding: 4px 10px;
+  border-radius: 3px;
+  color: var(--text);
+}
+
+.nav a[aria-current="page"] {
+  background: var(--row-hover);
+  font-weight: 600;
+}
+
+.content {
+  padding: 12px;
+  flex: 1;
+}
+
+/* The page's content takes the focus after navigation; it is no control, so it shows no ring. */
+.content:focus {
+  outline: none;
+}
+
+/* Panels */
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--panel-head);
+  border-bottom: 1px solid var(--border);
+}
+
+.toolbar h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.box {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.box h3 {
+  margin-bottom: 8px;
+}
+
+/* Values start where a form's controls do, so a summary lines up with the fields beside it. */
+.summary {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 4px 8px;
+  margin: 0;
+}
+
+.summary dt {
+  color: var(--muted);
+}
+
+.summary dd {
+  margin: 0;
+}
+
+/* An object's page: its views in a menu on the left, as Proxmox VE shows a VM's. */
+
+.object {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  min-height: 300px;
+}
+
+.object-menu {
+  border-right: 1px solid var(--border);
+  background: var(--panel-head);
+  padding: 4px 0;
+}
+
+.object-menu a {
+  display: block;
+  padding: 6px 12px;
+  color: var(--text);
+  border-left: 3px solid transparent;
+}
+
+.object-menu a[aria-current="page"] {
+  background: var(--row-hover);
+  border-left-color: var(--accent);
+  font-weight: 600;
+}
+
+.object-view {
+  min-width: 0;
+}
+
+/* The view's frame keeps its height; a rule under its last box would float halfway down. */
+.object-view > .box:last-child {
+  border-bottom: none;
+}
+
+@media (width < 640px) {
+  .object {
+    grid-template-columns: 1fr;
+  }
+
+  .object-menu {
+    display: flex;
+    flex-wrap: wrap;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+.grid.options th {
+  width: 180px;
+  background: none;
+  font-weight: normal;
+  color: var(--muted);
+}
+
+/* Every row as tall as one with its 28 px button, its label and value centred beside it. */
+.grid.options th,
+.grid.options td {
+  height: calc(28px + 2 * 4px + 1px);
+  padding-top: 4px;
+  padding-bottom: 4px;
+  vertical-align: middle;
+}
+
+.grid .row-action {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+
+/* A row with a button centres its text beside it; rows of text alone keep to the top, where a
+   cell of several lines starts. */
+.grid tr:has(> .row-action) > :is(td, th) {
+  vertical-align: middle;
+}
+
+/* Grids */
+
+.grid {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.grid th {
+  text-align: left;
+  font-weight: 600;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-head);
+}
+
+.grid td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.grid tbody tr:nth-child(even) {
+  background: var(--row-alt);
+}
+
+.grid tbody tr:hover {
+  background: var(--row-hover);
+}
+
+/* A shadow, not a border, so the row's text stays in line with the rows around it. */
+.grid tr.attention td:first-child {
+  box-shadow: inset 3px 0 0 var(--progress);
+}
+
+.grid td.message,
+.grid .hint.message {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Status: an icon before plain text, as Proxmox VE's grids show it. The icons are images in the
+   stylesheet, which the content security policy allows where it would refuse inline styles. */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: normal;
+}
+
+.status::before {
+  content: "";
+  flex: none;
+  width: 12px;
+  height: 12px;
+  background-repeat: no-repeat;
+  background-size: 12px 12px;
+}
+
+.status-ok::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Ccircle cx='6' cy='6' r='6' fill='%231b7f2c'/%3E%3Cpath d='M3.2 6.2l1.9 1.9 3.8-4' stroke='%23fff' stroke-width='1.6' fill='none'/%3E%3C/svg%3E");
+}
+
+.status-error::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Ccircle cx='6' cy='6' r='6' fill='%23c9302c'/%3E%3Cpath d='M3.8 3.8l4.4 4.4M8.2 3.8l-4.4 4.4' stroke='%23fff' stroke-width='1.6'/%3E%3C/svg%3E");
+}
+
+.status-progress::before,
+.status-deleting::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Ccircle cx='6' cy='6' r='4.8' stroke='%23b0b0b0' stroke-width='1.8' fill='none'/%3E%3Cpath d='M6 1.2a4.8 4.8 0 0 1 4.8 4.8' stroke='%231f6fb2' stroke-width='1.8' fill='none'/%3E%3C/svg%3E");
+  animation: spin 1.2s linear infinite;
+}
+
+/* Deleting is no failure: a grey spinner. */
+.status-deleting::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Ccircle cx='6' cy='6' r='4.8' stroke='%23b0b0b0' stroke-width='1.8' fill='none'/%3E%3Cpath d='M6 1.2a4.8 4.8 0 0 1 4.8 4.8' stroke='%23707070' stroke-width='1.8' fill='none'/%3E%3C/svg%3E");
+}
+
+.status-idle::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Ccircle cx='6' cy='6' r='5' stroke='%23909090' stroke-width='1.6' fill='none'/%3E%3C/svg%3E");
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status::before {
+    animation: none;
+  }
+}
+
+/* Text only screen readers read, for what the page shows by colour or icon alone. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Forms */
+
+.field {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 8px;
+  align-items: start;
+  margin-bottom: 8px;
+}
+
+/* Level with the text of the 28 px control beside it. */
+.field label {
+  padding-top: 6px;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.field.invalid input,
+.field.invalid select,
+.field.invalid textarea {
+  border-color: var(--error);
+}
+
+.field-error {
+  color: var(--error);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.check {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 8px 0;
+}
+
+.check:has(> input:disabled) {
+  color: var(--muted);
+}
+
+/* A note on one choice sits under its words, not under the box or button before them. */
+.check + .hint {
+  margin: -6px 0 8px calc(13px + 6px);
+}
+
+fieldset.choices {
+  border: none;
+  margin: 0 0 8px;
+  padding: 0;
+}
+
+fieldset.choices legend {
+  padding: 0;
+  margin-bottom: 2px;
+}
+
+fieldset.choices .check {
+  margin: 2px 0;
+}
+
+.check.inline {
+  display: inline-flex;
+  margin: 4px 12px 4px 0;
+}
+
+.box dl + h3 {
+  margin-top: 12px;
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.error {
+  color: var(--error);
+  border: 1px solid var(--error);
+  padding: 6px 8px;
+  margin: 8px;
+  white-space: pre-wrap;
+}
+
+.dialog-body .error,
+.wizard .error,
+.box .error {
+  margin: 8px 0;
+}
+
+.warning {
+  border: 1px solid var(--progress);
+  border-left-width: 4px;
+  background: var(--panel);
+  padding: 6px 8px;
+  margin-bottom: 8px;
+}
+
+.group {
+  border: 1px solid var(--border);
+  margin: 8px 0;
+  padding: 8px 10px 0;
+}
+
+/* A fieldset without a box: one only there to switch its fields off together, or a dialog's only
+   group, which the dialog's title names. */
+.bare {
+  border: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+/* A box's fields start their controls where the fields around the box do: its label column gives
+   up the box's border and left padding. */
+.group > .field {
+  grid-template-columns: calc(180px - 10px - 1px) 1fr;
+}
+
+/* Fields keep their own gap below; a closing button needs one from the box's border. */
+.group > button:last-child {
+  margin-bottom: 8px;
+}
+
+.group legend {
+  padding: 0 4px;
+  font-weight: 600;
+}
+
+/* Sign-in */
+
+.signin {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Wide enough for Proxmox VE's longest realm name, "Linux PAM standard authentication (pam)". */
+.signin-panel {
+  width: 460px;
+  max-width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  padding: 16px 20px;
+}
+
+.signin .field {
+  grid-template-columns: 100px 1fr;
+}
+
+.tabs,
+.wizard-steps {
+  display: flex;
+  gap: 0;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 3px 3px 0 0;
+  background: none;
+  margin-bottom: -1px;
+}
+
+/* Bold would widen the tab and shift the ones after it at every step. */
+.tab.active {
+  border-color: var(--border);
+  background: var(--panel);
+}
+
+/* Wizard */
+
+.wizard {
+  padding: 10px 12px;
+  max-width: var(--form-width);
+}
+
+.field,
+.group,
+form.box > * {
+  max-width: var(--form-width);
+}
+
+details.advanced {
+  margin: 8px 0;
+}
+
+details.advanced > summary {
+  cursor: pointer;
+}
+
+/* The frame closes round the wizard, instead of running on empty across the page. */
+.panel:has(> .wizard) {
+  max-width: calc(var(--form-width) + 2px);
+}
+
+.confirm {
+  background: var(--panel-head);
+  border: 1px solid var(--border);
+  padding: 8px;
+  overflow: auto;
+  max-height: 420px;
+}
+
+.log {
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0 12px 12px;
+}
+
+/* Dialogs */
+
+.dialog {
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  width: min(640px, 92vw);
+}
+
+.dialog::backdrop {
+  background: rgb(0 0 0 / 35%);
+}
+
+.dialog-title {
+  display: flex;
+  align-items: center;
+  padding: 4px 6px 4px 12px;
+  background: var(--panel-head);
+  border-bottom: 1px solid var(--border);
+}
+
+.dialog-title h2 {
+  flex: 1;
+}
+
+.dialog-close {
+  border: none;
+  background: none;
+  font-size: 18px;
+  line-height: 18px;
+  padding: 2px 8px;
+}
+
+.dialog-body {
+  padding: 12px;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+}

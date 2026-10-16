@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["namespaces", "providers", "secrets", "image", "waitTimeoutSeconds"],
+  "properties": {
+    "chartDigest": {
+      "description": "Digest of the chart's files, which the management cluster's module passes so that a changed chart upgrades the release whatever its version says.",
+      "type": "string"
+    },
+    "namespaces": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/name" },
+      "uniqueItems": true
+    },
+    "providers": {
+      "description": "Cluster API Operator provider objects; their spec is the operator's, which its CRDs check.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "name", "namespace", "spec"],
+        "properties": {
+          "kind": {
+            "enum": ["CoreProvider", "BootstrapProvider", "ControlPlaneProvider", "InfrastructureProvider", "IPAMProvider", "AddonProvider"]
+          },
+          "name": { "$ref": "#/$defs/name" },
+          "namespace": { "$ref": "#/$defs/name" },
+          "spec": { "type": "object" }
+        }
+      }
+    },
+    "secrets": {
+      "description": "Secrets by name, each with its namespace and string data.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["namespace", "data"],
+        "properties": {
+          "namespace": { "$ref": "#/$defs/name" },
+          "data": { "type": "object", "additionalProperties": { "type": "string" } }
+        }
+      }
+    },
+    "image": {
+      "description": "Kubehenge's controller image, whose `kubehenge wait` the release's hooks run.",
+      "type": "string",
+      "minLength": 1
+    },
+    "waitTimeoutSeconds": {
+      "type": "integer",
+      "minimum": 60
+    }
+  },
+  "$defs": {
+    "name": {
+      "description": "A Kubernetes object or namespace name.",
+      "type": "string",
+      "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+      "maxLength": 253
+    }
+  }
+}

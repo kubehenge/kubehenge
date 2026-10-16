@@ -1,0 +1,195 @@
+{{- $class := "kubehenge-k3s" }}
+{{- $clusterSpec := include "kubehenge.proxmoxClusterSpec" . }}
+{{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "cloud-image" "kubehenge" "ubuntu-26.04") "serviceJoins" true) }}
+{{- $controlPlaneSpec := include "kubehenge.k3sControlPlaneSpec" . }}
+{{- $workerSpec := include "kubehenge.k3sWorkerSpec" . }}
+{{- $clusterName := include "kubehenge.hashedName" (dict "name" $class "spec" $clusterSpec) }}
+{{- $machineName := include "kubehenge.hashedName" (dict "name" (printf "%s-machine" $class) "spec" $machineSpec) }}
+{{- $controlPlaneName := include "kubehenge.hashedName" (dict "name" (printf "%s-control-plane" $class) "spec" $controlPlaneSpec) }}
+{{- $workerName := include "kubehenge.hashedName" (dict "name" (printf "%s-worker" $class) "spec" $workerSpec) }}
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: ClusterClass
+metadata:
+  name: {{ $class }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # k3s brings flannel; Kubehenge's controller installs the others the cni variable names.
+    kubehenge.dev/cni: cilium,calico
+    # k3s's servicelb forwards packets inside its pods, which Calico allows only when told.
+    kubehenge.dev/cni-container-forwarding: "true"
+    # k3s's own ranges, for a Cluster that sets none.
+    kubehenge.dev/default-pods: 10.42.0.0/16
+    kubehenge.dev/default-services: 10.43.0.0/16
+    {{- if .Values.proxmox.ha }}
+    # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
+    kubehenge.dev/proxmox-ha: "true"
+    {{- end }}
+spec:
+  infrastructure:
+    templateRef:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+      kind: ProxmoxClusterTemplate
+      name: {{ $clusterName }}
+  controlPlane:
+    templateRef:
+      apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+      kind: KThreesControlPlaneTemplate
+      name: {{ $controlPlaneName }}
+    machineInfrastructure:
+      templateRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+        kind: ProxmoxMachineTemplate
+        name: {{ $machineName }}
+    naming:
+      template: {{ "{{ .cluster.name }}-control-plane-{{ .random }}" | quote }}
+    healthCheck:
+      {{- include "kubehenge.healthCheck" "controlPlane" | nindent 6 }}
+  workers:
+    machineDeployments:
+      - class: worker
+        naming:
+          template: {{ "{{ .cluster.name }}-{{ .machineDeployment.topologyName }}-{{ .random }}" | quote }}
+        bootstrap:
+          templateRef:
+            apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+            kind: KThreesConfigTemplate
+            name: {{ $workerName }}
+        infrastructure:
+          templateRef:
+            apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+            kind: ProxmoxMachineTemplate
+            name: {{ $machineName }}
+        healthCheck:
+          {{- include "kubehenge.healthCheck" "workers" | nindent 10 }}
+  variables:
+    {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "controlPlaneMinMemoryMiB" 2048 "clusters" .Values.clusters) | nindent 4 }}
+    {{- include "kubehenge.addonVariables" . | nindent 4 }}
+    {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
+    {{- include "kubehenge.oidcVariable" . | nindent 4 }}
+    - name: cni
+      required: false
+      schema:
+        openAPIV3Schema:
+          type: string
+          description: The CNI plugin, fixed once the cluster exists. k3s's own is flannel.
+          enum: [flannel, cilium, calico]
+          default: flannel
+          {{- include "kubehenge.cniFixed" . | nindent 10 }}
+  patches:
+    {{- include "kubehenge.proxmoxPatches" . | nindent 4 }}
+    - name: k3s-control-plane
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: KThreesControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/kthreesConfigSpec/files
+              valueFrom:
+                template: |
+                  -{{- include "kubehenge.kubeVipFile" (dict "path" "/var/lib/rancher/k3s/agent/pod-manifests/kube-vip.yaml" "kubeconfig" "/etc/rancher/k3s/k3s.yaml") | nindent 22 }}
+    # The k3s provider takes the ranges only from its own server configuration, never from the
+    # Cluster's clusterNetwork, which Kubehenge's range check and every other distribution read.
+    {{- range $range := list (dict "name" "pods" "field" "clusterCidr") (dict "name" "services" "field" "serviceCidr") }}
+    - name: k3s-{{ $range.name }}
+      enabledIf: {{ printf "{{ if .builtin.cluster.network.%s }}true{{ end }}" $range.name | quote }}
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: KThreesControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/kthreesConfigSpec/serverConfig/{{ $range.field }}
+              valueFrom:
+                template: {{ printf "{{ join \",\" .builtin.cluster.network.%s | quote }}" $range.name | quote }}
+    {{- end }}
+    # The k3s provider has no setting for flannel's backend, so a drop-in beside its config.yaml
+    # switches flannel and k3s's network policy controller off; the agents follow the servers.
+    - name: k3s-cni
+      enabledIf: {{ "{{ if ne .cni \"flannel\" }}true{{ end }}" | quote }}
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: KThreesControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/kthreesConfigSpec/files/-
+              value:
+                path: /etc/rancher/k3s/config.yaml.d/50-kubehenge-cni.yaml
+                owner: root:root
+                permissions: "0600"
+                content: |
+                  flannel-backend: none
+                  disable-network-policy: true
+    - name: k3s-oidc
+      enabledIf: {{ include "kubehenge.oidcEnabled" . }}
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: KThreesControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/kthreesConfigSpec/files/-
+              valueFrom:
+                template: |
+                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/etc/rancher/k3s/authentication-config.yaml") | nindent 18 }}
+            - op: add
+              path: /spec/template/spec/kthreesConfigSpec/serverConfig/kubeAPIServerArg
+              value:
+                - authentication-config=/etc/rancher/k3s/authentication-config.yaml
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+kind: ProxmoxClusterTemplate
+metadata:
+  name: {{ $clusterName }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- $clusterSpec | nindent 2 }}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+kind: ProxmoxMachineTemplate
+metadata:
+  name: {{ $machineName }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- $machineSpec | nindent 2 }}
+---
+{{ include "kubehenge.classTemplates" (dict "class" $class "namespace" .Release.Namespace "templates" (list
+  (dict "apiVersion" "controlplane.cluster.x-k8s.io/v1beta2" "kind" "KThreesControlPlaneTemplate" "name" $controlPlaneName "spec" $controlPlaneSpec)
+  (dict "apiVersion" "bootstrap.cluster.x-k8s.io/v1beta2" "kind" "KThreesConfigTemplate" "name" $workerName "spec" $workerSpec)
+)) }}
+
+{{- define "kubehenge.k3sAgentConfig" -}}
+agentConfig:
+  kubeletArgs:
+    # capmox names a machine by its VM's SMBIOS UUID, which cloud-init reads as the instance ID.
+    - provider-id=proxmox://{{ "{{ ds.meta_data.instance_id }}" }}
+  {{- if .controlPlane }}
+  {{- include "kubehenge.controlPlaneTaints" . | nindent 2 }}
+  {{- end }}
+{{- end -}}
+
+{{- define "kubehenge.k3sControlPlaneSpec" -}}
+template:
+  spec:
+    kthreesConfigSpec:
+      {{- include "kubehenge.k3sAgentConfig" (dict "controlPlane" true) | nindent 6 }}
+      serverConfig:
+        # The Proxmox VE cloud controller manager initialises the nodes instead of k3s's own.
+        disableCloudController: true
+        cloudProviderName: external
+{{- end -}}
+
+{{- define "kubehenge.k3sWorkerSpec" -}}
+template:
+  spec:
+    {{- include "kubehenge.k3sAgentConfig" (dict) | nindent 4 }}
+{{- end -}}

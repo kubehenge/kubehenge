@@ -1,0 +1,267 @@
+import { useEffect, useId, useState, type JSX } from "react";
+
+import { api } from "./api";
+import type { ClusterClass, HARule, HARules, PveNode, Storage } from "./types";
+import { Field, errorMessage, filled } from "./ui";
+
+/** Where a cluster's VMs may run: any node, the nodes of an HA rule, or nodes chosen one by one. */
+export const placements = ["any", "rule", "nodes"] as const;
+export type Placement = (typeof placements)[number];
+
+export interface Place {
+  placement: Placement;
+  /** The HA rule chosen, for a placement by rule. */
+  haRule: string;
+  /** The nodes the VMs keep to, unless placed on any node: the rule's, or those chosen. */
+  nodes: string[];
+}
+
+export const anyNode: Place = { placement: "any", haRule: "", nodes: [] };
+
+/** placeOf reads a cluster's allowed nodes as a placement; which rule they came from is not kept. */
+export const placeOf = (allowed: string[] | undefined): Place =>
+  allowed === undefined || allowed.length === 0 ? anyNode : { placement: "nodes", haRule: "", nodes: allowed };
+
+/** allowedNodes is the cluster's allowedNodes value for a placement, or undefined for any node. */
+export const allowedNodes = (p: Place): string[] | undefined => (p.placement === "any" ? undefined : p.nodes);
+
+export function placeText(p: Place): string {
+  const texts: Record<Placement, string> = {
+    any: "Any node",
+    rule: `The nodes of HA rule ${p.haRule}: ${p.nodes.join(", ")}`,
+    nodes: p.nodes.join(", "),
+  };
+  return texts[p.placement];
+}
+
+export function placeProblem(p: Place): string | undefined {
+  if (p.placement === "rule" && !p.haRule) {
+    return "Choose an HA rule.";
+  }
+  if (p.placement === "nodes" && p.nodes.length === 0) {
+    return "Choose at least one node.";
+  }
+  return undefined;
+}
+
+export interface HARulesRead {
+  haRules: HARules | undefined;
+  haRulesError: string | undefined;
+}
+
+/**
+ * useHARules reads Proxmox VE's HA rules. Without them a cluster can still be placed on any node or
+ * on nodes chosen, so a failure shows only where the rules would be offered.
+ */
+export function useHARules(): HARulesRead {
+  const [haRules, setHARules] = useState<HARules>();
+  const [haRulesError, setHARulesError] = useState<string>();
+  useEffect(() => {
+    async function load(): Promise<void> {
+      try {
+        setHARules(await api.haRules());
+      } catch (err) {
+        setHARulesError(errorMessage(err));
+      }
+    }
+    void load();
+  }, []);
+  return { haRules, haRulesError };
+}
+
+// ruleLabel names a rule with what it keeps the cluster to.
+const ruleLabel = (r: HARule): string =>
+  `${r.rule}${filled(r.comment) ? ` (${r.comment})` : ""}: ${r.allowed.join(", ")}${r.strict === true ? ", strict" : ""}`;
+
+function rulesHint({ haRules, haRulesError }: HARulesRead): string | undefined {
+  if (filled(haRulesError)) {
+    return `Proxmox VE's HA rules could not be read: ${haRulesError}.`;
+  }
+  if (haRules && !haRules.readable) {
+    return "Reading Proxmox VE's HA rules takes Sys.Audit on /.";
+  }
+  if (haRules?.rules.length === 0) {
+    return "Proxmox VE has no enabled HA node-affinity rule with a node you can see.";
+  }
+  return undefined;
+}
+
+const noNodes: string[] = [];
+
+// choices are the nodes to tick: those the user sees, and those the cluster has that they do not,
+// which a change may keep.
+function choices(nodes: PveNode[], kept: string[]): { node: string; note: string }[] {
+  const seen = nodes.map((n) => ({ node: n.node, note: n.online ? "" : " (offline)" }));
+  const unseen = kept
+    .filter((x) => !nodes.some((n) => n.node === x))
+    .map((node) => ({ node, note: " (not shown to you)" }));
+  return [...seen, ...unseen];
+}
+
+export function PlacementFields({
+  value,
+  onChange,
+  problem,
+  hint,
+  nodes,
+  kept = noNodes,
+  rules: read,
+  framed = true,
+}: {
+  value: Place;
+  onChange: (p: Place) => void;
+  problem: string | undefined;
+  hint: string;
+  nodes: PveNode[];
+  /** The nodes the cluster already has, offered even where the user cannot see them. */
+  kept?: string[] | undefined;
+  rules: HARulesRead;
+  /** False where a dialog's title already says Placement: the group then draws no box and no legend. */
+  framed?: boolean;
+}): JSX.Element {
+  const rules = read.haRules?.rules ?? [];
+  const nodesOf = (rule: string): string[] => rules.find((r) => r.rule === rule)?.allowed ?? [];
+  const choose = (placement: Placement): void => {
+    const chosen: Record<Placement, string[]> = { any: [], rule: nodesOf(value.haRule), nodes: value.nodes };
+    onChange({ ...value, placement, nodes: chosen[placement] });
+  };
+  const rulesNote = rulesHint(read);
+  return (
+    <fieldset
+      className={framed ? "group" : "bare"}
+      aria-label={framed ? undefined : "Placement"}
+      aria-describedby="placement-hint"
+    >
+      {framed && <legend>Placement</legend>}
+      <p className="hint" id="placement-hint">
+        {hint}
+      </p>
+      <label className="check">
+        <input type="radio" name="placement" checked={value.placement === "any"} onChange={() => choose("any")} /> Any
+        node
+      </label>
+      <label className="check">
+        <input
+          type="radio"
+          name="placement"
+          checked={value.placement === "rule"}
+          disabled={rules.length === 0}
+          onChange={() => choose("rule")}
+        />{" "}
+        The nodes of an HA rule
+      </label>
+      {value.placement === "rule" && (
+        <Field label="HA rule" error={problem}>
+          {(id) => (
+            <select
+              id={id}
+              value={value.haRule}
+              onChange={(e) => onChange({ ...value, haRule: e.target.value, nodes: nodesOf(e.target.value) })}
+            >
+              <option value="" disabled>
+                Choose…
+              </option>
+              {rules.map((r) => (
+                <option key={r.rule} value={r.rule}>
+                  {ruleLabel(r)}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
+      )}
+      {rulesNote !== undefined && <p className="hint">{rulesNote}</p>}
+      <label className="check">
+        <input type="radio" name="placement" checked={value.placement === "nodes"} onChange={() => choose("nodes")} />{" "}
+        Nodes I choose
+      </label>
+      {value.placement === "nodes" && (
+        <fieldset className="group">
+          <legend>Nodes</legend>
+          {choices(nodes, kept).map(({ node, note }) => (
+            <label key={node} className="check">
+              <input
+                type="checkbox"
+                aria-invalid={problem === undefined ? undefined : true}
+                checked={value.nodes.includes(node)}
+                onChange={(e) =>
+                  onChange({
+                    ...value,
+                    nodes: e.target.checked ? [...value.nodes, node] : value.nodes.filter((x) => x !== node),
+                  })
+                }
+              />{" "}
+              {node}
+              {note}
+            </label>
+          ))}
+          {problem !== undefined && (
+            <p className="field-error" role="alert">
+              {problem}
+            </p>
+          )}
+        </fieldset>
+      )}
+    </fieldset>
+  );
+}
+
+/** haAnnotation marks the classes whose proxmoxHA variable takes effect: an administrator enabled HA. */
+export const haAnnotation = "kubehenge.dev/proxmox-ha";
+
+/**
+ * offersHA tells whether Proxmox VE HA would keep apart the control planes of a cluster of the
+ * class on the storage: it moves and restarts VMs only where every node reaches their disks.
+ */
+export function offersHA(c: ClusterClass | undefined, storages: Storage[], storage: string | undefined): boolean {
+  return (
+    c?.annotations?.[haAnnotation] === "true" &&
+    c.variables.some((v) => v.name === "proxmoxHA") &&
+    storages.some((s) => s.storage === storage && s.shared)
+  );
+}
+
+/** useHAOffered reads whether an existing cluster's class and storage take part in Proxmox VE HA. */
+export function useHAOffered(className: string, storage: string | undefined): boolean {
+  const [offered, setOffered] = useState(false);
+  useEffect(() => {
+    async function load(): Promise<void> {
+      try {
+        const [classes, storages] = await Promise.all([api.classes(), api.storages()]);
+        setOffered(
+          offersHA(
+            classes.find((c) => c.name === className),
+            storages,
+            storage,
+          ),
+        );
+      } catch {
+        // Without the classes or storages the option is not shown; the cluster keeps its setting.
+        setOffered(false);
+      }
+    }
+    void load();
+  }, [className, storage]);
+  return offered;
+}
+
+/** haText describes a cluster's Proxmox VE HA setting; unset means it takes part. */
+export const haText = (on: boolean): string =>
+  on ? "Control-plane VMs kept on separate nodes, restarted elsewhere when a node fails" : "Off";
+
+/** HAField switches Proxmox VE HA for a cluster's control-plane VMs. */
+export function HAField({ checked, onChange }: { checked: boolean; onChange: (on: boolean) => void }): JSX.Element {
+  const hint = useId();
+  return (
+    <>
+      <label className="check">
+        <input type="checkbox" checked={checked} aria-describedby={hint} onChange={(e) => onChange(e.target.checked)} />{" "}
+        Keep the control-plane VMs on separate nodes with Proxmox VE HA
+      </label>
+      <div className="hint" id={hint}>
+        Proxmox VE HA moves the control-plane VMs apart while they run and restarts one on another node when its node
+        fails. A node that runs an HA VM arms Proxmox VE&apos;s watchdog, so it restarts itself if it loses quorum.
+      </div>
+    </>
+  );
+}

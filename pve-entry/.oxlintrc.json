@@ -1,0 +1,43 @@
+{
+  "$schema": "../web/node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "unicorn", "oxc"],
+  // The interface's categories and the rules of web/.oxlintrc.json that apply to a plain script.
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "pedantic": "error",
+    "perf": "error",
+    "style": "error"
+  },
+  "env": { "browser": true },
+  // Proxmox VE's interface defines these before it loads the script.
+  "globals": { "Ext": "readonly", "gettext": "readonly" },
+  "rules": {
+    "eslint/complexity": "error",
+    "eslint/eqeqeq": "error",
+    "eslint/no-alert": "error",
+    "eslint/no-empty-function": "error",
+    "eslint/no-param-reassign": "error",
+    "eslint/no-var": "error",
+    "eslint/curly": ["error", "all"],
+    "eslint/func-style": ["error", "declaration", { "allowArrowFunctions": true }],
+    "eslint/no-magic-numbers": [
+      "error",
+      { "ignore": [-1, 0, 1, 2], "ignoreArrayIndexes": true, "ignoreDefaultValues": true }
+    ],
+    "eslint/one-var": ["error", "never"],
+    "unicorn/catch-error-name": ["error", { "name": "err" }],
+    // The console is where the entry says why it left itself out of a Proxmox VE release.
+    "eslint/no-console": "off",
+    // ExtJS's overrides are methods that reach their component through this.
+    "eslint/prefer-arrow-callback": "off",
+    // Everything stays inside the script's closure, out of the page's globals.
+    "unicorn/consistent-function-scoping": "off",
+    // Runs only in a browser, where window is the global it means.
+    "unicorn/prefer-global-this": "off",
+    // Keys follow ExtJS's component configs, comments often start with an identifier.
+    "eslint/sort-keys": "off",
+    "eslint/capitalized-comments": "off",
+    "eslint/id-length": "off"
+  }
+}

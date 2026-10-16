@@ -1,0 +1,132 @@
+# Upgrading
+
+Three things are upgraded separately, in this order:
+
+1. **Kubehenge itself:** the appliance's software, from the Administration page or the Proxmox VE shell.
+2. **The management cluster:** Talos, Kubernetes, Cluster API and its providers, and Kubehenge's ClusterClasses and controller, to the versions the new release carries, by applying it again.
+3. **Workload clusters:** Kubernetes in each cluster, by hand or automatically inside a maintenance window.
+
+Before 1.0.0, a minor release may change behaviour: read its release notes (`CHANGELOG.md`) first.
+
+## Kubehenge
+
+### From the Administration page
+
+**Administration** in the top bar opens the Administration page, for those with the [setup privileges](install.md#who-may-set-it-up) on `/`. Its **Kubehenge** box shows:
+
+- **Installed:** the running release.
+- **Newer releases:** those published since, or why they are unknown (the release index could not be fetched or checked).
+- **Last upgrade:** from which release to which, that the installed release is already the newest allowed, that one is in progress, or why it failed, with the time.
+
+**Upgrade to `<version>`** installs the newest release, once confirmed. The interface restarts, so it is unavailable for about a minute. No upgrade starts while the management cluster is being applied or removed or a VM template is being built. The restart signs everyone out. A page left open across an upgrade says so and offers to reload, since it still runs the old interface.
+
+### Automatically
+
+**Automatic upgrades** in the same box:
+
+| Setting | Upgrades to |
+| --- | --- |
+| off | nothing (the default) |
+| patch releases | the newest release of the installed minor version, such as 0.1.x |
+| minor releases | the newest release of the installed major version, such as 0.x |
+
+**At hour** picks the hour of the day (03:00 by default), in the **Time zone** below it, which starts out as the browser's when automatic upgrades are switched on. The interface checks once a day in that hour, never during a run of the management cluster or a template build, and only Kubehenge's own software is upgraded: the management cluster and the workload clusters are not touched.
+
+### What is installed
+
+The interface never replaces software itself. It drops a request into a spool, and a separate service running as root, `kubehenge-update`, carries it out:
+
+- It fetches the release index, `https://github.com/kubehenge/kubehenge/releases/latest/download/index.json`, and its signature, and accepts the index only if it is signed with Kubehenge's release key. The public key is built into each release and cannot be configured. A mirror of the index and its signature can be named with `KUBEHENGE_RELEASE_INDEX=<URL>` in the appliance's `/etc/kubehenge/appliance.env`, which both the interface and the updater read; the signature check is the same.
+- It installs only a release named in that index, newer than the installed one, and only an archive matching the checksum in the index. It also installs the OpenTofu release that Kubehenge release names, checked the same way.
+- It swaps the files by rename and restarts the interface. It holds the lock the management cluster's runs take, so an upgrade never cuts a run off and no run starts during an upgrade.
+
+A release published without its signed index upgrades no appliance.
+
+### From the Proxmox VE shell
+
+`install.sh` upgrades an installed appliance too. In the shell of the node the appliance runs on, as root:
+
+```sh
+curl -fsSLO https://github.com/kubehenge/kubehenge/releases/latest/download/install.sh && sh install.sh --upgrade --ctid <ctid>
+```
+
+- It checks every download against the checksums it carries, as when installing ([install.md](install.md#install-the-appliance)); `--release <file> --sha256 <hex>` installs a local archive instead.
+- It refuses a container that is not Kubehenge's appliance (tagged `kubehenge`), and a release older than the installed one. The same release may be installed again.
+- It keeps the appliance's state, settings and certificate, and keeps a newer OpenTofu that the appliance's own upgrades brought.
+- `--proxmox-ca <file>` replaces the CA the appliance checks the Proxmox VE API against, after the API's certificate was replaced with one from another CA ([install.md](install.md#options)); it stops, changing nothing, unless the API's certificate is one that CA signed. Apply the management cluster again afterwards, so that it and the clusters check the API against the new CA as well.
+- It stops, changing nothing, while the management cluster is being applied or removed, a VM template is being built, or the appliance is being upgraded; run it again once that has finished.
+
+## The management cluster
+
+Each Kubehenge release pins the versions of Talos, Kubernetes, Cluster API, every provider and cert-manager together, as the set it has tested. Upgrading Kubehenge does not change the running management cluster; applying it again does.
+
+### In the appliance
+
+On the Administration page, the **Management cluster** section shows the settings of the last run. **Apply again…** asks for the state passphrase given when the management cluster was created and applies them as they are; **Edit…** opens them for changes first, applied with the same passphrase. Applying again:
+
+- upgrades Talos node by node, each drained first when there are several;
+- upgrades Kubernetes component by component;
+- upgrades each Cluster API provider through the Cluster API Operator, and Kubehenge's ClusterClasses and controller;
+- puts back anything that drifted from the settings.
+
+**What a running management cluster keeps.** Its nodes keep their addresses, and nodes are only added after them: a single node grows to three by adding two addresses after its own, but none is taken away, since a node given another address is cut off from Talos and etcd, and a node removed leaves its etcd member behind. The API address, gateway, pod and service ranges and the VM disks' storage stay as they were. The appliance refuses such changes. The page shows the API address, gateway, pod and service ranges and VM disks read-only, and keeps Node addresses editable only for adding addresses after the existing ones. Anything else, such as the nodes the VMs run on, the bridge, DNS servers, registry mirrors, identity providers and what clusters may use, can change. With Terraform/OpenTofu the same holds, but nothing refuses it: do not change `node_addresses`, `api_address`, `gateway`, `pod_subnets`, `service_subnets` or `vm_datastore` of a running management cluster, and only append to `node_addresses`.
+
+**When a release changes a ClusterClass**, applying it rolls the clusters of that class: a ClusterClass's machine and bootstrap templates are named after their contents, and Cluster API replaces the nodes of every cluster whose class now points at new templates, one at a time as for an upgrade, so each cluster needs [spare addresses](install.md#network-and-addresses). [CHANGELOG.md](../CHANGELOG.md) says which classes a release changes; apply such a release when the rollouts suit you.
+
+The same page can move the management cluster to other Proxmox VE nodes or add nodes to it: a VM given another node is migrated there.
+
+It runs with your Proxmox VE session, like the first run, and takes about as long. The page follows the log. If it fails, the page shows the error and the log; fix the cause and apply again.
+
+### With Terraform/OpenTofu
+
+Take the module from the new release's archive and apply it with the same variables and the same state:
+
+```sh
+tofu init -upgrade
+tofu apply
+```
+
+`version_overrides` holds a component back below the tested set, by the keys in `versions.tf`; lowering a version on a running cluster is not supported. Changing `node_cores` or `node_memory_mb` updates the VMs without rebooting them; each node takes the new size at its next reboot, which a Talos upgrade does one node at a time.
+
+## Workload clusters
+
+### By hand
+
+**Upgrade** on a cluster's page offers the newest release of its own minor version, when that is newer than the one running, and the newest of the next minor version, in the distribution's own form (`v1.37.1`, `v1.37.1+rke2r1`, `v1.37.1+k3s1`): RKE2's and k3s's from their release channels, kubeadm's from the VM templates there are. When there is neither, the version can be typed in; for kubeadm, the dialog asks for a template of a newer version first. The interface refuses skipping a minor version or going back. Cluster API replaces the control-plane nodes one by one, then the workers, each new node created before an old one is removed. With kubectl, set `spec.topology.version` ([clusters.md](clusters.md#day-two)).
+
+- **kubeadm** nodes boot from a template built for their exact Kubernetes version: create the template of the new version first ([templates.md](templates.md)).
+- **RKE2 and k3s** install the requested version when a node boots, from the same template.
+
+### Automatically inside a window
+
+**Edit** beside Automatic upgrades, in a cluster's **Options**, sets its `upgrades` variable; the create wizard can switch it on from the start, with the default window in the browser's time zone:
+
+| Field | Variable | What it is |
+| --- | --- | --- |
+| Upgrade automatically | `mode` | `off` (the default); `patch` releases: the newest release of the cluster's minor version; `minor`, patch and minor releases: also the next minor version. |
+| Days | `window.weekdays` | Days of the week the window opens on. |
+| Days of the month | `window.monthDays` | Such as `1, 15`. A day listed here or in Days counts; every day when both are empty. |
+| From | `window.start` | When the window opens, `HH:MM`; `02:00` by default. |
+| Duration (hours) | `window.durationMinutes` | How long it stays open: 30 minutes to 24 hours, in half hours; four hours by default. A window may run past midnight. |
+| Time zone | `window.timeZone` | An IANA time zone, such as `Europe/Berlin`. The variable defaults to `UTC`; switching automatic upgrades on in the dialog, or in the create wizard, starts from the browser's zone. |
+
+Kubehenge's controller looks at every cluster every five minutes. It starts an upgrade only:
+
+- inside the cluster's window;
+- while the cluster is available, with every node at the same version and no rollout running;
+- one step at a time: in `patch` mode to the newest release of the cluster's minor version; in `minor` mode to the newest release of the next minor version once the distribution's stable release has reached it, and otherwise as in `patch` mode. The next step waits until the cluster is settled again.
+
+Where the versions come from:
+
+| Distribution | Newest releases and stable minor version |
+| --- | --- |
+| RKE2, k3s | the distribution's own release channels; the management cluster's nodes need to reach them |
+| kubeadm | the kubeadm templates on Proxmox VE: the newest version a template has been built for, so building a newer template is what offers one |
+
+Cluster API then rolls the nodes as for any upgrade. A rollout that has started finishes even if the window closes. The last automatic upgrade shows in the cluster's **Summary** as **Last automatic upgrade**, and is recorded on the Cluster in the annotation `kubehenge.dev/auto-upgraded`.
+
+### What holds an upgrade back
+
+- **Rancher.** The cluster that runs Rancher stays within the Kubernetes versions Rancher's release runs on. An upgrade beyond them, by hand or automatic, waits (the cluster's conditions say why) until a Kubehenge release brings a Rancher that runs there.
+- **A missing kubeadm template.** New kubeadm nodes cannot be created without the template of their version ([troubleshooting.md](troubleshooting.md#template-missing)).
+- **No spare addresses.** Each rollout creates a node before removing one ([troubleshooting.md](troubleshooting.md#node-addresses-run-out)).

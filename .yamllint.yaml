@@ -1,0 +1,16 @@
+---
+extends: default
+
+rules:
+  # The width the rest of the repository wraps at; a URL, digest or expression that cannot be broken
+  # may run past it.
+  line-length:
+    max: 100
+    allow-non-breakable-words: true
+    allow-non-breakable-inline-mappings: true
+  # One space before a trailing comment, as Dependabot writes the version beside a pinned action.
+  comments:
+    min-spaces-from-content: 1
+  # GitHub Actions' `on` is a key, not a boolean.
+  truthy:
+    check-keys: false

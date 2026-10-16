@@ -1,0 +1,175 @@
+---
+version: "2"
+
+run:
+  build-tags:
+    - e2e
+    - integration
+
+linters:
+  default: all
+  disable:
+    # Each of these asks for what Go's own conventions advise against.
+    - exhaustruct # every field spelled out, where the zero value is part of the design
+    - exhaustruct_v5
+    - gomodguard # deprecated; gomodguard_v2 runs instead
+    - varnamelen # short names in short scopes are Go style
+    - noinlineerr # forbids `if err := f(); err != nil`
+    - testpackage # in-package tests are how unexported code is tested
+    - err113 # a sentinel error for every message, also those no caller tells apart
+    - tagliatelle # JSON names follow the APIs they speak (Proxmox VE, Kubernetes, OIDC)
+    # Kubernetes API values (GroupVersions, GVKs, schemes) are package variables by convention;
+    # turning them into functions hides no state and adds a call at every use.
+    - gochecknoglobals
+    # Layout belongs to gofumpt; these add rules of their own about blank lines and line length.
+    - wsl
+    - wsl_v5
+    - nlreturn
+    - lll
+  settings:
+    cyclop:
+      max-complexity: 30
+      package-average: 10
+    depguard:
+      rules:
+        superseded:
+          deny:
+            - pkg: io/ioutil
+              desc: deprecated; use io and os
+            - pkg: math/rand$
+              desc: use math/rand/v2
+            - pkg: github.com/pkg/errors
+              desc: use errors and fmt.Errorf with %w
+            - pkg: golang.org/x/exp/slices
+              desc: use slices
+            - pkg: golang.org/x/exp/maps
+              desc: use maps
+    errcheck:
+      check-type-assertions: true
+    exhaustive:
+      check:
+        - switch
+        - mapliteral
+        - typeswitch
+    funlen:
+      lines: 100
+      statements: 50
+      ignore-comments: true
+    gocognit:
+      min-complexity: 20
+    goconst:
+      # Field names of the APIs the code speaks (Kubernetes, Helm values, Proxmox VE): a constant
+      # named for "name" reads worse than the literal, and is not how Kubernetes Go code is written.
+      ignore-string-values:
+        - ^(name|kind|spec|type|enabled|path|key|operator|cni|poolid|comment|delete)$
+    ireturn:
+      allow:
+        - anon
+        - error
+        - empty
+        - stdlib
+        # A type parameter is the caller's concrete type, not an interface.
+        - generic
+        # controller-runtime hands out its clients and managers only as these interfaces.
+        - ^sigs\.k8s\.io/controller-runtime/pkg/(client\.(Client|WithWatch)|manager\.Manager)$
+    gocritic:
+      enable-all: true
+      disabled-checks:
+        # Contradicts nonamedreturns.
+        - unnamedResult
+        # With govet's shadow also on, `if err = f(); err != nil` and `if err := f(); ...` are
+        # both refused, leaving only the most verbose form.
+        - sloppyReassign
+    govet:
+      enable-all: true
+      disable:
+        # Orders fields by size rather than by meaning.
+        - fieldalignment
+    misspell:
+      locale: UK
+      # Names in other people's APIs keep their spelling.
+      ignore-rules:
+        - synchronize
+    mnd:
+      # A command's argument count reads plainly where it is declared.
+      ignored-functions:
+        - ^cobra\.(ExactArgs|MinimumNArgs|MaximumNArgs|RangeArgs)$
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    paralleltest:
+      # tparallel checks subtests, and also accepts parallel subtests of a test that must run alone.
+      ignore-missing-subtests: true
+    revive:
+      enable-all-rules: true
+      rules:
+        # Covered by dedicated linters above, with their own settings.
+        - name: add-constant
+          disabled: true
+        - name: cognitive-complexity
+          disabled: true
+        - name: cyclomatic
+          disabled: true
+        - name: function-length
+          disabled: true
+        - name: line-length-limit
+          disabled: true
+        - name: unhandled-error
+          disabled: true
+        # Asks for a licence header the repository keeps in LICENSE instead.
+        - name: file-header
+          disabled: true
+        # Splits types that belong together, such as a chart's settings, across files by count.
+        - name: max-public-structs
+          disabled: true
+        # Asks for named results, which nonamedreturns refuses.
+        - name: confusing-results
+          disabled: true
+        # A default branch in a switch exhaustive checks would hide a case left out.
+        - name: enforce-switch-style
+          arguments:
+            - allowNoDefault
+    staticcheck:
+      checks:
+        - all
+    usestdlibvars:
+      http-method: true
+      http-status-code: true
+      time-weekday: true
+      time-month: true
+      time-layout: true
+      crypto-hash: true
+      default-rpc-path: true
+      sql-isolation-level: true
+      tls-signature-scheme: true
+      constant-kind: true
+  exclusions:
+    rules:
+      # Table-driven tests are long and repeat their literals by design.
+      - path: _test\.go
+        linters:
+          - cyclop
+          - dupl
+          - funlen
+          - gocognit
+          - goconst
+          - maintidx
+          - mnd
+          - wrapcheck
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    gofumpt:
+      extra:
+        group-params: true
+        clothe-returns: true
+    goimports:
+      local-prefixes:
+        - github.com/kubehenge/kubehenge

@@ -1,0 +1,54 @@
+[Unit]
+Description=Headlamp for Kubehenge's clusters, reached only through the interface's sign-in
+Documentation=https://github.com/kubehenge/kubehenge
+# Started by the first connection to kubehenge-headlamp.socket, and stopped once its proxy has
+# exited or the interface, which writes its kubeconfig and is the only way to reach it, stops.
+PartOf=kubehenge.service
+After=kubehenge.service
+StopWhenUnneeded=yes
+
+# Its kubeconfig holds each cluster's address and CA, no credentials: users sign in to every
+# cluster themselves. A user of its own, with nothing of the interface's readable.
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=kubehenge-headlamp-server
+Environment=HOME=/var/lib/kubehenge-headlamp-server
+# HEADLAMP_CONFIG_OIDC_CALLBACK_URL, written by the installer: the address identity providers send
+# people back to, https://<appliance>:8443/oidc-callback. Headlamp answers only to its loopback
+# address, so it cannot work this out from requests.
+EnvironmentFile=-/etc/kubehenge/headlamp.env
+ExecStart=/usr/local/share/kubehenge/headlamp/headlamp-server \
+    -listen-addr 127.0.0.1 \
+    -port 4467 \
+    -kubeconfig /var/lib/kubehenge-headlamp/kubeconfig \
+    -html-static-dir /usr/local/share/kubehenge/headlamp/frontend \
+    -plugins-dir /usr/local/share/kubehenge/headlamp/plugins \
+    -user-plugins-dir /usr/local/share/kubehenge/headlamp/plugins \
+    -watch-plugins-changes=false \
+    -oidc-use-pkce
+# Started only once it listens, so that the proxy's first connection, the one that started it,
+# reaches it.
+ExecStartPost=/bin/bash -c 'for _ in {1..300}; do (: </dev/tcp/127.0.0.1/4467) 2>/dev/null && exit 0; sleep 0.1; done; exit 1'
+Restart=on-failure
+RestartSec=5s
+
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+UMask=0077
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native

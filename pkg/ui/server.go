@@ -1,0 +1,486 @@
+// Package ui is Kubehenge's web interface: users sign in with their Proxmox VE accounts and manage
+// the clusters their Proxmox VE privileges allow, which the interface then creates, changes and
+// deletes in the management cluster with its own account.
+package ui
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"log/slog"
+	"mime"
+	"net/http"
+	"path"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubehenge/kubehenge/pkg/appliance"
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
+	"github.com/kubehenge/kubehenge/pkg/pve"
+	"github.com/kubehenge/kubehenge/pkg/release"
+)
+
+// Accounts is what the interface asks Proxmox VE, as the signed-in user.
+type Accounts interface {
+	SignIns
+	Resources
+	Removals
+}
+
+// SignIns are the Proxmox VE sign-ins the interface's sessions rest on.
+type SignIns interface {
+	SignIn(ctx context.Context, username, password string) (*pve.Ticket, *pve.Challenge, error)
+	Answer(ctx context.Context, c *pve.Challenge, kind, code string) (*pve.Ticket, error)
+	Renew(ctx context.Context, t *pve.Ticket) (*pve.Ticket, error)
+	Realms(ctx context.Context) ([]pve.Realm, error)
+	OpenIDAuthURL(ctx context.Context, realm, redirect string) (string, error)
+	OpenIDLogin(ctx context.Context, code, state, redirect string) (*pve.Ticket, error)
+}
+
+// Resources are what a signed-in user holds and sees in Proxmox VE.
+type Resources interface {
+	Privileges(ctx context.Context, t *pve.Ticket, aclPath string) (pve.Privileges, error)
+	AllPrivileges(ctx context.Context, t *pve.Ticket) (map[string]pve.Privileges, error)
+	Storages(ctx context.Context, t *pve.Ticket) ([]pve.Storage, error)
+	Nodes(ctx context.Context, t *pve.Ticket) ([]pve.Node, error)
+	Bridges(ctx context.Context, t *pve.Ticket, node string) ([]pve.Bridge, error)
+	NodeAffinityRules(ctx context.Context, t *pve.Ticket) ([]pve.HARule, error)
+	Zone(ctx context.Context, t *pve.Ticket, bridge string) (string, error)
+	PoolMembers(ctx context.Context, t *pve.Ticket, pool string) ([]pve.Member, error)
+	Templates(ctx context.Context, t *pve.Ticket, pool string) ([]pve.Member, error)
+	BackupCovers(ctx context.Context, t *pve.Ticket, vmid int) (bool, error)
+}
+
+// Removals are what an administrator's runs remove from Proxmox VE that the management-cluster
+// module does not.
+type Removals interface {
+	DeleteVM(ctx context.Context, t *pve.Ticket, node string, vmid int) error
+	ReleaseHA(ctx context.Context, t *pve.Ticket, prefix string) error
+}
+
+// Server serves the interface and its API.
+type Server struct {
+	Accounts Accounts
+	// Kube acts in the management cluster with the interface's own account, after the user's
+	// Proxmox VE privileges have been checked. Nil until the appliance has set the management
+	// cluster up.
+	Kube client.Client
+	// Appliance is set when the interface runs in Kubehenge's appliance, which creates and looks
+	// after the management cluster.
+	Appliance *appliance.Appliance
+	// ApplianceVMID is the appliance's own guest ID in Proxmox VE, for telling administrators
+	// whether it is backed up; 0 when not known.
+	ApplianceVMID int
+	// CertificateExpires is when the certificate the interface serves runs out; zero when not
+	// known. It is read at start, as the certificate is.
+	CertificateExpires time.Time
+	// NewKube makes the client for the management cluster from the kubeconfig the appliance wrote.
+	NewKube func(kubeconfig []byte) (client.Client, error)
+	// Upgrades are set in the appliance, which upgrades its own software.
+	Upgrades *Upgrades
+	// MakeTemplate builds VM templates in the appliance with an administrator's session.
+	MakeTemplate MakeTemplate
+	// Releases are the Kubernetes versions RKE2 and k3s publish, the same channels the
+	// controller's automatic upgrades read; nil leaves their version to be typed in.
+	Releases     provisioner.Releases
+	releaseCache releaseCache
+	// Headlamp is set when a shared Headlamp server runs beside the interface.
+	Headlamp *Headlamp
+	// WorkloadPool is the Proxmox VE pool every cluster's own pool nests under.
+	WorkloadPool string
+	// ClassNamespace holds Kubehenge's ClusterClasses.
+	ClassNamespace string
+	// Namespace is where clusters are created unless the request names another.
+	Namespace string
+	// Assets is the built frontend: index.html and what it loads.
+	Assets fs.FS
+	// PublicURL is the address users reach the interface at, such as https://kubehenge.example;
+	// OpenID identity providers send users back to it. Empty means the address the browser used.
+	PublicURL string
+	// SessionMaxAge ends every session this long after sign-in.
+	SessionMaxAge time.Duration
+	Log           *slog.Logger
+
+	sessions   *sessions
+	limiter    *limiter
+	activeKube atomic.Pointer[client.Client]
+	backups    backupCache
+	etags      etagCache
+}
+
+const (
+	// headlampSyncEvery is how soon a new cluster shows in Headlamp.
+	headlampSyncEvery = 30 * time.Second
+	// failuresAllowed failed sign-ins or wrong passphrases within failureWindow hold their source
+	// back for the rest of it.
+	failuresAllowed = 5
+	failureWindow   = 15 * time.Minute
+)
+
+// Run prepares the server and prunes its sessions until ctx ends. Handler is usable once it has
+// been called.
+func (s *Server) Run(ctx context.Context) {
+	s.init()
+	go s.autoUpgrade(ctx)
+	if s.Headlamp != nil {
+		go s.syncHeadlamp(ctx, headlampSyncEvery)
+	}
+	s.sessions.pruneEvery(ctx, time.Minute)
+}
+
+// Handler returns the interface's routes.
+func (s *Server) Handler() http.Handler {
+	s.init()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/realms", s.realms)
+	mux.HandleFunc("POST /api/session", s.signIn)
+	mux.HandleFunc("POST /api/session/second-factor", s.secondFactor)
+	mux.HandleFunc("GET /api/openid/start", s.openIDStart)
+	mux.HandleFunc("GET /api/openid/callback", s.openIDCallback)
+	mux.HandleFunc("GET /api/session", s.signedIn(s.whoAmI))
+	mux.HandleFunc("DELETE /api/session", s.signedIn(s.signOut))
+
+	mux.HandleFunc("GET /api/proxmox/storages", s.signedIn(s.storages))
+	mux.HandleFunc("GET /api/proxmox/nodes", s.signedIn(s.nodes))
+	mux.HandleFunc("GET /api/proxmox/nodes/{node}/bridges", s.signedIn(s.bridges))
+	mux.HandleFunc("GET /api/proxmox/ha-rules", s.signedIn(s.haRules))
+
+	mux.HandleFunc("GET /api/setup", s.signedIn(s.setupStatus))
+	mux.HandleFunc("POST /api/setup", s.signedIn(s.setup))
+	mux.HandleFunc("POST /api/setup/credential", s.signedIn(s.credential))
+	mux.HandleFunc("POST /api/setup/remove", s.signedIn(s.remove))
+	mux.HandleFunc("GET /api/appliance/upgrades", s.signedIn(s.upgradesStatus))
+	mux.HandleFunc("POST /api/appliance/upgrades", s.signedIn(s.upgrade))
+	mux.HandleFunc("PUT /api/appliance/upgrades/settings", s.signedIn(s.upgradeSettings))
+	mux.HandleFunc("GET /api/templates", s.signedIn(s.listTemplates))
+	mux.HandleFunc("POST /api/templates", s.signedIn(s.createTemplate))
+	mux.HandleFunc("DELETE /api/templates/{vmid}", s.signedIn(s.deleteTemplate))
+
+	mux.HandleFunc("GET /api/classes", s.managed(s.classes))
+	mux.HandleFunc("GET /api/versions/{distribution}", s.signedIn(s.versions))
+	mux.HandleFunc("GET /api/clusters", s.managed(s.listClusters))
+	mux.HandleFunc("POST /api/clusters", s.managed(s.createCluster))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}", s.managed(s.getCluster))
+	mux.HandleFunc("PATCH /api/clusters/{namespace}/{name}", s.managed(s.changeCluster))
+	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}", s.managed(s.deleteCluster))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/kubeconfig", s.managed(s.kubeconfig))
+
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusNotFound, "no such API")
+	})
+	mux.HandleFunc("/", s.assets)
+	return securityHeaders(mux)
+}
+
+func (s *Server) init() {
+	if s.sessions == nil {
+		s.sessions = newSessions(s.Accounts, s.SessionMaxAge)
+		s.limiter = newLimiter(failuresAllowed, failureWindow)
+		if s.Kube != nil {
+			s.setKube(s.Kube)
+		}
+	}
+	if s.Log == nil {
+		s.Log = slog.New(slog.DiscardHandler)
+	}
+}
+
+// setKube switches the interface to a management cluster.
+func (s *Server) setKube(c client.Client) {
+	s.activeKube.Store(&c)
+}
+
+func (s *Server) currentKube() client.Client {
+	if p := s.activeKube.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "+
+			"connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+		h.Set("Cross-Origin-Resource-Policy", "same-origin")
+		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), usb=()")
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			h.Set("Cache-Control", "no-store")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// assets serves the frontend. Paths that name no file get index.html, where the frontend's own
+// router takes over.
+func (s *Server) assets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+	if name == "" {
+		name = "index.html"
+	}
+	f, err := s.Assets.Open(name)
+	if err == nil {
+		if st, statErr := f.Stat(); statErr != nil || st.IsDir() {
+			_ = f.Close()
+			f, err = nil, fs.ErrNotExist
+		}
+	}
+	if err != nil {
+		if strings.HasPrefix(name, "assets/") {
+			http.NotFound(w, r)
+			return
+		}
+		name = "index.html"
+		if f, err = s.Assets.Open(name); err != nil {
+			http.Error(w, "the interface was built without its frontend", http.StatusNotFound)
+			return
+		}
+	}
+	h := w.Header()
+	if strings.HasPrefix(name, "assets/") {
+		// Vite names these by the hash of their content.
+		h.Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		h.Set("Cache-Control", "no-cache")
+	}
+	if ct := mime.TypeByExtension(path.Ext(name)); ct != "" {
+		h.Set("Content-Type", ct)
+	}
+	// The build writes compressed forms beside each text file, so none is compressed per request.
+	served := name
+	h.Add("Vary", "Accept-Encoding")
+	if g, e, ok := s.compressed(r, name); ok {
+		_ = f.Close()
+		f, served = g, name+e.suffix
+		h.Set("Content-Encoding", e.coding)
+	}
+	defer func() { _ = f.Close() }()
+	rs, ok := f.(io.ReadSeeker)
+	if !ok {
+		_, _ = io.Copy(w, f)
+		return
+	}
+	if tag, err := s.etag(served); err == nil {
+		h.Set("ETag", tag)
+	}
+	// ServeContent answers a known ETag with 304 and serves ranges; the Content-Type set above
+	// keeps it from guessing.
+	http.ServeContent(w, r, "", time.Time{}, rs)
+}
+
+type assetEncoding struct{ coding, suffix string }
+
+// precompressed are the forms the build writes beside each text asset, by preference.
+var precompressed = []assetEncoding{{"br", ".br"}, {"gzip", ".gz"}}
+
+// compressed opens the preferred form of an asset the request accepts; not ok when there is none.
+func (s *Server) compressed(r *http.Request, name string) (fs.File, assetEncoding, bool) {
+	for _, e := range precompressed {
+		if !accepts(r, e.coding) {
+			continue
+		}
+		if f, err := s.Assets.Open(name + e.suffix); err == nil {
+			return f, e, true
+		}
+	}
+	return nil, assetEncoding{}, false
+}
+
+// accepts tells whether the request accepts a content coding, not refused with q=0.
+func accepts(r *http.Request, coding string) bool {
+	for _, field := range r.Header.Values("Accept-Encoding") {
+		for part := range strings.SplitSeq(field, ",") {
+			name, params, _ := strings.Cut(part, ";")
+			if !strings.EqualFold(strings.TrimSpace(name), coding) {
+				continue
+			}
+			q, ok := strings.CutPrefix(strings.ReplaceAll(params, " ", ""), "q=")
+			if !ok {
+				return true
+			}
+			v, err := strconv.ParseFloat(q, 64)
+			return err == nil && v > 0
+		}
+	}
+	return false
+}
+
+type etagCache struct {
+	mu     sync.Mutex
+	byName map[string]string
+}
+
+// etagBytes of an asset's SHA-256 tell its versions apart.
+const etagBytes = 16
+
+// etag is a strong validator for an asset, from its content; worked out once per file.
+func (s *Server) etag(name string) (string, error) {
+	c := &s.etags
+	c.mu.Lock()
+	tag, ok := c.byName[name]
+	c.mu.Unlock()
+	if ok {
+		return tag, nil
+	}
+	raw, err := fs.ReadFile(s.Assets, name)
+	if err != nil {
+		return "", fmt.Errorf("asset %s: %w", name, err)
+	}
+	sum := sha256.Sum256(raw)
+	tag = `"` + hex.EncodeToString(sum[:etagBytes]) + `"`
+	c.mu.Lock()
+	if c.byName == nil {
+		c.byName = map[string]string{}
+	}
+	c.byName[name] = tag
+	c.mu.Unlock()
+	return tag, nil
+}
+
+// user is a signed-in request's caller.
+type user struct {
+	session *session
+	ticket  *pve.Ticket
+	// kube is the management cluster, for handlers behind managed.
+	kube client.Client
+}
+
+// versionHeader carries the running release on answers to signed-in users.
+const versionHeader = "X-Kubehenge-Version"
+
+// managed is signedIn for what needs the management cluster, which an appliance has only once it
+// has been set up.
+func (s *Server) managed(next func(http.ResponseWriter, *http.Request, user)) http.HandlerFunc {
+	return s.signedIn(func(w http.ResponseWriter, r *http.Request, u user) {
+		if u.kube = s.currentKube(); u.kube == nil {
+			writeError(w, http.StatusServiceUnavailable, "the management cluster is not set up yet")
+			return
+		}
+		next(w, r, u)
+	})
+}
+
+// signedIn lets only signed-in users through, and only with the session's CSRF token on anything
+// but a read.
+func (s *Server) signedIn(next func(http.ResponseWriter, *http.Request, user)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sess := s.sessions.lookup(r)
+		if sess == nil {
+			writeError(w, http.StatusUnauthorized, "not signed in")
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && !sess.checkCSRF(r) {
+			writeError(w, http.StatusForbidden, "missing or wrong CSRF token")
+			return
+		}
+		ticket := s.sessions.signedIn(r.Context(), sess)
+		if ticket == nil {
+			writeError(w, http.StatusUnauthorized, "not signed in")
+			return
+		}
+		// A page loaded before an upgrade learns from this that it is out of date. Only those signed
+		// in see the version, so it tells no one else what to attack.
+		w.Header().Set(versionHeader, release.Version)
+		next(w, r, user{session: sess, ticket: ticket})
+	}
+}
+
+// require checks that the user holds every privilege on a Proxmox VE path, and answers the request
+// when not.
+func (s *Server) require(w http.ResponseWriter, r *http.Request, u user, aclPath string, privs ...string) bool {
+	held, err := s.Accounts.Privileges(r.Context(), u.ticket, aclPath)
+	if err != nil {
+		s.proxmoxError(w, err)
+		return false
+	}
+	for _, p := range privs {
+		if !held[p] {
+			writeError(w, http.StatusForbidden, fmt.Sprintf("%s needs %s on %s", u.ticket.Username, p, aclPath))
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) proxmoxError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, pve.ErrAuthentication):
+		writeError(w, http.StatusUnauthorized, "Proxmox VE no longer accepts the session")
+	case errors.Is(err, pve.ErrForbidden):
+		writeError(w, http.StatusForbidden, "Proxmox VE refused: permission denied")
+	default:
+		s.Log.Error("proxmox VE request failed", "error", err)
+		writeError(w, http.StatusBadGateway, "Proxmox VE did not answer")
+	}
+}
+
+const maxBody = 64 << 10
+
+// readJSON decodes a request body. Only application/json is accepted: a form on another site can
+// send a POST without the preflight a JSON request needs.
+func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	if ct, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); ct != "application/json" {
+		writeError(w, http.StatusUnsupportedMediaType, "send application/json")
+		return false
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		writeError(w, http.StatusBadRequest, "malformed request: "+decodeProblem(err))
+		return false
+	}
+	return true
+}
+
+// decodeProblem says what is wrong with a request body without Go's type and package names.
+func decodeProblem(err error) string {
+	var typed *json.UnmarshalTypeError
+	var syntax *json.SyntaxError
+	var tooLarge *http.MaxBytesError
+	switch {
+	case errors.As(err, &typed) && typed.Field != "":
+		return fmt.Sprintf("%s: the wrong kind of value (%s)", typed.Field, typed.Value)
+	case errors.As(err, &typed):
+		return fmt.Sprintf("the body: the wrong kind of value (%s)", typed.Value)
+	case errors.As(err, &syntax), errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, io.EOF):
+		return "the body is no valid JSON"
+	case errors.As(err, &tooLarge):
+		return fmt.Sprintf("the body is larger than %d bytes", tooLarge.Limit)
+	}
+	return strings.TrimPrefix(err.Error(), "json: ")
+}
+
+// writeJSON encodes the answer before the status goes out, so one that cannot be encoded is an
+// error rather than half an answer.
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		http.Error(w, "the answer could not be encoded", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(append(raw, '\n'))
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"error": message})
+}

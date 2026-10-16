@@ -1,0 +1,55 @@
+[Unit]
+Description=Kubehenge, Kubernetes for Proxmox VE
+Documentation=https://github.com/kubehenge/kubehenge
+After=network-online.target
+Wants=network-online.target kubehenge-headlamp.socket
+
+[Service]
+Type=simple
+User=kubehenge
+Group=kubehenge
+# KUBEHENGE_PROXMOX_URL, KUBEHENGE_PUBLIC_URL and KUBEHENGE_APPLIANCE_VMID, written by the installer.
+EnvironmentFile=/etc/kubehenge/appliance.env
+ExecStart=/usr/local/bin/kubehenge serve \
+    --appliance-dir /var/lib/kubehenge \
+    --module /usr/local/share/kubehenge/management-cluster \
+    --tofu /usr/local/bin/tofu \
+    --proxmox-ca /etc/kubehenge/proxmox-ca.pem \
+    --tls-cert /etc/kubehenge/tls.crt \
+    --tls-key /etc/kubehenge/tls.key \
+    --listen :443 \
+    --headlamp-listen :8443 \
+    --headlamp-upstream http://127.0.0.1:4466 \
+    --headlamp-kubeconfig /var/lib/kubehenge-headlamp/kubeconfig
+Restart=on-failure
+# Headlamp's kubeconfig, which the Headlamp server (another user) reads.
+StateDirectory=kubehenge-headlamp
+StateDirectoryMode=0755
+RestartSec=5s
+
+# Port 443 is the one privilege it keeps.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+UMask=0077
+ProtectSystem=strict
+# Its own state, and the one directory where it may ask the updater for an upgrade.
+ReadWritePaths=/var/lib/kubehenge /var/lib/kubehenge-update/requests
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
