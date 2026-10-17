@@ -15,7 +15,7 @@ MAKEFLAGS += --jobs=$(shell getconf _NPROCESSORS_ONLN) --output-sync=target
 LDFLAGS := -s -w -buildid=
 
 build: web
-	CGO_ENABLED=0 go build -trimpath -ldflags='$(LDFLAGS)' -o bin/kubehenge ./cmd/kubehenge
+	CGO_ENABLED=0 go build -trimpath -ldflags='$(LDFLAGS)' -o dist/kubehenge ./cmd/kubehenge
 
 # The frontend's packages, installed again only when the lockfile changes.
 web/node_modules/.package-lock.json: web/package-lock.json
@@ -51,7 +51,7 @@ dist: web
 	rm -rf dist/stage && mkdir -p dist/stage/bin dist/stage/share/kubehenge/appliance dist/stage/share/kubehenge/headlamp/plugins dist/cache
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='$(RELEASE_LDFLAGS)' \
 		-o dist/stage/bin/kubehenge ./cmd/kubehenge
-	tar -cf - --exclude=.terraform --exclude=tests --exclude='*.tfstate*' --exclude='*.go' management-cluster charts | tar -xf - -C dist/stage/share/kubehenge
+	tar -cf - --exclude=.terraform --exclude=tests --exclude=.tflint.hcl --exclude='*.tfstate*' --exclude='*.go' management-cluster charts | tar -xf - -C dist/stage/share/kubehenge
 	if [ -n '$(CONTROLLER_IMAGE)' ]; then \
 		sed -i 's|^image: ""$$|image: "$(CONTROLLER_IMAGE)"|' dist/stage/share/kubehenge/charts/kubehenge/values.yaml && \
 		grep -qxF 'image: "$(CONTROLLER_IMAGE)"' dist/stage/share/kubehenge/charts/kubehenge/values.yaml; \
@@ -63,7 +63,7 @@ dist: web
 		$(foreach f,headlamp-server frontend LICENSE NOTICE,Headlamp-$(HEADLAMP_VERSION)-linux-x64/resources/$(f))
 	cp $(addprefix appliance/,$(UNITS)) dist/stage/share/kubehenge/appliance/
 	mkdir -p dist/stage/share/kubehenge/pve-entry
-	cp pve-entry/install.sh pve-entry/kubehenge-entry.js pve-entry/README.md dist/stage/share/kubehenge/pve-entry/
+	cp $(addprefix appliance/pve-entry/,install.sh kubehenge-entry.js README.md) dist/stage/share/kubehenge/pve-entry/
 	cp LICENSE dist/stage/share/kubehenge/
 	printf '%s\n' '$(VERSION)' > dist/stage/share/kubehenge/VERSION
 	# Modes are set here, not taken from the build machine's file system, which may keep none.
@@ -84,8 +84,8 @@ dist: web
 TOFU_VERSION = $(shell sed -n 's/^TOFU_VERSION=//p' appliance/install.sh)
 TOFU_SHA256 = $(shell sed -n 's/^TOFU_SHA256=//p' appliance/install.sh)
 index:
-	CGO_ENABLED=0 go build -trimpath -ldflags='$(RELEASE_LDFLAGS)' -o bin/kubehenge-release ./cmd/kubehenge
-	bin/kubehenge-release release index $(if $(PREVIOUS),--previous $(PREVIOUS)) --version $(VERSION) \
+	CGO_ENABLED=0 go build -trimpath -ldflags='$(RELEASE_LDFLAGS)' -o dist/kubehenge-release ./cmd/kubehenge
+	dist/kubehenge-release release index $(if $(PREVIOUS),--previous $(PREVIOUS)) --version $(VERSION) \
 		--url https://github.com/kubehenge/kubehenge/releases/download/v$(VERSION)/kubehenge_$(VERSION)_linux_amd64.tar.gz \
 		--sha256 $$(sed -n 's/  kubehenge_$(VERSION)_linux_amd64.tar.gz$$//p' dist/kubehenge_$(VERSION)_SHA256SUMS) \
 		--tofu-version $(TOFU_VERSION) \
@@ -95,12 +95,12 @@ index:
 # Builds and pushes the image the management cluster runs the controller from, and prints its
 # reference by digest.
 image: web
-	KO_DOCKER_REPO=$(IMAGE) ko build --bare $(KO_FLAGS) ./cmd/kubehenge
+	KO_DOCKER_REPO=$(IMAGE) KO_CONFIG_PATH=cmd/kubehenge ko build --bare $(KO_FLAGS) ./cmd/kubehenge
 
 # Builds and pushes the capmox image the management cluster runs (capmox_build in
 # management-cluster/versions.tf), checks its digest and prints its reference by digest.
 capmox-image:
-	sh hack/capmox-image.sh $(CAPMOX_IMAGE) $(KO_FLAGS)
+	sh scripts/capmox-image.sh $(CAPMOX_IMAGE) $(KO_FLAGS)
 
 # Lint and static tier: Go, the frontend, Terraform/OpenTofu, Helm charts, shell, the workflows,
 # YAML, Markdown and the e2e image's Dockerfile, each at its strictest settings; the files are the
@@ -108,7 +108,8 @@ capmox-image:
 lint: lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker
 
 FILES = git ls-files --cached --others --exclude-standard
-SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh appliance/*.sh pve-entry/*.sh hack/*.sh
+SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh test/integration/*.sh appliance/*.sh appliance/pve-entry/*.sh scripts/*.sh
+SHFMT_FLAGS := -i 4 -ci -sr
 # Run from their package indexes at these versions, which check each download's hash.
 YAMLLINT := uvx yamllint@1.38.0
 ZIZMOR := uvx zizmor@1.31.1
@@ -118,9 +119,9 @@ MARKDOWNLINT := npx --yes markdownlint-cli2@0.23.3
 fmt: web/node_modules/.package-lock.json
 	golangci-lint fmt ./...
 	$(TOFU) fmt -recursive
-	shfmt -w $(SHELL_SCRIPTS)
+	shfmt $(SHFMT_FLAGS) -w $(SHELL_SCRIPTS)
 	cd web && npm run fmt
-	npm --prefix web exec --no -- oxfmt -c web/.oxfmtrc.json pve-entry
+	npm --prefix web exec --no -- oxfmt -c web/.oxfmtrc.json appliance/pve-entry
 
 # For both systems the code builds for: the appliance and images on Linux, the tests also on Windows.
 # Without cgo, as the binary is built, and so that a cross-system check needs no C toolchain.
@@ -133,8 +134,8 @@ lint-go: web
 # The Proxmox VE entry's script is plain JavaScript, checked with the interface's tools.
 lint-web: web/node_modules/.package-lock.json
 	cd web && npm run lint
-	npm --prefix web exec --no -- oxfmt --check -c web/.oxfmtrc.json pve-entry
-	npm --prefix web exec --no -- oxlint -c pve-entry/.oxlintrc.json --deny-warnings --report-unused-disable-directives pve-entry
+	npm --prefix web exec --no -- oxfmt --check -c web/.oxfmtrc.json appliance/pve-entry
+	npm --prefix web exec --no -- oxlint -c appliance/pve-entry/.oxlintrc.json --deny-warnings --report-unused-disable-directives appliance/pve-entry
 
 tofu-init:
 	set -e; for m in $(MODULES); do $(TOFU) -chdir=$$m init -backend=false -input=false >/dev/null; done
@@ -143,7 +144,7 @@ lint-tofu: tofu-init
 	$(TOFU) fmt -check -recursive -diff
 	set -e; for m in $(MODULES); do \
 		$(TOFU) -chdir=$$m validate; \
-		tflint --chdir=$$m --recursive --config=$(CURDIR)/.tflint.hcl; \
+		tflint --chdir=$$m --recursive --config=$(CURDIR)/management-cluster/.tflint.hcl; \
 	done
 
 # With the values they are installed with, which their schemas check.
@@ -153,7 +154,7 @@ lint-helm:
 
 lint-shell:
 	shellcheck -x -P SCRIPTDIR -o all -S style $(SHELL_SCRIPTS)
-	shfmt -d $(SHELL_SCRIPTS)
+	shfmt $(SHFMT_FLAGS) -d $(SHELL_SCRIPTS)
 	@# A checkout on a file system without modes records none, and the workflows run scripts directly.
 	@git ls-files -s '*.sh' | awk '$$1 != "100755" { print $$4 ": not executable in git; git update-index --chmod=+x " $$4; bad = 1 } END { exit bad }'
 
@@ -191,7 +192,7 @@ test: lint unit
 # containers. Its assets are fetched once, into Go's own directory.
 INTEGRATION_ASSETS ?= $(subst \,/,$(shell go env GOPATH))/kubehenge-integration
 integration: web
-	hack/integration-assets.sh $(INTEGRATION_ASSETS)
+	test/integration/assets.sh $(INTEGRATION_ASSETS)
 	KUBEBUILDER_ASSETS=$(INTEGRATION_ASSETS)/bin KUBEHENGE_INTEGRATION_CRDS=$(INTEGRATION_ASSETS)/crds \
 		go test -tags integration -count=1 -run '^TestIntegration' ./pkg/...
 

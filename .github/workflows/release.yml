@@ -46,7 +46,7 @@ jobs:
           enable-cache: false
       - name: Tools
         run: |
-          hack/tools.sh "$RUNNER_TEMP/bin"
+          scripts/tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
@@ -61,8 +61,8 @@ jobs:
           [ -s pkg/release/release.pub ] ||
             fail "pkg/release/release.pub is missing: a build without it upgrades nothing"
           awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {p = 1; next} /^## \[/ {p = 0} p' \
-            CHANGELOG.md > "$RUNNER_TEMP/notes.md"
-          [ -s "$RUNNER_TEMP/notes.md" ] || fail "CHANGELOG.md has no section for $version"
+            docs/changelog.md > "$RUNNER_TEMP/notes.md"
+          [ -s "$RUNNER_TEMP/notes.md" ] || fail "docs/changelog.md has no section for $version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - run: make test

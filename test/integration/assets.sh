@@ -4,7 +4,7 @@
 # whose objects Kubehenge's charts and controllers write, from the releases the management cluster
 # installs. Each download is checked
 # against its SHA-256, and nothing is fetched again while the versions stay the same.
-#   hack/integration-assets.sh <directory>   ->  <directory>/bin, <directory>/crds
+#   test/integration/assets.sh <directory>   ->  <directory>/bin, <directory>/crds
 set -eu
 
 dir=${1:?usage: $0 <directory>}

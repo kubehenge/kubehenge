@@ -128,7 +128,7 @@ A web app in a small LXC container on Proxmox VE, installed with one line in the
 
 ### Optional entry inside Proxmox VE
 
-Proxmox VE has no supported way to extend its own web interface. An opt-in installer (`pve-entry/`) adds a Kubernetes entry that leads to the appliance:
+Proxmox VE has no supported way to extend its own web interface. An opt-in installer (`appliance/pve-entry/`) adds a Kubernetes entry that leads to the appliance:
 
 - **What it adds:** a button beside Create VM and Create CT, and an item under Datacenter. Both open the appliance in a new tab, since the appliance refuses to be framed and stays an origin of its own.
 - **How:** one line added to the page template `pve-manager` ships, loading a script of ExtJS overrides that runs before Proxmox VE builds its workspace.

@@ -4,7 +4,7 @@ package provisioner
 
 // The integration tier: the charts and the controllers against a real API server, envtest's
 // kube-apiserver and etcd with no kubelet and no other controller, carrying the CRDs of the
-// releases the management cluster installs (hack/integration-assets.sh). It checks what the unit
+// releases the management cluster installs (test/integration/assets.sh). It checks what the unit
 // tests' fake client cannot: every object against its CRD's schema, server-side apply, the status
 // and scale subresources, finalizers and deletion. Run it with `make integration`.
 

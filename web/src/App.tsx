@@ -13,6 +13,7 @@ import {
 import { ApiError, api, setSignedOutHandler, setUpgradedHandler } from "./api";
 import { ClusterDetail, clusterPath, headlampURL, views, type View } from "./ClusterDetail";
 import { ClusterList } from "./ClusterList";
+import logo from "./logo.svg";
 import { Link, match, usePath } from "./router";
 import { SignIn } from "./SignIn";
 import type { Session, SetupStatus } from "./types";
@@ -201,6 +202,7 @@ function Shell({
     <div className="shell">
       <header className="topbar">
         <Link to="/" className="brand">
+          <img src={logo} alt="" />
           Kubehenge
         </Link>
         {!settingUp && (

@@ -1,0 +1,57 @@
+---
+name: codeql
+
+# CodeQL over every language the repository is written in: the Go of the controller, interface
+# backend and CLI, the TypeScript of the interface and the Proxmox VE entry's JavaScript, and the
+# workflows themselves. The security-and-quality suite, as a check on every pull request.
+on:
+  push:
+    branches: [main]
+  # Every pull request, whatever it targets, so that one stacked on another is checked too.
+  pull_request:
+  # A query pack that learns a new pattern finds it in code that has not changed since.
+  schedule:
+    - cron: '29 3 * * 3'
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyse:
+    name: codeql (${{ matrix.language }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+          # Go is read from a build, which needs no frontend: the embedded directory keeps a .keep.
+          - language: go
+            build-mode: autobuild
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read # Reads the source it analyses.
+      security-events: write # Uploads the findings to code scanning.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: matrix.language == 'go'
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-and-quality
+      - uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          category: /language:${{ matrix.language }}

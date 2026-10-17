@@ -6,7 +6,7 @@ Three things are upgraded separately, in this order:
 2. **The management cluster:** Talos, Kubernetes, Cluster API and its providers, and Kubehenge's ClusterClasses and controller, to the versions the new release carries, by applying it again.
 3. **Workload clusters:** Kubernetes in each cluster, by hand or automatically inside a maintenance window.
 
-Before 1.0.0, a minor release may change behaviour: read its release notes (`CHANGELOG.md`) first.
+Before 1.0.0, a minor release may change behaviour: read its release notes ([changelog](changelog.md)) first.
 
 ## Kubehenge
 
@@ -71,7 +71,7 @@ On the Administration page, the **Management cluster** section shows the setting
 
 **What a running management cluster keeps.** Its nodes keep their addresses, and nodes are only added after them: a single node grows to three by adding two addresses after its own, but none is taken away, since a node given another address is cut off from Talos and etcd, and a node removed leaves its etcd member behind. The API address, gateway, pod and service ranges and the VM disks' storage stay as they were. The appliance refuses such changes. The page shows the API address, gateway, pod and service ranges and VM disks read-only, and keeps Node addresses editable only for adding addresses after the existing ones. Anything else, such as the nodes the VMs run on, the bridge, DNS servers, registry mirrors, identity providers and what clusters may use, can change. With Terraform/OpenTofu the same holds, but nothing refuses it: do not change `node_addresses`, `api_address`, `gateway`, `pod_subnets`, `service_subnets` or `vm_datastore` of a running management cluster, and only append to `node_addresses`.
 
-**When a release changes a ClusterClass**, applying it rolls the clusters of that class: a ClusterClass's machine and bootstrap templates are named after their contents, and Cluster API replaces the nodes of every cluster whose class now points at new templates, one at a time as for an upgrade, so each cluster needs [spare addresses](install.md#network-and-addresses). [CHANGELOG.md](../CHANGELOG.md) says which classes a release changes; apply such a release when the rollouts suit you.
+**When a release changes a ClusterClass**, applying it rolls the clusters of that class: a ClusterClass's machine and bootstrap templates are named after their contents, and Cluster API replaces the nodes of every cluster whose class now points at new templates, one at a time as for an upgrade, so each cluster needs [spare addresses](install.md#network-and-addresses). The [changelog](changelog.md) says which classes a release changes; apply such a release when the rollouts suit you.
 
 The same page can move the management cluster to other Proxmox VE nodes or add nodes to it: a VM given another node is migrated there.
 
