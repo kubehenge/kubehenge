@@ -161,6 +161,10 @@ esac
 tofu -chdir="${work}/mgmt" init -input=false > /dev/null
 if ! tofu -chdir="${work}/mgmt" apply -input=false -auto-approve -no-color > "${work}/apply.log"; then
     tail -n 50 "${work}/apply.log" >&2
+    # A failed apply can still leave the management cluster up, and the job's artifacts then come
+    # from it: its pods, events and controller logs.
+    (umask 077 && tofu -chdir="${work}/mgmt" output -raw kubeconfig > "${work}/kubeconfig.yaml") ||
+        rm -f "${work}/kubeconfig.yaml"
     exit 1
 fi
 (umask 077 && tofu -chdir="${work}/mgmt" output -raw kubeconfig > "${work}/kubeconfig.yaml")

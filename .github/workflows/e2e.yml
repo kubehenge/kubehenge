@@ -154,6 +154,11 @@ jobs:
             kubectl get clusters,machines,pods -A -o wide \
               > "$out/management-cluster.txt" 2>&1 || true
             kubectl get events -A --sort-by=.lastTimestamp > "$out/events.txt" 2>&1 || true
+            # A Helm hook's Job fails on its first failed pod, and the pod's status says whether the
+            # command failed or the pod was evicted or never admitted.
+            kubectl get jobs -A -o yaml > "$out/jobs.yaml" 2>&1 || true
+            kubectl get pods -A --field-selector=status.phase=Failed -o yaml \
+              > "$out/failed-pods.yaml" 2>&1 || true
             # The conditions and failure reasons that say why a machine never came up.
             kubectl get machines,proxmoxmachines,proxmoxclusters -A -o yaml \
               > "$out/machines.yaml" 2>&1 || true
