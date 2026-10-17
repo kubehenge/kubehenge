@@ -1,12 +1,12 @@
 ---
 name: e2e
 
+# No paths filter: a required check that never reports holds a pull request forever. The scope job
+# decides instead.
 on:
   pull_request:
-    paths-ignore: ['**.md', 'docs/**', '.github/ISSUE_TEMPLATE/**']
   push:
     branches: [main]
-    paths-ignore: ['**.md', 'docs/**', '.github/ISSUE_TEMPLATE/**']
   schedule:
     - cron: '17 2 * * *'
   workflow_dispatch:
@@ -19,12 +19,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A pull request that changes only documentation runs no end-to-end test.
+  scope:
+    name: scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.scope.outputs.code }}
+    steps:
+      # A pull request's merge commit and the base under it, which is all the comparison reads.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          code=true
+          docs='\.md$|^docs/|^\.github/ISSUE_TEMPLATE/'
+          if [ "$EVENT" = pull_request ] && ! git diff --name-only HEAD^1 HEAD | grep -qvE "$docs"; then
+            code=false
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   # End-to-end tier: Proxmox VE runs in a container on the runner (test/e2e/pve) and starts the
   # clusters' VMs on the runner's KVM. One test per runner, since a runner holds one management
   # cluster and one workload cluster; the job needs no secrets, so pull requests from forks run it
   # as they are.
-  e2e:
+  test:
     name: e2e (${{ matrix.test }})
+    needs: scope
+    if: needs.scope.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     strategy:
@@ -90,3 +116,19 @@ jobs:
           name: e2e-${{ matrix.test }}
           path: ${{ runner.temp }}/artifacts
           retention-days: 7
+
+  # The one check the main branch's ruleset requires: the matrix's jobs differ by event, and a pull
+  # request of documentation only skips them.
+  result:
+    name: e2e
+    needs: [scope, test]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - env:
+          SCOPE: ${{ needs.scope.result }}
+          TESTS: ${{ needs.test.result }}
+        run: |
+          echo "scope: $SCOPE, tests: $TESTS"
+          [ "$SCOPE" = success ] && { [ "$TESTS" = success ] || [ "$TESTS" = skipped ]; }
