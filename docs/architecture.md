@@ -94,6 +94,8 @@ Add-ons are Helm charts installed per cluster by the Cluster API Add-on Provider
 | CIS hardening | each distribution's CIS profile (RKE2's CIS mode, kubeadm hardening; Talos is hardened by default) | next |
 | Pod security | Pod Security Admission levels, or Kyverno policies | next |
 | Monitoring | metrics and dashboards per cluster | next |
+| Istio | service mesh per cluster | next |
+| Cilium Cluster Mesh | connects the pod networks of clusters that run Cilium | next |
 
 Kubehenge's controller turns a cluster's add-on variables into HelmChartProxies beside the cluster, and deletes the proxy when an add-on is switched off, which uninstalls it. Values never carry a secret: the Add-on Provider for Helm keeps them in plain text.
 
