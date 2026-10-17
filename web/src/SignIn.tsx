@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type JSX, type SubmitEvent } from "react";
 
 import { api } from "./api";
+import logo from "./logo.svg";
 import type { Realm, SecondFactor, Session } from "./types";
 import { ErrorBox, Field, errorMessage, filled } from "./ui";
 
@@ -92,7 +93,10 @@ export function SignIn({
   return (
     <div className="signin">
       <div className="signin-panel">
-        <h1 className="brand">Kubehenge</h1>
+        <h1 className="brand">
+          <img src={logo} alt="" />
+          Kubehenge
+        </h1>
         {filled(notice) && <output className="warning notice">{notice}</output>}
         {factor ? (
           <SecondFactorForm factor={factor} onSignedIn={onSignedIn} onCancel={() => setFactor(undefined)} />

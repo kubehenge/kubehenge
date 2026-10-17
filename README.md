@@ -1,4 +1,5 @@
-# Kubehenge
+<!-- markdownlint-disable-next-line MD033 -- Markdown can neither size an image nor mark it decorative. -->
+# <img src="web/src/logo.svg" alt="" width="40" align="top"> Kubehenge
 
 **Kubernetes for Proxmox VE.**
 
