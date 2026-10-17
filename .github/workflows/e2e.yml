@@ -145,6 +145,8 @@ jobs:
           free -m > "$out/memory.txt"; sudo dmesg | tee "$out/dmesg.txt" >/dev/null || true
           pve() { docker exec kubehenge-e2e-pve "$@"; }
           pve journalctl -b --no-pager > "$out/proxmox-journal.txt" || true
+          # Proxmox VE logs its API's requests here, not to the journal.
+          pve cat /var/log/pveproxy/access.log > "$out/pveproxy-access.log" || true
           pve qm list > "$out/vms.txt" || true
           cp "$RUNNER_TEMP/e2e/apply.log" "$out/" 2>/dev/null || true
           if [ -f "$RUNNER_TEMP/e2e/kubeconfig.yaml" ]; then

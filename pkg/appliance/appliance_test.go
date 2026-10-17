@@ -491,6 +491,27 @@ func TestJobLogIsAListEvenWithoutLines(t *testing.T) {
 	}
 }
 
+func TestJSONMessageNamesTheResourceADiagnosticIsAbout(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ line, want string }{{
+		line: `{"@level":"error","@message":"Error: Unable to create ACL","type":"diagnostic","diagnostic":{"summary":"Unable to create ACL","detail":"EOF","address":"module.management.proxmox_acl.clusters[\"/pool/kubehenge\"]"}}`,
+		want: `error: module.management.proxmox_acl.clusters["/pool/kubehenge"]: Unable to create ACL: EOF`,
+	}, {
+		line: `{"@level":"warning","@message":"Warning: Deprecated","type":"diagnostic","diagnostic":{"summary":"Deprecated","detail":"use another attribute"}}`,
+		want: `warning: Deprecated: use another attribute`,
+	}, {
+		line: `{"@level":"info","@message":"module.management.proxmox_acl.clusters: Creating...","type":"apply_start"}`,
+		want: `module.management.proxmox_acl.clusters: Creating...`,
+	}, {
+		line: "  not json  ",
+		want: "not json",
+	}} {
+		if got := jsonMessage(c.line); got != c.want {
+			t.Errorf("jsonMessage(%s) = %q, want %q", c.line, got, c.want)
+		}
+	}
+}
+
 func TestFixedOnceCreated(t *testing.T) {
 	t.Parallel()
 	was := settings("pve1")

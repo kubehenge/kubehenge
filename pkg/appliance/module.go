@@ -319,16 +319,21 @@ type tofuMessage struct {
 type tofuDiagnostic struct {
 	Summary string `json:"summary"`
 	Detail  string `json:"detail"`
+	Address string `json:"address"`
 }
 
 // jsonMessage is the human part of a line of OpenTofu's -json output: its message, or a
-// diagnostic's whole text.
+// diagnostic's whole text with the resource it is about. OpenTofu prints an apply's diagnostics
+// only once the apply has ended, so the address is what ties one to the resource that failed.
 func jsonMessage(line string) string {
 	var m tofuMessage
 	if json.Unmarshal([]byte(line), &m) != nil {
 		return strings.TrimSpace(line)
 	}
 	if m.Type == "diagnostic" && m.Diagnostic.Detail != "" {
+		if m.Diagnostic.Address != "" {
+			return fmt.Sprintf("%s: %s: %s: %s", m.Level, m.Diagnostic.Address, m.Diagnostic.Summary, m.Diagnostic.Detail)
+		}
 		return fmt.Sprintf("%s: %s: %s", m.Level, m.Diagnostic.Summary, m.Diagnostic.Detail)
 	}
 	return m.Message
