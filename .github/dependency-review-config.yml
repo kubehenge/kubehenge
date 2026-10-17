@@ -1,7 +1,8 @@
 ---
 # What a pull request's new or changed dependencies may bring in. The licences are the permissive
-# ones Kubehenge's dependencies carry, and MPL-2.0, whose copyleft stays with its own files; each
-# combines with Kubehenge's Apache-2.0.
-allow-licenses: [Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, MIT, MPL-2.0]
+# ones Kubehenge's dependencies carry, CC0-1.0, which gives its work to the public domain (the
+# website's icon set), and MPL-2.0, whose copyleft stays with its own files; each combines with
+# Kubehenge's Apache-2.0.
+allow-licenses: [Apache-2.0, BSD-2-Clause, BSD-3-Clause, CC0-1.0, ISC, MIT, MPL-2.0]
 fail-on-severity: low
 fail-on-scopes: [runtime, development, unknown]
