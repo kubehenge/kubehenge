@@ -1,16 +1,18 @@
 #!/bin/sh
 # Builds the capmox controller image the management cluster runs (capmox_build in
-# management-cluster/versions.tf) from its upstream commit, pushes it to <repository> and prints
-# <repository>@<digest>. The build is reproducible: it fails unless the image comes out with the
-# digest versions.tf names, so what a release publishes is what anyone gets from that commit.
-# Further arguments go to ko, such as --insecure-registry.
+# management-cluster/versions.tf) from its upstream commit with the fixes in scripts/capmox-patches,
+# pushes it to <repository> and prints <repository>@<digest>. The build is reproducible: it fails
+# unless the image comes out with the digest versions.tf names, so what a release publishes is what
+# anyone gets from that commit and those patches. Further arguments go to ko, such as
+# --insecure-registry.
 #
 #   scripts/capmox-image.sh <repository> [ko flags]
 set -eu
 
 repository=${1:?usage: $0 <repository> [ko flags]}
 shift
-versions=$(dirname "$0")/../management-cluster/versions.tf
+scripts=$(cd "$(dirname "$0")" && pwd)
+versions=${scripts}/../management-cluster/versions.tf
 field() {
     sed -n "/capmox_build = {/,/^  }/s/^ *$1 *= *\"\(.*\)\"/\1/p" "${versions}"
 }
@@ -30,6 +32,10 @@ trap 'rm -rf "$src"' EXIT
 # the binary.
 curl -fsSL --proto '=https' "https://github.com/ionos-cloud/cluster-api-provider-proxmox/archive/${commit}.tar.gz" |
     tar -xzf - -C "${src}" --strip-components=1
+for fix in "${scripts}"/capmox-patches/*.patch; do
+    [ -e "${fix}" ] || continue
+    patch -d "${src}" -p1 --batch --forward --quiet < "${fix}"
+done
 
 build() {
     (cd "${src}" && GOTOOLCHAIN=${go} GOFLAGS='-trimpath -buildvcs=false' CGO_ENABLED=0 KO_DEFAULTBASEIMAGE=${base} \

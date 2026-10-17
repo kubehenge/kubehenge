@@ -109,7 +109,7 @@ job_ended() {
 # is ready after it, with the job's log when not as expected.
 job_was() {
     if ! jq -e --arg k "$1" --arg s "$2" --argjson r "$3" '.job.kind == $k and .job.state == $s and .ready == $r' "${work}/body" > /dev/null; then
-        jq -r '"kind \(.job.kind), state \(.job.state), ready \(.ready): \(.job.error // "")", (.job.log // [] | .[-40:][])' "${work}/body" >&2
+        jq -r '"kind \(.job.kind), state \(.job.state), ready \(.ready): \(.job.error // "")", (.job.log // [] | .[])' "${work}/body" >&2
         fail "the $1 job did not end $2 with the management cluster ready: $3"
     fi
 }

@@ -6,11 +6,13 @@ IMAGE ?= ghcr.io/kubehenge/kubehenge
 CAPMOX_IMAGE ?= ghcr.io/kubehenge/cluster-api-provider-proxmox
 KO_FLAGS ?=
 
-.PHONY: build web dist index image capmox-image lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-templates e2e-volumes e2e-interface e2e-appliance
+.PHONY: build web website dist index image capmox-image lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-templates e2e-volumes e2e-interface e2e-appliance
 .PHONY: fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker unit-go unit-web unit-tofu tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
-# each step's output is printed together once it ends.
-MAKEFLAGS += --jobs=$(shell getconf _NPROCESSORS_ONLN) --output-sync=target
+# each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
+# comes, as the end-to-end runs do.
+OUTPUT_SYNC ?= target
+MAKEFLAGS += --jobs=$(shell getconf _NPROCESSORS_ONLN) --output-sync=$(OUTPUT_SYNC)
 # The symbol table and DWARF go: a third of the binary, and stack traces keep their names without them.
 LDFLAGS := -s -w -buildid=
 
@@ -32,6 +34,10 @@ pkg/ui/dist/index.html: web/node_modules/.package-lock.json $(WEB_SOURCES)
 
 web: pkg/ui/dist/index.html
 
+# The website (kubehenge.dev): docs/ with a home page, built into website/.vitepress/dist.
+website:
+	cd website && npm ci --no-audit --no-fund && npm run build
+
 # The appliance's release archive, which appliance/install.sh installs: the binary, the
 # management-cluster module with the charts it installs, the shared Headlamp (its server and
 # frontend, taken from its Linux release) and the service units.
@@ -43,8 +49,10 @@ RELEASE_LDFLAGS = $(LDFLAGS) -X github.com/kubehenge/kubehenge/pkg/release.Versi
 # The controller image the release's chart runs, by digest (repository@sha256:...); unset, the chart
 # names it by its version's tag.
 CONTROLLER_IMAGE ?=
-HEADLAMP_VERSION := 0.46.0
+# renovate: datasource=github-release-attachments depName=kubernetes-sigs/headlamp
+HEADLAMP_TAG := v0.46.0
 HEADLAMP_SHA256 := 1747c5de63963be925ded64dc2a5308144d260e43452855169bc771f03846434
+HEADLAMP_VERSION := $(HEADLAMP_TAG:v%=%)
 HEADLAMP_TARBALL := dist/cache/Headlamp-$(HEADLAMP_VERSION)-linux-x64.tar.gz
 UNITS := kubehenge.service kubehenge-update.service kubehenge-update.path kubehenge-headlamp.service kubehenge-headlamp.socket kubehenge-headlamp-proxy.service
 dist: web
@@ -57,7 +65,7 @@ dist: web
 		grep -qxF 'image: "$(CONTROLLER_IMAGE)"' dist/stage/share/kubehenge/charts/kubehenge/values.yaml; \
 	fi
 	test -f $(HEADLAMP_TARBALL) || curl -fsSL --proto '=https' -o $(HEADLAMP_TARBALL) \
-		https://github.com/kubernetes-sigs/headlamp/releases/download/v$(HEADLAMP_VERSION)/Headlamp-$(HEADLAMP_VERSION)-linux-x64.tar.gz
+		https://github.com/kubernetes-sigs/headlamp/releases/download/$(HEADLAMP_TAG)/Headlamp-$(HEADLAMP_VERSION)-linux-x64.tar.gz
 	echo '$(HEADLAMP_SHA256)  $(HEADLAMP_TARBALL)' | sha256sum -c --quiet - || { rm -f $(HEADLAMP_TARBALL); exit 1; }
 	tar -xzf $(HEADLAMP_TARBALL) -C dist/stage/share/kubehenge/headlamp --strip-components=2 \
 		$(foreach f,headlamp-server frontend LICENSE NOTICE,Headlamp-$(HEADLAMP_VERSION)-linux-x64/resources/$(f))
@@ -81,7 +89,7 @@ dist: web
 
 # The release index to sign: the previous release's (PREVIOUS, its .sig beside it), checked against
 # the release key, with this release added. Run after dist.
-TOFU_VERSION = $(shell sed -n 's/^TOFU_VERSION=//p' appliance/install.sh)
+TOFU_VERSION = $(patsubst v%,%,$(shell sed -n 's/^TOFU_TAG=//p' appliance/install.sh))
 TOFU_SHA256 = $(shell sed -n 's/^TOFU_SHA256=//p' appliance/install.sh)
 index:
 	CGO_ENABLED=0 go build -trimpath -ldflags='$(RELEASE_LDFLAGS)' -o dist/kubehenge-release ./cmd/kubehenge
@@ -121,7 +129,7 @@ fmt: web/node_modules/.package-lock.json
 	$(TOFU) fmt -recursive
 	shfmt $(SHFMT_FLAGS) -w $(SHELL_SCRIPTS)
 	cd web && npm run fmt
-	npm --prefix web exec --no -- oxfmt -c web/.oxfmtrc.json appliance/pve-entry
+	npm --prefix web exec --no -- oxfmt -c web/.oxfmtrc.json appliance/pve-entry $(WEBSITE_CODE)
 
 # For both systems the code builds for: the appliance and images on Linux, the tests also on Windows.
 # Without cgo, as the binary is built, and so that a cross-system check needs no C toolchain.
@@ -131,10 +139,12 @@ lint-go: web
 	CGO_ENABLED=0 GOOS=windows golangci-lint run ./...
 
 # oxfmt's check, type-aware oxlint and TypeScript's check; the build leaves the types to this step.
-# The Proxmox VE entry's script is plain JavaScript, checked with the interface's tools.
+# The Proxmox VE entry's script is plain JavaScript, checked with the interface's tools, and so is
+# the formatting of the website's own code.
+WEBSITE_CODE := website/prepare.js website/.vitepress/config.mts website/.vitepress/theme
 lint-web: web/node_modules/.package-lock.json
 	cd web && npm run lint
-	npm --prefix web exec --no -- oxfmt --check -c web/.oxfmtrc.json appliance/pve-entry
+	npm --prefix web exec --no -- oxfmt --check -c web/.oxfmtrc.json appliance/pve-entry $(WEBSITE_CODE)
 	npm --prefix web exec --no -- oxlint -c appliance/pve-entry/.oxlintrc.json --deny-warnings --report-unused-disable-directives appliance/pve-entry
 
 tofu-init:

@@ -1,0 +1,12 @@
+{
+  "name": "kubehenge-website",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node prepare.js && vitepress dev",
+    "build": "node prepare.js && vitepress build"
+  },
+  "devDependencies": {
+    "vitepress": "2.0.0-alpha.20"
+  }
+}

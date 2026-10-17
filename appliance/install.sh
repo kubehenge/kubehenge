@@ -36,8 +36,10 @@ set -eu
 # The release this script installs, and the OpenTofu it runs the management-cluster module with.
 KUBEHENGE_VERSION=0.1.0
 KUBEHENGE_SHA256=
-TOFU_VERSION=1.13.1
+# renovate: datasource=github-release-attachments depName=opentofu/opentofu
+TOFU_TAG=v1.13.1
 TOFU_SHA256=378ada19d4bc70c43732004e8159be771b23b9a5afdf059e5f8a2b3fa2c70a69
+TOFU_VERSION=${TOFU_TAG#v}
 TEMPLATE=debian-13-standard_13.6-1_amd64.tar.zst
 
 ctid='' storage='' bridge=vmbr0 ip=dhcp gateway='' dns='' proxmox_url='' proxmox_ca='' hostname=kubehenge release='' release_sha='' upgrade='' pve_entry=''

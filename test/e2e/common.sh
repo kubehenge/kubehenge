@@ -1,7 +1,12 @@
 #!/bin/sh
 # Helpers every end-to-end test uses. Sourced after `set -eu`.
 
-step() { printf '\n== %s\n' "$*"; }
+# Each step shows the time since the test started, which is how a slow run shows where it lost it.
+e2e_started=$(date +%s)
+step() {
+    elapsed=$(($(date +%s) - e2e_started))
+    printf '\n== [%d:%02d] %s\n' $((elapsed / 60)) $((elapsed % 60)) "$*"
+}
 fail() {
     printf 'FAIL: %s\n' "$*" >&2
     exit 1
