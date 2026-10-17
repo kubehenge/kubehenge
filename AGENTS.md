@@ -17,6 +17,7 @@ The engineering rules are in `.github/CONTRIBUTING.md` and apply in full. Read i
 | `test/integration/`, `test/e2e/` | integration assets; end-to-end tests against a Proxmox VE host |
 | `scripts/` | the pinned tools (`tools.sh`), the capmox image build |
 | `docs/` | architecture, install, testing, releasing, roadmap, changelog |
+| `website/` | kubehenge.dev: `docs/` with a home page, built with VitePress and published from main |
 
 ## Checks
 

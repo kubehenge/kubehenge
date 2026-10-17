@@ -8,6 +8,7 @@ Kubehenge creates, scales, upgrades and removes Kubernetes clusters on Proxmox V
 | --- | --- |
 | `README.md` | what Kubehenge is, for users |
 | `docs/` | user guides (installing, clusters, upgrading, uninstalling, troubleshooting), the design (architecture, templates, testing, roadmap, releasing) and the changelog |
+| `website/` | kubehenge.dev: the pages of `docs/` with a home page, built by `make website` (VitePress) and published from main |
 | `management-cluster/` | the Terraform/OpenTofu configuration of the management cluster |
 | `charts/kubehenge/` | the Helm chart the management cluster installs: Kubehenge's ClusterClasses |
 | `cmd/kubehenge`, `pkg/` | the `kubehenge` command and the Go code it shares with the interface (`pkg/ui`) |

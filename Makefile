@@ -6,7 +6,7 @@ IMAGE ?= ghcr.io/kubehenge/kubehenge
 CAPMOX_IMAGE ?= ghcr.io/kubehenge/cluster-api-provider-proxmox
 KO_FLAGS ?=
 
-.PHONY: build web dist index image capmox-image lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-templates e2e-volumes e2e-interface e2e-appliance
+.PHONY: build web website dist index image capmox-image lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-templates e2e-volumes e2e-interface e2e-appliance
 .PHONY: fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker unit-go unit-web unit-tofu tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
@@ -33,6 +33,10 @@ pkg/ui/dist/index.html: web/node_modules/.package-lock.json $(WEB_SOURCES)
 	touch pkg/ui/dist/.keep
 
 web: pkg/ui/dist/index.html
+
+# The website (kubehenge.dev): docs/ with a home page, built into website/.vitepress/dist.
+website:
+	cd website && npm ci --no-audit --no-fund && npm run build
 
 # The appliance's release archive, which appliance/install.sh installs: the binary, the
 # management-cluster module with the charts it installs, the shared Headlamp (its server and
@@ -125,7 +129,7 @@ fmt: web/node_modules/.package-lock.json
 	$(TOFU) fmt -recursive
 	shfmt $(SHFMT_FLAGS) -w $(SHELL_SCRIPTS)
 	cd web && npm run fmt
-	npm --prefix web exec --no -- oxfmt -c web/.oxfmtrc.json appliance/pve-entry
+	npm --prefix web exec --no -- oxfmt -c web/.oxfmtrc.json appliance/pve-entry $(WEBSITE_CODE)
 
 # For both systems the code builds for: the appliance and images on Linux, the tests also on Windows.
 # Without cgo, as the binary is built, and so that a cross-system check needs no C toolchain.
@@ -135,10 +139,12 @@ lint-go: web
 	CGO_ENABLED=0 GOOS=windows golangci-lint run ./...
 
 # oxfmt's check, type-aware oxlint and TypeScript's check; the build leaves the types to this step.
-# The Proxmox VE entry's script is plain JavaScript, checked with the interface's tools.
+# The Proxmox VE entry's script is plain JavaScript, checked with the interface's tools, and so is
+# the formatting of the website's own code.
+WEBSITE_CODE := website/prepare.js website/.vitepress/config.mts website/.vitepress/theme
 lint-web: web/node_modules/.package-lock.json
 	cd web && npm run lint
-	npm --prefix web exec --no -- oxfmt --check -c web/.oxfmtrc.json appliance/pve-entry
+	npm --prefix web exec --no -- oxfmt --check -c web/.oxfmtrc.json appliance/pve-entry $(WEBSITE_CODE)
 	npm --prefix web exec --no -- oxlint -c appliance/pve-entry/.oxlintrc.json --deny-warnings --report-unused-disable-directives appliance/pve-entry
 
 tofu-init:

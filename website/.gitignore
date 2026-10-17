@@ -1,0 +1,6 @@
+# Copied in by prepare.js.
+/docs/
+/public/logo.svg
+/.vitepress/cache/
+/.vitepress/dist/
+/node_modules/
