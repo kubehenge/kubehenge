@@ -38,7 +38,8 @@ jobs:
         run: |
           code=true
           docs='\.md$|^docs/|^\.github/ISSUE_TEMPLATE/'
-          if [ "$EVENT" = pull_request ] && ! git diff --name-only HEAD^1 HEAD | grep -qvE "$docs"; then
+          if [ "$EVENT" = pull_request ] &&
+            ! git diff --name-only HEAD^1 HEAD | grep -qvE "$docs"; then
             code=false
           fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
