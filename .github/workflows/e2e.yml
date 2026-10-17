@@ -3,10 +3,10 @@ name: e2e
 
 # No paths filter: a required check that never reports holds a pull request forever. The scope job
 # decides instead.
+# Main needs no run of its own on a push: the merge queue tested the same tree before it landed.
 on:
   pull_request:
-  push:
-    branches: [main]
+  merge_group:
   schedule:
     - cron: '17 2 * * *'
   workflow_dispatch:
@@ -19,13 +19,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # A pull request that changes only documentation runs no end-to-end test.
+  # A pull request runs the tests its changes need (test/e2e/ci/scope.sh); the merge queue runs
+  # every pull request's test, and the nightly run adds the upgrade of the management cluster and
+  # Rancher, the longest.
   scope:
     name: scope
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      code: ${{ steps.scope.outputs.code }}
+      tests: ${{ steps.scope.outputs.tests }}
     steps:
       # A pull request's merge commit and the base under it, which is all the comparison reads.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,13 +38,13 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
         run: |
-          code=true
-          docs='\.md$|^docs/|^\.github/ISSUE_TEMPLATE/'
-          if [ "$EVENT" = pull_request ] &&
-            ! git diff --name-only HEAD^1 HEAD | grep -qvE "$docs"; then
-            code=false
-          fi
-          echo "code=$code" >> "$GITHUB_OUTPUT"
+          case "$EVENT" in
+            pull_request) tests=$(git diff --name-only HEAD^1 HEAD | test/e2e/ci/scope.sh) ;;
+            merge_group) tests=$(test/e2e/ci/scope.sh --all) ;;
+            *) tests='["management-cluster", "management-cluster-upgrade", "appliance", "kubeadm",
+                 "rke2", "k3s", "rancher"]' ;;
+          esac
+          echo "tests=$(printf '%s' "$tests" | jq -c .)" >> "$GITHUB_OUTPUT"
 
   # End-to-end tier: Proxmox VE runs in a container on the runner (test/e2e/pve) and starts the
   # clusters' VMs on the runner's KVM. One test per runner, since a runner holds one management
@@ -51,25 +53,48 @@ jobs:
   test:
     name: e2e (${{ matrix.test }})
     needs: scope
-    if: needs.scope.outputs.code == 'true'
+    if: needs.scope.outputs.tests != '[]'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        # The upgrade of the management cluster and Rancher, the longest, run nightly and on demand.
-        test: >-
-          ${{ fromJSON(contains(fromJSON('["pull_request", "push"]'), github.event_name)
-          && '["management-cluster", "appliance", "templates", "kubeadm", "rke2", "k3s", "volumes"]'
-          || '["management-cluster", "management-cluster-upgrade", "appliance", "templates",
-               "kubeadm", "rke2", "k3s", "volumes", "rancher"]') }}
+        test: ${{ fromJSON(needs.scope.outputs.tests) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Go's caches are e2e's own: the ci workflow's hold race-instrumented test builds, none of the
+      # controller's and capmox's static builds. The nightly run saves them and every other run
+      # reads them, so a pull request never fills the cache with its own.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: false
+      - id: go-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: e2e-go-${{ hashFiles('go.sum') }}-${{ github.run_id }}
+          restore-keys: |
+            e2e-go-${{ hashFiles('go.sum') }}-
+            e2e-go-
+      # The image of Proxmox VE as the nightly run last built it, so with packages a day old at
+      # most; the nightly run builds it afresh.
+      - id: pve-cache
+        if: github.event_name != 'schedule'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pve-image.tar.zst
+          key: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-${{ github.run_id }}
+          restore-keys: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-
+      - name: Load Proxmox VE's image
+        if: steps.pve-cache.outputs.cache-matched-key != ''
+        run: |
+          zstd -dc "$RUNNER_TEMP/pve-image.tar.zst" | docker load -q
+          echo KUBEHENGE_E2E_PVE_BUILT=1 >> "$GITHUB_ENV"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26
@@ -92,10 +117,27 @@ jobs:
           nproc && free -m && df -h / /mnt
       - name: Proxmox VE
         run: test/e2e/ci/up.sh "$RUNNER_TEMP/e2e"
+      # One nightly job keeps what the others read.
+      - name: Keep Proxmox VE's image
+        if: github.event_name == 'schedule' && matrix.test == 'management-cluster'
+        run: docker save kubehenge-e2e-pve | zstd -T0 -q -o "$RUNNER_TEMP/pve-image.tar.zst"
+      - if: github.event_name == 'schedule' && matrix.test == 'management-cluster'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pve-image.tar.zst
+          key: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-${{ github.run_id }}
       - name: ${{ matrix.test }}
         env:
           TEST: ${{ matrix.test }}
         run: test/e2e/ci/run.sh "$RUNNER_TEMP/e2e" "$TEST"
+      - if: >-
+          !cancelled() && github.event_name == 'schedule' && matrix.test == 'management-cluster'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
       - name: Collect
         if: failure()
         run: |

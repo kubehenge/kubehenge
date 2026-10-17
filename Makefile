@@ -9,8 +9,10 @@ KO_FLAGS ?=
 .PHONY: build web dist index image capmox-image lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-templates e2e-volumes e2e-interface e2e-appliance
 .PHONY: fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker unit-go unit-web unit-tofu tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
-# each step's output is printed together once it ends.
-MAKEFLAGS += --jobs=$(shell getconf _NPROCESSORS_ONLN) --output-sync=target
+# each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
+# comes, as the end-to-end runs do.
+OUTPUT_SYNC ?= target
+MAKEFLAGS += --jobs=$(shell getconf _NPROCESSORS_ONLN) --output-sync=$(OUTPUT_SYNC)
 # The symbol table and DWARF go: a third of the binary, and stack traces keep their names without them.
 LDFLAGS := -s -w -buildid=
 

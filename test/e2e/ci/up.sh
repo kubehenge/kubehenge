@@ -6,6 +6,8 @@
 #   test/e2e/ci/up.sh <work directory>
 #
 # Writes <work directory>/env, the settings test/e2e/ci/run.sh reads. Needs sudo for the route.
+# With KUBEHENGE_E2E_PVE_BUILT=1, the image kubehenge-e2e-pve already loaded is run as it is rather
+# than built.
 #
 #   172.21.99.0/24  the Docker network: this machine .1, Proxmox VE .2 (its API on 8006), registry .3
 #   172.20.99.0/24  the VMs' bridge, NAT through the container: management cluster .10 (API) and
@@ -21,7 +23,7 @@ REGISTRY_IMAGE=registry:3.1.2@sha256:ddf754342cfc8acc51a56d5d0ab6af0682646186446
 
 mkdir -p "${work}/vz"
 work=$(readlink -f "${work}")
-docker build -q -t kubehenge-e2e-pve "${here}/../pve" > /dev/null
+[ "${KUBEHENGE_E2E_PVE_BUILT:-}" = 1 ] || docker build -q -t kubehenge-e2e-pve "${here}/../pve" > /dev/null
 docker network create --subnet 172.21.99.0/24 --gateway 172.21.99.1 kubehenge-e2e > /dev/null
 # Privileged for /dev/kvm, /dev/net/tun, /dev/fuse (Proxmox VE's configuration file system) and the
 # bridge and NAT it sets up in its own network namespace. On a kernel with AppArmor, LXC loads a

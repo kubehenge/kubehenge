@@ -199,7 +199,17 @@ ${cni_variable}
         value: ${oidc}
 EOF
 kubectl apply -f "${work}/cluster.yaml"
-kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=40m
+# capmox does not come back to a machine whose VM failed to provision, so the wait ends there rather
+# than at its timeout.
+available_or_failed() {
+    if kubectl -n "${ns}" get proxmoxmachines -l "cluster.x-k8s.io/cluster-name=${name}" -o json |
+        jq -e '[.items[].status | .. | objects | select(.reason? == "VMProvisionFailed")] | length > 0' > /dev/null; then
+        kubectl -n "${ns}" get proxmoxmachines -l "cluster.x-k8s.io/cluster-name=${name}" -o yaml >&2
+        fail "a VM of ${name} failed to provision"
+    fi
+    kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=1s > /dev/null 2>&1
+}
+until_true 1200 "cluster ${name} available" available_or_failed
 kubectl -n "${ns}" get secret "${name}-kubeconfig" -o jsonpath='{.data.value}' | base64 -d > "${work}/workload"
 
 step "the cluster's own Proxmox VE pool, user and volume owner"

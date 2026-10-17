@@ -4,10 +4,11 @@
 #
 #   test/e2e/ci/run.sh <work directory> <test>
 #
-# <test> is management-cluster or management-cluster-upgrade (each applies and destroys the
-# management cluster), appliance (installs the appliance, which sets the management cluster up and
-# removes it), or templates, kubeadm, rke2, k3s, volumes or rancher, which first apply the
-# management cluster and create the templates they need, and leave it up.
+# <test> is management-cluster (applies the management cluster, runs the templates and volumes tests
+# while it is up, and destroys it), management-cluster-upgrade (applies and destroys it), appliance
+# (installs the appliance, which sets the management cluster up and removes it), or kubeadm, rke2,
+# k3s or rancher, which first apply the management cluster and create the templates they need, and
+# leave it up.
 #
 # The workload clusters start one minor version behind the management cluster's Kubernetes and are
 # upgraded to it; KUBEHENGE_E2E_FROM names the release they start on.
@@ -15,6 +16,13 @@ set -eu
 
 work=$(readlink -f "${1:?usage: $0 <work directory> <test>}")
 test=${2:?usage: $0 <work directory> <test>}
+case "${test}" in
+    management-cluster | management-cluster-upgrade | appliance | kubeadm | rke2 | k3s | rancher) ;;
+    *)
+        echo "unknown test ${test}" >&2
+        exit 2
+        ;;
+esac
 repo=$(readlink -f "$(dirname "$0")/../../..")
 # shellcheck source=/dev/null
 . "${work}/env"
@@ -38,6 +46,42 @@ for bundle in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.cr
 done
 cat "${bundle}" "${KUBEHENGE_PROXMOX_CA}" > "${work}/ca-bundle.pem"
 export SSL_CERT_FILE="${work}/ca-bundle.pem"
+
+template() { # distribution [flags]
+    "${repo}/dist/kubehenge" template create "$@" --node "${KUBEHENGE_E2E_NODE}" --storage local \
+        --build-address "${KUBEHENGE_E2E_ADDRESS}" --build-gateway "${KUBEHENGE_E2E_GATEWAY}" \
+        --build-dns "${KUBEHENGE_E2E_DNS}"
+}
+# A template needs only Proxmox VE, so the ones a test needs are made while the images build and the
+# management cluster comes up. One at a time: they share the build address.
+templates=
+case "${test}" in
+    rke2 | k3s | kubeadm | rancher)
+        make -s -C "${repo}" build
+        case "${test}" in
+            rke2 | rancher) template rke2 ;;
+            k3s) template k3s ;;
+            kubeadm)
+                template kubeadm --kubernetes-version "${from}"
+                template kubeadm --kubernetes-version "${to}"
+                ;;
+            *) ;;
+        esac > "${work}/templates.log" 2>&1 &
+        templates=$!
+        ;;
+    *) ;;
+esac
+templates_made() {
+    [ -n "${templates}" ] || return 0
+    # shellcheck disable=SC2310 # the status is reported here, with the log of what failed.
+    if ! wait "${templates}"; then
+        cat "${work}/templates.log" >&2
+        echo "the templates were not made" >&2
+        exit 1
+    fi
+    cat "${work}/templates.log"
+}
+
 TF_VAR_controller_image=ghcr.io/kubehenge/kubehenge@$(make -s -C "${repo}" image \
     IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/kubehenge" KO_FLAGS=--insecure-registry | sed -n 's/.*@//p')
 export TF_VAR_proxmox_ca_certificate TF_VAR_controller_image
@@ -53,8 +97,22 @@ esac
 make -s -C "${repo}" capmox-image CAPMOX_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-provider-proxmox" \
     KO_FLAGS=--insecure-registry > /dev/null
 
+# The tests' own output is shown as it comes rather than when each make target ends.
+e2e() { make -C "${repo}" OUTPUT_SYNC=none "$@"; }
+
 case "${test}" in
-    management-cluster | management-cluster-upgrade)
+    management-cluster)
+        # The templates test needs the pool the module makes, and the volumes test the controller's
+        # API token, so both run while the management cluster is up.
+        export KUBEHENGE_E2E_POOL=kubehenge-templates KUBEHENGE_E2E_LOCAL_STORAGE=local
+        exec sh "${repo}/test/e2e/management-cluster.sh" "${work}/mgmt" sh -ec '
+            KUBEHENGE_E2E_CONTROLLER_TOKEN=$(kubectl -n kubehenge-system get secret kubehenge-proxmox \
+                -o jsonpath="{.data.token}" | base64 -d)
+            export KUBEHENGE_E2E_CONTROLLER_TOKEN
+            make -C "$1" OUTPUT_SYNC=none e2e-templates
+            make -C "$1" OUTPUT_SYNC=none e2e-volumes' sh "${repo}"
+        ;;
+    management-cluster-upgrade)
         exec sh "${repo}/test/e2e/${test}.sh" "${work}/mgmt"
         ;;
     appliance)
@@ -96,56 +154,33 @@ fi
 (umask 077 && tofu -chdir="${work}/mgmt" output -raw kubeconfig > "${work}/kubeconfig.yaml")
 export KUBECONFIG="${work}/kubeconfig.yaml"
 
-make -s -C "${repo}" build
-template() { # distribution [flags]
-    "${repo}/dist/kubehenge" template create "$@" --node "${KUBEHENGE_E2E_NODE}" --storage local \
-        --build-address "${KUBEHENGE_E2E_ADDRESS}" --build-gateway "${KUBEHENGE_E2E_GATEWAY}" \
-        --build-dns "${KUBEHENGE_E2E_DNS}"
-}
+templates_made
 
 # Nested vCPUs cost no memory, and with two an RKE2 control plane stopped answering its own lease
 # renewals while everything started.
 export KUBEHENGE_E2E_CONTROL_PLANE_CORES=4
 export KUBEHENGE_E2E_CONTROL_PLANE_MEMORY=2048 KUBEHENGE_E2E_WORKER_MEMORY=1024
-cd "${repo}"
 case "${test}" in
-    templates)
-        export KUBEHENGE_E2E_POOL=kubehenge-templates
-        exec make e2e-templates
-        ;;
     rke2)
-        template rke2
         # RKE2's static pods request 2 GiB between them; the class's minimum.
         export KUBEHENGE_E2E_CONTROL_PLANE_MEMORY=3072
-        exec make e2e-workload-cluster CLASS=kubehenge-rke2 VERSION="${from}+rke2r1" UPGRADE="${to}+rke2r1"
+        e2e e2e-workload-cluster CLASS=kubehenge-rke2 VERSION="${from}+rke2r1" UPGRADE="${to}+rke2r1"
         ;;
     k3s)
-        template k3s
-        exec make e2e-workload-cluster CLASS=kubehenge-k3s VERSION="${from}+k3s1" UPGRADE="${to}+k3s1"
+        e2e e2e-workload-cluster CLASS=kubehenge-k3s VERSION="${from}+k3s1" UPGRADE="${to}+k3s1"
         ;;
     kubeadm)
-        template kubeadm --kubernetes-version "${from}"
-        template kubeadm --kubernetes-version "${to}"
         export KUBEHENGE_E2E_CNI="${KUBEHENGE_E2E_CNI:-cilium}"
-        exec make e2e-workload-cluster CLASS=kubehenge-kubeadm VERSION="${from}" UPGRADE="${to}"
-        ;;
-    volumes)
-        KUBEHENGE_E2E_CONTROLLER_TOKEN=$(kubectl -n kubehenge-system get secret kubehenge-proxmox \
-            -o jsonpath='{.data.token}' | base64 -d)
-        export KUBEHENGE_E2E_CONTROLLER_TOKEN KUBEHENGE_E2E_LOCAL_STORAGE=local
-        exec make e2e-volumes
+        e2e e2e-workload-cluster CLASS=kubehenge-kubeadm VERSION="${from}" UPGRADE="${to}"
         ;;
     rancher)
-        template rke2
         export KUBEHENGE_E2E_RANCHER_ENDPOINT=172.20.99.20 KUBEHENGE_E2E_RANCHER_ADDRESSES=172.20.99.21-172.20.99.24
         export KUBEHENGE_E2E_DOWNSTREAM_ENDPOINT=172.20.99.25 KUBEHENGE_E2E_DOWNSTREAM_ADDRESSES=172.20.99.26-172.20.99.29
         export KUBEHENGE_E2E_RANCHER_VERSION="${from}+rke2r1" KUBEHENGE_E2E_DOWNSTREAM_VERSION="${from}+k3s1"
         export KUBEHENGE_E2E_BLOCKED_VERSION="${to}+rke2r1"
         export KUBEHENGE_E2E_RANCHER_MEMORY=6144 KUBEHENGE_E2E_DOWNSTREAM_MEMORY=2048
-        exec make e2e-rancher
+        e2e e2e-rancher
         ;;
-    *)
-        echo "unknown test ${test}" >&2
-        exit 2
-        ;;
+    # Checked before anything was built.
+    *) ;;
 esac
