@@ -52,21 +52,33 @@ template() { # distribution [flags]
         --build-address "${KUBEHENGE_E2E_ADDRESS}" --build-gateway "${KUBEHENGE_E2E_GATEWAY}" \
         --build-dns "${KUBEHENGE_E2E_DNS}"
 }
-# A template needs only Proxmox VE, so the ones a test needs are made while the images build and the
-# management cluster comes up. One at a time: they share the build address.
+# A template needs only Proxmox VE and the template pool, which the apply makes in its first seconds,
+# so the ones a test needs are made while the management cluster comes up. One at a time: they share
+# the build address.
 templates=
 case "${test}" in
     rke2 | k3s | kubeadm | rancher)
         make -s -C "${repo}" build
-        case "${test}" in
-            rke2 | rancher) template rke2 ;;
-            k3s) template k3s ;;
-            kubeadm)
-                template kubeadm --kubernetes-version "${from}"
-                template kubeadm --kubernetes-version "${to}"
-                ;;
-            *) ;;
-        esac > "${work}/templates.log" 2>&1 &
+        {
+            waited=0
+            until docker exec kubehenge-e2e-pve pvesh get /pools/kubehenge-templates > /dev/null 2>&1; do
+                if [ "${waited}" -ge 1200 ]; then
+                    echo "the apply made no pool kubehenge-templates in 20 minutes"
+                    exit 1
+                fi
+                sleep 5
+                waited=$((waited + 5))
+            done
+            case "${test}" in
+                rke2 | rancher) template rke2 ;;
+                k3s) template k3s ;;
+                kubeadm)
+                    template kubeadm --kubernetes-version "${from}"
+                    template kubeadm --kubernetes-version "${to}"
+                    ;;
+                *) ;;
+            esac
+        } > "${work}/templates.log" 2>&1 &
         templates=$!
         ;;
     *) ;;
