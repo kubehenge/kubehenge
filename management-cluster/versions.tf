@@ -48,14 +48,17 @@ locals {
   # capmox up to v0.9.1 refuses the changed machine template of a kubeadm cluster's upgrade (#735);
   # the fix (#832) is on its main branch but in no release yet. Until one carries it, capmox v0.9.1
   # runs as built from that commit, on v0.9.1's own manifests: main has changed no CRD, RBAC or
-  # webhook since. scripts/capmox-image.sh builds it reproducibly, and a release publishes it only when
-  # it comes out with this digest. It applies only while capmox is at `release`.
+  # webhook since. The build also carries scripts/capmox-patches: capmox starts a VM's disk resize
+  # without waiting for it, so the bootstrap ISO's attach can time out on the VM's lock, which capmox
+  # takes as a VMProvisionFailed it never retries. scripts/capmox-image.sh builds it reproducibly,
+  # and a release publishes it only when it comes out with this digest. It applies only while capmox
+  # is at `release`.
   capmox_build = {
     release = "v0.9.1"
     commit  = "edd7461c2a2f335cd4fc1839171671681f4216c6"
     # capmox's own image is built with Go 1.26 on distroless static.
     go         = "go1.26.9"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
-    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:07d0062f41980afce99c9e5adec5472d60340de42c798124542d8bffaa8ebdbe"
+    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:f70d989fd8c14123fc3516825491b56429daa4afbd96a338f7cad497d8c54857"
   }
 }

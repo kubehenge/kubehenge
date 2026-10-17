@@ -166,7 +166,7 @@ providers:
         namespace: proxmox-infrastructure-system
       deployment:
         containers:
-          - imageUrl: ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:07d0062f41980afce99c9e5adec5472d60340de42c798124542d8bffaa8ebdbe
+          - imageUrl: ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:f70d989fd8c14123fc3516825491b56429daa4afbd96a338f7cad497d8c54857
             name: manager
       manager:
         leaderElection: *leases

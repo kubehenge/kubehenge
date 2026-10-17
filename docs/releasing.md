@@ -11,7 +11,7 @@ A release is built by CI and published by a person. CI builds and tests everythi
 | `install.sh` | The installer, carrying this release's version and archive checksum. |
 | `index.json`, `index.json.sig` | Every published release with its archive's URL and checksum, and the signature appliances check it against. |
 | `ghcr.io/kubehenge/kubehenge:v<version>` | The controller image, signed with Sigstore (keyless, by the release workflow) and with build provenance attached. |
-| `ghcr.io/kubehenge/cluster-api-provider-proxmox:<capmox release>-<commit>` | While the management cluster runs capmox as built from an upstream commit (`capmox_build` in `management-cluster/versions.tf`): that build, signed and attested the same way. `hack/capmox-image.sh` builds it reproducibly and refuses an image whose digest differs from the one the module names, so anyone can rebuild it from that commit and compare. |
+| `ghcr.io/kubehenge/cluster-api-provider-proxmox:<capmox release>-<commit>` | While the management cluster runs capmox as built from an upstream commit (`capmox_build` in `management-cluster/versions.tf`) with the fixes in `scripts/capmox-patches`: that build, signed and attested the same way. `scripts/capmox-image.sh` builds it reproducibly and refuses an image whose digest differs from the one the module names, so anyone can rebuild it from that commit and those patches and compare. |
 
 Every file the release workflow makes, and the image, carry GitHub build provenance, so anyone can check they were built from the tagged source by the release workflow. The index's signature, `index.json.sig`, is added afterwards, offline, with the release key, and is checked with that key instead.
 

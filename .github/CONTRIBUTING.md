@@ -15,7 +15,7 @@ Kubehenge creates, scales, upgrades and removes Kubernetes clusters on Proxmox V
 | `web/` | the interface's frontend, React and TypeScript, built by `make web` into `pkg/ui/dist` and embedded in the binary |
 | `appliance/` | the appliance's install script and service units; `appliance/pve-entry/`, the optional entry in Proxmox VE's own interface |
 | `test/integration/`, `test/e2e/` | the integration tier's assets; the end-to-end tests, run against a Proxmox VE host |
-| `scripts/` | the pinned tools `make test` needs besides Go and Node (`tools.sh`); the capmox image build |
+| `scripts/` | the pinned tools `make test` needs besides Go and Node (`tools.sh`); the capmox image build and the fixes it carries (`capmox-patches/`) |
 | `.github/` | CI on every pull request, the release workflow, issue templates, this guide and the security policy (`SECURITY.md`) |
 
 ## Working on it
