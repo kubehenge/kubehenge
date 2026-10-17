@@ -38,7 +38,7 @@ locals {
   # capmox up to v0.9.1 refuses the changed machine template of a kubeadm cluster's upgrade (#735);
   # the fix (#832) is on its main branch but in no release yet. Until one carries it, capmox v0.9.1
   # runs as built from that commit, on v0.9.1's own manifests: main has changed no CRD, RBAC or
-  # webhook since. hack/capmox-image.sh builds it reproducibly, and a release publishes it only when
+  # webhook since. scripts/capmox-image.sh builds it reproducibly, and a release publishes it only when
   # it comes out with this digest. It applies only while capmox is at `release`.
   capmox_build = {
     release = "v0.9.1"

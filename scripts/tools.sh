@@ -3,7 +3,7 @@
 # Node and the system's own (curl, jq, openssl, python3), at pinned versions checked against their
 # published checksums, into a directory of the caller's choosing:
 #
-#   hack/tools.sh <directory>
+#   scripts/tools.sh <directory>
 #
 # CI puts the directory on PATH. yamllint, zizmor and markdownlint run through uvx and npx at the
 # versions the Makefile names.

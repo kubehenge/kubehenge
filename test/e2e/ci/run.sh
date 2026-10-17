@@ -98,7 +98,7 @@ export KUBECONFIG="${work}/kubeconfig.yaml"
 
 make -s -C "${repo}" build
 template() { # distribution [flags]
-    "${repo}/bin/kubehenge" template create "$@" --node "${KUBEHENGE_E2E_NODE}" --storage local \
+    "${repo}/dist/kubehenge" template create "$@" --node "${KUBEHENGE_E2E_NODE}" --storage local \
         --build-address "${KUBEHENGE_E2E_ADDRESS}" --build-gateway "${KUBEHENGE_E2E_GATEWAY}" \
         --build-dns "${KUBEHENGE_E2E_DNS}"
 }

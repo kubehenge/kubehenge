@@ -50,7 +50,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Tools
         run: |
-          hack/tools.sh "$RUNNER_TEMP/bin"
+          scripts/tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: KVM and memory
         run: |

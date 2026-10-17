@@ -2,7 +2,7 @@
 
 Kubernetes for Proxmox VE: Cluster API underneath, kubeadm, RKE2 or k3s per cluster (Talos to follow, `docs/roadmap.md`), optional add-ons, and a web interface that signs in with Proxmox VE users. It installs as a small LXC appliance whose interface creates and looks after a Talos management cluster.
 
-The engineering rules are in `CONTRIBUTING.md` and apply in full. Read it first, then `docs/architecture.md` and `docs/testing.md`.
+The engineering rules are in `.github/CONTRIBUTING.md` and apply in full. Read it first, then `docs/architecture.md` and `docs/testing.md`.
 
 ## Layout
 
@@ -12,10 +12,11 @@ The engineering rules are in `CONTRIBUTING.md` and apply in full. Read it first,
 | `web/` | the interface's React/TypeScript frontend, embedded in the binary |
 | `charts/kubehenge` | the ClusterClasses and the controller |
 | `management-cluster/` | Terraform/OpenTofu module for the Talos management cluster |
-| `appliance/` | the LXC appliance's install script |
-| `pve-entry/` | the opt-in Proxmox VE interface entry |
-| `test/e2e/` | end-to-end tests against a Proxmox VE host |
-| `docs/` | architecture, install, testing, releasing, roadmap |
+| `appliance/` | the LXC appliance's install script and units |
+| `appliance/pve-entry/` | the opt-in Proxmox VE interface entry |
+| `test/integration/`, `test/e2e/` | integration assets; end-to-end tests against a Proxmox VE host |
+| `scripts/` | the pinned tools (`tools.sh`), the capmox image build |
+| `docs/` | architecture, install, testing, releasing, roadmap, changelog |
 
 ## Checks
 

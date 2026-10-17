@@ -29,7 +29,7 @@ Every file the release workflow makes, and the image, carry GitHub build provena
 
 ## Each release
 
-1. Set the version in `charts/kubehenge/Chart.yaml` (`appVersion`, and raise `version`), and write its section in `CHANGELOG.md` (`## [<version>] - <date>`). The workflow refuses a tag without both.
+1. Set the version in `charts/kubehenge/Chart.yaml` (`appVersion`, and raise `version`), and write its section in `docs/changelog.md` (`## [<version>] - <date>`). The workflow refuses a tag without both.
 2. Tag the commit and push the tag:
 
    ```sh

@@ -45,9 +45,9 @@ The script checks everything it downloads against checksums it carries, creates 
 | [Testing](docs/testing.md) | the test tiers and what counts as supported |
 | [Roadmap](docs/roadmap.md) | what comes next |
 | [Releasing](docs/releasing.md) | how releases are built, signed and checked |
-| [Changelog](CHANGELOG.md) | what each release changed |
+| [Changelog](docs/changelog.md) | what each release changed |
 
-Contributions are welcome: [CONTRIBUTING.md](CONTRIBUTING.md). Security reports go privately through [SECURITY.md](SECURITY.md).
+Contributions are welcome: [CONTRIBUTING.md](.github/CONTRIBUTING.md). Security reports go privately through [SECURITY.md](.github/SECURITY.md).
 
 ## Licence
 

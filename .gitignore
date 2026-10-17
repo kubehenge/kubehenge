@@ -1,4 +1,3 @@
-/bin/
 /dist/
 # Test binaries from `go test -c` and profiles from `go test -cpuprofile`.
 *.test

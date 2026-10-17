@@ -7,21 +7,19 @@ Kubehenge creates, scales, upgrades and removes Kubernetes clusters on Proxmox V
 | Path | What |
 | --- | --- |
 | `README.md` | what Kubehenge is, for users |
-| `docs/` | user guides (installing, clusters, upgrading, uninstalling, troubleshooting) and the design: architecture, templates, testing, roadmap, releasing |
-| `CHANGELOG.md`, `SECURITY.md` | what each release changed; how to report a vulnerability |
+| `docs/` | user guides (installing, clusters, upgrading, uninstalling, troubleshooting), the design (architecture, templates, testing, roadmap, releasing) and the changelog |
 | `management-cluster/` | the Terraform/OpenTofu configuration of the management cluster |
 | `charts/kubehenge/` | the Helm chart the management cluster installs: Kubehenge's ClusterClasses |
 | `cmd/kubehenge`, `pkg/` | the `kubehenge` command and the Go code it shares with the interface (`pkg/ui`) |
 | `web/` | the interface's frontend, React and TypeScript, built by `make web` into `pkg/ui/dist` and embedded in the binary |
-| `appliance/` | the appliance's install script and service units |
-| `pve-entry/` | the optional entry in Proxmox VE's own interface |
-| `test/e2e/` | the end-to-end tests, run against a Proxmox VE host |
-| `hack/tools.sh` | the pinned tools `make test` needs besides Go and Node |
-| `.github/` | CI on every pull request, the release workflow, issue templates |
+| `appliance/` | the appliance's install script and service units; `appliance/pve-entry/`, the optional entry in Proxmox VE's own interface |
+| `test/integration/`, `test/e2e/` | the integration tier's assets; the end-to-end tests, run against a Proxmox VE host |
+| `scripts/` | the pinned tools `make test` needs besides Go and Node (`tools.sh`); the capmox image build |
+| `.github/` | CI on every pull request, the release workflow, issue templates, this guide and the security policy (`SECURITY.md`) |
 
 ## Working on it
 
-`hack/tools.sh <dir>` installs the pinned tools; with them, Go, Node and uv on PATH, `make test` runs every lint and unit test, as CI does on each pull request, and `make fmt` formats what the checks would refuse. `make build` builds the `kubehenge` binary with the interface embedded.
+`scripts/tools.sh <dir>` installs the pinned tools; with them, Go, Node and uv on PATH, `make test` runs every lint and unit test, as CI does on each pull request, and `make fmt` formats what the checks would refuse. `make build` builds the `kubehenge` binary with the interface embedded.
 
 ## Design
 

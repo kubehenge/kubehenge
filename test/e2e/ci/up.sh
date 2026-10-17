@@ -23,10 +23,12 @@ work=$(readlink -f "${work}")
 docker build -q -t kubehenge-e2e-pve "${here}/../pve" > /dev/null
 docker network create --subnet 172.21.99.0/24 --gateway 172.21.99.1 kubehenge-e2e > /dev/null
 # Privileged for /dev/kvm, /dev/net/tun, /dev/fuse (Proxmox VE's configuration file system) and the
-# bridge and NAT it sets up in its own network namespace.
+# bridge and NAT it sets up in its own network namespace. On a kernel with AppArmor, LXC loads a
+# profile for each container through securityfs, which Docker does not mount, so it comes from the
+# host as on a real node; without it no container starts.
 docker run -d --name kubehenge-e2e-pve --hostname pve --privileged --cgroupns=private \
     --network kubehenge-e2e --ip 172.21.99.2 --tmpfs /run --tmpfs /run/lock \
-    -v "${work}/vz:/var/lib/vz" kubehenge-e2e-pve > /dev/null
+    -v /sys/kernel/security:/sys/kernel/security -v "${work}/vz:/var/lib/vz" kubehenge-e2e-pve > /dev/null
 docker run -d --name kubehenge-e2e-registry --network kubehenge-e2e --ip 172.21.99.3 \
     -e OTEL_TRACES_EXPORTER=none "${REGISTRY_IMAGE}" > /dev/null
 

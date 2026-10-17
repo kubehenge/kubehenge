@@ -5,7 +5,7 @@
 # digest versions.tf names, so what a release publishes is what anyone gets from that commit.
 # Further arguments go to ko, such as --insecure-registry.
 #
-#   hack/capmox-image.sh <repository> [ko flags]
+#   scripts/capmox-image.sh <repository> [ko flags]
 set -eu
 
 repository=${1:?usage: $0 <repository> [ko flags]}
