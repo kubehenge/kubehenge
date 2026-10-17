@@ -34,7 +34,9 @@ func BakeUserData(b Bake, packagesKey string) (string, error) {
 
 	fmt.Fprintf(&sb, "apt:\n  sources:\n    kubernetes.list:\n      source: \"deb [signed-by=$KEY_FILE] https://pkgs.k8s.io/core:/stable:/%s/deb/ /\"\n      key: |\n", series)
 	for line := range strings.SplitSeq(strings.TrimSpace(packagesKey), "\n") {
-		sb.WriteString("        " + line + "\n")
+		sb.WriteString("        ")
+		sb.WriteString(line)
+		sb.WriteString("\n")
 	}
 	fmt.Fprintf(&sb, `packages:
   - qemu-guest-agent

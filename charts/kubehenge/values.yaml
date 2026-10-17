@@ -65,6 +65,7 @@ addons:
     chart: headlamp
     version: 0.46.0
     # The chart names its image by tag only.
+    # renovate: datasource=docker depName=ghcr.io/headlamp-k8s/headlamp
     image: v0.46.0@sha256:8a0ef97527544baa2b35825940ddf4db6e2d09c30cd5aa31fd269ff604cc8b75
   rancher:
     repository: https://releases.rancher.com/server-charts/stable
@@ -81,10 +82,13 @@ addons:
   cloudControllerManager:
     repository: oci://ghcr.io/sergelogvinov/charts
     chart: proxmox-cloud-controller-manager
+    # yamllint disable-line rule:line-length
+    # renovate: datasource=docker depName=ghcr.io/sergelogvinov/charts/proxmox-cloud-controller-manager
     version: 0.2.32
   csiPlugin:
     repository: oci://ghcr.io/sergelogvinov/charts
     chart: proxmox-csi-plugin
+    # renovate: datasource=docker depName=ghcr.io/sergelogvinov/charts/proxmox-csi-plugin
     version: 0.5.12
   cilium:
     repository: https://helm.cilium.io

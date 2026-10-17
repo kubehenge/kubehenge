@@ -110,6 +110,14 @@ jobs:
             kubectl get clusters,machines,pods -A -o wide \
               > "$out/management-cluster.txt" 2>&1 || true
             kubectl get events -A --sort-by=.lastTimestamp > "$out/events.txt" 2>&1 || true
+            # The conditions and failure reasons that say why a machine never came up.
+            kubectl get machines,proxmoxmachines,proxmoxclusters -A -o yaml \
+              > "$out/machines.yaml" 2>&1 || true
+            kubectl get pods -A --no-headers \
+              -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name |
+              grep -E -- '-system ' | while read -r ns pod; do
+                kubectl logs -n "$ns" "$pod" --all-containers --prefix --tail=-1 || true
+              done > "$out/controllers.log" 2>&1
           fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()

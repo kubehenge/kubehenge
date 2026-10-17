@@ -23,16 +23,26 @@ locals {
 
   # The tested set. Raising one of these upgrades that component on the next apply.
   tested_versions = {
-    talos           = "v1.14.4"
-    kubernetes      = "v1.37.1"
-    cert_manager    = "v1.21.2"
-    capi_operator   = "0.29.0"
-    cluster_api     = "v1.14.3"
-    capmox          = "v0.9.1"
-    rke2            = "v0.26.0"
-    k3s             = "v0.4.0"
+    # renovate: datasource=github-releases depName=siderolabs/talos
+    talos = "v1.14.4"
+    # renovate: datasource=github-releases depName=kubernetes/kubernetes
+    kubernetes = "v1.37.1"
+    # renovate: datasource=github-releases depName=cert-manager/cert-manager
+    cert_manager = "v1.21.2"
+    # renovate: datasource=github-releases depName=kubernetes-sigs/cluster-api-operator extractVersion=^v(?<version>.+)$
+    capi_operator = "0.29.0"
+    # renovate: datasource=github-releases depName=kubernetes-sigs/cluster-api
+    cluster_api = "v1.14.3"
+    # renovate: datasource=github-releases depName=ionos-cloud/cluster-api-provider-proxmox
+    capmox = "v0.9.1"
+    # renovate: datasource=github-releases depName=rancher/cluster-api-provider-rke2
+    rke2 = "v0.26.0"
+    # renovate: datasource=github-releases depName=k3s-io/cluster-api-k3s
+    k3s = "v0.4.0"
+    # renovate: datasource=github-releases depName=kubernetes-sigs/cluster-api-ipam-provider-in-cluster
     ipam_in_cluster = "v1.1.1"
-    helm_addon      = "v0.6.4"
+    # renovate: datasource=github-releases depName=kubernetes-sigs/cluster-api-addon-provider-helm
+    helm_addon = "v0.6.4"
   }
 
   # capmox up to v0.9.1 refuses the changed machine template of a kubeadm cluster's upgrade (#735);

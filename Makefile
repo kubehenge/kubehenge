@@ -43,8 +43,10 @@ RELEASE_LDFLAGS = $(LDFLAGS) -X github.com/kubehenge/kubehenge/pkg/release.Versi
 # The controller image the release's chart runs, by digest (repository@sha256:...); unset, the chart
 # names it by its version's tag.
 CONTROLLER_IMAGE ?=
-HEADLAMP_VERSION := 0.46.0
+# renovate: datasource=github-release-attachments depName=kubernetes-sigs/headlamp
+HEADLAMP_TAG := v0.46.0
 HEADLAMP_SHA256 := 1747c5de63963be925ded64dc2a5308144d260e43452855169bc771f03846434
+HEADLAMP_VERSION := $(HEADLAMP_TAG:v%=%)
 HEADLAMP_TARBALL := dist/cache/Headlamp-$(HEADLAMP_VERSION)-linux-x64.tar.gz
 UNITS := kubehenge.service kubehenge-update.service kubehenge-update.path kubehenge-headlamp.service kubehenge-headlamp.socket kubehenge-headlamp-proxy.service
 dist: web
@@ -57,7 +59,7 @@ dist: web
 		grep -qxF 'image: "$(CONTROLLER_IMAGE)"' dist/stage/share/kubehenge/charts/kubehenge/values.yaml; \
 	fi
 	test -f $(HEADLAMP_TARBALL) || curl -fsSL --proto '=https' -o $(HEADLAMP_TARBALL) \
-		https://github.com/kubernetes-sigs/headlamp/releases/download/v$(HEADLAMP_VERSION)/Headlamp-$(HEADLAMP_VERSION)-linux-x64.tar.gz
+		https://github.com/kubernetes-sigs/headlamp/releases/download/$(HEADLAMP_TAG)/Headlamp-$(HEADLAMP_VERSION)-linux-x64.tar.gz
 	echo '$(HEADLAMP_SHA256)  $(HEADLAMP_TARBALL)' | sha256sum -c --quiet - || { rm -f $(HEADLAMP_TARBALL); exit 1; }
 	tar -xzf $(HEADLAMP_TARBALL) -C dist/stage/share/kubehenge/headlamp --strip-components=2 \
 		$(foreach f,headlamp-server frontend LICENSE NOTICE,Headlamp-$(HEADLAMP_VERSION)-linux-x64/resources/$(f))
@@ -81,7 +83,7 @@ dist: web
 
 # The release index to sign: the previous release's (PREVIOUS, its .sig beside it), checked against
 # the release key, with this release added. Run after dist.
-TOFU_VERSION = $(shell sed -n 's/^TOFU_VERSION=//p' appliance/install.sh)
+TOFU_VERSION = $(patsubst v%,%,$(shell sed -n 's/^TOFU_TAG=//p' appliance/install.sh))
 TOFU_SHA256 = $(shell sed -n 's/^TOFU_SHA256=//p' appliance/install.sh)
 index:
 	CGO_ENABLED=0 go build -trimpath -ldflags='$(RELEASE_LDFLAGS)' -o dist/kubehenge-release ./cmd/kubehenge

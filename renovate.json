@@ -1,0 +1,106 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Every update from every ecosystem lands in one pull request on Monday morning, which CI and the end-to-end tests check like any other: Go modules, the frontend's npm packages, GitHub Actions, the OpenTofu providers, container images, the tools CI downloads, and the versions of Talos, Kubernetes, Cluster API, its providers and the add-ons that the management cluster and the clusters run. A fix for a known vulnerability comes at once, in a pull request of its own.",
+    "Renovate refuses to group a lock file refresh with other updates, so the lock files' maintenance arrives as a second pull request on Tuesday, after Monday's has had a day to be merged.",
+    "A release is offered as soon as it is published.",
+    "Only node_modules is left out: config:best-practices would also skip everything under test/, and with it the image and registry the end-to-end tests run."
+  ],
+  "extends": [
+    "config:best-practices",
+    "helpers:pinGitHubActionDigestsToSemver",
+    "group:all",
+    "security:openssf-scorecard"
+  ],
+  "timezone": "Europe/Zurich",
+  "schedule": ["before 6am on monday"],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on tuesday"]
+  },
+  "separateMajorMinor": false,
+  "separateMultipleMajor": false,
+  "internalChecksFilter": "strict",
+  "semanticCommits": "disabled",
+  "labels": ["dependencies"],
+  "postUpdateOptions": ["gomodTidy"],
+  "ignorePresets": [":ignoreModulesAndTests"],
+  "ignorePaths": ["**/node_modules/**"],
+  "helm-values": {
+    "description": "Off. values.yaml names the Headlamp image by tag and digest alone, which this manager reads as an image called by its tag; the custom managers below read every version in it.",
+    "enabled": false
+  },
+  "packageRules": [
+    {
+      "description": "No release waits to age, including the npm packages `config:best-practices` would otherwise hold for three days.",
+      "matchPackageNames": ["*"],
+      "minimumReleaseAge": null
+    },
+    {
+      "description": "A runner image this datasource knows about is not yet a label GitHub schedules jobs on, and moving to a new image is a decision to take once, not every week.",
+      "matchDatasources": ["github-runners"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "Helm and kubectl publish their downloads outside GitHub, where Renovate cannot find the new SHA-256 to write beside the new tag. They come in a pull request of their own so that the Monday one is not held up by a checksum taken by hand.",
+      "matchFileNames": ["scripts/tools.sh"],
+      "matchDatasources": ["github-releases"],
+      "groupName": "Helm and kubectl",
+      "prBodyNotes": [
+        "Put the new SHA-256 on the line below each new tag in `scripts/tools.sh`, from the checksum file published beside the download: `https://get.helm.sh/helm-<tag>-linux-amd64.tar.gz.sha256sum` and `https://dl.k8s.io/release/<tag>/bin/linux/amd64/kubectl.sha256`."
+      ]
+    }
+  ],
+  "customManagers": [
+    {
+      "description": "A download from a GitHub release whose tag sits on the line above its SHA-256: the tools in scripts/tools.sh, the OpenTofu appliance/install.sh runs and the Headlamp the appliance serves. The tag and the digest move together; the datasource finds the new digest in the release's checksum file, or hashes the download itself.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^scripts/tools\\.sh$/", "/^appliance/install\\.sh$/", "/^Makefile$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>github-release-attachments) depName=(?<depName>\\S+)\\n[A-Z0-9_]+ *:?= *(?<currentValue>\\S+)\\n[A-Z0-9_]+_SHA256 *:?= *(?<currentDigest>[0-9a-f]{64})"
+      ]
+    },
+    {
+      "description": "Any other version named in a comment on the line above it: the tested set in the management-cluster module, the Talos release templates are made from, the add-on charts published as OCI images, the Headlamp image the clusters run and the registry the end-to-end tests run, and Helm and kubectl in scripts/tools.sh. An image's digest moves with its tag.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^scripts/tools\\.sh$/",
+        "/^management-cluster/versions\\.tf$/",
+        "/^pkg/templates/plan\\.go$/",
+        "/^charts/kubehenge/values\\.yaml$/",
+        "/^test/e2e/ci/up\\.sh$/"
+      ],
+      "matchStrings": [
+        "(?:#|//) renovate: datasource=(?<datasource>github-releases|docker) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?\\n[^\\n]*?[=:] *\"?(?<currentValue>v?\\d[^\"\\s@]*)\"?(?:@(?<currentDigest>sha256:[0-9a-f]{64}))?"
+      ]
+    },
+    {
+      "description": "The add-on charts published in a Helm repository, which values.yaml names by repository, chart and version.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^charts/kubehenge/values\\.yaml$/"],
+      "matchStrings": [
+        "repository: (?<registryUrl>https://\\S+)\\n\\s+chart: (?<depName>\\S+)\\n\\s+version: (?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "helm"
+    },
+    {
+      "description": "The linters the Makefile runs through uvx.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^Makefile$/"],
+      "matchStrings": [
+        "uvx (?<depName>[a-z0-9-]+)@(?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "pypi"
+    },
+    {
+      "description": "The linter the Makefile runs through npx.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^Makefile$/"],
+      "matchStrings": [
+        "npx --yes (?<depName>[a-z0-9@/-]+?)@(?<currentValue>\\d\\S*)"
+      ],
+      "datasourceTemplate": "npm"
+    }
+  ]
+}

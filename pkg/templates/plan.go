@@ -30,6 +30,7 @@ var Distributions = []Distribution{Talos, RKE2, K3s, Kubeadm}
 
 const (
 	// DefaultTalosVersion is the Talos release templates are made from unless another is asked for.
+	// renovate: datasource=github-releases depName=siderolabs/talos
 	DefaultTalosVersion = "v1.14.4"
 	// DefaultOS is the cloud image RKE2, k3s and kubeadm templates are made from.
 	DefaultOS = "ubuntu-26.04"

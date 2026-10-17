@@ -8,7 +8,7 @@ rules:
     max: 100
     allow-non-breakable-words: true
     allow-non-breakable-inline-mappings: true
-  # One space before a trailing comment, as Dependabot writes the version beside a pinned action.
+  # One space before a trailing comment, as Renovate writes the version beside a pinned action.
   comments:
     min-spaces-from-content: 1
   # GitHub Actions' `on` is a key, not a boolean.
