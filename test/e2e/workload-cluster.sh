@@ -297,9 +297,18 @@ case ${cni} in
     *) ;;
 esac
 agnhost=registry.k8s.io/e2e-test-images/agnhost:2.61
+# agnhost_pod <name> <args...>: an agnhost pod at Pod Security's restricted level, which the
+# cluster enforces; the image runs as root unless told otherwise. The overrides merge into the
+# container by its name.
+agnhost_pod() {
+    overrides=$(printf '{"apiVersion":"v1","spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"%s","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' "$1")
+    name=$1
+    shift
+    wl -n e2e-policy run "${name}" --image="${agnhost}" --override-type=strategic --overrides="${overrides}" -- "$@"
+}
 wl create namespace e2e-policy
-wl -n e2e-policy run server --image="${agnhost}" -- netexec --http-port=8080
-wl -n e2e-policy run client --image="${agnhost}" -- pause
+agnhost_pod server netexec --http-port=8080
+agnhost_pod client pause
 wl -n e2e-policy wait --for=condition=Ready pod/server pod/client --timeout=5m
 server_ip=$(wl -n e2e-policy get pod server -o jsonpath='{.status.podIP}')
 connect() { KUBECONFIG=${work}/workload kubectl -n e2e-policy exec client -- /agnhost connect "${server_ip}:8080" --timeout=3s 2>&1; }
