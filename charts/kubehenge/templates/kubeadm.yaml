@@ -118,7 +118,7 @@ spec:
               path: /spec/template/spec/kubeadmConfigSpec/files/-
               valueFrom:
                 template: |
-                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/etc/kubernetes/authentication-config.yaml" "anonymous" true) | nindent 18 }}
+                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/etc/kubernetes/authentication-config.yaml" "anonymous" "paths") | nindent 18 }}
             # The key that encrypts Secrets in etcd, which Kubehenge's controller makes once for the
             # cluster: every control-plane node has to hold the same one.
             - op: add

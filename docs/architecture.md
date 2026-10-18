@@ -121,7 +121,7 @@ Both leave alone the namespaces of the components that need the host's network, 
 
 - **Audit:** the API server logs who did what to which object, at the `Metadata` level, without request or response bodies, which would put Secrets and tokens into the log, and without health checks, leases and events. It keeps a month of it, in ten files of 100 MB at most.
 - **Secrets encrypted in etcd:** RKE2 and k3s encrypt them themselves; on kubeadm, Kubehenge's controller makes a secretbox key once for the cluster, in the Secret `<cluster>-encryption` beside the Cluster, which every control-plane node gets. It is never replaced, since Secrets written under one key cannot be read with another.
-- **Requests without credentials** reach only the API server's health checks and, on kubeadm, the `cluster-info` ConfigMap that `kubeadm join` reads before it has any; RKE2 and k3s refuse them all.
+- **Requests without credentials** are refused on RKE2 and k3s; on kubeadm they reach only the API server's health checks and the `cluster-info` ConfigMap, which `kubeadm join` reads before it has any.
 - **The API server** limits the rate of events a namespace, and the cluster as a whole, may write (EventRateLimit), does not extend projected ServiceAccount tokens past their hour, and has profiling off, as do the controller manager and the scheduler, which serve on loopback only ([monitoring](#add-ons) reaches them through proxies). It and the kubelets offer only forward-secret TLS 1.2 ciphers with authenticated encryption.
 - **Nodes** run with the kernel settings the kubelet expects, and the kubelet refuses to start on others rather than change them; kubeadm's kubelet configuration and unit files are readable by root alone.
 

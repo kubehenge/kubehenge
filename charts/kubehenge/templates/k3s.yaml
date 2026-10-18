@@ -146,10 +146,16 @@ spec:
               path: /spec/template/spec/kthreesConfigSpec/files/-
               valueFrom:
                 template: |
-                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/etc/rancher/k3s/authentication-config.yaml" "anonymous" false) | nindent 18 }}
+                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/etc/rancher/k3s/authentication-config.yaml" "anonymous" "flag") | nindent 18 }}
             - op: add
-              path: /spec/template/spec/kthreesConfigSpec/serverConfig/kubeAPIServerArg/-
-              value: authentication-config=/etc/rancher/k3s/authentication-config.yaml
+              path: /spec/template/spec/kthreesConfigSpec/files/-
+              value:
+                path: /etc/rancher/k3s/config.yaml.d/45-kubehenge-oidc.yaml
+                owner: root:root
+                permissions: "0600"
+                content: |
+                  kube-apiserver-arg+:
+                    - authentication-config=/etc/rancher/k3s/authentication-config.yaml
     - name: k3s-cis
       enabledIf: {{ include "kubehenge.cisEnabled" . }}
       definitions:
@@ -211,29 +217,32 @@ template:
       files:
         {{- include "kubehenge.sysctlFile" . | nindent 8 }}
         {{- include "kubehenge.auditPolicyFile" (dict "root" . "path" "/etc/rancher/k3s/audit-policy.yaml") | nindent 8 }}
-        # The k3s provider has no setting for it. k3s keeps the key in its datastore, so every
-        # server holds the same one.
-        - path: /etc/rancher/k3s/config.yaml.d/40-kubehenge-secrets-encryption.yaml
+        # The k3s provider has no setting for secrets encryption; k3s keeps the key in its
+        # datastore, so every server holds the same one. The API server's arguments are here, in
+        # place of the provider's list, which always ends with anonymous-auth=true and a cipher list
+        # of its own; a later file only adds to them (kube-apiserver-arg+).
+        - path: /etc/rancher/k3s/config.yaml.d/40-kubehenge-server.yaml
           owner: root:root
           permissions: "0600"
           content: |
             secrets-encryption: true
+            kube-apiserver-arg:
+              - admission-control-config-file=/etc/rancher/k3s/pod-security.yaml
+              - enable-admission-plugins=NodeRestriction,EventRateLimit
+              - audit-policy-file=/etc/rancher/k3s/audit-policy.yaml
+              - audit-log-path=/var/lib/rancher/k3s/server/logs/audit.log
+              # A month of it, in at most a gigabyte, as RKE2 keeps its own.
+              - audit-log-maxage=30
+              - audit-log-maxbackup=10
+              - audit-log-maxsize=100
+              # Every client reloads its projected token, so none needs it to outlast its hour.
+              - service-account-extend-token-expiration=false
+              - anonymous-auth=false
+              - tls-cipher-suites={{ include "kubehenge.tlsCipherSuites" . }}
       serverConfig:
         # The Proxmox VE cloud controller manager initialises the nodes instead of k3s's own.
         disableCloudController: true
         cloudProviderName: external
-        kubeAPIServerArg:
-          - admission-control-config-file=/etc/rancher/k3s/pod-security.yaml
-          - enable-admission-plugins=NodeRestriction,EventRateLimit
-          - audit-policy-file=/etc/rancher/k3s/audit-policy.yaml
-          - audit-log-path=/var/lib/rancher/k3s/server/logs/audit.log
-          # A month of it, in at most a gigabyte, as RKE2 keeps its own.
-          - audit-log-maxage=30
-          - audit-log-maxbackup=10
-          - audit-log-maxsize=100
-          # Every client reloads its projected token, so none needs it to outlast its hour.
-          - service-account-extend-token-expiration=false
-          - tls-cipher-suites={{ include "kubehenge.tlsCipherSuites" . }}
 {{- end -}}
 
 {{- define "kubehenge.k3sWorkerSpec" -}}

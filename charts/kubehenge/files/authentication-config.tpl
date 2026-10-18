@@ -2,9 +2,11 @@
 Rendered by Cluster API, not Helm, with the cluster's variables and $anonymous: the oidc variable
 becomes the API server's structured authentication configuration, one JWT authenticator per
 provider. Defaults are repeated here because a value set without them reaches the template as
-given. With $anonymous, requests without credentials reach only the health checks and the
-cluster-info ConfigMap, which kubeadm join reads before it has any. Without, they reach nothing:
-RKE2 and k3s, which need none, switch anonymous requests off only while they are given no file.
+given. $anonymous is where requests without credentials may go. "paths": only the health checks
+and the cluster-info ConfigMap, which kubeadm join reads before it has any. "none": nowhere, for
+RKE2, which needs none and switches anonymous requests off only while it is given no file. "flag":
+the API server's --anonymous-auth decides, for k3s, whose provider always sets it, and the API
+server refuses the flag beside an anonymous section.
 */ -}}
 {{- $jwt := list }}
 {{- range .oidc }}
@@ -22,12 +24,12 @@ RKE2 and k3s, which need none, switch anonymous requests off only while they are
 {{- $jwt = append $jwt (dict "issuer" $issuer "claimMappings" $claims) }}
 {{- end }}
 {{- $config := dict "apiVersion" "apiserver.config.k8s.io/v1" "kind" "AuthenticationConfiguration" "jwt" $jwt }}
-{{- if $anonymous }}
+{{- if eq $anonymous "paths" }}
 {{- $paths := list "/livez" "/readyz" "/healthz" "/api/v1/namespaces/kube-public/configmaps/cluster-info" }}
 {{- $conditions := list }}
 {{- range $paths }}{{ $conditions = append $conditions (dict "path" .) }}{{ end }}
 {{- $_ := set $config "anonymous" (dict "enabled" true "conditions" $conditions) }}
-{{- else }}
+{{- else if eq $anonymous "none" }}
 {{- $_ := set $config "anonymous" (dict "enabled" false) }}
 {{- end }}
 owner: root:root
