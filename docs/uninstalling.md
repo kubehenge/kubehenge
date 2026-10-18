@@ -1,6 +1,6 @@
 # Uninstalling
 
-Remove Kubehenge in this order. Each step needs the one before it: the management cluster cleans up after the clusters it created, and the appliance holds the only copy of the management cluster's state.
+Remove Kubehenge's clusters, then its management cluster, then the appliance, in that order. Each step needs the one before it: the management cluster cleans up after the clusters it created, and the appliance holds the only copy of the management cluster's state.
 
 1. [Delete the clusters](#delete-the-clusters).
 2. [Remove the management cluster](#remove-the-management-cluster).

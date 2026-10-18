@@ -1,6 +1,7 @@
 import { defineConfig } from "vitepress";
 
 const repository = "https://github.com/kubehenge/kubehenge";
+const site = "https://kubehenge.dev";
 
 export default defineConfig({
   title: "Kubehenge",
@@ -8,8 +9,30 @@ export default defineConfig({
   lang: "en-GB",
   cleanUrls: true,
   lastUpdated: true,
-  head: [["link", { rel: "icon", type: "image/svg+xml", href: "/logo.svg" }]],
-  sitemap: { hostname: "https://kubehenge.dev" },
+  head: [
+    ["link", { rel: "icon", type: "image/svg+xml", href: "/logo.svg" }],
+    // What chat and social apps show for a shared link: Open Graph, and X's own card tags.
+    ["meta", { property: "og:site_name", content: "Kubehenge" }],
+    ["meta", { property: "og:type", content: "website" }],
+    ["meta", { property: "og:locale", content: "en_GB" }],
+    ["meta", { property: "og:image", content: `${site}/og.png` }],
+    ["meta", { property: "og:image:width", content: "1200" }],
+    ["meta", { property: "og:image:height", content: "630" }],
+    ["meta", { property: "og:image:alt", content: "Kubehenge: Kubernetes for Proxmox VE, a ring of stones" }],
+    ["meta", { name: "twitter:card", content: "summary_large_image" }],
+  ],
+  // Each page's own title, description and address, and the address search engines index it at.
+  transformHead({ pageData, title, description }) {
+    const path = pageData.relativePath.replace(/(?:^|\/)index\.md$/u, "").replace(/\.md$/u, "");
+    const url = `${site}/${path}`;
+    return [
+      ["link", { rel: "canonical", href: url }],
+      ["meta", { property: "og:url", content: url }],
+      ["meta", { property: "og:title", content: title }],
+      ["meta", { property: "og:description", content: description }],
+    ];
+  },
+  sitemap: { hostname: site },
   themeConfig: {
     logo: { src: "/logo.svg", alt: "" },
     nav: [

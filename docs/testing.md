@@ -1,6 +1,6 @@
 # Testing
 
-Four tiers. Only the last needs Proxmox VE.
+Kubehenge is tested in four tiers, and only the last needs Proxmox VE.
 
 | Tier | What it checks | Needs Proxmox VE |
 | --- | --- | --- |

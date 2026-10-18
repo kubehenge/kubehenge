@@ -1,5 +1,7 @@
 # Roadmap
 
+What Kubehenge's first release does, what comes next, and what may come later.
+
 ## First release
 
 - ClusterClasses for kubeadm, RKE2 and k3s, each passing the end-to-end suite.

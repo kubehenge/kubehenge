@@ -1,6 +1,6 @@
 # Upgrading
 
-Three things are upgraded separately, in this order:
+Kubehenge itself, the management cluster and the workload clusters are upgraded separately, in this order.
 
 1. **Kubehenge itself:** the appliance's software, from the Administration page or the Proxmox VE shell.
 2. **The management cluster:** Talos, Kubernetes, Cluster API and its providers, and Kubehenge's ClusterClasses and controller, to the versions the new release carries, by applying it again.
