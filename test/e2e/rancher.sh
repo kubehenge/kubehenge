@@ -126,7 +126,8 @@ rancher -n cattle-system get secret bootstrap-secret > /dev/null || fail "Ranche
 
 step "a k3s cluster registers with Rancher on its own"
 # Rancher's agents and controllers run in the namespaces Kubehenge exempts, but the job that cleans
-# up after them runs in default and is refused at restricted (docs/troubleshooting.md#rancher).
+# up after them runs in default and is refused at restricted until a Rancher release carries
+# rancher/rancher#58081's fix (docs/troubleshooting.md#rancher).
 cluster downstream kubehenge-k3s "${KUBEHENGE_E2E_DOWNSTREAM_VERSION}" "${KUBEHENGE_E2E_DOWNSTREAM_ADDRESSES}" "${KUBEHENGE_E2E_DOWNSTREAM_ENDPOINT}" \
     "{memoryMiB: ${KUBEHENGE_E2E_DOWNSTREAM_MEMORY:-4096}}" "{}" baseline
 kubectl -n "${ns}" wait --for=condition=Available cluster/downstream --timeout=40m
