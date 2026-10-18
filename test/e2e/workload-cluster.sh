@@ -414,7 +414,57 @@ set_variable() {
         jq -c --arg n "$1" --argjson v "$2" '[.spec.topology.variables[] | select(.name != $n)] + [{name: $n, value: $v}]')
     kubectl -n "${ns}" patch "cluster/${name}" --type=merge -p "{\"spec\":{\"topology\":{\"variables\":${vars}}}}"
 }
-step "Headlamp switched on and off"
+# guest <node> <vmid> <command>: runs a shell command in a VM through its guest agent and prints its
+# output; fails when the command or the agent does. It is polled with set -e off, so each step
+# returns its own failure.
+guest() {
+    request=$(jq -cn --arg c "$3" '{command: ["sh", "-c", $c]}')
+    # shellcheck disable=SC2310 # guest is polled with set -e off, so a failed request is returned.
+    pid=$(pve -X POST -H 'Content-Type: application/json' -d "${request}" \
+        "${KUBEHENGE_PROXMOX_URL}/api2/json/nodes/$1/qemu/$2/agent/exec" | jq -r .data.pid) || return 1
+    tries=0
+    # shellcheck disable=SC2310 # polled until the command has exited; a failed request is tried again.
+    until result=$(pve_get "nodes/$1/qemu/$2/agent/exec-status?pid=${pid}") &&
+        printf '%s' "${result}" | jq -e '.data.exited == 1' > /dev/null; do
+        tries=$((tries + 1))
+        [ "${tries}" -lt 60 ] || return 1
+        sleep 1
+    done
+    printf '%s' "${result}" | jq -r '.data."out-data" // ""'
+    printf '%s' "${result}" | jq -e '.data.exitcode == 0' > /dev/null
+}
+# on_machines "<Machine names>" <command>: runs the command on those Machines' VMs.
+on_machines() {
+    for m in $1; do
+        pm=$(kubectl -n "${ns}" get machine "${m}" -o jsonpath='{.spec.infrastructureRef.name}')
+        pm_node=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.status.proxmoxNode}')
+        pm_vmid=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.spec.virtualMachineID}')
+        guest "${pm_node}" "${pm_vmid}" "$2"
+    done
+}
+# restarts: each pod's container restarts, by namespace/name.
+restarts() {
+    wl get pods -A -o json |
+        jq -c '[.items[] | {key: "\(.metadata.namespace)/\(.metadata.name)", value: ([.status.containerStatuses[]?.restartCount] | add // 0)}] | from_entries'
+}
+# server_restarts: how often systemd has restarted the control planes' distribution service. k3s runs
+# every control-plane component in it, so it is the one place k3s's restarts show.
+case ${class} in
+    kubehenge-rke2) server_unit=rke2-server ;;
+    kubehenge-k3s) server_unit=k3s ;;
+    *) server_unit=kubelet ;;
+esac
+servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+server_restarts() {
+    # shellcheck disable=SC2310 # its failure is returned.
+    counts=$(on_machines "${servers}" "systemctl show -p NRestarts --value ${server_unit}") || return 1
+    printf '%s\n' "${counts}" | awk '{ n += $1 } END { print n + 0 }'
+}
+pods_before=$(restarts)
+# shellcheck disable=SC2310 # a failed count fails the step.
+servers_before=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
+
+step "Headlamp switched on"
 set_variable headlamp '{"enabled":true}'
 until_true 600 "Headlamp installed" sh -c "KUBECONFIG=${work}/workload kubectl -n headlamp get deployment/headlamp >/dev/null 2>&1"
 wl -n headlamp rollout status deployment/headlamp --timeout=10m
@@ -430,10 +480,8 @@ case ${pod_security} in
     # Only a pod that falls short of the level gets a warning.
     *) ;;
 esac
-set_variable headlamp '{"enabled":false}'
-until_true 600 "Headlamp removed" absent wl -n headlamp get deployment/headlamp
 
-step "monitoring switched on and off"
+step "monitoring switched on"
 set_variable monitoring '{"enabled":true}'
 prometheus=statefulset/prometheus-kube-prometheus-stack-prometheus
 until_true 1200 "Prometheus installed" sh -c "KUBECONFIG=${work}/workload kubectl -n monitoring get ${prometheus} >/dev/null 2>&1"
@@ -476,11 +524,8 @@ case ${pod_security} in
     *violate*) fail "monitoring's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
     *) ;;
 esac
-set_variable monitoring '{"enabled":false}'
-until_true 900 "monitoring removed" absent wl -n monitoring get "${prometheus}"
-until_true 300 "metrics proxies removed" absent wl -n kube-system get daemonset/kubehenge-etcd-metrics
 
-step "pod security enforced, with Kyverno switched on and off"
+step "pod security enforced, with Kyverno switched on"
 # privileged_pod <namespace>: asks the API server to admit a privileged pod, without creating it.
 privileged_pod() {
     wl -n "$1" run e2e-privileged --image=registry.k8s.io/pause:3.10.1 --restart=Never --dry-run=server \
@@ -510,7 +555,29 @@ case ${pod_security} in
     *violate*) fail "Kyverno's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
     *) ;;
 esac
+
+# The class's minimum sizes have to carry every add-on at once.
+step "every add-on at once, with nothing restarted"
+# shellcheck disable=SC2310 # a failed count fails the step.
+servers_after=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
+[ "${servers_after}" = "${servers_before}" ] ||
+    fail "${server_unit} restarted $((servers_after - servers_before)) times on the control planes while the add-ons were installed"
+pods_after=$(restarts)
+restarted=$(jq -rn --argjson b "${pods_before}" --argjson a "${pods_after}" '$a | to_entries[] | select(.value > ($b[.key] // 0)) | "\(.key) \(.value - ($b[.key] // 0))"')
+[ -z "${restarted}" ] || fail "containers restarted while the add-ons were installed (pod, restarts): ${restarted}"
+for node in $(wl get nodes -o jsonpath='{.items[*].metadata.name}'); do
+    summary=$(wl get --raw "/api/v1/nodes/${node}/proxy/stats/summary")
+    printf '%s' "${summary}" |
+        jq -r --arg n "${node}" '.node.memory | "\($n): \(.workingSetBytes / 1048576 | floor) MiB of memory in use, \(.availableBytes / 1048576 | floor) MiB available"'
+done
+
+step "every add-on switched off at once"
+set_variable headlamp '{"enabled":false}'
+set_variable monitoring '{"enabled":false}'
 set_variable podSecurity '{"admission":"restricted","kyverno":"off"}'
+until_true 600 "Headlamp removed" absent wl -n headlamp get deployment/headlamp
+until_true 900 "monitoring removed" absent wl -n monitoring get "${prometheus}"
+until_true 300 "metrics proxies removed" absent wl -n kube-system get daemonset/kubehenge-etcd-metrics
 until_true 900 "Kyverno removed" absent wl -n kyverno get deployment/kyverno-admission-controller
 # shellcheck disable=SC2310 # the admission is the answer looked for.
 privileged_pod e2e-privileged > /dev/null || fail "Kyverno's policies outlive Kyverno"
@@ -525,35 +592,6 @@ step "scale workers to 2"
 workers 2
 step "scale workers back to 1"
 workers 1
-
-# guest <node> <vmid> <command>: runs a shell command in a VM through its guest agent and prints its
-# output; fails when the command or the agent does. It is polled with set -e off, so each step
-# returns its own failure.
-guest() {
-    request=$(jq -cn --arg c "$3" '{command: ["sh", "-c", $c]}')
-    # shellcheck disable=SC2310 # guest is polled with set -e off, so a failed request is returned.
-    pid=$(pve -X POST -H 'Content-Type: application/json' -d "${request}" \
-        "${KUBEHENGE_PROXMOX_URL}/api2/json/nodes/$1/qemu/$2/agent/exec" | jq -r .data.pid) || return 1
-    tries=0
-    # shellcheck disable=SC2310 # polled until the command has exited; a failed request is tried again.
-    until result=$(pve_get "nodes/$1/qemu/$2/agent/exec-status?pid=${pid}") &&
-        printf '%s' "${result}" | jq -e '.data.exited == 1' > /dev/null; do
-        tries=$((tries + 1))
-        [ "${tries}" -lt 60 ] || return 1
-        sleep 1
-    done
-    printf '%s' "${result}" | jq -r '.data."out-data" // ""'
-    printf '%s' "${result}" | jq -e '.data.exitcode == 0' > /dev/null
-}
-# on_machines "<Machine names>" <command>: runs the command on those Machines' VMs.
-on_machines() {
-    for m in $1; do
-        pm=$(kubectl -n "${ns}" get machine "${m}" -o jsonpath='{.spec.infrastructureRef.name}')
-        pm_node=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.status.proxmoxNode}')
-        pm_vmid=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.spec.virtualMachineID}')
-        guest "${pm_node}" "${pm_vmid}" "$2"
-    done
-}
 
 step "upgrade to ${upgrade}"
 old_servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
