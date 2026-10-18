@@ -68,7 +68,6 @@ runcmd:
   - [sh, -c, "mkdir -p /etc/containerd && containerd config default | sed 's/SystemdCgroup = false/SystemdCgroup = true/' > /etc/containerd/config.toml"]
   - [systemctl, restart, containerd]
   - [apt-mark, hold, kubelet, kubeadm, kubectl]
-  - [chmod, "0600", /usr/lib/systemd/system/kubelet.service, /usr/lib/systemd/system/kubelet.service.d/10-kubeadm.conf]
   - [systemctl, enable, kubelet]
   - [kubeadm, config, images, pull, --kubernetes-version, %[2]s]
 `, pkg, b.KubernetesVersion)

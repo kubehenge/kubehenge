@@ -370,15 +370,16 @@ template:
         - /etc/kubehenge/kube-vip-credentials.sh init
       postKubeadmCommands:
         - /etc/kubehenge/kube-vip-credentials.sh done
-        {{- include "kubehenge.kubeletConfigMode" . | nindent 8 }}
+        {{- include "kubehenge.kubeletFileModes" . | nindent 8 }}
 {{- end -}}
 
 {{/*
-kubeadm writes the kubelet's configuration readable by every user, where the CIS benchmark asks for
-root alone. It holds no secret; the kubelet only reads it at start.
+kubeadm and the kubelet's package write the kubelet's configuration and service files readable by
+every user, where the CIS benchmark asks for root alone. They hold no secret; the kubelet only reads
+them at start. Set on each node, so a node is the same whichever template it was cloned from.
 */}}
-{{- define "kubehenge.kubeletConfigMode" -}}
-- chmod 0600 /var/lib/kubelet/config.yaml
+{{- define "kubehenge.kubeletFileModes" -}}
+- chmod 0600 /var/lib/kubelet/config.yaml /usr/lib/systemd/system/kubelet.service /usr/lib/systemd/system/kubelet.service.d/10-kubeadm.conf
 {{- end -}}
 
 {{- define "kubehenge.kubeadmWorkerSpec" -}}
@@ -394,5 +395,5 @@ template:
       - sysctl --system
       - /etc/kubehenge/node-ip.sh
     postKubeadmCommands:
-      {{- include "kubehenge.kubeletConfigMode" . | nindent 6 }}
+      {{- include "kubehenge.kubeletFileModes" . | nindent 6 }}
 {{- end -}}
