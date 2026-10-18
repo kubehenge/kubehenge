@@ -1,6 +1,6 @@
 #!/bin/sh
 # End-to-end test of the Rancher add-on on a Proxmox VE host, against a running management cluster:
-# a one-node RKE2 cluster installs Rancher, a one-node k3s cluster registers with it on its own,
+# a one-node k3s cluster installs Rancher, another one-node k3s cluster registers with it on its own,
 # leaves it (Rancher cleans up inside it) and comes back, the Rancher cluster is held at the
 # Kubernetes versions Rancher runs on, the k3s cluster leaves Rancher before it is deleted, and
 # nothing of either is left afterwards.
@@ -14,10 +14,11 @@
 # has its own addresses and virtual IP: KUBEHENGE_E2E_RANCHER_ADDRESSES and _RANCHER_ENDPOINT,
 # KUBEHENGE_E2E_DOWNSTREAM_ADDRESSES and _DOWNSTREAM_ENDPOINT. KUBEHENGE_E2E_RANCHER_HOSTNAME
 # resolves to the Rancher cluster's virtual IP, where its ingress controller answers; by default
-# <endpoint>.sslip.io. KUBEHENGE_E2E_RANCHER_VERSION (RKE2) and KUBEHENGE_E2E_DOWNSTREAM_VERSION (k3s)
+# <endpoint>.sslip.io. KUBEHENGE_E2E_RANCHER_VERSION and KUBEHENGE_E2E_DOWNSTREAM_VERSION, both k3s,
 # lie within the Kubernetes versions the installed Rancher runs on; KUBEHENGE_E2E_BLOCKED_VERSION
-# lies beyond them. KUBEHENGE_E2E_RANCHER_MEMORY and _DOWNSTREAM_MEMORY (MiB) size the nodes, and
-# KUBEHENGE_E2E_RANCHER_CORES Rancher's, at least the 4 Kubehenge requires.
+# lies beyond them. KUBEHENGE_E2E_RANCHER_CORES and _MEMORY (MiB) size Rancher's node, by default
+# the 4 vCPUs Rancher needs and the least of a k3s control plane without workers;
+# KUBEHENGE_E2E_DOWNSTREAM_CORES and _MEMORY size the other's, by default that least.
 set -eu
 
 : "${KUBECONFIG:?KUBECONFIG must point at the management cluster}"
@@ -105,10 +106,10 @@ in_rancher="${ns}-downstream-$(printf '%s' "${ns}/downstream" | sha256sum | cut 
 registered() { rancher -n fleet-default get clusters.provisioning.cattle.io "${in_rancher}" -o jsonpath='{.status.ready}' 2> /dev/null | grep -q true; }
 gone_from_rancher() { absent rancher -n fleet-default get clusters.provisioning.cattle.io "${in_rancher}"; }
 
-step "Rancher's cluster, RKE2 ${KUBEHENGE_E2E_RANCHER_VERSION}, Rancher at ${hostname}"
+step "Rancher's cluster, k3s ${KUBEHENGE_E2E_RANCHER_VERSION}, Rancher at ${hostname}"
 kubectl create namespace "${ns}"
-cluster rancher kubehenge-rke2 "${KUBEHENGE_E2E_RANCHER_VERSION}" "${KUBEHENGE_E2E_RANCHER_ADDRESSES}" "${KUBEHENGE_E2E_RANCHER_ENDPOINT}" \
-    "{cores: ${KUBEHENGE_E2E_RANCHER_CORES:-4}, memoryMiB: ${KUBEHENGE_E2E_RANCHER_MEMORY:-8192}}" "{install: true, hostname: ${hostname}}" restricted
+cluster rancher kubehenge-k3s "${KUBEHENGE_E2E_RANCHER_VERSION}" "${KUBEHENGE_E2E_RANCHER_ADDRESSES}" "${KUBEHENGE_E2E_RANCHER_ENDPOINT}" \
+    "{cores: ${KUBEHENGE_E2E_RANCHER_CORES:-4}, memoryMiB: ${KUBEHENGE_E2E_RANCHER_MEMORY:-5120}}" "{install: true, hostname: ${hostname}}" restricted
 kubectl -n "${ns}" wait --for=condition=Available cluster/rancher --timeout=40m
 kubeconfig rancher rancher
 until_true 1200 "Rancher installed" sh -c "KUBECONFIG=${work}/rancher kubectl -n cattle-system get deployment/rancher >/dev/null 2>&1"
@@ -129,7 +130,7 @@ step "a k3s cluster registers with Rancher on its own"
 # up after them runs in default and is refused at restricted until a Rancher release carries
 # rancher/rancher#58081's fix (docs/troubleshooting.md#rancher).
 cluster downstream kubehenge-k3s "${KUBEHENGE_E2E_DOWNSTREAM_VERSION}" "${KUBEHENGE_E2E_DOWNSTREAM_ADDRESSES}" "${KUBEHENGE_E2E_DOWNSTREAM_ENDPOINT}" \
-    "{memoryMiB: ${KUBEHENGE_E2E_DOWNSTREAM_MEMORY:-4096}}" "{}" baseline
+    "{cores: ${KUBEHENGE_E2E_DOWNSTREAM_CORES:-3}, memoryMiB: ${KUBEHENGE_E2E_DOWNSTREAM_MEMORY:-5120}}" "{}" baseline
 kubectl -n "${ns}" wait --for=condition=Available cluster/downstream --timeout=40m
 kubeconfig downstream downstream
 until_true 1200 "registered and connected" registered

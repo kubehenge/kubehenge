@@ -70,8 +70,8 @@ case "${test}" in
                 waited=$((waited + 5))
             done
             case "${test}" in
-                rke2 | rancher) template rke2 ;;
-                k3s) template k3s ;;
+                rke2) template rke2 ;;
+                k3s | rancher) template k3s ;;
                 kubeadm)
                     template kubeadm --kubernetes-version "${from}"
                     template kubeadm --kubernetes-version "${to}"
@@ -193,9 +193,8 @@ case "${test}" in
     rancher)
         export KUBEHENGE_E2E_RANCHER_ENDPOINT=172.20.99.20 KUBEHENGE_E2E_RANCHER_ADDRESSES=172.20.99.21-172.20.99.24
         export KUBEHENGE_E2E_DOWNSTREAM_ENDPOINT=172.20.99.25 KUBEHENGE_E2E_DOWNSTREAM_ADDRESSES=172.20.99.26-172.20.99.29
-        export KUBEHENGE_E2E_RANCHER_VERSION="${from}+rke2r1" KUBEHENGE_E2E_DOWNSTREAM_VERSION="${from}+k3s1"
-        export KUBEHENGE_E2E_BLOCKED_VERSION="${to}+rke2r1"
-        export KUBEHENGE_E2E_RANCHER_MEMORY=6144 KUBEHENGE_E2E_DOWNSTREAM_MEMORY=4096
+        export KUBEHENGE_E2E_RANCHER_VERSION="${from}+k3s1" KUBEHENGE_E2E_DOWNSTREAM_VERSION="${from}+k3s1"
+        export KUBEHENGE_E2E_BLOCKED_VERSION="${to}+k3s1"
         e2e e2e-rancher
         ;;
     # Checked before anything was built.
