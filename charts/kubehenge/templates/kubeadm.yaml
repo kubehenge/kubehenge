@@ -190,10 +190,10 @@ verify: the API server checks it when it reaches the kubelet, and so does Promet
 
 {{/*
 kubeadm's controller manager and scheduler serve a certificate they sign themselves, anew on every
-start, so nothing can verify them. These come from the cluster CA and name the node's address,
-which they serve on behind their own authentication for Prometheus. They are for serving only:
-the API server takes a certificate of the cluster CA from a client only for client
-authentication. They last as long as kubeadm's own, and a machine is replaced before either ends.
+start, so nothing can verify them. These come from the cluster CA and name loopback, where the
+metrics proxies reach them. They are for serving only: the API server takes a certificate of the
+cluster CA from a client only for client authentication. They last as long as kubeadm's own, and
+a machine is replaced before either ends.
 */}}
 {{- define "kubehenge.kubeadmServingFile" -}}
 - path: /etc/kubehenge/serving-certs.sh
@@ -202,8 +202,6 @@ authentication. They last as long as kubeadm's own, and a machine is replaced be
   content: |
     #!/bin/sh
     set -eu
-    . /etc/default/kubelet
-    ip=${KUBELET_EXTRA_ARGS#--node-ip=}
     dir=/etc/kubernetes/serving
     mkdir -p -m 0700 "$dir"
     for c in kube-controller-manager kube-scheduler; do
@@ -218,7 +216,7 @@ authentication. They last as long as kubeadm's own, and a machine is replaced be
     basicConstraints = critical, CA:FALSE
     keyUsage = critical, digitalSignature
     extendedKeyUsage = serverAuth
-    subjectAltName = DNS:localhost, DNS:$(hostname), IP:127.0.0.1, IP:$ip
+    subjectAltName = DNS:localhost, IP:127.0.0.1
     EOF
         openssl req -x509 -new -noenc -newkey ec -pkeyopt ec_paramgen_curve:P-256 -days 365 \
             -CA /etc/kubernetes/pki/ca.crt -CAkey /etc/kubernetes/pki/ca.key \
@@ -227,13 +225,14 @@ authentication. They last as long as kubeadm's own, and a machine is replaced be
 {{- end -}}
 
 {{/*
-A control-plane component's serving certificate, and the flags that bind it to every address so
-Prometheus reaches it at the node's.
+A control-plane component's serving certificate. It serves on loopback only, kubeadm's own
+default, and lets its metrics through there without credentials, as etcd and kube-proxy do: the
+metrics proxy on the node's address authenticates Prometheus instead.
 */}}
 {{- define "kubehenge.kubeadmServing" -}}
 extraArgs:
-  - name: bind-address
-    value: 0.0.0.0
+  - name: authorization-always-allow-paths
+    value: /healthz,/readyz,/livez,/metrics
   - name: tls-cert-file
     value: /etc/kubernetes/serving/{{ . }}.crt
   - name: tls-private-key-file

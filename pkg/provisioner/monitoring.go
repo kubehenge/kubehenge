@@ -41,10 +41,14 @@ const (
 	metricsProxyAccount = "kubehenge-metrics-proxy"
 	etcdMetrics         = "kubehenge-etcd-metrics"
 	kubeProxyMetrics    = "kubehenge-kube-proxy-metrics"
-	// The ports etcd and kube-proxy serve metrics on, on the loopback interface; their proxies
-	// take the same port on the node's address.
-	etcdMetricsPort      = 2381
-	kubeProxyMetricsPort = 10249
+	controllerMetrics   = "kubehenge-kube-controller-manager-metrics"
+	schedulerMetrics    = "kubehenge-kube-scheduler-metrics"
+	// The ports the components serve metrics on, on the loopback interface; their proxies take the
+	// same port on the node's address.
+	etcdMetricsPort       = 2381
+	kubeProxyMetricsPort  = 10249
+	controllerMetricsPort = 10257
+	schedulerMetricsPort  = 10259
 
 	// The kube-rbac-proxy image's own user.
 	proxyUser = 65532
@@ -88,24 +92,17 @@ func (i Image) String() string {
 }
 
 // monitoringValues install kube-prometheus-stack so that every scrape is authenticated and its
-// server verified. The controller manager and the scheduler serve on the node's address behind
-// their own authentication; etcd and kube-proxy serve plain HTTP on loopback, so each gets a
-// kube-rbac-proxy on the node's address that takes only Prometheus's client certificate. On k3s
-// every component runs in the one process whose kubelet already serves all their metrics, as
-// Rancher scrapes it, so the chart's rules look for them in the kubelet's job. The chart's
-// long-lived token goes only where a component asks for one, never over plain HTTP.
+// server verified. etcd, kube-proxy, the controller manager and the scheduler serve their metrics
+// on loopback only, as the CIS benchmark asks of the last two, so each gets a kube-rbac-proxy on
+// the node's address that takes only Prometheus's client certificate. On k3s every component runs
+// in the one process whose kubelet already serves all their metrics, as Rancher scrapes it, so the
+// chart's rules look for them in the kubelet's job. The chart's long-lived token goes only where a
+// component asks for one, never over plain HTTP.
 func monitoringValues(distribution templates.Distribution, proxy Image, m Monitoring) map[string]any {
-	verified := map[string]any{"insecureSkipVerify": false}
-	if distribution == templates.RKE2 {
-		// RKE2's serving certificates for the two name only the loopback addresses, under the
-		// server CA the cluster's root CA ConfigMap holds.
-		verified["serverName"] = "localhost"
-	}
-	secure := map[string]any{"serviceMonitor": map[string]any{"https": true, "tlsConfig": verified}}
 	values := map[string]any{
 		"kubelet":               map[string]any{"serviceMonitor": map[string]any{"tlsConfig": map[string]any{"insecureSkipVerify": false}}},
-		"kubeControllerManager": secure,
-		"kubeScheduler":         secure,
+		"kubeControllerManager": proxied(controllerMetrics, controllerMetricsPort, "https", true),
+		"kubeScheduler":         proxied(schedulerMetrics, schedulerMetricsPort, "https", true),
 		"kubeEtcd":              proxied(etcdMetrics, etcdMetricsPort, "scheme", "https"),
 		"kubeProxy":             proxied(kubeProxyMetrics, kubeProxyMetricsPort, "https", true),
 		"coreDns":               map[string]any{"serviceMonitor": map[string]any{"authorization": nil}},
@@ -214,8 +211,10 @@ func metricsManifests(distribution templates.Distribution, proxy Image) []any {
 			"isCA": true, "commonName": metricsIssuer, "duration": "87600h",
 		}),
 		issuer(metricsIssuer, map[string]any{"ca": map[string]any{"secretName": metricsIssuer + "-ca"}}),
-		certificate(metav1.NamespaceSystem, metricsProxyTLS, metricsIssuer,
-			server(etcdMetrics+"."+metav1.NamespaceSystem+".svc", kubeProxyMetrics+"."+metav1.NamespaceSystem+".svc")),
+		certificate(metav1.NamespaceSystem, metricsProxyTLS, metricsIssuer, server(
+			etcdMetrics+"."+metav1.NamespaceSystem+".svc", kubeProxyMetrics+"."+metav1.NamespaceSystem+".svc",
+			controllerMetrics+"."+metav1.NamespaceSystem+".svc", schedulerMetrics+"."+metav1.NamespaceSystem+".svc",
+		)),
 		certificate(nodeExporterNamespace, nodeExporter+"-tls", metricsIssuer, server(nodeExporter+"."+nodeExporterNamespace+".svc")),
 		certificate(monitoringAddon, metricsClientSecret, metricsIssuer, client()),
 		certificate(nodeExporterNamespace, metricsClientSecret, metricsIssuer, client()),
@@ -248,11 +247,15 @@ func metricsManifests(distribution templates.Distribution, proxy Image) []any {
 			RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "system:auth-delegator"},
 			Subjects: []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: metricsProxyAccount, Namespace: metav1.NamespaceSystem}},
 		},
-		metricsProxy(etcdMetrics, etcdMetricsPort, &controlPlaneAffinity, proxy),
+		metricsProxy(etcdMetrics, etcdMetricsPort, false, &controlPlaneAffinity, proxy),
 	}
-	// k3s's kube-proxy is in the kubelet's metrics.
+	// k3s's kube-proxy, controller manager and scheduler are in the kubelet's metrics.
 	if distribution != templates.K3s {
-		out = append(out, metricsProxy(kubeProxyMetrics, kubeProxyMetricsPort, nil, proxy))
+		out = append(out,
+			metricsProxy(kubeProxyMetrics, kubeProxyMetricsPort, false, nil, proxy),
+			metricsProxy(controllerMetrics, controllerMetricsPort, true, &controlPlaneAffinity, proxy),
+			metricsProxy(schedulerMetrics, schedulerMetricsPort, true, &controlPlaneAffinity, proxy),
+		)
 	}
 	return out
 }
@@ -282,11 +285,21 @@ var controlPlaneAffinity = corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
 // metricsProxy is a kube-rbac-proxy on every node affinity allows, in front of a component's
 // metrics on loopback. It listens on the node's address and the component's own port, so that the
 // component serving there itself would keep it from starting rather than sit beside it
-// unauthenticated. It opens no other port: probes would need one of their own on the host.
-func metricsProxy(name string, port int32, affinity *corev1.Affinity, image Image) *appsv1.DaemonSet {
+// unauthenticated. It opens no other port: probes would need one of their own on the host. A
+// component that serves HTTPS is verified against the cluster CA, under the name its serving
+// certificate carries on every distribution.
+func metricsProxy(name string, port int32, upstreamTLS bool, affinity *corev1.Affinity, image Image) *appsv1.DaemonSet {
 	p := strconv.Itoa(int(port))
 	labels := map[string]string{appName: name}
 	user, no, yes := int64(proxyUser), false, true
+	upstream := []string{"--upstream=http://127.0.0.1:" + p + "/"}
+	mounts := []corev1.VolumeMount{{Name: "tls", MountPath: "/etc/kube-rbac-proxy", ReadOnly: true}}
+	volumes := []corev1.Volume{{Name: "tls", Secret: &corev1.SecretVolumeSource{SecretName: metricsProxyTLS}}}
+	if upstreamTLS {
+		upstream = []string{"--upstream=https://localhost:" + p + "/", "--upstream-ca-file=/etc/kube-rbac-proxy-upstream/ca.crt"}
+		mounts = append(mounts, corev1.VolumeMount{Name: "upstream", MountPath: "/etc/kube-rbac-proxy-upstream", ReadOnly: true})
+		volumes = append(volumes, corev1.Volume{Name: "upstream", ConfigMap: &corev1.ConfigMapVolumeSource{Name: "kube-root-ca.crt"}})
+	}
 	return &appsv1.DaemonSet{
 		APIVersion: appsv1.SchemeGroupVersion.String(), Kind: "DaemonSet",
 		Name: name, Namespace: metav1.NamespaceSystem, Labels: labels,
@@ -305,15 +318,14 @@ func metricsProxy(name string, port int32, affinity *corev1.Affinity, image Imag
 				Containers: []corev1.Container{{
 					Name:  "kube-rbac-proxy",
 					Image: image.String(),
-					Args: []string{
+					Args: append([]string{
 						"--secure-listen-address=$(HOST_IP):" + p,
-						"--upstream=http://127.0.0.1:" + p + "/",
 						"--allow-paths=/metrics",
 						"--client-ca-file=/etc/kube-rbac-proxy/ca.crt",
 						"--tls-cert-file=/etc/kube-rbac-proxy/tls.crt",
 						"--tls-private-key-file=/etc/kube-rbac-proxy/tls.key",
 						"--tls-min-version=VersionTLS13",
-					},
+					}, upstream...),
 					Env:   []corev1.EnvVar{{Name: "HOST_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"}}}},
 					Ports: []corev1.ContainerPort{{Name: "https-metrics", ContainerPort: port}},
 					SecurityContext: &corev1.SecurityContext{
@@ -325,9 +337,9 @@ func metricsProxy(name string, port int32, affinity *corev1.Affinity, image Imag
 						Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("5m"), corev1.ResourceMemory: resource.MustParse("16Mi")},
 						Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("64Mi")},
 					},
-					VolumeMounts: []corev1.VolumeMount{{Name: "tls", MountPath: "/etc/kube-rbac-proxy", ReadOnly: true}},
+					VolumeMounts: mounts,
 				}},
-				Volumes: []corev1.Volume{{Name: "tls", Secret: &corev1.SecretVolumeSource{SecretName: metricsProxyTLS}}},
+				Volumes: volumes,
 			}},
 		},
 	}

@@ -161,12 +161,13 @@ template:
       cloudProviderName: external
       disableComponents:
         kubernetesComponents: [cloudController]
-      # Served on every address, behind their own authentication, for Prometheus to reach at the
-      # node's; RKE2 probes them on localhost, so the node's address alone would not do.
+      # Served on loopback only, RKE2's own default, with their metrics let through there without
+      # credentials, as etcd's and kube-proxy's are: the metrics proxy on the node's address
+      # authenticates Prometheus instead.
       kubeControllerManager:
-        extraArgs: [bind-address=0.0.0.0]
+        extraArgs: [authorization-always-allow-paths=/healthz,/readyz,/livez,/metrics]
       kubeScheduler:
-        extraArgs: [bind-address=0.0.0.0]
+        extraArgs: [authorization-always-allow-paths=/healthz,/readyz,/livez,/metrics]
     rolloutStrategy:
       type: RollingUpdate
       rollingUpdate:

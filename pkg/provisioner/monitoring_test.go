@@ -134,8 +134,9 @@ func TestMonitoringVerifiesEveryScrape(t *testing.T) {
 	}
 }
 
-// checkControlPlaneScrapes checks how the controller manager and kube-proxy are reached: through
-// the kubelet on k3s, or verified at their own ports elsewhere.
+// checkControlPlaneScrapes checks how the controller manager, the scheduler and kube-proxy are
+// reached: through the kubelet on k3s, or through their proxies elsewhere, which verify the two
+// that serve HTTPS against the cluster CA.
 func checkControlPlaneScrapes(t *testing.T, distribution templates.Distribution, v, objects map[string]any) {
 	t.Helper()
 	kcm := lookup[map[string]any](t, v, "kubeControllerManager")
@@ -146,12 +147,29 @@ func checkControlPlaneScrapes(t *testing.T, distribution templates.Distribution,
 		}
 		return
 	}
-	if !lookup[bool](t, kcm, "serviceMonitor", "https") || lookup[bool](t, kcm, "serviceMonitor", "tlsConfig", "insecureSkipVerify") || !kubeProxy {
-		t.Errorf("the controller manager is not verified, or kube-proxy has no proxy: %v", kcm)
+	if !kubeProxy {
+		t.Error("kube-proxy has no proxy")
 	}
-	name, ok := lookup[map[string]any](t, kcm, "serviceMonitor", "tlsConfig")["serverName"].(string)
-	if (ok && name == "localhost") != (distribution == templates.RKE2) {
-		t.Errorf("controller manager verified for %q", name)
+	for component, c := range map[string]struct {
+		proxy string
+		port  string
+	}{"kubeControllerManager": {controllerMetrics, "10257"}, "kubeScheduler": {schedulerMetrics, "10259"}} {
+		monitor := lookup[map[string]any](t, v, component, "serviceMonitor")
+		if !lookup[bool](t, monitor, "https") || monitor["authorization"] != nil ||
+			lookup[string](t, monitor, "tlsConfig", "serverName") != c.proxy+".kube-system.svc" ||
+			lookup[string](t, v, component, "service", "selector", appName) != c.proxy {
+			t.Errorf("%s is not scraped through its proxy with Prometheus's certificate: %v", component, v[component])
+		}
+		proxy := lookup[map[string]any](t, objects, "DaemonSet/"+c.proxy, "spec", "template", "spec")
+		args := lookup[[]any](t, proxy, "containers", 0, "args")
+		for _, want := range []string{"--secure-listen-address=$(HOST_IP):" + c.port, "--upstream=https://localhost:" + c.port + "/", "--upstream-ca-file=/etc/kube-rbac-proxy-upstream/ca.crt"} {
+			if !slices.Contains(args, any(want)) {
+				t.Errorf("%s's proxy lacks %s: %v", component, want, args)
+			}
+		}
+		if proxy["affinity"] == nil || lookup[string](t, proxy, "volumes", 1, "configMap", "name") != "kube-root-ca.crt" {
+			t.Errorf("%s's proxy runs beyond the control planes or trusts another CA: %v", component, proxy)
+		}
 	}
 }
 
