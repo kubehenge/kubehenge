@@ -22,12 +22,28 @@ const rke2: ClusterClass = {
     {
       name: "controlPlaneMachine",
       required: false,
-      schema: { type: "object", default: { cores: 2, memoryMiB: 4096, diskGiB: 30 } },
+      schema: {
+        type: "object",
+        default: { cores: 2, memoryMiB: 4096, diskGiB: 30 },
+        properties: {
+          cores: { type: "integer", minimum: 2 },
+          memoryMiB: { type: "integer", minimum: 4096 },
+          diskGiB: { type: "integer", minimum: 20 },
+        },
+      },
     },
     {
       name: "workerMachine",
       required: false,
-      schema: { type: "object", default: { cores: 2, memoryMiB: 4096, diskGiB: 40 } },
+      schema: {
+        type: "object",
+        default: { cores: 2, memoryMiB: 4096, diskGiB: 40 },
+        properties: {
+          cores: { type: "integer", minimum: 2 },
+          memoryMiB: { type: "integer", minimum: 4096 },
+          diskGiB: { type: "integer", minimum: 20 },
+        },
+      },
     },
     { name: "cni", required: false, schema: { type: "string", enum: ["canal", "calico", "cilium"], default: "canal" } },
     { name: "headlamp", required: false, schema: { type: "object" } },
@@ -629,6 +645,13 @@ describe("create", () => {
     expect(
       problems("Machines", { ...form, workerMachine: { cores: 1.5, memoryMiB: 4096, diskGiB: 40 } }, rke2),
     ).toHaveLength(1);
+    // The class's own minimums, which follow its distribution's sizing guide.
+    expect(
+      fieldProblems("Machines", { ...form, controlPlaneMachine: { cores: 1, memoryMiB: 4096, diskGiB: 30 } }, rke2),
+    ).toStrictEqual({ controlPlaneMachine: "A whole number of cores, at least 2." });
+    expect(
+      fieldProblems("Machines", { ...form, workerMachine: { cores: 2, memoryMiB: 2048, diskGiB: 40 } }, rke2),
+    ).toStrictEqual({ workerMachine: "Memory of at least 4096 MiB, in steps of 8." });
     expect(problems("General", { ...form, workerReplicas: 1.5 }, rke2)).toStrictEqual([
       "A whole number from 0 to 100.",
     ]);

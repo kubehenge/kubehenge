@@ -2,8 +2,8 @@ import type { JSX } from "react";
 
 import { controlPlaneSizes, maxWorkers } from "./ClusterDetail";
 import {
+  machineMinimums,
   memoryStepMiB,
-  minMemoryMiB,
   variable,
   versionExamples,
   versionLabel,
@@ -289,12 +289,14 @@ export function MachinesStep({
   form,
   set,
   shown,
+  cls,
   usableStorages,
   placed,
   haOffered,
   nodes,
   rules,
 }: StepProps & {
+  cls: ClusterClass | undefined;
   usableStorages: Storage[];
   placed: boolean;
   haOffered: boolean;
@@ -332,12 +334,14 @@ export function MachinesStep({
       <MachineFields
         label="Control plane"
         value={form.controlPlaneMachine}
+        min={machineMinimums(cls, "controlPlaneMachine")}
         error={shown("controlPlaneMachine")}
         onChange={(m) => set("controlPlaneMachine", m)}
       />
       <MachineFields
         label="Workers"
         value={form.workerMachine}
+        min={machineMinimums(cls, "workerMachine")}
         error={shown("workerMachine")}
         onChange={(m) => set("workerMachine", m)}
       />
@@ -378,11 +382,13 @@ export function IdentityStep({
 function MachineFields({
   label,
   value,
+  min,
   error,
   onChange,
 }: {
   label: string;
   value: Machine;
+  min: Machine;
   error?: string | undefined;
   onChange: (m: Machine) => void;
 }): JSX.Element {
@@ -396,7 +402,7 @@ function MachineFields({
           <input
             id={id}
             type="number"
-            min={1}
+            min={min.cores}
             value={shownNumber(value.cores)}
             onChange={(e) => onChange({ ...value, cores: typedNumber(e.target.value) })}
           />
@@ -407,7 +413,7 @@ function MachineFields({
           <input
             id={id}
             type="number"
-            min={minMemoryMiB}
+            min={min.memoryMiB}
             step={memoryStepMiB}
             value={shownNumber(value.memoryMiB)}
             onChange={(e) => onChange({ ...value, memoryMiB: typedNumber(e.target.value) })}
@@ -419,7 +425,7 @@ function MachineFields({
           <input
             id={id}
             type="number"
-            min={1}
+            min={min.diskGiB}
             value={shownNumber(value.diskGiB)}
             onChange={(e) => onChange({ ...value, diskGiB: typedNumber(e.target.value) })}
           />

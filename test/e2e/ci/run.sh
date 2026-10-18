@@ -175,12 +175,12 @@ templates_made
 # Nested vCPUs cost no memory, and with two an RKE2 control plane stopped answering its own lease
 # renewals while everything started.
 export KUBEHENGE_E2E_CONTROL_PLANE_CORES=4
-# The worker runs monitoring's Prometheus, Alertmanager and Grafana once the control plane is tainted.
-export KUBEHENGE_E2E_CONTROL_PLANE_MEMORY=2048 KUBEHENGE_E2E_WORKER_MEMORY=2048
+# The classes' least memory, so that every add-on is seen to fit in it. The worker runs monitoring's
+# Prometheus, Alertmanager and Grafana once the control plane is tainted.
+export KUBEHENGE_E2E_CONTROL_PLANE_MEMORY=4096 KUBEHENGE_E2E_WORKER_MEMORY=2048
 case "${test}" in
     rke2)
-        # RKE2's static pods request 2 GiB between them; the class's minimum.
-        export KUBEHENGE_E2E_CONTROL_PLANE_MEMORY=3072
+        export KUBEHENGE_E2E_WORKER_MEMORY=4096
         e2e e2e-workload-cluster CLASS=kubehenge-rke2 VERSION="${from}+rke2r1" UPGRADE="${to}+rke2r1"
         ;;
     k3s)
@@ -195,7 +195,7 @@ case "${test}" in
         export KUBEHENGE_E2E_DOWNSTREAM_ENDPOINT=172.20.99.25 KUBEHENGE_E2E_DOWNSTREAM_ADDRESSES=172.20.99.26-172.20.99.29
         export KUBEHENGE_E2E_RANCHER_VERSION="${from}+rke2r1" KUBEHENGE_E2E_DOWNSTREAM_VERSION="${from}+k3s1"
         export KUBEHENGE_E2E_BLOCKED_VERSION="${to}+rke2r1"
-        export KUBEHENGE_E2E_RANCHER_MEMORY=6144 KUBEHENGE_E2E_DOWNSTREAM_MEMORY=2048
+        export KUBEHENGE_E2E_RANCHER_MEMORY=6144 KUBEHENGE_E2E_DOWNSTREAM_MEMORY=4096
         e2e e2e-rancher
         ;;
     # Checked before anything was built.

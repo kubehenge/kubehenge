@@ -466,6 +466,42 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 	if err := c.Create(ctx, rancherCluster("second", `{"cores":4,"memoryMiB":8192}`)); err == nil || !strings.Contains(err.Error(), "already runs Rancher") {
 		t.Fatalf("a second Rancher: %v", err)
 	}
+
+	many := &clusterv1.Cluster{
+		Namespace: "team-a", Name: "many",
+		Spec: clusterv1.ClusterSpec{Topology: clusterv1.Topology{
+			ClassRef: clusterv1.ClusterClassRef{Name: "kubehenge-rke2", Namespace: classNamespace},
+			Version:  "v1.36.5+rke2r1",
+			Workers: clusterv1.WorkersTopology{MachineDeployments: []clusterv1.MachineDeploymentTopology{
+				{Class: "worker", Name: "md-0", Replicas: new(int32(300))},
+			}},
+		}},
+	}
+	if err := c.Create(ctx, many); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "with 300 workers need at least 4 vCPUs and 8192 MiB") {
+		t.Fatalf("300 workers on the class's default control planes: %v", err)
+	}
+
+	// Each class's sizing guide starts at the least its control-plane machines may be.
+	for _, name := range []string{"kubehenge-kubeadm", "kubehenge-k3s", "kubehenge-rke2"} {
+		class := &clusterv1.ClusterClass{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: classNamespace, Name: name}, class); err != nil {
+			t.Fatal(err)
+		}
+		need, _, err := controlPlaneFit(&clusterv1.Cluster{}, class)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var schema clusterv1.JSONSchemaProps
+		for _, v := range class.Spec.Variables {
+			if v.Name == "controlPlaneMachine" {
+				schema = v.Schema.OpenAPIV3Schema
+			}
+		}
+		if need.Cores == 0 || int64(need.Cores) != *schema.Properties["cores"].Minimum || int64(need.MemoryMiB) != *schema.Properties["memoryMiB"].Minimum {
+			t.Errorf("%s: its guide starts at %d vCPUs and %d MiB, its control-plane machines at %v and %v",
+				name, need.Cores, need.MemoryMiB, *schema.Properties["cores"].Minimum, *schema.Properties["memoryMiB"].Minimum)
+		}
+	}
 }
 
 // The end-to-end tests shorten the workers' health check for their own cluster, so the classes' own

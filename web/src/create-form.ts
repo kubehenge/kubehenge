@@ -91,6 +91,16 @@ function machineDefaults(s: Schema | undefined): Machine {
   };
 }
 
+/** machineMinimums is the least a class lets one of its machine variables give a node. */
+export function machineMinimums(c: ClusterClass | undefined, key: "controlPlaneMachine" | "workerMachine"): Machine {
+  const schema = variable(c, key)?.properties;
+  return {
+    cores: schema?.["cores"]?.minimum ?? 1,
+    memoryMiB: schema?.["memoryMiB"]?.minimum ?? minMemoryMiB,
+    diskGiB: schema?.["diskGiB"]?.minimum ?? 1,
+  };
+}
+
 /** newForm is the wizard before anything is chosen. */
 export const newForm = (): Form => ({
   name: "",
@@ -428,21 +438,19 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
     ["controlPlaneMachine", form.controlPlaneMachine],
     ["workerMachine", form.workerMachine],
   ] as const) {
-    const schema = variable(c, key)?.properties;
-    const minMemory = schema?.["memoryMiB"]?.minimum ?? minMemoryMiB;
-    const minDisk = schema?.["diskGiB"]?.minimum ?? 1;
-    if (!whole(m.cores, 1)) {
-      p[key] = "A whole number of cores, at least one.";
+    const min = machineMinimums(c, key);
+    if (!whole(m.cores, min.cores)) {
+      p[key] = `A whole number of cores, at least ${min.cores}.`;
     } else if (
       form.rancherInstall &&
       m.cores < rancherMinimumCores &&
       (key === "controlPlaneMachine" || form.workerReplicas > 0)
     ) {
       p[key] = `At least ${rancherMinimumCores} cores, which Rancher needs on every node.`;
-    } else if (!whole(m.memoryMiB, minMemory) || m.memoryMiB % memoryStepMiB !== 0) {
-      p[key] = `Memory of at least ${minMemory} MiB, in steps of ${memoryStepMiB}.`;
-    } else if (!whole(m.diskGiB, minDisk)) {
-      p[key] = `A whole number of GiB of disk, at least ${minDisk}.`;
+    } else if (!whole(m.memoryMiB, min.memoryMiB) || m.memoryMiB % memoryStepMiB !== 0) {
+      p[key] = `Memory of at least ${min.memoryMiB} MiB, in steps of ${memoryStepMiB}.`;
+    } else if (!whole(m.diskGiB, min.diskGiB)) {
+      p[key] = `A whole number of GiB of disk, at least ${min.diskGiB}.`;
     }
   }
   return p;

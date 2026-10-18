@@ -472,7 +472,10 @@ func hooksFor(t *testing.T, objs ...client.Object) (*Hooks, client.Client) {
 	}
 	class := &clusterv1.ClusterClass{
 		Name: "kubehenge-rke2", Namespace: "kubehenge-system",
-		Annotations: map[string]string{DefaultPodsAnnotation: "10.42.0.0/16", DefaultServicesAnnotation: "10.43.0.0/16"},
+		Annotations: map[string]string{
+			DefaultPodsAnnotation: "10.42.0.0/16", DefaultServicesAnnotation: "10.43.0.0/16",
+			ControlPlaneSizesAnnotation: rke2Sizes,
+		},
 		Spec: clusterv1.ClusterClassSpec{Variables: []clusterv1.ClusterClassVariable{
 			machineVariable("controlPlaneMachine"), machineVariable("workerMachine"),
 		}},

@@ -73,7 +73,7 @@ default:
 properties:
   cores:
     type: integer
-    minimum: 1
+    minimum: {{ .minCores }}
     default: {{ .cores }}
   memoryMiB:
     type: integer
@@ -88,10 +88,11 @@ properties:
 {{- end -}}
 
 {{/*
-Call with (dict "controlPlaneDiskGiB" <n> "workerDiskGiB" <n> "minDiskGiB" <n> "controlPlaneMinMemoryMiB" <n>).
-The control-plane minimum is the least a distribution's control plane starts in: below it the
-kubelet refuses its own static pods (their memory requests exceed the node's memory) or the
-distribution's documented minimum is not met.
+Call with (dict "controlPlaneDiskGiB" <n> "workerDiskGiB" <n> "minDiskGiB" <n> "workerMinCores" <n> "workerMinMemoryMiB" <n>).
+A control plane's minimum is the first row of the k3s and RKE2 server sizing guides, 2 vCPUs and
+4 GiB; kubeadm, which documents no sizes past its 2 GiB to start, follows RKE2's, whose servers run
+the same components. On less, an add-on's install crowds out the API server and etcd. A worker's is
+never below its distribution's documented minimum for a node.
 */}}
 {{- define "kubehenge.proxmoxVariables" -}}
 - name: controlPlaneEndpoint
@@ -174,12 +175,12 @@ distribution's documented minimum is not met.
   required: false
   schema:
     openAPIV3Schema:
-      {{- include "kubehenge.machineSchema" (dict "cores" 2 "memoryMiB" 4096 "minMemoryMiB" .controlPlaneMinMemoryMiB "diskGiB" .controlPlaneDiskGiB "minDiskGiB" .minDiskGiB) | nindent 6 }}
+      {{- include "kubehenge.machineSchema" (dict "cores" 2 "minCores" 2 "memoryMiB" 4096 "minMemoryMiB" 4096 "diskGiB" .controlPlaneDiskGiB "minDiskGiB" .minDiskGiB) | nindent 6 }}
 - name: workerMachine
   required: false
   schema:
     openAPIV3Schema:
-      {{- include "kubehenge.machineSchema" (dict "cores" 2 "memoryMiB" 4096 "minMemoryMiB" 1024 "diskGiB" .workerDiskGiB "minDiskGiB" .minDiskGiB) | nindent 6 }}
+      {{- include "kubehenge.machineSchema" (dict "cores" 2 "minCores" .workerMinCores "memoryMiB" 4096 "minMemoryMiB" .workerMinMemoryMiB "diskGiB" .workerDiskGiB "minDiskGiB" .minDiskGiB) | nindent 6 }}
 {{- end -}}
 
 {{/*

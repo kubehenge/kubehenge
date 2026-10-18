@@ -13,9 +13,9 @@ import (
 
 // ClusterValidator answers the API server for Kubehenge's clusters as they are created and changed,
 // so that what BeforeClusterCreate would refuse later is refused at once, and a change made after
-// creation is held to the same: Rancher switched on beside another, or on nodes too small for it,
-// and a Rancher cluster's nodes made smaller than it needs. A cluster that already fell short before
-// a change is not held to it for unrelated edits.
+// creation is held to the same: control planes too small for the cluster's workers, Rancher switched
+// on beside another, or on nodes too small for it, and a Rancher cluster's nodes made smaller than it
+// needs. A cluster that already fell short before a change is not held to it for unrelated edits.
 type ClusterValidator struct {
 	Hooks *Hooks
 }
@@ -42,7 +42,7 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 		return nil
 	}
 	r, err := rancherOf(c)
-	if err != nil || !r.Install {
+	if err != nil {
 		return err
 	}
 	class := &clusterv1.ClusterClass{}
@@ -53,6 +53,24 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 		}
 		return fmt.Errorf("reading the cluster's ClusterClass: %w", err)
 	}
+	var errs field.ErrorList
+	topology := field.NewPath("spec", "topology")
+	if err := checkControlPlaneSize(old, c, class); err != nil {
+		errs = append(errs, field.Forbidden(topology, err.Error()))
+	}
+	if r.Install {
+		errs = append(errs, v.validateRancher(ctx, old, c, class)...)
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	// Invalid, not the plain denial a validator's error becomes, so that the interface shows the
+	// reason as it does the API server's own validation.
+	return apierrors.NewInvalid(clusterv1.GroupVersion.WithKind("Cluster").GroupKind(), c.Name, errs) //nolint:wrapcheck // made here, not passed on
+}
+
+// validateRancher holds a cluster that installs Rancher to what Rancher needs.
+func (v *ClusterValidator) validateRancher(ctx context.Context, old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
 	switchedOn := old == nil
 	if old != nil {
 		was, err := rancherOf(old)
@@ -68,10 +86,5 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 	if err := checkRancherNodes(c, class); err != nil && (switchedOn || checkRancherNodes(old, class) == nil) {
 		errs = append(errs, field.Forbidden(topology, err.Error()))
 	}
-	if len(errs) == 0 {
-		return nil
-	}
-	// Invalid, not the plain denial a validator's error becomes, so that the interface shows the
-	// reason as it does the API server's own validation.
-	return apierrors.NewInvalid(clusterv1.GroupVersion.WithKind("Cluster").GroupKind(), c.Name, errs) //nolint:wrapcheck // made here, not passed on
+	return errs
 }

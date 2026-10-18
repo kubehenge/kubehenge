@@ -199,6 +199,7 @@ export function CreateCluster({ canTrust }: { canTrust?: boolean | undefined }):
               form={form}
               set={set}
               shown={shown}
+              cls={cls}
               usableStorages={usableStorages}
               placed={variable(cls, "allowedNodes") !== undefined}
               haOffered={haOffered}
