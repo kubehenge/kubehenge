@@ -16,13 +16,15 @@ kube_bench_image=docker.io/aquasec/kube-bench:v0.16.0@sha256:75506f222d1eb6ce2a7
 kube_bench_commit=e278a5915a982f2756026de6e2f9ca77077ef9f9
 security_scan_image=docker.io/rancher/security-scan:v0.10.2@sha256:2c7e270a01771d97b46842149033e272394351fa6a0729598d62d9a2d8eee9e8
 
-# The checks a cluster fails by design, each with why.
-case ${distribution} in
-    # 1.1.12: kubeadm runs etcd as root, so its data belongs to root, not to an etcd user. Kubernetes
-    # has no supported way to run kubeadm's etcd as another user.
-    kubeadm) cis_exceptions='["1.1.12"]' ;;
-    *) cis_exceptions='[]' ;;
-esac
+# cis_exceptions: the checks the cluster fails by design, each with why, as a JSON list.
+cis_exceptions() {
+    case ${distribution} in
+        # 1.1.12: kubeadm runs etcd as root, so its data belongs to root, not to an etcd user.
+        # Kubernetes has no supported way to run kubeadm's etcd as another user.
+        kubeadm) echo '["1.1.12"]' ;;
+        *) echo '[]' ;;
+    esac
+}
 
 # cis_job <name> <control plane: true|false> <targets>: a kube-bench Job on a node of that kind,
 # reading the host's configuration through read-only mounts and its processes through its PID
@@ -103,6 +105,7 @@ cis_benchmark() {
     cis_job cis-control-plane true master,controlplane,etcd,node > "${work}/cis-control-plane.yaml"
     cis_job cis-worker false node > "${work}/cis-worker.yaml"
     wl apply -f "${work}/cis-control-plane.yaml" -f "${work}/cis-worker.yaml"
+    exceptions=$(cis_exceptions)
     for job in cis-control-plane cis-worker; do
         if ! wl -n e2e-cis wait --for=condition=Complete "job/${job}" --timeout=10m; then
             wl -n e2e-cis logs "job/${job}" >&2
@@ -112,7 +115,7 @@ cis_benchmark() {
         wl -n e2e-cis logs "job/${job}" | grep '^{' > "${work}/${job}.json" ||
             fail "kube-bench reported nothing on the ${job#cis-}"
         jq -r '.Controls[] | "\(.text): \(.total_pass) passed, \(.total_fail) failed, \(.total_warn) to check by hand"' "${work}/${job}.json"
-        failed=$(jq -r --argjson except "${cis_exceptions}" \
+        failed=$(jq -r --argjson except "${exceptions}" \
             '[.Controls[].tests[].results[] | select(.status == "FAIL" and (.test_number | IN($except[]) | not)) | "\(.test_number) \(.test_desc)"] | .[]' \
             "${work}/${job}.json")
         [ -z "${failed}" ] || fail "the ${job#cis-} fails the CIS benchmark:
