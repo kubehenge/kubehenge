@@ -38,7 +38,12 @@ func TestParseImage(t *testing.T) {
 func monitoringProxies(t *testing.T, distribution templates.Distribution, m Monitoring) (map[string]map[string]any, map[string]string) {
 	t.Helper()
 	m.Enabled = true
-	proxies, err := helmChartProxies(cluster(), &testCharts, distribution, "local-lvm", CNI{}, &Addons{Monitoring: m})
+	return proxiesOf(t, distribution, &Addons{Monitoring: m})
+}
+
+func proxiesOf(t *testing.T, distribution templates.Distribution, addons *Addons) (map[string]map[string]any, map[string]string) {
+	t.Helper()
+	proxies, err := helmChartProxies(cluster(), &testCharts, distribution, "local-lvm", CNI{}, addons)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,6 +174,37 @@ func checkControlPlaneScrapes(t *testing.T, distribution templates.Distribution,
 		}
 		if proxy["affinity"] == nil || lookup[string](t, proxy, "volumes", 1, "configMap", "name") != "kube-root-ca.crt" {
 			t.Errorf("%s's proxy runs beyond the control planes or trusts another CA: %v", component, proxy)
+		}
+	}
+}
+
+func TestMonitoringReachesCoreDNSPastRKE2sCISPolicies(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		distribution templates.Distribution
+		cis, policy  bool
+	}{
+		{templates.RKE2, true, true},
+		// Elsewhere no policy isolates CoreDNS, and this one would.
+		{templates.RKE2, false, false},
+		{templates.Kubeadm, true, false},
+		{templates.K3s, true, false},
+	} {
+		values, _ := proxiesOf(t, c.distribution, &Addons{Monitoring: Monitoring{Enabled: true}, CIS: c.cis})
+		policy, ok := manifests(t, values["web-monitoring"])["NetworkPolicy/"+coreDNSMetricsPolicy].(map[string]any)
+		if ok != c.policy {
+			t.Errorf("%s, cis %t: policy %t", c.distribution, c.cis, ok)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		rule := lookup[map[string]any](t, policy, "spec", "ingress", 0)
+		if lookup[string](t, policy, "metadata", "namespace") != "kube-system" ||
+			lookup[string](t, policy, "spec", "podSelector", "matchLabels", "k8s-app") != "kube-dns" ||
+			lookup[string](t, rule, "from", 0, "namespaceSelector", "matchLabels", "kubernetes.io/metadata.name") != monitoringAddon ||
+			lookup[float64](t, rule, "ports", 0, "port") != coreDNSMetricsPort {
+			t.Errorf("policy %v", policy)
 		}
 	}
 }

@@ -93,7 +93,7 @@ Add-ons are Helm charts installed per cluster by the Cluster API Add-on Provider
 | Headlamp | Kubernetes web UI per cluster | first |
 | Monitoring | Prometheus, Alertmanager and Grafana per cluster, with kube-prometheus-stack's dashboards and alerts | first |
 | Pod security | a Pod Security Standard level enforced by Pod Security Admission, by Kyverno's policies, or both | first |
-| CIS hardening | each distribution's CIS profile (RKE2's CIS mode, kubeadm hardening; Talos is hardened by default) | next |
+| CIS hardening | the rest of the CIS Kubernetes Benchmark, beyond the baseline every cluster gets, with RKE2's own CIS profile | first |
 | Istio | service mesh per cluster | next |
 | Cilium Cluster Mesh | connects the pod networks of clusters that run Cilium | next |
 
@@ -116,6 +116,23 @@ Prometheus keeps ten days of metrics on a 20 GiB volume from the cluster's defau
 - **Kyverno**: `kyverno` installs Kyverno and its Pod Security Standards policies into the `kyverno` namespace. They hold every namespace to the level whatever its labels say, which Pod Security Admission cannot, since anyone who may label a namespace may lift its level; they deny a pod when Kyverno cannot be reached, and Kyverno's policy reports list what falls short. Switched off, the policies go first, then Kyverno.
 
 Both leave alone the namespaces of the components that need the host's network, file system or privileges: `kube-system` (the cloud controller manager, the CSI plugin, Cilium, kube-vip and the distributions' own components), Calico's, node-exporter's and those of Rancher's agents and controllers. The chart's `podSecurityExempt` lists them. A workload of one's own that needs more than the level gets its namespace labelled, and, with Kyverno, a PolicyException in the `kyverno` namespace, the only one Kyverno takes exceptions from, so that only those who may write there can grant one.
+
+**The security baseline** of every cluster is the part of the [CIS Kubernetes Benchmark](https://www.cisecurity.org/benchmark/kubernetes) that costs workloads nothing:
+
+- **Audit:** the API server logs who did what to which object, at the `Metadata` level, without request or response bodies, which would put Secrets and tokens into the log, and without health checks, leases and events. It keeps a month of it, in ten files of 100 MB at most.
+- **Secrets encrypted in etcd:** RKE2 and k3s encrypt them themselves; on kubeadm, Kubehenge's controller makes a secretbox key once for the cluster, in the Secret `<cluster>-encryption` beside the Cluster, which every control-plane node gets. It is never replaced, since Secrets written under one key cannot be read with another.
+- **Requests without credentials** reach only the API server's health checks and, on kubeadm, the `cluster-info` ConfigMap that `kubeadm join` reads before it has any; RKE2 and k3s refuse them all.
+- **The API server** limits the rate of events a namespace, and the cluster as a whole, may write (EventRateLimit), does not extend projected ServiceAccount tokens past their hour, and has profiling off, as do the controller manager and the scheduler, which serve on loopback only ([monitoring](#add-ons) reaches them through proxies). It and the kubelets offer only forward-secret TLS 1.2 ciphers with authenticated encryption.
+- **Nodes** run with the kernel settings the kubelet expects, and the kubelet refuses to start on others rather than change them; kubeadm's kubelet configuration and unit files are readable by root alone.
+
+**CIS hardening** (`cis: true`), chosen when a cluster is created and fixed after, adds what costs workloads something:
+
+- Pod Security Admission enforces `restricted`, whatever `podSecurity` says; the exempt namespaces stay exempt.
+- Every container that sets no seccomp profile of its own runs under the container runtime's default.
+- Exec, attach and port-forward sessions end after five idle minutes.
+- RKE2 runs its own CIS profile: etcd runs as a user of its own, and the pods in `kube-system`, `kube-public` and `default` take connections only from their own namespace, DNS and a few of RKE2's own services aside. With monitoring on, Kubehenge's controller lets Prometheus through to CoreDNS's metrics.
+
+The end-to-end tests run [kube-bench](https://github.com/aquasecurity/kube-bench) on a hardened cluster of each distribution, against the CIS Kubernetes Benchmark 2.0 for kubeadm and Rancher's own benchmarks for RKE2 and k3s, and fail on every failed check but one: kubeadm runs etcd as root, so its data belongs to root (1.1.12), and Kubernetes has no supported way to run kubeadm's etcd as another user. The benchmark's policies section is the cluster owner's, since it judges what runs in the cluster rather than how the cluster is built.
 
 **Rancher** (`rancher: {install: true, hostname: …}`) goes into one cluster Kubehenge creates for it, never into the management cluster, together with cert-manager; Rancher makes its own CA, and its server URL is fixed to `hostname`, which must resolve to that cluster's ingress controller for people and for every registered cluster. Kubehenge's controller registers every other cluster with it once the cluster is available, unless the cluster sets `register: false`:
 

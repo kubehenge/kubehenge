@@ -30,6 +30,11 @@ const (
 	certManagerAddon = "cert-manager"
 	// rancherNamespace is the namespace Rancher's chart has to be installed in.
 	rancherNamespace = "cattle-system"
+	// cisVariable hardens the cluster to the CIS benchmark beyond what every cluster gets.
+	cisVariable = "cis"
+
+	// apiVersionKey is a manifest's own, in those written as maps.
+	apiVersionKey = "apiVersion"
 
 	// The CNIs Kubehenge installs, as the cni variable names them.
 	cniCilium = "cilium"
@@ -65,6 +70,8 @@ type Addons struct {
 	Rancher     Rancher
 	Monitoring  Monitoring
 	PodSecurity PodSecurity
+	// CIS is the cluster's cis variable, which the add-ons make room for.
+	CIS bool
 }
 
 // addonsOf reads a cluster's add-on variables.
@@ -78,6 +85,9 @@ func addonsOf(cluster *clusterv1.Cluster) (Addons, error) {
 		return a, err
 	}
 	if a.PodSecurity, _, err = optionalVariable[PodSecurity](cluster, podSecurityVariable); err != nil {
+		return a, err
+	}
+	if a.CIS, _, err = optionalVariable[bool](cluster, cisVariable); err != nil {
 		return a, err
 	}
 	a.Rancher, err = rancherOf(cluster)
@@ -273,7 +283,7 @@ func calicoResources(cluster *clusterv1.Cluster, cni CNI) (*corev1.Secret, error
 	}
 	var manifest []byte
 	for _, r := range resources {
-		r["apiVersion"] = "operator.tigera.io/v1"
+		r[apiVersionKey] = "operator.tigera.io/v1"
 		r["metadata"] = map[string]any{"name": "default"}
 		doc, err := yaml.Marshal(r)
 		if err != nil {
@@ -465,7 +475,7 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 	if addons.Monitoring.Enabled {
 		wanted = append(wanted, proxy{
 			monitoringAddon, monitoringRelease, monitoringAddon, charts.Monitoring,
-			monitoringValues(distribution, charts.KubeRBACProxy, addons.Monitoring),
+			monitoringValues(distribution, charts.KubeRBACProxy, addons),
 		})
 	}
 	if addons.PodSecurity.kyvernoOn() {

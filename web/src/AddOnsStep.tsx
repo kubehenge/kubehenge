@@ -3,7 +3,7 @@ import type { JSX } from "react";
 import { modeChoices, upgradeModes } from "./ClusterUpgrades";
 import { rancherMinimumCores, variable } from "./create-form";
 import type { StepProps } from "./CreateSteps";
-import { PodSecurityFields } from "./PodSecurity";
+import { PodSecurityFields, cisHint } from "./PodSecurity";
 import type { ClusterClass } from "./types";
 import { Field, browserZone, registerHint } from "./ui";
 import { oneOf } from "./values";
@@ -70,10 +70,30 @@ export function AddOnsStep({
           )}
         </Field>
       )}
+      {variable(cls, "cis") && (
+        <>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={form.cis}
+              aria-describedby="cis-hint"
+              onChange={(e) => set("cis", e.target.checked)}
+            />{" "}
+            Harden to the CIS Kubernetes Benchmark
+          </label>
+          <p className="hint" id="cis-hint">
+            {cisHint}
+          </p>
+        </>
+      )}
       {variable(cls, "podSecurity") && (
         <fieldset className="group">
           <legend>Pod security</legend>
-          <PodSecurityFields value={form.podSecurity} onChange={(p) => set("podSecurity", p)} />
+          <PodSecurityFields
+            value={form.podSecurity}
+            onChange={(p) => set("podSecurity", p)}
+            cis={form.cis && variable(cls, "cis") !== undefined}
+          />
         </fieldset>
       )}
       <label className="check">

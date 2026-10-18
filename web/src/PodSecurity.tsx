@@ -34,6 +34,17 @@ export function podSecurityOf(v: unknown): PodSecurity {
   };
 }
 
+export const cisText = (on: boolean): string => (on ? "On" : "Off");
+
+/** cisHint says what CIS hardening costs workloads, beyond the baseline every cluster gets. */
+export const cisHint =
+  "Beyond what every cluster gets: restricted pods outside the exempt namespaces, the runtime's seccomp profile for every container that asks for no other, and exec, attach and port-forward sessions that end after five idle minutes. RKE2 also runs its own CIS profile, under which pods in kube-system, kube-public and default take connections only from their own namespace. Fixed once the cluster exists.";
+
+/** enforced is what holds a cluster's pods: CIS hardening has Pod Security Admission enforce restricted, whatever was chosen. */
+export function enforced(p: PodSecurity, cis: boolean): PodSecurity {
+  return cis ? { ...p, admission: "restricted" } : p;
+}
+
 /** podSecurityVariable is the variable for a choice, or undefined for the defaults, which need none. */
 export function podSecurityVariable(p: PodSecurity): Partial<PodSecurity> | undefined {
   const v: Partial<PodSecurity> = {};
@@ -60,13 +71,15 @@ export function podSecurityText(p: PodSecurity): string {
   return parts.length > 0 ? parts.join(", ") : "Not enforced";
 }
 
-/** PodSecurityFields chooses the level Pod Security Admission and Kyverno each enforce. */
+/** PodSecurityFields chooses the level Pod Security Admission and Kyverno each enforce; under CIS hardening, Kyverno's alone. */
 export function PodSecurityFields({
   value,
   onChange,
+  cis = false,
 }: {
   value: PodSecurity;
   onChange: (p: PodSecurity) => void;
+  cis?: boolean;
 }): JSX.Element {
   // Non-breaking hyphens keep the namespace names whole where the text wraps.
   return (
@@ -78,12 +91,17 @@ export function PodSecurityFields({
       </p>
       <Field
         label="Pod Security Admission"
-        hint="Kubernetes' own check, for every namespace that labels no level of its own. Below restricted, pods short of restricted are warned about. Changing it replaces the control-plane nodes one at a time."
+        hint={
+          cis
+            ? "Kubernetes' own check, for every namespace that labels no level of its own. Restricted, as CIS hardening has it."
+            : "Kubernetes' own check, for every namespace that labels no level of its own. Below restricted, pods short of restricted are warned about. Changing it replaces the control-plane nodes one at a time."
+        }
       >
         {(id) => (
           <select
             id={id}
-            value={value.admission}
+            value={enforced(value, cis).admission}
+            disabled={cis}
             onChange={(e) => {
               if (oneOf(admissionLevels, e.target.value)) {
                 onChange({ ...value, admission: e.target.value });

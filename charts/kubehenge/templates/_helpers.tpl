@@ -372,22 +372,63 @@ x-kubernetes-validations:
 
 {{/*
 The structured authentication configuration as a bootstrap file at path: a template Cluster API
-renders with the cluster's variables. Call with (dict "root" $ "path" …).
+renders with the cluster's variables. With anonymous, requests without credentials reach the few
+paths kubeadm needs them to; without, none. Call with (dict "root" $ "path" … "anonymous" true|false).
 */}}
 {{- define "kubehenge.oidcFile" -}}
 path: {{ .path }}
+{{ printf "{{- $anonymous := %t }}" .anonymous }}
 {{ .root.Files.Get "files/authentication-config.tpl" }}
 {{- end -}}
 
 {{/*
-Pod Security Admission's configuration as a bootstrap file at path, a template Cluster API renders
-with the cluster's variables, the chart's exempt namespaces written into it. Call with
+The API server's admission configuration as a bootstrap file at path, a template Cluster API
+renders with the cluster's variables, the chart's exempt namespaces written into it. Call with
 (dict "root" $ "path" …).
 */}}
-{{- define "kubehenge.podSecurityFile" -}}
+{{- define "kubehenge.admissionFile" -}}
 path: {{ .path }}
 {{ printf "{{- $exempt := list %s }}" (include "kubehenge.quotedList" .root.Values.podSecurityExempt) }}
-{{ .root.Files.Get "files/pod-security.tpl" }}
+{{ .root.Files.Get "files/admission.tpl" }}
+{{- end -}}
+
+{{/*
+The kernel settings every node runs with. The kubelet checks them and refuses to start when they
+differ (protect-kernel-defaults), rather than change the host behind its back: the four the CIS
+hardening guides set, and the two the kubelet itself would. A node whose kernel panics or oopses
+restarts after ten seconds instead of running on half broken; its machine health check and
+Proxmox VE HA take it from there. Applied before the distribution starts with sysctl --system.
+*/}}
+{{- define "kubehenge.sysctlFile" -}}
+- path: /etc/sysctl.d/90-kubehenge.conf
+  owner: root:root
+  permissions: "0644"
+  content: |
+    vm.panic_on_oom=0
+    vm.overcommit_memory=1
+    kernel.panic=10
+    kernel.panic_on_oops=1
+    kernel.keys.root_maxkeys=1000000
+    kernel.keys.root_maxbytes=25000000
+{{- end -}}
+
+{{/*
+The API server's audit policy as a bootstrap file at path, the same for every distribution.
+*/}}
+{{- define "kubehenge.auditPolicyFile" -}}
+- path: {{ .path }}
+  owner: root:root
+  permissions: "0600"
+  content: |
+    {{- .root.Files.Get "files/audit-policy.yaml" | nindent 4 }}
+{{- end -}}
+
+{{/*
+The TLS 1.2 cipher suites the kubelets and kubeadm's API server offer: forward secret, with
+authenticated encryption only. TLS 1.3 chooses its own.
+*/}}
+{{- define "kubehenge.tlsCipherSuites" -}}
+TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
 {{- end -}}
 
 {{- define "kubehenge.quotedList" -}}
@@ -398,6 +439,43 @@ path: {{ .path }}
 
 {{- define "kubehenge.oidcEnabled" -}}
 {{ "{{ if .oidc }}true{{ end }}" | quote }}
+{{- end -}}
+
+{{/*
+Hardening to the CIS Kubernetes Benchmark beyond the baseline every cluster gets, where it costs
+workloads something: restricted pods, the runtime's seccomp profile for every container, and
+streaming sessions that end when idle. Each class adds its distribution's own on top.
+*/}}
+{{- define "kubehenge.cisVariable" -}}
+- name: cis
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: boolean
+      default: false
+      description: >-
+        Harden the cluster to the CIS Kubernetes Benchmark beyond what every cluster gets: Pod
+        Security Admission enforces restricted outside the exempt namespaces, every container
+        runs under the runtime's default seccomp profile unless it asks for another, and exec,
+        attach and port-forward sessions end after five idle minutes. RKE2 also runs its own CIS
+        profile, under which pods in kube-system, kube-public and default take connections only
+        from their own namespace, DNS and a few of RKE2's own services aside. Fixed once the
+        cluster exists.
+      x-kubernetes-validations:
+        - rule: self == oldSelf
+          message: CIS hardening is chosen when the cluster is created and cannot be changed
+{{- end -}}
+
+{{- define "kubehenge.cisEnabled" -}}
+{{ "{{ if .cis }}true{{ end }}" | quote }}
+{{- end -}}
+
+{{/*
+The kubelet settings cis adds, as kubelet flags.
+*/}}
+{{- define "kubehenge.cisKubeletArgs" -}}
+- seccomp-default=true
+- streaming-connection-idle-timeout=5m
 {{- end -}}
 
 {{/*

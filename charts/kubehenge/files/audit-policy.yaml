@@ -1,0 +1,19 @@
+---
+apiVersion: audit.k8s.io/v1
+kind: Policy
+# No request or response bodies: they would put Secrets, tokens and every object's contents into
+# the log. Who did what to which object, and the answer's code, are kept for everything else.
+omitStages: [RequestReceived]
+rules:
+  # Checks and renewals every component makes all the time, which would drown the rest.
+  - level: None
+    nonResourceURLs: ["/healthz*", "/livez*", "/readyz*", "/version", "/metrics"]
+  - level: None
+    resources:
+      - group: coordination.k8s.io
+        resources: [leases]
+      - group: ""
+        resources: [events]
+      - group: events.k8s.io
+        resources: [events]
+  - level: Metadata

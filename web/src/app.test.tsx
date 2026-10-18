@@ -33,6 +33,7 @@ const rke2: ClusterClass = {
     { name: "headlamp", required: false, schema: { type: "object" } },
     { name: "monitoring", required: false, schema: { type: "object" } },
     { name: "podSecurity", required: false, schema: { type: "object" } },
+    { name: "cis", required: false, schema: { type: "boolean", default: false } },
     { name: "rancher", required: false, schema: { type: "object" } },
     {
       name: "oidc",
@@ -473,6 +474,7 @@ describe("create", () => {
     monitoring: true,
     grafanaHostname: "grafana.example",
     podSecurity: { admission: "restricted", kyverno: "off" },
+    cis: false,
     rancherInstall: false,
     rancherHostname: "",
     rancherRegister: false,
@@ -526,6 +528,14 @@ describe("create", () => {
     });
     const defaults = { ...form, podSecurity: { admission: "privileged" as const, kyverno: "off" as const } };
     expect(request(defaults, rke2).variables).not.toHaveProperty("podSecurity");
+    expect(request(defaults, rke2).variables).not.toHaveProperty("cis");
+    // CIS hardening has admission enforce restricted, and the variable says so.
+    expect(request({ ...defaults, cis: true }, rke2).variables).toMatchObject({
+      cis: true,
+      podSecurity: { admission: "restricted" },
+    });
+    const unhardened = { ...rke2, variables: rke2.variables.filter((v) => v.name !== "cis") };
+    expect(request({ ...defaults, cis: true }, unhardened).variables).not.toHaveProperty("podSecurity");
   });
 
   it("sums the form up as the Confirm step shows it", () => {
@@ -538,12 +548,21 @@ describe("create", () => {
       "Worker machines": "4 cores, 8 GiB memory, 40 GiB disk",
       Headlamp: "On",
       Monitoring: "On, Grafana at grafana.example",
+      "CIS hardening": "Off",
       "Pod security": "Restricted by Pod Security Admission",
       Rancher: "Not registered",
     });
     expect(
       Object.fromEntries(summary({ ...form, podSecurity: { admission: "baseline", kyverno: "restricted" } }, rke2)),
     ).toMatchObject({ "Pod security": "Baseline by Pod Security Admission, Restricted by Kyverno" });
+    expect(
+      Object.fromEntries(
+        summary({ ...form, cis: true, podSecurity: { admission: "baseline", kyverno: "restricted" } }, rke2),
+      ),
+    ).toMatchObject({
+      "CIS hardening": "On",
+      "Pod security": "Restricted by Pod Security Admission, Restricted by Kyverno",
+    });
     expect(
       Object.fromEntries(summary({ ...form, vlan: "30", rancherInstall: true, rancherHostname: "r.example" }, rke2)),
     ).toMatchObject({

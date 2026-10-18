@@ -7,9 +7,11 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 	"github.com/kubehenge/kubehenge/pkg/templates"
@@ -49,6 +51,11 @@ const (
 	kubeProxyMetricsPort  = 10249
 	controllerMetricsPort = 10257
 	schedulerMetricsPort  = 10259
+	coreDNSMetricsPort    = 9153
+
+	coreDNSMetricsPolicy = "kubehenge-coredns-metrics"
+	// prometheus names Prometheus in the charts' values, and its pods by their app label.
+	prometheus = "prometheus"
 
 	// The kube-rbac-proxy image's own user.
 	proxyUser = 65532
@@ -98,7 +105,8 @@ func (i Image) String() string {
 // in the one process whose kubelet already serves all their metrics, as Rancher scrapes it, so the
 // chart's rules look for them in the kubelet's job. The chart's long-lived token goes only where a
 // component asks for one, never over plain HTTP.
-func monitoringValues(distribution templates.Distribution, proxy Image, m Monitoring) map[string]any {
+func monitoringValues(distribution templates.Distribution, proxy Image, addons *Addons) map[string]any {
+	m := addons.Monitoring
 	values := map[string]any{
 		"kubelet":               map[string]any{"serviceMonitor": map[string]any{"tlsConfig": map[string]any{"insecureSkipVerify": false}}},
 		"kubeControllerManager": proxied(controllerMetrics, controllerMetricsPort, "https", true),
@@ -117,19 +125,19 @@ func monitoringValues(distribution templates.Distribution, proxy Image, m Monito
 				"containerSecurityContext": map[string]any{"allowPrivilegeEscalation": false, "readOnlyRootFilesystem": true, "capabilities": map[string]any{"drop": []any{"ALL"}}},
 			},
 			"tlsSecret": map[string]any{"enabled": true, "secretName": nodeExporter + "-tls", "caItem": "ca.crt"},
-			"prometheus": map[string]any{"monitor": map[string]any{
+			prometheus: map[string]any{"monitor": map[string]any{
 				"scheme": "https", "tlsConfig": clientTLS(nodeExporter + "." + nodeExporterNamespace + ".svc"),
 			}},
 		},
 		// cert-manager is there for the proxies already; it renews the webhook's certificate
 		// instead of the chart's one-off Jobs.
 		"prometheusOperator": map[string]any{"admissionWebhooks": map[string]any{"certManager": map[string]any{"enabled": true}}},
-		"prometheus": map[string]any{"prometheusSpec": map[string]any{
+		prometheus: map[string]any{"prometheusSpec": map[string]any{
 			"storageSpec":   claim(prometheusStorage),
 			"retentionSize": prometheusRetention,
 		}},
 		"alertmanager":   map[string]any{"alertmanagerSpec": map[string]any{"storage": claim(alertmanagerStorage)}},
-		"extraManifests": metricsManifests(distribution, proxy),
+		"extraManifests": metricsManifests(distribution, proxy, addons),
 	}
 	if distribution == templates.K3s {
 		off := map[string]any{"enabled": false}
@@ -190,7 +198,7 @@ func claim(size string) map[string]any {
 // proxies and their rights, and node-exporter's privileged namespace. They are part of the
 // release, so they go when monitoring does; until cert-manager serves, the release fails and the
 // Add-on Provider for Helm tries it again.
-func metricsManifests(distribution templates.Distribution, proxy Image) []any {
+func metricsManifests(distribution templates.Distribution, proxy Image, addons *Addons) []any {
 	server := func(names ...string) map[string]any {
 		return map[string]any{"dnsNames": names, "usages": []any{"server auth", "digital signature"}}
 	}
@@ -247,21 +255,40 @@ func metricsManifests(distribution templates.Distribution, proxy Image) []any {
 			RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "system:auth-delegator"},
 			Subjects: []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: metricsProxyAccount, Namespace: metav1.NamespaceSystem}},
 		},
-		metricsProxy(etcdMetrics, etcdMetricsPort, false, &controlPlaneAffinity, proxy),
+		metricsProxy(etcdMetrics, etcdMetricsPort, "http", &controlPlaneAffinity, proxy),
 	}
 	// k3s's kube-proxy, controller manager and scheduler are in the kubelet's metrics.
 	if distribution != templates.K3s {
 		out = append(out,
-			metricsProxy(kubeProxyMetrics, kubeProxyMetricsPort, false, nil, proxy),
-			metricsProxy(controllerMetrics, controllerMetricsPort, true, &controlPlaneAffinity, proxy),
-			metricsProxy(schedulerMetrics, schedulerMetricsPort, true, &controlPlaneAffinity, proxy),
+			metricsProxy(kubeProxyMetrics, kubeProxyMetricsPort, "http", nil, proxy),
+			metricsProxy(controllerMetrics, controllerMetricsPort, "https", &controlPlaneAffinity, proxy),
+			metricsProxy(schedulerMetrics, schedulerMetricsPort, "https", &controlPlaneAffinity, proxy),
 		)
+	}
+	// RKE2's CIS profile lets only kube-system's own pods reach the pods there, CoreDNS's metrics
+	// among them. Only there: where no policy isolates CoreDNS, this one would, to its metrics.
+	if distribution == templates.RKE2 && addons.CIS {
+		tcp := corev1.ProtocolTCP
+		out = append(out, &networkingv1.NetworkPolicy{
+			APIVersion: networkingv1.SchemeGroupVersion.String(), Kind: "NetworkPolicy", Name: coreDNSMetricsPolicy, Namespace: metav1.NamespaceSystem,
+			Spec: networkingv1.NetworkPolicySpec{
+				PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"k8s-app": "kube-dns"}},
+				PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+				Ingress: []networkingv1.NetworkPolicyIngressRule{{
+					From: []networkingv1.NetworkPolicyPeer{{
+						NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{corev1.LabelMetadataName: monitoringAddon}},
+						PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{appName: prometheus}},
+					}},
+					Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: new(intstr.FromInt32(coreDNSMetricsPort))}},
+				}},
+			},
+		})
 	}
 	return out
 }
 
 func issuer(name string, spec map[string]any) map[string]any {
-	return map[string]any{"apiVersion": certManagerAPI, "kind": clusterIssuerKind, "metadata": map[string]any{"name": name}, "spec": spec}
+	return map[string]any{apiVersionKey: certManagerAPI, "kind": clusterIssuerKind, "metadata": map[string]any{"name": name}, "spec": spec}
 }
 
 // certificate is a cert-manager Certificate of a key of its own, in a Secret of its own name.
@@ -270,7 +297,7 @@ func certificate(namespace, name, issuer string, spec map[string]any) map[string
 	spec["privateKey"] = map[string]any{"algorithm": "ECDSA", "size": keyBits}
 	spec["issuerRef"] = map[string]any{"kind": clusterIssuerKind, "name": issuer}
 	return map[string]any{
-		"apiVersion": certManagerAPI, "kind": "Certificate",
+		apiVersionKey: certManagerAPI, "kind": "Certificate",
 		"metadata": map[string]any{"name": name, "namespace": namespace}, "spec": spec,
 	}
 }
@@ -286,16 +313,16 @@ var controlPlaneAffinity = corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
 // metrics on loopback. It listens on the node's address and the component's own port, so that the
 // component serving there itself would keep it from starting rather than sit beside it
 // unauthenticated. It opens no other port: probes would need one of their own on the host. A
-// component that serves HTTPS is verified against the cluster CA, under the name its serving
+// component whose scheme is https is verified against the cluster CA, under the name its serving
 // certificate carries on every distribution.
-func metricsProxy(name string, port int32, upstreamTLS bool, affinity *corev1.Affinity, image Image) *appsv1.DaemonSet {
+func metricsProxy(name string, port int32, scheme string, affinity *corev1.Affinity, image Image) *appsv1.DaemonSet {
 	p := strconv.Itoa(int(port))
 	labels := map[string]string{appName: name}
 	user, no, yes := int64(proxyUser), false, true
 	upstream := []string{"--upstream=http://127.0.0.1:" + p + "/"}
 	mounts := []corev1.VolumeMount{{Name: "tls", MountPath: "/etc/kube-rbac-proxy", ReadOnly: true}}
 	volumes := []corev1.Volume{{Name: "tls", Secret: &corev1.SecretVolumeSource{SecretName: metricsProxyTLS}}}
-	if upstreamTLS {
+	if scheme == "https" {
 		upstream = []string{"--upstream=https://localhost:" + p + "/", "--upstream-ca-file=/etc/kube-rbac-proxy-upstream/ca.crt"}
 		mounts = append(mounts, corev1.VolumeMount{Name: "upstream", MountPath: "/etc/kube-rbac-proxy-upstream", ReadOnly: true})
 		volumes = append(volumes, corev1.Volume{Name: "upstream", ConfigMap: &corev1.ConfigMapVolumeSource{Name: "kube-root-ca.crt"}})

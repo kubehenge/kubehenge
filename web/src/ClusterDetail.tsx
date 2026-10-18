@@ -14,7 +14,7 @@ import {
   useHAOffered,
   useHARules,
 } from "./Placement";
-import { PodSecurityFields, podSecurityOf, podSecurityText } from "./PodSecurity";
+import { PodSecurityFields, cisText, enforced, podSecurityOf, podSecurityText } from "./PodSecurity";
 import { Link, navigate } from "./router";
 import type { ChangeRequest, Cluster, Machine, OIDCProvider, PveNode, Versions } from "./types";
 import {
@@ -487,8 +487,11 @@ function Options({
   const rancher = rancherValue(c.variables["rancher"]);
   const haOffered = useHAOffered(c.class, text(c.variables["storage"]));
   // name is how the row's button names what it changes, for those who hear it out of the grid.
+  const cis = c.variables["cis"] === true;
+  const podSecurity = enforced(podSecurityOf(c.variables["podSecurity"]), cis);
   const rows: { label: string; value: string; action?: Action; button?: string; name?: string }[] = [
     { label: "Pod network", value: text(c.variables["cni"]) ?? "The distribution's own" },
+    { label: "CIS hardening", value: cisText(cis) },
     {
       label: "Placement",
       value: placeText(placeOf(texts(c.variables["allowedNodes"]))),
@@ -517,7 +520,7 @@ function Options({
     },
     {
       label: "Pod security",
-      value: podSecurityText(podSecurityOf(c.variables["podSecurity"])),
+      value: podSecurityText(podSecurity),
       action: "podSecurity",
       name: "pod security",
     },
@@ -606,7 +609,8 @@ function OIDCDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => 
 }
 
 function PodSecurityDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
-  const current = podSecurityOf(c.variables["podSecurity"]);
+  const cis = c.variables["cis"] === true;
+  const current = enforced(podSecurityOf(c.variables["podSecurity"]), cis);
   const [value, setValue] = useState(current);
   const { busy, error, send } = useChange(c, onClose);
   return (
@@ -631,7 +635,7 @@ function PodSecurityDialog({ cluster: c, onClose }: { cluster: Cluster; onClose:
         </>
       }
     >
-      <PodSecurityFields value={value} onChange={setValue} />
+      <PodSecurityFields value={value} onChange={setValue} cis={cis} />
       <ErrorBox message={error} />
     </Dialog>
   );

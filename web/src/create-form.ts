@@ -3,7 +3,14 @@ import { defaultMinutes, defaultStart, describe, type UpgradeMode, type UpgradeP
 import { addressBits, addressCount, inList, ipv4, isVLAN, list, rangeProblem, whole } from "./network";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
-import { podSecurityOf, podSecurityText, podSecurityVariable, type PodSecurity } from "./PodSecurity";
+import {
+  cisText,
+  enforced,
+  podSecurityOf,
+  podSecurityText,
+  podSecurityVariable,
+  type PodSecurity,
+} from "./PodSecurity";
 import type { Bridge, ClusterClass, CreateRequest, OIDCProvider, Schema, Storage } from "./types";
 import { browserZone, distributionName, filled, registeredWithRancher, sentence } from "./ui";
 import { quantity, record, texts } from "./values";
@@ -53,6 +60,7 @@ export interface Form {
   monitoring: boolean;
   grafanaHostname: string;
   podSecurity: PodSecurity;
+  cis: boolean;
   rancherInstall: boolean;
   rancherHostname: string;
   rancherRegister: boolean;
@@ -110,6 +118,7 @@ export const newForm = (): Form => ({
   monitoring: false,
   grafanaHostname: "",
   podSecurity: podSecurityOf(undefined),
+  cis: false,
   rancherInstall: false,
   rancherHostname: "",
   rancherRegister: true,
@@ -178,9 +187,13 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
       ? { enabled: true, hostname: form.grafanaHostname }
       : { enabled: true };
   }
-  const podSecurity = podSecurityVariable(form.podSecurity);
+  const cis = form.cis && defined.has("cis");
+  const podSecurity = podSecurityVariable(enforced(form.podSecurity, cis));
   if (podSecurity) {
     variables["podSecurity"] = podSecurity;
+  }
+  if (cis) {
+    variables["cis"] = true;
   }
   if (form.rancherInstall) {
     variables["rancher"] = { install: true, hostname: form.rancherHostname };
@@ -251,6 +264,24 @@ export function summary(form: Form, c: ClusterClass, haOffered = false): [string
   if (defined.has("cni")) {
     rows.push(["Pod network", form.cni || "The distribution's own"]);
   }
+  rows.push(...addOnRows(form, defined));
+  if (defined.has("upgrades")) {
+    const upgrades = newUpgrades(form.upgradeMode, browserZone());
+    rows.push(["Automatic upgrades", describe(upgrades)]);
+  }
+  if (defined.has("oidc")) {
+    const providers = cleanProviders(form.oidc);
+    rows.push([
+      "Identity providers",
+      providers.length > 0 ? providers.map((p) => p.issuerURL).join(", ") : "None: tokens and certificates only",
+    ]);
+  }
+  return rows;
+}
+
+// addOnRows sums up the add-ons and the hardening the class offers.
+function addOnRows(form: Form, defined: Set<string>): [string, string][] {
+  const rows: [string, string][] = [];
   if (defined.has("headlamp")) {
     rows.push([
       "Headlamp",
@@ -263,22 +294,15 @@ export function summary(form: Form, c: ClusterClass, haOffered = false): [string
       form.monitoring ? `On${form.grafanaHostname ? `, Grafana at ${form.grafanaHostname}` : ""}` : "Off",
     ]);
   }
+  const cis = form.cis && defined.has("cis");
+  if (defined.has("cis")) {
+    rows.push(["CIS hardening", cisText(cis)]);
+  }
   if (defined.has("podSecurity")) {
-    rows.push(["Pod security", podSecurityText(form.podSecurity)]);
+    rows.push(["Pod security", podSecurityText(enforced(form.podSecurity, cis))]);
   }
   if (defined.has("rancher")) {
     rows.push(["Rancher", rancherChoice(form)]);
-  }
-  if (defined.has("upgrades")) {
-    const upgrades = newUpgrades(form.upgradeMode, browserZone());
-    rows.push(["Automatic upgrades", describe(upgrades)]);
-  }
-  if (defined.has("oidc")) {
-    const providers = cleanProviders(form.oidc);
-    rows.push([
-      "Identity providers",
-      providers.length > 0 ? providers.map((p) => p.issuerURL).join(", ") : "None: tokens and certificates only",
-    ]);
   }
   return rows;
 }

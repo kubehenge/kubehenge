@@ -66,6 +66,7 @@ spec:
     {{- include "kubehenge.addonVariables" . | nindent 4 }}
     {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
+    {{- include "kubehenge.cisVariable" . | nindent 4 }}
     - name: cni
       required: true
       schema:
@@ -112,34 +113,47 @@ spec:
               path: /spec/template/spec/kubeadmConfigSpec/files/-
               valueFrom:
                 template: |
-                  {{- include "kubehenge.podSecurityFile" (dict "root" . "path" "/etc/kubernetes/admission-config.yaml") | nindent 18 }}
-    - name: kubeadm-oidc
-      enabledIf: {{ include "kubehenge.oidcEnabled" . }}
-      definitions:
-        - selector:
-            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
-            kind: KubeadmControlPlaneTemplate
-            matchResources:
-              controlPlane: true
-          jsonPatches:
+                  {{- include "kubehenge.admissionFile" (dict "root" . "path" "/etc/kubernetes/admission-config.yaml") | nindent 18 }}
             - op: add
               path: /spec/template/spec/kubeadmConfigSpec/files/-
               valueFrom:
                 template: |
-                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/etc/kubernetes/authentication-config.yaml") | nindent 18 }}
+                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/etc/kubernetes/authentication-config.yaml" "anonymous" true) | nindent 18 }}
+            # The key that encrypts Secrets in etcd, which Kubehenge's controller makes once for the
+            # cluster: every control-plane node has to hold the same one.
             - op: add
-              path: /spec/template/spec/kubeadmConfigSpec/clusterConfiguration/apiServer/extraArgs/-
-              value:
-                name: authentication-config
-                value: /etc/kubernetes/authentication-config.yaml
+              path: /spec/template/spec/kubeadmConfigSpec/files/-
+              valueFrom:
+                template: |
+                  path: /etc/kubernetes/encryption-config.yaml
+                  owner: root:root
+                  permissions: "0600"
+                  contentFrom:
+                    secret:
+                      name: {{ "{{ .builtin.cluster.name }}" }}-encryption
+                      key: encryption-config.yaml
+    # kubeadm applies its patches for a target in the order of their names, this one after the
+    # kubelet's own (kubehenge.kubeletConfigFile).
+    - name: kubeadm-cis
+      enabledIf: {{ include "kubehenge.cisEnabled" . }}
+      definitions:
+        {{- range $kind, $sel := dict "KubeadmControlPlaneTemplate" (dict "selector" (dict "controlPlane" true) "api" "controlplane.cluster.x-k8s.io/v1beta2" "files" "/spec/template/spec/kubeadmConfigSpec/files/-") "KubeadmConfigTemplate" (dict "selector" (dict "machineDeploymentClass" (dict "names" (list "worker"))) "api" "bootstrap.cluster.x-k8s.io/v1beta2" "files" "/spec/template/spec/files/-") }}
+        - selector:
+            apiVersion: {{ $sel.api }}
+            kind: {{ $kind }}
+            matchResources:
+              {{- toYaml $sel.selector | nindent 14 }}
+          jsonPatches:
             - op: add
-              path: /spec/template/spec/kubeadmConfigSpec/clusterConfiguration/apiServer/extraVolumes/-
+              path: {{ $sel.files }}
               value:
-                name: authentication-config
-                hostPath: /etc/kubernetes/authentication-config.yaml
-                mountPath: /etc/kubernetes/authentication-config.yaml
-                readOnly: true
-                pathType: File
+                path: /etc/kubernetes/patches/kubeletconfiguration1+merge.yaml
+                owner: root:root
+                permissions: "0600"
+                content: |
+                  seccompDefault: true
+                  streamingConnectionIdleTimeout: 5m
+        {{- end }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
 kind: ProxmoxClusterTemplate
@@ -178,14 +192,17 @@ patches:
 {{/*
 The kubelet asks the cluster CA for its serving certificate, which Kubehenge's controller approves
 for the node's own name and addresses, instead of serving one it signs itself that nothing can
-verify: the API server checks it when it reaches the kubelet, and so does Prometheus.
+verify: the API server checks it when it reaches the kubelet, and so does Prometheus. It refuses to
+start on kernel settings other than its own (kubehenge.sysctlFile), and offers only strong ciphers.
 */}}
-{{- define "kubehenge.kubeletServingFile" -}}
+{{- define "kubehenge.kubeletConfigFile" -}}
 - path: /etc/kubernetes/patches/kubeletconfiguration+merge.yaml
   owner: root:root
   permissions: "0600"
   content: |
     serverTLSBootstrap: true
+    protectKernelDefaults: true
+    tlsCipherSuites: [{{ include "kubehenge.tlsCipherSuites" . }}]
 {{- end -}}
 
 {{/*
@@ -233,6 +250,8 @@ metrics proxy on the node's address authenticates Prometheus instead.
 extraArgs:
   - name: authorization-always-allow-paths
     value: /healthz,/readyz,/livez,/metrics
+  - name: profiling
+    value: "false"
   - name: tls-cert-file
     value: /etc/kubernetes/serving/{{ . }}.crt
   - name: tls-private-key-file
@@ -278,12 +297,42 @@ template:
               value: /etc/kubernetes/pki/ca.crt
             - name: admission-control-config-file
               value: /etc/kubernetes/admission-config.yaml
+            - name: enable-admission-plugins
+              value: NodeRestriction,EventRateLimit
+            - name: authentication-config
+              value: /etc/kubernetes/authentication-config.yaml
+            - name: encryption-provider-config
+              value: /etc/kubernetes/encryption-config.yaml
+            - name: audit-policy-file
+              value: /etc/kubernetes/audit-policy.yaml
+            - name: audit-log-path
+              value: /var/log/kubernetes/audit/audit.log
+            # A month of it, in at most a gigabyte, as RKE2 keeps its own.
+            - name: audit-log-maxage
+              value: "30"
+            - name: audit-log-maxbackup
+              value: "10"
+            - name: audit-log-maxsize
+              value: "100"
+            # Every client reloads its projected token, so none needs it to outlast its hour.
+            - name: service-account-extend-token-expiration
+              value: "false"
+            - name: profiling
+              value: "false"
+            - name: tls-cipher-suites
+              value: {{ include "kubehenge.tlsCipherSuites" . }}
           extraVolumes:
-            - name: admission-config
-              hostPath: /etc/kubernetes/admission-config.yaml
-              mountPath: /etc/kubernetes/admission-config.yaml
+            {{- range $file := list "admission-config" "authentication-config" "encryption-config" "audit-policy" }}
+            - name: {{ $file }}
+              hostPath: /etc/kubernetes/{{ $file }}.yaml
+              mountPath: /etc/kubernetes/{{ $file }}.yaml
               readOnly: true
               pathType: File
+            {{- end }}
+            - name: audit-log
+              hostPath: /var/log/kubernetes/audit
+              mountPath: /var/log/kubernetes/audit
+              pathType: DirectoryOrCreate
         controllerManager:
           {{- include "kubehenge.kubeadmServing" "kube-controller-manager" | nindent 10 }}
         scheduler:
@@ -310,14 +359,26 @@ template:
             esac
             sed -i "s#path: /etc/kubernetes/$from#path: /etc/kubernetes/$to#" /etc/kubernetes/manifests/kube-vip.yaml
         {{- include "kubehenge.kubeadmNodeIPFile" . | nindent 8 }}
-        {{- include "kubehenge.kubeletServingFile" . | nindent 8 }}
+        {{- include "kubehenge.kubeletConfigFile" . | nindent 8 }}
         {{- include "kubehenge.kubeadmServingFile" . | nindent 8 }}
+        {{- include "kubehenge.sysctlFile" . | nindent 8 }}
+        {{- include "kubehenge.auditPolicyFile" (dict "root" . "path" "/etc/kubernetes/audit-policy.yaml") | nindent 8 }}
       preKubeadmCommands:
+        - sysctl --system
         - /etc/kubehenge/node-ip.sh
         - /etc/kubehenge/serving-certs.sh
         - /etc/kubehenge/kube-vip-credentials.sh init
       postKubeadmCommands:
         - /etc/kubehenge/kube-vip-credentials.sh done
+        {{- include "kubehenge.kubeletConfigMode" . | nindent 8 }}
+{{- end -}}
+
+{{/*
+kubeadm writes the kubelet's configuration readable by every user, where the CIS benchmark asks for
+root alone. It holds no secret; the kubelet only reads it at start.
+*/}}
+{{- define "kubehenge.kubeletConfigMode" -}}
+- chmod 0600 /var/lib/kubelet/config.yaml
 {{- end -}}
 
 {{- define "kubehenge.kubeadmWorkerSpec" -}}
@@ -327,7 +388,11 @@ template:
       {{- include "kubehenge.kubeadmNodeRegistration" . | nindent 6 }}
     files:
       {{- include "kubehenge.kubeadmNodeIPFile" . | nindent 6 }}
-      {{- include "kubehenge.kubeletServingFile" . | nindent 6 }}
+      {{- include "kubehenge.kubeletConfigFile" . | nindent 6 }}
+      {{- include "kubehenge.sysctlFile" . | nindent 6 }}
     preKubeadmCommands:
+      - sysctl --system
       - /etc/kubehenge/node-ip.sh
+    postKubeadmCommands:
+      {{- include "kubehenge.kubeletConfigMode" . | nindent 6 }}
 {{- end -}}

@@ -86,4 +86,37 @@ describe("a cluster's options", () => {
     dialog = screen.getByRole("dialog", { name: "Identity providers" });
     expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
   });
+
+  it("hold pods to restricted under CIS hardening, which cannot change", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const hardened = {
+      ...cluster,
+      variables: { ...cluster.variables, cis: true, podSecurity: { kyverno: "baseline" } },
+    };
+    const calls = fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: hardened },
+      "PATCH /api/clusters/clusters/web": { body: hardened },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    const row = await screen.findByRole("row", { name: /CIS hardening/u });
+    expect(row).toHaveTextContent("On");
+    expect(within(row).queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /Pod security/u })).toHaveTextContent(
+      "Restricted by Pod Security Admission, Baseline by Kyverno",
+    );
+    await user.click(screen.getByRole("button", { name: "Edit pod security" }));
+    const dialog = screen.getByRole("dialog", { name: "Pod security" });
+    const admission = within(dialog).getByLabelText("Pod Security Admission");
+    expect(admission).toBeDisabled();
+    expect(admission).toHaveValue("restricted");
+    await user.selectOptions(within(dialog).getByLabelText("Kyverno"), "restricted");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: { podSecurity: { admission: "restricted", kyverno: "restricted" } },
+    });
+  });
 });

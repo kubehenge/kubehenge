@@ -1,7 +1,8 @@
 #!/bin/sh
 # End-to-end test of one Kubehenge ClusterClass on a Proxmox VE host, against a running management
-# cluster: create a cluster trusting an OpenID issuer and enforcing Pod Security's restricted level,
-# check sign-in through it, its nodes, cloud controller manager and persistent volumes, switch
+# cluster: create a cluster trusting an OpenID issuer, hardened to the CIS benchmark and enforcing
+# Pod Security's restricted level, check sign-in through it, its nodes against the benchmark, its
+# cloud controller manager and persistent volumes, switch
 # Headlamp, monitoring (every component scraped with its server verified) and Kyverno on and off,
 # scale its workers up and down, upgrade it by one minor version (for RKE2 and k3s with the first
 # new server's join refused at first), replace a node that dies, delete it, and check that nothing
@@ -37,6 +38,8 @@ upgrade=${3:?usage: $0 <ClusterClass> <version> <upgrade version>}
 
 # shellcheck source=common.sh
 . "$(dirname "$0")/common.sh"
+# shellcheck source=cis-benchmark.sh
+. "$(dirname "$0")/cis-benchmark.sh"
 
 work=$(mktemp -d)
 distribution=$(echo "${class}" | sed 's/^kubehenge-//')
@@ -200,9 +203,11 @@ ${cni_variable}
       - name: oidc
         value: ${oidc}
       # The strictest level from the start, so that every component Kubehenge installs is seen to
-      # run under it, or to sit in a namespace it exempts.
+      # run under it, or to sit in a namespace it exempts, and every add-on to work hardened.
       - name: podSecurity
         value: {admission: restricted}
+      - name: cis
+        value: true
 EOF
 kubectl apply -f "${work}/cluster.yaml"
 # capmox does not come back to a machine whose VM failed to provision, so the wait ends there rather
@@ -276,6 +281,9 @@ printf '%s' "${nodes}" | jq -e '.items | all(.spec.providerID | startswith("prox
 printf '%s' "${nodes}" | jq -e '.items | all(any(.status.addresses[]; .type == "InternalIP"))' > /dev/null ||
     fail "nodes have no InternalIP"
 wl get nodes -L topology.kubernetes.io/region,topology.kubernetes.io/zone
+
+step "the nodes pass the CIS Kubernetes Benchmark"
+cis_benchmark
 
 step "the cluster runs its CNI, which enforces network policies"
 cni=$(kubectl -n "${ns}" get "cluster/${name}" -o json | jq -r '.spec.topology.variables[] | select(.name == "cni") | .value')
@@ -437,7 +445,17 @@ deadline=$(($(date +%s) + 900))
 until all_up; do
     now=$(date +%s)
     if [ "${now}" -ge "${deadline}" ]; then
-        wl get --raw "${targets}" | jq -r '.data.activeTargets[] | select(.health != "up") | "\(.labels.job) \(.scrapeUrl): \(.lastError)"' >&2
+        # A Service without ready endpoints leaves its job out of the targets altogether, so the
+        # missing jobs are named beside the ones down, with the pods that would serve them.
+        active=$(wl get --raw "${targets}")
+        for job in ${jobs}; do
+            printf '%s' "${active}" | jq -e --arg j "${job}" 'any(.data.activeTargets[]; .labels.job == $j)' > /dev/null ||
+                echo "no target for ${job}" >&2
+        done
+        printf '%s' "${active}" | jq -r '.data.activeTargets[] | select(.health != "up") | "\(.labels.job) \(.scrapeUrl): \(.lastError)"' >&2
+        wl -n kube-system get daemonsets -o wide >&2
+        wl get pods -A -o wide | awk 'NR == 1 || $3 !~ /^([0-9]+)\/\1$/ || $4 != "Running"' >&2
+        wl -n kube-system get events --field-selector type=Warning >&2
         fail "monitoring does not reach every component"
     fi
     sleep 10

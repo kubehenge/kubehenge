@@ -126,6 +126,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	if err = r.ensureEncryption(ctx, cluster); err != nil {
+		return ctrl.Result{}, err
+	}
 	addons, rancherRefused, err := r.addons(ctx, cluster)
 	if err != nil {
 		return ctrl.Result{}, err
