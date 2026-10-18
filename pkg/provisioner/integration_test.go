@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -508,6 +509,102 @@ func TestIntegrationClassHealthChecks(t *testing.T) {
 	if want := slices.Sorted(maps.Keys(classProviders)); !slices.Equal(classes, want) {
 		t.Fatalf("classes %v, want %v", classes, want)
 	}
+}
+
+// Every argument the classes hand a component, in their templates or their patches, is one
+// name=value: a list written in YAML's flow style splits a value that holds commas into several,
+// and the component then refuses to start on a flag it does not know.
+func TestIntegrationClassArguments(t *testing.T) {
+	t.Parallel()
+	argument := regexp.MustCompile(`^[a-z][a-z0-9-]*=\S`)
+	isArgs := func(key string) bool { return strings.HasSuffix(key, "Args") || strings.HasSuffix(key, "Arg") }
+	checked := 0
+	check := func(where, s string) {
+		checked++
+		if !argument.MatchString(s) {
+			t.Errorf("%s: %q is not one name=value", where, s)
+		}
+	}
+	var walk func(where string, v any)
+	walk = func(where string, v any) {
+		switch v := v.(type) {
+		case map[string]any:
+			for key, e := range v {
+				if list, ok := e.([]any); ok && isArgs(key) {
+					for _, a := range list {
+						if s, ok := a.(string); ok {
+							check(where+" "+key, s)
+						}
+					}
+				}
+				walk(where, e)
+			}
+		case []any:
+			for _, e := range v {
+				walk(where, e)
+			}
+		}
+	}
+	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
+		switch {
+		case o.GetKind() == "ConfigMap" && o.GetLabels()["kubehenge.dev/class"] != "":
+			data, _, err := unstructured.NestedString(o.Object, "data", "templates.yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tpl := range decodeAll(t, []byte(data)) {
+				walk(tpl.GetKind(), tpl.Object)
+			}
+		case o.GetKind() == "ClusterClass":
+			patches, _, err := unstructured.NestedSlice(o.Object, "spec", "patches")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, op := range jsonPatches(t, patches) {
+				path := fmt.Sprint(op["path"])
+				if s, ok := op["value"].(string); ok && isArgs(strings.TrimSuffix(path, "/-")) {
+					check(o.GetName()+" "+path, s)
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no arguments found")
+	}
+}
+
+// jsonPatches are the operations of a ClusterClass's patches, every definition's in turn.
+func jsonPatches(t *testing.T, patches []any) []map[string]any {
+	t.Helper()
+	var ops []map[string]any
+	for _, p := range patches {
+		patch, ok := p.(map[string]any)
+		if !ok {
+			t.Fatalf("patch %v", p)
+		}
+		definitions, _, err := unstructured.NestedSlice(patch, "definitions")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range definitions {
+			definition, ok := d.(map[string]any)
+			if !ok {
+				t.Fatalf("definition %v", d)
+			}
+			list, _, err := unstructured.NestedSlice(definition, "jsonPatches")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, j := range list {
+				op, ok := j.(map[string]any)
+				if !ok {
+					t.Fatalf("operation %v", j)
+				}
+				ops = append(ops, op)
+			}
+		}
+	}
+	return ops
 }
 
 // Only a management cluster with Proxmox VE HA hands the controller the HA token and offers the

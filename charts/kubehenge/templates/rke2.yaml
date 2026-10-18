@@ -215,9 +215,11 @@ template:
       # credentials, as etcd's and kube-proxy's are: the metrics proxy on the node's address
       # authenticates Prometheus instead.
       kubeControllerManager:
-        extraArgs: [authorization-always-allow-paths=/healthz,/readyz,/livez,/metrics]
+        extraArgs:
+          - authorization-always-allow-paths=/healthz,/readyz,/livez,/metrics
       kubeScheduler:
-        extraArgs: [authorization-always-allow-paths=/healthz,/readyz,/livez,/metrics]
+        extraArgs:
+          - authorization-always-allow-paths=/healthz,/readyz,/livez,/metrics
     rolloutStrategy:
       type: RollingUpdate
       rollingUpdate:
