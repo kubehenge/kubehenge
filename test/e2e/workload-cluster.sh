@@ -121,6 +121,17 @@ signed_in() {
 check_sign_in() {
     wl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d > "${work}/workload-ca"
     until_true 600 "the API server is ready" sh -c "KUBECONFIG=${work}/workload kubectl get --raw /readyz >/dev/null 2>&1"
+    # Requests without credentials reach kubeadm's health checks, which kubeadm needs, and nothing
+    # else; on RKE2 and k3s, nothing at all.
+    server=$(wl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+    for path in /readyz /version; do
+        code=$(curl -sS --cacert "${work}/workload-ca" -o /dev/null -w '%{http_code}' "${server}${path}")
+        case ${distribution}${path} in
+            kubeadm/readyz) want=200 ;;
+            *) want=401 ;;
+        esac
+        [ "${code}" = "${want}" ] || fail "a request without credentials to ${path} got ${code}, not ${want}"
+    done
     # Each answer is assigned before it is tested: a failure inside a substitution within a test
     # would go unnoticed, while a failed assignment stops the test.
     token=$(id_token kubehenge-e2e "${work}/signing.key")

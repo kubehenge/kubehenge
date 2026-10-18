@@ -30,21 +30,22 @@ cis_exceptions() {
 # reading the host's configuration through read-only mounts and its processes through its PID
 # namespace.
 cis_job() {
-    # Only what the node has: a missing path would be made on the host, or fail the pod.
-    host_paths="/var/lib/kubelet /etc/systemd /lib/systemd"
+    # Only what the node has: a missing path would be made on the host, or fail the pod. /var/lib
+    # holds the kubelet's, etcd's, RKE2's and k3s's data and the CNI's address leases; Rancher's
+    # benchmarks read k3s's components' arguments from the journal.
+    host_paths="/var/lib /var/log/journal /run/log/journal /etc/systemd /lib/systemd"
     case ${distribution} in
         kubeadm)
             image=${kube_bench_image} config=/opt/kube-bench/cfg benchmark=cis-2.0
             host_paths="${host_paths} /etc/kubernetes /etc/cni/net.d /opt/cni/bin"
-            [ "$2" = true ] && host_paths="${host_paths} /var/lib/etcd"
             ;;
         rke2)
             image=${security_scan_image} config=/etc/kube-bench/cfg benchmark=rke2-cis-2.0
-            host_paths="${host_paths} /var/lib/rancher /etc/rancher /etc/cni/net.d"
+            host_paths="${host_paths} /etc/rancher /etc/cni/net.d"
             ;;
         *)
             image=${security_scan_image} config=/etc/kube-bench/cfg benchmark=${distribution}-cis-2.0
-            host_paths="${host_paths} /var/lib/rancher /etc/rancher"
+            host_paths="${host_paths} /etc/rancher"
             ;;
     esac
     operator=DoesNotExist
@@ -82,7 +83,7 @@ spec:
       containers:
         - name: kube-bench
           image: ${image}
-          command: [kube-bench, run, --benchmark, ${benchmark}, --targets, $3, --config-dir, ${config}, --json, --noremediations]
+          command: [kube-bench, run, --benchmark, ${benchmark}, --targets, "$3", --config-dir, ${config}, --json, --noremediations]
           volumeMounts:${mounts}
       volumes:${volumes}
 EOF
