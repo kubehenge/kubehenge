@@ -463,6 +463,8 @@ server_restarts() {
 pods_before=$(restarts)
 # shellcheck disable=SC2310 # a failed count fails the step.
 servers_before=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
+echo "memory before the add-ons:"
+pod_memory "${work}/workload"
 
 step "Headlamp switched on"
 set_variable headlamp '{"enabled":true}'
@@ -565,11 +567,7 @@ servers_after=$(server_restarts) || fail "cannot read ${server_unit}'s restarts 
 pods_after=$(restarts)
 restarted=$(jq -rn --argjson b "${pods_before}" --argjson a "${pods_after}" '$a | to_entries[] | select(.value > ($b[.key] // 0)) | "\(.key) \(.value - ($b[.key] // 0))"')
 [ -z "${restarted}" ] || fail "containers restarted while the add-ons were installed (pod, restarts): ${restarted}"
-for node in $(wl get nodes -o jsonpath='{.items[*].metadata.name}'); do
-    summary=$(wl get --raw "/api/v1/nodes/${node}/proxy/stats/summary")
-    printf '%s' "${summary}" |
-        jq -r --arg n "${node}" '.node.memory | "\($n): \(.workingSetBytes / 1048576 | floor) MiB of memory in use, \(.availableBytes / 1048576 | floor) MiB available"'
-done
+pod_memory "${work}/workload"
 
 step "every add-on switched off at once"
 set_variable headlamp '{"enabled":false}'

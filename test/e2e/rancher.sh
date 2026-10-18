@@ -124,6 +124,8 @@ server_url=$(rancher get settings.management.cattle.io server-url -o jsonpath='{
 [ "${server_url}" = "https://${hostname}" ] || fail "Rancher's server URL is not https://${hostname}"
 # shellcheck disable=SC2310 # rancher wraps one kubectl call, whose status is the one tested.
 rancher -n cattle-system get secret bootstrap-secret > /dev/null || fail "Rancher generated no first admin password"
+echo "memory with Rancher:"
+pod_memory "${work}/rancher"
 
 step "a k3s cluster registers with Rancher on its own"
 # Rancher's agents and controllers run in the namespaces Kubehenge exempts, but the job that cleans
@@ -139,6 +141,8 @@ agent=$(downstream -n cattle-system get deployment/cattle-cluster-agent -o json)
 printf '%s' "${agent}" |
     jq -e '.spec.template.spec.containers[0].env | any(.name == "STRICT_VERIFY" and .value == "true") and any(.name == "CATTLE_CA_CHECKSUM" and (.value | length) == 64)' > /dev/null ||
     fail "the agent does not pin Rancher's CA"
+echo "memory with Rancher's agents:"
+pod_memory "${work}/downstream"
 
 step "the k3s cluster leaves Rancher, which cleans up inside it, and comes back"
 set_variable downstream rancher '{"register":false}'

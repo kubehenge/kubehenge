@@ -44,6 +44,22 @@ providers_idle() {
     done
 }
 
+# pod_memory <kubeconfig>: each node's memory in use, then the memory the pods of each namespace use
+# over all nodes, from the kubelets' working sets: the figures add-ons are sized by. Kubehenge's
+# metrics proxies in kube-system are counted apart, as monitoring's.
+pod_memory() {
+    pods='[]'
+    for node in $(KUBECONFIG="$1" kubectl get nodes -o jsonpath='{.items[*].metadata.name}'); do
+        summary=$(KUBECONFIG="$1" kubectl get --raw "/api/v1/nodes/${node}/proxy/stats/summary")
+        printf '%s' "${summary}" |
+            jq -r --arg n "${node}" '.node.memory | "\($n): \(.workingSetBytes / 1048576 | floor) MiB of memory in use, \(.availableBytes / 1048576 | floor) MiB available"'
+        pods=$(printf '%s' "${summary}" | jq -c --argjson all "${pods}" '$all + [.pods[] | {
+            ns: (if .podRef.namespace == "kube-system" and (.podRef.name | startswith("kubehenge-")) then "kube-system (Kubehenge metrics proxies)" else .podRef.namespace end),
+            bytes: (.memory.workingSetBytes // 0)}]')
+    done
+    printf '%s' "${pods}" | jq -r 'group_by(.ns)[] | "  \(.[0].ns): \(map(.bytes) | add / 1048576 | floor) MiB in \(length) pods"'
+}
+
 # absent <kubectl get command...>: whether the API server answers that the object does not exist.
 # Any other failure, an unreachable server among them, is not taken for absence.
 absent() {
