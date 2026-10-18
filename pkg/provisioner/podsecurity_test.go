@@ -61,11 +61,90 @@ func TestKyvernoEnforcesTheChosenLevel(t *testing.T) {
 	}
 }
 
+// setKyvernoReady sets the Ready condition of the web cluster's Kyverno HelmChartProxy as the Add-on
+// Provider for Helm does, for the generation behind generations before its current one.
+func setKyvernoReady(t *testing.T, kube client.Client, status string, behind int64) {
+	t.Helper()
+	hcp := &unstructured.Unstructured{}
+	hcp.SetGroupVersionKind(helmChartProxyGVK)
+	if err := kube.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "web-kyverno"}, hcp); err != nil {
+		t.Fatal(err)
+	}
+	hcp.Object["status"] = map[string]any{"conditions": []any{
+		map[string]any{"type": "Ready", "status": status, "observedGeneration": hcp.GetGeneration() - behind},
+	}}
+	if err := kube.Update(context.Background(), hcp); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReconcileInstallsKyvernoPoliciesOnceKyvernoIsReady(t *testing.T) {
+	t.Parallel()
+	c := storageCluster()
+	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: "podSecurity", Value: apiextensionsv1.JSON{Raw: []byte(`{"kyverno":"restricted"}`)}})
+	r, kube := newReconciler(t, &fakeCloud{}, c)
+	ctx := context.Background()
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(c)}
+	policies := func() error {
+		hcp := &unstructured.Unstructured{}
+		hcp.SetGroupVersionKind(helmChartProxyGVK)
+		return kube.Get(ctx, client.ObjectKey{Namespace: "team-a", Name: "web-kyverno-policies"}, hcp)
+	}
+	kyverno := &unstructured.Unstructured{}
+	kyverno.SetGroupVersionKind(helmChartProxyGVK)
+
+	for _, ready := range []func(){
+		func() {},
+		// Ready for an earlier spec says nothing of this one.
+		func() { setKyvernoReady(t, kube, "True", 1) },
+		func() { setKyvernoReady(t, kube, "False", 0) },
+	} {
+		ready()
+		res, err := r.Reconcile(ctx, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := kube.Get(ctx, client.ObjectKey{Namespace: "team-a", Name: "web-kyverno"}, kyverno); err != nil {
+			t.Fatalf("Kyverno is not being installed: %v", err)
+		}
+		if err := policies(); !apierrors.IsNotFound(err) {
+			t.Fatalf("Kyverno's policies are installed before Kyverno is ready: %v", err)
+		}
+		if res.RequeueAfter != waitInterval {
+			t.Errorf("waiting on Kyverno, the cluster is looked at again after %v", res.RequeueAfter)
+		}
+	}
+
+	setKyvernoReady(t, kube, "True", 0)
+	if err := reconcile(t, r, c); err != nil {
+		t.Fatal(err)
+	}
+	if err := policies(); err != nil {
+		t.Fatalf("Kyverno is ready and its policies are not installed: %v", err)
+	}
+	// Kyverno being upgraded leaves its policies where they are.
+	setKyvernoReady(t, kube, "False", 0)
+	res, err := r.Reconcile(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := policies(); err != nil {
+		t.Errorf("Kyverno's policies went while Kyverno was not ready: %v", err)
+	}
+	if res.RequeueAfter != resync {
+		t.Errorf("with nothing to wait on, the cluster is looked at again after %v", res.RequeueAfter)
+	}
+}
+
 func TestReconcileRemovesKyvernoAfterItsPolicies(t *testing.T) {
 	t.Parallel()
 	c := storageCluster()
 	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: "podSecurity", Value: apiextensionsv1.JSON{Raw: []byte(`{"kyverno":"restricted"}`)}})
 	r, kube := newReconciler(t, &fakeCloud{}, c)
+	if err := reconcile(t, r, c); err != nil {
+		t.Fatal(err)
+	}
+	setKyvernoReady(t, kube, "True", 0)
 	if err := reconcile(t, r, c); err != nil {
 		t.Fatal(err)
 	}

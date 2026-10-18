@@ -291,7 +291,7 @@ func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.C
 
 // applyAddons applies what the cluster gets installed: the Secrets of its ClusterResourceSet, the
 // set itself and the HelmChartProxies of its charts, and removes those switched off. It reports
-// whether a removal waits on another.
+// whether an add-on's installation or removal waits on another.
 func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster, creds Credentials, addons *Addons) (bool, error) {
 	storage, err := variable[string](cluster, "storage")
 	if err != nil {
@@ -333,7 +333,27 @@ func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster
 	if err := applyOwned(ctx, r.Client, cluster, crs, func(got *addonsv1.ClusterResourceSet) { got.Spec = *desired }); err != nil {
 		return false, err
 	}
+	if installing, err := r.applyProxies(ctx, cluster, proxies); err != nil || installing {
+		return installing, err
+	}
+	return waiting, nil
+}
+
+// applyProxies applies the cluster's HelmChartProxies, in order, and reports whether one waits on
+// another.
+func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluster, proxies []*unstructured.Unstructured) (bool, error) {
+	waiting := false
 	for _, p := range proxies {
+		if p.GetName() == kyvernoPoliciesProxy(cluster) {
+			wait, err := r.policiesWait(ctx, cluster)
+			if err != nil {
+				return false, err
+			}
+			if wait {
+				waiting = true
+				continue
+			}
+		}
 		desired := p.Object["spec"]
 		if err := applyOwned(ctx, r.Client, cluster, p, func(got *unstructured.Unstructured) { got.Object["spec"] = desired }); err != nil {
 			return false, err
