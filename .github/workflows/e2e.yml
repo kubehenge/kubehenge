@@ -154,6 +154,8 @@ jobs:
             kubectl get clusters,machines,pods -A -o wide \
               > "$out/management-cluster.txt" 2>&1 || true
             kubectl get events -A --sort-by=.lastTimestamp > "$out/events.txt" 2>&1 || true
+            # A namespace's conditions say what is left in it and whose finalizers hold that.
+            kubectl get namespaces -o yaml > "$out/namespaces.yaml" 2>&1 || true
             # A Helm hook's Job fails on its first failed pod, and the pod's status says whether the
             # command failed or the pod was evicted or never admitted.
             kubectl get jobs -A -o yaml > "$out/jobs.yaml" 2>&1 || true

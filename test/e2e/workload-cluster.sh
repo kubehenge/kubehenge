@@ -645,7 +645,11 @@ printf '%s' "${users}" | jq -e --arg u "${user}" '[.data[] | select(.userid == $
 vms=$(pve_get "cluster/resources?type=vm")
 printf '%s' "${vms}" | jq -e --argjson o "${owner}" --arg n "${name}" '[.data[] | select(.vmid == $o or (.name // "" | startswith($n + "-")))] | length == 0' > /dev/null ||
     fail "VMs of the cluster are still there"
-kubectl delete namespace "${ns}" --wait --timeout=5m
+if ! kubectl delete namespace "${ns}" --wait --timeout=5m; then
+    # Its conditions say what is left in it and whose finalizers hold that.
+    left=$(kubectl get namespace "${ns}" -o jsonpath='{range .status.conditions[?(@.status=="True")]}{.message}; {end}' || true)
+    fail "namespace ${ns} is still there: ${left}"
+fi
 
 # Another test may be using the class on the same management cluster.
 if kubectl get clusters --all-namespaces -o json | jq -e --arg c "${class}" '[.items[] | select(.spec.topology.classRef.name == $c)] | length == 0' > /dev/null; then
