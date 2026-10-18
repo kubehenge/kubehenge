@@ -372,12 +372,13 @@ x-kubernetes-validations:
 
 {{/*
 The structured authentication configuration as a bootstrap file at path: a template Cluster API
-renders with the cluster's variables. anonymous says where requests without credentials may go
-(files/authentication-config.tpl). Call with (dict "root" $ "path" … "anonymous" "paths"|"none"|"flag").
+renders with the cluster's variables. With anonymous, requests without credentials reach the few
+paths kubeadm needs them to; without, the API server is to be given anonymous-auth=false
+(files/authentication-config.tpl). Call with (dict "root" $ "path" … "anonymous" true|false).
 */}}
 {{- define "kubehenge.oidcFile" -}}
 path: {{ .path }}
-{{ printf "{{- $anonymous := %q }}" .anonymous }}
+{{ printf "{{- $anonymous := %t }}" .anonymous }}
 {{ .root.Files.Get "files/authentication-config.tpl" }}
 {{- end -}}
 

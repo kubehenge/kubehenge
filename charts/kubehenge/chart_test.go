@@ -97,15 +97,15 @@ func TestAuthenticationConfiguration(t *testing.T) {
 		variables string
 		want      map[string]any
 	}{
-		{"none", oidc, map[string]any{"jwt": jwt, "anonymous": map[string]any{"enabled": false}}},
-		{"paths", oidc, map[string]any{"jwt": jwt, "anonymous": kubeadm}},
+		// The API server's --anonymous-auth=false says it; it refuses the flag beside a section.
+		{"false", oidc, map[string]any{"jwt": jwt}},
+		{"true", oidc, map[string]any{"jwt": jwt, "anonymous": kubeadm}},
 		// kubeadm's API server reads the file whether or not the cluster trusts a provider.
-		{"paths", `{}`, map[string]any{"jwt": []any{}, "anonymous": kubeadm}},
-		{"flag", oidc, map[string]any{"jwt": jwt}},
+		{"true", `{}`, map[string]any{"jwt": []any{}, "anonymous": kubeadm}},
 	} {
 		want := map[string]any{"apiVersion": "apiserver.config.k8s.io/v1", "kind": "AuthenticationConfiguration"}
 		maps.Copy(want, c.want)
-		config := bootstrapFile(t, renderAfter(t, "{{- $anonymous := \""+c.anonymous+"\" }}\n", "files/authentication-config.tpl", c.variables))
+		config := bootstrapFile(t, renderAfter(t, "{{- $anonymous := "+c.anonymous+" }}\n", "files/authentication-config.tpl", c.variables))
 		if !reflect.DeepEqual(config, want) {
 			t.Errorf("anonymous %s, %s: configuration =\n%v", c.anonymous, c.variables, config)
 		}

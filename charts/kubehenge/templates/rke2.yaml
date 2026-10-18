@@ -110,12 +110,16 @@ spec:
               path: /spec/template/spec/files/-
               valueFrom:
                 template: |
-                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/etc/rancher/rke2/authentication-config.yaml" "anonymous" "none") | nindent 18 }}
+                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/etc/rancher/rke2/authentication-config.yaml" "anonymous" false) | nindent 18 }}
             # RKE2 mounts every file an argument names into the API server's static pod; mounting it
             # again as an extra mount makes the pod invalid (a mount path must be unique).
             - op: add
               path: /spec/template/spec/serverConfig/kubeAPIServer/extraArgs/-
               value: authentication-config=/etc/rancher/rke2/authentication-config.yaml
+            # RKE2 switches anonymous requests off itself only while it is given no file.
+            - op: add
+              path: /spec/template/spec/serverConfig/kubeAPIServer/extraArgs/-
+              value: anonymous-auth=false
     # RKE2's profile keeps the admission configuration it is given, which enforces restricted
     # under cis already. Under it a server refuses to start without an etcd user and group, whom it
     # gives etcd's data and process.

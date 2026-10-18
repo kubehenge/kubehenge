@@ -146,7 +146,7 @@ spec:
               path: /spec/template/spec/kthreesConfigSpec/files/-
               valueFrom:
                 template: |
-                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/etc/rancher/k3s/authentication-config.yaml" "anonymous" "flag") | nindent 18 }}
+                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/etc/rancher/k3s/authentication-config.yaml" "anonymous" false) | nindent 18 }}
             - op: add
               path: /spec/template/spec/kthreesConfigSpec/files/-
               value:
