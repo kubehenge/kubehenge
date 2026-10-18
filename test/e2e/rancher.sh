@@ -127,7 +127,7 @@ rancher -n cattle-system get secret bootstrap-secret > /dev/null || fail "Ranche
 
 step "a k3s cluster registers with Rancher on its own"
 cluster downstream kubehenge-k3s "${KUBEHENGE_E2E_DOWNSTREAM_VERSION}" "${KUBEHENGE_E2E_DOWNSTREAM_ADDRESSES}" "${KUBEHENGE_E2E_DOWNSTREAM_ENDPOINT}" \
-    "{memoryMiB: ${KUBEHENGE_E2E_DOWNSTREAM_MEMORY:-3072}}" "{}"
+    "{memoryMiB: ${KUBEHENGE_E2E_DOWNSTREAM_MEMORY:-4096}}" "{}"
 kubectl -n "${ns}" wait --for=condition=Available cluster/downstream --timeout=40m
 kubeconfig downstream downstream
 until_true 1200 "registered and connected" registered
