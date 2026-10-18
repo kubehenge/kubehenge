@@ -169,7 +169,7 @@ A message saying "the pod range … overlaps the nodes' network …" (or the ser
 
 ### Control planes too small
 
-A message saying "the control planes of a cluster with … workers need at least …": the cluster has more workers than its control planes' size carries, by its distribution's sizing guide ([clusters.md](clusters.md#machines)). Give the control planes the cores and memory the message names (`controlPlaneMachine`, or the control plane's override), or keep fewer workers. A cluster that already fell short, after an upgrade of Kubehenge asked for more, can still be changed in other ways; only more workers or smaller control planes are refused.
+A message saying "the control planes of a cluster with … workers need at least …": the cluster has more workers than its control planes' size carries, by its distribution's sizing guide ([clusters.md](clusters.md#machines)). Give the control planes the cores and memory the message names (`controlPlaneMachine`, or the control plane's override), or keep fewer workers. "The control planes of a cluster without workers run its workloads too and need at least …": with no workers, or every worker pool scaled to 0, the control planes need a worker's least on top of their own; give them that, or keep a worker. A cluster that already fell short, after an upgrade of Kubehenge asked for more, can still be changed in other ways; only more workers or smaller control planes are refused.
 
 ### Rancher
 

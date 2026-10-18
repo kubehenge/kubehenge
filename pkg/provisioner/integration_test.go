@@ -481,25 +481,50 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 		t.Fatalf("300 workers on the class's default control planes: %v", err)
 	}
 
-	// Each class's sizing guide starts at the least its control-plane machines may be.
+	workerless := &clusterv1.Cluster{
+		Namespace: "team-a", Name: "workerless",
+		Spec: clusterv1.ClusterSpec{Topology: clusterv1.Topology{
+			ClassRef: clusterv1.ClusterClassRef{Name: "kubehenge-k3s", Namespace: classNamespace},
+			Version:  "v1.36.5+k3s1",
+		}},
+	}
+	if err := c.Create(ctx, workerless); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "without workers run its workloads too and need at least 3 vCPUs and 5120 MiB") {
+		t.Fatalf("a k3s cluster without workers on the class's default control planes: %v", err)
+	}
+
+	// Each class's sizing guide starts at the least its control-plane machines may be, and without
+	// workers they need its least worker on top.
+	oneWorker := &clusterv1.Cluster{Spec: clusterv1.ClusterSpec{Topology: clusterv1.Topology{
+		Workers: clusterv1.WorkersTopology{MachineDeployments: []clusterv1.MachineDeploymentTopology{{Replicas: new(int32(1))}}},
+	}}}
 	for _, name := range []string{"kubehenge-kubeadm", "kubehenge-k3s", "kubehenge-rke2"} {
 		class := &clusterv1.ClusterClass{}
 		if err := c.Get(ctx, client.ObjectKey{Namespace: classNamespace, Name: name}, class); err != nil {
 			t.Fatal(err)
 		}
-		need, _, err := controlPlaneFit(&clusterv1.Cluster{}, class)
+		need, _, err := controlPlaneFit(oneWorker, class)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		var schema clusterv1.JSONSchemaProps
-		for _, v := range class.Spec.Variables {
-			if v.Name == "controlPlaneMachine" {
-				schema = v.Schema.OpenAPIV3Schema
+		minimum := func(variable, field string) int {
+			for _, v := range class.Spec.Variables {
+				if m := v.Schema.OpenAPIV3Schema.Properties[field].Minimum; v.Name == variable && m != nil {
+					return int(*m)
+				}
 			}
+			t.Fatalf("%s: %s sets no least %s", name, variable, field)
+			return 0
 		}
-		if need.Cores == 0 || int64(need.Cores) != *schema.Properties["cores"].Minimum || int64(need.MemoryMiB) != *schema.Properties["memoryMiB"].Minimum {
-			t.Errorf("%s: its guide starts at %d vCPUs and %d MiB, its control-plane machines at %v and %v",
-				name, need.Cores, need.MemoryMiB, *schema.Properties["cores"].Minimum, *schema.Properties["memoryMiB"].Minimum)
+		if need.Cores != minimum("controlPlaneMachine", "cores") || need.MemoryMiB != minimum("controlPlaneMachine", "memoryMiB") {
+			t.Errorf("%s: its guide starts at %d vCPUs and %d MiB, its control-plane machines at %d and %d",
+				name, need.Cores, need.MemoryMiB, minimum("controlPlaneMachine", "cores"), minimum("controlPlaneMachine", "memoryMiB"))
+		}
+		alone, _, err := controlPlaneFit(&clusterv1.Cluster{}, class)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if alone.Cores != need.Cores+minimum("workerMachine", "cores") || alone.MemoryMiB != need.MemoryMiB+minimum("workerMachine", "memoryMiB") {
+			t.Errorf("%s: without workers its control planes need %d vCPUs and %d MiB", name, alone.Cores, alone.MemoryMiB)
 		}
 	}
 }

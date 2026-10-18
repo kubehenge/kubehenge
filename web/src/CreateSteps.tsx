@@ -2,6 +2,7 @@ import type { JSX } from "react";
 
 import { controlPlaneSizes, maxWorkers } from "./ClusterDetail";
 import {
+  controlPlaneMinimums,
   machineMinimums,
   memoryStepMiB,
   variable,
@@ -95,6 +96,7 @@ export function GeneralStep({
   offered: Versions | undefined;
   onChooseClass: (name: string) => void;
 }): JSX.Element {
+  const alone = controlPlaneMinimums(cls, 0);
   return (
     <>
       <Field label="Name" hint="Also names its Proxmox VE pool and VMs." error={shown("name")}>
@@ -134,7 +136,15 @@ export function GeneralStep({
           </select>
         )}
       </Field>
-      <Field label="Workers" error={shown("workerReplicas")}>
+      <Field
+        label="Workers"
+        error={shown("workerReplicas")}
+        hint={
+          form.workerReplicas === 0
+            ? `With none, the control planes run the workloads too, so they have at least ${alone.cores} cores and ${alone.memoryMiB} MiB.`
+            : undefined
+        }
+      >
         {(id) => (
           <input
             id={id}
@@ -142,7 +152,18 @@ export function GeneralStep({
             min={0}
             max={maxWorkers}
             value={shownNumber(form.workerReplicas)}
-            onChange={(e) => set("workerReplicas", typedNumber(e.target.value))}
+            onChange={(e) => {
+              const workers = typedNumber(e.target.value);
+              set("workerReplicas", workers);
+              const m = form.controlPlaneMachine;
+              if (workers === 0 && (m.cores < alone.cores || m.memoryMiB < alone.memoryMiB)) {
+                set("controlPlaneMachine", {
+                  ...m,
+                  cores: Math.max(m.cores, alone.cores),
+                  memoryMiB: Math.max(m.memoryMiB, alone.memoryMiB),
+                });
+              }
+            }}
           />
         )}
       </Field>
@@ -334,7 +355,7 @@ export function MachinesStep({
       <MachineFields
         label="Control plane"
         value={form.controlPlaneMachine}
-        min={machineMinimums(cls, "controlPlaneMachine")}
+        min={controlPlaneMinimums(cls, form.workerReplicas)}
         error={shown("controlPlaneMachine")}
         onChange={(m) => set("controlPlaneMachine", m)}
       />

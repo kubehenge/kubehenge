@@ -652,6 +652,21 @@ describe("create", () => {
     expect(
       fieldProblems("Machines", { ...form, workerMachine: { cores: 2, memoryMiB: 2048, diskGiB: 40 } }, rke2),
     ).toStrictEqual({ workerMachine: "Memory of at least 4096 MiB, in steps of 8." });
+    // Without workers the control planes run the workloads too, so they need a worker's least on top.
+    const alone = { ...form, workerReplicas: 0 };
+    expect(
+      fieldProblems("Machines", { ...alone, controlPlaneMachine: { cores: 2, memoryMiB: 8192, diskGiB: 30 } }, rke2),
+    ).toStrictEqual({
+      controlPlaneMachine: "A whole number of cores, at least 4. Without workers, they run the workloads too.",
+    });
+    expect(
+      fieldProblems("Machines", { ...alone, controlPlaneMachine: { cores: 4, memoryMiB: 4096, diskGiB: 30 } }, rke2),
+    ).toStrictEqual({
+      controlPlaneMachine: "Memory of at least 8192 MiB, in steps of 8. Without workers, they run the workloads too.",
+    });
+    expect(
+      fieldProblems("Machines", { ...alone, controlPlaneMachine: { cores: 4, memoryMiB: 8192, diskGiB: 30 } }, rke2),
+    ).toStrictEqual({});
     expect(problems("General", { ...form, workerReplicas: 1.5 }, rke2)).toStrictEqual([
       "A whole number from 0 to 100.",
     ]);

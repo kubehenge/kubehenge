@@ -43,12 +43,18 @@ func checkControlPlaneSize(old, cluster *clusterv1.Cluster, class *clusterv1.Clu
 			return nil
 		}
 	}
+	if have.Workers == 0 {
+		return fmt.Errorf("the control planes of a cluster without workers run its workloads too and need at least %d vCPUs and %d MiB of memory, and have %d vCPUs and %d MiB",
+			need.Cores, need.MemoryMiB, have.Cores, have.MemoryMiB)
+	}
 	return fmt.Errorf("the control planes of a cluster with %d workers need at least %d vCPUs and %d MiB of memory, and have %d vCPUs and %d MiB",
 		have.Workers, need.Cores, need.MemoryMiB, have.Cores, have.MemoryMiB)
 }
 
 // controlPlaneFit is what the class's sizing guide asks of the cluster's control planes, and what
-// they have, with the cluster's number of workers. A class without a guide asks nothing.
+// they have, with the cluster's number of workers. A class without a guide asks nothing. The guides
+// size servers whose workloads run on workers; without workers the control planes run them too
+// (TaintReconciler), so they need the class's least worker on top.
 func controlPlaneFit(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) (controlPlaneSize, controlPlaneSize, error) {
 	var need, have controlPlaneSize
 	topology := cluster.Spec.Topology
@@ -72,6 +78,11 @@ func controlPlaneFit(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) 
 		if s.Workers <= have.Workers {
 			need = s
 		}
+	}
+	if have.Workers == 0 {
+		worker := classMinimumSize(class, "workerMachine")
+		need.Cores += worker.Cores
+		need.MemoryMiB += worker.MemoryMiB
 	}
 	var err error
 	have.Cores, have.MemoryMiB, err = nodeSize(cluster, class, "controlPlaneMachine", topology.ControlPlane.Variables.Overrides)
@@ -117,6 +128,24 @@ func variableNamed(vars []clusterv1.ClusterVariable, name string) *clusterv1.Clu
 		}
 	}
 	return nil
+}
+
+// classMinimumSize is the least vCPUs and memory a class's machine variable lets a node have, zero
+// where its schema sets no minimum.
+func classMinimumSize(class *clusterv1.ClusterClass, name string) controlPlaneSize {
+	var size controlPlaneSize
+	for i := range class.Spec.Variables {
+		v := &class.Spec.Variables[i]
+		if v.Name != name {
+			continue
+		}
+		for field, value := range map[string]*int{"cores": &size.Cores, "memoryMiB": &size.MemoryMiB} {
+			if m := v.Schema.OpenAPIV3Schema.Properties[field].Minimum; m != nil {
+				*value = int(*m)
+			}
+		}
+	}
+	return size
 }
 
 // classDefaultSize is the vCPUs and memory a class's machine variable defaults to: each field's own

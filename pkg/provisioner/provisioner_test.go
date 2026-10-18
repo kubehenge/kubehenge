@@ -426,10 +426,14 @@ func TestHeadlampIngressOnlyWithAHostname(t *testing.T) {
 	}
 }
 
+// networkCluster is a cluster on that network with one worker, so its control planes run no
+// workloads.
 func networkCluster(gateway string, prefix int) *clusterv1.Cluster {
-	return cluster(clusterv1.ClusterVariable{Name: "network", Value: apiextensionsv1.JSON{
+	c := cluster(clusterv1.ClusterVariable{Name: "network", Value: apiextensionsv1.JSON{
 		Raw: fmt.Appendf(nil, `{"bridge":"vmbr0","addresses":["%s"],"prefix":%d,"gateway":"%s","dnsServers":["%s"]}`, gateway, prefix, gateway, gateway),
 	}})
+	c.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{{Class: "worker", Name: "md-0", Replicas: new(int32(1))}}
+	return c
 }
 
 // lookup walks a decoded document by object keys and list indexes, failing the test where the
@@ -484,12 +488,16 @@ func hooksFor(t *testing.T, objs ...client.Object) (*Hooks, client.Client) {
 	return &Hooks{Reader: reader, ClassNamespace: "kubehenge-system"}, reader
 }
 
-// machineVariable is a machine variable as the chart declares it, two vCPUs by default.
+// machineVariable is a machine variable as the RKE2 class declares it: two vCPUs and 4096 MiB by
+// default and at least.
 func machineVariable(name string) clusterv1.ClusterClassVariable {
 	return clusterv1.ClusterClassVariable{Name: name, Schema: clusterv1.VariableSchema{OpenAPIV3Schema: clusterv1.JSONSchemaProps{
-		Type:       "object",
-		Default:    &apiextensionsv1.JSON{Raw: []byte(`{"cores":2,"memoryMiB":4096,"diskGiB":30}`)},
-		Properties: map[string]clusterv1.JSONSchemaProps{"cores": {Type: "integer", Default: &apiextensionsv1.JSON{Raw: []byte("2")}}},
+		Type:    "object",
+		Default: &apiextensionsv1.JSON{Raw: []byte(`{"cores":2,"memoryMiB":4096,"diskGiB":30}`)},
+		Properties: map[string]clusterv1.JSONSchemaProps{
+			"cores":     {Type: "integer", Default: &apiextensionsv1.JSON{Raw: []byte("2")}, Minimum: new(int64(2))},
+			"memoryMiB": {Type: "integer", Minimum: new(int64(4096))},
+		},
 	}}}
 }
 

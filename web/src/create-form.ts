@@ -101,6 +101,23 @@ export function machineMinimums(c: ClusterClass | undefined, key: "controlPlaneM
   };
 }
 
+/**
+ * controlPlaneMinimums is the least a class lets a cluster's control planes have. Without workers
+ * they run the workloads too, so they need the class's least worker on top, as the controller asks.
+ */
+export function controlPlaneMinimums(c: ClusterClass | undefined, workers: number): Machine {
+  const min = machineMinimums(c, "controlPlaneMachine");
+  if (workers > 0) {
+    return min;
+  }
+  const worker = variable(c, "workerMachine")?.properties;
+  return {
+    ...min,
+    cores: min.cores + (worker?.["cores"]?.minimum ?? 0),
+    memoryMiB: min.memoryMiB + (worker?.["memoryMiB"]?.minimum ?? 0),
+  };
+}
+
 /** newForm is the wizard before anything is chosen. */
 export const newForm = (): Form => ({
   name: "",
@@ -438,9 +455,11 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
     ["controlPlaneMachine", form.controlPlaneMachine],
     ["workerMachine", form.workerMachine],
   ] as const) {
-    const min = machineMinimums(c, key);
+    const min = key === "controlPlaneMachine" ? controlPlaneMinimums(c, form.workerReplicas) : machineMinimums(c, key);
+    const alone =
+      key === "controlPlaneMachine" && form.workerReplicas === 0 ? " Without workers, they run the workloads too." : "";
     if (!whole(m.cores, min.cores)) {
-      p[key] = `A whole number of cores, at least ${min.cores}.`;
+      p[key] = `A whole number of cores, at least ${min.cores}.${alone}`;
     } else if (
       form.rancherInstall &&
       m.cores < rancherMinimumCores &&
@@ -448,7 +467,7 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
     ) {
       p[key] = `At least ${rancherMinimumCores} cores, which Rancher needs on every node.`;
     } else if (!whole(m.memoryMiB, min.memoryMiB) || m.memoryMiB % memoryStepMiB !== 0) {
-      p[key] = `Memory of at least ${min.memoryMiB} MiB, in steps of ${memoryStepMiB}.`;
+      p[key] = `Memory of at least ${min.memoryMiB} MiB, in steps of ${memoryStepMiB}.${alone}`;
     } else if (!whole(m.diskGiB, min.diskGiB)) {
       p[key] = `A whole number of GiB of disk, at least ${min.diskGiB}.`;
     }

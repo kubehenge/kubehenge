@@ -38,7 +38,10 @@ func TestControlPlanesFollowTheSizingGuide(t *testing.T) {
 		want string
 	}{
 		{"a few workers on the class's default", sized("", new(int32(3))), ""},
-		{"no workers", sized(""), ""},
+		{"no workers on the default", sized(""), "without workers run its workloads too and need at least 4 vCPUs and 8192 MiB of memory, and have 2 vCPUs and 4096 MiB"},
+		{"pools scaled to none", sized("", new(int32(0)), new(int32(0))), "without workers"},
+		{"no workers on a control plane and a worker's least", sized(`{"cores":4,"memoryMiB":8192}`), ""},
+		{"no workers, memory short", sized(`{"cores":4,"memoryMiB":6144}`), "have 4 vCPUs and 6144 MiB"},
 		{"226 workers on the default", sized("", new(int32(226))), "with 226 workers need at least 4 vCPUs and 8192 MiB of memory, and have 2 vCPUs and 4096 MiB"},
 		{"226 workers across pools", sized("", new(int32(200)), new(int32(26))), "with 226 workers"},
 		{"a pool without replicas starts with one", sized("", new(int32(225)), nil), "with 226 workers"},
@@ -93,5 +96,11 @@ func TestClusterValidatorHoldsControlPlanesToTheirWorkers(t *testing.T) {
 	}
 	if _, err := v.ValidateUpdate(ctx, many, enough); err != nil {
 		t.Errorf("a short cluster's control planes sized for its workers: %v", err)
+	}
+	if _, err := v.ValidateUpdate(ctx, few, sized("", new(int32(0)))); err == nil || !strings.Contains(err.Error(), "without workers") {
+		t.Errorf("the last workers taken from control planes that cannot carry the workloads: %v", err)
+	}
+	if _, err := v.ValidateUpdate(ctx, sized(`{"cores":4,"memoryMiB":8192}`, new(int32(1))), sized(`{"cores":4,"memoryMiB":8192}`, new(int32(0)))); err != nil {
+		t.Errorf("the last workers taken from control planes that carry the workloads: %v", err)
 	}
 }
