@@ -299,12 +299,12 @@ esac
 agnhost=registry.k8s.io/e2e-test-images/agnhost:2.61
 # agnhost_pod <name> <args...>: an agnhost pod at Pod Security's restricted level, which the
 # cluster enforces; the image runs as root unless told otherwise. The overrides merge into the
-# container by its name.
+# container by its name. sh has no local variables, so its own carry its prefix.
 agnhost_pod() {
-    overrides=$(printf '{"apiVersion":"v1","spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"%s","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' "$1")
-    name=$1
+    agnhost_overrides=$(printf '{"apiVersion":"v1","spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"%s","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' "$1")
+    agnhost_name=$1
     shift
-    wl -n e2e-policy run "${name}" --image="${agnhost}" --override-type=strategic --overrides="${overrides}" -- "$@"
+    wl -n e2e-policy run "${agnhost_name}" --image="${agnhost}" --override-type=strategic --overrides="${agnhost_overrides}" -- "$@"
 }
 wl create namespace e2e-policy
 agnhost_pod server netexec --http-port=8080
