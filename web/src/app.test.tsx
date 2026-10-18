@@ -31,6 +31,7 @@ const rke2: ClusterClass = {
     },
     { name: "cni", required: false, schema: { type: "string", enum: ["canal", "calico", "cilium"], default: "canal" } },
     { name: "headlamp", required: false, schema: { type: "object" } },
+    { name: "monitoring", required: false, schema: { type: "object" } },
     { name: "rancher", required: false, schema: { type: "object" } },
     {
       name: "oidc",
@@ -468,6 +469,8 @@ describe("create", () => {
     cni: "cilium",
     headlamp: true,
     headlampHostname: "",
+    monitoring: true,
+    grafanaHostname: "grafana.example",
     rancherInstall: false,
     rancherHostname: "",
     rancherRegister: false,
@@ -513,6 +516,7 @@ describe("create", () => {
         workerMachine: { cores: 4, memoryMiB: 8192, diskGiB: 40 },
         cni: "cilium",
         headlamp: { enabled: true },
+        monitoring: { enabled: true, hostname: "grafana.example" },
         rancher: { register: false },
         oidc: [],
       },
@@ -528,6 +532,7 @@ describe("create", () => {
       "Pod range": "Chosen clear of the nodes' network",
       "Worker machines": "4 cores, 8 GiB memory, 40 GiB disk",
       Headlamp: "On",
+      Monitoring: "On, Grafana at grafana.example",
       Rancher: "Not registered",
     });
     expect(

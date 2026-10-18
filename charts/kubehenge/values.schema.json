@@ -79,7 +79,7 @@
     "addons": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["headlamp", "rancher", "certManager", "cloudControllerManager", "csiPlugin", "cilium", "calico"],
+      "required": ["headlamp", "rancher", "monitoring", "certManager", "cloudControllerManager", "csiPlugin", "cilium", "calico"],
       "properties": {
         "headlamp": {
           "allOf": [{ "$ref": "#/$defs/chart" }],
@@ -101,6 +101,18 @@
               "description": "Kubernetes minor versions the Rancher release runs on, as <min>-<max>.",
               "type": "string",
               "pattern": "^[0-9]+-[0-9]+$"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "monitoring": {
+          "allOf": [{ "$ref": "#/$defs/chart" }],
+          "required": ["kubeRBACProxy"],
+          "properties": {
+            "kubeRBACProxy": {
+              "description": "kube-rbac-proxy's image by registry, repository, tag and digest.",
+              "type": "string",
+              "pattern": "^[^/@]+/[^:@]+:[^@]+@sha256:[0-9a-f]{64}$"
             }
           },
           "unevaluatedProperties": false

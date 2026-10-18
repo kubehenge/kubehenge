@@ -187,6 +187,13 @@ var testCharts = Charts{
 
 	Headlamp:      Chart{Repository: "https://kubernetes-sigs.github.io/headlamp", Name: "headlamp", Version: "0.45.0"},
 	HeadlampImage: "v0.45.0@sha256:db3f0e0fc58d358d41daa3fe7fc852437552c7ee873c3645470f7b86a8e0db49",
+
+	CertManager: Chart{Repository: "https://charts.jetstack.io", Name: "cert-manager", Version: "v1.21.2"},
+	Monitoring:  Chart{Repository: "https://prometheus-community.github.io/helm-charts", Name: "kube-prometheus-stack", Version: "92.10.1"},
+	KubeRBACProxy: Image{
+		Registry: "ghcr.io", Repository: "kube-rbac-proxy/kube-rbac-proxy", Tag: "v0.23.0",
+		Digest: "296fd0a10fb635414b4533b983f0d5a686ce0ce73567b7079b6595ba75034f1a",
+	},
 }
 
 func TestParseChart(t *testing.T) {
@@ -212,7 +219,7 @@ func TestCNIProxy(t *testing.T) {
 	c.Spec.ClusterNetwork.Pods.CIDRBlocks = []string{"10.50.0.0/16"}
 	values := func(t *testing.T, c *clusterv1.Cluster, cni CNI, chart Chart) string {
 		t.Helper()
-		proxies, err := helmChartProxies(c, &testCharts, "local-lvm", cni, Addons{})
+		proxies, err := helmChartProxies(c, &testCharts, "kubeadm", "local-lvm", cni, &Addons{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -249,10 +256,10 @@ func TestCNIProxy(t *testing.T) {
 	if !lookup[bool](t, operator, "manageCRDs") {
 		t.Errorf("the operator leaves Calico's CRDs to nobody: %s", calico)
 	}
-	if _, err := helmChartProxies(c, &testCharts, "local-lvm", CNI{Name: "weave", Pods: "10.42.0.0/16"}, Addons{}); err == nil {
+	if _, err := helmChartProxies(c, &testCharts, "kubeadm", "local-lvm", CNI{Name: "weave", Pods: "10.42.0.0/16"}, &Addons{}); err == nil {
 		t.Error("no error for a CNI without a chart")
 	}
-	if _, err := helmChartProxies(cluster(), &testCharts, "local-lvm", CNI{Name: "cilium"}, Addons{}); err == nil {
+	if _, err := helmChartProxies(cluster(), &testCharts, "kubeadm", "local-lvm", CNI{Name: "cilium"}, &Addons{}); err == nil {
 		t.Error("no error for a CNI without a pod range")
 	}
 }
@@ -315,7 +322,7 @@ func TestCalicoResources(t *testing.T) {
 
 func TestHelmChartProxiesHoldNoSecret(t *testing.T) {
 	t.Parallel()
-	proxies, err := helmChartProxies(cluster(), &testCharts, "local-lvm", CNI{}, Addons{})
+	proxies, err := helmChartProxies(cluster(), &testCharts, "kubeadm", "local-lvm", CNI{}, &Addons{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +374,7 @@ func TestHelmChartProxiesHoldNoSecret(t *testing.T) {
 
 func headlampProxyValues(t *testing.T, h Headlamp) (map[string]any, map[string]any) {
 	t.Helper()
-	proxies, err := helmChartProxies(cluster(), &testCharts, "local-lvm", CNI{}, Addons{Headlamp: h})
+	proxies, err := helmChartProxies(cluster(), &testCharts, "kubeadm", "local-lvm", CNI{}, &Addons{Headlamp: h})
 	if err != nil {
 		t.Fatal(err)
 	}

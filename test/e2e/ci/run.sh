@@ -175,7 +175,8 @@ templates_made
 # Nested vCPUs cost no memory, and with two an RKE2 control plane stopped answering its own lease
 # renewals while everything started.
 export KUBEHENGE_E2E_CONTROL_PLANE_CORES=4
-export KUBEHENGE_E2E_CONTROL_PLANE_MEMORY=2048 KUBEHENGE_E2E_WORKER_MEMORY=1024
+# The worker runs monitoring's Prometheus, Alertmanager and Grafana once the control plane is tainted.
+export KUBEHENGE_E2E_CONTROL_PLANE_MEMORY=2048 KUBEHENGE_E2E_WORKER_MEMORY=2048
 case "${test}" in
     rke2)
         # RKE2's static pods request 2 GiB between them; the class's minimum.

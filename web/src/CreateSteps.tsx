@@ -386,6 +386,33 @@ export function AddOnsStep({
       <label className="check">
         <input
           type="checkbox"
+          checked={form.monitoring}
+          aria-describedby="monitoring-hint"
+          onChange={(e) => set("monitoring", e.target.checked)}
+        />{" "}
+        Install monitoring
+      </label>
+      <p className="hint" id="monitoring-hint">
+        Prometheus, Alertmanager and Grafana, with dashboards and alerts for every node and control-plane component.
+        Grafana&apos;s admin password is in the kube-prometheus-stack-grafana Secret in the monitoring namespace.
+      </p>
+      {form.monitoring && (
+        <Field
+          label="Grafana host name"
+          hint="Optional: serve Grafana at this name through the cluster's ingress controller."
+        >
+          {(id) => (
+            <input
+              id={id}
+              value={form.grafanaHostname}
+              onChange={(e) => set("grafanaHostname", e.target.value.trim())}
+            />
+          )}
+        </Field>
+      )}
+      <label className="check">
+        <input
+          type="checkbox"
           checked={form.rancherInstall}
           disabled={canTrust === false && !form.rancherInstall}
           aria-describedby="rancher-hint"

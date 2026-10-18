@@ -49,6 +49,16 @@ describe("a cluster's options", () => {
       variables: { headlamp: { enabled: true } },
     });
 
+    await user.click(screen.getByRole("button", { name: "Edit monitoring" }));
+    dialog = screen.getByRole("dialog", { name: "Monitoring" });
+    await user.click(within(dialog).getByLabelText("Install monitoring"));
+    await user.type(within(dialog).getByLabelText("Grafana host name"), "grafana.example.org");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: { monitoring: { enabled: true, hostname: "grafana.example.org" } },
+    });
+
     await user.click(screen.getByRole("button", { name: "Edit Rancher" }));
     dialog = screen.getByRole("dialog", { name: "Rancher" });
     const register = within(dialog).getByLabelText("Register with Rancher");

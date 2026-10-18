@@ -34,7 +34,7 @@ management cluster (small, Talos, on Proxmox VE VMs; runs Kubehenge and nothing 
         ▼ creates and manages
 workload clusters on Proxmox VE VMs
  ├─ always: Proxmox CSI plugin, Proxmox cloud controller manager, control-plane virtual IP, CNI
- └─ chosen: Rancher, Headlamp
+ └─ chosen: Rancher, Headlamp, monitoring
 ```
 
 ## Management cluster
@@ -91,15 +91,25 @@ Add-ons are Helm charts installed per cluster by the Cluster API Add-on Provider
 | --- | --- | --- |
 | Rancher | runs in a cluster Kubehenge creates for it; Kubehenge registers its other clusters with it, so they appear in Rancher's interface | first |
 | Headlamp | Kubernetes web UI per cluster | first |
+| Monitoring | Prometheus, Alertmanager and Grafana per cluster, with kube-prometheus-stack's dashboards and alerts | first |
 | CIS hardening | each distribution's CIS profile (RKE2's CIS mode, kubeadm hardening; Talos is hardened by default) | next |
 | Pod security | Pod Security Admission levels, or Kyverno policies | next |
-| Monitoring | metrics and dashboards per cluster | next |
 | Istio | service mesh per cluster | next |
 | Cilium Cluster Mesh | connects the pod networks of clusters that run Cilium | next |
 
 Kubehenge's controller turns a cluster's add-on variables into HelmChartProxies beside the cluster, and deletes the proxy when an add-on is switched off, which uninstalls it. Values never carry a secret: the Add-on Provider for Helm keeps them in plain text.
 
 **Headlamp** (`headlamp: {enabled: true}`) has no rights of its own: its service account is bound to no role, and everyone signs in with their own token or through OIDC, so Headlamp shows each user exactly what their credentials allow. It is not exposed: `kubectl -n headlamp port-forward svc/headlamp 8080:80` reaches it from a workstation, and `hostname` adds an Ingress on the cluster's ingress controller (RKE2 and k3s bring Traefik; kubeadm brings none), with the certificate from `tlsSecret` or the controller's default. Plugins are those in its image; nothing is fetched at run time. Its pod meets Pod Security's restricted level.
+
+**Monitoring** (`monitoring: {enabled: true}`) installs kube-prometheus-stack into the `monitoring` namespace, with cert-manager, and every scrape is authenticated and verifies its server; nothing that serves metrics without authentication is opened beyond its node's loopback interface:
+
+- **Controller manager and scheduler** serve on every address of their node, behind their own authentication and authorisation. On RKE2 their certificates come from the server CA, for `localhost`, which Prometheus verifies them for. kubeadm's would be signed anew on every start by a CA of their own, so the class gives each control-plane node certificates from the cluster CA for its address instead. On k3s every component runs in one process, whose kubelet already serves all their metrics, so Prometheus takes them from the kubelet, as Rancher does, and the chart's alerts look for them there.
+- **Kubelets** on kubeadm ask the cluster CA for their serving certificates, which Kubehenge's controller approves when they name only the node and its Machine's addresses; the API server verifies them too. RKE2 and k3s sign theirs with the server CA.
+- **etcd and kube-proxy** serve their metrics over plain HTTP on loopback. A kube-rbac-proxy in front of each, on the node's address and the component's own port, takes only Prometheus's client certificate and asks the API server whether it may read `/metrics`. Prometheus gets no etcd client certificate, which would give it every key in the cluster.
+- **node-exporter** listens on loopback behind its chart's kube-rbac-proxy, which takes the same client certificate. It reads the host's namespaces and file system, which only Pod Security's privileged level allows, so it has a namespace of its own labelled privileged; the rest of the add-on meets the restricted level.
+- **Certificates:** cert-manager runs a CA of the add-on's own (ClusterIssuer `kubehenge-metrics`), which signs the proxies' serving certificates and Prometheus's client certificate, and nothing else. The chart's long-lived token is sent only to what asks for one, never over plain HTTP.
+
+Prometheus keeps ten days of metrics on a 20 GiB volume from the cluster's default storage class, Alertmanager its silences on 1 GiB. `hostname` serves Grafana through the cluster's ingress controller, with the certificate from `tlsSecret` or the controller's default; without it, `kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80` reaches it. Its `admin` password is generated into the `kube-prometheus-stack-grafana` Secret. The release carries the proxies and certificates, so switching monitoring off removes them with it.
 
 **Rancher** (`rancher: {install: true, hostname: …}`) goes into one cluster Kubehenge creates for it, never into the management cluster, together with cert-manager; Rancher makes its own CA, and its server URL is fixed to `hostname`, which must resolve to that cluster's ingress controller for people and for every registered cluster. Kubehenge's controller registers every other cluster with it once the cluster is available, unless the cluster sets `register: false`:
 

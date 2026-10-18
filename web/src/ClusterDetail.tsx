@@ -37,7 +37,17 @@ import {
 } from "./ui";
 import { flag, record, text, texts } from "./values";
 
-type Action = "scale" | "upgrade" | "delete" | "placement" | "ha" | "headlamp" | "rancher" | "upgrades" | "oidc";
+type Action =
+  | "scale"
+  | "upgrade"
+  | "delete"
+  | "placement"
+  | "ha"
+  | "headlamp"
+  | "monitoring"
+  | "rancher"
+  | "upgrades"
+  | "oidc";
 
 // A cluster on its way somewhere is looked at more often than a settled one.
 const pollChanging = 5000;
@@ -225,8 +235,9 @@ function ActionDialog({
     case "delete": {
       return <DeleteDialog cluster={c} onClose={onClose} />;
     }
-    case "headlamp": {
-      return <HeadlampDialog cluster={c} onClose={onClose} />;
+    case "headlamp":
+    case "monitoring": {
+      return <HostedAddonDialog cluster={c} addon={action} onClose={onClose} />;
     }
     case "rancher": {
       return <RancherDialog cluster={c} onClose={onClose} />;
@@ -247,13 +258,13 @@ function ActionDialog({
   return <OIDCDialog cluster={c} onClose={onClose} />;
 }
 
-interface HeadlampValue {
+interface HostedValue {
   enabled?: boolean | undefined;
   hostname?: string | undefined;
   tlsSecret?: string | undefined;
 }
 
-function headlampValue(v: unknown): HeadlampValue {
+function hostedValue(v: unknown): HostedValue {
   const r = record(v);
   return { enabled: flag(r["enabled"]), hostname: text(r["hostname"]), tlsSecret: text(r["tlsSecret"]) };
 }
@@ -466,7 +477,8 @@ function Options({
   can: boolean;
   onEdit: (a: Action) => void;
 }): JSX.Element {
-  const headlamp = headlampValue(c.variables["headlamp"]);
+  const headlamp = hostedValue(c.variables["headlamp"]);
+  const monitoring = hostedValue(c.variables["monitoring"]);
   const rancher = rancherValue(c.variables["rancher"]);
   const haOffered = useHAOffered(c.class, text(c.variables["storage"]));
   // name is how the row's button names what it changes, for those who hear it out of the grid.
@@ -488,6 +500,15 @@ function Options({
       value: headlamp.enabled === true ? `On${filled(headlamp.hostname) ? `, at ${headlamp.hostname}` : ""}` : "Off",
       action: "headlamp",
       name: "Headlamp",
+    },
+    {
+      label: "Monitoring",
+      value:
+        monitoring.enabled === true
+          ? `On${filled(monitoring.hostname) ? `, Grafana at ${monitoring.hostname}` : ""}`
+          : "Off",
+      action: "monitoring",
+      name: "monitoring",
     },
     {
       label: "Rancher",
@@ -882,12 +903,41 @@ function DeleteDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
   );
 }
 
-function HeadlampDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
-  const current = headlampValue(c.variables["headlamp"]);
+/** The add-ons switched on and off by an enabled flag, and served at a host name when one is set. */
+const hostedAddons = {
+  headlamp: {
+    title: "Headlamp",
+    install: "Install Headlamp",
+    hint: "A web interface inside the cluster. People sign in to it with their own token; it has no rights of its own.",
+    hostLabel: "Host name",
+    hostHint: "Optional: also serve it at this name through the cluster's ingress controller.",
+  },
+  monitoring: {
+    title: "Monitoring",
+    install: "Install monitoring",
+    hint: "Prometheus, Alertmanager and Grafana, with dashboards and alerts for every node and control-plane component. Grafana's admin password is in the kube-prometheus-stack-grafana Secret in the monitoring namespace.",
+    hostLabel: "Grafana host name",
+    hostHint: "Optional: serve Grafana at this name through the cluster's ingress controller.",
+  },
+} as const;
+
+type HostedAddon = keyof typeof hostedAddons;
+
+function HostedAddonDialog({
+  cluster: c,
+  addon,
+  onClose,
+}: {
+  cluster: Cluster;
+  addon: HostedAddon;
+  onClose: () => void;
+}): JSX.Element {
+  const words = hostedAddons[addon];
+  const current = hostedValue(c.variables[addon]);
   const [enabled, setEnabled] = useState(current.enabled === true);
   const [hostname, setHostname] = useState(current.hostname ?? "");
   const { busy, error, send } = useChange(c, onClose);
-  const value: HeadlampValue = { enabled };
+  const value: HostedValue = { enabled };
   if (enabled && hostname) {
     value.hostname = hostname;
   }
@@ -898,10 +948,10 @@ function HeadlampDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: ()
   const hint = useId();
   return (
     <Dialog
-      title="Headlamp"
+      title={words.title}
       onClose={onClose}
       onSubmit={() => {
-        void send({ variables: { headlamp: value } });
+        void send({ variables: { [addon]: value } });
       }}
       actions={
         <>
@@ -921,13 +971,13 @@ function HeadlampDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: ()
           aria-describedby={hint}
           onChange={(e) => setEnabled(e.target.checked)}
         />{" "}
-        Install Headlamp
+        {words.install}
       </label>
       <div className="hint" id={hint}>
-        A web interface inside the cluster. People sign in to it with their own token; it has no rights of its own.
+        {words.hint}
       </div>
       {enabled && (
-        <Field label="Host name" hint="Optional: also serve it at this name through the cluster's ingress controller.">
+        <Field label={words.hostLabel} hint={words.hostHint}>
           {(id) => <input id={id} value={hostname} onChange={(e) => setHostname(e.target.value.trim())} />}
         </Field>
       )}

@@ -70,6 +70,8 @@ type controllerOptions struct {
 	certManagerChart  string
 	rancherChart      string
 	rancherKubernetes string
+	monitoringChart   string
+	kubeRBACProxy     string
 	extensionConfig   string
 	upgradeInterval   time.Duration
 	classProviders    []string
@@ -110,9 +112,11 @@ separate nodes.`,
 	f.StringVar(&o.calicoChart, "calico-chart", "", "Calico's operator chart, for distributions without a CNI of their own, as <repository>/<name>:<version>")
 	f.StringVar(&o.headlampChart, "headlamp-chart", "", "Headlamp chart, for clusters that switch it on, as <repository>/<name>:<version>")
 	f.StringVar(&o.r.Charts.HeadlampImage, "headlamp-image", "", "Headlamp image tag with its digest, as <tag>@sha256:<digest>")
-	f.StringVar(&o.certManagerChart, "cert-manager-chart", "", "cert-manager chart, installed with Rancher, as <repository>/<name>:<version>")
+	f.StringVar(&o.certManagerChart, "cert-manager-chart", "", "cert-manager chart, installed with Rancher and with monitoring, as <repository>/<name>:<version>")
 	f.StringVar(&o.rancherChart, "rancher-chart", "", "Rancher chart, for the cluster that installs it, as <repository>/<name>:<version>")
 	f.StringVar(&o.rancherKubernetes, "rancher-kubernetes", "", "Kubernetes minor versions the Rancher chart runs on, as <min>-<max>, such as 34-36")
+	f.StringVar(&o.monitoringChart, "monitoring-chart", "", "kube-prometheus-stack chart, for clusters that switch monitoring on, as <repository>/<name>:<version>")
+	f.StringVar(&o.kubeRBACProxy, "kube-rbac-proxy-image", "", "kube-rbac-proxy image, in front of the metrics monitoring scrapes, as <registry>/<repository>:<tag>@sha256:<digest>")
 	f.StringArrayVar(&o.classProviders, "class-providers", nil, "namespaces of the Cluster API providers only one ClusterClass's clusters use, as <class>=<namespace>,<namespace>; they run only while a cluster does (repeatable)")
 	f.DurationVar(&o.upgradeInterval, "upgrade-interval", defaultUpgradeInterval, "how often clusters are checked for an automatic upgrade due in their window")
 	f.IntVar(&o.port, "extension-port", defaultExtensionPort, "port of the Runtime Extension server")
@@ -120,7 +124,7 @@ separate nodes.`,
 	f.StringVar(&o.certDir, "extension-cert-dir", "/etc/kubehenge/tls", "directory with tls.crt and tls.key for the Runtime Extension server")
 	f.StringVar(&o.healthAddr, "health-address", ":8081", "address of the liveness and readiness probes")
 	f.BoolVar(&o.leaderElect, "leader-elect", true, "elect one active controller among replicas")
-	for _, flag := range []string{"ccm-chart", "csi-chart", "cilium-chart", "calico-chart", "headlamp-chart", "headlamp-image", "cert-manager-chart", "rancher-chart", "rancher-kubernetes"} {
+	for _, flag := range []string{"ccm-chart", "csi-chart", "cilium-chart", "calico-chart", "headlamp-chart", "headlamp-image", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "monitoring-chart", "kube-rbac-proxy-image"} {
 		_ = cmd.MarkFlagRequired(flag)
 	}
 	return cmd
@@ -248,11 +252,16 @@ func (o *controllerOptions) parseCharts() error {
 		{"--headlamp-chart", o.headlampChart, &o.r.Charts.Headlamp},
 		{"--cert-manager-chart", o.certManagerChart, &o.r.Charts.CertManager},
 		{"--rancher-chart", o.rancherChart, &o.r.Charts.Rancher},
+		{"--monitoring-chart", o.monitoringChart, &o.r.Charts.Monitoring},
 	} {
 		var err error
 		if *c.chart, err = provisioner.ParseChart(c.value); err != nil {
 			return fmt.Errorf("%s: %w", c.flag, err)
 		}
+	}
+	var err error
+	if o.r.Charts.KubeRBACProxy, err = provisioner.ParseImage(o.kubeRBACProxy); err != nil {
+		return fmt.Errorf("--kube-rbac-proxy-image: %w", err)
 	}
 	return nil
 }
@@ -320,8 +329,9 @@ func (o *controllerOptions) newManager(scheme *runtime.Scheme, extensions *serve
 	return mgr, nil
 }
 
-// setUpControllers adds the reconciler, the registrar, what taints control-plane nodes and, when
-// some distribution's providers run only while used, the controller that starts and stops them.
+// setUpControllers adds the reconciler, the registrar, what taints control-plane nodes, what
+// approves kubeadm kubelets' serving certificates and, when some distribution's providers run only
+// while used, the controller that starts and stops them.
 func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *provisioner.Registrar, distributions *provisioner.Distributions) error {
 	o.r.Client = mgr.GetClient()
 	o.r.Registrar = registrar
@@ -335,6 +345,10 @@ func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *pro
 	tainter := &provisioner.TaintReconciler{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Remotes: registrar.Remotes}
 	if err := tainter.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the control-plane taints: %w", err)
+	}
+	approver := &provisioner.ServingCertApprover{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Remotes: registrar.Remotes}
+	if err := approver.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("the kubelet serving certificates: %w", err)
 	}
 	if len(distributions.Providers) == 0 {
 		return nil

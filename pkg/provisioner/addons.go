@@ -12,6 +12,8 @@ import (
 	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/yaml"
+
+	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
 const (
@@ -47,12 +49,16 @@ type Charts struct {
 	HeadlampImage string
 	CertManager   Chart
 	Rancher       Chart
+	Monitoring    Chart
+	// KubeRBACProxy is the image of the proxies in front of metrics served without authentication.
+	KubeRBACProxy Image
 }
 
 // Addons are the add-ons a cluster switches on through its variables.
 type Addons struct {
-	Headlamp Headlamp
-	Rancher  Rancher
+	Headlamp   Headlamp
+	Rancher    Rancher
+	Monitoring Monitoring
 }
 
 // addonsOf reads a cluster's add-on variables.
@@ -62,8 +68,17 @@ func addonsOf(cluster *clusterv1.Cluster) (Addons, error) {
 	if a.Headlamp, _, err = optionalVariable[Headlamp](cluster, headlampAddon); err != nil {
 		return a, err
 	}
+	if a.Monitoring, _, err = optionalVariable[Monitoring](cluster, monitoringAddon); err != nil {
+		return a, err
+	}
 	a.Rancher, err = rancherOf(cluster)
 	return a, err
+}
+
+// certManagerProxy names the cluster's cert-manager proxy, installed for Rancher and for
+// monitoring, either or both.
+func certManagerProxy(cluster *clusterv1.Cluster) string {
+	return cluster.Name + "-" + certManagerAddon
 }
 
 // rancherOf reads a cluster's rancher variable, the zero value if it has none.
@@ -72,9 +87,9 @@ func rancherOf(cluster *clusterv1.Cluster) (Rancher, error) {
 	return r, err
 }
 
-// rancherProxies name the proxies of Rancher's own cluster, which go when it is switched off.
-func rancherProxies(cluster *clusterv1.Cluster) []string {
-	return []string{cluster.Name + "-rancher", cluster.Name + "-cert-manager"}
+// rancherProxy names the proxy of Rancher's own cluster, which goes when it is switched off.
+func rancherProxy(cluster *clusterv1.Cluster) string {
+	return cluster.Name + "-" + rancherAddon
 }
 
 // rancherValues: Rancher makes its own CA through cert-manager and the agents trust only that CA,
@@ -311,14 +326,10 @@ func headlampValues(image string, h Headlamp) map[string]any {
 		},
 	}
 	if h.Hostname != "" {
-		tls := map[string]any{"hosts": []any{h.Hostname}}
-		if h.TLSSecret != "" {
-			tls["secretName"] = h.TLSSecret
-		}
 		values["ingress"] = map[string]any{
 			"enabled": true,
 			"hosts":   []any{map[string]any{"host": h.Hostname, "paths": []any{map[string]any{"path": "/", "type": "Prefix"}}}},
-			"tls":     []any{tls},
+			"tls":     []any{ingressTLS(h.Hostname, h.TLSSecret)},
 		}
 	}
 	return values
@@ -395,7 +406,7 @@ func proxmoxValues(storage string) (map[string]any, map[string]any) {
 // helmChartProxies installs the cloud controller manager and the CSI plugin into the cluster, the
 // CNI named by cni unless none is, and the add-ons switched on. The Add-on Provider for Helm
 // selects only Clusters in a proxy's own namespace, so each cluster gets its own proxies beside it.
-func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, storage string, cni CNI, addons Addons) ([]*unstructured.Unstructured, error) {
+func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution templates.Distribution, storage string, cni CNI, addons *Addons) ([]*unstructured.Unstructured, error) {
 	ccm, csi := proxmoxValues(storage)
 	type proxy struct {
 		suffix, release, namespace string
@@ -430,14 +441,23 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, storage string
 	if addons.Headlamp.Enabled {
 		wanted = append(wanted, proxy{headlampAddon, headlampAddon, headlampAddon, charts.Headlamp, headlampValues(charts.HeadlampImage, addons.Headlamp)})
 	}
+	if addons.Rancher.Install || addons.Monitoring.Enabled {
+		// A Secret goes with its Certificate, so that nothing an add-on asked for outlives it.
+		wanted = append(wanted, proxy{certManagerAddon, certManagerAddon, certManagerAddon, charts.CertManager, map[string]any{
+			"crds": map[string]any{"enabled": true}, "enableCertificateOwnerRef": true,
+		}})
+	}
 	if addons.Rancher.Install {
 		if addons.Rancher.Hostname == "" {
 			return nil, fmt.Errorf("cluster %s/%s: Rancher needs a hostname", cluster.Namespace, cluster.Name)
 		}
-		wanted = append(wanted,
-			proxy{certManagerAddon, certManagerAddon, certManagerAddon, charts.CertManager, map[string]any{"crds": map[string]any{"enabled": true}}},
-			proxy{rancherAddon, rancherAddon, rancherNamespace, charts.Rancher, rancherValues(addons.Rancher)},
-		)
+		wanted = append(wanted, proxy{rancherAddon, rancherAddon, rancherNamespace, charts.Rancher, rancherValues(addons.Rancher)})
+	}
+	if addons.Monitoring.Enabled {
+		wanted = append(wanted, proxy{
+			monitoringAddon, monitoringRelease, monitoringAddon, charts.Monitoring,
+			monitoringValues(distribution, charts.KubeRBACProxy, addons.Monitoring),
+		})
 	}
 
 	var proxies []*unstructured.Unstructured

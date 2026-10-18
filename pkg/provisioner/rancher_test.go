@@ -184,7 +184,7 @@ func TestClusterValidatorHoldsChangesToRancher(t *testing.T) {
 
 func TestRancherProxies(t *testing.T) {
 	t.Parallel()
-	proxies, err := helmChartProxies(cluster(), &testCharts, "local-lvm", CNI{}, Addons{Rancher: Rancher{Install: true, Hostname: "rancher.example.org"}})
+	proxies, err := helmChartProxies(cluster(), &testCharts, "kubeadm", "local-lvm", CNI{}, &Addons{Rancher: Rancher{Install: true, Hostname: "rancher.example.org"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestRancherProxies(t *testing.T) {
 	if _, ok := values["bootstrapPassword"]; ok {
 		t.Error("a password in plain-text values")
 	}
-	if _, err := helmChartProxies(cluster(), &testCharts, "local-lvm", CNI{}, Addons{Rancher: Rancher{Install: true}}); err == nil {
+	if _, err := helmChartProxies(cluster(), &testCharts, "kubeadm", "local-lvm", CNI{}, &Addons{Rancher: Rancher{Install: true}}); err == nil {
 		t.Error("Rancher without a hostname")
 	}
 }

@@ -51,6 +51,8 @@ linters:
         - switch
         - mapliteral
         - typeswitch
+      # A ResourceList names the resources a container asks for, not every one there is.
+      ignore-types: ^k8s\.io/api/core/v1\.ResourceName$
     funlen:
       lines: 100
       statements: 50
@@ -62,6 +64,7 @@ linters:
       # named for "name" reads worse than the literal, and is not how Kubernetes Go code is written.
       ignore-string-values:
         - ^(name|kind|spec|type|enabled|path|key|operator|cni|poolid|comment|delete)$
+        - ^(service|serviceMonitor|secret|secretName|tls|tlsConfig|insecureSkipVerify|hosts|resources|storage|ClusterRole|ALL)$
     ireturn:
       allow:
         - anon
@@ -90,6 +93,7 @@ linters:
       # Names in other people's APIs keep their spelling.
       ignore-rules:
         - synchronize
+        - organization
     mnd:
       # A command's argument count reads plainly where it is declared.
       ignored-functions:

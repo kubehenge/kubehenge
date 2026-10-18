@@ -1,7 +1,8 @@
 #!/bin/sh
 # End-to-end test of one Kubehenge ClusterClass on a Proxmox VE host, against a running management
 # cluster: create a cluster trusting an OpenID issuer, check sign-in through it, its nodes, cloud
-# controller manager and persistent volumes, switch Headlamp on and off, scale its workers up and
+# controller manager and persistent volumes, switch Headlamp and monitoring on and off (every
+# component scraped with its server verified), scale its workers up and
 # down, upgrade it by one minor version (for RKE2 and k3s with the first new server's join refused
 # at first), replace a node that dies, delete it, and check that nothing of it is left on Proxmox VE.
 #
@@ -398,6 +399,43 @@ case ${pod_security} in
 esac
 set_variable headlamp '{"enabled":false}'
 until_true 600 "Headlamp removed" absent wl -n headlamp get deployment/headlamp
+
+step "monitoring switched on and off"
+set_variable monitoring '{"enabled":true}'
+prometheus=statefulset/prometheus-kube-prometheus-stack-prometheus
+until_true 1200 "Prometheus installed" sh -c "KUBECONFIG=${work}/workload kubectl -n monitoring get ${prometheus} >/dev/null 2>&1"
+wl -n monitoring rollout status "${prometheus}" --timeout=15m
+# Every component's job, each scraped with its server verified; k3s's components are in its
+# kubelet's metrics.
+jobs="apiserver kubelet coredns kube-state-metrics node-exporter kube-etcd"
+[ "${distribution}" = k3s ] || jobs="${jobs} kube-controller-manager kube-scheduler kube-proxy"
+targets='/api/v1/namespaces/monitoring/services/http:kube-prometheus-stack-prometheus:9090/proxy/api/v1/targets?state=active'
+all_up() {
+    # shellcheck disable=SC2310 # wl wraps one kubectl call; a failed request is only a retry.
+    active=$(wl get --raw "${targets}") || return 1
+    for job in ${jobs}; do
+        printf '%s' "${active}" | jq -e --arg j "${job}" 'any(.data.activeTargets[]; .labels.job == $j)' > /dev/null || return 1
+    done
+    printf '%s' "${active}" | jq -e 'all(.data.activeTargets[]; .health == "up")' > /dev/null
+}
+deadline=$(($(date +%s) + 900))
+# shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+until all_up; do
+    now=$(date +%s)
+    if [ "${now}" -ge "${deadline}" ]; then
+        wl get --raw "${targets}" | jq -r '.data.activeTargets[] | select(.health != "up") | "\(.labels.job) \(.scrapeUrl): \(.lastError)"' >&2
+        fail "monitoring does not reach every component"
+    fi
+    sleep 10
+done
+pod_security=$(wl label --dry-run=server --overwrite namespace monitoring pod-security.kubernetes.io/enforce=restricted 2>&1)
+case ${pod_security} in
+    *violate*) fail "monitoring's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
+    *) ;;
+esac
+set_variable monitoring '{"enabled":false}'
+until_true 900 "monitoring removed" absent wl -n monitoring get "${prometheus}"
+until_true 300 "metrics proxies removed" absent wl -n kube-system get daemonset/kubehenge-etcd-metrics
 
 workers() {
     kubectl -n "${ns}" patch "cluster/${name}" --type=json \

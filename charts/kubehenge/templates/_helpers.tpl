@@ -209,6 +209,30 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           description: >-
             Secret in the headlamp namespace holding the certificate for hostname; the ingress
             controller's own default certificate when unset.
+- name: monitoring
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        Prometheus, Alertmanager and Grafana with the kube-prometheus-stack dashboards and alerts,
+        scraping every node and control-plane component over verified, authenticated TLS. Installs
+        cert-manager too. Grafana's admin password is in the kube-prometheus-stack-grafana Secret
+        in the monitoring namespace.
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        hostname:
+          type: string
+          format: hostname
+          description: Serve Grafana at this name through the cluster's ingress controller.
+        tlsSecret:
+          type: string
+          minLength: 1
+          description: >-
+            Secret in the monitoring namespace holding the certificate for hostname; the ingress
+            controller's own default certificate when unset.
 - name: rancher
   required: false
   schema:

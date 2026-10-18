@@ -181,11 +181,12 @@ spec:
             {{- with .Values.proxmox.region }}
             - --region={{ . }}
             {{- end }}
-            {{- range $flag, $chart := dict "ccm-chart" .Values.addons.cloudControllerManager "csi-chart" .Values.addons.csiPlugin "cilium-chart" .Values.addons.cilium "calico-chart" .Values.addons.calico "headlamp-chart" .Values.addons.headlamp "rancher-chart" .Values.addons.rancher "cert-manager-chart" .Values.addons.certManager }}
+            {{- range $flag, $chart := dict "ccm-chart" .Values.addons.cloudControllerManager "csi-chart" .Values.addons.csiPlugin "cilium-chart" .Values.addons.cilium "calico-chart" .Values.addons.calico "headlamp-chart" .Values.addons.headlamp "rancher-chart" .Values.addons.rancher "cert-manager-chart" .Values.addons.certManager "monitoring-chart" .Values.addons.monitoring }}
             - --{{ $flag }}={{ $chart.repository }}/{{ $chart.chart }}:{{ $chart.version }}
             {{- end }}
             - --headlamp-image={{ .Values.addons.headlamp.image }}
             - --rancher-kubernetes={{ .Values.addons.rancher.kubernetes }}
+            - --kube-rbac-proxy-image={{ .Values.addons.monitoring.kubeRBACProxy }}
             - --proxmox-ca=/etc/kubehenge/proxmox/ca.crt
             {{- range $class, $namespaces := .Values.providerNamespaces }}
             - --class-providers={{ $class }}={{ join "," $namespaces }}

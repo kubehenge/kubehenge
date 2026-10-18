@@ -49,6 +49,8 @@ export interface Form {
   cni: string;
   headlamp: boolean;
   headlampHostname: string;
+  monitoring: boolean;
+  grafanaHostname: string;
   rancherInstall: boolean;
   rancherHostname: string;
   rancherRegister: boolean;
@@ -103,6 +105,8 @@ export const newForm = (): Form => ({
   cni: "",
   headlamp: false,
   headlampHostname: "",
+  monitoring: false,
+  grafanaHostname: "",
   rancherInstall: false,
   rancherHostname: "",
   rancherRegister: true,
@@ -164,6 +168,11 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   if (form.headlamp) {
     variables["headlamp"] = form.headlampHostname
       ? { enabled: true, hostname: form.headlampHostname }
+      : { enabled: true };
+  }
+  if (form.monitoring) {
+    variables["monitoring"] = form.grafanaHostname
+      ? { enabled: true, hostname: form.grafanaHostname }
       : { enabled: true };
   }
   if (form.rancherInstall) {
@@ -239,6 +248,12 @@ export function summary(form: Form, c: ClusterClass, haOffered = false): [string
     rows.push([
       "Headlamp",
       form.headlamp ? `On${form.headlampHostname ? `, at ${form.headlampHostname}` : ""}` : "Off",
+    ]);
+  }
+  if (defined.has("monitoring")) {
+    rows.push([
+      "Monitoring",
+      form.monitoring ? `On${form.grafanaHostname ? `, Grafana at ${form.grafanaHostname}` : ""}` : "Off",
     ]);
   }
   if (defined.has("rancher")) {

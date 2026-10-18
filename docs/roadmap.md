@@ -15,7 +15,7 @@
 ## Next
 
 - A Talos ClusterClass, once Cluster API's Talos providers support ClusterClass in a release.
-- Add-ons: CIS hardening per distribution, pod security through Pod Security Admission or Kyverno, monitoring, and the Istio service mesh.
+- Add-ons: CIS hardening per distribution, pod security through Pod Security Admission or Kyverno, and the Istio service mesh.
 - Cilium Cluster Mesh, connecting the pod networks of clusters that run Cilium.
 
 ## Later

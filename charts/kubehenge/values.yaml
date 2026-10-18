@@ -74,7 +74,16 @@ addons:
     # Kubernetes minor versions this Rancher release runs on (its chart's kubeVersion and support
     # matrix); the cluster that installs it is held within them.
     kubernetes: 34-36
-  # Installed with Rancher, which makes its CA and certificate through it.
+  # Prometheus, Alertmanager and Grafana, for clusters that switch monitoring on.
+  monitoring:
+    repository: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    version: 92.10.1
+    # In front of the metrics etcd, kube-proxy and node-exporter serve without authentication.
+    # renovate: datasource=docker depName=ghcr.io/kube-rbac-proxy/kube-rbac-proxy
+    kubeRBACProxy: ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.23.0@sha256:296fd0a10fb635414b4533b983f0d5a686ce0ce73567b7079b6595ba75034f1a
+  # Installed with Rancher, which makes its CA and certificate through it, and with monitoring,
+  # whose metrics proxies and Prometheus it gives their certificates.
   certManager:
     repository: https://charts.jetstack.io
     chart: cert-manager
