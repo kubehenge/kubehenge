@@ -62,19 +62,20 @@ func kyvernoPolicyValues(level string, exempt []string) map[string]any {
 
 // removeKyverno uninstalls Kyverno's policies, and Kyverno once they are gone: their release
 // cannot be uninstalled after Kyverno's custom resource definitions have gone with Kyverno's.
-func (r *Reconciler) removeKyverno(ctx context.Context, cluster *clusterv1.Cluster) error {
+// It reports whether Kyverno waits on its policies.
+func (r *Reconciler) removeKyverno(ctx context.Context, cluster *clusterv1.Cluster) (bool, error) {
 	if err := r.removeProxies(ctx, cluster, kyvernoPoliciesProxy(cluster)); err != nil {
-		return err
+		return false, err
 	}
 	p := &unstructured.Unstructured{}
 	p.SetGroupVersionKind(helmChartProxyGVK)
 	err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: kyvernoPoliciesProxy(cluster)}, p)
 	switch {
 	case apierrors.IsNotFound(err):
-		return r.removeProxies(ctx, cluster, kyvernoProxy(cluster))
+		return false, r.removeProxies(ctx, cluster, kyvernoProxy(cluster))
 	case err != nil:
-		return fmt.Errorf("reading add-on %s: %w", kyvernoPoliciesProxy(cluster), err)
+		return false, fmt.Errorf("reading add-on %s: %w", kyvernoPoliciesProxy(cluster), err)
 	default:
-		return nil
+		return true, nil
 	}
 }

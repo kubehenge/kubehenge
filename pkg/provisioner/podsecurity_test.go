@@ -9,6 +9,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 )
@@ -101,8 +102,13 @@ func TestReconcileRemovesKyvernoAfterItsPolicies(t *testing.T) {
 	}
 	current.Spec.Topology.Variables[len(current.Spec.Topology.Variables)-1].Value.Raw = []byte(`{"kyverno":"off"}`)
 	update(current)
-	if err := reconcile(t, r, current); err != nil {
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(current)})
+	if err != nil {
 		t.Fatal(err)
+	}
+	// Removing the policies changes nothing the controller watches.
+	if res.RequeueAfter != waitInterval {
+		t.Errorf("waiting on Kyverno's policies, the cluster is looked at again after %v", res.RequeueAfter)
 	}
 	if err := lookUp("web-kyverno"); err != nil {
 		t.Fatalf("Kyverno removed before its policies are uninstalled: %v", err)

@@ -133,41 +133,46 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.applyAddons(ctx, cluster, creds, &addons); err != nil {
+	addonWaiting, err := r.applyAddons(ctx, cluster, creds, &addons)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 	// Marked ready last: BeforeClusterCreate lets the cluster be built once it is.
-	if err := r.keep(ctx, cluster, creds, true); err != nil {
+	if err = r.keep(ctx, cluster, creds, true); err != nil {
 		return ctrl.Result{}, err
 	}
 	// After the rest: Rancher's removal waits on every cluster registered with it, however long
 	// that takes, and nothing else of this cluster waits with it.
+	rancherWaiting := false
 	if !addons.Rancher.Install && rancherRefused == "" {
 		var with []string
 		if !addons.Monitoring.Enabled {
 			with = append(with, certManagerProxy(cluster))
 		}
-		return r.removeRancherWhenFree(ctx, cluster, with...)
+		if rancherWaiting, err = r.removeRancherWhenFree(ctx, cluster, with...); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	// Nothing the waits are on changes the Cluster, so only a requeue looks again.
+	if addonWaiting || rancherWaiting {
+		return ctrl.Result{RequeueAfter: waitInterval}, nil
 	}
 	return ctrl.Result{RequeueAfter: resync}, nil
 }
 
-// removeRancherWhenFree removes Rancher from a cluster that switched it off, or waits for Rancher
-// to let go of the clusters registered with it first.
-func (r *Reconciler) removeRancherWhenFree(ctx context.Context, cluster *clusterv1.Cluster, with ...string) (ctrl.Result, error) {
+// removeRancherWhenFree removes Rancher from a cluster that switched it off, or reports that it
+// waits for Rancher to let go of the clusters registered with it first.
+func (r *Reconciler) removeRancherWhenFree(ctx context.Context, cluster *clusterv1.Cluster, with ...string) (bool, error) {
 	waiting, err := r.removeRancher(ctx, cluster, with...)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if !waiting {
-		return ctrl.Result{RequeueAfter: resync}, nil
+	if err != nil || !waiting {
+		return false, err
 	}
 	ctrl.LoggerFrom(ctx).Info("waiting for Rancher to let go of the clusters registered with it before removing it")
 	if r.Events != nil {
 		r.Events.Eventf(cluster, nil, corev1.EventTypeNormal, "RemovingRancher", "RemoveRancher",
 			"waiting for Rancher to let go of the clusters registered with it")
 	}
-	return ctrl.Result{RequeueAfter: waitInterval}, nil
+	return true, nil
 }
 
 // addFinalizer holds the cluster until its Proxmox VE objects are removed.
@@ -265,8 +270,9 @@ func (r *Reconciler) addons(ctx context.Context, cluster *clusterv1.Cluster) (Ad
 }
 
 // removeSwitchedOff removes the proxies of Headlamp, monitoring and Kyverno when the cluster
-// switches them off; Rancher's removal waits on its registered clusters, apart from these.
-func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons) error {
+// switches them off; Rancher's removal waits on its registered clusters, apart from these. It
+// reports whether a removal waits on another.
+func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons) (bool, error) {
 	var off []string
 	if !addons.Headlamp.Enabled {
 		off = append(off, headlampProxy(cluster))
@@ -275,41 +281,43 @@ func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.C
 		off = append(off, monitoringProxy(cluster))
 	}
 	if err := r.removeProxies(ctx, cluster, off...); err != nil {
-		return err
+		return false, err
 	}
 	if !addons.PodSecurity.kyvernoOn() {
 		return r.removeKyverno(ctx, cluster)
 	}
-	return nil
+	return false, nil
 }
 
 // applyAddons applies what the cluster gets installed: the Secrets of its ClusterResourceSet, the
-// set itself and the HelmChartProxies of its charts, and removes those switched off.
-func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster, creds Credentials, addons *Addons) error {
+// set itself and the HelmChartProxies of its charts, and removes those switched off. It reports
+// whether a removal waits on another.
+func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster, creds Credentials, addons *Addons) (bool, error) {
 	storage, err := variable[string](cluster, "storage")
 	if err != nil {
-		return err
+		return false, err
 	}
 	resources, err := resourceSetSecret(cluster, r.Endpoint, creds)
 	if err != nil {
-		return err
+		return false, err
 	}
 	cni, err := r.addonCNI(ctx, cluster)
 	if err != nil {
-		return err
+		return false, err
 	}
 	proxies, err := helmChartProxies(cluster, &r.Charts, distributionOf(cluster), storage, cni, addons)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if err := r.removeSwitchedOff(ctx, cluster, addons); err != nil {
-		return err
+	waiting, err := r.removeSwitchedOff(ctx, cluster, addons)
+	if err != nil {
+		return false, err
 	}
 	secrets := []*corev1.Secret{resources}
 	if cni.Name == cniCalico {
 		calico, err := calicoResources(cluster, cni)
 		if err != nil {
-			return err
+			return false, err
 		}
 		secrets = append(secrets, calico)
 	}
@@ -317,21 +325,21 @@ func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster
 		desired := s.DeepCopy()
 		mutate := func(got *corev1.Secret) { got.Type, got.Data = desired.Type, desired.Data }
 		if err := applyOwned(ctx, r.Client, cluster, s, mutate); err != nil {
-			return err
+			return false, err
 		}
 	}
 	crs := clusterResourceSet(cluster, cni)
 	desired := crs.Spec.DeepCopy()
 	if err := applyOwned(ctx, r.Client, cluster, crs, func(got *addonsv1.ClusterResourceSet) { got.Spec = *desired }); err != nil {
-		return err
+		return false, err
 	}
 	for _, p := range proxies {
 		desired := p.Object["spec"]
 		if err := applyOwned(ctx, r.Client, cluster, p, func(got *unstructured.Unstructured) { got.Object["spec"] = desired }); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return nil
+	return waiting, nil
 }
 
 // held reads what was recorded for the cluster; nothing yet, or no longer once a foreground
