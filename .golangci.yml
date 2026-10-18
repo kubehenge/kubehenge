@@ -64,7 +64,7 @@ linters:
       # named for "name" reads worse than the literal, and is not how Kubernetes Go code is written.
       ignore-string-values:
         - ^(name|kind|spec|type|enabled|path|key|operator|cni|poolid|comment|delete)$
-        - ^(service|serviceMonitor|secret|secretName|tls|tlsConfig|insecureSkipVerify|hosts|resources|storage|ClusterRole|ALL)$
+        - ^(namespace|service|serviceMonitor|secret|secretName|tls|tlsConfig|insecureSkipVerify|hosts|resources|storage|ClusterRole|ALL)$
     ireturn:
       allow:
         - anon

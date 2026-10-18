@@ -51,14 +51,20 @@ type Charts struct {
 	Rancher       Chart
 	Monitoring    Chart
 	// KubeRBACProxy is the image of the proxies in front of metrics served without authentication.
-	KubeRBACProxy Image
+	KubeRBACProxy   Image
+	Kyverno         Chart
+	KyvernoPolicies Chart
+	// PodSecurityExempt are the namespaces Kyverno's policies leave alone, those the ClusterClasses'
+	// Pod Security Admission exempts.
+	PodSecurityExempt []string
 }
 
 // Addons are the add-ons a cluster switches on through its variables.
 type Addons struct {
-	Headlamp   Headlamp
-	Rancher    Rancher
-	Monitoring Monitoring
+	Headlamp    Headlamp
+	Rancher     Rancher
+	Monitoring  Monitoring
+	PodSecurity PodSecurity
 }
 
 // addonsOf reads a cluster's add-on variables.
@@ -69,6 +75,9 @@ func addonsOf(cluster *clusterv1.Cluster) (Addons, error) {
 		return a, err
 	}
 	if a.Monitoring, _, err = optionalVariable[Monitoring](cluster, monitoringAddon); err != nil {
+		return a, err
+	}
+	if a.PodSecurity, _, err = optionalVariable[PodSecurity](cluster, podSecurityVariable); err != nil {
 		return a, err
 	}
 	a.Rancher, err = rancherOf(cluster)
@@ -458,6 +467,12 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 			monitoringAddon, monitoringRelease, monitoringAddon, charts.Monitoring,
 			monitoringValues(distribution, charts.KubeRBACProxy, addons.Monitoring),
 		})
+	}
+	if addons.PodSecurity.kyvernoOn() {
+		wanted = append(wanted,
+			proxy{kyvernoAddon, kyvernoAddon, kyvernoAddon, charts.Kyverno, kyvernoValues()},
+			proxy{kyvernoPolicies, kyvernoPolicies, kyvernoAddon, charts.KyvernoPolicies, kyvernoPolicyValues(addons.PodSecurity.Kyverno, charts.PodSecurityExempt)},
+		)
 	}
 
 	var proxies []*unstructured.Unstructured

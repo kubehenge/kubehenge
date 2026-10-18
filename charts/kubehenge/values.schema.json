@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["workloadPool", "providerNamespaces", "interface", "clusters", "clusterOIDC", "image", "proxmox", "addons"],
+  "required": ["workloadPool", "providerNamespaces", "interface", "clusters", "clusterOIDC", "podSecurityExempt", "image", "proxmox", "addons"],
   "properties": {
     "chartDigest": {
       "description": "Digest of the chart's files, which the management cluster's module passes so that a changed chart upgrades the release whatever its version says.",
@@ -58,6 +58,12 @@
         }
       }
     },
+    "podSecurityExempt": {
+      "description": "Namespaces neither Pod Security Admission nor Kyverno holds to a cluster's pod security level.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/name" },
+      "uniqueItems": true
+    },
     "image": {
       "description": "Kubehenge's controller image; empty means the one this chart was released with.",
       "type": "string"
@@ -79,7 +85,7 @@
     "addons": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["headlamp", "rancher", "monitoring", "certManager", "cloudControllerManager", "csiPlugin", "cilium", "calico"],
+      "required": ["headlamp", "rancher", "monitoring", "kyverno", "kyvernoPolicies", "certManager", "cloudControllerManager", "csiPlugin", "cilium", "calico"],
       "properties": {
         "headlamp": {
           "allOf": [{ "$ref": "#/$defs/chart" }],
@@ -117,6 +123,8 @@
           },
           "unevaluatedProperties": false
         },
+        "kyverno": { "$ref": "#/$defs/chartOnly" },
+        "kyvernoPolicies": { "$ref": "#/$defs/chartOnly" },
         "certManager": { "$ref": "#/$defs/chartOnly" },
         "cloudControllerManager": { "$ref": "#/$defs/chartOnly" },
         "csiPlugin": { "$ref": "#/$defs/chartOnly" },

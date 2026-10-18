@@ -233,6 +233,32 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           description: >-
             Secret in the monitoring namespace holding the certificate for hostname; the ingress
             controller's own default certificate when unset.
+- name: podSecurity
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        The Pod Security Standard the cluster's pods are held to, by Kubernetes' Pod Security
+        Admission, by Kyverno, or by both. The namespaces of the components that need the host
+        (kube-system, the CNI's, node-exporter's, Rancher's) are exempt from both.
+      properties:
+        admission:
+          type: string
+          enum: [privileged, baseline, restricted]
+          default: privileged
+          description: >-
+            The level Pod Security Admission enforces in every namespace that labels none of its
+            own. Below restricted, pods short of restricted are warned about and audited. Changing
+            it replaces the control-plane machines.
+        kyverno:
+          type: string
+          enum: ["off", baseline, restricted]
+          default: "off"
+          description: >-
+            The level Kyverno's Pod Security Standards policies enforce, in every namespace and
+            whatever its labels say, with a policy report of what falls short; off leaves Kyverno
+            out of the cluster.
 - name: rancher
   required: false
   schema:
@@ -351,6 +377,23 @@ renders with the cluster's variables. Call with (dict "root" $ "path" …).
 {{- define "kubehenge.oidcFile" -}}
 path: {{ .path }}
 {{ .root.Files.Get "files/authentication-config.tpl" }}
+{{- end -}}
+
+{{/*
+Pod Security Admission's configuration as a bootstrap file at path, a template Cluster API renders
+with the cluster's variables, the chart's exempt namespaces written into it. Call with
+(dict "root" $ "path" …).
+*/}}
+{{- define "kubehenge.podSecurityFile" -}}
+path: {{ .path }}
+{{ printf "{{- $exempt := list %s }}" (include "kubehenge.quotedList" .root.Values.podSecurityExempt) }}
+{{ .root.Files.Get "files/pod-security.tpl" }}
+{{- end -}}
+
+{{- define "kubehenge.quotedList" -}}
+{{- $quoted := list }}
+{{- range . }}{{ $quoted = append $quoted (quote .) }}{{ end }}
+{{- join " " $quoted }}
 {{- end -}}
 
 {{- define "kubehenge.oidcEnabled" -}}

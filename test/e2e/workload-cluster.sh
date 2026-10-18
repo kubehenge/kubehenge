@@ -1,10 +1,11 @@
 #!/bin/sh
 # End-to-end test of one Kubehenge ClusterClass on a Proxmox VE host, against a running management
-# cluster: create a cluster trusting an OpenID issuer, check sign-in through it, its nodes, cloud
-# controller manager and persistent volumes, switch Headlamp and monitoring on and off (every
-# component scraped with its server verified), scale its workers up and
-# down, upgrade it by one minor version (for RKE2 and k3s with the first new server's join refused
-# at first), replace a node that dies, delete it, and check that nothing of it is left on Proxmox VE.
+# cluster: create a cluster trusting an OpenID issuer and enforcing Pod Security's restricted level,
+# check sign-in through it, its nodes, cloud controller manager and persistent volumes, switch
+# Headlamp, monitoring (every component scraped with its server verified) and Kyverno on and off,
+# scale its workers up and down, upgrade it by one minor version (for RKE2 and k3s with the first
+# new server's join refused at first), replace a node that dies, delete it, and check that nothing
+# of it is left on Proxmox VE.
 #
 #   test/e2e/workload-cluster.sh <ClusterClass> <version> <upgrade version>
 #
@@ -198,6 +199,10 @@ ${network_spec}
 ${cni_variable}
       - name: oidc
         value: ${oidc}
+      # The strictest level from the start, so that every component Kubehenge installs is seen to
+      # run under it, or to sit in a namespace it exempts.
+      - name: podSecurity
+        value: {admission: restricted}
 EOF
 kubectl apply -f "${work}/cluster.yaml"
 # capmox does not come back to a machine whose VM failed to provision, so the wait ends there rather
@@ -436,6 +441,42 @@ esac
 set_variable monitoring '{"enabled":false}'
 until_true 900 "monitoring removed" absent wl -n monitoring get "${prometheus}"
 until_true 300 "metrics proxies removed" absent wl -n kube-system get daemonset/kubehenge-etcd-metrics
+
+step "pod security enforced, with Kyverno switched on and off"
+# privileged_pod <namespace>: asks the API server to admit a privileged pod, without creating it.
+privileged_pod() {
+    wl -n "$1" run e2e-privileged --image=registry.k8s.io/pause:3.10.1 --restart=Never --dry-run=server \
+        --overrides='{"apiVersion":"v1","spec":{"containers":[{"name":"e2e-privileged","image":"registry.k8s.io/pause:3.10.1","securityContext":{"privileged":true}}]}}' 2>&1
+}
+# shellcheck disable=SC2310 # the refusal is the answer looked for.
+refused=$(privileged_pod default) && fail "a privileged pod is admitted under Pod Security's restricted level"
+case ${refused} in
+    *'violates PodSecurity "restricted'*) ;;
+    *) fail "a privileged pod is refused for another reason: ${refused}" ;;
+esac
+# A namespace labelled privileged is past Pod Security Admission, but not past Kyverno.
+wl create namespace e2e-privileged
+wl label namespace e2e-privileged pod-security.kubernetes.io/enforce=privileged
+set_variable podSecurity '{"admission":"restricted","kyverno":"restricted"}'
+kyverno_refuses() {
+    # shellcheck disable=SC2310 # admitted is a retry until the policies are in place.
+    out=$(privileged_pod e2e-privileged) && return 1
+    case ${out} in
+        *disallow-privileged-containers*) ;;
+        *) return 1 ;;
+    esac
+}
+until_true 900 "Kyverno refuses a privileged pod" kyverno_refuses
+pod_security=$(wl label --dry-run=server --overwrite namespace kyverno pod-security.kubernetes.io/enforce=restricted 2>&1)
+case ${pod_security} in
+    *violate*) fail "Kyverno's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
+    *) ;;
+esac
+set_variable podSecurity '{"admission":"restricted","kyverno":"off"}'
+until_true 900 "Kyverno removed" absent wl -n kyverno get deployment/kyverno-admission-controller
+# shellcheck disable=SC2310 # the admission is the answer looked for.
+privileged_pod e2e-privileged > /dev/null || fail "Kyverno's policies outlive Kyverno"
+wl delete namespace e2e-privileged --wait --timeout=5m
 
 workers() {
     kubectl -n "${ns}" patch "cluster/${name}" --type=json \

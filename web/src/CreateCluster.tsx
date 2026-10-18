@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState, type JSX } from "react";
 
+import { AddOnsStep } from "./AddOnsStep";
 import { api, bridgesOf } from "./api";
 import { clusterPath } from "./ClusterDetail";
 import {
@@ -19,7 +20,7 @@ import {
   type Form,
   type Step,
 } from "./create-form";
-import { AddOnsStep, GeneralStep, IdentityStep, MachinesStep, NetworkStep } from "./CreateSteps";
+import { GeneralStep, IdentityStep, MachinesStep, NetworkStep } from "./CreateSteps";
 import { offersHA, useHARules } from "./Placement";
 import { navigate } from "./router";
 import type { Bridge, ClusterClass, PveNode, Storage, Versions } from "./types";

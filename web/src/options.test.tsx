@@ -59,6 +59,20 @@ describe("a cluster's options", () => {
       variables: { monitoring: { enabled: true, hostname: "grafana.example.org" } },
     });
 
+    expect(screen.getByRole("row", { name: /Pod security/u })).toHaveTextContent("Not enforced");
+    await user.click(screen.getByRole("button", { name: "Edit pod security" }));
+    dialog = screen.getByRole("dialog", { name: "Pod security" });
+    const admission = within(dialog).getByLabelText("Pod Security Admission");
+    expect(admission).toHaveAccessibleDescription(/replaces the control-plane nodes/u);
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    await user.selectOptions(admission, "baseline");
+    await user.selectOptions(within(dialog).getByLabelText("Kyverno"), "restricted");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: { podSecurity: { admission: "baseline", kyverno: "restricted" } },
+    });
+
     await user.click(screen.getByRole("button", { name: "Edit Rancher" }));
     dialog = screen.getByRole("dialog", { name: "Rancher" });
     const register = within(dialog).getByLabelText("Register with Rancher");

@@ -3,6 +3,7 @@ import { defaultMinutes, defaultStart, describe, type UpgradeMode, type UpgradeP
 import { addressBits, addressCount, inList, ipv4, isVLAN, list, rangeProblem, whole } from "./network";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
+import { podSecurityOf, podSecurityText, podSecurityVariable, type PodSecurity } from "./PodSecurity";
 import type { Bridge, ClusterClass, CreateRequest, OIDCProvider, Schema, Storage } from "./types";
 import { browserZone, distributionName, filled, registeredWithRancher, sentence } from "./ui";
 import { quantity, record, texts } from "./values";
@@ -51,6 +52,7 @@ export interface Form {
   headlampHostname: string;
   monitoring: boolean;
   grafanaHostname: string;
+  podSecurity: PodSecurity;
   rancherInstall: boolean;
   rancherHostname: string;
   rancherRegister: boolean;
@@ -107,6 +109,7 @@ export const newForm = (): Form => ({
   headlampHostname: "",
   monitoring: false,
   grafanaHostname: "",
+  podSecurity: podSecurityOf(undefined),
   rancherInstall: false,
   rancherHostname: "",
   rancherRegister: true,
@@ -174,6 +177,10 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
     variables["monitoring"] = form.grafanaHostname
       ? { enabled: true, hostname: form.grafanaHostname }
       : { enabled: true };
+  }
+  const podSecurity = podSecurityVariable(form.podSecurity);
+  if (podSecurity) {
+    variables["podSecurity"] = podSecurity;
   }
   if (form.rancherInstall) {
     variables["rancher"] = { install: true, hostname: form.rancherHostname };
@@ -255,6 +262,9 @@ export function summary(form: Form, c: ClusterClass, haOffered = false): [string
       "Monitoring",
       form.monitoring ? `On${form.grafanaHostname ? `, Grafana at ${form.grafanaHostname}` : ""}` : "Off",
     ]);
+  }
+  if (defined.has("podSecurity")) {
+    rows.push(["Pod security", podSecurityText(form.podSecurity)]);
   }
   if (defined.has("rancher")) {
     rows.push(["Rancher", rancherChoice(form)]);

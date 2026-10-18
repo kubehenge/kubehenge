@@ -34,7 +34,7 @@ management cluster (small, Talos, on Proxmox VE VMs; runs Kubehenge and nothing 
         ▼ creates and manages
 workload clusters on Proxmox VE VMs
  ├─ always: Proxmox CSI plugin, Proxmox cloud controller manager, control-plane virtual IP, CNI
- └─ chosen: Rancher, Headlamp, monitoring
+ └─ chosen: Rancher, Headlamp, monitoring, pod security
 ```
 
 ## Management cluster
@@ -92,8 +92,8 @@ Add-ons are Helm charts installed per cluster by the Cluster API Add-on Provider
 | Rancher | runs in a cluster Kubehenge creates for it; Kubehenge registers its other clusters with it, so they appear in Rancher's interface | first |
 | Headlamp | Kubernetes web UI per cluster | first |
 | Monitoring | Prometheus, Alertmanager and Grafana per cluster, with kube-prometheus-stack's dashboards and alerts | first |
+| Pod security | a Pod Security Standard level enforced by Pod Security Admission, by Kyverno's policies, or both | first |
 | CIS hardening | each distribution's CIS profile (RKE2's CIS mode, kubeadm hardening; Talos is hardened by default) | next |
-| Pod security | Pod Security Admission levels, or Kyverno policies | next |
 | Istio | service mesh per cluster | next |
 | Cilium Cluster Mesh | connects the pod networks of clusters that run Cilium | next |
 
@@ -110,6 +110,13 @@ Kubehenge's controller turns a cluster's add-on variables into HelmChartProxies 
 - **Certificates:** cert-manager runs a CA of the add-on's own (ClusterIssuer `kubehenge-metrics`), which signs the proxies' serving certificates and Prometheus's client certificate, and nothing else. The chart's long-lived token is sent only to what asks for one, never over plain HTTP.
 
 Prometheus keeps ten days of metrics on a 20 GiB volume from the cluster's default storage class, Alertmanager its silences on 1 GiB. `hostname` serves Grafana through the cluster's ingress controller, with the certificate from `tlsSecret` or the controller's default; without it, `kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80` reaches it. Its `admin` password is generated into the `kube-prometheus-stack-grafana` Secret. The release carries the proxies and certificates, so switching monitoring off removes them with it.
+
+**Pod security** (`podSecurity: {admission: …, kyverno: …}`) holds a cluster's pods to a [Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/), `baseline` or `restricted`, through either or both of two checks:
+
+- **Pod Security Admission**, Kubernetes' own: every ClusterClass gives the API server an admission configuration whose default level is `admission`, for every namespace that labels no level of its own. Left at `privileged`, Kubernetes' own default, it enforces nothing; at `baseline` it also warns about and audits pods short of `restricted`. The configuration is a file on the control-plane nodes, so changing the level replaces them one at a time.
+- **Kyverno**: `kyverno` installs Kyverno and its Pod Security Standards policies into the `kyverno` namespace. They hold every namespace to the level whatever its labels say, which Pod Security Admission cannot, since anyone who may label a namespace may lift its level; they deny a pod when Kyverno cannot be reached, and Kyverno's policy reports list what falls short. Switched off, the policies go first, then Kyverno.
+
+Both leave alone the namespaces of the components that need the host's network, file system or privileges: `kube-system` (the cloud controller manager, the CSI plugin, Cilium, kube-vip and the distributions' own components), Calico's, node-exporter's and those of Rancher's agents and controllers. The chart's `podSecurityExempt` lists them. A workload of one's own that needs more than the level gets its namespace labelled, and, with Kyverno, a PolicyException in the `kyverno` namespace, the only one Kyverno takes exceptions from, so that only those who may write there can grant one.
 
 **Rancher** (`rancher: {install: true, hostname: …}`) goes into one cluster Kubehenge creates for it, never into the management cluster, together with cert-manager; Rancher makes its own CA, and its server URL is fixed to `hostname`, which must resolve to that cluster's ingress controller for people and for every registered cluster. Kubehenge's controller registers every other cluster with it once the cluster is available, unless the cluster sets `register: false`:
 

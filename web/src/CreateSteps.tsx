@@ -1,11 +1,9 @@
 import type { JSX } from "react";
 
 import { controlPlaneSizes, maxWorkers } from "./ClusterDetail";
-import { modeChoices, upgradeModes } from "./ClusterUpgrades";
 import {
   memoryStepMiB,
   minMemoryMiB,
-  rancherMinimumCores,
   variable,
   versionExamples,
   versionLabel,
@@ -17,8 +15,7 @@ import { addressBits } from "./network";
 import { OIDCProviders } from "./OIDCProviders";
 import { HAField, PlacementFields, type HARulesRead } from "./Placement";
 import type { Bridge, ClusterClass, PveNode, Storage, Versions } from "./types";
-import { Field, browserZone, bytes, distributionName, filled, registerHint, sentence } from "./ui";
-import { oneOf } from "./values";
+import { Field, bytes, distributionName, filled, sentence } from "./ui";
 
 // Number fields keep an empty or unfinished entry as NaN, which the checks refuse, rather than
 // turning it into 0 under the cursor.
@@ -344,150 +341,6 @@ export function MachinesStep({
         error={shown("workerMachine")}
         onChange={(m) => set("workerMachine", m)}
       />
-    </>
-  );
-}
-
-export function AddOnsStep({
-  form,
-  set,
-  shown,
-  cls,
-  canTrust,
-}: StepProps & { cls: ClusterClass | undefined; canTrust: boolean | undefined }): JSX.Element {
-  return (
-    <>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={form.headlamp}
-          aria-describedby="headlamp-hint"
-          onChange={(e) => set("headlamp", e.target.checked)}
-        />{" "}
-        Install Headlamp
-      </label>
-      <p className="hint" id="headlamp-hint">
-        A web interface inside the cluster. People sign in to it with their own token; it has no rights of its own.
-      </p>
-      {form.headlamp && (
-        <Field
-          label="Headlamp host name"
-          hint="Optional: also serve it at this name through the cluster's ingress controller."
-        >
-          {(id) => (
-            <input
-              id={id}
-              value={form.headlampHostname}
-              onChange={(e) => set("headlampHostname", e.target.value.trim())}
-            />
-          )}
-        </Field>
-      )}
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={form.monitoring}
-          aria-describedby="monitoring-hint"
-          onChange={(e) => set("monitoring", e.target.checked)}
-        />{" "}
-        Install monitoring
-      </label>
-      <p className="hint" id="monitoring-hint">
-        Prometheus, Alertmanager and Grafana, with dashboards and alerts for every node and control-plane component.
-        Grafana&apos;s admin password is in the kube-prometheus-stack-grafana Secret in the monitoring namespace.
-      </p>
-      {form.monitoring && (
-        <Field
-          label="Grafana host name"
-          hint="Optional: serve Grafana at this name through the cluster's ingress controller."
-        >
-          {(id) => (
-            <input
-              id={id}
-              value={form.grafanaHostname}
-              onChange={(e) => set("grafanaHostname", e.target.value.trim())}
-            />
-          )}
-        </Field>
-      )}
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={form.rancherInstall}
-          disabled={canTrust === false && !form.rancherInstall}
-          aria-describedby="rancher-hint"
-          onChange={(e) => {
-            set("rancherInstall", e.target.checked);
-            if (!e.target.checked) {
-              return;
-            }
-            for (const key of ["controlPlaneMachine", "workerMachine"] as const) {
-              if (form[key].cores < rancherMinimumCores) {
-                set(key, { ...form[key], cores: rancherMinimumCores });
-              }
-            }
-          }}
-        />{" "}
-        Install Rancher
-      </label>
-      <p className="hint" id="rancher-hint">
-        Into this cluster; every other cluster then registers with it.
-        {form.rancherInstall &&
-          ` Rancher needs at least ${rancherMinimumCores} cores on every node, so the machines have at least that many.`}
-        {canTrust === false &&
-          " Rancher holds every registered cluster's admin credentials, so installing it needs Sys.Modify on the workload pool."}
-      </p>
-      {form.rancherInstall ? (
-        <Field
-          label="Rancher host name"
-          hint="Resolves to this cluster's API address, where its ingress controller answers."
-          error={shown("rancherHostname")}
-        >
-          {(id) => (
-            <input
-              id={id}
-              value={form.rancherHostname}
-              onChange={(e) => set("rancherHostname", e.target.value.trim())}
-            />
-          )}
-        </Field>
-      ) : (
-        <>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={form.rancherRegister}
-              aria-describedby="register-hint"
-              onChange={(e) => set("rancherRegister", e.target.checked)}
-            />{" "}
-            Register with Rancher
-          </label>
-          <p className="hint" id="register-hint">
-            {registerHint}
-          </p>
-        </>
-      )}
-      {variable(cls, "upgrades") && (
-        <Field
-          label="Upgrade automatically"
-          hint={`Every day from 02:00 for four hours, ${browserZone()} time; the cluster's Options change the window later.`}
-        >
-          {(id) => (
-            <select
-              id={id}
-              value={form.upgradeMode}
-              onChange={(e) => {
-                const mode = e.target.value;
-                if (oneOf(upgradeModes, mode)) {
-                  set("upgradeMode", mode);
-                }
-              }}
-            >
-              {modeChoices}
-            </select>
-          )}
-        </Field>
-      )}
     </>
   );
 }

@@ -14,6 +14,7 @@ import {
   useHAOffered,
   useHARules,
 } from "./Placement";
+import { PodSecurityFields, podSecurityOf, podSecurityText } from "./PodSecurity";
 import { Link, navigate } from "./router";
 import type { ChangeRequest, Cluster, Machine, OIDCProvider, PveNode, Versions } from "./types";
 import {
@@ -45,6 +46,7 @@ type Action =
   | "ha"
   | "headlamp"
   | "monitoring"
+  | "podSecurity"
   | "rancher"
   | "upgrades"
   | "oidc";
@@ -238,6 +240,9 @@ function ActionDialog({
     case "headlamp":
     case "monitoring": {
       return <HostedAddonDialog cluster={c} addon={action} onClose={onClose} />;
+    }
+    case "podSecurity": {
+      return <PodSecurityDialog cluster={c} onClose={onClose} />;
     }
     case "rancher": {
       return <RancherDialog cluster={c} onClose={onClose} />;
@@ -511,6 +516,12 @@ function Options({
       name: "monitoring",
     },
     {
+      label: "Pod security",
+      value: podSecurityText(podSecurityOf(c.variables["podSecurity"])),
+      action: "podSecurity",
+      name: "pod security",
+    },
+    {
       label: "Rancher",
       value: rancherText(rancher),
       action: "rancher",
@@ -589,6 +600,38 @@ function OIDCDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => 
         Sys.Modify on the cluster's pool.
       </p>
       <OIDCProviders initial={value} fixed={!c.allowed.kubeconfig} onChange={setValue} />
+      <ErrorBox message={error} />
+    </Dialog>
+  );
+}
+
+function PodSecurityDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+  const current = podSecurityOf(c.variables["podSecurity"]);
+  const [value, setValue] = useState(current);
+  const { busy, error, send } = useChange(c, onClose);
+  return (
+    <Dialog
+      title="Pod security"
+      onClose={onClose}
+      onSubmit={() => {
+        void send({ variables: { podSecurity: { admission: value.admission, kyverno: value.kyverno } } });
+      }}
+      actions={
+        <>
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="primary"
+            disabled={busy || (value.admission === current.admission && value.kyverno === current.kyverno)}
+          >
+            Save
+          </button>
+        </>
+      }
+    >
+      <PodSecurityFields value={value} onChange={setValue} />
       <ErrorBox message={error} />
     </Dialog>
   );

@@ -89,6 +89,9 @@ spec:
         value: $6
       - name: rancher
         value: $7
+      # Rancher's agents and controllers run in the namespaces Kubehenge exempts.
+      - name: podSecurity
+        value: {admission: restricted}
 EOF
 }
 kubeconfig() { kubectl -n "${ns}" get secret "$1-kubeconfig" -o jsonpath='{.data.value}' | base64 -d > "${work}/$2"; }

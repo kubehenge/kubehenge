@@ -194,6 +194,9 @@ var testCharts = Charts{
 		Registry: "ghcr.io", Repository: "kube-rbac-proxy/kube-rbac-proxy", Tag: "v0.23.0",
 		Digest: "296fd0a10fb635414b4533b983f0d5a686ce0ce73567b7079b6595ba75034f1a",
 	},
+	Kyverno:           Chart{Repository: "https://kyverno.github.io/kyverno", Name: "kyverno", Version: "3.9.1"},
+	KyvernoPolicies:   Chart{Repository: "https://kyverno.github.io/kyverno", Name: "kyverno-policies", Version: "3.9.1"},
+	PodSecurityExempt: []string{"kube-system", "node-exporter"},
 }
 
 func TestParseChart(t *testing.T) {

@@ -90,6 +90,11 @@ spec:
               valueFrom:
                 template: |
                   -{{- include "kubehenge.kubeVipFile" (dict "path" "/var/lib/rancher/k3s/agent/pod-manifests/kube-vip.yaml" "kubeconfig" "/etc/rancher/k3s/k3s.yaml") | nindent 22 }}
+            - op: add
+              path: /spec/template/spec/kthreesConfigSpec/files/-
+              valueFrom:
+                template: |
+                  {{- include "kubehenge.podSecurityFile" (dict "root" . "path" "/etc/rancher/k3s/pod-security.yaml") | nindent 18 }}
     # The k3s provider takes the ranges only from its own server configuration, never from the
     # Cluster's clusterNetwork, which Kubehenge's range check and every other distribution read.
     {{- range $range := list (dict "name" "pods" "field" "clusterCidr") (dict "name" "services" "field" "serviceCidr") }}
@@ -142,9 +147,8 @@ spec:
                 template: |
                   {{- include "kubehenge.oidcFile" (dict "root" . "path" "/etc/rancher/k3s/authentication-config.yaml") | nindent 18 }}
             - op: add
-              path: /spec/template/spec/kthreesConfigSpec/serverConfig/kubeAPIServerArg
-              value:
-                - authentication-config=/etc/rancher/k3s/authentication-config.yaml
+              path: /spec/template/spec/kthreesConfigSpec/serverConfig/kubeAPIServerArg/-
+              value: authentication-config=/etc/rancher/k3s/authentication-config.yaml
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
 kind: ProxmoxClusterTemplate
@@ -186,6 +190,8 @@ template:
         # The Proxmox VE cloud controller manager initialises the nodes instead of k3s's own.
         disableCloudController: true
         cloudProviderName: external
+        kubeAPIServerArg:
+          - admission-control-config-file=/etc/rancher/k3s/pod-security.yaml
 {{- end -}}
 
 {{- define "kubehenge.k3sWorkerSpec" -}}

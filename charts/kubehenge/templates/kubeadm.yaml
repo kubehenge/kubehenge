@@ -108,6 +108,11 @@ spec:
               valueFrom:
                 template: |
                   {{- include "kubehenge.kubeVipFile" (dict "path" "/etc/kubernetes/manifests/kube-vip.yaml" "kubeconfig" "/etc/kubernetes/admin.conf") | nindent 18 }}
+            - op: add
+              path: /spec/template/spec/kubeadmConfigSpec/files/-
+              valueFrom:
+                template: |
+                  {{- include "kubehenge.podSecurityFile" (dict "root" . "path" "/etc/kubernetes/admission-config.yaml") | nindent 18 }}
     - name: kubeadm-oidc
       enabledIf: {{ include "kubehenge.oidcEnabled" . }}
       definitions:
@@ -128,13 +133,13 @@ spec:
                 name: authentication-config
                 value: /etc/kubernetes/authentication-config.yaml
             - op: add
-              path: /spec/template/spec/kubeadmConfigSpec/clusterConfiguration/apiServer/extraVolumes
+              path: /spec/template/spec/kubeadmConfigSpec/clusterConfiguration/apiServer/extraVolumes/-
               value:
-                - name: authentication-config
-                  hostPath: /etc/kubernetes/authentication-config.yaml
-                  mountPath: /etc/kubernetes/authentication-config.yaml
-                  readOnly: true
-                  pathType: File
+                name: authentication-config
+                hostPath: /etc/kubernetes/authentication-config.yaml
+                mountPath: /etc/kubernetes/authentication-config.yaml
+                readOnly: true
+                pathType: File
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
 kind: ProxmoxClusterTemplate
@@ -272,6 +277,14 @@ template:
           extraArgs:
             - name: kubelet-certificate-authority
               value: /etc/kubernetes/pki/ca.crt
+            - name: admission-control-config-file
+              value: /etc/kubernetes/admission-config.yaml
+          extraVolumes:
+            - name: admission-config
+              hostPath: /etc/kubernetes/admission-config.yaml
+              mountPath: /etc/kubernetes/admission-config.yaml
+              readOnly: true
+              pathType: File
         controllerManager:
           {{- include "kubehenge.kubeadmServing" "kube-controller-manager" | nindent 10 }}
         scheduler:

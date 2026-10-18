@@ -32,6 +32,7 @@ const rke2: ClusterClass = {
     { name: "cni", required: false, schema: { type: "string", enum: ["canal", "calico", "cilium"], default: "canal" } },
     { name: "headlamp", required: false, schema: { type: "object" } },
     { name: "monitoring", required: false, schema: { type: "object" } },
+    { name: "podSecurity", required: false, schema: { type: "object" } },
     { name: "rancher", required: false, schema: { type: "object" } },
     {
       name: "oidc",
@@ -471,6 +472,7 @@ describe("create", () => {
     headlampHostname: "",
     monitoring: true,
     grafanaHostname: "grafana.example",
+    podSecurity: { admission: "restricted", kyverno: "off" },
     rancherInstall: false,
     rancherHostname: "",
     rancherRegister: false,
@@ -517,10 +519,13 @@ describe("create", () => {
         cni: "cilium",
         headlamp: { enabled: true },
         monitoring: { enabled: true, hostname: "grafana.example" },
+        podSecurity: { admission: "restricted" },
         rancher: { register: false },
         oidc: [],
       },
     });
+    const defaults = { ...form, podSecurity: { admission: "privileged" as const, kyverno: "off" as const } };
+    expect(request(defaults, rke2).variables).not.toHaveProperty("podSecurity");
   });
 
   it("sums the form up as the Confirm step shows it", () => {
@@ -533,8 +538,12 @@ describe("create", () => {
       "Worker machines": "4 cores, 8 GiB memory, 40 GiB disk",
       Headlamp: "On",
       Monitoring: "On, Grafana at grafana.example",
+      "Pod security": "Restricted by Pod Security Admission",
       Rancher: "Not registered",
     });
+    expect(
+      Object.fromEntries(summary({ ...form, podSecurity: { admission: "baseline", kyverno: "restricted" } }, rke2)),
+    ).toMatchObject({ "Pod security": "Baseline by Pod Security Admission, Restricted by Kyverno" });
     expect(
       Object.fromEntries(summary({ ...form, vlan: "30", rancherInstall: true, rancherHostname: "r.example" }, rke2)),
     ).toMatchObject({

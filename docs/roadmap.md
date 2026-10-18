@@ -4,7 +4,7 @@
 
 - ClusterClasses for kubeadm, RKE2 and k3s, each passing the end-to-end suite.
 - In every cluster: Proxmox CSI plugin, Proxmox cloud controller manager, control-plane virtual IP, CNI (the distribution's own or one chosen per cluster).
-- Add-ons: Rancher, with Kubehenge's clusters registered in it, and Headlamp.
+- Add-ons: Rancher, with Kubehenge's clusters registered in it, Headlamp, monitoring, and pod security through Pod Security Admission, Kyverno or both.
 - The VM templates for every distribution (`kubehenge template`).
 - The appliance: one line in the Proxmox VE shell installs it as an LXC container, whose interface creates the management cluster and keeps it upgraded; the same management cluster from one Terraform/OpenTofu apply for those who prefer it.
 - The interface: create, list, scale, upgrade and delete clusters, choose the distribution and add-ons, download a kubeconfig, with permissions following Proxmox VE's on each cluster's pool.
@@ -15,7 +15,7 @@
 ## Next
 
 - A Talos ClusterClass, once Cluster API's Talos providers support ClusterClass in a release.
-- Add-ons: CIS hardening per distribution, pod security through Pod Security Admission or Kyverno, and the Istio service mesh.
+- Add-ons: CIS hardening per distribution, and the Istio service mesh.
 - Cilium Cluster Mesh, connecting the pod networks of clusters that run Cilium.
 
 ## Later

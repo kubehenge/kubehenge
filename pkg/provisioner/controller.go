@@ -261,9 +261,27 @@ func (r *Reconciler) addons(ctx context.Context, cluster *clusterv1.Cluster) (Ad
 	return addons, refused, nil
 }
 
+// removeSwitchedOff removes the proxies of Headlamp, monitoring and Kyverno when the cluster
+// switches them off; Rancher's removal waits on its registered clusters, apart from these.
+func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons) error {
+	var off []string
+	if !addons.Headlamp.Enabled {
+		off = append(off, headlampProxy(cluster))
+	}
+	if !addons.Monitoring.Enabled {
+		off = append(off, monitoringProxy(cluster))
+	}
+	if err := r.removeProxies(ctx, cluster, off...); err != nil {
+		return err
+	}
+	if !addons.PodSecurity.kyvernoOn() {
+		return r.removeKyverno(ctx, cluster)
+	}
+	return nil
+}
+
 // applyAddons applies what the cluster gets installed: the Secrets of its ClusterResourceSet, the
-// set itself and the HelmChartProxies of its charts, and removes Headlamp's and monitoring's when
-// they are switched off.
+// set itself and the HelmChartProxies of its charts, and removes those switched off.
 func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster, creds Credentials, addons *Addons) error {
 	storage, err := variable[string](cluster, "storage")
 	if err != nil {
@@ -281,15 +299,8 @@ func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster
 	if err != nil {
 		return err
 	}
-	if !addons.Headlamp.Enabled {
-		if err := r.removeProxies(ctx, cluster, headlampProxy(cluster)); err != nil {
-			return err
-		}
-	}
-	if !addons.Monitoring.Enabled {
-		if err := r.removeProxies(ctx, cluster, monitoringProxy(cluster)); err != nil {
-			return err
-		}
+	if err := r.removeSwitchedOff(ctx, cluster, addons); err != nil {
+		return err
 	}
 	secrets := []*corev1.Secret{resources}
 	if cni.Name == cniCalico {

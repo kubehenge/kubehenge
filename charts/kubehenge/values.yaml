@@ -33,6 +33,21 @@ clusters:
 # groupsPrefix, scopes, certificateAuthority}. Tokens and certificates work beside them.
 clusterOIDC: []
 
+# Namespaces whose pods neither Pod Security Admission nor Kyverno holds to a cluster's pod
+# security level: those of the components that need the host's network, file system or
+# privileges (the cloud controller manager, the CSI plugin, the CNIs, node-exporter, Rancher's
+# agents and controllers). A cluster's own workloads that need it get their namespace labelled
+# instead.
+podSecurityExempt:
+  - kube-system
+  - tigera-operator
+  - calico-system
+  - node-exporter
+  - cattle-system
+  - cattle-fleet-system
+  - cattle-fleet-local-system
+  - cattle-turtles-system
+
 # Kubehenge's controller image; empty means the one this chart was released with.
 image: ""
 
@@ -82,6 +97,16 @@ addons:
     # In front of the metrics etcd, kube-proxy and node-exporter serve without authentication.
     # renovate: datasource=docker depName=ghcr.io/kube-rbac-proxy/kube-rbac-proxy
     kubeRBACProxy: ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.23.0@sha256:296fd0a10fb635414b4533b983f0d5a686ce0ce73567b7079b6595ba75034f1a
+  # Kyverno and its Pod Security Standards policies, for clusters that have Kyverno enforce pod
+  # security.
+  kyverno:
+    repository: https://kyverno.github.io/kyverno
+    chart: kyverno
+    version: 3.9.1
+  kyvernoPolicies:
+    repository: https://kyverno.github.io/kyverno
+    chart: kyverno-policies
+    version: 3.9.1
   # Installed with Rancher, which makes its CA and certificate through it, and with monitoring,
   # whose metrics proxies and Prometheus it gives their certificates.
   certManager:

@@ -88,6 +88,11 @@ spec:
                 template: |
                   -{{- include "kubehenge.kubeVipFile" (dict "path" "/var/lib/rancher/rke2/agent/pod-manifests/kube-vip.yaml" "kubeconfig" "/etc/rancher/rke2/rke2.yaml") | nindent 22 }}
             - op: add
+              path: /spec/template/spec/files/-
+              valueFrom:
+                template: |
+                  {{- include "kubehenge.podSecurityFile" (dict "root" . "path" "/etc/rancher/rke2/pod-security.yaml") | nindent 18 }}
+            - op: add
               path: /spec/template/spec/serverConfig/cni
               valueFrom:
                 variable: cni
@@ -142,6 +147,8 @@ agentConfig:
       - provider-id=proxmox://{{ "{{ ds.meta_data.instance_id }}" }}
   {{- if .controlPlane }}
   {{- include "kubehenge.controlPlaneTaints" . | nindent 2 }}
+  # In place of the one RKE2 writes, which enforces nothing.
+  podSecurityAdmissionConfigFile: /etc/rancher/rke2/pod-security.yaml
   {{- end }}
 {{- end -}}
 

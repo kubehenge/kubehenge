@@ -17,11 +17,17 @@ import (
 // variables as they arrive there: decoded from JSON.
 func render(t *testing.T, file, variables string) []byte {
 	t.Helper()
+	return renderAfter(t, "", file, variables)
+}
+
+// renderAfter renders a chart file behind the lines Helm writes in front of it.
+func renderAfter(t *testing.T, prefix, file, variables string) []byte {
+	t.Helper()
 	raw, err := os.ReadFile(file) //nolint:gosec // the chart's own files
 	if err != nil {
 		t.Fatal(err)
 	}
-	tpl, err := template.New("tpl").Funcs(sprig.HermeticTxtFuncMap()).Parse(string(raw))
+	tpl, err := template.New("tpl").Funcs(sprig.HermeticTxtFuncMap()).Parse(prefix + string(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,5 +88,59 @@ func TestAuthenticationConfiguration(t *testing.T) {
 	}
 	if !reflect.DeepEqual(config, want) {
 		t.Fatalf("configuration =\n%s", file.Content)
+	}
+}
+
+func TestPodSecurityConfiguration(t *testing.T) {
+	t.Parallel()
+	exempt := []any{"kube-system", "node-exporter"}
+	for _, c := range []struct {
+		variables string
+		defaults  map[string]any
+	}{
+		// Kubernetes' own default, without a warning on every pod.
+		{`{}`, map[string]any{"enforce": "privileged", "enforce-version": "latest"}},
+		{`{"podSecurity": {"kyverno": "restricted"}}`, map[string]any{"enforce": "privileged", "enforce-version": "latest"}},
+		{`{"podSecurity": {"admission": "baseline"}}`, map[string]any{
+			"enforce": "baseline", "enforce-version": "latest",
+			"audit": "restricted", "audit-version": "latest", "warn": "restricted", "warn-version": "latest",
+		}},
+		{`{"podSecurity": {"admission": "restricted"}}`, map[string]any{
+			"enforce": "restricted", "enforce-version": "latest",
+			"audit": "restricted", "audit-version": "latest", "warn": "restricted", "warn-version": "latest",
+		}},
+	} {
+		out := renderAfter(t, `{{- $exempt := list "kube-system" "node-exporter" }}`+"\n", "files/pod-security.tpl", c.variables)
+		var file struct {
+			Owner       string `json:"owner"`
+			Permissions string `json:"permissions"`
+			Content     string `json:"content"`
+		}
+		if err := yaml.UnmarshalStrict(out, &file); err != nil {
+			t.Fatalf("%v:\n%s", err, out)
+		}
+		if file.Owner != "root:root" || file.Permissions != "0600" {
+			t.Fatalf("file = %+v", file)
+		}
+		var config map[string]any
+		if err := yaml.Unmarshal([]byte(file.Content), &config); err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]any{
+			"apiVersion": "apiserver.config.k8s.io/v1",
+			"kind":       "AdmissionConfiguration",
+			"plugins": []any{map[string]any{
+				"name": "PodSecurity",
+				"configuration": map[string]any{
+					"apiVersion": "pod-security.admission.config.k8s.io/v1",
+					"kind":       "PodSecurityConfiguration",
+					"defaults":   c.defaults,
+					"exemptions": map[string]any{"namespaces": exempt},
+				},
+			}},
+		}
+		if !reflect.DeepEqual(config, want) {
+			t.Errorf("%s: configuration =\n%s", c.variables, file.Content)
+		}
 	}
 }
