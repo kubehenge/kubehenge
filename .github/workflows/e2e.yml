@@ -169,6 +169,31 @@ jobs:
               grep -E -- '-system ' | while read -r ns pod; do
                 kubectl logs -n "$ns" "$pod" --all-containers --prefix --tail=-1 || true
               done > "$out/controllers.log" 2>&1
+            # A test can fail inside a workload cluster, such as one that never connects to Rancher:
+            # each cluster still standing, with the logs of Rancher's pods and of every pod that is
+            # not running or has restarted.
+            kubectl get secrets -A --field-selector type=cluster.x-k8s.io/secret --no-headers \
+              -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name 2>/dev/null |
+              grep -- '-kubeconfig$' | while read -r ns secret; do
+                dir="$out/clusters/$ns-${secret%-kubeconfig}" && mkdir -p "$dir"
+                kubectl -n "$ns" get secret "$secret" -o jsonpath='{.data.value}' | base64 -d \
+                  > "$RUNNER_TEMP/workload.kubeconfig" || continue
+                k() {
+                  kubectl --kubeconfig "$RUNNER_TEMP/workload.kubeconfig" --request-timeout=20s "$@"
+                }
+                k get nodes,pods -A -o wide > "$dir/resources.txt" 2>&1 || continue
+                k get events -A --sort-by=.lastTimestamp > "$dir/events.txt" 2>&1 || true
+                k get pods -A -o json 2>/dev/null | jq -r '.items[] |
+                  select((.metadata.namespace | startswith("cattle-"))
+                    or (.status.phase | IN("Running", "Succeeded") | not)
+                    or any(.status.containerStatuses[]?; .restartCount > 0)) |
+                  "\(.metadata.namespace) \(.metadata.name)"' | while read -r pns pod; do
+                    k logs -n "$pns" "$pod" --all-containers --prefix --tail=2000 || true
+                    k logs -n "$pns" "$pod" --all-containers --prefix --previous --tail=500 \
+                      2>/dev/null || true
+                  done > "$dir/pods.log" 2>&1
+              done
+            rm -f "$RUNNER_TEMP/workload.kubeconfig"
           fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
