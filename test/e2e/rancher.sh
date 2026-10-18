@@ -50,7 +50,7 @@ json_list() { printf '%s' "$1" | jq -R 'split(",")'; }
 rancher() { KUBECONFIG="${work}/rancher" kubectl "$@"; }
 downstream() { KUBECONFIG="${work}/downstream" kubectl "$@"; }
 
-# cluster <name> <class> <version> <addresses> <endpoint> <control-plane machine> <rancher variable>
+# cluster <name> <class> <version> <addresses> <endpoint> <control-plane machine> <rancher variable> <pod security level>
 cluster() {
     addresses=$(json_list "$4")
     dns_servers=$(json_list "${KUBEHENGE_E2E_DNS}")
@@ -89,9 +89,8 @@ spec:
         value: $6
       - name: rancher
         value: $7
-      # Rancher's agents and controllers run in the namespaces Kubehenge exempts.
       - name: podSecurity
-        value: {admission: restricted}
+        value: {admission: $8}
 EOF
 }
 kubeconfig() { kubectl -n "${ns}" get secret "$1-kubeconfig" -o jsonpath='{.data.value}' | base64 -d > "${work}/$2"; }
@@ -109,7 +108,7 @@ gone_from_rancher() { absent rancher -n fleet-default get clusters.provisioning.
 step "Rancher's cluster, RKE2 ${KUBEHENGE_E2E_RANCHER_VERSION}, Rancher at ${hostname}"
 kubectl create namespace "${ns}"
 cluster rancher kubehenge-rke2 "${KUBEHENGE_E2E_RANCHER_VERSION}" "${KUBEHENGE_E2E_RANCHER_ADDRESSES}" "${KUBEHENGE_E2E_RANCHER_ENDPOINT}" \
-    "{cores: ${KUBEHENGE_E2E_RANCHER_CORES:-4}, memoryMiB: ${KUBEHENGE_E2E_RANCHER_MEMORY:-8192}}" "{install: true, hostname: ${hostname}}"
+    "{cores: ${KUBEHENGE_E2E_RANCHER_CORES:-4}, memoryMiB: ${KUBEHENGE_E2E_RANCHER_MEMORY:-8192}}" "{install: true, hostname: ${hostname}}" restricted
 kubectl -n "${ns}" wait --for=condition=Available cluster/rancher --timeout=40m
 kubeconfig rancher rancher
 until_true 1200 "Rancher installed" sh -c "KUBECONFIG=${work}/rancher kubectl -n cattle-system get deployment/rancher >/dev/null 2>&1"
@@ -126,8 +125,10 @@ server_url=$(rancher get settings.management.cattle.io server-url -o jsonpath='{
 rancher -n cattle-system get secret bootstrap-secret > /dev/null || fail "Rancher generated no first admin password"
 
 step "a k3s cluster registers with Rancher on its own"
+# Rancher's agents and controllers run in the namespaces Kubehenge exempts, but the job that cleans
+# up after them runs in default and is refused at restricted (docs/troubleshooting.md#rancher).
 cluster downstream kubehenge-k3s "${KUBEHENGE_E2E_DOWNSTREAM_VERSION}" "${KUBEHENGE_E2E_DOWNSTREAM_ADDRESSES}" "${KUBEHENGE_E2E_DOWNSTREAM_ENDPOINT}" \
-    "{memoryMiB: ${KUBEHENGE_E2E_DOWNSTREAM_MEMORY:-4096}}" "{}"
+    "{memoryMiB: ${KUBEHENGE_E2E_DOWNSTREAM_MEMORY:-4096}}" "{}" baseline
 kubectl -n "${ns}" wait --for=condition=Available cluster/downstream --timeout=40m
 kubeconfig downstream downstream
 until_true 1200 "registered and connected" registered
