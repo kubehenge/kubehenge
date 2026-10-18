@@ -312,7 +312,9 @@ var controlPlaneAffinity = corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
 // metricsProxy is a kube-rbac-proxy on every node affinity allows, in front of a component's
 // metrics on loopback. It listens on the node's address and the component's own port, so that the
 // component serving there itself would keep it from starting rather than sit beside it
-// unauthenticated. It opens no other port: probes would need one of their own on the host. A
+// unauthenticated. It declares no port: the scheduler books a host network port for the whole node,
+// so it would find the component's static pod, whose probes declare the same port on loopback, in
+// the way. It opens no other port either: probes would need one of their own on the host. A
 // component whose scheme is https is verified against the cluster CA, under the name its serving
 // certificate carries on every distribution.
 func metricsProxy(name string, port int32, scheme string, affinity *corev1.Affinity, image Image) *appsv1.DaemonSet {
@@ -353,8 +355,7 @@ func metricsProxy(name string, port int32, scheme string, affinity *corev1.Affin
 						"--tls-private-key-file=/etc/kube-rbac-proxy/tls.key",
 						"--tls-min-version=VersionTLS13",
 					}, upstream...),
-					Env:   []corev1.EnvVar{{Name: "HOST_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"}}}},
-					Ports: []corev1.ContainerPort{{Name: "https-metrics", ContainerPort: port}},
+					Env: []corev1.EnvVar{{Name: "HOST_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"}}}},
 					SecurityContext: &corev1.SecurityContext{
 						AllowPrivilegeEscalation: &no,
 						ReadOnlyRootFilesystem:   &yes,

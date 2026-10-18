@@ -178,6 +178,30 @@ func checkControlPlaneScrapes(t *testing.T, distribution templates.Distribution,
 	}
 }
 
+// The scheduler books a host network port for the whole node, and the components' static pods
+// declare theirs for their probes, so a proxy that declared the same port would never be placed on
+// a control-plane node.
+func TestMetricsProxiesDeclareNoPorts(t *testing.T) {
+	t.Parallel()
+	for _, distribution := range []templates.Distribution{templates.Kubeadm, templates.RKE2} {
+		values, _ := monitoringProxies(t, distribution, Monitoring{})
+		proxies := 0
+		objects := manifests(t, values["web-monitoring"])
+		for name := range objects {
+			if !strings.HasPrefix(name, "DaemonSet/") {
+				continue
+			}
+			proxies++
+			if ports := lookup[map[string]any](t, objects, name, "spec", "template", "spec", "containers", 0)["ports"]; ports != nil {
+				t.Errorf("%s: %s declares %v", distribution, name, ports)
+			}
+		}
+		if proxies == 0 {
+			t.Errorf("%s: no metrics proxies", distribution)
+		}
+	}
+}
+
 func TestMonitoringReachesCoreDNSPastRKE2sCISPolicies(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
