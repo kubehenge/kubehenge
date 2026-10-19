@@ -11,8 +11,8 @@
 #
 #   172.21.99.0/24  the Docker network: this machine .1, Proxmox VE .2 (its API on 8006), registry .3
 #   172.20.99.0/24  the VMs' bridge, NAT through the container: management cluster .10 (API) and
-#                   .11-.13, workload clusters .20-.29, the appliance .40, the VM that prepares a
-#                   template .50
+#                   .11-.13, workload clusters .20-.29 and their load balancers .30-.39, the
+#                   appliance .40, the VM that prepares a template .50
 set -eu
 
 work=${1:?usage: $0 <work directory>}
@@ -66,6 +66,7 @@ export KUBEHENGE_PROXMOX_CA=${work}/pve-root-ca.pem
 export KUBEHENGE_E2E_NODE=pve KUBEHENGE_E2E_STORAGE=local KUBEHENGE_E2E_BRIDGE=vmbr0
 export KUBEHENGE_E2E_PREFIX=24 KUBEHENGE_E2E_GATEWAY=172.20.99.1 KUBEHENGE_E2E_DNS=1.1.1.1,9.9.9.9
 export KUBEHENGE_E2E_ENDPOINT=172.20.99.20 KUBEHENGE_E2E_ADDRESSES=172.20.99.21-172.20.99.29
+export KUBEHENGE_E2E_LOAD_BALANCER_ADDRESSES=172.20.99.30-172.20.99.39
 export KUBEHENGE_E2E_ADDRESS=172.20.99.50/24
 export KUBEHENGE_E2E_OIDC_ADDRESS=172.21.99.1
 export KUBEHENGE_E2E_REGISTRY=172.21.99.3:5000

@@ -2,9 +2,9 @@
 # End-to-end test of one Kubehenge ClusterClass on a Proxmox VE host, against a running management
 # cluster: create a cluster trusting an OpenID issuer, hardened to the CIS benchmark and enforcing
 # Pod Security's restricted level, check sign-in through it, its nodes against the benchmark, its
-# cloud controller manager and persistent volumes, switch
+# cloud controller manager, load balancer and persistent volumes, switch
 # Headlamp, monitoring (every component scraped with its server verified), Kyverno and Istio (a
-# namespace's traffic over mutual TLS) on and off,
+# namespace's traffic over mutual TLS) on and off, and the load balancer off,
 # scale its workers up and down, upgrade it by one minor version (for RKE2 and k3s with the first
 # new server's join refused at first), replace a node that dies, delete it, and check that nothing
 # of it is left on Proxmox VE.
@@ -18,7 +18,10 @@
 # system does not trust it. The cluster's network and storage:
 #   KUBEHENGE_E2E_BRIDGE, KUBEHENGE_E2E_ADDRESSES (comma-separated ranges or networks),
 #   KUBEHENGE_E2E_PREFIX, KUBEHENGE_E2E_GATEWAY, KUBEHENGE_E2E_DNS (comma-separated),
-#   KUBEHENGE_E2E_ENDPOINT (the control plane's virtual IP), KUBEHENGE_E2E_STORAGE.
+#   KUBEHENGE_E2E_ENDPOINT (the control plane's virtual IP), KUBEHENGE_E2E_STORAGE,
+#   KUBEHENGE_E2E_LOAD_BALANCER_ADDRESSES (comma-separated, unused, on the nodes' network and
+#   reached from the machine running this test). KUBEHENGE_E2E_LOAD_BALANCER is the load balancer,
+#   metallb (default) or kube-vip.
 # KUBEHENGE_E2E_CONTROL_PLANE_MEMORY and KUBEHENGE_E2E_WORKER_MEMORY (MiB) and
 # KUBEHENGE_E2E_CONTROL_PLANE_CORES size the nodes; the worker's memory is by default the least
 # the class lets it have with the add-ons.
@@ -37,6 +40,8 @@ upgrade=${3:?usage: $0 <ClusterClass> <version> <upgrade version>}
 : "${KUBEHENGE_PROXMOX_URL:?}" "${KUBEHENGE_PROXMOX_TOKEN:?}"
 : "${KUBEHENGE_E2E_BRIDGE:?}" "${KUBEHENGE_E2E_ADDRESSES:?}" "${KUBEHENGE_E2E_PREFIX:?}" "${KUBEHENGE_E2E_GATEWAY:?}"
 : "${KUBEHENGE_E2E_DNS:?}" "${KUBEHENGE_E2E_ENDPOINT:?}" "${KUBEHENGE_E2E_STORAGE:?}" "${KUBEHENGE_E2E_OIDC_ADDRESS:?}"
+: "${KUBEHENGE_E2E_LOAD_BALANCER_ADDRESSES:?}"
+load_balancer=${KUBEHENGE_E2E_LOAD_BALANCER:-metallb}
 
 # shellcheck source=common.sh
 . "$(dirname "$0")/common.sh"
@@ -171,6 +176,7 @@ kubectl create namespace "${ns}"
 network_spec=$(cluster_network)
 addresses=$(json_list "${KUBEHENGE_E2E_ADDRESSES}")
 dns_servers=$(json_list "${KUBEHENGE_E2E_DNS}")
+load_balancer_addresses=$(json_list "${KUBEHENGE_E2E_LOAD_BALANCER_ADDRESSES}")
 cni_variable=
 if [ -n "${KUBEHENGE_E2E_CNI:-}" ]; then
     cni_variable=$(printf '      - name: cni\n        value: %s\n' "${KUBEHENGE_E2E_CNI}")
@@ -184,7 +190,7 @@ worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq 
     (.metadata.annotations["kubehenge.dev/addon-memory"] | fromjson) as $addon
     | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
     | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
-        $node.worker + $addon.headlamp + $addon.monitoring + $addon.kyverno + $addon.istio + $addon.certManager + $addon.rancherAgent]
+        $node.worker + $addon.headlamp + $addon.monitoring + $addon.kyverno + $addon.istio + $addon.loadBalancer + $addon.certManager + $addon.rancherAgent]
     | max')}
 echo "workers with ${worker_memory} MiB of memory"
 cat > "${work}/cluster.yaml" << EOF
@@ -219,6 +225,9 @@ ${network_spec}
           dnsServers: ${dns_servers}
       - name: storage
         value: ${KUBEHENGE_E2E_STORAGE}
+      # From the start: on k3s, switching it on later replaces the control planes.
+      - name: loadBalancer
+        value: {enabled: true, implementation: ${load_balancer}, addresses: ${load_balancer_addresses}}
       - name: controlPlaneMachine
         value: {memoryMiB: ${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-4096}, cores: ${KUBEHENGE_E2E_CONTROL_PLANE_CORES:-2}}
       - name: workerMachine
@@ -380,6 +389,38 @@ for address in ${KUBEHENGE_E2E_ENDPOINT} ${node_addresses}; do
     until_true 300 "${address} serves the host name" served "${address}"
 done
 wl delete namespace e2e-ingress --wait=false
+
+step "a Service of type LoadBalancer answers on an address from the cluster's range, with ${load_balancer}"
+wl create namespace e2e-lb
+agnhost_pod e2e-lb web netexec --http-port=8080
+wl -n e2e-lb expose pod web --type=LoadBalancer --port=80 --target-port=8080
+wl -n e2e-lb wait --for=condition=Ready pod/web --timeout=5m
+# shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+lb_ips() { lb_ip=$(wl -n e2e-lb get service web -o jsonpath='{.status.loadBalancer.ingress[*].ip}') && [ -n "${lb_ip}" ]; }
+until_true 600 "the Service given an address" lb_ips
+lb_ip=${lb_ip%% *}
+# in_range <comma-separated ranges, networks or addresses> <address>: whether the address is in one.
+in_range() { python3 -c 'import ipaddress, sys
+a = ipaddress.ip_address(sys.argv[2])
+def holds(e):
+    if "-" in e:
+        first, last = (ipaddress.ip_address(x.strip()) for x in e.split("-"))
+        return first <= a <= last
+    return a in ipaddress.ip_network(e.strip(), strict=False)
+sys.exit(0 if any(holds(e) for e in sys.argv[1].split(",")) else 1)' "$@"; }
+# shellcheck disable=SC2310 # the answer is the status.
+in_range "${KUBEHENGE_E2E_LOAD_BALANCER_ADDRESSES}" "${lb_ip}" ||
+    fail "the Service's ${lb_ip} is not from ${KUBEHENGE_E2E_LOAD_BALANCER_ADDRESSES}"
+# netexec answers /hostname with its pod's name.
+answers() {
+    answer=$(curl -sS --max-time 5 "http://$1/hostname" 2> /dev/null) || return 1
+    [ "${answer}" = web ]
+}
+until_true 300 "${lb_ip} answers for the Service" answers "${lb_ip}"
+if [ "${distribution}" = k3s ]; then
+    servicelb=$(wl -n kube-system get daemonsets -l svccontroller.k3s.cattle.io/svcname -o name)
+    [ -z "${servicelb}" ] || fail "k3s's servicelb runs beside the load balancer: ${servicelb}"
+fi
 
 step "a persistent volume from the Proxmox VE CSI plugin"
 wl apply -f - << 'EOF'
@@ -690,6 +731,38 @@ enrolled=$(wl get namespace e2e-mesh -o jsonpath='{.metadata.labels.istio\.io/da
 until_true 120 "a client outside the old mesh reaches the server" fetches e2e-plain
 until_true 60 "a client in the old mesh reaches the server" fetches e2e-mesh
 wl delete namespace e2e-mesh e2e-plain --wait --timeout=5m
+
+step "the load balancer switched off"
+set_variable loadBalancer "{\"enabled\":false,\"implementation\":\"${load_balancer}\",\"addresses\":${load_balancer_addresses}}"
+case ${load_balancer} in
+    kube-vip)
+        until_true 600 "kube-vip's Service announcer removed" absent wl -n kube-system get daemonset/kube-vip
+        until_true 300 "kube-vip's cloud provider removed" absent wl -n kube-system get deployment/kube-vip-cloud-provider
+        ;;
+    *) until_true 600 "MetalLB removed" absent wl -n metallb-system get daemonset/metallb-speaker ;;
+esac
+if [ "${distribution}" = k3s ]; then
+    # Switching servicelb back on replaces the control planes, whose servicelb then answers for the
+    # Service on every node's own address.
+    replaced() {
+        kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o json |
+            jq -e --arg old " ${servers} " '(.items | length > 0) and all(.items[];
+                .status.phase == "Running" and (($old | contains(" " + .metadata.name + " ")) | not))' > /dev/null
+    }
+    until_true 1800 "the control planes replaced" replaced
+    kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
+    on_node() {
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+        lb_ips || return 1
+        node_addresses=$(wl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}')
+        case " ${node_addresses} " in
+            *" ${lb_ip%% *} "*) answers "${lb_ip%% *}" ;;
+            *) return 1 ;;
+        esac
+    }
+    until_true 600 "servicelb answers for the Service on a node's address" on_node
+fi
+wl delete namespace e2e-lb --wait --timeout=5m
 
 workers() {
     kubectl -n "${ns}" patch "cluster/${name}" --type=json \

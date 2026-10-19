@@ -85,26 +85,39 @@ export const isNetwork = (v: string): boolean => {
   return a !== undefined && (n === addressBits || a % 2 ** (addressBits - n) === 0);
 };
 
-/** inList tells whether an address falls in one of the node address entries. */
-export function inList(address: string, entries: string[]): boolean {
-  const a = toInt(address);
-  if (a === undefined) {
-    return false;
+/** spanOf is the first and last address an address entry holds, as numbers; undefined when it is none. */
+export function spanOf(entry: string): [number, number] | undefined {
+  const [from = "", to] = entry.split("-");
+  if (to !== undefined) {
+    const a = toInt(from.trim());
+    const b = toInt(to.trim());
+    return a === undefined || b === undefined || b < a ? undefined : [a, b];
   }
-  return entries.some((e) => {
-    const [from = "", to] = e.split("-");
-    if (to !== undefined) {
-      return a >= (toInt(from.trim()) ?? Infinity) && a <= (toInt(to.trim()) ?? -1);
+  if (entry.includes("/")) {
+    const [base = "", bits] = entry.split("/");
+    const a = toInt(base);
+    if (!cidr.test(entry) || a === undefined) {
+      return undefined;
     }
-    if (e.includes("/")) {
-      const [base, bits] = e.split("/");
-      const size = 2 ** (addressBits - Number(bits));
-      const b = toInt(base ?? "");
-      return b !== undefined && a >= b && a < b + size;
-    }
-    return toInt(e) === a;
+    const first = (a & maskOf(Number(bits))) >>> 0;
+    return [first, first + 2 ** (addressBits - Number(bits)) - 1];
+  }
+  const a = toInt(entry);
+  return a === undefined ? undefined : [a, a];
+}
+
+/** overlapping is the first of the entries that shares an address with one of the others. */
+export function overlapping(entries: string[], others: string[]): string | undefined {
+  const spans = others.map((o) => spanOf(o)).filter((s) => s !== undefined);
+  return entries.find((e) => {
+    const s = spanOf(e);
+    return s !== undefined && spans.some(([a, b]) => s[0] <= b && a <= s[1]);
   });
 }
+
+/** inList tells whether an address falls in one of the node address entries. */
+export const inList = (address: string, entries: string[]): boolean =>
+  toInt(address) !== undefined && overlapping([address], entries) !== undefined;
 
 /** isIP tells whether a server address is IPv4 or looks like IPv6. */
 export const isIP = (v: string): boolean => ipv4.test(v) || (/^[0-9a-f:.]+$/iu.test(v) && v.includes(":"));

@@ -491,6 +491,8 @@ describe("create", () => {
     prefix: 24,
     gateway: "10.0.0.1",
     dnsServers: "10.0.0.1, 1.1.1.1",
+    loadBalancer: "",
+    loadBalancerAddresses: "",
     pods: "",
     services: "",
     storage: "local-lvm",
@@ -644,6 +646,54 @@ describe("create", () => {
       cni: "Cilium takes cluster names of at most 32 characters; this one has 33.",
     });
     expect(fieldProblems("Network", { ...form, name: long, cni: "canal" }, withMesh)).toStrictEqual({});
+  });
+
+  it("gives Services addresses of their own from the load balancer chosen", () => {
+    const withLB: ClusterClass = {
+      ...rke2,
+      annotations: { "kubehenge.dev/addon-memory": '{"loadBalancer":96}' },
+      variables: [...rke2.variables, { name: "loadBalancer", required: false, schema: { type: "object" } }],
+    };
+    expect(Object.fromEntries(summary(form, withLB))).toMatchObject({ "Load balancer": "None" });
+    expect(Object.fromEntries(summary(form, { ...withLB, distribution: "k3s" }))).toMatchObject({
+      "Load balancer": "k3s's own, on the nodes' addresses",
+    });
+    expect(request(form, withLB).variables).not.toHaveProperty("loadBalancer");
+    expect(addonMemory(form, withLB).mib).toBe(0);
+
+    const metallb = {
+      ...form,
+      loadBalancer: "metallb" as const,
+      loadBalancerAddresses: "10.0.0.100-10.0.0.120\n10.0.0.130",
+    };
+    expect(Object.fromEntries(summary(metallb, withLB))).toMatchObject({
+      "Load balancer": "MetalLB, on 10.0.0.100-10.0.0.120, 10.0.0.130",
+    });
+    expect(request(metallb, withLB).variables["loadBalancer"]).toStrictEqual({
+      enabled: true,
+      implementation: "metallb",
+      addresses: ["10.0.0.100-10.0.0.120", "10.0.0.130"],
+    });
+    expect(request({ ...metallb, loadBalancer: "kube-vip" }, withLB).variables["loadBalancer"]).toMatchObject({
+      implementation: "kube-vip",
+    });
+    expect(request(metallb, rke2).variables).not.toHaveProperty("loadBalancer");
+    expect(addonMemory(metallb, withLB)).toStrictEqual({ names: ["the load balancer"], mib: 96 });
+    expect(fieldProblems("Network", metallb, withLB)).toStrictEqual({});
+
+    for (const [addresses, problem] of [
+      ["", "At least one range, network or address."],
+      ["10.0.1.100-10.0.1.120", "10.0.1.100-10.0.1.120 is no address, range or network inside the gateway's network."],
+      ["10.0.0.25-10.0.0.30", "10.0.0.25-10.0.0.30 overlaps the node addresses."],
+      ["10.0.0.40/28", "10.0.0.40/28 overlaps the node addresses."],
+      ["10.0.0.20", "10.0.0.20 overlaps the API address."],
+      ["10.0.0.0/30", "10.0.0.0/30 overlaps the gateway."],
+      ["10.0.0.100-10.0.0.120, 10.0.0.110", "10.0.0.100-10.0.0.120 overlaps another of these addresses."],
+    ] as const) {
+      expect(fieldProblems("Network", { ...metallb, loadBalancerAddresses: addresses }, withLB)).toStrictEqual({
+        loadBalancerAddresses: problem,
+      });
+    }
   });
 
   it("starts automatic upgrades with a window in the browser's time zone", () => {

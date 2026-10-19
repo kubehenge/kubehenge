@@ -96,7 +96,7 @@ spec:
               path: /spec/template/spec/kthreesConfigSpec/files/-
               valueFrom:
                 template: |
-                  {{- include "kubehenge.kubeVipFile" (dict "path" "/var/lib/rancher/k3s/agent/pod-manifests/kube-vip.yaml" "kubeconfig" "/etc/rancher/k3s/k3s.yaml") | nindent 18 }}
+                  {{- include "kubehenge.kubeVipFile" (dict "root" . "path" "/var/lib/rancher/k3s/agent/pod-manifests/kube-vip.yaml" "kubeconfig" "/etc/rancher/k3s/k3s.yaml") | nindent 18 }}
             - op: add
               path: /spec/template/spec/kthreesConfigSpec/files/-
               valueFrom:
@@ -139,6 +139,19 @@ spec:
                 content: |
                   flannel-backend: none
                   disable-network-policy: true
+    # servicelb would answer for the same Services as the cluster's own load balancer.
+    - name: k3s-load-balancer
+      enabledIf: {{ "{{ with .loadBalancer }}{{ if .enabled }}true{{ end }}{{ end }}" | quote }}
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: KThreesControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/kthreesConfigSpec/serverConfig/disableComponents
+              value: [servicelb]
     - name: k3s-oidc
       enabledIf: {{ include "kubehenge.oidcEnabled" . }}
       definitions:

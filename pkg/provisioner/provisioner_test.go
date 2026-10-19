@@ -196,10 +196,21 @@ var testCharts = Charts{
 		Registry: "ghcr.io", Repository: "kube-rbac-proxy/kube-rbac-proxy", Tag: "v0.23.0",
 		Digest: "296fd0a10fb635414b4533b983f0d5a686ce0ce73567b7079b6595ba75034f1a",
 	},
-	Kyverno:           Chart{Repository: "https://kyverno.github.io/kyverno", Name: "kyverno", Version: "3.9.1"},
-	KyvernoPolicies:   Chart{Repository: "https://kyverno.github.io/kyverno", Name: "kyverno-policies", Version: "3.9.1"},
-	Istio:             Chart{Repository: "oci://ghcr.io/istio/release/charts", Name: "istiod", Version: "1.31.2"},
-	Traefik:           Chart{Repository: "https://traefik.github.io/charts", Name: "traefik", Version: "42.0.0"},
+	Kyverno:         Chart{Repository: "https://kyverno.github.io/kyverno", Name: "kyverno", Version: "3.9.1"},
+	KyvernoPolicies: Chart{Repository: "https://kyverno.github.io/kyverno", Name: "kyverno-policies", Version: "3.9.1"},
+	Istio:           Chart{Repository: "oci://ghcr.io/istio/release/charts", Name: "istiod", Version: "1.31.2"},
+	Traefik:         Chart{Repository: "https://traefik.github.io/charts", Name: "traefik", Version: "42.0.0"},
+	MetalLB:         Chart{Repository: "https://metallb.github.io/metallb", Name: "metallb", Version: "0.16.1"},
+	KubeVip:         Chart{Repository: "https://kube-vip.github.io/helm-charts", Name: "kube-vip", Version: "0.11.1"},
+	KubeVipImage: Image{
+		Registry: "ghcr.io", Repository: "kube-vip/kube-vip", Tag: "v1.3.1",
+		Digest: "1962f9daf226503f7e6b107f595cb28b7917fd2d0113957075e19a3e5a6c1e33",
+	},
+	KubeVipCloudProvider: Chart{Repository: "https://kube-vip.github.io/helm-charts", Name: "kube-vip-cloud-provider", Version: "0.2.10"},
+	KubeVipCloudProviderImage: Image{
+		Registry: "ghcr.io", Repository: "kube-vip/kube-vip-cloud-provider", Tag: "v0.0.13",
+		Digest: "b8b6a5180e678b410e2c5dba86b87fa8099ada16e2f067d83f04e749f8ea54ab",
+	},
 	PodSecurityExempt: []string{"kube-system", "node-exporter"},
 }
 

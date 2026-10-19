@@ -298,9 +298,10 @@ func (r *Reconciler) addons(ctx context.Context, cluster *clusterv1.Cluster) (Ad
 	return addons, refused, nil
 }
 
-// removeSwitchedOff removes the proxies of Headlamp, monitoring and Kyverno when the cluster
-// switches them off; Rancher's and Istio's removals wait on other clusters, apart from these. It
-// reports whether a removal waits on another.
+// removeSwitchedOff removes the proxies of Headlamp, monitoring, the load balancer and Kyverno when
+// the cluster switches them off, and kube-vip's cloud provider when the load balancer is MetalLB;
+// Rancher's and Istio's removals wait on other clusters, apart from these. It reports whether a
+// removal waits on another.
 func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons) (bool, error) {
 	var off []string
 	if !addons.Headlamp.Enabled {
@@ -308,6 +309,12 @@ func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.C
 	}
 	if !addons.Monitoring.Enabled {
 		off = append(off, monitoringProxy(cluster))
+	}
+	if !addons.LoadBalancer.Enabled {
+		off = append(off, loadBalancerProxy(cluster))
+	}
+	if !addons.LoadBalancer.Enabled || addons.LoadBalancer.implementation() != kubeVip {
+		off = append(off, kubeVipProviderProxy(cluster))
 	}
 	if err := r.removeProxies(ctx, cluster, off...); err != nil {
 		return false, err
@@ -366,12 +373,17 @@ func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster
 	if installing, err := r.applyProxies(ctx, cluster, proxies); err != nil || installing {
 		return installing, err
 	}
+	if addons.LoadBalancer.Enabled && distributionOf(cluster) == templates.K3s {
+		if err := r.removeServiceLB(ctx, cluster); err != nil {
+			return false, err
+		}
+	}
 	return waiting, nil
 }
 
 // resourceSetSecrets are the Secrets of the cluster's ClusterResourceSet: its Proxmox VE Secret,
-// Calico's resources when Kubehenge installs Calico, and the configuration of the distribution's
-// own Cilium when it runs that.
+// Calico's resources when Kubehenge installs Calico, the configuration of the distribution's own
+// Cilium when it runs that, and MetalLB's address pool when MetalLB is its load balancer.
 func resourceSetSecrets(cluster *clusterv1.Cluster, resources *corev1.Secret, cni CNI, addons *Addons) ([]*corev1.Secret, error) {
 	secrets := []*corev1.Secret{resources}
 	switch {
@@ -387,6 +399,13 @@ func resourceSetSecrets(cluster *clusterv1.Cluster, resources *corev1.Secret, cn
 			return nil, err
 		}
 		secrets = append(secrets, cilium)
+	}
+	if lb := addons.LoadBalancer; lb.Enabled && lb.implementation() == metalLB {
+		pool, err := metalLBPool(cluster, lb)
+		if err != nil {
+			return nil, err
+		}
+		secrets = append(secrets, pool)
 	}
 	return secrets, nil
 }

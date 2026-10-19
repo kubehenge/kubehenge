@@ -105,7 +105,8 @@ func (h *Hooks) BeforeClusterDelete(ctx context.Context, req *runtimehooksv1.Bef
 
 // BeforeClusterCreate holds a new cluster back until the Reconciler has created its Proxmox VE
 // objects; capmox would otherwise clone its first VMs into a pool that does not exist yet. It
-// refuses a cluster whose pod or service range overlaps its nodes' network.
+// refuses a cluster whose pod or service range overlaps its nodes' network, and load-balancer
+// addresses that clash with that network or another cluster's.
 func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.BeforeClusterCreateRequest, resp *runtimehooksv1.BeforeClusterCreateResponse) {
 	resp.Status = runtimehooksv1.ResponseStatusSuccess
 	cluster := &req.Cluster
@@ -118,6 +119,10 @@ func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.Bef
 		return
 	}
 	if err := checkRanges(cluster, class); err != nil {
+		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
+		return
+	}
+	if err := h.checkLoadBalancer(ctx, cluster); err != nil {
 		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
 		return
 	}

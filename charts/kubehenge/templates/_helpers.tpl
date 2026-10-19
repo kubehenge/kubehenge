@@ -190,10 +190,11 @@ Prometheus, Alertmanager, Grafana, node-exporter and the metrics proxies, at 1.5
 grows while it fills its first two-hour block; Rancher's own pod peaks at about 1.6 GiB as it
 first starts, and with a cluster registered Rancher, Fleet and their controllers hold about 1.2 GiB.
 Istio uses about 100 MiB, but istiod and the ztunnel beside it ask for 384 MiB, which the node they
-share has to have; the clustermesh-apiserver uses about 50 MiB.
+share has to have; the clustermesh-apiserver uses about 50 MiB. The load balancer is MetalLB's
+controller and a node's speaker, or kube-vip and its cloud provider.
 */}}
 {{- define "kubehenge.addonMemory" -}}
-kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"kyverno":384,"istio":384,"clusterMesh":128,"certManager":192,"rancher":2048,"rancherAgent":512}'
+kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"kyverno":384,"istio":384,"clusterMesh":128,"loadBalancer":96,"certManager":192,"rancher":2048,"rancherAgent":512}'
 {{- end -}}
 
 {{/*
@@ -309,6 +310,40 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
             type: string
             maxLength: 32
             pattern: "^[a-z]([-a-z0-9]*[a-z0-9])?$"
+- name: loadBalancer
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        Addresses for the cluster's Services of type LoadBalancer, from a range on the nodes'
+        network. One node at a time answers for each address, and another takes over when it fails.
+        Without it, kubeadm and RKE2 give such Services no address, and k3s's servicelb answers for
+        them on every node's own address.
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        implementation:
+          type: string
+          enum: [metallb, kube-vip]
+          default: metallb
+          description: >-
+            MetalLB, or kube-vip, which also holds the cluster's API address. Switching replaces the
+            one with the other, and the Services take new addresses from the range.
+        addresses:
+          type: array
+          minItems: 1
+          description: >-
+            Addresses the Services take theirs from, as ranges (10.0.0.30-10.0.0.40), networks in
+            CIDR notation or single addresses: unused addresses on the nodes' network, apart from
+            network.addresses, the control-plane endpoint and other clusters' addresses there.
+          items:
+            type: string
+            minLength: 1
+      x-kubernetes-validations:
+        - rule: "!self.enabled || has(self.addresses)"
+          message: A load balancer needs addresses.
 - name: rancher
   required: false
   schema:
@@ -747,7 +782,7 @@ data:
 {{/*
 kube-vip as a static pod on each control-plane node, holding the control-plane endpoint by ARP for
 whichever node leads. Returned as the template of a JSON patch value that adds the bootstrap file.
-Call with (dict "path" <static pod manifest file> "kubeconfig" <admin kubeconfig on the node>).
+Call with (dict "root" . "path" <static pod manifest file> "kubeconfig" <admin kubeconfig on the node>).
 */}}
 {{- define "kubehenge.kubeVipFile" -}}
 path: {{ .path }}
@@ -766,7 +801,7 @@ content: |
         hostnames: [kubernetes]
     containers:
       - name: kube-vip
-        image: ghcr.io/kube-vip/kube-vip:v1.3.0@sha256:57603c01702ac2c62e31112306a1c34d46047231fe03716dfb8b363c33284649
+        image: {{ .root.Values.kubeVip }}
         imagePullPolicy: IfNotPresent
         args: [manager]
         env:
@@ -782,6 +817,9 @@ content: |
             value: kube-system
           - name: svc_enable
             value: "false"
+          # kube-vip serves its metrics without authentication, on every address by default.
+          - name: prometheus_server
+            value: 127.0.0.1:2112
           - name: vip_leaderelection
             value: "true"
           # kube-vip gives up on each API request after 10 s; a renew deadline of 10 s would let one

@@ -185,6 +185,8 @@ export KUBEHENGE_E2E_CONTROL_PLANE_CORES=4
 export KUBEHENGE_E2E_CONTROL_PLANE_MEMORY=4096
 case "${test}" in
     rke2)
+        # MetalLB is the default the other distributions run; kube-vip gets a cluster of its own.
+        export KUBEHENGE_E2E_LOAD_BALANCER=kube-vip
         e2e e2e-workload-cluster CLASS=kubehenge-rke2 VERSION="${from}+rke2r1" UPGRADE="${to}+rke2r1"
         ;;
     k3s)

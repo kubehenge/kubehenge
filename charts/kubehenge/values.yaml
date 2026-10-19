@@ -44,6 +44,7 @@ podSecurityExempt:
   - calico-system
   - node-exporter
   - istio-node
+  - metallb-system
   - cattle-system
   - cattle-fleet-system
   - cattle-fleet-local-system
@@ -71,6 +72,11 @@ proxmox:
   # for it with the API token under the secret's key ha-token, which needs Sys.Audit and Sys.Console
   # on /.
   ha: false
+
+# kube-vip, which holds each cluster's API address on its control planes and, where it is the
+# cluster's load balancer, its Services' addresses.
+# renovate: datasource=docker depName=ghcr.io/kube-vip/kube-vip
+kubeVip: ghcr.io/kube-vip/kube-vip:v1.3.1@sha256:1962f9daf226503f7e6b107f595cb28b7917fd2d0113957075e19a3e5a6c1e33
 
 # Installed into clusters: the Proxmox VE cloud controller manager and CSI plugin into every one,
 # the CNI chosen for a cluster whose distribution has none of its own (kubeadm), and the add-ons a
@@ -145,3 +151,20 @@ addons:
     repository: https://traefik.github.io/charts
     chart: traefik
     version: 42.0.0
+  # The load balancers a cluster chooses from for its Services of type LoadBalancer: MetalLB, or
+  # kube-vip with its cloud provider, which hands out the addresses. kube-vip runs the image above.
+  metallb:
+    repository: https://metallb.github.io/metallb
+    chart: metallb
+    version: 0.16.1
+  kubeVip:
+    repository: https://kube-vip.github.io/helm-charts
+    chart: kube-vip
+    version: 0.11.1
+  kubeVipCloudProvider:
+    repository: https://kube-vip.github.io/helm-charts
+    chart: kube-vip-cloud-provider
+    version: 0.2.10
+    # The chart's own lags the releases.
+    # renovate: datasource=docker depName=ghcr.io/kube-vip/kube-vip-cloud-provider
+    image: ghcr.io/kube-vip/kube-vip-cloud-provider:v0.0.13@sha256:b8b6a5180e678b410e2c5dba86b87fa8099ada16e2f067d83f04e749f8ea54ab

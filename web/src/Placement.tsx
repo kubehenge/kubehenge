@@ -1,8 +1,9 @@
 import { useEffect, useId, useState, type JSX } from "react";
 
 import { api } from "./api";
-import type { ClusterClass, HARule, HARules, PveNode, Storage } from "./types";
-import { Field, errorMessage, filled } from "./ui";
+import type { Cluster, ClusterClass, HARule, HARules, PveNode, Storage } from "./types";
+import { Dialog, ErrorBox, Field, errorMessage, filled, useChange } from "./ui";
+import { flag, texts } from "./values";
 
 /** Where a cluster's VMs may run: any node, the nodes of an HA rule, or nodes chosen one by one. */
 export const placements = ["any", "rule", "nodes"] as const;
@@ -26,12 +27,12 @@ export const placeOf = (allowed: string[] | undefined): Place =>
 export const allowedNodes = (p: Place): string[] | undefined => (p.placement === "any" ? undefined : p.nodes);
 
 export function placeText(p: Place): string {
-  const texts: Record<Placement, string> = {
+  const byPlacement: Record<Placement, string> = {
     any: "Any node",
     rule: `The nodes of HA rule ${p.haRule}: ${p.nodes.join(", ")}`,
     nodes: p.nodes.join(", "),
   };
-  return texts[p.placement];
+  return byPlacement[p.placement];
 }
 
 export function placeProblem(p: Place): string | undefined {
@@ -263,5 +264,89 @@ export function HAField({ checked, onChange }: { checked: boolean; onChange: (on
         fails. A node that runs an HA VM arms Proxmox VE&apos;s watchdog, so it restarts itself if it loses quorum.
       </div>
     </>
+  );
+}
+
+/** haOn reads the cluster's proxmoxHA variable, which takes part unless it is false. */
+export const haOn = (c: Cluster): boolean => flag(c.variables["proxmoxHA"]) !== false;
+
+export function HADialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+  const [on, setOn] = useState(haOn(c));
+  const { busy, error, send } = useChange(c, onClose);
+  return (
+    <Dialog
+      title="Proxmox VE HA"
+      onClose={onClose}
+      onSubmit={() => {
+        void send({ variables: { proxmoxHA: on } });
+      }}
+      actions={
+        <>
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="primary" disabled={busy || on === haOn(c)}>
+            Save
+          </button>
+        </>
+      }
+    >
+      <HAField checked={on} onChange={setOn} />
+      <ErrorBox message={error} />
+    </Dialog>
+  );
+}
+
+export function PlacementDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+  const kept = texts(c.variables["allowedNodes"]);
+  const initial = placeOf(kept);
+  const [value, setValue] = useState(initial);
+  const [nodes, setNodes] = useState<PveNode[]>([]);
+  const [nodesError, setNodesError] = useState<string>();
+  const rules = useHARules();
+  const { busy, error, send } = useChange(c, onClose);
+  useEffect(() => {
+    async function load(): Promise<void> {
+      try {
+        setNodes(await api.nodes());
+      } catch (err) {
+        setNodesError(errorMessage(err));
+      }
+    }
+    void load();
+  }, []);
+  const problem = placeProblem(value);
+  const next = allowedNodes(value) ?? null;
+  const changed = JSON.stringify(next) !== JSON.stringify(allowedNodes(initial) ?? null);
+  return (
+    <Dialog
+      title="Placement"
+      onClose={onClose}
+      onSubmit={() => {
+        void send({ variables: { allowedNodes: next } });
+      }}
+      actions={
+        <>
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="primary" disabled={busy || !changed || problem !== undefined}>
+            Save
+          </button>
+        </>
+      }
+    >
+      <PlacementFields
+        value={value}
+        onChange={setValue}
+        problem={problem}
+        hint="The Proxmox VE nodes the cluster's VMs may run on. A change applies to the VMs created after it, by scaling up, an upgrade or a replacement; those running stay where they are."
+        nodes={nodes}
+        kept={kept}
+        rules={rules}
+        framed={false}
+      />
+      <ErrorBox message={nodesError ?? error} />
+    </Dialog>
   );
 }

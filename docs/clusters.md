@@ -40,10 +40,21 @@ Before the first cluster, the VM templates for its distribution have to exist ([
 | Prefix length | Of the nodes' network. |
 | Gateway | The nodes' default gateway. |
 | DNS servers | IPv4 addresses, one per line or separated by commas. |
+| Load balancer | What gives Services of type `LoadBalancer` their addresses, [below](#load-balancer). |
+| Load-balancer addresses | With a load balancer: the addresses it hands out, as ranges, networks or single addresses. |
 | Pod network | The CNI, [below](#pod-network). |
 | Pod range, Service range | Optional, under **Pod and service ranges**. |
 
 The nodes' network is the gateway with the prefix length. Pod and service ranges must stay clear of it and of each other, or traffic for the nodes would be routed into the cluster. Kubehenge sets both ranges on every cluster it creates: those you give, refused if they overlap; otherwise the distribution's own when they are clear of the nodes' network (`10.244.0.0/16` and `10.96.0.0/12` for kubeadm, `10.42.0.0/16` and `10.43.0.0/16` for RKE2 and k3s); otherwise the first of a few private ranges that are clear.
+
+#### Load balancer
+
+Without one, kubeadm and RKE2 clusters give Services of type `LoadBalancer` no address, and k3s's own servicelb answers for each of them on every node's address. With one, each such Service takes an address of its own from the load-balancer addresses, which one node at a time answers for on the nodes' network; when that node fails, another takes over. Choose:
+
+- **MetalLB** (recommended), in layer 2 mode, in the `metallb-system` namespace.
+- **kube-vip**, which already holds the API address, in `kube-system`, with kube-vip's cloud provider handing out the addresses.
+
+The addresses must be unused and on the nodes' network, apart from the node addresses, the API address and the gateway. Kubehenge refuses addresses that clash with these, or with the node addresses, API address or load-balancer addresses of another cluster on the same bridge and VLAN, when the cluster is created and whenever its addresses change. On k3s, a load balancer switches servicelb off. The load balancer can be switched, or changed to other addresses, later ([below](#change-add-ons-and-sign-in)); Services then take new addresses.
 
 #### Pod network
 
@@ -137,6 +148,7 @@ The status reads **Provisioning**, **Available**, **Upgrading** or **Reconciling
 - **Pod security:** choose the level Pod Security Admission and Kyverno each enforce; on a cluster hardened to the CIS benchmark, Pod Security Admission's stays `restricted`. A new Pod Security Admission level replaces the control-plane nodes one at a time; switching Kyverno off uninstalls its policies, then Kyverno.
 - **Istio:** switch it on or off. Switching it off takes every namespace and pod out of the mesh first, then uninstalls it; its CRDs and their resources stay.
 - **Cluster Mesh**, on a cluster that runs Cilium: join or leave, and choose the peers. Each listed peer shows whether it is linked, and why not; a peer you cannot see shows only that it is not linked, or does not exist. Peers come and go without restarting anything; joining or leaving upgrades Cilium and restarts its agents.
+- **Load balancer:** choose MetalLB, kube-vip or none, and change its addresses. Switching uninstalls the one before; switched off, the cluster keeps the addresses for when it is switched on again.
 - **Rancher:** register with the Rancher Kubehenge installed, or leave it; leaving removes Rancher's agent from the cluster, except where `default` is held to `restricted` ([troubleshooting.md](troubleshooting.md#rancher)). Whether a cluster runs Rancher itself is chosen at creation. On the cluster that runs it, **Remove** beside Rancher under Options uninstalls Rancher after asking for the cluster's name: every registered cluster is first taken out of Rancher, which cleans up inside each, and Rancher's own settings, users and projects are lost. While it waits on that, the cluster shows a `RemovingRancher` event; everything else about the cluster is still applied.
 - **Identity providers:** change them. Saving replaces the control-plane nodes one at a time, as any change of the API server's configuration does. Adding or changing a provider that neither the providers set for every cluster nor the cluster's own list hold needs `Sys.Modify` on the cluster's pool; without it the dialog shows the providers read-only, and any of them can be removed.
 
@@ -293,6 +305,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `proxmoxHA` | no | Whether Proxmox VE HA keeps the control-plane VMs on separate nodes ([above](#machines)); default true, where the management cluster has Proxmox VE HA and the storage is shared. |
 | `controlPlaneMachine`, `workerMachine` | no | `cores` (default 2), `memoryMiB` (a multiple of 8, default 4096, with the minimums [above](#machines)), `diskGiB` (default 30 for the control plane and 40 for workers, at least 20; a disk only grows). |
 | `cni` | kubeadm only | kubeadm: `cilium` or `calico`. RKE2: `canal` (default), `calico` or `cilium`. k3s: `flannel` (default), `cilium` or `calico`. The class refuses a change once the cluster exists. |
+| `loadBalancer` | no | Addresses for Services of type `LoadBalancer` ([above](#load-balancer)): `enabled` (default false); `implementation`, `metallb` (default) or `kube-vip`; `addresses`, a list of ranges, networks in CIDR notation or single addresses on the nodes' network, needed while `enabled`. |
 | `headlamp` | no | `enabled` (default false); `hostname`, to serve it through the cluster's ingress controller; `tlsSecret`, a Secret in the `headlamp` namespace with the certificate for `hostname` (the ingress controller's default certificate when unset). |
 | `rancher` | no | `install` (default false), which needs `hostname` and at least 4 vCPUs on every node; `register` (default true), to register with the Rancher Kubehenge installed. Setting `install` back to false removes every registered cluster from Rancher, then uninstalls it. A second cluster with `install` gets no Rancher; `kubectl describe cluster` shows a `RancherRefused` event. |
 | `oidc` | no | Up to eight providers: `issuerURL`, `clientID`, `usernameClaim`, `usernamePrefix`, `groupsClaim`, `groupsPrefix`, `scopes`, `certificateAuthority` ([above](#signing-in-with-openid-connect)). Unset, the providers set for every cluster. |
