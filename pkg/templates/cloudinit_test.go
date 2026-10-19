@@ -1,8 +1,6 @@
 package templates
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -29,7 +28,10 @@ type seedNode struct {
 	t        *testing.T
 	mu       sync.Mutex
 	uploaded []byte
-	fields   map[string]string
+	// parts are the upload form's part names in the order sent, which Proxmox VE's proxy holds
+	// to: content, checksum-algorithm, checksum, then the file.
+	parts    []string
+	content  string
 	filename string
 	polls    int
 	// attached is the drive the VM was given, and done whether the upload had ended by then.
@@ -84,7 +86,7 @@ func (n *seedNode) upload(r *http.Request) string {
 		n.t.Error(err)
 		return ""
 	}
-	n.fields = map[string]string{}
+	n.parts = nil
 	for {
 		p, err := mr.NextPart()
 		if errors.Is(err, io.EOF) {
@@ -98,15 +100,17 @@ func (n *seedNode) upload(r *http.Request) string {
 		if err != nil {
 			n.t.Error(err)
 		}
-		if p.FormName() == "filename" {
+		n.parts = append(n.parts, p.FormName())
+		switch p.FormName() {
+		case "filename":
 			n.filename, n.uploaded = p.FileName(), body
-		} else {
-			n.fields[p.FormName()] = string(body)
+		case "content":
+			n.content = string(body)
 		}
 	}
 }
 
-func TestAttachSeedWaitsForTheUploadAndChecksIt(t *testing.T) {
+func TestAttachSeedWaitsForTheUpload(t *testing.T) {
 	t.Parallel()
 	n := &seedNode{t: t}
 	srv := httptest.NewServer(http.HandlerFunc(n.serve))
@@ -130,10 +134,8 @@ func TestAttachSeedWaitsForTheUploadAndChecksIt(t *testing.T) {
 	if n.attached != "local:iso/user-data-101.iso,media=cdrom" || !n.done {
 		t.Errorf("attached %q, upload ended first: %v", n.attached, n.done)
 	}
-	sum := sha256.Sum256(n.uploaded)
-	if n.filename != "user-data-101.iso" || n.fields["content"] != "iso" ||
-		n.fields["checksum-algorithm"] != "sha256" || n.fields["checksum"] != hex.EncodeToString(sum[:]) {
-		t.Errorf("uploaded %s with %v", n.filename, n.fields)
+	if n.filename != "user-data-101.iso" || n.content != "iso" || !slices.Equal(n.parts, []string{"content", "filename"}) {
+		t.Errorf("uploaded %s as %q in parts %v", n.filename, n.content, n.parts)
 	}
 	iso := filepath.Join(t.TempDir(), "seed.iso")
 	if err = os.WriteFile(iso, n.uploaded, 0o600); err != nil {

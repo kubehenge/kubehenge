@@ -2,8 +2,6 @@ package templates
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"maps"
 	"os"
@@ -42,12 +40,10 @@ func attachSeed(ctx context.Context, node *proxmox.Node, storageName string, vm 
 	if err = writeSeed(iso, files); err != nil {
 		return err
 	}
-	raw, err := os.ReadFile(iso) //nolint:gosec // the ISO just written in a directory of its own
-	if err != nil {
-		return fmt.Errorf("making the cloud-init ISO: %w", err)
-	}
-	sum := sha256.Sum256(raw)
-	task, err := storage.UploadWithHash("iso", iso, &name, hex.EncodeToString(sum[:]), "sha256")
+	// No checksum: Proxmox VE's proxy takes an upload's form fields only in the order content,
+	// checksum-algorithm, checksum, and go-proxmox writes them in a map's order, so an upload with
+	// a checksum is refused at random.
+	task, err := storage.UploadWithName("iso", iso, name)
 	if err = waitTask(ctx, task, err, shortTaskTimeout); err != nil {
 		return fmt.Errorf("uploading the cloud-init ISO: %w", err)
 	}
