@@ -402,6 +402,10 @@ function meshChoice(form: Form): string {
 // VE HA only where it applies.
 export function summary(form: Form, c: ClusterClass, haOffered = false): [string, string][] {
   const defined = new Set(c.variables.map((v) => v.name));
+  const chosenRange =
+    form.cni === "cilium"
+      ? "Chosen clear of the nodes' network and the other clusters' ranges"
+      : "Chosen clear of the nodes' network";
   const rows: [string, string][] = [
     ["Name", form.name],
     ["Distribution", distributionName(c.distribution)],
@@ -413,8 +417,8 @@ export function summary(form: Form, c: ClusterClass, haOffered = false): [string
     ["Node addresses", list(form.addresses).join(", ")],
     ["Prefix length and gateway", `/${form.prefix}, ${form.gateway}`],
     ["DNS servers", list(form.dnsServers).join(", ")],
-    ["Pod range", form.pods || "Chosen clear of the nodes' network"],
-    ["Service range", form.services || "Chosen clear of the nodes' network"],
+    ["Pod range", form.pods || chosenRange],
+    ["Service range", form.services || chosenRange],
     ["Storage", form.storage],
   ];
   if (defined.has("allowedNodes")) {
@@ -423,10 +427,10 @@ export function summary(form: Form, c: ClusterClass, haOffered = false): [string
   if (haOffered) {
     rows.push(["Proxmox VE HA", haText(form.proxmoxHA)]);
   }
-  rows.push(
-    ["Control-plane machines", machine(form.controlPlaneMachine)],
-    ["Worker machines", machine(form.workerMachine)],
-  );
+  rows.push(["Control-plane machines", machine(form.controlPlaneMachine)]);
+  if (form.workerReplicas > 0) {
+    rows.push(["Worker machines", machine(form.workerMachine)]);
+  }
   if (defined.has("cni")) {
     rows.push(["Pod network", form.cni || "The distribution's own"]);
   }

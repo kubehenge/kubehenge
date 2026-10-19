@@ -568,7 +568,7 @@ describe("create", () => {
       Name: "web",
       Distribution: "RKE2",
       "Node addresses": "10.0.0.21-10.0.0.29, 10.0.0.32/28",
-      "Pod range": "Chosen clear of the nodes' network",
+      "Pod range": "Chosen clear of the nodes' network and the other clusters' ranges",
       "Worker machines": "4 cores, 8 GiB memory, 40 GiB disk",
       Headlamp: "On",
       Monitoring: "On, Grafana at grafana.example",
@@ -579,6 +579,9 @@ describe("create", () => {
     expect(
       Object.fromEntries(summary({ ...form, podSecurity: { admission: "baseline", kyverno: "restricted" } }, rke2)),
     ).toMatchObject({ "Pod security": "Baseline by Pod Security Admission, Restricted by Kyverno" });
+    const alone = Object.fromEntries(summary({ ...form, workerReplicas: 0, cni: "canal" }, rke2));
+    expect(alone).not.toHaveProperty("Worker machines");
+    expect(alone["Pod range"]).toBe("Chosen clear of the nodes' network");
     expect(
       Object.fromEntries(
         summary({ ...form, cis: true, podSecurity: { admission: "baseline", kyverno: "restricted" } }, rke2),

@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AddOnsStep } from "./AddOnsStep";
 import { App } from "./App";
 import { newForm, type FieldKey, type Form } from "./create-form";
+import { NetworkStep } from "./CreateSteps";
 import { fakeServer } from "./fake-server";
 import type { Cluster, ClusterClass } from "./types";
 
@@ -113,5 +114,31 @@ describe("a Cluster Mesh", () => {
 
     rerender(step({ ...form, cni: "calico" }));
     expect(screen.queryByLabelText("Join a Cluster Mesh")).not.toBeInTheDocument();
+  });
+
+  it("says a Cilium cluster's ranges keep clear of the other clusters'", () => {
+    const cls: ClusterClass = {
+      name: "kubehenge-k3s",
+      distribution: "k3s",
+      versionFormat: { pattern: "^v1\\.\\d+\\.\\d+\\+k3s\\d+$" },
+      annotations: { "kubehenge.dev/default-pods": "10.42.0.0/16", "kubehenge.dev/default-services": "10.43.0.0/16" },
+      variables: [{ name: "cni", required: false, schema: { type: "string", enum: ["cilium", "calico"] } }],
+    };
+    const step = (f: Form): JSX.Element => (
+      <NetworkStep
+        form={f}
+        set={vi.fn<(k: keyof Form, v: unknown) => void>()}
+        shown={(k) => noProblems.get(k)}
+        cls={cls}
+        bridgeOptions={[]}
+      />
+    );
+    const { rerender } = render(step({ ...newForm(), cni: "cilium" }));
+    expect(screen.getByLabelText("Pod range")).toHaveAttribute("placeholder", "10.42.0.0/16");
+    expect(screen.getByLabelText("Service range")).toHaveAttribute("placeholder", "10.43.0.0/16");
+    expect(screen.getByLabelText("Pod range")).toHaveAccessibleDescription(/another cluster's ranges/u);
+
+    rerender(step({ ...newForm(), cni: "calico" }));
+    expect(screen.getByLabelText("Pod range")).not.toHaveAccessibleDescription(/another cluster's ranges/u);
   });
 });

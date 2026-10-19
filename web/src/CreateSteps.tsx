@@ -167,6 +167,10 @@ export function NetworkStep({
   bridgeOptions,
 }: StepProps & { cls: ClusterClass | undefined; bridgeOptions: Bridge[] }): JSX.Element {
   const cni = variable(cls, "cni");
+  const rangeHint =
+    form.cni === "cilium"
+      ? "Leave empty for the distribution's default, or the first free range if that overlaps the nodes' network or another cluster's ranges, so the cluster can join a Cluster Mesh."
+      : "Leave empty for the distribution's default, or the first free range if that overlaps the nodes' network.";
   return (
     <>
       <Field label="Bridge" hint="Only the bridges allowed for clusters are listed." error={shown("bridge")}>
@@ -261,30 +265,22 @@ export function NetworkStep({
         open={shown("pods") !== undefined || shown("services") !== undefined ? true : undefined}
       >
         <summary>Pod and service ranges</summary>
-        <Field
-          label="Pod range"
-          hint="Leave empty for the distribution's default, or the first free range if that overlaps the nodes' network."
-          error={shown("pods")}
-        >
+        <Field label="Pod range" hint={rangeHint} error={shown("pods")}>
           {(id) => (
             <input
               id={id}
               value={form.pods}
-              placeholder="10.244.0.0/16"
+              placeholder={cls?.annotations?.["kubehenge.dev/default-pods"]}
               onChange={(e) => set("pods", e.target.value.trim())}
             />
           )}
         </Field>
-        <Field
-          label="Service range"
-          hint="Leave empty for the distribution's default, or the first free range if that overlaps the nodes' network."
-          error={shown("services")}
-        >
+        <Field label="Service range" hint={rangeHint} error={shown("services")}>
           {(id) => (
             <input
               id={id}
               value={form.services}
-              placeholder="10.96.0.0/16"
+              placeholder={cls?.annotations?.["kubehenge.dev/default-services"]}
               onChange={(e) => set("services", e.target.value.trim())}
             />
           )}
