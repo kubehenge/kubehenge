@@ -191,7 +191,8 @@ func bootClone(t *testing.T, b *Builder, template int, bake Bake) {
 	}
 	userData := "#cloud-config\nwrite_files:\n  - path: /run/kubehenge-e2e\n    content: clone\n"
 	metaData := fmt.Sprintf("instance-id: kubehenge-e2e-%d\nlocal-hostname: kubehenge-e2e-%d\n", cloneID, cloneID)
-	if err = vm.CloudInit(ctx, "ide0", userData, metaData, "", NetworkConfig(mac, b.Network), proxmox.WithCloudInitStorage(iso)); err != nil {
+	seed := map[string]string{"user-data": userData, "meta-data": metaData, "network-config": NetworkConfig(mac, b.Network)}
+	if err = attachSeed(ctx, node, iso, vm, "ide0", seed); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {

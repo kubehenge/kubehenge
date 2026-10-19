@@ -12,6 +12,8 @@ import (
 	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/yaml"
+
+	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
 const (
@@ -28,6 +30,16 @@ const (
 	certManagerAddon = "cert-manager"
 	// rancherNamespace is the namespace Rancher's chart has to be installed in.
 	rancherNamespace = "cattle-system"
+	// cisVariable hardens the cluster to the CIS benchmark beyond what every cluster gets.
+	cisVariable = "cis"
+
+	// apiVersionKey is a manifest's own, in those written as maps.
+	apiVersionKey = "apiVersion"
+	// Keys of the charts' values and of pod specs written as maps.
+	seccompProfileKey = "seccompProfile"
+	requestsKey       = "requests"
+	memoryKey         = "memory"
+	cpuKey            = "cpu"
 
 	// The CNIs Kubehenge installs, as the cni variable names them.
 	cniCilium = "cilium"
@@ -47,12 +59,28 @@ type Charts struct {
 	HeadlampImage string
 	CertManager   Chart
 	Rancher       Chart
+	Monitoring    Chart
+	// KubeRBACProxy is the image of the proxies in front of metrics served without authentication.
+	KubeRBACProxy   Image
+	Kyverno         Chart
+	KyvernoPolicies Chart
+	// Istio is istiod's chart; its base, cni and ztunnel charts are beside it, at its version.
+	Istio Chart
+	// PodSecurityExempt are the namespaces Kyverno's policies leave alone, those the ClusterClasses'
+	// Pod Security Admission exempts.
+	PodSecurityExempt []string
 }
 
 // Addons are the add-ons a cluster switches on through its variables.
 type Addons struct {
-	Headlamp Headlamp
-	Rancher  Rancher
+	Headlamp    Headlamp
+	Rancher     Rancher
+	Monitoring  Monitoring
+	PodSecurity PodSecurity
+	Istio       Istio
+	ClusterMesh ClusterMesh
+	// CIS is the cluster's cis variable, which the add-ons make room for.
+	CIS bool
 }
 
 // addonsOf reads a cluster's add-on variables.
@@ -62,8 +90,29 @@ func addonsOf(cluster *clusterv1.Cluster) (Addons, error) {
 	if a.Headlamp, _, err = optionalVariable[Headlamp](cluster, headlampAddon); err != nil {
 		return a, err
 	}
+	if a.Monitoring, _, err = optionalVariable[Monitoring](cluster, monitoringAddon); err != nil {
+		return a, err
+	}
+	if a.PodSecurity, _, err = optionalVariable[PodSecurity](cluster, podSecurityVariable); err != nil {
+		return a, err
+	}
+	if a.CIS, _, err = optionalVariable[bool](cluster, cisVariable); err != nil {
+		return a, err
+	}
+	if a.Istio, _, err = optionalVariable[Istio](cluster, istioAddon); err != nil {
+		return a, err
+	}
+	if a.ClusterMesh, _, err = optionalVariable[ClusterMesh](cluster, clusterMeshVariable); err != nil {
+		return a, err
+	}
 	a.Rancher, err = rancherOf(cluster)
 	return a, err
+}
+
+// certManagerProxy names the cluster's cert-manager proxy, installed for Rancher and for
+// monitoring, either or both.
+func certManagerProxy(cluster *clusterv1.Cluster) string {
+	return cluster.Name + "-" + certManagerAddon
 }
 
 // rancherOf reads a cluster's rancher variable, the zero value if it has none.
@@ -72,9 +121,9 @@ func rancherOf(cluster *clusterv1.Cluster) (Rancher, error) {
 	return r, err
 }
 
-// rancherProxies name the proxies of Rancher's own cluster, which go when it is switched off.
-func rancherProxies(cluster *clusterv1.Cluster) []string {
-	return []string{cluster.Name + "-rancher", cluster.Name + "-cert-manager"}
+// rancherProxy names the proxy of Rancher's own cluster, which goes when it is switched off.
+func rancherProxy(cluster *clusterv1.Cluster) string {
+	return cluster.Name + "-" + rancherAddon
 }
 
 // rancherValues: Rancher makes its own CA through cert-manager and the agents trust only that CA,
@@ -143,6 +192,8 @@ type CNI struct {
 	Pods string
 	// ContainerForwarding is CNIForwardingAnnotation.
 	ContainerForwarding bool
+	// ClusterID is Cilium's cluster id, CiliumClusterIDAnnotation.
+	ClusterID int
 }
 
 // Endpoint is how workload clusters reach the Proxmox VE API.
@@ -249,7 +300,7 @@ func calicoResources(cluster *clusterv1.Cluster, cni CNI) (*corev1.Secret, error
 	}
 	var manifest []byte
 	for _, r := range resources {
-		r["apiVersion"] = "operator.tigera.io/v1"
+		r[apiVersionKey] = "operator.tigera.io/v1"
 		r["metadata"] = map[string]any{"name": "default"}
 		doc, err := yaml.Marshal(r)
 		if err != nil {
@@ -264,12 +315,69 @@ func calicoResources(cluster *clusterv1.Cluster, cni CNI) (*corev1.Secret, error
 	}, nil
 }
 
-// clusterResourceSet applies the cluster's Proxmox VE Secret and, when Kubehenge installs Calico,
-// Calico's resources; each is retried on its own until it applies.
-func clusterResourceSet(cluster *clusterv1.Cluster, cni CNI) *addonsv1.ClusterResourceSet {
-	resources := []addonsv1.ResourceRef{{Kind: secretKind, Name: cluster.Name + "-proxmox"}}
-	if cni.Name == cniCalico {
-		resources = append(resources, addonsv1.ResourceRef{Kind: secretKind, Name: calicoResourcesName(cluster)})
+// ciliumValues are what Kubehenge sets in Cilium's chart, its own or the distribution's. The
+// cluster's name and id are Cilium's from the start: a cluster that joins a mesh later would
+// otherwise have to restart every workload. operator holds the operator's own values.
+func ciliumValues(cluster *clusterv1.Cluster, id int, addons *Addons, operator map[string]any) (map[string]any, error) {
+	if len(cluster.Name) > MaxCiliumClusterName {
+		return nil, fmt.Errorf("cluster %s/%s: Cilium takes cluster names of at most %d characters", cluster.Namespace, cluster.Name, MaxCiliumClusterName)
+	}
+	// The agents and the operator read their configuration only when they start: an agent that
+	// started with cni.exclusive goes on taking istio-cni's plugin out after Istio is switched on.
+	operator["rollOutPods"] = true
+	values := map[string]any{
+		"cluster":           map[string]any{"name": cluster.Name, "id": id},
+		"rollOutCiliumPods": true,
+		"operator":          operator,
+	}
+	if addons.ClusterMesh.Enabled {
+		values["clustermesh"] = clusterMeshValues()
+	}
+	if addons.Istio.Enabled {
+		// Cilium would otherwise take istio-cni's plugin out of the node's CNI configuration.
+		values["cni"] = map[string]any{"exclusive": false}
+	}
+	return values, nil
+}
+
+func rke2CiliumName(cluster *clusterv1.Cluster) string {
+	return cluster.Name + "-rke2-cilium"
+}
+
+// rke2CiliumConfig wraps, for the ClusterResourceSet, the HelmChartConfig through which RKE2's
+// helm-controller merges Kubehenge's values into RKE2's own Cilium chart. A change reaches the
+// running cluster, where a file on the nodes would reach only those created after it.
+func rke2CiliumConfig(cluster *clusterv1.Cluster, id int, addons *Addons) (*corev1.Secret, error) {
+	values, err := ciliumValues(cluster, id, addons, map[string]any{})
+	if err != nil {
+		return nil, err
+	}
+	content, err := yaml.Marshal(values)
+	if err != nil {
+		return nil, fmt.Errorf("encoding Cilium's values: %w", err)
+	}
+	manifest, err := yaml.Marshal(map[string]any{
+		apiVersionKey: "helm.cattle.io/v1",
+		"kind":        "HelmChartConfig",
+		"metadata":    map[string]any{"name": "rke2-cilium", "namespace": metav1.NamespaceSystem},
+		"spec":        map[string]any{"valuesContent": string(content)},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encoding RKE2's Cilium configuration: %w", err)
+	}
+	return &corev1.Secret{
+		Name: rke2CiliumName(cluster), Namespace: cluster.Namespace,
+		Type: addonsv1.ClusterResourceSetSecretType,
+		Data: map[string][]byte{"rke2-cilium.yaml": manifest},
+	}, nil
+}
+
+// clusterResourceSet applies the cluster's Proxmox VE Secret and the other Secrets given, such as
+// Calico's resources when Kubehenge installs Calico; each is retried on its own until it applies.
+func clusterResourceSet(cluster *clusterv1.Cluster, secrets []*corev1.Secret) *addonsv1.ClusterResourceSet {
+	resources := make([]addonsv1.ResourceRef, 0, len(secrets))
+	for _, s := range secrets {
+		resources = append(resources, addonsv1.ResourceRef{Kind: secretKind, Name: s.Name})
 	}
 	return &addonsv1.ClusterResourceSet{
 		Name: cluster.Name + "-proxmox", Namespace: cluster.Namespace,
@@ -303,22 +411,18 @@ func headlampValues(image string, h Headlamp) map[string]any {
 			"allowPrivilegeEscalation": false,
 			"readOnlyRootFilesystem":   true,
 			"capabilities":             map[string]any{"drop": []any{"ALL"}},
-			"seccompProfile":           map[string]any{"type": "RuntimeDefault"},
+			seccompProfileKey:          map[string]any{"type": "RuntimeDefault"},
 		},
 		"resources": map[string]any{
-			"requests": map[string]any{"cpu": "10m", "memory": "64Mi"},
-			"limits":   map[string]any{"memory": "256Mi"},
+			requestsKey: map[string]any{cpuKey: "10m", memoryKey: "64Mi"},
+			"limits":    map[string]any{memoryKey: "256Mi"},
 		},
 	}
 	if h.Hostname != "" {
-		tls := map[string]any{"hosts": []any{h.Hostname}}
-		if h.TLSSecret != "" {
-			tls["secretName"] = h.TLSSecret
-		}
 		values["ingress"] = map[string]any{
 			"enabled": true,
 			"hosts":   []any{map[string]any{"host": h.Hostname, "paths": []any{map[string]any{"path": "/", "type": "Prefix"}}}},
-			"tls":     []any{tls},
+			"tls":     []any{ingressTLS(h.Hostname, h.TLSSecret)},
 		}
 	}
 	return values
@@ -392,17 +496,19 @@ func proxmoxValues(storage string) (map[string]any, map[string]any) {
 	return ccm, csi
 }
 
+// chartProxy is a chart a cluster gets, by the suffix of its HelmChartProxy's name.
+type chartProxy struct {
+	suffix, release, namespace string
+	chart                      Chart
+	values                     map[string]any
+}
+
 // helmChartProxies installs the cloud controller manager and the CSI plugin into the cluster, the
 // CNI named by cni unless none is, and the add-ons switched on. The Add-on Provider for Helm
 // selects only Clusters in a proxy's own namespace, so each cluster gets its own proxies beside it.
-func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, storage string, cni CNI, addons Addons) ([]*unstructured.Unstructured, error) {
+func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution templates.Distribution, storage string, cni CNI, addons *Addons) ([]*unstructured.Unstructured, error) {
 	ccm, csi := proxmoxValues(storage)
-	type proxy struct {
-		suffix, release, namespace string
-		chart                      Chart
-		values                     map[string]any
-	}
-	wanted := []proxy{
+	wanted := []chartProxy{
 		{"proxmox-ccm", "proxmox-cloud-controller-manager", metav1.NamespaceSystem, charts.CCM, ccm},
 		{"proxmox-csi", "proxmox-csi-plugin", metav1.NamespaceSystem, charts.CSI, csi},
 	}
@@ -413,31 +519,51 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, storage string
 		if err != nil {
 			return nil, err
 		}
-		wanted = append(wanted, proxy{"cni", cniCilium, metav1.NamespaceSystem, charts.Cilium, map[string]any{
-			"ipam":     map[string]any{"mode": "cluster-pool", "operator": map[string]any{"clusterPoolIPv4PodCIDRList": []any{pods}}},
-			"operator": map[string]any{"replicas": 1},
-		}})
+		values, err := ciliumValues(cluster, cni.ClusterID, addons, map[string]any{"replicas": 1})
+		if err != nil {
+			return nil, err
+		}
+		values["ipam"] = map[string]any{"mode": "cluster-pool", "operator": map[string]any{"clusterPoolIPv4PodCIDRList": []any{pods}}}
+		wanted = append(wanted, chartProxy{"cni", cniCilium, metav1.NamespaceSystem, charts.Cilium, values})
 	case cniCalico:
 		// Only the operator: it creates Calico's CRDs itself, and calicoResources brings the
 		// resources of them that the chart would otherwise render before they exist.
 		off := map[string]any{"enabled": false}
-		wanted = append(wanted, proxy{"cni", cniCalico, "tigera-operator", charts.Calico, map[string]any{
+		wanted = append(wanted, chartProxy{"cni", cniCalico, "tigera-operator", charts.Calico, map[string]any{
 			"manageCRDs": true, "installation": off, "apiServer": off, "goldmane": off, "whisker": off,
 		}})
 	default:
 		return nil, fmt.Errorf("cluster %s/%s: no chart for CNI %q", cluster.Namespace, cluster.Name, cni.Name)
 	}
 	if addons.Headlamp.Enabled {
-		wanted = append(wanted, proxy{headlampAddon, headlampAddon, headlampAddon, charts.Headlamp, headlampValues(charts.HeadlampImage, addons.Headlamp)})
+		wanted = append(wanted, chartProxy{headlampAddon, headlampAddon, headlampAddon, charts.Headlamp, headlampValues(charts.HeadlampImage, addons.Headlamp)})
+	}
+	if addons.Rancher.Install || addons.Monitoring.Enabled {
+		// A Secret goes with its Certificate, so that nothing an add-on asked for outlives it.
+		wanted = append(wanted, chartProxy{certManagerAddon, certManagerAddon, certManagerAddon, charts.CertManager, map[string]any{
+			"crds": map[string]any{"enabled": true}, "enableCertificateOwnerRef": true,
+		}})
 	}
 	if addons.Rancher.Install {
 		if addons.Rancher.Hostname == "" {
 			return nil, fmt.Errorf("cluster %s/%s: Rancher needs a hostname", cluster.Namespace, cluster.Name)
 		}
+		wanted = append(wanted, chartProxy{rancherAddon, rancherAddon, rancherNamespace, charts.Rancher, rancherValues(addons.Rancher)})
+	}
+	if addons.Monitoring.Enabled {
+		wanted = append(wanted, chartProxy{
+			monitoringAddon, monitoringRelease, monitoringAddon, charts.Monitoring,
+			monitoringValues(distribution, charts.KubeRBACProxy, addons),
+		})
+	}
+	if addons.PodSecurity.kyvernoOn() {
 		wanted = append(wanted,
-			proxy{certManagerAddon, certManagerAddon, certManagerAddon, charts.CertManager, map[string]any{"crds": map[string]any{"enabled": true}}},
-			proxy{rancherAddon, rancherAddon, rancherNamespace, charts.Rancher, rancherValues(addons.Rancher)},
+			chartProxy{kyvernoAddon, kyvernoAddon, kyvernoAddon, charts.Kyverno, kyvernoValues()},
+			chartProxy{kyvernoPolicies, kyvernoPolicies, kyvernoAddon, charts.KyvernoPolicies, kyvernoPolicyValues(addons.PodSecurity.Kyverno, charts.PodSecurityExempt)},
 		)
+	}
+	if addons.Istio.Enabled {
+		wanted = append(wanted, istioCharts(charts.Istio, distribution, cni)...)
 	}
 
 	var proxies []*unstructured.Unstructured

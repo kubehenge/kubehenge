@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState, type JSX } from "react";
 
+import { AddOnsStep } from "./AddOnsStep";
 import { api, bridgesOf } from "./api";
 import { clusterPath } from "./ClusterDetail";
 import {
@@ -15,17 +16,38 @@ import {
   summary,
   variable,
   withClass,
+  withRoom,
   type FieldKey,
   type Form,
   type Step,
 } from "./create-form";
-import { AddOnsStep, GeneralStep, IdentityStep, MachinesStep, NetworkStep } from "./CreateSteps";
+import { GeneralStep, IdentityStep, MachinesStep, NetworkStep } from "./CreateSteps";
 import { offersHA, useHARules } from "./Placement";
 import { navigate } from "./router";
 import type { Bridge, ClusterClass, PveNode, Storage, Versions } from "./types";
 import { Dialog, ErrorBox, errorMessage, filled, sole } from "./ui";
 
-export function CreateCluster({ canTrust }: { canTrust?: boolean | undefined }): JSX.Element {
+// The choices that can ask more of the machines, which then grow to it.
+const raising = new Set<keyof Form>([
+  "controlPlaneReplicas",
+  "workerReplicas",
+  "headlamp",
+  "monitoring",
+  "podSecurity",
+  "istio",
+  "cni",
+  "clusterMesh",
+  "rancherInstall",
+  "rancherRegister",
+]);
+
+export function CreateCluster({
+  canTrust,
+  namespace,
+}: {
+  canTrust?: boolean | undefined;
+  namespace?: string | undefined;
+}): JSX.Element {
   const [classes, setClasses] = useState<ClusterClass[]>([]);
   const [discarding, setDiscarding] = useState(false);
   const [bridgesByNode, setBridgesByNode] = useState<Record<string, Bridge[]>>({});
@@ -39,11 +61,11 @@ export function CreateCluster({ canTrust }: { canTrust?: boolean | undefined }):
   // A field's problem shows once the field has been changed, or Next was pressed on its step.
   const [touched, setTouched] = useState<ReadonlySet<string>>(new Set());
   const [attempted, setAttempted] = useState<ReadonlySet<Step>>(new Set());
+  const cls = classes.find((c) => c.name === entered.className);
   const set = <K extends keyof Form>(k: K, v: Form[K]): void => {
-    setEntered((f) => ({ ...f, [k]: v }));
+    setEntered((f) => (raising.has(k) ? withRoom({ ...f, [k]: v }, cls) : { ...f, [k]: v }));
     setTouched((t) => (t.has(k) ? t : new Set([...t, k])));
   };
-  const cls = classes.find((c) => c.name === entered.className);
   const [versionsBy, setVersionsBy] = useState<Record<string, Versions>>({});
   const offered = cls ? versionsBy[cls.distribution] : undefined;
 
@@ -119,7 +141,12 @@ export function CreateCluster({ canTrust }: { canTrust?: boolean | undefined }):
 
   const chooseClass = (name: string): void => {
     const c = classes.find((x) => x.name === name);
-    setEntered((f) => withClass(f, c, (k) => touched.has(k)));
+    setEntered((f) =>
+      withRoom(
+        withClass(f, c, (k) => touched.has(k)),
+        c,
+      ),
+    );
     setTouched((t) => new Set([...t, "class"]));
   };
 
@@ -198,6 +225,7 @@ export function CreateCluster({ canTrust }: { canTrust?: boolean | undefined }):
               form={form}
               set={set}
               shown={shown}
+              cls={cls}
               usableStorages={usableStorages}
               placed={variable(cls, "allowedNodes") !== undefined}
               haOffered={haOffered}
@@ -205,7 +233,9 @@ export function CreateCluster({ canTrust }: { canTrust?: boolean | undefined }):
               rules={rules}
             />
           )}
-          {step === "Add-ons" && <AddOnsStep form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} />}
+          {step === "Add-ons" && (
+            <AddOnsStep form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} namespace={namespace} />
+          )}
           {step === "Identity providers" && (
             <IdentityStep
               form={form}

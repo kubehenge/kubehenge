@@ -1,8 +1,10 @@
 package provisioner
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -13,9 +15,10 @@ import (
 
 // ClusterValidator answers the API server for Kubehenge's clusters as they are created and changed,
 // so that what BeforeClusterCreate would refuse later is refused at once, and a change made after
-// creation is held to the same: Rancher switched on beside another, or on nodes too small for it,
-// and a Rancher cluster's nodes made smaller than it needs. A cluster that already fell short before
-// a change is not held to it for unrelated edits.
+// creation is held to the same: control planes too small for the cluster's workers, nodes without
+// the memory its add-ons use, Rancher switched
+// on beside another, or on nodes too small for it, and a Rancher cluster's nodes made smaller than it
+// needs. A cluster that already fell short before a change is not held to it for unrelated edits.
 type ClusterValidator struct {
 	Hooks *Hooks
 }
@@ -42,7 +45,7 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 		return nil
 	}
 	r, err := rancherOf(c)
-	if err != nil || !r.Install {
+	if err != nil {
 		return err
 	}
 	class := &clusterv1.ClusterClass{}
@@ -53,6 +56,28 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 		}
 		return fmt.Errorf("reading the cluster's ClusterClass: %w", err)
 	}
+	var errs field.ErrorList
+	topology := field.NewPath("spec", "topology")
+	if err := checkControlPlaneSize(old, c, class); err != nil {
+		errs = append(errs, field.Forbidden(topology, err.Error()))
+	}
+	if err := checkAddonRoom(old, c, class); err != nil {
+		errs = append(errs, field.Forbidden(topology, err.Error()))
+	}
+	if r.Install {
+		errs = append(errs, v.validateRancher(ctx, old, c, class)...)
+	}
+	errs = append(errs, validateClusterMesh(old, c)...)
+	if len(errs) == 0 {
+		return nil
+	}
+	// Invalid, not the plain denial a validator's error becomes, so that the interface shows the
+	// reason as it does the API server's own validation.
+	return apierrors.NewInvalid(clusterv1.GroupVersion.WithKind("Cluster").GroupKind(), c.Name, errs) //nolint:wrapcheck // made here, not passed on
+}
+
+// validateRancher holds a cluster that installs Rancher to what Rancher needs.
+func (v *ClusterValidator) validateRancher(ctx context.Context, old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
 	switchedOn := old == nil
 	if old != nil {
 		was, err := rancherOf(old)
@@ -68,10 +93,36 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 	if err := checkRancherNodes(c, class); err != nil && (switchedOn || checkRancherNodes(old, class) == nil) {
 		errs = append(errs, field.Forbidden(topology, err.Error()))
 	}
-	if len(errs) == 0 {
-		return nil
+	return errs
+}
+
+// validateClusterMesh holds a cluster to what Cilium takes: a name of at most 32 characters for a
+// new cluster that runs it, Cluster Mesh only beside it, peers other than the cluster itself, and a
+// Cilium cluster id that stays once given.
+func validateClusterMesh(old, c *clusterv1.Cluster) field.ErrorList {
+	var errs field.ErrorList
+	cni, _, err := optionalVariable[string](c, "cni")
+	if err != nil {
+		return field.ErrorList{field.Invalid(field.NewPath("spec", "topology", "variables"), "cni", err.Error())}
 	}
-	// Invalid, not the plain denial a validator's error becomes, so that the interface shows the
-	// reason as it does the API server's own validation.
-	return apierrors.NewInvalid(clusterv1.GroupVersion.WithKind("Cluster").GroupKind(), c.Name, errs) //nolint:wrapcheck // made here, not passed on
+	if old == nil && cni == cniCilium && len(c.Name) > MaxCiliumClusterName {
+		errs = append(errs, field.TooLong(field.NewPath("metadata", "name"), c.Name, MaxCiliumClusterName))
+	}
+	mesh, _, err := optionalVariable[ClusterMesh](c, clusterMeshVariable)
+	variables := field.NewPath("spec", "topology", "variables").Key(clusterMeshVariable)
+	switch {
+	case err != nil:
+		errs = append(errs, field.Invalid(variables, clusterMeshVariable, err.Error()))
+	case mesh.Enabled && cni != cniCilium:
+		errs = append(errs, field.Forbidden(variables, "Cluster Mesh links clusters that run Cilium; this one runs "+cmp.Or(cni, "its distribution's own CNI")))
+	case slices.Contains(mesh.Peers, c.Name):
+		errs = append(errs, field.Invalid(variables.Child("peers"), c.Name, "a cluster cannot list itself"))
+	}
+	if old != nil {
+		if was, ok := old.Annotations[CiliumClusterIDAnnotation]; ok && c.Annotations[CiliumClusterIDAnnotation] != was {
+			errs = append(errs, field.Forbidden(field.NewPath("metadata", "annotations").Key(CiliumClusterIDAnnotation),
+				"the Cilium cluster id is fixed once given: changing it would restart every workload and could clash with a peer's"))
+		}
+	}
+	return errs
 }

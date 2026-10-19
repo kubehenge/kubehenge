@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -465,6 +466,112 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 	if err := c.Create(ctx, rancherCluster("second", `{"cores":4,"memoryMiB":8192}`)); err == nil || !strings.Contains(err.Error(), "already runs Rancher") {
 		t.Fatalf("a second Rancher: %v", err)
 	}
+
+	many := &clusterv1.Cluster{
+		Namespace: "team-a", Name: "many",
+		Spec: clusterv1.ClusterSpec{Topology: clusterv1.Topology{
+			ClassRef: clusterv1.ClusterClassRef{Name: "kubehenge-rke2", Namespace: classNamespace},
+			Version:  "v1.36.5+rke2r1",
+			Workers: clusterv1.WorkersTopology{MachineDeployments: []clusterv1.MachineDeploymentTopology{
+				{Class: "worker", Name: "md-0", Replicas: new(int32(300))},
+			}},
+		}},
+	}
+	if err := c.Create(ctx, many); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "with 300 workers need at least 4 vCPUs and 8192 MiB") {
+		t.Fatalf("300 workers on the class's default control planes: %v", err)
+	}
+
+	workerless := &clusterv1.Cluster{
+		Namespace: "team-a", Name: "workerless",
+		Spec: clusterv1.ClusterSpec{Topology: clusterv1.Topology{
+			ClassRef: clusterv1.ClusterClassRef{Name: "kubehenge-k3s", Namespace: classNamespace},
+			Version:  "v1.36.5+k3s1",
+		}},
+	}
+	if err := c.Create(ctx, workerless); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "without workers run its workloads too and need at least 3 vCPUs and 5120 MiB") {
+		t.Fatalf("a k3s cluster without workers on the class's default control planes: %v", err)
+	}
+
+	// Each class's sizing guide starts at the least its control-plane machines may be, and without
+	// workers they need its least worker on top.
+	oneWorker := &clusterv1.Cluster{Spec: clusterv1.ClusterSpec{Topology: clusterv1.Topology{
+		Workers: clusterv1.WorkersTopology{MachineDeployments: []clusterv1.MachineDeploymentTopology{{Replicas: new(int32(1))}}},
+	}}}
+	for _, name := range []string{"kubehenge-kubeadm", "kubehenge-k3s", "kubehenge-rke2"} {
+		class := &clusterv1.ClusterClass{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: classNamespace, Name: name}, class); err != nil {
+			t.Fatal(err)
+		}
+		need, _, err := controlPlaneFit(oneWorker, class)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		minimum := func(variable, field string) int {
+			for _, v := range class.Spec.Variables {
+				if m := v.Schema.OpenAPIV3Schema.Properties[field].Minimum; v.Name == variable && m != nil {
+					return int(*m)
+				}
+			}
+			t.Fatalf("%s: %s sets no least %s", name, variable, field)
+			return 0
+		}
+		if need.Cores != minimum("controlPlaneMachine", "cores") || need.MemoryMiB != minimum("controlPlaneMachine", "memoryMiB") {
+			t.Errorf("%s: its guide starts at %d vCPUs and %d MiB, its control-plane machines at %d and %d",
+				name, need.Cores, need.MemoryMiB, minimum("controlPlaneMachine", "cores"), minimum("controlPlaneMachine", "memoryMiB"))
+		}
+		alone, _, err := controlPlaneFit(&clusterv1.Cluster{}, class)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if alone.Cores != need.Cores+minimum("workerMachine", "cores") || alone.MemoryMiB != need.MemoryMiB+minimum("workerMachine", "memoryMiB") {
+			t.Errorf("%s: without workers its control planes need %d vCPUs and %d MiB", name, alone.Cores, alone.MemoryMiB)
+		}
+		checkClassAddonRoom(t, class, oneWorker, alone)
+	}
+
+	small := &clusterv1.Cluster{
+		Namespace: "team-a", Name: "small",
+		Spec: clusterv1.ClusterSpec{Topology: clusterv1.Topology{
+			ClassRef: clusterv1.ClusterClassRef{Name: "kubehenge-k3s", Namespace: classNamespace},
+			Version:  "v1.36.5+k3s1",
+			Workers: clusterv1.WorkersTopology{MachineDeployments: []clusterv1.MachineDeploymentTopology{
+				{Class: "worker", Name: "md-0", Replicas: new(int32(1))},
+			}},
+		}},
+	}
+	withAddons(small, map[string]string{"workerMachine": `{"memoryMiB":1024}`, "monitoring": `{"enabled":true}`})
+	if err := c.Create(ctx, small); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "the cluster's add-ons (monitoring, cert-manager, Rancher's agent) need 2240 MiB of memory on its workers") {
+		t.Fatalf("monitoring on a k3s worker at its least: %v", err)
+	}
+}
+
+// checkClassAddonRoom holds a class's memory figures: one for every add-on and every node kind, a
+// cluster at the class's defaults holding every add-on but Rancher, and the least cluster Rancher
+// runs on, without workers, holding Rancher.
+func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker *clusterv1.Cluster, alone controlPlaneSize) {
+	t.Helper()
+	addons, _, err := classMemory(class, AddonMemoryAnnotation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key := range addonNames {
+		if addons[key] <= 0 {
+			t.Errorf("%s: no memory figure for %s", class.Name, key)
+		}
+	}
+	if nodes, _, err := classMemory(class, NodeMemoryAnnotation); err != nil || nodes["controlPlane"] <= 0 || nodes["worker"] <= 0 {
+		t.Errorf("%s: node memory %v, %v", class.Name, nodes, err)
+	}
+	if err := checkAddonRoom(nil, withAddons(oneWorker.DeepCopy(), everyAddon), class); err != nil {
+		t.Errorf("%s: every add-on on the default worker: %v", class.Name, err)
+	}
+	rancher := withAddons(&clusterv1.Cluster{}, map[string]string{
+		"rancher":             `{"install":true,"hostname":"rancher.example.org"}`,
+		"controlPlaneMachine": fmt.Sprintf(`{"cores":%d,"memoryMiB":%d}`, max(alone.Cores, RancherMinimumCores), alone.MemoryMiB),
+	})
+	if err := checkAddonRoom(nil, rancher, class); err != nil {
+		t.Errorf("%s: Rancher on the least control plane without workers: %v", class.Name, err)
+	}
 }
 
 // The end-to-end tests shorten the workers' health check for their own cluster, so the classes' own
@@ -508,6 +615,102 @@ func TestIntegrationClassHealthChecks(t *testing.T) {
 	if want := slices.Sorted(maps.Keys(classProviders)); !slices.Equal(classes, want) {
 		t.Fatalf("classes %v, want %v", classes, want)
 	}
+}
+
+// Every argument the classes hand a component, in their templates or their patches, is one
+// name=value: a list written in YAML's flow style splits a value that holds commas into several,
+// and the component then refuses to start on a flag it does not know.
+func TestIntegrationClassArguments(t *testing.T) {
+	t.Parallel()
+	argument := regexp.MustCompile(`^[a-z][a-z0-9-]*=\S`)
+	isArgs := func(key string) bool { return strings.HasSuffix(key, "Args") || strings.HasSuffix(key, "Arg") }
+	checked := 0
+	check := func(where, s string) {
+		checked++
+		if !argument.MatchString(s) {
+			t.Errorf("%s: %q is not one name=value", where, s)
+		}
+	}
+	var walk func(where string, v any)
+	walk = func(where string, v any) {
+		switch v := v.(type) {
+		case map[string]any:
+			for key, e := range v {
+				if list, ok := e.([]any); ok && isArgs(key) {
+					for _, a := range list {
+						if s, ok := a.(string); ok {
+							check(where+" "+key, s)
+						}
+					}
+				}
+				walk(where, e)
+			}
+		case []any:
+			for _, e := range v {
+				walk(where, e)
+			}
+		}
+	}
+	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
+		switch {
+		case o.GetKind() == "ConfigMap" && o.GetLabels()["kubehenge.dev/class"] != "":
+			data, _, err := unstructured.NestedString(o.Object, "data", "templates.yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tpl := range decodeAll(t, []byte(data)) {
+				walk(tpl.GetKind(), tpl.Object)
+			}
+		case o.GetKind() == "ClusterClass":
+			patches, _, err := unstructured.NestedSlice(o.Object, "spec", "patches")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, op := range jsonPatches(t, patches) {
+				path := fmt.Sprint(op["path"])
+				if s, ok := op["value"].(string); ok && isArgs(strings.TrimSuffix(path, "/-")) {
+					check(o.GetName()+" "+path, s)
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no arguments found")
+	}
+}
+
+// jsonPatches are the operations of a ClusterClass's patches, every definition's in turn.
+func jsonPatches(t *testing.T, patches []any) []map[string]any {
+	t.Helper()
+	var ops []map[string]any
+	for _, p := range patches {
+		patch, ok := p.(map[string]any)
+		if !ok {
+			t.Fatalf("patch %v", p)
+		}
+		definitions, _, err := unstructured.NestedSlice(patch, "definitions")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range definitions {
+			definition, ok := d.(map[string]any)
+			if !ok {
+				t.Fatalf("definition %v", d)
+			}
+			list, _, err := unstructured.NestedSlice(definition, "jsonPatches")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, j := range list {
+				op, ok := j.(map[string]any)
+				if !ok {
+					t.Fatalf("operation %v", j)
+				}
+				ops = append(ops, op)
+			}
+		}
+	}
+	return ops
 }
 
 // Only a management cluster with Proxmox VE HA hands the controller the HA token and offers the

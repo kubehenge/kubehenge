@@ -42,7 +42,7 @@ jobs:
             pull_request) tests=$(git diff --name-only HEAD^1 HEAD | test/e2e/ci/scope.sh) ;;
             merge_group) tests=$(test/e2e/ci/scope.sh --all) ;;
             *) tests='["management-cluster", "management-cluster-upgrade", "appliance", "kubeadm",
-                 "rke2", "k3s", "rancher"]' ;;
+                 "rke2", "k3s", "rancher", "cluster-mesh"]' ;;
           esac
           echo "tests=$(printf '%s' "$tests" | jq -c .)" >> "$GITHUB_OUTPUT"
 
@@ -114,7 +114,10 @@ jobs:
           # the OOM killer.
           sudo fallocate -l 8G /mnt/e2e.swap && sudo chmod 600 /mnt/e2e.swap
           sudo mkswap /mnt/e2e.swap >/dev/null && sudo swapon /mnt/e2e.swap
-          nproc && free -m && df -h / /mnt
+          nproc && grep -m1 'model name' /proc/cpuinfo && free -m && df -h / /mnt
+      # The guests' vCPUs outnumber the runner's, so a failure may come from the runner itself.
+      - name: Record the runner's load
+        run: nohup vmstat -t -w 15 > "$RUNNER_TEMP/vmstat.txt" 2>&1 &
       - name: Proxmox VE
         run: test/e2e/ci/up.sh "$RUNNER_TEMP/e2e"
       # One nightly job keeps what the others read.
@@ -148,12 +151,14 @@ jobs:
           # Proxmox VE logs its API's requests here, not to the journal.
           pve cat /var/log/pveproxy/access.log > "$out/pveproxy-access.log" || true
           pve qm list > "$out/vms.txt" || true
-          cp "$RUNNER_TEMP/e2e/apply.log" "$out/" 2>/dev/null || true
+          cp "$RUNNER_TEMP/e2e/apply.log" "$RUNNER_TEMP/vmstat.txt" "$out/" 2>/dev/null || true
           if [ -f "$RUNNER_TEMP/e2e/kubeconfig.yaml" ]; then
             export KUBECONFIG="$RUNNER_TEMP/e2e/kubeconfig.yaml"
             kubectl get clusters,machines,pods -A -o wide \
               > "$out/management-cluster.txt" 2>&1 || true
             kubectl get events -A --sort-by=.lastTimestamp > "$out/events.txt" 2>&1 || true
+            # A namespace's conditions say what is left in it and whose finalizers hold that.
+            kubectl get namespaces -o yaml > "$out/namespaces.yaml" 2>&1 || true
             # A Helm hook's Job fails on its first failed pod, and the pod's status says whether the
             # command failed or the pod was evicted or never admitted.
             kubectl get jobs -A -o yaml > "$out/jobs.yaml" 2>&1 || true
@@ -167,6 +172,32 @@ jobs:
               grep -E -- '-system ' | while read -r ns pod; do
                 kubectl logs -n "$ns" "$pod" --all-containers --prefix --tail=-1 || true
               done > "$out/controllers.log" 2>&1
+            # A test can fail inside a workload cluster, such as one that never connects to Rancher:
+            # each cluster still standing, with the logs of Rancher's pods and of every pod that is
+            # not running or has restarted. RKE2's provider leaves its kubeconfig Secrets untyped,
+            # so they are found by the clusters' names.
+            kubectl get clusters -A --no-headers \
+              -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name 2>/dev/null |
+              while read -r ns cluster; do
+                dir="$out/clusters/$ns-$cluster" && mkdir -p "$dir"
+                kubectl -n "$ns" get secret "$cluster-kubeconfig" -o jsonpath='{.data.value}' |
+                  base64 -d > "$RUNNER_TEMP/workload.kubeconfig" || continue
+                k() {
+                  kubectl --kubeconfig "$RUNNER_TEMP/workload.kubeconfig" --request-timeout=20s "$@"
+                }
+                k get nodes,pods -A -o wide > "$dir/resources.txt" 2>&1 || continue
+                k get events -A --sort-by=.lastTimestamp > "$dir/events.txt" 2>&1 || true
+                k get pods -A -o json 2>/dev/null | jq -r '.items[] |
+                  select((.metadata.namespace | startswith("cattle-"))
+                    or (.status.phase | IN("Running", "Succeeded") | not)
+                    or any(.status.containerStatuses[]?; .restartCount > 0)) |
+                  "\(.metadata.namespace) \(.metadata.name)"' | while read -r pns pod; do
+                    k logs -n "$pns" "$pod" --all-containers --prefix --tail=2000 || true
+                    k logs -n "$pns" "$pod" --all-containers --prefix --previous --tail=500 \
+                      2>/dev/null || true
+                  done > "$dir/pods.log" 2>&1
+              done
+            rm -f "$RUNNER_TEMP/workload.kubeconfig"
           fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()

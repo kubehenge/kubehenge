@@ -5,7 +5,7 @@ terraform {
   required_providers {
     proxmox = {
       source  = "bpg/proxmox"
-      version = "~> 0.116"
+      version = "~> 0.117"
     }
     talos = {
       source  = "siderolabs/talos"
@@ -49,8 +49,10 @@ locals {
   # the fix (#832) is on its main branch but in no release yet. Until one carries it, capmox v0.9.1
   # runs as built from that commit, on v0.9.1's own manifests: main has changed no CRD, RBAC or
   # webhook since. The build also carries scripts/capmox-patches: capmox starts a VM's disk resize
-  # without waiting for it, so the bootstrap ISO's attach can time out on the VM's lock, which capmox
-  # takes as a VMProvisionFailed it never retries. scripts/capmox-image.sh builds it reproducibly,
+  # without waiting for it, and a reconcile that read the machine before the resize's task reference
+  # was written clears that reference, so the bootstrap ISO's attach can time out on the VM's lock,
+  # which capmox takes as a VMProvisionFailed it never retries. One patch waits for the resize, the
+  # other for any task still running on the VM. scripts/capmox-image.sh builds it reproducibly,
   # and a release publishes it only when it comes out with this digest. It applies only while capmox
   # is at `release`.
   capmox_build = {
@@ -59,6 +61,6 @@ locals {
     # capmox's own image is built with Go 1.26 on distroless static.
     go         = "go1.26.9"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
-    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:f70d989fd8c14123fc3516825491b56429daa4afbd96a338f7cad497d8c54857"
+    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:762ce6cf397a023c63dea6c9fa4864b687cc8dea42f7cf84ddb8f4eb38360c5b"
   }
 }

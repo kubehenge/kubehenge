@@ -21,7 +21,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+
+	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
 // Finalizer holds a Cluster until its Proxmox VE objects are removed.
@@ -61,10 +64,20 @@ type Reconciler struct {
 	Charts         Charts
 	// Registrar removes clusters from Rancher before Rancher itself is switched off.
 	Registrar *Registrar
+	// Remotes reaches the workload clusters, to take their workloads out of the mesh before Istio
+	// is switched off.
+	Remotes *Remotes
 	// Events reports on a Cluster what the controller refuses to do for it; may be nil.
 	Events events.EventRecorder
 	// RancherKubernetes is what the Rancher release Kubehenge installs runs on; unset allows any.
 	RancherKubernetes KubernetesMinors
+
+	ids ciliumIDs
+}
+
+// distributionOf is the distribution of a Cluster built from one of Kubehenge's ClusterClasses.
+func distributionOf(c *clusterv1.Cluster) templates.Distribution {
+	return templates.Distribution(strings.TrimPrefix(c.Spec.Topology.ClassRef.Name, ClassPrefix))
 }
 
 // Owns reports whether a Cluster is built from one of Kubehenge's ClusterClasses.
@@ -85,6 +98,10 @@ func Owns(c *clusterv1.Cluster, classNamespace string) bool {
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	err := ctrl.NewControllerManagedBy(mgr).
 		For(&clusterv1.Cluster{}, builder.WithPredicates(predicate.Or(
+			predicate.GenerationChangedPredicate{},
+			predicate.AnnotationChangedPredicate{},
+		))).
+		Watches(&clusterv1.Cluster{}, handler.EnqueueRequestsFromMapFunc(r.meshPeersOf), builder.WithPredicates(predicate.Or(
 			predicate.GenerationChangedPredicate{},
 			predicate.AnnotationChangedPredicate{},
 		))).
@@ -119,41 +136,72 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	if err = r.ensureEncryption(ctx, cluster); err != nil {
+		return ctrl.Result{}, err
+	}
 	addons, rancherRefused, err := r.addons(ctx, cluster)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.applyAddons(ctx, cluster, creds, addons); err != nil {
+	addonWaiting, err := r.applyAddons(ctx, cluster, creds, &addons)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 	// Marked ready last: BeforeClusterCreate lets the cluster be built once it is.
-	if err := r.keep(ctx, cluster, creds, true); err != nil {
+	if err = r.keep(ctx, cluster, creds, true); err != nil {
 		return ctrl.Result{}, err
 	}
-	// After the rest: Rancher's removal waits on every cluster registered with it, however long
-	// that takes, and nothing else of this cluster waits with it.
-	if !addons.Rancher.Install && rancherRefused == "" {
-		return r.removeRancherWhenFree(ctx, cluster)
+	othersWaiting, err := r.afterTheRest(ctx, cluster, &addons, rancherRefused)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	// Nothing the waits are on changes the Cluster, so only a requeue looks again.
+	if addonWaiting || othersWaiting {
+		return ctrl.Result{RequeueAfter: waitInterval}, nil
 	}
 	return ctrl.Result{RequeueAfter: resync}, nil
 }
 
-// removeRancherWhenFree removes Rancher from a cluster that switched it off, or waits for Rancher
-// to let go of the clusters registered with it first.
-func (r *Reconciler) removeRancherWhenFree(ctx context.Context, cluster *clusterv1.Cluster) (ctrl.Result, error) {
-	waiting, err := r.removeRancher(ctx, cluster)
-	if err != nil {
-		return ctrl.Result{}, err
+// afterTheRest does what waits on other clusters or on the workload cluster's own API, however long
+// that takes, so that nothing else of this cluster waits with it: removing Rancher, which waits on
+// every cluster registered with it, removing Istio, which waits on the cluster's workloads, and
+// linking the cluster's Cluster Mesh peers. It reports whether any of it waits.
+func (r *Reconciler) afterTheRest(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons, rancherRefused string) (bool, error) {
+	rancherWaiting := false
+	if !addons.Rancher.Install && rancherRefused == "" {
+		var with []string
+		if !addons.Monitoring.Enabled {
+			with = append(with, certManagerProxy(cluster))
+		}
+		var err error
+		if rancherWaiting, err = r.removeRancherWhenFree(ctx, cluster, with...); err != nil {
+			return false, err
+		}
 	}
-	if !waiting {
-		return ctrl.Result{RequeueAfter: resync}, nil
+	istioWaiting := false
+	if !addons.Istio.Enabled {
+		var err error
+		if istioWaiting, err = r.removeIstio(ctx, cluster); err != nil {
+			return false, err
+		}
+	}
+	meshWaiting, err := r.meshCluster(ctx, cluster, addons)
+	return rancherWaiting || istioWaiting || meshWaiting, err
+}
+
+// removeRancherWhenFree removes Rancher from a cluster that switched it off, or reports that it
+// waits for Rancher to let go of the clusters registered with it first.
+func (r *Reconciler) removeRancherWhenFree(ctx context.Context, cluster *clusterv1.Cluster, with ...string) (bool, error) {
+	waiting, err := r.removeRancher(ctx, cluster, with...)
+	if err != nil || !waiting {
+		return false, err
 	}
 	ctrl.LoggerFrom(ctx).Info("waiting for Rancher to let go of the clusters registered with it before removing it")
 	if r.Events != nil {
 		r.Events.Eventf(cluster, nil, corev1.EventTypeNormal, "RemovingRancher", "RemoveRancher",
 			"waiting for Rancher to let go of the clusters registered with it")
 	}
-	return ctrl.Result{RequeueAfter: waitInterval}, nil
+	return true, nil
 }
 
 // addFinalizer holds the cluster until its Proxmox VE objects are removed.
@@ -250,57 +298,120 @@ func (r *Reconciler) addons(ctx context.Context, cluster *clusterv1.Cluster) (Ad
 	return addons, refused, nil
 }
 
+// removeSwitchedOff removes the proxies of Headlamp, monitoring and Kyverno when the cluster
+// switches them off; Rancher's and Istio's removals wait on other clusters, apart from these. It
+// reports whether a removal waits on another.
+func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons) (bool, error) {
+	var off []string
+	if !addons.Headlamp.Enabled {
+		off = append(off, headlampProxy(cluster))
+	}
+	if !addons.Monitoring.Enabled {
+		off = append(off, monitoringProxy(cluster))
+	}
+	if err := r.removeProxies(ctx, cluster, off...); err != nil {
+		return false, err
+	}
+	if !addons.PodSecurity.kyvernoOn() {
+		return r.removeKyverno(ctx, cluster)
+	}
+	return false, nil
+}
+
 // applyAddons applies what the cluster gets installed: the Secrets of its ClusterResourceSet, the
-// set itself and the HelmChartProxies of its charts, and removes Headlamp's when it is switched off.
-func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster, creds Credentials, addons Addons) error {
+// set itself and the HelmChartProxies of its charts, and removes those switched off. It reports
+// whether an add-on's installation or removal waits on another.
+func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster, creds Credentials, addons *Addons) (bool, error) {
 	storage, err := variable[string](cluster, "storage")
 	if err != nil {
-		return err
+		return false, err
 	}
 	resources, err := resourceSetSecret(cluster, r.Endpoint, creds)
 	if err != nil {
-		return err
+		return false, err
 	}
 	cni, err := r.addonCNI(ctx, cluster)
 	if err != nil {
-		return err
+		return false, err
 	}
-	proxies, err := helmChartProxies(cluster, &r.Charts, storage, cni, addons)
+	if runsCilium(cluster) {
+		if cni.ClusterID, err = r.ciliumClusterID(ctx, cluster); err != nil {
+			return false, err
+		}
+	}
+	proxies, err := helmChartProxies(cluster, &r.Charts, distributionOf(cluster), storage, cni, addons)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if !addons.Headlamp.Enabled {
-		if err := r.removeProxies(ctx, cluster, headlampProxy(cluster)); err != nil {
-			return err
-		}
+	waiting, err := r.removeSwitchedOff(ctx, cluster, addons)
+	if err != nil {
+		return false, err
 	}
-	secrets := []*corev1.Secret{resources}
-	if cni.Name == cniCalico {
-		calico, err := calicoResources(cluster, cni)
-		if err != nil {
-			return err
-		}
-		secrets = append(secrets, calico)
+	secrets, err := resourceSetSecrets(cluster, resources, cni, addons)
+	if err != nil {
+		return false, err
 	}
 	for _, s := range secrets {
 		desired := s.DeepCopy()
 		mutate := func(got *corev1.Secret) { got.Type, got.Data = desired.Type, desired.Data }
 		if err := applyOwned(ctx, r.Client, cluster, s, mutate); err != nil {
-			return err
+			return false, err
 		}
 	}
-	crs := clusterResourceSet(cluster, cni)
+	crs := clusterResourceSet(cluster, secrets)
 	desired := crs.Spec.DeepCopy()
 	if err := applyOwned(ctx, r.Client, cluster, crs, func(got *addonsv1.ClusterResourceSet) { got.Spec = *desired }); err != nil {
-		return err
+		return false, err
 	}
+	if installing, err := r.applyProxies(ctx, cluster, proxies); err != nil || installing {
+		return installing, err
+	}
+	return waiting, nil
+}
+
+// resourceSetSecrets are the Secrets of the cluster's ClusterResourceSet: its Proxmox VE Secret,
+// Calico's resources when Kubehenge installs Calico, and the configuration of the distribution's
+// own Cilium when it runs that.
+func resourceSetSecrets(cluster *clusterv1.Cluster, resources *corev1.Secret, cni CNI, addons *Addons) ([]*corev1.Secret, error) {
+	secrets := []*corev1.Secret{resources}
+	switch {
+	case cni.Name == cniCalico:
+		calico, err := calicoResources(cluster, cni)
+		if err != nil {
+			return nil, err
+		}
+		secrets = append(secrets, calico)
+	case cni.Name == "" && runsCilium(cluster):
+		cilium, err := rke2CiliumConfig(cluster, cni.ClusterID, addons)
+		if err != nil {
+			return nil, err
+		}
+		secrets = append(secrets, cilium)
+	}
+	return secrets, nil
+}
+
+// applyProxies applies the cluster's HelmChartProxies, in order, and reports whether one waits on
+// another.
+func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluster, proxies []*unstructured.Unstructured) (bool, error) {
+	waiting := false
 	for _, p := range proxies {
+		if p.GetName() == kyvernoPoliciesProxy(cluster) {
+			wait, err := r.policiesWait(ctx, cluster)
+			if err != nil {
+				return false, err
+			}
+			if wait {
+				waiting = true
+				continue
+			}
+		}
 		desired := p.Object["spec"]
 		if err := applyOwned(ctx, r.Client, cluster, p, func(got *unstructured.Unstructured) { got.Object["spec"] = desired }); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return nil
+	return waiting, nil
 }
 
 // held reads what was recorded for the cluster; nothing yet, or no longer once a foreground
@@ -352,6 +463,22 @@ func (r *Reconciler) removeProxies(ctx context.Context, cluster *clusterv1.Clust
 	return nil
 }
 
+// anyProxy reports whether any of the cluster's HelmChartProxies named is still there.
+func (r *Reconciler) anyProxy(ctx context.Context, cluster *clusterv1.Cluster, names ...string) (bool, error) {
+	for _, name := range names {
+		p := &unstructured.Unstructured{}
+		p.SetGroupVersionKind(helmChartProxyGVK)
+		err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: name}, p)
+		if err == nil {
+			return true, nil
+		}
+		if !apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("reading add-on %s: %w", name, err)
+		}
+	}
+	return false, nil
+}
+
 // refuseRancher says why Rancher may not be installed into the cluster, or "": another cluster runs
 // it, or the cluster's Kubernetes is one Rancher does not run on. The hooks and the interface refuse
 // both up front; this holds for any client that set the variable past them. One already installed
@@ -372,7 +499,7 @@ func (r *Reconciler) refuseRancher(ctx context.Context, cluster *clusterv1.Clust
 	}
 	installed := &unstructured.Unstructured{}
 	installed.SetGroupVersionKind(helmChartProxyGVK)
-	err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: rancherProxies(cluster)[0]}, installed)
+	err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: rancherProxy(cluster)}, installed)
 	if err == nil {
 		return "", nil
 	}
@@ -384,14 +511,16 @@ func (r *Reconciler) refuseRancher(ctx context.Context, cluster *clusterv1.Clust
 }
 
 // removeRancher uninstalls Rancher from a cluster that switched it off, once every cluster
-// registered with it is removed from it, so that Rancher cleans up inside them first. It reports
-// whether it is still waiting for that.
-func (r *Reconciler) removeRancher(ctx context.Context, cluster *clusterv1.Cluster) (bool, error) {
+// registered with it is removed from it, so that Rancher cleans up inside them first, and the
+// proxies named in with along with it, or at once when Rancher was never there. It reports
+// whether it is still waiting.
+func (r *Reconciler) removeRancher(ctx context.Context, cluster *clusterv1.Cluster, with ...string) (bool, error) {
+	proxies := append([]string{rancherProxy(cluster)}, with...)
 	p := &unstructured.Unstructured{}
 	p.SetGroupVersionKind(helmChartProxyGVK)
-	err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: rancherProxies(cluster)[0]}, p)
+	err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: proxies[0]}, p)
 	if apierrors.IsNotFound(err) {
-		return false, nil
+		return false, r.removeProxies(ctx, cluster, proxies[1:]...)
 	}
 	if err != nil {
 		return false, fmt.Errorf("reading the Rancher proxy: %w", err)
@@ -408,7 +537,7 @@ func (r *Reconciler) removeRancher(ctx context.Context, cluster *clusterv1.Clust
 			}
 		}
 	}
-	return false, r.removeProxies(ctx, cluster, rancherProxies(cluster)...)
+	return false, r.removeProxies(ctx, cluster, proxies...)
 }
 
 // addonCNI is the CNI Kubehenge installs into the cluster, or none when its distribution brings

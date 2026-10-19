@@ -3,8 +3,16 @@ import { defaultMinutes, defaultStart, describe, type UpgradeMode, type UpgradeP
 import { addressBits, addressCount, inList, ipv4, isVLAN, list, rangeProblem, whole } from "./network";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
+import {
+  cisText,
+  enforced,
+  podSecurityOf,
+  podSecurityText,
+  podSecurityVariable,
+  type PodSecurity,
+} from "./PodSecurity";
 import type { Bridge, ClusterClass, CreateRequest, OIDCProvider, Schema, Storage } from "./types";
-import { browserZone, distributionName, filled, registeredWithRancher, sentence } from "./ui";
+import { browserZone, cniName, distributionName, filled, istioText, registeredWithRancher, sentence } from "./ui";
 import { quantity, record, texts } from "./values";
 
 export const steps = ["General", "Network", "Machines", "Add-ons", "Identity providers", "Confirm"] as const;
@@ -49,6 +57,13 @@ export interface Form {
   cni: string;
   headlamp: boolean;
   headlampHostname: string;
+  monitoring: boolean;
+  grafanaHostname: string;
+  podSecurity: PodSecurity;
+  cis: boolean;
+  istio: boolean;
+  clusterMesh: boolean;
+  meshPeers: string[];
   rancherInstall: boolean;
   rancherHostname: string;
   rancherRegister: boolean;
@@ -79,6 +94,153 @@ function machineDefaults(s: Schema | undefined): Machine {
   };
 }
 
+/** machineMinimums is the least a class lets one of its machine variables give a node. */
+export function machineMinimums(c: ClusterClass | undefined, key: "controlPlaneMachine" | "workerMachine"): Machine {
+  const schema = variable(c, key)?.properties;
+  return {
+    cores: schema?.["cores"]?.minimum ?? 1,
+    memoryMiB: schema?.["memoryMiB"]?.minimum ?? minMemoryMiB,
+    diskGiB: schema?.["diskGiB"]?.minimum ?? 1,
+  };
+}
+
+/**
+ * controlPlaneMinimums is the least a class lets a cluster's control planes have. Without workers
+ * they run the workloads too, so they need the class's least worker on top, as the controller asks.
+ */
+export function controlPlaneMinimums(c: ClusterClass | undefined, workers: number): Machine {
+  const min = machineMinimums(c, "controlPlaneMachine");
+  if (workers > 0) {
+    return min;
+  }
+  const worker = variable(c, "workerMachine")?.properties;
+  return {
+    ...min,
+    cores: min.cores + (worker?.["cores"]?.minimum ?? 0),
+    memoryMiB: min.memoryMiB + (worker?.["memoryMiB"]?.minimum ?? 0),
+  };
+}
+
+// The add-ons by their keys in a class's kubehenge.dev/addon-memory figures, as people know them.
+const addonNames = [
+  ["headlamp", "Headlamp"],
+  ["monitoring", "monitoring"],
+  ["kyverno", "Kyverno"],
+  ["istio", "Istio"],
+  ["clusterMesh", "Cluster Mesh"],
+  ["certManager", "cert-manager"],
+  ["rancher", "Rancher"],
+  ["rancherAgent", "Rancher's agent"],
+] as const;
+
+// maxCiliumName is the longest cluster name Cilium takes, which names the cluster in a mesh.
+const maxCiliumName = 32;
+
+/** offersMesh says whether a form's cluster can join a Cluster Mesh: its class offers it and it runs Cilium. */
+export const offersMesh = (form: Form, c: ClusterClass | undefined): boolean =>
+  variable(c, "clusterMesh") !== undefined && form.cni === "cilium";
+
+const meshChosen = (form: Form): boolean => form.clusterMesh && form.cni === "cilium";
+
+// classFigures reads one of a class's annotations of memory figures: kubehenge.dev/addon-memory by
+// add-on, or kubehenge.dev/node-memory, what a controlPlane or worker uses itself.
+function classFigures(c: ClusterClass | undefined, annotation: string): Record<string, unknown> {
+  try {
+    return record(JSON.parse(c?.annotations?.[annotation] ?? "{}"));
+  } catch {
+    // The controller refuses clusters of such a class with the reason.
+    return {};
+  }
+}
+
+/**
+ * addonMemory is the memory, in MiB, the add-ons a form chooses use by its class's figures, and
+ * which they are. Rancher's agent counts wherever the cluster would register, as the controller
+ * counts it: once a cluster installs Rancher, every other one registers with it.
+ */
+export function addonMemory(form: Form, c: ClusterClass | undefined): { names: string[]; mib: number } {
+  const figures = classFigures(c, "kubehenge.dev/addon-memory");
+  const on: Record<(typeof addonNames)[number][0], boolean> = {
+    headlamp: form.headlamp,
+    monitoring: form.monitoring,
+    kyverno: form.podSecurity.kyverno !== "off",
+    istio: form.istio,
+    clusterMesh: meshChosen(form),
+    certManager: form.monitoring || form.rancherInstall,
+    rancher: form.rancherInstall,
+    rancherAgent: !form.rancherInstall && form.rancherRegister,
+  };
+  const names: string[] = [];
+  let mib = 0;
+  for (const [key, name] of addonNames) {
+    const figure = quantity(figures[key]) ?? 0;
+    if (on[key] && figure > 0) {
+      names.push(name);
+      mib += figure;
+    }
+  }
+  return { names, mib };
+}
+
+const plainLeast = (form: Form, c: ClusterClass | undefined, key: "controlPlaneMachine" | "workerMachine"): Machine =>
+  key === "controlPlaneMachine" ? controlPlaneMinimums(c, form.workerReplicas) : machineMinimums(c, key);
+
+// carries says whether a form's machines of one kind run its add-ons: the workers, or without
+// workers the control planes.
+const carries = (form: Form, key: "controlPlaneMachine" | "workerMachine"): boolean =>
+  (key === "workerMachine") === form.workerReplicas > 0;
+
+/**
+ * addonNeedMiB is the memory each node that carries a form's add-ons needs for them, as the
+ * controller asks: what such a node uses itself, by its class, and its share of the add-ons'.
+ * Without add-ons it is 0.
+ */
+export function addonNeedMiB(form: Form, c: ClusterClass | undefined): number {
+  const key = form.workerReplicas > 0 ? "workerMachine" : "controlPlaneMachine";
+  const nodes = key === "workerMachine" ? form.workerReplicas : form.controlPlaneReplicas;
+  const { mib } = addonMemory(form, c);
+  if (mib === 0 || nodes <= 0) {
+    return 0;
+  }
+  const own =
+    quantity(classFigures(c, "kubehenge.dev/node-memory")[key === "workerMachine" ? "worker" : "controlPlane"]) ??
+    plainLeast(form, c, key).memoryMiB;
+  return own + Math.ceil(mib / nodes / memoryStepMiB) * memoryStepMiB;
+}
+
+/**
+ * machineLeast is the least a form lets its machines of one kind have: the class's, or for the nodes
+ * that carry the add-ons what those need, whichever is more.
+ */
+export function machineLeast(
+  form: Form,
+  c: ClusterClass | undefined,
+  key: "controlPlaneMachine" | "workerMachine",
+): Machine {
+  const min = plainLeast(form, c, key);
+  return carries(form, key) ? { ...min, memoryMiB: Math.max(min.memoryMiB, addonNeedMiB(form, c)) } : min;
+}
+
+/**
+ * withRoom raises a form's machines to the least its other choices ask of them: control planes that
+ * run the workloads without workers, the add-ons' memory and Rancher's cores. It lowers nothing.
+ */
+export function withRoom(form: Form, c: ClusterClass | undefined): Form {
+  const raised = { ...form };
+  for (const key of ["controlPlaneMachine", "workerMachine"] as const) {
+    const least = machineLeast(form, c, key);
+    const rancher =
+      form.rancherInstall && (key === "controlPlaneMachine" || form.workerReplicas > 0) ? rancherMinimumCores : 0;
+    const m = form[key];
+    raised[key] = {
+      ...m,
+      cores: Math.max(m.cores, least.cores, rancher),
+      memoryMiB: Math.max(m.memoryMiB, least.memoryMiB),
+    };
+  }
+  return raised;
+}
+
 /** newForm is the wizard before anything is chosen. */
 export const newForm = (): Form => ({
   name: "",
@@ -103,6 +265,13 @@ export const newForm = (): Form => ({
   cni: "",
   headlamp: false,
   headlampHostname: "",
+  monitoring: false,
+  grafanaHostname: "",
+  podSecurity: podSecurityOf(undefined),
+  cis: false,
+  istio: false,
+  clusterMesh: false,
+  meshPeers: [],
   rancherInstall: false,
   rancherHostname: "",
   rancherRegister: true,
@@ -166,6 +335,25 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
       ? { enabled: true, hostname: form.headlampHostname }
       : { enabled: true };
   }
+  if (form.monitoring) {
+    variables["monitoring"] = form.grafanaHostname
+      ? { enabled: true, hostname: form.grafanaHostname }
+      : { enabled: true };
+  }
+  const cis = form.cis && defined.has("cis");
+  const podSecurity = podSecurityVariable(enforced(form.podSecurity, cis));
+  if (podSecurity) {
+    variables["podSecurity"] = podSecurity;
+  }
+  if (cis) {
+    variables["cis"] = true;
+  }
+  if (form.istio && defined.has("istio")) {
+    variables["istio"] = { enabled: true };
+  }
+  if (meshChosen(form)) {
+    variables["clusterMesh"] = { enabled: true, peers: form.meshPeers.toSorted() };
+  }
   if (form.rancherInstall) {
     variables["rancher"] = { install: true, hostname: form.rancherHostname };
   } else if (!form.rancherRegister) {
@@ -203,10 +391,21 @@ function rancherChoice(form: Form): string {
   return form.rancherRegister ? registeredWithRancher : "Not registered";
 }
 
+function meshChoice(form: Form): string {
+  if (!meshChosen(form)) {
+    return "Off";
+  }
+  return form.meshPeers.length > 0 ? `On, with ${form.meshPeers.toSorted().join(", ")}` : "On, with no peers yet";
+}
+
 // summary is what the Confirm step shows: each setting by its name, as the user chose it; Proxmox
 // VE HA only where it applies.
 export function summary(form: Form, c: ClusterClass, haOffered = false): [string, string][] {
   const defined = new Set(c.variables.map((v) => v.name));
+  const chosenRange =
+    form.cni === "cilium"
+      ? "Chosen clear of the nodes' network and the other clusters' ranges"
+      : "Chosen clear of the nodes' network";
   const rows: [string, string][] = [
     ["Name", form.name],
     ["Distribution", distributionName(c.distribution)],
@@ -218,8 +417,8 @@ export function summary(form: Form, c: ClusterClass, haOffered = false): [string
     ["Node addresses", list(form.addresses).join(", ")],
     ["Prefix length and gateway", `/${form.prefix}, ${form.gateway}`],
     ["DNS servers", list(form.dnsServers).join(", ")],
-    ["Pod range", form.pods || "Chosen clear of the nodes' network"],
-    ["Service range", form.services || "Chosen clear of the nodes' network"],
+    ["Pod range", form.pods || chosenRange],
+    ["Service range", form.services || chosenRange],
     ["Storage", form.storage],
   ];
   if (defined.has("allowedNodes")) {
@@ -228,22 +427,14 @@ export function summary(form: Form, c: ClusterClass, haOffered = false): [string
   if (haOffered) {
     rows.push(["Proxmox VE HA", haText(form.proxmoxHA)]);
   }
-  rows.push(
-    ["Control-plane machines", machine(form.controlPlaneMachine)],
-    ["Worker machines", machine(form.workerMachine)],
-  );
+  rows.push(["Control-plane machines", machine(form.controlPlaneMachine)]);
+  if (form.workerReplicas > 0) {
+    rows.push(["Worker machines", machine(form.workerMachine)]);
+  }
   if (defined.has("cni")) {
-    rows.push(["Pod network", form.cni || "The distribution's own"]);
+    rows.push(["Pod network", cniName(form.cni) || "The distribution's own"]);
   }
-  if (defined.has("headlamp")) {
-    rows.push([
-      "Headlamp",
-      form.headlamp ? `On${form.headlampHostname ? `, at ${form.headlampHostname}` : ""}` : "Off",
-    ]);
-  }
-  if (defined.has("rancher")) {
-    rows.push(["Rancher", rancherChoice(form)]);
-  }
+  rows.push(...addOnRows(form, defined));
   if (defined.has("upgrades")) {
     const upgrades = newUpgrades(form.upgradeMode, browserZone());
     rows.push(["Automatic upgrades", describe(upgrades)]);
@@ -254,6 +445,40 @@ export function summary(form: Form, c: ClusterClass, haOffered = false): [string
       "Identity providers",
       providers.length > 0 ? providers.map((p) => p.issuerURL).join(", ") : "None: tokens and certificates only",
     ]);
+  }
+  return rows;
+}
+
+// addOnRows sums up the add-ons and the hardening the class offers.
+function addOnRows(form: Form, defined: Set<string>): [string, string][] {
+  const rows: [string, string][] = [];
+  if (defined.has("headlamp")) {
+    rows.push([
+      "Headlamp",
+      form.headlamp ? `On${form.headlampHostname ? `, at ${form.headlampHostname}` : ""}` : "Off",
+    ]);
+  }
+  if (defined.has("monitoring")) {
+    rows.push([
+      "Monitoring",
+      form.monitoring ? `On${form.grafanaHostname ? `, Grafana at ${form.grafanaHostname}` : ""}` : "Off",
+    ]);
+  }
+  const cis = form.cis && defined.has("cis");
+  if (defined.has("cis")) {
+    rows.push(["CIS hardening", cisText(cis)]);
+  }
+  if (defined.has("podSecurity")) {
+    rows.push(["Pod security", podSecurityText(enforced(form.podSecurity, cis))]);
+  }
+  if (defined.has("istio")) {
+    rows.push(["Istio", istioText(form.istio)]);
+  }
+  if (defined.has("clusterMesh") && form.cni === "cilium") {
+    rows.push(["Cluster Mesh", meshChoice(form)]);
+  }
+  if (defined.has("rancher")) {
+    rows.push(["Rancher", rancherChoice(form)]);
   }
   return rows;
 }
@@ -362,6 +587,8 @@ function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
   }
   if (c?.variables.find((v) => v.name === "cni")?.required === true && !form.cni) {
     p.cni = "Choose a pod network.";
+  } else if (form.cni === "cilium" && form.name.length > maxCiliumName) {
+    p.cni = `Cilium takes cluster names of at most ${maxCiliumName} characters; this one has ${form.name.length}.`;
   }
   return p;
 }
@@ -379,21 +606,25 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
     ["controlPlaneMachine", form.controlPlaneMachine],
     ["workerMachine", form.workerMachine],
   ] as const) {
-    const schema = variable(c, key)?.properties;
-    const minMemory = schema?.["memoryMiB"]?.minimum ?? minMemoryMiB;
-    const minDisk = schema?.["diskGiB"]?.minimum ?? 1;
-    if (!whole(m.cores, 1)) {
-      p[key] = "A whole number of cores, at least one.";
+    const min = machineLeast(form, c, key);
+    const alone =
+      key === "controlPlaneMachine" && form.workerReplicas === 0 ? " Without workers, they run the workloads too." : "";
+    const addons =
+      min.memoryMiB > plainLeast(form, c, key).memoryMiB
+        ? ` The add-ons chosen need that much: ${addonMemory(form, c).mib} MiB, shared by the ${key === "workerMachine" ? "workers" : "control planes"}.`
+        : "";
+    if (!whole(m.cores, min.cores)) {
+      p[key] = `A whole number of cores, at least ${min.cores}.${alone}`;
     } else if (
       form.rancherInstall &&
       m.cores < rancherMinimumCores &&
       (key === "controlPlaneMachine" || form.workerReplicas > 0)
     ) {
       p[key] = `At least ${rancherMinimumCores} cores, which Rancher needs on every node.`;
-    } else if (!whole(m.memoryMiB, minMemory) || m.memoryMiB % memoryStepMiB !== 0) {
-      p[key] = `Memory of at least ${minMemory} MiB, in steps of ${memoryStepMiB}.`;
-    } else if (!whole(m.diskGiB, minDisk)) {
-      p[key] = `A whole number of GiB of disk, at least ${minDisk}.`;
+    } else if (!whole(m.memoryMiB, min.memoryMiB) || m.memoryMiB % memoryStepMiB !== 0) {
+      p[key] = `Memory of at least ${min.memoryMiB} MiB, in steps of ${memoryStepMiB}.${alone}${addons}`;
+    } else if (!whole(m.diskGiB, min.diskGiB)) {
+      p[key] = `A whole number of GiB of disk, at least ${min.diskGiB}.`;
     }
   }
   return p;

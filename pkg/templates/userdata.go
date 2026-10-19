@@ -15,7 +15,8 @@ const (
 // BakeUserData renders the cloud-config that prepares a cloud image to become a template. Every
 // template gets the latest updates and the QEMU guest agent; a kubeadm template also gets
 // containerd, the kubelet and kubeadm as Kubernetes' own installation guide sets them up, with the
-// control-plane images pulled ahead. packagesKey is the ASCII-armoured pkgs.k8s.io key, needed for kubeadm.
+// control-plane images pulled ahead and the kubelet's unit files readable by root alone, as the CIS
+// benchmark asks. packagesKey is the ASCII-armoured pkgs.k8s.io key, needed for kubeadm.
 func BakeUserData(b Bake, packagesKey string) (string, error) {
 	var sb strings.Builder
 	sb.WriteString("#cloud-config\npackage_update: true\npackage_upgrade: true\n")

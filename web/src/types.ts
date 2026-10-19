@@ -23,6 +23,8 @@ export interface Session {
   canCreate?: boolean;
   /** Whether the user may install Rancher and trust identity providers of their own: Sys.Modify on the workload pool. */
   canTrust?: boolean;
+  /** The namespace the interface creates clusters in. */
+  namespace?: string;
 }
 
 export interface Schema {
@@ -115,6 +117,14 @@ export interface Cluster {
   machines?: Machine[];
   /** The cluster's name in the shared Headlamp. */
   headlamp?: string;
+  /** How each peer the cluster lists for Cluster Mesh stands, while it is on. */
+  mesh?: MeshPeer[];
+}
+
+/** A cluster another lists to link with in a Cluster Mesh; refused says why the two are not linked. */
+export interface MeshPeer {
+  name: string;
+  refused?: string;
 }
 
 /** An OpenID Connect provider a cluster's API server accepts ID tokens from. */

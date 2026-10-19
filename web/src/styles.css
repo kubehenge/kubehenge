@@ -593,6 +593,11 @@ fieldset.choices .check {
   grid-template-columns: calc(180px - 10px - 1px) 1fr;
 }
 
+/* Whatever opens a box, a note or a checkbox, starts where a field would, at the box's padding. */
+.group > legend + * {
+  margin-top: 0;
+}
+
 /* Fields keep their own gap below; a closing button needs one from the box's border. */
 .group > button:last-child {
   margin-bottom: 8px;
@@ -724,6 +729,11 @@ details.advanced > summary {
 
 .dialog-body {
   padding: 12px;
+}
+
+/* A note that opens a dialog starts at the body's padding, as a field would. */
+.dialog-body > p:first-child {
+  margin-top: 0;
 }
 
 .dialog-actions {

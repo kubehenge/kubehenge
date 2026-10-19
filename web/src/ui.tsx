@@ -12,8 +12,8 @@ import {
   type ReactNode,
 } from "react";
 
-import { ApiError } from "./api";
-import type { Cluster } from "./types";
+import { ApiError, api } from "./api";
+import type { ChangeRequest, Cluster } from "./types";
 
 // minPassphrase is the fewest characters the appliance takes for the state passphrase.
 export const minPassphrase = 16;
@@ -40,10 +40,20 @@ const distributionNames: Record<string, string> = { rke2: "RKE2", k3s: "k3s", ku
 /** distributionName is how a distribution is written for people: RKE2, k3s, kubeadm. */
 export const distributionName = (d: string): string => distributionNames[d] ?? d;
 
+const cniNames: Record<string, string> = { cilium: "Cilium", calico: "Calico", canal: "Canal", flannel: "Flannel" };
+
+/** cniName is how a pod network is written for people: Cilium, Calico, Canal, Flannel. */
+export const cniName = (n: string): string => cniNames[n] ?? n;
+
 // The controller registers a cluster with the Rancher another of its clusters runs, as soon as
 // one does.
 export const registerHint = "With the Rancher one of Kubehenge's other clusters runs, now or once one does.";
 export const registeredWithRancher = "Registered with Rancher, once one of Kubehenge's clusters runs it";
+
+/** istioHint says what Istio does in a cluster and how workloads join it. */
+export const istioHint =
+  "Istio in ambient mode, without sidecars: pods in a namespace labelled istio.io/dataplane-mode=ambient talk to each other over mutual TLS, with their workload identities. Switching it off first takes every namespace and pod out of the mesh.";
+export const istioText = (on: boolean): string => (on ? "On, ambient mode" : "Off");
 
 /** sole is the one name of a list that has only one: a choice a form can make for the user. */
 export const sole = (names: string[]): string | undefined => (names.length === 1 ? names[0] : undefined);
@@ -455,4 +465,26 @@ export function Dialog({
       </form>
     </dialog>
   );
+}
+
+// useChange sends one change and closes the dialog when it is accepted.
+export function useChange(
+  c: Cluster,
+  onClose: () => void,
+): { busy: boolean; error: string | undefined; send: (req: ChangeRequest) => Promise<void> } {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const send = async (req: ChangeRequest): Promise<void> => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.change(c.namespace, c.name, req);
+      onClose();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return { busy, error, send };
 }

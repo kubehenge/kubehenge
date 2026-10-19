@@ -167,6 +167,25 @@ The first cluster of a distribution also waits while that distribution's Cluster
 
 A message saying "the pod range … overlaps the nodes' network …" (or the service range): pod and service ranges must stay clear of the nodes' network (the gateway with the prefix length) and of each other. Choose other ranges under **Pod and service ranges**, or in `spec.clusterNetwork`.
 
+### Control planes too small
+
+A message saying "the control planes of a cluster with … workers need at least …": the cluster has more workers than its control planes' size carries, by its distribution's sizing guide ([clusters.md](clusters.md#machines)). Give the control planes the cores and memory the message names (`controlPlaneMachine`, or the control plane's override), or keep fewer workers. "The control planes of a cluster without workers run its workloads too and need at least …": with no workers, or every worker pool scaled to 0, the control planes need a worker's least on top of their own; give them that, or keep a worker. A cluster that already fell short, after an upgrade of Kubehenge asked for more, can still be changed in other ways; only more workers or smaller control planes are refused.
+
+### Not enough memory for the add-ons
+
+A message saying "the cluster's add-ons (…) need … MiB of memory on its workers, beyond the … MiB a worker uses itself": the workers together lack the memory the add-ons named take ([clusters.md](clusters.md#machines)). Give the workers more memory (`workerMachine`, or a worker pool's override), add workers, or leave an add-on off. Rancher's agent counts in every cluster that registers with Rancher; set `rancher` to `{register: false}` for a cluster that never will. "… on its control planes, which run them without workers …": the same for the control planes of a cluster without workers. A cluster that already fell short, after an upgrade of Kubehenge asked for more, can still be changed in other ways; only changes that leave it shorter are refused.
+
+### Istio
+
+- **Pods in the mesh reach nothing, or fail their probes, under a NetworkPolicy:** ztunnel carries the enrolled pods' traffic on port 15008/TCP, and the kubelet's probes reach them from 169.254.7.127; a policy that denies by default has to allow both ([Istio's notes](https://istio.io/latest/docs/ambient/usage/networkpolicy/)).
+- **Switching Istio off takes long:** Kubehenge waits until no pod's traffic is redirected through ztunnel any more (the pod annotation `ambient.istio.io/redirection`), which needs the cluster reachable and istio-cni running on the pod's node. A pod whose node is gone keeps the annotation; delete the pod.
+- **Waypoints are not created:** they need the Gateway API's CRDs, which Kubehenge does not install.
+
+### Cluster Mesh
+
+- **A peer shows "not linked":** the reason beside it, and the cluster's `ClusterMeshNotLinked` events, say what is missing: the peer must run Cilium, have the mesh on, list this cluster, have a Cilium cluster id and an API address, and its pod range must overlap neither this cluster's pods nor its services. Two clusters given overlapping ranges by hand cannot be linked, since a range is fixed once a cluster exists.
+- **Linked, but pods do not reach the peer's:** `cilium clustermesh status` in either cluster names the peer it cannot reach. The peers' KVStoreMesh connects to port 32379/TCP of the other's API address; a firewall between the clusters has to let it through. Cilium's network policies apply across the mesh: a policy that denies by default has to allow the peer's pods.
+
 ### Rancher
 
 - **"cluster … already runs Rancher, with which every cluster registers":** only one cluster may install it; the others register with it. The interface refuses a second one when it is created, with "Rancher: cluster … already runs it, and every cluster registers with that one". A second cluster set to install it with kubectl gets no Rancher and a `RancherRefused` event (`kubectl describe cluster <name>`).
@@ -174,6 +193,7 @@ A message saying "the pod range … overlaps the nodes' network …" (or the ser
 - **"every node of the cluster Rancher runs on needs at least 4 vCPUs":** the cluster's control planes or a worker pool with nodes have fewer cores than Rancher needs; give them 4 or more (`controlPlaneMachine` and `workerMachine`, or a worker pool's override). A worker pool scaled to 0 is not counted.
 - **Removing Rancher takes long:** it waits until Rancher has let go of every registered cluster, which needs each of them reachable; the Rancher cluster shows `RemovingRancher` events meanwhile, and everything else about it is still applied.
 - **Clusters do not register:** Rancher's host name must resolve, for people and for every registered cluster, to the Rancher cluster's ingress controller. kubeadm clusters bring no ingress controller.
+- **Rancher's agent stays after a cluster leaves Rancher:** Rancher removes it with a `cattle-cleanup-…` job in the `default` namespace, whose pod does not meet `restricted` ([rancher/rancher#58081](https://github.com/rancher/rancher/issues/58081)). In a cluster that holds `default` to `restricted`, the job shows `FailedCreate` events naming the settings it lacks, and keeps trying. Let it run by holding `default` to `baseline` until the job has finished: with Pod Security Admission, `kubectl label namespace default pod-security.kubernetes.io/enforce=baseline`, and afterwards `kubectl label namespace default pod-security.kubernetes.io/enforce-`; with Kyverno, set its level to `baseline` under **Pod security** and back afterwards. A cluster being deleted needs none of this, since its VMs go with the agent.
 
 ### A cluster does not finish deleting
 

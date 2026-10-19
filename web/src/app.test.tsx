@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { noAnswer } from "./api";
 import { App } from "./App";
 import { ClusterList } from "./ClusterList";
-import { fieldProblems, problems, request, summary, type Form } from "./create-form";
+import { addonMemory, fieldProblems, problems, request, summary, withRoom, type Form } from "./create-form";
 import { fakeServer, held, reads, type Route } from "./fake-server";
 import { addressCount } from "./network";
 import type { Cluster, ClusterClass, Machine } from "./types";
@@ -13,6 +13,11 @@ import type { Cluster, ClusterClass, Machine } from "./types";
 const rke2: ClusterClass = {
   name: "kubehenge-rke2",
   distribution: "rke2",
+  annotations: {
+    "kubehenge.dev/addon-memory":
+      '{"headlamp":64,"monitoring":1536,"kyverno":384,"certManager":192,"rancher":2048,"rancherAgent":512}',
+    "kubehenge.dev/node-memory": '{"controlPlane":2560,"worker":704}',
+  },
   versionFormat: { pattern: "^v1\\.\\d+\\.\\d+\\+rke2r\\d+$" },
   variables: [
     { name: "controlPlaneEndpoint", required: true, schema: { type: "string" } },
@@ -22,15 +27,34 @@ const rke2: ClusterClass = {
     {
       name: "controlPlaneMachine",
       required: false,
-      schema: { type: "object", default: { cores: 2, memoryMiB: 4096, diskGiB: 30 } },
+      schema: {
+        type: "object",
+        default: { cores: 2, memoryMiB: 4096, diskGiB: 30 },
+        properties: {
+          cores: { type: "integer", minimum: 2 },
+          memoryMiB: { type: "integer", minimum: 4096 },
+          diskGiB: { type: "integer", minimum: 20 },
+        },
+      },
     },
     {
       name: "workerMachine",
       required: false,
-      schema: { type: "object", default: { cores: 2, memoryMiB: 4096, diskGiB: 40 } },
+      schema: {
+        type: "object",
+        default: { cores: 2, memoryMiB: 4096, diskGiB: 40 },
+        properties: {
+          cores: { type: "integer", minimum: 2 },
+          memoryMiB: { type: "integer", minimum: 4096 },
+          diskGiB: { type: "integer", minimum: 20 },
+        },
+      },
     },
     { name: "cni", required: false, schema: { type: "string", enum: ["canal", "calico", "cilium"], default: "canal" } },
     { name: "headlamp", required: false, schema: { type: "object" } },
+    { name: "monitoring", required: false, schema: { type: "object" } },
+    { name: "podSecurity", required: false, schema: { type: "object" } },
+    { name: "cis", required: false, schema: { type: "boolean", default: false } },
     { name: "rancher", required: false, schema: { type: "object" } },
     {
       name: "oidc",
@@ -244,6 +268,15 @@ describe("clusters", () => {
     await user.click(confirm);
     await waitFor(() => expect(window.location.pathname).toBe("/"));
     expect(calls.find((c) => c.key === "DELETE /api/clusters/default/web")?.headers.get("X-Kubehenge-CSRF")).toBe("c1");
+  });
+
+  it("says what runs the workloads of a cluster without workers", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
+    const alone: Cluster = { ...web, workers: { desired: 0, ready: 0, available: 0, upToDate: 0 } };
+    fakeServer({ ...signedIn, "GET /api/clusters/default/web": () => ({ body: alone }) });
+    render(<App />);
+    const term = await screen.findByText("Workers", { selector: "dt" });
+    expect(term.nextElementSibling).toHaveTextContent("None; the control planes run the workloads");
   });
 
   it("scales a worker pool", async () => {
@@ -468,6 +501,13 @@ describe("create", () => {
     cni: "cilium",
     headlamp: true,
     headlampHostname: "",
+    monitoring: true,
+    grafanaHostname: "grafana.example",
+    podSecurity: { admission: "restricted", kyverno: "off" },
+    cis: false,
+    istio: false,
+    clusterMesh: false,
+    meshPeers: [],
     rancherInstall: false,
     rancherHostname: "",
     rancherRegister: false,
@@ -513,10 +553,22 @@ describe("create", () => {
         workerMachine: { cores: 4, memoryMiB: 8192, diskGiB: 40 },
         cni: "cilium",
         headlamp: { enabled: true },
+        monitoring: { enabled: true, hostname: "grafana.example" },
+        podSecurity: { admission: "restricted" },
         rancher: { register: false },
         oidc: [],
       },
     });
+    const defaults = { ...form, podSecurity: { admission: "privileged" as const, kyverno: "off" as const } };
+    expect(request(defaults, rke2).variables).not.toHaveProperty("podSecurity");
+    expect(request(defaults, rke2).variables).not.toHaveProperty("cis");
+    // CIS hardening has admission enforce restricted, and the variable says so.
+    expect(request({ ...defaults, cis: true }, rke2).variables).toMatchObject({
+      cis: true,
+      podSecurity: { admission: "restricted" },
+    });
+    const unhardened = { ...rke2, variables: rke2.variables.filter((v) => v.name !== "cis") };
+    expect(request({ ...defaults, cis: true }, unhardened).variables).not.toHaveProperty("podSecurity");
   });
 
   it("sums the form up as the Confirm step shows it", () => {
@@ -525,10 +577,28 @@ describe("create", () => {
       Name: "web",
       Distribution: "RKE2",
       "Node addresses": "10.0.0.21-10.0.0.29, 10.0.0.32/28",
-      "Pod range": "Chosen clear of the nodes' network",
+      "Pod range": "Chosen clear of the nodes' network and the other clusters' ranges",
       "Worker machines": "4 cores, 8 GiB memory, 40 GiB disk",
       Headlamp: "On",
+      Monitoring: "On, Grafana at grafana.example",
+      "CIS hardening": "Off",
+      "Pod security": "Restricted by Pod Security Admission",
       Rancher: "Not registered",
+    });
+    expect(
+      Object.fromEntries(summary({ ...form, podSecurity: { admission: "baseline", kyverno: "restricted" } }, rke2)),
+    ).toMatchObject({ "Pod security": "Baseline by Pod Security Admission, Restricted by Kyverno" });
+    const alone = Object.fromEntries(summary({ ...form, workerReplicas: 0, cni: "canal" }, rke2));
+    expect(alone).not.toHaveProperty("Worker machines");
+    expect(alone["Pod range"]).toBe("Chosen clear of the nodes' network");
+    expect(alone["Pod network"]).toBe("Canal");
+    expect(
+      Object.fromEntries(
+        summary({ ...form, cis: true, podSecurity: { admission: "baseline", kyverno: "restricted" } }, rke2),
+      ),
+    ).toMatchObject({
+      "CIS hardening": "On",
+      "Pod security": "Restricted by Pod Security Admission, Restricted by Kyverno",
     });
     expect(
       Object.fromEntries(summary({ ...form, vlan: "30", rancherInstall: true, rancherHostname: "r.example" }, rke2)),
@@ -536,6 +606,44 @@ describe("create", () => {
       Bridge: "vmbr0, VLAN 30",
       Rancher: "Installed here, at r.example",
     });
+    const withIstio = {
+      ...rke2,
+      variables: [...rke2.variables, { name: "istio", required: false, schema: { type: "object" } }],
+    };
+    expect(Object.fromEntries(summary(form, withIstio))).toMatchObject({ Istio: "Off" });
+    expect(Object.fromEntries(summary({ ...form, istio: true }, withIstio))).toMatchObject({
+      Istio: "On, ambient mode",
+    });
+    expect(request({ ...form, istio: true }, withIstio).variables["istio"]).toStrictEqual({ enabled: true });
+    expect(request({ ...form, istio: true }, rke2).variables).not.toHaveProperty("istio");
+  });
+
+  it("joins a Cluster Mesh only where the cluster runs Cilium", () => {
+    const withMesh: ClusterClass = {
+      ...rke2,
+      annotations: { "kubehenge.dev/addon-memory": '{"clusterMesh":256}' },
+      variables: [...rke2.variables, { name: "clusterMesh", required: false, schema: { type: "object" } }],
+    };
+    const meshed = { ...form, clusterMesh: true, meshPeers: ["db", "api"] };
+    expect(Object.fromEntries(summary(form, withMesh))).toMatchObject({ "Cluster Mesh": "Off" });
+    expect(Object.fromEntries(summary(meshed, withMesh))).toMatchObject({ "Cluster Mesh": "On, with api, db" });
+    expect(Object.fromEntries(summary({ ...meshed, meshPeers: [] }, withMesh))).toMatchObject({
+      "Cluster Mesh": "On, with no peers yet",
+    });
+    expect(request(meshed, withMesh).variables["clusterMesh"]).toStrictEqual({ enabled: true, peers: ["api", "db"] });
+    expect(addonMemory(meshed, withMesh)).toStrictEqual({ names: ["Cluster Mesh"], mib: 256 });
+
+    const canal = { ...meshed, cni: "canal" };
+    expect(Object.fromEntries(summary(canal, withMesh))).not.toHaveProperty("Cluster Mesh");
+    expect(request(canal, withMesh).variables).not.toHaveProperty("clusterMesh");
+    expect(addonMemory(canal, withMesh).mib).toBe(0);
+    expect(request(meshed, rke2).variables).not.toHaveProperty("clusterMesh");
+
+    const long = "a".repeat(33);
+    expect(fieldProblems("Network", { ...form, name: long }, withMesh)).toStrictEqual({
+      cni: "Cilium takes cluster names of at most 32 characters; this one has 33.",
+    });
+    expect(fieldProblems("Network", { ...form, name: long, cni: "canal" }, withMesh)).toStrictEqual({});
   });
 
   it("starts automatic upgrades with a window in the browser's time zone", () => {
@@ -596,6 +704,28 @@ describe("create", () => {
     expect(
       problems("Machines", { ...form, workerMachine: { cores: 1.5, memoryMiB: 4096, diskGiB: 40 } }, rke2),
     ).toHaveLength(1);
+    // The class's own minimums, which follow its distribution's sizing guide.
+    expect(
+      fieldProblems("Machines", { ...form, controlPlaneMachine: { cores: 1, memoryMiB: 4096, diskGiB: 30 } }, rke2),
+    ).toStrictEqual({ controlPlaneMachine: "A whole number of cores, at least 2." });
+    expect(
+      fieldProblems("Machines", { ...form, workerMachine: { cores: 2, memoryMiB: 2048, diskGiB: 40 } }, rke2),
+    ).toStrictEqual({ workerMachine: "Memory of at least 4096 MiB, in steps of 8." });
+    // Without workers the control planes run the workloads too, so they need a worker's least on top.
+    const alone = { ...form, workerReplicas: 0 };
+    expect(
+      fieldProblems("Machines", { ...alone, controlPlaneMachine: { cores: 2, memoryMiB: 8192, diskGiB: 30 } }, rke2),
+    ).toStrictEqual({
+      controlPlaneMachine: "A whole number of cores, at least 4. Without workers, they run the workloads too.",
+    });
+    expect(
+      fieldProblems("Machines", { ...alone, controlPlaneMachine: { cores: 4, memoryMiB: 4096, diskGiB: 30 } }, rke2),
+    ).toStrictEqual({
+      controlPlaneMachine: "Memory of at least 8192 MiB, in steps of 8. Without workers, they run the workloads too.",
+    });
+    expect(
+      fieldProblems("Machines", { ...alone, controlPlaneMachine: { cores: 4, memoryMiB: 8192, diskGiB: 30 } }, rke2),
+    ).toStrictEqual({});
     expect(problems("General", { ...form, workerReplicas: 1.5 }, rke2)).toStrictEqual([
       "A whole number from 0 to 100.",
     ]);
@@ -639,6 +769,60 @@ describe("create", () => {
       ),
     ).toStrictEqual({});
     expect(fieldProblems("Machines", { ...form, controlPlaneMachine: { ...four, cores: 2 } }, rke2)).toStrictEqual({});
+  });
+
+  it("gives the nodes that carry the add-ons room for them", () => {
+    const addons =
+      '{"headlamp":50,"monitoring":6000,"kyverno":300,"istio":200,"certManager":100,"rancher":1500,"rancherAgent":250}';
+    const figured: ClusterClass = {
+      ...rke2,
+      annotations: {
+        "kubehenge.dev/addon-memory": addons,
+        "kubehenge.dev/node-memory": '{"controlPlane":4800,"worker":640}',
+      },
+    };
+    expect(addonMemory(form, figured)).toStrictEqual({ names: ["Headlamp", "monitoring", "cert-manager"], mib: 6150 });
+    expect(addonMemory({ ...form, rancherRegister: true }, figured).mib).toBe(6400);
+    expect(
+      addonMemory(
+        { ...form, rancherInstall: true, istio: true, podSecurity: { admission: "privileged", kyverno: "baseline" } },
+        figured,
+      ).names,
+    ).toStrictEqual(["Headlamp", "monitoring", "Kyverno", "Istio", "cert-manager", "Rancher"]);
+    const plain: ClusterClass = { ...rke2, annotations: {} };
+    expect(addonMemory(form, plain).mib).toBe(0);
+    // A worker needs the class's least, or what it uses itself and its share of the add-ons in
+    // Proxmox VE's steps, whichever is more: two least workers hold them, one does not.
+    const least = { cores: 4, memoryMiB: 4096, diskGiB: 40 };
+    expect(fieldProblems("Machines", { ...form, workerMachine: least }, figured)).toStrictEqual({});
+    const one = { ...form, workerReplicas: 1, workerMachine: least };
+    expect(fieldProblems("Machines", one, figured)).toStrictEqual({
+      workerMachine:
+        "Memory of at least 6792 MiB, in steps of 8. The add-ons chosen need that much: 6150 MiB, shared by the workers.",
+    });
+    expect(fieldProblems("Machines", one, plain)).toStrictEqual({});
+    expect(withRoom(one, figured).workerMachine).toStrictEqual({ ...least, memoryMiB: 6792 });
+    expect(withRoom(form, figured)).toStrictEqual(form);
+    // A class that says nothing of its nodes' own use counts its least for it.
+    const unmeasured: ClusterClass = { ...figured, annotations: { "kubehenge.dev/addon-memory": addons } };
+    expect(fieldProblems("Machines", one, unmeasured).workerMachine).toMatch(/^Memory of at least 10248 MiB/u);
+    // Without workers the control planes carry them.
+    const alone = {
+      ...form,
+      workerReplicas: 0,
+      controlPlaneReplicas: 1,
+      controlPlaneMachine: { cores: 4, memoryMiB: 8192, diskGiB: 30 },
+    };
+    expect(fieldProblems("Machines", alone, figured)).toStrictEqual({
+      controlPlaneMachine:
+        "Memory of at least 10952 MiB, in steps of 8. Without workers, they run the workloads too. The add-ons chosen need that much: 6150 MiB, shared by the control planes.",
+    });
+    expect(
+      withRoom({ ...alone, controlPlaneMachine: { cores: 2, memoryMiB: 4096, diskGiB: 30 } }, figured),
+    ).toMatchObject({
+      controlPlaneMachine: { cores: 4, memoryMiB: 10_952 },
+      workerMachine: form.workerMachine,
+    });
   });
 
   it("says why the sign-in page is back, what a lost connection means, and who may create", async () => {
@@ -760,9 +944,18 @@ describe("create", () => {
     await user.type(cores, "4");
     expect(cores).toHaveValue(4);
     await user.click(screen.getByRole("button", { name: "Next" }));
+    // The add-ons' memory shows as they are chosen; Rancher's agent counts while the cluster registers.
+    expect(
+      screen.getByText(
+        /^The add-ons chosen use about 512 MiB of memory \(Rancher's agent\), so each worker has at least 4096/u,
+      ),
+    ).toBeInTheDocument();
     // Rancher raises the machines to the cores it needs, and they stay raised once it is unticked.
     await user.click(screen.getByRole("checkbox", { name: /Install Rancher/u }));
     expect(screen.getByText(/Rancher needs at least 4 cores on every node/u)).toBeInTheDocument();
+    expect(
+      screen.getByText(/^The add-ons chosen use about 2240 MiB of memory \(cert-manager, Rancher\)/u),
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("checkbox", { name: /Install Rancher/u }));
     await user.click(screen.getByRole("button", { name: "Machines" }));
     expect(within(screen.getByRole("group", { name: "Control plane" })).getByLabelText("Cores")).toHaveValue(4);

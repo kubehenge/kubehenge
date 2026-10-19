@@ -1,9 +1,13 @@
 #!/bin/sh
 # End-to-end test of one Kubehenge ClusterClass on a Proxmox VE host, against a running management
-# cluster: create a cluster trusting an OpenID issuer, check sign-in through it, its nodes, cloud
-# controller manager and persistent volumes, switch Headlamp on and off, scale its workers up and
-# down, upgrade it by one minor version (for RKE2 and k3s with the first new server's join refused
-# at first), replace a node that dies, delete it, and check that nothing of it is left on Proxmox VE.
+# cluster: create a cluster trusting an OpenID issuer, hardened to the CIS benchmark and enforcing
+# Pod Security's restricted level, check sign-in through it, its nodes against the benchmark, its
+# cloud controller manager and persistent volumes, switch
+# Headlamp, monitoring (every component scraped with its server verified), Kyverno and Istio (a
+# namespace's traffic over mutual TLS) on and off,
+# scale its workers up and down, upgrade it by one minor version (for RKE2 and k3s with the first
+# new server's join refused at first), replace a node that dies, delete it, and check that nothing
+# of it is left on Proxmox VE.
 #
 #   test/e2e/workload-cluster.sh <ClusterClass> <version> <upgrade version>
 #
@@ -16,7 +20,8 @@
 #   KUBEHENGE_E2E_PREFIX, KUBEHENGE_E2E_GATEWAY, KUBEHENGE_E2E_DNS (comma-separated),
 #   KUBEHENGE_E2E_ENDPOINT (the control plane's virtual IP), KUBEHENGE_E2E_STORAGE.
 # KUBEHENGE_E2E_CONTROL_PLANE_MEMORY and KUBEHENGE_E2E_WORKER_MEMORY (MiB) and
-# KUBEHENGE_E2E_CONTROL_PLANE_CORES size the nodes.
+# KUBEHENGE_E2E_CONTROL_PLANE_CORES size the nodes; the worker's memory is by default the least
+# the class lets it have with the add-ons.
 # KUBEHENGE_E2E_CNI chooses the CNI (required by kubeadm). KUBEHENGE_E2E_PODS and
 # KUBEHENGE_E2E_SERVICES set the cluster's pod and service ranges, which must not overlap the nodes'
 # network; unset, the distribution's defaults apply.
@@ -35,6 +40,8 @@ upgrade=${3:?usage: $0 <ClusterClass> <version> <upgrade version>}
 
 # shellcheck source=common.sh
 . "$(dirname "$0")/common.sh"
+# shellcheck source=cis-benchmark.sh
+. "$(dirname "$0")/cis-benchmark.sh"
 
 work=$(mktemp -d)
 distribution=$(echo "${class}" | sed 's/^kubehenge-//')
@@ -116,6 +123,17 @@ signed_in() {
 check_sign_in() {
     wl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d > "${work}/workload-ca"
     until_true 600 "the API server is ready" sh -c "KUBECONFIG=${work}/workload kubectl get --raw /readyz >/dev/null 2>&1"
+    # Requests without credentials reach kubeadm's health checks, which kubeadm needs, and nothing
+    # else; on RKE2 and k3s, nothing at all.
+    server=$(wl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+    for path in /readyz /version; do
+        code=$(curl -sS --cacert "${work}/workload-ca" -o /dev/null -w '%{http_code}' "${server}${path}")
+        case ${distribution}${path} in
+            kubeadm/readyz) want=200 ;;
+            *) want=401 ;;
+        esac
+        [ "${code}" = "${want}" ] || fail "a request without credentials to ${path} got ${code}, not ${want}"
+    done
     # Each answer is assigned before it is tested: a failure inside a substitution within a test
     # would go unnoticed, while a failed assignment stops the test.
     token=$(id_token kubehenge-e2e "${work}/signing.key")
@@ -158,6 +176,17 @@ if [ -n "${KUBEHENGE_E2E_CNI:-}" ]; then
     cni_variable=$(printf '      - name: cni\n        value: %s\n' "${KUBEHENGE_E2E_CNI}")
 fi
 oidc=$(jq -cn --arg i "${issuer}" --rawfile ca "${work}/ca.crt" '[{issuerURL: $i, clientID: "kubehenge-e2e", certificateAuthority: $ca}]')
+class_json=$(kubectl -n kubehenge-system get clusterclass "${class}" -o json)
+# Unless set, the worker gets the least Kubehenge lets it have with every add-on but Rancher on, so
+# that the add-ons are seen to fit in it: its distribution's least, or what a worker uses itself
+# and every add-on's figure, whichever is more.
+worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq -r '
+    (.metadata.annotations["kubehenge.dev/addon-memory"] | fromjson) as $addon
+    | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
+    | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
+        $node.worker + $addon.headlamp + $addon.monitoring + $addon.kyverno + $addon.istio + $addon.certManager + $addon.rancherAgent]
+    | max')}
+echo "workers with ${worker_memory} MiB of memory"
 cat > "${work}/cluster.yaml" << EOF
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
@@ -193,10 +222,16 @@ ${network_spec}
       - name: controlPlaneMachine
         value: {memoryMiB: ${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-4096}, cores: ${KUBEHENGE_E2E_CONTROL_PLANE_CORES:-2}}
       - name: workerMachine
-        value: {memoryMiB: ${KUBEHENGE_E2E_WORKER_MEMORY:-4096}}
+        value: {memoryMiB: ${worker_memory}}
 ${cni_variable}
       - name: oidc
         value: ${oidc}
+      # The strictest level from the start, so that every component Kubehenge installs is seen to
+      # run under it, or to sit in a namespace it exempts, and every add-on to work hardened.
+      - name: podSecurity
+        value: {admission: restricted}
+      - name: cis
+        value: true
 EOF
 kubectl apply -f "${work}/cluster.yaml"
 # capmox does not come back to a machine whose VM failed to provision, so the wait ends there rather
@@ -239,7 +274,6 @@ check_sign_in
 
 step "the cluster uses its pod and service ranges"
 # The Cluster's own, or else the class's defaults, as Kubehenge's controller reads them.
-class_json=$(kubectl -n kubehenge-system get clusterclass "${class}" -o json)
 ranges=$(kubectl -n "${ns}" get "cluster/${name}" -o json | jq -c --argjson class "${class_json}" '{
     pods: (.spec.clusterNetwork.pods.cidrBlocks // [$class.metadata.annotations["kubehenge.dev/default-pods"]]),
     services: (.spec.clusterNetwork.services.cidrBlocks // [$class.metadata.annotations["kubehenge.dev/default-services"]])}')
@@ -271,6 +305,9 @@ printf '%s' "${nodes}" | jq -e '.items | all(any(.status.addresses[]; .type == "
     fail "nodes have no InternalIP"
 wl get nodes -L topology.kubernetes.io/region,topology.kubernetes.io/zone
 
+step "the nodes pass the CIS Kubernetes Benchmark"
+cis_benchmark
+
 step "the cluster runs its CNI, which enforces network policies"
 cni=$(kubectl -n "${ns}" get "cluster/${name}" -o json | jq -r '.spec.topology.variables[] | select(.name == "cni") | .value')
 case ${cni} in
@@ -291,9 +328,18 @@ case ${cni} in
     *) ;;
 esac
 agnhost=registry.k8s.io/e2e-test-images/agnhost:2.61
+# agnhost_pod <namespace> <name> <args...>: an agnhost pod at Pod Security's restricted level,
+# which the cluster enforces; the image runs as root unless told otherwise. The overrides merge into
+# the container by its name. sh has no local variables, so its own carry its prefix.
+agnhost_pod() {
+    agnhost_overrides=$(printf '{"apiVersion":"v1","spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"%s","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' "$2")
+    agnhost_namespace=$1 agnhost_name=$2
+    shift 2
+    wl -n "${agnhost_namespace}" run "${agnhost_name}" --image="${agnhost}" --override-type=strategic --overrides="${agnhost_overrides}" -- "$@"
+}
 wl create namespace e2e-policy
-wl -n e2e-policy run server --image="${agnhost}" -- netexec --http-port=8080
-wl -n e2e-policy run client --image="${agnhost}" -- pause
+agnhost_pod e2e-policy server netexec --http-port=8080
+agnhost_pod e2e-policy client pause
 wl -n e2e-policy wait --for=condition=Ready pod/server pod/client --timeout=5m
 server_ip=$(wl -n e2e-policy get pod server -o jsonpath='{.status.podIP}')
 connect() { KUBECONFIG=${work}/workload kubectl -n e2e-policy exec client -- /agnhost connect "${server_ip}:8080" --timeout=3s 2>&1; }
@@ -380,35 +426,6 @@ set_variable() {
         jq -c --arg n "$1" --argjson v "$2" '[.spec.topology.variables[] | select(.name != $n)] + [{name: $n, value: $v}]')
     kubectl -n "${ns}" patch "cluster/${name}" --type=merge -p "{\"spec\":{\"topology\":{\"variables\":${vars}}}}"
 }
-step "Headlamp switched on and off"
-set_variable headlamp '{"enabled":true}'
-until_true 600 "Headlamp installed" sh -c "KUBECONFIG=${work}/workload kubectl -n headlamp get deployment/headlamp >/dev/null 2>&1"
-wl -n headlamp rollout status deployment/headlamp --timeout=10m
-# Through the API server's service proxy, as Kubehenge's interface reaches it.
-page=$(wl get --raw /api/v1/namespaces/headlamp/services/http:headlamp:80/proxy/)
-printf '%s' "${page}" | grep -q -i '<html' || fail "Headlamp does not answer through the API server"
-# shellcheck disable=SC2310 # can-i exits non-zero for its answer no, which the comparison reads.
-can_list=$(wl auth can-i list pods --all-namespaces --as=system:serviceaccount:headlamp:headlamp || true)
-[ "${can_list}" = no ] || fail "Headlamp's service account has rights in the cluster"
-pod_security=$(wl label --dry-run=server --overwrite namespace headlamp pod-security.kubernetes.io/enforce=restricted 2>&1)
-case ${pod_security} in
-    *violate*) fail "Headlamp's pod does not meet Pod Security's restricted level" ;;
-    # Only a pod that falls short of the level gets a warning.
-    *) ;;
-esac
-set_variable headlamp '{"enabled":false}'
-until_true 600 "Headlamp removed" absent wl -n headlamp get deployment/headlamp
-
-workers() {
-    kubectl -n "${ns}" patch "cluster/${name}" --type=json \
-        -p "[{\"op\":\"replace\",\"path\":\"/spec/topology/workers/machineDeployments/0/replicas\",\"value\":$1}]"
-    until_true 1800 "$1 worker nodes ready" sh -c "[ \"\$(KUBECONFIG=${work}/workload kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o json | jq '[.items[] | select(any(.status.conditions[]; .type == \"Ready\" and .status == \"True\"))] | length')\" = $1 ] && [ \"\$(kubectl -n ${ns} get machines -l cluster.x-k8s.io/deployment-name -o name | wc -l)\" = $1 ]"
-}
-step "scale workers to 2"
-workers 2
-step "scale workers back to 1"
-workers 1
-
 # guest <node> <vmid> <command>: runs a shell command in a VM through its guest agent and prints its
 # output; fails when the command or the agent does. It is polled with set -e off, so each step
 # returns its own failure.
@@ -437,6 +454,235 @@ on_machines() {
         guest "${pm_node}" "${pm_vmid}" "$2"
     done
 }
+# restarts: each pod's container restarts, by namespace/name.
+restarts() {
+    wl get pods -A -o json |
+        jq -c '[.items[] | {key: "\(.metadata.namespace)/\(.metadata.name)", value: ([.status.containerStatuses[]?.restartCount] | add // 0)}] | from_entries'
+}
+# server_restarts: how often systemd has restarted the control planes' distribution service. k3s runs
+# every control-plane component in it, so it is the one place k3s's restarts show.
+case ${class} in
+    kubehenge-rke2) server_unit=rke2-server ;;
+    kubehenge-k3s) server_unit=k3s ;;
+    *) server_unit=kubelet ;;
+esac
+servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+server_restarts() {
+    # shellcheck disable=SC2310 # its failure is returned.
+    counts=$(on_machines "${servers}" "systemctl show -p NRestarts --value ${server_unit}") || return 1
+    printf '%s\n' "${counts}" | awk '{ n += $1 } END { print n + 0 }'
+}
+pods_before=$(restarts)
+# shellcheck disable=SC2310 # a failed count fails the step.
+servers_before=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
+echo "memory before the add-ons:"
+pod_memory "${work}/workload"
+
+step "Headlamp switched on"
+set_variable headlamp '{"enabled":true}'
+until_true 600 "Headlamp installed" sh -c "KUBECONFIG=${work}/workload kubectl -n headlamp get deployment/headlamp >/dev/null 2>&1"
+wl -n headlamp rollout status deployment/headlamp --timeout=10m
+# Through the API server's service proxy, as Kubehenge's interface reaches it.
+page=$(wl get --raw /api/v1/namespaces/headlamp/services/http:headlamp:80/proxy/)
+printf '%s' "${page}" | grep -q -i '<html' || fail "Headlamp does not answer through the API server"
+# shellcheck disable=SC2310 # can-i exits non-zero for its answer no, which the comparison reads.
+can_list=$(wl auth can-i list pods --all-namespaces --as=system:serviceaccount:headlamp:headlamp || true)
+[ "${can_list}" = no ] || fail "Headlamp's service account has rights in the cluster"
+pod_security=$(wl label --dry-run=server --overwrite namespace headlamp pod-security.kubernetes.io/enforce=restricted 2>&1)
+case ${pod_security} in
+    *violate*) fail "Headlamp's pod does not meet Pod Security's restricted level" ;;
+    # Only a pod that falls short of the level gets a warning.
+    *) ;;
+esac
+
+step "monitoring switched on"
+set_variable monitoring '{"enabled":true}'
+prometheus=statefulset/prometheus-kube-prometheus-stack-prometheus
+until_true 1200 "Prometheus installed" sh -c "KUBECONFIG=${work}/workload kubectl -n monitoring get ${prometheus} >/dev/null 2>&1"
+wl -n monitoring rollout status "${prometheus}" --timeout=15m
+# Every component's job, each scraped with its server verified; k3s's components are in its
+# kubelet's metrics.
+jobs="apiserver kubelet coredns kube-state-metrics node-exporter kube-etcd"
+[ "${distribution}" = k3s ] || jobs="${jobs} kube-controller-manager kube-scheduler kube-proxy"
+targets='/api/v1/namespaces/monitoring/services/http:kube-prometheus-stack-prometheus:9090/proxy/api/v1/targets?state=active'
+all_up() {
+    # shellcheck disable=SC2310 # wl wraps one kubectl call; a failed request is only a retry.
+    active=$(wl get --raw "${targets}") || return 1
+    for job in ${jobs}; do
+        printf '%s' "${active}" | jq -e --arg j "${job}" 'any(.data.activeTargets[]; .labels.job == $j)' > /dev/null || return 1
+    done
+    printf '%s' "${active}" | jq -e 'all(.data.activeTargets[]; .health == "up")' > /dev/null
+}
+deadline=$(($(date +%s) + 900))
+# shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+until all_up; do
+    now=$(date +%s)
+    if [ "${now}" -ge "${deadline}" ]; then
+        # A Service without ready endpoints leaves its job out of the targets altogether, so the
+        # missing jobs are named beside the ones down, with the pods that would serve them.
+        active=$(wl get --raw "${targets}")
+        for job in ${jobs}; do
+            printf '%s' "${active}" | jq -e --arg j "${job}" 'any(.data.activeTargets[]; .labels.job == $j)' > /dev/null ||
+                echo "no target for ${job}" >&2
+        done
+        printf '%s' "${active}" | jq -r '.data.activeTargets[] | select(.health != "up") | "\(.labels.job) \(.scrapeUrl): \(.lastError)"' >&2
+        wl -n kube-system get daemonsets -o wide >&2
+        wl get pods -A -o wide | awk 'NR == 1 || $3 !~ /^([0-9]+)\/\1$/ || $4 != "Running"' >&2
+        wl -n kube-system get events --field-selector type=Warning >&2
+        fail "monitoring does not reach every component"
+    fi
+    sleep 10
+done
+if [ "${distribution}" = k3s ]; then
+    # The chart's rules and dashboards find k3s's controller manager, scheduler and kube-proxy in
+    # the kubelet's job, so their own series have to arrive there.
+    has_series() {
+        query=$(printf '%s' "$1" | jq -sRr @uri)
+        # shellcheck disable=SC2310 # wl wraps one kubectl call; a failed request is only a retry.
+        found=$(wl get --raw "/api/v1/namespaces/monitoring/services/http:kube-prometheus-stack-prometheus:9090/proxy/api/v1/query?query=${query}") || return 1
+        printf '%s' "${found}" | jq -e '.data.result | length > 0' > /dev/null
+    }
+    for series in 'workqueue_adds_total{job="kubelet",name="deployment"}' \
+        'scheduler_schedule_attempts_total{job="kubelet"}' \
+        'kubeproxy_sync_proxy_rules_duration_seconds_count{job="kubelet"}'; do
+        until_true 300 "${series} in Prometheus" has_series "${series}"
+    done
+fi
+pod_security=$(wl label --dry-run=server --overwrite namespace monitoring pod-security.kubernetes.io/enforce=restricted 2>&1)
+case ${pod_security} in
+    *violate*) fail "monitoring's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
+    *) ;;
+esac
+
+step "pod security enforced, with Kyverno switched on"
+# privileged_pod <namespace>: asks the API server to admit a privileged pod, without creating it.
+privileged_pod() {
+    wl -n "$1" run e2e-privileged --image=registry.k8s.io/pause:3.10.1 --restart=Never --dry-run=server \
+        --overrides='{"apiVersion":"v1","spec":{"containers":[{"name":"e2e-privileged","image":"registry.k8s.io/pause:3.10.1","securityContext":{"privileged":true}}]}}' 2>&1
+}
+# shellcheck disable=SC2310 # the refusal is the answer looked for.
+refused=$(privileged_pod default) && fail "a privileged pod is admitted under Pod Security's restricted level"
+case ${refused} in
+    *'violates PodSecurity "restricted'*) ;;
+    *) fail "a privileged pod is refused for another reason: ${refused}" ;;
+esac
+# A namespace labelled privileged is past Pod Security Admission, but not past Kyverno.
+wl create namespace e2e-privileged
+wl label namespace e2e-privileged pod-security.kubernetes.io/enforce=privileged
+set_variable podSecurity '{"admission":"restricted","kyverno":"restricted"}'
+kyverno_refuses() {
+    # shellcheck disable=SC2310 # admitted is a retry until the policies are in place.
+    out=$(privileged_pod e2e-privileged) && return 1
+    case ${out} in
+        *disallow-privileged-containers*) ;;
+        *) return 1 ;;
+    esac
+}
+until_true 900 "Kyverno refuses a privileged pod" kyverno_refuses
+pod_security=$(wl label --dry-run=server --overwrite namespace kyverno pod-security.kubernetes.io/enforce=restricted 2>&1)
+case ${pod_security} in
+    *violate*) fail "Kyverno's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
+    *) ;;
+esac
+
+step "Istio switched on, the mesh's traffic over mutual TLS"
+set_variable istio '{"enabled":true}'
+until_true 900 "istiod available" wl -n istio-system wait --for=condition=Available deployment/istiod --timeout=10s
+until_true 600 "ztunnel on every node" wl -n istio-node rollout status daemonset/ztunnel --timeout=10s
+until_true 600 "istio-cni on every node" wl -n istio-node rollout status daemonset/istio-cni-node --timeout=10s
+wl create namespace e2e-mesh
+wl label namespace e2e-mesh istio.io/dataplane-mode=ambient
+wl create namespace e2e-plain
+agnhost_pod e2e-mesh server netexec --http-port=8080
+agnhost_pod e2e-mesh client pause
+agnhost_pod e2e-plain client pause
+wl -n e2e-mesh wait --for=condition=Ready pod/server pod/client --timeout=5m
+wl -n e2e-plain wait --for=condition=Ready pod/client --timeout=5m
+redirected() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    marks=$(wl -n e2e-mesh get pod server client -o jsonpath='{.items[*].metadata.annotations.ambient\.istio\.io/redirection}') &&
+        [ "${marks}" = "enabled enabled" ]
+}
+until_true 120 "the mesh's pods redirected through ztunnel" redirected
+mesh_ip=$(wl -n e2e-mesh get pod server -o jsonpath='{.status.podIP}')
+# fetch <namespace>: the server's host name, fetched over HTTP by the namespace's client.
+fetch() { KUBECONFIG=${work}/workload kubectl -n "$1" exec client -- curl -sS --max-time 5 "http://${mesh_ip}:8080/hostname" 2>&1; }
+# shellcheck disable=SC2310 # polled with set -e off, so a failed fetch is only a retry.
+fetches() { fetched=$(fetch "$1") && [ "${fetched}" = server ]; }
+until_true 60 "a client outside the mesh reaches the server while mutual TLS is optional" fetches e2e-plain
+wl -n e2e-mesh apply -f - << 'EOF'
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: strict
+spec:
+  mtls:
+    mode: STRICT
+EOF
+# ztunnel closes a plain-text connection the policy refuses, so curl gets no reply; any other
+# failure, a failing exec among them, does not count as refused.
+plain_refused() { fetch e2e-plain | grep -qE '^curl: \((52|56)\)'; }
+until_true 120 "a client outside the mesh refused once mutual TLS is required" plain_refused
+until_true 60 "a client in the mesh reaches the server" fetches e2e-mesh
+# What ztunnel let through carries the client's workload identity.
+mesh_identity() { wl -n istio-node logs -l app=ztunnel --tail=-1 --prefix=false | grep -q 'spiffe://cluster.local/ns/e2e-mesh/sa/default'; }
+until_true 60 "ztunnel names the client's workload identity" mesh_identity
+
+# The class's minimum sizes have to carry every add-on at once.
+step "every add-on at once, with nothing restarted"
+# shellcheck disable=SC2310 # a failed count fails the step.
+servers_after=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
+[ "${servers_after}" = "${servers_before}" ] ||
+    fail "${server_unit} restarted $((servers_after - servers_before)) times on the control planes while the add-ons were installed"
+pods_after=$(restarts)
+restarted=$(jq -rn --argjson b "${pods_before}" --argjson a "${pods_after}" '$a | to_entries[] | select(.value > ($b[.key] // 0)) | "\(.key) \(.value - ($b[.key] // 0))"')
+if [ -n "${restarted}" ]; then
+    # Why each container ended, and how starved each node has been of CPU, memory and IO over the
+    # last minutes, tell an add-on's fault from nodes too small for them all.
+    echo "the restarted containers' last ends:"
+    wl get pods -A -o json | jq -r '.items[] | .metadata as $m | .status.containerStatuses[]? |
+        select(.restartCount > 0) | .lastState.terminated // {} |
+        "\($m.namespace)/\($m.name): \(.reason // "?") exit \(.exitCode // "?") at \(.finishedAt // "?")"'
+    for m in $(kubectl -n "${ns}" get machines -o jsonpath='{.items[*].metadata.name}'); do
+        echo "pressure on ${m}:"
+        # shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
+        on_machines "${m}" "grep -H . /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io" ||
+            echo "  cannot read it"
+    done
+    fail "containers restarted while the add-ons were installed (pod, restarts): ${restarted}"
+fi
+pod_memory "${work}/workload"
+
+step "every add-on switched off at once"
+set_variable headlamp '{"enabled":false}'
+set_variable monitoring '{"enabled":false}'
+set_variable podSecurity '{"admission":"restricted","kyverno":"off"}'
+set_variable istio '{"enabled":false}'
+until_true 600 "Headlamp removed" absent wl -n headlamp get deployment/headlamp
+until_true 900 "monitoring removed" absent wl -n monitoring get "${prometheus}"
+until_true 300 "metrics proxies removed" absent wl -n kube-system get daemonset/kubehenge-etcd-metrics
+until_true 900 "Kyverno removed" absent wl -n kyverno get deployment/kyverno-admission-controller
+# shellcheck disable=SC2310 # the admission is the answer looked for.
+privileged_pod e2e-privileged > /dev/null || fail "Kyverno's policies outlive Kyverno"
+wl delete namespace e2e-privileged --wait --timeout=5m
+until_true 900 "Istio removed" absent wl -n istio-node get daemonset/ztunnel
+until_true 300 "istiod removed" absent wl -n istio-system get deployment/istiod
+enrolled=$(wl get namespace e2e-mesh -o jsonpath='{.metadata.labels.istio\.io/dataplane-mode}')
+[ -z "${enrolled}" ] || fail "e2e-mesh is still enrolled in a mesh that has gone"
+# Taken out of the mesh first, its pods reach each other and the rest without ztunnel.
+until_true 120 "a client outside the old mesh reaches the server" fetches e2e-plain
+until_true 60 "a client in the old mesh reaches the server" fetches e2e-mesh
+wl delete namespace e2e-mesh e2e-plain --wait --timeout=5m
+
+workers() {
+    kubectl -n "${ns}" patch "cluster/${name}" --type=json \
+        -p "[{\"op\":\"replace\",\"path\":\"/spec/topology/workers/machineDeployments/0/replicas\",\"value\":$1}]"
+    until_true 1800 "$1 worker nodes ready" sh -c "[ \"\$(KUBECONFIG=${work}/workload kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o json | jq '[.items[] | select(any(.status.conditions[]; .type == \"Ready\" and .status == \"True\"))] | length')\" = $1 ] && [ \"\$(kubectl -n ${ns} get machines -l cluster.x-k8s.io/deployment-name -o name | wc -l)\" = $1 ]"
+}
+step "scale workers to 2"
+workers 2
+step "scale workers back to 1"
+workers 1
 
 step "upgrade to ${upgrade}"
 old_servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
@@ -528,7 +774,11 @@ printf '%s' "${users}" | jq -e --arg u "${user}" '[.data[] | select(.userid == $
 vms=$(pve_get "cluster/resources?type=vm")
 printf '%s' "${vms}" | jq -e --argjson o "${owner}" --arg n "${name}" '[.data[] | select(.vmid == $o or (.name // "" | startswith($n + "-")))] | length == 0' > /dev/null ||
     fail "VMs of the cluster are still there"
-kubectl delete namespace "${ns}" --wait --timeout=5m
+if ! kubectl delete namespace "${ns}" --wait --timeout=5m; then
+    # Its conditions say what is left in it and whose finalizers hold that.
+    left=$(kubectl get namespace "${ns}" -o jsonpath='{range .status.conditions[?(@.status=="True")]}{.message}; {end}' || true)
+    fail "namespace ${ns} is still there: ${left}"
+fi
 
 # Another test may be using the class on the same management cluster.
 if kubectl get clusters --all-namespaces -o json | jq -e --arg c "${class}" '[.items[] | select(.spec.topology.classRef.name == $c)] | length == 0' > /dev/null; then

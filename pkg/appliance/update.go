@@ -402,6 +402,16 @@ func unpack(archive, dir string) error {
 		return err
 	}
 	defer closeArchive()
+	if err = os.MkdirAll(dir, publicDir); err != nil {
+		return fmt.Errorf("unpacking the release archive: %w", err)
+	}
+	// Every write goes through the root, which refuses any path that would leave dir, through
+	// ".." or a symbolic link alike.
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return fmt.Errorf("unpacking the release archive: %w", err)
+	}
+	defer func() { _ = root.Close() }()
 	for {
 		h, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -410,39 +420,39 @@ func unpack(archive, dir string) error {
 		if err != nil {
 			return fmt.Errorf("reading the release archive: %w", err)
 		}
-		if err := unpackEntry(tr, h, dir); err != nil {
+		if err := unpackEntry(tr, h, root); err != nil {
 			return err
 		}
 	}
 }
 
-// unpackEntry writes one entry of the release archive, whose content r reads, under dir.
-func unpackEntry(r io.Reader, h *tar.Header, dir string) error {
+// unpackEntry writes one entry of the release archive, whose content r reads, under root.
+func unpackEntry(r io.Reader, h *tar.Header, root *os.Root) error {
 	name := path.Clean(strings.TrimPrefix(h.Name, "./"))
 	if name == "." {
 		return nil
 	}
-	if path.IsAbs(name) || name == ".." || strings.HasPrefix(name, "../") {
+	target := filepath.FromSlash(name)
+	if !filepath.IsLocal(target) {
 		return fmt.Errorf("the release archive holds %q, outside itself", h.Name)
 	}
-	// Checked above to stay inside dir. The software is world-readable: the interface runs as
-	// its own user and reads the module and charts.
-	target := filepath.Join(dir, filepath.FromSlash(name))
+	// The software is world-readable: the interface runs as its own user and reads the module and
+	// charts.
 	switch h.Typeflag {
 	case tar.TypeDir:
-		if err := os.MkdirAll(target, publicDir); err != nil {
+		if err := root.MkdirAll(target, publicDir); err != nil {
 			return fmt.Errorf("unpacking %s: %w", h.Name, err)
 		}
 		return nil
 	case tar.TypeReg:
-		if err := os.MkdirAll(filepath.Dir(target), publicDir); err != nil {
+		if err := root.MkdirAll(filepath.Dir(target), publicDir); err != nil {
 			return fmt.Errorf("unpacking %s: %w", h.Name, err)
 		}
 		mode := os.FileMode(publicFile)
 		if h.Mode&anyExecute != 0 {
 			mode = publicExecutable
 		}
-		f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode) //nolint:gosec // see above
+		f, err := root.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 		if err != nil {
 			return fmt.Errorf("unpacking %s: %w", h.Name, err)
 		}

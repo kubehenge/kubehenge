@@ -1,0 +1,254 @@
+diff --git a/internal/service/vmservice/vm.go b/internal/service/vmservice/vm.go
+index ca906a7..45ca80b 100644
+--- a/internal/service/vmservice/vm.go
++++ b/internal/service/vmservice/vm.go
+@@ -79,6 +79,10 @@ func ReconcileVM(ctx context.Context, scope *scope.MachineScope) (infrav1.Virtua
+ 		return vm, err
+ 	} // VirtualMachineProvisioned reason is Cloning
+
++	if busy, err := hasActiveTask(ctx, scope); err != nil || busy {
++		return vm, err
++	}
++
+ 	// Recover IP/address status for already-running machines (e.g. restored from
+ 	// backup) whose status was lost. This is read-only and a no-op during normal
+ 	// provisioning; it does not advance the provisioning state machine below.
+@@ -267,6 +271,27 @@ func ensureVirtualMachine(ctx context.Context, machineScope *scope.MachineScope)
+ 	return false, nil
+ }
+
++// hasActiveTask checks whether a task is still running for the VM before it is started.
++// Such a task holds the VM's config lock, and a change made meanwhile waits on the lock
++// and can time out. TaskRef alone does not catch this: a reconcile that read the
++// ProxmoxMachine before TaskRef was written clears it when its own task completes.
++func hasActiveTask(ctx context.Context, machineScope *scope.MachineScope) (bool, error) {
++	vm := machineScope.VirtualMachine
++	if vm.IsRunning() || ptr.Deref(machineScope.ProxmoxMachine.Status.Initialization.Provisioned, false) {
++		return false, nil
++	}
++
++	busy, err := machineScope.InfraCluster.ProxmoxClient.HasActiveTask(ctx, vm)
++	if err != nil {
++		return false, err
++	}
++	if busy {
++		machineScope.V(4).Info("waiting for an active task on the vm", "vm", vm.VMID)
++	}
++
++	return busy, nil
++}
++
+ func reconcileDisks(ctx context.Context, machineScope *scope.MachineScope) error {
+ 	if conditions.GetReason(machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition) != infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForDiskReconciliationReason {
+ 		// Machine is in the wrong state to reconcile, we only reconcile Cloning VMs
+diff --git a/internal/service/vmservice/vm_test.go b/internal/service/vmservice/vm_test.go
+index c0f4f6e..4f065d2 100644
+--- a/internal/service/vmservice/vm_test.go
++++ b/internal/service/vmservice/vm_test.go
+@@ -594,6 +594,36 @@ func TestReconcileDisks_ResizeDisk(t *testing.T) {
+ 	require.NoError(t, reconcileDisks(context.Background(), machineScope))
+ }
+
++func TestReconcileVM_WaitsForActiveTask(t *testing.T) {
++	machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForDiskReconciliationReason)
++	machineScope.ProxmoxMachine.Spec.Disks = &infrav1.Storage{
++		BootVolume: &infrav1.DiskSize{Disk: "scsi0", SizeGB: 100},
++	}
++	vm := newStoppedVM()
++	machineScope.SetVirtualMachineID(123)
++
++	proxmoxClient.EXPECT().GetVM(context.Background(), "node1", int64(123)).Return(vm, nil).Once()
++	proxmoxClient.EXPECT().HasActiveTask(context.Background(), vm).Return(true, nil).Once()
++
++	result, err := ReconcileVM(context.Background(), machineScope)
++	require.NoError(t, err)
++	require.Equal(t, infrav1.VirtualMachineStatePending, result.State)
++	require.Equal(t, infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForDiskReconciliationReason,
++		conditions.GetReason(machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition))
++}
++
++func TestReconcileVM_ActiveTaskError(t *testing.T) {
++	machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForDiskReconciliationReason)
++	vm := newStoppedVM()
++	machineScope.SetVirtualMachineID(123)
++
++	proxmoxClient.EXPECT().GetVM(context.Background(), "node1", int64(123)).Return(vm, nil).Once()
++	proxmoxClient.EXPECT().HasActiveTask(context.Background(), vm).Return(false, fmt.Errorf("unavailable")).Once()
++
++	_, err := ReconcileVM(context.Background(), machineScope)
++	require.ErrorContains(t, err, "unavailable")
++}
++
+ func TestReconcileMachineAddresses_IPv4(t *testing.T) {
+ 	machineScope, _, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForClusterAPIMachineAddressesReason)
+ 	vm := newRunningVM()
+@@ -878,6 +908,7 @@ func TestReconcileVM_StateMachine(t *testing.T) {
+ 	// Round 1: clone task complete; ConfigureVM sets VM options and requeues.
+ 	proxmoxClient.EXPECT().GetTask(context.Background(), "result").Return(task, nil).Once()
+ 	proxmoxClient.EXPECT().GetVM(context.Background(), "node2", int64(123)).Return(vm, nil).Once()
++	proxmoxClient.EXPECT().HasActiveTask(context.Background(), vm).Return(false, nil).Once()
+
+ 	expectedVMConfigureRequest := []any{
+ 		proxmox.VirtualMachineOption{Name: optionSockets, Value: *machineScope.ProxmoxMachine.Spec.NumSockets},
+@@ -905,6 +936,7 @@ func TestReconcileVM_StateMachine(t *testing.T) {
+ 	// We're not mocking the entirety of a network setup.
+ 	proxmoxClient.EXPECT().GetTask(context.Background(), "result").Return(task, nil).Once()
+ 	proxmoxClient.EXPECT().GetVM(context.Background(), "node2", int64(123)).Return(vm, nil).Once()
++	proxmoxClient.EXPECT().HasActiveTask(context.Background(), vm).Return(false, nil).Once()
+ 	proxmoxClient.EXPECT().ResizeDisk(context.Background(), vm, "scsi0", "50G").Return(nil, nil).Once()
+
+ 	result, err = ReconcileVM(context.Background(), machineScope)
+@@ -931,6 +963,7 @@ func TestReconcileVM_StateMachine(t *testing.T) {
+ 	)
+
+ 	proxmoxClient.EXPECT().GetVM(context.Background(), "node2", int64(123)).Return(vm, nil).Once()
++	proxmoxClient.EXPECT().HasActiveTask(context.Background(), vm).Return(false, nil).Once()
+ 	proxmoxClient.EXPECT().StartVM(context.Background(), vm).Return(newTask(), nil).Once()
+
+ 	// Provide IPAddresses fields to fake network bootstrap.
+diff --git a/pkg/proxmox/client.go b/pkg/proxmox/client.go
+index 9b3a26c..dc1f21b 100644
+--- a/pkg/proxmox/client.go
++++ b/pkg/proxmox/client.go
+@@ -40,6 +40,8 @@ type Client interface {
+
+ 	GetTask(ctx context.Context, upID string) (*proxmox.Task, error)
+
++	HasActiveTask(ctx context.Context, vm *proxmox.VirtualMachine) (bool, error)
++
+ 	GetReservableMemoryBytes(ctx context.Context, nodeName string, nodeMemoryAdjustment int64) (uint64, error)
+
+ 	ResizeDisk(ctx context.Context, vm *proxmox.VirtualMachine, disk, size string) (*proxmox.Task, error)
+diff --git a/pkg/proxmox/goproxmox/api_client.go b/pkg/proxmox/goproxmox/api_client.go
+index 9971b66..8d77c2e 100644
+--- a/pkg/proxmox/goproxmox/api_client.go
++++ b/pkg/proxmox/goproxmox/api_client.go
+@@ -281,6 +281,18 @@ func (c *APIClient) GetTask(ctx context.Context, upID string) (*proxmox.Task, er
+ 	return task, nil
+ }
+
++// HasActiveTask checks whether any task is still running for the VM.
++func (c *APIClient) HasActiveTask(ctx context.Context, vm *proxmox.VirtualMachine) (bool, error) {
++	node := (&proxmox.Node{}).New(c.Client, vm.Node)
++
++	tasks, err := node.Tasks(ctx, &proxmox.NodeTasksOptions{Source: "active", VMID: int(vm.VMID)})
++	if err != nil {
++		return false, fmt.Errorf("cannot list active tasks for vm %d: %w", vm.VMID, err)
++	}
++
++	return len(tasks) > 0, nil
++}
++
+ // GetReservableMemoryBytes returns the memory that can be reserved by a new VM, in bytes.
+ func (c *APIClient) GetReservableMemoryBytes(ctx context.Context, nodeName string, nodeMemoryAdjustment int64) (uint64, error) {
+ 	node := (&proxmox.Node{}).New(c.Client, nodeName)
+diff --git a/pkg/proxmox/goproxmox/api_client_test.go b/pkg/proxmox/goproxmox/api_client_test.go
+index 4e50228..563086a 100644
+--- a/pkg/proxmox/goproxmox/api_client_test.go
++++ b/pkg/proxmox/goproxmox/api_client_test.go
+@@ -641,6 +641,37 @@ func TestProxmoxAPIClient_GetTask(t *testing.T) {
+ 	}
+ }
+
++func TestProxmoxAPIClient_HasActiveTask(t *testing.T) {
++	upid := "UPID:test:000D6BDA:041E0A54:654A5A1D:resize:101:root@pam:"
++	tests := []struct {
++		name   string
++		status int
++		tasks  []*proxmox.Task
++		active bool
++		err    string
++	}{
++		{name: "active", status: 200, tasks: []*proxmox.Task{{UPID: proxmox.UPID(upid)}}, active: true},
++		{name: "none", status: 200, tasks: []*proxmox.Task{}, active: false},
++		{name: "list fails", status: 501, err: "cannot list active tasks for vm 101: 501 Not Implemented"},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			client := newTestClient(t)
++
++			httpmock.RegisterResponderWithQuery(http.MethodGet, testBaseURL+"api2/json/nodes/test/tasks", "source=active&vmid=101",
++				newJSONResponder(test.status, test.tasks))
++
++			active, err := client.HasActiveTask(context.Background(), &proxmox.VirtualMachine{Node: "test", VMID: 101})
++			if test.err != "" {
++				require.EqualError(t, err, test.err)
++				return
++			}
++			require.NoError(t, err)
++			require.Equal(t, test.active, active)
++		})
++	}
++}
++
+ func TestProxmoxAPIClient_CloudInitStatus(t *testing.T) {
+ 	tests := []struct {
+ 		name     string
+diff --git a/pkg/proxmox/proxmoxtest/mock_client.go b/pkg/proxmox/proxmoxtest/mock_client.go
+index c0680a6..46ced2a 100644
+--- a/pkg/proxmox/proxmoxtest/mock_client.go
++++ b/pkg/proxmox/proxmoxtest/mock_client.go
+@@ -631,6 +631,63 @@ func (_c *MockClient_GetVM_Call) RunAndReturn(run func(context.Context, string,
+ 	return _c
+ }
+
++// HasActiveTask provides a mock function with given fields: ctx, vm
++func (_m *MockClient) HasActiveTask(ctx context.Context, vm *go_proxmox.VirtualMachine) (bool, error) {
++	ret := _m.Called(ctx, vm)
++
++	if len(ret) == 0 {
++		panic("no return value specified for HasActiveTask")
++	}
++
++	var r0 bool
++	var r1 error
++	if rf, ok := ret.Get(0).(func(context.Context, *go_proxmox.VirtualMachine) (bool, error)); ok {
++		return rf(ctx, vm)
++	}
++	if rf, ok := ret.Get(0).(func(context.Context, *go_proxmox.VirtualMachine) bool); ok {
++		r0 = rf(ctx, vm)
++	} else {
++		r0 = ret.Get(0).(bool)
++	}
++
++	if rf, ok := ret.Get(1).(func(context.Context, *go_proxmox.VirtualMachine) error); ok {
++		r1 = rf(ctx, vm)
++	} else {
++		r1 = ret.Error(1)
++	}
++
++	return r0, r1
++}
++
++// MockClient_HasActiveTask_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'HasActiveTask'
++type MockClient_HasActiveTask_Call struct {
++	*mock.Call
++}
++
++// HasActiveTask is a helper method to define mock.On call
++//   - ctx context.Context
++//   - vm *go_proxmox.VirtualMachine
++func (_e *MockClient_Expecter) HasActiveTask(ctx interface{}, vm interface{}) *MockClient_HasActiveTask_Call {
++	return &MockClient_HasActiveTask_Call{Call: _e.mock.On("HasActiveTask", ctx, vm)}
++}
++
++func (_c *MockClient_HasActiveTask_Call) Run(run func(ctx context.Context, vm *go_proxmox.VirtualMachine)) *MockClient_HasActiveTask_Call {
++	_c.Call.Run(func(args mock.Arguments) {
++		run(args[0].(context.Context), args[1].(*go_proxmox.VirtualMachine))
++	})
++	return _c
++}
++
++func (_c *MockClient_HasActiveTask_Call) Return(_a0 bool, _a1 error) *MockClient_HasActiveTask_Call {
++	_c.Call.Return(_a0, _a1)
++	return _c
++}
++
++func (_c *MockClient_HasActiveTask_Call) RunAndReturn(run func(context.Context, *go_proxmox.VirtualMachine) (bool, error)) *MockClient_HasActiveTask_Call {
++	_c.Call.Return(run)
++	return _c
++}
++
+ // QemuAgentStatus provides a mock function with given fields: ctx, vm
+ func (_m *MockClient) QemuAgentStatus(ctx context.Context, vm *go_proxmox.VirtualMachine) error {
+ 	ret := _m.Called(ctx, vm)

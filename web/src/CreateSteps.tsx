@@ -1,11 +1,9 @@
 import type { JSX } from "react";
 
 import { controlPlaneSizes, maxWorkers } from "./ClusterDetail";
-import { modeChoices, upgradeModes } from "./ClusterUpgrades";
 import {
+  machineLeast,
   memoryStepMiB,
-  minMemoryMiB,
-  rancherMinimumCores,
   variable,
   versionExamples,
   versionLabel,
@@ -17,8 +15,7 @@ import { addressBits } from "./network";
 import { OIDCProviders } from "./OIDCProviders";
 import { HAField, PlacementFields, type HARulesRead } from "./Placement";
 import type { Bridge, ClusterClass, PveNode, Storage, Versions } from "./types";
-import { Field, browserZone, bytes, distributionName, filled, registerHint, sentence } from "./ui";
-import { oneOf } from "./values";
+import { Field, bytes, cniName, distributionName, filled, sentence } from "./ui";
 
 // Number fields keep an empty or unfinished entry as NaN, which the checks refuse, rather than
 // turning it into 0 under the cursor.
@@ -98,6 +95,7 @@ export function GeneralStep({
   offered: Versions | undefined;
   onChooseClass: (name: string) => void;
 }): JSX.Element {
+  const alone = machineLeast({ ...form, workerReplicas: 0 }, cls, "controlPlaneMachine");
   return (
     <>
       <Field label="Name" hint="Also names its Proxmox VE pool and VMs." error={shown("name")}>
@@ -137,7 +135,15 @@ export function GeneralStep({
           </select>
         )}
       </Field>
-      <Field label="Workers" error={shown("workerReplicas")}>
+      <Field
+        label="Workers"
+        error={shown("workerReplicas")}
+        hint={
+          form.workerReplicas === 0
+            ? `With none, the control planes run the workloads too, so they have at least ${alone.cores} cores and ${alone.memoryMiB} MiB.`
+            : undefined
+        }
+      >
         {(id) => (
           <input
             id={id}
@@ -161,6 +167,10 @@ export function NetworkStep({
   bridgeOptions,
 }: StepProps & { cls: ClusterClass | undefined; bridgeOptions: Bridge[] }): JSX.Element {
   const cni = variable(cls, "cni");
+  const rangeHint =
+    form.cni === "cilium"
+      ? "Leave empty for the distribution's default, or the first free range if that overlaps the nodes' network or another cluster's ranges, so the cluster can join a Cluster Mesh."
+      : "Leave empty for the distribution's default, or the first free range if that overlaps the nodes' network.";
   return (
     <>
       <Field label="Bridge" hint="Only the bridges allowed for clusters are listed." error={shown("bridge")}>
@@ -243,7 +253,7 @@ export function NetworkStep({
               </option>
               {(cni.enum ?? []).map((v) => (
                 <option key={String(v)} value={String(v)}>
-                  {String(v)}
+                  {cniName(String(v))}
                 </option>
               ))}
             </select>
@@ -255,30 +265,22 @@ export function NetworkStep({
         open={shown("pods") !== undefined || shown("services") !== undefined ? true : undefined}
       >
         <summary>Pod and service ranges</summary>
-        <Field
-          label="Pod range"
-          hint="Leave empty for the distribution's default, or the first free range if that overlaps the nodes' network."
-          error={shown("pods")}
-        >
+        <Field label="Pod range" hint={rangeHint} error={shown("pods")}>
           {(id) => (
             <input
               id={id}
               value={form.pods}
-              placeholder="10.244.0.0/16"
+              placeholder={cls?.annotations?.["kubehenge.dev/default-pods"]}
               onChange={(e) => set("pods", e.target.value.trim())}
             />
           )}
         </Field>
-        <Field
-          label="Service range"
-          hint="Leave empty for the distribution's default, or the first free range if that overlaps the nodes' network."
-          error={shown("services")}
-        >
+        <Field label="Service range" hint={rangeHint} error={shown("services")}>
           {(id) => (
             <input
               id={id}
               value={form.services}
-              placeholder="10.96.0.0/16"
+              placeholder={cls?.annotations?.["kubehenge.dev/default-services"]}
               onChange={(e) => set("services", e.target.value.trim())}
             />
           )}
@@ -292,12 +294,14 @@ export function MachinesStep({
   form,
   set,
   shown,
+  cls,
   usableStorages,
   placed,
   haOffered,
   nodes,
   rules,
 }: StepProps & {
+  cls: ClusterClass | undefined;
   usableStorages: Storage[];
   placed: boolean;
   haOffered: boolean;
@@ -335,132 +339,17 @@ export function MachinesStep({
       <MachineFields
         label="Control plane"
         value={form.controlPlaneMachine}
+        min={machineLeast(form, cls, "controlPlaneMachine")}
         error={shown("controlPlaneMachine")}
         onChange={(m) => set("controlPlaneMachine", m)}
       />
       <MachineFields
         label="Workers"
         value={form.workerMachine}
+        min={machineLeast(form, cls, "workerMachine")}
         error={shown("workerMachine")}
         onChange={(m) => set("workerMachine", m)}
       />
-    </>
-  );
-}
-
-export function AddOnsStep({
-  form,
-  set,
-  shown,
-  cls,
-  canTrust,
-}: StepProps & { cls: ClusterClass | undefined; canTrust: boolean | undefined }): JSX.Element {
-  return (
-    <>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={form.headlamp}
-          aria-describedby="headlamp-hint"
-          onChange={(e) => set("headlamp", e.target.checked)}
-        />{" "}
-        Install Headlamp
-      </label>
-      <p className="hint" id="headlamp-hint">
-        A web interface inside the cluster. People sign in to it with their own token; it has no rights of its own.
-      </p>
-      {form.headlamp && (
-        <Field
-          label="Headlamp host name"
-          hint="Optional: also serve it at this name through the cluster's ingress controller."
-        >
-          {(id) => (
-            <input
-              id={id}
-              value={form.headlampHostname}
-              onChange={(e) => set("headlampHostname", e.target.value.trim())}
-            />
-          )}
-        </Field>
-      )}
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={form.rancherInstall}
-          disabled={canTrust === false && !form.rancherInstall}
-          aria-describedby="rancher-hint"
-          onChange={(e) => {
-            set("rancherInstall", e.target.checked);
-            if (!e.target.checked) {
-              return;
-            }
-            for (const key of ["controlPlaneMachine", "workerMachine"] as const) {
-              if (form[key].cores < rancherMinimumCores) {
-                set(key, { ...form[key], cores: rancherMinimumCores });
-              }
-            }
-          }}
-        />{" "}
-        Install Rancher
-      </label>
-      <p className="hint" id="rancher-hint">
-        Into this cluster; every other cluster then registers with it.
-        {form.rancherInstall &&
-          ` Rancher needs at least ${rancherMinimumCores} cores on every node, so the machines have at least that many.`}
-        {canTrust === false &&
-          " Rancher holds every registered cluster's admin credentials, so installing it needs Sys.Modify on the workload pool."}
-      </p>
-      {form.rancherInstall ? (
-        <Field
-          label="Rancher host name"
-          hint="Resolves to this cluster's API address, where its ingress controller answers."
-          error={shown("rancherHostname")}
-        >
-          {(id) => (
-            <input
-              id={id}
-              value={form.rancherHostname}
-              onChange={(e) => set("rancherHostname", e.target.value.trim())}
-            />
-          )}
-        </Field>
-      ) : (
-        <>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={form.rancherRegister}
-              aria-describedby="register-hint"
-              onChange={(e) => set("rancherRegister", e.target.checked)}
-            />{" "}
-            Register with Rancher
-          </label>
-          <p className="hint" id="register-hint">
-            {registerHint}
-          </p>
-        </>
-      )}
-      {variable(cls, "upgrades") && (
-        <Field
-          label="Upgrade automatically"
-          hint={`Every day from 02:00 for four hours, ${browserZone()} time; the cluster's Options change the window later.`}
-        >
-          {(id) => (
-            <select
-              id={id}
-              value={form.upgradeMode}
-              onChange={(e) => {
-                const mode = e.target.value;
-                if (oneOf(upgradeModes, mode)) {
-                  set("upgradeMode", mode);
-                }
-              }}
-            >
-              {modeChoices}
-            </select>
-          )}
-        </Field>
-      )}
     </>
   );
 }
@@ -498,16 +387,18 @@ export function IdentityStep({
 function MachineFields({
   label,
   value,
+  min,
   error,
   onChange,
 }: {
   label: string;
   value: Machine;
+  min: Machine;
   error?: string | undefined;
   onChange: (m: Machine) => void;
 }): JSX.Element {
   // fieldProblems names the first of cores, memory and disk that is wrong.
-  const on = (part: string): string | undefined => (error?.includes(part) === true ? error : undefined);
+  const on = (part: string): string | undefined => (error?.toLowerCase().includes(part) === true ? error : undefined);
   return (
     <fieldset className="group">
       <legend>{label}</legend>
@@ -516,7 +407,7 @@ function MachineFields({
           <input
             id={id}
             type="number"
-            min={1}
+            min={min.cores}
             value={shownNumber(value.cores)}
             onChange={(e) => onChange({ ...value, cores: typedNumber(e.target.value) })}
           />
@@ -527,7 +418,7 @@ function MachineFields({
           <input
             id={id}
             type="number"
-            min={minMemoryMiB}
+            min={min.memoryMiB}
             step={memoryStepMiB}
             value={shownNumber(value.memoryMiB)}
             onChange={(e) => onChange({ ...value, memoryMiB: typedNumber(e.target.value) })}
@@ -539,7 +430,7 @@ function MachineFields({
           <input
             id={id}
             type="number"
-            min={1}
+            min={min.diskGiB}
             value={shownNumber(value.diskGiB)}
             onChange={(e) => onChange({ ...value, diskGiB: typedNumber(e.target.value) })}
           />

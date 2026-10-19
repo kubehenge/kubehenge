@@ -1,0 +1,10 @@
+---
+# CodeQL's queries for every language: the security-and-quality suite, but for Go's log injection
+# query. Every log goes through a logger that escapes what it logs (slog's handlers, the
+# controller's zap in JSON), so a value cannot forge a line, and the Go linters refuse any other
+# logger (.golangci.yml: depguard's logging rule, forbidigo).
+queries:
+  - uses: security-and-quality
+query-filters:
+  - exclude:
+      id: go/log-injection

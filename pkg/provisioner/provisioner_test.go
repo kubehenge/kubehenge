@@ -187,6 +187,17 @@ var testCharts = Charts{
 
 	Headlamp:      Chart{Repository: "https://kubernetes-sigs.github.io/headlamp", Name: "headlamp", Version: "0.45.0"},
 	HeadlampImage: "v0.45.0@sha256:db3f0e0fc58d358d41daa3fe7fc852437552c7ee873c3645470f7b86a8e0db49",
+
+	CertManager: Chart{Repository: "https://charts.jetstack.io", Name: "cert-manager", Version: "v1.21.2"},
+	Monitoring:  Chart{Repository: "https://prometheus-community.github.io/helm-charts", Name: "kube-prometheus-stack", Version: "92.10.1"},
+	KubeRBACProxy: Image{
+		Registry: "ghcr.io", Repository: "kube-rbac-proxy/kube-rbac-proxy", Tag: "v0.23.0",
+		Digest: "296fd0a10fb635414b4533b983f0d5a686ce0ce73567b7079b6595ba75034f1a",
+	},
+	Kyverno:           Chart{Repository: "https://kyverno.github.io/kyverno", Name: "kyverno", Version: "3.9.1"},
+	KyvernoPolicies:   Chart{Repository: "https://kyverno.github.io/kyverno", Name: "kyverno-policies", Version: "3.9.1"},
+	Istio:             Chart{Repository: "oci://ghcr.io/istio/release/charts", Name: "istiod", Version: "1.31.2"},
+	PodSecurityExempt: []string{"kube-system", "node-exporter"},
 }
 
 func TestParseChart(t *testing.T) {
@@ -212,7 +223,7 @@ func TestCNIProxy(t *testing.T) {
 	c.Spec.ClusterNetwork.Pods.CIDRBlocks = []string{"10.50.0.0/16"}
 	values := func(t *testing.T, c *clusterv1.Cluster, cni CNI, chart Chart) string {
 		t.Helper()
-		proxies, err := helmChartProxies(c, &testCharts, "local-lvm", cni, Addons{})
+		proxies, err := helmChartProxies(c, &testCharts, "kubeadm", "local-lvm", cni, &Addons{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -249,10 +260,10 @@ func TestCNIProxy(t *testing.T) {
 	if !lookup[bool](t, operator, "manageCRDs") {
 		t.Errorf("the operator leaves Calico's CRDs to nobody: %s", calico)
 	}
-	if _, err := helmChartProxies(c, &testCharts, "local-lvm", CNI{Name: "weave", Pods: "10.42.0.0/16"}, Addons{}); err == nil {
+	if _, err := helmChartProxies(c, &testCharts, "kubeadm", "local-lvm", CNI{Name: "weave", Pods: "10.42.0.0/16"}, &Addons{}); err == nil {
 		t.Error("no error for a CNI without a chart")
 	}
-	if _, err := helmChartProxies(cluster(), &testCharts, "local-lvm", CNI{Name: "cilium"}, Addons{}); err == nil {
+	if _, err := helmChartProxies(cluster(), &testCharts, "kubeadm", "local-lvm", CNI{Name: "cilium"}, &Addons{}); err == nil {
 		t.Error("no error for a CNI without a pod range")
 	}
 }
@@ -315,7 +326,7 @@ func TestCalicoResources(t *testing.T) {
 
 func TestHelmChartProxiesHoldNoSecret(t *testing.T) {
 	t.Parallel()
-	proxies, err := helmChartProxies(cluster(), &testCharts, "local-lvm", CNI{}, Addons{})
+	proxies, err := helmChartProxies(cluster(), &testCharts, "kubeadm", "local-lvm", CNI{}, &Addons{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +378,7 @@ func TestHelmChartProxiesHoldNoSecret(t *testing.T) {
 
 func headlampProxyValues(t *testing.T, h Headlamp) (map[string]any, map[string]any) {
 	t.Helper()
-	proxies, err := helmChartProxies(cluster(), &testCharts, "local-lvm", CNI{}, Addons{Headlamp: h})
+	proxies, err := helmChartProxies(cluster(), &testCharts, "kubeadm", "local-lvm", CNI{}, &Addons{Headlamp: h})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,10 +427,14 @@ func TestHeadlampIngressOnlyWithAHostname(t *testing.T) {
 	}
 }
 
+// networkCluster is a cluster on that network with one worker, so its control planes run no
+// workloads.
 func networkCluster(gateway string, prefix int) *clusterv1.Cluster {
-	return cluster(clusterv1.ClusterVariable{Name: "network", Value: apiextensionsv1.JSON{
+	c := cluster(clusterv1.ClusterVariable{Name: "network", Value: apiextensionsv1.JSON{
 		Raw: fmt.Appendf(nil, `{"bridge":"vmbr0","addresses":["%s"],"prefix":%d,"gateway":"%s","dnsServers":["%s"]}`, gateway, prefix, gateway, gateway),
 	}})
+	c.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{{Class: "worker", Name: "md-0", Replicas: new(int32(1))}}
+	return c
 }
 
 // lookup walks a decoded document by object keys and list indexes, failing the test where the
@@ -462,7 +477,10 @@ func hooksFor(t *testing.T, objs ...client.Object) (*Hooks, client.Client) {
 	}
 	class := &clusterv1.ClusterClass{
 		Name: "kubehenge-rke2", Namespace: "kubehenge-system",
-		Annotations: map[string]string{DefaultPodsAnnotation: "10.42.0.0/16", DefaultServicesAnnotation: "10.43.0.0/16"},
+		Annotations: map[string]string{
+			DefaultPodsAnnotation: "10.42.0.0/16", DefaultServicesAnnotation: "10.43.0.0/16",
+			ControlPlaneSizesAnnotation: rke2Sizes,
+		},
 		Spec: clusterv1.ClusterClassSpec{Variables: []clusterv1.ClusterClassVariable{
 			machineVariable("controlPlaneMachine"), machineVariable("workerMachine"),
 		}},
@@ -471,12 +489,16 @@ func hooksFor(t *testing.T, objs ...client.Object) (*Hooks, client.Client) {
 	return &Hooks{Reader: reader, ClassNamespace: "kubehenge-system"}, reader
 }
 
-// machineVariable is a machine variable as the chart declares it, two vCPUs by default.
+// machineVariable is a machine variable as the RKE2 class declares it: two vCPUs and 4096 MiB by
+// default and at least.
 func machineVariable(name string) clusterv1.ClusterClassVariable {
 	return clusterv1.ClusterClassVariable{Name: name, Schema: clusterv1.VariableSchema{OpenAPIV3Schema: clusterv1.JSONSchemaProps{
-		Type:       "object",
-		Default:    &apiextensionsv1.JSON{Raw: []byte(`{"cores":2,"memoryMiB":4096,"diskGiB":30}`)},
-		Properties: map[string]clusterv1.JSONSchemaProps{"cores": {Type: "integer", Default: &apiextensionsv1.JSON{Raw: []byte("2")}}},
+		Type:    "object",
+		Default: &apiextensionsv1.JSON{Raw: []byte(`{"cores":2,"memoryMiB":4096,"diskGiB":30}`)},
+		Properties: map[string]clusterv1.JSONSchemaProps{
+			"cores":     {Type: "integer", Default: &apiextensionsv1.JSON{Raw: []byte("2")}, Minimum: new(int64(2))},
+			"memoryMiB": {Type: "integer", Minimum: new(int64(4096))},
+		},
 	}}}
 }
 

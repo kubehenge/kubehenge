@@ -258,7 +258,10 @@ func (a *Accounts) BackupCovers(ctx context.Context, t *Ticket, vmid int) (bool,
 	return false, nil
 }
 
-// Templates lists the VM templates in a pool, with their tags.
+// Templates lists the VM templates in a pool, with their tags. The cluster's resource view reads
+// pools and tags afresh, but a VM's name and whether it is a template from the status its node
+// broadcast last, which can be seconds old and can still show a removed VM's under a reused VM ID;
+// each VM's configuration says it for certain, before anything is done to the VM by its ID.
 func (a *Accounts) Templates(ctx context.Context, t *Ticket, pool string) ([]Member, error) {
 	var guests []struct {
 		Member
@@ -271,9 +274,22 @@ func (a *Accounts) Templates(ctx context.Context, t *Ticket, pool string) ([]Mem
 	}
 	var list []Member
 	for _, g := range guests {
-		if g.Type == "qemu" && g.Template == 1 && g.Pool == pool {
-			list = append(list, g.Member)
+		if g.Type != "qemu" || g.Pool != pool {
+			continue
 		}
+		var config struct {
+			Name     string `json:"name"`
+			Template int    `json:"template"`
+		}
+		err := a.get(ctx, t, fmt.Sprintf("/nodes/%s/qemu/%d/config", url.PathEscape(g.Node), g.VMID), &config)
+		if notFound(err) || err == nil && config.Template != 1 {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		g.Name, g.Template = config.Name, config.Template
+		list = append(list, g.Member)
 	}
 	return list, nil
 }

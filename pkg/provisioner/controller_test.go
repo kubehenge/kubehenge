@@ -243,7 +243,7 @@ func TestReconcileAppliesTheRestWhileRancherIsBeingRemoved(t *testing.T) {
 	installed := &unstructured.Unstructured{}
 	installed.SetGroupVersionKind(helmChartProxyGVK)
 	installed.SetNamespace(c.Namespace)
-	installed.SetName(rancherProxies(c)[0])
+	installed.SetName(rancherProxy(c))
 	unreachable := &corev1.Secret{
 		Namespace: c.Namespace, Name: c.Name + "-kubeconfig",
 		Data: map[string][]byte{"value": []byte("not a kubeconfig")},

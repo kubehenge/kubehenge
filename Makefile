@@ -6,7 +6,7 @@ IMAGE ?= ghcr.io/kubehenge/kubehenge
 CAPMOX_IMAGE ?= ghcr.io/kubehenge/cluster-api-provider-proxmox
 KO_FLAGS ?=
 
-.PHONY: build web website dist index image capmox-image lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-templates e2e-volumes e2e-interface e2e-appliance
+.PHONY: build web website dist index image capmox-image lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-templates e2e-volumes e2e-interface e2e-appliance
 .PHONY: fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker unit-go unit-web unit-tofu tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
@@ -122,6 +122,7 @@ SHFMT_FLAGS := -i 4 -ci -sr
 YAMLLINT := uvx yamllint@1.38.0
 ZIZMOR := uvx zizmor@1.31.1
 MARKDOWNLINT := npx --yes markdownlint-cli2@0.23.3
+GOVULNCHECK := go run golang.org/x/vuln/cmd/govulncheck@v1.9.0
 
 # Rewrites what the format checks below would refuse.
 fmt: web/node_modules/.package-lock.json
@@ -133,10 +134,14 @@ fmt: web/node_modules/.package-lock.json
 
 # For both systems the code builds for: the appliance and images on Linux, the tests also on Windows.
 # Without cgo, as the binary is built, and so that a cross-system check needs no C toolchain.
+# govulncheck fails on a known vulnerability only where the code calls into it, for the system it
+# runs on: GOOS would also build govulncheck itself for another one.
 lint-go: web
 	go mod tidy -diff
+	golangci-lint config verify
 	CGO_ENABLED=0 GOOS=linux golangci-lint run ./...
 	CGO_ENABLED=0 GOOS=windows golangci-lint run ./...
+	$(GOVULNCHECK) ./...
 
 # oxfmt's check, type-aware oxlint and TypeScript's check; the build leaves the types to this step.
 # The Proxmox VE entry's script is plain JavaScript, checked with the interface's tools, and so is
@@ -220,6 +225,10 @@ e2e-workload-cluster:
 # Against the management cluster in KUBECONFIG; settings in test/e2e/rancher.sh.
 e2e-rancher:
 	test/e2e/rancher.sh
+
+# Against the management cluster in KUBECONFIG; settings in test/e2e/cluster-mesh.sh.
+e2e-cluster-mesh:
+	test/e2e/cluster-mesh.sh
 
 # Settings come from KUBEHENGE_PROXMOX_* and KUBEHENGE_E2E_*; see pkg/templates/e2e_test.go.
 e2e-templates:

@@ -20,6 +20,12 @@ metadata:
     # k3s's own ranges, for a Cluster that sets none.
     kubehenge.dev/default-pods: 10.42.0.0/16
     kubehenge.dev/default-services: 10.43.0.0/16
+    # k3s's server sizing guide: the control planes' least vCPUs and memory from a number of workers.
+    kubehenge.dev/control-plane-sizes: '[{"workers":0,"cores":2,"memoryMiB":4096},{"workers":351,"cores":4,"memoryMiB":8192},{"workers":901,"cores":8,"memoryMiB":16384},{"workers":1801,"cores":16,"memoryMiB":32768}]'
+    {{- include "kubehenge.addonMemory" . | nindent 4 }}
+    # What a node uses besides the add-ons' pods, measured by the end-to-end tests with a tenth on
+    # top: a control plane with every add-on on, a worker idle.
+    kubehenge.dev/node-memory: '{"controlPlane":2560,"worker":448}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"
@@ -62,10 +68,11 @@ spec:
         healthCheck:
           {{- include "kubehenge.healthCheck" "workers" | nindent 10 }}
   variables:
-    {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "controlPlaneMinMemoryMiB" 2048 "clusters" .Values.clusters) | nindent 4 }}
+    {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 1 "workerMinMemoryMiB" 1024 "clusters" .Values.clusters) | nindent 4 }}
     {{- include "kubehenge.addonVariables" . | nindent 4 }}
     {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
+    {{- include "kubehenge.cisVariable" . | nindent 4 }}
     - name: cni
       required: false
       schema:
@@ -86,10 +93,15 @@ spec:
               controlPlane: true
           jsonPatches:
             - op: add
-              path: /spec/template/spec/kthreesConfigSpec/files
+              path: /spec/template/spec/kthreesConfigSpec/files/-
               valueFrom:
                 template: |
-                  -{{- include "kubehenge.kubeVipFile" (dict "path" "/var/lib/rancher/k3s/agent/pod-manifests/kube-vip.yaml" "kubeconfig" "/etc/rancher/k3s/k3s.yaml") | nindent 22 }}
+                  {{- include "kubehenge.kubeVipFile" (dict "path" "/var/lib/rancher/k3s/agent/pod-manifests/kube-vip.yaml" "kubeconfig" "/etc/rancher/k3s/k3s.yaml") | nindent 18 }}
+            - op: add
+              path: /spec/template/spec/kthreesConfigSpec/files/-
+              valueFrom:
+                template: |
+                  {{- include "kubehenge.admissionFile" (dict "root" . "path" "/etc/rancher/k3s/pod-security.yaml") | nindent 18 }}
     # The k3s provider takes the ranges only from its own server configuration, never from the
     # Cluster's clusterNetwork, which Kubehenge's range check and every other distribution read.
     {{- range $range := list (dict "name" "pods" "field" "clusterCidr") (dict "name" "services" "field" "serviceCidr") }}
@@ -140,11 +152,32 @@ spec:
               path: /spec/template/spec/kthreesConfigSpec/files/-
               valueFrom:
                 template: |
-                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/etc/rancher/k3s/authentication-config.yaml") | nindent 18 }}
+                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/etc/rancher/k3s/authentication-config.yaml" "anonymous" false) | nindent 18 }}
             - op: add
-              path: /spec/template/spec/kthreesConfigSpec/serverConfig/kubeAPIServerArg
+              path: /spec/template/spec/kthreesConfigSpec/files/-
               value:
-                - authentication-config=/etc/rancher/k3s/authentication-config.yaml
+                path: /etc/rancher/k3s/config.yaml.d/45-kubehenge-oidc.yaml
+                owner: root:root
+                permissions: "0600"
+                content: |
+                  kube-apiserver-arg+:
+                    - authentication-config=/etc/rancher/k3s/authentication-config.yaml
+    - name: k3s-cis
+      enabledIf: {{ include "kubehenge.cisEnabled" . }}
+      definitions:
+        {{- range $kind, $sel := dict "KThreesControlPlaneTemplate" (dict "selector" (dict "controlPlane" true) "api" "controlplane.cluster.x-k8s.io/v1beta2" "args" "/spec/template/spec/kthreesConfigSpec/agentConfig/kubeletArgs/-") "KThreesConfigTemplate" (dict "selector" (dict "machineDeploymentClass" (dict "names" (list "worker"))) "api" "bootstrap.cluster.x-k8s.io/v1beta2" "args" "/spec/template/spec/agentConfig/kubeletArgs/-") }}
+        - selector:
+            apiVersion: {{ $sel.api }}
+            kind: {{ $kind }}
+            matchResources:
+              {{- toYaml $sel.selector | nindent 14 }}
+          jsonPatches:
+            {{- range fromYamlArray (include "kubehenge.cisKubeletArgs" $) }}
+            - op: add
+              path: {{ $sel.args }}
+              value: {{ . }}
+            {{- end }}
+        {{- end }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
 kind: ProxmoxClusterTemplate
@@ -168,10 +201,15 @@ spec:
 )) }}
 
 {{- define "kubehenge.k3sAgentConfig" -}}
+preK3sCommands:
+  - sysctl --system
 agentConfig:
   kubeletArgs:
     # capmox names a machine by its VM's SMBIOS UUID, which cloud-init reads as the instance ID.
     - provider-id=proxmox://{{ "{{ ds.meta_data.instance_id }}" }}
+    # The kubelet refuses to start on kernel settings other than its own (kubehenge.sysctlFile).
+    - protect-kernel-defaults=true
+    - tls-cipher-suites={{ include "kubehenge.tlsCipherSuites" . }}
   {{- if .controlPlane }}
   {{- include "kubehenge.controlPlaneTaints" . | nindent 2 }}
   {{- end }}
@@ -182,6 +220,31 @@ template:
   spec:
     kthreesConfigSpec:
       {{- include "kubehenge.k3sAgentConfig" (dict "controlPlane" true) | nindent 6 }}
+      files:
+        {{- include "kubehenge.sysctlFile" . | nindent 8 }}
+        {{- include "kubehenge.auditPolicyFile" (dict "root" . "path" "/etc/rancher/k3s/audit-policy.yaml") | nindent 8 }}
+        # The k3s provider has no setting for secrets encryption; k3s keeps the key in its
+        # datastore, so every server holds the same one. The API server's arguments are here, in
+        # place of the provider's list, which always ends with anonymous-auth=true and a cipher list
+        # of its own; a later file only adds to them (kube-apiserver-arg+).
+        - path: /etc/rancher/k3s/config.yaml.d/40-kubehenge-server.yaml
+          owner: root:root
+          permissions: "0600"
+          content: |
+            secrets-encryption: true
+            kube-apiserver-arg:
+              - admission-control-config-file=/etc/rancher/k3s/pod-security.yaml
+              - enable-admission-plugins=NodeRestriction,EventRateLimit
+              - audit-policy-file=/etc/rancher/k3s/audit-policy.yaml
+              - audit-log-path=/var/lib/rancher/k3s/server/logs/audit.log
+              # A month of it, in at most a gigabyte, as RKE2 keeps its own.
+              - audit-log-maxage=30
+              - audit-log-maxbackup=10
+              - audit-log-maxsize=100
+              # Every client reloads its projected token, so none needs it to outlast its hour.
+              - service-account-extend-token-expiration=false
+              - anonymous-auth=false
+              - tls-cipher-suites={{ include "kubehenge.tlsCipherSuites" . }}
       serverConfig:
         # The Proxmox VE cloud controller manager initialises the nodes instead of k3s's own.
         disableCloudController: true
@@ -192,4 +255,6 @@ template:
 template:
   spec:
     {{- include "kubehenge.k3sAgentConfig" (dict) | nindent 4 }}
+    files:
+      {{- include "kubehenge.sysctlFile" . | nindent 6 }}
 {{- end -}}

@@ -73,7 +73,7 @@ default:
 properties:
   cores:
     type: integer
-    minimum: 1
+    minimum: {{ .minCores }}
     default: {{ .cores }}
   memoryMiB:
     type: integer
@@ -88,10 +88,11 @@ properties:
 {{- end -}}
 
 {{/*
-Call with (dict "controlPlaneDiskGiB" <n> "workerDiskGiB" <n> "minDiskGiB" <n> "controlPlaneMinMemoryMiB" <n>).
-The control-plane minimum is the least a distribution's control plane starts in: below it the
-kubelet refuses its own static pods (their memory requests exceed the node's memory) or the
-distribution's documented minimum is not met.
+Call with (dict "controlPlaneDiskGiB" <n> "workerDiskGiB" <n> "minDiskGiB" <n> "workerMinCores" <n> "workerMinMemoryMiB" <n>).
+A control plane's minimum is the first row of the k3s and RKE2 server sizing guides, 2 vCPUs and
+4 GiB; kubeadm, which documents no sizes past its 2 GiB to start, follows RKE2's, whose servers run
+the same components. On less, an add-on's install crowds out the API server and etcd. A worker's is
+never below its distribution's documented minimum for a node.
 */}}
 {{- define "kubehenge.proxmoxVariables" -}}
 - name: controlPlaneEndpoint
@@ -174,12 +175,25 @@ distribution's documented minimum is not met.
   required: false
   schema:
     openAPIV3Schema:
-      {{- include "kubehenge.machineSchema" (dict "cores" 2 "memoryMiB" 4096 "minMemoryMiB" .controlPlaneMinMemoryMiB "diskGiB" .controlPlaneDiskGiB "minDiskGiB" .minDiskGiB) | nindent 6 }}
+      {{- include "kubehenge.machineSchema" (dict "cores" 2 "minCores" 2 "memoryMiB" 4096 "minMemoryMiB" 4096 "diskGiB" .controlPlaneDiskGiB "minDiskGiB" .minDiskGiB) | nindent 6 }}
 - name: workerMachine
   required: false
   schema:
     openAPIV3Schema:
-      {{- include "kubehenge.machineSchema" (dict "cores" 2 "memoryMiB" 4096 "minMemoryMiB" 1024 "diskGiB" .workerDiskGiB "minDiskGiB" .minDiskGiB) | nindent 6 }}
+      {{- include "kubehenge.machineSchema" (dict "cores" 2 "minCores" .workerMinCores "memoryMiB" 4096 "minMemoryMiB" .workerMinMemoryMiB "diskGiB" .workerDiskGiB "minDiskGiB" .minDiskGiB) | nindent 6 }}
+{{- end -}}
+
+{{/*
+The memory, in MiB, each add-on's pods use in a cluster, the same for every distribution: the
+end-to-end tests' working sets once every add-on has started, with room to grow. Monitoring is
+Prometheus, Alertmanager, Grafana, node-exporter and the metrics proxies, at 1.5 GiB as Prometheus
+grows while it fills its first two-hour block; Rancher's own pod peaks at about 1.6 GiB as it
+first starts, and with a cluster registered Rancher, Fleet and their controllers hold about 1.2 GiB.
+Istio uses about 100 MiB, but istiod and the ztunnel beside it ask for 384 MiB, which the node they
+share has to have; the clustermesh-apiserver uses about 50 MiB.
+*/}}
+{{- define "kubehenge.addonMemory" -}}
+kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"kyverno":384,"istio":384,"clusterMesh":128,"certManager":192,"rancher":2048,"rancherAgent":512}'
 {{- end -}}
 
 {{/*
@@ -209,6 +223,92 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           description: >-
             Secret in the headlamp namespace holding the certificate for hostname; the ingress
             controller's own default certificate when unset.
+- name: monitoring
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        Prometheus, Alertmanager and Grafana with the kube-prometheus-stack dashboards and alerts,
+        scraping every node and control-plane component over verified, authenticated TLS. Installs
+        cert-manager too. Grafana's admin password is in the kube-prometheus-stack-grafana Secret
+        in the monitoring namespace.
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        hostname:
+          type: string
+          format: hostname
+          description: Serve Grafana at this name through the cluster's ingress controller.
+        tlsSecret:
+          type: string
+          minLength: 1
+          description: >-
+            Secret in the monitoring namespace holding the certificate for hostname; the ingress
+            controller's own default certificate when unset.
+- name: podSecurity
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        The Pod Security Standard the cluster's pods are held to, by Kubernetes' Pod Security
+        Admission, by Kyverno, or by both. The namespaces of the components that need the host
+        (kube-system, the CNI's, node-exporter's, Istio's node agents', Rancher's) are exempt from
+        both.
+      properties:
+        admission:
+          type: string
+          enum: [privileged, baseline, restricted]
+          default: privileged
+          description: >-
+            The level Pod Security Admission enforces in every namespace that labels none of its
+            own. Below restricted, pods short of restricted are warned about and audited. Changing
+            it replaces the control-plane machines.
+        kyverno:
+          type: string
+          enum: ["off", baseline, restricted]
+          default: "off"
+          description: >-
+            The level Kyverno's Pod Security Standards policies enforce, in every namespace and
+            whatever its labels say, with a policy report of what falls short; off leaves Kyverno
+            out of the cluster.
+- name: istio
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        Istio in ambient mode: a namespace labelled istio.io/dataplane-mode=ambient has its pods'
+        traffic carried over mutual TLS between them, with their workload identities, and no
+        sidecars. Switching it off first takes every namespace and pod out of the mesh.
+      properties:
+        enabled:
+          type: boolean
+          default: false
+- name: clusterMesh
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        Cilium Cluster Mesh, for a cluster that runs Cilium: its pods reach those of the clusters it
+        is linked with, by address and through global services, and Cilium's network policies can
+        select them. Two clusters of one namespace are linked while both are on and list each
+        other, with pod ranges apart; each then reads the other's pod names, labels and identities.
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        peers:
+          type: array
+          maxItems: 254
+          description: The clusters of this namespace to link with.
+          items:
+            type: string
+            maxLength: 32
+            pattern: "^[a-z]([-a-z0-9]*[a-z0-9])?$"
 - name: rancher
   required: false
   schema:
@@ -322,15 +422,111 @@ x-kubernetes-validations:
 
 {{/*
 The structured authentication configuration as a bootstrap file at path: a template Cluster API
-renders with the cluster's variables. Call with (dict "root" $ "path" …).
+renders with the cluster's variables. With anonymous, requests without credentials reach the few
+paths kubeadm needs them to; without, the API server is to be given anonymous-auth=false
+(files/authentication-config.tpl). Call with (dict "root" $ "path" … "anonymous" true|false).
 */}}
 {{- define "kubehenge.oidcFile" -}}
 path: {{ .path }}
+{{ printf "{{- $anonymous := %t }}" .anonymous }}
 {{ .root.Files.Get "files/authentication-config.tpl" }}
+{{- end -}}
+
+{{/*
+The API server's admission configuration as a bootstrap file at path, a template Cluster API
+renders with the cluster's variables, the chart's exempt namespaces written into it. Call with
+(dict "root" $ "path" …).
+*/}}
+{{- define "kubehenge.admissionFile" -}}
+path: {{ .path }}
+{{ printf "{{- $exempt := list %s }}" (include "kubehenge.quotedList" .root.Values.podSecurityExempt) }}
+{{ .root.Files.Get "files/admission.tpl" }}
+{{- end -}}
+
+{{/*
+The kernel settings every node runs with. The kubelet checks them and refuses to start when they
+differ (protect-kernel-defaults), rather than change the host behind its back: the four the CIS
+hardening guides set, and the two the kubelet itself would. A node whose kernel panics or oopses
+restarts after ten seconds instead of running on half broken; its machine health check and
+Proxmox VE HA take it from there. Applied before the distribution starts with sysctl --system.
+*/}}
+{{- define "kubehenge.sysctlFile" -}}
+- path: /etc/sysctl.d/90-kubehenge.conf
+  owner: root:root
+  permissions: "0644"
+  content: |
+    vm.panic_on_oom=0
+    vm.overcommit_memory=1
+    kernel.panic=10
+    kernel.panic_on_oops=1
+    kernel.keys.root_maxkeys=1000000
+    kernel.keys.root_maxbytes=25000000
+{{- end -}}
+
+{{/*
+The API server's audit policy as a bootstrap file at path, the same for every distribution.
+*/}}
+{{- define "kubehenge.auditPolicyFile" -}}
+- path: {{ .path }}
+  owner: root:root
+  permissions: "0600"
+  content: |
+    {{- .root.Files.Get "files/audit-policy.yaml" | nindent 4 }}
+{{- end -}}
+
+{{/*
+The TLS 1.2 cipher suites the kubelets and kubeadm's API server offer: forward secret, with
+authenticated encryption only. TLS 1.3 chooses its own.
+*/}}
+{{- define "kubehenge.tlsCipherSuites" -}}
+TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+{{- end -}}
+
+{{- define "kubehenge.quotedList" -}}
+{{- $quoted := list }}
+{{- range . }}{{ $quoted = append $quoted (quote .) }}{{ end }}
+{{- join " " $quoted }}
 {{- end -}}
 
 {{- define "kubehenge.oidcEnabled" -}}
 {{ "{{ if .oidc }}true{{ end }}" | quote }}
+{{- end -}}
+
+{{/*
+Hardening to the CIS Kubernetes Benchmark beyond the baseline every cluster gets, where it costs
+workloads something: restricted pods, the runtime's seccomp profile for every container, and
+streaming sessions that end when idle. Each class adds its distribution's own on top.
+*/}}
+{{- define "kubehenge.cisVariable" -}}
+- name: cis
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: boolean
+      default: false
+      description: >-
+        Harden the cluster to the CIS Kubernetes Benchmark beyond what every cluster gets: Pod
+        Security Admission enforces restricted outside the exempt namespaces, every container
+        runs under the runtime's default seccomp profile unless it asks for another, and exec,
+        attach and port-forward sessions end after five idle minutes. RKE2 also runs its own CIS
+        profile, under which pods in kube-system, kube-public and default take connections only
+        from their own namespace, DNS and a few of RKE2's own services aside. Fixed once the
+        cluster exists.
+      x-kubernetes-validations:
+        - rule: self == oldSelf
+          message: CIS hardening is chosen when the cluster is created and cannot be changed
+{{- end -}}
+
+{{- define "kubehenge.cisEnabled" -}}
+{{ "{{ if .cis }}true{{ end }}" | quote }}
+{{- end -}}
+
+{{/*
+The kubelet settings cis adds, as kubelet flags.
+*/}}
+{{- define "kubehenge.cisKubeletArgs" -}}
+- seccomp-default=true
+- streaming-connection-idle-timeout=5m
 {{- end -}}
 
 {{/*

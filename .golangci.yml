@@ -44,6 +44,13 @@ linters:
               desc: use slices
             - pkg: golang.org/x/exp/maps
               desc: use maps
+        # Logs carry what users send, so they go through loggers that escape it: slog's handlers
+        # and the controller's zap in JSON. CodeQL's log injection query is off on that account
+        # (.github/codeql-config.yml).
+        logging:
+          deny:
+            - pkg: log$
+              desc: log with log/slog, which escapes what it logs
     errcheck:
       check-type-assertions: true
     exhaustive:
@@ -51,6 +58,17 @@ linters:
         - switch
         - mapliteral
         - typeswitch
+      # A ResourceList names the resources a container asks for, not every one there is.
+      ignore-types:
+        - ^k8s\.io/api/core/v1\.ResourceName$
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^(fmt\.Print(|f|ln)|print|println)$
+        # zap writes a message as it is outside JSON (see depguard's logging rule).
+        - pattern: ^zap\.(UseDevMode|ConsoleEncoder)$
+          pkg: ^sigs\.k8s\.io/controller-runtime/pkg/log/zap$
+          msg: the controller logs in JSON, which escapes what it logs
     funlen:
       lines: 100
       statements: 50
@@ -62,6 +80,8 @@ linters:
       # named for "name" reads worse than the literal, and is not how Kubernetes Go code is written.
       ignore-string-values:
         - ^(name|kind|spec|type|enabled|path|key|operator|cni|poolid|comment|delete)$
+        - ^(namespace|service|serviceMonitor|secret|secretName|tls|tlsConfig|insecureSkipVerify|hosts|resources|storage|ClusterRole|ALL)$
+        - ^(metadata|cluster|users)$
     ireturn:
       allow:
         - anon
@@ -90,6 +110,7 @@ linters:
       # Names in other people's APIs keep their spelling.
       ignore-rules:
         - synchronize
+        - organization
     mnd:
       # A command's argument count reads plainly where it is declared.
       ignored-functions:

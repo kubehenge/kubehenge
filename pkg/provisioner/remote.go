@@ -6,7 +6,9 @@ import (
 	"sync"
 	"time"
 
+	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
@@ -14,11 +16,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// remoteScheme holds the types read in workload clusters: Secrets and persistent volumes, and
-// Rancher's own through unstructured objects.
+// remoteScheme holds the types read in workload clusters: Secrets, persistent volumes, certificate
+// signing requests and network policies, and Rancher's own through unstructured objects.
 var remoteScheme = func() *runtime.Scheme {
 	s := runtime.NewScheme()
-	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, storagev1.AddToScheme} {
+	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, storagev1.AddToScheme, certificatesv1.AddToScheme, networkingv1.AddToScheme} {
 		if err := add(s); err != nil {
 			panic(err)
 		}

@@ -16,6 +16,12 @@ metadata:
     # RKE2's own ranges, for a Cluster that sets none.
     kubehenge.dev/default-pods: 10.42.0.0/16
     kubehenge.dev/default-services: 10.43.0.0/16
+    # RKE2's server sizing guide: the control planes' least vCPUs and memory from a number of workers.
+    kubehenge.dev/control-plane-sizes: '[{"workers":0,"cores":2,"memoryMiB":4096},{"workers":226,"cores":4,"memoryMiB":8192},{"workers":451,"cores":8,"memoryMiB":16384},{"workers":1301,"cores":16,"memoryMiB":32768}]'
+    {{- include "kubehenge.addonMemory" . | nindent 4 }}
+    # What a node uses besides the add-ons' pods, measured by the end-to-end tests with a tenth on
+    # top: a control plane with every add-on on, a worker idle.
+    kubehenge.dev/node-memory: '{"controlPlane":2560,"worker":704}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"
@@ -59,10 +65,11 @@ spec:
           {{- include "kubehenge.healthCheck" "workers" | nindent 10 }}
   variables:
     {{- /* RKE2's static pods request 2 GiB between them (etcd, API server, controller manager, scheduler, kube-proxy). */}}
-    {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "controlPlaneMinMemoryMiB" 3072 "clusters" .Values.clusters) | nindent 4 }}
+    {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 2 "workerMinMemoryMiB" 4096 "clusters" .Values.clusters) | nindent 4 }}
     {{- include "kubehenge.addonVariables" . | nindent 4 }}
     {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
+    {{- include "kubehenge.cisVariable" . | nindent 4 }}
     - name: cni
       required: false
       schema:
@@ -83,10 +90,15 @@ spec:
               controlPlane: true
           jsonPatches:
             - op: add
-              path: /spec/template/spec/files
+              path: /spec/template/spec/files/-
               valueFrom:
                 template: |
-                  -{{- include "kubehenge.kubeVipFile" (dict "path" "/var/lib/rancher/rke2/agent/pod-manifests/kube-vip.yaml" "kubeconfig" "/etc/rancher/rke2/rke2.yaml") | nindent 22 }}
+                  {{- include "kubehenge.kubeVipFile" (dict "path" "/var/lib/rancher/rke2/agent/pod-manifests/kube-vip.yaml" "kubeconfig" "/etc/rancher/rke2/rke2.yaml") | nindent 18 }}
+            - op: add
+              path: /spec/template/spec/files/-
+              valueFrom:
+                template: |
+                  {{- include "kubehenge.admissionFile" (dict "root" . "path" "/etc/rancher/rke2/pod-security.yaml") | nindent 18 }}
             - op: add
               path: /spec/template/spec/serverConfig/cni
               valueFrom:
@@ -104,14 +116,47 @@ spec:
               path: /spec/template/spec/files/-
               valueFrom:
                 template: |
-                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/etc/rancher/rke2/authentication-config.yaml") | nindent 18 }}
+                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/etc/rancher/rke2/authentication-config.yaml" "anonymous" false) | nindent 18 }}
             # RKE2 mounts every file an argument names into the API server's static pod; mounting it
             # again as an extra mount makes the pod invalid (a mount path must be unique).
             - op: add
-              path: /spec/template/spec/serverConfig/kubeAPIServer
-              value:
-                extraArgs:
-                  - authentication-config=/etc/rancher/rke2/authentication-config.yaml
+              path: /spec/template/spec/serverConfig/kubeAPIServer/extraArgs/-
+              value: authentication-config=/etc/rancher/rke2/authentication-config.yaml
+            # RKE2 switches anonymous requests off itself only while it is given no file.
+            - op: add
+              path: /spec/template/spec/serverConfig/kubeAPIServer/extraArgs/-
+              value: anonymous-auth=false
+    # RKE2's profile keeps the admission configuration it is given, which enforces restricted
+    # under cis already. Under it a server refuses to start without an etcd user and group, whom it
+    # gives etcd's data and process.
+    - name: rke2-cis
+      enabledIf: {{ include "kubehenge.cisEnabled" . }}
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: RKE2ControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/preRKE2Commands/-
+              value: id -u etcd >/dev/null 2>&1 || useradd --system --user-group --no-create-home --shell /usr/sbin/nologin --comment "etcd user" etcd
+        {{- range $kind, $sel := dict "RKE2ControlPlaneTemplate" (dict "selector" (dict "controlPlane" true) "api" "controlplane.cluster.x-k8s.io/v1beta2") "RKE2ConfigTemplate" (dict "selector" (dict "machineDeploymentClass" (dict "names" (list "worker"))) "api" "bootstrap.cluster.x-k8s.io/v1beta2") }}
+        - selector:
+            apiVersion: {{ $sel.api }}
+            kind: {{ $kind }}
+            matchResources:
+              {{- toYaml $sel.selector | nindent 14 }}
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/agentConfig/cisProfile
+              value: cis
+            {{- range fromYamlArray (include "kubehenge.cisKubeletArgs" $) }}
+            - op: add
+              path: /spec/template/spec/agentConfig/kubelet/extraArgs/-
+              value: {{ . }}
+            {{- end }}
+        {{- end }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
 kind: ProxmoxClusterTemplate
@@ -135,13 +180,20 @@ spec:
 )) }}
 
 {{- define "kubehenge.rke2AgentConfig" -}}
+preRKE2Commands:
+  - sysctl --system
 agentConfig:
+  # The kubelet refuses to start on kernel settings other than its own (kubehenge.sysctlFile).
+  protectKernelDefaults: true
   kubelet:
     extraArgs:
       # capmox names a machine by its VM's SMBIOS UUID, which cloud-init reads as the instance ID.
       - provider-id=proxmox://{{ "{{ ds.meta_data.instance_id }}" }}
+      - tls-cipher-suites={{ include "kubehenge.tlsCipherSuites" . }}
   {{- if .controlPlane }}
   {{- include "kubehenge.controlPlaneTaints" . | nindent 2 }}
+  # In place of the one RKE2 writes, which enforces nothing.
+  podSecurityAdmissionConfigFile: /etc/rancher/rke2/pod-security.yaml
   {{- end }}
 {{- end -}}
 
@@ -149,11 +201,35 @@ agentConfig:
 template:
   spec:
     {{- include "kubehenge.rke2AgentConfig" (dict "controlPlane" true) | nindent 4 }}
+    files:
+      {{- include "kubehenge.sysctlFile" . | nindent 6 }}
+      {{- include "kubehenge.auditPolicyFile" (dict "root" . "path" "/etc/rancher/rke2/audit-policy.yaml") | nindent 6 }}
+      # Given a policy, RKE2 audits the API server and keeps a month of the log.
+      - path: /etc/rancher/rke2/config.yaml.d/50-kubehenge-audit.yaml
+        owner: root:root
+        permissions: "0600"
+        content: |
+          audit-policy-file: /etc/rancher/rke2/audit-policy.yaml
     serverConfig:
       # The Proxmox VE cloud controller manager initialises the nodes instead of RKE2's own.
       cloudProviderName: external
       disableComponents:
         kubernetesComponents: [cloudController]
+      kubeAPIServer:
+        extraArgs:
+          - enable-admission-plugins=NodeRestriction,EventRateLimit
+          # Every client reloads its projected token, so none needs it to outlast its hour.
+          - service-account-extend-token-expiration=false
+          - tls-cipher-suites={{ include "kubehenge.tlsCipherSuites" . }}
+      # Served on loopback only, RKE2's own default, with their metrics let through there without
+      # credentials, as etcd's and kube-proxy's are: the metrics proxy on the node's address
+      # authenticates Prometheus instead.
+      kubeControllerManager:
+        extraArgs:
+          - authorization-always-allow-paths=/healthz,/readyz,/livez,/metrics
+      kubeScheduler:
+        extraArgs:
+          - authorization-always-allow-paths=/healthz,/readyz,/livez,/metrics
     rolloutStrategy:
       type: RollingUpdate
       rollingUpdate:
@@ -164,4 +240,6 @@ template:
 template:
   spec:
     {{- include "kubehenge.rke2AgentConfig" (dict) | nindent 4 }}
+    files:
+      {{- include "kubehenge.sysctlFile" . | nindent 6 }}
 {{- end -}}

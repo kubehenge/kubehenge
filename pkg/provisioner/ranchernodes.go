@@ -1,7 +1,6 @@
 package provisioner
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -13,10 +12,6 @@ import (
 // stops answering, kube-vip loses its lease and drops the cluster's address.
 const RancherMinimumCores = 4
 
-type machineCores struct {
-	Cores *int `json:"cores,omitempty"`
-}
-
 // checkRancherNodes refuses a cluster that runs Rancher on nodes with fewer vCPUs than Rancher
 // needs: its control planes, and the workers of every machine deployment that has any, since
 // Rancher's pods run there too.
@@ -27,7 +22,7 @@ func checkRancherNodes(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass
 	}
 	topology := cluster.Spec.Topology
 	var small []string
-	cores, err := nodeCores(cluster, class, "controlPlaneMachine", topology.ControlPlane.Variables.Overrides)
+	cores, _, err := nodeSize(cluster, class, "controlPlaneMachine", topology.ControlPlane.Variables.Overrides)
 	if err != nil {
 		return err
 	}
@@ -39,7 +34,7 @@ func checkRancherNodes(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass
 		if md.Replicas != nil && *md.Replicas == 0 {
 			continue
 		}
-		cores, err := nodeCores(cluster, class, "workerMachine", md.Variables.Overrides)
+		cores, _, err := nodeSize(cluster, class, "workerMachine", md.Variables.Overrides)
 		if err != nil {
 			return err
 		}
@@ -52,49 +47,4 @@ func checkRancherNodes(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass
 			RancherMinimumCores, strings.Join(small, ", "))
 	}
 	return nil
-}
-
-// nodeCores is the vCPUs a machine variable gives its nodes: from a machine deployment's or the
-// control plane's override, else the cluster's value, else the class's default.
-func nodeCores(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass, name string, overrides []clusterv1.ClusterVariable) (int, error) {
-	for _, vars := range [][]clusterv1.ClusterVariable{overrides, cluster.Spec.Topology.Variables} {
-		for _, v := range vars {
-			if v.Name != name {
-				continue
-			}
-			var m machineCores
-			if err := json.Unmarshal(v.Value.Raw, &m); err != nil {
-				return 0, fmt.Errorf("variable %s: %w", name, err)
-			}
-			if m.Cores != nil {
-				return *m.Cores, nil
-			}
-			return classDefaultCores(class, name)
-		}
-	}
-	return classDefaultCores(class, name)
-}
-
-func classDefaultCores(class *clusterv1.ClusterClass, name string) (int, error) {
-	for i := range class.Spec.Variables {
-		v := &class.Spec.Variables[i]
-		if v.Name != name {
-			continue
-		}
-		schema := v.Schema.OpenAPIV3Schema
-		if d := schema.Properties["cores"].Default; d != nil {
-			var cores int
-			if err := json.Unmarshal(d.Raw, &cores); err != nil {
-				return 0, fmt.Errorf("class %s, variable %s: default cores: %w", class.Name, name, err)
-			}
-			return cores, nil
-		}
-		if schema.Default != nil {
-			var m machineCores
-			if err := json.Unmarshal(schema.Default.Raw, &m); err == nil && m.Cores != nil {
-				return *m.Cores, nil
-			}
-		}
-	}
-	return 0, fmt.Errorf("class %s gives %s no default vCPUs", class.Name, name)
 }

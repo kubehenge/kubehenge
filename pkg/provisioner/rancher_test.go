@@ -71,6 +71,7 @@ func clusterWithRancher(name string, install bool) *clusterv1.Cluster {
 	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: "rancher", Value: apiextensionsv1.JSON{
 		Raw: []byte(`{"install":` + map[bool]string{true: "true", false: "false"}[install] + `,"hostname":"rancher.example.org"}`),
 	}}, clusterv1.ClusterVariable{Name: "controlPlaneMachine", Value: apiextensionsv1.JSON{Raw: []byte(`{"cores":4,"memoryMiB":8192}`)}})
+	c.Spec.Topology.Workers.MachineDeployments = nil
 	c.Name = name
 	return c
 }
@@ -161,7 +162,10 @@ func TestClusterValidatorHoldsChangesToRancher(t *testing.T) {
 	if _, err := v.ValidateCreate(ctx, small(on)); err == nil {
 		t.Error("a new Rancher cluster on two vCPUs")
 	}
-	if _, err := v.ValidateCreate(ctx, small(off)); err != nil {
+	// With a worker, so that its control planes run no workloads.
+	plain := small(off)
+	plain.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{{Class: "worker", Name: "md-0", Replicas: new(int32(1))}}
+	if _, err := v.ValidateCreate(ctx, plain); err != nil {
 		t.Errorf("a new cluster without Rancher on two vCPUs: %v", err)
 	}
 
@@ -184,7 +188,7 @@ func TestClusterValidatorHoldsChangesToRancher(t *testing.T) {
 
 func TestRancherProxies(t *testing.T) {
 	t.Parallel()
-	proxies, err := helmChartProxies(cluster(), &testCharts, "local-lvm", CNI{}, Addons{Rancher: Rancher{Install: true, Hostname: "rancher.example.org"}})
+	proxies, err := helmChartProxies(cluster(), &testCharts, "kubeadm", "local-lvm", CNI{}, &Addons{Rancher: Rancher{Install: true, Hostname: "rancher.example.org"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +213,7 @@ func TestRancherProxies(t *testing.T) {
 	if _, ok := values["bootstrapPassword"]; ok {
 		t.Error("a password in plain-text values")
 	}
-	if _, err := helmChartProxies(cluster(), &testCharts, "local-lvm", CNI{}, Addons{Rancher: Rancher{Install: true}}); err == nil {
+	if _, err := helmChartProxies(cluster(), &testCharts, "kubeadm", "local-lvm", CNI{}, &Addons{Rancher: Rancher{Install: true}}); err == nil {
 		t.Error("Rancher without a hostname")
 	}
 }

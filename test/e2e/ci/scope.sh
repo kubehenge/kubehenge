@@ -10,7 +10,7 @@
 # main untested.
 set -eu
 
-all='management-cluster appliance kubeadm rke2 k3s'
+all='management-cluster appliance kubeadm rke2 k3s cluster-mesh'
 workload='kubeadm rke2 k3s'
 need=
 [ "${1:-}" != --all ] || need=${all}
@@ -21,12 +21,14 @@ need=
         *.md | docs/* | website/* | LICENSE | .gitignore | .gitattributes | renovate.json | .yamllint.yaml) ;;
         .golangci.yml | .markdownlint* | .github/ISSUE_TEMPLATE/* | .github/workflows/ci.yml) ;;
         .github/workflows/codeql.yml | .github/workflows/scorecard.yml | .github/workflows/release.yml) ;;
-        .github/workflows/website.yml) ;;
+        .github/codeql-config.yml) ;;
+        .github/workflows/website.yml | osv-scanner.toml) ;;
         appliance/* | pkg/appliance/* | pkg/ui/* | web/* | test/e2e/appliance.sh) need="${need} appliance" ;;
         *e2e_test.go) need="${need} management-cluster" ;;
         *_test.go | */testdata/* | test/integration/*) ;;
         test/e2e/management-cluster-upgrade.sh | test/e2e/rancher.sh) ;;
         test/e2e/workload-cluster.sh) need="${need} ${workload}" ;;
+        test/e2e/cluster-mesh.sh) need="${need} cluster-mesh" ;;
         test/e2e/management-cluster.sh | test/e2e/lib.sh) need="${need} management-cluster" ;;
         *) need="${need} ${all}" ;;
     esac

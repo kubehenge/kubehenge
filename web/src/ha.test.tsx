@@ -60,6 +60,7 @@ describe("a new cluster's Proxmox VE HA", () => {
         form={{ ...newForm(), storage: "ceph" }}
         set={set}
         shown={(k) => noProblems.get(k)}
+        cls={rke2}
         usableStorages={storages}
         placed={false}
         haOffered={haOffered}
