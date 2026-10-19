@@ -24,6 +24,11 @@ func tryLock(dir string) (func(), error) {
 		}
 		return nil, fmt.Errorf("locking jobs in %s: %w", dir, err)
 	}
-	// Closing the descriptor releases the lock, as the process ending does.
-	return func() { _ = f.Close() }, nil
+	// Unlocked before the close: a child forked meanwhile by any goroutine holds the descriptor until
+	// it execs, and a close alone would leave the lock held by it. A crash still drops the lock with
+	// the process.
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}, nil
 }
