@@ -48,12 +48,11 @@ COPY lxcfs.conf /etc/systemd/system/lxcfs.service.d/container.conf
 COPY interfaces /etc/network/interfaces
 # No watchdog to arm, the clock is the host's, and no getty or first-boot prompt has a terminal; the
 # machine ID is made at each start. nftables.service would flush the rules the container runtime
-# keeps in the container for its DNS, so the NAT goes through the legacy tables beside them.
+# keeps in the container for its DNS, so the NAT is added beside them through iptables-nft, Debian's
+# default; kernels built without the legacy tables have nothing else.
 RUN systemctl mask watchdog-mux.service nftables.service systemd-timesyncd.service getty.target \
         console-getty.service systemd-firstboot.service systemd-networkd-wait-online.service \
     && systemctl enable lxcfs.service \
-    && update-alternatives --set iptables /usr/sbin/iptables-legacy \
-    && update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy \
     && rm -f /etc/network/interfaces.new
 
 STOPSIGNAL SIGRTMIN+3
