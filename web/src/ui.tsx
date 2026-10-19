@@ -45,6 +45,11 @@ export const distributionName = (d: string): string => distributionNames[d] ?? d
 export const registerHint = "With the Rancher one of Kubehenge's other clusters runs, now or once one does.";
 export const registeredWithRancher = "Registered with Rancher, once one of Kubehenge's clusters runs it";
 
+/** istioHint says what Istio does in a cluster and how workloads join it. */
+export const istioHint =
+  "Istio in ambient mode, without sidecars: pods in a namespace labelled istio.io/dataplane-mode=ambient talk to each other over mutual TLS, with their workload identities. Switching it off first takes every namespace and pod out of the mesh.";
+export const istioText = (on: boolean): string => (on ? "On, ambient mode" : "Off");
+
 /** sole is the one name of a list that has only one: a choice a form can make for the user. */
 export const sole = (names: string[]): string | undefined => (names.length === 1 ? names[0] : undefined);
 

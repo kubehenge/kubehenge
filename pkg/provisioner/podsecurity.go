@@ -107,15 +107,9 @@ func (r *Reconciler) removeKyverno(ctx context.Context, cluster *clusterv1.Clust
 	if err := r.removeProxies(ctx, cluster, kyvernoPoliciesProxy(cluster)); err != nil {
 		return false, err
 	}
-	p := &unstructured.Unstructured{}
-	p.SetGroupVersionKind(helmChartProxyGVK)
-	err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: kyvernoPoliciesProxy(cluster)}, p)
-	switch {
-	case apierrors.IsNotFound(err):
-		return false, r.removeProxies(ctx, cluster, kyvernoProxy(cluster))
-	case err != nil:
-		return false, fmt.Errorf("reading add-on %s: %w", kyvernoPoliciesProxy(cluster), err)
-	default:
-		return true, nil
+	policies, err := r.anyProxy(ctx, cluster, kyvernoPoliciesProxy(cluster))
+	if err != nil || policies {
+		return policies, err
 	}
+	return false, r.removeProxies(ctx, cluster, kyvernoProxy(cluster))
 }

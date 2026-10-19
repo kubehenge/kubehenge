@@ -63,6 +63,9 @@ type Reconciler struct {
 	Charts         Charts
 	// Registrar removes clusters from Rancher before Rancher itself is switched off.
 	Registrar *Registrar
+	// Remotes reaches the workload clusters, to take their workloads out of the mesh before Istio
+	// is switched off.
+	Remotes *Remotes
 	// Events reports on a Cluster what the controller refuses to do for it; may be nil.
 	Events events.EventRecorder
 	// RancherKubernetes is what the Rancher release Kubehenge installs runs on; unset allows any.
@@ -269,9 +272,9 @@ func (r *Reconciler) addons(ctx context.Context, cluster *clusterv1.Cluster) (Ad
 	return addons, refused, nil
 }
 
-// removeSwitchedOff removes the proxies of Headlamp, monitoring and Kyverno when the cluster
-// switches them off; Rancher's removal waits on its registered clusters, apart from these. It
-// reports whether a removal waits on another.
+// removeSwitchedOff removes the proxies of Headlamp, monitoring, Kyverno and Istio when the
+// cluster switches them off; Rancher's removal waits on its registered clusters, apart from these.
+// It reports whether a removal waits on another.
 func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons) (bool, error) {
 	var off []string
 	if !addons.Headlamp.Enabled {
@@ -283,10 +286,22 @@ func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.C
 	if err := r.removeProxies(ctx, cluster, off...); err != nil {
 		return false, err
 	}
+	waiting := false
 	if !addons.PodSecurity.kyvernoOn() {
-		return r.removeKyverno(ctx, cluster)
+		wait, err := r.removeKyverno(ctx, cluster)
+		if err != nil {
+			return false, err
+		}
+		waiting = wait
 	}
-	return false, nil
+	if !addons.Istio.Enabled {
+		wait, err := r.removeIstio(ctx, cluster)
+		if err != nil {
+			return false, err
+		}
+		waiting = waiting || wait
+	}
+	return waiting, nil
 }
 
 // applyAddons applies what the cluster gets installed: the Secrets of its ClusterResourceSet, the
@@ -409,6 +424,22 @@ func (r *Reconciler) removeProxies(ctx context.Context, cluster *clusterv1.Clust
 		}
 	}
 	return nil
+}
+
+// anyProxy reports whether any of the cluster's HelmChartProxies named is still there.
+func (r *Reconciler) anyProxy(ctx context.Context, cluster *clusterv1.Cluster, names ...string) (bool, error) {
+	for _, name := range names {
+		p := &unstructured.Unstructured{}
+		p.SetGroupVersionKind(helmChartProxyGVK)
+		err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: name}, p)
+		if err == nil {
+			return true, nil
+		}
+		if !apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("reading add-on %s: %w", name, err)
+		}
+	}
+	return false, nil
 }
 
 // refuseRancher says why Rancher may not be installed into the cluster, or "": another cluster runs

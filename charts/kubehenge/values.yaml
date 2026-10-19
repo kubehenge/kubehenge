@@ -43,6 +43,7 @@ podSecurityExempt:
   - tigera-operator
   - calico-system
   - node-exporter
+  - istio-node
   - cattle-system
   - cattle-fleet-system
   - cattle-fleet-local-system
@@ -107,6 +108,13 @@ addons:
     repository: https://kyverno.github.io/kyverno
     chart: kyverno-policies
     version: 3.9.1
+  # Istio in ambient mode, for clusters that switch it on: istiod's chart, with base, cni and
+  # ztunnel beside it at the same version.
+  istio:
+    repository: oci://ghcr.io/istio/release/charts
+    chart: istiod
+    # renovate: datasource=docker depName=ghcr.io/istio/release/charts/istiod
+    version: 1.31.2
   # Installed with Rancher, which makes its CA and certificate through it, and with monitoring,
   # whose metrics proxies and Prometheus it gives their certificates.
   certManager:

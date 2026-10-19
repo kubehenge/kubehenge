@@ -3,7 +3,8 @@
 # cluster: create a cluster trusting an OpenID issuer, hardened to the CIS benchmark and enforcing
 # Pod Security's restricted level, check sign-in through it, its nodes against the benchmark, its
 # cloud controller manager and persistent volumes, switch
-# Headlamp, monitoring (every component scraped with its server verified) and Kyverno on and off,
+# Headlamp, monitoring (every component scraped with its server verified), Kyverno and Istio (a
+# namespace's traffic over mutual TLS) on and off,
 # scale its workers up and down, upgrade it by one minor version (for RKE2 and k3s with the first
 # new server's join refused at first), replace a node that dies, delete it, and check that nothing
 # of it is left on Proxmox VE.
@@ -183,7 +184,7 @@ worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq 
     (.metadata.annotations["kubehenge.dev/addon-memory"] | fromjson) as $addon
     | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
     | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
-        $node.worker + $addon.headlamp + $addon.monitoring + $addon.kyverno + $addon.certManager + $addon.rancherAgent]
+        $node.worker + $addon.headlamp + $addon.monitoring + $addon.kyverno + $addon.istio + $addon.certManager + $addon.rancherAgent]
     | max')}
 echo "workers with ${worker_memory} MiB of memory"
 cat > "${work}/cluster.yaml" << EOF
@@ -327,18 +328,18 @@ case ${cni} in
     *) ;;
 esac
 agnhost=registry.k8s.io/e2e-test-images/agnhost:2.61
-# agnhost_pod <name> <args...>: an agnhost pod at Pod Security's restricted level, which the
-# cluster enforces; the image runs as root unless told otherwise. The overrides merge into the
-# container by its name. sh has no local variables, so its own carry its prefix.
+# agnhost_pod <namespace> <name> <args...>: an agnhost pod at Pod Security's restricted level,
+# which the cluster enforces; the image runs as root unless told otherwise. The overrides merge into
+# the container by its name. sh has no local variables, so its own carry its prefix.
 agnhost_pod() {
-    agnhost_overrides=$(printf '{"apiVersion":"v1","spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"%s","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' "$1")
-    agnhost_name=$1
-    shift
-    wl -n e2e-policy run "${agnhost_name}" --image="${agnhost}" --override-type=strategic --overrides="${agnhost_overrides}" -- "$@"
+    agnhost_overrides=$(printf '{"apiVersion":"v1","spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"%s","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' "$2")
+    agnhost_namespace=$1 agnhost_name=$2
+    shift 2
+    wl -n "${agnhost_namespace}" run "${agnhost_name}" --image="${agnhost}" --override-type=strategic --overrides="${agnhost_overrides}" -- "$@"
 }
 wl create namespace e2e-policy
-agnhost_pod server netexec --http-port=8080
-agnhost_pod client pause
+agnhost_pod e2e-policy server netexec --http-port=8080
+agnhost_pod e2e-policy client pause
 wl -n e2e-policy wait --for=condition=Ready pod/server pod/client --timeout=5m
 server_ip=$(wl -n e2e-policy get pod server -o jsonpath='{.status.podIP}')
 connect() { KUBECONFIG=${work}/workload kubectl -n e2e-policy exec client -- /agnhost connect "${server_ip}:8080" --timeout=3s 2>&1; }
@@ -584,6 +585,49 @@ case ${pod_security} in
     *) ;;
 esac
 
+step "Istio switched on, the mesh's traffic over mutual TLS"
+set_variable istio '{"enabled":true}'
+until_true 900 "istiod available" wl -n istio-system wait --for=condition=Available deployment/istiod --timeout=10s
+until_true 600 "ztunnel on every node" wl -n istio-node rollout status daemonset/ztunnel --timeout=10s
+until_true 600 "istio-cni on every node" wl -n istio-node rollout status daemonset/istio-cni-node --timeout=10s
+wl create namespace e2e-mesh
+wl label namespace e2e-mesh istio.io/dataplane-mode=ambient
+wl create namespace e2e-plain
+agnhost_pod e2e-mesh server netexec --http-port=8080
+agnhost_pod e2e-mesh client pause
+agnhost_pod e2e-plain client pause
+wl -n e2e-mesh wait --for=condition=Ready pod/server pod/client --timeout=5m
+wl -n e2e-plain wait --for=condition=Ready pod/client --timeout=5m
+redirected() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    marks=$(wl -n e2e-mesh get pod server client -o jsonpath='{.items[*].metadata.annotations.ambient\.istio\.io/redirection}') &&
+        [ "${marks}" = "enabled enabled" ]
+}
+until_true 120 "the mesh's pods redirected through ztunnel" redirected
+mesh_ip=$(wl -n e2e-mesh get pod server -o jsonpath='{.status.podIP}')
+# fetch <namespace>: the server's host name, fetched over HTTP by the namespace's client.
+fetch() { KUBECONFIG=${work}/workload kubectl -n "$1" exec client -- curl -sS --max-time 5 "http://${mesh_ip}:8080/hostname" 2>&1; }
+# shellcheck disable=SC2310 # polled with set -e off, so a failed fetch is only a retry.
+fetches() { fetched=$(fetch "$1") && [ "${fetched}" = server ]; }
+until_true 60 "a client outside the mesh reaches the server while mutual TLS is optional" fetches e2e-plain
+wl -n e2e-mesh apply -f - << 'EOF'
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: strict
+spec:
+  mtls:
+    mode: STRICT
+EOF
+# ztunnel closes a plain-text connection the policy refuses, so curl gets no reply; any other
+# failure, a failing exec among them, does not count as refused.
+plain_refused() { fetch e2e-plain | grep -qE '^curl: \((52|56)\)'; }
+until_true 120 "a client outside the mesh refused once mutual TLS is required" plain_refused
+until_true 60 "a client in the mesh reaches the server" fetches e2e-mesh
+# What ztunnel let through carries the client's workload identity.
+mesh_identity() { wl -n istio-node logs -l app=ztunnel --tail=-1 --prefix=false | grep -q 'spiffe://cluster.local/ns/e2e-mesh/sa/default'; }
+until_true 60 "ztunnel names the client's workload identity" mesh_identity
+
 # The class's minimum sizes have to carry every add-on at once.
 step "every add-on at once, with nothing restarted"
 # shellcheck disable=SC2310 # a failed count fails the step.
@@ -599,6 +643,7 @@ step "every add-on switched off at once"
 set_variable headlamp '{"enabled":false}'
 set_variable monitoring '{"enabled":false}'
 set_variable podSecurity '{"admission":"restricted","kyverno":"off"}'
+set_variable istio '{"enabled":false}'
 until_true 600 "Headlamp removed" absent wl -n headlamp get deployment/headlamp
 until_true 900 "monitoring removed" absent wl -n monitoring get "${prometheus}"
 until_true 300 "metrics proxies removed" absent wl -n kube-system get daemonset/kubehenge-etcd-metrics
@@ -606,6 +651,14 @@ until_true 900 "Kyverno removed" absent wl -n kyverno get deployment/kyverno-adm
 # shellcheck disable=SC2310 # the admission is the answer looked for.
 privileged_pod e2e-privileged > /dev/null || fail "Kyverno's policies outlive Kyverno"
 wl delete namespace e2e-privileged --wait --timeout=5m
+until_true 900 "Istio removed" absent wl -n istio-node get daemonset/ztunnel
+until_true 300 "istiod removed" absent wl -n istio-system get deployment/istiod
+enrolled=$(wl get namespace e2e-mesh -o jsonpath='{.metadata.labels.istio\.io/dataplane-mode}')
+[ -z "${enrolled}" ] || fail "e2e-mesh is still enrolled in a mesh that has gone"
+# Taken out of the mesh first, its pods reach each other and the rest without ztunnel.
+until_true 120 "a client outside the old mesh reaches the server" fetches e2e-plain
+until_true 60 "a client in the old mesh reaches the server" fetches e2e-mesh
+wl delete namespace e2e-mesh e2e-plain --wait --timeout=5m
 
 workers() {
     kubectl -n "${ns}" patch "cluster/${name}" --type=json \

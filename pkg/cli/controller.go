@@ -74,6 +74,7 @@ type controllerOptions struct {
 	kubeRBACProxy     string
 	kyvernoChart      string
 	kyvernoPolicies   string
+	istioChart        string
 	extensionConfig   string
 	upgradeInterval   time.Duration
 	classProviders    []string
@@ -121,6 +122,7 @@ separate nodes.`,
 	f.StringVar(&o.kubeRBACProxy, "kube-rbac-proxy-image", "", "kube-rbac-proxy image, in front of the metrics monitoring scrapes, as <registry>/<repository>:<tag>@sha256:<digest>")
 	f.StringVar(&o.kyvernoChart, "kyverno-chart", "", "Kyverno chart, for clusters that have Kyverno enforce pod security, as <repository>/<name>:<version>")
 	f.StringVar(&o.kyvernoPolicies, "kyverno-policies-chart", "", "Kyverno's Pod Security Standards policies chart, as <repository>/<name>:<version>")
+	f.StringVar(&o.istioChart, "istio-chart", "", "Istio's istiod chart, for clusters that switch Istio on, as <repository>/<name>:<version>; its base, cni and ztunnel charts are in the same repository at the same version")
 	f.StringSliceVar(&o.r.Charts.PodSecurityExempt, "pod-security-exempt", nil, "namespaces Kyverno's pod security policies leave alone, those the ClusterClasses' Pod Security Admission exempts (comma-separated)")
 	f.StringArrayVar(&o.classProviders, "class-providers", nil, "namespaces of the Cluster API providers only one ClusterClass's clusters use, as <class>=<namespace>,<namespace>; they run only while a cluster does (repeatable)")
 	f.DurationVar(&o.upgradeInterval, "upgrade-interval", defaultUpgradeInterval, "how often clusters are checked for an automatic upgrade due in their window")
@@ -129,7 +131,7 @@ separate nodes.`,
 	f.StringVar(&o.certDir, "extension-cert-dir", "/etc/kubehenge/tls", "directory with tls.crt and tls.key for the Runtime Extension server")
 	f.StringVar(&o.healthAddr, "health-address", ":8081", "address of the liveness and readiness probes")
 	f.BoolVar(&o.leaderElect, "leader-elect", true, "elect one active controller among replicas")
-	for _, flag := range []string{"ccm-chart", "csi-chart", "cilium-chart", "calico-chart", "headlamp-chart", "headlamp-image", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "monitoring-chart", "kube-rbac-proxy-image", "kyverno-chart", "kyverno-policies-chart"} {
+	for _, flag := range []string{"ccm-chart", "csi-chart", "cilium-chart", "calico-chart", "headlamp-chart", "headlamp-image", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "monitoring-chart", "kube-rbac-proxy-image", "kyverno-chart", "kyverno-policies-chart", "istio-chart"} {
 		_ = cmd.MarkFlagRequired(flag)
 	}
 	return cmd
@@ -260,6 +262,7 @@ func (o *controllerOptions) parseCharts() error {
 		{"--monitoring-chart", o.monitoringChart, &o.r.Charts.Monitoring},
 		{"--kyverno-chart", o.kyvernoChart, &o.r.Charts.Kyverno},
 		{"--kyverno-policies-chart", o.kyvernoPolicies, &o.r.Charts.KyvernoPolicies},
+		{"--istio-chart", o.istioChart, &o.r.Charts.Istio},
 	} {
 		var err error
 		if *c.chart, err = provisioner.ParseChart(c.value); err != nil {
@@ -342,6 +345,7 @@ func (o *controllerOptions) newManager(scheme *runtime.Scheme, extensions *serve
 func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *provisioner.Registrar, distributions *provisioner.Distributions) error {
 	o.r.Client = mgr.GetClient()
 	o.r.Registrar = registrar
+	o.r.Remotes = registrar.Remotes
 	o.r.Events = mgr.GetEventRecorder("kubehenge")
 	if err := o.r.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the cluster reconciler: %w", err)

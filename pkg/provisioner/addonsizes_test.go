@@ -14,7 +14,7 @@ func addonClass() *clusterv1.ClusterClass {
 		Name: "kubehenge-rke2",
 		Annotations: map[string]string{
 			ControlPlaneSizesAnnotation: rke2Sizes,
-			AddonMemoryAnnotation:       `{"headlamp":50,"monitoring":3000,"kyverno":300,"certManager":100,"rancher":1500,"rancherAgent":250}`,
+			AddonMemoryAnnotation:       `{"headlamp":50,"monitoring":3000,"kyverno":300,"istio":200,"certManager":100,"rancher":1500,"rancherAgent":250}`,
 			NodeMemoryAnnotation:        `{"controlPlane":4800,"worker":640}`,
 		},
 		Spec: clusterv1.ClusterClassSpec{Variables: []clusterv1.ClusterClassVariable{
@@ -36,7 +36,9 @@ func workerMemory(c *clusterv1.Cluster, raw string) *clusterv1.Cluster {
 }
 
 // everyAddon switches on every add-on but Rancher, whose agent counts while the cluster registers.
-var everyAddon = map[string]string{"headlamp": `{"enabled":true}`, "monitoring": `{"enabled":true}`, "podSecurity": `{"kyverno":"restricted"}`}
+var everyAddon = map[string]string{
+	"headlamp": `{"enabled":true}`, "monitoring": `{"enabled":true}`, "podSecurity": `{"kyverno":"restricted"}`, "istio": `{"enabled":true}`,
+}
 
 func TestWorkersHaveRoomForTheAddons(t *testing.T) {
 	t.Parallel()
@@ -50,12 +52,12 @@ func TestWorkersHaveRoomForTheAddons(t *testing.T) {
 		{"not registering, nothing on", withAddons(sized("", new(int32(1))), map[string]string{"rancher": `{"register":false}`}), ""},
 		{
 			"every add-on on the least worker", withAddons(sized("", new(int32(1))), everyAddon),
-			"the cluster's add-ons (Headlamp, monitoring, Kyverno, cert-manager, Rancher's agent) need 3700 MiB of memory on its workers, beyond the 640 MiB a worker uses itself, and the workers have 3456 MiB for them",
+			"the cluster's add-ons (Headlamp, monitoring, Kyverno, Istio, cert-manager, Rancher's agent) need 3900 MiB of memory on its workers, beyond the 640 MiB a worker uses itself, and the workers have 3456 MiB for them",
 		},
 		{"Kyverno off", withAddons(sized("", new(int32(1))), map[string]string{
 			"headlamp": `{"enabled":true}`, "monitoring": `{"enabled":true}`, "podSecurity": `{"admission":"restricted","kyverno":"off"}`,
 		}), ""},
-		{"room on one worker", workerMemory(withAddons(sized("", new(int32(1))), everyAddon), `{"memoryMiB":4352}`), ""},
+		{"room on one worker", workerMemory(withAddons(sized("", new(int32(1))), everyAddon), `{"memoryMiB":4544}`), ""},
 		{"room shared over workers", withAddons(sized("", new(int32(2))), everyAddon), ""},
 		{"a pool scaled to none", withAddons(sized("", new(int32(1)), new(int32(0))), everyAddon), "and the workers have 3456 MiB"},
 		{
@@ -66,9 +68,9 @@ func TestWorkersHaveRoomForTheAddons(t *testing.T) {
 		{"without workers, the agent", sized(`{"cores":4,"memoryMiB":8192}`), ""},
 		{
 			"without workers, every add-on", withAddons(sized(`{"cores":4,"memoryMiB":8192}`), everyAddon),
-			"need 3700 MiB of memory on its control planes, which run them without workers, beyond the 4800 MiB a control plane uses itself, and the control planes have 3392 MiB for them",
+			"need 3900 MiB of memory on its control planes, which run them without workers, beyond the 4800 MiB a control plane uses itself, and the control planes have 3392 MiB for them",
 		},
-		{"without workers, room on the control planes", withAddons(sized(`{"cores":4,"memoryMiB":8512}`), everyAddon), ""},
+		{"without workers, room on the control planes", withAddons(sized(`{"cores":4,"memoryMiB":8704}`), everyAddon), ""},
 	} {
 		err := checkAddonRoom(nil, tc.c, class)
 		switch {

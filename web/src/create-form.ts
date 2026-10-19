@@ -12,7 +12,7 @@ import {
   type PodSecurity,
 } from "./PodSecurity";
 import type { Bridge, ClusterClass, CreateRequest, OIDCProvider, Schema, Storage } from "./types";
-import { browserZone, distributionName, filled, registeredWithRancher, sentence } from "./ui";
+import { browserZone, distributionName, filled, istioText, registeredWithRancher, sentence } from "./ui";
 import { quantity, record, texts } from "./values";
 
 export const steps = ["General", "Network", "Machines", "Add-ons", "Identity providers", "Confirm"] as const;
@@ -61,6 +61,7 @@ export interface Form {
   grafanaHostname: string;
   podSecurity: PodSecurity;
   cis: boolean;
+  istio: boolean;
   rancherInstall: boolean;
   rancherHostname: string;
   rancherRegister: boolean;
@@ -123,6 +124,7 @@ const addonNames = [
   ["headlamp", "Headlamp"],
   ["monitoring", "monitoring"],
   ["kyverno", "Kyverno"],
+  ["istio", "Istio"],
   ["certManager", "cert-manager"],
   ["rancher", "Rancher"],
   ["rancherAgent", "Rancher's agent"],
@@ -150,6 +152,7 @@ export function addonMemory(form: Form, c: ClusterClass | undefined): { names: s
     headlamp: form.headlamp,
     monitoring: form.monitoring,
     kyverno: form.podSecurity.kyverno !== "off",
+    istio: form.istio,
     certManager: form.monitoring || form.rancherInstall,
     rancher: form.rancherInstall,
     rancherAgent: !form.rancherInstall && form.rancherRegister,
@@ -253,6 +256,7 @@ export const newForm = (): Form => ({
   grafanaHostname: "",
   podSecurity: podSecurityOf(undefined),
   cis: false,
+  istio: false,
   rancherInstall: false,
   rancherHostname: "",
   rancherRegister: true,
@@ -328,6 +332,9 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   }
   if (cis) {
     variables["cis"] = true;
+  }
+  if (form.istio && defined.has("istio")) {
+    variables["istio"] = { enabled: true };
   }
   if (form.rancherInstall) {
     variables["rancher"] = { install: true, hostname: form.rancherHostname };
@@ -434,6 +441,9 @@ function addOnRows(form: Form, defined: Set<string>): [string, string][] {
   }
   if (defined.has("podSecurity")) {
     rows.push(["Pod security", podSecurityText(enforced(form.podSecurity, cis))]);
+  }
+  if (defined.has("istio")) {
+    rows.push(["Istio", istioText(form.istio)]);
   }
   if (defined.has("rancher")) {
     rows.push(["Rancher", rancherChoice(form)]);

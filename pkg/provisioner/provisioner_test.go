@@ -196,6 +196,7 @@ var testCharts = Charts{
 	},
 	Kyverno:           Chart{Repository: "https://kyverno.github.io/kyverno", Name: "kyverno", Version: "3.9.1"},
 	KyvernoPolicies:   Chart{Repository: "https://kyverno.github.io/kyverno", Name: "kyverno-policies", Version: "3.9.1"},
+	Istio:             Chart{Repository: "oci://ghcr.io/istio/release/charts", Name: "istiod", Version: "1.31.2"},
 	PodSecurityExempt: []string{"kube-system", "node-exporter"},
 }
 

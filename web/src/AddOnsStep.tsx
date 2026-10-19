@@ -5,7 +5,7 @@ import { addonMemory, machineLeast, rancherMinimumCores, variable } from "./crea
 import type { StepProps } from "./CreateSteps";
 import { PodSecurityFields, cisHint } from "./PodSecurity";
 import type { ClusterClass } from "./types";
-import { Field, browserZone, registerHint } from "./ui";
+import { Field, browserZone, istioHint, registerHint } from "./ui";
 import { oneOf } from "./values";
 
 export function AddOnsStep({
@@ -97,6 +97,22 @@ export function AddOnsStep({
             cis={form.cis && variable(cls, "cis") !== undefined}
           />
         </fieldset>
+      )}
+      {variable(cls, "istio") && (
+        <>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={form.istio}
+              aria-describedby="istio-hint"
+              onChange={(e) => set("istio", e.target.checked)}
+            />{" "}
+            Install Istio
+          </label>
+          <p className="hint" id="istio-hint">
+            {istioHint}
+          </p>
+        </>
       )}
       <label className="check">
         <input

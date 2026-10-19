@@ -73,6 +73,19 @@ describe("a cluster's options", () => {
       variables: { podSecurity: { admission: "baseline", kyverno: "restricted" } },
     });
 
+    expect(screen.getByRole("row", { name: /Istio/u })).toHaveTextContent("Off");
+    await user.click(screen.getByRole("button", { name: "Edit Istio" }));
+    dialog = screen.getByRole("dialog", { name: "Istio" });
+    const istio = within(dialog).getByLabelText("Install Istio");
+    expect(istio).toHaveAccessibleDescription(/takes every namespace and pod out of the mesh/u);
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    await user.click(istio);
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: { istio: { enabled: true } },
+    });
+
     await user.click(screen.getByRole("button", { name: "Edit Rancher" }));
     dialog = screen.getByRole("dialog", { name: "Rancher" });
     const register = within(dialog).getByLabelText("Register with Rancher");

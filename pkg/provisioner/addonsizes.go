@@ -10,8 +10,8 @@ import (
 )
 
 // AddonMemoryAnnotation on a ClusterClass is the memory, in MiB, each add-on's pods use in one of its
-// clusters, by add-on: headlamp, monitoring, kyverno, certManager, rancher and rancherAgent. The
-// end-to-end tests measure the figures with every add-on on.
+// clusters, by add-on: headlamp, monitoring, kyverno, istio, certManager, rancher and rancherAgent.
+// The end-to-end tests measure the figures with every add-on on.
 const AddonMemoryAnnotation = "kubehenge.dev/addon-memory"
 
 // NodeMemoryAnnotation on a ClusterClass is the memory, in MiB, a node of one of its clusters uses
@@ -28,26 +28,14 @@ const (
 
 // addonNames are the add-ons as people know them, by their keys in AddonMemoryAnnotation.
 var addonNames = map[string]string{
-	headlampAddon: "Headlamp", monitoringAddon: "monitoring", kyvernoAddon: "Kyverno",
+	headlampAddon: "Headlamp", monitoringAddon: "monitoring", kyvernoAddon: "Kyverno", istioAddon: "Istio",
 	certManagerFigure: "cert-manager", rancherAddon: "Rancher", rancherAgentFigure: "Rancher's agent",
 }
 
 // addonsOn names the add-ons the cluster runs, in a fixed order. Rancher's agent counts wherever the
 // cluster would register: once a cluster installs Rancher, every other one registers with it.
 func addonsOn(cluster *clusterv1.Cluster) ([]string, error) {
-	h, _, err := optionalVariable[Headlamp](cluster, headlampAddon)
-	if err != nil {
-		return nil, err
-	}
-	m, _, err := optionalVariable[Monitoring](cluster, monitoringAddon)
-	if err != nil {
-		return nil, err
-	}
-	p, _, err := optionalVariable[PodSecurity](cluster, podSecurityVariable)
-	if err != nil {
-		return nil, err
-	}
-	r, err := rancherOf(cluster)
+	a, err := addonsOf(cluster)
 	if err != nil {
 		return nil, err
 	}
@@ -56,12 +44,13 @@ func addonsOn(cluster *clusterv1.Cluster) ([]string, error) {
 		name string
 		on   bool
 	}{
-		{headlampAddon, h.Enabled},
-		{monitoringAddon, m.Enabled},
-		{kyvernoAddon, p.kyvernoOn()},
-		{certManagerFigure, m.Enabled || r.Install},
-		{rancherAddon, r.Install},
-		{rancherAgentFigure, !r.Install && r.registers()},
+		{headlampAddon, a.Headlamp.Enabled},
+		{monitoringAddon, a.Monitoring.Enabled},
+		{kyvernoAddon, a.PodSecurity.kyvernoOn()},
+		{istioAddon, a.Istio.Enabled},
+		{certManagerFigure, a.Monitoring.Enabled || a.Rancher.Install},
+		{rancherAddon, a.Rancher.Install},
+		{rancherAgentFigure, !a.Rancher.Install && a.Rancher.registers()},
 	} {
 		if a.on {
 			on = append(on, a.name)

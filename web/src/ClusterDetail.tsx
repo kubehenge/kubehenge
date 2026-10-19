@@ -28,6 +28,8 @@ import {
   distributionName,
   errorMessage,
   filled,
+  istioHint,
+  istioText,
   pollIdle,
   registerHint,
   registeredWithRancher,
@@ -47,6 +49,7 @@ type Action =
   | "headlamp"
   | "monitoring"
   | "podSecurity"
+  | "istio"
   | "rancher"
   | "upgrades"
   | "oidc";
@@ -243,6 +246,9 @@ function ActionDialog({
     }
     case "podSecurity": {
       return <PodSecurityDialog cluster={c} onClose={onClose} />;
+    }
+    case "istio": {
+      return <IstioDialog cluster={c} onClose={onClose} />;
     }
     case "rancher": {
       return <RancherDialog cluster={c} onClose={onClose} />;
@@ -525,6 +531,12 @@ function Options({
       name: "pod security",
     },
     {
+      label: "Istio",
+      value: istioText(istioOn(c)),
+      action: "istio",
+      name: "Istio",
+    },
+    {
       label: "Rancher",
       value: rancherText(rancher),
       action: "rancher",
@@ -643,6 +655,42 @@ function PodSecurityDialog({ cluster: c, onClose }: { cluster: Cluster; onClose:
 
 // haOn reads the cluster's proxmoxHA variable, which takes part unless it is false.
 const haOn = (c: Cluster): boolean => flag(c.variables["proxmoxHA"]) !== false;
+
+const istioOn = (c: Cluster): boolean => flag(record(c.variables["istio"])["enabled"]) === true;
+
+function IstioDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+  const [on, setOn] = useState(istioOn(c));
+  const { busy, error, send } = useChange(c, onClose);
+  const hint = useId();
+  return (
+    <Dialog
+      title="Istio"
+      onClose={onClose}
+      onSubmit={() => {
+        void send({ variables: { istio: { enabled: on } } });
+      }}
+      actions={
+        <>
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="primary" disabled={busy || on === istioOn(c)}>
+            Save
+          </button>
+        </>
+      }
+    >
+      <label className="check">
+        <input type="checkbox" checked={on} aria-describedby={hint} onChange={(e) => setOn(e.target.checked)} /> Install
+        Istio
+      </label>
+      <p className="hint" id={hint}>
+        {istioHint}
+      </p>
+      <ErrorBox message={error} />
+    </Dialog>
+  );
+}
 
 function HADialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
   const [on, setOn] = useState(haOn(c));

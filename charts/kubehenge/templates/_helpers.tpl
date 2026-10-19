@@ -191,7 +191,7 @@ grows while it fills its first two-hour block; Rancher's own pod peaks at about 
 first starts, and with a cluster registered Rancher, Fleet and their controllers hold about 1.2 GiB.
 */}}
 {{- define "kubehenge.addonMemory" -}}
-kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"kyverno":384,"certManager":192,"rancher":2048,"rancherAgent":512}'
+kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"kyverno":384,"istio":512,"certManager":192,"rancher":2048,"rancherAgent":512}'
 {{- end -}}
 
 {{/*
@@ -253,7 +253,8 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
       description: >-
         The Pod Security Standard the cluster's pods are held to, by Kubernetes' Pod Security
         Admission, by Kyverno, or by both. The namespaces of the components that need the host
-        (kube-system, the CNI's, node-exporter's, Rancher's) are exempt from both.
+        (kube-system, the CNI's, node-exporter's, Istio's node agents', Rancher's) are exempt from
+        both.
       properties:
         admission:
           type: string
@@ -271,6 +272,19 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
             The level Kyverno's Pod Security Standards policies enforce, in every namespace and
             whatever its labels say, with a policy report of what falls short; off leaves Kyverno
             out of the cluster.
+- name: istio
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        Istio in ambient mode: a namespace labelled istio.io/dataplane-mode=ambient has its pods'
+        traffic carried over mutual TLS between them, with their workload identities, and no
+        sidecars. Switching it off first takes every namespace and pod out of the mesh.
+      properties:
+        enabled:
+          type: boolean
+          default: false
 - name: rancher
   required: false
   schema:

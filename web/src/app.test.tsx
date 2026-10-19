@@ -496,6 +496,7 @@ describe("create", () => {
     grafanaHostname: "grafana.example",
     podSecurity: { admission: "restricted", kyverno: "off" },
     cis: false,
+    istio: false,
     rancherInstall: false,
     rancherHostname: "",
     rancherRegister: false,
@@ -590,6 +591,16 @@ describe("create", () => {
       Bridge: "vmbr0, VLAN 30",
       Rancher: "Installed here, at r.example",
     });
+    const withIstio = {
+      ...rke2,
+      variables: [...rke2.variables, { name: "istio", required: false, schema: { type: "object" } }],
+    };
+    expect(Object.fromEntries(summary(form, withIstio))).toMatchObject({ Istio: "Off" });
+    expect(Object.fromEntries(summary({ ...form, istio: true }, withIstio))).toMatchObject({
+      Istio: "On, ambient mode",
+    });
+    expect(request({ ...form, istio: true }, withIstio).variables["istio"]).toStrictEqual({ enabled: true });
+    expect(request({ ...form, istio: true }, rke2).variables).not.toHaveProperty("istio");
   });
 
   it("starts automatic upgrades with a window in the browser's time zone", () => {
@@ -719,7 +730,7 @@ describe("create", () => {
 
   it("gives the nodes that carry the add-ons room for them", () => {
     const addons =
-      '{"headlamp":50,"monitoring":6000,"kyverno":300,"certManager":100,"rancher":1500,"rancherAgent":250}';
+      '{"headlamp":50,"monitoring":6000,"kyverno":300,"istio":200,"certManager":100,"rancher":1500,"rancherAgent":250}';
     const figured: ClusterClass = {
       ...rke2,
       annotations: {
@@ -731,10 +742,10 @@ describe("create", () => {
     expect(addonMemory({ ...form, rancherRegister: true }, figured).mib).toBe(6400);
     expect(
       addonMemory(
-        { ...form, rancherInstall: true, podSecurity: { admission: "privileged", kyverno: "baseline" } },
+        { ...form, rancherInstall: true, istio: true, podSecurity: { admission: "privileged", kyverno: "baseline" } },
         figured,
       ).names,
-    ).toStrictEqual(["Headlamp", "monitoring", "Kyverno", "cert-manager", "Rancher"]);
+    ).toStrictEqual(["Headlamp", "monitoring", "Kyverno", "Istio", "cert-manager", "Rancher"]);
     const plain: ClusterClass = { ...rke2, annotations: {} };
     expect(addonMemory(form, plain).mib).toBe(0);
     // A worker needs the class's least, or what it uses itself and its share of the add-ons in

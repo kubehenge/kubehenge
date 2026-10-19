@@ -190,7 +190,7 @@ func clientTLS(serverName string) map[string]any {
 func claim(size string) map[string]any {
 	return map[string]any{"volumeClaimTemplate": map[string]any{"spec": map[string]any{
 		"accessModes": []any{string(corev1.ReadWriteOnce)},
-		"resources":   map[string]any{"requests": map[string]any{"storage": size}},
+		"resources":   map[string]any{requestsKey: map[string]any{"storage": size}},
 	}}}
 }
 

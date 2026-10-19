@@ -35,6 +35,10 @@ const (
 
 	// apiVersionKey is a manifest's own, in those written as maps.
 	apiVersionKey = "apiVersion"
+	// Keys of the charts' values and of pod specs written as maps.
+	seccompProfileKey = "seccompProfile"
+	requestsKey       = "requests"
+	memoryKey         = "memory"
 
 	// The CNIs Kubehenge installs, as the cni variable names them.
 	cniCilium = "cilium"
@@ -59,6 +63,8 @@ type Charts struct {
 	KubeRBACProxy   Image
 	Kyverno         Chart
 	KyvernoPolicies Chart
+	// Istio is istiod's chart; its base, cni and ztunnel charts are beside it, at its version.
+	Istio Chart
 	// PodSecurityExempt are the namespaces Kyverno's policies leave alone, those the ClusterClasses'
 	// Pod Security Admission exempts.
 	PodSecurityExempt []string
@@ -70,6 +76,7 @@ type Addons struct {
 	Rancher     Rancher
 	Monitoring  Monitoring
 	PodSecurity PodSecurity
+	Istio       Istio
 	// CIS is the cluster's cis variable, which the add-ons make room for.
 	CIS bool
 }
@@ -88,6 +95,9 @@ func addonsOf(cluster *clusterv1.Cluster) (Addons, error) {
 		return a, err
 	}
 	if a.CIS, _, err = optionalVariable[bool](cluster, cisVariable); err != nil {
+		return a, err
+	}
+	if a.Istio, _, err = optionalVariable[Istio](cluster, istioAddon); err != nil {
 		return a, err
 	}
 	a.Rancher, err = rancherOf(cluster)
@@ -337,11 +347,11 @@ func headlampValues(image string, h Headlamp) map[string]any {
 			"allowPrivilegeEscalation": false,
 			"readOnlyRootFilesystem":   true,
 			"capabilities":             map[string]any{"drop": []any{"ALL"}},
-			"seccompProfile":           map[string]any{"type": "RuntimeDefault"},
+			seccompProfileKey:          map[string]any{"type": "RuntimeDefault"},
 		},
 		"resources": map[string]any{
-			"requests": map[string]any{"cpu": "10m", "memory": "64Mi"},
-			"limits":   map[string]any{"memory": "256Mi"},
+			requestsKey: map[string]any{"cpu": "10m", memoryKey: "64Mi"},
+			"limits":    map[string]any{memoryKey: "256Mi"},
 		},
 	}
 	if h.Hostname != "" {
@@ -422,17 +432,19 @@ func proxmoxValues(storage string) (map[string]any, map[string]any) {
 	return ccm, csi
 }
 
+// chartProxy is a chart a cluster gets, by the suffix of its HelmChartProxy's name.
+type chartProxy struct {
+	suffix, release, namespace string
+	chart                      Chart
+	values                     map[string]any
+}
+
 // helmChartProxies installs the cloud controller manager and the CSI plugin into the cluster, the
 // CNI named by cni unless none is, and the add-ons switched on. The Add-on Provider for Helm
 // selects only Clusters in a proxy's own namespace, so each cluster gets its own proxies beside it.
 func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution templates.Distribution, storage string, cni CNI, addons *Addons) ([]*unstructured.Unstructured, error) {
 	ccm, csi := proxmoxValues(storage)
-	type proxy struct {
-		suffix, release, namespace string
-		chart                      Chart
-		values                     map[string]any
-	}
-	wanted := []proxy{
+	wanted := []chartProxy{
 		{"proxmox-ccm", "proxmox-cloud-controller-manager", metav1.NamespaceSystem, charts.CCM, ccm},
 		{"proxmox-csi", "proxmox-csi-plugin", metav1.NamespaceSystem, charts.CSI, csi},
 	}
@@ -443,26 +455,31 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 		if err != nil {
 			return nil, err
 		}
-		wanted = append(wanted, proxy{"cni", cniCilium, metav1.NamespaceSystem, charts.Cilium, map[string]any{
+		values := map[string]any{
 			"ipam":     map[string]any{"mode": "cluster-pool", "operator": map[string]any{"clusterPoolIPv4PodCIDRList": []any{pods}}},
 			"operator": map[string]any{"replicas": 1},
-		}})
+		}
+		if addons.Istio.Enabled {
+			// Cilium would otherwise take istio-cni's plugin out of the node's CNI configuration.
+			values["cni"] = map[string]any{"exclusive": false}
+		}
+		wanted = append(wanted, chartProxy{"cni", cniCilium, metav1.NamespaceSystem, charts.Cilium, values})
 	case cniCalico:
 		// Only the operator: it creates Calico's CRDs itself, and calicoResources brings the
 		// resources of them that the chart would otherwise render before they exist.
 		off := map[string]any{"enabled": false}
-		wanted = append(wanted, proxy{"cni", cniCalico, "tigera-operator", charts.Calico, map[string]any{
+		wanted = append(wanted, chartProxy{"cni", cniCalico, "tigera-operator", charts.Calico, map[string]any{
 			"manageCRDs": true, "installation": off, "apiServer": off, "goldmane": off, "whisker": off,
 		}})
 	default:
 		return nil, fmt.Errorf("cluster %s/%s: no chart for CNI %q", cluster.Namespace, cluster.Name, cni.Name)
 	}
 	if addons.Headlamp.Enabled {
-		wanted = append(wanted, proxy{headlampAddon, headlampAddon, headlampAddon, charts.Headlamp, headlampValues(charts.HeadlampImage, addons.Headlamp)})
+		wanted = append(wanted, chartProxy{headlampAddon, headlampAddon, headlampAddon, charts.Headlamp, headlampValues(charts.HeadlampImage, addons.Headlamp)})
 	}
 	if addons.Rancher.Install || addons.Monitoring.Enabled {
 		// A Secret goes with its Certificate, so that nothing an add-on asked for outlives it.
-		wanted = append(wanted, proxy{certManagerAddon, certManagerAddon, certManagerAddon, charts.CertManager, map[string]any{
+		wanted = append(wanted, chartProxy{certManagerAddon, certManagerAddon, certManagerAddon, charts.CertManager, map[string]any{
 			"crds": map[string]any{"enabled": true}, "enableCertificateOwnerRef": true,
 		}})
 	}
@@ -470,19 +487,22 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 		if addons.Rancher.Hostname == "" {
 			return nil, fmt.Errorf("cluster %s/%s: Rancher needs a hostname", cluster.Namespace, cluster.Name)
 		}
-		wanted = append(wanted, proxy{rancherAddon, rancherAddon, rancherNamespace, charts.Rancher, rancherValues(addons.Rancher)})
+		wanted = append(wanted, chartProxy{rancherAddon, rancherAddon, rancherNamespace, charts.Rancher, rancherValues(addons.Rancher)})
 	}
 	if addons.Monitoring.Enabled {
-		wanted = append(wanted, proxy{
+		wanted = append(wanted, chartProxy{
 			monitoringAddon, monitoringRelease, monitoringAddon, charts.Monitoring,
 			monitoringValues(distribution, charts.KubeRBACProxy, addons),
 		})
 	}
 	if addons.PodSecurity.kyvernoOn() {
 		wanted = append(wanted,
-			proxy{kyvernoAddon, kyvernoAddon, kyvernoAddon, charts.Kyverno, kyvernoValues()},
-			proxy{kyvernoPolicies, kyvernoPolicies, kyvernoAddon, charts.KyvernoPolicies, kyvernoPolicyValues(addons.PodSecurity.Kyverno, charts.PodSecurityExempt)},
+			chartProxy{kyvernoAddon, kyvernoAddon, kyvernoAddon, charts.Kyverno, kyvernoValues()},
+			chartProxy{kyvernoPolicies, kyvernoPolicies, kyvernoAddon, charts.KyvernoPolicies, kyvernoPolicyValues(addons.PodSecurity.Kyverno, charts.PodSecurityExempt)},
 		)
+	}
+	if addons.Istio.Enabled {
+		wanted = append(wanted, istioCharts(charts.Istio, distribution, cni)...)
 	}
 
 	var proxies []*unstructured.Unstructured

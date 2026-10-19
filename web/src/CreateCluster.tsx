@@ -34,6 +34,7 @@ const raising = new Set<keyof Form>([
   "headlamp",
   "monitoring",
   "podSecurity",
+  "istio",
   "rancherInstall",
   "rancherRegister",
 ]);

@@ -94,7 +94,7 @@ Add-ons are Helm charts installed per cluster by the Cluster API Add-on Provider
 | Monitoring | Prometheus, Alertmanager and Grafana per cluster, with kube-prometheus-stack's dashboards and alerts | first |
 | Pod security | a Pod Security Standard level enforced by Pod Security Admission, by Kyverno's policies, or both | first |
 | CIS hardening | the rest of the CIS Kubernetes Benchmark, beyond the baseline every cluster gets, with RKE2's own CIS profile | first |
-| Istio | service mesh per cluster | next |
+| Istio | Istio in ambient mode per cluster: mutual TLS between the pods of the namespaces enrolled, without sidecars | first |
 | Cilium Cluster Mesh | connects the pod networks of clusters that run Cilium | next |
 
 Kubehenge's controller turns a cluster's add-on variables into HelmChartProxies beside the cluster, and deletes the proxy when an add-on is switched off, which uninstalls it. Values never carry a secret: the Add-on Provider for Helm keeps them in plain text.
@@ -109,6 +109,8 @@ Kubehenge's controller turns a cluster's add-on variables into HelmChartProxies 
 - **Certificates:** cert-manager runs a CA of the add-on's own (ClusterIssuer `kubehenge-metrics`), which signs the proxies' serving certificates and Prometheus's client certificate, and nothing else. The chart's long-lived token is sent only to what asks for one, never over plain HTTP.
 
 Prometheus keeps ten days of metrics on a 20 GiB volume from the cluster's default storage class, Alertmanager its silences on 1 GiB. `hostname` serves Grafana through the cluster's ingress controller, with the certificate from `tlsSecret` or the controller's default; without it, `kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80` reaches it. Its `admin` password is generated into the `kube-prometheus-stack-grafana` Secret. The release carries the proxies and certificates, so switching monitoring off removes them with it.
+
+**Istio** (`istio: {enabled: true}`) installs Istio in ambient mode, without sidecars: istiod into `istio-system`, and ztunnel and istio-cni on every node into `istio-node`. A namespace or pod labelled `istio.io/dataplane-mode=ambient` joins the mesh: istio-cni redirects its pods' traffic through the ztunnel on their node, which carries it to the other side's ztunnel over mutual TLS with each workload's identity, so Istio's policies by identity apply, such as a `PeerAuthentication` that requires mutual TLS or an `AuthorizationPolicy` by service account. ztunnel and istio-cni reach into the nodes' network namespaces, which only Pod Security's privileged level allows, so `istio-node` is exempt from pod security; istiod meets the restricted level. With the Cilium Kubehenge installs, Cilium's `cni.exclusive` is off while Istio is on, so that Cilium leaves istio-cni's plugin in place. Waypoints, Istio's layer 7 proxies, need the Gateway API's CRDs, which Kubehenge does not install. Switching Istio off first removes the `istio.io/dataplane-mode` label from every namespace and pod and waits until istio-cni has taken every pod's redirection away, since a pod still redirected once ztunnel has gone reaches nothing; then it uninstalls the charts. Istio's CRDs stay, with any resources of them.
 
 **Pod security** (`podSecurity: {admission: …, kyverno: …}`) holds a cluster's pods to a [Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/), `baseline` or `restricted`, through either or both of two checks:
 

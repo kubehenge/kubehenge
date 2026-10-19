@@ -175,6 +175,12 @@ A message saying "the control planes of a cluster with … workers need at least
 
 A message saying "the cluster's add-ons (…) need … MiB of memory on its workers, beyond the … MiB a worker uses itself": the workers together lack the memory the add-ons named take ([clusters.md](clusters.md#machines)). Give the workers more memory (`workerMachine`, or a worker pool's override), add workers, or leave an add-on off. Rancher's agent counts in every cluster that registers with Rancher; set `rancher` to `{register: false}` for a cluster that never will. "… on its control planes, which run them without workers …": the same for the control planes of a cluster without workers. A cluster that already fell short, after an upgrade of Kubehenge asked for more, can still be changed in other ways; only changes that leave it shorter are refused.
 
+### Istio
+
+- **Pods in the mesh reach nothing, or fail their probes, under a NetworkPolicy:** ztunnel carries the enrolled pods' traffic on port 15008/TCP, and the kubelet's probes reach them from 169.254.7.127; a policy that denies by default has to allow both ([Istio's notes](https://istio.io/latest/docs/ambient/usage/networkpolicy/)).
+- **Switching Istio off takes long:** Kubehenge waits until no pod's traffic is redirected through ztunnel any more (the pod annotation `ambient.istio.io/redirection`), which needs the cluster reachable and istio-cni running on the pod's node. A pod whose node is gone keeps the annotation; delete the pod.
+- **Waypoints are not created:** they need the Gateway API's CRDs, which Kubehenge does not install.
+
 ### Rancher
 
 - **"cluster … already runs Rancher, with which every cluster registers":** only one cluster may install it; the others register with it. The interface refuses a second one when it is created, with "Rancher: cluster … already runs it, and every cluster registers with that one". A second cluster set to install it with kubectl gets no Rancher and a `RancherRefused` event (`kubectl describe cluster <name>`).
