@@ -733,6 +733,7 @@ until_true 60 "a client in the old mesh reaches the server" fetches e2e-mesh
 wl delete namespace e2e-mesh e2e-plain --wait --timeout=5m
 
 step "the load balancer switched off"
+servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
 set_variable loadBalancer "{\"enabled\":false,\"implementation\":\"${load_balancer}\",\"addresses\":${load_balancer_addresses}}"
 case ${load_balancer} in
     kube-vip)
@@ -746,8 +747,8 @@ if [ "${distribution}" = k3s ]; then
     # Service on every node's own address.
     replaced() {
         kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o json |
-            jq -e --arg old " ${servers} " '(.items | length > 0) and all(.items[];
-                .status.phase == "Running" and (($old | contains(" " + .metadata.name + " ")) | not))' > /dev/null
+            jq -e --arg old " ${servers} " '(.items | length > 0) and all(.items[]; .metadata.name as $name |
+                .status.phase == "Running" and (($old | contains(" " + $name + " ")) | not))' > /dev/null
     }
     until_true 1800 "the control planes replaced" replaced
     kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
