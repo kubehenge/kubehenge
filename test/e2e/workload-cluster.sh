@@ -636,7 +636,21 @@ servers_after=$(server_restarts) || fail "cannot read ${server_unit}'s restarts 
     fail "${server_unit} restarted $((servers_after - servers_before)) times on the control planes while the add-ons were installed"
 pods_after=$(restarts)
 restarted=$(jq -rn --argjson b "${pods_before}" --argjson a "${pods_after}" '$a | to_entries[] | select(.value > ($b[.key] // 0)) | "\(.key) \(.value - ($b[.key] // 0))"')
-[ -z "${restarted}" ] || fail "containers restarted while the add-ons were installed (pod, restarts): ${restarted}"
+if [ -n "${restarted}" ]; then
+    # Why each container ended, and how starved each node has been of CPU, memory and IO over the
+    # last minutes, tell an add-on's fault from nodes too small for them all.
+    echo "the restarted containers' last ends:"
+    wl get pods -A -o json | jq -r '.items[] | .metadata as $m | .status.containerStatuses[]? |
+        select(.restartCount > 0) | .lastState.terminated // {} |
+        "\($m.namespace)/\($m.name): \(.reason // "?") exit \(.exitCode // "?") at \(.finishedAt // "?")"'
+    for m in $(kubectl -n "${ns}" get machines -o jsonpath='{.items[*].metadata.name}'); do
+        echo "pressure on ${m}:"
+        # shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
+        on_machines "${m}" "grep -H . /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io" ||
+            echo "  cannot read it"
+    done
+    fail "containers restarted while the add-ons were installed (pod, restarts): ${restarted}"
+fi
 pod_memory "${work}/workload"
 
 step "every add-on switched off at once"
