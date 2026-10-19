@@ -42,7 +42,7 @@ jobs:
             pull_request) tests=$(git diff --name-only HEAD^1 HEAD | test/e2e/ci/scope.sh) ;;
             merge_group) tests=$(test/e2e/ci/scope.sh --all) ;;
             *) tests='["management-cluster", "management-cluster-upgrade", "appliance", "kubeadm",
-                 "rke2", "k3s", "rancher"]' ;;
+                 "rke2", "k3s", "rancher", "cluster-mesh"]' ;;
           esac
           echo "tests=$(printf '%s' "$tests" | jq -c .)" >> "$GITHUB_OUTPUT"
 

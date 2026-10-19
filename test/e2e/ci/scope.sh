@@ -10,7 +10,7 @@
 # main untested.
 set -eu
 
-all='management-cluster appliance kubeadm rke2 k3s'
+all='management-cluster appliance kubeadm rke2 k3s cluster-mesh'
 workload='kubeadm rke2 k3s'
 need=
 [ "${1:-}" != --all ] || need=${all}
@@ -27,6 +27,7 @@ need=
         *_test.go | */testdata/* | test/integration/*) ;;
         test/e2e/management-cluster-upgrade.sh | test/e2e/rancher.sh) ;;
         test/e2e/workload-cluster.sh) need="${need} ${workload}" ;;
+        test/e2e/cluster-mesh.sh) need="${need} cluster-mesh" ;;
         test/e2e/management-cluster.sh | test/e2e/lib.sh) need="${need} management-cluster" ;;
         *) need="${need} ${all}" ;;
     esac

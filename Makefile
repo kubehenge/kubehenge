@@ -6,7 +6,7 @@ IMAGE ?= ghcr.io/kubehenge/kubehenge
 CAPMOX_IMAGE ?= ghcr.io/kubehenge/cluster-api-provider-proxmox
 KO_FLAGS ?=
 
-.PHONY: build web website dist index image capmox-image lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-templates e2e-volumes e2e-interface e2e-appliance
+.PHONY: build web website dist index image capmox-image lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-templates e2e-volumes e2e-interface e2e-appliance
 .PHONY: fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker unit-go unit-web unit-tofu tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
@@ -220,6 +220,10 @@ e2e-workload-cluster:
 # Against the management cluster in KUBECONFIG; settings in test/e2e/rancher.sh.
 e2e-rancher:
 	test/e2e/rancher.sh
+
+# Against the management cluster in KUBECONFIG; settings in test/e2e/cluster-mesh.sh.
+e2e-cluster-mesh:
+	test/e2e/cluster-mesh.sh
 
 # Settings come from KUBEHENGE_PROXMOX_* and KUBEHENGE_E2E_*; see pkg/templates/e2e_test.go.
 e2e-templates:
