@@ -100,7 +100,7 @@ func TestIstioFindsTheCNIConfiguration(t *testing.T) {
 		t.Errorf("Cilium takes istio-cni's plugin out: %v", with["web-cni"])
 	}
 	_, without := proxySpecs(t, templates.K3s, cilium, &Addons{})
-	if _, ok := without["web-cni"]["cni"]; ok {
+	if cni, ok := without["web-cni"]["cni"].(map[string]any); !ok || cni["exclusive"] != nil {
 		t.Errorf("without Istio, Cilium's CNI settings change: %v", without["web-cni"])
 	}
 }

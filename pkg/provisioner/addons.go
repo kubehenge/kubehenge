@@ -339,17 +339,21 @@ func ciliumValues(cluster *clusterv1.Cluster, id int, addons *Addons, operator m
 	// The agents and the operator read their configuration only when they start: an agent that
 	// started with cni.exclusive goes on taking istio-cni's plugin out after Istio is switched on.
 	operator["rollOutPods"] = true
+	// Without kube-proxy replacement, Cilium serves host ports, Traefik's on every node, only
+	// through the portmap plugin chained behind it, as RKE2 runs its own Cilium.
+	cni := map[string]any{"chainingMode": "portmap"}
 	values := map[string]any{
 		"cluster":           map[string]any{"name": cluster.Name, "id": id},
 		"rollOutCiliumPods": true,
 		"operator":          operator,
+		"cni":               cni,
 	}
 	if addons.ClusterMesh.Enabled {
 		values["clustermesh"] = clusterMeshValues()
 	}
 	if addons.Istio.Enabled {
 		// Cilium would otherwise take istio-cni's plugin out of the node's CNI configuration.
-		values["cni"] = map[string]any{"exclusive": false}
+		cni["exclusive"] = false
 	}
 	return values, nil
 }
