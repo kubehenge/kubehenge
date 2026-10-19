@@ -3,7 +3,8 @@ name: codeql
 
 # CodeQL over every language the repository is written in: the Go of the controller, interface
 # backend and CLI, the TypeScript of the interface and the Proxmox VE entry's JavaScript, and the
-# workflows themselves. The security-and-quality suite, as a check on every pull request.
+# workflows themselves. The security-and-quality suite as .github/codeql-config.yml narrows it, as a
+# check on every pull request.
 on:
   push:
     branches: [main]
@@ -52,7 +53,7 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-          queries: security-and-quality
+          config-file: ./.github/codeql-config.yml
       - uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           category: /language:${{ matrix.language }}
