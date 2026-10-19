@@ -122,6 +122,7 @@ SHFMT_FLAGS := -i 4 -ci -sr
 YAMLLINT := uvx yamllint@1.38.0
 ZIZMOR := uvx zizmor@1.31.1
 MARKDOWNLINT := npx --yes markdownlint-cli2@0.23.3
+GOVULNCHECK := go run golang.org/x/vuln/cmd/govulncheck@v1.9.0
 
 # Rewrites what the format checks below would refuse.
 fmt: web/node_modules/.package-lock.json
@@ -133,10 +134,13 @@ fmt: web/node_modules/.package-lock.json
 
 # For both systems the code builds for: the appliance and images on Linux, the tests also on Windows.
 # Without cgo, as the binary is built, and so that a cross-system check needs no C toolchain.
+# govulncheck fails on a known vulnerability only where the code calls into it, for the system it
+# runs on: GOOS would also build govulncheck itself for another one.
 lint-go: web
 	go mod tidy -diff
 	CGO_ENABLED=0 GOOS=linux golangci-lint run ./...
 	CGO_ENABLED=0 GOOS=windows golangci-lint run ./...
+	$(GOVULNCHECK) ./...
 
 # oxfmt's check, type-aware oxlint and TypeScript's check; the build leaves the types to this step.
 # The Proxmox VE entry's script is plain JavaScript, checked with the interface's tools, and so is

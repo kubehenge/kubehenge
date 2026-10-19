@@ -341,6 +341,7 @@ func TestUnpackStaysInside(t *testing.T) {
 		{Name: "../escape", Typeflag: tar.TypeReg, Size: 0},
 		{Name: "/etc/passwd", Typeflag: tar.TypeReg, Size: 0},
 		{Name: "./share/link", Typeflag: tar.TypeSymlink, Linkname: "/etc"},
+		{Name: "share/../../escape", Typeflag: tar.TypeReg, Size: 0},
 	} {
 		file := filepath.Join(t.TempDir(), "archive.tar.gz")
 		if err := os.WriteFile(file, archive(t, "x", h), 0o600); err != nil {
@@ -350,4 +351,86 @@ func TestUnpackStaysInside(t *testing.T) {
 			t.Errorf("unpacked %s", h.Name)
 		}
 	}
+}
+
+func TestUnpackFollowsNoLinkOut(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the updater runs on Linux")
+	}
+	dir, outside := t.TempDir(), t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(dir, "share")); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "archive.tar.gz")
+	h := &tar.Header{Name: "./share/escape", Typeflag: tar.TypeReg, Size: 0}
+	if err := os.WriteFile(file, archive(t, "x", h), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := unpack(file, dir); err == nil {
+		t.Error("unpacked through a link out of the directory")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "escape")); err == nil {
+		t.Error("wrote outside the directory")
+	}
+}
+
+// Whatever an archive's entry is called and whatever kind it is, unpacking writes nothing beside
+// the directory it unpacks into.
+func FuzzUnpackStaysInside(f *testing.F) {
+	for _, s := range []struct {
+		name string
+		kind byte
+	}{
+		{"./bin/kubehenge", tar.TypeReg},
+		{"./share/kubehenge/", tar.TypeDir},
+		{"../escape", tar.TypeReg},
+		{"share/../../escape", tar.TypeReg},
+		{"/etc/escape", tar.TypeReg},
+		{`..\escape`, tar.TypeReg},
+		{"./share/link", tar.TypeSymlink},
+	} {
+		f.Add(s.name, s.kind, []byte("x"))
+	}
+	f.Fuzz(func(t *testing.T, name string, kind byte, body []byte) {
+		if runtime.GOOS == "windows" {
+			t.Skip("the updater runs on Linux")
+		}
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		tw := tar.NewWriter(gz)
+		h := &tar.Header{Name: name, Typeflag: kind, Mode: 0o755, Size: int64(len(body)), Linkname: "../.."}
+		if kind != tar.TypeReg {
+			h.Size = 0
+		}
+		if tw.WriteHeader(h) != nil {
+			return
+		}
+		if _, err := tw.Write(body[:h.Size]); err != nil {
+			t.Fatal(err)
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := gz.Close(); err != nil {
+			t.Fatal(err)
+		}
+		file := filepath.Join(t.TempDir(), "archive.tar.gz")
+		if err := os.WriteFile(file, buf.Bytes(), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		parent := t.TempDir()
+		dir := filepath.Join(parent, "dir")
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		_ = unpack(file, dir)
+		entries, err := os.ReadDir(parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("unpacking %q (type %q) wrote beside its directory: %v", name, kind, entries)
+		}
+	})
 }

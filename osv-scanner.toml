@@ -1,0 +1,6 @@
+# Advisories that name a whole module where this module uses none of the affected code. govulncheck
+# (make lint) still fails on any advisory the code reaches.
+
+[[IgnoredVulns]]
+id = "GO-2026-5932"
+reason = "Names golang.org/x/crypto/openpgp, with no fixed version. Nothing imports it: the templates verify signatures with github.com/ProtonMail/go-crypto/openpgp, which requires golang.org/x/crypto for other packages."

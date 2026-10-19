@@ -8,11 +8,11 @@ import (
 	"testing"
 )
 
-func signedIndex(t *testing.T, versions ...string) ([]byte, string, ed25519.PublicKey) {
-	t.Helper()
+func signedIndex(tb testing.TB, versions ...string) ([]byte, string, ed25519.PublicKey) {
+	tb.Helper()
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	var ix Index
 	for _, v := range versions {
@@ -20,16 +20,16 @@ func signedIndex(t *testing.T, versions ...string) ([]byte, string, ed25519.Publ
 	}
 	raw, err := json.Marshal(ix)
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	return raw, Sign(raw, priv), pub
 }
 
-func newKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
-	t.Helper()
+func newKey(tb testing.TB) (ed25519.PublicKey, ed25519.PrivateKey) {
+	tb.Helper()
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	return pub, priv
 }
@@ -139,4 +139,63 @@ func TestFindNeverGoesBack(t *testing.T) {
 			t.Errorf("Find(%s, %s) succeeded", c[0], c[1])
 		}
 	}
+}
+
+func FuzzParseVersion(f *testing.F) {
+	for _, s := range []string{"1.2.3", "v0.10.0", "1.2", "01.2.3", "-1.2.3", "1.2.3-rc.1", "v", "1..3"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		v, err := ParseVersion(s)
+		if err != nil {
+			return
+		}
+		if v.String() != strings.TrimPrefix(s, "v") {
+			t.Fatalf("ParseVersion(%q) = %s", s, v)
+		}
+		if again, err := ParseVersion(v.String()); err != nil || again != v {
+			t.Fatalf("ParseVersion(%q) = %+v, %v", v.String(), again, err)
+		}
+	})
+}
+
+// The index is signed before it is read, so this reads what a release key could sign: whatever
+// Parse accepts holds only valid releases, survives a round trip, and the upgrade choices take it.
+func FuzzParse(f *testing.F) {
+	pub, priv := newKey(f)
+	raw, _, _ := signedIndex(f, "0.1.0", "0.2.0")
+	f.Add(raw)
+	f.Add([]byte(`{"releases":[{"version":"1.0.0","url":"https://example.org/a","sha256":"` +
+		strings.Repeat("0", 64) + `","tofu":{"version":"1.11.0","url":"https://example.org/t","sha256":"` +
+		strings.Repeat("f", 64) + `"}}]}`))
+	f.Add([]byte(`{"releases":[{"version":"1.0","url":"http://example.org/a","sha256":"x"}]}`))
+	f.Add([]byte(`{"releases":null}`))
+	f.Fuzz(func(t *testing.T, index []byte) {
+		ix, err := Parse(index, Sign(index, priv), pub)
+		if err != nil {
+			return
+		}
+		for _, r := range ix.Releases {
+			if verr := r.validate(); verr != nil {
+				t.Fatalf("accepted %+v: %v", r, verr)
+			}
+		}
+		out, err := ix.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		again, err := Parse(out, Sign(out, priv), pub)
+		if err != nil || len(again.Releases) != len(ix.Releases) {
+			t.Fatalf("round trip: %+v, %v", again, err)
+		}
+		for _, current := range []string{"0.0.0", "1.2.3", "dev"} {
+			for _, p := range []Policy{PolicyOff, PolicyPatch, PolicyMinor} {
+				if r := ix.Newest(current, p); r != nil {
+					if _, err := ix.Find(current, r.Version); err != nil {
+						t.Fatalf("Newest(%s, %s) offered %s, which Find refuses: %v", current, p, r.Version, err)
+					}
+				}
+			}
+		}
+	})
 }
