@@ -143,6 +143,8 @@ printf '%s' "${agent}" |
     fail "the agent does not pin Rancher's CA"
 echo "memory with Rancher's agents:"
 pod_memory "${work}/downstream"
+echo "memory with Rancher, a cluster registered:"
+pod_memory "${work}/rancher"
 
 step "the k3s cluster leaves Rancher, which cleans up inside it, and comes back"
 set_variable downstream rancher '{"register":false}'

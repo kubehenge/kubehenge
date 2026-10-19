@@ -118,6 +118,113 @@ export function controlPlaneMinimums(c: ClusterClass | undefined, workers: numbe
   };
 }
 
+// The add-ons by their keys in a class's kubehenge.dev/addon-memory figures, as people know them.
+const addonNames = [
+  ["headlamp", "Headlamp"],
+  ["monitoring", "monitoring"],
+  ["kyverno", "Kyverno"],
+  ["certManager", "cert-manager"],
+  ["rancher", "Rancher"],
+  ["rancherAgent", "Rancher's agent"],
+] as const;
+
+// classFigures reads one of a class's annotations of memory figures: kubehenge.dev/addon-memory by
+// add-on, or kubehenge.dev/node-memory, what a controlPlane or worker uses itself.
+function classFigures(c: ClusterClass | undefined, annotation: string): Record<string, unknown> {
+  try {
+    return record(JSON.parse(c?.annotations?.[annotation] ?? "{}"));
+  } catch {
+    // The controller refuses clusters of such a class with the reason.
+    return {};
+  }
+}
+
+/**
+ * addonMemory is the memory, in MiB, the add-ons a form chooses use by its class's figures, and
+ * which they are. Rancher's agent counts wherever the cluster would register, as the controller
+ * counts it: once a cluster installs Rancher, every other one registers with it.
+ */
+export function addonMemory(form: Form, c: ClusterClass | undefined): { names: string[]; mib: number } {
+  const figures = classFigures(c, "kubehenge.dev/addon-memory");
+  const on: Record<(typeof addonNames)[number][0], boolean> = {
+    headlamp: form.headlamp,
+    monitoring: form.monitoring,
+    kyverno: form.podSecurity.kyverno !== "off",
+    certManager: form.monitoring || form.rancherInstall,
+    rancher: form.rancherInstall,
+    rancherAgent: !form.rancherInstall && form.rancherRegister,
+  };
+  const names: string[] = [];
+  let mib = 0;
+  for (const [key, name] of addonNames) {
+    const figure = quantity(figures[key]) ?? 0;
+    if (on[key] && figure > 0) {
+      names.push(name);
+      mib += figure;
+    }
+  }
+  return { names, mib };
+}
+
+const plainLeast = (form: Form, c: ClusterClass | undefined, key: "controlPlaneMachine" | "workerMachine"): Machine =>
+  key === "controlPlaneMachine" ? controlPlaneMinimums(c, form.workerReplicas) : machineMinimums(c, key);
+
+// carries says whether a form's machines of one kind run its add-ons: the workers, or without
+// workers the control planes.
+const carries = (form: Form, key: "controlPlaneMachine" | "workerMachine"): boolean =>
+  (key === "workerMachine") === form.workerReplicas > 0;
+
+/**
+ * addonNeedMiB is the memory each node that carries a form's add-ons needs for them, as the
+ * controller asks: what such a node uses itself, by its class, and its share of the add-ons'.
+ * Without add-ons it is 0.
+ */
+export function addonNeedMiB(form: Form, c: ClusterClass | undefined): number {
+  const key = form.workerReplicas > 0 ? "workerMachine" : "controlPlaneMachine";
+  const nodes = key === "workerMachine" ? form.workerReplicas : form.controlPlaneReplicas;
+  const { mib } = addonMemory(form, c);
+  if (mib === 0 || nodes <= 0) {
+    return 0;
+  }
+  const own =
+    quantity(classFigures(c, "kubehenge.dev/node-memory")[key === "workerMachine" ? "worker" : "controlPlane"]) ??
+    plainLeast(form, c, key).memoryMiB;
+  return own + Math.ceil(mib / nodes / memoryStepMiB) * memoryStepMiB;
+}
+
+/**
+ * machineLeast is the least a form lets its machines of one kind have: the class's, or for the nodes
+ * that carry the add-ons what those need, whichever is more.
+ */
+export function machineLeast(
+  form: Form,
+  c: ClusterClass | undefined,
+  key: "controlPlaneMachine" | "workerMachine",
+): Machine {
+  const min = plainLeast(form, c, key);
+  return carries(form, key) ? { ...min, memoryMiB: Math.max(min.memoryMiB, addonNeedMiB(form, c)) } : min;
+}
+
+/**
+ * withRoom raises a form's machines to the least its other choices ask of them: control planes that
+ * run the workloads without workers, the add-ons' memory and Rancher's cores. It lowers nothing.
+ */
+export function withRoom(form: Form, c: ClusterClass | undefined): Form {
+  const raised = { ...form };
+  for (const key of ["controlPlaneMachine", "workerMachine"] as const) {
+    const least = machineLeast(form, c, key);
+    const rancher =
+      form.rancherInstall && (key === "controlPlaneMachine" || form.workerReplicas > 0) ? rancherMinimumCores : 0;
+    const m = form[key];
+    raised[key] = {
+      ...m,
+      cores: Math.max(m.cores, least.cores, rancher),
+      memoryMiB: Math.max(m.memoryMiB, least.memoryMiB),
+    };
+  }
+  return raised;
+}
+
 /** newForm is the wizard before anything is chosen. */
 export const newForm = (): Form => ({
   name: "",
@@ -455,9 +562,13 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
     ["controlPlaneMachine", form.controlPlaneMachine],
     ["workerMachine", form.workerMachine],
   ] as const) {
-    const min = key === "controlPlaneMachine" ? controlPlaneMinimums(c, form.workerReplicas) : machineMinimums(c, key);
+    const min = machineLeast(form, c, key);
     const alone =
       key === "controlPlaneMachine" && form.workerReplicas === 0 ? " Without workers, they run the workloads too." : "";
+    const addons =
+      min.memoryMiB > plainLeast(form, c, key).memoryMiB
+        ? ` The add-ons chosen need that much: ${addonMemory(form, c).mib} MiB, shared by the ${key === "workerMachine" ? "workers" : "control planes"}.`
+        : "";
     if (!whole(m.cores, min.cores)) {
       p[key] = `A whole number of cores, at least ${min.cores}.${alone}`;
     } else if (
@@ -467,7 +578,7 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
     ) {
       p[key] = `At least ${rancherMinimumCores} cores, which Rancher needs on every node.`;
     } else if (!whole(m.memoryMiB, min.memoryMiB) || m.memoryMiB % memoryStepMiB !== 0) {
-      p[key] = `Memory of at least ${min.memoryMiB} MiB, in steps of ${memoryStepMiB}.${alone}`;
+      p[key] = `Memory of at least ${min.memoryMiB} MiB, in steps of ${memoryStepMiB}.${alone}${addons}`;
     } else if (!whole(m.diskGiB, min.diskGiB)) {
       p[key] = `A whole number of GiB of disk, at least ${min.diskGiB}.`;
     }

@@ -19,7 +19,8 @@
 #   KUBEHENGE_E2E_PREFIX, KUBEHENGE_E2E_GATEWAY, KUBEHENGE_E2E_DNS (comma-separated),
 #   KUBEHENGE_E2E_ENDPOINT (the control plane's virtual IP), KUBEHENGE_E2E_STORAGE.
 # KUBEHENGE_E2E_CONTROL_PLANE_MEMORY and KUBEHENGE_E2E_WORKER_MEMORY (MiB) and
-# KUBEHENGE_E2E_CONTROL_PLANE_CORES size the nodes.
+# KUBEHENGE_E2E_CONTROL_PLANE_CORES size the nodes; the worker's memory is by default the least
+# the class lets it have with the add-ons.
 # KUBEHENGE_E2E_CNI chooses the CNI (required by kubeadm). KUBEHENGE_E2E_PODS and
 # KUBEHENGE_E2E_SERVICES set the cluster's pod and service ranges, which must not overlap the nodes'
 # network; unset, the distribution's defaults apply.
@@ -174,6 +175,17 @@ if [ -n "${KUBEHENGE_E2E_CNI:-}" ]; then
     cni_variable=$(printf '      - name: cni\n        value: %s\n' "${KUBEHENGE_E2E_CNI}")
 fi
 oidc=$(jq -cn --arg i "${issuer}" --rawfile ca "${work}/ca.crt" '[{issuerURL: $i, clientID: "kubehenge-e2e", certificateAuthority: $ca}]')
+class_json=$(kubectl -n kubehenge-system get clusterclass "${class}" -o json)
+# Unless set, the worker gets the least Kubehenge lets it have with every add-on but Rancher on, so
+# that the add-ons are seen to fit in it: its distribution's least, or what a worker uses itself
+# and every add-on's figure, whichever is more.
+worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq -r '
+    (.metadata.annotations["kubehenge.dev/addon-memory"] | fromjson) as $addon
+    | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
+    | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
+        $node.worker + $addon.headlamp + $addon.monitoring + $addon.kyverno + $addon.certManager + $addon.rancherAgent]
+    | max')}
+echo "workers with ${worker_memory} MiB of memory"
 cat > "${work}/cluster.yaml" << EOF
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
@@ -209,7 +221,7 @@ ${network_spec}
       - name: controlPlaneMachine
         value: {memoryMiB: ${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-4096}, cores: ${KUBEHENGE_E2E_CONTROL_PLANE_CORES:-2}}
       - name: workerMachine
-        value: {memoryMiB: ${KUBEHENGE_E2E_WORKER_MEMORY:-4096}}
+        value: {memoryMiB: ${worker_memory}}
 ${cni_variable}
       - name: oidc
         value: ${oidc}
@@ -261,7 +273,6 @@ check_sign_in
 
 step "the cluster uses its pod and service ranges"
 # The Cluster's own, or else the class's defaults, as Kubehenge's controller reads them.
-class_json=$(kubectl -n kubehenge-system get clusterclass "${class}" -o json)
 ranges=$(kubectl -n "${ns}" get "cluster/${name}" -o json | jq -c --argjson class "${class_json}" '{
     pods: (.spec.clusterNetwork.pods.cidrBlocks // [$class.metadata.annotations["kubehenge.dev/default-pods"]]),
     services: (.spec.clusterNetwork.services.cidrBlocks // [$class.metadata.annotations["kubehenge.dev/default-services"]])}')

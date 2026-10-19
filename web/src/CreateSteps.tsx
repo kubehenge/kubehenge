@@ -2,8 +2,7 @@ import type { JSX } from "react";
 
 import { controlPlaneSizes, maxWorkers } from "./ClusterDetail";
 import {
-  controlPlaneMinimums,
-  machineMinimums,
+  machineLeast,
   memoryStepMiB,
   variable,
   versionExamples,
@@ -96,7 +95,7 @@ export function GeneralStep({
   offered: Versions | undefined;
   onChooseClass: (name: string) => void;
 }): JSX.Element {
-  const alone = controlPlaneMinimums(cls, 0);
+  const alone = machineLeast({ ...form, workerReplicas: 0 }, cls, "controlPlaneMachine");
   return (
     <>
       <Field label="Name" hint="Also names its Proxmox VE pool and VMs." error={shown("name")}>
@@ -152,18 +151,7 @@ export function GeneralStep({
             min={0}
             max={maxWorkers}
             value={shownNumber(form.workerReplicas)}
-            onChange={(e) => {
-              const workers = typedNumber(e.target.value);
-              set("workerReplicas", workers);
-              const m = form.controlPlaneMachine;
-              if (workers === 0 && (m.cores < alone.cores || m.memoryMiB < alone.memoryMiB)) {
-                set("controlPlaneMachine", {
-                  ...m,
-                  cores: Math.max(m.cores, alone.cores),
-                  memoryMiB: Math.max(m.memoryMiB, alone.memoryMiB),
-                });
-              }
-            }}
+            onChange={(e) => set("workerReplicas", typedNumber(e.target.value))}
           />
         )}
       </Field>
@@ -355,14 +343,14 @@ export function MachinesStep({
       <MachineFields
         label="Control plane"
         value={form.controlPlaneMachine}
-        min={controlPlaneMinimums(cls, form.workerReplicas)}
+        min={machineLeast(form, cls, "controlPlaneMachine")}
         error={shown("controlPlaneMachine")}
         onChange={(m) => set("controlPlaneMachine", m)}
       />
       <MachineFields
         label="Workers"
         value={form.workerMachine}
-        min={machineMinimums(cls, "workerMachine")}
+        min={machineLeast(form, cls, "workerMachine")}
         error={shown("workerMachine")}
         onChange={(m) => set("workerMachine", m)}
       />
@@ -414,7 +402,7 @@ function MachineFields({
   onChange: (m: Machine) => void;
 }): JSX.Element {
   // fieldProblems names the first of cores, memory and disk that is wrong.
-  const on = (part: string): string | undefined => (error?.includes(part) === true ? error : undefined);
+  const on = (part: string): string | undefined => (error?.toLowerCase().includes(part) === true ? error : undefined);
   return (
     <fieldset className="group">
       <legend>{label}</legend>

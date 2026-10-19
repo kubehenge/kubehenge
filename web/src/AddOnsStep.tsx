@@ -1,7 +1,7 @@
 import type { JSX } from "react";
 
 import { modeChoices, upgradeModes } from "./ClusterUpgrades";
-import { rancherMinimumCores, variable } from "./create-form";
+import { addonMemory, machineLeast, rancherMinimumCores, variable } from "./create-form";
 import type { StepProps } from "./CreateSteps";
 import { PodSecurityFields, cisHint } from "./PodSecurity";
 import type { ClusterClass } from "./types";
@@ -15,6 +15,8 @@ export function AddOnsStep({
   cls,
   canTrust,
 }: StepProps & { cls: ClusterClass | undefined; canTrust: boolean | undefined }): JSX.Element {
+  const used = addonMemory(form, cls);
+  const carrier = form.workerReplicas > 0 ? "workerMachine" : "controlPlaneMachine";
   return (
     <>
       <label className="check">
@@ -102,17 +104,7 @@ export function AddOnsStep({
           checked={form.rancherInstall}
           disabled={canTrust === false && !form.rancherInstall}
           aria-describedby="rancher-hint"
-          onChange={(e) => {
-            set("rancherInstall", e.target.checked);
-            if (!e.target.checked) {
-              return;
-            }
-            for (const key of ["controlPlaneMachine", "workerMachine"] as const) {
-              if (form[key].cores < rancherMinimumCores) {
-                set(key, { ...form[key], cores: rancherMinimumCores });
-              }
-            }
-          }}
+          onChange={(e) => set("rancherInstall", e.target.checked)}
         />{" "}
         Install Rancher
       </label>
@@ -152,6 +144,13 @@ export function AddOnsStep({
             {registerHint}
           </p>
         </>
+      )}
+      {used.mib > 0 && (
+        <p className="hint" id="addon-memory">
+          The add-ons chosen use about {used.mib} MiB of memory ({used.names.join(", ")}), so each{" "}
+          {form.workerReplicas > 0 ? "worker" : "control plane"} has at least{" "}
+          {machineLeast(form, cls, carrier).memoryMiB} MiB.
+        </p>
       )}
       {variable(cls, "upgrades") && (
         <Field

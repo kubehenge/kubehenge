@@ -13,7 +13,8 @@ import (
 
 // ClusterValidator answers the API server for Kubehenge's clusters as they are created and changed,
 // so that what BeforeClusterCreate would refuse later is refused at once, and a change made after
-// creation is held to the same: control planes too small for the cluster's workers, Rancher switched
+// creation is held to the same: control planes too small for the cluster's workers, nodes without
+// the memory its add-ons use, Rancher switched
 // on beside another, or on nodes too small for it, and a Rancher cluster's nodes made smaller than it
 // needs. A cluster that already fell short before a change is not held to it for unrelated edits.
 type ClusterValidator struct {
@@ -56,6 +57,9 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 	var errs field.ErrorList
 	topology := field.NewPath("spec", "topology")
 	if err := checkControlPlaneSize(old, c, class); err != nil {
+		errs = append(errs, field.Forbidden(topology, err.Error()))
+	}
+	if err := checkAddonRoom(old, c, class); err != nil {
 		errs = append(errs, field.Forbidden(topology, err.Error()))
 	}
 	if r.Install {

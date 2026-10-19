@@ -171,6 +171,10 @@ A message saying "the pod range … overlaps the nodes' network …" (or the ser
 
 A message saying "the control planes of a cluster with … workers need at least …": the cluster has more workers than its control planes' size carries, by its distribution's sizing guide ([clusters.md](clusters.md#machines)). Give the control planes the cores and memory the message names (`controlPlaneMachine`, or the control plane's override), or keep fewer workers. "The control planes of a cluster without workers run its workloads too and need at least …": with no workers, or every worker pool scaled to 0, the control planes need a worker's least on top of their own; give them that, or keep a worker. A cluster that already fell short, after an upgrade of Kubehenge asked for more, can still be changed in other ways; only more workers or smaller control planes are refused.
 
+### Not enough memory for the add-ons
+
+A message saying "the cluster's add-ons (…) need … MiB of memory on its workers, beyond the … MiB a worker uses itself": the workers together lack the memory the add-ons named take ([clusters.md](clusters.md#machines)). Give the workers more memory (`workerMachine`, or a worker pool's override), add workers, or leave an add-on off. Rancher's agent counts in every cluster that registers with Rancher; set `rancher` to `{register: false}` for a cluster that never will. "… on its control planes, which run them without workers …": the same for the control planes of a cluster without workers. A cluster that already fell short, after an upgrade of Kubehenge asked for more, can still be changed in other ways; only changes that leave it shorter are refused.
+
 ### Rancher
 
 - **"cluster … already runs Rancher, with which every cluster registers":** only one cluster may install it; the others register with it. The interface refuses a second one when it is created, with "Rancher: cluster … already runs it, and every cluster registers with that one". A second cluster set to install it with kubectl gets no Rancher and a `RancherRefused` event (`kubectl describe cluster <name>`).

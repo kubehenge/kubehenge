@@ -184,6 +184,17 @@ never below its distribution's documented minimum for a node.
 {{- end -}}
 
 {{/*
+The memory, in MiB, each add-on's pods use in a cluster, the same for every distribution: the
+end-to-end tests' working sets once every add-on has started, with room to grow. Monitoring is
+Prometheus, Alertmanager, Grafana, node-exporter and the metrics proxies, at 1.5 GiB as Prometheus
+grows while it fills its first two-hour block; Rancher is measured as it first answers, before
+Fleet and its webhook start.
+*/}}
+{{- define "kubehenge.addonMemory" -}}
+kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"kyverno":384,"certManager":192,"rancher":2048,"rancherAgent":512}'
+{{- end -}}
+
+{{/*
 Add-ons Kubehenge's controller installs into a cluster, the same for every distribution.
 */}}
 {{- define "kubehenge.addonVariables" -}}

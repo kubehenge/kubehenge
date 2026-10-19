@@ -175,12 +175,11 @@ templates_made
 # Nested vCPUs cost no memory, and with two an RKE2 control plane stopped answering its own lease
 # renewals while everything started.
 export KUBEHENGE_E2E_CONTROL_PLANE_CORES=4
-# The classes' least memory, so that every add-on is seen to fit in it. The worker runs monitoring's
-# Prometheus, Alertmanager and Grafana once the control plane is tainted.
-export KUBEHENGE_E2E_CONTROL_PLANE_MEMORY=4096 KUBEHENGE_E2E_WORKER_MEMORY=2048
+# The control planes' least memory, so that every add-on is seen to fit in it; the workers get
+# theirs with the add-ons from the test itself.
+export KUBEHENGE_E2E_CONTROL_PLANE_MEMORY=4096
 case "${test}" in
     rke2)
-        export KUBEHENGE_E2E_WORKER_MEMORY=4096
         e2e e2e-workload-cluster CLASS=kubehenge-rke2 VERSION="${from}+rke2r1" UPGRADE="${to}+rke2r1"
         ;;
     k3s)

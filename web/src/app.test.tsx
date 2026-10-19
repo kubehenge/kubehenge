@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { noAnswer } from "./api";
 import { App } from "./App";
 import { ClusterList } from "./ClusterList";
-import { fieldProblems, problems, request, summary, type Form } from "./create-form";
+import { addonMemory, fieldProblems, problems, request, summary, withRoom, type Form } from "./create-form";
 import { fakeServer, held, reads, type Route } from "./fake-server";
 import { addressCount } from "./network";
 import type { Cluster, ClusterClass, Machine } from "./types";
@@ -710,6 +710,59 @@ describe("create", () => {
       ),
     ).toStrictEqual({});
     expect(fieldProblems("Machines", { ...form, controlPlaneMachine: { ...four, cores: 2 } }, rke2)).toStrictEqual({});
+  });
+
+  it("gives the nodes that carry the add-ons room for them", () => {
+    const addons =
+      '{"headlamp":50,"monitoring":6000,"kyverno":300,"certManager":100,"rancher":1500,"rancherAgent":250}';
+    const figured: ClusterClass = {
+      ...rke2,
+      annotations: {
+        "kubehenge.dev/addon-memory": addons,
+        "kubehenge.dev/node-memory": '{"controlPlane":4800,"worker":640}',
+      },
+    };
+    expect(addonMemory(form, figured)).toStrictEqual({ names: ["Headlamp", "monitoring", "cert-manager"], mib: 6150 });
+    expect(addonMemory({ ...form, rancherRegister: true }, figured).mib).toBe(6400);
+    expect(
+      addonMemory(
+        { ...form, rancherInstall: true, podSecurity: { admission: "privileged", kyverno: "baseline" } },
+        figured,
+      ).names,
+    ).toStrictEqual(["Headlamp", "monitoring", "Kyverno", "cert-manager", "Rancher"]);
+    expect(addonMemory(form, rke2).mib).toBe(0);
+    // A worker needs the class's least, or what it uses itself and its share of the add-ons in
+    // Proxmox VE's steps, whichever is more: two least workers hold them, one does not.
+    const least = { cores: 4, memoryMiB: 4096, diskGiB: 40 };
+    expect(fieldProblems("Machines", { ...form, workerMachine: least }, figured)).toStrictEqual({});
+    const one = { ...form, workerReplicas: 1, workerMachine: least };
+    expect(fieldProblems("Machines", one, figured)).toStrictEqual({
+      workerMachine:
+        "Memory of at least 6792 MiB, in steps of 8. The add-ons chosen need that much: 6150 MiB, shared by the workers.",
+    });
+    expect(fieldProblems("Machines", one, rke2)).toStrictEqual({});
+    expect(withRoom(one, figured).workerMachine).toStrictEqual({ ...least, memoryMiB: 6792 });
+    expect(withRoom(form, figured)).toStrictEqual(form);
+    // A class that says nothing of its nodes' own use counts its least for it.
+    const unmeasured: ClusterClass = { ...figured, annotations: { "kubehenge.dev/addon-memory": addons } };
+    expect(fieldProblems("Machines", one, unmeasured).workerMachine).toMatch(/^Memory of at least 10248 MiB/u);
+    // Without workers the control planes carry them.
+    const alone = {
+      ...form,
+      workerReplicas: 0,
+      controlPlaneReplicas: 1,
+      controlPlaneMachine: { cores: 4, memoryMiB: 8192, diskGiB: 30 },
+    };
+    expect(fieldProblems("Machines", alone, figured)).toStrictEqual({
+      controlPlaneMachine:
+        "Memory of at least 10952 MiB, in steps of 8. Without workers, they run the workloads too. The add-ons chosen need that much: 6150 MiB, shared by the control planes.",
+    });
+    expect(
+      withRoom({ ...alone, controlPlaneMachine: { cores: 2, memoryMiB: 4096, diskGiB: 30 } }, figured),
+    ).toMatchObject({
+      controlPlaneMachine: { cores: 4, memoryMiB: 10_952 },
+      workerMachine: form.workerMachine,
+    });
   });
 
   it("says why the sign-in page is back, what a lost connection means, and who may create", async () => {
