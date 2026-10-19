@@ -13,6 +13,11 @@ import type { Cluster, ClusterClass, Machine } from "./types";
 const rke2: ClusterClass = {
   name: "kubehenge-rke2",
   distribution: "rke2",
+  annotations: {
+    "kubehenge.dev/addon-memory":
+      '{"headlamp":64,"monitoring":1536,"kyverno":384,"certManager":192,"rancher":2048,"rancherAgent":512}',
+    "kubehenge.dev/node-memory": '{"controlPlane":2368,"worker":640}',
+  },
   versionFormat: { pattern: "^v1\\.\\d+\\.\\d+\\+rke2r\\d+$" },
   variables: [
     { name: "controlPlaneEndpoint", required: true, schema: { type: "string" } },
@@ -730,7 +735,8 @@ describe("create", () => {
         figured,
       ).names,
     ).toStrictEqual(["Headlamp", "monitoring", "Kyverno", "cert-manager", "Rancher"]);
-    expect(addonMemory(form, rke2).mib).toBe(0);
+    const plain: ClusterClass = { ...rke2, annotations: {} };
+    expect(addonMemory(form, plain).mib).toBe(0);
     // A worker needs the class's least, or what it uses itself and its share of the add-ons in
     // Proxmox VE's steps, whichever is more: two least workers hold them, one does not.
     const least = { cores: 4, memoryMiB: 4096, diskGiB: 40 };
@@ -740,7 +746,7 @@ describe("create", () => {
       workerMachine:
         "Memory of at least 6792 MiB, in steps of 8. The add-ons chosen need that much: 6150 MiB, shared by the workers.",
     });
-    expect(fieldProblems("Machines", one, rke2)).toStrictEqual({});
+    expect(fieldProblems("Machines", one, plain)).toStrictEqual({});
     expect(withRoom(one, figured).workerMachine).toStrictEqual({ ...least, memoryMiB: 6792 });
     expect(withRoom(form, figured)).toStrictEqual(form);
     // A class that says nothing of its nodes' own use counts its least for it.
@@ -884,9 +890,18 @@ describe("create", () => {
     await user.type(cores, "4");
     expect(cores).toHaveValue(4);
     await user.click(screen.getByRole("button", { name: "Next" }));
+    // The add-ons' memory shows as they are chosen; Rancher's agent counts while the cluster registers.
+    expect(
+      screen.getByText(
+        /^The add-ons chosen use about 512 MiB of memory \(Rancher's agent\), so each worker has at least 4096/u,
+      ),
+    ).toBeInTheDocument();
     // Rancher raises the machines to the cores it needs, and they stay raised once it is unticked.
     await user.click(screen.getByRole("checkbox", { name: /Install Rancher/u }));
     expect(screen.getByText(/Rancher needs at least 4 cores on every node/u)).toBeInTheDocument();
+    expect(
+      screen.getByText(/^The add-ons chosen use about 2240 MiB of memory \(cert-manager, Rancher\)/u),
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("checkbox", { name: /Install Rancher/u }));
     await user.click(screen.getByRole("button", { name: "Machines" }));
     expect(within(screen.getByRole("group", { name: "Control plane" })).getByLabelText("Cores")).toHaveValue(4);
