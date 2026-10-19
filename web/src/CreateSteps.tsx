@@ -15,7 +15,7 @@ import { addressBits } from "./network";
 import { OIDCProviders } from "./OIDCProviders";
 import { HAField, PlacementFields, type HARulesRead } from "./Placement";
 import type { Bridge, ClusterClass, PveNode, Storage, Versions } from "./types";
-import { Field, bytes, distributionName, filled, sentence } from "./ui";
+import { Field, bytes, cniName, distributionName, filled, sentence } from "./ui";
 
 // Number fields keep an empty or unfinished entry as NaN, which the checks refuse, rather than
 // turning it into 0 under the cursor.
@@ -253,7 +253,7 @@ export function NetworkStep({
               </option>
               {(cni.enum ?? []).map((v) => (
                 <option key={String(v)} value={String(v)}>
-                  {String(v)}
+                  {cniName(String(v))}
                 </option>
               ))}
             </select>

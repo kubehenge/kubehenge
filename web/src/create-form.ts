@@ -12,7 +12,7 @@ import {
   type PodSecurity,
 } from "./PodSecurity";
 import type { Bridge, ClusterClass, CreateRequest, OIDCProvider, Schema, Storage } from "./types";
-import { browserZone, distributionName, filled, istioText, registeredWithRancher, sentence } from "./ui";
+import { browserZone, cniName, distributionName, filled, istioText, registeredWithRancher, sentence } from "./ui";
 import { quantity, record, texts } from "./values";
 
 export const steps = ["General", "Network", "Machines", "Add-ons", "Identity providers", "Confirm"] as const;
@@ -432,7 +432,7 @@ export function summary(form: Form, c: ClusterClass, haOffered = false): [string
     rows.push(["Worker machines", machine(form.workerMachine)]);
   }
   if (defined.has("cni")) {
-    rows.push(["Pod network", form.cni || "The distribution's own"]);
+    rows.push(["Pod network", cniName(form.cni) || "The distribution's own"]);
   }
   rows.push(...addOnRows(form, defined));
   if (defined.has("upgrades")) {

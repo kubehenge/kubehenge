@@ -21,6 +21,7 @@ import {
   Dialog,
   ErrorBox,
   Field,
+  cniName,
   errorMessage,
   filled,
   istioHint,
@@ -132,7 +133,7 @@ export function Options({
   const cis = c.variables["cis"] === true;
   const podSecurity = enforced(podSecurityOf(c.variables["podSecurity"]), cis);
   const rows: { label: string; value: string; action?: OptionAction; button?: string; name?: string }[] = [
-    { label: "Pod network", value: text(c.variables["cni"]) ?? "The distribution's own" },
+    { label: "Pod network", value: cniName(text(c.variables["cni"]) ?? "") || "The distribution's own" },
     { label: "CIS hardening", value: cisText(cis) },
     {
       label: "Placement",

@@ -591,6 +591,7 @@ describe("create", () => {
     const alone = Object.fromEntries(summary({ ...form, workerReplicas: 0, cni: "canal" }, rke2));
     expect(alone).not.toHaveProperty("Worker machines");
     expect(alone["Pod range"]).toBe("Chosen clear of the nodes' network");
+    expect(alone["Pod network"]).toBe("Canal");
     expect(
       Object.fromEntries(
         summary({ ...form, cis: true, podSecurity: { admission: "baseline", kyverno: "restricted" } }, rke2),

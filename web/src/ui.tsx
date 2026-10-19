@@ -40,6 +40,11 @@ const distributionNames: Record<string, string> = { rke2: "RKE2", k3s: "k3s", ku
 /** distributionName is how a distribution is written for people: RKE2, k3s, kubeadm. */
 export const distributionName = (d: string): string => distributionNames[d] ?? d;
 
+const cniNames: Record<string, string> = { cilium: "Cilium", calico: "Calico", canal: "Canal", flannel: "Flannel" };
+
+/** cniName is how a pod network is written for people: Cilium, Calico, Canal, Flannel. */
+export const cniName = (n: string): string => cniNames[n] ?? n;
+
 // The controller registers a cluster with the Rancher another of its clusters runs, as soon as
 // one does.
 export const registerHint = "With the Rancher one of Kubehenge's other clusters runs, now or once one does.";
