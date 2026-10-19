@@ -316,12 +316,19 @@ func calicoResources(cluster *clusterv1.Cluster, cni CNI) (*corev1.Secret, error
 
 // ciliumValues are what Kubehenge sets in Cilium's chart, its own or the distribution's. The
 // cluster's name and id are Cilium's from the start: a cluster that joins a mesh later would
-// otherwise have to restart every workload.
-func ciliumValues(cluster *clusterv1.Cluster, id int, addons *Addons) (map[string]any, error) {
+// otherwise have to restart every workload. operator holds the operator's own values.
+func ciliumValues(cluster *clusterv1.Cluster, id int, addons *Addons, operator map[string]any) (map[string]any, error) {
 	if len(cluster.Name) > MaxCiliumClusterName {
 		return nil, fmt.Errorf("cluster %s/%s: Cilium takes cluster names of at most %d characters", cluster.Namespace, cluster.Name, MaxCiliumClusterName)
 	}
-	values := map[string]any{"cluster": map[string]any{"name": cluster.Name, "id": id}}
+	// The agents and the operator read their configuration only when they start: an agent that
+	// started with cni.exclusive goes on taking istio-cni's plugin out after Istio is switched on.
+	operator["rollOutPods"] = true
+	values := map[string]any{
+		"cluster":           map[string]any{"name": cluster.Name, "id": id},
+		"rollOutCiliumPods": true,
+		"operator":          operator,
+	}
 	if addons.ClusterMesh.Enabled {
 		values["clustermesh"] = clusterMeshValues()
 	}
@@ -340,7 +347,7 @@ func rke2CiliumName(cluster *clusterv1.Cluster) string {
 // helm-controller merges Kubehenge's values into RKE2's own Cilium chart. A change reaches the
 // running cluster, where a file on the nodes would reach only those created after it.
 func rke2CiliumConfig(cluster *clusterv1.Cluster, id int, addons *Addons) (*corev1.Secret, error) {
-	values, err := ciliumValues(cluster, id, addons)
+	values, err := ciliumValues(cluster, id, addons, map[string]any{})
 	if err != nil {
 		return nil, err
 	}
@@ -511,12 +518,11 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 		if err != nil {
 			return nil, err
 		}
-		values, err := ciliumValues(cluster, cni.ClusterID, addons)
+		values, err := ciliumValues(cluster, cni.ClusterID, addons, map[string]any{"replicas": 1})
 		if err != nil {
 			return nil, err
 		}
 		values["ipam"] = map[string]any{"mode": "cluster-pool", "operator": map[string]any{"clusterPoolIPv4PodCIDRList": []any{pods}}}
-		values["operator"] = map[string]any{"replicas": 1}
 		wanted = append(wanted, chartProxy{"cni", cniCilium, metav1.NamespaceSystem, charts.Cilium, values})
 	case cniCalico:
 		// Only the operator: it creates Calico's CRDs itself, and calicoResources brings the

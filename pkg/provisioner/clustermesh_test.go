@@ -39,6 +39,9 @@ func TestCiliumHasTheClusterNameAndIDFromTheStart(t *testing.T) {
 	if _, ok := agent["clustermesh"]; ok {
 		t.Errorf("a cluster outside the mesh runs a clustermesh-apiserver: %v", agent)
 	}
+	if !lookup[bool](t, agent, "rollOutCiliumPods") || !lookup[bool](t, agent, "operator", "rollOutPods") || lookup[float64](t, agent, "operator", "replicas") != 1 {
+		t.Errorf("Cilium's agents or operator keep running on a configuration they no longer have: %v", agent)
+	}
 
 	_, meshed := proxySpecs(t, templates.K3s, cilium, &Addons{ClusterMesh: ClusterMesh{Enabled: true}})
 	mesh := meshed["web-cni"]
@@ -153,7 +156,7 @@ func TestRKE2sOwnCiliumGetsTheClusterNameIDAndMesh(t *testing.T) {
 		t.Fatal(err)
 	}
 	if lookup[string](t, values, "cluster", "name") != "rke2" || lookup[float64](t, values, "cluster", "id") != 2 ||
-		!lookup[bool](t, values, "clustermesh", "useAPIServer") || lookup[bool](t, values, "cni", "exclusive") {
+		!lookup[bool](t, values, "clustermesh", "useAPIServer") || lookup[bool](t, values, "cni", "exclusive") || !lookup[bool](t, values, "rollOutCiliumPods") {
 		t.Errorf("RKE2's Cilium is not the cluster's, in the mesh, beside istio-cni: %v", values)
 	}
 	if _, ok := values["ipam"]; ok {
