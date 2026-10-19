@@ -54,7 +54,7 @@ Without one, kubeadm and RKE2 clusters give Services of type `LoadBalancer` no a
 - **MetalLB** (recommended), in layer 2 mode, in the `metallb-system` namespace.
 - **kube-vip**, which already holds the API address, in `kube-system`, with kube-vip's cloud provider handing out the addresses.
 
-The addresses must be unused and on the nodes' network, apart from the node addresses, the API address and the gateway. Kubehenge refuses addresses that clash with these, or with the node addresses, API address or load-balancer addresses of another cluster on the same bridge and VLAN, when the cluster is created and whenever its addresses change. On k3s, a load balancer switches servicelb off. The load balancer can be switched, or changed to other addresses, later ([below](#change-add-ons-and-sign-in)); Services then take new addresses.
+The addresses must be unused and on the nodes' network, apart from the node addresses, the API address, the gateway and the network's own and broadcast addresses. Kubehenge refuses addresses that clash with these, or with the node addresses, API address or load-balancer addresses of another cluster on the same bridge and VLAN, when the cluster is created and whenever its addresses change. On k3s, a load balancer switches servicelb off. The load balancer can be switched, or changed to other addresses, later ([below](#change-add-ons-and-sign-in)): Services whose addresses are outside the new range then take new ones from it, and a switch from MetalLB to kube-vip hands every Service its address afresh.
 
 #### Pod network
 

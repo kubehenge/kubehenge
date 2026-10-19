@@ -5,21 +5,24 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/yaml"
 )
 
@@ -70,13 +73,16 @@ func TestCheckLoadBalancer(t *testing.T) {
 		others  []*clusterv1.Cluster
 		want    string
 	}{
-		"beside everything":  {cluster: web(onAt(`"10.0.0.100-10.0.0.120"`))},
-		"off the network":    {cluster: web(onAt(`"10.0.1.100-10.0.1.120"`)), want: "10.0.1.100-10.0.1.120 are not on the nodes' network 10.0.0.0/24"},
-		"the gateway":        {cluster: web(onAt(`"10.0.0.0/30"`)), want: "10.0.0.0-10.0.0.3 hold the gateway 10.0.0.1"},
-		"the endpoint":       {cluster: web(onAt(`"10.0.0.5"`)), want: "10.0.0.5 hold the control-plane endpoint 10.0.0.5"},
-		"the nodes":          {cluster: web(onAt(`"10.0.0.15-10.0.0.30"`)), want: "10.0.0.15-10.0.0.30 overlap the nodes' addresses 10.0.0.10-10.0.0.20"},
-		"each other":         {cluster: web(onAt(`"10.0.0.100-10.0.0.120","10.0.0.110"`)), want: "10.0.0.100-10.0.0.120 and 10.0.0.110 overlap"},
-		"the cluster itself": {cluster: web(onAt(`"10.0.0.100-10.0.0.120"`)), others: []*clusterv1.Cluster{web(onAt(`"10.0.0.100-10.0.0.120"`))}},
+		"beside everything":   {cluster: web(onAt(`"10.0.0.100-10.0.0.120"`))},
+		"off the network":     {cluster: web(onAt(`"10.0.1.100-10.0.1.120"`)), want: "10.0.1.100-10.0.1.120 are not on the nodes' network 10.0.0.0/24"},
+		"the gateway":         {cluster: web(onAt(`"10.0.0.0/30"`)), want: "10.0.0.0-10.0.0.3 hold the gateway 10.0.0.1"},
+		"the endpoint":        {cluster: web(onAt(`"10.0.0.5"`)), want: "10.0.0.5 hold the control-plane endpoint 10.0.0.5"},
+		"the broadcast":       {cluster: web(onAt(`"10.0.0.240/28"`)), want: "10.0.0.240-10.0.0.255 hold 10.0.0.255, the network's own or broadcast address"},
+		"the network itself":  {cluster: web(onAt(`"10.0.0.0"`)), want: "10.0.0.0 hold 10.0.0.0, the network's own or broadcast address"},
+		"up to the broadcast": {cluster: web(onAt(`"10.0.0.240-10.0.0.254"`))},
+		"the nodes":           {cluster: web(onAt(`"10.0.0.15-10.0.0.30"`)), want: "10.0.0.15-10.0.0.30 overlap the nodes' addresses 10.0.0.10-10.0.0.20"},
+		"each other":          {cluster: web(onAt(`"10.0.0.100-10.0.0.120","10.0.0.110"`)), want: "10.0.0.100-10.0.0.120 and 10.0.0.110 overlap"},
+		"the cluster itself":  {cluster: web(onAt(`"10.0.0.100-10.0.0.120"`)), others: []*clusterv1.Cluster{web(onAt(`"10.0.0.100-10.0.0.120"`))}},
 		"another cluster's nodes": {
 			cluster: web(onAt(`"10.0.0.100-10.0.0.120"`)),
 			others:  []*clusterv1.Cluster{lbCluster("db", 0, "10.0.0.100-10.0.0.110", "10.0.0.6", "")},
@@ -179,7 +185,7 @@ func TestMetalLBAnswersFromEveryNodeOnLayer2(t *testing.T) {
 	if !found || spec["chartName"] != "metallb" || spec["releaseName"] != "metallb" || spec["namespace"] != metalLBNamespace {
 		t.Fatalf("MetalLB's proxy: %v", spec)
 	}
-	if !lookup[bool](t, values, "speaker", "ignoreExcludeLB") || lookup[bool](t, values, "speaker", "frr", "enabled") {
+	if !lookup[bool](t, values, "speaker", "ignoreExcludeLB") || lookup[bool](t, values, "frrk8s", "enabled") {
 		t.Errorf("values %v", values)
 	}
 	if _, _, found := proxyValues(t, proxies, "web-load-balancer-addresses"); found {
@@ -227,37 +233,238 @@ func TestKubeVipAnnouncesWhatItsCloudProviderHandsOut(t *testing.T) {
 
 func TestMetalLBPoolHoldsTheAddresses(t *testing.T) {
 	t.Parallel()
-	s, err := metalLBPool(cluster(), LoadBalancer{Enabled: true, Addresses: []string{"10.0.0.100-10.0.0.120", "10.0.0.130"}})
+	spans, err := parseAddresses([]string{"10.0.0.100-10.0.0.120", "10.0.0.130"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Name != "web-metallb-pool" || s.Namespace != "team-a" || s.Type != addonsv1.ClusterResourceSetSecretType {
-		t.Errorf("Secret %s/%s of type %s", s.Namespace, s.Name, s.Type)
-	}
 	kinds := map[string]map[string]any{}
-	for doc := range strings.SplitSeq(string(s.Data["metallb-pool.yaml"]), "---\n") {
-		if doc == "" {
-			continue
+	for _, o := range metalLBPool(spans) {
+		if o.GetAPIVersion() != "metallb.io/v1beta1" || o.GetNamespace() != metalLBNamespace || o.GetName() != "kubehenge" {
+			t.Errorf("not MetalLB's: %v", o.Object)
 		}
-		var r map[string]any
-		if err := yaml.Unmarshal([]byte(doc), &r); err != nil {
-			t.Fatal(err)
-		}
-		if r[apiVersionKey] != "metallb.io/v1beta1" || lookup[string](t, r, "metadata", "namespace") != metalLBNamespace ||
-			lookup[string](t, r, "metadata", "name") != "kubehenge" {
-			t.Errorf("not MetalLB's: %v", r)
-		}
-		kind, ok := r["kind"].(string)
-		if !ok {
-			t.Fatalf("no kind: %v", r)
-		}
-		kinds[kind] = r
+		kinds[o.GetKind()] = o.Object
 	}
 	if got := lookup[[]any](t, kinds["IPAddressPool"], "spec", "addresses"); len(got) != 2 || got[0] != "10.0.0.100-10.0.0.120" || got[1] != "10.0.0.130-10.0.0.130" {
 		t.Errorf("addresses %v", got)
 	}
 	if got := lookup[[]any](t, kinds["L2Advertisement"], "spec", "ipAddressPools"); len(got) != 1 || got[0] != "kubehenge" {
 		t.Errorf("advertised pools %v", got)
+	}
+}
+
+// lbWorkload is a workload cluster holding objs, whose server-side applies go to applied by kind,
+// and fail as they would before MetalLB's CRDs exist while installed is false.
+type lbWorkload struct {
+	client.WithWatch
+
+	mu        sync.Mutex
+	installed bool
+	applied   map[string]map[string]any
+}
+
+func newLBWorkload(t *testing.T, objs ...client.Object) *lbWorkload {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{appsv1.AddToScheme, corev1.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := &lbWorkload{applied: map[string]map[string]any{}}
+	w.WithWatch = interceptor.NewClient(fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build(), interceptor.Funcs{
+		Apply: func(_ context.Context, _ client.WithWatch, obj runtime.ApplyConfiguration, _ ...client.ApplyOption) error {
+			u, ok := obj.(interface{ UnstructuredContent() map[string]any })
+			if !ok {
+				return fmt.Errorf("applied %T", obj)
+			}
+			o := &unstructured.Unstructured{Object: u.UnstructuredContent()}
+			w.mu.Lock()
+			defer w.mu.Unlock()
+			if !w.installed {
+				return &meta.NoKindMatchError{GroupKind: o.GroupVersionKind().GroupKind()}
+			}
+			w.applied[o.GetKind()] = o.Object
+			return nil
+		},
+	})
+	return w
+}
+
+func (w *lbWorkload) install() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.installed = true
+}
+
+// uninstall stands for removing MetalLB, whose CRDs take the pool with them.
+func (w *lbWorkload) uninstall() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.installed = false
+	w.applied = map[string]map[string]any{}
+}
+
+func (w *lbWorkload) pool() []any {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	addresses, _, _ := unstructured.NestedSlice(w.applied["IPAddressPool"], "spec", "addresses")
+	if _, ok := w.applied["L2Advertisement"]; !ok {
+		return nil
+	}
+	return addresses
+}
+
+func TestReconcileAppliesMetalLBPoolWheneverMetalLBRuns(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	c := withAddons(storageCluster(), map[string]string{loadBalancerVariable: onAt(`"10.0.0.100-10.0.0.120"`)})
+	r, kube := newReconciler(t, &fakeCloud{}, c)
+	workload := newLBWorkload(t)
+	r.Remotes = &Remotes{byCluster: map[string]remote{remoteKey(c): {client: workload, until: time.Now().Add(time.Hour)}}}
+	run := func() ctrl.Result {
+		t.Helper()
+		result, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(c)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+
+	if result := run(); result.RequeueAfter != waitInterval || workload.pool() != nil {
+		t.Errorf("before MetalLB's CRDs: requeued after %v, pool %v", result.RequeueAfter, workload.pool())
+	}
+	workload.install()
+	if result := run(); result.RequeueAfter == waitInterval || !slices.Equal(workload.pool(), []any{"10.0.0.100-10.0.0.120"}) {
+		t.Errorf("with MetalLB running: requeued after %v, pool %v", result.RequeueAfter, workload.pool())
+	}
+
+	setLoadBalancer(t, kube, c, `{"enabled":false,"addresses":["10.0.0.100-10.0.0.120"]}`)
+	workload.uninstall()
+	run()
+	setLoadBalancer(t, kube, c, onAt(`"10.0.0.100-10.0.0.120"`))
+	workload.install()
+	run()
+	if !slices.Equal(workload.pool(), []any{"10.0.0.100-10.0.0.120"}) {
+		t.Errorf("MetalLB switched on again has the pool %v", workload.pool())
+	}
+}
+
+func TestReconcileReleasesServicesOnceKubeVipIsGone(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	c := withAddons(storageCluster(), map[string]string{loadBalancerVariable: `{"enabled":true,"implementation":"kube-vip","addresses":["10.0.0.100-10.0.0.120"]}`})
+	r, kube := newReconciler(t, &fakeCloud{}, c)
+	provider := &appsv1.Deployment{Name: kubeVipProvider, Namespace: metav1.NamespaceSystem}
+	service := func(name string, labels map[string]string) *corev1.Service {
+		return &corev1.Service{Name: name, Namespace: "default", Labels: labels, Finalizers: []string{loadBalancerCleanup}, Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer}}
+	}
+	workload := newLBWorkload(t, provider,
+		service("handled", map[string]string{kubeVipImplementation: kubeVip}),
+		service("someone-elses", nil),
+	)
+	r.Remotes = &Remotes{byCluster: map[string]remote{remoteKey(c): {client: workload, until: time.Now().Add(time.Hour)}}}
+	run := func() ctrl.Result {
+		t.Helper()
+		result, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(c)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	state := func() (bool, []string, []string) {
+		t.Helper()
+		current := &clusterv1.Cluster{}
+		if err := kube.Get(ctx, client.ObjectKeyFromObject(c), current); err != nil {
+			t.Fatal(err)
+		}
+		var finalizers [2][]string
+		for i, name := range []string{"handled", "someone-elses"} {
+			s := &corev1.Service{}
+			if err := workload.Get(ctx, client.ObjectKey{Namespace: "default", Name: name}, s); err != nil {
+				t.Fatal(err)
+			}
+			finalizers[i] = s.Finalizers
+		}
+		_, marked := current.Annotations[kubeVipServicesAnnotation]
+		return marked, finalizers[0], finalizers[1]
+	}
+
+	run()
+	if marked, _, _ := state(); !marked {
+		t.Error("the cluster running kube-vip is not marked")
+	}
+	setLoadBalancer(t, kube, c, `{"enabled":false,"addresses":["10.0.0.100-10.0.0.120"]}`)
+	if result := run(); result.RequeueAfter != waitInterval {
+		t.Errorf("requeued after %v while kube-vip's cloud provider still runs", result.RequeueAfter)
+	}
+	if marked, handled, _ := state(); !marked || len(handled) != 1 {
+		t.Errorf("released while kube-vip's cloud provider still runs: marked %v, finalizers %v", marked, handled)
+	}
+	if err := workload.Delete(ctx, provider); err != nil {
+		t.Fatal(err)
+	}
+	run()
+	if marked, handled, others := state(); marked || len(handled) != 0 || len(others) != 1 {
+		t.Errorf("after kube-vip: marked %v, its Service's finalizers %v, another's %v", marked, handled, others)
+	}
+}
+
+// setLoadBalancer gives the stored cluster another loadBalancer variable, raw JSON.
+func setLoadBalancer(t *testing.T, kube client.Client, c *clusterv1.Cluster, raw string) {
+	t.Helper()
+	current := &clusterv1.Cluster{}
+	if err := kube.Get(context.Background(), client.ObjectKeyFromObject(c), current); err != nil {
+		t.Fatal(err)
+	}
+	for i, v := range current.Spec.Topology.Variables {
+		if v.Name == loadBalancerVariable {
+			current.Spec.Topology.Variables[i].Value.Raw = []byte(raw)
+		}
+	}
+	if err := kube.Update(context.Background(), current); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFreeStaleAddressesLeavesThoseInTheRange(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	service := func(name, labelled, annotated, requested string) *corev1.Service {
+		s := &corev1.Service{Name: name, Namespace: "default", Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer, LoadBalancerIP: requested}}
+		if labelled != "" {
+			s.Labels = map[string]string{kubeVipImplementation: labelled}
+		}
+		if annotated != "" {
+			s.Annotations = map[string]string{kubeVipAddresses: annotated}
+		}
+		return s
+	}
+	workload := newLBWorkload(t,
+		service("inside", kubeVip, "10.0.0.105", "10.0.0.105"),
+		service("outside", kubeVip, "10.0.0.35", "10.0.0.35"),
+		service("partly-outside", kubeVip, "10.0.0.106,10.0.0.36", "10.0.0.106"),
+		service("requested-by-its-owner", "", "", "10.0.0.37"),
+		service("another-implementation", "metallb", "10.0.0.38", "10.0.0.38"),
+	)
+	spans, err := parseAddresses([]string{"10.0.0.100-10.0.0.120"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := freeStaleAddresses(ctx, workload, spans); err != nil {
+		t.Fatal(err)
+	}
+	for name, kept := range map[string]bool{
+		"inside": true, "outside": false, "partly-outside": false, "requested-by-its-owner": true, "another-implementation": true,
+	} {
+		s := &corev1.Service{}
+		if err := workload.Get(ctx, client.ObjectKey{Namespace: "default", Name: name}, s); err != nil {
+			t.Fatal(err)
+		}
+		_, labelled := s.Labels[kubeVipImplementation]
+		_, annotated := s.Annotations[kubeVipAddresses]
+		if has := s.Spec.LoadBalancerIP != ""; has != kept || (name != "requested-by-its-owner" && (labelled != kept || annotated != kept)) {
+			t.Errorf("%s: kept %v, labelled %v, annotated %v, requested %q", name, kept, labelled, annotated, s.Spec.LoadBalancerIP)
+		}
 	}
 }
 
@@ -276,21 +483,13 @@ func TestReconcileSwitchesTheLoadBalancer(t *testing.T) {
 		}
 		return err == nil
 	}
+	workload := newLBWorkload(t)
+	workload.install()
+	r.Remotes = &Remotes{byCluster: map[string]remote{remoteKey(c): {client: workload, until: time.Now().Add(time.Hour)}}}
 	set := func(raw string) {
 		t.Helper()
-		current := &clusterv1.Cluster{}
-		if err := kube.Get(ctx, client.ObjectKeyFromObject(c), current); err != nil {
-			t.Fatal(err)
-		}
-		for i, v := range current.Spec.Topology.Variables {
-			if v.Name == loadBalancerVariable {
-				current.Spec.Topology.Variables[i].Value.Raw = []byte(raw)
-			}
-		}
-		if err := kube.Update(ctx, current); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(current)}); err != nil {
+		setLoadBalancer(t, kube, c, raw)
+		if err := reconcile(t, r, c); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -298,26 +497,18 @@ func TestReconcileSwitchesTheLoadBalancer(t *testing.T) {
 	if err := reconcile(t, r, c); err != nil {
 		t.Fatal(err)
 	}
-	if !exists("web-load-balancer") || exists("web-load-balancer-addresses") {
+	if !exists("web-load-balancer") || exists("web-load-balancer-addresses") || workload.pool() == nil {
 		t.Error("MetalLB is not the load balancer")
 	}
-	crs := &addonsv1.ClusterResourceSet{}
-	if err := kube.Get(ctx, client.ObjectKey{Namespace: c.Namespace, Name: c.Name + "-proxmox"}, crs); err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Contains(crs.Spec.Resources, addonsv1.ResourceRef{Kind: secretKind, Name: metalLBPoolName(c)}) {
-		t.Errorf("MetalLB's addresses are not applied to the cluster: %v", crs.Spec.Resources)
-	}
 
+	workload.uninstall()
+	workload.install()
 	set(`{"enabled":true,"implementation":"kube-vip","addresses":["10.0.0.100-10.0.0.120"]}`)
 	if !exists("web-load-balancer") || !exists("web-load-balancer-addresses") {
 		t.Error("kube-vip is not the load balancer")
 	}
-	if err := kube.Get(ctx, client.ObjectKeyFromObject(crs), crs); err != nil {
-		t.Fatal(err)
-	}
-	if slices.Contains(crs.Spec.Resources, addonsv1.ResourceRef{Kind: secretKind, Name: metalLBPoolName(c)}) {
-		t.Errorf("kube-vip's cluster is given MetalLB's addresses: %v", crs.Spec.Resources)
+	if workload.pool() != nil {
+		t.Errorf("kube-vip's cluster is given MetalLB's addresses: %v", workload.pool())
 	}
 
 	set(`{"enabled":true,"implementation":"metallb","addresses":["10.0.0.100-10.0.0.120"]}`)
@@ -338,17 +529,13 @@ func TestReconcileRemovesWhatServiceLBLeftOnK3s(t *testing.T) {
 	c.Spec.Topology.ClassRef.Name = "kubehenge-k3s"
 	r, _ := newReconciler(t, &fakeCloud{}, c)
 
-	scheme := runtime.NewScheme()
-	if err := appsv1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
 	daemonSet := func(name string, labels map[string]string) *appsv1.DaemonSet {
 		return &appsv1.DaemonSet{Name: name, Namespace: metav1.NamespaceSystem, Labels: labels}
 	}
-	workload := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+	workload := newLBWorkload(t,
 		daemonSet("svclb-traefik-0b1c2d3e", map[string]string{k3sServiceLB: "traefik"}),
 		daemonSet("kube-vip", nil),
-	).Build()
+	)
 	r.Remotes = &Remotes{byCluster: map[string]remote{remoteKey(c): {client: workload, until: time.Now().Add(time.Hour)}}}
 
 	if err := reconcile(t, r, c); err != nil {

@@ -1,6 +1,6 @@
 import { useState, type JSX } from "react";
 
-import { addressCount, list, overlapping } from "./network";
+import { addressBits, addressCount, list, maskOf, overlapping, pointToPoint, spanOf, toInt } from "./network";
 import type { Cluster } from "./types";
 import { Dialog, ErrorBox, Field, useChange } from "./ui";
 import { flag, quantity, record, text, texts } from "./values";
@@ -71,6 +71,21 @@ export function networkOf(c: Cluster): NodesNetwork {
   };
 }
 
+// holdingReserved is the first entry holding the network's own or its broadcast address, which
+// hosts on the network never answer for; a /31 or /32 has neither.
+function holdingReserved(entries: string[], network: NodesNetwork): string | undefined {
+  const g = toInt(network.gateway);
+  if (g === undefined || network.prefix < 1 || network.prefix >= pointToPoint) {
+    return undefined;
+  }
+  const own = (g & maskOf(network.prefix)) >>> 0;
+  const broadcast = own + 2 ** (addressBits - network.prefix) - 1;
+  return entries.find((e) => {
+    const s = spanOf(e);
+    return s !== undefined && [own, broadcast].some((a) => s[0] <= a && a <= s[1]);
+  });
+}
+
 /**
  * addressesProblem says what is wrong with load-balancer addresses on a network, if anything. The
  * server also holds them to other clusters' addresses, which the browser cannot see.
@@ -82,6 +97,10 @@ export function addressesProblem(entries: string[], network: NodesNetwork): stri
   const { bad } = addressCount(entries, network.gateway, network.prefix);
   if (bad !== undefined) {
     return `${bad} is no address, range or network inside the gateway's network.`;
+  }
+  const reserved = holdingReserved(entries, network);
+  if (reserved !== undefined) {
+    return `${reserved} holds the network's own or broadcast address.`;
   }
   const taken: [string, string[]][] = [
     ["the node addresses", network.addresses],

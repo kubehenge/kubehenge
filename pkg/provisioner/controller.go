@@ -65,7 +65,7 @@ type Reconciler struct {
 	// Registrar removes clusters from Rancher before Rancher itself is switched off.
 	Registrar *Registrar
 	// Remotes reaches the workload clusters, to take their workloads out of the mesh before Istio
-	// is switched off.
+	// is switched off and to do what their load balancers need there.
 	Remotes *Remotes
 	// Events reports on a Cluster what the controller refuses to do for it; may be nil.
 	Events events.EventRecorder
@@ -164,8 +164,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 // afterTheRest does what waits on other clusters or on the workload cluster's own API, however long
 // that takes, so that nothing else of this cluster waits with it: removing Rancher, which waits on
-// every cluster registered with it, removing Istio, which waits on the cluster's workloads, and
-// linking the cluster's Cluster Mesh peers. It reports whether any of it waits.
+// every cluster registered with it, removing Istio, which waits on the cluster's workloads,
+// linking the cluster's Cluster Mesh peers, and what its load balancer needs in the cluster. It
+// reports whether any of it waits.
 func (r *Reconciler) afterTheRest(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons, rancherRefused string) (bool, error) {
 	rancherWaiting := false
 	if !addons.Rancher.Install && rancherRefused == "" {
@@ -186,7 +187,11 @@ func (r *Reconciler) afterTheRest(ctx context.Context, cluster *clusterv1.Cluste
 		}
 	}
 	meshWaiting, err := r.meshCluster(ctx, cluster, addons)
-	return rancherWaiting || istioWaiting || meshWaiting, err
+	if err != nil {
+		return false, err
+	}
+	lbWaiting, err := r.reconcileLoadBalancer(ctx, cluster, addons.LoadBalancer)
+	return rancherWaiting || istioWaiting || meshWaiting || lbWaiting, err
 }
 
 // removeRancherWhenFree removes Rancher from a cluster that switched it off, or reports that it
@@ -373,17 +378,12 @@ func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster
 	if installing, err := r.applyProxies(ctx, cluster, proxies); err != nil || installing {
 		return installing, err
 	}
-	if addons.LoadBalancer.Enabled && distributionOf(cluster) == templates.K3s {
-		if err := r.removeServiceLB(ctx, cluster); err != nil {
-			return false, err
-		}
-	}
 	return waiting, nil
 }
 
 // resourceSetSecrets are the Secrets of the cluster's ClusterResourceSet: its Proxmox VE Secret,
-// Calico's resources when Kubehenge installs Calico, the configuration of the distribution's own
-// Cilium when it runs that, and MetalLB's address pool when MetalLB is its load balancer.
+// Calico's resources when Kubehenge installs Calico, and the configuration of the distribution's
+// own Cilium when it runs that.
 func resourceSetSecrets(cluster *clusterv1.Cluster, resources *corev1.Secret, cni CNI, addons *Addons) ([]*corev1.Secret, error) {
 	secrets := []*corev1.Secret{resources}
 	switch {
@@ -399,13 +399,6 @@ func resourceSetSecrets(cluster *clusterv1.Cluster, resources *corev1.Secret, cn
 			return nil, err
 		}
 		secrets = append(secrets, cilium)
-	}
-	if lb := addons.LoadBalancer; lb.Enabled && lb.implementation() == metalLB {
-		pool, err := metalLBPool(cluster, lb)
-		if err != nil {
-			return nil, err
-		}
-		secrets = append(secrets, pool)
 	}
 	return secrets, nil
 }

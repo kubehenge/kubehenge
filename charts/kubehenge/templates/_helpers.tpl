@@ -330,14 +330,17 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           default: metallb
           description: >-
             MetalLB, or kube-vip, which also holds the cluster's API address. Switching replaces the
-            one with the other, and the Services take new addresses from the range.
+            one with the other; Services keep their addresses where the new one can, and take new
+            ones from the range otherwise.
         addresses:
           type: array
           minItems: 1
           description: >-
             Addresses the Services take theirs from, as ranges (10.0.0.30-10.0.0.40), networks in
             CIDR notation or single addresses: unused addresses on the nodes' network, apart from
-            network.addresses, the control-plane endpoint and other clusters' addresses there.
+            network.addresses, the control-plane endpoint, the gateway, the network's own and
+            broadcast addresses and other clusters' addresses there. Services outside a changed
+            range take new addresses from it.
           items:
             type: string
             minLength: 1

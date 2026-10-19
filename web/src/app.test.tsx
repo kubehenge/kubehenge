@@ -687,7 +687,9 @@ describe("create", () => {
       ["10.0.0.25-10.0.0.30", "10.0.0.25-10.0.0.30 overlaps the node addresses."],
       ["10.0.0.40/28", "10.0.0.40/28 overlaps the node addresses."],
       ["10.0.0.20", "10.0.0.20 overlaps the API address."],
-      ["10.0.0.0/30", "10.0.0.0/30 overlaps the gateway."],
+      ["10.0.0.1-10.0.0.3", "10.0.0.1-10.0.0.3 overlaps the gateway."],
+      ["10.0.0.0/30", "10.0.0.0/30 holds the network's own or broadcast address."],
+      ["10.0.0.240/28", "10.0.0.240/28 holds the network's own or broadcast address."],
       ["10.0.0.100-10.0.0.120, 10.0.0.110", "10.0.0.100-10.0.0.120 overlaps another of these addresses."],
     ] as const) {
       expect(fieldProblems("Network", { ...metallb, loadBalancerAddresses: addresses }, withLB)).toStrictEqual({
