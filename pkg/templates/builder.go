@@ -557,8 +557,9 @@ func (b *Builder) attachCloudInit(ctx context.Context, node *proxmox.Node, vm *p
 		return "", fmt.Errorf("growing the disk: %w", err)
 	}
 	metaData := fmt.Sprintf("instance-id: kubehenge-bake-%d\nlocal-hostname: kubehenge-bake-%d\n", vm.VMID, vm.VMID)
-	if err = vm.CloudInit(ctx, bakeDevice, userData, metaData, "", NetworkConfig(mac, b.Network), proxmox.WithCloudInitStorage(isoStorage)); err != nil {
-		return "", fmt.Errorf("attaching the cloud-init ISO: %w", err)
+	seed := map[string]string{"user-data": userData, "meta-data": metaData, "network-config": NetworkConfig(mac, b.Network)}
+	if err = attachSeed(ctx, node, isoStorage, vm, bakeDevice, seed); err != nil {
+		return "", err
 	}
 	return isoStorage, nil
 }

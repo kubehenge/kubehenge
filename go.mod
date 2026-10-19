@@ -5,6 +5,7 @@ go 1.27.2
 require (
 	github.com/Masterminds/sprig/v3 v3.3.0
 	github.com/ProtonMail/go-crypto v1.5.2
+	github.com/diskfs/go-diskfs v1.9.3
 	github.com/luthermonson/go-proxmox v0.8.2
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
@@ -30,7 +31,6 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/diskfs/go-diskfs v1.9.3 // indirect
 	github.com/djherbis/times v1.6.0 // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
 	github.com/evanphx/json-patch/v5 v5.9.11 // indirect
