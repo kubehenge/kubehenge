@@ -82,7 +82,7 @@ jobs:
           cosign sign --yes "$ref"
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
           echo "digest=${ref#*@}" >> "$GITHUB_OUTPUT"
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.image.outputs.digest }}
@@ -98,7 +98,7 @@ jobs:
           esac
           cosign sign --yes "$ref"
           echo "digest=${ref#*@}" >> "$GITHUB_OUTPUT"
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ghcr.io/kubehenge/cluster-api-provider-proxmox
           subject-digest: ${{ steps.capmox.outputs.digest }}
@@ -117,7 +117,7 @@ jobs:
             previous=$RUNNER_TEMP/previous/index.json
           fi
           make index VERSION="$VERSION" PREVIOUS="$previous"
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             dist/kubehenge_${{ steps.version.outputs.version }}_linux_amd64.tar.gz
