@@ -49,7 +49,7 @@ The nodes' network is the gateway with the prefix length. Pod and service ranges
 
 #### Load balancer
 
-Without one, kubeadm and RKE2 clusters give Services of type `LoadBalancer` no address, and k3s's own servicelb answers for each of them on every node's address. With one, each such Service takes an address of its own from the load-balancer addresses, which one node at a time answers for on the nodes' network; when that node fails, another takes over. Choose:
+Without one, kubeadm and RKE2 clusters give Services of type `LoadBalancer` no address, and k3s's own servicelb answers for each of them on every node's address, on any port but 80 and 443, which the ingress controller holds there. With one, each such Service takes an address of its own from the load-balancer addresses, which one node at a time answers for on the nodes' network; when that node fails, another takes over. Choose:
 
 - **MetalLB** (recommended), in layer 2 mode, in the `metallb-system` namespace.
 - **kube-vip**, which already holds the API address, in `kube-system`, with kube-vip's cloud provider handing out the addresses.

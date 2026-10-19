@@ -460,7 +460,7 @@ func traefikValues() map[string]any {
 			"web":       map[string]any{"hostPort": http},
 			"websecure": map[string]any{"hostPort": https},
 		},
-		"service": map[string]any{"type": "ClusterIP"},
+		"service": map[string]any{"spec": map[string]any{"type": "ClusterIP"}},
 		// The Service's address is one only pods reach, so Ingresses are not told it.
 		"providers": map[string]any{"kubernetesIngress": map[string]any{"publishedService": map[string]any{"enabled": false}}},
 		// Routes whose TLS options conflict fail rather than fall back to the defaults, which would

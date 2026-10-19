@@ -302,7 +302,8 @@ template:
                   websecure:
                     hostPort: 443
                 service:
-                  type: ClusterIP
+                  spec:
+                    type: ClusterIP
                 providers:
                   kubernetesIngress:
                     publishedService:

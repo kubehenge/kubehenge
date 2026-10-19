@@ -393,7 +393,8 @@ wl delete namespace e2e-ingress --wait=false
 step "a Service of type LoadBalancer answers on an address from the cluster's range, with ${load_balancer}"
 wl create namespace e2e-lb
 agnhost_pod e2e-lb web netexec --http-port=8080
-wl -n e2e-lb expose pod web --type=LoadBalancer --port=80 --target-port=8080
+# Off port 80, which Traefik holds on every node, so that k3s's servicelb can answer for it later.
+wl -n e2e-lb expose pod web --type=LoadBalancer --port=8080 --target-port=8080
 wl -n e2e-lb wait --for=condition=Ready pod/web --timeout=5m
 # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
 lb_ips() { lb_ip=$(wl -n e2e-lb get service web -o jsonpath='{.status.loadBalancer.ingress[*].ip}') && [ -n "${lb_ip}" ]; }
@@ -413,7 +414,7 @@ in_range "${KUBEHENGE_E2E_LOAD_BALANCER_ADDRESSES}" "${lb_ip}" ||
     fail "the Service's ${lb_ip} is not from ${KUBEHENGE_E2E_LOAD_BALANCER_ADDRESSES}"
 # netexec answers /hostname with its pod's name.
 answers() {
-    answer=$(curl -sS --max-time 5 "http://$1/hostname" 2> /dev/null) || return 1
+    answer=$(curl -sS --max-time 5 "http://$1:8080/hostname" 2> /dev/null) || return 1
     [ "${answer}" = web ]
 }
 until_true 300 "${lb_ip} answers for the Service" answers "${lb_ip}"

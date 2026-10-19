@@ -315,6 +315,10 @@ func TestIngressControllerOnKubeadmOnly(t *testing.T) {
 		if lookup[string](t, values, "tolerations", 0, "key") != controlPlaneTaint.Key {
 			t.Errorf("Traefik stays off the control planes, so the API address serves no ingress: %v", values["tolerations"])
 		}
+		// The chart has read the type from service.spec since its version 41, and ignores service.type.
+		if lookup[string](t, values, "service", "spec", "type") != "ClusterIP" {
+			t.Errorf("Traefik's Service takes an address from the load balancer: %v", values["service"])
+		}
 	}
 }
 
