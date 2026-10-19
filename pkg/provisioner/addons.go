@@ -39,6 +39,7 @@ const (
 	seccompProfileKey = "seccompProfile"
 	requestsKey       = "requests"
 	memoryKey         = "memory"
+	cpuKey            = "cpu"
 
 	// The CNIs Kubehenge installs, as the cni variable names them.
 	cniCilium = "cilium"
@@ -413,7 +414,7 @@ func headlampValues(image string, h Headlamp) map[string]any {
 			seccompProfileKey:          map[string]any{"type": "RuntimeDefault"},
 		},
 		"resources": map[string]any{
-			requestsKey: map[string]any{"cpu": "10m", memoryKey: "64Mi"},
+			requestsKey: map[string]any{cpuKey: "10m", memoryKey: "64Mi"},
 			"limits":    map[string]any{memoryKey: "256Mi"},
 		},
 	}

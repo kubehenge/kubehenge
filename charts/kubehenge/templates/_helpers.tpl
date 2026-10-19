@@ -189,9 +189,11 @@ end-to-end tests' working sets once every add-on has started, with room to grow.
 Prometheus, Alertmanager, Grafana, node-exporter and the metrics proxies, at 1.5 GiB as Prometheus
 grows while it fills its first two-hour block; Rancher's own pod peaks at about 1.6 GiB as it
 first starts, and with a cluster registered Rancher, Fleet and their controllers hold about 1.2 GiB.
+Istio uses about 100 MiB, but istiod and the ztunnel beside it ask for 384 MiB, which the node they
+share has to have; the clustermesh-apiserver uses about 50 MiB.
 */}}
 {{- define "kubehenge.addonMemory" -}}
-kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"kyverno":384,"istio":512,"clusterMesh":256,"certManager":192,"rancher":2048,"rancherAgent":512}'
+kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"kyverno":384,"istio":384,"clusterMesh":128,"certManager":192,"rancher":2048,"rancherAgent":512}'
 {{- end -}}
 
 {{/*

@@ -74,12 +74,15 @@ func istioCharts(istio Chart, distribution templates.Distribution, cni CNI) []ch
 				"trustedZtunnelNamespace": istioNodeNamespace,
 				seccompProfileKey:         restricted,
 				// The chart asks for 2 GiB, room for a mesh of thousands of pods.
-				"resources": map[string]any{requestsKey: map[string]any{"cpu": "100m", memoryKey: "256Mi"}},
+				"resources": map[string]any{requestsKey: map[string]any{cpuKey: "100m", memoryKey: "256Mi"}},
 			},
 			"gateways": map[string]any{seccompProfileKey: restricted},
 		})},
 		{istioCNI, istioCNI, istioNodeNamespace, istio.beside("cni"), cniValues},
-		{istioZtunnel, istioZtunnel, istioNodeNamespace, istio.beside("ztunnel"), ambient(map[string]any{})},
+		{istioZtunnel, istioZtunnel, istioNodeNamespace, istio.beside("ztunnel"), ambient(map[string]any{
+			// The chart asks for 512 MiB on every node, room for a mesh of 200,000 pods.
+			"resources": map[string]any{requestsKey: map[string]any{cpuKey: "200m", memoryKey: "128Mi"}},
+		})},
 	}
 }
 

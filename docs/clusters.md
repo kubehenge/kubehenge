@@ -80,8 +80,8 @@ The add-ons need memory too, on the workers, or on the control planes of a clust
 | Headlamp | 64 MiB |
 | Monitoring | 1536 MiB |
 | Kyverno | 384 MiB |
-| Istio | 512 MiB |
-| Cilium Cluster Mesh | 256 MiB |
+| Istio | 384 MiB |
+| Cilium Cluster Mesh | 128 MiB |
 | cert-manager, with monitoring or Rancher | 192 MiB |
 | Rancher | 2048 MiB |
 | Rancher's agent, in every cluster that registers | 512 MiB |
