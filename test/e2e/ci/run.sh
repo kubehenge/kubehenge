@@ -105,8 +105,11 @@ case "${TF_VAR_controller_image}" in
     # Anything else ends in the pushed image's digest.
     *) ;;
 esac
-# capmox as a release publishes it, by the digest the module names; the mirror serves it as ghcr.io's.
+# capmox and the Add-on Provider for Helm as a release publishes them, by the digests the module
+# names; the mirror serves them as ghcr.io's.
 make -s -C "${repo}" capmox-image CAPMOX_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-provider-proxmox" \
+    KO_FLAGS=--insecure-registry > /dev/null
+make -s -C "${repo}" helm-addon-image HELM_ADDON_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-addon-provider-helm" \
     KO_FLAGS=--insecure-registry > /dev/null
 
 # The tests' own output is shown as it comes rather than when each make target ends.
@@ -154,8 +157,10 @@ case "${test}" in
             /root/kubehenge/kubehenge_0.0.1_linux_amd64.tar.gz /root/kubehenge/kubehenge_0.0.2_linux_amd64.tar.gz \
             /root/kubehenge/settings.json
         ;;
-    # The other tests run against a management cluster applied here first.
-    *) ;;
+    # The other tests run against a management cluster applied here first. The runner has 4 vCPUs,
+    # and a workload cluster with every add-on starting starves when the management node holds 4 of
+    # its own beside it; with no provider upgrade to ride out, 2 do.
+    *) export TF_VAR_node_cores=2 ;;
 esac
 
 tofu -chdir="${work}/mgmt" init -input=false > /dev/null

@@ -25,6 +25,11 @@ variable "node_count" {
   default = 1
 }
 
+variable "node_cores" {
+  type    = number
+  default = 4
+}
+
 variable "version_overrides" {
   type    = map(string)
   default = {}
@@ -46,6 +51,7 @@ module "management_cluster" {
   workload_datastores = ["local"]
 
   node_addresses = [for i in range(var.node_count) : "172.20.99.${11 + i}/24"]
+  node_cores     = var.node_cores
   node_memory_mb = 3072
 
   version_overrides = var.version_overrides
@@ -54,7 +60,8 @@ module "management_cluster" {
   gateway     = "172.20.99.1"
   dns_servers = ["1.1.1.1", "9.9.9.9"]
 
-  # The controller is pushed under its ghcr.io path; everything else falls through to ghcr.io.
+  # The controller and Kubehenge's provider builds are pushed under their ghcr.io paths; everything
+  # else falls through to ghcr.io.
   registry_mirrors = { "ghcr.io" = ["http://172.21.99.3:5000"] }
   controller_image = var.controller_image
 }

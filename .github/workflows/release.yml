@@ -104,6 +104,22 @@ jobs:
           subject-digest: ${{ steps.capmox.outputs.digest }}
           push-to-registry: true
 
+      - name: Add-on Provider for Helm image
+        id: helm-addon
+        run: |
+          ref=$(make -s helm-addon-image | tail -n 1)
+          case $ref in
+            ghcr.io/kubehenge/cluster-api-addon-provider-helm@sha256:*) ;;
+            *) echo "::error::no Add-on Provider for Helm image digest: $ref"; exit 1 ;;
+          esac
+          cosign sign --yes "$ref"
+          echo "digest=${ref#*@}" >> "$GITHUB_OUTPUT"
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/kubehenge/cluster-api-addon-provider-helm
+          subject-digest: ${{ steps.helm-addon.outputs.digest }}
+          push-to-registry: true
+
       - name: Appliance archive and index
         env:
           VERSION: ${{ steps.version.outputs.version }}

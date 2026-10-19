@@ -1,12 +1,14 @@
 TOFU ?= tofu
 MODULES := management-cluster
-# Where `make image` pushes the controller's image and `make capmox-image` capmox's; KO_FLAGS such
-# as --tags or --insecure-registry.
+# Where `make image` pushes the controller's image, `make capmox-image` capmox's and
+# `make helm-addon-image` the Add-on Provider for Helm's; KO_FLAGS such as --tags or
+# --insecure-registry.
 IMAGE ?= ghcr.io/kubehenge/kubehenge
 CAPMOX_IMAGE ?= ghcr.io/kubehenge/cluster-api-provider-proxmox
+HELM_ADDON_IMAGE ?= ghcr.io/kubehenge/cluster-api-addon-provider-helm
 KO_FLAGS ?=
 
-.PHONY: build web website dist index image capmox-image lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-templates e2e-volumes e2e-interface e2e-appliance
+.PHONY: build web website dist index image capmox-image helm-addon-image lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-templates e2e-volumes e2e-interface e2e-appliance
 .PHONY: fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker unit-go unit-web unit-tofu tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
@@ -105,10 +107,14 @@ index:
 image: web
 	KO_DOCKER_REPO=$(IMAGE) KO_CONFIG_PATH=cmd/kubehenge ko build --bare $(KO_FLAGS) ./cmd/kubehenge
 
-# Builds and pushes the capmox image the management cluster runs (capmox_build in
-# management-cluster/versions.tf), checks its digest and prints its reference by digest.
+# Build and push the provider images the management cluster runs as Kubehenge builds them
+# (capmox_build and helm_addon_build in management-cluster/versions.tf), check their digests and
+# print their references by digest.
 capmox-image:
-	sh scripts/capmox-image.sh $(CAPMOX_IMAGE) $(KO_FLAGS)
+	sh scripts/provider-image.sh capmox $(CAPMOX_IMAGE) $(KO_FLAGS)
+
+helm-addon-image:
+	sh scripts/provider-image.sh helm-addon $(HELM_ADDON_IMAGE) $(KO_FLAGS)
 
 # Lint and static tier: Go, the frontend, Terraform/OpenTofu, Helm charts, shell, the workflows,
 # YAML, Markdown and the e2e image's Dockerfile, each at its strictest settings; the files are the

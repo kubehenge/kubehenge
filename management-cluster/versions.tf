@@ -52,15 +52,34 @@ locals {
   # without waiting for it, and a reconcile that read the machine before the resize's task reference
   # was written clears that reference, so the bootstrap ISO's attach can time out on the VM's lock,
   # which capmox takes as a VMProvisionFailed it never retries. One patch waits for the resize, the
-  # other for any task still running on the VM. scripts/capmox-image.sh builds it reproducibly,
+  # other for any task still running on the VM. scripts/provider-image.sh builds it reproducibly,
   # and a release publishes it only when it comes out with this digest. It applies only while capmox
   # is at `release`.
   capmox_build = {
-    release = "v0.9.1"
-    commit  = "edd7461c2a2f335cd4fc1839171671681f4216c6"
+    upstream = "ionos-cloud/cluster-api-provider-proxmox"
+    package  = "./cmd"
+    release  = "v0.9.1"
+    commit   = "edd7461c2a2f335cd4fc1839171671681f4216c6"
     # capmox's own image is built with Go 1.26 on distroless static.
     go         = "go1.26.9"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
     image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:762ce6cf397a023c63dea6c9fa4864b687cc8dea42f7cf84ddb8f4eb38360c5b"
+  }
+
+  # The Add-on Provider for Helm creates a cluster's HelmReleaseProxy under a generated name and
+  # looks for it in its cache on the next reconcile, which its own status patch starts at once; when
+  # the cache lags, that reconcile creates a second one, and from then on every reconcile of the
+  # HelmChartProxy fails and its changes never reach the release. scripts/helm-addon-patches waits
+  # after the create until the cache has it. Built as capmox's is; it applies only while the provider
+  # is at `release`.
+  helm_addon_build = {
+    upstream = "kubernetes-sigs/cluster-api-addon-provider-helm"
+    package  = "."
+    release  = "v0.6.4"
+    commit   = "825662962a26dc339f3871184c91ed4bd2f83a4f"
+    # The provider's own image is built with Go 1.25 on distroless static.
+    go         = "go1.25.14"
+    base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
+    image      = "ghcr.io/kubehenge/cluster-api-addon-provider-helm@sha256:12d95dc080b82fac715dd31620b08726362bee2c752a9b69e2e2f76a55f9e833"
   }
 }
