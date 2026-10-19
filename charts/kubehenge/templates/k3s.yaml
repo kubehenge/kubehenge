@@ -240,6 +240,10 @@ agentConfig:
     # The kubelet refuses to start on kernel settings other than its own (kubehenge.sysctlFile).
     - protect-kernel-defaults=true
     - tls-cipher-suites={{ include "kubehenge.tlsCipherSuites" . }}
+    # servicelb's pods set these in their own network namespace, and k3s allows them only on nodes
+    # whose servicelb is on: while the control planes roll to switch it back on, an old server
+    # would refuse every pod servicelb gives it, and the next one would hold up its drain.
+    - allowed-unsafe-sysctls=net.ipv4.ip_forward,net.ipv6.conf.all.forwarding
   {{- if .controlPlane }}
   {{- include "kubehenge.controlPlaneTaints" . | nindent 2 }}
   {{- end }}

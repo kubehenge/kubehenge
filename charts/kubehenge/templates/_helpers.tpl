@@ -194,7 +194,7 @@ share has to have; the clustermesh-apiserver uses about 50 MiB. The load balance
 controller and a node's speaker, or kube-vip and its cloud provider.
 */}}
 {{- define "kubehenge.addonMemory" -}}
-kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"kyverno":384,"istio":384,"clusterMesh":128,"loadBalancer":96,"certManager":192,"rancher":2048,"rancherAgent":512}'
+kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"kyverno":384,"istio":384,"clusterMesh":128,"loadBalancer":128,"certManager":192,"rancher":2048,"rancherAgent":512}'
 {{- end -}}
 
 {{/*
