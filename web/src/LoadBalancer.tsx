@@ -47,7 +47,7 @@ export function loadBalancerText(lb: LoadBalancer, distribution: string | undefi
 }
 
 export const loadBalancerHint =
-  "Gives each Service of type LoadBalancer an address of its own from the addresses below, answered for by one of the nodes. MetalLB is recommended; kube-vip is the alternative.";
+  "Gives each Service of type LoadBalancer an address of its own from the load-balancer addresses, answered for by one of the nodes. MetalLB is recommended; kube-vip is the alternative.";
 
 const addressesHint =
   "Ranges (10.0.0.100-10.0.0.120), networks or single addresses on the nodes' network, apart from the node addresses, the API address, the gateway and other clusters' addresses.";
