@@ -84,7 +84,7 @@ The add-ons need memory too, on the workers, or on the control planes of a clust
 | Rancher | 2048 MiB |
 | Rancher's agent, in every cluster that registers | 512 MiB |
 
-A worker uses 384 MiB itself on k3s, 576 MiB on kubeadm and 640 MiB on RKE2; a control plane uses 2240 MiB on k3s and kubeadm and 2368 MiB on RKE2. A single k3s worker with every add-on but Rancher needs 3072 MiB, and the default machines hold every add-on but Rancher on every distribution. Kubehenge refuses a cluster short of that room when it is created and when an add-on is switched on or its nodes change. The interface raises the machines to it as add-ons are chosen and shows the add-ons' total on the Add-ons step.
+A worker counts 448 MiB for itself on k3s and 704 MiB on kubeadm and RKE2; a control plane counts 2560 MiB. A single k3s worker with every add-on but Rancher needs 3136 MiB, and the default machines hold every add-on but Rancher on every distribution. Kubehenge refuses a cluster short of that room when it is created and when an add-on is switched on or its nodes change. The interface raises the machines to it as add-ons are chosen and shows the add-ons' total on the Add-ons step.
 
 ### Add-ons
 

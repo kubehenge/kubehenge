@@ -16,7 +16,7 @@ const rke2: ClusterClass = {
   annotations: {
     "kubehenge.dev/addon-memory":
       '{"headlamp":64,"monitoring":1536,"kyverno":384,"certManager":192,"rancher":2048,"rancherAgent":512}',
-    "kubehenge.dev/node-memory": '{"controlPlane":2368,"worker":640}',
+    "kubehenge.dev/node-memory": '{"controlPlane":2560,"worker":704}',
   },
   versionFormat: { pattern: "^v1\\.\\d+\\.\\d+\\+rke2r\\d+$" },
   variables: [
