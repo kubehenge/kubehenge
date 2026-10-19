@@ -181,6 +181,11 @@ A message saying "the cluster's add-ons (…) need … MiB of memory on its work
 - **Switching Istio off takes long:** Kubehenge waits until no pod's traffic is redirected through ztunnel any more (the pod annotation `ambient.istio.io/redirection`), which needs the cluster reachable and istio-cni running on the pod's node. A pod whose node is gone keeps the annotation; delete the pod.
 - **Waypoints are not created:** they need the Gateway API's CRDs, which Kubehenge does not install.
 
+### Cluster Mesh
+
+- **A peer shows "not linked":** the reason beside it, and the cluster's `ClusterMeshNotLinked` events, say what is missing: the peer must run Cilium, have the mesh on, list this cluster, have a Cilium cluster id and an API address, and its pod range must overlap neither this cluster's pods nor its services. Two clusters given overlapping ranges by hand cannot be linked, since a range is fixed once a cluster exists.
+- **Linked, but pods do not reach the peer's:** `cilium clustermesh status` in either cluster names the peer it cannot reach. The peers' KVStoreMesh connects to port 32379/TCP of the other's API address; a firewall between the clusters has to let it through. Cilium's network policies apply across the mesh: a policy that denies by default has to allow the peer's pods.
+
 ### Rancher
 
 - **"cluster … already runs Rancher, with which every cluster registers":** only one cluster may install it; the others register with it. The interface refuses a second one when it is created, with "Rancher: cluster … already runs it, and every cluster registers with that one". A second cluster set to install it with kubectl gets no Rancher and a `RancherRefused` event (`kubectl describe cluster <name>`).

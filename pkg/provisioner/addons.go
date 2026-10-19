@@ -77,6 +77,7 @@ type Addons struct {
 	Monitoring  Monitoring
 	PodSecurity PodSecurity
 	Istio       Istio
+	ClusterMesh ClusterMesh
 	// CIS is the cluster's cis variable, which the add-ons make room for.
 	CIS bool
 }
@@ -98,6 +99,9 @@ func addonsOf(cluster *clusterv1.Cluster) (Addons, error) {
 		return a, err
 	}
 	if a.Istio, _, err = optionalVariable[Istio](cluster, istioAddon); err != nil {
+		return a, err
+	}
+	if a.ClusterMesh, _, err = optionalVariable[ClusterMesh](cluster, clusterMeshVariable); err != nil {
 		return a, err
 	}
 	a.Rancher, err = rancherOf(cluster)
@@ -187,6 +191,8 @@ type CNI struct {
 	Pods string
 	// ContainerForwarding is CNIForwardingAnnotation.
 	ContainerForwarding bool
+	// ClusterID is Cilium's cluster id, CiliumClusterIDAnnotation.
+	ClusterID int
 }
 
 // Endpoint is how workload clusters reach the Proxmox VE API.
@@ -308,12 +314,62 @@ func calicoResources(cluster *clusterv1.Cluster, cni CNI) (*corev1.Secret, error
 	}, nil
 }
 
-// clusterResourceSet applies the cluster's Proxmox VE Secret and, when Kubehenge installs Calico,
-// Calico's resources; each is retried on its own until it applies.
-func clusterResourceSet(cluster *clusterv1.Cluster, cni CNI) *addonsv1.ClusterResourceSet {
-	resources := []addonsv1.ResourceRef{{Kind: secretKind, Name: cluster.Name + "-proxmox"}}
-	if cni.Name == cniCalico {
-		resources = append(resources, addonsv1.ResourceRef{Kind: secretKind, Name: calicoResourcesName(cluster)})
+// ciliumValues are what Kubehenge sets in Cilium's chart, its own or the distribution's. The
+// cluster's name and id are Cilium's from the start: a cluster that joins a mesh later would
+// otherwise have to restart every workload.
+func ciliumValues(cluster *clusterv1.Cluster, id int, addons *Addons) (map[string]any, error) {
+	if len(cluster.Name) > MaxCiliumClusterName {
+		return nil, fmt.Errorf("cluster %s/%s: Cilium takes cluster names of at most %d characters", cluster.Namespace, cluster.Name, MaxCiliumClusterName)
+	}
+	values := map[string]any{"cluster": map[string]any{"name": cluster.Name, "id": id}}
+	if addons.ClusterMesh.Enabled {
+		values["clustermesh"] = clusterMeshValues()
+	}
+	if addons.Istio.Enabled {
+		// Cilium would otherwise take istio-cni's plugin out of the node's CNI configuration.
+		values["cni"] = map[string]any{"exclusive": false}
+	}
+	return values, nil
+}
+
+func rke2CiliumName(cluster *clusterv1.Cluster) string {
+	return cluster.Name + "-rke2-cilium"
+}
+
+// rke2CiliumConfig wraps, for the ClusterResourceSet, the HelmChartConfig through which RKE2's
+// helm-controller merges Kubehenge's values into RKE2's own Cilium chart. A change reaches the
+// running cluster, where a file on the nodes would reach only those created after it.
+func rke2CiliumConfig(cluster *clusterv1.Cluster, id int, addons *Addons) (*corev1.Secret, error) {
+	values, err := ciliumValues(cluster, id, addons)
+	if err != nil {
+		return nil, err
+	}
+	content, err := yaml.Marshal(values)
+	if err != nil {
+		return nil, fmt.Errorf("encoding Cilium's values: %w", err)
+	}
+	manifest, err := yaml.Marshal(map[string]any{
+		apiVersionKey: "helm.cattle.io/v1",
+		"kind":        "HelmChartConfig",
+		"metadata":    map[string]any{"name": "rke2-cilium", "namespace": metav1.NamespaceSystem},
+		"spec":        map[string]any{"valuesContent": string(content)},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encoding RKE2's Cilium configuration: %w", err)
+	}
+	return &corev1.Secret{
+		Name: rke2CiliumName(cluster), Namespace: cluster.Namespace,
+		Type: addonsv1.ClusterResourceSetSecretType,
+		Data: map[string][]byte{"rke2-cilium.yaml": manifest},
+	}, nil
+}
+
+// clusterResourceSet applies the cluster's Proxmox VE Secret and the other Secrets given, such as
+// Calico's resources when Kubehenge installs Calico; each is retried on its own until it applies.
+func clusterResourceSet(cluster *clusterv1.Cluster, secrets []*corev1.Secret) *addonsv1.ClusterResourceSet {
+	resources := make([]addonsv1.ResourceRef, 0, len(secrets))
+	for _, s := range secrets {
+		resources = append(resources, addonsv1.ResourceRef{Kind: secretKind, Name: s.Name})
 	}
 	return &addonsv1.ClusterResourceSet{
 		Name: cluster.Name + "-proxmox", Namespace: cluster.Namespace,
@@ -455,14 +511,12 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 		if err != nil {
 			return nil, err
 		}
-		values := map[string]any{
-			"ipam":     map[string]any{"mode": "cluster-pool", "operator": map[string]any{"clusterPoolIPv4PodCIDRList": []any{pods}}},
-			"operator": map[string]any{"replicas": 1},
+		values, err := ciliumValues(cluster, cni.ClusterID, addons)
+		if err != nil {
+			return nil, err
 		}
-		if addons.Istio.Enabled {
-			// Cilium would otherwise take istio-cni's plugin out of the node's CNI configuration.
-			values["cni"] = map[string]any{"exclusive": false}
-		}
+		values["ipam"] = map[string]any{"mode": "cluster-pool", "operator": map[string]any{"clusterPoolIPv4PodCIDRList": []any{pods}}}
+		values["operator"] = map[string]any{"replicas": 1}
 		wanted = append(wanted, chartProxy{"cni", cniCilium, metav1.NamespaceSystem, charts.Cilium, values})
 	case cniCalico:
 		// Only the operator: it creates Calico's CRDs itself, and calicoResources brings the

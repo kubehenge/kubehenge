@@ -1,8 +1,10 @@
 package provisioner
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -65,6 +67,7 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 	if r.Install {
 		errs = append(errs, v.validateRancher(ctx, old, c, class)...)
 	}
+	errs = append(errs, validateClusterMesh(old, c)...)
 	if len(errs) == 0 {
 		return nil
 	}
@@ -89,6 +92,37 @@ func (v *ClusterValidator) validateRancher(ctx context.Context, old, c *clusterv
 	}
 	if err := checkRancherNodes(c, class); err != nil && (switchedOn || checkRancherNodes(old, class) == nil) {
 		errs = append(errs, field.Forbidden(topology, err.Error()))
+	}
+	return errs
+}
+
+// validateClusterMesh holds a cluster to what Cilium takes: a name of at most 32 characters for a
+// new cluster that runs it, Cluster Mesh only beside it, peers other than the cluster itself, and a
+// Cilium cluster id that stays once given.
+func validateClusterMesh(old, c *clusterv1.Cluster) field.ErrorList {
+	var errs field.ErrorList
+	cni, _, err := optionalVariable[string](c, "cni")
+	if err != nil {
+		return field.ErrorList{field.Invalid(field.NewPath("spec", "topology", "variables"), "cni", err.Error())}
+	}
+	if old == nil && cni == cniCilium && len(c.Name) > MaxCiliumClusterName {
+		errs = append(errs, field.TooLong(field.NewPath("metadata", "name"), c.Name, MaxCiliumClusterName))
+	}
+	mesh, _, err := optionalVariable[ClusterMesh](c, clusterMeshVariable)
+	variables := field.NewPath("spec", "topology", "variables").Key(clusterMeshVariable)
+	switch {
+	case err != nil:
+		errs = append(errs, field.Invalid(variables, clusterMeshVariable, err.Error()))
+	case mesh.Enabled && cni != cniCilium:
+		errs = append(errs, field.Forbidden(variables, "Cluster Mesh links clusters that run Cilium; this one runs "+cmp.Or(cni, "its distribution's own CNI")))
+	case slices.Contains(mesh.Peers, c.Name):
+		errs = append(errs, field.Invalid(variables.Child("peers"), c.Name, "a cluster cannot list itself"))
+	}
+	if old != nil {
+		if was, ok := old.Annotations[CiliumClusterIDAnnotation]; ok && c.Annotations[CiliumClusterIDAnnotation] != was {
+			errs = append(errs, field.Forbidden(field.NewPath("metadata", "annotations").Key(CiliumClusterIDAnnotation),
+				"the Cilium cluster id is fixed once given: changing it would restart every workload and could clash with a peer's"))
+		}
 	}
 	return errs
 }

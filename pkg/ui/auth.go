@@ -33,11 +33,14 @@ type sessionView struct {
 	// CanTrust tells whether the user holds Sys.Modify on the workload pool, which installing
 	// Rancher and trusting identity providers of one's own need; unset when not known.
 	CanTrust *bool `json:"canTrust,omitempty"`
+	// Namespace is where the interface creates clusters, so it can offer the ones a new cluster
+	// can be linked with.
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // signedInView describes a signed-in session.
 func (s *Server) signedInView(username string, sess *session) sessionView {
-	v := sessionView{User: username, CSRF: sess.csrf}
+	v := sessionView{User: username, CSRF: sess.csrf, Namespace: s.Namespace}
 	if s.Headlamp != nil {
 		v.Headlamp = s.Headlamp.Port
 	}

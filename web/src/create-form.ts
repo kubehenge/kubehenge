@@ -62,6 +62,8 @@ export interface Form {
   podSecurity: PodSecurity;
   cis: boolean;
   istio: boolean;
+  clusterMesh: boolean;
+  meshPeers: string[];
   rancherInstall: boolean;
   rancherHostname: string;
   rancherRegister: boolean;
@@ -125,10 +127,20 @@ const addonNames = [
   ["monitoring", "monitoring"],
   ["kyverno", "Kyverno"],
   ["istio", "Istio"],
+  ["clusterMesh", "Cluster Mesh"],
   ["certManager", "cert-manager"],
   ["rancher", "Rancher"],
   ["rancherAgent", "Rancher's agent"],
 ] as const;
+
+// maxCiliumName is the longest cluster name Cilium takes, which names the cluster in a mesh.
+const maxCiliumName = 32;
+
+/** offersMesh says whether a form's cluster can join a Cluster Mesh: its class offers it and it runs Cilium. */
+export const offersMesh = (form: Form, c: ClusterClass | undefined): boolean =>
+  variable(c, "clusterMesh") !== undefined && form.cni === "cilium";
+
+const meshChosen = (form: Form): boolean => form.clusterMesh && form.cni === "cilium";
 
 // classFigures reads one of a class's annotations of memory figures: kubehenge.dev/addon-memory by
 // add-on, or kubehenge.dev/node-memory, what a controlPlane or worker uses itself.
@@ -153,6 +165,7 @@ export function addonMemory(form: Form, c: ClusterClass | undefined): { names: s
     monitoring: form.monitoring,
     kyverno: form.podSecurity.kyverno !== "off",
     istio: form.istio,
+    clusterMesh: meshChosen(form),
     certManager: form.monitoring || form.rancherInstall,
     rancher: form.rancherInstall,
     rancherAgent: !form.rancherInstall && form.rancherRegister,
@@ -257,6 +270,8 @@ export const newForm = (): Form => ({
   podSecurity: podSecurityOf(undefined),
   cis: false,
   istio: false,
+  clusterMesh: false,
+  meshPeers: [],
   rancherInstall: false,
   rancherHostname: "",
   rancherRegister: true,
@@ -336,6 +351,9 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   if (form.istio && defined.has("istio")) {
     variables["istio"] = { enabled: true };
   }
+  if (meshChosen(form)) {
+    variables["clusterMesh"] = { enabled: true, peers: form.meshPeers.toSorted() };
+  }
   if (form.rancherInstall) {
     variables["rancher"] = { install: true, hostname: form.rancherHostname };
   } else if (!form.rancherRegister) {
@@ -371,6 +389,13 @@ function rancherChoice(form: Form): string {
     return `Installed here, at ${form.rancherHostname}`;
   }
   return form.rancherRegister ? registeredWithRancher : "Not registered";
+}
+
+function meshChoice(form: Form): string {
+  if (!meshChosen(form)) {
+    return "Off";
+  }
+  return form.meshPeers.length > 0 ? `On, with ${form.meshPeers.toSorted().join(", ")}` : "On, with no peers yet";
 }
 
 // summary is what the Confirm step shows: each setting by its name, as the user chose it; Proxmox
@@ -444,6 +469,9 @@ function addOnRows(form: Form, defined: Set<string>): [string, string][] {
   }
   if (defined.has("istio")) {
     rows.push(["Istio", istioText(form.istio)]);
+  }
+  if (defined.has("clusterMesh") && form.cni === "cilium") {
+    rows.push(["Cluster Mesh", meshChoice(form)]);
   }
   if (defined.has("rancher")) {
     rows.push(["Rancher", rancherChoice(form)]);
@@ -555,6 +583,8 @@ function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
   }
   if (c?.variables.find((v) => v.name === "cni")?.required === true && !form.cni) {
     p.cni = "Choose a pod network.";
+  } else if (form.cni === "cilium" && form.name.length > maxCiliumName) {
+    p.cni = `Cilium takes cluster names of at most ${maxCiliumName} characters; this one has ${form.name.length}.`;
   }
   return p;
 }

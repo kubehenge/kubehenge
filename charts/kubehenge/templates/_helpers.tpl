@@ -191,7 +191,7 @@ grows while it fills its first two-hour block; Rancher's own pod peaks at about 
 first starts, and with a cluster registered Rancher, Fleet and their controllers hold about 1.2 GiB.
 */}}
 {{- define "kubehenge.addonMemory" -}}
-kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"kyverno":384,"istio":512,"certManager":192,"rancher":2048,"rancherAgent":512}'
+kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"kyverno":384,"istio":512,"clusterMesh":256,"certManager":192,"rancher":2048,"rancherAgent":512}'
 {{- end -}}
 
 {{/*
@@ -285,6 +285,28 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
         enabled:
           type: boolean
           default: false
+- name: clusterMesh
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        Cilium Cluster Mesh, for a cluster that runs Cilium: its pods reach those of the clusters it
+        is linked with, by address and through global services, and Cilium's network policies can
+        select them. Two clusters of one namespace are linked while both are on and list each
+        other, with pod ranges apart; each then reads the other's pod names, labels and identities.
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        peers:
+          type: array
+          maxItems: 254
+          description: The clusters of this namespace to link with.
+          items:
+            type: string
+            maxLength: 32
+            pattern: "^[a-z]([-a-z0-9]*[a-z0-9])?$"
 - name: rancher
   required: false
   schema:

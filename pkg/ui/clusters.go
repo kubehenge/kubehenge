@@ -52,7 +52,7 @@ const maxClusterName = 40
 
 // Variables a cluster may change after creation; the others describe where its VMs live.
 var changeableVariables = map[string]bool{
-	"headlamp": true, "monitoring": true, "rancher": true, "podSecurity": true, "istio": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true,
+	"headlamp": true, "monitoring": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true,
 }
 
 // autoUpgraded is where Kubehenge's controller records the last automatic upgrade.
@@ -195,6 +195,8 @@ type clusterView struct {
 	Machines     []machineView              `json:"machines,omitempty"`
 	// Headlamp names the cluster in the shared Headlamp, which offers the interface's namespace.
 	Headlamp string `json:"headlamp,omitempty"`
+	// Mesh is how each peer stands that the cluster lists for Cluster Mesh, while it is on.
+	Mesh []provisioner.MeshPeer `json:"mesh,omitempty"`
 }
 
 type conditionView struct {
@@ -329,6 +331,10 @@ func (s *Server) listClusters(w http.ResponseWriter, r *http.Request, u user) {
 	if err != nil {
 		s.proxmoxError(w, err)
 		return
+	}
+	// The peers' standing is an addition to the clusters, which show without it.
+	if err := s.addMesh(r.Context(), u, list.Items, views, visibleKeys(views)); err != nil {
+		s.Log.Error("reading the clusters' Cluster Mesh peers", "error", err)
 	}
 	slices.SortFunc(views, func(a, b clusterView) int {
 		return cmp.Or(strings.Compare(a.Namespace, b.Namespace), strings.Compare(a.Name, b.Name))
@@ -469,6 +475,9 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	v := s.view(c, access.path, access.held)
+	if err := s.addClusterMesh(r.Context(), u, &v); err != nil {
+		s.Log.Error("reading a cluster's Cluster Mesh peers", "cluster", c.Namespace+"/"+c.Name, "error", err)
+	}
 	var machines clusterv1.MachineList
 	if err := u.kube.List(r.Context(), &machines, client.InNamespace(c.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: c.Name}); err != nil {
 		s.kubeError(w, err)
@@ -568,14 +577,8 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
 	if !ok {
 		return
 	}
-	nodes, err := nodesPrefix(req.Variables["network"])
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
-		return
-	}
-	pods, services, err := clusterRanges(class, nodes, req.Pods, req.Services)
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+	pods, services, ok := s.newRanges(w, r, u, &req, class)
+	if !ok {
 		return
 	}
 	pool, err := s.poolPath(s.Namespace, req.Name)

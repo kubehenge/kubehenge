@@ -1,7 +1,8 @@
 import type { JSX } from "react";
 
+import { MeshPeersField, meshHint } from "./ClusterMesh";
 import { modeChoices, upgradeModes } from "./ClusterUpgrades";
-import { addonMemory, machineLeast, rancherMinimumCores, variable } from "./create-form";
+import { addonMemory, machineLeast, offersMesh, rancherMinimumCores, variable } from "./create-form";
 import type { StepProps } from "./CreateSteps";
 import { PodSecurityFields, cisHint } from "./PodSecurity";
 import type { ClusterClass } from "./types";
@@ -14,7 +15,12 @@ export function AddOnsStep({
   shown,
   cls,
   canTrust,
-}: StepProps & { cls: ClusterClass | undefined; canTrust: boolean | undefined }): JSX.Element {
+  namespace,
+}: StepProps & {
+  cls: ClusterClass | undefined;
+  canTrust: boolean | undefined;
+  namespace: string | undefined;
+}): JSX.Element {
   const used = addonMemory(form, cls);
   const carrier = form.workerReplicas > 0 ? "workerMachine" : "controlPlaneMachine";
   return (
@@ -112,6 +118,30 @@ export function AddOnsStep({
           <p className="hint" id="istio-hint">
             {istioHint}
           </p>
+        </>
+      )}
+      {offersMesh(form, cls) && (
+        <>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={form.clusterMesh}
+              aria-describedby="mesh-hint"
+              onChange={(e) => set("clusterMesh", e.target.checked)}
+            />{" "}
+            Join a Cluster Mesh
+          </label>
+          <p className="hint" id="mesh-hint">
+            {meshHint}
+          </p>
+          {form.clusterMesh && namespace !== undefined && (
+            <MeshPeersField
+              namespace={namespace}
+              self={form.name}
+              value={form.meshPeers}
+              onChange={(p) => set("meshPeers", p)}
+            />
+          )}
         </>
       )}
       <label className="check">

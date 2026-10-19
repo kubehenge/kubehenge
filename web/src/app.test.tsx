@@ -497,6 +497,8 @@ describe("create", () => {
     podSecurity: { admission: "restricted", kyverno: "off" },
     cis: false,
     istio: false,
+    clusterMesh: false,
+    meshPeers: [],
     rancherInstall: false,
     rancherHostname: "",
     rancherRegister: false,
@@ -601,6 +603,34 @@ describe("create", () => {
     });
     expect(request({ ...form, istio: true }, withIstio).variables["istio"]).toStrictEqual({ enabled: true });
     expect(request({ ...form, istio: true }, rke2).variables).not.toHaveProperty("istio");
+  });
+
+  it("joins a Cluster Mesh only where the cluster runs Cilium", () => {
+    const withMesh: ClusterClass = {
+      ...rke2,
+      annotations: { "kubehenge.dev/addon-memory": '{"clusterMesh":256}' },
+      variables: [...rke2.variables, { name: "clusterMesh", required: false, schema: { type: "object" } }],
+    };
+    const meshed = { ...form, clusterMesh: true, meshPeers: ["db", "api"] };
+    expect(Object.fromEntries(summary(form, withMesh))).toMatchObject({ "Cluster Mesh": "Off" });
+    expect(Object.fromEntries(summary(meshed, withMesh))).toMatchObject({ "Cluster Mesh": "On, with api, db" });
+    expect(Object.fromEntries(summary({ ...meshed, meshPeers: [] }, withMesh))).toMatchObject({
+      "Cluster Mesh": "On, with no peers yet",
+    });
+    expect(request(meshed, withMesh).variables["clusterMesh"]).toStrictEqual({ enabled: true, peers: ["api", "db"] });
+    expect(addonMemory(meshed, withMesh)).toStrictEqual({ names: ["Cluster Mesh"], mib: 256 });
+
+    const canal = { ...meshed, cni: "canal" };
+    expect(Object.fromEntries(summary(canal, withMesh))).not.toHaveProperty("Cluster Mesh");
+    expect(request(canal, withMesh).variables).not.toHaveProperty("clusterMesh");
+    expect(addonMemory(canal, withMesh).mib).toBe(0);
+    expect(request(meshed, rke2).variables).not.toHaveProperty("clusterMesh");
+
+    const long = "a".repeat(33);
+    expect(fieldProblems("Network", { ...form, name: long }, withMesh)).toStrictEqual({
+      cni: "Cilium takes cluster names of at most 32 characters; this one has 33.",
+    });
+    expect(fieldProblems("Network", { ...form, name: long, cni: "canal" }, withMesh)).toStrictEqual({});
   });
 
   it("starts automatic upgrades with a window in the browser's time zone", () => {

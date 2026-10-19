@@ -12,8 +12,8 @@ import {
   type ReactNode,
 } from "react";
 
-import { ApiError } from "./api";
-import type { Cluster } from "./types";
+import { ApiError, api } from "./api";
+import type { ChangeRequest, Cluster } from "./types";
 
 // minPassphrase is the fewest characters the appliance takes for the state passphrase.
 export const minPassphrase = 16;
@@ -460,4 +460,26 @@ export function Dialog({
       </form>
     </dialog>
   );
+}
+
+// useChange sends one change and closes the dialog when it is accepted.
+export function useChange(
+  c: Cluster,
+  onClose: () => void,
+): { busy: boolean; error: string | undefined; send: (req: ChangeRequest) => Promise<void> } {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const send = async (req: ChangeRequest): Promise<void> => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.change(c.namespace, c.name, req);
+      onClose();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return { busy, error, send };
 }

@@ -35,11 +35,19 @@ const raising = new Set<keyof Form>([
   "monitoring",
   "podSecurity",
   "istio",
+  "cni",
+  "clusterMesh",
   "rancherInstall",
   "rancherRegister",
 ]);
 
-export function CreateCluster({ canTrust }: { canTrust?: boolean | undefined }): JSX.Element {
+export function CreateCluster({
+  canTrust,
+  namespace,
+}: {
+  canTrust?: boolean | undefined;
+  namespace?: string | undefined;
+}): JSX.Element {
   const [classes, setClasses] = useState<ClusterClass[]>([]);
   const [discarding, setDiscarding] = useState(false);
   const [bridgesByNode, setBridgesByNode] = useState<Record<string, Bridge[]>>({});
@@ -225,7 +233,9 @@ export function CreateCluster({ canTrust }: { canTrust?: boolean | undefined }):
               rules={rules}
             />
           )}
-          {step === "Add-ons" && <AddOnsStep form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} />}
+          {step === "Add-ons" && (
+            <AddOnsStep form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} namespace={namespace} />
+          )}
           {step === "Identity providers" && (
             <IdentityStep
               form={form}
