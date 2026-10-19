@@ -144,23 +144,37 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err = r.keep(ctx, cluster, creds, true); err != nil {
 		return ctrl.Result{}, err
 	}
-	// After the rest: Rancher's removal waits on every cluster registered with it, however long
-	// that takes, and nothing else of this cluster waits with it.
+	removalWaiting, err := r.removeAfterTheRest(ctx, cluster, &addons, rancherRefused)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	// Nothing the waits are on changes the Cluster, so only a requeue looks again.
+	if addonWaiting || removalWaiting {
+		return ctrl.Result{RequeueAfter: waitInterval}, nil
+	}
+	return ctrl.Result{RequeueAfter: resync}, nil
+}
+
+// removeAfterTheRest removes the add-ons whose removal waits on other clusters, however long that
+// takes, so that nothing else of this cluster waits with them: Rancher, on every cluster registered
+// with it, and Istio, on the workload cluster itself. It reports whether either waits.
+func (r *Reconciler) removeAfterTheRest(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons, rancherRefused string) (bool, error) {
 	rancherWaiting := false
 	if !addons.Rancher.Install && rancherRefused == "" {
 		var with []string
 		if !addons.Monitoring.Enabled {
 			with = append(with, certManagerProxy(cluster))
 		}
+		var err error
 		if rancherWaiting, err = r.removeRancherWhenFree(ctx, cluster, with...); err != nil {
-			return ctrl.Result{}, err
+			return false, err
 		}
 	}
-	// Nothing the waits are on changes the Cluster, so only a requeue looks again.
-	if addonWaiting || rancherWaiting {
-		return ctrl.Result{RequeueAfter: waitInterval}, nil
+	if addons.Istio.Enabled {
+		return rancherWaiting, nil
 	}
-	return ctrl.Result{RequeueAfter: resync}, nil
+	istioWaiting, err := r.removeIstio(ctx, cluster)
+	return rancherWaiting || istioWaiting, err
 }
 
 // removeRancherWhenFree removes Rancher from a cluster that switched it off, or reports that it
@@ -272,9 +286,9 @@ func (r *Reconciler) addons(ctx context.Context, cluster *clusterv1.Cluster) (Ad
 	return addons, refused, nil
 }
 
-// removeSwitchedOff removes the proxies of Headlamp, monitoring, Kyverno and Istio when the
-// cluster switches them off; Rancher's removal waits on its registered clusters, apart from these.
-// It reports whether a removal waits on another.
+// removeSwitchedOff removes the proxies of Headlamp, monitoring and Kyverno when the cluster
+// switches them off; Rancher's and Istio's removals wait on other clusters, apart from these. It
+// reports whether a removal waits on another.
 func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons) (bool, error) {
 	var off []string
 	if !addons.Headlamp.Enabled {
@@ -286,22 +300,10 @@ func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.C
 	if err := r.removeProxies(ctx, cluster, off...); err != nil {
 		return false, err
 	}
-	waiting := false
 	if !addons.PodSecurity.kyvernoOn() {
-		wait, err := r.removeKyverno(ctx, cluster)
-		if err != nil {
-			return false, err
-		}
-		waiting = wait
+		return r.removeKyverno(ctx, cluster)
 	}
-	if !addons.Istio.Enabled {
-		wait, err := r.removeIstio(ctx, cluster)
-		if err != nil {
-			return false, err
-		}
-		waiting = waiting || wait
-	}
-	return waiting, nil
+	return false, nil
 }
 
 // applyAddons applies what the cluster gets installed: the Secrets of its ClusterResourceSet, the

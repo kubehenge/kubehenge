@@ -8,6 +8,7 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/yaml"
@@ -194,5 +195,38 @@ func TestReconcileKeepsIstioUntilItsWorkloadsLeaveTheMesh(t *testing.T) {
 	}
 	if !exists("web-headlamp") {
 		t.Error("Headlamp waits on Istio's removal")
+	}
+
+	// A cluster whose API does not answer fails the removal, after the rest is applied.
+	unreachable := &corev1.Secret{
+		Namespace: "team-a", Name: "web-kubeconfig",
+		Data: map[string][]byte{"value": []byte(`apiVersion: v1
+kind: Config
+clusters: [{name: web, cluster: {server: "https://127.0.0.1:1"}}]
+users: [{name: web, user: {token: t}}]
+contexts: [{name: web, context: {cluster: web, user: web}}]
+current-context: web
+`)},
+	}
+	if err := kube.Create(ctx, unreachable); err != nil {
+		t.Fatal(err)
+	}
+	if err := kube.Get(ctx, client.ObjectKeyFromObject(c), current); err != nil {
+		t.Fatal(err)
+	}
+	current.Spec.Topology.Variables = append(current.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: "monitoring", Value: apiextensionsv1.JSON{Raw: []byte(`{"enabled":true}`)}})
+	if err := kube.Update(ctx, current); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(c)}); err == nil {
+		t.Error("an unreachable cluster's workloads count as out of the mesh")
+	}
+	if !exists("web-monitoring") {
+		t.Error("monitoring waits on a cluster Istio's removal cannot reach")
+	}
+	for _, name := range istioProxies(c) {
+		if !exists(name) {
+			t.Errorf("%s removed from a cluster that cannot be reached", name)
+		}
 	}
 }
