@@ -237,7 +237,9 @@ function Summary({ cluster: c }: { cluster: Cluster }): JSX.Element {
         </dd>
         <dt>Workers</dt>
         <dd>
-          {c.workers.ready} of {c.workers.desired} ready
+          {c.workers.desired === 0 && c.workers.ready === 0
+            ? "None; the control planes run the workloads"
+            : `${c.workers.ready} of ${c.workers.desired} ready`}
         </dd>
         <dt>Proxmox VE pool</dt>
         <dd>{poolName(c.pool)}</dd>

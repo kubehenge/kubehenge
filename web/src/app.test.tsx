@@ -270,6 +270,15 @@ describe("clusters", () => {
     expect(calls.find((c) => c.key === "DELETE /api/clusters/default/web")?.headers.get("X-Kubehenge-CSRF")).toBe("c1");
   });
 
+  it("says what runs the workloads of a cluster without workers", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
+    const alone: Cluster = { ...web, workers: { desired: 0, ready: 0, available: 0, upToDate: 0 } };
+    fakeServer({ ...signedIn, "GET /api/clusters/default/web": () => ({ body: alone }) });
+    render(<App />);
+    const term = await screen.findByText("Workers", { selector: "dt" });
+    expect(term.nextElementSibling).toHaveTextContent("None; the control planes run the workloads");
+  });
+
   it("scales a worker pool", async () => {
     window.history.replaceState(null, "", "/clusters/default/web");
     const calls = fakeServer({
