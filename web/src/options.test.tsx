@@ -132,4 +132,72 @@ describe("a cluster's options", () => {
       variables: { podSecurity: { admission: "restricted", kyverno: "restricted" } },
     });
   });
+
+  it("switch the load balancer, keeping its addresses while it is off", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const onNetwork = {
+      ...cluster,
+      variables: {
+        ...cluster.variables,
+        controlPlaneEndpoint: "10.0.0.5",
+        network: { bridge: "vmbr0", addresses: ["10.0.0.10-10.0.0.20"], prefix: 24, gateway: "10.0.0.1" },
+      },
+    };
+    const calls = fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: onNetwork },
+      "PATCH /api/clusters/clusters/web": { body: onNetwork },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    const row = await screen.findByRole("row", { name: /Load balancer/u });
+    expect(row).toHaveTextContent("k3s's own, on the nodes' addresses");
+    await user.click(screen.getByRole("button", { name: "Edit the load balancer" }));
+    const dialog = screen.getByRole("dialog", { name: "Load balancer" });
+    const save = within(dialog).getByRole("button", { name: "Save" });
+    expect(save).toBeDisabled();
+    await user.selectOptions(within(dialog).getByLabelText("Load balancer"), "metallb");
+    const addresses = within(dialog).getByLabelText("Load-balancer addresses");
+    await user.type(addresses, "10.0.0.15-10.0.0.30");
+    expect(addresses).toHaveAccessibleDescription(/10.0.0.15-10.0.0.30 overlaps the node addresses/u);
+    expect(save).toBeDisabled();
+    await user.clear(addresses);
+    await user.type(addresses, "10.0.0.100-10.0.0.120");
+    await user.click(save);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: { loadBalancer: { enabled: true, implementation: "metallb", addresses: ["10.0.0.100-10.0.0.120"] } },
+    });
+  });
+
+  it("switch the load balancer off, keeping what it held", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const balanced = {
+      ...cluster,
+      variables: {
+        ...cluster.variables,
+        loadBalancer: { enabled: true, implementation: "kube-vip", addresses: ["10.0.0.100-10.0.0.120"] },
+      },
+    };
+    const calls = fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: balanced },
+      "PATCH /api/clusters/clusters/web": { body: balanced },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    const row = await screen.findByRole("row", { name: /Load balancer/u });
+    expect(row).toHaveTextContent("kube-vip, on 10.0.0.100-10.0.0.120");
+    await user.click(screen.getByRole("button", { name: "Edit the load balancer" }));
+    const dialog = screen.getByRole("dialog", { name: "Load balancer" });
+    await user.selectOptions(within(dialog).getByLabelText("Load balancer"), "");
+    expect(within(dialog).queryByLabelText("Load-balancer addresses")).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: { loadBalancer: { enabled: false, implementation: "kube-vip", addresses: ["10.0.0.100-10.0.0.120"] } },
+    });
+  });
 });

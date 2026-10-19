@@ -52,7 +52,7 @@ const maxClusterName = 40
 
 // Variables a cluster may change after creation; the others describe where its VMs live.
 var changeableVariables = map[string]bool{
-	"headlamp": true, "monitoring": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true,
+	"headlamp": true, "monitoring": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true,
 }
 
 // autoUpgraded is where Kubehenge's controller records the last automatic upgrade.

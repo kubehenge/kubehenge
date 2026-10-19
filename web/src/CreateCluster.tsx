@@ -37,6 +37,7 @@ const raising = new Set<keyof Form>([
   "istio",
   "cni",
   "clusterMesh",
+  "loadBalancer",
   "rancherInstall",
   "rancherRegister",
 ]);

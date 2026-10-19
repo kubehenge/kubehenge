@@ -11,6 +11,7 @@ import {
   type Form,
   type Machine,
 } from "./create-form";
+import { LoadBalancerFields } from "./LoadBalancer";
 import { addressBits } from "./network";
 import { OIDCProviders } from "./OIDCProviders";
 import { HAField, PlacementFields, type HARulesRead } from "./Placement";
@@ -244,6 +245,16 @@ export function NetworkStep({
       <Field label="DNS servers" hint="One per line or separated by commas." error={shown("dnsServers")}>
         {(id) => <input id={id} value={form.dnsServers} onChange={(e) => set("dnsServers", e.target.value)} />}
       </Field>
+      {variable(cls, "loadBalancer") && (
+        <LoadBalancerFields
+          distribution={cls?.distribution}
+          implementation={form.loadBalancer}
+          addresses={form.loadBalancerAddresses}
+          error={shown("loadBalancerAddresses")}
+          onImplementation={(i) => set("loadBalancer", i)}
+          onAddresses={(a) => set("loadBalancerAddresses", a)}
+        />
+      )}
       {cni && (
         <Field label="Pod network" hint={cni.description ?? "Fixed once the cluster exists."} error={shown("cni")}>
           {(id) => (

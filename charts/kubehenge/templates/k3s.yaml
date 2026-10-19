@@ -96,7 +96,7 @@ spec:
               path: /spec/template/spec/kthreesConfigSpec/files/-
               valueFrom:
                 template: |
-                  {{- include "kubehenge.kubeVipFile" (dict "path" "/var/lib/rancher/k3s/agent/pod-manifests/kube-vip.yaml" "kubeconfig" "/etc/rancher/k3s/k3s.yaml") | nindent 18 }}
+                  {{- include "kubehenge.kubeVipFile" (dict "root" . "path" "/var/lib/rancher/k3s/agent/pod-manifests/kube-vip.yaml" "kubeconfig" "/etc/rancher/k3s/k3s.yaml") | nindent 18 }}
             - op: add
               path: /spec/template/spec/kthreesConfigSpec/files/-
               valueFrom:
@@ -139,6 +139,36 @@ spec:
                 content: |
                   flannel-backend: none
                   disable-network-policy: true
+    # Cilium chains the portmap plugin for host ports (ciliumValues), but k3s without flannel
+    # leaves containerd's plugins in /opt/cni/bin, where Cilium installs only its own; k3s carries
+    # portmap among the plugins of its data directory, which it has unpacked by the time pods start.
+    - name: k3s-cilium-portmap
+      enabledIf: {{ "{{ if eq .cni \"cilium\" }}true{{ end }}" | quote }}
+      definitions:
+        {{- range $kind, $sel := dict "KThreesControlPlaneTemplate" (dict "selector" (dict "controlPlane" true) "api" "controlplane.cluster.x-k8s.io/v1beta2" "commands" "/spec/template/spec/kthreesConfigSpec/preK3sCommands/-") "KThreesConfigTemplate" (dict "selector" (dict "machineDeploymentClass" (dict "names" (list "worker"))) "api" "bootstrap.cluster.x-k8s.io/v1beta2" "commands" "/spec/template/spec/preK3sCommands/-") }}
+        - selector:
+            apiVersion: {{ $sel.api }}
+            kind: {{ $kind }}
+            matchResources:
+              {{- toYaml $sel.selector | nindent 14 }}
+          jsonPatches:
+            - op: add
+              path: {{ $sel.commands }}
+              value: mkdir -p /opt/cni/bin && ln -sfn /var/lib/rancher/k3s/data/current/bin/portmap /opt/cni/bin/portmap
+        {{- end }}
+    # servicelb would answer for the same Services as the cluster's own load balancer.
+    - name: k3s-load-balancer
+      enabledIf: {{ "{{ with .loadBalancer }}{{ if .enabled }}true{{ end }}{{ end }}" | quote }}
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: KThreesControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/kthreesConfigSpec/serverConfig/disableComponents
+              value: [servicelb]
     - name: k3s-oidc
       enabledIf: {{ include "kubehenge.oidcEnabled" . }}
       definitions:
@@ -210,6 +240,10 @@ agentConfig:
     # The kubelet refuses to start on kernel settings other than its own (kubehenge.sysctlFile).
     - protect-kernel-defaults=true
     - tls-cipher-suites={{ include "kubehenge.tlsCipherSuites" . }}
+    # servicelb's pods set these in their own network namespace, and k3s allows them only on nodes
+    # whose servicelb is on: while the control planes roll to switch it back on, an old server
+    # would refuse every pod servicelb gives it, and the next one would hold up its drain.
+    - allowed-unsafe-sysctls=net.ipv4.ip_forward,net.ipv6.conf.all.forwarding
   {{- if .controlPlane }}
   {{- include "kubehenge.controlPlaneTaints" . | nindent 2 }}
   {{- end }}
@@ -245,6 +279,41 @@ template:
               - service-account-extend-token-expiration=false
               - anonymous-auth=false
               - tls-cipher-suites={{ include "kubehenge.tlsCipherSuites" . }}
+        # Traefik runs as RKE2 runs its own, on every node's ports 80 and 443, rather than behind
+        # k3s's servicelb, so that it answers there whatever load balancer the cluster has.
+        # Routes whose TLS options conflict fail rather than fall back to the defaults, which would
+        # drop a host's client-certificate check (GHSA-g55h-rg46-x9c5).
+        - path: /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
+          owner: root:root
+          permissions: "0600"
+          content: |
+            apiVersion: helm.cattle.io/v1
+            kind: HelmChartConfig
+            metadata:
+              name: traefik
+              namespace: kube-system
+            spec:
+              valuesContent: |-
+                deployment:
+                  kind: DaemonSet
+                updateStrategy:
+                  rollingUpdate:
+                    maxUnavailable: 1
+                    maxSurge: 0
+                ports:
+                  web:
+                    hostPort: 80
+                  websecure:
+                    hostPort: 443
+                service:
+                  spec:
+                    type: ClusterIP
+                providers:
+                  kubernetesIngress:
+                    publishedService:
+                      enabled: false
+                core:
+                  strictTLSOptions: true
       serverConfig:
         # The Proxmox VE cloud controller manager initialises the nodes instead of k3s's own.
         disableCloudController: true

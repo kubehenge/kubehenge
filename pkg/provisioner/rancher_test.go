@@ -192,7 +192,7 @@ func TestRancherProxies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(proxies) != 4 || proxies[2].GetName() != "web-cert-manager" || proxies[3].GetName() != "web-rancher" {
+	if len(proxies) != 5 || proxies[2].GetName() != "web-cert-manager" || proxies[3].GetName() != "web-rancher" {
 		t.Fatalf("proxies %v", proxies)
 	}
 	namespace, _, _ := unstructured.NestedString(proxies[3].Object, "spec", "namespace")

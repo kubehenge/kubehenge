@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["workloadPool", "providerNamespaces", "interface", "clusters", "clusterOIDC", "podSecurityExempt", "image", "proxmox", "addons"],
+  "required": ["workloadPool", "providerNamespaces", "interface", "clusters", "clusterOIDC", "podSecurityExempt", "image", "kubeVip", "proxmox", "addons"],
   "properties": {
     "chartDigest": {
       "description": "Digest of the chart's files, which the management cluster's module passes so that a changed chart upgrades the release whatever its version says.",
@@ -68,6 +68,10 @@
       "description": "Kubehenge's controller image; empty means the one this chart was released with.",
       "type": "string"
     },
+    "kubeVip": {
+      "description": "kube-vip's image by registry, repository, tag and digest.",
+      "$ref": "#/$defs/pinnedImage"
+    },
     "proxmox": {
       "type": "object",
       "additionalProperties": false,
@@ -85,7 +89,7 @@
     "addons": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["headlamp", "rancher", "monitoring", "kyverno", "kyvernoPolicies", "istio", "certManager", "cloudControllerManager", "csiPlugin", "cilium", "calico"],
+      "required": ["headlamp", "rancher", "monitoring", "kyverno", "kyvernoPolicies", "istio", "certManager", "cloudControllerManager", "csiPlugin", "cilium", "calico", "traefik", "metallb", "kubeVip", "kubeVipCloudProvider"],
       "properties": {
         "headlamp": {
           "allOf": [{ "$ref": "#/$defs/chart" }],
@@ -117,8 +121,7 @@
           "properties": {
             "kubeRBACProxy": {
               "description": "kube-rbac-proxy's image by registry, repository, tag and digest.",
-              "type": "string",
-              "pattern": "^[^/@]+/[^:@]+:[^@]+@sha256:[0-9a-f]{64}$"
+              "$ref": "#/$defs/pinnedImage"
             }
           },
           "unevaluatedProperties": false
@@ -130,7 +133,21 @@
         "cloudControllerManager": { "$ref": "#/$defs/chartOnly" },
         "csiPlugin": { "$ref": "#/$defs/chartOnly" },
         "cilium": { "$ref": "#/$defs/chartOnly" },
-        "calico": { "$ref": "#/$defs/chartOnly" }
+        "calico": { "$ref": "#/$defs/chartOnly" },
+        "traefik": { "$ref": "#/$defs/chartOnly" },
+        "metallb": { "$ref": "#/$defs/chartOnly" },
+        "kubeVip": { "$ref": "#/$defs/chartOnly" },
+        "kubeVipCloudProvider": {
+          "allOf": [{ "$ref": "#/$defs/chart" }],
+          "required": ["image"],
+          "properties": {
+            "image": {
+              "description": "kube-vip-cloud-provider's image by registry, repository, tag and digest.",
+              "$ref": "#/$defs/pinnedImage"
+            }
+          },
+          "unevaluatedProperties": false
+        }
       }
     }
   },
@@ -158,6 +175,10 @@
     "chartOnly": {
       "allOf": [{ "$ref": "#/$defs/chart" }],
       "unevaluatedProperties": false
+    },
+    "pinnedImage": {
+      "type": "string",
+      "pattern": "^[^/@]+/[^:@]+:[^@]+@sha256:[0-9a-f]{64}$"
     }
   }
 }

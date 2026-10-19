@@ -65,7 +65,7 @@ type Reconciler struct {
 	// Registrar removes clusters from Rancher before Rancher itself is switched off.
 	Registrar *Registrar
 	// Remotes reaches the workload clusters, to take their workloads out of the mesh before Istio
-	// is switched off.
+	// is switched off and to do what their load balancers need there.
 	Remotes *Remotes
 	// Events reports on a Cluster what the controller refuses to do for it; may be nil.
 	Events events.EventRecorder
@@ -164,8 +164,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 // afterTheRest does what waits on other clusters or on the workload cluster's own API, however long
 // that takes, so that nothing else of this cluster waits with it: removing Rancher, which waits on
-// every cluster registered with it, removing Istio, which waits on the cluster's workloads, and
-// linking the cluster's Cluster Mesh peers. It reports whether any of it waits.
+// every cluster registered with it, removing Istio, which waits on the cluster's workloads,
+// linking the cluster's Cluster Mesh peers, and what its load balancer needs in the cluster. It
+// reports whether any of it waits.
 func (r *Reconciler) afterTheRest(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons, rancherRefused string) (bool, error) {
 	rancherWaiting := false
 	if !addons.Rancher.Install && rancherRefused == "" {
@@ -186,7 +187,11 @@ func (r *Reconciler) afterTheRest(ctx context.Context, cluster *clusterv1.Cluste
 		}
 	}
 	meshWaiting, err := r.meshCluster(ctx, cluster, addons)
-	return rancherWaiting || istioWaiting || meshWaiting, err
+	if err != nil {
+		return false, err
+	}
+	lbWaiting, err := r.reconcileLoadBalancer(ctx, cluster, addons.LoadBalancer)
+	return rancherWaiting || istioWaiting || meshWaiting || lbWaiting, err
 }
 
 // removeRancherWhenFree removes Rancher from a cluster that switched it off, or reports that it
@@ -298,9 +303,10 @@ func (r *Reconciler) addons(ctx context.Context, cluster *clusterv1.Cluster) (Ad
 	return addons, refused, nil
 }
 
-// removeSwitchedOff removes the proxies of Headlamp, monitoring and Kyverno when the cluster
-// switches them off; Rancher's and Istio's removals wait on other clusters, apart from these. It
-// reports whether a removal waits on another.
+// removeSwitchedOff removes the proxies of Headlamp, monitoring, the load balancer and Kyverno when
+// the cluster switches them off, and kube-vip's cloud provider when the load balancer is MetalLB;
+// Rancher's and Istio's removals wait on other clusters, apart from these. It reports whether a
+// removal waits on another.
 func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons) (bool, error) {
 	var off []string
 	if !addons.Headlamp.Enabled {
@@ -308,6 +314,12 @@ func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.C
 	}
 	if !addons.Monitoring.Enabled {
 		off = append(off, monitoringProxy(cluster))
+	}
+	if !addons.LoadBalancer.Enabled {
+		off = append(off, loadBalancerProxy(cluster))
+	}
+	if !addons.LoadBalancer.Enabled || addons.LoadBalancer.implementation() != kubeVip {
+		off = append(off, kubeVipProviderProxy(cluster))
 	}
 	if err := r.removeProxies(ctx, cluster, off...); err != nil {
 		return false, err

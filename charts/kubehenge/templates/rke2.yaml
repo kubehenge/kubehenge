@@ -93,7 +93,7 @@ spec:
               path: /spec/template/spec/files/-
               valueFrom:
                 template: |
-                  {{- include "kubehenge.kubeVipFile" (dict "path" "/var/lib/rancher/rke2/agent/pod-manifests/kube-vip.yaml" "kubeconfig" "/etc/rancher/rke2/rke2.yaml") | nindent 18 }}
+                  {{- include "kubehenge.kubeVipFile" (dict "root" . "path" "/var/lib/rancher/rke2/agent/pod-manifests/kube-vip.yaml" "kubeconfig" "/etc/rancher/rke2/rke2.yaml") | nindent 18 }}
             - op: add
               path: /spec/template/spec/files/-
               valueFrom:
@@ -210,6 +210,27 @@ template:
         permissions: "0600"
         content: |
           audit-policy-file: /etc/rancher/rke2/audit-policy.yaml
+      # RKE2's Traefik tolerates no taint, so it would leave the control planes once a worker
+      # joins, and the cluster's API address would serve no ingress. Routes whose TLS options
+      # conflict fail rather than fall back to the defaults, which would drop a host's
+      # client-certificate check (GHSA-g55h-rg46-x9c5).
+      - path: /var/lib/rancher/rke2/server/manifests/rke2-traefik-config.yaml
+        owner: root:root
+        permissions: "0600"
+        content: |
+          apiVersion: helm.cattle.io/v1
+          kind: HelmChartConfig
+          metadata:
+            name: rke2-traefik
+            namespace: kube-system
+          spec:
+            valuesContent: |-
+              core:
+                strictTLSOptions: true
+              tolerations:
+                - key: node-role.kubernetes.io/control-plane
+                  operator: Exists
+                  effect: NoSchedule
     serverConfig:
       # The Proxmox VE cloud controller manager initialises the nodes instead of RKE2's own.
       cloudProviderName: external

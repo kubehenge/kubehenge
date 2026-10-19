@@ -1,28 +1,17 @@
-import { useEffect, useId, useState, type JSX } from "react";
+import { useId, useState, type JSX } from "react";
 
-import { api } from "./api";
 import { ClusterMeshDialog, meshText, runsCilium } from "./ClusterMesh";
 import { UpgradesDialog, describe, upgradePolicy } from "./ClusterUpgrades";
+import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBalancer";
 import { OIDCProviders, cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
-import {
-  HAField,
-  PlacementFields,
-  allowedNodes,
-  haText,
-  placeOf,
-  placeProblem,
-  placeText,
-  useHAOffered,
-  useHARules,
-} from "./Placement";
+import { HADialog, PlacementDialog, haOn, haText, placeOf, placeText, useHAOffered } from "./Placement";
 import { PodSecurityFields, cisText, enforced, podSecurityOf, podSecurityText } from "./PodSecurity";
-import type { Cluster, OIDCProvider, PveNode } from "./types";
+import type { Cluster, OIDCProvider } from "./types";
 import {
   Dialog,
   ErrorBox,
   Field,
   cniName,
-  errorMessage,
   filled,
   istioHint,
   istioText,
@@ -41,6 +30,7 @@ export type OptionAction =
   | "podSecurity"
   | "istio"
   | "clusterMesh"
+  | "loadBalancer"
   | "rancher"
   | "upgrades"
   | "oidc";
@@ -67,6 +57,9 @@ export function OptionDialog({
     }
     case "clusterMesh": {
       return <ClusterMeshDialog cluster={c} onClose={onClose} />;
+    }
+    case "loadBalancer": {
+      return <LoadBalancerDialog cluster={c} onClose={onClose} />;
     }
     case "rancher": {
       return <RancherDialog cluster={c} onClose={onClose} />;
@@ -134,6 +127,12 @@ export function Options({
   const podSecurity = enforced(podSecurityOf(c.variables["podSecurity"]), cis);
   const rows: { label: string; value: string; action?: OptionAction; button?: string; name?: string }[] = [
     { label: "Pod network", value: cniName(text(c.variables["cni"]) ?? "") || "The distribution's own" },
+    {
+      label: "Load balancer",
+      value: loadBalancerText(loadBalancerOf(c.variables["loadBalancer"]), c.distribution),
+      action: "loadBalancer",
+      name: "the load balancer",
+    },
     { label: "CIS hardening", value: cisText(cis) },
     {
       label: "Placement",
@@ -295,9 +294,6 @@ function PodSecurityDialog({ cluster: c, onClose }: { cluster: Cluster; onClose:
   );
 }
 
-// haOn reads the cluster's proxmoxHA variable, which takes part unless it is false.
-const haOn = (c: Cluster): boolean => flag(c.variables["proxmoxHA"]) !== false;
-
 const istioOn = (c: Cluster): boolean => flag(record(c.variables["istio"])["enabled"]) === true;
 
 function IstioDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
@@ -330,87 +326,6 @@ function IstioDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =>
         {istioHint}
       </p>
       <ErrorBox message={error} />
-    </Dialog>
-  );
-}
-
-function HADialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
-  const [on, setOn] = useState(haOn(c));
-  const { busy, error, send } = useChange(c, onClose);
-  return (
-    <Dialog
-      title="Proxmox VE HA"
-      onClose={onClose}
-      onSubmit={() => {
-        void send({ variables: { proxmoxHA: on } });
-      }}
-      actions={
-        <>
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="primary" disabled={busy || on === haOn(c)}>
-            Save
-          </button>
-        </>
-      }
-    >
-      <HAField checked={on} onChange={setOn} />
-      <ErrorBox message={error} />
-    </Dialog>
-  );
-}
-
-function PlacementDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
-  const kept = texts(c.variables["allowedNodes"]);
-  const initial = placeOf(kept);
-  const [value, setValue] = useState(initial);
-  const [nodes, setNodes] = useState<PveNode[]>([]);
-  const [nodesError, setNodesError] = useState<string>();
-  const rules = useHARules();
-  const { busy, error, send } = useChange(c, onClose);
-  useEffect(() => {
-    async function load(): Promise<void> {
-      try {
-        setNodes(await api.nodes());
-      } catch (err) {
-        setNodesError(errorMessage(err));
-      }
-    }
-    void load();
-  }, []);
-  const problem = placeProblem(value);
-  const next = allowedNodes(value) ?? null;
-  const changed = JSON.stringify(next) !== JSON.stringify(allowedNodes(initial) ?? null);
-  return (
-    <Dialog
-      title="Placement"
-      onClose={onClose}
-      onSubmit={() => {
-        void send({ variables: { allowedNodes: next } });
-      }}
-      actions={
-        <>
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="primary" disabled={busy || !changed || problem !== undefined}>
-            Save
-          </button>
-        </>
-      }
-    >
-      <PlacementFields
-        value={value}
-        onChange={setValue}
-        problem={problem}
-        hint="The Proxmox VE nodes the cluster's VMs may run on. A change applies to the VMs created after it, by scaling up, an upgrade or a replacement; those running stay where they are."
-        nodes={nodes}
-        kept={kept}
-        rules={rules}
-        framed={false}
-      />
-      <ErrorBox message={nodesError ?? error} />
     </Dialog>
   );
 }

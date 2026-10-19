@@ -115,7 +115,7 @@ spec:
               path: /spec/template/spec/kubeadmConfigSpec/files/-
               valueFrom:
                 template: |
-                  {{- include "kubehenge.kubeVipFile" (dict "path" "/etc/kubernetes/manifests/kube-vip.yaml" "kubeconfig" "/etc/kubernetes/admin.conf") | nindent 18 }}
+                  {{- include "kubehenge.kubeVipFile" (dict "root" . "path" "/etc/kubernetes/manifests/kube-vip.yaml" "kubeconfig" "/etc/kubernetes/admin.conf") | nindent 18 }}
             - op: add
               path: /spec/template/spec/kubeadmConfigSpec/files/-
               valueFrom:

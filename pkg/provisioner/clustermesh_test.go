@@ -42,6 +42,9 @@ func TestCiliumHasTheClusterNameAndIDFromTheStart(t *testing.T) {
 	if !lookup[bool](t, agent, "rollOutCiliumPods") || !lookup[bool](t, agent, "operator", "rollOutPods") || lookup[float64](t, agent, "operator", "replicas") != 1 {
 		t.Errorf("Cilium's agents or operator keep running on a configuration they no longer have: %v", agent)
 	}
+	if lookup[string](t, agent, "cni", "chainingMode") != "portmap" {
+		t.Errorf("Cilium serves no host ports: %v", agent)
+	}
 
 	_, meshed := proxySpecs(t, templates.K3s, cilium, &Addons{ClusterMesh: ClusterMesh{Enabled: true}})
 	mesh := meshed["web-cni"]

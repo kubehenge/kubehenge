@@ -505,31 +505,36 @@ run "provider_image" {
         imageUrl  = "registry.example/capi@sha256:4567"
         resources = { requests = { cpu = "10m", memory = "128Mi" } }
       }]
+      "AddonProvider/helm" = [{
+        name      = "manager"
+        imageUrl  = local.helm_addon_build.image
+        resources = { requests = { cpu = "10m", memory = "64Mi" } }
+      }]
     }
-    error_message = "only the named providers run the given images, in their manager containers, keeping their requests"
+    error_message = "only the named providers run the given images, in their manager containers, keeping their requests, and the others their own or Kubehenge's builds"
   }
 }
 
-run "capmox_build" {
+run "provider_builds" {
   command = apply
 
   assert {
-    condition = [
+    condition = {
       for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers :
-      p.spec.deployment.containers if can(p.spec.deployment.containers[0].imageUrl)
-      ] == [[{
-        name     = "manager"
-        imageUrl = local.capmox_build.image
-    }]]
-    error_message = "capmox at its tested release runs Kubehenge's build of it, and no other provider an image of its own"
+      "${p.kind}/${p.name}" => p.spec.deployment.containers[0].imageUrl if can(p.spec.deployment.containers[0].imageUrl)
+      } == {
+      "InfrastructureProvider/proxmox" = local.capmox_build.image
+      "AddonProvider/helm"             = local.helm_addon_build.image
+    }
+    error_message = "capmox and the Add-on Provider for Helm at their tested releases run Kubehenge's builds of them, and no other provider an image of its own"
   }
 }
 
-run "capmox_build_only_on_its_release" {
+run "provider_builds_only_on_their_releases" {
   command = apply
 
   variables {
-    version_overrides = { capmox = "v0.9.0" }
+    version_overrides = { capmox = "v0.9.0", helm_addon = "v0.6.3" }
   }
 
   assert {
@@ -537,7 +542,7 @@ run "capmox_build_only_on_its_release" {
       for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers :
       !can(p.spec.deployment.containers[0].imageUrl)
     ])
-    error_message = "another capmox release runs its own image"
+    error_message = "other releases of capmox and the Add-on Provider for Helm run their own images"
   }
 }
 

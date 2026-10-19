@@ -166,7 +166,9 @@ locals {
     contains(keys(var.provider_images), "${p.kind}/${p.name}") ?
     { imageUrl = var.provider_images["${p.kind}/${p.name}"] } :
     "${p.kind}/${p.name}" == "InfrastructureProvider/proxmox" && local.versions.capmox == local.capmox_build.release ?
-    { imageUrl = local.capmox_build.image } : {},
+    { imageUrl = local.capmox_build.image } :
+    "${p.kind}/${p.name}" == "AddonProvider/helm" && local.versions.helm_addon == local.helm_addon_build.release ?
+    { imageUrl = local.helm_addon_build.image } : {},
   ) }
   providers = [for p in local.provider_specs : merge(p, { spec = merge(p.spec,
     length(local.provider_containers["${p.kind}/${p.name}"]) > 1 ?

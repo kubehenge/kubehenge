@@ -16,6 +16,8 @@ const (
 )
 
 type nodeNetwork struct {
+	Bridge  string   `json:"bridge"`
+	VLAN    int      `json:"vlan"`
 	Gateway string   `json:"gateway"`
 	Prefix  int      `json:"prefix"`
 	Addrs   []string `json:"addresses"`

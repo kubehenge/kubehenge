@@ -1,5 +1,6 @@
 import { maxWorkers } from "./ClusterDetail";
 import { defaultMinutes, defaultStart, describe, type UpgradeMode, type UpgradePolicy } from "./ClusterUpgrades";
+import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implementation } from "./LoadBalancer";
 import { addressBits, addressCount, inList, ipv4, isVLAN, list, rangeProblem, whole } from "./network";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
@@ -47,6 +48,8 @@ export interface Form {
   prefix: number;
   gateway: string;
   dnsServers: string;
+  loadBalancer: Implementation;
+  loadBalancerAddresses: string;
   pods: string;
   services: string;
   storage: string;
@@ -128,6 +131,7 @@ const addonNames = [
   ["kyverno", "Kyverno"],
   ["istio", "Istio"],
   ["clusterMesh", "Cluster Mesh"],
+  ["loadBalancer", "the load balancer"],
   ["certManager", "cert-manager"],
   ["rancher", "Rancher"],
   ["rancherAgent", "Rancher's agent"],
@@ -166,6 +170,7 @@ export function addonMemory(form: Form, c: ClusterClass | undefined): { names: s
     kyverno: form.podSecurity.kyverno !== "off",
     istio: form.istio,
     clusterMesh: meshChosen(form),
+    loadBalancer: form.loadBalancer !== "",
     certManager: form.monitoring || form.rancherInstall,
     rancher: form.rancherInstall,
     rancherAgent: !form.rancherInstall && form.rancherRegister,
@@ -255,6 +260,8 @@ export const newForm = (): Form => ({
   prefix: 24,
   gateway: "",
   dnsServers: "",
+  loadBalancer: "",
+  loadBalancerAddresses: "",
   pods: "",
   services: "",
   storage: "",
@@ -299,6 +306,41 @@ export function withClass(f: Form, c: ClusterClass | undefined, kept: (k: keyof 
   };
 }
 
+// addOnVariables are the variables of the add-ons and the hardening a form chooses.
+function addOnVariables(form: Form, defined: Set<string>): Record<string, unknown> {
+  const variables: Record<string, unknown> = {};
+  if (form.headlamp) {
+    variables["headlamp"] = form.headlampHostname
+      ? { enabled: true, hostname: form.headlampHostname }
+      : { enabled: true };
+  }
+  if (form.monitoring) {
+    variables["monitoring"] = form.grafanaHostname
+      ? { enabled: true, hostname: form.grafanaHostname }
+      : { enabled: true };
+  }
+  const cis = form.cis && defined.has("cis");
+  const podSecurity = podSecurityVariable(enforced(form.podSecurity, cis));
+  if (podSecurity) {
+    variables["podSecurity"] = podSecurity;
+  }
+  if (cis) {
+    variables["cis"] = true;
+  }
+  if (form.istio && defined.has("istio")) {
+    variables["istio"] = { enabled: true };
+  }
+  if (meshChosen(form)) {
+    variables["clusterMesh"] = { enabled: true, peers: form.meshPeers.toSorted() };
+  }
+  if (form.rancherInstall) {
+    variables["rancher"] = { install: true, hostname: form.rancherHostname };
+  } else if (!form.rancherRegister) {
+    variables["rancher"] = { register: false };
+  }
+  return variables;
+}
+
 // request turns the form into the API's request, with only the variables the class defines.
 export function request(form: Form, c: ClusterClass): CreateRequest {
   const defined = new Set(c.variables.map((v) => v.name));
@@ -330,35 +372,11 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   if (form.cni) {
     variables["cni"] = form.cni;
   }
-  if (form.headlamp) {
-    variables["headlamp"] = form.headlampHostname
-      ? { enabled: true, hostname: form.headlampHostname }
-      : { enabled: true };
+  const lb = loadBalancerVariable({ implementation: form.loadBalancer, addresses: list(form.loadBalancerAddresses) });
+  if (lb) {
+    variables["loadBalancer"] = lb;
   }
-  if (form.monitoring) {
-    variables["monitoring"] = form.grafanaHostname
-      ? { enabled: true, hostname: form.grafanaHostname }
-      : { enabled: true };
-  }
-  const cis = form.cis && defined.has("cis");
-  const podSecurity = podSecurityVariable(enforced(form.podSecurity, cis));
-  if (podSecurity) {
-    variables["podSecurity"] = podSecurity;
-  }
-  if (cis) {
-    variables["cis"] = true;
-  }
-  if (form.istio && defined.has("istio")) {
-    variables["istio"] = { enabled: true };
-  }
-  if (meshChosen(form)) {
-    variables["clusterMesh"] = { enabled: true, peers: form.meshPeers.toSorted() };
-  }
-  if (form.rancherInstall) {
-    variables["rancher"] = { install: true, hostname: form.rancherHostname };
-  } else if (!form.rancherRegister) {
-    variables["rancher"] = { register: false };
-  }
+  Object.assign(variables, addOnVariables(form, defined));
   variables["oidc"] = cleanProviders(form.oidc);
   if (form.upgradeMode !== "off") {
     variables["upgrades"] = newUpgrades(form.upgradeMode, browserZone());
@@ -417,10 +435,21 @@ export function summary(form: Form, c: ClusterClass, haOffered = false): [string
     ["Node addresses", list(form.addresses).join(", ")],
     ["Prefix length and gateway", `/${form.prefix}, ${form.gateway}`],
     ["DNS servers", list(form.dnsServers).join(", ")],
+  ];
+  if (defined.has("loadBalancer")) {
+    rows.push([
+      "Load balancer",
+      loadBalancerText(
+        { implementation: form.loadBalancer, addresses: list(form.loadBalancerAddresses) },
+        c.distribution,
+      ),
+    ]);
+  }
+  rows.push(
     ["Pod range", form.pods || chosenRange],
     ["Service range", form.services || chosenRange],
     ["Storage", form.storage],
-  ];
+  );
   if (defined.has("allowedNodes")) {
     rows.push(["Placement", placeText(form.place)]);
   }
@@ -501,6 +530,7 @@ export type FieldKey =
   | "prefix"
   | "gateway"
   | "dnsServers"
+  | "loadBalancerAddresses"
   | "pods"
   | "services"
   | "storage"
@@ -575,6 +605,18 @@ function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
     p.dnsServers = "At least one.";
   } else if (list(form.dnsServers).some((d) => !ipv4.test(d))) {
     p.dnsServers = "IPv4 addresses.";
+  }
+  const lb =
+    form.loadBalancer === ""
+      ? undefined
+      : addressesProblem(list(form.loadBalancerAddresses), {
+          gateway: form.gateway,
+          prefix: form.prefix,
+          addresses: list(form.addresses),
+          endpoint: form.endpoint,
+        });
+  if (lb !== undefined) {
+    p.loadBalancerAddresses = lb;
   }
   for (const [key, v] of [
     ["pods", form.pods],

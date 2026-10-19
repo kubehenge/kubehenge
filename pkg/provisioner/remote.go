@@ -57,6 +57,9 @@ type remote struct {
 // get returns the cluster's client and its configuration, and false until Cluster API has made its
 // kubeconfig.
 func (rs *Remotes) get(ctx context.Context, cluster *clusterv1.Cluster) (remote, bool, error) {
+	if rs == nil {
+		return remote{}, false, nil
+	}
 	now := time.Now()
 	rs.mu.Lock()
 	r, ok := rs.byCluster[remoteKey(cluster)]
