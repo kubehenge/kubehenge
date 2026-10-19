@@ -31,7 +31,13 @@ export function meshText(c: Cluster): string {
   const peers = c.mesh ?? [];
   const linked = peers.filter((p) => !filled(p.refused)).map((p) => p.name);
   const waiting = peers.filter((p) => filled(p.refused)).map((p) => p.name);
-  const parts = [linked.length > 0 ? `linked with ${linked.join(", ")}` : "linked with none"];
+  if (peers.length === 0) {
+    return "On, no peers chosen";
+  }
+  if (linked.length === 0) {
+    return `On, not yet linked with ${waiting.join(", ")}`;
+  }
+  const parts = [`linked with ${linked.join(", ")}`];
   if (waiting.length > 0) {
     parts.push(`not yet with ${waiting.join(", ")}`);
   }

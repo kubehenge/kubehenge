@@ -59,7 +59,7 @@ describe("a Cluster Mesh", () => {
     render(<App />);
 
     const row = await screen.findByRole("row", { name: /Cluster Mesh/u });
-    expect(row).toHaveTextContent("On, linked with none; not yet with db");
+    expect(row).toHaveTextContent("On, not yet linked with db");
     await user.click(screen.getByRole("button", { name: "Edit Cluster Mesh" }));
     const dialog = screen.getByRole("dialog", { name: "Cluster Mesh" });
     expect(within(dialog).getByLabelText("Join a Cluster Mesh")).toHaveAccessibleDescription(/list each other/u);
@@ -74,6 +74,21 @@ describe("a Cluster Mesh", () => {
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: { clusterMesh: { enabled: true, peers: ["api", "db"] } },
     });
+  });
+
+  it.each([
+    [[], "On, no peers chosen"],
+    [[{ name: "db" }, { name: "api", refused: "it is off" }], "On, linked with db; not yet with api"],
+  ])("says in a line what a cluster is linked with", async (mesh, line) => {
+    const on: Cluster = { ...cluster("clusters", "web", { cni: "cilium", clusterMesh: { enabled: true } }), mesh };
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: on },
+    });
+    render(<App />);
+    const row = await screen.findByRole("row", { name: /Cluster Mesh/u });
+    expect(row).toHaveTextContent(line);
   });
 
   it("is not offered to a cluster that does not run Cilium", async () => {
