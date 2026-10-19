@@ -16,6 +16,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/yaml"
+
+	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
 func TestNamesFor(t *testing.T) {
@@ -197,6 +199,7 @@ var testCharts = Charts{
 	Kyverno:           Chart{Repository: "https://kyverno.github.io/kyverno", Name: "kyverno", Version: "3.9.1"},
 	KyvernoPolicies:   Chart{Repository: "https://kyverno.github.io/kyverno", Name: "kyverno-policies", Version: "3.9.1"},
 	Istio:             Chart{Repository: "oci://ghcr.io/istio/release/charts", Name: "istiod", Version: "1.31.2"},
+	Traefik:           Chart{Repository: "https://traefik.github.io/charts", Name: "traefik", Version: "42.0.0"},
 	PodSecurityExempt: []string{"kube-system", "node-exporter"},
 }
 
@@ -235,7 +238,7 @@ func TestCNIProxy(t *testing.T) {
 		if spec == nil || spec["chartName"] != chart.Name || spec["repoURL"] != chart.Repository {
 			t.Fatalf("%s: %v", cni.Name, specs)
 		}
-		if len(specs) != 3 {
+		if len(specs) != 4 {
 			t.Fatalf("%s: %v", cni.Name, specs)
 		}
 		return lookup[string](t, spec, "valuesTemplate")
@@ -265,6 +268,42 @@ func TestCNIProxy(t *testing.T) {
 	}
 	if _, err := helmChartProxies(cluster(), &testCharts, "kubeadm", "local-lvm", CNI{Name: "cilium"}, &Addons{}); err == nil {
 		t.Error("no error for a CNI without a pod range")
+	}
+}
+
+func TestIngressControllerOnKubeadmOnly(t *testing.T) {
+	t.Parallel()
+	for _, distribution := range []templates.Distribution{templates.Kubeadm, templates.RKE2, templates.K3s} {
+		proxies, err := helmChartProxies(cluster(), &testCharts, distribution, "local-lvm", CNI{}, &Addons{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var spec map[string]any
+		for _, p := range proxies {
+			if p.GetName() == "web-traefik" {
+				spec = lookup[map[string]any](t, p.Object, "spec")
+			}
+		}
+		if distribution != templates.Kubeadm {
+			if spec != nil {
+				t.Errorf("%s brings its own ingress controller, and gets Traefik too", distribution)
+			}
+			continue
+		}
+		if spec == nil || spec["chartName"] != testCharts.Traefik.Name || spec["version"] != testCharts.Traefik.Version || spec["namespace"] != "kube-system" {
+			t.Fatalf("kubeadm's ingress controller: %v", spec)
+		}
+		var values map[string]any
+		if err := yaml.Unmarshal([]byte(lookup[string](t, spec, "valuesTemplate")), &values); err != nil {
+			t.Fatal(err)
+		}
+		if lookup[string](t, values, "deployment", "kind") != "DaemonSet" ||
+			lookup[float64](t, values, "ports", "web", "hostPort") != 80 || lookup[float64](t, values, "ports", "websecure", "hostPort") != 443 {
+			t.Errorf("Traefik does not answer on every node's ports 80 and 443: %v", values)
+		}
+		if lookup[string](t, values, "tolerations", 0, "key") != controlPlaneTaint.Key {
+			t.Errorf("Traefik stays off the control planes, so the API address serves no ingress: %v", values["tolerations"])
+		}
 	}
 }
 
@@ -326,7 +365,7 @@ func TestCalicoResources(t *testing.T) {
 
 func TestHelmChartProxiesHoldNoSecret(t *testing.T) {
 	t.Parallel()
-	proxies, err := helmChartProxies(cluster(), &testCharts, "kubeadm", "local-lvm", CNI{}, &Addons{})
+	proxies, err := helmChartProxies(cluster(), &testCharts, templates.RKE2, "local-lvm", CNI{}, &Addons{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +421,7 @@ func headlampProxyValues(t *testing.T, h Headlamp) (map[string]any, map[string]a
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(proxies) != 3 || proxies[2].GetName() != "web-headlamp" {
+	if len(proxies) != 4 || proxies[2].GetName() != "web-headlamp" {
 		t.Fatalf("proxies %v", proxies)
 	}
 	spec := lookup[map[string]any](t, proxies[2].Object, "spec")

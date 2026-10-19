@@ -140,3 +140,8 @@ addons:
     repository: https://docs.tigera.io/calico/charts
     chart: tigera-operator
     version: v3.33.0
+  # The ingress controller of kubeadm clusters, which bring none; RKE2 and k3s bring Traefik.
+  traefik:
+    repository: https://traefik.github.io/charts
+    chart: traefik
+    version: 42.0.0

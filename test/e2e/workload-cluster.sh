@@ -364,6 +364,23 @@ wl -n e2e-policy wait --for=condition=Ready pod/server --timeout=10s > /dev/null
     fail "the server stopped; the refusal was not the policy's"
 wl delete namespace e2e-policy --wait=false
 
+step "the ingress controller serves a host name on the API address and every node"
+wl create namespace e2e-ingress
+agnhost_pod e2e-ingress web netexec --http-port=8080
+wl -n e2e-ingress expose pod web --port=80 --target-port=8080
+wl -n e2e-ingress create ingress web --rule='e2e.test/*=web:80'
+wl -n e2e-ingress wait --for=condition=Ready pod/web --timeout=5m
+# netexec answers /hostname with its pod's name.
+served() {
+    served_answer=$(curl -sS --max-time 5 -H 'Host: e2e.test' "http://$1/hostname" 2> /dev/null) || return 1
+    [ "${served_answer}" = web ]
+}
+node_addresses=$(wl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}')
+for address in ${KUBEHENGE_E2E_ENDPOINT} ${node_addresses}; do
+    until_true 300 "${address} serves the host name" served "${address}"
+done
+wl delete namespace e2e-ingress --wait=false
+
 step "a persistent volume from the Proxmox VE CSI plugin"
 wl apply -f - << 'EOF'
 apiVersion: v1

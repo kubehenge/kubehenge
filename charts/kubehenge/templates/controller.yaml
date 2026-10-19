@@ -181,7 +181,7 @@ spec:
             {{- with .Values.proxmox.region }}
             - --region={{ . }}
             {{- end }}
-            {{- range $flag, $chart := dict "ccm-chart" .Values.addons.cloudControllerManager "csi-chart" .Values.addons.csiPlugin "cilium-chart" .Values.addons.cilium "calico-chart" .Values.addons.calico "headlamp-chart" .Values.addons.headlamp "rancher-chart" .Values.addons.rancher "cert-manager-chart" .Values.addons.certManager "monitoring-chart" .Values.addons.monitoring "kyverno-chart" .Values.addons.kyverno "kyverno-policies-chart" .Values.addons.kyvernoPolicies "istio-chart" .Values.addons.istio }}
+            {{- range $flag, $chart := dict "ccm-chart" .Values.addons.cloudControllerManager "csi-chart" .Values.addons.csiPlugin "cilium-chart" .Values.addons.cilium "calico-chart" .Values.addons.calico "headlamp-chart" .Values.addons.headlamp "rancher-chart" .Values.addons.rancher "cert-manager-chart" .Values.addons.certManager "monitoring-chart" .Values.addons.monitoring "kyverno-chart" .Values.addons.kyverno "kyverno-policies-chart" .Values.addons.kyvernoPolicies "istio-chart" .Values.addons.istio "traefik-chart" .Values.addons.traefik }}
             - --{{ $flag }}={{ $chart.repository }}/{{ $chart.chart }}:{{ $chart.version }}
             {{- end }}
             - --headlamp-image={{ .Values.addons.headlamp.image }}

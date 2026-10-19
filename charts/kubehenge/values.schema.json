@@ -85,7 +85,7 @@
     "addons": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["headlamp", "rancher", "monitoring", "kyverno", "kyvernoPolicies", "istio", "certManager", "cloudControllerManager", "csiPlugin", "cilium", "calico"],
+      "required": ["headlamp", "rancher", "monitoring", "kyverno", "kyvernoPolicies", "istio", "certManager", "cloudControllerManager", "csiPlugin", "cilium", "calico", "traefik"],
       "properties": {
         "headlamp": {
           "allOf": [{ "$ref": "#/$defs/chart" }],
@@ -130,7 +130,8 @@
         "cloudControllerManager": { "$ref": "#/$defs/chartOnly" },
         "csiPlugin": { "$ref": "#/$defs/chartOnly" },
         "cilium": { "$ref": "#/$defs/chartOnly" },
-        "calico": { "$ref": "#/$defs/chartOnly" }
+        "calico": { "$ref": "#/$defs/chartOnly" },
+        "traefik": { "$ref": "#/$defs/chartOnly" }
       }
     }
   },

@@ -38,6 +38,7 @@ const (
 	// Keys of the charts' values and of pod specs written as maps.
 	seccompProfileKey = "seccompProfile"
 	requestsKey       = "requests"
+	tolerationsKey    = "tolerations"
 	memoryKey         = "memory"
 	cpuKey            = "cpu"
 
@@ -66,6 +67,8 @@ type Charts struct {
 	KyvernoPolicies Chart
 	// Istio is istiod's chart; its base, cni and ztunnel charts are beside it, at its version.
 	Istio Chart
+	// Traefik is the ingress controller of distributions that bring none.
+	Traefik Chart
 	// PodSecurityExempt are the namespaces Kyverno's policies leave alone, those the ClusterClasses'
 	// Pod Security Admission exempts.
 	PodSecurityExempt []string
@@ -428,6 +431,31 @@ func headlampValues(image string, h Headlamp) map[string]any {
 	return values
 }
 
+// traefikValues run Traefik as RKE2 runs its own: on every node, on the node's ports 80 and 443,
+// so that a host name pointing at any node works without a load balancer. It runs on the control
+// planes too, so that the cluster's API address serves it as well. Its namespace is kube-system,
+// which Pod Security exempts, since host ports are beyond the baseline level.
+func traefikValues() map[string]any {
+	const http, https = 80, 443
+	return map[string]any{
+		"deployment": map[string]any{"kind": "DaemonSet"},
+		// A host port is held by the pod on it, so a node's new pod starts only once the old one is gone.
+		"updateStrategy": map[string]any{"rollingUpdate": map[string]any{"maxUnavailable": 1, "maxSurge": 0}},
+		"ports": map[string]any{
+			"web":       map[string]any{"hostPort": http},
+			"websecure": map[string]any{"hostPort": https},
+		},
+		"service": map[string]any{"type": "ClusterIP"},
+		// The Service's address is one only pods reach, so Ingresses are not told it.
+		"providers": map[string]any{"kubernetesIngress": map[string]any{"publishedService": map[string]any{"enabled": false}}},
+		// Routes whose TLS options conflict fail rather than fall back to the defaults, which would
+		// drop a host's client-certificate check (GHSA-g55h-rg46-x9c5).
+		"core":         map[string]any{"strictTLSOptions": true},
+		tolerationsKey: []any{toleration(controlPlaneTaint.Key, controlPlaneTaint.Effect)},
+		"resources":    map[string]any{requestsKey: map[string]any{cpuKey: "10m", memoryKey: "64Mi"}},
+	}
+}
+
 var helmChartProxyGVK = schema.GroupVersionKind{Group: "addons.cluster.x-k8s.io", Version: "v1alpha1", Kind: "HelmChartProxy"}
 
 // headlampProxy names the cluster's Headlamp proxy, which goes again when Headlamp is switched off.
@@ -475,11 +503,11 @@ func proxmoxValues(storage string) (map[string]any, map[string]any) {
 		// CCM on the pod network unable to reach Proxmox VE, and the cluster stuck.
 		"useDaemonSet": true,
 		"affinity":     controlPlane,
-		"tolerations":  controlPlaneTolerations(toleration("node.cloudprovider.kubernetes.io/uninitialized", corev1.TaintEffectNoSchedule)),
+		tolerationsKey: controlPlaneTolerations(toleration("node.cloudprovider.kubernetes.io/uninitialized", corev1.TaintEffectNoSchedule)),
 	}
 	csi := map[string]any{
 		"affinity":                controlPlane,
-		"tolerations":             controlPlaneTolerations(),
+		tolerationsKey:            controlPlaneTolerations(),
 		"existingConfigSecret":    workloadSecret,
 		"existingConfigSecretKey": "csi.yaml",
 		"storageClass": []any{map[string]any{
@@ -504,7 +532,8 @@ type chartProxy struct {
 }
 
 // helmChartProxies installs the cloud controller manager and the CSI plugin into the cluster, the
-// CNI named by cni unless none is, and the add-ons switched on. The Add-on Provider for Helm
+// CNI named by cni unless none is, the add-ons switched on, and on kubeadm, which brings no
+// ingress controller, Traefik. The Add-on Provider for Helm
 // selects only Clusters in a proxy's own namespace, so each cluster gets its own proxies beside it.
 func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution templates.Distribution, storage string, cni CNI, addons *Addons) ([]*unstructured.Unstructured, error) {
 	ccm, csi := proxmoxValues(storage)
@@ -564,6 +593,9 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 	}
 	if addons.Istio.Enabled {
 		wanted = append(wanted, istioCharts(charts.Istio, distribution, cni)...)
+	}
+	if distribution == templates.Kubeadm {
+		wanted = append(wanted, chartProxy{"traefik", "traefik", metav1.NamespaceSystem, charts.Traefik, traefikValues()})
 	}
 
 	var proxies []*unstructured.Unstructured
