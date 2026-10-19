@@ -532,6 +532,21 @@ until all_up; do
     fi
     sleep 10
 done
+if [ "${distribution}" = k3s ]; then
+    # The chart's rules and dashboards find k3s's controller manager, scheduler and kube-proxy in
+    # the kubelet's job, so their own series have to arrive there.
+    has_series() {
+        query=$(printf '%s' "$1" | jq -sRr @uri)
+        # shellcheck disable=SC2310 # wl wraps one kubectl call; a failed request is only a retry.
+        found=$(wl get --raw "/api/v1/namespaces/monitoring/services/http:kube-prometheus-stack-prometheus:9090/proxy/api/v1/query?query=${query}") || return 1
+        printf '%s' "${found}" | jq -e '.data.result | length > 0' > /dev/null
+    }
+    for series in 'workqueue_adds_total{job="kubelet",name="deployment"}' \
+        'scheduler_schedule_attempts_total{job="kubelet"}' \
+        'kubeproxy_sync_proxy_rules_duration_seconds_count{job="kubelet"}'; do
+        until_true 300 "${series} in Prometheus" has_series "${series}"
+    done
+fi
 pod_security=$(wl label --dry-run=server --overwrite namespace monitoring pod-security.kubernetes.io/enforce=restricted 2>&1)
 case ${pod_security} in
     *violate*) fail "monitoring's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
