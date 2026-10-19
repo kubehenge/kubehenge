@@ -245,6 +245,40 @@ template:
               - service-account-extend-token-expiration=false
               - anonymous-auth=false
               - tls-cipher-suites={{ include "kubehenge.tlsCipherSuites" . }}
+        # Traefik runs as RKE2 runs its own, on every node's ports 80 and 443, rather than behind
+        # k3s's servicelb, so that it answers there whatever load balancer the cluster has.
+        # Routes whose TLS options conflict fail rather than fall back to the defaults, which would
+        # drop a host's client-certificate check (GHSA-g55h-rg46-x9c5).
+        - path: /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
+          owner: root:root
+          permissions: "0600"
+          content: |
+            apiVersion: helm.cattle.io/v1
+            kind: HelmChartConfig
+            metadata:
+              name: traefik
+              namespace: kube-system
+            spec:
+              valuesContent: |-
+                deployment:
+                  kind: DaemonSet
+                updateStrategy:
+                  rollingUpdate:
+                    maxUnavailable: 1
+                    maxSurge: 0
+                ports:
+                  web:
+                    hostPort: 80
+                  websecure:
+                    hostPort: 443
+                service:
+                  type: ClusterIP
+                providers:
+                  kubernetesIngress:
+                    publishedService:
+                      enabled: false
+                core:
+                  strictTLSOptions: true
       serverConfig:
         # The Proxmox VE cloud controller manager initialises the nodes instead of k3s's own.
         disableCloudController: true
