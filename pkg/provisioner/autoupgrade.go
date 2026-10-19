@@ -297,19 +297,18 @@ func kubeadmVersionOf(tags []string) (kubeVersion, bool) {
 	return kubeVersion{}, false
 }
 
+// listPoolTemplates reads the templates through the builder, which confirms each from its VM's
+// configuration: an upgrade started from a moment's stale listing would ask for a template that is
+// gone.
 func listPoolTemplates(ctx context.Context, c *proxmox.Client) (poolTemplates, error) {
-	cluster, err := c.Cluster(ctx)
-	if err != nil {
-		return poolTemplates{}, fmt.Errorf("reading the Proxmox VE cluster: %w", err)
-	}
-	resources, err := cluster.Resources(ctx, "vm")
+	resources, err := (&templates.Builder{Client: c}).List(ctx)
 	if err != nil {
 		return poolTemplates{}, fmt.Errorf("listing the Proxmox VE templates: %w", err)
 	}
 	var seen poolTemplates
 	for _, r := range resources {
 		tags := templates.ParseTags(r.Tags)
-		if r.Template != 1 || !slices.Contains(tags, "kubehenge") || !slices.Contains(tags, templates.DefaultOS) {
+		if !slices.Contains(tags, templates.DefaultOS) {
 			continue
 		}
 		if slices.Contains(tags, "cloud-image") {

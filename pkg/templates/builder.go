@@ -1,6 +1,7 @@
 package templates
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -33,6 +34,11 @@ type Builder struct {
 	Log     func(format string, args ...any)
 	// KeepOnFailure leaves a failed bake's VM in place for inspection.
 	KeepOnFailure bool
+
+	// selectableSettle and selectablePoll pace waitSelectable; zero means selectableSettle and
+	// pollLongest.
+	selectableSettle time.Duration
+	selectablePoll   time.Duration
 }
 
 // Network is a static address for a VM being baked; without it the VM asks DHCP.
@@ -66,6 +72,13 @@ const (
 	selectableTimeout = 2 * time.Minute  // a new template showing in the cluster's resources
 )
 
+// selectableSettle is how long the cluster's resource view must show a new template without a
+// break before Cluster API can be relied on to see it. The view's template flag comes from the
+// node's last status round, and pmxcfs and every pveproxy worker each cache it for up to two
+// seconds, so a worker can still answer from before the template for a while after another
+// already shows it.
+const selectableSettle = 5 * time.Second
+
 // Most tasks, such as a configuration change, end within a fraction of a second; a download or a
 // disk import takes minutes. So polling asks again soon at first and less often the longer one runs.
 const (
@@ -89,6 +102,10 @@ func bakeDiskSize(b Bake) string {
 }
 
 // Find returns the template in the builder's pool whose tags are exactly t's, or ErrNoTemplate.
+// The cluster's resource view reads tags and pools afresh, but takes a VM's name and whether it is
+// a template from the status the node broadcast last, up to ten seconds old and cached apart in
+// each pveproxy worker, so two requests a moment apart can disagree, and a reused VM ID can show
+// the removed VM's. The VM's configuration says it for certain.
 func (b *Builder) Find(ctx context.Context, t *Template) (*proxmox.ClusterResource, error) {
 	resources, err := b.vms(ctx)
 	if err != nil {
@@ -96,8 +113,15 @@ func (b *Builder) Find(ctx context.Context, t *Template) (*proxmox.ClusterResour
 	}
 	var found []*proxmox.ClusterResource
 	for _, r := range resources {
-		if r.Template == 1 && b.inPool(r) && slices.Equal(ParseTags(r.Tags), t.Tags) {
-			found = append(found, r)
+		if !b.carries(r, t) {
+			continue
+		}
+		c, err := b.config(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		if bool(c.Template) {
+			found = append(found, confirmed(r, c))
 		}
 	}
 	switch len(found) {
@@ -110,7 +134,8 @@ func (b *Builder) Find(ctx context.Context, t *Template) (*proxmox.ClusterResour
 	}
 }
 
-// List returns every Kubehenge template in the builder's pool.
+// List returns every Kubehenge template in the builder's pool, confirmed from each VM's
+// configuration as Find's are.
 func (b *Builder) List(ctx context.Context) ([]*proxmox.ClusterResource, error) {
 	resources, err := b.vms(ctx)
 	if err != nil {
@@ -118,8 +143,15 @@ func (b *Builder) List(ctx context.Context) ([]*proxmox.ClusterResource, error) 
 	}
 	var out []*proxmox.ClusterResource
 	for _, r := range resources {
-		if r.Template == 1 && b.inPool(r) && slices.Contains(ParseTags(r.Tags), kubehengeTag) {
-			out = append(out, r)
+		if !isQemu(r) || !b.inPool(r) || !slices.Contains(ParseTags(r.Tags), kubehengeTag) {
+			continue
+		}
+		c, err := b.config(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		if bool(c.Template) {
+			out = append(out, confirmed(r, c))
 		}
 	}
 	slices.SortFunc(out, func(x, y *proxmox.ClusterResource) int { return strings.Compare(x.Name, y.Name) })
@@ -236,6 +268,45 @@ func (b *Builder) inPool(r *proxmox.ClusterResource) bool {
 	return b.Pool == "" || r.Pool == b.Pool
 }
 
+// carries tells whether a listed VM is in the builder's pool with exactly t's tags, both of which
+// the resource view reads afresh.
+func (b *Builder) carries(r *proxmox.ClusterResource, t *Template) bool {
+	return isQemu(r) && b.inPool(r) && slices.Equal(ParseTags(r.Tags), t.Tags)
+}
+
+func isQemu(r *proxmox.ClusterResource) bool {
+	return r.Type == "qemu"
+}
+
+// confirmed is a copy of a listed VM whose configuration says it is a template, with the name
+// from that configuration and the template flag the view may not show yet.
+func confirmed(r *proxmox.ClusterResource, c *proxmox.VirtualMachineConfig) *proxmox.ClusterResource {
+	out := *r
+	out.Name = c.Name
+	out.Template = 1
+	return &out
+}
+
+// config reads a listed VM's configuration, which Proxmox VE keeps current. A VM removed or moved
+// since the listing has an empty one: no name, and no template.
+func (b *Builder) config(ctx context.Context, r *proxmox.ClusterResource) (*proxmox.VirtualMachineConfig, error) {
+	id, err := vmID(r)
+	if err != nil {
+		return nil, err
+	}
+	var c proxmox.VirtualMachineConfig
+	err = b.Client.Get(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/config", r.Node, id), &c)
+	if err != nil {
+		// Proxmox VE puts this in the status line of its answer for a missing configuration, and
+		// the status line is all go-proxmox keeps of an error response.
+		if strings.Contains(err.Error(), "does not exist") {
+			return &proxmox.VirtualMachineConfig{}, nil
+		}
+		return nil, fmt.Errorf("reading VM %d's configuration: %w", id, err)
+	}
+	return &c, nil
+}
+
 // finish bakes the new VM if the template asks for it, gives it its final tags and size, and turns
 // it into the template.
 func (b *Builder) finish(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, vmid int, t *Template) error {
@@ -287,45 +358,88 @@ func (b *Builder) vm(ctx context.Context, nodeName string, id int) (*proxmox.Vir
 	return vm, nil
 }
 
-// checkNotInProgress refuses to start while a VM of the template's name exists that is not yet a
-// template: another run is building it, or a failed one left it for inspection. Two builds would
-// end in two templates with the same tags, which Cluster API cannot choose between.
+// checkNotInProgress refuses to start while a Kubehenge VM of the template's name exists that is
+// not yet a template: another run is building it, or a failed one left it for inspection. Two
+// builds would end in two templates with the same tags, which Cluster API cannot choose between.
+// Every VM the builder makes carries kubehengeTag from its creation on, and its name and template
+// flag are read from its configuration, since the resource view shows neither for a VM created
+// in the last few seconds, and may still show a removed VM's under a reused VM ID.
 func (b *Builder) checkNotInProgress(ctx context.Context, t *Template) error {
 	resources, err := b.vms(ctx)
 	if err != nil {
 		return err
 	}
 	for _, r := range resources {
-		if r.Name == t.Name && r.Template != 1 {
+		if !isQemu(r) || !slices.Contains(ParseTags(r.Tags), kubehengeTag) {
+			continue
+		}
+		c, err := b.config(ctx, r)
+		if err != nil {
+			return err
+		}
+		if c.Name == t.Name && !bool(c.Template) {
 			return fmt.Errorf("VM %d on %s is already named %s: another run is building it, or a failed run left it; wait, or remove it", r.VMID, r.Node, t.Name)
 		}
 	}
 	return nil
 }
 
-// waitSelectable waits until the cluster's resource view, which Cluster API selects templates
-// from and Proxmox VE refreshes every few seconds, shows the new template.
+// waitSelectable waits until the cluster's resource view, which Cluster API's Proxmox VE provider
+// selects templates from, shows the new template as the only one with its tags, and has gone on
+// showing it for the settle window without a break. Unlike Find it trusts the view's template
+// flag, as the provider does; the window is what makes that flag hold in every pveproxy worker
+// before Create returns.
 func (b *Builder) waitSelectable(ctx context.Context, t *Template, vmid int) error {
+	settle := cmp.Or(b.selectableSettle, selectableSettle)
+	poll := cmp.Or(b.selectablePoll, pollLongest)
 	deadline := time.Now().Add(selectableTimeout)
+	var since time.Time
 	for {
-		found, err := b.Find(ctx, t)
-		if err != nil && !errors.Is(err, ErrNoTemplate) {
+		shown, err := b.selectable(ctx, t, vmid)
+		if err != nil {
 			return err
 		}
-		if err == nil {
-			if id, idErr := vmID(found); idErr == nil && id == vmid {
-				return nil
-			}
+		switch {
+		case !shown:
+			since = time.Time{}
+		case since.IsZero():
+			since = time.Now()
+		case time.Since(since) >= settle:
+			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("template VM %d does not show in the cluster's resources", vmid)
+			return fmt.Errorf("template VM %d does not show steadily in the cluster's resources", vmid)
 		}
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("waiting for template VM %d to show: %w", vmid, ctx.Err())
-		case <-time.After(pollLongest):
+		case <-time.After(poll):
 		}
 	}
+}
+
+// selectable tells whether one answer of the resource view shows VM vmid as the only template in
+// the builder's pool with t's tags.
+func (b *Builder) selectable(ctx context.Context, t *Template, vmid int) (bool, error) {
+	resources, err := b.vms(ctx)
+	if err != nil {
+		return false, err
+	}
+	var shown []int
+	for _, r := range resources {
+		if r.Template != 1 || !b.carries(r, t) {
+			continue
+		}
+		id, err := vmID(r)
+		if err != nil {
+			return false, err
+		}
+		shown = append(shown, id)
+	}
+	if len(shown) > 1 {
+		return false, fmt.Errorf("%d templates carry the tags %s; Cluster API needs exactly one", len(shown), strings.Join(t.Tags, ";"))
+	}
+	return slices.Equal(shown, []int{vmid}), nil
 }
 
 func (b *Builder) download(ctx context.Context, storage *proxmox.Storage, image Resolved, volume string) error {

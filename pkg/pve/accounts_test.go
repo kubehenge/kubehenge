@@ -64,7 +64,29 @@ func fakeTicketAPI(t *testing.T) *Accounts {
 			{"vmid": 161, "node": "one", "type": "qemu", "name": "kubehenge-ubuntu-26.04", "template": 1, "tags": "cloud-image;kubehenge;ubuntu-26.04", "pool": "elsewhere"},
 			{"vmid": 162, "node": "one", "type": "qemu", "name": "being-built", "template": 0, "pool": "kubehenge-templates"},
 			{"vmid": 163, "node": "one", "type": "lxc", "name": "a-container-template", "template": 1, "pool": "kubehenge-templates"},
+			// Behind the configurations: 164's VM ID was reused by a VM being built, 165 was removed.
+			{"vmid": 164, "node": "one", "type": "qemu", "name": "kubehenge-old", "template": 1, "tags": "cloud-image;kubehenge;ubuntu-24.04", "pool": "kubehenge-templates"},
+			{"vmid": 165, "node": "one", "type": "qemu", "name": "kubehenge-gone", "template": 1, "tags": "cloud-image;kubehenge;ubuntu-22.04", "pool": "kubehenge-templates"},
 		})
+	})
+	mux.HandleFunc("GET /api2/json/nodes/one/qemu/{vmid}/config", func(w http.ResponseWriter, r *http.Request) {
+		configs := map[string]map[string]any{
+			"160": {"name": "kubehenge-ubuntu-26.04", "template": 1},
+			"162": {"name": "being-built"},
+			"164": {"name": "being-built-too"},
+		}
+		config, ok := configs[r.PathValue("vmid")]
+		if !ok {
+			conn, _, err := http.NewResponseController(w).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer func() { _ = conn.Close() }()
+			_, _ = io.WriteString(conn, "HTTP/1.1 500 Configuration file 'nodes/one/qemu-server/"+r.PathValue("vmid")+".conf' does not exist\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+			return
+		}
+		reply(w, config)
 	})
 	mux.HandleFunc("GET /api2/json/cluster/backup", func(w http.ResponseWriter, _ *http.Request) {
 		reply(w, []map[string]any{

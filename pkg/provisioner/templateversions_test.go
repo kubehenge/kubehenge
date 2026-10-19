@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -34,10 +35,12 @@ func TestKubeadmTemplateVersionsRecordedOnTheClass(t *testing.T) {
 			mu.Lock()
 			vms := make([]map[string]any, 0, len(tags))
 			for i, tag := range tags {
-				vms = append(vms, map[string]any{"vmid": 9000 + i, "template": 1, "tags": tag})
+				vms = append(vms, map[string]any{"vmid": 9000 + i, "type": "qemu", "node": "pve1", "template": 1, "tags": tag})
 			}
 			mu.Unlock()
 			data = vms
+		} else if strings.HasPrefix(r.URL.Path, "/api2/json/nodes/pve1/qemu/") && strings.HasSuffix(r.URL.Path, "/config") {
+			data = map[string]any{"template": 1}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
 	}))

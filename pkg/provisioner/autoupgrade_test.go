@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -220,14 +221,25 @@ func TestUpgrader(t *testing.T) {
 
 func TestKubeadmTargetsAreTemplatesTheClassSelects(t *testing.T) {
 	t.Parallel()
+	vms := []map[string]any{
+		{"vmid": 9001, "template": 1, "tags": "kubeadm;kubehenge;kubernetes-v1.36.5;" + templates.DefaultOS},
+		{"vmid": 9002, "template": 1, "tags": "kubeadm;kubehenge;kubernetes-v1.37.1;ubuntu-24.04"},
+		{"vmid": 9003, "template": 0, "tags": "kubeadm;kubehenge;kubernetes-v1.37.2;" + templates.DefaultOS},
+		// A VM ID reused a moment ago, which the resource view still shows as the template before.
+		{"vmid": 9004, "template": 1, "tags": "kubeadm;kubehenge;kubernetes-v1.38.0;" + templates.DefaultOS},
+	}
+	configs := map[string]any{}
+	for _, vm := range vms {
+		vm["type"], vm["node"] = "qemu", "pve1"
+		configs[fmt.Sprintf("/api2/json/nodes/pve1/qemu/%d/config", vm["vmid"])] = map[string]any{"template": vm["template"]}
+	}
+	configs["/api2/json/nodes/pve1/qemu/9004/config"] = map[string]any{"template": 0}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var data any = []any{}
 		if r.URL.Path == "/api2/json/cluster/resources" {
-			data = []map[string]any{
-				{"vmid": 9001, "template": 1, "tags": "kubeadm;kubehenge;kubernetes-v1.36.5;" + templates.DefaultOS},
-				{"vmid": 9002, "template": 1, "tags": "kubeadm;kubehenge;kubernetes-v1.37.1;ubuntu-24.04"},
-				{"vmid": 9003, "template": 0, "tags": "kubeadm;kubehenge;kubernetes-v1.37.2;" + templates.DefaultOS},
-			}
+			data = vms
+		} else if c, ok := configs[r.URL.Path]; ok {
+			data = c
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
 	}))
