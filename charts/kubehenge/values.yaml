@@ -182,14 +182,14 @@ addons:
           image:
             # renovate: datasource=docker depName=quay.io/prometheus/prometheus
             tag: v3.15.0-distroless@sha256:b2a413d5a03ea6a76782a508d1c7947440bba3b973931a25676e278431891b01
-          # renovate: datasource=docker depName=quay.io/prometheus/prometheus
+          # renovate: datasource=docker depName=quay.io/prometheus/prometheus depType=version
           version: v3.15.0
       alertmanager:
         alertmanagerSpec:
           image:
             # renovate: datasource=docker depName=quay.io/prometheus/alertmanager
             tag: v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a
-          # renovate: datasource=docker depName=quay.io/prometheus/alertmanager
+          # renovate: datasource=docker depName=quay.io/prometheus/alertmanager depType=version
           version: v0.34.1
       thanosRuler:
         thanosRulerSpec:
@@ -454,9 +454,10 @@ addons:
         image:
           # renovate: datasource=docker depName=quay.io/metallb/speaker
           tag: v0.16.1@sha256:16561e96531e1852d5c229ad7fae6e994dcfa983ff7f4de6b6208b34a4e2ddbc
+        # The FRR this MetalLB release's chart names, so it moves with MetalLB; layer 2 mode leaves
+        # it off.
         frr:
           image:
-            # renovate: datasource=docker depName=quay.io/frrouting/frr
             tag: 10.5.3@sha256:37b42d2b340c322edc5f20dc4598373adb6e813e95cc9d4a18f64f9a37c98a4c
   kubeVip:
     repository: https://kube-vip.github.io/helm-charts
