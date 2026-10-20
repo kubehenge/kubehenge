@@ -106,6 +106,7 @@ set_variable() {
 in_rancher="${ns}-downstream-$(printf '%s' "${ns}/downstream" | sha256sum | cut -c1-8)"
 registered() { rancher -n fleet-default get clusters.provisioning.cattle.io "${in_rancher}" -o jsonpath='{.status.ready}' 2> /dev/null | grep -q true; }
 gone_from_rancher() { absent rancher -n fleet-default get clusters.provisioning.cattle.io "${in_rancher}"; }
+capi_deployed() { [ -n "$(rancher -n cattle-capi-system get deployments -o name 2> /dev/null)" ]; }
 
 step "Rancher's cluster, k3s ${KUBEHENGE_E2E_RANCHER_VERSION}, Rancher at ${hostname}"
 kubectl create namespace "${ns}"
@@ -165,6 +166,8 @@ turtles=$(rancher get settings.management.cattle.io rancher-turtles-version -o j
 cluster_api=$(rancher -n cattle-capi-system get configmap -l provider.cluster.x-k8s.io/name=cluster-api,provider.cluster.x-k8s.io/type=core \
     -o jsonpath='{.items[*].metadata.labels.provider\.cluster\.x-k8s\.io/version}')
 [ "${cluster_api}" = "${pinned_cluster_api}" ] || fail "Turtles installs Cluster API ${cluster_api}, but Kubehenge pins ${pinned_cluster_api}"
+# The operator inside Turtles creates the Deployments some time after the ConfigMap.
+until_true 600 "Turtles' Cluster API deployed" capi_deployed
 rancher -n cattle-capi-system wait --for=condition=Available deployment --all --timeout=10m
 # shellcheck disable=SC2310 # absent wraps one kubectl call, whose status is the one tested.
 absent rancher -n cattle-system get deployment/system-upgrade-controller || fail "Rancher installed its system-upgrade-controller"

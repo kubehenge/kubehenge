@@ -4,7 +4,8 @@
 # website's icon set), MPL-2.0, whose copyleft stays with its own files, and OFL-1.1, which lets
 # the website's fonts be served with it; each combines with Kubehenge's Apache-2.0. The Go
 # project's own modules add a patent grant to BSD-3-Clause, which the licence data names
-# LicenseRef-scancode-google-patent-license-golang; it only gives rights.
+# LicenseRef-scancode-google-patent-license-golang; it only gives rights. The Python Software
+# Foundation's licences (argparse's, ported to JavaScript) are permissive as well.
 allow-licenses:
   - Apache-2.0
   - BSD-2-Clause
@@ -15,6 +16,12 @@ allow-licenses:
   - MIT
   - MPL-2.0
   - OFL-1.1
+  - PSF-2.0
+  - Python-2.0
+# yamllint, under the GPL, only checks the repository's YAML in CI: nothing Kubehenge distributes
+# includes or links it.
+allow-dependencies-licenses:
+  - pkg:pypi/yamllint
 fail-on-severity: low
 fail-on-scopes: [runtime, development, unknown]
 # braces, with no fixed release, recurses without bound on deeply nested brace patterns. It comes
