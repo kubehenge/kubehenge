@@ -63,7 +63,11 @@ type Charts struct {
 	Headlamp     Chart
 	CertManager  Chart
 	Rancher      Chart
-	Monitoring   Chart
+	// Turtles and TurtlesClusterAPI are the images of the Turtles release Rancher installs
+	// itself, and of the Cluster API controller it runs (rancherConfig).
+	Turtles           Image
+	TurtlesClusterAPI Image
+	Monitoring        Chart
 	// KubeRBACProxy is the image of the proxies in front of metrics served without authentication.
 	KubeRBACProxy   Image
 	Kyverno         Chart

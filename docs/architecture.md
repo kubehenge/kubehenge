@@ -64,6 +64,8 @@ Kubehenge's controller, in the management cluster, creates all of this before Cl
 
 The controller also tells `capmox` where to put each cluster's VMs. Left to itself, `capmox` clones every VM onto the node holding its template when a cluster names no nodes, and places no VM at all while one node it names does not answer, which is when a cluster needs replacements most. So the ClusterClasses leave the nodes to an external patch the controller serves (`GeneratePatches`): the cluster's `allowedNodes` that are online, or every online node when it names none. Every 15 seconds the controller reads which nodes are online and records them on each Cluster (`kubehenge.dev/online-nodes`), which has Cluster API compute the topology again when the list changes.
 
+The same patch has RKE2 and k3s nodes install their release from files they check, in place of their bootstrap providers' online install, which runs whatever install script and release a tag names on the day a node boots. Neither project signs its releases or images, so the first time a cluster uses a release, the controller reads its checksum file and its install script, records their SHA-256s in the ConfigMap `kubehenge-release-checksums`, and holds every later node of that release to them. A node downloads the script, the release and the airgap images of its core and its CNI, checks each against the recorded checksum file, and hands them to its bootstrap provider's air-gapped install, so it pulls none of the distribution's images.
+
 Every 30 seconds the controller also records on the kubeadm ClusterClass the Kubernetes versions its token finds templates for in the template pool (`kubehenge.dev/kubeadm-versions`), and on the RKE2 and k3s ClusterClasses whether their shared template is there (`kubehenge.dev/cloud-image-template`). The interface offers those versions, and refuses a cluster whose template is missing, since Cluster API clones with its own token: the people who create clusters need no privilege on the template pool.
 
 With Proxmox VE HA switched on ([install.md](install.md#proxmox-ve-ha)), the controller also makes each joined control-plane VM of a cluster on shared storage an HA resource, and keeps two HA rules per cluster: a negative resource affinity among those VMs, sized to the nodes Proxmox VE's HA manager knows, and a strict node affinity to the cluster's nodes when it may use only some. It does so with a token of its own, since only `Sys.Console` on `/` may write HA configuration, and the cluster tokens never see it. Two things follow from HA moving VMs that Cluster API's Proxmox VE provider does not expect:
@@ -77,9 +79,9 @@ Each distribution boots from a different VM template:
 
 | Distribution | Template |
 | --- | --- |
-| kubeadm | Ubuntu's cloud image with containerd, the kubelet and kubeadm preinstalled at one Kubernetes version |
+| kubeadm | Ubuntu's cloud image with containerd, the kubelet and kubeadm preinstalled at one Kubernetes version, and its control-plane images, each checked against Kubernetes' release signature |
 | Talos (clusters to follow) | Talos's own image from the Talos Image Factory, with the QEMU guest agent |
-| RKE2, k3s | Ubuntu's cloud image, updated and with the QEMU guest agent; the distribution installs at boot |
+| RKE2, k3s | Ubuntu's cloud image, updated and with the QEMU guest agent; the distribution installs at boot from checked files |
 
 `kubehenge template create` (or the Administration page in the appliance, with an administrator's session) fetches the image, prepares it by booting it once where it needs more, and turns it into a template `capmox` selects by its tags, all through the Proxmox VE API. Details: [templates.md](templates.md).
 
@@ -149,7 +151,7 @@ The end-to-end tests run [kube-bench](https://github.com/aquasecurity/kube-bench
 
 Rancher's chart refuses Kubernetes versions its release does not run on, so the controller refuses to create the Rancher cluster outside them and holds back an upgrade beyond them (`BeforeClusterUpgrade`) until a Kubehenge release brings a Rancher that runs there. On fewer than 4 vCPUs a node running Rancher starves its own etcd and API server, so `BeforeClusterCreate` refuses such a cluster, and a validating webhook on Clusters refuses switching Rancher on or making its nodes smaller later. Rancher's first admin password is generated into the `bootstrap-secret` Secret in `cattle-system`, never written into values.
 
-Rancher runs with Turtles off, its own Cluster API, and with imported-cluster version management off, with which it would upgrade RKE2 and k3s itself beside Cluster API: Kubehenge creates and upgrades the clusters, and Rancher's upgrade jobs name their images by tag alone. The images Rancher starts itself (its agent, shell, webhook and Fleet) are named by digest through its chart's values.
+Rancher runs with imported-cluster version management off, with which it would upgrade RKE2 and k3s itself beside Cluster API: Kubehenge creates and upgrades the clusters, and Rancher's upgrade jobs name their images by tag alone. The images Rancher starts itself (its agent, shell, webhook and Fleet) are named by digest through its chart's values. Rancher also installs Turtles, its own Cluster API, without which it never takes a registered cluster as ready. Rancher reads Turtles' values only from its `rancher-config` ConfigMap, which its chart writes without them, so Kubehenge's controller writes that ConfigMap into Rancher's cluster before the chart installs, with Turtles' image and its Cluster API controller by digest, and Helm adopts it as it installs.
 
 ## Interface
 

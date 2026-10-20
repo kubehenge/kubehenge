@@ -147,6 +147,7 @@ func TestChartValuesGoToTheirCharts(t *testing.T) {
 	options := func(values string) *controllerOptions {
 		o := &controllerOptions{
 			kubeRBACProxy: "ghcr.io/example/proxy:v1" + digest, kubeVipImage: "ghcr.io/example/vip:v1" + digest,
+			turtlesImage: "docker.io/example/turtles:v1" + digest, turtlesCAPIImage: "registry.example.test/example/capi:v1" + digest,
 			calicoImages: []string{"quay.io/calico/node:v3.33.0" + digest}, chartValues: values,
 		}
 		for _, f := range []*string{

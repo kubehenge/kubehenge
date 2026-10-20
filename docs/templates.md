@@ -5,10 +5,10 @@ Every cluster's nodes are clones of a Proxmox VE VM template. `kubehenge templat
 | Distribution | Template | One per |
 | --- | --- | --- |
 | Talos | the Talos Image Factory's image with the QEMU guest agent extension; made by the command only, ahead of Talos clusters, which no ClusterClass offers yet | Talos release |
-| RKE2, k3s | Ubuntu's cloud image with every update and the QEMU guest agent; the distribution installs itself when a node boots | Ubuntu release |
-| kubeadm | the same, plus containerd, the kubelet and kubeadm from pkgs.k8s.io as Kubernetes' installation guide sets them up, with the control-plane images pulled ahead | Ubuntu release and Kubernetes version |
+| RKE2, k3s | Ubuntu's cloud image with every update and the QEMU guest agent; the distribution installs itself when a node boots, from files checked against the checksums recorded for its release ([architecture.md](architecture.md#each-clusters-own-corner-of-proxmox-ve)) | Ubuntu release |
+| kubeadm | the same, plus containerd, the kubelet and kubeadm from pkgs.k8s.io as Kubernetes' installation guide sets them up, with the control-plane images pulled ahead, each kept only once Kubernetes' release signature for it checks out, and containerd set to kubeadm's pause image | Ubuntu release and Kubernetes version |
 
-Ubuntu images are checked against Ubuntu's signed checksums before Proxmox VE downloads them, and the pkgs.k8s.io signing key is accepted only with its known fingerprint.
+Each Kubehenge release makes Ubuntu templates from one build of each Ubuntu release's cloud image, checked against Ubuntu's signed checksums before Proxmox VE downloads it; the updates a bake installs come from Ubuntu's archive, which apt checks against its signed index. The pkgs.k8s.io signing key is accepted only with its known fingerprint.
 
 ## Create
 

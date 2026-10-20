@@ -95,12 +95,22 @@
         "headlamp": { "$ref": "#/$defs/chartOnly" },
         "rancher": {
           "allOf": [{ "$ref": "#/$defs/chart" }],
-          "required": ["kubernetes"],
+          "required": ["kubernetes", "turtles"],
           "properties": {
             "kubernetes": {
               "description": "Kubernetes minor versions the Rancher release runs on, as <min>-<max>.",
               "type": "string",
               "pattern": "^[0-9]+-[0-9]+$"
+            },
+            "turtles": {
+              "description": "The images of the Turtles release Rancher installs and of the Cluster API controller it runs.",
+              "type": "object",
+              "required": ["image", "clusterAPI"],
+              "properties": {
+                "image": { "$ref": "#/$defs/pinnedImage" },
+                "clusterAPI": { "$ref": "#/$defs/pinnedImage" }
+              },
+              "additionalProperties": false
             }
           },
           "unevaluatedProperties": false

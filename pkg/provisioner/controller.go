@@ -408,12 +408,19 @@ func resourceSetSecrets(cluster *clusterv1.Cluster, resources *corev1.Secret, cn
 func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluster, proxies []*unstructured.Unstructured) (bool, error) {
 	waiting := false
 	for _, p := range proxies {
-		if p.GetName() == kyvernoPoliciesProxy(cluster) {
-			wait, err := r.policiesWait(ctx, cluster)
+		var wait func(context.Context, *clusterv1.Cluster) (bool, error)
+		switch p.GetName() {
+		case kyvernoPoliciesProxy(cluster):
+			wait = r.policiesWait
+		case rancherProxy(cluster):
+			wait = r.rancherConfigWaits
+		}
+		if wait != nil {
+			waits, err := wait(ctx, cluster)
 			if err != nil {
 				return false, err
 			}
-			if wait {
+			if waits {
 				waiting = true
 				continue
 			}

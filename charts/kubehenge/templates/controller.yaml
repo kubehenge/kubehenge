@@ -83,6 +83,15 @@ rules:
   - apiGroups: [""]
     resources: [configmaps]
     verbs: [get, list, watch]
+  # The checksums of each RKE2 and k3s release a cluster used, recorded once; a create cannot be
+  # held to a name.
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [kubehenge-release-checksums]
+    verbs: [update]
   - apiGroups: [controlplane.cluster.x-k8s.io]
     resources: [kubeadmcontrolplanetemplates, rke2controlplanetemplates, kthreescontrolplanetemplates]
     verbs: [create, patch, deletecollection]
@@ -191,6 +200,8 @@ spec:
             - {{ printf "--chart-values=%s" (toJson $chartValues) | quote }}
             - --calico-images={{ join "," .Values.addons.calico.images }}
             - --rancher-kubernetes={{ .Values.addons.rancher.kubernetes }}
+            - --rancher-turtles-image={{ .Values.addons.rancher.turtles.image }}
+            - --rancher-cluster-api-image={{ .Values.addons.rancher.turtles.clusterAPI }}
             - --kube-rbac-proxy-image={{ .Values.addons.monitoring.kubeRBACProxy }}
             - --kube-vip-image={{ .Values.kubeVip }}
             - --pod-security-exempt={{ join "," .Values.podSecurityExempt }}

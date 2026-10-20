@@ -1,7 +1,8 @@
 #!/bin/sh
 # End-to-end test of the Rancher add-on on a Proxmox VE host, against a running management cluster:
 # a one-node k3s cluster installs Rancher, another one-node k3s cluster registers with it on its own
-# (Rancher starting no Cluster API or upgrades of its own and naming every image by digest), leaves it (Rancher cleans up inside it) and comes back, the Rancher cluster is held at the
+# (Rancher running the Turtles Kubehenge pins, no upgrades of its own, and every image by digest),
+# leaves it (Rancher cleans up inside it) and comes back, the Rancher cluster is held at the
 # Kubernetes versions Rancher runs on, the k3s cluster leaves Rancher before it is deleted, and
 # nothing of either is left afterwards.
 #
@@ -146,7 +147,7 @@ pod_memory "${work}/downstream"
 echo "memory with Rancher, a cluster registered:"
 pod_memory "${work}/rancher"
 
-step "Rancher runs no Cluster API or upgrades of its own, and names every image by digest"
+step "Rancher runs the Turtles Kubehenge pins and no upgrades of its own, and names every image by digest"
 # kube-system holds only k3s's own components, which come with the distribution.
 for c in rancher downstream; do
     images=$(KUBECONFIG="${work}/${c}" kubectl get pods -A -o json | jq -r '.items[] | select(.metadata.namespace != "kube-system") |
@@ -154,11 +155,18 @@ for c in rancher downstream; do
     unpinned=$(printf '%s\n' "${images}" | grep -v -e '@sha256:[0-9a-f]\{64\}$' -e '^$' | sort -u)
     [ -z "${unpinned}" ] || fail "images in ${c}'s cluster named without a digest (pod, image): ${unpinned}"
 done
+# The images Kubehenge gives Turtles are those of the Turtles release and Cluster API this Rancher
+# release installs.
+values="$(dirname "$0")/../../charts/kubehenge/values.yaml"
+pinned_turtles=$(sed -n 's/^ *image: docker\.io\/rancher\/turtles:\(v[^@]*\)@.*/\1/p' "${values}")
+pinned_cluster_api=$(sed -n 's/^ *clusterAPI: [^:]*:\(v[^@]*\)@.*/\1/p' "${values}")
+turtles=$(rancher get settings.management.cattle.io rancher-turtles-version -o jsonpath='{.value}')
+[ "v${turtles#*+up}" = "${pinned_turtles}" ] || fail "Rancher installs Turtles ${turtles}, but Kubehenge pins ${pinned_turtles}"
+cluster_api=$(rancher -n cattle-capi-system get configmap -l provider.cluster.x-k8s.io/name=cluster-api,provider.cluster.x-k8s.io/type=core \
+    -o jsonpath='{.items[*].metadata.labels.provider\.cluster\.x-k8s\.io/version}')
+[ "${cluster_api}" = "${pinned_cluster_api}" ] || fail "Turtles installs Cluster API ${cluster_api}, but Kubehenge pins ${pinned_cluster_api}"
+rancher -n cattle-capi-system wait --for=condition=Available deployment --all --timeout=10m
 # shellcheck disable=SC2310 # absent wraps one kubectl call, whose status is the one tested.
-for n in cattle-turtles-system cattle-capi-system; do
-    absent rancher get namespace "${n}" || fail "Rancher created ${n}"
-done
-# shellcheck disable=SC2310
 absent rancher -n cattle-system get deployment/system-upgrade-controller || fail "Rancher installed its system-upgrade-controller"
 # shellcheck disable=SC2310
 absent downstream -n cattle-system get deployment/system-upgrade-controller || fail "Rancher installed its system-upgrade-controller in the registered cluster"

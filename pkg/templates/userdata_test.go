@@ -1,6 +1,7 @@
 package templates
 
 import (
+	"encoding/base64"
 	"net/netip"
 	"slices"
 	"strings"
@@ -65,9 +66,19 @@ func TestBakeUserDataForKubeadm(t *testing.T) {
 		}
 	}
 	runcmd := as[[]any](t, doc["runcmd"])
-	last := as[[]any](t, runcmd[len(runcmd)-1])
-	if last[len(last)-1] != "v1.37.1" {
-		t.Errorf("the image pull is not for v1.37.1: %v", last)
+	if last := as[[]any](t, runcmd[len(runcmd)-1]); !slices.Equal(last, []any{imagesScriptPath, "v1.37.1"}) {
+		t.Errorf("the image pull is %v, want the checked pull of v1.37.1", last)
+	}
+	script := slices.IndexFunc(as[[]any](t, doc["write_files"]), func(f any) bool {
+		return as[map[string]any](t, f)["path"] == imagesScriptPath
+	})
+	if script < 0 {
+		t.Fatalf("no %s among the files", imagesScriptPath)
+	}
+	file := as[map[string]any](t, as[[]any](t, doc["write_files"])[script])
+	content, err := base64.StdEncoding.DecodeString(as[string](t, file["content"]))
+	if err != nil || file["encoding"] != "b64" || string(content) != imagesScript || file["permissions"] != "0700" {
+		t.Errorf("%s written as %v (%v)", imagesScriptPath, file, err)
 	}
 }
 

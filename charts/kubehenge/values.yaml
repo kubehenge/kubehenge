@@ -48,6 +48,7 @@ podSecurityExempt:
   - cattle-system
   - cattle-fleet-system
   - cattle-fleet-local-system
+  - cattle-turtles-system
 
 # Kubehenge's controller image by digest, repository@sha256:<digest>: a release's chart names the
 # one it was released with, and a checkout's needs one given.
@@ -100,16 +101,19 @@ addons:
     # Kubernetes minor versions this Rancher release runs on (its chart's kubeVersion and support
     # matrix); the cluster that installs it is held within them.
     kubernetes: 34-36
+    # Turtles, which Rancher installs itself and whose Cluster API its registered clusters need, and
+    # the Cluster API controller it runs: those of the rancher-turtles chart this Rancher release
+    # installs, so they move with Rancher. Kubehenge's controller hands them to Rancher.
+    turtles:
+      image: docker.io/rancher/turtles:v0.27.2@sha256:fff10f34feffcf0fc583ffb51975e9e6f2839c65d54f96668790bbb770456512
+      clusterAPI: registry.rancher.com/rancher/cluster-api-controller:v1.13.3@sha256:74a29c8dda523e2981cd0c2176e33d6adcb9c2cc55de6c66b06cc3839e4e4235
     values:
       image:
         # renovate: datasource=docker depName=docker.io/rancher/rancher
         tag: v2.15.2@sha256:0c3d8e5702555b2bfd2ec3fe7a6e5f95484a28fcb9787c498db3e5b0f62652ea
-      # Turtles runs a Cluster API of Rancher's own beside Kubehenge's, and imported-cluster version
-      # management upgrades RKE2 and k3s beside Cluster API with images it names by tag alone;
-      # clusters join through Rancher's agent, so neither is needed.
-      features: turtles=false
       # Rancher reads a setting from CATTLE_<NAME> before its own object, and starts the agent and
-      # shell images exactly as named here.
+      # shell images exactly as named here. Imported-cluster version management would upgrade RKE2
+      # and k3s beside Cluster API, with images it names by tag alone.
       extraEnv:
         - name: CATTLE_IMPORTED_CLUSTER_VERSION_MANAGEMENT
           value: "false"

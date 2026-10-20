@@ -47,9 +47,9 @@ Addresses are IPv4. Kubehenge gives every node of every cluster a static address
 | The node running the installer | GitHub, for Kubehenge's release and OpenTofu; the container template mirror, through `pveam` |
 | The appliance | GitHub, for the release index and upgrades; the OpenTofu registry, the Helm chart repositories and the Talos Image Factory, while it applies the management cluster; while it makes VM templates, the Talos Image Factory (`factory.talos.dev`), Ubuntu's cloud images (`cloud-images.ubuntu.com`, for their signed checksums) and `pkgs.k8s.io` (for its signing key) |
 | The Proxmox VE nodes | the Talos Image Factory and Ubuntu's cloud images, which Proxmox VE downloads disk images from |
-| The management cluster's nodes | container registries and the Cluster API providers' release files; RKE2's and k3s's release channels, for automatic upgrades; the add-on chart repositories: `ghcr.io` (the Proxmox VE cloud controller manager and CSI plugin), `helm.cilium.io`, `docs.tigera.io`, `kubernetes-sigs.github.io` (Headlamp), `releases.rancher.com` and `charts.jetstack.io` |
-| Clusters' nodes | container registries; RKE2's or k3s's own downloads, since those distributions install when a node boots |
-| The VM that prepares a template | Ubuntu's and Kubernetes' package mirrors |
+| The management cluster's nodes | container registries and the Cluster API providers' release files; RKE2's and k3s's release channels, for automatic upgrades, and their releases' checksum files and install scripts on GitHub, read once per release; the add-on chart repositories: `ghcr.io` (the Proxmox VE cloud controller manager and CSI plugin), `helm.cilium.io`, `docs.tigera.io`, `kubernetes-sigs.github.io` (Headlamp), `releases.rancher.com` and `charts.jetstack.io` |
+| Clusters' nodes | container registries; on RKE2 and k3s, GitHub (`github.com` and `raw.githubusercontent.com`), for the release and its images, which a node installs when it boots |
+| The VM that prepares a template | Ubuntu's and Kubernetes' package mirrors; for kubeadm, `registry.k8s.io`, GitHub (for cosign) and Sigstore's `tuf-repo-cdn.sigstore.dev`, to check the images' signatures |
 
 The management cluster's nodes can pull through registry mirrors instead ([setup](#the-settings), Advanced).
 

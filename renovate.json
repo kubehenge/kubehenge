@@ -56,13 +56,20 @@
       "prBodyNotes": [
         "Put the new SHA-256 on the line below each new version in `scripts/tools.sh`, from the checksum list published beside the download: `https://go.dev/dl/?mode=json` (`go<version>.linux-amd64.tar.gz`), `https://nodejs.org/dist/v<version>/SHASUMS256.txt` (`node-v<version>-linux-x64.tar.gz`), `https://get.helm.sh/helm-<tag>-linux-amd64.tar.gz.sha256sum` and `https://dl.k8s.io/release/<tag>/bin/linux/amd64/kubectl.sha256`."
       ]
+    },
+    {
+      "description": "Rancher installs a Turtles release of its own choosing, whose images Kubehenge pins beside Rancher's; the Rancher test fails until they match.",
+      "matchDepNames": ["docker.io/rancher/rancher"],
+      "prBodyNotes": [
+        "Set `addons.rancher.turtles` in `charts/kubehenge/values.yaml` to the images of the rancher-turtles chart the new release installs: its `build.yaml` names the chart (`turtlesVersion`), whose `values.yaml` names Turtles' image and whose core provider ConfigMap names the Cluster API controller's."
+      ]
     }
   ],
   "customManagers": [
     {
-      "description": "A download from a GitHub release whose tag sits on the line above its SHA-256: the tools in scripts/tools.sh, the OpenTofu appliance/install.sh runs and the Headlamp the appliance serves. The tag and the digest move together; the datasource finds the new digest in the release's checksum file, or hashes the download itself.",
+      "description": "A download from a GitHub release whose tag sits on the line above its SHA-256: the tools in scripts/tools.sh, the OpenTofu appliance/install.sh runs, the Headlamp the appliance serves and the cosign kubeadm templates check their images with. The tag and the digest move together; the datasource finds the new digest in the release's checksum file, or hashes the download itself.",
       "customType": "regex",
-      "managerFilePatterns": ["/^scripts/tools\\.sh$/", "/^appliance/install\\.sh$/", "/^Makefile$/"],
+      "managerFilePatterns": ["/^scripts/tools\\.sh$/", "/^appliance/install\\.sh$/", "/^Makefile$/", "/^pkg/templates/images\\.sh$/"],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>github-release-attachments) depName=(?<depName>\\S+)\\n[A-Z0-9_]+ *:?= *(?<currentValue>\\S+)\\n[A-Z0-9_]+_SHA256 *:?= *(?<currentDigest>[0-9a-f]{64})"
       ]
@@ -107,6 +114,21 @@
         "defaultBaseImage: (?<depName>[^:@\\s]+):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[0-9a-f]{64})"
       ],
       "datasourceTemplate": "docker"
+    },
+    {
+      "description": "The build of each Ubuntu release's cloud image that templates are made from, named by its directory on cloud-images.ubuntu.com, whose SHA256SUMS Ubuntu signs and Kubehenge checks.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^pkg/templates/plan\\.go$/"],
+      "matchStrings": ["Codename: \"(?<depName>[a-z]+)\", Build: \"(?<currentValue>\\d{8}(?:\\.\\d+)?)\""],
+      "datasourceTemplate": "custom.ubuntu-cloud-images",
+      "extractVersionTemplate": "^release-(?<version>\\d{8}(?:\\.\\d+)?)/$",
+      "versioningTemplate": "loose"
     }
-  ]
+  ],
+  "customDatasources": {
+    "ubuntu-cloud-images": {
+      "defaultRegistryUrlTemplate": "https://cloud-images.ubuntu.com/releases/{{packageName}}/",
+      "format": "html"
+    }
+  }
 }

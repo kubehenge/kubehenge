@@ -219,6 +219,14 @@ var testCharts = Charts{
 		Digest: "855cb9be954f65a31b9a8c77f7aebce125c2d7797425257d21d35e3380816ac8",
 		Values: map[string]any{"extraEnv": []any{rancherAgentEnv}},
 	},
+	Turtles: Image{
+		Registry: "docker.io", Repository: "rancher/turtles", Tag: "v0.27.2",
+		Digest: "fff10f34feffcf0fc583ffb51975e9e6f2839c65d54f96668790bbb770456512",
+	},
+	TurtlesClusterAPI: Image{
+		Registry: "registry.rancher.com", Repository: "rancher/cluster-api-controller", Tag: "v1.13.3",
+		Digest: "74a29c8dda523e2981cd0c2176e33d6adcb9c2cc55de6c66b06cc3839e4e4235",
+	},
 	CertManager: Chart{
 		Repository: "https://charts.jetstack.io", Name: "cert-manager", Version: "v1.21.2",
 		Digest: "73a56e1728edd6c99f1f31082618c3259d279a76b7ebd3d4bdc5475c2442d34a",

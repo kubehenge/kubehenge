@@ -73,6 +73,8 @@ type controllerOptions struct {
 	certManagerChart  string
 	rancherChart      string
 	rancherKubernetes string
+	turtlesImage      string
+	turtlesCAPIImage  string
 	monitoringChart   string
 	kubeRBACProxy     string
 	kyvernoChart      string
@@ -132,6 +134,8 @@ separate nodes.`,
 	f.StringVar(&o.certManagerChart, "cert-manager-chart", "", "cert-manager chart, installed with Rancher and with monitoring, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.rancherChart, "rancher-chart", "", "Rancher chart, for the cluster that installs it, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.rancherKubernetes, "rancher-kubernetes", "", "Kubernetes minor versions the Rancher chart runs on, as <min>-<max>, such as 34-36")
+	f.StringVar(&o.turtlesImage, "rancher-turtles-image", "", "the image of the Turtles release Rancher installs, as <registry>/<repository>:<tag>@sha256:<digest>")
+	f.StringVar(&o.turtlesCAPIImage, "rancher-cluster-api-image", "", "the Cluster API controller image that Turtles runs, as <registry>/<repository>:<tag>@sha256:<digest>")
 	f.StringVar(&o.monitoringChart, "monitoring-chart", "", "kube-prometheus-stack chart, for clusters that switch monitoring on, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.kubeRBACProxy, "kube-rbac-proxy-image", "", "kube-rbac-proxy image, in front of the metrics monitoring scrapes, as <registry>/<repository>:<tag>@sha256:<digest>")
 	f.StringVar(&o.kyvernoChart, "kyverno-chart", "", "Kyverno chart, for clusters that have Kyverno enforce pod security, as <repository>/<name>:<version>@sha256:<digest>")
@@ -153,7 +157,7 @@ separate nodes.`,
 	f.StringVar(&o.certDir, "extension-cert-dir", "/etc/kubehenge/tls", "directory with tls.crt and tls.key for the Runtime Extension server")
 	f.StringVar(&o.healthAddr, "health-address", ":8081", "address of the liveness and readiness probes")
 	f.BoolVar(&o.leaderElect, "leader-elect", true, "elect one active controller among replicas")
-	for _, flag := range []string{"ccm-chart", "csi-chart", "cilium-chart", "calico-chart", "calico-images", "headlamp-chart", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "monitoring-chart", "kube-rbac-proxy-image", "kyverno-chart", "kyverno-policies-chart", "istio-chart", "istio-base-chart", "istio-cni-chart", "istio-ztunnel-chart", "traefik-chart", "metallb-chart", "kube-vip-chart", "kube-vip-image", "kube-vip-cloud-provider-chart"} {
+	for _, flag := range []string{"ccm-chart", "csi-chart", "cilium-chart", "calico-chart", "calico-images", "headlamp-chart", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "rancher-turtles-image", "rancher-cluster-api-image", "monitoring-chart", "kube-rbac-proxy-image", "kyverno-chart", "kyverno-policies-chart", "istio-chart", "istio-base-chart", "istio-cni-chart", "istio-ztunnel-chart", "traefik-chart", "metallb-chart", "kube-vip-chart", "kube-vip-image", "kube-vip-cloud-provider-chart"} {
 		_ = cmd.MarkFlagRequired(flag)
 	}
 	return cmd
@@ -218,6 +222,14 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 		Registrar:         registrar,
 		RancherKubernetes: rancherMinors,
 		Nodes:             cloud,
+		Releases: &provisioner.ReleaseChecksums{
+			Reader:    mgr.GetAPIReader(),
+			Client:    mgr.GetClient(),
+			Namespace: o.r.ClassNamespace,
+			HTTP:      &http.Client{Timeout: time.Minute},
+			GitHub:    "https://github.com",
+			Raw:       "https://raw.githubusercontent.com",
+		},
 	}
 	if err = o.addPlacement(mgr, extensions, scheme, hooks, conn, cloud); err != nil {
 		return err
@@ -315,6 +327,8 @@ func (o *controllerOptions) parseCharts() error {
 	}{
 		{"--kube-rbac-proxy-image", o.kubeRBACProxy, &o.r.Charts.KubeRBACProxy},
 		{"--kube-vip-image", o.kubeVipImage, &o.r.Charts.KubeVipImage},
+		{"--rancher-turtles-image", o.turtlesImage, &o.r.Charts.Turtles},
+		{"--rancher-cluster-api-image", o.turtlesCAPIImage, &o.r.Charts.TurtlesClusterAPI},
 	} {
 		var err error
 		if *i.image, err = provisioner.ParseImage(i.value); err != nil {
