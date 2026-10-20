@@ -91,18 +91,7 @@
       "additionalProperties": false,
       "required": ["headlamp", "rancher", "monitoring", "kyverno", "kyvernoPolicies", "istio", "istioBase", "istioCNI", "istioZtunnel", "certManager", "cloudControllerManager", "csiPlugin", "cilium", "calico", "traefik", "metallb", "kubeVip", "kubeVipCloudProvider"],
       "properties": {
-        "headlamp": {
-          "allOf": [{ "$ref": "#/$defs/chart" }],
-          "required": ["image"],
-          "properties": {
-            "image": {
-              "description": "Headlamp's image by tag and digest, as the chart names it.",
-              "type": "string",
-              "pattern": "^v[0-9][^@]*@sha256:[0-9a-f]{64}$"
-            }
-          },
-          "unevaluatedProperties": false
-        },
+        "headlamp": { "$ref": "#/$defs/chartOnly" },
         "rancher": {
           "allOf": [{ "$ref": "#/$defs/chart" }],
           "required": ["kubernetes"],
@@ -140,17 +129,7 @@
         "traefik": { "$ref": "#/$defs/chartOnly" },
         "metallb": { "$ref": "#/$defs/chartOnly" },
         "kubeVip": { "$ref": "#/$defs/chartOnly" },
-        "kubeVipCloudProvider": {
-          "allOf": [{ "$ref": "#/$defs/chart" }],
-          "required": ["image"],
-          "properties": {
-            "image": {
-              "description": "kube-vip-cloud-provider's image by registry, repository, tag and digest.",
-              "$ref": "#/$defs/pinnedImage"
-            }
-          },
-          "unevaluatedProperties": false
-        }
+        "kubeVipCloudProvider": { "$ref": "#/$defs/chartOnly" }
       }
     }
   },
@@ -176,6 +155,10 @@
           "description": "The chart's version and the digest it is pulled by, as <version>@sha256:<digest>.",
           "type": "string",
           "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+[^@]*@sha256:[0-9a-f]{64}$"
+        },
+        "values": {
+          "description": "Values beneath those Kubehenge gives the chart: the images it runs, each by tag and digest.",
+          "type": "object"
         }
       }
     },

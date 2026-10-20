@@ -1,6 +1,13 @@
 #!/bin/sh
 # Helpers every end-to-end test uses. Sourced after `set -eu`.
 
+# The images the tests run their own pods from.
+# renovate: datasource=docker depName=registry.k8s.io/e2e-test-images/agnhost
+agnhost=registry.k8s.io/e2e-test-images/agnhost:2.66.1@sha256:6e2eef87d0dc77e070a7549bc5fdfa290c0fefe3359eb33c2ad1eda692fe66a4
+# renovate: datasource=docker depName=registry.k8s.io/pause
+pause_image=registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
+export agnhost pause_image
+
 # Each step shows the time since the test started, which is how a slow run shows where it lost it.
 e2e_started=$(date +%s)
 step() {

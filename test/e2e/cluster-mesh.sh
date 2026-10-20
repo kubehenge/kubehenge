@@ -115,7 +115,6 @@ reads_peer() {
         jq -e --arg p "$2" '.data // {} | has($p)' > /dev/null
 }
 # The pods: restricted, as the clusters enforce.
-agnhost=registry.k8s.io/e2e-test-images/agnhost:2.61
 agnhost_pod() { # <kubeconfig> <name> <args...>
     agnhost_overrides=$(printf '{"apiVersion":"v1","spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"%s","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' "$2")
     agnhost_kubeconfig=$1 agnhost_name=$2

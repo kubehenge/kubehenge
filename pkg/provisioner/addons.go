@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 
@@ -51,16 +52,14 @@ const (
 // plugin into every one, a CNI into those whose distribution has none of its own, and the add-ons
 // a cluster switches on.
 type Charts struct {
-	CCM      Chart
-	CSI      Chart
-	Cilium   Chart
-	Calico   Chart
-	Headlamp Chart
-	// HeadlampImage is the image tag with its digest; the chart names its image by tag only.
-	HeadlampImage string
-	CertManager   Chart
-	Rancher       Chart
-	Monitoring    Chart
+	CCM         Chart
+	CSI         Chart
+	Cilium      Chart
+	Calico      Chart
+	Headlamp    Chart
+	CertManager Chart
+	Rancher     Chart
+	Monitoring  Chart
 	// KubeRBACProxy is the image of the proxies in front of metrics served without authentication.
 	KubeRBACProxy   Image
 	Kyverno         Chart
@@ -72,13 +71,12 @@ type Charts struct {
 	IstioZtunnel Chart
 	// Traefik is the ingress controller of distributions that bring none.
 	Traefik Chart
-	// The load balancers a cluster chooses from: MetalLB, or kube-vip with its cloud provider,
-	// whose charts lag their images.
-	MetalLB                   Chart
-	KubeVip                   Chart
-	KubeVipImage              Image
-	KubeVipCloudProvider      Chart
-	KubeVipCloudProviderImage Image
+	// The load balancers a cluster chooses from: MetalLB, or kube-vip with its cloud provider.
+	// kube-vip runs the image its control planes do.
+	MetalLB              Chart
+	KubeVip              Chart
+	KubeVipImage         Image
+	KubeVipCloudProvider Chart
 	// PodSecurityExempt are the namespaces Kyverno's policies leave alone, those the ClusterClasses'
 	// Pod Security Admission exempts.
 	PodSecurityExempt []string
@@ -182,6 +180,8 @@ type Chart struct {
 	Name       string
 	Version    string
 	Digest     string
+	// Values lie beneath those Kubehenge gives the chart: the images it runs, each by tag and digest.
+	Values map[string]any
 }
 
 // ParseChart reads <repository>/<name>:<version>@sha256:<digest>, such as
@@ -439,11 +439,10 @@ func clusterResourceSet(cluster *clusterv1.Cluster, secrets []*corev1.Secret) *a
 // or through OIDC. Its service account token stays mounted only because Headlamp reads the API
 // server's address and CA through it; the account is bound to no role. Plugins are those in the
 // image, nothing fetched at run time.
-func headlampValues(image string, h Headlamp) map[string]any {
+func headlampValues(h Headlamp) map[string]any {
 	// The image's own user and group.
 	const user, group = 100, 101
 	values := map[string]any{
-		"image":              map[string]any{"tag": image},
 		"clusterRoleBinding": map[string]any{"create": false},
 		"config":             map[string]any{"oidc": map[string]any{"secret": map[string]any{"create": false}}},
 		"pluginsManager":     map[string]any{"enabled": false},
@@ -616,7 +615,7 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 	}
 	wanted = append(wanted, cniCharts...)
 	if addons.Headlamp.Enabled {
-		wanted = append(wanted, chartProxy{headlampAddon, headlampAddon, headlampAddon, charts.Headlamp, headlampValues(charts.HeadlampImage, addons.Headlamp)})
+		wanted = append(wanted, chartProxy{headlampAddon, headlampAddon, headlampAddon, charts.Headlamp, headlampValues(addons.Headlamp)})
 	}
 	if addons.Rancher.Install || addons.Monitoring.Enabled {
 		// A Secret goes with its Certificate, so that nothing an add-on asked for outlives it.
@@ -657,8 +656,9 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 	}
 
 	var proxies []*unstructured.Unstructured
-	for _, p := range wanted {
-		values, err := yaml.Marshal(p.values)
+	for i := range wanted {
+		p := &wanted[i]
+		values, err := yaml.Marshal(overlay(p.chart.Values, p.values))
 		if err != nil {
 			return nil, fmt.Errorf("encoding the values of %s: %w", p.release, err)
 		}
@@ -680,6 +680,28 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 		proxies = append(proxies, u)
 	}
 	return proxies, nil
+}
+
+// overlay lays values over base into a new map, leaving both as they are: maps merge key by key,
+// and anything else in values replaces what base has.
+func overlay(base, values map[string]any) map[string]any {
+	merged := maps.Clone(values)
+	if merged == nil {
+		merged = map[string]any{}
+	}
+	for k, b := range base {
+		v, ok := merged[k]
+		if !ok {
+			merged[k] = b
+			continue
+		}
+		bm, bIsMap := b.(map[string]any)
+		vm, vIsMap := v.(map[string]any)
+		if bIsMap && vIsMap {
+			merged[k] = overlay(bm, vm)
+		}
+	}
+	return merged
 }
 
 func credentialsSecretName(cluster *clusterv1.Cluster) string {

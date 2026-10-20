@@ -336,7 +336,6 @@ case ${cni} in
     # Canal and k3s's own CNI carry flannel by design.
     *) ;;
 esac
-agnhost=registry.k8s.io/e2e-test-images/agnhost:2.61
 # agnhost_pod <namespace> <name> <args...>: an agnhost pod at Pod Security's restricted level,
 # which the cluster enforces; the image runs as root unless told otherwise. The overrides merge into
 # the container by its name. sh has no local variables, so its own carry its prefix.
@@ -450,7 +449,8 @@ spec:
       type: RuntimeDefault
   containers:
     - name: write
-      image: registry.k8s.io/pause:3.10.1
+      # renovate: datasource=docker depName=registry.k8s.io/pause
+      image: registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
       securityContext:
         allowPrivilegeEscalation: false
         capabilities:
@@ -622,8 +622,8 @@ esac
 step "pod security enforced, with Kyverno switched on"
 # privileged_pod <namespace>: asks the API server to admit a privileged pod, without creating it.
 privileged_pod() {
-    wl -n "$1" run e2e-privileged --image=registry.k8s.io/pause:3.10.1 --restart=Never --dry-run=server \
-        --overrides='{"apiVersion":"v1","spec":{"containers":[{"name":"e2e-privileged","image":"registry.k8s.io/pause:3.10.1","securityContext":{"privileged":true}}]}}' 2>&1
+    wl -n "$1" run e2e-privileged --image="${pause_image}" --restart=Never --dry-run=server \
+        --overrides="{\"apiVersion\":\"v1\",\"spec\":{\"containers\":[{\"name\":\"e2e-privileged\",\"image\":\"${pause_image}\",\"securityContext\":{\"privileged\":true}}]}}" 2>&1
 }
 # shellcheck disable=SC2310 # the refusal is the answer looked for.
 refused=$(privileged_pod default) && fail "a privileged pod is admitted under Pod Security's restricted level"
@@ -717,6 +717,18 @@ if [ -n "${restarted}" ]; then
     fail "containers restarted while the add-ons were installed (pod, restarts): ${restarted}"
 fi
 pod_memory "${work}/workload"
+
+step "every add-on's image named by digest"
+# Every pod outside kube-system, which only the add-ons, their operators and these tests create,
+# and in kube-system the workloads of the releases Kubehenge installs.
+releases=$(kubectl -n "${ns}" get helmreleaseproxies -l "cluster.x-k8s.io/cluster-name=${name}" -o json | jq -c '[.items[].spec.releaseName]')
+images=$(wl get pods -A -o json | jq -r '.items[] | select(.metadata.namespace != "kube-system") | .metadata as $m |
+    (.spec.initContainers // [])[], .spec.containers[] | "\($m.namespace)/\($m.name) \(.image)"')
+system_images=$(wl -n kube-system get deployments,daemonsets,statefulsets -o json | jq -r --argjson r "${releases}" '.items[] |
+    select(.metadata.annotations["meta.helm.sh/release-name"] as $n | $r | index($n)) | .metadata as $m |
+    (.spec.template.spec.initContainers // [])[], .spec.template.spec.containers[] | "kube-system/\($m.name) \(.image)"')
+unpinned=$(printf '%s\n%s\n' "${images}" "${system_images}" | grep -v -e '@sha256:[0-9a-f]\{64\}$' -e '^$' | sort -u)
+[ -z "${unpinned}" ] || fail "images named without a digest (pod, image): ${unpinned}"
 
 step "every add-on switched off at once"
 set_variable headlamp '{"enabled":false}'

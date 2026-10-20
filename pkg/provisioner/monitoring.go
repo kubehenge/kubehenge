@@ -94,16 +94,6 @@ func ParseImage(s string) (Image, error) {
 	return Image{Registry: registry, Repository: path[:at], Tag: path[at+1:], Digest: digest}, nil
 }
 
-// ValidTagDigest checks <tag>@sha256:<digest>, an image's tag with its digest for a chart that
-// names its image by tag only.
-func ValidTagDigest(s string) error {
-	tag, digest, ok := strings.Cut(s, "@sha256:")
-	if !ok || tag == "" || strings.ContainsAny(tag, "/:") || !isDigest(digest) {
-		return fmt.Errorf("%q is not <tag>@sha256:<digest>", s)
-	}
-	return nil
-}
-
 func (i Image) String() string {
 	return i.Registry + "/" + i.Repository + ":" + i.Tag + "@sha256:" + i.Digest
 }

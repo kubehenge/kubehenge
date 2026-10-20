@@ -2,6 +2,7 @@
 {{- $extension := "kubehenge-extension" }}
 {{- $tls := printf "%s-tls" $extension }}
 {{- $labels := dict "app.kubernetes.io/name" $name "app.kubernetes.io/instance" .Release.Name }}
+{{- $chartValues := dict }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -183,12 +184,14 @@ spec:
             {{- end }}
             {{- range $flag, $chart := dict "ccm-chart" .Values.addons.cloudControllerManager "csi-chart" .Values.addons.csiPlugin "cilium-chart" .Values.addons.cilium "calico-chart" .Values.addons.calico "headlamp-chart" .Values.addons.headlamp "rancher-chart" .Values.addons.rancher "cert-manager-chart" .Values.addons.certManager "monitoring-chart" .Values.addons.monitoring "kyverno-chart" .Values.addons.kyverno "kyverno-policies-chart" .Values.addons.kyvernoPolicies "istio-chart" .Values.addons.istio "istio-base-chart" .Values.addons.istioBase "istio-cni-chart" .Values.addons.istioCNI "istio-ztunnel-chart" .Values.addons.istioZtunnel "traefik-chart" .Values.addons.traefik "metallb-chart" .Values.addons.metallb "kube-vip-chart" .Values.addons.kubeVip "kube-vip-cloud-provider-chart" .Values.addons.kubeVipCloudProvider }}
             - --{{ $flag }}={{ $chart.repository }}/{{ $chart.chart }}:{{ $chart.version }}
+            {{- with $chart.values }}
+            {{- $_ := set $chartValues (trimSuffix "-chart" $flag) . }}
             {{- end }}
-            - --headlamp-image={{ .Values.addons.headlamp.image }}
+            {{- end }}
+            - {{ printf "--chart-values=%s" (toJson $chartValues) | quote }}
             - --rancher-kubernetes={{ .Values.addons.rancher.kubernetes }}
             - --kube-rbac-proxy-image={{ .Values.addons.monitoring.kubeRBACProxy }}
             - --kube-vip-image={{ .Values.kubeVip }}
-            - --kube-vip-cloud-provider-image={{ .Values.addons.kubeVipCloudProvider.image }}
             - --pod-security-exempt={{ join "," .Values.podSecurityExempt }}
             - --proxmox-ca=/etc/kubehenge/proxmox/ca.crt
             {{- range $class, $namespaces := .Values.providerNamespaces }}

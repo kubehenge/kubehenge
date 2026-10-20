@@ -12,8 +12,10 @@
 # kube-bench's latest release predates the benchmark's 2.0, so it runs with the 2.0 configuration
 # from its main branch at this commit. security-scan carries kube-bench and the RKE2 and k3s
 # benchmarks together.
+# renovate: datasource=docker depName=docker.io/aquasec/kube-bench
 kube_bench_image=docker.io/aquasec/kube-bench:v0.16.0@sha256:75506f222d1eb6ce2a751a5533bdc0a3b54c898e2e49e7751d0ee22cfb862679
 kube_bench_commit=e278a5915a982f2756026de6e2f9ca77077ef9f9
+# renovate: datasource=docker depName=docker.io/rancher/security-scan
 security_scan_image=docker.io/rancher/security-scan:v0.10.2@sha256:2c7e270a01771d97b46842149033e272394351fa6a0729598d62d9a2d8eee9e8
 
 # cis_exceptions: the checks the cluster fails by design, each with why, as a JSON list.

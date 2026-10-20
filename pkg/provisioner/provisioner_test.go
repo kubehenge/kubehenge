@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -202,8 +203,8 @@ var testCharts = Charts{
 	Headlamp: Chart{
 		Repository: "https://kubernetes-sigs.github.io/headlamp", Name: "headlamp", Version: "0.46.0",
 		Digest: "faa471a8c5c55125b3dceed1cf73000e1ced18f07e2088e5e12e75292fb9ae62",
+		Values: map[string]any{"image": map[string]any{"tag": "v0.46.0@sha256:8a0ef97527544baa2b35825940ddf4db6e2d09c30cd5aa31fd269ff604cc8b75"}},
 	},
-	HeadlampImage: "v0.46.0@sha256:8a0ef97527544baa2b35825940ddf4db6e2d09c30cd5aa31fd269ff604cc8b75",
 
 	CertManager: Chart{
 		Repository: "https://charts.jetstack.io", Name: "cert-manager", Version: "v1.21.2",
@@ -260,10 +261,10 @@ var testCharts = Charts{
 	KubeVipCloudProvider: Chart{
 		Repository: "https://kube-vip.github.io/helm-charts", Name: "kube-vip-cloud-provider", Version: "0.2.10",
 		Digest: "6a9c9d7540cd3d7a4ebfaf205c4df07c809b19b463e6a764d59c011387d2695e",
-	},
-	KubeVipCloudProviderImage: Image{
-		Registry: "ghcr.io", Repository: "kube-vip/kube-vip-cloud-provider", Tag: "v0.0.13",
-		Digest: "b8b6a5180e678b410e2c5dba86b87fa8099ada16e2f067d83f04e749f8ea54ab",
+		Values: map[string]any{"image": map[string]any{
+			"repository": "ghcr.io/kube-vip/kube-vip-cloud-provider",
+			"tag":        "v0.0.13@sha256:b8b6a5180e678b410e2c5dba86b87fa8099ada16e2f067d83f04e749f8ea54ab",
+		}},
 	},
 	PodSecurityExempt: []string{"kube-system", "node-exporter"},
 }
@@ -275,7 +276,7 @@ func TestParseChart(t *testing.T) {
 		"oci://ghcr.io/sergelogvinov/charts/proxmox-csi-plugin:0.5.12@sha256:" + testCharts.CSI.Digest: testCharts.CSI,
 		"https://helm.cilium.io/cilium:1.20.3" + digest:                                                testCharts.Cilium,
 	} {
-		if got, err := ParseChart(s); err != nil || got != want || !strings.HasSuffix(s, "/"+got.Name+":"+got.pinnedVersion()) {
+		if got, err := ParseChart(s); err != nil || !reflect.DeepEqual(got, want) || !strings.HasSuffix(s, "/"+got.Name+":"+got.pinnedVersion()) {
 			t.Errorf("%s: got %+v, %v", s, got, err)
 		}
 	}
@@ -508,6 +509,28 @@ func headlampProxyValues(t *testing.T, h Headlamp) (map[string]any, map[string]a
 		t.Fatal(err)
 	}
 	return spec, values
+}
+
+func TestChartValuesLieBeneathKubehenges(t *testing.T) {
+	t.Parallel()
+	base := map[string]any{
+		"image":    map[string]any{"repository": "example.test/a", "tag": "v1@sha256:0805"},
+		"replicas": 1,
+		"keep":     "base",
+	}
+	got := overlay(base, map[string]any{"image": map[string]any{"pullPolicy": "Always"}, "replicas": 3, "own": true})
+	want := map[string]any{
+		"image":    map[string]any{"repository": "example.test/a", "tag": "v1@sha256:0805", "pullPolicy": "Always"},
+		"replicas": 3,
+		"keep":     "base",
+		"own":      true,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("overlay = %v, want %v", got, want)
+	}
+	if image, ok := base["image"].(map[string]any); !ok || len(image) != 2 {
+		t.Errorf("the chart's own values changed: %v", base)
+	}
 }
 
 func TestHeadlampHasNoRightsOfItsOwn(t *testing.T) {

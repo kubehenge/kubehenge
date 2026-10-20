@@ -68,13 +68,14 @@
       ]
     },
     {
-      "description": "Any other version named in a comment on the line above it: the tested set in the management-cluster module, the Talos release templates are made from, the add-on charts published as OCI images, the Headlamp image the clusters run and the registry the end-to-end tests run, and Helm and kubectl in scripts/tools.sh. An image's digest moves with its tag.",
+      "description": "Any other version named in a comment on the line above it: the tested set in the management-cluster module, the Talos release templates are made from, the add-on charts published as OCI images, the images the add-ons run, the images and registry the end-to-end tests run, and Helm and kubectl in scripts/tools.sh. An image's digest moves with its tag.",
       "customType": "regex",
       "managerFilePatterns": [
         "/^scripts/tools\\.sh$/",
         "/^management-cluster/versions\\.tf$/",
         "/^pkg/templates/plan\\.go$/",
         "/^charts/kubehenge/values\\.yaml$/",
+        "/^test/e2e/[^/]+\\.sh$/",
         "/^test/e2e/ci/up\\.sh$/"
       ],
       "matchStrings": [

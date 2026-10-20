@@ -2,10 +2,13 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -83,7 +86,7 @@ type controllerOptions struct {
 	kubeVipChart      string
 	kubeVipImage      string
 	kubeVipCloudChart string
-	kubeVipCloudImage string
+	chartValues       string
 	extensionConfig   string
 	upgradeInterval   time.Duration
 	classProviders    []string
@@ -123,7 +126,7 @@ separate nodes.`,
 	f.StringVar(&o.ciliumChart, "cilium-chart", "", "Cilium chart, for distributions without a CNI of their own, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.calicoChart, "calico-chart", "", "Calico's operator chart, for distributions without a CNI of their own, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.headlampChart, "headlamp-chart", "", "Headlamp chart, for clusters that switch it on, as <repository>/<name>:<version>@sha256:<digest>")
-	f.StringVar(&o.r.Charts.HeadlampImage, "headlamp-image", "", "Headlamp image tag with its digest, as <tag>@sha256:<digest>")
+	f.StringVar(&o.chartValues, "chart-values", "{}", "values beneath those Kubehenge gives each chart, naming its images by digest, as a JSON object by chart flag without -chart, such as {\"cert-manager\":{...}}")
 	f.StringVar(&o.certManagerChart, "cert-manager-chart", "", "cert-manager chart, installed with Rancher and with monitoring, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.rancherChart, "rancher-chart", "", "Rancher chart, for the cluster that installs it, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.rancherKubernetes, "rancher-kubernetes", "", "Kubernetes minor versions the Rancher chart runs on, as <min>-<max>, such as 34-36")
@@ -140,7 +143,6 @@ separate nodes.`,
 	f.StringVar(&o.kubeVipChart, "kube-vip-chart", "", "kube-vip chart, for clusters whose load balancer is kube-vip, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.kubeVipImage, "kube-vip-image", "", "kube-vip image, as <registry>/<repository>:<tag>@sha256:<digest>")
 	f.StringVar(&o.kubeVipCloudChart, "kube-vip-cloud-provider-chart", "", "kube-vip's cloud provider chart, which hands kube-vip's Services their addresses, as <repository>/<name>:<version>@sha256:<digest>")
-	f.StringVar(&o.kubeVipCloudImage, "kube-vip-cloud-provider-image", "", "kube-vip's cloud provider image, as <registry>/<repository>:<tag>@sha256:<digest>")
 	f.StringSliceVar(&o.r.Charts.PodSecurityExempt, "pod-security-exempt", nil, "namespaces Kyverno's pod security policies leave alone, those the ClusterClasses' Pod Security Admission exempts (comma-separated)")
 	f.StringArrayVar(&o.classProviders, "class-providers", nil, "namespaces of the Cluster API providers only one ClusterClass's clusters use, as <class>=<namespace>,<namespace>; they run only while a cluster does (repeatable)")
 	f.DurationVar(&o.upgradeInterval, "upgrade-interval", defaultUpgradeInterval, "how often clusters are checked for an automatic upgrade due in their window")
@@ -149,7 +151,7 @@ separate nodes.`,
 	f.StringVar(&o.certDir, "extension-cert-dir", "/etc/kubehenge/tls", "directory with tls.crt and tls.key for the Runtime Extension server")
 	f.StringVar(&o.healthAddr, "health-address", ":8081", "address of the liveness and readiness probes")
 	f.BoolVar(&o.leaderElect, "leader-elect", true, "elect one active controller among replicas")
-	for _, flag := range []string{"ccm-chart", "csi-chart", "cilium-chart", "calico-chart", "headlamp-chart", "headlamp-image", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "monitoring-chart", "kube-rbac-proxy-image", "kyverno-chart", "kyverno-policies-chart", "istio-chart", "istio-base-chart", "istio-cni-chart", "istio-ztunnel-chart", "traefik-chart", "metallb-chart", "kube-vip-chart", "kube-vip-image", "kube-vip-cloud-provider-chart", "kube-vip-cloud-provider-image"} {
+	for _, flag := range []string{"ccm-chart", "csi-chart", "cilium-chart", "calico-chart", "headlamp-chart", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "monitoring-chart", "kube-rbac-proxy-image", "kyverno-chart", "kyverno-policies-chart", "istio-chart", "istio-base-chart", "istio-cni-chart", "istio-ztunnel-chart", "traefik-chart", "metallb-chart", "kube-vip-chart", "kube-vip-image", "kube-vip-cloud-provider-chart"} {
 		_ = cmd.MarkFlagRequired(flag)
 	}
 	return cmd
@@ -263,8 +265,12 @@ func (o *controllerOptions) addReclaimer(mgr manager.Manager, conn *pve.Config, 
 	return nil
 }
 
-// parseCharts reads every chart flag into the reconciler's charts.
+// parseCharts reads every chart flag, with the chart's values, into the reconciler's charts.
 func (o *controllerOptions) parseCharts() error {
+	var values map[string]map[string]any
+	if err := json.Unmarshal([]byte(o.chartValues), &values); err != nil {
+		return fmt.Errorf("--chart-values: %w", err)
+	}
 	for _, c := range []struct {
 		flag  string
 		value string
@@ -293,6 +299,12 @@ func (o *controllerOptions) parseCharts() error {
 		if *c.chart, err = provisioner.ParseChart(c.value); err != nil {
 			return fmt.Errorf("%s: %w", c.flag, err)
 		}
+		name := strings.TrimSuffix(strings.TrimPrefix(c.flag, "--"), "-chart")
+		c.chart.Values = values[name]
+		delete(values, name)
+	}
+	if len(values) > 0 {
+		return fmt.Errorf("--chart-values: no chart is called %s", strings.Join(slices.Sorted(maps.Keys(values)), ", "))
 	}
 	for _, i := range []struct {
 		flag  string
@@ -301,15 +313,11 @@ func (o *controllerOptions) parseCharts() error {
 	}{
 		{"--kube-rbac-proxy-image", o.kubeRBACProxy, &o.r.Charts.KubeRBACProxy},
 		{"--kube-vip-image", o.kubeVipImage, &o.r.Charts.KubeVipImage},
-		{"--kube-vip-cloud-provider-image", o.kubeVipCloudImage, &o.r.Charts.KubeVipCloudProviderImage},
 	} {
 		var err error
 		if *i.image, err = provisioner.ParseImage(i.value); err != nil {
 			return fmt.Errorf("%s: %w", i.flag, err)
 		}
-	}
-	if err := provisioner.ValidTagDigest(o.r.Charts.HeadlampImage); err != nil {
-		return fmt.Errorf("--headlamp-image: %w", err)
 	}
 	return nil
 }
