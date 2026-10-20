@@ -310,7 +310,7 @@ tofu output -raw talosconfig > talosconfig
 | `workload_datastores` | `["local-lvm"]` | Storages clusters may use. |
 | `workload_bridges` | `["vmbr0"]` | Bridges clusters may attach to, with any VLAN on them. |
 | `bootstrap_datastore` | `local` | Storage for cloud-init ISOs; Cluster API gets full control of it. |
-| `registry_mirrors` | `{}` | Registry mirrors for the management cluster's nodes, by registry name: endpoint URLs tried in order before the registry itself. |
+| `registry_mirrors` | `{}` | Registry mirrors for the management cluster's nodes, by registry name: endpoint URLs tried in order before the registry itself. A mirror of factory.talos.dev, ghcr.io or registry.k8s.io serves the images' cosign signatures too, which the nodes require on Sidero's and Kubernetes' images. |
 | `cluster_oidc` | `[]` | OpenID Connect providers every new cluster trusts unless it names its own: up to eight, each with `issuer_url` (https) and `client_id`, and optionally `username_claim`, `username_prefix`, `groups_claim`, `groups_prefix`, `scopes` and `certificate_authority`. |
 | `version_overrides` | `{}` | Versions to use instead of the tested set, by its keys, to hold a component back. A provider held back needs its image in `provider_images` and its files' digests in `provider_manifests`. Lowering a version on a running cluster is not supported. |
 | `provider_images` | `{}` | Controller images by digest to run instead of the tested ones, by `"<kind>/<name>"`, such as `"InfrastructureProvider/proxmox"`. |

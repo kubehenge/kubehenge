@@ -219,7 +219,7 @@ variable "bootstrap_datastore" {
 }
 
 variable "registry_mirrors" {
-  description = "Image registry mirrors for the management cluster's nodes, by registry name (such as ghcr.io or docker.io): endpoint URLs tried in order before the registry itself."
+  description = "Image registry mirrors for the management cluster's nodes, by registry name (such as ghcr.io or docker.io): endpoint URLs tried in order before the registry itself. A mirror of factory.talos.dev, ghcr.io or registry.k8s.io serves the images' cosign signatures too, which the nodes require on Sidero's and Kubernetes' images."
   type        = map(list(string))
   default     = {}
 }

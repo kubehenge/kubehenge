@@ -247,6 +247,19 @@ run "controller_and_clusters_are_least_privilege" {
   }
 
   assert {
+    condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : [
+        for r in yamldecode(d).rules : [r.image, r.keyless.issuer, try(r.keyless.subject, r.keyless.subjectRegex)]
+      ] if yamldecode(d).kind == "ImageVerificationConfig"
+      ] == [[
+        ["factory.talos.dev/*", "https://accounts.google.com", "image-factory-signing@talos-production.iam.gserviceaccount.com"],
+        ["ghcr.io/siderolabs/*", "https://accounts.google.com", "^(releasemgr-svc@talos-production\\.iam\\.gserviceaccount\\.com|[^@]+@siderolabs\\.com)$"],
+        ["registry.k8s.io/*", "https://accounts.google.com", "krel-trust@k8s-releng-prod.iam.gserviceaccount.com"],
+    ]]
+    error_message = "Talos must pull the Image Factory's, Sidero's and Kubernetes' images only with their publishers' signatures"
+  }
+
+  assert {
     condition = (
       length(proxmox_acl.ha) == 0 && length(proxmox_user_token.ha) == 0 &&
       !contains([for s in helm_release.cluster_api_providers.set_sensitive : s.name], "secrets.kubehenge-proxmox.data.ha-token")
