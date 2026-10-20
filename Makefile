@@ -159,7 +159,7 @@ lint-web: web/node_modules/.package-lock.json
 	npm --prefix web exec --no -- oxlint -c appliance/pve-entry/.oxlintrc.json --deny-warnings --report-unused-disable-directives appliance/pve-entry
 
 tofu-init:
-	set -e; for m in $(MODULES); do $(TOFU) -chdir=$$m init -backend=false -input=false >/dev/null; done
+	set -e; for m in $(MODULES); do $(TOFU) -chdir=$$m init -backend=false -input=false -lockfile=readonly >/dev/null; done
 
 lint-tofu: tofu-init
 	$(TOFU) fmt -check -recursive -diff

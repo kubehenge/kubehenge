@@ -37,13 +37,13 @@ In the cluster:
 cp terraform.tfvars.example terraform.tfvars   # then fill it in
 export TF_VAR_proxmox_api_token='root@pam!kubehenge=...'
 export TF_VAR_proxmox_ca_certificate="$(cat pve-root-ca.pem)"
-tofu init
+tofu init -lockfile=readonly
 tofu apply
 tofu output -raw kubeconfig > kubeconfig
 tofu output -raw talosconfig > talosconfig
 ```
 
-`terraform` works the same as `tofu`, from version 1.11.
+`-lockfile=readonly` holds the providers to the checksums in `.terraform.lock.hcl`. A root module of your own that calls this one needs a copy of that file beside it, since only the root module's is read. `terraform` works the same as `tofu`, from version 1.11.
 
 The state holds the cluster's secrets and its administrator credentials. Keep it in an encrypted backend, or use OpenTofu's state encryption.
 

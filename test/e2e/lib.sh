@@ -16,8 +16,11 @@ provider_kinds=coreproviders,bootstrapproviders,controlplaneproviders,infrastruc
 # shellcheck source=common.sh
 . "$(dirname "$0")/common.sh"
 
+# The root module in ${dir} calls this checkout's module, whose lock checks the providers: OpenTofu
+# reads only the root module's.
 apply_management_cluster() {
-    "${tofu}" -chdir="${dir}" init -input=false > /dev/null
+    cp "$(dirname "$0")/../../management-cluster/.terraform.lock.hcl" "${dir}/"
+    "${tofu}" -chdir="${dir}" init -input=false -lockfile=readonly > /dev/null
     "${tofu}" -chdir="${dir}" apply -input=false -auto-approve
     "${tofu}" -chdir="${dir}" output -raw kubeconfig > "${KUBECONFIG}"
     "${tofu}" -chdir="${dir}" output -json proxmox_objects > "${work}/objects.json"

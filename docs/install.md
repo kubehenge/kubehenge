@@ -278,13 +278,13 @@ cd share/kubehenge/management-cluster
 cp terraform.tfvars.example terraform.tfvars   # then fill it in
 export TF_VAR_proxmox_api_token='root@pam!kubehenge=...'
 export TF_VAR_proxmox_ca_certificate="$(cat pve-root-ca.pem)"
-tofu init
+tofu init -lockfile=readonly
 tofu apply
 tofu output -raw kubeconfig > kubeconfig
 tofu output -raw talosconfig > talosconfig
 ```
 
-The module is tested with OpenTofu, which the appliance runs too; it declares Terraform 1.11 or newer as well. The state holds the cluster's secrets and its administrator credentials: keep it in an encrypted backend, or use OpenTofu's state encryption.
+`-lockfile=readonly` holds the providers to the checksums in the module's `.terraform.lock.hcl`, as the appliance does. The module is tested with OpenTofu, which the appliance runs too; it declares Terraform 1.11 or newer as well. The state holds the cluster's secrets and its administrator credentials: keep it in an encrypted backend, or use OpenTofu's state encryption.
 
 ### Variables
 

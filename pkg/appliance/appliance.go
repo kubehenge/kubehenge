@@ -196,8 +196,7 @@ func (a *Appliance) Remove(passphrase string, ticket *pve.Ticket, before func(ct
 		if err := before(ctx, j); err != nil {
 			return err
 		}
-		j.Add("Preparing OpenTofu")
-		if err := a.tofu(ctx, j, env, plainLine, "init", "-input=false", "-no-color"); err != nil { //nolint:misspell // OpenTofu's flag
+		if err := a.init(ctx, j, env); err != nil {
 			return err
 		}
 		j.Add("Destroying the management cluster")
