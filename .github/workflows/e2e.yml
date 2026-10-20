@@ -140,13 +140,21 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           grep -m1 'model name' /proc/cpuinfo
+          kvm="$RUNNER_TEMP/kvm.txt"
+          echo "$(grep -c '^[0-9][0-9]:' "$kvm") samples, $(wc -l < "$kvm") lines"
           awk -F: '/^[0-9][0-9]:[0-9][0-9]:[0-9][0-9]$/ { n++; next }
             { k = $1; sub(/.*\//, "", k); if (!(k in first)) first[k] = $2; last[k] = $2 }
             END {
               for (k in last)
                 if (n > 1 && last[k] > first[k])
                   printf "%-28s %12.0f\n", k, (last[k] - first[k]) / ((n - 1) * 15)
-            }' "$RUNNER_TEMP/kvm.txt" | sort -k2 -nr
+            }' "$kvm" | sort -k2 -nr > "$RUNNER_TEMP/exits.txt"
+          # No counter that moved means the samples themselves are what to read.
+          if [ -s "$RUNNER_TEMP/exits.txt" ]; then
+            cat "$RUNNER_TEMP/exits.txt"
+          else
+            head -60 "$kvm"
+          fi
       - if: >-
           !cancelled() && github.event_name == 'schedule' && matrix.test == 'management-cluster'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
