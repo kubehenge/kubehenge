@@ -10,11 +10,18 @@
 # CIS benchmark itself, RKE2 and k3s against their own, as Rancher's security-scan carries them.
 
 # kube-bench's latest release predates the benchmark's 2.0, so it runs with the 2.0 configuration
-# from its main branch at this commit. security-scan carries kube-bench and the RKE2 and k3s
+# from its main branch at this commit, each file checked against its SHA-256. security-scan carries kube-bench and the RKE2 and k3s
 # benchmarks together.
 # renovate: datasource=docker depName=docker.io/aquasec/kube-bench
 kube_bench_image=docker.io/aquasec/kube-bench:v0.16.0@sha256:75506f222d1eb6ce2a751a5533bdc0a3b54c898e2e49e7751d0ee22cfb862679
 kube_bench_commit=e278a5915a982f2756026de6e2f9ca77077ef9f9
+kube_bench_sums='f274224ff57a5aa945fffa673224ac1830f0b10ed1c015fa04810c1f85e15374  config.yaml
+f8beefa9c5392e5c25d03e802294ad1852ac094d3bf3053903dad718f599e3b7  cis-2.0/config.yaml
+0b1b74801b86638646a9bfb83c1f1f861c96f0f9009a96f4dc966889cad48b8d  cis-2.0/master.yaml
+6e1ed27051bffcebbaeba5e6895c81704efd785e9daf8bb896febe8f135862a7  cis-2.0/node.yaml
+c675e598ab6414b2e2e1b4e8dc9d947dd2d3fd3138ad1107b07c83cfb4c96897  cis-2.0/controlplane.yaml
+6febdc4959f769153ffe3b605a8b4db794b29ed605e11cbe651575d0f7d768a5  cis-2.0/etcd.yaml
+716ac411115288c01553491b6fe96d85366c3d012af8bdc2abda9ae7d10884f9  cis-2.0/policies.yaml'
 # renovate: datasource=docker depName=docker.io/rancher/security-scan
 security_scan_image=docker.io/rancher/security-scan:v0.10.2@sha256:2c7e270a01771d97b46842149033e272394351fa6a0729598d62d9a2d8eee9e8
 
@@ -102,6 +109,7 @@ cis_benchmark() {
         for f in config master node controlplane etcd policies; do
             curl -sSfL -o "${work}/kube-bench/cis-2.0/${f}.yaml" "${raw}/cis-2.0/${f}.yaml"
         done
+        (cd "${work}/kube-bench" && echo "${kube_bench_sums}" | sha256sum --check --strict --quiet -)
         wl -n e2e-cis create configmap kube-bench-config --from-file="${work}/kube-bench/config.yaml"
         wl -n e2e-cis create configmap kube-bench-cis-2.0 --from-file="${work}/kube-bench/cis-2.0"
     fi
