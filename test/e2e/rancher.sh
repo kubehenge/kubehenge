@@ -1,7 +1,7 @@
 #!/bin/sh
 # End-to-end test of the Rancher add-on on a Proxmox VE host, against a running management cluster:
-# a one-node k3s cluster installs Rancher, another one-node k3s cluster registers with it on its own,
-# leaves it (Rancher cleans up inside it) and comes back, the Rancher cluster is held at the
+# a one-node k3s cluster installs Rancher, another one-node k3s cluster registers with it on its own
+# (Rancher starting no Cluster API or upgrades of its own and naming every image by digest), leaves it (Rancher cleans up inside it) and comes back, the Rancher cluster is held at the
 # Kubernetes versions Rancher runs on, the k3s cluster leaves Rancher before it is deleted, and
 # nothing of either is left afterwards.
 #
@@ -145,6 +145,23 @@ echo "memory with Rancher's agents:"
 pod_memory "${work}/downstream"
 echo "memory with Rancher, a cluster registered:"
 pod_memory "${work}/rancher"
+
+step "Rancher runs no Cluster API or upgrades of its own, and names every image by digest"
+# kube-system holds only k3s's own components, which come with the distribution.
+for c in rancher downstream; do
+    images=$(KUBECONFIG="${work}/${c}" kubectl get pods -A -o json | jq -r '.items[] | select(.metadata.namespace != "kube-system") |
+        .metadata as $m | (.spec.initContainers // [])[], .spec.containers[] | "\($m.namespace)/\($m.name) \(.image)"')
+    unpinned=$(printf '%s\n' "${images}" | grep -v -e '@sha256:[0-9a-f]\{64\}$' -e '^$' | sort -u)
+    [ -z "${unpinned}" ] || fail "images in ${c}'s cluster named without a digest (pod, image): ${unpinned}"
+done
+# shellcheck disable=SC2310 # absent wraps one kubectl call, whose status is the one tested.
+for n in cattle-turtles-system cattle-capi-system; do
+    absent rancher get namespace "${n}" || fail "Rancher created ${n}"
+done
+# shellcheck disable=SC2310
+absent rancher -n cattle-system get deployment/system-upgrade-controller || fail "Rancher installed its system-upgrade-controller"
+# shellcheck disable=SC2310
+absent downstream -n cattle-system get deployment/system-upgrade-controller || fail "Rancher installed its system-upgrade-controller in the registered cluster"
 
 step "the k3s cluster leaves Rancher, which cleans up inside it, and comes back"
 set_variable downstream rancher '{"register":false}'

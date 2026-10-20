@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -204,8 +205,12 @@ func TestRancherProxies(t *testing.T) {
 	if namespace != "cattle-system" || values["hostname"] != "rancher.example.org" || values["agentTLSMode"] != "strict" {
 		t.Errorf("Rancher proxy in %q with %v", namespace, values)
 	}
-	if !strings.Contains(valuesTemplate, "value: https://rancher.example.org") {
-		t.Errorf("Rancher's server URL is not fixed to its hostname:\n%s", valuesTemplate)
+	want := []any{rancherAgentEnv, map[string]any{"name": "CATTLE_SERVER_URL", "value": "https://rancher.example.org"}}
+	if env := values["extraEnv"]; !reflect.DeepEqual(env, want) {
+		t.Errorf("Rancher's environment is %v, want the chart's and the server URL fixed to its hostname", env)
+	}
+	if own, ok := testCharts.Rancher.Values["extraEnv"].([]any); !ok || len(own) != 1 {
+		t.Error("the chart's own environment was changed")
 	}
 	if probe, ok := values["startupProbe"].(map[string]any); !ok || probe["failureThreshold"] != float64(60) || probe["periodSeconds"] != float64(10) {
 		t.Errorf("Rancher's first start has %v, want ten minutes", values["startupProbe"])

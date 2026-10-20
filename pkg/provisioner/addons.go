@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -150,8 +151,9 @@ func rancherProxy(cluster *clusterv1.Cluster) string {
 // nodes; the admin's first password is generated into the bootstrap-secret Secret, never put into
 // values. Rancher's chart gives a start two minutes, which its first start on one small node can
 // overrun while it registers its CRDs; every kill begins that again, so the window is ten minutes,
-// and liveness keeps its own.
-func rancherValues(r Rancher) map[string]any {
+// and liveness keeps its own. The server URL joins the chart's own extraEnv, which a list in these
+// values would replace.
+func rancherValues(r Rancher, base map[string]any) map[string]any {
 	const (
 		// A negative count is the chart's "up to": as many replicas as nodes, at most three.
 		replicas      = -3
@@ -159,12 +161,16 @@ func rancherValues(r Rancher) map[string]any {
 		probePeriod   = 10
 		probeFailures = 60
 	)
+	var env []any
+	if e, ok := base["extraEnv"].([]any); ok {
+		env = slices.Clone(e)
+	}
 	return map[string]any{
 		"hostname":     r.Hostname,
 		"replicas":     replicas,
 		"agentTLSMode": "strict",
 		"ingress":      map[string]any{"tls": map[string]any{"source": "rancher"}},
-		"extraEnv":     []any{map[string]any{"name": "CATTLE_SERVER_URL", "value": "https://" + r.Hostname}},
+		"extraEnv":     append(env, map[string]any{"name": "CATTLE_SERVER_URL", "value": "https://" + r.Hostname}),
 		"startupProbe": map[string]any{"timeoutSeconds": probeTimeout, "periodSeconds": probePeriod, "failureThreshold": probeFailures},
 	}
 }
@@ -669,7 +675,7 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 		if addons.Rancher.Hostname == "" {
 			return nil, fmt.Errorf("cluster %s/%s: Rancher needs a hostname", cluster.Namespace, cluster.Name)
 		}
-		wanted = append(wanted, chartProxy{rancherAddon, rancherAddon, rancherNamespace, charts.Rancher, rancherValues(addons.Rancher)})
+		wanted = append(wanted, chartProxy{rancherAddon, rancherAddon, rancherNamespace, charts.Rancher, rancherValues(addons.Rancher, charts.Rancher.Values)})
 	}
 	if addons.Monitoring.Enabled {
 		wanted = append(wanted, chartProxy{

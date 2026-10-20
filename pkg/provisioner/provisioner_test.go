@@ -182,6 +182,10 @@ func TestResourceSetSecret(t *testing.T) {
 	}
 }
 
+var rancherAgentEnv = map[string]any{
+	"name": "CATTLE_AGENT_IMAGE", "value": "rancher/rancher-agent:v2.15.2@sha256:fb006776b7ee42818ed1e2575bc2015e33ec64d6799545ba72e4297e43ce22a3",
+}
+
 var testCharts = Charts{
 	CCM: Chart{
 		Repository: "oci://ghcr.io/sergelogvinov/charts", Name: "proxmox-cloud-controller-manager", Version: "0.2.32",
@@ -210,6 +214,11 @@ var testCharts = Charts{
 		Values: map[string]any{"image": map[string]any{"tag": "v0.46.0@sha256:8a0ef97527544baa2b35825940ddf4db6e2d09c30cd5aa31fd269ff604cc8b75"}},
 	},
 
+	Rancher: Chart{
+		Repository: "https://releases.rancher.com/server-charts/stable", Name: "rancher", Version: "2.15.2",
+		Digest: "855cb9be954f65a31b9a8c77f7aebce125c2d7797425257d21d35e3380816ac8",
+		Values: map[string]any{"extraEnv": []any{rancherAgentEnv}},
+	},
 	CertManager: Chart{
 		Repository: "https://charts.jetstack.io", Name: "cert-manager", Version: "v1.21.2",
 		Digest: "73a56e1728edd6c99f1f31082618c3259d279a76b7ebd3d4bdc5475c2442d34a",
