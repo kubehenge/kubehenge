@@ -36,10 +36,11 @@ old_manifests='{
   "ionos-cloud/cluster-api-provider-proxmox/releases/download/v0.9.0/metadata.yaml": "df2916a79503ac053f6a9866a8de025e780e24d6d472f00f59f84898b5a1c572",
   "ionos-cloud/cluster-api-provider-proxmox/releases/download/v0.9.0/infrastructure-components.yaml": "43b229d747ffb0adee67d4c3a4be20859779332fcaaf8d195205e1e41e53028f"
 }'
-new_talos=$(sed -n 's/^ *talos *= *"\(.*\)"/\1/p' "$(dirname "$0")/../../management-cluster/versions.tf")
-new_kubernetes=$(sed -n 's/^ *kubernetes *= *"\(.*\)"/\1/p' "$(dirname "$0")/../../management-cluster/versions.tf")
-new_cluster_api=$(sed -n 's/^ *cluster_api *= *"\(.*\)"/\1/p' "$(dirname "$0")/../../management-cluster/versions.tf")
-new_capmox=$(sed -n 's/^ *capmox *= *"\(.*\)"/\1/p' "$(dirname "$0")/../../management-cluster/versions.tf")
+# The tested set's versions; the same names also map to the providers' repositories there.
+new_talos=$(sed -n 's/^ *talos *= *"\(v[0-9][^"]*\)"/\1/p' "$(dirname "$0")/../../management-cluster/versions.tf")
+new_kubernetes=$(sed -n 's/^ *kubernetes *= *"\(v[0-9][^"]*\)"/\1/p' "$(dirname "$0")/../../management-cluster/versions.tf")
+new_cluster_api=$(sed -n 's/^ *cluster_api *= *"\(v[0-9][^"]*\)"/\1/p' "$(dirname "$0")/../../management-cluster/versions.tf")
+new_capmox=$(sed -n 's/^ *capmox *= *"\(v[0-9][^"]*\)"/\1/p' "$(dirname "$0")/../../management-cluster/versions.tf")
 
 step "apply the older versions"
 export TF_VAR_version_overrides="${old}" TF_VAR_provider_images="${old_images}" TF_VAR_provider_manifests="${old_manifests}"

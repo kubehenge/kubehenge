@@ -17,3 +17,8 @@ allow-licenses:
   - OFL-1.1
 fail-on-severity: low
 fail-on-scopes: [runtime, development, unknown]
+# braces, with no fixed release, recurses without bound on deeply nested brace patterns. It comes
+# only with markdownlint-cli2, which expands the repository's own Markdown globs with it and
+# nothing a user sends.
+allow-ghsas:
+  - GHSA-vfj7-8cjw-p6xm
