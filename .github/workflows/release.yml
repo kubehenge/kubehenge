@@ -28,8 +28,11 @@ jobs:
     env:
       IMAGE: ghcr.io/kubehenge/kubehenge
       GH_TOKEN: ${{ github.token }}
-      # Go as scripts/tools.sh installs it, never a toolchain go.mod would have it download.
+      # Go as scripts/tools.sh installs it, never a toolchain go.mod would have it download. Go does
+      # not retry a module download the proxy breaks off, so it fetches from the source then; go.sum
+      # and the checksum database still check every module.
       GOTOOLCHAIN: local
+      GOPROXY: https://proxy.golang.org|direct
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

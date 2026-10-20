@@ -10,9 +10,12 @@ on:
 permissions:
   contents: read
 
-# Go as scripts/tools.sh installs it, never a toolchain go.mod would have it download.
+# Go as scripts/tools.sh installs it, never a toolchain go.mod would have it download. Go does not
+# retry a module download the proxy breaks off, so it fetches from the source then; go.sum and the
+# checksum database still check every module.
 env:
   GOTOOLCHAIN: local
+  GOPROXY: https://proxy.golang.org|direct
 
 concurrency:
   group: ci-${{ github.ref }}
