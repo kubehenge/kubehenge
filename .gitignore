@@ -4,6 +4,9 @@
 *.test.exe
 *.prof
 
+# The linters' environment, which uv makes from scripts/lint/uv.lock.
+/scripts/lint/.venv/
+
 # The frontend's dependencies and build, which `make web` produces; .keep lets Go compile without it.
 /web/node_modules/
 /pkg/ui/dist/*

@@ -124,11 +124,11 @@ lint: lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lin
 FILES = git ls-files --cached --others --exclude-standard
 SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh test/integration/*.sh appliance/*.sh appliance/pve-entry/*.sh scripts/*.sh
 SHFMT_FLAGS := -i 4 -ci -sr
-# Run from their package indexes at these versions, which check each download's hash.
-YAMLLINT := uvx yamllint@1.38.0
-ZIZMOR := uvx zizmor@1.31.1
-MARKDOWNLINT := npx --yes markdownlint-cli2@0.23.3
-GOVULNCHECK := go run golang.org/x/vuln/cmd/govulncheck@v1.9.0
+# Installed from lock files, which check every package's hash, their dependencies' included.
+YAMLLINT := uv run --locked --project scripts/lint yamllint
+ZIZMOR := uv run --locked --project scripts/lint zizmor
+MARKDOWNLINT := npm --prefix web exec --no -- markdownlint-cli2
+GOVULNCHECK := go tool govulncheck
 
 # Rewrites what the format checks below would refuse.
 fmt: web/node_modules/.package-lock.json
@@ -188,7 +188,7 @@ lint-actions:
 lint-yaml:
 	$(YAMLLINT) --strict $$($(FILES) '*.yml' '*.yaml' ':!:*/templates/*')
 
-lint-markdown:
+lint-markdown: web/node_modules/.package-lock.json
 	$(MARKDOWNLINT) $$($(FILES) '*.md')
 
 lint-docker:

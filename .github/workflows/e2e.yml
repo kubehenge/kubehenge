@@ -14,6 +14,10 @@ on:
 permissions:
   contents: read
 
+# Go as scripts/tools.sh installs it, never a toolchain go.mod would have it download.
+env:
+  GOTOOLCHAIN: local
+
 concurrency:
   group: e2e-${{ github.ref }}
   cancel-in-progress: true
@@ -64,22 +68,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Go's caches are e2e's own: the ci workflow's hold race-instrumented test builds, none of the
-      # controller's and capmox's static builds. The nightly run saves them and every other run
-      # reads them, so a pull request never fills the cache with its own.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: false
+      # Go's and npm's caches are e2e's own: the ci workflow's hold race-instrumented test builds,
+      # none of the controller's and capmox's static builds. The nightly run saves them and every
+      # other run reads them, so a pull request never fills the cache with its own.
       - id: go-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: e2e-go-${{ hashFiles('go.sum') }}-${{ github.run_id }}
+            ~/.npm
+          key: e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-${{ github.run_id }}
           restore-keys: |
-            e2e-go-${{ hashFiles('go.sum') }}-
+            e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-
             e2e-go-
       # The image of Proxmox VE as the nightly run last built it, so with packages a day old at
       # most; the nightly run builds it afresh.
@@ -95,11 +96,6 @@ jobs:
         run: |
           zstd -dc "$RUNNER_TEMP/pve-image.tar.zst" | docker load -q
           echo KUBEHENGE_E2E_PVE_BUILT=1 >> "$GITHUB_ENV"
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 26
-          cache: npm
-          cache-dependency-path: web/package-lock.json
       - name: Tools
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin"
@@ -158,6 +154,7 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
+            ~/.npm
           key: ${{ steps.go-cache.outputs.cache-primary-key }}
       - name: Collect
         if: failure()

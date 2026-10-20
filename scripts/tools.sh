@@ -1,21 +1,34 @@
 #!/bin/sh
-# Installs the tools `make test`, `make dist`, `make image` and the end-to-end tests need besides Go,
-# Node and the system's own (curl, jq, openssl, python3), at pinned versions checked against their
-# published checksums, into a directory of the caller's choosing:
+# Installs the tools `make test`, `make dist`, `make image` and the end-to-end tests need besides the
+# system's own (curl, jq, openssl, python3), Go, Node and uv among them, at pinned versions checked
+# against their published checksums, into a directory of the caller's choosing; every one, or only
+# those named:
 #
-#   scripts/tools.sh <directory>
+#   scripts/tools.sh <directory> [tool...]
 #
-# CI puts the directory on PATH. yamllint, zizmor and markdownlint run through uvx and npx at the
-# versions the Makefile names.
+# CI puts the directory on PATH. yamllint and zizmor run from scripts/lint's lock file through uv,
+# markdownlint from the frontend's through npm.
 set -eu
 
-dir=${1:?usage: $0 <directory>}
+dir=${1:?usage: $0 <directory> [tool...]}
+shift
+only=" $* "
 mkdir -p "${dir}"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
+# wanted <name>: whether the caller named this tool, or named none.
+wanted() {
+    case "${only}" in
+        '  ' | *" $1 "*) true ;;
+        *) false ;;
+    esac
+}
+
 # tool <name> <url> <sha256> [member of the archive]
 tool() {
+    # shellcheck disable=SC2310 # wanted only matches a word, nothing in it can fail.
+    wanted "$1" || return 0
     curl -fsSL --proto '=https' --tlsv1.2 -o "${work}/download" "$2"
     echo "$3  ${work}/download" | sha256sum -c --quiet -
     case "${4:-}" in
@@ -31,9 +44,44 @@ release() {
     tool "$1" "https://github.com/$2/releases/download/$3/$4" "$5" "${6:-}"
 }
 
-# Each tag sits on the line above its SHA-256, so Renovate moves the two together. Helm and kubectl
-# publish their downloads outside GitHub, so Renovate moves only their tag, and their SHA-256 is
-# taken from the checksum file beside the download.
+# tree <name> <url> <sha256> <directory of its programs in the archive> <program>...: a tool that
+# comes as a directory tree, unpacked into <directory>/lib/<name>, with its programs linked beside
+# the others.
+tree() {
+    # shellcheck disable=SC2310
+    wanted "$1" || return 0
+    curl -fsSL --proto '=https' --tlsv1.2 -o "${work}/download" "$2"
+    echo "$3  ${work}/download" | sha256sum -c --quiet -
+    rm -rf "${dir:?}/lib/$1" && mkdir -p "${dir}/lib/$1"
+    tar -xzf "${work}/download" -C "${dir}/lib/$1" --strip-components=1
+    rm -f "${work}/download"
+    name=$1 bin=$4
+    shift 4
+    for program in "$@"; do
+        ln -sfn "lib/${name}/${bin}/${program}" "${dir}/${program}"
+    done
+}
+
+# Each tag sits on the line above its SHA-256, so Renovate moves the two together. Go, Node, Helm
+# and kubectl publish their downloads outside GitHub, so Renovate moves only their version, and
+# their SHA-256 is taken from the checksum list beside the download.
+
+# Go finds its own tree through the link, and the workflows hold it to this release
+# (GOTOOLCHAIN=local) rather than download the one go.mod names.
+# renovate: datasource=golang-version depName=go
+GO=1.27.3
+GO_SHA256=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
+tree go "https://go.dev/dl/go${GO}.linux-amd64.tar.gz" "${GO_SHA256}" bin go gofmt
+
+# renovate: datasource=node-version depName=node
+NODE=26.12.0
+NODE_SHA256=d9f88af72ad34f7ddf8e67289829f1698f54b6254f7d4f54b7453117ff1a3d2c
+tree node "https://nodejs.org/dist/v${NODE}/node-v${NODE}-linux-x64.tar.gz" "${NODE_SHA256}" bin node npm npx
+
+# renovate: datasource=github-release-attachments depName=astral-sh/uv
+UV=0.13.3
+UV_SHA256=e4f169ec380f1793b898a6f1fcbacd22db25cf7ca0349a6e96ffb85b69998d04
+tree uv "https://github.com/astral-sh/uv/releases/download/${UV}/uv-x86_64-unknown-linux-gnu.tar.gz" "${UV_SHA256}" . uv
 
 # renovate: datasource=github-release-attachments depName=opentofu/opentofu
 TOFU=v1.13.1

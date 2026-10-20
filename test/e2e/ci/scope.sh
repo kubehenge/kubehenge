@@ -22,7 +22,7 @@ need=
         .golangci.yml | .markdownlint* | .github/ISSUE_TEMPLATE/* | .github/workflows/ci.yml) ;;
         .github/workflows/codeql.yml | .github/workflows/scorecard.yml | .github/workflows/release.yml) ;;
         .github/codeql-config.yml) ;;
-        .github/workflows/website.yml | osv-scanner.toml) ;;
+        .github/workflows/website.yml | osv-scanner.toml | scripts/lint/*) ;;
         appliance/* | pkg/appliance/* | pkg/ui/* | web/* | test/e2e/appliance.sh) need="${need} appliance" ;;
         *e2e_test.go) need="${need} management-cluster" ;;
         *_test.go | */testdata/* | test/integration/*) ;;

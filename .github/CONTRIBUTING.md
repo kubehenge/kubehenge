@@ -15,12 +15,12 @@ Kubehenge creates, scales, upgrades and removes Kubernetes clusters on Proxmox V
 | `web/` | the interface's frontend, React and TypeScript, built by `make web` into `pkg/ui/dist` and embedded in the binary |
 | `appliance/` | the appliance's install script and service units; `appliance/pve-entry/`, the optional entry in Proxmox VE's own interface |
 | `test/integration/`, `test/e2e/` | the integration tier's assets; the end-to-end tests, run against a Proxmox VE host |
-| `scripts/` | the pinned tools `make test` needs besides Go and Node (`tools.sh`); the image builds of capmox and the Add-on Provider for Helm (`provider-image.sh`) and the fixes they carry (`capmox-patches/`, `helm-addon-patches/`) |
+| `scripts/` | the pinned tools `make test` needs, Go and Node among them (`tools.sh`), and the Python linters' lock file (`lint/`); the image builds of capmox and the Add-on Provider for Helm (`provider-image.sh`) and the fixes they carry (`capmox-patches/`, `helm-addon-patches/`) |
 | `.github/` | CI on every pull request, the release workflow, issue templates, this guide and the security policy (`SECURITY.md`) |
 
 ## Working on it
 
-`scripts/tools.sh <dir>` installs the pinned tools; with them, Go, Node and uv on PATH, `make test` runs every lint and unit test, as CI does on each pull request, and `make fmt` formats what the checks would refuse. `make build` builds the `kubehenge` binary with the interface embedded.
+`scripts/tools.sh <dir>` installs the pinned tools, Go, Node and uv among them; with them on PATH, `make test` runs every lint and unit test, as CI does on each pull request, and `make fmt` formats what the checks would refuse. `make build` builds the `kubehenge` binary with the interface embedded.
 
 ## Design
 

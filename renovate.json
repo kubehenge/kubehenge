@@ -49,12 +49,12 @@
       "enabled": false
     },
     {
-      "description": "Helm and kubectl publish their downloads outside GitHub, where Renovate cannot find the new SHA-256 to write beside the new tag. They come in a pull request of their own so that the Monday one is not held up by a checksum taken by hand.",
-      "matchFileNames": ["scripts/tools.sh"],
-      "matchDatasources": ["github-releases"],
-      "groupName": "Helm and kubectl",
+      "description": "Go, Node, Helm and kubectl publish their downloads outside GitHub, where Renovate cannot find the new SHA-256 to write beside the new version. They come in a pull request of their own so that the Monday one is not held up by a checksum taken by hand; go.mod's Go comes with them, since CI builds with the Go scripts/tools.sh installs.",
+      "matchFileNames": ["scripts/tools.sh", "go.mod"],
+      "matchDatasources": ["github-releases", "golang-version", "node-version"],
+      "groupName": "Go, Node, Helm and kubectl",
       "prBodyNotes": [
-        "Put the new SHA-256 on the line below each new tag in `scripts/tools.sh`, from the checksum file published beside the download: `https://get.helm.sh/helm-<tag>-linux-amd64.tar.gz.sha256sum` and `https://dl.k8s.io/release/<tag>/bin/linux/amd64/kubectl.sha256`."
+        "Put the new SHA-256 on the line below each new version in `scripts/tools.sh`, from the checksum list published beside the download: `https://go.dev/dl/?mode=json` (`go<version>.linux-amd64.tar.gz`), `https://nodejs.org/dist/v<version>/SHASUMS256.txt` (`node-v<version>-linux-x64.tar.gz`), `https://get.helm.sh/helm-<tag>-linux-amd64.tar.gz.sha256sum` and `https://dl.k8s.io/release/<tag>/bin/linux/amd64/kubectl.sha256`."
       ]
     }
   ],
@@ -76,7 +76,7 @@
       ]
     },
     {
-      "description": "Any other version named in a comment on the line above it: the tested set in the management-cluster module and its providers' images, the Talos release templates are made from, the add-on charts published as OCI images, the images the add-ons run, the images and registry the end-to-end tests run, and Helm and kubectl in scripts/tools.sh. An image's digest moves with its tag.",
+      "description": "Any other version named in a comment on the line above it: the tested set in the management-cluster module and its providers' images, the Talos release templates are made from, the add-on charts published as OCI images, the images the add-ons run, the images and registry the end-to-end tests run, and Go, Node, Helm and kubectl in scripts/tools.sh. An image's digest moves with its tag.",
       "customType": "regex",
       "managerFilePatterns": [
         "/^scripts/tools\\.sh$/",
@@ -87,7 +87,7 @@
         "/^test/e2e/ci/up\\.sh$/"
       ],
       "matchStrings": [
-        "(?:#|//) renovate: datasource=(?<datasource>github-releases|docker) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?\\n[^\\n]*?[=:] *\"?(?<currentValue>v?\\d[^\"\\s@]*)\"?(?:@(?<currentDigest>sha256:[0-9a-f]{64}))?"
+        "(?:#|//) renovate: datasource=(?<datasource>github-releases|docker|golang-version|node-version) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?\\n[^\\n]*?[=:] *\"?(?<currentValue>v?\\d[^\"\\s@]*)\"?(?:@(?<currentDigest>sha256:[0-9a-f]{64}))?"
       ]
     },
     {
@@ -107,33 +107,6 @@
         "defaultBaseImage: (?<depName>[^:@\\s]+):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[0-9a-f]{64})"
       ],
       "datasourceTemplate": "docker"
-    },
-    {
-      "description": "The linters the Makefile runs through uvx.",
-      "customType": "regex",
-      "managerFilePatterns": ["/^Makefile$/"],
-      "matchStrings": [
-        "uvx (?<depName>[a-z0-9-]+)@(?<currentValue>\\S+)"
-      ],
-      "datasourceTemplate": "pypi"
-    },
-    {
-      "description": "The linter the Makefile runs through npx.",
-      "customType": "regex",
-      "managerFilePatterns": ["/^Makefile$/"],
-      "matchStrings": [
-        "npx --yes (?<depName>[a-z0-9@/-]+?)@(?<currentValue>\\d\\S*)"
-      ],
-      "datasourceTemplate": "npm"
-    },
-    {
-      "description": "The Go tools the Makefile runs through go run, named by module.",
-      "customType": "regex",
-      "managerFilePatterns": ["/^Makefile$/"],
-      "matchStrings": [
-        "go run (?<depName>[a-z0-9./-]+?)/cmd/[a-z0-9-]+@(?<currentValue>v\\S+)"
-      ],
-      "datasourceTemplate": "go"
     }
   ]
 }

@@ -44,11 +44,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - name: Go
         if: matrix.language == 'go'
-        with:
-          go-version-file: go.mod
-          cache: false
+        run: |
+          scripts/tools.sh "$RUNNER_TEMP/bin" go
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          echo GOTOOLCHAIN=local >> "$GITHUB_ENV"
       - uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           languages: ${{ matrix.language }}
