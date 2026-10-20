@@ -147,16 +147,22 @@ addons:
         thanosImage:
           # renovate: datasource=docker depName=quay.io/thanos/thanos
           tag: v0.42.4@sha256:b567818fe608067eb0f1d7c2c4fe361e7ad83c8a256234c97685f1d0bf670cc8
+      # The chart takes the version it gives the operator from the image's tag unless one is
+      # set, and the operator cannot read one with a digest in it.
       prometheus:
         prometheusSpec:
           image:
             # renovate: datasource=docker depName=quay.io/prometheus/prometheus
             tag: v3.15.0-distroless@sha256:b2a413d5a03ea6a76782a508d1c7947440bba3b973931a25676e278431891b01
+          # renovate: datasource=docker depName=quay.io/prometheus/prometheus
+          version: v3.15.0
       alertmanager:
         alertmanagerSpec:
           image:
             # renovate: datasource=docker depName=quay.io/prometheus/alertmanager
             tag: v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a
+          # renovate: datasource=docker depName=quay.io/prometheus/alertmanager
+          version: v0.34.1
       thanosRuler:
         thanosRulerSpec:
           image:
