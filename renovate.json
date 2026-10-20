@@ -58,10 +58,10 @@
       ]
     },
     {
-      "description": "Rancher installs a Turtles release of its own choosing, whose images Kubehenge pins beside Rancher's; the Rancher test fails until they match.",
+      "description": "Rancher names the versions of the webhook, Fleet, its shell and Turtles it runs with, whose images Kubehenge pins beside Rancher's; they move only with Rancher, and the Rancher test fails until they match.",
       "matchDepNames": ["docker.io/rancher/rancher"],
       "prBodyNotes": [
-        "Set `addons.rancher.turtles` in `charts/kubehenge/values.yaml` to the images of the rancher-turtles chart the new release installs: its `build.yaml` names the chart (`turtlesVersion`), whose `values.yaml` names Turtles' image and whose core provider ConfigMap names the Cluster API controller's."
+        "Set the images under `addons.rancher` in `charts/kubehenge/values.yaml` to those of the new release, tag and digest: the webhook, Fleet and its agent, the shell and the audit log image from its `build.yaml` (`webhookVersion`, `fleetVersion`, `defaultShellVersion`, `chartAuditLogImage`), the shell three times; and `turtles` from the rancher-turtles chart `build.yaml` names (`turtlesVersion`), whose `values.yaml` names Turtles' image and whose core provider ConfigMap names the Cluster API controller's."
       ]
     }
   ],

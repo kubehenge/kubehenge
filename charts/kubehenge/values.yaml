@@ -121,35 +121,29 @@ addons:
           # renovate: datasource=docker depName=docker.io/rancher/rancher-agent
           value: rancher/rancher-agent:v2.15.2@sha256:fb006776b7ee42818ed1e2575bc2015e33ec64d6799545ba72e4297e43ce22a3
         - name: CATTLE_SHELL_IMAGE
-          # renovate: datasource=docker depName=docker.io/rancher/shell
           value: rancher/shell:v0.8.2@sha256:1eeed72d4eda486de13403c4ae6e9d29a0842edc35d0f4a8fb7b0dab79d04be9
       # The webhook's and Fleet's charts, which Rancher installs itself, read these from its
-      # rancher-config ConfigMap.
+      # rancher-config ConfigMap. From here on, and the shell image above, each is the one this
+      # Rancher release names, so they move with Rancher.
       webhook:
         image:
           repository: rancher/rancher-webhook
-          # renovate: datasource=docker depName=docker.io/rancher/rancher-webhook
           tag: v0.11.3@sha256:6d76ccda60ab030b898e615730a037c8f59a4cc9f7d04b49f7f5bd1be6c23e3f
       fleet:
         image:
           repository: rancher/fleet
-          # renovate: datasource=docker depName=docker.io/rancher/fleet
           tag: v0.16.2@sha256:31f39589e1f876ebafe8af05e2aabf1ee0b553fb94d2f8aaf8ea691b67fe66ca
         agentImage:
           repository: rancher/fleet-agent
-          # renovate: datasource=docker depName=docker.io/rancher/fleet-agent
           tag: v0.16.2@sha256:9bed916e5a2307ac4a6c752f809964364464de71bdd47f95009f4be657e071c7
       preUpgrade:
         image:
-          # renovate: datasource=docker depName=docker.io/rancher/shell
           tag: v0.8.2@sha256:1eeed72d4eda486de13403c4ae6e9d29a0842edc35d0f4a8fb7b0dab79d04be9
       postDelete:
         image:
-          # renovate: datasource=docker depName=docker.io/rancher/shell
           tag: v0.8.2@sha256:1eeed72d4eda486de13403c4ae6e9d29a0842edc35d0f4a8fb7b0dab79d04be9
       auditLog:
         image:
-          # renovate: datasource=docker depName=docker.io/rancher/mirrored-bci-micro
           tag: 16.0-15.11@sha256:c05817e6ec52af611e2d1e2e901b4c0c8e57ad49e516e2faca25d046d8deff89
   # Prometheus, Alertmanager and Grafana, for clusters that switch monitoring on.
   monitoring:
