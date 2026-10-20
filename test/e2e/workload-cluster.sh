@@ -536,6 +536,12 @@ pods_before=$(restarts)
 servers_before=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
 echo "memory before the add-ons:"
 pod_memory "${work}/workload"
+# What the guests are told of the CPU decides which mitigations their kernels run, and those cost
+# the most under nested virtualisation: the figure to read beside a slow run.
+echo "the CPU a control plane sees:"
+# shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
+on_machines "${servers%% *}" "grep -m1 'model name' /proc/cpuinfo; grep -qw pcid /proc/cpuinfo && echo 'pcid: yes' || echo 'pcid: no'; grep -H . /sys/devices/system/cpu/vulnerabilities/*" ||
+    echo "  cannot read it"
 
 step "Headlamp switched on"
 set_variable headlamp '{"enabled":true}'
