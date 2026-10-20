@@ -189,6 +189,7 @@ spec:
             {{- end }}
             {{- end }}
             - {{ printf "--chart-values=%s" (toJson $chartValues) | quote }}
+            - --calico-images={{ join "," .Values.addons.calico.images }}
             - --rancher-kubernetes={{ .Values.addons.rancher.kubernetes }}
             - --kube-rbac-proxy-image={{ .Values.addons.monitoring.kubeRBACProxy }}
             - --kube-vip-image={{ .Values.kubeVip }}

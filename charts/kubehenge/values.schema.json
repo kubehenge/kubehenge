@@ -125,7 +125,20 @@
         "cloudControllerManager": { "$ref": "#/$defs/chartOnly" },
         "csiPlugin": { "$ref": "#/$defs/chartOnly" },
         "cilium": { "$ref": "#/$defs/chartOnly" },
-        "calico": { "$ref": "#/$defs/chartOnly" },
+        "calico": {
+          "allOf": [{ "$ref": "#/$defs/chart" }],
+          "required": ["images"],
+          "properties": {
+            "images": {
+              "description": "The images the Tigera operator runs Calico from, by registry, repository, tag and digest, all at one release.",
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/pinnedImage" },
+              "uniqueItems": true
+            }
+          },
+          "unevaluatedProperties": false
+        },
         "traefik": { "$ref": "#/$defs/chartOnly" },
         "metallb": { "$ref": "#/$defs/chartOnly" },
         "kubeVip": { "$ref": "#/$defs/chartOnly" },

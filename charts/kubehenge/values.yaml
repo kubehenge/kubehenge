@@ -366,6 +366,35 @@ addons:
       tigeraOperator:
         # renovate: datasource=docker depName=quay.io/tigera/operator
         version: v1.44.0@sha256:066c2e8d67452903a516fa54aabc22a604ec911b5882467b4de550d10fa8b21e
+    # The images the operator runs Calico from, at its release, which it takes by digest from an
+    # ImageSet named for that release. It refuses a set that lacks one it runs, so all are here.
+    images:
+      # renovate: datasource=docker depName=quay.io/calico/calico
+      - quay.io/calico/calico:v3.33.0@sha256:4ebc20730127bc9e8bf1db5f5a2d8b58cf37fe0e891b3c7b5471992221d213e5
+      # renovate: datasource=docker depName=quay.io/calico/node
+      - quay.io/calico/node:v3.33.0@sha256:565d8db3200e443955557f8f28ff44ab8a4a456754bc74a19c4f2f3444af9b1c
+      # renovate: datasource=docker depName=quay.io/calico/third-party-cni-plugins
+      - quay.io/calico/third-party-cni-plugins:v3.33.0@sha256:0f32f48279484c0d6f0e0d0e767b2d0e1a6c6ca34cb3421a61b989d992f3df41
+      # renovate: datasource=docker depName=quay.io/calico/whisker
+      - quay.io/calico/whisker:v3.33.0@sha256:4802f246acbc4ac08d1ce6b5c229a518dc4d85e33b50b4d1366b05a49459497c
+      # renovate: datasource=docker depName=quay.io/calico/envoy-gateway
+      - quay.io/calico/envoy-gateway:v3.33.0@sha256:e1a3e0b964c72dbe9bc6a58fee8dd20cb94109e40649416f70d14d2710810b64
+      # renovate: datasource=docker depName=quay.io/calico/envoy-proxy
+      - quay.io/calico/envoy-proxy:v3.33.0@sha256:431d1467703624b377f5d801f36367d948aa7da0ea6f6ac132d2f8758d70513a
+      # renovate: datasource=docker depName=quay.io/calico/envoy-ratelimit
+      - quay.io/calico/envoy-ratelimit:v3.33.0@sha256:22470bbe92715b9ea5bed075ea491cf3e31dcd7814ef9049d6c1803b28a3fb64
+      # renovate: datasource=docker depName=quay.io/calico/istio-pilot
+      - quay.io/calico/istio-pilot:v3.33.0@sha256:de402261cba5fdf354308775a03a2451feb11ebb70c6e705dfca36681f6910ff
+      # renovate: datasource=docker depName=quay.io/calico/istio-install-cni
+      - quay.io/calico/istio-install-cni:v3.33.0@sha256:799ccfdecfb1c84ed12eec3ff033c4bc138fb0745a28c1b127f198cfda63e22e
+      # renovate: datasource=docker depName=quay.io/calico/istio-ztunnel
+      - quay.io/calico/istio-ztunnel:v3.33.0@sha256:c176e7fde49109b25b5153ded76435782dc4869c05415bfc0fb9f7fcecf90359
+      # renovate: datasource=docker depName=quay.io/calico/istio-proxyv2
+      - quay.io/calico/istio-proxyv2:v3.33.0@sha256:754ceacbb2ed3a41c0a6ece5a4a006ae6dbc6cdd441fc2865ad1f05e7894171e
+      # renovate: datasource=docker depName=quay.io/calico/cni-windows
+      - quay.io/calico/cni-windows:v3.33.0@sha256:831453427dfb803acd73f32cbe53000e1e7942971dff9f25d2003832ed2f1997
+      # renovate: datasource=docker depName=quay.io/calico/node-windows
+      - quay.io/calico/node-windows:v3.33.0@sha256:dc0d63f711964b074e5275d843c0442e72547f2ec5a5c03e793a7180af7516c3
   # The ingress controller of kubeadm clusters, which bring none; RKE2 and k3s bring Traefik.
   traefik:
     repository: https://traefik.github.io/charts

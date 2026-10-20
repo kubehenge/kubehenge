@@ -199,6 +199,10 @@ var testCharts = Charts{
 		Repository: "https://docs.tigera.io/calico/charts", Name: "tigera-operator", Version: "v3.33.0",
 		Digest: "efcc8633742c136708cd8de9673862c6eee3a91ed176d7f2835690ab625ad846",
 	},
+	CalicoImages: []Image{
+		{Registry: "quay.io", Repository: "calico/calico", Tag: "v3.33.0", Digest: "4ebc20730127bc9e8bf1db5f5a2d8b58cf37fe0e891b3c7b5471992221d213e5"},
+		{Registry: "quay.io", Repository: "calico/node", Tag: "v3.33.0", Digest: "565d8db3200e443955557f8f28ff44ab8a4a456754bc74a19c4f2f3444af9b1c"},
+	},
 
 	Headlamp: Chart{
 		Repository: "https://kubernetes-sigs.github.io/headlamp", Name: "headlamp", Version: "0.46.0",
@@ -390,7 +394,7 @@ func TestCalicoResources(t *testing.T) {
 	t.Parallel()
 	manifest := func(t *testing.T, c *clusterv1.Cluster, cni CNI) []map[string]any {
 		t.Helper()
-		s, err := calicoResources(c, cni)
+		s, err := calicoResources(c, cni, testCharts.CalicoImages)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -414,15 +418,23 @@ func TestCalicoResources(t *testing.T) {
 	kinds := make([]string, 0, len(docs))
 	for _, d := range docs {
 		kinds = append(kinds, lookup[string](t, d, "kind"))
-		if d["apiVersion"] != "operator.tigera.io/v1" || lookup[string](t, d, "metadata", "name") != "default" {
+		want := "default"
+		if d["kind"] == "ImageSet" {
+			want = "calico-v3.33.0"
+		}
+		if d["apiVersion"] != "operator.tigera.io/v1" || lookup[string](t, d, "metadata", "name") != want {
 			t.Errorf("resource %v", d)
 		}
 	}
-	if strings.Join(kinds, ",") != "Installation,APIServer,Goldmane,Whisker" {
+	if strings.Join(kinds, ",") != "ImageSet,Installation,APIServer,Goldmane,Whisker" {
 		t.Errorf("kinds %v", kinds)
 	}
+	if image := lookup[map[string]any](t, docs[0], "spec", "images", 1); image["image"] != "calico/node" ||
+		image["digest"] != "sha256:565d8db3200e443955557f8f28ff44ab8a4a456754bc74a19c4f2f3444af9b1c" {
+		t.Errorf("ImageSet %v", docs[0])
+	}
 	network := func(docs []map[string]any) map[string]any {
-		return lookup[map[string]any](t, docs[0], "spec", "calicoNetwork")
+		return lookup[map[string]any](t, docs[1], "spec", "calicoNetwork")
 	}
 	if pool := lookup[map[string]any](t, network(docs), "ipPools", 0); pool["cidr"] != "10.50.0.0/16" {
 		t.Errorf("pool %v ignores the cluster's own range", pool)
@@ -437,8 +449,25 @@ func TestCalicoResources(t *testing.T) {
 	if network(docs)["containerIPForwarding"] != "Enabled" {
 		t.Error("pods may not forward although the class asks")
 	}
-	if _, err := calicoResources(cluster(), CNI{Name: "calico"}); err == nil {
+	if _, err := calicoResources(cluster(), CNI{Name: "calico"}, testCharts.CalicoImages); err == nil {
 		t.Error("no error without a pod range")
+	}
+}
+
+func TestParseCalicoImages(t *testing.T) {
+	t.Parallel()
+	const node = "quay.io/calico/node:v3.33.0@sha256:565d8db3200e443955557f8f28ff44ab8a4a456754bc74a19c4f2f3444af9b1c"
+	if images, err := ParseCalicoImages([]string{node}); err != nil || len(images) != 1 || images[0].Repository != "calico/node" {
+		t.Errorf("images %v, %v", images, err)
+	}
+	for name, refs := range map[string][]string{
+		"none":         nil,
+		"no digest":    {"quay.io/calico/node:v3.33.0"},
+		"two releases": {node, "quay.io/calico/calico:v3.32.1@sha256:4ebc20730127bc9e8bf1db5f5a2d8b58cf37fe0e891b3c7b5471992221d213e5"},
+	} {
+		if _, err := ParseCalicoImages(refs); err == nil {
+			t.Errorf("%s: no error", name)
+		}
 	}
 }
 

@@ -359,7 +359,7 @@ func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster
 	if err != nil {
 		return false, err
 	}
-	secrets, err := resourceSetSecrets(cluster, resources, cni, addons)
+	secrets, err := resourceSetSecrets(cluster, resources, cni, addons, r.Charts.CalicoImages)
 	if err != nil {
 		return false, err
 	}
@@ -384,11 +384,11 @@ func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster
 // resourceSetSecrets are the Secrets of the cluster's ClusterResourceSet: its Proxmox VE Secret,
 // Calico's resources when Kubehenge installs Calico, and the configuration of the distribution's
 // own Cilium when it runs that.
-func resourceSetSecrets(cluster *clusterv1.Cluster, resources *corev1.Secret, cni CNI, addons *Addons) ([]*corev1.Secret, error) {
+func resourceSetSecrets(cluster *clusterv1.Cluster, resources *corev1.Secret, cni CNI, addons *Addons, calicoImages []Image) ([]*corev1.Secret, error) {
 	secrets := []*corev1.Secret{resources}
 	switch {
 	case cni.Name == cniCalico:
-		calico, err := calicoResources(cluster, cni)
+		calico, err := calicoResources(cluster, cni, calicoImages)
 		if err != nil {
 			return nil, err
 		}

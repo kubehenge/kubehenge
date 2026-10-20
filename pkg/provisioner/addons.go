@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"strconv"
@@ -52,14 +53,16 @@ const (
 // plugin into every one, a CNI into those whose distribution has none of its own, and the add-ons
 // a cluster switches on.
 type Charts struct {
-	CCM         Chart
-	CSI         Chart
-	Cilium      Chart
-	Calico      Chart
-	Headlamp    Chart
-	CertManager Chart
-	Rancher     Chart
-	Monitoring  Chart
+	CCM    Chart
+	CSI    Chart
+	Cilium Chart
+	Calico Chart
+	// CalicoImages are the images the Tigera operator runs Calico from, all at one release.
+	CalicoImages []Image
+	Headlamp     Chart
+	CertManager  Chart
+	Rancher      Chart
+	Monitoring   Chart
 	// KubeRBACProxy is the image of the proxies in front of metrics served without authentication.
 	KubeRBACProxy   Image
 	Kyverno         Chart
@@ -314,12 +317,48 @@ func calicoResourcesName(cluster *clusterv1.Cluster) string {
 	return cluster.Name + "-calico"
 }
 
+// ParseCalicoImages reads the images the Tigera operator runs Calico from, which have to be of one
+// release, the one its ImageSet is named for.
+func ParseCalicoImages(refs []string) ([]Image, error) {
+	images := make([]Image, 0, len(refs))
+	for _, ref := range refs {
+		image, err := ParseImage(ref)
+		if err != nil {
+			return nil, err
+		}
+		if len(images) > 0 && image.Tag != images[0].Tag {
+			return nil, fmt.Errorf("%s is not at %s, the release of %s", ref, images[0].Tag, images[0])
+		}
+		images = append(images, image)
+	}
+	if len(images) == 0 {
+		return nil, errors.New("no images")
+	}
+	return images, nil
+}
+
+// calicoImageSet pins the images the operator runs Calico from to their digests. The operator
+// takes the ImageSet named for its own release; it names the images by repository, which is the
+// operator's image path and the image's name.
+func calicoImageSet(images []Image) map[string]any {
+	pinned := make([]any, 0, len(images))
+	for _, i := range images {
+		pinned = append(pinned, map[string]any{"image": i.Repository, "digest": "sha256:" + i.Digest})
+	}
+	return map[string]any{
+		"kind":     "ImageSet",
+		"metadata": map[string]any{"name": "calico-" + images[0].Tag},
+		"spec":     map[string]any{"images": pinned},
+	}
+}
+
 // calicoResources wraps, for the ClusterResourceSet, the resources the Tigera operator installs
-// Calico from, as its chart's defaults have them. The chart would render them before the operator
-// has created their CRDs, which a Helm release cannot wait for; a ClusterResourceSet retries until
-// they exist. Nor can Helm install the CRDs first: Calico's CRD chart is larger than the 1 MiB
-// Secret a Helm release is kept in.
-func calicoResources(cluster *clusterv1.Cluster, cni CNI) (*corev1.Secret, error) {
+// Calico from, as its chart's defaults have them, and the ImageSet that pins its images, which
+// comes first so that the operator never runs one by tag. The chart would render them before the
+// operator has created their CRDs, which a Helm release cannot wait for; a ClusterResourceSet
+// retries until they exist. Nor can Helm install the CRDs first: Calico's CRD chart is larger than
+// the 1 MiB Secret a Helm release is kept in.
+func calicoResources(cluster *clusterv1.Cluster, cni CNI, images []Image) (*corev1.Secret, error) {
 	pods, err := podRange(cluster, cni)
 	if err != nil {
 		return nil, err
@@ -329,6 +368,7 @@ func calicoResources(cluster *clusterv1.Cluster, cni CNI) (*corev1.Secret, error
 		network["containerIPForwarding"] = "Enabled"
 	}
 	resources := []map[string]any{
+		calicoImageSet(images),
 		{"kind": "Installation", "spec": map[string]any{
 			"cni":           map[string]any{"type": "Calico"},
 			"calicoNetwork": network,
@@ -342,7 +382,9 @@ func calicoResources(cluster *clusterv1.Cluster, cni CNI) (*corev1.Secret, error
 	var manifest []byte
 	for _, r := range resources {
 		r[apiVersionKey] = "operator.tigera.io/v1"
-		r["metadata"] = map[string]any{"name": "default"}
+		if _, named := r["metadata"]; !named {
+			r["metadata"] = map[string]any{"name": "default"}
+		}
 		doc, err := yaml.Marshal(r)
 		if err != nil {
 			return nil, fmt.Errorf("encoding Calico's %s: %w", r["kind"], err)

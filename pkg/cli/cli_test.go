@@ -145,7 +145,10 @@ func TestChartValuesGoToTheirCharts(t *testing.T) {
 	t.Parallel()
 	const digest = "@sha256:0805a5273118c436c9772bb9566d87ec558d8b25cc2ce5dc32918ecdd36f2c7c"
 	options := func(values string) *controllerOptions {
-		o := &controllerOptions{kubeRBACProxy: "ghcr.io/example/proxy:v1" + digest, kubeVipImage: "ghcr.io/example/vip:v1" + digest, chartValues: values}
+		o := &controllerOptions{
+			kubeRBACProxy: "ghcr.io/example/proxy:v1" + digest, kubeVipImage: "ghcr.io/example/vip:v1" + digest,
+			calicoImages: []string{"quay.io/calico/node:v3.33.0" + digest}, chartValues: values,
+		}
 		for _, f := range []*string{
 			&o.ccmChart, &o.csiChart, &o.ciliumChart, &o.calicoChart, &o.headlampChart, &o.certManagerChart, &o.rancherChart,
 			&o.monitoringChart, &o.kyvernoChart, &o.kyvernoPolicies, &o.istioChart, &o.istioBaseChart, &o.istioCNIChart,
