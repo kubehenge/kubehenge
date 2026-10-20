@@ -4,65 +4,74 @@ import (
 	"context"
 	"encoding/pem"
 	"errors"
-	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/luthermonson/go-proxmox"
 )
 
+// The pool is checked rather than the connections a burst of requests opens, which is Go's to
+// decide: a request that finds no connection idle dials one at once, and under load the dial can
+// beat a connection being handed back.
 func TestClientsShareTheirConnections(t *testing.T) {
 	t.Parallel()
-	var opened atomic.Int32
-	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		time.Sleep(10 * time.Millisecond)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"data":{}}`))
 	}))
-	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
-		if s == http.StateNew {
-			opened.Add(1)
-		}
-	}
-	srv.StartTLS()
 	t.Cleanup(srv.Close)
 	ca := filepath.Join(t.TempDir(), "ca.pem")
 	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// Two clients, as the controller makes one per cluster, each asking four things at once, three
-	// times over.
-	clients := make([]*proxmox.Client, 0, 2)
-	for range cap(clients) {
-		c, err := Connect(Config{URL: srv.URL, Token: "kubehenge@pve!controller=s3cret", CAFile: ca}) //nolint:gosec // test data
+	pool := func(caFile string) *http.Transport {
+		t.Helper()
+		_, c, err := Config{URL: srv.URL, CAFile: caFile}.transport()
 		if err != nil {
 			t.Fatal(err)
 		}
-		clients = append(clients, c)
-	}
-	for range 3 {
-		var wg sync.WaitGroup
-		for _, c := range clients {
-			for range 4 {
-				wg.Go(func() {
-					var v map[string]any
-					if err := c.Get(context.Background(), "/version", &v); err != nil {
-						t.Error(err)
-					}
-				})
-			}
+		p, ok := c.Transport.(*http.Transport)
+		if !ok {
+			t.Fatalf("transport %T", c.Transport)
 		}
-		wg.Wait()
+		return p
 	}
-	if n := opened.Load(); n > 8 {
-		t.Fatalf("%d connections for 24 requests, at most eight at a time", n)
+	// One client per cluster, as the controller makes them.
+	first, second, system := pool(ca), pool(ca), pool("")
+	if first != second {
+		t.Error("two clients of one Proxmox VE have a connection pool each")
+	}
+	if first == system {
+		t.Error("clients trusting different CAs share a connection pool")
+	}
+	// The interface's eight clusters at once and the controller's four reconciles.
+	if first.MaxIdleConnsPerHost < 12 {
+		t.Errorf("%d idle connections kept, fewer than are in use at once", first.MaxIdleConnsPerHost)
+	}
+	c, err := Connect(Config{URL: srv.URL, Token: "kubehenge@pve!controller=s3cret", CAFile: ca}) //nolint:gosec // test data
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reused atomic.Int32
+	ctx := httptrace.WithClientTrace(context.Background(), &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) {
+		if i.Reused {
+			reused.Add(1)
+		}
+	}})
+	for range 10 {
+		var v map[string]any
+		if err := c.Get(ctx, "/version", &v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if reused.Load() == 0 {
+		t.Error("ten requests one after another reused no connection")
 	}
 }
 
