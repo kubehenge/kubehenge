@@ -4,12 +4,16 @@
 chartDigest: ""
 
 namespaces: []
+# Each provider's object, and the files the operator installs it from, which the release's hook
+# downloads and checks: manifests.metadata and manifests.components, each as
+# <https URL>@sha256:<digest>.
 providers: []
 secrets: {}
 
-# Kubehenge's controller image, whose `kubehenge wait` the release's hooks run.
+# Kubehenge's controller image by digest, whose `kubehenge manifests` and `kubehenge wait` the
+# release's hooks run.
 image: ""
 
 # How long the release waits, before its changes, for the operator's webhooks to answer, and after
-# them for every provider to be installed and rolled out.
+# them for the providers' manifests to be stored and every provider to be installed and rolled out.
 waitTimeoutSeconds: 600

@@ -305,14 +305,6 @@ run "providers" {
   assert {
     condition = alltrue([
       for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers :
-      startswith(p.spec.fetchConfig.url, "https://github.com/k3s-io/cluster-api-k3s/releases/") if p.name == "k3s"
-    ])
-    error_message = "the k3s providers need their fetch URL"
-  }
-
-  assert {
-    condition = alltrue([
-      for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers :
       toset([for op in yamldecode(p.spec.patches[0].patch) : op.value if can(tostring(op.value))]) ==
       toset(["--proxmox-insecure=false", "--proxmox-root-cert-file=/etc/proxmox-ca/ca.crt"])
       if p.name == "proxmox"
@@ -511,20 +503,21 @@ run "provider_image" {
 
   variables {
     provider_images = {
-      "InfrastructureProvider/proxmox" = "registry.example/capmox@sha256:0123"
-      "CoreProvider/cluster-api"       = "registry.example/capi@sha256:4567"
+      "InfrastructureProvider/proxmox" = "registry.example/capmox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      "CoreProvider/cluster-api"       = "registry.example/capi@sha256:456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123"
     }
   }
 
   assert {
     condition = {
       for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers :
-      "${p.kind}/${p.name}" => p.spec.deployment.containers if can(p.spec.deployment.containers[0].imageUrl)
+      "${p.kind}/${p.name}" => p.spec.deployment.containers
+      if contains(["InfrastructureProvider/proxmox", "CoreProvider/cluster-api", "AddonProvider/helm"], "${p.kind}/${p.name}")
       } == {
-      "InfrastructureProvider/proxmox" = [{ name = "manager", imageUrl = "registry.example/capmox@sha256:0123" }]
+      "InfrastructureProvider/proxmox" = [{ name = "manager", imageUrl = "registry.example/capmox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }]
       "CoreProvider/cluster-api" = [{
         name      = "manager"
-        imageUrl  = "registry.example/capi@sha256:4567"
+        imageUrl  = "registry.example/capi@sha256:456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123"
         resources = { requests = { cpu = "10m", memory = "128Mi" } }
       }]
       "AddonProvider/helm" = [{
@@ -533,7 +526,7 @@ run "provider_image" {
         resources = { requests = { cpu = "10m", memory = "64Mi" } }
       }]
     }
-    error_message = "only the named providers run the given images, in their manager containers, keeping their requests, and the others their own or Kubehenge's builds"
+    error_message = "the named providers run the given images, in their manager containers, keeping their requests, and the others their tested ones or Kubehenge's builds"
   }
 }
 
@@ -543,12 +536,37 @@ run "provider_builds" {
   assert {
     condition = {
       for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers :
-      "${p.kind}/${p.name}" => p.spec.deployment.containers[0].imageUrl if can(p.spec.deployment.containers[0].imageUrl)
-      } == {
-      "InfrastructureProvider/proxmox" = local.capmox_build.image
-      "AddonProvider/helm"             = local.helm_addon_build.image
-    }
-    error_message = "capmox and the Add-on Provider for Helm at their tested releases run Kubehenge's builds of them, and no other provider an image of its own"
+      "${p.kind}/${p.name}" => p.spec.deployment.containers[0].imageUrl
+      } == merge(local.tested_provider_images, {
+        "InfrastructureProvider/proxmox" = local.capmox_build.image
+        "AddonProvider/helm"             = local.helm_addon_build.image
+    })
+    error_message = "capmox and the Add-on Provider for Helm at their tested releases run Kubehenge's builds of them, and every other provider its tested image by digest"
+  }
+}
+
+run "providers_install_from_checked_manifests" {
+  command = apply
+
+  assert {
+    condition = alltrue([
+      for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers :
+      p.spec.fetchConfig == { selector = { matchLabels = {
+        "kubehenge.dev/provider-manifests"  = lower("${p.kind}-${p.name}")
+        "provider.cluster.x-k8s.io/version" = p.spec.version
+      } } }
+    ])
+    error_message = "every provider must come from the ConfigMap the chart's hook stores its checked files in"
+  }
+
+  assert {
+    condition = [
+      for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : p.manifests if p.kind == "CoreProvider"
+      ] == [{
+        metadata   = "https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.3/metadata.yaml@sha256:${local.tested_manifests["kubernetes-sigs/cluster-api/releases/download/v1.14.3/metadata.yaml"]}"
+        components = "https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.3/core-components.yaml@sha256:${local.tested_manifests["kubernetes-sigs/cluster-api/releases/download/v1.14.3/core-components.yaml"]}"
+    }]
+    error_message = "a provider's files must be its release's, at its version, each with its digest"
   }
 }
 
@@ -557,25 +575,66 @@ run "provider_builds_only_on_their_releases" {
 
   variables {
     version_overrides = { capmox = "v0.9.0", helm_addon = "v0.6.3" }
+    provider_images = {
+      "InfrastructureProvider/proxmox" = "ghcr.io/ionos-cloud/cluster-api-provider-proxmox:v0.9.0@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      "AddonProvider/helm"             = "registry.k8s.io/cluster-api-helm/cluster-api-helm-controller:v0.6.3@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    }
+    provider_manifests = {
+      "ionos-cloud/cluster-api-provider-proxmox/releases/download/v0.9.0/metadata.yaml"                  = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      "ionos-cloud/cluster-api-provider-proxmox/releases/download/v0.9.0/infrastructure-components.yaml" = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      "kubernetes-sigs/cluster-api-addon-provider-helm/releases/download/v0.6.3/metadata.yaml"           = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      "kubernetes-sigs/cluster-api-addon-provider-helm/releases/download/v0.6.3/addon-components.yaml"   = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    }
   }
 
   assert {
-    condition = alltrue([
+    condition = {
       for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers :
-      !can(p.spec.deployment.containers[0].imageUrl)
-    ])
-    error_message = "other releases of capmox and the Add-on Provider for Helm run their own images"
+      "${p.kind}/${p.name}" => p.spec.deployment.containers[0].imageUrl
+      if contains(["InfrastructureProvider/proxmox", "AddonProvider/helm"], "${p.kind}/${p.name}")
+    } == var.provider_images
+    error_message = "other releases of capmox and the Add-on Provider for Helm run the images given for them"
   }
+}
+
+run "a_provider_held_back_needs_its_image_and_digests" {
+  command = plan
+
+  variables {
+    version_overrides = { capmox = "v0.9.0" }
+  }
+
+  expect_failures = [helm_release.cluster_api_providers]
 }
 
 run "provider_image_unknown" {
   command = plan
 
   variables {
-    provider_images = { "InfrastructureProvider/vsphere" = "registry.example/capv:1" }
+    provider_images = { "InfrastructureProvider/vsphere" = "registry.example/capv@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
   }
 
   expect_failures = [var.provider_images]
+}
+
+run "provider_image_needs_a_digest" {
+  command = plan
+
+  variables {
+    provider_images = { "InfrastructureProvider/proxmox" = "registry.example/capmox:v0.9.0" }
+  }
+
+  expect_failures = [var.provider_images]
+}
+
+run "provider_manifests_need_a_digest" {
+  command = plan
+
+  variables {
+    provider_manifests = { "ionos-cloud/cluster-api-provider-proxmox/releases/download/v0.9.0/metadata.yaml" = "sha256:0123" }
+  }
+
+  expect_failures = [var.provider_manifests]
 }
 
 run "single_node_does_not_drain" {

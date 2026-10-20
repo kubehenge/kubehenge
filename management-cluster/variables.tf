@@ -96,7 +96,7 @@ variable "dns_servers" {
 }
 
 variable "version_overrides" {
-  description = "Versions to use instead of the tested set in versions.tf, by the same keys, for holding a component back. Lowering a version on a running cluster is not supported."
+  description = "Versions to use instead of the tested set in versions.tf, by the same keys, for holding a component back. A provider held back needs its image in provider_images and its files' digests in provider_manifests. Lowering a version on a running cluster is not supported."
   type        = map(string)
   default     = {}
 
@@ -110,7 +110,7 @@ variable "version_overrides" {
 }
 
 variable "provider_images" {
-  description = "Controller images to run instead of a provider release's own, by \"<kind>/<name>\" (for example \"InfrastructureProvider/proxmox\"): a registry mirror, or a build carrying a fix not yet released. The release's manifests still come from its version."
+  description = "Controller images by digest (repository@sha256:<digest>) to run instead of the tested ones, by \"<kind>/<name>\" (for example \"InfrastructureProvider/proxmox\"): a registry mirror, a build carrying a fix not yet released, or the image of a version held back in version_overrides, which needs one. The release's manifests still come from its version."
   type        = map(string)
   default     = {}
 
@@ -122,6 +122,21 @@ variable "provider_images" {
       "InfrastructureProvider/proxmox", "IPAMProvider/in-cluster", "AddonProvider/helm",
     ], k)])
     error_message = "provider_images takes only the providers the management cluster installs, as \"<kind>/<name>\"."
+  }
+  validation {
+    condition     = alltrue([for image in values(var.provider_images) : can(regex("^[^@]+@sha256:[0-9a-f]{64}$", image))])
+    error_message = "provider_images takes each image by digest, repository@sha256:<digest>."
+  }
+}
+
+variable "provider_manifests" {
+  description = "The SHA-256 of provider files outside the tested set, by their address under https://github.com/ (for example \"kubernetes-sigs/cluster-api/releases/download/v1.14.2/core-components.yaml\"): a version held back in version_overrides needs its metadata.yaml and components file's."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition     = alltrue([for path, digest in var.provider_manifests : can(regex("^[^/]+/[^/]+/releases/download/[^/]+/[^/]+\\.yaml$", path)) && can(regex("^[0-9a-f]{64}$", digest))])
+    error_message = "provider_manifests maps <owner>/<repository>/releases/download/<version>/<file>.yaml to its SHA-256 in hex."
   }
 }
 

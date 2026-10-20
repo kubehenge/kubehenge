@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -42,7 +43,7 @@ It creates an AddonProvider named webhook-probe in --namespace as a dry run, so 
 until the webhooks admit it.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return withOperatorClient(cmd.Context(), timeout, func(ctx context.Context, c client.Client) error {
+			return inCluster(cmd.Context(), timeout, func(ctx context.Context, c client.Client) error {
 				return provisioner.WaitForOperator(ctx, c, namespace, waitPoll)
 			})
 		},
@@ -55,7 +56,7 @@ until the webhooks admit it.`,
 		Short: "Wait until the operator has applied every provider and their Deployments have rolled out",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return withOperatorClient(cmd.Context(), timeout, func(ctx context.Context, c client.Client) error {
+			return inCluster(cmd.Context(), timeout, func(ctx context.Context, c client.Client) error {
 				return provisioner.WaitForProviders(ctx, c, waitPoll, cmd.ErrOrStderr())
 			})
 		},
@@ -64,21 +65,23 @@ until the webhooks admit it.`,
 	return cmd
 }
 
-// withOperatorClient waits, for at most timeout, with a client of the cluster the command runs in.
-func withOperatorClient(ctx context.Context, timeout time.Duration, wait func(context.Context, client.Client) error) error {
+// inCluster runs a hook's work, for at most timeout, with a client of the cluster the command runs in.
+func inCluster(ctx context.Context, timeout time.Duration, work func(context.Context, client.Client) error) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cfg, err := ctrl.GetConfig()
 	if err != nil {
-		return fmt.Errorf("the cluster to wait in: %w", err)
+		return fmt.Errorf("the cluster to run in: %w", err)
 	}
 	scheme := runtime.NewScheme()
-	if err = appsv1.AddToScheme(scheme); err != nil {
-		return fmt.Errorf("the waiting client's scheme: %w", err)
+	for _, add := range []func(*runtime.Scheme) error{appsv1.AddToScheme, corev1.AddToScheme} {
+		if err = add(scheme); err != nil {
+			return fmt.Errorf("the hook client's scheme: %w", err)
+		}
 	}
 	c, err := newClient(cfg, scheme)
 	if err != nil {
 		return err
 	}
-	return wait(ctx, c)
+	return work(ctx, c)
 }

@@ -64,4 +64,4 @@ spec:
       restartPolicy: Never
       serviceAccountName: wait-for-operator
       automountServiceAccountToken: true
-      {{- include "cluster-api-providers.waitPod" (list . (list "operator" (printf "--namespace=%s" .Release.Namespace))) | nindent 6 }}
+      {{- include "cluster-api-providers.hookPod" (list . "wait" (list "wait" "operator" (printf "--namespace=%s" .Release.Namespace))) | nindent 6 }}

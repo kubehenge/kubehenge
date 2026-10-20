@@ -45,6 +45,79 @@ locals {
     helm_addon = "v0.6.4"
   }
 
+  # Where the providers of each component in the tested set are released.
+  provider_repositories = {
+    cluster_api     = "kubernetes-sigs/cluster-api"
+    rke2            = "rancher/cluster-api-provider-rke2"
+    k3s             = "k3s-io/cluster-api-k3s"
+    capmox          = "ionos-cloud/cluster-api-provider-proxmox"
+    ipam_in_cluster = "kubernetes-sigs/cluster-api-ipam-provider-in-cluster"
+    helm_addon      = "kubernetes-sigs/cluster-api-addon-provider-helm"
+  }
+
+  # The SHA-256 of each file the operator installs a provider of the tested set from, by its address
+  # under https://github.com/. A version held back brings its own in provider_manifests.
+  tested_manifests = {
+    # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api
+    "kubernetes-sigs/cluster-api/releases/download/v1.14.3/metadata.yaml" = "c470906f551ac3e3e9aedc9a3e733b5a5994428693df43e95f65ea67c035f9fe"
+    # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api
+    "kubernetes-sigs/cluster-api/releases/download/v1.14.3/core-components.yaml" = "f70be959af4aba061b91cb264b3b1961ae38ca49e2eb542ccf2640146f5221a7"
+    # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api
+    "kubernetes-sigs/cluster-api/releases/download/v1.14.3/bootstrap-components.yaml" = "537d6db3b70aad723710825f76073659865dc1a115715ef5d5c470da3b9bcc39"
+    # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api
+    "kubernetes-sigs/cluster-api/releases/download/v1.14.3/control-plane-components.yaml" = "a211e2e54b6b6fb93e59191f5db8ee76ad6ff92a698f1c62f9d6ce4d5218cf87"
+    # renovate: datasource=github-release-attachments depName=rancher/cluster-api-provider-rke2
+    "rancher/cluster-api-provider-rke2/releases/download/v0.26.0/metadata.yaml" = "4251911efc9ae26c1e280529388d47c3304192fb890b8287956e98c140e6dac6"
+    # renovate: datasource=github-release-attachments depName=rancher/cluster-api-provider-rke2
+    "rancher/cluster-api-provider-rke2/releases/download/v0.26.0/bootstrap-components.yaml" = "0356080e7071833ac3931f657e0dbd41b2b2ad7c0699575bf2fed19ed5a45f3e"
+    # renovate: datasource=github-release-attachments depName=rancher/cluster-api-provider-rke2
+    "rancher/cluster-api-provider-rke2/releases/download/v0.26.0/control-plane-components.yaml" = "1dbed3911fa2f6c208020cae74e2d31f6fba6366ad639aa8666a03a75c80443a"
+    # renovate: datasource=github-release-attachments depName=k3s-io/cluster-api-k3s
+    "k3s-io/cluster-api-k3s/releases/download/v0.4.0/metadata.yaml" = "bb1c0c8356cf3d78a83812769f657c327209153732c189291c4602e5d1f9326d"
+    # renovate: datasource=github-release-attachments depName=k3s-io/cluster-api-k3s
+    "k3s-io/cluster-api-k3s/releases/download/v0.4.0/bootstrap-components.yaml" = "26301df3f6a1b9a14317061bd586a73711d54c956ee8f679982fb3301c6ab71d"
+    # renovate: datasource=github-release-attachments depName=k3s-io/cluster-api-k3s
+    "k3s-io/cluster-api-k3s/releases/download/v0.4.0/control-plane-components.yaml" = "2e3754bb42be197c31b7567496767f22091f4da74453eb366d29c8bd06e28270"
+    # renovate: datasource=github-release-attachments depName=ionos-cloud/cluster-api-provider-proxmox
+    "ionos-cloud/cluster-api-provider-proxmox/releases/download/v0.9.1/metadata.yaml" = "df2916a79503ac053f6a9866a8de025e780e24d6d472f00f59f84898b5a1c572"
+    # renovate: datasource=github-release-attachments depName=ionos-cloud/cluster-api-provider-proxmox
+    "ionos-cloud/cluster-api-provider-proxmox/releases/download/v0.9.1/infrastructure-components.yaml" = "424fb38189659147df452490bb2b11f9f4ae3a75c7179b92a85041658bfd74d5"
+    # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api-ipam-provider-in-cluster
+    "kubernetes-sigs/cluster-api-ipam-provider-in-cluster/releases/download/v1.1.1/metadata.yaml" = "eb280ab315f478324973a7b65739a655d57e3c22a1356efd9f5127534d3502b7"
+    # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api-ipam-provider-in-cluster
+    "kubernetes-sigs/cluster-api-ipam-provider-in-cluster/releases/download/v1.1.1/ipam-components.yaml" = "8a0656a39d9e85ee07219702254669b7e543d09957e86315f3d20b4bf6aebfa5"
+    # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api-addon-provider-helm
+    "kubernetes-sigs/cluster-api-addon-provider-helm/releases/download/v0.6.4/metadata.yaml" = "d50a44ee0db2f0368699d15ff011b9b5a61d9969483de1c4f6e4e6046390530f"
+    # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api-addon-provider-helm
+    "kubernetes-sigs/cluster-api-addon-provider-helm/releases/download/v0.6.4/addon-components.yaml" = "a70f4eb77eac626231daca1e2a046b4b069bb84320efa327cc8c56a9c4ca03e6"
+  }
+
+  # Each provider's controller image by digest at its tested version, in place of the tag its
+  # manifests name. capmox and the Add-on Provider for Helm run Kubehenge's builds below while
+  # those apply. A version held back brings its own in provider_images.
+  tested_provider_images = {
+    # renovate: datasource=docker depName=registry.k8s.io/cluster-api/cluster-api-controller
+    "CoreProvider/cluster-api" = "registry.k8s.io/cluster-api/cluster-api-controller:v1.14.3@sha256:1110ddb0f4a9cfc1b557f305199e2d56911fe442edef6361e12e5cc4b11e23fd"
+    # renovate: datasource=docker depName=registry.k8s.io/cluster-api/kubeadm-bootstrap-controller
+    "BootstrapProvider/kubeadm" = "registry.k8s.io/cluster-api/kubeadm-bootstrap-controller:v1.14.3@sha256:bc056ff51f8df7c86481745cb86cbc07b7e8cfd4ee3684017f9a98362ab45b8f"
+    # renovate: datasource=docker depName=ghcr.io/rancher/cluster-api-provider-rke2-bootstrap
+    "BootstrapProvider/rke2" = "ghcr.io/rancher/cluster-api-provider-rke2-bootstrap:v0.26.0@sha256:2f6b79933c157902b70e0fc80f81b2df6e4f222e6a87b71ad71f3ef2c1509052"
+    # renovate: datasource=docker depName=ghcr.io/k3s-io/cluster-api-k3s/bootstrap-controller
+    "BootstrapProvider/k3s" = "ghcr.io/k3s-io/cluster-api-k3s/bootstrap-controller:v0.4.0@sha256:aac5968f5664e9c4927f07c9d6b7541d1b20f6be0a69665a63942ba3d73417f1"
+    # renovate: datasource=docker depName=registry.k8s.io/cluster-api/kubeadm-control-plane-controller
+    "ControlPlaneProvider/kubeadm" = "registry.k8s.io/cluster-api/kubeadm-control-plane-controller:v1.14.3@sha256:fbf0b07fd4e4575160d82977f0daeba4792c992a2f56efac111fb76cfe29d0e1"
+    # renovate: datasource=docker depName=ghcr.io/rancher/cluster-api-provider-rke2-controlplane
+    "ControlPlaneProvider/rke2" = "ghcr.io/rancher/cluster-api-provider-rke2-controlplane:v0.26.0@sha256:04485849ca20c56e0ea7c028a414ec21d83a798ef987817d51791668f31bea11"
+    # renovate: datasource=docker depName=ghcr.io/k3s-io/cluster-api-k3s/controlplane-controller
+    "ControlPlaneProvider/k3s" = "ghcr.io/k3s-io/cluster-api-k3s/controlplane-controller:v0.4.0@sha256:4f7305f8871954afa2c2e37a0b19eac3b352e2028bc56617dc78822da5975c20"
+    # renovate: datasource=docker depName=ghcr.io/ionos-cloud/cluster-api-provider-proxmox
+    "InfrastructureProvider/proxmox" = "ghcr.io/ionos-cloud/cluster-api-provider-proxmox:v0.9.1@sha256:17b01f3e160d930eb5bd2a75853e0aaac70821130f49eef0228483482a36d0f3"
+    # renovate: datasource=docker depName=registry.k8s.io/capi-ipam-ic/cluster-api-ipam-in-cluster-controller
+    "IPAMProvider/in-cluster" = "registry.k8s.io/capi-ipam-ic/cluster-api-ipam-in-cluster-controller:v1.1.1@sha256:49a4cc0c5d7cd8deef20105e71ce168407ddcaab612f5819947163bd4b66ff0b"
+    # renovate: datasource=docker depName=registry.k8s.io/cluster-api-helm/cluster-api-helm-controller
+    "AddonProvider/helm" = "registry.k8s.io/cluster-api-helm/cluster-api-helm-controller:v0.6.4@sha256:97d2a86f8e35d23bb4656b26f4564b35f109e47a0dc4860b71089e52eb6e6a24"
+  }
+
   # capmox up to v0.9.1 refuses the changed machine template of a kubeadm cluster's upgrade (#735);
   # the fix (#832) is on its main branch but in no release yet. Until one carries it, capmox v0.9.1
   # runs as built from that commit, on v0.9.1's own manifests: main has changed no CRD, RBAC or

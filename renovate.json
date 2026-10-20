@@ -68,7 +68,15 @@
       ]
     },
     {
-      "description": "Any other version named in a comment on the line above it: the tested set in the management-cluster module, the Talos release templates are made from, the add-on charts published as OCI images, the images the add-ons run, the images and registry the end-to-end tests run, and Helm and kubectl in scripts/tools.sh. An image's digest moves with its tag.",
+      "description": "The files the Cluster API operator installs each provider from, which the management-cluster module names by their release download's address with their SHA-256. The tag in the address and the digest move together, with the provider's version in the tested set.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^management-cluster/versions\\.tf$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>github-release-attachments) depName=(?<depName>\\S+)\\n\\s*\"[^\"]*/releases/download/(?<currentValue>[^/\"]+)/[^/\"]+\" *= *\"(?<currentDigest>[0-9a-f]{64})\""
+      ]
+    },
+    {
+      "description": "Any other version named in a comment on the line above it: the tested set in the management-cluster module and its providers' images, the Talos release templates are made from, the add-on charts published as OCI images, the images the add-ons run, the images and registry the end-to-end tests run, and Helm and kubectl in scripts/tools.sh. An image's digest moves with its tag.",
       "customType": "regex",
       "managerFilePatterns": [
         "/^scripts/tools\\.sh$/",

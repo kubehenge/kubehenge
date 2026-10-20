@@ -1,0 +1,74 @@
+{{- /*
+Left to itself, the operator downloads each provider's manifests from its release and installs
+whatever arrives. This Job downloads them instead, checks each file against the SHA-256 the module
+names it with and stores it where the provider's fetchConfig points the operator
+(`kubehenge manifests`). It runs after Helm has created the providers, which wait for it, and before
+the release waits for them.
+*/ -}}
+{{- $hook := dict "helm.sh/hook" "post-install,post-upgrade" "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded" }}
+{{- $providers := list }}
+{{- $namespaces := list }}
+{{- range .Values.providers }}
+{{- $providers = append $providers (dict "kind" .kind "name" .name "namespace" .namespace "version" .spec.version "metadata" .manifests.metadata "components" .manifests.components) }}
+{{- $namespaces = append $namespaces .namespace }}
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: provider-manifests
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+    helm.sh/hook-weight: "-3"
+automountServiceAccountToken: false
+{{- range $ns := uniq $namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: provider-manifests
+  namespace: {{ $ns }}
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+    helm.sh/hook-weight: "-3"
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [create, patch, deletecollection]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: provider-manifests
+  namespace: {{ $ns }}
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+    helm.sh/hook-weight: "-3"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: provider-manifests
+subjects:
+  - kind: ServiceAccount
+    name: provider-manifests
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: provider-manifests
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+    helm.sh/hook-weight: "-2"
+spec:
+  backoffLimit: 0
+  # Past the command's own timeout, so that the Job fails with the command's account of why.
+  activeDeadlineSeconds: {{ add .Values.waitTimeoutSeconds 60 }}
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: provider-manifests
+      automountServiceAccountToken: true
+      {{- include "cluster-api-providers.hookPod" (list . "manifests" (list "manifests" (printf "--providers=%s" (toJson $providers)))) | nindent 6 }}
