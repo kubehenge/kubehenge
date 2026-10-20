@@ -14,3 +14,4 @@ proxmox:
   clusterGroup: kubehenge-clusters
   clusterRole: KubehengeClusterVMs
   ha: false
+image: ghcr.io/kubehenge/kubehenge@sha256:0000000000000000000000000000000000000000000000000000000000000000

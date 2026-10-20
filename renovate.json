@@ -92,6 +92,15 @@
       "datasourceTemplate": "helm"
     },
     {
+      "description": "The image ko builds Kubehenge's controller on, named by a tag that is no version, so only its digest moves.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^cmd/kubehenge/\\.ko\\.yaml$/"],
+      "matchStrings": [
+        "defaultBaseImage: (?<depName>[^:@\\s]+):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[0-9a-f]{64})"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
       "description": "The linters the Makefile runs through uvx.",
       "customType": "regex",
       "managerFilePatterns": ["/^Makefile$/"],

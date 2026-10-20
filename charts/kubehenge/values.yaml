@@ -50,7 +50,8 @@ podSecurityExempt:
   - cattle-fleet-local-system
   - cattle-turtles-system
 
-# Kubehenge's controller image; empty means the one this chart was released with.
+# Kubehenge's controller image by digest, repository@sha256:<digest>: a release's chart names the
+# one it was released with, and a checkout's needs one given.
 image: ""
 
 proxmox:

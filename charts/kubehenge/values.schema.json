@@ -65,8 +65,9 @@
       "uniqueItems": true
     },
     "image": {
-      "description": "Kubehenge's controller image; empty means the one this chart was released with.",
-      "type": "string"
+      "description": "Kubehenge's controller image by digest, which a release's chart names and a checkout's needs given.",
+      "type": "string",
+      "pattern": "^([^@]+@sha256:[0-9a-f]{64})?$"
     },
     "kubeVip": {
       "description": "kube-vip's image by registry, repository, tag and digest.",

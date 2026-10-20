@@ -170,7 +170,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: controller
-          image: {{ .Values.image | default (printf "ghcr.io/kubehenge/kubehenge:v%s" .Chart.AppVersion) }}
+          image: {{ required "image: Kubehenge's controller image by digest" .Values.image }}
           args:
             - controller
             - --workload-pool={{ .Values.workloadPool }}

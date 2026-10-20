@@ -50,6 +50,8 @@ variables {
   dns_servers            = ["192.0.2.1"]
   workload_datastores    = ["local-lvm", "ceph"]
   workload_bridges       = ["vmbr0", "vmbr1"]
+  # A checkout's chart names no controller image; a release's names its own.
+  controller_image = "ghcr.io/kubehenge/kubehenge@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
 }
 
 run "nodes" {
@@ -229,7 +231,7 @@ run "controller_and_clusters_are_least_privilege" {
         ha           = false
       }
       clusterOIDC = []
-      image       = "ghcr.io/kubehenge/kubehenge:v${yamldecode(file("../charts/kubehenge/Chart.yaml")).appVersion}"
+      image       = "ghcr.io/kubehenge/kubehenge@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
     }
     error_message = "the Kubehenge chart's values differ"
   }
@@ -412,7 +414,7 @@ run "providers_values_match_the_integration_tier" {
   command = apply
 
   variables {
-    controller_image = "registry.example/kubehenge:integration"
+    controller_image = "registry.example/kubehenge@sha256:0000000000000000000000000000000000000000000000000000000000000000"
   }
 
   assert {
@@ -426,7 +428,7 @@ run "registry_mirrors_and_controller_image" {
 
   variables {
     registry_mirrors = { "ghcr.io" = ["http://192.0.2.5:5000", "https://mirror.example.org"] }
-    controller_image = "ghcr.io/kubehenge/kubehenge@sha256:0123"
+    controller_image = "ghcr.io/kubehenge/kubehenge@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   }
 
   assert {
@@ -443,8 +445,8 @@ run "registry_mirrors_and_controller_image" {
   }
 
   assert {
-    condition = (yamldecode(helm_release.kubehenge.values[0]).image == "ghcr.io/kubehenge/kubehenge@sha256:0123" &&
-    yamldecode(helm_release.cluster_api_providers.values[0]).image == "ghcr.io/kubehenge/kubehenge@sha256:0123")
+    condition = (yamldecode(helm_release.kubehenge.values[0]).image == "ghcr.io/kubehenge/kubehenge@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" &&
+    yamldecode(helm_release.cluster_api_providers.values[0]).image == "ghcr.io/kubehenge/kubehenge@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
     error_message = "the controller image must reach both charts, the providers' for its hooks"
   }
 }
@@ -482,6 +484,26 @@ run "cluster_oidc_needs_https" {
   }
 
   expect_failures = [var.cluster_oidc]
+}
+
+run "controller_image_needs_a_digest" {
+  command = plan
+
+  variables {
+    controller_image = "ghcr.io/kubehenge/kubehenge:v0.1.0"
+  }
+
+  expect_failures = [var.controller_image]
+}
+
+run "a_checkout_needs_a_controller_image" {
+  command = plan
+
+  variables {
+    controller_image = null
+  }
+
+  expect_failures = [helm_release.cluster_api_providers]
 }
 
 run "provider_image" {

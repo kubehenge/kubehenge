@@ -45,9 +45,9 @@
       }
     },
     "image": {
-      "description": "Kubehenge's controller image, whose `kubehenge wait` the release's hooks run.",
+      "description": "Kubehenge's controller image by digest, whose `kubehenge wait` the release's hooks run.",
       "type": "string",
-      "minLength": 1
+      "pattern": "^[^@]+@sha256:[0-9a-f]{64}$"
     },
     "waitTimeoutSeconds": {
       "type": "integer",

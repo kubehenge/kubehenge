@@ -314,7 +314,7 @@ The module is tested with OpenTofu, which the appliance runs too; it declares Te
 | `cluster_oidc` | `[]` | OpenID Connect providers every new cluster trusts unless it names its own: up to eight, each with `issuer_url` (https) and `client_id`, and optionally `username_claim`, `username_prefix`, `groups_claim`, `groups_prefix`, `scopes` and `certificate_authority`. |
 | `version_overrides` | `{}` | Versions to use instead of the tested set, by its keys, to hold a component back. Lowering a version on a running cluster is not supported. |
 | `provider_images` | `{}` | Controller images to run instead of a provider release's own, by `"<kind>/<name>"`, such as `"InfrastructureProvider/proxmox"`. |
-| `controller_image` | the chart's | Kubehenge's controller image, as `repository:tag` or `repository@digest`. |
+| `controller_image` | the chart's | Kubehenge's controller image by digest, as `repository@sha256:<digest>`. A release's chart names the image it was released with; a checkout's names none, so a module taken from git needs one. |
 | `proxmox_ha` | `false` | Keep each cluster's control-plane VMs on separate nodes with Proxmox VE HA, giving the controller a token with `Sys.Audit` and `Sys.Console` on `/` ([above](#proxmox-ve-ha)). After setting it back to false, remove the HA resources and rules whose comment starts with `Kubehenge cluster`, as the appliance does: without its token the controller cannot. |
 
 Outputs: `kubeconfig` and `talosconfig` (sensitive), `api_endpoint`, and `proxmox_objects`, which lists everything the module made on Proxmox VE.

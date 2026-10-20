@@ -1,7 +1,7 @@
 ---
 # The management-cluster module's values for the cluster-api-providers chart, with its tests'
 # variables; its tests hold the module to them.
-image: registry.example/kubehenge:integration
+image: registry.example/kubehenge@sha256:0000000000000000000000000000000000000000000000000000000000000000
 namespaces:
   - kubehenge-system
   - capi-system

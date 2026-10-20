@@ -18,7 +18,8 @@ locals {
   ])) }
 
   # The providers' release runs it too, for its hooks, before the controller's chart is installed.
-  controller_image = coalesce(var.controller_image, "ghcr.io/kubehenge/kubehenge:v${yamldecode(file("${path.module}/../charts/kubehenge/Chart.yaml")).appVersion}")
+  # A release's chart names the image it was released with, by digest; a checkout's names none.
+  controller_image = var.controller_image != null ? var.controller_image : yamldecode(file("${path.module}/../charts/kubehenge/values.yaml")).image
 
   cluster_api_variables = {
     name      = "cluster-api-variables"
@@ -264,6 +265,13 @@ resource "helm_release" "cluster_api_providers" {
       value = t.value
       type  = "string"
   }])
+
+  lifecycle {
+    precondition {
+      condition     = local.controller_image != ""
+      error_message = "no controller image: a release's chart names its own, and a checkout's needs controller_image."
+    }
+  }
 
   depends_on = [helm_release.cluster_api_operator]
 }

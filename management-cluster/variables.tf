@@ -238,7 +238,12 @@ variable "proxmox_ha" {
 }
 
 variable "controller_image" {
-  description = "Image of Kubehenge's controller, as repository:tag or repository@digest, instead of the one the chart was released with."
+  description = "Image of Kubehenge's controller by digest, as repository@sha256:<digest>, instead of the one the chart was released with."
   type        = string
   default     = null
+
+  validation {
+    condition     = var.controller_image == null || can(regex("^[^@]+@sha256:[0-9a-f]{64}$", var.controller_image))
+    error_message = "controller_image is the image by digest, repository@sha256:<digest>."
+  }
 }
