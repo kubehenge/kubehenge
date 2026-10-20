@@ -27,10 +27,6 @@ locals {
     talos = "v1.14.4"
     # renovate: datasource=github-releases depName=kubernetes/kubernetes
     kubernetes = "v1.37.1"
-    # renovate: datasource=github-releases depName=cert-manager/cert-manager
-    cert_manager = "v1.21.2"
-    # renovate: datasource=github-releases depName=kubernetes-sigs/cluster-api-operator extractVersion=^v(?<version>.+)$
-    capi_operator = "0.29.0"
     # renovate: datasource=github-releases depName=kubernetes-sigs/cluster-api
     cluster_api = "v1.14.3"
     # renovate: datasource=github-releases depName=ionos-cloud/cluster-api-provider-proxmox
@@ -43,6 +39,32 @@ locals {
     ipam_in_cluster = "v1.1.1"
     # renovate: datasource=github-releases depName=kubernetes-sigs/cluster-api-addon-provider-helm
     helm_addon = "v0.6.4"
+  }
+
+  # The charts the management cluster runs beneath its providers, with their images, by digest.
+  # They are part of the tested set but cannot be held back: nothing outside the management cluster
+  # depends on their versions.
+  cert_manager = {
+    # renovate: datasource=docker depName=quay.io/jetstack/charts/cert-manager
+    chart = "v1.21.2@sha256:634dce9c13b56677a2c05e2ab76c312d0be2664022d5dd05815da67e1fd5f610"
+    images = {
+      # renovate: datasource=docker depName=quay.io/jetstack/cert-manager-controller
+      controller = "v1.21.2@sha256:70f532fd9cfde0b09d55687200942399d89838bc2d5d5b45152eb799a15912b8"
+      # renovate: datasource=docker depName=quay.io/jetstack/cert-manager-webhook
+      webhook = "v1.21.2@sha256:a60e2dac46dbb8a7f3df95c54ce941012f54c2fe022f0ee55aaa1ab40ed957ae"
+      # renovate: datasource=docker depName=quay.io/jetstack/cert-manager-cainjector
+      cainjector = "v1.21.2@sha256:c85268c64f2e0e76684bf5fe8906caff34b82523561c6affe0fae3546bd87562"
+      # renovate: datasource=docker depName=quay.io/jetstack/cert-manager-startupapicheck
+      startupapicheck = "v1.21.2@sha256:46e75b6866359ffb5d82624f41e3ed1c70b2994982702ced547ce5edb418a8f5"
+      # renovate: datasource=docker depName=quay.io/jetstack/cert-manager-acmesolver
+      acmesolver = "v1.21.2@sha256:699b40d622211ab7accad8a21b04c5fbaa1841ef7a12621e8de492dbe27b2503"
+    }
+  }
+  capi_operator = {
+    # renovate: datasource=github-releases depName=kubernetes-sigs/cluster-api-operator extractVersion=^v(?<version>.+)$
+    chart = "0.29.0"
+    # renovate: datasource=docker depName=registry.k8s.io/capi-operator/cluster-api-operator
+    image = "v0.29.0@sha256:465e72f8b06ae96de7c142d552f898fb4d0d92ab5d71c8691e431a19d1b4955c"
   }
 
   # Where the providers of each component in the tested set are released.

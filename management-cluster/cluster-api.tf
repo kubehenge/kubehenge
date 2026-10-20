@@ -221,17 +221,22 @@ resource "helm_release" "cert_manager" {
   name             = "cert-manager"
   namespace        = "cert-manager"
   create_namespace = true
-  repository       = "https://charts.jetstack.io"
-  chart            = "cert-manager"
-  version          = local.versions.cert_manager
-  wait             = true
+  # Pulled by its digest, which Helm checks the version's tag against.
+  repository = "oci://quay.io/jetstack/charts"
+  chart      = "cert-manager@sha256:${split("@sha256:", local.cert_manager.chart)[1]}"
+  version    = split("@sha256:", local.cert_manager.chart)[0]
+  wait       = true
 
-  # The chart sets no requests, which leaves cert-manager BestEffort; see memory_requests.
+  # The chart sets no requests, which leaves cert-manager BestEffort; see memory_requests. Each image
+  # is named by its tag and digest, which the chart puts after the repository.
   values = [yamlencode({
-    crds       = { enabled = true }
-    resources  = { requests = { cpu = "10m", memory = "64Mi" } }
-    cainjector = { resources = { requests = { cpu = "10m", memory = "64Mi" } } }
-    webhook    = { resources = { requests = { cpu = "10m", memory = "32Mi" } } }
+    crds            = { enabled = true }
+    image           = { tag = local.cert_manager.images.controller }
+    resources       = { requests = { cpu = "10m", memory = "64Mi" } }
+    cainjector      = { image = { tag = local.cert_manager.images.cainjector }, resources = { requests = { cpu = "10m", memory = "64Mi" } } }
+    webhook         = { image = { tag = local.cert_manager.images.webhook }, resources = { requests = { cpu = "10m", memory = "32Mi" } } }
+    startupapicheck = { image = { tag = local.cert_manager.images.startupapicheck } }
+    acmesolver      = { image = { tag = local.cert_manager.images.acmesolver } }
   })]
 
   depends_on = [data.talos_cluster_health.this]
@@ -244,10 +249,11 @@ resource "helm_release" "cluster_api_operator" {
   create_namespace = true
   repository       = "https://kubernetes-sigs.github.io/cluster-api-operator"
   chart            = "cluster-api-operator"
-  version          = local.versions.capi_operator
+  version          = local.capi_operator.chart
   wait             = true
 
   values = [yamlencode({
+    image             = { manager = { tag = local.capi_operator.image } }
     watchConfigSecret = true
     # The chart starts a pprof endpoint by default; nothing here profiles the operator.
     profilerAddress = ""

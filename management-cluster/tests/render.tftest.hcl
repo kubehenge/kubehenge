@@ -371,6 +371,26 @@ run "providers" {
   }
 
   assert {
+    condition = (
+      helm_release.cert_manager.repository == "oci://quay.io/jetstack/charts" &&
+      can(regex("^cert-manager@sha256:[0-9a-f]{64}$", helm_release.cert_manager.chart)) &&
+      alltrue([for v in [
+        yamldecode(helm_release.cert_manager.values[0]),
+        yamldecode(helm_release.cert_manager.values[0]).cainjector,
+        yamldecode(helm_release.cert_manager.values[0]).webhook,
+        yamldecode(helm_release.cert_manager.values[0]).startupapicheck,
+        yamldecode(helm_release.cert_manager.values[0]).acmesolver,
+      ] : can(regex("^v[^@]+@sha256:[0-9a-f]{64}$", v.image.tag))])
+    )
+    error_message = "cert-manager's chart is pulled by its digest, and each of its images named by one"
+  }
+
+  assert {
+    condition     = can(regex("^v[^@]+@sha256:[0-9a-f]{64}$", yamldecode(helm_release.cluster_api_operator.values[0]).image.manager.tag))
+    error_message = "the operator's image is named by its digest"
+  }
+
+  assert {
     condition = {
       for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers :
       "${p.kind}/${p.name}" => p.spec.configSecret.name if can(p.spec.configSecret)

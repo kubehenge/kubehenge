@@ -102,7 +102,7 @@ variable "version_overrides" {
 
   validation {
     condition = alltrue([for k in keys(var.version_overrides) : contains([
-      "talos", "kubernetes", "cert_manager", "capi_operator", "cluster_api", "capmox",
+      "talos", "kubernetes", "cluster_api", "capmox",
       "rke2", "k3s", "ipam_in_cluster", "helm_addon",
     ], k)])
     error_message = "version_overrides takes only the keys of the tested set in versions.tf."
