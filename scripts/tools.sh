@@ -138,3 +138,9 @@ release shfmt mvdan/sh "${SHFMT}" "shfmt_${SHFMT}_linux_amd64" "${SHFMT_SHA256}"
 HADOLINT=v2.15.1
 HADOLINT_SHA256=c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507
 release hadolint hadolint/hadolint "${HADOLINT}" hadolint-linux-x86_64 "${HADOLINT_SHA256}"
+
+# The release signs its images with it.
+# renovate: datasource=github-release-attachments depName=sigstore/cosign
+COSIGN=v3.1.3
+COSIGN_SHA256=4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71
+release cosign sigstore/cosign "${COSIGN}" cosign-linux-amd64 "${COSIGN_SHA256}"
