@@ -191,6 +191,15 @@ jobs:
             kinds=coreproviders,bootstrapproviders,controlplaneproviders
             kinds=$kinds,infrastructureproviders,ipamproviders,addonproviders
             kubectl get "$kinds" -A -o yaml > "$out/providers.yaml" 2>&1 || true
+            # Helm writes why a release failed only into its record, a Secret holding the release
+            # as gzipped JSON in base64.
+            kubectl get secrets -A -l owner=helm,status=failed -o json |
+              jq -r '.items[] | "\(.metadata.namespace)/\(.metadata.name) \(.data.release)"' |
+              while read -r name release; do
+                why=$(printf '%s' "$release" | base64 -d | base64 -d | gzip -d |
+                  jq -r .info.description)
+                printf '%s: %s\n' "$name" "$why"
+              done > "$out/helm-failures.txt" 2>&1 || true
             kubectl get events -A --sort-by=.lastTimestamp > "$out/events.txt" 2>&1 || true
             # A namespace's conditions say what is left in it and whose finalizers hold that.
             kubectl get namespaces -o yaml > "$out/namespaces.yaml" 2>&1 || true
