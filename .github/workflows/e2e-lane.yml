@@ -44,3 +44,20 @@ jobs:
     with:
       test: ${{ inputs.test }}
       last: true
+
+  # A try that hands the test back succeeds without running it, so the lane passes only when every
+  # try that ran succeeded and one of them ran the test.
+  result:
+    name: result
+    needs: [try-1, try-2, try-3, try-4]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - env:
+          TRIES: ${{ toJSON(needs) }}
+        run: |
+          printf '%s' "$TRIES" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          printf '%s' "$TRIES" | jq -e '
+            all(.[]; .result == "success" or .result == "skipped")
+            and any(.[]; .result == "success" and .outputs["handed-back"] != "true")' > /dev/null
