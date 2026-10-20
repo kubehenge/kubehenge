@@ -1,30 +1,26 @@
 ---
-name: e2e lanes
+name: e2e try
 
-# One try at the end-to-end tests e2e.yml runs: each test on a runner of its own, or handed back
-# for the next try when the runner's KVM lacks pause-loop exiting. Without it a vCPU spinning on a
-# lock whose holder lost its CPU keeps spinning, so guests that outnumber the runner's CPUs starve
-# each other, whatever their sizes. A runner is assigned at random, so the next try likely gets one
-# that has it; the last try runs wherever it lands, with restarts reported instead of failing.
+# One try at an end-to-end test (e2e-lane.yml), on a runner of its own, or handed back for the next
+# try when the runner's KVM lacks pause-loop exiting. Without it a vCPU spinning on a lock whose
+# holder lost its CPU keeps spinning, so guests that outnumber the runner's CPUs starve each other,
+# whatever their sizes. A runner is assigned at random, so the next try likely gets one that has
+# it; the last try runs wherever it lands, with restarts reported instead of failing.
 on:
   workflow_call:
     inputs:
-      tests:
-        description: The tests to run, as a JSON list.
+      test:
+        description: The test to run, as test/e2e/ci/run.sh names it.
         required: true
         type: string
-      try:
-        description: The try's number, which tells its handed-back tests apart.
-        required: true
-        type: number
       last:
-        description: Whether this try runs every test wherever it lands.
+        description: Whether to run the test wherever it lands.
         type: boolean
         default: false
     outputs:
-      tests:
-        description: The tests this try handed back, as a JSON list.
-        value: ${{ jobs.handed-back.outputs.tests }}
+      handed-back:
+        description: Whether the test was handed back for the next try.
+        value: ${{ jobs.test.outputs.handed-back }}
 
 permissions:
   contents: read
@@ -38,21 +34,18 @@ env:
 
 jobs:
   # Proxmox VE runs in a container on the runner (test/e2e/pve) and starts the clusters' VMs on the
-  # runner's KVM. One test per runner, since a runner holds one management cluster and one workload
-  # cluster; the job needs no secrets, so pull requests from forks run it as they are.
+  # runner's KVM.
   test:
-    name: e2e (${{ matrix.test }})
+    name: ${{ inputs.test }}
     runs-on: ubuntu-26.04
     timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        test: ${{ fromJSON(inputs.tests) }}
+    outputs:
+      handed-back: ${{ steps.host.outputs.handed-back }}
     steps:
       - name: Host
+        id: host
         env:
           LAST: ${{ inputs.last }}
-          TEST: ${{ matrix.test }}
         run: |
           grep -m1 'model name' /proc/cpuinfo
           ple=$(cat /sys/module/kvm_intel/parameters/ple_gap \
@@ -65,14 +58,8 @@ jobs:
             echo KUBEHENGE_E2E_RESTARTS=report >> "$GITHUB_ENV"
           else
             echo "handed back for the next try"
-            mkdir -p "$RUNNER_TEMP/handed-back" && echo "$TEST" > "$RUNNER_TEMP/handed-back/test"
+            echo handed-back=true >> "$GITHUB_OUTPUT"
           fi
-      - if: env.E2E_RUN != 'true'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: e2e-handed-back-${{ inputs.try }}-${{ matrix.test }}
-          path: ${{ runner.temp }}/handed-back
-          retention-days: 1
       - if: env.E2E_RUN == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -139,19 +126,19 @@ jobs:
       - name: Keep Proxmox VE's image
         if: >-
           env.E2E_RUN == 'true' && github.event_name == 'schedule'
-          && matrix.test == 'management-cluster'
+          && inputs.test == 'management-cluster'
         run: docker save kubehenge-e2e-pve | zstd -T0 -q -o "$RUNNER_TEMP/pve-image.tar.zst"
       - if: >-
           env.E2E_RUN == 'true' && github.event_name == 'schedule'
-          && matrix.test == 'management-cluster'
+          && inputs.test == 'management-cluster'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/pve-image.tar.zst
           key: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-${{ github.run_id }}
-      - name: ${{ matrix.test }}
+      - name: ${{ inputs.test }}
         if: env.E2E_RUN == 'true'
         env:
-          TEST: ${{ matrix.test }}
+          TEST: ${{ inputs.test }}
         run: test/e2e/ci/run.sh "$RUNNER_TEMP/e2e" "$TEST"
       # Each KVM counter's average per second over the job, to set one runner's CPU against
       # another's.
@@ -176,7 +163,7 @@ jobs:
           fi
       - if: >-
           !cancelled() && env.E2E_RUN == 'true' && github.event_name == 'schedule'
-          && matrix.test == 'management-cluster'
+          && inputs.test == 'management-cluster'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -266,27 +253,6 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
-          name: e2e-${{ matrix.test }}
+          name: e2e-${{ inputs.test }}
           path: ${{ runner.temp }}/artifacts
           retention-days: 7
-
-  # The tests this try handed back, collected from their markers, since a matrix's jobs cannot each
-  # set an output of their own. Another test failing does not stop them getting their run.
-  handed-back:
-    name: handed back
-    needs: test
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-26.04
-    timeout-minutes: 5
-    outputs:
-      tests: ${{ steps.list.outputs.tests }}
-    steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: e2e-handed-back-${{ inputs.try }}-*
-          path: ${{ runner.temp }}/handed-back
-      - id: list
-        run: |
-          cat "$RUNNER_TEMP"/handed-back/*/test 2>/dev/null |
-            jq -Rcn '[inputs | select(. != "")]' | sed 's/^/tests=/' >> "$GITHUB_OUTPUT"
-          grep '^tests=' "$GITHUB_OUTPUT"

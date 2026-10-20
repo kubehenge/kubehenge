@@ -1,0 +1,46 @@
+---
+name: e2e lane
+
+# One end-to-end test, in up to four tries (e2e-try.yml): a try whose runner lacks pause-loop
+# exiting hands the test to the next one on a fresh runner, and the last runs it wherever it lands.
+# The calls keep the `./` form, which actionlint still requires; GitHub resolves a called workflow
+# from this commit either way.
+on:
+  workflow_call:
+    inputs:
+      test:
+        description: The test to run, as test/e2e/ci/run.sh names it.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  try-1:
+    name: try 1
+    uses: ./.github/workflows/e2e-try.yml # zizmor: ignore[self-repository]
+    with:
+      test: ${{ inputs.test }}
+  try-2:
+    name: try 2
+    needs: try-1
+    if: needs.try-1.outputs.handed-back == 'true'
+    uses: ./.github/workflows/e2e-try.yml # zizmor: ignore[self-repository]
+    with:
+      test: ${{ inputs.test }}
+  try-3:
+    name: try 3
+    needs: try-2
+    if: needs.try-2.outputs.handed-back == 'true'
+    uses: ./.github/workflows/e2e-try.yml # zizmor: ignore[self-repository]
+    with:
+      test: ${{ inputs.test }}
+  try-4:
+    name: try 4
+    needs: try-3
+    if: needs.try-3.outputs.handed-back == 'true'
+    uses: ./.github/workflows/e2e-try.yml # zizmor: ignore[self-repository]
+    with:
+      test: ${{ inputs.test }}
+      last: true

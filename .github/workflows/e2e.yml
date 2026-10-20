@@ -46,60 +46,33 @@ jobs:
           esac
           echo "tests=$(printf '%s' "$tests" | jq -c .)" >> "$GITHUB_OUTPUT"
 
-  # Up to four tries (e2e-lanes.yml): a test whose runner lacks pause-loop exiting goes to the next
-  # try on a fresh runner, and the last one runs it wherever it lands. The calls keep the `./` form,
-  # which actionlint still requires; GitHub resolves a called workflow from this commit either way.
-  try-1:
-    name: try 1
+  # Each test in a lane of its own (e2e-lane.yml), which hands it to a fresh runner when its runner
+  # lacks pause-loop exiting. One test per runner, since a runner holds one management cluster and
+  # one workload cluster; it needs no secrets, so pull requests from forks run it as they are.
+  test:
+    name: e2e (${{ matrix.test }})
     needs: scope
     if: needs.scope.outputs.tests != '[]'
-    uses: ./.github/workflows/e2e-lanes.yml # zizmor: ignore[self-repository]
+    strategy:
+      fail-fast: false
+      matrix:
+        test: ${{ fromJSON(needs.scope.outputs.tests) }}
+    uses: ./.github/workflows/e2e-lane.yml # zizmor: ignore[self-repository]
     with:
-      tests: ${{ needs.scope.outputs.tests }}
-      try: 1
-  try-2:
-    name: try 2
-    needs: try-1
-    if: ${{ !cancelled() && needs.try-1.outputs.tests != '' && needs.try-1.outputs.tests != '[]' }}
-    uses: ./.github/workflows/e2e-lanes.yml # zizmor: ignore[self-repository]
-    with:
-      tests: ${{ needs.try-1.outputs.tests }}
-      try: 2
-  try-3:
-    name: try 3
-    needs: try-2
-    if: ${{ !cancelled() && needs.try-2.outputs.tests != '' && needs.try-2.outputs.tests != '[]' }}
-    uses: ./.github/workflows/e2e-lanes.yml # zizmor: ignore[self-repository]
-    with:
-      tests: ${{ needs.try-2.outputs.tests }}
-      try: 3
-  try-4:
-    name: try 4
-    needs: try-3
-    if: ${{ !cancelled() && needs.try-3.outputs.tests != '' && needs.try-3.outputs.tests != '[]' }}
-    uses: ./.github/workflows/e2e-lanes.yml # zizmor: ignore[self-repository]
-    with:
-      tests: ${{ needs.try-3.outputs.tests }}
-      try: 4
-      last: true
+      test: ${{ matrix.test }}
 
-  # The one check the main branch's ruleset requires: the tests differ by event, and a pull request
-  # of documentation only skips them.
+  # The one check the main branch's ruleset requires: the matrix's tests differ by event, and a pull
+  # request of documentation only skips them.
   result:
     name: e2e
-    needs: [scope, try-1, try-2, try-3, try-4]
+    needs: [scope, test]
     if: always()
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - env:
           SCOPE: ${{ needs.scope.result }}
-          TRIES: >-
-            ${{ needs.try-1.result }} ${{ needs.try-2.result }} ${{ needs.try-3.result }}
-            ${{ needs.try-4.result }}
+          TESTS: ${{ needs.test.result }}
         run: |
-          echo "scope: $SCOPE, tries: $TRIES"
-          [ "$SCOPE" = success ] || exit 1
-          for try in $TRIES; do
-            [ "$try" = success ] || [ "$try" = skipped ] || exit 1
-          done
+          echo "scope: $SCOPE, tests: $TESTS"
+          [ "$SCOPE" = success ] && { [ "$TESTS" = success ] || [ "$TESTS" = skipped ]; }
