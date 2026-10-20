@@ -32,6 +32,7 @@
   },
   "overrides": {
     "markdownlint-cli2": {
+      "katex": "0.19.0",
       "smol-toml": "1.9.1"
     }
   }

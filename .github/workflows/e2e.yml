@@ -176,10 +176,21 @@ jobs:
           pve qm list > "$out/vms.txt" || true
           cp "$RUNNER_TEMP/e2e/apply.log" "$RUNNER_TEMP/vmstat.txt" "$RUNNER_TEMP/kvm.txt" "$out/" \
             2>/dev/null || true
-          if [ -f "$RUNNER_TEMP/e2e/kubeconfig.yaml" ]; then
+          # The management-cluster tests keep their kubeconfig only while they run, and leave the
+          # cluster up when they fail.
+          e2e="$RUNNER_TEMP/e2e"
+          if [ ! -s "$e2e/kubeconfig.yaml" ] && [ -f "$e2e/mgmt/terraform.tfstate" ]; then
+            (umask 077 && tofu -chdir="$e2e/mgmt" output -raw kubeconfig \
+              > "$e2e/kubeconfig.yaml") || rm -f "$e2e/kubeconfig.yaml"
+          fi
+          if [ -s "$RUNNER_TEMP/e2e/kubeconfig.yaml" ]; then
             export KUBECONFIG="$RUNNER_TEMP/e2e/kubeconfig.yaml"
             kubectl get clusters,machines,pods -A -o wide \
               > "$out/management-cluster.txt" 2>&1 || true
+            # The operator's conditions say why a provider is not ready.
+            kinds=coreproviders,bootstrapproviders,controlplaneproviders
+            kinds=$kinds,infrastructureproviders,ipamproviders,addonproviders
+            kubectl get "$kinds" -A -o yaml > "$out/providers.yaml" 2>&1 || true
             kubectl get events -A --sort-by=.lastTimestamp > "$out/events.txt" 2>&1 || true
             # A namespace's conditions say what is left in it and whose finalizers hold that.
             kubectl get namespaces -o yaml > "$out/namespaces.yaml" 2>&1 || true
