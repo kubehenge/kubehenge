@@ -24,7 +24,9 @@
 #   metallb (default) or kube-vip.
 # KUBEHENGE_E2E_CONTROL_PLANE_MEMORY and KUBEHENGE_E2E_WORKER_MEMORY (MiB) and
 # KUBEHENGE_E2E_CONTROL_PLANE_CORES size the nodes; the worker's memory is by default the least
-# the class lets it have with the add-ons.
+# the class lets it have with the add-ons. KUBEHENGE_E2E_RESTARTS=report prints restarts while every
+# add-on is on instead of failing, for a host whose KVM lacks pause-loop exiting: there guests that
+# outnumber its CPUs starve each other, whatever their sizes.
 # KUBEHENGE_E2E_CNI chooses the CNI (required by kubeadm). KUBEHENGE_E2E_PODS and
 # KUBEHENGE_E2E_SERVICES set the cluster's pod and service ranges, which must not overlap the nodes'
 # network; unset, the distribution's defaults apply.
@@ -695,10 +697,17 @@ until_true 60 "ztunnel names the client's workload identity" mesh_identity
 
 # The class's minimum sizes have to carry every add-on at once.
 step "every add-on at once, with nothing restarted"
+found_restarts() {
+    if [ "${KUBEHENGE_E2E_RESTARTS:-fail}" = report ]; then
+        echo "not failing, on a host that starves its guests: $*"
+    else
+        fail "$*"
+    fi
+}
 # shellcheck disable=SC2310 # a failed count fails the step.
 servers_after=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
 [ "${servers_after}" = "${servers_before}" ] ||
-    fail "${server_unit} restarted $((servers_after - servers_before)) times on the control planes while the add-ons were installed"
+    found_restarts "${server_unit} restarted $((servers_after - servers_before)) times on the control planes while the add-ons were installed"
 pods_after=$(restarts)
 restarted=$(jq -rn --argjson b "${pods_before}" --argjson a "${pods_after}" '$a | to_entries[] | select(.value > ($b[.key] // 0)) | "\(.key) \(.value - ($b[.key] // 0))"')
 if [ -n "${restarted}" ]; then
@@ -714,7 +723,7 @@ if [ -n "${restarted}" ]; then
         on_machines "${m}" "grep -H . /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io" ||
             echo "  cannot read it"
     done
-    fail "containers restarted while the add-ons were installed (pod, restarts): ${restarted}"
+    found_restarts "containers restarted while the add-ons were installed (pod, restarts): ${restarted}"
 fi
 pod_memory "${work}/workload"
 
