@@ -43,6 +43,13 @@
       "enabled": true
     },
     {
+      "description": "The add-on charts published as OCI images are named by version alone, as a HelmChartProxy takes them, so there is no digest beside the version to pin; a pinning update for them would fail the whole group.",
+      "matchManagers": ["custom.regex"],
+      "matchFileNames": ["charts/kubehenge/values.yaml"],
+      "matchDepNames": ["/^ghcr\\.io/.+/charts//"],
+      "pinDigests": false
+    },
+    {
       "description": "A runner image this datasource knows about is not yet a label GitHub schedules jobs on, and moving to a new image is a decision to take once, not every week.",
       "matchDatasources": ["github-runners"],
       "matchUpdateTypes": ["major"],
