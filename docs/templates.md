@@ -28,6 +28,8 @@ Creating is idempotent: a template with the same tags in the template pool is fo
 
 Each template carries a unique set of Proxmox VE tags, such as `kubehenge;talos;talos-v1.14.4`, and Cluster API's Proxmox VE provider selects it by that exact set. The template has no network card, one core and 512 MiB: each clone gets the network, size and disk its machine asks for.
 
+Clones keep the template's CPU type, `x86-64-v2-AES` unless `--cpu-type` names another. That type runs on any node, so a VM can migrate between nodes of different CPUs, but it hides the CPU's own model, and a node's kernel then takes it to be open to Meltdown and MDS and runs their mitigations, which cost the most on Intel hosts. `--cpu-type host` shows the clones the node's own CPU, at the cost of migrating only between nodes with the same one.
+
 Templates should be on shared storage in a Proxmox VE cluster, so that clones can start on any node.
 
 ## Requirements

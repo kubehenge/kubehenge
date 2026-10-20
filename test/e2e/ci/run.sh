@@ -47,8 +47,10 @@ done
 cat "${bundle}" "${KUBEHENGE_PROXMOX_CA}" > "${work}/ca-bundle.pem"
 export SSL_CERT_FILE="${work}/ca-bundle.pem"
 
+# The host's CPU: told of a generic one, the guests' kernels run Meltdown's and MDS's mitigations,
+# which under nested virtualisation slow them on Intel runners until a worker loses its API server.
 template() { # distribution [flags]
-    "${repo}/dist/kubehenge" template create "$@" --node "${KUBEHENGE_E2E_NODE}" --storage local \
+    "${repo}/dist/kubehenge" template create "$@" --cpu-type host --node "${KUBEHENGE_E2E_NODE}" --storage local \
         --build-address "${KUBEHENGE_E2E_ADDRESS}" --build-gateway "${KUBEHENGE_E2E_GATEWAY}" \
         --build-dns "${KUBEHENGE_E2E_DNS}"
 }

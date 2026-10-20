@@ -303,7 +303,7 @@ The module is tested with OpenTofu, which the appliance runs too; it declares Te
 | `gateway`, `dns_servers` | required | The nodes' gateway and DNS servers. |
 | `pod_subnets`, `service_subnets` | `["10.244.0.0/16"]`, `["10.96.0.0/12"]` | The management cluster's own ranges. The plan refuses ranges that overlap the nodes' network. |
 | `node_cores`, `node_memory_mb`, `node_disk_gb` | `4`, `4096`, `32` | Size of each node. |
-| `cpu_type` | `x86-64-v2-AES` | QEMU CPU type; Talos needs at least x86-64-v2. |
+| `cpu_type` | `x86-64-v2-AES` | QEMU CPU type; Talos needs at least x86-64-v2. `host` spares the nodes mitigations their CPU does not need, but lets them migrate only between nodes with the same CPU ([templates.md](templates.md#how-clusters-find-them)). |
 | `workload_pool` | `kubehenge` | Pool for the clusters' VMs, each cluster in a pool of its own under it. A pool name, nested at most one level. |
 | `template_pool` | `kubehenge-templates` | Pool of the VM templates. |
 | `management_pool` | `kubehenge-management` | Pool of the management cluster's own VMs, out of Cluster API's reach. |

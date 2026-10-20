@@ -34,6 +34,8 @@ type Builder struct {
 	Log     func(format string, args ...any)
 	// KeepOnFailure leaves a failed bake's VM in place for inspection.
 	KeepOnFailure bool
+	// CPUType is the template's QEMU CPU type, which its clones keep; empty means DefaultCPUType.
+	CPUType string
 
 	// selectableSettle and selectablePoll pace waitSelectable; zero means selectableSettle and
 	// pollLongest.
@@ -51,8 +53,11 @@ type Network struct {
 // ErrNoTemplate is Find's answer when no template carries the tags.
 var ErrNoTemplate = errors.New("no template carries these tags")
 
+// DefaultCPUType runs on every x86-64 host Talos and Ubuntu support, so clones can migrate between
+// nodes of different CPUs.
+const DefaultCPUType = "x86-64-v2-AES"
+
 const (
-	cpuType = "x86-64-v2-AES"
 	// Templates are deliberately small: a clone that already matches its machine's size never
 	// boots under Cluster API's Proxmox VE provider (its issue 848), and every clone is resized anyway.
 	templateCores    = 1
@@ -463,6 +468,10 @@ func (b *Builder) createVM(ctx context.Context, node *proxmox.Node, vmid int, t 
 	cores, memory := templateCores, templateMemoryMB
 	if t.Bake != nil {
 		cores, memory = bakeCores, bakeMemoryMB
+	}
+	cpuType := b.CPUType
+	if cpuType == "" {
+		cpuType = DefaultCPUType
 	}
 	options := []proxmox.VirtualMachineOption{
 		{Name: "name", Value: t.Name},
