@@ -89,7 +89,7 @@
     "addons": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["headlamp", "rancher", "monitoring", "kyverno", "kyvernoPolicies", "istio", "certManager", "cloudControllerManager", "csiPlugin", "cilium", "calico", "traefik", "metallb", "kubeVip", "kubeVipCloudProvider"],
+      "required": ["headlamp", "rancher", "monitoring", "kyverno", "kyvernoPolicies", "istio", "istioBase", "istioCNI", "istioZtunnel", "certManager", "cloudControllerManager", "csiPlugin", "cilium", "calico", "traefik", "metallb", "kubeVip", "kubeVipCloudProvider"],
       "properties": {
         "headlamp": {
           "allOf": [{ "$ref": "#/$defs/chart" }],
@@ -129,6 +129,9 @@
         "kyverno": { "$ref": "#/$defs/chartOnly" },
         "kyvernoPolicies": { "$ref": "#/$defs/chartOnly" },
         "istio": { "$ref": "#/$defs/chartOnly" },
+        "istioBase": { "$ref": "#/$defs/chartOnly" },
+        "istioCNI": { "$ref": "#/$defs/chartOnly" },
+        "istioZtunnel": { "$ref": "#/$defs/chartOnly" },
         "certManager": { "$ref": "#/$defs/chartOnly" },
         "cloudControllerManager": { "$ref": "#/$defs/chartOnly" },
         "csiPlugin": { "$ref": "#/$defs/chartOnly" },
@@ -169,7 +172,11 @@
       "properties": {
         "repository": { "type": "string", "pattern": "^(https|oci)://" },
         "chart": { "type": "string", "minLength": 1 },
-        "version": { "type": "string", "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+" }
+        "version": {
+          "description": "The chart's version and the digest it is pulled by, as <version>@sha256:<digest>.",
+          "type": "string",
+          "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+[^@]*@sha256:[0-9a-f]{64}$"
+        }
       }
     },
     "chartOnly": {

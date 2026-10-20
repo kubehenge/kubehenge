@@ -213,7 +213,7 @@ providers:
     spec:
       deployment:
         containers:
-          - imageUrl: ghcr.io/kubehenge/cluster-api-addon-provider-helm@sha256:12d95dc080b82fac715dd31620b08726362bee2c752a9b69e2e2f76a55f9e833
+          - imageUrl: ghcr.io/kubehenge/cluster-api-addon-provider-helm@sha256:14ba4b0c8594352948d0a08ef9746ec4196739cfc821c3d38fbbe0768f8b427e
             name: manager
             resources:
               requests:

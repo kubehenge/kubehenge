@@ -80,19 +80,20 @@ kubeVip: ghcr.io/kube-vip/kube-vip:v1.3.1@sha256:1962f9daf226503f7e6b107f595cb28
 
 # Installed into clusters: the Proxmox VE cloud controller manager and CSI plugin into every one,
 # the CNI chosen for a cluster whose distribution has none of its own (kubeadm), and the add-ons a
-# cluster switches on.
+# cluster switches on. Each chart's version carries its digest, which it is pulled by: an OCI
+# chart's manifest digest, or the sha256 of the archive that a repository's index lists.
 addons:
   headlamp:
     repository: https://kubernetes-sigs.github.io/headlamp
     chart: headlamp
-    version: 0.46.0
+    version: 0.46.0@sha256:faa471a8c5c55125b3dceed1cf73000e1ced18f07e2088e5e12e75292fb9ae62
     # The chart names its image by tag only.
     # renovate: datasource=docker depName=ghcr.io/headlamp-k8s/headlamp
     image: v0.46.0@sha256:8a0ef97527544baa2b35825940ddf4db6e2d09c30cd5aa31fd269ff604cc8b75
   rancher:
     repository: https://releases.rancher.com/server-charts/stable
     chart: rancher
-    version: 2.15.2
+    version: 2.15.2@sha256:855cb9be954f65a31b9a8c77f7aebce125c2d7797425257d21d35e3380816ac8
     # Kubernetes minor versions this Rancher release runs on (its chart's kubeVersion and support
     # matrix); the cluster that installs it is held within them.
     kubernetes: 34-36
@@ -100,7 +101,7 @@ addons:
   monitoring:
     repository: https://prometheus-community.github.io/helm-charts
     chart: kube-prometheus-stack
-    version: 92.10.1
+    version: 92.10.1@sha256:0d16c44e941372400ee8bcdc232ebee957eefcc910f8833767d8b94145f20094
     # In front of the metrics etcd, kube-proxy and node-exporter serve without authentication.
     # renovate: datasource=docker depName=ghcr.io/kube-rbac-proxy/kube-rbac-proxy
     kubeRBACProxy: ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.23.0@sha256:296fd0a10fb635414b4533b983f0d5a686ce0ce73567b7079b6595ba75034f1a
@@ -109,62 +110,77 @@ addons:
   kyverno:
     repository: https://kyverno.github.io/kyverno
     chart: kyverno
-    version: 3.9.1
+    version: 3.9.1@sha256:7b7fe51a431b5b133b0ce7eb9dcb222b6a37fb967c163223cf480054ad14d752
   kyvernoPolicies:
     repository: https://kyverno.github.io/kyverno
     chart: kyverno-policies
-    version: 3.9.1
-  # Istio in ambient mode, for clusters that switch it on: istiod's chart, with base, cni and
-  # ztunnel beside it at the same version.
+    version: 3.9.1@sha256:42078dacb0954041a00b3f2f086bf1a2b5d6588ff5ac42ee7fbecc3148f6fb7d
+  # Istio in ambient mode, for clusters that switch it on: istiod, and its base, cni and ztunnel
+  # charts at the same version.
   istio:
     repository: oci://ghcr.io/istio/release/charts
     chart: istiod
     # renovate: datasource=docker depName=ghcr.io/istio/release/charts/istiod
-    version: 1.31.2
+    version: 1.31.2@sha256:92c8b0ab5c67dbd750e5625bc3dd7f7c995287079c36279ea649178adc5afa41
+  istioBase:
+    repository: oci://ghcr.io/istio/release/charts
+    chart: base
+    # renovate: datasource=docker depName=ghcr.io/istio/release/charts/base
+    version: 1.31.2@sha256:4e992fddb71ace84e46dc1eb8309402a20aa869d46c20f95bd64f12826bd842a
+  istioCNI:
+    repository: oci://ghcr.io/istio/release/charts
+    chart: cni
+    # renovate: datasource=docker depName=ghcr.io/istio/release/charts/cni
+    version: 1.31.2@sha256:652d40a1d666c07bfeb346c84b66de30b656ac515f150e9ab32fd4dead25a636
+  istioZtunnel:
+    repository: oci://ghcr.io/istio/release/charts
+    chart: ztunnel
+    # renovate: datasource=docker depName=ghcr.io/istio/release/charts/ztunnel
+    version: 1.31.2@sha256:cf3ac400874dc6bdf7affb1396dde3a46c10f1a60fb9542c65d2b6fc02de376c
   # Installed with Rancher, which makes its CA and certificate through it, and with monitoring,
   # whose metrics proxies and Prometheus it gives their certificates.
   certManager:
     repository: https://charts.jetstack.io
     chart: cert-manager
-    version: v1.21.2
+    version: v1.21.2@sha256:73a56e1728edd6c99f1f31082618c3259d279a76b7ebd3d4bdc5475c2442d34a
   cloudControllerManager:
     repository: oci://ghcr.io/sergelogvinov/charts
     chart: proxmox-cloud-controller-manager
     # yamllint disable-line rule:line-length
     # renovate: datasource=docker depName=ghcr.io/sergelogvinov/charts/proxmox-cloud-controller-manager
-    version: 0.2.32
+    version: 0.2.32@sha256:2e7fbb98e1554d198d28b0f1365d1391bc646664cbaba2628b7f3031c4a66308
   csiPlugin:
     repository: oci://ghcr.io/sergelogvinov/charts
     chart: proxmox-csi-plugin
     # renovate: datasource=docker depName=ghcr.io/sergelogvinov/charts/proxmox-csi-plugin
-    version: 0.5.12
+    version: 0.5.12@sha256:bbd954924333b2c6dd0a01ed6b347f0798c4ed9f2de99b0c3d0bcef3e9f9efdd
   cilium:
     repository: https://helm.cilium.io
     chart: cilium
-    version: 1.20.3
+    version: 1.20.3@sha256:0805a5273118c436c9772bb9566d87ec558d8b25cc2ce5dc32918ecdd36f2c7c
   calico:
     repository: https://docs.tigera.io/calico/charts
     chart: tigera-operator
-    version: v3.33.0
+    version: v3.33.0@sha256:efcc8633742c136708cd8de9673862c6eee3a91ed176d7f2835690ab625ad846
   # The ingress controller of kubeadm clusters, which bring none; RKE2 and k3s bring Traefik.
   traefik:
     repository: https://traefik.github.io/charts
     chart: traefik
-    version: 42.0.0
+    version: 42.0.0@sha256:a6ede324662ddcca0160a5ce639b7b5b9dd40a20a475e1101e9f95b5e5d83dd5
   # The load balancers a cluster chooses from for its Services of type LoadBalancer: MetalLB, or
   # kube-vip with its cloud provider, which hands out the addresses. kube-vip runs the image above.
   metallb:
     repository: https://metallb.github.io/metallb
     chart: metallb
-    version: 0.16.1
+    version: 0.16.1@sha256:fb06bb584fcb7856f15733b2a6a2aff5b61b5c350687e341c163ae24a5938adc
   kubeVip:
     repository: https://kube-vip.github.io/helm-charts
     chart: kube-vip
-    version: 0.11.1
+    version: 0.11.1@sha256:739401e81471d2d485df614d484aecbf8364ca5c4cab0f998631394d75b9e1dd
   kubeVipCloudProvider:
     repository: https://kube-vip.github.io/helm-charts
     chart: kube-vip-cloud-provider
-    version: 0.2.10
+    version: 0.2.10@sha256:6a9c9d7540cd3d7a4ebfaf205c4df07c809b19b463e6a764d59c011387d2695e
     # The chart's own lags the releases.
     # renovate: datasource=docker depName=ghcr.io/kube-vip/kube-vip-cloud-provider
     image: ghcr.io/kube-vip/kube-vip-cloud-provider:v0.0.13@sha256:b8b6a5180e678b410e2c5dba86b87fa8099ada16e2f067d83f04e749f8ea54ab

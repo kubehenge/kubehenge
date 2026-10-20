@@ -70,8 +70,9 @@ locals {
   # looks for it in its cache on the next reconcile, which its own status patch starts at once; when
   # the cache lags, that reconcile creates a second one, and from then on every reconcile of the
   # HelmChartProxy fails and its changes never reach the release. scripts/helm-addon-patches waits
-  # after the create until the cache has it. Built as capmox's is; it applies only while the provider
-  # is at `release`.
+  # after the create until the cache has it, and pins each chart by the digest a HelmChartProxy's
+  # version carries after an @: an OCI chart is pulled by it, and an HTTP repository's archive is
+  # checked against it. Built as capmox's is; it applies only while the provider is at `release`.
   helm_addon_build = {
     upstream = "kubernetes-sigs/cluster-api-addon-provider-helm"
     package  = "."
@@ -80,6 +81,6 @@ locals {
     # The provider's own image is built with Go 1.25 on distroless static.
     go         = "go1.25.14"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
-    image      = "ghcr.io/kubehenge/cluster-api-addon-provider-helm@sha256:12d95dc080b82fac715dd31620b08726362bee2c752a9b69e2e2f76a55f9e833"
+    image      = "ghcr.io/kubehenge/cluster-api-addon-provider-helm@sha256:14ba4b0c8594352948d0a08ef9746ec4196739cfc821c3d38fbbe0768f8b427e"
   }
 }

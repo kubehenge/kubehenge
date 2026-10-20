@@ -182,31 +182,85 @@ func TestResourceSetSecret(t *testing.T) {
 }
 
 var testCharts = Charts{
-	CCM:    Chart{Repository: "oci://ghcr.io/sergelogvinov/charts", Name: "proxmox-cloud-controller-manager", Version: "0.2.32"},
-	CSI:    Chart{Repository: "oci://ghcr.io/sergelogvinov/charts", Name: "proxmox-csi-plugin", Version: "0.5.12"},
-	Cilium: Chart{Repository: "https://helm.cilium.io", Name: "cilium", Version: "1.20.2"},
-	Calico: Chart{Repository: "https://docs.tigera.io/calico/charts", Name: "tigera-operator", Version: "v3.33.0"},
+	CCM: Chart{
+		Repository: "oci://ghcr.io/sergelogvinov/charts", Name: "proxmox-cloud-controller-manager", Version: "0.2.32",
+		Digest: "2e7fbb98e1554d198d28b0f1365d1391bc646664cbaba2628b7f3031c4a66308",
+	},
+	CSI: Chart{
+		Repository: "oci://ghcr.io/sergelogvinov/charts", Name: "proxmox-csi-plugin", Version: "0.5.12",
+		Digest: "bbd954924333b2c6dd0a01ed6b347f0798c4ed9f2de99b0c3d0bcef3e9f9efdd",
+	},
+	Cilium: Chart{
+		Repository: "https://helm.cilium.io", Name: "cilium", Version: "1.20.3",
+		Digest: "0805a5273118c436c9772bb9566d87ec558d8b25cc2ce5dc32918ecdd36f2c7c",
+	},
+	Calico: Chart{
+		Repository: "https://docs.tigera.io/calico/charts", Name: "tigera-operator", Version: "v3.33.0",
+		Digest: "efcc8633742c136708cd8de9673862c6eee3a91ed176d7f2835690ab625ad846",
+	},
 
-	Headlamp:      Chart{Repository: "https://kubernetes-sigs.github.io/headlamp", Name: "headlamp", Version: "0.45.0"},
-	HeadlampImage: "v0.45.0@sha256:db3f0e0fc58d358d41daa3fe7fc852437552c7ee873c3645470f7b86a8e0db49",
+	Headlamp: Chart{
+		Repository: "https://kubernetes-sigs.github.io/headlamp", Name: "headlamp", Version: "0.46.0",
+		Digest: "faa471a8c5c55125b3dceed1cf73000e1ced18f07e2088e5e12e75292fb9ae62",
+	},
+	HeadlampImage: "v0.46.0@sha256:8a0ef97527544baa2b35825940ddf4db6e2d09c30cd5aa31fd269ff604cc8b75",
 
-	CertManager: Chart{Repository: "https://charts.jetstack.io", Name: "cert-manager", Version: "v1.21.2"},
-	Monitoring:  Chart{Repository: "https://prometheus-community.github.io/helm-charts", Name: "kube-prometheus-stack", Version: "92.10.1"},
+	CertManager: Chart{
+		Repository: "https://charts.jetstack.io", Name: "cert-manager", Version: "v1.21.2",
+		Digest: "73a56e1728edd6c99f1f31082618c3259d279a76b7ebd3d4bdc5475c2442d34a",
+	},
+	Monitoring: Chart{
+		Repository: "https://prometheus-community.github.io/helm-charts", Name: "kube-prometheus-stack", Version: "92.10.1",
+		Digest: "0d16c44e941372400ee8bcdc232ebee957eefcc910f8833767d8b94145f20094",
+	},
 	KubeRBACProxy: Image{
 		Registry: "ghcr.io", Repository: "kube-rbac-proxy/kube-rbac-proxy", Tag: "v0.23.0",
 		Digest: "296fd0a10fb635414b4533b983f0d5a686ce0ce73567b7079b6595ba75034f1a",
 	},
-	Kyverno:         Chart{Repository: "https://kyverno.github.io/kyverno", Name: "kyverno", Version: "3.9.1"},
-	KyvernoPolicies: Chart{Repository: "https://kyverno.github.io/kyverno", Name: "kyverno-policies", Version: "3.9.1"},
-	Istio:           Chart{Repository: "oci://ghcr.io/istio/release/charts", Name: "istiod", Version: "1.31.2"},
-	Traefik:         Chart{Repository: "https://traefik.github.io/charts", Name: "traefik", Version: "42.0.0"},
-	MetalLB:         Chart{Repository: "https://metallb.github.io/metallb", Name: "metallb", Version: "0.16.1"},
-	KubeVip:         Chart{Repository: "https://kube-vip.github.io/helm-charts", Name: "kube-vip", Version: "0.11.1"},
+	Kyverno: Chart{
+		Repository: "https://kyverno.github.io/kyverno", Name: "kyverno", Version: "3.9.1",
+		Digest: "7b7fe51a431b5b133b0ce7eb9dcb222b6a37fb967c163223cf480054ad14d752",
+	},
+	KyvernoPolicies: Chart{
+		Repository: "https://kyverno.github.io/kyverno", Name: "kyverno-policies", Version: "3.9.1",
+		Digest: "42078dacb0954041a00b3f2f086bf1a2b5d6588ff5ac42ee7fbecc3148f6fb7d",
+	},
+	Istio: Chart{
+		Repository: "oci://ghcr.io/istio/release/charts", Name: "istiod", Version: "1.31.2",
+		Digest: "92c8b0ab5c67dbd750e5625bc3dd7f7c995287079c36279ea649178adc5afa41",
+	},
+	IstioBase: Chart{
+		Repository: "oci://ghcr.io/istio/release/charts", Name: "base", Version: "1.31.2",
+		Digest: "4e992fddb71ace84e46dc1eb8309402a20aa869d46c20f95bd64f12826bd842a",
+	},
+	IstioCNI: Chart{
+		Repository: "oci://ghcr.io/istio/release/charts", Name: "cni", Version: "1.31.2",
+		Digest: "652d40a1d666c07bfeb346c84b66de30b656ac515f150e9ab32fd4dead25a636",
+	},
+	IstioZtunnel: Chart{
+		Repository: "oci://ghcr.io/istio/release/charts", Name: "ztunnel", Version: "1.31.2",
+		Digest: "cf3ac400874dc6bdf7affb1396dde3a46c10f1a60fb9542c65d2b6fc02de376c",
+	},
+	Traefik: Chart{
+		Repository: "https://traefik.github.io/charts", Name: "traefik", Version: "42.0.0",
+		Digest: "a6ede324662ddcca0160a5ce639b7b5b9dd40a20a475e1101e9f95b5e5d83dd5",
+	},
+	MetalLB: Chart{
+		Repository: "https://metallb.github.io/metallb", Name: "metallb", Version: "0.16.1",
+		Digest: "fb06bb584fcb7856f15733b2a6a2aff5b61b5c350687e341c163ae24a5938adc",
+	},
+	KubeVip: Chart{
+		Repository: "https://kube-vip.github.io/helm-charts", Name: "kube-vip", Version: "0.11.1",
+		Digest: "739401e81471d2d485df614d484aecbf8364ca5c4cab0f998631394d75b9e1dd",
+	},
 	KubeVipImage: Image{
 		Registry: "ghcr.io", Repository: "kube-vip/kube-vip", Tag: "v1.3.1",
 		Digest: "1962f9daf226503f7e6b107f595cb28b7917fd2d0113957075e19a3e5a6c1e33",
 	},
-	KubeVipCloudProvider: Chart{Repository: "https://kube-vip.github.io/helm-charts", Name: "kube-vip-cloud-provider", Version: "0.2.10"},
+	KubeVipCloudProvider: Chart{
+		Repository: "https://kube-vip.github.io/helm-charts", Name: "kube-vip-cloud-provider", Version: "0.2.10",
+		Digest: "6a9c9d7540cd3d7a4ebfaf205c4df07c809b19b463e6a764d59c011387d2695e",
+	},
 	KubeVipCloudProviderImage: Image{
 		Registry: "ghcr.io", Repository: "kube-vip/kube-vip-cloud-provider", Tag: "v0.0.13",
 		Digest: "b8b6a5180e678b410e2c5dba86b87fa8099ada16e2f067d83f04e749f8ea54ab",
@@ -216,15 +270,24 @@ var testCharts = Charts{
 
 func TestParseChart(t *testing.T) {
 	t.Parallel()
+	const digest = "@sha256:0805a5273118c436c9772bb9566d87ec558d8b25cc2ce5dc32918ecdd36f2c7c"
 	for s, want := range map[string]Chart{
-		"oci://ghcr.io/sergelogvinov/charts/proxmox-csi-plugin:0.5.12": testCharts.CSI,
-		"https://helm.cilium.io/cilium:1.20.2":                         testCharts.Cilium,
+		"oci://ghcr.io/sergelogvinov/charts/proxmox-csi-plugin:0.5.12@sha256:" + testCharts.CSI.Digest: testCharts.CSI,
+		"https://helm.cilium.io/cilium:1.20.3" + digest:                                                testCharts.Cilium,
 	} {
-		if got, err := ParseChart(s); err != nil || got != want {
+		if got, err := ParseChart(s); err != nil || got != want || !strings.HasSuffix(s, "/"+got.Name+":"+got.pinnedVersion()) {
 			t.Errorf("%s: got %+v, %v", s, got, err)
 		}
 	}
-	for _, bad := range []string{"cilium:1.20.2", "https://helm.cilium.io/cilium", "https://helm.cilium.io/:1"} {
+	for _, bad := range []string{
+		"cilium:1.20.3" + digest,
+		"https://helm.cilium.io/cilium" + digest,
+		"https://helm.cilium.io/:1" + digest,
+		"https://helm.cilium.io/cilium:1.20.3",
+		"https://helm.cilium.io/cilium:" + digest,
+		"https://helm.cilium.io/cilium:1.20.3@sha256:0805",
+		"https://helm.cilium.io/cilium:1.20.3@sha256:0805A5273118C436C9772BB9566D87EC558D8B25CC2CE5DC32918ECDD36F2C7C",
+	} {
 		if _, err := ParseChart(bad); err == nil {
 			t.Errorf("%q: no error", bad)
 		}
@@ -301,7 +364,7 @@ func TestIngressControllerOnKubeadmOnly(t *testing.T) {
 			}
 			continue
 		}
-		if spec == nil || spec["chartName"] != testCharts.Traefik.Name || spec["version"] != testCharts.Traefik.Version || spec["namespace"] != "kube-system" {
+		if spec == nil || spec["chartName"] != testCharts.Traefik.Name || spec["version"] != "42.0.0@sha256:"+testCharts.Traefik.Digest || spec["namespace"] != "kube-system" {
 			t.Fatalf("kubeadm's ingress controller: %v", spec)
 		}
 		var values map[string]any

@@ -27,9 +27,27 @@ func TestParseImage(t *testing.T) {
 		"kube-rbac-proxy:v0.23.0@sha256:296fd0a10fb635414b4533b983f0d5a686ce0ce73567b7079b6595ba75034f1a",
 		"ghcr.io/kube-rbac-proxy/kube-rbac-proxy@sha256:296fd0a10fb635414b4533b983f0d5a686ce0ce73567b7079b6595ba75034f1a",
 		"ghcr.io/kube-rbac-proxy/kube-rbac-proxy:@sha256:296fd0a10fb635414b4533b983f0d5a686ce0ce73567b7079b6595ba75034f1a",
+		"ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.23.0@sha256:296fd0a1",
 	} {
 		if _, err := ParseImage(bad); err == nil {
 			t.Errorf("ParseImage(%q) took it", bad)
+		}
+	}
+}
+
+func TestValidTagDigest(t *testing.T) {
+	t.Parallel()
+	if err := ValidTagDigest(testCharts.HeadlampImage); err != nil {
+		t.Error(err)
+	}
+	for _, bad := range []string{
+		"v0.46.0",
+		"@sha256:8a0ef97527544baa2b35825940ddf4db6e2d09c30cd5aa31fd269ff604cc8b75",
+		"ghcr.io/headlamp-k8s/headlamp:v0.46.0@sha256:8a0ef97527544baa2b35825940ddf4db6e2d09c30cd5aa31fd269ff604cc8b75",
+		"v0.46.0@sha256:8a0ef975",
+	} {
+		if err := ValidTagDigest(bad); err == nil {
+			t.Errorf("ValidTagDigest(%q) took it", bad)
 		}
 	}
 }

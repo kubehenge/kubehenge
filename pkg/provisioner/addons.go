@@ -65,8 +65,11 @@ type Charts struct {
 	KubeRBACProxy   Image
 	Kyverno         Chart
 	KyvernoPolicies Chart
-	// Istio is istiod's chart; its base, cni and ztunnel charts are beside it, at its version.
-	Istio Chart
+	// Istio is istiod's chart, installed with its base, cni and ztunnel charts at the same version.
+	Istio        Chart
+	IstioBase    Chart
+	IstioCNI     Chart
+	IstioZtunnel Chart
 	// Traefik is the ingress controller of distributions that bring none.
 	Traefik Chart
 	// The load balancers a cluster chooses from: MetalLB, or kube-vip with its cloud provider,
@@ -172,22 +175,46 @@ type Headlamp struct {
 	TLSSecret string `json:"tlsSecret,omitempty"`
 }
 
-// Chart is one Helm chart.
+// Chart is one Helm chart, pinned by its digest: an OCI chart's manifest digest, or the SHA-256 of
+// the archive a repository's index lists.
 type Chart struct {
 	Repository string
 	Name       string
 	Version    string
+	Digest     string
 }
 
-// ParseChart reads <repository>/<name>:<version>, such as
-// oci://ghcr.io/sergelogvinov/charts/proxmox-csi-plugin:0.5.12 or https://helm.cilium.io/cilium:1.20.2.
+// ParseChart reads <repository>/<name>:<version>@sha256:<digest>, such as
+// oci://ghcr.io/sergelogvinov/charts/proxmox-csi-plugin:0.5.12@sha256:bbd9… or
+// https://helm.cilium.io/cilium:1.20.3@sha256:0805….
 func ParseChart(s string) (Chart, error) {
-	at := strings.LastIndex(s, ":")
-	slash := strings.LastIndex(s, "/")
-	if slash < 0 || at <= slash+1 || at == len(s)-1 {
-		return Chart{}, fmt.Errorf("%q is not <repository>/<name>:<version>", s)
+	name, digest, ok := strings.Cut(s, "@sha256:")
+	at := strings.LastIndex(name, ":")
+	slash := strings.LastIndex(name, "/")
+	if !ok || !isDigest(digest) || slash < 0 || at <= slash+1 || at == len(name)-1 {
+		return Chart{}, fmt.Errorf("%q is not <repository>/<name>:<version>@sha256:<digest>", s)
 	}
-	return Chart{Repository: s[:slash], Name: s[slash+1 : at], Version: s[at+1:]}, nil
+	return Chart{Repository: name[:slash], Name: name[slash+1 : at], Version: name[at+1:], Digest: digest}, nil
+}
+
+// pinnedVersion is the version a HelmChartProxy takes, which Kubehenge's build of the Add-on
+// Provider for Helm pulls the chart by or checks the chart against.
+func (c Chart) pinnedVersion() string {
+	return c.Version + "@sha256:" + c.Digest
+}
+
+// isDigest reports whether s is a SHA-256 digest in lower-case hex.
+func isDigest(s string) bool {
+	const sha256Hex = 64
+	if len(s) != sha256Hex {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // CNIAnnotation on a ClusterClass lists, comma-separated, the values of its cni variable that name
@@ -616,7 +643,7 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 		)
 	}
 	if addons.Istio.Enabled {
-		wanted = append(wanted, istioCharts(charts.Istio, distribution, cni)...)
+		wanted = append(wanted, istioCharts(charts, distribution, cni)...)
 	}
 	if distribution == templates.Kubeadm {
 		wanted = append(wanted, chartProxy{"traefik", "traefik", metav1.NamespaceSystem, charts.Traefik, traefikValues()})
@@ -643,7 +670,7 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 			"clusterSelector": map[string]any{"matchLabels": map[string]any{clusterv1.ClusterNameLabel: cluster.Name}},
 			"repoURL":         p.chart.Repository,
 			"chartName":       p.chart.Name,
-			"version":         p.chart.Version,
+			"version":         p.chart.pinnedVersion(),
 			"releaseName":     p.release,
 			"namespace":       p.namespace,
 			"options":         map[string]any{"install": map[string]any{"createNamespace": true}},

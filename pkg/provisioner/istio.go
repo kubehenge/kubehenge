@@ -31,8 +31,7 @@ const (
 	istioRedirection   = "ambient.istio.io/redirection"
 )
 
-// The releases of Istio's four charts, each also its proxy's suffix: the chart of the istio flag
-// is istiod, and the others are found beside it at the same version.
+// The releases of Istio's four charts, each also its proxy's suffix.
 const (
 	istioBase    = "istio-base"
 	istiod       = "istiod"
@@ -45,19 +44,13 @@ func istioProxies(cluster *clusterv1.Cluster) []string {
 	return []string{cluster.Name + "-" + istioBase, cluster.Name + "-" + istiod, cluster.Name + "-" + istioCNI, cluster.Name + "-" + istioZtunnel}
 }
 
-// beside is the chart of the same repository and version under another name.
-func (c Chart) beside(name string) Chart {
-	c.Name = name
-	return c
-}
-
 // istioCharts are Istio in ambient mode, without sidecars: ztunnel on every node carries the
 // enrolled pods' traffic over mutual TLS, istio-cni redirects it there, and istiod gives ztunnel
 // its workloads' certificates. Its CRDs come with the base chart, and none of the charts renders
 // a resource of them, so the four install side by side. istiod runs at Pod Security's restricted
 // level, as do waypoints it deploys; on k3s with its own flannel, istio-cni finds the CNI
 // configuration where k3s keeps it, and everywhere else in the standard directories.
-func istioCharts(istio Chart, distribution templates.Distribution, cni CNI) []chartProxy {
+func istioCharts(charts *Charts, distribution templates.Distribution, cni CNI) []chartProxy {
 	restricted := map[string]any{"type": string(corev1.SeccompProfileTypeRuntimeDefault)}
 	ambient := func(values map[string]any) map[string]any {
 		values["profile"] = "ambient"
@@ -68,8 +61,8 @@ func istioCharts(istio Chart, distribution templates.Distribution, cni CNI) []ch
 		cniValues["global"] = map[string]any{"platform": "k3s"}
 	}
 	return []chartProxy{
-		{istioBase, istioBase, istioNamespace, istio.beside("base"), map[string]any{}},
-		{istiod, istiod, istioNamespace, istio, ambient(map[string]any{
+		{istioBase, istioBase, istioNamespace, charts.IstioBase, map[string]any{}},
+		{istiod, istiod, istioNamespace, charts.Istio, ambient(map[string]any{
 			"pilot": map[string]any{
 				"trustedZtunnelNamespace": istioNodeNamespace,
 				seccompProfileKey:         restricted,
@@ -78,8 +71,8 @@ func istioCharts(istio Chart, distribution templates.Distribution, cni CNI) []ch
 			},
 			"gateways": map[string]any{seccompProfileKey: restricted},
 		})},
-		{istioCNI, istioCNI, istioNodeNamespace, istio.beside("cni"), cniValues},
-		{istioZtunnel, istioZtunnel, istioNodeNamespace, istio.beside("ztunnel"), ambient(map[string]any{
+		{istioCNI, istioCNI, istioNodeNamespace, charts.IstioCNI, cniValues},
+		{istioZtunnel, istioZtunnel, istioNodeNamespace, charts.IstioZtunnel, ambient(map[string]any{
 			// The chart asks for 512 MiB on every node, room for a mesh of 200,000 pods.
 			"resources": map[string]any{requestsKey: map[string]any{cpuKey: "200m", memoryKey: "128Mi"}},
 		})},

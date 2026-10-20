@@ -82,11 +82,11 @@
       ]
     },
     {
-      "description": "The add-on charts published in a Helm repository, which values.yaml names by repository, chart and version.",
+      "description": "The add-on charts published in a Helm repository, which values.yaml names by repository, chart and version with the SHA-256 of its archive; the digest moves with the version, from the digest the repository's index lists.",
       "customType": "regex",
       "managerFilePatterns": ["/^charts/kubehenge/values\\.yaml$/"],
       "matchStrings": [
-        "repository: (?<registryUrl>https://\\S+)\\n\\s+chart: (?<depName>\\S+)\\n\\s+version: (?<currentValue>\\S+)"
+        "repository: (?<registryUrl>https://\\S+)\\n\\s+chart: (?<depName>\\S+)\\n\\s+version: (?<currentValue>[^\\s@]+)@sha256:(?<currentDigest>[0-9a-f]{64})"
       ],
       "datasourceTemplate": "helm"
     },
