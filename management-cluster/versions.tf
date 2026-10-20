@@ -147,7 +147,9 @@ locals {
   # without waiting for it, and a reconcile that read the machine before the resize's task reference
   # was written clears that reference, so the bootstrap ISO's attach can time out on the VM's lock,
   # which capmox takes as a VMProvisionFailed it never retries. One patch waits for the resize, the
-  # other for any task still running on the VM. scripts/provider-image.sh builds it reproducibly,
+  # other for any task still running on the VM. A third reads the machine from the API server before
+  # cloning: the cached copy can predate the previous reconcile's clone, and cloning from it leaves a
+  # second VM behind. scripts/provider-image.sh builds it reproducibly,
   # and a release publishes it only when it comes out with this digest. It applies only while capmox
   # is at `release`.
   capmox_build = {
@@ -158,7 +160,7 @@ locals {
     # capmox's own image is built with Go 1.26 on distroless static.
     go         = "go1.26.9"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
-    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:762ce6cf397a023c63dea6c9fa4864b687cc8dea42f7cf84ddb8f4eb38360c5b"
+    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:c055349990da20734783e8da117a50224b2225071fd95528fd1fce4a97e7d863"
   }
 
   # The Add-on Provider for Helm creates a cluster's HelmReleaseProxy under a generated name and
