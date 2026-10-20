@@ -35,7 +35,7 @@ jobs:
           # Go is read from a build, which needs no frontend: the embedded directory keeps a .keep.
           - language: go
             build-mode: autobuild
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     permissions:
       contents: read # Reads the source it analyses.
