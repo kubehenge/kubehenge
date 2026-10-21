@@ -47,7 +47,7 @@ type UbuntuRelease struct {
 
 // OperatingSystems maps each supported cloud image to its Ubuntu release.
 var OperatingSystems = map[string]UbuntuRelease{
-	"ubuntu-26.04": {Codename: "resolute", Build: "20260927"},
+	"ubuntu-26.04": {Codename: "resolute", Build: "20261016"},
 	"ubuntu-24.04": {Codename: "noble", Build: "20261017"},
 }
 

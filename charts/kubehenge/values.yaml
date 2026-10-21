@@ -149,7 +149,7 @@ addons:
   monitoring:
     repository: https://prometheus-community.github.io/helm-charts
     chart: kube-prometheus-stack
-    version: 92.10.1@sha256:0d16c44e941372400ee8bcdc232ebee957eefcc910f8833767d8b94145f20094
+    version: 92.11.0@sha256:c357a259965187edcbed86591461bfbd56997591afba09be3a49a09b2bec8a2c
     # In front of the metrics etcd, kube-proxy and node-exporter serve without authentication.
     # renovate: datasource=docker depName=ghcr.io/kube-rbac-proxy/kube-rbac-proxy
     kubeRBACProxy: ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.23.0@sha256:296fd0a10fb635414b4533b983f0d5a686ce0ce73567b7079b6595ba75034f1a
@@ -185,9 +185,9 @@ addons:
         prometheusSpec:
           image:
             # renovate: datasource=docker depName=quay.io/prometheus/prometheus
-            tag: v3.15.0-distroless@sha256:b2a413d5a03ea6a76782a508d1c7947440bba3b973931a25676e278431891b01
+            tag: v3.15.1-distroless@sha256:451a845bae1d51622b41af1780eb2ad911bbb79a9855bc8e9bb67fabbc03f934
           # renovate: datasource=docker depName=quay.io/prometheus/prometheus depType=version
-          version: v3.15.0
+          version: v3.15.1
       alertmanager:
         alertmanagerSpec:
           image:
@@ -227,46 +227,46 @@ addons:
   kyverno:
     repository: https://kyverno.github.io/kyverno
     chart: kyverno
-    version: 3.9.1@sha256:7b7fe51a431b5b133b0ce7eb9dcb222b6a37fb967c163223cf480054ad14d752
+    version: 3.9.2@sha256:f6fe7184544d5e2ee33a77808c09e67aa603ce6560cc197038fde31d727c861e
     values:
       admissionController:
         initContainer:
           image:
             # renovate: datasource=docker depName=reg.kyverno.io/kyverno/kyvernopre
-            tag: v1.19.1@sha256:c25c47461f06f2845a48c319ae86fbbc1730a7b9ed5b701889c9dc1f9ee94b09
+            tag: v1.19.2@sha256:27f3cc52e628559b56d08363b85316819802086c9808606914f7805a244148f4
         container:
           image:
             # renovate: datasource=docker depName=reg.kyverno.io/kyverno/kyverno
-            tag: v1.19.1@sha256:b31d8511ae5fd6010e2a01ea72ebae08eb82fa51d91af14a1d9fe989949b4edb
+            tag: v1.19.2@sha256:c8c4dd09e720d2cd7fd24ca73ac28e46651001372f988e0cba3f2f612f04b955
       backgroundController:
         image:
           # renovate: datasource=docker depName=reg.kyverno.io/kyverno/background-controller
-          tag: v1.19.1@sha256:8f1e9143373a27578cafc2d28d2c66ba0926c63b4c77e63de8d2fdd4a122859f
+          tag: v1.19.2@sha256:c46e124f21ef8a6bb4b48de57106808b1007edcd5ddd4ff7df5d23b9efa60ce2
       cleanupController:
         image:
           # renovate: datasource=docker depName=reg.kyverno.io/kyverno/cleanup-controller
-          tag: v1.19.1@sha256:67a48e62a8d8f8120c86914ff822b90017c54054c7b64ef8a1555645e9d9761e
+          tag: v1.19.2@sha256:d7340aa7c9315080c3dafa7b765d090ced37353e89e5cd7a3f9ac69e8fb532b2
       reportsController:
         image:
           # renovate: datasource=docker depName=reg.kyverno.io/kyverno/reports-controller
-          tag: v1.19.1@sha256:c0eee97b9b44a0dd35805d56b358fa52548480f79d4944602b9609538eccd64c
+          tag: v1.19.2@sha256:5fb6d3e738050dbce84f60ecabaede7665fbe0578d07c1e8c912443b035e79c3
       crds:
         migration:
           image:
             # renovate: datasource=docker depName=reg.kyverno.io/kyverno/kyverno-cli
-            tag: v1.19.1@sha256:ced7b2be0b04250cabfe695f15307f69eb715fe23234816388af4f3812915b2a
+            tag: v1.19.2@sha256:322ec5044d600930cb3af0e56dc33154a2d1d1fba58f4cadad3f47be7e78b11c
       webhooksCleanup:
         image:
           # renovate: datasource=docker depName=ghcr.io/kyverno/readiness-checker
-          tag: v1.19.1@sha256:31bb42ce7f5b2e27c1cf633aeff4f0cad1f5bb63761e2cb09f0e25cdd26572bf
+          tag: v1.19.2@sha256:02600428e7c956e222f4376413525866ed9fec28e6bcb1222774ce6bf5fc904a
       test:
         image:
           # renovate: datasource=docker depName=ghcr.io/kyverno/readiness-checker
-          tag: v1.19.1@sha256:31bb42ce7f5b2e27c1cf633aeff4f0cad1f5bb63761e2cb09f0e25cdd26572bf
+          tag: v1.19.2@sha256:02600428e7c956e222f4376413525866ed9fec28e6bcb1222774ce6bf5fc904a
   kyvernoPolicies:
     repository: https://kyverno.github.io/kyverno
     chart: kyverno-policies
-    version: 3.9.1@sha256:42078dacb0954041a00b3f2f086bf1a2b5d6588ff5ac42ee7fbecc3148f6fb7d
+    version: 3.9.2@sha256:70ab274622b5a6467e3b638be958d9511c5a2eca31f494bcf9866b2869db400d
   # Istio in ambient mode, for clusters that switch it on: istiod, and its base, cni and ztunnel
   # charts at the same version.
   istio:
@@ -366,19 +366,19 @@ addons:
         attacher:
           image:
             # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-attacher
-            tag: v4.12.0@sha256:b9dc9a714a484ccdeeb6f86d88d4db9b7a5ecfc5a55da6db3a60bb3fa33c278a
+            tag: v4.13.0@sha256:d1a26170efed45491074ca4545c81844eee2b9043fb885ac01fb4aed6f8b72d2
         provisioner:
           image:
             # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-provisioner
-            tag: v6.3.0@sha256:a4b0b1a37605b7b04a293e136edf7006ec1786a8eb3f4e5a945f81d667dcc371
+            tag: v6.4.0@sha256:6ebe60fd8ed67a7f8a90d34402e9e706b274e53612d6fa5fbb8285728db622e2
         resizer:
           image:
             # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-resizer
-            tag: v2.2.1@sha256:ea1d25e23479000c7e8eeb92d827df66258df4e482ca054c5e7ce3fc0f5c41a5
+            tag: v2.3.0@sha256:48fb3deb93cd848e3c8998b6368f4322c93bb5ce4a90d1307b6dda0dbefb9a0e
         snapshotter:
           image:
             # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-snapshotter
-            tag: v8.6.0@sha256:42af0929bcd60a43499825c078a60ff0534e08af8fbeb283aa391be40feb9f3e
+            tag: v8.7.0@sha256:b03d3334f8035fa42660b166f6eb819a659a14774da020eb1b6c52cd422eaadb
       node:
         plugin:
           image:
@@ -388,11 +388,11 @@ addons:
           image:
             # yamllint disable-line rule:line-length
             # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-node-driver-registrar
-            tag: v2.17.0@sha256:f9de845b170155199f2a2a3f9531cf13d78e31235e9db6b6582a8b0db0a50dad
+            tag: v2.18.0@sha256:b7fefd08651f00ac4df1a196ed4c621c2451fbb899297fe9fad9e36c667af0c0
       livenessprobe:
         image:
           # renovate: datasource=docker depName=registry.k8s.io/sig-storage/livenessprobe
-          tag: v2.19.0@sha256:06da0d5b8908072f2e4522692aee8dc119fba7247a9658497e1153992cd777e9
+          tag: v2.20.0@sha256:19f2cf2f40e1987c7943945deca5f65cd4e4bf5cc0657fc78a5df131861578e8
   cilium:
     repository: https://helm.cilium.io
     chart: cilium
@@ -438,11 +438,11 @@ addons:
   traefik:
     repository: https://traefik.github.io/charts
     chart: traefik
-    version: 42.0.0@sha256:a6ede324662ddcca0160a5ce639b7b5b9dd40a20a475e1101e9f95b5e5d83dd5
+    version: 42.1.2@sha256:ecf9ac8bc0837e3260722566c2a49919332ca96b0b4e962405dfcfae51838699
     values:
       image:
         # renovate: datasource=docker depName=docker.io/library/traefik
-        tag: v3.7.14@sha256:575fa15b135078fe5e50aa847987d96dbddd7b093c172429618404df73f3fa7c
+        tag: v3.7.16@sha256:6d3e069ee484ab1da5adfdda555a75eb9b1545ef09096a0cc7c3043101986a20
   # The load balancers a cluster chooses from for its Services of type LoadBalancer: MetalLB, or
   # kube-vip with its cloud provider, which hands out the addresses. kube-vip runs the image above.
   metallb:
@@ -466,7 +466,7 @@ addons:
   kubeVip:
     repository: https://kube-vip.github.io/helm-charts
     chart: kube-vip
-    version: 0.11.1@sha256:739401e81471d2d485df614d484aecbf8364ca5c4cab0f998631394d75b9e1dd
+    version: 0.11.2@sha256:cd7b5ab2ed30a3a5ad758d058790c805a21d1f725d779e258f58bf322255721c
   kubeVipCloudProvider:
     repository: https://kube-vip.github.io/helm-charts
     chart: kube-vip-cloud-provider

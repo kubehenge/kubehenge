@@ -37,8 +37,8 @@ set -eu
 KUBEHENGE_VERSION=0.1.0
 KUBEHENGE_SHA256=
 # renovate: datasource=github-release-attachments depName=opentofu/opentofu
-TOFU_TAG=v1.13.1
-TOFU_SHA256=378ada19d4bc70c43732004e8159be771b23b9a5afdf059e5f8a2b3fa2c70a69
+TOFU_TAG=v1.13.2
+TOFU_SHA256=ac05d9952662c7db28dd57e93f0a68018837bfdf9342384ec0987977c16a9645
 TOFU_VERSION=${TOFU_TAG#v}
 TEMPLATE=debian-13-standard_13.6-1_amd64.tar.zst
 
