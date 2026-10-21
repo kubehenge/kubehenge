@@ -50,8 +50,9 @@
       "enabled": false
     },
     {
-      "description": "controller-runtime is pinned to a commit of its release-0.25 branch, but a pseudo-version's update follows the module's default branch, which builds on Kubernetes' next pre-release. The pin moves to the next v0.25 release instead.",
-      "matchPackageNames": ["sigs.k8s.io/controller-runtime"],
+      "description": "A Kubernetes module named by a commit follows its default branch when Renovate moves it, which builds on Kubernetes' next pre-release: controller-runtime is pinned to a commit of its release-0.25 branch and moves to the next v0.25 release instead, and kube-openapi, k8s.io/utils and sigs.k8s.io/json, which publish no releases, move with the Kubernetes modules that require them.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["k8s.io/**", "sigs.k8s.io/**"],
       "matchUpdateTypes": ["digest"],
       "enabled": false
     },
