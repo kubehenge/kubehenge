@@ -18,7 +18,7 @@ const rke2: ClusterClass = {
       '{"headlamp":64,"monitoring":1536,"kyverno":384,"certManager":192,"rancher":2048,"rancherAgent":512}',
     "kubehenge.dev/node-memory": '{"controlPlane":2560,"worker":704}',
   },
-  versionFormat: { pattern: "^v1\\.\\d+\\.\\d+\\+rke2r\\d+$" },
+  versionFormat: { pattern: String.raw`^v1\.\d+\.\d+\+rke2r\d+$` },
   variables: [
     { name: "controlPlaneEndpoint", required: true, schema: { type: "string" } },
     { name: "network", required: true, schema: { type: "object" } },
@@ -1057,7 +1057,7 @@ describe("create", () => {
       ...rke2,
       name: "kubehenge-k3s",
       distribution: "k3s",
-      versionFormat: { pattern: "^v1\\.\\d+\\.\\d+\\+k3s\\d+$" },
+      versionFormat: { pattern: String.raw`^v1\.\d+\.\d+\+k3s\d+$` },
     };
     fakeServer({
       "GET /api/session": () => ({ body: { user: "dev@pve", csrf: "c1", canCreate: true, canTrust: false } }),

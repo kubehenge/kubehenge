@@ -50,6 +50,12 @@
       "enabled": false
     },
     {
+      "description": "controller-runtime is pinned to a commit of its release-0.25 branch, but a pseudo-version's update follows the module's default branch, which builds on Kubernetes' next pre-release. The pin moves to the next v0.25 release instead.",
+      "matchPackageNames": ["sigs.k8s.io/controller-runtime"],
+      "matchUpdateTypes": ["digest"],
+      "enabled": false
+    },
+    {
       "description": "The Prometheus operator reads the version of Prometheus and Alertmanager apart from their image and takes no digest in it; the image beside it carries the digest.",
       "matchDepTypes": ["version"],
       "pinDigests": false

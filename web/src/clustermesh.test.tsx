@@ -108,7 +108,7 @@ describe("a Cluster Mesh", () => {
     const cls: ClusterClass = {
       name: "kubehenge-kubeadm",
       distribution: "kubeadm",
-      versionFormat: { pattern: "^v1\\.\\d+\\.\\d+$" },
+      versionFormat: { pattern: String.raw`^v1\.\d+\.\d+$` },
       variables: [
         { name: "cni", required: false, schema: { type: "string", enum: ["cilium", "calico"], default: "cilium" } },
         { name: "clusterMesh", required: false, schema: { type: "object" } },
@@ -135,7 +135,7 @@ describe("a Cluster Mesh", () => {
     const cls: ClusterClass = {
       name: "kubehenge-k3s",
       distribution: "k3s",
-      versionFormat: { pattern: "^v1\\.\\d+\\.\\d+\\+k3s\\d+$" },
+      versionFormat: { pattern: String.raw`^v1\.\d+\.\d+\+k3s\d+$` },
       annotations: { "kubehenge.dev/default-pods": "10.42.0.0/16", "kubehenge.dev/default-services": "10.43.0.0/16" },
       variables: [{ name: "cni", required: false, schema: { type: "string", enum: ["cilium", "calico"] } }],
     };
