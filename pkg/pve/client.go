@@ -100,7 +100,23 @@ const (
 	// clusters at once and the controller reconciles four, while Go's default of two idle
 	// connections per host would close most of them after each request.
 	idleConnsPerHost = 16
+	// idleConnTimeout drops a connection before pveproxy closes it after five idle seconds.
+	idleConnTimeout = 3 * time.Second
 )
+
+// connections sends reads over kept connections and every other request over a connection of its
+// own. pveproxy answers some calls, query-url-metadata among them, inside the worker that took
+// them; while one waits, that worker serves nothing, and afterwards it drops every connection it
+// held, requests already sent on them included. Go sends a dropped read again on a new connection,
+// which only a worker that is serving accepts, but never a write.
+type connections struct{ reads, writes *http.Transport }
+
+func (c connections) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Method == http.MethodGet || req.Method == http.MethodHead {
+		return c.reads.RoundTrip(req) //nolint:wrapcheck // a RoundTripper passes its transport's error on; http.Client adds the method and URL
+	}
+	return c.writes.RoundTrip(req) //nolint:wrapcheck // as above
+}
 
 // transports holds one connection pool per CA, keyed by its PEM ("" for the system's trust store),
 // shared by every client: each new connection costs pveproxy a TLS handshake, and the credentials
@@ -108,10 +124,10 @@ const (
 var transports = struct {
 	sync.Mutex
 
-	byPEM map[string]*http.Transport
-}{byPEM: map[string]*http.Transport{}}
+	byPEM map[string]connections
+}{byPEM: map[string]connections{}}
 
-func sharedTransport(pem []byte) (*http.Transport, error) {
+func sharedTransport(pem []byte) (connections, error) {
 	transports.Lock()
 	defer transports.Unlock()
 	if t, ok := transports.byPEM[string(pem)]; ok {
@@ -121,18 +137,22 @@ func sharedTransport(pem []byte) (*http.Transport, error) {
 	if len(pem) > 0 {
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(pem) {
-			return nil, errors.New("no PEM certificate in it")
+			return connections{}, errors.New("no PEM certificate in it")
 		}
 		tlsConfig.RootCAs = pool
 	}
 	defaults, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
-		return nil, errors.New("http.DefaultTransport has been replaced by one that cannot be cloned")
+		return connections{}, errors.New("http.DefaultTransport has been replaced by one that cannot be cloned")
 	}
-	t := defaults.Clone()
-	t.TLSClientConfig = tlsConfig
-	t.Proxy = http.ProxyFromEnvironment
-	t.MaxIdleConnsPerHost = idleConnsPerHost
-	transports.byPEM[string(pem)] = t
-	return t, nil
+	reads := defaults.Clone()
+	reads.TLSClientConfig = tlsConfig
+	reads.Proxy = http.ProxyFromEnvironment
+	reads.MaxIdleConnsPerHost = idleConnsPerHost
+	reads.IdleConnTimeout = idleConnTimeout
+	writes := reads.Clone()
+	writes.DisableKeepAlives = true
+	c := connections{reads: reads, writes: writes}
+	transports.byPEM[string(pem)] = c
+	return c, nil
 }

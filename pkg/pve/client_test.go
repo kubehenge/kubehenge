@@ -36,11 +36,11 @@ func TestClientsShareTheirConnections(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		p, ok := c.Transport.(*http.Transport)
+		p, ok := c.Transport.(connections)
 		if !ok {
 			t.Fatalf("transport %T", c.Transport)
 		}
-		return p
+		return p.reads
 	}
 	// One client per cluster, as the controller makes them.
 	first, second, system := pool(ca), pool(ca), pool("")
@@ -72,6 +72,52 @@ func TestClientsShareTheirConnections(t *testing.T) {
 	}
 	if reused.Load() == 0 {
 		t.Error("ten requests one after another reused no connection")
+	}
+}
+
+// A connection pveproxy drops loses the requests already sent on it, and Go sends only reads again.
+func TestWritesGoOnConnectionsOfTheirOwn(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":{}}`))
+	}))
+	t.Cleanup(srv.Close)
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Connect(Config{URL: srv.URL, Token: "kubehenge@pve!controller=s3cret", CAFile: ca}) //nolint:gosec // test data
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reused atomic.Int32
+	ctx := httptrace.WithClientTrace(context.Background(), &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) {
+		if i.Reused {
+			reused.Add(1)
+		}
+	}})
+	for range 3 {
+		var v map[string]any
+		if err := c.Get(ctx, "/version", &v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if reused.Load() == 0 {
+		t.Fatal("three reads one after another reused no connection")
+	}
+	reused.Store(0)
+	for _, write := range []func() error{
+		func() error { return c.Post(ctx, "/access/roles", map[string]string{"roleid": "r"}, nil) },
+		func() error { return c.Put(ctx, "/access/acl", map[string]string{"path": "/"}, nil) },
+		func() error { return c.Delete(ctx, "/access/roles/r", nil) },
+		func() error { return c.Post(ctx, "/access/roles", map[string]string{"roleid": "s"}, nil) },
+	} {
+		if err := write(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := reused.Load(); n != 0 {
+		t.Errorf("%d writes went on a connection kept from an earlier request", n)
 	}
 }
 
