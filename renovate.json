@@ -4,6 +4,7 @@
     "Every update from every ecosystem lands in one pull request on Monday morning, which CI and the end-to-end tests check like any other: Go modules, the frontend's npm packages, GitHub Actions, the OpenTofu providers, container images, the tools CI downloads, and the versions of Talos, Kubernetes, Cluster API, its providers and the add-ons that the management cluster and the clusters run. A fix for a known vulnerability comes at once, in a pull request of its own.",
     "Renovate refuses to group a lock file refresh with other updates, so the lock files' maintenance arrives as a second pull request on Tuesday, after Monday's has had a day to be merged.",
     "A release is offered as soon as it is published.",
+    "Renovate runs go mod tidy in a pull request that holds a major update of anything only when it also updates import paths, so gomodUpdateImportPaths is on; it rewrites imports only for a Go module's new major version.",
     "Only node_modules is left out: config:best-practices would also skip everything under test/, and with it the image and registry the end-to-end tests run."
   ],
   "extends": [
@@ -23,7 +24,7 @@
   "internalChecksFilter": "strict",
   "semanticCommits": "disabled",
   "labels": ["dependencies"],
-  "postUpdateOptions": ["gomodTidy"],
+  "postUpdateOptions": ["gomodTidy", "gomodUpdateImportPaths"],
   "ignorePresets": [":ignoreModulesAndTests"],
   "ignorePaths": ["**/node_modules/**"],
   "helm-values": {
