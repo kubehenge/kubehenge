@@ -39,17 +39,21 @@ func TestIstioInstallsInAmbientMode(t *testing.T) {
 	t.Parallel()
 	istio := &Addons{Istio: Istio{Enabled: true}}
 	specs, values := proxySpecs(t, templates.RKE2, CNI{}, istio)
-	for name, want := range map[string][2]string{
-		"web-istio-base": {"base", "istio-system"},
-		"web-istiod":     {"istiod", "istio-system"},
-		"web-istio-cni":  {"cni", "istio-node"},
-		"web-ztunnel":    {"ztunnel", "istio-node"},
+	for name, want := range map[string]struct {
+		chart     Chart
+		namespace string
+	}{
+		"web-istio-base": {testCharts.IstioBase, "istio-system"},
+		"web-istiod":     {testCharts.Istio, "istio-system"},
+		"web-istio-cni":  {testCharts.IstioCNI, "istio-node"},
+		"web-ztunnel":    {testCharts.IstioZtunnel, "istio-node"},
 	} {
 		spec := specs[name]
 		if spec == nil {
 			t.Fatalf("no proxy %s among %v", name, specs)
 		}
-		if spec["chartName"] != want[0] || spec["namespace"] != want[1] || spec["repoURL"] != testCharts.Istio.Repository || spec["version"] != testCharts.Istio.Version {
+		if spec["chartName"] != want.chart.Name || spec["namespace"] != want.namespace || spec["repoURL"] != want.chart.Repository ||
+			spec["version"] != "1.31.2@sha256:"+want.chart.Digest {
 			t.Errorf("%s installs %v/%v %v into %v", name, spec["repoURL"], spec["chartName"], spec["version"], spec["namespace"])
 		}
 	}

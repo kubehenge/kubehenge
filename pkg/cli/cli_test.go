@@ -141,6 +141,38 @@ func TestWaitOperatorNeedsANamespace(t *testing.T) {
 	}
 }
 
+func TestChartValuesGoToTheirCharts(t *testing.T) {
+	t.Parallel()
+	const digest = "@sha256:0805a5273118c436c9772bb9566d87ec558d8b25cc2ce5dc32918ecdd36f2c7c"
+	options := func(values string) *controllerOptions {
+		o := &controllerOptions{
+			kubeRBACProxy: "ghcr.io/example/proxy:v1" + digest, kubeVipImage: "ghcr.io/example/vip:v1" + digest,
+			turtlesImage: "docker.io/example/turtles:v1" + digest, turtlesCAPIImage: "registry.example.test/example/capi:v1" + digest,
+			calicoImages: []string{"quay.io/calico/node:v3.33.0" + digest}, chartValues: values,
+		}
+		for _, f := range []*string{
+			&o.ccmChart, &o.csiChart, &o.ciliumChart, &o.calicoChart, &o.headlampChart, &o.certManagerChart, &o.rancherChart,
+			&o.monitoringChart, &o.kyvernoChart, &o.kyvernoPolicies, &o.istioChart, &o.istioBaseChart, &o.istioCNIChart,
+			&o.istioZtunnelChart, &o.traefikChart, &o.metalLBChart, &o.kubeVipChart, &o.kubeVipCloudChart,
+		} {
+			*f = "https://charts.example.test/chart:1.0.0" + digest
+		}
+		return o
+	}
+	o := options(`{"cert-manager":{"image":{"tag":"v1.21.2` + digest + `"}},"istio-ztunnel":{"image":"ztunnel"}}`)
+	if err := o.parseCharts(); err != nil {
+		t.Fatal(err)
+	}
+	if o.r.Charts.CertManager.Values["image"] == nil || o.r.Charts.IstioZtunnel.Values["image"] != "ztunnel" || o.r.Charts.CCM.Values != nil {
+		t.Errorf("cert-manager %v, ztunnel %v, the CCM %v", o.r.Charts.CertManager.Values, o.r.Charts.IstioZtunnel.Values, o.r.Charts.CCM.Values)
+	}
+	for values, want := range map[string]string{`{"certmanager":{}}`: "certmanager", `[]`: "--chart-values"} {
+		if err := options(values).parseCharts(); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want %q", values, err, want)
+		}
+	}
+}
+
 func TestParseNetwork(t *testing.T) {
 	t.Parallel()
 	n, err := parseNetwork("192.0.2.50/24", "192.0.2.1", []string{"192.0.2.1", "198.51.100.53"})

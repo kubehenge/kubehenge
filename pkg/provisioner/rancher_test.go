@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -204,8 +205,12 @@ func TestRancherProxies(t *testing.T) {
 	if namespace != "cattle-system" || values["hostname"] != "rancher.example.org" || values["agentTLSMode"] != "strict" {
 		t.Errorf("Rancher proxy in %q with %v", namespace, values)
 	}
-	if !strings.Contains(valuesTemplate, "value: https://rancher.example.org") {
-		t.Errorf("Rancher's server URL is not fixed to its hostname:\n%s", valuesTemplate)
+	want := []any{rancherAgentEnv, map[string]any{"name": "CATTLE_SERVER_URL", "value": "https://rancher.example.org"}}
+	if env := values["extraEnv"]; !reflect.DeepEqual(env, want) {
+		t.Errorf("Rancher's environment is %v, want the chart's and the server URL fixed to its hostname", env)
+	}
+	if own, ok := testCharts.Rancher.Values["extraEnv"].([]any); !ok || len(own) != 1 {
+		t.Error("the chart's own environment was changed")
 	}
 	if probe, ok := values["startupProbe"].(map[string]any); !ok || probe["failureThreshold"] != float64(60) || probe["periodSeconds"] != float64(10) {
 		t.Errorf("Rancher's first start has %v, want ten minutes", values["startupProbe"])
@@ -273,6 +278,10 @@ func TestSecondRancherIsNeverInstalled(t *testing.T) {
 		t.Fatalf("Rancher's cluster is %s, not the one created first", got.Name)
 	}
 	r, kube := newReconciler(t, &fakeCloud{}, first, second)
+	r.Remotes = &Remotes{byCluster: map[string]remote{}}
+	for _, c := range []*clusterv1.Cluster{first, second} {
+		r.Remotes.byCluster[remoteKey(c)] = remote{client: fake.NewClientBuilder().WithScheme(remoteScheme).Build(), until: time.Now().Add(time.Hour)}
+	}
 	for _, c := range []*clusterv1.Cluster{first, second} {
 		if err := reconcile(t, r, c); err != nil {
 			t.Fatal(err)

@@ -46,167 +46,22 @@ jobs:
           esac
           echo "tests=$(printf '%s' "$tests" | jq -c .)" >> "$GITHUB_OUTPUT"
 
-  # End-to-end tier: Proxmox VE runs in a container on the runner (test/e2e/pve) and starts the
-  # clusters' VMs on the runner's KVM. One test per runner, since a runner holds one management
-  # cluster and one workload cluster; the job needs no secrets, so pull requests from forks run it
-  # as they are.
+  # Each test in a lane of its own (e2e-lane.yml), which hands it to a fresh runner when its runner
+  # lacks pause-loop exiting. One test per runner, since a runner holds one management cluster and
+  # one workload cluster; it needs no secrets, so pull requests from forks run it as they are.
   test:
     name: e2e (${{ matrix.test }})
     needs: scope
     if: needs.scope.outputs.tests != '[]'
-    runs-on: ubuntu-26.04
-    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         test: ${{ fromJSON(needs.scope.outputs.tests) }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # Go's caches are e2e's own: the ci workflow's hold race-instrumented test builds, none of the
-      # controller's and capmox's static builds. The nightly run saves them and every other run
-      # reads them, so a pull request never fills the cache with its own.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: false
-      - id: go-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: e2e-go-${{ hashFiles('go.sum') }}-${{ github.run_id }}
-          restore-keys: |
-            e2e-go-${{ hashFiles('go.sum') }}-
-            e2e-go-
-      # The image of Proxmox VE as the nightly run last built it, so with packages a day old at
-      # most; the nightly run builds it afresh.
-      - id: pve-cache
-        if: github.event_name != 'schedule'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/pve-image.tar.zst
-          key: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-${{ github.run_id }}
-          restore-keys: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-
-      - name: Load Proxmox VE's image
-        if: steps.pve-cache.outputs.cache-matched-key != ''
-        run: |
-          zstd -dc "$RUNNER_TEMP/pve-image.tar.zst" | docker load -q
-          echo KUBEHENGE_E2E_PVE_BUILT=1 >> "$GITHUB_ENV"
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 26
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - name: Tools
-        run: |
-          scripts/tools.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-      - name: KVM and memory
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
-            sudo tee /etc/udev/rules.d/99-kvm.rules >/dev/null
-          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
-          test -c /dev/kvm
-          # A cushion only: guests swapped out run slowly, but a run short of memory loses a VM to
-          # the OOM killer.
-          sudo fallocate -l 8G /mnt/e2e.swap && sudo chmod 600 /mnt/e2e.swap
-          sudo mkswap /mnt/e2e.swap >/dev/null && sudo swapon /mnt/e2e.swap
-          nproc && grep -m1 'model name' /proc/cpuinfo && free -m && df -h / /mnt
-      # The guests' vCPUs outnumber the runner's, so a failure may come from the runner itself.
-      - name: Record the runner's load
-        run: nohup vmstat -t -w 15 > "$RUNNER_TEMP/vmstat.txt" 2>&1 &
-      - name: Proxmox VE
-        run: test/e2e/ci/up.sh "$RUNNER_TEMP/e2e"
-      # One nightly job keeps what the others read.
-      - name: Keep Proxmox VE's image
-        if: github.event_name == 'schedule' && matrix.test == 'management-cluster'
-        run: docker save kubehenge-e2e-pve | zstd -T0 -q -o "$RUNNER_TEMP/pve-image.tar.zst"
-      - if: github.event_name == 'schedule' && matrix.test == 'management-cluster'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/pve-image.tar.zst
-          key: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-${{ github.run_id }}
-      - name: ${{ matrix.test }}
-        env:
-          TEST: ${{ matrix.test }}
-        run: test/e2e/ci/run.sh "$RUNNER_TEMP/e2e" "$TEST"
-      - if: >-
-          !cancelled() && github.event_name == 'schedule' && matrix.test == 'management-cluster'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ steps.go-cache.outputs.cache-primary-key }}
-      - name: Collect
-        if: failure()
-        run: |
-          out="$RUNNER_TEMP/artifacts" && mkdir -p "$out"
-          free -m > "$out/memory.txt"; sudo dmesg | tee "$out/dmesg.txt" >/dev/null || true
-          pve() { docker exec kubehenge-e2e-pve "$@"; }
-          pve journalctl -b --no-pager > "$out/proxmox-journal.txt" || true
-          # Proxmox VE logs its API's requests here, not to the journal.
-          pve cat /var/log/pveproxy/access.log > "$out/pveproxy-access.log" || true
-          pve qm list > "$out/vms.txt" || true
-          cp "$RUNNER_TEMP/e2e/apply.log" "$RUNNER_TEMP/vmstat.txt" "$out/" 2>/dev/null || true
-          if [ -f "$RUNNER_TEMP/e2e/kubeconfig.yaml" ]; then
-            export KUBECONFIG="$RUNNER_TEMP/e2e/kubeconfig.yaml"
-            kubectl get clusters,machines,pods -A -o wide \
-              > "$out/management-cluster.txt" 2>&1 || true
-            kubectl get events -A --sort-by=.lastTimestamp > "$out/events.txt" 2>&1 || true
-            # A namespace's conditions say what is left in it and whose finalizers hold that.
-            kubectl get namespaces -o yaml > "$out/namespaces.yaml" 2>&1 || true
-            # A Helm hook's Job fails on its first failed pod, and the pod's status says whether the
-            # command failed or the pod was evicted or never admitted.
-            kubectl get jobs -A -o yaml > "$out/jobs.yaml" 2>&1 || true
-            kubectl get pods -A --field-selector=status.phase=Failed -o yaml \
-              > "$out/failed-pods.yaml" 2>&1 || true
-            # The conditions and failure reasons that say why a machine never came up.
-            kubectl get machines,proxmoxmachines,proxmoxclusters -A -o yaml \
-              > "$out/machines.yaml" 2>&1 || true
-            kubectl get pods -A --no-headers \
-              -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name |
-              grep -E -- '-system ' | while read -r ns pod; do
-                kubectl logs -n "$ns" "$pod" --all-containers --prefix --tail=-1 || true
-              done > "$out/controllers.log" 2>&1
-            # A test can fail inside a workload cluster, such as one that never connects to Rancher:
-            # each cluster still standing, with the logs of Rancher's pods and of every pod that is
-            # not running or has restarted. RKE2's provider leaves its kubeconfig Secrets untyped,
-            # so they are found by the clusters' names.
-            kubectl get clusters -A --no-headers \
-              -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name 2>/dev/null |
-              while read -r ns cluster; do
-                dir="$out/clusters/$ns-$cluster" && mkdir -p "$dir"
-                kubectl -n "$ns" get secret "$cluster-kubeconfig" -o jsonpath='{.data.value}' |
-                  base64 -d > "$RUNNER_TEMP/workload.kubeconfig" || continue
-                k() {
-                  kubectl --kubeconfig "$RUNNER_TEMP/workload.kubeconfig" --request-timeout=20s "$@"
-                }
-                k get nodes,pods -A -o wide > "$dir/resources.txt" 2>&1 || continue
-                k get events -A --sort-by=.lastTimestamp > "$dir/events.txt" 2>&1 || true
-                k get pods -A -o json 2>/dev/null | jq -r '.items[] |
-                  select((.metadata.namespace | startswith("cattle-"))
-                    or (.status.phase | IN("Running", "Succeeded") | not)
-                    or any(.status.containerStatuses[]?; .restartCount > 0)) |
-                  "\(.metadata.namespace) \(.metadata.name)"' | while read -r pns pod; do
-                    k logs -n "$pns" "$pod" --all-containers --prefix --tail=2000 || true
-                    k logs -n "$pns" "$pod" --all-containers --prefix --previous --tail=500 \
-                      2>/dev/null || true
-                  done > "$dir/pods.log" 2>&1
-              done
-            rm -f "$RUNNER_TEMP/workload.kubeconfig"
-          fi
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: failure()
-        with:
-          name: e2e-${{ matrix.test }}
-          path: ${{ runner.temp }}/artifacts
-          retention-days: 7
+    uses: ./.github/workflows/e2e-lane.yml # zizmor: ignore[self-repository]
+    with:
+      test: ${{ matrix.test }}
 
-  # The one check the main branch's ruleset requires: the matrix's jobs differ by event, and a pull
+  # The one check the main branch's ruleset requires: the matrix's tests differ by event, and a pull
   # request of documentation only skips them.
   result:
     name: e2e

@@ -1,11 +1,15 @@
 # eth0 and lo belong to the container runtime. vmbr0 is the VMs' bridge, without DHCP: NAT through
 # eth0, and the host reaches the VMs through the container's address (test/e2e/ci/up.sh).
+# A bridge without a set address takes its lowest port's, so it changes whenever a VM stops,
+# unannounced: the other VMs keep sending to the old one until their ARP entry expires, and the
+# management cluster's API went quiet for 45 seconds that way. hwaddress holds it still.
 
 iface eth0 inet manual
 
 auto vmbr0
 iface vmbr0 inet static
 	address 172.20.99.1/24
+	hwaddress 02:00:ac:14:63:01
 	bridge-ports none
 	bridge-stp off
 	bridge-fd 0

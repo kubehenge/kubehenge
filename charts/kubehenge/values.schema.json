@@ -65,8 +65,9 @@
       "uniqueItems": true
     },
     "image": {
-      "description": "Kubehenge's controller image; empty means the one this chart was released with.",
-      "type": "string"
+      "description": "Kubehenge's controller image by digest, which a release's chart names and a checkout's needs given.",
+      "type": "string",
+      "pattern": "^([^@]+@sha256:[0-9a-f]{64})?$"
     },
     "kubeVip": {
       "description": "kube-vip's image by registry, repository, tag and digest.",
@@ -89,28 +90,27 @@
     "addons": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["headlamp", "rancher", "monitoring", "kyverno", "kyvernoPolicies", "istio", "certManager", "cloudControllerManager", "csiPlugin", "cilium", "calico", "traefik", "metallb", "kubeVip", "kubeVipCloudProvider"],
+      "required": ["headlamp", "rancher", "monitoring", "kyverno", "kyvernoPolicies", "istio", "istioBase", "istioCNI", "istioZtunnel", "certManager", "cloudControllerManager", "csiPlugin", "cilium", "calico", "traefik", "metallb", "kubeVip", "kubeVipCloudProvider"],
       "properties": {
-        "headlamp": {
-          "allOf": [{ "$ref": "#/$defs/chart" }],
-          "required": ["image"],
-          "properties": {
-            "image": {
-              "description": "Headlamp's image by tag and digest, as the chart names it.",
-              "type": "string",
-              "pattern": "^v[0-9][^@]*@sha256:[0-9a-f]{64}$"
-            }
-          },
-          "unevaluatedProperties": false
-        },
+        "headlamp": { "$ref": "#/$defs/chartOnly" },
         "rancher": {
           "allOf": [{ "$ref": "#/$defs/chart" }],
-          "required": ["kubernetes"],
+          "required": ["kubernetes", "turtles"],
           "properties": {
             "kubernetes": {
               "description": "Kubernetes minor versions the Rancher release runs on, as <min>-<max>.",
               "type": "string",
               "pattern": "^[0-9]+-[0-9]+$"
+            },
+            "turtles": {
+              "description": "The images of the Turtles release Rancher installs and of the Cluster API controller it runs.",
+              "type": "object",
+              "required": ["image", "clusterAPI"],
+              "properties": {
+                "image": { "$ref": "#/$defs/pinnedImage" },
+                "clusterAPI": { "$ref": "#/$defs/pinnedImage" }
+              },
+              "additionalProperties": false
             }
           },
           "unevaluatedProperties": false
@@ -129,25 +129,31 @@
         "kyverno": { "$ref": "#/$defs/chartOnly" },
         "kyvernoPolicies": { "$ref": "#/$defs/chartOnly" },
         "istio": { "$ref": "#/$defs/chartOnly" },
+        "istioBase": { "$ref": "#/$defs/chartOnly" },
+        "istioCNI": { "$ref": "#/$defs/chartOnly" },
+        "istioZtunnel": { "$ref": "#/$defs/chartOnly" },
         "certManager": { "$ref": "#/$defs/chartOnly" },
         "cloudControllerManager": { "$ref": "#/$defs/chartOnly" },
         "csiPlugin": { "$ref": "#/$defs/chartOnly" },
         "cilium": { "$ref": "#/$defs/chartOnly" },
-        "calico": { "$ref": "#/$defs/chartOnly" },
-        "traefik": { "$ref": "#/$defs/chartOnly" },
-        "metallb": { "$ref": "#/$defs/chartOnly" },
-        "kubeVip": { "$ref": "#/$defs/chartOnly" },
-        "kubeVipCloudProvider": {
+        "calico": {
           "allOf": [{ "$ref": "#/$defs/chart" }],
-          "required": ["image"],
+          "required": ["images"],
           "properties": {
-            "image": {
-              "description": "kube-vip-cloud-provider's image by registry, repository, tag and digest.",
-              "$ref": "#/$defs/pinnedImage"
+            "images": {
+              "description": "The images the Tigera operator runs Calico from, by registry, repository, tag and digest, all at one release.",
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/pinnedImage" },
+              "uniqueItems": true
             }
           },
           "unevaluatedProperties": false
-        }
+        },
+        "traefik": { "$ref": "#/$defs/chartOnly" },
+        "metallb": { "$ref": "#/$defs/chartOnly" },
+        "kubeVip": { "$ref": "#/$defs/chartOnly" },
+        "kubeVipCloudProvider": { "$ref": "#/$defs/chartOnly" }
       }
     }
   },
@@ -169,7 +175,15 @@
       "properties": {
         "repository": { "type": "string", "pattern": "^(https|oci)://" },
         "chart": { "type": "string", "minLength": 1 },
-        "version": { "type": "string", "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+" }
+        "version": {
+          "description": "The chart's version and the digest it is pulled by, as <version>@sha256:<digest>.",
+          "type": "string",
+          "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+[^@]*@sha256:[0-9a-f]{64}$"
+        },
+        "values": {
+          "description": "Values beneath those Kubehenge gives the chart: the images it runs, each by tag and digest.",
+          "type": "object"
+        }
       }
     },
     "chartOnly": {

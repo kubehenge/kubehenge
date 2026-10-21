@@ -34,7 +34,8 @@ to=$(sed -n 's/^ *kubernetes *= *"\(v[^"]*\)".*/\1/p' "${repo}/management-cluste
 [ -n "${to}" ]
 
 mkdir -p "${work}/mgmt" "${work}/plugins"
-cp "${repo}/test/e2e/ci/main.tf" "${work}/mgmt/"
+# OpenTofu reads only the root module's lock, so the module's own checks the providers.
+cp "${repo}/test/e2e/ci/main.tf" "${repo}/management-cluster/.terraform.lock.hcl" "${work}/mgmt/"
 export TF_PLUGIN_CACHE_DIR="${work}/plugins"
 export TF_VAR_repository="${repo}" TF_VAR_proxmox_api_token="${KUBEHENGE_PROXMOX_TOKEN}"
 TF_VAR_proxmox_ca_certificate=$(cat "${KUBEHENGE_PROXMOX_CA}")
@@ -47,8 +48,10 @@ done
 cat "${bundle}" "${KUBEHENGE_PROXMOX_CA}" > "${work}/ca-bundle.pem"
 export SSL_CERT_FILE="${work}/ca-bundle.pem"
 
+# The host's CPU: told of a generic one, the guests' kernels run Meltdown's and MDS's mitigations,
+# which under nested virtualisation slow them on Intel runners until a worker loses its API server.
 template() { # distribution [flags]
-    "${repo}/dist/kubehenge" template create "$@" --node "${KUBEHENGE_E2E_NODE}" --storage local \
+    "${repo}/dist/kubehenge" template create "$@" --cpu-type host --node "${KUBEHENGE_E2E_NODE}" --storage local \
         --build-address "${KUBEHENGE_E2E_ADDRESS}" --build-gateway "${KUBEHENGE_E2E_GATEWAY}" \
         --build-dns "${KUBEHENGE_E2E_DNS}"
 }
@@ -163,7 +166,7 @@ case "${test}" in
     *) export TF_VAR_node_cores=2 ;;
 esac
 
-tofu -chdir="${work}/mgmt" init -input=false > /dev/null
+tofu -chdir="${work}/mgmt" init -input=false -lockfile=readonly > /dev/null
 if ! tofu -chdir="${work}/mgmt" apply -input=false -auto-approve -no-color > "${work}/apply.log"; then
     tail -n 50 "${work}/apply.log" >&2
     # A failed apply can still leave the management cluster up, and the job's artifacts then come

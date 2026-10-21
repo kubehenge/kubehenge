@@ -359,7 +359,7 @@ func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster
 	if err != nil {
 		return false, err
 	}
-	secrets, err := resourceSetSecrets(cluster, resources, cni, addons)
+	secrets, err := resourceSetSecrets(cluster, resources, cni, addons, r.Charts.CalicoImages)
 	if err != nil {
 		return false, err
 	}
@@ -384,11 +384,11 @@ func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster
 // resourceSetSecrets are the Secrets of the cluster's ClusterResourceSet: its Proxmox VE Secret,
 // Calico's resources when Kubehenge installs Calico, and the configuration of the distribution's
 // own Cilium when it runs that.
-func resourceSetSecrets(cluster *clusterv1.Cluster, resources *corev1.Secret, cni CNI, addons *Addons) ([]*corev1.Secret, error) {
+func resourceSetSecrets(cluster *clusterv1.Cluster, resources *corev1.Secret, cni CNI, addons *Addons, calicoImages []Image) ([]*corev1.Secret, error) {
 	secrets := []*corev1.Secret{resources}
 	switch {
 	case cni.Name == cniCalico:
-		calico, err := calicoResources(cluster, cni)
+		calico, err := calicoResources(cluster, cni, calicoImages)
 		if err != nil {
 			return nil, err
 		}
@@ -408,12 +408,19 @@ func resourceSetSecrets(cluster *clusterv1.Cluster, resources *corev1.Secret, cn
 func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluster, proxies []*unstructured.Unstructured) (bool, error) {
 	waiting := false
 	for _, p := range proxies {
-		if p.GetName() == kyvernoPoliciesProxy(cluster) {
-			wait, err := r.policiesWait(ctx, cluster)
+		var wait func(context.Context, *clusterv1.Cluster) (bool, error)
+		switch p.GetName() {
+		case kyvernoPoliciesProxy(cluster):
+			wait = r.policiesWait
+		case rancherProxy(cluster):
+			wait = r.rancherConfigWaits
+		}
+		if wait != nil {
+			waits, err := wait(ctx, cluster)
 			if err != nil {
 				return false, err
 			}
-			if wait {
+			if waits {
 				waiting = true
 				continue
 			}

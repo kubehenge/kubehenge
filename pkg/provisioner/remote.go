@@ -16,8 +16,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// remoteScheme holds the types read in workload clusters: Secrets, persistent volumes, certificate
-// signing requests and network policies, and Rancher's own through unstructured objects.
+// remoteScheme holds the types read and written in workload clusters: Secrets, ConfigMaps and the
+// other core types, persistent volumes, certificate signing requests and network policies, and
+// Rancher's own through unstructured objects.
 var remoteScheme = func() *runtime.Scheme {
 	s := runtime.NewScheme()
 	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, storagev1.AddToScheme, certificatesv1.AddToScheme, networkingv1.AddToScheme} {

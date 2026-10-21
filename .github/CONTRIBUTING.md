@@ -15,12 +15,12 @@ Kubehenge creates, scales, upgrades and removes Kubernetes clusters on Proxmox V
 | `web/` | the interface's frontend, React and TypeScript, built by `make web` into `pkg/ui/dist` and embedded in the binary |
 | `appliance/` | the appliance's install script and service units; `appliance/pve-entry/`, the optional entry in Proxmox VE's own interface |
 | `test/integration/`, `test/e2e/` | the integration tier's assets; the end-to-end tests, run against a Proxmox VE host |
-| `scripts/` | the pinned tools `make test` needs besides Go and Node (`tools.sh`); the image builds of capmox and the Add-on Provider for Helm (`provider-image.sh`) and the fixes they carry (`capmox-patches/`, `helm-addon-patches/`) |
+| `scripts/` | the pinned tools `make test` needs, Go and Node among them (`tools.sh`), and the Python linters' lock file (`lint/`); the image builds of capmox and the Add-on Provider for Helm (`provider-image.sh`) and the fixes they carry (`capmox-patches/`, `helm-addon-patches/`) |
 | `.github/` | CI on every pull request, the release workflow, issue templates, this guide and the security policy (`SECURITY.md`) |
 
 ## Working on it
 
-`scripts/tools.sh <dir>` installs the pinned tools; with them, Go, Node and uv on PATH, `make test` runs every lint and unit test, as CI does on each pull request, and `make fmt` formats what the checks would refuse. `make build` builds the `kubehenge` binary with the interface embedded.
+`scripts/tools.sh <dir>` installs the pinned tools, Go, Node and uv among them; with them on PATH, `make test` runs every lint and unit test, as CI does on each pull request, and `make fmt` formats what the checks would refuse. `make build` builds the `kubehenge` binary with the interface embedded.
 
 ## Design
 
@@ -40,6 +40,7 @@ Details and reasons: `docs/architecture.md`.
 - **Supported means tested.** A ClusterClass or add-on counts as supported only once end-to-end tests in CI have created, scaled, upgraded and deleted a cluster with it on Proxmox VE (`docs/testing.md`).
 - **Upstream first.** Use the maintained upstream Cluster API providers, charts and images; Kubehenge assembles and tests them rather than forking them. Fixes that belong upstream go upstream.
 - **Newest versions.** Providers, charts and tooling track their latest release; a pin below latest carries the reason beside it. Renovate (`renovate.json`) proposes every update in one pull request each week. A version it cannot find on its own gets a `# renovate: datasource=… depName=…` comment on the line above, and a download's SHA-256 goes on the line below its tag, so the two move together.
+- **Pinned by digest.** Everything Kubehenge pulls or deploys (images, charts, manifests, OS images, downloads, tools) is pinned by its digest as well as its version, and Renovate moves the two together. Where a consumer takes only a version, Kubehenge gives it the digest beside the version and makes it pull by the digest or check it. Where the publisher's bytes change under a version, its signature is required instead; the few left with neither are named in `docs/architecture.md`. An image that another release names for itself (Rancher's webhook, Fleet, shell and Turtles; the FRR of MetalLB's chart) has no Renovate comment and moves only with that release, as Renovate's pull request for it says.
 - **Strictest checks.** Every linter, formatter and type checker runs at its strictest setting. A rule is switched off only where it contradicts another or the language's own conventions, and a single finding is suppressed only where the rule is wrong for that line; either way the reason stands beside it.
 - **Logs escape what they carry.** Go code logs through `log/slog` and the controller through controller-runtime's zap in JSON, both of which escape a value, so nothing a user sends can forge a log line; the linters refuse the `log` package and zap's console output, and CodeQL's log injection query is off on that account (`.github/codeql-config.yml`).
 - **Releases are signed.** Each release publishes the appliance archive and `index.json`, listing every release's archive URL and SHA-256 and signed offline with Kubehenge's release key. The public key is `pkg/release/release.pub`, built into every release; appliances install nothing the key has not signed, and never an older release. The release workflow builds everything and leaves a draft; the steps are in `docs/releasing.md`.

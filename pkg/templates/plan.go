@@ -6,6 +6,7 @@ package templates
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -36,10 +37,18 @@ const (
 	DefaultOS = "ubuntu-26.04"
 )
 
-// OperatingSystems maps each supported cloud image to its Ubuntu release codename.
-var OperatingSystems = map[string]string{
-	"ubuntu-26.04": "resolute",
-	"ubuntu-24.04": "noble",
+// UbuntuRelease is an Ubuntu release and the build of its cloud image templates are made from.
+type UbuntuRelease struct {
+	Codename string
+	// Build names the build's directory on cloud-images.ubuntu.com, which never changes once
+	// published, and whose SHA256SUMS Ubuntu signs.
+	Build string
+}
+
+// OperatingSystems maps each supported cloud image to its Ubuntu release.
+var OperatingSystems = map[string]UbuntuRelease{
+	"ubuntu-26.04": {Codename: "resolute", Build: "20260927"},
+	"ubuntu-24.04": {Codename: "noble", Build: "20261017"},
 }
 
 // Request asks for the template of one distribution.
@@ -164,11 +173,6 @@ func ParseTags(s string) []string {
 	return NormaliseTags(strings.FieldsFunc(s, func(r rune) bool { return r == ';' || r == ',' || r == ' ' }))
 }
 
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	return keys
+func sortedKeys[V any](m map[string]V) []string {
+	return slices.Sorted(maps.Keys(m))
 }

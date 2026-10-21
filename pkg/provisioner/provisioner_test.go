@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -181,50 +182,134 @@ func TestResourceSetSecret(t *testing.T) {
 	}
 }
 
+var rancherAgentEnv = map[string]any{
+	"name": "CATTLE_AGENT_IMAGE", "value": "rancher/rancher-agent:v2.15.2@sha256:fb006776b7ee42818ed1e2575bc2015e33ec64d6799545ba72e4297e43ce22a3",
+}
+
 var testCharts = Charts{
-	CCM:    Chart{Repository: "oci://ghcr.io/sergelogvinov/charts", Name: "proxmox-cloud-controller-manager", Version: "0.2.32"},
-	CSI:    Chart{Repository: "oci://ghcr.io/sergelogvinov/charts", Name: "proxmox-csi-plugin", Version: "0.5.12"},
-	Cilium: Chart{Repository: "https://helm.cilium.io", Name: "cilium", Version: "1.20.2"},
-	Calico: Chart{Repository: "https://docs.tigera.io/calico/charts", Name: "tigera-operator", Version: "v3.33.0"},
+	CCM: Chart{
+		Repository: "oci://ghcr.io/sergelogvinov/charts", Name: "proxmox-cloud-controller-manager", Version: "0.2.32",
+		Digest: "2e7fbb98e1554d198d28b0f1365d1391bc646664cbaba2628b7f3031c4a66308",
+	},
+	CSI: Chart{
+		Repository: "oci://ghcr.io/sergelogvinov/charts", Name: "proxmox-csi-plugin", Version: "0.5.12",
+		Digest: "bbd954924333b2c6dd0a01ed6b347f0798c4ed9f2de99b0c3d0bcef3e9f9efdd",
+	},
+	Cilium: Chart{
+		Repository: "https://helm.cilium.io", Name: "cilium", Version: "1.20.3",
+		Digest: "0805a5273118c436c9772bb9566d87ec558d8b25cc2ce5dc32918ecdd36f2c7c",
+	},
+	Calico: Chart{
+		Repository: "https://docs.tigera.io/calico/charts", Name: "tigera-operator", Version: "v3.33.0",
+		Digest: "efcc8633742c136708cd8de9673862c6eee3a91ed176d7f2835690ab625ad846",
+	},
+	CalicoImages: []Image{
+		{Registry: "quay.io", Repository: "calico/calico", Tag: "v3.33.0", Digest: "4ebc20730127bc9e8bf1db5f5a2d8b58cf37fe0e891b3c7b5471992221d213e5"},
+		{Registry: "quay.io", Repository: "calico/node", Tag: "v3.33.0", Digest: "565d8db3200e443955557f8f28ff44ab8a4a456754bc74a19c4f2f3444af9b1c"},
+	},
 
-	Headlamp:      Chart{Repository: "https://kubernetes-sigs.github.io/headlamp", Name: "headlamp", Version: "0.45.0"},
-	HeadlampImage: "v0.45.0@sha256:db3f0e0fc58d358d41daa3fe7fc852437552c7ee873c3645470f7b86a8e0db49",
+	Headlamp: Chart{
+		Repository: "https://kubernetes-sigs.github.io/headlamp", Name: "headlamp", Version: "0.46.0",
+		Digest: "faa471a8c5c55125b3dceed1cf73000e1ced18f07e2088e5e12e75292fb9ae62",
+		Values: map[string]any{"image": map[string]any{"tag": "v0.46.0@sha256:8a0ef97527544baa2b35825940ddf4db6e2d09c30cd5aa31fd269ff604cc8b75"}},
+	},
 
-	CertManager: Chart{Repository: "https://charts.jetstack.io", Name: "cert-manager", Version: "v1.21.2"},
-	Monitoring:  Chart{Repository: "https://prometheus-community.github.io/helm-charts", Name: "kube-prometheus-stack", Version: "92.10.1"},
+	Rancher: Chart{
+		Repository: "https://releases.rancher.com/server-charts/stable", Name: "rancher", Version: "2.15.2",
+		Digest: "855cb9be954f65a31b9a8c77f7aebce125c2d7797425257d21d35e3380816ac8",
+		Values: map[string]any{"extraEnv": []any{rancherAgentEnv}},
+	},
+	Turtles: Image{
+		Registry: "docker.io", Repository: "rancher/turtles", Tag: "v0.27.2",
+		Digest: "fff10f34feffcf0fc583ffb51975e9e6f2839c65d54f96668790bbb770456512",
+	},
+	TurtlesClusterAPI: Image{
+		Registry: "docker.io", Repository: "rancher/cluster-api-controller", Tag: "v1.13.3",
+		Digest: "80f8775553807ddba520dcbfd84da42fbfdfbd36036fc2f9238b1ad423649309",
+	},
+	CertManager: Chart{
+		Repository: "https://charts.jetstack.io", Name: "cert-manager", Version: "v1.21.2",
+		Digest: "73a56e1728edd6c99f1f31082618c3259d279a76b7ebd3d4bdc5475c2442d34a",
+	},
+	Monitoring: Chart{
+		Repository: "https://prometheus-community.github.io/helm-charts", Name: "kube-prometheus-stack", Version: "92.10.1",
+		Digest: "0d16c44e941372400ee8bcdc232ebee957eefcc910f8833767d8b94145f20094",
+	},
 	KubeRBACProxy: Image{
 		Registry: "ghcr.io", Repository: "kube-rbac-proxy/kube-rbac-proxy", Tag: "v0.23.0",
 		Digest: "296fd0a10fb635414b4533b983f0d5a686ce0ce73567b7079b6595ba75034f1a",
 	},
-	Kyverno:         Chart{Repository: "https://kyverno.github.io/kyverno", Name: "kyverno", Version: "3.9.1"},
-	KyvernoPolicies: Chart{Repository: "https://kyverno.github.io/kyverno", Name: "kyverno-policies", Version: "3.9.1"},
-	Istio:           Chart{Repository: "oci://ghcr.io/istio/release/charts", Name: "istiod", Version: "1.31.2"},
-	Traefik:         Chart{Repository: "https://traefik.github.io/charts", Name: "traefik", Version: "42.0.0"},
-	MetalLB:         Chart{Repository: "https://metallb.github.io/metallb", Name: "metallb", Version: "0.16.1"},
-	KubeVip:         Chart{Repository: "https://kube-vip.github.io/helm-charts", Name: "kube-vip", Version: "0.11.1"},
+	Kyverno: Chart{
+		Repository: "https://kyverno.github.io/kyverno", Name: "kyverno", Version: "3.9.1",
+		Digest: "7b7fe51a431b5b133b0ce7eb9dcb222b6a37fb967c163223cf480054ad14d752",
+	},
+	KyvernoPolicies: Chart{
+		Repository: "https://kyverno.github.io/kyverno", Name: "kyverno-policies", Version: "3.9.1",
+		Digest: "42078dacb0954041a00b3f2f086bf1a2b5d6588ff5ac42ee7fbecc3148f6fb7d",
+	},
+	Istio: Chart{
+		Repository: "oci://ghcr.io/istio/release/charts", Name: "istiod", Version: "1.31.2",
+		Digest: "92c8b0ab5c67dbd750e5625bc3dd7f7c995287079c36279ea649178adc5afa41",
+	},
+	IstioBase: Chart{
+		Repository: "oci://ghcr.io/istio/release/charts", Name: "base", Version: "1.31.2",
+		Digest: "4e992fddb71ace84e46dc1eb8309402a20aa869d46c20f95bd64f12826bd842a",
+	},
+	IstioCNI: Chart{
+		Repository: "oci://ghcr.io/istio/release/charts", Name: "cni", Version: "1.31.2",
+		Digest: "652d40a1d666c07bfeb346c84b66de30b656ac515f150e9ab32fd4dead25a636",
+	},
+	IstioZtunnel: Chart{
+		Repository: "oci://ghcr.io/istio/release/charts", Name: "ztunnel", Version: "1.31.2",
+		Digest: "cf3ac400874dc6bdf7affb1396dde3a46c10f1a60fb9542c65d2b6fc02de376c",
+	},
+	Traefik: Chart{
+		Repository: "https://traefik.github.io/charts", Name: "traefik", Version: "42.0.0",
+		Digest: "a6ede324662ddcca0160a5ce639b7b5b9dd40a20a475e1101e9f95b5e5d83dd5",
+	},
+	MetalLB: Chart{
+		Repository: "https://metallb.github.io/metallb", Name: "metallb", Version: "0.16.1",
+		Digest: "fb06bb584fcb7856f15733b2a6a2aff5b61b5c350687e341c163ae24a5938adc",
+	},
+	KubeVip: Chart{
+		Repository: "https://kube-vip.github.io/helm-charts", Name: "kube-vip", Version: "0.11.1",
+		Digest: "739401e81471d2d485df614d484aecbf8364ca5c4cab0f998631394d75b9e1dd",
+	},
 	KubeVipImage: Image{
 		Registry: "ghcr.io", Repository: "kube-vip/kube-vip", Tag: "v1.3.1",
 		Digest: "1962f9daf226503f7e6b107f595cb28b7917fd2d0113957075e19a3e5a6c1e33",
 	},
-	KubeVipCloudProvider: Chart{Repository: "https://kube-vip.github.io/helm-charts", Name: "kube-vip-cloud-provider", Version: "0.2.10"},
-	KubeVipCloudProviderImage: Image{
-		Registry: "ghcr.io", Repository: "kube-vip/kube-vip-cloud-provider", Tag: "v0.0.13",
-		Digest: "b8b6a5180e678b410e2c5dba86b87fa8099ada16e2f067d83f04e749f8ea54ab",
+	KubeVipCloudProvider: Chart{
+		Repository: "https://kube-vip.github.io/helm-charts", Name: "kube-vip-cloud-provider", Version: "0.2.10",
+		Digest: "6a9c9d7540cd3d7a4ebfaf205c4df07c809b19b463e6a764d59c011387d2695e",
+		Values: map[string]any{"image": map[string]any{
+			"repository": "ghcr.io/kube-vip/kube-vip-cloud-provider",
+			"tag":        "v0.0.13@sha256:b8b6a5180e678b410e2c5dba86b87fa8099ada16e2f067d83f04e749f8ea54ab",
+		}},
 	},
 	PodSecurityExempt: []string{"kube-system", "node-exporter"},
 }
 
 func TestParseChart(t *testing.T) {
 	t.Parallel()
+	const digest = "@sha256:0805a5273118c436c9772bb9566d87ec558d8b25cc2ce5dc32918ecdd36f2c7c"
 	for s, want := range map[string]Chart{
-		"oci://ghcr.io/sergelogvinov/charts/proxmox-csi-plugin:0.5.12": testCharts.CSI,
-		"https://helm.cilium.io/cilium:1.20.2":                         testCharts.Cilium,
+		"oci://ghcr.io/sergelogvinov/charts/proxmox-csi-plugin:0.5.12@sha256:" + testCharts.CSI.Digest: testCharts.CSI,
+		"https://helm.cilium.io/cilium:1.20.3" + digest:                                                testCharts.Cilium,
 	} {
-		if got, err := ParseChart(s); err != nil || got != want {
+		if got, err := ParseChart(s); err != nil || !reflect.DeepEqual(got, want) || !strings.HasSuffix(s, "/"+got.Name+":"+got.pinnedVersion()) {
 			t.Errorf("%s: got %+v, %v", s, got, err)
 		}
 	}
-	for _, bad := range []string{"cilium:1.20.2", "https://helm.cilium.io/cilium", "https://helm.cilium.io/:1"} {
+	for _, bad := range []string{
+		"cilium:1.20.3" + digest,
+		"https://helm.cilium.io/cilium" + digest,
+		"https://helm.cilium.io/:1" + digest,
+		"https://helm.cilium.io/cilium:1.20.3",
+		"https://helm.cilium.io/cilium:" + digest,
+		"https://helm.cilium.io/cilium:1.20.3@sha256:0805",
+		"https://helm.cilium.io/cilium:1.20.3@sha256:0805A5273118C436C9772BB9566D87EC558D8B25CC2CE5DC32918ECDD36F2C7C",
+	} {
 		if _, err := ParseChart(bad); err == nil {
 			t.Errorf("%q: no error", bad)
 		}
@@ -301,7 +386,7 @@ func TestIngressControllerOnKubeadmOnly(t *testing.T) {
 			}
 			continue
 		}
-		if spec == nil || spec["chartName"] != testCharts.Traefik.Name || spec["version"] != testCharts.Traefik.Version || spec["namespace"] != "kube-system" {
+		if spec == nil || spec["chartName"] != testCharts.Traefik.Name || spec["version"] != "42.0.0@sha256:"+testCharts.Traefik.Digest || spec["namespace"] != "kube-system" {
 			t.Fatalf("kubeadm's ingress controller: %v", spec)
 		}
 		var values map[string]any
@@ -326,7 +411,7 @@ func TestCalicoResources(t *testing.T) {
 	t.Parallel()
 	manifest := func(t *testing.T, c *clusterv1.Cluster, cni CNI) []map[string]any {
 		t.Helper()
-		s, err := calicoResources(c, cni)
+		s, err := calicoResources(c, cni, testCharts.CalicoImages)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -350,15 +435,23 @@ func TestCalicoResources(t *testing.T) {
 	kinds := make([]string, 0, len(docs))
 	for _, d := range docs {
 		kinds = append(kinds, lookup[string](t, d, "kind"))
-		if d["apiVersion"] != "operator.tigera.io/v1" || lookup[string](t, d, "metadata", "name") != "default" {
+		want := "default"
+		if d["kind"] == "ImageSet" {
+			want = "calico-v3.33.0"
+		}
+		if d["apiVersion"] != "operator.tigera.io/v1" || lookup[string](t, d, "metadata", "name") != want {
 			t.Errorf("resource %v", d)
 		}
 	}
-	if strings.Join(kinds, ",") != "Installation,APIServer,Goldmane,Whisker" {
+	if strings.Join(kinds, ",") != "ImageSet,Installation,APIServer,Goldmane,Whisker" {
 		t.Errorf("kinds %v", kinds)
 	}
+	if image := lookup[map[string]any](t, docs[0], "spec", "images", 1); image["image"] != "calico/node" ||
+		image["digest"] != "sha256:565d8db3200e443955557f8f28ff44ab8a4a456754bc74a19c4f2f3444af9b1c" {
+		t.Errorf("ImageSet %v", docs[0])
+	}
 	network := func(docs []map[string]any) map[string]any {
-		return lookup[map[string]any](t, docs[0], "spec", "calicoNetwork")
+		return lookup[map[string]any](t, docs[1], "spec", "calicoNetwork")
 	}
 	if pool := lookup[map[string]any](t, network(docs), "ipPools", 0); pool["cidr"] != "10.50.0.0/16" {
 		t.Errorf("pool %v ignores the cluster's own range", pool)
@@ -373,8 +466,25 @@ func TestCalicoResources(t *testing.T) {
 	if network(docs)["containerIPForwarding"] != "Enabled" {
 		t.Error("pods may not forward although the class asks")
 	}
-	if _, err := calicoResources(cluster(), CNI{Name: "calico"}); err == nil {
+	if _, err := calicoResources(cluster(), CNI{Name: "calico"}, testCharts.CalicoImages); err == nil {
 		t.Error("no error without a pod range")
+	}
+}
+
+func TestParseCalicoImages(t *testing.T) {
+	t.Parallel()
+	const node = "quay.io/calico/node:v3.33.0@sha256:565d8db3200e443955557f8f28ff44ab8a4a456754bc74a19c4f2f3444af9b1c"
+	if images, err := ParseCalicoImages([]string{node}); err != nil || len(images) != 1 || images[0].Repository != "calico/node" {
+		t.Errorf("images %v, %v", images, err)
+	}
+	for name, refs := range map[string][]string{
+		"none":         nil,
+		"no digest":    {"quay.io/calico/node:v3.33.0"},
+		"two releases": {node, "quay.io/calico/calico:v3.32.1@sha256:4ebc20730127bc9e8bf1db5f5a2d8b58cf37fe0e891b3c7b5471992221d213e5"},
+	} {
+		if _, err := ParseCalicoImages(refs); err == nil {
+			t.Errorf("%s: no error", name)
+		}
 	}
 }
 
@@ -445,6 +555,28 @@ func headlampProxyValues(t *testing.T, h Headlamp) (map[string]any, map[string]a
 		t.Fatal(err)
 	}
 	return spec, values
+}
+
+func TestChartValuesLieBeneathKubehenges(t *testing.T) {
+	t.Parallel()
+	base := map[string]any{
+		"image":    map[string]any{"repository": "example.test/a", "tag": "v1@sha256:0805"},
+		"replicas": 1,
+		"keep":     "base",
+	}
+	got := overlay(base, map[string]any{"image": map[string]any{"pullPolicy": "Always"}, "replicas": 3, "own": true})
+	want := map[string]any{
+		"image":    map[string]any{"repository": "example.test/a", "tag": "v1@sha256:0805", "pullPolicy": "Always"},
+		"replicas": 3,
+		"keep":     "base",
+		"own":      true,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("overlay = %v, want %v", got, want)
+	}
+	if image, ok := base["image"].(map[string]any); !ok || len(image) != 2 {
+		t.Errorf("the chart's own values changed: %v", base)
+	}
 }
 
 func TestHeadlampHasNoRightsOfItsOwn(t *testing.T) {

@@ -154,12 +154,21 @@ func TestClusterOIDC(t *testing.T) {
 	}
 }
 
+const moduleLock = "provider \"registry.opentofu.org/bpg/proxmox\" {}\n"
+
 func newAppliance(t *testing.T) (*Appliance, chan []byte) {
 	t.Helper()
 	ready := make(chan []byte, 1)
+	module := filepath.Join(t.TempDir(), "management-cluster")
+	if err := os.Mkdir(module, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(module, ".terraform.lock.hcl"), []byte(moduleLock), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	a := &Appliance{
 		Dir:        t.TempDir(),
-		Module:     "/usr/share/kubehenge/management-cluster",
+		Module:     module,
 		Tofu:       fakeTofu,
 		ProxmoxURL: "https://pve.example:8006",
 		ProxmoxCA:  "-----BEGIN CERTIFICATE-----\n",
@@ -219,7 +228,7 @@ func TestApply(t *testing.T) {
 	}
 
 	main, err := os.ReadFile(filepath.Join(a.Dir, "management", "main.tf"))
-	if err != nil || !strings.Contains(string(main), `source = "/usr/share/kubehenge//management-cluster"`) {
+	if err != nil || !strings.Contains(string(main), `source = "`+filepath.ToSlash(filepath.Dir(a.Module))+`//management-cluster"`) {
 		t.Fatalf("main.tf: %v\n%s", err, main)
 	}
 	vars, err := os.ReadFile(filepath.Join(a.Dir, "management", "terraform.tfvars.json"))
@@ -258,6 +267,43 @@ func TestApply(t *testing.T) {
 		if strings.Contains(env, "KUBEHENGE_UNRELATED_SECRET") {
 			t.Errorf("tofu %v saw the appliance's own environment", rec.Args)
 		}
+	}
+}
+
+func TestApplyHoldsTheProvidersToTheModulesLock(t *testing.T) {
+	t.Parallel()
+	a, ready := newAppliance(t)
+	if err := a.Apply(settings("pve1"), "correct horse battery staple", ticket(), func(_ context.Context, k []byte) error { ready <- k; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if j := waitFor(t, a); j.State != "succeeded" {
+		t.Fatalf("job = %+v", j)
+	}
+	lock, err := os.ReadFile(filepath.Join(a.Dir, "management", ".terraform.lock.hcl"))
+	if err != nil || string(lock) != moduleLock {
+		t.Fatalf("the root module's lock: %v\n%s", err, lock)
+	}
+	log, err := os.ReadFile(filepath.Join(a.Dir, "fake-tofu.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inits := 0
+	for run := range strings.SplitSeq(strings.TrimSpace(string(log)), "\n") {
+		var rec struct {
+			Args []string `json:"args"`
+		}
+		if err := json.Unmarshal([]byte(run), &rec); err != nil {
+			t.Fatal(err)
+		}
+		if rec.Args[0] == "init" {
+			inits++
+			if !slices.Contains(rec.Args, "-lockfile=readonly") {
+				t.Errorf("tofu %v may change the providers' lock", rec.Args)
+			}
+		}
+	}
+	if inits == 0 {
+		t.Fatal("no tofu init")
 	}
 }
 

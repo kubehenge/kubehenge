@@ -19,14 +19,28 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["kind", "name", "namespace", "spec"],
+        "required": ["kind", "name", "namespace", "spec", "manifests"],
         "properties": {
           "kind": {
             "enum": ["CoreProvider", "BootstrapProvider", "ControlPlaneProvider", "InfrastructureProvider", "IPAMProvider", "AddonProvider"]
           },
           "name": { "$ref": "#/$defs/name" },
           "namespace": { "$ref": "#/$defs/name" },
-          "spec": { "type": "object" }
+          "spec": {
+            "type": "object",
+            "required": ["version", "fetchConfig"],
+            "properties": { "version": { "type": "string" } }
+          },
+          "manifests": {
+            "description": "The files the operator installs the provider from, which the release's hook downloads and checks for it.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["metadata", "components"],
+            "properties": {
+              "metadata": { "$ref": "#/$defs/file" },
+              "components": { "$ref": "#/$defs/file" }
+            }
+          }
         }
       }
     },
@@ -45,9 +59,9 @@
       }
     },
     "image": {
-      "description": "Kubehenge's controller image, whose `kubehenge wait` the release's hooks run.",
+      "description": "Kubehenge's controller image by digest, whose `kubehenge manifests` and `kubehenge wait` the release's hooks run.",
       "type": "string",
-      "minLength": 1
+      "pattern": "^[^@]+@sha256:[0-9a-f]{64}$"
     },
     "waitTimeoutSeconds": {
       "type": "integer",
@@ -55,6 +69,11 @@
     }
   },
   "$defs": {
+    "file": {
+      "description": "A file by its address and SHA-256.",
+      "type": "string",
+      "pattern": "^https://[^@\\s]+@sha256:[0-9a-f]{64}$"
+    },
     "name": {
       "description": "A Kubernetes object or namespace name.",
       "type": "string",

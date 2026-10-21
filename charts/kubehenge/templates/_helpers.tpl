@@ -651,8 +651,10 @@ Call with the root context.
           valueFrom:
             variable: network.dnsServers
 # The controller names the nodes capmox may use, the allowed ones that are online: capmox clones
-# onto the template's node when given none, and places no VM while a node it is given is down.
-- name: proxmox-placement
+# onto the template's node when given none, and places no VM while a node it is given is down. On
+# RKE2 and k3s it also has every node install its release from files checked against the checksums
+# recorded when a cluster first used the release, as neither project signs them.
+- name: controller
   external:
     generatePatchesExtension: generate-patches.kubehenge
 - name: proxmox-machines

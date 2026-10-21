@@ -88,7 +88,7 @@ func ParseImage(s string) (Image, error) {
 	name, digest, ok := strings.Cut(s, "@sha256:")
 	registry, path, ok2 := strings.Cut(name, "/")
 	at := strings.LastIndex(path, ":")
-	if !ok || !ok2 || digest == "" || at <= 0 || at == len(path)-1 {
+	if !ok || !ok2 || !isDigest(digest) || at <= 0 || at == len(path)-1 {
 		return Image{}, fmt.Errorf("%q is not <registry>/<repository>:<tag>@sha256:<digest>", s)
 	}
 	return Image{Registry: registry, Repository: path[:at], Tag: path[at+1:], Digest: digest}, nil

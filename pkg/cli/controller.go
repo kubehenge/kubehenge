@@ -2,10 +2,13 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -70,17 +73,23 @@ type controllerOptions struct {
 	certManagerChart  string
 	rancherChart      string
 	rancherKubernetes string
+	turtlesImage      string
+	turtlesCAPIImage  string
 	monitoringChart   string
 	kubeRBACProxy     string
 	kyvernoChart      string
 	kyvernoPolicies   string
 	istioChart        string
+	istioBaseChart    string
+	istioCNIChart     string
+	istioZtunnelChart string
 	traefikChart      string
 	metalLBChart      string
 	kubeVipChart      string
 	kubeVipImage      string
 	kubeVipCloudChart string
-	kubeVipCloudImage string
+	chartValues       string
+	calicoImages      []string
 	extensionConfig   string
 	upgradeInterval   time.Duration
 	classProviders    []string
@@ -115,26 +124,31 @@ separate nodes.`,
 	f.StringVar(&o.settings.Role, "cluster-role", "kubehenge-cluster", "Proxmox VE role each cluster's user gets on its own pool")
 	f.StringVar(&o.settings.Node, "volume-owner-node", "", "Proxmox VE node for the VMs that own clusters' volumes; default the first online node")
 	f.StringVar(&o.settings.Region, "region", "", "region the clusters see Proxmox VE as; default the Proxmox VE cluster's name")
-	f.StringVar(&o.ccmChart, "ccm-chart", "", "cloud controller manager chart, as <repository>/<name>:<version>")
-	f.StringVar(&o.csiChart, "csi-chart", "", "CSI plugin chart, as <repository>/<name>:<version>")
-	f.StringVar(&o.ciliumChart, "cilium-chart", "", "Cilium chart, for distributions without a CNI of their own, as <repository>/<name>:<version>")
-	f.StringVar(&o.calicoChart, "calico-chart", "", "Calico's operator chart, for distributions without a CNI of their own, as <repository>/<name>:<version>")
-	f.StringVar(&o.headlampChart, "headlamp-chart", "", "Headlamp chart, for clusters that switch it on, as <repository>/<name>:<version>")
-	f.StringVar(&o.r.Charts.HeadlampImage, "headlamp-image", "", "Headlamp image tag with its digest, as <tag>@sha256:<digest>")
-	f.StringVar(&o.certManagerChart, "cert-manager-chart", "", "cert-manager chart, installed with Rancher and with monitoring, as <repository>/<name>:<version>")
-	f.StringVar(&o.rancherChart, "rancher-chart", "", "Rancher chart, for the cluster that installs it, as <repository>/<name>:<version>")
+	f.StringVar(&o.ccmChart, "ccm-chart", "", "cloud controller manager chart, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.csiChart, "csi-chart", "", "CSI plugin chart, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.ciliumChart, "cilium-chart", "", "Cilium chart, for distributions without a CNI of their own, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.calicoChart, "calico-chart", "", "Calico's operator chart, for distributions without a CNI of their own, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.headlampChart, "headlamp-chart", "", "Headlamp chart, for clusters that switch it on, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringSliceVar(&o.calicoImages, "calico-images", nil, "the images the Tigera operator runs Calico from, all at its release, as <registry>/<repository>:<tag>@sha256:<digest> (comma-separated)")
+	f.StringVar(&o.chartValues, "chart-values", "{}", "values beneath those Kubehenge gives each chart, naming its images by digest, as a JSON object by chart flag without -chart, such as {\"cert-manager\":{...}}")
+	f.StringVar(&o.certManagerChart, "cert-manager-chart", "", "cert-manager chart, installed with Rancher and with monitoring, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.rancherChart, "rancher-chart", "", "Rancher chart, for the cluster that installs it, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.rancherKubernetes, "rancher-kubernetes", "", "Kubernetes minor versions the Rancher chart runs on, as <min>-<max>, such as 34-36")
-	f.StringVar(&o.monitoringChart, "monitoring-chart", "", "kube-prometheus-stack chart, for clusters that switch monitoring on, as <repository>/<name>:<version>")
+	f.StringVar(&o.turtlesImage, "rancher-turtles-image", "", "the image of the Turtles release Rancher installs, as <registry>/<repository>:<tag>@sha256:<digest>")
+	f.StringVar(&o.turtlesCAPIImage, "rancher-cluster-api-image", "", "the Cluster API controller image that Turtles runs, as <registry>/<repository>:<tag>@sha256:<digest>")
+	f.StringVar(&o.monitoringChart, "monitoring-chart", "", "kube-prometheus-stack chart, for clusters that switch monitoring on, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.kubeRBACProxy, "kube-rbac-proxy-image", "", "kube-rbac-proxy image, in front of the metrics monitoring scrapes, as <registry>/<repository>:<tag>@sha256:<digest>")
-	f.StringVar(&o.kyvernoChart, "kyverno-chart", "", "Kyverno chart, for clusters that have Kyverno enforce pod security, as <repository>/<name>:<version>")
-	f.StringVar(&o.kyvernoPolicies, "kyverno-policies-chart", "", "Kyverno's Pod Security Standards policies chart, as <repository>/<name>:<version>")
-	f.StringVar(&o.istioChart, "istio-chart", "", "Istio's istiod chart, for clusters that switch Istio on, as <repository>/<name>:<version>; its base, cni and ztunnel charts are in the same repository at the same version")
-	f.StringVar(&o.traefikChart, "traefik-chart", "", "Traefik chart, the ingress controller of distributions without one of their own, as <repository>/<name>:<version>")
-	f.StringVar(&o.metalLBChart, "metallb-chart", "", "MetalLB chart, for clusters whose load balancer is MetalLB, as <repository>/<name>:<version>")
-	f.StringVar(&o.kubeVipChart, "kube-vip-chart", "", "kube-vip chart, for clusters whose load balancer is kube-vip, as <repository>/<name>:<version>")
+	f.StringVar(&o.kyvernoChart, "kyverno-chart", "", "Kyverno chart, for clusters that have Kyverno enforce pod security, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.kyvernoPolicies, "kyverno-policies-chart", "", "Kyverno's Pod Security Standards policies chart, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.istioChart, "istio-chart", "", "Istio's istiod chart, for clusters that switch Istio on, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.istioBaseChart, "istio-base-chart", "", "Istio's base chart, with its CRDs, at istiod's version, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.istioCNIChart, "istio-cni-chart", "", "Istio's cni chart at istiod's version, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.istioZtunnelChart, "istio-ztunnel-chart", "", "Istio's ztunnel chart at istiod's version, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.traefikChart, "traefik-chart", "", "Traefik chart, the ingress controller of distributions without one of their own, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.metalLBChart, "metallb-chart", "", "MetalLB chart, for clusters whose load balancer is MetalLB, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.kubeVipChart, "kube-vip-chart", "", "kube-vip chart, for clusters whose load balancer is kube-vip, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.kubeVipImage, "kube-vip-image", "", "kube-vip image, as <registry>/<repository>:<tag>@sha256:<digest>")
-	f.StringVar(&o.kubeVipCloudChart, "kube-vip-cloud-provider-chart", "", "kube-vip's cloud provider chart, which hands kube-vip's Services their addresses, as <repository>/<name>:<version>")
-	f.StringVar(&o.kubeVipCloudImage, "kube-vip-cloud-provider-image", "", "kube-vip's cloud provider image, as <registry>/<repository>:<tag>@sha256:<digest>")
+	f.StringVar(&o.kubeVipCloudChart, "kube-vip-cloud-provider-chart", "", "kube-vip's cloud provider chart, which hands kube-vip's Services their addresses, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringSliceVar(&o.r.Charts.PodSecurityExempt, "pod-security-exempt", nil, "namespaces Kyverno's pod security policies leave alone, those the ClusterClasses' Pod Security Admission exempts (comma-separated)")
 	f.StringArrayVar(&o.classProviders, "class-providers", nil, "namespaces of the Cluster API providers only one ClusterClass's clusters use, as <class>=<namespace>,<namespace>; they run only while a cluster does (repeatable)")
 	f.DurationVar(&o.upgradeInterval, "upgrade-interval", defaultUpgradeInterval, "how often clusters are checked for an automatic upgrade due in their window")
@@ -143,7 +157,7 @@ separate nodes.`,
 	f.StringVar(&o.certDir, "extension-cert-dir", "/etc/kubehenge/tls", "directory with tls.crt and tls.key for the Runtime Extension server")
 	f.StringVar(&o.healthAddr, "health-address", ":8081", "address of the liveness and readiness probes")
 	f.BoolVar(&o.leaderElect, "leader-elect", true, "elect one active controller among replicas")
-	for _, flag := range []string{"ccm-chart", "csi-chart", "cilium-chart", "calico-chart", "headlamp-chart", "headlamp-image", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "monitoring-chart", "kube-rbac-proxy-image", "kyverno-chart", "kyverno-policies-chart", "istio-chart", "traefik-chart", "metallb-chart", "kube-vip-chart", "kube-vip-image", "kube-vip-cloud-provider-chart", "kube-vip-cloud-provider-image"} {
+	for _, flag := range []string{"ccm-chart", "csi-chart", "cilium-chart", "calico-chart", "calico-images", "headlamp-chart", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "rancher-turtles-image", "rancher-cluster-api-image", "monitoring-chart", "kube-rbac-proxy-image", "kyverno-chart", "kyverno-policies-chart", "istio-chart", "istio-base-chart", "istio-cni-chart", "istio-ztunnel-chart", "traefik-chart", "metallb-chart", "kube-vip-chart", "kube-vip-image", "kube-vip-cloud-provider-chart"} {
 		_ = cmd.MarkFlagRequired(flag)
 	}
 	return cmd
@@ -208,6 +222,14 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 		Registrar:         registrar,
 		RancherKubernetes: rancherMinors,
 		Nodes:             cloud,
+		Releases: &provisioner.ReleaseChecksums{
+			Reader:    mgr.GetAPIReader(),
+			Client:    mgr.GetClient(),
+			Namespace: o.r.ClassNamespace,
+			HTTP:      &http.Client{Timeout: time.Minute},
+			GitHub:    "https://github.com",
+			Raw:       "https://raw.githubusercontent.com",
+		},
 	}
 	if err = o.addPlacement(mgr, extensions, scheme, hooks, conn, cloud); err != nil {
 		return err
@@ -257,8 +279,12 @@ func (o *controllerOptions) addReclaimer(mgr manager.Manager, conn *pve.Config, 
 	return nil
 }
 
-// parseCharts reads every chart flag into the reconciler's charts.
+// parseCharts reads every chart flag, with the chart's values, into the reconciler's charts.
 func (o *controllerOptions) parseCharts() error {
+	var values map[string]map[string]any
+	if err := json.Unmarshal([]byte(o.chartValues), &values); err != nil {
+		return fmt.Errorf("--chart-values: %w", err)
+	}
 	for _, c := range []struct {
 		flag  string
 		value string
@@ -275,6 +301,9 @@ func (o *controllerOptions) parseCharts() error {
 		{"--kyverno-chart", o.kyvernoChart, &o.r.Charts.Kyverno},
 		{"--kyverno-policies-chart", o.kyvernoPolicies, &o.r.Charts.KyvernoPolicies},
 		{"--istio-chart", o.istioChart, &o.r.Charts.Istio},
+		{"--istio-base-chart", o.istioBaseChart, &o.r.Charts.IstioBase},
+		{"--istio-cni-chart", o.istioCNIChart, &o.r.Charts.IstioCNI},
+		{"--istio-ztunnel-chart", o.istioZtunnelChart, &o.r.Charts.IstioZtunnel},
 		{"--traefik-chart", o.traefikChart, &o.r.Charts.Traefik},
 		{"--metallb-chart", o.metalLBChart, &o.r.Charts.MetalLB},
 		{"--kube-vip-chart", o.kubeVipChart, &o.r.Charts.KubeVip},
@@ -284,6 +313,12 @@ func (o *controllerOptions) parseCharts() error {
 		if *c.chart, err = provisioner.ParseChart(c.value); err != nil {
 			return fmt.Errorf("%s: %w", c.flag, err)
 		}
+		name := strings.TrimSuffix(strings.TrimPrefix(c.flag, "--"), "-chart")
+		c.chart.Values = values[name]
+		delete(values, name)
+	}
+	if len(values) > 0 {
+		return fmt.Errorf("--chart-values: no chart is called %s", strings.Join(slices.Sorted(maps.Keys(values)), ", "))
 	}
 	for _, i := range []struct {
 		flag  string
@@ -292,12 +327,17 @@ func (o *controllerOptions) parseCharts() error {
 	}{
 		{"--kube-rbac-proxy-image", o.kubeRBACProxy, &o.r.Charts.KubeRBACProxy},
 		{"--kube-vip-image", o.kubeVipImage, &o.r.Charts.KubeVipImage},
-		{"--kube-vip-cloud-provider-image", o.kubeVipCloudImage, &o.r.Charts.KubeVipCloudProviderImage},
+		{"--rancher-turtles-image", o.turtlesImage, &o.r.Charts.Turtles},
+		{"--rancher-cluster-api-image", o.turtlesCAPIImage, &o.r.Charts.TurtlesClusterAPI},
 	} {
 		var err error
 		if *i.image, err = provisioner.ParseImage(i.value); err != nil {
 			return fmt.Errorf("%s: %w", i.flag, err)
 		}
+	}
+	var err error
+	if o.r.Charts.CalicoImages, err = provisioner.ParseCalicoImages(o.calicoImages); err != nil {
+		return fmt.Errorf("--calico-images: %w", err)
 	}
 	return nil
 }

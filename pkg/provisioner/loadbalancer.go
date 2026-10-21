@@ -77,13 +77,14 @@ func loadBalancerCharts(charts *Charts, lb LoadBalancer) ([]chartProxy, error) {
 	}
 	return []chartProxy{
 		{"load-balancer", kubeVip, metav1.NamespaceSystem, charts.KubeVip, withImage(kubeVipValues(), charts.KubeVipImage)},
-		{"load-balancer-addresses", "kube-vip-cloud-provider", metav1.NamespaceSystem, charts.KubeVipCloudProvider, withImage(map[string]any{
+		{"load-balancer-addresses", "kube-vip-cloud-provider", metav1.NamespaceSystem, charts.KubeVipCloudProvider, map[string]any{
 			"cm": map[string]any{"data": map[string]any{"range-global": strings.Join(ranges, ",")}},
-		}, charts.KubeVipCloudProviderImage)},
+		}},
 	}, nil
 }
 
-// withImage pins a kube-vip chart's image, which both charts take as a repository and a tag.
+// withImage pins kube-vip's chart to the image of the control planes' kube-vip, which it takes as a
+// repository and a tag.
 func withImage(values map[string]any, image Image) map[string]any {
 	values["image"] = map[string]any{"repository": image.Registry + "/" + image.Repository, "tag": image.Tag + "@sha256:" + image.Digest}
 	return values

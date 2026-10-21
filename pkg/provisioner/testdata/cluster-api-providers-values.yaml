@@ -1,7 +1,7 @@
 ---
 # The management-cluster module's values for the cluster-api-providers chart, with its tests'
 # variables; its tests hold the module to them.
-image: registry.example/kubehenge:integration
+image: registry.example/kubehenge@sha256:0000000000000000000000000000000000000000000000000000000000000000
 namespaces:
   - kubehenge-system
   - capi-system
@@ -18,6 +18,9 @@ providers:
   - kind: CoreProvider
     name: cluster-api
     namespace: capi-system
+    manifests:
+      metadata: https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.3/metadata.yaml@sha256:c470906f551ac3e3e9aedc9a3e733b5a5994428693df43e95f65ea67c035f9fe
+      components: https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.3/core-components.yaml@sha256:f70be959af4aba061b91cb264b3b1961ae38ca49e2eb542ccf2640146f5221a7
     spec:
       configSecret:
         name: cluster-api-variables
@@ -25,10 +28,16 @@ providers:
       deployment:
         containers:
           - name: manager
+            imageUrl: registry.k8s.io/cluster-api/cluster-api-controller:v1.14.3@sha256:1110ddb0f4a9cfc1b557f305199e2d56911fe442edef6361e12e5cc4b11e23fd
             resources:
               requests:
                 cpu: 10m
                 memory: 128Mi
+      fetchConfig:
+        selector:
+          matchLabels:
+            kubehenge.dev/provider-manifests: coreprovider-cluster-api
+            provider.cluster.x-k8s.io/version: v1.14.3
       manager:
         leaderElection: &leases
           leaderElect: true
@@ -51,14 +60,23 @@ providers:
   - kind: BootstrapProvider
     name: kubeadm
     namespace: kubeadm-bootstrap-system
+    manifests:
+      metadata: https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.3/metadata.yaml@sha256:c470906f551ac3e3e9aedc9a3e733b5a5994428693df43e95f65ea67c035f9fe
+      components: https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.3/bootstrap-components.yaml@sha256:537d6db3b70aad723710825f76073659865dc1a115715ef5d5c470da3b9bcc39
     spec:
       deployment:
         containers:
           - name: manager
+            imageUrl: registry.k8s.io/cluster-api/kubeadm-bootstrap-controller:v1.14.3@sha256:bc056ff51f8df7c86481745cb86cbc07b7e8cfd4ee3684017f9a98362ab45b8f
             resources:
               requests:
                 cpu: 10m
                 memory: 64Mi
+      fetchConfig:
+        selector:
+          matchLabels:
+            kubehenge.dev/provider-manifests: bootstrapprovider-kubeadm
+            provider.cluster.x-k8s.io/version: v1.14.3
       manager:
         leaderElection: *leases
       patches:
@@ -71,14 +89,23 @@ providers:
   - kind: BootstrapProvider
     name: rke2
     namespace: rke2-bootstrap-system
+    manifests:
+      metadata: https://github.com/rancher/cluster-api-provider-rke2/releases/download/v0.26.0/metadata.yaml@sha256:4251911efc9ae26c1e280529388d47c3304192fb890b8287956e98c140e6dac6
+      components: https://github.com/rancher/cluster-api-provider-rke2/releases/download/v0.26.0/bootstrap-components.yaml@sha256:0356080e7071833ac3931f657e0dbd41b2b2ad7c0699575bf2fed19ed5a45f3e
     spec:
       deployment:
         containers:
           - name: manager
+            imageUrl: ghcr.io/rancher/cluster-api-provider-rke2-bootstrap:v0.26.0@sha256:2f6b79933c157902b70e0fc80f81b2df6e4f222e6a87b71ad71f3ef2c1509052
             resources:
               requests:
                 cpu: 10m
                 memory: 64Mi
+      fetchConfig:
+        selector:
+          matchLabels:
+            kubehenge.dev/provider-manifests: bootstrapprovider-rke2
+            provider.cluster.x-k8s.io/version: v0.26.0
       manager:
         leaderElection: *leases
       patches:
@@ -89,16 +116,23 @@ providers:
   - kind: BootstrapProvider
     name: k3s
     namespace: k3s-bootstrap-system
+    manifests:
+      metadata: https://github.com/k3s-io/cluster-api-k3s/releases/download/v0.4.0/metadata.yaml@sha256:bb1c0c8356cf3d78a83812769f657c327209153732c189291c4602e5d1f9326d
+      components: https://github.com/k3s-io/cluster-api-k3s/releases/download/v0.4.0/bootstrap-components.yaml@sha256:26301df3f6a1b9a14317061bd586a73711d54c956ee8f679982fb3301c6ab71d
     spec:
       deployment:
         containers:
           - name: manager
+            imageUrl: ghcr.io/k3s-io/cluster-api-k3s/bootstrap-controller:v0.4.0@sha256:aac5968f5664e9c4927f07c9d6b7541d1b20f6be0a69665a63942ba3d73417f1
             resources:
               requests:
                 cpu: 10m
                 memory: 64Mi
       fetchConfig:
-        url: https://github.com/k3s-io/cluster-api-k3s/releases/latest/bootstrap-components.yaml
+        selector:
+          matchLabels:
+            kubehenge.dev/provider-manifests: bootstrapprovider-k3s
+            provider.cluster.x-k8s.io/version: v0.4.0
       patches:
         - patch: *left-to-scaling
           target:
@@ -107,6 +141,9 @@ providers:
   - kind: ControlPlaneProvider
     name: kubeadm
     namespace: kubeadm-control-plane-system
+    manifests:
+      metadata: https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.3/metadata.yaml@sha256:c470906f551ac3e3e9aedc9a3e733b5a5994428693df43e95f65ea67c035f9fe
+      components: https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.3/control-plane-components.yaml@sha256:a211e2e54b6b6fb93e59191f5db8ee76ad6ff92a698f1c62f9d6ce4d5218cf87
     spec:
       configSecret:
         name: cluster-api-variables
@@ -114,10 +151,16 @@ providers:
       deployment:
         containers:
           - name: manager
+            imageUrl: registry.k8s.io/cluster-api/kubeadm-control-plane-controller:v1.14.3@sha256:fbf0b07fd4e4575160d82977f0daeba4792c992a2f56efac111fb76cfe29d0e1
             resources:
               requests:
                 cpu: 10m
                 memory: 64Mi
+      fetchConfig:
+        selector:
+          matchLabels:
+            kubehenge.dev/provider-manifests: controlplaneprovider-kubeadm
+            provider.cluster.x-k8s.io/version: v1.14.3
       manager:
         leaderElection: *leases
       patches:
@@ -131,7 +174,19 @@ providers:
   - kind: ControlPlaneProvider
     name: rke2
     namespace: rke2-control-plane-system
+    manifests:
+      metadata: https://github.com/rancher/cluster-api-provider-rke2/releases/download/v0.26.0/metadata.yaml@sha256:4251911efc9ae26c1e280529388d47c3304192fb890b8287956e98c140e6dac6
+      components: https://github.com/rancher/cluster-api-provider-rke2/releases/download/v0.26.0/control-plane-components.yaml@sha256:1dbed3911fa2f6c208020cae74e2d31f6fba6366ad639aa8666a03a75c80443a
     spec:
+      deployment:
+        containers:
+          - name: manager
+            imageUrl: ghcr.io/rancher/cluster-api-provider-rke2-controlplane:v0.26.0@sha256:04485849ca20c56e0ea7c028a414ec21d83a798ef987817d51791668f31bea11
+      fetchConfig:
+        selector:
+          matchLabels:
+            kubehenge.dev/provider-manifests: controlplaneprovider-rke2
+            provider.cluster.x-k8s.io/version: v0.26.0
       manager:
         leaderElection: *leases
       patches:
@@ -142,16 +197,23 @@ providers:
   - kind: ControlPlaneProvider
     name: k3s
     namespace: k3s-control-plane-system
+    manifests:
+      metadata: https://github.com/k3s-io/cluster-api-k3s/releases/download/v0.4.0/metadata.yaml@sha256:bb1c0c8356cf3d78a83812769f657c327209153732c189291c4602e5d1f9326d
+      components: https://github.com/k3s-io/cluster-api-k3s/releases/download/v0.4.0/control-plane-components.yaml@sha256:2e3754bb42be197c31b7567496767f22091f4da74453eb366d29c8bd06e28270
     spec:
       deployment:
         containers:
           - name: manager
+            imageUrl: ghcr.io/k3s-io/cluster-api-k3s/controlplane-controller:v0.4.0@sha256:4f7305f8871954afa2c2e37a0b19eac3b352e2028bc56617dc78822da5975c20
             resources:
               requests:
                 cpu: 10m
                 memory: 64Mi
       fetchConfig:
-        url: https://github.com/k3s-io/cluster-api-k3s/releases/latest/control-plane-components.yaml
+        selector:
+          matchLabels:
+            kubehenge.dev/provider-manifests: controlplaneprovider-k3s
+            provider.cluster.x-k8s.io/version: v0.4.0
       patches:
         - patch: *left-to-scaling
           target:
@@ -160,14 +222,22 @@ providers:
   - kind: InfrastructureProvider
     name: proxmox
     namespace: proxmox-infrastructure-system
+    manifests:
+      metadata: https://github.com/ionos-cloud/cluster-api-provider-proxmox/releases/download/v0.9.1/metadata.yaml@sha256:df2916a79503ac053f6a9866a8de025e780e24d6d472f00f59f84898b5a1c572
+      components: https://github.com/ionos-cloud/cluster-api-provider-proxmox/releases/download/v0.9.1/infrastructure-components.yaml@sha256:424fb38189659147df452490bb2b11f9f4ae3a75c7179b92a85041658bfd74d5
     spec:
       configSecret:
         name: capmox-variables
         namespace: proxmox-infrastructure-system
       deployment:
         containers:
-          - imageUrl: ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:762ce6cf397a023c63dea6c9fa4864b687cc8dea42f7cf84ddb8f4eb38360c5b
+          - imageUrl: ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:c055349990da20734783e8da117a50224b2225071fd95528fd1fce4a97e7d863
             name: manager
+      fetchConfig:
+        selector:
+          matchLabels:
+            kubehenge.dev/provider-manifests: infrastructureprovider-proxmox
+            provider.cluster.x-k8s.io/version: v0.9.1
       manager:
         leaderElection: *leases
       patches:
@@ -205,20 +275,40 @@ providers:
   - kind: IPAMProvider
     name: in-cluster
     namespace: in-cluster-ipam-system
+    manifests:
+      metadata: https://github.com/kubernetes-sigs/cluster-api-ipam-provider-in-cluster/releases/download/v1.1.1/metadata.yaml@sha256:eb280ab315f478324973a7b65739a655d57e3c22a1356efd9f5127534d3502b7
+      components: https://github.com/kubernetes-sigs/cluster-api-ipam-provider-in-cluster/releases/download/v1.1.1/ipam-components.yaml@sha256:8a0656a39d9e85ee07219702254669b7e543d09957e86315f3d20b4bf6aebfa5
     spec:
+      deployment:
+        containers:
+          - name: manager
+            imageUrl: registry.k8s.io/capi-ipam-ic/cluster-api-ipam-in-cluster-controller:v1.1.1@sha256:49a4cc0c5d7cd8deef20105e71ce168407ddcaab612f5819947163bd4b66ff0b
+      fetchConfig:
+        selector:
+          matchLabels:
+            kubehenge.dev/provider-manifests: ipamprovider-in-cluster
+            provider.cluster.x-k8s.io/version: v1.1.1
       version: v1.1.1
   - kind: AddonProvider
     name: helm
     namespace: helm-addon-system
+    manifests:
+      metadata: https://github.com/kubernetes-sigs/cluster-api-addon-provider-helm/releases/download/v0.6.4/metadata.yaml@sha256:d50a44ee0db2f0368699d15ff011b9b5a61d9969483de1c4f6e4e6046390530f
+      components: https://github.com/kubernetes-sigs/cluster-api-addon-provider-helm/releases/download/v0.6.4/addon-components.yaml@sha256:a70f4eb77eac626231daca1e2a046b4b069bb84320efa327cc8c56a9c4ca03e6
     spec:
       deployment:
         containers:
-          - imageUrl: ghcr.io/kubehenge/cluster-api-addon-provider-helm@sha256:12d95dc080b82fac715dd31620b08726362bee2c752a9b69e2e2f76a55f9e833
+          - imageUrl: ghcr.io/kubehenge/cluster-api-addon-provider-helm@sha256:14ba4b0c8594352948d0a08ef9746ec4196739cfc821c3d38fbbe0768f8b427e
             name: manager
             resources:
               requests:
                 cpu: 10m
                 memory: 64Mi
+      fetchConfig:
+        selector:
+          matchLabels:
+            kubehenge.dev/provider-manifests: addonprovider-helm
+            provider.cluster.x-k8s.io/version: v0.6.4
       manager:
         leaderElection: *leases
       version: v0.6.4

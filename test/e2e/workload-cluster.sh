@@ -24,7 +24,9 @@
 #   metallb (default) or kube-vip.
 # KUBEHENGE_E2E_CONTROL_PLANE_MEMORY and KUBEHENGE_E2E_WORKER_MEMORY (MiB) and
 # KUBEHENGE_E2E_CONTROL_PLANE_CORES size the nodes; the worker's memory is by default the least
-# the class lets it have with the add-ons.
+# the class lets it have with the add-ons. KUBEHENGE_E2E_RESTARTS=report prints restarts while every
+# add-on is on instead of failing, for a host whose KVM lacks pause-loop exiting: there guests that
+# outnumber its CPUs starve each other, whatever their sizes.
 # KUBEHENGE_E2E_CNI chooses the CNI (required by kubeadm). KUBEHENGE_E2E_PODS and
 # KUBEHENGE_E2E_SERVICES set the cluster's pod and service ranges, which must not overlap the nodes'
 # network; unset, the distribution's defaults apply.
@@ -336,7 +338,6 @@ case ${cni} in
     # Canal and k3s's own CNI carry flannel by design.
     *) ;;
 esac
-agnhost=registry.k8s.io/e2e-test-images/agnhost:2.61
 # agnhost_pod <namespace> <name> <args...>: an agnhost pod at Pod Security's restricted level,
 # which the cluster enforces; the image runs as root unless told otherwise. The overrides merge into
 # the container by its name. sh has no local variables, so its own carry its prefix.
@@ -450,7 +451,8 @@ spec:
       type: RuntimeDefault
   containers:
     - name: write
-      image: registry.k8s.io/pause:3.10.1
+      # renovate: datasource=docker depName=registry.k8s.io/pause
+      image: registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
       securityContext:
         allowPrivilegeEscalation: false
         capabilities:
@@ -536,6 +538,12 @@ pods_before=$(restarts)
 servers_before=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
 echo "memory before the add-ons:"
 pod_memory "${work}/workload"
+# What the guests are told of the CPU decides which mitigations their kernels run, and those cost
+# the most under nested virtualisation: the figure to read beside a slow run.
+echo "the CPU a control plane sees:"
+# shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
+on_machines "${servers%% *}" "grep -m1 'model name' /proc/cpuinfo; grep -qw pcid /proc/cpuinfo && echo 'pcid: yes' || echo 'pcid: no'; grep -H . /sys/devices/system/cpu/vulnerabilities/*" ||
+    echo "  cannot read it"
 
 step "Headlamp switched on"
 set_variable headlamp '{"enabled":true}'
@@ -616,8 +624,8 @@ esac
 step "pod security enforced, with Kyverno switched on"
 # privileged_pod <namespace>: asks the API server to admit a privileged pod, without creating it.
 privileged_pod() {
-    wl -n "$1" run e2e-privileged --image=registry.k8s.io/pause:3.10.1 --restart=Never --dry-run=server \
-        --overrides='{"apiVersion":"v1","spec":{"containers":[{"name":"e2e-privileged","image":"registry.k8s.io/pause:3.10.1","securityContext":{"privileged":true}}]}}' 2>&1
+    wl -n "$1" run e2e-privileged --image="${pause_image}" --restart=Never --dry-run=server \
+        --overrides="{\"apiVersion\":\"v1\",\"spec\":{\"containers\":[{\"name\":\"e2e-privileged\",\"image\":\"${pause_image}\",\"securityContext\":{\"privileged\":true}}]}}" 2>&1
 }
 # shellcheck disable=SC2310 # the refusal is the answer looked for.
 refused=$(privileged_pod default) && fail "a privileged pod is admitted under Pod Security's restricted level"
@@ -689,10 +697,17 @@ until_true 60 "ztunnel names the client's workload identity" mesh_identity
 
 # The class's minimum sizes have to carry every add-on at once.
 step "every add-on at once, with nothing restarted"
+found_restarts() {
+    if [ "${KUBEHENGE_E2E_RESTARTS:-fail}" = report ]; then
+        echo "not failing, on a host that starves its guests: $*"
+    else
+        fail "$*"
+    fi
+}
 # shellcheck disable=SC2310 # a failed count fails the step.
 servers_after=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
 [ "${servers_after}" = "${servers_before}" ] ||
-    fail "${server_unit} restarted $((servers_after - servers_before)) times on the control planes while the add-ons were installed"
+    found_restarts "${server_unit} restarted $((servers_after - servers_before)) times on the control planes while the add-ons were installed"
 pods_after=$(restarts)
 restarted=$(jq -rn --argjson b "${pods_before}" --argjson a "${pods_after}" '$a | to_entries[] | select(.value > ($b[.key] // 0)) | "\(.key) \(.value - ($b[.key] // 0))"')
 if [ -n "${restarted}" ]; then
@@ -708,9 +723,21 @@ if [ -n "${restarted}" ]; then
         on_machines "${m}" "grep -H . /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io" ||
             echo "  cannot read it"
     done
-    fail "containers restarted while the add-ons were installed (pod, restarts): ${restarted}"
+    found_restarts "containers restarted while the add-ons were installed (pod, restarts): ${restarted}"
 fi
 pod_memory "${work}/workload"
+
+step "every add-on's image named by digest"
+# Every pod outside kube-system, which only the add-ons, their operators and these tests create,
+# and in kube-system the workloads of the releases Kubehenge installs.
+releases=$(kubectl -n "${ns}" get helmreleaseproxies -l "cluster.x-k8s.io/cluster-name=${name}" -o json | jq -c '[.items[].spec.releaseName]')
+images=$(wl get pods -A -o json | jq -r '.items[] | select(.metadata.namespace != "kube-system") | .metadata as $m |
+    (.spec.initContainers // [])[], .spec.containers[] | "\($m.namespace)/\($m.name) \(.image)"')
+system_images=$(wl -n kube-system get deployments,daemonsets,statefulsets -o json | jq -r --argjson r "${releases}" '.items[] |
+    select(.metadata.annotations["meta.helm.sh/release-name"] as $n | $r | index($n)) | .metadata as $m |
+    (.spec.template.spec.initContainers // [])[], .spec.template.spec.containers[] | "kube-system/\($m.name) \(.image)"')
+unpinned=$(printf '%s\n%s\n' "${images}" "${system_images}" | grep -v -e '@sha256:[0-9a-f]\{64\}$' -e '^$' | sort -u)
+[ -z "${unpinned}" ] || fail "images named without a digest (pod, image): ${unpinned}"
 
 step "every add-on switched off at once"
 set_variable headlamp '{"enabled":false}'

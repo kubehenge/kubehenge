@@ -69,6 +69,8 @@ type Hooks struct {
 	RancherKubernetes KubernetesMinors
 	// Nodes is asked which Proxmox VE nodes are online for a cluster the Placer has not marked yet.
 	Nodes Nodes
+	// Releases has RKE2 and k3s nodes install the files recorded for their release.
+	Releases *ReleaseChecksums
 }
 
 // BeforeClusterUpgrade holds Rancher's cluster at the Kubernetes versions Rancher runs on.

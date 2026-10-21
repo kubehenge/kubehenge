@@ -5,6 +5,17 @@ locals {
 
   talos_image = data.talos_image_factory_urls.this.urls.installer
 
+  # Talos and the node's container runtime pull these only with their publishers' keyless
+  # signatures: the Image Factory's builds of a release differ in their bytes, so no digest of its
+  # installer stays valid, and Talos's Kubernetes upgrades name the components by tag. Sidero signs
+  # its images with its release service account or a siderolabs.com account; Kubernetes' image
+  # promoter signs everything on registry.k8s.io. A registry mirror has to serve the signatures too.
+  image_signatures = [
+    { image = "factory.talos.dev/*", keyless = { issuer = "https://accounts.google.com", subject = "image-factory-signing@talos-production.iam.gserviceaccount.com" } },
+    { image = "ghcr.io/siderolabs/*", keyless = { issuer = "https://accounts.google.com", subjectRegex = "^(releasemgr-svc@talos-production\\.iam\\.gserviceaccount\\.com|[^@]+@siderolabs\\.com)$" } },
+    { image = "registry.k8s.io/*", keyless = { issuer = "https://accounts.google.com", subject = "krel-trust@k8s-releng-prod.iam.gserviceaccount.com" } },
+  ]
+
   patient_lease_args = {
     leader-elect-lease-duration = local.patient_leases.leaderElection.leaseDuration
     leader-elect-renew-deadline = local.patient_leases.leaderElection.renewDeadline
@@ -94,6 +105,7 @@ data "talos_machine_configuration" "node" {
         name       = var.api_address
         link       = "lan"
       }),
+      yamlencode({ apiVersion = "v1alpha1", kind = "ImageVerificationConfig", rules = local.image_signatures }),
       ], [
       for registry, endpoints in var.registry_mirrors : yamlencode({
         apiVersion = "v1alpha1"

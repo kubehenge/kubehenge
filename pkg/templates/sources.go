@@ -118,11 +118,11 @@ func (s *Sources) talos(ctx context.Context, version string) (Resolved, error) {
 }
 
 func (s *Sources) ubuntu(ctx context.Context, os string) (Resolved, error) {
-	codename, ok := OperatingSystems[os]
+	release, ok := OperatingSystems[os]
 	if !ok {
 		return Resolved{}, fmt.Errorf("unsupported operating system %q", os)
 	}
-	dir := fmt.Sprintf("%s/%s/release", s.UbuntuCloudURL, codename)
+	dir := fmt.Sprintf("%s/%s/release-%s", s.UbuntuCloudURL, release.Codename, release.Build)
 	sums, err := s.do(ctx, http.MethodGet, dir+"/SHA256SUMS", nil)
 	if err != nil {
 		return Resolved{}, err

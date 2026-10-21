@@ -221,7 +221,7 @@ func TestKubeVipAnnouncesWhatItsCloudProviderHandsOut(t *testing.T) {
 	if got := lookup[string](t, values, "cm", "data", "range-global"); got != "10.0.0.100-10.0.0.120,10.0.0.130-10.0.0.131,10.0.0.140-10.0.0.140" {
 		t.Errorf("range-global %q", got)
 	}
-	if tag := lookup[string](t, values, "image", "tag"); tag != "v0.0.13@sha256:"+testCharts.KubeVipCloudProviderImage.Digest {
+	if tag := lookup[string](t, values, "image", "tag"); tag != "v0.0.13@sha256:b8b6a5180e678b410e2c5dba86b87fa8099ada16e2f067d83f04e749f8ea54ab" {
 		t.Errorf("the cloud provider's image %q", tag)
 	}
 

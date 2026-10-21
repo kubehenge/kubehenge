@@ -1,8 +1,8 @@
 {{- /*
-The pod spec of a hook Job that runs `kubehenge wait`, from the root context and the subcommand's
-arguments.
+The pod spec of a hook Job that runs a kubehenge subcommand, from the root context, the container's
+name and the subcommand's arguments.
 */ -}}
-{{- define "cluster-api-providers.waitPod" -}}
+{{- define "cluster-api-providers.hookPod" -}}
 {{- $root := index . 0 -}}
 securityContext:
   runAsNonRoot: true
@@ -11,12 +11,11 @@ securityContext:
   seccompProfile:
     type: RuntimeDefault
 containers:
-  - name: wait
+  - name: {{ index . 1 }}
     image: {{ $root.Values.image }}
     args:
-      - wait
-      {{- range index . 1 }}
-      - {{ . }}
+      {{- range index . 2 }}
+      - {{ . | quote }}
       {{- end }}
       - --timeout={{ int $root.Values.waitTimeoutSeconds }}s
     securityContext:

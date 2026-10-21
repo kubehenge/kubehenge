@@ -5,10 +5,10 @@ Every cluster's nodes are clones of a Proxmox VE VM template. `kubehenge templat
 | Distribution | Template | One per |
 | --- | --- | --- |
 | Talos | the Talos Image Factory's image with the QEMU guest agent extension; made by the command only, ahead of Talos clusters, which no ClusterClass offers yet | Talos release |
-| RKE2, k3s | Ubuntu's cloud image with every update and the QEMU guest agent; the distribution installs itself when a node boots | Ubuntu release |
-| kubeadm | the same, plus containerd, the kubelet and kubeadm from pkgs.k8s.io as Kubernetes' installation guide sets them up, with the control-plane images pulled ahead | Ubuntu release and Kubernetes version |
+| RKE2, k3s | Ubuntu's cloud image with every update and the QEMU guest agent; the distribution installs itself when a node boots, from files checked against the checksums recorded for its release ([architecture.md](architecture.md#each-clusters-own-corner-of-proxmox-ve)) | Ubuntu release |
+| kubeadm | the same, plus containerd, the kubelet and kubeadm from pkgs.k8s.io as Kubernetes' installation guide sets them up, with the control-plane images pulled ahead, each kept only once Kubernetes' release signature for it checks out, and containerd set to kubeadm's pause image | Ubuntu release and Kubernetes version |
 
-Ubuntu images are checked against Ubuntu's signed checksums before Proxmox VE downloads them, and the pkgs.k8s.io signing key is accepted only with its known fingerprint.
+Each Kubehenge release makes Ubuntu templates from one build of each Ubuntu release's cloud image, checked against Ubuntu's signed checksums before Proxmox VE downloads it; the updates a bake installs come from Ubuntu's archive, which apt checks against its signed index. The pkgs.k8s.io signing key is accepted only with its known fingerprint.
 
 ## Create
 
@@ -27,6 +27,8 @@ Creating is idempotent: a template with the same tags in the template pool is fo
 ## How clusters find them
 
 Each template carries a unique set of Proxmox VE tags, such as `kubehenge;talos;talos-v1.14.4`, and Cluster API's Proxmox VE provider selects it by that exact set. The template has no network card, one core and 512 MiB: each clone gets the network, size and disk its machine asks for.
+
+Clones keep the template's CPU type, `x86-64-v2-AES` unless `--cpu-type` names another. That type runs on any node, so a VM can migrate between nodes of different CPUs, but it hides the CPU's own model, and a node's kernel then takes it to be open to Meltdown and MDS and runs their mitigations, which cost the most on Intel hosts. `--cpu-type host` shows the clones the node's own CPU, at the cost of migrating only between nodes with the same one.
 
 Templates should be on shared storage in a Proxmox VE cluster, so that clones can start on any node.
 

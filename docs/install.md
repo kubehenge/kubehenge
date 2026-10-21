@@ -47,9 +47,9 @@ Addresses are IPv4. Kubehenge gives every node of every cluster a static address
 | The node running the installer | GitHub, for Kubehenge's release and OpenTofu; the container template mirror, through `pveam` |
 | The appliance | GitHub, for the release index and upgrades; the OpenTofu registry, the Helm chart repositories and the Talos Image Factory, while it applies the management cluster; while it makes VM templates, the Talos Image Factory (`factory.talos.dev`), Ubuntu's cloud images (`cloud-images.ubuntu.com`, for their signed checksums) and `pkgs.k8s.io` (for its signing key) |
 | The Proxmox VE nodes | the Talos Image Factory and Ubuntu's cloud images, which Proxmox VE downloads disk images from |
-| The management cluster's nodes | container registries and the Cluster API providers' release files; RKE2's and k3s's release channels, for automatic upgrades; the add-on chart repositories: `ghcr.io` (the Proxmox VE cloud controller manager and CSI plugin), `helm.cilium.io`, `docs.tigera.io`, `kubernetes-sigs.github.io` (Headlamp), `releases.rancher.com` and `charts.jetstack.io` |
-| Clusters' nodes | container registries; RKE2's or k3s's own downloads, since those distributions install when a node boots |
-| The VM that prepares a template | Ubuntu's and Kubernetes' package mirrors |
+| The management cluster's nodes | container registries and the Cluster API providers' release files; RKE2's and k3s's release channels, for automatic upgrades, and their releases' checksum files and install scripts on GitHub, read once per release; the add-on chart repositories: `ghcr.io` (the Proxmox VE cloud controller manager and CSI plugin), `helm.cilium.io`, `docs.tigera.io`, `kubernetes-sigs.github.io` (Headlamp), `releases.rancher.com` and `charts.jetstack.io` |
+| Clusters' nodes | container registries; on RKE2 and k3s, GitHub (`github.com` and `raw.githubusercontent.com`), for the release and its images, which a node installs when it boots |
+| The VM that prepares a template | Ubuntu's and Kubernetes' package mirrors; for kubeadm, `registry.k8s.io`, GitHub (for cosign) and Sigstore's `tuf-repo-cdn.sigstore.dev`, to check the images' signatures |
 
 The management cluster's nodes can pull through registry mirrors instead ([setup](#the-settings), Advanced).
 
@@ -278,13 +278,13 @@ cd share/kubehenge/management-cluster
 cp terraform.tfvars.example terraform.tfvars   # then fill it in
 export TF_VAR_proxmox_api_token='root@pam!kubehenge=...'
 export TF_VAR_proxmox_ca_certificate="$(cat pve-root-ca.pem)"
-tofu init
+tofu init -lockfile=readonly
 tofu apply
 tofu output -raw kubeconfig > kubeconfig
 tofu output -raw talosconfig > talosconfig
 ```
 
-The module is tested with OpenTofu, which the appliance runs too; it declares Terraform 1.11 or newer as well. The state holds the cluster's secrets and its administrator credentials: keep it in an encrypted backend, or use OpenTofu's state encryption.
+`-lockfile=readonly` holds the providers to the checksums in the module's `.terraform.lock.hcl`, as the appliance does. The module is tested with OpenTofu, which the appliance runs too; it declares Terraform 1.11 or newer as well. The state holds the cluster's secrets and its administrator credentials: keep it in an encrypted backend, or use OpenTofu's state encryption.
 
 ### Variables
 
@@ -303,18 +303,19 @@ The module is tested with OpenTofu, which the appliance runs too; it declares Te
 | `gateway`, `dns_servers` | required | The nodes' gateway and DNS servers. |
 | `pod_subnets`, `service_subnets` | `["10.244.0.0/16"]`, `["10.96.0.0/12"]` | The management cluster's own ranges. The plan refuses ranges that overlap the nodes' network. |
 | `node_cores`, `node_memory_mb`, `node_disk_gb` | `4`, `4096`, `32` | Size of each node. |
-| `cpu_type` | `x86-64-v2-AES` | QEMU CPU type; Talos needs at least x86-64-v2. |
+| `cpu_type` | `x86-64-v2-AES` | QEMU CPU type; Talos needs at least x86-64-v2. `host` spares the nodes mitigations their CPU does not need, but lets them migrate only between nodes with the same CPU ([templates.md](templates.md#how-clusters-find-them)). |
 | `workload_pool` | `kubehenge` | Pool for the clusters' VMs, each cluster in a pool of its own under it. A pool name, nested at most one level. |
 | `template_pool` | `kubehenge-templates` | Pool of the VM templates. |
 | `management_pool` | `kubehenge-management` | Pool of the management cluster's own VMs, out of Cluster API's reach. |
 | `workload_datastores` | `["local-lvm"]` | Storages clusters may use. |
 | `workload_bridges` | `["vmbr0"]` | Bridges clusters may attach to, with any VLAN on them. |
 | `bootstrap_datastore` | `local` | Storage for cloud-init ISOs; Cluster API gets full control of it. |
-| `registry_mirrors` | `{}` | Registry mirrors for the management cluster's nodes, by registry name: endpoint URLs tried in order before the registry itself. |
+| `registry_mirrors` | `{}` | Registry mirrors for the management cluster's nodes, by registry name: endpoint URLs tried in order before the registry itself. A mirror of factory.talos.dev, ghcr.io or registry.k8s.io serves the images' cosign signatures too, which the nodes require on Sidero's and Kubernetes' images. |
 | `cluster_oidc` | `[]` | OpenID Connect providers every new cluster trusts unless it names its own: up to eight, each with `issuer_url` (https) and `client_id`, and optionally `username_claim`, `username_prefix`, `groups_claim`, `groups_prefix`, `scopes` and `certificate_authority`. |
-| `version_overrides` | `{}` | Versions to use instead of the tested set, by its keys, to hold a component back. Lowering a version on a running cluster is not supported. |
-| `provider_images` | `{}` | Controller images to run instead of a provider release's own, by `"<kind>/<name>"`, such as `"InfrastructureProvider/proxmox"`. |
-| `controller_image` | the chart's | Kubehenge's controller image, as `repository:tag` or `repository@digest`. |
+| `version_overrides` | `{}` | Versions to use instead of the tested set, by its keys, to hold a component back. A provider held back needs its image in `provider_images` and its files' digests in `provider_manifests`. Lowering a version on a running cluster is not supported. |
+| `provider_images` | `{}` | Controller images by digest to run instead of the tested ones, by `"<kind>/<name>"`, such as `"InfrastructureProvider/proxmox"`. |
+| `provider_manifests` | `{}` | The SHA-256 of provider files outside the tested set, by their address under `https://github.com/`, such as `"kubernetes-sigs/cluster-api/releases/download/v1.14.2/core-components.yaml"`: `metadata.yaml` and the components file of each provider held back. |
+| `controller_image` | the chart's | Kubehenge's controller image by digest, as `repository@sha256:<digest>`. A release's chart names the image it was released with; a checkout's names none, so a module taken from git needs one. |
 | `proxmox_ha` | `false` | Keep each cluster's control-plane VMs on separate nodes with Proxmox VE HA, giving the controller a token with `Sys.Audit` and `Sys.Console` on `/` ([above](#proxmox-ve-ha)). After setting it back to false, remove the HA resources and rules whose comment starts with `Kubehenge cluster`, as the appliance does: without its token the controller cannot. |
 
 Outputs: `kubeconfig` and `talosconfig` (sensitive), `api_endpoint`, and `proxmox_objects`, which lists everything the module made on Proxmox VE.

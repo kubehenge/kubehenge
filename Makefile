@@ -49,7 +49,7 @@ VERSION ?= 0.1.0
 RELEASE_KEY ?= $(shell cat pkg/release/release.pub 2>/dev/null)
 RELEASE_LDFLAGS = $(LDFLAGS) -X github.com/kubehenge/kubehenge/pkg/release.Version=$(VERSION) -X github.com/kubehenge/kubehenge/pkg/release.publicKey=$(RELEASE_KEY)
 # The controller image the release's chart runs, by digest (repository@sha256:...); unset, the chart
-# names it by its version's tag.
+# names none, and the module needs controller_image.
 CONTROLLER_IMAGE ?=
 # renovate: datasource=github-release-attachments depName=kubernetes-sigs/headlamp
 HEADLAMP_TAG := v0.46.0
@@ -122,13 +122,13 @@ helm-addon-image:
 lint: lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker
 
 FILES = git ls-files --cached --others --exclude-standard
-SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh test/integration/*.sh appliance/*.sh appliance/pve-entry/*.sh scripts/*.sh
+SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh test/integration/*.sh appliance/*.sh appliance/pve-entry/*.sh scripts/*.sh pkg/provisioner/*.sh pkg/templates/*.sh
 SHFMT_FLAGS := -i 4 -ci -sr
-# Run from their package indexes at these versions, which check each download's hash.
-YAMLLINT := uvx yamllint@1.38.0
-ZIZMOR := uvx zizmor@1.31.1
-MARKDOWNLINT := npx --yes markdownlint-cli2@0.23.3
-GOVULNCHECK := go run golang.org/x/vuln/cmd/govulncheck@v1.9.0
+# Installed from lock files, which check every package's hash, their dependencies' included.
+YAMLLINT := uv run --locked --project scripts/lint yamllint
+ZIZMOR := uv run --locked --project scripts/lint zizmor
+MARKDOWNLINT := npm --prefix web exec --no -- markdownlint-cli2
+GOVULNCHECK := go tool govulncheck
 
 # Rewrites what the format checks below would refuse.
 fmt: web/node_modules/.package-lock.json
@@ -159,7 +159,7 @@ lint-web: web/node_modules/.package-lock.json
 	npm --prefix web exec --no -- oxlint -c appliance/pve-entry/.oxlintrc.json --deny-warnings --report-unused-disable-directives appliance/pve-entry
 
 tofu-init:
-	set -e; for m in $(MODULES); do $(TOFU) -chdir=$$m init -backend=false -input=false >/dev/null; done
+	set -e; for m in $(MODULES); do $(TOFU) -chdir=$$m init -backend=false -input=false -lockfile=readonly >/dev/null; done
 
 lint-tofu: tofu-init
 	$(TOFU) fmt -check -recursive -diff
@@ -169,9 +169,10 @@ lint-tofu: tofu-init
 	done
 
 # With the values they are installed with, which their schemas check.
+LINT_IMAGE := ghcr.io/kubehenge/kubehenge@sha256:0000000000000000000000000000000000000000000000000000000000000000
 lint-helm:
 	helm lint --strict charts/kubehenge --values pkg/provisioner/testdata/integration-values.yaml
-	helm lint --strict management-cluster/charts/cluster-api-providers --set image=ghcr.io/kubehenge/kubehenge:v$(VERSION)
+	helm lint --strict management-cluster/charts/cluster-api-providers --set image=$(LINT_IMAGE)
 
 lint-shell:
 	shellcheck -x -P SCRIPTDIR -o all -S style $(SHELL_SCRIPTS)
@@ -187,7 +188,7 @@ lint-actions:
 lint-yaml:
 	$(YAMLLINT) --strict $$($(FILES) '*.yml' '*.yaml' ':!:*/templates/*')
 
-lint-markdown:
+lint-markdown: web/node_modules/.package-lock.json
 	$(MARKDOWNLINT) $$($(FILES) '*.md')
 
 lint-docker:

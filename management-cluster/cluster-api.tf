@@ -18,7 +18,8 @@ locals {
   ])) }
 
   # The providers' release runs it too, for its hooks, before the controller's chart is installed.
-  controller_image = coalesce(var.controller_image, "ghcr.io/kubehenge/kubehenge:v${yamldecode(file("${path.module}/../charts/kubehenge/Chart.yaml")).appVersion}")
+  # A release's chart names the image it was released with, by digest; a checkout's names none.
+  controller_image = var.controller_image != null ? var.controller_image : yamldecode(file("${path.module}/../charts/kubehenge/values.yaml")).image
 
   cluster_api_variables = {
     name      = "cluster-api-variables"
@@ -99,11 +100,9 @@ locals {
       patches = [local.replicas_left_to_scaling]
       manager = local.patient_leases
     } },
-    # Not in clusterctl's built-in provider list, so the k3s providers carry their URL.
     { kind = "BootstrapProvider", name = "k3s", namespace = "k3s-bootstrap-system", spec = {
-      version     = local.versions.k3s
-      fetchConfig = { url = "https://github.com/k3s-io/cluster-api-k3s/releases/latest/bootstrap-components.yaml" }
-      patches     = [local.replicas_left_to_scaling]
+      version = local.versions.k3s
+      patches = [local.replicas_left_to_scaling]
     } },
     { kind = "ControlPlaneProvider", name = "kubeadm", namespace = "kubeadm-control-plane-system", spec = {
       version      = local.versions.cluster_api
@@ -117,9 +116,8 @@ locals {
       manager = local.patient_leases
     } },
     { kind = "ControlPlaneProvider", name = "k3s", namespace = "k3s-control-plane-system", spec = {
-      version     = local.versions.k3s
-      fetchConfig = { url = "https://github.com/k3s-io/cluster-api-k3s/releases/latest/control-plane-components.yaml" }
-      patches     = [local.replicas_left_to_scaling]
+      version = local.versions.k3s
+      patches = [local.replicas_left_to_scaling]
     } },
     { kind = "InfrastructureProvider", name = "proxmox", namespace = local.capmox_namespace, spec = {
       version      = local.versions.capmox
@@ -158,39 +156,87 @@ locals {
     "AddonProvider/helm"           = "64Mi"
   }
 
+  # The component of the tested set each provider comes with.
+  provider_components = {
+    "CoreProvider/cluster-api"       = "cluster_api"
+    "BootstrapProvider/kubeadm"      = "cluster_api"
+    "BootstrapProvider/rke2"         = "rke2"
+    "BootstrapProvider/k3s"          = "k3s"
+    "ControlPlaneProvider/kubeadm"   = "cluster_api"
+    "ControlPlaneProvider/rke2"      = "rke2"
+    "ControlPlaneProvider/k3s"       = "k3s"
+    "InfrastructureProvider/proxmox" = "capmox"
+    "IPAMProvider/in-cluster"        = "ipam_in_cluster"
+    "AddonProvider/helm"             = "helm_addon"
+  }
+  components_files = {
+    CoreProvider           = "core-components.yaml"
+    BootstrapProvider      = "bootstrap-components.yaml"
+    ControlPlaneProvider   = "control-plane-components.yaml"
+    InfrastructureProvider = "infrastructure-components.yaml"
+    IPAMProvider           = "ipam-components.yaml"
+    AddonProvider          = "addon-components.yaml"
+  }
+  manifest_digests = merge(local.tested_manifests, var.provider_manifests)
+  # Each provider's files by their address under https://github.com/, as the digests are keyed.
+  manifest_paths = { for p in local.provider_specs : "${p.kind}/${p.name}" => {
+    for role, file in { metadata = "metadata.yaml", components = local.components_files[p.kind] } :
+    role => "${local.provider_repositories[local.provider_components["${p.kind}/${p.name}"]]}/releases/download/${p.spec.version}/${file}"
+  } }
+  missing_manifests = sort(distinct([for path in flatten([for files in values(local.manifest_paths) : values(files)]) : path if !contains(keys(local.manifest_digests), path)]))
+
+  # A provider's image by digest: one given, Kubehenge's build while it applies, or the tested one at
+  # the tested version; null when none of these is.
+  provider_images = { for key, component in local.provider_components : key => (
+    contains(keys(var.provider_images), key) ? var.provider_images[key] :
+    key == "InfrastructureProvider/proxmox" && local.versions.capmox == local.capmox_build.release ? local.capmox_build.image :
+    key == "AddonProvider/helm" && local.versions.helm_addon == local.helm_addon_build.release ? local.helm_addon_build.image :
+    local.versions[component] == local.tested_versions[component] ? local.tested_provider_images[key] : null
+  ) }
+  missing_images = sort([for key, image in local.provider_images : key if image == null])
+
   # Every Cluster API provider names its controller container "manager".
   provider_containers = { for p in local.provider_specs : "${p.kind}/${p.name}" => merge(
-    { name = "manager" },
+    { name = "manager", imageUrl = local.provider_images["${p.kind}/${p.name}"] },
     contains(keys(local.memory_requests), "${p.kind}/${p.name}") ?
     { resources = { requests = { cpu = "10m", memory = local.memory_requests["${p.kind}/${p.name}"] } } } : {},
-    contains(keys(var.provider_images), "${p.kind}/${p.name}") ?
-    { imageUrl = var.provider_images["${p.kind}/${p.name}"] } :
-    "${p.kind}/${p.name}" == "InfrastructureProvider/proxmox" && local.versions.capmox == local.capmox_build.release ?
-    { imageUrl = local.capmox_build.image } :
-    "${p.kind}/${p.name}" == "AddonProvider/helm" && local.versions.helm_addon == local.helm_addon_build.release ?
-    { imageUrl = local.helm_addon_build.image } : {},
   ) }
-  providers = [for p in local.provider_specs : merge(p, { spec = merge(p.spec,
-    length(local.provider_containers["${p.kind}/${p.name}"]) > 1 ?
-    { deployment = { containers = [local.provider_containers["${p.kind}/${p.name}"]] } } : {},
-  ) })]
+  # The operator installs each provider from the ConfigMap the providers chart's hook stores its
+  # checked files in, not from the release.
+  providers = [for p in local.provider_specs : merge(p, {
+    spec = merge(p.spec, {
+      fetchConfig = { selector = { matchLabels = {
+        "kubehenge.dev/provider-manifests"  = lower("${p.kind}-${p.name}")
+        "provider.cluster.x-k8s.io/version" = p.spec.version
+      } } }
+      deployment = { containers = [local.provider_containers["${p.kind}/${p.name}"]] }
+    })
+    # A file without a digest stops the release in its precondition before this is used.
+    manifests = { for role, path in local.manifest_paths["${p.kind}/${p.name}"] :
+    role => "https://github.com/${path}@sha256:${lookup(local.manifest_digests, path, "none")}" }
+  })]
 }
 
 resource "helm_release" "cert_manager" {
   name             = "cert-manager"
   namespace        = "cert-manager"
   create_namespace = true
-  repository       = "https://charts.jetstack.io"
-  chart            = "cert-manager"
-  version          = local.versions.cert_manager
-  wait             = true
+  # Pulled by its digest, which Helm checks the version's tag against.
+  repository = "oci://quay.io/jetstack/charts"
+  chart      = "cert-manager@sha256:${split("@sha256:", local.cert_manager.chart)[1]}"
+  version    = split("@sha256:", local.cert_manager.chart)[0]
+  wait       = true
 
-  # The chart sets no requests, which leaves cert-manager BestEffort; see memory_requests.
+  # The chart sets no requests, which leaves cert-manager BestEffort; see memory_requests. Each image
+  # is named by its tag and digest, which the chart puts after the repository.
   values = [yamlencode({
-    crds       = { enabled = true }
-    resources  = { requests = { cpu = "10m", memory = "64Mi" } }
-    cainjector = { resources = { requests = { cpu = "10m", memory = "64Mi" } } }
-    webhook    = { resources = { requests = { cpu = "10m", memory = "32Mi" } } }
+    crds            = { enabled = true }
+    image           = { tag = local.cert_manager.images.controller }
+    resources       = { requests = { cpu = "10m", memory = "64Mi" } }
+    cainjector      = { image = { tag = local.cert_manager.images.cainjector }, resources = { requests = { cpu = "10m", memory = "64Mi" } } }
+    webhook         = { image = { tag = local.cert_manager.images.webhook }, resources = { requests = { cpu = "10m", memory = "32Mi" } } }
+    startupapicheck = { image = { tag = local.cert_manager.images.startupapicheck } }
+    acmesolver      = { image = { tag = local.cert_manager.images.acmesolver } }
   })]
 
   depends_on = [data.talos_cluster_health.this]
@@ -203,10 +249,11 @@ resource "helm_release" "cluster_api_operator" {
   create_namespace = true
   repository       = "https://kubernetes-sigs.github.io/cluster-api-operator"
   chart            = "cluster-api-operator"
-  version          = local.versions.capi_operator
+  version          = local.capi_operator.chart
   wait             = true
 
   values = [yamlencode({
+    image             = { manager = { tag = local.capi_operator.image } }
     watchConfigSecret = true
     # The chart starts a pprof endpoint by default; nothing here profiles the operator.
     profilerAddress = ""
@@ -264,6 +311,21 @@ resource "helm_release" "cluster_api_providers" {
       value = t.value
       type  = "string"
   }])
+
+  lifecycle {
+    precondition {
+      condition     = local.controller_image != ""
+      error_message = "no controller image: a release's chart names its own, and a checkout's needs controller_image."
+    }
+    precondition {
+      condition     = length(local.missing_manifests) == 0
+      error_message = "no digest for ${join(", ", local.missing_manifests)}: a version held back needs its files' SHA-256 in provider_manifests."
+    }
+    precondition {
+      condition     = length(local.missing_images) == 0
+      error_message = "no image for ${join(", ", local.missing_images)}: a version held back needs its image by digest in provider_images."
+    }
+  }
 
   depends_on = [helm_release.cluster_api_operator]
 }

@@ -79,9 +79,7 @@ func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase str
 	if err != nil {
 		return nil, err
 	}
-	j.Add("Preparing OpenTofu")
-	err = a.tofu(ctx, j, env, plainLine, "init", "-input=false", "-no-color") //nolint:misspell // OpenTofu's flag
-	if err != nil {
+	if err = a.init(ctx, j, env); err != nil {
 		return nil, err
 	}
 	j.Add("Applying the management cluster")
@@ -107,6 +105,21 @@ func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase str
 		return nil, err
 	}
 	return kubeconfig, nil
+}
+
+// init prepares OpenTofu for the module released with the appliance. OpenTofu reads the lock file
+// of the root module only, so the module's own, which holds its providers' checksums, is put there
+// first, and init refuses any provider that does not match it.
+func (a *Appliance) init(ctx context.Context, j *Job, env []string) error {
+	lock, err := os.ReadFile(filepath.Join(a.Module, ".terraform.lock.hcl"))
+	if err != nil {
+		return fmt.Errorf("the module's provider lock: %w", err)
+	}
+	if err = writeFileAtomic(filepath.Join(a.workdir(), ".terraform.lock.hcl"), lock); err != nil {
+		return err
+	}
+	j.Add("Preparing OpenTofu")
+	return a.tofu(ctx, j, env, plainLine, "init", "-input=false", "-lockfile=readonly", "-no-color") //nolint:misspell // OpenTofu's flag
 }
 
 func (a *Appliance) writeConfig(s *Settings) error {

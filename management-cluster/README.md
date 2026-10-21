@@ -20,7 +20,7 @@ In the cluster:
 - The Cluster API Operator, and through it Cluster API core (with the ClusterClass and Runtime SDK features on), the Proxmox VE infrastructure provider (`capmox`), the bootstrap and control-plane providers for kubeadm, RKE2 and k3s (Talos's join with a Talos ClusterClass), the in-cluster IP address manager, and the Add-on Provider for Helm.
 - The `kubehenge` chart (`../charts/kubehenge`): Kubehenge's ClusterClasses and its controller.
 
-`registry_mirrors` points the nodes at image registry mirrors, for networks without direct access to the public registries. `cluster_oidc` lists OpenID Connect providers every new workload cluster's API server trusts unless the cluster names its own; tokens and certificates keep working beside them. `capmox` verifies the Proxmox VE API's certificate against the CA you give it; upstream's default is to skip that check. The nodes do not report to Sidero's public discovery service.
+`registry_mirrors` points the nodes at image registry mirrors, for networks without direct access to the public registries. The nodes pull the Image Factory's installer, Sidero's images and everything from registry.k8s.io only with their publishers' keyless signatures, so a mirror of those registries serves the signatures too. The Talos disk image the VMs boot from is downloaded from the Image Factory over TLS alone: the factory builds it again with different bytes, and publishes no checksum or signature for it. `cluster_oidc` lists OpenID Connect providers every new workload cluster's API server trusts unless the cluster names its own; tokens and certificates keep working beside them. `capmox` verifies the Proxmox VE API's certificate against the CA you give it; upstream's default is to skip that check. The nodes do not report to Sidero's public discovery service.
 
 ## Before you apply
 
@@ -37,13 +37,13 @@ In the cluster:
 cp terraform.tfvars.example terraform.tfvars   # then fill it in
 export TF_VAR_proxmox_api_token='root@pam!kubehenge=...'
 export TF_VAR_proxmox_ca_certificate="$(cat pve-root-ca.pem)"
-tofu init
+tofu init -lockfile=readonly
 tofu apply
 tofu output -raw kubeconfig > kubeconfig
 tofu output -raw talosconfig > talosconfig
 ```
 
-`terraform` works the same as `tofu`, from version 1.11.
+`-lockfile=readonly` holds the providers to the checksums in `.terraform.lock.hcl`. A root module of your own that calls this one needs a copy of that file beside it, since only the root module's is read. `terraform` works the same as `tofu`, from version 1.11.
 
 The state holds the cluster's secrets and its administrator credentials. Keep it in an encrypted backend, or use OpenTofu's state encryption.
 

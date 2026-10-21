@@ -181,6 +181,7 @@ The API token is read from KUBEHENGE_PROXMOX_TOKEN.`,
 	f.StringVar(&gateway, "build-gateway", "", "gateway for --build-address")
 	f.StringSliceVar(&dns, "build-dns", nil, "DNS servers for --build-address")
 	f.BoolVar(&builder.KeepOnFailure, "keep-on-failure", false, "leave the VM in place when preparing an image fails")
+	f.StringVar(&builder.CPUType, "cpu-type", templates.DefaultCPUType, "QEMU CPU type of the template, which its clones keep; host shows them the node's own CPU")
 	_ = cmd.MarkFlagRequired("node")
 	cmd.PreRunE = func(_ *cobra.Command, args []string) error {
 		if args[0] == string(templates.Kubeadm) && req.KubernetesVersion == "" {

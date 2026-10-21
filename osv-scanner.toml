@@ -1,5 +1,10 @@
-# Advisories that name a whole module where this module uses none of the affected code. govulncheck
-# (make lint) still fails on any advisory the code reaches.
+# Advisories that name a whole module where this module uses none of the affected code, or affect
+# only input Kubehenge never gives the code. govulncheck (make lint) still fails on any advisory the
+# Go code reaches.
+
+[[IgnoredVulns]]
+id = "GHSA-vfj7-8cjw-p6xm"
+reason = "braces, with no fixed release, recurses without bound on deeply nested brace patterns. Only markdownlint-cli2, a development dependency, uses it, to expand the repository's own Markdown globs."
 
 [[IgnoredVulns]]
 id = "GO-2026-5932"

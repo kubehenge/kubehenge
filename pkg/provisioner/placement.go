@@ -111,9 +111,10 @@ func placement(chosen, online []string) []string {
 	return up
 }
 
-// GeneratePatches gives capmox the nodes it may put the cluster's new VMs on. capmox clones every
-// VM onto its template's node when the cluster names none, and fails to place any VM while one of
-// the nodes it names does not answer, so the cluster always names the nodes that are online.
+// GeneratePatches gives capmox the nodes it may put the cluster's new VMs on, and has RKE2 and k3s
+// nodes install their release from checked files (ReleaseChecksums). capmox clones every VM onto
+// its template's node when the cluster names none, and fails to place any VM while one of the
+// nodes it names does not answer, so the cluster always names the nodes that are online.
 func (h *Hooks) GeneratePatches(ctx context.Context, req *runtimehooksv1.GeneratePatchesRequest, resp *runtimehooksv1.GeneratePatchesResponse) {
 	resp.Status = runtimehooksv1.ResponseStatusSuccess
 	var chosen []string
@@ -128,28 +129,47 @@ func (h *Hooks) GeneratePatches(ctx context.Context, req *runtimehooksv1.Generat
 	}
 	for i := range req.Items {
 		item := &req.Items[i]
-		holder := item.HolderReference
-		if holder.Kind != "Cluster" || holder.FieldPath != "spec.infrastructureRef" {
-			continue
+		var patch []byte
+		var err error
+		switch {
+		case item.HolderReference.Kind == "Cluster" && item.HolderReference.FieldPath == "spec.infrastructureRef":
+			patch, err = h.placementPatch(ctx, &item.HolderReference, chosen)
+		case h.Releases != nil:
+			patch, err = h.Releases.patch(ctx, item, req.Variables)
 		}
-		online, err := h.onlineNodes(ctx, client.ObjectKey{Namespace: holder.Namespace, Name: holder.Name})
 		if err != nil {
 			resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
 			return
 		}
-		nodes := placement(chosen, online)
-		if len(nodes) == 0 {
-			continue
+		if patch != nil {
+			resp.Items = append(resp.Items, runtimehooksv1.GeneratePatchesResponseItem{
+				UID: item.UID, PatchType: runtimehooksv1.JSONPatchType, Patch: patch,
+			})
 		}
-		patch, err := json.Marshal([]map[string]any{{"op": "add", "path": "/spec/template/spec/allowedNodes", "value": nodes}})
-		if err != nil {
-			resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
-			return
-		}
-		resp.Items = append(resp.Items, runtimehooksv1.GeneratePatchesResponseItem{
-			UID: item.UID, PatchType: runtimehooksv1.JSONPatchType, Patch: patch,
-		})
 	}
+}
+
+// placementPatch names the nodes on the cluster's ProxmoxClusterTemplate; it is nil while there
+// are none to name.
+func (h *Hooks) placementPatch(ctx context.Context, holder *runtimehooksv1.HolderReference, chosen []string) ([]byte, error) {
+	online, err := h.onlineNodes(ctx, client.ObjectKey{Namespace: holder.Namespace, Name: holder.Name})
+	if err != nil {
+		return nil, err
+	}
+	nodes := placement(chosen, online)
+	if len(nodes) == 0 {
+		return nil, nil
+	}
+	patch, err := json.Marshal([]map[string]any{addOp(templateSpec+"/allowedNodes", nodes)})
+	if err != nil {
+		return nil, fmt.Errorf("patching the nodes: %w", err)
+	}
+	return patch, nil
+}
+
+// addOp is a JSON patch operation adding value at path.
+func addOp(path string, value any) map[string]any {
+	return map[string]any{"op": "add", "path": path, "value": value}
 }
 
 // onlineNodes are the nodes recorded on the cluster, or, for a cluster the Placer has not got to

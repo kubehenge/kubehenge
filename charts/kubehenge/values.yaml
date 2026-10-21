@@ -50,7 +50,8 @@ podSecurityExempt:
   - cattle-fleet-local-system
   - cattle-turtles-system
 
-# Kubehenge's controller image; empty means the one this chart was released with.
+# Kubehenge's controller image by digest, repository@sha256:<digest>: a release's chart names the
+# one it was released with, and a checkout's needs one given.
 image: ""
 
 proxmox:
@@ -80,91 +81,395 @@ kubeVip: ghcr.io/kube-vip/kube-vip:v1.3.1@sha256:1962f9daf226503f7e6b107f595cb28
 
 # Installed into clusters: the Proxmox VE cloud controller manager and CSI plugin into every one,
 # the CNI chosen for a cluster whose distribution has none of its own (kubeadm), and the add-ons a
-# cluster switches on.
+# cluster switches on. Each chart's version carries its digest, which it is pulled by: an OCI
+# chart's manifest digest, or the sha256 of the archive that a repository's index lists. A chart's
+# values, beneath those Kubehenge gives it, name each image it runs by tag and digest, as one tag
+# where the chart joins it to the repository; Cilium's chart pins its own.
 addons:
   headlamp:
     repository: https://kubernetes-sigs.github.io/headlamp
     chart: headlamp
-    version: 0.46.0
-    # The chart names its image by tag only.
-    # renovate: datasource=docker depName=ghcr.io/headlamp-k8s/headlamp
-    image: v0.46.0@sha256:8a0ef97527544baa2b35825940ddf4db6e2d09c30cd5aa31fd269ff604cc8b75
+    version: 0.46.0@sha256:faa471a8c5c55125b3dceed1cf73000e1ced18f07e2088e5e12e75292fb9ae62
+    values:
+      image:
+        # renovate: datasource=docker depName=ghcr.io/headlamp-k8s/headlamp
+        tag: v0.46.0@sha256:8a0ef97527544baa2b35825940ddf4db6e2d09c30cd5aa31fd269ff604cc8b75
   rancher:
     repository: https://releases.rancher.com/server-charts/stable
     chart: rancher
-    version: 2.15.2
+    version: 2.15.2@sha256:855cb9be954f65a31b9a8c77f7aebce125c2d7797425257d21d35e3380816ac8
     # Kubernetes minor versions this Rancher release runs on (its chart's kubeVersion and support
     # matrix); the cluster that installs it is held within them.
     kubernetes: 34-36
+    # Turtles, which Rancher installs itself and whose Cluster API its registered clusters need, and
+    # the Cluster API controller it runs: those of the rancher-turtles chart this Rancher release
+    # installs, so they move with Rancher. Kubehenge's controller hands them to Rancher.
+    turtles:
+      image: docker.io/rancher/turtles:v0.27.2@sha256:fff10f34feffcf0fc583ffb51975e9e6f2839c65d54f96668790bbb770456512
+      clusterAPI: docker.io/rancher/cluster-api-controller:v1.13.3@sha256:80f8775553807ddba520dcbfd84da42fbfdfbd36036fc2f9238b1ad423649309
+    values:
+      image:
+        # renovate: datasource=docker depName=docker.io/rancher/rancher
+        tag: v2.15.2@sha256:0c3d8e5702555b2bfd2ec3fe7a6e5f95484a28fcb9787c498db3e5b0f62652ea
+      # Rancher reads a setting from CATTLE_<NAME> before its own object, and starts the agent and
+      # shell images exactly as named here. Imported-cluster version management would upgrade RKE2
+      # and k3s beside Cluster API, with images it names by tag alone.
+      extraEnv:
+        - name: CATTLE_IMPORTED_CLUSTER_VERSION_MANAGEMENT
+          value: "false"
+        - name: CATTLE_AGENT_IMAGE
+          # renovate: datasource=docker depName=docker.io/rancher/rancher-agent
+          value: rancher/rancher-agent:v2.15.2@sha256:fb006776b7ee42818ed1e2575bc2015e33ec64d6799545ba72e4297e43ce22a3
+        - name: CATTLE_SHELL_IMAGE
+          value: rancher/shell:v0.8.2@sha256:1eeed72d4eda486de13403c4ae6e9d29a0842edc35d0f4a8fb7b0dab79d04be9
+      # The webhook's and Fleet's charts, which Rancher installs itself, read these from its
+      # rancher-config ConfigMap. From here on, and the shell image above, each is the one this
+      # Rancher release names, so they move with Rancher.
+      webhook:
+        image:
+          repository: rancher/rancher-webhook
+          tag: v0.11.3@sha256:6d76ccda60ab030b898e615730a037c8f59a4cc9f7d04b49f7f5bd1be6c23e3f
+      fleet:
+        image:
+          repository: rancher/fleet
+          tag: v0.16.2@sha256:31f39589e1f876ebafe8af05e2aabf1ee0b553fb94d2f8aaf8ea691b67fe66ca
+        agentImage:
+          repository: rancher/fleet-agent
+          tag: v0.16.2@sha256:9bed916e5a2307ac4a6c752f809964364464de71bdd47f95009f4be657e071c7
+      preUpgrade:
+        image:
+          tag: v0.8.2@sha256:1eeed72d4eda486de13403c4ae6e9d29a0842edc35d0f4a8fb7b0dab79d04be9
+      postDelete:
+        image:
+          tag: v0.8.2@sha256:1eeed72d4eda486de13403c4ae6e9d29a0842edc35d0f4a8fb7b0dab79d04be9
+      auditLog:
+        image:
+          tag: 16.0-15.11@sha256:c05817e6ec52af611e2d1e2e901b4c0c8e57ad49e516e2faca25d046d8deff89
   # Prometheus, Alertmanager and Grafana, for clusters that switch monitoring on.
   monitoring:
     repository: https://prometheus-community.github.io/helm-charts
     chart: kube-prometheus-stack
-    version: 92.10.1
+    version: 92.10.1@sha256:0d16c44e941372400ee8bcdc232ebee957eefcc910f8833767d8b94145f20094
     # In front of the metrics etcd, kube-proxy and node-exporter serve without authentication.
     # renovate: datasource=docker depName=ghcr.io/kube-rbac-proxy/kube-rbac-proxy
     kubeRBACProxy: ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.23.0@sha256:296fd0a10fb635414b4533b983f0d5a686ce0ce73567b7079b6595ba75034f1a
+    values:
+      prometheusOperator:
+        image:
+          # renovate: datasource=docker depName=quay.io/prometheus-operator/prometheus-operator
+          tag: v0.94.1@sha256:7c88d4e7bae63bd8d0f8da986054337c23b4472fa8d3c6817f5bc4b8407a2d6a
+        prometheusConfigReloader:
+          image:
+            # yamllint disable-line rule:line-length
+            # renovate: datasource=docker depName=quay.io/prometheus-operator/prometheus-config-reloader
+            tag: v0.94.1@sha256:06b52bd4dbe3ed6dd5905aadaf8b9987d9da4c31d37bb86deaadae68cee2d26b
+        admissionWebhooks:
+          deployment:
+            image:
+              # renovate: datasource=docker depName=quay.io/prometheus-operator/admission-webhook
+              tag: v0.94.1@sha256:691ecb7e05ce81b899639c187da7614ffa12698a60ab8e2747f454c0efb3a55e
+          patch:
+            image:
+              # renovate: datasource=docker depName=ghcr.io/jkroepke/kube-webhook-certgen
+              tag: 1.11.0@sha256:778d97dc3986355625e14392419b3364c487a7c807d4d86ddad1df369129b082
+        thanosImage:
+          # renovate: datasource=docker depName=quay.io/thanos/thanos
+          tag: v0.42.4@sha256:b567818fe608067eb0f1d7c2c4fe361e7ad83c8a256234c97685f1d0bf670cc8
+      # The chart takes the version it gives the operator from the image's tag unless one is
+      # set, and the operator cannot read one with a digest in it.
+      prometheus:
+        prometheusSpec:
+          image:
+            # renovate: datasource=docker depName=quay.io/prometheus/prometheus
+            tag: v3.15.0-distroless@sha256:b2a413d5a03ea6a76782a508d1c7947440bba3b973931a25676e278431891b01
+          # renovate: datasource=docker depName=quay.io/prometheus/prometheus depType=version
+          version: v3.15.0
+      alertmanager:
+        alertmanagerSpec:
+          image:
+            # renovate: datasource=docker depName=quay.io/prometheus/alertmanager
+            tag: v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a
+          # renovate: datasource=docker depName=quay.io/prometheus/alertmanager depType=version
+          version: v0.34.1
+      thanosRuler:
+        thanosRulerSpec:
+          image:
+            # renovate: datasource=docker depName=quay.io/thanos/thanos
+            tag: v0.42.4@sha256:b567818fe608067eb0f1d7c2c4fe361e7ad83c8a256234c97685f1d0bf670cc8
+      grafana:
+        image:
+          # renovate: datasource=docker depName=docker.io/grafana/grafana
+          tag: 13.2.4-distroless@sha256:ae3d3add290adbe6a88412229f5d76fd7bb82743050881698642d3d62f277e35
+        sidecar:
+          image:
+            # renovate: datasource=docker depName=quay.io/kiwigrid/k8s-sidecar
+            tag: 2.14.1@sha256:092dbe0c335fba9af414a27630ca68f34df6185784fa847d9954187e69dbfdd7
+        testFramework:
+          image:
+            # renovate: datasource=docker depName=docker.io/bats/bats
+            tag: 1.14.0@sha256:5322b877351fda0cc435de8c6116de7d0a2ec79d7c680132a0ef329a633bc66f
+      kube-state-metrics:
+        image:
+          # yamllint disable-line rule:line-length
+          # renovate: datasource=docker depName=registry.k8s.io/kube-state-metrics/kube-state-metrics
+          tag: v2.20.0@sha256:42cfe3723a5f058171c627537fb57a3ea0f26e4380fa18555a95cb1a1b4cfc5b
+      prometheus-node-exporter:
+        image:
+          # The whole reference: the chart adds -distroless to a tag of its own.
+          # renovate: datasource=docker depName=quay.io/prometheus/node-exporter
+          tag: quay.io/prometheus/node-exporter:v1.12.1-distroless@sha256:8c9bac11973b94b59be88d6e11fee4429aa743c8846cdc75d65b18db33f6a106
   # Kyverno and its Pod Security Standards policies, for clusters that have Kyverno enforce pod
   # security.
   kyverno:
     repository: https://kyverno.github.io/kyverno
     chart: kyverno
-    version: 3.9.1
+    version: 3.9.1@sha256:7b7fe51a431b5b133b0ce7eb9dcb222b6a37fb967c163223cf480054ad14d752
+    values:
+      admissionController:
+        initContainer:
+          image:
+            # renovate: datasource=docker depName=reg.kyverno.io/kyverno/kyvernopre
+            tag: v1.19.1@sha256:c25c47461f06f2845a48c319ae86fbbc1730a7b9ed5b701889c9dc1f9ee94b09
+        container:
+          image:
+            # renovate: datasource=docker depName=reg.kyverno.io/kyverno/kyverno
+            tag: v1.19.1@sha256:b31d8511ae5fd6010e2a01ea72ebae08eb82fa51d91af14a1d9fe989949b4edb
+      backgroundController:
+        image:
+          # renovate: datasource=docker depName=reg.kyverno.io/kyverno/background-controller
+          tag: v1.19.1@sha256:8f1e9143373a27578cafc2d28d2c66ba0926c63b4c77e63de8d2fdd4a122859f
+      cleanupController:
+        image:
+          # renovate: datasource=docker depName=reg.kyverno.io/kyverno/cleanup-controller
+          tag: v1.19.1@sha256:67a48e62a8d8f8120c86914ff822b90017c54054c7b64ef8a1555645e9d9761e
+      reportsController:
+        image:
+          # renovate: datasource=docker depName=reg.kyverno.io/kyverno/reports-controller
+          tag: v1.19.1@sha256:c0eee97b9b44a0dd35805d56b358fa52548480f79d4944602b9609538eccd64c
+      crds:
+        migration:
+          image:
+            # renovate: datasource=docker depName=reg.kyverno.io/kyverno/kyverno-cli
+            tag: v1.19.1@sha256:ced7b2be0b04250cabfe695f15307f69eb715fe23234816388af4f3812915b2a
+      webhooksCleanup:
+        image:
+          # renovate: datasource=docker depName=ghcr.io/kyverno/readiness-checker
+          tag: v1.19.1@sha256:31bb42ce7f5b2e27c1cf633aeff4f0cad1f5bb63761e2cb09f0e25cdd26572bf
+      test:
+        image:
+          # renovate: datasource=docker depName=ghcr.io/kyverno/readiness-checker
+          tag: v1.19.1@sha256:31bb42ce7f5b2e27c1cf633aeff4f0cad1f5bb63761e2cb09f0e25cdd26572bf
   kyvernoPolicies:
     repository: https://kyverno.github.io/kyverno
     chart: kyverno-policies
-    version: 3.9.1
-  # Istio in ambient mode, for clusters that switch it on: istiod's chart, with base, cni and
-  # ztunnel beside it at the same version.
+    version: 3.9.1@sha256:42078dacb0954041a00b3f2f086bf1a2b5d6588ff5ac42ee7fbecc3148f6fb7d
+  # Istio in ambient mode, for clusters that switch it on: istiod, and its base, cni and ztunnel
+  # charts at the same version.
   istio:
     repository: oci://ghcr.io/istio/release/charts
     chart: istiod
     # renovate: datasource=docker depName=ghcr.io/istio/release/charts/istiod
-    version: 1.31.2
+    version: 1.31.2@sha256:92c8b0ab5c67dbd750e5625bc3dd7f7c995287079c36279ea649178adc5afa41
+    # Istio's charts take an image with a slash in its name as the whole reference.
+    values:
+      # renovate: datasource=docker depName=docker.io/istio/pilot
+      image: docker.io/istio/pilot:1.31.2@sha256:cc1376dfd15b82c2e1a5dae72c3064503391bc20969805c7901ed823dad94e94
+      global:
+        # The proxies istiod injects into waypoints and gateways.
+        proxy:
+          # renovate: datasource=docker depName=docker.io/istio/proxyv2
+          image: docker.io/istio/proxyv2:1.31.2@sha256:de2028fe8f4cd36231f1a903218800f1ea2bdda7b8de49fb602d0bb399598256
+        proxy_init:
+          # renovate: datasource=docker depName=docker.io/istio/proxyv2
+          image: docker.io/istio/proxyv2:1.31.2@sha256:de2028fe8f4cd36231f1a903218800f1ea2bdda7b8de49fb602d0bb399598256
+        agentgateway:
+          # renovate: datasource=docker depName=docker.io/istio/agentgateway
+          image: docker.io/istio/agentgateway:1.31.2@sha256:74c7bdeac7ef1aa268fcb59fa93f9ff622765fefc61f04fe30bee3060b881e6c
+      sidecarInjectorWebhook:
+        templates:
+          # Proxyless gRPC sidecars, which ambient mode never injects, from a template that names
+          # its image by tag; a pod that asks for it is refused instead.
+          grpc-simple: ""
+  istioBase:
+    repository: oci://ghcr.io/istio/release/charts
+    chart: base
+    # renovate: datasource=docker depName=ghcr.io/istio/release/charts/base
+    version: 1.31.2@sha256:4e992fddb71ace84e46dc1eb8309402a20aa869d46c20f95bd64f12826bd842a
+  istioCNI:
+    repository: oci://ghcr.io/istio/release/charts
+    chart: cni
+    # renovate: datasource=docker depName=ghcr.io/istio/release/charts/cni
+    version: 1.31.2@sha256:652d40a1d666c07bfeb346c84b66de30b656ac515f150e9ab32fd4dead25a636
+    values:
+      # renovate: datasource=docker depName=docker.io/istio/install-cni
+      image: docker.io/istio/install-cni:1.31.2@sha256:442fb7cc984c743622a79d8e824515112d42b76d3ef1866f2f8e4ceadea6d172
+  istioZtunnel:
+    repository: oci://ghcr.io/istio/release/charts
+    chart: ztunnel
+    # renovate: datasource=docker depName=ghcr.io/istio/release/charts/ztunnel
+    version: 1.31.2@sha256:cf3ac400874dc6bdf7affb1396dde3a46c10f1a60fb9542c65d2b6fc02de376c
+    values:
+      # renovate: datasource=docker depName=docker.io/istio/ztunnel
+      image: docker.io/istio/ztunnel:1.31.2@sha256:63c8073f481210c0e2221adfe7910a24f83853d31a9772141c4f8b56577450a0
   # Installed with Rancher, which makes its CA and certificate through it, and with monitoring,
   # whose metrics proxies and Prometheus it gives their certificates.
   certManager:
     repository: https://charts.jetstack.io
     chart: cert-manager
-    version: v1.21.2
+    version: v1.21.2@sha256:73a56e1728edd6c99f1f31082618c3259d279a76b7ebd3d4bdc5475c2442d34a
+    values:
+      image:
+        # renovate: datasource=docker depName=quay.io/jetstack/cert-manager-controller
+        tag: v1.21.2@sha256:70f532fd9cfde0b09d55687200942399d89838bc2d5d5b45152eb799a15912b8
+      webhook:
+        image:
+          # renovate: datasource=docker depName=quay.io/jetstack/cert-manager-webhook
+          tag: v1.21.2@sha256:a60e2dac46dbb8a7f3df95c54ce941012f54c2fe022f0ee55aaa1ab40ed957ae
+      cainjector:
+        image:
+          # renovate: datasource=docker depName=quay.io/jetstack/cert-manager-cainjector
+          tag: v1.21.2@sha256:c85268c64f2e0e76684bf5fe8906caff34b82523561c6affe0fae3546bd87562
+      startupapicheck:
+        image:
+          # renovate: datasource=docker depName=quay.io/jetstack/cert-manager-startupapicheck
+          tag: v1.21.2@sha256:46e75b6866359ffb5d82624f41e3ed1c70b2994982702ced547ce5edb418a8f5
+      acmesolver:
+        image:
+          # renovate: datasource=docker depName=quay.io/jetstack/cert-manager-acmesolver
+          tag: v1.21.2@sha256:699b40d622211ab7accad8a21b04c5fbaa1841ef7a12621e8de492dbe27b2503
   cloudControllerManager:
     repository: oci://ghcr.io/sergelogvinov/charts
     chart: proxmox-cloud-controller-manager
     # yamllint disable-line rule:line-length
     # renovate: datasource=docker depName=ghcr.io/sergelogvinov/charts/proxmox-cloud-controller-manager
-    version: 0.2.32
+    version: 0.2.32@sha256:2e7fbb98e1554d198d28b0f1365d1391bc646664cbaba2628b7f3031c4a66308
+    values:
+      image:
+        # yamllint disable-line rule:line-length
+        # renovate: datasource=docker depName=ghcr.io/sergelogvinov/proxmox-cloud-controller-manager
+        tag: v0.16.1@sha256:474dbfd3be5c2e0866e520bc6ddb60b7accef554ca7401488eee35252cdf8734
   csiPlugin:
     repository: oci://ghcr.io/sergelogvinov/charts
     chart: proxmox-csi-plugin
     # renovate: datasource=docker depName=ghcr.io/sergelogvinov/charts/proxmox-csi-plugin
-    version: 0.5.12
+    version: 0.5.12@sha256:bbd954924333b2c6dd0a01ed6b347f0798c4ed9f2de99b0c3d0bcef3e9f9efdd
+    values:
+      controller:
+        plugin:
+          image:
+            # renovate: datasource=docker depName=ghcr.io/sergelogvinov/proxmox-csi-controller
+            tag: v0.20.0@sha256:95ef74cce03e89a1706d9b32888a84bf44e0db439c4fe2a4334ce123728d4c3b
+        attacher:
+          image:
+            # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-attacher
+            tag: v4.12.0@sha256:b9dc9a714a484ccdeeb6f86d88d4db9b7a5ecfc5a55da6db3a60bb3fa33c278a
+        provisioner:
+          image:
+            # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-provisioner
+            tag: v6.3.0@sha256:a4b0b1a37605b7b04a293e136edf7006ec1786a8eb3f4e5a945f81d667dcc371
+        resizer:
+          image:
+            # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-resizer
+            tag: v2.2.1@sha256:ea1d25e23479000c7e8eeb92d827df66258df4e482ca054c5e7ce3fc0f5c41a5
+        snapshotter:
+          image:
+            # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-snapshotter
+            tag: v8.6.0@sha256:42af0929bcd60a43499825c078a60ff0534e08af8fbeb283aa391be40feb9f3e
+      node:
+        plugin:
+          image:
+            # renovate: datasource=docker depName=ghcr.io/sergelogvinov/proxmox-csi-node
+            tag: v0.20.0@sha256:e0151137a1c5fa4faea9b4622436b203f1dc246ea37a3a77d09d3855c70aabd1
+        driverRegistrar:
+          image:
+            # yamllint disable-line rule:line-length
+            # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-node-driver-registrar
+            tag: v2.17.0@sha256:f9de845b170155199f2a2a3f9531cf13d78e31235e9db6b6582a8b0db0a50dad
+      livenessprobe:
+        image:
+          # renovate: datasource=docker depName=registry.k8s.io/sig-storage/livenessprobe
+          tag: v2.19.0@sha256:06da0d5b8908072f2e4522692aee8dc119fba7247a9658497e1153992cd777e9
   cilium:
     repository: https://helm.cilium.io
     chart: cilium
-    version: 1.20.3
+    version: 1.20.3@sha256:0805a5273118c436c9772bb9566d87ec558d8b25cc2ce5dc32918ecdd36f2c7c
   calico:
     repository: https://docs.tigera.io/calico/charts
     chart: tigera-operator
-    version: v3.33.0
+    version: v3.33.0@sha256:efcc8633742c136708cd8de9673862c6eee3a91ed176d7f2835690ab625ad846
+    values:
+      tigeraOperator:
+        # renovate: datasource=docker depName=quay.io/tigera/operator
+        version: v1.44.0@sha256:066c2e8d67452903a516fa54aabc22a604ec911b5882467b4de550d10fa8b21e
+    # The images the operator runs Calico from, at its release, which it takes by digest from an
+    # ImageSet named for that release. It refuses a set that lacks one it runs, so all are here.
+    images:
+      # renovate: datasource=docker depName=quay.io/calico/calico
+      - quay.io/calico/calico:v3.33.0@sha256:4ebc20730127bc9e8bf1db5f5a2d8b58cf37fe0e891b3c7b5471992221d213e5
+      # renovate: datasource=docker depName=quay.io/calico/node
+      - quay.io/calico/node:v3.33.0@sha256:565d8db3200e443955557f8f28ff44ab8a4a456754bc74a19c4f2f3444af9b1c
+      # renovate: datasource=docker depName=quay.io/calico/third-party-cni-plugins
+      - quay.io/calico/third-party-cni-plugins:v3.33.0@sha256:0f32f48279484c0d6f0e0d0e767b2d0e1a6c6ca34cb3421a61b989d992f3df41
+      # renovate: datasource=docker depName=quay.io/calico/whisker
+      - quay.io/calico/whisker:v3.33.0@sha256:4802f246acbc4ac08d1ce6b5c229a518dc4d85e33b50b4d1366b05a49459497c
+      # renovate: datasource=docker depName=quay.io/calico/envoy-gateway
+      - quay.io/calico/envoy-gateway:v3.33.0@sha256:e1a3e0b964c72dbe9bc6a58fee8dd20cb94109e40649416f70d14d2710810b64
+      # renovate: datasource=docker depName=quay.io/calico/envoy-proxy
+      - quay.io/calico/envoy-proxy:v3.33.0@sha256:431d1467703624b377f5d801f36367d948aa7da0ea6f6ac132d2f8758d70513a
+      # renovate: datasource=docker depName=quay.io/calico/envoy-ratelimit
+      - quay.io/calico/envoy-ratelimit:v3.33.0@sha256:22470bbe92715b9ea5bed075ea491cf3e31dcd7814ef9049d6c1803b28a3fb64
+      # renovate: datasource=docker depName=quay.io/calico/istio-pilot
+      - quay.io/calico/istio-pilot:v3.33.0@sha256:de402261cba5fdf354308775a03a2451feb11ebb70c6e705dfca36681f6910ff
+      # renovate: datasource=docker depName=quay.io/calico/istio-install-cni
+      - quay.io/calico/istio-install-cni:v3.33.0@sha256:799ccfdecfb1c84ed12eec3ff033c4bc138fb0745a28c1b127f198cfda63e22e
+      # renovate: datasource=docker depName=quay.io/calico/istio-ztunnel
+      - quay.io/calico/istio-ztunnel:v3.33.0@sha256:c176e7fde49109b25b5153ded76435782dc4869c05415bfc0fb9f7fcecf90359
+      # renovate: datasource=docker depName=quay.io/calico/istio-proxyv2
+      - quay.io/calico/istio-proxyv2:v3.33.0@sha256:754ceacbb2ed3a41c0a6ece5a4a006ae6dbc6cdd441fc2865ad1f05e7894171e
+      # renovate: datasource=docker depName=quay.io/calico/cni-windows
+      - quay.io/calico/cni-windows:v3.33.0@sha256:831453427dfb803acd73f32cbe53000e1e7942971dff9f25d2003832ed2f1997
+      # renovate: datasource=docker depName=quay.io/calico/node-windows
+      - quay.io/calico/node-windows:v3.33.0@sha256:dc0d63f711964b074e5275d843c0442e72547f2ec5a5c03e793a7180af7516c3
   # The ingress controller of kubeadm clusters, which bring none; RKE2 and k3s bring Traefik.
   traefik:
     repository: https://traefik.github.io/charts
     chart: traefik
-    version: 42.0.0
+    version: 42.0.0@sha256:a6ede324662ddcca0160a5ce639b7b5b9dd40a20a475e1101e9f95b5e5d83dd5
+    values:
+      image:
+        # renovate: datasource=docker depName=docker.io/library/traefik
+        tag: v3.7.14@sha256:575fa15b135078fe5e50aa847987d96dbddd7b093c172429618404df73f3fa7c
   # The load balancers a cluster chooses from for its Services of type LoadBalancer: MetalLB, or
   # kube-vip with its cloud provider, which hands out the addresses. kube-vip runs the image above.
   metallb:
     repository: https://metallb.github.io/metallb
     chart: metallb
-    version: 0.16.1
+    version: 0.16.1@sha256:fb06bb584fcb7856f15733b2a6a2aff5b61b5c350687e341c163ae24a5938adc
+    values:
+      controller:
+        image:
+          # renovate: datasource=docker depName=quay.io/metallb/controller
+          tag: v0.16.1@sha256:f51ab515de9ccd20dc3dccb093e48df8adddac019326c456f449e55ba91b6420
+      speaker:
+        image:
+          # renovate: datasource=docker depName=quay.io/metallb/speaker
+          tag: v0.16.1@sha256:16561e96531e1852d5c229ad7fae6e994dcfa983ff7f4de6b6208b34a4e2ddbc
+        # The FRR this MetalLB release's chart names, so it moves with MetalLB; layer 2 mode leaves
+        # it off.
+        frr:
+          image:
+            tag: 10.5.3@sha256:37b42d2b340c322edc5f20dc4598373adb6e813e95cc9d4a18f64f9a37c98a4c
   kubeVip:
     repository: https://kube-vip.github.io/helm-charts
     chart: kube-vip
-    version: 0.11.1
+    version: 0.11.1@sha256:739401e81471d2d485df614d484aecbf8364ca5c4cab0f998631394d75b9e1dd
   kubeVipCloudProvider:
     repository: https://kube-vip.github.io/helm-charts
     chart: kube-vip-cloud-provider
-    version: 0.2.10
-    # The chart's own lags the releases.
-    # renovate: datasource=docker depName=ghcr.io/kube-vip/kube-vip-cloud-provider
-    image: ghcr.io/kube-vip/kube-vip-cloud-provider:v0.0.13@sha256:b8b6a5180e678b410e2c5dba86b87fa8099ada16e2f067d83f04e749f8ea54ab
+    version: 0.2.10@sha256:6a9c9d7540cd3d7a4ebfaf205c4df07c809b19b463e6a764d59c011387d2695e
+    values:
+      # The chart's own lags the releases.
+      image:
+        repository: ghcr.io/kube-vip/kube-vip-cloud-provider
+        # renovate: datasource=docker depName=ghcr.io/kube-vip/kube-vip-cloud-provider
+        tag: v0.0.13@sha256:b8b6a5180e678b410e2c5dba86b87fa8099ada16e2f067d83f04e749f8ea54ab

@@ -28,27 +28,20 @@ jobs:
     env:
       IMAGE: ghcr.io/kubehenge/kubehenge
       GH_TOKEN: ${{ github.token }}
+      # Go as scripts/tools.sh installs it, never a toolchain go.mod would have it download. Go does
+      # not retry a module download the proxy breaks off, so it fetches from the source then; go.sum
+      # and the checksum database still check every module.
+      GOTOOLCHAIN: local
+      GOPROXY: https://proxy.golang.org|direct
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # No build caches: a cache written by another workflow's run could reach what is released.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 26
-          package-manager-cache: false
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          enable-cache: false
       - name: Tools
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Version
         id: version

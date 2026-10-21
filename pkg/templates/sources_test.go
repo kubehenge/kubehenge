@@ -36,8 +36,9 @@ func fakePublishers(t *testing.T) *Sources {
 		}
 		_, _ = io.WriteString(w, `{"id":"ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"}`)
 	})
-	mux.HandleFunc("GET /releases/resolute/release/SHA256SUMS", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(sums) })
-	mux.HandleFunc("GET /releases/resolute/release/SHA256SUMS.gpg", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(sig) })
+	build := "/releases/resolute/release-" + OperatingSystems["ubuntu-26.04"].Build
+	mux.HandleFunc("GET "+build+"/SHA256SUMS", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(sums) })
+	mux.HandleFunc("GET "+build+"/SHA256SUMS.gpg", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(sig) })
 	mux.HandleFunc("GET /core:/stable:/v1.37/deb/Release.key", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(key) })
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -68,7 +69,7 @@ func TestResolveUbuntuVerifiesTheSignedChecksums(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Resolved{
-		URL:               s.UbuntuCloudURL + "/resolute/release/ubuntu-26.04-server-cloudimg-amd64.img",
+		URL:               s.UbuntuCloudURL + "/resolute/release-" + OperatingSystems["ubuntu-26.04"].Build + "/ubuntu-26.04-server-cloudimg-amd64.img",
 		FileName:          "template-ubuntu-26.04-8800651811af.qcow2",
 		Checksum:          "8800651811af9a85465ad1d552add729947bb16488dddb4a9b5305a3d97332b2",
 		ChecksumAlgorithm: "sha256",

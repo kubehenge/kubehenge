@@ -43,79 +43,111 @@
       "enabled": true
     },
     {
+      "description": "A major release of a Go module is a module of its own, which nothing here requires until the module that requires the old one moves; go mod tidy would take it out again.",
+      "matchManagers": ["gomod"],
+      "matchDepTypes": ["indirect"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "The Prometheus operator reads the version of Prometheus and Alertmanager apart from their image and takes no digest in it; the image beside it carries the digest.",
+      "matchDepTypes": ["version"],
+      "pinDigests": false
+    },
+    {
       "description": "A runner image this datasource knows about is not yet a label GitHub schedules jobs on, and moving to a new image is a decision to take once, not every week.",
       "matchDatasources": ["github-runners"],
       "matchUpdateTypes": ["major"],
       "enabled": false
     },
     {
-      "description": "Helm and kubectl publish their downloads outside GitHub, where Renovate cannot find the new SHA-256 to write beside the new tag. They come in a pull request of their own so that the Monday one is not held up by a checksum taken by hand.",
-      "matchFileNames": ["scripts/tools.sh"],
-      "matchDatasources": ["github-releases"],
-      "groupName": "Helm and kubectl",
+      "description": "Go, Node, Helm and kubectl publish their downloads outside GitHub, where Renovate cannot find the new SHA-256 to write beside the new version. They come in a pull request of their own so that the Monday one is not held up by a checksum taken by hand; go.mod's Go comes with them, since CI builds with the Go scripts/tools.sh installs.",
+      "matchFileNames": ["scripts/tools.sh", "go.mod"],
+      "matchDatasources": ["github-releases", "golang-version", "node-version"],
+      "groupName": "Go, Node, Helm and kubectl",
       "prBodyNotes": [
-        "Put the new SHA-256 on the line below each new tag in `scripts/tools.sh`, from the checksum file published beside the download: `https://get.helm.sh/helm-<tag>-linux-amd64.tar.gz.sha256sum` and `https://dl.k8s.io/release/<tag>/bin/linux/amd64/kubectl.sha256`."
+        "Put the new SHA-256 on the line below each new version in `scripts/tools.sh`, from the checksum list published beside the download: `https://go.dev/dl/?mode=json` (`go<version>.linux-amd64.tar.gz`), `https://nodejs.org/dist/v<version>/SHASUMS256.txt` (`node-v<version>-linux-x64.tar.gz`), `https://get.helm.sh/helm-<tag>-linux-amd64.tar.gz.sha256sum` and `https://dl.k8s.io/release/<tag>/bin/linux/amd64/kubectl.sha256`."
+      ]
+    },
+    {
+      "description": "MetalLB's chart names the FRR it is tested with, whose image Kubehenge pins beside MetalLB's.",
+      "matchDepNames": ["quay.io/metallb/speaker"],
+      "prBodyNotes": [
+        "Set `addons.metallb.values.speaker.frr.image.tag` in `charts/kubehenge/values.yaml` to the FRR tag the new chart's `values.yaml` names (`speaker.frr.image.tag`), with its digest."
+      ]
+    },
+    {
+      "description": "Rancher names the versions of the webhook, Fleet, its shell and Turtles it runs with, whose images Kubehenge pins beside Rancher's; they move only with Rancher, and the Rancher test fails until they match.",
+      "matchDepNames": ["docker.io/rancher/rancher"],
+      "prBodyNotes": [
+        "Set the images under `addons.rancher` in `charts/kubehenge/values.yaml` to those of the new release, tag and digest: the webhook, Fleet and its agent, the shell and the audit log image from its `build.yaml` (`webhookVersion`, `fleetVersion`, `defaultShellVersion`, `chartAuditLogImage`), the shell three times; and `turtles` from the rancher-turtles chart `build.yaml` names (`turtlesVersion`), whose `values.yaml` names Turtles' image and whose core provider ConfigMap names the Cluster API controller's."
       ]
     }
   ],
   "customManagers": [
     {
-      "description": "A download from a GitHub release whose tag sits on the line above its SHA-256: the tools in scripts/tools.sh, the OpenTofu appliance/install.sh runs and the Headlamp the appliance serves. The tag and the digest move together; the datasource finds the new digest in the release's checksum file, or hashes the download itself.",
+      "description": "A download from a GitHub release whose tag sits on the line above its SHA-256: the tools in scripts/tools.sh, the OpenTofu appliance/install.sh runs, the Headlamp the appliance serves and the cosign kubeadm templates check their images with. The tag and the digest move together; the datasource finds the new digest in the release's checksum file, or hashes the download itself.",
       "customType": "regex",
-      "managerFilePatterns": ["/^scripts/tools\\.sh$/", "/^appliance/install\\.sh$/", "/^Makefile$/"],
+      "managerFilePatterns": ["/^scripts/tools\\.sh$/", "/^appliance/install\\.sh$/", "/^Makefile$/", "/^pkg/templates/images\\.sh$/"],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>github-release-attachments) depName=(?<depName>\\S+)\\n[A-Z0-9_]+ *:?= *(?<currentValue>\\S+)\\n[A-Z0-9_]+_SHA256 *:?= *(?<currentDigest>[0-9a-f]{64})"
       ]
     },
     {
-      "description": "Any other version named in a comment on the line above it: the tested set in the management-cluster module, the Talos release templates are made from, the add-on charts published as OCI images, the Headlamp image the clusters run and the registry the end-to-end tests run, and Helm and kubectl in scripts/tools.sh. An image's digest moves with its tag.",
+      "description": "The files the Cluster API operator installs each provider from, which the management-cluster module names by their release download's address with their SHA-256. The tag in the address and the digest move together, with the provider's version in the tested set.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^management-cluster/versions\\.tf$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>github-release-attachments) depName=(?<depName>\\S+)\\n\\s*\"[^\"]*/releases/download/(?<currentValue>[^/\"]+)/[^/\"]+\" *= *\"(?<currentDigest>[0-9a-f]{64})\""
+      ]
+    },
+    {
+      "description": "Any other version named in a comment on the line above it: the tested set in the management-cluster module and its providers' images, the Talos release templates are made from, the add-on charts published as OCI images, the images the add-ons run, the images and registry the end-to-end tests run, and Go, Node, Helm and kubectl in scripts/tools.sh. An image's digest moves with its tag.",
       "customType": "regex",
       "managerFilePatterns": [
         "/^scripts/tools\\.sh$/",
         "/^management-cluster/versions\\.tf$/",
         "/^pkg/templates/plan\\.go$/",
         "/^charts/kubehenge/values\\.yaml$/",
+        "/^test/e2e/[^/]+\\.sh$/",
         "/^test/e2e/ci/up\\.sh$/"
       ],
       "matchStrings": [
-        "(?:#|//) renovate: datasource=(?<datasource>github-releases|docker) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?\\n[^\\n]*?[=:] *\"?(?<currentValue>v?\\d[^\"\\s@]*)\"?(?:@(?<currentDigest>sha256:[0-9a-f]{64}))?"
+        "(?:#|//) renovate: datasource=(?<datasource>github-releases|docker|golang-version|node-version) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?(?: depType=(?<depType>\\S+))?\\n[^\\n]*?[=:] *\"?(?<currentValue>v?\\d[^\"\\s@]*)\"?(?:@(?<currentDigest>sha256:[0-9a-f]{64}))?"
       ]
     },
     {
-      "description": "The add-on charts published in a Helm repository, which values.yaml names by repository, chart and version.",
+      "description": "The add-on charts published in a Helm repository, which values.yaml names by repository, chart and version with the SHA-256 of its archive; the digest moves with the version, from the digest the repository's index lists.",
       "customType": "regex",
       "managerFilePatterns": ["/^charts/kubehenge/values\\.yaml$/"],
       "matchStrings": [
-        "repository: (?<registryUrl>https://\\S+)\\n\\s+chart: (?<depName>\\S+)\\n\\s+version: (?<currentValue>\\S+)"
+        "repository: (?<registryUrl>https://\\S+)\\n\\s+chart: (?<depName>\\S+)\\n\\s+version: (?<currentValue>[^\\s@]+)@sha256:(?<currentDigest>[0-9a-f]{64})"
       ],
       "datasourceTemplate": "helm"
     },
     {
-      "description": "The linters the Makefile runs through uvx.",
+      "description": "The image ko builds Kubehenge's controller on, named by a tag that is no version, so only its digest moves.",
       "customType": "regex",
-      "managerFilePatterns": ["/^Makefile$/"],
+      "managerFilePatterns": ["/^cmd/kubehenge/\\.ko\\.yaml$/"],
       "matchStrings": [
-        "uvx (?<depName>[a-z0-9-]+)@(?<currentValue>\\S+)"
+        "defaultBaseImage: (?<depName>[^:@\\s]+):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[0-9a-f]{64})"
       ],
-      "datasourceTemplate": "pypi"
+      "datasourceTemplate": "docker"
     },
     {
-      "description": "The linter the Makefile runs through npx.",
+      "description": "The build of each Ubuntu release's cloud image that templates are made from, named by its directory on cloud-images.ubuntu.com, whose SHA256SUMS Ubuntu signs and Kubehenge checks.",
       "customType": "regex",
-      "managerFilePatterns": ["/^Makefile$/"],
-      "matchStrings": [
-        "npx --yes (?<depName>[a-z0-9@/-]+?)@(?<currentValue>\\d\\S*)"
-      ],
-      "datasourceTemplate": "npm"
-    },
-    {
-      "description": "The Go tools the Makefile runs through go run, named by module.",
-      "customType": "regex",
-      "managerFilePatterns": ["/^Makefile$/"],
-      "matchStrings": [
-        "go run (?<depName>[a-z0-9./-]+?)/cmd/[a-z0-9-]+@(?<currentValue>v\\S+)"
-      ],
-      "datasourceTemplate": "go"
+      "managerFilePatterns": ["/^pkg/templates/plan\\.go$/"],
+      "matchStrings": ["Codename: \"(?<depName>[a-z]+)\", Build: \"(?<currentValue>\\d{8}(?:\\.\\d+)?)\""],
+      "datasourceTemplate": "custom.ubuntu-cloud-images",
+      "extractVersionTemplate": "^release-(?<version>\\d{8}(?:\\.\\d+)?)/$",
+      "versioningTemplate": "loose"
     }
-  ]
+  ],
+  "customDatasources": {
+    "ubuntu-cloud-images": {
+      "defaultRegistryUrlTemplate": "https://cloud-images.ubuntu.com/releases/{{packageName}}/",
+      "format": "html"
+    }
+  }
 }

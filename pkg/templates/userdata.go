@@ -1,6 +1,8 @@
 package templates
 
 import (
+	_ "embed"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,11 +14,17 @@ const (
 	systemctl = "systemctl"
 )
 
+//go:embed images.sh
+var imagesScript string
+
+const imagesScriptPath = "/usr/local/sbin/kubehenge-images"
+
 // BakeUserData renders the cloud-config that prepares a cloud image to become a template. Every
 // template gets the latest updates and the QEMU guest agent; a kubeadm template also gets
 // containerd, the kubelet and kubeadm as Kubernetes' own installation guide sets them up, with the
-// control-plane images pulled ahead and the kubelet's unit files readable by root alone, as the CIS
-// benchmark asks. packagesKey is the ASCII-armoured pkgs.k8s.io key, needed for kubeadm.
+// control-plane images pulled ahead, each checked against its signature (images.sh), and the
+// kubelet's unit files readable by root alone, as the CIS benchmark asks. packagesKey is the
+// ASCII-armoured pkgs.k8s.io key, needed for kubeadm.
 func BakeUserData(b Bake, packagesKey string) (string, error) {
 	var sb strings.Builder
 	sb.WriteString("#cloud-config\npackage_update: true\npackage_upgrade: true\n")
@@ -60,6 +68,10 @@ write_files:
       net.ipv4.ip_forward = 1
       net.bridge.bridge-nf-call-iptables = 1
       net.bridge.bridge-nf-call-ip6tables = 1
+  - path: %[3]s
+    permissions: "0700"
+    encoding: b64
+    content: %[4]s
 runcmd:
   - [systemctl, enable, --now, qemu-guest-agent]
   - [modprobe, overlay]
@@ -69,8 +81,8 @@ runcmd:
   - [systemctl, restart, containerd]
   - [apt-mark, hold, kubelet, kubeadm, kubectl]
   - [systemctl, enable, kubelet]
-  - [kubeadm, config, images, pull, --kubernetes-version, %[2]s]
-`, pkg, b.KubernetesVersion)
+  - [%[3]s, %[2]s]
+`, pkg, b.KubernetesVersion, imagesScriptPath, base64.StdEncoding.EncodeToString([]byte(imagesScript)))
 	return sb.String(), nil
 }
 
@@ -87,8 +99,10 @@ func BakeChecks(b Bake) [][]string {
 			[]string{"sh", "-c", "grep -q 'SystemdCgroup = true' /etc/containerd/config.toml"},
 			[]string{systemctl, "is-enabled", "kubelet"},
 			[]string{systemctl, "is-active", "containerd"},
-			// The control-plane images are in containerd, so nodes do not wait on the registry.
+			// The control-plane images are in containerd, so nodes do not wait on the registry,
+			// and containerd starts pods on kubeadm's pause image among them.
 			[]string{"sh", "-c", "crictl images | grep -q kube-apiserver"},
+			[]string{"sh", "-c", `grep -qF "$(kubeadm config images list --kubernetes-version ` + b.KubernetesVersion + ` | grep /pause:)" /etc/containerd/config.toml`},
 		)
 	}
 	return checks

@@ -1,7 +1,10 @@
 package provisioner
 
 import (
+	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -51,31 +54,37 @@ const (
 // plugin into every one, a CNI into those whose distribution has none of its own, and the add-ons
 // a cluster switches on.
 type Charts struct {
-	CCM      Chart
-	CSI      Chart
-	Cilium   Chart
-	Calico   Chart
-	Headlamp Chart
-	// HeadlampImage is the image tag with its digest; the chart names its image by tag only.
-	HeadlampImage string
-	CertManager   Chart
-	Rancher       Chart
-	Monitoring    Chart
+	CCM    Chart
+	CSI    Chart
+	Cilium Chart
+	Calico Chart
+	// CalicoImages are the images the Tigera operator runs Calico from, all at one release.
+	CalicoImages []Image
+	Headlamp     Chart
+	CertManager  Chart
+	Rancher      Chart
+	// Turtles and TurtlesClusterAPI are the images of the Turtles release Rancher installs
+	// itself, and of the Cluster API controller it runs (rancherConfig).
+	Turtles           Image
+	TurtlesClusterAPI Image
+	Monitoring        Chart
 	// KubeRBACProxy is the image of the proxies in front of metrics served without authentication.
 	KubeRBACProxy   Image
 	Kyverno         Chart
 	KyvernoPolicies Chart
-	// Istio is istiod's chart; its base, cni and ztunnel charts are beside it, at its version.
-	Istio Chart
+	// Istio is istiod's chart, installed with its base, cni and ztunnel charts at the same version.
+	Istio        Chart
+	IstioBase    Chart
+	IstioCNI     Chart
+	IstioZtunnel Chart
 	// Traefik is the ingress controller of distributions that bring none.
 	Traefik Chart
-	// The load balancers a cluster chooses from: MetalLB, or kube-vip with its cloud provider,
-	// whose charts lag their images.
-	MetalLB                   Chart
-	KubeVip                   Chart
-	KubeVipImage              Image
-	KubeVipCloudProvider      Chart
-	KubeVipCloudProviderImage Image
+	// The load balancers a cluster chooses from: MetalLB, or kube-vip with its cloud provider.
+	// kube-vip runs the image its control planes do.
+	MetalLB              Chart
+	KubeVip              Chart
+	KubeVipImage         Image
+	KubeVipCloudProvider Chart
 	// PodSecurityExempt are the namespaces Kyverno's policies leave alone, those the ClusterClasses'
 	// Pod Security Admission exempts.
 	PodSecurityExempt []string
@@ -146,8 +155,9 @@ func rancherProxy(cluster *clusterv1.Cluster) string {
 // nodes; the admin's first password is generated into the bootstrap-secret Secret, never put into
 // values. Rancher's chart gives a start two minutes, which its first start on one small node can
 // overrun while it registers its CRDs; every kill begins that again, so the window is ten minutes,
-// and liveness keeps its own.
-func rancherValues(r Rancher) map[string]any {
+// and liveness keeps its own. The server URL joins the chart's own extraEnv, which a list in these
+// values would replace.
+func rancherValues(r Rancher, base map[string]any) map[string]any {
 	const (
 		// A negative count is the chart's "up to": as many replicas as nodes, at most three.
 		replicas      = -3
@@ -155,12 +165,16 @@ func rancherValues(r Rancher) map[string]any {
 		probePeriod   = 10
 		probeFailures = 60
 	)
+	var env []any
+	if e, ok := base["extraEnv"].([]any); ok {
+		env = slices.Clone(e)
+	}
 	return map[string]any{
 		"hostname":     r.Hostname,
 		"replicas":     replicas,
 		"agentTLSMode": "strict",
 		"ingress":      map[string]any{"tls": map[string]any{"source": "rancher"}},
-		"extraEnv":     []any{map[string]any{"name": "CATTLE_SERVER_URL", "value": "https://" + r.Hostname}},
+		"extraEnv":     append(env, map[string]any{"name": "CATTLE_SERVER_URL", "value": "https://" + r.Hostname}),
 		"startupProbe": map[string]any{"timeoutSeconds": probeTimeout, "periodSeconds": probePeriod, "failureThreshold": probeFailures},
 	}
 }
@@ -172,22 +186,48 @@ type Headlamp struct {
 	TLSSecret string `json:"tlsSecret,omitempty"`
 }
 
-// Chart is one Helm chart.
+// Chart is one Helm chart, pinned by its digest: an OCI chart's manifest digest, or the SHA-256 of
+// the archive a repository's index lists.
 type Chart struct {
 	Repository string
 	Name       string
 	Version    string
+	Digest     string
+	// Values lie beneath those Kubehenge gives the chart: the images it runs, each by tag and digest.
+	Values map[string]any
 }
 
-// ParseChart reads <repository>/<name>:<version>, such as
-// oci://ghcr.io/sergelogvinov/charts/proxmox-csi-plugin:0.5.12 or https://helm.cilium.io/cilium:1.20.2.
+// ParseChart reads <repository>/<name>:<version>@sha256:<digest>, such as
+// oci://ghcr.io/sergelogvinov/charts/proxmox-csi-plugin:0.5.12@sha256:bbd9… or
+// https://helm.cilium.io/cilium:1.20.3@sha256:0805….
 func ParseChart(s string) (Chart, error) {
-	at := strings.LastIndex(s, ":")
-	slash := strings.LastIndex(s, "/")
-	if slash < 0 || at <= slash+1 || at == len(s)-1 {
-		return Chart{}, fmt.Errorf("%q is not <repository>/<name>:<version>", s)
+	name, digest, ok := strings.Cut(s, "@sha256:")
+	at := strings.LastIndex(name, ":")
+	slash := strings.LastIndex(name, "/")
+	if !ok || !isDigest(digest) || slash < 0 || at <= slash+1 || at == len(name)-1 {
+		return Chart{}, fmt.Errorf("%q is not <repository>/<name>:<version>@sha256:<digest>", s)
 	}
-	return Chart{Repository: s[:slash], Name: s[slash+1 : at], Version: s[at+1:]}, nil
+	return Chart{Repository: name[:slash], Name: name[slash+1 : at], Version: name[at+1:], Digest: digest}, nil
+}
+
+// pinnedVersion is the version a HelmChartProxy takes, which Kubehenge's build of the Add-on
+// Provider for Helm pulls the chart by or checks the chart against.
+func (c Chart) pinnedVersion() string {
+	return c.Version + "@sha256:" + c.Digest
+}
+
+// isDigest reports whether s is a SHA-256 digest in lower-case hex.
+func isDigest(s string) bool {
+	const sha256Hex = 64
+	if len(s) != sha256Hex {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // CNIAnnotation on a ClusterClass lists, comma-separated, the values of its cni variable that name
@@ -287,12 +327,48 @@ func calicoResourcesName(cluster *clusterv1.Cluster) string {
 	return cluster.Name + "-calico"
 }
 
+// ParseCalicoImages reads the images the Tigera operator runs Calico from, which have to be of one
+// release, the one its ImageSet is named for.
+func ParseCalicoImages(refs []string) ([]Image, error) {
+	images := make([]Image, 0, len(refs))
+	for _, ref := range refs {
+		image, err := ParseImage(ref)
+		if err != nil {
+			return nil, err
+		}
+		if len(images) > 0 && image.Tag != images[0].Tag {
+			return nil, fmt.Errorf("%s is not at %s, the release of %s", ref, images[0].Tag, images[0])
+		}
+		images = append(images, image)
+	}
+	if len(images) == 0 {
+		return nil, errors.New("no images")
+	}
+	return images, nil
+}
+
+// calicoImageSet pins the images the operator runs Calico from to their digests. The operator
+// takes the ImageSet named for its own release; it names the images by repository, which is the
+// operator's image path and the image's name.
+func calicoImageSet(images []Image) map[string]any {
+	pinned := make([]any, 0, len(images))
+	for _, i := range images {
+		pinned = append(pinned, map[string]any{"image": i.Repository, "digest": "sha256:" + i.Digest})
+	}
+	return map[string]any{
+		"kind":     "ImageSet",
+		"metadata": map[string]any{"name": "calico-" + images[0].Tag},
+		"spec":     map[string]any{"images": pinned},
+	}
+}
+
 // calicoResources wraps, for the ClusterResourceSet, the resources the Tigera operator installs
-// Calico from, as its chart's defaults have them. The chart would render them before the operator
-// has created their CRDs, which a Helm release cannot wait for; a ClusterResourceSet retries until
-// they exist. Nor can Helm install the CRDs first: Calico's CRD chart is larger than the 1 MiB
-// Secret a Helm release is kept in.
-func calicoResources(cluster *clusterv1.Cluster, cni CNI) (*corev1.Secret, error) {
+// Calico from, as its chart's defaults have them, and the ImageSet that pins its images, which
+// comes first so that the operator never runs one by tag. The chart would render them before the
+// operator has created their CRDs, which a Helm release cannot wait for; a ClusterResourceSet
+// retries until they exist. Nor can Helm install the CRDs first: Calico's CRD chart is larger than
+// the 1 MiB Secret a Helm release is kept in.
+func calicoResources(cluster *clusterv1.Cluster, cni CNI, images []Image) (*corev1.Secret, error) {
 	pods, err := podRange(cluster, cni)
 	if err != nil {
 		return nil, err
@@ -302,6 +378,7 @@ func calicoResources(cluster *clusterv1.Cluster, cni CNI) (*corev1.Secret, error
 		network["containerIPForwarding"] = "Enabled"
 	}
 	resources := []map[string]any{
+		calicoImageSet(images),
 		{"kind": "Installation", "spec": map[string]any{
 			"cni":           map[string]any{"type": "Calico"},
 			"calicoNetwork": network,
@@ -315,7 +392,9 @@ func calicoResources(cluster *clusterv1.Cluster, cni CNI) (*corev1.Secret, error
 	var manifest []byte
 	for _, r := range resources {
 		r[apiVersionKey] = "operator.tigera.io/v1"
-		r["metadata"] = map[string]any{"name": "default"}
+		if _, named := r["metadata"]; !named {
+			r["metadata"] = map[string]any{"name": "default"}
+		}
 		doc, err := yaml.Marshal(r)
 		if err != nil {
 			return nil, fmt.Errorf("encoding Calico's %s: %w", r["kind"], err)
@@ -412,11 +491,10 @@ func clusterResourceSet(cluster *clusterv1.Cluster, secrets []*corev1.Secret) *a
 // or through OIDC. Its service account token stays mounted only because Headlamp reads the API
 // server's address and CA through it; the account is bound to no role. Plugins are those in the
 // image, nothing fetched at run time.
-func headlampValues(image string, h Headlamp) map[string]any {
+func headlampValues(h Headlamp) map[string]any {
 	// The image's own user and group.
 	const user, group = 100, 101
 	values := map[string]any{
-		"image":              map[string]any{"tag": image},
 		"clusterRoleBinding": map[string]any{"create": false},
 		"config":             map[string]any{"oidc": map[string]any{"secret": map[string]any{"create": false}}},
 		"pluginsManager":     map[string]any{"enabled": false},
@@ -589,7 +667,7 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 	}
 	wanted = append(wanted, cniCharts...)
 	if addons.Headlamp.Enabled {
-		wanted = append(wanted, chartProxy{headlampAddon, headlampAddon, headlampAddon, charts.Headlamp, headlampValues(charts.HeadlampImage, addons.Headlamp)})
+		wanted = append(wanted, chartProxy{headlampAddon, headlampAddon, headlampAddon, charts.Headlamp, headlampValues(addons.Headlamp)})
 	}
 	if addons.Rancher.Install || addons.Monitoring.Enabled {
 		// A Secret goes with its Certificate, so that nothing an add-on asked for outlives it.
@@ -601,7 +679,7 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 		if addons.Rancher.Hostname == "" {
 			return nil, fmt.Errorf("cluster %s/%s: Rancher needs a hostname", cluster.Namespace, cluster.Name)
 		}
-		wanted = append(wanted, chartProxy{rancherAddon, rancherAddon, rancherNamespace, charts.Rancher, rancherValues(addons.Rancher)})
+		wanted = append(wanted, chartProxy{rancherAddon, rancherAddon, rancherNamespace, charts.Rancher, rancherValues(addons.Rancher, charts.Rancher.Values)})
 	}
 	if addons.Monitoring.Enabled {
 		wanted = append(wanted, chartProxy{
@@ -616,7 +694,7 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 		)
 	}
 	if addons.Istio.Enabled {
-		wanted = append(wanted, istioCharts(charts.Istio, distribution, cni)...)
+		wanted = append(wanted, istioCharts(charts, distribution, cni)...)
 	}
 	if distribution == templates.Kubeadm {
 		wanted = append(wanted, chartProxy{"traefik", "traefik", metav1.NamespaceSystem, charts.Traefik, traefikValues()})
@@ -630,8 +708,9 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 	}
 
 	var proxies []*unstructured.Unstructured
-	for _, p := range wanted {
-		values, err := yaml.Marshal(p.values)
+	for i := range wanted {
+		p := &wanted[i]
+		values, err := yaml.Marshal(overlay(p.chart.Values, p.values))
 		if err != nil {
 			return nil, fmt.Errorf("encoding the values of %s: %w", p.release, err)
 		}
@@ -643,7 +722,7 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 			"clusterSelector": map[string]any{"matchLabels": map[string]any{clusterv1.ClusterNameLabel: cluster.Name}},
 			"repoURL":         p.chart.Repository,
 			"chartName":       p.chart.Name,
-			"version":         p.chart.Version,
+			"version":         p.chart.pinnedVersion(),
 			"releaseName":     p.release,
 			"namespace":       p.namespace,
 			"options":         map[string]any{"install": map[string]any{"createNamespace": true}},
@@ -653,6 +732,28 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 		proxies = append(proxies, u)
 	}
 	return proxies, nil
+}
+
+// overlay lays values over base into a new map, leaving both as they are: maps merge key by key,
+// and anything else in values replaces what base has.
+func overlay(base, values map[string]any) map[string]any {
+	merged := maps.Clone(values)
+	if merged == nil {
+		merged = map[string]any{}
+	}
+	for k, b := range base {
+		v, ok := merged[k]
+		if !ok {
+			merged[k] = b
+			continue
+		}
+		bm, bIsMap := b.(map[string]any)
+		vm, vIsMap := v.(map[string]any)
+		if bIsMap && vIsMap {
+			merged[k] = overlay(bm, vm)
+		}
+	}
+	return merged
 }
 
 func credentialsSecretName(cluster *clusterv1.Cluster) string {

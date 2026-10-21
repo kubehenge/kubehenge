@@ -62,4 +62,4 @@ spec:
       restartPolicy: Never
       serviceAccountName: wait-for-providers
       automountServiceAccountToken: true
-      {{- include "cluster-api-providers.waitPod" (list . (list "providers")) | nindent 6 }}
+      {{- include "cluster-api-providers.hookPod" (list . "wait" (list "wait" "providers")) | nindent 6 }}

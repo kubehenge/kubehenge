@@ -27,6 +27,7 @@ func TestParseImage(t *testing.T) {
 		"kube-rbac-proxy:v0.23.0@sha256:296fd0a10fb635414b4533b983f0d5a686ce0ce73567b7079b6595ba75034f1a",
 		"ghcr.io/kube-rbac-proxy/kube-rbac-proxy@sha256:296fd0a10fb635414b4533b983f0d5a686ce0ce73567b7079b6595ba75034f1a",
 		"ghcr.io/kube-rbac-proxy/kube-rbac-proxy:@sha256:296fd0a10fb635414b4533b983f0d5a686ce0ce73567b7079b6595ba75034f1a",
+		"ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.23.0@sha256:296fd0a1",
 	} {
 		if _, err := ParseImage(bad); err == nil {
 			t.Errorf("ParseImage(%q) took it", bad)
