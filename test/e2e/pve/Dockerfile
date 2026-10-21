@@ -17,7 +17,7 @@ SHELL ["/bin/bash", "-o", "errexit", "-o", "pipefail", "-c"]
 # hadolint ignore=DL3008
 RUN apt-get update -qq \
     && apt-get install -y -qq --no-install-recommends ca-certificates curl \
-    && curl -fsSL --proto '=https' -o /usr/share/keyrings/proxmox-archive-keyring.gpg "$KEY_URL" \
+    && curl -fsSL --proto '=https' --retry 5 --retry-all-errors -o /usr/share/keyrings/proxmox-archive-keyring.gpg "$KEY_URL" \
     && echo "$KEY_SHA256  /usr/share/keyrings/proxmox-archive-keyring.gpg" | sha256sum -c --quiet - \
     && printf '%s\n' 'Types: deb' 'URIs: http://download.proxmox.com/debian/pve' 'Suites: trixie' \
         'Components: pve-no-subscription' 'Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg' \

@@ -105,9 +105,9 @@ cis_benchmark() {
     if [ "${distribution}" = kubeadm ]; then
         raw=https://raw.githubusercontent.com/aquasecurity/kube-bench/${kube_bench_commit}/cfg
         mkdir -p "${work}/kube-bench/cis-2.0"
-        curl -sSfL -o "${work}/kube-bench/config.yaml" "${raw}/config.yaml"
+        curl -sSfL --retry 5 --retry-all-errors -o "${work}/kube-bench/config.yaml" "${raw}/config.yaml"
         for f in config master node controlplane etcd policies; do
-            curl -sSfL -o "${work}/kube-bench/cis-2.0/${f}.yaml" "${raw}/cis-2.0/${f}.yaml"
+            curl -sSfL --retry 5 --retry-all-errors -o "${work}/kube-bench/cis-2.0/${f}.yaml" "${raw}/cis-2.0/${f}.yaml"
         done
         (cd "${work}/kube-bench" && echo "${kube_bench_sums}" | sha256sum --check --strict --quiet -)
         wl -n e2e-cis create configmap kube-bench-config --from-file="${work}/kube-bench/config.yaml"

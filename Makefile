@@ -66,7 +66,7 @@ dist: web
 		sed -i 's|^image: ""$$|image: "$(CONTROLLER_IMAGE)"|' dist/stage/share/kubehenge/charts/kubehenge/values.yaml && \
 		grep -qxF 'image: "$(CONTROLLER_IMAGE)"' dist/stage/share/kubehenge/charts/kubehenge/values.yaml; \
 	fi
-	test -f $(HEADLAMP_TARBALL) || curl -fsSL --proto '=https' -o $(HEADLAMP_TARBALL) \
+	test -f $(HEADLAMP_TARBALL) || curl -fsSL --proto '=https' --retry 5 --retry-all-errors -o $(HEADLAMP_TARBALL) \
 		https://github.com/kubernetes-sigs/headlamp/releases/download/$(HEADLAMP_TAG)/Headlamp-$(HEADLAMP_VERSION)-linux-x64.tar.gz
 	echo '$(HEADLAMP_SHA256)  $(HEADLAMP_TARBALL)' | sha256sum -c --quiet - || { rm -f $(HEADLAMP_TARBALL); exit 1; }
 	tar -xzf $(HEADLAMP_TARBALL) -C dist/stage/share/kubehenge/headlamp --strip-components=2 \

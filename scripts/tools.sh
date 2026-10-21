@@ -29,7 +29,9 @@ wanted() {
 tool() {
     # shellcheck disable=SC2310 # wanted only matches a word, nothing in it can fail.
     wanted "$1" || return 0
-    curl -fsSL --proto '=https' --tlsv1.2 -o "${work}/download" "$2"
+    # --retry alone leaves out a connection the host resets mid-transfer (curl's exit 92); the
+    # checksum makes trying again safe.
+    curl -fsSL --proto '=https' --retry 5 --retry-all-errors --tlsv1.2 -o "${work}/download" "$2"
     echo "$3  ${work}/download" | sha256sum -c --quiet -
     case "${4:-}" in
         '') install -m 0755 "${work}/download" "${dir}/$1" ;;
@@ -50,7 +52,7 @@ release() {
 tree() {
     # shellcheck disable=SC2310
     wanted "$1" || return 0
-    curl -fsSL --proto '=https' --tlsv1.2 -o "${work}/download" "$2"
+    curl -fsSL --proto '=https' --retry 5 --retry-all-errors --tlsv1.2 -o "${work}/download" "$2"
     echo "$3  ${work}/download" | sha256sum -c --quiet -
     rm -rf "${dir:?}/lib/$1" && mkdir -p "${dir}/lib/$1"
     tar -xzf "${work}/download" -C "${dir}/lib/$1" --strip-components=1
