@@ -79,13 +79,13 @@ NODE_SHA256=d9f88af72ad34f7ddf8e67289829f1698f54b6254f7d4f54b7453117ff1a3d2c
 tree node "https://nodejs.org/dist/v${NODE}/node-v${NODE}-linux-x64.tar.gz" "${NODE_SHA256}" bin node npm npx
 
 # renovate: datasource=github-release-attachments depName=astral-sh/uv
-UV=0.13.3
-UV_SHA256=e4f169ec380f1793b898a6f1fcbacd22db25cf7ca0349a6e96ffb85b69998d04
+UV=0.13.4
+UV_SHA256=2b428396f12572d4429cf210ca234dd599a33b3af0958a4d5ed569d63e3f344f
 tree uv "https://github.com/astral-sh/uv/releases/download/${UV}/uv-x86_64-unknown-linux-gnu.tar.gz" "${UV_SHA256}" . uv
 
 # renovate: datasource=github-release-attachments depName=opentofu/opentofu
-TOFU=v1.13.1
-TOFU_SHA256=378ada19d4bc70c43732004e8159be771b23b9a5afdf059e5f8a2b3fa2c70a69
+TOFU=v1.13.2
+TOFU_SHA256=ac05d9952662c7db28dd57e93f0a68018837bfdf9342384ec0987977c16a9645
 release tofu opentofu/opentofu "${TOFU}" "tofu_${TOFU#v}_linux_amd64.tar.gz" "${TOFU_SHA256}" tofu
 
 # renovate: datasource=github-releases depName=helm/helm
@@ -141,6 +141,6 @@ release hadolint hadolint/hadolint "${HADOLINT}" hadolint-linux-x86_64 "${HADOLI
 
 # The release signs its images with it.
 # renovate: datasource=github-release-attachments depName=sigstore/cosign
-COSIGN=v3.1.3
-COSIGN_SHA256=4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71
+COSIGN=v3.1.4
+COSIGN_SHA256=424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
 release cosign sigstore/cosign "${COSIGN}" cosign-linux-amd64 "${COSIGN_SHA256}"
