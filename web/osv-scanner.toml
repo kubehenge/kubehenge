@@ -1,0 +1,6 @@
+# Advisories that affect only input Kubehenge never gives the code. OSV-Scanner reads the file
+# beside each lock file, so the frontend's packages are ignored here, not at the root.
+
+[[IgnoredVulns]]
+id = "GHSA-vfj7-8cjw-p6xm"
+reason = "braces, with no fixed release, recurses without bound on deeply nested brace patterns. Only markdownlint-cli2, a development dependency, uses it, to expand the repository's own Markdown globs."
