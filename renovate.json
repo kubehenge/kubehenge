@@ -77,6 +77,16 @@
       ]
     },
     {
+      "description": "From v0.21.0 (chart 0.5.13) the Proxmox VE CSI plugin reads a storage's configuration through /storage/{storage}, which Proxmox VE allows only with Datastore.Allocate on the storage, the privilege that would let every cluster delete any volume on it. Clusters' tokens hold Datastore.Audit, enough for /cluster/resources, which earlier releases read; the plugin stays below until it reads the configuration that way again.",
+      "matchDepNames": ["ghcr.io/sergelogvinov/proxmox-csi-controller", "ghcr.io/sergelogvinov/proxmox-csi-node"],
+      "allowedVersions": "<0.21.0"
+    },
+    {
+      "description": "The CSI plugin's chart from 0.5.13 is made for v0.21.0, held back above.",
+      "matchDepNames": ["ghcr.io/sergelogvinov/charts/proxmox-csi-plugin"],
+      "allowedVersions": "<0.5.13"
+    },
+    {
       "description": "Rancher names the versions of the webhook, Fleet, its shell and Turtles it runs with, whose images Kubehenge pins beside Rancher's; they move only with Rancher, and the Rancher test fails until they match.",
       "matchDepNames": ["docker.io/rancher/rancher"],
       "prBodyNotes": [

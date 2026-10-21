@@ -435,6 +435,7 @@ run "providers" {
 }
 
 # The integration tier installs the providers chart with these values, against the operator's CRDs.
+# Their versions and digests are placeholders there, so a dependency update changes only the module.
 run "providers_values_match_the_integration_tier" {
   command = apply
 
@@ -443,7 +444,10 @@ run "providers_values_match_the_integration_tier" {
   }
 
   assert {
-    condition     = { for k, v in yamldecode(helm_release.cluster_api_providers.values[0]) : k => v if k != "chartDigest" } == yamldecode(file("../pkg/provisioner/testdata/cluster-api-providers-values.yaml"))
+    condition = { for k, v in yamldecode(replace(replace(helm_release.cluster_api_providers.values[0],
+      "/v[0-9]+\\.[0-9]+\\.[0-9]+/", "v0.0.0"),
+      "/[0-9a-f]{64}/", "0000000000000000000000000000000000000000000000000000000000000000")) : k => v if k != "chartDigest"
+    } == yamldecode(file("../pkg/provisioner/testdata/cluster-api-providers-values.yaml"))
     error_message = "pkg/provisioner/testdata/cluster-api-providers-values.yaml differs from the module's values for the providers chart; bring it up to date"
   }
 }
