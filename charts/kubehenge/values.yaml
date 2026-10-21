@@ -175,6 +175,10 @@ addons:
         thanosImage:
           # renovate: datasource=docker depName=quay.io/thanos/thanos
           tag: v0.42.4@sha256:b567818fe608067eb0f1d7c2c4fe361e7ad83c8a256234c97685f1d0bf670cc8
+        # The chart's one second is less than a TLS handshake takes on a node whose CPU every
+        # add-on starting at once keeps busy, so the operator was restarted while working.
+        livenessProbe:
+          timeoutSeconds: 5
       # The chart takes the version it gives the operator from the image's tag unless one is
       # set, and the operator cannot read one with a digest in it.
       prometheus:

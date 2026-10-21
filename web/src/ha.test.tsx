@@ -13,7 +13,7 @@ import type { ClusterClass, Storage } from "./types";
 const rke2: ClusterClass = {
   name: "kubehenge-rke2",
   distribution: "rke2",
-  versionFormat: { pattern: "^v1\\.\\d+\\.\\d+\\+rke2r\\d+$" },
+  versionFormat: { pattern: String.raw`^v1\.\d+\.\d+\+rke2r\d+$` },
   annotations: { [haAnnotation]: "true" },
   variables: [
     { name: "storage", required: true, schema: { type: "string" } },
