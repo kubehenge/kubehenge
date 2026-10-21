@@ -94,11 +94,12 @@ The add-ons need memory too, on the workers, or on the control planes of a clust
 | Kyverno | 384 MiB |
 | Istio | 384 MiB |
 | Cilium Cluster Mesh | 128 MiB |
+| Load balancer | 128 MiB |
 | cert-manager, with monitoring or Rancher | 192 MiB |
 | Rancher | 2048 MiB |
 | Rancher's agent, in every cluster that registers | 512 MiB |
 
-A worker counts 448 MiB for itself on k3s and 704 MiB on kubeadm and RKE2; a control plane counts 2560 MiB. A single k3s worker with every add-on but Rancher needs 3648 MiB, and the default machines hold every add-on but Rancher on every distribution. Kubehenge refuses a cluster short of that room when it is created and when an add-on is switched on or its nodes change. The interface raises the machines to it as add-ons are chosen and shows the add-ons' total on the Add-ons step.
+A worker counts 448 MiB for itself on k3s and 704 MiB on kubeadm and RKE2; a control plane counts 2560 MiB. A single k3s worker with every add-on but Rancher needs 3776 MiB, and the default machines hold every add-on but Rancher on every distribution. Kubehenge refuses a cluster short of that room when it is created and when an add-on is switched on or its nodes change. The interface raises the machines to it as add-ons are chosen and shows the add-ons' total on the Add-ons step.
 
 ### Add-ons
 
