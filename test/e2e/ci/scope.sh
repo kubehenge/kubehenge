@@ -5,9 +5,9 @@
 #   git diff --name-only <base> <head> | test/e2e/ci/scope.sh
 #   test/e2e/ci/scope.sh --all
 #
-# A path no rule below names needs them all, as --all does. The merge queue runs them all whatever a pull request
-# changes, so these rules decide only how soon a pull request hears of a failure, never what reaches
-# main untested.
+# A path no rule below names needs them all, as --all does. The merge queue runs what a merge group's
+# changes need by these same rules, so a rule that leaves a test out lets a change reach main without
+# it until the nightly run, which runs them all: leave a test out only for a path it cannot reach.
 set -eu
 
 all='management-cluster appliance kubeadm rke2 k3s cluster-mesh'
