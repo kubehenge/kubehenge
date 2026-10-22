@@ -12,6 +12,10 @@
 /pkg/ui/dist/*
 !/pkg/ui/dist/.keep
 
+# The Gateway API's install file, which `make gateway-api` downloads; .keep lets Go compile without it.
+/pkg/provisioner/gatewayapi/*
+!/pkg/provisioner/gatewayapi/.keep
+
 # Terraform/OpenTofu working files, state and inputs: state and variables hold credentials.
 .terraform/
 *.tfstate

@@ -441,11 +441,19 @@ func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *pro
 	if err := health.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the health identity: %w", err)
 	}
+	bundle, err := provisioner.LoadGatewayAPI()
+	if err != nil {
+		return fmt.Errorf("the Gateway API: %w", err)
+	}
+	gatewayAPI := &provisioner.GatewayAPIReconciler{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Remotes: registrar.Remotes, Bundle: bundle}
+	if err = gatewayAPI.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("the Gateway API: %w", err)
+	}
 	if len(distributions.Providers) == 0 {
 		return nil
 	}
 	distributions.Client = mgr.GetClient()
-	if err := distributions.SetupWithManager(mgr); err != nil {
+	if err = distributions.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the distributions' providers: %w", err)
 	}
 	return nil

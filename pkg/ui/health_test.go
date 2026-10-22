@@ -445,7 +445,8 @@ func TestPodLogsForThoseWhoMayTakeTheKubeconfig(t *testing.T) {
 		t.Fatalf("no log read: %v", workloads.kube.Actions())
 	}
 	opts, ok := read.Value.(*corev1.PodLogOptions)
-	if !ok || opts.TailLines == nil || *opts.TailLines != podLogLines || !opts.Previous || opts.Container != "api" {
+	// The kubelet's newest run is the last one to stop; Previous would name the one before it.
+	if !ok || opts.TailLines == nil || *opts.TailLines != podLogLines || opts.Previous || opts.Container != "api" {
 		t.Errorf("log read with %+v", read.Value)
 	}
 	if got := workloads.connected(); !slices.Contains(got, "logs-token") {

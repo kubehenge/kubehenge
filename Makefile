@@ -8,7 +8,7 @@ CAPMOX_IMAGE ?= ghcr.io/kubehenge/cluster-api-provider-proxmox
 HELM_ADDON_IMAGE ?= ghcr.io/kubehenge/cluster-api-addon-provider-helm
 KO_FLAGS ?=
 
-.PHONY: build web website dist index image capmox-image helm-addon-image lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-templates e2e-volumes e2e-interface e2e-appliance
+.PHONY: build web gateway-api website dist index image capmox-image helm-addon-image lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-templates e2e-volumes e2e-interface e2e-appliance
 .PHONY: fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker unit-go unit-web unit-tofu tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
@@ -18,8 +18,25 @@ MAKEFLAGS += --jobs=$(shell getconf _NPROCESSORS_ONLN) --output-sync=$(OUTPUT_SY
 # The symbol table and DWARF go: a third of the binary, and stack traces keep their names without them.
 LDFLAGS := -s -w -buildid=
 
-build: web
+build: web gateway-api
 	CGO_ENABLED=0 go build -trimpath -ldflags='$(LDFLAGS)' -o dist/kubehenge ./cmd/kubehenge
+
+# The Gateway API's standard channel, which the controller embeds and applies to every workload
+# cluster: upstream's install file for one release, downloaded again only when the release changes
+# and refused unless it matches its SHA-256. Every Go step waits for it, as for the frontend; .keep
+# is what lets Go compile pkg/provisioner before it is there.
+# renovate: datasource=github-release-attachments depName=kubernetes-sigs/gateway-api
+GATEWAY_API_TAG := v1.6.3
+GATEWAY_API_SHA256 := 356c2b8e286a964dc20995435659ad1095386329974793af10bbfe3eff977fe5
+GATEWAY_API := pkg/provisioner/gatewayapi/standard-install-$(GATEWAY_API_TAG).yaml
+$(GATEWAY_API):
+	curl -fsSL --proto '=https' --retry 5 --retry-all-errors -o $@.part \
+		https://github.com/kubernetes-sigs/gateway-api/releases/download/$(GATEWAY_API_TAG)/standard-install.yaml
+	echo '$(GATEWAY_API_SHA256)  $@.part' | sha256sum -c --quiet - || { rm -f $@.part; exit 1; }
+	rm -f pkg/provisioner/gatewayapi/standard-install-*.yaml
+	mv $@.part $@
+
+gateway-api: $(GATEWAY_API)
 
 # The frontend's packages, installed again only when the lockfile changes.
 web/node_modules/.package-lock.json: web/package-lock.json
@@ -57,7 +74,7 @@ HEADLAMP_SHA256 := 1747c5de63963be925ded64dc2a5308144d260e43452855169bc771f03846
 HEADLAMP_VERSION := $(HEADLAMP_TAG:v%=%)
 HEADLAMP_TARBALL := dist/cache/Headlamp-$(HEADLAMP_VERSION)-linux-x64.tar.gz
 UNITS := kubehenge.service kubehenge-update.service kubehenge-update.path kubehenge-headlamp.service kubehenge-headlamp.socket kubehenge-headlamp-proxy.service
-dist: web
+dist: web gateway-api
 	rm -rf dist/stage && mkdir -p dist/stage/bin dist/stage/share/kubehenge/appliance dist/stage/share/kubehenge/headlamp/plugins dist/cache
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='$(RELEASE_LDFLAGS)' \
 		-o dist/stage/bin/kubehenge ./cmd/kubehenge
@@ -93,7 +110,7 @@ dist: web
 # the release key, with this release added. Run after dist.
 TOFU_VERSION = $(patsubst v%,%,$(shell sed -n 's/^TOFU_TAG=//p' appliance/install.sh))
 TOFU_SHA256 = $(shell sed -n 's/^TOFU_SHA256=//p' appliance/install.sh)
-index:
+index: gateway-api
 	CGO_ENABLED=0 go build -trimpath -ldflags='$(RELEASE_LDFLAGS)' -o dist/kubehenge-release ./cmd/kubehenge
 	dist/kubehenge-release release index $(if $(PREVIOUS),--previous $(PREVIOUS)) --version $(VERSION) \
 		--url https://github.com/kubehenge/kubehenge/releases/download/v$(VERSION)/kubehenge_$(VERSION)_linux_amd64.tar.gz \
@@ -105,7 +122,7 @@ index:
 # Builds and pushes the image the management cluster runs the controller from, and prints its
 # reference by digest. ko's own SBOM would be pushed beside it unsigned; the release attests one
 # instead (scripts/sbom.sh).
-image: web
+image: web gateway-api
 	KO_DOCKER_REPO=$(IMAGE) KO_CONFIG_PATH=cmd/kubehenge ko build --bare --sbom=none $(KO_FLAGS) ./cmd/kubehenge
 
 # Build and push the provider images the management cluster runs as Kubehenge builds them
@@ -143,7 +160,7 @@ fmt: web/node_modules/.package-lock.json
 # Without cgo, as the binary is built, and so that a cross-system check needs no C toolchain.
 # govulncheck fails on a known vulnerability only where the code calls into it, for the system it
 # runs on: GOOS would also build govulncheck itself for another one.
-lint-go: web
+lint-go: web gateway-api
 	go mod tidy -diff
 	golangci-lint config verify
 	CGO_ENABLED=0 GOOS=linux golangci-lint run ./...
@@ -201,7 +218,7 @@ lint-docker:
 # configuration against mocked providers.
 unit: unit-go unit-web unit-tofu
 
-unit-go: web
+unit-go: web gateway-api
 	go test -race ./...
 
 unit-web: web/node_modules/.package-lock.json
@@ -216,7 +233,7 @@ test: lint unit
 # and etcd, with the CRDs of the releases the management cluster installs; no Proxmox VE, no
 # containers. Its assets are fetched once, into Go's own directory.
 INTEGRATION_ASSETS ?= $(subst \,/,$(shell go env GOPATH))/kubehenge-integration
-integration: web
+integration: web gateway-api
 	test/integration/assets.sh $(INTEGRATION_ASSETS)
 	KUBEBUILDER_ASSETS=$(INTEGRATION_ASSETS)/bin KUBEHENGE_INTEGRATION_CRDS=$(INTEGRATION_ASSETS)/crds \
 		go test -tags integration -count=1 -run '^TestIntegration' ./pkg/...
