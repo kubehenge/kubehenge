@@ -79,6 +79,12 @@ func loadBalancerCharts(charts *Charts, lb LoadBalancer) ([]chartProxy, error) {
 		{"load-balancer", kubeVip, metav1.NamespaceSystem, charts.KubeVip, withImage(kubeVipValues(), charts.KubeVipImage)},
 		{"load-balancer-addresses", "kube-vip-cloud-provider", metav1.NamespaceSystem, charts.KubeVipCloudProvider, map[string]any{
 			"cm": map[string]any{"data": map[string]any{"range-global": strings.Join(ranges, ",")}},
+			// The chart takes its arguments as a map of flag to value.
+			"extraArgs": map[string]any{
+				"leader-elect-lease-duration": leaseDuration,
+				"leader-elect-renew-deadline": leaseRenew,
+				"leader-elect-retry-period":   leaseRetry,
+			},
 		}},
 	}, nil
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -376,6 +377,43 @@ func TestCNIProxy(t *testing.T) {
 	}
 	if _, err := helmChartProxies(cluster(), &testCharts, "kubeadm", "local-lvm", CNI{Name: "cilium"}, &Addons{}); err == nil {
 		t.Error("no error for a CNI without a pod range")
+	}
+}
+
+// Every controller that exits once it misses its lease's renewal holds it as long as the control
+// planes' controller managers do.
+func TestControllersHoldPatientLeases(t *testing.T) {
+	t.Parallel()
+	lb := LoadBalancer{Enabled: true, Implementation: kubeVip, Addresses: []string{"10.0.0.100-10.0.0.120"}}
+	proxies, err := helmChartProxies(cluster(), &testCharts, "kubeadm", "local-lvm", CNI{Name: "cilium", Pods: "10.42.0.0/16"}, &Addons{LoadBalancer: lb})
+	if err != nil {
+		t.Fatal(err)
+	}
+	patient := func(what string, args []any, prefix string) {
+		t.Helper()
+		for _, want := range []string{"-lease-duration=60s", "-renew-deadline=40s", "-retry-period=10s"} {
+			if !slices.Contains(args, any("--"+prefix+want)) {
+				t.Errorf("%s lacks --%s%s: %v", what, prefix, want, args)
+			}
+		}
+	}
+	_, cilium, _ := proxyValues(t, proxies, "web-cni")
+	patient("the Cilium operator", lookup[[]any](t, cilium, "operator", "extraArgs"), "leader-election")
+	_, ccm, _ := proxyValues(t, proxies, "web-proxmox-ccm")
+	patient("the cloud controller manager", lookup[[]any](t, ccm, "extraArgs"), "leader-elect")
+	_, csi, _ := proxyValues(t, proxies, "web-proxmox-csi")
+	for _, sidecar := range []string{"attacher", "provisioner", "resizer", "snapshotter"} {
+		patient("the CSI "+sidecar, lookup[[]any](t, csi, "controller", sidecar, "args"), "leader-election")
+	}
+	for _, sidecar := range []string{"attacher", "provisioner"} {
+		if args := lookup[[]any](t, csi, "controller", sidecar, "args"); !slices.Contains(args, any("--default-fstype=ext4")) {
+			t.Errorf("the CSI %s lost the chart's own file system: %v", sidecar, args)
+		}
+	}
+	_, provider, _ := proxyValues(t, proxies, "web-load-balancer-addresses")
+	if args := lookup[map[string]any](t, provider, "extraArgs"); args["leader-elect-renew-deadline"] != "40s" ||
+		args["leader-elect-lease-duration"] != "60s" || args["leader-elect-retry-period"] != "10s" {
+		t.Errorf("kube-vip's cloud provider's leases: %v", args)
 	}
 }
 

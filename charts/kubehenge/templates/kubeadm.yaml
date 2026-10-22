@@ -251,7 +251,8 @@ a machine is replaced before either ends.
 {{/*
 A control-plane component's serving certificate. It serves on loopback only, kubeadm's own
 default, and lets its metrics through there without credentials, as etcd and kube-proxy do: the
-metrics proxy on the node's address authenticates Prometheus instead.
+metrics proxy on the node's address authenticates Prometheus instead. Its leader election is the
+patient one (kubehenge.patientLeaseArgs).
 */}}
 {{- define "kubehenge.kubeadmServing" -}}
 extraArgs:
@@ -263,6 +264,10 @@ extraArgs:
     value: /etc/kubernetes/serving/{{ . }}.crt
   - name: tls-private-key-file
     value: /etc/kubernetes/serving/{{ . }}.key
+  {{- range $arg := fromYamlArray (include "kubehenge.patientLeaseArgs" $) }}
+  - name: {{ (splitn "=" 2 $arg)._0 }}
+    value: {{ (splitn "=" 2 $arg)._1 }}
+  {{- end }}
 extraVolumes:
   {{- range $ext := list "crt" "key" }}
   - name: serving-{{ $ext }}
