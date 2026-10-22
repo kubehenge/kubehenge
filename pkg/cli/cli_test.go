@@ -133,6 +133,43 @@ func TestSignRefusesAFileWithoutASeed(t *testing.T) {
 	}
 }
 
+func TestSignTakesOnlyTheTrustedKey(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	keyFile, indexFile := filepath.Join(dir, "release.key"), filepath.Join(dir, "index.json")
+	out, err := run(t, "release", "keygen", keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := base64.StdEncoding.DecodeString(strings.TrimSpace(out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(indexFile, []byte(`{"releases":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	other, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sign := func(trusted ed25519.PublicKey) error {
+		cmd := newSignCommand(trusted)
+		cmd.SetArgs([]string{keyFile, indexFile})
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(&bytes.Buffer{})
+		return cmd.ExecuteContext(t.Context())
+	}
+	if err = sign(other); err == nil || !strings.Contains(err.Error(), "not the release key") {
+		t.Fatalf("signed with a key the build does not trust: %v", err)
+	}
+	if _, statErr := os.Stat(indexFile + ".sig"); !os.IsNotExist(statErr) {
+		t.Fatalf("a signature was written: %v", statErr)
+	}
+	if err = sign(pub); err != nil {
+		t.Fatalf("refused the trusted key: %v", err)
+	}
+}
+
 func TestWaitOperatorNeedsANamespace(t *testing.T) {
 	t.Parallel()
 	_, err := run(t, "wait", "operator")

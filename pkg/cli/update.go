@@ -65,7 +65,7 @@ func newReleaseCommand() *cobra.Command {
 		Use:   "release",
 		Short: "Sign release indexes, for the people who publish Kubehenge",
 	}
-	cmd.AddCommand(newKeygenCommand(), newSignCommand(), newIndexCommand())
+	cmd.AddCommand(newKeygenCommand(), newSignCommand(release.PublicKey()), newIndexCommand())
 	return cmd
 }
 
@@ -98,7 +98,11 @@ func newKeygenCommand() *cobra.Command {
 	}
 }
 
-func newSignCommand() *cobra.Command {
+// newSignCommand signs with a key whose public half is trusted, the release key built into this
+// binary; a signature from any other key would be refused by every appliance, and by the next
+// release's index build, which checks the previous index against it. A build without a release key
+// (nil) signs with any key.
+func newSignCommand(trusted ed25519.PublicKey) *cobra.Command {
 	return &cobra.Command{
 		Use:   "sign <private key file> <index.json>",
 		Short: "Check an index and write its signature to <index.json>.sig",
@@ -116,6 +120,9 @@ func newSignCommand() *cobra.Command {
 			pub, ok := key.Public().(ed25519.PublicKey)
 			if !ok {
 				return errors.New("the private key has no Ed25519 public key")
+			}
+			if trusted != nil && !pub.Equal(trusted) {
+				return errors.New("the private key is not the release key this build trusts (pkg/release/release.pub)")
 			}
 			index, err := os.ReadFile(args[1])
 			if err != nil {
@@ -142,7 +149,7 @@ func newIndexCommand() *cobra.Command {
 		Short: "Write the next release index: the previous one, verified, with one release added",
 		Long: `Write the next release index to standard output: the previous published index, checked
 against this build's release key, with one newer release added. The result still has to be signed
-with "kubehenge release sign", by whoever holds the private key.`,
+with "kubehenge release sign".`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ix, err := previousIndex(previous)

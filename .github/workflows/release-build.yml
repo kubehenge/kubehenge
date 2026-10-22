@@ -29,6 +29,12 @@ on:
       helm-addon:
         description: The digest of the Add-on Provider for Helm's image
         value: ${{ jobs.build.outputs.helm-addon }}
+    # An environment's secret reaches a called workflow only when the caller names it, and only
+    # the job that sets that environment receives its value: the sign job.
+    secrets:
+      RELEASE_KEY:
+        description: The release key's seed, as `kubehenge release keygen` writes it
+        required: true
 
 permissions: {}
 
@@ -45,15 +51,14 @@ env:
   HELM_ADDON_REPOSITORY: ghcr.io/kubehenge/cluster-api-addon-provider-helm
 
 jobs:
-  # Nothing is built until the owner has approved the run (the release environment) and the commit
-  # has shown it is one to release: a signed tag on a signed commit of main that passed every check
-  # main requires, including the end-to-end tests, which nothing here runs again.
+  # Nothing is built until the commit has shown it is one to release: a signed tag on a signed
+  # commit of main that passed every check main requires, including the end-to-end tests, which
+  # nothing here runs again.
   gate:
     name: gate
     if: github.repository == 'kubehenge/kubehenge'
     runs-on: ubuntu-26.04
     timeout-minutes: 10
-    environment: release
     permissions:
       contents: read # Reads the tagged source, the tag, and the signatures GitHub verified.
       checks: read # Reads the checks the release commit passed in the merge queue.
@@ -253,6 +258,44 @@ jobs:
           retention-days: 1
           overwrite: true
 
+  # The only job that holds the release key (the release environment's secret, deployable from
+  # version tags alone). It checks out nothing and runs no code but the kubehenge binary of the
+  # archive it has checked, which signs only with the release key that binary trusts.
+  sign:
+    name: sign
+    needs: [gate, build]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    environment: release
+    permissions: {}
+    env:
+      VERSION: ${{ needs.gate.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-files
+          path: dist
+      - name: Sign the index
+        env:
+          RELEASE_KEY: ${{ secrets.RELEASE_KEY }}
+        run: |
+          set -eu
+          fail() { echo "::error::$*"; exit 1; }
+          [ -n "$RELEASE_KEY" ] || fail "the release environment has no RELEASE_KEY secret"
+          (cd dist && sha256sum --check --strict "kubehenge_${VERSION}_SHA256SUMS")
+          tar -xzf "dist/kubehenge_${VERSION}_linux_amd64.tar.gz" -C "$RUNNER_TEMP" ./bin/kubehenge
+          key=$RUNNER_TEMP/release.key
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s' "$RELEASE_KEY" > "$key")
+          "$RUNNER_TEMP/bin/kubehenge" release sign "$key" dist/index.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-signature
+          path: dist/index.json.sig
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
   # SPDX SBOMs of the archive and of each image, each checked to list what ships (scripts/sbom.sh).
   sbom:
     name: sbom
@@ -307,7 +350,7 @@ jobs:
 
   attest:
     name: attest
-    needs: [gate, build, sbom]
+    needs: [gate, build, sbom, sign]
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
@@ -339,6 +382,10 @@ jobs:
         with:
           name: release-sboms
           path: sbom
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-signature
+          path: dist
 
       # Signed only if the bytes that arrived are those the checksums were written over.
       - name: Checksums
@@ -362,6 +409,7 @@ jobs:
             dist/kubehenge_${{ env.VERSION }}_SHA256SUMS
             dist/install.sh
             dist/index.json
+            dist/index.json.sig
             sbom/kubehenge_${{ env.VERSION }}_linux_amd64.spdx.json
       - name: SBOM of the archive
         id: sbom
