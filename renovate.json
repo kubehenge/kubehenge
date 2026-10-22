@@ -78,6 +78,12 @@
       ]
     },
     {
+      "description": "The cluster autoscaler is pinned once for each Kubernetes minor version, as each release carries its minor's scheduler, so each line takes the patches of its own minor; a release for a new minor is added as a line of its own.",
+      "matchDepNames": ["registry.k8s.io/autoscaling/cluster-autoscaler"],
+      "matchUpdateTypes": ["major", "minor"],
+      "enabled": false
+    },
+    {
       "description": "MetalLB's chart names the FRR it is tested with, whose image Kubehenge pins beside MetalLB's.",
       "matchDepNames": ["quay.io/metallb/speaker"],
       "prBodyNotes": [

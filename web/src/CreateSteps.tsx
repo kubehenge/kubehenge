@@ -1,6 +1,7 @@
 import { useEffect, useState, type JSX } from "react";
 
 import { api } from "./api";
+import { WorkerFields } from "./Autoscaling";
 import {
   controlPlaneSizes,
   machineLeast,
@@ -18,7 +19,18 @@ import { addressBits } from "./network";
 import { OIDCProviders } from "./OIDCProviders";
 import { HAField, HAGroupsField, PlacementFields, type HARulesRead } from "./Placement";
 import type { Bridge, ClusterClass, PveNode, Storage, TemplateBuilds, Versions } from "./types";
-import { ErrorBox, Field, bytes, cniName, distributionName, errorMessage, filled, maxWorkers, sentence } from "./ui";
+import {
+  ErrorBox,
+  Field,
+  bytes,
+  cniName,
+  distributionName,
+  errorMessage,
+  filled,
+  sentence,
+  shownNumber,
+  typedNumber,
+} from "./ui";
 
 const kubeadmVersion = /^v1\.\d+\.\d+$/u;
 
@@ -103,11 +115,6 @@ function TemplateAsk({ cls }: { cls: ClusterClass | undefined }): JSX.Element | 
   );
 }
 
-// Number fields keep an empty or unfinished entry as NaN, which the checks refuse, rather than
-// turning it into 0 under the cursor.
-const shownNumber = (n: number): string => (Number.isNaN(n) ? "" : String(n));
-const typedNumber = (s: string): number => (s.trim() === "" ? Number.NaN : Number(s));
-
 function versionHint(cls: ClusterClass | undefined, offered: Versions | undefined): string | undefined {
   if (offered && offered.versions.length > 0) {
     return cls?.distribution === "kubeadm"
@@ -185,7 +192,7 @@ export function GeneralStep({
   namespaces: string[];
   onChooseNamespace: (namespace: string) => void;
 }): JSX.Element {
-  const alone = machineLeast({ ...form, workerReplicas: 0 }, cls, "controlPlaneMachine");
+  const alone = machineLeast({ ...form, workerReplicas: 0, workerAutoscale: false }, cls, "controlPlaneMachine");
   return (
     <>
       {namespaces.length > 1 && (
@@ -242,26 +249,13 @@ export function GeneralStep({
           </select>
         )}
       </Field>
-      <Field
-        label="Workers"
-        error={shown("workerReplicas")}
-        hint={
-          form.workerReplicas === 0
-            ? `With none, the control planes run the workloads too, so they have at least ${alone.cores} cores and ${alone.memoryMiB} MiB.`
-            : undefined
-        }
-      >
-        {(id) => (
-          <input
-            id={id}
-            type="number"
-            min={0}
-            max={maxWorkers}
-            value={shownNumber(form.workerReplicas)}
-            onChange={(e) => set("workerReplicas", typedNumber(e.target.value))}
-          />
-        )}
-      </Field>
+      <WorkerFields
+        form={form}
+        set={set}
+        shown={shown}
+        cls={cls}
+        alone={`With none, the control planes run the workloads too, so they have at least ${alone.cores} cores and ${alone.memoryMiB} MiB.`}
+      />
     </>
   );
 }

@@ -40,6 +40,8 @@ import { Dialog, ErrorBox, errorMessage, filled, sole, usePrivilege } from "./ui
 const raising = new Set<keyof Form>([
   "controlPlaneReplicas",
   "workerReplicas",
+  "workerAutoscale",
+  "workerMax",
   "headlamp",
   "monitoring",
   "podSecurity",

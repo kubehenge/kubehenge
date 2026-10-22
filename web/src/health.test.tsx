@@ -212,6 +212,27 @@ describe("health page", () => {
     expect(screen.queryByRole("link", { name: "Headlamp" })).not.toBeInTheDocument();
   });
 
+  it("says the autoscaler brings workers to a pool at none, which keeps the control plane to itself", async () => {
+    const atNone = { name: "md-0", desired: 0, ready: 0, available: 0, upToDate: 0, rollingOut: false };
+    fakeServer({
+      [healthPath]: {
+        body: {
+          ...degraded,
+          nodes: { items: degraded.nodes.items.filter((n) => n.role === "control-plane") },
+          pools: { items: [{ ...atNone, autoscaling: { min: 0, max: 3 } }] },
+        },
+      },
+    });
+    render(<HealthView cluster={cluster} />);
+
+    const tiles = within(await screen.findByRole("list", { name: "At a glance" }));
+    expect(
+      tiles.getByRole("link", {
+        name: /Workers\s*None\s*The cluster autoscaler adds workers once pods wait for room/u,
+      }),
+    ).toBeInTheDocument();
+  });
+
   it("asks again more often while the cluster is not healthy", async () => {
     const routes: Record<string, Route> = { [healthPath]: { body: degraded } };
     const calls = fakeServer(routes);

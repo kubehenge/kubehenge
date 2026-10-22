@@ -94,10 +94,18 @@ export interface Replicas {
   upToDate: number;
 }
 
+/** The least and the most workers the cluster autoscaler keeps a pool between. */
+export interface Autoscaling {
+  min: number;
+  max: number;
+}
+
 export interface WorkerPool {
   name: string;
   class: string;
+  /** For an autoscaled pool, the workers it asks for at the moment. */
   replicas: number;
+  autoscaling?: Autoscaling;
 }
 
 export interface Machine {
@@ -213,6 +221,7 @@ export interface PoolState {
   upToDate: number;
   rollingOut: boolean;
   message?: string;
+  autoscaling?: Autoscaling;
 }
 
 export interface HealthCheck {
@@ -348,6 +357,9 @@ export interface Storage {
 export interface PveNode {
   node: string;
   online: boolean;
+  /** Memory in use and in all, in bytes, while the node is online. */
+  memory?: number;
+  maxMemory?: number;
 }
 
 /** HARule is an enabled HA node-affinity rule of Proxmox VE, offered as a place for a cluster. */
@@ -634,6 +646,8 @@ export interface CreateRequest {
   version: string;
   controlPlaneReplicas: number;
   workerReplicas: number;
+  /** Has the cluster autoscaler size the worker pool in place of workerReplicas. */
+  workerAutoscaling?: Autoscaling;
   variables: Record<string, unknown>;
   pods?: string[];
   services?: string[];
@@ -643,5 +657,15 @@ export interface ChangeRequest {
   version?: string;
   controlPlaneReplicas?: number;
   workerPools?: Record<string, number>;
+  /** Switches autoscaling on for pools by name, or off with null. */
+  autoscaling?: Record<string, Autoscaling | null>;
   variables?: Record<string, unknown>;
+}
+
+/** The autoscaler variable: where the cluster autoscaler runs and how it scales. */
+export interface AutoscalerSettings {
+  placement?: "management" | "workload";
+  expander?: "least-waste" | "most-pods" | "random";
+  scaleDownDelayAfterAddMinutes?: number;
+  scaleDownUnneededMinutes?: number;
 }

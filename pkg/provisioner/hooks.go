@@ -152,6 +152,14 @@ func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.Bef
 		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
 		return
 	}
+	if errs := validateAutoscaling(cluster); len(errs) > 0 {
+		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, errs.ToAggregate().Error()
+		return
+	}
+	if err := checkNodeAddresses(nil, cluster); err != nil {
+		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
+		return
+	}
 	s := &corev1.Secret{}
 	err := h.Reader.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: credentialsSecretName(cluster)}, s)
 	switch {

@@ -48,6 +48,19 @@ func (ti *tokenIssuer) count() int {
 	return len(ti.issued)
 }
 
+// tokensOf counts the tokens made of an account.
+func (ti *tokenIssuer) tokensOf(account string) int {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	n := 0
+	for _, a := range ti.issued {
+		if a == account {
+			n++
+		}
+	}
+	return n
+}
+
 func initialised(c *clusterv1.Cluster) *clusterv1.Cluster {
 	c.Status.Conditions = append(c.Status.Conditions, metav1.Condition{
 		Type: clusterv1.ClusterControlPlaneInitializedCondition, Status: metav1.ConditionTrue, Reason: "Up",
@@ -72,7 +85,7 @@ func newIdentities(t *testing.T, c *clusterv1.Cluster, clock *time.Time) identit
 	workload := interceptor.NewClient(inside, interceptor.Funcs{SubResourceCreate: issuer.create})
 	config := &rest.Config{Host: "https://10.0.0.20:6443", CAData: []byte("the cluster CA")}
 	w := &WorkloadIdentities{
-		Client: r.Client, ClassNamespace: r.ClassNamespace,
+		Client: r.Client, ClassNamespace: r.ClassNamespace, MountNamespace: autoscalerNamespace,
 		Remotes: &Remotes{byCluster: map[string]remote{remoteKey(c): {config: config, client: workload, until: time.Now().Add(time.Hour)}}},
 		now:     func() time.Time { return *clock },
 	}

@@ -29,6 +29,19 @@ rules:
   - apiGroups: [infrastructure.cluster.x-k8s.io]
     resources: [proxmoxmachines]
     verbs: [get, list, watch, patch]
+  # What a node of each autoscaled pool holds goes onto its MachineDeployment, for the autoscaler.
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [machinedeployments]
+    verbs: [get, list, watch, patch]
+  # Each cluster's autoscaler gets the autoscaler role in the cluster's namespace, which can be any;
+  # bind lets the controller grant that role and no other.
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [rolebindings]
+    verbs: [get, create, update, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles]
+    resourceNames: [kubehenge-autoscaler]
+    verbs: [bind]
   # Each cluster's token and the ClusterResourceSet Secret delivering it live in the cluster's
   # namespace, which can be any. delete: an identity's token goes once the cluster no longer wants
   # the identity, such as the backup ones when backups are switched off.
@@ -240,6 +253,11 @@ spec:
             - --velero-plugin-image={{ .Values.addons.velero.plugin }}
             - --kube-vip-image={{ .Values.kubeVip }}
             - --flux-version={{ .Values.addons.fluxOperator.flux }}
+            - --autoscaler-namespace={{ .Values.autoscaler.namespace }}
+            - --autoscaler-images={{ join "," .Values.autoscaler.images }}
+            {{- with .Values.managementEndpoint }}
+            - --management-endpoint={{ . }}
+            {{- end }}
             - --pod-security-exempt={{ join "," .Values.podSecurityExempt }}
             - --proxmox-ca=/etc/kubehenge/proxmox/ca.crt
             {{- if .Values.interface.offerHARules }}

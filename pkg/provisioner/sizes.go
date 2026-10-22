@@ -26,6 +26,7 @@ func (s controlPlaneSize) covers(need controlPlaneSize) bool {
 type machineSize struct {
 	Cores     *int `json:"cores,omitempty"`
 	MemoryMiB *int `json:"memoryMiB,omitempty"`
+	DiskGiB   *int `json:"diskGiB,omitempty"`
 }
 
 // checkControlPlaneSize refuses a cluster whose control planes are smaller than its class's sizing
@@ -59,12 +60,8 @@ func controlPlaneFit(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) 
 	var need, have controlPlaneSize
 	topology := cluster.Spec.Topology
 	for i := range topology.Workers.MachineDeployments {
-		// Without replicas, a machine deployment starts with one.
-		replicas := int32(1)
-		if r := topology.Workers.MachineDeployments[i].Replicas; r != nil {
-			replicas = *r
-		}
-		have.Workers += replicas
+		// An autoscaled pool may grow to its most, which the control planes have to serve.
+		have.Workers += workerRange(&topology.Workers.MachineDeployments[i]).most
 	}
 	guide, ok := class.Annotations[ControlPlaneSizesAnnotation]
 	if !ok {
@@ -92,6 +89,16 @@ func controlPlaneFit(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) 
 // nodeSize is the vCPUs and memory a machine variable gives its nodes: from a machine deployment's
 // or the control plane's override, else the cluster's value, else the class's default.
 func nodeSize(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass, name string, overrides []clusterv1.ClusterVariable) (int, int, error) {
+	set, err := nodeShape(cluster, class, name, overrides)
+	if err != nil {
+		return 0, 0, err
+	}
+	return *set.Cores, *set.MemoryMiB, nil
+}
+
+// nodeShape is what nodeSize reads, with the boot disk's size where the variable or the class gives
+// one. Its vCPUs and memory are always set.
+func nodeShape(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass, name string, overrides []clusterv1.ClusterVariable) (machineSize, error) {
 	var set machineSize
 	for _, vars := range [][]clusterv1.ClusterVariable{overrides, cluster.Spec.Topology.Variables} {
 		v := variableNamed(vars, name)
@@ -99,14 +106,14 @@ func nodeSize(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass, name st
 			continue
 		}
 		if err := json.Unmarshal(v.Value.Raw, &set); err != nil {
-			return 0, 0, fmt.Errorf("variable %s: %w", name, err)
+			return set, fmt.Errorf("variable %s: %w", name, err)
 		}
 		break
 	}
-	if set.Cores == nil || set.MemoryMiB == nil {
+	if set.Cores == nil || set.MemoryMiB == nil || set.DiskGiB == nil {
 		defaults, err := classDefaultSize(class, name)
 		if err != nil {
-			return 0, 0, err
+			return set, err
 		}
 		if set.Cores == nil {
 			set.Cores = defaults.Cores
@@ -114,11 +121,14 @@ func nodeSize(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass, name st
 		if set.MemoryMiB == nil {
 			set.MemoryMiB = defaults.MemoryMiB
 		}
+		if set.DiskGiB == nil {
+			set.DiskGiB = defaults.DiskGiB
+		}
 	}
 	if set.Cores == nil || set.MemoryMiB == nil {
-		return 0, 0, fmt.Errorf("class %s gives %s no default vCPUs or memory", class.Name, name)
+		return set, fmt.Errorf("class %s gives %s no default vCPUs or memory", class.Name, name)
 	}
-	return *set.Cores, *set.MemoryMiB, nil
+	return set, nil
 }
 
 func variableNamed(vars []clusterv1.ClusterVariable, name string) *clusterv1.ClusterVariable {
@@ -163,7 +173,7 @@ func classDefaultSize(class *clusterv1.ClusterClass, name string) (machineSize, 
 				return size, fmt.Errorf("class %s, variable %s: default: %w", class.Name, name, err)
 			}
 		}
-		for field, value := range map[string]**int{"cores": &size.Cores, "memoryMiB": &size.MemoryMiB} {
+		for field, value := range map[string]**int{"cores": &size.Cores, "memoryMiB": &size.MemoryMiB, "diskGiB": &size.DiskGiB} {
 			d := schema.Properties[field].Default
 			if d == nil {
 				continue

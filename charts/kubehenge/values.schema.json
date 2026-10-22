@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["workloadPool", "providerNamespaces", "interface", "clusters", "clusterOIDC", "backupTargets", "podSecurityExempt", "image", "kubeVip", "etcdProxy", "proxmox", "addons"],
+  "required": ["workloadPool", "providerNamespaces", "interface", "clusters", "clusterOIDC", "backupTargets", "podSecurityExempt", "image", "kubeVip", "etcdProxy", "proxmox", "addons", "autoscaler"],
   "properties": {
     "chartDigest": {
       "description": "Digest of the chart's files, which the management cluster's module passes so that a changed chart upgrades the release whatever its version says.",
@@ -101,6 +101,29 @@
     "kubeVip": {
       "description": "kube-vip's image by registry, repository, tag and digest.",
       "$ref": "#/$defs/pinnedImage"
+    },
+    "managementEndpoint": {
+      "description": "The management cluster's API as workload clusters reach it, for autoscalers that run inside their cluster; empty, none can.",
+      "type": "string",
+      "pattern": "^(https://[^\\s/]+)?$"
+    },
+    "autoscaler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace", "images"],
+      "properties": {
+        "namespace": { "$ref": "#/$defs/name" },
+        "images": {
+          "description": "The cluster autoscaler's images, one for each Kubernetes minor version, by registry, repository, tag and digest.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[^\\s:@]+(:[0-9]+)?/[^\\s:@]+:v1\\.[0-9]+\\.[0-9]+@sha256:[0-9a-f]{64}$"
+          },
+          "uniqueItems": true
+        }
+      }
     },
     "etcdProxy": {
       "description": "The image of the etcd proxy on k3s control planes, by registry, repository, tag and digest.",

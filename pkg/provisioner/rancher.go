@@ -60,13 +60,19 @@ func ParseKubernetesMinors(s string) (KubernetesMinors, error) {
 
 // Allows reports whether a Kubernetes version such as v1.36.5+rke2r1 is in the range.
 func (m KubernetesMinors) Allows(version string) bool {
+	minor, ok := kubernetesMinor(version)
+	return ok && minor >= m.Min && minor <= m.Max
+}
+
+// kubernetesMinor is the minor version of a Kubernetes version such as v1.36.5+rke2r1.
+func kubernetesMinor(version string) (int, bool) {
 	major, minorOn, ok := strings.Cut(strings.TrimPrefix(version, "v"), ".")
 	if !ok || major != "1" {
-		return false
+		return 0, false
 	}
 	minorText, _, _ := strings.Cut(minorOn, ".")
 	minor, err := strconv.Atoi(minorText)
-	return err == nil && minor >= m.Min && minor <= m.Max
+	return minor, err == nil
 }
 
 var (
@@ -94,13 +100,19 @@ const (
 // and a/b-c the same name, so a hash of the identity follows. Rancher treats c-xxxxx and local as
 // clusters of its own, which this never matches.
 func rancherName(cluster *clusterv1.Cluster) string {
-	sum := sha256.Sum256([]byte(cluster.Namespace + "/" + cluster.Name))
+	return qualifiedName(cluster.Namespace, cluster.Name)
+}
+
+// qualifiedName names something of the cluster namespace/name outside its namespace, in one DNS
+// label: <namespace>-<name> and a hash of the identity, as the name alone repeats.
+func qualifiedName(namespace, name string) string {
+	sum := sha256.Sum256([]byte(namespace + "/" + name))
 	suffix := "-" + hex.EncodeToString(sum[:])[:8]
-	name := strings.ToLower(cluster.Namespace + "-" + cluster.Name)
-	if len(name) > 63-len(suffix) {
-		name = strings.TrimRight(name[:63-len(suffix)], "-")
+	joined := strings.ToLower(namespace + "-" + name)
+	if len(joined) > 63-len(suffix) {
+		joined = strings.TrimRight(joined[:63-len(suffix)], "-")
 	}
-	return name + suffix
+	return joined + suffix
 }
 
 // remoteConfig reads the kubeconfig Cluster API keeps for a cluster, and whether it exists yet.

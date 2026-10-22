@@ -38,15 +38,18 @@ func TestControlPlanesTaintedOnceAWorkerJoins(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		wantsWorkers bool
+		autoscaled   bool
 		worker       bool
 		tainted      bool
 	}{
-		{"workers wanted and one joined", true, true, true},
+		{"workers wanted and one joined", true, false, true, true},
 		// Until a worker joins, the control planes are all there is to run the add-ons' workloads.
-		{"workers wanted, none joined yet", true, false, false},
+		{"workers wanted, none joined yet", true, false, false, false},
 		// Scaled to none: the workers being drained are still there, and their pods need somewhere to go.
-		{"no workers wanted", false, true, false},
-		{"no workers at all", false, false, false},
+		{"no workers wanted", false, false, true, false},
+		{"no workers at all", false, false, false, false},
+		// A pending workload is what has the autoscaler add the first worker.
+		{"autoscaled, no worker yet", true, true, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -58,7 +61,7 @@ func TestControlPlanesTaintedOnceAWorkerJoins(t *testing.T) {
 				objects = append(objects, workerNode("worker-1"))
 			}
 			workload := fake.NewClientBuilder().WithScheme(remoteScheme).WithObjects(objects...).Build()
-			if err := taintControlPlanes(context.Background(), workload, tc.wantsWorkers); err != nil {
+			if err := taintControlPlanes(context.Background(), workload, tc.wantsWorkers, tc.autoscaled); err != nil {
 				t.Fatal(err)
 			}
 			for _, name := range []string{"cp-1", "cp-2"} {
@@ -96,6 +99,11 @@ func TestWantsWorkers(t *testing.T) {
 		{"one of two has workers", withDeployments(new(int32(0)), new(int32(2))), true},
 		// Cluster API gives a machine deployment without replicas one.
 		{"replicas unset", withDeployments(nil), true},
+		{"autoscaled from none", func() *clusterv1.Cluster {
+			c := withDeployments(nil)
+			c.Spec.Topology.Workers.MachineDeployments[0].Metadata.Annotations = map[string]string{AutoscalerMinAnnotation: "0", AutoscalerMaxAnnotation: "2"}
+			return c
+		}(), true},
 	} {
 		if got := wantsWorkers(tc.cluster); got != tc.want {
 			t.Errorf("%s: wantsWorkers = %v, want %v", tc.name, got, tc.want)

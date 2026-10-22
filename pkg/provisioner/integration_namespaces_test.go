@@ -177,13 +177,13 @@ func TestIntegrationChartInterfaceNamespaces(t *testing.T) {
 
 	bound, listed, made := roles()
 	if !maps.Equal(bound, map[string]bool{classNamespace: true, interfaceNamespace: true}) ||
-		!slices.Equal(listed, []string{interfaceNamespace}) || !maps.Equal(made, map[string]bool{interfaceNamespace: false}) {
+		!slices.Equal(listed, []string{interfaceNamespace}) || !maps.Equal(made, map[string]bool{interfaceNamespace: false, autoscalerNamespace: false}) {
 		t.Errorf("without more namespaces: bound in %v, listed %v, namespaces %v", bound, listed, made)
 	}
 	bound, listed, made = roles("testdata/more-namespaces-values.yaml")
 	if !maps.Equal(bound, map[string]bool{classNamespace: true, interfaceNamespace: true, "team-a": true, "team-b": true}) ||
 		!slices.Equal(listed, []string{interfaceNamespace, "team-a", "team-b"}) ||
-		!maps.Equal(made, map[string]bool{interfaceNamespace: false, "team-a": true, "team-b": true}) {
+		!maps.Equal(made, map[string]bool{interfaceNamespace: false, autoscalerNamespace: false, "team-a": true, "team-b": true}) {
 		t.Errorf("with team-a and team-b: bound in %v, listed %v, namespaces %v", bound, listed, made)
 	}
 

@@ -438,6 +438,7 @@ func poolsSection(m *managementRead, a *attention) section[poolView] {
 			Name:    cmp.Or(md.Labels[clusterv1.ClusterTopologyMachineDeploymentNameLabel], md.Name),
 			Desired: deref(md.Spec.Replicas), Ready: deref(md.Status.ReadyReplicas),
 			Available: deref(md.Status.AvailableReplicas), UpToDate: deref(md.Status.UpToDateReplicas),
+			Autoscaling: autoscalingOf(md.Annotations),
 		}
 		conds := md.Status.Conditions
 		rolling := meta.FindStatusCondition(conds, clusterv1.MachineDeploymentRollingOutCondition)

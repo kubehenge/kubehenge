@@ -159,6 +159,28 @@ templateRefresh:
 # renovate: datasource=docker depName=ghcr.io/kube-vip/kube-vip
 kubeVip: ghcr.io/kube-vip/kube-vip:v1.3.1@sha256:1962f9daf226503f7e6b107f595cb28b7917fd2d0113957075e19a3e5a6c1e33
 
+# The management cluster's API as workload clusters reach it, such as https://192.0.2.10:6443; the
+# management cluster's module sets it. Without it, no cluster's autoscaler can run inside the
+# cluster (the autoscaler variable's placement workload).
+managementEndpoint: ""
+
+# The cluster autoscaler the controller runs for each cluster with an autoscaled pool.
+autoscaler:
+  # Namespace of the autoscalers that run in the management cluster and their accounts.
+  namespace: kubehenge-autoscaler
+  # A release for each Kubernetes minor version, as each carries its minor's scheduler. A cluster
+  # runs the one of its minor, else the newest before it; one older than them all, the oldest. A
+  # new minor is a new line: Renovate moves each line within its own minor.
+  images:
+    # renovate: datasource=docker depName=registry.k8s.io/autoscaling/cluster-autoscaler
+    - registry.k8s.io/autoscaling/cluster-autoscaler:v1.33.6@sha256:7b44e0f075b2c8f9952e339b6c396cd4d1c3831c24c0fe092a3e708c45e6ec51
+    # renovate: datasource=docker depName=registry.k8s.io/autoscaling/cluster-autoscaler
+    - registry.k8s.io/autoscaling/cluster-autoscaler:v1.34.5@sha256:5c3a56440ffc76eac79e7d7e840153c1fbe7b6e02d415e76a45ba2e0ef99a266
+    # renovate: datasource=docker depName=registry.k8s.io/autoscaling/cluster-autoscaler
+    - registry.k8s.io/autoscaling/cluster-autoscaler:v1.35.2@sha256:aac369dc283927a623deb1af54696efcc722ae79255aa07788422e495bab887d
+    # renovate: datasource=docker depName=registry.k8s.io/autoscaling/cluster-autoscaler
+    - registry.k8s.io/autoscaling/cluster-autoscaler:v1.36.1@sha256:461388d03eb5b55db58941ee7a81d9a619dd15302b01cbab9f5a9946715994b4
+
 # The proxy on k3s control planes through which Cluster API reaches each node's etcd; the k3s
 # provider would otherwise pull it by tag alone.
 # renovate: datasource=docker depName=docker.io/alpine/socat

@@ -81,6 +81,25 @@ func runtimeDefault() map[string]any {
 	return map[string]any{"type": string(corev1.SeccompProfileTypeRuntimeDefault)}
 }
 
+// restrictedPod is a pod's security context at Pod Security's restricted level, running as the
+// image's nonroot user and its group.
+func restrictedPod(user int64) *corev1.PodSecurityContext {
+	return &corev1.PodSecurityContext{
+		RunAsNonRoot: new(true), RunAsUser: new(user), RunAsGroup: new(user),
+		SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+	}
+}
+
+// restrictedSecurity is a container's security context at Pod Security's restricted level, on a
+// read-only root file system.
+func restrictedSecurity() *corev1.SecurityContext {
+	return &corev1.SecurityContext{
+		AllowPrivilegeEscalation: new(false),
+		ReadOnlyRootFilesystem:   new(true),
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+	}
+}
+
 // Charts locates the Helm charts installed into clusters: the cloud controller manager and CSI
 // plugin into every one, a CNI into those whose distribution has none of its own, and the add-ons
 // a cluster switches on.

@@ -514,6 +514,8 @@ describe("create", () => {
     version: "v1.36.5+rke2r1",
     controlPlaneReplicas: 3,
     workerReplicas: 2,
+    workerAutoscale: false,
+    workerMax: 3,
     endpoint: "10.0.0.20",
     bridge: "vmbr0",
     vlan: "",
@@ -809,6 +811,38 @@ describe("create", () => {
     expect(Object.fromEntries(summary(form, { ...withUpgrades, distribution: "talos" }))["Automatic upgrades"]).toBe(
       "Off",
     );
+  });
+
+  it("autoscales the workers between the fewest and the most", () => {
+    const withAutoscaler: ClusterClass = {
+      ...rke2,
+      variables: [...rke2.variables, { name: "autoscaler", required: false, schema: { type: "object" } }],
+    };
+    const scaled = { ...form, workerAutoscale: true, workerReplicas: 1, workerMax: 4 };
+    // A class without the autoscaler takes the fixed number.
+    expect(request(scaled, rke2)).not.toHaveProperty("workerAutoscaling");
+    expect(request(scaled, withAutoscaler)).toMatchObject({ workerReplicas: 1, workerAutoscaling: { min: 1, max: 4 } });
+    expect(Object.fromEntries(summary(scaled, withAutoscaler))["Workers"]).toBe("1 to 4, autoscaled");
+    expect(problems("General", scaled, withAutoscaler)).toStrictEqual([]);
+    expect(fieldProblems("General", { ...scaled, workerMax: 0 }, withAutoscaler)).toStrictEqual({
+      workerMax: "A whole number from 1 to 100, no fewer than the fewest.",
+    });
+    expect(fieldProblems("General", { ...scaled, workerReplicas: 5 }, withAutoscaler)).toStrictEqual({
+      workerMax: "A whole number from 5 to 100, no fewer than the fewest.",
+    });
+    // The addresses count every worker the pool may have: three control planes, four workers and one for rollouts.
+    expect(fieldProblems("Network", { ...scaled, addresses: "10.0.0.21-10.0.0.27" }, withAutoscaler).addresses).toMatch(
+      /7 given; the nodes need 8/u,
+    );
+    // A pool that may grow keeps the control planes to the control plane's work, even from none.
+    const fromNone = { ...scaled, workerReplicas: 0, headlamp: false, monitoring: false };
+    expect(fieldProblems("Machines", fromNone, withAutoscaler)).toStrictEqual({});
+    // The add-ons need a worker that stays.
+    expect(fieldProblems("Add-ons", { ...fromNone, headlamp: true }, withAutoscaler)).toStrictEqual({
+      addons:
+        "The add-ons chosen need a worker that stays: set the fewest workers to at least 1 on the General step, or choose none.",
+    });
+    expect(fieldProblems("Add-ons", { ...scaled, headlamp: true }, withAutoscaler)).toStrictEqual({});
   });
 
   it("keeps an emptied number empty, for the check to name", () => {

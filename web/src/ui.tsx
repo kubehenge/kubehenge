@@ -306,6 +306,11 @@ export function bytes(n: number): string {
   return `${value.toFixed(i === 0 ? 0 : 1)} ${byteUnits[i] ?? ""}`;
 }
 
+// Number fields keep an empty or unfinished entry as NaN, which the checks refuse, rather than
+// turning it into 0 under the cursor.
+export const shownNumber = (n: number): string => (Number.isNaN(n) ? "" : String(n));
+export const typedNumber = (s: string): number => (s.trim() === "" ? Number.NaN : Number(s));
+
 /** sentence turns an API message, written lowercase and unpunctuated like a Go error, into one. */
 export function sentence(message: string): string {
   const s = message.trim();

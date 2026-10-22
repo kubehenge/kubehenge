@@ -1197,6 +1197,50 @@ reads it.
 {{- end -}}
 
 {{/*
+The cluster autoscaler of a cluster with an autoscaled pool, which Kubehenge's controller runs; no
+patch reads it. A pool is autoscaled by Cluster API's own annotations on it.
+*/}}
+{{- define "kubehenge.autoscalerVariable" -}}
+- name: autoscaler
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        How the cluster autoscaler scales the cluster's autoscaled pools: those whose topology entry
+        carries cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size and -max-size and no
+        replicas. Kubehenge's controller runs it while the cluster has such a pool.
+      properties:
+        placement:
+          type: string
+          enum: [management, workload]
+          default: management
+          description: >-
+            Where the autoscaler runs. management keeps it in the management cluster, and the
+            cluster holds no credential of the management cluster. workload runs it on the
+            cluster's control planes, sparing the management cluster its memory, and puts a
+            management-cluster token inside the cluster that can read every cluster's machines in
+            its namespace; the admission policy still lets it scale only this cluster's pools.
+        expander:
+          type: string
+          enum: [least-waste, most-pods, random]
+          default: least-waste
+          description: Which pool grows when several could take the waiting pods.
+        scaleDownDelayAfterAddMinutes:
+          type: integer
+          minimum: 1
+          maximum: 1440
+          default: 10
+          description: How long after a scale-up the autoscaler waits before it removes any node.
+        scaleDownUnneededMinutes:
+          type: integer
+          minimum: 1
+          maximum: 1440
+          default: 10
+          description: How long a node stays unneeded before the autoscaler removes it.
+{{- end -}}
+
+{{/*
 Call with the root context.
 */}}
 {{- define "kubehenge.proxmoxPatches" -}}

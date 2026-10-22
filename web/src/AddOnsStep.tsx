@@ -4,7 +4,16 @@ import { BackupFieldset, backupCredentialHint, backupKeys, backupsHint, classTar
 import { CertificatesFields } from "./Certificates";
 import { MeshPeersField, meshHint } from "./ClusterMesh";
 import { ModeSelect } from "./ClusterUpgrades";
-import { addonMemory, logsChosen, machineLeast, offersMesh, rancherMinimumCores, variable } from "./create-form";
+import {
+  addonMemory,
+  addonsProblem,
+  logsChosen,
+  machineLeast,
+  mostWorkers,
+  offersMesh,
+  rancherMinimumCores,
+  variable,
+} from "./create-form";
 import type { StepProps } from "./CreateSteps";
 import { GitOpsFields, gitOpsFields, gitOpsTrustHint } from "./GitOps";
 import { LogsFields, logsHint, logsNeedMonitoring } from "./Logs";
@@ -314,6 +323,41 @@ function RancherAddOn({ form, set, shown, canTrust }: StepProps & { canTrust: bo
   );
 }
 
+/**
+ * AddonMemory says what keeps the add-ons chosen from running, or else how much memory they take
+ * from the machines that carry them.
+ */
+function AddonMemory({ form, cls }: { form: StepProps["form"]; cls: ClusterClass | undefined }): JSX.Element | null {
+  const stranded = addonsProblem(form, cls);
+  if (stranded !== undefined) {
+    return (
+      <p className="field-error" role="alert">
+        {stranded}
+      </p>
+    );
+  }
+  const used = addonMemory(form, cls);
+  if (used.mib === 0) {
+    return null;
+  }
+  const carrier = form.workerReplicas > 0 ? "workerMachine" : "controlPlaneMachine";
+  return (
+    <p className="hint" id="addon-memory">
+      The add-ons chosen use about {used.mib} MiB of memory ({used.names.join(", ")}), so each{" "}
+      {form.workerReplicas > 0 ? "worker" : "control plane"} has at least {machineLeast(form, cls, carrier).memoryMiB}{" "}
+      MiB
+      {mostWorkers(form) > 0 && (
+        <>
+          {" "}
+          and each control plane, whose API server holds their objects, at least{" "}
+          {machineLeast(form, cls, "controlPlaneMachine").memoryMiB} MiB
+        </>
+      )}
+      .
+    </p>
+  );
+}
+
 export function AddOnsStep({
   form,
   set,
@@ -328,8 +372,6 @@ export function AddOnsStep({
   namespace: string | undefined;
   showAll?: boolean;
 }): JSX.Element {
-  const used = addonMemory(form, cls);
-  const carrier = form.workerReplicas > 0 ? "workerMachine" : "controlPlaneMachine";
   return (
     <>
       <HeadlampAddOn form={form} set={set} />
@@ -433,21 +475,8 @@ export function AddOnsStep({
         <CertificatesAddOn form={form} set={set} canTrust={canTrust} showAll={showAll} />
       )}
       {variable(cls, "gitops") && <GitOpsChoices form={form} set={set} shown={shown} canTrust={canTrust} />}
-      {used.mib > 0 && (
-        <p className="hint" id="addon-memory">
-          The add-ons chosen use about {used.mib} MiB of memory ({used.names.join(", ")}), so each{" "}
-          {form.workerReplicas > 0 ? "worker" : "control plane"} has at least{" "}
-          {machineLeast(form, cls, carrier).memoryMiB} MiB
-          {form.workerReplicas > 0 && (
-            <>
-              {" "}
-              and each control plane, whose API server holds their objects, at least{" "}
-              {machineLeast(form, cls, "controlPlaneMachine").memoryMiB} MiB
-            </>
-          )}
-          .
-        </p>
-      )}
+      <AddonMemory form={form} cls={cls} />
+
       {variable(cls, "upgrades") && (
         <Field label="Upgrade automatically" hint={upgradesHint(cls)}>
           {(id) => <ModeSelect id={id} value={form.upgradeMode} onChange={(m) => set("upgradeMode", m)} />}

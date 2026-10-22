@@ -29,7 +29,7 @@ Before the first cluster, the VM templates for its distribution have to exist ([
 | Distribution | kubeadm, RKE2 or k3s: one per ClusterClass in the management cluster. A distribution whose VM template is not in the template pool yet says so, and the cluster cannot be created until it is built ([templates.md](templates.md)): by an administrator, or, where the administrator lets cluster creators have missing templates built, with **Have the template built** right there. |
 | Kubernetes version | For RKE2 and k3s, the newest release of each minor version Kubernetes still patches (the four newest, which takes in the one Kubernetes keeps a few weeks after a release) from their release channels, the stable one chosen first; a cluster already on an older minor version can still be upgraded from it; for kubeadm, the newest version of each minor version a VM template has been built for, the newest chosen first; where cluster creators may have missing templates built, **Kubernetes version to build** asks for another version's, which is offered here once built, after about a quarter of an hour. They are in the distribution's own form: `v1.36.5` for kubeadm, `v1.36.5+rke2r1` for RKE2, `v1.36.5+k3s1` for k3s. When the list cannot be read, the version is typed in. |
 | Control-plane nodes | 1, 3, 5 or 7. Three or more keep the cluster running when one fails. |
-| Workers | 0 to 100. With none, the control-plane nodes run the workloads too. |
+| Workers | 0 to 100. With none, the control-plane nodes run the workloads too. **Worker count**, **Autoscaled** instead has the cluster autoscaler keep the workers between the **Fewest workers** (0 to 100) and the **Most workers** (1 to 100), [below](#autoscaling). |
 
 ### Network
 
@@ -38,7 +38,7 @@ Before the first cluster, the VM templates for its distribution have to exist ([
 | Bridge | The bridge the cluster's VMs attach to: one of those chosen for clusters when the management cluster was set up. Bridges you may not use (no `SDN.Use`) are shown but disabled; when only one is left to choose, it is chosen. When the management cluster names none and Proxmox VE lists no bridges to you (no `Sys.Audit` on the nodes), you type the name in. |
 | VLAN tag | Optional, 1 to 4094. |
 | API address | The control plane's virtual IP: an unused address in the nodes' network, outside the node addresses. |
-| Node addresses | Where the nodes take their addresses from: ranges (`192.0.2.21-192.0.2.29`), networks or single addresses inside the gateway's network, one per line or separated by commas. The wizard asks for at least one address more than there are nodes, for the extra node an upgrade or a replacement adds; leave more for scaling up. |
+| Node addresses | Where the nodes take their addresses from: ranges (`192.0.2.21-192.0.2.29`), networks or single addresses inside the gateway's network, one per line or separated by commas. The wizard asks for at least one address more than there are nodes, for the extra node an upgrade or a replacement adds, counting an autoscaled pool at its most; leave more for scaling up. |
 | Prefix length | Of the nodes' network. |
 | Gateway | The nodes' default gateway. |
 | DNS servers | IPv4 addresses, one per line or separated by commas. |
@@ -146,17 +146,40 @@ Kubehenge's controller first gives the cluster its Proxmox VE pool, user, token 
 
 The buttons along the top act on the whole cluster: **Scale**, **Upgrade**, **Kubeconfig**, **Headlamp** and **Delete**. **Kubeconfig** and **Headlamp** appear once the cluster is available (Kubeconfig for those with `Sys.Modify` on its pool, Headlamp for clusters in the interface's namespaces); without `VM.Allocate` on its pool, or while it is being deleted, the others are disabled and the page says why. The menu on the left switches between its views, as Proxmox VE's does for a VM:
 
-- **Summary:** status, distribution, Kubernetes version, API endpoint, pod and service ranges, ready control-plane nodes and workers, Proxmox VE pool, namespace, who created it when, the last automatic upgrade, and for kubeadm, RKE2 and k3s which build of their VM template the nodes run, when they next move to a newer one and when they last did ([Node image refresh](#node-image-refresh)).
+- **Summary:** status, distribution, Kubernetes version, API endpoint, pod and service ranges, ready control-plane nodes and workers, with autoscaled pools as `md-0: 2 of 0 to 5, autoscaled`, Proxmox VE pool, namespace, who created it when, the last automatic upgrade, and for kubeadm, RKE2 and k3s which build of their VM template the nodes run, when they next move to a newer one and when they last did ([Node image refresh](#node-image-refresh)).
 - **Health:** whether the cluster is healthy, changing, degraded or unreachable, with tiles for the control plane (and etcd, on kubeadm), workers, node pressure, unwell pods, add-ons and machine health checks; then what needs attention, most serious first, each linking to its details. Below come the nodes (ready, pressure, cordons and taints, what their pods ask for, and the VM's CPU over the last hour and its memory, as far as you may see the VMs), the pods that are not well (crash loops, images that do not pull, pods that cannot be scheduled, containers killed for memory), volume claims still waiting, the add-ons' Helm releases, the worker pools, the control plane's and the health checks' conditions, the last hour's warnings from inside the cluster and from Cluster API, and last the cluster's own conditions. Those with `Sys.Modify` on the cluster's pool also get **Logs** on each unwell pod: the last 60 lines of a container, from its last run when it has not run since. With the shared Headlamp running, each pod also links to its page there. The page reads inside clusters of the interface's namespaces only; for others it shows what Cluster API knows.
 - **Machines:** each node's role, status, phase, version, addresses, age, and the Proxmox VE node its VM runs on, as far as you may see the cluster's VMs. When one Proxmox VE node runs more than one of the control-plane VMs, the page warns and says what losing that node would cost; migrating one of them in Proxmox VE to a node of its own fixes it.
 - **Backups:** the cluster's backups and restores, with **Back up now** and **Restore** ([Back up and restore](#back-up-and-restore)).
-- **Options:** the pod network, CIS hardening, placement, Headlamp, monitoring, logs, backups, certificates, pod security, Istio, Cluster Mesh (on a cluster that runs Cilium), GitOps, Rancher, automatic upgrades and identity providers, each with **Edit** (**Remove** for Rancher on the cluster that runs it), disabled for those who may not change the cluster (the pod network and CIS hardening are fixed). A change of placement applies to the VMs created after it, by scaling up, an upgrade or a replacement; those running stay where they are. Nodes the cluster has that you cannot see are listed too, and may be kept.
+- **Options:** the pod network, CIS hardening, placement, Headlamp, monitoring, logs, backups, certificates, the autoscaler ([below](#autoscaling)), pod security, Istio, Cluster Mesh (on a cluster that runs Cilium), GitOps, Rancher, automatic upgrades and identity providers, each with **Edit** (**Remove** for Rancher on the cluster that runs it), disabled for those who may not change the cluster (the pod network and CIS hardening are fixed). A change of placement applies to the VMs created after it, by scaling up, an upgrade or a replacement; those running stay where they are. Nodes the cluster has that you cannot see are listed too, and may be kept.
 
 The status reads **Provisioning**, **Available**, **Upgrading** or **Reconciling** while a change rolls out, **Deleting**, or **Failed**. A cluster deleted while its page is open says so.
 
 ## Scale
 
-**Scale** sets the control-plane nodes (1, 3, 5 or 7: an odd number, so etcd keeps a majority when one fails) and the workers of each worker pool (0 to 100).
+**Scale** sets the control-plane nodes (1, 3, 5 or 7: an odd number, so etcd keeps a majority when one fails) and, for each worker pool, either its workers (0 to 100) or, under **Scaling**, **Autoscaled** between its fewest and most workers ([below](#autoscaling)).
+
+## Autoscaling
+
+An autoscaled pool is sized by the [cluster autoscaler](https://github.com/kubernetes/autoscaler/tree/master/cluster-autoscaler) through Cluster API: it adds a worker while pods wait for room it would give them, up to the pool's most, and removes a worker that has stayed unneeded for 10 minutes, down to its fewest. Kubehenge's controller runs one autoscaler per cluster while any of its pools is autoscaled, and removes it with everything it was given once none is.
+
+- **Switching on** in the Scale dialog sets the pool's fewest and most and leaves its number of workers to the autoscaler, starting from those it has. **Switching off** fixes the pool at the workers it runs at that moment, unless you type another number; nothing is added or removed by switching.
+- **From none.** A pool with 0 as its fewest empties while nothing waits. The autoscaler reads what a new worker would hold from the pool's machines, cores and 90% of their memory and disk, the rest being what the node keeps for itself, and the pool's node labels (`node.cluster.x-k8s.io/…`), so a pod's node selector can bring a worker up from none. A pod that asks for more than 90% of a worker's memory is never given one.
+- **Control planes** stay kept for the control plane while a pool may grow, even while every pool is at none: a workload never lands on them only to be moved once a worker comes. A cluster whose pools may all go down to none therefore runs no workloads at those times.
+- **Add-ons** need a worker that stays: with any add-on that uses memory, at least one autoscaled pool keeps a fewest of 1 or more, and the add-ons' memory is shared out over the pools' fewest. The interface says so on the fewest, and Kubehenge refuses the cluster otherwise.
+- **Addresses.** The node addresses must hold every pool at its most, the control planes and one more for a rollout. The Scale dialog shows the room left on the most, and Kubehenge refuses a change that leaves fewer addresses than that, unless the cluster was already short by as much.
+- **Room on Proxmox VE.** When the workers a pool may still add need more memory than the Proxmox VE nodes the cluster may use have free, the Scale dialog warns; it is advice, since memory frees and fills as other VMs come and go. A worker that finds no room waits: the cluster's events show `AutoscalerNoRoom` with the Proxmox VE provider's reason, and after 30 minutes the autoscaler gives the machine up and tries again. Shared storage suits autoscaled pools best, as it lets a new worker start on whichever allowed node has the room.
+- **Expander and timing**, under **Options**, **Edit** beside Autoscaler: which pool grows when several could take the waiting pods (the one left with the least unused room, by default, the one that takes the most pods, or any), how long after adding a worker before any is removed, and how long a worker stays unneeded before it goes, each 10 minutes by default.
+
+**Which release.** A cluster runs the cluster autoscaler release of its Kubernetes minor version, since each carries that minor's scheduler; a minor without a release yet runs the newest earlier one, and a cluster older than every release Kubehenge carries runs the oldest. They are, by Kubernetes minor:
+
+| Kubernetes | Cluster autoscaler |
+| --- | --- |
+| 1.33 and older | 1.33.6 |
+| 1.34 | 1.34.5 |
+| 1.35 | 1.35.2 |
+| 1.36 and newer | 1.36.1 |
+
+**Where it runs.** By default each cluster's autoscaler runs in the management cluster, in the `kubehenge-autoscaler` namespace, and reaches its cluster with a token of its own there; the cluster holds no credential of the management cluster. Each asks for 64 MiB of memory, with a limit of 512 MiB. **Runs**, **On the cluster's own control planes** moves it into the cluster, sparing the management cluster that memory. It then needs the management cluster's API reachable from the cluster's nodes, and puts a management cluster token inside the cluster. That token reads the MachineDeployments, MachineSets and Machines of every cluster in the namespace, which an admission policy cannot narrow; the policy still lets it scale only this cluster's pools and mark only its machines. Anyone with the cluster's admin rights can read the token, so this choice needs `VM.Audit` on the workload pool, which sees every cluster's VMs anyway. Without the management cluster's address, set by its module, the autoscaler stays out and the cluster shows an `AutoscalerNotPlaced` event.
 
 ## Upgrade
 
@@ -362,6 +385,7 @@ The interface checks the signed-in user's Proxmox VE privileges on each cluster'
 | Read an unwell pod's logs on the health page | `Sys.Modify` | the cluster's pool |
 | Trust identity providers beyond those set for every cluster | `Sys.Modify` | the workload pool when creating, the cluster's pool when changing |
 | Choose the repository GitOps syncs from | `Sys.Modify` | the workload pool when creating, the cluster's pool when changing |
+| Run a cluster's autoscaler on its own control planes | `VM.Audit` | the workload pool |
 | Use the Administration page | the [setup privileges](install.md#who-may-set-it-up) | `/` |
 
 - A node's own bridges are in the zone `localnetwork`: `/sdn/zones/localnetwork/vmbr0`.
@@ -448,7 +472,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 
 - **The ClusterClasses** are `kubehenge-kubeadm`, `kubehenge-rke2` and `kubehenge-k3s`, in `kubehenge-system`.
 - **The namespace** decides the pool: `<workload pool>/<namespace>.<name>`. Clusters in the interface's namespaces (`clusters`, and any [added for clusters](#more-namespaces-for-clusters)) are also looked after from the interface; any other namespace works, and the interface shows those clusters read-only. The ClusterClasses stay in `kubehenge-system`, which `topology.classRef.namespace` names, so every namespace uses the same ones. Keep names to 40 characters, as the interface does, so that the nodes' host names stay within one DNS label.
-- **Worker pools** are machine deployments of the class `worker`; a Cluster may have several.
+- **Worker pools** are machine deployments of the class `worker`; a Cluster may have several. An autoscaled pool has no `replicas` and carries Cluster API's annotations `cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size` and `-max-size` under `metadata.annotations` (at most 100), with the pool's node labels under `metadata.labels`.
 - **Ranges** come from `spec.clusterNetwork`; without it, the distribution's own apply (`10.244.0.0/16` and `10.96.0.0/12` for kubeadm, `10.42.0.0/16` and `10.43.0.0/16` for RKE2 and k3s). Kubehenge refuses to create a cluster whose ranges overlap its nodes' network.
 
 ### Variables
@@ -472,6 +496,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `gitops` | no | `enabled` (default false); `engine`, `argocd` (default) or `flux`; `repository`, with `url` (`https://` or `ssh://`), `revision` (a branch or full ref, default `main`) and `path` (default `.`); `auth`, `none` (default), `deployKey` (over `ssh://`; the key is in the Secret `<name>-gitops` beside the Cluster, its public half under `identity.pub`), `token` (the cluster's `gitops` credential, `username` and `password`) or `existingSecret` with `existingSecret`; `knownHosts`, the server's host keys as known_hosts lines, read from the server once when unset; `hostname` and `tlsSecret`, to serve the web interface through the ingress controller; `admins`, the first provider's groups that administer Argo CD; `signIn`, with `clientID` (the provider's own when unset) and `clientSecret`, `none` (default, PKCE), `stored` (the cluster's `oidc-client` credential, key `clientSecret`) or `existingSecret` with `existingSecret`; `ui` (default false), Flux's web interface, which needs `hostname` and a client secret. `ui` and `admins` need an identity provider in `oidc`. |
 | `oidc` | no | Up to eight providers: `issuerURL`, `clientID`, `usernameClaim`, `usernamePrefix`, `groupsClaim`, `groupsPrefix`, `scopes`, `certificateAuthority` ([above](#signing-in-with-openid-connect)). Unset, the providers set for every cluster. |
 | `upgrades` | no | Automatic Kubernetes upgrades: `mode` (`off`, `patch` or `minor`; default `off`) and `window` ([upgrading.md](upgrading.md#automatically-inside-a-window)); `nodeImages` (default true), whether the nodes move to new builds of their VM template in the window ([above](#node-image-refresh)). |
+| `autoscaler` | no | How the cluster autoscaler sizes the autoscaled pools ([above](#autoscaling)): `placement`, `management` (default) or `workload`; `expander`, `least-waste` (default), `most-pods` or `random`; `scaleDownDelayAfterAddMinutes` and `scaleDownUnneededMinutes`, 1 to 1440, default 10. |
 
 ### Day two
 

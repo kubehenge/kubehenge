@@ -1,10 +1,10 @@
 import { useEffect, useState, type JSX } from "react";
 
 import { api } from "./api";
+import { AutoscalerDialog, ScaleDialog, autoscalerText, poolText } from "./Autoscaling";
 import { BackupsDialog, BackupsView, backupsOf, useBackupsRows } from "./Backups";
 import { issuesFromCA, saveCA } from "./Certificates";
 import { OptionDialog, Options, type OptionAction } from "./ClusterOptions";
-import { controlPlaneSizes } from "./create-form";
 import { HealthView } from "./Health";
 import { Link, navigate } from "./router";
 import type { Cluster, Machine, Versions } from "./types";
@@ -18,7 +18,6 @@ import {
   distributionName,
   errorMessage,
   filled,
-  maxWorkers,
   pollIdle,
   saveFile,
   settled,
@@ -27,7 +26,7 @@ import {
   type Health,
 } from "./ui";
 
-type Action = "scale" | "upgrade" | "delete" | "backups" | OptionAction;
+type Action = "scale" | "upgrade" | "delete" | "backups" | "autoscaler" | OptionAction;
 
 // A cluster on its way somewhere is looked at more often than a settled one.
 const pollChanging = 5000;
@@ -285,11 +284,14 @@ function ActionDialog({
   if (action === "backups") {
     return <BackupsDialog cluster={c} onClose={onClose} />;
   }
+  if (action === "autoscaler") {
+    return <AutoscalerDialog cluster={c} onClose={onClose} />;
+  }
   return <OptionDialog action={action} cluster={c} onClose={onClose} />;
 }
 
 // OptionsView is the Options view, with the rows of the settings whose dialogs live with views of
-// their own.
+// their own, and the autoscaler's, which lives with the Scale dialog's.
 function OptionsView({
   cluster: c,
   can,
@@ -299,7 +301,10 @@ function OptionsView({
   can: boolean;
   onEdit: (a: Action) => void;
 }): JSX.Element {
-  const more = useBackupsRows(c);
+  const more = [
+    ...useBackupsRows(c),
+    { label: "Autoscaler", value: autoscalerText(c), action: "autoscaler" as const, name: "the autoscaler" },
+  ];
   return <Options cluster={c} can={can} onEdit={onEdit} more={more} />;
 }
 
@@ -331,6 +336,12 @@ function Summary({ cluster: c }: { cluster: Cluster }): JSX.Element {
             ? "None; the control planes run the workloads"
             : `${c.workers.ready} of ${c.workers.desired} ready`}
         </dd>
+        {c.workerPools.some((p) => p.autoscaling) && (
+          <>
+            <dt>Worker pools</dt>
+            <dd>{c.workerPools.map((p) => `${p.name}: ${poolText(p)}`).join("; ")}</dd>
+          </>
+        )}
         <dt>Proxmox VE pool</dt>
         <dd>{poolName(c.pool)}</dd>
         <dt>Namespace</dt>
@@ -440,76 +451,6 @@ function Machines({ cluster: c }: { cluster: Cluster }) {
         </tbody>
       </table>
     </div>
-  );
-}
-
-// Options lists what can be set on a cluster after it was created, each with its Edit button, as
-// Proxmox VE's Options panels do.
-function ScaleDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
-  const current = c.controlPlane.desired || 1;
-  const [controlPlane, setControlPlane] = useState(current);
-  // Kept as typed, so a cleared field stays empty instead of turning into 0.
-  const [pools, setPools] = useState<Record<string, string>>(
-    Object.fromEntries(c.workerPools.map((p) => [p.name, String(p.replicas)])),
-  );
-  const { busy, error, send } = useChange(c, onClose);
-  const invalid = Object.fromEntries(
-    Object.entries(pools).map(([k, v]) => [
-      k,
-      /^\d+$/u.test(v) && Number(v) <= maxWorkers ? undefined : `A whole number from 0 to ${maxWorkers}.`,
-    ]),
-  );
-  const changed = controlPlane !== current || c.workerPools.some((p) => pools[p.name] !== String(p.replicas));
-  return (
-    <Dialog
-      title={`Scale ${c.name}`}
-      onClose={onClose}
-      onSubmit={() => {
-        void send({
-          controlPlaneReplicas: controlPlane,
-          workerPools: Object.fromEntries(Object.entries(pools).map(([k, v]) => [k, Number(v)])),
-        });
-      }}
-      actions={
-        <>
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="primary" disabled={busy || !changed || Object.values(invalid).some(Boolean)}>
-            Scale
-          </button>
-        </>
-      }
-    >
-      <Field label="Control-plane nodes" hint="Three or more keep the cluster running when one node fails.">
-        {(id) => (
-          <select id={id} value={controlPlane} onChange={(e) => setControlPlane(Number(e.target.value))}>
-            {[...new Set([...controlPlaneSizes, current])]
-              .toSorted((a, b) => a - b)
-              .map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-          </select>
-        )}
-      </Field>
-      {c.workerPools.map((p) => (
-        <Field key={p.name} label={`Workers (${p.name})`} error={invalid[p.name]}>
-          {(id) => (
-            <input
-              id={id}
-              type="number"
-              min={0}
-              max={maxWorkers}
-              value={pools[p.name] ?? ""}
-              onChange={(e) => setPools({ ...pools, [p.name]: e.target.value })}
-            />
-          )}
-        </Field>
-      ))}
-      <ErrorBox message={error} />
-    </Dialog>
   );
 }
 

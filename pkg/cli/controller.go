@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/pflag"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/selection"
@@ -111,6 +112,8 @@ type controllerOptions struct {
 	offerHARules      bool
 	nodeImageSoak     time.Duration
 	templateRefresh   bool
+	autoscaler        provisioner.AutoscalerReconciler
+	autoscalerImages  []string
 }
 
 func newControllerCommand(conn *pve.Config) *cobra.Command {
@@ -124,8 +127,9 @@ It gives each cluster built from a Kubehenge ClusterClass its own Proxmox VE poo
 API token scoped to that pool for the cluster's cloud controller manager and CSI plugin, before
 Cluster API creates any of its VMs (as the BeforeClusterCreate hook of a Runtime Extension), and
 removes them once the cluster's VMs are gone. It installs the add-ons each cluster switches on, and
-registers every cluster with the Rancher one of them installs. A distribution's Cluster API
-providers run only while a cluster uses it.
+registers every cluster with the Rancher one of them installs, and runs a cluster autoscaler for
+each cluster with an autoscaled pool. A distribution's Cluster API providers run only while a
+cluster uses it.
 
 The API token is read from KUBEHENGE_PROXMOX_TOKEN. With a second one in KUBEHENGE_PROXMOX_HA_TOKEN,
 holding Sys.Audit and Sys.Console on /, Proxmox VE HA keeps each cluster's control-plane VMs on
@@ -143,6 +147,7 @@ separate nodes.`,
 	f.StringVar(&o.settings.Node, "volume-owner-node", "", "Proxmox VE node for the VMs that own clusters' volumes; default the first online node")
 	f.StringVar(&o.settings.Region, "region", "", "region the clusters see Proxmox VE as; default the Proxmox VE cluster's name")
 	o.addonFlags(f)
+	o.addAutoscalerFlags(f)
 	f.StringSliceVar(&o.r.Charts.PodSecurityExempt, "pod-security-exempt", nil, "namespaces Kyverno's pod security policies leave alone, those the ClusterClasses' Pod Security Admission exempts (comma-separated)")
 	f.StringArrayVar(&o.classProviders, "class-providers", nil, "namespaces of the Cluster API providers only one ClusterClass's clusters use, as <class>=<namespace>,<namespace>; they run only while a cluster does (repeatable)")
 	f.BoolVar(&o.offerHARules, "offer-ha-rules", false, "offer Proxmox VE's HA node-affinity rules, their names and nodes only, to those who may create a cluster but not read the rules, through the ConfigMap "+provisioner.HARulesName)
@@ -210,6 +215,15 @@ func (o *controllerOptions) grantFlags(f *pflag.FlagSet) {
 	f.StringVar(&o.csiNewestChart, "csi-newest-chart", "", "the CSI plugin's newest release, for clusters whose token holds Datastore.Allocate on their storage, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.settings.DatastoreRole, "datastore-allocate-role", "", "Proxmox VE role, holding Datastore.Allocate, each cluster that asks for it gets on its storage; empty to let no cluster hold it")
 	f.StringSliceVar(&o.r.DatastoreAllocate.Management, "management-storages", nil, "storages the management cluster uses, on which no cluster may hold Datastore.Allocate (comma-separated)")
+}
+
+// addAutoscalerFlags adds the flags of the cluster autoscalers the controller runs. Their images
+// are required, as the add-ons' are.
+func (o *controllerOptions) addAutoscalerFlags(f *pflag.FlagSet) {
+	f.StringVar(&o.autoscaler.Namespace, "autoscaler-namespace", "kubehenge-autoscaler", "namespace of the cluster autoscalers that run in the management cluster, their accounts, the autoscaler identity's tokens they mount and the admission policy's ConfigMap")
+	f.StringSliceVar(&o.autoscalerImages, "autoscaler-images", nil, "the cluster autoscaler's images, one for each Kubernetes minor version, as <registry>/<repository>:v1.<minor>.<patch>@sha256:<digest> (comma-separated)")
+	f.StringVar(&o.autoscaler.Management.Server, "management-endpoint", "", "the management cluster's API as workload clusters reach it, such as https://192.0.2.10:6443, for autoscalers that run inside their cluster; none can without it")
+	_ = cobra.MarkFlagRequired(f, "autoscaler-images")
 }
 
 func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
@@ -413,6 +427,9 @@ func (o *controllerOptions) parseCharts() error {
 	if o.r.Charts.CalicoImages, err = provisioner.ParseCalicoImages(o.calicoImages); err != nil {
 		return fmt.Errorf("--calico-images: %w", err)
 	}
+	if o.autoscaler.Images, err = provisioner.ParseAutoscalerImages(o.autoscalerImages); err != nil {
+		return fmt.Errorf("--autoscaler-images: %w", err)
+	}
 	return nil
 }
 
@@ -445,13 +462,12 @@ func (o *controllerOptions) newManager(scheme *runtime.Scheme, extensions *serve
 			Label:      labels.NewSelector().Add(*ofClass),
 		},
 	}
-	if len(distributions.Providers) > 0 {
-		deployments := map[string]cache.Config{}
-		for _, ns := range distributions.Namespaces() {
-			deployments[ns] = cache.Config{}
-		}
-		cached[&appsv1.Deployment{}] = cache.ByObject{Namespaces: deployments}
+	// The providers' Deployments, and the cluster autoscalers' that run in the management cluster.
+	deployments := map[string]cache.Config{o.autoscaler.Namespace: {}}
+	for _, ns := range distributions.Namespaces() {
+		deployments[ns] = cache.Config{}
 	}
+	cached[&appsv1.Deployment{}] = cache.ByObject{Namespaces: deployments}
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                        scheme,
 		LeaderElection:                o.leaderElect,
@@ -469,9 +485,12 @@ func (o *controllerOptions) newManager(scheme *runtime.Scheme, extensions *serve
 			ByObject:         cached,
 		},
 		// Secrets are read directly: caching them would mean watching every Secret in the
-		// management cluster. Machines too: the cache holds only control-plane ones, and every
-		// Machine is counted while a cluster is deleted.
-		Client: client.Options{Cache: &client.CacheOptions{DisableFor: []client.Object{&corev1.Secret{}, &clusterv1.Machine{}}}},
+		// management cluster, and the same goes for the autoscalers' ServiceAccounts and
+		// RoleBindings. Machines too: the cache holds only control-plane ones, and every Machine is
+		// counted while a cluster is deleted.
+		Client: client.Options{Cache: &client.CacheOptions{DisableFor: []client.Object{
+			&corev1.Secret{}, &clusterv1.Machine{}, &corev1.ServiceAccount{}, &rbacv1.RoleBinding{},
+		}}},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("the controller manager: %w", err)
@@ -480,9 +499,9 @@ func (o *controllerOptions) newManager(scheme *runtime.Scheme, extensions *serve
 }
 
 // setUpControllers adds the reconciler, the registrar, what taints control-plane nodes, what
-// approves kubeadm kubelets' serving certificates, what keeps the interface's identities in the
-// clusters and, when some distribution's providers run only while used, the controller that
-// starts and stops them.
+// approves kubeadm kubelets' serving certificates, what keeps the identities in the clusters, what
+// runs their autoscalers and, when some distribution's providers run only while used, the
+// controller that starts and stops them.
 func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *provisioner.Registrar, distributions *provisioner.Distributions) error {
 	o.r.Client = mgr.GetClient()
 	o.r.Registrar = registrar
@@ -502,7 +521,9 @@ func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *pro
 	if err := approver.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the kubelet serving certificates: %w", err)
 	}
-	identities := &provisioner.WorkloadIdentities{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Remotes: registrar.Remotes}
+	identities := &provisioner.WorkloadIdentities{
+		Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, MountNamespace: o.autoscaler.Namespace, Remotes: registrar.Remotes,
+	}
 	if err := identities.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the workload identities: %w", err)
 	}
@@ -514,12 +535,41 @@ func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *pro
 	if err = gatewayAPI.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the Gateway API: %w", err)
 	}
+	if err = o.addAutoscalers(mgr, registrar.Remotes); err != nil {
+		return err
+	}
 	if len(distributions.Providers) == 0 {
 		return nil
 	}
 	distributions.Client = mgr.GetClient()
 	if err = distributions.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the distributions' providers: %w", err)
+	}
+	return nil
+}
+
+// addAutoscalers adds what runs a cluster autoscaler for every cluster with an autoscaled pool. One
+// that runs inside its cluster trusts the management cluster's API with the CA the controller's own
+// account trusts it with.
+func (o *controllerOptions) addAutoscalers(mgr manager.Manager, remotes *provisioner.Remotes) error {
+	a := &o.autoscaler
+	a.Client = mgr.GetClient()
+	a.ClassNamespace = o.r.ClassNamespace
+	a.Remotes = remotes
+	a.Events = mgr.GetEventRecorder("kubehenge")
+	if a.Management.Server != "" {
+		cfg := mgr.GetConfig()
+		a.Management.CA = cfg.CAData
+		if len(a.Management.CA) == 0 && cfg.CAFile != "" {
+			ca, err := os.ReadFile(cfg.CAFile)
+			if err != nil {
+				return fmt.Errorf("the management cluster's CA: %w", err)
+			}
+			a.Management.CA = ca
+		}
+	}
+	if err := a.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("the cluster autoscalers: %w", err)
 	}
 	return nil
 }

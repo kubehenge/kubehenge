@@ -85,7 +85,7 @@ linters:
         - ^(Role|RoleBinding|backups|restores)$
         - ^(name|kind|spec|type|enabled|path|key|operator|cni|poolid|comment|delete)$
         - ^(namespace|service|serviceMonitor|secret|secretName|tls|tlsConfig|insecureSkipVerify|hosts|resources|storage|ClusterRole|ALL)$
-        - ^(metadata|cluster|users|image|repository|tag|data|mountPath|value)$
+        - ^(metadata|cluster|users|image|repository|tag|data|config|mountPath|value)$
         - ^(replicas|limits|commonName|content|extra|ClusterRoleBinding)$
         - ^(port|from|server|gateway)$
         - ^(default|host|mountPath|readOnly|crds|clientID|size|registry|NetworkPolicy|true)$

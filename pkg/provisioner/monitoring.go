@@ -338,7 +338,6 @@ var controlPlaneAffinity = corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
 func metricsProxy(name string, port int32, scheme string, affinity *corev1.Affinity, image Image) *appsv1.DaemonSet {
 	p := strconv.Itoa(int(port))
 	labels := map[string]string{appName: name}
-	user, no, yes := int64(proxyUser), false, true
 	upstream := []string{"--upstream=http://127.0.0.1:" + p + "/"}
 	mounts := []corev1.VolumeMount{{Name: "tls", MountPath: "/etc/kube-rbac-proxy", ReadOnly: true}}
 	volumes := []corev1.Volume{{Name: "tls", Secret: &corev1.SecretVolumeSource{SecretName: metricsProxyTLS}}}
@@ -358,10 +357,7 @@ func metricsProxy(name string, port int32, scheme string, affinity *corev1.Affin
 				PriorityClassName:  "system-node-critical",
 				Affinity:           affinity,
 				Tolerations:        []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
-				SecurityContext: &corev1.PodSecurityContext{
-					RunAsNonRoot: &yes, RunAsUser: &user, RunAsGroup: &user,
-					SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
-				},
+				SecurityContext:    restrictedPod(proxyUser),
 				Containers: []corev1.Container{{
 					Name:  "kube-rbac-proxy",
 					Image: image.String(),
@@ -373,12 +369,8 @@ func metricsProxy(name string, port int32, scheme string, affinity *corev1.Affin
 						"--tls-private-key-file=/etc/kube-rbac-proxy/tls.key",
 						"--tls-min-version=VersionTLS13",
 					}, upstream...),
-					Env: []corev1.EnvVar{{Name: "HOST_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"}}}},
-					SecurityContext: &corev1.SecurityContext{
-						AllowPrivilegeEscalation: &no,
-						ReadOnlyRootFilesystem:   &yes,
-						Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-					},
+					Env:             []corev1.EnvVar{{Name: "HOST_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"}}}},
+					SecurityContext: restrictedSecurity(),
 					Resources: corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("5m"), corev1.ResourceMemory: resource.MustParse("16Mi")},
 						Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("64Mi")},

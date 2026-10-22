@@ -257,9 +257,10 @@ run "controller_and_clusters_are_least_privilege" {
         dns           = []
         creatorBuilds = false
       }
-      clusterOIDC   = []
-      backupTargets = []
-      image         = "ghcr.io/kubehenge/kubehenge@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+      clusterOIDC        = []
+      backupTargets      = []
+      image              = "ghcr.io/kubehenge/kubehenge@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+      managementEndpoint = "https://192.0.2.10:6443"
     }
     error_message = "the Kubehenge chart's values differ"
   }

@@ -174,8 +174,8 @@ function rancherText(r: RancherValue): string {
 
 /**
  * Options lists what can be set on a cluster after it was created, each with its Edit button, as
- * Proxmox VE's Options panels do. more are the rows of settings whose dialogs live with the views
- * of their own, after logs.
+ * Proxmox VE's Options panels do. more are the rows of settings whose dialogs live elsewhere, with
+ * views of their own or the Scale dialog's, after logs.
  */
 export function Options<A extends string = never>({
   cluster: c,
