@@ -318,6 +318,7 @@ template:
         # The Proxmox VE cloud controller manager initialises the nodes instead of k3s's own.
         disableCloudController: true
         cloudProviderName: external
+        etcdProxyImage: {{ .Values.etcdProxy }}
 {{- end -}}
 
 {{- define "kubehenge.k3sWorkerSpec" -}}

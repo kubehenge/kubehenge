@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["workloadPool", "providerNamespaces", "interface", "clusters", "clusterOIDC", "podSecurityExempt", "image", "kubeVip", "proxmox", "addons"],
+  "required": ["workloadPool", "providerNamespaces", "interface", "clusters", "clusterOIDC", "podSecurityExempt", "image", "kubeVip", "etcdProxy", "proxmox", "addons"],
   "properties": {
     "chartDigest": {
       "description": "Digest of the chart's files, which the management cluster's module passes so that a changed chart upgrades the release whatever its version says.",
@@ -71,6 +71,10 @@
     },
     "kubeVip": {
       "description": "kube-vip's image by registry, repository, tag and digest.",
+      "$ref": "#/$defs/pinnedImage"
+    },
+    "etcdProxy": {
+      "description": "The image of the etcd proxy on k3s control planes, by registry, repository, tag and digest.",
       "$ref": "#/$defs/pinnedImage"
     },
     "proxmox": {
