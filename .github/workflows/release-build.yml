@@ -1,0 +1,439 @@
+---
+name: release build
+
+# Everything that makes a release's files and images, and the signatures over them, in one reusable
+# workflow. That is what SLSA Build Level 3 asks of GitHub Actions: the certificate Sigstore issues
+# names this file as the builder, so a verifier that insists on it (`gh attestation verify
+# --signer-workflow`, `cosign verify --certificate-identity`) insists on these steps, which no
+# caller can change. release.yml decides when a release happens and publishes what comes out.
+#
+# Building and signing are separate jobs. A job granted `id-token: write` exposes the token to every
+# step it runs, and building runs npm's packages and every Go module's code; only the attest job,
+# which runs cosign and the attest action over bytes it has checked, can mint one.
+#
+# No build caches: a cache written by another workflow's run could reach what is released. Each
+# artefact is overwritten when a job runs again, as re-running a failed job does, since a name is
+# taken for the whole run.
+on:
+  workflow_call:
+    outputs:
+      version:
+        description: The version the tag names, checked against the chart's appVersion
+        value: ${{ jobs.gate.outputs.version }}
+      controller:
+        description: The digest of the controller's image
+        value: ${{ jobs.build.outputs.controller }}
+      capmox:
+        description: The digest of capmox's image
+        value: ${{ jobs.build.outputs.capmox }}
+      helm-addon:
+        description: The digest of the Add-on Provider for Helm's image
+        value: ${{ jobs.build.outputs.helm-addon }}
+
+permissions: {}
+
+# Go as scripts/tools.sh installs it, never a toolchain go.mod would have it download. Go does not
+# retry a module download the proxy breaks off, so it fetches from the source then; go.sum and the
+# checksum database still check every module.
+env:
+  GOTOOLCHAIN: local
+  GOPROXY: https://proxy.golang.org|direct
+  # Where the images go; the Makefile's defaults name the same, and the providers' digests are
+  # checked against management-cluster/versions.tf.
+  CONTROLLER_REPOSITORY: ghcr.io/kubehenge/kubehenge
+  CAPMOX_REPOSITORY: ghcr.io/kubehenge/cluster-api-provider-proxmox
+  HELM_ADDON_REPOSITORY: ghcr.io/kubehenge/cluster-api-addon-provider-helm
+
+jobs:
+  # Nothing is built until the owner has approved the run (the release environment) and the commit
+  # has shown it is one to release: a signed tag on a signed commit of main that passed every check
+  # main requires, including the end-to-end tests, which nothing here runs again.
+  gate:
+    name: gate
+    if: github.repository == 'kubehenge/kubehenge'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: read # Reads the tagged source, the tag, and the signatures GitHub verified.
+      checks: read # Reads the checks the release commit passed in the merge queue.
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Tag and commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          fail() { echo "::error::$*"; exit 1; }
+          api() { gh api "repos/${GITHUB_REPOSITORY}/$1" --jq "$2"; }
+          status=$(api "compare/main...${GITHUB_SHA}" .status)
+          case $status in
+            identical | behind) ;;
+            *) fail "${GITHUB_SHA} is not on main (compared with main: ${status})" ;;
+          esac
+          # Main's ruleset requires signed commits, so this fails only when that rule was bypassed
+          # or removed, which is exactly when to hear about it.
+          read -r verified reason <<< "$(api "commits/${GITHUB_SHA}" \
+            '.commit.verification | "\(.verified) \(.reason)"')"
+          [ "$verified" = true ] || fail "${GITHUB_SHA} carries no valid signature: $reason"
+          # A lightweight tag names a commit and nobody; an annotated one carries the signature of
+          # whoever tagged it.
+          tag=$(api "git/ref/tags/${GITHUB_REF_NAME}" '"\(.object.type) \(.object.sha)"')
+          [ "${tag%% *}" = tag ] || fail "${GITHUB_REF_NAME} is not an annotated, signed tag"
+          read -r verified commit reason <<< "$(api "git/tags/${tag#* }" \
+            '"\(.verification.verified) \(.object.sha) \(.verification.reason)"')"
+          [ "$verified" = true ] || fail "${GITHUB_REF_NAME} carries no valid signature: $reason"
+          [ "$commit" = "${GITHUB_SHA}" ] ||
+            fail "${GITHUB_REF_NAME} names $commit, not ${GITHUB_SHA}"
+
+      # Read from the merge queue, which ran every check main requires on this very commit before
+      # main moved to it. Only GitHub Actions' own check runs count: any app with access to checks
+      # could post one by the same name.
+      - name: Checks the commit passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          fail() { echo "::error::$*"; exit 1; }
+          gh api "repos/${GITHUB_REPOSITORY}/rules/branches/main" --jq '.[]
+            | select(.type == "required_status_checks")
+            | .parameters.required_status_checks[].context' | sort -u > "${RUNNER_TEMP}/required"
+          [ -s "${RUNNER_TEMP}/required" ] ||
+            fail "main's rules require no checks, so nothing vouches for ${GITHUB_SHA}"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
+            -f per_page=100 -X GET --jq '.check_runs[] | select(.app.slug == "github-actions")
+              | "\(.id)\t\(.name)\t\(.conclusion // .status)"' > "${RUNNER_TEMP}/runs"
+          missing=0
+          while IFS= read -r name; do
+            # The latest run of each check decides, as it does for a pull request.
+            conclusion=$(awk -F '\t' -v n="${name}" '$2 == n && $1 > id { id = $1; c = $3 }
+              END { print c }' "${RUNNER_TEMP}/runs")
+            case ${conclusion} in
+              success | skipped | neutral) echo "${name}: ${conclusion}" ;;
+              *) echo "::error::${name}: ${conclusion:-never ran} on ${GITHUB_SHA}"; missing=1 ;;
+            esac
+          done < "${RUNNER_TEMP}/required"
+          [ "${missing}" = 0 ] || fail "${GITHUB_SHA} has not passed every check main requires"
+
+      - name: Version
+        id: version
+        run: |
+          set -eu
+          version=${GITHUB_REF_NAME#v}
+          chart=$(sed -n 's/^appVersion: //p' charts/kubehenge/Chart.yaml)
+          fail() { echo "::error::$*"; exit 1; }
+          [ "$version" = "$chart" ] ||
+            fail "the tag is $GITHUB_REF_NAME but the chart's appVersion is $chart"
+          [ -s pkg/release/release.pub ] ||
+            fail "pkg/release/release.pub is missing: a build without it upgrades nothing"
+          mkdir -p "$RUNNER_TEMP/notes"
+          awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {p = 1; next} /^## \[/ {p = 0} p' \
+            docs/changelog.md > "$RUNNER_TEMP/changes.md"
+          [ -s "$RUNNER_TEMP/changes.md" ] || fail "docs/changelog.md has no section for $version"
+          # Before 1.0.0 every release opens with the README's alpha warning, so nobody reads a
+          # release page without it.
+          case $version in
+            0.*)
+              alpha=$(grep -m 1 '^> \*\*Alpha' README.md) || fail "README.md has no alpha warning"
+              printf '%s\n' "$alpha" > "$RUNNER_TEMP/notes/notes.md"
+              ;;
+            *) : > "$RUNNER_TEMP/notes/notes.md" ;;
+          esac
+          cat "$RUNNER_TEMP/changes.md" >> "$RUNNER_TEMP/notes/notes.md"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/notes/notes.md
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  # Lint and unit tests again: a vulnerability published since the merge, in a Go module or an
+  # action, fails here before anything ships with it.
+  test:
+    name: test
+    needs: gate
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    permissions:
+      contents: read # Reads the tagged source.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tools
+        run: |
+          scripts/tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: make test
+        env:
+          # zizmor's online audits: impostor commits and actions with known vulnerabilities.
+          GH_TOKEN: ${{ github.token }}
+      - run: make integration
+
+  # The images, pushed to ghcr.io, and the appliance archive, whose chart runs the controller image
+  # by digest, with install.sh and the index to sign.
+  build:
+    name: build
+    needs: [gate, test]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    permissions:
+      contents: read # Reads the tagged source and the previous release's index.
+      packages: write # Pushes the controller's and the providers' images.
+    outputs:
+      controller: ${{ steps.images.outputs.controller }}
+      capmox: ${{ steps.images.outputs.capmox }}
+      helm-addon: ${{ steps.images.outputs.helm-addon }}
+    env:
+      VERSION: ${{ needs.gate.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tools
+        run: |
+          scripts/tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      # Each is passed on by its digest alone: ko names what it pushed by tag and digest, and a tag
+      # can be moved.
+      - name: Images
+        id: images
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          digest() {
+            printf '%s\n' "$3" | grep -Eqx "$2(:[^@/]+)?@sha256:[0-9a-f]{64}" ||
+              { echo "::error::the $1 build printed '$3', not $2 by digest"; exit 1; }
+            echo "$1=${3##*@}" >> "$GITHUB_OUTPUT"
+          }
+          echo "$GH_TOKEN" | ko login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          printed=$(make -s image IMAGE="$CONTROLLER_REPOSITORY" KO_FLAGS="--tags v$VERSION" |
+            tail -n 1)
+          digest controller "$CONTROLLER_REPOSITORY" "$printed"
+          printed=$(make -s capmox-image CAPMOX_IMAGE="$CAPMOX_REPOSITORY" | tail -n 1)
+          digest capmox "$CAPMOX_REPOSITORY" "$printed"
+          printed=$(make -s helm-addon-image HELM_ADDON_IMAGE="$HELM_ADDON_REPOSITORY" | tail -n 1)
+          digest helm-addon "$HELM_ADDON_REPOSITORY" "$printed"
+
+      - name: Appliance archive and index
+        env:
+          CONTROLLER: ${{ steps.images.outputs.controller }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          make dist VERSION="$VERSION" CONTROLLER_IMAGE="$CONTROLLER_REPOSITORY@$CONTROLLER"
+          previous=
+          if gh release view --json tagName >/dev/null 2>&1; then
+            gh release download --pattern index.json --pattern index.json.sig \
+              --dir "$RUNNER_TEMP/previous"
+            previous=$RUNNER_TEMP/previous/index.json
+          fi
+          make index VERSION="$VERSION" PREVIOUS="$previous"
+          (cd dist && sha256sum --check --strict "kubehenge_${VERSION}_SHA256SUMS")
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-files
+          path: |
+            dist/kubehenge_${{ env.VERSION }}_linux_amd64.tar.gz
+            dist/kubehenge_${{ env.VERSION }}_SHA256SUMS
+            dist/install.sh
+            dist/index.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  # SPDX SBOMs of the archive and of each image, each checked to list what ships (scripts/sbom.sh).
+  sbom:
+    name: sbom
+    needs: [gate, build]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    permissions:
+      contents: read # Reads the SBOM script, syft's settings and the lock files at the tag.
+      packages: read # Pulls the images, which ghcr.io keeps private until they are made public.
+    env:
+      VERSION: ${{ needs.gate.outputs.version }}
+      CONTROLLER: ${{ needs.build.outputs.controller }}
+      CAPMOX: ${{ needs.build.outputs.capmox }}
+      HELM_ADDON: ${{ needs.build.outputs.helm-addon }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tools
+        run: |
+          scripts/tools.sh "$RUNNER_TEMP/bin" go syft
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-files
+          path: dist
+      - name: SBOMs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          (cd dist && sha256sum --check --strict "kubehenge_${VERSION}_SHA256SUMS")
+          echo "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          mkdir sbom
+          scripts/sbom.sh archive "dist/kubehenge_${VERSION}_linux_amd64.tar.gz" "$VERSION" \
+            "sbom/kubehenge_${VERSION}_linux_amd64.spdx.json"
+          scripts/sbom.sh image "$CONTROLLER_REPOSITORY@$CONTROLLER" \
+            github.com/kubehenge/kubehenge sbom/kubehenge.spdx.json
+          scripts/sbom.sh image "$CAPMOX_REPOSITORY@$CAPMOX" \
+            github.com/ionos-cloud/cluster-api-provider-proxmox \
+            sbom/cluster-api-provider-proxmox.spdx.json
+          scripts/sbom.sh image "$HELM_ADDON_REPOSITORY@$HELM_ADDON" \
+            sigs.k8s.io/cluster-api-addon-provider-helm \
+            sbom/cluster-api-addon-provider-helm.spdx.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-sboms
+          path: sbom/
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  attest:
+    name: attest
+    needs: [gate, build, sbom]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    permissions:
+      contents: read # Fetches scripts/tools.sh at the tag, to install cosign by its checksum.
+      packages: write # Pushes the images' signatures and attestations beside them.
+      id-token: write # Sigstore signs against this token.
+      attestations: write # Stores the attestations on the repository.
+    env:
+      VERSION: ${{ needs.gate.outputs.version }}
+      CONTROLLER: ${{ needs.build.outputs.controller }}
+      CAPMOX: ${{ needs.build.outputs.capmox }}
+      HELM_ADDON: ${{ needs.build.outputs.helm-addon }}
+    steps:
+      # The one file of the repository this job runs, which installs cosign and checks its digest.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/tools.sh
+          sparse-checkout-cone-mode: false
+      - name: cosign
+        run: |
+          scripts/tools.sh "$RUNNER_TEMP/bin" cosign
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-files
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-sboms
+          path: sbom
+
+      # Signed only if the bytes that arrived are those the checksums were written over.
+      - name: Checksums
+        run: (cd dist && sha256sum --check --strict "kubehenge_${VERSION}_SHA256SUMS")
+
+      - name: Sign the images
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          echo "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          cosign sign --yes "$CONTROLLER_REPOSITORY@$CONTROLLER" "$CAPMOX_REPOSITORY@$CAPMOX" \
+            "$HELM_ADDON_REPOSITORY@$HELM_ADDON"
+
+      - name: Provenance of the files
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/kubehenge_${{ env.VERSION }}_linux_amd64.tar.gz
+            dist/kubehenge_${{ env.VERSION }}_SHA256SUMS
+            dist/install.sh
+            dist/index.json
+            sbom/kubehenge_${{ env.VERSION }}_linux_amd64.spdx.json
+      - name: SBOM of the archive
+        id: sbom
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/kubehenge_${{ env.VERSION }}_linux_amd64.tar.gz
+          sbom-path: sbom/kubehenge_${{ env.VERSION }}_linux_amd64.spdx.json
+
+      - name: Provenance of the controller image
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.CONTROLLER_REPOSITORY }}
+          subject-digest: ${{ env.CONTROLLER }}
+          push-to-registry: true
+      - name: SBOM of the controller image
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.CONTROLLER_REPOSITORY }}
+          subject-digest: ${{ env.CONTROLLER }}
+          sbom-path: sbom/kubehenge.spdx.json
+          push-to-registry: true
+      - name: Provenance of the capmox image
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.CAPMOX_REPOSITORY }}
+          subject-digest: ${{ env.CAPMOX }}
+          push-to-registry: true
+      - name: SBOM of the capmox image
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.CAPMOX_REPOSITORY }}
+          subject-digest: ${{ env.CAPMOX }}
+          sbom-path: sbom/cluster-api-provider-proxmox.spdx.json
+          push-to-registry: true
+      - name: Provenance of the Add-on Provider for Helm image
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.HELM_ADDON_REPOSITORY }}
+          subject-digest: ${{ env.HELM_ADDON }}
+          push-to-registry: true
+      - name: SBOM of the Add-on Provider for Helm image
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.HELM_ADDON_REPOSITORY }}
+          subject-digest: ${{ env.HELM_ADDON }}
+          sbom-path: sbom/cluster-api-addon-provider-helm.spdx.json
+          push-to-registry: true
+
+      # The attestations are stored on the repository too, but only a verifier with GitHub's API
+      # reaches them there. A copy beside the archive verifies from the file alone
+      # (`gh attestation verify --bundle`), and it is the form OpenSSF Scorecard counts as a signed
+      # release. The images' attestations travel with them in the registry.
+      - name: Gather the files' attestations
+        env:
+          PROVENANCE: ${{ steps.provenance.outputs.bundle-path }}
+          SBOM: ${{ steps.sbom.outputs.bundle-path }}
+        run: |
+          set -eu
+          mkdir attestations
+          bundle="attestations/kubehenge_${VERSION}.intoto.jsonl"
+          cat "$PROVENANCE" "$SBOM" > "$bundle"
+          lines=$(wc -l < "$bundle")
+          fail() { echo "::error::$*"; exit 1; }
+          [ "$lines" -eq 2 ] ||
+            fail "expected one provenance and one SBOM attestation, found $lines lines"
+          jq -e '.dsseEnvelope.payload | @base64d | fromjson
+            | .predicateType == "https://slsa.dev/provenance/v1"' "$PROVENANCE" > /dev/null ||
+            fail "$PROVENANCE is not SLSA provenance"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-attestations
+          path: attestations/kubehenge_${{ env.VERSION }}.intoto.jsonl
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true

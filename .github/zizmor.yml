@@ -1,0 +1,8 @@
+---
+# Every action, GitHub's own included, is named by the full commit its version tag points at, so a
+# tag moved upstream changes nothing that runs here; Renovate moves the commit with the version.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        '*': hash-pin

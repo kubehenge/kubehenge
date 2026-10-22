@@ -1,0 +1,21 @@
+---
+# How scripts/sbom.sh has syft describe a release archive or image. The Go binaries record every
+# module they were built from, at its version and hash, and syft reads that record, so the SBOM
+# names what shipped rather than everything go.sum holds. The interface's frontend is bundled into
+# the binary, where nothing names its packages; they come from the lock file it was built from,
+# which scripts/sbom.sh lays beside the unpacked archive, and the lock file cataloger leaves out the
+# packages only development needs, which the bundle never saw. The OpenTofu providers come from the
+# module's lock file, which ships in the archive. Each cataloger is named so that a change to syft's
+# defaults cannot quietly leave one out; the lock file catalogers are off for an image by default.
+select-catalogers:
+  - '+go-module-binary-cataloger'
+  - '+javascript-lock-cataloger'
+  - '+terraform-lock-cataloger'
+
+# Every file that ships, with its digest, so the archive can be checked against the SBOM member by
+# member rather than only as a whole.
+file:
+  metadata:
+    selection: all
+    digests:
+      - sha256

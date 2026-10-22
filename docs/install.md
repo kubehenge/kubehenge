@@ -76,13 +76,7 @@ The same with a static address:
 sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 ```
 
-`install.sh` carries the version of its release and the SHA-256 checksums of the release archive and of the OpenTofu release it installs, and checks each download against them before using it. To check the script itself before running it, compare it with the release's checksum file, or verify its build provenance with the GitHub CLI:
-
-```sh
-curl -fsSLO https://github.com/kubehenge/kubehenge/releases/latest/download/kubehenge_<version>_SHA256SUMS
-sha256sum -c --ignore-missing kubehenge_<version>_SHA256SUMS
-gh attestation verify install.sh --repo kubehenge/kubehenge
-```
+`install.sh` carries the version of its release and the SHA-256 checksums of the release archive and of the OpenTofu release it installs, and checks each download against them before using it. To check the script itself before running it, see [Verifying a release](#verifying-a-release).
 
 ### Options
 
@@ -144,6 +138,40 @@ sh install.sh --url https://192.0.2.40
 ```
 
 A `pve-manager` update replaces the page the entry changes; an apt hook checks after every package run and, when an update removed the entry, puts it back and logs it (`journalctl -t kubehenge-pve-entry`). If a Proxmox VE release changes its interface so the entry no longer fits, the interface works as shipped, without the entry. More in `pve-entry/README.md`.
+
+### Verifying a release
+
+`install.sh` checks what it downloads, and the appliance installs only releases listed in an index signed with the project's release key, so the one thing left to check yourself is the script, before you run it. A release carries the means to check more: each of its files and each image Kubehenge runs was built by the release workflow from the tagged source on a GitHub-hosted runner (SLSA Build Level 3), and carries signed build provenance and an SPDX SBOM, kept with the repository and, for the files, in `kubehenge_<version>.intoto.jsonl` beside them.
+
+With the [GitHub CLI](https://cli.github.com), for the release you install (`<version>` without the `v`):
+
+```sh
+gh release download v<version> --repo kubehenge/kubehenge --dir kubehenge-release
+cd kubehenge-release
+sha256sum -c kubehenge_<version>_SHA256SUMS
+for file in install.sh kubehenge_<version>_linux_amd64.tar.gz; do
+  gh attestation verify "$file" --repo kubehenge/kubehenge \
+    --bundle kubehenge_<version>.intoto.jsonl \
+    --signer-workflow kubehenge/kubehenge/.github/workflows/release-build.yml \
+    --source-ref refs/tags/v<version> --deny-self-hosted-runners
+done
+```
+
+The checksums prove the files are the ones the release lists; the attestation proves the release workflow built them, from this repository at that tag, with the steps in `release-build.yml`, which a checksum cannot: a checksum made beside a changed file agrees with it perfectly. `kubehenge_<version>_linux_amd64.spdx.json` lists every file in the archive with its SHA-256 and every package in it at its exact version, for a vulnerability scanner such as Grype or Trivy; add `--predicate-type https://spdx.dev/Document/v2.3` to the command above to check the SBOM attested to the archive instead of its provenance.
+
+The images carry the same provenance and SBOM, kept beside them in the registry, and a Sigstore signature, which cosign checks:
+
+```sh
+image=ghcr.io/kubehenge/kubehenge:v<version>
+gh attestation verify "oci://$image" --repo kubehenge/kubehenge \
+  --signer-workflow kubehenge/kubehenge/.github/workflows/release-build.yml \
+  --source-ref refs/tags/v<version> --deny-self-hosted-runners
+cosign verify "$image" \
+  --certificate-identity https://github.com/kubehenge/kubehenge/.github/workflows/release-build.yml@refs/tags/v<version> \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+How releases are built and signed is in [releasing.md](releasing.md).
 
 ## Sign in
 

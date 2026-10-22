@@ -3,6 +3,8 @@
 
 **Kubernetes for Proxmox VE.**
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/kubehenge/kubehenge/badge)](https://scorecard.dev/viewer/?uri=github.com/kubehenge/kubehenge)
+
 > [!WARNING]
 > **Alpha: do not use it in production.** Any release may change Kubehenge completely, its settings, interface and ClusterClasses included, and nothing is guaranteed yet to keep working from one release to the next.
 
