@@ -298,4 +298,53 @@ describe("a cluster's options", () => {
       },
     });
   });
+
+  it("switch Headlamp's view access on and off with its host name kept", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    let shown = {
+      ...cluster,
+      variables: { headlamp: { enabled: true, hostname: "headlamp.example.org", access: "token" }, oidc: [] },
+    };
+    const calls = fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": () => ({ body: shown }),
+      "PATCH /api/clusters/clusters/web": () => ({ body: shown }),
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await expect(screen.findByRole("row", { name: /Headlamp/u })).resolves.toHaveTextContent(
+      /On, at headlamp\.example\.orgEdit$/u,
+    );
+    await user.click(screen.getByRole("button", { name: "Edit Headlamp" }));
+    let dialog = screen.getByRole("dialog", { name: "Headlamp" });
+    const view = within(dialog).getByLabelText("Read-only for everyone, without signing in");
+    expect(view).not.toBeChecked();
+    expect(view).toHaveAccessibleDescription(/view role.*without Secrets/u);
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    await user.click(view);
+    shown = {
+      ...cluster,
+      variables: { headlamp: { enabled: true, hostname: "headlamp.example.org", access: "view" }, oidc: [] },
+    };
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: { headlamp: { enabled: true, hostname: "headlamp.example.org", access: "view" } },
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("row", { name: /Headlamp/u })).toHaveTextContent(
+        "On, at headlamp.example.org, read-only for everyone",
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit Headlamp" }));
+    dialog = screen.getByRole("dialog", { name: "Headlamp" });
+    await user.click(within(dialog).getByLabelText("Read-only for everyone, without signing in"));
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: { headlamp: { enabled: true, hostname: "headlamp.example.org" } },
+    });
+  });
 });

@@ -253,12 +253,21 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
       type: object
       description: >-
         Headlamp, a web interface for the cluster. Users sign in with their own token or through
-        OIDC; Headlamp itself has no rights in the cluster. Reached through Kubehenge's interface, or
-        at hostname when one is set.
+        OIDC, and Headlamp itself has no rights in the cluster, unless access is view. Reached
+        through Kubehenge's interface, or at hostname when one is set.
       properties:
         enabled:
           type: boolean
           default: false
+        access:
+          type: string
+          enum: [token, view]
+          default: token
+          description: >-
+            token: everyone signs in with their own token or through OIDC. view: Headlamp's own
+            service account is bound to the view ClusterRole and Headlamp uses it for everyone,
+            so whoever reaches Headlamp sees the cluster read-only without signing in (no
+            Secrets), and a token given to it is not used.
         hostname:
           type: string
           format: hostname

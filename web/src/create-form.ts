@@ -37,6 +37,7 @@ import {
   haGroupsText,
   distributionName,
   filled,
+  headlampText,
   istioText,
   maxWorkers,
   registeredWithRancher,
@@ -97,6 +98,8 @@ export interface Form {
   cni: string;
   headlamp: boolean;
   headlampHostname: string;
+  /** Headlamp serves everyone through its own account with Kubernetes' view role. */
+  headlampView: boolean;
   monitoring: boolean;
   grafanaHostname: string;
   logs: Logs;
@@ -337,6 +340,7 @@ export const newForm = (): Form => ({
   cni: "",
   headlamp: false,
   headlampHostname: "",
+  headlampView: false,
   monitoring: false,
   grafanaHostname: "",
   logs: newLogs(),
@@ -391,9 +395,14 @@ export function withClass(f: Form, c: ClusterClass | undefined, kept: (k: keyof 
 function addOnVariables(form: Form, defined: Set<string>): Record<string, unknown> {
   const variables: Record<string, unknown> = {};
   if (form.headlamp) {
-    variables["headlamp"] = form.headlampHostname
-      ? { enabled: true, hostname: form.headlampHostname }
-      : { enabled: true };
+    const headlamp: Record<string, unknown> = { enabled: true };
+    if (form.headlampHostname) {
+      headlamp["hostname"] = form.headlampHostname;
+    }
+    if (form.headlampView) {
+      headlamp["access"] = "view";
+    }
+    variables["headlamp"] = headlamp;
   }
   if (form.monitoring) {
     variables["monitoring"] = form.grafanaHostname
@@ -590,10 +599,7 @@ export function summary(
 function addOnRows(form: Form, defined: Set<string>): [string, string][] {
   const rows: [string, string][] = [];
   if (defined.has("headlamp")) {
-    rows.push([
-      "Headlamp",
-      form.headlamp ? `On${form.headlampHostname ? `, at ${form.headlampHostname}` : ""}` : "Off",
-    ]);
+    rows.push(["Headlamp", headlampText(form.headlamp, form.headlampHostname, form.headlampView)]);
   }
   if (defined.has("monitoring")) {
     rows.push([

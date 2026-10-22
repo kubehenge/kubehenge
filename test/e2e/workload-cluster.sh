@@ -3,13 +3,13 @@
 # cluster: create a cluster trusting an OpenID issuer, hardened to the CIS benchmark and enforcing
 # Pod Security's restricted level, check sign-in through it, its nodes against the benchmark, its
 # cloud controller manager, ingress controller, Gateway API, load balancer and persistent volumes,
-# what the health page's read-only identities may see in it, switch Headlamp, Kyverno, Istio (a
-# namespace's traffic over mutual TLS), monitoring (every component scraped with its server
-# verified) and logs (a pod's lines, and with the node collector the journal and the audit log, read
-# in Loki through Grafana) on and off, back a namespace with a volume and a Secret up with Velero to
-# an S3 store the test serves, delete it and restore it, check the store holds the backup
-# encrypted, switch backups and the load balancer off, scale its workers up and down, upgrade it by
-# one minor version (for RKE2 and k3s with the first
+# what the health page's read-only identities may see in it, switch Headlamp (and its read-only
+# access for everyone), Kyverno, Istio (a namespace's traffic over mutual TLS), monitoring (every
+# component scraped with its server verified) and logs (a pod's lines, and with the node collector
+# the journal and the audit log, read in Loki through Grafana) on and off, back a namespace with a
+# volume and a Secret up with Velero to an S3 store the test serves, delete it and restore it, check
+# the store holds the backup encrypted, switch backups and the load balancer off, scale its workers
+# up and down, upgrade it by one minor version (for RKE2 and k3s with the first
 # new server's join refused at first), replace a node that dies, delete it, and check that nothing
 # of it is left on Proxmox VE.
 #
@@ -925,6 +925,59 @@ case ${pod_security} in
     # Only a pod that falls short of the level gets a warning.
     *) ;;
 esac
+# headlamp_pods: Headlamp's answer to a list of pods in its in-cluster context, asked through the
+# API server's service proxy. The admin kubeconfig signs in with a client certificate, which ends
+# at the API server, so Headlamp is sent no credentials of anyone's.
+headlamp_pods() { wl get --raw '/api/v1/namespaces/headlamp/services/http:headlamp:80/proxy/clusters/main/api/v1/pods?limit=1' 2>&1; }
+headlamp_lists_pods() { headlamp_pods | jq -e '.kind == "PodList"' > /dev/null 2>&1; }
+# headlamp_refuses: whether the API server refused Headlamp's request, rather than Headlamp being
+# out of reach for a moment.
+headlamp_refuses() {
+    # shellcheck disable=SC2310 # the request failing is the answer looked for.
+    if answer=$(headlamp_pods); then
+        return 1
+    fi
+    case ${answer} in
+        *Unauthorized* | *Forbidden* | *forbidden*) ;;
+        *) return 1 ;;
+    esac
+}
+# headlamp_flag <present|absent>: whether Headlamp's running Deployment uses its own account.
+headlamp_flag() {
+    # shellcheck disable=SC2310 # a Deployment not read yet is no answer, polled again.
+    args=$(wl -n headlamp get deployment/headlamp -o jsonpath='{.spec.template.spec.containers[0].args}') || return 1
+    case ${args} in
+        *-unsafe-use-service-account-token*) [ "$1" = present ] ;;
+        *) [ "$1" = absent ] ;;
+    esac
+}
+# headlamp_can <verb> <resource>: what Headlamp's service account may do across the cluster.
+headlamp_can() {
+    # shellcheck disable=SC2310 # can-i exits non-zero for its answer no, which the caller reads.
+    wl auth can-i "$1" "$2" --all-namespaces --as=system:serviceaccount:headlamp:headlamp 2> /dev/null || true
+}
+until_true 120 "Headlamp refuses to list pods without a token" headlamp_refuses
+
+step "Headlamp read-only for everyone"
+set_variable headlamp '{"enabled":true,"access":"view"}'
+until_true 600 "Headlamp started with its own account" headlamp_flag present
+wl -n headlamp rollout status deployment/headlamp --timeout=10m
+until_true 120 "Headlamp lists pods without a token" headlamp_lists_pods
+can_list=$(headlamp_can list pods)
+[ "${can_list}" = yes ] || fail "Headlamp's service account cannot list pods"
+for denied in "get secrets" "list secrets" "create pods" "delete deployments" "list nodes"; do
+    # shellcheck disable=SC2086 # the verb and the resource, split on purpose.
+    allowed=$(headlamp_can ${denied})
+    [ "${allowed}" = no ] || fail "Headlamp's service account may ${denied}"
+done
+
+step "Headlamp back to everyone's own token"
+set_variable headlamp '{"enabled":true}'
+until_true 600 "Headlamp started without its own account" headlamp_flag absent
+wl -n headlamp rollout status deployment/headlamp --timeout=10m
+can_list=$(headlamp_can list pods)
+[ "${can_list}" = no ] || fail "Headlamp's service account keeps its view binding"
+until_true 120 "Headlamp refuses to list pods without a token again" headlamp_refuses
 
 step "pod security enforced, with Kyverno switched on"
 # privileged_pod <namespace>: asks the API server to admit a privileged pod, without creating it.

@@ -50,6 +50,21 @@ export const cniName = (n: string): string => cniNames[n] ?? n;
 export const registerHint = "With the Rancher one of Kubehenge's other clusters runs, now or once one does.";
 export const registeredWithRancher = "Registered with Rancher, once one of Kubehenge's clusters runs it";
 
+export const headlampHint =
+  "A web interface inside the cluster. People sign in to it with their own token, and it has no rights of its own, unless it is read-only for everyone.";
+export const headlampViewLabel = "Read-only for everyone, without signing in";
+/** headlampViewHint says what Headlamp's view access shows, and to whom. */
+export const headlampViewHint =
+  "Headlamp's own account gets Kubernetes' view role, and Headlamp uses it for everyone who reaches it: the workloads, ConfigMaps, events and logs of every namespace, without Secrets, and no changes. Tokens given to it are not used.";
+
+/** headlampText sums up the in-cluster Headlamp: off, or on with its host name and access. */
+export function headlampText(enabled: boolean, hostname: string | undefined, view: boolean): string {
+  if (!enabled) {
+    return "Off";
+  }
+  return `On${filled(hostname) ? `, at ${hostname}` : ""}${view ? ", read-only for everyone" : ""}`;
+}
+
 /** istioHint says what Istio does in a cluster and how workloads join it. */
 export const istioHint =
   "Istio in ambient mode, without sidecars: pods in a namespace labelled istio.io/dataplane-mode=ambient talk to each other over mutual TLS, with their workload identities. Switching it off first takes every namespace and pod out of the mesh.";

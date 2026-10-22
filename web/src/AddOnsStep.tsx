@@ -8,7 +8,7 @@ import type { StepProps } from "./CreateSteps";
 import { LogsFields, logsHint, logsNeedMonitoring } from "./Logs";
 import { PodSecurityFields, cisHint } from "./PodSecurity";
 import type { ClusterClass } from "./types";
-import { Field, browserZone, istioHint, registerHint } from "./ui";
+import { Field, browserZone, headlampHint, headlampViewHint, headlampViewLabel, istioHint, registerHint } from "./ui";
 
 // Talos nodes have no VM template builds to move to, so only the other classes mention them.
 function upgradesHint(cls: ClusterClass | undefined): string {
@@ -158,21 +158,36 @@ export function AddOnsStep({
         Install Headlamp
       </label>
       <p className="hint" id="headlamp-hint">
-        A web interface inside the cluster. People sign in to it with their own token; it has no rights of its own.
+        {headlampHint}
       </p>
       {form.headlamp && (
-        <Field
-          label="Headlamp host name"
-          hint="Optional: also serve it at this name through the cluster's ingress controller."
-        >
-          {(id) => (
+        <fieldset className="group">
+          <legend>Headlamp</legend>
+          <Field
+            label="Host name"
+            hint="Optional: also serve it at this name through the cluster's ingress controller."
+          >
+            {(id) => (
+              <input
+                id={id}
+                value={form.headlampHostname}
+                onChange={(e) => set("headlampHostname", e.target.value.trim())}
+              />
+            )}
+          </Field>
+          <label className="check">
             <input
-              id={id}
-              value={form.headlampHostname}
-              onChange={(e) => set("headlampHostname", e.target.value.trim())}
-            />
-          )}
-        </Field>
+              type="checkbox"
+              checked={form.headlampView}
+              aria-describedby="headlamp-view-hint"
+              onChange={(e) => set("headlampView", e.target.checked)}
+            />{" "}
+            {headlampViewLabel}
+          </label>
+          <p className="hint" id="headlamp-view-hint">
+            {headlampViewHint}
+          </p>
+        </fieldset>
       )}
       <label className="check">
         <input

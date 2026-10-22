@@ -229,7 +229,13 @@ type Headlamp struct {
 	Enabled   bool   `json:"enabled"`
 	Hostname  string `json:"hostname,omitempty"`
 	TLSSecret string `json:"tlsSecret,omitempty"`
+	// Access is token, the default, for everyone's own token or OIDC sign-in, or headlampViewAccess.
+	Access string `json:"access,omitempty"`
 }
+
+// headlampViewAccess has Headlamp serve everyone who reaches it through its own account, bound to
+// Kubernetes' view role.
+const headlampViewAccess = "view"
 
 // Chart is one Helm chart, pinned by its digest: an OCI chart's manifest digest, or the SHA-256 of
 // the archive a repository's index lists.
@@ -558,16 +564,25 @@ func clusterResourceSet(cluster *clusterv1.Cluster, secrets []*corev1.Secret) *a
 	}
 }
 
-// headlampValues keep Headlamp without rights of its own: every user signs in with their own token
-// or through OIDC. Its service account token stays mounted only because Headlamp reads the API
-// server's address and CA through it; the account is bound to no role. Plugins are those in the
+// headlampValues keep Headlamp without rights of its own unless the cluster asks for view access:
+// every user signs in with their own token or through OIDC. Its service account token stays
+// mounted because Headlamp reads the API server's address and CA through it; the account is bound
+// to no role. With view access, the account is bound to the view ClusterRole and Headlamp sends
+// every request with its token, the user's own dropped, so whoever reaches Headlamp reads the
+// cluster without signing in and nobody changes anything through it. Plugins are those in the
 // image, nothing fetched at run time.
 func headlampValues(h Headlamp) map[string]any {
 	// The image's own user and group.
 	const user, group = 100, 101
+	binding := map[string]any{"create": false}
+	config := map[string]any{"oidc": map[string]any{"secret": map[string]any{"create": false}}}
+	if h.Access == headlampViewAccess {
+		binding = map[string]any{"create": true, "clusterRoleName": "view"}
+		config["unsafeUseServiceAccountToken"] = true
+	}
 	values := map[string]any{
-		"clusterRoleBinding": map[string]any{"create": false},
-		"config":             map[string]any{"oidc": map[string]any{"secret": map[string]any{"create": false}}},
+		"clusterRoleBinding": binding,
+		"config":             config,
 		"pluginsManager":     map[string]any{"enabled": false},
 		// The chart's own default leaves out what Pod Security's restricted level requires.
 		"securityContext": restrictedContainer(map[string]any{

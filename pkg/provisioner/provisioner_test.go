@@ -685,6 +685,9 @@ func TestHeadlampHasNoRightsOfItsOwn(t *testing.T) {
 	if lookup[bool](t, values, "clusterRoleBinding", "create") {
 		t.Error("Headlamp's service account is bound to a role")
 	}
+	if _, ok := lookup[map[string]any](t, values, "config")["unsafeUseServiceAccountToken"]; ok {
+		t.Error("Headlamp uses its own service account for its users")
+	}
 	if lookup[bool](t, values, "pluginsManager", "enabled") {
 		t.Error("Headlamp fetches plugins at run time")
 	}
@@ -697,6 +700,24 @@ func TestHeadlampHasNoRightsOfItsOwn(t *testing.T) {
 	}
 	if _, ok := values["ingress"]; ok {
 		t.Error("an Ingress without a hostname")
+	}
+}
+
+func TestHeadlampWithViewAccessServesEveryoneThroughItsOwnAccount(t *testing.T) {
+	t.Parallel()
+	_, values := headlampProxyValues(t, Headlamp{Enabled: true, Access: "view"})
+	if !lookup[bool](t, values, "clusterRoleBinding", "create") || lookup[string](t, values, "clusterRoleBinding", "clusterRoleName") != "view" {
+		t.Errorf("Headlamp's service account is not bound to view: %v", values["clusterRoleBinding"])
+	}
+	if !lookup[bool](t, values, "config", "unsafeUseServiceAccountToken") {
+		t.Error("Headlamp does not use its own service account")
+	}
+	if lookup[bool](t, values, "config", "oidc", "secret", "create") {
+		t.Error("Headlamp's chart makes an OIDC Secret")
+	}
+	_, token := headlampProxyValues(t, Headlamp{Enabled: true, Access: "token"})
+	if lookup[bool](t, token, "clusterRoleBinding", "create") {
+		t.Error("token access binds Headlamp's service account to a role")
 	}
 }
 

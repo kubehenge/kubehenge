@@ -27,6 +27,10 @@ import {
   Field,
   cniName,
   filled,
+  headlampHint,
+  headlampText,
+  headlampViewHint,
+  headlampViewLabel,
   istioHint,
   istioText,
   registerHint,
@@ -122,11 +126,18 @@ interface HostedValue {
   enabled?: boolean | undefined;
   hostname?: string | undefined;
   tlsSecret?: string | undefined;
+  /** Headlamp's access: token, or view for everyone through its own account. */
+  access?: string | undefined;
 }
 
 function hostedValue(v: unknown): HostedValue {
   const r = record(v);
-  return { enabled: flag(r["enabled"]), hostname: text(r["hostname"]), tlsSecret: text(r["tlsSecret"]) };
+  return {
+    enabled: flag(r["enabled"]),
+    hostname: text(r["hostname"]),
+    tlsSecret: text(r["tlsSecret"]),
+    access: text(r["access"]),
+  };
 }
 
 interface RancherValue {
@@ -207,7 +218,7 @@ export function Options<A extends string = never>({
   rows.push(
     {
       label: "Headlamp",
-      value: headlamp.enabled === true ? `On${filled(headlamp.hostname) ? `, at ${headlamp.hostname}` : ""}` : "Off",
+      value: headlampText(headlamp.enabled === true, headlamp.hostname, headlamp.access === "view"),
       action: "headlamp",
       name: "Headlamp",
     },
@@ -397,7 +408,7 @@ const hostedAddons = {
   headlamp: {
     title: "Headlamp",
     install: "Install Headlamp",
-    hint: "A web interface inside the cluster. People sign in to it with their own token; it has no rights of its own.",
+    hint: headlampHint,
     hostLabel: "Host name",
     hostHint: "Optional: also serve it at this name through the cluster's ingress controller.",
   },
@@ -425,6 +436,7 @@ function HostedAddonDialog({
   const current = hostedValue(c.variables[addon]);
   const [enabled, setEnabled] = useState(current.enabled === true);
   const [hostname, setHostname] = useState(current.hostname ?? "");
+  const [view, setView] = useState(current.access === "view");
   const { busy, error, send } = useChange(c, onClose);
   const value: HostedValue = { enabled };
   if (enabled && hostname) {
@@ -433,8 +445,14 @@ function HostedAddonDialog({
   if (enabled && hostname && filled(current.tlsSecret)) {
     value.tlsSecret = current.tlsSecret;
   }
-  const changed = enabled !== (current.enabled === true) || (enabled && hostname !== (current.hostname ?? ""));
+  if (enabled && view) {
+    value.access = "view";
+  }
+  const changed =
+    enabled !== (current.enabled === true) ||
+    (enabled && (hostname !== (current.hostname ?? "") || view !== (current.access === "view")));
   const hint = useId();
+  const viewHint = useId();
   // Logs are read in monitoring's Grafana, so they go with it.
   const heldLogs = record(c.variables["logs"]);
   const logsGo = addon === "monitoring" && !enabled && logsOf(heldLogs).enabled;
@@ -474,6 +492,22 @@ function HostedAddonDialog({
         <Field label={words.hostLabel} hint={words.hostHint}>
           {(id) => <input id={id} value={hostname} onChange={(e) => setHostname(e.target.value.trim())} />}
         </Field>
+      )}
+      {enabled && addon === "headlamp" && (
+        <>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={view}
+              aria-describedby={viewHint}
+              onChange={(e) => setView(e.target.checked)}
+            />{" "}
+            {headlampViewLabel}
+          </label>
+          <p className="hint" id={viewHint}>
+            {headlampViewHint}
+          </p>
+        </>
       )}
       {logsGo && (
         <output className="warning notice">
