@@ -19,9 +19,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # A pull request runs the tests its changes need (test/e2e/ci/scope.sh); the merge queue runs
-  # every pull request's test, and the nightly run adds the upgrade of the management cluster and
-  # Rancher, the longest.
+  # A pull request runs the tests its changes need (test/e2e/ci/scope.sh), and so does a merge
+  # group for all its pull requests' changes together, on the tree that would land on main; the
+  # nightly run runs every test and adds the upgrade of the management cluster and Rancher, the
+  # longest.
   scope:
     name: scope
     runs-on: ubuntu-26.04
@@ -29,7 +30,8 @@ jobs:
     outputs:
       tests: ${{ steps.scope.outputs.tests }}
     steps:
-      # A pull request's merge commit and the base under it, which is all the comparison reads.
+      # A pull request's merge commit and the base under it, which is all its comparison reads; a
+      # merge group fetches main's commit under it as well.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -37,10 +39,16 @@ jobs:
       - id: scope
         env:
           EVENT: ${{ github.event_name }}
+          GROUP_BASE: ${{ github.event.merge_group.base_sha }}
         run: |
           case "$EVENT" in
             pull_request) tests=$(git diff --name-only HEAD^1 HEAD | test/e2e/ci/scope.sh) ;;
-            merge_group) tests=$(test/e2e/ci/scope.sh --all) ;;
+            # A group holds one commit per pull request on top of main, so its changes are the
+            # difference from main's commit under it.
+            merge_group)
+              git fetch --no-tags --depth=1 origin "$GROUP_BASE"
+              tests=$(git diff --name-only "$GROUP_BASE" HEAD | test/e2e/ci/scope.sh)
+              ;;
             *) tests='["management-cluster", "management-cluster-upgrade", "appliance", "kubeadm",
                  "rke2", "k3s", "rancher", "cluster-mesh"]' ;;
           esac

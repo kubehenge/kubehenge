@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/luthermonson/go-proxmox"
@@ -57,6 +58,20 @@ func (f *fakeCluster) client() *proxmox.Client {
 	f.t.Cleanup(srv.Close)
 	return proxmox.NewClient(srv.URL + "/api2/json")
 }
+
+// memoryClient reaches the fake without a network, for tests run in a synctest bubble, where time
+// moves only while every goroutine waits: a socket would hold that up.
+func (f *fakeCluster) memoryClient() *proxmox.Client {
+	return proxmox.NewClient("http://fake/api2/json", proxmox.WithHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		w := httptest.NewRecorder()
+		f.serve(w, r)
+		return w.Result(), nil
+	})}))
+}
+
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (rt roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return rt(r) }
 
 func (f *fakeCluster) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
@@ -301,45 +316,51 @@ func TestWaitSelectableWaitsForTheViewToSettle(t *testing.T) {
 	tmpl, tags := rke2(t)
 	converted := template(101, tmpl.Name, tags, testPool)
 	stale := shownAs(converted, tmpl.Name, 0)
-	// Long against the poll, so that only a view showing the template throughout can last it.
+	// Long against the poll, so that only a view showing the template throughout can last it. Both
+	// run on synctest's clock: on the real one, a test machine stalling for the settle window
+	// between two answers would rightly count as a view that showed the template throughout.
 	const settle = 200 * time.Millisecond
 	newBuilder := func(f *fakeCluster) *Builder {
-		return &Builder{Client: f.client(), Pool: testPool, selectableSettle: settle, selectablePoll: time.Millisecond}
+		return &Builder{Client: f.memoryClient(), Pool: testPool, selectableSettle: settle, selectablePoll: time.Millisecond}
 	}
 
 	t.Run("drops out once", func(t *testing.T) {
 		t.Parallel()
-		f := &fakeCluster{t: t, views: [][]map[string]any{{stale}, {converted}, {stale}, {converted}}, configs: configsOf(converted)}
-		if err := newBuilder(f).waitSelectable(t.Context(), &tmpl, 101); err != nil {
-			t.Fatal(err)
-		}
-		const lastDrop = 2
-		served := f.servedAt()
-		if len(served) <= lastDrop+1 {
-			t.Fatalf("waitSelectable read the view %d times, returning before it showed the template again", len(served))
-		}
-		if shown := time.Since(served[lastDrop+1]); shown < settle {
-			t.Errorf("waitSelectable returned %s after the template showed again, before the %s settle window", shown, settle)
-		}
+		synctest.Test(t, func(t *testing.T) {
+			f := &fakeCluster{t: t, views: [][]map[string]any{{stale}, {converted}, {stale}, {converted}}, configs: configsOf(converted)}
+			if err := newBuilder(f).waitSelectable(t.Context(), &tmpl, 101); err != nil {
+				t.Fatal(err)
+			}
+			const lastDrop = 2
+			served := f.servedAt()
+			if len(served) <= lastDrop+1 {
+				t.Fatalf("waitSelectable read the view %d times, returning before it showed the template again", len(served))
+			}
+			if shown := time.Since(served[lastDrop+1]); shown < settle {
+				t.Errorf("waitSelectable returned %s after the template showed again, before the %s settle window", shown, settle)
+			}
+		})
 	})
 
 	t.Run("keeps flapping", func(t *testing.T) {
 		t.Parallel()
-		// More answers than the polls that fit in the context's time, each third without the
-		// template.
-		views := make([][]map[string]any, 2000)
-		for i := range views {
-			views[i] = []map[string]any{converted}
-			if i%3 == 2 {
-				views[i] = []map[string]any{stale}
+		synctest.Test(t, func(t *testing.T) {
+			// More answers than the polls that fit in the context's time, each third without the
+			// template.
+			views := make([][]map[string]any, 2000)
+			for i := range views {
+				views[i] = []map[string]any{converted}
+				if i%3 == 2 {
+					views[i] = []map[string]any{stale}
+				}
 			}
-		}
-		f := &fakeCluster{t: t, views: views, configs: configsOf(converted)}
-		ctx, cancel := context.WithTimeout(t.Context(), 3*settle)
-		defer cancel()
-		if err := newBuilder(f).waitSelectable(ctx, &tmpl, 101); !errors.Is(err, context.DeadlineExceeded) {
-			t.Errorf("waitSelectable gave %v over a flapping view; want it still waiting", err)
-		}
+			f := &fakeCluster{t: t, views: views, configs: configsOf(converted)}
+			ctx, cancel := context.WithTimeout(t.Context(), 3*settle)
+			defer cancel()
+			if err := newBuilder(f).waitSelectable(ctx, &tmpl, 101); !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("waitSelectable gave %v over a flapping view; want it still waiting", err)
+			}
+		})
 	})
 
 	t.Run("a second template", func(t *testing.T) {
