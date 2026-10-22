@@ -6,7 +6,7 @@ description: >-
   Kubehenge management cluster
 type: application
 version: 0.15.0
-appVersion: 0.1.0
+appVersion: 0.2.0
 home: https://github.com/kubehenge/kubehenge
 sources:
   - https://github.com/kubehenge/kubehenge
