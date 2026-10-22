@@ -419,8 +419,9 @@ func TestControllersHoldPatientLeases(t *testing.T) {
 
 func TestIngressControllerOnKubeadmOnly(t *testing.T) {
 	t.Parallel()
+	endpoint := clusterv1.ClusterVariable{Name: "controlPlaneEndpoint", Value: apiextensionsv1.JSON{Raw: []byte(`"192.0.2.50"`)}}
 	for _, distribution := range []templates.Distribution{templates.Kubeadm, templates.RKE2, templates.K3s} {
-		proxies, err := helmChartProxies(cluster(), &testCharts, distribution, "local-lvm", CNI{}, &Addons{})
+		proxies, err := helmChartProxies(cluster(endpoint), &testCharts, distribution, "local-lvm", CNI{}, &Addons{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -453,6 +454,13 @@ func TestIngressControllerOnKubeadmOnly(t *testing.T) {
 		// The chart has read the type from service.spec since its version 41, and ignores service.type.
 		if lookup[string](t, values, "service", "spec", "type") != "ClusterIP" {
 			t.Errorf("Traefik's Service takes an address from the load balancer: %v", values["service"])
+		}
+		gateway := lookup[map[string]any](t, values, "providers", "kubernetesGateway")
+		if !lookup[bool](t, gateway, "enabled") || lookup[string](t, gateway, "statusAddress", "ip") != "192.0.2.50" {
+			t.Errorf("Traefik's Gateway provider is off, or its Gateway reports another address than the API's: %v", gateway)
+		}
+		if lookup[string](t, values, "gateway", "listeners", "web", "namespacePolicy", "from") != "All" {
+			t.Errorf("Traefik's Gateway takes routes only from its own namespace: %v", values["gateway"])
 		}
 	}
 }

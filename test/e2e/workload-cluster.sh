@@ -2,11 +2,11 @@
 # End-to-end test of one Kubehenge ClusterClass on a Proxmox VE host, against a running management
 # cluster: create a cluster trusting an OpenID issuer, hardened to the CIS benchmark and enforcing
 # Pod Security's restricted level, check sign-in through it, its nodes against the benchmark, its
-# cloud controller manager, load balancer and persistent volumes, what the health page's read-only
-# identities may see in it, switch
-# Headlamp, Kyverno, Istio (a namespace's traffic over mutual TLS), monitoring (every component
-# scraped with its server verified) and logs (a pod's lines, and with the node collector the journal
-# and the audit log, read in Loki through Grafana) on and off, and the load balancer off,
+# cloud controller manager, ingress controller, Gateway API, load balancer and persistent volumes,
+# what the health page's read-only identities may see in it, switch Headlamp, Kyverno, Istio (a
+# namespace's traffic over mutual TLS), monitoring (every component scraped with its server
+# verified) and logs (a pod's lines, and with the node collector the journal and the audit log, read
+# in Loki through Grafana) on and off, and the load balancer off,
 # scale its workers up and down, upgrade it by one minor version (for RKE2 and k3s with the first
 # new server's join refused at first), replace a node that dies, delete it, and check that nothing
 # of it is left on Proxmox VE.
@@ -417,8 +417,10 @@ refused health create pods -n e2e-health
 refused health delete nodes
 refused health-logs list pods -n e2e-health
 refused health-logs get secrets -n kube-system
-# Raw, as kubectl logs would first read the pod, which this identity may not.
-crash_log=$(KUBECONFIG="${work}/health-logs" kubectl get --raw "/api/v1/namespaces/e2e-health/pods/crasher/log?previous=true") ||
+# Raw, as kubectl logs would first read the pod, which this identity may not. Without previous=true,
+# as the health page reads: the kubelet hands out the newest run, the crash, which it keeps, while
+# previous=true can name a run it has already removed.
+crash_log=$(KUBECONFIG="${work}/health-logs" kubectl get --raw "/api/v1/namespaces/e2e-health/pods/crasher/log") ||
     fail "the logs identity cannot read the pod's log"
 printf '%s' "${crash_log}" | grep -q no-such-command || fail "the pod's log does not tell why it stopped: ${crash_log}"
 wl delete namespace e2e-health --wait=false
@@ -429,15 +431,147 @@ agnhost_pod e2e-ingress web netexec --http-port=8080
 wl -n e2e-ingress expose pod web --port=80 --target-port=8080
 wl -n e2e-ingress create ingress web --rule='e2e.test/*=web:80'
 wl -n e2e-ingress wait --for=condition=Ready pod/web --timeout=5m
-# netexec answers /hostname with its pod's name.
+# served <address> [host name]: whether the address serves the web pod at the host name, e2e.test
+# unless given; netexec answers /hostname with its pod's name.
 served() {
-    served_answer=$(curl -sS --max-time 5 -H 'Host: e2e.test' "http://$1/hostname" 2> /dev/null) || return 1
+    served_answer=$(curl -sS --max-time 5 -H "Host: ${2:-e2e.test}" "http://$1/hostname" 2> /dev/null) || return 1
     [ "${served_answer}" = web ]
+}
+# The Gateway API's objects, as <kind>/<name>: its CRDs and the admission policy beside them.
+gateway_api_version=$(sed -n 's/^GATEWAY_API_TAG := //p' "$(dirname "$0")/../../Makefile")
+gateway_api_objects=
+for gateway_api_crd in backendtlspolicies gatewayclasses gateways grpcroutes httproutes listenersets referencegrants tcproutes tlsroutes udproutes; do
+    gateway_api_objects="${gateway_api_objects} CustomResourceDefinition/${gateway_api_crd}.gateway.networking.k8s.io"
+done
+gateway_api_objects="${gateway_api_objects} ValidatingAdmissionPolicy/safe-upgrades.gateway.networking.k8s.io ValidatingAdmissionPolicyBinding/safe-upgrades.gateway.networking.k8s.io"
+# gateway_api_say <reason>: says why the Gateway API is not as it should be yet, once per reason,
+# as the checks below are polled.
+gateway_api_say() {
+    [ "$1" = "${gateway_api_reason:-}" ] || printf 'the Gateway API: %s\n' "$1" >&2
+    gateway_api_reason=$1
+}
+# gateway_api_shipped: the Gateway API's objects the latest revision of every Helm release ships,
+# where that revision is deployed, one per line as "<namespace>/<release> <kind> <name> <Gateway API
+# release>". Helm keeps a release gzipped and in base64, within the Secret's own base64.
+gateway_api_shipped() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+    gateway_api_revisions=$(wl get secret -A -l owner=helm -o json) || return 1
+    printf '%s' "${gateway_api_revisions}" |
+        jq -r '.items | group_by(.metadata.namespace + "/" + .metadata.labels.name) | map(max_by(.metadata.labels.version | tonumber)) | .[]
+            | select(.metadata.labels.status == "deployed") | "\(.metadata.namespace)/\(.metadata.labels.name) \(.data.release)"' |
+        while read -r gateway_api_release gateway_api_stored; do
+            printf '%s' "${gateway_api_stored}" | base64 -d | base64 -d | gzip -dc | jq -r .manifest |
+                awk -v release="${gateway_api_release}" '
+                    function emit() {
+                        if (kind != "" && name ~ /\.gateway\.networking\.k8s\.io$/) print release, kind, name, (version == "" ? "none" : version)
+                    }
+                    /^---/ { emit(); kind = ""; name = ""; version = ""; meta = 0; next }
+                    /^kind:/ { kind = $2; meta = 0; next }
+                    /^metadata:/ { meta = 1; next }
+                    /^[^ #]/ { meta = 0 }
+                    meta && /^  name:/ { name = $2; gsub(/"/, "", name) }
+                    meta && /^    gateway\.networking\.k8s\.io\/bundle-version:/ { version = $2; gsub(/"/, "", version) }
+                    END { emit() }' || exit 1
+        done
+}
+# gateway_api_held: every object of the Gateway API is held once. One that a Helm release ships is
+# that release's alone: no other release ships it, its annotations name that release, and it is of
+# the Gateway API release the chart ships, which nothing has replaced. One that no Helm release
+# ships is of Kubehenge's release or newer.
+gateway_api_held() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+    gateway_api_shipping=$(gateway_api_shipped) || return 1
+    for gateway_api_object in ${gateway_api_objects}; do
+        gateway_api_kind=${gateway_api_object%%/*} gateway_api_name=${gateway_api_object#*/}
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+        gateway_api_has=$(wl get "${gateway_api_kind}" "${gateway_api_name}" -o json 2> /dev/null) || return 1
+        gateway_api_named=$(printf '%s' "${gateway_api_has}" | jq -r '.metadata.annotations // {} | "\(.["meta.helm.sh/release-namespace"] // "")/\(.["meta.helm.sh/release-name"] // "")"')
+        gateway_api_is=$(printf '%s' "${gateway_api_has}" | jq -r '.metadata.annotations["gateway.networking.k8s.io/bundle-version"] // "none"')
+        gateway_api_holders=$(printf '%s\n' "${gateway_api_shipping}" | awk -v k="${gateway_api_kind}" -v n="${gateway_api_name}" '$2 == k && $3 == n')
+        gateway_api_count=$(printf '%s' "${gateway_api_holders}" | grep -c . || true)
+        case ${gateway_api_count} in
+            0)
+                gateway_api_oldest=$(printf '%s\n%s\n' "${gateway_api_is}" "${gateway_api_version}" | sort -V | head -n 1)
+                [ "${gateway_api_is}" != none ] && [ "${gateway_api_oldest}" = "${gateway_api_version}" ] || {
+                    gateway_api_say "${gateway_api_object} is of release ${gateway_api_is}, which no Helm release ships, not ${gateway_api_version} or newer"
+                    return 1
+                }
+                ;;
+            1)
+                gateway_api_holder=${gateway_api_holders%% *} gateway_api_ships=${gateway_api_holders##* }
+                [ "${gateway_api_named}" = "${gateway_api_holder}" ] || {
+                    gateway_api_say "${gateway_api_object} is shipped by ${gateway_api_holder} but marked as ${gateway_api_named}'s"
+                    return 1
+                }
+                [ "${gateway_api_is}" = "${gateway_api_ships}" ] || {
+                    gateway_api_say "${gateway_api_object} is of release ${gateway_api_is}, where ${gateway_api_holder} ships ${gateway_api_ships}"
+                    return 1
+                }
+                ;;
+            *)
+                gateway_api_releases=$(printf '%s\n' "${gateway_api_holders}" | cut -d ' ' -f 1 | tr '\n' ' ')
+                gateway_api_say "${gateway_api_object} is shipped by more than one Helm release: ${gateway_api_releases}"
+                return 1
+                ;;
+        esac
+    done
+}
+# The Gateway API chart of the distribution's own that the releases the test upgrades RKE2 and k3s
+# to have, which adopts what the Traefik CRD chart of the release before left behind.
+case ${distribution} in
+    rke2) gateway_api_chart=rke2-gateway-api-crd ;;
+    k3s) gateway_api_chart=gateway-api-crd ;;
+    *) gateway_api_chart= ;;
+esac
+# gateway_api_chart_holds: the distribution's own Gateway API chart is installed and ships every
+# object of the Gateway API.
+gateway_api_chart_holds() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+    wl -n kube-system get helmchart "${gateway_api_chart}" > /dev/null 2>&1 || {
+        gateway_api_say "the cluster has no HelmChart ${gateway_api_chart}"
+        return 1
+    }
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+    gateway_api_shipping=$(gateway_api_shipped) || return 1
+    for gateway_api_object in ${gateway_api_objects}; do
+        printf '%s\n' "${gateway_api_shipping}" | awk -v r="kube-system/${gateway_api_chart}" -v k="${gateway_api_object%%/*}" -v n="${gateway_api_object#*/}" \
+            '$1 == r && $2 == k && $3 == n { found = 1 } END { exit !found }' || {
+            gateway_api_say "the latest revision of ${gateway_api_chart} is not deployed, or does not ship ${gateway_api_object}"
+            return 1
+        }
+    done
+}
+gateway_programmed() {
+    wl -n kube-system get gateway traefik-gateway -o json 2> /dev/null |
+        jq -e --arg ip "${KUBEHENGE_E2E_ENDPOINT}" 'any(.status.conditions[]?; .type == "Programmed" and .status == "True") and any(.status.addresses[]?; .value == $ip)' > /dev/null
 }
 node_addresses=$(wl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}')
 for address in ${KUBEHENGE_E2E_ENDPOINT} ${node_addresses}; do
     until_true 300 "${address} serves the host name" served "${address}"
 done
+
+step "the Gateway API: Traefik's Gateway routes an HTTPRoute"
+until_true 300 "the Gateway API's objects, each held once, by Kubehenge or a Helm release" gateway_api_held
+wl get validatingadmissionpolicy,validatingadmissionpolicybinding safe-upgrades.gateway.networking.k8s.io > /dev/null
+until_true 300 "Traefik's Gateway is programmed, at the API address" gateway_programmed
+wl -n e2e-ingress apply -f - << 'EOF'
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: web
+spec:
+  parentRefs:
+    - name: traefik-gateway
+      namespace: kube-system
+      sectionName: web
+  hostnames: [gateway.e2e.test]
+  rules:
+    - backendRefs:
+        - name: web
+          port: 80
+EOF
+wl -n e2e-ingress wait --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True httproute/web --timeout=2m
+until_true 300 "the API address serves the route" served "${KUBEHENGE_E2E_ENDPOINT}" gateway.e2e.test
 wl delete namespace e2e-ingress --wait=false
 
 step "a Service of type LoadBalancer answers on an address from the cluster's range, with ${load_balancer}"
@@ -1029,6 +1163,13 @@ kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20
 wl get nodes -o wide
 # The new control-plane nodes have to carry the authentication configuration too.
 check_sign_in
+# The distribution's own Gateway API chart takes over what its Traefik CRD chart shipped before,
+# and Kubehenge's policy, without Kubehenge applying anything beside it.
+if [ -n "${gateway_api_chart}" ]; then
+    until_true 300 "${gateway_api_chart} holds the Gateway API after the upgrade" gateway_api_chart_holds
+fi
+until_true 300 "the Gateway API's objects after the upgrade, each held once" gateway_api_held
+until_true 300 "Traefik's Gateway is programmed after the upgrade" gateway_programmed
 
 step "a dead worker is replaced"
 # The class's 300 s before a not-ready node counts as dead only adds waiting here; the integration

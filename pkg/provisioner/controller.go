@@ -416,6 +416,8 @@ func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluste
 			wait = r.policiesWait
 		case rancherProxy(cluster):
 			wait = r.rancherConfigWaits
+		case traefikProxy(cluster):
+			wait = gatewayAPIWaits
 		}
 		if wait != nil {
 			waits, err := wait(ctx, cluster)

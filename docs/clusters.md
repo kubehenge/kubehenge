@@ -9,6 +9,7 @@ Every cluster gets, whatever its distribution:
 - **A control-plane virtual IP**, held by kube-vip on one control-plane node and moved to another when it fails.
 - **A CNI**: the distribution's own, or the one chosen at creation.
 - **An ingress controller**, Traefik, on ports 80 and 443 of every node, the control planes included, so a host name pointing at the cluster's API address or at any node reaches it. RKE2 and k3s bring their own; Kubehenge installs it into kubeadm clusters, in `kube-system`.
+- **The Gateway API**, so that Gateways and HTTPRoutes work beside Ingresses: its standard channel's CRDs, with the admission policy upstream ships to refuse older or experimental ones over them, and Traefik's Gateway `traefik-gateway` in `kube-system`, which listens for HTTP where Traefik does and takes routes from every namespace ([below](#routes-through-the-gateway-api)). RKE2 and k3s ship the CRDs with their Traefik in some releases, and all of the Gateway API in a chart of its own in later ones; there they stay the distribution's while it ships them.
 - **Health checks.** A node that stays not ready for five minutes, or does not join within twenty, is replaced; workers one at a time.
 - **Control-plane nodes kept for the control plane.** Once a worker has joined, the control-plane nodes carry the taint `node-role.kubernetes.io/control-plane:NoSchedule` in every distribution, so workloads run on the workers and leave etcd and the API server their nodes. A cluster scaled to no workers has the taint taken off, and its control-plane nodes run the workloads. A worker that fails leaves the taint in place. Pods that started on a control-plane node before the first worker joined stay there until they are next scheduled.
 - **Its own Proxmox VE user and API token**, with rights on its own pool only, held by the cloud controller manager and the CSI plugin's controller on the control-plane nodes ([architecture.md](architecture.md#each-clusters-own-corner-of-proxmox-ve)).
@@ -196,6 +197,32 @@ kubectl create clusterrolebinding platform-admins --clusterrole=cluster-admin --
 Headlamp signs in with the first provider. kubectl does so through an OpenID Connect credential plugin, such as kubelogin, set to the provider's issuer and client ID.
 
 **Providers for every cluster** are set on the Administration page (**Edit…** in the Management cluster section, Identity providers), or as `cluster_oidc` with Terraform/OpenTofu. Every new cluster trusts them unless it sets its own list, and a change applies to clusters created afterwards. Whoever runs a provider can issue a token for any name, so a cluster may keep or drop these freely, while adding any other provider needs `Sys.Modify` on the pool, as the admin kubeconfig does.
+
+## Routes through the Gateway API
+
+Every cluster has the Gateway API's standard channel: GatewayClass, Gateway, HTTPRoute, GRPCRoute, TLSRoute, TCPRoute, UDPRoute, ReferenceGrant, BackendTLSPolicy and ListenerSet. Traefik serves the GatewayClass `traefik`, and its Gateway `traefik-gateway` in `kube-system` has one listener, `web`, for HTTP on port 80 of every node and of the API address, which it reports as its address. Any namespace may attach routes to it, as any namespace may claim a host name with an Ingress:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: web
+  namespace: shop
+spec:
+  parentRefs:
+    - name: traefik-gateway
+      namespace: kube-system
+      sectionName: web
+  hostnames: [shop.example.org]
+  rules:
+    - backendRefs:
+        - name: web
+          port: 80
+```
+
+A Gateway of your own with the class `traefik` works too; its listeners use Traefik's ports, 8000 for HTTP and 8443 for HTTPS, which the nodes' ports 80 and 443 lead to. Istio's waypoints, its layer 7 proxies, are Gateways of the class `istio-waypoint`, which istiod serves once the Istio add-on is on.
+
+The Gateway API's admission policy (`safe-upgrades.gateway.networking.k8s.io`) refuses CRDs of the group from the experimental channel over standard ones, and from releases before v1.5.0, so that a chart that brings old CRDs fails rather than downgrades the cluster's. Kubehenge applies its release of the CRDs where they are missing, or older and no longer shipped by the distribution, and never puts an older release over a newer one; where the distribution's release has its own Gateway API chart (RKE2's `rke2-gateway-api-crd`, k3s's `gateway-api-crd`), the Gateway API is that chart's alone, at the chart's release ([architecture.md](architecture.md#networking)). The annotation `kubehenge.dev/gateway-api` on the Cluster names the oldest release among the CRDs once every one is in place.
 
 ## Persistent volumes
 

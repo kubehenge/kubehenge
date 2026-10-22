@@ -556,12 +556,27 @@ func headlampValues(h Headlamp) map[string]any {
 	return values
 }
 
+// traefikProxy names the proxy of the ingress controller Kubehenge installs where the distribution
+// brings none.
+func traefikProxy(cluster *clusterv1.Cluster) string {
+	return cluster.Name + "-traefik"
+}
+
 // traefikValues run Traefik as RKE2 runs its own: on every node, on the node's ports 80 and 443,
 // so that a host name pointing at any node works without a load balancer. It runs on the control
 // planes too, so that the cluster's API address serves it as well. Its namespace is kube-system,
 // which Pod Security exempts, since host ports are beyond the baseline level.
-func traefikValues() map[string]any {
+//
+// Its Gateway API provider is on, as the ClusterClasses switch it on in the distributions' own
+// Traefik: the chart creates the GatewayClass traefik and the Gateway traefik-gateway beside
+// Traefik, whose HTTP listener takes routes from every namespace, as Traefik takes Ingresses from
+// every namespace. The Gateway reports the cluster's API address, where Traefik answers too.
+func traefikValues(endpoint string) map[string]any {
 	const http, https = 80, 443
+	gatewayProvider := map[string]any{"enabled": true}
+	if endpoint != "" {
+		gatewayProvider["statusAddress"] = map[string]any{"ip": endpoint}
+	}
 	return map[string]any{
 		"deployment": map[string]any{"kind": "DaemonSet"},
 		// A host port is held by the pod on it, so a node's new pod starts only once the old one is gone.
@@ -571,8 +586,12 @@ func traefikValues() map[string]any {
 			"websecure": map[string]any{"hostPort": https},
 		},
 		"service": map[string]any{"spec": map[string]any{"type": "ClusterIP"}},
-		// The Service's address is one only pods reach, so Ingresses are not told it.
-		"providers": map[string]any{"kubernetesIngress": map[string]any{"publishedService": map[string]any{"enabled": false}}},
+		"providers": map[string]any{
+			// The Service's address is one only pods reach, so Ingresses are not told it.
+			"kubernetesIngress": map[string]any{"publishedService": map[string]any{"enabled": false}},
+			"kubernetesGateway": gatewayProvider,
+		},
+		"gateway": map[string]any{"listeners": map[string]any{"web": map[string]any{"namespacePolicy": map[string]any{"from": "All"}}}},
 		// Routes whose TLS options conflict fail rather than fall back to the defaults, which would
 		// drop a host's client-certificate check (GHSA-g55h-rg46-x9c5).
 		"core":         map[string]any{"strictTLSOptions": true},
@@ -744,7 +763,11 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 		wanted = append(wanted, istioCharts(charts, distribution, cni)...)
 	}
 	if distribution == templates.Kubeadm {
-		wanted = append(wanted, chartProxy{"traefik", "traefik", metav1.NamespaceSystem, charts.Traefik, traefikValues()})
+		endpoint, _, err := optionalVariable[string](cluster, "controlPlaneEndpoint")
+		if err != nil {
+			return nil, err
+		}
+		wanted = append(wanted, chartProxy{"traefik", "traefik", metav1.NamespaceSystem, charts.Traefik, traefikValues(endpoint)})
 	}
 	if addons.LoadBalancer.Enabled {
 		lb, err := loadBalancerCharts(charts, addons.LoadBalancer)
