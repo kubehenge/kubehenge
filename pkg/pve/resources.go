@@ -76,6 +76,32 @@ type Member struct {
 	// Tags are separated by semicolons, as Proxmox VE stores them; Templates reads them, PoolMembers
 	// cannot.
 	Tags string `json:"tags"`
+	// Status is running or stopped. CPU is the share of its cores in use, from 0 to 1; memory is in
+	// bytes, uptime in seconds. Proxmox VE lists them with a pool's members, from its nodes' last
+	// broadcast.
+	Status string  `json:"status"`
+	CPU    float64 `json:"cpu"`
+	Cores  float64 `json:"maxcpu"`
+	Memory int64   `json:"mem"`
+	MaxMem int64   `json:"maxmem"`
+	Uptime int64   `json:"uptime"`
+}
+
+// LoadPoint is a VM's average CPU load over one step of Proxmox VE's round-robin data, the share of
+// its cores in use from 0 to 1; nil where the VM did not run.
+type LoadPoint struct {
+	Time int64    `json:"time"`
+	CPU  *float64 `json:"cpu"`
+}
+
+// VMLoad reads a VM's CPU load over the last hour, a point a minute, as Proxmox VE keeps it.
+func (a *Accounts) VMLoad(ctx context.Context, t *Ticket, node string, vmid int) ([]LoadPoint, error) {
+	var points []LoadPoint
+	path := fmt.Sprintf("/nodes/%s/qemu/%d/rrddata?timeframe=hour&cf=AVERAGE", url.PathEscape(node), vmid)
+	if err := a.get(ctx, t, path, &points); err != nil {
+		return nil, err
+	}
+	return points, nil
 }
 
 // Realms lists the realms, as Proxmox VE shows them to anyone before sign-in.
@@ -273,7 +299,8 @@ func (a *Accounts) Templates(ctx context.Context, t *Ticket, pool string) ([]Mem
 		return nil, err
 	}
 	var list []Member
-	for _, g := range guests {
+	for i := range guests {
+		g := &guests[i]
 		if g.Type != "qemu" || g.Pool != pool {
 			continue
 		}
@@ -308,9 +335,9 @@ func (a *Accounts) PoolMembers(ctx context.Context, t *Ticket, pool string) ([]M
 		return nil, err
 	}
 	var vms []Member
-	for _, m := range pools[0].Members {
-		if m.Type == "qemu" {
-			vms = append(vms, m)
+	for i := range pools[0].Members {
+		if m := &pools[0].Members[i]; m.Type == "qemu" {
+			vms = append(vms, *m)
 		}
 	}
 	return vms, nil

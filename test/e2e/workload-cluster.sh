@@ -2,7 +2,8 @@
 # End-to-end test of one Kubehenge ClusterClass on a Proxmox VE host, against a running management
 # cluster: create a cluster trusting an OpenID issuer, hardened to the CIS benchmark and enforcing
 # Pod Security's restricted level, check sign-in through it, its nodes against the benchmark, its
-# cloud controller manager, load balancer and persistent volumes, switch
+# cloud controller manager, load balancer and persistent volumes, what the health page's read-only
+# identities may see in it, switch
 # Headlamp, monitoring (every component scraped with its server verified), Kyverno and Istio (a
 # namespace's traffic over mutual TLS) on and off, and the load balancer off,
 # scale its workers up and down, upgrade it by one minor version (for RKE2 and k3s with the first
@@ -373,6 +374,51 @@ until_true 120 "the policy blocks the client" blocked
 wl -n e2e-policy wait --for=condition=Ready pod/server --timeout=10s > /dev/null ||
     fail "the server stopped; the refusal was not the policy's"
 wl delete namespace e2e-policy --wait=false
+
+step "the health page's identities see a crash loop, and nothing they need not"
+# identity_kubeconfig <health | health-logs>: a kubeconfig of the token Kubehenge's controller keeps
+# beside the cluster, written to a file only this user reads rather than passed as an argument.
+identity_kubeconfig() {
+    identity_secret=$(kubectl -n "${ns}" get "secret/${name}-$1" -o json 2> /dev/null) || return 1
+    (
+        umask 077
+        printf '%s' "${identity_secret}" | jq '{apiVersion: "v1", kind: "Config", "current-context": "c",
+            clusters: [{name: "c", cluster: {server: (.data.server | @base64d), "certificate-authority-data": .data["ca.crt"]}}],
+            users: [{name: "u", user: {token: (.data.token | @base64d)}}],
+            contexts: [{name: "c", context: {cluster: "c", user: "u"}}]}' > "${work}/$1"
+    )
+}
+until_true 300 "the health identities' tokens beside the cluster" identity_kubeconfig health
+identity_kubeconfig health-logs
+# refused <identity> <can-i arguments...>: the identity may not do it.
+refused() {
+    refused_identity=$1
+    shift
+    refused_answer=$(KUBECONFIG="${work}/${refused_identity}" kubectl auth can-i "$@" 2> /dev/null || true)
+    [ "${refused_answer}" = no ] || fail "${refused_identity} may $*"
+}
+wl create namespace e2e-health
+# An unknown command makes agnhost exit at once, so the pod restarts until it backs off.
+agnhost_pod e2e-health crasher no-such-command
+crash_seen() {
+    crash_pod=$(KUBECONFIG="${work}/health" kubectl -n e2e-health get pod crasher -o json 2> /dev/null) || return 1
+    printf '%s' "${crash_pod}" | jq -e '.status.containerStatuses[0].state.waiting.reason == "CrashLoopBackOff"' > /dev/null
+}
+until_true 300 "the health identity sees the pod crash-looping" crash_seen
+health_ready=$(KUBECONFIG="${work}/health" kubectl get --raw /readyz) ||
+    fail "the health identity cannot read the API server's readiness"
+[ "${health_ready}" = ok ] || fail "the API server is not ready: ${health_ready}"
+refused health get secrets -n kube-system
+refused health get pods --subresource=log -n e2e-health
+refused health create pods -n e2e-health
+refused health delete nodes
+refused health-logs list pods -n e2e-health
+refused health-logs get secrets -n kube-system
+# Raw, as kubectl logs would first read the pod, which this identity may not.
+crash_log=$(KUBECONFIG="${work}/health-logs" kubectl get --raw "/api/v1/namespaces/e2e-health/pods/crasher/log?previous=true") ||
+    fail "the logs identity cannot read the pod's log"
+printf '%s' "${crash_log}" | grep -q no-such-command || fail "the pod's log does not tell why it stopped: ${crash_log}"
+wl delete namespace e2e-health --wait=false
 
 step "the ingress controller serves a host name on the API address and every node"
 wl create namespace e2e-ingress

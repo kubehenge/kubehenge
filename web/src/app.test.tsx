@@ -8,7 +8,7 @@ import { ClusterList } from "./ClusterList";
 import { addonMemory, fieldProblems, problems, request, summary, withRoom, type Form } from "./create-form";
 import { fakeServer, held, reads, type Route } from "./fake-server";
 import { addressCount } from "./network";
-import type { Cluster, ClusterClass, Machine } from "./types";
+import type { Cluster, ClusterClass, ClusterHealth, Machine } from "./types";
 
 const rke2: ClusterClass = {
   name: "kubehenge-rke2",
@@ -96,6 +96,21 @@ const web: Cluster = {
   pool: "/pool/kubehenge/default.web",
   allowed: { change: true, kubeconfig: false },
   machines: [],
+};
+
+const quietHealth: ClusterHealth = {
+  read: new Date().toISOString(),
+  verdict: "healthy",
+  attention: [],
+  nodes: { items: [] },
+  pods: { items: [] },
+  volumes: { items: [] },
+  addons: { items: [] },
+  pools: { items: [] },
+  controlPlane: { conditions: [] },
+  healthChecks: { items: [] },
+  events: { items: [] },
+  logs: false,
 };
 
 const workerCores = (): HTMLElement => within(screen.getByRole("group", { name: "Workers" })).getByLabelText("Cores");
@@ -397,6 +412,7 @@ describe("clusters", () => {
           conditions: [{ type: "ControlPlaneAvailable", status: "False", since: new Date().toISOString() }],
         },
       },
+      "GET /api/clusters/default/web/health": { body: quietHealth },
     };
     fakeServer(routes);
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -404,8 +420,11 @@ describe("clusters", () => {
     render(<App />);
     await expect(screen.findByText("No machines yet.")).resolves.toBeInTheDocument();
     routes["GET /api/clusters/default/web"] = { status: 404, body: { error: "no such cluster" } };
-    await user.click(screen.getByRole("link", { name: "Conditions" }));
-    expect(screen.getByRole("cell", { name: /^Needs attention:\s*ControlPlaneAvailable$/u })).toBeInTheDocument();
+    // The cluster's own conditions close its health page.
+    await user.click(screen.getByRole("link", { name: "Health" }));
+    await expect(
+      screen.findByRole("cell", { name: /^Needs attention:\s*ControlPlaneAvailable$/u }),
+    ).resolves.toBeInTheDocument();
     await user.click(screen.getByRole("link", { name: "Summary" }));
     // Nothing moves in it, so its page asks again only every 30 s.
     await act(() => vi.advanceTimersByTimeAsync(5000));

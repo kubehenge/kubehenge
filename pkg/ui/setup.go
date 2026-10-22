@@ -285,7 +285,8 @@ func (s *Server) templateRemover(ticket *pve.Ticket) func(context.Context, *appl
 		if err != nil {
 			return fmt.Errorf("listing the templates: %w", err)
 		}
-		for _, m := range members {
+		for i := range members {
+			m := &members[i]
 			j.Add(fmt.Sprintf("Deleting template %s (VM %d)", m.Name, m.VMID))
 			if err := s.Accounts.DeleteVM(ctx, ticket, m.Node, m.VMID); err != nil {
 				return fmt.Errorf("deleting template %d: %w", m.VMID, err)

@@ -109,6 +109,153 @@ export interface Machine {
   created: string;
 }
 
+/** A section of the health page from one source: what was read, or why it was not. */
+export interface HealthSection<T> {
+  items: T[];
+  error?: string;
+  /** The list stopped at the interface's limit. */
+  truncated?: boolean;
+}
+
+export type Severity = "error" | "warning" | "progress";
+
+export interface Attention {
+  severity: Severity;
+  /** The part of the page with the details. */
+  section: string;
+  what: string;
+  message?: string;
+  since?: string;
+  pod?: { namespace: string; name: string };
+}
+
+export interface HealthVM {
+  id: number;
+  node: string;
+  status: string;
+  /** The share of its cores in use, from 0 to 1. */
+  cpu: number;
+  cores: number;
+  memory: number;
+  maxMemory: number;
+  /** Seconds. */
+  uptime: number;
+  /** The CPU load of the last hour, a point a minute; null where it did not run. */
+  load?: (number | null)[];
+}
+
+export interface HealthNode {
+  name: string;
+  machine?: string;
+  role: "control-plane" | "worker";
+  pool?: string;
+  /** Whether the node was read inside the cluster; the fields up to pods need it. */
+  joined: boolean;
+  ready: boolean;
+  since?: string;
+  message?: string;
+  pressure?: string[];
+  unschedulable?: boolean;
+  taints?: string[];
+  kubelet?: string;
+  /** Millicores the pods on it ask for, of what it offers. */
+  cpu?: { requested: number; allocatable: number };
+  /** Bytes the pods on it ask for, of what it offers. */
+  memory?: { requested: number; allocatable: number };
+  pods: number;
+  vm?: HealthVM;
+}
+
+export interface UnwellPod {
+  namespace: string;
+  name: string;
+  node?: string;
+  severity: Severity;
+  reason: string;
+  message?: string;
+  restarts: number;
+  since?: string;
+  /** The unwell container first. */
+  containers: string[];
+}
+
+export interface PendingVolume {
+  namespace: string;
+  name: string;
+  storageClass?: string;
+  since: string;
+}
+
+export interface AddonRelease {
+  name: string;
+  release: string;
+  namespace?: string;
+  chart: string;
+  version?: string;
+  status: string;
+  revision?: number;
+  ready: boolean;
+  message?: string;
+  since?: string;
+}
+
+export interface PoolState {
+  name: string;
+  desired: number;
+  ready: number;
+  available: number;
+  upToDate: number;
+  rollingOut: boolean;
+  message?: string;
+}
+
+export interface HealthCheck {
+  name: string;
+  expected: number;
+  healthy: number;
+  /** Whether it may replace machines now; it stops when too many fail. */
+  allowed: boolean;
+  message?: string;
+  remediating?: string[];
+}
+
+export interface HealthEvent {
+  source: "workload" | "management";
+  type: string;
+  reason: string;
+  message: string;
+  object: string;
+  count: number;
+  last: string;
+}
+
+export interface ClusterHealth {
+  read: string;
+  verdict: "healthy" | "changing" | "degraded" | "unreachable";
+  attention: Attention[];
+  /** Why nothing from inside the cluster shows, when nothing does. */
+  workload?: string;
+  nodes: HealthSection<HealthNode>;
+  pods: HealthSection<UnwellPod>;
+  volumes: HealthSection<PendingVolume>;
+  addons: HealthSection<AddonRelease>;
+  pools: HealthSection<PoolState>;
+  controlPlane: { kind?: string; conditions: Condition[]; error?: string };
+  healthChecks: HealthSection<HealthCheck>;
+  events: HealthSection<HealthEvent>;
+  /** Why the nodes show no figures from Proxmox VE, when they show none. */
+  vms?: string;
+  /** Whether the user may read the pods' logs here: Sys.Modify on the cluster's pool. */
+  logs: boolean;
+}
+
+export interface PodLogs {
+  container: string;
+  /** The lines are from the container's last run, as a crash-looping one has none of its own yet. */
+  previous: boolean;
+  lines: string[];
+}
+
 export interface Cluster {
   namespace: string;
   name: string;

@@ -74,6 +74,8 @@ kubectl -n clusters get helmchartproxies,helmreleaseproxies
 
 ### Inside a cluster
 
+The cluster's **Health** view in the interface is the first place to look: it lists what needs attention, most serious first. When it says Kubehenge's read-only access has not been set up, or ran out, its controller has not reached the cluster's API server; the controller's log names the cluster and the reason (`health-identity`).
+
 With the cluster's admin kubeconfig ([clusters.md](clusters.md#download-a-kubeconfig)): the cloud controller manager and the CSI plugin's controller run in `kube-system`, on the control-plane nodes.
 
 ```sh

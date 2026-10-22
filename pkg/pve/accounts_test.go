@@ -123,9 +123,16 @@ func fakeTicketAPI(t *testing.T) *Accounts {
 			return
 		}
 		reply(w, []map[string]any{{"poolid": "kubehenge/clusters.web", "members": []map[string]any{
-			{"vmid": 170, "node": "two", "type": "qemu", "name": "web-cp-a"},
+			{"vmid": 170, "node": "two", "type": "qemu", "name": "web-cp-a", "status": "running", "cpu": 0.25, "maxcpu": 4, "mem": 2147483648, "maxmem": 8589934592, "uptime": 3600},
 			{"node": "two", "type": "storage", "storage": "local"},
 		}}})
+	})
+	// A VM started half way through the hour: the steps before it have no load.
+	mux.HandleFunc("GET /api2/json/nodes/two/qemu/170/rrddata", func(w http.ResponseWriter, r *http.Request) {
+		if q := r.URL.Query(); q.Get("timeframe") != "hour" || q.Get("cf") != "AVERAGE" {
+			t.Errorf("load asked for with %s", r.URL.RawQuery)
+		}
+		reply(w, []map[string]any{{"time": 1760000000}, {"time": 1760000060, "cpu": 0.5, "maxcpu": 4}})
 	})
 	mux.HandleFunc("GET /api2/json/access/domains", func(w http.ResponseWriter, _ *http.Request) {
 		reply(w, []map[string]any{{"realm": "pve", "type": "pve", "default": 1}, {"realm": "pam", "type": "pam"}})
@@ -241,12 +248,24 @@ func TestMembersOfANestedPool(t *testing.T) {
 	a, ctx := fakeTicketAPI(t), context.Background()
 	tk := &Ticket{Username: "alice@pve", Ticket: "PVE:alice@pve:1"}
 	got, err := a.PoolMembers(ctx, tk, "kubehenge/clusters.web")
-	want := []Member{{VMID: 170, Node: "two", Type: "qemu", Name: "web-cp-a"}}
+	want := []Member{{
+		VMID: 170, Node: "two", Type: "qemu", Name: "web-cp-a",
+		Status: "running", CPU: 0.25, Cores: 4, Memory: 2 << 30, MaxMem: 8 << 30, Uptime: 3600,
+	}}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("PoolMembers = %+v, %v; want %+v", got, err, want)
 	}
 	if got, err := a.PoolMembers(ctx, tk, "kubehenge/clusters.gone"); err != nil || got != nil {
 		t.Fatalf("missing pool: %+v, %v; want none", got, err)
+	}
+}
+
+func TestVMLoad(t *testing.T) {
+	t.Parallel()
+	a := fakeTicketAPI(t)
+	got, err := a.VMLoad(context.Background(), &Ticket{Username: "alice@pve", Ticket: "PVE:alice@pve:1"}, "two", 170)
+	if err != nil || len(got) != 2 || got[0].CPU != nil || got[1].CPU == nil || *got[1].CPU != 0.5 || got[1].Time != 1760000060 {
+		t.Fatalf("VMLoad = %+v, %v", got, err)
 	}
 }
 

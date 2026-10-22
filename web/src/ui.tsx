@@ -216,7 +216,7 @@ export function abnormal(type: string, status: string): boolean {
 }
 
 /** Status shows a state as Proxmox VE does: an icon, then the text. */
-export function Status({ state, text }: { state: Health | "idle"; text: string }): JSX.Element {
+export function Status({ state, text }: { state: Health | "idle" | "warning"; text: string }): JSX.Element {
   return <span className={`status status-${state}`}>{text}</span>;
 }
 

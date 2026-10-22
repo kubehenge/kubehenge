@@ -406,8 +406,9 @@ func (o *controllerOptions) newManager(scheme *runtime.Scheme, extensions *serve
 }
 
 // setUpControllers adds the reconciler, the registrar, what taints control-plane nodes, what
-// approves kubeadm kubelets' serving certificates and, when some distribution's providers run only
-// while used, the controller that starts and stops them.
+// approves kubeadm kubelets' serving certificates, what keeps the interface's health identities in
+// the clusters and, when some distribution's providers run only while used, the controller that
+// starts and stops them.
 func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *provisioner.Registrar, distributions *provisioner.Distributions) error {
 	o.r.Client = mgr.GetClient()
 	o.r.Registrar = registrar
@@ -426,6 +427,10 @@ func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *pro
 	approver := &provisioner.ServingCertApprover{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Remotes: registrar.Remotes}
 	if err := approver.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the kubelet serving certificates: %w", err)
+	}
+	health := &provisioner.HealthIdentity{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Remotes: registrar.Remotes}
+	if err := health.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("the health identity: %w", err)
 	}
 	if len(distributions.Providers) == 0 {
 		return nil

@@ -448,6 +448,10 @@ output.notice {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Ccircle cx='6' cy='6' r='5' stroke='%23909090' stroke-width='1.6' fill='none'/%3E%3C/svg%3E");
 }
 
+.status-warning::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M6 .6L11.7 11.2H.3z' fill='%23d9a400'/%3E%3Cpath d='M6 4.2v3.5M6 8.6v1.3' stroke='%231f1f1f' stroke-width='1.5'/%3E%3C/svg%3E");
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -742,4 +746,146 @@ details.advanced > summary {
   gap: 6px;
   padding: 8px 12px;
   border-top: 1px solid var(--border);
+}
+
+/* The health page */
+
+.verdict {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 10px;
+}
+
+.verdict .status {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* Tiles sum up the page, each linking to its part; a coloured edge says how it stands, beside the
+   icon that says it without colour. */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  height: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--border);
+  background: var(--panel-head);
+  color: var(--text);
+}
+
+.tile:hover {
+  background: var(--row-hover);
+  text-decoration: none;
+}
+
+.tile-ok {
+  border-left-color: #1b7f2c;
+}
+
+.tile-warning,
+.tile-progress {
+  border-left-color: var(--progress);
+}
+
+.tile-error {
+  border-left-color: var(--error);
+}
+
+.tile-label,
+.tile-detail {
+  color: var(--muted);
+}
+
+.tile-detail {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.box h4 {
+  margin: 14px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.section-head h3 {
+  margin: 0;
+}
+
+.filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.filter select {
+  width: auto;
+}
+
+/* A name breaks nowhere; its table scrolls instead in a narrow window. */
+.grid td.nowrap {
+  white-space: nowrap;
+}
+
+/* A VM's use beside its figure: a line for the last hour's CPU, a bar for memory. */
+.use {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.sparkline {
+  flex: none;
+  width: 60px;
+  height: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sparkline path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.bar {
+  flex: none;
+  width: 60px;
+  height: 8px;
+}
+
+/* Log lines keep their own breaks, so their dialog takes more of a wide screen. */
+.dialog:has(.pod-log) {
+  width: min(1000px, 96vw);
+}
+
+.pod-log {
+  max-height: 60vh;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 8px;
+  background: var(--panel-head);
+  border: 1px solid var(--border);
+  white-space: pre;
 }
