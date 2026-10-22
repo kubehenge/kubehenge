@@ -538,6 +538,11 @@ fieldset.choices .check {
   margin: 2px 0;
 }
 
+/* The choices sit closer together, so their notes need no pulling up. */
+fieldset.choices .check + .hint {
+  margin-top: 0;
+}
+
 .check.inline {
   display: inline-flex;
   margin: 4px 12px 4px 0;

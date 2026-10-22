@@ -200,4 +200,102 @@ describe("a cluster's options", () => {
       variables: { loadBalancer: { enabled: false, implementation: "kube-vip", addresses: ["10.0.0.100-10.0.0.120"] } },
     });
   });
+
+  it("keep logs only beside monitoring", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const calls = fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: cluster },
+      "PATCH /api/clusters/clusters/web": { body: cluster },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await expect(screen.findByRole("row", { name: /Logs/u })).resolves.toHaveTextContent("Off");
+    await user.click(screen.getByRole("button", { name: "Edit logs" }));
+    const dialog = screen.getByRole("dialog", { name: "Logs" });
+    const keep = within(dialog).getByLabelText("Keep logs");
+    expect(keep).toBeDisabled();
+    expect(keep).toHaveAccessibleDescription(/need monitoring on/u);
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(calls.map((c) => c.key)).not.toContain("PATCH /api/clusters/clusters/web");
+  });
+
+  it("change how logs are collected and kept, the volume only growing", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const logged = {
+      ...cluster,
+      variables: {
+        ...cluster.variables,
+        monitoring: { enabled: true },
+        logs: { enabled: true, collector: "node", retentionDays: 7, sizeGiB: 10 },
+      },
+    };
+    const calls = fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: logged },
+      "PATCH /api/clusters/clusters/web": { body: logged },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await expect(screen.findByRole("row", { name: /Logs/u })).resolves.toHaveTextContent(
+      "On, collected on every node, 7 days in 10 GiB",
+    );
+    await user.click(screen.getByRole("button", { name: "Edit logs" }));
+    const dialog = screen.getByRole("dialog", { name: "Logs" });
+    const save = within(dialog).getByRole("button", { name: "Save" });
+    expect(save).toBeDisabled();
+    const node = within(dialog).getByLabelText("On every node (recommended)");
+    expect(node).toBeChecked();
+    expect(node).toHaveAccessibleDescription(/privileged logging-node namespace/u);
+    const api = within(dialog).getByLabelText("Through the Kubernetes API");
+    expect(api).toHaveAccessibleDescription(/no journals and no audit log/u);
+    await user.click(api);
+    const size = within(dialog).getByLabelText("Loki's volume (GiB)");
+    await user.clear(size);
+    await user.type(size, "5");
+    expect(size).toHaveAccessibleDescription(/only grows: at least 10 GiB/u);
+    expect(save).toBeDisabled();
+    await user.clear(size);
+    await user.type(size, "20");
+    await user.click(save);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: { logs: { enabled: true, collector: "api", retentionDays: 7, sizeGiB: 20 } },
+    });
+  });
+
+  it("switch logs off with monitoring", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const logged = {
+      ...cluster,
+      variables: {
+        ...cluster.variables,
+        monitoring: { enabled: true },
+        logs: { enabled: true, collector: "node", retentionDays: 7, sizeGiB: 10 },
+      },
+    };
+    const calls = fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: logged },
+      "PATCH /api/clusters/clusters/web": { body: logged },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Edit monitoring" }));
+    const dialog = screen.getByRole("dialog", { name: "Monitoring" });
+    expect(within(dialog).queryByRole("status")).not.toBeInTheDocument();
+    await user.click(within(dialog).getByLabelText("Install monitoring"));
+    expect(within(dialog).getByRole("status")).toHaveTextContent(/Logs are switched off with monitoring/u);
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: {
+        monitoring: { enabled: false },
+        logs: { enabled: false, collector: "node", retentionDays: 7, sizeGiB: 10 },
+      },
+    });
+  });
 });

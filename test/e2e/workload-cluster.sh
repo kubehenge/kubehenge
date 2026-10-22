@@ -4,8 +4,9 @@
 # Pod Security's restricted level, check sign-in through it, its nodes against the benchmark, its
 # cloud controller manager, load balancer and persistent volumes, what the health page's read-only
 # identities may see in it, switch
-# Headlamp, monitoring (every component scraped with its server verified), Kyverno and Istio (a
-# namespace's traffic over mutual TLS) on and off, and the load balancer off,
+# Headlamp, monitoring (every component scraped with its server verified), logs (a pod's lines, and
+# with the node collector the journal and the audit log, read in Loki through Grafana), Kyverno and
+# Istio (a namespace's traffic over mutual TLS) on and off, and the load balancer off,
 # scale its workers up and down, upgrade it by one minor version (for RKE2 and k3s with the first
 # new server's join refused at first), replace a node that dies, delete it, and check that nothing
 # of it is left on Proxmox VE.
@@ -57,9 +58,11 @@ suffix=$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')
 name=e2e-${distribution}-${suffix}
 ns=${name}
 issuer_pid=
+grafana_pid=
 cleanup() {
     status=$?
     [ -z "${issuer_pid}" ] || kill "${issuer_pid}" 2> /dev/null || true
+    [ -z "${grafana_pid}" ] || kill "${grafana_pid}" 2> /dev/null || true
     if [ "${status}" -ne 0 ]; then
         printf '\nleaving cluster %s/%s for inspection; delete it with: kubectl delete namespace %s\n' "${ns}" "${name}" "${ns}"
     fi
@@ -193,7 +196,7 @@ worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq 
     (.metadata.annotations["kubehenge.dev/addon-memory"] | fromjson) as $addon
     | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
     | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
-        $node.worker + $addon.headlamp + $addon.monitoring + $addon.kyverno + $addon.istio + $addon.loadBalancer + $addon.certManager + $addon.rancherAgent]
+        $node.worker + $addon.headlamp + $addon.monitoring + $addon.logs + $addon.kyverno + $addon.istio + $addon.loadBalancer + $addon.certManager + $addon.rancherAgent]
     | max')}
 echo "workers with ${worker_memory} MiB of memory"
 cat > "${work}/cluster.yaml" << EOF
@@ -667,6 +670,112 @@ case ${pod_security} in
     *) ;;
 esac
 
+step "logs switched on, collected on every node"
+set_variable logs '{"enabled":true,"collector":"node","retentionDays":7,"sizeGiB":10}'
+until_true 900 "Loki installed" sh -c "KUBECONFIG=${work}/workload kubectl -n logging get statefulset/loki >/dev/null 2>&1"
+wl -n logging rollout status statefulset/loki --timeout=10m
+until_true 600 "Alloy installed on the nodes" sh -c "KUBECONFIG=${work}/workload kubectl -n logging-node get daemonset/alloy-node >/dev/null 2>&1"
+wl -n logging-node rollout status daemonset/alloy-node --timeout=10m
+wl -n logging rollout status deployment/alloy --timeout=10m
+# Grafana reads Loki with its client certificate once its Deployment mounts it, which replaces its pod.
+grafana_deployment=deployment/kube-prometheus-stack-grafana
+grafana_mounts() {
+    wl -n monitoring get "${grafana_deployment}" -o json |
+        jq -e 'any(.spec.template.spec.volumes[]; .secret.secretName == "kubehenge-loki-client")' > /dev/null
+}
+until_true 600 "Grafana mounts its Loki client certificate" grafana_mounts
+wl -n monitoring rollout status "${grafana_deployment}" --timeout=10m
+grafana_user=$(wl -n monitoring get secret kube-prometheus-stack-grafana -o jsonpath='{.data.admin-user}' | base64 -d)
+grafana_password=$(wl -n monitoring get secret kube-prometheus-stack-grafana -o jsonpath='{.data.admin-password}' | base64 -d)
+grafana_port=$((20000 + $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % 10000))
+KUBECONFIG="${work}/workload" kubectl -n monitoring port-forward "${grafana_deployment}" "${grafana_port}:3000" > "${work}/grafana-forward.log" 2>&1 &
+grafana_pid=$!
+# grafana <path> [curl options...]: Grafana's API, as its admin.
+grafana() {
+    grafana_path=$1
+    shift
+    curl -sS --fail --max-time 30 -u "${grafana_user}:${grafana_password}" "$@" "http://127.0.0.1:${grafana_port}${grafana_path}"
+}
+until_true 60 "Grafana reached" grafana /api/health
+# shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+loki_healthy() { health=$(grafana /api/datasources/uid/loki/health) && printf '%s' "${health}" | jq -e '.status == "OK"' > /dev/null; }
+until_true 300 "Grafana reaches Loki with its client certificate" loki_healthy
+# lines <LogQL query> <text>: how many of the last hour's lines the query finds in Loki through
+# Grafana's Loki data source hold the text.
+lines() {
+    query=$(jq -cn --arg e "$1" '{from: "now-1h", to: "now", queries: [{refId: "A", datasource: {uid: "loki", type: "loki"}, expr: $e, queryType: "range", maxLines: 1000}]}')
+    # shellcheck disable=SC2310 # its failure is returned.
+    found=$(grafana /api/ds/query -X POST -H 'Content-Type: application/json' -d "${query}") || return 1
+    printf '%s' "${found}" | jq --arg t "$2" '[.results.A.frames[]?.data.values[]? | arrays | .[] | strings | select(contains($t))] | length'
+}
+# shellcheck disable=SC2310 # polled with set -e off, so a failed query is only a retry.
+logged() { count=$(lines "$1" "$2") && [ "${count}" -ge 1 ]; }
+# Without a client certificate or a token Loki's proxy lets nobody read, through the API server's
+# service proxy no more than from anywhere else.
+# shellcheck disable=SC2310 # the refusal is the answer looked for.
+wl get --request-timeout=20s --raw /api/v1/namespaces/logging/services/https:loki:3100/proxy/loki/api/v1/labels > /dev/null 2>&1 &&
+    fail "Loki answers a client it does not know"
+wl create namespace e2e-logs
+# log_pod <name> <line> <ports JSON> <then>: a pod at Pod Security's restricted level that writes the
+# line, declares the ports and then runs the command.
+log_pod() {
+    wl -n e2e-logs apply -f - << EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: $1
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: log
+      image: ${agnhost}
+      command: [sh, -c, "echo $2; $4"]
+      ports: $3
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+EOF
+}
+# A pod gone again within a second: the node collector reads its log from the node.
+short_line=e2e-short-lived-${suffix}
+log_pod short "${short_line}" '[]' 'true'
+wl -n e2e-logs wait --for=jsonpath='{.status.phase}'=Succeeded pod/short --timeout=5m
+until_true 300 "the short-lived pod's line in Loki" logged '{namespace="e2e-logs", pod="short", container="log", job="pods"}' "${short_line}"
+until_true 300 "the nodes' journals in Loki" logged '{job="journal"}' ""
+# The API server audited the pod's creation, after the collector started reading the log.
+until_true 300 "the API server's audit log in Loki" logged '{job="audit"} |= "e2e-logs"' '"name":"short"'
+wl -n e2e-logs delete pod/short --wait --timeout=2m
+pod_security=$(wl label --dry-run=server --overwrite namespace logging pod-security.kubernetes.io/enforce=restricted 2>&1)
+case ${pod_security} in
+    *violate*) fail "Loki's and the events collector's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
+    *) ;;
+esac
+
+step "logs collected through the Kubernetes API instead"
+set_variable logs '{"enabled":true,"collector":"api","retentionDays":7,"sizeGiB":10}'
+until_true 600 "Alloy removed from the nodes" absent wl -n logging-node get daemonset/alloy-node
+wl -n logging rollout status deployment/alloy --timeout=10m
+# Two ports, which discovery gives the container once each: its line still arrives once.
+api_line=e2e-through-the-api-${suffix}
+log_pod ported "${api_line}" '[{"containerPort": 8080}, {"containerPort": 8081}]' 'exec /agnhost pause'
+wl -n e2e-logs wait --for=condition=Ready pod/ported --timeout=5m
+until_true 300 "the pod's line in Loki through the API" logged '{namespace="e2e-logs", pod="ported", job="pods"}' "${api_line}"
+# shellcheck disable=SC2310 # a failed query fails the step.
+count=$(lines '{namespace="e2e-logs", pod="ported", job="pods"}' "${api_line}") || fail "cannot query Loki"
+[ "${count}" = 1 ] || fail "the pod's line arrived ${count} times"
+wl delete namespace e2e-logs --wait --timeout=5m
+
+step "logs collected on every node again"
+set_variable logs '{"enabled":true,"collector":"node","retentionDays":7,"sizeGiB":10}'
+until_true 600 "Alloy installed on the nodes" sh -c "KUBECONFIG=${work}/workload kubectl -n logging-node get daemonset/alloy-node >/dev/null 2>&1"
+wl -n logging-node rollout status daemonset/alloy-node --timeout=10m
+
 step "pod security enforced, with Kyverno switched on"
 # privileged_pod <namespace>: asks the API server to admit a privileged pod, without creating it.
 privileged_pod() {
@@ -787,10 +896,21 @@ unpinned=$(printf '%s\n%s\n' "${images}" "${system_images}" | grep -v -e '@sha25
 
 step "every add-on switched off at once"
 set_variable headlamp '{"enabled":false}'
+# Logs go first: they need monitoring, which is refused off while they are on.
+# shellcheck disable=SC2310 # the refusal is the answer looked for.
+set_variable monitoring '{"enabled":false}' > /dev/null 2>&1 && fail "monitoring was switched off under logs"
+kill "${grafana_pid}" 2> /dev/null || true
+grafana_pid=
+set_variable logs '{"enabled":false,"collector":"node","retentionDays":7,"sizeGiB":10}'
 set_variable monitoring '{"enabled":false}'
 set_variable podSecurity '{"admission":"restricted","kyverno":"off"}'
 set_variable istio '{"enabled":false}'
 until_true 600 "Headlamp removed" absent wl -n headlamp get deployment/headlamp
+until_true 600 "Loki removed" absent wl -n logging get statefulset/loki
+until_true 300 "Alloy removed" absent wl -n logging get deployment/alloy
+until_true 300 "Alloy removed from the nodes" absent wl -n logging-node get daemonset/alloy-node
+# shellcheck disable=SC2310 # a volume that cannot be read fails the step.
+wl -n logging get pvc/loki-storage > /dev/null || fail "Loki's volume went with logs"
 until_true 900 "monitoring removed" absent wl -n monitoring get "${prometheus}"
 until_true 300 "metrics proxies removed" absent wl -n kube-system get daemonset/kubehenge-etcd-metrics
 until_true 900 "Kyverno removed" absent wl -n kyverno get deployment/kyverno-admission-controller

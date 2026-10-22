@@ -2,12 +2,41 @@ import type { JSX } from "react";
 
 import { MeshPeersField, meshHint } from "./ClusterMesh";
 import { modeChoices, upgradeModes } from "./ClusterUpgrades";
-import { addonMemory, machineLeast, offersMesh, rancherMinimumCores, variable } from "./create-form";
+import { addonMemory, logsChosen, machineLeast, offersMesh, rancherMinimumCores, variable } from "./create-form";
 import type { StepProps } from "./CreateSteps";
+import { LogsFields, logsHint, logsNeedMonitoring } from "./Logs";
 import { PodSecurityFields, cisHint } from "./PodSecurity";
 import type { ClusterClass } from "./types";
 import { Field, browserZone, istioHint, registerHint } from "./ui";
 import { oneOf } from "./values";
+
+// LogsAddOn keeps logs, offered only beside monitoring, whose Grafana reads them.
+function LogsAddOn({ form, set }: Pick<StepProps, "form" | "set">): JSX.Element {
+  return (
+    <>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={logsChosen(form)}
+          disabled={!form.monitoring}
+          aria-describedby="logs-hint"
+          onChange={(e) => set("logs", { ...form.logs, enabled: e.target.checked })}
+        />{" "}
+        Keep logs
+      </label>
+      <p className="hint" id="logs-hint">
+        {logsHint}
+        {!form.monitoring && ` ${logsNeedMonitoring}`}
+      </p>
+      {logsChosen(form) && (
+        <fieldset className="group">
+          <legend>Logs</legend>
+          <LogsFields value={form.logs} onChange={(l) => set("logs", l)} />
+        </fieldset>
+      )}
+    </>
+  );
+}
 
 export function AddOnsStep({
   form,
@@ -78,6 +107,7 @@ export function AddOnsStep({
           )}
         </Field>
       )}
+      {variable(cls, "logs") && <LogsAddOn form={form} set={set} />}
       {variable(cls, "cis") && (
         <>
           <label className="check">

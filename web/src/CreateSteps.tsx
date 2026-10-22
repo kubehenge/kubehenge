@@ -1,6 +1,6 @@
 import type { JSX } from "react";
 
-import { controlPlaneSizes, maxWorkers } from "./ClusterDetail";
+import { controlPlaneSizes } from "./ClusterDetail";
 import {
   machineLeast,
   memoryStepMiB,
@@ -16,7 +16,7 @@ import { addressBits } from "./network";
 import { OIDCProviders } from "./OIDCProviders";
 import { HAField, PlacementFields, type HARulesRead } from "./Placement";
 import type { Bridge, ClusterClass, PveNode, Storage, Versions } from "./types";
-import { Field, bytes, cniName, distributionName, filled, sentence } from "./ui";
+import { Field, bytes, cniName, distributionName, filled, maxWorkers, sentence } from "./ui";
 
 // Number fields keep an empty or unfinished entry as NaN, which the checks refuse, rather than
 // turning it into 0 under the cursor.

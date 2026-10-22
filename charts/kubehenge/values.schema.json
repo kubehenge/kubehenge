@@ -94,7 +94,7 @@
     "addons": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["headlamp", "rancher", "monitoring", "kyverno", "kyvernoPolicies", "istio", "istioBase", "istioCNI", "istioZtunnel", "certManager", "cloudControllerManager", "csiPlugin", "cilium", "calico", "traefik", "metallb", "kubeVip", "kubeVipCloudProvider"],
+      "required": ["headlamp", "rancher", "monitoring", "loki", "alloy", "kyverno", "kyvernoPolicies", "istio", "istioBase", "istioCNI", "istioZtunnel", "certManager", "cloudControllerManager", "csiPlugin", "cilium", "calico", "traefik", "metallb", "kubeVip", "kubeVipCloudProvider"],
       "properties": {
         "headlamp": { "$ref": "#/$defs/chartOnly" },
         "rancher": {
@@ -125,6 +125,18 @@
           "properties": {
             "kubeRBACProxy": {
               "description": "kube-rbac-proxy's image by registry, repository, tag and digest.",
+              "$ref": "#/$defs/pinnedImage"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "loki": { "$ref": "#/$defs/chartOnly" },
+        "alloy": {
+          "allOf": [{ "$ref": "#/$defs/chart" }],
+          "required": ["image"],
+          "properties": {
+            "image": {
+              "description": "Grafana Alloy's image by registry, repository, tag and digest.",
               "$ref": "#/$defs/pinnedImage"
             }
           },

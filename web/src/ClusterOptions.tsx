@@ -3,6 +3,7 @@ import { useId, useState, type JSX } from "react";
 import { ClusterMeshDialog, meshText, runsCilium } from "./ClusterMesh";
 import { UpgradesDialog, describe, upgradePolicy } from "./ClusterUpgrades";
 import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBalancer";
+import { LogsDialog, logsOf, logsText } from "./Logs";
 import { OIDCProviders, cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import { HADialog, PlacementDialog, haOn, haText, placeOf, placeText, useHAOffered } from "./Placement";
 import { PodSecurityFields, cisText, enforced, podSecurityOf, podSecurityText } from "./PodSecurity";
@@ -19,6 +20,7 @@ import {
   registeredWithRancher,
   useChange,
 } from "./ui";
+// oxlint-disable-next-line import/max-dependencies -- the options view shows and opens every feature's own setting
 import { flag, record, text, texts } from "./values";
 
 /** What the Options view changes, each through a dialog of its own. */
@@ -27,6 +29,7 @@ export type OptionAction =
   | "ha"
   | "headlamp"
   | "monitoring"
+  | "logs"
   | "podSecurity"
   | "istio"
   | "clusterMesh"
@@ -48,6 +51,9 @@ export function OptionDialog({
     case "headlamp":
     case "monitoring": {
       return <HostedAddonDialog cluster={c} addon={action} onClose={onClose} />;
+    }
+    case "logs": {
+      return <LogsDialog cluster={c} onClose={onClose} />;
     }
     case "podSecurity": {
       return <PodSecurityDialog cluster={c} onClose={onClose} />;
@@ -160,6 +166,7 @@ export function Options({
       action: "monitoring",
       name: "monitoring",
     },
+    { label: "Logs", value: logsText(logsOf(c.variables["logs"])), action: "logs", name: "logs" },
     {
       label: "Pod security",
       value: podSecurityText(podSecurity),
@@ -373,12 +380,17 @@ function HostedAddonDialog({
   }
   const changed = enabled !== (current.enabled === true) || (enabled && hostname !== (current.hostname ?? ""));
   const hint = useId();
+  // Logs are read in monitoring's Grafana, so they go with it.
+  const heldLogs = record(c.variables["logs"]);
+  const logsGo = addon === "monitoring" && !enabled && logsOf(heldLogs).enabled;
   return (
     <Dialog
       title={words.title}
       onClose={onClose}
       onSubmit={() => {
-        void send({ variables: { [addon]: value } });
+        void send({
+          variables: logsGo ? { [addon]: value, logs: { ...heldLogs, enabled: false } } : { [addon]: value },
+        });
       }}
       actions={
         <>
@@ -407,6 +419,11 @@ function HostedAddonDialog({
         <Field label={words.hostLabel} hint={words.hostHint}>
           {(id) => <input id={id} value={hostname} onChange={(e) => setHostname(e.target.value.trim())} />}
         </Field>
+      )}
+      {logsGo && (
+        <output className="warning notice">
+          Logs are switched off with monitoring: they are read in its Grafana. Loki&apos;s volume stays.
+        </output>
       )}
       <ErrorBox message={error} />
     </Dialog>

@@ -104,7 +104,7 @@ func (i Image) String() string {
 // the node's address that takes only Prometheus's client certificate. On k3s every component runs
 // in the one process whose kubelet already serves all their metrics, as Rancher scrapes it, so the
 // chart's rules look for them in the kubelet's job. The chart's long-lived token goes only where a
-// component asks for one, never over plain HTTP.
+// component asks for one, never over plain HTTP. With logs on, Grafana reads Loki too.
 func monitoringValues(distribution templates.Distribution, proxy Image, addons *Addons) map[string]any {
 	m := addons.Monitoring
 	values := map[string]any{
@@ -144,11 +144,17 @@ func monitoringValues(distribution templates.Distribution, proxy Image, addons *
 		inKubelet := map[string]any{"jobNameOverride": "kubelet", "service": off, "serviceMonitor": off}
 		values["kubeControllerManager"], values["kubeScheduler"], values["kubeProxy"] = inKubelet, inKubelet, inKubelet
 	}
+	grafana := map[string]any{}
 	if m.Hostname != "" {
-		values["grafana"] = map[string]any{
-			"ingress":     map[string]any{"enabled": true, "hosts": []any{m.Hostname}, "tls": []any{ingressTLS(m.Hostname, m.TLSSecret)}},
-			"grafana.ini": map[string]any{"server": map[string]any{"root_url": "https://" + m.Hostname}},
-		}
+		grafana["ingress"] = map[string]any{"enabled": true, "hosts": []any{m.Hostname}, "tls": []any{ingressTLS(m.Hostname, m.TLSSecret)}}
+		grafana["grafana.ini"] = map[string]any{"server": map[string]any{"root_url": "https://" + m.Hostname}}
+	}
+	if addons.logsOn() {
+		grafana["additionalDataSources"] = []any{lokiDataSource()}
+		grafana["extraSecretMounts"] = []any{grafanaLokiMount()}
+	}
+	if len(grafana) > 0 {
+		values["grafana"] = grafana
 	}
 	return values
 }
@@ -194,17 +200,21 @@ func claim(size string) map[string]any {
 	}}}
 }
 
+// serverCertificate is a certificate for a server's names, from the metrics CA.
+func serverCertificate(names ...string) map[string]any {
+	return map[string]any{"dnsNames": names, "usages": []any{"server auth", "digital signature"}}
+}
+
+// clientCertificate is a certificate a client shows a kube-rbac-proxy, which names it user.
+func clientCertificate(user string) map[string]any {
+	return map[string]any{"commonName": user, "usages": []any{"client auth", "digital signature"}}
+}
+
 // metricsManifests are what the chart does not bring: the metrics CA and certificates, the
 // proxies and their rights, and node-exporter's privileged namespace. They are part of the
 // release, so they go when monitoring does; until cert-manager serves, the release fails and the
 // Add-on Provider for Helm tries it again.
 func metricsManifests(distribution templates.Distribution, proxy Image, addons *Addons) []any {
-	server := func(names ...string) map[string]any {
-		return map[string]any{"dnsNames": names, "usages": []any{"server auth", "digital signature"}}
-	}
-	client := func() map[string]any {
-		return map[string]any{"commonName": metricsUser, "usages": []any{"client auth", "digital signature"}}
-	}
 	privileged := map[string]string{}
 	for _, mode := range []string{"enforce", "audit", "warn"} {
 		privileged["pod-security.kubernetes.io/"+mode] = "privileged"
@@ -219,13 +229,13 @@ func metricsManifests(distribution templates.Distribution, proxy Image, addons *
 			"isCA": true, "commonName": metricsIssuer, "duration": "87600h",
 		}),
 		issuer(metricsIssuer, map[string]any{"ca": map[string]any{"secretName": metricsIssuer + "-ca"}}),
-		certificate(metav1.NamespaceSystem, metricsProxyTLS, metricsIssuer, server(
+		certificate(metav1.NamespaceSystem, metricsProxyTLS, metricsIssuer, serverCertificate(
 			etcdMetrics+"."+metav1.NamespaceSystem+".svc", kubeProxyMetrics+"."+metav1.NamespaceSystem+".svc",
 			controllerMetrics+"."+metav1.NamespaceSystem+".svc", schedulerMetrics+"."+metav1.NamespaceSystem+".svc",
 		)),
-		certificate(nodeExporterNamespace, nodeExporter+"-tls", metricsIssuer, server(nodeExporter+"."+nodeExporterNamespace+".svc")),
-		certificate(monitoringAddon, metricsClientSecret, metricsIssuer, client()),
-		certificate(nodeExporterNamespace, metricsClientSecret, metricsIssuer, client()),
+		certificate(nodeExporterNamespace, nodeExporter+"-tls", metricsIssuer, serverCertificate(nodeExporter+"."+nodeExporterNamespace+".svc")),
+		certificate(monitoringAddon, metricsClientSecret, metricsIssuer, clientCertificate(metricsUser)),
+		certificate(nodeExporterNamespace, metricsClientSecret, metricsIssuer, clientCertificate(metricsUser)),
 		&rbacv1.ClusterRole{
 			APIVersion: rbacv1.SchemeGroupVersion.String(), Kind: "ClusterRole", Name: metricsIssuer,
 			Rules: []rbacv1.PolicyRule{{NonResourceURLs: []string{"/metrics"}, Verbs: []string{"get"}}},
@@ -256,6 +266,9 @@ func metricsManifests(distribution templates.Distribution, proxy Image, addons *
 			Subjects: []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: metricsProxyAccount, Namespace: metav1.NamespaceSystem}},
 		},
 		metricsProxy(etcdMetrics, etcdMetricsPort, "http", &controlPlaneAffinity, proxy),
+	}
+	if addons.logsOn() {
+		out = append(out, lokiClient(monitoringAddon, grafanaUser))
 	}
 	// k3s's kube-proxy, controller manager and scheduler are in the kubelet's metrics.
 	if distribution != templates.K3s {
