@@ -26,9 +26,11 @@ type fakeCloud struct {
 	created         int
 	removed         []Names
 	removedHeld     []Credentials
+	access          Access
 }
 
-func (f *fakeCloud) Ensure(_ context.Context, n Names, held Credentials, record func(Credentials) error) (Credentials, error) {
+func (f *fakeCloud) Ensure(_ context.Context, n Names, access Access, held Credentials, record func(Credentials) error) (Credentials, error) {
+	f.access = access
 	c := held
 	if c.VolumeOwner == 0 {
 		c.VolumeOwner, c.VolumeOwnerNode = 4242, "pve"

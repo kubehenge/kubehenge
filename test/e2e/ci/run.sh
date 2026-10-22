@@ -193,6 +193,9 @@ case "${test}" in
         e2e e2e-workload-cluster CLASS=kubehenge-rke2 VERSION="${from}+rke2r1" UPGRADE="${to}+rke2r1"
         ;;
     k3s)
+        # The one cluster on the storage of its own, which switches the CSI plugin's newest release
+        # on and off.
+        export KUBEHENGE_E2E_STORAGE=own KUBEHENGE_E2E_DATASTORE_ALLOCATE=1 KUBEHENGE_E2E_LOCAL_STORAGE=local
         e2e e2e-workload-cluster CLASS=kubehenge-k3s VERSION="${from}+k3s1" UPGRADE="${to}+k3s1"
         ;;
     kubeadm)

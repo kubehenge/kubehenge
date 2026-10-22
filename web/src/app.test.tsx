@@ -517,6 +517,7 @@ describe("create", () => {
     storage: "local-lvm",
     place: { placement: "any", haRule: "", nodes: [] },
     proxmoxHA: true,
+    datastoreAllocate: false,
     controlPlaneMachine: { cores: 2, memoryMiB: 4096, diskGiB: 30 },
     workerMachine: { cores: 4, memoryMiB: 8192, diskGiB: 40 },
     cni: "cilium",

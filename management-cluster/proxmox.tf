@@ -87,6 +87,17 @@ resource "proxmox_virtual_environment_role" "cluster_storage" {
   privileges = ["Datastore.AllocateSpace", "Datastore.Audit"]
 }
 
+# What a cluster that opts in to the CSI plugin's newest release holds on its own storage: the
+# plugin reads a storage's configuration and deletes volumes through the storage, both of which
+# Proxmox VE allows only with Datastore.Allocate. An ACL of a user's own on a path takes the place of
+# its group's there, so the role carries the group's privileges too.
+resource "proxmox_virtual_environment_role" "cluster_datastore" {
+  count = var.cluster_datastore_allocate ? 1 : 0
+
+  role_id    = "${var.cluster_name}-cluster-datastore"
+  privileges = ["Datastore.Allocate", "Datastore.AllocateSpace", "Datastore.Audit"]
+}
+
 resource "proxmox_virtual_environment_group" "clusters" {
   group_id = "${var.cluster_name}-clusters"
   comment  = "Clusters created by Kubehenge management cluster ${var.cluster_name}"
@@ -174,6 +185,11 @@ resource "proxmox_acl" "ha" {
 }
 
 locals {
+  # The storages the management cluster's own VMs, its disk image and Cluster API's cloud-init
+  # drives of every cluster are on, which no cluster may hold Datastore.Allocate on.
+  management_storages         = distinct([var.vm_datastore, var.image_datastore, var.bootstrap_datastore])
+  datastore_allocate_storages = var.cluster_datastore_allocate ? [for s in var.workload_datastores : s if !contains(local.management_storages, s)] : []
+
   provisioner_acls = concat(
     [
       { path = "/", role = proxmox_virtual_environment_role.audit.role_id, propagate = false },
@@ -186,6 +202,9 @@ locals {
     # Finding and deleting a removed cluster's volumes on storages local to nodes other than its
     # volume owner VM's, which destroying that VM does not reach.
     [for s in var.workload_datastores : { path = "/storage/${s}", role = proxmox_virtual_environment_role.cluster_storage.role_id, propagate = false }],
+    # Granting a cluster's user the role on its storage. Without Permissions.Modify, Proxmox VE lets a
+    # user grant on a storage only privileges it holds there, with Datastore.Allocate.
+    [for s in local.datastore_allocate_storages : { path = "/storage/${s}", role = proxmox_virtual_environment_role.cluster_datastore[0].role_id, propagate = false }],
   )
 }
 

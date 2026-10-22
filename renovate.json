@@ -85,13 +85,15 @@
       ]
     },
     {
-      "description": "From v0.21.0 (chart 0.5.13) the Proxmox VE CSI plugin reads a storage's configuration through /storage/{storage}, which Proxmox VE allows only with Datastore.Allocate on the storage, the privilege that would let every cluster delete any volume on it. Clusters' tokens hold Datastore.Audit, enough for /cluster/resources, which earlier releases read; the plugin stays below until it reads the configuration that way again.",
+      "description": "From v0.21.0 (chart 0.5.13) the Proxmox VE CSI plugin reads a storage's configuration through /storage/{storage}, which Proxmox VE allows only with Datastore.Allocate on the storage, the privilege that would let every cluster delete any volume on it. Clusters' tokens hold Datastore.Audit, enough for /cluster/resources, which earlier releases read, so the release every cluster runs by default (depType held in values.yaml) stays below until the plugin reads the configuration that way again. The newest release, for clusters whose token holds Datastore.Allocate on their storage, carries no depType and moves as any other.",
       "matchDepNames": ["ghcr.io/sergelogvinov/proxmox-csi-controller", "ghcr.io/sergelogvinov/proxmox-csi-node"],
+      "matchDepTypes": ["held"],
       "allowedVersions": "<0.21.0"
     },
     {
-      "description": "The CSI plugin's chart from 0.5.13 is made for v0.21.0, held back above.",
+      "description": "The CSI plugin's chart from 0.5.13 is made for v0.21.0, held back above for the default release.",
       "matchDepNames": ["ghcr.io/sergelogvinov/charts/proxmox-csi-plugin"],
+      "matchDepTypes": ["held"],
       "allowedVersions": "<0.5.13"
     },
     {

@@ -311,6 +311,8 @@ export interface Storage {
   avail: number;
   total: number;
   usable: boolean;
+  /** Whether the user may give a cluster's token Datastore.Allocate there. */
+  allocatable: boolean;
 }
 
 export interface PveNode {
@@ -364,6 +366,8 @@ export interface ManagementSettings {
   clusterOIDC?: OIDCProvider[];
   /** Proxmox VE HA keeps the clusters' control-plane VMs on separate nodes. */
   proxmoxHA?: boolean;
+  /** Clusters may choose the CSI plugin's newest release, with Datastore.Allocate on their storage. */
+  clusterDatastoreAllocate?: boolean;
 }
 
 export interface Job {

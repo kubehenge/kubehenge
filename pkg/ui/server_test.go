@@ -326,6 +326,7 @@ func rke2Class() *clusterv1.ClusterClass {
 			{Name: "storage", Required: &required, Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "string"})},
 			{Name: "headlamp", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
 			{Name: "rancher", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+			{Name: "csi", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
 			{Name: "oidc", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "array", Default: &apiextensionsv1.JSON{
 				Raw: []byte(`[{"issuerURL":"https://sso.example","clientID":"kubernetes"},{"issuerURL":"https://lab.example","clientID":"lab"}]`),
 			}})},
@@ -692,6 +693,7 @@ func TestCreateChecksProxmoxPrivileges(t *testing.T) {
 		// The grant on localnetwork does not cover a VNet of that name in another zone.
 		"vnet":    {"dev@pve", strings.Replace(createBody, `"bridge":"vmbr0"`, `"bridge":"tenants"`, 1)},
 		"rancher": {"dev@pve", strings.Replace(createBody, `"storage":`, `"rancher":{"install":true,"hostname":"rancher.example"},"storage":`, 1)},
+		"csi":     {"dev@pve", strings.Replace(createBody, `"storage":`, `"csi":{"datastoreAllocate":true},"storage":`, 1)},
 		"viewer":  {"viewer@pve", createBody},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -999,6 +1001,40 @@ func TestChangeOptsOutOfProxmoxHA(t *testing.T) {
 	}
 }
 
+// Datastore.Allocate on a cluster's storage takes the user's own, there.
+func TestDatastoreAllocateNeedsTheUsersOwn(t *testing.T) {
+	t.Parallel()
+	c := cluster("default", "one")
+	h := newHarness(t, c)
+	b := h.browser()
+	b.signIn("dev@pve")
+	switchOn := func() *httptest.ResponseRecorder {
+		return b.do("PATCH", "/api/clusters/default/one", `{"variables":{"csi":{"datastoreAllocate":true}}}`)
+	}
+	expect(t, switchOn(), http.StatusForbidden)
+	h.accounts.mu.Lock()
+	h.accounts.grants["dev@pve"]["/storage/local-lvm"] = []string{"Datastore.AllocateSpace", "Datastore.Allocate"}
+	h.accounts.mu.Unlock()
+	expect(t, switchOn(), http.StatusOK)
+	got := &clusterv1.Cluster{}
+	if err := h.kube.Get(t.Context(), client.ObjectKeyFromObject(c), got); err != nil {
+		t.Fatal(err)
+	}
+	if v := string(variableValue(got, "csi")); v != `{"datastoreAllocate":true}` {
+		t.Fatalf("csi = %s", v)
+	}
+
+	rec := b.do("GET", "/api/proxmox/storages", "")
+	var storages []storageView
+	if err := json.Unmarshal(rec.Body.Bytes(), &storages); err != nil || !storages[0].Allocatable || storages[1].Allocatable || storages[2].Allocatable {
+		t.Fatalf("storages = %s", rec.Body)
+	}
+	created := strings.Replace(createBody, `"storage":`, `"csi":{"datastoreAllocate":true},"storage":`, 1)
+	expect(t, b.do("POST", "/api/clusters", created), http.StatusCreated)
+	noStorage := strings.Replace(created, `"storage":"local-lvm",`, ``, 1)
+	expect(t, b.do("POST", "/api/clusters", strings.Replace(noStorage, `"web"`, `"bare"`, 1)), http.StatusUnprocessableEntity)
+}
+
 func TestClusterShowsWhereItsVMsRun(t *testing.T) {
 	t.Parallel()
 	machine := func(name, infra string, controlPlane bool) *clusterv1.Machine {
@@ -1155,7 +1191,7 @@ func TestClasses(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &classes); err != nil || len(classes) != 1 {
 		t.Fatalf("classes = %s", rec.Body)
 	}
-	if c := classes[0]; c.Distribution != "rke2" || len(c.Variables) != 6 || !c.Variables[0].Required || c.Variables[0].Schema.Format != "ipv4" ||
+	if c := classes[0]; c.Distribution != "rke2" || len(c.Variables) != 7 || !c.Variables[0].Required || c.Variables[0].Schema.Format != "ipv4" ||
 		c.Annotations["kubehenge.dev/default-pods"] != "10.42.0.0/16" {
 		t.Fatalf("class = %+v", c)
 	}

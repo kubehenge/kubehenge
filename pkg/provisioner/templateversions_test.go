@@ -40,7 +40,7 @@ func TestKubeadmTemplateVersionsRecordedOnTheClass(t *testing.T) {
 			mu.Unlock()
 			data = vms
 		} else if strings.HasPrefix(r.URL.Path, "/api2/json/nodes/pve1/qemu/") && strings.HasSuffix(r.URL.Path, "/config") {
-			data = map[string]any{"template": 1}
+			data = map[string]any{"template": 1, "scsi0": "ceph:base-9000-disk-0,size=30G", "ide2": "none,media=cdrom"}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
 	}))
@@ -78,6 +78,11 @@ func TestKubeadmTemplateVersionsRecordedOnTheClass(t *testing.T) {
 	}
 	if got, _ := recorded(rke2.Name, CloudImageTemplateAnnotation); got != "true" {
 		t.Errorf("RKE2's template recorded as %q", got)
+	}
+	for _, name := range []string{class.Name, rke2.Name} {
+		if got, _ := recorded(name, TemplateStoragesAnnotation); got != "ceph" {
+			t.Errorf("%s records the templates' storages as %q, want ceph", name, got)
+		}
 	}
 
 	// The last template deleted: none, which is not the same as not looked at yet. A cloud image

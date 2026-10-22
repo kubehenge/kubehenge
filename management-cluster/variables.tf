@@ -252,6 +252,13 @@ variable "proxmox_ha" {
   nullable    = false
 }
 
+variable "cluster_datastore_allocate" {
+  description = "Let each cluster choose the Proxmox VE CSI plugin's newest release, which needs Datastore.Allocate on the cluster's storage: Kubehenge's controller then grants that cluster's token Datastore.Allocate there, which lets it delete any volume on that storage and change the storage's definition. A cluster may choose it only on a workload storage that neither the management cluster (vm_datastore, image_datastore, bootstrap_datastore), its templates nor another cluster uses. Off, every cluster runs the plugin's last release that needs no more than Datastore.AllocateSpace and Datastore.Audit."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "controller_image" {
   description = "Image of Kubehenge's controller by digest, as repository@sha256:<digest>, instead of the one the chart was released with."
   type        = string

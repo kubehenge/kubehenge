@@ -48,7 +48,7 @@ const (
 
 // Cloud creates and removes a cluster's Proxmox VE objects; *Proxmox is the real one.
 type Cloud interface {
-	Ensure(ctx context.Context, n Names, held Credentials, record func(Credentials) error) (Credentials, error)
+	Ensure(ctx context.Context, n Names, access Access, held Credentials, record func(Credentials) error) (Credentials, error)
 	Remove(ctx context.Context, n Names, held Credentials) error
 }
 
@@ -71,6 +71,8 @@ type Reconciler struct {
 	Events events.EventRecorder
 	// RancherKubernetes is what the Rancher release Kubehenge installs runs on; unset allows any.
 	RancherKubernetes KubernetesMinors
+	// DatastoreAllocate is what lets a cluster hold Datastore.Allocate on its storage.
+	DatastoreAllocate DatastoreAllocate
 
 	ids ciliumIDs
 }
@@ -132,7 +134,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.addFinalizer(ctx, cluster); err != nil {
 		return ctrl.Result{}, err
 	}
-	creds, err := r.ensureCloud(ctx, cluster)
+	access, err := r.access(ctx, cluster)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	creds, err := r.ensureCloud(ctx, cluster, access)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -143,6 +149,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	addons.CSINewest = len(access.DatastoreAllocate) > 0
 	addonWaiting, err := r.applyAddons(ctx, cluster, creds, &addons)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -235,14 +242,48 @@ func (r *Reconciler) cloudObjects(ctx context.Context, cluster *clusterv1.Cluste
 	return names, held, nil
 }
 
+// access is what the cluster's user gets beyond its pool: Datastore.Allocate on its storage when
+// its csi variable asks for it and nothing stands in the way. When something does, it says why on
+// the Cluster, and the cluster keeps the CSI plugin that needs no more than its group's rights.
+func (r *Reconciler) access(ctx context.Context, cluster *clusterv1.Cluster) (Access, error) {
+	csi, err := csiOf(cluster)
+	if err != nil || !csi.DatastoreAllocate {
+		return Access{}, err
+	}
+	class := &clusterv1.ClusterClass{}
+	if err = r.Client.Get(ctx, client.ObjectKey{Namespace: r.ClassNamespace, Name: cluster.Spec.Topology.ClassRef.Name}, class); err != nil {
+		return Access{}, fmt.Errorf("reading the cluster's ClusterClass: %w", err)
+	}
+	clusters := &clusterv1.ClusterList{}
+	if err = r.Client.List(ctx, clusters); err != nil {
+		return Access{}, fmt.Errorf("listing clusters: %w", err)
+	}
+	refused, err := r.DatastoreAllocate.Refusal(cluster, class, clusters.Items, r.ClassNamespace)
+	if err != nil {
+		return Access{}, err
+	}
+	if refused != "" {
+		ctrl.LoggerFrom(ctx).Info("not granting Datastore.Allocate: " + refused)
+		if r.Events != nil {
+			r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, "DatastoreAllocateRefused", "GrantDatastoreAllocate", "%s", refused)
+		}
+		return Access{}, nil
+	}
+	storage, err := variable[string](cluster, "storage")
+	if err != nil {
+		return Access{}, err
+	}
+	return Access{DatastoreAllocate: []string{storage}}, nil
+}
+
 // ensureCloud creates the cluster's Proxmox VE objects, keeping what it creates as it goes.
-func (r *Reconciler) ensureCloud(ctx context.Context, cluster *clusterv1.Cluster) (Credentials, error) {
+func (r *Reconciler) ensureCloud(ctx context.Context, cluster *clusterv1.Cluster, access Access) (Credentials, error) {
 	names, held, err := r.cloudObjects(ctx, cluster)
 	if err != nil {
 		return held, err
 	}
 	record := func(c Credentials) error { return r.keep(ctx, cluster, c, false) }
-	creds, err := r.Cloud.Ensure(ctx, names, held, record)
+	creds, err := r.Cloud.Ensure(ctx, names, access, held, record)
 	if err != nil {
 		return creds, fmt.Errorf("creating the cluster's Proxmox VE objects: %w", err)
 	}

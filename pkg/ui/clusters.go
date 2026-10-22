@@ -52,7 +52,7 @@ const maxClusterName = 40
 
 // Variables a cluster may change after creation; the others describe where its VMs live.
 var changeableVariables = map[string]bool{
-	"headlamp": true, "monitoring": true, "logs": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true,
+	"headlamp": true, "monitoring": true, "logs": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, csiVariable: true,
 }
 
 // autoUpgraded is where Kubehenge's controller records the last automatic upgrade.
@@ -671,6 +671,9 @@ func (s *Server) mayCreate(w http.ResponseWriter, r *http.Request, u user, class
 	if installsRancher(req.Variables["rancher"]) && !s.allowRancher(w, r, u, client.ObjectKey{Namespace: s.Namespace, Name: req.Name}) {
 		return false
 	}
+	if allocatesDatastore(req.Variables[csiVariable]) && !s.allowDatastoreAllocate(w, r, u, req.Variables["storage"]) {
+		return false
+	}
 	raw, ok := req.Variables[oidcVariable]
 	if !ok {
 		return true
@@ -826,6 +829,29 @@ func networkVariable(raw json.RawMessage) (string, string, bool) {
 	return v.Bridge, vlan, true
 }
 
+// csiVariable configures a cluster's CSI plugin; its datastoreAllocate gives the cluster's token
+// Datastore.Allocate on the cluster's storage.
+const csiVariable = "csi"
+
+func allocatesDatastore(raw json.RawMessage) bool {
+	var v struct {
+		DatastoreAllocate bool `json:"datastoreAllocate"`
+	}
+	return raw != nil && json.Unmarshal(raw, &v) == nil && v.DatastoreAllocate
+}
+
+// allowDatastoreAllocate checks the right to give a cluster's token Datastore.Allocate on its
+// storage: the user's own Datastore.Allocate there. Whether the storage is the cluster's alone is
+// the controller's admission check, which refuses the cluster otherwise.
+func (s *Server) allowDatastoreAllocate(w http.ResponseWriter, r *http.Request, u user, storage json.RawMessage) bool {
+	name, ok := stringVariable(storage)
+	if !ok {
+		writeError(w, http.StatusUnprocessableEntity, "CSI plugin: Datastore.Allocate needs the cluster's storage chosen")
+		return false
+	}
+	return s.require(w, r, u, storagePath(name), privDatastoreAllocate)
+}
+
 func installsRancher(raw json.RawMessage) bool {
 	var v struct {
 		Install bool `json:"install"`
@@ -933,6 +959,9 @@ func (s *Server) applyVariables(w http.ResponseWriter, r *http.Request, u user, 
 		}
 		old := variableValue(c, name)
 		if name == "rancher" && installsRancher(value) && !installsRancher(old) && !s.allowRancher(w, r, u, client.ObjectKeyFromObject(c)) {
+			return false
+		}
+		if name == csiVariable && allocatesDatastore(value) && !allocatesDatastore(old) && !s.allowDatastoreAllocate(w, r, u, variableValue(c, "storage")) {
 			return false
 		}
 		if name == oidcVariable && !sameJSON(old, value) && !s.allowOIDC(w, r, u, c, access, value, old) {

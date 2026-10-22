@@ -217,6 +217,7 @@ The run acts with your own Proxmox VE session: the interface renews your ticket 
 | What clusters may use | The storages and bridges clusters may put their disks on and attach to, from any node; at least one of each. The page says which nodes have each, or that a storage is shared. Cluster API's token gets rights on exactly these, and the ClusterClasses accept no others, from the interface or kubectl. |
 | Identity providers | OpenID Connect providers every new cluster trusts unless it names its own ([clusters.md](clusters.md#signing-in-with-openid-connect)). A change applies to clusters created afterwards. |
 | Proxmox VE HA | Off by default. When on, Proxmox VE HA keeps each cluster's control-plane VMs on separate nodes and restarts them on another node after a node fails, for every cluster on shared storage that does not opt out ([clusters.md](clusters.md#machines)). See [below](#proxmox-ve-ha) before switching it on. |
+| CSI plugin | Off by default. When on, clusters may choose the CSI plugin's newest release ([below](#the-csi-plugins-newest-release)). |
 | Advanced: Registry mirrors | `registry=endpoint`, one per line, such as `ghcr.io=https://mirror.example.org:5000`: endpoints the management cluster's nodes try before the registry itself. |
 | Advanced: Pod ranges, Service ranges | The management cluster's own. When empty, the first of a few private ranges clear of the nodes' network, the API address and the gateway is taken: `10.244.0.0/16` and `10.96.0.0/12` when they are clear. |
 | State passphrase | Encrypts the management cluster's state on the appliance ([below](#the-state-passphrase)); asked for twice on the first run. |
@@ -226,6 +227,10 @@ Choose no more Proxmox VE nodes than there are node addresses; an offline node c
 #### Proxmox VE HA
 
 Proxmox VE lets only `Sys.Console` on `/` create HA resources and rules, so with this setting the controller gets a second user and API token holding `Sys.Audit` and `Sys.Console` on `/`. That privilege amounts to a root shell on every node: whoever reads the controller's Secret in the management cluster, or holds its admin kubeconfig, can take over the Proxmox VE cluster. The token is used for HA resources and rules alone, and the controller touches only those it made, but the privilege cannot be narrowed further. Switching the setting on or off takes `Sys.Console` on `/` of you as well; switching it off takes the controller's token away, then removes every HA resource and rule Kubehenge made, with your session. Every node that runs an HA resource arms Proxmox VE's watchdog and restarts itself when it loses quorum.
+
+#### The CSI plugin's newest release
+
+The CSI plugin's newer releases need `Datastore.Allocate` on a cluster's storage, which covers every volume on it and its definition, so clusters run its last release without it unless this setting is on. With it, a cluster may choose the newest release on a storage of its own ([clusters.md](clusters.md#persistent-volumes)); its token then holds `Datastore.Allocate` there. The setting creates a role, `<name>-cluster-datastore`, holding `Datastore.Allocate`, `Datastore.AllocateSpace` and `Datastore.Audit`, and gives Kubehenge's controller `Datastore.Allocate` on each storage for clusters that the management cluster's disks, its Talos image and the cloud-init images are not on, so that it can grant the role there. Switching it off removes the role, and with it every cluster's grant; those clusters go back to the earlier release.
 
 The appliance keeps the module's other settings at their defaults: the management cluster is named `kubehenge`, its nodes have 4 vCPUs, 4 GiB of memory and a 32 GB disk, and it creates the pools `kubehenge` (clusters), `kubehenge-templates` (VM templates) and `kubehenge-management` (its own VMs).
 
@@ -345,6 +350,7 @@ tofu output -raw talosconfig > talosconfig
 | `provider_manifests` | `{}` | The SHA-256 of provider files outside the tested set, by their address under `https://github.com/`, such as `"kubernetes-sigs/cluster-api/releases/download/v1.14.2/core-components.yaml"`: `metadata.yaml` and the components file of each provider held back. |
 | `controller_image` | the chart's | Kubehenge's controller image by digest, as `repository@sha256:<digest>`. A release's chart names the image it was released with; a checkout's names none, so a module taken from git needs one. |
 | `proxmox_ha` | `false` | Keep each cluster's control-plane VMs on separate nodes with Proxmox VE HA, giving the controller a token with `Sys.Audit` and `Sys.Console` on `/` ([above](#proxmox-ve-ha)). After setting it back to false, remove the HA resources and rules whose comment starts with `Kubehenge cluster`, as the appliance does: without its token the controller cannot. |
+| `cluster_datastore_allocate` | `false` | Let clusters choose the CSI plugin's newest release, with `Datastore.Allocate` for the cluster's token on a storage of its own, granted by the controller ([above](#the-csi-plugins-newest-release)). |
 
 Outputs: `kubeconfig` and `talosconfig` (sensitive), `api_endpoint`, and `proxmox_objects`, which lists everything the module made on Proxmox VE.
 

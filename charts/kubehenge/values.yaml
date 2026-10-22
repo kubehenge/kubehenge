@@ -74,6 +74,13 @@ proxmox:
   # for it with the API token under the secret's key ha-token, which needs Sys.Audit and Sys.Console
   # on /.
   ha: false
+  # Clusters that choose the CSI plugin's newest release (their csi variable) get this role on their
+  # storage from the controller: Datastore.Allocate, Datastore.AllocateSpace and Datastore.Audit,
+  # which the controller's token must hold there itself. Empty: no cluster may choose it.
+  # managementStorages are those the management cluster uses, which no cluster may get it on.
+  datastoreAllocate:
+    role: ""
+    managementStorages: []
 
 # kube-vip, which holds each cluster's API address on its control planes and, where it is the
 # cluster's load balancer, its Services' addresses.
@@ -376,16 +383,21 @@ addons:
         # yamllint disable-line rule:line-length
         # renovate: datasource=docker depName=ghcr.io/sergelogvinov/proxmox-cloud-controller-manager
         tag: v0.16.1@sha256:474dbfd3be5c2e0866e520bc6ddb60b7accef554ca7401488eee35252cdf8734
+  # The CSI plugin's last release that reads a storage's configuration without Datastore.Allocate,
+  # which clusters' tokens do not hold on their storage; Renovate keeps it below v0.21.0
+  # (depType held).
   csiPlugin:
     repository: oci://ghcr.io/sergelogvinov/charts
     chart: proxmox-csi-plugin
-    # renovate: datasource=docker depName=ghcr.io/sergelogvinov/charts/proxmox-csi-plugin
+    # yamllint disable-line rule:line-length
+    # renovate: datasource=docker depName=ghcr.io/sergelogvinov/charts/proxmox-csi-plugin depType=held
     version: 0.5.12@sha256:bbd954924333b2c6dd0a01ed6b347f0798c4ed9f2de99b0c3d0bcef3e9f9efdd
     values:
       controller:
         plugin:
           image:
-            # renovate: datasource=docker depName=ghcr.io/sergelogvinov/proxmox-csi-controller
+            # yamllint disable-line rule:line-length
+            # renovate: datasource=docker depName=ghcr.io/sergelogvinov/proxmox-csi-controller depType=held
             tag: v0.20.0@sha256:95ef74cce03e89a1706d9b32888a84bf44e0db439c4fe2a4334ce123728d4c3b
         attacher:
           image:
@@ -406,8 +418,52 @@ addons:
       node:
         plugin:
           image:
-            # renovate: datasource=docker depName=ghcr.io/sergelogvinov/proxmox-csi-node
+            # yamllint disable-line rule:line-length
+            # renovate: datasource=docker depName=ghcr.io/sergelogvinov/proxmox-csi-node depType=held
             tag: v0.20.0@sha256:e0151137a1c5fa4faea9b4622436b203f1dc246ea37a3a77d09d3855c70aabd1
+        driverRegistrar:
+          image:
+            # yamllint disable-line rule:line-length
+            # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-node-driver-registrar
+            tag: v2.18.0@sha256:b7fefd08651f00ac4df1a196ed4c621c2451fbb899297fe9fad9e36c667af0c0
+      livenessprobe:
+        image:
+          # renovate: datasource=docker depName=registry.k8s.io/sig-storage/livenessprobe
+          tag: v2.20.0@sha256:19f2cf2f40e1987c7943945deca5f65cd4e4bf5cc0657fc78a5df131861578e8
+  # The CSI plugin's newest release, for clusters whose token holds Datastore.Allocate on their
+  # storage (their csi variable). The sidecars are the same as above.
+  csiPluginNewest:
+    repository: oci://ghcr.io/sergelogvinov/charts
+    chart: proxmox-csi-plugin
+    # renovate: datasource=docker depName=ghcr.io/sergelogvinov/charts/proxmox-csi-plugin
+    version: 0.5.13@sha256:575e6d4ccce99d25c49cfc530d3df7cb18765925c432e0f2d6fcdf5366cfc034
+    values:
+      controller:
+        plugin:
+          image:
+            # renovate: datasource=docker depName=ghcr.io/sergelogvinov/proxmox-csi-controller
+            tag: v0.21.0@sha256:8f344b70785f7b567f9daa9a7d688a238d25f21353f9664e419791763e1414be
+        attacher:
+          image:
+            # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-attacher
+            tag: v4.13.0@sha256:d1a26170efed45491074ca4545c81844eee2b9043fb885ac01fb4aed6f8b72d2
+        provisioner:
+          image:
+            # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-provisioner
+            tag: v6.4.0@sha256:6ebe60fd8ed67a7f8a90d34402e9e706b274e53612d6fa5fbb8285728db622e2
+        resizer:
+          image:
+            # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-resizer
+            tag: v2.3.0@sha256:48fb3deb93cd848e3c8998b6368f4322c93bb5ce4a90d1307b6dda0dbefb9a0e
+        snapshotter:
+          image:
+            # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-snapshotter
+            tag: v8.7.0@sha256:b03d3334f8035fa42660b166f6eb819a659a14774da020eb1b6c52cd422eaadb
+      node:
+        plugin:
+          image:
+            # renovate: datasource=docker depName=ghcr.io/sergelogvinov/proxmox-csi-node
+            tag: v0.21.0@sha256:3895d75356d51e65c36d6c90ae74c72164fe55b4ef1dcfa632e28e86dc0ede33
         driverRegistrar:
           image:
             # yamllint disable-line rule:line-length

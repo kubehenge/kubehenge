@@ -1,7 +1,9 @@
+/* oxlint-disable import/max-dependencies -- the options view shows and opens every feature's own setting */
 import { useId, useState, type JSX } from "react";
 
 import { ClusterMeshDialog, meshText, runsCilium } from "./ClusterMesh";
 import { UpgradesDialog, describe, upgradePolicy } from "./ClusterUpgrades";
+import { CSIDialog, csiOn, useCSIOffer } from "./CsiPlugin";
 import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBalancer";
 import { LogsDialog, logsOf, logsText } from "./Logs";
 import { OIDCProviders, cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
@@ -18,15 +20,16 @@ import {
   istioText,
   registerHint,
   registeredWithRancher,
+  csiText,
   useChange,
 } from "./ui";
-// oxlint-disable-next-line import/max-dependencies -- the options view shows and opens every feature's own setting
 import { flag, record, text, texts } from "./values";
 
 /** What the Options view changes, each through a dialog of its own. */
 export type OptionAction =
   | "placement"
   | "ha"
+  | "csi"
   | "headlamp"
   | "monitoring"
   | "logs"
@@ -79,6 +82,9 @@ export function OptionDialog({
     case "ha": {
       return <HADialog cluster={c} onClose={onClose} />;
     }
+    case "csi": {
+      return <CSIDialog cluster={c} onClose={onClose} />;
+    }
     case "oidc": {
       break;
     }
@@ -128,6 +134,7 @@ export function Options({
   const monitoring = hostedValue(c.variables["monitoring"]);
   const rancher = rancherValue(c.variables["rancher"]);
   const haOffered = useHAOffered(c.class, text(c.variables["storage"]));
+  const csi = useCSIOffer(c);
   // name is how the row's button names what it changes, for those who hear it out of the grid.
   const cis = c.variables["cis"] === true;
   const podSecurity = enforced(podSecurityOf(c.variables["podSecurity"]), cis);
@@ -149,6 +156,11 @@ export function Options({
   ];
   if (haOffered) {
     rows.push({ label: "Proxmox VE HA", value: haText(haOn(c)), action: "ha", name: "Proxmox VE HA" });
+  }
+  // A cluster that runs the newest release keeps the row after its administrator withdraws the
+  // choice, so that it can be switched back.
+  if (csi.offered || csiOn(c)) {
+    rows.push({ label: "CSI plugin", value: csiText(csiOn(c)), action: "csi", name: "the CSI plugin" });
   }
   rows.push(
     {

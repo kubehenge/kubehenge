@@ -51,6 +51,8 @@ module "management" {
   service_subnets        = var.settings.serviceSubnets
   cluster_oidc           = var.settings.clusterOIDC
   proxmox_ha             = var.settings.proxmoxHA
+
+  cluster_datastore_allocate = var.settings.clusterDatastoreAllocate
 }
 
 output "kubeconfig" {
@@ -156,6 +158,8 @@ func (a *Appliance) writeConfig(s *Settings) error {
 		"serviceSubnets":         ranges.services,
 		"clusterOIDC":            moduleOIDC(s.ClusterOIDC),
 		"proxmoxHA":              s.ProxmoxHA,
+
+		"clusterDatastoreAllocate": s.ClusterDatastoreAllocate,
 	}}
 	raw, err := json.MarshalIndent(vars, "", "  ")
 	if err != nil {

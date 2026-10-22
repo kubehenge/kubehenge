@@ -12,10 +12,11 @@ import {
   podSecurityVariable,
   type PodSecurity,
 } from "./PodSecurity";
-import type { Bridge, ClusterClass, CreateRequest, OIDCProvider, Schema, Storage } from "./types";
+import type { Bridge, Cluster, ClusterClass, CreateRequest, OIDCProvider, Schema, Storage } from "./types";
 import {
   browserZone,
   cniName,
+  csiText,
   distributionName,
   filled,
   istioText,
@@ -23,7 +24,7 @@ import {
   registeredWithRancher,
   sentence,
 } from "./ui";
-import { quantity, record, texts } from "./values";
+import { quantity, record, text, texts } from "./values";
 
 export const steps = ["General", "Network", "Machines", "Add-ons", "Identity providers", "Confirm"] as const;
 export type Step = (typeof steps)[number];
@@ -64,6 +65,7 @@ export interface Form {
   storage: string;
   place: Place;
   proxmoxHA: boolean;
+  datastoreAllocate: boolean;
   controlPlaneMachine: Machine;
   workerMachine: Machine;
   cni: string;
@@ -282,6 +284,7 @@ export const newForm = (): Form => ({
   storage: "",
   place: anyNode,
   proxmoxHA: true,
+  datastoreAllocate: false,
   controlPlaneMachine: machineDefaults(undefined),
   workerMachine: machineDefaults(undefined),
   cni: "",
@@ -388,6 +391,9 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   if (!form.proxmoxHA) {
     variables["proxmoxHA"] = false;
   }
+  if (form.datastoreAllocate && defined.has("csi")) {
+    variables["csi"] = { datastoreAllocate: true };
+  }
   if (form.cni) {
     variables["cni"] = form.cni;
   }
@@ -436,8 +442,12 @@ function meshChoice(form: Form): string {
 }
 
 // summary is what the Confirm step shows: each setting by its name, as the user chose it; Proxmox
-// VE HA only where it applies.
-export function summary(form: Form, c: ClusterClass, haOffered = false): [string, string][] {
+// VE HA and the CSI plugin's release only where they can be chosen.
+export function summary(
+  form: Form,
+  c: ClusterClass,
+  offered: { ha?: boolean; csi?: boolean } = {},
+): [string, string][] {
   const defined = new Set(c.variables.map((v) => v.name));
   const chosenRange =
     form.cni === "cilium"
@@ -472,8 +482,11 @@ export function summary(form: Form, c: ClusterClass, haOffered = false): [string
   if (defined.has("allowedNodes")) {
     rows.push(["Placement", placeText(form.place)]);
   }
-  if (haOffered) {
+  if (offered.ha === true) {
     rows.push(["Proxmox VE HA", haText(form.proxmoxHA)]);
+  }
+  if (offered.csi === true) {
+    rows.push(["CSI plugin", csiText(form.datastoreAllocate)]);
   }
   rows.push(["Control-plane machines", machine(form.controlPlaneMachine)]);
   if (form.workerReplicas > 0) {
@@ -556,6 +569,7 @@ export type FieldKey =
   | "pods"
   | "services"
   | "storage"
+  | "datastoreAllocate"
   | "placement"
   | "controlPlaneMachine"
   | "workerMachine"
@@ -762,6 +776,82 @@ export function offeredBridges(byNode: Record<string, Bridge[]>, allowed: string
     return [...seen.values()];
   }
   return allowed.map((name) => seen.get(name) ?? { bridge: name, node: "", vlanAware: false, usable: true });
+}
+
+/** datastoreAllocateAnnotation marks the classes whose clusters may choose the CSI plugin's newest release. */
+export const datastoreAllocateAnnotation = "kubehenge.dev/datastore-allocate";
+/** The storages, comma-separated, of the management cluster and of the VM templates. */
+export const managementStoragesAnnotation = "kubehenge.dev/management-storages";
+export const templateStoragesAnnotation = "kubehenge.dev/template-storages";
+
+const listed = (c: ClusterClass, annotation: string): string[] =>
+  (c.annotations?.[annotation] ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s !== "");
+
+/** csiOffered tells whether an administrator lets the class's clusters choose the plugin's newest release. */
+export const csiOffered = (c: ClusterClass | undefined): boolean =>
+  c?.annotations?.[datastoreAllocateAnnotation] === "true" && c.variables.some((v) => v.name === "csi");
+
+/** What a cluster's Datastore.Allocate on its storage is checked against. */
+export interface DatastoreAllocateCheck {
+  cls: ClusterClass;
+  storages: Storage[];
+  storage: string | undefined;
+  /** clusters are those the user sees. */
+  clusters: Cluster[];
+  /** self is the cluster itself, once there is one. */
+  self?: { namespace: string; name: string } | undefined;
+}
+
+/** datastoreAllocateProblem says why the cluster may not hold Datastore.Allocate on its storage, or gives undefined. */
+export function datastoreAllocateProblem({
+  cls,
+  storages,
+  storage,
+  clusters,
+  self,
+}: DatastoreAllocateCheck): string | undefined {
+  if (storage === undefined || storage === "") {
+    return "Choose the cluster's storage first.";
+  }
+  if (listed(cls, managementStoragesAnnotation).includes(storage)) {
+    return `The management cluster uses storage ${storage}, so no cluster may hold Datastore.Allocate on it.`;
+  }
+  if (listed(cls, templateStoragesAnnotation).includes(storage)) {
+    return `VM templates have disks on storage ${storage}, so no cluster may hold Datastore.Allocate on it.`;
+  }
+  if (!storages.some((s) => s.storage === storage && s.allocatable)) {
+    return `You do not hold Datastore.Allocate on storage ${storage}, which the cluster's token would get.`;
+  }
+  const other = clusters.find(
+    (o) => text(o.variables["storage"]) === storage && !(o.namespace === self?.namespace && o.name === self.name),
+  );
+  if (other !== undefined) {
+    return `Cluster ${other.namespace}/${other.name} uses storage ${storage} too; Datastore.Allocate needs a storage of the cluster's own.`;
+  }
+  return undefined;
+}
+
+/** CSIOffer is whether a cluster may choose the plugin's newest release, and what stands in the way. */
+export interface CSIOffer {
+  offered: boolean;
+  problem: string | undefined;
+}
+
+/** csiOffer is what the class and the storage make of a cluster's choice of the plugin's newest release. */
+export function csiOffer(check: Omit<DatastoreAllocateCheck, "cls"> & { cls: ClusterClass | undefined }): CSIOffer {
+  const { cls } = check;
+  return { offered: csiOffered(cls), problem: cls && datastoreAllocateProblem({ ...check, cls }) };
+}
+
+/** csiProblems holds the machines step to the CSI plugin's release a new cluster chose. */
+export function csiProblems(step: Step, form: Form, csi: CSIOffer): Problems {
+  if (step !== "Machines" || !csi.offered || !form.datastoreAllocate || csi.problem === undefined) {
+    return {};
+  }
+  return { datastoreAllocate: csi.problem };
 }
 
 // offeredStorages are the storages, once each, that take disks, the user may use and the class

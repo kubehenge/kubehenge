@@ -196,6 +196,10 @@ var testCharts = Charts{
 		Repository: "oci://ghcr.io/sergelogvinov/charts", Name: "proxmox-csi-plugin", Version: "0.5.12",
 		Digest: "bbd954924333b2c6dd0a01ed6b347f0798c4ed9f2de99b0c3d0bcef3e9f9efdd",
 	},
+	CSINewest: Chart{
+		Repository: "oci://ghcr.io/sergelogvinov/charts", Name: "proxmox-csi-plugin", Version: "0.5.13",
+		Digest: "575e6d4ccce99d25c49cfc530d3df7cb18765925c432e0f2d6fcdf5366cfc034",
+	},
 	Cilium: Chart{
 		Repository: "https://helm.cilium.io", Name: "cilium", Version: "1.20.3",
 		Digest: "0805a5273118c436c9772bb9566d87ec558d8b25cc2ce5dc32918ecdd36f2c7c",

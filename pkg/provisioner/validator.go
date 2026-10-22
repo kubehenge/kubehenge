@@ -18,7 +18,8 @@ import (
 // creation is held to the same: control planes too small for the cluster's workers, nodes without
 // the memory its add-ons use, logs without monitoring, Rancher switched
 // on beside another, or on nodes too small for it, a Rancher cluster's nodes made smaller than it
-// needs, and load-balancer addresses that clash with the nodes' network or another cluster's. A
+// needs, load-balancer addresses that clash with the nodes' network or another cluster's, and
+// Datastore.Allocate on a storage that is not the cluster's alone. A
 // cluster that already fell short before a change is not held to it for unrelated edits.
 type ClusterValidator struct {
 	Hooks *Hooks
@@ -75,6 +76,11 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 	if addressesChanged(old, c) {
 		if err := v.Hooks.checkLoadBalancer(ctx, c); err != nil {
 			errs = append(errs, field.Forbidden(topology.Child("variables").Key(loadBalancerVariable), err.Error()))
+		}
+	}
+	if old == nil || variableChanged(old, c, csiVariable) || variableChanged(old, c, "storage") {
+		if err := v.Hooks.checkDatastoreAllocate(ctx, c, class); err != nil {
+			errs = append(errs, field.Forbidden(topology.Child("variables").Key(csiVariable), err.Error()))
 		}
 	}
 	if len(errs) == 0 {

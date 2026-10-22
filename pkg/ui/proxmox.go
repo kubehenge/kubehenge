@@ -13,6 +13,9 @@ import (
 const (
 	privStorage = "Datastore.AllocateSpace"
 	privBridge  = "SDN.Use"
+	// privDatastoreAllocate is what a user gives a cluster's token on its storage when the cluster
+	// runs the CSI plugin's newest release, so it takes the user's own.
+	privDatastoreAllocate = "Datastore.Allocate"
 )
 
 func storagePath(storage string) string { return "/storage/" + storage }
@@ -32,6 +35,8 @@ type storageView struct {
 
 	// Usable tells whether it takes VM disks and the user may put a cluster's disks there.
 	Usable bool `json:"usable"`
+	// Allocatable tells whether the user may give a cluster's token Datastore.Allocate there.
+	Allocatable bool `json:"allocatable"`
 }
 
 func (s *Server) storages(w http.ResponseWriter, r *http.Request, u user) {
@@ -40,20 +45,20 @@ func (s *Server) storages(w http.ResponseWriter, r *http.Request, u user) {
 		s.proxmoxError(w, err)
 		return
 	}
-	usable := map[string]bool{}
+	held := map[string]pve.Privileges{}
 	views := make([]storageView, 0, len(storages))
 	for _, st := range storages {
-		ok, seen := usable[st.Storage]
+		privs, seen := held[st.Storage]
 		if !seen {
-			privs, err := s.Accounts.Privileges(r.Context(), u.ticket, storagePath(st.Storage))
-			if err != nil {
+			var err error
+			if privs, err = s.Accounts.Privileges(r.Context(), u.ticket, storagePath(st.Storage)); err != nil {
 				s.proxmoxError(w, err)
 				return
 			}
-			ok = privs.Has(privStorage)
-			usable[st.Storage] = ok
+			held[st.Storage] = privs
 		}
-		views = append(views, storageView{Storage: st, Usable: ok && slices.Contains(st.Content, "images")})
+		usable := privs.Has(privStorage) && slices.Contains(st.Content, "images")
+		views = append(views, storageView{Storage: st, Usable: usable, Allocatable: usable && privs.Has(privDatastoreAllocate)})
 	}
 	writeJSON(w, http.StatusOK, views)
 }

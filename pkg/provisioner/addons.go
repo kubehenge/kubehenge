@@ -54,10 +54,13 @@ const (
 // plugin into every one, a CNI into those whose distribution has none of its own, and the add-ons
 // a cluster switches on.
 type Charts struct {
-	CCM    Chart
-	CSI    Chart
-	Cilium Chart
-	Calico Chart
+	CCM Chart
+	// CSI is the plugin's last release that needs no Datastore.Allocate, CSINewest its newest, for
+	// clusters whose user holds Datastore.Allocate on their storage.
+	CSI       Chart
+	CSINewest Chart
+	Cilium    Chart
+	Calico    Chart
 	// CalicoImages are the images the Tigera operator runs Calico from, all at one release.
 	CalicoImages []Image
 	Headlamp     Chart
@@ -107,6 +110,9 @@ type Addons struct {
 	LoadBalancer LoadBalancer
 	// CIS is the cluster's cis variable, which the add-ons make room for.
 	CIS bool
+	// CSINewest runs the CSI plugin's newest release, once the cluster's user holds
+	// Datastore.Allocate on its storage, as its csi variable asks.
+	CSINewest bool
 }
 
 // addonsOf reads a cluster's add-on variables.
@@ -720,9 +726,13 @@ func cniChart(cluster *clusterv1.Cluster, charts *Charts, cni CNI, addons *Addon
 // selects only Clusters in a proxy's own namespace, so each cluster gets its own proxies beside it.
 func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution templates.Distribution, storage string, cni CNI, addons *Addons) ([]*unstructured.Unstructured, error) {
 	ccm, csi := proxmoxValues(storage)
+	csiChart := charts.CSI
+	if addons.CSINewest {
+		csiChart = charts.CSINewest
+	}
 	wanted := []chartProxy{
 		{"proxmox-ccm", "proxmox-cloud-controller-manager", metav1.NamespaceSystem, charts.CCM, ccm},
-		{"proxmox-csi", "proxmox-csi-plugin", metav1.NamespaceSystem, charts.CSI, csi},
+		{"proxmox-csi", "proxmox-csi-plugin", metav1.NamespaceSystem, csiChart, csi},
 	}
 	cniCharts, err := cniChart(cluster, charts, cni, addons)
 	if err != nil {

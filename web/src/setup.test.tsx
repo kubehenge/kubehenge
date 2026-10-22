@@ -24,6 +24,7 @@ const form: SetupForm = {
   serviceSubnets: "",
   clusterOIDC: [],
   proxmoxHA: false,
+  clusterDatastoreAllocate: false,
   passphrase: "correct horse battery staple",
   confirm: "correct horse battery staple",
 };
@@ -105,6 +106,16 @@ describe("setup", () => {
     expect(settings({ ...form, proxmoxHA: true })).toHaveProperty("proxmoxHA", true);
     expect(settings(form)).not.toHaveProperty("proxmoxHA");
     expect([formOf(settings({ ...form, proxmoxHA: true })).proxmoxHA, formOf(settings(form)).proxmoxHA]).toStrictEqual([
+      true,
+      false,
+    ]);
+  });
+
+  it("lets clusters choose the CSI plugin's newest release only when it is switched on", () => {
+    const on = settings({ ...form, clusterDatastoreAllocate: true });
+    expect(on).toHaveProperty("clusterDatastoreAllocate", true);
+    expect(settings(form)).not.toHaveProperty("clusterDatastoreAllocate");
+    expect([formOf(on).clusterDatastoreAllocate, formOf(settings(form)).clusterDatastoreAllocate]).toStrictEqual([
       true,
       false,
     ]);

@@ -77,6 +77,7 @@ RKE2 installs its choice itself. For kubeadm, and for k3s given Cilium or Calico
 | Control plane, Workers | Cores; memory in MiB, in steps of 8; disk in GiB. |
 | Placement | The Proxmox VE nodes the cluster's VMs may run on: **Any node**, **The nodes of an HA rule**, or **Nodes I choose**. **Options** changes it later. |
 | Proxmox VE HA | Shown when the management cluster has Proxmox VE HA and the storage is shared; on unless you untick it. **Options** changes it later. |
+| CSI plugin's newest release | Shown when the management cluster lets clusters choose it; off unless you tick it. **Options** changes it later. See [Persistent volumes](#persistent-volumes). |
 
 Each new VM goes to one of the nodes it may use that is online: the one running the fewest of the cluster's VMs of its kind (control plane or worker) that has the memory for it, so three control planes on three nodes run one to a node. **Any node** means every node of the Proxmox VE cluster, nodes added later included. A node that goes down is left out within about 15 seconds and taken back once it is online, so the VMs that replace those it ran go to the others; while every node chosen is down, no new VM is placed elsewhere.
 
@@ -228,6 +229,8 @@ The Gateway API's admission policy (`safe-upgrades.gateway.networking.k8s.io`) r
 
 The default StorageClass `proxmox` puts volumes on the cluster's storage. They belong to a VM named `<name>-<hash>-volumes`, tagged `kubehenge` and `volumes`, in the cluster's pool, which is never started and exists so that only this cluster's token may attach them. A released volume is deleted through that VM. On storage local to each node, a volume lives on one node.
 
+Every cluster runs the last release of the Proxmox VE CSI plugin that needs no more than `Datastore.AllocateSpace` on the cluster's storage. Its newer releases read the storage's configuration and need `Datastore.Allocate` there, which lets the cluster's token delete any volume on that storage and change the storage's definition. Where the administrator lets clusters choose it ([install.md](install.md#the-csi-plugins-newest-release)), a cluster can run the newest release instead (**Run the newest release of the Proxmox VE CSI plugin**, or the `csi` variable's `datastoreAllocate`); its token then gets `Datastore.Allocate` on the cluster's storage, and loses it again when switched off. The storage has to be the cluster's alone: Kubehenge refuses it on a storage the management cluster uses (its disks, its Talos image and the cloud-init images), one that VM templates have disks on, or one another cluster uses, and refuses another cluster on a storage a cluster holds it on. Switching it on takes your own `Datastore.Allocate` on the storage. When a refusal comes up after the cluster switched it on, such as a template built on its storage later, the cluster goes back to the earlier release and `kubectl describe cluster` shows a `DatastoreAllocateRefused` event saying why.
+
 ## Delete
 
 **Delete** asks for the cluster's name. It deletes the cluster's VMs and its persistent volumes, and removes it from Rancher first. It cannot be undone. Once the VMs are gone, Kubehenge's controller removes the cluster's pool, user, token and volume owner VM. If a node that may hold some of the cluster's volumes on its local storage is offline, the controller waits for it. Cluster API removes each VM's cloud-init ISO (`user-data-<VMID>.iso` on the cloud-init storage) with the VM; only a VM deleted by hand, outside Cluster API, leaves its ISO behind, which can then be removed under the storage's ISO Images in Proxmox VE.
@@ -246,6 +249,7 @@ The interface checks the signed-in user's Proxmox VE privileges on each cluster'
 | | `SDN.Use` | `/sdn/zones/<zone>/<bridge>`, or `…/<bridge>/<vlan>` with a VLAN tag |
 | Place a cluster by an HA rule's nodes | `Sys.Audit` | `/` |
 | Install Rancher | `Sys.Modify` | the workload pool |
+| Run the CSI plugin's newest release | `Datastore.Allocate` | `/storage/<storage>` |
 | Scale, upgrade, change add-ons, automatic upgrades and sign-in, delete | `VM.Allocate` | the cluster's pool |
 | Download the admin kubeconfig | `Sys.Modify` | the cluster's pool |
 | Read an unwell pod's logs on the health page | `Sys.Modify` | the cluster's pool |
@@ -339,6 +343,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `storage` | yes | The storage for the nodes' disks and the persistent volumes, one of those clusters may use. |
 | `allowedNodes` | no | Proxmox VE nodes the cluster's VMs may run on, at least one; every node when unset. New VMs go to those of them that are online ([above](#machines)). The interface takes only nodes the user can see, or those the cluster already has. A change applies to VMs created after it. |
 | `proxmoxHA` | no | Whether Proxmox VE HA keeps the control-plane VMs on separate nodes ([above](#machines)); default true, where the management cluster has Proxmox VE HA and the storage is shared. |
+| `csi` | no | `datastoreAllocate` (default false): run the CSI plugin's newest release, with `Datastore.Allocate` for the cluster's token on its storage ([above](#persistent-volumes)), where the management cluster lets clusters choose it and on a storage of the cluster's own. |
 | `controlPlaneMachine`, `workerMachine` | no | `cores` (default 2), `memoryMiB` (a multiple of 8, default 4096, with the minimums [above](#machines)), `diskGiB` (default 30 for the control plane and 40 for workers, at least 20; a disk only grows). |
 | `cni` | kubeadm only | kubeadm: `cilium` or `calico`. RKE2: `canal` (default), `calico` or `cilium`. k3s: `flannel` (default), `cilium` or `calico`. The class refuses a change once the cluster exists. |
 | `loadBalancer` | no | Addresses for Services of type `LoadBalancer` ([above](#load-balancer)): `enabled` (default false); `implementation`, `metallb` (default) or `kube-vip`; `addresses`, a list of ranges, networks in CIDR notation or single addresses on the nodes' network, needed while `enabled`. |

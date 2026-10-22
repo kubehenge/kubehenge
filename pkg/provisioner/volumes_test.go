@@ -372,7 +372,7 @@ func TestGrantWrittenOnlyWhenItDiffers(t *testing.T) {
 	// Another user's grant on the same pool stays as it is.
 	f.acl = []map[string]any{{"path": "/pool/kubehenge/team-a.web", "type": "user", "ugid": "admin@pve", "roleid": "Administrator", "propagate": 1}}
 	for range 3 {
-		if err := p.ensureGrant(ctx, n); err != nil {
+		if err := p.ensureGrant(ctx, n, Access{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -382,7 +382,7 @@ func TestGrantWrittenOnlyWhenItDiffers(t *testing.T) {
 	}
 
 	p.Settings.Role = "kubehenge-cluster-vms-v2"
-	if err := p.ensureGrant(ctx, n); err != nil {
+	if err := p.ensureGrant(ctx, n, Access{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.acl) != 2 || f.acl[0]["ugid"] != "admin@pve" || f.acl[1]["roleid"] != "kubehenge-cluster-vms-v2" {
@@ -602,13 +602,13 @@ func TestSteadyReconcileReadsOnlyTheClustersOwn(t *testing.T) {
 	p := &Proxmox{Client: serve(t, f), Settings: Settings{Role: "kubehenge-cluster"}}
 	held := Credentials{TokenID: webNames.TokenID(), TokenSecret: "s3cret", VolumeOwner: 4242, VolumeOwnerNode: "a"}
 	record := func(Credentials) error { return nil }
-	if _, err := p.Ensure(context.Background(), webNames, held, record); err != nil {
+	if _, err := p.Ensure(context.Background(), webNames, Access{}, held, record); err != nil {
 		t.Fatal(err)
 	}
 	f.mu.Lock()
 	f.requests = nil
 	f.mu.Unlock()
-	c, err := p.Ensure(context.Background(), webNames, held, record)
+	c, err := p.Ensure(context.Background(), webNames, Access{}, held, record)
 	if err != nil || c.Region != "lab" || c.VolumeOwner != 4242 {
 		t.Fatalf("Ensure = %+v, %v", c, err)
 	}
@@ -632,7 +632,7 @@ func TestNewTokenKeptBeforeALaterFailure(t *testing.T) {
 	var recorded Credentials
 	record := func(c Credentials) error { recorded = c; return nil }
 
-	_, err := p.Ensure(context.Background(), webNames, Credentials{VolumeOwner: 4242, VolumeOwnerNode: "a"}, record)
+	_, err := p.Ensure(context.Background(), webNames, Access{}, Credentials{VolumeOwner: 4242, VolumeOwnerNode: "a"}, record)
 	if err == nil || !strings.Contains(err.Error(), "cluster status") {
 		t.Fatalf("got %v, want a failure to read the cluster status", err)
 	}
@@ -640,7 +640,7 @@ func TestNewTokenKeptBeforeALaterFailure(t *testing.T) {
 		t.Fatalf("recorded %+v", recorded)
 	}
 	p.Settings.Region = "lab"
-	if _, err := p.Ensure(context.Background(), webNames, recorded, record); err != nil {
+	if _, err := p.Ensure(context.Background(), webNames, Access{}, recorded, record); err != nil {
 		t.Fatal(err)
 	}
 	if f.tokens != 1 {

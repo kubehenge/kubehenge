@@ -80,7 +80,7 @@
     "proxmox": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["url", "secret", "clusterGroup", "clusterRole", "volumeOwnerNode", "region", "ha"],
+      "required": ["url", "secret", "clusterGroup", "clusterRole", "volumeOwnerNode", "region", "ha", "datastoreAllocate"],
       "properties": {
         "url": { "type": "string", "pattern": "^https://[^/]+" },
         "secret": { "$ref": "#/$defs/name" },
@@ -88,13 +88,23 @@
         "clusterRole": { "type": "string", "minLength": 1 },
         "volumeOwnerNode": { "type": "string" },
         "region": { "type": "string" },
-        "ha": { "type": "boolean" }
+        "ha": { "type": "boolean" },
+        "datastoreAllocate": {
+          "description": "The role that gives a cluster Datastore.Allocate on its storage, empty when no cluster may choose it, and the storages the management cluster uses.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role", "managementStorages"],
+          "properties": {
+            "role": { "type": "string" },
+            "managementStorages": { "type": "array", "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9._-]*$" }, "uniqueItems": true }
+          }
+        }
       }
     },
     "addons": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["headlamp", "rancher", "monitoring", "loki", "alloy", "kyverno", "kyvernoPolicies", "istio", "istioBase", "istioCNI", "istioZtunnel", "certManager", "cloudControllerManager", "csiPlugin", "cilium", "calico", "traefik", "metallb", "kubeVip", "kubeVipCloudProvider"],
+      "required": ["headlamp", "rancher", "monitoring", "loki", "alloy", "kyverno", "kyvernoPolicies", "istio", "istioBase", "istioCNI", "istioZtunnel", "certManager", "cloudControllerManager", "csiPlugin", "csiPluginNewest", "cilium", "calico", "traefik", "metallb", "kubeVip", "kubeVipCloudProvider"],
       "properties": {
         "headlamp": { "$ref": "#/$defs/chartOnly" },
         "rancher": {
@@ -151,6 +161,7 @@
         "certManager": { "$ref": "#/$defs/chartOnly" },
         "cloudControllerManager": { "$ref": "#/$defs/chartOnly" },
         "csiPlugin": { "$ref": "#/$defs/chartOnly" },
+        "csiPluginNewest": { "$ref": "#/$defs/chartOnly" },
         "cilium": { "$ref": "#/$defs/chartOnly" },
         "calico": {
           "allOf": [{ "$ref": "#/$defs/chart" }],

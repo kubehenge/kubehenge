@@ -14,6 +14,7 @@ import (
 
 	"github.com/luthermonson/go-proxmox"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -67,6 +68,7 @@ type controllerOptions struct {
 	leaderElect       bool
 	ccmChart          string
 	csiChart          string
+	csiNewestChart    string
 	ciliumChart       string
 	calicoChart       string
 	headlampChart     string
@@ -129,6 +131,7 @@ separate nodes.`,
 	f.StringVar(&o.settings.Region, "region", "", "region the clusters see Proxmox VE as; default the Proxmox VE cluster's name")
 	f.StringVar(&o.ccmChart, "ccm-chart", "", "cloud controller manager chart, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.csiChart, "csi-chart", "", "CSI plugin chart, as <repository>/<name>:<version>@sha256:<digest>")
+	o.datastoreAllocateFlags(f)
 	f.StringVar(&o.ciliumChart, "cilium-chart", "", "Cilium chart, for distributions without a CNI of their own, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.calicoChart, "calico-chart", "", "Calico's operator chart, for distributions without a CNI of their own, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.headlampChart, "headlamp-chart", "", "Headlamp chart, for clusters that switch it on, as <repository>/<name>:<version>@sha256:<digest>")
@@ -163,10 +166,17 @@ separate nodes.`,
 	f.StringVar(&o.certDir, "extension-cert-dir", "/etc/kubehenge/tls", "directory with tls.crt and tls.key for the Runtime Extension server")
 	f.StringVar(&o.healthAddr, "health-address", ":8081", "address of the liveness and readiness probes")
 	f.BoolVar(&o.leaderElect, "leader-elect", true, "elect one active controller among replicas")
-	for _, flag := range []string{"ccm-chart", "csi-chart", "cilium-chart", "calico-chart", "calico-images", "headlamp-chart", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "rancher-turtles-image", "rancher-cluster-api-image", "monitoring-chart", "kube-rbac-proxy-image", "loki-chart", "alloy-chart", "alloy-image", "kyverno-chart", "kyverno-policies-chart", "istio-chart", "istio-base-chart", "istio-cni-chart", "istio-ztunnel-chart", "traefik-chart", "metallb-chart", "kube-vip-chart", "kube-vip-image", "kube-vip-cloud-provider-chart"} {
+	for _, flag := range []string{"ccm-chart", "csi-chart", "csi-newest-chart", "cilium-chart", "calico-chart", "calico-images", "headlamp-chart", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "rancher-turtles-image", "rancher-cluster-api-image", "monitoring-chart", "kube-rbac-proxy-image", "loki-chart", "alloy-chart", "alloy-image", "kyverno-chart", "kyverno-policies-chart", "istio-chart", "istio-base-chart", "istio-cni-chart", "istio-ztunnel-chart", "traefik-chart", "metallb-chart", "kube-vip-chart", "kube-vip-image", "kube-vip-cloud-provider-chart"} {
 		_ = cmd.MarkFlagRequired(flag)
 	}
 	return cmd
+}
+
+// datastoreAllocateFlags are those that let clusters run the CSI plugin's newest release.
+func (o *controllerOptions) datastoreAllocateFlags(f *pflag.FlagSet) {
+	f.StringVar(&o.csiNewestChart, "csi-newest-chart", "", "the CSI plugin's newest release, for clusters whose token holds Datastore.Allocate on their storage, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.settings.DatastoreRole, "datastore-allocate-role", "", "Proxmox VE role, holding Datastore.Allocate, each cluster that asks for it gets on its storage; empty to let no cluster hold it")
+	f.StringSliceVar(&o.r.DatastoreAllocate.Management, "management-storages", nil, "storages the management cluster uses, on which no cluster may hold Datastore.Allocate (comma-separated)")
 }
 
 func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
@@ -198,6 +208,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	distributions := &provisioner.Distributions{ClassNamespace: o.r.ClassNamespace, Providers: providers}
 	cloud := &provisioner.Proxmox{Client: c, Settings: o.settings}
 	o.r.Cloud = cloud
+	o.r.DatastoreAllocate.Role = o.settings.DatastoreRole
 	o.r.Endpoint = provisioner.Endpoint{URL: strings.TrimSuffix(conn.URL, "/"), CA: string(ca)}
 	o.r.RancherKubernetes = rancherMinors
 
@@ -228,6 +239,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 		Registrar:         registrar,
 		RancherKubernetes: rancherMinors,
 		Nodes:             cloud,
+		DatastoreAllocate: o.r.DatastoreAllocate,
 		Releases: &provisioner.ReleaseChecksums{
 			Reader:    mgr.GetAPIReader(),
 			Client:    mgr.GetClient(),
@@ -298,6 +310,7 @@ func (o *controllerOptions) parseCharts() error {
 	}{
 		{"--ccm-chart", o.ccmChart, &o.r.Charts.CCM},
 		{"--csi-chart", o.csiChart, &o.r.Charts.CSI},
+		{"--csi-newest-chart", o.csiNewestChart, &o.r.Charts.CSINewest},
 		{"--cilium-chart", o.ciliumChart, &o.r.Charts.Cilium},
 		{"--calico-chart", o.calicoChart, &o.r.Charts.Calico},
 		{"--headlamp-chart", o.headlampChart, &o.r.Charts.Headlamp},

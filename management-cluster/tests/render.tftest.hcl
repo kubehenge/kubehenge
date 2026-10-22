@@ -229,6 +229,10 @@ run "controller_and_clusters_are_least_privilege" {
         clusterGroup = "kubehenge-clusters"
         clusterRole  = "kubehenge-cluster-vms"
         ha           = false
+        datastoreAllocate = {
+          role               = ""
+          managementStorages = ["local-lvm", "local"]
+        }
       }
       clusterOIDC = []
       image       = "ghcr.io/kubehenge/kubehenge@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
@@ -266,6 +270,11 @@ run "controller_and_clusters_are_least_privilege" {
     )
     error_message = "no HA token unless Proxmox VE HA is asked for"
   }
+
+  assert {
+    condition     = length(proxmox_virtual_environment_role.cluster_datastore) == 0
+    error_message = "no cluster may hold Datastore.Allocate unless the administrator lets clusters choose it"
+  }
 }
 
 run "proxmox_ha" {
@@ -297,6 +306,37 @@ run "proxmox_ha" {
   assert {
     condition     = contains(output.proxmox_objects.users, "kubehenge-ha@pve") && contains(output.proxmox_objects.roles, "kubehenge-ha")
     error_message = "a destroy is checked for the HA user and role too"
+  }
+}
+
+run "cluster_datastore_allocate" {
+  command = plan
+
+  variables {
+    cluster_datastore_allocate = true
+    workload_datastores        = ["local-lvm", "ceph", "local"]
+  }
+
+  assert {
+    condition = (
+      toset(proxmox_virtual_environment_role.cluster_datastore[0].privileges) == toset(["Datastore.Allocate", "Datastore.AllocateSpace", "Datastore.Audit"]) &&
+      toset([for k, a in proxmox_acl.provisioner : k if a.role_id == "kubehenge-cluster-datastore"]) == toset(["/storage/ceph kubehenge-cluster-datastore"]) &&
+      !proxmox_acl.provisioner["/storage/ceph kubehenge-cluster-datastore"].propagate
+    )
+    error_message = "the controller may grant Datastore.Allocate on the workload storages the management cluster does not use, and on no other"
+  }
+
+  assert {
+    condition = (
+      length([for k, a in proxmox_acl.clusters : k if a.role_id == "kubehenge-cluster-datastore"]) == 0 &&
+      yamldecode(helm_release.kubehenge.values[0]).proxmox.datastoreAllocate == { role = "kubehenge-cluster-datastore", managementStorages = ["local-lvm", "local"] }
+    )
+    error_message = "the clusters' group gets nothing more; the controller learns the role and the management cluster's storages"
+  }
+
+  assert {
+    condition     = contains(output.proxmox_objects.roles, "kubehenge-cluster-datastore")
+    error_message = "a destroy is checked for the role too"
   }
 }
 

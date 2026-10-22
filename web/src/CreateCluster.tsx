@@ -6,6 +6,8 @@ import { clusterPath } from "./ClusterDetail";
 import {
   classBridges,
   classStorages,
+  csiOffer,
+  csiProblems,
   fieldProblems,
   newForm,
   offeredBridges,
@@ -24,7 +26,7 @@ import {
 import { GeneralStep, IdentityStep, MachinesStep, NetworkStep } from "./CreateSteps";
 import { offersHA, useHARules } from "./Placement";
 import { navigate } from "./router";
-import type { Bridge, ClusterClass, PveNode, Storage, Versions } from "./types";
+import type { Bridge, Cluster, ClusterClass, PveNode, Storage, Versions } from "./types";
 import { Dialog, ErrorBox, errorMessage, filled, sole } from "./ui";
 
 // The choices that can ask more of the machines, which then grow to it.
@@ -53,6 +55,7 @@ export function CreateCluster({
   const [discarding, setDiscarding] = useState(false);
   const [bridgesByNode, setBridgesByNode] = useState<Record<string, Bridge[]>>({});
   const [storages, setStorages] = useState<Storage[]>([]);
+  const [clusters, setClusters] = useState<Cluster[]>([]);
   const [nodes, setNodes] = useState<PveNode[]>([]);
   const rules = useHARules();
   const [step, setStep] = useState<Step>("General");
@@ -121,9 +124,18 @@ export function CreateCluster({
         setError(errorMessage(err));
       }
     }
+    async function loadClusters(): Promise<void> {
+      try {
+        setClusters(await api.clusters());
+      } catch {
+        // The controller refuses a storage another cluster uses in any case; the list only says so sooner.
+        setClusters([]);
+      }
+    }
     void loadClasses();
     void loadStorages();
     void loadNodes();
+    void loadClusters();
   }, []);
 
   // Without Sys.Audit on a node Proxmox VE lists none of its bridges, and with nothing listed the
@@ -139,6 +151,7 @@ export function CreateCluster({
     storage: filled(entered.storage) ? entered.storage : (sole(usableStorages.map((s) => s.storage)) ?? ""),
   };
   const haOffered = offersHA(cls, usableStorages, form.storage);
+  const csi = csiOffer({ cls, storages: usableStorages, storage: form.storage, clusters });
 
   const chooseClass = (name: string): void => {
     const c = classes.find((x) => x.name === name);
@@ -154,7 +167,7 @@ export function CreateCluster({
   const index = steps.indexOf(step);
   const previous = steps[index - 1];
   const following = steps[index + 1];
-  const byField = fieldProblems(step, form, cls);
+  const byField = { ...fieldProblems(step, form, cls), ...csiProblems(step, form, csi) };
   const open = Object.values(byField);
   const shown = (k: FieldKey): string | undefined => (attempted.has(step) || touched.has(k) ? byField[k] : undefined);
   const wizardRef = useRef<HTMLDivElement>(null);
@@ -230,6 +243,7 @@ export function CreateCluster({
               usableStorages={usableStorages}
               placed={variable(cls, "allowedNodes") !== undefined}
               haOffered={haOffered}
+              csi={csi}
               nodes={nodes}
               rules={rules}
             />
@@ -249,7 +263,7 @@ export function CreateCluster({
           {step === "Confirm" && cls && (
             <>
               <dl className="summary" aria-label="Summary">
-                {summary(form, cls, haOffered).map(([k, v]) => (
+                {summary(form, cls, { ha: haOffered, csi: csi.offered }).map(([k, v]) => (
                   <Fragment key={k}>
                     <dt>{k}</dt>
                     <dd>{v}</dd>

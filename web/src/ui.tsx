@@ -55,6 +55,10 @@ export const istioHint =
   "Istio in ambient mode, without sidecars: pods in a namespace labelled istio.io/dataplane-mode=ambient talk to each other over mutual TLS, with their workload identities. Switching it off first takes every namespace and pod out of the mesh.";
 export const istioText = (on: boolean): string => (on ? "On, ambient mode" : "Off");
 
+/** csiText describes the CSI plugin's release a cluster runs. */
+export const csiText = (on: boolean): string =>
+  on ? "Newest release, with Datastore.Allocate on the cluster's storage" : "Release that needs no Datastore.Allocate";
+
 /** maxWorkers is the most workers a cluster is given, at creation and when scaled. */
 export const maxWorkers = 100;
 

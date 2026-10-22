@@ -2,6 +2,10 @@
 
 Every release's changes, newest first. Versions follow [Semantic Versioning](https://semver.org/); before 1.0.0 a minor version may change behaviour.
 
+## [Unreleased]
+
+- **The CSI plugin's newest release, per cluster.** With `cluster_datastore_allocate` (**CSI plugin** in the setup), a cluster may choose the Proxmox VE CSI plugin's newest release in the wizard, under **Options** or with its `csi` variable; its token then gets `Datastore.Allocate` on the cluster's storage. Only on a storage the management cluster, the VM templates and other clusters do not use. Other clusters keep the release that needs no `Datastore.Allocate`.
+
 ## [0.1.0] - 2026-10-22
 
 The first release.

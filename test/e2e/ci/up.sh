@@ -53,6 +53,9 @@ until pve systemctl is-active --quiet pveproxy.service && pve pvesh get /version
 done
 # `import` holds the disk images VMs are created from, `rootdir` the appliance's container.
 pve pvesm set local --content iso,vztmpl,backup,images,snippets,import,rootdir
+# A storage no other cluster, the management cluster nor the templates use, for a cluster that
+# holds Datastore.Allocate on its own.
+pve pvesm add dir own --path /var/lib/vz/own --mkdir 1 --content images
 pve cat /etc/pve/pve-root-ca.pem > "${work}/pve-root-ca.pem"
 secret=$(pve pveum user token add root@pam e2e --privsep 0 --output-format json |
     sed -n 's/.*"value" *: *"\([^"]*\)".*/\1/p')

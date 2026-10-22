@@ -140,7 +140,7 @@ func TestVolumesEndToEnd(t *testing.T) { //nolint:paralleltest // owns the Proxm
 
 	var recorded Credentials
 	t.Cleanup(func() { removeLeftovers(t, p, n, recorded) })
-	creds, err := p.Ensure(ctx, n, Credentials{}, func(c Credentials) error { recorded = c; return nil })
+	creds, err := p.Ensure(ctx, n, Access{}, Credentials{}, func(c Credentials) error { recorded = c; return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestVolumesEndToEnd(t *testing.T) { //nolint:paralleltest // owns the Proxm
 	}
 
 	// The controller finds the owner VM where it moved to, rather than making another.
-	again, err := p.Ensure(ctx, n, creds, func(Credentials) error {
+	again, err := p.Ensure(ctx, n, Access{}, creds, func(Credentials) error {
 		t.Error("the controller chose a new volume owner")
 		return nil
 	})

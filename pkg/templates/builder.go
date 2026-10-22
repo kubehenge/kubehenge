@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"regexp"
 	"slices"
@@ -142,25 +143,58 @@ func (b *Builder) Find(ctx context.Context, t *Template) (*proxmox.ClusterResour
 // List returns every Kubehenge template in the builder's pool, confirmed from each VM's
 // configuration as Find's are.
 func (b *Builder) List(ctx context.Context) ([]*proxmox.ClusterResource, error) {
+	inv, err := b.Inventory(ctx)
+	return inv.Templates, err
+}
+
+// Inventory is what the builder's pool holds of Kubehenge's templates.
+type Inventory struct {
+	// Templates are sorted by name.
+	Templates []*proxmox.ClusterResource
+	// Storages are those the templates have disks on, sorted.
+	Storages []string
+}
+
+// Inventory lists the templates as List does, with the storages their disks are on.
+func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 	resources, err := b.vms(ctx)
 	if err != nil {
-		return nil, err
+		return Inventory{}, err
 	}
-	var out []*proxmox.ClusterResource
+	var inv Inventory
 	for _, r := range resources {
 		if !isQemu(r) || !b.inPool(r) || !slices.Contains(ParseTags(r.Tags), kubehengeTag) {
 			continue
 		}
 		c, err := b.config(ctx, r)
 		if err != nil {
-			return nil, err
+			return Inventory{}, err
 		}
-		if bool(c.Template) {
-			out = append(out, confirmed(r, c))
+		if !bool(c.Template) {
+			continue
+		}
+		inv.Templates = append(inv.Templates, confirmed(r, c))
+		disks := slices.Collect(maps.Values(c.MergeDisks()))
+		for _, disk := range append(disks, c.EFIDisk0, c.TPMState0) {
+			if s := diskStorage(disk); s != "" && !slices.Contains(inv.Storages, s) {
+				inv.Storages = append(inv.Storages, s)
+			}
 		}
 	}
-	slices.SortFunc(out, func(x, y *proxmox.ClusterResource) int { return strings.Compare(x.Name, y.Name) })
-	return out, nil
+	slices.SortFunc(inv.Templates, func(x, y *proxmox.ClusterResource) int { return strings.Compare(x.Name, y.Name) })
+	slices.Sort(inv.Storages)
+	return inv, nil
+}
+
+// diskStorage is the storage of a disk as a VM's configuration names it, storage:volume followed by
+// its options, or "" for none, such as an empty CD drive.
+func diskStorage(disk string) string {
+	volume, _, _ := strings.Cut(disk, ",")
+	storage, _, ok := strings.Cut(volume, ":")
+	if !ok {
+		return ""
+	}
+	return storage
 }
 
 // Delete removes the template with t's tags, if there is one, and returns its VM ID or 0.
