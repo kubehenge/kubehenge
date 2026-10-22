@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type JSX,
+  type ReactNode,
   type RefObject,
 } from "react";
 
@@ -652,7 +653,9 @@ function LastRun({ status, manage }: { status: SetupStatus; manage: boolean }) {
     <>
       {manage && job.state === "succeeded" && job.kind !== "remove" && (
         <p className="muted">
-          Last applied {when} by {job.user}.
+          {job.automatic === true
+            ? `Last applied ${when} by an automatic upgrade, as ${job.user}.`
+            : `Last applied ${when} by ${job.user}.`}
         </p>
       )}
       {job.state === "succeeded" && job.kind === "remove" && (
@@ -662,7 +665,9 @@ function LastRun({ status, manage }: { status: SetupStatus; manage: boolean }) {
       )}
       {job.state === "failed" && (
         <div className="error" role="alert">
-          The last run failed: {job.error}
+          {job.automatic === true
+            ? `The automatic upgrade of ${when} failed, and is tried again in the next day's upgrade hour: ${job.error ?? ""}`
+            : `The last run failed: ${job.error ?? ""}`}
           {(job.log ?? []).length > 0 && (
             <details>
               <summary>Log</summary>
@@ -757,6 +762,9 @@ function ManagedSummary({
     ["Pod ranges", s.podSubnets?.join(", ") ?? "Chosen clear of the nodes' network"],
     ["Service ranges", s.serviceSubnets?.join(", ") ?? "Chosen clear of the nodes' network"],
   ];
+  if (status.upgrade) {
+    rows.unshift(["Applied with", `Kubehenge ${status.upgrade.applied}`]);
+  }
   return (
     <section className="panel">
       <div className="box">
@@ -793,20 +801,36 @@ function ManagedSummary({
           />
         </div>
       )}
-      {applying && <ApplyAgain settings={s} onClose={() => setApplying(false)} onStarted={onStarted} />}
+      {applying && (
+        <ApplyDialog
+          title="Apply the management cluster again"
+          action="Apply"
+          settings={s}
+          onClose={() => setApplying(false)}
+          onStarted={onStarted}
+        />
+      )}
     </section>
   );
 }
 
-function ApplyAgain({
+// ApplyDialog applies the saved settings again as they are, once given the state passphrase; what
+// it brings goes above the passphrase.
+export function ApplyDialog({
+  title,
+  action,
   settings: s,
   onClose,
   onStarted,
+  children,
 }: {
+  title: string;
+  action: string;
   settings: ManagementSettings;
   onClose: () => void;
   onStarted: () => void;
-}) {
+  children?: ReactNode;
+}): JSX.Element {
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -827,7 +851,7 @@ function ApplyAgain({
   };
   return (
     <Dialog
-      title="Apply the management cluster again"
+      title={title}
       onClose={onClose}
       onSubmit={() => {
         void apply();
@@ -838,11 +862,12 @@ function ApplyAgain({
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || short}>
-            Apply
+            {action}
           </button>
         </>
       }
     >
+      {children}
       <p className="muted">Runs with your Proxmox VE session, which is not stored, and takes ten to twenty minutes.</p>
       <Field
         label="State passphrase"
@@ -889,7 +914,8 @@ function Progress({ job }: { job: Job }): JSX.Element {
         <h2>{job.kind === "remove" ? "Removing the management cluster" : "Applying the management cluster"}</h2>
         <span className="spacer" />
         <span className="muted">
-          started by {job.user}, {elapsed(job.started)} ago
+          {job.automatic === true ? `started automatically as ${job.user}` : `started by ${job.user}`},{" "}
+          {elapsed(job.started)} ago
         </span>
       </div>
       <p className="pad muted">

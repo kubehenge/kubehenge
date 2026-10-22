@@ -36,6 +36,7 @@ type Accounts interface {
 	Resources
 	Guests
 	Removals
+	Upgraders
 }
 
 // SignIns are the Proxmox VE sign-ins the interface's sessions rest on.
@@ -182,6 +183,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/appliance/upgrades", s.signedIn(s.upgradesStatus))
 	mux.HandleFunc("POST /api/appliance/upgrades", s.signedIn(s.upgrade))
 	mux.HandleFunc("PUT /api/appliance/upgrades/settings", s.signedIn(s.upgradeSettings))
+	mux.HandleFunc("PUT /api/appliance/upgrades/management", s.signedIn(s.keepUnattended))
+	mux.HandleFunc("DELETE /api/appliance/upgrades/management", s.signedIn(s.forgetUnattended))
 	mux.HandleFunc("GET /api/templates", s.signedIn(s.listTemplates))
 	mux.HandleFunc("POST /api/templates", s.signedIn(s.createTemplate))
 	mux.HandleFunc("DELETE /api/templates/{vmid}", s.signedIn(s.deleteTemplate))

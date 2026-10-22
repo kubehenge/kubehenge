@@ -26,6 +26,7 @@ Deleting the cluster that runs Rancher first removes every registered cluster fr
 On the Administration page, **Remove Kubehenge** takes the state passphrase and the word `remove`. It refuses while any cluster exists, since their Proxmox VE objects are cleaned up by the management cluster, and waits while a run of the management cluster is going on. A wrong passphrase stops it before anything is deleted. It then:
 
 - deletes the VM templates in the template pool, `kubehenge-templates`;
+- switches automatic upgrades of the management cluster off, deleting what the appliance kept for them and the user `kubehenge-upgrader@pve` with its token ([upgrading.md](upgrading.md#automatically-after-kubehenge));
 - destroys the management cluster with OpenTofu: its VMs, the Talos image, the three pools, the group for clusters' users, the roles, and the Cluster API and controller users with their API tokens.
 
 The page follows the log. The appliance stays, back at its first run with the last settings filled in, ready to set up again; the emptied state is deleted, so the next setup chooses a new passphrase. Removal needs the same [privileges](install.md#who-may-set-it-up) on `/` as the setup.

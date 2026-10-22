@@ -34,6 +34,9 @@ type Upgrades struct {
 	lastErr string
 	lastRun time.Time
 	changed chan struct{}
+
+	// lastManagement is when an automatic apply of the management cluster last started.
+	lastManagement time.Time
 }
 
 // UpgradeSettings is the automatic upgrade policy: how far, and at which hour of the day in which
@@ -53,6 +56,9 @@ const (
 	shownIndexAge = time.Minute
 	// privateFile is the mode of the files only the interface's own user reads.
 	privateFile os.FileMode = 0o600
+	// oncePerDay is the least time between two automatic runs of a kind: a day, less what the hour
+	// they start in allows.
+	oncePerDay = 20 * time.Hour
 )
 
 func (u *Upgrades) settings() UpgradeSettings {
@@ -93,6 +99,8 @@ type upgradesView struct {
 	Error     string                  `json:"error,omitempty"`
 	Settings  UpgradeSettings         `json:"settings"`
 	Status    *appliance.UpdateStatus `json:"status,omitempty"`
+	// Management is whether the management cluster follows the appliance's upgrades on its own.
+	Management *managementAutomatic `json:"management,omitempty"`
 }
 
 // aboutRelease keeps the updater's last result only while it speaks of the installed release: an
@@ -116,7 +124,10 @@ func (s *Server) upgradesStatus(w http.ResponseWriter, r *http.Request, u user) 
 	if !s.require(w, r, u, "/", setupPrivileges...) {
 		return
 	}
-	v := upgradesView{Version: up.Current, Available: []string{}, Settings: up.settings(), Status: aboutRelease(up.Spool.Status(), up.Current)}
+	v := upgradesView{
+		Version: up.Current, Available: []string{}, Settings: up.settings(), Status: aboutRelease(up.Spool.Status(), up.Current),
+		Management: s.managementAutomatic(),
+	}
 	ix, errText := up.index(r.Context(), shownIndexAge)
 	v.Error = errText
 	if cur, err := release.ParseVersion(up.Current); ix != nil && err == nil {
@@ -221,11 +232,16 @@ func (s *Server) upgradeSettings(w http.ResponseWriter, r *http.Request, u user)
 		return
 	}
 	s.Log.Info("appliance upgrade policy set", "user", u.ticket.Username, "policy", req.Policy, "hour", req.Hour, "timeZone", req.TimeZone)
+	up.wake()
+	writeJSON(w, http.StatusOK, req)
+}
+
+// wake tells autoUpgrade that what it waits for changed.
+func (u *Upgrades) wake() {
 	select {
-	case up.changes() <- struct{}{}:
+	case u.changes() <- struct{}{}:
 	default:
 	}
-	writeJSON(w, http.StatusOK, req)
 }
 
 // applying tells whether the management cluster is being applied or a template built, which a
@@ -235,18 +251,23 @@ func (s *Server) applying() bool {
 }
 
 // autoUpgrade asks the updater, once a day at the chosen hour, for the newest release the policy
-// allows; the updater decides whether there is one. It sleeps until that hour, then looks once a
-// minute within it, as an apply going on holds the upgrade back; with the policy off it sleeps
-// until the settings change.
+// allows; the updater decides whether there is one. In the same hour, once the appliance runs a
+// newer release than the one that applied the management cluster, it applies that too where an
+// administrator switched that on. It sleeps until that hour, then looks once a minute within it, as
+// an apply going on holds the upgrade back, and an upgrade of the appliance the apply; with both
+// off it sleeps until the settings change.
 func (s *Server) autoUpgrade(ctx context.Context) {
 	up := s.Upgrades
 	if up == nil {
 		return
 	}
 	for {
-		wait, on := up.untilHour(up.Now())
+		wait, on := up.untilHour(up.Now(), s.unattendedOn())
 		if on && wait == 0 {
-			s.requestDueUpgrade()
+			// The management cluster waits for an upgrade asked for now, which brings what it moves to.
+			if !s.requestDueUpgrade() {
+				s.applyDueManagement() //nolint:contextcheck // the run outlives the loop's wait on purpose, as one a request starts does
+			}
 			wait = time.Minute
 		}
 		var fire <-chan time.Time
@@ -269,22 +290,31 @@ func (s *Server) autoUpgrade(ctx context.Context) {
 	}
 }
 
-func (s *Server) requestDueUpgrade() {
+// requestDueUpgrade asks the updater for an automatic upgrade when one is due, and tells whether it
+// did.
+func (s *Server) requestDueUpgrade() bool {
 	req, ok := s.Upgrades.due(s.applying())
 	if !ok {
-		return
+		return false
 	}
 	if err := s.Upgrades.Spool.Request(req); err != nil {
 		s.Log.Error("automatic upgrade request", "error", err)
-		return
+		return false
 	}
 	s.Log.Info("automatic upgrade requested", "policy", req.Policy)
+	return true
 }
 
-// untilHour is how long until the chosen hour starts, 0 within it; not on while the policy is off.
-func (u *Upgrades) untilHour(now time.Time) (time.Duration, bool) {
+// unattendedOn tells whether the management cluster follows the appliance's upgrades on its own.
+func (s *Server) unattendedOn() bool {
+	return s.Appliance != nil && s.Appliance.UnattendedOn() != nil
+}
+
+// untilHour is how long until the chosen hour starts, 0 within it; not on while the policy is off,
+// unless the management cluster's automatic upgrades are on (management).
+func (u *Upgrades) untilHour(now time.Time, management bool) (time.Duration, bool) { //nolint:revive // flag-parameter: management is a state the decision reads, not a mode
 	st := u.settings()
-	if st.Policy == release.PolicyOff {
+	if st.Policy == release.PolicyOff && !management {
 		return 0, false
 	}
 	loc := st.location()
@@ -322,7 +352,7 @@ func (u *Upgrades) due(applying bool) (appliance.UpdateRequest, bool) { //nolint
 			_ = u.lastRun.UnmarshalText(raw)
 		}
 	}
-	if st.Policy == release.PolicyOff || applying || now.Hour() != st.Hour || now.Sub(u.lastRun) < 20*time.Hour {
+	if st.Policy == release.PolicyOff || applying || now.Hour() != st.Hour || now.Sub(u.lastRun) < oncePerDay {
 		return appliance.UpdateRequest{}, false
 	}
 	u.lastRun = now
@@ -330,4 +360,34 @@ func (u *Upgrades) due(applying bool) (appliance.UpdateRequest, bool) { //nolint
 		_ = os.WriteFile(u.SettingsPath+".last", raw, privateFile)
 	}
 	return appliance.UpdateRequest{Policy: st.Policy}, true
+}
+
+// managementPath records when an automatic apply of the management cluster last started, kept on
+// disk so that a restart within the hour does not run it again.
+func (u *Upgrades) managementPath() string { return u.SettingsPath + ".management" }
+
+// managementDue tells whether an automatic apply of the management cluster may start now: in the
+// chosen hour, once a day, never beside another job.
+func (u *Upgrades) managementDue(applying bool) bool {
+	st := u.settings()
+	now := u.Now().In(st.location())
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.lastManagement.IsZero() {
+		if raw, err := os.ReadFile(u.managementPath()); err == nil {
+			_ = u.lastManagement.UnmarshalText(raw)
+		}
+	}
+	return !applying && now.Hour() == st.Hour && now.Sub(u.lastManagement) >= oncePerDay
+}
+
+// managementStarted records that an automatic apply of the management cluster started, or failed
+// to, so that the next is tried the next day.
+func (u *Upgrades) managementStarted() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.lastManagement = u.Now()
+	if raw, err := u.lastManagement.MarshalText(); err == nil {
+		_ = os.WriteFile(u.managementPath(), raw, privateFile)
+	}
 }

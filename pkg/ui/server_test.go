@@ -53,6 +53,30 @@ type fakeAccounts struct {
 	released []string
 	// loadReads records the VMs whose load was read.
 	loadReads []int
+	// users are the users made with an administrator token, by ID; usersDeleted counts deletions.
+	users        map[string]string
+	usersDeleted int
+}
+
+func (f *fakeAccounts) CreateAdministratorToken(_ context.Context, t *pve.Ticket, userid, name, _ string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.effective(t.Username, "/").Has("Permissions.Modify", "User.Modify") {
+		return "", pve.ErrForbidden
+	}
+	if f.users == nil {
+		f.users = map[string]string{}
+	}
+	f.users[userid] = userid + "!" + name + "=5ec2e7"
+	return f.users[userid], nil
+}
+
+func (f *fakeAccounts) DeleteUser(_ context.Context, _ *pve.Ticket, userid string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.users, userid)
+	f.usersDeleted++
+	return nil
 }
 
 func (f *fakeAccounts) SignIn(_ context.Context, username, password string) (*pve.Ticket, *pve.Challenge, error) {

@@ -412,8 +412,11 @@ func TestAutomaticUpgradeSleepsUntilItsHour(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	up := withUpgrades(t, h)
-	if _, on := up.untilHour(h.clock); on {
+	if _, on := up.untilHour(h.clock, false); on {
 		t.Fatal("waiting for an hour with the policy off")
+	}
+	if wait, on := up.untilHour(h.clock, true); !on || wait != 18*time.Hour {
+		t.Fatalf("with the management cluster's automatic upgrades on: %s, %v", wait, on)
 	}
 	if err := os.WriteFile(up.SettingsPath, []byte(`{"policy":"patch","hour":3,"timeZone":"Europe/Berlin"}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -429,7 +432,7 @@ func TestAutomaticUpgradeSleepsUntilItsHour(t *testing.T) {
 		time.Date(2026, 10, 24, 23, 0, 0, 0, berlin):   5 * time.Hour, // summer time ends at 03:00 on the 25th
 		time.Date(2026, 10, 14, 23, 0, 0, 0, time.UTC): 2 * time.Hour,
 	} {
-		if got, on := up.untilHour(now); !on || got != want {
+		if got, on := up.untilHour(now, false); !on || got != want {
 			t.Errorf("at %s: %s, want %s", now, got, want)
 		}
 	}

@@ -221,7 +221,7 @@ The signed-in user needs these privileges on `/`, which the Administrator role h
 
 Proxmox VE checks every call of the run again on its own. Anyone without them sees that Kubehenge is not set up yet. The same privileges open the Administration page later: Kubehenge's upgrades, repair access, the VM templates, the management cluster's settings (applying them again or changing them) and removal. They also bring the warnings about the [backup](#back-up-the-appliance) and the [certificate](#the-appliances-certificate).
 
-The run acts with your own Proxmox VE session: the interface renews your ticket and hands it to OpenTofu through its environment only; it is never stored, and no administrator token is created. A ticket lasts two hours, so the run has to finish within that.
+The run acts with your own Proxmox VE session: the interface renews your ticket and hands it to OpenTofu through its environment only; it is never stored, and no administrator token is created. A ticket lasts two hours, so the run has to finish within that. The one exception is opt-in: automatic upgrades of the management cluster, off unless an administrator switches them on, have the appliance keep the state passphrase and an Administrator token of a user of its own ([upgrading.md](upgrading.md#automatically-after-kubehenge)).
 
 ### The settings
 
@@ -335,14 +335,14 @@ The appliance keeps the module's other settings at their defaults: the managemen
 
 ### The state passphrase
 
-The management cluster's state holds its secrets, among them its admin kubeconfig and talosconfig. The appliance encrypts it with a key derived from the passphrase: at least 16 printable characters, on one line. The passphrase is never stored. Every later apply, the repair access on the Administration page and removal ask for it again, and without it the state cannot be read. Keep it in a password manager.
+The management cluster's state holds its secrets, among them its admin kubeconfig and talosconfig. The appliance encrypts it with a key derived from the passphrase: at least 16 printable characters, on one line. The passphrase is not stored, unless automatic upgrades of the management cluster are switched on ([upgrading.md](upgrading.md#automatically-after-kubehenge)). Every later apply, the repair access on the Administration page and removal ask for it again, and without it the state cannot be read. Keep it in a password manager.
 
 A first run that failed part of the way keeps its state, which records what it made, so the next try asks once for that run's passphrase rather than a new one. After a [removal](uninstalling.md#in-the-appliance) the emptied state goes, and the next setup chooses a passphrase afresh.
 
 **A lost passphrase cannot be recovered**, and nothing stands in for it. The management cluster and every cluster keep running, and the interface still creates, changes and deletes clusters with an account of its own. What is lost is applying the management cluster again (it stays at the versions it has), repair access, and removal from the page. To start over:
 
 1. Delete every cluster in the interface, and wait until they are gone, so that the management cluster cleans up their Proxmox VE objects.
-2. In Proxmox VE, delete the VMs in the pools `kubehenge-management` (the management cluster) and `kubehenge-templates` (the VM templates), then the pools `kubehenge-management`, `kubehenge-templates` and `kubehenge`, the users `kubehenge-cluster-api@pve`, `kubehenge-provisioner@pve` and `kubehenge-template-builder@pve` (their API tokens go with them), the group `kubehenge-clusters`, and the roles named `kubehenge-…`.
+2. In Proxmox VE, delete the VMs in the pools `kubehenge-management` (the management cluster) and `kubehenge-templates` (the VM templates), then the pools `kubehenge-management`, `kubehenge-templates` and `kubehenge`, the users `kubehenge-cluster-api@pve`, `kubehenge-provisioner@pve`, `kubehenge-template-builder@pve` and, where automatic upgrades of the management cluster were on, `kubehenge-upgrader@pve` (their API tokens go with them), the group `kubehenge-clusters`, and the roles named `kubehenge-…`.
 3. [Remove the appliance](uninstalling.md#remove-the-appliance) and install it again, which starts from an empty state.
 
 ### While it runs

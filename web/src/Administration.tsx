@@ -4,6 +4,7 @@ import { api } from "./api";
 import { ApplianceUpgrades } from "./ApplianceUpgrades";
 import { SharedDNS01 } from "./Certificates";
 import { Credentials } from "./Credentials";
+import { ManagementBehind } from "./ManagementUpgrade";
 import { RemoveManagement } from "./RemoveManagement";
 import { ManagementCluster } from "./Setup";
 import { Templates } from "./Templates";
@@ -36,9 +37,18 @@ export function Administration({ onGone }: { onGone: () => void }): JSX.Element 
     );
   }
   const running = status.job?.state === "running";
+  const management = <ManagementCluster status={status} reload={reload} />;
   return (
     <>
       <ErrorBox message={error} />
+      <ManagementBehind
+        status={status}
+        onStarted={() => {
+          void reload();
+        }}
+      />
+      {/* A run going on is what the page is about until it ends, whoever started it. */}
+      {running && management}
       <section className="panel columns">
         <ApplianceUpgrades />
         <Credentials running={running} />
@@ -63,7 +73,7 @@ export function Administration({ onGone }: { onGone: () => void }): JSX.Element 
       <section className="panel">
         <SharedDNS01 />
       </section>
-      <ManagementCluster status={status} reload={reload} />
+      {!running && management}
       <section className="panel">
         <RemoveManagement
           running={running}

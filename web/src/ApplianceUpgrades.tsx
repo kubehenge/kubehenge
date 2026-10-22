@@ -1,6 +1,7 @@
 import { useState, type JSX } from "react";
 
 import { api } from "./api";
+import { AutomaticManagement } from "./ManagementUpgrade";
 import type { UpgradePolicy, Upgrades } from "./types";
 import { Dialog, ErrorBox, Field, browserZone, errorMessage, filled, pollRunning, timeZones, usePoll } from "./ui";
 import { oneOf } from "./values";
@@ -90,10 +91,12 @@ export function ApplianceUpgrades(): JSX.Element {
       <AutomaticUpgrades
         version={data.version}
         settings={data.settings}
+        management={data.management}
         busy={busy}
         onSave={(settings) => {
           void save(settings);
         }}
+        onManagementChanged={reload}
       />
       <output className="muted notice">{saved ? "Saved." : ""}</output>
       <ErrorBox message={actionError} />
@@ -159,14 +162,22 @@ function Releases({ upgrades: u }: { upgrades: Upgrades }): JSX.Element {
 function AutomaticUpgrades({
   version,
   settings,
+  management,
   busy,
   onSave,
+  onManagementChanged,
 }: {
   version: string;
   settings: Upgrades["settings"];
+  management: Upgrades["management"];
   busy: boolean;
   onSave: (settings: Upgrades["settings"]) => void;
+  onManagementChanged: () => Promise<void>;
 }): JSX.Element {
+  // The hour is the management cluster's too once it follows Kubehenge's upgrades on its own.
+  const timed = settings.policy !== "off" || management?.on === true;
+  // Switched on from nothing timed, the hour starts out in the browser's time zone.
+  const timeZone = (): string => (timed ? settings.timeZone : browserZone());
   return (
     <>
       <Field
@@ -183,9 +194,7 @@ function AutomaticUpgrades({
               if (!oneOf(policies, policy)) {
                 return;
               }
-              // Switched on, the hour starts out in the browser's time zone.
-              const timeZone = settings.policy === "off" ? browserZone() : settings.timeZone;
-              onSave({ ...settings, policy, timeZone });
+              onSave({ ...settings, policy, timeZone: timeZone() });
             }}
           >
             <option value="off">Off</option>
@@ -194,7 +203,7 @@ function AutomaticUpgrades({
           </select>
         )}
       </Field>
-      {settings.policy !== "off" && (
+      {timed && (
         <Field label="At hour">
           {(id) => (
             <select
@@ -212,7 +221,7 @@ function AutomaticUpgrades({
           )}
         </Field>
       )}
-      {settings.policy !== "off" && (
+      {timed && (
         <Field label="Time zone" hint="The hour is in this time zone.">
           {(id) => (
             <select
@@ -229,6 +238,19 @@ function AutomaticUpgrades({
             </select>
           )}
         </Field>
+      )}
+      {management && (
+        <AutomaticManagement
+          management={management}
+          hour={settings.hour}
+          timeZone={timeZone()}
+          onChanged={async () => {
+            if (!timed && !management.on) {
+              onSave({ ...settings, timeZone: timeZone() });
+            }
+            await onManagementChanged();
+          }}
+        />
       )}
     </>
   );

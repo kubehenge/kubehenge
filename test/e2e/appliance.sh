@@ -2,9 +2,10 @@
 # End-to-end test of the appliance on a Proxmox VE node: install it from a release archive, sign in
 # with Proxmox VE users, set the management cluster up from the interface, place by an HA rule
 # offered to a cluster creator, reach the shared Headlamp behind the interface's sign-in and log out
-# of a cluster in it, upgrade the appliance under the running management cluster, remove
-# the management cluster from the interface and then the appliance, and check that Proxmox VE is
-# left as it was.
+# of a cluster in it, switch automatic upgrades of the management cluster on and off, upgrade the
+# appliance under the running management cluster and then the management cluster to what it
+# carries, remove the management cluster from the interface and then the appliance, and check that
+# Proxmox VE is left as it was.
 #
 #   test/e2e/appliance.sh <release> <newer release> <settings>
 #
@@ -32,7 +33,7 @@ ip=${address%/*}
 ui=https://${ip} headlamp=https://${ip}:8443
 # The appliance's certificate is signed by the cluster's CA for its address.
 ca=/etc/pve/pve-root-ca.pem
-admin=kubehenge-e2e-admin@pve user=kubehenge-e2e-user@pve
+admin=kubehenge-e2e-admin@pve user=kubehenge-e2e-user@pve upgrader=kubehenge-upgrader@pve
 # The HA rule offered to cluster creators, and the guest it needs: Proxmox VE takes a rule only for
 # HA resources, and a resource only for a guest that exists.
 ha_rule=kubehenge-e2e-placement ha_vmid=
@@ -66,9 +67,25 @@ request() {
     curl -sS --cacert "${ca}" -b "${jar}" -c "${jar}" -o "${work}/body" -w '%{http_code}' "$@" > "${work}/status"
 }
 
-# post <cookie jar> <CSRF token> <URL> <JSON>
+# post <cookie jar> <CSRF token> <URL> <JSON>, and put and delete the same
 post() {
     request "$1" -H 'Content-Type: application/json' -H "X-Kubehenge-CSRF: $2" -d "$4" "$3"
+}
+put() {
+    request "$1" -X PUT -H 'Content-Type: application/json' -H "X-Kubehenge-CSRF: $2" -d "$4" "$3"
+}
+delete() {
+    request "$1" -X DELETE -H "X-Kubehenge-CSRF: $2" "$3"
+}
+
+# upgrader_is <present|absent> <message>: checks whether Proxmox VE has the user automatic upgrades
+# of the management cluster act as.
+upgrader_is() {
+    if pvesh get "/access/users/${upgrader}" --output-format json < /dev/null > /dev/null 2>&1; then
+        [ "$1" = present ] || fail "$2"
+    else
+        [ "$1" = absent ] || fail "$2"
+    fi
 }
 
 # expect <status> <what> <command...>: runs a request and checks the status it got.
@@ -89,6 +106,13 @@ fail_with_body() {
 # body_is <jq filter> <message>: checks the last answer's body.
 body_is() {
     jq -e "$1" "${work}/body" > /dev/null || fail_with_body "$2"
+}
+
+# body_has <message> <jq arguments...>: body_is with a filter that takes arguments.
+body_has() {
+    message=$1
+    shift
+    jq -e "$@" "${work}/body" > /dev/null || fail_with_body "${message}"
 }
 
 # answers: whether the interface is up again, on its certificate.
@@ -304,6 +328,25 @@ grep -qi '^location: /c/clusters\.e2e/pods' "${work}/headers" ||
     fail "opening the cluster did not lead on to its page in Headlamp"
 expect 404 "opening a cluster the user does not see" request "${work}/user.jar" "${headlamp}/kubehenge/open/clusters.e2e"
 
+step "automatic upgrades of the management cluster, switched on and off"
+# Their hour half a day away, so that none starts during the test.
+hour=$((($(date -u +%H | sed 's/^0//') + 12) % 24))
+body=$(jq -n --argjson h "${hour}" '{policy: "off", hour: $h, timeZone: "UTC"}')
+expect 200 "the upgrade hour" put "${work}/admin.jar" "${admin_csrf}" "${ui}/api/appliance/upgrades/settings" "${body}"
+body=$(jq -n --arg p "not-${passphrase}" '{passphrase: $p}')
+expect 403 "switching them on with a wrong passphrase" put "${work}/admin.jar" "${admin_csrf}" "${ui}/api/appliance/upgrades/management" "${body}"
+upgrader_is absent "a wrong passphrase made ${upgrader}"
+on=$(jq -n --arg p "${passphrase}" '{passphrase: $p}')
+expect 200 "switching them on" put "${work}/admin.jar" "${admin_csrf}" "${ui}/api/appliance/upgrades/management" "${on}"
+# shellcheck disable=SC2016 # jq's variables, not the shell's.
+body_has "they are not on" --arg u "${upgrader}" '.on and .user == $u'
+upgrader_is present "switching them on made no ${upgrader}"
+expect 200 "switching them off" delete "${work}/admin.jar" "${admin_csrf}" "${ui}/api/appliance/upgrades/management"
+body_is '.on | not' "they are still on"
+upgrader_is absent "switching them off left ${upgrader}"
+# Left on, so that removing the management cluster has to take them away.
+expect 200 "switching them on again" put "${work}/admin.jar" "${admin_csrf}" "${ui}/api/appliance/upgrades/management" "${on}"
+
 step "upgrade the appliance with the management cluster up"
 upgrade "${newer}"
 if [ "${upgraded}" -ne 0 ]; then
@@ -318,6 +361,20 @@ sign_in "${work}/admin.jar" "${admin}"
 admin_csrf=${csrf}
 until_true 120 "the interface to find the management cluster again" ready_again
 upgrade_refused "${release}" 'newer than'
+
+step "upgrade the management cluster to what the newer release carries"
+old=$(tar -xzOf "${release}" ./share/kubehenge/VERSION)
+setup_status
+# shellcheck disable=SC2016 # jq's variables, not the shell's.
+body_has "the interface does not say the management cluster runs what ${old} applied" \
+    --arg old "${old}" --arg new "${version}" '.upgrade.behind and .upgrade.applied == $old and .upgrade.carried == $new'
+body=$(jq -c --arg p "${passphrase}" '{passphrase: $p, settings: .settings}' "${work}/body")
+expect 202 "upgrading the management cluster" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup" "${body}"
+until_true 3600 "the management cluster's upgrade to end" job_ended
+job_was apply succeeded true
+# shellcheck disable=SC2016 # jq's variables, not the shell's.
+body_has "the management cluster is not recorded as applied by ${version}" \
+    --arg new "${version}" '(.upgrade.behind | not) and .upgrade.applied == $new'
 
 step "remove the management cluster from the interface"
 body=$(jq -n --arg p "${passphrase}" '{passphrase: $p, confirm: "delete"}')

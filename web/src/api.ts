@@ -12,6 +12,7 @@ import type {
   EtcdRestorePlan,
   HARules,
   Job,
+  ManagementAutomatic,
   ManagementSettings,
   PodLogs,
   PveNode,
@@ -214,6 +215,10 @@ export interface Api {
   requestTemplateBuild: (distribution: string, kubernetesVersion?: string) => Promise<void>;
 
   upgradeSettings: (settings: Upgrades["settings"]) => Promise<Upgrades["settings"]>;
+  /** Lets the appliance keep the state passphrase and a token of its own to apply unattended. */
+  automaticManagement: (passphrase: string) => Promise<ManagementAutomatic>;
+  /** Deletes what automaticManagement kept, and its Proxmox VE user. */
+  stopAutomaticManagement: () => Promise<ManagementAutomatic>;
 
   storages: () => Promise<Storage[]>;
   nodes: () => Promise<PveNode[]>;
@@ -279,6 +284,8 @@ export const api: Api = {
     act("POST", "/api/template-builds", { distribution, kubernetesVersion }),
 
   upgradeSettings: (settings) => request("PUT", "/api/appliance/upgrades/settings", settings),
+  automaticManagement: (passphrase) => request("PUT", "/api/appliance/upgrades/management", { passphrase }),
+  stopAutomaticManagement: () => request("DELETE", "/api/appliance/upgrades/management"),
 
   storages: () => request("GET", "/api/proxmox/storages"),
   nodes: () => request("GET", "/api/proxmox/nodes"),

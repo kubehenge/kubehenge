@@ -596,6 +596,8 @@ export interface EtcdRestorePlan {
 
 export interface Job {
   user: string;
+  /** A run the appliance started on its own, as user, in an automatic upgrade. */
+  automatic?: boolean;
   kind?: "apply" | "remove" | "template";
   started: string;
   finished?: string;
@@ -623,6 +625,36 @@ export interface SetupStatus {
   proxmoxInsecure?: boolean;
   /** An earlier run left its encrypted state, so the setup takes that run's passphrase. */
   resumes?: boolean;
+  /** Which release last applied the management cluster, and what applying this one changes. */
+  upgrade?: ManagementUpgrade;
+}
+
+/** A component of the management cluster whose version applying the appliance's release changes. */
+export interface VersionChange {
+  /** The module's name for it, such as talos or cluster_api. */
+  component: string;
+  from?: string;
+  to?: string;
+}
+
+export interface ManagementUpgrade {
+  /** The release that last applied the management cluster. */
+  applied: string;
+  /** The appliance's own release. */
+  carried: string;
+  behind: boolean;
+  changes?: VersionChange[];
+}
+
+/** Whether the management cluster follows the appliance's upgrades on its own. */
+export interface ManagementAutomatic {
+  /** There is a management cluster to upgrade. */
+  possible: boolean;
+  on: boolean;
+  by?: string;
+  since?: string;
+  /** The Proxmox VE user the runs act as. */
+  user: string;
 }
 
 export type UpgradePolicy = "off" | "patch" | "minor";
@@ -721,6 +753,8 @@ export interface Upgrades {
     time: string;
     error?: string;
   };
+  /** Absent outside the appliance. */
+  management?: ManagementAutomatic;
 }
 
 export interface CreateRequest {
