@@ -824,6 +824,7 @@ func TestCreateValidates(t *testing.T) {
 		"even":          strings.Replace(createBody, `"controlPlaneReplicas":3`, `"controlPlaneReplicas":2`, 1),
 		"workers":       strings.Replace(createBody, `"workerReplicas":2`, `"workerReplicas":-1`, 1),
 		"variable":      strings.Replace(createBody, `"storage":`, `"cni":"cilium","storage":`, 1),
+		"namespace":     strings.Replace(createBody, `"name"`, `"namespace":"kube-system","name"`, 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -832,7 +833,7 @@ func TestCreateValidates(t *testing.T) {
 			expect(t, fresh.do("POST", "/api/clusters", body), http.StatusUnprocessableEntity)
 		})
 	}
-	expect(t, b.do("POST", "/api/clusters", strings.Replace(createBody, `"name"`, `"namespace":"kube-system","name"`, 1)), http.StatusBadRequest)
+	expect(t, b.do("POST", "/api/clusters", strings.Replace(createBody, `"name"`, `"labels":{"team":"a"},"name"`, 1)), http.StatusBadRequest)
 }
 
 func TestDecodeProblemsNameNoGoTypes(t *testing.T) {
@@ -842,7 +843,7 @@ func TestDecodeProblemsNameNoGoTypes(t *testing.T) {
 		`{"workerReplicas":1.5}`: "workerReplicas: the wrong kind of value (number 1.5)",
 		`{"name":`:               "the body is no valid JSON",
 		`[]`:                     "the body: the wrong kind of value (array)",
-		`{"namespace":"x"}`:      `unknown field "namespace"`,
+		`{"labels":"x"}`:         `unknown field "labels"`,
 	} {
 		dec := json.NewDecoder(strings.NewReader(body))
 		dec.DisallowUnknownFields()

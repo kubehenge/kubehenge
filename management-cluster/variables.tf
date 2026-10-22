@@ -348,6 +348,25 @@ variable "cluster_sys_audit" {
   nullable    = false
 }
 
+variable "extra_cluster_namespaces" {
+  description = "More namespaces of the management cluster for workload clusters, beside clusters: the web interface creates, changes and hands out kubeconfigs of clusters in each, with the same rights it has in clusters, and lets whoever creates a cluster choose among them. The namespaces are created when missing and kept with their clusters when taken out of the list; the interface's rights there go. None may be one of Kubernetes', the providers' or Kubehenge's own: default, kube-*, *-system or cert-manager."
+  type        = list(string)
+  default     = []
+  nullable    = false
+
+  validation {
+    condition = (
+      length(distinct(var.extra_cluster_namespaces)) == length(var.extra_cluster_namespaces) &&
+      alltrue([for n in var.extra_cluster_namespaces : (
+        can(regex("^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$", n)) &&
+        !contains(["clusters", "default", "cert-manager"], n) &&
+        !startswith(n, "kube-") && !endswith(n, "-system")
+      )])
+    )
+    error_message = "extra_cluster_namespaces names each namespace once, as a DNS label, and none of clusters, default, kube-*, *-system or cert-manager."
+  }
+}
+
 variable "controller_image" {
   description = "Image of Kubehenge's controller by digest, as repository@sha256:<digest>, instead of the one the chart was released with."
   type        = string

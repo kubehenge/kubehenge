@@ -97,7 +97,7 @@ export function App(): JSX.Element {
       headlamp={session.headlamp}
       canCreate={session.canCreate}
       canTrust={session.canTrust}
-      namespace={session.namespace}
+      namespaces={session.namespaces ?? (session.namespace === undefined ? [] : [session.namespace])}
       onSignOut={() => setSession(null)}
     />
   );
@@ -108,14 +108,14 @@ function Shell({
   headlamp,
   canCreate,
   canTrust,
-  namespace,
+  namespaces,
   onSignOut,
 }: {
   user: string;
   headlamp?: number | undefined;
   canCreate?: boolean | undefined;
   canTrust?: boolean | undefined;
-  namespace?: string | undefined;
+  namespaces: string[];
   onSignOut: () => void;
 }): JSX.Element {
   const path = usePath();
@@ -268,7 +268,7 @@ function Shell({
               route={route}
               canCreate={canCreate}
               canTrust={canTrust}
-              namespace={namespace}
+              namespaces={namespaces}
               headlamp={headlamp}
               onSetupChanged={reloadSetup}
             />
@@ -336,14 +336,14 @@ function RoutePage({
   route,
   canCreate,
   canTrust,
-  namespace,
+  namespaces,
   headlamp,
   onSetupChanged,
 }: {
   route: Route;
   canCreate: boolean | undefined;
   canTrust: boolean | undefined;
-  namespace: string | undefined;
+  namespaces: string[];
   headlamp: number | undefined;
   onSetupChanged: () => void;
 }): JSX.Element {
@@ -363,7 +363,7 @@ function RoutePage({
       );
     }
     case "create": {
-      return <CreateCluster canTrust={canTrust} namespace={namespace} />;
+      return <CreateCluster canTrust={canTrust} namespaces={namespaces} />;
     }
     case "cluster": {
       return <ClusterDetail namespace={route.namespace} name={route.name} view={route.view} headlamp={headlamp} />;

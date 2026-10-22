@@ -58,6 +58,8 @@ module "management" {
 
   cluster_datastore_allocate = var.settings.clusterDatastoreAllocate
   cluster_sys_audit          = var.settings.clusterSysAudit
+
+  extra_cluster_namespaces = var.settings.extraClusterNamespaces
 }
 
 output "kubeconfig" {
@@ -170,6 +172,8 @@ func (a *Appliance) writeConfig(s *Settings) error {
 
 		"clusterDatastoreAllocate": s.ClusterDatastoreAllocate,
 		"clusterSysAudit":          s.ClusterSysAudit,
+		// The module takes no null for a list.
+		"extraClusterNamespaces": append([]string{}, s.ExtraClusterNamespaces...),
 	}}
 	raw, err := json.MarshalIndent(vars, "", "  ")
 	if err != nil {

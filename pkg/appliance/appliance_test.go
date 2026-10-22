@@ -246,6 +246,70 @@ func waitFor(t *testing.T, a *Appliance) *JobView {
 	return nil
 }
 
+func TestExtraClusterNamespacesValidated(t *testing.T) {
+	t.Parallel()
+	for ns, want := range map[string]string{
+		"kubehenge-system": "Namespaces for clusters: kubehenge-system holds",
+		"clusters":         "Namespaces for clusters: clusters is the interface's own",
+		"Team A":           `Namespaces for clusters: "Team A" is not a namespace name`,
+	} {
+		s := settings("pve1")
+		s.ExtraClusterNamespaces = []string{"team-a", ns}
+		if err := s.Validate(); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", ns, err, want)
+		}
+	}
+	s := settings("pve1")
+	s.ExtraClusterNamespaces = []string{"team-a", "team-a"}
+	if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "team-a is named twice") {
+		t.Errorf("a namespace twice: %v", err)
+	}
+	s.ExtraClusterNamespaces = []string{"team-a", "team-b"}
+	if err := s.Validate(); err != nil {
+		t.Errorf("two teams: %v", err)
+	}
+}
+
+func TestApplyPassesTheExtraClusterNamespaces(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	vars := func() string {
+		t.Helper()
+		j := waitFor(t, a)
+		if j.State != "succeeded" {
+			t.Fatalf("job = %+v", j)
+		}
+		raw, err := os.ReadFile(filepath.Join(a.Dir, "management", "terraform.tfvars.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	ready := func(context.Context, []byte) error { return nil }
+	if err := a.Apply(settings("pve1"), "correct horse battery staple", ticket(), ready); err != nil {
+		t.Fatal(err)
+	}
+	// The module's variable takes a list, never null.
+	if v := vars(); !strings.Contains(v, `"extraClusterNamespaces": []`) {
+		t.Fatalf("tfvars without an empty list of namespaces:\n%s", v)
+	}
+	s := settings("pve1")
+	s.ExtraClusterNamespaces = []string{"team-a"}
+	if err := a.Apply(s, "correct horse battery staple", ticket(), ready); err != nil {
+		t.Fatal(err)
+	}
+	if v := vars(); !strings.Contains(v, "\"extraClusterNamespaces\": [\n      \"team-a\"\n    ]") {
+		t.Fatalf("tfvars without team-a:\n%s", v)
+	}
+	main, err := os.ReadFile(filepath.Join(a.Dir, "management", "main.tf"))
+	if err != nil || !strings.Contains(string(main), "extra_cluster_namespaces = var.settings.extraClusterNamespaces") {
+		t.Fatalf("main.tf: %v\n%s", err, main)
+	}
+	if saved := a.SavedSettings(); !slices.Equal(saved.ExtraClusterNamespaces, []string{"team-a"}) {
+		t.Fatalf("saved settings = %+v", saved)
+	}
+}
+
 func TestApply(t *testing.T) {
 	t.Setenv("KUBEHENGE_UNRELATED_SECRET", "must not reach tofu")
 	a, ready := newAppliance(t)

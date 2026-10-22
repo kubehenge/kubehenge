@@ -222,7 +222,7 @@ run "controller_and_clusters_are_least_privilege" {
         kubehenge-rke2    = ["rke2-bootstrap-system", "rke2-control-plane-system"]
         kubehenge-k3s     = ["k3s-bootstrap-system", "k3s-control-plane-system"]
       }
-      interface = { offerHARules = false }
+      interface = { extraNamespaces = [], offerHARules = false }
       clusters  = { storages = ["local-lvm", "ceph"], bridges = ["vmbr0", "vmbr1"] }
       proxmox = {
         url          = "https://pve.example.org:8006"
@@ -551,6 +551,51 @@ run "template_refresh_off" {
     )
     error_message = "no template builder unless the refresh is on"
   }
+}
+
+run "extra_cluster_namespaces" {
+  command = plan
+
+  variables {
+    extra_cluster_namespaces = ["team-a", "team-b"]
+  }
+
+  assert {
+    condition = (
+      yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = ["team-a", "team-b"], offerHARules = false } &&
+      toset(keys(proxmox_acl.provisioner)) == toset([
+        "/ kubehenge-audit",
+        "/nodes kubehenge-audit",
+        "/pool/kubehenge kubehenge-provisioner-pools",
+        "/access/groups/kubehenge-clusters kubehenge-provisioner-users",
+        "/access/realm/pve kubehenge-provisioner-realm",
+        "/pool/kubehenge-templates kubehenge-templates-audit",
+        "/storage/local-lvm kubehenge-cluster-storage",
+        "/storage/ceph kubehenge-cluster-storage",
+      ])
+    )
+    error_message = "the chart is told the namespaces, and Proxmox VE grants nothing more for them: each cluster's pool still nests under the workload pool"
+  }
+}
+
+run "extra_cluster_namespaces_refuse_system_ones" {
+  command = plan
+
+  variables {
+    extra_cluster_namespaces = ["team-a", "capi-system"]
+  }
+
+  expect_failures = [var.extra_cluster_namespaces]
+}
+
+run "extra_cluster_namespaces_refuse_the_interface_s_own" {
+  command = plan
+
+  variables {
+    extra_cluster_namespaces = ["clusters"]
+  }
+
+  expect_failures = [var.extra_cluster_namespaces]
 }
 
 run "providers" {

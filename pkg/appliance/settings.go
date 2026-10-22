@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
 // MinPassphrase is OpenTofu's minimum for a pbkdf2 passphrase.
@@ -62,6 +64,9 @@ type Settings struct {
 	// ClusterSysAudit lets a cluster choose the cloud controller manager's HA group labels, whose
 	// token then holds Sys.Audit on /.
 	ClusterSysAudit bool `json:"clusterSysAudit,omitempty"`
+	// ExtraClusterNamespaces are more namespaces the interface creates and manages clusters in,
+	// beside its own, such as one per team.
+	ExtraClusterNamespaces []string `json:"extraClusterNamespaces,omitempty"`
 }
 
 // TemplateRefresh is when and where the Ubuntu VM templates are built again. Empty fields take the
@@ -292,6 +297,7 @@ func (s *Settings) Validate() error {
 	if s.TemplateRefresh != nil {
 		s.TemplateRefresh.check(&p, s.WorkloadDatastores)
 	}
+	s.checkNamespaces(&p)
 	err = p.err()
 	if err != nil {
 		return err
@@ -442,6 +448,16 @@ func (s *Settings) checkMirrors(p *problems) {
 			if u, err := url.Parse(e); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
 				p.addf("Registry mirrors: %s is no http:// or https:// URL", e)
 			}
+		}
+	}
+}
+
+func (s *Settings) checkNamespaces(p *problems) {
+	for i, ns := range s.ExtraClusterNamespaces {
+		if err := provisioner.ValidExtraNamespace(ns); err != nil {
+			p.addf("Namespaces for clusters: %s", err)
+		} else if slices.Contains(s.ExtraClusterNamespaces[:i], ns) {
+			p.addf("Namespaces for clusters: %s is named twice", ns)
 		}
 	}
 }

@@ -33,6 +33,8 @@ const step = (cls: ClusterClass): void => {
       cls={cls}
       offered={{ versions: ["v1.36.5"] }}
       onChooseClass={vi.fn<(name: string) => void>()}
+      namespaces={["clusters"]}
+      onChooseNamespace={vi.fn<(namespace: string) => void>()}
     />,
   );
 };

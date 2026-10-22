@@ -249,9 +249,9 @@ type machineView struct {
 }
 
 // view describes a cluster to a user with privs on its pool. The interface changes clusters only in
-// its own namespace, so elsewhere nothing is allowed whatever the privileges.
-func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges) clusterView {
-	ours := c.Namespace == s.Namespace
+// the namespaces it manages, so elsewhere nothing is allowed whatever the privileges.
+func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, managed managedNamespaces) clusterView {
+	ours := managed.has(c.Namespace)
 	dist, _ := distribution(c.Spec.Topology.ClassRef.Name)
 	v := clusterView{
 		Namespace:    c.Namespace,
@@ -373,7 +373,7 @@ func (s *Server) visibleClusters(ctx context.Context, u user, clusters []cluster
 		}
 		if privs, listed := all[pool]; listed || !inheritedHere(all, pool) {
 			if privs.Has(privSee) {
-				results[i] = clusterResult{view: s.view(c, pool, privs), ok: true}
+				results[i] = clusterResult{view: s.view(c, pool, privs, u.namespaces), ok: true}
 			}
 			continue
 		}
@@ -404,7 +404,7 @@ func (s *Server) askedView(ctx context.Context, u user, c *clusterv1.Cluster, po
 	if !privs.Has(privSee) {
 		return clusterResult{}
 	}
-	return clusterResult{view: s.view(c, pool, privs), ok: true}
+	return clusterResult{view: s.view(c, pool, privs, u.namespaces), ok: true}
 }
 
 // inheritedHere tells whether path, missing from all, may still hold privileges inherited from
@@ -467,8 +467,8 @@ func (s *Server) cluster(w http.ResponseWriter, r *http.Request, u user, privs .
 			return nil, poolAccess{}, false
 		}
 	}
-	if len(privs) > 0 && c.Namespace != s.Namespace {
-		writeError(w, http.StatusForbidden, fmt.Sprintf("the interface manages the clusters in namespace %s; this one is managed from elsewhere", s.Namespace))
+	if len(privs) > 0 && !u.namespaces.has(c.Namespace) {
+		writeError(w, http.StatusForbidden, fmt.Sprintf("the interface manages the clusters in %s; this one is managed from elsewhere", namespacesPhrase(u.namespaces)))
 		return nil, poolAccess{}, false
 	}
 	return c, poolAccess{path: pool, held: held}, true
@@ -479,7 +479,7 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 	if !ok {
 		return
 	}
-	v := s.view(c, access.path, access.held)
+	v := s.view(c, access.path, access.held, u.namespaces)
 	if err := s.addClusterMesh(r.Context(), u, &v); err != nil {
 		s.Log.Error("reading a cluster's Cluster Mesh peers", "cluster", c.Namespace+"/"+c.Name, "error", err)
 	}
@@ -556,6 +556,8 @@ func (s *Server) vmNodes(r *http.Request, u user, c *clusterv1.Cluster, poolPath
 }
 
 type createRequest struct {
+	// Namespace is one of those the interface manages; unset, its first.
+	Namespace            string                     `json:"namespace,omitempty"`
 	Name                 string                     `json:"name"`
 	Class                string                     `json:"class"`
 	Version              string                     `json:"version"`
@@ -587,6 +589,12 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusUnprocessableEntity, msg)
 		return
 	}
+	if req.Namespace == "" {
+		req.Namespace = u.namespaces[0]
+	} else if !u.namespaces.has(req.Namespace) {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("namespace: the interface creates clusters in %s only", namespacesPhrase(u.namespaces)))
+		return
+	}
 	class, ok := s.createClass(w, r, u, &req)
 	if !ok {
 		return
@@ -595,7 +603,7 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
 	if !ok {
 		return
 	}
-	pool, err := s.poolPath(s.Namespace, req.Name)
+	pool, err := s.poolPath(req.Namespace, req.Name)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "name: "+err.Error())
 		return
@@ -608,12 +616,12 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
 		s.kubeError(w, err)
 		return
 	}
-	s.Log.Info("created cluster", "user", u.ticket.Username, "cluster", s.Namespace+"/"+req.Name, "class", req.Class, "version", req.Version)
+	s.Log.Info("created cluster", "user", u.ticket.Username, "cluster", req.Namespace+"/"+req.Name, "class", req.Class, "version", req.Version)
 	privs, err := s.Accounts.Privileges(r.Context(), u.ticket, pool)
 	if err != nil {
 		privs = pve.Privileges{}
 	}
-	writeJSON(w, http.StatusCreated, s.view(c, pool, privs))
+	writeJSON(w, http.StatusCreated, s.view(c, pool, privs, u.namespaces))
 }
 
 // invalid says what is wrong with a create request on its own, before anything is looked up, or
@@ -679,7 +687,7 @@ func (s *Server) mayCreate(w http.ResponseWriter, r *http.Request, u user, class
 		!s.mayPlace(w, r, u, req.Variables[allowedNodesVariable], nil) {
 		return false
 	}
-	if installsRancher(req.Variables["rancher"]) && !s.allowRancher(w, r, u, client.ObjectKey{Namespace: s.Namespace, Name: req.Name}) {
+	if installsRancher(req.Variables["rancher"]) && !s.allowRancher(w, r, u, client.ObjectKey{Namespace: req.Namespace, Name: req.Name}) {
 		return false
 	}
 	if allocatesDatastore(req.Variables[csiVariable]) && !s.allowDatastoreAllocate(w, r, u, req.Variables["storage"]) {
@@ -766,7 +774,7 @@ func (s *Server) mayPlace(w http.ResponseWriter, r *http.Request, u user, raw, k
 
 func (s *Server) newCluster(u user, req *createRequest, pods, services []string) *clusterv1.Cluster {
 	c := &clusterv1.Cluster{
-		Namespace:   s.Namespace,
+		Namespace:   req.Namespace,
 		Name:        req.Name,
 		Annotations: map[string]string{createdBy: u.ticket.Username},
 		Spec: clusterv1.ClusterSpec{ClusterNetwork: clusterv1.ClusterNetwork{
@@ -917,7 +925,7 @@ func (s *Server) changeCluster(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	s.Log.Info("changed cluster", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
-	writeJSON(w, http.StatusOK, s.view(c, access.path, access.held))
+	writeJSON(w, http.StatusOK, s.view(c, access.path, access.held, u.namespaces))
 }
 
 // applyTopology sets the version and the replicas a change asks for, or says what is wrong with

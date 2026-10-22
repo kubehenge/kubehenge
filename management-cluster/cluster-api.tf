@@ -351,7 +351,8 @@ resource "helm_release" "kubehenge" {
       workloadPool       = proxmox_virtual_environment_pool.workload.pool_id
       providerNamespaces = local.class_provider_namespaces
       interface = {
-        offerHARules = var.offer_ha_rules
+        extraNamespaces = var.extra_cluster_namespaces
+        offerHARules    = var.offer_ha_rules
       }
       clusters = {
         storages = var.workload_datastores

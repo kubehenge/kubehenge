@@ -69,6 +69,8 @@ const mibPerGiB = 1024;
 export const controlPlaneSizes = [1, 3, 5, 7];
 
 export interface Form {
+  /** Empty while the interface creates clusters in one namespace only. */
+  namespace: string;
   name: string;
   className: string;
   version: string;
@@ -308,6 +310,7 @@ export const withBackupChoices = (f: Form, c: ClusterClass | undefined, canTrust
 
 /** newForm is the wizard before anything is chosen. */
 export const newForm = (): Form => ({
+  namespace: "",
   name: "",
   className: "",
   version: "",
@@ -352,6 +355,17 @@ export const newForm = (): Form => ({
   backupOwnKey: true,
   backupKey: {},
 });
+
+/** namespaceOf is the namespace the cluster goes to: the one chosen, else the interface's first. */
+export const namespaceOf = (f: Form, namespaces: string[]): string => f.namespace || (namespaces[0] ?? "");
+
+/**
+ * withNamespace moves the cluster to another namespace. Cluster Mesh links clusters of one
+ * namespace only, so the peers chosen in the one it was in are dropped.
+ */
+export function withNamespace(f: Form, namespace: string, current = f.namespace): Form {
+  return { ...f, namespace, meshPeers: namespace === current ? f.meshPeers : [] };
+}
 
 /**
  * withClass chooses a distribution's class, bringing its defaults, but only into what the user has
@@ -464,6 +478,7 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
     variables["upgrades"] = upgrades;
   }
   const req: CreateRequest = {
+    ...(form.namespace ? { namespace: form.namespace } : {}),
     name: form.name,
     class: c.name,
     version: form.version,
@@ -511,6 +526,7 @@ export function summary(
       ? "Chosen clear of the nodes' network and the other clusters' ranges"
       : "Chosen clear of the nodes' network";
   const rows: [string, string][] = [
+    ...(form.namespace ? [["Namespace", form.namespace] as [string, string]] : []),
     ["Name", form.name],
     ["Distribution", distributionName(c.distribution)],
     ["Kubernetes version", form.version],

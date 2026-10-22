@@ -20,6 +20,8 @@ import {
   variable,
   withBackupChoices,
   withClass,
+  namespaceOf,
+  withNamespace,
   withRoom,
   type FieldKey,
   type Form,
@@ -49,10 +51,10 @@ const raising = new Set<keyof Form>([
 
 export function CreateCluster({
   canTrust,
-  namespace,
+  namespaces,
 }: {
   canTrust?: boolean | undefined;
-  namespace?: string | undefined;
+  namespaces: string[];
 }): JSX.Element {
   const [classes, setClasses] = useState<ClusterClass[]>([]);
   const [discarding, setDiscarding] = useState(false);
@@ -150,6 +152,7 @@ export function CreateCluster({
   const form: Form = withBackupChoices(
     {
       ...entered,
+      namespace: namespaces.length > 1 ? namespaceOf(entered, namespaces) : "",
       bridge: filled(entered.bridge)
         ? entered.bridge
         : (sole(bridgeOptions.filter((b) => b.usable).map((b) => b.bridge)) ?? ""),
@@ -171,6 +174,9 @@ export function CreateCluster({
       ),
     );
     setTouched((t) => new Set([...t, "class"]));
+  };
+  const chooseNamespace = (namespace: string): void => {
+    setEntered((f) => withNamespace(f, namespace, namespaceOf(f, namespaces)));
   };
 
   const index = steps.indexOf(step);
@@ -252,6 +258,8 @@ export function CreateCluster({
               cls={cls}
               offered={offered}
               onChooseClass={chooseClass}
+              namespaces={namespaces}
+              onChooseNamespace={chooseNamespace}
             />
           )}
           {step === "Network" && (
@@ -273,7 +281,14 @@ export function CreateCluster({
             />
           )}
           {step === "Add-ons" && (
-            <AddOnsStep form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} namespace={namespace} />
+            <AddOnsStep
+              form={form}
+              set={set}
+              shown={shown}
+              cls={cls}
+              canTrust={canTrust}
+              namespace={namespaceOf(form, namespaces)}
+            />
           )}
           {step === "Identity providers" && (
             <IdentityStep

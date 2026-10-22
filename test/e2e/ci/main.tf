@@ -108,6 +108,9 @@ module "management_cluster" {
     dns            = ["172.20.99.1"]
     creator_builds = true
   }
+
+  # The k3s test's cluster is created in it with the interface's account (test/e2e/ci/run.sh).
+  extra_cluster_namespaces = ["e2e-team"]
 }
 
 output "kubeconfig" {

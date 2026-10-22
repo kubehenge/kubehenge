@@ -38,6 +38,8 @@ const form: SetupForm = {
   refreshDNS: "",
   creatorBuilds: false,
   clusterSysAudit: false,
+  moreNamespaces: false,
+  extraNamespaces: "",
   passphrase: "correct horse battery staple",
   confirm: "correct horse battery staple",
 };
@@ -192,6 +194,32 @@ describe("setup", () => {
     expect(on).toHaveProperty("clusterSysAudit", true);
     expect(settings(form)).not.toHaveProperty("clusterSysAudit");
     expect([formOf(on).clusterSysAudit, formOf(settings(form)).clusterSysAudit]).toStrictEqual([true, false]);
+  });
+
+  it("names more namespaces for clusters only when they are switched on", () => {
+    const on = { ...form, moreNamespaces: true, extraNamespaces: "team-a, team-b" };
+    expect(settings(on).extraClusterNamespaces).toStrictEqual(["team-a", "team-b"]);
+    expect(settings({ ...on, moreNamespaces: false })).not.toHaveProperty("extraClusterNamespaces");
+    expect(settings(form)).not.toHaveProperty("extraClusterNamespaces");
+    const back = formOf(settings(on));
+    expect([back.moreNamespaces, back.extraNamespaces, formOf(settings(form)).moreNamespaces]).toStrictEqual([
+      true,
+      "team-a, team-b",
+      false,
+    ]);
+  });
+
+  it("refuses namespaces that cannot hold clusters", () => {
+    const problem = (extraNamespaces: string): string | undefined =>
+      setupFieldProblems({ ...form, moreNamespaces: true, extraNamespaces }).extraNamespaces;
+    expect(problem("team-a, team-b")).toBeUndefined();
+    expect(problem("")).toMatch(/at least one namespace/u);
+    expect(problem("team-a, kubehenge-system")).toMatch(/kubehenge-system holds/u);
+    expect(problem("kube-public")).toMatch(/kube-public holds/u);
+    expect(problem("clusters")).toMatch(/interface's own namespace/u);
+    expect(problem("Team_A")).toMatch(/no namespace name/u);
+    expect(problem("team-a, team-a")).toMatch(/named twice/u);
+    expect(setupFieldProblems({ ...form, extraNamespaces: "kube-system" }).extraNamespaces).toBeUndefined();
   });
 
   it("passes the clusters' identity providers on, empty fields left to the defaults", () => {

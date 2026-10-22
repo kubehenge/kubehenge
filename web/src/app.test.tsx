@@ -498,6 +498,7 @@ describe("clusters", () => {
 
 describe("create", () => {
   const form: Form = {
+    namespace: "",
     name: "web",
     className: "kubehenge-rke2",
     version: "v1.36.5+rke2r1",

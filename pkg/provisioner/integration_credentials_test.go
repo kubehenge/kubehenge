@@ -6,16 +6,13 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// interfaceNamespace is the chart's default interface.namespace.
-const interfaceNamespace = "clusters"
+const interfaceNamespace = InterfaceNamespace
 
 func credential(cluster, purpose string, data map[string][]byte) *corev1.Secret {
 	labels := map[string]string{CredentialLabel: purpose}
@@ -33,12 +30,7 @@ func credential(cluster, purpose string, data map[string][]byte) *corev1.Secret 
 func TestIntegrationInterfaceCredentials(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
 	cfg, admin, _ := startAPIConfig(t)
 	ctx := context.Background()
-	as := rest.CopyConfig(cfg)
-	as.Impersonate = rest.ImpersonationConfig{
-		UserName: "system:serviceaccount:" + classNamespace + ":kubehenge-interface",
-		Groups:   []string{"system:serviceaccounts", "system:serviceaccounts:" + classNamespace, "system:authenticated"},
-	}
-	ui, err := client.New(as, client.Options{Scheme: admin.Scheme()})
+	ui, err := client.New(interfaceAccount(cfg), client.Options{Scheme: admin.Scheme()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,25 +38,7 @@ func TestIntegrationInterfaceCredentials(t *testing.T) { //nolint:paralleltest /
 	if err := admin.Create(ctx, kubeconfig); err != nil {
 		t.Fatal(err)
 	}
-
-	// The API server takes the policy up from its own watch, a moment after the chart is applied.
-	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
-		probe := &corev1.Secret{Namespace: interfaceNamespace, Name: "probe"}
-		err := ui.Create(ctx, probe)
-		if apierrors.IsInvalid(err) {
-			break
-		}
-		if err == nil {
-			if deleted := admin.Delete(ctx, probe); deleted != nil {
-				t.Fatal(deleted)
-			}
-		} else {
-			t.Fatalf("a Secret of its own making: %v", err)
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the API server let the interface write any Secret for 30 seconds")
-		}
-	}
+	waitForCredentialPolicy(t, ui, admin, interfaceNamespace)
 
 	refused := func(what string, err error, message string) {
 		t.Helper()
@@ -134,6 +108,7 @@ func TestIntegrationInterfaceCredentials(t *testing.T) { //nolint:paralleltest /
 
 	elsewhere := credential("one", "backup", nil)
 	elsewhere.Namespace = "team-a"
+	// team-a is not among the interface's namespaces here.
 	if err := ui.Create(ctx, elsewhere); !apierrors.IsForbidden(err) {
 		t.Errorf("a credential outside the interface's namespace: %v, want forbidden", err)
 	}

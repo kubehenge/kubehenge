@@ -90,6 +90,9 @@ export interface SetupForm {
   refreshDNS: string;
   creatorBuilds: boolean;
   clusterSysAudit: boolean;
+  moreNamespaces: boolean;
+  // Separated by commas or lines.
+  extraNamespaces: string;
   passphrase: string;
   confirm: string;
 }
@@ -121,6 +124,24 @@ function refreshSettings(f: SetupForm): NonNullable<ManagementSettings["template
     r.creatorBuilds = true;
   }
   return r;
+}
+
+/** The namespace the interface creates clusters in, whatever others it is given. */
+export const ownNamespace = "clusters";
+
+// namespaceProblem says why a namespace cannot hold clusters beside ownNamespace, as the appliance
+// checks it, or returns undefined.
+function namespaceProblem(ns: string): string | undefined {
+  if (!/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/u.test(ns)) {
+    return `${ns} is no namespace name: lowercase letters, digits and dashes, at most 63.`;
+  }
+  if (ns === ownNamespace) {
+    return `${ns} is the interface's own namespace already.`;
+  }
+  if (ns === "default" || ns === "cert-manager" || ns.startsWith("kube-") || ns.endsWith("-system")) {
+    return `${ns} holds Kubernetes', the providers' or Kubehenge's own objects.`;
+  }
+  return undefined;
 }
 
 const mirrorLines = (text: string): string[] =>
@@ -194,6 +215,9 @@ export function settings(f: SetupForm): ManagementSettings {
   s.templateRefresh = refreshSettings(f);
   if (f.clusterSysAudit) {
     s.clusterSysAudit = true;
+  }
+  if (f.moreNamespaces && list(f.extraNamespaces).length > 0) {
+    s.extraClusterNamespaces = list(f.extraNamespaces);
   }
   return s;
 }
@@ -269,6 +293,8 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     backupTargets: saved.backupTargets ?? [],
     ...refreshFields(saved.templateRefresh),
     clusterSysAudit: saved.clusterSysAudit === true,
+    moreNamespaces: (saved.extraClusterNamespaces ?? []).length > 0,
+    extraNamespaces: (saved.extraClusterNamespaces ?? []).join(", "),
     passphrase: "",
     confirm: "",
   };
@@ -294,6 +320,7 @@ export type SetupField =
   | "refreshAddress"
   | "refreshGateway"
   | "refreshDNS"
+  | "extraNamespaces"
   | "passphrase"
   | "confirm";
 
@@ -456,6 +483,18 @@ function offerProblems(f: SetupForm): SetupProblems {
     const wrong = list(f[key]).find((r) => rangeProblem(r) !== undefined);
     if (wrong !== undefined) {
       p[key] = `${wrong} is no IPv4 network such as 10.244.0.0/16, without host bits.`;
+    }
+  }
+  if (f.moreNamespaces) {
+    const names = list(f.extraNamespaces);
+    const twice = names.find((n, i) => names.indexOf(n) !== i);
+    const wrong = names.map((n) => namespaceProblem(n)).find((x) => x !== undefined);
+    if (names.length === 0) {
+      p.extraNamespaces = "Name at least one namespace, or leave clusters in their own.";
+    } else if (wrong !== undefined) {
+      p.extraNamespaces = wrong;
+    } else if (twice !== undefined) {
+      p.extraNamespaces = `${twice} is named twice.`;
     }
   }
   return p;
@@ -629,6 +668,20 @@ function refreshSummary(s: ManagementSettings): string {
   return parts.join(", ");
 }
 
+// optInRows summarise the choices, each off by default, that let Kubehenge or the clusters do more
+// in Proxmox VE than their pools allow.
+function optInRows(s: ManagementSettings): [string, string][] {
+  return [
+    ["Proxmox VE HA", s.proxmoxHA === true ? "Keeps clusters' control-plane VMs on separate nodes" : "Off"],
+    ["HA rules for cluster creators", s.offerHARules === true ? "Offered by name and nodes" : "Off"],
+    [
+      "CSI plugin's newest release",
+      s.clusterDatastoreAllocate === true ? "Clusters may choose it, on a storage of their own" : "Off",
+    ],
+    ["HA group labels", s.clusterSysAudit === true ? "Clusters may choose them, with Sys.Audit on /" : "Off"],
+  ];
+}
+
 function ManagedSummary({
   status,
   settings: s,
@@ -653,14 +706,9 @@ function ManagedSummary({
     ["DNS servers", s.dnsServers.join(", ")],
     ["Storages for clusters", s.workloadDatastores.join(", ")],
     ["Bridges for clusters", s.workloadBridges.join(", ")],
-    ["Proxmox VE HA", s.proxmoxHA === true ? "Keeps clusters' control-plane VMs on separate nodes" : "Off"],
-    ["HA rules for cluster creators", s.offerHARules === true ? "Offered by name and nodes" : "Off"],
-    [
-      "CSI plugin's newest release",
-      s.clusterDatastoreAllocate === true ? "Clusters may choose it, on a storage of their own" : "Off",
-    ],
+    ...optInRows(s),
     ["Template refresh", refreshSummary(s)],
-    ["HA group labels", s.clusterSysAudit === true ? "Clusters may choose them, with Sys.Audit on /" : "Off"],
+    ["Namespaces for clusters", [ownNamespace, ...(s.extraClusterNamespaces ?? [])].join(", ")],
     [
       "Identity providers",
       s.clusterOIDC && s.clusterOIDC.length > 0 ? s.clusterOIDC.map((p) => p.issuerURL).join(", ") : "None",
@@ -1163,6 +1211,36 @@ function SysAuditChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element 
   );
 }
 
+function NamespacesChoice({ form, set, shown }: FieldsProps): JSX.Element {
+  const hint = useId();
+  return (
+    <fieldset className="group">
+      <legend>Namespaces for clusters</legend>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.moreNamespaces}
+          aria-describedby={hint}
+          onChange={(e) => set("moreNamespaces", e.target.checked)}
+        />{" "}
+        Let cluster creators choose among more namespaces than {ownNamespace}
+      </label>
+      <p className="muted" id={hint}>
+        Such as one per team. Each cluster still has its own pool, and seeing or changing it still takes the privileges
+        on that pool. A namespace is created if it is missing; one taken off the list keeps its clusters, which are then
+        changed with kubectl.
+      </p>
+      {form.moreNamespaces && (
+        <Field label="Namespaces" hint="Separated by commas, such as team-a, team-b." error={shown("extraNamespaces")}>
+          {(id) => (
+            <input id={id} value={form.extraNamespaces} onChange={(e) => set("extraNamespaces", e.target.value)} />
+          )}
+        </Field>
+      )}
+    </fieldset>
+  );
+}
+
 function AdvancedFields({
   form,
   set,
@@ -1559,6 +1637,7 @@ function SetupWizard({
         <DatastoreAllocateChoice form={form} set={set} />
         <RefreshChoice form={effective} set={set} shown={shown} />
         <SysAuditChoice form={form} set={set} />
+        <NamespacesChoice form={form} set={set} shown={shown} />
         <fieldset className="group">
           <legend>Identity providers</legend>
           <p className="muted">

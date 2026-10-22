@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
@@ -50,6 +52,29 @@ func ValidWorkloadPool(pool string) error {
 		if !poolSegment.MatchString(s) {
 			return fmt.Errorf("workload pool %q is not a Proxmox VE pool name", pool)
 		}
+	}
+	return nil
+}
+
+// InterfaceNamespace is the namespace the interface creates clusters in unless it is given more,
+// the chart's interface.namespace.
+const InterfaceNamespace = "clusters"
+
+// clusterNamespace is a namespace's name, a DNS label.
+var clusterNamespace = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+
+// ValidExtraNamespace tells whether namespace may hold the interface's clusters beside
+// InterfaceNamespace, as the chart's interface.extraNamespaces checks it: a namespace name, and
+// none of Kubernetes', the Cluster API providers', cert-manager's or Kubehenge's own, whose Secrets
+// the interface would otherwise read.
+func ValidExtraNamespace(namespace string) error {
+	switch {
+	case !clusterNamespace.MatchString(namespace):
+		return fmt.Errorf("%q is not a namespace name: lowercase letters, digits and dashes, at most 63", namespace)
+	case namespace == InterfaceNamespace:
+		return fmt.Errorf("%s is the interface's own namespace already", namespace)
+	case namespace == metav1.NamespaceDefault || namespace == "cert-manager" || strings.HasPrefix(namespace, "kube-") || strings.HasSuffix(namespace, "-system"):
+		return fmt.Errorf("%s holds Kubernetes', the providers' or Kubehenge's own objects", namespace)
 	}
 	return nil
 }

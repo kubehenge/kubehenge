@@ -75,12 +75,12 @@ func (wl *workloadRead) why() string {
 	}
 }
 
-// readWorkload reads the nodes, pods, volume claims, warnings and readiness of a cluster in the
-// interface's namespace, as its health identity, each within healthDeadline. Elsewhere the
-// interface reads no Secret, so it has no way in.
-func (s *Server) readWorkload(ctx context.Context, kube client.Client, c *clusterv1.Cluster) workloadRead {
-	if c.Namespace != s.Namespace {
-		return workloadRead{skipped: "Kubehenge reads inside the clusters of its own namespace, " + s.Namespace + ", only; this one is managed from elsewhere."}
+// readWorkload reads the nodes, pods, volume claims, warnings and readiness of a cluster in a
+// namespace the interface manages, as its health identity, each within healthDeadline. Elsewhere
+// the interface reads no Secret, so it has no way in.
+func (s *Server) readWorkload(ctx context.Context, kube client.Client, c *clusterv1.Cluster, managed managedNamespaces) workloadRead {
+	if !managed.has(c.Namespace) {
+		return workloadRead{skipped: "Kubehenge reads inside the clusters of the " + namespacesPhrase(managed) + " only; this one is managed from elsewhere."}
 	}
 	if !meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition) {
 		return workloadRead{skipped: "The cluster's API server is not up yet."}

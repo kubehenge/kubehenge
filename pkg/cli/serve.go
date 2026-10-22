@@ -85,7 +85,8 @@ kubeconfig. The interface then acts in the management cluster with the kubeconfi
 	f.StringVar(&o.keyFile, "tls-key", "", "PEM file with the certificate's private key")
 	f.StringVar(&s.WorkloadPool, "workload-pool", "kubehenge", "Proxmox VE pool the clusters' own pools nest under, as the controller's --workload-pool")
 	f.StringVar(&s.ClassNamespace, "class-namespace", "kubehenge-system", "namespace of Kubehenge's ClusterClasses")
-	f.StringVar(&s.Namespace, "namespace", "clusters", "namespace clusters are created in, the chart's interface.namespace; the interface changes only the clusters there")
+	f.StringVar(&s.Namespace, "namespace", provisioner.InterfaceNamespace,
+		"namespace clusters are created in, the chart's interface.namespace, unless the chart's ConfigMap kubehenge-interface in --class-namespace lists the namespaces (with interface.extraNamespaces); the interface changes only the clusters there")
 	f.DurationVar(&s.SessionMaxAge, "session-max-age", defaultSessionMaxAge, "how long a sign-in lasts, however active the user")
 	f.StringVar(&s.PublicURL, "public-url", os.Getenv("KUBEHENGE_PUBLIC_URL"),
 		"address users reach the interface at, where OpenID identity providers send them back; default the address the browser used (env KUBEHENGE_PUBLIC_URL)")

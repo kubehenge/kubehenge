@@ -76,6 +76,24 @@ func TestValidWorkloadPool(t *testing.T) {
 	}
 }
 
+func TestValidExtraNamespace(t *testing.T) {
+	t.Parallel()
+	for _, ns := range []string{"team-a", "lab", "a", strings.Repeat("a", 63), "systems", "kubernetes"} {
+		if err := ValidExtraNamespace(ns); err != nil {
+			t.Errorf("%q: %v", ns, err)
+		}
+	}
+	// Their Secrets hold Proxmox VE tokens, CAs and the providers' credentials.
+	for _, ns := range []string{
+		"", "Team-A", "team_a", "-team", strings.Repeat("a", 64), InterfaceNamespace, "default", "cert-manager",
+		"kube-system", "kube-public", "kube-node-lease", "kubehenge-system", "capi-system", "proxmox-infrastructure-system",
+	} {
+		if err := ValidExtraNamespace(ns); err == nil {
+			t.Errorf("%q accepted", ns)
+		}
+	}
+}
+
 func TestNamesForLongClusterStaysWithinProxmoxLimits(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("a", 63)

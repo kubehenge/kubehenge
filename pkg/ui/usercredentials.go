@@ -104,13 +104,13 @@ func (s *Server) applianceCredentialTarget(w http.ResponseWriter, r *http.Reques
 	}
 	return &credentialTarget{
 		purpose:   purpose,
-		key:       client.ObjectKey{Namespace: s.Namespace, Name: provisioner.CredentialName("", purpose.Name)},
+		key:       client.ObjectKey{Namespace: u.namespaces[0], Name: provisioner.CredentialName("", purpose.Name)},
 		canChange: true,
 	}
 }
 
-// Naming privSee has s.cluster refuse a cluster outside the interface's namespace, whose Secrets
-// the interface may not read.
+// Naming privSee has s.cluster refuse a cluster outside the namespaces the interface manages,
+// whose Secrets it may not read.
 func (s *Server) clusterCredential(w http.ResponseWriter, r *http.Request, u user) {
 	if t := s.clusterCredentialTarget(w, r, u, privSee); t != nil {
 		s.showCredential(w, r, u, t)

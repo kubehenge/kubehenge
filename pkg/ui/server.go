@@ -109,7 +109,8 @@ type Server struct {
 	WorkloadPool string
 	// ClassNamespace holds Kubehenge's ClusterClasses.
 	ClassNamespace string
-	// Namespace is where clusters are created unless the request names another.
+	// Namespace is where the interface creates and changes clusters while the management cluster
+	// lists no namespaces for it (namespaces).
 	Namespace string
 	// Assets is the built frontend: index.html and what it loads.
 	Assets fs.FS
@@ -392,6 +393,9 @@ type user struct {
 	ticket  *pve.Ticket
 	// kube is the management cluster, for handlers behind managed.
 	kube client.Client
+	// namespaces are those the interface creates and changes clusters in, for handlers behind
+	// managed.
+	namespaces managedNamespaces
 }
 
 // versionHeader carries the running release on answers to signed-in users.
@@ -403,6 +407,12 @@ func (s *Server) managed(next func(http.ResponseWriter, *http.Request, user)) ht
 	return s.signedIn(func(w http.ResponseWriter, r *http.Request, u user) {
 		if u.kube = s.currentKube(); u.kube == nil {
 			writeError(w, http.StatusServiceUnavailable, "the management cluster is not set up yet")
+			return
+		}
+		var err error
+		if u.namespaces, err = s.namespaces(r.Context(), u.kube); err != nil {
+			s.Log.Error("management cluster request failed", "error", err)
+			writeError(w, http.StatusBadGateway, "the management cluster did not answer")
 			return
 		}
 		next(w, r, u)

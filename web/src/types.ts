@@ -25,8 +25,10 @@ export interface Session {
   canTrust?: boolean;
   /** Whether the user holds Sys.Audit on /, which a cluster's token gets with the HA group labels. */
   canAudit?: boolean;
-  /** The namespace the interface creates clusters in. */
+  /** The namespace the interface creates clusters in unless the creator chooses another. */
   namespace?: string;
+  /** Every namespace the interface creates and changes clusters in, namespace first. */
+  namespaces?: string[];
 }
 
 /** A cluster, by where it lives. */
@@ -394,6 +396,8 @@ export interface ManagementSettings {
   templateRefresh?: TemplateRefreshSettings;
   /** Clusters may choose the cloud controller manager's HA group labels, with Sys.Audit on / for their token. */
   clusterSysAudit?: boolean;
+  /** More namespaces the interface creates and manages clusters in, beside its own. */
+  extraClusterNamespaces?: string[];
 }
 
 /** When and where the Ubuntu VM templates are built again; empty fields take the defaults. */
@@ -610,6 +614,8 @@ export interface Upgrades {
 }
 
 export interface CreateRequest {
+  /** One of the session's namespaces; unset, its first. */
+  namespace?: string;
   name: string;
   class: string;
   version: string;

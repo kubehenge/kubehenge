@@ -175,15 +175,35 @@ export function GeneralStep({
   cls,
   offered,
   onChooseClass,
+  namespaces,
+  onChooseNamespace,
 }: StepProps & {
   classes: ClusterClass[];
   cls: ClusterClass | undefined;
   offered: Versions | undefined;
   onChooseClass: (name: string) => void;
+  namespaces: string[];
+  onChooseNamespace: (namespace: string) => void;
 }): JSX.Element {
   const alone = machineLeast({ ...form, workerReplicas: 0 }, cls, "controlPlaneMachine");
   return (
     <>
+      {namespaces.length > 1 && (
+        <Field
+          label="Namespace"
+          hint="Where the cluster's objects live in the management cluster; Cluster Mesh links clusters of one namespace."
+        >
+          {(id) => (
+            <select id={id} value={form.namespace} onChange={(e) => onChooseNamespace(e.target.value)}>
+              {namespaces.map((ns) => (
+                <option key={ns} value={ns}>
+                  {ns}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
+      )}
       <Field label="Name" hint="Also names its Proxmox VE pool and VMs." error={shown("name")}>
         {(id) => <input id={id} value={form.name} onChange={(e) => set("name", e.target.value.trim())} />}
       </Field>

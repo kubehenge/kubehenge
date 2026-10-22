@@ -73,8 +73,8 @@ func startAPI(t *testing.T) (client.Client, *envtest.WebhookInstallOptions) {
 }
 
 // startAPIConfig is startAPI with the administrator's configuration too, for clients of other
-// identities.
-func startAPIConfig(t *testing.T) (*rest.Config, client.Client, *envtest.WebhookInstallOptions) {
+// identities, and Kubehenge's chart installed with the module's values and then those of values.
+func startAPIConfig(t *testing.T, values ...string) (*rest.Config, client.Client, *envtest.WebhookInstallOptions) {
 	t.Helper()
 	crds := os.Getenv("KUBEHENGE_INTEGRATION_CRDS")
 	if crds == "" || os.Getenv("KUBEBUILDER_ASSETS") == "" {
@@ -84,7 +84,7 @@ func startAPIConfig(t *testing.T) (*rest.Config, client.Client, *envtest.Webhook
 	objects := renderChart(t, "cluster-api-providers", "../../management-cluster/charts/cluster-api-providers", "capi-operator-system",
 		"testdata/cluster-api-providers-values.yaml")
 	var webhooks []*admissionregistrationv1.ValidatingWebhookConfiguration
-	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
+	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, append([]string{"testdata/integration-values.yaml"}, values...)...) {
 		if o.GetKind() != "ValidatingWebhookConfiguration" {
 			objects = append(objects, o)
 			continue

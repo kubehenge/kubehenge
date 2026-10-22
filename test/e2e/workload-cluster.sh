@@ -48,6 +48,11 @@
 # KUBEHENGE_E2E_HA_GROUPS=1 switches the cloud controller manager's HA group labels on and off again,
 # with a management cluster that lets clusters choose them; the test makes an HA node-affinity rule
 # over every node, which needs Proxmox VE 9, and removes it again.
+# KUBEHENGE_E2E_NAMESPACE names one of the namespaces the management cluster's
+# extra_cluster_namespaces gives the web interface: the cluster is then created there with the
+# interface's own account, as the interface creates one in a namespace of its creator's choice, and
+# the namespace is left in place. Unset, the cluster gets a namespace of its own, created and deleted
+# with it.
 set -eu
 
 class=${1:?usage: $0 <ClusterClass> <version> <upgrade version>}
@@ -75,7 +80,7 @@ work=$(mktemp -d)
 distribution=$(echo "${class}" | sed 's/^kubehenge-//')
 suffix=$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')
 name=e2e-${distribution}-${suffix}
-ns=${name}
+ns=${KUBEHENGE_E2E_NAMESPACE:-${name}}
 issuer_pid=
 grafana_pid=
 s3_pid=
@@ -90,7 +95,9 @@ cleanup() {
     [ -z "${s3_pid}" ] || kill "${s3_pid}" 2> /dev/null || true
     # shellcheck disable=SC2310 # each removal is tried, whatever happened to those before it
     remove_ha_rule || true
-    if [ "${status}" -ne 0 ]; then
+    if [ "${status}" -ne 0 ] && [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
+        printf '\nleaving cluster %s/%s for inspection; delete it with: kubectl -n %s delete cluster %s\n' "${ns}" "${name}" "${ns}" "${name}"
+    elif [ "${status}" -ne 0 ]; then
         printf '\nleaving cluster %s/%s for inspection; delete it with: kubectl delete namespace %s\n' "${ns}" "${name}" "${ns}"
     fi
     rm -rf "${work}"
@@ -221,7 +228,29 @@ cluster_network() {
 }
 
 step "create ${ns}/${name} from ${class} at ${version}"
-kubectl create namespace "${ns}"
+# creator: kubectl as whoever creates the cluster, the interface's account in one of its namespaces.
+if [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
+    kubectl -n kubehenge-system get configmap kubehenge-interface -o jsonpath='{.data.namespaces}' |
+        jq -e --arg n "${ns}" 'index($n) > 0' > /dev/null || fail "the interface is not given namespace ${ns}"
+    kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d > "${work}/management-ca.crt"
+    management_server=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+    interface_token=$(kubectl -n kubehenge-system get secret kubehenge-interface-token -o jsonpath='{.data.token}' | base64 -d)
+    creator_config="${work}/interface.kubeconfig"
+    kubectl --kubeconfig "${creator_config}" config set-cluster management --server="${management_server}" \
+        --certificate-authority="${work}/management-ca.crt" --embed-certs > /dev/null
+    kubectl --kubeconfig "${creator_config}" config set-credentials interface --token="${interface_token}" > /dev/null
+    kubectl --kubeconfig "${creator_config}" config set-context interface --cluster=management --user=interface > /dev/null
+    kubectl --kubeconfig "${creator_config}" config use-context interface > /dev/null
+    creator() { kubectl --kubeconfig "${creator_config}" "$@"; }
+    # can-i answers no with a non-zero exit as well as on the word.
+    in_namespace=$(kubectl --kubeconfig "${creator_config}" auth can-i create clusters.cluster.x-k8s.io -n "${ns}" || true)
+    in_default=$(kubectl --kubeconfig "${creator_config}" auth can-i create clusters.cluster.x-k8s.io -n default || true)
+    [ "${in_namespace}" = yes ] || fail "the interface may not create clusters in ${ns}"
+    [ "${in_default}" = no ] || fail "the interface may create clusters in default"
+else
+    kubectl create namespace "${ns}"
+    creator() { kubectl "$@"; }
+fi
 network_spec=$(cluster_network)
 addresses=$(json_list "${KUBEHENGE_E2E_ADDRESSES}")
 dns_servers=$(json_list "${KUBEHENGE_E2E_DNS}")
@@ -291,7 +320,7 @@ ${cni_variable}
       - name: cis
         value: true
 EOF
-kubectl apply -f "${work}/cluster.yaml"
+creator create -f "${work}/cluster.yaml"
 # capmox does not come back to a machine whose VM failed to provision, so the wait ends there rather
 # than at its timeout.
 available_or_failed() {
@@ -1541,7 +1570,7 @@ until_true 1800 "machine ${machine} replaced" absent kubectl -n "${ns}" get mach
 workers 1
 
 step "delete"
-kubectl -n "${ns}" delete "cluster/${name}" --wait --timeout=30m
+creator -n "${ns}" delete "cluster/${name}" --wait --timeout=30m
 # A failed request is not an empty list.
 # shellcheck disable=SC2310 # polled; a failed request leaves the pool counted as there.
 pool_removed() { pools=$(pve_get pools) && ! printf '%s' "${pools}" | jq -e --arg p "${pool}" '.data[] | select(.poolid == $p)' > /dev/null; }
@@ -1551,7 +1580,13 @@ printf '%s' "${users}" | jq -e --arg u "${user}" '[.data[] | select(.userid == $
 vms=$(pve_get "cluster/resources?type=vm")
 printf '%s' "${vms}" | jq -e --argjson o "${owner}" --arg n "${name}" '[.data[] | select(.vmid == $o or (.name // "" | startswith($n + "-")))] | length == 0' > /dev/null ||
     fail "VMs of the cluster are still there"
-if ! kubectl delete namespace "${ns}" --wait --timeout=5m; then
+if [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
+    # The namespace is the appliance's and stays; nothing of the cluster may, once the garbage
+    # collector has taken what the Cluster owned.
+    # shellcheck disable=SC2310 # polled; a failed request counts as something left.
+    nothing_left() { left=$(kubectl -n "${ns}" get secrets,configmaps,machines -l "cluster.x-k8s.io/cluster-name=${name}" -o name) && [ -z "${left}" ]; }
+    until_true 300 "nothing of ${name} left in ${ns}" nothing_left
+elif ! kubectl delete namespace "${ns}" --wait --timeout=5m; then
     # Its conditions say what is left in it and whose finalizers hold that.
     left=$(kubectl get namespace "${ns}" -o jsonpath='{range .status.conditions[?(@.status=="True")]}{.message}; {end}' || true)
     fail "namespace ${ns} is still there: ${left}"
