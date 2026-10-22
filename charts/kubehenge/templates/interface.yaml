@@ -36,7 +36,8 @@ metadata:
 {{- end }}
 ---
 # Where the interface creates and changes clusters, its own namespace first. It reads this rather
-# than a setting of its own, so that its rights and its offer change together.
+# than a setting of its own, so that its rights and its offer change together. Likewise whether
+# the shared Headlamp offers its actions, so that it changes with the release applied.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -44,6 +45,9 @@ metadata:
   namespace: {{ .Release.Namespace }}
 data:
   namespaces: {{ toJson $namespaces | quote }}
+  {{- if .Values.interface.headlampActions }}
+  headlampActions: "true"
+  {{- end }}
 ---
 apiVersion: v1
 kind: ServiceAccount

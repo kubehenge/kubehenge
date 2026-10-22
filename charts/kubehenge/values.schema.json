@@ -41,6 +41,10 @@
         "headlampSignIn": {
           "description": "Whether the shared Headlamp signs those who may download a cluster's admin kubeconfig in as cluster-admin.",
           "type": "boolean"
+        },
+        "headlampActions": {
+          "description": "Whether the shared Headlamp offers its Helm app catalog and Prometheus charts, acting with each user's own credentials in the cluster.",
+          "type": "boolean"
         }
       }
     },

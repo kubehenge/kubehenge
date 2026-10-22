@@ -58,6 +58,9 @@ type Settings struct {
 	// HeadlampSignIn has the shared Headlamp sign those who may download a cluster's admin
 	// kubeconfig in as cluster-admin.
 	HeadlampSignIn bool `json:"headlampSignIn,omitempty"`
+	// HeadlampActions has the shared Headlamp offer the Helm app catalog and the Prometheus charts
+	// it ships with, acting with each user's own credentials in the cluster.
+	HeadlampActions bool `json:"headlampActions,omitempty"`
 	// OfferHARules offers Proxmox VE's HA node-affinity rules, their names and nodes only, to those
 	// who may create or change a cluster without Sys.Audit on / of their own.
 	OfferHARules bool `json:"offerHARules,omitempty"`

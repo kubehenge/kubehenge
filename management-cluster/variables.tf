@@ -388,6 +388,13 @@ variable "headlamp_sign_in" {
   nullable    = false
 }
 
+variable "headlamp_actions" {
+  description = "Have the appliance's shared Headlamp offer the Helm app catalog and the Prometheus charts it ships with: Helm releases listed, installed from repositories, upgraded, rolled back and uninstalled with each user's own credentials in the cluster. Only those who may set the appliance up add or remove a repository, since one list serves every user and cluster. Port forwards stay with Headlamp's desktop app, and node drain is offered either way."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "controller_image" {
   description = "Image of Kubehenge's controller by digest, as repository@sha256:<digest>, instead of the one the chart was released with."
   type        = string

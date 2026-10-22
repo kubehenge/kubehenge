@@ -38,6 +38,12 @@ interface:
   # bound to cluster-admin, and one that may only make its tokens, whose own token it keeps beside
   # the Cluster for the interface. Switched off, it removes them, which ends every token made.
   headlampSignIn: false
+  # Whether the appliance's shared Headlamp offers the Helm app catalog and the Prometheus charts
+  # it ships with: listing, installing, upgrading, rolling back and uninstalling Helm releases from
+  # repositories, with each user's own credentials in the cluster. Only those who may set the
+  # appliance up (Sys.Modify on / among others) add or remove a repository, as one list serves
+  # every user and cluster. The interface reads this from the ConfigMap kubehenge-interface.
+  headlampActions: false
 
 # What clusters may use on Proxmox VE: the storages for their disks and volumes, and the bridges
 # their nodes attach to, which the management cluster's Cluster API token has rights on. The

@@ -222,7 +222,7 @@ run "controller_and_clusters_are_least_privilege" {
         kubehenge-rke2    = ["rke2-bootstrap-system", "rke2-control-plane-system"]
         kubehenge-k3s     = ["k3s-bootstrap-system", "k3s-control-plane-system"]
       }
-      interface = { extraNamespaces = [], offerHARules = false, headlampSignIn = false }
+      interface = { extraNamespaces = [], offerHARules = false, headlampSignIn = false, headlampActions = false }
       clusters  = { storages = ["local-lvm", "ceph"], bridges = ["vmbr0", "vmbr1"] }
       proxmox = {
         url          = "https://pve.example.org:8006"
@@ -635,7 +635,7 @@ run "extra_cluster_namespaces" {
 
   assert {
     condition = (
-      yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = ["team-a", "team-b"], offerHARules = false, headlampSignIn = false } &&
+      yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = ["team-a", "team-b"], offerHARules = false, headlampSignIn = false, headlampActions = false } &&
       toset(keys(proxmox_acl.provisioner)) == toset([
         "/ kubehenge-audit",
         "/nodes kubehenge-audit",
@@ -884,8 +884,21 @@ run "headlamp_sign_in" {
   }
 
   assert {
-    condition     = yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = [], offerHARules = false, headlampSignIn = true }
+    condition     = yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = [], offerHARules = false, headlampSignIn = true, headlampActions = false }
     error_message = "the chart must be told to have the shared Headlamp sign people in, its namespaces left as they are"
+  }
+}
+
+run "headlamp_actions" {
+  command = plan
+
+  variables {
+    headlamp_actions = true
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = [], offerHARules = false, headlampSignIn = false, headlampActions = true }
+    error_message = "the chart must be told to have the shared Headlamp offer its actions, nothing else of the interface changed"
   }
 }
 

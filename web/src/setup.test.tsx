@@ -44,6 +44,7 @@ const form: SetupForm = {
   moreNamespaces: false,
   extraNamespaces: "",
   headlampSignIn: false,
+  headlampActions: false,
   passphrase: "correct horse battery staple",
   confirm: "correct horse battery staple",
 };
@@ -244,6 +245,15 @@ describe("setup", () => {
     ]).toStrictEqual([true, false]);
   });
 
+  it("asks for the Headlamp actions only when they are switched on", () => {
+    expect(settings({ ...form, headlampActions: true })).toHaveProperty("headlampActions", true);
+    expect(settings(form)).not.toHaveProperty("headlampActions");
+    expect([
+      formOf(settings({ ...form, headlampActions: true })).headlampActions,
+      formOf(settings(form)).headlampActions,
+    ]).toStrictEqual([true, false]);
+  });
+
   it("passes the clusters' identity providers on, empty fields left to the defaults", () => {
     const s = settings({
       ...form,
@@ -352,6 +362,10 @@ describe("setup", () => {
     expect(signIn).not.toBeChecked();
     expect(signIn).toHaveAccessibleDescription(/Grants: .* cluster-admin.* Risks: /u);
     await user.click(signIn);
+    const actions = screen.getByLabelText("Offer Helm and Prometheus charts in the appliance's Headlamp");
+    expect(actions).not.toBeChecked();
+    expect(actions).toHaveAccessibleDescription(/Grants: .* own credentials.* Risks: /u);
+    await user.click(actions);
     await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple");
     await user.type(screen.getByLabelText("Repeat passphrase"), "correct horse battery staple");
     await submit(user);
@@ -369,6 +383,7 @@ describe("setup", () => {
         bootstrapDatastore: "local",
         workloadBridges: ["vmbr0"],
         headlampSignIn: true,
+        headlampActions: true,
       },
     });
   });

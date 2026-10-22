@@ -57,6 +57,7 @@ module "management" {
   template_refresh       = var.settings.templateRefresh
   etcd_restore           = var.settings.etcdRestore
   headlamp_sign_in       = var.settings.headlampSignIn
+  headlamp_actions       = var.settings.headlampActions
 
   cluster_datastore_allocate = var.settings.clusterDatastoreAllocate
   cluster_sys_audit          = var.settings.clusterSysAudit
@@ -188,6 +189,7 @@ func (a *Appliance) writeConfig(s *Settings) error {
 		"templateRefresh":        moduleTemplateRefresh(s.TemplateRefresh),
 		"etcdRestore":            s.EtcdRestore,
 		"headlampSignIn":         s.HeadlampSignIn,
+		"headlampActions":        s.HeadlampActions,
 
 		"clusterDatastoreAllocate": s.ClusterDatastoreAllocate,
 		"clusterSysAudit":          s.ClusterSysAudit,

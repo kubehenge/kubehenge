@@ -1,18 +1,18 @@
 #!/bin/sh
 # End-to-end test of the appliance on a Proxmox VE node: install it from a release archive, sign in
 # with Proxmox VE users, set the management cluster up from the interface, place by an HA rule
-# offered to a cluster creator, reach the shared Headlamp behind the interface's sign-in and log out
-# of a cluster in it, switch automatic upgrades of the management cluster on and off, upgrade the
-# appliance under the running management cluster and then the management cluster to what it
-# carries, remove the management cluster from the interface and then the appliance, and check that
-# Proxmox VE is left as it was.
+# offered to a cluster creator, reach the shared Headlamp behind the interface's sign-in, with the
+# plugins it ships and its Helm routes' limits, and log out of a cluster in it, switch automatic
+# upgrades of the management cluster on and off, upgrade the appliance under the running management
+# cluster and then the management cluster to what it carries, remove the management cluster from
+# the interface and then the appliance, and check that Proxmox VE is left as it was.
 #
 #   test/e2e/appliance.sh <release> <newer release> <settings>
 #
 # Runs as root on the node, as appliance/install.sh does, and needs jq. <release> and <newer release>
 # are archives `make dist` built with two versions; <settings> is a JSON file of the management
 # cluster's settings as the interface's setup sends them (pkg/appliance/settings.go), with
-# offerHARules on and the default workload pool. The appliance
+# offerHARules and headlampActions on and the default workload pool. The appliance
 # is container KUBEHENGE_E2E_APPLIANCE_ID at KUBEHENGE_E2E_APPLIANCE_ADDRESS (with its prefix length)
 # on KUBEHENGE_E2E_BRIDGE (default vmbr0), with the gateway KUBEHENGE_E2E_GATEWAY and the name
 # servers KUBEHENGE_E2E_DNS; its disk goes on KUBEHENGE_E2E_STORAGE when that is set.
@@ -159,6 +159,14 @@ headlamp_serves() {
     request "${work}/admin.jar" "${headlamp}/"
     got=$(cat "${work}/status")
     [ "${got}" = 200 ] && grep -q Headlamp "${work}/body"
+}
+
+# headlamp_offers_actions: whether Headlamp's plugin list holds the app catalog it ships, which the
+# gate leaves out until it has read that the actions are on.
+headlamp_offers_actions() {
+    request "${work}/admin.jar" "${headlamp}/plugins"
+    got=$(cat "${work}/status")
+    [ "${got}" = 200 ] && jq -e 'any(.[]; .path == "static-plugins/app-catalog")' "${work}/body" > /dev/null
 }
 
 # upgrade <release>: install.sh --upgrade of the appliance, its exit status in $upgraded and its
@@ -310,6 +318,19 @@ until_true 120 "Headlamp's page through the gate" headlamp_serves
 expect 200 "Headlamp's configuration" request "${work}/admin.jar" "${headlamp}/config"
 body_is 'has("clusters")' "Headlamp's configuration has no clusters"
 expect 403 "Headlamp's plugin upload" request "${work}/admin.jar" "${headlamp}/user-plugins/x"
+
+step "the shared Headlamp's actions"
+# The settings switch them on; the interface reads that from the chart's ConfigMap every half minute.
+until_true 120 "the plugins Headlamp ships in its plugin list" headlamp_offers_actions
+expect 200 "the app catalog" request "${work}/admin.jar" "${headlamp}/static-plugins/app-catalog/main.js"
+expect 200 "the Prometheus charts" request "${work}/admin.jar" "${headlamp}/static-plugins/prometheus/main.js"
+expect 403 "a chart from a path on the appliance" request "${work}/admin.jar" -H 'Content-Type: application/json' \
+    -d '{"name":"x","namespace":"default","chart":"/etc","version":"1","description":"x"}' \
+    "${headlamp}/clusters/clusters.e2e/helm/release/install?namespace=default"
+expect 403 "a Helm repository over HTTP" request "${work}/admin.jar" -H 'Content-Type: application/json' \
+    -d '{"name":"x","url":"http://charts.example"}' "${headlamp}/clusters/clusters.e2e/helm/repositories"
+expect 403 "a port forward" request "${work}/admin.jar" -H 'Content-Type: application/json' \
+    -d '{"namespace":"default","pod":"x","targetPort":"80"}' "${headlamp}/clusters/clusters.e2e/portforward"
 
 step "Headlamp's log out of a cluster through the gate, and opening the cluster again"
 # Headlamp's frontend names the cluster in unpadded URL-safe base64 and posts JSON. The gate judges

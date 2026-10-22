@@ -99,6 +99,7 @@ export interface SetupForm {
   // Separated by commas or lines.
   extraNamespaces: string;
   headlampSignIn: boolean;
+  headlampActions: boolean;
   passphrase: string;
   confirm: string;
 }
@@ -237,6 +238,9 @@ export function settings(f: SetupForm): ManagementSettings {
   if (f.headlampSignIn) {
     s.headlampSignIn = true;
   }
+  if (f.headlampActions) {
+    s.headlampActions = true;
+  }
   return s;
 }
 
@@ -317,6 +321,7 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     moreNamespaces: (saved.extraClusterNamespaces ?? []).length > 0,
     extraNamespaces: (saved.extraClusterNamespaces ?? []).join(", "),
     headlampSignIn: saved.headlampSignIn === true,
+    headlampActions: saved.headlampActions === true,
     passphrase: "",
     confirm: "",
   };
@@ -718,6 +723,16 @@ function optInRows(s: ManagementSettings): [string, string][] {
   ];
 }
 
+function headlampRows(s: ManagementSettings): [string, string][] {
+  return [
+    [
+      "Headlamp sign-in",
+      s.headlampSignIn === true ? "Signs those who may download a cluster's kubeconfig in as cluster-admin" : "Off",
+    ],
+    ["Headlamp actions", s.headlampActions === true ? "Helm app catalog and Prometheus charts" : "Off"],
+  ];
+}
+
 function ManagedSummary({
   status,
   settings: s,
@@ -745,10 +760,7 @@ function ManagedSummary({
     ...optInRows(s),
     ["Template refresh", refreshSummary(s)],
     ["Namespaces for clusters", [ownNamespace, ...(s.extraClusterNamespaces ?? [])].join(", ")],
-    [
-      "Headlamp sign-in",
-      s.headlampSignIn === true ? "Signs those who may download a cluster's kubeconfig in as cluster-admin" : "Off",
-    ],
+    ...headlampRows(s),
     [
       "Identity providers",
       s.clusterOIDC && s.clusterOIDC.length > 0 ? s.clusterOIDC.map((p) => p.issuerURL).join(", ") : "None",
@@ -1122,6 +1134,33 @@ function HeadlampChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element 
         where the admin kubeconfigs already are; Headlamp acts as that account, not as the Proxmox VE user, whom the
         interface&apos;s log names beside the token&apos;s ID. Switching it off removes both accounts, which ends every
         token made.
+      </p>
+    </fieldset>
+  );
+}
+
+function HeadlampActionsChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element {
+  const hint = useId();
+  return (
+    <fieldset className="group">
+      <legend>Headlamp actions</legend>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.headlampActions}
+          aria-describedby={hint}
+          onChange={(e) => set("headlampActions", e.target.checked)}
+        />{" "}
+        Offer Helm and Prometheus charts in the appliance&apos;s Headlamp
+      </label>
+      <p className="muted" id={hint}>
+        Grants: Headlamp&apos;s Helm app catalog and Prometheus charts, with which everyone who sees a cluster lists,
+        installs, upgrades, rolls back and uninstalls its Helm releases. Each acts in the cluster with their own
+        credentials there, or the sign-in above, so the cluster lets them do no more than it already does. Only those
+        who may set the appliance up add or remove a Helm repository, since one list serves every user and cluster.
+        Risks: the appliance fetches the charts, from those repositories alone and over HTTPS. Node drain is offered
+        either way, with the user&apos;s own credentials; port forwards work in Headlamp&apos;s desktop app alone and
+        stay off here.
       </p>
     </fieldset>
   );
@@ -1858,6 +1897,7 @@ function SetupWizard({
         <VolumeSnapshotsChoice form={form} set={set} shown={shown} fixed={fixed} />
         <NamespacesChoice form={form} set={set} shown={shown} />
         <HeadlampChoice form={form} set={set} />
+        <HeadlampActionsChoice form={form} set={set} />
         <fieldset className="group">
           <legend>Identity providers</legend>
           <p className="muted">

@@ -86,8 +86,11 @@ dist: web gateway-api
 	test -f $(HEADLAMP_TARBALL) || curl -fsSL --proto '=https' --retry 5 --retry-all-errors -o $(HEADLAMP_TARBALL) \
 		https://github.com/kubernetes-sigs/headlamp/releases/download/$(HEADLAMP_TAG)/Headlamp-$(HEADLAMP_VERSION)-linux-x64.tar.gz
 	echo '$(HEADLAMP_SHA256)  $(HEADLAMP_TARBALL)' | sha256sum -c --quiet - || { rm -f $(HEADLAMP_TARBALL); exit 1; }
+	# Of the plugins Headlamp ships, the Helm app catalog and the Prometheus charts, which the interface
+	# serves while the shared Headlamp offers its actions; the plugin catalog would install any plugin.
 	tar -xzf $(HEADLAMP_TARBALL) -C dist/stage/share/kubehenge/headlamp --strip-components=2 \
-		$(foreach f,headlamp-server frontend LICENSE NOTICE,Headlamp-$(HEADLAMP_VERSION)-linux-x64/resources/$(f))
+		$(foreach f,headlamp-server frontend LICENSE NOTICE .plugins/app-catalog .plugins/prometheus,Headlamp-$(HEADLAMP_VERSION)-linux-x64/resources/$(f))
+	mv dist/stage/share/kubehenge/headlamp/.plugins dist/stage/share/kubehenge/headlamp/static-plugins
 	cp $(addprefix appliance/,$(UNITS)) dist/stage/share/kubehenge/appliance/
 	mkdir -p dist/stage/share/kubehenge/pve-entry
 	cp $(addprefix appliance/pve-entry/,install.sh kubehenge-entry.js README.md) dist/stage/share/kubehenge/pve-entry/

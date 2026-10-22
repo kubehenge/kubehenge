@@ -66,6 +66,9 @@ type Headlamp struct {
 	// signedOut are the sessions that signed out of a cluster in Headlamp, by session and cluster,
 	// until the session ends.
 	signedOut map[string]time.Time
+	// actions is whether an administrator has given the shared Headlamp its actions
+	// (headlampActionsKey), as last read.
+	actions bool
 }
 
 // headlampKey tells clusters apart, one created again under an earlier one's name too.
@@ -104,9 +107,11 @@ const headlampPrivilegeTTL = 30 * time.Second
 // separates it from the name.
 func headlampContext(namespace, name string) string { return namespace + "." + name }
 
-// headlampDenied are Headlamp's routes the shared server must not offer: port forwards open ports
-// on the appliance, the external proxy and the multiplexer reach clusters around the per-cluster
-// paths checked here, and draining runs without the user's token.
+// headlampDenied are Headlamp's routes the shared server must not offer: the external proxy fetches
+// any address from the appliance, the multiplexer and the drain routes reach clusters they name
+// themselves, around the per-cluster paths checked here (a cluster's own drain-node is one of
+// those), the metrics are the server's own across every cluster, and the rest change the server's
+// list of clusters or its credentials.
 var headlampDenied = map[string]bool{
 	"/externalproxy": true, "/wsMultiplexer": true, "/drain-node": true, "/drain-node-status": true,
 	"/metrics": true, "/parseKubeConfig": true, "/cluster": true, "/auth/set-token": true,
@@ -174,7 +179,7 @@ func (h *Headlamp) rewrite(pr *httputil.ProxyRequest) {
 			pr.Out.AddCookie(c)
 		}
 	}
-	if pr.In.URL.Path == "/config" {
+	if pr.In.URL.Path == "/config" || pr.In.URL.Path == "/plugins" {
 		pr.Out.Header.Del("Accept-Encoding")
 	}
 }
@@ -190,6 +195,8 @@ func (s *Server) modifyHeadlampResponse(resp *http.Response) error {
 			return errors.New("headlamp's config was asked for without a signed-in user")
 		}
 		return s.filterHeadlampConfig(resp, u)
+	case "/plugins":
+		return s.filterHeadlampPlugins(resp)
 	case "/oidc":
 		loc, err := url.Parse(resp.Header.Get("Location"))
 		if err != nil || loc.Query().Get("state") == "" {
@@ -236,9 +243,14 @@ func (s *Server) headlampOffers(w http.ResponseWriter, r *http.Request, u user) 
 	switch {
 	case strings.HasPrefix(p, "/clusters/"):
 		name, rest, _ := strings.Cut(strings.TrimPrefix(p, "/clusters/"), "/")
-		if rest == "portforward" || strings.HasPrefix(rest, "portforward/") || rest == "helm" || strings.HasPrefix(rest, "helm/") {
+		// Headlamp offers port forwards in its desktop app alone: a forward listens on the server's
+		// loopback, which no browser reaches, for everyone signed in to the cluster.
+		if rest == "portforward" || strings.HasPrefix(rest, "portforward/") || rest == "helm" {
 			http.Error(w, "not offered here", http.StatusForbidden)
 			return false
+		}
+		if route, ok := strings.CutPrefix(rest, "helm/"); ok {
+			return s.headlampHelm(w, r, u, name, route)
 		}
 		return s.headlampSees(w, r, u, name)
 	case strings.HasPrefix(p, "/encoded-clusters/"):
@@ -252,7 +264,8 @@ func (s *Server) headlampOffers(w http.ResponseWriter, r *http.Request, u user) 
 			return false
 		}
 		return s.headlampSees(w, r, u, r.URL.Query().Get("cluster"))
-	case headlampDenied[p] || strings.HasPrefix(p, "/cluster/") || strings.HasPrefix(p, "/user-plugins/"):
+	case headlampDenied[p] || strings.HasPrefix(p, "/cluster/") || strings.HasPrefix(p, "/user-plugins/"),
+		strings.HasPrefix(p, "/"+staticPluginsPrefix) && !s.Headlamp.actionsOffered():
 		http.Error(w, "not offered here", http.StatusForbidden)
 		return false
 	case !read:
@@ -415,8 +428,12 @@ func (s *Server) syncHeadlamp(ctx context.Context, every time.Duration) {
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
-		if err := s.writeHeadlampKubeconfig(ctx, s.currentKube()); err != nil {
+		kube := s.currentKube()
+		if err := s.writeHeadlampKubeconfig(ctx, kube); err != nil {
 			s.Log.Error("headlamp's kubeconfig", "error", err)
+		}
+		if err := s.readHeadlampActions(ctx, kube); err != nil {
+			s.Log.Error("headlamp's actions", "error", err)
 		}
 		s.pruneHeadlampSeen()
 		s.Headlamp.pruneHeadlampSignIns(s.now())

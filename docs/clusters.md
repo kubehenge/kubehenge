@@ -220,7 +220,9 @@ Headlamp itself holds no credentials. Sign in to each cluster with your own toke
 
 Where the administrator switched on the [Headlamp sign-in](install.md#headlamp-sign-in), a cluster opens already signed in as cluster-admin for whoever holds `Sys.Modify` on its pool, the privilege the admin kubeconfig takes. The token is made for your session, lasts an hour at most and never longer than the session, and stays in the appliance: the browser never holds it. A token of your own, or a sign-in through the identity provider, takes its place while Headlamp keeps it. In the cluster's audit log, what you do appears as the ServiceAccount `kube-system/kubehenge-headlamp`; the appliance's log names you beside the token's ID, which the audit log records with each request. Losing `Sys.Modify` ends the sign-in within 30 seconds; switching the setting off ends every token made. **Log out** in Headlamp signs you out of that cluster: the appliance drops your session's token, and Headlamp asks for a token or a sign-in of your own, until you open the cluster again with **Headlamp** on its page here, which signs you in again.
 
-The shared Headlamp does not offer what a shared server must not: port forwards, Helm, node draining, its external proxy, plugin changes, adding clusters or kubeconfigs, setting a token for others, its WebSocket multiplexer and its metrics.
+Where the administrator switched on the [Headlamp actions](install.md#headlamp-actions), Headlamp also offers the Helm app catalog and the Prometheus charts it ships with. The catalog lists a cluster's Helm releases and installs, upgrades, rolls back and uninstalls them, acting with your own credentials in the cluster, or the sign-in's, so the cluster lets you do no more than it already does; it installs charts only from the Helm repositories set for the appliance, which only those who may set the appliance up add or remove. The Prometheus plugin charts a cluster's metrics from a Prometheus running in it, such as the monitoring add-on's, through the cluster's API with your credentials. Node drain is offered either way, with your own credentials.
+
+The shared Headlamp does not offer what a shared server must not: port forwards (Headlamp offers them in its desktop app alone, where a forward listens on your own machine), its external proxy, plugin changes, adding clusters or kubeconfigs, setting a token for others, its WebSocket multiplexer and its own metrics.
 
 ## Signing in with OpenID Connect
 
@@ -439,6 +441,8 @@ The interface checks the signed-in user's Proxmox VE privileges on each cluster'
 | Store a cluster's own backup access key | `Sys.Modify` | the workload pool when creating, the cluster's pool when changing |
 | Download the admin kubeconfig | `Sys.Modify` | the cluster's pool |
 | Open the cluster in the shared Headlamp signed in as cluster-admin, where the [Headlamp sign-in](install.md#headlamp-sign-in) is on | `Sys.Modify` | the cluster's pool |
+| Use the Helm app catalog and the Prometheus charts in the shared Headlamp, where the [Headlamp actions](install.md#headlamp-actions) are on, with the cluster's own rights for what they do in it | `VM.Audit` | the cluster's pool |
+| Add, update or remove a Helm repository in the shared Headlamp | the setup's privileges | `/` |
 | Read an unwell pod's logs on the health page | `Sys.Modify` | the cluster's pool |
 | Trust identity providers beyond those set for every cluster | `Sys.Modify` | the workload pool when creating, the cluster's pool when changing |
 | Choose the repository GitOps syncs from | `Sys.Modify` | the workload pool when creating, the cluster's pool when changing |
