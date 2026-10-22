@@ -13,13 +13,15 @@
 # system does not trust it. Network and storage, as for workload-cluster.sh: KUBEHENGE_E2E_BRIDGE,
 # KUBEHENGE_E2E_PREFIX, KUBEHENGE_E2E_GATEWAY, KUBEHENGE_E2E_DNS, KUBEHENGE_E2E_STORAGE. Each cluster
 # has its own addresses and virtual IP: KUBEHENGE_E2E_RANCHER_ADDRESSES and _RANCHER_ENDPOINT,
-# KUBEHENGE_E2E_DOWNSTREAM_ADDRESSES and _DOWNSTREAM_ENDPOINT. KUBEHENGE_E2E_RANCHER_HOSTNAME
-# resolves to the Rancher cluster's virtual IP, where its ingress controller answers; by default
-# <endpoint>.sslip.io. KUBEHENGE_E2E_RANCHER_VERSION and KUBEHENGE_E2E_DOWNSTREAM_VERSION, both k3s,
-# lie within the Kubernetes versions the installed Rancher runs on; KUBEHENGE_E2E_BLOCKED_VERSION
-# lies beyond them. KUBEHENGE_E2E_RANCHER_CORES and _MEMORY (MiB) size Rancher's node, by default
-# the 4 vCPUs Rancher needs and the least of a k3s control plane without workers;
-# KUBEHENGE_E2E_DOWNSTREAM_CORES and _MEMORY size the other's, by default that least.
+# KUBEHENGE_E2E_DOWNSTREAM_ADDRESSES and _DOWNSTREAM_ENDPOINT. KUBEHENGE_E2E_RANCHER_HOSTNAME names
+# Rancher, by default rancher.kubehenge.test; the test itself resolves it to the Rancher cluster's
+# virtual IP, where its ingress controller answers, on this machine and in the registered cluster,
+# so it needs no DNS record. KUBEHENGE_E2E_RANCHER_VERSION and KUBEHENGE_E2E_DOWNSTREAM_VERSION,
+# both k3s, lie within the Kubernetes versions the installed Rancher runs on;
+# KUBEHENGE_E2E_BLOCKED_VERSION lies beyond them. KUBEHENGE_E2E_RANCHER_CORES and _MEMORY (MiB)
+# size Rancher's node, by default the 4 vCPUs Rancher needs and the least of a k3s control plane
+# without workers; KUBEHENGE_E2E_DOWNSTREAM_CORES and _MEMORY size the other's, by default that
+# least.
 set -eu
 
 : "${KUBECONFIG:?KUBECONFIG must point at the management cluster}"
@@ -28,7 +30,7 @@ set -eu
 : "${KUBEHENGE_E2E_RANCHER_ADDRESSES:?}" "${KUBEHENGE_E2E_RANCHER_ENDPOINT:?}"
 : "${KUBEHENGE_E2E_DOWNSTREAM_ADDRESSES:?}" "${KUBEHENGE_E2E_DOWNSTREAM_ENDPOINT:?}"
 : "${KUBEHENGE_E2E_RANCHER_VERSION:?}" "${KUBEHENGE_E2E_DOWNSTREAM_VERSION:?}" "${KUBEHENGE_E2E_BLOCKED_VERSION:?}"
-hostname=${KUBEHENGE_E2E_RANCHER_HOSTNAME:-${KUBEHENGE_E2E_RANCHER_ENDPOINT}.sslip.io}
+hostname=${KUBEHENGE_E2E_RANCHER_HOSTNAME:-rancher.kubehenge.test}
 
 # shellcheck source=common.sh
 . "$(dirname "$0")/common.sh"
@@ -96,6 +98,32 @@ spec:
 EOF
 }
 kubeconfig() { kubectl -n "${ns}" get secret "$1-kubeconfig" -o jsonpath='{.data.value}' | base64 -d > "${work}/$2"; }
+# resolve_rancher <kubeconfig>: answers Rancher's name with its cluster's virtual IP in that cluster's
+# CoreDNS, as a DNS record would, for the pods of a registered cluster that reach Rancher at its
+# server URL, the cattle-cluster-agent and the fleet-agent, both on the cluster's DNS. Rancher's own
+# cluster needs no entry: its Fleet agent and Rancher's Helm operations reach their API server
+# in-cluster. k3s's CoreDNS imports the zones of its coredns-custom ConfigMap; restarting it loads
+# them at once, where the ConfigMap's volume and CoreDNS's reload would take a minute or two, which
+# a crash-looping agent's back-off would stretch.
+resolve_rancher() {
+    KUBECONFIG="$1" kubectl apply -f - << EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  rancher.server: |
+    ${hostname}:53 {
+        errors
+        hosts {
+            ${KUBEHENGE_E2E_RANCHER_ENDPOINT} ${hostname}
+        }
+    }
+EOF
+    KUBECONFIG="$1" kubectl -n kube-system rollout restart deployment/coredns
+    KUBECONFIG="$1" kubectl -n kube-system rollout status deployment/coredns --timeout=5m
+}
 # set_variable <cluster> <name> <JSON value>: sets one of a Cluster's topology variables.
 set_variable() {
     vars=$(kubectl -n "${ns}" get "cluster/$1" -o json |
@@ -121,7 +149,8 @@ rancher -n cattle-system wait --for=condition=Available deployment/rancher --tim
 # Rancher's own CA, which every agent pins.
 until_true 600 "Rancher's CA" sh -c "KUBECONFIG=${work}/rancher kubectl get settings.management.cattle.io cacerts -o jsonpath='{.value}' | grep -q 'BEGIN CERTIFICATE'"
 rancher get settings.management.cattle.io cacerts -o jsonpath='{.value}' > "${work}/rancher-ca.pem"
-until_true 600 "Rancher answering at ${hostname}" sh -c "curl -sS --fail --cacert ${work}/rancher-ca.pem https://${hostname}/ping | grep -q pong"
+until_true 600 "Rancher answering at ${hostname}" sh -c "curl -sS --fail --resolve ${hostname}:443:${KUBEHENGE_E2E_RANCHER_ENDPOINT} \
+    --cacert ${work}/rancher-ca.pem https://${hostname}/ping | grep -q pong"
 server_url=$(rancher get settings.management.cattle.io server-url -o jsonpath='{.value}')
 [ "${server_url}" = "https://${hostname}" ] || fail "Rancher's server URL is not https://${hostname}"
 # shellcheck disable=SC2310 # rancher wraps one kubectl call, whose status is the one tested.
@@ -137,6 +166,7 @@ cluster downstream kubehenge-k3s "${KUBEHENGE_E2E_DOWNSTREAM_VERSION}" "${KUBEHE
     "{cores: ${KUBEHENGE_E2E_DOWNSTREAM_CORES:-3}, memoryMiB: ${KUBEHENGE_E2E_DOWNSTREAM_MEMORY:-5120}}" "{}" baseline
 kubectl -n "${ns}" wait --for=condition=Available cluster/downstream --timeout=40m
 kubeconfig downstream downstream
+resolve_rancher "${work}/downstream"
 until_true 1200 "registered and connected" registered
 downstream -n cattle-system rollout status deployment/cattle-cluster-agent --timeout=10m
 agent=$(downstream -n cattle-system get deployment/cattle-cluster-agent -o json)

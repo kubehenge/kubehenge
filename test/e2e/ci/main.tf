@@ -72,7 +72,7 @@ module "management_cluster" {
 
   api_address = "172.20.99.10"
   gateway     = "172.20.99.1"
-  dns_servers = ["1.1.1.1", "9.9.9.9"]
+  dns_servers = ["172.20.99.1"]
 
   # The controller and Kubehenge's provider builds are pushed under their ghcr.io paths; everything
   # else falls through to ghcr.io.

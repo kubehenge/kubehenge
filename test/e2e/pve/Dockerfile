@@ -32,11 +32,11 @@ RUN apt-get update -qq \
     # pve-container for the appliance's LXC; openssh-client because Proxmox VE makes each
     # container's SSH host keys with ssh-keygen; e2fsprogs, which every full Debian has and
     # pve-container leaves undeclared, formats a container's disk on directory storage; ifupdown2
-    # brings up the VMs' bridge; openssl for the appliance's installer and jq for its test, which run
-    # on the node.
+    # brings up the VMs' bridge and dnsmasq answers their name lookups there; openssl for the
+    # appliance's installer and jq for its test, which run on the node.
     && apt-get install -y -qq --no-install-recommends systemd systemd-sysv dbus kmod procps iproute2 \
-        ifupdown2 iptables pve-manager qemu-server pve-container pve-cluster postfix socat openssh-client \
-        e2fsprogs openssl jq \
+        ifupdown2 iptables dnsmasq pve-manager qemu-server pve-container pve-cluster postfix socat \
+        openssh-client e2fsprogs openssl jq \
     # Installing pve-manager adds the subscription-only repository, which answers 401 without a
     # subscription and fails every later apt-get update.
     && rm -f /etc/apt/sources.list.d/pve-enterprise.sources \
@@ -46,13 +46,14 @@ RUN apt-get update -qq \
 # fail to start ("lxcfs not running?" from its mount hook).
 COPY lxcfs.conf /etc/systemd/system/lxcfs.service.d/container.conf
 COPY interfaces /etc/network/interfaces
+COPY dnsmasq.conf /etc/dnsmasq.d/vmbr0.conf
 # No watchdog to arm, the clock is the host's, and no getty or first-boot prompt has a terminal; the
 # machine ID is made at each start. nftables.service would flush the rules the container runtime
 # keeps in the container for its DNS, so the NAT is added beside them through iptables-nft, Debian's
 # default; kernels built without the legacy tables have nothing else.
 RUN systemctl mask watchdog-mux.service nftables.service systemd-timesyncd.service getty.target \
         console-getty.service systemd-firstboot.service systemd-networkd-wait-online.service \
-    && systemctl enable lxcfs.service \
+    && systemctl enable lxcfs.service dnsmasq.service \
     && rm -f /etc/network/interfaces.new
 
 STOPSIGNAL SIGRTMIN+3
