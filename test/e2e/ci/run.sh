@@ -142,7 +142,7 @@ case "${test}" in
         jq -n --arg image "${TF_VAR_controller_image}" '{
             nodes: ["pve"], imageDatastore: "local", vmDatastore: "local", bootstrapDatastore: "local",
             bridge: "vmbr0", nodeAddresses: ["172.20.99.11/24"], apiAddress: "172.20.99.10",
-            gateway: "172.20.99.1", dnsServers: ["1.1.1.1", "9.9.9.9"],
+            gateway: "172.20.99.1", dnsServers: ["172.20.99.1"],
             workloadDatastores: ["local"], workloadBridges: ["vmbr0"],
             registryMirrors: {"ghcr.io": ["http://172.21.99.3:5000"]}, controllerImage: $image
         }' > "${work}/appliance-settings.json"
