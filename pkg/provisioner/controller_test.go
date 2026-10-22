@@ -68,7 +68,10 @@ func newReconciler(t *testing.T, cloud Cloud, objs ...client.Object) (*Reconcile
 	listGVK.Kind += "List"
 	scheme.AddKnownTypeWithName(listGVK, &unstructured.UnstructuredList{})
 	classes := []client.Object{
-		&clusterv1.ClusterClass{Name: "kubehenge-rke2", Namespace: "kubehenge-system"},
+		&clusterv1.ClusterClass{
+			Name: "kubehenge-rke2", Namespace: "kubehenge-system",
+			Annotations: map[string]string{BackupTargetsAnnotation: testTargets},
+		},
 		&clusterv1.ClusterClass{
 			Name: "kubehenge-kubeadm", Namespace: "kubehenge-system",
 			Annotations: map[string]string{CNIAnnotation: "cilium,calico", DefaultPodsAnnotation: "10.244.0.0/16"},

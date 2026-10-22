@@ -590,7 +590,7 @@ func checkDatastoreAllocateAdmission(ctx context.Context, t *testing.T, c client
 }
 
 // checkClassAddonRoom holds a class's memory figures: one for every add-on and every node kind, a
-// cluster at the class's defaults holding every add-on but Rancher and logs, and the least cluster Rancher
+// cluster at the class's defaults holding every add-on but Rancher, logs and backups, and the least cluster Rancher
 // runs on, without workers, holding Rancher.
 func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker *clusterv1.Cluster, alone controlPlaneSize) {
 	t.Helper()

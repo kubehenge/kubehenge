@@ -4,6 +4,8 @@ Every release's changes, newest first. Versions follow [Semantic Versioning](htt
 
 ## [Unreleased]
 
+- **Backups.** Backups with Velero to the S3 stores an administrator sets, on a schedule and kept for as long as the cluster chooses, each cluster under a prefix of its own and encrypted with keys of its own (SSE-C for its resources, Kopia for its volumes' data), `kube-system` left out; the cluster page lists the backups and restores, backs up at once and restores the whole cluster or chosen namespaces, restoring only for those who may download its admin kubeconfig.
+
 ## [0.2.0] - 2026-10-22
 
 - **The Gateway API** in every cluster, so that Gateways and HTTPRoutes work beside Ingresses: the standard channel's CRDs, with the admission policy upstream ships to refuse older or experimental ones over them, and Traefik's Gateway `traefik-gateway` in `kube-system`, listening for HTTP where Traefik does and taking HTTPRoutes from every namespace. RKE2's and k3s's CRDs stay theirs while they ship them; Kubehenge brings its own release where they do not, never an older one over a newer. Istio's waypoints are Gateways of the class `istio-waypoint`.

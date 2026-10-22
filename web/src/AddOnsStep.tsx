@@ -1,14 +1,14 @@
 import type { JSX } from "react";
 
+import { BackupFieldset, backupCredentialHint, backupKeys, backupsHint, classTargets } from "./Backups";
 import { MeshPeersField, meshHint } from "./ClusterMesh";
-import { modeChoices, upgradeModes } from "./ClusterUpgrades";
+import { ModeSelect } from "./ClusterUpgrades";
 import { addonMemory, logsChosen, machineLeast, offersMesh, rancherMinimumCores, variable } from "./create-form";
 import type { StepProps } from "./CreateSteps";
 import { LogsFields, logsHint, logsNeedMonitoring } from "./Logs";
 import { PodSecurityFields, cisHint } from "./PodSecurity";
 import type { ClusterClass } from "./types";
 import { Field, browserZone, istioHint, registerHint } from "./ui";
-import { oneOf } from "./values";
 
 // LogsAddOn keeps logs, offered only beside monitoring, whose Grafana reads them.
 function LogsAddOn({ form, set }: Pick<StepProps, "form" | "set">): JSX.Element {
@@ -33,6 +33,92 @@ function LogsAddOn({ form, set }: Pick<StepProps, "form" | "set">): JSX.Element 
           <legend>Logs</legend>
           <LogsFields value={form.logs} onChange={(l) => set("logs", l)} />
         </fieldset>
+      )}
+    </>
+  );
+}
+
+// BackupsChoice switches a new cluster's backups on, with their settings and the access key it
+// gets. A key of its own is stored once the cluster exists, which needs Sys.Modify on the pool.
+function BackupsChoice({
+  form,
+  set,
+  shown,
+  cls,
+  canTrust,
+}: StepProps & { cls: ClusterClass | undefined; canTrust: boolean | undefined }): JSX.Element {
+  const targets = classTargets(cls);
+  const none = targets.length === 0;
+  const own = form.backupOwnKey && canTrust !== false;
+  return (
+    <>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.backups}
+          disabled={none && !form.backups}
+          aria-describedby="backups-hint"
+          onChange={(e) => set("backups", e.target.checked)}
+        />{" "}
+        Back up with Velero
+      </label>
+      <p className="hint" id="backups-hint">
+        {none
+          ? "An administrator has set no backup target yet; they add one in the appliance's settings."
+          : backupsHint}
+      </p>
+      {form.backups && (
+        <>
+          <BackupFieldset
+            value={form.backupFields}
+            onChange={(f) => set("backupFields", f)}
+            targets={targets}
+            problems={{
+              target: shown("backupTarget"),
+              schedule: shown("backupSchedule"),
+              retention: shown("backupRetention"),
+            }}
+          />
+          <fieldset className="group">
+            <legend>Access key</legend>
+            <p className="hint">{backupCredentialHint}</p>
+            <label className="check">
+              <input
+                type="radio"
+                name="backup-key"
+                checked={own}
+                disabled={canTrust === false}
+                onChange={() => set("backupOwnKey", true)}
+              />{" "}
+              One of the cluster&apos;s own
+            </label>
+            <label className="check">
+              <input type="radio" name="backup-key" checked={!own} onChange={() => set("backupOwnKey", false)} /> The
+              one for every cluster
+            </label>
+            {canTrust === false && (
+              <p className="hint">
+                A cluster&apos;s own key reaches as far as its admin kubeconfig, so storing one needs Sys.Modify on the
+                workload pool.
+              </p>
+            )}
+            {own &&
+              backupKeys.map((k, i) => (
+                <Field key={k.key} label={k.label} error={i === backupKeys.length - 1 ? shown("backupKey") : undefined}>
+                  {(id) => (
+                    <input
+                      id={id}
+                      type={k.plain === true ? "text" : "password"}
+                      autoComplete={k.plain === true ? "off" : "new-password"}
+                      spellCheck={false}
+                      value={form.backupKey[k.key] ?? ""}
+                      onChange={(e) => set("backupKey", { ...form.backupKey, [k.key]: e.target.value })}
+                    />
+                  )}
+                </Field>
+              ))}
+          </fieldset>
+        </>
       )}
     </>
   );
@@ -221,6 +307,7 @@ export function AddOnsStep({
           </p>
         </>
       )}
+      {variable(cls, "backups") && <BackupsChoice form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} />}
       {used.mib > 0 && (
         <p className="hint" id="addon-memory">
           The add-ons chosen use about {used.mib} MiB of memory ({used.names.join(", ")}), so each{" "}
@@ -233,20 +320,7 @@ export function AddOnsStep({
           label="Upgrade automatically"
           hint={`Every day from 02:00 for four hours, ${browserZone()} time; the cluster's Options change the window later.`}
         >
-          {(id) => (
-            <select
-              id={id}
-              value={form.upgradeMode}
-              onChange={(e) => {
-                const mode = e.target.value;
-                if (oneOf(upgradeModes, mode)) {
-                  set("upgradeMode", mode);
-                }
-              }}
-            >
-              {modeChoices}
-            </select>
-          )}
+          {(id) => <ModeSelect id={id} value={form.upgradeMode} onChange={(m) => set("upgradeMode", m)} />}
         </Field>
       )}
     </>

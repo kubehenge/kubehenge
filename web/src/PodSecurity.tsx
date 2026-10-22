@@ -88,7 +88,7 @@ export function PodSecurityFields({
         Baseline refuses privileged pods and the host&apos;s namespaces and paths; restricted also has containers run
         without root, privilege escalation or capabilities. The namespaces of the components that need the host
         (kube&#8209;system, the pod network&apos;s, node&#8209;exporter&apos;s, Alloy&apos;s node collectors&apos;,
-        Istio&apos;s node agents&apos; and Rancher&apos;s) are exempt from both.
+        Velero&apos;s, Istio&apos;s node agents&apos; and Rancher&apos;s) are exempt from both.
       </p>
       <Field
         label="Pod Security Admission"

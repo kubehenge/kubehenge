@@ -372,6 +372,78 @@ export interface ManagementSettings {
   offerHARules?: boolean;
   /** Clusters may choose the CSI plugin's newest release, with Datastore.Allocate on their storage. */
   clusterDatastoreAllocate?: boolean;
+  backupTargets?: BackupTarget[];
+}
+
+/** An S3 store clusters back up to, each under a folder of its own beneath the prefix. */
+export interface BackupTarget {
+  name: string;
+  /** The store's https:// URL; none for AWS S3 itself. */
+  endpoint?: string;
+  bucket: string;
+  region?: string;
+  prefix?: string;
+  caCertificate?: string;
+  /** Keeps the AWS SDK from sending the checksums some stores refuse. */
+  noChecksums?: boolean;
+}
+
+/** A backup Velero made of a cluster, or is making. */
+export interface BackupRun {
+  name: string;
+  phase: string;
+  /** Made by the schedule, rather than asked for. */
+  scheduled: boolean;
+  /** The Proxmox VE user who asked for it. */
+  by?: string;
+  started?: string;
+  completed?: string;
+  expires?: string;
+  items: number;
+  total: number;
+  warnings: number;
+  errors: number;
+  failure?: string;
+}
+
+/** A restore of one of a cluster's backups, with how far its volumes have come. */
+export interface RestoreRun {
+  name: string;
+  backup: string;
+  phase: string;
+  by?: string;
+  /** The namespaces it brings back; "*" for every one. */
+  namespaces?: string[];
+  started?: string;
+  completed?: string;
+  items: number;
+  total: number;
+  warnings: number;
+  errors: number;
+  failure?: string;
+  volumes: number;
+  volumesDone: number;
+  bytesDone: number;
+  bytesTotal: number;
+}
+
+/** What the backups view shows of a cluster. */
+export interface ClusterBackups {
+  enabled: boolean;
+  target?: string;
+  /** False while Velero cannot be read, with the reason in message. */
+  reachable: boolean;
+  message?: string;
+  /** The backup location's phase: Available once Velero reaches the target. */
+  location?: string;
+  locationMessage?: string;
+  lastBackup?: string;
+  backups: BackupRun[];
+  restores: RestoreRun[];
+  /** VM.Allocate on the cluster's pool. */
+  canBackUp: boolean;
+  /** Sys.Modify on the cluster's pool. */
+  canRestore: boolean;
 }
 
 export interface Job {

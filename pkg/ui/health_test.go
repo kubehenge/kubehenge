@@ -84,10 +84,10 @@ func healthCluster(now time.Time) []client.Object {
 	token := func(name, value string) *corev1.Secret {
 		return &corev1.Secret{
 			Namespace: "default", Name: name,
-			Annotations: map[string]string{provisioner.HealthExpiresAnnotation: now.Add(time.Hour).Format(time.RFC3339)},
+			Annotations: map[string]string{provisioner.IdentityExpiresAnnotation: now.Add(time.Hour).Format(time.RFC3339)},
 			Data: map[string][]byte{
-				provisioner.HealthServerKey: []byte("https://10.0.0.20:6443"), provisioner.HealthCAKey: []byte("the cluster CA"),
-				provisioner.HealthTokenKey: []byte(value),
+				provisioner.IdentityServerKey: []byte("https://10.0.0.20:6443"), provisioner.IdentityCAKey: []byte("the cluster CA"),
+				provisioner.IdentityTokenKey: []byte(value),
 			},
 		}
 	}
@@ -133,7 +133,8 @@ func healthCluster(now time.Time) []client.Object {
 	worker.Status.Conditions = append(worker.Status.Conditions, condition(clusterv1.MachineHealthCheckSucceededCondition, metav1.ConditionFalse, "Node has been NotReady for 6m", now.Add(-time.Minute)))
 	return []client.Object{
 		c, machine("one-cp-a", "one-cp-a", true, true), worker,
-		token(provisioner.HealthSecretName("one"), "health-token"), token(provisioner.HealthLogsSecretName("one"), "logs-token"),
+		token(provisioner.IdentitySecretName("one", provisioner.IdentityHealth), "health-token"),
+		token(provisioner.IdentitySecretName("one", provisioner.IdentityLogs), "logs-token"),
 		controlPlane, release("one-monitoring-r1", "monitoring", "failed", false, "upgrade failed: timed out waiting for the condition"),
 		release("one-headlamp-r1", "headlamp", "deployed", true, ""), pool, check,
 		event("e1", "one-md-0-a", "Node one-md-0-a is not ready"), event("e2", "two-md-0-a", "Node two-md-0-a is not ready"),
@@ -379,7 +380,7 @@ func TestHealthWithoutAWayIn(t *testing.T) {
 	}{
 		{"its token ran out", func(h *harness) { h.clock = h.clock.Add(2 * time.Hour) }, "Kubehenge's access to the cluster ran out at 2026-10-13 10:00:00 UTC"},
 		{"no token yet", func(h *harness) {
-			if err := h.kube.Delete(context.Background(), &corev1.Secret{Namespace: "default", Name: provisioner.HealthSecretName("one")}); err != nil {
+			if err := h.kube.Delete(context.Background(), &corev1.Secret{Namespace: "default", Name: provisioner.IdentitySecretName("one", provisioner.IdentityHealth)}); err != nil {
 				t.Fatal(err)
 			}
 		}, notSetUp},

@@ -185,13 +185,14 @@ func TestChartValuesGoToTheirCharts(t *testing.T) {
 		o := &controllerOptions{
 			kubeRBACProxy: "ghcr.io/example/proxy:v1" + digest, kubeVipImage: "ghcr.io/example/vip:v1" + digest,
 			turtlesImage: "docker.io/example/turtles:v1" + digest, turtlesCAPIImage: "registry.example.test/example/capi:v1" + digest,
-			alloyImage:   "docker.io/example/alloy:v1" + digest,
+			alloyImage:  "docker.io/example/alloy:v1" + digest,
+			veleroImage: "docker.io/example/velero:v1" + digest, veleroPlugin: "docker.io/example/plugin:v1" + digest,
 			calicoImages: []string{"quay.io/calico/node:v3.33.0" + digest}, chartValues: values,
 		}
 		for _, f := range []*string{
 			&o.ccmChart, &o.csiChart, &o.csiNewestChart, &o.ciliumChart, &o.calicoChart, &o.headlampChart, &o.certManagerChart, &o.rancherChart,
-			&o.monitoringChart, &o.lokiChart, &o.alloyChart, &o.kyvernoChart, &o.kyvernoPolicies, &o.istioChart, &o.istioBaseChart, &o.istioCNIChart,
-			&o.istioZtunnelChart, &o.traefikChart, &o.metalLBChart, &o.kubeVipChart, &o.kubeVipCloudChart,
+			&o.monitoringChart, &o.lokiChart, &o.alloyChart, &o.veleroChart, &o.kyvernoChart, &o.kyvernoPolicies, &o.istioChart,
+			&o.istioBaseChart, &o.istioCNIChart, &o.istioZtunnelChart, &o.traefikChart, &o.metalLBChart, &o.kubeVipChart, &o.kubeVipCloudChart,
 		} {
 			*f = "https://charts.example.test/chart:1.0.0" + digest
 		}

@@ -17,146 +17,26 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
-// Workload is a workload cluster as one of Kubehenge's health identities reaches it.
-type Workload struct {
-	Kube kubernetes.Interface
-	// Readyz answers the API server's verbose readiness check, with any failed checks.
-	Readyz func(ctx context.Context) (string, error)
-	// Close lets go of its idle connections; may be nil.
-	Close func()
-}
-
-func (w *Workload) close() {
-	if w.Close != nil {
-		w.Close()
-	}
-}
-
-// connectWorkload reaches a workload cluster's API server with a bearer token, trusting its CA alone.
-func connectWorkload(server string, ca []byte, token string) (*Workload, error) {
-	cfg := &rest.Config{
-		Host: server, BearerToken: token, CAData: ca,
-		Timeout: healthDeadline, UserAgent: "kubehenge-interface",
-	}
-	hc, err := rest.HTTPClientFor(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("the workload cluster's client: %w", err)
-	}
-	kube, err := kubernetes.NewForConfigAndClient(cfg, hc)
-	if err != nil {
-		return nil, fmt.Errorf("the workload cluster's client: %w", err)
-	}
-	return &Workload{
-		Kube: kube,
-		Readyz: func(ctx context.Context) (string, error) {
-			// A failing check answers 500, with the checks in the body all the same.
-			body, err := kube.CoreV1().RESTClient().Get().AbsPath("/readyz").Param("verbose", "true").DoRaw(ctx)
-			if err != nil && len(body) == 0 {
-				return "", fmt.Errorf("the API server's readiness: %w", err)
-			}
-			return string(body), nil
-		},
-		Close: hc.CloseIdleConnections,
-	}, nil
-}
-
-func (s *Server) connect(server string, ca []byte, token string) (*Workload, error) {
-	if s.ConnectWorkload != nil {
-		return s.ConnectWorkload(server, ca, token)
-	}
-	return connectWorkload(server, ca, token)
-}
-
-// workloadToken is one of the Secrets Kubehenge's controller keeps a health identity's token in.
-type workloadToken struct {
-	server string
-	ca     []byte
-	token  string
-}
-
 // notSetUp is why a cluster whose health identity is not there yet shows nothing from inside.
 const notSetUp = "Kubehenge's controller has not set up its read-only access to this cluster yet."
 
-// readToken reads one of a cluster's health Secrets, and says why it cannot be used when it cannot.
-func (s *Server) readToken(ctx context.Context, kube client.Client, c *clusterv1.Cluster, name string) (workloadToken, string, error) {
-	secret := &corev1.Secret{}
-	err := kube.Get(ctx, client.ObjectKey{Namespace: c.Namespace, Name: name}, secret)
-	if apierrors.IsNotFound(err) {
-		return workloadToken{}, notSetUp, nil
+// healthWorkload reaches a cluster as one of its health identities, or says why it cannot.
+func (s *Server) healthWorkload(ctx context.Context, kube client.Client, c *clusterv1.Cluster, id provisioner.Identity) (*Workload, string, error) {
+	w, ranOut, err := s.reach(ctx, kube, c, id)
+	switch {
+	case err != nil || w != nil:
+		return w, "", err
+	case ranOut.IsZero():
+		return nil, notSetUp, nil
 	}
-	if err != nil {
-		return workloadToken{}, "", fmt.Errorf("reading Secret %s: %w", name, err)
-	}
-	t := workloadToken{
-		server: string(secret.Data[provisioner.HealthServerKey]), ca: secret.Data[provisioner.HealthCAKey],
-		token: string(secret.Data[provisioner.HealthTokenKey]),
-	}
-	if t.server == "" || t.token == "" {
-		return workloadToken{}, notSetUp, nil
-	}
-	if expires, err := time.Parse(time.RFC3339, secret.Annotations[provisioner.HealthExpiresAnnotation]); err == nil && !s.now().Before(expires) {
-		return workloadToken{}, fmt.Sprintf("Kubehenge's access to the cluster ran out at %s UTC: its controller has not reached the cluster to renew it since.",
-			expires.UTC().Format(time.DateTime)), nil
-	}
-	return t, "", nil
-}
-
-// workloadIdle is how long a workload cluster's connection is kept unused.
-const workloadIdle = 10 * time.Minute
-
-type workloadConns struct {
-	mu    sync.Mutex
-	byKey map[string]*workloadConn
-}
-
-type workloadConn struct {
-	token string
-	w     *Workload
-	used  time.Time
-}
-
-// healthWorkload reaches a cluster as its health identity, with the connection kept from the last
-// read while the token is the same.
-func (s *Server) healthWorkload(ctx context.Context, kube client.Client, c *clusterv1.Cluster) (*Workload, string, error) {
-	t, why, err := s.readToken(ctx, kube, c, provisioner.HealthSecretName(c.Name))
-	if why != "" || err != nil {
-		return nil, why, err
-	}
-	key := c.Namespace + "/" + c.Name + "/" + string(c.UID)
-	now := s.now()
-	wc := &s.workloads
-	wc.mu.Lock()
-	defer wc.mu.Unlock()
-	for k, kept := range wc.byKey {
-		if now.Sub(kept.used) > workloadIdle {
-			kept.w.close()
-			delete(wc.byKey, k)
-		}
-	}
-	if kept, ok := wc.byKey[key]; ok && kept.token == t.token {
-		kept.used = now
-		return kept.w, "", nil
-	}
-	w, err := s.connect(t.server, t.ca, t.token)
-	if err != nil {
-		return nil, "", err
-	}
-	if kept, ok := wc.byKey[key]; ok {
-		kept.w.close()
-	}
-	if wc.byKey == nil {
-		wc.byKey = map[string]*workloadConn{}
-	}
-	wc.byKey[key] = &workloadConn{token: t.token, w: w, used: now}
-	return w, "", nil
+	return nil, fmt.Sprintf("Kubehenge's access to the cluster ran out at %s UTC: its controller has not reached the cluster to renew it since.",
+		ranOut.UTC().Format(time.DateTime)), nil
 }
 
 // workloadRead is what the health identity read inside a cluster.
@@ -206,7 +86,7 @@ func (s *Server) readWorkload(ctx context.Context, kube client.Client, c *cluste
 		return workloadRead{skipped: "The cluster's API server is not up yet."}
 	}
 	tctx, cancel := context.WithTimeout(ctx, healthDeadline)
-	w, why, err := s.healthWorkload(tctx, kube, c)
+	w, why, err := s.healthWorkload(tctx, kube, c, provisioner.IdentityHealth)
 	cancel()
 	if why != "" || err != nil {
 		return workloadRead{skipped: why, connectErr: err}
@@ -485,10 +365,10 @@ func (s *Server) podLogs(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), podLogsDeadline)
 	defer cancel()
-	health, why, err := s.healthWorkload(ctx, u.kube, c)
+	health, why, err := s.healthWorkload(ctx, u.kube, c, provisioner.IdentityHealth)
 	if why == "" && err == nil {
-		var logs workloadToken
-		if logs, why, err = s.readToken(ctx, u.kube, c, provisioner.HealthLogsSecretName(c.Name)); why == "" && err == nil {
+		var logs *Workload
+		if logs, why, err = s.healthWorkload(ctx, u.kube, c, provisioner.IdentityLogs); why == "" && err == nil {
 			s.servePodLogs(ctx, w, r, u, c, health, logs)
 			return
 		}
@@ -501,7 +381,7 @@ func (s *Server) podLogs(w http.ResponseWriter, r *http.Request, u user) {
 	writeError(w, http.StatusBadGateway, "the cluster did not answer")
 }
 
-func (s *Server) servePodLogs(ctx context.Context, w http.ResponseWriter, r *http.Request, u user, c *clusterv1.Cluster, health *Workload, logs workloadToken) {
+func (s *Server) servePodLogs(ctx context.Context, w http.ResponseWriter, r *http.Request, u user, c *clusterv1.Cluster, health, logs *Workload) {
 	ns, name, container := r.PathValue("podNamespace"), r.PathValue("pod"), r.URL.Query().Get("container")
 	pod, err := health.Kube.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
@@ -520,18 +400,11 @@ func (s *Server) servePodLogs(ctx context.Context, w http.ResponseWriter, r *htt
 	}
 	cs := statuses[i]
 	previous := cs.State.Running == nil && (cs.State.Terminated != nil || cs.LastTerminationState.Terminated != nil)
-	reader, err := s.connect(logs.server, logs.ca, logs.token)
-	if err != nil {
-		s.Log.Error("reaching a cluster for pod logs", "cluster", c.Namespace+"/"+c.Name, "error", err)
-		writeError(w, http.StatusBadGateway, "the cluster did not answer")
-		return
-	}
-	defer reader.close()
 	// Never Previous: the kubelet hands out the newest run without it, the running one or else the
 	// last to stop, and keeps that run. Previous names the run before by the status the kubelet last
 	// wrote, which lags behind its removal of all but the newest exited container, so a crash-looping
 	// container's read would fail with "unable to retrieve container logs" now and then.
-	stream, err := reader.Kube.CoreV1().Pods(ns).GetLogs(name, &corev1.PodLogOptions{
+	stream, err := logs.Kube.CoreV1().Pods(ns).GetLogs(name, &corev1.PodLogOptions{
 		Container: container, TailLines: new(int64(podLogLines)), LimitBytes: new(int64(podLogBytes)),
 	}).Stream(ctx)
 	if err != nil {

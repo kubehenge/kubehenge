@@ -51,6 +51,7 @@ module "management" {
   pod_subnets            = var.settings.podSubnets
   service_subnets        = var.settings.serviceSubnets
   cluster_oidc           = var.settings.clusterOIDC
+  backup_targets         = var.settings.backupTargets
   proxmox_ha             = var.settings.proxmoxHA
   offer_ha_rules         = var.settings.offerHARules
 
@@ -160,6 +161,7 @@ func (a *Appliance) writeConfig(s *Settings) error {
 		"podSubnets":             ranges.pods,
 		"serviceSubnets":         ranges.services,
 		"clusterOIDC":            moduleOIDC(s.ClusterOIDC),
+		"backupTargets":          moduleBackupTargets(s.BackupTargets),
 		"proxmoxHA":              s.ProxmoxHA,
 		"offerHARules":           s.OfferHARules,
 

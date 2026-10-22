@@ -6,8 +6,10 @@
 # what the health page's read-only identities may see in it, switch Headlamp, Kyverno, Istio (a
 # namespace's traffic over mutual TLS), monitoring (every component scraped with its server
 # verified) and logs (a pod's lines, and with the node collector the journal and the audit log, read
-# in Loki through Grafana) on and off, and the load balancer off,
-# scale its workers up and down, upgrade it by one minor version (for RKE2 and k3s with the first
+# in Loki through Grafana) on and off, back a namespace with a volume and a Secret up with Velero to
+# an S3 store the test serves, delete it and restore it, check the store holds the backup
+# encrypted, switch backups and the load balancer off, scale its workers up and down, upgrade it by
+# one minor version (for RKE2 and k3s with the first
 # new server's join refused at first), replace a node that dies, delete it, and check that nothing
 # of it is left on Proxmox VE.
 #
@@ -39,6 +41,10 @@
 # KUBEHENGE_E2E_STORAGE that the management cluster, the templates and other clusters leave alone,
 # with a management cluster that lets clusters choose it; KUBEHENGE_E2E_LOCAL_STORAGE names one of
 # the management cluster's storages, which a cluster asking for it is refused.
+# KUBEHENGE_E2E_BACKUP_TARGET names a backup target the management cluster was set up with whose
+# endpoint is on this machine, at an https:// address the cluster's nodes reach; the test serves
+# SeaweedFS's S3 gateway there with KUBEHENGE_E2E_BACKUP_CERT and KUBEHENGE_E2E_BACKUP_KEY, which
+# KUBEHENGE_E2E_BACKUP_CA, the target's CA, signed.
 set -eu
 
 class=${1:?usage: $0 <ClusterClass> <version> <upgrade version>}
@@ -49,7 +55,13 @@ upgrade=${3:?usage: $0 <ClusterClass> <version> <upgrade version>}
 : "${KUBEHENGE_E2E_BRIDGE:?}" "${KUBEHENGE_E2E_ADDRESSES:?}" "${KUBEHENGE_E2E_PREFIX:?}" "${KUBEHENGE_E2E_GATEWAY:?}"
 : "${KUBEHENGE_E2E_DNS:?}" "${KUBEHENGE_E2E_ENDPOINT:?}" "${KUBEHENGE_E2E_STORAGE:?}" "${KUBEHENGE_E2E_OIDC_ADDRESS:?}"
 : "${KUBEHENGE_E2E_LOAD_BALANCER_ADDRESSES:?}"
+: "${KUBEHENGE_E2E_BACKUP_TARGET:?}" "${KUBEHENGE_E2E_BACKUP_CA:?}" "${KUBEHENGE_E2E_BACKUP_CERT:?}" "${KUBEHENGE_E2E_BACKUP_KEY:?}"
 load_balancer=${KUBEHENGE_E2E_LOAD_BALANCER:-metallb}
+
+# The S3 store the backups go to.
+# renovate: datasource=github-release-attachments depName=seaweedfs/seaweedfs
+SEAWEEDFS_VERSION=4.48
+SEAWEEDFS_SHA256=4a7d108384d044d95212d1342cdda9533fa55842c1c9b41f606ca3c8a9561124
 
 # shellcheck source=common.sh
 . "$(dirname "$0")/common.sh"
@@ -63,10 +75,12 @@ name=e2e-${distribution}-${suffix}
 ns=${name}
 issuer_pid=
 grafana_pid=
+s3_pid=
 cleanup() {
     status=$?
     [ -z "${issuer_pid}" ] || kill "${issuer_pid}" 2> /dev/null || true
     [ -z "${grafana_pid}" ] || kill "${grafana_pid}" 2> /dev/null || true
+    [ -z "${s3_pid}" ] || kill "${s3_pid}" 2> /dev/null || true
     if [ "${status}" -ne 0 ]; then
         printf '\nleaving cluster %s/%s for inspection; delete it with: kubectl delete namespace %s\n' "${ns}" "${name}" "${ns}"
     fi
@@ -200,7 +214,7 @@ worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq 
     (.metadata.annotations["kubehenge.dev/addon-memory"] | fromjson) as $addon
     | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
     | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
-        $node.worker + $addon.headlamp + $addon.monitoring + $addon.logs + $addon.kyverno + $addon.istio + $addon.loadBalancer + $addon.certManager + $addon.rancherAgent]
+        $node.worker + $addon.headlamp + $addon.monitoring + $addon.logs + $addon.backups + $addon.kyverno + $addon.istio + $addon.loadBalancer + $addon.certManager + $addon.rancherAgent]
     | max')}
 echo "workers with ${worker_memory} MiB of memory"
 cat > "${work}/cluster.yaml" << EOF
@@ -1052,6 +1066,187 @@ set_variable logs '{"enabled":true,"collector":"node","retentionDays":7,"sizeGiB
 until_true 600 "Alloy installed on the nodes" sh -c "KUBECONFIG=${work}/workload kubectl -n logging-node get daemonset/alloy-node >/dev/null 2>&1"
 wl -n logging-node rollout status daemonset/alloy-node --timeout=10m
 
+step "an S3 store for the backups"
+target=$(printf '%s' "${class_json}" | jq -c --arg t "${KUBEHENGE_E2E_BACKUP_TARGET}" \
+    '.metadata.annotations["kubehenge.dev/backup-targets"] // "[]" | fromjson | .[] | select(.name == $t)')
+[ -n "${target}" ] || fail "${class} offers no backup target ${KUBEHENGE_E2E_BACKUP_TARGET}"
+s3_endpoint=$(printf '%s' "${target}" | jq -r .endpoint)
+bucket=$(printf '%s' "${target}" | jq -r .bucket)
+region=$(printf '%s' "${target}" | jq -r '.region // "us-east-1"')
+# Where the cluster's backups go in the bucket, as Kubehenge names it.
+prefix=$(printf '%s' "${target}" | jq -r --arg own "${ns}.${name}/velero" 'if (.prefix // "") == "" then $own else .prefix + "/" + $own end')
+s3_port=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlsplit(sys.argv[1]).port or 443)' "${s3_endpoint}")
+curl -sS --fail -L -o "${work}/seaweedfs.tar.gz" \
+    "https://github.com/seaweedfs/seaweedfs/releases/download/${SEAWEEDFS_VERSION}/linux_amd64.tar.gz"
+printf '%s  %s\n' "${SEAWEEDFS_SHA256}" "${work}/seaweedfs.tar.gz" | sha256sum -c - > /dev/null ||
+    fail "SeaweedFS's download does not have its SHA-256"
+tar -xzf "${work}/seaweedfs.tar.gz" -C "${work}" weed
+s3_key=e2e$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
+s3_secret=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
+jq -n --arg k "${s3_key}" --arg s "${s3_secret}" \
+    '{identities: [{name: "e2e", credentials: [{accessKey: $k, secretKey: $s}], actions: ["Admin", "Read", "Write", "List", "Tagging"]}]}' \
+    > "${work}/s3.json"
+mkdir -p "${work}/s3-data"
+"${work}/weed" server -dir="${work}/s3-data" -ip=127.0.0.1 -ip.bind=0.0.0.0 -master.port=19333 -master.volumeSizeLimitMB=256 \
+    -volume.port=18080 -filer.port=18888 -s3 -s3.port="${s3_port}" -s3.config="${work}/s3.json" \
+    -s3.cert.file="${KUBEHENGE_E2E_BACKUP_CERT}" -s3.key.file="${KUBEHENGE_E2E_BACKUP_KEY}" > "${work}/s3.log" 2>&1 &
+s3_pid=$!
+s3() { curl -sS --fail --cacert "${KUBEHENGE_E2E_BACKUP_CA}" --aws-sigv4 "aws:amz:${region}:s3" --user "${s3_key}:${s3_secret}" "$@"; }
+until_true 120 "the S3 store takes a bucket" s3 -X PUT -o /dev/null "${s3_endpoint}/${bucket}"
+
+step "backups with Velero: a volume and a Secret backed up, deleted and restored"
+marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+# As the interface stores a cluster's own key for its target.
+kubectl -n "${ns}" create secret generic "${name}.backup" --type=kubehenge.dev/user-credential \
+    --from-literal=accessKeyID="${s3_key}" --from-literal=secretAccessKey="${s3_secret}"
+kubectl -n "${ns}" label secret "${name}.backup" kubehenge.dev/user-credential=backup "kubehenge.dev/credential-cluster=${name}"
+set_variable backups "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
+until_true 900 "Velero installed" wl -n velero rollout status deployment/velero --timeout=10s
+until_true 600 "Velero's node agent on every node" wl -n velero rollout status daemonset/node-agent --timeout=10s
+location_available() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    phase=$(wl -n velero get backupstoragelocation default -o jsonpath='{.status.phase}') && [ "${phase}" = Available ]
+}
+until_true 300 "Velero reaches the S3 store" location_available
+# The node agent reads every pod's volumes from the node, which takes a privileged pod; Velero's
+# server needs nothing of the kind.
+pod_security=$(wl label --dry-run=server --overwrite namespace velero pod-security.kubernetes.io/enforce=restricted 2>&1)
+server_violations=$(printf '%s\n' "${pod_security}" | grep '^Warning: velero-' || true)
+[ -z "${server_violations}" ] || fail "Velero's server does not meet Pod Security's restricted level: ${server_violations}"
+# The interface's two identities in the cluster: one that reads and starts backups, one that
+# restores, neither able to read the keys Velero holds.
+# can <Secret> <verb> <resource>: whether the identity whose token the Secret beside the Cluster
+# holds may do it in the velero namespace.
+can() {
+    can_token=$(kubectl -n "${ns}" get secret "$1" -o jsonpath='{.data.token}' | base64 -d)
+    server=$(wl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+    # shellcheck disable=SC2310 # can-i exits non-zero for its answer no, which the caller reads.
+    kubectl --kubeconfig=/dev/null --server="${server}" --certificate-authority="${work}/workload-ca" \
+        --token="${can_token}" -n velero auth can-i "$2" "$3" 2> /dev/null || true
+}
+until_true 300 "the interface's identities in the cluster" sh -c \
+    "kubectl -n ${ns} get secret ${name}-backups ${name}-restores > /dev/null 2>&1"
+for check in "${name}-backups create backups.velero.io yes" "${name}-backups create restores.velero.io no" \
+    "${name}-backups get secrets no" "${name}-restores create restores.velero.io yes" "${name}-restores get secrets no"; do
+    # shellcheck disable=SC2086 # the check's words are the arguments.
+    set -- ${check}
+    answer=$(can "$1" "$2" "$3")
+    [ "${answer}" = "$4" ] || fail "$1 may $2 $3: ${answer}, not $4"
+done
+wl create namespace e2e-backup
+wl -n e2e-backup create secret generic e2e --from-literal=marker="${marker}"
+wl apply -f - << EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data
+  namespace: e2e-backup
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: data
+  namespace: e2e-backup
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: data
+      image: ${agnhost}
+      args: [pause]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: data
+EOF
+wl -n e2e-backup wait --for=condition=Ready pod/data --timeout=10m
+wl -n e2e-backup exec data -- sh -c "printf '%s' '${marker}' > /data/marker"
+# Asked for as the interface's Back up now does: the schedule's own backup, made at once.
+template=$(wl -n velero get schedule velero-scheduled -o json | jq -c .spec.template)
+excluded=$(printf '%s' "${template}" | jq -r '.excludedNamespaces | index("kube-system")')
+[ "${excluded}" != null ] || fail "the schedule backs kube-system up"
+jq -n --argjson spec "${template}" '{apiVersion: "velero.io/v1", kind: "Backup", metadata: {name: "e2e", namespace: "velero"}, spec: $spec}' |
+    wl apply -f -
+# phase_is <kind> <name> <phase>: whether a Velero object has reached the phase; any phase it ends in
+# otherwise fails the test.
+phase_is() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    phase=$(wl -n velero get "$1" "$2" -o jsonpath='{.status.phase}') || return 1
+    case ${phase} in
+        "$3") ;;
+        Failed | FailedValidation | PartiallyFailed)
+            wl -n velero get "$1" "$2" -o yaml >&2
+            wl -n velero logs deployment/velero --tail=100 >&2
+            fail "$1 $2 ended ${phase}"
+            ;;
+        *) return 1 ;;
+    esac
+}
+until_true 1200 "the backup completed" phase_is backup e2e Completed
+volume_backups=$(wl -n velero get podvolumebackups -l velero.io/backup-name=e2e -o json |
+    jq '[.items[] | select(.spec.pod.namespace == "e2e-backup" and .status.phase == "Completed")] | length')
+[ "${volume_backups}" = 1 ] || fail "the pod's volume was not backed up: ${volume_backups} volume backups"
+
+step "the backup in the S3 store: under the cluster's own prefix, encrypted"
+keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
+stray=$(printf '%s\n' "${keys}" | grep -v -e "^${prefix}/" -e '^$' || true)
+[ -z "${stray}" ] || fail "objects outside the cluster's prefix ${prefix}: ${stray}"
+printf '%s\n' "${keys}" | grep -q "^${prefix}/kopia/e2e-backup/" || fail "no Kopia repository for e2e-backup under ${prefix}"
+tarball="${s3_endpoint}/${bucket}/${prefix}/backups/e2e/e2e.tar.gz"
+# Without the cluster's SSE-C key the store gives nothing out; with it, the backup.
+plain=$(curl -sS --cacert "${KUBEHENGE_E2E_BACKUP_CA}" --aws-sigv4 "aws:amz:${region}:s3" --user "${s3_key}:${s3_secret}" \
+    -o /dev/null -w '%{http_code}' "${tarball}")
+[ "${plain}" = 400 ] || fail "the backup was read without its SSE-C key: HTTP ${plain}"
+sse_key=$(kubectl -n "${ns}" get secret "${name}-backup-keys" -o jsonpath='{.data.sse-c-key}')
+sse_md5=$(printf '%s' "${sse_key}" | base64 -d | openssl dgst -md5 -binary | base64)
+s3 -H 'x-amz-server-side-encryption-customer-algorithm: AES256' -H "x-amz-server-side-encryption-customer-key: ${sse_key}" \
+    -H "x-amz-server-side-encryption-customer-key-MD5: ${sse_md5}" -o "${work}/e2e.tar.gz" "${tarball}"
+contents=$(tar -tzf "${work}/e2e.tar.gz")
+printf '%s\n' "${contents}" | grep -q '/namespaces/kube-system/' && fail "the backup holds kube-system"
+secret_json=$(tar -xzOf "${work}/e2e.tar.gz" resources/secrets/namespaces/e2e-backup/e2e.json)
+backed_up=$(printf '%s' "${secret_json}" | jq -r .data.marker | base64 -d)
+[ "${backed_up}" = "${marker}" ] || fail "the backup does not hold the Secret"
+# What the store keeps on its disk: the volume's data encrypted by Kopia, the resources by SSE-C.
+grep -r -q -F "${marker}" "${work}/s3-data" && fail "the store keeps the volume's data unencrypted"
+
+step "the namespace deleted and restored"
+wl delete namespace e2e-backup --wait --timeout=5m
+# As the interface restores chosen namespaces.
+wl apply -f - << 'EOF'
+apiVersion: velero.io/v1
+kind: Restore
+metadata:
+  name: e2e
+  namespace: velero
+spec:
+  backupName: e2e
+  includedNamespaces: [e2e-backup]
+  restorePVs: true
+EOF
+until_true 1200 "the restore completed" phase_is restore e2e Completed
+wl -n e2e-backup wait --for=condition=Ready pod/data --timeout=10m
+restored=$(wl -n e2e-backup exec data -- cat /data/marker)
+[ "${restored}" = "${marker}" ] || fail "the volume's data did not come back: ${restored}"
+restored=$(wl -n e2e-backup get secret e2e -o jsonpath='{.data.marker}' | base64 -d)
+[ "${restored}" = "${marker}" ] || fail "the Secret did not come back"
+wl delete namespace e2e-backup --wait --timeout=5m
+
 # The class's minimum sizes have to carry every add-on at once.
 step "every add-on at once, with nothing restarted"
 found_restarts() {
@@ -1107,6 +1302,7 @@ set_variable logs '{"enabled":false,"collector":"node","retentionDays":7,"sizeGi
 set_variable monitoring '{"enabled":false}'
 set_variable podSecurity '{"admission":"restricted","kyverno":"off"}'
 set_variable istio '{"enabled":false}'
+set_variable backups "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
 until_true 600 "Headlamp removed" absent wl -n headlamp get deployment/headlamp
 until_true 600 "Loki removed" absent wl -n logging get statefulset/loki
 until_true 300 "Alloy removed" absent wl -n logging get deployment/alloy
@@ -1127,6 +1323,21 @@ enrolled=$(wl get namespace e2e-mesh -o jsonpath='{.metadata.labels.istio\.io/da
 until_true 120 "a client outside the old mesh reaches the server" fetches e2e-plain
 until_true 60 "a client in the old mesh reaches the server" fetches e2e-mesh
 wl delete namespace e2e-mesh e2e-plain --wait --timeout=5m
+until_true 900 "Velero removed" absent wl get namespace velero
+crds=$(wl get customresourcedefinitions -o name)
+velero_crds=$(printf '%s\n' "${crds}" | grep '\.velero\.io$' || true)
+[ -z "${velero_crds}" ] || fail "Velero's resource definitions outlive it: ${velero_crds}"
+until_true 300 "the interface's identities in the cluster removed" absent kubectl -n "${ns}" get secret "${name}-backups"
+# shellcheck disable=SC2310 # absent's answer is what is checked.
+absent kubectl -n "${ns}" get secret "${name}-restores" || fail "the restores identity outlives backups"
+# The keys stay, so that the backups, which stay in the store, can be read again.
+kubectl -n "${ns}" get secret "${name}-backup-keys" > /dev/null || fail "the backup keys went with Velero"
+# shellcheck disable=SC2310 # a failed read fails the test with the reason.
+s3 -o /dev/null "${tarball}" -H 'x-amz-server-side-encryption-customer-algorithm: AES256' \
+    -H "x-amz-server-side-encryption-customer-key: ${sse_key}" -H "x-amz-server-side-encryption-customer-key-MD5: ${sse_md5}" ||
+    fail "the backup went from the store with Velero"
+kill "${s3_pid}"
+s3_pid=
 
 step "the load balancer switched off"
 servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')

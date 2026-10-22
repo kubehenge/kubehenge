@@ -51,14 +51,33 @@ const shortestHours = 0.5;
 
 const weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-/** modeChoices are the options of an automatic upgrade policy, for the dialog and the create wizard. */
-export const modeChoices = (
-  <>
-    <option value="off">Off</option>
-    <option value="patch">Patch releases</option>
-    <option value="minor">Patch and minor releases</option>
-  </>
-);
+/** ModeSelect chooses an automatic upgrade policy's mode, for the dialog and the create wizard. */
+export function ModeSelect({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: UpgradeMode;
+  onChange: (m: UpgradeMode) => void;
+}): JSX.Element {
+  return (
+    <select
+      id={id}
+      value={value}
+      onChange={(e) => {
+        const chosen = e.target.value;
+        if (oneOf(upgradeModes, chosen)) {
+          onChange(chosen);
+        }
+      }}
+    >
+      <option value="off">Off</option>
+      <option value="patch">Patch releases</option>
+      <option value="minor">Patch and minor releases</option>
+    </select>
+  );
+}
 
 // describe says in words when a policy upgrades a cluster.
 export function describe(p: UpgradePolicy): string {
@@ -183,22 +202,7 @@ export function UpgradesDialog({ cluster: c, onClose }: { cluster: Cluster; onCl
         stable release, only while the cluster is healthy and nothing else rolls out. A started upgrade finishes even if
         the window closes first.
       </p>
-      <Field label="Upgrade automatically">
-        {(id) => (
-          <select
-            id={id}
-            value={mode}
-            onChange={(e) => {
-              const chosen = e.target.value;
-              if (oneOf(upgradeModes, chosen)) {
-                setMode(chosen);
-              }
-            }}
-          >
-            {modeChoices}
-          </select>
-        )}
-      </Field>
+      <Field label="Upgrade automatically">{(id) => <ModeSelect id={id} value={mode} onChange={setMode} />}</Field>
       {mode !== "off" && (
         <>
           <fieldset className="group">

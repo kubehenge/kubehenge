@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["workloadPool", "providerNamespaces", "interface", "clusters", "clusterOIDC", "podSecurityExempt", "image", "kubeVip", "etcdProxy", "proxmox", "addons"],
+  "required": ["workloadPool", "providerNamespaces", "interface", "clusters", "clusterOIDC", "backupTargets", "podSecurityExempt", "image", "kubeVip", "etcdProxy", "proxmox", "addons"],
   "properties": {
     "chartDigest": {
       "description": "Digest of the chart's files, which the management cluster's module passes so that a changed chart upgrades the release whatever its version says.",
@@ -62,6 +62,25 @@
         }
       }
     },
+    "backupTargets": {
+      "description": "S3 stores clusters back up to, each cluster under a prefix of its own.",
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "bucket"],
+        "properties": {
+          "name": { "$ref": "#/$defs/name" },
+          "endpoint": { "type": "string", "pattern": "^https://[^/?#@]+(/[^?#]*)?$", "maxLength": 2048 },
+          "bucket": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$" },
+          "region": { "type": "string", "pattern": "^[a-z0-9-]+$", "maxLength": 64 },
+          "prefix": { "type": "string", "pattern": "^[A-Za-z0-9!_.*'()-]+(/[A-Za-z0-9!_.*'()-]+)*$", "maxLength": 256 },
+          "caCertificate": { "type": "string", "pattern": "-----BEGIN CERTIFICATE-----" },
+          "checksums": { "type": "boolean" }
+        }
+      }
+    },
     "podSecurityExempt": {
       "description": "Namespaces neither Pod Security Admission nor Kyverno holds to a cluster's pod security level.",
       "type": "array",
@@ -109,7 +128,7 @@
     "addons": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["headlamp", "rancher", "monitoring", "loki", "alloy", "kyverno", "kyvernoPolicies", "istio", "istioBase", "istioCNI", "istioZtunnel", "certManager", "cloudControllerManager", "csiPlugin", "csiPluginNewest", "cilium", "calico", "traefik", "metallb", "kubeVip", "kubeVipCloudProvider"],
+      "required": ["headlamp", "rancher", "monitoring", "loki", "alloy", "velero", "kyverno", "kyvernoPolicies", "istio", "istioBase", "istioCNI", "istioZtunnel", "certManager", "cloudControllerManager", "csiPlugin", "csiPluginNewest", "cilium", "calico", "traefik", "metallb", "kubeVip", "kubeVipCloudProvider"],
       "properties": {
         "headlamp": { "$ref": "#/$defs/chartOnly" },
         "rancher": {
@@ -152,6 +171,21 @@
           "properties": {
             "image": {
               "description": "Grafana Alloy's image by registry, repository, tag and digest.",
+              "$ref": "#/$defs/pinnedImage"
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "velero": {
+          "allOf": [{ "$ref": "#/$defs/chart" }],
+          "required": ["image", "plugin"],
+          "properties": {
+            "image": {
+              "description": "Velero's image by registry, repository, tag and digest, for its server, its node agents and the restores of volumes.",
+              "$ref": "#/$defs/pinnedImage"
+            },
+            "plugin": {
+              "description": "The image of Velero's plugin for S3 by registry, repository, tag and digest.",
               "$ref": "#/$defs/pinnedImage"
             }
           },

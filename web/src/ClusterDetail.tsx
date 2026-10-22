@@ -1,7 +1,9 @@
 import { useEffect, useState, type JSX } from "react";
 
 import { api } from "./api";
+import { BackupsDialog, BackupsView, backupsOf, useBackupsRows } from "./Backups";
 import { OptionDialog, Options, type OptionAction } from "./ClusterOptions";
+import { controlPlaneSizes } from "./create-form";
 import { HealthView } from "./Health";
 import { Link, navigate } from "./router";
 import type { Cluster, Machine, Versions } from "./types";
@@ -24,16 +26,12 @@ import {
   type Health,
 } from "./ui";
 
-type Action = "scale" | "upgrade" | "delete" | OptionAction;
+type Action = "scale" | "upgrade" | "delete" | "backups" | OptionAction;
 
 // A cluster on its way somewhere is looked at more often than a settled one.
 const pollChanging = 5000;
 
 const httpNotFound = 404;
-
-// Odd sizes keep etcd's quorum.
-// oxlint-disable-next-line eslint/no-magic-numbers -- the sizes themselves, named by the constant
-export const controlPlaneSizes = [1, 3, 5, 7];
 
 /** headlampURL is a cluster's page in the shared Headlamp, served on its own port of this host. */
 export function headlampURL(port: number, cluster?: string): string {
@@ -55,6 +53,7 @@ export const views = [
   { path: "", label: "Summary" },
   { path: "health", label: "Health" },
   { path: "machines", label: "Machines" },
+  { path: "backups", label: "Backups" },
   { path: "options", label: "Options" },
 ] as const;
 
@@ -190,7 +189,8 @@ export function ClusterDetail({
           {view === "" && <Summary cluster={c} />}
           {view === "health" && <HealthView cluster={c} headlamp={inHeadlamp} />}
           {view === "machines" && <Machines cluster={c} />}
-          {view === "options" && <Options cluster={c} can={can} onEdit={setAction} />}
+          {view === "backups" && <BackupsView cluster={c} can={can} onEdit={setAction} />}
+          {view === "options" && <OptionsView cluster={c} can={can} onEdit={setAction} />}
         </div>
       </div>
 
@@ -217,7 +217,25 @@ function ActionDialog({
   if (action === "delete") {
     return <DeleteDialog cluster={c} onClose={onClose} />;
   }
+  if (action === "backups") {
+    return <BackupsDialog cluster={c} onClose={onClose} />;
+  }
   return <OptionDialog action={action} cluster={c} onClose={onClose} />;
+}
+
+// OptionsView is the Options view, with the rows of the settings whose dialogs live with views of
+// their own.
+function OptionsView({
+  cluster: c,
+  can,
+  onEdit,
+}: {
+  cluster: Cluster;
+  can: boolean;
+  onEdit: (a: Action) => void;
+}): JSX.Element {
+  const more = useBackupsRows(c);
+  return <Options cluster={c} can={can} onEdit={onEdit} more={more} />;
 }
 
 function Summary({ cluster: c }: { cluster: Cluster }): JSX.Element {
@@ -555,6 +573,8 @@ function DeleteDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
     >
       <p>
         This deletes the cluster's VMs and its persistent volumes, and removes it from Rancher. It cannot be undone.
+        {backupsOf(c.variables["backups"]).enabled &&
+          " Its backups stay in the target, and a cluster created again under the same name and target can restore them."}
       </p>
       <Field label="Confirm name" hint={`Type ${c.name}.`}>
         {(id) => <input id={id} value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" />}

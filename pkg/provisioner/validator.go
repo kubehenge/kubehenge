@@ -16,10 +16,11 @@ import (
 // ClusterValidator answers the API server for Kubehenge's clusters as they are created and changed,
 // so that what BeforeClusterCreate would refuse later is refused at once, and a change made after
 // creation is held to the same: control planes too small for the cluster's workers, nodes without
-// the memory its add-ons use, logs without monitoring, Rancher switched
-// on beside another, or on nodes too small for it, a Rancher cluster's nodes made smaller than it
-// needs, load-balancer addresses that clash with the nodes' network or another cluster's, and
-// Datastore.Allocate on a storage that is not the cluster's alone. A
+// the memory its add-ons use, logs without monitoring, backups to a target the class lacks or on
+// a schedule Velero cannot read, Rancher switched on beside another, or on nodes too small for it,
+// a Rancher cluster's nodes made smaller than it needs, load-balancer addresses that clash with the
+// nodes' network or another cluster's, and Datastore.Allocate on a storage that is not the
+// cluster's alone. A
 // cluster that already fell short before a change is not held to it for unrelated edits.
 type ClusterValidator struct {
 	Hooks *Hooks
@@ -72,6 +73,9 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 	errs = append(errs, validateClusterMesh(old, c)...)
 	if err := checkLogs(c); err != nil {
 		errs = append(errs, field.Forbidden(topology.Child("variables").Key(logsAddon), err.Error()))
+	}
+	if err := checkBackups(old, c, class); err != nil {
+		errs = append(errs, field.Invalid(topology.Child("variables").Key(backupsVariable), backupsVariable, err.Error()))
 	}
 	if addressesChanged(old, c) {
 		if err := v.Hooks.checkLoadBalancer(ctx, c); err != nil {

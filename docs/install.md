@@ -239,6 +239,7 @@ The run acts with your own Proxmox VE session: the interface renews your ticket 
 | DNS servers | IP addresses, one per line or separated by commas. |
 | What clusters may use | The storages and bridges clusters may put their disks on and attach to, from any node; at least one of each. The page says which nodes have each, or that a storage is shared. Cluster API's token gets rights on exactly these, and the ClusterClasses accept no others, from the interface or kubectl. |
 | Identity providers | OpenID Connect providers every new cluster trusts unless it names its own ([clusters.md](clusters.md#signing-in-with-openid-connect)). A change applies to clusters created afterwards. |
+| Backup targets | S3 stores clusters back up to with Velero, when they switch backups on ([below](#backup-targets)). A changed target reaches the clusters that back up to it within ten minutes; one taken away leaves their Velero as it is. |
 | Proxmox VE HA | Off by default. When on, Proxmox VE HA keeps each cluster's control-plane VMs on separate nodes and restarts them on another node after a node fails, for every cluster on shared storage that does not opt out ([clusters.md](clusters.md#machines)). See [below](#proxmox-ve-ha) before switching it on. |
 | HA rules for cluster creators | Off by default. When on, everyone who may create or change a cluster can place it on the nodes of one of Proxmox VE's HA node-affinity rules without `Sys.Audit` on `/` of their own ([clusters.md](clusters.md#machines)). See [below](#ha-rules-for-cluster-creators). |
 | CSI plugin | Off by default. When on, clusters may choose the CSI plugin's newest release ([below](#the-csi-plugins-newest-release)). |
@@ -263,6 +264,22 @@ Reading Proxmox VE's HA rules takes `Sys.Audit` on `/`, which reaches the whole 
 #### The CSI plugin's newest release
 
 The CSI plugin's newer releases need `Datastore.Allocate` on a cluster's storage, which covers every volume on it and its definition, so clusters run its last release without it unless this setting is on. With it, a cluster may choose the newest release on a storage of its own ([clusters.md](clusters.md#persistent-volumes)); its token then holds `Datastore.Allocate` there. The setting creates a role, `<name>-cluster-datastore`, holding `Datastore.Allocate`, `Datastore.AllocateSpace` and `Datastore.Audit`, and gives Kubehenge's controller `Datastore.Allocate` on each storage for clusters that the management cluster's disks, its Talos image and the cloud-init images are not on, so that it can grant the role there. Switching it off removes the role, and with it every cluster's grant; those clusters go back to the earlier release.
+
+#### Backup targets
+
+Each target is an S3 store and a bucket in it, which any S3-compatible store serves: AWS S3, MinIO, Ceph's RADOS Gateway, SeaweedFS, Garage, or the S3 store a Proxmox Backup Server 4.2 or later keeps a datastore on, so that the clusters' backups and the Proxmox VE backups share one store. The store must take server-side encryption with keys the client sends (SSE-C), with which every cluster encrypts what it writes.
+
+| Field | What it is |
+| --- | --- |
+| Name | How clusters name the target: lower-case letters, digits and dashes. |
+| Endpoint | The store's `https://` URL; empty for AWS S3 itself. |
+| Bucket | The bucket, which has to exist. |
+| Region | The bucket's region; `us-east-1` when empty. |
+| Prefix | A folder in the bucket. Each cluster writes under `<prefix>/<namespace>.<cluster>/velero`. |
+| CA certificate | PEM, when the system's CAs do not cover the store's certificate. |
+| Send checksums | On by default; off for a store that refuses the checksums the AWS SDK sends with every upload. |
+
+Velero signs in to a target with an S3 access key. **Backup access key for every cluster**, below the targets once the management cluster runs, stores one that every cluster without a key of its own uses. It is the least work, but every cluster's Velero then holds a key that reaches the other clusters' folders too: their keys keep the contents unreadable, but one cluster could delete another's backups. A key per cluster, limited by the store to the cluster's folder, keeps them apart; whoever creates or looks after a cluster with `Sys.Modify` on its pool stores it on the cluster ([clusters.md](clusters.md#change-add-ons-and-sign-in)).
 
 The appliance keeps the module's other settings at their defaults: the management cluster is named `kubehenge`, its nodes have 4 vCPUs, 4 GiB of memory and a 32 GB disk, and it creates the pools `kubehenge` (clusters), `kubehenge-templates` (VM templates) and `kubehenge-management` (its own VMs).
 
@@ -377,6 +394,7 @@ tofu output -raw talosconfig > talosconfig
 | `workload_bridges` | `["vmbr0"]` | Bridges clusters may attach to, with any VLAN on them. |
 | `bootstrap_datastore` | `local` | Storage for cloud-init ISOs; Cluster API gets full control of it. |
 | `registry_mirrors` | `{}` | Registry mirrors for the management cluster's nodes, by registry name: endpoint URLs tried in order before the registry itself. A mirror of factory.talos.dev, ghcr.io or registry.k8s.io serves the images' cosign signatures too, which the nodes require on Sidero's and Kubernetes' images. |
+| `backup_targets` | `[]` | S3 stores clusters back up to with Velero ([above](#backup-targets)): up to sixteen, each with `name` and `bucket`, and optionally `endpoint` (https; AWS S3 when unset), `region`, `prefix`, `ca_certificate` and `checksums` (default true). Access keys are stored through the interface, or named per cluster with `existingSecret` ([clusters.md](clusters.md#variables)). |
 | `cluster_oidc` | `[]` | OpenID Connect providers every new cluster trusts unless it names its own: up to eight, each with `issuer_url` (https) and `client_id`, and optionally `username_claim`, `username_prefix`, `groups_claim`, `groups_prefix`, `scopes` and `certificate_authority`. |
 | `version_overrides` | `{}` | Versions to use instead of the tested set, by its keys, to hold a component back. A provider held back needs its image in `provider_images` and its files' digests in `provider_manifests`. Lowering a version on a running cluster is not supported. |
 | `provider_images` | `{}` | Controller images by digest to run instead of the tested ones, by `"<kind>/<name>"`, such as `"InfrastructureProvider/proxmox"`. |

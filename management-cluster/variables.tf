@@ -252,6 +252,28 @@ variable "cluster_oidc" {
   }
 }
 
+variable "backup_targets" {
+  description = "S3 stores workload clusters back up to with Velero, when they switch backups on: each cluster writes under <prefix>/<namespace>.<cluster>/velero in the bucket, with keys of its own, its objects encrypted with a key of its own (SSE-C). endpoint is the store's https:// URL, null for AWS S3 itself; ca_certificate the PEM CA of its certificate when the system's do not cover it; checksums false for a store that refuses the checksums the AWS SDK sends."
+  type = list(object({
+    name           = string
+    endpoint       = optional(string)
+    bucket         = string
+    region         = optional(string)
+    prefix         = optional(string)
+    ca_certificate = optional(string)
+    checksums      = optional(bool, true)
+  }))
+  default  = []
+  nullable = false
+
+  validation {
+    condition = length(var.backup_targets) <= 16 && length(distinct([for t in var.backup_targets : t.name])) == length(var.backup_targets) && alltrue([
+      for t in var.backup_targets : can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", t.name)) && t.bucket != "" && (t.endpoint == null || startswith(coalesce(t.endpoint, "-"), "https://"))
+    ])
+    error_message = "At most 16 targets, each with its own name of lower-case letters, digits and dashes, a bucket, and an https:// endpoint or none."
+  }
+}
+
 variable "proxmox_ha" {
   description = "Have Proxmox VE HA keep each cluster's control-plane VMs on separate nodes and restart them on another node when theirs fails. Kubehenge's controller gets a second API token for it, with Sys.Console on /, which amounts to a root shell on every node. Only clusters whose disks are on shared storage take part, and each cluster can opt out. Proxmox VE arms its watchdog on every node that runs an HA resource, so such a node that loses quorum restarts itself."
   type        = bool

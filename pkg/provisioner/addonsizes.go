@@ -10,8 +10,8 @@ import (
 )
 
 // AddonMemoryAnnotation on a ClusterClass is the memory, in MiB, each add-on's pods use in one of its
-// clusters, by add-on: headlamp, monitoring, logs, kyverno, istio, clusterMesh, loadBalancer, certManager,
-// rancher and rancherAgent.
+// clusters, by add-on: headlamp, monitoring, logs, backups, kyverno, istio, clusterMesh,
+// loadBalancer, certManager, rancher and rancherAgent.
 // The end-to-end tests measure the figures with every add-on on.
 const AddonMemoryAnnotation = "kubehenge.dev/addon-memory"
 
@@ -29,7 +29,7 @@ const (
 
 // addonNames are the add-ons as people know them, by their keys in AddonMemoryAnnotation.
 var addonNames = map[string]string{
-	headlampAddon: "Headlamp", monitoringAddon: "monitoring", logsAddon: "logs", kyvernoAddon: "Kyverno", istioAddon: "Istio",
+	headlampAddon: "Headlamp", monitoringAddon: "monitoring", logsAddon: "logs", backupsVariable: "backups", kyvernoAddon: "Kyverno", istioAddon: "Istio",
 	clusterMeshVariable: "Cluster Mesh", loadBalancerVariable: "the load balancer", certManagerFigure: "cert-manager", rancherAddon: "Rancher", rancherAgentFigure: "Rancher's agent",
 }
 
@@ -48,6 +48,7 @@ func addonsOn(cluster *clusterv1.Cluster) ([]string, error) {
 		{headlampAddon, a.Headlamp.Enabled},
 		{monitoringAddon, a.Monitoring.Enabled},
 		{logsAddon, a.logsOn()},
+		{backupsVariable, a.Backups.Enabled},
 		{kyvernoAddon, a.PodSecurity.kyvernoOn()},
 		{istioAddon, a.Istio.Enabled},
 		{clusterMeshVariable, a.ClusterMesh.Enabled},

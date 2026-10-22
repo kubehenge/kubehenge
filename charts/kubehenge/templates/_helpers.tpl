@@ -209,10 +209,19 @@ first starts, and with a cluster registered Rancher, Fleet and their controllers
 Istio uses about 100 MiB, but istiod and the ztunnel beside it ask for 384 MiB, which the node they
 share has to have; the clustermesh-apiserver uses about 50 MiB. The load balancer is MetalLB's
 controller and a node's speaker, or kube-vip and its cloud provider. Logs are Loki, which asks for
-256 MiB, the Alloy that reads the events and a node's Alloy.
+256 MiB, the Alloy that reads the events and a node's Alloy. Backups are Velero's server and a
+node's agent, which grow while a backup reads a volume.
 */}}
 {{- define "kubehenge.addonMemory" -}}
-kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"logs":512,"kyverno":384,"istio":384,"clusterMesh":128,"loadBalancer":128,"certManager":192,"rancher":2048,"rancherAgent":512}'
+kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"logs":512,"backups":384,"kyverno":384,"istio":384,"clusterMesh":128,"loadBalancer":128,"certManager":192,"rancher":2048,"rancherAgent":512}'
+{{- end -}}
+
+{{/*
+The S3 stores an administrator set for backups, which a cluster's backups variable names one of:
+the interface offers them and the controller reads them here.
+*/}}
+{{- define "kubehenge.backupTargets" -}}
+kubehenge.dev/backup-targets: {{ .Values.backupTargets | toJson | quote }}
 {{- end -}}
 
 {{/*
@@ -308,6 +317,63 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           x-kubernetes-validations:
             - rule: self >= oldSelf
               message: Loki's volume only grows.
+- name: backups
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        Velero backing up the cluster's resources and volumes on a schedule to one of the S3
+        targets an administrator set, under a prefix of the cluster's own, and restoring them. What
+        it stores is encrypted with keys of the cluster's own, which Kubehenge keeps beside the
+        Cluster in the <cluster>-backup-keys Secret: the objects by the store (SSE-C), the volumes'
+        data by Kopia. kube-system, which holds the cluster's Proxmox VE token, and the add-ons'
+        namespaces are left out. Velero reads every volume as root from the privileged velero
+        namespace. Switched off, Velero goes and the backups stay in the target.
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        target:
+          type: string
+          minLength: 1
+          maxLength: 63
+          description: The administrator's target to back up to, by name.
+        schedule:
+          type: string
+          minLength: 1
+          maxLength: 128
+          default: "0 2 * * *"
+          description: When to back up, as a cron expression of five fields or a descriptor such as @weekly.
+        timeZone:
+          type: string
+          default: UTC
+          description: IANA time zone the schedule is read in, such as Europe/Berlin.
+        retentionDays:
+          type: integer
+          minimum: 1
+          maximum: 3650
+          default: 7
+          description: Days each backup is kept before Velero deletes it from the target.
+        volumes:
+          type: string
+          enum: [all, annotated]
+          default: all
+          description: >-
+            all backs up every volume of every pod but emptyDir ones; annotated only the volumes a
+            pod names in its backup.velero.io/backup-volumes annotation.
+        existingSecret:
+          type: string
+          minLength: 1
+          maxLength: 253
+          description: >-
+            Secret in the workload cluster's velero namespace with the store's keys as Velero's
+            credentials file, under the key cloud, which never passes through the management
+            cluster; unset, the credential typed into the interface for the cluster, or else the
+            one for every cluster.
+      x-kubernetes-validations:
+        - rule: "!self.enabled || has(self.target)"
+          message: Backups need a target.
 - name: podSecurity
   required: false
   schema:
@@ -316,8 +382,8 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
       description: >-
         The Pod Security Standard the cluster's pods are held to, by Kubernetes' Pod Security
         Admission, by Kyverno, or by both. The namespaces of the components that need the host
-        (kube-system, the CNI's, node-exporter's, Alloy's node collectors', Istio's node agents',
-        Rancher's) are exempt from both.
+        (kube-system, the CNI's, node-exporter's, Alloy's node collectors', Velero's, Istio's node
+        agents', Rancher's) are exempt from both.
       properties:
         admission:
           type: string
