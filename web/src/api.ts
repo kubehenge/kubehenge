@@ -3,6 +3,7 @@ import type {
   ChangeRequest,
   Cluster,
   ClusterClass,
+  ClusterRef,
   CreateRequest,
   HARules,
   Job,
@@ -12,6 +13,7 @@ import type {
   Session,
   SetupStatus,
   Storage,
+  StoredCredential,
   TemplateRequest,
   Templates,
   Upgrades,
@@ -141,6 +143,12 @@ function remember(s: Session): Session {
 const clusterPath = (ns: string, name: string): string =>
   `/api/clusters/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`;
 
+// A cluster's credential, or with no cluster, the one for every cluster.
+const credentialPath = (purpose: string, cluster?: ClusterRef): string =>
+  cluster === undefined
+    ? `/api/credentials/${encodeURIComponent(purpose)}`
+    : `${clusterPath(cluster.namespace, cluster.name)}/credentials/${encodeURIComponent(purpose)}`;
+
 export interface Api {
   realms: () => Promise<Realm[]>;
   session: () => Promise<Session>;
@@ -159,6 +167,9 @@ export interface Api {
   setup: (settings: ManagementSettings, passphrase: string) => Promise<Job>;
 
   kubeconfig: (ns: string, name: string) => Promise<Blob>;
+  storedCredential: (purpose: string, cluster?: ClusterRef) => Promise<StoredCredential>;
+  storeCredential: (purpose: string, values: Record<string, string>, cluster?: ClusterRef) => Promise<StoredCredential>;
+  removeCredential: (purpose: string, cluster?: ClusterRef) => Promise<void>;
   credential: (name: "kubeconfig" | "talosconfig", passphrase: string) => Promise<Blob>;
   removeManagement: (passphrase: string) => Promise<Job>;
   upgrades: () => Promise<Upgrades>;
@@ -198,6 +209,9 @@ export const api: Api = {
   setup: (settings, passphrase) => request("POST", "/api/setup", { settings, passphrase }),
 
   kubeconfig: (ns, name) => download("GET", `${clusterPath(ns, name)}/kubeconfig`),
+  storedCredential: (purpose, cluster) => request("GET", credentialPath(purpose, cluster)),
+  storeCredential: (purpose, values, cluster) => request("PUT", credentialPath(purpose, cluster), { values }),
+  removeCredential: (purpose, cluster) => act("DELETE", credentialPath(purpose, cluster)),
   credential: (name, passphrase) => download("POST", "/api/setup/credential", { name, passphrase }),
   removeManagement: (passphrase) => request("POST", "/api/setup/remove", { passphrase, confirm: "remove" }),
   upgrades: () => request("GET", "/api/appliance/upgrades"),

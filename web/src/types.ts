@@ -27,6 +27,23 @@ export interface Session {
   namespace?: string;
 }
 
+/** A cluster, by where it lives. */
+export interface ClusterRef {
+  namespace: string;
+  name: string;
+}
+
+/** What the interface tells of a credential it stores: never its values. */
+export interface StoredCredential {
+  purpose: string;
+  set: boolean;
+  /** The Proxmox VE user who last stored it, and when. */
+  setBy?: string;
+  setAt?: string;
+  /** Whether the user may store, replace or remove it. */
+  canChange: boolean;
+}
+
 export interface Schema {
   type?: string;
   format?: string;

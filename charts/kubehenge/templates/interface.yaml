@@ -1,7 +1,7 @@
 {{- /*
 The identity Kubehenge's web interface acts with in the management cluster, instead of an admin
-kubeconfig: it sees every cluster, but creates, changes and deletes them, and reads their
-kubeconfigs, only in its own namespace.
+kubeconfig: it sees every cluster, but creates, changes and deletes them, reads their
+kubeconfigs and stores the credentials users type in for them, only in its own namespace.
 */}}
 {{- $name := "kubehenge-interface" }}
 {{- $ns := .Values.interface.namespace }}
@@ -82,10 +82,11 @@ rules:
   - apiGroups: [cluster.x-k8s.io]
     resources: [clusters]
     verbs: [create, update, patch, delete]
-  # Each cluster's <name>-kubeconfig, handed to users with Sys.Modify on its pool.
+  # Each cluster's <name>-kubeconfig, handed to users with Sys.Modify on its pool, and the
+  # credentials users type in, which the policy below holds every write and deletion to.
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [get]
+    verbs: [get, create, update, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -100,3 +101,71 @@ subjects:
   - kind: ServiceAccount
     name: {{ $name }}
     namespace: {{ .Release.Namespace }}
+{{- /*
+RBAC cannot tell one Secret from another on create, so this policy holds the interface's writes
+and deletions of Secrets to the user credentials it stores (pkg/provisioner's credentialPurposes,
+whose purposes and scopes this follows): labelled with their purpose, of their own type, named for
+their cluster and purpose, and never another Secret, such as a cluster's kubeconfig, CA or
+Proxmox VE token. It runs inside the API server, so no webhook has to answer for it, and it fails
+closed.
+*/}}
+{{- $credential := "kubehenge.dev/user-credential" }}
+{{- $credentialCluster := "kubehenge.dev/credential-cluster" }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}-credentials
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [secrets]
+  matchConditions:
+    - name: interface
+      expression: request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:{{ $name }}'
+  variables:
+    # The Secret as the request leaves it, or the one it deletes.
+    - name: secret
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: purpose
+      expression: >-
+        has(variables.secret.metadata.labels) && '{{ $credential }}' in variables.secret.metadata.labels
+        ? variables.secret.metadata.labels['{{ $credential }}'] : ''
+    - name: cluster
+      expression: >-
+        has(variables.secret.metadata.labels) && '{{ $credentialCluster }}' in variables.secret.metadata.labels
+        ? variables.secret.metadata.labels['{{ $credentialCluster }}'] : ''
+  validations:
+    - expression: >-
+        request.operation != 'UPDATE'
+        || (has(oldObject.metadata.labels) && '{{ $credential }}' in oldObject.metadata.labels)
+      message: the interface changes no Secret but the credentials it stores
+    - expression: >-
+        variables.cluster == ''
+        ? variables.purpose in ['backup', 'dns01']
+        : variables.purpose in ['backup', 'dns01', 'gitops', 'oidc-client']
+      messageExpression: >-
+        'the interface writes and deletes only credentials labelled {{ $credential }} with a purpose it knows, not '
+        + (variables.purpose == '' ? 'an unlabelled Secret' : 'one for ' + variables.purpose)
+    - expression: has(variables.secret.type) && variables.secret.type == '{{ $credential }}'
+      message: a credential is of type {{ $credential }}
+    - expression: >-
+        variables.secret.metadata.name == (variables.cluster == ''
+        ? 'kubehenge-' + variables.purpose : variables.cluster + '.' + variables.purpose)
+      message: a credential is named <cluster>.<purpose>, or kubehenge-<purpose> for every cluster
+    - expression: >-
+        request.operation == 'DELETE' || !has(variables.secret.metadata.finalizers)
+        || size(variables.secret.metadata.finalizers) == 0
+      message: a credential carries no finalizers
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}-credentials
+spec:
+  policyName: {{ $name }}-credentials
+  validationActions: [Deny]

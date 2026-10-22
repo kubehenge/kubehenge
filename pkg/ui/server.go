@@ -174,6 +174,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/clusters/{namespace}/{name}", s.managed(s.changeCluster))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}", s.managed(s.deleteCluster))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/kubeconfig", s.managed(s.kubeconfig))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.clusterCredential))
+	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.storeClusterCredential))
+	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.removeClusterCredential))
+	mux.HandleFunc("GET /api/credentials/{purpose}", s.managed(s.applianceCredential))
+	mux.HandleFunc("PUT /api/credentials/{purpose}", s.managed(s.storeApplianceCredential))
+	mux.HandleFunc("DELETE /api/credentials/{purpose}", s.managed(s.removeApplianceCredential))
 
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "no such API")
