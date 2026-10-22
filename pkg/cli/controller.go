@@ -213,7 +213,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	cloud := &provisioner.Proxmox{Client: c, Settings: o.settings}
 	o.r.Cloud = cloud
 	o.r.DatastoreAllocate.Role = o.settings.DatastoreRole
-	o.r.Endpoint = provisioner.Endpoint{URL: strings.TrimSuffix(conn.URL, "/"), CA: string(ca)}
+	o.r.Endpoint = provisioner.Endpoint{URL: strings.TrimSuffix(conn.URL, "/"), CA: string(ca), Insecure: conn.Insecure}
 	o.r.RancherKubernetes = rancherMinors
 
 	ctrl.SetLogger(zap.New())
@@ -288,7 +288,7 @@ func (o *controllerOptions) addReclaimer(mgr manager.Manager, conn *pve.Config, 
 		Client:         mgr.GetClient(),
 		ClassNamespace: o.r.ClassNamespace,
 		Connect: func(token string) (*proxmox.Client, error) {
-			return pve.Connect(pve.Config{URL: conn.URL, Token: token, CAFile: conn.CAFile})
+			return pve.Connect(pve.Config{URL: conn.URL, Token: token, CAFile: conn.CAFile, Insecure: conn.Insecure})
 		},
 		Mover:   cloud,
 		Remotes: remotes,
@@ -537,7 +537,7 @@ func (o *controllerOptions) addHA(mgr manager.Manager, conn *pve.Config, c *prox
 		Proxmox:        c,
 	}
 	if token := os.Getenv("KUBEHENGE_PROXMOX_HA_TOKEN"); token != "" {
-		ha, err := pve.Connect(pve.Config{URL: conn.URL, Token: token, CAFile: conn.CAFile})
+		ha, err := pve.Connect(pve.Config{URL: conn.URL, Token: token, CAFile: conn.CAFile, Insecure: conn.Insecure})
 		if err != nil {
 			return fmt.Errorf("connecting to Proxmox VE for HA: %w", err)
 		}

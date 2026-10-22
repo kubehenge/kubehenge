@@ -232,7 +232,8 @@ func TestApply(t *testing.T) {
 		t.Fatalf("main.tf: %v\n%s", err, main)
 	}
 	vars, err := os.ReadFile(filepath.Join(a.Dir, "management", "terraform.tfvars.json"))
-	if err != nil || !strings.Contains(string(vars), `"proxmox_endpoint": "https://pve.example:8006"`) || strings.Contains(string(vars), "horse") {
+	if err != nil || !strings.Contains(string(vars), `"proxmox_endpoint": "https://pve.example:8006"`) ||
+		!strings.Contains(string(vars), `"proxmox_insecure": false`) || strings.Contains(string(vars), "horse") {
 		t.Fatalf("tfvars: %v\n%s", err, vars)
 	}
 	if s := a.SavedSettings(); s == nil || !slices.Equal(s.Nodes, []string{"pve1"}) {

@@ -41,6 +41,8 @@ type setupView struct {
 	// renew it on the node with the installer, naming the appliance by its guest ID.
 	CertificateExpires *time.Time `json:"certificateExpires,omitempty"`
 	ApplianceVMID      int        `json:"applianceVMID,omitempty"`
+	// ProxmoxInsecure tells that the Proxmox VE API's certificate goes unverified.
+	ProxmoxInsecure bool `json:"proxmoxInsecure,omitempty"`
 	// Resumes tells that an earlier run left its encrypted state, so the setup takes that run's
 	// passphrase rather than a new one.
 	Resumes bool `json:"resumes,omitempty"`
@@ -71,7 +73,7 @@ func (s *Server) applianceStatus(w http.ResponseWriter, r *http.Request, u user,
 	}
 	v.Job, v.Settings = a.Current(), a.SavedSettings()
 	v.Resumes = !v.Ready && a.HasState()
-	v.ApplianceVMID = s.ApplianceVMID
+	v.ApplianceVMID, v.ProxmoxInsecure = s.ApplianceVMID, s.ProxmoxInsecure
 	if !s.CertificateExpires.IsZero() {
 		v.CertificateExpires = &s.CertificateExpires
 	}

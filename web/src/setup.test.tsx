@@ -369,6 +369,28 @@ describe("setup", () => {
     expect(screen.queryByText(/certificate expires on/u)).not.toBeInTheDocument();
   });
 
+  it("shows administrators that the Proxmox VE API's certificate goes unverified, and nothing when it is checked", async () => {
+    window.history.replaceState(null, "", "/administration");
+    const routes: Record<string, Route> = {
+      ...administrator,
+      ...administration,
+      "GET /api/setup": {
+        body: { appliance: true, ready: true, allowed: true, applianceVMID: 105, proxmoxInsecure: true },
+      },
+    };
+    fakeServer(routes);
+    const { unmount } = render(<App />);
+    await expect(screen.findByRole("heading", { name: "Proxmox VE API" })).resolves.toBeInTheDocument();
+    expect(screen.getByText(/Certificate verification is off/u)).toBeInTheDocument();
+    expect(screen.getByText("sh install.sh --upgrade --ctid 105 --proxmox-ca <file>")).toBeInTheDocument();
+    unmount();
+
+    routes["GET /api/setup"] = { body: { appliance: true, ready: true, allowed: true } };
+    render(<App />);
+    await expect(screen.findByRole("heading", { name: "Management cluster" })).resolves.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Proxmox VE API" })).not.toBeInTheDocument();
+  });
+
   it("asks about the setup every few seconds only while a run goes on", async () => {
     window.history.replaceState(null, "", "/administration");
     vi.useFakeTimers({ shouldAdvanceTime: true });

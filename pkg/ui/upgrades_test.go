@@ -242,6 +242,25 @@ func TestSetupTellsAdministratorsWhenTheCertificateRunsOut(t *testing.T) {
 	}
 }
 
+func TestSetupTellsAdministratorsTheAPICertificateGoesUnverified(t *testing.T) {
+	t.Parallel()
+	for _, insecure := range []bool{false, true} {
+		h := newHarness(t)
+		h.server.Appliance = &appliance.Appliance{Dir: t.TempDir()}
+		h.server.ProxmoxInsecure = insecure
+		a := h.browser()
+		a.signIn("admin@pve")
+		if got := a.do("GET", "/api/setup", "").Body.String(); strings.Contains(got, `"proxmoxInsecure":true`) != insecure {
+			t.Errorf("insecure %v: setup = %s", insecure, got)
+		}
+		d := h.browser()
+		d.signIn("dev@pve")
+		if got := d.do("GET", "/api/setup", "").Body.String(); strings.Contains(got, "proxmoxInsecure") {
+			t.Errorf("told someone who may not set up: %s", got)
+		}
+	}
+}
+
 func TestRemoveNeedsNoClustersLeft(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, cluster("default", "one"))

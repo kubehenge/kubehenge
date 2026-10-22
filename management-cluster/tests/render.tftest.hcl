@@ -226,6 +226,7 @@ run "controller_and_clusters_are_least_privilege" {
       clusters  = { storages = ["local-lvm", "ceph"], bridges = ["vmbr0", "vmbr1"] }
       proxmox = {
         url          = "https://pve.example.org:8006"
+        insecure     = false
         secret       = "kubehenge-proxmox"
         clusterGroup = "kubehenge-clusters"
         clusterRole  = "kubehenge-cluster-vms"
@@ -803,6 +804,28 @@ run "rejects_a_non_pem_ca" {
   }
 
   expect_failures = [var.proxmox_ca_certificate]
+}
+
+run "proxmox_insecure" {
+  command = plan
+
+  variables {
+    proxmox_insecure = true
+  }
+
+  assert {
+    condition = alltrue([
+      for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers :
+      contains([for op in yamldecode(p.spec.patches[0].patch) : op.value if can(tostring(op.value))], "--proxmox-insecure=true")
+      if p.name == "proxmox"
+    ])
+    error_message = "capmox skips verifying the Proxmox VE certificate when told to"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).proxmox.insecure
+    error_message = "the controller, and through it the clusters, skip verifying the Proxmox VE certificate when told to"
+  }
 }
 
 run "rejects_a_node_twice" {

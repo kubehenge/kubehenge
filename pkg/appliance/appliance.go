@@ -41,10 +41,12 @@ type Appliance struct {
 	Module string
 	// Tofu is the OpenTofu binary.
 	Tofu string
-	// ProxmoxURL and ProxmoxCA (PEM) are the Proxmox VE API the module signs in to.
-	ProxmoxURL string
-	ProxmoxCA  string
-	Log        *slog.Logger
+	// ProxmoxURL and ProxmoxCA (PEM) are the Proxmox VE API the module signs in to;
+	// ProxmoxInsecure has the module and the management cluster skip verifying its certificate.
+	ProxmoxURL      string
+	ProxmoxCA       string
+	ProxmoxInsecure bool
+	Log             *slog.Logger
 	// InterfaceKubeconfig makes the interface's kubeconfig from the management cluster's admin
 	// kubeconfig and API endpoint, once an apply has succeeded.
 	InterfaceKubeconfig func(ctx context.Context, admin []byte, endpoint string) ([]byte, error)

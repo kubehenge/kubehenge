@@ -33,6 +33,7 @@ module "management" {
 
   proxmox_endpoint       = var.settings.proxmox_endpoint
   proxmox_ca_certificate = var.settings.proxmox_ca_certificate
+  proxmox_insecure       = var.settings.proxmox_insecure
   proxmox_nodes          = var.settings.nodes
   image_datastore        = var.settings.imageDatastore
   vm_datastore           = var.settings.vmDatastore
@@ -141,6 +142,7 @@ func (a *Appliance) writeConfig(s *Settings) error {
 	vars := map[string]any{"settings": map[string]any{
 		"proxmox_endpoint":       a.ProxmoxURL,
 		"proxmox_ca_certificate": a.ProxmoxCA,
+		"proxmox_insecure":       a.ProxmoxInsecure,
 		"nodes":                  s.Nodes,
 		"imageDatastore":         s.ImageDatastore,
 		"vmDatastore":            s.VMDatastore,

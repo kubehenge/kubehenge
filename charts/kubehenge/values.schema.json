@@ -84,9 +84,10 @@
     "proxmox": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["url", "secret", "clusterGroup", "clusterRole", "volumeOwnerNode", "region", "ha", "datastoreAllocate"],
+      "required": ["url", "insecure", "secret", "clusterGroup", "clusterRole", "volumeOwnerNode", "region", "ha", "datastoreAllocate"],
       "properties": {
         "url": { "type": "string", "pattern": "^https://[^/]+" },
+        "insecure": { "type": "boolean" },
         "secret": { "$ref": "#/$defs/name" },
         "clusterGroup": { "type": "string", "minLength": 1 },
         "clusterRole": { "type": "string", "minLength": 1 },
