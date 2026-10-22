@@ -54,8 +54,18 @@ jobs:
           [ -s pkg/release/release.pub ] ||
             fail "pkg/release/release.pub is missing: a build without it upgrades nothing"
           awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {p = 1; next} /^## \[/ {p = 0} p' \
-            docs/changelog.md > "$RUNNER_TEMP/notes.md"
-          [ -s "$RUNNER_TEMP/notes.md" ] || fail "docs/changelog.md has no section for $version"
+            docs/changelog.md > "$RUNNER_TEMP/changes.md"
+          [ -s "$RUNNER_TEMP/changes.md" ] || fail "docs/changelog.md has no section for $version"
+          # Before 1.0.0 every release opens with the README's alpha warning, so nobody reads a
+          # release page without it.
+          case $version in
+            0.*)
+              alpha=$(grep -m 1 '^> \*\*Alpha' README.md) || fail "README.md has no alpha warning"
+              printf '%s\n' "$alpha" > "$RUNNER_TEMP/notes.md"
+              ;;
+            *) : > "$RUNNER_TEMP/notes.md" ;;
+          esac
+          cat "$RUNNER_TEMP/changes.md" >> "$RUNNER_TEMP/notes.md"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - run: make test
@@ -67,11 +77,14 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           echo "$GH_TOKEN" | ko login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          ref=$(make -s image IMAGE="$IMAGE" KO_FLAGS="--tags v$VERSION" | tail -n 1)
-          case $ref in
-            "$IMAGE"@sha256:*) ;;
-            *) echo "::error::ko printed no image digest: $ref"; exit 1 ;;
+          # With a tag ko prints the image as name:tag@digest; everything downstream names it by
+          # digest alone.
+          printed=$(make -s image IMAGE="$IMAGE" KO_FLAGS="--tags v$VERSION" | tail -n 1)
+          case $printed in
+            "$IMAGE"@sha256:* | "$IMAGE:v$VERSION"@sha256:*) ;;
+            *) echo "::error::ko printed no image digest: $printed"; exit 1 ;;
           esac
+          ref=$IMAGE@${printed##*@}
           cosign sign --yes "$ref"
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
           echo "digest=${ref#*@}" >> "$GITHUB_OUTPUT"

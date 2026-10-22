@@ -38,7 +38,7 @@ Every file the release workflow makes, and the image, carry GitHub build provena
    git push origin v<version>
    ```
 
-3. Approve the run. It runs every lint and unit test, builds the controller image and capmox's, signs them, builds the archive and `install.sh`, makes `index.json` from the previous release's signed index (checked against the release key) with this release added, and creates a draft release.
+3. Approve the run. It runs every lint and unit test, builds the controller image and capmox's, signs them, builds the archive and `install.sh`, makes `index.json` from the previous release's signed index (checked against the release key) with this release added, and creates a draft release whose notes are the version's changelog section; before 1.0.0 they open with the README's alpha warning.
 4. Check what CI built, on a machine with the GitHub CLI and cosign:
 
    ```sh

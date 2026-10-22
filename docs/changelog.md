@@ -2,7 +2,7 @@
 
 Every release's changes, newest first. Versions follow [Semantic Versioning](https://semver.org/); before 1.0.0 a minor version may change behaviour.
 
-## [0.1.0] - unreleased
+## [0.1.0] - 2026-10-22
 
 The first release.
 
