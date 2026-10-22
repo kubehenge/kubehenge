@@ -417,6 +417,27 @@ func calicoResources(cluster *clusterv1.Cluster, cni CNI, images []Image) (*core
 	}, nil
 }
 
+// The leader election of every controller Kubehenge installs into a cluster that exits once it
+// misses its lease's renewal: the Cilium operator, the cloud controller managers and the CSI
+// plugin's sidecars. Their defaults give up within 10 s, which a node short of CPU, or an API
+// server waiting on etcd, makes them miss; these are the control planes' controller managers' and
+// the management cluster's controllers' leases.
+const (
+	leaseDuration = "60s"
+	leaseRenew    = "40s"
+	leaseRetry    = "10s"
+)
+
+// leaseArgs are those leases as flags of the given prefix: leader-elect for Kubernetes' own
+// components and those built on them, leader-election for Cilium and the CSI sidecars.
+func leaseArgs(prefix string) []any {
+	return []any{
+		"--" + prefix + "-lease-duration=" + leaseDuration,
+		"--" + prefix + "-renew-deadline=" + leaseRenew,
+		"--" + prefix + "-retry-period=" + leaseRetry,
+	}
+}
+
 // ciliumValues are what Kubehenge sets in Cilium's chart, its own or the distribution's. The
 // cluster's name and id are Cilium's from the start: a cluster that joins a mesh later would
 // otherwise have to restart every workload. operator holds the operator's own values.
@@ -427,6 +448,8 @@ func ciliumValues(cluster *clusterv1.Cluster, id int, addons *Addons, operator m
 	// The agents and the operator read their configuration only when they start: an agent that
 	// started with cni.exclusive goes on taking istio-cni's plugin out after Istio is switched on.
 	operator["rollOutPods"] = true
+	// As arguments rather than in Cilium's ConfigMap, a change to them restarts the operator only.
+	operator["extraArgs"] = leaseArgs("leader-election")
 	// Without kube-proxy replacement, Cilium serves host ports, Traefik's on every node, only
 	// through the portmap plugin chained behind it, as RKE2 runs its own Cilium.
 	cni := map[string]any{"chainingMode": "portmap"}
@@ -606,8 +629,20 @@ func proxmoxValues(storage string) (map[string]any, map[string]any) {
 		"useDaemonSet": true,
 		"affinity":     controlPlane,
 		tolerationsKey: controlPlaneTolerations(toleration("node.cloudprovider.kubernetes.io/uninitialized", corev1.TaintEffectNoSchedule)),
+		"extraArgs":    leaseArgs("leader-elect"),
+	}
+	sidecar := func(args ...any) map[string]any {
+		return map[string]any{"args": append(args, leaseArgs("leader-election")...)}
 	}
 	csi := map[string]any{
+		// A sidecar's args replace the chart's own, which for the attacher and the provisioner are
+		// the file system they default to.
+		"controller": map[string]any{
+			"attacher":    sidecar("--default-fstype=ext4"),
+			"provisioner": sidecar("--default-fstype=ext4"),
+			"resizer":     sidecar(),
+			"snapshotter": sidecar(),
+		},
 		"affinity":                controlPlane,
 		tolerationsKey:            controlPlaneTolerations(),
 		"existingConfigSecret":    workloadSecret,

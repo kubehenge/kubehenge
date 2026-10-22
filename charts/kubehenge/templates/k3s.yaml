@@ -319,6 +319,10 @@ template:
         disableCloudController: true
         cloudProviderName: external
         etcdProxyImage: {{ .Values.etcdProxy }}
+        kubeControllerManagerArgs:
+          {{- include "kubehenge.patientLeaseArgs" . | nindent 10 }}
+        kubeSchedulerArgs:
+          {{- include "kubehenge.patientLeaseArgs" . | nindent 10 }}
 {{- end -}}
 
 {{- define "kubehenge.k3sWorkerSpec" -}}

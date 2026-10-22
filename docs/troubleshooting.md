@@ -174,6 +174,14 @@ A message saying "the pod range … overlaps the nodes' network …" (or the ser
 
 A message saying "the control planes of a cluster with … workers need at least …": the cluster has more workers than its control planes' size carries, by its distribution's sizing guide ([clusters.md](clusters.md#machines)). Give the control planes the cores and memory the message names (`controlPlaneMachine`, or the control plane's override), or keep fewer workers. "The control planes of a cluster without workers run its workloads too and need at least …": with no workers, or every worker pool scaled to 0, the control planes need a worker's least on top of their own; give them that, or keep a worker. A cluster that already fell short, after an upgrade of Kubehenge asked for more, can still be changed in other ways; only more workers or smaller control planes are refused.
 
+### One control plane, unreachable after a roll
+
+A cluster with one control plane runs on two etcd members while that node is replaced, by an upgrade or any change to the control planes, and each member then needs the other ([architecture.md](architecture.md#clusterclasses)). If the API stops answering during the roll and does not come back, one of the two is not running, and nothing in Cluster API recovers that by itself.
+
+- Find which: on both control-plane VMs (the old node and its successor), look at the distribution's service (`systemctl status k3s` or `rke2-server`, `journalctl -u k3s`; kubeadm's etcd and API server are static pods, `crictl ps -a`), and at the kernel's log for a process killed for memory (`dmesg`). Start whatever stopped, or the VM. Once both members run again, the cluster recovers and the roll goes on.
+- If one of them cannot come back, its VM or disk lost: stop the service on the other, reset its etcd to itself alone (`k3s server --cluster-reset` or `rke2 server --cluster-reset`, as the distribution's documentation describes), and start the service again. Then delete the Machine of the lost node in the management cluster, and Cluster API replaces it.
+- Three control planes keep a majority through the loss of one, rolls included.
+
 ### Not enough memory for the add-ons
 
 A message saying "the cluster's add-ons (…) need … MiB of memory on its workers, beyond the … MiB a worker uses itself": the workers together lack the memory the add-ons named take ([clusters.md](clusters.md#machines)). Give the workers more memory (`workerMachine`, or a worker pool's override), add workers, or leave an add-on off. Rancher's agent counts in every cluster that registers with Rancher; set `rancher` to `{register: false}` for a cluster that never will. "… on its control planes, which run them without workers …": the same for the control planes of a cluster without workers. A cluster that already fell short, after an upgrade of Kubehenge asked for more, can still be changed in other ways; only changes that leave it shorter are refused.

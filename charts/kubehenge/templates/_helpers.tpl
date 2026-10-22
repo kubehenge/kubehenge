@@ -828,6 +828,20 @@ data:
 {{- end -}}
 
 {{/*
+The leader election of a control plane's controller manager and scheduler, as flag=value lines:
+those of the management cluster's (management-cluster/cluster-api.tf). With their defaults (15 s,
+renewed within 10 s) an etcd without a leader for that long, as a VM stalled on its Proxmox VE host
+can leave it, has them exit. k3s runs both in its own process, so that takes the node's etcd member
+down with them; with one control plane being replaced, etcd has two voting members, each needing
+the other, and the exit on one node ends the other's quorum too, until both are back.
+*/}}
+{{- define "kubehenge.patientLeaseArgs" -}}
+- leader-elect-lease-duration=60s
+- leader-elect-renew-deadline=40s
+- leader-elect-retry-period=10s
+{{- end -}}
+
+{{/*
 kube-vip as a static pod on each control-plane node, holding the control-plane endpoint by ARP for
 whichever node leads. Returned as the template of a JSON patch value that adds the bootstrap file.
 Call with (dict "root" . "path" <static pod manifest file> "kubeconfig" <admin kubeconfig on the node>).

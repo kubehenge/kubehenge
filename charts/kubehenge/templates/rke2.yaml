@@ -248,9 +248,11 @@ template:
       kubeControllerManager:
         extraArgs:
           - authorization-always-allow-paths=/healthz,/readyz,/livez,/metrics
+          {{- include "kubehenge.patientLeaseArgs" . | nindent 10 }}
       kubeScheduler:
         extraArgs:
           - authorization-always-allow-paths=/healthz,/readyz,/livez,/metrics
+          {{- include "kubehenge.patientLeaseArgs" . | nindent 10 }}
     rolloutStrategy:
       type: RollingUpdate
       rollingUpdate:
