@@ -16,8 +16,11 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -48,6 +51,8 @@ type fakeAccounts struct {
 	listed func()
 	// released records the prefixes of the HA objects removed.
 	released []string
+	// loadReads records the VMs whose load was read.
+	loadReads []int
 }
 
 func (f *fakeAccounts) SignIn(_ context.Context, username, password string) (*pve.Ticket, *pve.Challenge, error) {
@@ -177,12 +182,20 @@ func (f *fakeAccounts) PoolMembers(context.Context, *pve.Ticket, string) ([]pve.
 	return members, nil
 }
 
+// VMLoad answers a load of a quarter for every VM.
+func (f *fakeAccounts) VMLoad(_ context.Context, _ *pve.Ticket, _ string, vmid int) ([]pve.LoadPoint, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.loadReads = append(f.loadReads, vmid)
+	return []pve.LoadPoint{{Time: 1}, {Time: 2, CPU: new(0.25)}}, nil
+}
+
 func (f *fakeAccounts) Templates(context.Context, *pve.Ticket, string) ([]pve.Member, error) {
 	f.mu.Lock()
 	var list []pve.Member
-	for _, m := range f.members {
-		if m.Template == 1 {
-			list = append(list, m)
+	for i := range f.members {
+		if m := &f.members[i]; m.Template == 1 {
+			list = append(list, *m)
 		}
 	}
 	listed := f.listed
@@ -245,6 +258,14 @@ func newHarness(t *testing.T, objects ...client.Object) *harness {
 			t.Fatal(err)
 		}
 	}
+	// The kinds the interface reads only as unstructured objects: the add-on releases, and the
+	// control plane of whichever provider, which it finds through the RESTMapper.
+	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{rke2ControlPlane.GroupVersion()})
+	for _, gvk := range []schema.GroupVersionKind{helmReleaseProxyList.GroupVersion().WithKind("HelmReleaseProxy"), rke2ControlPlane} {
+		scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
+		scheme.AddKnownTypeWithName(gvk.GroupVersion().WithKind(gvk.Kind+"List"), &unstructured.UnstructuredList{})
+		mapper.Add(gvk, meta.RESTScopeNamespace)
+	}
 	h := &harness{t: t, clock: time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)}
 	h.accounts = &fakeAccounts{
 		passwords: map[string]string{"admin@pve": "secret", "viewer@pve": "secret", "dev@pve": "secret", "otp@pve": "secret"},
@@ -269,7 +290,7 @@ func newHarness(t *testing.T, objects ...client.Object) *harness {
 		now: func() time.Time { return h.clock },
 	}
 	objects = append(objects, rke2Class())
-	h.kube = fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+	h.kube = fake.NewClientBuilder().WithScheme(scheme).WithRESTMapper(mapper).WithObjects(objects...).Build()
 	h.server = &Server{
 		Accounts:       h.accounts,
 		Kube:           h.kube,
@@ -284,13 +305,14 @@ func newHarness(t *testing.T, objects ...client.Object) *harness {
 		},
 	}
 	h.handler = h.server.Handler()
+	h.server.clock = func() time.Time { return h.clock }
 	h.server.sessions.now = func() time.Time { return h.clock }
 	h.server.limiter.now = func() time.Time { return h.clock }
 	return h
 }
 
 func rke2Class() *clusterv1.ClusterClass {
-	schema := func(s *clusterv1.JSONSchemaProps) clusterv1.VariableSchema {
+	variableSchema := func(s *clusterv1.JSONSchemaProps) clusterv1.VariableSchema {
 		return clusterv1.VariableSchema{OpenAPIV3Schema: *s}
 	}
 	required := true
@@ -299,12 +321,12 @@ func rke2Class() *clusterv1.ClusterClass {
 			"kubehenge.dev/default-pods": "10.42.0.0/16", "kubehenge.dev/default-services": "10.43.0.0/16",
 		},
 		Spec: clusterv1.ClusterClassSpec{Variables: []clusterv1.ClusterClassVariable{
-			{Name: "controlPlaneEndpoint", Required: &required, Schema: schema(&clusterv1.JSONSchemaProps{Type: "string", Format: "ipv4"})},
-			{Name: "network", Required: &required, Schema: schema(&clusterv1.JSONSchemaProps{Type: "object"})},
-			{Name: "storage", Required: &required, Schema: schema(&clusterv1.JSONSchemaProps{Type: "string"})},
-			{Name: "headlamp", Schema: schema(&clusterv1.JSONSchemaProps{Type: "object"})},
-			{Name: "rancher", Schema: schema(&clusterv1.JSONSchemaProps{Type: "object"})},
-			{Name: "oidc", Schema: schema(&clusterv1.JSONSchemaProps{Type: "array", Default: &apiextensionsv1.JSON{
+			{Name: "controlPlaneEndpoint", Required: &required, Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "string", Format: "ipv4"})},
+			{Name: "network", Required: &required, Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+			{Name: "storage", Required: &required, Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "string"})},
+			{Name: "headlamp", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+			{Name: "rancher", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+			{Name: "oidc", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "array", Default: &apiextensionsv1.JSON{
 				Raw: []byte(`[{"issuerURL":"https://sso.example","clientID":"kubernetes"},{"issuerURL":"https://lab.example","clientID":"lab"}]`),
 			}})},
 		}},

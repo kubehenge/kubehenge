@@ -34,6 +34,7 @@ import (
 type Accounts interface {
 	SignIns
 	Resources
+	Guests
 	Removals
 }
 
@@ -56,7 +57,12 @@ type Resources interface {
 	Bridges(ctx context.Context, t *pve.Ticket, node string) ([]pve.Bridge, error)
 	NodeAffinityRules(ctx context.Context, t *pve.Ticket) ([]pve.HARule, error)
 	Zone(ctx context.Context, t *pve.Ticket, bridge string) (string, error)
+}
+
+// Guests are the VMs a signed-in user sees in Proxmox VE, and how they run.
+type Guests interface {
 	PoolMembers(ctx context.Context, t *pve.Ticket, pool string) ([]pve.Member, error)
+	VMLoad(ctx context.Context, t *pve.Ticket, node string, vmid int) ([]pve.LoadPoint, error)
 	Templates(ctx context.Context, t *pve.Ticket, pool string) ([]pve.Member, error)
 	BackupCovers(ctx context.Context, t *pve.Ticket, vmid int) (bool, error)
 }
@@ -109,13 +115,21 @@ type Server struct {
 	PublicURL string
 	// SessionMaxAge ends every session this long after sign-in.
 	SessionMaxAge time.Duration
-	Log           *slog.Logger
+	// ConnectWorkload reaches a workload cluster's API server with one of the health identities'
+	// tokens; unset, it connects over HTTPS trusting the cluster's CA alone.
+	ConnectWorkload func(server string, ca []byte, token string) (*Workload, error)
+	Log             *slog.Logger
 
 	sessions   *sessions
 	limiter    *limiter
 	activeKube atomic.Pointer[client.Client]
 	backups    backupCache
 	etags      etagCache
+	health     healthCache
+	vmLoads    vmLoadCache
+	workloads  workloadConns
+	// clock is the health page's time; unset, the system's.
+	clock func() time.Time
 }
 
 const (
@@ -174,6 +188,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/clusters/{namespace}/{name}", s.managed(s.changeCluster))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}", s.managed(s.deleteCluster))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/kubeconfig", s.managed(s.kubeconfig))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/health", s.managed(s.clusterHealth))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/pods/{podNamespace}/{pod}/logs", s.managed(s.podLogs))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.clusterCredential))
 	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.storeClusterCredential))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.removeClusterCredential))

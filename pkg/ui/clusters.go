@@ -225,8 +225,11 @@ type allowedView struct {
 	Kubeconfig bool `json:"kubeconfig"`
 }
 
-// controlPlaneRole is a control-plane machine's role; every other machine is a worker.
-const controlPlaneRole = "control-plane"
+// A machine's role: a control plane's, or a worker's for every other one.
+const (
+	controlPlaneRole = "control-plane"
+	workerRole       = "worker"
+)
 
 type machineView struct {
 	Name string `json:"name"`
@@ -491,7 +494,7 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 			Name:        m.Name,
 			Node:        m.Status.NodeRef.Name,
 			ProxmoxNode: hosts[m.Spec.InfrastructureRef.Name],
-			Role:        "worker",
+			Role:        workerRole,
 			Version:     m.Spec.Version,
 			Phase:       m.Status.Phase,
 			Ready:       meta.IsStatusConditionTrue(m.Status.Conditions, clusterv1.MachineReadyCondition),
@@ -535,8 +538,8 @@ func (s *Server) vmNodes(r *http.Request, u user, c *clusterv1.Cluster, poolPath
 		return nil
 	}
 	nodes := make(map[string]string, len(members))
-	for _, m := range members {
-		nodes[m.Name] = m.Node
+	for i := range members {
+		nodes[members[i].Name] = members[i].Node
 	}
 	return nodes
 }

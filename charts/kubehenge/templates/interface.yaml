@@ -1,7 +1,9 @@
 {{- /*
 The identity Kubehenge's web interface acts with in the management cluster, instead of an admin
 kubeconfig: it sees every cluster, but creates, changes and deletes them, reads their
-kubeconfigs and stores the credentials users type in for them, only in its own namespace.
+kubeconfigs and stores the credentials users type in for them, only in its own namespace. What
+it reads of a cluster beyond the cluster itself (its machines, pools, control plane, health
+checks, add-on releases and events) is what the health page shows anyone who sees the cluster.
 */}}
 {{- $name := "kubehenge-interface" }}
 {{- $ns := .Values.interface.namespace }}
@@ -35,6 +37,18 @@ rules:
   - apiGroups: [cluster.x-k8s.io]
     resources: [clusters, machines]
     verbs: [get, list, watch]
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [machinedeployments, machinehealthchecks]
+    verbs: [get, list]
+  - apiGroups: [controlplane.cluster.x-k8s.io]
+    resources: [kubeadmcontrolplanes, rke2controlplanes, kthreescontrolplanes]
+    verbs: [get]
+  - apiGroups: [addons.cluster.x-k8s.io]
+    resources: [helmreleaseproxies]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

@@ -82,7 +82,8 @@ func (s *Server) templates(ctx context.Context, t *pve.Ticket) ([]templateView, 
 		return nil, fmt.Errorf("the templates in pool %s: %w", templatePool, err)
 	}
 	list := []templateView{}
-	for _, m := range members {
+	for i := range members {
+		m := &members[i]
 		list = append(list, templateView{VMID: m.VMID, Node: m.Node, Name: m.Name, Tags: templates.ParseTags(m.Tags)})
 	}
 	slices.SortFunc(list, func(a, b templateView) int { return strings.Compare(a.Name, b.Name) })

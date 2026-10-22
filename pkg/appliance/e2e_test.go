@@ -63,6 +63,18 @@ func TestInterfaceKubeconfigEndToEnd(t *testing.T) {
 		{"create", "", "namespaces", "", false},
 		{"update", "cluster.x-k8s.io", "clusterclasses", "kubehenge-system", false},
 		{"create", "", "pods", "clusters", false},
+		{"list", "cluster.x-k8s.io", "machinedeployments", "", true},
+		{"list", "cluster.x-k8s.io", "machinehealthchecks", "", true},
+		{"get", "controlplane.cluster.x-k8s.io", "kubeadmcontrolplanes", "clusters", true},
+		{"get", "controlplane.cluster.x-k8s.io", "rke2controlplanes", "clusters", true},
+		{"get", "controlplane.cluster.x-k8s.io", "kthreescontrolplanes", "clusters", true},
+		{"list", "addons.cluster.x-k8s.io", "helmreleaseproxies", "", true},
+		{"list", "", "events", "clusters", true},
+		{"update", "cluster.x-k8s.io", "machinedeployments", "clusters", false},
+		{"update", "controlplane.cluster.x-k8s.io", "kubeadmcontrolplanes", "clusters", false},
+		{"delete", "cluster.x-k8s.io", "machines", "clusters", false},
+		{"get", "", "pods", "clusters", false},
+		{"create", "", "events", "clusters", false},
 	} {
 		review, err := kube.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, &authorizationv1.SelfSubjectAccessReview{
 			Spec: authorizationv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &authorizationv1.ResourceAttributes{

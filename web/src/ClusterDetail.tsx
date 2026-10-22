@@ -2,6 +2,7 @@ import { useEffect, useState, type JSX } from "react";
 
 import { api } from "./api";
 import { OptionDialog, Options, type OptionAction } from "./ClusterOptions";
+import { HealthView } from "./Health";
 import { Link, navigate } from "./router";
 import type { Cluster, Machine, Versions } from "./types";
 import {
@@ -10,7 +11,6 @@ import {
   Field,
   Status,
   StatusBadge,
-  abnormal,
   age,
   distributionName,
   errorMessage,
@@ -42,13 +42,20 @@ export function headlampURL(port: number, cluster?: string): string {
   return `https://${host}:${port}/${filled(cluster) ? `c/${encodeURIComponent(cluster)}` : ""}`;
 }
 
+// headlampOf is the cluster's page in the shared Headlamp, when one runs and can reach the cluster.
+function headlampOf(port: number | undefined, c: Cluster): string | undefined {
+  return port !== undefined && port > 0 && filled(c.headlamp) && c.available
+    ? headlampURL(port, c.headlamp)
+    : undefined;
+}
+
 const poolName = (pool: string): string => pool.replace(/^\/pool\//u, "");
 
 /** The views of a cluster's page, as the last part of its address; the summary has none. */
 export const views = [
   { path: "", label: "Summary" },
+  { path: "health", label: "Health" },
   { path: "machines", label: "Machines" },
-  { path: "conditions", label: "Conditions" },
   { path: "options", label: "Options" },
 ] as const;
 
@@ -121,6 +128,7 @@ export function ClusterDetail({
   }
   const can = c.allowed.change && !c.deleting;
   const why = whyNot(c);
+  const inHeadlamp = headlampOf(headlamp, c);
   const close = (): void => {
     setAction(undefined);
     void reload();
@@ -158,8 +166,8 @@ export function ClusterDetail({
             Kubeconfig
           </button>
         )}
-        {headlamp !== undefined && headlamp > 0 && filled(c.headlamp) && c.available && (
-          <a className="button" href={headlampURL(headlamp, c.headlamp)} target="_blank" rel="noopener noreferrer">
+        {inHeadlamp !== undefined && (
+          <a className="button" href={inHeadlamp} target="_blank" rel="noopener noreferrer">
             Headlamp
           </a>
         )}
@@ -181,8 +189,8 @@ export function ClusterDetail({
         </nav>
         <div className="object-view">
           {view === "" && <Summary cluster={c} />}
+          {view === "health" && <HealthView cluster={c} headlamp={inHeadlamp} />}
           {view === "machines" && <Machines cluster={c} />}
-          {view === "conditions" && <Conditions cluster={c} />}
           {view === "options" && <Options cluster={c} can={can} onEdit={setAction} />}
         </div>
       </div>
@@ -343,48 +351,6 @@ function Machines({ cluster: c }: { cluster: Cluster }) {
                 <td>{m.version ?? ""}</td>
                 <td>{(m.addresses ?? []).join(", ")}</td>
                 <td title={new Date(m.created).toLocaleString()}>{age(m.created)}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function Conditions({ cluster: c }: { cluster: Cluster }) {
-  return (
-    <div className="box scroll">
-      <table className="grid">
-        <thead>
-          <tr>
-            <th>Type</th>
-            <th>Status</th>
-            <th>Reason</th>
-            <th>Message</th>
-            <th>Since</th>
-          </tr>
-        </thead>
-        <tbody>
-          {c.conditions.length === 0 && (
-            <tr>
-              <td colSpan={5} className="muted">
-                No conditions reported yet.
-              </td>
-            </tr>
-          )}
-          {c.conditions.map((x) => {
-            const attention = abnormal(x.type, x.status);
-            return (
-              <tr key={x.type} className={attention ? "attention" : ""}>
-                <td>
-                  {attention && <span className="visually-hidden">Needs attention: </span>}
-                  {x.type}
-                </td>
-                <td>{x.status}</td>
-                <td>{x.reason ?? ""}</td>
-                <td className="message">{x.message ?? ""}</td>
-                <td title={new Date(x.since).toLocaleString()}>{age(x.since)}</td>
               </tr>
             );
           })}

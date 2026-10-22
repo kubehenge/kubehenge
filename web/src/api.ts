@@ -3,11 +3,13 @@ import type {
   ChangeRequest,
   Cluster,
   ClusterClass,
+  ClusterHealth,
   ClusterRef,
   CreateRequest,
   HARules,
   Job,
   ManagementSettings,
+  PodLogs,
   PveNode,
   Realm,
   Session,
@@ -166,6 +168,8 @@ export interface Api {
   setupStatus: () => Promise<SetupStatus>;
   setup: (settings: ManagementSettings, passphrase: string) => Promise<Job>;
 
+  health: (ns: string, name: string) => Promise<ClusterHealth>;
+  podLogs: (cluster: ClusterRef, pod: { namespace: string; name: string }, container: string) => Promise<PodLogs>;
   kubeconfig: (ns: string, name: string) => Promise<Blob>;
   storedCredential: (purpose: string, cluster?: ClusterRef) => Promise<StoredCredential>;
   storeCredential: (purpose: string, values: Record<string, string>, cluster?: ClusterRef) => Promise<StoredCredential>;
@@ -208,6 +212,12 @@ export const api: Api = {
   setupStatus: () => request("GET", "/api/setup"),
   setup: (settings, passphrase) => request("POST", "/api/setup", { settings, passphrase }),
 
+  health: (ns, name) => request("GET", `${clusterPath(ns, name)}/health`),
+  podLogs: (cluster, pod, container) =>
+    request(
+      "GET",
+      `${clusterPath(cluster.namespace, cluster.name)}/pods/${encodeURIComponent(pod.namespace)}/${encodeURIComponent(pod.name)}/logs?container=${encodeURIComponent(container)}`,
+    ),
   kubeconfig: (ns, name) => download("GET", `${clusterPath(ns, name)}/kubeconfig`),
   storedCredential: (purpose, cluster) => request("GET", credentialPath(purpose, cluster)),
   storeCredential: (purpose, values, cluster) => request("PUT", credentialPath(purpose, cluster), { values }),
