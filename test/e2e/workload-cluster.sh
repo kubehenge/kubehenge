@@ -12,9 +12,10 @@
 # an ACME server over DNS-01 and over HTTP-01) and GitOps (Flux, then Argo CD, syncing a repository
 # on a Git server in the cluster through a deploy key), switch backups, certificates and GitOps off,
 # take an etcd snapshot into the same store, read it back and restore etcd from it through the
-# guest agent, switch the load balancer off, scale its workers up and down, upgrade it by one minor
-# version (for RKE2 and k3s with the first new server's join refused at first), replace a node that
-# dies, delete it, and check that nothing of it is left on Proxmox VE.
+# guest agent, on RKE2 and k3s have the servers upload a snapshot of their own there and switch that
+# off, switch the load balancer off, scale its workers up and down, upgrade it by one minor version
+# (for RKE2 and k3s with the first new server's join refused at first), replace a node that dies,
+# delete it, and check that nothing of it is left on Proxmox VE.
 #
 #   test/e2e/workload-cluster.sh <ClusterClass> <version> <upgrade version>
 #
@@ -2369,7 +2370,46 @@ absent wl -n default get configmap e2e-after-snapshot || fail "a ConfigMap made 
 wl -n default delete configmap e2e-before-snapshot
 keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
 [ "${keys}" = "${etcd_prefix}/${snapshot_name}" ] || fail "the restore left objects in the store: ${keys}"
-set_variable etcdSnapshots "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
+
+case ${distribution} in
+    rke2 | k3s)
+        step "${distribution}'s own etcd snapshots uploaded to the same store, and switched off"
+        # The drop-in is part of the servers' bootstrap, so switching the upload replaces them.
+        servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+        servers_replaced() {
+            kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o json |
+                jq -e --arg old " ${servers} " '(.items | length > 0) and all(.items[]; .metadata.name as $name |
+                    .status.phase == "Running" and (($old | contains(" " + $name + " ")) | not))' > /dev/null
+        }
+        set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2,\"distributionUpload\":true}"
+        until_true 300 "the upload's Secret in kube-system" wl -n kube-system get secret kubehenge-etcd-s3
+        upload_secret=$(wl -n kube-system get secret kubehenge-etcd-s3 -o json)
+        printf '%s' "${upload_secret}" | jq -e '.type == "etcd.k3s.cattle.io/s3-config-secret" and
+            (.data["etcd-s3-skip-ssl-verify"] | @base64d) == "false" and (.data["etcd-s3-insecure"] | @base64d) == "false" and
+            (.data["etcd-s3-endpoint-ca"] | @base64d | length > 0)' > /dev/null ||
+            fail "the upload's Secret does not verify the store's certificate"
+        until_true 1800 "the control planes replaced for the upload" servers_replaced
+        kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
+        upload_prefix=$(printf '%s' "${target}" | jq -r --arg own "${ns}.${name}/${distribution}-etcd" 'if (.prefix // "") == "" then $own else .prefix + "/" + $own end')
+        servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+        # The server reads the drop-in and the Secret, so the snapshot asked for goes to the store too.
+        # shellcheck disable=SC2310 # a failed save fails the test with the reason.
+        on_machines "${servers%% *}" "PATH=\$PATH:/usr/local/bin:/opt/rke2/bin ${distribution} etcd-snapshot save --name e2e-upload" > /dev/null ||
+            fail "${distribution} could not take a snapshot of its own"
+        uploaded() {
+            # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+            listing=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${upload_prefix}/") || return 1
+            printf '%s' "${listing}" | grep -q "<Key>${upload_prefix}/e2e-upload"
+        }
+        until_true 300 "${distribution}'s snapshot in the store" uploaded
+        servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+        set_variable etcdSnapshots "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
+        until_true 300 "the upload's Secret gone" absent wl -n kube-system get secret kubehenge-etcd-s3
+        until_true 1800 "the control planes replaced without the upload" servers_replaced
+        kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
+        ;;
+    *) set_variable etcdSnapshots "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}" ;;
+esac
 kill "${s3_pid}"
 s3_pid=
 # removed <kubectl get...>: whether the object is gone, or its kind with it, as cert-manager's own

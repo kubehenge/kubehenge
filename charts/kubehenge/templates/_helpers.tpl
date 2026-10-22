@@ -476,9 +476,22 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           maximum: 1000
           default: 14
           description: How many snapshots to keep; the oldest beyond are deleted from the target.
+        distributionUpload:
+          type: boolean
+          default: false
+          description: >-
+            RKE2 and k3s only: have the cluster's servers also take snapshots themselves on the same
+            schedule, read in UTC, and upload them to the target's <distribution>-etcd folder of the
+            cluster, keeping as many, as etcd holds them and not encrypted by Kubehenge. For it the
+            controller puts the target and its access key into the Secret kubehenge-etcd-s3 in the
+            cluster's kube-system, where whoever may read Secrets there reads the key and with it
+            everything the key reaches in the target. Switching it, or changing the schedule or keep
+            while it is on, replaces the control-plane machines.
       x-kubernetes-validations:
         - rule: "!self.enabled || has(self.target)"
           message: etcd snapshots need a target.
+        - rule: "!has(self.distributionUpload) || !self.distributionUpload || self.enabled"
+          message: The distribution's own upload takes the target, schedule and keep of etcd snapshots, which are off.
 - name: podSecurity
   required: false
   schema:
@@ -1176,6 +1189,28 @@ streaming sessions that end when idle. Each class adds its distribution's own on
 
 {{- define "kubehenge.cisEnabled" -}}
 {{ "{{ if .cis }}true{{ end }}" | quote }}
+{{- end -}}
+
+{{- define "kubehenge.etcdUploadEnabled" -}}
+{{ "{{ with .etcdSnapshots }}{{ if and .enabled .distributionUpload }}true{{ end }}{{ end }}" | quote }}
+{{- end -}}
+
+{{/*
+The drop-in that has RKE2's or k3s's servers upload their own etcd snapshots, with the target read
+from the Secret Kubehenge's controller keeps in kube-system: given any other etcd-s3 setting, the
+servers ignore that Secret, and the store's keys would have to be written here, into the
+bootstrap data. The retention, an etcd-snapshot setting, counts each server's local snapshots and
+the uploads of all servers together.
+*/}}
+{{- define "kubehenge.etcdUploadFile" -}}
+path: {{ .path }}
+owner: root:root
+permissions: "0600"
+content: |
+  etcd-s3: true
+  etcd-s3-config-secret: kubehenge-etcd-s3
+  etcd-snapshot-schedule-cron: {{ "{{ .etcdSnapshots.schedule | quote }}" }}
+  etcd-snapshot-retention: {{ "{{ .etcdSnapshots.keep }}" }}
 {{- end -}}
 
 {{/*

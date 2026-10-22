@@ -28,6 +28,9 @@ type etcdSnapshotsView struct {
 	Schedule string `json:"schedule,omitempty"`
 	TimeZone string `json:"timeZone,omitempty"`
 	Keep     int    `json:"keep,omitempty"`
+	// DistributionUpload is set while RKE2's or k3s's servers upload snapshots of their own to the
+	// target, into the <distribution>-etcd folder beside these.
+	DistributionUpload bool `json:"distributionUpload,omitempty"`
 	// Last is the last snapshot the controller took, and Condition how its last try went.
 	Last      *provisioner.EtcdSnapshot `json:"last,omitempty"`
 	Condition *conditionView            `json:"condition,omitempty"`
@@ -55,8 +58,8 @@ func (s *Server) etcdSnapshots(w http.ResponseWriter, r *http.Request, u user) {
 	settings, _ := provisioner.EtcdSnapshotsOf(c)
 	view := etcdSnapshotsView{
 		Enabled: settings.Enabled, Target: settings.Target, Schedule: settings.Schedule, TimeZone: settings.TimeZone, Keep: settings.Keep,
-		Snapshots: []provisioner.EtcdSnapshot{}, Restoring: provisioner.RestoreInProgress(c),
-		CanSnapshot: access.held.Has(privChange), CanRestore: access.held.Has(privKubeconfig),
+		DistributionUpload: settings.Enabled && settings.DistributionUpload, Restoring: provisioner.RestoreInProgress(c),
+		Snapshots: []provisioner.EtcdSnapshot{}, CanSnapshot: access.held.Has(privChange), CanRestore: access.held.Has(privKubeconfig),
 	}
 	_, view.Requested = c.Annotations[provisioner.EtcdSnapshotRequestAnnotation]
 	if last, ok := provisioner.LastEtcdSnapshot(c); ok {

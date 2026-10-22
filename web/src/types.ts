@@ -558,6 +558,8 @@ export interface ClusterEtcdSnapshots {
   schedule?: string;
   timeZone?: string;
   keep?: number;
+  /** Set while RKE2's or k3s's servers also upload snapshots of their own to the target. */
+  distributionUpload?: boolean;
   last?: EtcdSnapshot;
   condition?: Condition;
   /** A snapshot asked for has not been taken yet. */

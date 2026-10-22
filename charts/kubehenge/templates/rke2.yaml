@@ -159,6 +159,22 @@ spec:
               path: /spec/template/spec/serverConfig/cni
               valueFrom:
                 variable: cni
+    # The RKE2 provider's own etcd.backupConfig would write the store's keys into the servers'
+    # bootstrap data and skip verifying its certificate unless told otherwise.
+    - name: rke2-etcd-upload
+      enabledIf: {{ include "kubehenge.etcdUploadEnabled" . }}
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: RKE2ControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/files/-
+              valueFrom:
+                template: |
+                  {{- include "kubehenge.etcdUploadFile" (dict "path" "/etc/rancher/rke2/config.yaml.d/60-kubehenge-etcd-s3.yaml") | nindent 18 }}
     - name: rke2-oidc
       enabledIf: {{ include "kubehenge.oidcEnabled" . }}
       definitions:

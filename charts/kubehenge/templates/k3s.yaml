@@ -241,6 +241,21 @@ spec:
             - op: add
               path: /spec/template/spec/kthreesConfigSpec/serverConfig/disableComponents
               value: [servicelb]
+    # The k3s provider has no setting for etcd snapshots.
+    - name: k3s-etcd-upload
+      enabledIf: {{ include "kubehenge.etcdUploadEnabled" . }}
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: KThreesControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/kthreesConfigSpec/files/-
+              valueFrom:
+                template: |
+                  {{- include "kubehenge.etcdUploadFile" (dict "path" "/etc/rancher/k3s/config.yaml.d/60-kubehenge-etcd-s3.yaml") | nindent 18 }}
     - name: k3s-oidc
       enabledIf: {{ include "kubehenge.oidcEnabled" . }}
       definitions:

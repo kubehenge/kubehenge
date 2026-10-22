@@ -54,12 +54,25 @@ export interface EtcdSnapshotsValue {
   schedule?: string;
   timeZone?: string;
   keep?: number;
+  distributionUpload?: boolean;
+}
+
+/** uploadsItself says whether a distribution can upload etcd snapshots of its own. */
+export const uploadsItself = (distribution: string): boolean => distribution === "rke2" || distribution === "k3s";
+
+/** uploadHint says what the distribution's own upload does, grants and risks. */
+export function uploadHint(distribution: string): string {
+  const d = distributionName(distribution);
+  return `${d}'s servers then also take snapshots themselves on this schedule, read in UTC, and upload them to the ${distribution}-etcd folder beside these, keeping as many in all; they go on while the management cluster is down. What it grants: the target's access key goes into the Secret kubehenge-etcd-s3 in the cluster's kube-system, where whoever may read Secrets there, every cluster admin among them, reads it, and with it everything the key reaches in the target: the other clusters' backups too, when it is the key for every cluster. What it risks: ${d}'s snapshots are stored as etcd holds them, not encrypted by Kubehenge, and Kubehenge neither lists nor restores them; they are restored by hand with ${d}'s own steps. The store's certificate is verified. Switching it on or off, or changing the schedule or keep while it is on, replaces the control-plane machines one at a time.`;
 }
 
 /** etcdSnapshotsOf reads a cluster's etcdSnapshots variable; unset, snapshots are off. */
 export function etcdSnapshotsOf(v: unknown): EtcdSnapshotsValue {
   const r = record(v);
   const out: EtcdSnapshotsValue = { enabled: r["enabled"] === true };
+  if (r["distributionUpload"] === true) {
+    out.distributionUpload = true;
+  }
   for (const k of ["target", "schedule", "timeZone"] as const) {
     const s = text(r[k]);
     if (filled(s)) {
@@ -79,6 +92,7 @@ export interface EtcdSnapshotFields {
   schedule: string;
   timeZone: string;
   keep: string;
+  upload: boolean;
 }
 
 /** etcdFieldsOf are the fields of a cluster's settings; what it leaves unset is the chart's default. */
@@ -88,6 +102,7 @@ export function etcdFieldsOf(v: EtcdSnapshotsValue): EtcdSnapshotFields {
     schedule: v.schedule ?? defaultEtcdSchedule,
     timeZone: v.timeZone ?? "UTC",
     keep: String(v.keep ?? defaultEtcdKeep),
+    upload: v.distributionUpload === true,
   };
 }
 
@@ -122,15 +137,17 @@ export const etcdSnapshotsVariable = (f: EtcdSnapshotFields): EtcdSnapshotsValue
   schedule: f.schedule.trim(),
   timeZone: f.timeZone,
   keep: Number(f.keep),
+  ...(f.upload ? { distributionUpload: true } : {}),
 });
 
 /** etcdSnapshotsText sums up a cluster's etcd snapshots. */
-export function etcdSnapshotsText(v: EtcdSnapshotsValue): string {
+export function etcdSnapshotsText(v: EtcdSnapshotsValue, distribution = ""): string {
   if (!v.enabled) {
     return "Off";
   }
   const f = etcdFieldsOf(v);
-  return `${scheduleText(f.schedule)} (${f.timeZone}), keeps the last ${f.keep}, to ${f.target}`;
+  const upload = f.upload ? `; ${distributionName(distribution)} uploads its own too` : "";
+  return `${scheduleText(f.schedule)} (${f.timeZone}), keeps the last ${f.keep}, to ${f.target}${upload}`;
 }
 
 /** etcdSnapshotsRows is the Options view's row of a cluster's etcd snapshots, where its class offers a target. */
@@ -139,7 +156,14 @@ export function etcdSnapshotsRows(c: Cluster, offered: boolean): OptionRow<"etcd
   if (!v.enabled && !offered) {
     return [];
   }
-  return [{ label: "etcd snapshots", value: etcdSnapshotsText(v), action: "etcdSnapshots", name: "etcd snapshots" }];
+  return [
+    {
+      label: "etcd snapshots",
+      value: etcdSnapshotsText(v, c.distribution),
+      action: "etcdSnapshots",
+      name: "etcd snapshots",
+    },
+  ];
 }
 
 // withTarget starts from the target the cluster's backups use, or the one there is.
@@ -165,7 +189,10 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
   const fields = withTarget(typed, targets, backups.enabled ? backups.target : undefined);
   const kept = current.enabled ? current.target : undefined;
   const problems = enabled ? etcdProblems(fields, targets, kept) : {};
-  const next: EtcdSnapshotsValue = enabled ? etcdSnapshotsVariable(fields) : { ...current, enabled: false };
+  // The distribution's upload shares the snapshots' settings, so it goes off with them.
+  const { distributionUpload: _, ...rest } = current;
+  const next: EtcdSnapshotsValue = enabled ? etcdSnapshotsVariable(fields) : { ...rest, enabled: false };
+  const uploadHintId = useId();
   const before: EtcdSnapshotsValue = current.enabled ? etcdSnapshotsVariable(etcdFieldsOf(current)) : current;
   const changed = JSON.stringify(next) !== JSON.stringify(before);
   const none = offered !== undefined && targets.length === 0 && !current.enabled;
@@ -268,6 +295,22 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
               />
             )}
           </Field>
+          {uploadsItself(c.distribution) && (
+            <>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={fields.upload}
+                  aria-describedby={uploadHintId}
+                  onChange={(e) => update({ upload: e.target.checked })}
+                />{" "}
+                Also have {distributionName(c.distribution)} upload snapshots of its own
+              </label>
+              <p className="hint" id={uploadHintId}>
+                {uploadHint(c.distribution)}
+              </p>
+            </>
+          )}
           <CredentialField
             label="Access key"
             purpose="backup"
@@ -459,7 +502,16 @@ function SnapshotsSummary({ cluster: c, view: v }: { cluster: Cluster; view: Clu
       <dt>Target</dt>
       <dd>{v.target ?? ""}</dd>
       <dt>Schedule</dt>
-      <dd>{etcdSnapshotsText(etcdSnapshotsOf(c.variables["etcdSnapshots"]))}</dd>
+      <dd>{etcdSnapshotsText({ ...etcdSnapshotsOf(c.variables["etcdSnapshots"]), distributionUpload: false })}</dd>
+      {v.distributionUpload === true && (
+        <>
+          <dt>{distributionName(c.distribution)}&apos;s own</dt>
+          <dd>
+            Uploaded by the servers to the {c.distribution}-etcd folder beside these, on the schedule in UTC; restored
+            by hand with {distributionName(c.distribution)}&apos;s own steps.
+          </dd>
+        </>
+      )}
       <dt>Last snapshot</dt>
       <dd>
         <Status state={s.state} text={s.text} />

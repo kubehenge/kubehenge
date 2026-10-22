@@ -46,6 +46,20 @@ const snapshotting: Cluster = {
   variables: { etcdSnapshots: { enabled: true, target: "store", schedule: "0 */6 * * *", timeZone: "UTC", keep: 10 } },
 };
 
+const uploading: Cluster = {
+  ...cluster,
+  variables: {
+    etcdSnapshots: {
+      enabled: true,
+      target: "store",
+      schedule: "0 */6 * * *",
+      timeZone: "UTC",
+      keep: 10,
+      distributionUpload: true,
+    },
+  },
+};
+
 const taken = "2026-10-21T06:00:00Z";
 const older = "2026-10-21T00:00:00Z";
 
@@ -159,6 +173,81 @@ describe("etcd snapshot settings", () => {
       },
     });
   });
+
+  it("offer RKE2's and k3s's own upload, saying what it grants, and drop it with the snapshots", async () => {
+    expect(etcdSnapshotsText({ enabled: true, target: "store", distributionUpload: true }, "k3s")).toBe(
+      "Every 12 hours from 00:00 (UTC), keeps the last 14, to store; k3s uploads its own too",
+    );
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    let now = snapshotting;
+    const calls = fakeServer({
+      ...signedIn,
+      "GET /api/clusters/clusters/web": () => ({ body: now }),
+      "GET /api/classes": { body: [rke2] },
+      "GET /api/clusters/clusters/web/credentials/backup": { body: { purpose: "backup", set: true, canChange: true } },
+      "PATCH /api/clusters/clusters/web": () => {
+        now = uploading;
+        return { body: now };
+      },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Edit etcd snapshots" }));
+    let dialog = screen.getByRole("dialog", { name: "etcd snapshots" });
+    const upload = within(dialog).getByLabelText("Also have RKE2 upload snapshots of its own");
+    expect(upload).not.toBeChecked();
+    expect(upload).toHaveAccessibleDescription(/access key goes into the Secret kubehenge-etcd-s3/u);
+    expect(upload).toHaveAccessibleDescription(/not encrypted by Kubehenge/u);
+    await user.click(upload);
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: {
+        etcdSnapshots: {
+          enabled: true,
+          target: "store",
+          schedule: "0 */6 * * *",
+          timeZone: "UTC",
+          keep: 10,
+          distributionUpload: true,
+        },
+      },
+    });
+
+    await expect(screen.findByText(/; RKE2 uploads its own too$/u)).resolves.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Edit etcd snapshots" }));
+    dialog = screen.getByRole("dialog", { name: "etcd snapshots" });
+    expect(within(dialog).getByLabelText("Also have RKE2 upload snapshots of its own")).toBeChecked();
+    await user.click(within(dialog).getByLabelText("Take etcd snapshots"));
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: {
+        etcdSnapshots: { enabled: false, target: "store", schedule: "0 */6 * * *", timeZone: "UTC", keep: 10 },
+      },
+    });
+  });
+
+  it("offer no upload of its own on kubeadm", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const kubeadm: ClusterClass = { ...rke2, name: "kubehenge-kubeadm", distribution: "kubeadm" };
+    fakeServer({
+      ...signedIn,
+      "GET /api/clusters/clusters/web": {
+        body: { ...snapshotting, class: "kubehenge-kubeadm", distribution: "kubeadm", version: "v1.36.5" },
+      },
+      "GET /api/classes": { body: [kubeadm] },
+      "GET /api/clusters/clusters/web/credentials/backup": { body: { purpose: "backup", set: true, canChange: true } },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Edit etcd snapshots" }));
+    const dialog = screen.getByRole("dialog", { name: "etcd snapshots" });
+    expect(within(dialog).getByLabelText("Keep")).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText(/upload snapshots of its own/u)).not.toBeInTheDocument();
+  });
 });
 
 describe("a cluster's etcd snapshots", () => {
@@ -185,6 +274,22 @@ describe("a cluster's etcd snapshots", () => {
 
     await user.click(screen.getByRole("button", { name: "Take a snapshot now" }));
     await waitFor(() => expect(calls.map((c) => c.key)).toContain("POST /api/clusters/clusters/web/etcd-snapshots"));
+  });
+
+  it("say where RKE2's own snapshots go and how they come back", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/backups");
+    fakeServer({
+      ...base,
+      "GET /api/clusters/clusters/web": { body: uploading },
+      "GET /api/clusters/clusters/web/etcd-snapshots": { body: { ...view, distributionUpload: true } },
+    });
+    render(<App />);
+
+    await expect(screen.findByText("RKE2's own")).resolves.toBeInTheDocument();
+    expect(screen.getByText("RKE2's own").nextElementSibling).toHaveTextContent(
+      /to the rke2-etcd folder beside these, on the schedule in UTC; restored by hand with RKE2's own steps/u,
+    );
+    expect(screen.getByText("Every 6 hours from 00:00 (UTC), keeps the last 10, to store")).toBeInTheDocument();
   });
 
   it("restore through the guest agent once the cluster's name is typed", async () => {

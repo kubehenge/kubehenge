@@ -86,6 +86,9 @@ type EtcdSnapshots struct {
 	Schedule string `json:"schedule,omitempty"`
 	TimeZone string `json:"timeZone,omitempty"`
 	Keep     int    `json:"keep,omitempty"`
+	// DistributionUpload has RKE2's or k3s's servers also upload snapshots of their own to the
+	// target, on the same schedule read in UTC and keeping as many (etcdupload.go).
+	DistributionUpload bool `json:"distributionUpload,omitempty"`
 }
 
 // withDefaults fills in what the cluster left to the chart's schema.
@@ -117,7 +120,10 @@ func EtcdSnapshotsOf(c *clusterv1.Cluster) (EtcdSnapshots, error) {
 // schedule cron reads, as checkBackups holds its backups.
 func checkEtcdSnapshots(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) error {
 	s, err := EtcdSnapshotsOf(c)
-	if err != nil || !s.Enabled {
+	if err != nil {
+		return err
+	}
+	if err := checkEtcdUpload(c, &s); err != nil || !s.Enabled {
 		return err
 	}
 	if s.Target == "" {

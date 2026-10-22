@@ -211,7 +211,8 @@ func TestEtcdSnapshotsView(t *testing.T) {
 	rec := b.do("GET", "/api/clusters/default/one/etcd-snapshots", "")
 	expect(t, rec, http.StatusOK)
 	v := etcdViewOf(t, rec.Body.Bytes())
-	if !v.Enabled || v.Target != "store" || v.Keep != 5 || v.Schedule != "0 */12 * * *" || !v.CanSnapshot || !v.CanRestore || v.Automatic || v.Message != "" {
+	if !v.Enabled || v.Target != "store" || v.Keep != 5 || v.Schedule != "0 */12 * * *" || !v.CanSnapshot || !v.CanRestore || v.Automatic ||
+		v.DistributionUpload || v.Message != "" {
 		t.Fatalf("view %+v", v)
 	}
 	names := make([]string, 0, len(v.Snapshots))
@@ -239,6 +240,30 @@ func TestEtcdSnapshotsView(t *testing.T) {
 		{"POST", "/api/clusters/default/one/etcd-restores"},
 	} {
 		expect(t, viewer.do(req[0], req[1], `{"snapshot":"`+h.name+`"}`), http.StatusForbidden)
+	}
+}
+
+func TestEtcdSnapshotsViewWithTheDistributionsUpload(t *testing.T) {
+	t.Parallel()
+	h := etcdSnapshotting(t)
+	c := &clusterv1.Cluster{}
+	if err := h.kube.Get(h.t.Context(), client.ObjectKey{Namespace: "default", Name: "one"}, c); err != nil {
+		t.Fatal(err)
+	}
+	for i := range c.Spec.Topology.Variables {
+		if c.Spec.Topology.Variables[i].Name == "etcdSnapshots" {
+			c.Spec.Topology.Variables[i].Value.Raw = []byte(`{"enabled":true,"target":"store","distributionUpload":true}`)
+		}
+	}
+	if err := h.kube.Update(h.t.Context(), c); err != nil {
+		t.Fatal(err)
+	}
+	b := h.browser()
+	b.signIn("dev@pve")
+	rec := b.do("GET", "/api/clusters/default/one/etcd-snapshots", "")
+	expect(t, rec, http.StatusOK)
+	if v := etcdViewOf(t, rec.Body.Bytes()); !v.DistributionUpload {
+		t.Errorf("view %+v", v)
 	}
 }
 

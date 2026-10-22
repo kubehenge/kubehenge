@@ -126,7 +126,7 @@ func monitoringValues(distribution templates.Distribution, proxy Image, addons *
 			},
 			"tlsSecret": map[string]any{"enabled": true, "secretName": nodeExporter + "-tls", "caItem": "ca.crt"},
 			prometheus: map[string]any{"monitor": map[string]any{
-				"scheme": "https", "tlsConfig": clientTLS(nodeExporter + "." + nodeExporterNamespace + ".svc"),
+				"scheme": schemeHTTPS, "tlsConfig": clientTLS(nodeExporter + "." + nodeExporterNamespace + ".svc"),
 			}},
 		},
 		// cert-manager is there for the proxies already; it renews the webhook's certificate
@@ -341,7 +341,7 @@ func metricsProxy(name string, port int32, scheme string, affinity *corev1.Affin
 	upstream := []string{"--upstream=http://127.0.0.1:" + p + "/"}
 	mounts := []corev1.VolumeMount{{Name: "tls", MountPath: "/etc/kube-rbac-proxy", ReadOnly: true}}
 	volumes := []corev1.Volume{{Name: "tls", Secret: &corev1.SecretVolumeSource{SecretName: metricsProxyTLS}}}
-	if scheme == "https" {
+	if scheme == schemeHTTPS {
 		upstream = []string{"--upstream=https://localhost:" + p + "/", "--upstream-ca-file=/etc/kube-rbac-proxy-upstream/ca.crt"}
 		mounts = append(mounts, corev1.VolumeMount{Name: "upstream", MountPath: "/etc/kube-rbac-proxy-upstream", ReadOnly: true})
 		volumes = append(volumes, corev1.Volume{Name: "upstream", ConfigMap: &corev1.ConfigMapVolumeSource{Name: "kube-root-ca.crt"}})
