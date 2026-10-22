@@ -1,7 +1,7 @@
 import type { JSX } from "react";
 
-import { controlPlaneSizes } from "./ClusterDetail";
 import {
+  controlPlaneSizes,
   machineLeast,
   memoryStepMiB,
   variable,

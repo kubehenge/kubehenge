@@ -45,6 +45,20 @@ variable "provider_manifests" {
   default = {}
 }
 
+# The S3 store test/e2e/workload-cluster.sh serves the clusters' backups from.
+variable "backup_targets" {
+  type = list(object({
+    name           = string
+    endpoint       = optional(string)
+    bucket         = string
+    region         = optional(string)
+    prefix         = optional(string)
+    ca_certificate = optional(string)
+    checksums      = optional(bool, true)
+  }))
+  default = []
+}
+
 module "management_cluster" {
   # The whole repository, as a published module source would fetch it: the module reads ../charts.
   source = "${var.repository}//management-cluster"
@@ -71,6 +85,7 @@ module "management_cluster" {
   version_overrides  = var.version_overrides
   provider_images    = var.provider_images
   provider_manifests = var.provider_manifests
+  backup_targets     = var.backup_targets
 
   api_address = "172.20.99.10"
   gateway     = "172.20.99.1"

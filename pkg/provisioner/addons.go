@@ -44,11 +44,27 @@ const (
 	tolerationsKey    = "tolerations"
 	memoryKey         = "memory"
 	cpuKey            = "cpu"
+	// The least CPU and memory the small add-on pods ask for.
+	cpu10m     = "10m"
+	memory64Mi = "64Mi"
 
 	// The CNIs Kubehenge installs, as the cni variable names them.
 	cniCilium = "cilium"
 	cniCalico = "calico"
 )
+
+// restrictedContainer is a container's security context at Pod Security's restricted level, with
+// the fields given besides.
+func restrictedContainer(with map[string]any) map[string]any {
+	context := map[string]any{"allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []any{"ALL"}}}
+	maps.Copy(context, with)
+	return context
+}
+
+// runtimeDefault is the seccomp profile Pod Security's restricted level asks for.
+func runtimeDefault() map[string]any {
+	return map[string]any{"type": string(corev1.SeccompProfileTypeRuntimeDefault)}
+}
 
 // Charts locates the Helm charts installed into clusters: the cloud controller manager and CSI
 // plugin into every one, a CNI into those whose distribution has none of its own, and the add-ons
@@ -75,9 +91,14 @@ type Charts struct {
 	// and of the one in front of Loki.
 	KubeRBACProxy Image
 	// Loki keeps the logs that Alloy collects; Alloy runs AlloyImage, which its chart takes apart.
-	Loki            Chart
-	Alloy           Chart
-	AlloyImage      Image
+	Loki       Chart
+	Alloy      Chart
+	AlloyImage Image
+	// Velero is the backups' chart; its server, node agents and volume restores run VeleroImage, with
+	// VeleroPlugin's S3 plugin.
+	Velero          Chart
+	VeleroImage     Image
+	VeleroPlugin    Image
 	Kyverno         Chart
 	KyvernoPolicies Chart
 	// Istio is istiod's chart, installed with its base, cni and ztunnel charts at the same version.
@@ -104,6 +125,7 @@ type Addons struct {
 	Rancher      Rancher
 	Monitoring   Monitoring
 	Logs         Logs
+	Backups      Backups
 	PodSecurity  PodSecurity
 	Istio        Istio
 	ClusterMesh  ClusterMesh
@@ -113,6 +135,10 @@ type Addons struct {
 	// CSINewest runs the CSI plugin's newest release, once the cluster's user holds
 	// Datastore.Allocate on its storage, as its csi variable asks.
 	CSINewest bool
+
+	// backupTarget is the target the backups name, found in the cluster's class; nil while it is
+	// not, when Velero is neither installed nor removed.
+	backupTarget *BackupTarget
 }
 
 // addonsOf reads a cluster's add-on variables.
@@ -128,6 +154,10 @@ func addonsOf(cluster *clusterv1.Cluster) (Addons, error) {
 	if a.Logs, _, err = optionalVariable[Logs](cluster, logsAddon); err != nil {
 		return a, err
 	}
+	if a.Backups, _, err = optionalVariable[Backups](cluster, backupsVariable); err != nil {
+		return a, err
+	}
+	a.Backups.withDefaults()
 	if a.PodSecurity, _, err = optionalVariable[PodSecurity](cluster, podSecurityVariable); err != nil {
 		return a, err
 	}
@@ -540,18 +570,16 @@ func headlampValues(h Headlamp) map[string]any {
 		"config":             map[string]any{"oidc": map[string]any{"secret": map[string]any{"create": false}}},
 		"pluginsManager":     map[string]any{"enabled": false},
 		// The chart's own default leaves out what Pod Security's restricted level requires.
-		"securityContext": map[string]any{
-			"runAsNonRoot":             true,
-			"runAsUser":                user,
-			"runAsGroup":               group,
-			"privileged":               false,
-			"allowPrivilegeEscalation": false,
-			"readOnlyRootFilesystem":   true,
-			"capabilities":             map[string]any{"drop": []any{"ALL"}},
-			seccompProfileKey:          map[string]any{"type": "RuntimeDefault"},
-		},
+		"securityContext": restrictedContainer(map[string]any{
+			"runAsNonRoot":           true,
+			"runAsUser":              user,
+			"runAsGroup":             group,
+			"privileged":             false,
+			"readOnlyRootFilesystem": true,
+			seccompProfileKey:        runtimeDefault(),
+		}),
 		"resources": map[string]any{
-			requestsKey: map[string]any{cpuKey: "10m", memoryKey: "64Mi"},
+			requestsKey: map[string]any{cpuKey: cpu10m, memoryKey: memory64Mi},
 			"limits":    map[string]any{memoryKey: "256Mi"},
 		},
 	}
@@ -605,7 +633,7 @@ func traefikValues(endpoint string) map[string]any {
 		// drop a host's client-certificate check (GHSA-g55h-rg46-x9c5).
 		"core":         map[string]any{"strictTLSOptions": true},
 		tolerationsKey: []any{toleration(controlPlaneTaint.Key, controlPlaneTaint.Effect)},
-		"resources":    map[string]any{requestsKey: map[string]any{cpuKey: "10m", memoryKey: "64Mi"}},
+		"resources":    map[string]any{requestsKey: map[string]any{cpuKey: cpu10m, memoryKey: memory64Mi}},
 	}
 }
 
@@ -765,6 +793,9 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 	}
 	if addons.logsOn() {
 		wanted = append(wanted, logsCharts(charts, distribution, addons.Logs)...)
+	}
+	if addons.Backups.Enabled && addons.backupTarget != nil {
+		wanted = append(wanted, chartProxy{veleroRelease, veleroRelease, VeleroNamespace, charts.Velero, veleroValues(charts, &addons.Backups, addons.backupTarget, cluster)})
 	}
 	if addons.PodSecurity.kyvernoOn() {
 		wanted = append(wanted,

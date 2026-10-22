@@ -11,9 +11,21 @@ import {
 } from "react";
 
 import { api, bridgesOf } from "./api";
+import { backupKeys } from "./Backups";
+import { BackupTargets, cleanTargets, targetProblems, targetSummary } from "./BackupTargets";
+import { CredentialField } from "./CredentialField";
 import { cidr, isIP, isVLAN, list, maskOf, pointToPoint, rangeProblem, sameNetwork, toInt } from "./network";
 import { OIDCProviders, cleanProviders, oidcProblems } from "./OIDCProviders";
-import type { Bridge, Job, ManagementSettings, OIDCProvider, PveNode, SetupStatus, Storage } from "./types";
+import type {
+  BackupTarget,
+  Bridge,
+  Job,
+  ManagementSettings,
+  OIDCProvider,
+  PveNode,
+  SetupStatus,
+  Storage,
+} from "./types";
 import {
   Choice,
   Dialog,
@@ -62,6 +74,7 @@ export interface SetupForm {
   proxmoxHA: boolean;
   offerHARules: boolean;
   clusterDatastoreAllocate: boolean;
+  backupTargets: BackupTarget[];
   passphrase: string;
   confirm: string;
 }
@@ -131,6 +144,9 @@ export function settings(f: SetupForm): ManagementSettings {
   if (f.clusterDatastoreAllocate) {
     s.clusterDatastoreAllocate = true;
   }
+  if (f.backupTargets.length > 0) {
+    s.backupTargets = cleanTargets(f.backupTargets);
+  }
   return s;
 }
 
@@ -173,6 +189,7 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     proxmoxHA: saved.proxmoxHA === true,
     offerHARules: saved.offerHARules === true,
     clusterDatastoreAllocate: saved.clusterDatastoreAllocate === true,
+    backupTargets: saved.backupTargets ?? [],
     passphrase: "",
     confirm: "",
   };
@@ -191,6 +208,7 @@ export type SetupField =
   | "workload"
   | "bootstrapDatastore"
   | "clusterOIDC"
+  | "backupTargets"
   | "mirrors"
   | "podSubnets"
   | "serviceSubnets"
@@ -342,6 +360,10 @@ function offerProblems(f: SetupForm): SetupProblems {
   const oidc = oidcProblems(f.clusterOIDC);
   if (oidc.length > 0) {
     p.clusterOIDC = oidc.join(" ");
+  }
+  const targets = targetProblems(f.backupTargets);
+  if (targets.length > 0) {
+    p.backupTargets = targets.join(" ");
   }
   const bad = badMirror(f.mirrors);
   if (bad !== undefined) {
@@ -509,6 +531,10 @@ function ManagedSummary({
       "Identity providers",
       s.clusterOIDC && s.clusterOIDC.length > 0 ? s.clusterOIDC.map((p) => p.issuerURL).join(", ") : "None",
     ],
+    [
+      "Backup targets",
+      s.backupTargets && s.backupTargets.length > 0 ? s.backupTargets.map((t) => targetSummary(t)).join(", ") : "None",
+    ],
     ["Registry mirrors", s.registryMirrors ? formatMirrors(s.registryMirrors).split("\n").join(", ") : "None"],
     ["Pod ranges", s.podSubnets?.join(", ") ?? "Chosen clear of the nodes' network"],
     ["Service ranges", s.serviceSubnets?.join(", ") ?? "Chosen clear of the nodes' network"],
@@ -539,6 +565,16 @@ function ManagedSummary({
           </button>
         </div>
       </div>
+      {status.ready && (s.backupTargets ?? []).length > 0 && (
+        <div className="box">
+          <CredentialField
+            label="Backup access key for every cluster"
+            purpose="backup"
+            keys={backupKeys}
+            hint="Taken by every cluster that backs up without a key of its own. One key for all lets each cluster's Velero reach the others' folders in the target, though not read them: each cluster's backups are encrypted with keys of its own. A key per cluster, limited to its folder, keeps them apart."
+          />
+        </div>
+      )}
       {applying && <ApplyAgain settings={s} onClose={() => setApplying(false)} onStarted={onStarted} />}
     </section>
   );
@@ -1245,6 +1281,15 @@ function SetupWizard({
             had.
           </p>
           <OIDCProviders initial={form.clusterOIDC} showAll={attempted} onChange={(v) => set("clusterOIDC", v)} />
+        </fieldset>
+        <fieldset className="group">
+          <legend>Backup targets</legend>
+          <p className="muted">
+            S3 stores clusters back up to with Velero. Each cluster writes into a folder of its own beneath the prefix,
+            with an access key of its own or the one for every cluster, and encrypts what it writes with keys of its
+            own.
+          </p>
+          <BackupTargets initial={form.backupTargets} showAll={attempted} onChange={(v) => set("backupTargets", v)} />
         </fieldset>
         <AdvancedFields form={form} set={set} shown={shown} fixed={fixed !== undefined} detailsRef={advancedRef} />
         <PassphraseFields

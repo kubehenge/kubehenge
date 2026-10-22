@@ -1,3 +1,13 @@
+import {
+  backupKeys,
+  backupProblems,
+  backupsText,
+  backupsVariable,
+  classTargets,
+  newBackupFields,
+  withTarget,
+  type BackupFields,
+} from "./Backups";
 import { defaultMinutes, defaultStart, describe, type UpgradeMode, type UpgradePolicy } from "./ClusterUpgrades";
 import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implementation } from "./LoadBalancer";
 import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
@@ -24,6 +34,7 @@ import {
   registeredWithRancher,
   sentence,
 } from "./ui";
+// oxlint-disable-next-line import/max-dependencies -- the wizard's form holds, checks and sends every feature's own setting
 import { quantity, record, text, texts } from "./values";
 
 export const steps = ["General", "Network", "Machines", "Add-ons", "Identity providers", "Confirm"] as const;
@@ -44,6 +55,10 @@ export const minMemoryMiB = 1024;
 export const memoryStepMiB = 8;
 
 const mibPerGiB = 1024;
+
+// Odd sizes keep etcd's quorum.
+// oxlint-disable-next-line eslint/no-magic-numbers -- the sizes themselves, named by the constant
+export const controlPlaneSizes = [1, 3, 5, 7];
 
 export interface Form {
   name: string;
@@ -84,6 +99,11 @@ export interface Form {
   rancherRegister: boolean;
   oidc: OIDCProvider[];
   upgradeMode: UpgradeMode;
+  backups: boolean;
+  backupFields: BackupFields;
+  /** Whether the cluster gets an access key of its own, stored once it is created. */
+  backupOwnKey: boolean;
+  backupKey: Record<string, string>;
 }
 
 /** newUpgrades is the policy a new cluster starts with: every day from 02:00 for four hours, in the browser's time zone. */
@@ -148,6 +168,7 @@ const addonNames = [
   ["certManager", "cert-manager"],
   ["rancher", "Rancher"],
   ["rancherAgent", "Rancher's agent"],
+  ["backups", "Velero"],
 ] as const;
 
 // maxCiliumName is the longest cluster name Cilium takes, which names the cluster in a mesh.
@@ -191,6 +212,7 @@ export function addonMemory(form: Form, c: ClusterClass | undefined): { names: s
     certManager: form.monitoring || form.rancherInstall,
     rancher: form.rancherInstall,
     rancherAgent: !form.rancherInstall && form.rancherRegister,
+    backups: form.backups && variable(c, "backups") !== undefined,
   };
   const names: string[] = [];
   let mib = 0;
@@ -263,6 +285,16 @@ export function withRoom(form: Form, c: ClusterClass | undefined): Form {
   return raised;
 }
 
+/**
+ * withBackupChoices takes the one backup target a class offers until another is chosen, and a key of
+ * the cluster's own only for those who may store one.
+ */
+export const withBackupChoices = (f: Form, c: ClusterClass | undefined, canTrust: boolean | undefined): Form => ({
+  ...f,
+  backupFields: withTarget(f.backupFields, classTargets(c)),
+  backupOwnKey: f.backupOwnKey && canTrust !== false,
+});
+
 /** newForm is the wizard before anything is chosen. */
 export const newForm = (): Form => ({
   name: "",
@@ -303,6 +335,10 @@ export const newForm = (): Form => ({
   rancherRegister: true,
   oidc: [],
   upgradeMode: "off",
+  backups: false,
+  backupFields: newBackupFields(),
+  backupOwnKey: true,
+  backupKey: {},
 });
 
 /**
@@ -359,6 +395,9 @@ function addOnVariables(form: Form, defined: Set<string>): Record<string, unknow
     variables["rancher"] = { install: true, hostname: form.rancherHostname };
   } else if (!form.rancherRegister) {
     variables["rancher"] = { register: false };
+  }
+  if (form.backups) {
+    variables["backups"] = backupsVariable(form.backupFields);
   }
   return variables;
 }
@@ -544,6 +583,10 @@ function addOnRows(form: Form, defined: Set<string>): [string, string][] {
   if (defined.has("rancher")) {
     rows.push(["Rancher", rancherChoice(form)]);
   }
+  if (defined.has("backups")) {
+    const key = form.backupOwnKey ? "an access key of its own" : "the access key for every cluster";
+    rows.push(["Backups", form.backups ? `${backupsText(backupsVariable(form.backupFields))}, with ${key}` : "Off"]);
+  }
   return rows;
 }
 
@@ -577,6 +620,10 @@ export type FieldKey =
   | "rancherHostname"
   | "headlampHostname"
   | "logs"
+  | "backupTarget"
+  | "backupSchedule"
+  | "backupRetention"
+  | "backupKey"
   | "oidc";
 
 type Problems = Partial<Record<FieldKey, string>>;
@@ -709,6 +756,34 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
   return p;
 }
 
+function addOnProblems(form: Form, c: ClusterClass | undefined): Problems {
+  const p: Problems = {};
+  if (form.rancherInstall && !form.rancherHostname) {
+    p.rancherHostname = "Rancher needs a host name.";
+  }
+  const logs = logsChosen(form) ? logsProblem(form.logs) : undefined;
+  if (logs !== undefined) {
+    p.logs = logs;
+  }
+  if (!form.backups || variable(c, "backups") === undefined) {
+    return p;
+  }
+  const b = backupProblems(form.backupFields, classTargets(c));
+  for (const [key, found] of [
+    ["backupTarget", b.target],
+    ["backupSchedule", b.schedule],
+    ["backupRetention", b.retention],
+  ] as const) {
+    if (found !== undefined) {
+      p[key] = found;
+    }
+  }
+  if (form.backupOwnKey && !backupKeys.every((k) => filled(form.backupKey[k.key]))) {
+    p.backupKey = "Both parts of the access key.";
+  }
+  return p;
+}
+
 // fieldProblems says, by field, what keeps a step from being complete.
 export function fieldProblems(step: Step, form: Form, c: ClusterClass | undefined): Problems {
   switch (step) {
@@ -722,15 +797,7 @@ export function fieldProblems(step: Step, form: Form, c: ClusterClass | undefine
       return machineProblems(form, c);
     }
     case "Add-ons": {
-      const p: Problems = {};
-      if (form.rancherInstall && !form.rancherHostname) {
-        p.rancherHostname = "Rancher needs a host name.";
-      }
-      const logs = logsChosen(form) ? logsProblem(form.logs) : undefined;
-      if (logs !== undefined) {
-        p.logs = logs;
-      }
-      return p;
+      return addOnProblems(form, c);
     }
     case "Identity providers": {
       const o = oidcProblems(form.oidc);

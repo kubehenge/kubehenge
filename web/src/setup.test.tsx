@@ -3,6 +3,7 @@ import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
+import { cleanTargets, targetProblems } from "./BackupTargets";
 import { fakeServer, reads, type Route } from "./fake-server";
 import { formOf, settings, setupFieldProblems, setupProblems, type SetupForm } from "./Setup";
 
@@ -26,6 +27,7 @@ const form: SetupForm = {
   proxmoxHA: false,
   offerHARules: false,
   clusterDatastoreAllocate: false,
+  backupTargets: [],
   passphrase: "correct horse battery staple",
   confirm: "correct horse battery staple",
 };
@@ -534,5 +536,39 @@ describe("setup", () => {
     render(<App />);
     await expect(screen.findByRole("heading", { name: "Set up Kubehenge" })).resolves.toBeInTheDocument();
     expect(screen.getByText(/The management cluster was removed .* by root@pam\./u)).toBeInTheDocument();
+  });
+});
+
+describe("backup targets", () => {
+  it("are checked as the appliance checks them", () => {
+    expect(targetProblems([{ name: "store", bucket: "backups", endpoint: "https://s3.example.org" }])).toStrictEqual(
+      [],
+    );
+    expect(
+      targetProblems([
+        { name: "Store", bucket: "b", endpoint: "http://s3.example.org", prefix: "/x" },
+        { name: "aws", bucket: "aws-backups", region: "EU" },
+      ]),
+    ).toStrictEqual([
+      "Backup target 1: a name of lower-case letters, digits and dashes.",
+      "Backup target 1: the endpoint is an https:// URL without query, fragment or user.",
+      "Backup target 1: an S3 bucket name: 3 to 63 lower-case letters, digits, dots and dashes.",
+      "Backup target 1: folders of letters, digits and !_.*'()- apart by /, without one at either end.",
+      "Backup target 2: a region such as eu-central-2.",
+    ]);
+    expect(
+      cleanTargets([{ name: "aws", bucket: "aws-backups", endpoint: "", region: " ", noChecksums: false }]),
+    ).toStrictEqual([{ name: "aws", bucket: "aws-backups" }]);
+  });
+
+  it("are part of the appliance's settings", () => {
+    const store = { name: "store", bucket: "backups", endpoint: "https://s3.example.org", noChecksums: true };
+    const saved = settings({ ...formOf(), backupTargets: [store] });
+    expect(saved.backupTargets).toStrictEqual([store]);
+    expect(formOf(saved).backupTargets).toStrictEqual([store]);
+    expect(settings(formOf())).not.toHaveProperty("backupTargets");
+    expect(setupFieldProblems({ ...formOf(), backupTargets: [{ name: "", bucket: "backups" }] }).backupTargets).toBe(
+      "Backup target 1: a name of lower-case letters, digits and dashes.",
+    );
   });
 });

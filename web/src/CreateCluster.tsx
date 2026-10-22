@@ -17,6 +17,7 @@ import {
   steps,
   summary,
   variable,
+  withBackupChoices,
   withClass,
   withRoom,
   type FieldKey,
@@ -42,6 +43,7 @@ const raising = new Set<keyof Form>([
   "loadBalancer",
   "rancherInstall",
   "rancherRegister",
+  "backups",
 ]);
 
 export function CreateCluster({
@@ -143,13 +145,17 @@ export function CreateCluster({
   const bridgeOptions = offeredBridges(bridgesByNode, classBridges(cls));
   const usableStorages = offeredStorages(storages, classStorages(cls));
   // Where there is only one bridge or storage to choose, it is chosen until another is.
-  const form: Form = {
-    ...entered,
-    bridge: filled(entered.bridge)
-      ? entered.bridge
-      : (sole(bridgeOptions.filter((b) => b.usable).map((b) => b.bridge)) ?? ""),
-    storage: filled(entered.storage) ? entered.storage : (sole(usableStorages.map((s) => s.storage)) ?? ""),
-  };
+  const form: Form = withBackupChoices(
+    {
+      ...entered,
+      bridge: filled(entered.bridge)
+        ? entered.bridge
+        : (sole(bridgeOptions.filter((b) => b.usable).map((b) => b.bridge)) ?? ""),
+      storage: filled(entered.storage) ? entered.storage : (sole(usableStorages.map((s) => s.storage)) ?? ""),
+    },
+    cls,
+    canTrust,
+  );
   const haOffered = offersHA(cls, usableStorages, form.storage);
   const csi = csiOffer({ cls, storages: usableStorages, storage: form.storage, clusters });
 
@@ -192,7 +198,17 @@ export function CreateCluster({
     setError(undefined);
     try {
       const c = await api.create(request(form, cls));
-      navigate(clusterPath(c.namespace, c.name));
+      if (!form.backups || !form.backupOwnKey || variable(cls, "backups") === undefined) {
+        navigate(clusterPath(c.namespace, c.name));
+        return;
+      }
+      try {
+        await api.storeCredential("backup", form.backupKey, { namespace: c.namespace, name: c.name });
+        navigate(clusterPath(c.namespace, c.name));
+      } catch {
+        // The cluster exists; its backups view says that Velero waits for a key, which its Options store.
+        navigate(clusterPath(c.namespace, c.name, "backups"));
+      }
     } catch (err) {
       setError(errorMessage(err));
       setBusy(false);

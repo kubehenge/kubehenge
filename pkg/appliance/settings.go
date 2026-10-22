@@ -44,6 +44,8 @@ type Settings struct {
 	// ClusterOIDC are the identity providers every new workload cluster trusts unless it names its
 	// own.
 	ClusterOIDC []OIDCProvider `json:"clusterOIDC,omitempty"`
+	// BackupTargets are the S3 stores clusters that switch backups on choose from.
+	BackupTargets []BackupTarget `json:"backupTargets,omitempty"`
 	// ProxmoxHA has Proxmox VE HA keep the clusters' control-plane VMs on separate nodes, with a
 	// second controller token that holds Sys.Console on /.
 	ProxmoxHA bool `json:"proxmoxHA,omitempty"`
@@ -77,12 +79,17 @@ const (
 	maxVLAN = 4094
 )
 
+// plainHTTPS tells whether s is an https:// URL with a host and without query, fragment or user.
+func plainHTTPS(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.RawQuery == "" && u.Fragment == "" && u.User == nil
+}
+
 // Validate checks a provider as the API server would on start, where a mistake keeps the control
 // plane from coming up.
 func (p *OIDCProvider) Validate() error {
-	u, err := url.Parse(p.IssuerURL)
 	switch {
-	case err != nil || u.Scheme != "https" || u.Host == "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil:
+	case !plainHTTPS(p.IssuerURL):
 		return fmt.Errorf("issuer %q: an https:// URL without query, fragment or user", p.IssuerURL)
 	case strings.TrimSpace(p.ClientID) == "":
 		return fmt.Errorf("issuer %s: clientID is required", p.IssuerURL)
@@ -173,6 +180,9 @@ func (s *Settings) Validate() error {
 	s.checkMirrors(&p)
 	if err = ValidOIDC(s.ClusterOIDC); err != nil {
 		p.addf("Identity providers: %s", err)
+	}
+	if err = ValidBackupTargets(s.BackupTargets); err != nil {
+		p.addf("Backup targets: %s", err)
 	}
 	err = p.err()
 	if err != nil {

@@ -324,11 +324,26 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cluster *clusterv1.Clu
 
 // addons reads the add-ons the cluster switches on, with Rancher switched off when it is refused,
 // and why it is refused, or "". A Rancher refused here is neither installed nor removed: what the
-// cluster already runs stays.
+// cluster already runs stays; so do backups whose target is not one of the class's, or whose
+// schedule Velero would not take.
 func (r *Reconciler) addons(ctx context.Context, cluster *clusterv1.Cluster) (Addons, string, error) {
 	addons, err := addonsOf(cluster)
 	if err != nil {
 		return addons, "", err
+	}
+	if addons.Backups.Enabled {
+		target, found, terr := r.backupTarget(ctx, cluster, addons.Backups.Target)
+		invalid := addons.Backups.valid()
+		switch {
+		case terr != nil:
+			return addons, "", terr
+		case !found:
+			r.holdBackups(ctx, cluster, "BackupTargetMissing", fmt.Sprintf("backup target %q is not one an administrator set", addons.Backups.Target))
+		case invalid != nil:
+			r.holdBackups(ctx, cluster, "BackupsInvalid", invalid.Error())
+		default:
+			addons.backupTarget = &target
+		}
 	}
 	refused, err := r.refuseRancher(ctx, cluster, addons.Rancher)
 	if err != nil {
@@ -345,10 +360,10 @@ func (r *Reconciler) addons(ctx context.Context, cluster *clusterv1.Cluster) (Ad
 }
 
 // removeSwitchedOff removes the proxies of Headlamp, monitoring, logs, the load balancer and Kyverno
-// when the cluster switches them off, the nodes' Alloy when the API collects the logs, and kube-vip's
-// cloud provider when the load balancer is MetalLB;
-// Rancher's and Istio's removals wait on other clusters, apart from these. It reports whether a
-// removal waits on another.
+// when the cluster switches them off, the nodes' Alloy when the API collects the logs, kube-vip's
+// cloud provider when the load balancer is MetalLB, and Velero with what it leaves; Rancher's and
+// Istio's removals wait on other clusters, apart from these. It reports whether a removal waits on
+// another.
 func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons) (bool, error) {
 	var off []string
 	if !addons.Headlamp.Enabled {
@@ -367,10 +382,18 @@ func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.C
 	if err := r.removeProxies(ctx, cluster, off...); err != nil {
 		return false, err
 	}
-	if !addons.PodSecurity.kyvernoOn() {
-		return r.removeKyverno(ctx, cluster)
+	backupsWaiting := false
+	if !addons.Backups.Enabled {
+		var err error
+		if backupsWaiting, err = r.removeBackups(ctx, cluster); err != nil {
+			return false, err
+		}
 	}
-	return false, nil
+	if !addons.PodSecurity.kyvernoOn() {
+		kyvernoWaiting, err := r.removeKyverno(ctx, cluster)
+		return backupsWaiting || kyvernoWaiting, err
+	}
+	return backupsWaiting, nil
 }
 
 // applyAddons applies what the cluster gets installed: the Secrets of its ClusterResourceSet, the
@@ -418,7 +441,7 @@ func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster
 	if err := applyOwned(ctx, r.Client, cluster, crs, func(got *addonsv1.ClusterResourceSet) { got.Spec = *desired }); err != nil {
 		return false, err
 	}
-	if installing, err := r.applyProxies(ctx, cluster, proxies); err != nil || installing {
+	if installing, err := r.applyProxies(ctx, cluster, proxies, addons); err != nil || installing {
 		return installing, err
 	}
 	return waiting, nil
@@ -447,8 +470,8 @@ func resourceSetSecrets(cluster *clusterv1.Cluster, resources *corev1.Secret, cn
 }
 
 // applyProxies applies the cluster's HelmChartProxies, in order, and reports whether one waits on
-// another.
-func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluster, proxies []*unstructured.Unstructured) (bool, error) {
+// another or on what it needs in the cluster.
+func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluster, proxies []*unstructured.Unstructured, addons *Addons) (bool, error) {
 	waiting := false
 	for _, p := range proxies {
 		var wait func(context.Context, *clusterv1.Cluster) (bool, error)
@@ -459,6 +482,10 @@ func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluste
 			wait = r.rancherConfigWaits
 		case traefikProxy(cluster):
 			wait = gatewayAPIWaits
+		case veleroProxy(cluster):
+			wait = func(ctx context.Context, c *clusterv1.Cluster) (bool, error) {
+				return r.backupsWait(ctx, c, &addons.Backups)
+			}
 		}
 		if wait != nil {
 			waits, err := wait(ctx, cluster)

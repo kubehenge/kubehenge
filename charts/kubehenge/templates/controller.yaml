@@ -30,10 +30,11 @@ rules:
     resources: [proxmoxmachines]
     verbs: [get, list, watch, patch]
   # Each cluster's token and the ClusterResourceSet Secret delivering it live in the cluster's
-  # namespace, which can be any.
+  # namespace, which can be any. delete: an identity's token goes once the cluster no longer wants
+  # the identity, such as the backup ones when backups are switched off.
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [get, create, update, patch]
+    verbs: [get, create, update, patch, delete]
   - apiGroups: [addons.cluster.x-k8s.io]
     resources: [clusterresourcesets]
     verbs: [get, list, watch, create, update, patch]
@@ -201,7 +202,7 @@ spec:
             - --datastore-allocate-role={{ . }}
             - --management-storages={{ join "," $.Values.proxmox.datastoreAllocate.managementStorages }}
             {{- end }}
-            {{- range $flag, $chart := dict "ccm-chart" .Values.addons.cloudControllerManager "csi-chart" .Values.addons.csiPlugin "csi-newest-chart" .Values.addons.csiPluginNewest "cilium-chart" .Values.addons.cilium "calico-chart" .Values.addons.calico "headlamp-chart" .Values.addons.headlamp "rancher-chart" .Values.addons.rancher "cert-manager-chart" .Values.addons.certManager "monitoring-chart" .Values.addons.monitoring "loki-chart" .Values.addons.loki "alloy-chart" .Values.addons.alloy "kyverno-chart" .Values.addons.kyverno "kyverno-policies-chart" .Values.addons.kyvernoPolicies "istio-chart" .Values.addons.istio "istio-base-chart" .Values.addons.istioBase "istio-cni-chart" .Values.addons.istioCNI "istio-ztunnel-chart" .Values.addons.istioZtunnel "traefik-chart" .Values.addons.traefik "metallb-chart" .Values.addons.metallb "kube-vip-chart" .Values.addons.kubeVip "kube-vip-cloud-provider-chart" .Values.addons.kubeVipCloudProvider }}
+            {{- range $flag, $chart := dict "ccm-chart" .Values.addons.cloudControllerManager "csi-chart" .Values.addons.csiPlugin "csi-newest-chart" .Values.addons.csiPluginNewest "cilium-chart" .Values.addons.cilium "calico-chart" .Values.addons.calico "headlamp-chart" .Values.addons.headlamp "rancher-chart" .Values.addons.rancher "cert-manager-chart" .Values.addons.certManager "monitoring-chart" .Values.addons.monitoring "loki-chart" .Values.addons.loki "alloy-chart" .Values.addons.alloy "velero-chart" .Values.addons.velero "kyverno-chart" .Values.addons.kyverno "kyverno-policies-chart" .Values.addons.kyvernoPolicies "istio-chart" .Values.addons.istio "istio-base-chart" .Values.addons.istioBase "istio-cni-chart" .Values.addons.istioCNI "istio-ztunnel-chart" .Values.addons.istioZtunnel "traefik-chart" .Values.addons.traefik "metallb-chart" .Values.addons.metallb "kube-vip-chart" .Values.addons.kubeVip "kube-vip-cloud-provider-chart" .Values.addons.kubeVipCloudProvider }}
             - --{{ $flag }}={{ $chart.repository }}/{{ $chart.chart }}:{{ $chart.version }}
             {{- with $chart.values }}
             {{- $_ := set $chartValues (trimSuffix "-chart" $flag) . }}
@@ -214,6 +215,8 @@ spec:
             - --rancher-cluster-api-image={{ .Values.addons.rancher.turtles.clusterAPI }}
             - --kube-rbac-proxy-image={{ .Values.addons.monitoring.kubeRBACProxy }}
             - --alloy-image={{ .Values.addons.alloy.image }}
+            - --velero-image={{ .Values.addons.velero.image }}
+            - --velero-plugin-image={{ .Values.addons.velero.plugin }}
             - --kube-vip-image={{ .Values.kubeVip }}
             - --pod-security-exempt={{ join "," .Values.podSecurityExempt }}
             - --proxmox-ca=/etc/kubehenge/proxmox/ca.crt

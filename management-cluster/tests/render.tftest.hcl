@@ -236,8 +236,9 @@ run "controller_and_clusters_are_least_privilege" {
           managementStorages = ["local-lvm", "local"]
         }
       }
-      clusterOIDC = []
-      image       = "ghcr.io/kubehenge/kubehenge@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+      clusterOIDC   = []
+      backupTargets = []
+      image         = "ghcr.io/kubehenge/kubehenge@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
     }
     error_message = "the Kubehenge chart's values differ"
   }
@@ -578,6 +579,38 @@ run "cluster_oidc_needs_https" {
   }
 
   expect_failures = [var.cluster_oidc]
+}
+
+run "backup_targets" {
+  command = apply
+
+  variables {
+    backup_targets = [
+      { name = "s3", endpoint = "https://s3.example:8333", bucket = "kubehenge", prefix = "site-a", ca_certificate = "-----BEGIN CERTIFICATE-----\n", checksums = false },
+      { name = "aws", bucket = "backups", region = "eu-central-2" },
+    ]
+  }
+
+  assert {
+    condition = yamldecode(helm_release.kubehenge.values[0]).backupTargets == [
+      { name = "s3", endpoint = "https://s3.example:8333", bucket = "kubehenge", prefix = "site-a", caCertificate = "-----BEGIN CERTIFICATE-----\n", checksums = false },
+      { name = "aws", bucket = "backups", region = "eu-central-2", checksums = true },
+    ]
+    error_message = "the targets must reach the chart's backupTargets in its own names, checksums on unless switched off"
+  }
+}
+
+run "backup_targets_need_https_and_names_of_their_own" {
+  command = plan
+
+  variables {
+    backup_targets = [
+      { name = "s3", endpoint = "http://s3.example:8333", bucket = "kubehenge" },
+      { name = "s3", bucket = "other" },
+    ]
+  }
+
+  expect_failures = [var.backup_targets]
 }
 
 run "controller_image_needs_a_digest" {

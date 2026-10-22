@@ -1,7 +1,9 @@
 import type {
+  BackupRun,
   Bridge,
   ChangeRequest,
   Cluster,
+  ClusterBackups,
   ClusterClass,
   ClusterHealth,
   ClusterRef,
@@ -12,6 +14,7 @@ import type {
   PodLogs,
   PveNode,
   Realm,
+  RestoreRun,
   Session,
   SetupStatus,
   Storage,
@@ -164,6 +167,10 @@ export interface Api {
   create: (req: CreateRequest) => Promise<Cluster>;
   change: (ns: string, name: string, req: ChangeRequest) => Promise<Cluster>;
   remove: (ns: string, name: string) => Promise<void>;
+  backups: (ns: string, name: string) => Promise<ClusterBackups>;
+  backUp: (ns: string, name: string) => Promise<BackupRun>;
+  /** restore brings back a backup: of the namespaces named, or of every one when none is. */
+  restore: (ns: string, name: string, req: { backup: string; namespaces: string[] }) => Promise<RestoreRun>;
 
   setupStatus: () => Promise<SetupStatus>;
   setup: (settings: ManagementSettings, passphrase: string) => Promise<Job>;
@@ -208,6 +215,9 @@ export const api: Api = {
   create: (req) => request("POST", "/api/clusters", req),
   change: (ns, name, req) => request("PATCH", clusterPath(ns, name), req),
   remove: (ns, name) => act("DELETE", clusterPath(ns, name)),
+  backups: (ns, name) => request("GET", `${clusterPath(ns, name)}/backups`),
+  backUp: (ns, name) => request("POST", `${clusterPath(ns, name)}/backups`),
+  restore: (ns, name, req) => request("POST", `${clusterPath(ns, name)}/restores`, req),
 
   setupStatus: () => request("GET", "/api/setup"),
   setup: (settings, passphrase) => request("POST", "/api/setup", { settings, passphrase }),

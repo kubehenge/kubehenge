@@ -21,9 +21,9 @@ import (
 )
 
 // remoteScheme holds the types read and written in workload clusters: Secrets, ConfigMaps and the
-// other core types, persistent volumes, certificate signing requests, network policies, the health
-// identities' roles and token requests, CRDs and admission policies, and Rancher's own and the
-// distributions' HelmCharts through unstructured objects or their metadata.
+// other core types, persistent volumes, certificate signing requests, network policies, the
+// interface's identities' roles and token requests, CRDs and admission policies, and Rancher's and
+// Velero's own and the distributions' HelmCharts through unstructured objects or their metadata.
 var remoteScheme = newRemoteScheme()
 
 func newRemoteScheme() *runtime.Scheme {

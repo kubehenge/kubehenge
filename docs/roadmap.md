@@ -21,4 +21,4 @@ What Kubehenge's first release does, what comes next, and what may come later.
 
 ## Later
 
-Driven by what users ask for. Candidates: clusters across several Proxmox VE nodes and clusters, backup and restore with Proxmox Backup Server, more add-ons, and OKD clusters once Cluster API's OpenShift Assisted providers support ClusterClass and work with the Proxmox VE provider.
+Driven by what users ask for. Candidates: clusters across several Proxmox VE nodes and clusters, restoring a backup into another cluster from the interface, more add-ons, and OKD clusters once Cluster API's OpenShift Assisted providers support ClusterClass and work with the Proxmox VE provider.

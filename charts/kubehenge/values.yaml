@@ -39,17 +39,25 @@ clusters:
 # groupsPrefix, scopes, certificateAuthority}. Tokens and certificates work beside them.
 clusterOIDC: []
 
+# S3 stores clusters that switch backups on back up to, each under a prefix of its own beneath the
+# target's: a list of {name, endpoint, bucket, region, prefix, caCertificate, checksums}. endpoint
+# is the store's https:// URL, unset for AWS S3 itself; caCertificate the PEM CA of its
+# certificate when the system's do not cover it; checksums false for a store that refuses the
+# checksums the AWS SDK sends. A cluster brings its own keys for the store.
+backupTargets: []
+
 # Namespaces whose pods neither Pod Security Admission nor Kyverno holds to a cluster's pod
 # security level: those of the components that need the host's network, file system or
 # privileges (the cloud controller manager, the CSI plugin, the CNIs, node-exporter, Alloy's node
-# collectors, Rancher's agents and controllers). A cluster's own workloads that need it get their
-# namespace labelled instead.
+# collectors, Velero's node agents, Rancher's agents and controllers). A cluster's own workloads
+# that need it get their namespace labelled instead.
 podSecurityExempt:
   - kube-system
   - tigera-operator
   - calico-system
   - node-exporter
   - logging-node
+  - velero
   - istio-node
   - metallb-system
   - cattle-system
@@ -262,6 +270,17 @@ addons:
     # The whole reference: the chart puts its tag into a label, where a digest cannot go.
     # renovate: datasource=docker depName=docker.io/grafana/alloy
     image: docker.io/grafana/alloy:v1.21.1@sha256:4039c971193053a84e53dd9ed3e7d4561c069256b024631cd3498a353ed7ece8
+  # Velero, for clusters that switch backups on, with its plugin for S3. The chart's own image
+  # trails Velero's releases, so the controller names Velero's image itself, which also restores
+  # the volumes of the pods it brings back.
+  velero:
+    repository: https://vmware-tanzu.github.io/helm-charts
+    chart: velero
+    version: 12.2.1@sha256:fe4acd70a0123c369e7af7064457b4ffdddebee413e2bb01976a4fe07c471773
+    # renovate: datasource=docker depName=docker.io/velero/velero
+    image: docker.io/velero/velero:v1.18.4@sha256:c89fb5b6d1fd6afd368e0f483e6f5555fd62851a1eada8ac5c72482e674ca17b
+    # renovate: datasource=docker depName=docker.io/velero/velero-plugin-for-aws
+    plugin: docker.io/velero/velero-plugin-for-aws:v1.14.4@sha256:c85a7fa803569e3128c33e4f5766f84ab156c8d171c9f1dd2715581d45ce98fa
   # Kyverno and its Pod Security Standards policies, for clusters that have Kyverno enforce pod
   # security.
   kyverno:

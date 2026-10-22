@@ -51,7 +51,7 @@ func istioProxies(cluster *clusterv1.Cluster) []string {
 // level, as do waypoints it deploys; on k3s with its own flannel, istio-cni finds the CNI
 // configuration where k3s keeps it, and everywhere else in the standard directories.
 func istioCharts(charts *Charts, distribution templates.Distribution, cni CNI) []chartProxy {
-	restricted := map[string]any{"type": string(corev1.SeccompProfileTypeRuntimeDefault)}
+	restricted := runtimeDefault()
 	ambient := func(values map[string]any) map[string]any {
 		values["profile"] = "ambient"
 		return values

@@ -373,6 +373,13 @@ resource "helm_release" "kubehenge" {
         },
         p.certificate_authority == null ? {} : { certificateAuthority = p.certificate_authority },
       )]
+      backupTargets = [for t in var.backup_targets : merge(
+        { name = t.name, bucket = t.bucket, checksums = t.checksums },
+        t.endpoint == null ? {} : { endpoint = t.endpoint },
+        t.region == null ? {} : { region = t.region },
+        t.prefix == null ? {} : { prefix = t.prefix },
+        t.ca_certificate == null ? {} : { caCertificate = t.ca_certificate },
+      )]
     },
     { image = local.controller_image },
   ))]

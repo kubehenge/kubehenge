@@ -118,8 +118,8 @@ type Server struct {
 	PublicURL string
 	// SessionMaxAge ends every session this long after sign-in.
 	SessionMaxAge time.Duration
-	// ConnectWorkload reaches a workload cluster's API server with one of the health identities'
-	// tokens; unset, it connects over HTTPS trusting the cluster's CA alone.
+	// ConnectWorkload reaches a workload cluster's API server with the token of one of Kubehenge's
+	// identities in it; unset, it connects over HTTPS trusting the cluster's CA alone.
 	ConnectWorkload func(server string, ca []byte, token string) (*Workload, error)
 	Log             *slog.Logger
 
@@ -193,6 +193,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/kubeconfig", s.managed(s.kubeconfig))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/health", s.managed(s.clusterHealth))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/pods/{podNamespace}/{pod}/logs", s.managed(s.podLogs))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/backups", s.managed(s.clusterBackups))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/backups", s.managed(s.backUp))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/restores", s.managed(s.restore))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.clusterCredential))
 	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.storeClusterCredential))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.removeClusterCredential))

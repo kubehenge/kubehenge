@@ -536,6 +536,10 @@ describe("create", () => {
     rancherRegister: false,
     oidc: [],
     upgradeMode: "off",
+    backups: false,
+    backupFields: { target: "", schedule: "0 2 * * *", timeZone: "UTC", retention: "7", volumes: "all" },
+    backupOwnKey: true,
+    backupKey: {},
   };
 
   it("keeps the VMs to the nodes of the placement chosen", () => {

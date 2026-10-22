@@ -7,6 +7,7 @@ require (
 	github.com/ProtonMail/go-crypto v1.5.2
 	github.com/diskfs/go-diskfs v1.9.4
 	github.com/luthermonson/go-proxmox v0.8.2
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	go.yaml.in/yaml/v3 v3.0.5

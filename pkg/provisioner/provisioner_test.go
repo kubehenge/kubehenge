@@ -261,6 +261,18 @@ var testCharts = Charts{
 		Registry: "docker.io", Repository: "grafana/alloy", Tag: "v1.21.1",
 		Digest: "4039c971193053a84e53dd9ed3e7d4561c069256b024631cd3498a353ed7ece8",
 	},
+	Velero: Chart{
+		Repository: "https://vmware-tanzu.github.io/helm-charts", Name: "velero", Version: "12.2.1",
+		Digest: "fe4acd70a0123c369e7af7064457b4ffdddebee413e2bb01976a4fe07c471773",
+	},
+	VeleroImage: Image{
+		Registry: "docker.io", Repository: "velero/velero", Tag: "v1.18.4",
+		Digest: "c89fb5b6d1fd6afd368e0f483e6f5555fd62851a1eada8ac5c72482e674ca17b",
+	},
+	VeleroPlugin: Image{
+		Registry: "docker.io", Repository: "velero/velero-plugin-for-aws", Tag: "v1.14.4",
+		Digest: "c85a7fa803569e3128c33e4f5766f84ab156c8d171c9f1dd2715581d45ce98fa",
+	},
 	Kyverno: Chart{
 		Repository: "https://kyverno.github.io/kyverno", Name: "kyverno", Version: "3.9.1",
 		Digest: "7b7fe51a431b5b133b0ce7eb9dcb222b6a37fb967c163223cf480054ad14d752",

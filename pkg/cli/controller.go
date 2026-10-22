@@ -84,6 +84,9 @@ type controllerOptions struct {
 	lokiChart         string
 	alloyChart        string
 	alloyImage        string
+	veleroChart       string
+	veleroImage       string
+	veleroPlugin      string
 	kyvernoChart      string
 	kyvernoPolicies   string
 	istioChart        string
@@ -132,6 +135,22 @@ separate nodes.`,
 	f.StringVar(&o.settings.Role, "cluster-role", "kubehenge-cluster", "Proxmox VE role each cluster's user gets on its own pool")
 	f.StringVar(&o.settings.Node, "volume-owner-node", "", "Proxmox VE node for the VMs that own clusters' volumes; default the first online node")
 	f.StringVar(&o.settings.Region, "region", "", "region the clusters see Proxmox VE as; default the Proxmox VE cluster's name")
+	o.addonFlags(f)
+	f.StringSliceVar(&o.r.Charts.PodSecurityExempt, "pod-security-exempt", nil, "namespaces Kyverno's pod security policies leave alone, those the ClusterClasses' Pod Security Admission exempts (comma-separated)")
+	f.StringArrayVar(&o.classProviders, "class-providers", nil, "namespaces of the Cluster API providers only one ClusterClass's clusters use, as <class>=<namespace>,<namespace>; they run only while a cluster does (repeatable)")
+	f.BoolVar(&o.offerHARules, "offer-ha-rules", false, "offer Proxmox VE's HA node-affinity rules, their names and nodes only, to those who may create a cluster but not read the rules, through the ConfigMap "+provisioner.HARulesName)
+	f.DurationVar(&o.upgradeInterval, "upgrade-interval", defaultUpgradeInterval, "how often clusters are checked for an automatic upgrade due in their window")
+	f.IntVar(&o.port, "extension-port", defaultExtensionPort, "port of the Runtime Extension server")
+	f.StringVar(&o.extensionConfig, "extension-config", "kubehenge", "ExtensionConfig through which Cluster API calls this controller's hooks")
+	f.StringVar(&o.certDir, "extension-cert-dir", "/etc/kubehenge/tls", "directory with tls.crt and tls.key for the Runtime Extension server")
+	f.StringVar(&o.healthAddr, "health-address", ":8081", "address of the liveness and readiness probes")
+	f.BoolVar(&o.leaderElect, "leader-elect", true, "elect one active controller among replicas")
+	return cmd
+}
+
+// addonFlags names the charts and images Kubehenge installs into clusters, and the values beneath
+// them. Every chart and image is required, so that a controller installs only what its release pins.
+func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 	f.StringVar(&o.ccmChart, "ccm-chart", "", "cloud controller manager chart, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.csiChart, "csi-chart", "", "CSI plugin chart, as <repository>/<name>:<version>@sha256:<digest>")
 	o.datastoreAllocateFlags(f)
@@ -150,6 +169,9 @@ separate nodes.`,
 	f.StringVar(&o.lokiChart, "loki-chart", "", "Loki chart, for clusters that switch logs on, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.alloyChart, "alloy-chart", "", "Grafana Alloy chart, which collects the logs of clusters that switch logs on, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.alloyImage, "alloy-image", "", "Grafana Alloy image, as <registry>/<repository>:<tag>@sha256:<digest>")
+	f.StringVar(&o.veleroChart, "velero-chart", "", "Velero chart, for clusters that switch backups on, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.veleroImage, "velero-image", "", "Velero image, as <registry>/<repository>:<tag>@sha256:<digest>")
+	f.StringVar(&o.veleroPlugin, "velero-plugin-image", "", "image of Velero's plugin for S3, as <registry>/<repository>:<tag>@sha256:<digest>")
 	f.StringVar(&o.kyvernoChart, "kyverno-chart", "", "Kyverno chart, for clusters that have Kyverno enforce pod security, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.kyvernoPolicies, "kyverno-policies-chart", "", "Kyverno's Pod Security Standards policies chart, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.istioChart, "istio-chart", "", "Istio's istiod chart, for clusters that switch Istio on, as <repository>/<name>:<version>@sha256:<digest>")
@@ -161,19 +183,9 @@ separate nodes.`,
 	f.StringVar(&o.kubeVipChart, "kube-vip-chart", "", "kube-vip chart, for clusters whose load balancer is kube-vip, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.kubeVipImage, "kube-vip-image", "", "kube-vip image, as <registry>/<repository>:<tag>@sha256:<digest>")
 	f.StringVar(&o.kubeVipCloudChart, "kube-vip-cloud-provider-chart", "", "kube-vip's cloud provider chart, which hands kube-vip's Services their addresses, as <repository>/<name>:<version>@sha256:<digest>")
-	f.StringSliceVar(&o.r.Charts.PodSecurityExempt, "pod-security-exempt", nil, "namespaces Kyverno's pod security policies leave alone, those the ClusterClasses' Pod Security Admission exempts (comma-separated)")
-	f.StringArrayVar(&o.classProviders, "class-providers", nil, "namespaces of the Cluster API providers only one ClusterClass's clusters use, as <class>=<namespace>,<namespace>; they run only while a cluster does (repeatable)")
-	f.BoolVar(&o.offerHARules, "offer-ha-rules", false, "offer Proxmox VE's HA node-affinity rules, their names and nodes only, to those who may create a cluster but not read the rules, through the ConfigMap "+provisioner.HARulesName)
-	f.DurationVar(&o.upgradeInterval, "upgrade-interval", defaultUpgradeInterval, "how often clusters are checked for an automatic upgrade due in their window")
-	f.IntVar(&o.port, "extension-port", defaultExtensionPort, "port of the Runtime Extension server")
-	f.StringVar(&o.extensionConfig, "extension-config", "kubehenge", "ExtensionConfig through which Cluster API calls this controller's hooks")
-	f.StringVar(&o.certDir, "extension-cert-dir", "/etc/kubehenge/tls", "directory with tls.crt and tls.key for the Runtime Extension server")
-	f.StringVar(&o.healthAddr, "health-address", ":8081", "address of the liveness and readiness probes")
-	f.BoolVar(&o.leaderElect, "leader-elect", true, "elect one active controller among replicas")
-	for _, flag := range []string{"ccm-chart", "csi-chart", "csi-newest-chart", "cilium-chart", "calico-chart", "calico-images", "headlamp-chart", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "rancher-turtles-image", "rancher-cluster-api-image", "monitoring-chart", "kube-rbac-proxy-image", "loki-chart", "alloy-chart", "alloy-image", "kyverno-chart", "kyverno-policies-chart", "istio-chart", "istio-base-chart", "istio-cni-chart", "istio-ztunnel-chart", "traefik-chart", "metallb-chart", "kube-vip-chart", "kube-vip-image", "kube-vip-cloud-provider-chart"} {
-		_ = cmd.MarkFlagRequired(flag)
+	for _, flag := range []string{"ccm-chart", "csi-chart", "csi-newest-chart", "cilium-chart", "calico-chart", "calico-images", "headlamp-chart", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "rancher-turtles-image", "rancher-cluster-api-image", "monitoring-chart", "kube-rbac-proxy-image", "loki-chart", "alloy-chart", "alloy-image", "velero-chart", "velero-image", "velero-plugin-image", "kyverno-chart", "kyverno-policies-chart", "istio-chart", "istio-base-chart", "istio-cni-chart", "istio-ztunnel-chart", "traefik-chart", "metallb-chart", "kube-vip-chart", "kube-vip-image", "kube-vip-cloud-provider-chart"} {
+		_ = cobra.MarkFlagRequired(f, flag)
 	}
-	return cmd
 }
 
 // datastoreAllocateFlags are those that let clusters run the CSI plugin's newest release.
@@ -323,6 +335,7 @@ func (o *controllerOptions) parseCharts() error {
 		{"--monitoring-chart", o.monitoringChart, &o.r.Charts.Monitoring},
 		{"--loki-chart", o.lokiChart, &o.r.Charts.Loki},
 		{"--alloy-chart", o.alloyChart, &o.r.Charts.Alloy},
+		{"--velero-chart", o.veleroChart, &o.r.Charts.Velero},
 		{"--kyverno-chart", o.kyvernoChart, &o.r.Charts.Kyverno},
 		{"--kyverno-policies-chart", o.kyvernoPolicies, &o.r.Charts.KyvernoPolicies},
 		{"--istio-chart", o.istioChart, &o.r.Charts.Istio},
@@ -352,6 +365,8 @@ func (o *controllerOptions) parseCharts() error {
 	}{
 		{"--kube-rbac-proxy-image", o.kubeRBACProxy, &o.r.Charts.KubeRBACProxy},
 		{"--alloy-image", o.alloyImage, &o.r.Charts.AlloyImage},
+		{"--velero-image", o.veleroImage, &o.r.Charts.VeleroImage},
+		{"--velero-plugin-image", o.veleroPlugin, &o.r.Charts.VeleroPlugin},
 		{"--kube-vip-image", o.kubeVipImage, &o.r.Charts.KubeVipImage},
 		{"--rancher-turtles-image", o.turtlesImage, &o.r.Charts.Turtles},
 		{"--rancher-cluster-api-image", o.turtlesCAPIImage, &o.r.Charts.TurtlesClusterAPI},
@@ -432,8 +447,8 @@ func (o *controllerOptions) newManager(scheme *runtime.Scheme, extensions *serve
 }
 
 // setUpControllers adds the reconciler, the registrar, what taints control-plane nodes, what
-// approves kubeadm kubelets' serving certificates, what keeps the interface's health identities in
-// the clusters and, when some distribution's providers run only while used, the controller that
+// approves kubeadm kubelets' serving certificates, what keeps the interface's identities in the
+// clusters and, when some distribution's providers run only while used, the controller that
 // starts and stops them.
 func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *provisioner.Registrar, distributions *provisioner.Distributions) error {
 	o.r.Client = mgr.GetClient()
@@ -454,9 +469,9 @@ func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *pro
 	if err := approver.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the kubelet serving certificates: %w", err)
 	}
-	health := &provisioner.HealthIdentity{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Remotes: registrar.Remotes}
-	if err := health.SetupWithManager(mgr); err != nil {
-		return fmt.Errorf("the health identity: %w", err)
+	identities := &provisioner.WorkloadIdentities{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Remotes: registrar.Remotes}
+	if err := identities.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("the workload identities: %w", err)
 	}
 	bundle, err := provisioner.LoadGatewayAPI()
 	if err != nil {

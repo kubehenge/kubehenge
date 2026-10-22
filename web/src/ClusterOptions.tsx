@@ -41,6 +41,16 @@ export type OptionAction =
   | "upgrades"
   | "oidc";
 
+/** A setting the Options view lists, and the action of the dialog that changes it. */
+export interface OptionRow<A extends string = OptionAction> {
+  label: string;
+  value: string;
+  action?: A;
+  button?: string;
+  /** How the row's button names what it changes, for those who hear it out of the grid. */
+  name?: string;
+}
+
 export function OptionDialog({
   action,
   cluster: c,
@@ -121,24 +131,30 @@ function rancherText(r: RancherValue): string {
   return r.register === false ? "Not registered" : registeredWithRancher;
 }
 
-export function Options({
+/**
+ * Options lists what can be set on a cluster after it was created, each with its Edit button, as
+ * Proxmox VE's Options panels do. more are the rows of settings whose dialogs live with the views
+ * of their own, after logs.
+ */
+export function Options<A extends string = never>({
   cluster: c,
   can,
   onEdit,
+  more,
 }: {
   cluster: Cluster;
   can: boolean;
-  onEdit: (a: OptionAction) => void;
+  onEdit: (a: OptionAction | A) => void;
+  more?: OptionRow<A>[];
 }): JSX.Element {
   const headlamp = hostedValue(c.variables["headlamp"]);
   const monitoring = hostedValue(c.variables["monitoring"]);
   const rancher = rancherValue(c.variables["rancher"]);
   const haOffered = useHAOffered(c.class, text(c.variables["storage"]));
   const csi = useCSIOffer(c);
-  // name is how the row's button names what it changes, for those who hear it out of the grid.
   const cis = c.variables["cis"] === true;
   const podSecurity = enforced(podSecurityOf(c.variables["podSecurity"]), cis);
-  const rows: { label: string; value: string; action?: OptionAction; button?: string; name?: string }[] = [
+  const rows: OptionRow<OptionAction | A>[] = [
     { label: "Pod network", value: cniName(text(c.variables["cni"]) ?? "") || "The distribution's own" },
     {
       label: "Load balancer",
@@ -179,6 +195,7 @@ export function Options({
       name: "monitoring",
     },
     { label: "Logs", value: logsText(logsOf(c.variables["logs"])), action: "logs", name: "logs" },
+    ...(more ?? []),
     {
       label: "Pod security",
       value: podSecurityText(podSecurity),

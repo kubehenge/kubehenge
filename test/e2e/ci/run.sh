@@ -167,6 +167,28 @@ case "${test}" in
     *) export TF_VAR_node_cores=2 ;;
 esac
 
+# The workload cluster tests back up to an S3 store they serve on this machine, at the address the
+# nodes reach it by, under a certificate of a CA made for the run; the management cluster offers it
+# as a backup target.
+case "${test}" in
+    rke2 | k3s | kubeadm)
+        s3=${work}/s3
+        mkdir -p "${s3}"
+        openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 -subj /CN=kubehenge-e2e-s3-ca \
+            -keyout "${s3}/ca.key" -out "${s3}/ca.crt" 2> /dev/null
+        openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=kubehenge-e2e-s3 \
+            -keyout "${s3}/tls.key" -out "${s3}/tls.csr" 2> /dev/null
+        printf 'subjectAltName = IP:%s\nextendedKeyUsage = serverAuth\n' "${KUBEHENGE_E2E_OIDC_ADDRESS:?}" > "${s3}/san.cnf"
+        openssl x509 -req -in "${s3}/tls.csr" -CA "${s3}/ca.crt" -CAkey "${s3}/ca.key" -CAcreateserial \
+            -CAserial "${s3}/ca.srl" -days 2 -extfile "${s3}/san.cnf" -out "${s3}/tls.crt" 2> /dev/null
+        TF_VAR_backup_targets=$(jq -cn --arg e "https://${KUBEHENGE_E2E_OIDC_ADDRESS}:8333" --rawfile ca "${s3}/ca.crt" \
+            '[{name: "e2e", endpoint: $e, bucket: "kubehenge-e2e", prefix: "ci", ca_certificate: $ca}]')
+        export TF_VAR_backup_targets KUBEHENGE_E2E_BACKUP_TARGET=e2e KUBEHENGE_E2E_BACKUP_CA="${s3}/ca.crt"
+        export KUBEHENGE_E2E_BACKUP_CERT="${s3}/tls.crt" KUBEHENGE_E2E_BACKUP_KEY="${s3}/tls.key"
+        ;;
+    *) ;;
+esac
+
 tofu -chdir="${work}/mgmt" init -input=false -lockfile=readonly > /dev/null
 if ! tofu -chdir="${work}/mgmt" apply -input=false -auto-approve -no-color > "${work}/apply.log"; then
     tail -n 50 "${work}/apply.log" >&2
