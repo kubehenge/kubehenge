@@ -36,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/client-go/rest"
 	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -66,6 +67,14 @@ func TestMain(m *testing.M) {
 // it, as the management-cluster module does. The chart's webhook configurations point at a local server
 // instead, whose address and certificates the options hold; nothing serves them until a test does.
 func startAPI(t *testing.T) (client.Client, *envtest.WebhookInstallOptions) {
+	t.Helper()
+	_, c, w := startAPIConfig(t)
+	return c, w
+}
+
+// startAPIConfig is startAPI with the administrator's configuration too, for clients of other
+// identities.
+func startAPIConfig(t *testing.T) (*rest.Config, client.Client, *envtest.WebhookInstallOptions) {
 	t.Helper()
 	crds := os.Getenv("KUBEHENGE_INTEGRATION_CRDS")
 	if crds == "" || os.Getenv("KUBEBUILDER_ASSETS") == "" {
@@ -107,7 +116,7 @@ func startAPI(t *testing.T) (client.Client, *envtest.WebhookInstallOptions) {
 		t.Fatal(err)
 	}
 	installChart(t, c, objects)
-	return c, &env.WebhookInstallOptions
+	return cfg, c, &env.WebhookInstallOptions
 }
 
 // stopAPI stops the API server and etcd, ending them first where envtest cannot.
