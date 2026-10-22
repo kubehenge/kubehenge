@@ -9,7 +9,7 @@ HELM_ADDON_IMAGE ?= ghcr.io/kubehenge/cluster-api-addon-provider-helm
 KO_FLAGS ?=
 
 .PHONY: build web gateway-api website dist index image capmox-image helm-addon-image lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-templates e2e-volumes e2e-interface e2e-appliance
-.PHONY: fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker unit-go unit-web unit-tofu tofu-init
+.PHONY: fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker unit-go unit-web unit-tofu unit-shell tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
 # comes, as the end-to-end runs do.
@@ -140,7 +140,7 @@ helm-addon-image:
 lint: lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker
 
 FILES = git ls-files --cached --others --exclude-standard
-SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh test/integration/*.sh appliance/*.sh appliance/pve-entry/*.sh scripts/*.sh pkg/provisioner/*.sh pkg/templates/*.sh
+SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh test/integration/*.sh test/unit/*.sh appliance/*.sh appliance/pve-entry/*.sh scripts/*.sh pkg/provisioner/*.sh pkg/templates/*.sh
 SHFMT_FLAGS := -i 4 -ci -sr
 # Installed from lock files, which check every package's hash, their dependencies' included.
 YAMLLINT := uv run --locked --project scripts/lint yamllint
@@ -214,9 +214,9 @@ lint-markdown: web/node_modules/.package-lock.json
 lint-docker:
 	hadolint --failure-threshold style test/e2e/pve/Dockerfile
 
-# Unit tier: the Go packages, under the race detector, the frontend, and each Terraform/OpenTofu
-# configuration against mocked providers.
-unit: unit-go unit-web unit-tofu
+# Unit tier: the Go packages, under the race detector, the frontend, each Terraform/OpenTofu
+# configuration against mocked providers, and the shell scripts' own tests.
+unit: unit-go unit-web unit-tofu unit-shell
 
 unit-go: web gateway-api
 	go test -race ./...
@@ -226,6 +226,9 @@ unit-web: web/node_modules/.package-lock.json
 
 unit-tofu: tofu-init
 	set -e; for m in $(MODULES); do $(TOFU) -chdir=$$m test; done
+
+unit-shell:
+	set -e; for t in test/unit/*.sh; do sh $$t; done
 
 test: lint unit
 

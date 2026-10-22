@@ -399,6 +399,8 @@ export interface SetupStatus {
   certificateExpires?: string;
   /** The appliance's guest ID in Proxmox VE; for administrators only. */
   applianceVMID?: number;
+  /** The Proxmox VE API's certificate goes unverified (--proxmox-insecure); for administrators only. */
+  proxmoxInsecure?: boolean;
   /** An earlier run left its encrypted state, so the setup takes that run's passphrase. */
   resumes?: boolean;
 }

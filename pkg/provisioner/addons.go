@@ -271,6 +271,9 @@ type Endpoint struct {
 	URL string
 	// CA is the PEM certificate that signed the API's certificate.
 	CA string
+	// Insecure has the cloud controller manager and the CSI plugin skip verifying the API's
+	// certificate, as the controller does.
+	Insecure bool
 }
 
 type proxmoxConfig struct {
@@ -294,7 +297,7 @@ type proxmoxCluster struct {
 // resourceSetSecret wraps the workload cluster's Secret for a ClusterResourceSet, which applies
 // every key of its Secret as a manifest.
 func resourceSetSecret(cluster *clusterv1.Cluster, endpoint Endpoint, c Credentials) (*corev1.Secret, error) {
-	pve := proxmoxCluster{URL: endpoint.URL + "/api2/json", TokenID: c.TokenID, TokenSecret: c.TokenSecret, Region: c.Region}
+	pve := proxmoxCluster{URL: endpoint.URL + "/api2/json", Insecure: endpoint.Insecure, TokenID: c.TokenID, TokenSecret: c.TokenSecret, Region: c.Region}
 	// capmox names machines proxmox://<SMBIOS UUID>, which only the capmox provider mode matches.
 	ccm, err := yaml.Marshal(proxmoxConfig{Features: proxmoxFeatures{Provider: "capmox"}, Clusters: []proxmoxCluster{pve}})
 	if err != nil {

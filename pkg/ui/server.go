@@ -90,6 +90,9 @@ type Server struct {
 	// CertificateExpires is when the certificate the interface serves runs out; zero when not
 	// known. It is read at start, as the certificate is.
 	CertificateExpires time.Time
+	// ProxmoxInsecure tells administrators that the appliance and the clusters do not verify the
+	// Proxmox VE API's certificate, as it was installed.
+	ProxmoxInsecure bool
 	// NewKube makes the client for the management cluster from the kubeconfig the appliance wrote.
 	NewKube func(kubeconfig []byte) (client.Client, error)
 	// Upgrades are set in the appliance, which upgrades its own software.

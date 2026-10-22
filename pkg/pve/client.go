@@ -22,9 +22,11 @@ type Config struct {
 	URL string
 	// Token is an API token as user@realm!name=secret.
 	Token string
-	// CAFile is a PEM file with the CA that signed the API's certificate. Empty means the system's
-	// trust store; certificate verification is never skipped.
+	// CAFile is a PEM file with the CA that signed the API's certificate, or any certificate of its
+	// chain, each taken as a trust anchor. Empty means the system's trust store.
 	CAFile string
+	// Insecure skips verifying the API's certificate, as the administrator chose at install.
+	Insecure bool
 }
 
 // Connect returns a client for the API that signs in with the token. It makes no request.
@@ -87,7 +89,7 @@ func (cfg Config) transport() (string, *http.Client, error) {
 			return "", nil, fmt.Errorf("the Proxmox VE CA: %w", err)
 		}
 	}
-	t, err := sharedTransport(pem)
+	t, err := sharedTransport(pem, cfg.Insecure)
 	if err != nil {
 		return "", nil, fmt.Errorf("%s: %w", cfg.CAFile, err)
 	}
@@ -118,22 +120,32 @@ func (c connections) RoundTrip(req *http.Request) (*http.Response, error) {
 	return c.writes.RoundTrip(req) //nolint:wrapcheck // as above
 }
 
-// transports holds one connection pool per CA, keyed by its PEM ("" for the system's trust store),
-// shared by every client: each new connection costs pveproxy a TLS handshake, and the credentials
-// go with each request, never with the connection.
+// transports holds one connection pool per CA, keyed by its PEM ("" for the system's trust store)
+// and whether verification is skipped, shared by every client: each new connection costs pveproxy
+// a TLS handshake, and the credentials go with each request, never with the connection.
 var transports = struct {
 	sync.Mutex
 
-	byPEM map[string]connections
-}{byPEM: map[string]connections{}}
+	byPEM map[transportKey]connections
+}{byPEM: map[transportKey]connections{}}
 
-func sharedTransport(pem []byte) (connections, error) {
+type transportKey struct {
+	pem      string
+	insecure bool
+}
+
+func sharedTransport(pem []byte, insecure bool) (connections, error) {
 	transports.Lock()
 	defer transports.Unlock()
-	if t, ok := transports.byPEM[string(pem)]; ok {
+	key := transportKey{pem: string(pem), insecure: insecure}
+	if t, ok := transports.byPEM[key]; ok {
 		return t, nil
 	}
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		// Only on the administrator's --proxmox-insecure.
+		InsecureSkipVerify: insecure, //nolint:gosec // the administrator's explicit choice for this API
+	}
 	if len(pem) > 0 {
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(pem) {
@@ -153,6 +165,6 @@ func sharedTransport(pem []byte) (connections, error) {
 	writes := reads.Clone()
 	writes.DisableKeepAlives = true
 	c := connections{reads: reads, writes: writes}
-	transports.byPEM[string(pem)] = c
+	transports.byPEM[key] = c
 	return c, nil
 }

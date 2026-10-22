@@ -8,7 +8,8 @@ Wants=network-online.target kubehenge-headlamp.socket
 Type=simple
 User=kubehenge
 Group=kubehenge
-# KUBEHENGE_PROXMOX_URL, KUBEHENGE_PUBLIC_URL and KUBEHENGE_APPLIANCE_VMID, written by the installer.
+# KUBEHENGE_PROXMOX_URL, KUBEHENGE_PUBLIC_URL, KUBEHENGE_APPLIANCE_VMID and, with
+# --proxmox-insecure, KUBEHENGE_PROXMOX_INSECURE, written by the installer.
 EnvironmentFile=/etc/kubehenge/appliance.env
 ExecStart=/usr/local/bin/kubehenge serve \
     --appliance-dir /var/lib/kubehenge \

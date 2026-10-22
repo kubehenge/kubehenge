@@ -154,31 +154,36 @@ func TestVariable(t *testing.T) {
 func TestResourceSetSecret(t *testing.T) {
 	t.Parallel()
 	creds := Credentials{TokenID: "kubehenge.team-a.web@pve!cluster", TokenSecret: "s3cret", VolumeOwner: 4242, Region: "lab"} //nolint:gosec // test data
-	s, err := resourceSetSecret(cluster(), Endpoint{URL: "https://pve.example.org:8006", CA: "PEM"}, creds)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.Type != "addons.cluster.x-k8s.io/resource-set" || s.Namespace != "team-a" {
-		t.Errorf("type %q namespace %q", s.Type, s.Namespace)
-	}
-	var inner corev1.Secret
-	if err := yaml.UnmarshalStrict(s.Data["kubehenge-proxmox.yaml"], &inner); err != nil {
-		t.Fatal(err)
-	}
-	if inner.Namespace != "kube-system" || inner.Name != "kubehenge-proxmox" || inner.StringData["ca.crt"] != "PEM" {
-		t.Errorf("workload secret %s/%s ca %q", inner.Namespace, inner.Name, inner.StringData["ca.crt"])
-	}
-	for key, owner := range map[string]int{"ccm.yaml": 0, "csi.yaml": 4242} {
-		var cfg proxmoxConfig
-		if err := yaml.UnmarshalStrict([]byte(inner.StringData[key]), &cfg); err != nil {
-			t.Fatalf("%s: %v", key, err)
+	for _, insecure := range []bool{false, true} {
+		s, err := resourceSetSecret(cluster(), Endpoint{URL: "https://pve.example.org:8006", CA: "PEM", Insecure: insecure}, creds)
+		if err != nil {
+			t.Fatal(err)
 		}
-		want := proxmoxConfig{
-			Features: proxmoxFeatures{Provider: "capmox", ControllerVMID: owner},
-			Clusters: []proxmoxCluster{{URL: "https://pve.example.org:8006/api2/json", TokenID: creds.TokenID, TokenSecret: "s3cret", Region: "lab"}},
+		if s.Type != "addons.cluster.x-k8s.io/resource-set" || s.Namespace != "team-a" {
+			t.Errorf("type %q namespace %q", s.Type, s.Namespace)
 		}
-		if cfg.Features != want.Features || len(cfg.Clusters) != 1 || cfg.Clusters[0] != want.Clusters[0] {
-			t.Errorf("%s: got %+v, want %+v", key, cfg, want)
+		var inner corev1.Secret
+		if err := yaml.UnmarshalStrict(s.Data["kubehenge-proxmox.yaml"], &inner); err != nil {
+			t.Fatal(err)
+		}
+		if inner.Namespace != "kube-system" || inner.Name != "kubehenge-proxmox" || inner.StringData["ca.crt"] != "PEM" {
+			t.Errorf("workload secret %s/%s ca %q", inner.Namespace, inner.Name, inner.StringData["ca.crt"])
+		}
+		for key, owner := range map[string]int{"ccm.yaml": 0, "csi.yaml": 4242} {
+			var cfg proxmoxConfig
+			if err := yaml.UnmarshalStrict([]byte(inner.StringData[key]), &cfg); err != nil {
+				t.Fatalf("%s: %v", key, err)
+			}
+			want := proxmoxConfig{
+				Features: proxmoxFeatures{Provider: "capmox", ControllerVMID: owner},
+				Clusters: []proxmoxCluster{{
+					URL: "https://pve.example.org:8006/api2/json", Insecure: insecure,
+					TokenID: creds.TokenID, TokenSecret: "s3cret", Region: "lab",
+				}},
+			}
+			if cfg.Features != want.Features || len(cfg.Clusters) != 1 || cfg.Clusters[0] != want.Clusters[0] {
+				t.Errorf("%s: got %+v, want %+v", key, cfg, want)
+			}
 		}
 	}
 }

@@ -43,7 +43,7 @@ locals {
   # A hash of the token secret reveals nothing about it.
   config_hash = {
     (local.cluster_api_variables.name) = sha256(jsonencode(local.cluster_api_variables.data))
-    (local.capmox_variables.name)      = nonsensitive(sha256(jsonencode([local.capmox_variables.data, local.cluster_api_token_secret, var.proxmox_ca_certificate])))
+    (local.capmox_variables.name)      = nonsensitive(sha256(jsonencode([local.capmox_variables.data, local.cluster_api_token_secret, var.proxmox_ca_certificate, var.proxmox_insecure])))
   }
   config_hash_patch = { for name, hash in local.config_hash : name => {
     target = { kind = "Deployment" }
@@ -52,9 +52,10 @@ locals {
   cluster_api_config = { name = local.cluster_api_variables.name, namespace = local.cluster_api_variables.namespace }
   capmox_config      = { name = local.capmox_variables.name, namespace = local.capmox_variables.namespace }
 
-  # Upstream defaults to skipping certificate verification; this turns it on against the given CA.
+  # Upstream defaults to skipping certificate verification; this turns it on against the given CA,
+  # unless proxmox_insecure says otherwise.
   capmox_verify_tls = [
-    { op = "add", path = "/spec/template/spec/containers/0/args/-", value = "--proxmox-insecure=false" },
+    { op = "add", path = "/spec/template/spec/containers/0/args/-", value = "--proxmox-insecure=${var.proxmox_insecure}" },
     { op = "add", path = "/spec/template/spec/containers/0/args/-", value = "--proxmox-root-cert-file=/etc/proxmox-ca/ca.crt" },
     { op = "add", path = "/spec/template/spec/containers/0/volumeMounts/-", value = { name = "proxmox-ca", mountPath = "/etc/proxmox-ca", readOnly = true } },
     { op = "add", path = "/spec/template/spec/volumes/-", value = { name = "proxmox-ca", secret = { secretName = "proxmox-ca" } } },
@@ -350,6 +351,7 @@ resource "helm_release" "kubehenge" {
       }
       proxmox = {
         url          = var.proxmox_endpoint
+        insecure     = var.proxmox_insecure
         secret       = local.controller_secret.name
         clusterGroup = proxmox_virtual_environment_group.clusters.group_id
         clusterRole  = proxmox_virtual_environment_role.cluster_vms.role_id

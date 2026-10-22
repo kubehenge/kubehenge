@@ -3,6 +3,7 @@ package cli
 
 import (
 	"os"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -26,6 +27,9 @@ func NewRoot() *cobra.Command {
 		"Proxmox VE API, such as https://pve.example.org:8006 (env KUBEHENGE_PROXMOX_URL)")
 	flags.StringVar(&conn.CAFile, "proxmox-ca", os.Getenv("KUBEHENGE_PROXMOX_CA"),
 		"PEM file with the CA of the API's certificate; default the system trust store (env KUBEHENGE_PROXMOX_CA)")
+	insecure, _ := strconv.ParseBool(os.Getenv("KUBEHENGE_PROXMOX_INSECURE"))
+	flags.BoolVar(&conn.Insecure, "proxmox-insecure", insecure,
+		"do not verify the API's certificate (env KUBEHENGE_PROXMOX_INSECURE)")
 	// The token comes only from the environment, so it never shows in process listings.
 	conn.Token = os.Getenv("KUBEHENGE_PROXMOX_TOKEN")
 

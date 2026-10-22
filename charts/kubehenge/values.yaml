@@ -64,6 +64,9 @@ image: ""
 proxmox:
   # The Proxmox VE API, such as https://pve.example.org:8006. Required.
   url: ""
+  # Skip verifying the API's certificate, in the controller and in the clusters' cloud controller
+  # manager and CSI plugin.
+  insecure: false
   # Secret in the release namespace with the controller's API token (key token, as
   # user@realm!name=secret) and the CA that signed the API's certificate (key ca.crt).
   secret: kubehenge-proxmox

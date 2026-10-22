@@ -41,6 +41,20 @@ export function Administration({ onGone }: { onGone: () => void }): JSX.Element 
         <ApplianceUpgrades />
         <Credentials running={running} />
       </section>
+      {status.proxmoxInsecure === true && (
+        <section className="panel">
+          <h3>Proxmox VE API</h3>
+          <p>
+            Certificate verification is off: the appliance and the clusters reach the Proxmox VE API without checking
+            its certificate, as the appliance was installed with <code>--proxmox-insecure</code>. To check it against a
+            CA, run{" "}
+            <code>
+              sh install.sh --upgrade --ctid {status.applianceVMID ?? "<appliance ID>"} --proxmox-ca &lt;file&gt;
+            </code>{" "}
+            in the shell of the Proxmox VE node, then apply the management cluster again.
+          </p>
+        </section>
+      )}
       <section className="panel">
         <Templates />
       </section>

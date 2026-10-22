@@ -34,7 +34,7 @@ Then create clusters: [clusters.md](clusters.md).
 Addresses are IPv4. Kubehenge gives every node of every cluster a static address, so no DHCP server is needed for them.
 
 - **The appliance** takes one address on a bridge, by DHCP or static (`--ip`). Give it one that does not change (a static `--ip`, or a DHCP reservation), or a DNS name with `--name`: its certificate and the addresses identity providers send people back to name it. Should the address change, [renew the certificate](#the-appliances-certificate).
-- **The Proxmox VE API** is reached at the installing node's own address on that bridge, port 8006. The appliance uses that address, and passes it on to Cluster API, to Kubehenge's controller and to every cluster's cloud controller manager and CSI plugin. The appliance, the management cluster's nodes and every cluster's nodes must reach it.
+- **The Proxmox VE API** is reached on port 8006, at a name or address of the Proxmox VE cluster that the API's certificate is valid for ([below](#the-proxmox-ve-api)). The appliance uses it, and passes it on to Cluster API, to Kubehenge's controller and to every cluster's cloud controller manager and CSI plugin. The appliance, the management cluster's nodes and every cluster's nodes must reach it.
 - **The management cluster** needs one free address per node (one node, or three for high availability) and one more for the virtual IP of its Kubernetes API, all in one subnet on one bridge, with a gateway and DNS servers. Its VMs can run on several Proxmox VE nodes, which then all need that bridge in the same layer-2 network. The appliance reaches its nodes on ports 50000 (Talos API) and 6443 (Kubernetes API).
 - **Each cluster** needs a range of free addresses for its nodes and one more, outside that range, for its control plane's virtual IP, in the same subnet. Leave spare addresses in the range: an upgrade or a node replacement creates the new node before it removes the old one. The management cluster reaches each cluster's virtual IP on port 6443.
 - **Pod and service ranges** must stay clear of the nodes' networks. Kubehenge picks clear ranges when none are given, and refuses ranges that overlap.
@@ -85,8 +85,9 @@ sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 | `--ctid <id>` | the next free ID | The container's ID. |
 | `--storage <storage>` | the first active storage that takes container disks | Where the container's disk goes. |
 | `--bridge <bridge>` | `vmbr0` | The bridge the container attaches to. |
-| `--proxmox-url <URL>` | this node's address on the bridge where the node's certificate names it, else the first address the certificate names, or failing that its first name | The Proxmox VE API as the appliance and the clusters' VMs reach it, such as `https://192.0.2.10:8006`. Each checks the certificate the API serves, so the address has to be one that certificate names; the installer checks that the appliance gets an answer and stops otherwise. |
-| `--proxmox-ca <file>` | `/etc/pve/pve-root-ca.pem`, the Proxmox VE cluster's CA | The CA that signed the API's certificate, where you replaced Proxmox VE's own with one from your organisation's CA. The appliance, the management cluster and the clusters' VMs check the API against it; the installer stops before it creates anything unless the API's certificate is one this CA signed for the URL. |
+| `--proxmox-url <URL>` | the best name or address of this Proxmox VE cluster that the API's certificate is valid for ([below](#the-proxmox-ve-api)) | The Proxmox VE API as the appliance and the clusters' VMs reach it, such as `https://pve.example.org:8006`. Each checks the certificate the API serves, so the name or address has to be one that certificate is valid for; the installer checks that the appliance gets an answer and stops otherwise. |
+| `--proxmox-ca <file>` | the Proxmox VE cluster's CA, else the CA in this node's trust store, else the CA the API serves once you say yes to it ([below](#the-proxmox-ve-api)) | The CA that signed the API's certificate, such as your organisation's where it replaced Proxmox VE's own. The file may hold other certificates too, such as a whole trust store: the appliance is given only those the API's certificate rests on. The appliance, the management cluster and the clusters' VMs check the API against it; the installer stops before it creates anything unless the API's certificate is one this CA signed for the URL. |
+| `--proxmox-insecure` | off | The appliance, the management cluster (OpenTofu's and Cluster API's Proxmox VE providers, Kubehenge's controller) and every cluster's cloud controller manager and CSI plugin reach the Proxmox VE API without verifying its certificate. The Administration page shows that it is on. Not with `--proxmox-ca`. |
 | `--ip dhcp` or `--ip <address>/<prefix>` | `dhcp` | The container's address, such as `192.0.2.40/24`. |
 | `--gateway <address>` | none | The default gateway, with a static `--ip`. |
 | `--dns <address>,...` | this node's name servers | The name servers the container asks, such as `192.0.2.53,192.0.2.54`: needed where the node's own are not reachable from the container's network, such as a resolver listening only on the node's loopback address. |
@@ -102,11 +103,12 @@ sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 
 1. Checks that it runs as root on a Proxmox VE 9 node, and asks whether to add the Kubernetes entry to this node's Proxmox VE interface, unless `--pve-entry` or `--no-pve-entry` answered already.
 2. Downloads Kubehenge's release archive and OpenTofu, and checks both against the checksums it carries. The container template comes through `pveam`, which checks it against its signed index.
-3. Creates an unprivileged Debian container with nesting enabled, started at boot and tagged `kubehenge`, and waits for its IPv4 address.
-4. Makes a certificate for the container's host name, address and `--name`, signed by the Proxmox VE cluster's own CA (self-signed when the node cannot read that CA's key) and valid for 825 days, the longest browsers accept from a private CA; or checks the one given with `--cert`. The CA's key never leaves the node.
-5. Installs Kubehenge, OpenTofu, the management-cluster module, the shared Headlamp and the service units into the container; adds the Proxmox VE CA to the container's trust store; switches off the template's SSH and mail servers; starts the interface on ports 443 and 8443 (the shared Headlamp) as an unprivileged user.
-6. If you said yes, adds the Kubernetes entry to this node's Proxmox VE interface.
-7. Prints the address and the certificate's fingerprint:
+3. Chooses the Proxmox VE API's address and the CA its certificate is checked against ([below](#the-proxmox-ve-api)), asking on the terminal where it needs your word, and checks that the API serves a certificate valid for that address.
+4. Creates an unprivileged Debian container with nesting enabled, started at boot and tagged `kubehenge`, and waits for its IPv4 address.
+5. Makes a certificate for the container's host name, address and `--name`, signed by the Proxmox VE cluster's own CA (self-signed when the node cannot read that CA's key) and valid for 825 days, the longest browsers accept from a private CA; or checks the one given with `--cert`. The CA's key never leaves the node.
+6. Installs Kubehenge, OpenTofu, the management-cluster module, the shared Headlamp and the service units into the container; adds the CA the API is checked against to the container's trust store; switches off the template's SSH and mail servers; starts the interface on ports 443 and 8443 (the shared Headlamp) as an unprivileged user.
+7. If you said yes, adds the Kubernetes entry to this node's Proxmox VE interface.
+8. Prints the address and the certificate's fingerprint:
 
    ```text
    Kubehenge is running in container 105: https://192.0.2.40/
@@ -116,6 +118,27 @@ sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
    ```
 
 If a step up to starting the interface fails, the installer removes the container it created, so running it again starts clean. A failure to add the interface entry leaves the working appliance in place and says so.
+
+### The Proxmox VE API
+
+The appliance, the management cluster and every cluster reach the Proxmox VE API at one URL and check the certificate it serves. Without `--proxmox-url`, the installer takes the names and addresses the certificate of this node's API (`/etc/pve/local/pveproxy-ssl.pem`, else `pve-ssl.pem`) is valid for, and keeps only those of this Proxmox VE cluster's nodes: an address of one of them, or a name whose every address is one of theirs. A certificate that also names other hosts, such as one from your organisation's CA covering several machines, never leads the appliance to another host. A wildcard name counts for this node's own name (`hostname -f`) where it covers it. Of what is left, the installer takes, in this order:
+
+1. a name for several of the cluster's nodes, such as a DNS name with the address of each;
+2. this node's own name;
+3. another name of this node;
+4. this node's address on the appliance's bridge, then its other addresses;
+5. a name of this node without a domain, which resolves only where a search domain supplies one;
+6. a name, then an address, of another node of the cluster.
+
+A name counts as it resolves on this node; the appliance and the clusters' VMs have to resolve it the same way, through DNS. Where more than one is as good as the best, the installer lists them on the terminal and asks which, the best first and the default; without a terminal it takes the best and names it. Where the certificate is valid for none of the cluster's names and addresses, the installer stops and says what it names: give the URL with `--proxmox-url`, by a name or address the certificate is valid for.
+
+The CA the certificate is checked against is, without `--proxmox-ca`:
+
+1. the Proxmox VE cluster's own CA, `/etc/pve/pve-root-ca.pem`, where it signed the certificate;
+2. else the CA in this node's trust store (`/etc/ssl/certs/ca-certificates.crt`) the certificate rests on, such as your organisation's CA once it is installed there; the installer names it, and the appliance is given that CA alone, not the whole store;
+3. else the CA the API serves with its certificate: its root where it serves one, else the topmost CA it serves, else the certificate itself. The installer shows its subject, issuer and SHA-256 fingerprint and asks whether to trust it; check the fingerprint against your CA before you say yes. Without a terminal it stops, naming the fingerprint: give the CA with `--proxmox-ca`.
+
+Where none of them is the answer, the installer stops before it creates anything. `--proxmox-ca` gives the CA instead; `--proxmox-insecure` has nothing checked.
 
 ### The appliance's certificate
 
@@ -335,6 +358,7 @@ tofu output -raw talosconfig > talosconfig
 | `proxmox_endpoint` | required | The Proxmox VE API, such as `https://pve.example.org:8006`. Every cluster's nodes reach Proxmox VE at this address too. |
 | `proxmox_api_token` | none | `user@realm!name=secret`, with administrator rights. Unset, a session from the environment is used. |
 | `proxmox_ca_certificate` | required | PEM of the CA that signed the API's certificate. Cluster API's Proxmox VE provider verifies the API against it. |
+| `proxmox_insecure` | `false` | Skip verifying the API's certificate: in this configuration's Proxmox VE provider, Cluster API's Proxmox VE provider, Kubehenge's controller and the clusters' cloud controller manager and CSI plugin. |
 | `proxmox_nodes` | required | The nodes the management cluster's VMs run on, taken in turn, such as `["pve1", "pve2", "pve3"]`. Each needs the bridge and both storages below. A VM given another node is migrated there. |
 | `image_datastore` | `local` | Storage the Talos image is downloaded to, on each node; it must allow `import`. |
 | `vm_datastore` | `local-lvm` | Storage for the management cluster's disks. |
