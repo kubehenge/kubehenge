@@ -9,6 +9,15 @@ import {
   type BackupFields,
 } from "./Backups";
 import {
+  certificatesProblems,
+  certificatesText,
+  certificatesVariable,
+  needsClusterToken,
+  newCertificates,
+  tokenLabel,
+  type CertificatesForm,
+} from "./Certificates";
+import {
   defaultMinutes,
   defaultStart,
   describe,
@@ -44,7 +53,6 @@ import {
   registeredWithRancher,
   sentence,
 } from "./ui";
-// oxlint-disable-next-line import/max-dependencies -- the wizard's form holds, checks and sends every feature's own setting
 import { quantity, record, text, texts } from "./values";
 
 export const steps = ["General", "Network", "Machines", "Add-ons", "Identity providers", "Confirm"] as const;
@@ -113,6 +121,9 @@ export interface Form {
   rancherInstall: boolean;
   rancherHostname: string;
   rancherRegister: boolean;
+  certificates: CertificatesForm;
+  // The DNS provider's credential, stored for the cluster once it is created; never in the request.
+  dns01Token: string;
   oidc: OIDCProvider[];
   upgradeMode: UpgradeMode;
   backups: boolean;
@@ -227,7 +238,7 @@ export function addonMemory(form: Form, c: ClusterClass | undefined): { names: s
     istio: form.istio,
     clusterMesh: meshChosen(form),
     loadBalancer: form.loadBalancer !== "",
-    certManager: form.monitoring || form.rancherInstall,
+    certManager: form.monitoring || form.rancherInstall || form.certificates.enabled,
     rancher: form.rancherInstall,
     rancherAgent: !form.rancherInstall && form.rancherRegister,
     backups: form.backups && variable(c, "backups") !== undefined,
@@ -355,6 +366,8 @@ export const newForm = (): Form => ({
   rancherInstall: false,
   rancherHostname: "",
   rancherRegister: true,
+  certificates: newCertificates(),
+  dns01Token: "",
   oidc: [],
   upgradeMode: "off",
   backups: false,
@@ -437,7 +450,42 @@ function addOnVariables(form: Form, defined: Set<string>): Record<string, unknow
   if (form.backups) {
     variables["backups"] = backupsVariable(form.backupFields);
   }
+  const certificates = defined.has("certificates") ? certificatesVariable(form.certificates) : undefined;
+  if (certificates) {
+    variables["certificates"] = certificates;
+  }
   return variables;
+}
+
+/**
+ * A credential the form holds for the cluster, stored once the cluster exists: label names it for
+ * people, section is the cluster's option that stores it later, and forget is the form without it,
+ * so that the summary no longer says it is stored.
+ */
+export interface PendingCredential {
+  purpose: string;
+  values: Record<string, string>;
+  label: string;
+  section: string;
+  forget: Partial<Form>;
+}
+
+/** pendingCredentials are the credentials to store for the created cluster that the form holds. */
+export function pendingCredentials(form: Form, c: ClusterClass): PendingCredential[] {
+  const pending: PendingCredential[] = [];
+  if (form.backups && form.backupOwnKey && variable(c, "backups")) {
+    pending.push({ purpose: "backup", values: form.backupKey, label: "S3 access key", section: "Backups", forget: {} });
+  }
+  if (variable(c, "certificates") && needsClusterToken(form.certificates) && filled(form.dns01Token)) {
+    pending.push({
+      purpose: "dns01",
+      values: { token: form.dns01Token },
+      label: tokenLabel(form.certificates.provider),
+      section: "Certificates",
+      forget: { dns01Token: "" },
+    });
+  }
+  return pending;
 }
 
 // request turns the form into the API's request, with only the variables the class defines.
@@ -639,6 +687,15 @@ function addOnRows(form: Form, defined: Set<string>): [string, string][] {
     const key = form.backupOwnKey ? "an access key of its own" : "the access key for every cluster";
     rows.push(["Backups", form.backups ? `${backupsText(backupsVariable(form.backupFields))}, with ${key}` : "Off"]);
   }
+  if (defined.has("certificates")) {
+    rows.push(["Certificates", certificatesText(form.certificates)]);
+    if (needsClusterToken(form.certificates)) {
+      rows.push([
+        tokenLabel(form.certificates.provider),
+        filled(form.dns01Token) ? "Stored for the cluster once it is created" : "None yet: the cluster waits for one",
+      ]);
+    }
+  }
   return rows;
 }
 
@@ -678,6 +735,7 @@ export type FieldKey =
   | "backupSchedule"
   | "backupRetention"
   | "backupKey"
+  | "certificates"
   | "oidc";
 
 type Problems = Partial<Record<FieldKey, string>>;
@@ -810,6 +868,8 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
   return p;
 }
 
+// The certificates' fields show their own problems; the step holds them, to keep it from being
+// complete.
 function addOnProblems(form: Form, c: ClusterClass | undefined): Problems {
   const p: Problems = {};
   if (form.rancherInstall && !form.rancherHostname) {
@@ -818,6 +878,10 @@ function addOnProblems(form: Form, c: ClusterClass | undefined): Problems {
   const logs = logsChosen(form) ? logsProblem(form.logs) : undefined;
   if (logs !== undefined) {
     p.logs = logs;
+  }
+  const certificates = variable(c, "certificates") ? Object.values(certificatesProblems(form.certificates)) : [];
+  if (certificates.length > 0) {
+    p.certificates = certificates.join(" ");
   }
   if (!form.backups || variable(c, "backups") === undefined) {
     return p;

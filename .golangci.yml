@@ -87,6 +87,7 @@ linters:
         - ^(namespace|service|serviceMonitor|secret|secretName|tls|tlsConfig|insecureSkipVerify|hosts|resources|storage|ClusterRole|ALL)$
         - ^(metadata|cluster|users|image|repository|tag|data|mountPath|value)$
         - ^(replicas|limits|commonName|content|extra|ClusterRoleBinding)$
+        - ^(port|from|server|gateway)$
         - ^[0-9]+(m|Mi|Gi)$
     ireturn:
       allow:

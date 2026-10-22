@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { noAnswer } from "./api";
 import { App } from "./App";
 import { ClusterList } from "./ClusterList";
-import { addonMemory, fieldProblems, problems, request, summary, withRoom, type Form } from "./create-form";
+import { addonMemory, fieldProblems, newForm, problems, request, summary, withRoom, type Form } from "./create-form";
 import { fakeServer, held, reads, type Route } from "./fake-server";
 import { addressCount } from "./network";
 import type { Cluster, ClusterClass, ClusterHealth, Machine } from "./types";
@@ -538,6 +538,8 @@ describe("create", () => {
     rancherInstall: false,
     rancherHostname: "",
     rancherRegister: false,
+    certificates: newForm().certificates,
+    dns01Token: "",
     oidc: [],
     upgradeMode: "off",
     backups: false,

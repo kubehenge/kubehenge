@@ -5,8 +5,10 @@ package provisioner
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"text/template"
@@ -192,9 +194,10 @@ func until(t *testing.T, limit time.Duration, what string, cond func() bool) {
 	}
 }
 
-// The RKE2 and k3s classes switch their Traefik's Gateway API provider on, through the
-// HelmChartConfig they write on the control planes, as Cluster API renders it for a cluster.
-func TestIntegrationClassesSwitchTraefiksGatewayOn(t *testing.T) {
+// The RKE2 and k3s classes switch their Traefik's Gateway API provider on, and give it the
+// cluster's default certificate when it has one, through the HelmChartConfig they write on the
+// control planes, as Cluster API renders it for a cluster.
+func TestIntegrationClassesConfigureTraefik(t *testing.T) {
 	t.Parallel()
 	found := map[string]bool{}
 	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
@@ -229,33 +232,96 @@ type helmChartConfigSpec struct {
 	ValuesContent string `json:"valuesContent"`
 }
 
+// The certificates variable as clusters set it, "" for a cluster without one.
+var traefikCertificateCases = []string{
+	"",
+	`{"enabled": false, "issuer": "ca", "domain": "lab.example.org"}`,
+	`{"enabled": true, "issuer": "acme-dns01"}`,
+	`{"enabled": true, "issuer": "acme-http01", "domain": "lab.example.org"}`,
+	`{"enabled": true, "domain": "lab.example.org"}`,
+	`{"enabled": true, "issuer": "acme-dns01", "domain": "lab.example.org"}`,
+	`{"enabled": true, "issuer": "ca", "domain": "lab.example.org"}`,
+}
+
 func checkTraefikConfig(t *testing.T, class, raw string) {
 	t.Helper()
 	tpl, err := template.New(class).Funcs(sprig.HermeticTxtFuncMap()).Parse(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out bytes.Buffer
-	if err := tpl.Execute(&out, map[string]any{"controlPlaneEndpoint": "192.0.2.50"}); err != nil {
-		t.Fatal(err)
+	for _, certificates := range traefikCertificateCases {
+		// As Cluster API hands a template its variables: decoded from their JSON.
+		data := map[string]any{"controlPlaneEndpoint": "192.0.2.50"}
+		var c Certificates
+		if certificates != "" {
+			var v any
+			if err := json.Unmarshal([]byte(certificates), &v); err != nil {
+				t.Fatal(err)
+			}
+			data[certificatesVariable] = v
+			if err := json.Unmarshal([]byte(certificates), &c); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var out bytes.Buffer
+		if err := tpl.Execute(&out, data); err != nil {
+			t.Fatal(err)
+		}
+		values := traefikConfigValues(t, class, out.Bytes())
+		checkTraefikValues(t, class, values)
+		checkTraefikCertificate(t, class+" "+certificates, values, &c)
 	}
+}
+
+// checkTraefikCertificate holds the class's Traefik to the values the controller gives the Traefik
+// it installs into kubeadm clusters: a default certificate and an HTTPS listener exactly when the
+// cluster has a default certificate.
+func checkTraefikCertificate(t *testing.T, name string, values map[string]any, c *Certificates) {
+	t.Helper()
+	listener, _, _ := unstructured.NestedFieldNoCopy(values, "gateway", "listeners", "websecure")
+	store, _, _ := unstructured.NestedFieldNoCopy(values, "tlsStore")
+	want := map[string]any{}
+	if expected := traefikCertificateValues(c); expected != nil {
+		encoded, err := json.Marshal(expected)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(encoded, &want); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wantListener, _, _ := unstructured.NestedFieldNoCopy(want, "gateway", "listeners", "websecure")
+	if !reflect.DeepEqual(listener, wantListener) || !reflect.DeepEqual(store, want["tlsStore"]) {
+		t.Errorf("%s: HTTPS listener %v and TLS store %v, want %v and %v", name, listener, store, wantListener, want["tlsStore"])
+	}
+}
+
+// traefikConfigValues are the values of the HelmChartConfig in a rendered file patch.
+func traefikConfigValues(t *testing.T, class string, rendered []byte) map[string]any {
+	t.Helper()
 	var file struct {
 		Content string `json:"content"`
 	}
 	var config helmChartConfig
 	var values map[string]any
-	if err := yaml.Unmarshal(out.Bytes(), &file); err != nil {
+	if err := yaml.Unmarshal(rendered, &file); err != nil {
 		t.Fatal(err)
 	}
 	if err := yaml.Unmarshal([]byte(file.Content), &config); err != nil {
-		t.Fatal(err)
+		t.Fatalf("%s: %v in\n%s", class, err, file.Content)
 	}
 	if err := yaml.Unmarshal([]byte(config.Spec.ValuesContent), &values); err != nil {
-		t.Fatal(err)
+		t.Fatalf("%s: %v in\n%s", class, err, config.Spec.ValuesContent)
 	}
 	if config.Kind != "HelmChartConfig" {
 		t.Fatalf("%s: a %s", class, config.Kind)
 	}
+	return values
+}
+
+// checkTraefikValues holds a class's Traefik to what every cluster's needs.
+func checkTraefikValues(t *testing.T, class string, values map[string]any) {
+	t.Helper()
 	gateway, _, _ := unstructured.NestedMap(values, "providers", "kubernetesGateway")
 	ip, _, _ := unstructured.NestedString(gateway, "statusAddress", "ip")
 	if enabled, _, _ := unstructured.NestedBool(gateway, "enabled"); !enabled || ip != "192.0.2.50" {

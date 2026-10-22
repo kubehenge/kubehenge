@@ -9,7 +9,7 @@ Every cluster gets, whatever its distribution:
 - **A control-plane virtual IP**, held by kube-vip on one control-plane node and moved to another when it fails.
 - **A CNI**: the distribution's own, or the one chosen at creation.
 - **An ingress controller**, Traefik, on ports 80 and 443 of every node, the control planes included, so a host name pointing at the cluster's API address or at any node reaches it. RKE2 and k3s bring their own; Kubehenge installs it into kubeadm clusters, in `kube-system`.
-- **The Gateway API**, so that Gateways and HTTPRoutes work beside Ingresses: its standard channel's CRDs, with the admission policy upstream ships to refuse older or experimental ones over them, and Traefik's Gateway `traefik-gateway` in `kube-system`, which listens for HTTP where Traefik does and takes routes from every namespace ([below](#routes-through-the-gateway-api)). RKE2 and k3s ship the CRDs with their Traefik in some releases, and all of the Gateway API in a chart of its own in later ones; there they stay the distribution's while it ships them.
+- **The Gateway API**, so that Gateways and HTTPRoutes work beside Ingresses: its standard channel's CRDs, with the admission policy upstream ships to refuse older or experimental ones over them, and Traefik's Gateway `traefik-gateway` in `kube-system`, which listens for HTTP where Traefik does, and for HTTPS too once the cluster has [certificates](#certificates), and takes routes from every namespace ([below](#routes-through-the-gateway-api)). RKE2 and k3s ship the CRDs with their Traefik in some releases, and all of the Gateway API in a chart of its own in later ones; there they stay the distribution's while it ships them.
 - **Health checks.** A node that stays not ready for five minutes, or does not join within twenty, is replaced; workers one at a time.
 - **Control-plane nodes kept for the control plane.** Once a worker has joined, the control-plane nodes carry the taint `node-role.kubernetes.io/control-plane:NoSchedule` in every distribution, so workloads run on the workers and leave etcd and the API server their nodes. A cluster scaled to no workers has the taint taken off, and its control-plane nodes run the workloads. A worker that fails leaves the taint in place. Pods that started on a control-plane node before the first worker joined stay there until they are next scheduled.
 - **Its own Proxmox VE user and API token**, with rights on its own pool only, held by the cloud controller manager and the CSI plugin's controller on the control-plane nodes ([architecture.md](architecture.md#each-clusters-own-corner-of-proxmox-ve)).
@@ -104,7 +104,7 @@ The add-ons need memory too, on the workers, or on the control planes of a clust
 | Istio | 384 MiB |
 | Cilium Cluster Mesh | 128 MiB |
 | Load balancer | 128 MiB |
-| cert-manager, with monitoring or Rancher | 192 MiB |
+| cert-manager, with monitoring, Rancher or certificates | 192 MiB |
 | Rancher | 2048 MiB |
 | Rancher's agent, in every cluster that registers | 512 MiB |
 
@@ -120,6 +120,7 @@ A worker counts 448 MiB for itself on k3s and 704 MiB on kubeadm and RKE2; a con
 
   Without monitoring there are no logs: Kubehenge refuses them, and refuses switching monitoring off while they are on.
 - **Backups** with Velero, to one of the S3 stores an administrator set ([install.md](install.md#backup-targets)), daily at 02:00 by default, each kept for 7 days. Velero backs up every namespace but Kubernetes' own and the add-ons', with the data in its pods' volumes; the cluster writes under a folder of its own in the store, encrypted with keys of its own ([Back up and restore](#back-up-and-restore)). Choose the target, the schedule, its time zone, how long each backup is kept and the access key Velero signs in to the store with: one of the cluster's own, which needs `Sys.Modify` on the workload pool, or the one an administrator stored for every cluster. Without any target, the choice is off and says so.
+- **Certificates** from cert-manager for the cluster's Ingresses and routes: from Let's Encrypt or another ACME server, proved through your DNS provider's API (DNS-01) or over HTTP (HTTP-01), or from a CA of the cluster's own. With DNS-01 or the cluster's CA, a certificate for a domain and every name one label beneath it is served wherever no other is asked for, and Traefik's Gateway listens for HTTPS with it ([below](#certificates)). DNS-01 takes the DNS provider's credential, typed in here and stored by the interface, or the one an administrator stored for every cluster. It installs cert-manager too.
 - **Pod security**: the [Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/) pods are held to, `baseline` or `restricted`, by Kubernetes' Pod Security Admission, by Kyverno, or by both, each at a level of its own. Pod Security Admission sets the level of every namespace that labels none of its own, and warns about pods short of `restricted`; Kyverno holds every namespace to its level whatever the labels say, and reports what falls short. The namespaces of the components that need the host are exempt from both ([architecture.md](architecture.md#add-ons)). A workload that needs more gets its namespace labelled, and with Kyverno a PolicyException in the `kyverno` namespace.
 - **Harden to the CIS Kubernetes Benchmark**, beyond the baseline every cluster gets ([architecture.md](architecture.md#add-ons)): Pod Security Admission enforces `restricted` outside the exempt namespaces, every container that asks for no seccomp profile of its own runs under the container runtime's default, exec, attach and port-forward sessions end after five idle minutes, and RKE2 runs its own CIS profile, under which the pods in `kube-system`, `kube-public` and `default` take connections only from their own namespace. Fixed once the cluster exists.
 - **Istio** in ambient mode: label a namespace `istio.io/dataplane-mode=ambient` and its pods talk to each other over mutual TLS, with their workload identities, without sidecars ([architecture.md](architecture.md#add-ons)). Under a NetworkPolicy that denies by default, allow ztunnel's port 15008/TCP between the enrolled pods, and 169.254.7.127/32, where the kubelet's probes come from.
@@ -146,7 +147,7 @@ The buttons along the top act on the whole cluster: **Scale**, **Upgrade**, **Ku
 - **Health:** whether the cluster is healthy, changing, degraded or unreachable, with tiles for the control plane (and etcd, on kubeadm), workers, node pressure, unwell pods, add-ons and machine health checks; then what needs attention, most serious first, each linking to its details. Below come the nodes (ready, pressure, cordons and taints, what their pods ask for, and the VM's CPU over the last hour and its memory, as far as you may see the VMs), the pods that are not well (crash loops, images that do not pull, pods that cannot be scheduled, containers killed for memory), volume claims still waiting, the add-ons' Helm releases, the worker pools, the control plane's and the health checks' conditions, the last hour's warnings from inside the cluster and from Cluster API, and last the cluster's own conditions. Those with `Sys.Modify` on the cluster's pool also get **Logs** on each unwell pod: the last 60 lines of a container, from its last run when it has not run since. With the shared Headlamp running, each pod also links to its page there. The page reads inside clusters of the interface's namespaces only; for others it shows what Cluster API knows.
 - **Machines:** each node's role, status, phase, version, addresses, age, and the Proxmox VE node its VM runs on, as far as you may see the cluster's VMs. When one Proxmox VE node runs more than one of the control-plane VMs, the page warns and says what losing that node would cost; migrating one of them in Proxmox VE to a node of its own fixes it.
 - **Backups:** the cluster's backups and restores, with **Back up now** and **Restore** ([Back up and restore](#back-up-and-restore)).
-- **Options:** the pod network, CIS hardening, placement, Headlamp, monitoring, logs, backups, pod security, Istio, Cluster Mesh (on a cluster that runs Cilium), Rancher, automatic upgrades and identity providers, each with **Edit** (**Remove** for Rancher on the cluster that runs it), disabled for those who may not change the cluster (the pod network and CIS hardening are fixed). A change of placement applies to the VMs created after it, by scaling up, an upgrade or a replacement; those running stay where they are. Nodes the cluster has that you cannot see are listed too, and may be kept.
+- **Options:** the pod network, CIS hardening, placement, Headlamp, monitoring, logs, backups, certificates, pod security, Istio, Cluster Mesh (on a cluster that runs Cilium), Rancher, automatic upgrades and identity providers, each with **Edit** (**Remove** for Rancher on the cluster that runs it), disabled for those who may not change the cluster (the pod network and CIS hardening are fixed). A change of placement applies to the VMs created after it, by scaling up, an upgrade or a replacement; those running stay where they are. Nodes the cluster has that you cannot see are listed too, and may be kept.
 
 The status reads **Provisioning**, **Available**, **Upgrading** or **Reconciling** while a change rolls out, **Deleting**, or **Failed**. A cluster deleted while its page is open says so.
 
@@ -169,9 +170,10 @@ The administrator switches the weekly build on or off and sets its day and time 
 ## Change add-ons and sign-in
 
 - **Headlamp:** switch it on or off, set or clear its host name, and switch read-only access for everyone on or off. Switching it off uninstalls it.
-- **Monitoring:** switch it on or off, and set or clear Grafana's host name. Switching it off uninstalls it with its metrics proxies and certificates, and cert-manager unless Rancher runs in the cluster; Prometheus's and Alertmanager's volumes are kept. With logs on, the dialog switches them off too.
+- **Monitoring:** switch it on or off, and set or clear Grafana's host name. Switching it off uninstalls it with its metrics proxies and certificates, and cert-manager unless Rancher or the certificates add-on runs in the cluster; Prometheus's and Alertmanager's volumes are kept. With logs on, the dialog switches them off too.
 - **Logs:** switch them on or off, choose the collector, and change the days kept or grow the volume. Switching the collector replaces one Alloy with the other; switching logs off uninstalls Loki and Alloy, and Loki's volume is kept. Without monitoring they cannot be switched on.
 - **Backups:** switch them on or off, choose the target, change the schedule, its time zone and how long each backup is kept, and store, replace or remove the cluster's own access key, which needs `Sys.Modify` on the cluster's pool. A new target or schedule applies from the next backup; those made already stay where they are and keep the time they were given. Switching backups off uninstalls Velero; the backups stay in the store, and the cluster's keys beside it.
+- **Certificates:** switch them on or off, change the issuer, the domain or the DNS provider, and store, replace or remove the DNS provider's credential; with the cluster's CA, **Download CA certificate** in the dialog, or **CA certificate** on the cluster's page, gives its certificate for clients to trust. A new issuer issues every certificate of the old one again. On RKE2 and k3s, Traefik's configuration is a file on the control-plane nodes, so a change that gives the cluster a default certificate or takes it away (switching them on or off, setting or clearing the domain, moving to or from HTTP-01) replaces those nodes one at a time. Switching them off removes the issuer, the default certificate and the credential's copy from the cluster, and cert-manager unless monitoring or Rancher runs there; the cluster's CA is kept for when they are switched on again.
 - **Pod security:** choose the level Pod Security Admission and Kyverno each enforce; on a cluster hardened to the CIS benchmark, Pod Security Admission's stays `restricted`. A new Pod Security Admission level replaces the control-plane nodes one at a time; switching Kyverno off uninstalls its policies, then Kyverno.
 - **Istio:** switch it on or off. Switching it off takes every namespace and pod out of the mesh first, then uninstalls it; its CRDs and their resources stay.
 - **Cluster Mesh**, on a cluster that runs Cilium: join or leave, and choose the peers. Each listed peer shows whether it is linked, and why not; a peer you cannot see shows only that it is not linked, or does not exist. Peers come and go without restarting anything; joining or leaving upgrades Cilium and restarts its agents.
@@ -238,9 +240,58 @@ spec:
           port: 80
 ```
 
+With [certificates](#certificates) from DNS-01 or the cluster's CA, the Gateway also has a listener `websecure`, for HTTPS on port 443, which serves the default certificate and takes routes from every namespace: `sectionName: websecure` puts a route there.
+
 A Gateway of your own with the class `traefik` works too; its listeners use Traefik's ports, 8000 for HTTP and 8443 for HTTPS, which the nodes' ports 80 and 443 lead to. Istio's waypoints, its layer 7 proxies, are Gateways of the class `istio-waypoint`, which istiod serves once the Istio add-on is on.
 
 The Gateway API's admission policy (`safe-upgrades.gateway.networking.k8s.io`) refuses CRDs of the group from the experimental channel over standard ones, and from releases before v1.5.0, so that a chart that brings old CRDs fails rather than downgrades the cluster's. Kubehenge applies its release of the CRDs where they are missing, or older and no longer shipped by the distribution, and never puts an older release over a newer one; where the distribution's release has its own Gateway API chart (RKE2's `rke2-gateway-api-crd`, k3s's `gateway-api-crd`), the Gateway API is that chart's alone, at the chart's release ([architecture.md](architecture.md#networking)). The annotation `kubehenge.dev/gateway-api` on the Cluster names the oldest release among the CRDs once every one is in place.
+
+## Certificates
+
+The certificates add-on (`certificates: {enabled: true, …}`) installs cert-manager and a ClusterIssuer `kubehenge-ingress`, which signs or orders every certificate the cluster asks for. There are three issuers:
+
+- **`acme-dns01`** (the default): an ACME server proves the names through a TXT record that cert-manager sets with the DNS provider's API. Works for clusters no one reaches from the internet, and for wildcards. Needs a `domain` and a DNS provider.
+- **`acme-http01`**: the ACME server fetches a token over HTTP on port 80 of the name, which cert-manager serves through Traefik's Gateway. Needs every name to resolve publicly to the cluster and port 80 open; it can prove no wildcard, so it gives no default certificate.
+- **`ca`**: a CA of the cluster's own, made by Kubehenge's controller, valid for ten years, and constrained to `domain`: it signs names in the domain and nothing else, no other name and no address, so trusting it trusts nothing beyond the cluster. Clients trust it once: **Download CA** under the cluster's **Options**, or the `<cluster>-ingress-ca` Secret beside the Cluster (`tls.crt`). A new domain makes a new CA. Add-on host names have to lie in the domain, or name a `tlsSecret`.
+
+With `acme-dns01` and `ca`, the certificate `kubehenge-ingress` in `kube-system` covers `domain` and `*.domain`. Traefik serves it for every Ingress and route that names no certificate of its own, and on the Gateway's `websecure` listener. A name further down, or any name with `acme-http01`, gets its own certificate: the add-ons' Ingresses (Headlamp's, Grafana's) ask for one themselves, and an Ingress of yours asks with either annotation:
+
+```yaml
+metadata:
+  annotations:
+    kubernetes.io/tls-acme: "true"   # or cert-manager.io/cluster-issuer: kubehenge-ingress
+spec:
+  tls:
+    - hosts: [shop.apps.lab.example.org]
+      secretName: shop-tls
+```
+
+A Gateway of your own asks for its listeners' certificates with `cert-manager.io/cluster-issuer: kubehenge-ingress` on the Gateway.
+
+The ACME server is Let's Encrypt's, or its staging directory with `acme.staging` (certificates no browser trusts, for trying things out), or any other with `acme.server`; `acme.caBundle` is the CA of a server whose own certificate the usual CAs do not sign. `acme.email` receives the server's notices.
+
+### DNS providers
+
+| `dns01.provider` | Settings | The credential |
+| --- | --- | --- |
+| `cloudflare` | | an API token with Zone:DNS:Edit and Zone:Zone:Read on the zone |
+| `route53` | `route53.region`, `route53.accessKeyID`, optional `route53.hostedZoneID` | the secret access key |
+| `digitalocean` | | an API token with write access to the domain |
+| `azuredns` | `azureDNS.subscriptionID`, `resourceGroupName`, `tenantID`, `clientID`, optional `hostedZoneName`, `environment` | the service principal's client secret |
+| `clouddns` | `cloudDNS.project`, optional `hostedZoneName` | the service account's JSON key |
+| `rfc2136` | `rfc2136.nameserver` (host:port), `tsigKeyName`, `tsigAlgorithm` (default `HMACSHA256`) | the TSIG secret, base64 as BIND writes it |
+| `acmedns` | `acmeDNS.host` | the account JSON `acme-dns register` gives, by domain |
+| `akamai` | `akamai.serviceConsumerDomain` | client token, client secret and access token, in an existing Secret only |
+
+The credential comes from one of three places, the first that applies:
+
+1. **`dns01.existingSecret`**: a Secret you create in the workload cluster's `cert-manager` namespace, with the credential under the key `token` (Akamai's under `clientToken`, `clientSecret` and `accessToken`). Kubehenge never sees it.
+2. **`dns01.sharedCredential: true`**: the DNS-01 credential an administrator stored for every cluster on the Administration page. Taking it needs `Sys.Modify` ([Who may do what](#who-may-do-what)), since it reaches every zone it was made for.
+3. **The cluster's own**, typed in when creating the cluster or under **Options**. The interface keeps it in the Secret `<cluster>.dns01` beside the Cluster and never shows it again.
+
+Kubehenge's controller copies the stored credential into the `cert-manager` namespace of the workload cluster (`kubehenge-dns01`) and replaces the copy, or removes it, as soon as the credential is stored again or removed. A cluster without a credential gets a `NoDNS01Credential` event, and its certificates wait.
+
+Where the domain's DNS answers differently inside the network than outside (split-horizon DNS), `dns01.nameservers` names the servers (host:port) cert-manager checks the challenge's record with, such as the domain's authoritative servers.
 
 ## Persistent volumes
 
@@ -287,7 +338,7 @@ The interface checks the signed-in user's Proxmox VE privileges on each cluster'
 
 | To | Privilege | On |
 | --- | --- | --- |
-| See a cluster and its health page, and open it in the shared Headlamp | `VM.Audit` | the cluster's pool |
+| See a cluster and its health page, open it in the shared Headlamp, and download its CA | `VM.Audit` | the cluster's pool |
 | Create a cluster | `VM.Allocate` | the workload pool |
 | | `Datastore.AllocateSpace` | `/storage/<storage>` |
 | | `SDN.Use` | `/sdn/zones/<zone>/<bridge>`, or `…/<bridge>/<vlan>` with a VLAN tag |
@@ -297,6 +348,7 @@ The interface checks the signed-in user's Proxmox VE privileges on each cluster'
 | Have a missing template built, where the administrator allows it | `VM.Allocate` | the workload pool |
 | Label the nodes with their HA groups | `Sys.Audit` | `/` |
 | Switch volume snapshots on | `Permissions.Modify` | `/` |
+| Use the DNS-01 credential stored for every cluster | `Sys.Modify` | the workload pool when creating, the cluster's pool when changing |
 | Scale, upgrade, change add-ons, automatic upgrades and sign-in, delete | `VM.Allocate` | the cluster's pool |
 | See its backups and restores | `VM.Audit` | the cluster's pool |
 | Back up now | `VM.Allocate` | the cluster's pool |
@@ -408,8 +460,9 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `controlPlaneMachine`, `workerMachine` | no | `cores` (default 2), `memoryMiB` (a multiple of 8, default 4096, with the minimums [above](#machines)), `diskGiB` (default 30 for the control plane and 40 for workers, at least 20; a disk only grows). |
 | `cni` | kubeadm only | kubeadm: `cilium` or `calico`. RKE2: `canal` (default), `calico` or `cilium`. k3s: `flannel` (default), `cilium` or `calico`. The class refuses a change once the cluster exists. |
 | `loadBalancer` | no | Addresses for Services of type `LoadBalancer` ([above](#load-balancer)): `enabled` (default false); `implementation`, `metallb` (default) or `kube-vip`; `addresses`, a list of ranges, networks in CIDR notation or single addresses on the nodes' network, needed while `enabled`. |
-| `headlamp` | no | `enabled` (default false); `hostname`, to serve it through the cluster's ingress controller; `tlsSecret`, a Secret in the `headlamp` namespace with the certificate for `hostname` (the ingress controller's default certificate when unset); `access`, `token` (default: everyone signs in with their own token or through OpenID Connect) or `view` (Headlamp shows everyone who reaches it the cluster read-only through its own account, bound to the `view` ClusterRole). |
+| `headlamp` | no | `enabled` (default false); `hostname`, to serve it through the cluster's ingress controller; `tlsSecret`, a Secret in the `headlamp` namespace with the certificate for `hostname` (when unset, one from the certificates add-on while it is on, else the ingress controller's default certificate); `access`, `token` (default: everyone signs in with their own token or through OpenID Connect) or `view` (Headlamp shows everyone who reaches it the cluster read-only through its own account, bound to the `view` ClusterRole). |
 | `backups` | no | Velero ([above](#back-up-and-restore)): `enabled` (default false); `target`, the name of one of the administrator's targets, needed while `enabled`; `schedule`, a cron expression of five fields or a descriptor such as `@weekly` (default `0 2 * * *`); `timeZone` (default `UTC`); `retentionDays` (1 to 3650, default 7); `volumes`, `all` (default) or `annotated`, only the volumes a pod names in its `backup.velero.io/backup-volumes` annotation; `existingSecret`, a Secret of the owner's own in the cluster's `velero` namespace with the store's keys as Velero's credentials file under the key `cloud`, instead of the credential stored through the interface for the cluster, or else for every cluster; Kubehenge creates the namespace, and switching backups off deletes it with the Secret. |
+| `certificates` | no | `enabled` (default false); `issuer`, `acme-dns01` (default), `acme-http01` or `ca`; `domain`, needed with `acme-dns01` and `ca`; `acme`: `email`, `server`, `staging`, `caBundle`; `dns01`: `provider`, its settings, `existingSecret`, `sharedCredential`, `nameservers` ([above](#certificates)). |
 | `rancher` | no | `install` (default false), which needs `hostname` and at least 4 vCPUs on every node; `register` (default true), to register with the Rancher Kubehenge installed. Setting `install` back to false removes every registered cluster from Rancher, then uninstalls it. A second cluster with `install` gets no Rancher; `kubectl describe cluster` shows a `RancherRefused` event. |
 | `oidc` | no | Up to eight providers: `issuerURL`, `clientID`, `usernameClaim`, `usernamePrefix`, `groupsClaim`, `groupsPrefix`, `scopes`, `certificateAuthority` ([above](#signing-in-with-openid-connect)). Unset, the providers set for every cluster. |
 | `upgrades` | no | Automatic Kubernetes upgrades: `mode` (`off`, `patch` or `minor`; default `off`) and `window` ([upgrading.md](upgrading.md#automatically-inside-a-window)); `nodeImages` (default true), whether the nodes move to new builds of their VM template in the window ([above](#node-image-refresh)). |

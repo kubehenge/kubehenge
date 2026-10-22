@@ -15,6 +15,7 @@ import {
   newForm,
   offeredBridges,
   offeredStorages,
+  pendingCredentials,
   problems,
   request,
   steps,
@@ -49,6 +50,7 @@ const raising = new Set<keyof Form>([
   "rancherInstall",
   "rancherRegister",
   "backups",
+  "certificates",
 ]);
 
 export function CreateCluster({
@@ -70,6 +72,8 @@ export function CreateCluster({
   const [step, setStep] = useState<Step>("General");
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  // The cluster created, while the page stays to tell what of the rest failed.
+  const [created, setCreated] = useState<Cluster>();
   const [entered, setEntered] = useState<Form>(newForm);
   // A field's problem shows once the field has been changed, or Next was pressed on its step.
   const [touched, setTouched] = useState<ReadonlySet<string>>(new Set());
@@ -214,23 +218,45 @@ export function CreateCluster({
     }
     setBusy(true);
     setError(undefined);
+    let c: Cluster;
     try {
-      const c = await api.create(request(form, cls));
-      if (!form.backups || !form.backupOwnKey || variable(cls, "backups") === undefined) {
-        navigate(clusterPath(c.namespace, c.name));
-        return;
-      }
-      try {
-        await api.storeCredential("backup", form.backupKey, { namespace: c.namespace, name: c.name });
-        navigate(clusterPath(c.namespace, c.name));
-      } catch {
-        // The cluster exists; its backups view says that Velero waits for a key, which its Options store.
-        navigate(clusterPath(c.namespace, c.name, "backups"));
-      }
+      c = await api.create(request(form, cls));
     } catch (err) {
       setError(errorMessage(err));
       setBusy(false);
+      return;
     }
+    const pending = pendingCredentials(form, cls);
+    const stored = await Promise.allSettled(
+      pending.map(async (p) => api.storeCredential(p.purpose, p.values, { namespace: c.namespace, name: c.name })),
+    );
+    const failures = pending.flatMap((p, i) => {
+      const s = stored[i];
+      return s?.status === "rejected"
+        ? [
+            {
+              ...p,
+              message: `its ${p.label} was not stored: ${errorMessage(s.reason)}. Store it under the cluster's Options, ${p.section}.`,
+            },
+          ]
+        : [];
+    });
+    if (failures.length > 0) {
+      // The cluster exists: creating it again would fail, so the page offers only the way to it,
+      // and the summary says the cluster waits for what was not stored rather than that it is.
+      setCreated(c);
+      setEntered((f) => {
+        const kept = { ...f };
+        for (const p of failures) {
+          Object.assign(kept, p.forget);
+        }
+        return kept;
+      });
+      setError(`The cluster was created, but ${failures.map((p) => p.message).join(" Also, ")}`);
+      setBusy(false);
+      return;
+    }
+    navigate(clusterPath(c.namespace, c.name));
   };
 
   return (
@@ -294,6 +320,7 @@ export function CreateCluster({
               cls={cls}
               canTrust={canTrust}
               namespace={namespaceOf(form, namespaces)}
+              showAll={attempted.has("Add-ons")}
             />
           )}
           {step === "Identity providers" && (
@@ -330,39 +357,51 @@ export function CreateCluster({
           )}
 
           <ErrorBox message={error} />
-          <div className="actions">
-            <button type="button" onClick={() => (touched.size > 0 ? setDiscarding(true) : navigate("/"))}>
-              Cancel
-            </button>
-            <span className="spacer" />
-            <button
-              type="button"
-              disabled={previous === undefined}
-              onClick={() => {
-                if (previous !== undefined) {
-                  setStep(previous);
-                }
-              }}
-            >
-              Back
-            </button>
-            {step === "Confirm" ? (
+          {created === undefined ? (
+            <div className="actions">
+              <button type="button" onClick={() => (touched.size > 0 ? setDiscarding(true) : navigate("/"))}>
+                Cancel
+              </button>
+              <span className="spacer" />
+              <button
+                type="button"
+                disabled={previous === undefined}
+                onClick={() => {
+                  if (previous !== undefined) {
+                    setStep(previous);
+                  }
+                }}
+              >
+                Back
+              </button>
+              {step === "Confirm" ? (
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={busy || !cls}
+                  onClick={() => {
+                    void create();
+                  }}
+                >
+                  Create
+                </button>
+              ) : (
+                <button type="button" className="primary" onClick={next}>
+                  Next
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="actions">
               <button
                 type="button"
                 className="primary"
-                disabled={busy || !cls}
-                onClick={() => {
-                  void create();
-                }}
+                onClick={() => navigate(clusterPath(created.namespace, created.name, "options"))}
               >
-                Create
+                Open the cluster
               </button>
-            ) : (
-              <button type="button" className="primary" onClick={next}>
-                Next
-              </button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
       {discarding && (

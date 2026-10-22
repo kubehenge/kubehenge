@@ -116,9 +116,10 @@ spec:
               valueFrom:
                 template: |
                   {{- include "kubehenge.admissionFile" (dict "root" . "path" "/etc/rancher/rke2/pod-security.yaml") | nindent 18 }}
-            # RKE2's Traefik tolerates no taint, so it would leave the control planes once a worker
-            # joins, and the cluster's API address would serve no ingress. Routes whose TLS options
-            # conflict fail rather than fall back to the defaults, which would drop a host's
+            # The file is on the control planes before RKE2 starts, so its Traefik never runs on
+            # RKE2's own values. RKE2's Traefik tolerates no taint, so it would leave the control planes once a
+            # worker joins, and the cluster's API address would serve no ingress. Routes whose TLS
+            # options conflict fail rather than fall back to the defaults, which would drop a host's
             # client-certificate check (GHSA-g55h-rg46-x9c5). Its Gateway API provider is on, as in
             # the Traefik Kubehenge installs into kubeadm clusters.
             - op: add
@@ -147,11 +148,7 @@ spec:
                             enabled: true
                             statusAddress:
                               ip: {{ "{{ .controlPlaneEndpoint | quote }}" }}
-                        gateway:
-                          listeners:
-                            web:
-                              namespacePolicy:
-                                from: All
+                        {{- include "kubehenge.traefikGatewayValues" . | nindent 24 }}
             - op: add
               path: /spec/template/spec/serverConfig/cni
               valueFrom:

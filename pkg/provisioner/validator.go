@@ -77,6 +77,7 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 	if err := checkBackups(old, c, class); err != nil {
 		errs = append(errs, field.Invalid(topology.Child("variables").Key(backupsVariable), backupsVariable, err.Error()))
 	}
+	errs = append(errs, validateCertificates(c)...)
 	if addressesChanged(old, c) {
 		if err := v.Hooks.checkLoadBalancer(ctx, c); err != nil {
 			errs = append(errs, field.Forbidden(topology.Child("variables").Key(loadBalancerVariable), err.Error()))

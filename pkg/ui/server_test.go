@@ -328,6 +328,7 @@ func rke2Class() *clusterv1.ClusterClass {
 			{Name: "rancher", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
 			{Name: "csi", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
 			{Name: "ccm", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+			{Name: "certificates", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
 			{Name: "oidc", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "array", Default: &apiextensionsv1.JSON{
 				Raw: []byte(`[{"issuerURL":"https://sso.example","clientID":"kubernetes"},{"issuerURL":"https://lab.example","clientID":"lab"}]`),
 			}})},
@@ -1327,7 +1328,7 @@ func TestClasses(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &classes); err != nil || len(classes) != 1 {
 		t.Fatalf("classes = %s", rec.Body)
 	}
-	if c := classes[0]; c.Distribution != "rke2" || len(c.Variables) != 8 || !c.Variables[0].Required || c.Variables[0].Schema.Format != "ipv4" ||
+	if c := classes[0]; c.Distribution != "rke2" || len(c.Variables) != 9 || !c.Variables[0].Required || c.Variables[0].Schema.Format != "ipv4" ||
 		c.Annotations["kubehenge.dev/default-pods"] != "10.42.0.0/16" {
 		t.Fatalf("class = %+v", c)
 	}

@@ -287,8 +287,8 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           type: string
           minLength: 1
           description: >-
-            Secret in the headlamp namespace holding the certificate for hostname; the ingress
-            controller's own default certificate when unset.
+            Secret in the headlamp namespace holding the certificate for hostname. When unset, the
+            certificates add-on's while it is on, else the ingress controller's own default.
 - name: monitoring
   required: false
   schema:
@@ -311,8 +311,8 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           type: string
           minLength: 1
           description: >-
-            Secret in the monitoring namespace holding the certificate for hostname; the ingress
-            controller's own default certificate when unset.
+            Secret in the monitoring namespace holding the certificate for hostname. When unset, the
+            certificates add-on's while it is on, else the ingress controller's own default.
 - name: logs
   required: false
   schema:
@@ -539,6 +539,187 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
       x-kubernetes-validations:
         - rule: "!self.install || has(self.hostname)"
           message: Rancher needs a hostname.
+- name: certificates
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        Certificates from cert-manager for the cluster's Ingresses, routes and Gateways. With DNS-01
+        or the cluster's CA, a certificate for domain and every name one label beneath it is the one
+        Traefik serves wherever no other is asked for, and Traefik's Gateway listens for HTTPS with
+        it. An Ingress annotated cert-manager.io/cluster-issuer: kubehenge-ingress, or
+        kubernetes.io/tls-acme: "true", gets its own certificate from the same issuer. Installs
+        cert-manager too.
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        issuer:
+          type: string
+          enum: [acme-dns01, acme-http01, ca]
+          default: acme-dns01
+          description: >-
+            Where certificates come from: an ACME server such as Let's Encrypt, proving the names
+            through the DNS provider's API (acme-dns01) or over HTTP on port 80 (acme-http01, which
+            gives no default certificate), or a CA of the cluster's own (ca), whose certificate the
+            interface hands out for clients to trust.
+        domain:
+          type: string
+          format: hostname
+          maxLength: 253
+          description: >-
+            The domain of the default certificate, which covers it and *.domain. The cluster's CA
+            signs names in it alone, and a new domain makes a new CA.
+        acme:
+          type: object
+          properties:
+            email:
+              type: string
+              format: email
+              description: The ACME account's contact, told of certificates about to expire.
+            server:
+              type: string
+              pattern: "^https://"
+              description: The ACME server's directory; Let's Encrypt's when unset.
+            staging:
+              type: boolean
+              default: false
+              description: Let's Encrypt's staging directory, whose certificates no browser trusts.
+            caBundle:
+              type: string
+              minLength: 1
+              description: >-
+                PEM of the CA that signed the ACME server's own certificate, for a server whose
+                certificate the system's CAs do not vouch for.
+          x-kubernetes-validations:
+            - rule: "!has(self.server) || !self.staging"
+              message: Staging is Let's Encrypt's own directory; it cannot go with another server.
+        dns01:
+          type: object
+          properties:
+            provider:
+              type: string
+              enum: [cloudflare, route53, digitalocean, azuredns, clouddns, rfc2136, acmedns, akamai]
+              description: >-
+                The DNS provider whose API sets the challenge's record. Its credential is the one
+                stored for the cluster in the interface, unless existingSecret or sharedCredential
+                says otherwise: Cloudflare's or DigitalOcean's API token, Route 53's secret access
+                key, the Azure service principal's client secret, the Google service account's JSON
+                key, the TSIG secret, or the ACME-DNS account's JSON.
+            existingSecret:
+              type: string
+              minLength: 1
+              maxLength: 253
+              pattern: "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+              description: >-
+                A Secret in the workload cluster's cert-manager namespace holding the credential
+                under the key token; Akamai's under clientToken, clientSecret and accessToken.
+            sharedCredential:
+              type: boolean
+              default: false
+              description: >-
+                Take the DNS-01 credential an administrator stored for every cluster rather than
+                one of the cluster's own.
+            nameservers:
+              type: array
+              maxItems: 8
+              description: >-
+                The DNS servers (host:port) cert-manager checks the challenge's record with, for a
+                domain whose answers inside the cluster differ from the public ones.
+              items:
+                type: string
+                pattern: "^[^\\s]+:[0-9]{1,5}$"
+            route53:
+              type: object
+              properties:
+                region:
+                  type: string
+                  minLength: 1
+                accessKeyID:
+                  type: string
+                  minLength: 1
+                hostedZoneID:
+                  type: string
+                  minLength: 1
+            azureDNS:
+              type: object
+              properties:
+                subscriptionID:
+                  type: string
+                  minLength: 1
+                resourceGroupName:
+                  type: string
+                  minLength: 1
+                tenantID:
+                  type: string
+                  minLength: 1
+                clientID:
+                  type: string
+                  minLength: 1
+                hostedZoneName:
+                  type: string
+                  minLength: 1
+                environment:
+                  type: string
+                  enum: [AzurePublicCloud, AzureChinaCloud, AzureUSGovernmentCloud]
+            cloudDNS:
+              type: object
+              properties:
+                project:
+                  type: string
+                  minLength: 1
+                hostedZoneName:
+                  type: string
+                  minLength: 1
+            rfc2136:
+              type: object
+              properties:
+                nameserver:
+                  type: string
+                  pattern: "^[^\\s]+:[0-9]{1,5}$"
+                  description: The DNS server (host:port) that takes the dynamic update.
+                tsigKeyName:
+                  type: string
+                  minLength: 1
+                tsigAlgorithm:
+                  type: string
+                  enum: [HMACMD5, HMACSHA1, HMACSHA256, HMACSHA512]
+                  default: HMACSHA256
+            acmeDNS:
+              type: object
+              properties:
+                host:
+                  type: string
+                  pattern: "^https://"
+            akamai:
+              type: object
+              properties:
+                serviceConsumerDomain:
+                  type: string
+                  minLength: 1
+          x-kubernetes-validations:
+            - rule: "!has(self.existingSecret) || !self.sharedCredential"
+              message: The credential comes from an existing Secret or from the one shared by every cluster, not both.
+            - rule: "!has(self.provider) || self.provider != 'akamai' || has(self.existingSecret)"
+              message: Akamai's three secrets come only from an existing Secret.
+            - rule: "!has(self.provider) || self.provider != 'akamai' || (has(self.akamai) && has(self.akamai.serviceConsumerDomain))"
+              message: Akamai needs its service consumer domain.
+            - rule: "!has(self.provider) || self.provider != 'route53' || (has(self.route53) && has(self.route53.region) && has(self.route53.accessKeyID))"
+              message: Route 53 needs its region and access key ID.
+            - rule: "!has(self.provider) || self.provider != 'azuredns' || (has(self.azureDNS) && has(self.azureDNS.subscriptionID) && has(self.azureDNS.resourceGroupName) && has(self.azureDNS.tenantID) && has(self.azureDNS.clientID))"
+              message: Azure DNS needs its subscription, resource group, tenant and client IDs.
+            - rule: "!has(self.provider) || self.provider != 'clouddns' || (has(self.cloudDNS) && has(self.cloudDNS.project))"
+              message: Google Cloud DNS needs its project.
+            - rule: "!has(self.provider) || self.provider != 'rfc2136' || (has(self.rfc2136) && has(self.rfc2136.nameserver) && has(self.rfc2136.tsigKeyName))"
+              message: RFC 2136 needs its nameserver and TSIG key name.
+            - rule: "!has(self.provider) || self.provider != 'acmedns' || (has(self.acmeDNS) && has(self.acmeDNS.host))"
+              message: ACME-DNS needs its host.
+      x-kubernetes-validations:
+        - rule: "!self.enabled || self.issuer == 'acme-http01' || has(self.domain)"
+          message: DNS-01 and the cluster's CA need a domain.
+        - rule: "!self.enabled || self.issuer != 'acme-dns01' || (has(self.dns01) && has(self.dns01.provider))"
+          message: DNS-01 needs a DNS provider.
 {{- end -}}
 
 {{/*
@@ -688,6 +869,36 @@ TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TL
 {{- $quoted := list }}
 {{- range . }}{{ $quoted = append $quoted (quote .) }}{{ end }}
 {{- join " " $quoted }}
+{{- end -}}
+
+{{/*
+The Gateway and TLS values of the Traefik RKE2 and k3s bring, rendered by Cluster API from the
+cluster's variables. Its Gateway's HTTP listener takes routes from every namespace; with DNS-01 or
+the cluster's CA, the wildcard certificate the controller asks cert-manager for is Traefik's
+default and that of an HTTPS listener as well. HTTP-01 proves no wildcard, so it gives neither.
+Traefik serves its own self-signed certificate until cert-manager has issued the Secret.
+*/}}
+{{- define "kubehenge.traefikGatewayValues" -}}
+gateway:
+  listeners:
+    web:
+      namespacePolicy:
+        from: All
+{{ "{{- with .certificates }}{{ if and .enabled .domain (ne (.issuer | default \"acme-dns01\") \"acme-http01\") }}" }}
+    websecure:
+      port: 8443
+      protocol: HTTPS
+      mode: Terminate
+      certificateRefs:
+        - kind: Secret
+          name: kubehenge-ingress-tls
+      namespacePolicy:
+        from: All
+tlsStore:
+  default:
+    defaultCertificate:
+      secretName: kubehenge-ingress-tls
+{{ "{{- end }}{{ end }}" }}
 {{- end -}}
 
 {{- define "kubehenge.oidcEnabled" -}}

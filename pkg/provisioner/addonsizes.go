@@ -53,7 +53,7 @@ func addonsOn(cluster *clusterv1.Cluster) ([]string, error) {
 		{istioAddon, a.Istio.Enabled},
 		{clusterMeshVariable, a.ClusterMesh.Enabled},
 		{loadBalancerVariable, a.LoadBalancer.Enabled},
-		{certManagerFigure, a.Monitoring.Enabled || a.Rancher.Install},
+		{certManagerFigure, a.certManager()},
 		{rancherAddon, a.Rancher.Install},
 		{rancherAgentFigure, !a.Rancher.Install && a.Rancher.registers()},
 	} {

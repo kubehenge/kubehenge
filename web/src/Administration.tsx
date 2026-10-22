@@ -2,6 +2,7 @@ import { useEffect, type JSX } from "react";
 
 import { api } from "./api";
 import { ApplianceUpgrades } from "./ApplianceUpgrades";
+import { SharedDNS01 } from "./Certificates";
 import { Credentials } from "./Credentials";
 import { RemoveManagement } from "./RemoveManagement";
 import { ManagementCluster } from "./Setup";
@@ -9,8 +10,9 @@ import { Templates } from "./Templates";
 import { ErrorBox, pollIdle, pollRunning, usePoll } from "./ui";
 
 // Administration is the appliance's own page for those who may set it up: Kubehenge's upgrades,
-// repair access, VM templates, the management cluster's settings and removal. One poll of the
-// setup status serves them all, so they agree on whether a run is going on.
+// repair access, VM templates, the DNS-01 credential for every cluster, the management cluster's
+// settings and removal. One poll of the setup status serves them all, so they agree on whether a
+// run is going on.
 export function Administration({ onGone }: { onGone: () => void }): JSX.Element {
   const {
     data: status,
@@ -57,6 +59,9 @@ export function Administration({ onGone }: { onGone: () => void }): JSX.Element 
       )}
       <section className="panel">
         <Templates />
+      </section>
+      <section className="panel">
+        <SharedDNS01 />
       </section>
       <ManagementCluster status={status} reload={reload} />
       <section className="panel">

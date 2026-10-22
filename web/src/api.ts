@@ -181,6 +181,7 @@ export interface Api {
   health: (ns: string, name: string) => Promise<ClusterHealth>;
   podLogs: (cluster: ClusterRef, pod: { namespace: string; name: string }, container: string) => Promise<PodLogs>;
   kubeconfig: (ns: string, name: string) => Promise<Blob>;
+  ingressCA: (ns: string, name: string) => Promise<Blob>;
   storedCredential: (purpose: string, cluster?: ClusterRef) => Promise<StoredCredential>;
   storeCredential: (purpose: string, values: Record<string, string>, cluster?: ClusterRef) => Promise<StoredCredential>;
   removeCredential: (purpose: string, cluster?: ClusterRef) => Promise<void>;
@@ -242,6 +243,7 @@ export const api: Api = {
       `${clusterPath(cluster.namespace, cluster.name)}/pods/${encodeURIComponent(pod.namespace)}/${encodeURIComponent(pod.name)}/logs?container=${encodeURIComponent(container)}`,
     ),
   kubeconfig: (ns, name) => download("GET", `${clusterPath(ns, name)}/kubeconfig`),
+  ingressCA: (ns, name) => download("GET", `${clusterPath(ns, name)}/certificates/ca`),
   storedCredential: (purpose, cluster) => request("GET", credentialPath(purpose, cluster)),
   storeCredential: (purpose, values, cluster) => request("PUT", credentialPath(purpose, cluster), { values }),
   removeCredential: (purpose, cluster) => act("DELETE", credentialPath(purpose, cluster)),

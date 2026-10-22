@@ -1,6 +1,6 @@
-/* oxlint-disable import/max-dependencies -- the options view shows and opens every feature's own setting */
 import { useId, useState, type JSX } from "react";
 
+import { CertificatesDialog, certificatesOf, certificatesText } from "./Certificates";
 import { ClusterMeshDialog, meshText, runsCilium } from "./ClusterMesh";
 import { UpgradesDialog, describe, refreshesNodes, upgradePolicy } from "./ClusterUpgrades";
 import { CSIDialog, SnapshotsDialog, csiOn, snapshotsOn, useCSIOffer, useSnapshotsOffer } from "./CsiPlugin";
@@ -58,6 +58,7 @@ export type OptionAction =
   | "loadBalancer"
   | "rancher"
   | "upgrades"
+  | "certificates"
   | "oidc";
 
 /** A setting the Options view lists, and the action of the dialog that changes it. */
@@ -104,6 +105,9 @@ export function OptionDialog({
     }
     case "upgrades": {
       return <UpgradesDialog cluster={c} onClose={onClose} />;
+    }
+    case "certificates": {
+      return <CertificatesDialog cluster={c} onClose={onClose} />;
     }
     case "placement": {
       return <PlacementDialog cluster={c} onClose={onClose} />;
@@ -247,6 +251,12 @@ export function Options<A extends string = never>({
     },
     { label: "Logs", value: logsText(logsOf(c.variables["logs"])), action: "logs", name: "logs" },
     ...(more ?? []),
+    {
+      label: "Certificates",
+      value: certificatesText(certificatesOf(c.variables["certificates"])),
+      action: "certificates",
+      name: "certificates",
+    },
     {
       label: "Pod security",
       value: podSecurityText(podSecurity),

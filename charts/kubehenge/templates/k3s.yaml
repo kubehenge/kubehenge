@@ -119,11 +119,12 @@ spec:
               valueFrom:
                 template: |
                   {{- include "kubehenge.admissionFile" (dict "root" . "path" "/etc/rancher/k3s/pod-security.yaml") | nindent 18 }}
-            # Traefik runs as RKE2 runs its own, on every node's ports 80 and 443, rather than behind
-            # k3s's servicelb, so that it answers there whatever load balancer the cluster has.
-            # Routes whose TLS options conflict fail rather than fall back to the defaults, which
-            # would drop a host's client-certificate check (GHSA-g55h-rg46-x9c5). Its Gateway API
-            # provider is on, as in the Traefik Kubehenge installs into kubeadm clusters.
+            # The file is on the servers before k3s starts, so its Traefik never runs on k3s's own
+            # values. Traefik runs as RKE2 runs its own, on every node's ports 80 and 443, rather
+            # than behind k3s's servicelb, so that it answers there whatever load balancer the
+            # cluster has. Routes whose TLS options conflict fail rather than fall back to the
+            # defaults, which would drop a host's client-certificate check (GHSA-g55h-rg46-x9c5). Its
+            # Gateway API provider is on, as in the Traefik Kubehenge installs into kubeadm clusters.
             - op: add
               path: /spec/template/spec/kthreesConfigSpec/files/-
               valueFrom:
@@ -161,13 +162,9 @@ spec:
                             enabled: true
                             statusAddress:
                               ip: {{ "{{ .controlPlaneEndpoint | quote }}" }}
-                        gateway:
-                          listeners:
-                            web:
-                              namespacePolicy:
-                                from: All
                         core:
                           strictTLSOptions: true
+                        {{- include "kubehenge.traefikGatewayValues" . | nindent 24 }}
     # The k3s provider takes the ranges only from its own server configuration, never from the
     # Cluster's clusterNetwork, which Kubehenge's range check and every other distribution read.
     {{- range $range := list (dict "name" "pods" "field" "clusterCidr") (dict "name" "services" "field" "serviceCidr") }}

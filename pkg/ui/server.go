@@ -200,6 +200,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/backups", s.managed(s.clusterBackups))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/backups", s.managed(s.backUp))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/restores", s.managed(s.restore))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/certificates/ca", s.managed(s.ingressCA))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.clusterCredential))
 	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.storeClusterCredential))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.removeClusterCredential))

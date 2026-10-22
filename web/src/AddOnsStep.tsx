@@ -1,6 +1,7 @@
 import type { JSX } from "react";
 
 import { BackupFieldset, backupCredentialHint, backupKeys, backupsHint, classTargets } from "./Backups";
+import { CertificatesFields } from "./Certificates";
 import { MeshPeersField, meshHint } from "./ClusterMesh";
 import { ModeSelect } from "./ClusterUpgrades";
 import { addonMemory, logsChosen, machineLeast, offersMesh, rancherMinimumCores, variable } from "./create-form";
@@ -16,6 +17,56 @@ function upgradesHint(cls: ClusterClass | undefined): string {
   return cls?.distribution === "talos"
     ? window
     : `${window} The nodes move to new builds of their VM template in the same window, whatever this says.`;
+}
+
+// HeadlampAddOn installs Headlamp, at a host name of its own if one is given, and read-only for
+// everyone if asked.
+function HeadlampAddOn({ form, set }: Pick<StepProps, "form" | "set">): JSX.Element {
+  return (
+    <>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.headlamp}
+          aria-describedby="headlamp-hint"
+          onChange={(e) => set("headlamp", e.target.checked)}
+        />{" "}
+        Install Headlamp
+      </label>
+      <p className="hint" id="headlamp-hint">
+        {headlampHint}
+      </p>
+      {form.headlamp && (
+        <fieldset className="group">
+          <legend>Headlamp</legend>
+          <Field
+            label="Host name"
+            hint="Optional: also serve it at this name through the cluster's ingress controller."
+          >
+            {(id) => (
+              <input
+                id={id}
+                value={form.headlampHostname}
+                onChange={(e) => set("headlampHostname", e.target.value.trim())}
+              />
+            )}
+          </Field>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={form.headlampView}
+              aria-describedby="headlamp-view-hint"
+              onChange={(e) => set("headlampView", e.target.checked)}
+            />{" "}
+            {headlampViewLabel}
+          </label>
+          <p className="hint" id="headlamp-view-hint">
+            {headlampViewHint}
+          </p>
+        </fieldset>
+      )}
+    </>
+  );
 }
 
 // LogsAddOn keeps logs, offered only beside monitoring, whose Grafana reads them.
@@ -132,6 +183,58 @@ function BackupsChoice({
   );
 }
 
+// A credential of the new cluster's reaches as far into what it runs as its admin kubeconfig,
+// which Sys.Modify on its pool grants.
+const tokenRefusal =
+  "Storing it needs Sys.Modify on the workload pool, which you do not hold; someone who does stores it under the cluster's Options once it is created.";
+
+// CertificatesAddOn sets the certificates up, with the DNS provider's credential typed in here for
+// the new cluster.
+function CertificatesAddOn({
+  form,
+  set,
+  canTrust,
+  showAll = false,
+}: Pick<StepProps, "form" | "set"> & { canTrust: boolean | undefined; showAll: boolean | undefined }): JSX.Element {
+  return (
+    <fieldset className="group">
+      <legend>Certificates</legend>
+      <CertificatesFields
+        value={form.certificates}
+        onChange={(f) => set("certificates", f)}
+        showAll={showAll}
+        mayShare={canTrust !== false}
+        shareRefusal="You do not hold it on the workload pool."
+        renderCredential={(label, hint) => (
+          <Field
+            label={label}
+            hint={
+              <>
+                {hint}{" "}
+                {canTrust === false
+                  ? tokenRefusal
+                  : "Empty: store it later under the cluster's Options; until then the cluster waits for it."}
+              </>
+            }
+          >
+            {(id) => (
+              <input
+                id={id}
+                type="password"
+                autoComplete="new-password"
+                spellCheck={false}
+                disabled={canTrust === false}
+                value={form.dns01Token}
+                onChange={(e) => set("dns01Token", e.target.value)}
+              />
+            )}
+          </Field>
+        )}
+      />
+    </fieldset>
+  );
+}
+
 export function AddOnsStep({
   form,
   set,
@@ -139,56 +242,18 @@ export function AddOnsStep({
   cls,
   canTrust,
   namespace,
+  showAll,
 }: StepProps & {
   cls: ClusterClass | undefined;
   canTrust: boolean | undefined;
   namespace: string | undefined;
+  showAll?: boolean;
 }): JSX.Element {
   const used = addonMemory(form, cls);
   const carrier = form.workerReplicas > 0 ? "workerMachine" : "controlPlaneMachine";
   return (
     <>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={form.headlamp}
-          aria-describedby="headlamp-hint"
-          onChange={(e) => set("headlamp", e.target.checked)}
-        />{" "}
-        Install Headlamp
-      </label>
-      <p className="hint" id="headlamp-hint">
-        {headlampHint}
-      </p>
-      {form.headlamp && (
-        <fieldset className="group">
-          <legend>Headlamp</legend>
-          <Field
-            label="Host name"
-            hint="Optional: also serve it at this name through the cluster's ingress controller."
-          >
-            {(id) => (
-              <input
-                id={id}
-                value={form.headlampHostname}
-                onChange={(e) => set("headlampHostname", e.target.value.trim())}
-              />
-            )}
-          </Field>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={form.headlampView}
-              aria-describedby="headlamp-view-hint"
-              onChange={(e) => set("headlampView", e.target.checked)}
-            />{" "}
-            {headlampViewLabel}
-          </label>
-          <p className="hint" id="headlamp-view-hint">
-            {headlampViewHint}
-          </p>
-        </fieldset>
-      )}
+      <HeadlampAddOn form={form} set={set} />
       <label className="check">
         <input
           type="checkbox"
@@ -331,6 +396,9 @@ export function AddOnsStep({
         </>
       )}
       {variable(cls, "backups") && <BackupsChoice form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} />}
+      {variable(cls, "certificates") && (
+        <CertificatesAddOn form={form} set={set} canTrust={canTrust} showAll={showAll} />
+      )}
       {used.mib > 0 && (
         <p className="hint" id="addon-memory">
           The add-ons chosen use about {used.mib} MiB of memory ({used.names.join(", ")}), so each{" "}

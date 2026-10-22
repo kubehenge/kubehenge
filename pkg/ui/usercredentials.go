@@ -268,6 +268,7 @@ func (s *Server) storeCredential(w http.ResponseWriter, r *http.Request, u user,
 		return
 	}
 	s.Log.Info("stored credential", "user", u.ticket.Username, "credential", t.describe())
+	s.credentialChanged(r, u, t)
 	writeJSON(w, http.StatusOK, viewOf(t, secret))
 }
 
@@ -283,8 +284,20 @@ func (s *Server) removeCredential(w http.ResponseWriter, r *http.Request, u user
 	}
 	if set {
 		s.Log.Info("removed credential", "user", u.ticket.Username, "credential", t.describe())
+		s.credentialChanged(r, u, t)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// credentialChanged marks the clusters that use a credential just stored or removed: its own
+// cluster, or for the DNS-01 credential of every cluster, those that chose it.
+func (s *Server) credentialChanged(r *http.Request, u user, t *credentialTarget) {
+	switch {
+	case t.cluster != nil:
+		s.stampCredentialsStored(r, u, t.cluster)
+	case t.purpose.Name == "dns01":
+		s.stampCredentialsStored(r, u, s.sharingDNS01(r, u)...)
+	}
 }
 
 func (s *Server) credentialError(w http.ResponseWriter, err error) {

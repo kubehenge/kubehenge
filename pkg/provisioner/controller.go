@@ -183,30 +183,31 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // that takes, so that nothing else of this cluster waits with it: removing Rancher, which waits on
 // every cluster registered with it, removing Istio, which waits on the cluster's workloads,
 // removing volume snapshots, which deletes root@pam's configuration in the cluster, linking the
-// cluster's Cluster Mesh peers, and what its load balancer needs in the cluster. It
-// reports whether any of it waits.
+// cluster's Cluster Mesh peers, and what its certificates and its load balancer need in the
+// cluster. It reports whether any of it waits.
 func (r *Reconciler) afterTheRest(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons, rancherRefused string) (bool, error) {
+	certificatesWaiting, err := r.reconcileCertificates(ctx, cluster, &addons.Certificates)
+	if err != nil {
+		return false, err
+	}
 	rancherWaiting := false
 	if !addons.Rancher.Install && rancherRefused == "" {
 		var with []string
-		if !addons.Monitoring.Enabled {
+		if !addons.Monitoring.Enabled && !addons.Certificates.on() {
 			with = append(with, certManagerProxy(cluster))
 		}
-		var err error
 		if rancherWaiting, err = r.removeRancherWhenFree(ctx, cluster, with...); err != nil {
 			return false, err
 		}
 	}
 	istioWaiting := false
 	if !addons.Istio.Enabled {
-		var err error
 		if istioWaiting, err = r.removeIstio(ctx, cluster); err != nil {
 			return false, err
 		}
 	}
 	snapshotsWaiting := false
 	if !addons.VolumeSnapshots {
-		var err error
 		if snapshotsWaiting, err = r.removeVolumeSnapshots(ctx, cluster); err != nil {
 			return false, err
 		}
@@ -216,7 +217,7 @@ func (r *Reconciler) afterTheRest(ctx context.Context, cluster *clusterv1.Cluste
 		return false, err
 	}
 	lbWaiting, err := r.reconcileLoadBalancer(ctx, cluster, addons.LoadBalancer)
-	return rancherWaiting || istioWaiting || snapshotsWaiting || meshWaiting || lbWaiting, err
+	return certificatesWaiting || rancherWaiting || istioWaiting || snapshotsWaiting || meshWaiting || lbWaiting, err
 }
 
 // removeRancherWhenFree removes Rancher from a cluster that switched it off, or reports that it
@@ -522,7 +523,7 @@ func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluste
 			wait = r.policiesWait
 		case rancherProxy(cluster):
 			wait = r.rancherConfigWaits
-		case traefikProxy(cluster):
+		case traefikProxy(cluster), certManagerProxy(cluster):
 			wait = gatewayAPIWaits
 		case veleroProxy(cluster):
 			wait = func(ctx context.Context, c *clusterv1.Cluster) (bool, error) {

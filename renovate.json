@@ -97,6 +97,11 @@
       "allowedVersions": "<0.5.13"
     },
     {
+      "description": "BIND's odd minor releases are its development line; the stable ones, which the certificates test runs, are the even ones.",
+      "matchDepNames": ["docker.io/internetsystemsconsortium/bind9"],
+      "allowedVersions": "/^\\d+\\.\\d*[02468]$/"
+    },
+    {
       "description": "Rancher names the versions of the webhook, Fleet, its shell and Turtles it runs with, whose images Kubehenge pins beside Rancher's; they move only with Rancher, and the Rancher test fails until they match.",
       "matchDepNames": ["docker.io/rancher/rancher"],
       "prBodyNotes": [

@@ -53,6 +53,7 @@ const maxClusterName = 40
 // Variables a cluster may change after creation; the others describe where its VMs live.
 var changeableVariables = map[string]bool{
 	"headlamp": true, "monitoring": true, "logs": true, "backups": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, csiVariable: true, ccmVariable: true,
+	certificatesVariable: true,
 }
 
 // autoUpgraded is where Kubehenge's controller records the last automatic upgrade.
@@ -700,7 +701,8 @@ func (s *Server) mayCreate(w http.ResponseWriter, r *http.Request, u user, class
 		return false
 	}
 	raw, ok := req.Variables[oidcVariable]
-	if !ok {
+	certs := req.Variables[certificatesVariable]
+	if !ok && !sharesDNS01(certs) {
 		return true
 	}
 	held, err := s.Accounts.Privileges(r.Context(), u.ticket, s.workloadPoolPath())
@@ -708,7 +710,10 @@ func (s *Server) mayCreate(w http.ResponseWriter, r *http.Request, u user, class
 		s.proxmoxError(w, err)
 		return false
 	}
-	return checkOIDC(w, u, class, s.workloadPoolPath(), held, raw, nil)
+	if !checkSharedDNS01(w, u, s.workloadPoolPath(), held, certs, nil) {
+		return false
+	}
+	return !ok || checkOIDC(w, u, class, s.workloadPoolPath(), held, raw, nil)
 }
 
 func (s *Server) mayUseStorage(w http.ResponseWriter, r *http.Request, u user, class *clusterv1.ClusterClass, raw json.RawMessage) bool {
@@ -997,31 +1002,39 @@ func setWorkerReplicas(c *clusterv1.Cluster, name string, n int32) bool {
 	return found
 }
 
-// applyVariables sets the variables a change asks for, checking the rights the Rancher and oidc
-// ones need; it answers the request when one fails.
+// applyVariables sets the variables a change asks for, checking the rights each needs; it answers
+// the request when one fails.
 func (s *Server) applyVariables(w http.ResponseWriter, r *http.Request, u user, c *clusterv1.Cluster, access poolAccess, vars map[string]json.RawMessage) bool {
 	for name, value := range vars {
 		if !changeableVariables[name] {
 			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("the variable %s is fixed when the cluster is created", name))
 			return false
 		}
-		old := variableValue(c, name)
-		if name == "rancher" && installsRancher(value) && !installsRancher(old) && !s.allowRancher(w, r, u, client.ObjectKeyFromObject(c)) {
-			return false
-		}
-		if name == csiVariable && !s.allowCSI(w, r, u, c, value, old) {
-			return false
-		}
-		if name == ccmVariable && labelsHAGroups(value) && !labelsHAGroups(old) && !s.require(w, r, u, "/", privSysAudit) {
-			return false
-		}
-		if name == oidcVariable && !sameJSON(old, value) && !s.allowOIDC(w, r, u, c, access, value, old) {
-			return false
-		}
-		if name == allowedNodesVariable && string(value) != jsonNull && !sameJSON(old, value) && !s.mayPlace(w, r, u, value, old) {
+		if !s.allowVariable(w, r, u, c, access, name, value) {
 			return false
 		}
 		setVariable(c, name, value)
+	}
+	return true
+}
+
+// allowVariable checks the rights a change of the cluster's variable name to value needs: those of
+// what it switches on or changes, never of what it keeps. It answers the request when they fail.
+func (s *Server) allowVariable(w http.ResponseWriter, r *http.Request, u user, c *clusterv1.Cluster, access poolAccess, name string, value json.RawMessage) bool {
+	old := variableValue(c, name)
+	switch name {
+	case "rancher":
+		return !installsRancher(value) || installsRancher(old) || s.allowRancher(w, r, u, client.ObjectKeyFromObject(c))
+	case csiVariable:
+		return s.allowCSI(w, r, u, c, value, old)
+	case ccmVariable:
+		return !labelsHAGroups(value) || labelsHAGroups(old) || s.require(w, r, u, "/", privSysAudit)
+	case oidcVariable:
+		return sameJSON(old, value) || s.allowOIDC(w, r, u, c, access, value, old)
+	case allowedNodesVariable:
+		return string(value) == jsonNull || sameJSON(old, value) || s.mayPlace(w, r, u, value, old)
+	case certificatesVariable:
+		return checkSharedDNS01(w, u, access.path, access.held, value, old)
 	}
 	return true
 }

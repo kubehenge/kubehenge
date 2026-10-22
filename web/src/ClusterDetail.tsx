@@ -2,6 +2,7 @@ import { useEffect, useState, type JSX } from "react";
 
 import { api } from "./api";
 import { BackupsDialog, BackupsView, backupsOf, useBackupsRows } from "./Backups";
+import { issuesFromCA, saveCA } from "./Certificates";
 import { OptionDialog, Options, type OptionAction } from "./ClusterOptions";
 import { controlPlaneSizes } from "./create-form";
 import { HealthView } from "./Health";
@@ -183,10 +184,10 @@ export function ClusterDetail({
     void reload();
   };
   // Fetched rather than linked, so that a refusal shows here instead of as a broken download.
-  const downloadKubeconfig = async (): Promise<void> => {
+  const download = async (save: () => Promise<void>): Promise<void> => {
     setDownloadError(undefined);
     try {
-      saveFile(await api.kubeconfig(c.namespace, c.name), `${c.name}.kubeconfig`);
+      await save();
     } catch (err) {
       setDownloadError(errorMessage(err));
     }
@@ -209,10 +210,23 @@ export function ClusterDetail({
           <button
             type="button"
             onClick={() => {
-              void downloadKubeconfig();
+              void download(async () => {
+                saveFile(await api.kubeconfig(c.namespace, c.name), `${c.name}.kubeconfig`);
+              });
             }}
           >
             Kubeconfig
+          </button>
+        )}
+        {issuesFromCA(c) && (
+          <button
+            type="button"
+            title="The certificate of the CA the cluster's certificates come from, for browsers and clients to trust"
+            onClick={() => {
+              void download(async () => saveCA(c));
+            }}
+          >
+            CA certificate
           </button>
         )}
         {inHeadlamp !== undefined && (
