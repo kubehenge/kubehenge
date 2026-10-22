@@ -469,8 +469,8 @@ const (
 
 type podLogView struct {
 	Container string `json:"container"`
-	// Previous tells the lines are from the container's last run, as a crash-looping one has none
-	// of its own yet.
+	// Previous tells the lines are from the container's last run, which has stopped, as a
+	// crash-looping one has no running one of its own.
 	Previous bool     `json:"previous"`
 	Lines    []string `json:"lines"`
 }
@@ -519,7 +519,7 @@ func (s *Server) servePodLogs(ctx context.Context, w http.ResponseWriter, r *htt
 		return
 	}
 	cs := statuses[i]
-	previous := cs.State.Running == nil && cs.LastTerminationState.Terminated != nil
+	previous := cs.State.Running == nil && (cs.State.Terminated != nil || cs.LastTerminationState.Terminated != nil)
 	reader, err := s.connect(logs.server, logs.ca, logs.token)
 	if err != nil {
 		s.Log.Error("reaching a cluster for pod logs", "cluster", c.Namespace+"/"+c.Name, "error", err)
@@ -527,8 +527,12 @@ func (s *Server) servePodLogs(ctx context.Context, w http.ResponseWriter, r *htt
 		return
 	}
 	defer reader.close()
+	// Never Previous: the kubelet hands out the newest run without it, the running one or else the
+	// last to stop, and keeps that run. Previous names the run before by the status the kubelet last
+	// wrote, which lags behind its removal of all but the newest exited container, so a crash-looping
+	// container's read would fail with "unable to retrieve container logs" now and then.
 	stream, err := reader.Kube.CoreV1().Pods(ns).GetLogs(name, &corev1.PodLogOptions{
-		Container: container, Previous: previous, TailLines: new(int64(podLogLines)), LimitBytes: new(int64(podLogBytes)),
+		Container: container, TailLines: new(int64(podLogLines)), LimitBytes: new(int64(podLogBytes)),
 	}).Stream(ctx)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "the cluster did not hand out the log: "+problem(err))
