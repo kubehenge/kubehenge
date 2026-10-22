@@ -5,6 +5,7 @@ Every release's changes, newest first. Versions follow [Semantic Versioning](htt
 ## [Unreleased]
 
 - **The CSI plugin's newest release, per cluster.** With `cluster_datastore_allocate` (**CSI plugin** in the setup), a cluster may choose the Proxmox VE CSI plugin's newest release in the wizard, under **Options** or with its `csi` variable; its token then gets `Datastore.Allocate` on the cluster's storage. Only on a storage the management cluster, the VM templates and other clusters do not use. Other clusters keep the release that needs no `Datastore.Allocate`.
+- **HA rules for cluster creators.** An administrator can have Proxmox VE's HA node-affinity rules offered as placements to everyone who may create or change a cluster, without `Sys.Audit` on `/` of their own (the setup's HA rules for cluster creators, or the module's `offer_ha_rules`; off by default). Kubehenge's controller reads them with its own token, which holds that privilege already, and the interface hands out each rule's name and the nodes it allows, nothing more.
 
 ## [0.1.0] - 2026-10-22
 

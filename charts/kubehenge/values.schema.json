@@ -27,7 +27,11 @@
       "additionalProperties": false,
       "required": ["namespace"],
       "properties": {
-        "namespace": { "$ref": "#/$defs/name" }
+        "namespace": { "$ref": "#/$defs/name" },
+        "offerHARules": {
+          "description": "Whether those who may create or change a cluster are offered Proxmox VE's HA node-affinity rules, their names and nodes only, without Sys.Audit on / of their own.",
+          "type": "boolean"
+        }
       }
     },
     "clusters": {

@@ -222,7 +222,8 @@ run "controller_and_clusters_are_least_privilege" {
         kubehenge-rke2    = ["rke2-bootstrap-system", "rke2-control-plane-system"]
         kubehenge-k3s     = ["k3s-bootstrap-system", "k3s-control-plane-system"]
       }
-      clusters = { storages = ["local-lvm", "ceph"], bridges = ["vmbr0", "vmbr1"] }
+      interface = { offerHARules = false }
+      clusters  = { storages = ["local-lvm", "ceph"], bridges = ["vmbr0", "vmbr1"] }
       proxmox = {
         url          = "https://pve.example.org:8006"
         secret       = "kubehenge-proxmox"
@@ -306,6 +307,29 @@ run "proxmox_ha" {
   assert {
     condition     = contains(output.proxmox_objects.users, "kubehenge-ha@pve") && contains(output.proxmox_objects.roles, "kubehenge-ha")
     error_message = "a destroy is checked for the HA user and role too"
+  }
+}
+
+run "offer_ha_rules" {
+  command = plan
+
+  variables {
+    offer_ha_rules = true
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).interface.offerHARules
+    error_message = "the chart is told to offer the HA rules"
+  }
+
+  assert {
+    condition = (
+      length(proxmox_acl.ha) == 0 && length(proxmox_user_token.ha) == 0 &&
+      !proxmox_acl.provisioner["/ kubehenge-audit"].propagate &&
+      proxmox_acl.provisioner["/ kubehenge-audit"].user_id == "kubehenge-provisioner@pve" &&
+      toset(proxmox_virtual_environment_role.audit.privileges) == toset(["Sys.Audit"])
+    )
+    error_message = "offering the HA rules asks for no token, and the controller's own holds Sys.Audit on / without propagation"
   }
 }
 

@@ -332,8 +332,10 @@ export interface HARule {
 }
 
 export interface HARules {
-  /** Whether the user may read the rules, which takes Sys.Audit on /. */
+  /** Whether the user may read the rules, which takes Sys.Audit on /, or is offered them. */
   readable: boolean;
+  /** The rules are offered by Kubehenge, as an administrator allowed: their names and nodes only. */
+  offered?: boolean;
   rules: HARule[];
 }
 
@@ -366,6 +368,8 @@ export interface ManagementSettings {
   clusterOIDC?: OIDCProvider[];
   /** Proxmox VE HA keeps the clusters' control-plane VMs on separate nodes. */
   proxmoxHA?: boolean;
+  /** Those who may create or change a cluster are offered the HA rules' names and nodes without Sys.Audit on /. */
+  offerHARules?: boolean;
   /** Clusters may choose the CSI plugin's newest release, with Datastore.Allocate on their storage. */
   clusterDatastoreAllocate?: boolean;
 }

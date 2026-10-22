@@ -92,6 +92,12 @@ rules:
     resources: [configmaps]
     resourceNames: [kubehenge-release-checksums]
     verbs: [update]
+  # The HA rules offered to cluster creators, kept current while interface.offerHARules is on and
+  # removed when it is switched off.
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [kubehenge-ha-rules]
+    verbs: [update, delete]
   - apiGroups: [controlplane.cluster.x-k8s.io]
     resources: [kubeadmcontrolplanetemplates, rke2controlplanetemplates, kthreescontrolplanetemplates]
     verbs: [create, patch, deletecollection]
@@ -211,6 +217,9 @@ spec:
             - --kube-vip-image={{ .Values.kubeVip }}
             - --pod-security-exempt={{ join "," .Values.podSecurityExempt }}
             - --proxmox-ca=/etc/kubehenge/proxmox/ca.crt
+            {{- if .Values.interface.offerHARules }}
+            - --offer-ha-rules
+            {{- end }}
             {{- range $class, $namespaces := .Values.providerNamespaces }}
             - --class-providers={{ $class }}={{ join "," $namespaces }}
             {{- end }}

@@ -56,6 +56,8 @@ const (
 	placementInterval = 15 * time.Second
 	// templateVersionsInterval is how soon a kubeadm template just built is offered in the interface.
 	templateVersionsInterval = 30 * time.Second
+	// haRulesInterval is how soon an HA rule made in Proxmox VE is offered to cluster creators.
+	haRulesInterval = 30 * time.Second
 )
 
 // controllerOptions are the controller command's flags.
@@ -98,6 +100,7 @@ type controllerOptions struct {
 	extensionConfig   string
 	upgradeInterval   time.Duration
 	classProviders    []string
+	offerHARules      bool
 }
 
 func newControllerCommand(conn *pve.Config) *cobra.Command {
@@ -160,6 +163,7 @@ separate nodes.`,
 	f.StringVar(&o.kubeVipCloudChart, "kube-vip-cloud-provider-chart", "", "kube-vip's cloud provider chart, which hands kube-vip's Services their addresses, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringSliceVar(&o.r.Charts.PodSecurityExempt, "pod-security-exempt", nil, "namespaces Kyverno's pod security policies leave alone, those the ClusterClasses' Pod Security Admission exempts (comma-separated)")
 	f.StringArrayVar(&o.classProviders, "class-providers", nil, "namespaces of the Cluster API providers only one ClusterClass's clusters use, as <class>=<namespace>,<namespace>; they run only while a cluster does (repeatable)")
+	f.BoolVar(&o.offerHARules, "offer-ha-rules", false, "offer Proxmox VE's HA node-affinity rules, their names and nodes only, to those who may create a cluster but not read the rules, through the ConfigMap "+provisioner.HARulesName)
 	f.DurationVar(&o.upgradeInterval, "upgrade-interval", defaultUpgradeInterval, "how often clusters are checked for an automatic upgrade due in their window")
 	f.IntVar(&o.port, "extension-port", defaultExtensionPort, "port of the Runtime Extension server")
 	f.StringVar(&o.extensionConfig, "extension-config", "kubehenge", "ExtensionConfig through which Cluster API calls this controller's hooks")
@@ -482,6 +486,17 @@ func (o *controllerOptions) addPlacement(mgr manager.Manager, extensions *server
 	placer := &provisioner.Placer{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Nodes: cloud, Interval: placementInterval}
 	if err := mgr.Add(placer); err != nil {
 		return fmt.Errorf("the placer: %w", err)
+	}
+	rules := &provisioner.HARules{
+		Reader:    mgr.GetAPIReader(),
+		Client:    mgr.GetClient(),
+		Namespace: o.r.ClassNamespace,
+		Proxmox:   cloud.Client,
+		Offer:     o.offerHARules,
+		Interval:  haRulesInterval,
+	}
+	if err := mgr.Add(rules); err != nil {
+		return fmt.Errorf("the HA rules offered: %w", err)
 	}
 	return o.addHA(mgr, conn, cloud.Client)
 }

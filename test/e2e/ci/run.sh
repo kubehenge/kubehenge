@@ -144,7 +144,8 @@ case "${test}" in
             bridge: "vmbr0", nodeAddresses: ["172.20.99.11/24"], apiAddress: "172.20.99.10",
             gateway: "172.20.99.1", dnsServers: ["172.20.99.1"],
             workloadDatastores: ["local"], workloadBridges: ["vmbr0"],
-            registryMirrors: {"ghcr.io": ["http://172.21.99.3:5000"]}, controllerImage: $image
+            registryMirrors: {"ghcr.io": ["http://172.21.99.3:5000"]}, controllerImage: $image,
+            offerHARules: true
         }' > "${work}/appliance-settings.json"
         pve=kubehenge-e2e-pve
         docker exec "${pve}" sh -c 'rm -rf /root/kubehenge && mkdir -p /root/kubehenge/test'

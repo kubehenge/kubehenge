@@ -13,7 +13,7 @@ What Kubehenge's first release does, what comes next, and what may come later.
 - The interface: create, list, scale, upgrade and delete clusters, choose the distribution and add-ons, download a kubeconfig, with permissions following Proxmox VE's on each cluster's pool.
 - Upgrades without a shell: the appliance upgrades itself from a button, or automatically to new patch or minor releases of Kubehenge, installing only signed releases; each cluster can upgrade Kubernetes automatically inside a maintenance window its owner sets.
 - The optional Kubernetes entry inside Proxmox VE's own interface.
-- Placement: a cluster's VMs spread over every online node, or over the nodes chosen by hand or from one of Proxmox VE's HA node-affinity rules; the cluster page shows which node each VM runs on and warns when control-plane VMs share one; optionally, Proxmox VE HA keeps the control-plane VMs apart and restarts them after a node failure.
+- Placement: a cluster's VMs spread over every online node, or over the nodes chosen by hand or from one of Proxmox VE's HA node-affinity rules, which an administrator can offer to cluster creators without `Sys.Audit` on `/`; the cluster page shows which node each VM runs on and warns when control-plane VMs share one; optionally, Proxmox VE HA keeps the control-plane VMs apart and restarts them after a node failure.
 
 ## Next
 

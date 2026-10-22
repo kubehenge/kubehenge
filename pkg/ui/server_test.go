@@ -906,6 +906,62 @@ func TestHARulesOfferPlaces(t *testing.T) {
 	}
 }
 
+func offeredRules(data string) *corev1.ConfigMap {
+	cm := &corev1.ConfigMap{Data: map[string]string{provisioner.HARulesKey: data}}
+	cm.Namespace, cm.Name = "kubehenge-system", provisioner.HARulesName
+	return cm
+}
+
+func TestHARulesOfferedToThoseWhoMayPlaceAClusterWithoutSysAudit(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, offeredRules(`[{"rule":"fast","nodes":["pve2"]},{"rule":"gone","nodes":["pve9"]}]`))
+	h.accounts.passwords["owner@pve"] = "secret"
+	h.accounts.grants["owner@pve"] = map[string][]string{"/pool/kubehenge/default.one": {"VM.Audit", "VM.Allocate"}}
+	h.accounts.passwords["auditor@pve"] = "secret"
+	h.accounts.grants["auditor@pve"] = map[string][]string{"/": {"VM.Audit"}}
+	rules := func(user string) string {
+		t.Helper()
+		b := h.browser()
+		b.signIn(user)
+		rec := b.do("GET", "/api/proxmox/ha-rules", "")
+		expect(t, rec, http.StatusOK)
+		return strings.TrimSpace(rec.Body.String())
+	}
+
+	// Only the name and the nodes come through, and only nodes the user sees.
+	offered := `{"readable":true,"offered":true,"rules":[{"rule":"fast","nodes":["pve2"],"allowed":["pve2"]}]}`
+	for _, user := range []string{"dev@pve", "owner@pve"} {
+		if got := rules(user); got != offered {
+			t.Errorf("%s, who may place a cluster, got %s", user, got)
+		}
+	}
+	for _, user := range []string{"viewer@pve", "auditor@pve"} {
+		if got := rules(user); got != `{"readable":false,"rules":[]}` {
+			t.Errorf("%s, who may place no cluster, got %s", user, got)
+		}
+	}
+	// Whoever may read the rules reads them in full, from Proxmox VE.
+	var view haRulesView
+	if err := json.Unmarshal([]byte(rules("admin@pve")), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.Offered || len(view.Rules) != 2 || !view.Rules[0].Strict || !view.Rules[1].Negative {
+		t.Fatalf("with Sys.Audit on / = %+v", view)
+	}
+}
+
+func TestHARulesNotOfferedWhenUnreadable(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, offeredRules(`not json`))
+	b := h.browser()
+	b.signIn("dev@pve")
+	rec := b.do("GET", "/api/proxmox/ha-rules", "")
+	expect(t, rec, http.StatusOK)
+	if got := strings.TrimSpace(rec.Body.String()); got != `{"readable":false,"rules":[]}` {
+		t.Fatalf("a record that cannot be read = %s", got)
+	}
+}
+
 func TestCreateKeepsToTheNodesAsked(t *testing.T) {
 	t.Parallel()
 	placed := func(name, nodes string) string {

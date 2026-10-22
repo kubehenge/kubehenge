@@ -786,7 +786,12 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 		}
 		wanted = append(wanted, lb...)
 	}
+	return chartProxyObjects(cluster, wanted)
+}
 
+// chartProxyObjects makes the cluster's HelmChartProxies of the charts it wants, in their order,
+// each selecting the cluster alone.
+func chartProxyObjects(cluster *clusterv1.Cluster, wanted []chartProxy) ([]*unstructured.Unstructured, error) {
 	var proxies []*unstructured.Unstructured
 	for i := range wanted {
 		p := &wanted[i]

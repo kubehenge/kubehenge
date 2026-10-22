@@ -252,6 +252,13 @@ variable "proxmox_ha" {
   nullable    = false
 }
 
+variable "offer_ha_rules" {
+  description = "Offer Proxmox VE's HA node-affinity rules as places for a cluster's VMs to those who may create or change a cluster but do not hold Sys.Audit on / themselves. Kubehenge's controller reads the rules with its own token, which holds Sys.Audit on / already, so nothing new is granted in Proxmox VE; the interface hands out each rule's name and the nodes it allows, never its comment or resources, and only to those with VM.Allocate on the workload pool or a cluster's pool. Every such user then learns the rules' names and which nodes they cover."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "cluster_datastore_allocate" {
   description = "Let each cluster choose the Proxmox VE CSI plugin's newest release, which needs Datastore.Allocate on the cluster's storage: Kubehenge's controller then grants that cluster's token Datastore.Allocate there, which lets it delete any volume on that storage and change the storage's definition. A cluster may choose it only on a workload storage that neither the management cluster (vm_datastore, image_datastore, bootstrap_datastore), its templates nor another cluster uses. Off, every cluster runs the plugin's last release that needs no more than Datastore.AllocateSpace and Datastore.Audit."
   type        = bool
