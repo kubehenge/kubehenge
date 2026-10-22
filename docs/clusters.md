@@ -80,6 +80,7 @@ RKE2 installs its choice itself. For kubeadm, and for k3s given Cilium or Calico
 | Proxmox VE HA | Shown when the management cluster has Proxmox VE HA and the storage is shared; on unless you untick it. **Options** changes it later. |
 | CSI plugin's newest release | Shown when the management cluster lets clusters choose it; off unless you tick it. **Options** changes it later. See [Persistent volumes](#persistent-volumes). |
 | HA group labels | Shown when the management cluster lets clusters choose it; off unless you tick it. **Options** changes it later. See below. |
+| Volume snapshots | Shown when the management cluster lets clusters take them and the storage is local to each node; off unless you tick it. **Options** changes it later. See [Volume snapshots](#volume-snapshots). |
 
 Each new VM goes to one of the nodes it may use that is online: the one running the fewest of the cluster's VMs of its kind (control plane or worker) that has the memory for it, so three control planes on three nodes run one to a node. **Any node** means every node of the Proxmox VE cluster, nodes added later included. A node that goes down is left out within about 15 seconds and taken back once it is online, so the VMs that replace those it ran go to the others; while every node chosen is down, no new VM is placed elsewhere.
 
@@ -262,6 +263,18 @@ The view reaches Velero through two accounts of Kubehenge's in the cluster's `ve
 
 Velero runs as `cluster-admin`, which backing up and restoring every resource needs, and its node agents read every pod's volumes as root from the host, so the `velero` namespace is exempt from pod security. Restoring a backup into another cluster, and deleting a backup before it runs out, are done with the Velero CLI against the cluster.
 
+### Volume snapshots
+
+With **Take volume snapshots** (the `csi` variable's `volumeSnapshots`), the cluster's CSI plugin takes VolumeSnapshots of its volumes, restores them into new volumes and clones volumes (a PersistentVolumeClaim whose `dataSource` is another claim). Proxmox VE copies a volume only for `root@pam` signed in with its password, never for an API token, so the plugin of such a cluster signs in as `root@pam` instead of with the cluster's token; the cloud controller manager keeps the token.
+
+- **What it grants:** `root@pam` holds every privilege on the whole Proxmox VE cluster. Whoever takes over the cluster, or reads the Secret its CSI plugin signs in with (`kube-system/kubehenge-proxmox-root` in the cluster), can do anything on every Proxmox VE node. Switch it on only for clusters run by those you would give `root@pam` to.
+- **Where it is offered:** where the administrator stored `root@pam`'s password ([install.md](install.md#volume-snapshots)), and only on storage local to each node of a type the plugin copies on: ZFS, LVM, LVM-thin, directory or btrfs. Kubehenge refuses it on shared storage and on any other type, and refuses another storage for a cluster that has it on. `root@pam` must sign in without a second factor. Switching it on takes your own `Permissions.Modify` on `/`, which only those who could make themselves `root@pam`'s equal hold.
+- **What the cluster gets:** the plugin's newest release with its `csi-snapshotter` sidecar, the VolumeSnapshotClass `proxmox` (the default, deleting a snapshot's volume with it), and on kubeadm and k3s the external snapshotter's CustomResourceDefinitions and snapshot controller. RKE2 runs a snapshot controller of its own, which the cluster uses.
+- **How long a copy may take:** the plugin waits up to 4 minutes for Proxmox VE to copy a volume, and the sidecars wait 5 minutes for the plugin. A copy that takes longer, a volume of a few tens of GB on a single disk, fails; when the sidecar asks again, the plugin may find the half-written copy and report the snapshot or volume ready while Proxmox VE is still writing it. Keep the volumes you snapshot well below that size, or check a large snapshot's data before relying on it.
+- **Switching it off** removes the sidecar, the VolumeSnapshotClass and the snapshot controller, and the plugin signs in with the cluster's token again. The CustomResourceDefinitions stay, so VolumeSnapshots still in the cluster keep their volumes on Proxmox VE: delete them while the option is on, or they go when the cluster is deleted.
+
+When Kubehenge cannot give the plugin `root@pam`, such as after the administrator removed the password, the plugin keeps the cluster's token and `kubectl describe cluster` shows a `VolumeSnapshotsRefused` event saying why.
+
 ## Delete
 
 **Delete** asks for the cluster's name. It deletes the cluster's VMs and its persistent volumes, and removes it from Rancher first. It cannot be undone. Its backups stay in their target, and its backup keys beside it ([Back up and restore](#back-up-and-restore)). Once the VMs are gone, Kubehenge's controller removes the cluster's pool, user, token and volume owner VM. If a node that may hold some of the cluster's volumes on its local storage is offline, the controller waits for it. Cluster API removes each VM's cloud-init ISO (`user-data-<VMID>.iso` on the cloud-init storage) with the VM; only a VM deleted by hand, outside Cluster API, leaves its ISO behind, which can then be removed under the storage's ISO Images in Proxmox VE.
@@ -283,6 +296,7 @@ The interface checks the signed-in user's Proxmox VE privileges on each cluster'
 | Run the CSI plugin's newest release | `Datastore.Allocate` | `/storage/<storage>` |
 | Have a missing template built, where the administrator allows it | `VM.Allocate` | the workload pool |
 | Label the nodes with their HA groups | `Sys.Audit` | `/` |
+| Switch volume snapshots on | `Permissions.Modify` | `/` |
 | Scale, upgrade, change add-ons, automatic upgrades and sign-in, delete | `VM.Allocate` | the cluster's pool |
 | See its backups and restores | `VM.Audit` | the cluster's pool |
 | Back up now | `VM.Allocate` | the cluster's pool |
@@ -389,7 +403,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `storage` | yes | The storage for the nodes' disks and the persistent volumes, one of those clusters may use. |
 | `allowedNodes` | no | Proxmox VE nodes the cluster's VMs may run on, at least one; every node when unset. New VMs go to those of them that are online ([above](#machines)). The interface takes only nodes the user can see, or those the cluster already has. A change applies to VMs created after it. |
 | `proxmoxHA` | no | Whether Proxmox VE HA keeps the control-plane VMs on separate nodes ([above](#machines)); default true, where the management cluster has Proxmox VE HA and the storage is shared. |
-| `csi` | no | `datastoreAllocate` (default false): run the CSI plugin's newest release, with `Datastore.Allocate` for the cluster's token on its storage ([above](#persistent-volumes)), where the management cluster lets clusters choose it and on a storage of the cluster's own. |
+| `csi` | no | `datastoreAllocate` (default false): run the CSI plugin's newest release, with `Datastore.Allocate` for the cluster's token on its storage ([above](#persistent-volumes)), where the management cluster lets clusters choose it and on a storage of the cluster's own. `volumeSnapshots` (default false): take volume snapshots, with the CSI plugin signed in as `root@pam` ([above](#volume-snapshots)), where the management cluster lets clusters take them and on storage local to each node. |
 | `ccm` | no | `haGroups` (default false): have the cloud controller manager label the nodes with their Proxmox VE HA groups, with `Sys.Audit` on `/` for the cluster's token ([above](#machines)), where the management cluster lets clusters choose it. |
 | `controlPlaneMachine`, `workerMachine` | no | `cores` (default 2), `memoryMiB` (a multiple of 8, default 4096, with the minimums [above](#machines)), `diskGiB` (default 30 for the control plane and 40 for workers, at least 20; a disk only grows). |
 | `cni` | kubeadm only | kubeadm: `cilium` or `calico`. RKE2: `canal` (default), `calico` or `cilium`. k3s: `flannel` (default), `cilium` or `calico`. The class refuses a change once the cluster exists. |

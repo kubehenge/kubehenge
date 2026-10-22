@@ -208,6 +208,13 @@ A message saying "the cluster's add-ons (…) need … MiB of memory on its work
 - **Clusters do not register:** Rancher's host name must resolve, for people and for every registered cluster, to the Rancher cluster's ingress controller, which answers on the cluster's API address and on every node.
 - **Rancher's agent stays after a cluster leaves Rancher:** Rancher removes it with a `cattle-cleanup-…` job in the `default` namespace, whose pod does not meet `restricted` ([rancher/rancher#58081](https://github.com/rancher/rancher/issues/58081)). In a cluster that holds `default` to `restricted`, the job shows `FailedCreate` events naming the settings it lacks, and keeps trying. Let it run by holding `default` to `baseline` until the job has finished: with Pod Security Admission, `kubectl label namespace default pod-security.kubernetes.io/enforce=baseline`, and afterwards `kubectl label namespace default pod-security.kubernetes.io/enforce-`; with Kyverno, set its level to `baseline` under **Pod security** and back afterwards. A cluster being deleted needs none of this, since its VMs go with the agent.
 
+### Volume snapshots
+
+- **The option is missing:** the administrator has not switched on **Volume snapshots** in the setup ([install.md](install.md#volume-snapshots)).
+- **The option is refused:** the cluster's storage is shared or of a type the CSI plugin does not copy on, or you lack `Permissions.Modify` on `/`; the option says which.
+- **A VolumeSnapshot stays not ready:** `kubectl describe volumesnapshotcontent` shows the CSI plugin's error. An authentication failure there means `root@pam`'s password changed, or a second factor was added to it: give the new password in the setup (Administration page, **Edit…** in the Management cluster section) and apply, or take the second factor off `root@pam`. A `VolumeSnapshotsRefused` event on the cluster (`kubectl describe cluster`) says why Kubehenge gave the plugin the cluster's token instead.
+- **A large volume's snapshot or restore fails, or holds less than it should:** Proxmox VE copies the volume while the plugin waits up to 4 minutes; a copy that takes longer can leave a snapshot reported ready before its data is all written ([clusters.md](clusters.md#volume-snapshots)). Delete it and take snapshots of smaller volumes.
+
 ### A cluster does not finish deleting
 
 - Kubehenge's controller waits while a Proxmox VE node that may hold some of the cluster's volumes on local storage is offline. Bring the node back.

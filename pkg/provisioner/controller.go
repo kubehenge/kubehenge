@@ -76,6 +76,8 @@ type Reconciler struct {
 	// SysAuditGroup is the Proxmox VE group holding Sys.Audit on / that a cluster's user joins for
 	// the cloud controller manager's HA group labels; empty when no cluster may.
 	SysAuditGroup string
+	// VolumeSnapshots is what lets a cluster's CSI plugin take volume snapshots as root@pam.
+	VolumeSnapshots VolumeSnapshots
 
 	ids ciliumIDs
 }
@@ -153,7 +155,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 	addons.CSINewest = len(access.DatastoreAllocate) > 0
-	addonWaiting, err := r.applyAddons(ctx, cluster, creds, &addons)
+	rootPassword, err := r.rootPassword(ctx, cluster)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	addons.VolumeSnapshots = rootPassword != ""
+	addonWaiting, err := r.applyAddons(ctx, cluster, creds, &addons, rootPassword)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -175,7 +182,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // afterTheRest does what waits on other clusters or on the workload cluster's own API, however long
 // that takes, so that nothing else of this cluster waits with it: removing Rancher, which waits on
 // every cluster registered with it, removing Istio, which waits on the cluster's workloads,
-// linking the cluster's Cluster Mesh peers, and what its load balancer needs in the cluster. It
+// removing volume snapshots, which deletes root@pam's configuration in the cluster, linking the
+// cluster's Cluster Mesh peers, and what its load balancer needs in the cluster. It
 // reports whether any of it waits.
 func (r *Reconciler) afterTheRest(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons, rancherRefused string) (bool, error) {
 	rancherWaiting := false
@@ -196,12 +204,19 @@ func (r *Reconciler) afterTheRest(ctx context.Context, cluster *clusterv1.Cluste
 			return false, err
 		}
 	}
+	snapshotsWaiting := false
+	if !addons.VolumeSnapshots {
+		var err error
+		if snapshotsWaiting, err = r.removeVolumeSnapshots(ctx, cluster); err != nil {
+			return false, err
+		}
+	}
 	meshWaiting, err := r.meshCluster(ctx, cluster, addons)
 	if err != nil {
 		return false, err
 	}
 	lbWaiting, err := r.reconcileLoadBalancer(ctx, cluster, addons.LoadBalancer)
-	return rancherWaiting || istioWaiting || meshWaiting || lbWaiting, err
+	return rancherWaiting || istioWaiting || snapshotsWaiting || meshWaiting || lbWaiting, err
 }
 
 // removeRancherWhenFree removes Rancher from a cluster that switched it off, or reports that it
@@ -426,12 +441,12 @@ func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.C
 // applyAddons applies what the cluster gets installed: the Secrets of its ClusterResourceSet, the
 // set itself and the HelmChartProxies of its charts, and removes those switched off. It reports
 // whether an add-on's installation or removal waits on another.
-func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster, creds Credentials, addons *Addons) (bool, error) {
+func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster, creds Credentials, addons *Addons, rootPassword string) (bool, error) {
 	storage, err := variable[string](cluster, "storage")
 	if err != nil {
 		return false, err
 	}
-	resources, err := resourceSetSecret(cluster, r.Endpoint, creds)
+	resources, err := resourceSetSecret(cluster, r.Endpoint, creds, rootPassword)
 	if err != nil {
 		return false, err
 	}
@@ -513,6 +528,8 @@ func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluste
 			wait = func(ctx context.Context, c *clusterv1.Cluster) (bool, error) {
 				return r.backupsWait(ctx, c, &addons.Backups)
 			}
+		case snapshotClassProxy(cluster):
+			wait = r.snapshotClassWaits
 		}
 		if wait != nil {
 			waits, err := wait(ctx, cluster)
@@ -579,6 +596,36 @@ func (r *Reconciler) removeProxies(ctx context.Context, cluster *clusterv1.Clust
 		}
 	}
 	return nil
+}
+
+// proxyReady reports whether the cluster's HelmChartProxy named is there with its releases
+// deployed for its current spec.
+func (r *Reconciler) proxyReady(ctx context.Context, cluster *clusterv1.Cluster, name string) (bool, error) {
+	p := &unstructured.Unstructured{}
+	p.SetGroupVersionKind(helmChartProxyGVK)
+	err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: name}, p)
+	switch {
+	case apierrors.IsNotFound(err):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("reading add-on %s: %w", name, err)
+	}
+	conditions, _, err := unstructured.NestedSlice(p.Object, "status", "conditions")
+	if err != nil {
+		return false, fmt.Errorf("reading add-on %s's conditions: %w", name, err)
+	}
+	for _, c := range conditions {
+		ready, ok := c.(map[string]any)
+		if !ok || ready["type"] != "Ready" {
+			continue
+		}
+		generation, _, err := unstructured.NestedInt64(ready, "observedGeneration")
+		if err != nil {
+			return false, fmt.Errorf("reading add-on %s's conditions: %w", name, err)
+		}
+		return ready["status"] == "True" && generation == p.GetGeneration(), nil
+	}
+	return false, nil
 }
 
 // anyProxy reports whether any of the cluster's HelmChartProxies named is still there.

@@ -66,6 +66,7 @@ describe("a new cluster's Proxmox VE HA", () => {
         placed={false}
         haOffered={haOffered}
         csi={{ offered: false, problem: undefined }}
+        snapshots={{ offered: false, problem: undefined }}
         haGroups={{ offered: false, problem: undefined }}
         nodes={[]}
         rules={{ haRules: undefined, haRulesError: undefined }}

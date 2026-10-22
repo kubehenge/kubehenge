@@ -35,6 +35,7 @@ import {
   cniName,
   csiText,
   haGroupsText,
+  snapshotsText,
   distributionName,
   filled,
   headlampText,
@@ -92,6 +93,7 @@ export interface Form {
   place: Place;
   proxmoxHA: boolean;
   datastoreAllocate: boolean;
+  volumeSnapshots: boolean;
   haGroups: boolean;
   controlPlaneMachine: Machine;
   workerMachine: Machine;
@@ -334,6 +336,7 @@ export const newForm = (): Form => ({
   place: anyNode,
   proxmoxHA: true,
   datastoreAllocate: false,
+  volumeSnapshots: false,
   haGroups: false,
   controlPlaneMachine: machineDefaults(undefined),
   workerMachine: machineDefaults(undefined),
@@ -465,8 +468,11 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   if (!form.proxmoxHA) {
     variables["proxmoxHA"] = false;
   }
-  if (form.datastoreAllocate && defined.has("csi")) {
-    variables["csi"] = { datastoreAllocate: true };
+  if ((form.datastoreAllocate || form.volumeSnapshots) && defined.has("csi")) {
+    variables["csi"] = {
+      ...(form.datastoreAllocate && { datastoreAllocate: true }),
+      ...(form.volumeSnapshots && { volumeSnapshots: true }),
+    };
   }
   if (form.haGroups && defined.has("ccm")) {
     variables["ccm"] = { haGroups: true };
@@ -527,7 +533,7 @@ function meshChoice(form: Form): string {
 export function summary(
   form: Form,
   c: ClusterClass,
-  offered: { ha?: boolean; csi?: boolean; haGroups?: boolean } = {},
+  offered: { ha?: boolean; csi?: boolean; snapshots?: boolean; haGroups?: boolean } = {},
 ): [string, string][] {
   const defined = new Set(c.variables.map((v) => v.name));
   const chosenRange =
@@ -569,6 +575,9 @@ export function summary(
   }
   if (offered.csi === true) {
     rows.push(["CSI plugin", csiText(form.datastoreAllocate)]);
+  }
+  if (offered.snapshots === true) {
+    rows.push(["Volume snapshots", snapshotsText(form.volumeSnapshots)]);
   }
   if (offered.haGroups === true) {
     rows.push(["HA group labels", haGroupsText(form.haGroups)]);
@@ -656,6 +665,7 @@ export type FieldKey =
   | "services"
   | "storage"
   | "datastoreAllocate"
+  | "volumeSnapshots"
   | "haGroups"
   | "placement"
   | "controlPlaneMachine"
@@ -955,6 +965,58 @@ export interface CSIOffer {
 export function csiOffer(check: Omit<DatastoreAllocateCheck, "cls"> & { cls: ClusterClass | undefined }): CSIOffer {
   const { cls } = check;
   return { offered: csiOffered(cls), problem: cls && datastoreAllocateProblem({ ...check, cls }) };
+}
+
+/** volumeSnapshotsAnnotation marks the classes whose clusters may take volume snapshots. */
+export const volumeSnapshotsAnnotation = "kubehenge.dev/volume-snapshots";
+/** The storages, comma-separated, the CSI plugin takes volume snapshots on. */
+export const snapshotStoragesAnnotation = "kubehenge.dev/snapshot-storages";
+
+/** SnapshotsOffer is whether a cluster may take volume snapshots, and what stands in the way. */
+export interface SnapshotsOffer {
+  offered: boolean;
+  problem: string | undefined;
+}
+
+/**
+ * snapshotsOffer is what the class, the storage and the user's own privileges make of a cluster's
+ * choice of volume snapshots; canModifyPermissions is whether the user holds Permissions.Modify on
+ * /, undefined when not known.
+ */
+export function snapshotsOffer(
+  cls: ClusterClass | undefined,
+  storage: string | undefined,
+  canModifyPermissions: boolean | undefined,
+): SnapshotsOffer {
+  const offered =
+    cls?.annotations?.[volumeSnapshotsAnnotation] === "true" && cls.variables.some((v) => v.name === "csi");
+  if (!cls || !offered) {
+    return { offered, problem: undefined };
+  }
+  if (storage === undefined || storage === "") {
+    return { offered, problem: "Choose the cluster's storage first." };
+  }
+  if (!listed(cls, snapshotStoragesAnnotation).includes(storage)) {
+    return {
+      offered,
+      problem: `The CSI plugin takes volume snapshots only on storage local to each node (ZFS, LVM, LVM-thin, directory or btrfs), which storage ${storage} is not.`,
+    };
+  }
+  if (canModifyPermissions === false) {
+    return {
+      offered,
+      problem: "You do not hold Permissions.Modify on /, which giving the cluster's CSI plugin root@pam takes.",
+    };
+  }
+  return { offered, problem: undefined };
+}
+
+/** snapshotsProblems holds the machines step to the volume snapshots a new cluster chose. */
+export function snapshotsProblems(step: Step, form: Form, offer: SnapshotsOffer): Problems {
+  if (step !== "Machines" || !offer.offered || !form.volumeSnapshots || offer.problem === undefined) {
+    return {};
+  }
+  return { volumeSnapshots: offer.problem };
 }
 
 /** csiProblems holds the machines step to the CSI plugin's release a new cluster chose. */

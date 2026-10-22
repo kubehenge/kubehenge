@@ -135,6 +135,7 @@ describe("the CSI plugin's newest release", () => {
         placed={false}
         haOffered={false}
         csi={{ offered, problem }}
+        snapshots={{ offered: false, problem: undefined }}
         haGroups={{ offered: false, problem: undefined }}
         nodes={[]}
         rules={{ haRules: undefined, haRulesError: undefined }}

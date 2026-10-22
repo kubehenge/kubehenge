@@ -44,9 +44,16 @@ const (
 	tolerationsKey    = "tolerations"
 	memoryKey         = "memory"
 	cpuKey            = "cpu"
+	controllerKey     = "controller"
+	annotationsKey    = "annotations"
+	securityKey       = "securityContext"
+	nonRootKey        = "runAsNonRoot"
+	readOnlyRootKey   = "readOnlyRootFilesystem"
 	// The least CPU and memory the small add-on pods ask for.
 	cpu10m     = "10m"
 	memory64Mi = "64Mi"
+	// csiConfigKey is the CSI plugin's configuration in the Secrets it reads it from.
+	csiConfigKey = "csi.yaml"
 
 	// The CNIs Kubehenge installs, as the cni variable names them.
 	cniCilium = "cilium"
@@ -75,8 +82,11 @@ type Charts struct {
 	// clusters whose user holds Datastore.Allocate on their storage.
 	CSI       Chart
 	CSINewest Chart
-	Cilium    Chart
-	Calico    Chart
+	// SnapshotController installs the volume snapshot CRDs and controller, and the plugin's
+	// VolumeSnapshotClass, for clusters that take volume snapshots.
+	SnapshotController Chart
+	Cilium             Chart
+	Calico             Chart
 	// CalicoImages are the images the Tigera operator runs Calico from, all at one release.
 	CalicoImages []Image
 	Headlamp     Chart
@@ -135,6 +145,9 @@ type Addons struct {
 	// CSINewest runs the CSI plugin's newest release, once the cluster's user holds
 	// Datastore.Allocate on its storage, as its csi variable asks.
 	CSINewest bool
+	// VolumeSnapshots has the CSI plugin take volume snapshots signed in as root@pam, once nothing
+	// stands in the way of what the cluster's csi variable asks.
+	VolumeSnapshots bool
 
 	// backupTarget is the target the backups name, found in the cluster's class; nil while it is
 	// not, when Velero is neither installed nor removed.
@@ -322,47 +335,78 @@ type proxmoxFeatures struct {
 	ControllerVMID int    `json:"controllerVmID,omitempty"`
 }
 
+// proxmoxCluster signs in with a token, or with a user's password; the plugins take exactly one.
 type proxmoxCluster struct {
 	URL         string `json:"url"`
 	Insecure    bool   `json:"insecure"`
-	TokenID     string `json:"token_id"`
-	TokenSecret string `json:"token_secret"`
+	TokenID     string `json:"token_id,omitempty"`
+	TokenSecret string `json:"token_secret,omitempty"`
+	Username    string `json:"username,omitempty"`
+	Password    string `json:"password,omitempty"`
 	Region      string `json:"region"`
 }
 
-// resourceSetSecret wraps the workload cluster's Secret for a ClusterResourceSet, which applies
-// every key of its Secret as a manifest.
-func resourceSetSecret(cluster *clusterv1.Cluster, endpoint Endpoint, c Credentials) (*corev1.Secret, error) {
+// resourceSetSecret wraps the workload cluster's Secrets for a ClusterResourceSet, which applies
+// every key of its Secret as a manifest: workloadSecret, and with rootPassword rootWorkloadSecret,
+// whose CSI plugin configuration signs in as root@pam.
+func resourceSetSecret(cluster *clusterv1.Cluster, endpoint Endpoint, c Credentials, rootPassword string) (*corev1.Secret, error) {
 	pve := proxmoxCluster{URL: endpoint.URL + "/api2/json", Insecure: endpoint.Insecure, TokenID: c.TokenID, TokenSecret: c.TokenSecret, Region: c.Region}
 	// capmox names machines proxmox://<SMBIOS UUID>, which only the capmox provider mode matches.
 	ccm, err := yaml.Marshal(proxmoxConfig{Features: proxmoxFeatures{Provider: "capmox"}, Clusters: []proxmoxCluster{pve}})
 	if err != nil {
 		return nil, fmt.Errorf("encoding the cloud controller manager's configuration: %w", err)
 	}
-	csi, err := yaml.Marshal(proxmoxConfig{
-		Features: proxmoxFeatures{Provider: "capmox", ControllerVMID: c.VolumeOwner},
-		Clusters: []proxmoxCluster{pve},
-	})
+	csi, err := csiConfig(c, &pve)
 	if err != nil {
-		return nil, fmt.Errorf("encoding the CSI plugin's configuration: %w", err)
+		return nil, err
 	}
-	inner := &corev1.Secret{
-		APIVersion: "v1",
-		Kind:       secretKind,
-		Name:       workloadSecret,
-		Namespace:  metav1.NamespaceSystem,
-		Type:       corev1.SecretTypeOpaque,
-		StringData: map[string]string{"ccm.yaml": string(ccm), "csi.yaml": string(csi), proxmoxCAKey: endpoint.CA},
-	}
-	manifest, err := yaml.Marshal(inner)
+	manifest, err := workloadManifest(workloadSecret, map[string]string{"ccm.yaml": string(ccm), csiConfigKey: csi, proxmoxCAKey: endpoint.CA})
 	if err != nil {
-		return nil, fmt.Errorf("encoding the workload cluster's Secret: %w", err)
+		return nil, err
+	}
+	data := map[string][]byte{workloadSecret + ".yaml": manifest}
+	if rootPassword != "" {
+		root, err := csiConfig(c, &proxmoxCluster{URL: pve.URL, Insecure: pve.Insecure, Username: rootUser, Password: rootPassword, Region: c.Region})
+		if err != nil {
+			return nil, err
+		}
+		if data[rootWorkloadSecret+".yaml"], err = workloadManifest(rootWorkloadSecret, map[string]string{csiConfigKey: root}); err != nil {
+			return nil, err
+		}
 	}
 	return &corev1.Secret{
 		Name: cluster.Name + "-proxmox", Namespace: cluster.Namespace,
 		Type: addonsv1.ClusterResourceSetSecretType,
-		Data: map[string][]byte{workloadSecret + ".yaml": manifest},
+		Data: data,
 	}, nil
+}
+
+// csiConfig is the CSI plugin's configuration, signing in as pve says.
+func csiConfig(c Credentials, pve *proxmoxCluster) (string, error) {
+	csi, err := yaml.Marshal(proxmoxConfig{
+		Features: proxmoxFeatures{Provider: "capmox", ControllerVMID: c.VolumeOwner},
+		Clusters: []proxmoxCluster{*pve},
+	})
+	if err != nil {
+		return "", fmt.Errorf("encoding the CSI plugin's configuration: %w", err)
+	}
+	return string(csi), nil
+}
+
+// workloadManifest is a kube-system Secret of the workload cluster, as a manifest.
+func workloadManifest(name string, data map[string]string) ([]byte, error) {
+	manifest, err := yaml.Marshal(&corev1.Secret{
+		APIVersion: "v1",
+		Kind:       secretKind,
+		Name:       name,
+		Namespace:  metav1.NamespaceSystem,
+		Type:       corev1.SecretTypeOpaque,
+		StringData: data,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encoding the workload cluster's Secret %s: %w", name, err)
+	}
+	return manifest, nil
 }
 
 // podRange is the CNI's pod range: the Cluster's own, or else the one the distribution's own
@@ -585,13 +629,13 @@ func headlampValues(h Headlamp) map[string]any {
 		"config":             config,
 		"pluginsManager":     map[string]any{"enabled": false},
 		// The chart's own default leaves out what Pod Security's restricted level requires.
-		"securityContext": restrictedContainer(map[string]any{
-			"runAsNonRoot":           true,
-			"runAsUser":              user,
-			"runAsGroup":             group,
-			"privileged":             false,
-			"readOnlyRootFilesystem": true,
-			seccompProfileKey:        runtimeDefault(),
+		securityKey: restrictedContainer(map[string]any{
+			nonRootKey:        true,
+			"runAsUser":       user,
+			"runAsGroup":      group,
+			"privileged":      false,
+			readOnlyRootKey:   true,
+			seccompProfileKey: runtimeDefault(),
 		}),
 		"resources": map[string]any{
 			requestsKey: map[string]any{cpuKey: cpu10m, memoryKey: memory64Mi},
@@ -665,8 +709,9 @@ func toleration(key string, effect corev1.TaintEffect) map[string]any {
 }
 
 // proxmoxValues are the values of the two charts that talk to Proxmox VE: the cloud controller
-// manager's and the CSI plugin's.
-func proxmoxValues(storage string) (map[string]any, map[string]any) {
+// manager's and the CSI plugin's. With volume snapshots, the plugin signs in as root@pam, runs its
+// snapshot sidecar, and its sidecars wait past the plugin's own wait for a volume copy.
+func proxmoxValues(storage string, addons *Addons) (map[string]any, map[string]any) {
 	// The charts have no CA setting; this replaces the image's trust store with the Proxmox VE CA,
 	// the only server either talks to besides the in-cluster API, which uses its own CA.
 	ca := map[string]any{
@@ -705,31 +750,57 @@ func proxmoxValues(storage string) (map[string]any, map[string]any) {
 	sidecar := func(args ...any) map[string]any {
 		return map[string]any{"args": append(args, leaseArgs("leader-election")...)}
 	}
+	snapshotter := sidecar()
+	config := workloadSecret
 	csi := map[string]any{
 		// A sidecar's args replace the chart's own, which for the attacher and the provisioner are
 		// the file system they default to.
-		"controller": map[string]any{
+		controllerKey: map[string]any{
 			"attacher":    sidecar("--default-fstype=ext4"),
 			"provisioner": sidecar("--default-fstype=ext4"),
 			"resizer":     sidecar(),
-			"snapshotter": sidecar(),
+			"snapshotter": snapshotter,
 		},
 		"affinity":                controlPlane,
 		tolerationsKey:            controlPlaneTolerations(),
-		"existingConfigSecret":    workloadSecret,
-		"existingConfigSecretKey": "csi.yaml",
+		"existingConfigSecretKey": csiConfigKey,
 		"storageClass": []any{map[string]any{
 			"name":          "proxmox",
 			"storage":       storage,
 			"reclaimPolicy": string(corev1.PersistentVolumeReclaimDelete),
 			"fstype":        "ext4",
-			"annotations":   map[string]any{"storageclass.kubernetes.io/is-default-class": strconv.FormatBool(true)},
+			annotationsKey:  map[string]any{"storageclass.kubernetes.io/is-default-class": strconv.FormatBool(true)},
 		}},
 	}
+	if addons.VolumeSnapshots {
+		snapshotter["enabled"] = true
+		config = rootWorkloadSecret
+		csi["timeout"] = csiCopyTimeout
+	}
+	csi["existingConfigSecret"] = config
 	for k, v := range ca {
 		ccm[k], csi[k] = v, v
 	}
 	return ccm, csi
+}
+
+// proxmoxCharts are the charts that talk to Proxmox VE: the cloud controller manager, the CSI
+// plugin, and with volume snapshots the snapshot controller and the plugin's VolumeSnapshotClass.
+func proxmoxCharts(charts *Charts, distribution templates.Distribution, storage string, addons *Addons) []chartProxy {
+	ccm, csi := proxmoxValues(storage, addons)
+	csiChart := charts.CSI
+	// root@pam needs none of the privileges the newest release is held back for.
+	if addons.CSINewest || addons.VolumeSnapshots {
+		csiChart = charts.CSINewest
+	}
+	wanted := []chartProxy{
+		{"proxmox-ccm", "proxmox-cloud-controller-manager", metav1.NamespaceSystem, charts.CCM, ccm},
+		{"proxmox-csi", "proxmox-csi-plugin", metav1.NamespaceSystem, csiChart, csi},
+	}
+	if addons.VolumeSnapshots {
+		wanted = append(wanted, snapshotCharts(charts, distribution)...)
+	}
+	return wanted
 }
 
 // chartProxy is a chart a cluster gets, by the suffix of its HelmChartProxy's name.
@@ -771,15 +842,7 @@ func cniChart(cluster *clusterv1.Cluster, charts *Charts, cni CNI, addons *Addon
 // which brings no ingress controller, Traefik. The Add-on Provider for Helm
 // selects only Clusters in a proxy's own namespace, so each cluster gets its own proxies beside it.
 func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution templates.Distribution, storage string, cni CNI, addons *Addons) ([]*unstructured.Unstructured, error) {
-	ccm, csi := proxmoxValues(storage)
-	csiChart := charts.CSI
-	if addons.CSINewest {
-		csiChart = charts.CSINewest
-	}
-	wanted := []chartProxy{
-		{"proxmox-ccm", "proxmox-cloud-controller-manager", metav1.NamespaceSystem, charts.CCM, ccm},
-		{"proxmox-csi", "proxmox-csi-plugin", metav1.NamespaceSystem, csiChart, csi},
-	}
+	wanted := proxmoxCharts(charts, distribution, storage, addons)
 	cniCharts, err := cniChart(cluster, charts, cni, addons)
 	if err != nil {
 		return nil, err

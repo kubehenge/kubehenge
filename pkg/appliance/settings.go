@@ -64,6 +64,13 @@ type Settings struct {
 	// ClusterSysAudit lets a cluster choose the cloud controller manager's HA group labels, whose
 	// token then holds Sys.Audit on /.
 	ClusterSysAudit bool `json:"clusterSysAudit,omitempty"`
+	// ClusterVolumeSnapshots lets a cluster take volume snapshots, whose CSI plugin then signs in as
+	// root@pam with the password the appliance keeps in the management cluster.
+	ClusterVolumeSnapshots bool `json:"clusterVolumeSnapshots,omitempty"`
+	// RootPassword is root@pam's password, for an apply that switches ClusterVolumeSnapshots on or
+	// changes the password; empty keeps the one stored. It goes into the management cluster alone:
+	// never into the saved settings, the module's variables or its state.
+	RootPassword string `json:"-"`
 	// ExtraClusterNamespaces are more namespaces the interface creates and manages clusters in,
 	// beside its own, such as one per team.
 	ExtraClusterNamespaces []string `json:"extraClusterNamespaces,omitempty"`

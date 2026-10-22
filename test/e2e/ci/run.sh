@@ -219,8 +219,11 @@ case "${test}" in
         ;;
     k3s)
         # The one cluster on the storage of its own, which switches the CSI plugin's newest release
-        # on and off.
+        # on and off, and volume snapshots, with root@pam's password stored as the appliance stores it.
         export KUBEHENGE_E2E_STORAGE=own KUBEHENGE_E2E_DATASTORE_ALLOCATE=1 KUBEHENGE_E2E_LOCAL_STORAGE=local
+        export KUBEHENGE_E2E_VOLUME_SNAPSHOTS=1
+        printf '%s' "${KUBEHENGE_E2E_ROOT_PASSWORD:?}" |
+            kubectl -n kubehenge-system create secret generic kubehenge-root-pam --from-file=password=/dev/stdin > /dev/null
         # In one of main.tf's extra_cluster_namespaces, created with the interface's own account.
         export KUBEHENGE_E2E_NAMESPACE=e2e-team
         e2e e2e-workload-cluster CLASS=kubehenge-k3s VERSION="${from}+k3s1" UPGRADE="${to}+k3s1"

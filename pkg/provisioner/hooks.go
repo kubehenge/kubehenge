@@ -81,6 +81,8 @@ type Hooks struct {
 	Now  func() time.Time
 	// SysAuditGroup is the Proxmox VE group holding Sys.Audit on /; empty when no cluster may join it.
 	SysAuditGroup string
+	// VolumeSnapshots is what lets a cluster's CSI plugin take volume snapshots as root@pam.
+	VolumeSnapshots VolumeSnapshots
 }
 
 // BeforeClusterUpgrade holds Rancher's cluster at the Kubernetes versions Rancher runs on, and has
@@ -133,8 +135,8 @@ func (h *Hooks) BeforeClusterDelete(ctx context.Context, req *runtimehooksv1.Bef
 // objects; capmox would otherwise clone its first VMs into a pool that does not exist yet. It
 // refuses a cluster whose pod or service range overlaps its nodes' network, load-balancer
 // addresses that clash with that network or another cluster's, logs without monitoring, backups
-// Velero cannot take, Datastore.Allocate on a storage that is not the cluster's alone, and
-// Sys.Audit on / where no cluster may hold it.
+// Velero cannot take, Datastore.Allocate on a storage that is not the cluster's alone, volume
+// snapshots where they cannot be taken, and Sys.Audit on / where no cluster may hold it.
 func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.BeforeClusterCreateRequest, resp *runtimehooksv1.BeforeClusterCreateResponse) {
 	resp.Status = runtimehooksv1.ResponseStatusSuccess
 	cluster := &req.Cluster
@@ -146,43 +148,7 @@ func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.Bef
 		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
 		return
 	}
-	if err := checkRanges(cluster, class); err != nil {
-		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
-		return
-	}
-	if err := h.checkLoadBalancer(ctx, cluster); err != nil {
-		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
-		return
-	}
-	if err := h.checkRancher(ctx, cluster, cluster.Spec.Topology.Version); err != nil {
-		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
-		return
-	}
-	if err := checkRancherNodes(cluster, class); err != nil {
-		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
-		return
-	}
-	if err := checkControlPlaneSize(nil, cluster, class); err != nil {
-		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
-		return
-	}
-	if err := checkAddonRoom(nil, cluster, class); err != nil {
-		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
-		return
-	}
-	if err := checkLogs(cluster); err != nil {
-		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
-		return
-	}
-	if err := checkBackups(nil, cluster, class); err != nil {
-		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
-		return
-	}
-	if err := h.checkDatastoreAllocate(ctx, cluster, class); err != nil {
-		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
-		return
-	}
-	if err := h.checkSysAudit(cluster); err != nil {
+	if err := h.refusal(ctx, cluster, class); err != nil {
 		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
 		return
 	}
@@ -197,6 +163,28 @@ func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.Bef
 		resp.Status = runtimehooksv1.ResponseStatusFailure
 		resp.Message = err.Error()
 	}
+}
+
+// refusal is the first reason BeforeClusterCreate refuses the cluster for, or nil.
+func (h *Hooks) refusal(ctx context.Context, cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) error {
+	for _, check := range []func() error{
+		func() error { return checkRanges(cluster, class) },
+		func() error { return h.checkLoadBalancer(ctx, cluster) },
+		func() error { return h.checkRancher(ctx, cluster, cluster.Spec.Topology.Version) },
+		func() error { return checkRancherNodes(cluster, class) },
+		func() error { return checkControlPlaneSize(nil, cluster, class) },
+		func() error { return checkAddonRoom(nil, cluster, class) },
+		func() error { return checkLogs(cluster) },
+		func() error { return checkBackups(nil, cluster, class) },
+		func() error { return h.checkDatastoreAllocate(ctx, cluster, class) },
+		func() error { return h.checkVolumeSnapshots(ctx, cluster, class) },
+		func() error { return h.checkSysAudit(cluster) },
+	} {
+		if err := check(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // newestNodeImages moves a cluster's node image time to now when that changes the build its

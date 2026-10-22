@@ -549,7 +549,7 @@ func (u *Upgrader) hold(ctx context.Context, c *clusterv1.Cluster, held string) 
 	if held != "" {
 		value = held
 	}
-	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]any{NodeImageHeldAnnotation: value}}})
+	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{annotationsKey: map[string]any{NodeImageHeldAnnotation: value}}})
 	if err != nil {
 		return fmt.Errorf("recording the node image hold: %w", err)
 	}

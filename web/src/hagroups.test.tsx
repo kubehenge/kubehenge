@@ -99,6 +99,7 @@ describe("the HA group labels", () => {
         placed={false}
         haOffered={false}
         csi={{ offered: false, problem: undefined }}
+        snapshots={{ offered: false, problem: undefined }}
         haGroups={{ offered, problem }}
         nodes={[]}
         rules={{ haRules: undefined, haRulesError: undefined }}

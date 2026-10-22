@@ -2,7 +2,7 @@ import { useEffect, useId, useState, type JSX } from "react";
 
 import { api } from "./api";
 import type { Cluster, ClusterClass, HARule, HARules, PveNode, Storage } from "./types";
-import { Dialog, ErrorBox, Field, errorMessage, filled, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, errorMessage, filled, useChange, usePrivilege } from "./ui";
 import { flag, record, texts } from "./values";
 
 /** Where a cluster's VMs may run: any node, the nodes of an HA rule, or nodes chosen one by one. */
@@ -377,24 +377,6 @@ export function haGroupsOffer(cls: ClusterClass | undefined, canAudit: boolean |
 /** haGroupsOn reads whether the cluster's nodes are labelled with their Proxmox VE HA groups. */
 export const haGroupsOn = (c: Cluster): boolean => flag(record(c.variables["ccm"])["haGroups"]) === true;
 
-/** useCanAudit reads whether the signed-in user holds Sys.Audit on /; undefined until known. */
-export function useCanAudit(): boolean | undefined {
-  const [canAudit, setCanAudit] = useState<boolean>();
-  useEffect(() => {
-    async function load(): Promise<void> {
-      try {
-        const session = await api.session();
-        setCanAudit(session.canAudit);
-      } catch {
-        // The server refuses the change without the privilege in any case; this only says so sooner.
-        setCanAudit(undefined);
-      }
-    }
-    void load();
-  }, []);
-  return canAudit;
-}
-
 /** HAGroupsField chooses the HA group labels; one with a problem can be switched off, not on. */
 export function HAGroupsField({
   checked,
@@ -439,7 +421,7 @@ export function HAGroupsField({
 /** useHAGroupsOffer reads whether an existing cluster may choose the HA group labels, and what stands in the way. */
 export function useHAGroupsOffer(c: Cluster): HAGroupsOffer {
   const [offer, setOffer] = useState<HAGroupsOffer>({ offered: false, problem: undefined });
-  const canAudit = useCanAudit();
+  const canAudit = usePrivilege("canAudit");
   const className = c.class;
   useEffect(() => {
     async function load(): Promise<void> {

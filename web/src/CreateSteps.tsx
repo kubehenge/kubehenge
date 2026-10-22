@@ -12,7 +12,7 @@ import {
   type Form,
   type Machine,
 } from "./create-form";
-import { CSIField } from "./CsiPlugin";
+import { CSIField, SnapshotsField } from "./CsiPlugin";
 import { LoadBalancerFields } from "./LoadBalancer";
 import { addressBits } from "./network";
 import { OIDCProviders } from "./OIDCProviders";
@@ -416,6 +416,7 @@ export function MachinesStep({
   placed,
   haOffered,
   csi,
+  snapshots,
   haGroups,
   nodes,
   rules,
@@ -425,6 +426,7 @@ export function MachinesStep({
   placed: boolean;
   haOffered: boolean;
   csi: { offered: boolean; problem: string | undefined };
+  snapshots: { offered: boolean; problem: string | undefined };
   haGroups: { offered: boolean; problem: string | undefined };
   nodes: PveNode[];
   rules: HARulesRead;
@@ -463,6 +465,13 @@ export function MachinesStep({
           onChange={(on) => set("datastoreAllocate", on)}
           storage={filled(form.storage) ? form.storage : undefined}
           problem={csi.problem}
+        />
+      )}
+      {snapshots.offered && (
+        <SnapshotsField
+          checked={form.volumeSnapshots}
+          onChange={(on) => set("volumeSnapshots", on)}
+          problem={snapshots.problem}
         />
       )}
       {haGroups.offered && (

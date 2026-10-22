@@ -90,6 +90,9 @@ export interface SetupForm {
   refreshDNS: string;
   creatorBuilds: boolean;
   clusterSysAudit: boolean;
+  clusterVolumeSnapshots: boolean;
+  // Sent beside the settings, never kept in them; empty keeps the one stored.
+  rootPassword: string;
   moreNamespaces: boolean;
   // Separated by commas or lines.
   extraNamespaces: string;
@@ -167,6 +170,9 @@ function formatMirrors(m: Record<string, string[]> | undefined): string {
     .join("\n");
 }
 
+/** rootPasswordOf is the root@pam password a run hands over: none while volume snapshots are off. */
+export const rootPasswordOf = (f: SetupForm): string => (f.clusterVolumeSnapshots ? f.rootPassword : "");
+
 export function settings(f: SetupForm): ManagementSettings {
   const s: ManagementSettings = {
     nodes: f.nodes,
@@ -215,6 +221,9 @@ export function settings(f: SetupForm): ManagementSettings {
   s.templateRefresh = refreshSettings(f);
   if (f.clusterSysAudit) {
     s.clusterSysAudit = true;
+  }
+  if (f.clusterVolumeSnapshots) {
+    s.clusterVolumeSnapshots = true;
   }
   if (f.moreNamespaces && list(f.extraNamespaces).length > 0) {
     s.extraClusterNamespaces = list(f.extraNamespaces);
@@ -293,6 +302,8 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     backupTargets: saved.backupTargets ?? [],
     ...refreshFields(saved.templateRefresh),
     clusterSysAudit: saved.clusterSysAudit === true,
+    clusterVolumeSnapshots: saved.clusterVolumeSnapshots === true,
+    rootPassword: "",
     moreNamespaces: (saved.extraClusterNamespaces ?? []).length > 0,
     extraNamespaces: (saved.extraClusterNamespaces ?? []).join(", "),
     passphrase: "",
@@ -321,6 +332,7 @@ export type SetupField =
   | "refreshGateway"
   | "refreshDNS"
   | "extraNamespaces"
+  | "rootPassword"
   | "passphrase"
   | "confirm";
 
@@ -377,6 +389,11 @@ export function setupFieldProblems(
     ...offerProblems(f),
     ...refreshProblems(f),
   };
+  // Switched on again, the password stored with the first switch-on stays unless another is given.
+  if (f.clusterVolumeSnapshots && was?.clusterVolumeSnapshots !== true && !filled(f.rootPassword)) {
+    p.rootPassword =
+      "Give root@pam's password, which the CSI plugins of clusters taking volume snapshots sign in with.";
+  }
   if (passphraseShort(f.passphrase)) {
     p.passphrase = `The passphrase needs at least ${minPassphrase} characters.`;
   } else if (firstRun && f.passphrase !== f.confirm) {
@@ -679,6 +696,10 @@ function optInRows(s: ManagementSettings): [string, string][] {
       s.clusterDatastoreAllocate === true ? "Clusters may choose it, on a storage of their own" : "Off",
     ],
     ["HA group labels", s.clusterSysAudit === true ? "Clusters may choose them, with Sys.Audit on /" : "Off"],
+    [
+      "Volume snapshots",
+      s.clusterVolumeSnapshots === true ? "Clusters may take them, with their CSI plugin signed in as root@pam" : "Off",
+    ],
   ];
 }
 
@@ -1211,6 +1232,54 @@ function SysAuditChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element 
   );
 }
 
+function VolumeSnapshotsChoice({
+  form,
+  set,
+  shown,
+  fixed,
+}: FieldsProps & { fixed: ManagementSettings | undefined }): JSX.Element {
+  const hint = useId();
+  const stored = fixed?.clusterVolumeSnapshots === true;
+  return (
+    <fieldset className="group">
+      <legend>Volume snapshots</legend>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.clusterVolumeSnapshots}
+          aria-describedby={hint}
+          onChange={(e) => set("clusterVolumeSnapshots", e.target.checked)}
+        />{" "}
+        Let clusters take volume snapshots
+      </label>
+      <p className="muted" id={hint}>
+        The CSI plugin copies volumes for snapshots, restores and clones through a Proxmox VE method that only root@pam
+        may call, with a password and without a second factor; no API token can. A cluster that chooses volume snapshots
+        gets root@pam&apos;s password in its CSI plugin&apos;s configuration, so whoever takes over that cluster or
+        reads that Secret holds the whole Proxmox VE cluster. The password is kept in the management cluster, never on
+        the appliance. Switching this off removes it, and clusters go back to their own tokens.
+      </p>
+      {form.clusterVolumeSnapshots && (
+        <Field
+          label="root@pam's password"
+          hint={stored ? "Leave empty to keep the one stored." : "Proxmox VE checks it before anything is applied."}
+          error={shown("rootPassword")}
+        >
+          {(id) => (
+            <input
+              id={id}
+              type="password"
+              autoComplete="off"
+              value={form.rootPassword}
+              onChange={(e) => set("rootPassword", e.target.value)}
+            />
+          )}
+        </Field>
+      )}
+    </fieldset>
+  );
+}
+
 function NamespacesChoice({ form, set, shown }: FieldsProps): JSX.Element {
   const hint = useId();
   return (
@@ -1447,8 +1516,8 @@ function SetupWizard({
     setBusy(true);
     setError(undefined);
     try {
-      await api.setup(settings(effective), form.passphrase);
-      setForm((f) => ({ ...f, passphrase: "", confirm: "" }));
+      await api.setup(settings(effective), form.passphrase, rootPasswordOf(effective));
+      setForm((f) => ({ ...f, passphrase: "", confirm: "", rootPassword: "" }));
       onStarted();
     } catch (err) {
       setError(errorMessage(err));
@@ -1637,6 +1706,7 @@ function SetupWizard({
         <DatastoreAllocateChoice form={form} set={set} />
         <RefreshChoice form={effective} set={set} shown={shown} />
         <SysAuditChoice form={form} set={set} />
+        <VolumeSnapshotsChoice form={form} set={set} shown={shown} fixed={fixed} />
         <NamespacesChoice form={form} set={set} shown={shown} />
         <fieldset className="group">
           <legend>Identity providers</legend>

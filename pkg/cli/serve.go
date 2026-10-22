@@ -184,6 +184,7 @@ func (o *serveOptions) setUpAppliance(conn *pve.Config) error {
 	a.ProxmoxURL, a.ProxmoxCA, a.ProxmoxInsecure, a.Log = conn.URL, string(ca), conn.Insecure, s.Log
 	s.ProxmoxInsecure = conn.Insecure
 	a.InterfaceKubeconfig = appliance.InterfaceKubeconfig
+	a.StoreRootPassword = appliance.StoreRootPassword
 	a.LoadLast()
 	if a.Ready() {
 		kubeconfig, readErr := os.ReadFile(a.KubeconfigPath())

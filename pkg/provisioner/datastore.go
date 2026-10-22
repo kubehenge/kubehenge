@@ -20,6 +20,9 @@ type CSI struct {
 	// deletes volumes through the storage, and gives the cluster's token Datastore.Allocate on the
 	// cluster's storage, which both need.
 	DatastoreAllocate bool `json:"datastoreAllocate,omitempty"`
+	// VolumeSnapshots has the plugin take volume snapshots, restore them and clone volumes, signed
+	// in as root@pam, the one user Proxmox VE lets copy a volume.
+	VolumeSnapshots bool `json:"volumeSnapshots,omitempty"`
 }
 
 // csiOf reads a cluster's csi variable, the zero value if it has none.

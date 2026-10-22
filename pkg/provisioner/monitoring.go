@@ -122,7 +122,7 @@ func monitoringValues(distribution templates.Distribution, proxy Image, addons *
 				"enabled":                  true,
 				"image":                    map[string]any{"registry": proxy.Registry, "repository": proxy.Repository, "tag": proxy.Tag, "sha": proxy.Digest},
 				"tls":                      map[string]any{"enabled": true, "tlsClientAuth": true},
-				"containerSecurityContext": restrictedContainer(map[string]any{"readOnlyRootFilesystem": true}),
+				"containerSecurityContext": restrictedContainer(map[string]any{readOnlyRootKey: true}),
 			},
 			"tlsSecret": map[string]any{"enabled": true, "secretName": nodeExporter + "-tls", "caItem": "ca.crt"},
 			prometheus: map[string]any{"monitor": map[string]any{

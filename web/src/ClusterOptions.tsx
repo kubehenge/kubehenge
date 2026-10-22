@@ -3,7 +3,7 @@ import { useId, useState, type JSX } from "react";
 
 import { ClusterMeshDialog, meshText, runsCilium } from "./ClusterMesh";
 import { UpgradesDialog, describe, refreshesNodes, upgradePolicy } from "./ClusterUpgrades";
-import { CSIDialog, csiOn, useCSIOffer } from "./CsiPlugin";
+import { CSIDialog, SnapshotsDialog, csiOn, snapshotsOn, useCSIOffer, useSnapshotsOffer } from "./CsiPlugin";
 import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBalancer";
 import { LogsDialog, logsOf, logsText } from "./Logs";
 import { OIDCProviders, cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
@@ -37,6 +37,7 @@ import {
   registeredWithRancher,
   csiText,
   haGroupsText,
+  snapshotsText,
   useChange,
 } from "./ui";
 import { flag, record, text, texts } from "./values";
@@ -46,6 +47,7 @@ export type OptionAction =
   | "placement"
   | "ha"
   | "csi"
+  | "snapshots"
   | "haGroups"
   | "headlamp"
   | "monitoring"
@@ -111,6 +113,9 @@ export function OptionDialog({
     }
     case "csi": {
       return <CSIDialog cluster={c} onClose={onClose} />;
+    }
+    case "snapshots": {
+      return <SnapshotsDialog cluster={c} onClose={onClose} />;
     }
     case "haGroups": {
       return <HAGroupsDialog cluster={c} onClose={onClose} />;
@@ -180,6 +185,7 @@ export function Options<A extends string = never>({
   const upgrades = upgradePolicy(c.variables["upgrades"]);
   const haOffered = useHAOffered(c.class, text(c.variables["storage"]));
   const csi = useCSIOffer(c);
+  const snapshots = useSnapshotsOffer(c);
   const haGroups = useHAGroupsOffer(c);
   const cis = c.variables["cis"] === true;
   const podSecurity = enforced(podSecurityOf(c.variables["podSecurity"]), cis);
@@ -206,6 +212,14 @@ export function Options<A extends string = never>({
   // choice, so that it can be switched back.
   if (csi.offered || csiOn(c)) {
     rows.push({ label: "CSI plugin", value: csiText(csiOn(c)), action: "csi", name: "the CSI plugin" });
+  }
+  if (snapshots.offered || snapshotsOn(c)) {
+    rows.push({
+      label: "Volume snapshots",
+      value: snapshotsText(snapshotsOn(c)),
+      action: "snapshots",
+      name: "volume snapshots",
+    });
   }
   if (haGroups.offered || haGroupsOn(c)) {
     rows.push({

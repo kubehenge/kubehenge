@@ -37,6 +37,9 @@ type sessionView struct {
 	// CanAudit tells whether the user holds Sys.Audit on /, which giving a cluster's token the same
 	// for its HA group labels needs; unset when not known.
 	CanAudit *bool `json:"canAudit,omitempty"`
+	// CanModifyPermissions tells whether the user holds Permissions.Modify on /, which giving a
+	// cluster's CSI plugin root@pam for volume snapshots needs; unset when not known.
+	CanModifyPermissions *bool `json:"canModifyPermissions,omitempty"`
 	// Namespace is where the interface creates clusters unless the creator chooses another of
 	// Namespaces, so it can offer the ones a new cluster can be linked with.
 	Namespace string `json:"namespace,omitempty"`
@@ -177,8 +180,8 @@ func (s *Server) whoAmI(w http.ResponseWriter, r *http.Request, u user) {
 		v.CanCreate, v.CanTrust = &create, &trust
 	}
 	if held, err := s.Accounts.Privileges(r.Context(), u.ticket, "/"); err == nil {
-		audit := held.Has(privSysAudit)
-		v.CanAudit = &audit
+		audit, permissions := held.Has(privSysAudit), held.Has(privPermissionsModify)
+		v.CanAudit, v.CanModifyPermissions = &audit, &permissions
 	}
 	writeJSON(w, http.StatusOK, v)
 }

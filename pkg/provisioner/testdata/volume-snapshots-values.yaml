@@ -1,0 +1,5 @@
+---
+# On top of integration-values.yaml: the module's values with cluster_volume_snapshots.
+proxmox:
+  volumeSnapshots:
+    rootSecret: kubehenge-root-pam

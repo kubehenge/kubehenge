@@ -235,7 +235,8 @@ run "controller_and_clusters_are_least_privilege" {
           role               = ""
           managementStorages = ["local-lvm", "local"]
         }
-        sysAuditGroup = ""
+        sysAuditGroup   = ""
+        volumeSnapshots = { rootSecret = "" }
       }
       templateRefresh = {
         enabled       = true
@@ -379,6 +380,35 @@ run "cluster_sys_audit" {
   assert {
     condition     = contains(output.proxmox_objects.groups, "kubehenge-clusters-audit")
     error_message = "a destroy is checked for the group too"
+  }
+}
+
+run "cluster_volume_snapshots" {
+  command = plan
+
+  variables {
+    cluster_volume_snapshots = true
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).proxmox.volumeSnapshots == { rootSecret = "kubehenge-root-pam" }
+    error_message = "the controller learns the Secret root@pam's password is in"
+  }
+
+  assert {
+    condition = (
+      !strcontains(jsonencode([for s in helm_release.cluster_api_providers.set_sensitive : s.name]), "root") &&
+      !strcontains(helm_release.cluster_api_providers.values[0], "kubehenge-root-pam")
+    )
+    error_message = "the module never holds root@pam's password, so that it stays out of the state"
+  }
+
+  assert {
+    condition = (
+      length(proxmox_virtual_environment_role.cluster_datastore) == 0 &&
+      length([for k, a in proxmox_acl.provisioner : k if a.path == "/" && a.role_id != "kubehenge-audit"]) == 0
+    )
+    error_message = "volume snapshots grant no token anything more"
   }
 }
 

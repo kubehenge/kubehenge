@@ -519,6 +519,7 @@ describe("create", () => {
     place: { placement: "any", haRule: "", nodes: [] },
     proxmoxHA: true,
     datastoreAllocate: false,
+    volumeSnapshots: false,
     haGroups: false,
     controlPlaneMachine: { cores: 2, memoryMiB: 4096, diskGiB: 30 },
     workerMachine: { cores: 4, memoryMiB: 8192, diskGiB: 40 },

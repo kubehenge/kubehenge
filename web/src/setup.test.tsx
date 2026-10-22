@@ -38,6 +38,8 @@ const form: SetupForm = {
   refreshDNS: "",
   creatorBuilds: false,
   clusterSysAudit: false,
+  clusterVolumeSnapshots: false,
+  rootPassword: "",
   moreNamespaces: false,
   extraNamespaces: "",
   passphrase: "correct horse battery staple",

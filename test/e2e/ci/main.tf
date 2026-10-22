@@ -77,6 +77,9 @@ module "management_cluster" {
   cluster_datastore_allocate = true
   # The rke2 test's cluster labels its nodes with their HA groups.
   cluster_sys_audit = true
+  # The k3s test's cluster takes volume snapshots, with the root@pam password test/e2e/ci/run.sh
+  # stores.
+  cluster_volume_snapshots = true
 
   node_addresses = [for i in range(var.node_count) : "172.20.99.${11 + i}/24"]
   node_cores     = var.node_cores

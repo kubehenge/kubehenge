@@ -693,6 +693,9 @@ func (s *Server) mayCreate(w http.ResponseWriter, r *http.Request, u user, class
 	if allocatesDatastore(req.Variables[csiVariable]) && !s.allowDatastoreAllocate(w, r, u, req.Variables["storage"]) {
 		return false
 	}
+	if takesSnapshots(req.Variables[csiVariable]) && !s.require(w, r, u, "/", privPermissionsModify) {
+		return false
+	}
 	if labelsHAGroups(req.Variables[ccmVariable]) && !s.require(w, r, u, "/", privSysAudit) {
 		return false
 	}
@@ -852,7 +855,8 @@ func networkVariable(raw json.RawMessage) (string, string, bool) {
 }
 
 // csiVariable configures a cluster's CSI plugin; its datastoreAllocate gives the cluster's token
-// Datastore.Allocate on the cluster's storage.
+// Datastore.Allocate on the cluster's storage, and its volumeSnapshots signs the plugin in as
+// root@pam.
 const csiVariable = "csi"
 
 // ccmVariable configures a cluster's cloud controller manager; its haGroups gives the cluster's
@@ -866,12 +870,23 @@ func labelsHAGroups(raw json.RawMessage) bool {
 	return raw != nil && json.Unmarshal(raw, &v) == nil && v.HAGroups
 }
 
-func allocatesDatastore(raw json.RawMessage) bool {
-	var v struct {
-		DatastoreAllocate bool `json:"datastoreAllocate"`
-	}
-	return raw != nil && json.Unmarshal(raw, &v) == nil && v.DatastoreAllocate
+// csiOptions are the csi variable's switches; a value that is not one reads as all off.
+type csiOptions struct {
+	DatastoreAllocate bool `json:"datastoreAllocate"`
+	VolumeSnapshots   bool `json:"volumeSnapshots"`
 }
+
+func csiOf(raw json.RawMessage) csiOptions {
+	var v csiOptions
+	if raw == nil || json.Unmarshal(raw, &v) != nil {
+		return csiOptions{}
+	}
+	return v
+}
+
+func allocatesDatastore(raw json.RawMessage) bool { return csiOf(raw).DatastoreAllocate }
+
+func takesSnapshots(raw json.RawMessage) bool { return csiOf(raw).VolumeSnapshots }
 
 // allowDatastoreAllocate checks the right to give a cluster's token Datastore.Allocate on its
 // storage: the user's own Datastore.Allocate there. Whether the storage is the cluster's alone is
@@ -994,7 +1009,7 @@ func (s *Server) applyVariables(w http.ResponseWriter, r *http.Request, u user, 
 		if name == "rancher" && installsRancher(value) && !installsRancher(old) && !s.allowRancher(w, r, u, client.ObjectKeyFromObject(c)) {
 			return false
 		}
-		if name == csiVariable && allocatesDatastore(value) && !allocatesDatastore(old) && !s.allowDatastoreAllocate(w, r, u, variableValue(c, "storage")) {
+		if name == csiVariable && !s.allowCSI(w, r, u, c, value, old) {
 			return false
 		}
 		if name == ccmVariable && labelsHAGroups(value) && !labelsHAGroups(old) && !s.require(w, r, u, "/", privSysAudit) {
@@ -1009,6 +1024,15 @@ func (s *Server) applyVariables(w http.ResponseWriter, r *http.Request, u user, 
 		setVariable(c, name, value)
 	}
 	return true
+}
+
+// allowCSI checks the rights a change of the cluster's csi variable from old to value needs: those
+// of what it switches on, never of what it keeps or switches off.
+func (s *Server) allowCSI(w http.ResponseWriter, r *http.Request, u user, c *clusterv1.Cluster, value, old json.RawMessage) bool {
+	if allocatesDatastore(value) && !allocatesDatastore(old) && !s.allowDatastoreAllocate(w, r, u, variableValue(c, "storage")) {
+		return false
+	}
+	return !takesSnapshots(value) || takesSnapshots(old) || s.require(w, r, u, "/", privPermissionsModify)
 }
 
 func variableValue(c *clusterv1.Cluster, name string) json.RawMessage {

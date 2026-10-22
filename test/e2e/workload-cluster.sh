@@ -53,6 +53,10 @@
 # interface's own account, as the interface creates one in a namespace of its creator's choice, and
 # the namespace is left in place. Unset, the cluster gets a namespace of its own, created and deleted
 # with it.
+# KUBEHENGE_E2E_VOLUME_SNAPSHOTS=1 switches volume snapshots on, takes a snapshot of a volume with
+# data, restores it into a new one and checks the data, and switches them off again, with a
+# management cluster that lets clusters take them, root@pam's password stored, and a
+# KUBEHENGE_E2E_STORAGE local to each node.
 set -eu
 
 class=${1:?usage: $0 <ClusterClass> <version> <upgrade version>}
@@ -802,6 +806,162 @@ if [ "${KUBEHENGE_E2E_DATASTORE_ALLOCATE:-}" = 1 ]; then
     set_variable csi '{"datastoreAllocate":false}'
     until_true 300 "the cluster's token to lose Datastore.Allocate on ${KUBEHENGE_E2E_STORAGE}" allocate_is false
     until_true 900 "the CSI plugin at ${held}" csi_at "${held}"
+    persistent_volume
+fi
+
+if [ "${KUBEHENGE_E2E_VOLUME_SNAPSHOTS:-}" = 1 ]; then
+    kubectl -n kubehenge-system get secret kubehenge-root-pam > /dev/null ||
+        fail "no root@pam password is stored for volume snapshots"
+    # csi_controller_is <Secret> <true|false>: the CSI plugin's controller is rolled out reading its
+    # configuration from the Secret, with the snapshot sidecar or without.
+    csi_controller_is() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        deployments=$(wl -n kube-system get deployments -o json) || return 1
+        printf '%s' "${deployments}" | jq -e --arg s "$1" --argjson snap "$2" '
+            [.items[] | select(any(.spec.template.spec.volumes[]?; .name == "cloud-config" and .secret.items[0].key == "csi.yaml"))] |
+            length == 1 and all(
+                ([.spec.template.spec.volumes[] | select(.name == "cloud-config") | .secret.secretName][0] == $s) and
+                (any(.spec.template.spec.containers[]; .name == "csi-snapshotter") == $snap) and
+                (.status.observedGeneration // 0) >= .metadata.generation and
+                (.status.updatedReplicas // 0) == .spec.replicas and (.status.readyReplicas // 0) == .spec.replicas and
+                (.status.replicas // 0) == .spec.replicas)' > /dev/null
+    }
+    # signs_in_as_root: the plugin's root configuration names root@pam and no token; its password is
+    # never printed.
+    signs_in_as_root() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        config=$(wl -n kube-system get secret kubehenge-proxmox-root -o jsonpath='{.data.csi\.yaml}' 2> /dev/null) || return 1
+        decoded=$(printf '%s' "${config}" | base64 -d)
+        printf '%s\n' "${decoded}" | grep -qx '  username: root@pam' && ! printf '%s\n' "${decoded}" | grep -q token_
+    }
+    # not_found <kubectl get arguments>: the object is not found, rather than out of reach for a
+    # moment.
+    not_found() {
+        # shellcheck disable=SC2310 # the request failing is the answer looked for.
+        if answer=$(wl get "$@" 2>&1); then
+            return 1
+        fi
+        case ${answer} in
+            *NotFound* | *"not found"*) ;;
+            *) return 1 ;;
+        esac
+    }
+    # none_of <kubectl get arguments>: the list is read, and empty.
+    none_of() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        names=$(wl get "$@" -o name) && [ -z "${names}" ]
+    }
+    snapshot_ready() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        ready=$(wl -n default get volumesnapshot e2e -o jsonpath='{.status.readyToUse}') && [ "${ready}" = true ]
+    }
+    no_owned_volumes() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        volumes=$(owned) && [ "${volumes}" = 0 ]
+    }
+    # data_pod <name> <claim> <command>: runs a shell command against a volume, once.
+    data_pod() {
+        wl apply -f - << EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: $1
+  namespace: default
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: data
+      image: ${agnhost}
+      command: [sh, -ec, "$3"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: $2
+EOF
+        # shellcheck disable=SC2310 # a pod that did not succeed fails the step, with its last lines.
+        if ! wl -n default wait --for=jsonpath='{.status.phase}'=Succeeded "pod/$1" --timeout=10m; then
+            last=$(wl -n default logs "pod/$1" 2>&1 | tail -n 5) || true
+            fail "pod $1 did not succeed: ${last}"
+        fi
+    }
+
+    step "volume snapshots, with the CSI plugin signed in as root@pam"
+    set_variable csi '{"volumeSnapshots":true}'
+    until_true 300 "the CSI plugin's root@pam configuration" signs_in_as_root
+    until_true 900 "the CSI plugin's controller with the snapshot sidecar, signed in as root@pam" csi_controller_is kubehenge-proxmox-root true
+    until_true 600 "the VolumeSnapshotClass" wl get volumesnapshotclass proxmox
+    if [ "${distribution}" != rke2 ]; then
+        wl -n kube-system rollout status deployment -l app.kubernetes.io/name=snapshot-controller --timeout=5m
+    fi
+    wl apply -f - << 'EOF'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: e2e-source
+  namespace: default
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+EOF
+    # 64 MiB of random data and its checksum, written and flushed, and the volume detached again
+    # before its snapshot is taken.
+    data_pod e2e-write e2e-source 'head -c 67108864 /dev/urandom > /data/blob; cd /data; sha256sum blob > sum; sync'
+    wl -n default delete pod/e2e-write --wait --timeout=5m
+    wl apply -f - << 'EOF'
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: e2e
+  namespace: default
+spec:
+  volumeSnapshotClassName: proxmox
+  source:
+    persistentVolumeClaimName: e2e-source
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: e2e-restored
+  namespace: default
+spec:
+  accessModes: [ReadWriteOnce]
+  dataSource:
+    apiGroup: snapshot.storage.k8s.io
+    kind: VolumeSnapshot
+    name: e2e
+  resources:
+    requests:
+      storage: 1Gi
+EOF
+    until_true 900 "the volume snapshot ready to use" snapshot_ready
+    data_pod e2e-check e2e-restored 'cd /data; sha256sum -c sum'
+    wl -n default delete pod/e2e-check pvc/e2e-restored pvc/e2e-source volumesnapshot/e2e --wait --timeout=5m
+    # The CSI plugin retries a failed deletion with a back-off of up to five minutes.
+    until_true 600 "the snapshot's content deleted" none_of volumesnapshotcontents
+    until_true 600 "the volumes deleted" sh -c "[ \"\$(KUBECONFIG=${work}/workload kubectl get pv -o name | wc -l)\" = 0 ]"
+    until_true 600 "no volume left on ${KUBEHENGE_E2E_STORAGE}" no_owned_volumes
+
+    step "the CSI plugin with the cluster's token again, without volume snapshots"
+    set_variable csi '{"volumeSnapshots":false}'
+    until_true 900 "the CSI plugin's controller without the snapshot sidecar, with the cluster's token" csi_controller_is kubehenge-proxmox false
+    until_true 300 "the CSI plugin's root@pam configuration deleted" not_found -n kube-system secret kubehenge-proxmox-root
+    until_true 600 "the VolumeSnapshotClass removed" not_found volumesnapshotclass proxmox
+    until_true 600 "the snapshot controller removed" none_of -n kube-system deployments -l app.kubernetes.io/name=snapshot-controller
     persistent_volume
 fi
 

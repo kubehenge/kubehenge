@@ -20,8 +20,8 @@ import (
 // a schedule Velero cannot read, Rancher switched on beside another, or on nodes too small for it,
 // a Rancher cluster's nodes made smaller than it needs, load-balancer addresses that clash with the
 // nodes' network or another cluster's, Datastore.Allocate on a storage that is not the cluster's
-// alone, and Sys.Audit on / where no cluster may hold it. A cluster that already fell short before
-// a change is not held to it for unrelated edits.
+// alone, volume snapshots where they cannot be taken, and Sys.Audit on / where no cluster may hold
+// it. A cluster that already fell short before a change is not held to it for unrelated edits.
 type ClusterValidator struct {
 	Hooks *Hooks
 }
@@ -98,6 +98,9 @@ func (v *ClusterValidator) validateGrants(ctx context.Context, old, c *clusterv1
 	variables := field.NewPath("spec", "topology", "variables")
 	if old == nil || variableChanged(old, c, csiVariable) || variableChanged(old, c, "storage") {
 		if err := v.Hooks.checkDatastoreAllocate(ctx, c, class); err != nil {
+			errs = append(errs, field.Forbidden(variables.Key(csiVariable), err.Error()))
+		}
+		if err := v.Hooks.checkVolumeSnapshots(ctx, c, class); err != nil {
 			errs = append(errs, field.Forbidden(variables.Key(csiVariable), err.Error()))
 		}
 	}

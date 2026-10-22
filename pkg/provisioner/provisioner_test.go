@@ -173,12 +173,12 @@ func TestResourceSetSecret(t *testing.T) {
 	t.Parallel()
 	creds := Credentials{TokenID: "kubehenge.team-a.web@pve!cluster", TokenSecret: "s3cret", VolumeOwner: 4242, Region: "lab"} //nolint:gosec // test data
 	for _, insecure := range []bool{false, true} {
-		s, err := resourceSetSecret(cluster(), Endpoint{URL: "https://pve.example.org:8006", CA: "PEM", Insecure: insecure}, creds)
+		s, err := resourceSetSecret(cluster(), Endpoint{URL: "https://pve.example.org:8006", CA: "PEM", Insecure: insecure}, creds, "")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if s.Type != "addons.cluster.x-k8s.io/resource-set" || s.Namespace != "team-a" {
-			t.Errorf("type %q namespace %q", s.Type, s.Namespace)
+		if s.Type != "addons.cluster.x-k8s.io/resource-set" || s.Namespace != "team-a" || len(s.Data) != 1 {
+			t.Errorf("type %q namespace %q keys %d", s.Type, s.Namespace, len(s.Data))
 		}
 		var inner corev1.Secret
 		if err := yaml.UnmarshalStrict(s.Data["kubehenge-proxmox.yaml"], &inner); err != nil {
@@ -222,6 +222,10 @@ var testCharts = Charts{
 	CSINewest: Chart{
 		Repository: "oci://ghcr.io/sergelogvinov/charts", Name: "proxmox-csi-plugin", Version: "0.5.13",
 		Digest: "575e6d4ccce99d25c49cfc530d3df7cb18765925c432e0f2d6fcdf5366cfc034",
+	},
+	SnapshotController: Chart{
+		Repository: "oci://ghcr.io/piraeusdatastore/helm-charts", Name: "snapshot-controller", Version: "5.4.0",
+		Digest: "b885ec62379a71eca0a6b97373fc342280c7f65885608d522ee908c023f86bae",
 	},
 	Cilium: Chart{
 		Repository: "https://helm.cilium.io", Name: "cilium", Version: "1.20.3",

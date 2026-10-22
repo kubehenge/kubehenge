@@ -897,6 +897,44 @@ func TestIntegrationChartSysAudit(t *testing.T) {
 	}
 }
 
+// Only a management cluster that lets clusters take volume snapshots names the controller the
+// Secret with root@pam's password, and offers them in the interface; the snapshot controller's
+// chart is the controller's in any case, pinned with its image.
+func TestIntegrationChartVolumeSnapshots(t *testing.T) {
+	t.Parallel()
+	for _, on := range []bool{false, true} {
+		values := []string{"testdata/integration-values.yaml"}
+		if on {
+			values = append(values, "testdata/volume-snapshots-values.yaml")
+		}
+		var args string
+		classes := 0
+		for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, values...) {
+			switch o.GetKind() {
+			case "ClusterClass":
+				if got := o.GetAnnotations()["kubehenge.dev/volume-snapshots"] == "true"; got != on {
+					t.Errorf("volume snapshots %t: %s offers them: %t", on, o.GetName(), got)
+				}
+				classes++
+			case "Deployment":
+				containers, _, err := unstructured.NestedSlice(o.Object, "spec", "template", "spec", "containers")
+				if err != nil {
+					t.Fatal(err)
+				}
+				args += fmt.Sprint(containers)
+			}
+		}
+		if !strings.Contains(args, "--snapshot-controller-chart=oci://ghcr.io/piraeusdatastore/helm-charts/snapshot-controller:") ||
+			!regexp.MustCompile(`"snapshot-controller":\{"controller":\{"image":\{"tag":"v[0-9.]+@sha256:[0-9a-f]{64}"`).MatchString(args) {
+			t.Errorf("volume snapshots %t: the controller is not given the snapshot controller's chart and image", on)
+		}
+		secret := strings.Contains(args, "--root-secret=kubehenge-root-pam")
+		if secret != on || strings.Contains(args, "--root-secret") != on || classes != len(classProviders) {
+			t.Errorf("volume snapshots %t: the controller gets the Secret: %t; %d classes", on, secret, classes)
+		}
+	}
+}
+
 // The HA reconciler's patches against capmox's CRD and Cluster API's: the hook a Machine's
 // deletion waits for, and the node a ProxmoxMachine's VM has moved to.
 func TestIntegrationProxmoxHA(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it

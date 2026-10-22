@@ -190,7 +190,7 @@ func TestChartValuesGoToTheirCharts(t *testing.T) {
 			calicoImages: []string{"quay.io/calico/node:v3.33.0" + digest}, chartValues: values,
 		}
 		for _, f := range []*string{
-			&o.ccmChart, &o.csiChart, &o.csiNewestChart, &o.ciliumChart, &o.calicoChart, &o.headlampChart, &o.certManagerChart, &o.rancherChart,
+			&o.ccmChart, &o.csiChart, &o.csiNewestChart, &o.snapshotChart, &o.ciliumChart, &o.calicoChart, &o.headlampChart, &o.certManagerChart, &o.rancherChart,
 			&o.monitoringChart, &o.lokiChart, &o.alloyChart, &o.veleroChart, &o.kyvernoChart, &o.kyvernoPolicies, &o.istioChart,
 			&o.istioBaseChart, &o.istioCNIChart, &o.istioZtunnelChart, &o.traefikChart, &o.metalLBChart, &o.kubeVipChart, &o.kubeVipCloudChart,
 		} {
@@ -198,12 +198,15 @@ func TestChartValuesGoToTheirCharts(t *testing.T) {
 		}
 		return o
 	}
-	o := options(`{"cert-manager":{"image":{"tag":"v1.21.2` + digest + `"}},"istio-ztunnel":{"image":"ztunnel"}}`)
+	o := options(`{"cert-manager":{"image":{"tag":"v1.21.2` + digest + `"}},"istio-ztunnel":{"image":"ztunnel"},"snapshot-controller":{"controller":{}}}`)
 	if err := o.parseCharts(); err != nil {
 		t.Fatal(err)
 	}
 	if o.r.Charts.CertManager.Values["image"] == nil || o.r.Charts.IstioZtunnel.Values["image"] != "ztunnel" || o.r.Charts.CCM.Values != nil {
 		t.Errorf("cert-manager %v, ztunnel %v, the CCM %v", o.r.Charts.CertManager.Values, o.r.Charts.IstioZtunnel.Values, o.r.Charts.CCM.Values)
+	}
+	if o.r.Charts.SnapshotController.Values["controller"] == nil {
+		t.Errorf("the snapshot controller's values %v", o.r.Charts.SnapshotController.Values)
 	}
 	for values, want := range map[string]string{`{"certmanager":{}}`: "certmanager", `[]`: "--chart-values"} {
 		if err := options(values).parseCharts(); err == nil || !strings.Contains(err.Error(), want) {

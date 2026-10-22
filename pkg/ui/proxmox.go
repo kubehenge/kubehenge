@@ -27,6 +27,9 @@ const (
 	// privSysAudit is what a user gives a cluster's token on / for its HA group labels, so it takes
 	// the user's own there.
 	privSysAudit = "Sys.Audit"
+	// privPermissionsModify on / is what a user needs to give a cluster's CSI plugin root@pam for
+	// volume snapshots: a user who holds it can already give themselves anything root@pam can do.
+	privPermissionsModify = "Permissions.Modify"
 )
 
 func storagePath(storage string) string { return "/storage/" + storage }
