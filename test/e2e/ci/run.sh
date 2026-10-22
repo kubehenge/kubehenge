@@ -7,8 +7,8 @@
 # <test> is management-cluster (applies the management cluster, runs the templates and volumes tests
 # while it is up, and destroys it), management-cluster-upgrade (applies and destroys it), appliance
 # (installs the appliance, which sets the management cluster up and removes it), or kubeadm, rke2,
-# k3s, rancher or cluster-mesh, which first apply the management cluster and create the templates
-# they need, and leave it up.
+# k3s, rancher, cluster-mesh or node-image-refresh, which first apply the management cluster and
+# create the templates they need, and leave it up.
 #
 # The workload clusters start one minor version behind the management cluster's Kubernetes and are
 # upgraded to it; KUBEHENGE_E2E_FROM names the release they start on.
@@ -17,7 +17,7 @@ set -eu
 work=$(readlink -f "${1:?usage: $0 <work directory> <test>}")
 test=${2:?usage: $0 <work directory> <test>}
 case "${test}" in
-    management-cluster | management-cluster-upgrade | appliance | kubeadm | rke2 | k3s | rancher | cluster-mesh) ;;
+    management-cluster | management-cluster-upgrade | appliance | kubeadm | rke2 | k3s | rancher | cluster-mesh | node-image-refresh) ;;
     *)
         echo "unknown test ${test}" >&2
         exit 2
@@ -60,7 +60,7 @@ template() { # distribution [flags]
 # the build address.
 templates=
 case "${test}" in
-    rke2 | k3s | kubeadm | rancher | cluster-mesh)
+    rke2 | k3s | kubeadm | rancher | cluster-mesh | node-image-refresh)
         make -s -C "${repo}" build
         {
             waited=0
@@ -74,7 +74,7 @@ case "${test}" in
             done
             case "${test}" in
                 rke2) template rke2 ;;
-                k3s | rancher | cluster-mesh) template k3s ;;
+                k3s | rancher | cluster-mesh | node-image-refresh) template k3s ;;
                 kubeadm)
                     template kubeadm --kubernetes-version "${from}"
                     template kubeadm --kubernetes-version "${to}"
@@ -237,6 +237,10 @@ case "${test}" in
         export KUBEHENGE_E2E_WEST_ENDPOINT=172.20.99.25 KUBEHENGE_E2E_WEST_ADDRESSES=172.20.99.26-172.20.99.29
         export KUBEHENGE_E2E_VERSION="${from}+k3s1"
         e2e e2e-cluster-mesh
+        ;;
+    node-image-refresh)
+        export KUBEHENGE_E2E_VERSION="${from}+k3s1"
+        e2e e2e-node-image-refresh
         ;;
     # Checked before anything was built.
     *) ;;

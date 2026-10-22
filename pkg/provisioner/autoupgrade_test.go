@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -222,11 +220,13 @@ func TestUpgrader(t *testing.T) {
 func TestKubeadmTargetsAreTemplatesTheClassSelects(t *testing.T) {
 	t.Parallel()
 	vms := []map[string]any{
-		{"vmid": 9001, "template": 1, "tags": "kubeadm;kubehenge;kubernetes-v1.36.5;" + templates.DefaultOS},
-		{"vmid": 9002, "template": 1, "tags": "kubeadm;kubehenge;kubernetes-v1.37.1;ubuntu-24.04"},
-		{"vmid": 9003, "template": 0, "tags": "kubeadm;kubehenge;kubernetes-v1.37.2;" + templates.DefaultOS},
+		{"vmid": 9001, "template": 1, "tags": "build-202610010000;kubeadm;kubehenge;kubernetes-v1.36.5;" + templates.DefaultOS},
+		{"vmid": 9002, "template": 1, "tags": "build-202610010000;kubeadm;kubehenge;kubernetes-v1.37.1;ubuntu-24.04"},
+		{"vmid": 9003, "template": 0, "tags": "build-202610010000;kubeadm;kubehenge;kubernetes-v1.37.2;" + templates.DefaultOS},
 		// A VM ID reused a moment ago, which the resource view still shows as the template before.
-		{"vmid": 9004, "template": 1, "tags": "kubeadm;kubehenge;kubernetes-v1.38.0;" + templates.DefaultOS},
+		{"vmid": 9004, "template": 1, "tags": "build-202610010000;kubeadm;kubehenge;kubernetes-v1.38.0;" + templates.DefaultOS},
+		// A template that is no build, which no machine selects.
+		{"vmid": 9005, "template": 1, "tags": "kubeadm;kubehenge;kubernetes-v1.39.0;" + templates.DefaultOS},
 	}
 	configs := map[string]any{}
 	for _, vm := range vms {
@@ -253,13 +253,9 @@ func TestKubeadmTargetsAreTemplatesTheClassSelects(t *testing.T) {
 		t.Errorf("channels %+v", ch)
 	}
 
-	// The class's selector and the upgrader name the same OS.
-	class, err := os.ReadFile("../../charts/kubehenge/templates/kubeadm.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(class), "- "+templates.DefaultOS+"\n") {
-		t.Errorf("the kubeadm ClusterClass does not select %s templates", templates.DefaultOS)
+	// The patch that picks a machine's template and the upgrader name the same OS.
+	if line, err := MachineLine("kubeadm", "v1.36.5"); err != nil || !slices.Contains(line, templates.DefaultOS) {
+		t.Errorf("kubeadm machines select %v, %v; want %s templates", line, err, templates.DefaultOS)
 	}
 }
 

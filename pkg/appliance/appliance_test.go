@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -114,6 +115,54 @@ func TestNetworkValidated(t *testing.T) {
 	s.NodeAddresses, s.Gateway, s.APIAddress = []string{"10.0.0.10/31"}, "10.0.0.11", "10.0.0.12"
 	if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "API address: inside the nodes' network") || strings.Contains(err.Error(), "broadcast") {
 		t.Errorf("a /31: %v", err)
+	}
+}
+
+func TestTemplateRefreshValidated(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		refresh TemplateRefresh
+		want    string
+	}{
+		"weekday":           {TemplateRefresh{Weekday: time.Sunday.String()}, "Template refresh day"},
+		"time":              {TemplateRefresh{Time: "1:00"}, "Template refresh time: HH:MM"},
+		"time zone":         {TemplateRefresh{TimeZone: "Mars/Olympus"}, "Template refresh time zone"},
+		"storage":           {TemplateRefresh{Storage: "elsewhere"}, "Template disks: one of the cluster storages"},
+		"gateway alone":     {TemplateRefresh{Gateway: "10.0.0.1"}, "Template build address: needed"},
+		"address":           {TemplateRefresh{Address: "10.0.0.50"}, "Template build address: an IPv4 address with prefix"},
+		"gateway elsewhere": {TemplateRefresh{Address: "10.0.0.50/24", Gateway: "10.0.1.1"}, "Template build gateway: an address in 10.0.0.0/24"},
+		"DNS":               {TemplateRefresh{Address: "10.0.0.50/24", Gateway: "10.0.0.1", DNS: []string{"dns"}}, "Template build DNS servers"},
+	} {
+		s := settings("pve1")
+		c.refresh.Enabled = true
+		s.TemplateRefresh = &c.refresh
+		if err := s.Validate(); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", name, err, c.want)
+		}
+	}
+	s := settings("pve1")
+	s.TemplateRefresh = &TemplateRefresh{Enabled: false, Weekday: "never"}
+	if err := s.Validate(); err != nil || s.RefreshesTemplates() {
+		t.Errorf("switched off, the rest is not looked at: %v", err)
+	}
+	s.TemplateRefresh = &TemplateRefresh{Enabled: true, Weekday: "Wed", Time: "03:30", TimeZone: "Europe/Berlin", Storage: "local-lvm", Address: "10.0.0.50/24", Gateway: "10.0.0.1", DNS: []string{"10.0.0.1"}, CreatorBuilds: true}
+	if err := s.Validate(); err != nil || !s.RefreshesTemplates() {
+		t.Errorf("a full refresh: %v", err)
+	}
+	if !settings("pve1").RefreshesTemplates() {
+		t.Error("settings saved without a refresh have it on")
+	}
+}
+
+func TestModuleTemplateRefresh(t *testing.T) {
+	t.Parallel()
+	if got := moduleTemplateRefresh(nil); len(got) != 0 {
+		t.Errorf("unset: %v, want the module's defaults", got)
+	}
+	got := moduleTemplateRefresh(&TemplateRefresh{Enabled: true, TimeZone: "Europe/Berlin", DNS: []string{"10.0.0.1"}})
+	want := map[string]any{"enabled": true, "creator_builds": false, "time_zone": "Europe/Berlin", "dns": []string{"10.0.0.1"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
 	}
 }
 

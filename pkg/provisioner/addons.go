@@ -912,5 +912,5 @@ func credentialsFrom(s *corev1.Secret) (Credentials, error) {
 
 // isReady reports whether a credentials Secret marks the cluster's objects as all in place.
 func isReady(s *corev1.Secret) bool {
-	return string(s.Data["ready"]) == "true"
+	return string(s.Data["ready"]) == trueText
 }

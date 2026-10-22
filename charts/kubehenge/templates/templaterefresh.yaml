@@ -1,0 +1,204 @@
+{{- /*
+The weekly build of the Ubuntu VM templates (kubehenge template refresh), signed in with a token of
+its own that alone may build and delete templates. The controller starts the same Job for builds
+asked for in the interface; the interface only writes the requests ConfigMap.
+*/}}
+{{- with .Values.templateRefresh }}
+{{- if .enabled }}
+{{- $name := "kubehenge-template-refresh" }}
+{{- $days := dict "Sun" 0 "Mon" 1 "Tue" 2 "Wed" 3 "Thu" 4 "Fri" 5 "Sat" 6 }}
+{{- $at := splitList ":" .time }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+---
+# Which template lines the clusters run, and which builds machines being created still select.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+rules:
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [clusters]
+    verbs: [get, list]
+  - apiGroups: [infrastructure.cluster.x-k8s.io]
+    resources: [proxmoxmachines]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $.Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+rules:
+  # One run at a time; a create cannot be held to a name.
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [create]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    resourceNames: [{{ $name }}]
+    verbs: [get, update]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [{{ $name }}]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $.Release.Namespace }}
+---
+# The schedule, for the interface to show, and how the last run went, which the run writes.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+data:
+  weekday: {{ .weekday | quote }}
+  time: {{ .time | quote }}
+  timeZone: {{ .timeZone | quote }}
+  soakHours: {{ .soakHours | quote }}
+  creatorBuilds: {{ .creatorBuilds | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubehenge-template-requests
+  namespace: {{ $.Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  schedule: {{ printf "%d %d * * %d" (atoi (index $at 1)) (atoi (index $at 0)) (index $days .weekday) | quote }}
+  timeZone: {{ .timeZone | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    metadata:
+      labels:
+        kubehenge.dev/template-refresh: "true"
+    spec:
+      # Each line that fails is reported and the others go on; a second try would only build the
+      # ones that worked again.
+      backoffLimit: 0
+      activeDeadlineSeconds: 21600
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            kubehenge.dev/template-refresh: "true"
+        spec:
+          serviceAccountName: {{ $name }}
+          restartPolicy: Never
+          enableServiceLinks: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: refresh
+              image: {{ required "image: Kubehenge's controller image by digest" $.Values.image }}
+              args:
+                - template
+                - refresh
+                - --node={{ required "templateRefresh.node: the Proxmox VE node the weekly template builds run on (or templateRefresh.enabled=false)" .node }}
+                - --storage={{ required "templateRefresh.storage: the storage of the templates' disks (or templateRefresh.enabled=false)" .storage }}
+                - --import-storage={{ required "templateRefresh.importStorage: the storage the cloud images are downloaded to (or templateRefresh.enabled=false)" .importStorage }}
+                {{- with .isoStorage }}
+                - --iso-storage={{ . }}
+                {{- end }}
+                - --pool={{ .pool }}
+                - --bridge={{ .bridge }}
+                - --vlan={{ .vlan }}
+                {{- with .address }}
+                - --build-address={{ . }}
+                {{- end }}
+                {{- with .gateway }}
+                - --build-gateway={{ . }}
+                {{- end }}
+                {{- with .dns }}
+                - --build-dns={{ join "," . }}
+                {{- end }}
+                - --soak={{ .soakHours }}h
+                - --proxmox-ca=/etc/kubehenge/proxmox/ca.crt
+                - --proxmox-insecure={{ $.Values.proxmox.insecure }}
+                - --trigger=schedule
+                - --token-secret={{ .secret }}
+              env:
+                - name: POD_NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                - name: KUBEHENGE_PROXMOX_URL
+                  value: {{ $.Values.proxmox.url | quote }}
+                - name: KUBEHENGE_PROXMOX_TOKEN
+                  valueFrom:
+                    # Optional, so that a missing Secret fails the run with a status the interface
+                    # shows, instead of a pod that never starts.
+                    secretKeyRef:
+                      name: {{ .secret }}
+                      key: token
+                      optional: true
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              volumeMounts:
+                - name: proxmox
+                  mountPath: /etc/kubehenge/proxmox
+                  readOnly: true
+                # The cloud-init ISO is put together here before it is uploaded.
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: proxmox
+              secret:
+                secretName: {{ $.Values.proxmox.secret }}
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+            - name: tmp
+              emptyDir:
+                sizeLimit: 64Mi
+{{- end }}
+{{- end }}

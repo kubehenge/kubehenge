@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -29,6 +30,13 @@ type templateView struct {
 	Node string   `json:"node"`
 	Name string   `json:"name"`
 	Tags []string `json:"tags"`
+	// Line is the template a build is one of, with Build its tag and Built when it was made; a
+	// Talos template has neither.
+	Line  string     `json:"line"`
+	Build string     `json:"build,omitempty"`
+	Built *time.Time `json:"built,omitempty"`
+	// Newest is the line's newest build, which new machines are cloned from once it is offered.
+	Newest bool `json:"newest,omitempty"`
 	// InUse names a cluster that clones from it, which keeps it from being deleted.
 	InUse string `json:"inUse,omitempty"`
 }
@@ -36,6 +44,8 @@ type templateView struct {
 type templatesView struct {
 	Templates []templateView     `json:"templates"`
 	Job       *appliance.JobView `json:"job,omitempty"`
+	// Refresh is the weekly build, when it is on.
+	Refresh *refreshView `json:"refresh,omitempty"`
 }
 
 // templatesReady checks that this is an appliance whose management cluster, which made the
@@ -64,7 +74,12 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request, u user) {
 		s.proxmoxError(w, err)
 		return
 	}
-	needs, err := s.templateNeeds(r.Context())
+	state, err := s.refreshState(r.Context(), s.currentKube())
+	if err != nil {
+		s.kubeError(w, err)
+		return
+	}
+	needs, err := s.templateNeeds(r.Context(), list, state.soak())
 	if err != nil {
 		s.kubeError(w, err)
 		return
@@ -72,94 +87,124 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request, u user) {
 	for i := range list {
 		list[i].InUse = needs.of(list[i].Tags)
 	}
-	writeJSON(w, http.StatusOK, templatesView{Templates: list, Job: job})
+	writeJSON(w, http.StatusOK, templatesView{Templates: list, Job: job, Refresh: state.view(s.now())})
 }
 
-// templates lists the VM templates in the template pool.
+// templates lists the VM templates in the template pool, each build beside its line's others,
+// newest first.
 func (s *Server) templates(ctx context.Context, t *pve.Ticket) ([]templateView, error) {
 	members, err := s.Accounts.Templates(ctx, t, templatePool)
 	if err != nil {
 		return nil, fmt.Errorf("the templates in pool %s: %w", templatePool, err)
 	}
 	list := []templateView{}
+	newest := map[string]time.Time{}
 	for i := range members {
 		m := &members[i]
-		list = append(list, templateView{VMID: m.VMID, Node: m.Node, Name: m.Name, Tags: templates.ParseTags(m.Tags)})
+		v := templateView{VMID: m.VMID, Node: m.Node, Name: m.Name, Tags: templates.ParseTags(m.Tags), Line: m.Name}
+		if at, built := templates.BuildOf(v.Tags); built {
+			v.Build, v.Built = templates.BuildTag(at), &at
+			v.Line = strings.TrimSuffix(m.Name, "-"+v.Build)
+			if key := templates.LineKey(v.Tags); at.After(newest[key]) {
+				newest[key] = at
+			}
+		}
+		list = append(list, v)
 	}
-	slices.SortFunc(list, func(a, b templateView) int { return strings.Compare(a.Name, b.Name) })
+	for i := range list {
+		list[i].Newest = list[i].Built != nil && list[i].Built.Equal(newest[templates.LineKey(list[i].Tags)])
+	}
+	slices.SortFunc(list, func(a, b templateView) int {
+		if c := strings.Compare(a.Line, b.Line); c != 0 || a.Built == nil || b.Built == nil {
+			return c
+		}
+		return b.Built.Compare(*a.Built)
+	})
 	return list, nil
 }
 
-// templateUsers tells, by a template's tags, which cluster clones from it. The ClusterClasses
-// select templates of the default OS: RKE2 and k3s share one cloud image, kubeadm takes the one of
-// each machine's Kubernetes version, which during an upgrade is two.
-type templateUsers struct {
-	cloudImage string
-	// kubeadm names a cluster by each Kubernetes version its machines run.
-	kubeadm map[string]string
-}
+// templateUsers tells, by a template's tags, which cluster clones from it: the build of each line
+// its machines run that its node image time picks. During an upgrade a kubeadm cluster runs two
+// lines, the Kubernetes version it leaves and the one it goes to.
+type templateUsers map[string]string
 
 // of names a cluster that clones from the template with these tags, or is "".
 func (t templateUsers) of(tags []string) string {
-	if !slices.Contains(tags, templates.DefaultOS) {
-		return ""
-	}
-	if slices.Contains(tags, "cloud-image") {
-		return t.cloudImage
-	}
-	if !slices.Contains(tags, string(templates.Kubeadm)) {
-		return ""
-	}
-	for _, tag := range tags {
-		if v, ok := strings.CutPrefix(tag, "kubernetes-"); ok && t.kubeadm[v] != "" {
-			return t.kubeadm[v]
-		}
-	}
-	return ""
+	return t[strings.Join(templates.NormaliseTags(tags), ";")]
 }
 
-func (s *Server) templateNeeds(ctx context.Context) (templateUsers, error) {
+func (s *Server) templateNeeds(ctx context.Context, list []templateView, soak time.Duration) (templateUsers, error) {
+	builds := listedBuilds(list)
 	kube := s.currentKube()
 	var clusters clusterv1.ClusterList
 	if err := kube.List(ctx, &clusters); err != nil {
-		return templateUsers{}, fmt.Errorf("listing the clusters: %w", err)
+		return nil, fmt.Errorf("listing the clusters: %w", err)
 	}
-	users := templateUsers{kubeadm: map[string]string{}}
+	users := templateUsers{}
 	for i := range clusters.Items {
 		c := &clusters.Items[i]
-		if !provisioner.Owns(c, s.ClassNamespace) {
+		if !provisioner.Owns(c, s.ClassNamespace) || !provisioner.RefreshesNodes(c) {
 			continue
 		}
-		name := c.Namespace + "/" + c.Name
-		d, _ := distribution(c.Spec.Topology.ClassRef.Name)
-		switch templates.Distribution(d) {
-		case templates.RKE2, templates.K3s:
-			users.cloudImage = name
-		case templates.Kubeadm:
-			if err := addKubeadmVersions(ctx, kube, c, users.kubeadm); err != nil {
-				return templateUsers{}, err
-			}
-		case templates.Talos:
-			// Talos templates are not of the default OS, the only ones this tells about.
+		if err := users.add(ctx, kube, c, builds, soak); err != nil {
+			return nil, err
 		}
 	}
 	return users, nil
 }
 
-// addKubeadmVersions names a kubeadm cluster by its Kubernetes version and each of its machines'.
-func addKubeadmVersions(ctx context.Context, kube client.Client, c *clusterv1.Cluster, byVersion map[string]string) error {
-	name := c.Namespace + "/" + c.Name
-	byVersion[c.Spec.Topology.Version] = name
-	var machines clusterv1.MachineList
-	if err := kube.List(ctx, &machines, client.InNamespace(c.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: c.Name}); err != nil {
-		return fmt.Errorf("listing cluster %s's machines: %w", name, err)
+// listedBuilds are the times of the listed builds by line, oldest first, as the ClusterClasses
+// record them.
+func listedBuilds(list []templateView) provisioner.NodeImageBuilds {
+	builds := provisioner.NodeImageBuilds{}
+	for i := range list {
+		if t := &list[i]; t.Built != nil {
+			key := templates.LineKey(t.Tags)
+			builds[key] = append(builds[key], *t.Built)
+		}
 	}
-	for i := range machines.Items {
-		if v := machines.Items[i].Spec.Version; v != "" {
-			byVersion[v] = name
+	for key := range builds {
+		slices.SortFunc(builds[key], time.Time.Compare)
+	}
+	return builds
+}
+
+// add records the build of each line a cluster's machines run that its node image time picks.
+func (t templateUsers) add(ctx context.Context, kube client.Client, c *clusterv1.Cluster, builds provisioner.NodeImageBuilds, soak time.Duration) error {
+	since, err := provisioner.NodeImageTime(c)
+	if err != nil {
+		return fmt.Errorf("reading cluster %s/%s's node image time: %w", c.Namespace, c.Name, err)
+	}
+	versions, err := machineVersions(ctx, kube, c)
+	if err != nil {
+		return err
+	}
+	dist, _ := distribution(c.Spec.Topology.ClassRef.Name)
+	for _, v := range versions {
+		line, lineErr := provisioner.MachineLine(dist, v)
+		if lineErr != nil {
+			continue
+		}
+		if at, ok := builds.Pick(line, since, soak); ok {
+			t[strings.Join(templates.NormaliseTags(append(slices.Clone(line), templates.BuildTag(at))), ";")] = c.Namespace + "/" + c.Name
 		}
 	}
 	return nil
+}
+
+// machineVersions are a cluster's Kubernetes version and each of its machines'.
+func machineVersions(ctx context.Context, kube client.Client, c *clusterv1.Cluster) ([]string, error) {
+	versions := []string{c.Spec.Topology.Version}
+	var machines clusterv1.MachineList
+	if err := kube.List(ctx, &machines, client.InNamespace(c.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: c.Name}); err != nil {
+		return nil, fmt.Errorf("listing cluster %s/%s's machines: %w", c.Namespace, c.Name, err)
+	}
+	for i := range machines.Items {
+		if v := machines.Items[i].Spec.Version; v != "" && !slices.Contains(versions, v) {
+			versions = append(versions, v)
+		}
+	}
+	return versions, nil
 }
 
 type templateRequest struct {
@@ -265,6 +310,11 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request, u user) 
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	// Each build is a template of its own, which clusters move to inside their windows.
+	if t, err = t.Build(s.now()); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	// A build takes minutes, so it gets the whole of a fresh ticket's life.
 	ticket, err := s.Accounts.Renew(r.Context(), u.ticket)
 	if err != nil {
@@ -312,7 +362,12 @@ func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request, u user) 
 		writeError(w, http.StatusNotFound, "no template of Kubehenge's has that ID")
 		return
 	}
-	needs, err := s.templateNeeds(r.Context())
+	state, err := s.refreshState(r.Context(), s.currentKube())
+	if err != nil {
+		s.kubeError(w, err)
+		return
+	}
+	needs, err := s.templateNeeds(r.Context(), list, state.soak())
 	if err != nil {
 		s.kubeError(w, err)
 		return

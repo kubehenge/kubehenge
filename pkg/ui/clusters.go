@@ -197,6 +197,8 @@ type clusterView struct {
 	Headlamp string `json:"headlamp,omitempty"`
 	// Mesh is how each peer stands that the cluster lists for Cluster Mesh, while it is on.
 	Mesh []provisioner.MeshPeer `json:"mesh,omitempty"`
+	// NodeImage is which template builds the nodes run and when they next move, but for Talos.
+	NodeImage *nodeImageView `json:"nodeImage,omitempty"`
 }
 
 type conditionView struct {
@@ -480,6 +482,15 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 	v := s.view(c, access.path, access.held)
 	if err := s.addClusterMesh(r.Context(), u, &v); err != nil {
 		s.Log.Error("reading a cluster's Cluster Mesh peers", "cluster", c.Namespace+"/"+c.Name, "error", err)
+	}
+	// An addition to the page, as the peers are: the cluster shows without it. Talos clusters have
+	// none, their template being their release's image.
+	if provisioner.RefreshesNodes(c) {
+		image, err := s.nodeImage(r.Context(), u.kube, c, s.now())
+		if err != nil {
+			s.Log.Warn("reading a cluster's node images", "cluster", c.Namespace+"/"+c.Name, "error", err)
+		}
+		v.NodeImage = image
 	}
 	var machines clusterv1.MachineList
 	if err := u.kube.List(r.Context(), &machines, client.InNamespace(c.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: c.Name}); err != nil {

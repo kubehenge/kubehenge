@@ -18,21 +18,25 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
-// withTemplates makes the harness an appliance with a management cluster and two templates:
-// the cloud image RKE2 and k3s share, and kubeadm at v1.36.5.
+// withTemplates makes the harness an appliance with a management cluster and three templates: two
+// builds of the cloud image RKE2 and k3s share, and one of kubeadm at v1.36.5.
 func withTemplates(t *testing.T, h *harness) {
 	t.Helper()
 	h.server.Appliance = &appliance.Appliance{Dir: t.TempDir(), Log: slog.New(slog.DiscardHandler)}
 	h.accounts.members = []pve.Member{
-		{VMID: 9001, Node: "pve1", Type: "qemu", Name: "kubehenge-ubuntu-26.04", Template: 1, Tags: "cloud-image;kubehenge;ubuntu-26.04"},
-		{VMID: 9002, Node: "pve1", Type: "qemu", Name: "kubehenge-kubeadm-v1.36.5-ubuntu-26.04", Template: 1, Tags: "kubeadm;kubehenge;kubernetes-v1.36.5;ubuntu-26.04"},
+		{VMID: 9001, Node: "pve1", Type: "qemu", Name: "kubehenge-ubuntu-26.04-build-202610010000", Template: 1, Tags: "build-202610010000;cloud-image;kubehenge;ubuntu-26.04"},
+		{VMID: 9004, Node: "pve1", Type: "qemu", Name: "kubehenge-ubuntu-26.04-build-202610150000", Template: 1, Tags: "build-202610150000;cloud-image;kubehenge;ubuntu-26.04"},
+		{VMID: 9002, Node: "pve1", Type: "qemu", Name: "kubehenge-kubeadm-v1.36.5-ubuntu-26.04-build-202610010000", Template: 1, Tags: "build-202610010000;kubeadm;kubehenge;kubernetes-v1.36.5;ubuntu-26.04"},
 		{VMID: 9003, Node: "pve1", Type: "qemu", Name: "being-built", Template: 0},
 	}
 }
 
 func TestTemplatesListedWithTheClustersThatNeedThem(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t, cluster("default", "one"))
+	// Its nodes went to the build of 1 October; the newer one is not offered by its node image time.
+	one := cluster("default", "one")
+	one.Annotations = map[string]string{"kubehenge.dev/node-image": "2026-10-10T00:00:00Z"}
+	h := newHarness(t, one)
 	withTemplates(t, h)
 	h.server.MakeTemplate = func(context.Context, *pve.Ticket, templates.Builder, *templates.Template) (int, error) { return 0, nil }
 	a := h.browser()
@@ -43,8 +47,13 @@ func TestTemplatesListedWithTheClustersThatNeedThem(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Templates) != 2 || got.Templates[0].Name != "kubehenge-kubeadm-v1.36.5-ubuntu-26.04" || got.Templates[0].InUse != "" ||
-		got.Templates[1].InUse != "default/one" {
+	ids := make([]int, 0, len(got.Templates))
+	for _, v := range got.Templates {
+		ids = append(ids, v.VMID)
+	}
+	if !slices.Equal(ids, []int{9002, 9004, 9001}) || got.Templates[0].InUse != "" || got.Templates[0].Line != "kubehenge-kubeadm-v1.36.5-ubuntu-26.04" ||
+		got.Templates[1].InUse != "" || !got.Templates[1].Newest || got.Templates[1].Build != "build-202610150000" ||
+		got.Templates[2].InUse != "default/one" || got.Templates[2].Newest || got.Refresh != nil {
 		t.Fatalf("templates = %s", rec.Body)
 	}
 
@@ -96,7 +105,8 @@ func TestTemplateBuiltOnTheAdministratorsSession(t *testing.T) {
 	if job.State != "succeeded" || !slices.Contains(job.Log, "Downloading the image") || !strings.Contains(strings.Join(job.Log, "\n"), "is VM 9010") {
 		t.Fatalf("job = %+v", job)
 	}
-	if gotTemplate.Name != "kubehenge-kubeadm-v1.37.1-ubuntu-26.04" || gotBuilder.Pool != templatePool || gotBuilder.Node != "pve1" ||
+	if _, built := templates.BuildOf(gotTemplate.Tags); !built || gotTemplate.LineName != "kubehenge-kubeadm-v1.37.1-ubuntu-26.04" ||
+		!strings.HasPrefix(gotTemplate.Name, gotTemplate.LineName+"-build-") || gotBuilder.Pool != templatePool || gotBuilder.Node != "pve1" ||
 		gotBuilder.Storage != "ceph" || gotBuilder.VLAN != 30 || gotBuilder.Network == nil || gotBuilder.Network.Gateway.String() != "192.0.2.1" {
 		t.Fatalf("built %+v with %+v", gotTemplate, gotBuilder)
 	}
@@ -161,7 +171,7 @@ func TestFinishedTemplateBuildIsListed(t *testing.T) {
 			t.Fatalf("template 9010 listed beside job %+v", got.Job)
 		}
 	}
-	if got := listed(); got.Job.State != "succeeded" || len(got.Templates) != 3 {
+	if got := listed(); got.Job.State != "succeeded" || len(got.Templates) != 4 {
 		t.Fatalf("after the build: %+v", got)
 	}
 }
@@ -228,6 +238,8 @@ func TestTemplateInUseIsKept(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "default/one") {
 		t.Fatalf("refusal = %s", rec.Body)
 	}
+	// A build no cluster's node image time picks can go.
+	expect(t, a.do("DELETE", "/api/templates/9004", ""), http.StatusNoContent)
 	expect(t, a.do("DELETE", "/api/templates/9002", ""), http.StatusConflict)
 	expect(t, a.do("DELETE", "/api/templates/9003", ""), http.StatusNotFound)
 	expect(t, a.do("DELETE", "/api/templates/42", ""), http.StatusNotFound)
@@ -236,7 +248,7 @@ func TestTemplateInUseIsKept(t *testing.T) {
 		t.Fatal(err)
 	}
 	expect(t, a.do("DELETE", "/api/templates/9002", ""), http.StatusNoContent)
-	if !slices.Equal(h.accounts.deleted, []int{9002}) {
+	if !slices.Equal(h.accounts.deleted, []int{9004, 9002}) {
 		t.Fatalf("deleted %v", h.accounts.deleted)
 	}
 }

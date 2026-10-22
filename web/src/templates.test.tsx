@@ -56,8 +56,26 @@ describe("vM templates", () => {
       "GET /api/templates": {
         body: {
           templates: [
-            { vmid: 9001, node: "pve1", name: "kubehenge-ubuntu-26.04", tags: [], inUse: "default/web" },
-            { vmid: 9002, node: "pve1", name: "kubehenge-kubeadm-v1.36.5-ubuntu-26.04", tags: [] },
+            {
+              vmid: 9001,
+              node: "pve1",
+              name: "kubehenge-ubuntu-26.04-build-202610110100",
+              line: "kubehenge-ubuntu-26.04",
+              build: "build-202610110100",
+              built: "2026-10-11T01:00:00Z",
+              newest: true,
+              tags: [],
+              inUse: "default/web",
+            },
+            {
+              vmid: 9002,
+              node: "pve1",
+              name: "kubehenge-kubeadm-v1.36.5-ubuntu-26.04-build-202610040100",
+              line: "kubehenge-kubeadm-v1.36.5-ubuntu-26.04",
+              build: "build-202610040100",
+              built: "2026-10-04T01:00:00Z",
+              tags: [],
+            },
           ],
           job: {
             user: "root@pam",
@@ -94,9 +112,12 @@ describe("vM templates", () => {
     const user = userEvent.setup({ delay: null });
     render(<Templates />);
 
-    const inUse = within(await screen.findByRole("row", { name: /kubehenge-ubuntu-26.04/u }));
-    expect(inUse.getByRole("button", { name: "Delete kubehenge-ubuntu-26.04" })).toBeDisabled();
+    const inUse = within(await screen.findByRole("row", { name: /kubehenge-ubuntu-26.04 \(9001\)/u }));
+    expect(inUse.getByText(/\(newest\)/u)).toBeInTheDocument();
+    expect(inUse.getByRole("button", { name: "Delete kubehenge-ubuntu-26.04-build-202610110100" })).toBeDisabled();
     expect(screen.getByText(/failed: no import storage/u)).toBeInTheDocument();
+    // The weekly build is off on this appliance.
+    expect(within(screen.getByRole("region", { name: "Automatic builds" })).getByText(/^Off\./u)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Build a template" }));
     const dialog = screen.getByRole("dialog", { name: "Build a template" });
@@ -125,5 +146,42 @@ describe("vM templates", () => {
         bridge: "vmbr0",
       }),
     );
+  });
+
+  it("shows the weekly build and runs it now", async () => {
+    const refresh = {
+      weekday: "Sun",
+      time: "01:00",
+      timeZone: "Europe/Zurich",
+      soakHours: 24,
+      creatorBuilds: false,
+      next: "2026-10-25T00:00:00Z",
+      requested: [] as string[],
+      last: {
+        state: "failed",
+        trigger: "schedule",
+        finished: "2026-10-18T00:20:00Z",
+        lines: ["kubehenge-ubuntu-26.04"],
+        error: "the mirror is down",
+        log: ["building", "failed"],
+      },
+    };
+    const calls = fakeServer({
+      "GET /api/templates": () => ({ body: { templates: [], refresh } }),
+      "POST /api/templates/refresh": () => {
+        refresh.requested = ["refresh"];
+        return { status: 202, body: refresh };
+      },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<Templates />);
+    const builds = within(await screen.findByRole("region", { name: "Automatic builds" }));
+    expect(builds.getByText(/Every Sunday at 01:00 \(Europe\/Zurich\)/u)).toBeInTheDocument();
+    expect(builds.getByText(/24 hours old/u)).toBeInTheDocument();
+    expect(builds.getByText(/failed, .*: the mirror is down/u)).toBeInTheDocument();
+    await user.click(builds.getByRole("button", { name: "Build now" }));
+    await waitFor(() => expect(builds.getByRole("button", { name: "Build now" })).toBeDisabled());
+    expect(builds.getByText(/Build now was asked for/u)).toBeInTheDocument();
+    expect(calls.filter((c) => c.key === "POST /api/templates/refresh")).toHaveLength(1);
   });
 });

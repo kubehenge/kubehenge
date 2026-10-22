@@ -8,7 +8,14 @@ import {
   withTarget,
   type BackupFields,
 } from "./Backups";
-import { defaultMinutes, defaultStart, describe, type UpgradeMode, type UpgradePolicy } from "./ClusterUpgrades";
+import {
+  defaultMinutes,
+  defaultStart,
+  describe,
+  refreshesNodes,
+  type UpgradeMode,
+  type UpgradePolicy,
+} from "./ClusterUpgrades";
 import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implementation } from "./LoadBalancer";
 import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
 import { addressBits, addressCount, inList, ipv4, isVLAN, list, rangeProblem, whole } from "./network";
@@ -107,8 +114,10 @@ export interface Form {
 }
 
 /** newUpgrades is the policy a new cluster starts with: every day from 02:00 for four hours, in the browser's time zone. */
-export const newUpgrades = (mode: Form["upgradeMode"], timeZone: string): UpgradePolicy =>
-  mode === "off" ? { mode } : { mode, window: { start: defaultStart, durationMinutes: defaultMinutes, timeZone } };
+export const newUpgrades = (mode: Form["upgradeMode"], timeZone: string): UpgradePolicy => ({
+  mode,
+  window: { start: defaultStart, durationMinutes: defaultMinutes, timeZone },
+});
 
 export const versionExamples: Record<string, string> = {
   rke2: "v1.36.5+rke2r1",
@@ -442,8 +451,11 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   }
   Object.assign(variables, addOnVariables(form, defined));
   variables["oidc"] = cleanProviders(form.oidc);
-  if (form.upgradeMode !== "off") {
-    variables["upgrades"] = newUpgrades(form.upgradeMode, browserZone());
+  // A cluster whose nodes move to new template builds needs its window in the browser's time zone
+  // even with Kubernetes upgrades off.
+  const upgrades = newUpgrades(form.upgradeMode, browserZone());
+  if (form.upgradeMode !== "off" || (defined.has("upgrades") && refreshesNodes(upgrades, c.distribution))) {
+    variables["upgrades"] = upgrades;
   }
   const req: CreateRequest = {
     name: form.name,
@@ -537,7 +549,7 @@ export function summary(
   rows.push(...addOnRows(form, defined));
   if (defined.has("upgrades")) {
     const upgrades = newUpgrades(form.upgradeMode, browserZone());
-    rows.push(["Automatic upgrades", describe(upgrades)]);
+    rows.push(["Automatic upgrades", describe(upgrades, refreshesNodes(upgrades, c.distribution))]);
   }
   if (defined.has("oidc")) {
     const providers = cleanProviders(form.oidc);

@@ -109,6 +109,21 @@ rules:
     resources: [clusterclasses]
     resourceNames: {{ keys .Values.providerNamespaces | sortAlpha | toJson }}
     verbs: [patch]
+  {{- if .Values.templateRefresh.enabled }}
+  # The builds asked for in the interface run as the template refresh CronJob's Job, one at a time:
+  # the controller takes the requests and starts that Job, never one of its own making.
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [kubehenge-template-requests]
+    verbs: [update, patch]
+  - apiGroups: [batch]
+    resources: [cronjobs]
+    resourceNames: [kubehenge-template-refresh]
+    verbs: [get]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [list, create]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -222,6 +237,10 @@ spec:
             - --proxmox-ca=/etc/kubehenge/proxmox/ca.crt
             {{- if .Values.interface.offerHARules }}
             - --offer-ha-rules
+            {{- end }}
+            - --node-image-soak={{ .Values.templateRefresh.soakHours }}h
+            {{- if .Values.templateRefresh.enabled }}
+            - --template-refresh
             {{- end }}
             - --proxmox-insecure={{ .Values.proxmox.insecure }}
             {{- range $class, $namespaces := .Values.providerNamespaces }}

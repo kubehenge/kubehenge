@@ -283,6 +283,21 @@ export interface Cluster {
   headlamp?: string;
   /** How each peer the cluster lists for Cluster Mesh stands, while it is on. */
   mesh?: MeshPeer[];
+  /** Which template builds the nodes run and when they next move; absent for Talos. */
+  nodeImage?: NodeImage;
+}
+
+/** The VM template builds a cluster's nodes are cloned from. */
+export interface NodeImage {
+  /** The nodes move to new builds inside the maintenance window. */
+  refreshes: boolean;
+  /** The nodes run the newest builds offered by then. */
+  since: string;
+  builds: { template: string; build: string; built: string }[];
+  /** The last refresh, as "<build> to <build> at <time>". */
+  last?: string;
+  /** The coming refresh: the build it takes, none while it is not built yet, and its earliest start. */
+  next?: { build?: string; due: string };
 }
 
 /** A cluster another lists to link with in a Cluster Mesh; refused says why the two are not linked. */
@@ -373,6 +388,21 @@ export interface ManagementSettings {
   /** Clusters may choose the CSI plugin's newest release, with Datastore.Allocate on their storage. */
   clusterDatastoreAllocate?: boolean;
   backupTargets?: BackupTarget[];
+  /** The weekly build of the Ubuntu VM templates; absent, it runs with its defaults. */
+  templateRefresh?: TemplateRefreshSettings;
+}
+
+/** When and where the Ubuntu VM templates are built again; empty fields take the defaults. */
+export interface TemplateRefreshSettings {
+  enabled: boolean;
+  weekday?: string;
+  time?: string;
+  timeZone?: string;
+  storage?: string;
+  address?: string;
+  gateway?: string;
+  dns?: string[];
+  creatorBuilds?: boolean;
 }
 
 /** An S3 store clusters back up to, each under a folder of its own beneath the prefix. */
@@ -497,14 +527,52 @@ export interface VMTemplate {
   node: string;
   name: string;
   tags: string[];
+  /** The template a build is one of; a Talos template's own name. */
+  line: string;
+  /** The build's tag and when it was made; absent for a Talos template. */
+  build?: string;
+  built?: string;
+  /** The newest build of its template. */
+  newest?: boolean;
   /** The cluster that clones from it, which keeps it from being deleted. */
   inUse?: string;
+}
+
+/** The weekly template build: its schedule, what was asked for, and how the last run went. */
+export interface TemplateRefresh {
+  weekday: string;
+  time: string;
+  timeZone: string;
+  soakHours: number;
+  creatorBuilds: boolean;
+  next?: string;
+  /** Builds asked for that have not started: "refresh", or a missing template. */
+  requested: string[];
+  last?: {
+    state: "running" | "succeeded" | "failed";
+    trigger?: string;
+    started?: string;
+    finished?: string;
+    lines: string[];
+    error?: string;
+    log: string[];
+  };
 }
 
 export interface Templates {
   templates: VMTemplate[];
   /** The last template build. */
   job?: Job;
+  /** The weekly build, when it is on. */
+  refresh?: TemplateRefresh;
+}
+
+/** Whether a cluster creator may have a missing template built, and which builds are under way. */
+export interface TemplateBuilds {
+  allowed: boolean;
+  /** Request keys not started yet, such as kubeadm-v1.37.1 or cloud-image. */
+  requested: string[];
+  building: string[];
 }
 
 export interface TemplateRequest {

@@ -26,6 +26,7 @@ The interface logs in JSON, one line per event, and every change names the user 
 
 - **The last run of the management cluster** shows on the Administration page, with its error and log when it failed, and stays there after a restart; one cut off by a restart says so.
 - **The last template build** shows under VM templates on the same page, kept the same way.
+- **The last weekly template build** shows below it under Automatic builds, with its log, from the ConfigMap `kubehenge-template-refresh` in the management cluster's `kubehenge-system`; the run itself is a Job of the CronJob of that name, whose pod's log has the whole of it: `kubectl -n kubehenge-system logs job/<name>`. A run that reads "no API token" found no Secret `kubehenge-template-builder` with the builder's token: the module makes it, and a management cluster installed from the chart alone needs it made, or `templateRefresh.enabled` set to false.
 - **The last upgrade** shows on the Administration page; the updater keeps it in `/var/lib/kubehenge-update/status.json`.
 
 ### The management cluster
@@ -122,8 +123,9 @@ The Administration page (or the setup page) shows the error and the run's log. F
 
 The interface refuses a cluster whose template the controller does not find in the template pool. A cluster made with kubectl, or whose template went after it was made, has machines that stay provisioning; the cluster's **Machines** view shows under each what it waits for, such as `VM template not found`. Cluster API's Proxmox VE provider selects a template by its exact set of tags and needs exactly one match:
 
-- RKE2 and k3s need the shared template (**Build a template**, For: RKE2 and k3s, on the Administration page, or `kubehenge template create rke2` with the default `--os`).
-- kubeadm needs the template of the cluster's exact Kubernetes version, for creating a cluster and for upgrading one.
+- RKE2 and k3s need a build of the shared template (**Build a template**, For: RKE2 and k3s, on the Administration page, or `kubehenge template create rke2` with the default `--os`).
+- kubeadm needs a build of the template of the cluster's exact Kubernetes version, for creating a cluster and for upgrading one.
+- A cluster's machines clone the build its node image time picks ([templates.md](templates.md#how-clusters-find-them)); with that build deleted they take the one before it, or the oldest left, and with none left of the line, none.
 - The template has to be in the template pool, `kubehenge-templates`, the only one Cluster API may clone from.
 - Two templates with the same tags are no match either.
 - A template on storage local to one node can only be cloned there; put templates on shared storage.

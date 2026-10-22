@@ -1,6 +1,6 @@
 {{- $class := "kubehenge-kubeadm" }}
 {{- $clusterSpec := include "kubehenge.proxmoxClusterSpec" . }}
-{{- /* Placeholder tags: patches select the template of each machine's Kubernetes version. */}}
+{{- /* Placeholder tags: the controller's patch selects the build of each machine's version's template. */}}
 {{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "kubeadm" "kubehenge" "ubuntu-26.04")) }}
 {{- $controlPlaneSpec := include "kubehenge.kubeadmControlPlaneSpec" . }}
 {{- $workerSpec := include "kubehenge.kubeadmWorkerSpec" . }}
@@ -91,25 +91,6 @@ spec:
           {{- include "kubehenge.cniFixed" . | nindent 10 }}
   patches:
     {{- include "kubehenge.proxmoxPatches" . | nindent 4 }}
-    {{- range $role, $sel := dict "control-plane" (dict "selector" (dict "controlPlane" true) "version" ".builtin.controlPlane.version") "worker" (dict "selector" (dict "machineDeploymentClass" (dict "names" (list "worker"))) "version" ".builtin.machineDeployment.version") }}
-    - name: kubeadm-{{ $role }}-template
-      definitions:
-        - selector:
-            apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
-            kind: ProxmoxMachineTemplate
-            matchResources:
-              {{- toYaml $sel.selector | nindent 14 }}
-          jsonPatches:
-            # The template `kubehenge template create kubeadm` builds for the machine's version.
-            - op: replace
-              path: /spec/template/spec/templateSelector/matchTags
-              valueFrom:
-                template: |
-                  - kubeadm
-                  - kubehenge
-                  - kubernetes-{{ printf "{{ %s }}" $sel.version }}
-                  - ubuntu-26.04
-    {{- end }}
     - name: kubeadm-control-plane
       definitions:
         - selector:

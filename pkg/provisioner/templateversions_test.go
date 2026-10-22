@@ -22,12 +22,15 @@ func TestKubeadmTemplateVersionsRecordedOnTheClass(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex
 	tags := []string{
-		"kubeadm;kubehenge;kubernetes-v1.36.5;" + templates.DefaultOS,
-		"kubeadm;kubehenge;kubernetes-v1.37.1;" + templates.DefaultOS,
-		"kubeadm;kubehenge;kubernetes-v1.36.4;" + templates.DefaultOS,
+		"build-202610010000;kubeadm;kubehenge;kubernetes-v1.36.5;" + templates.DefaultOS,
+		"build-202610080000;kubeadm;kubehenge;kubernetes-v1.36.5;" + templates.DefaultOS,
+		"build-202610010000;kubeadm;kubehenge;kubernetes-v1.37.1;" + templates.DefaultOS,
+		"build-202610010000;kubeadm;kubehenge;kubernetes-v1.36.4;" + templates.DefaultOS,
+		// Not a build, which no class selects.
+		"kubeadm;kubehenge;kubernetes-v1.38.1;" + templates.DefaultOS,
 		// Another OS than the class selects.
-		"kubeadm;kubehenge;kubernetes-v1.38.0;ubuntu-24.04",
-		"cloud-image;kubehenge;" + templates.DefaultOS,
+		"build-202610010000;kubeadm;kubehenge;kubernetes-v1.38.0;ubuntu-24.04",
+		"build-202610010000;cloud-image;kubehenge;" + templates.DefaultOS,
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var data any = []any{}
@@ -84,11 +87,23 @@ func TestKubeadmTemplateVersionsRecordedOnTheClass(t *testing.T) {
 			t.Errorf("%s records the templates' storages as %q, want ceph", name, got)
 		}
 	}
+	raw, _ := recorded(rke2.Name, NodeImageBuildsAnnotation)
+	builds, err := ParseNodeImageBuilds(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := "kubeadm;kubehenge;kubernetes-v1.36.5;" + templates.DefaultOS
+	if got := builds[line]; len(got) != 2 || !got[0].Before(got[1]) || len(builds) != 4 {
+		t.Errorf("builds recorded %s", raw)
+	}
+	if again, _ := recorded(class.Name, NodeImageBuildsAnnotation); again != raw {
+		t.Errorf("the classes record the builds differently: %s and %s", raw, again)
+	}
 
 	// The last template deleted: none, which is not the same as not looked at yet. A cloud image
 	// of another OS is no source for the classes.
 	mu.Lock()
-	tags = []string{"cloud-image;kubehenge;ubuntu-24.04"}
+	tags = []string{"build-202610010000;cloud-image;kubehenge;ubuntu-24.04"}
 	mu.Unlock()
 	if err := p.publish(ctx); err != nil {
 		t.Fatal(err)

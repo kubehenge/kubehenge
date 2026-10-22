@@ -95,6 +95,17 @@ module "management_cluster" {
   # else falls through to ghcr.io.
   registry_mirrors = { "ghcr.io" = ["http://172.21.99.3:5000"] }
   controller_image = var.controller_image
+
+  # No soak, so that the node image test sees a cluster move to a build as soon as it is made. Its
+  # builds take an address apart from the one run.sh's take, in case the schedule comes while those
+  # are under way.
+  template_refresh = {
+    soak_hours     = 0
+    address        = "172.20.99.51/24"
+    gateway        = "172.20.99.1"
+    dns            = ["172.20.99.1"]
+    creator_builds = true
+  }
 }
 
 output "kubeconfig" {

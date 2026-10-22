@@ -765,9 +765,17 @@ describe("create", () => {
       mode: "patch",
       window: { start: "02:00", durationMinutes: 240, timeZone: zone },
     });
-    expect(request(form, withUpgrades).variables).not.toHaveProperty("upgrades");
+    // The nodes still move to new template builds in that window.
+    expect(request(form, withUpgrades).variables["upgrades"]).toStrictEqual({
+      mode: "off",
+      window: { start: "02:00", durationMinutes: 240, timeZone: zone },
+    });
+    expect(request(form, rke2).variables).not.toHaveProperty("upgrades");
     expect(Object.fromEntries(summary({ ...form, upgradeMode: "minor" }, withUpgrades))["Automatic upgrades"]).toBe(
-      `Patch and minor releases, every day from 02:00 for 4 h (${zone})`,
+      `Patch and minor releases and new node images, every day from 02:00 for 4 h (${zone})`,
+    );
+    expect(Object.fromEntries(summary(form, { ...withUpgrades, distribution: "talos" }))["Automatic upgrades"]).toBe(
+      "Off",
     );
   });
 

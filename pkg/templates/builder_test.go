@@ -33,6 +33,8 @@ type fakeCluster struct {
 	configs map[int]map[string]any
 	served  []time.Time // when each answer of the resource view was given
 	deleted []int
+	created []map[string]any // the parameters of each VM created, in turn
+	nextIDs []int            // what /cluster/nextid answers, in turn
 }
 
 var (
@@ -81,6 +83,9 @@ func (f *fakeCluster) serve(w http.ResponseWriter, r *http.Request) {
 	switch m := qemuPath.FindStringSubmatch(path); {
 	case path == "/cluster/status":
 		data = []any{}
+	case path == "/cluster/nextid" && len(f.nextIDs) > 0:
+		data = strconv.Itoa(f.nextIDs[0])
+		f.nextIDs = f.nextIDs[1:]
 	case path == "/cluster/resources":
 		data = f.views[min(len(f.served), len(f.views)-1)]
 		f.served = append(f.served, time.Now())
@@ -88,6 +93,19 @@ func (f *fakeCluster) serve(w http.ResponseWriter, r *http.Request) {
 		data = map[string]any{}
 	case taskPath.MatchString(path):
 		data = map[string]any{"status": "stopped", "exitstatus": "OK"}
+	case path == "/nodes/pve1/qemu" && r.Method == http.MethodPost:
+		params := f.body(r)
+		vmid, ok := params["vmid"].(float64)
+		if !ok {
+			f.t.Errorf("a VM created without a VM ID: %v", params)
+		}
+		if _, taken := f.configs[int(vmid)]; taken {
+			f.refuse(w, fmt.Sprintf("unable to create VM %d - VM %d already exists on node 'pve1'", int(vmid), int(vmid)))
+			return
+		}
+		f.created = append(f.created, params)
+		f.configs[int(vmid)] = maps.Clone(params)
+		data = fmt.Sprintf("UPID:pve1:00001234:00005678:6700AB12:qmcreate:%d:root@pam:", int(vmid))
 	case m != nil:
 		vmid, err := strconv.Atoi(m[1])
 		if err != nil {
@@ -103,6 +121,9 @@ func (f *fakeCluster) serve(w http.ResponseWriter, r *http.Request) {
 			delete(f.configs, vmid)
 			f.deleted = append(f.deleted, vmid)
 			data = fmt.Sprintf("UPID:pve1:00001234:00005678:6700AB12:qmdestroy:%d:root@pam:", vmid)
+		case r.Method == http.MethodPost && m[2] == "/config":
+			maps.Copy(c, f.body(r))
+			data = fmt.Sprintf("UPID:pve1:00001234:00005678:6700AB12:qmconfig:%d:root@pam:", vmid)
 		case m[2] == "/config":
 			data = c
 		case m[2] == "/status/current":
@@ -120,16 +141,28 @@ func (f *fakeCluster) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (f *fakeCluster) body(r *http.Request) map[string]any {
+	var params map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+		f.t.Errorf("%s %s: %v", r.Method, r.URL.Path, err)
+	}
+	return params
+}
+
 // missing answers as Proxmox VE does for a VM without a configuration: a 500 whose status line,
 // not its body, says why.
 func (f *fakeCluster) missing(w http.ResponseWriter, vmid int) {
+	f.refuse(w, fmt.Sprintf("Configuration file 'nodes/pve1/qemu-server/%d.conf' does not exist", vmid))
+}
+
+func (f *fakeCluster) refuse(w http.ResponseWriter, reason string) {
 	conn, buf, err := http.NewResponseController(w).Hijack()
 	if err != nil {
 		f.t.Error(err)
 		return
 	}
 	defer func() { _ = conn.Close() }()
-	_, err = fmt.Fprintf(buf, "HTTP/1.1 500 Configuration file 'nodes/pve1/qemu-server/%d.conf' does not exist\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", vmid)
+	_, err = fmt.Fprintf(buf, "HTTP/1.1 500 %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", reason)
 	if err == nil {
 		err = buf.Flush()
 	}
@@ -351,6 +384,61 @@ func TestCreateFindsATemplateTheViewFlaps(t *testing.T) {
 	}
 }
 
+func TestCreateFreshTakesAnotherVMIDWhenTheOfferedOneIsTaken(t *testing.T) {
+	t.Parallel()
+	tmpl, tags := rke2(t)
+	// VM 100 is created by another build between this build's nextid and its create.
+	other := template(100, "kubehenge-k3s-build", tags, testPool)
+	f := &fakeCluster{t: t, views: [][]map[string]any{{other}}, configs: configsOf(other), nextIDs: []int{100, 101}}
+	client := f.client()
+	ctx := t.Context()
+	cluster, err := client.Cluster(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := client.Node(ctx, "pve1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &Builder{Client: client, Storage: "local-lvm", Pool: testPool}
+	vmid, err := b.createFresh(ctx, cluster, node, &tmpl, "local:import/image.qcow2", "x86-64-v2-AES", "https://example.test/image.qcow2")
+	if err != nil || vmid != 101 {
+		t.Fatalf("createFresh gave %d, %v; want VM 101 after 100 was taken", vmid, err)
+	}
+	if len(f.created) != 1 || f.created[0]["vmid"] != float64(101) {
+		t.Errorf("created %v; want VM 101 alone", f.created)
+	}
+	if f.configs[100]["name"] != "kubehenge-k3s-build" {
+		t.Errorf("the other build's VM 100 is now %v", f.configs[100])
+	}
+}
+
+func TestCreateFreshGivesUpAfterItsAttempts(t *testing.T) {
+	t.Parallel()
+	tmpl, tags := rke2(t)
+	other := template(100, "kubehenge-k3s-build", tags, testPool)
+	offered := slices.Repeat([]int{100}, createAttempts+1)
+	f := &fakeCluster{t: t, views: [][]map[string]any{{other}}, configs: configsOf(other), nextIDs: offered}
+	client := f.client()
+	ctx := t.Context()
+	cluster, err := client.Cluster(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := client.Node(ctx, "pve1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &Builder{Client: client, Storage: "local-lvm", Pool: testPool}
+	_, err = b.createFresh(ctx, cluster, node, &tmpl, "local:import/image.qcow2", "x86-64-v2-AES", "https://example.test/image.qcow2")
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("createFresh gave %v; want Proxmox VE's refusal once every attempt found the VM ID taken", err)
+	}
+	if len(f.nextIDs) != 1 || len(f.created) != 0 {
+		t.Errorf("%d VM IDs left unasked, created %v; want %d attempts and nothing created", len(f.nextIDs), f.created, createAttempts)
+	}
+}
+
 func TestWaitSelectableWaitsForTheViewToSettle(t *testing.T) {
 	t.Parallel()
 	tmpl, tags := rke2(t)
@@ -409,6 +497,17 @@ func TestWaitSelectableWaitsForTheViewToSettle(t *testing.T) {
 		f := &fakeCluster{t: t, views: [][]map[string]any{{converted, second}}, configs: configsOf(converted, second)}
 		if err := newBuilder(f).waitSelectable(t.Context(), &tmpl, 101); err == nil || !strings.Contains(err.Error(), "2 templates carry") {
 			t.Errorf("waitSelectable gave %v; want the two templates refused", err)
+		}
+	})
+
+	t.Run("a pool the caller may not audit", func(t *testing.T) {
+		t.Parallel()
+		// Proxmox VE's resource view leaves out the pool of a VM in a pool the caller lacks
+		// Pool.Audit on.
+		hidden := template(101, tmpl.Name, tags, "")
+		f := &fakeCluster{t: t, views: [][]map[string]any{{hidden}}, configs: configsOf(hidden)}
+		if err := newBuilder(f).waitSelectable(t.Context(), &tmpl, 101); err == nil || !strings.Contains(err.Error(), "Pool.Audit on /pool/"+testPool) {
+			t.Errorf("waitSelectable gave %v; want the missing Pool.Audit named at once", err)
 		}
 	})
 }

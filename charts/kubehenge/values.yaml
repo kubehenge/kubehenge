@@ -99,6 +99,44 @@ proxmox:
     role: ""
     managementStorages: []
 
+# Building the Ubuntu VM templates again every week, with the updates Ubuntu published since, as a
+# CronJob signed in with a token of its own. Clusters move their nodes to a new build inside their
+# maintenance windows (their upgrades variable's nodeImages) once it is soakHours old; of each
+# template the two newest builds stay, and any older one a cluster still clones from.
+templateRefresh:
+  # On, as with the module and the appliance. It needs node, storage and importStorage below and the
+  # builder's Secret; set enabled to false to install without them.
+  enabled: true
+  # When the weekly build starts: a weekday (Mon to Sun), a time as HH:MM, and its IANA time zone.
+  weekday: Sun
+  time: "01:00"
+  timeZone: UTC
+  # How old a build is before clusters move to it, giving a broken one time to be noticed.
+  soakHours: 24
+  # Secret in the release namespace with the builder's API token, key token, which needs the
+  # privileges docs/install.md lists. The CA is read from proxmox.secret.
+  secret: kubehenge-template-builder
+  # Where the templates are built, as kubehenge template create's flags of the same names: the node,
+  # the storage of their disks, the file storage the image is downloaded to (import content), the
+  # storage of the cloud-init ISO while an image is prepared, and the template pool.
+  node: ""
+  storage: ""
+  importStorage: ""
+  isoStorage: ""
+  pool: kubehenge-templates
+  # The network of the VM that prepares an image, which needs Ubuntu's and Kubernetes' package
+  # mirrors: a bridge and VLAN tag, and a static address with prefix, gateway and DNS servers, or
+  # DHCP when address is empty.
+  bridge: vmbr0
+  vlan: 0
+  address: ""
+  gateway: ""
+  dns: []
+  # Whether those who may create clusters may have a missing template built, such as for a
+  # Kubernetes version no kubeadm template exists for yet. The builds run here, with the builder's
+  # token, one at a time; the interface asks for them and never starts one itself.
+  creatorBuilds: false
+
 # kube-vip, which holds each cluster's API address on its control planes and, where it is the
 # cluster's load balancer, its Services' addresses.
 # renovate: datasource=docker depName=ghcr.io/kube-vip/kube-vip

@@ -111,10 +111,11 @@ func placement(chosen, online []string) []string {
 	return up
 }
 
-// GeneratePatches gives capmox the nodes it may put the cluster's new VMs on, and has RKE2 and k3s
-// nodes install their release from checked files (ReleaseChecksums). capmox clones every VM onto
-// its template's node when the cluster names none, and fails to place any VM while one of the
-// nodes it names does not answer, so the cluster always names the nodes that are online.
+// GeneratePatches gives capmox the nodes it may put the cluster's new VMs on and the template
+// build each machine is cloned from (nodeImages), and has RKE2 and k3s nodes install their release
+// from checked files (ReleaseChecksums). capmox clones every VM onto its template's node when the
+// cluster names none, and fails to place any VM while one of the nodes it names does not answer,
+// so the cluster always names the nodes that are online.
 func (h *Hooks) GeneratePatches(ctx context.Context, req *runtimehooksv1.GeneratePatchesRequest, resp *runtimehooksv1.GeneratePatchesResponse) {
 	resp.Status = runtimehooksv1.ResponseStatusSuccess
 	var chosen []string
@@ -127,6 +128,7 @@ func (h *Hooks) GeneratePatches(ctx context.Context, req *runtimehooksv1.Generat
 			return
 		}
 	}
+	images := &nodeImages{hooks: h, variables: req.Variables}
 	for i := range req.Items {
 		item := &req.Items[i]
 		var patch []byte
@@ -134,6 +136,8 @@ func (h *Hooks) GeneratePatches(ctx context.Context, req *runtimehooksv1.Generat
 		switch {
 		case item.HolderReference.Kind == "Cluster" && item.HolderReference.FieldPath == "spec.infrastructureRef":
 			patch, err = h.placementPatch(ctx, &item.HolderReference, chosen)
+		case kindOf(item) == proxmoxMachineTemplate:
+			patch, err = images.patch(ctx, item)
 		case h.Releases != nil:
 			patch, err = h.Releases.patch(ctx, item, req.Variables)
 		}

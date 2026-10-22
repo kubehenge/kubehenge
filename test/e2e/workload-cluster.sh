@@ -812,9 +812,13 @@ step "Headlamp switched on"
 set_variable headlamp '{"enabled":true}'
 until_true 600 "Headlamp installed" sh -c "KUBECONFIG=${work}/workload kubectl -n headlamp get deployment/headlamp >/dev/null 2>&1"
 wl -n headlamp rollout status deployment/headlamp --timeout=10m
-# Through the API server's service proxy, as Kubehenge's interface reaches it.
-page=$(wl get --raw /api/v1/namespaces/headlamp/services/http:headlamp:80/proxy/)
-printf '%s' "${page}" | grep -q -i '<html' || fail "Headlamp does not answer through the API server"
+# Through the API server's service proxy, as Kubehenge's interface reaches it. A rollout counts the
+# pod available before the endpoints controller has published it, and until then the proxy answers
+# that the Service has no endpoints.
+headlamp_page() {
+    wl get --raw /api/v1/namespaces/headlamp/services/http:headlamp:80/proxy/ 2> /dev/null | grep -q -i '<html'
+}
+until_true 60 "Headlamp answers through the API server" headlamp_page
 # shellcheck disable=SC2310 # can-i exits non-zero for its answer no, which the comparison reads.
 can_list=$(wl auth can-i list pods --all-namespaces --as=system:serviceaccount:headlamp:headlamp || true)
 [ "${can_list}" = no ] || fail "Headlamp's service account has rights in the cluster"

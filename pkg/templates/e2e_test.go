@@ -87,6 +87,12 @@ func TestTemplatesEndToEnd(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// An Ubuntu template is made as a build of its line, as clusters select it.
+			if tmpl.Refreshed() {
+				if tmpl, err = tmpl.Build(time.Now()); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if _, err = b.Delete(ctx, &tmpl); err != nil {
 				t.Fatal(err)
 			}

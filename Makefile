@@ -8,7 +8,7 @@ CAPMOX_IMAGE ?= ghcr.io/kubehenge/cluster-api-provider-proxmox
 HELM_ADDON_IMAGE ?= ghcr.io/kubehenge/cluster-api-addon-provider-helm
 KO_FLAGS ?=
 
-.PHONY: build web gateway-api website dist index image capmox-image helm-addon-image lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-templates e2e-volumes e2e-interface e2e-appliance
+.PHONY: build web gateway-api website dist index image capmox-image helm-addon-image lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-templates e2e-volumes e2e-interface e2e-appliance
 .PHONY: fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker unit-go unit-web unit-tofu unit-shell tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
@@ -259,6 +259,11 @@ e2e-rancher:
 # Against the management cluster in KUBECONFIG; settings in test/e2e/cluster-mesh.sh.
 e2e-cluster-mesh:
 	test/e2e/cluster-mesh.sh
+
+# Against the management cluster in KUBECONFIG, its template refresh on with no soak; settings in
+# test/e2e/node-image-refresh.sh.
+e2e-node-image-refresh:
+	test/e2e/node-image-refresh.sh
 
 # Settings come from KUBEHENGE_PROXMOX_* and KUBEHENGE_E2E_*; see pkg/templates/e2e_test.go.
 e2e-templates:
