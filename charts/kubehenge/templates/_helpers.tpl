@@ -239,10 +239,11 @@ Istio uses about 100 MiB, but istiod and the ztunnel beside it ask for 384 MiB, 
 share has to have; the clustermesh-apiserver uses about 50 MiB. The load balancer is MetalLB's
 controller and a node's speaker, or kube-vip and its cloud provider. Logs are Loki, which asks for
 256 MiB, the Alloy that reads the events and a node's Alloy. Backups are Velero's server and a
-node's agent, which grow while a backup reads a volume.
+node's agent, which grow while a backup reads a volume. Argo CD is its application, ApplicationSet
+and repository controllers, its server and Redis; Flux is the operator and Flux's four controllers.
 */}}
 {{- define "kubehenge.addonMemory" -}}
-kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"logs":512,"backups":384,"kyverno":384,"istio":384,"clusterMesh":128,"loadBalancer":128,"certManager":192,"rancher":2048,"rancherAgent":512}'
+kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"logs":512,"backups":384,"kyverno":384,"istio":384,"clusterMesh":128,"loadBalancer":128,"certManager":192,"rancher":2048,"rancherAgent":512,"argocd":512,"flux":384}'
 {{- end -}}
 
 {{/*
@@ -720,6 +721,149 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           message: DNS-01 and the cluster's CA need a domain.
         - rule: "!self.enabled || self.issuer != 'acme-dns01' || (has(self.dns01) && has(self.dns01.provider))"
           message: DNS-01 needs a DNS provider.
+- name: gitops
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        GitOps: Argo CD or Flux keeps the cluster in step with a directory of a Git repository,
+        applying what it holds and removing what goes from it. Switching it off, or to the other
+        engine, removes the engine and leaves what it deployed running.
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        engine:
+          type: string
+          enum: [argocd, flux]
+          default: argocd
+          description: >-
+            Argo CD, with a web interface that signs in through the cluster's first OIDC provider,
+            or Flux, installed by the Flux Operator, whose web interface is optional.
+        repository:
+          type: object
+          required: [url]
+          properties:
+            url:
+              type: string
+              maxLength: 2048
+              pattern: "^(https|ssh)://[^\\s]+$"
+              description: >-
+                The repository, as https://host/path or ssh://user@host[:port]/path; ssh:// is
+                read with a deploy key or a Secret of your own.
+            revision:
+              type: string
+              maxLength: 255
+              pattern: "^[A-Za-z0-9._/-]+$"
+              default: main
+              description: A branch, or a full ref such as refs/tags/v1.
+            path:
+              type: string
+              maxLength: 1024
+              pattern: "^[A-Za-z0-9._/-]+$"
+              default: "."
+              description: >-
+                The directory synced, with plain manifests or a kustomization; the repository's
+                root by default.
+          x-kubernetes-validations:
+            - rule: "!self.url.matches('^https://[^/]*@')"
+              message: A token goes into the cluster's gitops credential, not into the URL.
+            - rule: "!has(self.path) || !self.path.matches('(^|/)[.][.](/|$)')"
+              message: The path stays inside the repository.
+        auth:
+          type: string
+          enum: [none, deployKey, token, existingSecret]
+          default: none
+          description: >-
+            How the engine reads the repository: none for a public one over HTTPS; deployKey, a key
+            pair Kubehenge makes, whose public half you add to the repository as a read-only
+            deploy key; token, a user name and token over HTTPS, stored as the cluster's gitops
+            credential; or existingSecret, a Secret of your own in the engine's namespace.
+        existingSecret:
+          type: string
+          minLength: 1
+          maxLength: 253
+          description: >-
+            With auth existingSecret: for Flux, a Secret in flux-system as a GitRepository's
+            secretRef takes it (identity and known_hosts, or username and password); for Argo CD,
+            a repository Secret in argocd labelled argocd.argoproj.io/secret-type=repository for
+            this URL.
+        knownHosts:
+          type: string
+          maxLength: 16384
+          description: >-
+            The SSH host keys of the repository's server, as known_hosts lines. When unset,
+            Kubehenge reads them from the server once and trusts them from then on; the interface
+            shows their fingerprints to compare.
+        hostname:
+          type: string
+          format: hostname
+          description: Serve the engine's web interface at this name through the cluster's ingress controller.
+        tlsSecret:
+          type: string
+          minLength: 1
+          description: >-
+            Secret in the engine's namespace holding the certificate for hostname. When unset, the
+            certificates add-on's while it is on, else the ingress controller's own default.
+        admins:
+          type: array
+          maxItems: 64
+          description: >-
+            Groups of the cluster's first OIDC provider that administer Argo CD; nobody else has
+            any rights in it. Flux's web interface acts as the signed-in user, with the cluster's
+            own RBAC.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 256
+            pattern: "^[^,\\s]+$"
+        signIn:
+          type: object
+          description: >-
+            How the web interface signs in through the cluster's first OIDC provider: as that
+            provider's client unless clientID names another, without a client secret, using PKCE,
+            unless one is given. Argo CD's local admin stays disabled.
+          properties:
+            clientID:
+              type: string
+              minLength: 1
+              maxLength: 256
+            clientSecret:
+              type: string
+              enum: [none, stored, existingSecret]
+              default: none
+              description: >-
+                none for a public client; stored, the cluster's oidc-client credential; or
+                existingSecret, a Secret of your own in the engine's namespace with the key
+                clientSecret, labelled app.kubernetes.io/part-of=argocd for Argo CD.
+            existingSecret:
+              type: string
+              minLength: 1
+              maxLength: 253
+          x-kubernetes-validations:
+            - rule: "!has(self.clientSecret) || self.clientSecret != 'existingSecret' || has(self.existingSecret)"
+              message: A client secret from a Secret of your own needs the Secret's name.
+        ui:
+          type: boolean
+          default: false
+          description: >-
+            Flux's web interface, at hostname: it shows every Flux object and the workloads they
+            deployed, and lets those signed in reconcile, suspend and resume them, with the rights
+            the cluster's RBAC gives them. It signs in with a client secret.
+      x-kubernetes-validations:
+        - rule: "!self.enabled || has(self.repository)"
+          message: GitOps needs a repository.
+        - rule: "!has(self.repository) || !has(self.auth) || self.auth != 'deployKey' || self.repository.url.startsWith('ssh://')"
+          message: A deploy key reads the repository over ssh://.
+        - rule: "!has(self.repository) || !has(self.auth) || !(self.auth in ['none', 'token']) || self.repository.url.startsWith('https://')"
+          message: Without a key, the repository is read over https://.
+        - rule: "!has(self.auth) || self.auth != 'existingSecret' || has(self.existingSecret)"
+          message: Credentials from a Secret of your own need the Secret's name.
+        - rule: "!has(self.ui) || !self.ui || (has(self.engine) && self.engine == 'flux' && has(self.hostname))"
+          message: The web interface is Flux's, and needs a hostname.
+        - rule: "!has(self.ui) || !self.ui || (has(self.signIn) && has(self.signIn.clientSecret) && self.signIn.clientSecret != 'none')"
+          message: Flux's web interface signs in with a client secret.
 {{- end -}}
 
 {{/*

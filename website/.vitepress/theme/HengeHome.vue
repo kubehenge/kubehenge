@@ -90,8 +90,9 @@ onBeforeUnmount(() => stop());
               <li>
                 <b>Decorates them.</b> Add-ons per cluster, when it is created or later: Headlamp, a web interface
                 inside the cluster; Rancher, with every other cluster registered in it; monitoring, pod security and
-                Istio; backups with Velero to your S3 store, encrypted with the cluster's own keys; and Cilium Cluster
-                Mesh, which joins clusters into one pod network.
+                Istio; backups with Velero to your S3 store, encrypted with the cluster's own keys; GitOps with Argo CD
+                or Flux, syncing it from a Git repository; and Cilium Cluster Mesh, which joins clusters into one pod
+                network.
               </li>
               <li>
                 <b>Signs in with your Proxmox VE users.</b> Any realm Proxmox VE has, second factor included; Proxmox

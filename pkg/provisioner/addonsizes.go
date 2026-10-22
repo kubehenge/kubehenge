@@ -11,7 +11,7 @@ import (
 
 // AddonMemoryAnnotation on a ClusterClass is the memory, in MiB, each add-on's pods use in one of its
 // clusters, by add-on: headlamp, monitoring, logs, backups, kyverno, istio, clusterMesh,
-// loadBalancer, certManager, rancher and rancherAgent.
+// loadBalancer, certManager, rancher, rancherAgent, argocd and flux.
 // The end-to-end tests measure the figures with every add-on on.
 const AddonMemoryAnnotation = "kubehenge.dev/addon-memory"
 
@@ -31,6 +31,7 @@ const (
 var addonNames = map[string]string{
 	headlampAddon: "Headlamp", monitoringAddon: "monitoring", logsAddon: "logs", backupsVariable: "backups", kyvernoAddon: "Kyverno", istioAddon: "Istio",
 	clusterMeshVariable: "Cluster Mesh", loadBalancerVariable: "the load balancer", certManagerFigure: "cert-manager", rancherAddon: "Rancher", rancherAgentFigure: "Rancher's agent",
+	argoCD: "Argo CD", flux: "Flux",
 }
 
 // addonsOn names the add-ons the cluster runs, in a fixed order. Rancher's agent counts wherever the
@@ -56,6 +57,8 @@ func addonsOn(cluster *clusterv1.Cluster) ([]string, error) {
 		{certManagerFigure, a.certManager()},
 		{rancherAddon, a.Rancher.Install},
 		{rancherAgentFigure, !a.Rancher.Install && a.Rancher.registers()},
+		{argoCD, a.GitOps.on(argoCD)},
+		{flux, a.GitOps.on(flux)},
 	} {
 		if a.on {
 			on = append(on, a.name)

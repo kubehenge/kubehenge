@@ -101,6 +101,8 @@ type controllerOptions struct {
 	kubeVipChart      string
 	kubeVipImage      string
 	kubeVipCloudChart string
+	argoCDChart       string
+	fluxOperatorChart string
 	chartValues       string
 	calicoImages      []string
 	extensionConfig   string
@@ -190,7 +192,10 @@ func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 	f.StringVar(&o.kubeVipChart, "kube-vip-chart", "", "kube-vip chart, for clusters whose load balancer is kube-vip, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.kubeVipImage, "kube-vip-image", "", "kube-vip image, as <registry>/<repository>:<tag>@sha256:<digest>")
 	f.StringVar(&o.kubeVipCloudChart, "kube-vip-cloud-provider-chart", "", "kube-vip's cloud provider chart, which hands kube-vip's Services their addresses, as <repository>/<name>:<version>@sha256:<digest>")
-	for _, flag := range []string{"ccm-chart", "csi-chart", "csi-newest-chart", "snapshot-controller-chart", "cilium-chart", "calico-chart", "calico-images", "headlamp-chart", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "rancher-turtles-image", "rancher-cluster-api-image", "monitoring-chart", "kube-rbac-proxy-image", "loki-chart", "alloy-chart", "alloy-image", "velero-chart", "velero-image", "velero-plugin-image", "kyverno-chart", "kyverno-policies-chart", "istio-chart", "istio-base-chart", "istio-cni-chart", "istio-ztunnel-chart", "traefik-chart", "metallb-chart", "kube-vip-chart", "kube-vip-image", "kube-vip-cloud-provider-chart"} {
+	f.StringVar(&o.argoCDChart, "argocd-chart", "", "Argo CD chart, for clusters whose GitOps engine is Argo CD, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.fluxOperatorChart, "flux-operator-chart", "", "Flux Operator chart, for clusters whose GitOps engine is Flux, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.r.Charts.FluxVersion, "flux-version", "", "Flux release the Flux Operator installs from its own image, as <major>.<minor>.<patch>")
+	for _, flag := range []string{"ccm-chart", "csi-chart", "csi-newest-chart", "snapshot-controller-chart", "cilium-chart", "calico-chart", "calico-images", "headlamp-chart", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "rancher-turtles-image", "rancher-cluster-api-image", "monitoring-chart", "kube-rbac-proxy-image", "loki-chart", "alloy-chart", "alloy-image", "velero-chart", "velero-image", "velero-plugin-image", "kyverno-chart", "kyverno-policies-chart", "istio-chart", "istio-base-chart", "istio-cni-chart", "istio-ztunnel-chart", "traefik-chart", "metallb-chart", "kube-vip-chart", "kube-vip-image", "kube-vip-cloud-provider-chart", "argocd-chart", "flux-operator-chart", "flux-version"} {
 		_ = cobra.MarkFlagRequired(f, flag)
 	}
 }
@@ -372,6 +377,8 @@ func (o *controllerOptions) parseCharts() error {
 		{"--metallb-chart", o.metalLBChart, &o.r.Charts.MetalLB},
 		{"--kube-vip-chart", o.kubeVipChart, &o.r.Charts.KubeVip},
 		{"--kube-vip-cloud-provider-chart", o.kubeVipCloudChart, &o.r.Charts.KubeVipCloudProvider},
+		{"--argocd-chart", o.argoCDChart, &o.r.Charts.ArgoCD},
+		{"--flux-operator-chart", o.fluxOperatorChart, &o.r.Charts.FluxOperator},
 	} {
 		var err error
 		if *c.chart, err = provisioner.ParseChart(c.value); err != nil {

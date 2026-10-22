@@ -53,7 +53,7 @@ const maxClusterName = 40
 // Variables a cluster may change after creation; the others describe where its VMs live.
 var changeableVariables = map[string]bool{
 	"headlamp": true, "monitoring": true, "logs": true, "backups": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, csiVariable: true, ccmVariable: true,
-	certificatesVariable: true,
+	certificatesVariable: true, gitopsVariable: true,
 }
 
 // autoUpgraded is where Kubehenge's controller records the last automatic upgrade.
@@ -200,6 +200,8 @@ type clusterView struct {
 	Mesh []provisioner.MeshPeer `json:"mesh,omitempty"`
 	// NodeImage is which template builds the nodes run and when they next move, but for Talos.
 	NodeImage *nodeImageView `json:"nodeImage,omitempty"`
+	// GitOps is the deploy key and the repository host's keys the controller made for the cluster.
+	GitOps *gitOpsView `json:"gitops,omitempty"`
 }
 
 type conditionView struct {
@@ -475,17 +477,14 @@ func (s *Server) cluster(w http.ResponseWriter, r *http.Request, u user, privs .
 	return c, poolAccess{path: pool, held: held}, true
 }
 
-func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
-	c, access, ok := s.cluster(w, r, u)
-	if !ok {
-		return
-	}
-	v := s.view(c, access.path, access.held, u.namespaces)
-	if err := s.addClusterMesh(r.Context(), u, &v); err != nil {
+// addExtras adds what the cluster's page shows beside the cluster itself: its Cluster Mesh peers,
+// its node images and its GitOps keys. Each is an addition, so the cluster shows without the ones
+// that cannot be read.
+func (s *Server) addExtras(r *http.Request, u user, c *clusterv1.Cluster, v *clusterView) {
+	if err := s.addClusterMesh(r.Context(), u, v); err != nil {
 		s.Log.Error("reading a cluster's Cluster Mesh peers", "cluster", c.Namespace+"/"+c.Name, "error", err)
 	}
-	// An addition to the page, as the peers are: the cluster shows without it. Talos clusters have
-	// none, their template being their release's image.
+	// Talos clusters have no node images, their template being their release's image.
 	if provisioner.RefreshesNodes(c) {
 		image, err := s.nodeImage(r.Context(), u.kube, c, s.now())
 		if err != nil {
@@ -493,6 +492,18 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 		}
 		v.NodeImage = image
 	}
+	if err := addGitOps(r.Context(), u, v); err != nil {
+		s.Log.Error("reading a cluster's GitOps keys", "cluster", c.Namespace+"/"+c.Name, "error", err)
+	}
+}
+
+func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
+	c, access, ok := s.cluster(w, r, u)
+	if !ok {
+		return
+	}
+	v := s.view(c, access.path, access.held, u.namespaces)
+	s.addExtras(r, u, c, &v)
 	var machines clusterv1.MachineList
 	if err := u.kube.List(r.Context(), &machines, client.InNamespace(c.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: c.Name}); err != nil {
 		s.kubeError(w, err)
@@ -698,6 +709,9 @@ func (s *Server) mayCreate(w http.ResponseWriter, r *http.Request, u user, class
 		return false
 	}
 	if labelsHAGroups(req.Variables[ccmVariable]) && !s.require(w, r, u, "/", privSysAudit) {
+		return false
+	}
+	if !s.allowGitOps(w, r, u, s.workloadPoolPath(), req.Variables[gitopsVariable], nil) {
 		return false
 	}
 	raw, ok := req.Variables[oidcVariable]
@@ -1031,6 +1045,8 @@ func (s *Server) allowVariable(w http.ResponseWriter, r *http.Request, u user, c
 		return !labelsHAGroups(value) || labelsHAGroups(old) || s.require(w, r, u, "/", privSysAudit)
 	case oidcVariable:
 		return sameJSON(old, value) || s.allowOIDC(w, r, u, c, access, value, old)
+	case gitopsVariable:
+		return s.allowGitOps(w, r, u, access.path, value, old)
 	case allowedNodesVariable:
 		return string(value) == jsonNull || sameJSON(old, value) || s.mayPlace(w, r, u, value, old)
 	case certificatesVariable:

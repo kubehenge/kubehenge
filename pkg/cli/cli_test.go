@@ -193,6 +193,7 @@ func TestChartValuesGoToTheirCharts(t *testing.T) {
 			&o.ccmChart, &o.csiChart, &o.csiNewestChart, &o.snapshotChart, &o.ciliumChart, &o.calicoChart, &o.headlampChart, &o.certManagerChart, &o.rancherChart,
 			&o.monitoringChart, &o.lokiChart, &o.alloyChart, &o.veleroChart, &o.kyvernoChart, &o.kyvernoPolicies, &o.istioChart,
 			&o.istioBaseChart, &o.istioCNIChart, &o.istioZtunnelChart, &o.traefikChart, &o.metalLBChart, &o.kubeVipChart, &o.kubeVipCloudChart,
+			&o.argoCDChart, &o.fluxOperatorChart,
 		} {
 			*f = "https://charts.example.test/chart:1.0.0" + digest
 		}

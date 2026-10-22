@@ -179,7 +179,7 @@
     "addons": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["headlamp", "rancher", "monitoring", "loki", "alloy", "velero", "kyverno", "kyvernoPolicies", "istio", "istioBase", "istioCNI", "istioZtunnel", "certManager", "cloudControllerManager", "csiPlugin", "csiPluginNewest", "snapshotController", "cilium", "calico", "traefik", "metallb", "kubeVip", "kubeVipCloudProvider"],
+      "required": ["headlamp", "rancher", "monitoring", "loki", "alloy", "velero", "kyverno", "kyvernoPolicies", "istio", "istioBase", "istioCNI", "istioZtunnel", "certManager", "cloudControllerManager", "csiPlugin", "csiPluginNewest", "snapshotController", "cilium", "calico", "traefik", "metallb", "kubeVip", "kubeVipCloudProvider", "argocd", "fluxOperator"],
       "properties": {
         "headlamp": { "$ref": "#/$defs/chartOnly" },
         "rancher": {
@@ -271,7 +271,20 @@
         "traefik": { "$ref": "#/$defs/chartOnly" },
         "metallb": { "$ref": "#/$defs/chartOnly" },
         "kubeVip": { "$ref": "#/$defs/chartOnly" },
-        "kubeVipCloudProvider": { "$ref": "#/$defs/chartOnly" }
+        "kubeVipCloudProvider": { "$ref": "#/$defs/chartOnly" },
+        "argocd": { "$ref": "#/$defs/chartOnly" },
+        "fluxOperator": {
+          "allOf": [{ "$ref": "#/$defs/chart" }],
+          "required": ["flux"],
+          "properties": {
+            "flux": {
+              "description": "The Flux release the operator installs from the manifests inside its image.",
+              "type": "string",
+              "pattern": "^[0-9]+[.][0-9]+[.][0-9]+$"
+            }
+          },
+          "unevaluatedProperties": false
+        }
       }
     }
   },

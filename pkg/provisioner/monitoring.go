@@ -151,7 +151,7 @@ func monitoringValues(distribution templates.Distribution, proxy Image, addons *
 		if annotations != nil {
 			ingress["annotations"] = annotations
 		}
-		grafana["ingress"] = ingress
+		grafana[ingressKey] = ingress
 		grafana["grafana.ini"] = map[string]any{"server": map[string]any{"root_url": "https://" + m.Hostname}}
 	}
 	if addons.logsOn() {

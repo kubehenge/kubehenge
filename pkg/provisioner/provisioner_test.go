@@ -343,6 +343,18 @@ var testCharts = Charts{
 			"tag":        "v0.0.13@sha256:b8b6a5180e678b410e2c5dba86b87fa8099ada16e2f067d83f04e749f8ea54ab",
 		}},
 	},
+	ArgoCD: Chart{
+		Repository: "https://argoproj.github.io/argo-helm", Name: "argo-cd", Version: "10.10.5",
+		Digest: "ba6447eeed42bc41d1f0527721047b236304e97669a7b6286d02be4a1644ba7a",
+		Values: map[string]any{"global": map[string]any{"image": map[string]any{
+			"tag": "v3.5.6@sha256:8e5cc5bb008df8a09dba439462e58c94c55b7735888d3ebde0c25fc05e4e5335",
+		}}},
+	},
+	FluxOperator: Chart{
+		Repository: "oci://ghcr.io/controlplaneio-fluxcd/charts", Name: "flux-operator", Version: "0.61.0",
+		Digest: "8c039527c4a20599bc49bf69fa944e4ae08a0d7c1d585664261d9e78e51b0bde",
+	},
+	FluxVersion:       "2.9.6",
 	PodSecurityExempt: []string{"kube-system", "node-exporter"},
 }
 

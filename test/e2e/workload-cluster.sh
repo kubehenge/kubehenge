@@ -9,10 +9,11 @@
 # the journal and the audit log, read in Loki through Grafana) on and off, back a namespace with a
 # volume and a Secret up with Velero to an S3 store the test serves, delete it and restore it, check
 # the store holds the backup encrypted, switch certificates on (from the cluster's own CA, then from
-# an ACME server over DNS-01 and over HTTP-01), switch backups, certificates and the load balancer
-# off, scale its workers up and down, upgrade it by one minor version (for RKE2 and k3s with the
-# first new server's join refused at first), replace a node that dies, delete it, and check that
-# nothing of it is left on Proxmox VE.
+# an ACME server over DNS-01 and over HTTP-01) and GitOps (Flux, then Argo CD, syncing a repository
+# on a Git server in the cluster through a deploy key), switch backups, certificates, GitOps and the
+# load balancer off, scale its workers up and down, upgrade it by one minor version (for RKE2 and
+# k3s with the first new server's join refused at first), replace a node that dies, delete it, and
+# check that nothing of it is left on Proxmox VE.
 #
 #   test/e2e/workload-cluster.sh <ClusterClass> <version> <upgrade version>
 #
@@ -37,7 +38,7 @@
 # network; unset, the distribution's defaults apply.
 # KUBEHENGE_E2E_OIDC_ADDRESS is an IPv4 address of the machine running this test that the cluster's
 # nodes reach; the test serves an OpenID issuer there, on KUBEHENGE_E2E_OIDC_PORT (default 8943),
-# which the cluster trusts. Needs openssl and python3.
+# which the cluster trusts. Needs openssl, python3 and ssh-keygen.
 # KUBEHENGE_E2E_DATASTORE_ALLOCATE=1 switches the CSI plugin's newest release on and off again, on a
 # KUBEHENGE_E2E_STORAGE that the management cluster, the templates and other clusters leave alone,
 # with a management cluster that lets clusters choose it; KUBEHENGE_E2E_LOCAL_STORAGE names one of
@@ -273,7 +274,7 @@ worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq 
     (.metadata.annotations["kubehenge.dev/addon-memory"] | fromjson) as $addon
     | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
     | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
-        $node.worker + $addon.headlamp + $addon.monitoring + $addon.logs + $addon.backups + $addon.kyverno + $addon.istio + $addon.loadBalancer + $addon.certManager + $addon.rancherAgent]
+        $node.worker + $addon.headlamp + $addon.monitoring + $addon.logs + $addon.backups + $addon.kyverno + $addon.istio + $addon.loadBalancer + $addon.certManager + $addon.argocd + $addon.rancherAgent]
     | max')}
 echo "workers with ${worker_memory} MiB of memory"
 cat > "${work}/cluster.yaml" << EOF
@@ -2009,6 +2010,153 @@ headlamp_tls=$(ingress_tls headlamp "${http01_headlamp}")
 [ "${headlamp_tls}" = '[{"issuer":"kubehenge-ingress","secrets":["headlamp-tls"]}]' ] ||
     fail "Headlamp's Ingress asks for ${headlamp_tls}, not its own certificate from kubehenge-ingress"
 
+step "GitOps with Flux, then Argo CD, from a Git server in the cluster through a deploy key"
+# The repository lives in the cluster itself, so that no outside service is needed. The engine
+# reads it over SSH with the deploy key the controller makes; its host key is given, since the
+# controller, outside the cluster, cannot reach the server to read it.
+ssh-keygen -q -t ed25519 -N '' -C '' -f "${work}/git-host"
+git_host=gitea.e2e-git.svc.cluster.local
+known_hosts="[${git_host}]:2222 $(cut -d' ' -f1,2 "${work}/git-host.pub")"
+git_password=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+wl create namespace e2e-git
+wl -n e2e-git create secret generic gitea-host-key --from-file=host="${work}/git-host"
+wl -n e2e-git apply -f - << EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitea
+spec:
+  selector:
+    matchLabels: {app: gitea}
+  template:
+    metadata:
+      labels: {app: gitea}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: gitea
+          image: ${gitea}
+          env:
+            - {name: GITEA__security__INSTALL_LOCK, value: "true"}
+            - {name: GITEA__service__DISABLE_REGISTRATION, value: "true"}
+            - {name: GITEA__server__SSH_SERVER_HOST_KEYS, value: /etc/gitea-host-key/host}
+            - {name: GITEA__server__ROOT_URL, value: "http://${git_host}:3000/"}
+          ports:
+            - {name: http, containerPort: 3000}
+            - {name: ssh, containerPort: 2222}
+          readinessProbe:
+            httpGet: {path: /api/healthz, port: http}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/gitea}
+            - {name: config, mountPath: /etc/gitea}
+            - {name: host-key, mountPath: /etc/gitea-host-key, readOnly: true}
+      volumes:
+        - {name: data, emptyDir: {}}
+        - {name: config, emptyDir: {}}
+        - {name: host-key, secret: {secretName: gitea-host-key}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitea
+spec:
+  selector: {app: gitea}
+  ports:
+    - {name: http, port: 3000, targetPort: http}
+    - {name: ssh, port: 2222, targetPort: ssh}
+EOF
+wl -n e2e-git rollout status deployment/gitea --timeout=5m
+wl -n e2e-git exec deployment/gitea -- gitea admin user create --username e2e --password "${git_password}" \
+    --email e2e@example.org --admin --must-change-password=false
+agnhost_pod e2e-git client pause
+wl -n e2e-git wait --for=condition=Ready pod/client --timeout=5m
+# git_api <method> <path> [<curl options>]: a call to the Git server's API, as its admin.
+git_api() {
+    git_method=$1 git_path=$2
+    shift 2
+    KUBECONFIG=${work}/workload kubectl -n e2e-git exec client -- curl -sS --fail --max-time 10 -u "e2e:${git_password}" \
+        -H 'Content-Type: application/json' -X "${git_method}" "$@" "http://gitea:3000/api/v1/${git_path}"
+}
+# manifest <revision>: what the repository asks for, base64-encoded as the API takes a file.
+manifest() {
+    printf 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: e2e-gitops\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: synced\n  namespace: e2e-gitops\ndata:\n  revision: "%s"\n' "$1" | base64 -w0
+}
+contents=repos/e2e/clusters/contents/apps/cluster.yaml
+git_api POST user/repos -d '{"name":"clusters","private":true,"auto_init":true,"default_branch":"main"}' > /dev/null
+git_file=$(manifest one)
+git_request=$(jq -cn --arg c "${git_file}" '{content: $c, branch: "main", message: "one"}')
+git_api POST "${contents}" -d "${git_request}" > /dev/null
+# push <revision>: commits the manifest at a new revision.
+push() {
+    git_current=$(git_api GET "${contents}")
+    git_file=$(manifest "$1")
+    git_request=$(printf '%s' "${git_current}" | jq -c --arg c "${git_file}" --arg m "$1" '{content: $c, sha: .sha, branch: "main", message: $m}')
+    git_api PUT "${contents}" -d "${git_request}" > /dev/null
+}
+# synced <revision>: whether the cluster runs the manifest at that revision.
+synced() {
+    # shellcheck disable=SC2310 # wl wraps one kubectl call; a missing ConfigMap is only a retry.
+    synced_revision=$(wl -n e2e-gitops get configmap synced -o jsonpath='{.data.revision}' 2> /dev/null) || return 1
+    [ "${synced_revision}" = "$1" ]
+}
+gitops_value() {
+    jq -cn --arg url "ssh://git@${git_host}:2222/e2e/clusters.git" --arg hosts "${known_hosts}" --arg engine "$1" --argjson on "$2" \
+        '{enabled: $on, engine: $engine, auth: "deployKey", repository: {url: $url, revision: "main", path: "apps"}, knownHosts: $hosts, signIn: {clientSecret: "none"}}'
+}
+gitops=$(gitops_value flux true)
+set_variable gitops "${gitops}"
+# deploy_key: the public half of the deploy key the controller made, once it has made it.
+deploy_key() {
+    encoded_key=$(kubectl -n "${ns}" get secret "${name}-gitops" -o jsonpath='{.data.identity\.pub}' 2> /dev/null) || return 1
+    [ -n "${encoded_key}" ] && printf '%s' "${encoded_key}" | base64 -d
+}
+has_deploy_key() { deploy_key > /dev/null; }
+until_true 300 "the cluster's deploy key made" has_deploy_key
+public_key=$(deploy_key)
+# Read only, as the interface tells its users to add it.
+git_request=$(jq -cn --arg k "${public_key}" '{title: "kubehenge", key: $k, read_only: true}')
+git_api POST repos/e2e/clusters/keys -d "${git_request}" > /dev/null
+until_true 600 "Flux installed by its operator" wl -n flux-system wait --for=condition=Ready fluxinstance/flux --timeout=10s
+until_true 600 "Flux syncs the repository" synced one
+push two
+until_true 300 "Flux syncs a new commit" synced two
+pod_security=$(wl label --dry-run=server --overwrite namespace flux-system pod-security.kubernetes.io/enforce=restricted 2>&1)
+case ${pod_security} in
+    *violate*) fail "Flux's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
+    *) ;;
+esac
+
+gitops=$(gitops_value argocd true)
+set_variable gitops "${gitops}"
+# Flux goes first and leaves what it synced running, so that the two never fight over it.
+until_true 600 "Flux uninstalled" absent wl get crd kustomizations.kustomize.toolkit.fluxcd.io
+until_true 600 "the Flux Operator removed" absent wl -n flux-system get deployment/flux-operator
+# shellcheck disable=SC2310 # each answers the check.
+absent wl -n flux-system get secret/kubehenge-gitops || fail "Flux's copy of the deploy key outlives Flux"
+# shellcheck disable=SC2310 # each answers the check.
+synced two || fail "what Flux synced went with it"
+until_true 900 "Argo CD available" wl -n argocd wait --for=condition=Available deployment/argocd-server deployment/argocd-repo-server --timeout=10s
+until_true 300 "Argo CD's application controller ready" wl -n argocd rollout status statefulset/argocd-application-controller --timeout=10s
+push three
+until_true 600 "Argo CD syncs a new commit" synced three
+app_status=$(wl -n argocd get application kubehenge -o jsonpath='{.status.sync.status} {.status.health.status}')
+[ "${app_status}" = "Synced Healthy" ] || fail "Argo CD's application is ${app_status}"
+admin=$(wl -n argocd get configmap argocd-cm -o jsonpath='{.data.admin\.enabled}')
+[ "${admin}" = false ] || fail "Argo CD's built-in admin is enabled"
+pod_security=$(wl label --dry-run=server --overwrite namespace argocd pod-security.kubernetes.io/enforce=restricted 2>&1)
+case ${pod_security} in
+    *violate*) fail "Argo CD's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
+    *) ;;
+esac
+
 # The class's minimum sizes have to carry every add-on at once.
 step "every add-on at once, with nothing restarted"
 found_restarts() {
@@ -2066,6 +2214,8 @@ set_variable podSecurity '{"admission":"restricted","kyverno":"off"}'
 set_variable istio '{"enabled":false}'
 set_variable backups "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
 set_variable certificates '{"enabled":false}'
+gitops=$(gitops_value argocd false)
+set_variable gitops "${gitops}"
 until_true 600 "Headlamp removed" absent wl -n headlamp get deployment/headlamp
 until_true 600 "Loki removed" absent wl -n logging get statefulset/loki
 until_true 300 "Alloy removed" absent wl -n logging get deployment/alloy
@@ -2125,6 +2275,13 @@ until_true 900 "cert-manager removed, with nothing left that needs it" absent wl
 # The CA stays while the cluster lives, so that certificates switched on again keep it.
 kubectl -n "${ns}" get secret "${ingress_ca}" > /dev/null || fail "the cluster's CA went with its certificates"
 wl delete namespace e2e-certs e2e-acme --wait --timeout=5m
+until_true 600 "Argo CD removed" absent wl -n argocd get deployment/argocd-server
+until_true 300 "Argo CD's CRDs removed" absent wl get crd applications.argoproj.io
+# shellcheck disable=SC2310 # each answers the check.
+absent wl -n argocd get secret/kubehenge-repository || fail "Argo CD's copy of the deploy key outlives Argo CD"
+# shellcheck disable=SC2310 # each answers the check.
+synced three || fail "what Argo CD synced went with it"
+wl delete namespace e2e-gitops e2e-git --wait --timeout=5m
 
 step "the load balancer switched off"
 servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')

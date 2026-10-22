@@ -40,6 +40,10 @@ const (
 	apiVersionKey = "apiVersion"
 	// Keys of the charts' values and of pod specs written as maps.
 	seccompProfileKey = "seccompProfile"
+	ingressKey        = "ingress"
+	valueKey          = "value"
+	createKey         = "create"
+	v1alpha1          = "v1alpha1"
 	requestsKey       = "requests"
 	tolerationsKey    = "tolerations"
 	memoryKey         = "memory"
@@ -52,6 +56,7 @@ const (
 	configKey         = "config"
 	regionKey         = "region"
 	defaultKey        = "default"
+	installCRDsKey    = "installCRDs"
 	// The least CPU and memory the small add-on pods ask for.
 	cpu10m     = "10m"
 	memory64Mi = "64Mi"
@@ -127,6 +132,11 @@ type Charts struct {
 	KubeVip              Chart
 	KubeVipImage         Image
 	KubeVipCloudProvider Chart
+	// The GitOps engines a cluster chooses from: Argo CD, or the Flux Operator, which installs
+	// FluxVersion, the Flux release inside its image.
+	ArgoCD       Chart
+	FluxOperator Chart
+	FluxVersion  string
 	// PodSecurityExempt are the namespaces Kyverno's policies leave alone, those the ClusterClasses'
 	// Pod Security Admission exempts.
 	PodSecurityExempt []string
@@ -144,6 +154,7 @@ type Addons struct {
 	ClusterMesh  ClusterMesh
 	LoadBalancer LoadBalancer
 	Certificates Certificates
+	GitOps       GitOps
 	// CIS is the cluster's cis variable, which the add-ons make room for.
 	CIS bool
 	// CSINewest runs the CSI plugin's newest release, once the cluster's user holds
@@ -156,6 +167,8 @@ type Addons struct {
 	// backupTarget is the target the backups name, found in the cluster's class; nil while it is
 	// not, when Velero is neither installed nor removed.
 	backupTarget *BackupTarget
+	// gitOpsFound is what the controller found for GitOps before writing the charts' values.
+	gitOpsFound gitOpsState
 }
 
 // addonsOf reads a cluster's add-on variables.
@@ -191,6 +204,9 @@ func addonsOf(cluster *clusterv1.Cluster) (Addons, error) {
 		return a, err
 	}
 	if a.Certificates, err = CertificatesOf(cluster); err != nil {
+		return a, err
+	}
+	if a.GitOps, _, err = optionalVariable[GitOps](cluster, gitopsVariable); err != nil {
 		return a, err
 	}
 	a.Rancher, err = rancherOf(cluster)
@@ -243,8 +259,8 @@ func rancherValues(r Rancher, base map[string]any) map[string]any {
 		"hostname":     r.Hostname,
 		"replicas":     replicas,
 		"agentTLSMode": "strict",
-		"ingress":      map[string]any{"tls": map[string]any{"source": "rancher"}},
-		"extraEnv":     append(env, map[string]any{"name": "CATTLE_SERVER_URL", "value": "https://" + r.Hostname}),
+		ingressKey:     map[string]any{"tls": map[string]any{"source": "rancher"}},
+		"extraEnv":     append(env, map[string]any{"name": "CATTLE_SERVER_URL", valueKey: "https://" + r.Hostname}),
 		"startupProbe": map[string]any{"timeoutSeconds": probeTimeout, "periodSeconds": probePeriod, "failureThreshold": probeFailures},
 	}
 }
@@ -630,10 +646,10 @@ func clusterResourceSet(cluster *clusterv1.Cluster, secrets []*corev1.Secret) *a
 func headlampValues(h Headlamp, certs *Certificates) map[string]any {
 	// The image's own user and group.
 	const user, group = 100, 101
-	binding := map[string]any{"create": false}
-	config := map[string]any{"oidc": map[string]any{"secret": map[string]any{"create": false}}}
+	binding := map[string]any{createKey: false}
+	config := map[string]any{"oidc": map[string]any{"secret": map[string]any{createKey: false}}}
 	if h.Access == headlampViewAccess {
-		binding = map[string]any{"create": true, "clusterRoleName": "view"}
+		binding = map[string]any{createKey: true, "clusterRoleName": "view"}
 		config["unsafeUseServiceAccountToken"] = true
 	}
 	values := map[string]any{
@@ -664,7 +680,7 @@ func headlampValues(h Headlamp, certs *Certificates) map[string]any {
 		if annotations != nil {
 			ingress["annotations"] = annotations
 		}
-		values["ingress"] = ingress
+		values[ingressKey] = ingress
 	}
 	return values
 }
@@ -715,7 +731,7 @@ func traefikValues(endpoint string, certs *Certificates) map[string]any {
 	}, traefikCertificateValues(certs))
 }
 
-var helmChartProxyGVK = schema.GroupVersionKind{Group: "addons.cluster.x-k8s.io", Version: "v1alpha1", Kind: "HelmChartProxy"}
+var helmChartProxyGVK = schema.GroupVersionKind{Group: "addons.cluster.x-k8s.io", Version: v1alpha1, Kind: "HelmChartProxy"}
 
 // headlampProxy names the cluster's Headlamp proxy, which goes again when Headlamp is switched off.
 func headlampProxy(cluster *clusterv1.Cluster) string {
@@ -857,8 +873,8 @@ func cniChart(cluster *clusterv1.Cluster, charts *Charts, cni CNI, addons *Addon
 }
 
 // helmChartProxies installs the cloud controller manager and the CSI plugin into the cluster, the
-// CNI named by cni unless none is, the add-ons switched on, the load balancer, and on kubeadm,
-// which brings no ingress controller, Traefik. The Add-on Provider for Helm
+// CNI named by cni unless none is, the add-ons switched on, the load balancer, the GitOps engine,
+// and on kubeadm, which brings no ingress controller, Traefik. The Add-on Provider for Helm
 // selects only Clusters in a proxy's own namespace, so each cluster gets its own proxies beside it.
 func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution templates.Distribution, storage string, cni CNI, addons *Addons) ([]*unstructured.Unstructured, error) {
 	wanted := proxmoxCharts(charts, distribution, storage, addons)
@@ -900,6 +916,17 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 	if addons.Istio.Enabled {
 		wanted = append(wanted, istioCharts(charts, distribution, cni)...)
 	}
+	serving, err := servingCharts(cluster, charts, distribution, addons)
+	if err != nil {
+		return nil, err
+	}
+	return chartProxyObjects(cluster, append(wanted, serving...))
+}
+
+// servingCharts are those that bring traffic into the cluster and what it runs from Git: on
+// kubeadm, which brings no ingress controller, Traefik; the load balancer; the GitOps engine.
+func servingCharts(cluster *clusterv1.Cluster, charts *Charts, distribution templates.Distribution, addons *Addons) ([]chartProxy, error) {
+	var wanted []chartProxy
 	if distribution == templates.Kubeadm {
 		endpoint, _, err := optionalVariable[string](cluster, "controlPlaneEndpoint")
 		if err != nil {
@@ -914,13 +941,20 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 		}
 		wanted = append(wanted, lb...)
 	}
-	return chartProxyObjects(cluster, wanted)
+	if addons.GitOps.Enabled {
+		g, err := gitOpsCharts(charts, &addons.Certificates, &addons.GitOps, &addons.gitOpsFound)
+		if err != nil {
+			return nil, fmt.Errorf("cluster %s/%s: %w", cluster.Namespace, cluster.Name, err)
+		}
+		wanted = append(wanted, g...)
+	}
+	return wanted, nil
 }
 
 // chartProxyObjects makes the cluster's HelmChartProxies of the charts it wants, in their order,
-// each selecting the cluster alone.
+// each selecting the cluster alone, with its chart's values beneath its own.
 func chartProxyObjects(cluster *clusterv1.Cluster, wanted []chartProxy) ([]*unstructured.Unstructured, error) {
-	var proxies []*unstructured.Unstructured
+	proxies := make([]*unstructured.Unstructured, 0, len(wanted))
 	for i := range wanted {
 		p := &wanted[i]
 		values, err := yaml.Marshal(overlay(p.chart.Values, p.values))
@@ -940,7 +974,9 @@ func chartProxyObjects(cluster *clusterv1.Cluster, wanted []chartProxy) ([]*unst
 			"namespace":       p.namespace,
 			"options":         map[string]any{"install": map[string]any{"createNamespace": true}},
 			// Values are plain text in HelmReleaseProxy objects; they hold no secret, only where it is.
-			"valuesTemplate": string(values),
+			// The provider renders them as a Go template, which none of them is: what a cluster's
+			// owner typed in, a repository's URL or a group's name, comes through as it is.
+			"valuesTemplate": strings.ReplaceAll(string(values), "{{", `{{"{{"}}`),
 		}
 		proxies = append(proxies, u)
 	}

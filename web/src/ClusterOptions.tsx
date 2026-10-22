@@ -4,6 +4,7 @@ import { CertificatesDialog, certificatesOf, certificatesText } from "./Certific
 import { ClusterMeshDialog, meshText, runsCilium } from "./ClusterMesh";
 import { UpgradesDialog, describe, refreshesNodes, upgradePolicy } from "./ClusterUpgrades";
 import { CSIDialog, SnapshotsDialog, csiOn, snapshotsOn, useCSIOffer, useSnapshotsOffer } from "./CsiPlugin";
+import { GitOpsDialog, gitOpsOf, gitOpsText } from "./GitOps";
 import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBalancer";
 import { LogsDialog, logsOf, logsText } from "./Logs";
 import { OIDCProviders, cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
@@ -57,6 +58,7 @@ export type OptionAction =
   | "clusterMesh"
   | "loadBalancer"
   | "rancher"
+  | "gitops"
   | "upgrades"
   | "certificates"
   | "oidc";
@@ -102,6 +104,9 @@ export function OptionDialog({
     }
     case "rancher": {
       return <RancherDialog cluster={c} onClose={onClose} />;
+    }
+    case "gitops": {
+      return <GitOpsDialog cluster={c} onClose={onClose} />;
     }
     case "upgrades": {
       return <UpgradesDialog cluster={c} onClose={onClose} />;
@@ -280,6 +285,12 @@ export function Options<A extends string = never>({
       action: "rancher",
       button: rancher.install === true ? "Remove" : "Edit",
       name: "Rancher",
+    },
+    {
+      label: "GitOps",
+      value: gitOpsText(gitOpsOf(c.variables["gitops"])),
+      action: "gitops",
+      name: "GitOps",
     },
     {
       label: "Automatic upgrades",

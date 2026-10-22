@@ -289,6 +289,7 @@ func validateCertificates(cluster *clusterv1.Cluster) field.ErrorList {
 	for _, h := range []struct{ variable, hostname, secret string }{
 		{headlampAddon, addons.Headlamp.Hostname, addons.Headlamp.TLSSecret},
 		{monitoringAddon, addons.Monitoring.Hostname, addons.Monitoring.TLSSecret},
+		{gitopsVariable, addons.GitOps.Hostname, addons.GitOps.TLSSecret},
 	} {
 		if h.hostname != "" && h.secret == "" && !inDomain(h.hostname, c.Domain) {
 			errs = append(errs, field.Invalid(variables.Key(h.variable).Child("hostname"), h.hostname,

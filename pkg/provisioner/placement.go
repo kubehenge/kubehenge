@@ -173,7 +173,7 @@ func (h *Hooks) placementPatch(ctx context.Context, holder *runtimehooksv1.Holde
 
 // addOp is a JSON patch operation adding value at path.
 func addOp(path string, value any) map[string]any {
-	return map[string]any{"op": "add", "path": path, "value": value}
+	return map[string]any{"op": "add", "path": path, valueKey: value}
 }
 
 // onlineNodes are the nodes recorded on the cluster, or, for a cluster the Placer has not got to

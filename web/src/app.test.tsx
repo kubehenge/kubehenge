@@ -540,6 +540,7 @@ describe("create", () => {
     rancherRegister: false,
     certificates: newForm().certificates,
     dns01Token: "",
+    gitops: newForm().gitops,
     oidc: [],
     upgradeMode: "off",
     backups: false,

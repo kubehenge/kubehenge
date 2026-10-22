@@ -89,6 +89,20 @@ func TestAddonIngressAsksTheIssuerOnlyForWhatTheDefaultCertificateMisses(t *test
 	if got := lookup[string](t, grafana, "grafana", "ingress", "annotations", issuerAnnotation); got != ingressIssuer {
 		t.Errorf("Grafana's Ingress: %v", grafana["grafana"])
 	}
+	signedIn := &gitOpsState{provider: &oidcProvider{IssuerURL: "https://id.example.org"}, clientSecret: true}
+	argo, err := argoCDValues(&dns, &GitOps{Enabled: true, Hostname: "argo.example.org"}, signedIn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lookup[string](t, argo, "server", "ingress", "annotations", issuerAnnotation) != ingressIssuer ||
+		lookup[string](t, argo, "server", "ingress", "extraTls", 0, "secretName") != "argocd-tls" {
+		t.Errorf("Argo CD's Ingress: %v", argo["server"])
+	}
+	fluxWeb := fluxOperatorValues(&dns, &GitOps{Enabled: true, Engine: flux, UI: true, Hostname: "flux.example.org"}, signedIn)
+	if lookup[string](t, fluxWeb, "web", "ingress", "annotations", issuerAnnotation) != ingressIssuer ||
+		lookup[string](t, fluxWeb, "web", "ingress", "tls", 0, "secretName") != "flux-operator-tls" {
+		t.Errorf("Flux's Ingress: %v", fluxWeb["web"])
+	}
 }
 
 func TestTraefikServesTheDefaultCertificate(t *testing.T) {
@@ -467,6 +481,11 @@ func TestValidatorHoldsAddonHostsToTheClustersCA(t *testing.T) {
 		if wantErr && !strings.Contains(errs.ToAggregate().Error(), "lab.example.org") {
 			t.Errorf("%s: %v", raw, errs)
 		}
+	}
+	gitops := withAddons(certificatesCluster(`{"enabled": true, "issuer": "ca", "domain": "lab.example.org"}`),
+		map[string]string{gitopsVariable: `{"enabled": true, "hostname": "argo.example.org"}`})
+	if errs := validateCertificates(gitops); len(errs) == 0 {
+		t.Error("Argo CD's host name is not held to the domain")
 	}
 	acme := withAddons(certificatesCluster(`{"enabled": true, "domain": "lab.example.org", "dns01": {"provider": "cloudflare"}}`),
 		map[string]string{headlampAddon: `{"enabled": true, "hostname": "headlamp.example.org"}`})

@@ -25,6 +25,15 @@ import {
   type UpgradeMode,
   type UpgradePolicy,
 } from "./ClusterUpgrades";
+import {
+  gitOpsFields,
+  gitOpsProblems,
+  gitOpsText,
+  gitOpsVariable,
+  newGitOps,
+  type GitOpsChoice,
+  type GitOpsField,
+} from "./GitOps";
 import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implementation } from "./LoadBalancer";
 import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
 import { addressBits, addressCount, inList, ipv4, isVLAN, list, rangeProblem, whole } from "./network";
@@ -124,6 +133,7 @@ export interface Form {
   certificates: CertificatesForm;
   // The DNS provider's credential, stored for the cluster once it is created; never in the request.
   dns01Token: string;
+  gitops: GitOpsChoice;
   oidc: OIDCProvider[];
   upgradeMode: UpgradeMode;
   backups: boolean;
@@ -198,6 +208,8 @@ const addonNames = [
   ["rancher", "Rancher"],
   ["rancherAgent", "Rancher's agent"],
   ["backups", "Velero"],
+  ["argocd", "Argo CD"],
+  ["flux", "Flux"],
 ] as const;
 
 // maxCiliumName is the longest cluster name Cilium takes, which names the cluster in a mesh.
@@ -242,6 +254,8 @@ export function addonMemory(form: Form, c: ClusterClass | undefined): { names: s
     rancher: form.rancherInstall,
     rancherAgent: !form.rancherInstall && form.rancherRegister,
     backups: form.backups && variable(c, "backups") !== undefined,
+    argocd: form.gitops.engine === "argocd",
+    flux: form.gitops.engine === "flux",
   };
   const names: string[] = [];
   let mib = 0;
@@ -368,6 +382,7 @@ export const newForm = (): Form => ({
   rancherRegister: true,
   certificates: newCertificates(),
   dns01Token: "",
+  gitops: newGitOps(),
   oidc: [],
   upgradeMode: "off",
   backups: false,
@@ -453,6 +468,10 @@ function addOnVariables(form: Form, defined: Set<string>): Record<string, unknow
   const certificates = defined.has("certificates") ? certificatesVariable(form.certificates) : undefined;
   if (certificates) {
     variables["certificates"] = certificates;
+  }
+  const gitops = gitOpsVariable(form.gitops);
+  if (gitops !== undefined) {
+    variables["gitops"] = gitops;
   }
   return variables;
 }
@@ -696,6 +715,9 @@ function addOnRows(form: Form, defined: Set<string>): [string, string][] {
       ]);
     }
   }
+  if (defined.has("gitops")) {
+    rows.push(["GitOps", gitOpsText(form.gitops)]);
+  }
   return rows;
 }
 
@@ -736,6 +758,7 @@ export type FieldKey =
   | "backupRetention"
   | "backupKey"
   | "certificates"
+  | `gitops.${GitOpsField}`
   | "oidc";
 
 type Problems = Partial<Record<FieldKey, string>>;
@@ -883,6 +906,21 @@ function addOnProblems(form: Form, c: ClusterClass | undefined): Problems {
   if (certificates.length > 0) {
     p.certificates = certificates.join(" ");
   }
+  if (variable(c, "gitops") !== undefined) {
+    const g = gitOpsProblems(form.gitops);
+    for (const field of gitOpsFields) {
+      const problem = g[field];
+      if (problem !== undefined) {
+        p[`gitops.${field}`] = problem;
+      }
+    }
+  }
+  return { ...p, ...backupsProblems(form, c) };
+}
+
+// backupsProblems are what keeps the backups the form switches on from being complete.
+function backupsProblems(form: Form, c: ClusterClass | undefined): Problems {
+  const p: Problems = {};
   if (!form.backups || variable(c, "backups") === undefined) {
     return p;
   }
