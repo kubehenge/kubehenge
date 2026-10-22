@@ -58,7 +58,7 @@ jobs:
     name: gate
     if: github.repository == 'kubehenge/kubehenge'
     runs-on: ubuntu-26.04
-    timeout-minutes: 10
+    timeout-minutes: 30
     permissions:
       contents: read # Reads the tagged source, the tag, and the signatures GitHub verified.
       checks: read # Reads the checks the release commit passed in the merge queue.
@@ -110,14 +110,33 @@ jobs:
             | .parameters.required_status_checks[].context' | sort -u > "${RUNNER_TEMP}/required"
           [ -s "${RUNNER_TEMP}/required" ] ||
             fail "main's rules require no checks, so nothing vouches for ${GITHUB_SHA}"
-          gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
-            -f per_page=100 -X GET --jq '.check_runs[] | select(.app.slug == "github-actions")
-              | "\(.id)\t\(.name)\t\(.conclusion // .status)"' > "${RUNNER_TEMP}/runs"
+          # The latest run of each check decides, as it does for a pull request.
+          latest() {
+            awk -F '\t' -v n="$1" '$2 == n && $1 + 0 > id + 0 { id = $1; c = $3 } END { print c }' \
+              "${RUNNER_TEMP}/runs"
+          }
+          # Main's own runs on the commit start when the queue moves main to it, so a tag pushed
+          # straight after a merge finds them still running: their outcome is awaited.
+          for attempt in $(seq 1 40); do
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
+              -f per_page=100 -X GET --jq '.check_runs[] | select(.app.slug == "github-actions")
+                | "\(.id)\t\(.name)\t\(.conclusion // .status)"' > "${RUNNER_TEMP}/runs"
+            running=
+            while IFS= read -r name; do
+              case $(latest "${name}") in
+                queued | in_progress | waiting | pending | requested)
+                  running="${running} ${name}," ;;
+              esac
+            done < "${RUNNER_TEMP}/required"
+            [ -n "${running}" ] || break
+            [ "${attempt}" -lt 40 ] ||
+              fail "still running on ${GITHUB_SHA} after 20 minutes:${running%,}"
+            echo "waiting for:${running%,}"
+            sleep 30
+          done
           missing=0
           while IFS= read -r name; do
-            # The latest run of each check decides, as it does for a pull request.
-            conclusion=$(awk -F '\t' -v n="${name}" '$2 == n && $1 > id { id = $1; c = $3 }
-              END { print c }' "${RUNNER_TEMP}/runs")
+            conclusion=$(latest "${name}")
             case ${conclusion} in
               success | skipped | neutral) echo "${name}: ${conclusion}" ;;
               *) echo "::error::${name}: ${conclusion:-never ran} on ${GITHUB_SHA}"; missing=1 ;;
