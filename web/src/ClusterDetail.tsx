@@ -15,6 +15,7 @@ import {
   distributionName,
   errorMessage,
   filled,
+  maxWorkers,
   pollIdle,
   saveFile,
   settled,
@@ -29,8 +30,6 @@ type Action = "scale" | "upgrade" | "delete" | OptionAction;
 const pollChanging = 5000;
 
 const httpNotFound = 404;
-
-export const maxWorkers = 100;
 
 // Odd sizes keep etcd's quorum.
 // oxlint-disable-next-line eslint/no-magic-numbers -- the sizes themselves, named by the constant

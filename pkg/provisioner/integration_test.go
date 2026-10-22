@@ -555,7 +555,7 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 }
 
 // checkClassAddonRoom holds a class's memory figures: one for every add-on and every node kind, a
-// cluster at the class's defaults holding every add-on but Rancher, and the least cluster Rancher
+// cluster at the class's defaults holding every add-on but Rancher and logs, and the least cluster Rancher
 // runs on, without workers, holding Rancher.
 func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker *clusterv1.Cluster, alone controlPlaneSize) {
 	t.Helper()

@@ -68,8 +68,13 @@ type Charts struct {
 	Turtles           Image
 	TurtlesClusterAPI Image
 	Monitoring        Chart
-	// KubeRBACProxy is the image of the proxies in front of metrics served without authentication.
-	KubeRBACProxy   Image
+	// KubeRBACProxy is the image of the proxies in front of metrics served without authentication,
+	// and of the one in front of Loki.
+	KubeRBACProxy Image
+	// Loki keeps the logs that Alloy collects; Alloy runs AlloyImage, which its chart takes apart.
+	Loki            Chart
+	Alloy           Chart
+	AlloyImage      Image
 	Kyverno         Chart
 	KyvernoPolicies Chart
 	// Istio is istiod's chart, installed with its base, cni and ztunnel charts at the same version.
@@ -95,6 +100,7 @@ type Addons struct {
 	Headlamp     Headlamp
 	Rancher      Rancher
 	Monitoring   Monitoring
+	Logs         Logs
 	PodSecurity  PodSecurity
 	Istio        Istio
 	ClusterMesh  ClusterMesh
@@ -111,6 +117,9 @@ func addonsOf(cluster *clusterv1.Cluster) (Addons, error) {
 		return a, err
 	}
 	if a.Monitoring, _, err = optionalVariable[Monitoring](cluster, monitoringAddon); err != nil {
+		return a, err
+	}
+	if a.Logs, _, err = optionalVariable[Logs](cluster, logsAddon); err != nil {
 		return a, err
 	}
 	if a.PodSecurity, _, err = optionalVariable[PodSecurity](cluster, podSecurityVariable); err != nil {
@@ -686,6 +695,9 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 			monitoringAddon, monitoringRelease, monitoringAddon, charts.Monitoring,
 			monitoringValues(distribution, charts.KubeRBACProxy, addons),
 		})
+	}
+	if addons.logsOn() {
+		wanted = append(wanted, logsCharts(charts, distribution, addons.Logs)...)
 	}
 	if addons.PodSecurity.kyvernoOn() {
 		wanted = append(wanted,

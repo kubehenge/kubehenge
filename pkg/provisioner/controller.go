@@ -303,8 +303,9 @@ func (r *Reconciler) addons(ctx context.Context, cluster *clusterv1.Cluster) (Ad
 	return addons, refused, nil
 }
 
-// removeSwitchedOff removes the proxies of Headlamp, monitoring, the load balancer and Kyverno when
-// the cluster switches them off, and kube-vip's cloud provider when the load balancer is MetalLB;
+// removeSwitchedOff removes the proxies of Headlamp, monitoring, logs, the load balancer and Kyverno
+// when the cluster switches them off, the nodes' Alloy when the API collects the logs, and kube-vip's
+// cloud provider when the load balancer is MetalLB;
 // Rancher's and Istio's removals wait on other clusters, apart from these. It reports whether a
 // removal waits on another.
 func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons) (bool, error) {
@@ -315,6 +316,7 @@ func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.C
 	if !addons.Monitoring.Enabled {
 		off = append(off, monitoringProxy(cluster))
 	}
+	off = append(off, logsOff(cluster, addons)...)
 	if !addons.LoadBalancer.Enabled {
 		off = append(off, loadBalancerProxy(cluster))
 	}

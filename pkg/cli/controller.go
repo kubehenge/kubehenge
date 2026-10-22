@@ -77,6 +77,9 @@ type controllerOptions struct {
 	turtlesCAPIImage  string
 	monitoringChart   string
 	kubeRBACProxy     string
+	lokiChart         string
+	alloyChart        string
+	alloyImage        string
 	kyvernoChart      string
 	kyvernoPolicies   string
 	istioChart        string
@@ -137,7 +140,10 @@ separate nodes.`,
 	f.StringVar(&o.turtlesImage, "rancher-turtles-image", "", "the image of the Turtles release Rancher installs, as <registry>/<repository>:<tag>@sha256:<digest>")
 	f.StringVar(&o.turtlesCAPIImage, "rancher-cluster-api-image", "", "the Cluster API controller image that Turtles runs, as <registry>/<repository>:<tag>@sha256:<digest>")
 	f.StringVar(&o.monitoringChart, "monitoring-chart", "", "kube-prometheus-stack chart, for clusters that switch monitoring on, as <repository>/<name>:<version>@sha256:<digest>")
-	f.StringVar(&o.kubeRBACProxy, "kube-rbac-proxy-image", "", "kube-rbac-proxy image, in front of the metrics monitoring scrapes, as <registry>/<repository>:<tag>@sha256:<digest>")
+	f.StringVar(&o.kubeRBACProxy, "kube-rbac-proxy-image", "", "kube-rbac-proxy image, in front of the metrics monitoring scrapes and of Loki, as <registry>/<repository>:<tag>@sha256:<digest>")
+	f.StringVar(&o.lokiChart, "loki-chart", "", "Loki chart, for clusters that switch logs on, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.alloyChart, "alloy-chart", "", "Grafana Alloy chart, which collects the logs of clusters that switch logs on, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.alloyImage, "alloy-image", "", "Grafana Alloy image, as <registry>/<repository>:<tag>@sha256:<digest>")
 	f.StringVar(&o.kyvernoChart, "kyverno-chart", "", "Kyverno chart, for clusters that have Kyverno enforce pod security, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.kyvernoPolicies, "kyverno-policies-chart", "", "Kyverno's Pod Security Standards policies chart, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.istioChart, "istio-chart", "", "Istio's istiod chart, for clusters that switch Istio on, as <repository>/<name>:<version>@sha256:<digest>")
@@ -157,7 +163,7 @@ separate nodes.`,
 	f.StringVar(&o.certDir, "extension-cert-dir", "/etc/kubehenge/tls", "directory with tls.crt and tls.key for the Runtime Extension server")
 	f.StringVar(&o.healthAddr, "health-address", ":8081", "address of the liveness and readiness probes")
 	f.BoolVar(&o.leaderElect, "leader-elect", true, "elect one active controller among replicas")
-	for _, flag := range []string{"ccm-chart", "csi-chart", "cilium-chart", "calico-chart", "calico-images", "headlamp-chart", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "rancher-turtles-image", "rancher-cluster-api-image", "monitoring-chart", "kube-rbac-proxy-image", "kyverno-chart", "kyverno-policies-chart", "istio-chart", "istio-base-chart", "istio-cni-chart", "istio-ztunnel-chart", "traefik-chart", "metallb-chart", "kube-vip-chart", "kube-vip-image", "kube-vip-cloud-provider-chart"} {
+	for _, flag := range []string{"ccm-chart", "csi-chart", "cilium-chart", "calico-chart", "calico-images", "headlamp-chart", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "rancher-turtles-image", "rancher-cluster-api-image", "monitoring-chart", "kube-rbac-proxy-image", "loki-chart", "alloy-chart", "alloy-image", "kyverno-chart", "kyverno-policies-chart", "istio-chart", "istio-base-chart", "istio-cni-chart", "istio-ztunnel-chart", "traefik-chart", "metallb-chart", "kube-vip-chart", "kube-vip-image", "kube-vip-cloud-provider-chart"} {
 		_ = cmd.MarkFlagRequired(flag)
 	}
 	return cmd
@@ -298,6 +304,8 @@ func (o *controllerOptions) parseCharts() error {
 		{"--cert-manager-chart", o.certManagerChart, &o.r.Charts.CertManager},
 		{"--rancher-chart", o.rancherChart, &o.r.Charts.Rancher},
 		{"--monitoring-chart", o.monitoringChart, &o.r.Charts.Monitoring},
+		{"--loki-chart", o.lokiChart, &o.r.Charts.Loki},
+		{"--alloy-chart", o.alloyChart, &o.r.Charts.Alloy},
 		{"--kyverno-chart", o.kyvernoChart, &o.r.Charts.Kyverno},
 		{"--kyverno-policies-chart", o.kyvernoPolicies, &o.r.Charts.KyvernoPolicies},
 		{"--istio-chart", o.istioChart, &o.r.Charts.Istio},
@@ -326,6 +334,7 @@ func (o *controllerOptions) parseCharts() error {
 		image *provisioner.Image
 	}{
 		{"--kube-rbac-proxy-image", o.kubeRBACProxy, &o.r.Charts.KubeRBACProxy},
+		{"--alloy-image", o.alloyImage, &o.r.Charts.AlloyImage},
 		{"--kube-vip-image", o.kubeVipImage, &o.r.Charts.KubeVipImage},
 		{"--rancher-turtles-image", o.turtlesImage, &o.r.Charts.Turtles},
 		{"--rancher-cluster-api-image", o.turtlesCAPIImage, &o.r.Charts.TurtlesClusterAPI},

@@ -524,6 +524,7 @@ describe("create", () => {
     headlampHostname: "",
     monitoring: true,
     grafanaHostname: "grafana.example",
+    logs: { enabled: false, collector: "node", retentionDays: 7, sizeGiB: 10 },
     podSecurity: { admission: "restricted", kyverno: "off" },
     cis: false,
     istio: false,
@@ -665,6 +666,38 @@ describe("create", () => {
       cni: "Cilium takes cluster names of at most 32 characters; this one has 33.",
     });
     expect(fieldProblems("Network", { ...form, name: long, cni: "canal" }, withMesh)).toStrictEqual({});
+  });
+
+  it("keeps logs only beside monitoring", () => {
+    const withLogs: ClusterClass = {
+      ...rke2,
+      annotations: { "kubehenge.dev/addon-memory": '{"monitoring":1536,"logs":512}' },
+      variables: [...rke2.variables, { name: "logs", required: false, schema: { type: "object" } }],
+    };
+    const logged = { ...form, logs: { enabled: true, collector: "api" as const, retentionDays: 14, sizeGiB: 20 } };
+    expect(request(logged, withLogs).variables["logs"]).toStrictEqual({
+      enabled: true,
+      collector: "api",
+      retentionDays: 14,
+      sizeGiB: 20,
+    });
+    expect(Object.fromEntries(summary(logged, withLogs))).toMatchObject({
+      Logs: "On, collected through the API, 14 days in 20 GiB",
+    });
+    expect(addonMemory(logged, withLogs)).toStrictEqual({ names: ["monitoring", "logs"], mib: 2048 });
+
+    const unmonitored = { ...logged, monitoring: false };
+    expect(request(unmonitored, withLogs).variables).not.toHaveProperty("logs");
+    expect(Object.fromEntries(summary(unmonitored, withLogs))).toMatchObject({ Logs: "Off" });
+    expect(addonMemory(unmonitored, withLogs).mib).toBe(0);
+    expect(request(logged, rke2).variables).not.toHaveProperty("logs");
+
+    expect(fieldProblems("Add-ons", { ...logged, logs: { ...logged.logs, sizeGiB: 0 } }, withLogs)).toStrictEqual({
+      logs: "A whole number of GiB from 1 to 1024.",
+    });
+    expect(fieldProblems("Add-ons", { ...unmonitored, logs: { ...logged.logs, sizeGiB: 0 } }, withLogs)).toStrictEqual(
+      {},
+    );
   });
 
   it("gives Services addresses of their own from the load balancer chosen", () => {

@@ -16,7 +16,7 @@ import (
 // ClusterValidator answers the API server for Kubehenge's clusters as they are created and changed,
 // so that what BeforeClusterCreate would refuse later is refused at once, and a change made after
 // creation is held to the same: control planes too small for the cluster's workers, nodes without
-// the memory its add-ons use, Rancher switched
+// the memory its add-ons use, logs without monitoring, Rancher switched
 // on beside another, or on nodes too small for it, a Rancher cluster's nodes made smaller than it
 // needs, and load-balancer addresses that clash with the nodes' network or another cluster's. A
 // cluster that already fell short before a change is not held to it for unrelated edits.
@@ -69,6 +69,9 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 		errs = append(errs, v.validateRancher(ctx, old, c, class)...)
 	}
 	errs = append(errs, validateClusterMesh(old, c)...)
+	if err := checkLogs(c); err != nil {
+		errs = append(errs, field.Forbidden(topology.Child("variables").Key(logsAddon), err.Error()))
+	}
 	if addressesChanged(old, c) {
 		if err := v.Hooks.checkLoadBalancer(ctx, c); err != nil {
 			errs = append(errs, field.Forbidden(topology.Child("variables").Key(loadBalancerVariable), err.Error()))

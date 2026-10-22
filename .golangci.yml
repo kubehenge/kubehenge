@@ -76,14 +76,17 @@ linters:
     gocognit:
       min-complexity: 20
     goconst:
-      # Field names and RBAC verbs of the APIs the code speaks (Kubernetes, Helm values, Proxmox
-      # VE): a constant named for "name" or "get" reads worse than the literal, and is not how
-      # Kubernetes Go code is written.
+      # Field names, kinds and verbs of the APIs the code speaks (Kubernetes, Helm values, Proxmox
+      # VE), and resource quantities: a constant named for "name", "get" or "256Mi" reads worse than
+      # the literal, and is not how Kubernetes Go code is written.
       ignore-string-values:
-        - ^(get|list|watch)$
+        - ^(get|list|watch|create)$
+        - ^(pods|events|nodes|secrets|configmaps|services|namespaces|persistentvolumeclaims)$
         - ^(name|kind|spec|type|enabled|path|key|operator|cni|poolid|comment|delete)$
         - ^(namespace|service|serviceMonitor|secret|secretName|tls|tlsConfig|insecureSkipVerify|hosts|resources|storage|ClusterRole|ALL)$
         - ^(metadata|cluster|users|image|repository|tag|data)$
+        - ^(replicas|limits|commonName|content|extra|ClusterRoleBinding)$
+        - ^[0-9]+(m|Mi|Gi)$
     ireturn:
       allow:
         - anon

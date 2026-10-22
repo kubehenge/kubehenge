@@ -1,6 +1,6 @@
-import { maxWorkers } from "./ClusterDetail";
 import { defaultMinutes, defaultStart, describe, type UpgradeMode, type UpgradePolicy } from "./ClusterUpgrades";
 import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implementation } from "./LoadBalancer";
+import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
 import { addressBits, addressCount, inList, ipv4, isVLAN, list, rangeProblem, whole } from "./network";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
@@ -13,7 +13,16 @@ import {
   type PodSecurity,
 } from "./PodSecurity";
 import type { Bridge, ClusterClass, CreateRequest, OIDCProvider, Schema, Storage } from "./types";
-import { browserZone, cniName, distributionName, filled, istioText, registeredWithRancher, sentence } from "./ui";
+import {
+  browserZone,
+  cniName,
+  distributionName,
+  filled,
+  istioText,
+  maxWorkers,
+  registeredWithRancher,
+  sentence,
+} from "./ui";
 import { quantity, record, texts } from "./values";
 
 export const steps = ["General", "Network", "Machines", "Add-ons", "Identity providers", "Confirm"] as const;
@@ -62,6 +71,7 @@ export interface Form {
   headlampHostname: string;
   monitoring: boolean;
   grafanaHostname: string;
+  logs: Logs;
   podSecurity: PodSecurity;
   cis: boolean;
   istio: boolean;
@@ -128,6 +138,7 @@ export function controlPlaneMinimums(c: ClusterClass | undefined, workers: numbe
 const addonNames = [
   ["headlamp", "Headlamp"],
   ["monitoring", "monitoring"],
+  ["logs", "logs"],
   ["kyverno", "Kyverno"],
   ["istio", "Istio"],
   ["clusterMesh", "Cluster Mesh"],
@@ -145,6 +156,9 @@ export const offersMesh = (form: Form, c: ClusterClass | undefined): boolean =>
   variable(c, "clusterMesh") !== undefined && form.cni === "cilium";
 
 const meshChosen = (form: Form): boolean => form.clusterMesh && form.cni === "cilium";
+
+/** logsChosen says whether a form's cluster keeps logs: chosen beside monitoring, which they need. */
+export const logsChosen = (form: Form): boolean => form.logs.enabled && form.monitoring;
 
 // classFigures reads one of a class's annotations of memory figures: kubehenge.dev/addon-memory by
 // add-on, or kubehenge.dev/node-memory, what a controlPlane or worker uses itself.
@@ -167,6 +181,7 @@ export function addonMemory(form: Form, c: ClusterClass | undefined): { names: s
   const on: Record<(typeof addonNames)[number][0], boolean> = {
     headlamp: form.headlamp,
     monitoring: form.monitoring,
+    logs: logsChosen(form),
     kyverno: form.podSecurity.kyverno !== "off",
     istio: form.istio,
     clusterMesh: meshChosen(form),
@@ -274,6 +289,7 @@ export const newForm = (): Form => ({
   headlampHostname: "",
   monitoring: false,
   grafanaHostname: "",
+  logs: newLogs(),
   podSecurity: podSecurityOf(undefined),
   cis: false,
   istio: false,
@@ -318,6 +334,9 @@ function addOnVariables(form: Form, defined: Set<string>): Record<string, unknow
     variables["monitoring"] = form.grafanaHostname
       ? { enabled: true, hostname: form.grafanaHostname }
       : { enabled: true };
+  }
+  if (logsChosen(form)) {
+    variables["logs"] = logsVariable(form.logs);
   }
   const cis = form.cis && defined.has("cis");
   const podSecurity = podSecurityVariable(enforced(form.podSecurity, cis));
@@ -493,6 +512,9 @@ function addOnRows(form: Form, defined: Set<string>): [string, string][] {
       form.monitoring ? `On${form.grafanaHostname ? `, Grafana at ${form.grafanaHostname}` : ""}` : "Off",
     ]);
   }
+  if (defined.has("logs")) {
+    rows.push(["Logs", logsText({ ...form.logs, enabled: logsChosen(form) })]);
+  }
   const cis = form.cis && defined.has("cis");
   if (defined.has("cis")) {
     rows.push(["CIS hardening", cisText(cis)]);
@@ -540,6 +562,7 @@ export type FieldKey =
   | "cni"
   | "rancherHostname"
   | "headlampHostname"
+  | "logs"
   | "oidc";
 
 type Problems = Partial<Record<FieldKey, string>>;
@@ -685,7 +708,15 @@ export function fieldProblems(step: Step, form: Form, c: ClusterClass | undefine
       return machineProblems(form, c);
     }
     case "Add-ons": {
-      return form.rancherInstall && !form.rancherHostname ? { rancherHostname: "Rancher needs a host name." } : {};
+      const p: Problems = {};
+      if (form.rancherInstall && !form.rancherHostname) {
+        p.rancherHostname = "Rancher needs a host name.";
+      }
+      const logs = logsChosen(form) ? logsProblem(form.logs) : undefined;
+      if (logs !== undefined) {
+        p.logs = logs;
+      }
+      return p;
     }
     case "Identity providers": {
       const o = oidcProblems(form.oidc);

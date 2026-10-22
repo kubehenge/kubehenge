@@ -35,7 +35,8 @@ func workerMemory(c *clusterv1.Cluster, raw string) *clusterv1.Cluster {
 	return withAddons(c, map[string]string{"workerMachine": raw})
 }
 
-// everyAddon switches on every add-on but Rancher, whose agent counts while the cluster registers.
+// everyAddon switches on every add-on but Rancher, whose agent counts while the cluster registers,
+// and logs, which the default machines leave no room for.
 var everyAddon = map[string]string{
 	"headlamp": `{"enabled":true}`, "monitoring": `{"enabled":true}`, "podSecurity": `{"kyverno":"restricted"}`, "istio": `{"enabled":true}`,
 	"clusterMesh": `{"enabled":true}`,

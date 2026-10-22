@@ -239,6 +239,18 @@ var testCharts = Charts{
 		Registry: "ghcr.io", Repository: "kube-rbac-proxy/kube-rbac-proxy", Tag: "v0.23.0",
 		Digest: "296fd0a10fb635414b4533b983f0d5a686ce0ce73567b7079b6595ba75034f1a",
 	},
+	Loki: Chart{
+		Repository: "https://grafana-community.github.io/helm-charts", Name: "loki", Version: "19.0.3",
+		Digest: "bf3e8a09821c0f7aae095314fcbf16a20ee101e00523dcf0ddada2ae99821a99",
+	},
+	Alloy: Chart{
+		Repository: "https://grafana.github.io/helm-charts", Name: "alloy", Version: "1.14.1",
+		Digest: "4b31686f69ef1e3280382cb311a40edb555ecf8ed049770e3efe5da70d614d53",
+	},
+	AlloyImage: Image{
+		Registry: "docker.io", Repository: "grafana/alloy", Tag: "v1.21.1",
+		Digest: "4039c971193053a84e53dd9ed3e7d4561c069256b024631cd3498a353ed7ece8",
+	},
 	Kyverno: Chart{
 		Repository: "https://kyverno.github.io/kyverno", Name: "kyverno", Version: "3.9.1",
 		Digest: "7b7fe51a431b5b133b0ce7eb9dcb222b6a37fb967c163223cf480054ad14d752",

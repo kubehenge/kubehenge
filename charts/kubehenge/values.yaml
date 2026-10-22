@@ -35,14 +35,15 @@ clusterOIDC: []
 
 # Namespaces whose pods neither Pod Security Admission nor Kyverno holds to a cluster's pod
 # security level: those of the components that need the host's network, file system or
-# privileges (the cloud controller manager, the CSI plugin, the CNIs, node-exporter, Rancher's
-# agents and controllers). A cluster's own workloads that need it get their namespace labelled
-# instead.
+# privileges (the cloud controller manager, the CSI plugin, the CNIs, node-exporter, Alloy's node
+# collectors, Rancher's agents and controllers). A cluster's own workloads that need it get their
+# namespace labelled instead.
 podSecurityExempt:
   - kube-system
   - tigera-operator
   - calico-system
   - node-exporter
+  - logging-node
   - istio-node
   - metallb-system
   - cattle-system
@@ -227,6 +228,24 @@ addons:
           # The whole reference: the chart adds -distroless to a tag of its own.
           # renovate: datasource=docker depName=quay.io/prometheus/node-exporter
           tag: quay.io/prometheus/node-exporter:v1.12.1-distroless@sha256:8c9bac11973b94b59be88d6e11fee4429aa743c8846cdc75d65b18db33f6a106
+  # Loki, which keeps the logs of clusters that switch logs on, and Grafana Alloy, which collects
+  # them.
+  loki:
+    repository: https://grafana-community.github.io/helm-charts
+    chart: loki
+    version: 19.0.3@sha256:bf3e8a09821c0f7aae095314fcbf16a20ee101e00523dcf0ddada2ae99821a99
+    values:
+      loki:
+        image:
+          # renovate: datasource=docker depName=docker.io/grafana/loki
+          tag: 3.7.9@sha256:0db216b630ae1f348a1584c67f3cead8b4c1fc839169a39501db664744158e28
+  alloy:
+    repository: https://grafana.github.io/helm-charts
+    chart: alloy
+    version: 1.14.1@sha256:4b31686f69ef1e3280382cb311a40edb555ecf8ed049770e3efe5da70d614d53
+    # The whole reference: the chart puts its tag into a label, where a digest cannot go.
+    # renovate: datasource=docker depName=docker.io/grafana/alloy
+    image: docker.io/grafana/alloy:v1.21.1@sha256:4039c971193053a84e53dd9ed3e7d4561c069256b024631cd3498a353ed7ece8
   # Kyverno and its Pod Security Standards policies, for clusters that have Kyverno enforce pod
   # security.
   kyverno:

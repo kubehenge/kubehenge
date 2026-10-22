@@ -191,10 +191,11 @@ grows while it fills its first two-hour block; Rancher's own pod peaks at about 
 first starts, and with a cluster registered Rancher, Fleet and their controllers hold about 1.2 GiB.
 Istio uses about 100 MiB, but istiod and the ztunnel beside it ask for 384 MiB, which the node they
 share has to have; the clustermesh-apiserver uses about 50 MiB. The load balancer is MetalLB's
-controller and a node's speaker, or kube-vip and its cloud provider.
+controller and a node's speaker, or kube-vip and its cloud provider. Logs are Loki, which asks for
+256 MiB, the Alloy that reads the events and a node's Alloy.
 */}}
 {{- define "kubehenge.addonMemory" -}}
-kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"kyverno":384,"istio":384,"clusterMesh":128,"loadBalancer":128,"certManager":192,"rancher":2048,"rancherAgent":512}'
+kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"logs":512,"kyverno":384,"istio":384,"clusterMesh":128,"loadBalancer":128,"certManager":192,"rancher":2048,"rancherAgent":512}'
 {{- end -}}
 
 {{/*
@@ -248,6 +249,48 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           description: >-
             Secret in the monitoring namespace holding the certificate for hostname; the ingress
             controller's own default certificate when unset.
+- name: logs
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        Loki, keeping the cluster's logs and its events on a volume of their own, read in
+        monitoring's Grafana, which they need, and Grafana Alloy collecting them. Only Alloy may
+        push to Loki and only Grafana read it, each by its client certificate, besides users
+        whose RBAC allows them the Loki paths. Switched off, the volume stays.
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        collector:
+          type: string
+          enum: [node, api]
+          default: node
+          description: >-
+            node runs Alloy on every node, reading the files the kubelet writes, the node's journal
+            and on the control planes the API server's audit log, so it catches pods gone again
+            within seconds; it reads host paths as root without capabilities, from the privileged
+            logging-node namespace. api runs one Alloy without anything of the host, reading the
+            pods' logs through the Kubernetes API: lighter, but without journals or audit log, and
+            it can miss pods that live only seconds.
+        retentionDays:
+          type: integer
+          minimum: 1
+          maximum: 366
+          default: 7
+          description: Days Loki keeps each line.
+        sizeGiB:
+          type: integer
+          minimum: 1
+          maximum: 1024
+          default: 10
+          description: >-
+            Loki's volume, in GiB, which has to hold the retention's worth of logs: Loki takes no
+            lines while it is full. It only grows.
+          x-kubernetes-validations:
+            - rule: self >= oldSelf
+              message: Loki's volume only grows.
 - name: podSecurity
   required: false
   schema:
@@ -256,8 +299,8 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
       description: >-
         The Pod Security Standard the cluster's pods are held to, by Kubernetes' Pod Security
         Admission, by Kyverno, or by both. The namespaces of the components that need the host
-        (kube-system, the CNI's, node-exporter's, Istio's node agents', Rancher's) are exempt from
-        both.
+        (kube-system, the CNI's, node-exporter's, Alloy's node collectors', Istio's node agents',
+        Rancher's) are exempt from both.
       properties:
         admission:
           type: string
