@@ -235,6 +235,7 @@ run "controller_and_clusters_are_least_privilege" {
           role               = ""
           managementStorages = ["local-lvm", "local"]
         }
+        sysAuditGroup = ""
       }
       templateRefresh = {
         enabled       = true
@@ -329,6 +330,55 @@ run "controller_and_clusters_are_least_privilege" {
   assert {
     condition     = length(proxmox_virtual_environment_role.cluster_datastore) == 0
     error_message = "no cluster may hold Datastore.Allocate unless the administrator lets clusters choose it"
+  }
+
+  assert {
+    condition     = length(proxmox_virtual_environment_group.clusters_audit) == 0 && length(proxmox_acl.clusters_audit) == 0
+    error_message = "no cluster may hold Sys.Audit on / unless the administrator lets clusters choose it"
+  }
+}
+
+run "cluster_sys_audit" {
+  command = plan
+
+  variables {
+    cluster_sys_audit = true
+  }
+
+  assert {
+    condition = (
+      proxmox_virtual_environment_group.clusters_audit[0].group_id == "kubehenge-clusters-audit" &&
+      proxmox_acl.clusters_audit[0].group_id == "kubehenge-clusters-audit" &&
+      proxmox_acl.clusters_audit[0].path == "/" && !proxmox_acl.clusters_audit[0].propagate &&
+      proxmox_acl.clusters_audit[0].role_id == "kubehenge-audit" &&
+      toset(proxmox_virtual_environment_role.audit.privileges) == toset(["Sys.Audit"])
+    )
+    error_message = "the group holds Sys.Audit on / alone, unpropagated"
+  }
+
+  assert {
+    condition = (
+      toset([for k, a in proxmox_acl.provisioner : k if startswith(a.path, "/access/groups/")]) == toset([
+        "/access/groups/kubehenge-clusters kubehenge-provisioner-users",
+        "/access/groups/kubehenge-clusters-audit kubehenge-provisioner-users",
+      ]) &&
+      !proxmox_acl.provisioner["/access/groups/kubehenge-clusters-audit kubehenge-provisioner-users"].propagate &&
+      length([for k, a in proxmox_acl.provisioner : k if a.path == "/" && a.role_id != "kubehenge-audit"]) == 0
+    )
+    error_message = "the controller may change the group's members, and gains nothing on / itself"
+  }
+
+  assert {
+    condition = (
+      length([for k, a in proxmox_acl.clusters : k if a.path == "/"]) == 0 &&
+      yamldecode(helm_release.kubehenge.values[0]).proxmox.sysAuditGroup == "kubehenge-clusters-audit"
+    )
+    error_message = "the clusters' group gets nothing more; the controller learns the group"
+  }
+
+  assert {
+    condition     = contains(output.proxmox_objects.groups, "kubehenge-clusters-audit")
+    error_message = "a destroy is checked for the group too"
   }
 }
 

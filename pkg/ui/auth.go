@@ -33,6 +33,9 @@ type sessionView struct {
 	// CanTrust tells whether the user holds Sys.Modify on the workload pool, which installing
 	// Rancher and trusting identity providers of one's own need; unset when not known.
 	CanTrust *bool `json:"canTrust,omitempty"`
+	// CanAudit tells whether the user holds Sys.Audit on /, which giving a cluster's token the same
+	// for its HA group labels needs; unset when not known.
+	CanAudit *bool `json:"canAudit,omitempty"`
 	// Namespace is where the interface creates clusters, so it can offer the ones a new cluster
 	// can be linked with.
 	Namespace string `json:"namespace,omitempty"`
@@ -161,6 +164,10 @@ func (s *Server) whoAmI(w http.ResponseWriter, r *http.Request, u user) {
 	if held, err := s.Accounts.Privileges(r.Context(), u.ticket, s.workloadPoolPath()); err == nil {
 		create, trust := held.Has(privChange), held.Has(privKubeconfig)
 		v.CanCreate, v.CanTrust = &create, &trust
+	}
+	if held, err := s.Accounts.Privileges(r.Context(), u.ticket, "/"); err == nil {
+		audit := held.Has(privSysAudit)
+		v.CanAudit = &audit
 	}
 	writeJSON(w, http.StatusOK, v)
 }

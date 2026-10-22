@@ -23,6 +23,8 @@ export interface Session {
   canCreate?: boolean;
   /** Whether the user may install Rancher and trust identity providers of their own: Sys.Modify on the workload pool. */
   canTrust?: boolean;
+  /** Whether the user holds Sys.Audit on /, which a cluster's token gets with the HA group labels. */
+  canAudit?: boolean;
   /** The namespace the interface creates clusters in. */
   namespace?: string;
 }
@@ -390,6 +392,8 @@ export interface ManagementSettings {
   backupTargets?: BackupTarget[];
   /** The weekly build of the Ubuntu VM templates; absent, it runs with its defaults. */
   templateRefresh?: TemplateRefreshSettings;
+  /** Clusters may choose the cloud controller manager's HA group labels, with Sys.Audit on / for their token. */
+  clusterSysAudit?: boolean;
 }
 
 /** When and where the Ubuntu VM templates are built again; empty fields take the defaults. */

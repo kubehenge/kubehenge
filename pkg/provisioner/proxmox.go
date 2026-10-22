@@ -25,6 +25,11 @@ type Settings struct {
 	// DatastoreRole is given to the user of a cluster that holds Datastore.Allocate on its storage,
 	// there; it carries the group's privileges on the storage too, which it replaces.
 	DatastoreRole string
+	// SysAuditGroup holds Sys.Audit on /, unpropagated; the user of a cluster whose cloud
+	// controller manager labels nodes with their HA groups joins it. Proxmox VE lets only
+	// Permissions.Modify on / grant anything on /, which would let the controller grant itself every
+	// privilege, so a cluster gets it through the group rather than an ACL of its own.
+	SysAuditGroup string
 	// Node, when set, is where volume owner VMs are created; otherwise the first online node.
 	Node string
 	// Region names the Proxmox VE cluster to the clusters (topology.kubernetes.io/region);
@@ -60,6 +65,8 @@ type Proxmox struct {
 type Access struct {
 	// DatastoreAllocate are the storages the user holds Settings.DatastoreRole on.
 	DatastoreAllocate []string
+	// SysAudit puts the user in Settings.SysAuditGroup, for Sys.Audit on /.
+	SysAudit bool
 }
 
 // Ensure creates whatever of the cluster's objects is missing, and gives its user access and no
@@ -133,7 +140,7 @@ func (p *Proxmox) ensureAccess(ctx context.Context, n Names, access Access) ([]p
 	if err != nil {
 		return nil, err
 	}
-	if err := p.ensureUser(ctx, n); err != nil {
+	if err := p.ensureUser(ctx, n, access); err != nil {
 		return nil, err
 	}
 	if err := p.ensureGrant(ctx, n, access); err != nil {
@@ -289,24 +296,60 @@ func (p *Proxmox) ensurePool(ctx context.Context, pool string) ([]poolMember, er
 	return nil, nil
 }
 
-// ensureUser creates the cluster's user in the clusters' group. Proxmox VE shows the token a user
-// of that group; of one that does not exist it says "no such user", and one of the same name
+// ensureUser creates the cluster's user in the clusters' group, and keeps it in the group holding
+// Sys.Audit on / exactly while access asks for that. Proxmox VE shows the token a user of the
+// clusters' group; of one that does not exist it says "no such user", and one of the same name
 // outside the group it refuses to show, whose creation then fails rather than take it over.
-func (p *Proxmox) ensureUser(ctx context.Context, n Names) error {
-	err := p.Client.Get(ctx, "/access/users/"+url.PathEscape(n.User), &map[string]any{})
+func (p *Proxmox) ensureUser(ctx context.Context, n Names, access Access) error {
+	if access.SysAudit && p.Settings.SysAuditGroup == "" {
+		return fmt.Errorf("giving %s Sys.Audit on /: the controller has no group for it", n.User)
+	}
+	var user struct {
+		Groups []string `json:"groups"`
+	}
+	err := p.Client.Get(ctx, "/access/users/"+url.PathEscape(n.User), &user)
 	switch {
 	case err == nil:
-		return nil
+		return p.ensureSysAudit(ctx, n, access, user.Groups)
 	case !isMissing(err) && !proxmox.IsNotAuthorized(err):
 		return fmt.Errorf("reading user %s: %w", n.User, err)
 	}
+	groups := p.Settings.Group
+	if access.SysAudit {
+		groups += "," + p.Settings.SysAuditGroup
+	}
 	err = p.Client.Post(ctx, "/access/users", map[string]any{
-		"userid":  n.User,
-		"groups":  p.Settings.Group,
-		"comment": "Kubernetes cluster " + n.Pool + "; signs in with its API token only",
+		"userid":    n.User,
+		groupsParam: groups,
+		"comment":   "Kubernetes cluster " + n.Pool + "; signs in with its API token only",
 	}, nil)
 	if err != nil {
 		return fmt.Errorf("creating user %s: %w", n.User, err)
+	}
+	return nil
+}
+
+// groupsParam is Proxmox VE's parameter for a user's groups, a comma-separated list.
+const groupsParam = "groups"
+
+// ensureSysAudit adds the user, a member of groups, to the group holding Sys.Audit on / or takes
+// it out, as access asks. Proxmox VE replaces a user's groups with those it is given unless told
+// to append, so taking one away gives it the others back.
+func (p *Proxmox) ensureSysAudit(ctx context.Context, n Names, access Access, groups []string) error {
+	group := p.Settings.SysAuditGroup
+	if group == "" || slices.Contains(groups, group) == access.SysAudit {
+		return nil
+	}
+	path := "/access/users/" + url.PathEscape(n.User)
+	if access.SysAudit {
+		if err := p.Client.Put(ctx, path, map[string]any{groupsParam: group, "append": 1}, nil); err != nil {
+			return fmt.Errorf("adding %s to group %s: %w", n.User, group, err)
+		}
+		return nil
+	}
+	others := slices.DeleteFunc(slices.Clone(groups), func(g string) bool { return g == group })
+	if err := p.Client.Put(ctx, path, map[string]any{groupsParam: strings.Join(others, ",")}, nil); err != nil {
+		return fmt.Errorf("taking %s out of group %s: %w", n.User, group, err)
 	}
 	return nil
 }

@@ -7,7 +7,18 @@ import { CSIDialog, csiOn, useCSIOffer } from "./CsiPlugin";
 import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBalancer";
 import { LogsDialog, logsOf, logsText } from "./Logs";
 import { OIDCProviders, cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
-import { HADialog, PlacementDialog, haOn, haText, placeOf, placeText, useHAOffered } from "./Placement";
+import {
+  HADialog,
+  HAGroupsDialog,
+  PlacementDialog,
+  haGroupsOn,
+  haOn,
+  haText,
+  placeOf,
+  placeText,
+  useHAGroupsOffer,
+  useHAOffered,
+} from "./Placement";
 import { PodSecurityFields, cisText, enforced, podSecurityOf, podSecurityText } from "./PodSecurity";
 import type { Cluster, OIDCProvider } from "./types";
 import {
@@ -21,6 +32,7 @@ import {
   registerHint,
   registeredWithRancher,
   csiText,
+  haGroupsText,
   useChange,
 } from "./ui";
 import { flag, record, text, texts } from "./values";
@@ -30,6 +42,7 @@ export type OptionAction =
   | "placement"
   | "ha"
   | "csi"
+  | "haGroups"
   | "headlamp"
   | "monitoring"
   | "logs"
@@ -95,6 +108,9 @@ export function OptionDialog({
     case "csi": {
       return <CSIDialog cluster={c} onClose={onClose} />;
     }
+    case "haGroups": {
+      return <HAGroupsDialog cluster={c} onClose={onClose} />;
+    }
     case "oidc": {
       break;
     }
@@ -153,6 +169,7 @@ export function Options<A extends string = never>({
   const upgrades = upgradePolicy(c.variables["upgrades"]);
   const haOffered = useHAOffered(c.class, text(c.variables["storage"]));
   const csi = useCSIOffer(c);
+  const haGroups = useHAGroupsOffer(c);
   const cis = c.variables["cis"] === true;
   const podSecurity = enforced(podSecurityOf(c.variables["podSecurity"]), cis);
   const rows: OptionRow<OptionAction | A>[] = [
@@ -178,6 +195,14 @@ export function Options<A extends string = never>({
   // choice, so that it can be switched back.
   if (csi.offered || csiOn(c)) {
     rows.push({ label: "CSI plugin", value: csiText(csiOn(c)), action: "csi", name: "the CSI plugin" });
+  }
+  if (haGroups.offered || haGroupsOn(c)) {
+    rows.push({
+      label: "HA group labels",
+      value: haGroupsText(haGroupsOn(c)),
+      action: "haGroups",
+      name: "the HA group labels",
+    });
   }
   rows.push(
     {

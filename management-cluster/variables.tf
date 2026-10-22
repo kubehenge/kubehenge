@@ -341,6 +341,13 @@ variable "template_refresh" {
   }
 }
 
+variable "cluster_sys_audit" {
+  description = "Let each cluster choose the cloud controller manager's HA group labels, which need Sys.Audit on /: Kubehenge's controller then adds that cluster's user to a group holding Sys.Audit on /, unpropagated, so that its token can list Proxmox VE's HA groups and rules and read the rest of the Proxmox VE cluster's own configuration, but nothing of its guests, storages, nodes or users. Off, no cluster's token holds Sys.Audit on / and nodes go without the labels."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "controller_image" {
   description = "Image of Kubehenge's controller by digest, as repository@sha256:<digest>, instead of the one the chart was released with."
   type        = string

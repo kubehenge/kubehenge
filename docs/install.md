@@ -217,7 +217,7 @@ On first sign-in, an administrator sees the setup page. It creates the managemen
 
 The signed-in user needs these privileges on `/`, which the Administrator role holds:
 
-`Sys.Modify`, `Permissions.Modify`, `User.Modify`, `Realm.AllocateUser`, `Pool.Allocate`, `VM.Allocate`, `Datastore.AllocateSpace`, `Datastore.AllocateTemplate`
+`Sys.Modify`, `Permissions.Modify`, `User.Modify`, `Group.Allocate`, `Realm.AllocateUser`, `Pool.Allocate`, `VM.Allocate`, `Datastore.AllocateSpace`, `Datastore.AllocateTemplate`
 
 Proxmox VE checks every call of the run again on its own. Anyone without them sees that Kubehenge is not set up yet. The same privileges open the Administration page later: Kubehenge's upgrades, repair access, the VM templates, the management cluster's settings (applying them again or changing them) and removal. They also bring the warnings about the [backup](#back-up-the-appliance) and the [certificate](#the-appliances-certificate).
 
@@ -244,6 +244,7 @@ The run acts with your own Proxmox VE session: the interface renews your ticket 
 | HA rules for cluster creators | Off by default. When on, everyone who may create or change a cluster can place it on the nodes of one of Proxmox VE's HA node-affinity rules without `Sys.Audit` on `/` of their own ([clusters.md](clusters.md#machines)). See [below](#ha-rules-for-cluster-creators). |
 | CSI plugin | Off by default. When on, clusters may choose the CSI plugin's newest release ([below](#the-csi-plugins-newest-release)). |
 | Template refresh | On by default: the Ubuntu VM templates are built again every week with Ubuntu's updates, and clusters' nodes move to each build in their maintenance windows once it is a day old ([templates.md](templates.md#the-weekly-build)). **Day**, **Time** and **Time zone** say when (Sunday at 01:00 UTC unless changed); **Template disks**, one of the storages for clusters, where the builds go (the first by default); **Build address**, with its gateway and DNS servers, a static address for the VM that prepares an image, which otherwise takes DHCP on the first bridge for clusters. **Let those who may create clusters have a missing template built** (recommended, off by default) lets anyone with `VM.Allocate` on the workload pool ask for the cloud image's template or a kubeadm version's from the create wizard; the build runs with the refresh's token, never theirs. See [below](#what-the-template-builds-may-do). |
+| HA group labels | Off by default. When on, clusters may have their nodes labelled with Proxmox VE's HA groups ([below](#ha-group-labels)). |
 | Advanced: Registry mirrors | `registry=endpoint`, one per line, such as `ghcr.io=https://mirror.example.org:5000`: endpoints the management cluster's nodes try before the registry itself. |
 | Advanced: Pod ranges, Service ranges | The management cluster's own. When empty, the first of a few private ranges clear of the nodes' network, the API address and the gateway is taken: `10.244.0.0/16` and `10.96.0.0/12` when they are clear. |
 | State passphrase | Encrypts the management cluster's state on the appliance ([below](#the-state-passphrase)); asked for twice on the first run. |
@@ -301,6 +302,10 @@ It can touch no VM outside the template pool, no cluster's VM and none of the ma
 - **Kubehenge's controller can read every Secret in the management cluster**, which it needs for the clusters' credentials, so whoever takes over the controller holds this token too, as it holds Cluster API's.
 
 Switching the refresh off removes the user, its token and the CronJob; the templates stay.
+
+#### HA group labels
+
+The cloud controller manager labels each node with the Proxmox VE HA groups, or node-affinity HA rules, its Proxmox VE node is in. Proxmox VE lists them only with `Sys.Audit` on `/`, which clusters' tokens do not hold unless this setting is on. With it, a cluster may ask for the labels ([clusters.md](clusters.md#machines)); its token then holds `Sys.Audit` on `/`. The setting creates a group, `<name>-clusters-audit`, holding `Sys.Audit` on `/` without propagation, and gives Kubehenge's controller `User.Modify` on that group, so that it can add the user of a cluster that asks for the labels to it and take it out again. The controller gets nothing on `/` itself: granting there takes `Permissions.Modify` on `/`. Switching it off removes the group, and with it every cluster's `Sys.Audit` on `/`.
 
 The appliance keeps the module's other settings at their defaults: the management cluster is named `kubehenge`, its nodes have 4 vCPUs, 4 GiB of memory and a 32 GB disk, and it creates the pools `kubehenge` (clusters), `kubehenge-templates` (VM templates) and `kubehenge-management` (its own VMs).
 
@@ -428,6 +433,7 @@ tofu output -raw talosconfig > talosconfig
 | `offer_ha_rules` | `false` | Offer Proxmox VE's HA node-affinity rules, each one's name and nodes, to those with `VM.Allocate` on the workload pool or a cluster's pool who lack `Sys.Audit` on `/`, read with the controller's own token ([above](#ha-rules-for-cluster-creators)). Asks nothing new of Proxmox VE. |
 | `cluster_datastore_allocate` | `false` | Let clusters choose the CSI plugin's newest release, with `Datastore.Allocate` for the cluster's token on a storage of its own, granted by the controller ([above](#the-csi-plugins-newest-release)). |
 | `template_refresh` | on, `Sun` `01:00` `UTC`, 24 h soak | The weekly build of the Ubuntu VM templates ([templates.md](templates.md#the-weekly-build)) and its own API token ([above](#what-the-template-builds-may-do)): `enabled`; `weekday`, `time` (`HH:MM`) and `time_zone`; `soak_hours`, how old a build is before clusters move to it (0 to 720); `node` (the first of `proxmox_nodes`), `storage` (the first of `workload_datastores`), `import_datastore` (`image_datastore`), `iso_datastore` (`bootstrap_datastore`), `bridge` (the first of `workload_bridges`) and `vlan`; `address` with prefix, `gateway` and `dns` for the VM that prepares an image, DHCP when unset; `creator_builds` (`false`), letting those who may create clusters have a missing template built. |
+| `cluster_sys_audit` | `false` | Let clusters choose the cloud controller manager's HA group labels, with `Sys.Audit` on `/`, unpropagated, for the cluster's token through a group the controller adds its user to ([above](#ha-group-labels)). |
 
 Outputs: `kubeconfig` and `talosconfig` (sensitive), `api_endpoint`, and `proxmox_objects`, which lists everything the module made on Proxmox VE.
 

@@ -119,6 +119,26 @@ resource "proxmox_acl" "clusters" {
   propagate = each.value.propagate
 }
 
+# The cloud controller manager lists HA groups and rules for its HA group labels, which Proxmox VE
+# allows only with Sys.Audit on /. The controller adds the user of a cluster that asks for them to
+# this group: granting anything on / itself would take Permissions.Modify on /, with which the
+# controller could grant itself every privilege.
+resource "proxmox_virtual_environment_group" "clusters_audit" {
+  count = var.cluster_sys_audit ? 1 : 0
+
+  group_id = "${var.cluster_name}-clusters-audit"
+  comment  = "Clusters created by Kubehenge management cluster ${var.cluster_name} that label their nodes with Proxmox VE HA groups"
+}
+
+resource "proxmox_acl" "clusters_audit" {
+  count = var.cluster_sys_audit ? 1 : 0
+
+  group_id  = proxmox_virtual_environment_group.clusters_audit[0].group_id
+  path      = "/"
+  role_id   = proxmox_virtual_environment_role.audit.role_id
+  propagate = false
+}
+
 # Kubehenge's controller creates each cluster's pool, user, token, ACL and volume owner VM, and
 # nothing outside the workload pool and the clusters' group. VM.Migrate and VM.Config.Disk move a
 # volume owner VM to the node of a volume on node-local storage and delete the volume through it;
@@ -209,6 +229,8 @@ locals {
     # Granting a cluster's user the role on its storage. Without Permissions.Modify, Proxmox VE lets a
     # user grant on a storage only privileges it holds there, with Datastore.Allocate.
     [for s in local.datastore_allocate_storages : { path = "/storage/${s}", role = proxmox_virtual_environment_role.cluster_datastore[0].role_id, propagate = false }],
+    # Adding a cluster's user to the group holding Sys.Audit on /, and taking it out again.
+    [for g in proxmox_virtual_environment_group.clusters_audit : { path = "/access/groups/${g.group_id}", role = proxmox_virtual_environment_role.provisioner_users.role_id, propagate = false }],
   )
 }
 
@@ -321,6 +343,7 @@ resource "proxmox_download_file" "talos" {
   depends_on = [
     proxmox_acl.cluster_api,
     proxmox_acl.clusters,
+    proxmox_acl.clusters_audit,
     proxmox_acl.ha,
     proxmox_acl.provisioner,
     proxmox_acl.template_builder,

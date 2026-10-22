@@ -73,6 +73,9 @@ type Reconciler struct {
 	RancherKubernetes KubernetesMinors
 	// DatastoreAllocate is what lets a cluster hold Datastore.Allocate on its storage.
 	DatastoreAllocate DatastoreAllocate
+	// SysAuditGroup is the Proxmox VE group holding Sys.Audit on / that a cluster's user joins for
+	// the cloud controller manager's HA group labels; empty when no cluster may.
+	SysAuditGroup string
 
 	ids ciliumIDs
 }
@@ -242,38 +245,62 @@ func (r *Reconciler) cloudObjects(ctx context.Context, cluster *clusterv1.Cluste
 	return names, held, nil
 }
 
-// access is what the cluster's user gets beyond its pool: Datastore.Allocate on its storage when
-// its csi variable asks for it and nothing stands in the way. When something does, it says why on
-// the Cluster, and the cluster keeps the CSI plugin that needs no more than its group's rights.
+// access is what the cluster's user gets beyond its pool, as its variables ask and where nothing
+// stands in the way: Datastore.Allocate on its storage (csi), and Sys.Audit on / (ccm). When
+// something does, it says why on the Cluster, and the cluster goes without: it keeps the CSI plugin
+// that needs no more than its group's rights, and its nodes the labels they have.
 func (r *Reconciler) access(ctx context.Context, cluster *clusterv1.Cluster) (Access, error) {
-	csi, err := csiOf(cluster)
-	if err != nil || !csi.DatastoreAllocate {
+	storages, err := r.datastoreAllocate(ctx, cluster)
+	if err != nil {
 		return Access{}, err
 	}
-	class := &clusterv1.ClusterClass{}
-	if err = r.Client.Get(ctx, client.ObjectKey{Namespace: r.ClassNamespace, Name: cluster.Spec.Topology.ClassRef.Name}, class); err != nil {
-		return Access{}, fmt.Errorf("reading the cluster's ClusterClass: %w", err)
-	}
-	clusters := &clusterv1.ClusterList{}
-	if err = r.Client.List(ctx, clusters); err != nil {
-		return Access{}, fmt.Errorf("listing clusters: %w", err)
-	}
-	refused, err := r.DatastoreAllocate.Refusal(cluster, class, clusters.Items, r.ClassNamespace)
+	audit, refused, err := sysAudit(cluster, r.SysAuditGroup)
 	if err != nil {
 		return Access{}, err
 	}
 	if refused != "" {
-		ctrl.LoggerFrom(ctx).Info("not granting Datastore.Allocate: " + refused)
-		if r.Events != nil {
-			r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, "DatastoreAllocateRefused", "GrantDatastoreAllocate", "%s", refused)
-		}
-		return Access{}, nil
+		r.refuse(ctx, cluster, "SysAudit", refused)
+	}
+	return Access{DatastoreAllocate: storages, SysAudit: audit}, nil
+}
+
+// datastoreAllocate are the storages the cluster's user is to hold Datastore.Allocate on: its own,
+// when its csi variable asks for it and nothing stands in the way.
+func (r *Reconciler) datastoreAllocate(ctx context.Context, cluster *clusterv1.Cluster) ([]string, error) {
+	csi, err := csiOf(cluster)
+	if err != nil || !csi.DatastoreAllocate {
+		return nil, err
+	}
+	class := &clusterv1.ClusterClass{}
+	if err = r.Client.Get(ctx, client.ObjectKey{Namespace: r.ClassNamespace, Name: cluster.Spec.Topology.ClassRef.Name}, class); err != nil {
+		return nil, fmt.Errorf("reading the cluster's ClusterClass: %w", err)
+	}
+	clusters := &clusterv1.ClusterList{}
+	if err = r.Client.List(ctx, clusters); err != nil {
+		return nil, fmt.Errorf("listing clusters: %w", err)
+	}
+	refused, err := r.DatastoreAllocate.Refusal(cluster, class, clusters.Items, r.ClassNamespace)
+	if err != nil {
+		return nil, err
+	}
+	if refused != "" {
+		r.refuse(ctx, cluster, "DatastoreAllocate", refused)
+		return nil, nil
 	}
 	storage, err := variable[string](cluster, "storage")
 	if err != nil {
-		return Access{}, err
+		return nil, err
 	}
-	return Access{DatastoreAllocate: []string{storage}}, nil
+	return []string{storage}, nil
+}
+
+// refuse logs and records on the Cluster why its user does not get privilege, as the event
+// <privilege>Refused.
+func (r *Reconciler) refuse(ctx context.Context, cluster *clusterv1.Cluster, privilege, why string) {
+	ctrl.LoggerFrom(ctx).Info("privilege refused", "privilege", privilege, "reason", why)
+	if r.Events != nil {
+		r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, privilege+"Refused", "Grant"+privilege, "%s", why)
+	}
 }
 
 // ensureCloud creates the cluster's Proxmox VE objects, keeping what it creates as it goes.

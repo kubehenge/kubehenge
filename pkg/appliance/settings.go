@@ -59,6 +59,9 @@ type Settings struct {
 	// TemplateRefresh is the weekly build of the Ubuntu VM templates; unset, it runs with the
 	// module's defaults.
 	TemplateRefresh *TemplateRefresh `json:"templateRefresh,omitempty"`
+	// ClusterSysAudit lets a cluster choose the cloud controller manager's HA group labels, whose
+	// token then holds Sys.Audit on /.
+	ClusterSysAudit bool `json:"clusterSysAudit,omitempty"`
 }
 
 // TemplateRefresh is when and where the Ubuntu VM templates are built again. Empty fields take the

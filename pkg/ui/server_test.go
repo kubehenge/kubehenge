@@ -273,7 +273,7 @@ func newHarness(t *testing.T, objects ...client.Object) *harness {
 		grants: map[string]map[string][]string{
 			"admin@pve": {"/": {
 				"VM.Audit", "VM.Allocate", "Sys.Modify", "Datastore.AllocateSpace", "SDN.Use",
-				"Permissions.Modify", "User.Modify", "Realm.AllocateUser", "Pool.Allocate", "Datastore.AllocateTemplate", "Sys.Audit",
+				"Permissions.Modify", "User.Modify", "Group.Allocate", "Realm.AllocateUser", "Pool.Allocate", "Datastore.AllocateTemplate", "Sys.Audit",
 			}},
 			"viewer@pve": {"/pool/kubehenge/default.one": {"VM.Audit"}},
 			"dev@pve": {
@@ -327,6 +327,7 @@ func rke2Class() *clusterv1.ClusterClass {
 			{Name: "headlamp", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
 			{Name: "rancher", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
 			{Name: "csi", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+			{Name: "ccm", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
 			{Name: "oidc", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "array", Default: &apiextensionsv1.JSON{
 				Raw: []byte(`[{"issuerURL":"https://sso.example","clientID":"kubernetes"},{"issuerURL":"https://lab.example","clientID":"lab"}]`),
 			}})},
@@ -694,6 +695,7 @@ func TestCreateChecksProxmoxPrivileges(t *testing.T) {
 		"vnet":    {"dev@pve", strings.Replace(createBody, `"bridge":"vmbr0"`, `"bridge":"tenants"`, 1)},
 		"rancher": {"dev@pve", strings.Replace(createBody, `"storage":`, `"rancher":{"install":true,"hostname":"rancher.example"},"storage":`, 1)},
 		"csi":     {"dev@pve", strings.Replace(createBody, `"storage":`, `"csi":{"datastoreAllocate":true},"storage":`, 1)},
+		"ccm":     {"dev@pve", strings.Replace(createBody, `"storage":`, `"ccm":{"haGroups":true},"storage":`, 1)},
 		"viewer":  {"viewer@pve", createBody},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1091,6 +1093,44 @@ func TestDatastoreAllocateNeedsTheUsersOwn(t *testing.T) {
 	expect(t, b.do("POST", "/api/clusters", strings.Replace(noStorage, `"web"`, `"bare"`, 1)), http.StatusUnprocessableEntity)
 }
 
+// Sys.Audit on / for a cluster's token takes the user's own there.
+func TestHAGroupLabelsNeedTheUsersOwnSysAudit(t *testing.T) {
+	t.Parallel()
+	c := cluster("default", "one")
+	h := newHarness(t, c)
+	b := h.browser()
+	b.signIn("dev@pve")
+	switchOn := func() *httptest.ResponseRecorder {
+		return b.do("PATCH", "/api/clusters/default/one", `{"variables":{"ccm":{"haGroups":true}}}`)
+	}
+	expect(t, switchOn(), http.StatusForbidden)
+	if got := b.do("GET", "/api/session", "").Body.String(); !strings.Contains(got, `"canAudit":false`) {
+		t.Errorf("session = %s", got)
+	}
+	h.accounts.mu.Lock()
+	h.accounts.grants["dev@pve"]["/"] = []string{"Sys.Audit"}
+	h.accounts.mu.Unlock()
+	if got := b.do("GET", "/api/session", "").Body.String(); !strings.Contains(got, `"canAudit":true`) {
+		t.Errorf("session = %s", got)
+	}
+	expect(t, switchOn(), http.StatusOK)
+	got := &clusterv1.Cluster{}
+	if err := h.kube.Get(t.Context(), client.ObjectKeyFromObject(c), got); err != nil {
+		t.Fatal(err)
+	}
+	if v := string(variableValue(got, "ccm")); v != `{"haGroups":true}` {
+		t.Fatalf("ccm = %s", v)
+	}
+
+	// Switching it off takes nothing.
+	h.accounts.mu.Lock()
+	delete(h.accounts.grants["dev@pve"], "/")
+	h.accounts.mu.Unlock()
+	expect(t, b.do("PATCH", "/api/clusters/default/one", `{"variables":{"ccm":{"haGroups":false}}}`), http.StatusOK)
+	created := strings.Replace(createBody, `"storage":`, `"ccm":{"haGroups":true},"storage":`, 1)
+	expect(t, b.do("POST", "/api/clusters", created), http.StatusForbidden)
+}
+
 func TestClusterShowsWhereItsVMsRun(t *testing.T) {
 	t.Parallel()
 	machine := func(name, infra string, controlPlane bool) *clusterv1.Machine {
@@ -1247,7 +1287,7 @@ func TestClasses(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &classes); err != nil || len(classes) != 1 {
 		t.Fatalf("classes = %s", rec.Body)
 	}
-	if c := classes[0]; c.Distribution != "rke2" || len(c.Variables) != 7 || !c.Variables[0].Required || c.Variables[0].Schema.Format != "ipv4" ||
+	if c := classes[0]; c.Distribution != "rke2" || len(c.Variables) != 8 || !c.Variables[0].Required || c.Variables[0].Schema.Format != "ipv4" ||
 		c.Annotations["kubehenge.dev/default-pods"] != "10.42.0.0/16" {
 		t.Fatalf("class = %+v", c)
 	}

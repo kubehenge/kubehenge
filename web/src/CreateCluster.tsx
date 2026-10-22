@@ -9,6 +9,7 @@ import {
   csiOffer,
   csiProblems,
   fieldProblems,
+  haGroupsProblems,
   newForm,
   offeredBridges,
   offeredStorages,
@@ -25,7 +26,7 @@ import {
   type Step,
 } from "./create-form";
 import { GeneralStep, IdentityStep, MachinesStep, NetworkStep } from "./CreateSteps";
-import { offersHA, useHARules } from "./Placement";
+import { haGroupsOffer, offersHA, useCanAudit, useHARules } from "./Placement";
 import { navigate } from "./router";
 import type { Bridge, Cluster, ClusterClass, PveNode, Storage, Versions } from "./types";
 import { Dialog, ErrorBox, errorMessage, filled, sole } from "./ui";
@@ -60,6 +61,7 @@ export function CreateCluster({
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [nodes, setNodes] = useState<PveNode[]>([]);
   const rules = useHARules();
+  const canAudit = useCanAudit();
   const [step, setStep] = useState<Step>("General");
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -158,6 +160,7 @@ export function CreateCluster({
   );
   const haOffered = offersHA(cls, usableStorages, form.storage);
   const csi = csiOffer({ cls, storages: usableStorages, storage: form.storage, clusters });
+  const haGroups = haGroupsOffer(cls, canAudit);
 
   const chooseClass = (name: string): void => {
     const c = classes.find((x) => x.name === name);
@@ -173,7 +176,11 @@ export function CreateCluster({
   const index = steps.indexOf(step);
   const previous = steps[index - 1];
   const following = steps[index + 1];
-  const byField = { ...fieldProblems(step, form, cls), ...csiProblems(step, form, csi) };
+  const byField = {
+    ...fieldProblems(step, form, cls),
+    ...csiProblems(step, form, csi),
+    ...haGroupsProblems(step, form, haGroups),
+  };
   const open = Object.values(byField);
   const shown = (k: FieldKey): string | undefined => (attempted.has(step) || touched.has(k) ? byField[k] : undefined);
   const wizardRef = useRef<HTMLDivElement>(null);
@@ -260,6 +267,7 @@ export function CreateCluster({
               placed={variable(cls, "allowedNodes") !== undefined}
               haOffered={haOffered}
               csi={csi}
+              haGroups={haGroups}
               nodes={nodes}
               rules={rules}
             />
@@ -279,7 +287,7 @@ export function CreateCluster({
           {step === "Confirm" && cls && (
             <>
               <dl className="summary" aria-label="Summary">
-                {summary(form, cls, { ha: haOffered, csi: csi.offered }).map(([k, v]) => (
+                {summary(form, cls, { ha: haOffered, csi: csi.offered, haGroups: haGroups.offered }).map(([k, v]) => (
                   <Fragment key={k}>
                     <dt>{k}</dt>
                     <dd>{v}</dd>

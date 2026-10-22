@@ -593,6 +593,32 @@ func TestClusterDatastoreAllocateReachesTheModule(t *testing.T) {
 	}
 }
 
+func TestClusterSysAuditReachesTheModule(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	for _, on := range []bool{false, true} {
+		s := settings("pve1")
+		s.ClusterSysAudit = on
+		if err := a.Apply(s, "correct horse battery staple", ticket(), func(context.Context, []byte) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+		if j := waitFor(t, a); j.State != "succeeded" {
+			t.Fatalf("job = %+v", j)
+		}
+		main, err := os.ReadFile(filepath.Join(a.Dir, "management", "main.tf"))
+		if err != nil || !strings.Contains(string(main), "cluster_sys_audit          = var.settings.clusterSysAudit") {
+			t.Fatalf("main.tf: %v\n%s", err, main)
+		}
+		vars, err := os.ReadFile(filepath.Join(a.Dir, "management", "terraform.tfvars.json"))
+		if want := fmt.Sprintf(`"clusterSysAudit": %t`, on); err != nil || !strings.Contains(string(vars), want) {
+			t.Fatalf("tfvars want %s: %v\n%s", want, err, vars)
+		}
+		if a.SavedSettings().ClusterSysAudit != on {
+			t.Errorf("the setting %t was not kept", on)
+		}
+	}
+}
+
 func TestJobViewCarriesTheEndOfALongLog(t *testing.T) {
 	t.Parallel()
 	j := &Job{Kind: "apply", State: "running"}

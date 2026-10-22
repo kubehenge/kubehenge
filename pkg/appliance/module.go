@@ -57,6 +57,7 @@ module "management" {
   template_refresh       = var.settings.templateRefresh
 
   cluster_datastore_allocate = var.settings.clusterDatastoreAllocate
+  cluster_sys_audit          = var.settings.clusterSysAudit
 }
 
 output "kubeconfig" {
@@ -168,6 +169,7 @@ func (a *Appliance) writeConfig(s *Settings) error {
 		"templateRefresh":        moduleTemplateRefresh(s.TemplateRefresh),
 
 		"clusterDatastoreAllocate": s.ClusterDatastoreAllocate,
+		"clusterSysAudit":          s.ClusterSysAudit,
 	}}
 	raw, err := json.MarshalIndent(vars, "", "  ")
 	if err != nil {

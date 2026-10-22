@@ -213,6 +213,8 @@ case "${test}" in
     rke2)
         # MetalLB is the default the other distributions run; kube-vip gets a cluster of its own.
         export KUBEHENGE_E2E_LOAD_BALANCER=kube-vip
+        # The one cluster whose nodes get their HA group labels, with Sys.Audit on / for its token.
+        export KUBEHENGE_E2E_HA_GROUPS=1
         e2e e2e-workload-cluster CLASS=kubehenge-rke2 VERSION="${from}+rke2r1" UPGRADE="${to}+rke2r1"
         ;;
     k3s)

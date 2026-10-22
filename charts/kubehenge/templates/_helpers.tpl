@@ -189,6 +189,23 @@ never below its distribution's documented minimum for a node.
             Kubehenge's administrator lets clusters choose it, and on a storage that neither the
             management cluster, its templates nor another cluster uses. Off, the cluster runs the
             plugin's last release that needs no more than Datastore.AllocateSpace.
+- name: ccm
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: The Proxmox VE cloud controller manager, which every cluster runs for its nodes.
+      properties:
+        haGroups:
+          type: boolean
+          default: false
+          description: >-
+            Give the cluster's Proxmox VE token Sys.Audit on /, unpropagated, so that the cloud
+            controller manager labels each node group.topology.proxmox.sinextra.dev/<group> for
+            each Proxmox VE HA group, or node-affinity HA rule, its Proxmox VE node is in. The
+            token may then also read the rest of the Proxmox VE cluster's own configuration, but
+            nothing of its guests, storages or nodes. Only where Kubehenge's administrator lets
+            clusters choose it.
 - name: controlPlaneMachine
   required: false
   schema:

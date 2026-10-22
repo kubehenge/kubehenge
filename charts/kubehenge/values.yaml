@@ -98,6 +98,11 @@ proxmox:
   datastoreAllocate:
     role: ""
     managementStorages: []
+  # Group holding Sys.Audit on /, unpropagated, that the controller adds the user of each cluster
+  # asking for the cloud controller manager's HA group labels (its ccm variable) to; the
+  # controller's token needs User.Modify on /access/groups/<group>. Empty: no cluster may ask for
+  # them.
+  sysAuditGroup: ""
 
 # Building the Ubuntu VM templates again every week, with the updates Ubuntu published since, as a
 # CronJob signed in with a token of its own. Clusters move their nodes to a new build inside their

@@ -89,6 +89,7 @@ export interface SetupForm {
   refreshGateway: string;
   refreshDNS: string;
   creatorBuilds: boolean;
+  clusterSysAudit: boolean;
   passphrase: string;
   confirm: string;
 }
@@ -191,6 +192,9 @@ export function settings(f: SetupForm): ManagementSettings {
     s.backupTargets = cleanTargets(f.backupTargets);
   }
   s.templateRefresh = refreshSettings(f);
+  if (f.clusterSysAudit) {
+    s.clusterSysAudit = true;
+  }
   return s;
 }
 
@@ -264,6 +268,7 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     clusterDatastoreAllocate: saved.clusterDatastoreAllocate === true,
     backupTargets: saved.backupTargets ?? [],
     ...refreshFields(saved.templateRefresh),
+    clusterSysAudit: saved.clusterSysAudit === true,
     passphrase: "",
     confirm: "",
   };
@@ -655,6 +660,7 @@ function ManagedSummary({
       s.clusterDatastoreAllocate === true ? "Clusters may choose it, on a storage of their own" : "Off",
     ],
     ["Template refresh", refreshSummary(s)],
+    ["HA group labels", s.clusterSysAudit === true ? "Clusters may choose them, with Sys.Audit on /" : "Off"],
     [
       "Identity providers",
       s.clusterOIDC && s.clusterOIDC.length > 0 ? s.clusterOIDC.map((p) => p.issuerURL).join(", ") : "None",
@@ -1133,6 +1139,30 @@ function RefreshChoice({ form, set, shown }: FieldsProps): JSX.Element {
   );
 }
 
+function SysAuditChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element {
+  const hint = useId();
+  return (
+    <fieldset className="group">
+      <legend>HA group labels</legend>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.clusterSysAudit}
+          aria-describedby={hint}
+          onChange={(e) => set("clusterSysAudit", e.target.checked)}
+        />{" "}
+        Let clusters label their nodes with Proxmox VE&apos;s HA groups
+      </label>
+      <p className="muted" id={hint}>
+        The cloud controller manager reads Proxmox VE&apos;s HA groups and node-affinity rules, which takes Sys.Audit on
+        /. A cluster that chooses the labels gets that, unpropagated, through a group Kubehenge&apos;s controller adds
+        its user to; it can then read the Proxmox VE cluster&apos;s own configuration, but nothing of its guests,
+        storages or nodes.
+      </p>
+    </fieldset>
+  );
+}
+
 function AdvancedFields({
   form,
   set,
@@ -1528,6 +1558,7 @@ function SetupWizard({
         <HARulesChoice form={form} set={set} />
         <DatastoreAllocateChoice form={form} set={set} />
         <RefreshChoice form={effective} set={set} shown={shown} />
+        <SysAuditChoice form={form} set={set} />
         <fieldset className="group">
           <legend>Identity providers</legend>
           <p className="muted">

@@ -52,7 +52,7 @@ const maxClusterName = 40
 
 // Variables a cluster may change after creation; the others describe where its VMs live.
 var changeableVariables = map[string]bool{
-	"headlamp": true, "monitoring": true, "logs": true, "backups": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, csiVariable: true,
+	"headlamp": true, "monitoring": true, "logs": true, "backups": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, csiVariable: true, ccmVariable: true,
 }
 
 // autoUpgraded is where Kubehenge's controller records the last automatic upgrade.
@@ -685,6 +685,9 @@ func (s *Server) mayCreate(w http.ResponseWriter, r *http.Request, u user, class
 	if allocatesDatastore(req.Variables[csiVariable]) && !s.allowDatastoreAllocate(w, r, u, req.Variables["storage"]) {
 		return false
 	}
+	if labelsHAGroups(req.Variables[ccmVariable]) && !s.require(w, r, u, "/", privSysAudit) {
+		return false
+	}
 	raw, ok := req.Variables[oidcVariable]
 	if !ok {
 		return true
@@ -844,6 +847,17 @@ func networkVariable(raw json.RawMessage) (string, string, bool) {
 // Datastore.Allocate on the cluster's storage.
 const csiVariable = "csi"
 
+// ccmVariable configures a cluster's cloud controller manager; its haGroups gives the cluster's
+// token Sys.Audit on / for the HA group labels.
+const ccmVariable = "ccm"
+
+func labelsHAGroups(raw json.RawMessage) bool {
+	var v struct {
+		HAGroups bool `json:"haGroups"`
+	}
+	return raw != nil && json.Unmarshal(raw, &v) == nil && v.HAGroups
+}
+
 func allocatesDatastore(raw json.RawMessage) bool {
 	var v struct {
 		DatastoreAllocate bool `json:"datastoreAllocate"`
@@ -973,6 +987,9 @@ func (s *Server) applyVariables(w http.ResponseWriter, r *http.Request, u user, 
 			return false
 		}
 		if name == csiVariable && allocatesDatastore(value) && !allocatesDatastore(old) && !s.allowDatastoreAllocate(w, r, u, variableValue(c, "storage")) {
+			return false
+		}
+		if name == ccmVariable && labelsHAGroups(value) && !labelsHAGroups(old) && !s.require(w, r, u, "/", privSysAudit) {
 			return false
 		}
 		if name == oidcVariable && !sameJSON(old, value) && !s.allowOIDC(w, r, u, c, access, value, old) {

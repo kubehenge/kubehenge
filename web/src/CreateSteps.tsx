@@ -16,7 +16,7 @@ import { CSIField } from "./CsiPlugin";
 import { LoadBalancerFields } from "./LoadBalancer";
 import { addressBits } from "./network";
 import { OIDCProviders } from "./OIDCProviders";
-import { HAField, PlacementFields, type HARulesRead } from "./Placement";
+import { HAField, HAGroupsField, PlacementFields, type HARulesRead } from "./Placement";
 import type { Bridge, ClusterClass, PveNode, Storage, TemplateBuilds, Versions } from "./types";
 import { ErrorBox, Field, bytes, cniName, distributionName, errorMessage, filled, maxWorkers, sentence } from "./ui";
 
@@ -396,6 +396,7 @@ export function MachinesStep({
   placed,
   haOffered,
   csi,
+  haGroups,
   nodes,
   rules,
 }: StepProps & {
@@ -404,6 +405,7 @@ export function MachinesStep({
   placed: boolean;
   haOffered: boolean;
   csi: { offered: boolean; problem: string | undefined };
+  haGroups: { offered: boolean; problem: string | undefined };
   nodes: PveNode[];
   rules: HARulesRead;
 }): JSX.Element {
@@ -442,6 +444,9 @@ export function MachinesStep({
           storage={filled(form.storage) ? form.storage : undefined}
           problem={csi.problem}
         />
+      )}
+      {haGroups.offered && (
+        <HAGroupsField checked={form.haGroups} onChange={(on) => set("haGroups", on)} problem={haGroups.problem} />
       )}
       <MachineFields
         label="Control plane"

@@ -24,6 +24,9 @@ const (
 	// privDatastoreAllocate is what a user gives a cluster's token on its storage when the cluster
 	// runs the CSI plugin's newest release, so it takes the user's own.
 	privDatastoreAllocate = "Datastore.Allocate"
+	// privSysAudit is what a user gives a cluster's token on / for its HA group labels, so it takes
+	// the user's own there.
+	privSysAudit = "Sys.Audit"
 )
 
 func storagePath(storage string) string { return "/storage/" + storage }

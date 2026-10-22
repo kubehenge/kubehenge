@@ -159,7 +159,7 @@ separate nodes.`,
 func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 	f.StringVar(&o.ccmChart, "ccm-chart", "", "cloud controller manager chart, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.csiChart, "csi-chart", "", "CSI plugin chart, as <repository>/<name>:<version>@sha256:<digest>")
-	o.datastoreAllocateFlags(f)
+	o.grantFlags(f)
 	f.StringVar(&o.ciliumChart, "cilium-chart", "", "Cilium chart, for distributions without a CNI of their own, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.calicoChart, "calico-chart", "", "Calico's operator chart, for distributions without a CNI of their own, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.headlampChart, "headlamp-chart", "", "Headlamp chart, for clusters that switch it on, as <repository>/<name>:<version>@sha256:<digest>")
@@ -194,8 +194,11 @@ func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 	}
 }
 
-// datastoreAllocateFlags are those that let clusters run the CSI plugin's newest release.
-func (o *controllerOptions) datastoreAllocateFlags(f *pflag.FlagSet) {
+// grantFlags are those that let clusters' tokens hold more than their pools: Datastore.Allocate
+// for the CSI plugin's newest release, Sys.Audit on / for the cloud controller manager's HA group
+// labels.
+func (o *controllerOptions) grantFlags(f *pflag.FlagSet) {
+	f.StringVar(&o.settings.SysAuditGroup, "sys-audit-group", "", "Proxmox VE group holding Sys.Audit on / that the user of each cluster asking for the cloud controller manager's HA group labels joins; empty to let no cluster join it")
 	f.StringVar(&o.csiNewestChart, "csi-newest-chart", "", "the CSI plugin's newest release, for clusters whose token holds Datastore.Allocate on their storage, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.settings.DatastoreRole, "datastore-allocate-role", "", "Proxmox VE role, holding Datastore.Allocate, each cluster that asks for it gets on its storage; empty to let no cluster hold it")
 	f.StringSliceVar(&o.r.DatastoreAllocate.Management, "management-storages", nil, "storages the management cluster uses, on which no cluster may hold Datastore.Allocate (comma-separated)")
@@ -229,10 +232,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	}
 	distributions := &provisioner.Distributions{ClassNamespace: o.r.ClassNamespace, Providers: providers}
 	cloud := &provisioner.Proxmox{Client: c, Settings: o.settings}
-	o.r.Cloud = cloud
-	o.r.DatastoreAllocate.Role = o.settings.DatastoreRole
-	o.r.Endpoint = provisioner.Endpoint{URL: strings.TrimSuffix(conn.URL, "/"), CA: string(ca), Insecure: conn.Insecure}
-	o.r.RancherKubernetes = rancherMinors
+	o.completeReconciler(cloud, provisioner.Endpoint{URL: strings.TrimSuffix(conn.URL, "/"), CA: string(ca), Insecure: conn.Insecure}, rancherMinors)
 
 	ctrl.SetLogger(zap.New())
 	scheme, err := controllerScheme()
@@ -262,6 +262,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 		RancherKubernetes: rancherMinors,
 		Nodes:             cloud,
 		DatastoreAllocate: o.r.DatastoreAllocate,
+		SysAuditGroup:     o.r.SysAuditGroup,
 		Releases: &provisioner.ReleaseChecksums{
 			Reader:    mgr.GetAPIReader(),
 			Client:    mgr.GetClient(),
@@ -287,6 +288,16 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 		return fmt.Errorf("the controller manager: %w", err)
 	}
 	return nil
+}
+
+// completeReconciler gives the reconciler what only the parsed flags and the connection make: the
+// grants clusters may ask for are the Proxmox VE settings', so both read the same flags.
+func (o *controllerOptions) completeReconciler(cloud *provisioner.Proxmox, endpoint provisioner.Endpoint, rancherMinors provisioner.KubernetesMinors) {
+	o.r.Cloud = cloud
+	o.r.DatastoreAllocate.Role = o.settings.DatastoreRole
+	o.r.SysAuditGroup = o.settings.SysAuditGroup
+	o.r.Endpoint = endpoint
+	o.r.RancherKubernetes = rancherMinors
 }
 
 // newExtensionServer is the Runtime Extension server Cluster API calls the hooks through.

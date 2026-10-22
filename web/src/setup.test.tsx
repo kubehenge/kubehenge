@@ -37,6 +37,7 @@ const form: SetupForm = {
   refreshGateway: "",
   refreshDNS: "",
   creatorBuilds: false,
+  clusterSysAudit: false,
   passphrase: "correct horse battery staple",
   confirm: "correct horse battery staple",
 };
@@ -184,6 +185,13 @@ describe("setup", () => {
       true,
       false,
     ]);
+  });
+
+  it("lets clusters choose the HA group labels only when it is switched on", () => {
+    const on = settings({ ...form, clusterSysAudit: true });
+    expect(on).toHaveProperty("clusterSysAudit", true);
+    expect(settings(form)).not.toHaveProperty("clusterSysAudit");
+    expect([formOf(on).clusterSysAudit, formOf(settings(form)).clusterSysAudit]).toStrictEqual([true, false]);
   });
 
   it("passes the clusters' identity providers on, empty fields left to the defaults", () => {

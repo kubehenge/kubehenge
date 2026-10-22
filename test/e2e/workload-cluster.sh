@@ -45,6 +45,9 @@
 # endpoint is on this machine, at an https:// address the cluster's nodes reach; the test serves
 # SeaweedFS's S3 gateway there with KUBEHENGE_E2E_BACKUP_CERT and KUBEHENGE_E2E_BACKUP_KEY, which
 # KUBEHENGE_E2E_BACKUP_CA, the target's CA, signed.
+# KUBEHENGE_E2E_HA_GROUPS=1 switches the cloud controller manager's HA group labels on and off again,
+# with a management cluster that lets clusters choose them; the test makes an HA node-affinity rule
+# over every node, which needs Proxmox VE 9, and removes it again.
 set -eu
 
 class=${1:?usage: $0 <ClusterClass> <version> <upgrade version>}
@@ -76,11 +79,17 @@ ns=${name}
 issuer_pid=
 grafana_pid=
 s3_pid=
+# The HA rule the nodes are labelled with, and the guest it needs.
+ha_rule=''
+ha_vmid=''
+ha_node=''
 cleanup() {
     status=$?
     [ -z "${issuer_pid}" ] || kill "${issuer_pid}" 2> /dev/null || true
     [ -z "${grafana_pid}" ] || kill "${grafana_pid}" 2> /dev/null || true
     [ -z "${s3_pid}" ] || kill "${s3_pid}" 2> /dev/null || true
+    # shellcheck disable=SC2310 # each removal is tried, whatever happened to those before it
+    remove_ha_rule || true
     if [ "${status}" -ne 0 ]; then
         printf '\nleaving cluster %s/%s for inspection; delete it with: kubectl delete namespace %s\n' "${ns}" "${name}" "${ns}"
     fi
@@ -93,6 +102,22 @@ curl_ca=
 # shellcheck disable=SC2086 # curl_ca is empty or one option and its argument.
 pve() { curl -sS --fail ${curl_ca} -H "Authorization: PVEAPIToken=${KUBEHENGE_PROXMOX_TOKEN}" "$@"; }
 pve_get() { pve "${KUBEHENGE_PROXMOX_URL}/api2/json/$1"; }
+# pve_post <path> <curl options...>, pve_delete <path>: change Proxmox VE as its administrator.
+pve_post() {
+    api_path=$1
+    shift
+    pve -X POST "$@" "${KUBEHENGE_PROXMOX_URL}/api2/json/${api_path}" > /dev/null
+}
+pve_delete() { pve -X DELETE "${KUBEHENGE_PROXMOX_URL}/api2/json/$1" > /dev/null; }
+# remove_ha_rule: takes the HA rule the nodes are labelled with, its resource and guest away again,
+# in the order Proxmox VE allows.
+remove_ha_rule() {
+    [ -n "${ha_vmid}" ] || return 0
+    pve_delete "cluster/ha/rules/${ha_rule}"
+    pve_delete "cluster/ha/resources/vm:${ha_vmid}"
+    pve_delete "nodes/${ha_node}/qemu/${ha_vmid}?purge=1"
+    ha_vmid=''
+}
 wl() { KUBECONFIG="${work}/workload" kubectl "$@"; }
 json_list() { printf '%s' "$1" | jq -R 'split(",")'; }
 b64url() { base64 -w0 | tr '+/' '-_' | tr -d '='; }
@@ -749,6 +774,49 @@ if [ "${KUBEHENGE_E2E_DATASTORE_ALLOCATE:-}" = 1 ]; then
     until_true 300 "the cluster's token to lose Datastore.Allocate on ${KUBEHENGE_E2E_STORAGE}" allocate_is false
     until_true 900 "the CSI plugin at ${held}" csi_at "${held}"
     persistent_volume
+fi
+
+if [ "${KUBEHENGE_E2E_HA_GROUPS:-}" = 1 ]; then
+    # audit_is <true|false>: whether the cluster's token holds Sys.Audit on /.
+    audit_is() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        perms=$(cluster_get "access/permissions?path=/") || return 1
+        printf '%s' "${perms}" | jq -e --argjson want "$1" '([.data[] | has("Sys.Audit")] | any) == $want' > /dev/null
+    }
+    # labelled: every node carries the label of the test's HA rule.
+    labelled() {
+        wl get nodes -o json | jq -e --arg l "group.topology.proxmox.sinextra.dev/${ha_rule}" \
+            '.items | length > 0 and all(.metadata.labels | has($l))' > /dev/null
+    }
+    # The guest exists once Proxmox VE answers for it.
+    ha_guest_exists() { pve_get "nodes/${ha_node}/qemu/${ha_vmid}/status/current" > /dev/null 2>&1; }
+
+    step "nodes labelled with their HA rule, with Sys.Audit on / for the cluster's token"
+    # shellcheck disable=SC2310 # a failed read fails the step
+    audit_is false || fail "the cluster's token holds Sys.Audit on / without asking for it"
+    # A node-affinity rule over every node, for a guest of its own: Proxmox VE takes a rule only for
+    # HA resources, and a resource only for a guest that exists.
+    ha_node=$(pve_get nodes | jq -r '[.data[] | select(.status == "online") | .node][0]')
+    ha_nodes=$(pve_get nodes | jq -r '[.data[] | select(.status == "online") | .node] | join(",")')
+    ha_rule=${name}-labels
+    ha_vmid=$(pve_get cluster/nextid | jq -r .data)
+    pve_post "nodes/${ha_node}/qemu" --data-urlencode "vmid=${ha_vmid}" --data-urlencode "name=${ha_rule}" \
+        --data-urlencode memory=64
+    until_true 120 "guest ${ha_vmid}" ha_guest_exists
+    # Ignored, so that Proxmox VE HA neither starts the guest nor arms a node's watchdog for it.
+    pve_post cluster/ha/resources --data-urlencode "sid=vm:${ha_vmid}" --data-urlencode state=ignored
+    pve_post cluster/ha/rules --data-urlencode type=node-affinity --data-urlencode "rule=${ha_rule}" \
+        --data-urlencode "resources=vm:${ha_vmid}" --data-urlencode "nodes=${ha_nodes}"
+    set_variable ccm '{"haGroups":true}'
+    until_true 300 "the cluster's token to hold Sys.Audit on /" audit_is true
+    # The cloud controller manager labels the nodes when it next syncs them.
+    until_true 900 "every node labelled with HA rule ${ha_rule}" labelled
+    wl get nodes -L "group.topology.proxmox.sinextra.dev/${ha_rule}"
+
+    step "the cluster's token without Sys.Audit on / again"
+    set_variable ccm '{"haGroups":false}'
+    until_true 300 "the cluster's token to lose Sys.Audit on /" audit_is false
+    remove_ha_rule
 fi
 # guest <node> <vmid> <command>: runs a shell command in a VM through its guest agent and prints its
 # output; fails when the command or the agent does. It is polled with set -e off, so each step

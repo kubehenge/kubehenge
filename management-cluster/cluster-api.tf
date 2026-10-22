@@ -368,6 +368,7 @@ resource "helm_release" "kubehenge" {
           role               = var.cluster_datastore_allocate ? proxmox_virtual_environment_role.cluster_datastore[0].role_id : ""
           managementStorages = local.management_storages
         }
+        sysAuditGroup = var.cluster_sys_audit ? proxmox_virtual_environment_group.clusters_audit[0].group_id : ""
       }
       templateRefresh = {
         enabled       = local.template_builder.enabled

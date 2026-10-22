@@ -103,7 +103,7 @@
     "proxmox": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["url", "insecure", "secret", "clusterGroup", "clusterRole", "volumeOwnerNode", "region", "ha", "datastoreAllocate"],
+      "required": ["url", "insecure", "secret", "clusterGroup", "clusterRole", "volumeOwnerNode", "region", "ha", "datastoreAllocate", "sysAuditGroup"],
       "properties": {
         "url": { "type": "string", "pattern": "^https://[^/]+" },
         "insecure": { "type": "boolean" },
@@ -122,6 +122,10 @@
             "role": { "type": "string" },
             "managementStorages": { "type": "array", "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9._-]*$" }, "uniqueItems": true }
           }
+        },
+        "sysAuditGroup": {
+          "description": "The group holding Sys.Audit on / that clusters asking for the cloud controller manager's HA group labels join, empty when no cluster may.",
+          "type": "string"
         }
       }
     },

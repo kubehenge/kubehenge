@@ -17,10 +17,10 @@ import (
 )
 
 // setupPrivileges are what the management-cluster module needs of the user it runs as: it creates
-// pools, users, roles, ACLs, tokens and VMs, and downloads the Talos image. Proxmox VE checks each
-// call again; asking first saves a half-done run.
+// pools, users, groups, roles, ACLs, tokens and VMs, and downloads the Talos image. Proxmox VE
+// checks each call again; asking first saves a half-done run.
 var setupPrivileges = []string{
-	"Sys.Modify", "Permissions.Modify", "User.Modify", "Realm.AllocateUser", "Pool.Allocate",
+	"Sys.Modify", "Permissions.Modify", "User.Modify", "Group.Allocate", "Realm.AllocateUser", "Pool.Allocate",
 	"VM.Allocate", "Datastore.AllocateSpace", "Datastore.AllocateTemplate",
 }
 

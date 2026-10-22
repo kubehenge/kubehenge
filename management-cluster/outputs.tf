@@ -40,7 +40,7 @@ output "proxmox_objects" {
       proxmox_virtual_environment_user.ha[*].user_id,
       proxmox_virtual_environment_user.template_builder[*].user_id,
     )
-    groups = [proxmox_virtual_environment_group.clusters.group_id]
+    groups = concat([proxmox_virtual_environment_group.clusters.group_id], proxmox_virtual_environment_group.clusters_audit[*].group_id)
     vm_ids = proxmox_virtual_environment_vm.node[*].vm_id
     # The Talos image downloaded to each node, by node.
     images = { for node, d in proxmox_download_file.talos : node => d.id }

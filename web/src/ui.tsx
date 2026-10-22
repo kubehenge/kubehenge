@@ -59,6 +59,9 @@ export const istioText = (on: boolean): string => (on ? "On, ambient mode" : "Of
 export const csiText = (on: boolean): string =>
   on ? "Newest release, with Datastore.Allocate on the cluster's storage" : "Release that needs no Datastore.Allocate";
 
+/** haGroupsText describes whether a cluster's nodes are labelled with their Proxmox VE HA groups. */
+export const haGroupsText = (on: boolean): string => (on ? "On, with Sys.Audit on / for the cluster's token" : "Off");
+
 /** maxWorkers is the most workers a cluster is given, at creation and when scaled. */
 export const maxWorkers = 100;
 

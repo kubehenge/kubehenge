@@ -20,7 +20,7 @@ import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implemen
 import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
 import { addressBits, addressCount, inList, ipv4, isVLAN, list, rangeProblem, whole } from "./network";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
-import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
+import { allowedNodes, anyNode, haText, placeProblem, placeText, type HAGroupsOffer, type Place } from "./Placement";
 import {
   cisText,
   enforced,
@@ -34,6 +34,7 @@ import {
   browserZone,
   cniName,
   csiText,
+  haGroupsText,
   distributionName,
   filled,
   istioText,
@@ -88,6 +89,7 @@ export interface Form {
   place: Place;
   proxmoxHA: boolean;
   datastoreAllocate: boolean;
+  haGroups: boolean;
   controlPlaneMachine: Machine;
   workerMachine: Machine;
   cni: string;
@@ -326,6 +328,7 @@ export const newForm = (): Form => ({
   place: anyNode,
   proxmoxHA: true,
   datastoreAllocate: false,
+  haGroups: false,
   controlPlaneMachine: machineDefaults(undefined),
   workerMachine: machineDefaults(undefined),
   cni: "",
@@ -442,6 +445,9 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   if (form.datastoreAllocate && defined.has("csi")) {
     variables["csi"] = { datastoreAllocate: true };
   }
+  if (form.haGroups && defined.has("ccm")) {
+    variables["ccm"] = { haGroups: true };
+  }
   if (form.cni) {
     variables["cni"] = form.cni;
   }
@@ -493,11 +499,11 @@ function meshChoice(form: Form): string {
 }
 
 // summary is what the Confirm step shows: each setting by its name, as the user chose it; Proxmox
-// VE HA and the CSI plugin's release only where they can be chosen.
+// VE HA, the CSI plugin's release and the HA group labels only where they can be chosen.
 export function summary(
   form: Form,
   c: ClusterClass,
-  offered: { ha?: boolean; csi?: boolean } = {},
+  offered: { ha?: boolean; csi?: boolean; haGroups?: boolean } = {},
 ): [string, string][] {
   const defined = new Set(c.variables.map((v) => v.name));
   const chosenRange =
@@ -538,6 +544,9 @@ export function summary(
   }
   if (offered.csi === true) {
     rows.push(["CSI plugin", csiText(form.datastoreAllocate)]);
+  }
+  if (offered.haGroups === true) {
+    rows.push(["HA group labels", haGroupsText(form.haGroups)]);
   }
   rows.push(["Control-plane machines", machine(form.controlPlaneMachine)]);
   if (form.workerReplicas > 0) {
@@ -625,6 +634,7 @@ export type FieldKey =
   | "services"
   | "storage"
   | "datastoreAllocate"
+  | "haGroups"
   | "placement"
   | "controlPlaneMachine"
   | "workerMachine"
@@ -931,6 +941,14 @@ export function csiProblems(step: Step, form: Form, csi: CSIOffer): Problems {
     return {};
   }
   return { datastoreAllocate: csi.problem };
+}
+
+/** haGroupsProblems holds the machines step to the HA group labels a new cluster chose. */
+export function haGroupsProblems(step: Step, form: Form, offer: HAGroupsOffer): Problems {
+  if (step !== "Machines" || !offer.offered || !form.haGroups || offer.problem === undefined) {
+    return {};
+  }
+  return { haGroups: offer.problem };
 }
 
 // offeredStorages are the storages, once each, that take disks, the user may use and the class

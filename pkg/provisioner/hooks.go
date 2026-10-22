@@ -79,6 +79,8 @@ type Hooks struct {
 	// Soak is how long a template build waits before clusters are offered it.
 	Soak time.Duration
 	Now  func() time.Time
+	// SysAuditGroup is the Proxmox VE group holding Sys.Audit on /; empty when no cluster may join it.
+	SysAuditGroup string
 }
 
 // BeforeClusterUpgrade holds Rancher's cluster at the Kubernetes versions Rancher runs on, and has
@@ -131,7 +133,8 @@ func (h *Hooks) BeforeClusterDelete(ctx context.Context, req *runtimehooksv1.Bef
 // objects; capmox would otherwise clone its first VMs into a pool that does not exist yet. It
 // refuses a cluster whose pod or service range overlaps its nodes' network, load-balancer
 // addresses that clash with that network or another cluster's, logs without monitoring, backups
-// Velero cannot take, and Datastore.Allocate on a storage that is not the cluster's alone.
+// Velero cannot take, Datastore.Allocate on a storage that is not the cluster's alone, and
+// Sys.Audit on / where no cluster may hold it.
 func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.BeforeClusterCreateRequest, resp *runtimehooksv1.BeforeClusterCreateResponse) {
 	resp.Status = runtimehooksv1.ResponseStatusSuccess
 	cluster := &req.Cluster
@@ -176,6 +179,10 @@ func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.Bef
 		return
 	}
 	if err := h.checkDatastoreAllocate(ctx, cluster, class); err != nil {
+		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
+		return
+	}
+	if err := h.checkSysAudit(cluster); err != nil {
 		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
 		return
 	}
