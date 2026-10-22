@@ -109,9 +109,15 @@ jobs:
           # the OOM killer.
           sudo fallocate -l 8G /mnt/e2e.swap && sudo chmod 600 /mnt/e2e.swap
           sudo mkswap /mnt/e2e.swap >/dev/null && sudo swapon /mnt/e2e.swap
+          # The guests' memory fits beside the runner's own, but not beside its page cache as well,
+          # which cloning a VM's disk fills: by default the kernel then swaps out the guests rather
+          # than drop the cache, and a stalled guest stalls its etcd. Reclaim starts earlier too, in
+          # the background, so that a guest faulting in memory waits less on it.
+          sudo sysctl -q vm.swappiness=10 vm.watermark_scale_factor=200
           nproc && grep -m1 'model name' /proc/cpuinfo && free -m && df -h / /mnt
       # The guests' vCPUs outnumber the runner's, so a failure may come from the runner itself: its
-      # load, and how often and why the guests leave for its KVM, which costs more on some CPUs.
+      # load, each VM's share of its CPUs and memory, and how often and why the guests leave for its
+      # KVM, which costs more on some CPUs.
       - name: Record the runner's load
         if: env.E2E_RUN == 'true'
         run: |
@@ -119,6 +125,8 @@ jobs:
           nohup vmstat -t -w 15 > "$RUNNER_TEMP/vmstat.txt" 2>&1 &
           sample='while sleep 15; do date -u +%T; grep -H . /sys/kernel/debug/kvm/*; done'
           nohup sudo sh -c "$sample" > "$RUNNER_TEMP/kvm.txt" 2> /dev/null &
+          nohup test/e2e/ci/guests.sh record "$RUNNER_TEMP/guests.txt" \
+            > "$RUNNER_TEMP/guests-record.log" 2>&1 &
       - name: Proxmox VE
         if: env.E2E_RUN == 'true'
         run: test/e2e/ci/up.sh "$RUNNER_TEMP/e2e"
@@ -161,6 +169,11 @@ jobs:
           else
             head -60 "$kvm"
           fi
+      # What each step of the test asked of the runner, VM by VM, from the start of Proxmox VE on;
+      # the test's own steps say when each began.
+      - name: The guests' load
+        if: ${{ !cancelled() && env.E2E_RUN == 'true' }}
+        run: test/e2e/ci/guests.sh summary "$RUNNER_TEMP/guests.txt"
       - if: >-
           !cancelled() && env.E2E_RUN == 'true' && github.event_name == 'schedule'
           && inputs.test == 'management-cluster'
@@ -181,8 +194,10 @@ jobs:
           # Proxmox VE logs its API's requests here, not to the journal.
           pve cat /var/log/pveproxy/access.log > "$out/pveproxy-access.log" || true
           pve qm list > "$out/vms.txt" || true
-          cp "$RUNNER_TEMP/e2e/apply.log" "$RUNNER_TEMP/vmstat.txt" "$RUNNER_TEMP/kvm.txt" "$out/" \
-            2>/dev/null || true
+          cp "$RUNNER_TEMP/e2e/apply.log" "$RUNNER_TEMP/vmstat.txt" "$RUNNER_TEMP/kvm.txt" \
+            "$RUNNER_TEMP/guests.txt" "$RUNNER_TEMP/guests-record.log" "$out/" 2>/dev/null || true
+          # From inside the VMs, which answers even when a cluster's API does not.
+          test/e2e/ci/guests.sh collect "$out/guests" || true
           # The management-cluster tests keep their kubeconfig only while they run, and leave the
           # cluster up when they fail.
           e2e="$RUNNER_TEMP/e2e"
@@ -238,14 +253,21 @@ jobs:
                 }
                 k get nodes,pods -A -o wide > "$dir/resources.txt" 2>&1 || continue
                 k get events -A --sort-by=.lastTimestamp > "$dir/events.txt" 2>&1 || true
+                # The run before a restart says why the container ended; when it cannot be had, the
+                # error says why. It is asked for container by container, since with all of them
+                # kubectl stops at the first one that never restarted.
                 k get pods -A -o json 2>/dev/null | jq -r '.items[] |
                   select((.metadata.namespace | startswith("cattle-"))
                     or (.status.phase | IN("Running", "Succeeded") | not)
                     or any(.status.containerStatuses[]?; .restartCount > 0)) |
-                  "\(.metadata.namespace) \(.metadata.name)"' | while read -r pns pod; do
+                  "\(.metadata.namespace) \(.metadata.name) "
+                    + ([(.status.initContainerStatuses[]?, .status.containerStatuses[]?)
+                      | select(.restartCount > 0) | .name] | join(" "))' |
+                  while read -r pns pod restarted; do
                     k logs -n "$pns" "$pod" --all-containers --prefix --tail=2000 || true
-                    k logs -n "$pns" "$pod" --all-containers --prefix --previous --tail=500 \
-                      2>/dev/null || true
+                    for c in $restarted; do
+                      k logs -n "$pns" "$pod" -c "$c" --prefix --previous --tail=500 || true
+                    done
                   done > "$dir/pods.log" 2>&1
               done
             rm -f "$RUNNER_TEMP/workload.kubeconfig"

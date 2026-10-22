@@ -4,9 +4,9 @@
 # Pod Security's restricted level, check sign-in through it, its nodes against the benchmark, its
 # cloud controller manager, load balancer and persistent volumes, what the health page's read-only
 # identities may see in it, switch
-# Headlamp, monitoring (every component scraped with its server verified), logs (a pod's lines, and
-# with the node collector the journal and the audit log, read in Loki through Grafana), Kyverno and
-# Istio (a namespace's traffic over mutual TLS) on and off, and the load balancer off,
+# Headlamp, Kyverno, Istio (a namespace's traffic over mutual TLS), monitoring (every component
+# scraped with its server verified) and logs (a pod's lines, and with the node collector the journal
+# and the audit log, read in Loki through Grafana) on and off, and the load balancer off,
 # scale its workers up and down, upgrade it by one minor version (for RKE2 and k3s with the first
 # new server's join refused at first), replace a node that dies, delete it, and check that nothing
 # of it is left on Proxmox VE.
@@ -611,6 +611,82 @@ case ${pod_security} in
     *) ;;
 esac
 
+step "pod security enforced, with Kyverno switched on"
+# privileged_pod <namespace>: asks the API server to admit a privileged pod, without creating it.
+privileged_pod() {
+    wl -n "$1" run e2e-privileged --image="${pause_image}" --restart=Never --dry-run=server \
+        --overrides="{\"apiVersion\":\"v1\",\"spec\":{\"containers\":[{\"name\":\"e2e-privileged\",\"image\":\"${pause_image}\",\"securityContext\":{\"privileged\":true}}]}}" 2>&1
+}
+# shellcheck disable=SC2310 # the refusal is the answer looked for.
+refused=$(privileged_pod default) && fail "a privileged pod is admitted under Pod Security's restricted level"
+case ${refused} in
+    *'violates PodSecurity "restricted'*) ;;
+    *) fail "a privileged pod is refused for another reason: ${refused}" ;;
+esac
+# A namespace labelled privileged is past Pod Security Admission, but not past Kyverno.
+wl create namespace e2e-privileged
+wl label namespace e2e-privileged pod-security.kubernetes.io/enforce=privileged
+set_variable podSecurity '{"admission":"restricted","kyverno":"restricted"}'
+kyverno_refuses() {
+    # shellcheck disable=SC2310 # admitted is a retry until the policies are in place.
+    out=$(privileged_pod e2e-privileged) && return 1
+    case ${out} in
+        *disallow-privileged-containers*) ;;
+        *) return 1 ;;
+    esac
+}
+until_true 900 "Kyverno refuses a privileged pod" kyverno_refuses
+pod_security=$(wl label --dry-run=server --overwrite namespace kyverno pod-security.kubernetes.io/enforce=restricted 2>&1)
+case ${pod_security} in
+    *violate*) fail "Kyverno's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
+    *) ;;
+esac
+
+# Before monitoring: on Cilium, switching Istio on restarts Cilium's agents and operator, and with
+# monitoring's pods busy beside them a worker of the least size runs short of CPU.
+step "Istio switched on, the mesh's traffic over mutual TLS"
+set_variable istio '{"enabled":true}'
+until_true 900 "istiod available" wl -n istio-system wait --for=condition=Available deployment/istiod --timeout=10s
+until_true 600 "ztunnel on every node" wl -n istio-node rollout status daemonset/ztunnel --timeout=10s
+until_true 600 "istio-cni on every node" wl -n istio-node rollout status daemonset/istio-cni-node --timeout=10s
+wl create namespace e2e-mesh
+wl label namespace e2e-mesh istio.io/dataplane-mode=ambient
+wl create namespace e2e-plain
+agnhost_pod e2e-mesh server netexec --http-port=8080
+agnhost_pod e2e-mesh client pause
+agnhost_pod e2e-plain client pause
+wl -n e2e-mesh wait --for=condition=Ready pod/server pod/client --timeout=5m
+wl -n e2e-plain wait --for=condition=Ready pod/client --timeout=5m
+redirected() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    marks=$(wl -n e2e-mesh get pod server client -o jsonpath='{.items[*].metadata.annotations.ambient\.istio\.io/redirection}') &&
+        [ "${marks}" = "enabled enabled" ]
+}
+until_true 120 "the mesh's pods redirected through ztunnel" redirected
+mesh_ip=$(wl -n e2e-mesh get pod server -o jsonpath='{.status.podIP}')
+# fetch <namespace>: the server's host name, fetched over HTTP by the namespace's client.
+fetch() { KUBECONFIG=${work}/workload kubectl -n "$1" exec client -- curl -sS --max-time 5 "http://${mesh_ip}:8080/hostname" 2>&1; }
+# shellcheck disable=SC2310 # polled with set -e off, so a failed fetch is only a retry.
+fetches() { fetched=$(fetch "$1") && [ "${fetched}" = server ]; }
+until_true 60 "a client outside the mesh reaches the server while mutual TLS is optional" fetches e2e-plain
+wl -n e2e-mesh apply -f - << 'EOF'
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: strict
+spec:
+  mtls:
+    mode: STRICT
+EOF
+# ztunnel closes a plain-text connection the policy refuses, so curl gets no reply; any other
+# failure, a failing exec among them, does not count as refused.
+plain_refused() { fetch e2e-plain | grep -qE '^curl: \((52|56)\)'; }
+until_true 120 "a client outside the mesh refused once mutual TLS is required" plain_refused
+until_true 60 "a client in the mesh reaches the server" fetches e2e-mesh
+# What ztunnel let through carries the client's workload identity.
+mesh_identity() { wl -n istio-node logs -l app=ztunnel --tail=-1 --prefix=false | grep -q 'spiffe://cluster.local/ns/e2e-mesh/sa/default'; }
+until_true 60 "ztunnel names the client's workload identity" mesh_identity
+
 step "monitoring switched on"
 set_variable monitoring '{"enabled":true}'
 prometheus=statefulset/prometheus-kube-prometheus-stack-prometheus
@@ -775,80 +851,6 @@ step "logs collected on every node again"
 set_variable logs '{"enabled":true,"collector":"node","retentionDays":7,"sizeGiB":10}'
 until_true 600 "Alloy installed on the nodes" sh -c "KUBECONFIG=${work}/workload kubectl -n logging-node get daemonset/alloy-node >/dev/null 2>&1"
 wl -n logging-node rollout status daemonset/alloy-node --timeout=10m
-
-step "pod security enforced, with Kyverno switched on"
-# privileged_pod <namespace>: asks the API server to admit a privileged pod, without creating it.
-privileged_pod() {
-    wl -n "$1" run e2e-privileged --image="${pause_image}" --restart=Never --dry-run=server \
-        --overrides="{\"apiVersion\":\"v1\",\"spec\":{\"containers\":[{\"name\":\"e2e-privileged\",\"image\":\"${pause_image}\",\"securityContext\":{\"privileged\":true}}]}}" 2>&1
-}
-# shellcheck disable=SC2310 # the refusal is the answer looked for.
-refused=$(privileged_pod default) && fail "a privileged pod is admitted under Pod Security's restricted level"
-case ${refused} in
-    *'violates PodSecurity "restricted'*) ;;
-    *) fail "a privileged pod is refused for another reason: ${refused}" ;;
-esac
-# A namespace labelled privileged is past Pod Security Admission, but not past Kyverno.
-wl create namespace e2e-privileged
-wl label namespace e2e-privileged pod-security.kubernetes.io/enforce=privileged
-set_variable podSecurity '{"admission":"restricted","kyverno":"restricted"}'
-kyverno_refuses() {
-    # shellcheck disable=SC2310 # admitted is a retry until the policies are in place.
-    out=$(privileged_pod e2e-privileged) && return 1
-    case ${out} in
-        *disallow-privileged-containers*) ;;
-        *) return 1 ;;
-    esac
-}
-until_true 900 "Kyverno refuses a privileged pod" kyverno_refuses
-pod_security=$(wl label --dry-run=server --overwrite namespace kyverno pod-security.kubernetes.io/enforce=restricted 2>&1)
-case ${pod_security} in
-    *violate*) fail "Kyverno's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
-    *) ;;
-esac
-
-step "Istio switched on, the mesh's traffic over mutual TLS"
-set_variable istio '{"enabled":true}'
-until_true 900 "istiod available" wl -n istio-system wait --for=condition=Available deployment/istiod --timeout=10s
-until_true 600 "ztunnel on every node" wl -n istio-node rollout status daemonset/ztunnel --timeout=10s
-until_true 600 "istio-cni on every node" wl -n istio-node rollout status daemonset/istio-cni-node --timeout=10s
-wl create namespace e2e-mesh
-wl label namespace e2e-mesh istio.io/dataplane-mode=ambient
-wl create namespace e2e-plain
-agnhost_pod e2e-mesh server netexec --http-port=8080
-agnhost_pod e2e-mesh client pause
-agnhost_pod e2e-plain client pause
-wl -n e2e-mesh wait --for=condition=Ready pod/server pod/client --timeout=5m
-wl -n e2e-plain wait --for=condition=Ready pod/client --timeout=5m
-redirected() {
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-    marks=$(wl -n e2e-mesh get pod server client -o jsonpath='{.items[*].metadata.annotations.ambient\.istio\.io/redirection}') &&
-        [ "${marks}" = "enabled enabled" ]
-}
-until_true 120 "the mesh's pods redirected through ztunnel" redirected
-mesh_ip=$(wl -n e2e-mesh get pod server -o jsonpath='{.status.podIP}')
-# fetch <namespace>: the server's host name, fetched over HTTP by the namespace's client.
-fetch() { KUBECONFIG=${work}/workload kubectl -n "$1" exec client -- curl -sS --max-time 5 "http://${mesh_ip}:8080/hostname" 2>&1; }
-# shellcheck disable=SC2310 # polled with set -e off, so a failed fetch is only a retry.
-fetches() { fetched=$(fetch "$1") && [ "${fetched}" = server ]; }
-until_true 60 "a client outside the mesh reaches the server while mutual TLS is optional" fetches e2e-plain
-wl -n e2e-mesh apply -f - << 'EOF'
-apiVersion: security.istio.io/v1
-kind: PeerAuthentication
-metadata:
-  name: strict
-spec:
-  mtls:
-    mode: STRICT
-EOF
-# ztunnel closes a plain-text connection the policy refuses, so curl gets no reply; any other
-# failure, a failing exec among them, does not count as refused.
-plain_refused() { fetch e2e-plain | grep -qE '^curl: \((52|56)\)'; }
-until_true 120 "a client outside the mesh refused once mutual TLS is required" plain_refused
-until_true 60 "a client in the mesh reaches the server" fetches e2e-mesh
-# What ztunnel let through carries the client's workload identity.
-mesh_identity() { wl -n istio-node logs -l app=ztunnel --tail=-1 --prefix=false | grep -q 'spiffe://cluster.local/ns/e2e-mesh/sa/default'; }
-until_true 60 "ztunnel names the client's workload identity" mesh_identity
 
 # The class's minimum sizes have to carry every add-on at once.
 step "every add-on at once, with nothing restarted"
