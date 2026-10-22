@@ -381,6 +381,13 @@ variable "etcd_restore" {
   nullable    = false
 }
 
+variable "headlamp_sign_in" {
+  description = "Have the appliance's shared Headlamp sign those who may download a cluster's admin kubeconfig (Sys.Modify on its pool) in as cluster-admin, with a token made for their session that never reaches the browser. Kubehenge's controller then keeps, in every cluster of clusters and extra_cluster_namespaces, an identity bound to cluster-admin and one that may only make its tokens, whose own token it keeps beside the Cluster for the interface: whoever reads Secrets there, as the interface does, can act as cluster-admin in those clusters, as the admin kubeconfigs beside them already let them. Set back to false, the controller removes both, which ends every token made."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "controller_image" {
   description = "Image of Kubehenge's controller by digest, as repository@sha256:<digest>, instead of the one the chart was released with."
   type        = string

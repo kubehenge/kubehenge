@@ -49,6 +49,8 @@ type upstreamRequest struct {
 	host    string
 	// stateless are the headers with which Headlamp's dynamic clusters pick a kubeconfig and user.
 	stateless []string
+	// authorization is the credential Headlamp would pass on to the cluster.
+	authorization string
 }
 
 func withHeadlamp(t *testing.T, h *harness) *[]upstreamRequest {
@@ -73,7 +75,10 @@ func withHeadlamp(t *testing.T, h *harness) *[]upstreamRequest {
 			}
 		}
 		mu.Lock()
-		*seen = append(*seen, upstreamRequest{path: r.URL.Path, cookies: cookies, proto: r.Header.Get("X-Forwarded-Proto"), host: r.Host, stateless: stateless})
+		*seen = append(*seen, upstreamRequest{
+			path: r.URL.Path, cookies: cookies, proto: r.Header.Get("X-Forwarded-Proto"), host: r.Host, stateless: stateless,
+			authorization: r.Header.Get("Authorization"),
+		})
 		mu.Unlock()
 		// Headlamp's answers, as Headlamp gives them.
 		switch r.URL.Path {

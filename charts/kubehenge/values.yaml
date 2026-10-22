@@ -32,6 +32,12 @@ interface:
   # Sys.Audit on / already, into the ConfigMap kubehenge-ha-rules, which only then the interface
   # may read.
   offerHARules: false
+  # Whether the appliance's shared Headlamp signs those who may download a cluster's admin
+  # kubeconfig (Sys.Modify on its pool) in as cluster-admin, with a token made for their session.
+  # The controller then keeps two identities in each cluster of namespace and extraNamespaces: one
+  # bound to cluster-admin, and one that may only make its tokens, whose own token it keeps beside
+  # the Cluster for the interface. Switched off, it removes them, which ends every token made.
+  headlampSignIn: false
 
 # What clusters may use on Proxmox VE: the storages for their disks and volumes, and the bridges
 # their nodes attach to, which the management cluster's Cluster API token has rights on. The

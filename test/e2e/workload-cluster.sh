@@ -3,8 +3,9 @@
 # cluster: create a cluster trusting an OpenID issuer, hardened to the CIS benchmark and enforcing
 # Pod Security's restricted level, check sign-in through it, its nodes against the benchmark, its
 # cloud controller manager, ingress controller, Gateway API, load balancer and persistent volumes,
-# what the health page's read-only identities may see in it, switch Headlamp (and its read-only
-# access for everyone), Kyverno, Istio (a namespace's traffic over mutual TLS), monitoring (every
+# what the health page's read-only identities may see in it, that the shared Headlamp's sign-in
+# identities are there for the interface's namespaces alone and do no more than they should, switch
+# Headlamp (and its read-only access for everyone), Kyverno, Istio (a namespace's traffic over mutual TLS), monitoring (every
 # component scraped with its server verified) and logs (a pod's lines, and with the node collector
 # the journal and the audit log, read in Loki through Grafana) on and off, back a namespace with a
 # volume and a Secret up with Velero to an S3 store the test serves, delete it and restore it, check
@@ -57,8 +58,9 @@
 # KUBEHENGE_E2E_NAMESPACE names one of the namespaces the management cluster's
 # extra_cluster_namespaces gives the web interface: the cluster is then created there with the
 # interface's own account, as the interface creates one in a namespace of its creator's choice, and
-# the namespace is left in place. Unset, the cluster gets a namespace of its own, created and deleted
-# with it.
+# the namespace is left in place; with the management cluster's headlamp_sign_in, the cluster gets
+# the shared Headlamp's sign-in identities there. Unset, the cluster gets a namespace of its own,
+# created and deleted with it, and none of those identities.
 # KUBEHENGE_E2E_VOLUME_SNAPSHOTS=1 switches volume snapshots on, takes a snapshot of a volume with
 # data, restores it into a new one and checks the data, and switches them off again, with a
 # management cluster that lets clusters take them, root@pam's password stored, and a
@@ -477,8 +479,9 @@ wl -n e2e-policy wait --for=condition=Ready pod/server --timeout=10s > /dev/null
 wl delete namespace e2e-policy --wait=false
 
 step "the health page's identities see a crash loop, and nothing they need not"
-# identity_kubeconfig <health | health-logs>: a kubeconfig of the token Kubehenge's controller keeps
-# beside the cluster, written to a file only this user reads rather than passed as an argument.
+# identity_kubeconfig <health | health-logs | headlamp-issuer>: a kubeconfig of the token
+# Kubehenge's controller keeps beside the cluster, written to a file only this user reads rather
+# than passed as an argument.
 identity_kubeconfig() {
     identity_secret=$(kubectl -n "${ns}" get "secret/${name}-$1" -o json 2> /dev/null) || return 1
     (
@@ -522,6 +525,42 @@ crash_log=$(KUBECONFIG="${work}/health-logs" kubectl get --raw "/api/v1/namespac
     fail "the logs identity cannot read the pod's log"
 printf '%s' "${crash_log}" | grep -q no-such-command || fail "the pod's log does not tell why it stopped: ${crash_log}"
 wl delete namespace e2e-health --wait=false
+
+step "the shared Headlamp's sign-in identities, only for the interface's namespaces"
+headlamp_namespaces=$(kubectl -n kubehenge-system get deployment/kubehenge-controller -o json |
+    jq -r '[.spec.template.spec.containers[0].args[] | select(startswith("--headlamp-sign-in-namespaces=")) | split("=")[1] | split(",")[]] | join(" ")')
+signed_in=
+case " ${headlamp_namespaces} " in
+    *" ${ns} "*) signed_in=yes ;;
+    *) ;;
+esac
+if [ -n "${signed_in}" ]; then
+    until_true 300 "the Headlamp issuer's token beside the cluster" identity_kubeconfig headlamp-issuer
+    # The issuer makes the Headlamp account's tokens, as the interface does for a session, and
+    # nothing else; a token made acts as cluster-admin.
+    (
+        umask 077
+        KUBECONFIG="${work}/headlamp-issuer" kubectl -n kube-system create token kubehenge-headlamp --duration=10m > "${work}/headlamp-token" ||
+            fail "the issuer cannot make the Headlamp account's token"
+        KUBECONFIG="${work}/headlamp-issuer" kubectl config view --raw -o json |
+            jq --rawfile t "${work}/headlamp-token" '.users[0].user.token = ($t | rtrimstr("\n"))' > "${work}/headlamp-admin"
+    )
+    admin_can=$(KUBECONFIG="${work}/headlamp-admin" kubectl auth can-i '*' '*' --all-namespaces || true)
+    [ "${admin_can}" = yes ] || fail "the Headlamp account's token is not cluster-admin"
+    refused headlamp-issuer get secrets -n kube-system
+    refused headlamp-issuer list pods --all-namespaces
+    refused headlamp-issuer create serviceaccounts/kubehenge-health --subresource=token -n kube-system
+    refused headlamp-issuer create serviceaccounts/kubehenge-headlamp-issuer --subresource=token -n kube-system
+    mounted=$(wl -n kube-system get serviceaccount kubehenge-headlamp -o jsonpath='{.automountServiceAccountToken}')
+    [ "${mounted}" = false ] || fail "the Headlamp account's token is mounted into pods"
+else
+    found=$(wl -n kube-system get serviceaccount kubehenge-headlamp -o name --ignore-not-found)
+    [ -z "${found}" ] ||
+        fail "the Headlamp account is in a cluster outside the interface's namespaces (${headlamp_namespaces:-sign-in off})"
+    found=$(kubectl -n "${ns}" get "secret/${name}-headlamp-issuer" -o name --ignore-not-found)
+    [ -z "${found}" ] ||
+        fail "the Headlamp issuer's token is beside a cluster outside the interface's namespaces"
+fi
 
 step "the ingress controller serves a host name on the API address and every node"
 wl create namespace e2e-ingress
@@ -2609,6 +2648,15 @@ elif ! kubectl delete namespace "${ns}" --wait --timeout=5m; then
     # Its conditions say what is left in it and whose finalizers hold that.
     left=$(kubectl get namespace "${ns}" -o jsonpath='{range .status.conditions[?(@.status=="True")]}{.message}; {end}' || true)
     fail "namespace ${ns} is still there: ${left}"
+fi
+if [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
+    # What was kept beside the cluster goes with it, Cluster API's Secrets and the controller's,
+    # which carry no label of the cluster. A failed request is not an empty list.
+    secrets_gone() {
+        secrets=$(kubectl -n "${ns}" get secrets -o json) || return 1
+        printf '%s' "${secrets}" | jq -e --arg n "${name}" '[.items[] | select(.metadata.name | startswith($n + "-"))] | length == 0' > /dev/null
+    }
+    until_true 300 "the cluster's Secrets in ${ns} removed" secrets_gone
 fi
 
 # Another test may be using the class on the same management cluster.

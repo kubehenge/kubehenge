@@ -222,7 +222,7 @@ run "controller_and_clusters_are_least_privilege" {
         kubehenge-rke2    = ["rke2-bootstrap-system", "rke2-control-plane-system"]
         kubehenge-k3s     = ["k3s-bootstrap-system", "k3s-control-plane-system"]
       }
-      interface = { extraNamespaces = [], offerHARules = false }
+      interface = { extraNamespaces = [], offerHARules = false, headlampSignIn = false }
       clusters  = { storages = ["local-lvm", "ceph"], bridges = ["vmbr0", "vmbr1"] }
       proxmox = {
         url          = "https://pve.example.org:8006"
@@ -635,7 +635,7 @@ run "extra_cluster_namespaces" {
 
   assert {
     condition = (
-      yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = ["team-a", "team-b"], offerHARules = false } &&
+      yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = ["team-a", "team-b"], offerHARules = false, headlampSignIn = false } &&
       toset(keys(proxmox_acl.provisioner)) == toset([
         "/ kubehenge-audit",
         "/nodes kubehenge-audit",
@@ -873,6 +873,19 @@ run "cluster_oidc" {
       },
     ]
     error_message = "the providers must reach the chart's clusterOIDC in its own names, defaults filled in"
+  }
+}
+
+run "headlamp_sign_in" {
+  command = plan
+
+  variables {
+    headlamp_sign_in = true
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = [], offerHARules = false, headlampSignIn = true }
+    error_message = "the chart must be told to have the shared Headlamp sign people in, its namespaces left as they are"
   }
 }
 

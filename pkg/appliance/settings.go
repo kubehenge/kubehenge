@@ -55,6 +55,9 @@ type Settings struct {
 	// EtcdRestore has the controller restore clusters' etcd through the VMs' guest agents, with a
 	// controller token of its own that holds VM.GuestAgent.Unrestricted on the workload pool.
 	EtcdRestore bool `json:"etcdRestore,omitempty"`
+	// HeadlampSignIn has the shared Headlamp sign those who may download a cluster's admin
+	// kubeconfig in as cluster-admin.
+	HeadlampSignIn bool `json:"headlampSignIn,omitempty"`
 	// OfferHARules offers Proxmox VE's HA node-affinity rules, their names and nodes only, to those
 	// who may create or change a cluster without Sys.Audit on / of their own.
 	OfferHARules bool `json:"offerHARules,omitempty"`

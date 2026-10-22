@@ -10,7 +10,7 @@ What Kubehenge's first release does, what comes next, and what may come later.
 - A security baseline from the CIS Kubernetes Benchmark in every cluster.
 - The VM templates for every distribution (`kubehenge template`), built again every week with Ubuntu's updates, and the nodes of every kubeadm, RKE2 and k3s cluster moved to each build inside their maintenance windows once it has soaked for a day.
 - The appliance: one line in the Proxmox VE shell installs it as an LXC container, whose interface creates the management cluster and keeps it upgraded; the same management cluster from one Terraform/OpenTofu apply for those who prefer it.
-- The interface: create, list, scale, upgrade and delete clusters, choose the distribution and add-ons, download a kubeconfig, with permissions following Proxmox VE's on each cluster's pool.
+- The interface: create, list, scale, upgrade and delete clusters, choose the distribution and add-ons, download a kubeconfig, with permissions following Proxmox VE's on each cluster's pool; optionally, the shared Headlamp opens each cluster signed in as cluster-admin for those who may download its kubeconfig.
 - The cluster autoscaler for worker pools, from none up to 100 workers, running in the management cluster or, by choice, on the cluster's own control planes.
 - Upgrades without a shell: the appliance upgrades itself from a button, or automatically to new patch or minor releases of Kubehenge, installing only signed releases; each cluster can upgrade Kubernetes automatically inside a maintenance window its owner sets.
 - The optional Kubernetes entry inside Proxmox VE's own interface.

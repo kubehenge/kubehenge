@@ -1,7 +1,8 @@
 #!/bin/sh
 # End-to-end test of the appliance on a Proxmox VE node: install it from a release archive, sign in
 # with Proxmox VE users, set the management cluster up from the interface, place by an HA rule
-# offered to a cluster creator, reach the shared Headlamp behind the interface's sign-in, upgrade the appliance under the running management cluster, remove
+# offered to a cluster creator, reach the shared Headlamp behind the interface's sign-in and log out
+# of a cluster in it, upgrade the appliance under the running management cluster, remove
 # the management cluster from the interface and then the appliance, and check that Proxmox VE is
 # left as it was.
 #
@@ -285,6 +286,23 @@ until_true 120 "Headlamp's page through the gate" headlamp_serves
 expect 200 "Headlamp's configuration" request "${work}/admin.jar" "${headlamp}/config"
 body_is 'has("clusters")' "Headlamp's configuration has no clusters"
 expect 403 "Headlamp's plugin upload" request "${work}/admin.jar" "${headlamp}/user-plugins/x"
+
+step "Headlamp's log out of a cluster through the gate, and opening the cluster again"
+# Headlamp's frontend names the cluster in unpadded URL-safe base64 and posts JSON. The gate judges
+# a cluster by its pool, which the administrator holds on / whether or not the cluster exists.
+logout=${headlamp}/encoded-clusters/$(printf clusters.e2e | base64 -w0 | tr '+/' '-_' | tr -d '=')/clear-token
+expect 200 "Headlamp's log out" request "${work}/admin.jar" -D "${work}/headers" \
+    -H 'Content-Type: application/json' -d '{"token":null}' "${logout}"
+grep -qi '^set-cookie: headlamp-auth-clusterse2e\.0=;' "${work}/headers" ||
+    fail "Headlamp's log out did not clear the cluster's token cookie"
+expect 403 "Headlamp's log out by GET" request "${work}/admin.jar" "${logout}"
+expect 404 "Headlamp's log out of a cluster the user does not see" request "${work}/user.jar" \
+    -H 'Content-Type: application/json' -d '{"token":null}' "${logout}"
+expect 303 "opening the cluster from the interface" request "${work}/admin.jar" -D "${work}/headers" \
+    "${headlamp}/kubehenge/open/clusters.e2e/pods"
+grep -qi '^location: /c/clusters\.e2e/pods' "${work}/headers" ||
+    fail "opening the cluster did not lead on to its page in Headlamp"
+expect 404 "opening a cluster the user does not see" request "${work}/user.jar" "${headlamp}/kubehenge/open/clusters.e2e"
 
 step "upgrade the appliance with the management cluster up"
 upgrade "${newer}"

@@ -116,6 +116,11 @@ module "management_cluster" {
 
   # The k3s test's cluster is created in it with the interface's account (test/e2e/ci/run.sh).
   extra_cluster_namespaces = ["e2e-team"]
+
+  # Checked by the workload cluster tests: the k3s test's cluster, in one of the interface's
+  # namespaces, gets the sign-in identities, and the others' clusters, in namespaces of their own, do
+  # not.
+  headlamp_sign_in = true
 }
 
 output "kubeconfig" {

@@ -358,6 +358,7 @@ resource "helm_release" "kubehenge" {
       interface = {
         extraNamespaces = var.extra_cluster_namespaces
         offerHARules    = var.offer_ha_rules
+        headlampSignIn  = var.headlamp_sign_in
       }
       clusters = {
         storages = var.workload_datastores

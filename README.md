@@ -19,7 +19,7 @@ VMware ships Kubernetes inside vSphere as the vSphere Kubernetes Service, and Op
 - **Proxmox VE wired in:** persistent volumes through the Proxmox CSI plugin, node lifecycle through the Proxmox cloud controller manager, a virtual IP for the control plane.
 - **Clusters kept apart:** each cluster gets its own Proxmox VE pool, user and API token with rights on its own VMs and volumes only, held on its control-plane nodes only.
 - **Add-ons per cluster:** Rancher, with every Kubehenge cluster registered in it, and Headlamp; CIS hardening, pod security, monitoring, and backups with Velero to an S3 store, restored from the interface.
-- **Sign in to clusters your way:** each cluster can trust your OpenID Connect providers, set once for every cluster or per cluster, with tokens and certificates working beside them; one shared Headlamp in the appliance opens every cluster you may see.
+- **Sign in to clusters your way:** each cluster can trust your OpenID Connect providers, set once for every cluster or per cluster, with tokens and certificates working beside them; one shared Headlamp in the appliance opens every cluster you may see, and, where the administrator lets it, signs those who may download a cluster's kubeconfig in to it.
 - **Upgrades without a shell:** clusters can upgrade Kubernetes on their own inside a maintenance window you set, and Kubehenge upgrades itself from a button, or automatically, installing only signed releases.
 - **One appliance:** one line in the Proxmox VE shell installs Kubehenge as a small LXC container; its interface creates the management cluster and looks after it from then on. Infrastructure-as-code users can apply the same module with Terraform/OpenTofu instead.
 

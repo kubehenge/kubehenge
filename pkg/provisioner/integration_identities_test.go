@@ -38,7 +38,7 @@ func TestIntegrationIdentitiesGoUnderTheControllersRights(t *testing.T) { //noli
 	}
 	w := &WorkloadIdentities{Client: controller, ClassNamespace: classNamespace, MountNamespace: autoscalerNamespace}
 
-	if _, err = w.removeUnwanted(ctx, cluster); err != nil {
+	if _, _, err = w.removeUnwanted(ctx, cluster); err != nil {
 		t.Fatalf("with no backup identities to take away: %v", err)
 	}
 	for _, id := range []Identity{IdentityBackups, IdentityRestores} {
@@ -47,7 +47,7 @@ func TestIntegrationIdentitiesGoUnderTheControllersRights(t *testing.T) { //noli
 			t.Fatal(err)
 		}
 	}
-	wanted, err := w.removeUnwanted(ctx, cluster)
+	wanted, _, err := w.removeUnwanted(ctx, cluster)
 	if err != nil {
 		t.Fatalf("taking the backup identities away: %v", err)
 	}
@@ -98,7 +98,7 @@ func checkMountedIdentityUnderTheControllersRights(ctx context.Context, t *testi
 	write("renewed")
 
 	cluster.Spec.Topology.Workers.MachineDeployments[0].Metadata.Annotations = nil
-	wanted, err := w.removeUnwanted(ctx, cluster)
+	wanted, _, err := w.removeUnwanted(ctx, cluster)
 	if err != nil {
 		t.Fatalf("taking the autoscaler identity away: %v", err)
 	}

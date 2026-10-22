@@ -769,6 +769,30 @@ func TestEtcdRestoreReachesTheModule(t *testing.T) {
 	}
 }
 
+func TestHeadlampSignInReachesTheModule(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	s := settings("pve1")
+	s.HeadlampSignIn = true
+	if err := a.Apply(s, "correct horse battery staple", ticket(), func(context.Context, []byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if j := waitFor(t, a); j.State != "succeeded" {
+		t.Fatalf("job = %+v", j)
+	}
+	main, err := os.ReadFile(filepath.Join(a.Dir, "management", "main.tf"))
+	if err != nil || !strings.Contains(string(main), "headlamp_sign_in       = var.settings.headlampSignIn") {
+		t.Fatalf("main.tf: %v\n%s", err, main)
+	}
+	vars, err := os.ReadFile(filepath.Join(a.Dir, "management", "terraform.tfvars.json"))
+	if err != nil || !strings.Contains(string(vars), `"headlampSignIn": true`) {
+		t.Fatalf("tfvars: %v\n%s", err, vars)
+	}
+	if !a.SavedSettings().HeadlampSignIn {
+		t.Fatal("the saved settings forget the sign-in")
+	}
+}
+
 func TestJobViewCarriesTheEndOfALongLog(t *testing.T) {
 	t.Parallel()
 	j := &Job{Kind: "apply", State: "running"}

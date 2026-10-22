@@ -26,6 +26,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -39,7 +40,8 @@ import (
 // runs on its own port, so its pages are another origin than the interface's and cannot read the
 // interface's CSRF token. Headlamp has no sign-in of its own and its kubeconfig holds only each
 // cluster's address and CA: users sign in to each cluster with their own credentials, which
-// Headlamp keeps in cookies scoped to that cluster's path.
+// Headlamp keeps in cookies scoped to that cluster's path, or, where an administrator lets it and
+// they may download the cluster's admin kubeconfig, are signed in by the gate (signInToHeadlamp).
 type Headlamp struct {
 	// Upstream is the Headlamp server, listening on the loopback interface only.
 	Upstream *url.URL
@@ -56,6 +58,14 @@ type Headlamp struct {
 	// endpoints are the clusters' API addresses and CAs, by cluster (headlampKey), which hold for a
 	// cluster's life: kept, its kubeconfig Secret is read once rather than every round.
 	endpoints map[string]headlampEndpoint
+	// uids are the clusters in Headlamp's kubeconfig, by their names there, so that a sign-in to a
+	// cluster is not taken for one to another created under its name since.
+	uids map[string]types.UID
+	// signIns are the sessions' sign-ins to clusters, by session, cluster and its UID.
+	signIns map[string]*headlampSignIn
+	// signedOut are the sessions that signed out of a cluster in Headlamp, by session and cluster,
+	// until the session ends.
+	signedOut map[string]time.Time
 }
 
 // headlampKey tells clusters apart, one created again under an earlier one's name too.
@@ -80,7 +90,10 @@ const headlampOIDCCookie = "__Host-kubehenge-headlamp-oidc"
 
 type seenEntry struct {
 	visible bool
-	until   time.Time
+	// admin is whether the user may also download the cluster's admin kubeconfig, and so be signed
+	// in to it as cluster-admin.
+	admin bool
+	until time.Time
 }
 
 // Headlamp asks Proxmox VE again after this long whether a user still sees a cluster; it fires
@@ -133,6 +146,7 @@ func (s *Server) HeadlampHandler() http.Handler {
 			return
 		}
 		if s.headlampOffers(w, r, u) {
+			s.signInToHeadlamp(r, u)
 			proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), headlampUserKey{}, u)))
 		}
 	})
@@ -227,6 +241,11 @@ func (s *Server) headlampOffers(w http.ResponseWriter, r *http.Request, u user) 
 			return false
 		}
 		return s.headlampSees(w, r, u, name)
+	case strings.HasPrefix(p, "/encoded-clusters/"):
+		return s.headlampEncoded(w, r, u, strings.TrimPrefix(p, "/encoded-clusters/"))
+	case strings.HasPrefix(p, headlampOpenPath):
+		s.openInHeadlamp(w, r, u)
+		return false
 	case p == "/oidc":
 		if !read {
 			http.Error(w, "no such cluster", http.StatusNotFound)
@@ -289,30 +308,38 @@ var hostName = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])
 
 // headlampVisible tells whether the user sees the cluster Headlamp names.
 func (s *Server) headlampVisible(ctx context.Context, u user, cluster string) (bool, error) {
+	e, err := s.headlampAccess(ctx, u, cluster)
+	return e.visible, err
+}
+
+// headlampAccess is what the user may do with the cluster Headlamp names.
+func (s *Server) headlampAccess(ctx context.Context, u user, cluster string) (seenEntry, error) {
 	pool, ok := s.headlampPool(cluster)
 	if !ok {
-		return false, nil
+		return seenEntry{}, nil
 	}
 	h := s.Headlamp
 	key := u.ticket.Username + "\x00" + pool
-	now := time.Now()
+	now := s.now()
 	h.mu.Lock()
 	e, cached := h.seen[key]
 	h.mu.Unlock()
 	if cached && now.Before(e.until) {
-		return e.visible, nil
+		return e, nil
 	}
 	privs, err := s.Accounts.Privileges(ctx, u.ticket, pool)
 	if err != nil {
-		return false, fmt.Errorf("the privileges on %s: %w", pool, err)
+		return seenEntry{}, fmt.Errorf("the privileges on %s: %w", pool, err)
 	}
+	visible := privs.Has(privSee)
+	e = seenEntry{visible: visible, admin: visible && privs.Has(privKubeconfig), until: now.Add(headlampPrivilegeTTL)}
 	h.mu.Lock()
 	if h.seen == nil {
 		h.seen = map[string]seenEntry{}
 	}
-	h.seen[key] = seenEntry{visible: privs.Has(privSee), until: now.Add(headlampPrivilegeTTL)}
+	h.seen[key] = e
 	h.mu.Unlock()
-	return privs.Has(privSee), nil
+	return e, nil
 }
 
 // headlampPool is the pool of the cluster Headlamp names; not ok for a name no cluster of the
@@ -392,6 +419,7 @@ func (s *Server) syncHeadlamp(ctx context.Context, every time.Duration) {
 			s.Log.Error("headlamp's kubeconfig", "error", err)
 		}
 		s.pruneHeadlampSeen()
+		s.Headlamp.pruneHeadlampSignIns(s.now())
 		select {
 		case <-ctx.Done():
 			return
@@ -402,7 +430,7 @@ func (s *Server) syncHeadlamp(ctx context.Context, every time.Duration) {
 
 func (s *Server) pruneHeadlampSeen() {
 	h := s.Headlamp
-	now := time.Now()
+	now := s.now()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for k, e := range h.seen {
@@ -454,6 +482,7 @@ func (s *Server) writeHeadlampKubeconfig(ctx context.Context, kube client.Client
 	out.AuthInfos["user"] = clientcmdapi.NewAuthInfo()
 	var classes map[string]*clusterv1.ClusterClass
 	now := time.Now()
+	uids := map[string]types.UID{}
 	for i := range clusters {
 		c := &clusters[i]
 		if !provisioner.Owns(c, s.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
@@ -484,11 +513,15 @@ func (s *Server) writeHeadlampKubeconfig(ctx context.Context, kube client.Client
 			kctx.AuthInfo = name
 		}
 		out.Contexts[name] = kctx
+		uids[name] = c.UID
 	}
 	raw, err := clientcmd.Write(*out)
 	if err != nil {
 		return fmt.Errorf("headlamp's kubeconfig: %w", err)
 	}
+	s.Headlamp.mu.Lock()
+	s.Headlamp.uids = uids
+	s.Headlamp.mu.Unlock()
 	return s.Headlamp.write(raw, now)
 }
 

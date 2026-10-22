@@ -214,9 +214,11 @@ The administrator switches the weekly build on or off and sets its day and time 
 
 ## Open a cluster in Headlamp
 
-The appliance runs one Headlamp for the clusters of the interface's namespaces, on port 8443 of the appliance, behind the interface's sign-in. **Headlamp** in the top bar opens it, and **Headlamp** on a cluster's page opens that cluster (`https://<appliance>:8443/c/clusters.<name>`). It lists only the clusters you may see, checked against `VM.Audit` on each cluster's pool.
+The appliance runs one Headlamp for the clusters of the interface's namespaces, on port 8443 of the appliance, behind the interface's sign-in. **Headlamp** in the top bar opens it, and **Headlamp** on a cluster's page opens that cluster (`https://<appliance>:8443/kubehenge/open/<namespace>.<name>`, which leads on to `/c/<namespace>.<name>`, such as `/c/clusters.web`). It lists only the clusters you may see, checked against `VM.Audit` on each cluster's pool.
 
 Headlamp itself holds no credentials. Sign in to each cluster with your own token, such as a ServiceAccount token made with `kubectl create token`, or through the cluster's first OpenID Connect provider: the first of its own list, or, for a cluster that sets none, the first of the providers every cluster trusts. For the latter, the provider must accept `https://<appliance>:8443/oidc-callback` as a redirect URL; Headlamp signs in as a public client with PKCE, so no client secret is stored.
+
+Where the administrator switched on the [Headlamp sign-in](install.md#headlamp-sign-in), a cluster opens already signed in as cluster-admin for whoever holds `Sys.Modify` on its pool, the privilege the admin kubeconfig takes. The token is made for your session, lasts an hour at most and never longer than the session, and stays in the appliance: the browser never holds it. A token of your own, or a sign-in through the identity provider, takes its place while Headlamp keeps it. In the cluster's audit log, what you do appears as the ServiceAccount `kube-system/kubehenge-headlamp`; the appliance's log names you beside the token's ID, which the audit log records with each request. Losing `Sys.Modify` ends the sign-in within 30 seconds; switching the setting off ends every token made. **Log out** in Headlamp signs you out of that cluster: the appliance drops your session's token, and Headlamp asks for a token or a sign-in of your own, until you open the cluster again with **Headlamp** on its page here, which signs you in again.
 
 The shared Headlamp does not offer what a shared server must not: port forwards, Helm, node draining, its external proxy, plugin changes, adding clusters or kubeconfigs, setting a token for others, its WebSocket multiplexer and its metrics.
 
@@ -436,6 +438,7 @@ The interface checks the signed-in user's Proxmox VE privileges on each cluster'
 | Download an etcd snapshot, restore etcd | `Sys.Modify` | the cluster's pool |
 | Store a cluster's own backup access key | `Sys.Modify` | the workload pool when creating, the cluster's pool when changing |
 | Download the admin kubeconfig | `Sys.Modify` | the cluster's pool |
+| Open the cluster in the shared Headlamp signed in as cluster-admin, where the [Headlamp sign-in](install.md#headlamp-sign-in) is on | `Sys.Modify` | the cluster's pool |
 | Read an unwell pod's logs on the health page | `Sys.Modify` | the cluster's pool |
 | Trust identity providers beyond those set for every cluster | `Sys.Modify` | the workload pool when creating, the cluster's pool when changing |
 | Choose the repository GitOps syncs from | `Sys.Modify` | the workload pool when creating, the cluster's pool when changing |

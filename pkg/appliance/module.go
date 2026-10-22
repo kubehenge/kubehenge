@@ -56,6 +56,7 @@ module "management" {
   offer_ha_rules         = var.settings.offerHARules
   template_refresh       = var.settings.templateRefresh
   etcd_restore           = var.settings.etcdRestore
+  headlamp_sign_in       = var.settings.headlampSignIn
 
   cluster_datastore_allocate = var.settings.clusterDatastoreAllocate
   cluster_sys_audit          = var.settings.clusterSysAudit
@@ -181,6 +182,7 @@ func (a *Appliance) writeConfig(s *Settings) error {
 		"offerHARules":           s.OfferHARules,
 		"templateRefresh":        moduleTemplateRefresh(s.TemplateRefresh),
 		"etcdRestore":            s.EtcdRestore,
+		"headlampSignIn":         s.HeadlampSignIn,
 
 		"clusterDatastoreAllocate": s.ClusterDatastoreAllocate,
 		"clusterSysAudit":          s.ClusterSysAudit,

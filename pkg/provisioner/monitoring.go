@@ -253,14 +253,14 @@ func metricsManifests(distribution templates.Distribution, proxy Image, addons *
 		// node-exporter's chart has its proxy ask whether the client may get its Service's
 		// node-exporter subresource.
 		&rbacv1.Role{
-			APIVersion: rbacv1.SchemeGroupVersion.String(), Kind: "Role", Name: metricsIssuer, Namespace: nodeExporterNamespace,
+			APIVersion: rbacv1.SchemeGroupVersion.String(), Kind: roleKind, Name: metricsIssuer, Namespace: nodeExporterNamespace,
 			Rules: []rbacv1.PolicyRule{{
 				APIGroups: []string{""}, Resources: []string{"services/" + nodeExporter}, ResourceNames: []string{nodeExporter}, Verbs: []string{"get"},
 			}},
 		},
 		&rbacv1.RoleBinding{
 			APIVersion: rbacv1.SchemeGroupVersion.String(), Kind: "RoleBinding", Name: metricsIssuer, Namespace: nodeExporterNamespace,
-			RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: metricsIssuer},
+			RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: roleKind, Name: metricsIssuer},
 			Subjects: user,
 		},
 		&corev1.ServiceAccount{APIVersion: "v1", Kind: "ServiceAccount", Name: metricsProxyAccount, Namespace: metav1.NamespaceSystem},

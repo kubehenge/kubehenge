@@ -97,6 +97,7 @@ export interface SetupForm {
   moreNamespaces: boolean;
   // Separated by commas or lines.
   extraNamespaces: string;
+  headlampSignIn: boolean;
   passphrase: string;
   confirm: string;
 }
@@ -232,6 +233,9 @@ export function settings(f: SetupForm): ManagementSettings {
   if (f.moreNamespaces && list(f.extraNamespaces).length > 0) {
     s.extraClusterNamespaces = list(f.extraNamespaces);
   }
+  if (f.headlampSignIn) {
+    s.headlampSignIn = true;
+  }
   return s;
 }
 
@@ -311,6 +315,7 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     rootPassword: "",
     moreNamespaces: (saved.extraClusterNamespaces ?? []).length > 0,
     extraNamespaces: (saved.extraClusterNamespaces ?? []).join(", "),
+    headlampSignIn: saved.headlampSignIn === true,
     passphrase: "",
     confirm: "",
   };
@@ -736,6 +741,10 @@ function ManagedSummary({
     ["Template refresh", refreshSummary(s)],
     ["Namespaces for clusters", [ownNamespace, ...(s.extraClusterNamespaces ?? [])].join(", ")],
     [
+      "Headlamp sign-in",
+      s.headlampSignIn === true ? "Signs those who may download a cluster's kubeconfig in as cluster-admin" : "Off",
+    ],
+    [
       "Identity providers",
       s.clusterOIDC && s.clusterOIDC.length > 0 ? s.clusterOIDC.map((p) => p.issuerURL).join(", ") : "None",
     ],
@@ -1060,6 +1069,33 @@ function HARulesChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element {
         rules with its own token, which holds Sys.Audit on / already, so Proxmox VE grants nothing new. Risks: everyone
         with VM.Allocate on the clusters&apos; pool or a cluster&apos;s own pool learns the rules&apos; names and which
         nodes they cover.
+      </p>
+    </fieldset>
+  );
+}
+
+function HeadlampChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element {
+  const hint = useId();
+  return (
+    <fieldset className="group">
+      <legend>Headlamp sign-in</legend>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.headlampSignIn}
+          aria-describedby={hint}
+          onChange={(e) => set("headlampSignIn", e.target.checked)}
+        />{" "}
+        Sign those who may download a cluster&apos;s kubeconfig in to it in Headlamp (recommended)
+      </label>
+      <p className="muted" id={hint}>
+        Grants: whoever holds Sys.Modify on a cluster&apos;s pool opens it in the appliance&apos;s Headlamp as
+        cluster-admin, without pasting a token, with one made for their session that never reaches the browser. No one
+        else gets more than today. Risks: each cluster in the interface&apos;s namespaces gets an account bound to
+        cluster-admin and one that may make its tokens, whose token waits beside the cluster in the management cluster,
+        where the admin kubeconfigs already are; Headlamp acts as that account, not as the Proxmox VE user, whom the
+        interface&apos;s log names beside the token&apos;s ID. Switching it off removes both accounts, which ends every
+        token made.
       </p>
     </fieldset>
   );
@@ -1795,6 +1831,7 @@ function SetupWizard({
         <SysAuditChoice form={form} set={set} />
         <VolumeSnapshotsChoice form={form} set={set} shown={shown} fixed={fixed} />
         <NamespacesChoice form={form} set={set} shown={shown} />
+        <HeadlampChoice form={form} set={set} />
         <fieldset className="group">
           <legend>Identity providers</legend>
           <p className="muted">

@@ -27,7 +27,8 @@ import (
 // workload cluster with: a ServiceAccount there named kubehenge-<identity>, whose token is kept in
 // a Secret of the management cluster. Each does one job, so that what serves one purpose cannot do
 // another's whatever the holder does with it, and the workload cluster's audit log tells them
-// apart. None may read a Secret or exec.
+// apart. None may read a Secret or exec; the tokens IdentityHeadlampIssuer makes are another
+// account's.
 type Identity string
 
 const (
@@ -44,7 +45,18 @@ const (
 	// IdentityAutoscaler is the cluster autoscaler's: it reads what it simulates the scheduler over,
 	// drains and taints the nodes it removes, and reports on itself.
 	IdentityAutoscaler Identity = "autoscaler"
+	// IdentityHeadlampIssuer makes tokens of HeadlampAccount and does nothing else, for the shared
+	// Headlamp to sign those in as who may download the cluster's admin kubeconfig.
+	IdentityHeadlampIssuer Identity = "headlamp-issuer"
 )
+
+// HeadlampAccount is the ServiceAccount in kube-system the shared Headlamp signs people in to a
+// cluster as, bound to cluster-admin. IdentityHeadlampIssuer makes its tokens, one per session, and
+// none is kept beside the Cluster.
+const HeadlampAccount = "kubehenge-headlamp"
+
+// roleKind is the kind of an RBAC Role, which k8s.io/api/rbac/v1 names no constant for.
+const roleKind = "Role"
 
 // IdentitySecretName is the Secret beside a Cluster holding one of its identities' tokens.
 func IdentitySecretName(cluster string, id Identity) string { return cluster + "-" + string(id) }
@@ -85,13 +97,26 @@ type workloadIdentity struct {
 	// need; rules with a Role in the namespace.
 	clusterRules []rbacv1.PolicyRule
 	rules        []rbacv1.PolicyRule
+	// issues is an account beside the identity whose tokens it makes: created before the identity,
+	// and deleted before it, which ends every token made of the account.
+	issues *issuedAccount
 	// wanted says whether a cluster has the identity. One that no longer does loses its Secret;
-	// what it is in the workload cluster goes with its namespace, or with what uses it there.
-	wanted func(*clusterv1.Cluster) (bool, error)
+	// what it is in the workload cluster goes with its namespace, or with what uses it there,
+	// unless deleteInside says otherwise.
+	wanted func(*WorkloadIdentities, *clusterv1.Cluster) (bool, error)
+	// deleteInside has an identity no longer wanted deleted from inside the workload cluster before
+	// its Secret goes, for a namespace that stays.
+	deleteInside bool
 	// mounted keeps the Secret for a pod in the management cluster to mount, in
 	// WorkloadIdentities.MountNamespace, as a pod mounts Secrets of its own namespace alone. It
 	// carries a kubeconfig too, which client-go reads the token through as the token changes.
 	mounted bool
+}
+
+// issuedAccount is a ServiceAccount bound to a ClusterRole the workload cluster has of its own.
+type issuedAccount struct {
+	name        string
+	clusterRole string
 }
 
 func (w *workloadIdentity) account() string { return "kubehenge-" + string(w.id) }
@@ -135,6 +160,15 @@ var workloadIdentities = []workloadIdentity{
 		id: IdentityAutoscaler, namespace: metav1.NamespaceSystem, wanted: autoscalesBeside, mounted: true,
 		clusterRules: autoscalerWorkloadRules, rules: autoscalerStatusRules,
 	},
+	{
+		// Its own token goes beside the Cluster like the others'; the tokens it makes are cluster-admin
+		// and stay in the interface's memory, one per session.
+		id: IdentityHeadlampIssuer, namespace: metav1.NamespaceSystem, wanted: signsInToHeadlamp, deleteInside: true,
+		issues: &issuedAccount{name: HeadlampAccount, clusterRole: "cluster-admin"},
+		rules: []rbacv1.PolicyRule{{
+			APIGroups: []string{""}, Resources: []string{"serviceaccounts/token"}, ResourceNames: []string{HeadlampAccount}, Verbs: []string{"create"},
+		}},
+	},
 }
 
 // identityOf is the identity kept as id.
@@ -147,20 +181,26 @@ func identityOf(id Identity) *workloadIdentity {
 	panic("no identity " + string(id))
 }
 
-func always(*clusterv1.Cluster) (bool, error) { return true, nil }
+func always(*WorkloadIdentities, *clusterv1.Cluster) (bool, error) { return true, nil }
 
-func backsUp(cluster *clusterv1.Cluster) (bool, error) {
+func backsUp(_ *WorkloadIdentities, cluster *clusterv1.Cluster) (bool, error) {
 	b, _, err := optionalVariable[Backups](cluster, backupsVariable)
 	return b.Enabled, err
 }
 
 // autoscalesBeside says whether the cluster's autoscaler runs in the management cluster.
-func autoscalesBeside(cluster *clusterv1.Cluster) (bool, error) {
+func autoscalesBeside(_ *WorkloadIdentities, cluster *clusterv1.Cluster) (bool, error) {
 	if !autoscaled(cluster) {
 		return false, nil
 	}
 	s, err := autoscalerSettingsOf(cluster)
 	return s.Placement == PlacementManagement, err
+}
+
+// signsInToHeadlamp says whether the shared Headlamp signs people in to the cluster: one of the
+// interface's, with the sign-in on.
+func signsInToHeadlamp(w *WorkloadIdentities, cluster *clusterv1.Cluster) (bool, error) {
+	return slices.Contains(w.HeadlampNamespaces, cluster.Namespace), nil
 }
 
 // WorkloadIdentities keeps the identities in every workload cluster that wants them, and
@@ -175,6 +215,10 @@ type WorkloadIdentities struct {
 	MountNamespace string
 	// Remotes reaches the workload clusters.
 	Remotes *Remotes
+	// HeadlampNamespaces are the interface's namespaces, whose clusters the shared Headlamp signs
+	// people in to with IdentityHeadlampIssuer. With none, it signs nobody in, and the identity is
+	// taken out of every cluster that has it.
+	HeadlampNamespaces []string
 
 	now func() time.Time
 }
@@ -212,14 +256,25 @@ func (w *WorkloadIdentities) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if !cluster.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, w.removeMounted(ctx, req.NamespacedName)
 	}
-	wanted, err := w.removeUnwanted(ctx, cluster)
-	if err != nil || len(wanted) == 0 {
+	wanted, removed, err := w.removeUnwanted(ctx, cluster)
+	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if !removed {
+		return ctrl.Result{RequeueAfter: waitInterval}, nil
+	}
+	if len(wanted) == 0 {
+		return ctrl.Result{}, nil
 	}
 	// Until then the API server may not answer, and a node or pod to read is yet to come.
 	if !meta.IsStatusConditionTrue(cluster.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition) {
 		return ctrl.Result{RequeueAfter: waitInterval}, nil
 	}
+	return w.renewDue(ctx, cluster, wanted)
+}
+
+// renewDue renews the tokens of the identities that are due, and says when to look again.
+func (w *WorkloadIdentities) renewDue(ctx context.Context, cluster *clusterv1.Cluster, wanted []*workloadIdentity) (ctrl.Result, error) {
 	due, next, err := w.renewalDue(ctx, cluster, wanted, w.clock())
 	if err != nil || len(due) == 0 {
 		return ctrl.Result{RequeueAfter: next}, err
@@ -270,25 +325,55 @@ func (w *WorkloadIdentities) secretKey(cluster client.ObjectKey, id *workloadIde
 	return client.ObjectKey{Namespace: cluster.Namespace, Name: IdentitySecretName(cluster.Name, id.id)}
 }
 
-// removeUnwanted deletes the Secrets of the identities the cluster no longer wants, and returns
-// those it does.
-func (w *WorkloadIdentities) removeUnwanted(ctx context.Context, cluster *clusterv1.Cluster) ([]*workloadIdentity, error) {
+// removeUnwanted deletes the identities the cluster no longer wants, and returns those it does. It
+// reports false while one still has to be deleted from a workload cluster it cannot reach.
+func (w *WorkloadIdentities) removeUnwanted(ctx context.Context, cluster *clusterv1.Cluster) ([]*workloadIdentity, bool, error) {
 	var wanted []*workloadIdentity
+	removed := true
 	for i := range workloadIdentities {
 		id := &workloadIdentities[i]
-		on, err := id.wanted(cluster)
+		on, err := id.wanted(w, cluster)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if on {
 			wanted = append(wanted, id)
 			continue
 		}
-		if err := w.removeSecret(ctx, w.secretKey(client.ObjectKeyFromObject(cluster), id)); err != nil {
-			return nil, err
+		gone, err := w.removeIdentity(ctx, cluster, id)
+		if err != nil {
+			return nil, false, err
+		}
+		removed = removed && gone
+	}
+	return wanted, removed, nil
+}
+
+// removeIdentity deletes an identity no longer wanted: from the workload cluster where it says so,
+// then its Secret, which tells that it was made. It reports false while the workload cluster cannot
+// be reached, with the Secret kept to try again.
+func (w *WorkloadIdentities) removeIdentity(ctx context.Context, cluster *clusterv1.Cluster, id *workloadIdentity) (bool, error) {
+	key := w.secretKey(client.ObjectKeyFromObject(cluster), id)
+	// Read first, so that a cluster that never had the identity costs no delete on every reconcile.
+	s := &corev1.Secret{}
+	err := w.Client.Get(ctx, key, s)
+	if apierrors.IsNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reading Secret %s: %w", key, err)
+	}
+	if id.deleteInside {
+		workload, found, err := w.Remotes.get(ctx, cluster)
+		if err != nil || !found {
+			return false, err
+		}
+		if err := id.remove(ctx, workload.client); err != nil {
+			w.Remotes.forget(cluster)
+			return false, err
 		}
 	}
-	return wanted, nil
+	return true, w.deleteSecret(ctx, key, s)
 }
 
 // removeMounted deletes a cluster's Secrets of the mounted identities, which, outside the Cluster's
@@ -315,6 +400,11 @@ func (w *WorkloadIdentities) removeSecret(ctx context.Context, key client.Object
 	if err != nil {
 		return fmt.Errorf("reading Secret %s: %w", key, err)
 	}
+	return w.deleteSecret(ctx, key, s)
+}
+
+// deleteSecret deletes the Secret read, and none made since under its name.
+func (w *WorkloadIdentities) deleteSecret(ctx context.Context, key client.ObjectKey, s *corev1.Secret) error {
 	if err := client.IgnoreNotFound(w.Client.Delete(ctx, s, client.Preconditions{UID: &s.UID})); err != nil {
 		return fmt.Errorf("deleting Secret %s: %w", key, err)
 	}
@@ -425,13 +515,29 @@ type identityObject struct {
 	mutate func()
 }
 
-// objects are what the identity is in a workload cluster: its ServiceAccount, then each role with
-// its binding.
-func (w *workloadIdentity) objects() []identityObject {
+// issuedObjects are the account the identity issues tokens of, with its binding.
+func (w *workloadIdentity) issuedObjects() []identityObject {
+	a := w.issues
+	if a == nil {
+		return nil
+	}
+	sa := &corev1.ServiceAccount{Namespace: w.namespace, Name: a.name}
+	binding := &rbacv1.ClusterRoleBinding{Name: a.name}
+	ref := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: a.clusterRole}
+	subjects := []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: a.name, Namespace: w.namespace}}
+	return []identityObject{
+		{rbacv1.ServiceAccountKind, sa, func() { sa.AutomountServiceAccountToken = new(false) }},
+		{"ClusterRoleBinding", binding, func() { binding.RoleRef, binding.Subjects = ref, subjects }},
+	}
+}
+
+// ownObjects are what the identity itself is in a workload cluster: its ServiceAccount, then each
+// role with its binding.
+func (w *workloadIdentity) ownObjects() []identityObject {
 	account := w.account()
 	subjects := []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: account, Namespace: w.namespace}}
 	sa := &corev1.ServiceAccount{Namespace: w.namespace, Name: account}
-	objects := []identityObject{{"ServiceAccount", sa, func() { sa.AutomountServiceAccountToken = new(false) }}}
+	objects := []identityObject{{rbacv1.ServiceAccountKind, sa, func() { sa.AutomountServiceAccountToken = new(false) }}}
 	if len(w.clusterRules) > 0 {
 		role := &rbacv1.ClusterRole{Name: account}
 		binding := &rbacv1.ClusterRoleBinding{Name: account}
@@ -443,17 +549,17 @@ func (w *workloadIdentity) objects() []identityObject {
 	if len(w.rules) > 0 {
 		role := &rbacv1.Role{Namespace: w.namespace, Name: account}
 		binding := &rbacv1.RoleBinding{Namespace: w.namespace, Name: account}
-		ref := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: account}
+		ref := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: roleKind, Name: account}
 		objects = append(objects,
-			identityObject{"Role", role, func() { role.Rules = w.rules }},
+			identityObject{roleKind, role, func() { role.Rules = w.rules }},
 			identityObject{"RoleBinding", binding, func() { binding.RoleRef, binding.Subjects = ref, subjects }})
 	}
 	return objects
 }
 
-// ensure creates the identity in the workload cluster with its roles, and puts back what was
-// changed of them. It reports false, with nothing done, while the identity's namespace does not
-// exist.
+// ensure creates the identity in the workload cluster with the account it issues and its roles,
+// and puts back what was changed of them. It reports false, with nothing done, while the
+// identity's namespace does not exist.
 func (w *workloadIdentity) ensure(ctx context.Context, workload client.Client) (bool, error) {
 	if err := workload.Get(ctx, client.ObjectKey{Name: w.namespace}, &corev1.Namespace{}); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -461,19 +567,24 @@ func (w *workloadIdentity) ensure(ctx context.Context, workload client.Client) (
 		}
 		return false, fmt.Errorf("reading namespace %s: %w", w.namespace, err)
 	}
-	for _, o := range w.objects() {
+	for _, o := range slices.Concat(w.issuedObjects(), w.ownObjects()) {
 		if _, err := controllerutil.CreateOrUpdate(ctx, workload, o.obj, func() error { o.mutate(); return nil }); err != nil {
-			return false, fmt.Errorf("applying %s %s: %w", o.kind, w.account(), err)
+			return false, fmt.Errorf("applying %s %s: %w", o.kind, o.obj.GetName(), err)
 		}
 	}
 	return true, nil
 }
 
-// remove deletes the identity from the workload cluster: its rights first, its account last.
+// remove deletes the identity from the workload cluster. The account it issues goes first, its
+// binding right after: the API server takes no token of an account that is gone, once its token
+// cache lets go of one it took in the last seconds, and the account's rights go with its binding.
+// Then the identity's own rights, and its account last.
 func (w *workloadIdentity) remove(ctx context.Context, workload client.Client) error {
-	for _, o := range slices.Backward(w.objects()) {
+	own := w.ownObjects()
+	slices.Reverse(own)
+	for _, o := range slices.Concat(w.issuedObjects(), own) {
 		if err := client.IgnoreNotFound(workload.Delete(ctx, o.obj)); err != nil {
-			return fmt.Errorf("deleting %s %s: %w", o.kind, w.account(), err)
+			return fmt.Errorf("deleting %s %s: %w", o.kind, o.obj.GetName(), err)
 		}
 	}
 	return nil

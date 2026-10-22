@@ -43,6 +43,7 @@ const form: SetupForm = {
   rootPassword: "",
   moreNamespaces: false,
   extraNamespaces: "",
+  headlampSignIn: false,
   passphrase: "correct horse battery staple",
   confirm: "correct horse battery staple",
 };
@@ -234,6 +235,15 @@ describe("setup", () => {
     ]).toStrictEqual([true, false]);
   });
 
+  it("asks for the Headlamp sign-in only when it is switched on", () => {
+    expect(settings({ ...form, headlampSignIn: true })).toHaveProperty("headlampSignIn", true);
+    expect(settings(form)).not.toHaveProperty("headlampSignIn");
+    expect([
+      formOf(settings({ ...form, headlampSignIn: true })).headlampSignIn,
+      formOf(settings(form)).headlampSignIn,
+    ]).toStrictEqual([true, false]);
+  });
+
   it("passes the clusters' identity providers on, empty fields left to the defaults", () => {
     const s = settings({
       ...form,
@@ -338,6 +348,10 @@ describe("setup", () => {
     await user.type(screen.getByLabelText("DNS servers"), "192.0.2.1");
     await user.click(forClusters("Storages").getByRole("checkbox", { name: "local-lvm" }));
     await user.click(forClusters("Bridges").getByRole("checkbox", { name: "vmbr0" }));
+    const signIn = screen.getByLabelText(/^Sign those who may download a cluster's kubeconfig in/u);
+    expect(signIn).not.toBeChecked();
+    expect(signIn).toHaveAccessibleDescription(/Grants: .* cluster-admin.* Risks: /u);
+    await user.click(signIn);
     await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple");
     await user.type(screen.getByLabelText("Repeat passphrase"), "correct horse battery staple");
     await submit(user);
@@ -354,6 +368,7 @@ describe("setup", () => {
         imageDatastore: "local",
         bootstrapDatastore: "local",
         workloadBridges: ["vmbr0"],
+        headlampSignIn: true,
       },
     });
   });

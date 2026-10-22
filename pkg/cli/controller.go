@@ -114,6 +114,7 @@ type controllerOptions struct {
 	templateRefresh   bool
 	autoscaler        provisioner.AutoscalerReconciler
 	autoscalerImages  []string
+	headlampSignIn    []string
 }
 
 func newControllerCommand(conn *pve.Config) *cobra.Command {
@@ -153,6 +154,7 @@ through the VMs' guest agents.`,
 	f.StringSliceVar(&o.r.Charts.PodSecurityExempt, "pod-security-exempt", nil, "namespaces Kyverno's pod security policies leave alone, those the ClusterClasses' Pod Security Admission exempts (comma-separated)")
 	f.StringArrayVar(&o.classProviders, "class-providers", nil, "namespaces of the Cluster API providers only one ClusterClass's clusters use, as <class>=<namespace>,<namespace>; they run only while a cluster does (repeatable)")
 	f.BoolVar(&o.offerHARules, "offer-ha-rules", false, "offer Proxmox VE's HA node-affinity rules, their names and nodes only, to those who may create a cluster but not read the rules, through the ConfigMap "+provisioner.HARulesName)
+	f.StringSliceVar(&o.headlampSignIn, "headlamp-sign-in-namespaces", nil, "the interface's namespaces, whose clusters get identities through which the appliance's shared Headlamp signs those who may download a cluster's admin kubeconfig in as cluster-admin (comma-separated); none, nobody is signed in and the identities are removed")
 	f.DurationVar(&o.upgradeInterval, "upgrade-interval", defaultUpgradeInterval, "how often clusters are checked for an automatic upgrade due in their window")
 	f.DurationVar(&o.nodeImageSoak, "node-image-soak", provisioner.DefaultNodeImageSoak, "how old a template build is before clusters move to it; the template refresh's --soak")
 	f.BoolVar(&o.templateRefresh, "template-refresh", false, "start the template refresh CronJob's Job for the builds asked for in the interface")
@@ -528,6 +530,7 @@ func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *pro
 	}
 	identities := &provisioner.WorkloadIdentities{
 		Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, MountNamespace: o.autoscaler.Namespace, Remotes: registrar.Remotes,
+		HeadlampNamespaces: o.headlampSignIn,
 	}
 	if err := identities.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the workload identities: %w", err)

@@ -405,7 +405,7 @@ describe("clusters", () => {
     const links = screen.getAllByRole("link", { name: "Headlamp" });
     expect(links.map((a) => a.getAttribute("href"))).toStrictEqual([
       `https://${location.hostname}:8444/`,
-      `https://${location.hostname}:8444/c/default.web`,
+      `https://${location.hostname}:8444/kubehenge/open/default.web`,
     ]);
     for (const a of links) {
       expect(a).toHaveAttribute("rel", "noopener noreferrer");

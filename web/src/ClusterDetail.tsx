@@ -34,10 +34,14 @@ const pollChanging = 5000;
 
 const httpNotFound = 404;
 
-/** headlampURL is a cluster's page in the shared Headlamp, served on its own port of this host. */
+/**
+ * headlampURL is a cluster's page in the shared Headlamp, served on its own port of this host.
+ * A cluster's goes through the gate's opening of it, which signs in again a session that signed
+ * out of the cluster in Headlamp, and leads on to the cluster's page there.
+ */
 export function headlampURL(port: number, cluster?: string): string {
   const host = location.hostname.includes(":") ? `[${location.hostname}]` : location.hostname;
-  return `https://${host}:${port}/${filled(cluster) ? `c/${encodeURIComponent(cluster)}` : ""}`;
+  return `https://${host}:${port}/${filled(cluster) ? `kubehenge/open/${encodeURIComponent(cluster)}` : ""}`;
 }
 
 // headlampOf is the cluster's page in the shared Headlamp, when one runs and can reach the cluster.

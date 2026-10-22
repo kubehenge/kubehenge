@@ -425,6 +425,8 @@ export interface ManagementSettings {
   clusterVolumeSnapshots?: boolean;
   /** More namespaces the interface creates and manages clusters in, beside its own. */
   extraClusterNamespaces?: string[];
+  /** The shared Headlamp signs those who may download a cluster's kubeconfig in as cluster-admin. */
+  headlampSignIn?: boolean;
 }
 
 /** When and where the Ubuntu VM templates are built again; empty fields take the defaults. */

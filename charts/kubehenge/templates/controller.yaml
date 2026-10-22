@@ -273,6 +273,9 @@ spec:
             - --template-refresh
             {{- end }}
             - --proxmox-insecure={{ .Values.proxmox.insecure }}
+            {{- if .Values.interface.headlampSignIn }}
+            - --headlamp-sign-in-namespaces={{ prepend (.Values.interface.extraNamespaces | default list) .Values.interface.namespace | join "," }}
+            {{- end }}
             {{- range $class, $namespaces := .Values.providerNamespaces }}
             - --class-providers={{ $class }}={{ join "," $namespaces }}
             {{- end }}
