@@ -1,0 +1,85 @@
+---
+name: fuzz
+
+# The appliance's updater unpacks the archives it downloads and reads the release indexes and
+# versions it is sent, so the Go fuzz tests run for real here: every target for a few minutes on
+# each pull request, and for half an hour each week on main. `make unit` runs only their seeds. Go
+# keeps the inputs that reach new code in its cache, which is kept between runs, so each run starts
+# where the last left off; an input that fails is attached to the run, to be added to the
+# package's testdata/fuzz, where it stays a seed.
+on:
+  # Every pull request, whatever it targets, so that one stacked on another is checked too.
+  pull_request:
+  schedule:
+    - cron: '41 3 * * 6'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOTOOLCHAIN: local
+  GOPROXY: https://proxy.golang.org|direct
+
+jobs:
+  # Every fuzz test in the repository, so that a new one is fuzzed without a line here.
+  targets:
+    name: targets
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    outputs:
+      targets: ${{ steps.list.outputs.targets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: list
+        run: |
+          set -eu
+          targets=$(git grep -E '^func Fuzz[A-Za-z0-9_]*\(' -- '*_test.go' |
+            sed -E 's|^(.*)/[^/]*:func (Fuzz[A-Za-z0-9_]*)\(.*|\1 \2|' |
+            jq -cnR '[inputs | split(" ") | {package: ("./" + .[0]), target: .[1]}]')
+          [ "$targets" != '[]' ] || { echo "::error::no fuzz tests found"; exit 1; }
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    needs: targets
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.targets.outputs.targets) }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Go
+        run: |
+          scripts/tools.sh "$RUNNER_TEMP/bin" go
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      # Saved under a key of its own each run and restored from the newest, so the corpus grows;
+      # a pull request starts from main's and keeps what it finds to itself.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/go-build/fuzz
+          key: fuzz-${{ matrix.package }}-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-${{ matrix.package }}-${{ matrix.target }}-
+      - name: Fuzz
+        env:
+          PACKAGE: ${{ matrix.package }}
+          TARGET: ${{ matrix.target }}
+          FUZZTIME: ${{ github.event_name == 'pull_request' && '3m' || '30m' }}
+        run: go test -run '^$' -fuzz "^${TARGET}\$" -fuzztime "$FUZZTIME" "$PACKAGE"
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: ${{ matrix.package }}/testdata/fuzz/${{ matrix.target }}/
+          if-no-files-found: ignore
+          retention-days: 30

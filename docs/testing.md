@@ -5,7 +5,7 @@ Kubehenge is tested in four tiers, and only the last needs Proxmox VE.
 | Tier | What it checks | Needs Proxmox VE |
 | --- | --- | --- |
 | Lint and static | formatting, lint and types of Go, the known vulnerabilities it reaches, the frontend, shell, Terraform/OpenTofu, YAML, Markdown, the workflows and the e2e image's Dockerfile, each at its strictest settings; the charts' values against their schemas | no |
-| Unit | the interface's backend and frontend, and the template rendering; the fuzz tests' seeds (`go test -fuzz` runs one for longer) | no |
+| Unit | the interface's backend and frontend, and the template rendering; the fuzz tests' seeds (`go test -fuzz` runs one for longer; CI fuzzes every one for minutes on each pull request and for half an hour each week, `.github/workflows/fuzz.yml`) | no |
 | Integration | the Helm charts and Kubehenge's controllers against a real Kubernetes API server carrying the CRDs of the Cluster API releases the management cluster installs, and of the Cluster API operator: every object against its schema, server-side apply, finalizers, status and scale | no |
 | End to end | real clusters of VMs on Proxmox VE: create, scale workers up and down, upgrade Kubernetes by one minor version with nodes replaced one at a time, replace a failed node, delete; for each distribution and add-on | yes |
 

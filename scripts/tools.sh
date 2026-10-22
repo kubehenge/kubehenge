@@ -1,8 +1,8 @@
 #!/bin/sh
-# Installs the tools `make test`, `make dist`, `make image` and the end-to-end tests need besides the
-# system's own (curl, jq, openssl, python3), Go, Node and uv among them, at pinned versions checked
-# against their published checksums, into a directory of the caller's choosing; every one, or only
-# those named:
+# Installs the tools `make test`, `make dist`, `make image`, the release and the end-to-end tests
+# need besides the system's own (curl, jq, openssl, python3), Go, Node and uv among them, at pinned
+# versions checked against their published checksums, into a directory of the caller's choosing;
+# every one, or only those named:
 #
 #   scripts/tools.sh <directory> [tool...]
 #
@@ -146,3 +146,9 @@ release hadolint hadolint/hadolint "${HADOLINT}" hadolint-linux-x86_64 "${HADOLI
 COSIGN=v3.1.4
 COSIGN_SHA256=424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
 release cosign sigstore/cosign "${COSIGN}" cosign-linux-amd64 "${COSIGN_SHA256}"
+
+# The release writes the SBOMs of its archive and images with it (scripts/sbom.sh).
+# renovate: datasource=github-release-attachments depName=anchore/syft
+SYFT=v1.55.0
+SYFT_SHA256=bb65249542db5fedeeb4d3f9b018b75e7264dbfbbb10486f044581a92f90490d
+release syft anchore/syft "${SYFT}" "syft_${SYFT#v}_linux_amd64.tar.gz" "${SYFT_SHA256}" syft

@@ -54,6 +54,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
       - run: make integration
 
+  # The workflows are code with credentials attached, the release's among them, so actionlint and
+  # zizmor check them in a job of their own as well as in `make test`: it answers within a minute,
+  # and zizmor's findings are annotated on the lines they concern.
+  workflows:
+    name: Workflows
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tools
+        run: |
+          scripts/tools.sh "$RUNNER_TEMP/bin" actionlint shellcheck uv
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: make lint-actions ZIZMOR_FLAGS=--format=github
+        env:
+          # zizmor's online audits: impostor commits and actions with known vulnerabilities.
+          GH_TOKEN: ${{ github.token }}
+
   # A pull request's new or changed dependencies: their licences and known vulnerabilities, against
   # .github/dependency-review-config.yml.
   dependencies:

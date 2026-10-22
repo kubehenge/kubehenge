@@ -103,9 +103,10 @@ index:
 		--tofu-sha256 $(TOFU_SHA256) > dist/index.json
 
 # Builds and pushes the image the management cluster runs the controller from, and prints its
-# reference by digest.
+# reference by digest. ko's own SBOM would be pushed beside it unsigned; the release attests one
+# instead (scripts/sbom.sh).
 image: web
-	KO_DOCKER_REPO=$(IMAGE) KO_CONFIG_PATH=cmd/kubehenge ko build --bare $(KO_FLAGS) ./cmd/kubehenge
+	KO_DOCKER_REPO=$(IMAGE) KO_CONFIG_PATH=cmd/kubehenge ko build --bare --sbom=none $(KO_FLAGS) ./cmd/kubehenge
 
 # Build and push the provider images the management cluster runs as Kubehenge builds them
 # (capmox_build and helm_addon_build in management-cluster/versions.tf), check their digests and
@@ -180,10 +181,12 @@ lint-shell:
 	@# A checkout on a file system without modes records none, and the workflows run scripts directly.
 	@git ls-files -s '*.sh' | awk '$$1 != "100755" { print $$4 ": not executable in git; git update-index --chmod=+x " $$4; bad = 1 } END { exit bad }'
 
-# zizmor runs its online audits too when GH_TOKEN is set.
+# zizmor runs its online audits too when GH_TOKEN is set; ZIZMOR_FLAGS=--format=github has CI
+# annotate the lines it finds.
+ZIZMOR_FLAGS ?=
 lint-actions:
 	actionlint .github/workflows/*.yml
-	$(ZIZMOR) --persona=auditor .github/workflows/
+	$(ZIZMOR) --persona=auditor $(ZIZMOR_FLAGS) .github/workflows/
 
 lint-yaml:
 	$(YAMLLINT) --strict $$($(FILES) '*.yml' '*.yaml' ':!:*/templates/*')
