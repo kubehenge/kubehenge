@@ -1,6 +1,6 @@
 # Releasing
 
-A release is built by CI and published by a person. CI checks the tag, builds and tests everything, pushes the controller's and the providers' images, signs and attests what it built and leaves a draft release; the release index that appliances upgrade from is signed offline with the release key, which never enters CI.
+A pushed version tag releases Kubehenge with no further step. CI checks the tag, builds and tests everything, pushes the controller's and the providers' images, signs the release index that appliances upgrade from with the release key, signs and attests what it built, checks it all as a user would and publishes the release.
 
 ## What a release is
 
@@ -20,13 +20,14 @@ A release is built by CI and published by a person. CI checks the tag, builds an
 
 A pushed tag starts `.github/workflows/release.yml`, which calls `.github/workflows/release-build.yml` for everything that makes the release's bytes and signs them, then checks and publishes what comes out:
 
-1. **gate** waits for the owner's approval (the `release` environment), then refuses to go on unless the tag is annotated and carries a signature GitHub verifies, names a commit of main that carries one too, and that commit passed every check main's ruleset requires, read from the merge queue's run on that very commit, the end-to-end tests among them. The tag has to match the chart's `appVersion`, `docs/changelog.md` needs a section for the version, and `pkg/release/release.pub` must be there.
+1. **gate** refuses to go on unless the tag is annotated and carries a signature GitHub verifies, names a commit of main that carries one too, and that commit passed every check main's ruleset requires, read from the merge queue's run on that very commit, the end-to-end tests among them. The tag has to match the chart's `appVersion`, `docs/changelog.md` needs a section for the version, and `pkg/release/release.pub` must be there.
 2. **test** runs every lint and unit test and the integration tier again, so that a vulnerability published since the merge, in a Go module or an action, stops the release.
 3. **build** pushes the three images and builds the archive, `install.sh` and `index.json`, the last made from the previous release's signed index (checked against the release key) with this release added.
-4. **sbom** writes the SPDX SBOMs of the archive and of each image with syft (`scripts/sbom.sh`, `scripts/syft.yaml`), and checks each lists what ships: every file of the archive with its SHA-256, every module `go version -m` finds in its binaries, the interface's packages and the module's providers at their locked versions; for an image, the Go module its program is built from and the base image's packages.
-5. **attest** signs the images with Sigstore (keyless) and attests build provenance and the SBOMs: of the files, onto the repository and into `kubehenge_<version>.intoto.jsonl`; of the images, onto the repository and beside each image in ghcr.io. It is the only job that can sign: it holds the OpenID Connect token Sigstore signs against, and runs no code but cosign, which it installs by its checksum, and the attest action.
-6. **verify** checks everything as a user would, from the files alone, naming `release-build.yml` at this tag as the builder: the checksums, each file's provenance, the archive's SBOM, and each image's provenance, SBOM and signature.
-7. **publish** creates the draft release, whose notes are the version's changelog section; before 1.0.0 they open with the README's alpha warning. A draft left by a failed run is made again; a published release is never rewritten.
+4. **sign** signs `index.json` with the release key, writing `index.json.sig`. It is the only job that holds the key, the `RELEASE_KEY` secret of the `release` environment, and it checks out nothing: it checks the archive against its checksum and signs with the `kubehenge` binary inside it, which refuses any key but the one it was built to trust.
+5. **sbom** writes the SPDX SBOMs of the archive and of each image with syft (`scripts/sbom.sh`, `scripts/syft.yaml`), and checks each lists what ships: every file of the archive with its SHA-256, every module `go version -m` finds in its binaries, the interface's packages and the module's providers at their locked versions; for an image, the Go module its program is built from and the base image's packages.
+6. **attest** signs the images with Sigstore (keyless) and attests build provenance and the SBOMs: of the files, onto the repository and into `kubehenge_<version>.intoto.jsonl`; of the images, onto the repository and beside each image in ghcr.io. It is the only job that can sign: it holds the OpenID Connect token Sigstore signs against, and runs no code but cosign, which it installs by its checksum, and the attest action.
+7. **verify** checks everything as a user would, from the files alone, naming `release-build.yml` at this tag as the builder: the checksums, each file's provenance, `index.json.sig`'s among them, the archive's SBOM, and each image's provenance, SBOM and signature.
+8. **publish** creates the release with every file, publishes it and marks it the latest. Its notes are the version's changelog section; before 1.0.0 they open with the README's alpha warning. A draft left by a failed run is made again; a published release is never rewritten.
 
 This is SLSA Build Level 3 on GitHub Actions: the build runs on GitHub-hosted runners, used once, in a reusable workflow, so the certificate Sigstore issues names `release-build.yml` rather than whatever called it, and a verifier that insists on it (`--signer-workflow`, `--certificate-identity`) insists on its exact steps at the tag. No caller can change those steps, and no build cache, which another workflow's run could have written, reaches the release.
 
@@ -35,21 +36,21 @@ This is SLSA Build Level 3 on GitHub Actions: the build runs on GitHub-hosted ru
 | Subject | Attestations | Stored |
 | --- | --- | --- |
 | The archive | build provenance (SLSA v1), SBOM (SPDX 2.3) | on the repository, and in `kubehenge_<version>.intoto.jsonl` |
-| `kubehenge_<version>_SHA256SUMS`, `install.sh`, `index.json`, the archive's SBOM | build provenance | on the repository, and in `kubehenge_<version>.intoto.jsonl` |
+| `kubehenge_<version>_SHA256SUMS`, `install.sh`, `index.json`, `index.json.sig`, the archive's SBOM | build provenance | on the repository, and in `kubehenge_<version>.intoto.jsonl` |
 | Each of the three images | build provenance, SBOM, cosign signature | on the repository, and beside the image in ghcr.io |
-| `index.json` | the release key's signature, `index.json.sig`, made offline | the release |
+| `index.json` | the release key's signature, `index.json.sig` | the release |
 
 ## Once, before the first release
 
-1. Make the release key on a machine that is not used for anything online, and keep the private key offline:
+1. Make the release key:
 
    ```sh
    kubehenge release keygen release.key
    ```
 
-   It prints the public key; commit it as `pkg/release/release.pub`. Every build links it in, and an appliance installs only releases listed in an index signed by its private half. Losing the private key means no appliance can be upgraded from the interface again; whoever holds it can upgrade every appliance.
+   It prints the public key; commit it as `pkg/release/release.pub`. Every build links it in, and an appliance installs only releases listed in an index signed by its private half. The same command makes a new key whenever one is wanted; appliances then upgrade only to releases built with the new `release.pub`.
 2. In the repository's settings:
-   - create the environment `release` with required reviewers, deployable only from tags matching `v*`, so a pushed tag waits for approval before anything is built;
+   - create the environment `release`, deployable only from tags matching `v*`, and give it the secret `RELEASE_KEY` holding the contents of `release.key`;
    - add a tag ruleset for `v*` that blocks updates and deletions, so a released tag can never be moved;
    - turn on immutable releases (Settings, General, Releases), so a published release's files and tag can never change and GitHub attests the release itself;
    - add the signing key you tag with to your GitHub account as a signing key, so GitHub verifies the tag's signature.
@@ -65,53 +66,39 @@ This is SLSA Build Level 3 on GitHub Actions: the build runs on GitHub-hosted ru
    git push origin v<version>
    ```
 
-3. Approve the run. It goes through the steps [above](#how-it-is-built-and-signed) and leaves a draft release.
-4. Check what CI built, on a machine with the GitHub CLI and cosign, logged in to ghcr.io (`docker login ghcr.io`) while its packages are still private:
+   That is all: the run goes through the steps [above](#how-it-is-built-and-signed) and publishes the release. Appliances look for `releases/latest/download/index.json` and its signature, so they offer the new release as soon as it is published.
 
-   ```sh
-   gh release download v<version> --dir release
-   cd release
-   sha256sum -c kubehenge_<version>_SHA256SUMS
-   verify() {
-     gh attestation verify "$@" --repo kubehenge/kubehenge \
-       --signer-workflow kubehenge/kubehenge/.github/workflows/release-build.yml \
-       --source-ref refs/tags/v<version> --deny-self-hosted-runners
-   }
-   for file in kubehenge_<version>_linux_amd64.tar.gz kubehenge_<version>_SHA256SUMS install.sh index.json \
-     kubehenge_<version>_linux_amd64.spdx.json; do
-     verify "$file" --bundle kubehenge_<version>.intoto.jsonl
-   done
-   verify kubehenge_<version>_linux_amd64.tar.gz --bundle kubehenge_<version>.intoto.jsonl \
-     --predicate-type https://spdx.dev/Document/v2.3
-   for image in ghcr.io/kubehenge/kubehenge:v<version> \
-     "$(sed -n 's/^ *image *= *"\(ghcr.io\/kubehenge\/cluster-api-provider-proxmox@.*\)"/\1/p' ../management-cluster/versions.tf)" \
-     "$(sed -n 's/^ *image *= *"\(ghcr.io\/kubehenge\/cluster-api-addon-provider-helm@.*\)"/\1/p' ../management-cluster/versions.tf)"; do
-     verify "oci://$image"
-     verify "oci://$image" --predicate-type https://spdx.dev/Document/v2.3
-     cosign verify "$image" \
-       --certificate-identity https://github.com/kubehenge/kubehenge/.github/workflows/release-build.yml@refs/tags/v<version> \
-       --certificate-oidc-issuer https://token.actions.githubusercontent.com
-   done
-   ```
+## Checking a release
 
-   Read `index.json`: the previous releases unchanged, and one new entry whose checksum matches `SHA256SUMS`.
-5. On the offline machine, sign the index and bring back only the signature:
+Anyone can check a published release, on a machine with the GitHub CLI and cosign, from a checkout of the tag (for the image references in `management-cluster/versions.tf`):
 
-   ```sh
-   kubehenge release sign release.key index.json
-   ```
+```sh
+gh release verify v<version> --repo kubehenge/kubehenge
+gh release download v<version> --repo kubehenge/kubehenge --dir release
+cd release
+sha256sum -c kubehenge_<version>_SHA256SUMS
+verify() {
+  gh attestation verify "$@" --repo kubehenge/kubehenge \
+    --signer-workflow kubehenge/kubehenge/.github/workflows/release-build.yml \
+    --source-ref refs/tags/v<version> --deny-self-hosted-runners
+}
+for file in kubehenge_<version>_linux_amd64.tar.gz kubehenge_<version>_SHA256SUMS install.sh index.json \
+  index.json.sig kubehenge_<version>_linux_amd64.spdx.json; do
+  verify "$file" --bundle kubehenge_<version>.intoto.jsonl
+done
+verify kubehenge_<version>_linux_amd64.tar.gz --bundle kubehenge_<version>.intoto.jsonl \
+  --predicate-type https://spdx.dev/Document/v2.3
+for image in ghcr.io/kubehenge/kubehenge:v<version> \
+  "$(sed -n 's/^ *image *= *"\(ghcr.io\/kubehenge\/cluster-api-provider-proxmox@.*\)"/\1/p' ../management-cluster/versions.tf)" \
+  "$(sed -n 's/^ *image *= *"\(ghcr.io\/kubehenge\/cluster-api-addon-provider-helm@.*\)"/\1/p' ../management-cluster/versions.tf)"; do
+  verify "oci://$image"
+  verify "oci://$image" --predicate-type https://spdx.dev/Document/v2.3
+  cosign verify "$image" \
+    --certificate-identity https://github.com/kubehenge/kubehenge/.github/workflows/release-build.yml@refs/tags/v<version> \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+done
+```
 
-   This writes `index.json.sig`, after checking the index parses and the signature verifies.
-6. Upload the signature and publish:
-
-   ```sh
-   gh release upload v<version> index.json.sig
-   gh release edit v<version> --draft=false --latest
-   gh release verify v<version> --repo kubehenge/kubehenge
-   ```
-
-   The last command checks GitHub's attestation of the published release: its tag and every file, `index.json.sig` included, as they now stay.
-
-Appliances look for `releases/latest/download/index.json`; until the signature is published beside it, they offer nothing, so a release published without it upgrades no appliance.
+`gh release verify` checks GitHub's attestation of the published release: its tag and every file as they now stay. Until the packages on ghcr.io are public, the image checks need a login (`docker login ghcr.io`). `index.json` should hold the previous releases unchanged and one new entry whose checksum matches `SHA256SUMS`.
 
 How users check a release before installing it is in [install.md](install.md#verifying-a-release).
