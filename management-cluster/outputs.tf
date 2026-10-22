@@ -34,11 +34,13 @@ output "proxmox_objects" {
       proxmox_virtual_environment_role.template_builder_vms[*].role_id,
       proxmox_virtual_environment_role.template_builder_files[*].role_id,
       proxmox_virtual_environment_role.template_builder_network[*].role_id,
+      proxmox_virtual_environment_role.etcd_restore[*].role_id,
     )
     users = concat(
       [proxmox_virtual_environment_user.cluster_api.user_id, proxmox_virtual_environment_user.provisioner.user_id],
       proxmox_virtual_environment_user.ha[*].user_id,
       proxmox_virtual_environment_user.template_builder[*].user_id,
+      proxmox_virtual_environment_user.etcd_restore[*].user_id,
     )
     groups = concat([proxmox_virtual_environment_group.clusters.group_id], proxmox_virtual_environment_group.clusters_audit[*].group_id)
     vm_ids = proxmox_virtual_environment_vm.node[*].vm_id

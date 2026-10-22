@@ -319,6 +319,10 @@ resource "helm_release" "cluster_api_providers" {
       name  = "secrets.${local.builder_secret.name}.data.token"
       value = t.value
       type  = "string"
+      }], [for t in proxmox_user_token.etcd_restore : {
+      name  = "secrets.${local.controller_secret.name}.data.restore-token"
+      value = t.value
+      type  = "string"
   }])
 
   lifecycle {
@@ -366,6 +370,7 @@ resource "helm_release" "kubehenge" {
         clusterGroup = proxmox_virtual_environment_group.clusters.group_id
         clusterRole  = proxmox_virtual_environment_role.cluster_vms.role_id
         ha           = var.proxmox_ha
+        etcdRestore  = var.etcd_restore
         datastoreAllocate = {
           role               = var.cluster_datastore_allocate ? proxmox_virtual_environment_role.cluster_datastore[0].role_id : ""
           managementStorages = local.management_storages
@@ -417,5 +422,5 @@ resource "helm_release" "kubehenge" {
     { image = local.controller_image },
   ))]
 
-  depends_on = [helm_release.cluster_api_providers, proxmox_acl.provisioner, proxmox_acl.ha, proxmox_acl.template_builder]
+  depends_on = [helm_release.cluster_api_providers, proxmox_acl.provisioner, proxmox_acl.ha, proxmox_acl.template_builder, proxmox_acl.etcd_restore]
 }

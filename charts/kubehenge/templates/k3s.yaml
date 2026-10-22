@@ -50,6 +50,7 @@ metadata:
     # root@pam's password for it.
     kubehenge.dev/volume-snapshots: "true"
     {{- end }}
+    {{- include "kubehenge.etcdRestore" . | nindent 4 }}
 spec:
   infrastructure:
     templateRef:

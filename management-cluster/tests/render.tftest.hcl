@@ -231,6 +231,7 @@ run "controller_and_clusters_are_least_privilege" {
         clusterGroup = "kubehenge-clusters"
         clusterRole  = "kubehenge-cluster-vms"
         ha           = false
+        etcdRestore  = false
         datastoreAllocate = {
           role               = ""
           managementStorages = ["local-lvm", "local"]
@@ -338,6 +339,15 @@ run "controller_and_clusters_are_least_privilege" {
     condition     = length(proxmox_virtual_environment_group.clusters_audit) == 0 && length(proxmox_acl.clusters_audit) == 0
     error_message = "no cluster may hold Sys.Audit on / unless the administrator lets clusters choose it"
   }
+
+  assert {
+    condition = (
+      length(proxmox_acl.etcd_restore) == 0 && length(proxmox_user_token.etcd_restore) == 0 &&
+      !contains([for s in helm_release.cluster_api_providers.set_sensitive : s.name], "secrets.kubehenge-proxmox.data.restore-token") &&
+      !yamldecode(helm_release.kubehenge.values[0]).proxmox.etcdRestore
+    )
+    error_message = "no restore token unless restores through the guest agent are asked for"
+  }
 }
 
 run "cluster_sys_audit" {
@@ -410,6 +420,38 @@ run "cluster_volume_snapshots" {
       length([for k, a in proxmox_acl.provisioner : k if a.path == "/" && a.role_id != "kubehenge-audit"]) == 0
     )
     error_message = "volume snapshots grant no token anything more"
+  }
+}
+
+run "etcd_restore" {
+  command = plan
+
+  variables {
+    etcd_restore = true
+  }
+
+  assert {
+    condition = (
+      toset(proxmox_virtual_environment_role.etcd_restore[0].privileges) == toset(["VM.Audit", "VM.GuestAgent.Unrestricted"]) &&
+      proxmox_acl.etcd_restore[0].path == "/pool/${var.workload_pool}" && proxmox_acl.etcd_restore[0].propagate &&
+      proxmox_acl.etcd_restore[0].user_id == "kubehenge-etcd-restore@pve" &&
+      proxmox_virtual_environment_user.etcd_restore[0].password == null &&
+      !proxmox_user_token.etcd_restore[0].privileges_separation
+    )
+    error_message = "the restore token holds VM.Audit and VM.GuestAgent.Unrestricted on the workload pool alone, for a password-less user of its own"
+  }
+
+  assert {
+    condition = (
+      contains([for s in helm_release.cluster_api_providers.set_sensitive : s.name], "secrets.kubehenge-proxmox.data.restore-token") &&
+      yamldecode(helm_release.kubehenge.values[0]).proxmox.etcdRestore
+    )
+    error_message = "the controller gets the restore token, kept out of the plain values"
+  }
+
+  assert {
+    condition     = contains(output.proxmox_objects.users, "kubehenge-etcd-restore@pve") && contains(output.proxmox_objects.roles, "kubehenge-etcd-restore")
+    error_message = "a destroy is checked for the restore user and role too"
   }
 }
 

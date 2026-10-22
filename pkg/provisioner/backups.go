@@ -6,13 +6,13 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"filippo.io/age"
 	"github.com/robfig/cron/v3"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -50,6 +50,9 @@ const (
 	// BackupKeysKeySSEC is the key of a cluster's backup keys Secret with the 32 bytes the store
 	// encrypts every object Velero writes with (SSE-C).
 	BackupKeysKeySSEC = "sse-c-key"
+	// BackupKeysKeyEtcd is the key of a cluster's backup keys Secret with the age identity its etcd
+	// snapshots are encrypted to.
+	BackupKeysKeyEtcd = "etcd-snapshot-identity"
 	// backupsInstalledAnnotation on the keys Secret records that Velero was put into the cluster,
 	// so that switching backups off removes it, and nothing is looked for in clusters that never had
 	// it.
@@ -122,7 +125,28 @@ func (b *Backups) withDefaults() {
 
 // cron is the schedule as Velero reads it, in its time zone.
 func (b *Backups) cron() string {
-	return "CRON_TZ=" + b.TimeZone + " " + b.Schedule
+	return zonedCron(b.Schedule, b.TimeZone)
+}
+
+// zonedCron is a schedule in its time zone, as robfig/cron reads it and Velero with it.
+func zonedCron(schedule, timeZone string) string {
+	return "CRON_TZ=" + timeZone + " " + schedule
+}
+
+// parseSchedule reads a variable's cron schedule in its IANA time zone, which the variable names
+// on its own.
+func parseSchedule(what, schedule, timeZone string) (cron.Schedule, error) { //nolint:ireturn // robfig/cron parses to its Schedule interface alone
+	if _, err := time.LoadLocation(timeZone); err != nil || timeZone == "Local" {
+		return nil, fmt.Errorf("%s: time zone %q is not an IANA time zone", what, timeZone)
+	}
+	if strings.HasPrefix(schedule, "TZ=") || strings.HasPrefix(schedule, "CRON_TZ=") {
+		return nil, fmt.Errorf("%s: the schedule names its time zone in timeZone, not itself", what)
+	}
+	s, err := cron.ParseStandard(zonedCron(schedule, timeZone))
+	if err != nil {
+		return nil, fmt.Errorf("%s: schedule %q: %w", what, schedule, err)
+	}
+	return s, nil
 }
 
 // BackupTarget is one of the S3 stores in BackupTargetsAnnotation.
@@ -154,7 +178,13 @@ func BackupTargets(class *clusterv1.ClusterClass) ([]BackupTarget, error) {
 // BackupPrefix is where a cluster's backups go in its target: under the target's prefix, a folder
 // of the cluster's own, named for its namespace and name as its Proxmox VE pool is.
 func BackupPrefix(prefix, namespace, cluster string) string {
-	own := namespace + "." + cluster + "/velero"
+	return targetFolder(prefix, namespace, cluster, "velero")
+}
+
+// targetFolder is a folder of the cluster's own in a target, for its Velero backups or its etcd
+// snapshots.
+func targetFolder(prefix, namespace, cluster, folder string) string {
+	own := namespace + "." + cluster + "/" + folder
 	if prefix == "" {
 		return own
 	}
@@ -180,29 +210,29 @@ func checkBackups(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) erro
 			return nil
 		}
 	}
+	return targetOffered(class, b.Target, "backups")
+}
+
+// targetOffered tells whether the class offers the target a cluster's backups or etcd snapshots
+// name.
+func targetOffered(class *clusterv1.ClusterClass, name, what string) error {
 	targets, err := BackupTargets(class)
 	if err != nil {
 		return err
 	}
-	if !slices.ContainsFunc(targets, func(t BackupTarget) bool { return t.Name == b.Target }) {
+	if !slices.ContainsFunc(targets, func(t BackupTarget) bool { return t.Name == name }) {
 		if len(targets) == 0 {
-			return fmt.Errorf("backups need a target, and an administrator has set none: %q is not one", b.Target)
+			return fmt.Errorf("%s need a target, and an administrator has set none: %q is not one", what, name)
 		}
-		return fmt.Errorf("backup target %q is not one an administrator set", b.Target)
+		return fmt.Errorf("backup target %q is not one an administrator set", name)
 	}
 	return nil
 }
 
 // valid checks the schedule and time zone, which reach Velero inside its chart's values.
 func (b *Backups) valid() error {
-	if _, err := time.LoadLocation(b.TimeZone); err != nil || b.TimeZone == "Local" {
-		return fmt.Errorf("backups: time zone %q is not an IANA time zone", b.TimeZone)
-	}
-	if strings.HasPrefix(b.Schedule, "TZ=") || strings.HasPrefix(b.Schedule, "CRON_TZ=") {
-		return errors.New("backups: the schedule names its time zone in timeZone, not itself")
-	}
-	if _, err := cron.ParseStandard(b.cron()); err != nil {
-		return fmt.Errorf("backups: schedule %q: %w", b.Schedule, err)
+	if _, err := parseSchedule(backupsVariable, b.Schedule, b.TimeZone); err != nil {
+		return err
 	}
 	if b.Volumes != backupVolumesAll && b.Volumes != backupVolumesAnnotated {
 		return fmt.Errorf("backups: volumes is all or annotated, not %q", b.Volumes)
@@ -361,8 +391,14 @@ func veleroValues(charts *Charts, b *Backups, t *BackupTarget, cluster *clusterv
 // backupTarget finds the target a cluster's backups name in its class, or false when the class has
 // none of that name.
 func (r *Reconciler) backupTarget(ctx context.Context, cluster *clusterv1.Cluster, name string) (BackupTarget, bool, error) {
+	return classTarget(ctx, r.Client, r.ClassNamespace, cluster, name)
+}
+
+// classTarget finds a target by name in the cluster's class, or false when the class has none of
+// that name.
+func classTarget(ctx context.Context, c client.Reader, classNamespace string, cluster *clusterv1.Cluster, name string) (BackupTarget, bool, error) {
 	class := &clusterv1.ClusterClass{}
-	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: r.ClassNamespace, Name: cluster.Spec.Topology.ClassRef.Name}, class); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Namespace: classNamespace, Name: cluster.Spec.Topology.ClassRef.Name}, class); err != nil {
 		return BackupTarget{}, false, fmt.Errorf("reading the cluster's ClusterClass: %w", err)
 	}
 	targets, err := BackupTargets(class)
@@ -385,14 +421,21 @@ func (r *Reconciler) holdBackups(ctx context.Context, cluster *clusterv1.Cluster
 }
 
 // backupKeys reads the cluster's backup keys, making them first when create is set and there are
-// none: a random Kopia password and SSE-C key, made once and never changed, since the backups made
-// with them can be read with nothing else.
+// none.
 func (r *Reconciler) backupKeys(ctx context.Context, cluster *clusterv1.Cluster, create bool) (*corev1.Secret, error) {
+	return clusterKeys(ctx, r.Client, cluster, create)
+}
+
+// clusterKeys reads the cluster's backup keys, making them first when create is set and there are
+// none: a random Kopia password and SSE-C key for Velero, and the age identity etcd snapshots are
+// encrypted to, made once and never changed, since what was stored with them can be read with
+// nothing else.
+func clusterKeys(ctx context.Context, c client.Client, cluster *clusterv1.Cluster, create bool) (*corev1.Secret, error) {
 	s := &corev1.Secret{}
-	err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: BackupKeysSecretName(cluster.Name)}, s)
+	err := c.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: BackupKeysSecretName(cluster.Name)}, s)
 	switch {
 	case err == nil:
-		if len(s.Data[BackupKeysKeyRepository]) == 0 || len(s.Data[BackupKeysKeySSEC]) != sseCKeyBytes {
+		if len(s.Data[BackupKeysKeyRepository]) == 0 || len(s.Data[BackupKeysKeySSEC]) != sseCKeyBytes || len(s.Data[BackupKeysKeyEtcd]) == 0 {
 			return nil, fmt.Errorf("the Secret %s holds no backup keys of the cluster", BackupKeysSecretName(cluster.Name))
 		}
 		return s, nil
@@ -403,11 +446,15 @@ func (r *Reconciler) backupKeys(ctx context.Context, cluster *clusterv1.Cluster,
 	}
 	password := make([]byte, sseCKeyBytes)
 	key := make([]byte, sseCKeyBytes)
-	if _, err := rand.Read(password); err != nil {
+	if _, err = rand.Read(password); err != nil {
 		return nil, fmt.Errorf("making a repository password: %w", err)
 	}
-	if _, err := rand.Read(key); err != nil {
+	if _, err = rand.Read(key); err != nil {
 		return nil, fmt.Errorf("making an SSE-C key: %w", err)
+	}
+	identity, err := age.GenerateX25519Identity()
+	if err != nil {
+		return nil, fmt.Errorf("making an etcd snapshot key: %w", err)
 	}
 	s = &corev1.Secret{
 		Namespace: cluster.Namespace, Name: BackupKeysSecretName(cluster.Name),
@@ -416,9 +463,10 @@ func (r *Reconciler) backupKeys(ctx context.Context, cluster *clusterv1.Cluster,
 		Data: map[string][]byte{
 			BackupKeysKeyRepository: []byte(base64.RawURLEncoding.EncodeToString(password)),
 			BackupKeysKeySSEC:       key,
+			BackupKeysKeyEtcd:       []byte(identity.String()),
 		},
 	}
-	if err := r.Client.Create(ctx, s); err != nil {
+	if err := c.Create(ctx, s); err != nil {
 		return nil, fmt.Errorf("storing the cluster's backup keys: %w", err)
 	}
 	return s, nil
@@ -434,9 +482,15 @@ func BackupCredentialNames(cluster string) []string {
 // backupCredential finds the store's keys for the cluster among its credentials. The message says
 // what is missing, or is empty.
 func (r *Reconciler) backupCredential(ctx context.Context, cluster *clusterv1.Cluster) (map[string][]byte, string, error) {
+	return backupCredential(ctx, r.Client, cluster)
+}
+
+// backupCredential finds the store's keys for the cluster among its credentials in the management
+// cluster. The message says what is missing, or is empty.
+func backupCredential(ctx context.Context, c client.Reader, cluster *clusterv1.Cluster) (map[string][]byte, string, error) {
 	for _, name := range BackupCredentialNames(cluster.Name) {
 		s := &corev1.Secret{}
-		err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: name}, s)
+		err := c.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: name}, s)
 		if apierrors.IsNotFound(err) {
 			continue
 		}
@@ -448,8 +502,11 @@ func (r *Reconciler) backupCredential(ctx context.Context, cluster *clusterv1.Cl
 		}
 		return s.Data, "", nil
 	}
-	return nil, "no credential for the backup target: type one in for the cluster in the interface, or name a Secret of the cluster's velero namespace in existingSecret", nil
+	return nil, noBackupCredential, nil
 }
+
+// noBackupCredential is what backupCredential says when the cluster has no credential at all.
+const noBackupCredential = "no credential for the backup target: type one in for the cluster in the interface, or have an administrator store one for every cluster" //nolint:gosec // a message, not a credential
 
 // backupsWait puts what Velero needs into the workload cluster before its chart: the namespace, the
 // repository password, the SSE-C key and, unless the cluster's owner keeps them in a Secret of
@@ -467,6 +524,10 @@ func (r *Reconciler) backupsWait(ctx context.Context, cluster *clusterv1.Cluster
 		creds, missing, err = r.backupCredential(ctx, cluster)
 		if err != nil {
 			return false, err
+		}
+		if missing == noBackupCredential {
+			// Velero alone can also take a Secret of the owner's own in the workload cluster.
+			missing += ", or name a Secret of the cluster's velero namespace in existingSecret"
 		}
 		if missing != "" {
 			r.holdBackups(ctx, cluster, "BackupCredentialMissing", missing)

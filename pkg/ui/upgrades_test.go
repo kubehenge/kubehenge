@@ -142,6 +142,24 @@ func TestSetupNeedsAnAdministrator(t *testing.T) {
 	expect(t, d.do("POST", "/api/setup", `{"settings":{},"passphrase":"correct horse battery staple"}`), http.StatusForbidden)
 }
 
+// Restores through the guest agent grant Kubehenge a token with VM.GuestAgent.Unrestricted, which
+// only who holds it may hand on.
+func TestSetupWithEtcdRestoresNeedsTheGuestAgent(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.server.Appliance = &appliance.Appliance{Dir: t.TempDir()}
+	a := h.browser()
+	a.signIn("admin@pve")
+	setUp := func(settings string) *httptest.ResponseRecorder {
+		return a.do("POST", "/api/setup", `{"settings":`+settings+`,"passphrase":"correct horse battery staple"}`)
+	}
+	expect(t, setUp(`{"etcdRestore":true}`), http.StatusForbidden)
+	h.accounts.mu.Lock()
+	h.accounts.grants["admin@pve"]["/"] = append(h.accounts.grants["admin@pve"]["/"], "VM.GuestAgent.Unrestricted")
+	h.accounts.mu.Unlock()
+	expect(t, setUp(`{"etcdRestore":true}`), http.StatusUnprocessableEntity)
+}
+
 // Switching Proxmox VE HA on grants Kubehenge's token Sys.Console on /, and switching it off removes
 // the HA objects the controller left, both of which Proxmox VE lets only Sys.Console do.
 func TestSetupWithProxmoxHANeedsSysConsole(t *testing.T) {

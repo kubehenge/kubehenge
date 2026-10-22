@@ -239,7 +239,8 @@ The run acts with your own Proxmox VE session: the interface renews your ticket 
 | DNS servers | IP addresses, one per line or separated by commas. |
 | What clusters may use | The storages and bridges clusters may put their disks on and attach to, from any node; at least one of each. The page says which nodes have each, or that a storage is shared. Cluster API's token gets rights on exactly these, and the ClusterClasses accept no others, from the interface or kubectl. |
 | Identity providers | OpenID Connect providers every new cluster trusts unless it names its own ([clusters.md](clusters.md#signing-in-with-openid-connect)). A change applies to clusters created afterwards. |
-| Backup targets | S3 stores clusters back up to with Velero, when they switch backups on ([below](#backup-targets)). A changed target reaches the clusters that back up to it within ten minutes; one taken away leaves their Velero as it is. |
+| Backup targets | S3 stores clusters back up to with Velero, and keep their etcd snapshots in, when they switch either on ([below](#backup-targets)). A changed target reaches the clusters that back up to it within ten minutes; one taken away leaves their Velero as it is. |
+| etcd restores | Off by default, and the interface then shows the steps to restore a cluster's etcd by hand. When on, Kubehenge restores it itself through the VMs' guest agents ([below](#etcd-restores)). |
 | Proxmox VE HA | Off by default. When on, Proxmox VE HA keeps each cluster's control-plane VMs on separate nodes and restarts them on another node after a node fails, for every cluster on shared storage that does not opt out ([clusters.md](clusters.md#machines)). See [below](#proxmox-ve-ha) before switching it on. |
 | HA rules for cluster creators | Off by default. When on, everyone who may create or change a cluster can place it on the nodes of one of Proxmox VE's HA node-affinity rules without `Sys.Audit` on `/` of their own ([clusters.md](clusters.md#machines)). See [below](#ha-rules-for-cluster-creators). |
 | CSI plugin | Off by default. When on, clusters may choose the CSI plugin's newest release ([below](#the-csi-plugins-newest-release)). |
@@ -269,6 +270,10 @@ Reading Proxmox VE's HA rules takes `Sys.Audit` on `/`, which reaches the whole 
 
 The CSI plugin's newer releases need `Datastore.Allocate` on a cluster's storage, which covers every volume on it and its definition, so clusters run its last release without it unless this setting is on. With it, a cluster may choose the newest release on a storage of its own ([clusters.md](clusters.md#persistent-volumes)); its token then holds `Datastore.Allocate` there. The setting creates a role, `<name>-cluster-datastore`, holding `Datastore.Allocate`, `Datastore.AllocateSpace` and `Datastore.Audit`, and gives Kubehenge's controller `Datastore.Allocate` on each storage for clusters that the management cluster's disks, its Talos image, the cloud-init images and the template builds' downloads and uploads are not on, so that it can grant the role there. Switching it off removes the role, and with it every cluster's grant; those clusters go back to the earlier release.
 
+#### etcd restores
+
+Restoring a cluster's etcd from a snapshot ([clusters.md](clusters.md#restore-etcd)) stops the control plane on every control-plane VM and restores on one of them, which takes commands run as root on the VMs. With this setting the controller gets a user and API token of its own holding `VM.Audit` and `VM.GuestAgent.Unrestricted` on the workload pool, and runs each step through the QEMU guest agent. That privilege amounts to a root shell in every cluster's VMs: whoever reads the controller's Secret in the management cluster, or holds its admin kubeconfig, can read every Secret of every cluster and change any workload. It reaches no Proxmox VE node and no VM outside the workload pool, and the controller uses it only for a restore someone with `Sys.Modify` on the cluster's pool asked for. Switching the setting on takes `VM.GuestAgent.Unrestricted` on `/` of you as well. Off, there is no such token, and a restore takes the same steps, run by hand from the interface's list.
+
 #### Backup targets
 
 Each target is an S3 store and a bucket in it, which any S3-compatible store serves: AWS S3, MinIO, Ceph's RADOS Gateway, SeaweedFS, Garage, or the S3 store a Proxmox Backup Server 4.2 or later keeps a datastore on, so that the clusters' backups and the Proxmox VE backups share one store. The store must take server-side encryption with keys the client sends (SSE-C), with which every cluster encrypts what it writes.
@@ -279,7 +284,7 @@ Each target is an S3 store and a bucket in it, which any S3-compatible store ser
 | Endpoint | The store's `https://` URL; empty for AWS S3 itself. |
 | Bucket | The bucket, which has to exist. |
 | Region | The bucket's region; `us-east-1` when empty. |
-| Prefix | A folder in the bucket. Each cluster writes under `<prefix>/<namespace>.<cluster>/velero`. |
+| Prefix | A folder in the bucket. Each cluster writes under `<prefix>/<namespace>.<cluster>/velero`, and its etcd snapshots under `<prefix>/<namespace>.<cluster>/etcd`. |
 | CA certificate | PEM, when the system's CAs do not cover the store's certificate. |
 | Send checksums | On by default; off for a store that refuses the checksums the AWS SDK sends with every upload. |
 
@@ -446,6 +451,7 @@ tofu output -raw talosconfig > talosconfig
 | `cluster_sys_audit` | `false` | Let clusters choose the cloud controller manager's HA group labels, with `Sys.Audit` on `/`, unpropagated, for the cluster's token through a group the controller adds its user to ([above](#ha-group-labels)). |
 | `cluster_volume_snapshots` | `false` | Let clusters take volume snapshots, with their CSI plugin signed in as `root@pam` ([above](#volume-snapshots)). The controller reads `root@pam`'s password from the Secret `kubehenge-root-pam` in `kubehenge-system`, under `password`, which the module does not create: `kubectl -n kubehenge-system create secret generic kubehenge-root-pam --from-file=password=/dev/stdin`, then type the password, Enter and Ctrl-D. |
 | `extra_cluster_namespaces` | `[]` | Namespaces the interface creates and manages clusters in beside `clusters` ([clusters.md](clusters.md#more-namespaces-for-clusters)). Each is created if missing and kept when taken off the list; `default`, `cert-manager`, `kube-*` and `*-system` are refused. |
+| `etcd_restore` | `false` | Have the controller restore clusters' etcd itself through the VMs' guest agents, giving it a token with `VM.Audit` and `VM.GuestAgent.Unrestricted` on the workload pool ([above](#etcd-restores)). Without it, the interface shows the steps to restore by hand. |
 
 Outputs: `kubeconfig` and `talosconfig` (sensitive), `api_endpoint`, and `proxmox_objects`, which lists everything the module made on Proxmox VE.
 

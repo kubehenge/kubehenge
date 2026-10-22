@@ -133,7 +133,9 @@ cluster uses it.
 
 The API token is read from KUBEHENGE_PROXMOX_TOKEN. With a second one in KUBEHENGE_PROXMOX_HA_TOKEN,
 holding Sys.Audit and Sys.Console on /, Proxmox VE HA keeps each cluster's control-plane VMs on
-separate nodes.`,
+separate nodes. With one in KUBEHENGE_PROXMOX_RESTORE_TOKEN, holding VM.Audit and
+VM.GuestAgent.Unrestricted on the workload pool, it restores clusters' etcd from their snapshots
+through the VMs' guest agents.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.run(cmd.Context(), conn)
@@ -338,8 +340,11 @@ func (o *controllerOptions) newExtensionServer() (*server.Server, error) {
 }
 
 // addReclaimer adds what deletes the volumes of clusters' released persistent volumes, signed in
-// with each cluster's own token.
+// with each cluster's own token, and what snapshots and restores clusters' etcd.
 func (o *controllerOptions) addReclaimer(mgr manager.Manager, conn *pve.Config, cloud *provisioner.Proxmox, remotes *provisioner.Remotes) error {
+	if err := o.addEtcd(mgr, conn, remotes); err != nil {
+		return err
+	}
 	reclaimer := &provisioner.Reclaimer{
 		Client:         mgr.GetClient(),
 		ClassNamespace: o.r.ClassNamespace,
@@ -634,6 +639,40 @@ func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, 
 	}
 	if err := mgr.Add(requests); err != nil {
 		return fmt.Errorf("the template requests: %w", err)
+	}
+	return nil
+}
+
+// addEtcd adds what snapshots clusters' etcd into their backup targets, and what restores it from
+// a snapshot through the VMs' guest agents, signed in with KUBEHENGE_PROXMOX_RESTORE_TOKEN. Without
+// that token every restore is done by hand.
+func (o *controllerOptions) addEtcd(mgr manager.Manager, conn *pve.Config, remotes *provisioner.Remotes) error {
+	targets := &provisioner.ClusterTargets{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, OpenStore: provisioner.OpenTarget}
+	snapshotter := &provisioner.EtcdSnapshotter{
+		Client:         mgr.GetClient(),
+		ClassNamespace: o.r.ClassNamespace,
+		Etcd:           &provisioner.EtcdDialer{Reader: mgr.GetAPIReader(), Remotes: remotes},
+		Targets:        targets,
+		Events:         mgr.GetEventRecorder("kubehenge"),
+	}
+	if err := snapshotter.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("the etcd snapshotter: %w", err)
+	}
+	restorer := &provisioner.EtcdRestorer{
+		Client:         mgr.GetClient(),
+		ClassNamespace: o.r.ClassNamespace,
+		Targets:        targets,
+		Events:         mgr.GetEventRecorder("kubehenge"),
+	}
+	if token := os.Getenv("KUBEHENGE_PROXMOX_RESTORE_TOKEN"); token != "" {
+		c, err := pve.Connect(pve.Config{URL: conn.URL, Token: token, CAFile: conn.CAFile})
+		if err != nil {
+			return fmt.Errorf("connecting to Proxmox VE for restores: %w", err)
+		}
+		restorer.Guests = &provisioner.ProxmoxGuests{Client: c}
+	}
+	if err := restorer.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("the etcd restorer: %w", err)
 	}
 	return nil
 }

@@ -91,6 +91,8 @@ module "management_cluster" {
   provider_images    = var.provider_images
   provider_manifests = var.provider_manifests
   backup_targets     = var.backup_targets
+  # test/e2e/workload-cluster.sh restores each cluster's etcd through the guest agent.
+  etcd_restore = true
 
   api_address = "172.20.99.10"
   gateway     = "172.20.99.1"

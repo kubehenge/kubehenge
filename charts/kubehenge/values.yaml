@@ -115,6 +115,12 @@ proxmox:
   # appliance, never by this chart. Empty: no cluster may take them.
   volumeSnapshots:
     rootSecret: ""
+  # Whether the controller restores clusters' etcd from their snapshots itself, running the restore
+  # on the control-plane VMs through their guest agents, signing in for it with the API token under
+  # the secret's key restore-token, which needs VM.Audit and VM.GuestAgent.Unrestricted on the
+  # workload pool: a root shell in every cluster's VMs. Without it, the interface shows the steps
+  # to restore by hand.
+  etcdRestore: false
 
 # Building the Ubuntu VM templates again every week, with the updates Ubuntu published since, as a
 # CronJob signed in with a token of its own. Clusters move their nodes to a new build inside their

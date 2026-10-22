@@ -132,7 +132,7 @@
     "proxmox": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["url", "insecure", "secret", "clusterGroup", "clusterRole", "volumeOwnerNode", "region", "ha", "datastoreAllocate", "sysAuditGroup", "volumeSnapshots"],
+      "required": ["url", "insecure", "secret", "clusterGroup", "clusterRole", "volumeOwnerNode", "region", "ha", "datastoreAllocate", "sysAuditGroup", "volumeSnapshots", "etcdRestore"],
       "properties": {
         "url": { "type": "string", "pattern": "^https://[^/]+" },
         "insecure": { "type": "boolean" },
@@ -164,7 +164,8 @@
           "properties": {
             "rootSecret": { "anyOf": [{ "const": "" }, { "$ref": "#/$defs/name" }] }
           }
-        }
+        },
+        "etcdRestore": { "type": "boolean" }
       }
     },
     "templateRefresh": {

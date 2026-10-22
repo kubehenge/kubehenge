@@ -374,6 +374,13 @@ variable "extra_cluster_namespaces" {
   }
 }
 
+variable "etcd_restore" {
+  description = "Have Kubehenge's controller restore clusters' etcd from their snapshots itself, running the restore on the control-plane VMs through their guest agents. The controller gets an API token of its own for it, with VM.Audit and VM.GuestAgent.Unrestricted on the workload pool, which amounts to a root shell in every cluster's VMs. Without it, the interface shows the steps to restore by hand."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "controller_image" {
   description = "Image of Kubehenge's controller by digest, as repository@sha256:<digest>, instead of the one the chart was released with."
   type        = string

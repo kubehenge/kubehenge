@@ -78,6 +78,7 @@ export interface SetupForm {
   offerHARules: boolean;
   clusterDatastoreAllocate: boolean;
   backupTargets: BackupTarget[];
+  etcdRestore: boolean;
   // The weekly build of the Ubuntu VM templates.
   refresh: boolean;
   refreshWeekday: string;
@@ -218,6 +219,9 @@ export function settings(f: SetupForm): ManagementSettings {
   if (f.backupTargets.length > 0) {
     s.backupTargets = cleanTargets(f.backupTargets);
   }
+  if (f.etcdRestore) {
+    s.etcdRestore = true;
+  }
   s.templateRefresh = refreshSettings(f);
   if (f.clusterSysAudit) {
     s.clusterSysAudit = true;
@@ -300,6 +304,7 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     offerHARules: saved.offerHARules === true,
     clusterDatastoreAllocate: saved.clusterDatastoreAllocate === true,
     backupTargets: saved.backupTargets ?? [],
+    etcdRestore: saved.etcdRestore === true,
     ...refreshFields(saved.templateRefresh),
     clusterSysAudit: saved.clusterSysAudit === true,
     clusterVolumeSnapshots: saved.clusterVolumeSnapshots === true,
@@ -738,6 +743,7 @@ function ManagedSummary({
       "Backup targets",
       s.backupTargets && s.backupTargets.length > 0 ? s.backupTargets.map((t) => targetSummary(t)).join(", ") : "None",
     ],
+    ["etcd restores", s.etcdRestore === true ? "Through the Proxmox VE guest agent" : "By hand, with the steps shown"],
     ["Registry mirrors", s.registryMirrors ? formatMirrors(s.registryMirrors).split("\n").join(", ") : "None"],
     ["Pod ranges", s.podSubnets?.join(", ") ?? "Chosen clear of the nodes' network"],
     ["Service ranges", s.serviceSubnets?.join(", ") ?? "Chosen clear of the nodes' network"],
@@ -1059,6 +1065,38 @@ function HARulesChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element {
   );
 }
 
+const etcdRestoreGrant =
+  "Kubehenge's controller gets an API token of its own with VM.GuestAgent.Unrestricted and VM.Audit on the clusters' pool. It runs commands as root in every cluster VM through the guest agent, so whoever takes the management cluster has a root shell in all of them; switching this on takes VM.GuestAgent.Unrestricted on / of you too.";
+
+function EtcdRestoreChoice({ form, set, onAsk }: Omit<FieldsProps, "shown"> & { onAsk: () => void }): JSX.Element {
+  const hint = useId();
+  return (
+    <fieldset className="group">
+      <legend>etcd restores</legend>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.etcdRestore}
+          aria-describedby={hint}
+          onChange={(e) => {
+            if (e.target.checked) {
+              onAsk();
+            } else {
+              set("etcdRestore", false);
+            }
+          }}
+        />{" "}
+        Restore clusters&apos; etcd through the Proxmox VE guest agent
+      </label>
+      <p className="muted" id={hint}>
+        Restoring a cluster&apos;s etcd from a snapshot stops the control plane on its VMs and restores on one of them.
+        Switched on, Kubehenge does that itself when someone with Sys.Modify on the cluster&apos;s pool asks; switched
+        off, the interface lists the commands to run on the VMs by hand. {etcdRestoreGrant}
+      </p>
+    </fieldset>
+  );
+}
+
 function DatastoreAllocateChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element {
   const hint = useId();
   return (
@@ -1310,6 +1348,54 @@ function NamespacesChoice({ form, set, shown }: FieldsProps): JSX.Element {
   );
 }
 
+// EtcdRestoreConfirm asks before the restore token is granted. It stands outside the setup form,
+// whose submit would otherwise apply the settings along with the dialog's.
+function EtcdRestoreConfirm({
+  open,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}): JSX.Element | null {
+  if (!open) {
+    return null;
+  }
+  return (
+    <Dialog
+      title="Restore etcd through the guest agent?"
+      onClose={onClose}
+      onSubmit={onConfirm}
+      actions={
+        <>
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="danger">
+            Switch on
+          </button>
+        </>
+      }
+    >
+      <p>
+        <strong>What it grants.</strong> {etcdRestoreGrant}
+      </p>
+      <p>
+        <strong>What it risks.</strong> The token sits in the management cluster beside Kubehenge&apos;s other
+        credentials. Anyone who reads it, or who controls Kubehenge&apos;s controller, can run anything as root in any
+        cluster VM: read every Secret, change any workload, or stop a cluster. A restore itself takes every object of a
+        cluster back to the snapshot.
+      </p>
+      <p>
+        <strong>Left off</strong>, there is no such token: a restore takes the same steps, run by hand by someone with a
+        shell on the VMs.
+      </p>
+      <p className="hint">The change takes effect when the settings are applied.</p>
+    </Dialog>
+  );
+}
+
 function AdvancedFields({
   form,
   set,
@@ -1404,6 +1490,7 @@ function SetupWizard({
   // A field's problem shows once it has been changed, or after the run was asked for.
   const [touched, setTouched] = useState<ReadonlySet<string>>(new Set());
   const [attempted, setAttempted] = useState(false);
+  const [askingRestore, setAskingRestore] = useState(false);
   const touch = (k: string): void => setTouched((t) => (t.has(k) ? t : new Set([...t, k])));
   const set = <K extends keyof SetupForm>(k: K, v: SetupForm[K]): void => {
     setForm((f) => ({ ...f, [k]: v }));
@@ -1720,12 +1807,13 @@ function SetupWizard({
         <fieldset className="group">
           <legend>Backup targets</legend>
           <p className="muted">
-            S3 stores clusters back up to with Velero. Each cluster writes into a folder of its own beneath the prefix,
-            with an access key of its own or the one for every cluster, and encrypts what it writes with keys of its
-            own.
+            S3 stores clusters back up to, with Velero and as etcd snapshots. Each cluster writes into a folder of its
+            own beneath the prefix, with an access key of its own or the one for every cluster, and encrypts what it
+            writes with keys of its own.
           </p>
           <BackupTargets initial={form.backupTargets} showAll={attempted} onChange={(v) => set("backupTargets", v)} />
         </fieldset>
+        <EtcdRestoreChoice form={form} set={set} onAsk={() => setAskingRestore(true)} />
         <AdvancedFields form={form} set={set} shown={shown} fixed={fixed !== undefined} detailsRef={advancedRef} />
         <PassphraseFields
           form={form}
@@ -1746,6 +1834,14 @@ function SetupWizard({
           </button>
         </div>
       </form>
+      <EtcdRestoreConfirm
+        open={askingRestore}
+        onClose={() => setAskingRestore(false)}
+        onConfirm={() => {
+          set("etcdRestore", true);
+          setAskingRestore(false);
+        }}
+      />
     </section>
   );
 }

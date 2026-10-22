@@ -745,6 +745,30 @@ func TestRootPasswordGoesOnlyIntoTheManagementCluster(t *testing.T) {
 	}
 }
 
+// Restores through the guest agent reach the module as its etcd_restore variable.
+func TestEtcdRestoreReachesTheModule(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	s := settings("pve1")
+	s.EtcdRestore = true
+	if err := a.Apply(s, "correct horse battery staple", ticket(), func(context.Context, []byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if j := waitFor(t, a); j.State != "succeeded" {
+		t.Fatalf("job = %+v", j)
+	}
+	main, err := os.ReadFile(filepath.Join(a.Dir, "management", "main.tf"))
+	if err != nil || !strings.Contains(string(main), "etcd_restore           = var.settings.etcdRestore") {
+		t.Fatalf("main.tf: %v\n%s", err, main)
+	}
+	if vars, err := os.ReadFile(filepath.Join(a.Dir, "management", "terraform.tfvars.json")); err != nil || !strings.Contains(string(vars), `"etcdRestore": true`) {
+		t.Fatalf("tfvars: %v\n%s", err, vars)
+	}
+	if !a.SavedSettings().EtcdRestore {
+		t.Error("the setting was not kept")
+	}
+}
+
 func TestJobViewCarriesTheEndOfALongLog(t *testing.T) {
 	t.Parallel()
 	j := &Job{Kind: "apply", State: "running"}

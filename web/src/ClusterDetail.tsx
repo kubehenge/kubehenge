@@ -2,9 +2,10 @@ import { useEffect, useState, type JSX } from "react";
 
 import { api } from "./api";
 import { AutoscalerDialog, ScaleDialog, autoscalerText, poolText } from "./Autoscaling";
-import { BackupsDialog, BackupsView, backupsOf, useBackupsRows } from "./Backups";
+import { BackupsDialog, BackupsView, backupsOf, backupsRows, useClassTargets } from "./Backups";
 import { issuesFromCA, saveCA } from "./Certificates";
 import { OptionDialog, Options, type OptionAction } from "./ClusterOptions";
+import { EtcdSnapshotsDialog, EtcdSnapshotsView, etcdSnapshotsOf, etcdSnapshotsRows } from "./EtcdSnapshots";
 import { HealthView } from "./Health";
 import { Link, navigate } from "./router";
 import type { Cluster, Machine, Versions } from "./types";
@@ -26,7 +27,7 @@ import {
   type Health,
 } from "./ui";
 
-type Action = "scale" | "upgrade" | "delete" | "backups" | "autoscaler" | OptionAction;
+type Action = "scale" | "upgrade" | "delete" | "backups" | "autoscaler" | "etcdSnapshots" | OptionAction;
 
 // A cluster on its way somewhere is looked at more often than a settled one.
 const pollChanging = 5000;
@@ -253,7 +254,12 @@ export function ClusterDetail({
           {view === "" && <Summary cluster={c} />}
           {view === "health" && <HealthView cluster={c} headlamp={inHeadlamp} />}
           {view === "machines" && <Machines cluster={c} />}
-          {view === "backups" && <BackupsView cluster={c} can={can} onEdit={setAction} />}
+          {view === "backups" && (
+            <>
+              <BackupsView cluster={c} can={can} onEdit={setAction} />
+              <EtcdSnapshotsView cluster={c} can={can} onEdit={setAction} />
+            </>
+          )}
           {view === "options" && <OptionsView cluster={c} can={can} onEdit={setAction} />}
         </div>
       </div>
@@ -287,6 +293,9 @@ function ActionDialog({
   if (action === "autoscaler") {
     return <AutoscalerDialog cluster={c} onClose={onClose} />;
   }
+  if (action === "etcdSnapshots") {
+    return <EtcdSnapshotsDialog cluster={c} onClose={onClose} />;
+  }
   return <OptionDialog action={action} cluster={c} onClose={onClose} />;
 }
 
@@ -301,8 +310,10 @@ function OptionsView({
   can: boolean;
   onEdit: (a: Action) => void;
 }): JSX.Element {
+  const offered = (useClassTargets(c.class) ?? []).length > 0;
   const more = [
-    ...useBackupsRows(c),
+    ...backupsRows(c, offered),
+    ...etcdSnapshotsRows(c, offered),
     { label: "Autoscaler", value: autoscalerText(c), action: "autoscaler" as const, name: "the autoscaler" },
   ];
   return <Options cluster={c} can={can} onEdit={onEdit} more={more} />;
@@ -582,6 +593,7 @@ function DeleteDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
         This deletes the cluster's VMs and its persistent volumes, and removes it from Rancher. It cannot be undone.
         {backupsOf(c.variables["backups"]).enabled &&
           " Its backups stay in the target, and a cluster created again under the same name and target can restore them."}
+        {etcdSnapshotsOf(c.variables["etcdSnapshots"]).enabled && " Its etcd snapshots stay in the target too."}
       </p>
       <Field label="Confirm name" hint={`Type ${c.name}.`}>
         {(id) => <input id={id} value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" />}

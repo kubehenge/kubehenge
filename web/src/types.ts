@@ -415,6 +415,8 @@ export interface ManagementSettings {
   /** Clusters may choose the CSI plugin's newest release, with Datastore.Allocate on their storage. */
   clusterDatastoreAllocate?: boolean;
   backupTargets?: BackupTarget[];
+  /** The controller restores clusters' etcd through the Proxmox VE guest agent. */
+  etcdRestore?: boolean;
   /** The weekly build of the Ubuntu VM templates; absent, it runs with its defaults. */
   templateRefresh?: TemplateRefreshSettings;
   /** Clusters may choose the cloud controller manager's HA group labels, with Sys.Audit on / for their token. */
@@ -507,6 +509,85 @@ export interface ClusterBackups {
   canBackUp: boolean;
   /** Sys.Modify on the cluster's pool. */
   canRestore: boolean;
+}
+
+/** An etcd snapshot of a cluster, as it is stored in the target. */
+export interface EtcdSnapshot {
+  name: string;
+  time: string;
+  kubernetesVersion?: string;
+  distribution?: string;
+  revision?: number;
+  etcdVersion?: string;
+  /** Of the snapshot before it was encrypted. */
+  sha256?: string;
+  size?: number;
+  storedSize?: number;
+}
+
+export type EtcdRestorePhase =
+  | "Preparing"
+  | "Fetching"
+  | "Stopping"
+  | "Restoring"
+  | "Starting"
+  | "Replacing"
+  | "Succeeded"
+  | "Failed";
+
+/** How a restore of a cluster's etcd went, or is going. */
+export interface EtcdRestoreStatus {
+  snapshot: string;
+  by?: string;
+  requestedAt: string;
+  phase: EtcdRestorePhase;
+  /** The control-plane machine etcd is restored on, and its node. */
+  machine?: string;
+  node?: string;
+  /** The other control-plane machines, replaced once etcd is back. */
+  replaced?: string[];
+  message?: string;
+  started: string;
+  finished?: string;
+}
+
+/** What the backups view shows of a cluster's etcd snapshots. */
+export interface ClusterEtcdSnapshots {
+  enabled: boolean;
+  target?: string;
+  schedule?: string;
+  timeZone?: string;
+  keep?: number;
+  last?: EtcdSnapshot;
+  condition?: Condition;
+  /** A snapshot asked for has not been taken yet. */
+  requested: boolean;
+  snapshots: EtcdSnapshot[];
+  message?: string;
+  restore?: EtcdRestoreStatus;
+  restoring: boolean;
+  /** The controller restores through the guest agent; otherwise the steps are done by hand. */
+  automatic: boolean;
+  /** VM.Allocate on the cluster's pool. */
+  canSnapshot: boolean;
+  /** Sys.Modify on the cluster's pool. */
+  canRestore: boolean;
+}
+
+/** One step of restoring a cluster's etcd by hand. */
+export interface EtcdRestoreStep {
+  title: string;
+  /** Where the command runs: a node, or wherever kubectl reaches the management cluster. */
+  where: string;
+  command: string;
+}
+
+/** The steps that restore a cluster's etcd from a snapshot by hand. */
+export interface EtcdRestorePlan {
+  snapshot: EtcdSnapshot;
+  distribution: string;
+  steps: EtcdRestoreStep[];
+  replaced?: string[];
 }
 
 export interface Job {

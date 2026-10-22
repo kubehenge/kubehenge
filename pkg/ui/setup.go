@@ -253,6 +253,9 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 	if req.Settings.ProxmoxHA || releasing {
 		privileges = append(slices.Clone(privileges), haPrivilege)
 	}
+	if req.Settings.EtcdRestore {
+		privileges = append(slices.Clone(privileges), restorePrivilege)
+	}
 	if !s.require(w, r, u, "/", privileges...) {
 		return
 	}
@@ -337,6 +340,10 @@ func (s *Server) templateRemover(ticket *pve.Ticket) func(context.Context, *appl
 // administrator who switches Proxmox VE HA for Kubehenge on grants it to Kubehenge's token, and the
 // one who switches it off removes what the controller left.
 const haPrivilege = "Sys.Console"
+
+// restorePrivilege is what the restore token holds on the workload pool: the administrator who
+// turns restores through the guest agent on grants it to Kubehenge, so holds it too.
+const restorePrivilege = "VM.GuestAgent.Unrestricted"
 
 // applied is what follows a successful apply: the interface switches to the management cluster,
 // and when the apply switched Proxmox VE HA off, the clusters leave HA.

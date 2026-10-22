@@ -52,6 +52,9 @@ type Settings struct {
 	// ProxmoxHA has Proxmox VE HA keep the clusters' control-plane VMs on separate nodes, with a
 	// second controller token that holds Sys.Console on /.
 	ProxmoxHA bool `json:"proxmoxHA,omitempty"`
+	// EtcdRestore has the controller restore clusters' etcd through the VMs' guest agents, with a
+	// controller token of its own that holds VM.GuestAgent.Unrestricted on the workload pool.
+	EtcdRestore bool `json:"etcdRestore,omitempty"`
 	// OfferHARules offers Proxmox VE's HA node-affinity rules, their names and nodes only, to those
 	// who may create or change a cluster without Sys.Audit on / of their own.
 	OfferHARules bool `json:"offerHARules,omitempty"`

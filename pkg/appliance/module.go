@@ -55,6 +55,7 @@ module "management" {
   proxmox_ha             = var.settings.proxmoxHA
   offer_ha_rules         = var.settings.offerHARules
   template_refresh       = var.settings.templateRefresh
+  etcd_restore           = var.settings.etcdRestore
 
   cluster_datastore_allocate = var.settings.clusterDatastoreAllocate
   cluster_sys_audit          = var.settings.clusterSysAudit
@@ -179,6 +180,7 @@ func (a *Appliance) writeConfig(s *Settings) error {
 		"proxmoxHA":              s.ProxmoxHA,
 		"offerHARules":           s.OfferHARules,
 		"templateRefresh":        moduleTemplateRefresh(s.TemplateRefresh),
+		"etcdRestore":            s.EtcdRestore,
 
 		"clusterDatastoreAllocate": s.ClusterDatastoreAllocate,
 		"clusterSysAudit":          s.ClusterSysAudit,

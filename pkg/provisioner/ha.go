@@ -353,6 +353,11 @@ func (r *HAReconciler) reconcileMachine(ctx context.Context, m *clusterv1.Machin
 
 // proxmoxMachine reads the machine's ProxmoxMachine and its VMID, or nil and 0 before it exists.
 func (r *HAReconciler) proxmoxMachine(ctx context.Context, m *clusterv1.Machine) (*unstructured.Unstructured, int64, error) {
+	return proxmoxMachineOf(ctx, r.Client, m)
+}
+
+// proxmoxMachineOf reads a machine's ProxmoxMachine and its VMID, or nil and 0 before it exists.
+func proxmoxMachineOf(ctx context.Context, c client.Reader, m *clusterv1.Machine) (*unstructured.Unstructured, int64, error) {
 	ref := m.Spec.InfrastructureRef
 	if ref.Name == "" {
 		return nil, 0, nil
@@ -360,7 +365,7 @@ func (r *HAReconciler) proxmoxMachine(ctx context.Context, m *clusterv1.Machine)
 	pm := &unstructured.Unstructured{}
 	pm.SetAPIVersion(ref.APIGroup + "/" + proxmoxMachineVersion)
 	pm.SetKind(ref.Kind)
-	err := r.Client.Get(ctx, client.ObjectKey{Namespace: m.Namespace, Name: ref.Name}, pm)
+	err := c.Get(ctx, client.ObjectKey{Namespace: m.Namespace, Name: ref.Name}, pm)
 	if apierrors.IsNotFound(err) {
 		return nil, 0, nil
 	}

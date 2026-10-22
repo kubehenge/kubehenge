@@ -353,9 +353,45 @@ With **Take volume snapshots** (the `csi` variable's `volumeSnapshots`), the clu
 
 When Kubehenge cannot give the plugin `root@pam`, such as after the administrator removed the password, the plugin keeps the cluster's token and `kubectl describe cluster` shows a `VolumeSnapshotsRefused` event saying why.
 
+## etcd snapshots
+
+A cluster with etcd snapshots on has Kubehenge's controller copy its etcd database, every object the cluster's API holds, to one of the backup targets an administrator set: on the cluster's schedule, by default every 12 hours from 00:00 UTC with each cluster a few minutes after the hour of its own, and whenever asked. It keeps the newest 14 by default and deletes older ones. Snapshots go under `<prefix>/<namespace>.<name>/etcd` in the target's bucket, beside the cluster's Velero backups, named by when they were taken in UTC and the Kubernetes version, as `20261021T120000Z-v1.36.5-rke2r1.db.age`. Each object carries the Kubernetes version, the distribution, etcd's revision and the SHA-256 and size of the database in its metadata. Snapshots work on their own, with or without Velero backups.
+
+Nothing runs in the cluster for them, and no etcd key or S3 access key enters it. For each snapshot the controller signs itself an etcd client certificate valid for an hour, in memory, from the cluster's etcd CA, which the control-plane provider keeps in the management cluster. It reaches one etcd member through the cluster's API server, by a port-forward to the member's pod on kubeadm and RKE2 or to the k3s provider's etcd proxy on k3s, and streams the database into the target as it comes, checking etcd's own checksum at its end, so that a snapshot cut off is never kept. Each snapshot is encrypted with [age](https://age-encryption.org) to a key of the cluster's own, `etcd-snapshot-identity` in the Secret `<name>-backup-keys` beside the Cluster, made with the cluster's other backup keys and outliving it as they do. It is written with the same access key as Velero's backups. RKE2 and k3s also keep the snapshots they take themselves on their nodes, as they always do.
+
+The **Backups** view's etcd snapshots section says when the last snapshot was taken and what went wrong with the last try, and lists the snapshots in the target. Snapshots are switched on, and their target, schedule, time zone and number kept chosen, under Options or from **Set up etcd snapshots…**.
+
+- **Take a snapshot now** has the controller take one at once. It needs `VM.Allocate` on the cluster's pool.
+- **Download** hands the snapshot out decrypted, as etcd wrote it. It holds every Secret of the cluster, so it needs `Sys.Modify` on the cluster's pool, as the admin kubeconfig does.
+- **Restore…** restores the cluster's etcd from it ([below](#restore-etcd)). It needs `Sys.Modify` on the cluster's pool.
+
+With kubectl, the annotation `kubehenge.dev/etcd-snapshot-requested` with `{"at":"<time>"}` asks for a snapshot, and `kubehenge.dev/etcd-snapshot` records the last one. A snapshot copied from the target decrypts with `kubehenge etcd-snapshot decrypt --identity <key file> <snapshot.db.age> <snapshot.db>`, which checks etcd's checksum too, or with any age client, the key file holding the key from `<name>-backup-keys`:
+
+```sh
+kubectl --namespace clusters get secret web-backup-keys -o jsonpath='{.data.etcd-snapshot-identity}' | base64 -d > web.key
+age --decrypt --identity web.key --output snapshot.db 20261021T120000Z-v1.36.5-rke2r1.db.age
+```
+
+### Restore etcd
+
+Restoring etcd takes every object of the cluster back to the snapshot: Deployments, Secrets, roles, custom resources and the rest of what its API holds return to how they were, and whatever was created since is gone. The data in volumes is not restored and stays as it is now. It is for a cluster that lost its etcd quorum, or whose state is corrupted or was deleted in bulk; to bring back applications with their data, restore a [Velero backup](#back-up-and-restore). A cluster is restored only from a snapshot of its own distribution and Kubernetes minor version, whose objects its API server reads.
+
+A restore:
+
+1. pauses the cluster in Cluster API, so that it replaces no machine meanwhile;
+2. copies the snapshot to the first control-plane node and checks its SHA-256;
+3. stops etcd and the API server on every control-plane node;
+4. restores etcd on the first node as a cluster of one member: with `etcdutl snapshot restore`, run from the etcd image the node already runs, on kubeadm, keeping the database from before beside it; with `rke2 server --cluster-reset --cluster-reset-restore-path=<file> --etcd-s3=false` on RKE2, and `k3s server` the same on k3s;
+5. starts its control plane and waits for its API server;
+6. deletes the other control-plane machines, whose etcd still holds the cluster from before, and gives the cluster back to Cluster API, which makes them again to join the restored member.
+
+Where an administrator has switched on [etcd restores](install.md#etcd-restores), **Restore…** asks for the cluster's name and Kubehenge runs these steps itself through the control-plane VMs' guest agents, the section showing which step it is at. The snapshot reaches the node decrypted by the controller and encrypted again for the copy with a password of its own for that restore, from a link into the target that expires within the hour. A control-plane VM that is off is replaced with the others. A restore that fails before etcd was restored starts every control plane again as it was; one that fails after finishes the restore.
+
+Otherwise **Restore…** lists the steps for the chosen snapshot, with the commands for the cluster's distribution: those for the nodes run as root over SSH or the VM's console, after downloading the snapshot to the first node as `/var/lib/kubehenge-restore/snapshot.db`, and the `kubectl` ones with the management cluster's kubeconfig.
+
 ## Delete
 
-**Delete** asks for the cluster's name. It deletes the cluster's VMs and its persistent volumes, and removes it from Rancher first. It cannot be undone. Its backups stay in their target, and its backup keys beside it ([Back up and restore](#back-up-and-restore)). Once the VMs are gone, Kubehenge's controller removes the cluster's pool, user, token and volume owner VM. If a node that may hold some of the cluster's volumes on its local storage is offline, the controller waits for it. Cluster API removes each VM's cloud-init ISO (`user-data-<VMID>.iso` on the cloud-init storage) with the VM; only a VM deleted by hand, outside Cluster API, leaves its ISO behind, which can then be removed under the storage's ISO Images in Proxmox VE.
+**Delete** asks for the cluster's name. It deletes the cluster's VMs and its persistent volumes, and removes it from Rancher first. It cannot be undone. Its backups and etcd snapshots stay in their target, and its backup keys beside it ([Back up and restore](#back-up-and-restore)). Once the VMs are gone, Kubehenge's controller removes the cluster's pool, user, token and volume owner VM. If a node that may hold some of the cluster's volumes on its local storage is offline, the controller waits for it. Cluster API removes each VM's cloud-init ISO (`user-data-<VMID>.iso` on the cloud-init storage) with the VM; only a VM deleted by hand, outside Cluster API, leaves its ISO behind, which can then be removed under the storage's ISO Images in Proxmox VE.
 
 Deleting the cluster that runs Rancher first removes every registered cluster from Rancher.
 
@@ -380,6 +416,9 @@ The interface checks the signed-in user's Proxmox VE privileges on each cluster'
 | See its backups and restores | `VM.Audit` | the cluster's pool |
 | Back up now | `VM.Allocate` | the cluster's pool |
 | Restore a backup | `Sys.Modify` | the cluster's pool |
+| See its etcd snapshots | `VM.Audit` | the cluster's pool |
+| Take an etcd snapshot now | `VM.Allocate` | the cluster's pool |
+| Download an etcd snapshot, restore etcd | `Sys.Modify` | the cluster's pool |
 | Store a cluster's own backup access key | `Sys.Modify` | the workload pool when creating, the cluster's pool when changing |
 | Download the admin kubeconfig | `Sys.Modify` | the cluster's pool |
 | Read an unwell pod's logs on the health page | `Sys.Modify` | the cluster's pool |
@@ -491,6 +530,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `loadBalancer` | no | Addresses for Services of type `LoadBalancer` ([above](#load-balancer)): `enabled` (default false); `implementation`, `metallb` (default) or `kube-vip`; `addresses`, a list of ranges, networks in CIDR notation or single addresses on the nodes' network, needed while `enabled`. |
 | `headlamp` | no | `enabled` (default false); `hostname`, to serve it through the cluster's ingress controller; `tlsSecret`, a Secret in the `headlamp` namespace with the certificate for `hostname` (when unset, one from the certificates add-on while it is on, else the ingress controller's default certificate); `access`, `token` (default: everyone signs in with their own token or through OpenID Connect) or `view` (Headlamp shows everyone who reaches it the cluster read-only through its own account, bound to the `view` ClusterRole). |
 | `backups` | no | Velero ([above](#back-up-and-restore)): `enabled` (default false); `target`, the name of one of the administrator's targets, needed while `enabled`; `schedule`, a cron expression of five fields or a descriptor such as `@weekly` (default `0 2 * * *`); `timeZone` (default `UTC`); `retentionDays` (1 to 3650, default 7); `volumes`, `all` (default) or `annotated`, only the volumes a pod names in its `backup.velero.io/backup-volumes` annotation; `existingSecret`, a Secret of the owner's own in the cluster's `velero` namespace with the store's keys as Velero's credentials file under the key `cloud`, instead of the credential stored through the interface for the cluster, or else for every cluster; Kubehenge creates the namespace, and switching backups off deletes it with the Secret. |
+| `etcdSnapshots` | no | etcd snapshots ([above](#etcd-snapshots)): `enabled` (default false); `target`, the name of one of the administrator's targets, needed while `enabled`; `schedule`, as for `backups` (default `0 */12 * * *`); `timeZone` (default `UTC`); `keep`, the number of snapshots kept (1 to 1000, default 14). They are written with the credential stored through the interface for the cluster, or else for every cluster. |
 | `certificates` | no | `enabled` (default false); `issuer`, `acme-dns01` (default), `acme-http01` or `ca`; `domain`, needed with `acme-dns01` and `ca`; `acme`: `email`, `server`, `staging`, `caBundle`; `dns01`: `provider`, its settings, `existingSecret`, `sharedCredential`, `nameservers` ([above](#certificates)). |
 | `rancher` | no | `install` (default false), which needs `hostname` and at least 4 vCPUs on every node; `register` (default true), to register with the Rancher Kubehenge installed. Setting `install` back to false removes every registered cluster from Rancher, then uninstalls it. A second cluster with `install` gets no Rancher; `kubectl describe cluster` shows a `RancherRefused` event. |
 | `gitops` | no | `enabled` (default false); `engine`, `argocd` (default) or `flux`; `repository`, with `url` (`https://` or `ssh://`), `revision` (a branch or full ref, default `main`) and `path` (default `.`); `auth`, `none` (default), `deployKey` (over `ssh://`; the key is in the Secret `<name>-gitops` beside the Cluster, its public half under `identity.pub`), `token` (the cluster's `gitops` credential, `username` and `password`) or `existingSecret` with `existingSecret`; `knownHosts`, the server's host keys as known_hosts lines, read from the server once when unset; `hostname` and `tlsSecret`, to serve the web interface through the ingress controller; `admins`, the first provider's groups that administer Argo CD; `signIn`, with `clientID` (the provider's own when unset) and `clientSecret`, `none` (default, PKCE), `stored` (the cluster's `oidc-client` credential, key `clientSecret`) or `existingSecret` with `existingSecret`; `ui` (default false), Flux's web interface, which needs `hostname` and a client secret. `ui` and `admins` need an identity provider in `oidc`. |

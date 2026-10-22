@@ -270,6 +270,14 @@ kubehenge.dev/backup-targets: {{ .Values.backupTargets | toJson | quote }}
 {{- end -}}
 
 {{/*
+Whether the controller restores etcd through the VMs' guest agents, which the interface offers
+then; otherwise it shows the steps to restore by hand.
+*/}}
+{{- define "kubehenge.etcdRestore" -}}
+kubehenge.dev/etcd-restore-automatic: {{ .Values.proxmox.etcdRestore | toString | quote }}
+{{- end -}}
+
+{{/*
 Add-ons Kubehenge's controller installs into a cluster, the same for every distribution.
 */}}
 {{- define "kubehenge.addonVariables" -}}
@@ -428,6 +436,49 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
       x-kubernetes-validations:
         - rule: "!self.enabled || has(self.target)"
           message: Backups need a target.
+- name: etcdSnapshots
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        Snapshots of the cluster's etcd, which holds every object of the cluster but its volumes'
+        data, on a schedule to one of the S3 targets an administrator set, beside the cluster's
+        Velero backups in an etcd folder of its own. Kubehenge's controller takes each snapshot
+        through the cluster's API server with a client certificate it signs for itself, encrypts
+        it with age to a key of the cluster's own in the <cluster>-backup-keys Secret, and stores
+        it with the credential typed into the interface for the cluster, or else the one for every
+        cluster; no key or credential enters the cluster. Restoring one brings back the cluster's
+        objects as they were, for a cluster that lost its etcd quorum or had its objects deleted
+        or damaged.
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        target:
+          type: string
+          minLength: 1
+          maxLength: 63
+          description: The administrator's target to store the snapshots in, by name.
+        schedule:
+          type: string
+          minLength: 1
+          maxLength: 128
+          default: "0 */12 * * *"
+          description: When to take a snapshot, as a cron expression of five fields or a descriptor such as @daily.
+        timeZone:
+          type: string
+          default: UTC
+          description: IANA time zone the schedule is read in, such as Europe/Berlin.
+        keep:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 14
+          description: How many snapshots to keep; the oldest beyond are deleted from the target.
+      x-kubernetes-validations:
+        - rule: "!self.enabled || has(self.target)"
+          message: etcd snapshots need a target.
 - name: podSecurity
   required: false
   schema:

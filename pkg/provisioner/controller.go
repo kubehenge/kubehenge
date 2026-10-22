@@ -138,6 +138,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if !cluster.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, cluster)
 	}
+	// A restore stops the cluster's API server and pauses it; the cluster is looked at again after.
+	if RestoreInProgress(cluster) {
+		return ctrl.Result{RequeueAfter: etcdSnapshotWait}, nil
+	}
 	if err := r.addFinalizer(ctx, cluster); err != nil {
 		return ctrl.Result{}, err
 	}

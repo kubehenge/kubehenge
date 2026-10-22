@@ -204,6 +204,41 @@ resource "proxmox_acl" "ha" {
   propagate = false
 }
 
+# Restoring a cluster's etcd runs commands as root in its control-plane VMs through the guest
+# agent, which VM.GuestAgent.Unrestricted allows in every VM of the workload pool: a user and token
+# of their own, which the controller uses for restores alone.
+resource "proxmox_virtual_environment_role" "etcd_restore" {
+  count = var.etcd_restore ? 1 : 0
+
+  role_id    = "${var.cluster_name}-etcd-restore"
+  privileges = ["VM.Audit", "VM.GuestAgent.Unrestricted"]
+}
+
+resource "proxmox_virtual_environment_user" "etcd_restore" {
+  count = var.etcd_restore ? 1 : 0
+
+  user_id = "${var.cluster_name}-etcd-restore@pve"
+  comment = "etcd restores for the clusters of Kubehenge management cluster ${var.cluster_name}; signs in with its API token only"
+}
+
+resource "proxmox_user_token" "etcd_restore" {
+  count = var.etcd_restore ? 1 : 0
+
+  user_id               = proxmox_virtual_environment_user.etcd_restore[0].user_id
+  token_name            = "etcd-restore"
+  comment               = "Kubehenge's controller, for etcd restores"
+  privileges_separation = false
+}
+
+resource "proxmox_acl" "etcd_restore" {
+  count = var.etcd_restore ? 1 : 0
+
+  user_id   = proxmox_virtual_environment_user.etcd_restore[0].user_id
+  path      = "/pool/${proxmox_virtual_environment_pool.workload.pool_id}"
+  role_id   = proxmox_virtual_environment_role.etcd_restore[0].role_id
+  propagate = true
+}
+
 locals {
   # The storages the management cluster's own VMs, its disk image and Cluster API's cloud-init
   # drives of every cluster are on, and those the template builds download and upload to with
@@ -344,10 +379,12 @@ resource "proxmox_download_file" "talos" {
     proxmox_acl.cluster_api,
     proxmox_acl.clusters,
     proxmox_acl.clusters_audit,
+    proxmox_acl.etcd_restore,
     proxmox_acl.ha,
     proxmox_acl.provisioner,
     proxmox_acl.template_builder,
     proxmox_user_token.cluster_api,
+    proxmox_user_token.etcd_restore,
     proxmox_user_token.ha,
     proxmox_user_token.provisioner,
     proxmox_user_token.template_builder,
