@@ -187,21 +187,44 @@ func (a *Accounts) Bridges(ctx context.Context, t *Ticket, node string) ([]Bridg
 	return bridges, nil
 }
 
+// Allowed are those of the nodes given that the rule keeps its resources to: its own, or for a
+// negative rule every other one.
+func (r *HARule) Allowed(nodes []string) []string {
+	var allowed []string
+	for _, n := range nodes {
+		if slices.Contains(r.Nodes, n) != r.Negative {
+			allowed = append(allowed, n)
+		}
+	}
+	return allowed
+}
+
+// NodeAffinityPath lists Proxmox VE's HA node-affinity rules, to anyone with Sys.Audit on /.
+const NodeAffinityPath = "/cluster/ha/rules?type=node-affinity"
+
+// HARuleEntry is a rule as NodeAffinityPath lists it. Proxmox VE leaves out a flag that is off,
+// and writes one that is on as 1.
+type HARuleEntry struct {
+	Rule     string `json:"rule"`
+	Comment  string `json:"comment"`
+	Nodes    string `json:"nodes"`
+	Affinity string `json:"affinity"`
+	Strict   int    `json:"strict"`
+	Disable  int    `json:"disable"`
+}
+
 // NodeAffinityRules lists the enabled HA node-affinity rules; Proxmox VE shows them to users with
 // Sys.Audit on /.
 func (a *Accounts) NodeAffinityRules(ctx context.Context, t *Ticket) ([]HARule, error) {
-	// Proxmox VE leaves out a flag that is off, and writes one that is on as 1.
-	var res []struct {
-		Rule     string `json:"rule"`
-		Comment  string `json:"comment"`
-		Nodes    string `json:"nodes"`
-		Affinity string `json:"affinity"`
-		Strict   int    `json:"strict"`
-		Disable  int    `json:"disable"`
-	}
-	if err := a.get(ctx, t, "/cluster/ha/rules?type=node-affinity", &res); err != nil {
+	var res []HARuleEntry
+	if err := a.get(ctx, t, NodeAffinityPath, &res); err != nil {
 		return nil, err
 	}
+	return EnabledRules(res), nil
+}
+
+// EnabledRules are the rules of a listing that are not disabled.
+func EnabledRules(res []HARuleEntry) []HARule {
 	rules := make([]HARule, 0, len(res))
 	for _, r := range res {
 		if r.Disable != 0 {
@@ -216,7 +239,7 @@ func (a *Accounts) NodeAffinityRules(ctx context.Context, t *Ticket) ([]HARule, 
 		}
 		rules = append(rules, rule)
 	}
-	return rules, nil
+	return rules
 }
 
 // Zone returns the SDN zone of the bridge a VM connects to: a VNet's own zone, or localnetwork for

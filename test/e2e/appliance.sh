@@ -1,7 +1,7 @@
 #!/bin/sh
 # End-to-end test of the appliance on a Proxmox VE node: install it from a release archive, sign in
-# with Proxmox VE users, set the management cluster up from the interface, reach the shared Headlamp
-# behind the interface's sign-in, upgrade the appliance under the running management cluster, remove
+# with Proxmox VE users, set the management cluster up from the interface, place by an HA rule
+# offered to a cluster creator, reach the shared Headlamp behind the interface's sign-in, upgrade the appliance under the running management cluster, remove
 # the management cluster from the interface and then the appliance, and check that Proxmox VE is
 # left as it was.
 #
@@ -9,7 +9,8 @@
 #
 # Runs as root on the node, as appliance/install.sh does, and needs jq. <release> and <newer release>
 # are archives `make dist` built with two versions; <settings> is a JSON file of the management
-# cluster's settings as the interface's setup sends them (pkg/appliance/settings.go). The appliance
+# cluster's settings as the interface's setup sends them (pkg/appliance/settings.go), with
+# offerHARules on and the default workload pool. The appliance
 # is container KUBEHENGE_E2E_APPLIANCE_ID at KUBEHENGE_E2E_APPLIANCE_ADDRESS (with its prefix length)
 # on KUBEHENGE_E2E_BRIDGE (default vmbr0), with the gateway KUBEHENGE_E2E_GATEWAY and the name
 # servers KUBEHENGE_E2E_DNS; its disk goes on KUBEHENGE_E2E_STORAGE when that is set.
@@ -31,6 +32,9 @@ ui=https://${ip} headlamp=https://${ip}:8443
 # The appliance's certificate is signed by the cluster's CA for its address.
 ca=/etc/pve/pve-root-ca.pem
 admin=kubehenge-e2e-admin@pve user=kubehenge-e2e-user@pve
+# The HA rule offered to cluster creators, and the guest it needs: Proxmox VE takes a rule only for
+# HA resources, and a resource only for a guest that exists.
+ha_rule=kubehenge-e2e-placement ha_vmid=
 password=$(head -c 18 /dev/urandom | base64 | tr -d '/+=')
 passphrase=$(head -c 24 /dev/urandom | base64 | tr -d '/+=')
 work=$(mktemp -d)
@@ -40,6 +44,11 @@ finish() {
     if [ "${status}" -ne 0 ] && pct status "${ctid}" > /dev/null 2>&1; then
         echo "-- the appliance's log" >&2
         pct exec "${ctid}" -- journalctl -u kubehenge.service -n 100 --no-pager >&2 || true
+    fi
+    if [ -n "${ha_vmid}" ]; then
+        pvesh delete "/cluster/ha/rules/${ha_rule}" > /dev/null 2>&1 || true
+        pvesh delete "/cluster/ha/resources/vm:${ha_vmid}" > /dev/null 2>&1 || true
+        qm destroy "${ha_vmid}" --purge > /dev/null 2>&1 || true
     fi
     for u in "${admin}" "${user}"; do
         pvesh delete "/access/users/${u}" > /dev/null 2>&1 || true
@@ -153,6 +162,26 @@ list() {
     jq -r "${filter}" "${work}/answer"
 }
 
+# remove_ha_rule: takes the test's HA rule, its resource and guest away again, in the order Proxmox
+# VE allows.
+remove_ha_rule() {
+    [ -n "${ha_vmid}" ] || return 0
+    pvesh delete "/cluster/ha/rules/${ha_rule}" > /dev/null
+    pvesh delete "/cluster/ha/resources/vm:${ha_vmid}" > /dev/null
+    qm destroy "${ha_vmid}" --purge > /dev/null
+    ha_vmid=
+}
+
+# rules_offered <node>: whether the user without privileges on / is offered the test's HA rule, by
+# its name and node alone.
+rules_offered() {
+    request "${work}/user.jar" "${ui}/api/proxmox/ha-rules"
+    got=$(cat "${work}/status")
+    [ "${got}" = 200 ] &&
+        jq -e --arg r "${ha_rule}" --arg n "$1" \
+            '.readable and .offered and .rules == [{rule: $r, nodes: [$n], allowed: [$n]}]' "${work}/body" > /dev/null
+}
+
 # inventory: what Proxmox VE holds that the appliance or the management cluster could leave behind,
 # a line each. Container templates stay: install.sh keeps the one it downloaded for the next install.
 inventory() {
@@ -226,6 +255,25 @@ until_true 3600 "the setup to end" job_ended
 job_was apply succeeded true
 expect 200 "the ClusterClasses" request "${work}/admin.jar" "${ui}/api/classes"
 body_is '[.[].name] | contains(["kubehenge-kubeadm", "kubehenge-rke2", "kubehenge-k3s"])' "the interface does not offer the ClusterClasses"
+
+step "an HA rule offered to a cluster creator without Sys.Audit on /, by its name and nodes alone"
+expect 200 "the HA rules for a user who may place no cluster" request "${work}/user.jar" "${ui}/api/proxmox/ha-rules"
+body_is '(.readable | not) and .rules == []' "a user who may place no cluster is offered the HA rules"
+node=$(hostname)
+ha_vmid=$(pvesh get /cluster/nextid --output-format json | jq -r .)
+qm create "${ha_vmid}" --name kubehenge-e2e-ha-rule --memory 64 > /dev/null
+# Ignored, so that Proxmox VE HA neither starts the guest nor arms a node's watchdog for it.
+pvesh create /cluster/ha/resources --sid "vm:${ha_vmid}" --state ignored > /dev/null
+pvesh create /cluster/ha/rules --type node-affinity --rule "${ha_rule}" --resources "vm:${ha_vmid}" \
+    --nodes "${node}" --strict 1 --comment 'not for cluster creators' > /dev/null
+# The workload pool the setup made, where VM.Allocate lets the user create a cluster.
+pveum acl modify /pool/kubehenge --users "${user}" --roles PVEVMAdmin
+until_true 180 "the HA rule offered to the cluster creator" rules_offered "${node}"
+expect 200 "the HA rules for the administrator" request "${work}/admin.jar" "${ui}/api/proxmox/ha-rules"
+body_is "(.offered | not) and any(.rules[]; .rule == \"${ha_rule}\" and .comment == \"not for cluster creators\" and .strict)" \
+    "the administrator, who holds Sys.Audit on /, does not read the HA rule in full from Proxmox VE"
+pveum acl delete /pool/kubehenge --users "${user}" --roles PVEVMAdmin
+remove_ha_rule
 
 step "the shared Headlamp behind the interface's sign-in"
 # Its service starts on the first request.

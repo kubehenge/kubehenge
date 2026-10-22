@@ -60,6 +60,8 @@ export interface SetupForm {
   controllerImage?: string | undefined;
   clusterOIDC: OIDCProvider[];
   proxmoxHA: boolean;
+  offerHARules: boolean;
+  clusterDatastoreAllocate: boolean;
   passphrase: string;
   confirm: string;
 }
@@ -123,6 +125,12 @@ export function settings(f: SetupForm): ManagementSettings {
   if (f.proxmoxHA) {
     s.proxmoxHA = true;
   }
+  if (f.offerHARules) {
+    s.offerHARules = true;
+  }
+  if (f.clusterDatastoreAllocate) {
+    s.clusterDatastoreAllocate = true;
+  }
   return s;
 }
 
@@ -163,6 +171,8 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     controllerImage: saved.controllerImage,
     clusterOIDC: saved.clusterOIDC ?? [],
     proxmoxHA: saved.proxmoxHA === true,
+    offerHARules: saved.offerHARules === true,
+    clusterDatastoreAllocate: saved.clusterDatastoreAllocate === true,
     passphrase: "",
     confirm: "",
   };
@@ -490,6 +500,11 @@ function ManagedSummary({
     ["Storages for clusters", s.workloadDatastores.join(", ")],
     ["Bridges for clusters", s.workloadBridges.join(", ")],
     ["Proxmox VE HA", s.proxmoxHA === true ? "Keeps clusters' control-plane VMs on separate nodes" : "Off"],
+    ["HA rules for cluster creators", s.offerHARules === true ? "Offered by name and nodes" : "Off"],
+    [
+      "CSI plugin's newest release",
+      s.clusterDatastoreAllocate === true ? "Clusters may choose it, on a storage of their own" : "Off",
+    ],
     [
       "Identity providers",
       s.clusterOIDC && s.clusterOIDC.length > 0 ? s.clusterOIDC.map((p) => p.issuerURL).join(", ") : "None",
@@ -775,6 +790,55 @@ function HAChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element {
         its node fails, and a node that runs one restarts itself if it loses quorum. Kubehenge&apos;s controller gets a
         second API token with Sys.Console on /, which amounts to a root shell on every node; switching this on or off
         takes Sys.Console on / of you too.
+      </p>
+    </fieldset>
+  );
+}
+
+function HARulesChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element {
+  const hint = useId();
+  return (
+    <fieldset className="group">
+      <legend>HA rules for cluster creators</legend>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.offerHARules}
+          aria-describedby={hint}
+          onChange={(e) => set("offerHARules", e.target.checked)}
+        />{" "}
+        Offer Proxmox VE&apos;s HA node-affinity rules as placements to everyone who may create or change a cluster
+      </label>
+      <p className="muted" id={hint}>
+        Grants: those without Sys.Audit on / of their own can place a cluster on the nodes of an HA rule, seeing each
+        rule&apos;s name and the nodes it allows, never its comment or resources. Kubehenge&apos;s controller reads the
+        rules with its own token, which holds Sys.Audit on / already, so Proxmox VE grants nothing new. Risks: everyone
+        with VM.Allocate on the clusters&apos; pool or a cluster&apos;s own pool learns the rules&apos; names and which
+        nodes they cover.
+      </p>
+    </fieldset>
+  );
+}
+
+function DatastoreAllocateChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element {
+  const hint = useId();
+  return (
+    <fieldset className="group">
+      <legend>CSI plugin</legend>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.clusterDatastoreAllocate}
+          aria-describedby={hint}
+          onChange={(e) => set("clusterDatastoreAllocate", e.target.checked)}
+        />{" "}
+        Let clusters choose the CSI plugin&apos;s newest release
+      </label>
+      <p className="muted" id={hint}>
+        The newest release needs Datastore.Allocate on a cluster&apos;s storage. A cluster that chooses it gets that on
+        its storage, which must be one of the storages for clusters that no other cluster, the management cluster or the
+        VM templates use. Kubehenge&apos;s controller gets Datastore.Allocate on the storages for clusters the
+        management cluster does not use, to grant it.
       </p>
     </fieldset>
   );
@@ -1171,6 +1235,8 @@ function SetupWizard({
           onToggle={toggle}
         />
         <HAChoice form={form} set={set} />
+        <HARulesChoice form={form} set={set} />
+        <DatastoreAllocateChoice form={form} set={set} />
         <fieldset className="group">
           <legend>Identity providers</legend>
           <p className="muted">

@@ -14,6 +14,7 @@ import (
 
 	"github.com/luthermonson/go-proxmox"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -55,6 +56,8 @@ const (
 	placementInterval = 15 * time.Second
 	// templateVersionsInterval is how soon a kubeadm template just built is offered in the interface.
 	templateVersionsInterval = 30 * time.Second
+	// haRulesInterval is how soon an HA rule made in Proxmox VE is offered to cluster creators.
+	haRulesInterval = 30 * time.Second
 )
 
 // controllerOptions are the controller command's flags.
@@ -67,6 +70,7 @@ type controllerOptions struct {
 	leaderElect       bool
 	ccmChart          string
 	csiChart          string
+	csiNewestChart    string
 	ciliumChart       string
 	calicoChart       string
 	headlampChart     string
@@ -96,6 +100,7 @@ type controllerOptions struct {
 	extensionConfig   string
 	upgradeInterval   time.Duration
 	classProviders    []string
+	offerHARules      bool
 }
 
 func newControllerCommand(conn *pve.Config) *cobra.Command {
@@ -129,6 +134,7 @@ separate nodes.`,
 	f.StringVar(&o.settings.Region, "region", "", "region the clusters see Proxmox VE as; default the Proxmox VE cluster's name")
 	f.StringVar(&o.ccmChart, "ccm-chart", "", "cloud controller manager chart, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.csiChart, "csi-chart", "", "CSI plugin chart, as <repository>/<name>:<version>@sha256:<digest>")
+	o.datastoreAllocateFlags(f)
 	f.StringVar(&o.ciliumChart, "cilium-chart", "", "Cilium chart, for distributions without a CNI of their own, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.calicoChart, "calico-chart", "", "Calico's operator chart, for distributions without a CNI of their own, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.headlampChart, "headlamp-chart", "", "Headlamp chart, for clusters that switch it on, as <repository>/<name>:<version>@sha256:<digest>")
@@ -157,16 +163,24 @@ separate nodes.`,
 	f.StringVar(&o.kubeVipCloudChart, "kube-vip-cloud-provider-chart", "", "kube-vip's cloud provider chart, which hands kube-vip's Services their addresses, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringSliceVar(&o.r.Charts.PodSecurityExempt, "pod-security-exempt", nil, "namespaces Kyverno's pod security policies leave alone, those the ClusterClasses' Pod Security Admission exempts (comma-separated)")
 	f.StringArrayVar(&o.classProviders, "class-providers", nil, "namespaces of the Cluster API providers only one ClusterClass's clusters use, as <class>=<namespace>,<namespace>; they run only while a cluster does (repeatable)")
+	f.BoolVar(&o.offerHARules, "offer-ha-rules", false, "offer Proxmox VE's HA node-affinity rules, their names and nodes only, to those who may create a cluster but not read the rules, through the ConfigMap "+provisioner.HARulesName)
 	f.DurationVar(&o.upgradeInterval, "upgrade-interval", defaultUpgradeInterval, "how often clusters are checked for an automatic upgrade due in their window")
 	f.IntVar(&o.port, "extension-port", defaultExtensionPort, "port of the Runtime Extension server")
 	f.StringVar(&o.extensionConfig, "extension-config", "kubehenge", "ExtensionConfig through which Cluster API calls this controller's hooks")
 	f.StringVar(&o.certDir, "extension-cert-dir", "/etc/kubehenge/tls", "directory with tls.crt and tls.key for the Runtime Extension server")
 	f.StringVar(&o.healthAddr, "health-address", ":8081", "address of the liveness and readiness probes")
 	f.BoolVar(&o.leaderElect, "leader-elect", true, "elect one active controller among replicas")
-	for _, flag := range []string{"ccm-chart", "csi-chart", "cilium-chart", "calico-chart", "calico-images", "headlamp-chart", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "rancher-turtles-image", "rancher-cluster-api-image", "monitoring-chart", "kube-rbac-proxy-image", "loki-chart", "alloy-chart", "alloy-image", "kyverno-chart", "kyverno-policies-chart", "istio-chart", "istio-base-chart", "istio-cni-chart", "istio-ztunnel-chart", "traefik-chart", "metallb-chart", "kube-vip-chart", "kube-vip-image", "kube-vip-cloud-provider-chart"} {
+	for _, flag := range []string{"ccm-chart", "csi-chart", "csi-newest-chart", "cilium-chart", "calico-chart", "calico-images", "headlamp-chart", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "rancher-turtles-image", "rancher-cluster-api-image", "monitoring-chart", "kube-rbac-proxy-image", "loki-chart", "alloy-chart", "alloy-image", "kyverno-chart", "kyverno-policies-chart", "istio-chart", "istio-base-chart", "istio-cni-chart", "istio-ztunnel-chart", "traefik-chart", "metallb-chart", "kube-vip-chart", "kube-vip-image", "kube-vip-cloud-provider-chart"} {
 		_ = cmd.MarkFlagRequired(flag)
 	}
 	return cmd
+}
+
+// datastoreAllocateFlags are those that let clusters run the CSI plugin's newest release.
+func (o *controllerOptions) datastoreAllocateFlags(f *pflag.FlagSet) {
+	f.StringVar(&o.csiNewestChart, "csi-newest-chart", "", "the CSI plugin's newest release, for clusters whose token holds Datastore.Allocate on their storage, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.settings.DatastoreRole, "datastore-allocate-role", "", "Proxmox VE role, holding Datastore.Allocate, each cluster that asks for it gets on its storage; empty to let no cluster hold it")
+	f.StringSliceVar(&o.r.DatastoreAllocate.Management, "management-storages", nil, "storages the management cluster uses, on which no cluster may hold Datastore.Allocate (comma-separated)")
 }
 
 func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
@@ -198,6 +212,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	distributions := &provisioner.Distributions{ClassNamespace: o.r.ClassNamespace, Providers: providers}
 	cloud := &provisioner.Proxmox{Client: c, Settings: o.settings}
 	o.r.Cloud = cloud
+	o.r.DatastoreAllocate.Role = o.settings.DatastoreRole
 	o.r.Endpoint = provisioner.Endpoint{URL: strings.TrimSuffix(conn.URL, "/"), CA: string(ca)}
 	o.r.RancherKubernetes = rancherMinors
 
@@ -228,6 +243,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 		Registrar:         registrar,
 		RancherKubernetes: rancherMinors,
 		Nodes:             cloud,
+		DatastoreAllocate: o.r.DatastoreAllocate,
 		Releases: &provisioner.ReleaseChecksums{
 			Reader:    mgr.GetAPIReader(),
 			Client:    mgr.GetClient(),
@@ -298,6 +314,7 @@ func (o *controllerOptions) parseCharts() error {
 	}{
 		{"--ccm-chart", o.ccmChart, &o.r.Charts.CCM},
 		{"--csi-chart", o.csiChart, &o.r.Charts.CSI},
+		{"--csi-newest-chart", o.csiNewestChart, &o.r.Charts.CSINewest},
 		{"--cilium-chart", o.ciliumChart, &o.r.Charts.Cilium},
 		{"--calico-chart", o.calicoChart, &o.r.Charts.Calico},
 		{"--headlamp-chart", o.headlampChart, &o.r.Charts.Headlamp},
@@ -469,6 +486,17 @@ func (o *controllerOptions) addPlacement(mgr manager.Manager, extensions *server
 	placer := &provisioner.Placer{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Nodes: cloud, Interval: placementInterval}
 	if err := mgr.Add(placer); err != nil {
 		return fmt.Errorf("the placer: %w", err)
+	}
+	rules := &provisioner.HARules{
+		Reader:    mgr.GetAPIReader(),
+		Client:    mgr.GetClient(),
+		Namespace: o.r.ClassNamespace,
+		Proxmox:   cloud.Client,
+		Offer:     o.offerHARules,
+		Interval:  haRulesInterval,
+	}
+	if err := mgr.Add(rules); err != nil {
+		return fmt.Errorf("the HA rules offered: %w", err)
 	}
 	return o.addHA(mgr, conn, cloud.Client)
 }

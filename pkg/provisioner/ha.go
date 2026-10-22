@@ -43,7 +43,9 @@ const proxmoxMachineVersion = "v1alpha2"
 
 // HAComment marks the HA resources and rules of the cluster whose pool is given, and nothing else:
 // the controller changes no HA object without it.
-func HAComment(pool string) string { return "Kubehenge cluster " + pool }
+func HAComment(pool string) string { return haCommentPrefix + pool }
+
+const haCommentPrefix = "Kubehenge cluster "
 
 // The cluster's rules: keeping its control-plane VMs apart, and on its nodes.
 const (

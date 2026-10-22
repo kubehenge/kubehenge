@@ -72,6 +72,13 @@ rules:
   - apiGroups: [cluster.x-k8s.io]
     resources: [clusterclasses]
     verbs: [get, list, watch]
+  {{- if .Values.interface.offerHARules }}
+  # The HA rules' names and nodes, which it offers to those who may create or change a cluster.
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [kubehenge-ha-rules]
+    verbs: [get]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

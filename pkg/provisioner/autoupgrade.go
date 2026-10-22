@@ -282,6 +282,8 @@ type poolTemplates struct {
 	kubeadm []kubeVersion
 	// cloudImage tells whether the template RKE2's and k3s's machines are cloned from is there.
 	cloudImage bool
+	// storages are those any of Kubehenge's templates have disks on, whatever their OS.
+	storages []string
 }
 
 // kubeadmVersionOf is the Kubernetes version a kubeadm template's tags name.
@@ -301,12 +303,12 @@ func kubeadmVersionOf(tags []string) (kubeVersion, bool) {
 // configuration: an upgrade started from a moment's stale listing would ask for a template that is
 // gone.
 func listPoolTemplates(ctx context.Context, c *proxmox.Client) (poolTemplates, error) {
-	resources, err := (&templates.Builder{Client: c}).List(ctx)
+	inv, err := (&templates.Builder{Client: c}).Inventory(ctx)
 	if err != nil {
 		return poolTemplates{}, fmt.Errorf("listing the Proxmox VE templates: %w", err)
 	}
-	var seen poolTemplates
-	for _, r := range resources {
+	seen := poolTemplates{storages: inv.Storages}
+	for _, r := range inv.Templates {
 		tags := templates.ParseTags(r.Tags)
 		if !slices.Contains(tags, templates.DefaultOS) {
 			continue

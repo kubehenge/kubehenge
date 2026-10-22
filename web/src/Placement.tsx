@@ -79,7 +79,7 @@ function rulesHint({ haRules, haRulesError }: HARulesRead): string | undefined {
     return `Proxmox VE's HA rules could not be read: ${haRulesError}.`;
   }
   if (haRules && !haRules.readable) {
-    return "Reading Proxmox VE's HA rules takes Sys.Audit on /.";
+    return "Reading Proxmox VE's HA rules takes Sys.Audit on /, unless an administrator offers them.";
   }
   if (haRules?.rules.length === 0) {
     return "Proxmox VE has no enabled HA node-affinity rule with a node you can see.";

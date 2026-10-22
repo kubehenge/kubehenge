@@ -24,6 +24,8 @@ const form: SetupForm = {
   serviceSubnets: "",
   clusterOIDC: [],
   proxmoxHA: false,
+  offerHARules: false,
+  clusterDatastoreAllocate: false,
   passphrase: "correct horse battery staple",
   confirm: "correct horse battery staple",
 };
@@ -105,6 +107,25 @@ describe("setup", () => {
     expect(settings({ ...form, proxmoxHA: true })).toHaveProperty("proxmoxHA", true);
     expect(settings(form)).not.toHaveProperty("proxmoxHA");
     expect([formOf(settings({ ...form, proxmoxHA: true })).proxmoxHA, formOf(settings(form)).proxmoxHA]).toStrictEqual([
+      true,
+      false,
+    ]);
+  });
+
+  it("offers the HA rules to cluster creators only when an administrator says so", () => {
+    expect(settings({ ...form, offerHARules: true })).toHaveProperty("offerHARules", true);
+    expect(settings(form)).not.toHaveProperty("offerHARules");
+    expect([
+      formOf(settings({ ...form, offerHARules: true })).offerHARules,
+      formOf(settings(form)).offerHARules,
+    ]).toStrictEqual([true, false]);
+  });
+
+  it("lets clusters choose the CSI plugin's newest release only when it is switched on", () => {
+    const on = settings({ ...form, clusterDatastoreAllocate: true });
+    expect(on).toHaveProperty("clusterDatastoreAllocate", true);
+    expect(settings(form)).not.toHaveProperty("clusterDatastoreAllocate");
+    expect([formOf(on).clusterDatastoreAllocate, formOf(settings(form)).clusterDatastoreAllocate]).toStrictEqual([
       true,
       false,
     ]);

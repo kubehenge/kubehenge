@@ -54,11 +54,13 @@ module "management_cluster" {
   proxmox_ca_certificate = var.proxmox_ca_certificate
   proxmox_nodes          = ["pve"]
 
-  # The container's one storage, a directory.
-  image_datastore     = "local"
-  vm_datastore        = "local"
-  bootstrap_datastore = "local"
-  workload_datastores = ["local"]
+  # The container's storage, a directory, and another the k3s test's cluster holds
+  # Datastore.Allocate on.
+  image_datastore            = "local"
+  vm_datastore               = "local"
+  bootstrap_datastore        = "local"
+  workload_datastores        = ["local", "own"]
+  cluster_datastore_allocate = true
 
   node_addresses = [for i in range(var.node_count) : "172.20.99.${11 + i}/24"]
   node_cores     = var.node_cores

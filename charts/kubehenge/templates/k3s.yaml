@@ -30,6 +30,12 @@ metadata:
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"
     {{- end }}
+    {{- if .Values.proxmox.datastoreAllocate.role }}
+    # Tells the interface to offer the csi variable's datastoreAllocate, on the storages the
+    # management cluster does not use: an administrator let clusters choose it.
+    kubehenge.dev/datastore-allocate: "true"
+    kubehenge.dev/management-storages: {{ join "," .Values.proxmox.datastoreAllocate.managementStorages | quote }}
+    {{- end }}
 spec:
   infrastructure:
     templateRef:

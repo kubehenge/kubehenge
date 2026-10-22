@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"slices"
 	"strconv"
@@ -21,6 +22,9 @@ type Settings struct {
 	// Role is given to each cluster's user on its own pool: VM.Audit for the cloud controller
 	// manager, VM.Config.Disk for the CSI plugin.
 	Role string
+	// DatastoreRole is given to the user of a cluster that holds Datastore.Allocate on its storage,
+	// there; it carries the group's privileges on the storage too, which it replaces.
+	DatastoreRole string
 	// Node, when set, is where volume owner VMs are created; otherwise the first online node.
 	Node string
 	// Region names the Proxmox VE cluster to the clusters (topology.kubernetes.io/region);
@@ -52,11 +56,17 @@ type Proxmox struct {
 	region string
 }
 
-// Ensure creates whatever of the cluster's objects is missing. held is what an earlier call
-// returned, as far as it was kept. record keeps a chosen VMID before the VM is created, so that a
-// failure after creating it never leads to a second one.
-func (p *Proxmox) Ensure(ctx context.Context, n Names, held Credentials, record func(Credentials) error) (Credentials, error) {
-	members, err := p.ensureAccess(ctx, n)
+// Access is what a cluster's user holds beyond its own pool and its group's rights.
+type Access struct {
+	// DatastoreAllocate are the storages the user holds Settings.DatastoreRole on.
+	DatastoreAllocate []string
+}
+
+// Ensure creates whatever of the cluster's objects is missing, and gives its user access and no
+// more. held is what an earlier call returned, as far as it was kept. record keeps a chosen VMID
+// before the VM is created, so that a failure after creating it never leads to a second one.
+func (p *Proxmox) Ensure(ctx context.Context, n Names, access Access, held Credentials, record func(Credentials) error) (Credentials, error) {
+	members, err := p.ensureAccess(ctx, n, access)
 	if err != nil {
 		return held, err
 	}
@@ -116,8 +126,9 @@ func (p *Proxmox) MoveVolumeOwner(ctx context.Context, vmid int, from, to string
 	return nil
 }
 
-// ensureAccess creates the cluster's pool, with the members it has, and its user with rights on it.
-func (p *Proxmox) ensureAccess(ctx context.Context, n Names) ([]poolMember, error) {
+// ensureAccess creates the cluster's pool, with the members it has, and its user with rights on it
+// and access.
+func (p *Proxmox) ensureAccess(ctx context.Context, n Names, access Access) ([]poolMember, error) {
 	members, err := p.ensurePool(ctx, n.Pool)
 	if err != nil {
 		return nil, err
@@ -125,7 +136,7 @@ func (p *Proxmox) ensureAccess(ctx context.Context, n Names) ([]poolMember, erro
 	if err := p.ensureUser(ctx, n); err != nil {
 		return nil, err
 	}
-	if err := p.ensureGrant(ctx, n); err != nil {
+	if err := p.ensureGrant(ctx, n, access); err != nil {
 		return nil, err
 	}
 	return members, nil
@@ -300,11 +311,35 @@ func (p *Proxmox) ensureUser(ctx context.Context, n Names) error {
 	return nil
 }
 
-// ensureGrant gives the cluster's user the clusters' role on its pool and no other role there.
-// Every reconcile comes through here, and each ACL write rewrites the cluster-wide user.cfg, so
-// it writes only what differs. Proxmox VE lists the entries on paths the token may change
-// permissions on, which includes the pool.
-func (p *Proxmox) ensureGrant(ctx context.Context, n Names) error {
+// storageACLPath is where Proxmox VE grants privileges on a storage.
+const storageACLPath = "/storage/"
+
+// grant is one role on one path, propagated to the paths below it or not.
+type grant struct {
+	role      string
+	propagate int
+}
+
+// wantedGrants are the roles the cluster's user is to hold, by path.
+func (p *Proxmox) wantedGrants(n Names, access Access) (map[string]grant, error) {
+	wanted := map[string]grant{"/pool/" + n.Pool: {p.Settings.Role, 1}}
+	for _, s := range access.DatastoreAllocate {
+		if p.Settings.DatastoreRole == "" {
+			return nil, fmt.Errorf("granting %s Datastore.Allocate on storage %s: the controller has no role for it", n.User, s)
+		}
+		// Not propagated: a storage has nothing below it, and Proxmox VE lets a token without
+		// Permissions.Modify grant propagated privileges only where it holds them propagated.
+		wanted[storageACLPath+s] = grant{p.Settings.DatastoreRole, 0}
+	}
+	return wanted, nil
+}
+
+// ensureGrant gives the cluster's user the clusters' role on its pool, the datastore role on each
+// storage of access, and no other role on its pool or any storage. Every reconcile comes through
+// here, and each ACL write rewrites the cluster-wide user.cfg, so it writes only what differs.
+// Proxmox VE lists the entries on paths the token may change permissions on: the pool, and the
+// storages it holds Datastore.Allocate on, the only ones it may grant the datastore role on.
+func (p *Proxmox) ensureGrant(ctx context.Context, n Names, access Access) error {
 	var entries []struct {
 		Path      string `json:"path"`
 		Type      string `json:"type"`
@@ -312,30 +347,40 @@ func (p *Proxmox) ensureGrant(ctx context.Context, n Names) error {
 		RoleID    string `json:"roleid"`
 		Propagate int    `json:"propagate"`
 	}
-	if err := p.Client.Get(ctx, "/access/acl", &entries); err != nil {
-		return fmt.Errorf("reading the permissions on pool %s: %w", n.Pool, err)
+	wanted, err := p.wantedGrants(n, access)
+	if err != nil {
+		return err
 	}
-	path := "/pool/" + n.Pool
-	granted := false
+	if err = p.Client.Get(ctx, "/access/acl", &entries); err != nil {
+		return fmt.Errorf("reading the permissions of %s: %w", n.User, err)
+	}
+	granted := map[string]bool{}
 	for _, e := range entries {
-		if e.Path != path || e.Type != "user" || e.UGID != n.User {
+		if e.Type != "user" || e.UGID != n.User {
 			continue
 		}
-		if e.RoleID == p.Settings.Role && e.Propagate == 1 {
-			granted = true
+		want, ours := wanted[e.Path]
+		if !ours && !strings.HasPrefix(e.Path, storageACLPath) {
 			continue
 		}
-		revoke := map[string]any{"path": path, "users": n.User, "roles": e.RoleID, "delete": 1}
+		if ours && e.RoleID == want.role && e.Propagate == want.propagate {
+			granted[e.Path] = true
+			continue
+		}
+		revoke := map[string]any{"path": e.Path, "users": n.User, "roles": e.RoleID, "delete": 1}
 		if err := p.Client.Put(ctx, "/access/acl", revoke, nil); err != nil {
-			return fmt.Errorf("revoking %s from %s on pool %s: %w", e.RoleID, n.User, n.Pool, err)
+			return fmt.Errorf("revoking %s from %s on %s: %w", e.RoleID, n.User, e.Path, err)
 		}
 	}
-	if granted {
-		return nil
-	}
-	grant := map[string]any{"path": path, "users": n.User, "roles": p.Settings.Role, "propagate": 1}
-	if err := p.Client.Put(ctx, "/access/acl", grant, nil); err != nil {
-		return fmt.Errorf("granting %s on pool %s: %w", n.User, n.Pool, err)
+	for _, path := range slices.Sorted(maps.Keys(wanted)) {
+		if granted[path] {
+			continue
+		}
+		want := wanted[path]
+		grant := map[string]any{"path": path, "users": n.User, "roles": want.role, "propagate": want.propagate}
+		if err := p.Client.Put(ctx, "/access/acl", grant, nil); err != nil {
+			return fmt.Errorf("granting %s %s on %s: %w", n.User, want.role, path, err)
+		}
 	}
 	return nil
 }

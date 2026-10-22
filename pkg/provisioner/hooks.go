@@ -71,6 +71,8 @@ type Hooks struct {
 	Nodes Nodes
 	// Releases has RKE2 and k3s nodes install the files recorded for their release.
 	Releases *ReleaseChecksums
+	// DatastoreAllocate is what lets a cluster hold Datastore.Allocate on its storage.
+	DatastoreAllocate DatastoreAllocate
 }
 
 // BeforeClusterUpgrade holds Rancher's cluster at the Kubernetes versions Rancher runs on.
@@ -108,7 +110,8 @@ func (h *Hooks) BeforeClusterDelete(ctx context.Context, req *runtimehooksv1.Bef
 // BeforeClusterCreate holds a new cluster back until the Reconciler has created its Proxmox VE
 // objects; capmox would otherwise clone its first VMs into a pool that does not exist yet. It
 // refuses a cluster whose pod or service range overlaps its nodes' network, load-balancer
-// addresses that clash with that network or another cluster's, and logs without monitoring.
+// addresses that clash with that network or another cluster's, logs without monitoring, and
+// Datastore.Allocate on a storage that is not the cluster's alone.
 func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.BeforeClusterCreateRequest, resp *runtimehooksv1.BeforeClusterCreateResponse) {
 	resp.Status = runtimehooksv1.ResponseStatusSuccess
 	cluster := &req.Cluster
@@ -145,6 +148,10 @@ func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.Bef
 		return
 	}
 	if err := checkLogs(cluster); err != nil {
+		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
+		return
+	}
+	if err := h.checkDatastoreAllocate(ctx, cluster, class); err != nil {
 		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
 		return
 	}

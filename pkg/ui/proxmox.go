@@ -1,10 +1,18 @@
 package ui
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
@@ -13,6 +21,9 @@ import (
 const (
 	privStorage = "Datastore.AllocateSpace"
 	privBridge  = "SDN.Use"
+	// privDatastoreAllocate is what a user gives a cluster's token on its storage when the cluster
+	// runs the CSI plugin's newest release, so it takes the user's own.
+	privDatastoreAllocate = "Datastore.Allocate"
 )
 
 func storagePath(storage string) string { return "/storage/" + storage }
@@ -32,6 +43,8 @@ type storageView struct {
 
 	// Usable tells whether it takes VM disks and the user may put a cluster's disks there.
 	Usable bool `json:"usable"`
+	// Allocatable tells whether the user may give a cluster's token Datastore.Allocate there.
+	Allocatable bool `json:"allocatable"`
 }
 
 func (s *Server) storages(w http.ResponseWriter, r *http.Request, u user) {
@@ -40,20 +53,20 @@ func (s *Server) storages(w http.ResponseWriter, r *http.Request, u user) {
 		s.proxmoxError(w, err)
 		return
 	}
-	usable := map[string]bool{}
+	held := map[string]pve.Privileges{}
 	views := make([]storageView, 0, len(storages))
 	for _, st := range storages {
-		ok, seen := usable[st.Storage]
+		privs, seen := held[st.Storage]
 		if !seen {
-			privs, err := s.Accounts.Privileges(r.Context(), u.ticket, storagePath(st.Storage))
-			if err != nil {
+			var err error
+			if privs, err = s.Accounts.Privileges(r.Context(), u.ticket, storagePath(st.Storage)); err != nil {
 				s.proxmoxError(w, err)
 				return
 			}
-			ok = privs.Has(privStorage)
-			usable[st.Storage] = ok
+			held[st.Storage] = privs
 		}
-		views = append(views, storageView{Storage: st, Usable: ok && slices.Contains(st.Content, "images")})
+		usable := privs.Has(privStorage) && slices.Contains(st.Content, "images")
+		views = append(views, storageView{Storage: st, Usable: usable, Allocatable: usable && privs.Has(privDatastoreAllocate)})
 	}
 	writeJSON(w, http.StatusOK, views)
 }
@@ -69,9 +82,13 @@ func (s *Server) nodes(w http.ResponseWriter, r *http.Request, u user) {
 
 // haRulesView offers Proxmox VE's HA node-affinity rules as places for a cluster's VMs.
 type haRulesView struct {
-	// Readable tells whether the user may read the rules, which takes Sys.Audit on /.
-	Readable bool            `json:"readable"`
-	Rules    []placementRule `json:"rules"`
+	// Readable tells whether the user may read the rules, which takes Sys.Audit on /, or is offered
+	// them.
+	Readable bool `json:"readable"`
+	// Offered tells that the rules come from Kubehenge's controller, which an administrator lets
+	// offer them to those who may create or change a cluster: their names and nodes, nothing more.
+	Offered bool            `json:"offered,omitempty"`
+	Rules   []placementRule `json:"rules"`
 }
 
 type placementRule struct {
@@ -83,13 +100,18 @@ type placementRule struct {
 }
 
 func (s *Server) haRules(w http.ResponseWriter, r *http.Request, u user) {
+	view := haRulesView{Readable: true, Rules: []placementRule{}}
 	rules, err := s.Accounts.NodeAffinityRules(r.Context(), u.ticket)
 	if errors.Is(err, pve.ErrForbidden) {
-		writeJSON(w, http.StatusOK, haRulesView{Rules: []placementRule{}})
-		return
+		rules, view.Offered, err = s.offeredRules(r.Context(), u)
+		view.Readable = view.Offered
 	}
 	if err != nil {
 		s.proxmoxError(w, err)
+		return
+	}
+	if !view.Readable {
+		writeJSON(w, http.StatusOK, view)
 		return
 	}
 	nodes, err := s.Accounts.Nodes(r.Context(), u.ticket)
@@ -97,20 +119,71 @@ func (s *Server) haRules(w http.ResponseWriter, r *http.Request, u user) {
 		s.proxmoxError(w, err)
 		return
 	}
-	view := haRulesView{Readable: true, Rules: []placementRule{}}
+	names := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		names = append(names, n.Node)
+	}
 	for _, rule := range rules {
-		var allowed []string
-		for _, n := range nodes {
-			if slices.Contains(rule.Nodes, n.Node) != rule.Negative {
-				allowed = append(allowed, n.Node)
-			}
-		}
 		// A rule that leaves the user no node is no place for a cluster.
-		if len(allowed) > 0 {
+		if allowed := rule.Allowed(names); len(allowed) > 0 {
 			view.Rules = append(view.Rules, placementRule{HARule: rule, Allowed: allowed})
 		}
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+// offeredRules are the rules Kubehenge's controller offers, where an administrator lets it and the
+// user may create a cluster or change one, and whether they are offered. A management cluster that
+// cannot be asked offers none: a cluster can still be placed without them.
+func (s *Server) offeredRules(ctx context.Context, u user) ([]pve.HARule, bool, error) {
+	kube := s.currentKube()
+	if kube == nil {
+		return nil, false, nil
+	}
+	cm := &corev1.ConfigMap{}
+	err := kube.Get(ctx, client.ObjectKey{Namespace: s.ClassNamespace, Name: provisioner.HARulesName}, cm)
+	switch {
+	// Without the setting the interface may not read it either.
+	case apierrors.IsNotFound(err) || apierrors.IsForbidden(err):
+		return nil, false, nil
+	case err != nil:
+		s.Log.Warn("reading the HA rules offered", "error", err)
+		return nil, false, nil
+	}
+	offered, err := provisioner.ParseOfferedRules(cm)
+	if err != nil {
+		s.Log.Warn("reading the HA rules offered", "error", err)
+		return nil, false, nil
+	}
+	if may, err := s.placesClusters(ctx, u); err != nil || !may {
+		return nil, false, err
+	}
+	rules := make([]pve.HARule, 0, len(offered))
+	for _, o := range offered {
+		rules = append(rules, pve.HARule{Rule: o.Rule, Nodes: o.Nodes})
+	}
+	return rules, true, nil
+}
+
+// placesClusters tells whether the user may choose where a cluster's VMs go: VM.Allocate on the
+// workload pool, to create one, or on a cluster's pool beneath it, to change that one.
+func (s *Server) placesClusters(ctx context.Context, u user) (bool, error) {
+	all, err := s.Accounts.AllPrivileges(ctx, u.ticket)
+	if err != nil {
+		return false, fmt.Errorf("reading the user's privileges: %w", err)
+	}
+	pool := s.workloadPoolPath()
+	for path, privs := range all {
+		if (path == pool || strings.HasPrefix(path, pool+"/")) && privs.Has(privChange) {
+			return true, nil
+		}
+	}
+	// Inherited from above, which Proxmox VE lists only for paths with an entry of their own.
+	privs, err := s.Accounts.Privileges(ctx, u.ticket, pool)
+	if err != nil {
+		return false, fmt.Errorf("reading the user's privileges on %s: %w", pool, err)
+	}
+	return privs.Has(privChange), nil
 }
 
 type bridgeView struct {

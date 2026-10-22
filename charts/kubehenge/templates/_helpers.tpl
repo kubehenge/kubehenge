@@ -171,6 +171,23 @@ never below its distribution's documented minimum for a node.
         Whether Proxmox VE HA keeps the control-plane VMs on separate nodes and restarts them on
         another node when theirs fails. It takes effect where Kubehenge's administrator has enabled
         Proxmox VE HA and the cluster's disks are on shared storage.
+- name: csi
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: The Proxmox VE CSI plugin, which every cluster runs for its persistent volumes.
+      properties:
+        datastoreAllocate:
+          type: boolean
+          default: false
+          description: >-
+            Run the plugin's newest release, which needs Datastore.Allocate on the cluster's
+            storage, and give the cluster's Proxmox VE token Datastore.Allocate there: it may then
+            delete any volume on that storage and change the storage's definition. Only where
+            Kubehenge's administrator lets clusters choose it, and on a storage that neither the
+            management cluster, its templates nor another cluster uses. Off, the cluster runs the
+            plugin's last release that needs no more than Datastore.AllocateSpace.
 - name: controlPlaneMachine
   required: false
   schema:

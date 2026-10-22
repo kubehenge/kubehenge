@@ -27,7 +27,7 @@ output "proxmox_objects" {
       proxmox_virtual_environment_role.provisioner_users.role_id,
       proxmox_virtual_environment_role.provisioner_realm.role_id,
       proxmox_virtual_environment_role.templates_audit.role_id,
-    ], proxmox_virtual_environment_role.ha[*].role_id)
+    ], proxmox_virtual_environment_role.ha[*].role_id, proxmox_virtual_environment_role.cluster_datastore[*].role_id)
     users  = concat([proxmox_virtual_environment_user.cluster_api.user_id, proxmox_virtual_environment_user.provisioner.user_id], proxmox_virtual_environment_user.ha[*].user_id)
     groups = [proxmox_virtual_environment_group.clusters.group_id]
     vm_ids = proxmox_virtual_environment_vm.node[*].vm_id

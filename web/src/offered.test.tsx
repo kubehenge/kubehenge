@@ -11,6 +11,7 @@ const storage = (name: string, node: string, usable = true) => ({
   avail: 0,
   total: 0,
   usable,
+  allocatable: false,
 });
 
 describe("the wizard's choices", () => {

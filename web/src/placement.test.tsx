@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
 import { fakeServer } from "./fake-server";
+import type { HARules } from "./types";
 
 const cluster = {
   namespace: "clusters",
@@ -25,7 +26,9 @@ const cluster = {
   machines: [],
 };
 
-async function openPlacement(): Promise<{
+const readRules: HARules = { readable: true, rules: [{ rule: "fast", nodes: ["pve2"], allowed: ["pve2"] }] };
+
+async function openPlacement(haRules: HARules = readRules): Promise<{
   dialog: HTMLElement;
   sent: () => unknown;
   user: ReturnType<typeof userEvent.setup>;
@@ -40,9 +43,7 @@ async function openPlacement(): Promise<{
         { node: "pve2", online: false },
       ],
     },
-    "GET /api/proxmox/ha-rules": {
-      body: { readable: true, rules: [{ rule: "fast", nodes: ["pve2"], allowed: ["pve2"] }] },
-    },
+    "GET /api/proxmox/ha-rules": { body: haRules },
     "PATCH /api/clusters/clusters/web": { body: cluster },
   });
   const user = userEvent.setup({ delay: null });
@@ -83,6 +84,26 @@ describe("a cluster's placement", () => {
     await user.click(within(dialog).getByLabelText("The nodes of an HA rule"));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { allowedNodes: ["pve2"] } }));
+  });
+
+  it("takes the nodes of an HA rule offered to those who may not read the rules", async () => {
+    const { dialog, sent, user } = await openPlacement({
+      readable: true,
+      offered: true,
+      rules: [{ rule: "racks-a", nodes: ["pve1", "pve2"], allowed: ["pve1", "pve2"] }],
+    });
+    await user.click(within(dialog).getByLabelText("The nodes of an HA rule"));
+    const picker = within(dialog).getByLabelText("HA rule");
+    expect(within(picker).getByRole("option", { name: "racks-a: pve1, pve2" })).toBeInTheDocument();
+    await user.selectOptions(picker, "racks-a");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sent()).toStrictEqual({ variables: { allowedNodes: ["pve1", "pve2"] } }));
+  });
+
+  it("says how the HA rules are read where the user may not", async () => {
+    const { dialog } = await openPlacement({ readable: false, rules: [] });
+    expect(within(dialog).getByLabelText("The nodes of an HA rule")).toBeDisabled();
+    expect(dialog).toHaveTextContent("takes Sys.Audit on /, unless an administrator offers them.");
   });
 
   it("lets new VMs go to any node", async () => {

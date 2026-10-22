@@ -35,6 +35,10 @@
 # KUBEHENGE_E2E_OIDC_ADDRESS is an IPv4 address of the machine running this test that the cluster's
 # nodes reach; the test serves an OpenID issuer there, on KUBEHENGE_E2E_OIDC_PORT (default 8943),
 # which the cluster trusts. Needs openssl and python3.
+# KUBEHENGE_E2E_DATASTORE_ALLOCATE=1 switches the CSI plugin's newest release on and off again, on a
+# KUBEHENGE_E2E_STORAGE that the management cluster, the templates and other clusters leave alone,
+# with a management cluster that lets clusters choose it; KUBEHENGE_E2E_LOCAL_STORAGE names one of
+# the management cluster's storages, which a cluster asking for it is refused.
 set -eu
 
 class=${1:?usage: $0 <ClusterClass> <version> <upgrade version>}
@@ -607,8 +611,13 @@ if [ "${distribution}" = k3s ]; then
     [ -z "${servicelb}" ] || fail "k3s's servicelb runs beside the load balancer: ${servicelb}"
 fi
 
-step "a persistent volume from the Proxmox VE CSI plugin"
-wl apply -f - << 'EOF'
+owned() {
+    first_node=$(pve_get nodes | jq -r '.data[0].node')
+    pve_get "nodes/${first_node}/storage/${KUBEHENGE_E2E_STORAGE}/content?content=images&vmid=${owner}" | jq '.data | length'
+}
+# persistent_volume: a pod writes to a volume of its own, which goes again with its claim.
+persistent_volume() {
+    wl apply -f - << 'EOF'
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -648,21 +657,21 @@ spec:
       persistentVolumeClaim:
         claimName: e2e
 EOF
-wl -n default wait --for=condition=Ready pod/e2e --timeout=10m
-pv=$(wl -n default get pvc e2e -o jsonpath='{.spec.volumeName}')
-volume=$(wl get pv "${pv}" -o jsonpath='{.spec.csi.volumeHandle}')
-printf 'volume %s\n' "${volume}"
-owned() {
-    first_node=$(pve_get nodes | jq -r '.data[0].node')
-    pve_get "nodes/${first_node}/storage/${KUBEHENGE_E2E_STORAGE}/content?content=images&vmid=${owner}" | jq '.data | length'
+    wl -n default wait --for=condition=Ready pod/e2e --timeout=10m
+    pv=$(wl -n default get pvc e2e -o jsonpath='{.spec.volumeName}')
+    volume=$(wl get pv "${pv}" -o jsonpath='{.spec.csi.volumeHandle}')
+    printf 'volume %s\n' "${volume}"
+    owned_volumes=$(owned)
+    [ "${owned_volumes}" -ge 1 ] || fail "no volume owned by the volume owner VM ${owner}"
+    wl -n default delete pod/e2e pvc/e2e --wait --timeout=5m
+    # The CSI plugin retries a failed deletion with a back-off of up to five minutes.
+    until_true 600 "volume deleted" sh -c "[ \"\$(KUBECONFIG=${work}/workload kubectl get pv -o name | wc -l)\" = 0 ]"
+    owned_volumes=$(owned)
+    [ "${owned_volumes}" = 0 ] || fail "the volume is still on ${KUBEHENGE_E2E_STORAGE}"
 }
-owned_volumes=$(owned)
-[ "${owned_volumes}" -ge 1 ] || fail "no volume owned by the volume owner VM ${owner}"
-wl -n default delete pod/e2e pvc/e2e --wait --timeout=5m
-# The CSI plugin retries a failed deletion with a back-off of up to five minutes.
-until_true 600 "volume deleted" sh -c "[ \"\$(KUBECONFIG=${work}/workload kubectl get pv -o name | wc -l)\" = 0 ]"
-owned_volumes=$(owned)
-[ "${owned_volumes}" = 0 ] || fail "the volume is still on ${KUBEHENGE_E2E_STORAGE}"
+
+step "a persistent volume from the Proxmox VE CSI plugin"
+persistent_volume
 
 # set_variable <name> <JSON value>: sets one of the Cluster's topology variables.
 set_variable() {
@@ -670,6 +679,63 @@ set_variable() {
         jq -c --arg n "$1" --argjson v "$2" '[.spec.topology.variables[] | select(.name != $n)] + [{name: $n, value: $v}]')
     kubectl -n "${ns}" patch "cluster/${name}" --type=merge -p "{\"spec\":{\"topology\":{\"variables\":${vars}}}}"
 }
+
+if [ "${KUBEHENGE_E2E_DATASTORE_ALLOCATE:-}" = 1 ]; then
+    : "${KUBEHENGE_E2E_LOCAL_STORAGE:?}"
+    # The plugin's two releases, by the version of the controller image the controller's chart
+    # values name for each.
+    controller_args=$(kubectl get deployments -A -o json |
+        jq -c '[.items[].spec.template.spec.containers[].args // [] | select(any(startswith("--csi-newest-chart=")))][0]')
+    release_of() {
+        printf '%s' "${controller_args}" | jq -r --arg c "$1" '.[] | select(startswith("--chart-values=")) |
+            sub("^--chart-values="; "") | fromjson | .[$c].controller.plugin.image.tag // "" | split("@")[0]'
+    }
+    newest=$(release_of csi-newest)
+    held=$(release_of csi)
+    [ -n "${newest}" ] && [ -n "${held}" ] && [ "${newest}" != "${held}" ] ||
+        fail "the controller names no two releases of the CSI plugin: '${newest}' and '${held}'"
+    # allocate_is <true|false>: whether the cluster's token holds Datastore.Allocate on its storage.
+    allocate_is() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        perms=$(cluster_get "access/permissions?path=/storage/${KUBEHENGE_E2E_STORAGE}") || return 1
+        printf '%s' "${perms}" | jq -e --argjson want "$1" '([.data[] | has("Datastore.Allocate")] | any) == $want' > /dev/null
+    }
+    # csi_at <version>: every pod of the CSI plugin runs its images at the version, and is ready.
+    csi_at() {
+        wl get pods -A -o json | jq -e --arg v "$1" '
+            def plugin: .image | test("/proxmox-csi-(controller|node):");
+            [.items[] | select(any(.spec.containers[]; plugin))] |
+            length > 0 and all(
+                all(.spec.containers[] | select(plugin); .image | split("@")[0] | endswith(":" + $v)) and
+                any(.status.conditions[]?; .type == "Ready" and .status == "True"))' > /dev/null
+    }
+    # refused_with <message> <storage> <csi value>: a second cluster beside this one, on the storage
+    # and with the csi variable, is refused for the reason.
+    refused_with() {
+        other=$(kubectl -n "${ns}" get "cluster/${name}" -o json | jq -c --arg s "$2" --argjson c "$3" '
+            {apiVersion, kind, metadata: {name: "e2e-refused", namespace: .metadata.namespace},
+             spec: (.spec | del(.controlPlaneEndpoint) | .topology.variables = ([.topology.variables[] |
+                 select(.name != "storage" and .name != "csi")] + [{name: "storage", value: $s}, {name: "csi", value: $c}]))}')
+        if out=$(printf '%s' "${other}" | kubectl create --dry-run=server -f - 2>&1); then
+            fail "a cluster on storage $2 with csi $3 was let in"
+        fi
+        printf '%s' "${out}" | grep -qF "$1" || fail "a cluster on storage $2 was refused for another reason: ${out}"
+    }
+
+    step "the CSI plugin's newest release, with Datastore.Allocate on the cluster's own storage"
+    set_variable csi '{"datastoreAllocate":true}'
+    until_true 300 "the cluster's token to hold Datastore.Allocate on ${KUBEHENGE_E2E_STORAGE}" allocate_is true
+    until_true 900 "the CSI plugin at ${newest}" csi_at "${newest}"
+    persistent_volume
+    refused_with "holds Datastore.Allocate on storage ${KUBEHENGE_E2E_STORAGE}" "${KUBEHENGE_E2E_STORAGE}" '{"datastoreAllocate":false}'
+    refused_with "the management cluster uses storage ${KUBEHENGE_E2E_LOCAL_STORAGE}" "${KUBEHENGE_E2E_LOCAL_STORAGE}" '{"datastoreAllocate":true}'
+
+    step "the CSI plugin's held release again, without Datastore.Allocate"
+    set_variable csi '{"datastoreAllocate":false}'
+    until_true 300 "the cluster's token to lose Datastore.Allocate on ${KUBEHENGE_E2E_STORAGE}" allocate_is false
+    until_true 900 "the CSI plugin at ${held}" csi_at "${held}"
+    persistent_volume
+fi
 # guest <node> <vmid> <command>: runs a shell command in a VM through its guest agent and prints its
 # output; fails when the command or the agent does. It is polled with set -e off, so each step
 # returns its own failure.

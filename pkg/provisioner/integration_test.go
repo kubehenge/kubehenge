@@ -552,6 +552,41 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 	if err := c.Create(ctx, small); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "the cluster's add-ons (monitoring, cert-manager, Rancher's agent) need 2240 MiB of memory on its workers") {
 		t.Fatalf("monitoring on a k3s worker at its least: %v", err)
 	}
+
+	hooks.DatastoreAllocate = testDatastoreAllocate
+	checkDatastoreAllocateAdmission(ctx, t, c)
+}
+
+// checkDatastoreAllocateAdmission has the API server ask the validator about clusters holding
+// Datastore.Allocate on their storage.
+func checkDatastoreAllocateAdmission(ctx context.Context, t *testing.T, c client.Client) {
+	t.Helper()
+	onStorage := func(name, storage, csi string) *clusterv1.Cluster {
+		cluster := &clusterv1.Cluster{
+			Namespace: "team-a", Name: name,
+			Spec: clusterv1.ClusterSpec{Topology: clusterv1.Topology{
+				ClassRef: clusterv1.ClusterClassRef{Name: "kubehenge-k3s", Namespace: classNamespace},
+				Version:  "v1.36.5+k3s1",
+				Workers: clusterv1.WorkersTopology{MachineDeployments: []clusterv1.MachineDeploymentTopology{
+					{Class: "worker", Name: "md-0", Replicas: new(int32(1))},
+				}},
+			}},
+		}
+		vars := map[string]string{"storage": `"` + storage + `"`}
+		if csi != "" {
+			vars[csiVariable] = csi
+		}
+		return withAddons(cluster, vars)
+	}
+	if err := c.Create(ctx, onStorage("allocating", "ceph", `{"datastoreAllocate":true}`)); err != nil {
+		t.Fatalf("Datastore.Allocate on a storage of its own: %v", err)
+	}
+	if err := c.Create(ctx, onStorage("sharing", "ceph", "")); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "holds Datastore.Allocate on storage ceph") {
+		t.Fatalf("a second cluster on the storage another holds Datastore.Allocate on: %v", err)
+	}
+	if err := c.Create(ctx, onStorage("management", "local-lvm", `{"datastoreAllocate":true}`)); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "the management cluster uses storage local-lvm") {
+		t.Fatalf("Datastore.Allocate on the management cluster's storage: %v", err)
+	}
 }
 
 // checkClassAddonRoom holds a class's memory figures: one for every add-on and every node kind, a
@@ -750,6 +785,46 @@ func TestIntegrationChartProxmoxHA(t *testing.T) {
 		}
 		if token != on || classes != len(classProviders) {
 			t.Errorf("HA %t: the controller gets the HA token: %t; %d classes", on, token, classes)
+		}
+	}
+}
+
+// Only a management cluster that lets clusters hold Datastore.Allocate hands the controller the role
+// and the management cluster's storages, and offers the classes' csi variable in the interface.
+func TestIntegrationChartDatastoreAllocate(t *testing.T) {
+	t.Parallel()
+	for _, on := range []bool{false, true} {
+		values := []string{"testdata/integration-values.yaml"}
+		if on {
+			values = append(values, "testdata/datastore-allocate-values.yaml")
+		}
+		var args string
+		classes := 0
+		for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, values...) {
+			switch o.GetKind() {
+			case "ClusterClass":
+				annotations := o.GetAnnotations()
+				if got := annotations["kubehenge.dev/datastore-allocate"] == "true"; got != on {
+					t.Errorf("Datastore.Allocate %t: %s offers it: %t", on, o.GetName(), got)
+				}
+				if on && annotations["kubehenge.dev/management-storages"] != "local-lvm,local" {
+					t.Errorf("%s names the management cluster's storages %q", o.GetName(), annotations["kubehenge.dev/management-storages"])
+				}
+				classes++
+			case "Deployment":
+				containers, _, err := unstructured.NestedSlice(o.Object, "spec", "template", "spec", "containers")
+				if err != nil {
+					t.Fatal(err)
+				}
+				args += fmt.Sprint(containers)
+			}
+		}
+		if !strings.Contains(args, "--csi-newest-chart=oci://ghcr.io/sergelogvinov/charts/proxmox-csi-plugin:") {
+			t.Errorf("Datastore.Allocate %t: the controller is not given the plugin's newest release", on)
+		}
+		role := strings.Contains(args, "--datastore-allocate-role=kubehenge-cluster-datastore") && strings.Contains(args, "--management-storages=local-lvm,local")
+		if role != on || classes != len(classProviders) {
+			t.Errorf("Datastore.Allocate %t: the controller gets the role: %t; %d classes", on, role, classes)
 		}
 	}
 }

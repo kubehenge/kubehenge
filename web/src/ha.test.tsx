@@ -29,6 +29,7 @@ const storage = (name: string, shared: boolean): Storage => ({
   avail: 1,
   total: 2,
   usable: true,
+  allocatable: false,
 });
 
 const storages = [storage("ceph", true), storage("local-lvm", false)];
@@ -49,7 +50,7 @@ describe("a new cluster's Proxmox VE HA", () => {
     const form = { ...newForm(), storage: "ceph" };
     expect(request(form, rke2).variables).not.toHaveProperty("proxmoxHA");
     expect(request({ ...form, proxmoxHA: false }, rke2).variables).toHaveProperty("proxmoxHA", false);
-    expect(Object.fromEntries(summary({ ...form, proxmoxHA: false }, rke2, true))["Proxmox VE HA"]).toBe("Off");
+    expect(Object.fromEntries(summary({ ...form, proxmoxHA: false }, rke2, { ha: true }))["Proxmox VE HA"]).toBe("Off");
     expect(Object.fromEntries(summary(form, rke2))).not.toHaveProperty("Proxmox VE HA");
   });
 
@@ -64,6 +65,7 @@ describe("a new cluster's Proxmox VE HA", () => {
         usableStorages={storages}
         placed={false}
         haOffered={haOffered}
+        csi={{ offered: false, problem: undefined }}
         nodes={[]}
         rules={{ haRules: undefined, haRulesError: undefined }}
       />

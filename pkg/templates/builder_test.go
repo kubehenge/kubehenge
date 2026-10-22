@@ -212,6 +212,46 @@ func TestFindLooksOnlyInTheBuildersPool(t *testing.T) {
 	}
 }
 
+func TestInventoryNamesTheStoragesOfThePoolsTemplates(t *testing.T) {
+	t.Parallel()
+	tmpl, tags := rke2(t)
+	first := template(201, tmpl.Name, tags, testPool)
+	second := template(202, "kubehenge-talos", "kubehenge;talos;talos-v1.14.4", testPool)
+	elsewhere := template(101, tmpl.Name, tags, "")
+	configs := configsOf(first, second, elsewhere)
+	configs[201]["scsi0"] = "ceph:base-201-disk-0,discard=on,size=30G"
+	configs[201]["ide2"] = "none,media=cdrom"
+	configs[201]["efidisk0"] = "nvme:base-201-disk-1,efitype=4m,size=4M"
+	configs[202]["virtio0"] = "ceph:base-202-disk-0,size=10G"
+	configs[202]["ide0"] = "local-lvm:base-202-cloudinit,media=cdrom"
+	configs[101]["scsi0"] = "elsewhere:base-101-disk-0,size=30G"
+	vms := []map[string]any{first, second, elsewhere}
+	b := &Builder{Client: (&fakeCluster{t: t, views: [][]map[string]any{vms}, configs: configs}).client(), Pool: testPool}
+
+	inv, err := b.Inventory(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inv.Templates) != 2 || !slices.Equal(inv.Storages, []string{"ceph", "local-lvm", "nvme"}) {
+		t.Errorf("Inventory gave %d templates on %v; want 2 on ceph, local-lvm and nvme", len(inv.Templates), inv.Storages)
+	}
+}
+
+func TestDiskStorage(t *testing.T) {
+	t.Parallel()
+	for disk, want := range map[string]string{
+		"ceph:base-201-disk-0,size=30G":     "ceph",
+		"local:iso/debian.iso,media=cdrom":  "local",
+		"none,media=cdrom":                  "",
+		"/dev/disk/by-id/ata-disk,backup=0": "",
+		"":                                  "",
+	} {
+		if got := diskStorage(disk); got != want {
+			t.Errorf("diskStorage(%q) = %q, want %q", disk, got, want)
+		}
+	}
+}
+
 // The resource view shows a template converted a moment ago as no template at all, and under a
 // name it no longer has; its configuration says what it is.
 func TestLookupsTakeATemplateFromItsConfiguration(t *testing.T) {

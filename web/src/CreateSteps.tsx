@@ -11,6 +11,7 @@ import {
   type Form,
   type Machine,
 } from "./create-form";
+import { CSIField } from "./CsiPlugin";
 import { LoadBalancerFields } from "./LoadBalancer";
 import { addressBits } from "./network";
 import { OIDCProviders } from "./OIDCProviders";
@@ -309,6 +310,7 @@ export function MachinesStep({
   usableStorages,
   placed,
   haOffered,
+  csi,
   nodes,
   rules,
 }: StepProps & {
@@ -316,6 +318,7 @@ export function MachinesStep({
   usableStorages: Storage[];
   placed: boolean;
   haOffered: boolean;
+  csi: { offered: boolean; problem: string | undefined };
   nodes: PveNode[];
   rules: HARulesRead;
 }): JSX.Element {
@@ -347,6 +350,14 @@ export function MachinesStep({
         />
       )}
       {haOffered && <HAField checked={form.proxmoxHA} onChange={(on) => set("proxmoxHA", on)} />}
+      {csi.offered && (
+        <CSIField
+          checked={form.datastoreAllocate}
+          onChange={(on) => set("datastoreAllocate", on)}
+          storage={filled(form.storage) ? form.storage : undefined}
+          problem={csi.problem}
+        />
+      )}
       <MachineFields
         label="Control plane"
         value={form.controlPlaneMachine}

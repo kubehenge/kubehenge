@@ -1,0 +1,6 @@
+---
+# On top of integration-values.yaml: the module's values with cluster_datastore_allocate.
+proxmox:
+  datastoreAllocate:
+    role: kubehenge-cluster-datastore
+    managementStorages: [local-lvm, local]

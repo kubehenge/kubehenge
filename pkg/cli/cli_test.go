@@ -189,7 +189,7 @@ func TestChartValuesGoToTheirCharts(t *testing.T) {
 			calicoImages: []string{"quay.io/calico/node:v3.33.0" + digest}, chartValues: values,
 		}
 		for _, f := range []*string{
-			&o.ccmChart, &o.csiChart, &o.ciliumChart, &o.calicoChart, &o.headlampChart, &o.certManagerChart, &o.rancherChart,
+			&o.ccmChart, &o.csiChart, &o.csiNewestChart, &o.ciliumChart, &o.calicoChart, &o.headlampChart, &o.certManagerChart, &o.rancherChart,
 			&o.monitoringChart, &o.lokiChart, &o.alloyChart, &o.kyvernoChart, &o.kyvernoPolicies, &o.istioChart, &o.istioBaseChart, &o.istioCNIChart,
 			&o.istioZtunnelChart, &o.traefikChart, &o.metalLBChart, &o.kubeVipChart, &o.kubeVipCloudChart,
 		} {
