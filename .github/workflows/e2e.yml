@@ -19,10 +19,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # A pull request runs the tests its changes need (test/e2e/ci/scope.sh), and so does a merge
-  # group for all its pull requests' changes together, on the tree that would land on main; the
-  # nightly run runs every test and adds the upgrade of the management cluster and Rancher, the
-  # longest.
+  # A merge group runs the tests its pull requests' changes need together (test/e2e/ci/scope.sh),
+  # on the tree that would land on main; a pull request runs none, since the queue runs them on
+  # exactly what lands and a second run on the pull request only doubles the wait. The nightly run
+  # runs every test and adds the upgrade of the management cluster and Rancher, the longest.
   scope:
     name: scope
     runs-on: ubuntu-26.04
@@ -30,19 +30,17 @@ jobs:
     outputs:
       tests: ${{ steps.scope.outputs.tests }}
     steps:
-      # A pull request's merge commit and the base under it, which is all its comparison reads; a
-      # merge group fetches main's commit under it as well.
+      # A merge group's commit; the comparison fetches main's commit under it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 2
       - id: scope
         env:
           EVENT: ${{ github.event_name }}
           GROUP_BASE: ${{ github.event.merge_group.base_sha }}
         run: |
           case "$EVENT" in
-            pull_request) tests=$(git diff --name-only HEAD^1 HEAD | test/e2e/ci/scope.sh) ;;
+            pull_request) tests='[]' ;;
             # A group holds one commit per pull request on top of main, so its changes are the
             # difference from main's commit under it.
             merge_group)
@@ -70,7 +68,7 @@ jobs:
       test: ${{ matrix.test }}
 
   # The one check the main branch's ruleset requires: the matrix's tests differ by event, and a pull
-  # request of documentation only skips them.
+  # request, or a merge group of documentation only, skips them.
   result:
     name: e2e
     needs: [scope, test]
