@@ -57,6 +57,10 @@ module "management" {
   template_refresh       = var.settings.templateRefresh
 
   cluster_datastore_allocate = var.settings.clusterDatastoreAllocate
+  cluster_sys_audit          = var.settings.clusterSysAudit
+  cluster_volume_snapshots   = var.settings.clusterVolumeSnapshots
+
+  extra_cluster_namespaces = var.settings.extraClusterNamespaces
 }
 
 output "kubeconfig" {
@@ -108,6 +112,15 @@ func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase str
 	}
 	err = writeFileAtomic(a.KubeconfigPath(), kubeconfig)
 	if err != nil {
+		return nil, err
+	}
+	switch {
+	case s.RootPassword != "":
+		j.Add("Storing root@pam's password for volume snapshots in the management cluster")
+	case !s.ClusterVolumeSnapshots:
+		j.Add("Removing any root@pam password from the management cluster")
+	}
+	if err = a.StoreRootPassword(ctx, []byte(admin), s.ClusterVolumeSnapshots, s.RootPassword); err != nil {
 		return nil, err
 	}
 	return kubeconfig, nil
@@ -168,6 +181,10 @@ func (a *Appliance) writeConfig(s *Settings) error {
 		"templateRefresh":        moduleTemplateRefresh(s.TemplateRefresh),
 
 		"clusterDatastoreAllocate": s.ClusterDatastoreAllocate,
+		"clusterSysAudit":          s.ClusterSysAudit,
+		"clusterVolumeSnapshots":   s.ClusterVolumeSnapshots,
+		// The module takes no null for a list.
+		"extraClusterNamespaces": append([]string{}, s.ExtraClusterNamespaces...),
 	}}
 	raw, err := json.MarshalIndent(vars, "", "  ")
 	if err != nil {

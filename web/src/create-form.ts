@@ -20,7 +20,7 @@ import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implemen
 import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
 import { addressBits, addressCount, inList, ipv4, isVLAN, list, rangeProblem, whole } from "./network";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
-import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
+import { allowedNodes, anyNode, haText, placeProblem, placeText, type HAGroupsOffer, type Place } from "./Placement";
 import {
   cisText,
   enforced,
@@ -34,8 +34,11 @@ import {
   browserZone,
   cniName,
   csiText,
+  haGroupsText,
+  snapshotsText,
   distributionName,
   filled,
+  headlampText,
   istioText,
   maxWorkers,
   registeredWithRancher,
@@ -68,6 +71,8 @@ const mibPerGiB = 1024;
 export const controlPlaneSizes = [1, 3, 5, 7];
 
 export interface Form {
+  /** Empty while the interface creates clusters in one namespace only. */
+  namespace: string;
   name: string;
   className: string;
   version: string;
@@ -88,11 +93,15 @@ export interface Form {
   place: Place;
   proxmoxHA: boolean;
   datastoreAllocate: boolean;
+  volumeSnapshots: boolean;
+  haGroups: boolean;
   controlPlaneMachine: Machine;
   workerMachine: Machine;
   cni: string;
   headlamp: boolean;
   headlampHostname: string;
+  /** Headlamp serves everyone through its own account with Kubernetes' view role. */
+  headlampView: boolean;
   monitoring: boolean;
   grafanaHostname: string;
   logs: Logs;
@@ -306,6 +315,7 @@ export const withBackupChoices = (f: Form, c: ClusterClass | undefined, canTrust
 
 /** newForm is the wizard before anything is chosen. */
 export const newForm = (): Form => ({
+  namespace: "",
   name: "",
   className: "",
   version: "",
@@ -326,11 +336,14 @@ export const newForm = (): Form => ({
   place: anyNode,
   proxmoxHA: true,
   datastoreAllocate: false,
+  volumeSnapshots: false,
+  haGroups: false,
   controlPlaneMachine: machineDefaults(undefined),
   workerMachine: machineDefaults(undefined),
   cni: "",
   headlamp: false,
   headlampHostname: "",
+  headlampView: false,
   monitoring: false,
   grafanaHostname: "",
   logs: newLogs(),
@@ -349,6 +362,17 @@ export const newForm = (): Form => ({
   backupOwnKey: true,
   backupKey: {},
 });
+
+/** namespaceOf is the namespace the cluster goes to: the one chosen, else the interface's first. */
+export const namespaceOf = (f: Form, namespaces: string[]): string => f.namespace || (namespaces[0] ?? "");
+
+/**
+ * withNamespace moves the cluster to another namespace. Cluster Mesh links clusters of one
+ * namespace only, so the peers chosen in the one it was in are dropped.
+ */
+export function withNamespace(f: Form, namespace: string, current = f.namespace): Form {
+  return { ...f, namespace, meshPeers: namespace === current ? f.meshPeers : [] };
+}
 
 /**
  * withClass chooses a distribution's class, bringing its defaults, but only into what the user has
@@ -374,9 +398,14 @@ export function withClass(f: Form, c: ClusterClass | undefined, kept: (k: keyof 
 function addOnVariables(form: Form, defined: Set<string>): Record<string, unknown> {
   const variables: Record<string, unknown> = {};
   if (form.headlamp) {
-    variables["headlamp"] = form.headlampHostname
-      ? { enabled: true, hostname: form.headlampHostname }
-      : { enabled: true };
+    const headlamp: Record<string, unknown> = { enabled: true };
+    if (form.headlampHostname) {
+      headlamp["hostname"] = form.headlampHostname;
+    }
+    if (form.headlampView) {
+      headlamp["access"] = "view";
+    }
+    variables["headlamp"] = headlamp;
   }
   if (form.monitoring) {
     variables["monitoring"] = form.grafanaHostname
@@ -439,8 +468,14 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   if (!form.proxmoxHA) {
     variables["proxmoxHA"] = false;
   }
-  if (form.datastoreAllocate && defined.has("csi")) {
-    variables["csi"] = { datastoreAllocate: true };
+  if ((form.datastoreAllocate || form.volumeSnapshots) && defined.has("csi")) {
+    variables["csi"] = {
+      ...(form.datastoreAllocate && { datastoreAllocate: true }),
+      ...(form.volumeSnapshots && { volumeSnapshots: true }),
+    };
+  }
+  if (form.haGroups && defined.has("ccm")) {
+    variables["ccm"] = { haGroups: true };
   }
   if (form.cni) {
     variables["cni"] = form.cni;
@@ -458,6 +493,7 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
     variables["upgrades"] = upgrades;
   }
   const req: CreateRequest = {
+    ...(form.namespace ? { namespace: form.namespace } : {}),
     name: form.name,
     class: c.name,
     version: form.version,
@@ -493,11 +529,11 @@ function meshChoice(form: Form): string {
 }
 
 // summary is what the Confirm step shows: each setting by its name, as the user chose it; Proxmox
-// VE HA and the CSI plugin's release only where they can be chosen.
+// VE HA, the CSI plugin's release and the HA group labels only where they can be chosen.
 export function summary(
   form: Form,
   c: ClusterClass,
-  offered: { ha?: boolean; csi?: boolean } = {},
+  offered: { ha?: boolean; csi?: boolean; snapshots?: boolean; haGroups?: boolean } = {},
 ): [string, string][] {
   const defined = new Set(c.variables.map((v) => v.name));
   const chosenRange =
@@ -505,6 +541,7 @@ export function summary(
       ? "Chosen clear of the nodes' network and the other clusters' ranges"
       : "Chosen clear of the nodes' network";
   const rows: [string, string][] = [
+    ...(form.namespace ? [["Namespace", form.namespace] as [string, string]] : []),
     ["Name", form.name],
     ["Distribution", distributionName(c.distribution)],
     ["Kubernetes version", form.version],
@@ -539,6 +576,12 @@ export function summary(
   if (offered.csi === true) {
     rows.push(["CSI plugin", csiText(form.datastoreAllocate)]);
   }
+  if (offered.snapshots === true) {
+    rows.push(["Volume snapshots", snapshotsText(form.volumeSnapshots)]);
+  }
+  if (offered.haGroups === true) {
+    rows.push(["HA group labels", haGroupsText(form.haGroups)]);
+  }
   rows.push(["Control-plane machines", machine(form.controlPlaneMachine)]);
   if (form.workerReplicas > 0) {
     rows.push(["Worker machines", machine(form.workerMachine)]);
@@ -565,10 +608,7 @@ export function summary(
 function addOnRows(form: Form, defined: Set<string>): [string, string][] {
   const rows: [string, string][] = [];
   if (defined.has("headlamp")) {
-    rows.push([
-      "Headlamp",
-      form.headlamp ? `On${form.headlampHostname ? `, at ${form.headlampHostname}` : ""}` : "Off",
-    ]);
+    rows.push(["Headlamp", headlampText(form.headlamp, form.headlampHostname, form.headlampView)]);
   }
   if (defined.has("monitoring")) {
     rows.push([
@@ -625,6 +665,8 @@ export type FieldKey =
   | "services"
   | "storage"
   | "datastoreAllocate"
+  | "volumeSnapshots"
+  | "haGroups"
   | "placement"
   | "controlPlaneMachine"
   | "workerMachine"
@@ -925,12 +967,72 @@ export function csiOffer(check: Omit<DatastoreAllocateCheck, "cls"> & { cls: Clu
   return { offered: csiOffered(cls), problem: cls && datastoreAllocateProblem({ ...check, cls }) };
 }
 
+/** volumeSnapshotsAnnotation marks the classes whose clusters may take volume snapshots. */
+export const volumeSnapshotsAnnotation = "kubehenge.dev/volume-snapshots";
+/** The storages, comma-separated, the CSI plugin takes volume snapshots on. */
+export const snapshotStoragesAnnotation = "kubehenge.dev/snapshot-storages";
+
+/** SnapshotsOffer is whether a cluster may take volume snapshots, and what stands in the way. */
+export interface SnapshotsOffer {
+  offered: boolean;
+  problem: string | undefined;
+}
+
+/**
+ * snapshotsOffer is what the class, the storage and the user's own privileges make of a cluster's
+ * choice of volume snapshots; canModifyPermissions is whether the user holds Permissions.Modify on
+ * /, undefined when not known.
+ */
+export function snapshotsOffer(
+  cls: ClusterClass | undefined,
+  storage: string | undefined,
+  canModifyPermissions: boolean | undefined,
+): SnapshotsOffer {
+  const offered =
+    cls?.annotations?.[volumeSnapshotsAnnotation] === "true" && cls.variables.some((v) => v.name === "csi");
+  if (!cls || !offered) {
+    return { offered, problem: undefined };
+  }
+  if (storage === undefined || storage === "") {
+    return { offered, problem: "Choose the cluster's storage first." };
+  }
+  if (!listed(cls, snapshotStoragesAnnotation).includes(storage)) {
+    return {
+      offered,
+      problem: `The CSI plugin takes volume snapshots only on storage local to each node (ZFS, LVM, LVM-thin, directory or btrfs), which storage ${storage} is not.`,
+    };
+  }
+  if (canModifyPermissions === false) {
+    return {
+      offered,
+      problem: "You do not hold Permissions.Modify on /, which giving the cluster's CSI plugin root@pam takes.",
+    };
+  }
+  return { offered, problem: undefined };
+}
+
+/** snapshotsProblems holds the machines step to the volume snapshots a new cluster chose. */
+export function snapshotsProblems(step: Step, form: Form, offer: SnapshotsOffer): Problems {
+  if (step !== "Machines" || !offer.offered || !form.volumeSnapshots || offer.problem === undefined) {
+    return {};
+  }
+  return { volumeSnapshots: offer.problem };
+}
+
 /** csiProblems holds the machines step to the CSI plugin's release a new cluster chose. */
 export function csiProblems(step: Step, form: Form, csi: CSIOffer): Problems {
   if (step !== "Machines" || !csi.offered || !form.datastoreAllocate || csi.problem === undefined) {
     return {};
   }
   return { datastoreAllocate: csi.problem };
+}
+
+/** haGroupsProblems holds the machines step to the HA group labels a new cluster chose. */
+export function haGroupsProblems(step: Step, form: Form, offer: HAGroupsOffer): Problems {
+  if (step !== "Machines" || !offer.offered || !form.haGroups || offer.problem === undefined) {
+    return {};
+  }
+  return { haGroups: offer.problem };
 }
 
 // offeredStorages are the storages, once each, that take disks, the user may use and the class

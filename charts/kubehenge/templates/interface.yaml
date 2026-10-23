@@ -1,16 +1,49 @@
 {{- /*
 The identity Kubehenge's web interface acts with in the management cluster, instead of an admin
 kubeconfig: it sees every cluster, but creates, changes and deletes them, reads their
-kubeconfigs and stores the credentials users type in for them, only in its own namespace. What
-it reads of a cluster beyond the cluster itself (its machines, pools, control plane, health
-checks, add-on releases and events) is what the health page shows anyone who sees the cluster.
+kubeconfigs and stores the credentials users type in for them, only in its own namespace and the
+extra ones it is given. What it reads of a cluster beyond the cluster itself (its machines, pools,
+control plane, health checks, add-on releases and events) is what the health page shows anyone who
+sees the cluster.
 */}}
 {{- $name := "kubehenge-interface" }}
 {{- $ns := .Values.interface.namespace }}
+{{- $extra := .Values.interface.extraNamespaces | default list }}
+{{- range $extra }}
+{{- if or (eq . $ns) (eq . $.Release.Namespace) (eq . "default") (eq . "cert-manager") (hasPrefix "kube-" .) (hasSuffix "-system" .) }}
+{{- fail (printf "interface.extraNamespaces: %s holds Kubernetes', the providers' or Kubehenge's own objects, or is the interface's namespace already" .) }}
+{{- end }}
+{{- end }}
+{{- $namespaces := prepend $extra $ns }}
 apiVersion: v1
 kind: Namespace
 metadata:
   name: {{ $ns }}
+{{- range $extra }}
+{{- /* A namespace made before, by anyone but this release, stays its maker's. */}}
+{{- $existing := lookup "v1" "Namespace" "" . }}
+{{- if or (not $existing) (eq (dig "metadata" "annotations" "meta.helm.sh/release-name" "" $existing) $.Release.Name) }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ . }}
+  annotations:
+    # Taken out of extraNamespaces, the namespace stays with its clusters; only the interface's
+    # rights there go.
+    helm.sh/resource-policy: keep
+{{- end }}
+{{- end }}
+---
+# Where the interface creates and changes clusters, its own namespace first. It reads this rather
+# than a setting of its own, so that its rights and its offer change together.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+data:
+  namespaces: {{ toJson $namespaces | quote }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -72,6 +105,10 @@ rules:
   - apiGroups: [cluster.x-k8s.io]
     resources: [clusterclasses]
     verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [{{ $name }}]
+    verbs: [get]
   {{- if .Values.interface.offerHARules }}
   # The HA rules' names and nodes, which it offers to those who may create or change a cluster.
   - apiGroups: [""]
@@ -106,18 +143,20 @@ subjects:
   - kind: ServiceAccount
     name: {{ $name }}
     namespace: {{ .Release.Namespace }}
+{{- range $namespaces }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ $name }}
-  namespace: {{ $ns }}
+  namespace: {{ . }}
 rules:
   - apiGroups: [cluster.x-k8s.io]
     resources: [clusters]
     verbs: [create, update, patch, delete]
-  # Each cluster's <name>-kubeconfig, handed to users with Sys.Modify on its pool, and the
-  # credentials users type in, which the policy below holds every write and deletion to.
+  # Each cluster's <name>-kubeconfig, handed to users with Sys.Modify on its pool, its health
+  # identities' tokens, and the credentials users type in, which the policy below holds every write
+  # and deletion to.
   - apiGroups: [""]
     resources: [secrets]
     verbs: [get, create, update, delete]
@@ -126,7 +165,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: {{ $name }}
-  namespace: {{ $ns }}
+  namespace: {{ . }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -134,7 +173,8 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: {{ $name }}
-    namespace: {{ .Release.Namespace }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
 {{- /*
 RBAC cannot tell one Secret from another on create, so this policy holds the interface's writes
 and deletions of Secrets to the user credentials it stores (pkg/provisioner's credentialPurposes,

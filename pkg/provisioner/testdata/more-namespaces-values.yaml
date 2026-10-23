@@ -1,0 +1,4 @@
+---
+# The interface given namespaces beside its own, for the integration tier.
+interface:
+  extraNamespaces: [team-a, team-b]

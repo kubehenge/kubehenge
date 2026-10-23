@@ -9,6 +9,9 @@ import {
   csiOffer,
   csiProblems,
   fieldProblems,
+  haGroupsProblems,
+  snapshotsOffer,
+  snapshotsProblems,
   newForm,
   offeredBridges,
   offeredStorages,
@@ -19,16 +22,18 @@ import {
   variable,
   withBackupChoices,
   withClass,
+  namespaceOf,
+  withNamespace,
   withRoom,
   type FieldKey,
   type Form,
   type Step,
 } from "./create-form";
 import { GeneralStep, IdentityStep, MachinesStep, NetworkStep } from "./CreateSteps";
-import { offersHA, useHARules } from "./Placement";
+import { haGroupsOffer, offersHA, useHARules } from "./Placement";
 import { navigate } from "./router";
 import type { Bridge, Cluster, ClusterClass, PveNode, Storage, Versions } from "./types";
-import { Dialog, ErrorBox, errorMessage, filled, sole } from "./ui";
+import { Dialog, ErrorBox, errorMessage, filled, sole, usePrivilege } from "./ui";
 
 // The choices that can ask more of the machines, which then grow to it.
 const raising = new Set<keyof Form>([
@@ -48,10 +53,10 @@ const raising = new Set<keyof Form>([
 
 export function CreateCluster({
   canTrust,
-  namespace,
+  namespaces,
 }: {
   canTrust?: boolean | undefined;
-  namespace?: string | undefined;
+  namespaces: string[];
 }): JSX.Element {
   const [classes, setClasses] = useState<ClusterClass[]>([]);
   const [discarding, setDiscarding] = useState(false);
@@ -60,6 +65,8 @@ export function CreateCluster({
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [nodes, setNodes] = useState<PveNode[]>([]);
   const rules = useHARules();
+  const canAudit = usePrivilege("canAudit");
+  const canModifyPermissions = usePrivilege("canModifyPermissions");
   const [step, setStep] = useState<Step>("General");
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -148,6 +155,7 @@ export function CreateCluster({
   const form: Form = withBackupChoices(
     {
       ...entered,
+      namespace: namespaces.length > 1 ? namespaceOf(entered, namespaces) : "",
       bridge: filled(entered.bridge)
         ? entered.bridge
         : (sole(bridgeOptions.filter((b) => b.usable).map((b) => b.bridge)) ?? ""),
@@ -158,6 +166,8 @@ export function CreateCluster({
   );
   const haOffered = offersHA(cls, usableStorages, form.storage);
   const csi = csiOffer({ cls, storages: usableStorages, storage: form.storage, clusters });
+  const snapshots = snapshotsOffer(cls, form.storage, canModifyPermissions);
+  const haGroups = haGroupsOffer(cls, canAudit);
 
   const chooseClass = (name: string): void => {
     const c = classes.find((x) => x.name === name);
@@ -169,11 +179,19 @@ export function CreateCluster({
     );
     setTouched((t) => new Set([...t, "class"]));
   };
+  const chooseNamespace = (namespace: string): void => {
+    setEntered((f) => withNamespace(f, namespace, namespaceOf(f, namespaces)));
+  };
 
   const index = steps.indexOf(step);
   const previous = steps[index - 1];
   const following = steps[index + 1];
-  const byField = { ...fieldProblems(step, form, cls), ...csiProblems(step, form, csi) };
+  const byField = {
+    ...fieldProblems(step, form, cls),
+    ...csiProblems(step, form, csi),
+    ...snapshotsProblems(step, form, snapshots),
+    ...haGroupsProblems(step, form, haGroups),
+  };
   const open = Object.values(byField);
   const shown = (k: FieldKey): string | undefined => (attempted.has(step) || touched.has(k) ? byField[k] : undefined);
   const wizardRef = useRef<HTMLDivElement>(null);
@@ -245,6 +263,8 @@ export function CreateCluster({
               cls={cls}
               offered={offered}
               onChooseClass={chooseClass}
+              namespaces={namespaces}
+              onChooseNamespace={chooseNamespace}
             />
           )}
           {step === "Network" && (
@@ -260,12 +280,21 @@ export function CreateCluster({
               placed={variable(cls, "allowedNodes") !== undefined}
               haOffered={haOffered}
               csi={csi}
+              snapshots={snapshots}
+              haGroups={haGroups}
               nodes={nodes}
               rules={rules}
             />
           )}
           {step === "Add-ons" && (
-            <AddOnsStep form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} namespace={namespace} />
+            <AddOnsStep
+              form={form}
+              set={set}
+              shown={shown}
+              cls={cls}
+              canTrust={canTrust}
+              namespace={namespaceOf(form, namespaces)}
+            />
           )}
           {step === "Identity providers" && (
             <IdentityStep
@@ -279,7 +308,12 @@ export function CreateCluster({
           {step === "Confirm" && cls && (
             <>
               <dl className="summary" aria-label="Summary">
-                {summary(form, cls, { ha: haOffered, csi: csi.offered }).map(([k, v]) => (
+                {summary(form, cls, {
+                  ha: haOffered,
+                  csi: csi.offered,
+                  snapshots: snapshots.offered,
+                  haGroups: haGroups.offered,
+                }).map(([k, v]) => (
                   <Fragment key={k}>
                     <dt>{k}</dt>
                     <dd>{v}</dd>

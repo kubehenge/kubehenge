@@ -94,6 +94,11 @@ type fakePVE struct {
 	// VM 4242 makes it the volume owner.
 	nextIDs []int
 	taken   map[int]bool
+	// userMissing has the cluster's user not exist yet; groups are those it is in, and userWrites
+	// the bodies of its creation and changes.
+	userMissing bool
+	groups      []string
+	userWrites  []map[string]any
 }
 
 func newFakePVE(at string, volumes map[string][]string) *fakePVE {
@@ -134,6 +139,9 @@ func (f *fakePVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.reply(f.acl)
 	case len(path) == 5 && path[0] == "access" && path[3] == "token":
 		f.tokenRequest(a, r.Method, path[2])
+	case r.URL.Path == "/api2/json/access/users" && r.Method == http.MethodPost,
+		len(path) == 3 && path[0] == "access" && path[1] == "users":
+		f.user(a, r.Method, body)
 	case path[0] == "access":
 		a.reply(nil)
 	case len(path) == 5 && path[2] == "storage" && path[4] == "content":
@@ -146,6 +154,34 @@ func (f *fakePVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.vm(a, r.Method, path, body)
 	default:
 		http.NotFound(w, r)
+	}
+}
+
+// user answers for the cluster's user as Proxmox VE does: a change replaces its groups unless told
+// to append.
+func (f *fakePVE) user(a answer, method string, body map[string]any) {
+	switch method {
+	case http.MethodGet:
+		if f.userMissing {
+			a.fail("no such user")
+			return
+		}
+		a.reply(map[string]any{"groups": f.groups})
+	case http.MethodPost, http.MethodPut:
+		f.userWrites = append(f.userWrites, body)
+		f.userMissing = false
+		if body["append"] == nil {
+			f.groups = nil
+		}
+		groups, ok := body["groups"].(string)
+		if !ok {
+			a.fail("groups: not a list")
+			return
+		}
+		f.groups = append(f.groups, splitList(groups)...)
+		a.reply(nil)
+	default:
+		a.reply(nil)
 	}
 }
 

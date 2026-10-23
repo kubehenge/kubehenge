@@ -301,11 +301,11 @@ func veleroValues(charts *Charts, b *Backups, t *BackupTarget, cluster *clusterv
 		},
 		"initContainers": []any{map[string]any{
 			"name": "velero-plugin-for-aws", "image": charts.VeleroPlugin.String(), "imagePullPolicy": "IfNotPresent",
-			"volumeMounts":    []any{map[string]any{"mountPath": "/target", "name": "plugins"}},
-			"securityContext": restrictedContainer(nil),
+			"volumeMounts": []any{map[string]any{"mountPath": "/target", "name": "plugins"}},
+			securityKey:    restrictedContainer(nil),
 		}},
 		"podSecurityContext": map[string]any{
-			"runAsNonRoot": true, "runAsUser": veleroUser, "runAsGroup": veleroGroup, "fsGroup": veleroGroup,
+			nonRootKey: true, "runAsUser": veleroUser, "runAsGroup": veleroGroup, "fsGroup": veleroGroup,
 			seccompProfileKey: runtimeDefault(),
 		},
 		"containerSecurityContext": restrictedContainer(nil),

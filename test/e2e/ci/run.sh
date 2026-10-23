@@ -145,7 +145,7 @@ case "${test}" in
             gateway: "172.20.99.1", dnsServers: ["172.20.99.1"],
             workloadDatastores: ["local"], workloadBridges: ["vmbr0"],
             registryMirrors: {"ghcr.io": ["http://172.21.99.3:5000"]}, controllerImage: $image,
-            offerHARules: true
+            offerHARules: true, extraClusterNamespaces: ["e2e-team"]
         }' > "${work}/appliance-settings.json"
         pve=kubehenge-e2e-pve
         docker exec "${pve}" sh -c 'rm -rf /root/kubehenge && mkdir -p /root/kubehenge/test'
@@ -213,12 +213,19 @@ case "${test}" in
     rke2)
         # MetalLB is the default the other distributions run; kube-vip gets a cluster of its own.
         export KUBEHENGE_E2E_LOAD_BALANCER=kube-vip
+        # The one cluster whose nodes get their HA group labels, with Sys.Audit on / for its token.
+        export KUBEHENGE_E2E_HA_GROUPS=1
         e2e e2e-workload-cluster CLASS=kubehenge-rke2 VERSION="${from}+rke2r1" UPGRADE="${to}+rke2r1"
         ;;
     k3s)
         # The one cluster on the storage of its own, which switches the CSI plugin's newest release
-        # on and off.
+        # on and off, and volume snapshots, with root@pam's password stored as the appliance stores it.
         export KUBEHENGE_E2E_STORAGE=own KUBEHENGE_E2E_DATASTORE_ALLOCATE=1 KUBEHENGE_E2E_LOCAL_STORAGE=local
+        export KUBEHENGE_E2E_VOLUME_SNAPSHOTS=1
+        printf '%s' "${KUBEHENGE_E2E_ROOT_PASSWORD:?}" |
+            kubectl -n kubehenge-system create secret generic kubehenge-root-pam --from-file=password=/dev/stdin > /dev/null
+        # In one of main.tf's extra_cluster_namespaces, created with the interface's own account.
+        export KUBEHENGE_E2E_NAMESPACE=e2e-team
         e2e e2e-workload-cluster CLASS=kubehenge-k3s VERSION="${from}+k3s1" UPGRADE="${to}+k3s1"
         ;;
     kubeadm)

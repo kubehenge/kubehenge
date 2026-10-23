@@ -23,8 +23,14 @@ export interface Session {
   canCreate?: boolean;
   /** Whether the user may install Rancher and trust identity providers of their own: Sys.Modify on the workload pool. */
   canTrust?: boolean;
-  /** The namespace the interface creates clusters in. */
+  /** Whether the user holds Sys.Audit on /, which a cluster's token gets with the HA group labels. */
+  canAudit?: boolean;
+  /** Whether the user holds Permissions.Modify on /, which giving a cluster's CSI plugin root@pam needs. */
+  canModifyPermissions?: boolean;
+  /** The namespace the interface creates clusters in unless the creator chooses another. */
   namespace?: string;
+  /** Every namespace the interface creates and changes clusters in, namespace first. */
+  namespaces?: string[];
 }
 
 /** A cluster, by where it lives. */
@@ -390,6 +396,12 @@ export interface ManagementSettings {
   backupTargets?: BackupTarget[];
   /** The weekly build of the Ubuntu VM templates; absent, it runs with its defaults. */
   templateRefresh?: TemplateRefreshSettings;
+  /** Clusters may choose the cloud controller manager's HA group labels, with Sys.Audit on / for their token. */
+  clusterSysAudit?: boolean;
+  /** Clusters may take volume snapshots, with their CSI plugin signed in as root@pam. */
+  clusterVolumeSnapshots?: boolean;
+  /** More namespaces the interface creates and manages clusters in, beside its own. */
+  extraClusterNamespaces?: string[];
 }
 
 /** When and where the Ubuntu VM templates are built again; empty fields take the defaults. */
@@ -606,6 +618,8 @@ export interface Upgrades {
 }
 
 export interface CreateRequest {
+  /** One of the session's namespaces; unset, its first. */
+  namespace?: string;
   name: string;
   class: string;
   version: string;

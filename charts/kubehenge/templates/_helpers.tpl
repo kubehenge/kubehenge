@@ -189,6 +189,34 @@ never below its distribution's documented minimum for a node.
             Kubehenge's administrator lets clusters choose it, and on a storage that neither the
             management cluster, its templates nor another cluster uses. Off, the cluster runs the
             plugin's last release that needs no more than Datastore.AllocateSpace.
+        volumeSnapshots:
+          type: boolean
+          default: false
+          description: >-
+            Take VolumeSnapshots of the cluster's persistent volumes, restore them and clone
+            volumes. The plugin copies volumes through a Proxmox VE method that only root@pam may
+            call, so the cluster's CSI plugin signs in to Proxmox VE as root@pam: whoever takes over
+            the cluster or reads its Proxmox VE Secret holds the whole Proxmox VE cluster. Only
+            where Kubehenge's administrator has stored root@pam's password, and on storage local to
+            each node (ZFS, LVM, LVM-thin, directory or btrfs). Off, the plugin uses the cluster's
+            own token again and the snapshot components go.
+- name: ccm
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: The Proxmox VE cloud controller manager, which every cluster runs for its nodes.
+      properties:
+        haGroups:
+          type: boolean
+          default: false
+          description: >-
+            Give the cluster's Proxmox VE token Sys.Audit on /, unpropagated, so that the cloud
+            controller manager labels each node group.topology.proxmox.sinextra.dev/<group> for
+            each Proxmox VE HA group, or node-affinity HA rule, its Proxmox VE node is in. The
+            token may then also read the rest of the Proxmox VE cluster's own configuration, but
+            nothing of its guests, storages or nodes. Only where Kubehenge's administrator lets
+            clusters choose it.
 - name: controlPlaneMachine
   required: false
   schema:
@@ -236,12 +264,21 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
       type: object
       description: >-
         Headlamp, a web interface for the cluster. Users sign in with their own token or through
-        OIDC; Headlamp itself has no rights in the cluster. Reached through Kubehenge's interface, or
-        at hostname when one is set.
+        OIDC, and Headlamp itself has no rights in the cluster, unless access is view. Reached
+        through Kubehenge's interface, or at hostname when one is set.
       properties:
         enabled:
           type: boolean
           default: false
+        access:
+          type: string
+          enum: [token, view]
+          default: token
+          description: >-
+            token: everyone signs in with their own token or through OIDC. view: Headlamp's own
+            service account is bound to the view ClusterRole and Headlamp uses it for everyone,
+            so whoever reaches Headlamp sees the cluster read-only without signing in (no
+            Secrets), and a token given to it is not used.
         hostname:
           type: string
           format: hostname

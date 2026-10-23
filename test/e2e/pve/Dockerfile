@@ -29,17 +29,20 @@ RUN apt-get update -qq \
     # sorts after the image's own, so its rule comes last and wins.
     && echo 'path-include /usr/share/doc/pve-manager/*' > /etc/dpkg/dpkg.cfg.d/pve-manager \
     && apt-get update -qq \
-    # pve-container for the appliance's LXC; openssh-client because Proxmox VE makes each
-    # container's SSH host keys with ssh-keygen; e2fsprogs, which every full Debian has and
-    # pve-container leaves undeclared, formats a container's disk on directory storage; ifupdown2
-    # brings up the VMs' bridge and dnsmasq answers their name lookups there; openssl for the
-    # appliance's installer and jq for its test, which run on the node.
+    # pve-container for the appliance's LXC; openssh-server as on every node, because Proxmox VE
+    # copies a volume (a CSI volume snapshot or clone) by piping it through SSH as root to the node
+    # it goes to, this node too; e2fsprogs, which every full Debian has and pve-container leaves
+    # undeclared, formats a container's disk on directory storage; ifupdown2 brings up the VMs'
+    # bridge and dnsmasq answers their name lookups there; openssl for the appliance's installer and
+    # jq for its test, which run on the node.
     && apt-get install -y -qq --no-install-recommends systemd systemd-sysv dbus kmod procps iproute2 \
         ifupdown2 iptables dnsmasq pve-manager qemu-server pve-container pve-cluster postfix socat \
-        openssh-client e2fsprogs openssl jq \
+        openssh-server e2fsprogs openssl jq \
     # Installing pve-manager adds the subscription-only repository, which answers 401 without a
     # subscription and fails every later apt-get update.
     && rm -f /etc/apt/sources.list.d/pve-enterprise.sources \
+    # The image is cached from run to run, so its SSH host keys are made at each start instead.
+    && rm -f /etc/ssh/ssh_host_* \
     && apt-get clean && rm -rf /var/lib/apt/lists/* /etc/machine-id /var/lib/dbus/machine-id
 
 # systemd counts a container as one, and lxcfs's unit does not start inside one; containers then
@@ -47,13 +50,14 @@ RUN apt-get update -qq \
 COPY lxcfs.conf /etc/systemd/system/lxcfs.service.d/container.conf
 COPY interfaces /etc/network/interfaces
 COPY dnsmasq.conf /etc/dnsmasq.d/vmbr0.conf
+COPY ssh-host-keys.service /etc/systemd/system/ssh-host-keys.service
 # No watchdog to arm, the clock is the host's, and no getty or first-boot prompt has a terminal; the
 # machine ID is made at each start. nftables.service would flush the rules the container runtime
 # keeps in the container for its DNS, so the NAT is added beside them through iptables-nft, Debian's
 # default; kernels built without the legacy tables have nothing else.
 RUN systemctl mask watchdog-mux.service nftables.service systemd-timesyncd.service getty.target \
         console-getty.service systemd-firstboot.service systemd-networkd-wait-online.service \
-    && systemctl enable lxcfs.service dnsmasq.service \
+    && systemctl enable lxcfs.service dnsmasq.service ssh-host-keys.service \
     && rm -f /etc/network/interfaces.new
 
 STOPSIGNAL SIGRTMIN+3

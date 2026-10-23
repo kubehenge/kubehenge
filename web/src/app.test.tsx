@@ -498,6 +498,7 @@ describe("clusters", () => {
 
 describe("create", () => {
   const form: Form = {
+    namespace: "",
     name: "web",
     className: "kubehenge-rke2",
     version: "v1.36.5+rke2r1",
@@ -518,11 +519,14 @@ describe("create", () => {
     place: { placement: "any", haRule: "", nodes: [] },
     proxmoxHA: true,
     datastoreAllocate: false,
+    volumeSnapshots: false,
+    haGroups: false,
     controlPlaneMachine: { cores: 2, memoryMiB: 4096, diskGiB: 30 },
     workerMachine: { cores: 4, memoryMiB: 8192, diskGiB: 40 },
     cni: "cilium",
     headlamp: true,
     headlampHostname: "",
+    headlampView: false,
     monitoring: true,
     grafanaHostname: "grafana.example",
     logs: { enabled: false, collector: "node", retentionDays: 7, sizeGiB: 10 },
@@ -596,6 +600,17 @@ describe("create", () => {
     });
     const unhardened = { ...rke2, variables: rke2.variables.filter((v) => v.name !== "cis") };
     expect(request({ ...defaults, cis: true }, unhardened).variables).not.toHaveProperty("podSecurity");
+  });
+
+  it("asks for Headlamp's view access only when chosen", () => {
+    const open = { ...form, headlampHostname: "headlamp.example", headlampView: true };
+    expect(request(open, rke2).variables["headlamp"]).toStrictEqual({
+      enabled: true,
+      hostname: "headlamp.example",
+      access: "view",
+    });
+    expect(Object.fromEntries(summary(open, rke2))["Headlamp"]).toBe("On, at headlamp.example, read-only for everyone");
+    expect(request({ ...form, headlamp: false, headlampView: true }, rke2).variables).not.toHaveProperty("headlamp");
   });
 
   it("sums the form up as the Confirm step shows it", () => {

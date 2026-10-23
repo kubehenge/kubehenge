@@ -3,11 +3,22 @@ import { useId, useState, type JSX } from "react";
 
 import { ClusterMeshDialog, meshText, runsCilium } from "./ClusterMesh";
 import { UpgradesDialog, describe, refreshesNodes, upgradePolicy } from "./ClusterUpgrades";
-import { CSIDialog, csiOn, useCSIOffer } from "./CsiPlugin";
+import { CSIDialog, SnapshotsDialog, csiOn, snapshotsOn, useCSIOffer, useSnapshotsOffer } from "./CsiPlugin";
 import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBalancer";
 import { LogsDialog, logsOf, logsText } from "./Logs";
 import { OIDCProviders, cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
-import { HADialog, PlacementDialog, haOn, haText, placeOf, placeText, useHAOffered } from "./Placement";
+import {
+  HADialog,
+  HAGroupsDialog,
+  PlacementDialog,
+  haGroupsOn,
+  haOn,
+  haText,
+  placeOf,
+  placeText,
+  useHAGroupsOffer,
+  useHAOffered,
+} from "./Placement";
 import { PodSecurityFields, cisText, enforced, podSecurityOf, podSecurityText } from "./PodSecurity";
 import type { Cluster, OIDCProvider } from "./types";
 import {
@@ -16,11 +27,17 @@ import {
   Field,
   cniName,
   filled,
+  headlampHint,
+  headlampText,
+  headlampViewHint,
+  headlampViewLabel,
   istioHint,
   istioText,
   registerHint,
   registeredWithRancher,
   csiText,
+  haGroupsText,
+  snapshotsText,
   useChange,
 } from "./ui";
 import { flag, record, text, texts } from "./values";
@@ -30,6 +47,8 @@ export type OptionAction =
   | "placement"
   | "ha"
   | "csi"
+  | "snapshots"
+  | "haGroups"
   | "headlamp"
   | "monitoring"
   | "logs"
@@ -95,6 +114,12 @@ export function OptionDialog({
     case "csi": {
       return <CSIDialog cluster={c} onClose={onClose} />;
     }
+    case "snapshots": {
+      return <SnapshotsDialog cluster={c} onClose={onClose} />;
+    }
+    case "haGroups": {
+      return <HAGroupsDialog cluster={c} onClose={onClose} />;
+    }
     case "oidc": {
       break;
     }
@@ -106,11 +131,18 @@ interface HostedValue {
   enabled?: boolean | undefined;
   hostname?: string | undefined;
   tlsSecret?: string | undefined;
+  /** Headlamp's access: token, or view for everyone through its own account. */
+  access?: string | undefined;
 }
 
 function hostedValue(v: unknown): HostedValue {
   const r = record(v);
-  return { enabled: flag(r["enabled"]), hostname: text(r["hostname"]), tlsSecret: text(r["tlsSecret"]) };
+  return {
+    enabled: flag(r["enabled"]),
+    hostname: text(r["hostname"]),
+    tlsSecret: text(r["tlsSecret"]),
+    access: text(r["access"]),
+  };
 }
 
 interface RancherValue {
@@ -153,6 +185,8 @@ export function Options<A extends string = never>({
   const upgrades = upgradePolicy(c.variables["upgrades"]);
   const haOffered = useHAOffered(c.class, text(c.variables["storage"]));
   const csi = useCSIOffer(c);
+  const snapshots = useSnapshotsOffer(c);
+  const haGroups = useHAGroupsOffer(c);
   const cis = c.variables["cis"] === true;
   const podSecurity = enforced(podSecurityOf(c.variables["podSecurity"]), cis);
   const rows: OptionRow<OptionAction | A>[] = [
@@ -179,10 +213,26 @@ export function Options<A extends string = never>({
   if (csi.offered || csiOn(c)) {
     rows.push({ label: "CSI plugin", value: csiText(csiOn(c)), action: "csi", name: "the CSI plugin" });
   }
+  if (snapshots.offered || snapshotsOn(c)) {
+    rows.push({
+      label: "Volume snapshots",
+      value: snapshotsText(snapshotsOn(c)),
+      action: "snapshots",
+      name: "volume snapshots",
+    });
+  }
+  if (haGroups.offered || haGroupsOn(c)) {
+    rows.push({
+      label: "HA group labels",
+      value: haGroupsText(haGroupsOn(c)),
+      action: "haGroups",
+      name: "the HA group labels",
+    });
+  }
   rows.push(
     {
       label: "Headlamp",
-      value: headlamp.enabled === true ? `On${filled(headlamp.hostname) ? `, at ${headlamp.hostname}` : ""}` : "Off",
+      value: headlampText(headlamp.enabled === true, headlamp.hostname, headlamp.access === "view"),
       action: "headlamp",
       name: "Headlamp",
     },
@@ -372,7 +422,7 @@ const hostedAddons = {
   headlamp: {
     title: "Headlamp",
     install: "Install Headlamp",
-    hint: "A web interface inside the cluster. People sign in to it with their own token; it has no rights of its own.",
+    hint: headlampHint,
     hostLabel: "Host name",
     hostHint: "Optional: also serve it at this name through the cluster's ingress controller.",
   },
@@ -400,6 +450,7 @@ function HostedAddonDialog({
   const current = hostedValue(c.variables[addon]);
   const [enabled, setEnabled] = useState(current.enabled === true);
   const [hostname, setHostname] = useState(current.hostname ?? "");
+  const [view, setView] = useState(current.access === "view");
   const { busy, error, send } = useChange(c, onClose);
   const value: HostedValue = { enabled };
   if (enabled && hostname) {
@@ -408,8 +459,14 @@ function HostedAddonDialog({
   if (enabled && hostname && filled(current.tlsSecret)) {
     value.tlsSecret = current.tlsSecret;
   }
-  const changed = enabled !== (current.enabled === true) || (enabled && hostname !== (current.hostname ?? ""));
+  if (enabled && view) {
+    value.access = "view";
+  }
+  const changed =
+    enabled !== (current.enabled === true) ||
+    (enabled && (hostname !== (current.hostname ?? "") || view !== (current.access === "view")));
   const hint = useId();
+  const viewHint = useId();
   // Logs are read in monitoring's Grafana, so they go with it.
   const heldLogs = record(c.variables["logs"]);
   const logsGo = addon === "monitoring" && !enabled && logsOf(heldLogs).enabled;
@@ -449,6 +506,22 @@ function HostedAddonDialog({
         <Field label={words.hostLabel} hint={words.hostHint}>
           {(id) => <input id={id} value={hostname} onChange={(e) => setHostname(e.target.value.trim())} />}
         </Field>
+      )}
+      {enabled && addon === "headlamp" && (
+        <>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={view}
+              aria-describedby={viewHint}
+              onChange={(e) => setView(e.target.checked)}
+            />{" "}
+            {headlampViewLabel}
+          </label>
+          <p className="hint" id={viewHint}>
+            {headlampViewHint}
+          </p>
+        </>
       )}
       {logsGo && (
         <output className="warning notice">

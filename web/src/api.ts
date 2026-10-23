@@ -175,7 +175,8 @@ export interface Api {
   restore: (ns: string, name: string, req: { backup: string; namespaces: string[] }) => Promise<RestoreRun>;
 
   setupStatus: () => Promise<SetupStatus>;
-  setup: (settings: ManagementSettings, passphrase: string) => Promise<Job>;
+  /** rootPassword is root@pam's for volume snapshots; empty keeps the one stored. */
+  setup: (settings: ManagementSettings, passphrase: string, rootPassword?: string) => Promise<Job>;
 
   health: (ns: string, name: string) => Promise<ClusterHealth>;
   podLogs: (cluster: ClusterRef, pod: { namespace: string; name: string }, container: string) => Promise<PodLogs>;
@@ -227,7 +228,12 @@ export const api: Api = {
   restore: (ns, name, req) => request("POST", `${clusterPath(ns, name)}/restores`, req),
 
   setupStatus: () => request("GET", "/api/setup"),
-  setup: (settings, passphrase) => request("POST", "/api/setup", { settings, passphrase }),
+  setup: (settings, passphrase, rootPassword) =>
+    request("POST", "/api/setup", {
+      settings,
+      passphrase,
+      ...(rootPassword !== undefined && rootPassword !== "" && { rootPassword }),
+    }),
 
   health: (ns, name) => request("GET", `${clusterPath(ns, name)}/health`),
   podLogs: (cluster, pod, container) =>

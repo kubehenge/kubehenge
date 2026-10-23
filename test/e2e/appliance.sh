@@ -255,6 +255,10 @@ until_true 3600 "the setup to end" job_ended
 job_was apply succeeded true
 expect 200 "the ClusterClasses" request "${work}/admin.jar" "${ui}/api/classes"
 body_is '[.[].name] | contains(["kubehenge-kubeadm", "kubehenge-rke2", "kubehenge-k3s"])' "the interface does not offer the ClusterClasses"
+# The settings' extraClusterNamespaces, after the interface's own.
+expected_namespaces=$(jq -c '["clusters"] + (.extraClusterNamespaces // [])' "${settings}")
+expect 200 "the session" request "${work}/admin.jar" "${ui}/api/session"
+body_is ".namespace == \"clusters\" and .namespaces == ${expected_namespaces}" "the interface does not offer the namespaces ${expected_namespaces}"
 
 step "an HA rule offered to a cluster creator without Sys.Audit on /, by its name and nodes alone"
 expect 200 "the HA rules for a user who may place no cluster" request "${work}/user.jar" "${ui}/api/proxmox/ha-rules"

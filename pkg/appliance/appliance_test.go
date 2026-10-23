@@ -225,6 +225,7 @@ func newAppliance(t *testing.T) (*Appliance, chan []byte) {
 		InterfaceKubeconfig: func(_ context.Context, admin []byte, endpoint string) ([]byte, error) {
 			return []byte("interface for " + string(admin) + " at " + endpoint), nil
 		},
+		StoreRootPassword: func(context.Context, []byte, bool, string) error { return nil },
 	}
 	return a, ready
 }
@@ -244,6 +245,70 @@ func waitFor(t *testing.T, a *Appliance) *JobView {
 	}
 	t.Fatal("the apply did not finish")
 	return nil
+}
+
+func TestExtraClusterNamespacesValidated(t *testing.T) {
+	t.Parallel()
+	for ns, want := range map[string]string{
+		"kubehenge-system": "Namespaces for clusters: kubehenge-system holds",
+		"clusters":         "Namespaces for clusters: clusters is the interface's own",
+		"Team A":           `Namespaces for clusters: "Team A" is not a namespace name`,
+	} {
+		s := settings("pve1")
+		s.ExtraClusterNamespaces = []string{"team-a", ns}
+		if err := s.Validate(); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", ns, err, want)
+		}
+	}
+	s := settings("pve1")
+	s.ExtraClusterNamespaces = []string{"team-a", "team-a"}
+	if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "team-a is named twice") {
+		t.Errorf("a namespace twice: %v", err)
+	}
+	s.ExtraClusterNamespaces = []string{"team-a", "team-b"}
+	if err := s.Validate(); err != nil {
+		t.Errorf("two teams: %v", err)
+	}
+}
+
+func TestApplyPassesTheExtraClusterNamespaces(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	vars := func() string {
+		t.Helper()
+		j := waitFor(t, a)
+		if j.State != "succeeded" {
+			t.Fatalf("job = %+v", j)
+		}
+		raw, err := os.ReadFile(filepath.Join(a.Dir, "management", "terraform.tfvars.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	ready := func(context.Context, []byte) error { return nil }
+	if err := a.Apply(settings("pve1"), "correct horse battery staple", ticket(), ready); err != nil {
+		t.Fatal(err)
+	}
+	// The module's variable takes a list, never null.
+	if v := vars(); !strings.Contains(v, `"extraClusterNamespaces": []`) {
+		t.Fatalf("tfvars without an empty list of namespaces:\n%s", v)
+	}
+	s := settings("pve1")
+	s.ExtraClusterNamespaces = []string{"team-a"}
+	if err := a.Apply(s, "correct horse battery staple", ticket(), ready); err != nil {
+		t.Fatal(err)
+	}
+	if v := vars(); !strings.Contains(v, "\"extraClusterNamespaces\": [\n      \"team-a\"\n    ]") {
+		t.Fatalf("tfvars without team-a:\n%s", v)
+	}
+	main, err := os.ReadFile(filepath.Join(a.Dir, "management", "main.tf"))
+	if err != nil || !strings.Contains(string(main), "extra_cluster_namespaces = var.settings.extraClusterNamespaces") {
+		t.Fatalf("main.tf: %v\n%s", err, main)
+	}
+	if saved := a.SavedSettings(); !slices.Equal(saved.ExtraClusterNamespaces, []string{"team-a"}) {
+		t.Fatalf("saved settings = %+v", saved)
+	}
 }
 
 func TestApply(t *testing.T) {
@@ -590,6 +655,93 @@ func TestClusterDatastoreAllocateReachesTheModule(t *testing.T) {
 		if want := fmt.Sprintf(`"clusterDatastoreAllocate": %t`, on); err != nil || !strings.Contains(string(vars), want) {
 			t.Fatalf("tfvars want %s: %v\n%s", want, err, vars)
 		}
+	}
+}
+
+func TestClusterSysAuditReachesTheModule(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	for _, on := range []bool{false, true} {
+		s := settings("pve1")
+		s.ClusterSysAudit = on
+		if err := a.Apply(s, "correct horse battery staple", ticket(), func(context.Context, []byte) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+		if j := waitFor(t, a); j.State != "succeeded" {
+			t.Fatalf("job = %+v", j)
+		}
+		main, err := os.ReadFile(filepath.Join(a.Dir, "management", "main.tf"))
+		if err != nil || !strings.Contains(string(main), "cluster_sys_audit          = var.settings.clusterSysAudit") {
+			t.Fatalf("main.tf: %v\n%s", err, main)
+		}
+		vars, err := os.ReadFile(filepath.Join(a.Dir, "management", "terraform.tfvars.json"))
+		if want := fmt.Sprintf(`"clusterSysAudit": %t`, on); err != nil || !strings.Contains(string(vars), want) {
+			t.Fatalf("tfvars want %s: %v\n%s", want, err, vars)
+		}
+		if a.SavedSettings().ClusterSysAudit != on {
+			t.Errorf("the setting %t was not kept", on)
+		}
+	}
+}
+
+// The password reaches the management cluster alone; the module, its variables and the saved
+// settings learn only that volume snapshots are on, and a later run keeps the password stored.
+func TestRootPasswordGoesOnlyIntoTheManagementCluster(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	type stored struct {
+		admin, password string
+		on              bool
+	}
+	var calls []stored
+	a.StoreRootPassword = func(_ context.Context, admin []byte, on bool, password string) error {
+		calls = append(calls, stored{string(admin), password, on})
+		return nil
+	}
+	apply := func(s *Settings) error {
+		return a.Apply(s, "correct horse battery staple", ticket(), func(context.Context, []byte) error { return nil })
+	}
+	s := settings("pve1")
+	s.ClusterVolumeSnapshots = true
+	if err := apply(s); !errors.Is(err, ErrNoRootPassword) {
+		t.Fatalf("switched on without a password: %v", err)
+	}
+	const password = "root's own secret" //nolint:gosec // the test's own, looked for where it must not be
+	s.RootPassword = password
+	if err := apply(s); err != nil {
+		t.Fatal(err)
+	}
+	if j := waitFor(t, a); j.State != "succeeded" || strings.Contains(strings.Join(j.Log, "\n"), password) {
+		t.Fatalf("job = %+v", j)
+	}
+	for _, name := range []string{"main.tf", "terraform.tfvars.json", "settings.json"} {
+		raw, err := os.ReadFile(filepath.Join(a.Dir, "management", name)) //nolint:gosec // the test's own files
+		if err != nil || strings.Contains(string(raw), password) {
+			t.Fatalf("%s holds the password: %v\n%s", name, err, raw)
+		}
+	}
+	vars, err := os.ReadFile(filepath.Join(a.Dir, "management", "terraform.tfvars.json"))
+	if err != nil || !strings.Contains(string(vars), `"clusterVolumeSnapshots": true`) {
+		t.Fatalf("tfvars: %v\n%s", err, vars)
+	}
+
+	// Kept as it is by a run that names none, and removed with volume snapshots off.
+	again := settings("pve1")
+	again.ClusterVolumeSnapshots = true
+	if err := apply(again); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, a)
+	off := settings("pve1")
+	off.RootPassword = password
+	if err := apply(off); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, a)
+	const admin = "admin-kubeconfig"
+	want := []stored{{admin, password, true}, {admin, "", true}, {admin, "", false}}
+	if !slices.Equal(calls, want) {
+		t.Errorf("stored %+v, want %+v", calls, want)
 	}
 }
 

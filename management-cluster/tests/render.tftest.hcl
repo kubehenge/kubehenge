@@ -222,7 +222,7 @@ run "controller_and_clusters_are_least_privilege" {
         kubehenge-rke2    = ["rke2-bootstrap-system", "rke2-control-plane-system"]
         kubehenge-k3s     = ["k3s-bootstrap-system", "k3s-control-plane-system"]
       }
-      interface = { offerHARules = false }
+      interface = { extraNamespaces = [], offerHARules = false }
       clusters  = { storages = ["local-lvm", "ceph"], bridges = ["vmbr0", "vmbr1"] }
       proxmox = {
         url          = "https://pve.example.org:8006"
@@ -235,6 +235,8 @@ run "controller_and_clusters_are_least_privilege" {
           role               = ""
           managementStorages = ["local-lvm", "local"]
         }
+        sysAuditGroup   = ""
+        volumeSnapshots = { rootSecret = "" }
       }
       templateRefresh = {
         enabled       = true
@@ -329,6 +331,84 @@ run "controller_and_clusters_are_least_privilege" {
   assert {
     condition     = length(proxmox_virtual_environment_role.cluster_datastore) == 0
     error_message = "no cluster may hold Datastore.Allocate unless the administrator lets clusters choose it"
+  }
+
+  assert {
+    condition     = length(proxmox_virtual_environment_group.clusters_audit) == 0 && length(proxmox_acl.clusters_audit) == 0
+    error_message = "no cluster may hold Sys.Audit on / unless the administrator lets clusters choose it"
+  }
+}
+
+run "cluster_sys_audit" {
+  command = plan
+
+  variables {
+    cluster_sys_audit = true
+  }
+
+  assert {
+    condition = (
+      proxmox_virtual_environment_group.clusters_audit[0].group_id == "kubehenge-clusters-audit" &&
+      proxmox_acl.clusters_audit[0].group_id == "kubehenge-clusters-audit" &&
+      proxmox_acl.clusters_audit[0].path == "/" && !proxmox_acl.clusters_audit[0].propagate &&
+      proxmox_acl.clusters_audit[0].role_id == "kubehenge-audit" &&
+      toset(proxmox_virtual_environment_role.audit.privileges) == toset(["Sys.Audit"])
+    )
+    error_message = "the group holds Sys.Audit on / alone, unpropagated"
+  }
+
+  assert {
+    condition = (
+      toset([for k, a in proxmox_acl.provisioner : k if startswith(a.path, "/access/groups/")]) == toset([
+        "/access/groups/kubehenge-clusters kubehenge-provisioner-users",
+        "/access/groups/kubehenge-clusters-audit kubehenge-provisioner-users",
+      ]) &&
+      !proxmox_acl.provisioner["/access/groups/kubehenge-clusters-audit kubehenge-provisioner-users"].propagate &&
+      length([for k, a in proxmox_acl.provisioner : k if a.path == "/" && a.role_id != "kubehenge-audit"]) == 0
+    )
+    error_message = "the controller may change the group's members, and gains nothing on / itself"
+  }
+
+  assert {
+    condition = (
+      length([for k, a in proxmox_acl.clusters : k if a.path == "/"]) == 0 &&
+      yamldecode(helm_release.kubehenge.values[0]).proxmox.sysAuditGroup == "kubehenge-clusters-audit"
+    )
+    error_message = "the clusters' group gets nothing more; the controller learns the group"
+  }
+
+  assert {
+    condition     = contains(output.proxmox_objects.groups, "kubehenge-clusters-audit")
+    error_message = "a destroy is checked for the group too"
+  }
+}
+
+run "cluster_volume_snapshots" {
+  command = plan
+
+  variables {
+    cluster_volume_snapshots = true
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).proxmox.volumeSnapshots == { rootSecret = "kubehenge-root-pam" }
+    error_message = "the controller learns the Secret root@pam's password is in"
+  }
+
+  assert {
+    condition = (
+      !strcontains(jsonencode([for s in helm_release.cluster_api_providers.set_sensitive : s.name]), "root") &&
+      !strcontains(helm_release.cluster_api_providers.values[0], "kubehenge-root-pam")
+    )
+    error_message = "the module never holds root@pam's password, so that it stays out of the state"
+  }
+
+  assert {
+    condition = (
+      length(proxmox_virtual_environment_role.cluster_datastore) == 0 &&
+      length([for k, a in proxmox_acl.provisioner : k if a.path == "/" && a.role_id != "kubehenge-audit"]) == 0
+    )
+    error_message = "volume snapshots grant no token anything more"
   }
 }
 
@@ -501,6 +581,51 @@ run "template_refresh_off" {
     )
     error_message = "no template builder unless the refresh is on"
   }
+}
+
+run "extra_cluster_namespaces" {
+  command = plan
+
+  variables {
+    extra_cluster_namespaces = ["team-a", "team-b"]
+  }
+
+  assert {
+    condition = (
+      yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = ["team-a", "team-b"], offerHARules = false } &&
+      toset(keys(proxmox_acl.provisioner)) == toset([
+        "/ kubehenge-audit",
+        "/nodes kubehenge-audit",
+        "/pool/kubehenge kubehenge-provisioner-pools",
+        "/access/groups/kubehenge-clusters kubehenge-provisioner-users",
+        "/access/realm/pve kubehenge-provisioner-realm",
+        "/pool/kubehenge-templates kubehenge-templates-audit",
+        "/storage/local-lvm kubehenge-cluster-storage",
+        "/storage/ceph kubehenge-cluster-storage",
+      ])
+    )
+    error_message = "the chart is told the namespaces, and Proxmox VE grants nothing more for them: each cluster's pool still nests under the workload pool"
+  }
+}
+
+run "extra_cluster_namespaces_refuse_system_ones" {
+  command = plan
+
+  variables {
+    extra_cluster_namespaces = ["team-a", "capi-system"]
+  }
+
+  expect_failures = [var.extra_cluster_namespaces]
+}
+
+run "extra_cluster_namespaces_refuse_the_interface_s_own" {
+  command = plan
+
+  variables {
+    extra_cluster_namespaces = ["clusters"]
+  }
+
+  expect_failures = [var.extra_cluster_namespaces]
 }
 
 run "providers" {

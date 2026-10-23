@@ -544,7 +544,7 @@ func alloyValues(image Image, collector string) map[string]any {
 		"limits":    map[string]any{memoryKey: "256Mi"},
 	}
 	alloy["mounts"] = map[string]any{"extra": []any{corev1.VolumeMount{Name: "storage", MountPath: "/tmp/alloy"}, clientMount}}
-	values["controller"] = map[string]any{
+	values[controllerKey] = map[string]any{
 		"type": "deployment", "replicas": 1,
 		"volumes": map[string]any{"extra": []any{
 			corev1.Volume{Name: "storage", EmptyDir: &corev1.EmptyDirVolumeSource{}}, client,
@@ -585,7 +585,7 @@ func alloyNodeValues(image Image, distribution templates.Distribution) map[strin
 		corev1.VolumeMount{Name: "storage", MountPath: alloyNodeStorage},
 		clientMount,
 	}}
-	values["controller"] = map[string]any{
+	values[controllerKey] = map[string]any{
 		"type":         "daemonset",
 		tolerationsKey: []any{corev1.Toleration{Operator: corev1.TolerationOpExists}},
 		"volumes": map[string]any{"extra": []any{

@@ -73,6 +73,7 @@ type controllerOptions struct {
 	ccmChart          string
 	csiChart          string
 	csiNewestChart    string
+	snapshotChart     string
 	ciliumChart       string
 	calicoChart       string
 	headlampChart     string
@@ -159,7 +160,7 @@ separate nodes.`,
 func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 	f.StringVar(&o.ccmChart, "ccm-chart", "", "cloud controller manager chart, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.csiChart, "csi-chart", "", "CSI plugin chart, as <repository>/<name>:<version>@sha256:<digest>")
-	o.datastoreAllocateFlags(f)
+	o.grantFlags(f)
 	f.StringVar(&o.ciliumChart, "cilium-chart", "", "Cilium chart, for distributions without a CNI of their own, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.calicoChart, "calico-chart", "", "Calico's operator chart, for distributions without a CNI of their own, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.headlampChart, "headlamp-chart", "", "Headlamp chart, for clusters that switch it on, as <repository>/<name>:<version>@sha256:<digest>")
@@ -189,13 +190,18 @@ func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 	f.StringVar(&o.kubeVipChart, "kube-vip-chart", "", "kube-vip chart, for clusters whose load balancer is kube-vip, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.kubeVipImage, "kube-vip-image", "", "kube-vip image, as <registry>/<repository>:<tag>@sha256:<digest>")
 	f.StringVar(&o.kubeVipCloudChart, "kube-vip-cloud-provider-chart", "", "kube-vip's cloud provider chart, which hands kube-vip's Services their addresses, as <repository>/<name>:<version>@sha256:<digest>")
-	for _, flag := range []string{"ccm-chart", "csi-chart", "csi-newest-chart", "cilium-chart", "calico-chart", "calico-images", "headlamp-chart", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "rancher-turtles-image", "rancher-cluster-api-image", "monitoring-chart", "kube-rbac-proxy-image", "loki-chart", "alloy-chart", "alloy-image", "velero-chart", "velero-image", "velero-plugin-image", "kyverno-chart", "kyverno-policies-chart", "istio-chart", "istio-base-chart", "istio-cni-chart", "istio-ztunnel-chart", "traefik-chart", "metallb-chart", "kube-vip-chart", "kube-vip-image", "kube-vip-cloud-provider-chart"} {
+	for _, flag := range []string{"ccm-chart", "csi-chart", "csi-newest-chart", "snapshot-controller-chart", "cilium-chart", "calico-chart", "calico-images", "headlamp-chart", "cert-manager-chart", "rancher-chart", "rancher-kubernetes", "rancher-turtles-image", "rancher-cluster-api-image", "monitoring-chart", "kube-rbac-proxy-image", "loki-chart", "alloy-chart", "alloy-image", "velero-chart", "velero-image", "velero-plugin-image", "kyverno-chart", "kyverno-policies-chart", "istio-chart", "istio-base-chart", "istio-cni-chart", "istio-ztunnel-chart", "traefik-chart", "metallb-chart", "kube-vip-chart", "kube-vip-image", "kube-vip-cloud-provider-chart"} {
 		_ = cobra.MarkFlagRequired(f, flag)
 	}
 }
 
-// datastoreAllocateFlags are those that let clusters run the CSI plugin's newest release.
-func (o *controllerOptions) datastoreAllocateFlags(f *pflag.FlagSet) {
+// grantFlags are those that let clusters' tokens hold more than their pools: Datastore.Allocate
+// for the CSI plugin's newest release, Sys.Audit on / for the cloud controller manager's HA group
+// labels; and that let their CSI plugins sign in as root@pam for volume snapshots.
+func (o *controllerOptions) grantFlags(f *pflag.FlagSet) {
+	f.StringVar(&o.r.VolumeSnapshots.RootSecret, "root-secret", "", "Secret in the class namespace holding root@pam's password under the key password, with which the CSI plugin of each cluster asking for volume snapshots signs in; empty to let no cluster take them")
+	f.StringVar(&o.snapshotChart, "snapshot-controller-chart", "", "the volume snapshot controller's chart, with its CRDs and the VolumeSnapshotClass, for clusters that take volume snapshots, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.settings.SysAuditGroup, "sys-audit-group", "", "Proxmox VE group holding Sys.Audit on / that the user of each cluster asking for the cloud controller manager's HA group labels joins; empty to let no cluster join it")
 	f.StringVar(&o.csiNewestChart, "csi-newest-chart", "", "the CSI plugin's newest release, for clusters whose token holds Datastore.Allocate on their storage, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.settings.DatastoreRole, "datastore-allocate-role", "", "Proxmox VE role, holding Datastore.Allocate, each cluster that asks for it gets on its storage; empty to let no cluster hold it")
 	f.StringSliceVar(&o.r.DatastoreAllocate.Management, "management-storages", nil, "storages the management cluster uses, on which no cluster may hold Datastore.Allocate (comma-separated)")
@@ -229,10 +235,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	}
 	distributions := &provisioner.Distributions{ClassNamespace: o.r.ClassNamespace, Providers: providers}
 	cloud := &provisioner.Proxmox{Client: c, Settings: o.settings}
-	o.r.Cloud = cloud
-	o.r.DatastoreAllocate.Role = o.settings.DatastoreRole
-	o.r.Endpoint = provisioner.Endpoint{URL: strings.TrimSuffix(conn.URL, "/"), CA: string(ca), Insecure: conn.Insecure}
-	o.r.RancherKubernetes = rancherMinors
+	o.completeReconciler(cloud, provisioner.Endpoint{URL: strings.TrimSuffix(conn.URL, "/"), CA: string(ca), Insecure: conn.Insecure}, rancherMinors)
 
 	ctrl.SetLogger(zap.New())
 	scheme, err := controllerScheme()
@@ -262,6 +265,8 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 		RancherKubernetes: rancherMinors,
 		Nodes:             cloud,
 		DatastoreAllocate: o.r.DatastoreAllocate,
+		SysAuditGroup:     o.r.SysAuditGroup,
+		VolumeSnapshots:   o.r.VolumeSnapshots,
 		Releases: &provisioner.ReleaseChecksums{
 			Reader:    mgr.GetAPIReader(),
 			Client:    mgr.GetClient(),
@@ -287,6 +292,17 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 		return fmt.Errorf("the controller manager: %w", err)
 	}
 	return nil
+}
+
+// completeReconciler gives the reconciler what only the parsed flags and the connection make: the
+// grants clusters may ask for are the Proxmox VE settings', so both read the same flags.
+func (o *controllerOptions) completeReconciler(cloud *provisioner.Proxmox, endpoint provisioner.Endpoint, rancherMinors provisioner.KubernetesMinors) {
+	o.r.Cloud = cloud
+	o.r.DatastoreAllocate.Role = o.settings.DatastoreRole
+	o.r.SysAuditGroup = o.settings.SysAuditGroup
+	o.r.VolumeSnapshots.Namespace = o.r.ClassNamespace
+	o.r.Endpoint = endpoint
+	o.r.RancherKubernetes = rancherMinors
 }
 
 // newExtensionServer is the Runtime Extension server Cluster API calls the hooks through.
@@ -336,6 +352,7 @@ func (o *controllerOptions) parseCharts() error {
 		{"--ccm-chart", o.ccmChart, &o.r.Charts.CCM},
 		{"--csi-chart", o.csiChart, &o.r.Charts.CSI},
 		{"--csi-newest-chart", o.csiNewestChart, &o.r.Charts.CSINewest},
+		{"--snapshot-controller-chart", o.snapshotChart, &o.r.Charts.SnapshotController},
 		{"--cilium-chart", o.ciliumChart, &o.r.Charts.Cilium},
 		{"--calico-chart", o.calicoChart, &o.r.Charts.Calico},
 		{"--headlamp-chart", o.headlampChart, &o.r.Charts.Headlamp},

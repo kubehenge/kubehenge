@@ -51,6 +51,21 @@ until pve systemctl is-active --quiet pveproxy.service && pve pvesh get /version
     fi
     sleep 3
 done
+# Proxmox VE copies a volume through SSH to the node it goes to, this one too, so it must reach
+# itself as it does then: as root, with its own key, checking only the host key `pvecm updatecerts`
+# wrote under its name when it started.
+known=/etc/pve/nodes/pve/ssh_known_hosts
+# shellcheck disable=SC2310 # pve wraps one docker exec, whose status is what the loop polls and reports.
+until ssh_error=$(pve ssh -e none -o UserKnownHostsFile="${known}" -o GlobalKnownHostsFile=none \
+    -o BatchMode=yes -o HostKeyAlias=pve root@172.21.99.2 true 2>&1); do
+    now=$(date +%s)
+    if [ "${now}" -ge "${deadline}" ]; then
+        echo "Proxmox VE does not reach itself over SSH: ${ssh_error}" >&2
+        pve systemctl status --no-pager ssh-host-keys.service ssh.service >&2 || true
+        exit 1
+    fi
+    sleep 3
+done
 # `import` holds the disk images VMs are created from, `rootdir` the appliance's container.
 pve pvesm set local --content iso,vztmpl,backup,images,snippets,import,rootdir
 # A storage no other cluster, the management cluster nor the templates use, for a cluster that
@@ -60,6 +75,10 @@ pve cat /etc/pve/pve-root-ca.pem > "${work}/pve-root-ca.pem"
 secret=$(pve pveum user token add root@pam e2e --privsep 0 --output-format json |
     sed -n 's/.*"value" *: *"\([^"]*\)".*/\1/p')
 [ -n "${secret}" ]
+# root@pam's password, which the CSI plugin of a cluster taking volume snapshots signs in with: a
+# fresh one, as the image comes with none.
+root_password=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
+printf 'root:%s\n' "${root_password}" | docker exec -i kubehenge-e2e-pve chpasswd
 sudo ip route replace 172.20.99.0/24 via 172.21.99.2
 
 umask 077
@@ -67,6 +86,7 @@ cat > "${work}/env" << EOF
 export KUBEHENGE_PROXMOX_URL=https://172.21.99.2:8006
 export KUBEHENGE_PROXMOX_TOKEN='root@pam!e2e=${secret}'
 export KUBEHENGE_PROXMOX_CA=${work}/pve-root-ca.pem
+export KUBEHENGE_E2E_ROOT_PASSWORD=${root_password}
 export KUBEHENGE_E2E_NODE=pve KUBEHENGE_E2E_STORAGE=local KUBEHENGE_E2E_BRIDGE=vmbr0
 export KUBEHENGE_E2E_PREFIX=24 KUBEHENGE_E2E_GATEWAY=172.20.99.1 KUBEHENGE_E2E_DNS=172.20.99.1
 export KUBEHENGE_E2E_ENDPOINT=172.20.99.20 KUBEHENGE_E2E_ADDRESSES=172.20.99.21-172.20.99.29

@@ -12,11 +12,11 @@ import {
   type Form,
   type Machine,
 } from "./create-form";
-import { CSIField } from "./CsiPlugin";
+import { CSIField, SnapshotsField } from "./CsiPlugin";
 import { LoadBalancerFields } from "./LoadBalancer";
 import { addressBits } from "./network";
 import { OIDCProviders } from "./OIDCProviders";
-import { HAField, PlacementFields, type HARulesRead } from "./Placement";
+import { HAField, HAGroupsField, PlacementFields, type HARulesRead } from "./Placement";
 import type { Bridge, ClusterClass, PveNode, Storage, TemplateBuilds, Versions } from "./types";
 import { ErrorBox, Field, bytes, cniName, distributionName, errorMessage, filled, maxWorkers, sentence } from "./ui";
 
@@ -175,15 +175,35 @@ export function GeneralStep({
   cls,
   offered,
   onChooseClass,
+  namespaces,
+  onChooseNamespace,
 }: StepProps & {
   classes: ClusterClass[];
   cls: ClusterClass | undefined;
   offered: Versions | undefined;
   onChooseClass: (name: string) => void;
+  namespaces: string[];
+  onChooseNamespace: (namespace: string) => void;
 }): JSX.Element {
   const alone = machineLeast({ ...form, workerReplicas: 0 }, cls, "controlPlaneMachine");
   return (
     <>
+      {namespaces.length > 1 && (
+        <Field
+          label="Namespace"
+          hint="Where the cluster's objects live in the management cluster; Cluster Mesh links clusters of one namespace."
+        >
+          {(id) => (
+            <select id={id} value={form.namespace} onChange={(e) => onChooseNamespace(e.target.value)}>
+              {namespaces.map((ns) => (
+                <option key={ns} value={ns}>
+                  {ns}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
+      )}
       <Field label="Name" hint="Also names its Proxmox VE pool and VMs." error={shown("name")}>
         {(id) => <input id={id} value={form.name} onChange={(e) => set("name", e.target.value.trim())} />}
       </Field>
@@ -396,6 +416,8 @@ export function MachinesStep({
   placed,
   haOffered,
   csi,
+  snapshots,
+  haGroups,
   nodes,
   rules,
 }: StepProps & {
@@ -404,6 +426,8 @@ export function MachinesStep({
   placed: boolean;
   haOffered: boolean;
   csi: { offered: boolean; problem: string | undefined };
+  snapshots: { offered: boolean; problem: string | undefined };
+  haGroups: { offered: boolean; problem: string | undefined };
   nodes: PveNode[];
   rules: HARulesRead;
 }): JSX.Element {
@@ -442,6 +466,16 @@ export function MachinesStep({
           storage={filled(form.storage) ? form.storage : undefined}
           problem={csi.problem}
         />
+      )}
+      {snapshots.offered && (
+        <SnapshotsField
+          checked={form.volumeSnapshots}
+          onChange={(on) => set("volumeSnapshots", on)}
+          problem={snapshots.problem}
+        />
+      )}
+      {haGroups.offered && (
+        <HAGroupsField checked={form.haGroups} onChange={(on) => set("haGroups", on)} problem={haGroups.problem} />
       )}
       <MachineFields
         label="Control plane"

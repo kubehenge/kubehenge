@@ -73,8 +73,8 @@ func startAPI(t *testing.T) (client.Client, *envtest.WebhookInstallOptions) {
 }
 
 // startAPIConfig is startAPI with the administrator's configuration too, for clients of other
-// identities.
-func startAPIConfig(t *testing.T) (*rest.Config, client.Client, *envtest.WebhookInstallOptions) {
+// identities, and Kubehenge's chart installed with the module's values and then those of values.
+func startAPIConfig(t *testing.T, values ...string) (*rest.Config, client.Client, *envtest.WebhookInstallOptions) {
 	t.Helper()
 	crds := os.Getenv("KUBEHENGE_INTEGRATION_CRDS")
 	if crds == "" || os.Getenv("KUBEBUILDER_ASSETS") == "" {
@@ -84,7 +84,7 @@ func startAPIConfig(t *testing.T) (*rest.Config, client.Client, *envtest.Webhook
 	objects := renderChart(t, "cluster-api-providers", "../../management-cluster/charts/cluster-api-providers", "capi-operator-system",
 		"testdata/cluster-api-providers-values.yaml")
 	var webhooks []*admissionregistrationv1.ValidatingWebhookConfiguration
-	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
+	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, append([]string{"testdata/integration-values.yaml"}, values...)...) {
 		if o.GetKind() != "ValidatingWebhookConfiguration" {
 			objects = append(objects, o)
 			continue
@@ -555,6 +555,34 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 
 	hooks.DatastoreAllocate = testDatastoreAllocate
 	checkDatastoreAllocateAdmission(ctx, t, c)
+	checkSysAuditAdmission(ctx, t, c, hooks)
+}
+
+// checkSysAuditAdmission has the API server ask the validator about clusters whose token is to hold
+// Sys.Audit on /, before and after the administrator lets clusters hold it.
+func checkSysAuditAdmission(ctx context.Context, t *testing.T, c client.Client, hooks *Hooks) {
+	t.Helper()
+	asking := func(name string) *clusterv1.Cluster {
+		cluster := &clusterv1.Cluster{
+			Namespace: "team-a", Name: name,
+			Spec: clusterv1.ClusterSpec{Topology: clusterv1.Topology{
+				ClassRef: clusterv1.ClusterClassRef{Name: "kubehenge-k3s", Namespace: classNamespace},
+				Version:  "v1.36.5+k3s1",
+				Workers: clusterv1.WorkersTopology{MachineDeployments: []clusterv1.MachineDeploymentTopology{
+					{Class: "worker", Name: "md-0", Replicas: new(int32(1))},
+				}},
+			}},
+		}
+		return withAddons(cluster, map[string]string{"storage": `"local-lvm"`, ccmVariable: `{"haGroups":true}`})
+	}
+	hooks.SysAuditGroup = ""
+	if err := c.Create(ctx, asking("unaudited")); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "lets no cluster hold Sys.Audit on /") {
+		t.Fatalf("Sys.Audit on / where no cluster may hold it: %v", err)
+	}
+	hooks.SysAuditGroup = "kubehenge-clusters-audit"
+	if err := c.Create(ctx, asking("audited")); err != nil {
+		t.Fatalf("Sys.Audit on / where clusters may hold it: %v", err)
+	}
 }
 
 // checkDatastoreAllocateAdmission has the API server ask the validator about clusters holding
@@ -825,6 +853,84 @@ func TestIntegrationChartDatastoreAllocate(t *testing.T) {
 		role := strings.Contains(args, "--datastore-allocate-role=kubehenge-cluster-datastore") && strings.Contains(args, "--management-storages=local-lvm,local")
 		if role != on || classes != len(classProviders) {
 			t.Errorf("Datastore.Allocate %t: the controller gets the role: %t; %d classes", on, role, classes)
+		}
+	}
+}
+
+// Only a management cluster that lets clusters hold Sys.Audit on / hands the controller the group
+// holding it, and offers the classes' ccm variable in the interface.
+func TestIntegrationChartSysAudit(t *testing.T) {
+	t.Parallel()
+	for _, on := range []bool{false, true} {
+		values := []string{"testdata/integration-values.yaml"}
+		if on {
+			values = append(values, "testdata/sys-audit-values.yaml")
+		}
+		var args string
+		classes := 0
+		for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, values...) {
+			switch o.GetKind() {
+			case "ClusterClass":
+				if got := o.GetAnnotations()["kubehenge.dev/sys-audit"] == "true"; got != on {
+					t.Errorf("Sys.Audit %t: %s offers it: %t", on, o.GetName(), got)
+				}
+				variables, _, err := unstructured.NestedSlice(o.Object, "spec", "variables")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(fmt.Sprint(variables), "name:ccm") {
+					t.Errorf("%s has no ccm variable", o.GetName())
+				}
+				classes++
+			case "Deployment":
+				containers, _, err := unstructured.NestedSlice(o.Object, "spec", "template", "spec", "containers")
+				if err != nil {
+					t.Fatal(err)
+				}
+				args += fmt.Sprint(containers)
+			}
+		}
+		group := strings.Contains(args, "--sys-audit-group=kubehenge-clusters-audit")
+		if group != on || strings.Contains(args, "--sys-audit-group") != on || classes != len(classProviders) {
+			t.Errorf("Sys.Audit %t: the controller gets the group: %t; %d classes", on, group, classes)
+		}
+	}
+}
+
+// Only a management cluster that lets clusters take volume snapshots names the controller the
+// Secret with root@pam's password, and offers them in the interface; the snapshot controller's
+// chart is the controller's in any case, pinned with its image.
+func TestIntegrationChartVolumeSnapshots(t *testing.T) {
+	t.Parallel()
+	for _, on := range []bool{false, true} {
+		values := []string{"testdata/integration-values.yaml"}
+		if on {
+			values = append(values, "testdata/volume-snapshots-values.yaml")
+		}
+		var args string
+		classes := 0
+		for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, values...) {
+			switch o.GetKind() {
+			case "ClusterClass":
+				if got := o.GetAnnotations()["kubehenge.dev/volume-snapshots"] == "true"; got != on {
+					t.Errorf("volume snapshots %t: %s offers them: %t", on, o.GetName(), got)
+				}
+				classes++
+			case "Deployment":
+				containers, _, err := unstructured.NestedSlice(o.Object, "spec", "template", "spec", "containers")
+				if err != nil {
+					t.Fatal(err)
+				}
+				args += fmt.Sprint(containers)
+			}
+		}
+		if !strings.Contains(args, "--snapshot-controller-chart=oci://ghcr.io/piraeusdatastore/helm-charts/snapshot-controller:") ||
+			!regexp.MustCompile(`"snapshot-controller":\{"controller":\{"image":\{"tag":"v[0-9.]+@sha256:[0-9a-f]{64}"`).MatchString(args) {
+			t.Errorf("volume snapshots %t: the controller is not given the snapshot controller's chart and image", on)
+		}
+		secret := strings.Contains(args, "--root-secret=kubehenge-root-pam")
+		if secret != on || strings.Contains(args, "--root-secret") != on || classes != len(classProviders) {
+			t.Errorf("volume snapshots %t: the controller gets the Secret: %t; %d classes", on, secret, classes)
 		}
 	}
 }

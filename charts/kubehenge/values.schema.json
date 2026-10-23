@@ -28,6 +28,12 @@
       "required": ["namespace"],
       "properties": {
         "namespace": { "$ref": "#/$defs/name" },
+        "extraNamespaces": {
+          "description": "More namespaces the interface creates and manages clusters in, none of Kubernetes', the providers' or Kubehenge's own.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/name" },
+          "uniqueItems": true
+        },
         "offerHARules": {
           "description": "Whether those who may create or change a cluster are offered Proxmox VE's HA node-affinity rules, their names and nodes only, without Sys.Audit on / of their own.",
           "type": "boolean"
@@ -103,7 +109,7 @@
     "proxmox": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["url", "insecure", "secret", "clusterGroup", "clusterRole", "volumeOwnerNode", "region", "ha", "datastoreAllocate"],
+      "required": ["url", "insecure", "secret", "clusterGroup", "clusterRole", "volumeOwnerNode", "region", "ha", "datastoreAllocate", "sysAuditGroup", "volumeSnapshots"],
       "properties": {
         "url": { "type": "string", "pattern": "^https://[^/]+" },
         "insecure": { "type": "boolean" },
@@ -121,6 +127,19 @@
           "properties": {
             "role": { "type": "string" },
             "managementStorages": { "type": "array", "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9._-]*$" }, "uniqueItems": true }
+          }
+        },
+        "sysAuditGroup": {
+          "description": "The group holding Sys.Audit on / that clusters asking for the cloud controller manager's HA group labels join, empty when no cluster may.",
+          "type": "string"
+        },
+        "volumeSnapshots": {
+          "description": "The Secret holding root@pam's password for the CSI plugin of clusters that take volume snapshots, empty when no cluster may.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rootSecret"],
+          "properties": {
+            "rootSecret": { "anyOf": [{ "const": "" }, { "$ref": "#/$defs/name" }] }
           }
         }
       }
@@ -160,7 +179,7 @@
     "addons": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["headlamp", "rancher", "monitoring", "loki", "alloy", "velero", "kyverno", "kyvernoPolicies", "istio", "istioBase", "istioCNI", "istioZtunnel", "certManager", "cloudControllerManager", "csiPlugin", "csiPluginNewest", "cilium", "calico", "traefik", "metallb", "kubeVip", "kubeVipCloudProvider"],
+      "required": ["headlamp", "rancher", "monitoring", "loki", "alloy", "velero", "kyverno", "kyvernoPolicies", "istio", "istioBase", "istioCNI", "istioZtunnel", "certManager", "cloudControllerManager", "csiPlugin", "csiPluginNewest", "snapshotController", "cilium", "calico", "traefik", "metallb", "kubeVip", "kubeVipCloudProvider"],
       "properties": {
         "headlamp": { "$ref": "#/$defs/chartOnly" },
         "rancher": {
@@ -233,6 +252,7 @@
         "cloudControllerManager": { "$ref": "#/$defs/chartOnly" },
         "csiPlugin": { "$ref": "#/$defs/chartOnly" },
         "csiPluginNewest": { "$ref": "#/$defs/chartOnly" },
+        "snapshotController": { "$ref": "#/$defs/chartOnly" },
         "cilium": { "$ref": "#/$defs/chartOnly" },
         "calico": {
           "allOf": [{ "$ref": "#/$defs/chart" }],

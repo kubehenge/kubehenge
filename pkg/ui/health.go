@@ -359,7 +359,7 @@ func (s *Server) clusterHealth(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	key := c.Namespace + "/" + c.Name + "/" + string(c.UID)
 	shared, err := s.health.get(r.Context(), key, s.now, func(ctx context.Context) healthView {
-		return s.readHealth(ctx, u.kube, c)
+		return s.readHealth(ctx, u.kube, c, u.namespaces)
 	})
 	if err != nil {
 		return
@@ -367,17 +367,17 @@ func (s *Server) clusterHealth(w http.ResponseWriter, r *http.Request, u user) {
 	v := shared
 	v.Nodes.Items = slices.Clone(shared.Nodes.Items)
 	v.VMs = s.addVMs(r.Context(), u, c, access.path, v.Nodes.Items)
-	v.Logs = c.Namespace == s.Namespace && access.held.Has(privKubeconfig) && v.Workload == ""
+	v.Logs = u.namespaces.has(c.Namespace) && access.held.Has(privKubeconfig) && v.Workload == ""
 	writeJSON(w, http.StatusOK, v)
 }
 
 // readHealth reads every source of the page at once, each within its own deadline.
-func (s *Server) readHealth(ctx context.Context, kube client.Client, c *clusterv1.Cluster) healthView {
+func (s *Server) readHealth(ctx context.Context, kube client.Client, c *clusterv1.Cluster, managed managedNamespaces) healthView {
 	var m managementRead
 	var wl workloadRead
 	var wg sync.WaitGroup
 	wg.Go(func() { m = readManagement(ctx, kube, c) })
-	wg.Go(func() { wl = s.readWorkload(ctx, kube, c) })
+	wg.Go(func() { wl = s.readWorkload(ctx, kube, c, managed) })
 	wg.Wait()
 	for what, err := range m.failures() {
 		s.Log.Error("reading a cluster's health", "cluster", c.Namespace+"/"+c.Name, "what", what, "error", err)

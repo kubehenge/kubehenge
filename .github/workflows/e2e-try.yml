@@ -194,6 +194,14 @@ jobs:
           # Proxmox VE logs its API's requests here, not to the journal.
           pve cat /var/log/pveproxy/access.log > "$out/pveproxy-access.log" || true
           pve qm list > "$out/vms.txt" || true
+          # The journal has only a failed task's command and exit status; what the command wrote,
+          # such as why an SSH connection or a volume copy failed, is in the task's own log.
+          pve pvesh get /nodes/pve/tasks --errors 1 --limit 100 --output-format json |
+            jq -r '.[].upid' | while read -r upid; do
+              printf '== %s\n' "$upid"
+              pve pvesh get "/nodes/pve/tasks/$upid/log" --limit 500 --output-format json |
+                jq -r '.[].t'
+            done > "$out/proxmox-failed-tasks.txt" 2>&1 || true
           cp "$RUNNER_TEMP/e2e/apply.log" "$RUNNER_TEMP/vmstat.txt" "$RUNNER_TEMP/kvm.txt" \
             "$RUNNER_TEMP/guests.txt" "$RUNNER_TEMP/guests-record.log" "$out/" 2>/dev/null || true
           # From inside the VMs, which answers even when a cluster's API does not.
@@ -233,6 +241,12 @@ jobs:
             # The conditions and failure reasons that say why a machine never came up.
             kubectl get machines,proxmoxmachines,proxmoxclusters -A -o yaml \
               > "$out/machines.yaml" 2>&1 || true
+            # What a deleted cluster left behind and who holds it: the Secrets' and ConfigMaps'
+            # metadata, never their data.
+            kubectl get secrets,configmaps -A -l cluster.x-k8s.io/cluster-name -o json |
+              jq '[.items[] | {kind} + (.metadata | {namespace, name, labels, ownerReferences,
+                finalizers, creationTimestamp, deletionTimestamp})]' \
+              > "$out/cluster-objects.json" 2>&1 || true
             kubectl get pods -A --no-headers \
               -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name |
               grep -E -- '-system ' | while read -r ns pod; do
@@ -253,6 +267,20 @@ jobs:
                 }
                 k get nodes,pods -A -o wide > "$dir/resources.txt" 2>&1 || continue
                 k get events -A --sort-by=.lastTimestamp > "$dir/events.txt" 2>&1 || true
+                # Why a volume or a snapshot is not ready: the objects' status, which keeps the last
+                # error after its event has gone, and the logs of the CSI plugin and the snapshot
+                # controller, which say what they asked Proxmox VE and what it answered. The
+                # snapshot kinds are asked for apart, as kubectl lists nothing in a cluster that
+                # lacks one.
+                {
+                  k get storageclasses,persistentvolumes,persistentvolumeclaims -A -o yaml
+                  k get volumesnapshotclasses,volumesnapshots,volumesnapshotcontents -A -o yaml
+                } > "$dir/volumes.yaml" 2>&1 || true
+                k get pods -A --no-headers \
+                  -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name 2>/dev/null |
+                  grep -E -- 'csi|snapshot' | while read -r pns pod; do
+                    k logs -n "$pns" "$pod" --all-containers --prefix --tail=2000 || true
+                  done > "$dir/volumes.log" 2>&1 || true
                 # The run before a restart says why the container ended; when it cannot be had, the
                 # error says why. It is asked for container by container, since with all of them
                 # kubectl stops at the first one that never restarted.

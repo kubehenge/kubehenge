@@ -38,6 +38,16 @@ metadata:
     kubehenge.dev/datastore-allocate: "true"
     kubehenge.dev/management-storages: {{ join "," .Values.proxmox.datastoreAllocate.managementStorages | quote }}
     {{- end }}
+    {{- if .Values.proxmox.sysAuditGroup }}
+    # Tells the interface to offer the ccm variable's haGroups: an administrator let clusters hold
+    # Sys.Audit on /.
+    kubehenge.dev/sys-audit: "true"
+    {{- end }}
+    {{- if .Values.proxmox.volumeSnapshots.rootSecret }}
+    # Tells the interface to offer the csi variable's volumeSnapshots: an administrator stored
+    # root@pam's password for it.
+    kubehenge.dev/volume-snapshots: "true"
+    {{- end }}
 spec:
   infrastructure:
     templateRef:

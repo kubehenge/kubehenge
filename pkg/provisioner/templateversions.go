@@ -28,7 +28,7 @@ const KubeadmVersionsAnnotation = "kubehenge.dev/kubeadm-versions"
 const CloudImageTemplateAnnotation = "kubehenge.dev/cloud-image-template"
 
 // TemplateVersions keeps KubeadmVersionsAnnotation, CloudImageTemplateAnnotation,
-// TemplateStoragesAnnotation and NodeImageBuildsAnnotation current.
+// TemplateStoragesAnnotation, NodeImageBuildsAnnotation and SnapshotStoragesAnnotation current.
 type TemplateVersions struct {
 	Client         client.Client
 	ClassNamespace string
@@ -58,6 +58,23 @@ func (p *TemplateVersions) Start(ctx context.Context) error {
 }
 
 func (p *TemplateVersions) publish(ctx context.Context) error {
+	return errors.Join(p.publishTemplates(ctx), p.publishSnapshotStorages(ctx))
+}
+
+func (p *TemplateVersions) publishSnapshotStorages(ctx context.Context) error {
+	storages, err := snapshotStorages(ctx, p.Proxmox)
+	if err != nil {
+		return err
+	}
+	list := strings.Join(storages, ",")
+	return errors.Join(
+		p.annotate(ctx, "kubeadm", SnapshotStoragesAnnotation, list),
+		p.annotate(ctx, "rke2", SnapshotStoragesAnnotation, list),
+		p.annotate(ctx, "k3s", SnapshotStoragesAnnotation, list),
+	)
+}
+
+func (p *TemplateVersions) publishTemplates(ctx context.Context) error {
 	seen, err := listPoolTemplates(ctx, p.Proxmox)
 	if err != nil {
 		return err

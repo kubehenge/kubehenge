@@ -3,13 +3,13 @@
 # cluster: create a cluster trusting an OpenID issuer, hardened to the CIS benchmark and enforcing
 # Pod Security's restricted level, check sign-in through it, its nodes against the benchmark, its
 # cloud controller manager, ingress controller, Gateway API, load balancer and persistent volumes,
-# what the health page's read-only identities may see in it, switch Headlamp, Kyverno, Istio (a
-# namespace's traffic over mutual TLS), monitoring (every component scraped with its server
-# verified) and logs (a pod's lines, and with the node collector the journal and the audit log, read
-# in Loki through Grafana) on and off, back a namespace with a volume and a Secret up with Velero to
-# an S3 store the test serves, delete it and restore it, check the store holds the backup
-# encrypted, switch backups and the load balancer off, scale its workers up and down, upgrade it by
-# one minor version (for RKE2 and k3s with the first
+# what the health page's read-only identities may see in it, switch Headlamp (and its read-only
+# access for everyone), Kyverno, Istio (a namespace's traffic over mutual TLS), monitoring (every
+# component scraped with its server verified) and logs (a pod's lines, and with the node collector
+# the journal and the audit log, read in Loki through Grafana) on and off, back a namespace with a
+# volume and a Secret up with Velero to an S3 store the test serves, delete it and restore it, check
+# the store holds the backup encrypted, switch backups and the load balancer off, scale its workers
+# up and down, upgrade it by one minor version (for RKE2 and k3s with the first
 # new server's join refused at first), replace a node that dies, delete it, and check that nothing
 # of it is left on Proxmox VE.
 #
@@ -45,6 +45,18 @@
 # endpoint is on this machine, at an https:// address the cluster's nodes reach; the test serves
 # SeaweedFS's S3 gateway there with KUBEHENGE_E2E_BACKUP_CERT and KUBEHENGE_E2E_BACKUP_KEY, which
 # KUBEHENGE_E2E_BACKUP_CA, the target's CA, signed.
+# KUBEHENGE_E2E_HA_GROUPS=1 switches the cloud controller manager's HA group labels on and off again,
+# with a management cluster that lets clusters choose them; the test makes an HA node-affinity rule
+# over every node, which needs Proxmox VE 9, and removes it again.
+# KUBEHENGE_E2E_NAMESPACE names one of the namespaces the management cluster's
+# extra_cluster_namespaces gives the web interface: the cluster is then created there with the
+# interface's own account, as the interface creates one in a namespace of its creator's choice, and
+# the namespace is left in place. Unset, the cluster gets a namespace of its own, created and deleted
+# with it.
+# KUBEHENGE_E2E_VOLUME_SNAPSHOTS=1 switches volume snapshots on, takes a snapshot of a volume with
+# data, restores it into a new one and checks the data, and switches them off again, with a
+# management cluster that lets clusters take them, root@pam's password stored, and a
+# KUBEHENGE_E2E_STORAGE local to each node.
 set -eu
 
 class=${1:?usage: $0 <ClusterClass> <version> <upgrade version>}
@@ -72,16 +84,24 @@ work=$(mktemp -d)
 distribution=$(echo "${class}" | sed 's/^kubehenge-//')
 suffix=$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')
 name=e2e-${distribution}-${suffix}
-ns=${name}
+ns=${KUBEHENGE_E2E_NAMESPACE:-${name}}
 issuer_pid=
 grafana_pid=
 s3_pid=
+# The HA rule the nodes are labelled with, and the guest it needs.
+ha_rule=''
+ha_vmid=''
+ha_node=''
 cleanup() {
     status=$?
     [ -z "${issuer_pid}" ] || kill "${issuer_pid}" 2> /dev/null || true
     [ -z "${grafana_pid}" ] || kill "${grafana_pid}" 2> /dev/null || true
     [ -z "${s3_pid}" ] || kill "${s3_pid}" 2> /dev/null || true
-    if [ "${status}" -ne 0 ]; then
+    # shellcheck disable=SC2310 # each removal is tried, whatever happened to those before it
+    remove_ha_rule || true
+    if [ "${status}" -ne 0 ] && [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
+        printf '\nleaving cluster %s/%s for inspection; delete it with: kubectl -n %s delete cluster %s\n' "${ns}" "${name}" "${ns}" "${name}"
+    elif [ "${status}" -ne 0 ]; then
         printf '\nleaving cluster %s/%s for inspection; delete it with: kubectl delete namespace %s\n' "${ns}" "${name}" "${ns}"
     fi
     rm -rf "${work}"
@@ -93,6 +113,22 @@ curl_ca=
 # shellcheck disable=SC2086 # curl_ca is empty or one option and its argument.
 pve() { curl -sS --fail ${curl_ca} -H "Authorization: PVEAPIToken=${KUBEHENGE_PROXMOX_TOKEN}" "$@"; }
 pve_get() { pve "${KUBEHENGE_PROXMOX_URL}/api2/json/$1"; }
+# pve_post <path> <curl options...>, pve_delete <path>: change Proxmox VE as its administrator.
+pve_post() {
+    api_path=$1
+    shift
+    pve -X POST "$@" "${KUBEHENGE_PROXMOX_URL}/api2/json/${api_path}" > /dev/null
+}
+pve_delete() { pve -X DELETE "${KUBEHENGE_PROXMOX_URL}/api2/json/$1" > /dev/null; }
+# remove_ha_rule: takes the HA rule the nodes are labelled with, its resource and guest away again,
+# in the order Proxmox VE allows.
+remove_ha_rule() {
+    [ -n "${ha_vmid}" ] || return 0
+    pve_delete "cluster/ha/rules/${ha_rule}"
+    pve_delete "cluster/ha/resources/vm:${ha_vmid}"
+    pve_delete "nodes/${ha_node}/qemu/${ha_vmid}?purge=1"
+    ha_vmid=''
+}
 wl() { KUBECONFIG="${work}/workload" kubectl "$@"; }
 json_list() { printf '%s' "$1" | jq -R 'split(",")'; }
 b64url() { base64 -w0 | tr '+/' '-_' | tr -d '='; }
@@ -196,7 +232,29 @@ cluster_network() {
 }
 
 step "create ${ns}/${name} from ${class} at ${version}"
-kubectl create namespace "${ns}"
+# creator: kubectl as whoever creates the cluster, the interface's account in one of its namespaces.
+if [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
+    kubectl -n kubehenge-system get configmap kubehenge-interface -o jsonpath='{.data.namespaces}' |
+        jq -e --arg n "${ns}" 'index($n) > 0' > /dev/null || fail "the interface is not given namespace ${ns}"
+    kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d > "${work}/management-ca.crt"
+    management_server=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+    interface_token=$(kubectl -n kubehenge-system get secret kubehenge-interface-token -o jsonpath='{.data.token}' | base64 -d)
+    creator_config="${work}/interface.kubeconfig"
+    kubectl --kubeconfig "${creator_config}" config set-cluster management --server="${management_server}" \
+        --certificate-authority="${work}/management-ca.crt" --embed-certs > /dev/null
+    kubectl --kubeconfig "${creator_config}" config set-credentials interface --token="${interface_token}" > /dev/null
+    kubectl --kubeconfig "${creator_config}" config set-context interface --cluster=management --user=interface > /dev/null
+    kubectl --kubeconfig "${creator_config}" config use-context interface > /dev/null
+    creator() { kubectl --kubeconfig "${creator_config}" "$@"; }
+    # can-i answers no with a non-zero exit as well as on the word.
+    in_namespace=$(kubectl --kubeconfig "${creator_config}" auth can-i create clusters.cluster.x-k8s.io -n "${ns}" || true)
+    in_default=$(kubectl --kubeconfig "${creator_config}" auth can-i create clusters.cluster.x-k8s.io -n default || true)
+    [ "${in_namespace}" = yes ] || fail "the interface may not create clusters in ${ns}"
+    [ "${in_default}" = no ] || fail "the interface may create clusters in default"
+else
+    kubectl create namespace "${ns}"
+    creator() { kubectl "$@"; }
+fi
 network_spec=$(cluster_network)
 addresses=$(json_list "${KUBEHENGE_E2E_ADDRESSES}")
 dns_servers=$(json_list "${KUBEHENGE_E2E_DNS}")
@@ -266,7 +324,7 @@ ${cni_variable}
       - name: cis
         value: true
 EOF
-kubectl apply -f "${work}/cluster.yaml"
+creator create -f "${work}/cluster.yaml"
 # capmox does not come back to a machine whose VM failed to provision, so the wait ends there rather
 # than at its timeout.
 available_or_failed() {
@@ -750,6 +808,205 @@ if [ "${KUBEHENGE_E2E_DATASTORE_ALLOCATE:-}" = 1 ]; then
     until_true 900 "the CSI plugin at ${held}" csi_at "${held}"
     persistent_volume
 fi
+
+if [ "${KUBEHENGE_E2E_VOLUME_SNAPSHOTS:-}" = 1 ]; then
+    kubectl -n kubehenge-system get secret kubehenge-root-pam > /dev/null ||
+        fail "no root@pam password is stored for volume snapshots"
+    # csi_controller_is <Secret> <true|false>: the CSI plugin's controller is rolled out reading its
+    # configuration from the Secret, with the snapshot sidecar or without.
+    csi_controller_is() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        deployments=$(wl -n kube-system get deployments -o json) || return 1
+        printf '%s' "${deployments}" | jq -e --arg s "$1" --argjson snap "$2" '
+            [.items[] | select(any(.spec.template.spec.volumes[]?; .name == "cloud-config" and .secret.items[0].key == "csi.yaml"))] |
+            length == 1 and all(
+                ([.spec.template.spec.volumes[] | select(.name == "cloud-config") | .secret.secretName][0] == $s) and
+                (any(.spec.template.spec.containers[]; .name == "csi-snapshotter") == $snap) and
+                (.status.observedGeneration // 0) >= .metadata.generation and
+                (.status.updatedReplicas // 0) == .spec.replicas and (.status.readyReplicas // 0) == .spec.replicas and
+                (.status.replicas // 0) == .spec.replicas)' > /dev/null
+    }
+    # signs_in_as_root: the plugin's root configuration names root@pam and no token; its password is
+    # never printed.
+    signs_in_as_root() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        config=$(wl -n kube-system get secret kubehenge-proxmox-root -o jsonpath='{.data.csi\.yaml}' 2> /dev/null) || return 1
+        decoded=$(printf '%s' "${config}" | base64 -d)
+        printf '%s\n' "${decoded}" | grep -qx '  username: root@pam' && ! printf '%s\n' "${decoded}" | grep -q token_
+    }
+    # not_found <kubectl get arguments>: the object is not found, rather than out of reach for a
+    # moment.
+    not_found() {
+        # shellcheck disable=SC2310 # the request failing is the answer looked for.
+        if answer=$(wl get "$@" 2>&1); then
+            return 1
+        fi
+        case ${answer} in
+            *NotFound* | *"not found"*) ;;
+            *) return 1 ;;
+        esac
+    }
+    # none_of <kubectl get arguments>: the list is read, and empty.
+    none_of() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        names=$(wl get "$@" -o name) && [ -z "${names}" ]
+    }
+    snapshot_ready() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        ready=$(wl -n default get volumesnapshot e2e -o jsonpath='{.status.readyToUse}') && [ "${ready}" = true ]
+    }
+    no_owned_volumes() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        volumes=$(owned) && [ "${volumes}" = 0 ]
+    }
+    # data_pod <name> <claim> <command>: runs a shell command against a volume, once.
+    data_pod() {
+        wl apply -f - << EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: $1
+  namespace: default
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: data
+      image: ${agnhost}
+      command: [sh, -ec, "$3"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: $2
+EOF
+        # shellcheck disable=SC2310 # a pod that did not succeed fails the step, with its last lines.
+        if ! wl -n default wait --for=jsonpath='{.status.phase}'=Succeeded "pod/$1" --timeout=10m; then
+            last=$(wl -n default logs "pod/$1" 2>&1 | tail -n 5) || true
+            fail "pod $1 did not succeed: ${last}"
+        fi
+    }
+
+    step "volume snapshots, with the CSI plugin signed in as root@pam"
+    set_variable csi '{"volumeSnapshots":true}'
+    until_true 300 "the CSI plugin's root@pam configuration" signs_in_as_root
+    until_true 900 "the CSI plugin's controller with the snapshot sidecar, signed in as root@pam" csi_controller_is kubehenge-proxmox-root true
+    until_true 600 "the VolumeSnapshotClass" wl get volumesnapshotclass proxmox
+    if [ "${distribution}" != rke2 ]; then
+        wl -n kube-system rollout status deployment -l app.kubernetes.io/name=snapshot-controller --timeout=5m
+    fi
+    wl apply -f - << 'EOF'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: e2e-source
+  namespace: default
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+EOF
+    # 64 MiB of random data and its checksum, written and flushed, and the volume detached again
+    # before its snapshot is taken.
+    data_pod e2e-write e2e-source 'head -c 67108864 /dev/urandom > /data/blob; cd /data; sha256sum blob > sum; sync'
+    wl -n default delete pod/e2e-write --wait --timeout=5m
+    wl apply -f - << 'EOF'
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: e2e
+  namespace: default
+spec:
+  volumeSnapshotClassName: proxmox
+  source:
+    persistentVolumeClaimName: e2e-source
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: e2e-restored
+  namespace: default
+spec:
+  accessModes: [ReadWriteOnce]
+  dataSource:
+    apiGroup: snapshot.storage.k8s.io
+    kind: VolumeSnapshot
+    name: e2e
+  resources:
+    requests:
+      storage: 1Gi
+EOF
+    until_true 900 "the volume snapshot ready to use" snapshot_ready
+    data_pod e2e-check e2e-restored 'cd /data; sha256sum -c sum'
+    wl -n default delete pod/e2e-check pvc/e2e-restored pvc/e2e-source volumesnapshot/e2e --wait --timeout=5m
+    # The CSI plugin retries a failed deletion with a back-off of up to five minutes.
+    until_true 600 "the snapshot's content deleted" none_of volumesnapshotcontents
+    until_true 600 "the volumes deleted" sh -c "[ \"\$(KUBECONFIG=${work}/workload kubectl get pv -o name | wc -l)\" = 0 ]"
+    until_true 600 "no volume left on ${KUBEHENGE_E2E_STORAGE}" no_owned_volumes
+
+    step "the CSI plugin with the cluster's token again, without volume snapshots"
+    set_variable csi '{"volumeSnapshots":false}'
+    until_true 900 "the CSI plugin's controller without the snapshot sidecar, with the cluster's token" csi_controller_is kubehenge-proxmox false
+    until_true 300 "the CSI plugin's root@pam configuration deleted" not_found -n kube-system secret kubehenge-proxmox-root
+    until_true 600 "the VolumeSnapshotClass removed" not_found volumesnapshotclass proxmox
+    until_true 600 "the snapshot controller removed" none_of -n kube-system deployments -l app.kubernetes.io/name=snapshot-controller
+    persistent_volume
+fi
+
+if [ "${KUBEHENGE_E2E_HA_GROUPS:-}" = 1 ]; then
+    # audit_is <true|false>: whether the cluster's token holds Sys.Audit on /.
+    audit_is() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        perms=$(cluster_get "access/permissions?path=/") || return 1
+        printf '%s' "${perms}" | jq -e --argjson want "$1" '([.data[] | has("Sys.Audit")] | any) == $want' > /dev/null
+    }
+    # labelled: every node carries the label of the test's HA rule.
+    labelled() {
+        wl get nodes -o json | jq -e --arg l "group.topology.proxmox.sinextra.dev/${ha_rule}" \
+            '.items | length > 0 and all(.metadata.labels | has($l))' > /dev/null
+    }
+    # The guest exists once Proxmox VE answers for it.
+    ha_guest_exists() { pve_get "nodes/${ha_node}/qemu/${ha_vmid}/status/current" > /dev/null 2>&1; }
+
+    step "nodes labelled with their HA rule, with Sys.Audit on / for the cluster's token"
+    # shellcheck disable=SC2310 # a failed read fails the step
+    audit_is false || fail "the cluster's token holds Sys.Audit on / without asking for it"
+    # A node-affinity rule over every node, for a guest of its own: Proxmox VE takes a rule only for
+    # HA resources, and a resource only for a guest that exists.
+    ha_node=$(pve_get nodes | jq -r '[.data[] | select(.status == "online") | .node][0]')
+    ha_nodes=$(pve_get nodes | jq -r '[.data[] | select(.status == "online") | .node] | join(",")')
+    ha_rule=${name}-labels
+    ha_vmid=$(pve_get cluster/nextid | jq -r .data)
+    pve_post "nodes/${ha_node}/qemu" --data-urlencode "vmid=${ha_vmid}" --data-urlencode "name=${ha_rule}" \
+        --data-urlencode memory=64
+    until_true 120 "guest ${ha_vmid}" ha_guest_exists
+    # Ignored, so that Proxmox VE HA neither starts the guest nor arms a node's watchdog for it.
+    pve_post cluster/ha/resources --data-urlencode "sid=vm:${ha_vmid}" --data-urlencode state=ignored
+    pve_post cluster/ha/rules --data-urlencode type=node-affinity --data-urlencode "rule=${ha_rule}" \
+        --data-urlencode "resources=vm:${ha_vmid}" --data-urlencode "nodes=${ha_nodes}"
+    set_variable ccm '{"haGroups":true}'
+    until_true 300 "the cluster's token to hold Sys.Audit on /" audit_is true
+    # The cloud controller manager labels the nodes when it next syncs them.
+    until_true 900 "every node labelled with HA rule ${ha_rule}" labelled
+    wl get nodes -L "group.topology.proxmox.sinextra.dev/${ha_rule}"
+
+    step "the cluster's token without Sys.Audit on / again"
+    set_variable ccm '{"haGroups":false}'
+    until_true 300 "the cluster's token to lose Sys.Audit on /" audit_is false
+    remove_ha_rule
+fi
 # guest <node> <vmid> <command>: runs a shell command in a VM through its guest agent and prints its
 # output; fails when the command or the agent does. It is polled with set -e off, so each step
 # returns its own failure.
@@ -828,6 +1085,59 @@ case ${pod_security} in
     # Only a pod that falls short of the level gets a warning.
     *) ;;
 esac
+# headlamp_pods: Headlamp's answer to a list of pods in its in-cluster context, asked through the
+# API server's service proxy. The admin kubeconfig signs in with a client certificate, which ends
+# at the API server, so Headlamp is sent no credentials of anyone's.
+headlamp_pods() { wl get --raw '/api/v1/namespaces/headlamp/services/http:headlamp:80/proxy/clusters/main/api/v1/pods?limit=1' 2>&1; }
+headlamp_lists_pods() { headlamp_pods | jq -e '.kind == "PodList"' > /dev/null 2>&1; }
+# headlamp_refuses: whether the API server refused Headlamp's request, rather than Headlamp being
+# out of reach for a moment.
+headlamp_refuses() {
+    # shellcheck disable=SC2310 # the request failing is the answer looked for.
+    if answer=$(headlamp_pods); then
+        return 1
+    fi
+    case ${answer} in
+        *Unauthorized* | *Forbidden* | *forbidden*) ;;
+        *) return 1 ;;
+    esac
+}
+# headlamp_flag <present|absent>: whether Headlamp's running Deployment uses its own account.
+headlamp_flag() {
+    # shellcheck disable=SC2310 # a Deployment not read yet is no answer, polled again.
+    args=$(wl -n headlamp get deployment/headlamp -o jsonpath='{.spec.template.spec.containers[0].args}') || return 1
+    case ${args} in
+        *-unsafe-use-service-account-token*) [ "$1" = present ] ;;
+        *) [ "$1" = absent ] ;;
+    esac
+}
+# headlamp_can <verb> <resource>: what Headlamp's service account may do across the cluster.
+headlamp_can() {
+    # shellcheck disable=SC2310 # can-i exits non-zero for its answer no, which the caller reads.
+    wl auth can-i "$1" "$2" --all-namespaces --as=system:serviceaccount:headlamp:headlamp 2> /dev/null || true
+}
+until_true 120 "Headlamp refuses to list pods without a token" headlamp_refuses
+
+step "Headlamp read-only for everyone"
+set_variable headlamp '{"enabled":true,"access":"view"}'
+until_true 600 "Headlamp started with its own account" headlamp_flag present
+wl -n headlamp rollout status deployment/headlamp --timeout=10m
+until_true 120 "Headlamp lists pods without a token" headlamp_lists_pods
+can_list=$(headlamp_can list pods)
+[ "${can_list}" = yes ] || fail "Headlamp's service account cannot list pods"
+for denied in "get secrets" "list secrets" "create pods" "delete deployments" "list nodes"; do
+    # shellcheck disable=SC2086 # the verb and the resource, split on purpose.
+    allowed=$(headlamp_can ${denied})
+    [ "${allowed}" = no ] || fail "Headlamp's service account may ${denied}"
+done
+
+step "Headlamp back to everyone's own token"
+set_variable headlamp '{"enabled":true}'
+until_true 600 "Headlamp started without its own account" headlamp_flag absent
+wl -n headlamp rollout status deployment/headlamp --timeout=10m
+can_list=$(headlamp_can list pods)
+[ "${can_list}" = no ] || fail "Headlamp's service account keeps its view binding"
+until_true 120 "Headlamp refuses to list pods without a token again" headlamp_refuses
 
 step "pod security enforced, with Kyverno switched on"
 # privileged_pod <namespace>: asks the API server to admit a privileged pod, without creating it.
@@ -1473,7 +1783,7 @@ until_true 1800 "machine ${machine} replaced" absent kubectl -n "${ns}" get mach
 workers 1
 
 step "delete"
-kubectl -n "${ns}" delete "cluster/${name}" --wait --timeout=30m
+creator -n "${ns}" delete "cluster/${name}" --wait --timeout=30m
 # A failed request is not an empty list.
 # shellcheck disable=SC2310 # polled; a failed request leaves the pool counted as there.
 pool_removed() { pools=$(pve_get pools) && ! printf '%s' "${pools}" | jq -e --arg p "${pool}" '.data[] | select(.poolid == $p)' > /dev/null; }
@@ -1483,7 +1793,28 @@ printf '%s' "${users}" | jq -e --arg u "${user}" '[.data[] | select(.userid == $
 vms=$(pve_get "cluster/resources?type=vm")
 printf '%s' "${vms}" | jq -e --argjson o "${owner}" --arg n "${name}" '[.data[] | select(.vmid == $o or (.name // "" | startswith($n + "-")))] | length == 0' > /dev/null ||
     fail "VMs of the cluster are still there"
-if ! kubectl delete namespace "${ns}" --wait --timeout=5m; then
+if [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
+    # The namespace is the appliance's and stays; nothing of the cluster may, once the garbage
+    # collector has taken what the Cluster owned, but its backup keys: they stay beside it, so that
+    # a cluster made again under its name reads its backups.
+    keys=secret/${name}-backup-keys
+    # left_of_cluster: what of the cluster is still in its namespace, its backup keys aside.
+    left_of_cluster() {
+        objects=$(kubectl -n "${ns}" get secrets,configmaps,machines -l "cluster.x-k8s.io/cluster-name=${name}" -o name) || return 1
+        printf '%s\n' "${objects}" | grep -vxF -e "${keys}" -e '' || true
+    }
+    # A failed request is not an empty list.
+    # shellcheck disable=SC2310 # polled; a failed request counts as something left.
+    nothing_left() { left=$(left_of_cluster) && [ -z "${left}" ]; }
+    # shellcheck disable=SC2310 # until_true fails on its own; the subshell lets the leftovers be named.
+    if ! (until_true 300 "nothing of ${name} left in ${ns}" nothing_left); then
+        left=$(left_of_cluster) || left='(no answer)'
+        fail "still in ${ns}: ${left}"
+    fi
+    kubectl -n "${ns}" get "${keys}" > /dev/null || fail "${name}'s backup keys went with it"
+    # A test cluster's keys guard backups of nothing, and the namespace outlives the test.
+    kubectl -n "${ns}" delete "${keys}" > /dev/null
+elif ! kubectl delete namespace "${ns}" --wait --timeout=5m; then
     # Its conditions say what is left in it and whose finalizers hold that.
     left=$(kubectl get namespace "${ns}" -o jsonpath='{range .status.conditions[?(@.status=="True")]}{.message}; {end}' || true)
     fail "namespace ${ns} is still there: ${left}"

@@ -75,29 +75,8 @@ func (r *Reconciler) policiesWait(ctx context.Context, cluster *clusterv1.Cluste
 	case !apierrors.IsNotFound(err):
 		return false, fmt.Errorf("reading add-on %s: %w", kyvernoPoliciesProxy(cluster), err)
 	}
-	err = r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: kyvernoProxy(cluster)}, p)
-	switch {
-	case apierrors.IsNotFound(err):
-		return true, nil
-	case err != nil:
-		return false, fmt.Errorf("reading add-on %s: %w", kyvernoProxy(cluster), err)
-	}
-	conditions, _, err := unstructured.NestedSlice(p.Object, "status", "conditions")
-	if err != nil {
-		return false, fmt.Errorf("reading add-on %s's conditions: %w", kyvernoProxy(cluster), err)
-	}
-	for _, c := range conditions {
-		ready, ok := c.(map[string]any)
-		if !ok || ready["type"] != "Ready" {
-			continue
-		}
-		generation, _, err := unstructured.NestedInt64(ready, "observedGeneration")
-		if err != nil {
-			return false, fmt.Errorf("reading add-on %s's conditions: %w", kyvernoProxy(cluster), err)
-		}
-		return ready["status"] != "True" || generation != p.GetGeneration(), nil
-	}
-	return true, nil
+	ready, err := r.proxyReady(ctx, cluster, kyvernoProxy(cluster))
+	return !ready, err
 }
 
 // removeKyverno uninstalls Kyverno's policies, and Kyverno once they are gone: their release

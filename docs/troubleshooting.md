@@ -60,7 +60,7 @@ Kubehenge's controller, `kubehenge-controller` in `kubehenge-system`, creates ea
 
 ### Cluster API objects
 
-A cluster's objects are in its namespace, `clusters` for those created in the interface:
+A cluster's objects are in its namespace, `clusters` for those created in the interface unless another of its namespaces was chosen:
 
 ```sh
 kubectl -n clusters get clusters,machines,proxmoxmachines
@@ -95,7 +95,7 @@ The task log shows what each Kubehenge account did. In an appliance's management
 - **"Kubehenge is not set up yet"** for an administrator: the user lacks one of the [setup privileges](install.md#who-may-set-it-up) on `/`.
 - **A cluster is missing from the list:** the user lacks `VM.Audit` on its pool. A role given on the cluster's own pool replaces, for that pool, what the user inherits from the workload pool, so it has to hold `VM.Audit` too.
 - **"`<user>` needs `<privilege>` on `<path>`"** names exactly what to grant ([clusters.md](clusters.md#who-may-do-what)).
-- **Buttons are disabled or missing:** Scale, Upgrade, Delete and the **Edit** buttons under Options need `VM.Allocate` on the cluster's pool, and the page says so when it is missing; installing Rancher, offered when a cluster is created, needs `Sys.Modify` on the workload pool, and adding or changing identity providers needs it on the workload pool when creating and on the cluster's pool when changing; **Kubeconfig** needs `Sys.Modify` there and shows once the cluster is available. Clusters outside the interface's namespace are read-only there.
+- **Buttons are disabled or missing:** Scale, Upgrade, Delete and the **Edit** buttons under Options need `VM.Allocate` on the cluster's pool, and the page says so when it is missing; installing Rancher, offered when a cluster is created, needs `Sys.Modify` on the workload pool, and adding or changing identity providers needs it on the workload pool when creating and on the cluster's pool when changing; **Kubeconfig** needs `Sys.Modify` there and shows once the cluster is available. Clusters outside the interface's namespaces are read-only there.
 - **No bridges to choose from:** Proxmox VE lists a node's bridges only with `Sys.Audit` on the node; type the bridge's name instead. A bridge marked "no SDN.Use" needs that privilege on `/sdn/zones/localnetwork/<bridge>`.
 - **"Proxmox VE no longer accepts the session":** the session ended; sign in again. Sessions last eight hours.
 - **Sign-in refused after several tries:** five failures within 15 minutes, for a user or from an address, lock further attempts for a while.
@@ -160,7 +160,7 @@ Nodes keep the taint `node.cloudprovider.kubernetes.io/uninitialized`, and pods 
 
 Persistent volumes that stay pending point the same way: the CSI plugin's controller uses the same address and token.
 
-The cloud controller manager logs `failed to get HA group for the node` with `403 Permission check failed (/, Sys.Audit)` for every node now and then. That is expected and harmless: reading Proxmox VE's HA groups needs `Sys.Audit` on `/`, which would let the cluster's token read the whole Proxmox VE cluster's configuration, so Kubehenge does not grant it, and the nodes only go without the HA group labels.
+The cloud controller manager logs `failed to get HA group for the node` with `403 Permission check failed (/, Sys.Audit)` for every node now and then. That is harmless: reading Proxmox VE's HA groups needs `Sys.Audit` on `/`, which a cluster's token holds only with **Label the nodes with their Proxmox VE HA groups** on (the `ccm` variable's `haGroups`, [clusters.md](clusters.md#machines)), and without it the nodes only go without the HA group labels. Where the option is not offered, the administrator switches on **HA group labels** in the setup ([install.md](install.md#ha-group-labels)). With it on, the messages stop within a few minutes; if they do not, `kubectl describe cluster` shows a `SysAuditRefused` event saying why.
 
 ### A cluster waits before any VM exists
 
@@ -207,6 +207,14 @@ A message saying "the cluster's add-ons (…) need … MiB of memory on its work
 - **Removing Rancher takes long:** it waits until Rancher has let go of every registered cluster, which needs each of them reachable; the Rancher cluster shows `RemovingRancher` events meanwhile, and everything else about it is still applied.
 - **Clusters do not register:** Rancher's host name must resolve, for people and for every registered cluster, to the Rancher cluster's ingress controller, which answers on the cluster's API address and on every node.
 - **Rancher's agent stays after a cluster leaves Rancher:** Rancher removes it with a `cattle-cleanup-…` job in the `default` namespace, whose pod does not meet `restricted` ([rancher/rancher#58081](https://github.com/rancher/rancher/issues/58081)). In a cluster that holds `default` to `restricted`, the job shows `FailedCreate` events naming the settings it lacks, and keeps trying. Let it run by holding `default` to `baseline` until the job has finished: with Pod Security Admission, `kubectl label namespace default pod-security.kubernetes.io/enforce=baseline`, and afterwards `kubectl label namespace default pod-security.kubernetes.io/enforce-`; with Kyverno, set its level to `baseline` under **Pod security** and back afterwards. A cluster being deleted needs none of this, since its VMs go with the agent.
+
+### Volume snapshots
+
+- **The option is missing:** the administrator has not switched on **Volume snapshots** in the setup ([install.md](install.md#volume-snapshots)).
+- **The option is refused:** the cluster's storage is shared or of a type the CSI plugin does not copy on, or you lack `Permissions.Modify` on `/`; the option says which.
+- **A VolumeSnapshot stays not ready:** `kubectl describe volumesnapshotcontent` shows the CSI plugin's error. An authentication failure there means `root@pam`'s password changed, or a second factor was added to it: give the new password in the setup (Administration page, **Edit…** in the Management cluster section) and apply, or take the second factor off `root@pam`. A `VolumeSnapshotsRefused` event on the cluster (`kubectl describe cluster`) says why Kubehenge gave the plugin the cluster's token instead.
+- **`failed to copy disk` with `pvesm export … | /usr/bin/ssh … pvesm import …` and `exit code 255`:** Proxmox VE copies a volume by piping it through SSH as root to the node the copy goes to, even when that is the same node, and the node could not reach itself. On the node, `ssh -o UserKnownHostsFile=/etc/pve/nodes/<node>/ssh_known_hosts -o GlobalKnownHostsFile=none -o BatchMode=yes -o HostKeyAlias=<node> root@<node's address> true` shows why: the SSH server is not running, `root`'s key is not among the keys it lets in, or the node has no SSH host key under its name in that file (when the file is missing, the copy's command has no `UserKnownHostsFile`). `pvecm updatecerts` puts the keys back where Proxmox VE expects them; the task's log under the node's **Task History** shows the copy's full error.
+- **A large volume's snapshot or restore fails, or holds less than it should:** Proxmox VE copies the volume while the plugin waits up to 4 minutes; a copy that takes longer can leave a snapshot reported ready before its data is all written ([clusters.md](clusters.md#volume-snapshots)). Delete it and take snapshots of smaller volumes.
 
 ### A cluster does not finish deleting
 

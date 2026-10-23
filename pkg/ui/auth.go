@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
@@ -33,14 +34,30 @@ type sessionView struct {
 	// CanTrust tells whether the user holds Sys.Modify on the workload pool, which installing
 	// Rancher and trusting identity providers of one's own need; unset when not known.
 	CanTrust *bool `json:"canTrust,omitempty"`
-	// Namespace is where the interface creates clusters, so it can offer the ones a new cluster
-	// can be linked with.
+	// CanAudit tells whether the user holds Sys.Audit on /, which giving a cluster's token the same
+	// for its HA group labels needs; unset when not known.
+	CanAudit *bool `json:"canAudit,omitempty"`
+	// CanModifyPermissions tells whether the user holds Permissions.Modify on /, which giving a
+	// cluster's CSI plugin root@pam for volume snapshots needs; unset when not known.
+	CanModifyPermissions *bool `json:"canModifyPermissions,omitempty"`
+	// Namespace is where the interface creates clusters unless the creator chooses another of
+	// Namespaces, so it can offer the ones a new cluster can be linked with.
 	Namespace string `json:"namespace,omitempty"`
+	// Namespaces are every namespace the interface creates and changes clusters in, Namespace
+	// first; unset when not known.
+	Namespaces []string `json:"namespaces,omitempty"`
 }
 
-// signedInView describes a signed-in session.
-func (s *Server) signedInView(username string, sess *session) sessionView {
+// signedInView describes a signed-in session. Where the interface manages clusters is an addition
+// to it: a management cluster that does not answer leaves it unknown rather than the user signed
+// out.
+func (s *Server) signedInView(ctx context.Context, username string, sess *session) sessionView {
 	v := sessionView{User: username, CSRF: sess.csrf, Namespace: s.Namespace}
+	if namespaces, err := s.namespaces(ctx, s.currentKube()); err == nil {
+		v.Namespace, v.Namespaces = namespaces[0], namespaces
+	} else {
+		s.Log.Error("reading the namespaces the interface manages", "error", err)
+	}
 	if s.Headlamp != nil {
 		v.Headlamp = s.Headlamp.Port
 	}
@@ -90,7 +107,7 @@ func (s *Server) signIn(w http.ResponseWriter, r *http.Request) {
 	if ticket != nil {
 		sess := s.sessions.start(w, ticket, nil)
 		s.Log.Info("signed in", "user", ticket.Username, "address", clientAddress(r))
-		writeJSON(w, http.StatusOK, s.signedInView(ticket.Username, sess))
+		writeJSON(w, http.StatusOK, s.signedInView(r.Context(), ticket.Username, sess))
 		return
 	}
 	if !challenge.TOTP && !challenge.Yubico && len(challenge.Recovery) == 0 {
@@ -153,14 +170,18 @@ func (s *Server) secondFactor(w http.ResponseWriter, r *http.Request) {
 	s.sessions.end(w, r)
 	next := s.sessions.start(w, ticket, nil)
 	s.Log.Info("signed in", "user", ticket.Username, "address", clientAddress(r), "secondFactor", req.Kind)
-	writeJSON(w, http.StatusOK, s.signedInView(ticket.Username, next))
+	writeJSON(w, http.StatusOK, s.signedInView(r.Context(), ticket.Username, next))
 }
 
 func (s *Server) whoAmI(w http.ResponseWriter, r *http.Request, u user) {
-	v := s.signedInView(u.ticket.Username, u.session)
+	v := s.signedInView(r.Context(), u.ticket.Username, u.session)
 	if held, err := s.Accounts.Privileges(r.Context(), u.ticket, s.workloadPoolPath()); err == nil {
 		create, trust := held.Has(privChange), held.Has(privKubeconfig)
 		v.CanCreate, v.CanTrust = &create, &trust
+	}
+	if held, err := s.Accounts.Privileges(r.Context(), u.ticket, "/"); err == nil {
+		audit, permissions := held.Has(privSysAudit), held.Has(privPermissionsModify)
+		v.CanAudit, v.CanModifyPermissions = &audit, &permissions
 	}
 	writeJSON(w, http.StatusOK, v)
 }

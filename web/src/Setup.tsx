@@ -89,6 +89,13 @@ export interface SetupForm {
   refreshGateway: string;
   refreshDNS: string;
   creatorBuilds: boolean;
+  clusterSysAudit: boolean;
+  clusterVolumeSnapshots: boolean;
+  // Sent beside the settings, never kept in them; empty keeps the one stored.
+  rootPassword: string;
+  moreNamespaces: boolean;
+  // Separated by commas or lines.
+  extraNamespaces: string;
   passphrase: string;
   confirm: string;
 }
@@ -122,6 +129,24 @@ function refreshSettings(f: SetupForm): NonNullable<ManagementSettings["template
   return r;
 }
 
+/** The namespace the interface creates clusters in, whatever others it is given. */
+export const ownNamespace = "clusters";
+
+// namespaceProblem says why a namespace cannot hold clusters beside ownNamespace, as the appliance
+// checks it, or returns undefined.
+function namespaceProblem(ns: string): string | undefined {
+  if (!/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/u.test(ns)) {
+    return `${ns} is no namespace name: lowercase letters, digits and dashes, at most 63.`;
+  }
+  if (ns === ownNamespace) {
+    return `${ns} is the interface's own namespace already.`;
+  }
+  if (ns === "default" || ns === "cert-manager" || ns.startsWith("kube-") || ns.endsWith("-system")) {
+    return `${ns} holds Kubernetes', the providers' or Kubehenge's own objects.`;
+  }
+  return undefined;
+}
+
 const mirrorLines = (text: string): string[] =>
   text
     .split("\n")
@@ -144,6 +169,9 @@ function formatMirrors(m: Record<string, string[]> | undefined): string {
     .flatMap(([registry, endpoints]) => endpoints.map((e) => `${registry}=${e}`))
     .join("\n");
 }
+
+/** rootPasswordOf is the root@pam password a run hands over: none while volume snapshots are off. */
+export const rootPasswordOf = (f: SetupForm): string => (f.clusterVolumeSnapshots ? f.rootPassword : "");
 
 export function settings(f: SetupForm): ManagementSettings {
   const s: ManagementSettings = {
@@ -191,6 +219,15 @@ export function settings(f: SetupForm): ManagementSettings {
     s.backupTargets = cleanTargets(f.backupTargets);
   }
   s.templateRefresh = refreshSettings(f);
+  if (f.clusterSysAudit) {
+    s.clusterSysAudit = true;
+  }
+  if (f.clusterVolumeSnapshots) {
+    s.clusterVolumeSnapshots = true;
+  }
+  if (f.moreNamespaces && list(f.extraNamespaces).length > 0) {
+    s.extraClusterNamespaces = list(f.extraNamespaces);
+  }
   return s;
 }
 
@@ -264,6 +301,11 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     clusterDatastoreAllocate: saved.clusterDatastoreAllocate === true,
     backupTargets: saved.backupTargets ?? [],
     ...refreshFields(saved.templateRefresh),
+    clusterSysAudit: saved.clusterSysAudit === true,
+    clusterVolumeSnapshots: saved.clusterVolumeSnapshots === true,
+    rootPassword: "",
+    moreNamespaces: (saved.extraClusterNamespaces ?? []).length > 0,
+    extraNamespaces: (saved.extraClusterNamespaces ?? []).join(", "),
     passphrase: "",
     confirm: "",
   };
@@ -289,6 +331,8 @@ export type SetupField =
   | "refreshAddress"
   | "refreshGateway"
   | "refreshDNS"
+  | "extraNamespaces"
+  | "rootPassword"
   | "passphrase"
   | "confirm";
 
@@ -345,6 +389,11 @@ export function setupFieldProblems(
     ...offerProblems(f),
     ...refreshProblems(f),
   };
+  // Switched on again, the password stored with the first switch-on stays unless another is given.
+  if (f.clusterVolumeSnapshots && was?.clusterVolumeSnapshots !== true && !filled(f.rootPassword)) {
+    p.rootPassword =
+      "Give root@pam's password, which the CSI plugins of clusters taking volume snapshots sign in with.";
+  }
   if (passphraseShort(f.passphrase)) {
     p.passphrase = `The passphrase needs at least ${minPassphrase} characters.`;
   } else if (firstRun && f.passphrase !== f.confirm) {
@@ -451,6 +500,18 @@ function offerProblems(f: SetupForm): SetupProblems {
     const wrong = list(f[key]).find((r) => rangeProblem(r) !== undefined);
     if (wrong !== undefined) {
       p[key] = `${wrong} is no IPv4 network such as 10.244.0.0/16, without host bits.`;
+    }
+  }
+  if (f.moreNamespaces) {
+    const names = list(f.extraNamespaces);
+    const twice = names.find((n, i) => names.indexOf(n) !== i);
+    const wrong = names.map((n) => namespaceProblem(n)).find((x) => x !== undefined);
+    if (names.length === 0) {
+      p.extraNamespaces = "Name at least one namespace, or leave clusters in their own.";
+    } else if (wrong !== undefined) {
+      p.extraNamespaces = wrong;
+    } else if (twice !== undefined) {
+      p.extraNamespaces = `${twice} is named twice.`;
     }
   }
   return p;
@@ -624,6 +685,24 @@ function refreshSummary(s: ManagementSettings): string {
   return parts.join(", ");
 }
 
+// optInRows summarise the choices, each off by default, that let Kubehenge or the clusters do more
+// in Proxmox VE than their pools allow.
+function optInRows(s: ManagementSettings): [string, string][] {
+  return [
+    ["Proxmox VE HA", s.proxmoxHA === true ? "Keeps clusters' control-plane VMs on separate nodes" : "Off"],
+    ["HA rules for cluster creators", s.offerHARules === true ? "Offered by name and nodes" : "Off"],
+    [
+      "CSI plugin's newest release",
+      s.clusterDatastoreAllocate === true ? "Clusters may choose it, on a storage of their own" : "Off",
+    ],
+    ["HA group labels", s.clusterSysAudit === true ? "Clusters may choose them, with Sys.Audit on /" : "Off"],
+    [
+      "Volume snapshots",
+      s.clusterVolumeSnapshots === true ? "Clusters may take them, with their CSI plugin signed in as root@pam" : "Off",
+    ],
+  ];
+}
+
 function ManagedSummary({
   status,
   settings: s,
@@ -648,13 +727,9 @@ function ManagedSummary({
     ["DNS servers", s.dnsServers.join(", ")],
     ["Storages for clusters", s.workloadDatastores.join(", ")],
     ["Bridges for clusters", s.workloadBridges.join(", ")],
-    ["Proxmox VE HA", s.proxmoxHA === true ? "Keeps clusters' control-plane VMs on separate nodes" : "Off"],
-    ["HA rules for cluster creators", s.offerHARules === true ? "Offered by name and nodes" : "Off"],
-    [
-      "CSI plugin's newest release",
-      s.clusterDatastoreAllocate === true ? "Clusters may choose it, on a storage of their own" : "Off",
-    ],
+    ...optInRows(s),
     ["Template refresh", refreshSummary(s)],
+    ["Namespaces for clusters", [ownNamespace, ...(s.extraClusterNamespaces ?? [])].join(", ")],
     [
       "Identity providers",
       s.clusterOIDC && s.clusterOIDC.length > 0 ? s.clusterOIDC.map((p) => p.issuerURL).join(", ") : "None",
@@ -1133,6 +1208,108 @@ function RefreshChoice({ form, set, shown }: FieldsProps): JSX.Element {
   );
 }
 
+function SysAuditChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element {
+  const hint = useId();
+  return (
+    <fieldset className="group">
+      <legend>HA group labels</legend>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.clusterSysAudit}
+          aria-describedby={hint}
+          onChange={(e) => set("clusterSysAudit", e.target.checked)}
+        />{" "}
+        Let clusters label their nodes with Proxmox VE&apos;s HA groups
+      </label>
+      <p className="muted" id={hint}>
+        The cloud controller manager reads Proxmox VE&apos;s HA groups and node-affinity rules, which takes Sys.Audit on
+        /. A cluster that chooses the labels gets that, unpropagated, through a group Kubehenge&apos;s controller adds
+        its user to; it can then read the Proxmox VE cluster&apos;s own configuration, but nothing of its guests,
+        storages or nodes.
+      </p>
+    </fieldset>
+  );
+}
+
+function VolumeSnapshotsChoice({
+  form,
+  set,
+  shown,
+  fixed,
+}: FieldsProps & { fixed: ManagementSettings | undefined }): JSX.Element {
+  const hint = useId();
+  const stored = fixed?.clusterVolumeSnapshots === true;
+  return (
+    <fieldset className="group">
+      <legend>Volume snapshots</legend>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.clusterVolumeSnapshots}
+          aria-describedby={hint}
+          onChange={(e) => set("clusterVolumeSnapshots", e.target.checked)}
+        />{" "}
+        Let clusters take volume snapshots
+      </label>
+      <p className="muted" id={hint}>
+        The CSI plugin copies volumes for snapshots, restores and clones through a Proxmox VE method that only root@pam
+        may call, with a password and without a second factor; no API token can. A cluster that chooses volume snapshots
+        gets root@pam&apos;s password in its CSI plugin&apos;s configuration, so whoever takes over that cluster or
+        reads that Secret holds the whole Proxmox VE cluster. The password is kept in the management cluster, never on
+        the appliance. Switching this off removes it, and clusters go back to their own tokens.
+      </p>
+      {form.clusterVolumeSnapshots && (
+        <Field
+          label="root@pam's password"
+          hint={stored ? "Leave empty to keep the one stored." : "Proxmox VE checks it before anything is applied."}
+          error={shown("rootPassword")}
+        >
+          {(id) => (
+            <input
+              id={id}
+              type="password"
+              autoComplete="off"
+              value={form.rootPassword}
+              onChange={(e) => set("rootPassword", e.target.value)}
+            />
+          )}
+        </Field>
+      )}
+    </fieldset>
+  );
+}
+
+function NamespacesChoice({ form, set, shown }: FieldsProps): JSX.Element {
+  const hint = useId();
+  return (
+    <fieldset className="group">
+      <legend>Namespaces for clusters</legend>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.moreNamespaces}
+          aria-describedby={hint}
+          onChange={(e) => set("moreNamespaces", e.target.checked)}
+        />{" "}
+        Let cluster creators choose among more namespaces than {ownNamespace}
+      </label>
+      <p className="muted" id={hint}>
+        Such as one per team. Each cluster still has its own pool, and seeing or changing it still takes the privileges
+        on that pool. A namespace is created if it is missing; one taken off the list keeps its clusters, which are then
+        changed with kubectl.
+      </p>
+      {form.moreNamespaces && (
+        <Field label="Namespaces" hint="Separated by commas, such as team-a, team-b." error={shown("extraNamespaces")}>
+          {(id) => (
+            <input id={id} value={form.extraNamespaces} onChange={(e) => set("extraNamespaces", e.target.value)} />
+          )}
+        </Field>
+      )}
+    </fieldset>
+  );
+}
+
 function AdvancedFields({
   form,
   set,
@@ -1339,8 +1516,8 @@ function SetupWizard({
     setBusy(true);
     setError(undefined);
     try {
-      await api.setup(settings(effective), form.passphrase);
-      setForm((f) => ({ ...f, passphrase: "", confirm: "" }));
+      await api.setup(settings(effective), form.passphrase, rootPasswordOf(effective));
+      setForm((f) => ({ ...f, passphrase: "", confirm: "", rootPassword: "" }));
       onStarted();
     } catch (err) {
       setError(errorMessage(err));
@@ -1528,6 +1705,9 @@ function SetupWizard({
         <HARulesChoice form={form} set={set} />
         <DatastoreAllocateChoice form={form} set={set} />
         <RefreshChoice form={effective} set={set} shown={shown} />
+        <SysAuditChoice form={form} set={set} />
+        <VolumeSnapshotsChoice form={form} set={set} shown={shown} fixed={fixed} />
+        <NamespacesChoice form={form} set={set} shown={shown} />
         <fieldset className="group">
           <legend>Identity providers</legend>
           <p className="muted">

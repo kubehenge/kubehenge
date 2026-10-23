@@ -351,7 +351,8 @@ resource "helm_release" "kubehenge" {
       workloadPool       = proxmox_virtual_environment_pool.workload.pool_id
       providerNamespaces = local.class_provider_namespaces
       interface = {
-        offerHARules = var.offer_ha_rules
+        extraNamespaces = var.extra_cluster_namespaces
+        offerHARules    = var.offer_ha_rules
       }
       clusters = {
         storages = var.workload_datastores
@@ -368,6 +369,10 @@ resource "helm_release" "kubehenge" {
           role               = var.cluster_datastore_allocate ? proxmox_virtual_environment_role.cluster_datastore[0].role_id : ""
           managementStorages = local.management_storages
         }
+        sysAuditGroup = var.cluster_sys_audit ? proxmox_virtual_environment_group.clusters_audit[0].group_id : ""
+        # Written by the appliance, never by this module, so that the password stays out of the
+        # state.
+        volumeSnapshots = { rootSecret = var.cluster_volume_snapshots ? "kubehenge-root-pam" : "" }
       }
       templateRefresh = {
         enabled       = local.template_builder.enabled

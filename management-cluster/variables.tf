@@ -341,6 +341,39 @@ variable "template_refresh" {
   }
 }
 
+variable "cluster_sys_audit" {
+  description = "Let each cluster choose the cloud controller manager's HA group labels, which need Sys.Audit on /: Kubehenge's controller then adds that cluster's user to a group holding Sys.Audit on /, unpropagated, so that its token can list Proxmox VE's HA groups and rules and read the rest of the Proxmox VE cluster's own configuration, but nothing of its guests, storages, nodes or users. Off, no cluster's token holds Sys.Audit on / and nodes go without the labels."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "cluster_volume_snapshots" {
+  description = "Let each cluster choose volume snapshots, restores and clones of its persistent volumes. The Proxmox VE CSI plugin copies volumes through a method only root@pam may call (no API token passes), so the CSI plugin of a cluster that chooses them signs in to Proxmox VE as root@pam, and whoever takes over that cluster or reads its Proxmox VE Secret holds the whole Proxmox VE cluster. The password is no variable: Kubehenge's controller reads it from the Secret kubehenge-root-pam (key password) in the kubehenge-system namespace, which Kubehenge's appliance writes; root@pam must have no second factor. Only on storage local to each node (ZFS, LVM, LVM-thin, directory or btrfs)."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "extra_cluster_namespaces" {
+  description = "More namespaces of the management cluster for workload clusters, beside clusters: the web interface creates, changes and hands out kubeconfigs of clusters in each, with the same rights it has in clusters, and lets whoever creates a cluster choose among them. The namespaces are created when missing and kept with their clusters when taken out of the list; the interface's rights there go. None may be one of Kubernetes', the providers' or Kubehenge's own: default, kube-*, *-system or cert-manager."
+  type        = list(string)
+  default     = []
+  nullable    = false
+
+  validation {
+    condition = (
+      length(distinct(var.extra_cluster_namespaces)) == length(var.extra_cluster_namespaces) &&
+      alltrue([for n in var.extra_cluster_namespaces : (
+        can(regex("^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$", n)) &&
+        !contains(["clusters", "default", "cert-manager"], n) &&
+        !startswith(n, "kube-") && !endswith(n, "-system")
+      )])
+    )
+    error_message = "extra_cluster_namespaces names each namespace once, as a DNS label, and none of clusters, default, kube-*, *-system or cert-manager."
+  }
+}
+
 variable "controller_image" {
   description = "Image of Kubehenge's controller by digest, as repository@sha256:<digest>, instead of the one the chart was released with."
   type        = string

@@ -384,7 +384,12 @@ func TestHealthWithoutAWayIn(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, notSetUp},
-		{"outside the interface's namespace", func(h *harness) { h.server.Namespace = "clusters" }, "Kubehenge reads inside the clusters of its own namespace, clusters, only"},
+		{"outside the interface's namespace", func(h *harness) { h.server.Namespace = "clusters" }, "Kubehenge reads inside the clusters of the namespace clusters only"},
+		{"outside the interface's namespaces", func(h *harness) {
+			if err := h.kube.Create(context.Background(), managedConfigMap(`["clusters","team-a"]`)); err != nil {
+				t.Fatal(err)
+			}
+		}, "Kubehenge reads inside the clusters of the namespaces clusters, team-a only"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

@@ -20,6 +20,12 @@ interface:
   # Namespace the web interface creates clusters in; it changes and hands out kubeconfigs only of
   # the clusters there. Their pools are <workloadPool>/<namespace>.<cluster name>.
   namespace: clusters
+  # More namespaces the interface creates, changes and hands out kubeconfigs of clusters in, with
+  # the same rights as in namespace, such as one per team. The chart creates each one that does not
+  # exist yet and keeps it when it leaves this list, so that the clusters in it stay; the
+  # interface's rights there go. A namespace of Kubernetes', the providers' or Kubehenge's own
+  # (default, kube-*, *-system, cert-manager) is refused.
+  extraNamespaces: []
   # Whether those who may create or change a cluster, but not read Proxmox VE's HA rules (Sys.Audit
   # on /), are offered the HA node-affinity rules as places for its VMs: their names and nodes,
   # never their comments or resources. The controller reads them with its own token, which holds
@@ -98,6 +104,17 @@ proxmox:
   datastoreAllocate:
     role: ""
     managementStorages: []
+  # Group holding Sys.Audit on /, unpropagated, that the controller adds the user of each cluster
+  # asking for the cloud controller manager's HA group labels (its ccm variable) to; the
+  # controller's token needs User.Modify on /access/groups/<group>. Empty: no cluster may ask for
+  # them.
+  sysAuditGroup: ""
+  # Secret in the release namespace holding root@pam's password (key password), with which the CSI
+  # plugin of each cluster that takes volume snapshots (its csi variable's volumeSnapshots) signs
+  # in: the plugin copies volumes through a method only root@pam may call. Written by the
+  # appliance, never by this chart. Empty: no cluster may take them.
+  volumeSnapshots:
+    rootSecret: ""
 
 # Building the Ubuntu VM templates again every week, with the updates Ubuntu published since, as a
 # CronJob signed in with a token of its own. Clusters move their nodes to a new build inside their
@@ -539,6 +556,19 @@ addons:
         image:
           # renovate: datasource=docker depName=registry.k8s.io/sig-storage/livenessprobe
           tag: v2.20.0@sha256:19f2cf2f40e1987c7943945deca5f65cd4e4bf5cc0657fc78a5df131861578e8
+  # The VolumeSnapshot CRDs and snapshot controller, for kubeadm and k3s clusters that take volume
+  # snapshots (RKE2 runs its own), and the VolumeSnapshotClass of the CSI plugin, on every
+  # distribution, from a second release of the chart.
+  snapshotController:
+    repository: oci://ghcr.io/piraeusdatastore/helm-charts
+    chart: snapshot-controller
+    # renovate: datasource=docker depName=ghcr.io/piraeusdatastore/helm-charts/snapshot-controller
+    version: 5.4.0@sha256:b885ec62379a71eca0a6b97373fc342280c7f65885608d522ee908c023f86bae
+    values:
+      controller:
+        image:
+          # renovate: datasource=docker depName=registry.k8s.io/sig-storage/snapshot-controller
+          tag: v8.7.0@sha256:8511f417d0072efcd937aedd7cc79a937d5066e64ee17beb6097301c92742f19
   cilium:
     repository: https://helm.cilium.io
     chart: cilium

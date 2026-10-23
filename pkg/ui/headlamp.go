@@ -18,6 +18,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -440,27 +441,27 @@ func navigateOn(resp *http.Response) error {
 	return nil
 }
 
-// writeHeadlampKubeconfig writes every cluster of the interface's namespace with its API address
-// and CA, taken from the cluster's admin kubeconfig. Its credentials are left behind: Headlamp
-// would use them for every visitor who has not signed in to the cluster. Without a management
-// cluster the file lists none, so Headlamp still starts.
+// writeHeadlampKubeconfig writes every cluster of the namespaces the interface manages with its
+// API address and CA, taken from the cluster's admin kubeconfig. Its credentials are left behind:
+// Headlamp would use them for every visitor who has not signed in to the cluster. Without a
+// management cluster the file lists none, so Headlamp still starts.
 func (s *Server) writeHeadlampKubeconfig(ctx context.Context, kube client.Client) error {
-	var list clusterv1.ClusterList
-	if kube != nil {
-		if err := kube.List(ctx, &list, client.InNamespace(s.Namespace)); err != nil {
-			return fmt.Errorf("listing the clusters: %w", err)
-		}
+	clusters, err := s.managedClusters(ctx, kube)
+	if err != nil {
+		return err
 	}
 	out := clientcmdapi.NewConfig()
 	out.AuthInfos["user"] = clientcmdapi.NewAuthInfo()
 	var classes map[string]*clusterv1.ClusterClass
 	now := time.Now()
-	for i := range list.Items {
-		c := &list.Items[i]
+	for i := range clusters {
+		c := &clusters[i]
 		if !provisioner.Owns(c, s.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
 			continue
 		}
-		endpoint, ok, err := s.headlampEndpoint(ctx, kube, c, now)
+		var endpoint headlampEndpoint
+		var ok bool
+		endpoint, ok, err = s.headlampEndpoint(ctx, kube, c, now)
 		if err != nil {
 			return err
 		}
@@ -489,6 +490,23 @@ func (s *Server) writeHeadlampKubeconfig(ctx context.Context, kube client.Client
 		return fmt.Errorf("headlamp's kubeconfig: %w", err)
 	}
 	return s.Headlamp.write(raw, now)
+}
+
+// managedClusters lists the clusters of the namespaces the interface manages, none without a
+// management cluster.
+func (s *Server) managedClusters(ctx context.Context, kube client.Client) ([]clusterv1.Cluster, error) {
+	if kube == nil {
+		return nil, nil
+	}
+	managed, err := s.namespaces(ctx, kube)
+	if err != nil {
+		return nil, err
+	}
+	var list clusterv1.ClusterList
+	if err := kube.List(ctx, &list); err != nil {
+		return nil, fmt.Errorf("listing the clusters: %w", err)
+	}
+	return slices.DeleteFunc(list.Items, func(c clusterv1.Cluster) bool { return !managed.has(c.Namespace) }), nil
 }
 
 // classesByName lists every cluster's class at once. A class's default identity provider may

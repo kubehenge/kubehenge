@@ -1,0 +1,4 @@
+---
+# On top of integration-values.yaml: the module's values with cluster_sys_audit.
+proxmox:
+  sysAuditGroup: kubehenge-clusters-audit
