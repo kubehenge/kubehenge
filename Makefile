@@ -140,7 +140,7 @@ helm-addon-image:
 lint: lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker
 
 FILES = git ls-files --cached --others --exclude-standard
-SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh test/integration/*.sh test/unit/*.sh appliance/*.sh appliance/pve-entry/*.sh scripts/*.sh pkg/provisioner/*.sh pkg/templates/*.sh
+SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh test/integration/*.sh test/unit/*.sh appliance/*.sh appliance/pve-entry/*.sh scripts/*.sh pkg/provisioner/*.sh pkg/templates/*.sh charts/kubehenge/files/*.sh
 SHFMT_FLAGS := -i 4 -ci -sr
 # Installed from lock files, which check every package's hash, their dependencies' included.
 YAMLLINT := uv run --locked --project scripts/lint yamllint

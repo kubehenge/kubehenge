@@ -361,22 +361,13 @@ template:
       joinConfiguration:
         {{- include "kubehenge.kubeadmNodeRegistration" . | nindent 8 }}
       files:
-        # kubeadm init grants admin.conf its rights through the API server kube-vip has yet to put
-        # behind the virtual IP, so on the first node kube-vip starts with super-admin.conf
-        # (kube-vip/kube-vip#684) and is moved back to admin.conf once init is done, rather than
-        # keep credentials that bypass authorisation for the life of the node.
+        # On the first node kube-vip runs on super-admin.conf while kubeadm init does, admin.conf
+        # after (files/kube-vip-credentials.sh).
         - path: /etc/kubehenge/kube-vip-credentials.sh
           owner: root:root
           permissions: "0700"
           content: |
-            #!/bin/sh
-            set -eu
-            [ -f /run/kubeadm/kubeadm.yaml ] || exit 0
-            case "$1" in
-                init) from=admin.conf to=super-admin.conf ;;
-                done) from=super-admin.conf to=admin.conf ;;
-            esac
-            sed -i "s#path: /etc/kubernetes/$from#path: /etc/kubernetes/$to#" /etc/kubernetes/manifests/kube-vip.yaml
+            {{- .Files.Get "files/kube-vip-credentials.sh" | nindent 12 }}
         {{- include "kubehenge.kubeadmNodeIPFile" . | nindent 8 }}
         {{- include "kubehenge.kubeletConfigFile" . | nindent 8 }}
         {{- include "kubehenge.kubeadmServingFile" . | nindent 8 }}

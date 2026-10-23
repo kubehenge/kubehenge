@@ -5,6 +5,7 @@ Every release's changes, newest first. Versions follow [Semantic Versioning](htt
 ## [Unreleased]
 
 - **Backups.** Backups with Velero to the S3 stores an administrator sets, on a schedule and kept for as long as the cluster chooses, each cluster under a prefix of its own and encrypted with keys of its own (SSE-C for its resources, Kopia for its volumes' data), `kube-system` left out; the cluster page lists the backups and restores, backs up at once and restores the whole cluster or chosen namespaces, restoring only for those who may download its admin kubeconfig.
+- A kubeadm cluster's first control-plane node moves kube-vip from kubeadm's super-admin credentials to `admin.conf` while it is still bootstrapping, and finishes only once the new kube-vip holds the control-plane address. Until now the old kube-vip ran on for two minutes after `kubeadm init` and then left the address unanswered for about ten seconds, under whatever used the cluster by then.
 
 ## [0.2.0] - 2026-10-22
 
