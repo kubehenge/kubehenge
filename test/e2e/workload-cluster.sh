@@ -14,7 +14,7 @@
 # on a Git server in the cluster through a deploy key), on Talos upgrade the nodes in place to a
 # newer Talos release with every add-on on, switch backups, certificates and GitOps off, take an
 # etcd snapshot into the same store, read it back and restore etcd from it through the guest agent
-# (on Talos, see the restore refused), on RKE2 and k3s have the servers upload a snapshot of their
+# (on Talos through the Talos API), on RKE2 and k3s have the servers upload a snapshot of their
 # own there and switch that off, switch the load balancer off, scale its workers up and down,
 # upgrade it by one minor version (for RKE2 and k3s with the first new server's join refused at
 # first), replace a node that dies, delete it, and check that nothing of it is left on Proxmox VE.
@@ -53,7 +53,8 @@
 # endpoint is on this machine, at an https:// address the cluster's nodes reach; the test serves
 # SeaweedFS's S3 gateway there with KUBEHENGE_E2E_BACKUP_CERT and KUBEHENGE_E2E_BACKUP_KEY, which
 # KUBEHENGE_E2E_BACKUP_CA, the target's CA, signed. The etcd snapshots go to the same target; the
-# management cluster restores etcd through the guest agent (etcd_restore), and Go builds the
+# management cluster restores etcd through the guest agent (etcd_restore; Talos clusters through
+# their Talos API either way), and Go builds the
 # kubehenge command that decrypts a snapshot.
 # KUBEHENGE_E2E_HA_GROUPS=1 switches the cloud controller manager's HA group labels on and off again,
 # with a management cluster that lets clusters choose them; the test makes an HA node-affinity rule
@@ -1406,12 +1407,20 @@ prometheus=statefulset/prometheus-kube-prometheus-stack-prometheus
 until_true 1200 "Prometheus installed" sh -c "KUBECONFIG=${work}/workload kubectl -n monitoring get ${prometheus} >/dev/null 2>&1"
 wl -n monitoring rollout status "${prometheus}" --timeout=15m
 # Every component's job, each scraped with its server verified; k3s's components are in its
-# kubelet's metrics, and Talos's controller manager and scheduler serve certificates they sign
-# themselves, which nothing could verify, so they go unscraped.
+# kubelet's metrics. Talos's controller manager and scheduler are scraped only on releases that pass
+# them a serving certificate of the cluster CA; before those they sign their own, which nothing
+# could verify.
 jobs="apiserver kubelet coredns kube-state-metrics node-exporter kube-etcd"
 case ${distribution} in
     k3s) ;;
-    talos) jobs="${jobs} kube-proxy" ;;
+    talos)
+        jobs="${jobs} kube-proxy"
+        control_plane_pods=$(wl -n kube-system get pods -l 'component in (kube-controller-manager,kube-scheduler)' -o json)
+        if printf '%s' "${control_plane_pods}" |
+            jq -e '(.items | length > 0) and all(.items[]; any(.spec.containers[].command[]?; startswith("--tls-cert-file=")))' > /dev/null; then
+            jobs="${jobs} kube-controller-manager kube-scheduler"
+        fi
+        ;;
     *) jobs="${jobs} kube-controller-manager kube-scheduler kube-proxy" ;;
 esac
 targets='/api/v1/namespaces/monitoring/services/http:kube-prometheus-stack-prometheus:9090/proxy/api/v1/targets?state=active'
@@ -1543,13 +1552,15 @@ log_pod short "${short_line}" '[]' 'true'
 wl -n e2e-logs wait --for=jsonpath='{.status.phase}'=Succeeded pod/short --timeout=5m
 until_true 300 "the short-lived pod's line in Loki" logged '{namespace="e2e-logs", pod="short", container="log", job="pods"}' "${short_line}"
 if [ "${distribution}" = talos ]; then
-    # Talos keeps no journal, its own services logging to its API alone, and its API server's audit
-    # log lies in a directory of its own.
+    # Talos keeps no journal: it sends its services' and the kernel's logs to the collector on its
+    # node's loopback, and its API server's audit log lies in a directory of its own.
     collector=$(wl -n logging-node get daemonset/alloy-node -o json)
     audit_dir=$(printf '%s' "${collector}" | jq -r '.spec.template.spec.volumes[] | select(.name == "audit") | .hostPath.path')
     [ "${audit_dir}" = /var/log/audit/kube ] || fail "the collector reads the audit log from '${audit_dir}', not /var/log/audit/kube"
     printf '%s' "${collector}" | jq -e 'any(.spec.template.spec.volumes[]; .name == "journal") | not' > /dev/null ||
         fail "the collector mounts a journal Talos does not keep"
+    until_true 300 "Talos's service logs in Loki" logged '{job="talos", unit="kubelet"}' ""
+    until_true 300 "the nodes' kernel logs in Loki" logged '{job="talos", unit="kernel"}' ""
 else
     until_true 300 "the nodes' journals in Loki" logged '{job="journal"}' ""
 fi
@@ -2615,63 +2626,54 @@ etcd_restore_requested() {
         "kubehenge.dev/etcd-restore={\"snapshot\":\"${snapshot_name}\",\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"by\":\"e2e\",\"at\":\"${now}\"}"
 }
 if [ "${distribution}" = talos ]; then
-    # A restore runs its commands on the control planes through the guest agent, which on Talos runs
-    # none, so the controller refuses it before it changes anything.
-    step "etcd restore refused on Talos, the cluster left as it was"
-    wl -n default create configmap e2e-after-snapshot --from-literal=marker=after
-    etcd_restore_requested
-    # etcd_restore_refused: whether the controller ended the restore as failed for Talos and let the
-    # request go.
-    etcd_restore_refused() {
-        # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-        cluster_json=$(kubectl -n "${ns}" get cluster "${name}" -o json) || return 1
-        restore=$(printf '%s' "${cluster_json}" | jq -c '.metadata.annotations["kubehenge.dev/etcd-restore-status"] // "{}" | fromjson')
-        case $(printf '%s' "${restore}" | jq -r '.phase // ""') in
-            Failed) ;;
-            Succeeded) fail "etcd was restored on Talos: ${restore}" ;;
-            *) return 1 ;;
-        esac
-        printf '%s' "${restore}" | jq -e '.message | test("talos"; "i")' > /dev/null ||
-            fail "the etcd restore failed for another reason than Talos: ${restore}"
-        printf '%s' "${cluster_json}" | jq -e '(.metadata.annotations["kubehenge.dev/etcd-restore"] | not) and (.spec.paused // false | not)' > /dev/null
-    }
-    until_true 300 "the etcd restore refused" etcd_restore_refused
-    # shellcheck disable=SC2310 # a ConfigMap gone fails the step.
-    wl -n default get configmap e2e-before-snapshot e2e-after-snapshot > /dev/null ||
-        fail "the refused restore changed what etcd holds"
-    wl -n default delete configmap e2e-before-snapshot e2e-after-snapshot
-    keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
-    [ "${keys}" = "${etcd_prefix}/${snapshot_name}" ] || fail "the refused restore left objects in the store: ${keys}"
+    step "etcd restored from the snapshot through the Talos API, the control planes wiped and joining it again"
 else
     step "etcd restored from the snapshot through the guest agent"
-    wl -n default delete configmap e2e-before-snapshot
-    wl -n default create configmap e2e-after-snapshot --from-literal=marker=after
-    etcd_restore_requested
-    # etcd_restored: whether the restore has ended and the controller let the cluster go; a failed
-    # one fails the test with why.
-    etcd_restored() {
+fi
+control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+wl -n default delete configmap e2e-before-snapshot
+wl -n default create configmap e2e-after-snapshot --from-literal=marker=after
+etcd_restore_requested
+# etcd_restored: whether the restore has ended and the controller let the cluster go; a failed one
+# fails the test with why.
+etcd_restored() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    cluster_json=$(kubectl -n "${ns}" get cluster "${name}" -o json) || return 1
+    restore=$(printf '%s' "${cluster_json}" | jq -c '.metadata.annotations["kubehenge.dev/etcd-restore-status"] // "{}" | fromjson')
+    case $(printf '%s' "${restore}" | jq -r '.phase // ""') in
+        Succeeded) ;;
+        Failed)
+            kubectl -n kubehenge-system logs deployment/kubehenge-controller --tail=100 >&2
+            fail "the etcd restore failed: ${restore}"
+            ;;
+        *) return 1 ;;
+    esac
+    printf '%s' "${cluster_json}" | jq -e '(.metadata.annotations["kubehenge.dev/etcd-restore"] | not) and (.spec.paused // false | not)' > /dev/null
+}
+until_true 2400 "etcd restored" etcd_restored
+until_true 1200 "cluster ${name} available after the restore" available_or_failed
+wl wait --for=condition=Ready nodes --all --timeout=10m
+until_true 300 "the ConfigMap made before the snapshot back" wl -n default get configmap e2e-before-snapshot
+# shellcheck disable=SC2310 # absent's answer is what is checked.
+absent wl -n default get configmap e2e-after-snapshot || fail "a ConfigMap made after the snapshot outlived the restore"
+wl -n default delete configmap e2e-before-snapshot
+keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
+[ "${keys}" = "${etcd_prefix}/${snapshot_name}" ] || fail "the restore left objects in the store: ${keys}"
+if [ "${distribution}" = talos ]; then
+    # Talos's control planes join the restored etcd again rather than being made anew.
+    restored_control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+    [ "${restored_control_planes}" = "${control_planes}" ] ||
+        fail "the restore replaced control planes: ${control_planes} became ${restored_control_planes}"
+    first_control_plane=$(machine_address "${control_planes%% *}")
+    # etcd_rejoined: whether every control plane is a voting member of the restored etcd again.
+    etcd_rejoined() {
         # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-        cluster_json=$(kubectl -n "${ns}" get cluster "${name}" -o json) || return 1
-        restore=$(printf '%s' "${cluster_json}" | jq -c '.metadata.annotations["kubehenge.dev/etcd-restore-status"] // "{}" | fromjson')
-        case $(printf '%s' "${restore}" | jq -r '.phase // ""') in
-            Succeeded) ;;
-            Failed)
-                kubectl -n kubehenge-system logs deployment/kubehenge-controller --tail=100 >&2
-                fail "the etcd restore failed: ${restore}"
-                ;;
-            *) return 1 ;;
-        esac
-        printf '%s' "${cluster_json}" | jq -e '(.metadata.annotations["kubehenge.dev/etcd-restore"] | not) and (.spec.paused // false | not)' > /dev/null
+        members=$(talos_api "${first_control_plane}" etcd members) || return 1
+        voting=$(printf '%s\n' "${members}" | awk 'NR > 1 && $NF == "false" { n++ } END { print n + 0 }')
+        wanted=$(printf '%s' "${control_planes}" | wc -w)
+        [ "${voting}" -eq "${wanted}" ]
     }
-    until_true 2400 "etcd restored" etcd_restored
-    until_true 1200 "cluster ${name} available after the restore" available_or_failed
-    wl wait --for=condition=Ready nodes --all --timeout=10m
-    until_true 300 "the ConfigMap made before the snapshot back" wl -n default get configmap e2e-before-snapshot
-    # shellcheck disable=SC2310 # absent's answer is what is checked.
-    absent wl -n default get configmap e2e-after-snapshot || fail "a ConfigMap made after the snapshot outlived the restore"
-    wl -n default delete configmap e2e-before-snapshot
-    keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
-    [ "${keys}" = "${etcd_prefix}/${snapshot_name}" ] || fail "the restore left objects in the store: ${keys}"
+    until_true 900 "every control plane a member of the restored etcd" etcd_rejoined
 fi
 
 case ${distribution} in

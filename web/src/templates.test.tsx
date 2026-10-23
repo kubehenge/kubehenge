@@ -76,7 +76,19 @@ describe("vM templates", () => {
 
   it("makes a Talos release's template, offering the releases the Image Factory builds", async () => {
     const calls = fakeServer({
-      "GET /api/templates": { body: { templates: [] } },
+      "GET /api/templates": {
+        body: {
+          templates: [
+            {
+              vmid: 9002,
+              node: "pve1",
+              name: "kubehenge-talos-v1.14.4",
+              line: "kubehenge-talos-v1.14.4",
+              tags: ["kubehenge", "talos", "talos-v1.14.4"],
+            },
+          ],
+        },
+      },
       "GET /api/talos/releases": {
         body: { templates: ["v1.14.4"], releases: ["v1.15.1", "v1.14.4"], default: "v1.14.4", kubernetes: {} },
       },
@@ -94,19 +106,22 @@ describe("vM templates", () => {
     });
     const user = userEvent.setup({ delay: null });
     render(<Templates />);
+    // A Talos template is made once, never rebuilt.
+    expect(
+      within(await screen.findByRole("row", { name: /kubehenge-talos-v1\.14\.4/u })).getByText("Made once"),
+    ).toBeInTheDocument();
     await user.click(await screen.findByRole("button", { name: "Build a template" }));
     const dialog = within(screen.getByRole("dialog", { name: "Build a template" }));
     await user.selectOptions(dialog.getByLabelText("For"), "talos");
-    // The default release is chosen, newest first, and the one that has a template says so.
-    await waitFor(() => expect(dialog.getByLabelText("Talos release")).toHaveValue("v1.14.4"));
+    // The default release has its template already, so the newest without one is chosen.
+    await waitFor(() => expect(dialog.getByLabelText("Talos release")).toHaveValue("v1.15.1"));
     expect(
       within(dialog.getByLabelText("Talos release"))
         .getAllByRole("option")
         .map((o) => o.textContent),
-    ).toStrictEqual(["v1.15.1", "v1.14.4 (default) (has a template)"]);
+    ).toStrictEqual(["v1.15.1", "v1.14.4 (default, has a template)"]);
     expect(dialog.queryByLabelText("Cloud-init image")).not.toBeInTheDocument();
     expect(dialog.queryByText("Static address")).not.toBeInTheDocument();
-    await user.selectOptions(dialog.getByLabelText("Talos release"), "v1.15.1");
     await waitFor(() => expect(dialog.getByLabelText("Bridge")).toHaveValue("vmbr0"));
     await user.click(dialog.getByRole("button", { name: "Build" }));
     await waitFor(() =>

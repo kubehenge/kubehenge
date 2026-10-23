@@ -3,8 +3,10 @@ package provisioner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -19,12 +21,44 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-// fakeTalos records what the upgrader does on each node through the Talos API.
+// fakeTalos records what the upgrader and the restorer do on each node through the Talos API. Its
+// nodes run etcd until wiped, boot again at once, and wait in Preparing until bootstrapped.
 type fakeTalos struct {
 	mu         sync.Mutex
 	installed  map[string]string
 	rebooted   []string
 	installErr error
+
+	// calls are the restore's calls, "<address> <call>".
+	calls    []string
+	boots    map[string]int
+	wiped    map[string]bool
+	uploaded map[string][]byte
+	// down are the nodes whose API does not answer; fail decides which calls fail.
+	down map[string]bool
+	fail func(address, call string) error
+}
+
+// call records a restore's call, and fails it as the fake is told to.
+func (f *fakeTalos) call(address, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.down[address] {
+		return fmt.Errorf("%w: connection refused", errTalosNotReady)
+	}
+	f.calls = append(f.calls, address+" "+name)
+	if f.fail != nil {
+		return f.fail(address, name)
+	}
+	return nil
+}
+
+func (f *fakeTalos) restoreCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.DeleteFunc(slices.Clone(f.calls), func(c string) bool {
+		return strings.HasSuffix(c, " boot") || strings.HasSuffix(c, " etcd")
+	})
 }
 
 //nolint:ireturn // a TalosDialer
@@ -62,6 +96,72 @@ func (n *fakeTalosNode) Reboot(context.Context) error {
 
 func (*fakeTalosNode) EtcdSnapshot(context.Context) (io.ReadCloser, string, error) {
 	return io.NopCloser(strings.NewReader("snapshot")), "3.6.5", nil
+}
+
+func (n *fakeTalosNode) BootID(context.Context) (string, error) {
+	if err := n.f.call(n.address, "boot"); err != nil {
+		return "", err
+	}
+	n.f.mu.Lock()
+	defer n.f.mu.Unlock()
+	return strconv.Itoa(n.f.boots[n.address]), nil
+}
+
+func (n *fakeTalosNode) WipeEtcd(context.Context) error {
+	if err := n.f.call(n.address, "wipe"); err != nil {
+		return err
+	}
+	n.f.mu.Lock()
+	defer n.f.mu.Unlock()
+	if n.f.boots == nil {
+		n.f.boots, n.f.wiped = map[string]int{}, map[string]bool{}
+	}
+	n.f.boots[n.address]++
+	n.f.wiped[n.address] = true
+	delete(n.f.uploaded, n.address)
+	return nil
+}
+
+func (n *fakeTalosNode) Etcd(context.Context) (string, bool, error) {
+	if err := n.f.call(n.address, "etcd"); err != nil {
+		return "", false, err
+	}
+	n.f.mu.Lock()
+	defer n.f.mu.Unlock()
+	if n.f.wiped[n.address] {
+		return talosEtcdPreparing, false, nil
+	}
+	return talosEtcdRunning, true, nil
+}
+
+func (n *fakeTalosNode) UploadEtcdSnapshot(_ context.Context, snapshot io.Reader) error {
+	data, err := io.ReadAll(snapshot)
+	if err != nil {
+		return err
+	}
+	if err := n.f.call(n.address, "upload"); err != nil {
+		return err
+	}
+	n.f.mu.Lock()
+	defer n.f.mu.Unlock()
+	if n.f.uploaded == nil {
+		n.f.uploaded = map[string][]byte{}
+	}
+	n.f.uploaded[n.address] = data
+	return nil
+}
+
+func (n *fakeTalosNode) BootstrapRecovered(context.Context) error {
+	if err := n.f.call(n.address, "bootstrap"); err != nil {
+		return err
+	}
+	n.f.mu.Lock()
+	defer n.f.mu.Unlock()
+	if n.f.uploaded[n.address] == nil {
+		return errors.New("no snapshot uploaded")
+	}
+	n.f.wiped[n.address] = false
+	return nil
 }
 
 func (*fakeTalosNode) Close() error { return nil }

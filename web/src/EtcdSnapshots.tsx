@@ -41,8 +41,11 @@ export const defaultEtcdSchedule = "0 */12 * * *";
 export const defaultEtcdKeep = 14;
 const maxEtcdKeep = 1000;
 
-export const etcdSnapshotsHint =
-  "Kubehenge copies the cluster's etcd, every object its API holds, to an S3 target an administrator set, encrypted with a key of the cluster's own that Kubehenge keeps. Nothing runs in the cluster for it: the controller reads etcd through the cluster's API server.";
+/** etcdSnapshotsHint says what the snapshots are and, as Talos runs etcd outside any pod, how they are read. */
+export const etcdSnapshotsHint = (distribution: string): string =>
+  `Kubehenge copies the cluster's etcd, every object its API holds, to an S3 target an administrator set, encrypted with a key of the cluster's own that Kubehenge keeps. Nothing runs in the cluster for it: the controller reads etcd through ${
+    distribution === "talos" ? "the control-plane nodes' Talos API" : "the cluster's API server"
+  }.`;
 
 export const etcdRestoreHint =
   "Restoring etcd takes every object of the cluster back to the snapshot: Deployments, Secrets, roles and the rest of what its API holds. The data in volumes stays as it is now. It is for a cluster that lost its etcd quorum, or whose state is corrupted or was deleted in bulk; to bring back applications with their data, restore a Velero backup.";
@@ -229,7 +232,7 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
       <p className="hint" id={hint}>
         {none
           ? "An administrator has set no backup target yet; they add one in the appliance's settings."
-          : etcdSnapshotsHint}
+          : etcdSnapshotsHint(c.distribution)}
       </p>
       {enabled && (
         <>
@@ -492,7 +495,7 @@ function SnapshotsSummary({ cluster: c, view: v }: { cluster: Cluster; view: Clu
     return (
       <>
         <p>Kubehenge takes no etcd snapshots of this cluster.</p>
-        <p className="hint">{etcdSnapshotsHint}</p>
+        <p className="hint">{etcdSnapshotsHint(c.distribution)}</p>
       </>
     );
   }
@@ -693,9 +696,12 @@ export function EtcdRestoreDialog({
       {automatic ? (
         <>
           <p>
-            Kubehenge pauses the cluster, stops the control plane on every control-plane VM through the Proxmox VE guest
-            agent, restores etcd on one of them and replaces the others with new machines. The cluster&apos;s API is
-            down until the first is back, and whatever was created since {when(snapshot.time)} is gone.
+            Kubehenge pauses the cluster,{" "}
+            {c.distribution === "talos"
+              ? "wipes etcd on every control-plane node through its Talos API, which reboots each, and restores etcd from the snapshot on one of them; the others join it again"
+              : "stops the control plane on every control-plane VM through the Proxmox VE guest agent, restores etcd on one of them and replaces the others with new machines"}
+            . The cluster&apos;s API is down until the first is back, and whatever was created since{" "}
+            {when(snapshot.time)} is gone.
           </p>
           <Field label="Confirm name" hint={`Type ${c.name}.`}>
             {(id) => <input id={id} value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" />}

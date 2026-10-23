@@ -292,6 +292,8 @@ type RestoreNode struct {
 	Machine string
 	Node    string
 	VMID    int64
+	// Address is where a Talos node serves its API.
+	Address string
 
 	object *clusterv1.Machine
 }
@@ -335,6 +337,9 @@ func controlPlaneNodes(ctx context.Context, c client.Reader, cluster *clusterv1.
 func PlanEtcdRestore(ctx context.Context, c client.Reader, cluster *clusterv1.Cluster, snapshot *EtcdSnapshot) (*EtcdRestorePlan, error) {
 	if err := Restorable(cluster, snapshot); err != nil {
 		return nil, err
+	}
+	if isTalos(cluster) {
+		return planTalosRestore(ctx, c, cluster, snapshot)
 	}
 	scripts, err := restoreScriptsFor(distributionOf(cluster))
 	if err != nil {

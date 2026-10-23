@@ -408,7 +408,7 @@ The upload needs etcd snapshots on, and is refused on kubeadm. Switching snapsho
 
 ### Restore etcd
 
-Restoring etcd takes every object of the cluster back to the snapshot: Deployments, Secrets, roles, custom resources and the rest of what its API holds return to how they were, and whatever was created since is gone. The data in volumes is not restored and stays as it is now. It is for a cluster that lost its etcd quorum, or whose state is corrupted or was deleted in bulk; to bring back applications with their data, restore a [Velero backup](#back-up-and-restore). A cluster is restored only from a snapshot of its own distribution and Kubernetes minor version, whose objects its API server reads. Talos clusters cannot be restored from the interface yet; their snapshots restore with Talos's own `talosctl bootstrap --recover-from`.
+Restoring etcd takes every object of the cluster back to the snapshot: Deployments, Secrets, roles, custom resources and the rest of what its API holds return to how they were, and whatever was created since is gone. The data in volumes is not restored and stays as it is now. It is for a cluster that lost its etcd quorum, or whose state is corrupted or was deleted in bulk; to bring back applications with their data, restore a [Velero backup](#back-up-and-restore). A cluster is restored only from a snapshot of its own distribution and Kubernetes minor version, whose objects its API server reads. A Talos cluster is restored through its nodes' Talos API whether or not the management cluster restores through the guest agent: Kubehenge wipes etcd on every control-plane node, which reboots each, restores it from the snapshot on the first, and the others join it again, so no machine is replaced.
 
 A restore:
 

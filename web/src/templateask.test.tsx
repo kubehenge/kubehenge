@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { newForm, withClass, type FieldKey } from "./create-form";
-import { GeneralStep, type StepProps } from "./CreateSteps";
+import { GeneralStep, requestName, type StepProps } from "./CreateSteps";
 import { fakeServer } from "./fake-server";
 import type { ClusterClass, NodeOSChoice, TalosReleases } from "./types";
 
@@ -132,7 +132,40 @@ describe("a missing template", () => {
       distribution: "talos",
       talosVersion: "v1.16.0",
     });
-    expect(screen.getByText(/Asked for: talos-v1\.16\.0\./u)).toBeInTheDocument();
+    expect(screen.getByText(/Asked for: Talos v1\.16\.0\./u)).toBeInTheDocument();
+  });
+
+  it("says which templates are asked for in words, and holds one the run under way builds", async () => {
+    expect(
+      [
+        "talos-v1.16.0",
+        "kubeadm-v1.37.1-almalinux-10",
+        "rke2-rocky-10",
+        "k3s-leap-16.1",
+        "kubeadm-v1.37.1",
+        "refresh",
+        "other",
+      ].map((k) => requestName(k, [alma, rocky])),
+    ).toStrictEqual([
+      "Talos v1.16.0",
+      "kubeadm v1.37.1 on AlmaLinux 10",
+      "RKE2 on Rocky Linux 10",
+      "k3s on leap-16.1",
+      "kubeadm-v1.37.1",
+      "the weekly build",
+      "other",
+    ]);
+    // The run names the templates it builds by their line, not by the keys they were asked for by.
+    fakeServer({
+      "GET /api/template-builds": {
+        body: { allowed: true, requested: ["talos-v1.14.9"], building: ["kubehenge-talos-v1.16.0"] },
+      },
+    });
+    step(talos, "", { templates: ["v1.15.1"], releases: ["v1.16.0", "v1.15.1"], default: "v1.15.1", kubernetes: {} });
+    await expect(screen.findByRole("button", { name: "Asked for" })).resolves.toBeDisabled();
+    expect(
+      screen.getByText(/Building now: kubehenge-talos-v1\.16\.0\. Asked for: Talos v1\.14\.9\./u),
+    ).toBeInTheDocument();
   });
 
   it("takes a typed Talos release when the Image Factory's cannot be read", async () => {
@@ -194,6 +227,7 @@ describe("a missing template", () => {
     });
     step(rke2, "rocky-10");
     await expect(screen.findByRole("button", { name: "Asked for" })).resolves.toBeDisabled();
+    expect(screen.getByText(/Asked for: RKE2 on Rocky Linux 10\./u)).toBeInTheDocument();
   });
 
   it("is not offered while the node OS chosen has its template", async () => {

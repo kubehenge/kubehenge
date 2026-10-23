@@ -50,7 +50,8 @@ metadata:
     # root@pam's password for it.
     kubehenge.dev/volume-snapshots: "true"
     {{- end }}
-    {{- include "kubehenge.etcdRestore" . | nindent 4 }}
+    # The controller restores etcd through the nodes' Talos API, with no guest agent to let in.
+    kubehenge.dev/etcd-restore-automatic: "true"
 spec:
   infrastructure:
     templateRef:
@@ -209,9 +210,15 @@ Both roles:
   streaming sessions after five minutes, and speaks TLS 1.3 only.
 - Talos and the node's container runtime pull the images of Sidero's and Kubernetes' registries only
   with their publishers' keyless signatures (talos.imageSignatures).
+- Talos sends what its services and the kernel log to the logs add-on's node collector, on the
+  node's loopback, where Talos keeps it otherwise only in memory. Without logs nothing listens
+  there, and Talos tries again each second until something does.
 */}}
 {{- define "kubehenge.talosCommonPatches" -}}
+{{- $logs := "tcp://127.0.0.1:5170/" }}
 - {{ dict "cluster" (dict "externalCloudProvider" (dict "enabled" true)) | toJson | quote }}
+- {{ dict "machine" (dict "logging" (dict "destinations" (list (dict "endpoint" $logs "format" "json_lines")))) | toJson | quote }}
+- {{ dict "apiVersion" "v1alpha1" "kind" "KmsgLogConfig" "name" "kubehenge-logs" "url" $logs | toJson | quote }}
 - {{ dict "apiVersion" "v1alpha1" "kind" "KubeletConfig" "config" (dict "serverTLSBootstrap" true) | toJson | quote }}
 - {{ dict "apiVersion" "v1alpha1" "kind" "ImageVerificationConfig" "rules" .Values.talos.imageSignatures | toJson | quote }}
 {{- end -}}
@@ -223,14 +230,16 @@ The control planes besides:
 - EventRateLimit beside Talos's own admission plugins, configured with Pod Security Admission
   (kubehenge.talosAdmission); the API server checks the kubelets' serving certificates against the
   cluster CA; projected tokens last their hour, as every client reloads them.
-- The controller manager's and scheduler's patient leader election (kubehenge.patientLeaseArgs).
+- The controller manager's and scheduler's patient leader election (kubehenge.patientLeaseArgs),
+  and their metrics without credentials on loopback, where Talos has them listen, as kubeadm's:
+  the metrics proxy on the node's address authenticates Prometheus instead.
 - etcd's metrics on loopback without TLS, as kubeadm's, behind the metrics proxy.
 - The VM's one network link, named for the virtual IP (talos-control-plane).
 Talos already turns profiling off, speaks TLS 1.3 only, and encrypts Secrets in etcd with a key of
 the cluster's, the same on every control plane.
 */}}
 {{- define "kubehenge.talosControlPlaneSpec" -}}
-{{- $leases := dict }}
+{{- $leases := dict "authorization-always-allow-paths" "/healthz,/readyz,/livez,/metrics" }}
 {{- range $arg := fromYamlArray (include "kubehenge.patientLeaseArgs" $) }}
 {{- $_ := set $leases (splitn "=" 2 $arg)._0 (splitn "=" 2 $arg)._1 }}
 {{- end }}
@@ -246,7 +255,7 @@ template:
     controlPlaneConfig:
       controlplane:
         generateType: controlplane
-        {{- include "kubehenge.talosConfigContract" . | nindent 8 }}
+        {{- include "kubehenge.talosHostname" . | nindent 8 }}
         strategicPatches:
           - {{ join "\n---\n" $docs | quote }}
           {{- include "kubehenge.talosCommonPatches" . | nindent 10 }}
@@ -262,18 +271,18 @@ template:
 template:
   spec:
     generateType: worker
-    {{- include "kubehenge.talosConfigContract" . | nindent 4 }}
+    {{- include "kubehenge.talosHostname" . | nindent 4 }}
     strategicPatches:
       - {{ dict "apiVersion" "v1alpha1" "kind" "DiscoveryServiceConfig" "name" "default" "$patch" "delete" | toJson | quote }}
       {{- include "kubehenge.talosCommonPatches" . | nindent 6 }}
 {{- end -}}
 
 {{/*
-The machine configuration schema the nodes are generated with, which Talos upgrades leave as it is,
-and the node's name, its VM's: a clone carries no name of its own.
+The node's name, its VM's: a clone carries no name of its own. The machine configuration schema the
+nodes are generated with (talosVersion) is the release they boot first, which Kubehenge's
+controller patches in (generate-patches.kubehenge).
 */}}
-{{- define "kubehenge.talosConfigContract" -}}
-talosVersion: v1.14
+{{- define "kubehenge.talosHostname" -}}
 hostname:
   source: InfrastructureName
 {{- end -}}

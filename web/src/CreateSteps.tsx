@@ -18,7 +18,7 @@ import {
 import { CSIField, SnapshotsField } from "./CsiPlugin";
 import { LoadBalancerFields } from "./LoadBalancer";
 import { addressBits } from "./network";
-import { choosable, cpuNote, macName, nodeOSKey, nodeOSLabel } from "./node-os";
+import { choosable, cpuNote, findNodeOS, macName, nodeOSKey, nodeOSLabel } from "./node-os";
 import { OIDCProviders } from "./OIDCProviders";
 import { HAField, HAGroupsField, PlacementFields, type HARulesRead } from "./Placement";
 import {
@@ -193,6 +193,34 @@ function askText(kind: TemplateKind, os: NodeOSChoice | undefined): string {
   return words[kind];
 }
 
+/**
+ * requestName is how a template build request's key reads: talos-v1.14.4 as Talos v1.14.4,
+ * kubeadm-v1.37.1-almalinux-10 as kubeadm v1.37.1 on AlmaLinux 10, rke2-rocky-10 as RKE2 on Rocky
+ * Linux 10, with the node OS's title where oses has it.
+ */
+export function requestName(key: string, oses?: NodeOSChoice[]): string {
+  if (key === "refresh") {
+    return "the weekly build";
+  }
+  const { dist, rest } = /^(?<dist>rke2|k3s|kubeadm|talos)-(?<rest>.+)$/u.exec(key)?.groups ?? {};
+  if (dist === undefined || rest === undefined) {
+    return key;
+  }
+  const name = distributionName(dist);
+  if (dist === "talos") {
+    return `${name} ${rest}`;
+  }
+  // A Kubernetes version has no dash, so the first one ends it.
+  const parts: Partial<Record<"version" | "os", string>> =
+    (dist === "kubeadm" ? /^(?<version>[^-]+)-(?<os>.+)$/u.exec(rest)?.groups : { os: rest }) ?? {};
+  const { version, os } = parts;
+  if (os === undefined) {
+    return key;
+  }
+  const title = findNodeOS(oses, os)?.title ?? os;
+  return version === undefined ? `${name} on ${title}` : `${name} ${version} on ${title}`;
+}
+
 // TemplateAsk lets one who may create clusters have a missing template built, when the
 // administrators allow it: the distribution's template on the node OS chosen, a kubeadm version's on
 // it, or a Talos release's.
@@ -201,11 +229,14 @@ function TemplateAsk({
   talos,
   os,
   missing: missingTemplate,
+  oses,
 }: {
   cls: ClusterClass | undefined;
   talos: TalosReleases | undefined;
   os: NodeOSChoice | undefined;
   missing: string | undefined;
+  /** Every class's node OSes, to name those of the requests others made. */
+  oses: NodeOSChoice[];
 }): JSX.Element | null {
   const [builds, setBuilds] = useState<TemplateBuilds>();
   const [version, setVersion] = useState("");
@@ -238,7 +269,8 @@ function TemplateAsk({
   const valid = field === undefined || field.pattern.test(chosen);
   const req = templateBuildRequest(asking, chosen, os);
   const key = requestKey(req);
-  // The run under way lists the templates it builds by name, the key with kubehenge- before it.
+  // The run under way lists the templates it builds by their line's name, the key with kubehenge-
+  // before it, not by the keys they were asked for by.
   const asked = builds.requested.includes(key) || builds.building.includes(`kubehenge-${key}`);
   const ask = async (): Promise<void> => {
     setBusy(true);
@@ -258,7 +290,7 @@ function TemplateAsk({
       <p className="muted">
         {askText(kind, os)}
         {builds.building.length > 0 && ` Building now: ${builds.building.join(", ")}.`}
-        {builds.requested.length > 0 && ` Asked for: ${builds.requested.join(", ")}.`}
+        {builds.requested.length > 0 && ` Asked for: ${builds.requested.map((k) => requestName(k, oses)).join(", ")}.`}
       </p>
       {field && <VersionField field={field} version={version} chosen={chosen} onChange={setVersion} />}
       <ErrorBox message={error} />
@@ -448,7 +480,13 @@ export function GeneralStep({
           <VersionInput id={id} value={form.version} onChange={(v) => set("version", v)} cls={cls} offered={runs} />
         )}
       </Field>
-      <TemplateAsk cls={cls} talos={talos} os={chosenNodeOS(form, cls)} missing={templateMissing(form, cls)} />
+      <TemplateAsk
+        cls={cls}
+        talos={talos}
+        os={chosenNodeOS(form, cls)}
+        missing={templateMissing(form, cls)}
+        oses={classes.flatMap((c) => c.nodeOSes ?? [])}
+      />
       <Field label="Control-plane nodes" hint="Three or more keep the cluster running when one node fails.">
         {(id) => (
           <select

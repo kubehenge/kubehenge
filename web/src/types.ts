@@ -634,7 +634,7 @@ export interface ClusterEtcdSnapshots {
   message?: string;
   restore?: EtcdRestoreStatus;
   restoring: boolean;
-  /** The controller restores through the guest agent; otherwise the steps are done by hand. */
+  /** The controller restores through the guest agent, or a Talos cluster's Talos API; otherwise the steps are done by hand. */
   automatic: boolean;
   /** VM.Allocate on the cluster's pool. */
   canSnapshot: boolean;

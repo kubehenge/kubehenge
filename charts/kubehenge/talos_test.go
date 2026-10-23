@@ -318,8 +318,13 @@ func TestTalosControlPlaneConfiguration(t *testing.T) {
 			if !ok || args["enable-admission-plugins"] != "EventRateLimit" || args["kubelet-certificate-authority"] == nil {
 				t.Errorf("API server arguments = %v", args)
 			}
-			if got := field(t, docs["KubeControllerManagerConfig"], "extraArgs", "leader-elect-lease-duration"); got != "60s" {
-				t.Errorf("controller manager lease = %v", got)
+			for _, component := range []string{"KubeControllerManagerConfig", "KubeSchedulerConfig"} {
+				if got := field(t, docs[component], "extraArgs", "leader-elect-lease-duration"); got != "60s" {
+					t.Errorf("%s lease = %v", component, got)
+				}
+				if got := field(t, docs[component], "extraArgs", "authorization-always-allow-paths"); got != "/healthz,/readyz,/livez,/metrics" {
+					t.Errorf("%s paths open on loopback = %v", component, got)
+				}
 			}
 			if got := field(t, docs["v1alpha1"], "cluster", "etcd", "extraArgs", "listen-metrics-urls"); got != "http://127.0.0.1:2381" {
 				t.Errorf("etcd metrics on %v", got)
@@ -355,5 +360,13 @@ func checkTalosCommon(t *testing.T, docs map[string]map[string]any) {
 	}
 	if got := field(t, docs["HostnameConfig"], "hostname"); got != "demo-worker-abcde" {
 		t.Errorf("hostname = %v", got)
+	}
+	// The node collector's port on loopback (pkg/provisioner, talosLogsPort).
+	const logs = "tcp://127.0.0.1:5170/"
+	if got := asJSON(t, field(t, docs["v1alpha1"], "machine", "logging", "destinations")); got != `[{"endpoint":"`+logs+`","format":"json_lines"}]` {
+		t.Errorf("log destinations = %s", got)
+	}
+	if got := field(t, docs["KmsgLogConfig/kubehenge-logs"], "url"); got != logs {
+		t.Errorf("kernel log destination = %v", got)
 	}
 }

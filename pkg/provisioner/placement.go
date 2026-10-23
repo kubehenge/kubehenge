@@ -126,6 +126,8 @@ func (h *Hooks) GeneratePatches(ctx context.Context, req *runtimehooksv1.Generat
 			patch, err = h.placementPatch(ctx, &item.HolderReference, chosen)
 		case kindOf(item) == proxmoxMachineTemplate:
 			patch, err = images.patch(ctx, item)
+		case talosContractPaths[kindOf(item)] != "":
+			patch, err = images.contract(ctx, item)
 		case h.Releases != nil:
 			patch, err = h.Releases.patch(ctx, item, req.Variables)
 		}

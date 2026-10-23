@@ -30,6 +30,16 @@ func TalosMinor(version string) (int, error) {
 	return minor, nil
 }
 
+// TalosContract is the machine configuration schema of a Talos release, its minor version such as
+// v1.14, which nodes generated for it are written in.
+func TalosContract(version string) (string, error) {
+	minor, err := TalosMinor(version)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("v1.%d", minor), nil
+}
+
 func talosRelease(version string) (*compatibility.TalosVersion, error) {
 	if _, err := TalosMinor(version); err != nil {
 		return nil, err

@@ -938,7 +938,8 @@ func TestIntegrationChartVolumeSnapshots(t *testing.T) {
 }
 
 // Only a management cluster that restores through the guest agent hands the controller the restore
-// token, and its classes say so for the interface to offer the restore.
+// token, and its classes say so for the interface to offer the restore. A Talos cluster is restored
+// through its nodes' Talos API, so its class says so either way.
 func TestIntegrationChartEtcdRestore(t *testing.T) {
 	t.Parallel()
 	for _, on := range []bool{false, true} {
@@ -951,7 +952,8 @@ func TestIntegrationChartEtcdRestore(t *testing.T) {
 		for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, values...) {
 			switch o.GetKind() {
 			case "ClusterClass":
-				if got := o.GetAnnotations()[AutomaticRestoreAnnotation]; got != strconv.FormatBool(on) {
+				want := on || o.GetName() == "kubehenge-talos"
+				if got := o.GetAnnotations()[AutomaticRestoreAnnotation]; got != strconv.FormatBool(want) {
 					t.Errorf("restore %t: %s says %q", on, o.GetName(), got)
 				}
 				classes++

@@ -451,8 +451,65 @@ loki.process "audit" {
 }
 `
 
-// alloyJournal reads the node's journal, which every distribution but Talos keeps: Talos has no
-// systemd, and its own services log to its API alone.
+// talosLogsPort is where the node's Alloy takes the logs of Talos's services and kernel, on the
+// node's loopback, which the Talos ClusterClass names as its log destination
+// (kubehenge.talosCommonPatches).
+const talosLogsPort = 5170
+
+// The keys of a port in charts' values and Gateway listeners.
+const (
+	hostPortKey = "hostPort"
+	protocolKey = "protocol"
+)
+
+// alloyTalos takes in what a Talos node's services and kernel log, which Talos keeps in memory
+// alone and sends as JSON lines to its log destination, and labels it as alloyJournal labels the
+// journal: the service as the unit, and the kernel's as kernel. otelcol.receiver.tcplog is the one
+// component of Alloy that reads lines off TCP; the OTLP log it makes carries the line as its body.
+const alloyTalos = `otelcol.receiver.tcplog "talos" {
+  listen_address = "0.0.0.0:TALOS_LOGS_PORT"
+  output {
+    logs = [otelcol.exporter.loki.talos.input]
+  }
+}
+
+otelcol.exporter.loki "talos" {
+  forward_to = [loki.process.talos.receiver]
+}
+
+loki.process "talos" {
+  stage.json {
+    expressions = {"event" = "body"}
+  }
+  stage.json {
+    source      = "event"
+    expressions = {"msg" = "msg", "unit" = "\"talos-service\"", "facility" = "facility", "level" = "\"talos-level\"", "time" = "\"talos-time\""}
+  }
+  stage.template {
+    source   = "unit"
+    template = "{{ if .unit }}{{ .unit }}{{ else if .facility }}kernel{{ end }}"
+  }
+  stage.timestamp {
+    source = "time"
+    format = "RFC3339Nano"
+  }
+  stage.label_drop {
+    values = ["exporter"]
+  }
+  stage.labels {
+    values = {"unit" = "", "level" = ""}
+  }
+  stage.static_labels {
+    values = {"job" = "talos", "node" = sys.env("K8S_NODE_NAME")}
+  }
+  stage.output {
+    source = "msg"
+  }
+  forward_to = [loki.write.loki.receiver]
+}
+`
+
+// alloyJournal reads the node's journal, which every distribution but Talos keeps (alloyTalos).
 const alloyJournal = `loki.relabel "journal" {
   forward_to = []
   rule {
@@ -510,6 +567,19 @@ func alloyCommon(image Image, config, namespace string, objects ...any) (map[str
 	return values, alloy
 }
 
+// talosLogsPolicy lets no one reach the node Alloys on Talos, whose host port takes the node's logs
+// from any address: a NetworkPolicy always lets the pod's own node through, which is where Talos
+// sends from, so another node or pod cannot pass lines off as the node's.
+func talosLogsPolicy() *networkingv1.NetworkPolicy {
+	return &networkingv1.NetworkPolicy{
+		APIVersion: networkingv1.SchemeGroupVersion.String(), Kind: "NetworkPolicy", Name: alloyNodeRelease, Namespace: logsNodeNamespace,
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{appName: alloyRelease}},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+		},
+	}
+}
+
 // clientVolume mounts a namespace's Loki client certificate.
 func clientVolume() (corev1.Volume, corev1.VolumeMount) {
 	return corev1.Volume{Name: lokiClientVolume, Secret: &corev1.SecretVolumeSource{SecretName: lokiClientSecret}},
@@ -561,7 +631,7 @@ func alloyValues(image Image, collector string) map[string]any {
 }
 
 // alloyNodeValues run Alloy on every node, the control planes too, reading the node's container
-// logs, its journal where it has one and, on the control planes, the API server's audit log. It runs as root to read
+// logs, its journal or on Talos what Talos sends it and, on the control planes, the API server's audit log. It runs as root to read
 // those, which root owns, but with no capability but Talos's one, so it reads nothing else root's
 // alone, and mounts each read-only; it writes only where it keeps how far it has read. It needs nothing of the
 // API, so it gets no token. On workers, which have no audit log, its directory is an empty one.
@@ -569,10 +639,22 @@ func alloyNodeValues(image Image, distribution templates.Distribution) map[strin
 	audit, auditFile := auditLog(distribution)
 	config := strings.Replace(alloyNodePods, "AUDIT_LOG", audit+"/"+auditFile, 1)
 	journal := distribution != templates.Talos
+	var objects []any
 	if journal {
 		config += "\n" + alloyJournal
+	} else {
+		config += "\n" + strings.Replace(alloyTalos, "TALOS_LOGS_PORT", strconv.Itoa(talosLogsPort), 1)
+		objects = append(objects, talosLogsPolicy())
 	}
-	values, alloy := alloyCommon(image, config+"\n"+alloyWrite, logsNodeNamespace)
+	values, alloy := alloyCommon(image, config+"\n"+alloyWrite, logsNodeNamespace, objects...)
+	if !journal {
+		// Talos dials the port on the node's loopback, which the CNI's portmap plugin carries to
+		// the pod on that node. otelcol.receiver.tcplog is still experimental in Alloy.
+		alloy["stabilityLevel"] = "experimental"
+		alloy["extraPorts"] = []any{map[string]any{
+			"name": "talos-logs", "port": talosLogsPort, "targetPort": talosLogsPort, hostPortKey: talosLogsPort, protocolKey: "TCP",
+		}}
+	}
 	root, no, yes := int64(0), false, true
 	client, clientMount := clientVolume()
 	host := func(name, path string, kind corev1.HostPathType) corev1.Volume {

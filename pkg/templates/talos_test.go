@@ -3,7 +3,32 @@ package templates
 import (
 	"slices"
 	"testing"
+
+	"github.com/siderolabs/talos/pkg/machinery/config"
 )
+
+func TestTalosContractIsTheReleasesMinor(t *testing.T) {
+	t.Parallel()
+	for release, want := range map[string]string{"v1.14.4": "v1.14", "v1.13.12": "v1.13", "v1.15.0": "v1.15"} {
+		got, err := TalosContract(release)
+		if err != nil || got != want {
+			t.Errorf("TalosContract(%s) = %q, %v, want %s", release, got, err, want)
+		}
+	}
+	// The default release's contract is one the machinery Kubehenge generates with knows.
+	contract, err := TalosContract(DefaultTalosVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.ParseContractFromVersion(contract); err != nil {
+		t.Errorf("contract %s: %v", contract, err)
+	}
+	for _, malformed := range []string{"1.14.4", "v2.0.0", "v1.14"} {
+		if _, err := TalosContract(malformed); err == nil {
+			t.Errorf("a contract for %q", malformed)
+		}
+	}
+}
 
 func TestTalosRunsTheKubernetesItsTableNames(t *testing.T) {
 	t.Parallel()

@@ -9,7 +9,7 @@ import { EtcdSnapshotsDialog, EtcdSnapshotsView, etcdSnapshotsOf, etcdSnapshotsR
 import { HealthView } from "./Health";
 import { nodeOSKey } from "./node-os";
 import { Link, navigate } from "./router";
-import { TalosFailure, TalosRows } from "./Talos";
+import { TalosFailure, TalosRows, runsKubernetes, useTalosReleases } from "./Talos";
 import type { Cluster, Machine, Versions } from "./types";
 import {
   Dialog,
@@ -470,7 +470,8 @@ function Machines({ cluster: c }: { cluster: Cluster }) {
     "Proxmox VE node",
     "Status",
     "Phase",
-    "Version",
+    // Beside the Talos release, the version is named for what it is.
+    talos ? "Kubernetes" : "Version",
     ...(talos ? ["Talos"] : []),
     "Addresses",
     "Age",
@@ -563,6 +564,9 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
     void loadVersions();
   }, [c.distribution, kubeadmOS]);
   const targets = upgradeTargets(c.version, [...(offered?.versions ?? []), ...(offered?.older ?? [])]);
+  const talos = useTalosReleases(c.talos !== undefined);
+  const running = c.talos?.version ?? "";
+  const held = c.talos ? targets.filter((v) => !runsKubernetes(talos, running, v)) : [];
   return (
     <Dialog
       title={`Upgrade ${c.name}`}
@@ -592,8 +596,8 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
                 {c.version} (running)
               </option>
               {targets.map((v) => (
-                <option key={v} value={v}>
-                  {v}
+                <option key={v} value={v} disabled={held.includes(v)}>
+                  {held.includes(v) ? `${v} (not run by Talos ${running})` : v}
                 </option>
               ))}
             </select>
@@ -612,8 +616,9 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
       )}
       {c.talos && (
         <p className="muted">
-          The version has to be one Talos {c.talos.version} runs; a newer one may need a newer Talos release first,
-          under Options.
+          {held.length > 0
+            ? `Talos ${running} does not run ${held.join(" or ")}: upgrade Talos first, under Options.`
+            : `The version has to be one Talos ${running} runs; a newer one may need a newer Talos release first, under Options.`}
           {filled(c.talos.upgrading) && " The upgrade waits until the Talos upgrade under way is done."}
         </p>
       )}

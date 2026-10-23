@@ -259,8 +259,10 @@ type nodeImages struct {
 	os           templates.NodeOS
 	t            time.Time
 	builds       NodeImageBuilds
-	// talos is the template Talos machines are cloned from, the one of their first release.
-	talos []string
+	// talos is the template Talos machines are cloned from, the one of their first release, and
+	// talosContract the machine configuration schema of that release they are generated with.
+	talos         []string
+	talosContract string
 }
 
 func (n *nodeImages) load(ctx context.Context) error {
@@ -295,6 +297,9 @@ func (n *nodeImages) load(ctx context.Context) error {
 		var image string
 		if image, err = TalosImage(c); err != nil {
 			return err
+		}
+		if n.talosContract, err = templates.TalosContract(image); err != nil {
+			return fmt.Errorf("cluster %s: %w", key, err)
 		}
 		n.talos, err = TalosLine(image)
 		return err
@@ -337,6 +342,36 @@ func (n *nodeImages) patch(ctx context.Context, item *runtimehooksv1.GeneratePat
 		return nil, fmt.Errorf("the template pool holds no template %s; build it on the Administration page or with kubehenge template create", strings.Join(line, ";"))
 	}
 	return selectTags(templates.NormaliseTags(append(slices.Clone(line), templates.BuildTag(at))))
+}
+
+// The kinds of the Talos providers' templates, and where each holds the machine configuration's
+// schema version.
+const (
+	talosControlPlaneTemplate = "TalosControlPlaneTemplate"
+	talosConfigTemplate       = "TalosConfigTemplate"
+)
+
+var talosContractPaths = map[string]string{
+	talosControlPlaneTemplate: "/spec/template/spec/controlPlaneConfig/controlplane/talosVersion",
+	talosConfigTemplate:       "/spec/template/spec/talosVersion",
+}
+
+// contract has a Talos template generate its machines' configuration in the schema of the release
+// they boot first. It moves with that release, which moves only when Cluster API replaces the
+// machines anyway, so it rolls none of them by itself; in-place upgrades keep the schema a node
+// was generated in, as Talos does.
+func (n *nodeImages) contract(ctx context.Context, item *runtimehooksv1.GeneratePatchesRequestItem) ([]byte, error) {
+	if err := n.load(ctx); err != nil {
+		return nil, err
+	}
+	if n.talos == nil {
+		return nil, nil
+	}
+	patch, err := json.Marshal([]map[string]any{addOp(talosContractPaths[kindOf(item)], n.talosContract)})
+	if err != nil {
+		return nil, fmt.Errorf("patching the Talos configuration schema: %w", err)
+	}
+	return patch, nil
 }
 
 // selectTags is the patch that has a machine template select the template of these tags.

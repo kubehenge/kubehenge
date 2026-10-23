@@ -1192,7 +1192,8 @@ function EtcdRestoreChoice({ form, set, onAsk }: Omit<FieldsProps, "shown"> & { 
       <p className="muted" id={hint}>
         Restoring a cluster&apos;s etcd from a snapshot stops the control plane on its VMs and restores on one of them.
         Switched on, Kubehenge does that itself when someone with Sys.Modify on the cluster&apos;s pool asks; switched
-        off, the interface lists the commands to run on the VMs by hand. {etcdRestoreGrant}
+        off, the interface lists the commands to run on the VMs by hand. Talos clusters are restored through their
+        nodes&apos; Talos API either way. {etcdRestoreGrant}
       </p>
     </fieldset>
   );
