@@ -443,17 +443,40 @@ func (p *Proxmox) ensureVolumeOwner(ctx context.Context, n Names, c Credentials,
 	if err != nil {
 		return c, err
 	}
+	// A VMID Proxmox VE offers is not reserved: another cluster's owner, a machine or a template
+	// build created at the same moment can take it first, and the create is then refused.
+	for attempt := 1; ; attempt++ {
+		var upid string
+		c, upid, err = p.createVolumeOwner(ctx, n, c, node, record)
+		switch {
+		case isExisting(err) && attempt < volumeOwnerAttempts:
+			continue
+		case err != nil:
+			return c, err
+		}
+		if err := p.waitTask(ctx, node, upid, createTaskTimeout); err != nil {
+			return c, fmt.Errorf("creating volume owner VM %d: %w", c.VolumeOwner, err)
+		}
+		return c, p.describeVolumeOwner(ctx, node, c.VolumeOwner, n, ownerConfig{})
+	}
+}
+
+const volumeOwnerAttempts = 5
+
+// createVolumeOwner records the next free VMID as the cluster's volume owner and starts creating
+// it on node.
+func (p *Proxmox) createVolumeOwner(ctx context.Context, n Names, c Credentials, node string, record func(Credentials) error) (Credentials, string, error) {
 	var next string
 	if err := p.Client.Get(ctx, "/cluster/nextid", &next); err != nil {
-		return c, fmt.Errorf("choosing a VMID: %w", err)
+		return c, "", fmt.Errorf("choosing a VMID: %w", err)
 	}
 	var vmid int
 	if _, err := fmt.Sscan(next, &vmid); err != nil {
-		return c, fmt.Errorf("choosing a VMID: %q: %w", next, err)
+		return c, "", fmt.Errorf("choosing a VMID: %q: %w", next, err)
 	}
 	c.VolumeOwner, c.VolumeOwnerNode = vmid, node
 	if err := record(c); err != nil {
-		return c, err
+		return c, "", err
 	}
 	// Never started and without disks; it exists so that the cluster's volumes have an owner
 	// only this cluster's token may configure. Proxmox VE checks every other setting against the
@@ -461,12 +484,9 @@ func (p *Proxmox) ensureVolumeOwner(ctx context.Context, n Names, c Credentials,
 	vm := map[string]any{"vmid": vmid, "name": n.VolumeOwner, "pool": n.Pool}
 	var upid string
 	if err := p.Client.Post(ctx, fmt.Sprintf("/nodes/%s/qemu", node), vm, &upid); err != nil {
-		return c, fmt.Errorf("creating volume owner VM %d: %w", vmid, err)
+		return c, "", fmt.Errorf("creating volume owner VM %d: %w", vmid, err)
 	}
-	if err := p.waitTask(ctx, node, upid, createTaskTimeout); err != nil {
-		return c, fmt.Errorf("creating volume owner VM %d: %w", vmid, err)
-	}
-	return c, p.describeVolumeOwner(ctx, node, vmid, n, ownerConfig{})
+	return c, upid, nil
 }
 
 type ownerConfig struct {
