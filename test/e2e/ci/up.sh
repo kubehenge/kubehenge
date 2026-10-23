@@ -51,6 +51,21 @@ until pve systemctl is-active --quiet pveproxy.service && pve pvesh get /version
     fi
     sleep 3
 done
+# Proxmox VE copies a volume through SSH to the node it goes to, this one too, so it must reach
+# itself as it does then: as root, with its own key, checking only the host key `pvecm updatecerts`
+# wrote under its name when it started.
+known=/etc/pve/nodes/pve/ssh_known_hosts
+# shellcheck disable=SC2310 # pve wraps one docker exec, whose status is what the loop polls and reports.
+until ssh_error=$(pve ssh -e none -o UserKnownHostsFile="${known}" -o GlobalKnownHostsFile=none \
+    -o BatchMode=yes -o HostKeyAlias=pve root@172.21.99.2 true 2>&1); do
+    now=$(date +%s)
+    if [ "${now}" -ge "${deadline}" ]; then
+        echo "Proxmox VE does not reach itself over SSH: ${ssh_error}" >&2
+        pve systemctl status --no-pager ssh-host-keys.service ssh.service >&2 || true
+        exit 1
+    fi
+    sleep 3
+done
 # `import` holds the disk images VMs are created from, `rootdir` the appliance's container.
 pve pvesm set local --content iso,vztmpl,backup,images,snippets,import,rootdir
 # A storage no other cluster, the management cluster nor the templates use, for a cluster that

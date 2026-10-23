@@ -1,0 +1,13 @@
+# The node's SSH host keys, made before sshd starts and before pveproxy's start runs
+# `pvecm updatecerts`, which adds the node's key to the known hosts Proxmox VE's own SSH connections
+# check, and root's key to the keys sshd lets in.
+[Unit]
+Description=SSH host keys of the Proxmox VE node
+Before=ssh.service pveproxy.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ssh-keygen -A
+
+[Install]
+WantedBy=multi-user.target
