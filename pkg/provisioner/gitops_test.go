@@ -186,6 +186,20 @@ func TestBootstrapObjects(t *testing.T) {
 	if _, ok := distribution["artifact"]; ok || distribution["version"] != "2.9.6" { //nolint:misspell // the FluxInstance's field
 		t.Errorf("distribution %v", distribution)
 	}
+	if lookup[string](t, fi.Object, "spec", "kustomize", "patches", 0, "target", "kind") != "Deployment" {
+		t.Errorf("Flux's requests patch targets %v", lookup[any](t, fi.Object, "spec", "kustomize", "patches", 0, "target"))
+	}
+	var patch map[string]any
+	if err := yaml.Unmarshal([]byte(lookup[string](t, fi.Object, "spec", "kustomize", "patches", 0, "patch")), &patch); err != nil {
+		t.Fatal(err)
+	}
+	container := lookup[map[string]any](t, patch, "spec", "template", "spec", "containers", 0)
+	if container["name"] != "manager" || lookup[string](t, container, "resources", "requests", "cpu") != cpu10m {
+		t.Errorf("Flux's requests patch %v", patch)
+	}
+	if cpu := lookup[string](t, fluxOperatorValues(&Certificates{}, g, &gitOpsState{}), "resources", requestsKey, cpuKey); cpu != cpu10m {
+		t.Errorf("the Flux Operator requests %s of CPU", cpu)
+	}
 
 	g.Engine, g.Auth, g.Repository.Revision, g.Repository.Path = argoCD, gitAuthNone, "refs/tags/v1", ""
 	app := bootstrapObject(g, "2.9.6")

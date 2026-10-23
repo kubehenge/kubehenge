@@ -93,6 +93,24 @@ const (
 	argoCDGroup      = "argoproj.io"
 	// fluxSolverPolicy lets cert-manager's HTTP-01 solvers in Flux's namespace be reached.
 	fluxSolverPolicy = "kubehenge-acme-http01-solver"
+	// fluxRequestsPatch has every Flux controller request 10m of CPU, as Headlamp and Traefik do, and
+	// the Flux Operator itself (fluxOperatorValues). The size profile requests 100m each, which with
+	// the operator's is half a vCPU, more than a 2-vCPU RKE2 worker has left beside RKE2's own pods
+	// and the other add-ons, so one of Flux's pods would stay Pending. Flux mostly waits on its
+	// next sync, and the profile's limits still let it use more when it works.
+	fluxRequestsPatch = `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: all
+spec:
+  template:
+    spec:
+      containers:
+        - name: manager
+          resources:
+            requests:
+              cpu: 10m
+`
 )
 
 var (
@@ -312,7 +330,11 @@ func scopesOf(p *oidcProvider) []string {
 // provider's certificate with the provider's CA where one is set, beside the image's own.
 func fluxOperatorValues(certs *Certificates, g *GitOps, state *gitOpsState) map[string]any {
 	web := map[string]any{"enabled": false}
-	values := map[string]any{installCRDsKey: true, "web": web}
+	values := map[string]any{
+		installCRDsKey: true, "web": web,
+		// The chart's limits and memory request stay (fluxRequestsPatch).
+		"resources": map[string]any{requestsKey: map[string]any{cpuKey: cpu10m}},
+	}
 	if !g.fluxWebOn(state) {
 		return values
 	}
@@ -399,6 +421,7 @@ func bootstrapObject(g *GitOps, fluxVersion string) *unstructured.Unstructured {
 				"distribution": map[string]any{"version": fluxVersion, "registry": "ghcr.io/fluxcd"},
 				"components":   []any{"source-controller", "kustomize-controller", "helm-controller", "notification-controller"},
 				"cluster":      map[string]any{"type": "kubernetes", "size": "small", "networkPolicy": true, "multitenant": false, "domain": "cluster.local"},
+				"kustomize":    map[string]any{"patches": []any{map[string]any{"target": map[string]any{"kind": "Deployment"}, "patch": fluxRequestsPatch}}},
 				"sync":         sync,
 			},
 		}}
