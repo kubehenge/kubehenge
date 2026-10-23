@@ -109,8 +109,10 @@ func BakeChecks(b Bake) [][]string {
 }
 
 // BakeCleanup leaves the image as a fresh first boot: clones get their own machine ID, SSH host
-// keys and cloud-init run.
+// keys and cloud-init run. What the updates left unneeded goes, old kernels but the one the bake
+// booted among them, so that every build stays near the cloud image's size.
 var BakeCleanup = [][]string{
+	{"sh", "-c", "DEBIAN_FRONTEND=noninteractive apt-get autoremove --purge -y"},
 	{"apt-get", "clean"},
 	{"sh", "-c", "rm -f /etc/ssh/ssh_host_*"},
 	{cloudInit, "clean", "--logs", "--seed", "--machine-id", "--configs", "all"},

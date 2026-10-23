@@ -289,10 +289,56 @@ variable "offer_ha_rules" {
 }
 
 variable "cluster_datastore_allocate" {
-  description = "Let each cluster choose the Proxmox VE CSI plugin's newest release, which needs Datastore.Allocate on the cluster's storage: Kubehenge's controller then grants that cluster's token Datastore.Allocate there, which lets it delete any volume on that storage and change the storage's definition. A cluster may choose it only on a workload storage that neither the management cluster (vm_datastore, image_datastore, bootstrap_datastore), its templates nor another cluster uses. Off, every cluster runs the plugin's last release that needs no more than Datastore.AllocateSpace and Datastore.Audit."
+  description = "Let each cluster choose the Proxmox VE CSI plugin's newest release, which needs Datastore.Allocate on the cluster's storage: Kubehenge's controller then grants that cluster's token Datastore.Allocate there, which lets it delete any volume on that storage and change the storage's definition. A cluster may choose it only on a workload storage that neither the management cluster (vm_datastore, image_datastore, bootstrap_datastore, and with template_refresh its import_datastore and iso_datastore), its templates nor another cluster uses. Off, every cluster runs the plugin's last release that needs no more than Datastore.AllocateSpace and Datastore.Audit."
   type        = bool
   default     = false
   nullable    = false
+}
+
+variable "template_refresh" {
+  description = <<-EOT
+    Build the Ubuntu VM templates again every week, with the updates Ubuntu published since, and move each cluster's nodes to the new build inside its maintenance window once the build is soak_hours old. The two newest builds of each template stay, and any older one a cluster still clones from. The builds run in the management cluster with an API token of their own, which may create and delete VMs in the template pool, download to import_datastore and write to iso_datastore; it gets full control of those two storages (Proxmox VE deletes a file there only for Datastore.Allocate), so dedicated ones are best. The node defaults to the first of proxmox_nodes, storage to the first of workload_datastores, import_datastore to image_datastore and iso_datastore to bootstrap_datastore. The VM that prepares an image attaches to bridge (default the first of workload_bridges) and takes address (with prefix, gateway and dns), or DHCP when address is null. creator_builds lets those who may create clusters have a missing template built, such as for a Kubernetes version no kubeadm template exists for yet.
+  EOT
+  type = object({
+    enabled          = optional(bool, true)
+    weekday          = optional(string, "Sun")
+    time             = optional(string, "01:00")
+    time_zone        = optional(string, "UTC")
+    soak_hours       = optional(number, 24)
+    node             = optional(string)
+    storage          = optional(string)
+    import_datastore = optional(string)
+    iso_datastore    = optional(string)
+    bridge           = optional(string)
+    vlan             = optional(number, 0)
+    address          = optional(string)
+    gateway          = optional(string)
+    dns              = optional(list(string), [])
+    creator_builds   = optional(bool, false)
+  })
+  default  = {}
+  nullable = false
+
+  validation {
+    condition     = contains(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], var.template_refresh.weekday)
+    error_message = "template_refresh.weekday is one of Mon, Tue, Wed, Thu, Fri, Sat and Sun."
+  }
+  validation {
+    condition     = can(regex("^([01][0-9]|2[0-3]):[0-5][0-9]$", var.template_refresh.time))
+    error_message = "template_refresh.time is HH:MM."
+  }
+  validation {
+    condition     = var.template_refresh.soak_hours >= 0 && var.template_refresh.soak_hours <= 720 && floor(var.template_refresh.soak_hours) == var.template_refresh.soak_hours
+    error_message = "template_refresh.soak_hours is a whole number of hours from 0 to 720."
+  }
+  validation {
+    condition     = var.template_refresh.vlan >= 0 && var.template_refresh.vlan <= 4094
+    error_message = "template_refresh.vlan is 0 for none, or a VLAN tag up to 4094."
+  }
+  validation {
+    condition     = var.template_refresh.address == null ? var.template_refresh.gateway == null : can(cidrhost(var.template_refresh.address, 0)) && var.template_refresh.gateway != null
+    error_message = "template_refresh.address is an address with prefix, such as 192.0.2.50/24, and needs a gateway; without it, the VM takes DHCP and gateway stays null."
+  }
 }
 
 variable "controller_image" {

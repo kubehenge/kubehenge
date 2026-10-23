@@ -10,6 +10,14 @@ import { PodSecurityFields, cisHint } from "./PodSecurity";
 import type { ClusterClass } from "./types";
 import { Field, browserZone, istioHint, registerHint } from "./ui";
 
+// Talos nodes have no VM template builds to move to, so only the other classes mention them.
+function upgradesHint(cls: ClusterClass | undefined): string {
+  const window = `Every day from 02:00 for four hours, ${browserZone()} time; the cluster's Options change the window later.`;
+  return cls?.distribution === "talos"
+    ? window
+    : `${window} The nodes move to new builds of their VM template in the same window, whatever this says.`;
+}
+
 // LogsAddOn keeps logs, offered only beside monitoring, whose Grafana reads them.
 function LogsAddOn({ form, set }: Pick<StepProps, "form" | "set">): JSX.Element {
   return (
@@ -316,10 +324,7 @@ export function AddOnsStep({
         </p>
       )}
       {variable(cls, "upgrades") && (
-        <Field
-          label="Upgrade automatically"
-          hint={`Every day from 02:00 for four hours, ${browserZone()} time; the cluster's Options change the window later.`}
-        >
+        <Field label="Upgrade automatically" hint={upgradesHint(cls)}>
           {(id) => <ModeSelect id={id} value={form.upgradeMode} onChange={(m) => set("upgradeMode", m)} />}
         </Field>
       )}

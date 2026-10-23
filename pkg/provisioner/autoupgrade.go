@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/luthermonson/go-proxmox"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -27,6 +29,9 @@ type UpgradePolicy struct {
 	// Mode is off, patch or minor.
 	Mode   string `json:"mode"`
 	Window Window `json:"window"`
+	// NodeImages has the nodes move to new template builds inside the window, whatever Mode says;
+	// unset means on.
+	NodeImages *bool `json:"nodeImages,omitempty"`
 }
 
 // Window is when automatic upgrades may start.
@@ -275,8 +280,9 @@ func (s *ChannelServer) templateChannels(ctx context.Context) (Channels, error) 
 }
 
 // poolTemplates is what the token sees of Kubehenge's templates, the controller's being those of
-// the template pool. The ClusterClasses clone from templates of the default OS only; one made from
-// another cloud image is a source no machine of theirs could be built from.
+// the template pool. The ClusterClasses clone from builds of templates of the default OS only; one
+// made from another cloud image, or without a build tag, is a source no machine of theirs could be
+// built from.
 type poolTemplates struct {
 	// kubeadm are the Kubernetes versions of the kubeadm templates, newest first.
 	kubeadm []kubeVersion
@@ -284,6 +290,8 @@ type poolTemplates struct {
 	cloudImage bool
 	// storages are those any of Kubehenge's templates have disks on, whatever their OS.
 	storages []string
+	// builds are the builds of each line.
+	builds NodeImageBuilds
 }
 
 // kubeadmVersionOf is the Kubernetes version a kubeadm template's tags name.
@@ -307,12 +315,15 @@ func listPoolTemplates(ctx context.Context, c *proxmox.Client) (poolTemplates, e
 	if err != nil {
 		return poolTemplates{}, fmt.Errorf("listing the Proxmox VE templates: %w", err)
 	}
-	seen := poolTemplates{storages: inv.Storages}
+	seen := poolTemplates{storages: inv.Storages, builds: NodeImageBuilds{}}
 	for _, r := range inv.Templates {
 		tags := templates.ParseTags(r.Tags)
-		if !slices.Contains(tags, templates.DefaultOS) {
+		at, built := templates.BuildOf(tags)
+		if !slices.Contains(tags, templates.DefaultOS) || !built {
 			continue
 		}
+		line := templates.LineKey(tags)
+		seen.builds[line] = append(seen.builds[line], at)
 		if slices.Contains(tags, "cloud-image") {
 			seen.cloudImage = true
 		}
@@ -329,6 +340,9 @@ func listPoolTemplates(ctx context.Context, c *proxmox.Client) (poolTemplates, e
 		}
 		return 0
 	})
+	for line := range seen.builds {
+		slices.SortFunc(seen.builds[line], time.Time.Compare)
+	}
 	return seen, nil
 }
 
@@ -343,8 +357,10 @@ type Upgrader struct {
 	Releases       Releases
 	// RancherKubernetes holds back the cluster that runs Rancher, as the hook would.
 	RancherKubernetes KubernetesMinors
-	Interval          time.Duration
-	Now               func() time.Time
+	// Soak is how long a template build waits before clusters are offered it.
+	Soak     time.Duration
+	Interval time.Duration
+	Now      func() time.Time
 }
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable: one replica upgrades.
@@ -381,6 +397,11 @@ func (u *Upgrader) RunOnce(ctx context.Context) {
 			continue
 		}
 		if to == "" {
+			// An upgrade takes the newest node images itself, so a refresh is only looked for
+			// when none starts.
+			if err := u.refresh(ctx, c); err != nil {
+				log.Error(err, "node image refresh", "cluster", client.ObjectKeyFromObject(c))
+			}
 			continue
 		}
 		from := c.Spec.Topology.Version
@@ -432,6 +453,130 @@ func (u *Upgrader) next(ctx context.Context, c *clusterv1.Cluster, channels map[
 		return "", nil
 	}
 	return to, nil
+}
+
+// refresh moves a cluster's node image time to now, which has Cluster API replace its machines with
+// clones of the newest builds of their template lines, when the cluster is settled inside its
+// window and a build it does not run yet has been offered. Outside the window it records that it
+// holds the cluster, and until when.
+func (u *Upgrader) refresh(ctx context.Context, c *clusterv1.Cluster) error {
+	if !Owns(c, u.ClassNamespace) || !c.DeletionTimestamp.IsZero() || !RefreshesNodes(c) {
+		return nil
+	}
+	policy, _, err := optionalVariable[UpgradePolicy](c, "upgrades")
+	if err != nil {
+		return err
+	}
+	now := u.Now().UTC().Truncate(time.Second)
+	var w waiting
+	if policy.RefreshesNodeImages() {
+		if w, err = u.waitingBuild(ctx, c, now); err != nil {
+			return err
+		}
+	}
+	from, to := w.from, w.to
+	if to.IsZero() {
+		return u.hold(ctx, c, "")
+	}
+	open, err := policy.Window.Open(now)
+	if err != nil {
+		return err
+	}
+	if !open {
+		opens, err := policy.Window.Next(now)
+		if err != nil {
+			return err
+		}
+		return u.hold(ctx, c, fmt.Sprintf("%s at %s", templates.BuildTag(to), opens.UTC().Format(time.RFC3339)))
+	}
+	if !settled(c) {
+		return nil
+	}
+	base := client.MergeFromWithOptions(c.DeepCopy(), client.MergeFromWithOptimisticLock{})
+	if c.Annotations == nil {
+		c.Annotations = map[string]string{}
+	}
+	c.Annotations[NodeImageAnnotation] = now.Format(time.RFC3339)
+	c.Annotations[NodeImageRefreshedAnnotation] = fmt.Sprintf("%s to %s at %s", templates.BuildTag(from), templates.BuildTag(to), now.Format(time.RFC3339))
+	delete(c.Annotations, NodeImageHeldAnnotation)
+	if err := u.Client.Patch(ctx, c, base); err != nil {
+		return fmt.Errorf("moving the node image time: %w", err)
+	}
+	ctrl.LoggerFrom(ctx).WithName("upgrader").Info("node image refresh started", "cluster", client.ObjectKeyFromObject(c), "from", templates.BuildTag(from), "to", templates.BuildTag(to))
+	return nil
+}
+
+// waiting is the build a cluster's nodes run of a line (from) and the newer one offered that they
+// would move to (to); zero times when none waits.
+type waiting struct {
+	from, to time.Time
+}
+
+// waitingBuild is the build that waits for a cluster's nodes. A ClusterClass the controller has
+// not recorded builds on yet offers none.
+func (u *Upgrader) waitingBuild(ctx context.Context, c *clusterv1.Cluster, now time.Time) (waiting, error) {
+	builds, err := ClassBuilds(ctx, u.Client, c)
+	if errors.Is(err, errNoBuildsRecorded) {
+		return waiting{}, nil
+	}
+	if err != nil {
+		return waiting{}, err
+	}
+	t, err := NodeImageTime(c)
+	if err != nil {
+		return waiting{}, err
+	}
+	lines, err := ClusterLines(c)
+	if err != nil {
+		return waiting{}, err
+	}
+	for _, line := range lines {
+		if next, ok := builds.Waiting(line, t, now, u.Soak); ok {
+			from, _ := builds.Pick(line, t, u.Soak)
+			return waiting{from: from, to: next}, nil
+		}
+	}
+	return waiting{}, nil
+}
+
+// hold records on the cluster which build it is held from and until when, or with "" that it is
+// held from none; it writes only a change.
+func (u *Upgrader) hold(ctx context.Context, c *clusterv1.Cluster, held string) error {
+	if c.Annotations[NodeImageHeldAnnotation] == held {
+		return nil
+	}
+	value := any(nil)
+	if held != "" {
+		value = held
+	}
+	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]any{NodeImageHeldAnnotation: value}}})
+	if err != nil {
+		return fmt.Errorf("recording the node image hold: %w", err)
+	}
+	target := &clusterv1.Cluster{}
+	target.Namespace, target.Name = c.Namespace, c.Name
+	if err := u.Client.Patch(ctx, target, client.RawPatch(types.MergePatchType, patch)); err != nil {
+		return fmt.Errorf("recording the node image hold: %w", err)
+	}
+	return nil
+}
+
+// errNoBuildsRecorded is a ClusterClass the controller has not recorded the template builds on yet.
+var errNoBuildsRecorded = errors.New("no template builds recorded yet")
+
+// ClassBuilds reads the builds of the template lines recorded on a cluster's ClusterClass.
+func ClassBuilds(ctx context.Context, r client.Reader, c *clusterv1.Cluster) (NodeImageBuilds, error) {
+	ref := c.Spec.Topology.ClassRef
+	ns := cmpOr(ref.Namespace, c.Namespace)
+	class := &clusterv1.ClusterClass{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: ref.Name}, class); err != nil {
+		return nil, fmt.Errorf("reading ClusterClass %s/%s: %w", ns, ref.Name, err)
+	}
+	recorded, ok := class.Annotations[NodeImageBuildsAnnotation]
+	if !ok {
+		return nil, fmt.Errorf("ClusterClass %s/%s: %w", ns, ref.Name, errNoBuildsRecorded)
+	}
+	return ParseNodeImageBuilds(recorded)
 }
 
 // settled tells whether a cluster is available with nothing rolling out, so an upgrade starts

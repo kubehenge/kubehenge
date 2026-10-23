@@ -186,8 +186,12 @@ resource "proxmox_acl" "ha" {
 
 locals {
   # The storages the management cluster's own VMs, its disk image and Cluster API's cloud-init
-  # drives of every cluster are on, which no cluster may hold Datastore.Allocate on.
-  management_storages         = distinct([var.vm_datastore, var.image_datastore, var.bootstrap_datastore])
+  # drives of every cluster are on, and those the template builds download and upload to with
+  # Datastore.Allocate of their own, which no cluster may hold Datastore.Allocate on.
+  management_storages = distinct(concat(
+    [var.vm_datastore, var.image_datastore, var.bootstrap_datastore],
+    local.template_builder.enabled ? [local.template_builder.import, local.template_builder.iso] : [],
+  ))
   datastore_allocate_storages = var.cluster_datastore_allocate ? [for s in var.workload_datastores : s if !contains(local.management_storages, s)] : []
 
   provisioner_acls = concat(
@@ -217,6 +221,89 @@ resource "proxmox_acl" "provisioner" {
   propagate = each.value.propagate
 }
 
+# The template refresh builds the Ubuntu templates again every week with a user and token of their
+# own, so that nothing else in the management cluster can make or delete templates. Deleting a
+# downloaded image or a cloud-init ISO takes Datastore.Allocate on its storage, which reaches every
+# file there; Sys.AccessNetwork on the node lets Proxmox VE download the image, and nothing more.
+locals {
+  template_builder = {
+    enabled = var.template_refresh.enabled
+    node    = coalesce(var.template_refresh.node, var.proxmox_nodes[0])
+    storage = coalesce(var.template_refresh.storage, var.workload_datastores[0])
+    import  = coalesce(var.template_refresh.import_datastore, var.image_datastore)
+    iso     = coalesce(var.template_refresh.iso_datastore, var.bootstrap_datastore)
+    bridge  = coalesce(var.template_refresh.bridge, var.workload_bridges[0])
+  }
+}
+
+resource "proxmox_virtual_environment_role" "template_builder_vms" {
+  count = local.template_builder.enabled ? 1 : 0
+
+  role_id = "${var.cluster_name}-template-builder-vms"
+  # Creating, preparing (through the guest agent), converting and deleting the template VMs.
+  # Pool.Audit because the cluster's resource view leaves out the pool of every VM in a pool the
+  # caller may not audit, and the builder tells its own builds and templates by that pool.
+  privileges = [
+    "Pool.Audit", "VM.Allocate", "VM.Audit", "VM.Config.CDROM", "VM.Config.CPU", "VM.Config.Disk", "VM.Config.HWType",
+    "VM.Config.Memory", "VM.Config.Network", "VM.Config.Options", "VM.GuestAgent.Unrestricted", "VM.PowerMgmt",
+  ]
+}
+
+resource "proxmox_virtual_environment_role" "template_builder_files" {
+  count = local.template_builder.enabled ? 1 : 0
+
+  role_id    = "${var.cluster_name}-template-builder-files"
+  privileges = ["Datastore.Allocate", "Datastore.AllocateTemplate", "Datastore.Audit"]
+}
+
+resource "proxmox_virtual_environment_role" "template_builder_network" {
+  count = local.template_builder.enabled ? 1 : 0
+
+  role_id    = "${var.cluster_name}-template-builder-network"
+  privileges = ["Sys.AccessNetwork", "Sys.Audit"]
+}
+
+resource "proxmox_virtual_environment_user" "template_builder" {
+  count = local.template_builder.enabled ? 1 : 0
+
+  user_id = "${var.cluster_name}-template-builder@pve"
+  comment = "VM template builds of Kubehenge management cluster ${var.cluster_name}; signs in with its API token only"
+}
+
+resource "proxmox_user_token" "template_builder" {
+  count = local.template_builder.enabled ? 1 : 0
+
+  user_id               = proxmox_virtual_environment_user.template_builder[0].user_id
+  token_name            = "refresh"
+  comment               = "Kubehenge's template refresh"
+  privileges_separation = false
+}
+
+locals {
+  template_builder_acls = local.template_builder.enabled ? concat(
+    [
+      { path = "/", role = proxmox_virtual_environment_role.audit.role_id, propagate = false },
+      { path = "/nodes", role = proxmox_virtual_environment_role.audit.role_id, propagate = true },
+      { path = "/nodes/${local.template_builder.node}", role = proxmox_virtual_environment_role.template_builder_network[0].role_id, propagate = false },
+      { path = "/pool/${proxmox_virtual_environment_pool.templates.pool_id}", role = proxmox_virtual_environment_role.template_builder_vms[0].role_id, propagate = true },
+      { path = "/sdn/zones/localnetwork/${local.template_builder.bridge}", role = "PVESDNUser", propagate = true },
+    ],
+    [for s in distinct([local.template_builder.import, local.template_builder.iso]) : { path = "/storage/${s}", role = proxmox_virtual_environment_role.template_builder_files[0].role_id, propagate = false }],
+    # The template disks' storage, also when it is one of those two: Datastore.Allocate there does
+    # not hold Datastore.AllocateSpace, which creating a disk needs.
+    [{ path = "/storage/${local.template_builder.storage}", role = proxmox_virtual_environment_role.cluster_storage.role_id, propagate = false }],
+  ) : []
+}
+
+resource "proxmox_acl" "template_builder" {
+  for_each = { for a in local.template_builder_acls : "${a.path} ${a.role}" => a }
+
+  user_id   = proxmox_virtual_environment_user.template_builder[0].user_id
+  path      = each.value.path
+  role_id   = each.value.role
+  propagate = each.value.propagate
+}
+
 resource "proxmox_download_file" "talos" {
   for_each = toset(var.proxmox_nodes)
 
@@ -236,9 +323,11 @@ resource "proxmox_download_file" "talos" {
     proxmox_acl.clusters,
     proxmox_acl.ha,
     proxmox_acl.provisioner,
+    proxmox_acl.template_builder,
     proxmox_user_token.cluster_api,
     proxmox_user_token.ha,
     proxmox_user_token.provisioner,
+    proxmox_user_token.template_builder,
     proxmox_virtual_environment_pool.management,
   ]
 }

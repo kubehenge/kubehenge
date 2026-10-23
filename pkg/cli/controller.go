@@ -58,6 +58,8 @@ const (
 	templateVersionsInterval = 30 * time.Second
 	// haRulesInterval is how soon an HA rule made in Proxmox VE is offered to cluster creators.
 	haRulesInterval = 30 * time.Second
+	// templateRequestsInterval is how soon a build asked for in the interface starts.
+	templateRequestsInterval = 15 * time.Second
 )
 
 // controllerOptions are the controller command's flags.
@@ -104,6 +106,8 @@ type controllerOptions struct {
 	upgradeInterval   time.Duration
 	classProviders    []string
 	offerHARules      bool
+	nodeImageSoak     time.Duration
+	templateRefresh   bool
 }
 
 func newControllerCommand(conn *pve.Config) *cobra.Command {
@@ -140,6 +144,8 @@ separate nodes.`,
 	f.StringArrayVar(&o.classProviders, "class-providers", nil, "namespaces of the Cluster API providers only one ClusterClass's clusters use, as <class>=<namespace>,<namespace>; they run only while a cluster does (repeatable)")
 	f.BoolVar(&o.offerHARules, "offer-ha-rules", false, "offer Proxmox VE's HA node-affinity rules, their names and nodes only, to those who may create a cluster but not read the rules, through the ConfigMap "+provisioner.HARulesName)
 	f.DurationVar(&o.upgradeInterval, "upgrade-interval", defaultUpgradeInterval, "how often clusters are checked for an automatic upgrade due in their window")
+	f.DurationVar(&o.nodeImageSoak, "node-image-soak", provisioner.DefaultNodeImageSoak, "how old a template build is before clusters move to it; the template refresh's --soak")
+	f.BoolVar(&o.templateRefresh, "template-refresh", false, "start the template refresh CronJob's Job for the builds asked for in the interface")
 	f.IntVar(&o.port, "extension-port", defaultExtensionPort, "port of the Runtime Extension server")
 	f.StringVar(&o.extensionConfig, "extension-config", "kubehenge", "ExtensionConfig through which Cluster API calls this controller's hooks")
 	f.StringVar(&o.certDir, "extension-cert-dir", "/etc/kubehenge/tls", "directory with tls.crt and tls.key for the Runtime Extension server")
@@ -264,6 +270,9 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 			GitHub:    "https://github.com",
 			Raw:       "https://raw.githubusercontent.com",
 		},
+		Client: mgr.GetClient(),
+		Soak:   o.nodeImageSoak,
+		Now:    time.Now,
 	}
 	if err = o.addPlacement(mgr, extensions, scheme, hooks, conn, cloud); err != nil {
 		return err
@@ -533,10 +542,24 @@ func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, 
 		},
 		RancherKubernetes: rancherMinors,
 		Interval:          o.upgradeInterval,
+		Soak:              o.nodeImageSoak,
 		Now:               time.Now,
 	}
 	if err := mgr.Add(upgrader); err != nil {
 		return fmt.Errorf("the upgrader: %w", err)
+	}
+	if !o.templateRefresh {
+		return nil
+	}
+	requests := &provisioner.TemplateRequests{
+		Client:    mgr.GetClient(),
+		Reader:    mgr.GetAPIReader(),
+		Namespace: o.r.ClassNamespace,
+		Interval:  templateRequestsInterval,
+		Now:       time.Now,
+	}
+	if err := mgr.Add(requests); err != nil {
+		return fmt.Errorf("the template requests: %w", err)
 	}
 	return nil
 }

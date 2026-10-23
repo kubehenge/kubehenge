@@ -6,6 +6,7 @@ locals {
   cluster_api_token_secret = reverse(split("=", proxmox_user_token.cluster_api.value))[0]
 
   controller_secret = { name = "kubehenge-proxmox", namespace = local.kubehenge_namespace }
+  builder_secret    = { name = "kubehenge-template-builder", namespace = local.kubehenge_namespace }
 
   # The Helm provider upgrades a release only when its chart's version or its values change. Each
   # release gets the digest of the files Helm packages from its chart, so a changed chart is
@@ -282,18 +283,21 @@ resource "helm_release" "cluster_api_providers" {
     namespaces  = distinct(concat([local.kubehenge_namespace], [for p in local.providers : p.namespace]))
     providers   = local.providers
     image       = local.controller_image
-    secrets = {
-      (local.cluster_api_variables.name) = { namespace = local.cluster_api_variables.namespace, data = local.cluster_api_variables.data }
-      (local.capmox_variables.name)      = { namespace = local.capmox_variables.namespace, data = local.capmox_variables.data }
-      (local.controller_secret.name) = {
-        namespace = local.controller_secret.namespace
-        data      = { "ca.crt" = var.proxmox_ca_certificate }
-      }
-      proxmox-ca = {
-        namespace = local.capmox_namespace
-        data      = { "ca.crt" = var.proxmox_ca_certificate }
-      }
-    }
+    secrets = merge(
+      {
+        (local.cluster_api_variables.name) = { namespace = local.cluster_api_variables.namespace, data = local.cluster_api_variables.data }
+        (local.capmox_variables.name)      = { namespace = local.capmox_variables.namespace, data = local.capmox_variables.data }
+        (local.controller_secret.name) = {
+          namespace = local.controller_secret.namespace
+          data      = { "ca.crt" = var.proxmox_ca_certificate }
+        }
+        proxmox-ca = {
+          namespace = local.capmox_namespace
+          data      = { "ca.crt" = var.proxmox_ca_certificate }
+        }
+      },
+      local.template_builder.enabled ? { (local.builder_secret.name) = { namespace = local.builder_secret.namespace, data = {} } } : {},
+    )
   })]
 
   set_sensitive = concat([
@@ -309,6 +313,10 @@ resource "helm_release" "cluster_api_providers" {
     },
     ], [for t in proxmox_user_token.ha : {
       name  = "secrets.${local.controller_secret.name}.data.ha-token"
+      value = t.value
+      type  = "string"
+      }], [for t in proxmox_user_token.template_builder : {
+      name  = "secrets.${local.builder_secret.name}.data.token"
       value = t.value
       type  = "string"
   }])
@@ -361,6 +369,25 @@ resource "helm_release" "kubehenge" {
           managementStorages = local.management_storages
         }
       }
+      templateRefresh = {
+        enabled       = local.template_builder.enabled
+        weekday       = var.template_refresh.weekday
+        time          = var.template_refresh.time
+        timeZone      = var.template_refresh.time_zone
+        soakHours     = var.template_refresh.soak_hours
+        secret        = local.builder_secret.name
+        node          = local.template_builder.node
+        storage       = local.template_builder.storage
+        importStorage = local.template_builder.import
+        isoStorage    = local.template_builder.iso
+        pool          = proxmox_virtual_environment_pool.templates.pool_id
+        bridge        = local.template_builder.bridge
+        vlan          = var.template_refresh.vlan
+        address       = var.template_refresh.address == null ? "" : var.template_refresh.address
+        gateway       = var.template_refresh.gateway == null ? "" : var.template_refresh.gateway
+        dns           = var.template_refresh.dns
+        creatorBuilds = var.template_refresh.creator_builds
+      }
       clusterOIDC = [for p in var.cluster_oidc : merge(
         {
           issuerURL      = p.issuer_url
@@ -384,5 +411,5 @@ resource "helm_release" "kubehenge" {
     { image = local.controller_image },
   ))]
 
-  depends_on = [helm_release.cluster_api_providers, proxmox_acl.provisioner, proxmox_acl.ha]
+  depends_on = [helm_release.cluster_api_providers, proxmox_acl.provisioner, proxmox_acl.ha, proxmox_acl.template_builder]
 }

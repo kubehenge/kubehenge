@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -73,9 +74,16 @@ type Hooks struct {
 	Releases *ReleaseChecksums
 	// DatastoreAllocate is what lets a cluster hold Datastore.Allocate on its storage.
 	DatastoreAllocate DatastoreAllocate
+	// Client moves a cluster's node image time before an upgrade.
+	Client client.Client
+	// Soak is how long a template build waits before clusters are offered it.
+	Soak time.Duration
+	Now  func() time.Time
 }
 
-// BeforeClusterUpgrade holds Rancher's cluster at the Kubernetes versions Rancher runs on.
+// BeforeClusterUpgrade holds Rancher's cluster at the Kubernetes versions Rancher runs on, and has
+// every upgrade clone its machines from the newest template builds offered: the upgrade replaces
+// every machine anyway, and a refresh after it would replace them all again.
 func (h *Hooks) BeforeClusterUpgrade(ctx context.Context, req *runtimehooksv1.BeforeClusterUpgradeRequest, resp *runtimehooksv1.BeforeClusterUpgradeResponse) {
 	resp.Status = runtimehooksv1.ResponseStatusSuccess
 	if !Owns(&req.Cluster, h.ClassNamespace) {
@@ -85,6 +93,18 @@ func (h *Hooks) BeforeClusterUpgrade(ctx context.Context, req *runtimehooksv1.Be
 		// Retried rather than failed: a later Kubehenge release with a newer Rancher lets it through.
 		resp.RetryAfterSeconds = 300
 		resp.Message = err.Error()
+		return
+	}
+	moved, err := h.newestNodeImages(ctx, &req.Cluster, req.ToKubernetesVersion)
+	switch {
+	case err != nil:
+		resp.RetryAfterSeconds = 10
+		resp.Message = "taking the newest node images: " + err.Error()
+	case moved:
+		// Held for a moment, so that the rollout starts from the templates of the new time rather
+		// than rotating them again once it is under way.
+		resp.RetryAfterSeconds = 5
+		resp.Message = "taking the newest node images"
 	}
 }
 
@@ -170,6 +190,44 @@ func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.Bef
 		resp.Status = runtimehooksv1.ResponseStatusFailure
 		resp.Message = err.Error()
 	}
+}
+
+// newestNodeImages moves a cluster's node image time to now when that changes the build its
+// machines at the version are cloned from, and tells whether it did.
+func (h *Hooks) newestNodeImages(ctx context.Context, c *clusterv1.Cluster, version string) (bool, error) {
+	if h.Client == nil || !RefreshesNodes(c) {
+		return false, nil
+	}
+	builds, err := ClassBuilds(ctx, h.Reader, c)
+	if err != nil {
+		return false, err
+	}
+	t, err := NodeImageTime(c)
+	if err != nil {
+		return false, err
+	}
+	line, err := MachineLine(strings.TrimPrefix(c.Spec.Topology.ClassRef.Name, ClassPrefix), version)
+	if err != nil {
+		return false, err
+	}
+	now := h.now()
+	if _, waiting := builds.Waiting(line, t, now, h.Soak); !waiting {
+		return false, nil
+	}
+	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`, NodeImageAnnotation, now.Format(time.RFC3339))
+	target := &clusterv1.Cluster{}
+	target.Namespace, target.Name = c.Namespace, c.Name
+	if err := h.Client.Patch(ctx, target, client.RawPatch(types.MergePatchType, patch)); err != nil {
+		return false, fmt.Errorf("moving the node image time: %w", err)
+	}
+	return true, nil
+}
+
+func (h *Hooks) now() time.Time {
+	if h.Now == nil {
+		return time.Now().UTC().Truncate(time.Second)
+	}
+	return h.Now().UTC().Truncate(time.Second)
 }
 
 // checkRancher refuses Rancher on a Kubernetes version its release does not run on, and a second

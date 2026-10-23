@@ -30,7 +30,8 @@ template:
 {{- end -}}
 
 {{/*
-Call with "tags", the template tags to select as written by `kubehenge template create`, and
+Call with "tags", the tags of the template line to select, which stand in until the controller's
+patch names the build each machine is cloned from (the cluster's kubehenge.dev/node-image), and
 "serviceJoins" for distributions whose node joins through a systemd service that keeps retrying
 (k3s, RKE2). Their cloud-init stops at the installer's first start of that service, so a join that
 waits out a short outage of the control plane (another server restarting during a rolling upgrade)
@@ -694,7 +695,8 @@ The kubelet settings cis adds, as kubelet flags.
 {{- end -}}
 
 {{/*
-Automatic Kubernetes upgrades, which Kubehenge's controller starts; no patch reads it.
+Automatic Kubernetes upgrades and node image refreshes, which Kubehenge's controller starts; no patch
+reads it.
 */}}
 {{- define "kubehenge.upgradeVariables" -}}
 - name: upgrades
@@ -703,16 +705,25 @@ Automatic Kubernetes upgrades, which Kubehenge's controller starts; no patch rea
     openAPIV3Schema:
       type: object
       description: >-
-        Upgrade Kubernetes automatically, inside a maintenance window. Kubehenge's controller takes
-        the newest release the mode allows, one minor version at a time and never past the
-        distribution's stable channel, and starts only when the cluster is healthy and no rollout
-        is running. A started rollout finishes even if the window ends first.
+        Upgrade Kubernetes automatically, and move the nodes to new builds of their VM template,
+        inside a maintenance window. Kubehenge's controller takes the newest release the mode
+        allows, one minor version at a time and never past the distribution's stable channel, and
+        starts only when the cluster is healthy and no rollout is running. A started rollout
+        finishes even if the window ends first.
       properties:
         mode:
           type: string
           enum: ["off", patch, minor]
           default: "off"
           description: patch stays on the cluster's minor version; minor also moves to the next one.
+        nodeImages:
+          type: boolean
+          default: true
+          description: >-
+            Replace the nodes inside the window with clones of the newest build of their VM
+            template, which carries Ubuntu's updates, once that build is a day old, whatever mode
+            says. Nodes are replaced one at a time, as in an upgrade. Talos nodes take their
+            updates by upgrading Talos instead.
         window:
           type: object
           properties:

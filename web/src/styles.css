@@ -608,7 +608,8 @@ fieldset.choices .check + .hint {
 }
 
 /* Fields keep their own gap below; a closing button needs one from the box's border. */
-.group > button:last-child {
+.group > button:last-child,
+.group > .actions:last-child {
   margin-bottom: 8px;
 }
 

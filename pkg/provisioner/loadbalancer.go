@@ -110,7 +110,7 @@ func metalLBValues() map[string]any {
 // kubeVipValues run kube-vip on every node for the Services only, each Service's address held by
 // one node at a time through a lease of its own, so that the addresses spread over the nodes.
 func kubeVipValues() map[string]any {
-	const on, off = "true", "false"
+	const on, off = trueText, falseText
 	return map[string]any{
 		"env": map[string]any{
 			"vip_arp": on, "cp_enable": off, "lb_enable": off,
@@ -235,7 +235,7 @@ func (r *Reconciler) afterKubeVip(ctx context.Context, cluster *clusterv1.Cluste
 		if cluster.Annotations == nil {
 			cluster.Annotations = map[string]string{}
 		}
-		cluster.Annotations[kubeVipServicesAnnotation] = "true"
+		cluster.Annotations[kubeVipServicesAnnotation] = trueText
 	} else {
 		delete(cluster.Annotations, kubeVipServicesAnnotation)
 	}

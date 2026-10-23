@@ -87,7 +87,7 @@ sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 | `--bridge <bridge>` | `vmbr0` | The bridge the container attaches to. |
 | `--proxmox-url <URL>` | the best name or address of this Proxmox VE cluster that the API's certificate is valid for ([below](#the-proxmox-ve-api)) | The Proxmox VE API as the appliance and the clusters' VMs reach it, such as `https://pve.example.org:8006`. Each checks the certificate the API serves, so the name or address has to be one that certificate is valid for; the installer checks that the appliance gets an answer and stops otherwise. |
 | `--proxmox-ca <file>` | the Proxmox VE cluster's CA, else the CA in this node's trust store, else the CA the API serves once you say yes to it ([below](#the-proxmox-ve-api)) | The CA that signed the API's certificate, such as your organisation's where it replaced Proxmox VE's own. The file may hold other certificates too, such as a whole trust store: the appliance is given only those the API's certificate rests on. The appliance, the management cluster and the clusters' VMs check the API against it; the installer stops before it creates anything unless the API's certificate is one this CA signed for the URL. |
-| `--proxmox-insecure` | off | The appliance, the management cluster (OpenTofu's and Cluster API's Proxmox VE providers, Kubehenge's controller) and every cluster's cloud controller manager and CSI plugin reach the Proxmox VE API without verifying its certificate. The Administration page shows that it is on. Not with `--proxmox-ca`. |
+| `--proxmox-insecure` | off | The appliance, the management cluster (OpenTofu's and Cluster API's Proxmox VE providers, Kubehenge's controller and template builds) and every cluster's cloud controller manager and CSI plugin reach the Proxmox VE API without verifying its certificate. The Administration page shows that it is on. Not with `--proxmox-ca`. |
 | `--ip dhcp` or `--ip <address>/<prefix>` | `dhcp` | The container's address, such as `192.0.2.40/24`. |
 | `--gateway <address>` | none | The default gateway, with a static `--ip`. |
 | `--dns <address>,...` | this node's name servers | The name servers the container asks, such as `192.0.2.53,192.0.2.54`: needed where the node's own are not reachable from the container's network, such as a resolver listening only on the node's loopback address. |
@@ -243,6 +243,7 @@ The run acts with your own Proxmox VE session: the interface renews your ticket 
 | Proxmox VE HA | Off by default. When on, Proxmox VE HA keeps each cluster's control-plane VMs on separate nodes and restarts them on another node after a node fails, for every cluster on shared storage that does not opt out ([clusters.md](clusters.md#machines)). See [below](#proxmox-ve-ha) before switching it on. |
 | HA rules for cluster creators | Off by default. When on, everyone who may create or change a cluster can place it on the nodes of one of Proxmox VE's HA node-affinity rules without `Sys.Audit` on `/` of their own ([clusters.md](clusters.md#machines)). See [below](#ha-rules-for-cluster-creators). |
 | CSI plugin | Off by default. When on, clusters may choose the CSI plugin's newest release ([below](#the-csi-plugins-newest-release)). |
+| Template refresh | On by default: the Ubuntu VM templates are built again every week with Ubuntu's updates, and clusters' nodes move to each build in their maintenance windows once it is a day old ([templates.md](templates.md#the-weekly-build)). **Day**, **Time** and **Time zone** say when (Sunday at 01:00 UTC unless changed); **Template disks**, one of the storages for clusters, where the builds go (the first by default); **Build address**, with its gateway and DNS servers, a static address for the VM that prepares an image, which otherwise takes DHCP on the first bridge for clusters. **Let those who may create clusters have a missing template built** (recommended, off by default) lets anyone with `VM.Allocate` on the workload pool ask for the cloud image's template or a kubeadm version's from the create wizard; the build runs with the refresh's token, never theirs. See [below](#what-the-template-builds-may-do). |
 | Advanced: Registry mirrors | `registry=endpoint`, one per line, such as `ghcr.io=https://mirror.example.org:5000`: endpoints the management cluster's nodes try before the registry itself. |
 | Advanced: Pod ranges, Service ranges | The management cluster's own. When empty, the first of a few private ranges clear of the nodes' network, the API address and the gateway is taken: `10.244.0.0/16` and `10.96.0.0/12` when they are clear. |
 | State passphrase | Encrypts the management cluster's state on the appliance ([below](#the-state-passphrase)); asked for twice on the first run. |
@@ -263,7 +264,7 @@ Reading Proxmox VE's HA rules takes `Sys.Audit` on `/`, which reaches the whole 
 
 #### The CSI plugin's newest release
 
-The CSI plugin's newer releases need `Datastore.Allocate` on a cluster's storage, which covers every volume on it and its definition, so clusters run its last release without it unless this setting is on. With it, a cluster may choose the newest release on a storage of its own ([clusters.md](clusters.md#persistent-volumes)); its token then holds `Datastore.Allocate` there. The setting creates a role, `<name>-cluster-datastore`, holding `Datastore.Allocate`, `Datastore.AllocateSpace` and `Datastore.Audit`, and gives Kubehenge's controller `Datastore.Allocate` on each storage for clusters that the management cluster's disks, its Talos image and the cloud-init images are not on, so that it can grant the role there. Switching it off removes the role, and with it every cluster's grant; those clusters go back to the earlier release.
+The CSI plugin's newer releases need `Datastore.Allocate` on a cluster's storage, which covers every volume on it and its definition, so clusters run its last release without it unless this setting is on. With it, a cluster may choose the newest release on a storage of its own ([clusters.md](clusters.md#persistent-volumes)); its token then holds `Datastore.Allocate` there. The setting creates a role, `<name>-cluster-datastore`, holding `Datastore.Allocate`, `Datastore.AllocateSpace` and `Datastore.Audit`, and gives Kubehenge's controller `Datastore.Allocate` on each storage for clusters that the management cluster's disks, its Talos image, the cloud-init images and the template builds' downloads and uploads are not on, so that it can grant the role there. Switching it off removes the role, and with it every cluster's grant; those clusters go back to the earlier release.
 
 #### Backup targets
 
@@ -281,6 +282,26 @@ Each target is an S3 store and a bucket in it, which any S3-compatible store ser
 
 Velero signs in to a target with an S3 access key. **Backup access key for every cluster**, below the targets once the management cluster runs, stores one that every cluster without a key of its own uses. It is the least work, but every cluster's Velero then holds a key that reaches the other clusters' folders too: their keys keep the contents unreadable, but one cluster could delete another's backups. A key per cluster, limited by the store to the cluster's folder, keeps them apart; whoever creates or looks after a cluster with `Sys.Modify` on its pool stores it on the cluster ([clusters.md](clusters.md#change-add-ons-and-sign-in)).
 
+#### What the template builds may do
+
+The weekly build runs in the management cluster with a user and API token of its own, `kubehenge-template-builder@pve`, whose token lives in the Secret `kubehenge-template-builder` there. It holds:
+
+| On | Privileges | For |
+| --- | --- | --- |
+| `/pool/kubehenge-templates`, propagated | `Pool.Audit`, `VM.Allocate`, `VM.Audit`, `VM.Config.CDROM`, `VM.Config.CPU`, `VM.Config.Disk`, `VM.Config.HWType`, `VM.Config.Memory`, `VM.Config.Network`, `VM.Config.Options`, `VM.GuestAgent.Unrestricted`, `VM.PowerMgmt` | creating a template's VM, preparing it through the guest agent, turning it into a template, and deleting builds nothing needs; `Pool.Audit` lets it see which VMs are in the pool, which Proxmox VE's resource list hides without it |
+| the storages of the downloaded images and the cloud-init ISO (Talos image and Cloud-init images above, unless the module names others) | `Datastore.Allocate`, `Datastore.AllocateTemplate`, `Datastore.Audit` | downloading the cloud image and uploading the ISO, and deleting both afterwards |
+| the template disks' storage, also when it is one of those | `Datastore.AllocateSpace`, `Datastore.Audit` | the templates' disks: `Datastore.Allocate` does not hold `Datastore.AllocateSpace` |
+| `/nodes/<node>` the builds run on | `Sys.AccessNetwork`, `Sys.Audit` | Proxmox VE's download of the image |
+| `/sdn/zones/localnetwork/<bridge>` | `PVESDNUser` | attaching the VM that prepares an image |
+| `/`, and `/nodes` propagated | `Sys.Audit` | reading the cluster's resources and the nodes' storages |
+
+It can touch no VM outside the template pool, no cluster's VM and none of the management cluster's, and sees no users. Two gaps remain:
+
+- **Proxmox VE deletes a file on a storage only for `Datastore.Allocate`**, which reaches every file and volume on that storage. By default the builds use the storages of the Talos image and the cloud-init images, often `local`, so the token could delete other ISOs, images or backups kept there. Give the module storages of their own for the builds (`template_refresh.import_datastore` and `iso_datastore`), holding nothing else.
+- **Kubehenge's controller can read every Secret in the management cluster**, which it needs for the clusters' credentials, so whoever takes over the controller holds this token too, as it holds Cluster API's.
+
+Switching the refresh off removes the user, its token and the CronJob; the templates stay.
+
 The appliance keeps the module's other settings at their defaults: the management cluster is named `kubehenge`, its nodes have 4 vCPUs, 4 GiB of memory and a 32 GB disk, and it creates the pools `kubehenge` (clusters), `kubehenge-templates` (VM templates) and `kubehenge-management` (its own VMs).
 
 ### The state passphrase
@@ -292,7 +313,7 @@ A first run that failed part of the way keeps its state, which records what it m
 **A lost passphrase cannot be recovered**, and nothing stands in for it. The management cluster and every cluster keep running, and the interface still creates, changes and deletes clusters with an account of its own. What is lost is applying the management cluster again (it stays at the versions it has), repair access, and removal from the page. To start over:
 
 1. Delete every cluster in the interface, and wait until they are gone, so that the management cluster cleans up their Proxmox VE objects.
-2. In Proxmox VE, delete the VMs in the pools `kubehenge-management` (the management cluster) and `kubehenge-templates` (the VM templates), then the pools `kubehenge-management`, `kubehenge-templates` and `kubehenge`, the users `kubehenge-cluster-api@pve` and `kubehenge-provisioner@pve` (their API tokens go with them), the group `kubehenge-clusters`, and the roles named `kubehenge-…`.
+2. In Proxmox VE, delete the VMs in the pools `kubehenge-management` (the management cluster) and `kubehenge-templates` (the VM templates), then the pools `kubehenge-management`, `kubehenge-templates` and `kubehenge`, the users `kubehenge-cluster-api@pve`, `kubehenge-provisioner@pve` and `kubehenge-template-builder@pve` (their API tokens go with them), the group `kubehenge-clusters`, and the roles named `kubehenge-…`.
 3. [Remove the appliance](uninstalling.md#remove-the-appliance) and install it again, which starts from an empty state.
 
 ### While it runs
@@ -304,6 +325,7 @@ The run creates, on Proxmox VE:
 - the three pools;
 - a user and API token for Cluster API, allowed to manage VMs in the clusters' pool, clone templates from the template pool, use the chosen storages and bridges and write cloud-init images, and nothing of the management cluster's own VMs;
 - a user and API token for Kubehenge's controller, which creates each cluster's own pool, user and token ([architecture.md](architecture.md#each-clusters-own-corner-of-proxmox-ve));
+- while the template refresh is on, a user and API token for the weekly template build ([above](#what-the-template-builds-may-do));
 - a group for the clusters' users, and the roles all of these use;
 - the Talos disk image, and the management cluster's VMs, tagged `kubehenge` and `management`.
 
@@ -336,7 +358,9 @@ On the Administration page, **VM templates** lists them, each with a cluster tha
 | Bridge, VLAN tag | Where the VM that prepares the image attaches; it needs to reach Ubuntu's and Kubernetes' package mirrors. |
 | Static address | Optional: an address with prefix length, a gateway and DNS servers for that VM, instead of DHCP. |
 
-A build takes a few minutes; the page follows its log, and only one runs at a time, never during a run of the management cluster or an upgrade of the appliance. A template a cluster still clones from cannot be deleted: the shared one while any RKE2 or k3s cluster exists, a kubeadm one while a cluster or one of its machines runs its version.
+A build takes a few minutes; the page follows its log, and only one runs at a time, never during a run of the management cluster or an upgrade of the appliance. Each Ubuntu template is a line of builds, listed newest first with when each was made; building one that exists makes a new build beside it. A build a cluster still clones from cannot be deleted: the one each RKE2 and k3s cluster's nodes run, and for kubeadm the one a cluster or one of its machines runs at its version.
+
+Below the list, **Automatic builds** shows when the weekly build next runs, how its last run went with its log, and **Build now**, which has the management cluster run it at once ([templates.md](templates.md#the-weekly-build)). After the first templates, it keeps them current on its own: there is nothing to build by hand but a kubeadm version no cluster runs yet.
 
 The same is possible from any Linux machine that reaches the Proxmox VE API, with `kubehenge template create` and an API token ([templates.md](templates.md)). Keep the defaults of `--os` and `--pool` there: the ClusterClasses select templates of the default Ubuntu release, and Cluster API may clone only from the template pool.
 
@@ -375,7 +399,7 @@ tofu output -raw talosconfig > talosconfig
 | `proxmox_endpoint` | required | The Proxmox VE API, such as `https://pve.example.org:8006`. Every cluster's nodes reach Proxmox VE at this address too. |
 | `proxmox_api_token` | none | `user@realm!name=secret`, with administrator rights. Unset, a session from the environment is used. |
 | `proxmox_ca_certificate` | required | PEM of the CA that signed the API's certificate. Cluster API's Proxmox VE provider verifies the API against it. |
-| `proxmox_insecure` | `false` | Skip verifying the API's certificate: in this configuration's Proxmox VE provider, Cluster API's Proxmox VE provider, Kubehenge's controller and the clusters' cloud controller manager and CSI plugin. |
+| `proxmox_insecure` | `false` | Skip verifying the API's certificate: in this configuration's Proxmox VE provider, Cluster API's Proxmox VE provider, Kubehenge's controller and template builds, and the clusters' cloud controller manager and CSI plugin. |
 | `proxmox_nodes` | required | The nodes the management cluster's VMs run on, taken in turn, such as `["pve1", "pve2", "pve3"]`. Each needs the bridge and both storages below. A VM given another node is migrated there. |
 | `image_datastore` | `local` | Storage the Talos image is downloaded to, on each node; it must allow `import`. |
 | `vm_datastore` | `local-lvm` | Storage for the management cluster's disks. |
@@ -403,6 +427,7 @@ tofu output -raw talosconfig > talosconfig
 | `proxmox_ha` | `false` | Keep each cluster's control-plane VMs on separate nodes with Proxmox VE HA, giving the controller a token with `Sys.Audit` and `Sys.Console` on `/` ([above](#proxmox-ve-ha)). After setting it back to false, remove the HA resources and rules whose comment starts with `Kubehenge cluster`, as the appliance does: without its token the controller cannot. |
 | `offer_ha_rules` | `false` | Offer Proxmox VE's HA node-affinity rules, each one's name and nodes, to those with `VM.Allocate` on the workload pool or a cluster's pool who lack `Sys.Audit` on `/`, read with the controller's own token ([above](#ha-rules-for-cluster-creators)). Asks nothing new of Proxmox VE. |
 | `cluster_datastore_allocate` | `false` | Let clusters choose the CSI plugin's newest release, with `Datastore.Allocate` for the cluster's token on a storage of its own, granted by the controller ([above](#the-csi-plugins-newest-release)). |
+| `template_refresh` | on, `Sun` `01:00` `UTC`, 24 h soak | The weekly build of the Ubuntu VM templates ([templates.md](templates.md#the-weekly-build)) and its own API token ([above](#what-the-template-builds-may-do)): `enabled`; `weekday`, `time` (`HH:MM`) and `time_zone`; `soak_hours`, how old a build is before clusters move to it (0 to 720); `node` (the first of `proxmox_nodes`), `storage` (the first of `workload_datastores`), `import_datastore` (`image_datastore`), `iso_datastore` (`bootstrap_datastore`), `bridge` (the first of `workload_bridges`) and `vlan`; `address` with prefix, `gateway` and `dns` for the VM that prepares an image, DHCP when unset; `creator_builds` (`false`), letting those who may create clusters have a missing template built. |
 
 Outputs: `kubeconfig` and `talosconfig` (sensitive), `api_endpoint`, and `proxmox_objects`, which lists everything the module made on Proxmox VE.
 

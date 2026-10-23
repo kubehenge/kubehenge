@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,7 +36,9 @@ type Builder struct {
 	Log     func(format string, args ...any)
 	// KeepOnFailure leaves a failed bake's VM in place for inspection.
 	KeepOnFailure bool
-	// CPUType is the template's QEMU CPU type, which its clones keep; empty means DefaultCPUType.
+	// CPUType is the template's QEMU CPU type, which its clones keep. Empty means that of the newest
+	// build of the template's line, so that a new build does not change what its clones run on, and
+	// DefaultCPUType for a line without one.
 	CPUType string
 
 	// selectableSettle and selectablePoll pace waitSelectable; zero means selectableSettle and
@@ -206,20 +209,10 @@ func (b *Builder) Delete(ctx context.Context, t *Template) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	id, err := vmID(existing)
-	if err != nil {
+	if err = b.DeleteBuild(ctx, existing); err != nil {
 		return 0, err
 	}
-	vm, err := b.vm(ctx, existing.Node, id)
-	if err != nil {
-		return 0, err
-	}
-	task, err := vm.Delete(ctx, &proxmox.VirtualMachineDeleteOptions{Purge: true, DestroyUnreferencedDisks: true})
-	err = waitTask(ctx, task, err, longTaskTimeout)
-	if err != nil {
-		return 0, err
-	}
-	return id, nil
+	return vmID(existing)
 }
 
 // vmID reads a VM ID from the cluster's resource list, where it is unsigned.
@@ -242,6 +235,10 @@ func (b *Builder) Create(ctx context.Context, t *Template) (_ int, err error) {
 		return 0, err
 	}
 	err = b.checkNotInProgress(ctx, t)
+	if err != nil {
+		return 0, err
+	}
+	cpuType, err := b.cpuType(ctx, t)
 	if err != nil {
 		return 0, err
 	}
@@ -274,12 +271,7 @@ func (b *Builder) Create(ctx context.Context, t *Template) (_ int, err error) {
 	if err != nil {
 		return 0, fmt.Errorf("reading the Proxmox VE cluster: %w", err)
 	}
-	vmid, err := cluster.NextID(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("choosing a VM ID: %w", err)
-	}
-	b.logf("creating VM %d %s from %s", vmid, t.Name, image.URL)
-	err = b.createVM(ctx, node, vmid, t, volume)
+	vmid, err := b.createFresh(ctx, cluster, node, t, volume, cpuType, image.URL)
 	if err != nil {
 		return 0, err
 	}
@@ -300,6 +292,105 @@ func (b *Builder) Create(ctx context.Context, t *Template) (_ int, err error) {
 	return vmid, nil
 }
 
+// Built is one build of a line in the builder's pool.
+type Built struct {
+	Resource *proxmox.ClusterResource
+	At       time.Time
+}
+
+// Builds lists the builds of line in the builder's pool, newest first.
+func (b *Builder) Builds(ctx context.Context, line *Template) ([]Built, error) {
+	list, err := b.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []Built
+	for _, r := range list {
+		tags := ParseTags(r.Tags)
+		at, built := BuildOf(tags)
+		if built && slices.Equal(LineOf(tags), line.Tags) {
+			out = append(out, Built{Resource: r, At: at})
+		}
+	}
+	slices.SortFunc(out, func(x, y Built) int { return y.At.Compare(x.At) })
+	return out, nil
+}
+
+// Ensure returns the newest build of a line in the builder's pool, making the first one at now
+// when there is none. A line not built again for updates is made as it is.
+func (b *Builder) Ensure(ctx context.Context, line *Template, now time.Time) (int, error) {
+	if !line.Refreshed() {
+		return b.Create(ctx, line)
+	}
+	builds, err := b.Builds(ctx, line)
+	if err != nil {
+		return 0, err
+	}
+	if len(builds) > 0 {
+		b.logf("template %s is the newest build of %s, VM %d", builds[0].Resource.Name, line.LineName, builds[0].Resource.VMID)
+		return vmID(builds[0].Resource)
+	}
+	build, err := line.Build(now)
+	if err != nil {
+		return 0, err
+	}
+	return b.Create(ctx, &build)
+}
+
+// RemoveLeftovers deletes the VMs that runs building line left behind: in the builder's pool, not
+// templates, and made longer ago than a build can take, so that a build under way is left alone.
+// It returns their VM IDs.
+func (b *Builder) RemoveLeftovers(ctx context.Context, line *Template, olderThan time.Duration, now time.Time) ([]int, error) {
+	resources, err := b.vms(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var removed []int
+	for _, r := range resources {
+		if !b.inPool(r) || !b.mayBeBuild(r) {
+			continue
+		}
+		c, err := b.config(ctx, r)
+		if err != nil {
+			return removed, err
+		}
+		made, known := createdAt(c.Meta)
+		if !building(c, line) || !known || now.Sub(made) < olderThan {
+			continue
+		}
+		id, err := vmID(r)
+		if err != nil {
+			return removed, err
+		}
+		node, err := b.Client.Node(ctx, r.Node)
+		if err != nil {
+			return removed, fmt.Errorf("reading node %s: %w", r.Node, err)
+		}
+		vm, err := node.VirtualMachine(ctx, id)
+		if err != nil {
+			return removed, fmt.Errorf("reading VM %d: %w", id, err)
+		}
+		b.logf("VM %d (%s) was left by a build that did not finish", id, c.Name)
+		b.discard(ctx, node, vm)
+		removed = append(removed, id)
+	}
+	return removed, nil
+}
+
+// DeleteBuild removes one template of the builder's pool, as listed.
+func (b *Builder) DeleteBuild(ctx context.Context, r *proxmox.ClusterResource) error {
+	id, err := vmID(r)
+	if err != nil {
+		return err
+	}
+	vm, err := b.vm(ctx, r.Node, id)
+	if err != nil {
+		return err
+	}
+	task, err := vm.Delete(ctx, &proxmox.VirtualMachineDeleteOptions{Purge: true, DestroyUnreferencedDisks: true})
+	return waitTask(ctx, task, err, longTaskTimeout)
+}
+
 // inPool tells whether a VM is in the builder's pool, any VM when it has none. The management
 // cluster's Proxmox VE provider may clone only from its template pool, so a template elsewhere with
 // the same tags neither stands in for one there nor competes with it.
@@ -311,6 +402,12 @@ func (b *Builder) inPool(r *proxmox.ClusterResource) bool {
 // the resource view reads afresh.
 func (b *Builder) carries(r *proxmox.ClusterResource, t *Template) bool {
 	return isQemu(r) && b.inPool(r) && slices.Equal(ParseTags(r.Tags), t.Tags)
+}
+
+// mayBeBuild tells whether a listed VM may be one the builder made: one carrying kubehengeTag, or
+// any in the builder's pool, which a new VM joins a moment before markBuilding tags it.
+func (b *Builder) mayBeBuild(r *proxmox.ClusterResource) bool {
+	return isQemu(r) && (slices.Contains(ParseTags(r.Tags), kubehengeTag) || (b.Pool != "" && r.Pool == b.Pool))
 }
 
 func isQemu(r *proxmox.ClusterResource) bool {
@@ -346,9 +443,12 @@ func (b *Builder) config(ctx context.Context, r *proxmox.ClusterResource) (*prox
 	return &c, nil
 }
 
-// finish bakes the new VM if the template asks for it, gives it its final tags and size, and turns
-// it into the template.
+// finish tags the new VM as a build under way, bakes it if the template asks for it, gives it its
+// final tags and size, and turns it into the template.
 func (b *Builder) finish(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, vmid int, t *Template) error {
+	if err := markBuilding(ctx, vm); err != nil {
+		return err
+	}
 	if t.Bake != nil {
 		if err := b.bake(ctx, node, vm, *t.Bake); err != nil {
 			return fmt.Errorf("baking %s: %w", t.Name, err)
@@ -400,27 +500,47 @@ func (b *Builder) vm(ctx context.Context, nodeName string, id int) (*proxmox.Vir
 // checkNotInProgress refuses to start while a Kubehenge VM of the template's name exists that is
 // not yet a template: another run is building it, or a failed one left it for inspection. Two
 // builds would end in two templates with the same tags, which Cluster API cannot choose between.
-// Every VM the builder makes carries kubehengeTag from its creation on, and its name and template
-// flag are read from its configuration, since the resource view shows neither for a VM created
-// in the last few seconds, and may still show a removed VM's under a reused VM ID.
+// The VMs looked at are those mayBeBuild names, and each one's name and template flag are read
+// from its configuration, since the resource view shows neither for a VM created in the last few
+// seconds, and may still show a removed VM's under a reused VM ID.
 func (b *Builder) checkNotInProgress(ctx context.Context, t *Template) error {
 	resources, err := b.vms(ctx)
 	if err != nil {
 		return err
 	}
 	for _, r := range resources {
-		if !isQemu(r) || !slices.Contains(ParseTags(r.Tags), kubehengeTag) {
+		if !b.mayBeBuild(r) {
 			continue
 		}
 		c, err := b.config(ctx, r)
 		if err != nil {
 			return err
 		}
-		if c.Name == t.Name && !bool(c.Template) {
-			return fmt.Errorf("VM %d on %s is already named %s: another run is building it, or a failed run left it; wait, or remove it", r.VMID, r.Node, t.Name)
+		if building(c, t) {
+			return fmt.Errorf("VM %d on %s is already named %s: another run is building it, or a failed run left it; wait, or remove it", r.VMID, r.Node, c.Name)
 		}
 	}
 	return nil
+}
+
+// building tells whether a VM's configuration is that of a build of t's line not yet a template.
+// Two builds of one line at once are refused too: each would find the other's tags missing and
+// end as the line's newest.
+func building(c *proxmox.VirtualMachineConfig, t *Template) bool {
+	return !bool(c.Template) && (c.Name == t.Name || strings.HasPrefix(c.Name, t.LineName+"-"+buildTagPrefix))
+}
+
+// createdAt reads when Proxmox VE made a VM from its configuration's meta property, such as
+// "creation-qemu=10.0.2,ctime=1761091200".
+func createdAt(meta string) (time.Time, bool) {
+	for field := range strings.SplitSeq(meta, ",") {
+		if v, ok := strings.CutPrefix(field, "ctime="); ok {
+			if s, err := strconv.ParseInt(v, 10, 64); err == nil {
+				return time.Unix(s, 0), true
+			}
+		}
+	}
+	return time.Time{}, false
 }
 
 // waitSelectable waits until the cluster's resource view, which Cluster API's Proxmox VE provider
@@ -466,14 +586,21 @@ func (b *Builder) selectable(ctx context.Context, t *Template, vmid int) (bool, 
 	}
 	var shown []int
 	for _, r := range resources {
-		if r.Template != 1 || !b.carries(r, t) {
+		if !isQemu(r) {
 			continue
 		}
 		id, err := vmID(r)
 		if err != nil {
 			return false, err
 		}
-		shown = append(shown, id)
+		// The VM was created in the pool, so the view leaving its pool out means the caller lacks
+		// Pool.Audit there, and no answer would ever show the template in the pool.
+		if id == vmid && b.Pool != "" && r.Pool == "" {
+			return false, fmt.Errorf("the cluster's resources show VM %d in no pool: seeing the VMs in pool %s takes Pool.Audit on /pool/%s", vmid, b.Pool, b.Pool)
+		}
+		if r.Template == 1 && b.carries(r, t) {
+			shown = append(shown, id)
+		}
 	}
 	if len(shown) > 1 {
 		return false, fmt.Errorf("%d templates carry the tags %s; Cluster API needs exactly one", len(shown), strings.Join(t.Tags, ";"))
@@ -498,20 +625,61 @@ func (b *Builder) download(ctx context.Context, storage *proxmox.Storage, image 
 	return waitTask(ctx, task, err, transferTimeout)
 }
 
-func (b *Builder) createVM(ctx context.Context, node *proxmox.Node, vmid int, t *Template, volume string) error {
+// cpuType is the CPU type a new template gets, as CPUType says.
+func (b *Builder) cpuType(ctx context.Context, t *Template) (string, error) {
+	if b.CPUType != "" {
+		return b.CPUType, nil
+	}
+	if _, built := BuildOf(t.Tags); !built {
+		return DefaultCPUType, nil
+	}
+	builds, err := b.Builds(ctx, &Template{Tags: LineOf(t.Tags)})
+	if err != nil || len(builds) == 0 {
+		return DefaultCPUType, err
+	}
+	c, err := b.config(ctx, builds[0].Resource)
+	if err != nil {
+		return "", err
+	}
+	if c.CPU == "" {
+		// Proxmox VE's own default, which the VM's clones run on too.
+		return "kvm64", nil
+	}
+	return c.CPU, nil
+}
+
+// createAttempts bounds createFresh: a VM ID Proxmox VE offers is not reserved, so another build or
+// a machine being created at the same moment can take it first, and the create is then refused.
+const createAttempts = 5
+
+// createFresh creates t's VM under the next free VM ID, asking for another while the one offered
+// turns out taken.
+func (b *Builder) createFresh(ctx context.Context, cluster *proxmox.Cluster, node *proxmox.Node, t *Template, volume, cpuType, source string) (int, error) {
+	for attempt := 1; ; attempt++ {
+		vmid, err := cluster.NextID(ctx)
+		if err != nil {
+			return 0, fmt.Errorf("choosing a VM ID: %w", err)
+		}
+		b.logf("creating VM %d %s from %s", vmid, t.Name, source)
+		err = b.createVM(ctx, node, vmid, t, volume, cpuType)
+		if err == nil {
+			return vmid, nil
+		}
+		if attempt == createAttempts || !strings.Contains(err.Error(), "already exists") {
+			return 0, err
+		}
+		b.logf("VM %d was taken meanwhile; choosing another VM ID", vmid)
+	}
+}
+
+func (b *Builder) createVM(ctx context.Context, node *proxmox.Node, vmid int, t *Template, volume, cpuType string) error {
 	cores, memory := templateCores, templateMemoryMB
 	if t.Bake != nil {
 		cores, memory = bakeCores, bakeMemoryMB
 	}
-	cpuType := b.CPUType
-	if cpuType == "" {
-		cpuType = DefaultCPUType
-	}
 	options := []proxmox.VirtualMachineOption{
 		{Name: "name", Value: t.Name},
-		{Name: "description", Value: "Kubehenge template. Created by `kubehenge template create`; Cluster API selects it by its tags."},
-		// Not the final tags: a VM that fails half way must not look like the template.
-		{Name: "tags", Value: "kubehenge;kubehenge-building"},
+		{Name: "description", Value: "Kubehenge template, made by `kubehenge template`; Cluster API selects it by its tags."},
 		{Name: "ostype", Value: "l26"},
 		{Name: "machine", Value: "q35"},
 		{Name: "cpu", Value: cpuType},
@@ -536,6 +704,15 @@ func (b *Builder) createVM(ctx context.Context, node *proxmox.Node, vmid int, t 
 	}
 	task, err := node.NewVirtualMachine(ctx, vmid, options...)
 	return waitTask(ctx, task, err, transferTimeout)
+}
+
+// markBuilding tags a new VM as a build under way, with tags that are not the template's, since a
+// VM that fails half way must not look like the template. Not while creating it: Proxmox VE checks
+// a new VM's tags against the VM's own path alone, before the VM joins its pool, so a builder whose
+// rights come from the template pool would be refused the VM.
+func markBuilding(ctx context.Context, vm *proxmox.VirtualMachine) error {
+	task, err := vm.Config(ctx, proxmox.VirtualMachineOption{Name: "tags", Value: kubehengeTag + ";" + buildingTag})
+	return waitTask(ctx, task, err, configTimeout)
 }
 
 func (b *Builder) bake(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, bake Bake) error {

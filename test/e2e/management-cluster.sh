@@ -35,6 +35,9 @@ check_kubehenge
 step "capmox signs in to Proxmox VE with least privilege"
 check_capmox_privileges
 
+step "the weekly template build signs in to Proxmox VE with least privilege"
+check_template_builder_privileges
+
 if [ $# -gt 0 ]; then
     step "while the management cluster is up: $*"
     "$@"

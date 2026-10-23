@@ -27,8 +27,8 @@ const KubeadmVersionsAnnotation = "kubehenge.dev/kubeadm-versions"
 // theirs waits for ever for its first VM.
 const CloudImageTemplateAnnotation = "kubehenge.dev/cloud-image-template"
 
-// TemplateVersions keeps KubeadmVersionsAnnotation, CloudImageTemplateAnnotation and
-// TemplateStoragesAnnotation current.
+// TemplateVersions keeps KubeadmVersionsAnnotation, CloudImageTemplateAnnotation,
+// TemplateStoragesAnnotation and NodeImageBuildsAnnotation current.
 type TemplateVersions struct {
 	Client         client.Client
 	ClassNamespace string
@@ -68,6 +68,10 @@ func (p *TemplateVersions) publish(ctx context.Context) error {
 	}
 	cloudImage := strconv.FormatBool(seen.cloudImage)
 	storages := strings.Join(seen.storages, ",")
+	builds, err := seen.builds.Encode()
+	if err != nil {
+		return err
+	}
 	return errors.Join(
 		p.annotate(ctx, "kubeadm", KubeadmVersionsAnnotation, strings.Join(raw, ",")),
 		p.annotate(ctx, "rke2", CloudImageTemplateAnnotation, cloudImage),
@@ -75,6 +79,9 @@ func (p *TemplateVersions) publish(ctx context.Context) error {
 		p.annotate(ctx, "kubeadm", TemplateStoragesAnnotation, storages),
 		p.annotate(ctx, "rke2", TemplateStoragesAnnotation, storages),
 		p.annotate(ctx, "k3s", TemplateStoragesAnnotation, storages),
+		p.annotate(ctx, "kubeadm", NodeImageBuildsAnnotation, builds),
+		p.annotate(ctx, "rke2", NodeImageBuildsAnnotation, builds),
+		p.annotate(ctx, "k3s", NodeImageBuildsAnnotation, builds),
 	)
 }
 

@@ -2,7 +2,7 @@ import { useEffect, useState, type JSX } from "react";
 
 import { api, bridgesOf } from "./api";
 import { isVLAN, list } from "./network";
-import type { Bridge, PveNode, Storage, TemplateRequest, VMTemplate } from "./types";
+import type { Bridge, PveNode, Storage, TemplateRefresh, TemplateRequest, VMTemplate } from "./types";
 import {
   Choice,
   Dialog,
@@ -15,6 +15,7 @@ import {
   pollRunning,
   sole,
   usePoll,
+  weekdayName,
 } from "./ui";
 import { oneOf } from "./values";
 
@@ -23,7 +24,9 @@ const kubernetesVersion = /^v1\.\d+\.\d+$/u;
 // Templates lists the VM templates clusters are cloned from and builds them with the signed-in
 // administrator's Proxmox VE session.
 export function Templates(): JSX.Element {
-  const { data, error, reload } = usePoll(api.templates, (d) => (d?.job?.state === "running" ? pollRunning : pollIdle));
+  const { data, error, reload } = usePoll(api.templates, (d) =>
+    d?.job?.state === "running" || refreshBusy(d?.refresh) ? pollRunning : pollIdle,
+  );
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<VMTemplate>();
   const job = data?.job;
@@ -34,7 +37,8 @@ export function Templates(): JSX.Element {
       <h3>VM templates</h3>
       <p className="muted">
         Every cluster's machines are clones of one of these. RKE2 and k3s share one template; kubeadm needs one for each
-        Kubernetes version its clusters run or upgrade to.
+        Kubernetes version its clusters run or upgrade to. Each build of an Ubuntu template is a template of its own;
+        clusters move to a newer build inside their maintenance windows.
       </p>
       <ErrorBox message={error} />
       {data && data.templates.length === 0 && <p>No templates yet: clusters cannot be created until there is one.</p>}
@@ -43,6 +47,7 @@ export function Templates(): JSX.Element {
           <thead>
             <tr>
               <th>Template</th>
+              <th>Build</th>
               <th>Node</th>
               <th>Used by</th>
               <th>
@@ -54,7 +59,17 @@ export function Templates(): JSX.Element {
             {data.templates.map((t) => (
               <tr key={t.vmid}>
                 <td>
-                  {t.name} <span className="muted">({t.vmid})</span>
+                  {t.line} <span className="muted">({t.vmid})</span>
+                </td>
+                <td>
+                  {t.built === undefined ? (
+                    <span className="muted">Not rebuilt</span>
+                  ) : (
+                    <>
+                      {new Date(t.built).toLocaleString()}
+                      {t.newest === true && <span className="muted"> (newest)</span>}
+                    </>
+                  )}
                 </td>
                 <td>{t.node}</td>
                 <td>{t.inUse ?? "None"}</td>
@@ -96,6 +111,14 @@ export function Templates(): JSX.Element {
           Build a template
         </button>
       </div>
+      {data && (
+        <AutomaticBuilds
+          refresh={data.refresh}
+          onAsked={() => {
+            void reload();
+          }}
+        />
+      )}
       {creating && (
         <BuildDialog
           onClose={() => setCreating(false)}
@@ -116,6 +139,102 @@ export function Templates(): JSX.Element {
         />
       )}
     </div>
+  );
+}
+
+/** Whether the weekly build runs, or was asked for and has not started. */
+export function refreshBusy(r: TemplateRefresh | undefined): boolean {
+  return r !== undefined && (r.last?.state === "running" || r.requested.length > 0);
+}
+
+function lastRun(last: NonNullable<TemplateRefresh["last"]>): string {
+  const by = filled(last.trigger) && last.trigger !== "schedule" ? ` (${last.trigger})` : "";
+  const when = last.finished ?? last.started;
+  const at = when === undefined ? "" : `, ${new Date(when).toLocaleString()}`;
+  if (last.state === "running") {
+    return `Building ${last.lines.length > 0 ? last.lines.join(", ") : "the templates"}${by}…`;
+  }
+  if (last.state === "succeeded") {
+    return `The last run${by} succeeded${at}.`;
+  }
+  return `The last run${by} failed${at}: ${last.error ?? ""}`;
+}
+
+// AutomaticBuilds is the weekly build of the Ubuntu templates: when it runs, how its last run went,
+// and Build now.
+function AutomaticBuilds({
+  refresh,
+  onAsked,
+}: {
+  refresh?: TemplateRefresh | undefined;
+  onAsked: () => void;
+}): JSX.Element {
+  const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  if (refresh === undefined) {
+    return (
+      <section aria-label="Automatic builds">
+        <h4>Automatic builds</h4>
+        <p className="muted">
+          Off. With them on, Kubehenge builds the Ubuntu templates again every week with Ubuntu's updates, and clusters
+          move to them in their maintenance windows; switch them on in the management cluster's settings.
+        </p>
+      </section>
+    );
+  }
+  const asked = refresh.requested.includes("refresh");
+  const running = refresh.last?.state === "running";
+  const buildNow = async (): Promise<void> => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.refreshTemplates();
+      onAsked();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section aria-label="Automatic builds">
+      <h4>Automatic builds</h4>
+      <p>
+        Every {weekdayName(refresh.weekday)} at {refresh.time} ({refresh.timeZone}), Kubehenge builds the Ubuntu
+        templates clusters run again, with Ubuntu's updates. A cluster's nodes move to a new build in its maintenance
+        window once the build is {refresh.soakHours} hours old, unless the cluster switches that off. The two newest
+        builds of each template stay, and any older one a cluster still runs.
+      </p>
+      {refresh.next !== undefined && <p className="muted">Next build: {new Date(refresh.next).toLocaleString()}.</p>}
+      <div aria-live="polite">
+        {asked && !running && <p className="muted">Build now was asked for; it starts within a minute.</p>}
+        {refresh.last && (
+          <>
+            <p className={refresh.last.state === "failed" ? "error" : "muted"}>{lastRun(refresh.last)}</p>
+            {refresh.last.log.length > 0 && (
+              <details open={running}>
+                <summary>Log of the last run</summary>
+                <pre className="log" aria-label="Automatic build log">
+                  {refresh.last.log.slice(-logLines).join("\n")}
+                </pre>
+              </details>
+            )}
+          </>
+        )}
+      </div>
+      <ErrorBox message={error} />
+      <div className="actions">
+        <button
+          type="button"
+          disabled={busy || asked || running}
+          onClick={() => {
+            void buildNow();
+          }}
+        >
+          Build now
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -296,7 +415,8 @@ function BuildDialog({ onClose, onStarted }: { onClose: () => void; onStarted: (
     >
       <p className="muted">
         Builds with your Proxmox VE session, in a few minutes. The image is checked against its publisher's signed
-        checksums, booted once to install updates and what the distribution needs, then turned into a template.
+        checksums, booted once to install updates and what the distribution needs, then turned into a template. A
+        template that exists already gets a new build beside it, which clusters move to in their maintenance windows.
       </p>
       <Field label="For">
         {(id) => (
@@ -434,8 +554,8 @@ function DeleteDialog({
       }
     >
       <p>
-        Deletes template {t.name} (VM {t.vmid}) on node {t.node}. No cluster clones from it now; one created later at a
-        version it served needs it built again.
+        Deletes template {t.name} (VM {t.vmid}) on node {t.node}. No cluster clones from it now; a cluster created later
+        takes another build of {t.line}, or needs it built again when this is the last.
       </p>
       <ErrorBox message={error} />
     </Dialog>

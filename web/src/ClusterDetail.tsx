@@ -73,6 +73,57 @@ function autoUpgradeText(upgraded: string): string {
   return `${from} to ${to}, ${new Date(at).toLocaleString()}`;
 }
 
+// buildText reads a template build's tag, build-YYYYMMDDhhmm in UTC, as a time in the reader's own
+// terms.
+export function buildText(build: string): string {
+  const m = /^build-(?<y>\d{4})(?<mo>\d{2})(?<d>\d{2})(?<h>\d{2})(?<mi>\d{2})$/u.exec(build)?.groups;
+  if (m === undefined) {
+    return build;
+  }
+  const at = Date.UTC(Number(m["y"]), Number(m["mo"]) - 1, Number(m["d"]), Number(m["h"]), Number(m["mi"]));
+  return `the build of ${new Date(at).toLocaleString()}`;
+}
+
+// nodeRefreshText reads the controller's record of the last node refresh, "from to to at time".
+function nodeRefreshText(refreshed: string): string {
+  const { from, to, at } = /^(?<from>\S+) to (?<to>\S+) at (?<at>\S+)$/u.exec(refreshed)?.groups ?? {};
+  if (from === undefined || to === undefined || at === undefined || Number.isNaN(Date.parse(at))) {
+    return refreshed;
+  }
+  return `${new Date(at).toLocaleString()}, from ${buildText(from)} to ${buildText(to)}`;
+}
+
+// NodeImageRows say which template builds a cluster's nodes are clones of, and when they move to a
+// newer one.
+function NodeImageRows({ image }: { image: NonNullable<Cluster["nodeImage"]> }): JSX.Element {
+  let next = "None due: the nodes run the newest builds";
+  if (!image.refreshes) {
+    next = "Off: switched off in the cluster's automatic upgrades";
+  } else if (image.next?.build !== undefined) {
+    next = `${new Date(image.next.due).toLocaleString()}, to ${buildText(image.next.build)}`;
+  } else if (image.next !== undefined) {
+    next = `Not before ${new Date(image.next.due).toLocaleString()}, with the next template build`;
+  }
+  return (
+    <>
+      <dt>Node image</dt>
+      <dd>
+        {image.builds.length === 0
+          ? "Not known yet"
+          : image.builds.map((b) => `${b.template}, ${buildText(b.build)}`).join("; ")}
+      </dd>
+      <dt>Next node refresh</dt>
+      <dd>{next}</dd>
+      {filled(image.last) && (
+        <>
+          <dt>Last node refresh</dt>
+          <dd>{nodeRefreshText(image.last)}</dd>
+        </>
+      )}
+    </>
+  );
+}
+
 // whyNot says why a cluster's actions are off, for the disabled buttons to say.
 function whyNot(c: Cluster): string | undefined {
   if (c.deleting) {
@@ -281,6 +332,7 @@ function Summary({ cluster: c }: { cluster: Cluster }): JSX.Element {
             <dd>{autoUpgradeText(c.autoUpgraded)}</dd>
           </>
         )}
+        {c.nodeImage && <NodeImageRows image={c.nodeImage} />}
       </dl>
     </div>
   );

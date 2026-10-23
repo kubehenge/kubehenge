@@ -54,6 +54,7 @@ module "management" {
   backup_targets         = var.settings.backupTargets
   proxmox_ha             = var.settings.proxmoxHA
   offer_ha_rules         = var.settings.offerHARules
+  template_refresh       = var.settings.templateRefresh
 
   cluster_datastore_allocate = var.settings.clusterDatastoreAllocate
 }
@@ -164,6 +165,7 @@ func (a *Appliance) writeConfig(s *Settings) error {
 		"backupTargets":          moduleBackupTargets(s.BackupTargets),
 		"proxmoxHA":              s.ProxmoxHA,
 		"offerHARules":           s.OfferHARules,
+		"templateRefresh":        moduleTemplateRefresh(s.TemplateRefresh),
 
 		"clusterDatastoreAllocate": s.ClusterDatastoreAllocate,
 	}}

@@ -14,4 +14,11 @@ proxmox:
   clusterGroup: kubehenge-clusters
   clusterRole: KubehengeClusterVMs
   ha: false
+templateRefresh:
+  enabled: true
+  node: pve1
+  storage: local-lvm
+  importStorage: local
+  isoStorage: local
+  creatorBuilds: true
 image: ghcr.io/kubehenge/kubehenge@sha256:0000000000000000000000000000000000000000000000000000000000000000

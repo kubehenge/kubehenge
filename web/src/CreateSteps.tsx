@@ -1,5 +1,6 @@
-import type { JSX } from "react";
+import { useEffect, useState, type JSX } from "react";
 
+import { api } from "./api";
 import {
   controlPlaneSizes,
   machineLeast,
@@ -16,8 +17,91 @@ import { LoadBalancerFields } from "./LoadBalancer";
 import { addressBits } from "./network";
 import { OIDCProviders } from "./OIDCProviders";
 import { HAField, PlacementFields, type HARulesRead } from "./Placement";
-import type { Bridge, ClusterClass, PveNode, Storage, Versions } from "./types";
-import { Field, bytes, cniName, distributionName, filled, maxWorkers, sentence } from "./ui";
+import type { Bridge, ClusterClass, PveNode, Storage, TemplateBuilds, Versions } from "./types";
+import { ErrorBox, Field, bytes, cniName, distributionName, errorMessage, filled, maxWorkers, sentence } from "./ui";
+
+const kubeadmVersion = /^v1\.\d+\.\d+$/u;
+
+// TemplateAsk lets one who may create clusters have a missing template built, when the
+// administrators allow it: the cloud image RKE2 and k3s share, or a kubeadm version's template.
+function TemplateAsk({ cls }: { cls: ClusterClass | undefined }): JSX.Element | null {
+  const [builds, setBuilds] = useState<TemplateBuilds>();
+  const [version, setVersion] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    let current = true;
+    async function load(): Promise<void> {
+      try {
+        const b = await api.templateBuilds();
+        if (current) {
+          setBuilds(b);
+        }
+      } catch {
+        // Without the answer there is nothing to offer; the class's own message stays.
+      }
+    }
+    void load();
+    return () => {
+      current = false;
+    };
+  }, []);
+  const distribution = cls?.distribution;
+  const kubeadm = distribution === "kubeadm";
+  if (builds?.allowed !== true || distribution === undefined || distribution === "talos") {
+    return null;
+  }
+  if (!kubeadm && !filled(cls?.noTemplate)) {
+    return null;
+  }
+  const key = kubeadm ? `kubeadm-${version}` : "cloud-image";
+  const asked = builds.requested.includes(key);
+  const ask = async (): Promise<void> => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.requestTemplateBuild(distribution, kubeadm ? version : undefined);
+      setBuilds(await api.templateBuilds());
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <fieldset className="group">
+      <legend>Missing template</legend>
+      <p className="muted">
+        {kubeadm
+          ? "Kubeadm offers the versions that have a VM template. Another one gets its template built on request, which takes about a quarter of an hour."
+          : "Kubehenge builds the missing template on request, which takes about a quarter of an hour."}
+        {builds.building.length > 0 && ` Building now: ${builds.building.join(", ")}.`}
+        {builds.requested.length > 0 && ` Asked for: ${builds.requested.join(", ")}.`}
+      </p>
+      {kubeadm && (
+        <Field
+          label="Kubernetes version to build"
+          hint="Such as v1.36.5."
+          error={version !== "" && !kubeadmVersion.test(version) ? "A version such as v1.36.5." : undefined}
+        >
+          {(id) => <input id={id} value={version} onChange={(e) => setVersion(e.target.value.trim())} />}
+        </Field>
+      )}
+      <ErrorBox message={error} />
+      <div className="actions">
+        <button
+          type="button"
+          disabled={busy || asked || (kubeadm && !kubeadmVersion.test(version))}
+          onClick={() => {
+            void ask();
+          }}
+        >
+          {asked ? "Asked for" : "Have the template built"}
+        </button>
+      </div>
+    </fieldset>
+  );
+}
 
 // Number fields keep an empty or unfinished entry as NaN, which the checks refuse, rather than
 // turning it into 0 under the cursor.
@@ -122,6 +206,7 @@ export function GeneralStep({
           <VersionInput id={id} value={form.version} onChange={(v) => set("version", v)} cls={cls} offered={offered} />
         )}
       </Field>
+      <TemplateAsk cls={cls} />
       <Field label="Control-plane nodes" hint="Three or more keep the cluster running when one node fails.">
         {(id) => (
           <select

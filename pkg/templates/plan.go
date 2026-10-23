@@ -1,7 +1,10 @@
 // Package templates creates the Proxmox VE VM templates that Kubehenge's clusters are cloned from.
 //
 // A template is identified by its tag set alone: Cluster API's Proxmox VE provider selects templates
-// by tags and needs exactly one match, so each distribution and version maps to one unique set.
+// by tags and needs exactly one match, so each distribution and version maps to one unique set, its
+// line. Ubuntu templates are built again to bring in their updates, and each build keeps a tag of
+// its own beside the line's (build-<YYYYMMDDhhmm>, UTC), so that a cluster's machines move to a new
+// build only when the cluster's patch names it.
 package templates
 
 import (
@@ -10,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Distribution is a Kubernetes distribution Kubehenge creates clusters with.
@@ -25,6 +29,9 @@ const (
 
 // kubehengeTag is on every template Kubehenge makes, which is how List tells them from others.
 const kubehengeTag = "kubehenge"
+
+// buildingTag marks, beside kubehengeTag, a VM the builder is still making into a template.
+const buildingTag = "kubehenge-building"
 
 // Distributions lists every supported distribution.
 var Distributions = []Distribution{Talos, RKE2, K3s, Kubeadm}
@@ -59,9 +66,11 @@ type Request struct {
 	KubernetesVersion string // kubeadm only
 }
 
-// Template describes a template before it exists on Proxmox VE.
+// Template describes a template before it exists on Proxmox VE: a line, or one build of it.
 type Template struct {
 	Name string
+	// LineName is the line's name, which every build's name starts with.
+	LineName string
 	// Tags are lower case and sorted, as Proxmox VE stores them.
 	Tags []string
 	// Image is where the template's disk comes from.
@@ -153,7 +162,65 @@ func newTemplate(name string, tags []string, image ImageRef, bake *Bake) (Templa
 			return Template{}, fmt.Errorf("tag %q is not a valid Proxmox VE tag", t)
 		}
 	}
-	return Template{Name: name, Tags: tags, Image: image, Bake: bake}, nil
+	return Template{Name: name, LineName: name, Tags: tags, Image: image, Bake: bake}, nil
+}
+
+// buildTagPrefix and buildLayout make a build's tag. Minutes in UTC sort as they read; a second
+// build started in the same minute finds the first and keeps it.
+const (
+	buildTagPrefix = "build-"
+	buildLayout    = "200601021504"
+)
+
+// Refreshed tells whether the template is built again for its updates: the Ubuntu ones, which a
+// bake brings up to date. A Talos template is its release's image, the same at every build.
+func (t *Template) Refreshed() bool {
+	return t.Bake != nil
+}
+
+// Build is the build of the line t made at the given time, tagged and named for it.
+func (t *Template) Build(at time.Time) (Template, error) {
+	if !t.Refreshed() {
+		return Template{}, fmt.Errorf("%s is not built again for updates", t.LineName)
+	}
+	if _, built := BuildOf(t.Tags); built {
+		return Template{}, fmt.Errorf("%s is already a build", t.Name)
+	}
+	stamp := at.UTC().Format(buildLayout)
+	out := *t
+	out.Name = t.LineName + "-" + buildTagPrefix + stamp
+	out.Tags = NormaliseTags(append(slices.Clone(t.Tags), buildTagPrefix+stamp))
+	return out, nil
+}
+
+// BuildTag is the tag of the build made at the given time.
+func BuildTag(at time.Time) string {
+	return buildTagPrefix + at.UTC().Format(buildLayout)
+}
+
+// BuildOf is the time of the build a template's tags name, if they name one.
+func BuildOf(tags []string) (time.Time, bool) {
+	for _, tag := range tags {
+		if stamp, ok := strings.CutPrefix(tag, buildTagPrefix); ok {
+			if at, err := time.Parse(buildLayout, stamp); err == nil {
+				return at, true
+			}
+		}
+	}
+	return time.Time{}, false
+}
+
+// LineOf is the tags of a template's line: its own without the build tag.
+func LineOf(tags []string) []string {
+	return slices.DeleteFunc(slices.Clone(tags), func(tag string) bool {
+		_, built := BuildOf([]string{tag})
+		return built
+	})
+}
+
+// LineKey names a line by its tags, as the ClusterClasses' record of the builds does.
+func LineKey(tags []string) string {
+	return strings.Join(NormaliseTags(LineOf(tags)), ";")
 }
 
 // NormaliseTags lower-cases, sorts and de-duplicates tags, the form Proxmox VE stores them in.

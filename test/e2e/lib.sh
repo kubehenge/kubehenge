@@ -114,6 +114,39 @@ check_capmox_privileges() {
     done
 }
 
+# check_template_builder_privileges: the weekly template build's own API token, while the build is
+# on, may build and delete templates in the template pool and nothing in the clusters' pool, and
+# sees neither users nor the management cluster's VMs.
+check_template_builder_privileges() {
+    if absent kubectl -n kubehenge-system get secret kubehenge-template-builder; then
+        echo 'the weekly template build is off'
+        return
+    fi
+    builder_token=$(kubectl -n kubehenge-system get secret kubehenge-template-builder -o jsonpath='{.data.token}' | base64 -d)
+    [ -n "${builder_token}" ] || fail 'the template build has no API token'
+    endpoint=$(jq -r .endpoint "${work}/objects.json")
+    # shellcheck disable=SC2086 # curl_ca is empty or one option and its argument.
+    builder_get() { curl -sS --fail ${curl_ca} -H "Authorization: PVEAPIToken=${builder_token}" "${endpoint}/api2/json/$1"; }
+    template_pool=$(jq -r .template_pool "${work}/objects.json")
+    workload_pool=$(jq -r .workload_pool "${work}/objects.json")
+    builder_get "access/permissions?path=/pool/${template_pool}" |
+        jq -e '[.data[] | has("VM.Allocate") and has("VM.GuestAgent.Unrestricted") and has("VM.PowerMgmt")] | any' > /dev/null ||
+        fail 'the template build cannot build templates in the template pool'
+    template_storage=$(jq -r .template_storage "${work}/objects.json")
+    builder_get "access/permissions?path=/storage/${template_storage}" |
+        jq -e '[.data[] | has("Datastore.AllocateSpace")] | any' > /dev/null ||
+        fail "the template build cannot make disks on ${template_storage}"
+    builder_get "access/permissions?path=/pool/${workload_pool}" |
+        jq -e '[.data[] | has("VM.Allocate") or has("VM.Clone") or has("VM.PowerMgmt")] | any | not' > /dev/null ||
+        fail "the template build may change the clusters' VMs"
+    users=$(builder_get access/users | jq '.data | length')
+    [ "${users}" = 0 ] || fail 'the template build can see Proxmox VE users'
+    for vmid in $(jq -r '.vm_ids[]' "${work}/objects.json"); do
+        builder_get cluster/resources?type=vm | jq -e --argjson id "${vmid}" '[.data[] | select(.vmid == $id)] | length == 0' > /dev/null ||
+            fail "the template build can see management VM ${vmid}"
+    done
+}
+
 destroy_and_check_nothing_left() {
     "${tofu}" -chdir="${dir}" destroy -input=false -auto-approve
 

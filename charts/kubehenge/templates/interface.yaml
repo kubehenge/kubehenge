@@ -79,6 +79,19 @@ rules:
     resourceNames: [kubehenge-ha-rules]
     verbs: [get]
   {{- end }}
+  {{- if .Values.templateRefresh.enabled }}
+  # The template refresh's schedule and last run, and the requests for builds: an administrator's
+  # Build now, and with creatorBuilds a cluster creator's missing template. The controller starts
+  # the builds; the interface cannot start a pod.
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [kubehenge-template-refresh, kubehenge-template-requests]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [kubehenge-template-requests]
+    verbs: [patch]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

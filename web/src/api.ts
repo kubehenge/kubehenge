@@ -19,6 +19,8 @@ import type {
   SetupStatus,
   Storage,
   StoredCredential,
+  TemplateBuilds,
+  TemplateRefresh,
   TemplateRequest,
   Templates,
   Upgrades,
@@ -189,6 +191,11 @@ export interface Api {
   templates: () => Promise<Templates>;
   createTemplate: (req: TemplateRequest) => Promise<Job>;
   deleteTemplate: (vmid: number) => Promise<void>;
+  /** Has the weekly template build run now. */
+  refreshTemplates: () => Promise<TemplateRefresh>;
+  templateBuilds: () => Promise<TemplateBuilds>;
+  /** Asks for a missing template, for one who may create clusters. */
+  requestTemplateBuild: (distribution: string, kubernetesVersion?: string) => Promise<void>;
 
   upgradeSettings: (settings: Upgrades["settings"]) => Promise<Upgrades["settings"]>;
 
@@ -240,6 +247,10 @@ export const api: Api = {
   templates: () => request("GET", "/api/templates"),
   createTemplate: (req) => request("POST", "/api/templates", req),
   deleteTemplate: (vmid) => act("DELETE", `/api/templates/${vmid}`),
+  refreshTemplates: () => request("POST", "/api/templates/refresh"),
+  templateBuilds: () => request("GET", "/api/template-builds"),
+  requestTemplateBuild: (distribution, kubernetesVersion) =>
+    act("POST", "/api/template-builds", { distribution, kubernetesVersion }),
 
   upgradeSettings: (settings) => request("PUT", "/api/appliance/upgrades/settings", settings),
 

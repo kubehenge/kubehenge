@@ -28,6 +28,15 @@ const form: SetupForm = {
   offerHARules: false,
   clusterDatastoreAllocate: false,
   backupTargets: [],
+  refresh: true,
+  refreshWeekday: "Sun",
+  refreshTime: "01:00",
+  refreshTimeZone: "UTC",
+  refreshStorage: "",
+  refreshAddress: "",
+  refreshGateway: "",
+  refreshDNS: "",
+  creatorBuilds: false,
   passphrase: "correct horse battery staple",
   confirm: "correct horse battery staple",
 };
@@ -88,7 +97,51 @@ describe("setup", () => {
       workloadDatastores: ["local-lvm"],
       workloadBridges: ["vmbr0"],
       bootstrapDatastore: "local",
+      templateRefresh: { enabled: true, weekday: "Sun", time: "01:00", timeZone: "UTC" },
     });
+  });
+
+  it("builds the templates again every week unless switched off", () => {
+    const { templateRefresh: _, ...unnamed } = settings(form);
+    expect(formOf(unnamed)).toHaveProperty("refresh", true);
+    expect(settings({ ...form, refresh: false }).templateRefresh).toStrictEqual({ enabled: false });
+    const saved = settings({
+      ...form,
+      refreshWeekday: "Wed",
+      refreshStorage: "local-lvm",
+      refreshAddress: "192.0.2.50/24",
+      refreshGateway: "192.0.2.1",
+      refreshDNS: "192.0.2.1, 1.1.1.1",
+      creatorBuilds: true,
+    });
+    expect(saved.templateRefresh).toStrictEqual({
+      enabled: true,
+      weekday: "Wed",
+      time: "01:00",
+      timeZone: "UTC",
+      storage: "local-lvm",
+      address: "192.0.2.50/24",
+      gateway: "192.0.2.1",
+      dns: ["192.0.2.1", "1.1.1.1"],
+      creatorBuilds: true,
+    });
+    expect(formOf(saved)).toMatchObject({
+      refreshWeekday: "Wed",
+      creatorBuilds: true,
+    });
+    expect(setupFieldProblems({ ...form, refreshGateway: "192.0.2.1" })).toHaveProperty("refreshAddress");
+    expect(setupFieldProblems({ ...form, refreshAddress: "192.0.2.50" })).toHaveProperty("refreshAddress");
+    const outside = setupFieldProblems({
+      ...form,
+      refreshAddress: "192.0.2.50/24",
+      refreshGateway: "198.51.100.1",
+      refreshDNS: "dns",
+    });
+    expect([outside.refreshGateway, outside.refreshDNS]).toStrictEqual([
+      "An IPv4 address in the address's network.",
+      "IP addresses.",
+    ]);
+    expect(setupFieldProblems({ ...form, refresh: false, refreshGateway: "x" })).not.toHaveProperty("refreshAddress");
   });
 
   it("reads registry mirrors and ranges", () => {
@@ -223,10 +276,14 @@ describe("setup", () => {
     const user = userEvent.setup({ delay: null });
     render(<App />);
 
-    await waitFor(() => expect(screen.getByRole("option", { name: "local-lvm" })).toBeInTheDocument());
-    await user.selectOptions(screen.getByLabelText("VM disks"), "local-lvm");
-    await waitFor(() => expect(screen.getByRole("option", { name: "vmbr0" })).toBeInTheDocument());
-    await user.selectOptions(screen.getByLabelText("Bridge"), "vmbr0");
+    // Asked of the one select rather than the whole form, whose size makes a page-wide role query
+    // slower than waitFor's interval allows on a busy machine.
+    const disks = await screen.findByLabelText("VM disks");
+    await waitFor(() => expect(within(disks).getByRole("option", { name: "local-lvm" })).toBeInTheDocument());
+    await user.selectOptions(disks, "local-lvm");
+    const bridge = screen.getByLabelText("Bridge");
+    await waitFor(() => expect(within(bridge).getByRole("option", { name: "vmbr0" })).toBeInTheDocument());
+    await user.selectOptions(bridge, "vmbr0");
     await user.type(screen.getByLabelText("Node addresses"), "192.0.2.11/24");
     await user.type(screen.getByLabelText("API address"), "192.0.2.10");
     await user.type(screen.getByLabelText("Gateway"), "192.0.2.1");

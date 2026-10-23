@@ -332,6 +332,9 @@ secrets:
         MIIB
         -----END CERTIFICATE-----
     namespace: kubehenge-system
+  kubehenge-template-builder:
+    data: {}
+    namespace: kubehenge-system
   proxmox-ca:
     data:
       ca.crt: *ca

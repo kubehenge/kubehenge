@@ -236,11 +236,63 @@ run "controller_and_clusters_are_least_privilege" {
           managementStorages = ["local-lvm", "local"]
         }
       }
+      templateRefresh = {
+        enabled       = true
+        weekday       = "Sun"
+        time          = "01:00"
+        timeZone      = "UTC"
+        soakHours     = 24
+        secret        = "kubehenge-template-builder"
+        node          = "pve1"
+        storage       = "local-lvm"
+        importStorage = "local"
+        isoStorage    = "local"
+        pool          = "kubehenge-templates"
+        bridge        = "vmbr0"
+        vlan          = 0
+        address       = ""
+        gateway       = ""
+        dns           = []
+        creatorBuilds = false
+      }
       clusterOIDC   = []
       backupTargets = []
       image         = "ghcr.io/kubehenge/kubehenge@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
     }
     error_message = "the Kubehenge chart's values differ"
+  }
+
+  assert {
+    condition = (
+      toset(keys(proxmox_acl.template_builder)) == toset([
+        "/ kubehenge-audit",
+        "/nodes kubehenge-audit",
+        "/nodes/pve1 kubehenge-template-builder-network",
+        "/pool/kubehenge-templates kubehenge-template-builder-vms",
+        "/sdn/zones/localnetwork/vmbr0 PVESDNUser",
+        "/storage/local kubehenge-template-builder-files",
+        "/storage/local-lvm kubehenge-cluster-storage",
+      ]) &&
+      alltrue([for a in proxmox_acl.template_builder : a.user_id == "kubehenge-template-builder@pve"]) &&
+      proxmox_virtual_environment_user.template_builder[0].password == null &&
+      !proxmox_user_token.template_builder[0].privileges_separation &&
+      toset(proxmox_virtual_environment_role.template_builder_network[0].privileges) == toset(["Sys.AccessNetwork", "Sys.Audit"]) &&
+      !contains(proxmox_virtual_environment_role.template_builder_vms[0].privileges, "VM.Clone")
+    )
+    error_message = "the template builder's ACLs differ from the least-privilege set"
+  }
+
+  assert {
+    condition     = contains(proxmox_virtual_environment_role.template_builder_vms[0].privileges, "Pool.Audit")
+    error_message = "the template builder cannot see which VMs are in its pool without Pool.Audit there"
+  }
+
+  assert {
+    condition = (
+      contains([for s in helm_release.cluster_api_providers.set_sensitive : s.name], "secrets.kubehenge-template-builder.data.token") &&
+      contains(output.proxmox_objects.users, "kubehenge-template-builder@pve")
+    )
+    error_message = "the template refresh gets its own token, kept out of the plain values, and a destroy is checked for its user"
   }
 
   assert {
@@ -363,6 +415,91 @@ run "cluster_datastore_allocate" {
   assert {
     condition     = contains(output.proxmox_objects.roles, "kubehenge-cluster-datastore")
     error_message = "a destroy is checked for the role too"
+  }
+}
+
+run "template_refresh_on_dedicated_storages" {
+  command = plan
+
+  variables {
+    template_refresh = {
+      node             = "pve2"
+      storage          = "ceph"
+      import_datastore = "images"
+      iso_datastore    = "seeds"
+      address          = "192.0.2.50/24"
+      gateway          = "192.0.2.1"
+      creator_builds   = true
+    }
+  }
+
+  assert {
+    condition = toset(keys(proxmox_acl.template_builder)) == toset([
+      "/ kubehenge-audit",
+      "/nodes kubehenge-audit",
+      "/nodes/pve2 kubehenge-template-builder-network",
+      "/pool/kubehenge-templates kubehenge-template-builder-vms",
+      "/sdn/zones/localnetwork/vmbr0 PVESDNUser",
+      "/storage/images kubehenge-template-builder-files",
+      "/storage/seeds kubehenge-template-builder-files",
+      "/storage/ceph kubehenge-cluster-storage",
+    ])
+    error_message = "full control goes to the import and ISO storages alone; the template disks' storage gets space"
+  }
+
+  assert {
+    condition = (
+      yamldecode(helm_release.kubehenge.values[0]).templateRefresh.address == "192.0.2.50/24" &&
+      yamldecode(helm_release.kubehenge.values[0]).templateRefresh.creatorBuilds
+    )
+    error_message = "the chart builds with the network and creator builds asked for"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).proxmox.datastoreAllocate.managementStorages == ["local-lvm", "local", "images", "seeds"]
+    error_message = "no cluster may hold Datastore.Allocate on the storages the builds download and upload to"
+  }
+}
+
+run "template_refresh_on_one_storage" {
+  command = plan
+
+  variables {
+    template_refresh = {
+      storage          = "local"
+      import_datastore = "local"
+      iso_datastore    = "local"
+    }
+  }
+
+  assert {
+    condition = toset(keys(proxmox_acl.template_builder)) == toset([
+      "/ kubehenge-audit",
+      "/nodes kubehenge-audit",
+      "/nodes/pve1 kubehenge-template-builder-network",
+      "/pool/kubehenge-templates kubehenge-template-builder-vms",
+      "/sdn/zones/localnetwork/vmbr0 PVESDNUser",
+      "/storage/local kubehenge-template-builder-files",
+      "/storage/local kubehenge-cluster-storage",
+    ])
+    error_message = "a storage holding the images and the template disks gets space beside full control"
+  }
+}
+
+run "template_refresh_off" {
+  command = plan
+
+  variables {
+    template_refresh = { enabled = false }
+  }
+
+  assert {
+    condition = (
+      length(proxmox_acl.template_builder) == 0 && length(proxmox_user_token.template_builder) == 0 &&
+      !contains([for s in helm_release.cluster_api_providers.set_sensitive : s.name], "secrets.kubehenge-template-builder.data.token") &&
+      !yamldecode(helm_release.kubehenge.values[0]).templateRefresh.enabled
+    )
+    error_message = "no template builder unless the refresh is on"
   }
 }
 

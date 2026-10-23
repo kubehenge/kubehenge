@@ -4,7 +4,7 @@ Kubehenge itself, the management cluster and the workload clusters are upgraded 
 
 1. **Kubehenge itself:** the appliance's software, from the Administration page or the Proxmox VE shell.
 2. **The management cluster:** Talos, Kubernetes, Cluster API and its providers, and Kubehenge's ClusterClasses and controller, to the versions the new release carries, by applying it again.
-3. **Workload clusters:** Kubernetes in each cluster, by hand or automatically inside a maintenance window.
+3. **Workload clusters:** Kubernetes in each cluster, by hand or automatically inside a maintenance window, and the nodes' operating system, which moves to each week's build of the VM templates inside the same window.
 
 Before 1.0.0, a minor release may change behaviour: read its release notes ([changelog](changelog.md)) first.
 
@@ -105,6 +105,7 @@ tofu apply
 | Field | Variable | What it is |
 | --- | --- | --- |
 | Upgrade automatically | `mode` | `off` (the default); `patch` releases: the newest release of the cluster's minor version; `minor`, patch and minor releases: also the next minor version. |
+| Move the nodes to new template builds | `nodeImages` | On by default, for kubeadm, RKE2 and k3s: replace the nodes with clones of each new build of their VM template once it is a day old, whatever `mode` says ([below](#the-nodes-operating-system)). |
 | Days | `window.weekdays` | Days of the week the window opens on. |
 | Days of the month | `window.monthDays` | Such as `1, 15`. A day listed here or in Days counts; every day when both are empty. |
 | From | `window.start` | When the window opens, `HH:MM`; `02:00` by default. |
@@ -125,6 +126,12 @@ Where the versions come from:
 | kubeadm | the kubeadm templates on Proxmox VE: the newest version a template has been built for, so building a newer template is what offers one |
 
 Cluster API then rolls the nodes as for any upgrade. A rollout that has started finishes even if the window closes. The last automatic upgrade shows in the cluster's **Summary** as **Last automatic upgrade**, and is recorded on the Cluster in the annotation `kubehenge.dev/auto-upgraded`.
+
+### The nodes' operating system
+
+The management cluster builds the Ubuntu VM templates again every week, with the updates Ubuntu published since ([templates.md](templates.md#the-weekly-build)). Inside each cluster's window, under the same conditions as an upgrade, the controller moves the nodes of a cluster with `nodeImages` on to the newest build that is at least a day old: it sets the cluster's node image time (the annotation `kubehenge.dev/node-image`) to now, which has every machine template select that build, and Cluster API replaces the nodes one at a time. A Kubernetes upgrade due at the same time comes first; the nodes it creates are already clones of the newest build. The last move shows in the cluster's **Summary** as **Last node refresh**, recorded in the annotation `kubehenge.dev/node-image-refreshed`. While a newer build waits for the window, the controller records that it holds the cluster, with the build and when the window opens, in the annotation `kubehenge.dev/node-image-held` (such as `build-202610180100 at 2026-10-24T00:00:00Z`), which the **Summary** shows as **Next node refresh**; it is gone once the move starts.
+
+Holding a cluster on its build is switching `nodeImages` off. Deleting a build that turns out broken stops the clusters that have not moved to it yet. Neither the Administration page nor `kubehenge template delete … --build` deletes a build a cluster runs; both name the clusters instead. For a build found broken that clusters already run, `--roll-clusters` deletes it anyway, and those clusters' nodes are replaced at once, outside their windows, with clones of the build before it. The last build of a template is never deleted while a cluster runs it.
 
 ### What holds an upgrade back
 

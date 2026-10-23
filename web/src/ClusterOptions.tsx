@@ -2,7 +2,7 @@
 import { useId, useState, type JSX } from "react";
 
 import { ClusterMeshDialog, meshText, runsCilium } from "./ClusterMesh";
-import { UpgradesDialog, describe, upgradePolicy } from "./ClusterUpgrades";
+import { UpgradesDialog, describe, refreshesNodes, upgradePolicy } from "./ClusterUpgrades";
 import { CSIDialog, csiOn, useCSIOffer } from "./CsiPlugin";
 import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBalancer";
 import { LogsDialog, logsOf, logsText } from "./Logs";
@@ -150,6 +150,7 @@ export function Options<A extends string = never>({
   const headlamp = hostedValue(c.variables["headlamp"]);
   const monitoring = hostedValue(c.variables["monitoring"]);
   const rancher = rancherValue(c.variables["rancher"]);
+  const upgrades = upgradePolicy(c.variables["upgrades"]);
   const haOffered = useHAOffered(c.class, text(c.variables["storage"]));
   const csi = useCSIOffer(c);
   const cis = c.variables["cis"] === true;
@@ -222,7 +223,7 @@ export function Options<A extends string = never>({
     },
     {
       label: "Automatic upgrades",
-      value: describe(upgradePolicy(c.variables["upgrades"])),
+      value: describe(upgrades, refreshesNodes(upgrades, c.distribution)),
       action: "upgrades",
       name: "automatic upgrades",
     },

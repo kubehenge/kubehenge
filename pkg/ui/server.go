@@ -182,6 +182,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/templates", s.signedIn(s.listTemplates))
 	mux.HandleFunc("POST /api/templates", s.signedIn(s.createTemplate))
 	mux.HandleFunc("DELETE /api/templates/{vmid}", s.signedIn(s.deleteTemplate))
+	mux.HandleFunc("POST /api/templates/refresh", s.signedIn(s.refreshNow))
+	mux.HandleFunc("GET /api/template-builds", s.managed(s.templateBuilds))
+	mux.HandleFunc("POST /api/template-builds", s.managed(s.requestTemplateBuild))
 
 	mux.HandleFunc("GET /api/classes", s.managed(s.classes))
 	mux.HandleFunc("GET /api/versions/{distribution}", s.signedIn(s.versions))

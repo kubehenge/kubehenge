@@ -38,7 +38,10 @@ import {
   passphraseShort,
   pollIdle,
   pollRunning,
+  timeZones,
   usePoll,
+  weekdayName,
+  weekdays,
 } from "./ui";
 
 const unique = (xs: string[]): string[] => [...new Set(xs)].toSorted();
@@ -75,8 +78,48 @@ export interface SetupForm {
   offerHARules: boolean;
   clusterDatastoreAllocate: boolean;
   backupTargets: BackupTarget[];
+  // The weekly build of the Ubuntu VM templates.
+  refresh: boolean;
+  refreshWeekday: string;
+  refreshTime: string;
+  refreshTimeZone: string;
+  // Empty: the first storage for clusters.
+  refreshStorage: string;
+  refreshAddress: string;
+  refreshGateway: string;
+  refreshDNS: string;
+  creatorBuilds: boolean;
   passphrase: string;
   confirm: string;
+}
+
+// When the refresh runs unless the settings say otherwise, as the module has it.
+const refreshDefaults = { weekday: "Sun", time: "01:00", timeZone: "UTC" };
+
+function refreshSettings(f: SetupForm): NonNullable<ManagementSettings["templateRefresh"]> {
+  if (!f.refresh) {
+    return { enabled: false };
+  }
+  const r: NonNullable<ManagementSettings["templateRefresh"]> = {
+    enabled: true,
+    weekday: f.refreshWeekday,
+    time: f.refreshTime,
+    timeZone: f.refreshTimeZone,
+  };
+  if (f.refreshStorage) {
+    r.storage = f.refreshStorage;
+  }
+  if (f.refreshAddress) {
+    r.address = f.refreshAddress;
+    r.gateway = f.refreshGateway;
+    if (list(f.refreshDNS).length > 0) {
+      r.dns = list(f.refreshDNS);
+    }
+  }
+  if (f.creatorBuilds) {
+    r.creatorBuilds = true;
+  }
+  return r;
 }
 
 const mirrorLines = (text: string): string[] =>
@@ -147,6 +190,7 @@ export function settings(f: SetupForm): ManagementSettings {
   if (f.backupTargets.length > 0) {
     s.backupTargets = cleanTargets(f.backupTargets);
   }
+  s.templateRefresh = refreshSettings(f);
   return s;
 }
 
@@ -165,6 +209,35 @@ const unsaved: ManagementSettings = {
   workloadBridges: [],
   bootstrapDatastore: "local",
 };
+
+type RefreshFields = Pick<
+  SetupForm,
+  | "refresh"
+  | "refreshWeekday"
+  | "refreshTime"
+  | "refreshTimeZone"
+  | "refreshStorage"
+  | "refreshAddress"
+  | "refreshGateway"
+  | "refreshDNS"
+  | "creatorBuilds"
+>;
+
+// refreshFields fills the refresh's fields; settings that name no refresh have it on, with every
+// default.
+function refreshFields(r: ManagementSettings["templateRefresh"]): RefreshFields {
+  return {
+    refresh: r?.enabled ?? true,
+    refreshWeekday: r?.weekday ?? refreshDefaults.weekday,
+    refreshTime: r?.time ?? refreshDefaults.time,
+    refreshTimeZone: r?.timeZone ?? refreshDefaults.timeZone,
+    refreshStorage: r?.storage ?? "",
+    refreshAddress: r?.address ?? "",
+    refreshGateway: r?.gateway ?? "",
+    refreshDNS: (r?.dns ?? []).join(", "),
+    creatorBuilds: r?.creatorBuilds === true,
+  };
+}
 
 /** formOf fills the form from saved settings, or with nothing chosen yet. */
 export function formOf(saved: ManagementSettings = unsaved): SetupForm {
@@ -190,6 +263,7 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     offerHARules: saved.offerHARules === true,
     clusterDatastoreAllocate: saved.clusterDatastoreAllocate === true,
     backupTargets: saved.backupTargets ?? [],
+    ...refreshFields(saved.templateRefresh),
     passphrase: "",
     confirm: "",
   };
@@ -212,6 +286,9 @@ export type SetupField =
   | "mirrors"
   | "podSubnets"
   | "serviceSubnets"
+  | "refreshAddress"
+  | "refreshGateway"
+  | "refreshDNS"
   | "passphrase"
   | "confirm";
 
@@ -266,6 +343,7 @@ export function setupFieldProblems(
     ...placementProblems(f),
     ...networkProblems(f, was),
     ...offerProblems(f),
+    ...refreshProblems(f),
   };
   if (passphraseShort(f.passphrase)) {
     p.passphrase = `The passphrase needs at least ${minPassphrase} characters.`;
@@ -374,6 +452,35 @@ function offerProblems(f: SetupForm): SetupProblems {
     if (wrong !== undefined) {
       p[key] = `${wrong} is no IPv4 network such as 10.244.0.0/16, without host bits.`;
     }
+  }
+  return p;
+}
+
+// refreshProblems are those of the static network of the VM that prepares a template's image.
+function refreshProblems(f: SetupForm): SetupProblems {
+  const p: SetupProblems = {};
+  if (!f.refresh) {
+    return p;
+  }
+  const dns = list(f.refreshDNS);
+  if (!f.refreshAddress) {
+    if (f.refreshGateway || dns.length > 0) {
+      p.refreshAddress = "Needed for a gateway and DNS servers; leave all three empty for DHCP.";
+    }
+    return p;
+  }
+  const [base = "", bits] = f.refreshAddress.split("/");
+  const ip = toInt(base);
+  if (!cidr.test(f.refreshAddress) || ip === undefined) {
+    p.refreshAddress = "An IPv4 address with its prefix length, such as 192.0.2.50/24.";
+    return p;
+  }
+  const gateway = toInt(f.refreshGateway);
+  if (gateway === undefined || !sameNetwork(ip, gateway, Number(bits))) {
+    p.refreshGateway = "An IPv4 address in the address's network.";
+  }
+  if (dns.some((d) => !isIP(d))) {
+    p.refreshDNS = "IP addresses.";
   }
   return p;
 }
@@ -497,6 +604,26 @@ function LastRun({ status, manage }: { status: SetupStatus; manage: boolean }) {
   );
 }
 
+// refreshSummary says in words when and where the templates are built again.
+function refreshSummary(s: ManagementSettings): string {
+  const f = refreshFields(s.templateRefresh);
+  if (!f.refresh) {
+    return "Off";
+  }
+  const disks = filled(f.refreshStorage)
+    ? f.refreshStorage
+    : (s.workloadDatastores[0] ?? "the first storage for clusters");
+  const parts = [
+    `Every ${weekdayName(f.refreshWeekday)} at ${f.refreshTime} (${f.refreshTimeZone})`,
+    `disks on ${disks}`,
+    filled(f.refreshAddress) ? `built at ${f.refreshAddress}` : "built with DHCP",
+  ];
+  if (f.creatorBuilds) {
+    parts.push("cluster creators may have missing templates built");
+  }
+  return parts.join(", ");
+}
+
 function ManagedSummary({
   status,
   settings: s,
@@ -527,6 +654,7 @@ function ManagedSummary({
       "CSI plugin's newest release",
       s.clusterDatastoreAllocate === true ? "Clusters may choose it, on a storage of their own" : "Off",
     ],
+    ["Template refresh", refreshSummary(s)],
     [
       "Identity providers",
       s.clusterOIDC && s.clusterOIDC.length > 0 ? s.clusterOIDC.map((p) => p.issuerURL).join(", ") : "None",
@@ -880,6 +1008,131 @@ function DatastoreAllocateChoice({ form, set }: Omit<FieldsProps, "shown">): JSX
   );
 }
 
+// offeredRefreshStorage sends template disks the clusters may no longer use back to the first that
+// they may.
+const offeredRefreshStorage = (f: SetupForm): string =>
+  f.workloadDatastores.includes(f.refreshStorage) ? f.refreshStorage : "";
+
+function RefreshChoice({ form, set, shown }: FieldsProps): JSX.Element {
+  const hint = useId();
+  const creatorsHint = useId();
+  return (
+    <fieldset className="group">
+      <legend>Template refresh</legend>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.refresh}
+          aria-describedby={hint}
+          onChange={(e) => set("refresh", e.target.checked)}
+        />{" "}
+        Build the Ubuntu VM templates again every week
+      </label>
+      <p className="muted" id={hint}>
+        Each build takes Ubuntu&apos;s updates. A cluster&apos;s nodes move to a build in the cluster&apos;s maintenance
+        window once it is a day old, unless the cluster switches that off; the two newest builds of each template stay.
+        The builds run with an API token of their own, which may create and delete VMs in the template pool and upload
+        and delete images on the storages they use.
+      </p>
+      {form.refresh && (
+        <>
+          <Field label="Day">
+            {(id) => (
+              <select id={id} value={form.refreshWeekday} onChange={(e) => set("refreshWeekday", e.target.value)}>
+                {weekdays.map((d) => (
+                  <option key={d} value={d}>
+                    {weekdayName(d)}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
+          <Field label="Time">
+            {(id) => (
+              <input
+                id={id}
+                type="time"
+                value={form.refreshTime}
+                onChange={(e) => set("refreshTime", e.target.value || refreshDefaults.time)}
+              />
+            )}
+          </Field>
+          <Field label="Time zone">
+            {(id) => (
+              <select id={id} value={form.refreshTimeZone} onChange={(e) => set("refreshTimeZone", e.target.value)}>
+                {timeZones(form.refreshTimeZone).map((z) => (
+                  <option key={z} value={z}>
+                    {z}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
+          <Field label="Template disks" hint="One of the storages for clusters.">
+            {(id) => (
+              <select id={id} value={form.refreshStorage} onChange={(e) => set("refreshStorage", e.target.value)}>
+                <option value="">
+                  {form.workloadDatastores[0] === undefined
+                    ? "The first storage for clusters"
+                    : `${form.workloadDatastores[0]} (the first storage for clusters)`}
+                </option>
+                {form.workloadDatastores.slice(1).map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
+          <Field
+            label="Build address"
+            hint="The VM that prepares an image gets its address by DHCP when this is empty. Otherwise an unused address with its prefix length, such as 192.0.2.50/24."
+            error={shown("refreshAddress")}
+          >
+            {(id) => (
+              <input
+                id={id}
+                value={form.refreshAddress}
+                onChange={(e) => set("refreshAddress", e.target.value.trim())}
+              />
+            )}
+          </Field>
+          {form.refreshAddress && (
+            <>
+              <Field label="Build gateway" error={shown("refreshGateway")}>
+                {(id) => (
+                  <input
+                    id={id}
+                    value={form.refreshGateway}
+                    onChange={(e) => set("refreshGateway", e.target.value.trim())}
+                  />
+                )}
+              </Field>
+              <Field label="Build DNS servers" hint="Separated by commas." error={shown("refreshDNS")}>
+                {(id) => <input id={id} value={form.refreshDNS} onChange={(e) => set("refreshDNS", e.target.value)} />}
+              </Field>
+            </>
+          )}
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={form.creatorBuilds}
+              aria-describedby={creatorsHint}
+              onChange={(e) => set("creatorBuilds", e.target.checked)}
+            />{" "}
+            Let those who may create clusters have a missing template built
+          </label>
+          <p className="muted" id={creatorsHint}>
+            Recommended. A cluster creator whose Kubernetes version has no kubeadm template yet, or who finds no cloud
+            image, can ask for it from the create wizard; the build runs with the refresh&apos;s token, not theirs.
+            Without it, only an administrator can build templates.
+          </p>
+        </>
+      )}
+    </fieldset>
+  );
+}
+
 function AdvancedFields({
   form,
   set,
@@ -1047,6 +1300,7 @@ function SetupWizard({
     imageDatastore: fit(form.imageDatastore, onEveryNode("import")),
     bootstrapDatastore: fit(form.bootstrapDatastore, onEveryNode("iso")),
     bridge: keepOffered(form.bridge, bridges, bridgesKnown),
+    refreshStorage: offeredRefreshStorage(form),
   };
   // A new passphrase is chosen, and repeated, only when no earlier run left a state to open.
   const firstRun = !manage && status.resumes !== true;
@@ -1273,6 +1527,7 @@ function SetupWizard({
         <HAChoice form={form} set={set} />
         <HARulesChoice form={form} set={set} />
         <DatastoreAllocateChoice form={form} set={set} />
+        <RefreshChoice form={effective} set={set} shown={shown} />
         <fieldset className="group">
           <legend>Identity providers</legend>
           <p className="muted">

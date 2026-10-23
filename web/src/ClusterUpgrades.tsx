@@ -1,8 +1,8 @@
-import { useState, type JSX } from "react";
+import { useId, useState, type JSX } from "react";
 
 import { api } from "./api";
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, Field, browserZone, errorMessage, timeZones } from "./ui";
+import { Dialog, ErrorBox, Field, browserZone, errorMessage, timeZones, weekdays } from "./ui";
 import { oneOf, quantities, quantity, record, text, texts } from "./values";
 
 export const upgradeModes = ["off", "patch", "minor"] as const;
@@ -10,6 +10,8 @@ export type UpgradeMode = (typeof upgradeModes)[number];
 
 export interface UpgradePolicy {
   mode?: UpgradeMode | undefined;
+  /** The nodes move to new builds of their VM template inside the window; unset means on. */
+  nodeImages?: boolean | undefined;
   window?:
     | {
         weekdays?: string[] | undefined;
@@ -24,10 +26,11 @@ export interface UpgradePolicy {
 /** upgradePolicy reads a cluster's upgrades variable. */
 export function upgradePolicy(v: unknown): UpgradePolicy {
   const p = record(v);
-  const { mode } = p;
+  const { mode, nodeImages } = p;
   const w = record(p["window"]);
   return {
     mode: oneOf(upgradeModes, mode) ? mode : undefined,
+    nodeImages: typeof nodeImages === "boolean" ? nodeImages : undefined,
     window: {
       weekdays: texts(w["weekdays"]),
       monthDays: quantities(w["monthDays"]),
@@ -49,7 +52,9 @@ const lastMonthDay = 31;
 const stepMinutes = 30;
 const shortestHours = 0.5;
 
-const weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+/** refreshesNodes tells whether a policy moves the nodes to new template builds: on unless it says off, and never for Talos, whose nodes take their updates by upgrading Talos. */
+export const refreshesNodes = (p: UpgradePolicy, distribution: string): boolean =>
+  distribution !== "talos" && p.nodeImages !== false;
 
 /** ModeSelect chooses an automatic upgrade policy's mode, for the dialog and the create wizard. */
 export function ModeSelect({
@@ -79,18 +84,24 @@ export function ModeSelect({
   );
 }
 
-// describe says in words when a policy upgrades a cluster.
-export function describe(p: UpgradePolicy): string {
-  if (p.mode === undefined || p.mode === "off") {
+// describe says in words when a policy upgrades a cluster, and moves its nodes to new template
+// builds when nodeImages says the cluster's nodes may be.
+export function describe(p: UpgradePolicy, nodeImages = false): string {
+  const upgrades = p.mode !== undefined && p.mode !== "off";
+  if (!upgrades && !nodeImages) {
     return "Off";
   }
   const w = p.window ?? {};
   const monthDays = w.monthDays ?? [];
   const days = [...(w.weekdays ?? []), ...(monthDays.length > 0 ? [`day ${monthDays.join(", ")} of the month`] : [])];
   const hours = (w.durationMinutes ?? defaultMinutes) / minutesPerHour;
-  return `${p.mode === "patch" ? "Patch releases" : "Patch and minor releases"}, ${days.length > 0 ? days.join(", ") : "every day"} from ${
-    w.start ?? defaultStart
-  } for ${hours} h (${w.timeZone ?? "UTC"})`;
+  const what = [
+    ...(upgrades ? [p.mode === "patch" ? "Patch releases" : "Patch and minor releases"] : []),
+    ...(nodeImages ? [upgrades ? "new node images" : "New node images"] : []),
+  ].join(" and ");
+  return `${what}, ${days.length > 0 ? days.join(", ") : "every day"} from ${w.start ?? defaultStart} for ${hours} h (${
+    w.timeZone ?? "UTC"
+  })`;
 }
 
 const splitDays = (monthDays: string): string[] => monthDays.split(/[\s,]+/u).filter(Boolean);
@@ -111,6 +122,8 @@ export function windowProblems(monthDays: string, hours: string): { monthDays?: 
 // PolicyFields are the dialog's fields, as typed.
 interface PolicyFields {
   mode: UpgradeMode;
+  // Undefined for Talos, whose nodes have no template builds to move to.
+  nodeImages: boolean | undefined;
   days: string[];
   monthDays: string;
   start: string;
@@ -118,11 +131,13 @@ interface PolicyFields {
   timeZone: string;
 }
 
-function fieldsOf(current: UpgradePolicy): PolicyFields {
+function fieldsOf(current: UpgradePolicy, distribution: string): PolicyFields {
   const w = current.window ?? {};
-  const active = current.mode !== undefined && current.mode !== "off";
+  const nodeImages = distribution === "talos" ? undefined : refreshesNodes(current, distribution);
+  const active = (current.mode !== undefined && current.mode !== "off") || nodeImages === true;
   return {
     mode: current.mode ?? "off",
+    nodeImages,
     days: w.weekdays ?? [],
     monthDays: (w.monthDays ?? []).join(", "),
     start: w.start ?? defaultStart,
@@ -132,10 +147,14 @@ function fieldsOf(current: UpgradePolicy): PolicyFields {
   };
 }
 
-// policyOf is the policy the fields save.
+// windowed tells whether the fields need a window: something happens in it.
+const windowed = (f: Pick<PolicyFields, "mode" | "nodeImages">): boolean => f.mode !== "off" || f.nodeImages === true;
+
+// policyOf is the policy the fields save; nodeImages is written only when off, as on is the default.
 function policyOf(f: PolicyFields): UpgradePolicy {
-  if (f.mode === "off") {
-    return { mode: "off" };
+  const off = f.nodeImages === false ? { nodeImages: false } : {};
+  if (!windowed(f)) {
+    return { mode: "off", ...off };
   }
   const window: NonNullable<UpgradePolicy["window"]> = {
     start: f.start,
@@ -149,12 +168,13 @@ function policyOf(f: PolicyFields): UpgradePolicy {
   if (md.length > 0) {
     window.monthDays = md;
   }
-  return { mode: f.mode, window };
+  return { mode: f.mode, ...off, window };
 }
 
 export function UpgradesDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
-  const initial = fieldsOf(upgradePolicy(c.variables["upgrades"]));
+  const initial = fieldsOf(upgradePolicy(c.variables["upgrades"]), c.distribution);
   const [mode, setMode] = useState<UpgradeMode>(initial.mode);
+  const [nodeImages, setNodeImages] = useState(initial.nodeImages);
   const [days, setDays] = useState<string[]>(initial.days);
   const [monthDays, setMonthDays] = useState(initial.monthDays);
   const [start, setStart] = useState(initial.start);
@@ -162,8 +182,10 @@ export function UpgradesDialog({ cluster: c, onClose }: { cluster: Cluster; onCl
   const [timeZone, setTimeZone] = useState(initial.timeZone);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const problems = mode === "off" ? {} : windowProblems(monthDays, hours);
-  const policy = (): UpgradePolicy => policyOf({ mode, days, monthDays, start, hours, timeZone });
+  const nodeImagesHint = useId();
+  const withWindow = windowed({ mode, nodeImages });
+  const problems = withWindow ? windowProblems(monthDays, hours) : {};
+  const policy = (): UpgradePolicy => policyOf({ mode, nodeImages, days, monthDays, start, hours, timeZone });
   const changed = JSON.stringify(policy()) !== JSON.stringify(policyOf(initial));
 
   const save = async (): Promise<void> => {
@@ -203,7 +225,24 @@ export function UpgradesDialog({ cluster: c, onClose }: { cluster: Cluster; onCl
         the window closes first.
       </p>
       <Field label="Upgrade automatically">{(id) => <ModeSelect id={id} value={mode} onChange={setMode} />}</Field>
-      {mode !== "off" && (
+      {nodeImages !== undefined && (
+        <>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={nodeImages}
+              aria-describedby={nodeImagesHint}
+              onChange={(e) => setNodeImages(e.target.checked)}
+            />{" "}
+            Move the nodes to new template builds
+          </label>
+          <p className="muted" id={nodeImagesHint}>
+            When the VM templates are built again with Ubuntu&apos;s updates, the nodes are replaced one at a time with
+            clones of the new build inside the window, once the build is a day old, whatever the upgrade setting says.
+          </p>
+        </>
+      )}
+      {withWindow && (
         <>
           <fieldset className="group">
             <legend>Days</legend>

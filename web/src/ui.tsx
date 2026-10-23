@@ -308,6 +308,22 @@ export function timeZones(current: string): string[] {
   return [...new Set(["UTC", current, ...Intl.supportedValuesOf("timeZone")])];
 }
 
+const weekdayNames: Record<string, string> = {
+  Mon: "Monday",
+  Tue: "Tuesday",
+  Wed: "Wednesday",
+  Thu: "Thursday",
+  Fri: "Friday",
+  Sat: "Saturday",
+  Sun: "Sunday",
+};
+
+/** The days of a schedule, by the three letters schedules name them with. */
+export const weekdays = Object.keys(weekdayNames);
+
+/** The weekday's full name, as the schedule's three letters stand for it. */
+export const weekdayName = (d: string): string => weekdayNames[d] ?? d;
+
 // FieldAria ties a control to its field's message.
 export interface FieldAria {
   "aria-invalid"?: boolean;

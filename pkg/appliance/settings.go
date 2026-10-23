@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -55,6 +56,107 @@ type Settings struct {
 	// ClusterDatastoreAllocate lets a cluster choose the CSI plugin's newest release, whose token
 	// then holds Datastore.Allocate on the cluster's storage.
 	ClusterDatastoreAllocate bool `json:"clusterDatastoreAllocate,omitempty"`
+	// TemplateRefresh is the weekly build of the Ubuntu VM templates; unset, it runs with the
+	// module's defaults.
+	TemplateRefresh *TemplateRefresh `json:"templateRefresh,omitempty"`
+}
+
+// TemplateRefresh is when and where the Ubuntu VM templates are built again. Empty fields take the
+// module's defaults: Sunday at 01:00 UTC, the first cluster storage, DHCP for the VM that
+// prepares an image.
+type TemplateRefresh struct {
+	Enabled  bool   `json:"enabled"`
+	Weekday  string `json:"weekday,omitempty"`
+	Time     string `json:"time,omitempty"`
+	TimeZone string `json:"timeZone,omitempty"`
+	// Storage holds the templates' disks, one of the cluster storages.
+	Storage string `json:"storage,omitempty"`
+	// Address, Gateway and DNS are the static network of the VM that prepares an image.
+	Address string   `json:"address,omitempty"`
+	Gateway string   `json:"gateway,omitempty"`
+	DNS     []string `json:"dns,omitempty"`
+	// CreatorBuilds lets those who may create clusters have a missing template built.
+	CreatorBuilds bool `json:"creatorBuilds,omitempty"`
+}
+
+// RefreshWeekdays are the days the template refresh may run on, as the module names them.
+var RefreshWeekdays = []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+
+// RefreshesTemplates tells whether the settings have the templates built again every week.
+func (s *Settings) RefreshesTemplates() bool {
+	return s.TemplateRefresh == nil || s.TemplateRefresh.Enabled
+}
+
+// check adds what is wrong with the refresh, in the words of the setup page's fields.
+func (r *TemplateRefresh) check(p *problems, workloadDatastores []string) {
+	if !r.Enabled {
+		return
+	}
+	if r.Weekday != "" && !slices.Contains(RefreshWeekdays, r.Weekday) {
+		p.addf("Template refresh day: one of %s", strings.Join(RefreshWeekdays, ", "))
+	}
+	if r.Time != "" {
+		if _, err := time.Parse("15:04", r.Time); err != nil || len(r.Time) != len("15:04") {
+			p.addf("Template refresh time: HH:MM")
+		}
+	}
+	if r.TimeZone != "" {
+		if _, err := time.LoadLocation(r.TimeZone); err != nil || r.TimeZone == "Local" {
+			p.addf("Template refresh time zone: an IANA time zone, such as Europe/Berlin")
+		}
+	}
+	if r.Storage != "" && !slices.Contains(workloadDatastores, r.Storage) {
+		p.addf("Template disks: one of the cluster storages")
+	}
+	r.checkNetwork(p)
+}
+
+// checkNetwork adds what is wrong with the build VM's static network.
+func (r *TemplateRefresh) checkNetwork(p *problems) {
+	if r.Address == "" {
+		if r.Gateway != "" || len(r.DNS) > 0 {
+			p.addf("Template build address: needed for its gateway and DNS servers")
+		}
+		return
+	}
+	address, err := netip.ParsePrefix(r.Address)
+	if err != nil || !address.Addr().Is4() {
+		p.addf("Template build address: an IPv4 address with prefix, such as 192.0.2.50/24")
+		return
+	}
+	gateway, err := netip.ParseAddr(r.Gateway)
+	if err != nil || !address.Contains(gateway) {
+		p.addf("Template build gateway: an address in %s", address.Masked())
+	}
+	for _, d := range r.DNS {
+		if _, err := netip.ParseAddr(d); err != nil {
+			p.addf("Template build DNS servers: IP addresses")
+			break
+		}
+	}
+}
+
+// moduleTemplateRefresh is the module's template_refresh for the settings: an empty object takes
+// every default, the refresh switched on among them.
+func moduleTemplateRefresh(r *TemplateRefresh) map[string]any {
+	out := map[string]any{}
+	if r == nil {
+		return out
+	}
+	out["enabled"] = r.Enabled
+	out["creator_builds"] = r.CreatorBuilds
+	for key, value := range map[string]string{
+		"weekday": r.Weekday, "time": r.Time, "time_zone": r.TimeZone, "storage": r.Storage,
+		"address": r.Address, "gateway": r.Gateway,
+	} {
+		if value != "" {
+			out[key] = value
+		}
+	}
+	if len(r.DNS) > 0 {
+		out["dns"] = r.DNS
+	}
+	return out
 }
 
 // OIDCProvider is an OpenID Connect provider a cluster's API server accepts ID tokens from. Unset
@@ -183,6 +285,9 @@ func (s *Settings) Validate() error {
 	}
 	if err = ValidBackupTargets(s.BackupTargets); err != nil {
 		p.addf("Backup targets: %s", err)
+	}
+	if s.TemplateRefresh != nil {
+		s.TemplateRefresh.check(&p, s.WorkloadDatastores)
 	}
 	err = p.err()
 	if err != nil {
