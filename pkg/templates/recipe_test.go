@@ -242,9 +242,9 @@ func nodeBootChecks(t *testing.T, recipe *Recipe, m BuildMode, b Bake, files map
 		if recipe.Image == nil || recipe.Reboot || recipe.BuilderDiskGiB < 16 || recipe.DiskGiB < 8 {
 			t.Fatalf("an image-mode recipe boots the image it built from its own disk: %+v", recipe)
 		}
-		wantNodeUserData := "#cloud-config\n"
+		wantNodeUserData := "#cloud-config\n{}\n"
 		if b.Distribution == Kubeadm {
-			wantNodeUserData += "runcmd:\n  - [" + imagesPath + ", " + b.KubernetesVersion + "]\n"
+			wantNodeUserData = "#cloud-config\nruncmd:\n  - [" + imagesPath + ", " + b.KubernetesVersion + "]\n"
 		}
 		if recipe.Image.UserData != wantNodeUserData {
 			t.Errorf("node user data %q, want %q", recipe.Image.UserData, wantNodeUserData)
