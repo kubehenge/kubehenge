@@ -74,7 +74,12 @@ case "${test}" in
             done
             case "${test}" in
                 rke2) template rke2 ;;
-                k3s | rancher | cluster-mesh | node-image-refresh | autoscaler) template k3s ;;
+                k3s | rancher | cluster-mesh | autoscaler) template k3s ;;
+                # The test moves its cluster to another node OS than the default.
+                node-image-refresh)
+                    template k3s
+                    template k3s --node-os rocky-10
+                    ;;
                 kubeadm)
                     template kubeadm --kubernetes-version "${from}"
                     template kubeadm --kubernetes-version "${to}"
