@@ -20,7 +20,6 @@ What Kubehenge's first release does, what comes next, and what may come later.
 
 - A Talos ClusterClass, with each node's Talos release upgraded in place one node at a time, control planes first, and automatic patch upgrades inside the maintenance window.
 - The controller manager's and scheduler's metrics on Talos, once a Talos release gives them serving certificates of the cluster CA; Kubehenge scrapes them from the first release that does.
-- The Talos control-plane provider from an upstream release once one carries ClusterClass support, in place of Kubehenge's build.
 
 ## Later
 

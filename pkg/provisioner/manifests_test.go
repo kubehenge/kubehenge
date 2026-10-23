@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"regexp"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -177,56 +176,12 @@ func TestModuleSelectsTheStoredManifests(t *testing.T) {
 	}
 }
 
-// The module names the manifests of its Talos control-plane build by the digests in versions.tf,
-// which the files this binary carries have to match, or the hook refuses them on every install.
-func TestBuiltManifestsMatchTheModule(t *testing.T) {
-	t.Parallel()
-	raw, err := os.ReadFile("../../management-cluster/versions.tf")
-	if err != nil {
-		t.Fatal(err)
-	}
-	block := regexp.MustCompile(`(?s)talos_control_plane_build = \{.*?manifests = \{(.*?)\}`).FindSubmatch(raw)
-	if block == nil {
-		t.Fatal("no manifests in talos_control_plane_build")
-	}
-	digests := map[string]string{}
-	for _, m := range regexp.MustCompile(`(\w+)\s*=\s*"([0-9a-f]{64})"`).FindAllSubmatch(block[1], -1) {
-		digests[string(m[1])] = string(m[2])
-	}
-	for role, file := range map[string]string{"metadata": "metadata.yaml", "components": "control-plane-components.yaml"} {
-		ref := builtScheme + "talos-control-plane/" + file + "@sha256:" + digests[role]
-		body, err := downloadManifest(t.Context(), http.DefaultClient, ref, time.Millisecond)
-		if err != nil {
-			t.Errorf("%s: %v", role, err)
-			continue
-		}
-		if len(body) == 0 {
-			t.Errorf("%s is empty", file)
-		}
-	}
-}
-
-func TestDownloadManifestChecksTheBuiltOnes(t *testing.T) {
-	t.Parallel()
-	_, err := downloadManifest(t.Context(), http.DefaultClient, builtScheme+"talos-control-plane/metadata.yaml@sha256:"+digestOf("other"), time.Millisecond)
-	if !errors.Is(err, errDigest) {
-		t.Errorf("another digest: err = %v, want a digest mismatch", err)
-	}
-	for _, name := range []string{"talos-control-plane/absent.yaml", "../manifests.go"} {
-		_, err = downloadManifest(t.Context(), http.DefaultClient, builtScheme+name+"@sha256:"+digestOf("x"), time.Millisecond)
-		if err == nil || errors.Is(err, errDigest) {
-			t.Errorf("%s: err = %v, want it not found", name, err)
-		}
-	}
-}
-
 func TestDownloadManifestNeedsHTTPSAndADigest(t *testing.T) {
 	t.Parallel()
 	for _, ref := range []string{
 		"http://example.org/metadata.yaml@sha256:" + digestOf("x"),
 		"https://example.org/metadata.yaml",
 		"https://example.org/metadata.yaml@sha256:ABC",
-		builtScheme + "talos-control-plane/metadata.yaml",
 	} {
 		if _, err := downloadManifest(t.Context(), http.DefaultClient, ref, time.Millisecond); err == nil {
 			t.Errorf("%s: no error", ref)

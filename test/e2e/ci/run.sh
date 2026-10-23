@@ -135,14 +135,11 @@ case "${TF_VAR_controller_image}" in
     # Anything else ends in the pushed image's digest.
     *) ;;
 esac
-# The providers Kubehenge builds, as a release publishes them, by the digests the module names; the
-# mirror serves them as ghcr.io's.
+# capmox and the Add-on Provider for Helm as a release publishes them, by the digests the module
+# names; the mirror serves them as ghcr.io's.
 make -s -C "${repo}" capmox-image CAPMOX_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-provider-proxmox" \
     KO_FLAGS=--insecure-registry > /dev/null
 make -s -C "${repo}" helm-addon-image HELM_ADDON_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-addon-provider-helm" \
-    KO_FLAGS=--insecure-registry > /dev/null
-make -s -C "${repo}" talos-control-plane-image \
-    TALOS_CONTROL_PLANE_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-control-plane-provider-talos" \
     KO_FLAGS=--insecure-registry > /dev/null
 
 # The tests' own output is shown as it comes rather than when each make target ends.

@@ -14,13 +14,10 @@ CAPMOX=v0.9.1
 HELM_ADDON=v0.6.4
 RKE2=v0.26.0
 K3S=v0.4.0
-TALOS_BOOTSTRAP=v0.7.0-alpha.3
+TALOS_BOOTSTRAP=v0.7.0-alpha.4
+TALOS_CONTROL_PLANE=v0.6.0-alpha.1
 CERT_MANAGER=v1.21.2
 CAPI_OPERATOR=v0.29.0
-# No release publishes the Talos control-plane provider's manifests; Kubehenge's binary carries them.
-talos_control_plane=$(cd "$(dirname "$0")/../.." && pwd)/pkg/provisioner/providers/talos-control-plane/control-plane-components.yaml
-TALOS_CONTROL_PLANE=$(sha256sum "${talos_control_plane}")
-TALOS_CONTROL_PLANE=${TALOS_CONTROL_PLANE%% *}
 
 goos=$(go env GOOS)
 goarch=$(go env GOARCH)
@@ -69,9 +66,10 @@ fetch "${rke2}/control-plane-components.yaml" 1dbed3911fa2f6c208020cae74e2d31f6f
 k3s=https://github.com/k3s-io/cluster-api-k3s/releases/download/${K3S}
 fetch "${k3s}/bootstrap-components.yaml" 26301df3f6a1b9a14317061bd586a73711d54c956ee8f679982fb3301c6ab71d "${dir}/crds/k3s-bootstrap.yaml"
 fetch "${k3s}/control-plane-components.yaml" 2e3754bb42be197c31b7567496767f22091f4da74453eb366d29c8bd06e28270 "${dir}/crds/k3s-control-plane.yaml"
-fetch "https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/releases/download/${TALOS_BOOTSTRAP}/bootstrap-components.yaml" \
-    3e2e7b785aef2b71f6241a02b539cd720b889de77be6ef6f4a90e180549dd78b "${dir}/crds/talos-bootstrap.yaml"
-cp "${talos_control_plane}" "${dir}/crds/talos-control-plane.yaml"
+fetch "https://github.com/kubehenge/cluster-api-bootstrap-provider-talos/releases/download/${TALOS_BOOTSTRAP}/bootstrap-components.yaml" \
+    91a1ba88fd8d98a9e202a1f0e13ec6dc71c121373b62cff121b1e5f603c16e32 "${dir}/crds/talos-bootstrap.yaml"
+fetch "https://github.com/kubehenge/cluster-api-control-plane-provider-talos/releases/download/${TALOS_CONTROL_PLANE}/control-plane-components.yaml" \
+    3f94b208f39af788d608d88e2b4ddfec2e067c2f76644cf89f1f4762a67009f9 "${dir}/crds/talos-control-plane.yaml"
 fetch "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER}/cert-manager.crds.yaml" \
     262fef78478492cd35b73a1b227106b7802f9c056361d1f561d04b32d751337f "${dir}/crds/cert-manager.yaml"
 fetch "https://github.com/kubernetes-sigs/cluster-api-operator/releases/download/${CAPI_OPERATOR}/operator-components.yaml" \

@@ -5,15 +5,12 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
-	"embed"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
-	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -39,18 +36,8 @@ const (
 // cannot change.
 var errDigest = errors.New("does not match its digest")
 
-// builtManifests are the manifests of Kubehenge's provider builds that no release publishes, made
-// from the same source as their images (management-cluster/versions.tf), by provider and file.
-//
-//go:embed all:providers
-var builtManifests embed.FS
-
-// builtScheme names one of builtManifests, by its path under providers/, in place of a download.
-const builtScheme = "kubehenge:"
-
 // ProviderManifests names the files the Cluster API operator installs a provider from, each as
-// <https URL>@sha256:<digest>, or kubehenge:<provider>/<file>@sha256:<digest> for one this binary
-// carries.
+// <https URL>@sha256:<digest>.
 type ProviderManifests struct {
 	Kind       string `json:"kind"`
 	Name       string `json:"name"`
@@ -140,32 +127,20 @@ func otherVersions(p *ProviderManifests) (client.MatchingLabelsSelector, error) 
 }
 
 // downloadManifest fetches a file named as <https URL>@sha256:<digest> and checks it, trying again
-// every interval while the download fails. One this binary carries is read from it, and checked all
-// the same.
+// every interval while the download fails.
 func downloadManifest(ctx context.Context, hc *http.Client, ref string, interval time.Duration) ([]byte, error) {
 	url, digest, ok := strings.Cut(ref, "@sha256:")
-	name, built := strings.CutPrefix(url, builtScheme)
-	if !ok || !built && !strings.HasPrefix(url, "https://") || !isDigest(digest) {
+	if !ok || !strings.HasPrefix(url, "https://") || !isDigest(digest) {
 		return nil, fmt.Errorf("%q is not <https URL>@sha256:<digest>", ref)
-	}
-	matches := func(body []byte) ([]byte, error) {
-		sum := sha256.Sum256(body)
-		if hex.EncodeToString(sum[:]) != digest {
-			return nil, fmt.Errorf("%s %w", url, errDigest)
-		}
-		return body, nil
-	}
-	if built {
-		body, err := fs.ReadFile(builtManifests, path.Join("providers", name))
-		if err != nil {
-			return nil, fmt.Errorf("%s is not among the manifests this binary carries: %w", url, err)
-		}
-		return matches(body)
 	}
 	for {
 		body, err := getManifest(ctx, hc, url)
 		if err == nil {
-			return matches(body)
+			sum := sha256.Sum256(body)
+			if hex.EncodeToString(sum[:]) != digest {
+				return nil, fmt.Errorf("%s %w", url, errDigest)
+			}
+			return body, nil
 		}
 		select {
 		case <-ctx.Done():
