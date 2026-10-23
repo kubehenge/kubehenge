@@ -181,7 +181,7 @@ export function start(root) {
     { name: "prod", dist: "RKE2", ver: "v1.37.1+rke2r1", decos: ["Rancher"] },
     { name: "staging", dist: "k3s", ver: "v1.37.1+k3s1", decos: ["Headlamp"] },
     { name: "ci", dist: "kubeadm", ver: "v1.36.5", decos: ["Monitoring"] },
-    { name: "dev", dist: "kubeadm", ver: "v1.37.1", decos: [] },
+    { name: "edge", dist: "Talos", ver: "v1.37.1", decos: [] },
   ];
   const queue = [{ name: "web", dist: "k3s", ver: "v1.37.1+k3s1", decos: [] }];
   const order = [];

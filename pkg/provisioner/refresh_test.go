@@ -273,13 +273,22 @@ func TestRequestedJob(t *testing.T) {
 	if args := job.Spec.Template.Spec.Containers[0].Args; slices.Contains(args, "--missing-only") || !slices.Contains(args, "--missing=kubeadm-v1.38.0-almalinux-10") {
 		t.Errorf("a full run: %v", args)
 	}
+	job, err = requestedJob(refreshCronJob(), map[string]string{"talos-v1.14.4": request(t, "dev@pve")}, day(20))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args := job.Spec.Template.Spec.Containers[0].Args; !slices.Contains(args, "--missing=talos-v1.14.4") {
+		t.Errorf("a Talos release: %v", args)
+	}
 	for name, requests := range map[string]map[string]string{
-		"no such line":         {"talos-v1.14.4": request(t, "dev@pve")},
+		"no such line":         {"flatcar-v4230.2.1": request(t, "dev@pve")},
 		"no version":           {"kubeadm-1.38-almalinux-10": request(t, "dev@pve")},
 		"no node OS":           {"kubeadm-v1.38.0": request(t, "dev@pve")},
 		"an unknown node OS":   {"rke2-plan9-4": request(t, "dev@pve")},
 		"an unreleased one":    {"rke2-leap-16.1": request(t, "dev@pve")},
 		"not written as named": {"rke2-almalinux-10.0": request(t, "dev@pve")},
+		"no Talos release":     {"talos-1.14": request(t, "dev@pve")},
+		"a Talos node OS":      {"talos-v1.14.4-almalinux-10": request(t, "dev@pve")},
 		"no request in it":     {"rke2-almalinux-10": "yes"},
 	} {
 		if _, err := requestedJob(refreshCronJob(), requests, day(20)); err == nil {

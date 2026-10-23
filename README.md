@@ -8,14 +8,14 @@
 > [!WARNING]
 > **Alpha: do not use it in production.** Any release may change Kubehenge completely, its settings, interface and ClusterClasses included, and nothing is guaranteed yet to keep working from one release to the next.
 
-Kubehenge creates and runs Kubernetes clusters on Proxmox VE. Pick a distribution per cluster (kubeadm, RKE2 or k3s, with Talos to follow), add Rancher or Headlamp where you want them, and manage it all from a web interface that signs in with your Proxmox VE users, LDAP, Active Directory and OpenID Connect realms included.
+Kubehenge creates and runs Kubernetes clusters on Proxmox VE. Pick a distribution per cluster (kubeadm, RKE2, k3s or Talos), add Rancher or Headlamp where you want them, and manage it all from a web interface that signs in with your Proxmox VE users, LDAP, Active Directory and OpenID Connect realms included.
 
 VMware ships Kubernetes inside vSphere as the vSphere Kubernetes Service, and OpenStack ships it as Magnum. Both are built on Cluster API. Proxmox VE has no equivalent; Kubehenge is one, built the same way.
 
 ## What it does
 
 - **Create, scale, upgrade and delete clusters** on Proxmox VE VMs, declaratively, with nodes replaced one at a time on upgrades and dead nodes replaced automatically.
-- **Your choice of distribution,** none locked in: kubeadm (upstream Kubernetes), RKE2 and k3s, each with its own CNI or Cilium or Calico chosen per cluster.
+- **Your choice of distribution,** none locked in: kubeadm (upstream Kubernetes), RKE2, k3s and Talos Linux, each with its own CNI or Cilium or Calico chosen per cluster; Talos nodes are upgraded in place through Talos's own API.
 - **Proxmox VE wired in:** persistent volumes through the Proxmox CSI plugin, node lifecycle through the Proxmox cloud controller manager, a virtual IP for the control plane.
 - **Clusters kept apart:** each cluster gets its own Proxmox VE pool, user and API token with rights on its own VMs and volumes only, held on its control-plane nodes only.
 - **Add-ons per cluster:** Rancher, with every Kubehenge cluster registered in it, and Headlamp; CIS hardening, pod security, monitoring, and backups with Velero to an S3 store, restored from the interface.

@@ -60,11 +60,15 @@ func (r *TemplateRefresh) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	talos, err := r.talosReleases(ctx)
+	if err != nil {
+		return err
+	}
 	list, err := r.Pool.List(ctx)
 	if err != nil {
 		return fmt.Errorf("listing the templates: %w", err)
 	}
-	lines, err := r.toBuild(clusters, poolBuilds(list))
+	lines, err := r.toBuild(clusters, talos, poolBuilds(list), poolLines(list))
 	if err != nil {
 		return err
 	}
@@ -170,12 +174,55 @@ func poolBuilds(list []*proxmox.ClusterResource) map[string][]templates.Built {
 	return out
 }
 
-// toBuild are the lines this run builds, refreshedRequests's, then each missing line asked for
-// that has no build.
-func (r *TemplateRefresh) toBuild(clusters []refreshedCluster, builds map[string][]templates.Built) ([]templates.Template, error) {
+// poolLines are the line keys of the templates in a listing that are not builds of a line: those
+// made once, as a Talos release's is.
+func poolLines(list []*proxmox.ClusterResource) map[string]bool {
+	out := map[string]bool{}
+	for _, res := range list {
+		tags := templates.ParseTags(res.Tags)
+		if _, built := templates.BuildOf(tags); !built {
+			out[templates.LineKey(tags)] = true
+		}
+	}
+	return out
+}
+
+// talosReleases are the Talos releases the Talos clusters' machines boot or are upgraded to.
+func (r *TemplateRefresh) talosReleases(ctx context.Context) ([]string, error) {
+	var list clusterv1.ClusterList
+	if err := r.Kube.List(ctx, &list); err != nil {
+		return nil, fmt.Errorf("listing the clusters: %w", err)
+	}
+	var out []string
+	for i := range list.Items {
+		c := &list.Items[i]
+		if !Owns(c, r.ClassNamespace) || !c.DeletionTimestamp.IsZero() || !isTalos(c) {
+			continue
+		}
+		for _, release := range []func(*clusterv1.Cluster) (string, error){TalosImage, TalosVersion} {
+			v, err := release(c)
+			if err != nil {
+				return nil, err
+			}
+			if !slices.Contains(out, v) {
+				out = append(out, v)
+			}
+		}
+	}
+	return out, nil
+}
+
+// toBuild are the lines this run builds, refreshedRequests's and the Talos releases', then each
+// missing line asked for that has no build. A Talos release's template is made once, so it is built
+// only while the pool has none: for a release a Talos cluster boots or is upgraded to, or one asked
+// for.
+func (r *TemplateRefresh) toBuild(clusters []refreshedCluster, talos []string, builds map[string][]templates.Built, made map[string]bool) ([]templates.Template, error) {
 	var reqs []templates.Request
 	if !r.MissingOnly {
 		reqs = refreshedRequests(clusters, builds)
+		for _, v := range talos {
+			reqs = append(reqs, templates.Request{Distribution: templates.Talos, TalosVersion: v})
+		}
 	}
 	var out []templates.Template
 	seen := map[string]bool{}
@@ -185,7 +232,7 @@ func (r *TemplateRefresh) toBuild(clusters []refreshedCluster, builds map[string
 			return fmt.Errorf("planning the %s template: %w", req.Distribution, err)
 		}
 		key := templates.LineKey(t.Tags)
-		if seen[key] || onlyMissing && len(builds[key]) > 0 {
+		if seen[key] || !t.Refreshed() && made[key] || onlyMissing && len(builds[key]) > 0 {
 			return nil
 		}
 		seen[key] = true
@@ -234,6 +281,15 @@ func refreshedRequests(clusters []refreshedCluster, builds map[string][]template
 // build makes a new build of a line, first removing what an earlier run that did not finish left.
 func (r *TemplateRefresh) build(ctx context.Context, line *templates.Template) error {
 	now := r.Now()
+	if !line.Refreshed() {
+		r.logf("making %s", line.Name)
+		vmid, err := r.Pool.Create(ctx, line)
+		if err != nil {
+			return fmt.Errorf("making %s: %w", line.Name, err)
+		}
+		r.logf("template %s is VM %d", line.Name, vmid)
+		return nil
+	}
 	if _, err := r.Pool.RemoveLeftovers(ctx, line, leftoverAge, now); err != nil {
 		return fmt.Errorf("removing what earlier builds of %s left: %w", line.LineName, err)
 	}

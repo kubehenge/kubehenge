@@ -1,6 +1,10 @@
 ---
 extends: default
 
+# Rendered by scripts/provider-image.sh and pinned by digest, so their bytes stay kustomize's.
+ignore: |
+  /pkg/provisioner/providers/
+
 rules:
   # The width the rest of the repository wraps at; a URL, digest or expression that cannot be broken
   # may run past it.

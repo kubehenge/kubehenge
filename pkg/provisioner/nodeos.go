@@ -82,9 +82,21 @@ func (p *Proxmox) cpuLevel(ctx context.Context, node string) (int, error) {
 	return level, nil
 }
 
-// nodesFor are the names of the online nodes whose CPU runs the node OS.
-func nodesFor(online []Node, o templates.NodeOS) []string {
-	need := templates.CPULevel(o)
+// clusterCPULevel is the x86-64 microarchitecture level a cluster's nodes need of the Proxmox VE
+// nodes: their node OS's, or Talos's, which is its own OS.
+func clusterCPULevel(c *clusterv1.Cluster) (int, error) {
+	if isTalos(c) {
+		return templates.TalosCPULevel(), nil
+	}
+	o, err := ClusterNodeOS(c)
+	if err != nil {
+		return 0, err
+	}
+	return templates.CPULevel(o), nil
+}
+
+// nodesFor are the names of the online nodes whose CPU reaches the level.
+func nodesFor(online []Node, need int) []string {
 	var names []string
 	for _, n := range online {
 		if n.CPULevel >= need {
@@ -96,8 +108,12 @@ func nodesFor(online []Node, o templates.NodeOS) []string {
 
 // checkNodeOS refuses a node OS Kubehenge builds no templates of, and one whose CPU type none of the
 // online Proxmox VE nodes the cluster may use offers. While none of those is online there is nothing
-// to judge by, and the cluster waits for its nodes as any other does.
+// to judge by, and the cluster waits for its nodes as any other does. A Talos cluster has no node
+// OS: Talos is its own.
 func (h *Hooks) checkNodeOS(ctx context.Context, c *clusterv1.Cluster) error {
+	if isTalos(c) {
+		return nil
+	}
 	o, err := ClusterNodeOS(c)
 	if err != nil {
 		return err
@@ -119,7 +135,7 @@ func (h *Hooks) checkNodeOS(ctx context.Context, c *clusterv1.Cluster) error {
 	if len(chosen) > 0 {
 		online = slices.DeleteFunc(online, func(n Node) bool { return !slices.Contains(chosen, n.Name) })
 	}
-	if len(online) == 0 || len(nodesFor(online, o)) > 0 {
+	if len(online) == 0 || len(nodesFor(online, templates.CPULevel(o))) > 0 {
 		return nil
 	}
 	f, r, _ := templates.ReleaseOf(o)

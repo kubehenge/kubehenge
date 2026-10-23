@@ -43,7 +43,7 @@ check_providers() {
     until_true 900 "every provider ready at its version" providers_ready
     kubectl get "${provider_kinds}" --all-namespaces
     providers=$(kubectl get "${provider_kinds}" --all-namespaces -o name)
-    for p in cluster-api kubeadm rke2 k3s proxmox in-cluster helm; do
+    for p in cluster-api kubeadm rke2 k3s talos proxmox in-cluster helm; do
         printf '%s\n' "${providers}" | grep -q "/${p}\$" || fail "provider ${p} is missing"
     done
     kubectl get deployments --all-namespaces -l cluster.x-k8s.io/provider \
@@ -80,7 +80,7 @@ check_kubehenge() {
             jq -e --arg h "${hook}" '[.status.handlers[] | select(.requestHook.hook == $h)] | length == 1' > /dev/null ||
             fail "the controller does not serve ${hook}"
     done
-    for class in kubehenge-rke2 kubehenge-k3s kubehenge-kubeadm; do
+    for class in kubehenge-rke2 kubehenge-k3s kubehenge-kubeadm kubehenge-talos; do
         kubectl -n kubehenge-system wait --for=condition=VariablesReady "clusterclass/${class}" --timeout=5m
         # No cluster uses a class yet, so its distribution's controllers do not run, and its
         # control-plane and bootstrap templates wait in their ConfigMap.

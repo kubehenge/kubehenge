@@ -136,9 +136,9 @@ func NodeImageTime(c *clusterv1.Cluster) (time.Time, error) {
 }
 
 // RefreshesNodes tells whether a cluster's nodes are cloned from template builds: every
-// distribution's but Talos's, whose single template takes its updates through Talos upgrades.
+// distribution's but Talos's, whose template per release takes its updates through Talos upgrades.
 func RefreshesNodes(c *clusterv1.Cluster) bool {
-	return strings.TrimPrefix(c.Spec.Topology.ClassRef.Name, ClassPrefix) != string(templates.Talos)
+	return !isTalos(c)
 }
 
 // NodeOSVariable is the ClusterClasses' variable naming the operating system of a cluster's nodes.
@@ -242,6 +242,8 @@ type nodeImages struct {
 	os           templates.NodeOS
 	t            time.Time
 	builds       NodeImageBuilds
+	// talos is the template Talos machines are cloned from, the one of their first release.
+	talos []string
 }
 
 func (n *nodeImages) load(ctx context.Context) error {
@@ -253,6 +255,14 @@ func (n *nodeImages) load(ctx context.Context) error {
 	n.distribution = strings.TrimPrefix(c.Spec.Topology.ClassRef.Name, ClassPrefix)
 	n.refreshed = RefreshesNodes(c)
 	n.loaded = true
+	if isTalos(c) {
+		var image string
+		if image, err = TalosImage(c); err != nil {
+			return err
+		}
+		n.talos, err = TalosLine(image)
+		return err
+	}
 	if !n.refreshed {
 		return nil
 	}
@@ -267,10 +277,16 @@ func (n *nodeImages) load(ctx context.Context) error {
 }
 
 // patch has a machine template select the build of its line that the cluster's node image time
-// picks, which stays the same until that time moves.
+// picks, which stays the same until that time moves; a Talos one, its first release's template.
 func (n *nodeImages) patch(ctx context.Context, item *runtimehooksv1.GeneratePatchesRequestItem) ([]byte, error) {
-	if err := n.load(ctx); err != nil || !n.refreshed {
+	if err := n.load(ctx); err != nil {
 		return nil, err
+	}
+	if n.talos != nil {
+		return selectTags(n.talos)
+	}
+	if !n.refreshed {
+		return nil, nil
 	}
 	version, err := builtinVersion(item.Variables, item.HolderReference.Kind != "MachineDeployment")
 	if err != nil {
@@ -284,7 +300,11 @@ func (n *nodeImages) patch(ctx context.Context, item *runtimehooksv1.GeneratePat
 	if !ok {
 		return nil, fmt.Errorf("the template pool holds no template %s; build it on the Administration page or with kubehenge template create", strings.Join(line, ";"))
 	}
-	tags := templates.NormaliseTags(append(slices.Clone(line), templates.BuildTag(at)))
+	return selectTags(templates.NormaliseTags(append(slices.Clone(line), templates.BuildTag(at))))
+}
+
+// selectTags is the patch that has a machine template select the template of these tags.
+func selectTags(tags []string) ([]byte, error) {
 	patch, err := json.Marshal([]map[string]any{
 		{"op": "replace", "path": templateSpec + "/templateSelector/matchTags", "value": tags},
 	})

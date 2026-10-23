@@ -112,10 +112,11 @@ tofu apply
 
 ### By hand
 
-**Upgrade** on a cluster's page offers the newest release of its own minor version, when that is newer than the one running, and the newest of the next minor version, in the distribution's own form (`v1.37.1`, `v1.37.1+rke2r1`, `v1.37.1+k3s1`): RKE2's and k3s's from their release channels, kubeadm's from the VM templates there are. When there is neither, the version can be typed in; for kubeadm, the dialog asks for a template of a newer version first. The interface refuses skipping a minor version or going back. Cluster API replaces the control-plane nodes one by one, then the workers, each new node created before an old one is removed. With kubectl, set `spec.topology.version` ([clusters.md](clusters.md#day-two)).
+**Upgrade** on a cluster's page offers the newest release of its own minor version, when that is newer than the one running, and the newest of the next minor version, in the distribution's own form (`v1.37.1`, `v1.37.1+rke2r1`, `v1.37.1+k3s1`): RKE2's and k3s's from their release channels, kubeadm's from the VM templates there are, Talos's from Kubernetes' own, among the minor versions the cluster's Talos release runs. When there is neither, the version can be typed in; for kubeadm, the dialog asks for a template of a newer version first. The interface refuses skipping a minor version or going back. Cluster API replaces the control-plane nodes one by one, then the workers, each new node created before an old one is removed. With kubectl, set `spec.topology.version` ([clusters.md](clusters.md#day-two)).
 
 - **kubeadm** nodes boot from a template built for their exact Kubernetes version: create the template of the new version first ([templates.md](templates.md)).
 - **RKE2 and k3s** install the requested version when a node boots, from the same template.
+- **Talos** nodes run the Kubernetes version Talos is told to, from the template of the cluster's Talos release, which the new nodes move to with the upgrade once it is in the pool. A Kubernetes version the Talos release does not run needs a Talos upgrade first ([clusters.md](clusters.md#talos-upgrades)).
 
 ### Automatically inside a window
 
@@ -124,7 +125,7 @@ tofu apply
 | Field | Variable | What it is |
 | --- | --- | --- |
 | Upgrade automatically | `mode` | `off` (the default); `patch` releases: the newest release of the cluster's minor version; `minor`, patch and minor releases: also the next minor version. |
-| Move the nodes to new template builds | `nodeImages` | On by default, for kubeadm, RKE2 and k3s: replace the nodes with clones of each new build of their VM template once it is a day old, whatever `mode` says ([below](#the-nodes-operating-system)). |
+| Move the nodes to new template builds | `nodeImages` | On by default, for kubeadm, RKE2 and k3s: replace the nodes with clones of each new build of their VM template once it is a day old, whatever `mode` says ([below](#the-nodes-operating-system)). On Talos, **Move the nodes to new Talos patch releases**: upgrade the nodes in place to the newest patch release of their Talos minor version ([clusters.md](clusters.md#talos-upgrades)). |
 | Days | `window.weekdays` | Days of the week the window opens on. |
 | Days of the month | `window.monthDays` | Such as `1, 15`. A day listed here or in Days counts; every day when both are empty. |
 | From | `window.start` | When the window opens, `HH:MM`; `02:00` by default. |
@@ -143,6 +144,7 @@ Where the versions come from:
 | --- | --- |
 | RKE2, k3s | the distribution's own release channels; the management cluster's nodes need to reach them |
 | kubeadm | the kubeadm templates on Proxmox VE: the newest version a template has been built for, so building a newer template is what offers one |
+| Talos | Kubernetes' own newest release of each minor version (`dl.k8s.io`), the stable one being what the Talos release Kubehenge carries installs by default; never one the cluster's Talos release does not run, and never while its nodes are being upgraded |
 
 Cluster API then rolls the nodes as for any upgrade. A rollout that has started finishes even if the window closes. The last automatic upgrade shows in the cluster's **Summary** as **Last automatic upgrade**, and is recorded on the Cluster in the annotation `kubehenge.dev/auto-upgraded`.
 

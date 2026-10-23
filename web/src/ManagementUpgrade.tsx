@@ -15,6 +15,8 @@ const componentNames: Record<string, string> = {
   k3s: "k3s's Cluster API providers",
   ipam_in_cluster: "IP address management",
   helm_addon: "Add-on Provider for Helm",
+  talos_bootstrap: "Talos's Cluster API bootstrap provider",
+  talos_control_plane: "Talos's Cluster API control-plane provider",
   cert_manager: "cert-manager",
   capi_operator: "Cluster API Operator",
   kubehenge: "Kubehenge's ClusterClasses and controller",

@@ -180,7 +180,8 @@ func TestFinishedTemplateBuildIsListed(t *testing.T) {
 func TestTemplateRequestsAreChecked(t *testing.T) {
 	t.Parallel()
 	for name, body := range map[string]string{
-		"distribution": `{"distribution":"talos","node":"pve1","storage":"ceph","importStorage":"local","bridge":"vmbr0"}`,
+		"distribution": `{"distribution":"flatcar","node":"pve1","storage":"ceph","importStorage":"local","bridge":"vmbr0"}`,
+		"talos":        `{"distribution":"talos","talosVersion":"1.14","node":"pve1","storage":"ceph","importStorage":"local","bridge":"vmbr0"}`,
 		"version":      `{"distribution":"kubeadm","kubernetesVersion":"1.37","node":"pve1","storage":"ceph","importStorage":"local","bridge":"vmbr0"}`,
 		"node":         `{"distribution":"rke2","node":"","storage":"ceph","importStorage":"local","bridge":"vmbr0"}`,
 		"node OS":      `{"distribution":"rke2","nodeOS":"leap-16.1","node":"pve1","storage":"ceph","importStorage":"local","bridge":"vmbr0"}`,

@@ -1,0 +1,156 @@
+diff --git a/controllers/controllers_test.go b/controllers/controllers_test.go
+index fd23033..3fd4cbf 100644
+--- a/controllers/controllers_test.go
++++ b/controllers/controllers_test.go
+@@ -19,6 +19,7 @@ import (
+ 	"github.com/stretchr/testify/suite"
+ 	"golang.org/x/sync/errgroup"
+ 	corev1 "k8s.io/api/core/v1"
++	apierrors "k8s.io/apimachinery/pkg/api/errors"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+ 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+ 	"k8s.io/apimachinery/pkg/runtime/schema"
+@@ -509,6 +510,34 @@ func (suite *ControllersSuite) TestReconcileMigratesLegacyFinalizer() {
+ 	g.Expect(tcp.Finalizers).NotTo(ContainElement(controlplanev1.TalosControlPlaneFinalizerLegacy))
+ }
+ 
++func (suite *ControllersSuite) TestReconcileDeleteWithLegacyFinalizer() {
++	fakeClient := newFakeClient()
++
++	cluster, tcp, _ := suite.setupCluster(fakeClient, "test-delete-legacy-finalizer", ptr.To[int32](1))
++
++	g := NewWithT(suite.T())
++
++	patchHelper, err := patch.NewHelper(tcp, fakeClient)
++	g.Expect(err).To(BeNil())
++
++	tcp.Finalizers = []string{controlplanev1.TalosControlPlaneFinalizerLegacy}
++	g.Expect(patchHelper.Patch(suite.ctx, tcp)).To(Succeed())
++
++	machine, _ := createMachineNodePair("test-delete-legacy-finalizer-0", cluster, tcp, true, "10.0.0.1")
++	g.Expect(fakeClient.Create(suite.ctx, machine)).To(Succeed())
++
++	g.Expect(fakeClient.Delete(suite.ctx, tcp)).To(Succeed())
++
++	r := newReconciler(rejectNewFinalizersWhileDeleting(fakeClient), withCluster(util.ObjectKey(cluster)))
++
++	_, err = r.Reconcile(suite.ctx, ctrl.Request{NamespacedName: util.ObjectKey(tcp)})
++	g.Expect(err).NotTo(HaveOccurred())
++
++	g.Expect(fakeClient.Get(suite.ctx, util.ObjectKey(tcp), tcp)).To(Succeed())
++	g.Expect(tcp.Finalizers).To(Equal([]string{controlplanev1.TalosControlPlaneFinalizerLegacy}))
++	g.Expect(apierrors.IsNotFound(fakeClient.Get(suite.ctx, util.ObjectKey(machine), &clusterv1.Machine{}))).To(BeTrue())
++}
++
+ func (suite *ControllersSuite) TestReconcileInitializeControlPlane() {
+ 	fakeClient := newFakeClient()
+ 
+diff --git a/controllers/helpers_test.go b/controllers/helpers_test.go
+index 3df189d..99cd754 100644
+--- a/controllers/helpers_test.go
++++ b/controllers/helpers_test.go
+@@ -12,6 +12,7 @@ import (
+ 	"net"
+ 	"net/netip"
+ 	"os"
++	"slices"
+ 	"strings"
+ 	"sync"
+ 
+@@ -37,16 +38,20 @@ import (
+ 	appsv1 "k8s.io/api/apps/v1"
+ 	corev1 "k8s.io/api/core/v1"
+ 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
++	apierrors "k8s.io/apimachinery/pkg/api/errors"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+ 	"k8s.io/apimachinery/pkg/runtime"
+ 	"k8s.io/apimachinery/pkg/runtime/schema"
+ 	"k8s.io/apimachinery/pkg/types"
+ 	"k8s.io/apimachinery/pkg/util/validation"
++	"k8s.io/apimachinery/pkg/util/validation/field"
+ 	"k8s.io/utils/ptr"
+ 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+ 	"sigs.k8s.io/cluster-api/controllers/clustercache"
+ 	"sigs.k8s.io/controller-runtime/pkg/client"
++	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+ 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
++	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+ 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+ 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+ 
+@@ -109,6 +114,57 @@ func newFakeClient(initObjs ...client.Object) client.Client {
+ 		Build()
+ }
+ 
++// rejectNewFinalizersWhileDeleting makes the fake client refuse, like the API server does, to add a
++// finalizer to an object that is already being deleted.
++func rejectNewFinalizersWhileDeleting(c client.Client) client.Client {
++	check := func(ctx context.Context, c client.WithWatch, obj client.Object) error {
++		current, ok := obj.DeepCopyObject().(client.Object)
++		if !ok {
++			return fmt.Errorf("unexpected object %T", obj)
++		}
++
++		if err := c.Get(ctx, client.ObjectKeyFromObject(obj), current); err != nil {
++			return client.IgnoreNotFound(err)
++		}
++
++		if current.GetDeletionTimestamp().IsZero() {
++			return nil
++		}
++
++		for _, finalizer := range obj.GetFinalizers() {
++			if !slices.Contains(current.GetFinalizers(), finalizer) {
++				gvk, err := apiutil.GVKForObject(obj, c.Scheme())
++				if err != nil {
++					return err
++				}
++
++				return apierrors.NewInvalid(gvk.GroupKind(), obj.GetName(), field.ErrorList{
++					field.Forbidden(field.NewPath("metadata", "finalizers"), "no new finalizers can be added if the object is being deleted"),
++				})
++			}
++		}
++
++		return nil
++	}
++
++	return interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
++		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
++			if err := check(ctx, c, obj); err != nil {
++				return err
++			}
++
++			return c.Patch(ctx, obj, patch, opts...)
++		},
++		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
++			if err := check(ctx, c, obj); err != nil {
++				return err
++			}
++
++			return c.Update(ctx, obj, opts...)
++		},
++	})
++}
++
+ func createSecrets(ctx context.Context, obj client.Client, cluster *clusterv1.Cluster, secretsBundle *secrets.Bundle, machineAddress string) error {
+ 	ca := &corev1.Secret{
+ 		TypeMeta: metav1.TypeMeta{
+diff --git a/controllers/taloscontrolplane_controller.go b/controllers/taloscontrolplane_controller.go
+index 873bf1c..c9369ce 100644
+--- a/controllers/taloscontrolplane_controller.go
++++ b/controllers/taloscontrolplane_controller.go
+@@ -334,6 +334,13 @@ func (r *TalosControlPlaneReconciler) getControlPlaneMachinesForCluster(ctx cont
+ }
+ 
+ func ensureTalosControlPlaneFinalizers(tcp *controlplanev1.TalosControlPlane) bool {
++	// The API server rejects any finalizer added to an object that is being deleted, so a
++	// TalosControlPlane deleted with only the legacy finalizer keeps it until reconcileDelete
++	// removes both.
++	if !tcp.ObjectMeta.DeletionTimestamp.IsZero() {
++		return false
++	}
++
+ 	changed := false
+ 
+ 	if !controllerutil.ContainsFinalizer(tcp, controlplanev1.TalosControlPlaneFinalizer) {

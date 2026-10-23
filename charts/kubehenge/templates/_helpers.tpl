@@ -1035,6 +1035,7 @@ paths kubeadm needs them to; without, the API server is to be given anonymous-au
 {{- define "kubehenge.oidcFile" -}}
 path: {{ .path }}
 {{ printf "{{- $anonymous := %t }}" .anonymous }}
+{{ "{{- $talos := false }}" }}
 {{ .root.Files.Get "files/authentication-config.tpl" }}
 {{- end -}}
 
@@ -1046,6 +1047,7 @@ renders with the cluster's variables, the chart's exempt namespaces written into
 {{- define "kubehenge.admissionFile" -}}
 path: {{ .path }}
 {{ printf "{{- $exempt := list %s }}" (include "kubehenge.quotedList" .root.Values.podSecurityExempt) }}
+{{ "{{- $talos := false }}" }}
 {{ .root.Files.Get "files/admission.tpl" }}
 {{- end -}}
 

@@ -21,11 +21,12 @@ import { PodSecurityFields, cisHint } from "./PodSecurity";
 import type { ClusterClass } from "./types";
 import { Field, browserZone, headlampHint, headlampViewHint, headlampViewLabel, istioHint, registerHint } from "./ui";
 
-// Talos nodes have no VM template builds to move to, so only the other classes mention them.
+// Talos nodes take their updates as Talos patch releases, upgraded in place, where the others move
+// to new builds of their VM template.
 function upgradesHint(cls: ClusterClass | undefined): string {
   const window = `Every day from 02:00 for four hours, ${browserZone()} time; the cluster's Options change the window later.`;
   return cls?.distribution === "talos"
-    ? window
+    ? `${window} The nodes are upgraded to new Talos patch releases of their minor version in the same window, whatever this says.`
     : `${window} The nodes move to new builds of their VM template in the same window, whatever this says.`;
 }
 

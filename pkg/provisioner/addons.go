@@ -532,14 +532,19 @@ func calicoResources(cluster *clusterv1.Cluster, cni CNI, images []Image) (*core
 	if cni.ContainerForwarding {
 		network["containerIPForwarding"] = "Enabled"
 	}
+	installation := map[string]any{
+		"cni":           map[string]any{"type": "Calico"},
+		"calicoNetwork": network,
+		// Calico's CSI driver, for its own volume types, which Kubehenge does not use.
+		"kubeletVolumePluginPath": "None",
+	}
+	if isTalos(cluster) {
+		// Talos's /usr is read-only, so the FlexVolume driver Calico would install there cannot be.
+		installation["flexVolumePath"] = "None"
+	}
 	resources := []map[string]any{
 		calicoImageSet(images),
-		{"kind": "Installation", "spec": map[string]any{
-			"cni":           map[string]any{"type": "Calico"},
-			"calicoNetwork": network,
-			// Calico's CSI driver, for its own volume types, which Kubehenge does not use.
-			"kubeletVolumePluginPath": "None",
-		}},
+		{"kind": "Installation", "spec": installation},
 		{"kind": "APIServer", "spec": map[string]any{}},
 		{"kind": "Goldmane", "spec": map[string]any{}},
 		{"kind": "Whisker", "spec": map[string]any{}},
@@ -611,6 +616,19 @@ func ciliumValues(cluster *clusterv1.Cluster, id int, addons *Addons, operator m
 		values["clustermesh"] = clusterMeshValues()
 	}
 	return values, nil
+}
+
+// talosCilium fits Cilium to Talos, as Talos documents: Talos mounts the cgroup hierarchy itself,
+// and its kernel takes no modules from containers, so the agent goes without SYS_MODULE.
+func talosCilium(values map[string]any) {
+	values["cgroup"] = map[string]any{"autoMount": map[string]any{"enabled": false}, "hostRoot": "/sys/fs/cgroup"}
+	values[securityKey] = map[string]any{"capabilities": map[string]any{
+		"ciliumAgent": []any{
+			"CHOWN", "KILL", "NET_ADMIN", "NET_RAW", "IPC_LOCK", "SYS_ADMIN", "SYS_RESOURCE",
+			"DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID",
+		},
+		"cleanCiliumState": []any{"NET_ADMIN", "SYS_ADMIN", "SYS_RESOURCE"},
+	}}
 }
 
 func rke2CiliumName(cluster *clusterv1.Cluster) string {
@@ -916,6 +934,9 @@ func cniChart(cluster *clusterv1.Cluster, charts *Charts, cni CNI, addons *Addon
 			return nil, err
 		}
 		values["ipam"] = map[string]any{"mode": "cluster-pool", "operator": map[string]any{"clusterPoolIPv4PodCIDRList": []any{pods}}}
+		if isTalos(cluster) {
+			talosCilium(values)
+		}
 		return []chartProxy{{"cni", cniCilium, metav1.NamespaceSystem, charts.Cilium, values}}, nil
 	case cniCalico:
 		// Only the operator: it creates Calico's CRDs itself, and calicoResources brings the
@@ -930,7 +951,7 @@ func cniChart(cluster *clusterv1.Cluster, charts *Charts, cni CNI, addons *Addon
 
 // helmChartProxies installs the cloud controller manager and the CSI plugin into the cluster, the
 // CNI named by cni unless none is, the add-ons switched on, the load balancer, the GitOps engine,
-// and on kubeadm, which brings no ingress controller, Traefik. The Add-on Provider for Helm
+// and on kubeadm and Talos, which bring no ingress controller, Traefik. The Add-on Provider for Helm
 // selects only Clusters in a proxy's own namespace, so each cluster gets its own proxies beside it.
 func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution templates.Distribution, storage string, cni CNI, addons *Addons) ([]*unstructured.Unstructured, error) {
 	wanted := proxmoxCharts(charts, distribution, storage, addons)
@@ -980,10 +1001,11 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 }
 
 // servingCharts are those that bring traffic into the cluster and what it runs from Git: on
-// kubeadm, which brings no ingress controller, Traefik; the load balancer; the GitOps engine.
+// kubeadm and Talos, which bring no ingress controller, Traefik; the load balancer; the GitOps
+// engine.
 func servingCharts(cluster *clusterv1.Cluster, charts *Charts, distribution templates.Distribution, addons *Addons) ([]chartProxy, error) {
 	var wanted []chartProxy
-	if distribution == templates.Kubeadm {
+	if distribution == templates.Kubeadm || distribution == templates.Talos {
 		endpoint, _, err := optionalVariable[string](cluster, "controlPlaneEndpoint")
 		if err != nil {
 			return nil, err

@@ -39,6 +39,13 @@ locals {
     ipam_in_cluster = "v1.1.1"
     # renovate: datasource=github-releases depName=kubernetes-sigs/cluster-api-addon-provider-helm
     helm_addon = "v0.6.4"
+    # The first release of the Talos bootstrap provider on Cluster API's v1beta2 contract, a
+    # pre-release; its stable releases are on the v1beta1 contract, which Cluster API's core removes.
+    # renovate: datasource=github-releases depName=siderolabs/cluster-api-bootstrap-provider-talos
+    talos_bootstrap = "v0.7.0-alpha.3"
+    # Kubehenge's build of the Talos control-plane provider (talos_control_plane_build): no release
+    # of it serves the v1beta2 contract or the template a ClusterClass needs.
+    talos_control_plane = "v0.6.0-pr251"
   }
 
   # The charts the management cluster runs beneath its providers, with their images, by digest.
@@ -69,12 +76,14 @@ locals {
 
   # Where the providers of each component in the tested set are released.
   provider_repositories = {
-    cluster_api     = "kubernetes-sigs/cluster-api"
-    rke2            = "rancher/cluster-api-provider-rke2"
-    k3s             = "k3s-io/cluster-api-k3s"
-    capmox          = "ionos-cloud/cluster-api-provider-proxmox"
-    ipam_in_cluster = "kubernetes-sigs/cluster-api-ipam-provider-in-cluster"
-    helm_addon      = "kubernetes-sigs/cluster-api-addon-provider-helm"
+    cluster_api         = "kubernetes-sigs/cluster-api"
+    rke2                = "rancher/cluster-api-provider-rke2"
+    k3s                 = "k3s-io/cluster-api-k3s"
+    capmox              = "ionos-cloud/cluster-api-provider-proxmox"
+    ipam_in_cluster     = "kubernetes-sigs/cluster-api-ipam-provider-in-cluster"
+    helm_addon          = "kubernetes-sigs/cluster-api-addon-provider-helm"
+    talos_bootstrap     = "siderolabs/cluster-api-bootstrap-provider-talos"
+    talos_control_plane = "siderolabs/cluster-api-control-plane-provider-talos"
   }
 
   # The SHA-256 of each file the operator installs a provider of the tested set from, by its address
@@ -112,6 +121,10 @@ locals {
     "kubernetes-sigs/cluster-api-addon-provider-helm/releases/download/v0.6.4/metadata.yaml" = "d50a44ee0db2f0368699d15ff011b9b5a61d9969483de1c4f6e4e6046390530f"
     # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api-addon-provider-helm
     "kubernetes-sigs/cluster-api-addon-provider-helm/releases/download/v0.6.4/addon-components.yaml" = "a70f4eb77eac626231daca1e2a046b4b069bb84320efa327cc8c56a9c4ca03e6"
+    # renovate: datasource=github-release-attachments depName=siderolabs/cluster-api-bootstrap-provider-talos
+    "siderolabs/cluster-api-bootstrap-provider-talos/releases/download/v0.7.0-alpha.3/metadata.yaml" = "d5774698bf60bd884217a24870366979b5c2ba9dc90fb1bf94e5edc13a7fe152"
+    # renovate: datasource=github-release-attachments depName=siderolabs/cluster-api-bootstrap-provider-talos
+    "siderolabs/cluster-api-bootstrap-provider-talos/releases/download/v0.7.0-alpha.3/bootstrap-components.yaml" = "3e2e7b785aef2b71f6241a02b539cd720b889de77be6ef6f4a90e180549dd78b"
   }
 
   # Each provider's controller image by digest at its tested version, in place of the tag its
@@ -138,6 +151,8 @@ locals {
     "IPAMProvider/in-cluster" = "registry.k8s.io/capi-ipam-ic/cluster-api-ipam-in-cluster-controller:v1.1.1@sha256:49a4cc0c5d7cd8deef20105e71ce168407ddcaab612f5819947163bd4b66ff0b"
     # renovate: datasource=docker depName=registry.k8s.io/cluster-api-helm/cluster-api-helm-controller
     "AddonProvider/helm" = "registry.k8s.io/cluster-api-helm/cluster-api-helm-controller:v0.6.4@sha256:97d2a86f8e35d23bb4656b26f4564b35f109e47a0dc4860b71089e52eb6e6a24"
+    # renovate: datasource=docker depName=ghcr.io/siderolabs/cluster-api-talos-controller
+    "BootstrapProvider/talos" = "ghcr.io/siderolabs/cluster-api-talos-controller:v0.7.0-alpha.3@sha256:ee63e66dde674cd96a2c6e16d31f2e5c1d894bd3da4bb8ac44726dd52b9a15af"
   }
 
   # capmox up to v0.9.1 refuses the changed machine template of a kubeadm cluster's upgrade (#735);
@@ -179,5 +194,28 @@ locals {
     go         = "go1.25.14"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
     image      = "ghcr.io/kubehenge/cluster-api-addon-provider-helm@sha256:14ba4b0c8594352948d0a08ef9746ec4196739cfc821c3d38fbbe0768f8b427e"
+  }
+
+  # The Talos control-plane provider's releases are on Cluster API's v1beta1 contract and have no
+  # TalosControlPlaneTemplate, which a ClusterClass's control plane needs. Its pull request #251
+  # adds both; until a release carries them, the provider runs as built from that pull request's
+  # head with scripts/talos-control-plane-patches: the provider's main branch since, rebased under
+  # it, and fixes for what its review found. Its manifests are made from the same source
+  # (`make talos-control-plane-manifests`) and travel inside Kubehenge's binary, as no release
+  # publishes them; the build refuses them unless they come out with the digests named here. Built
+  # as capmox's is; it applies only while the provider is at `release`.
+  talos_control_plane_build = {
+    upstream = "siderolabs/cluster-api-control-plane-provider-talos"
+    package  = "."
+    release  = "v0.6.0-pr251"
+    commit   = "4e3ff03a172a40c5b92b4a09d9404357fdd9e15e"
+    # The provider's own image is built with Go 1.26.
+    go         = "go1.26.9"
+    base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
+    image      = "ghcr.io/kubehenge/cluster-api-control-plane-provider-talos@sha256:d5c34b84a1f44960e25b1817bc863ce017812df61822e35010ca07e5573811b3"
+    manifests = {
+      metadata   = "12f69f607250e060f7dc0b52cb58aa606c33cab227aa876182baa45475ddf0e1"
+      components = "104bc9f0dd554d1dd55a9f40d15f325e5734bc66dc47d5471a7ca582841381b8"
+    }
   }
 }

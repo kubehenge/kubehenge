@@ -84,7 +84,7 @@ locals {
   } }
 
   # The providers Kubehenge's ClusterClasses use, and no others; each gets only the variables it
-  # uses. Talos's join with a Talos ClusterClass.
+  # uses.
   provider_specs = [
     { kind = "CoreProvider", name = "cluster-api", namespace = "capi-system", spec = {
       version      = local.versions.cluster_api
@@ -121,6 +121,15 @@ locals {
       version = local.versions.k3s
       patches = [local.replicas_left_to_scaling]
     } },
+    # Talos's providers take no lease flags either: only --enable-leader-election.
+    { kind = "BootstrapProvider", name = "talos", namespace = "talos-bootstrap-system", spec = {
+      version = local.versions.talos_bootstrap
+      patches = [local.replicas_left_to_scaling]
+    } },
+    { kind = "ControlPlaneProvider", name = "talos", namespace = "talos-control-plane-system", spec = {
+      version = local.versions.talos_control_plane
+      patches = [local.replicas_left_to_scaling]
+    } },
     { kind = "InfrastructureProvider", name = "proxmox", namespace = local.capmox_namespace, spec = {
       version      = local.versions.capmox
       configSecret = local.capmox_config
@@ -140,7 +149,7 @@ locals {
     } },
   ]
   # Each of Kubehenge's ClusterClasses and the namespaces of the providers only its clusters use.
-  class_provider_namespaces = { for d in ["kubeadm", "rke2", "k3s"] : "kubehenge-${d}" => sort([
+  class_provider_namespaces = { for d in ["kubeadm", "rke2", "k3s", "talos"] : "kubehenge-${d}" => sort([
     for p in local.provider_specs : p.namespace if p.name == d
   ]) }
 
@@ -167,6 +176,8 @@ locals {
     "ControlPlaneProvider/kubeadm"   = "cluster_api"
     "ControlPlaneProvider/rke2"      = "rke2"
     "ControlPlaneProvider/k3s"       = "k3s"
+    "BootstrapProvider/talos"        = "talos_bootstrap"
+    "ControlPlaneProvider/talos"     = "talos_control_plane"
     "InfrastructureProvider/proxmox" = "capmox"
     "IPAMProvider/in-cluster"        = "ipam_in_cluster"
     "AddonProvider/helm"             = "helm_addon"
@@ -180,11 +191,19 @@ locals {
     AddonProvider          = "addon-components.yaml"
   }
   manifest_digests = merge(local.tested_manifests, var.provider_manifests)
-  # Each provider's files by their address under https://github.com/, as the digests are keyed.
+  # A build of Kubehenge's whose manifests no release publishes carries them inside Kubehenge's
+  # binary, which the hook reads them from, by the digests the build names.
+  built_manifests = local.versions.talos_control_plane == local.talos_control_plane_build.release ? {
+    "ControlPlaneProvider/talos" = {
+      for role, file in { metadata = "metadata.yaml", components = local.components_files.ControlPlaneProvider } :
+      role => "kubehenge:talos-control-plane/${file}@sha256:${local.talos_control_plane_build.manifests[role]}"
+    }
+  } : {}
+  # Each other provider's files by their address under https://github.com/, as the digests are keyed.
   manifest_paths = { for p in local.provider_specs : "${p.kind}/${p.name}" => {
     for role, file in { metadata = "metadata.yaml", components = local.components_files[p.kind] } :
     role => "${local.provider_repositories[local.provider_components["${p.kind}/${p.name}"]]}/releases/download/${p.spec.version}/${file}"
-  } }
+  } if !contains(keys(local.built_manifests), "${p.kind}/${p.name}") }
   missing_manifests = sort(distinct([for path in flatten([for files in values(local.manifest_paths) : values(files)]) : path if !contains(keys(local.manifest_digests), path)]))
 
   # A provider's image by digest: one given, Kubehenge's build while it applies, or the tested one at
@@ -193,6 +212,7 @@ locals {
     contains(keys(var.provider_images), key) ? var.provider_images[key] :
     key == "InfrastructureProvider/proxmox" && local.versions.capmox == local.capmox_build.release ? local.capmox_build.image :
     key == "AddonProvider/helm" && local.versions.helm_addon == local.helm_addon_build.release ? local.helm_addon_build.image :
+    key == "ControlPlaneProvider/talos" && local.versions.talos_control_plane == local.talos_control_plane_build.release ? local.talos_control_plane_build.image :
     local.versions[component] == local.tested_versions[component] ? local.tested_provider_images[key] : null
   ) }
   missing_images = sort([for key, image in local.provider_images : key if image == null])
@@ -214,8 +234,10 @@ locals {
       deployment = { containers = [local.provider_containers["${p.kind}/${p.name}"]] }
     })
     # A file without a digest stops the release in its precondition before this is used.
-    manifests = { for role, path in local.manifest_paths["${p.kind}/${p.name}"] :
-    role => "https://github.com/${path}@sha256:${lookup(local.manifest_digests, path, "none")}" }
+    manifests = contains(keys(local.built_manifests), "${p.kind}/${p.name}") ? local.built_manifests["${p.kind}/${p.name}"] : {
+      for role, path in local.manifest_paths["${p.kind}/${p.name}"] :
+      role => "https://github.com/${path}@sha256:${lookup(local.manifest_digests, path, "none")}"
+    }
   })]
 }
 
@@ -355,6 +377,7 @@ resource "helm_release" "kubehenge" {
       workloadPool       = proxmox_virtual_environment_pool.workload.pool_id
       providerNamespaces = local.class_provider_namespaces
       managementEndpoint = local.api_endpoint
+      talos              = { imageSignatures = local.image_signatures }
       interface = {
         extraNamespaces = var.extra_cluster_namespaces
         offerHARules    = var.offer_ha_rules

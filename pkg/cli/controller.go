@@ -38,6 +38,7 @@ import (
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
+	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
 const (
@@ -61,6 +62,9 @@ const (
 	haRulesInterval = 30 * time.Second
 	// templateRequestsInterval is how soon a build asked for in the interface starts.
 	templateRequestsInterval = 15 * time.Second
+	// talosUpgradeInterval is how soon a Talos node's upgrade starts after the one before, or after
+	// its node came back.
+	talosUpgradeInterval = 30 * time.Second
 )
 
 // controllerOptions are the controller command's flags.
@@ -305,7 +309,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	if err = o.addPlacement(mgr, extensions, scheme, hooks, conn, cloud); err != nil {
 		return err
 	}
-	if err = o.addUpgrader(mgr, c, rancherMinors); err != nil {
+	if err = o.addUpgrader(mgr, c, rancherMinors, remotes); err != nil {
 		return err
 	}
 	if err = o.addProbes(mgr); err != nil {
@@ -607,9 +611,10 @@ func (o *controllerOptions) addPlacement(mgr manager.Manager, extensions *server
 	return o.addHA(mgr, conn, cloud.Client)
 }
 
-// addUpgrader adds what upgrades clusters automatically in their windows, and what records the
-// Kubernetes versions kubeadm templates exist for, which both the upgrader and the interface go by.
-func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, rancherMinors provisioner.KubernetesMinors) error {
+// addUpgrader adds what upgrades clusters automatically in their windows, what upgrades Talos
+// clusters' nodes in place to their Talos release, and what records the templates there are, which
+// the upgraders and the interface go by.
+func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, rancherMinors provisioner.KubernetesMinors, remotes *provisioner.Remotes) error {
 	versions := &provisioner.TemplateVersions{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Proxmox: c, Interval: templateVersionsInterval}
 	if err := mgr.Add(versions); err != nil {
 		return fmt.Errorf("the template versions: %w", err)
@@ -625,10 +630,25 @@ func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, 
 		RancherKubernetes: rancherMinors,
 		Interval:          o.upgradeInterval,
 		Soak:              o.nodeImageSoak,
+		TalosImages:       templates.DefaultSources(),
 		Now:               time.Now,
 	}
 	if err := mgr.Add(upgrader); err != nil {
 		return fmt.Errorf("the upgrader: %w", err)
+	}
+	talos := &provisioner.TalosUpgrader{
+		Client:         mgr.GetClient(),
+		Reader:         mgr.GetAPIReader(),
+		ClassNamespace: o.r.ClassNamespace,
+		Images:         templates.DefaultSources(),
+		Dial:           provisioner.DialTalos,
+		Nodes:          &provisioner.RemoteDrainer{Remotes: remotes},
+		Events:         mgr.GetEventRecorder("kubehenge"),
+		Interval:       talosUpgradeInterval,
+		Now:            time.Now,
+	}
+	if err := mgr.Add(talos); err != nil {
+		return fmt.Errorf("the Talos upgrader: %w", err)
 	}
 	if !o.templateRefresh {
 		return nil
@@ -655,7 +675,7 @@ func (o *controllerOptions) addEtcd(mgr manager.Manager, conn *pve.Config, remot
 		Client:         mgr.GetClient(),
 		Reader:         mgr.GetAPIReader(),
 		ClassNamespace: o.r.ClassNamespace,
-		Etcd:           &provisioner.EtcdDialer{Reader: mgr.GetAPIReader(), Remotes: remotes},
+		Etcd:           &provisioner.EtcdDialer{Reader: mgr.GetAPIReader(), Remotes: remotes, Talos: provisioner.DialTalos},
 		Targets:        targets,
 		Events:         mgr.GetEventRecorder("kubehenge"),
 	}

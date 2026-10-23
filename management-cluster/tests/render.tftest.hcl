@@ -221,7 +221,14 @@ run "controller_and_clusters_are_least_privilege" {
         kubehenge-kubeadm = ["kubeadm-bootstrap-system", "kubeadm-control-plane-system"]
         kubehenge-rke2    = ["rke2-bootstrap-system", "rke2-control-plane-system"]
         kubehenge-k3s     = ["k3s-bootstrap-system", "k3s-control-plane-system"]
+        kubehenge-talos   = ["talos-bootstrap-system", "talos-control-plane-system"]
       }
+      # Talos workload clusters require the signatures the management cluster's nodes do.
+      talos = { imageSignatures = [
+        { image = "factory.talos.dev/*", keyless = { issuer = "https://accounts.google.com", subject = "image-factory-signing@talos-production.iam.gserviceaccount.com" } },
+        { image = "ghcr.io/siderolabs/*", keyless = { issuer = "https://accounts.google.com", subjectRegex = "^(releasemgr-svc@talos-production\\.iam\\.gserviceaccount\\.com|[^@]+@siderolabs\\.com)$" } },
+        { image = "registry.k8s.io/*", keyless = { issuer = "https://accounts.google.com", subject = "krel-trust@k8s-releng-prod.iam.gserviceaccount.com" } },
+      ] }
       interface = { extraNamespaces = [], offerHARules = false, headlampSignIn = false, headlampActions = false }
       clusters  = { storages = ["local-lvm", "ceph"], bridges = ["vmbr0", "vmbr1"] }
       proxmox = {
@@ -679,11 +686,11 @@ run "providers" {
       for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : "${p.kind}/${p.name}"
       ]) == toset([
       "CoreProvider/cluster-api",
-      "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/k3s",
-      "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "ControlPlaneProvider/k3s",
+      "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/k3s", "BootstrapProvider/talos",
+      "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "ControlPlaneProvider/k3s", "ControlPlaneProvider/talos",
       "InfrastructureProvider/proxmox", "IPAMProvider/in-cluster", "AddonProvider/helm",
     ])
-    error_message = "the provider set differs from Cluster API core, kubeadm, RKE2, k3s, capmox, in-cluster IPAM and Helm"
+    error_message = "the provider set differs from Cluster API core, kubeadm, RKE2, k3s, Talos, capmox, in-cluster IPAM and Helm"
   }
 
   assert {
@@ -701,8 +708,8 @@ run "providers" {
       for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : "${p.kind}/${p.name}"
       if anytrue([for patch in try(p.spec.patches, []) : try(yamldecode(patch.patch).spec.replicas, "set") == null])
       ]) == toset([
-      "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/k3s",
-      "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "ControlPlaneProvider/k3s",
+      "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/k3s", "BootstrapProvider/talos",
+      "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "ControlPlaneProvider/k3s", "ControlPlaneProvider/talos",
     ])
     error_message = "the distributions' providers, and only they, must leave their replica count to Kubehenge's controller"
   }
@@ -718,7 +725,7 @@ run "providers" {
         "CoreProvider/cluster-api", "BootstrapProvider/kubeadm", "BootstrapProvider/rke2",
         "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "InfrastructureProvider/proxmox", "AddonProvider/helm",
     ] : k => ["60s", "40s", "10s", ""] }
-    error_message = "every provider that takes lease flags gets the long leases and no lease name; k3s and in-cluster IPAM take none"
+    error_message = "every provider that takes lease flags gets the long leases and no lease name; k3s, Talos and in-cluster IPAM take none"
   }
 
   assert {
@@ -1006,8 +1013,19 @@ run "provider_builds" {
       } == merge(local.tested_provider_images, {
         "InfrastructureProvider/proxmox" = local.capmox_build.image
         "AddonProvider/helm"             = local.helm_addon_build.image
+        "ControlPlaneProvider/talos"     = local.talos_control_plane_build.image
     })
-    error_message = "capmox and the Add-on Provider for Helm at their tested releases run Kubehenge's builds of them, and every other provider its tested image by digest"
+    error_message = "capmox, the Add-on Provider for Helm and Talos's control-plane provider at their tested releases run Kubehenge's builds of them, and every other provider its tested image by digest"
+  }
+
+  assert {
+    condition = [
+      for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : p.manifests if p.kind == "ControlPlaneProvider" && p.name == "talos"
+      ] == [{
+        metadata   = "kubehenge:talos-control-plane/metadata.yaml@sha256:${local.talos_control_plane_build.manifests.metadata}"
+        components = "kubehenge:talos-control-plane/control-plane-components.yaml@sha256:${local.talos_control_plane_build.manifests.components}"
+    }]
+    error_message = "Talos's control-plane provider at its build's release installs from the manifests Kubehenge's binary carries, by the build's digests"
   }
 }
 
@@ -1060,6 +1078,32 @@ run "provider_builds_only_on_their_releases" {
       if contains(["InfrastructureProvider/proxmox", "AddonProvider/helm"], "${p.kind}/${p.name}")
     } == var.provider_images
     error_message = "other releases of capmox and the Add-on Provider for Helm run the images given for them"
+  }
+}
+
+run "talos_control_plane_build_only_on_its_release" {
+  command = apply
+
+  variables {
+    version_overrides = { talos_control_plane = "v0.6.1" }
+    provider_images = {
+      "ControlPlaneProvider/talos" = "ghcr.io/siderolabs/cluster-api-control-plane-talos-controller:v0.6.1@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    }
+    provider_manifests = {
+      "siderolabs/cluster-api-control-plane-provider-talos/releases/download/v0.6.1/metadata.yaml"                 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      "siderolabs/cluster-api-control-plane-provider-talos/releases/download/v0.6.1/control-plane-components.yaml" = "456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123"
+    }
+  }
+
+  assert {
+    condition = [
+      for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : [p.manifests, p.spec.deployment.containers[0].imageUrl]
+      if p.kind == "ControlPlaneProvider" && p.name == "talos"
+      ] == [[{
+        metadata   = "https://github.com/siderolabs/cluster-api-control-plane-provider-talos/releases/download/v0.6.1/metadata.yaml@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        components = "https://github.com/siderolabs/cluster-api-control-plane-provider-talos/releases/download/v0.6.1/control-plane-components.yaml@sha256:456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123"
+    }, var.provider_images["ControlPlaneProvider/talos"]]]
+    error_message = "another release of Talos's control-plane provider installs from its release's files and the image given for it"
   }
 }
 

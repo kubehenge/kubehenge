@@ -20,6 +20,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -66,6 +67,7 @@ var versionFormat = map[string]*regexp.Regexp{
 	string(templates.Kubeadm): regexp.MustCompile(`^v1\.\d+\.\d+$`),
 	string(templates.RKE2):    regexp.MustCompile(`^v1\.\d+\.\d+\+rke2r\d+$`),
 	string(templates.K3s):     regexp.MustCompile(`^v1\.\d+\.\d+\+k3s\d+$`),
+	string(templates.Talos):   regexp.MustCompile(`^v1\.\d+\.\d+$`),
 }
 
 func (s *Server) poolPath(namespace, name string) (string, error) {
@@ -232,6 +234,32 @@ type clusterView struct {
 	NodeOS *templates.NodeOSInfo `json:"nodeOS,omitempty"`
 	// GitOps is the deploy key and the repository host's keys the controller made for the cluster.
 	GitOps *gitOpsView `json:"gitops,omitempty"`
+	// Talos is how a Talos cluster's nodes stand with its Talos release.
+	Talos *talosView `json:"talos,omitempty"`
+}
+
+// talosView is how a Talos cluster's nodes are upgraded in place to its Talos release.
+type talosView struct {
+	// Version is the release the nodes are upgraded to.
+	Version string `json:"version"`
+	// Image is the release new machines boot first, before their upgrade.
+	Image string `json:"image,omitempty"`
+	// Upgrading names the node being upgraded and to which release, Upgraded the last that was,
+	// Failed the one that failed and why, which holds the rest until it is tried again.
+	Upgrading string `json:"upgrading,omitempty"`
+	Upgraded  string `json:"upgraded,omitempty"`
+	Failed    string `json:"failed,omitempty"`
+}
+
+func talosViewOf(c *clusterv1.Cluster) *talosView {
+	version, _ := provisioner.TalosVersion(c)
+	image, _ := provisioner.TalosImage(c)
+	return &talosView{
+		Version: version, Image: image,
+		Upgrading: c.Annotations[provisioner.TalosUpgradingAnnotation],
+		Upgraded:  c.Annotations[provisioner.TalosUpgradedAnnotation],
+		Failed:    c.Annotations[provisioner.TalosUpgradeFailedAnnotation],
+	}
 }
 
 type conditionView struct {
@@ -276,8 +304,10 @@ type machineView struct {
 	ProxmoxNode string `json:"proxmoxNode,omitempty"`
 	Role        string `json:"role"`
 	Version     string `json:"version,omitempty"`
-	Phase       string `json:"phase"`
-	Ready       bool   `json:"ready"`
+	// Talos is the Talos release a Talos cluster's node runs, as its kubelet reports it.
+	Talos string `json:"talos,omitempty"`
+	Phase string `json:"phase"`
+	Ready bool   `json:"ready"`
 	// Waiting is what keeps a machine that is not ready from it, as Cluster API sums it up.
 	Waiting   string    `json:"waiting,omitempty"`
 	Addresses []string  `json:"addresses,omitempty"`
@@ -311,6 +341,9 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 	}
 	if s.Headlamp != nil && ours {
 		v.Headlamp = headlampContext(c.Namespace, c.Name)
+	}
+	if dist == string(templates.Talos) {
+		v.Talos = talosViewOf(c)
 	}
 	if e := c.Spec.ControlPlaneEndpoint; e.Host != "" {
 		v.Endpoint = e.Host
@@ -577,6 +610,9 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 			Ready:       meta.IsStatusConditionTrue(m.Status.Conditions, clusterv1.MachineReadyCondition),
 			Created:     m.CreationTimestamp.Time,
 		}
+		if v.Talos != nil {
+			mv.Talos, _ = provisioner.MachineTalos(m)
+		}
 		if _, cp := m.Labels[clusterv1.MachineControlPlaneLabel]; cp {
 			mv.Role = controlPlaneRole
 		}
@@ -741,15 +777,23 @@ func (s *Server) createClass(w http.ResponseWriter, r *http.Request, u user, req
 	}
 	// A cluster made without its template would wait for ever for its first VM.
 	dist, _ := distribution(req.Class)
+	version := req.Version
+	var nodeOS templates.NodeOS
 	if dist == string(templates.Talos) {
-		return class, true
+		// A Talos template is a Talos release's, whatever Kubernetes version runs on it, and Talos
+		// is its own OS: the class has no nodeOS variable to set.
+		if err := json.Unmarshal(req.Variables[provisioner.TalosVersionVariable], &version); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, "Talos version: choose a Talos release")
+			return nil, false
+		}
+	} else {
+		var err error
+		if nodeOS, err = requestNodeOS(req.Variables[provisioner.NodeOSVariable]); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return nil, false
+		}
 	}
-	nodeOS, err := requestNodeOS(req.Variables[provisioner.NodeOSVariable])
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
-		return nil, false
-	}
-	if missing := missingTemplate(class, dist, req.Version, nodeOS); missing != "" {
+	if missing := missingTemplate(class, dist, version, nodeOS); missing != "" {
 		writeError(w, http.StatusConflict, missing)
 		return nil, false
 	}
@@ -1261,6 +1305,48 @@ func (s *Server) kubeconfig(w http.ResponseWriter, r *http.Request, u user) {
 	w.Header().Set("Content-Type", "application/yaml")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", c.Name+".kubeconfig"))
 	_, _ = w.Write(secret.Data["value"])
+}
+
+// talosconfig hands out a Talos cluster's talosconfig, which signs in to its nodes' Talos API as
+// os:admin, to those its kubeconfig goes to: either is the whole cluster.
+func (s *Server) talosconfig(w http.ResponseWriter, r *http.Request, u user) {
+	c, _, ok := s.cluster(w, r, u, privKubeconfig)
+	if !ok {
+		return
+	}
+	if dist, _ := distribution(c.Spec.Topology.ClassRef.Name); dist != string(templates.Talos) {
+		writeError(w, http.StatusNotFound, "only a Talos cluster has a talosconfig")
+		return
+	}
+	secret := &corev1.Secret{}
+	if err := u.kube.Get(r.Context(), client.ObjectKey{Namespace: c.Namespace, Name: provisioner.TalosconfigSecret(c.Name)}, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			writeError(w, http.StatusConflict, "the cluster has no talosconfig yet")
+			return
+		}
+		s.kubeError(w, err)
+		return
+	}
+	s.Log.Info("handed out talosconfig", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
+	w.Header().Set("Content-Type", "application/yaml")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", c.Name+".talosconfig"))
+	_, _ = w.Write(secret.Data[provisioner.TalosconfigKey])
+}
+
+// retryTalosUpgrade takes back the failure that holds a Talos cluster's node upgrades, so that the
+// controller tries again.
+func (s *Server) retryTalosUpgrade(w http.ResponseWriter, r *http.Request, u user) {
+	c, _, ok := s.cluster(w, r, u, privChange)
+	if !ok {
+		return
+	}
+	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:null}}}`, provisioner.TalosUpgradeFailedAnnotation)
+	if err := u.kube.Patch(r.Context(), c, client.RawPatch(types.MergePatchType, patch)); err != nil {
+		s.kubeError(w, err)
+		return
+	}
+	s.Log.Info("Talos upgrade tried again", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // kubeError answers with what the management cluster refused. Validation messages are the user's

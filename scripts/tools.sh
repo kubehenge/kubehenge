@@ -113,10 +113,23 @@ KO=v0.19.1
 KO_SHA256=635ac6ea3fd376c935fee597fbb29ab2c2449f49ef1655085fe3aa9c25fed7a5
 release ko ko-build/ko "${KO}" "ko_${KO#v}_Linux_x86_64.tar.gz" "${KO_SHA256}" ko
 
+# Renders the manifests of the providers Kubehenge builds (scripts/provider-image.sh).
+# renovate: datasource=github-release-attachments depName=kubernetes-sigs/kustomize extractVersion=^kustomize/(?<version>.+)$
+KUSTOMIZE=v5.8.3
+KUSTOMIZE_SHA256=cb9e31198d3f63b44848bd0afc4c8efc56e6cfef9c93a4a39a211940e6decd61
+release kustomize kubernetes-sigs/kustomize "kustomize%2F${KUSTOMIZE}" \
+    "kustomize_${KUSTOMIZE}_linux_amd64.tar.gz" "${KUSTOMIZE_SHA256}" kustomize
+
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
 KUBECTL=v1.37.1
 KUBECTL_SHA256=65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8
 tool kubectl "https://dl.k8s.io/release/${KUBECTL}/bin/linux/amd64/kubectl" "${KUBECTL_SHA256}"
+
+# The end-to-end tests reach Talos nodes through their API with it.
+# renovate: datasource=github-release-attachments depName=siderolabs/talos
+TALOSCTL=v1.14.4
+TALOSCTL_SHA256=0a69e3f9b682c5cd844b78dae305f6056ceb86c5fcc6913dcea78c527ed97cee
+release talosctl siderolabs/talos "${TALOSCTL}" talosctl-linux-amd64 "${TALOSCTL_SHA256}"
 
 # renovate: datasource=github-release-attachments depName=rhysd/actionlint
 ACTIONLINT=v1.7.12

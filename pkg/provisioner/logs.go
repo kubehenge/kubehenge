@@ -425,23 +425,8 @@ loki.process "pods" {
   forward_to = [loki.write.loki.receiver]
 }
 
-loki.relabel "journal" {
-  forward_to = []
-  rule {
-    source_labels = ["__journal__systemd_unit"]
-    target_label  = "unit"
-  }
-}
-
-loki.source.journal "journal" {
-  path          = "/var/log/journal"
-  labels        = {"job" = "journal", "node" = sys.env("K8S_NODE_NAME")}
-  relabel_rules = loki.relabel.journal.rules
-  forward_to    = [loki.write.loki.receiver]
-}
-
 local.file_match "audit" {
-  path_targets = [{"__path__" = "AUDIT_DIR/audit.log", "job" = "audit", "node" = sys.env("K8S_NODE_NAME")}]
+  path_targets = [{"__path__" = "AUDIT_LOG", "job" = "audit", "node" = sys.env("K8S_NODE_NAME")}]
 }
 
 // From its end: the log goes back a month, which would arrive as of now.
@@ -466,16 +451,38 @@ loki.process "audit" {
 }
 `
 
-// auditLogDir is where the distribution's API server writes its audit log, on the control planes.
-func auditLogDir(distribution templates.Distribution) string {
+// alloyJournal reads the node's journal, which every distribution but Talos keeps: Talos has no
+// systemd, and its own services log to its API alone.
+const alloyJournal = `loki.relabel "journal" {
+  forward_to = []
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+}
+
+loki.source.journal "journal" {
+  path          = "/var/log/journal"
+  labels        = {"job" = "journal", "node" = sys.env("K8S_NODE_NAME")}
+  relabel_rules = loki.relabel.journal.rules
+  forward_to    = [loki.write.loki.receiver]
+}
+`
+
+// auditLog is the directory the distribution's API server writes its audit log into, on the
+// control planes, and the log's name there.
+func auditLog(distribution templates.Distribution) (string, string) {
+	const name = "audit.log"
 	switch distribution {
 	case templates.RKE2:
-		return "/var/lib/rancher/rke2/server/logs"
+		return "/var/lib/rancher/rke2/server/logs", name
 	case templates.K3s:
-		return "/var/lib/rancher/k3s/server/logs"
-	case templates.Kubeadm, templates.Talos:
+		return "/var/lib/rancher/k3s/server/logs", name
+	case templates.Talos:
+		return "/var/log/audit/kube", "kube-apiserver.log"
+	case templates.Kubeadm:
 	}
-	return "/var/log/kubernetes/audit"
+	return "/var/log/kubernetes/audit", name
 }
 
 // alloyCommon are the values of both Alloys: the image by digest alone, since the chart puts its
@@ -554,24 +561,35 @@ func alloyValues(image Image, collector string) map[string]any {
 }
 
 // alloyNodeValues run Alloy on every node, the control planes too, reading the node's container
-// logs, its journal and, on the control planes, the API server's audit log. It runs as root to read
-// those, which root owns, but with no capability, so it reads nothing else root's alone, and
-// mounts each read-only; it writes only where it keeps how far it has read. It needs nothing of the
+// logs, its journal where it has one and, on the control planes, the API server's audit log. It runs as root to read
+// those, which root owns, but with no capability but Talos's one, so it reads nothing else root's
+// alone, and mounts each read-only; it writes only where it keeps how far it has read. It needs nothing of the
 // API, so it gets no token. On workers, which have no audit log, its directory is an empty one.
 func alloyNodeValues(image Image, distribution templates.Distribution) map[string]any {
-	audit := auditLogDir(distribution)
-	values, alloy := alloyCommon(image, strings.Replace(alloyNodePods, "AUDIT_DIR", audit, 1)+"\n"+alloyWrite, logsNodeNamespace)
+	audit, auditFile := auditLog(distribution)
+	config := strings.Replace(alloyNodePods, "AUDIT_LOG", audit+"/"+auditFile, 1)
+	journal := distribution != templates.Talos
+	if journal {
+		config += "\n" + alloyJournal
+	}
+	values, alloy := alloyCommon(image, config+"\n"+alloyWrite, logsNodeNamespace)
 	root, no, yes := int64(0), false, true
 	client, clientMount := clientVolume()
 	host := func(name, path string, kind corev1.HostPathType) corev1.Volume {
 		return corev1.Volume{Name: name, HostPath: &corev1.HostPathVolumeSource{Path: path, Type: &kind}}
 	}
 	alloy["storagePath"] = alloyNodeStorage
+	capabilities := &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}
+	if distribution == templates.Talos {
+		// Talos keeps the audit log in a directory only the API server's own user may enter.
+		// Reading past that is all the capability grants, and only in what is mounted here.
+		capabilities.Add = []corev1.Capability{"DAC_READ_SEARCH"}
+	}
 	alloy["securityContext"] = corev1.SecurityContext{
 		RunAsNonRoot: &no, RunAsUser: &root, RunAsGroup: &root,
 		AllowPrivilegeEscalation: &no,
 		ReadOnlyRootFilesystem:   &yes,
-		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		Capabilities:             capabilities,
 		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 		SELinuxOptions:           hostSELinux(),
 	}
@@ -579,23 +597,27 @@ func alloyNodeValues(image Image, distribution templates.Distribution) map[strin
 		requestsKey: map[string]any{cpuKey: "10m", memoryKey: "128Mi"},
 		"limits":    map[string]any{memoryKey: "512Mi"},
 	}
-	alloy["mounts"] = map[string]any{"extra": []any{
+	mounts := []any{
 		corev1.VolumeMount{Name: "pods", MountPath: "/var/log/pods", ReadOnly: true},
-		corev1.VolumeMount{Name: "journal", MountPath: "/var/log/journal", ReadOnly: true},
 		corev1.VolumeMount{Name: "audit", MountPath: audit, ReadOnly: true},
 		corev1.VolumeMount{Name: "storage", MountPath: alloyNodeStorage},
 		clientMount,
-	}}
+	}
+	volumes := []any{
+		host("pods", "/var/log/pods", corev1.HostPathDirectory),
+		host("audit", audit, corev1.HostPathDirectoryOrCreate),
+		host("storage", alloyNodeStorage, corev1.HostPathDirectoryOrCreate),
+		client,
+	}
+	if journal {
+		mounts = append(mounts, corev1.VolumeMount{Name: "journal", MountPath: "/var/log/journal", ReadOnly: true})
+		volumes = append(volumes, host("journal", "/var/log/journal", corev1.HostPathDirectory))
+	}
+	alloy["mounts"] = map[string]any{"extra": mounts}
 	values[controllerKey] = map[string]any{
 		"type":         "daemonset",
 		tolerationsKey: []any{corev1.Toleration{Operator: corev1.TolerationOpExists}},
-		"volumes": map[string]any{"extra": []any{
-			host("pods", "/var/log/pods", corev1.HostPathDirectory),
-			host("journal", "/var/log/journal", corev1.HostPathDirectory),
-			host("audit", audit, corev1.HostPathDirectoryOrCreate),
-			host("storage", alloyNodeStorage, corev1.HostPathDirectoryOrCreate),
-			client,
-		}},
+		"volumes":      map[string]any{"extra": volumes},
 	}
 	values["serviceAccount"] = map[string]any{"automountServiceAccountToken": false}
 	return values
