@@ -209,6 +209,29 @@ func checkFiles(t *testing.T, files map[string]string, dir string, keys []Reposi
 	if repos == 0 {
 		t.Error("the bake adds no repository")
 	}
+	checkScriptPaths(t, files, dir)
+}
+
+var bakePathRE = regexp.MustCompile(`\b(?:el|leap|node)/[A-Za-z0-9_.+-]+`)
+
+// checkScriptPaths finds build.sh working in the bake's root, builtCheck's marker there, and every
+// file of the bake it names carried.
+func checkScriptPaths(t *testing.T, files map[string]string, dir string) {
+	t.Helper()
+	build := files[dir+"/build.sh"]
+	if !strings.Contains(build, "\ncd \"$(dirname \"$0\")/..\"\n") || !strings.Contains(build, "\ntouch built\n") {
+		t.Errorf("%s/build.sh does not work in the bake's root, where the check finds its marker", dir)
+	}
+	for name, content := range files {
+		if path.Ext(name) != ".sh" && !strings.HasSuffix(name, "Containerfile") {
+			continue
+		}
+		for _, p := range bakePathRE.FindAllString(content, -1) {
+			if _, ok := files[p]; !ok {
+				t.Errorf("%s names %s, which the bake does not carry", name, p)
+			}
+		}
+	}
 }
 
 // nodeBootChecks are the checks of the node's own boot, past what the build mode runs first.

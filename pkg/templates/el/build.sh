@@ -2,7 +2,7 @@
 # Builds a node image in the bake's builder, a VM of the family's own cloud image, and installs it
 # onto the template's disk: a minimal root file system composed from the family's signed
 # repositories, the node's layer on top of it (node.sh), checked by bootc and installed by bootc
-# itself. Run in the directory holding the bake's files:
+# itself. It works in the directory holding the bake's files, the parent of its own:
 #
 #   build.sh <distribution> [<Kubernetes version>]
 set -eu
@@ -15,7 +15,7 @@ target=/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0
 
 distribution=$1
 kubernetes=${2:-}
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 dnf -y install podman rpm-ostree bootc ostree skopeo
 
