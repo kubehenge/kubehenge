@@ -1795,10 +1795,25 @@ printf '%s' "${vms}" | jq -e --argjson o "${owner}" --arg n "${name}" '[.data[] 
     fail "VMs of the cluster are still there"
 if [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
     # The namespace is the appliance's and stays; nothing of the cluster may, once the garbage
-    # collector has taken what the Cluster owned.
+    # collector has taken what the Cluster owned, but its backup keys: they stay beside it, so that
+    # a cluster made again under its name reads its backups.
+    keys=secret/${name}-backup-keys
+    # left_of_cluster: what of the cluster is still in its namespace, its backup keys aside.
+    left_of_cluster() {
+        objects=$(kubectl -n "${ns}" get secrets,configmaps,machines -l "cluster.x-k8s.io/cluster-name=${name}" -o name) || return 1
+        printf '%s\n' "${objects}" | grep -vxF -e "${keys}" -e '' || true
+    }
+    # A failed request is not an empty list.
     # shellcheck disable=SC2310 # polled; a failed request counts as something left.
-    nothing_left() { left=$(kubectl -n "${ns}" get secrets,configmaps,machines -l "cluster.x-k8s.io/cluster-name=${name}" -o name) && [ -z "${left}" ]; }
-    until_true 300 "nothing of ${name} left in ${ns}" nothing_left
+    nothing_left() { left=$(left_of_cluster) && [ -z "${left}" ]; }
+    # shellcheck disable=SC2310 # until_true fails on its own; the subshell lets the leftovers be named.
+    if ! (until_true 300 "nothing of ${name} left in ${ns}" nothing_left); then
+        left=$(left_of_cluster) || left='(no answer)'
+        fail "still in ${ns}: ${left}"
+    fi
+    kubectl -n "${ns}" get "${keys}" > /dev/null || fail "${name}'s backup keys went with it"
+    # A test cluster's keys guard backups of nothing, and the namespace outlives the test.
+    kubectl -n "${ns}" delete "${keys}" > /dev/null
 elif ! kubectl delete namespace "${ns}" --wait --timeout=5m; then
     # Its conditions say what is left in it and whose finalizers hold that.
     left=$(kubectl get namespace "${ns}" -o jsonpath='{range .status.conditions[?(@.status=="True")]}{.message}; {end}' || true)

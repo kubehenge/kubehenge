@@ -241,6 +241,12 @@ jobs:
             # The conditions and failure reasons that say why a machine never came up.
             kubectl get machines,proxmoxmachines,proxmoxclusters -A -o yaml \
               > "$out/machines.yaml" 2>&1 || true
+            # What a deleted cluster left behind and who holds it: the Secrets' and ConfigMaps'
+            # metadata, never their data.
+            kubectl get secrets,configmaps -A -l cluster.x-k8s.io/cluster-name -o json |
+              jq '[.items[] | {kind} + (.metadata | {namespace, name, labels, ownerReferences,
+                finalizers, creationTimestamp, deletionTimestamp})]' \
+              > "$out/cluster-objects.json" 2>&1 || true
             kubectl get pods -A --no-headers \
               -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name |
               grep -E -- '-system ' | while read -r ns pod; do
