@@ -36,4 +36,6 @@ done
 # The CIS benchmark asks for the kubelet's service files to be root's alone.
 chmod 0600 /usr/lib/systemd/system/kubelet.service /usr/lib/systemd/system/kubelet.service.d/*.conf
 
-systemctl enable containerd kubelet
+# Beside the family's node.sh's preset, so that a clone's first boot keeps them enabled.
+printf 'enable containerd.service\nenable kubelet.service\n' >> /usr/lib/systemd/system-preset/80-kubehenge.preset
+systemctl preset containerd kubelet
