@@ -112,7 +112,7 @@ func newAutoscaler(t *testing.T, c *clusterv1.Cluster, clock *time.Time, objs ..
 	}
 	recorder := events.NewFakeRecorder(10)
 	config := &rest.Config{Host: "https://10.0.0.20:6443", CAData: []byte("the cluster CA")}
-	remotes := &Remotes{byCluster: map[string]remote{remoteKey(c): {config: config, client: workload, until: clock.Add(24 * time.Hour)}}}
+	remotes := &Remotes{byCluster: map[string]remote{remoteKey(c): {config: config, client: workload, until: time.Now().Add(time.Hour)}}}
 	a := &AutoscalerReconciler{
 		Client: kube, ClassNamespace: "kubehenge-system", Namespace: autoscalerNamespace, Images: images,
 		Remotes: remotes,
