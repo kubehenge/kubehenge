@@ -366,10 +366,13 @@ step "sign-in through the cluster's identity provider, tokens beside it"
 check_sign_in
 
 step "the cluster uses its pod and service ranges"
-# The Cluster's own, or else the class's defaults, as Kubehenge's controller reads them.
-ranges=$(kubectl -n "${ns}" get "cluster/${name}" -o json | jq -c --argjson class "${class_json}" '{
-    pods: (.spec.clusterNetwork.pods.cidrBlocks // [$class.metadata.annotations["kubehenge.dev/default-pods"]]),
-    services: (.spec.clusterNetwork.services.cidrBlocks // [$class.metadata.annotations["kubehenge.dev/default-services"]])}')
+# The Cluster's own, or else the class's defaults, as Kubehenge's controller reads them. Only the
+# defaults go to jq as an argument: the whole class is larger than Linux allows one argument to be.
+class_ranges=$(printf '%s' "${class_json}" | jq -c '.metadata.annotations |
+    {pods: [.["kubehenge.dev/default-pods"]], services: [.["kubehenge.dev/default-services"]]}')
+ranges=$(kubectl -n "${ns}" get "cluster/${name}" -o json | jq -c --argjson class "${class_ranges}" '{
+    pods: (.spec.clusterNetwork.pods.cidrBlocks // $class.pods),
+    services: (.spec.clusterNetwork.services.cidrBlocks // $class.services)}')
 # outside <ranges JSON list> <addresses...>: prints the addresses outside every range.
 outside() { python3 -c 'import ipaddress, json, sys
 nets = [ipaddress.ip_network(n) for n in json.loads(sys.argv[1])]
