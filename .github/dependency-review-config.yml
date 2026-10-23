@@ -19,8 +19,10 @@ allow-licenses:
   - PSF-2.0
   - Python-2.0
 # yamllint, under the GPL, only checks the repository's YAML in CI: nothing Kubehenge distributes
-# includes or links it.
+# includes or links it. spdystream's LICENSE is Apache-2.0 and its NOTICE adds only BSD-3-Clause
+# code from the Go project; the licence data adds LicenseRef-scancode-unknown beside the two.
 allow-dependencies-licenses:
+  - pkg:golang/github.com/moby/spdystream
   - pkg:pypi/yamllint
 fail-on-severity: low
 fail-on-scopes: [runtime, development, unknown]
