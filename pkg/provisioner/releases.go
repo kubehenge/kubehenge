@@ -131,14 +131,31 @@ func (r *ReleaseChecksums) patch(ctx context.Context, item *runtimehooksv1.Gener
 	if err != nil {
 		return nil, err
 	}
+	nodeOS, err := variablesNodeOS(variables)
+	if err != nil {
+		return nil, err
+	}
+	family, _, err := templates.ReleaseOf(nodeOS)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // names the node OS
+	}
 	command := strings.Join(append([]string{releaseScriptPath, string(release.distribution), version, sums.file, sums.script}, files...), " ")
-	patch, err := json.Marshal([]map[string]any{
+	ops := []map[string]any{
 		addOp(tmpl.spec+"/files/-", map[string]any{
 			"path": releaseScriptPath, "owner": "root:root", "permissions": "0700", "content": releaseScript,
 		}),
 		addOp(tmpl.spec+"/"+tmpl.commands+"/-", command),
 		addOp(tmpl.spec+"/agentConfig/airGapped", true),
-	})
+	}
+	if family.MAC() == templates.SELinux {
+		// Neither bootstrap provider has a field for it, and both distributions read every file in
+		// config.yaml.d. The node's template carries the distribution's policy package.
+		ops = append(ops, addOp(tmpl.spec+"/files/-", map[string]any{
+			"path":  "/etc/rancher/" + string(release.distribution) + "/config.yaml.d/50-kubehenge-selinux.yaml",
+			"owner": "root:root", "permissions": "0600", "content": "selinux: true\n",
+		}))
+	}
+	patch, err := json.Marshal(ops)
 	if err != nil {
 		return nil, fmt.Errorf("patching template %s: %w", item.UID, err)
 	}

@@ -39,6 +39,9 @@ type templateView struct {
 	Newest bool `json:"newest,omitempty"`
 	// InUse names a cluster that clones from it, which keeps it from being deleted.
 	InUse string `json:"inUse,omitempty"`
+	// NodeOS is the operating system its machines run, such as AlmaLinux 10; a Talos template has
+	// none.
+	NodeOS string `json:"nodeOS,omitempty"`
 }
 
 type templatesView struct {
@@ -46,6 +49,8 @@ type templatesView struct {
 	Job       *appliance.JobView `json:"job,omitempty"`
 	// Refresh is the weekly build, when it is on.
 	Refresh *refreshView `json:"refresh,omitempty"`
+	// NodeOSes are those templates can be built of, and those not released yet.
+	NodeOSes []templates.NodeOSInfo `json:"nodeOSes"`
 }
 
 // templatesReady checks that this is an appliance whose management cluster, which made the
@@ -87,7 +92,7 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request, u user) {
 	for i := range list {
 		list[i].InUse = needs.of(list[i].Tags)
 	}
-	writeJSON(w, http.StatusOK, templatesView{Templates: list, Job: job, Refresh: state.view(s.now())})
+	writeJSON(w, http.StatusOK, templatesView{Templates: list, Job: job, Refresh: state.view(s.now()), NodeOSes: templates.NodeOSes()})
 }
 
 // templates lists the VM templates in the template pool, each build beside its line's others,
@@ -102,6 +107,9 @@ func (s *Server) templates(ctx context.Context, t *pve.Ticket) ([]templateView, 
 	for i := range members {
 		m := &members[i]
 		v := templateView{VMID: m.VMID, Node: m.Node, Name: m.Name, Tags: templates.ParseTags(m.Tags), Line: m.Name}
+		if o, ok := templates.NodeOSOf(v.Tags); ok {
+			v.NodeOS = nodeOSTitle(o)
+		}
 		if at, built := templates.BuildOf(v.Tags); built {
 			v.Build, v.Built = templates.BuildTag(at), &at
 			v.Line = strings.TrimSuffix(m.Name, "-"+v.Build)
@@ -180,8 +188,12 @@ func (t templateUsers) add(ctx context.Context, kube client.Client, c *clusterv1
 		return err
 	}
 	dist, _ := distribution(c.Spec.Topology.ClassRef.Name)
+	nodeOS, err := provisioner.ClusterNodeOS(c)
+	if err != nil {
+		return fmt.Errorf("reading cluster %s/%s's node OS: %w", c.Namespace, c.Name, err)
+	}
 	for _, v := range versions {
-		line, lineErr := provisioner.MachineLine(dist, v)
+		line, lineErr := provisioner.MachineLine(dist, v, nodeOS)
 		if lineErr != nil {
 			continue
 		}
@@ -208,18 +220,20 @@ func machineVersions(ctx context.Context, kube client.Client, c *clusterv1.Clust
 }
 
 type templateRequest struct {
-	// Distribution is rke2 for the cloud image RKE2 and k3s share, or kubeadm.
-	Distribution      string   `json:"distribution"`
-	KubernetesVersion string   `json:"kubernetesVersion,omitempty"`
-	Node              string   `json:"node"`
-	Storage           string   `json:"storage"`
-	ImportStorage     string   `json:"importStorage"`
-	ISOStorage        string   `json:"isoStorage,omitempty"`
-	Bridge            string   `json:"bridge"`
-	VLAN              int      `json:"vlan,omitempty"`
-	BuildAddress      string   `json:"buildAddress,omitempty"`
-	BuildGateway      string   `json:"buildGateway,omitempty"`
-	BuildDNS          []string `json:"buildDNS,omitempty"`
+	// Distribution is rke2, k3s or kubeadm.
+	Distribution      string `json:"distribution"`
+	KubernetesVersion string `json:"kubernetesVersion,omitempty"`
+	// NodeOS is the node OS as one word, such as almalinux-10; empty means the default.
+	NodeOS        string   `json:"nodeOS,omitempty"`
+	Node          string   `json:"node"`
+	Storage       string   `json:"storage"`
+	ImportStorage string   `json:"importStorage"`
+	ISOStorage    string   `json:"isoStorage,omitempty"`
+	Bridge        string   `json:"bridge"`
+	VLAN          int      `json:"vlan,omitempty"`
+	BuildAddress  string   `json:"buildAddress,omitempty"`
+	BuildGateway  string   `json:"buildGateway,omitempty"`
+	BuildDNS      []string `json:"buildDNS,omitempty"`
 }
 
 var proxmoxName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -239,14 +253,24 @@ func (req *templateRequest) builder() (templates.Builder, templates.Template, er
 	if req.VLAN < 0 || req.VLAN > 4094 {
 		problems = append(problems, "VLAN tag: 1 to 4094")
 	}
-	var plan templates.Request
+	plan := templates.Request{NodeOS: templates.DefaultNodeOS}
 	switch req.Distribution {
-	case string(templates.RKE2):
-		plan = templates.Request{Distribution: templates.RKE2}
+	case string(templates.RKE2), string(templates.K3s):
+		plan.Distribution = templates.Distribution(req.Distribution)
 	case string(templates.Kubeadm):
-		plan = templates.Request{Distribution: templates.Kubeadm, KubernetesVersion: req.KubernetesVersion}
+		plan.Distribution, plan.KubernetesVersion = templates.Kubeadm, req.KubernetesVersion
 	default:
-		problems = append(problems, "For: RKE2 and k3s, or kubeadm")
+		problems = append(problems, "For: RKE2, k3s or kubeadm")
+	}
+	if req.NodeOS != "" {
+		o, err := templates.ParseNodeOS(req.NodeOS)
+		if err == nil {
+			_, _, err = templates.Available(o)
+		}
+		if err != nil {
+			problems = append(problems, "Node OS: "+err.Error())
+		}
+		plan.NodeOS = o
 	}
 	network, problem := buildNetwork(req.BuildAddress, req.BuildGateway, req.BuildDNS)
 	if problem != "" {
@@ -256,7 +280,7 @@ func (req *templateRequest) builder() (templates.Builder, templates.Template, er
 		slices.Sort(problems)
 		return templates.Builder{}, templates.Template{}, errors.New(strings.Join(problems, "; "))
 	}
-	t, err := templates.Plan(plan)
+	t, err := templates.Plan(&plan)
 	if err != nil {
 		return templates.Builder{}, templates.Template{}, fmt.Errorf("the template: %w", err)
 	}

@@ -19,14 +19,14 @@ import (
 )
 
 // withTemplates makes the harness an appliance with a management cluster and three templates: two
-// builds of the cloud image RKE2 and k3s share, and one of kubeadm at v1.36.5.
+// builds of RKE2's on the default node OS, and one of kubeadm at v1.36.5.
 func withTemplates(t *testing.T, h *harness) {
 	t.Helper()
 	h.server.Appliance = &appliance.Appliance{Dir: t.TempDir(), Log: slog.New(slog.DiscardHandler)}
 	h.accounts.members = []pve.Member{
-		{VMID: 9001, Node: "pve1", Type: "qemu", Name: "kubehenge-ubuntu-26.04-build-202610010000", Template: 1, Tags: "build-202610010000;cloud-image;kubehenge;ubuntu-26.04"},
-		{VMID: 9004, Node: "pve1", Type: "qemu", Name: "kubehenge-ubuntu-26.04-build-202610150000", Template: 1, Tags: "build-202610150000;cloud-image;kubehenge;ubuntu-26.04"},
-		{VMID: 9002, Node: "pve1", Type: "qemu", Name: "kubehenge-kubeadm-v1.36.5-ubuntu-26.04-build-202610010000", Template: 1, Tags: "build-202610010000;kubeadm;kubehenge;kubernetes-v1.36.5;ubuntu-26.04"},
+		{VMID: 9001, Node: "pve1", Type: "qemu", Name: "kubehenge-rke2-almalinux-10-build-202610010000", Template: 1, Tags: "build-202610010000;kubehenge;os-almalinux-10;rke2"},
+		{VMID: 9004, Node: "pve1", Type: "qemu", Name: "kubehenge-rke2-almalinux-10-build-202610150000", Template: 1, Tags: "build-202610150000;kubehenge;os-almalinux-10;rke2"},
+		{VMID: 9002, Node: "pve1", Type: "qemu", Name: "kubehenge-kubeadm-v1.36.5-almalinux-10-build-202610010000", Template: 1, Tags: "build-202610010000;kubeadm;kubehenge;kubernetes-v1.36.5;os-almalinux-10"},
 		{VMID: 9003, Node: "pve1", Type: "qemu", Name: "being-built", Template: 0},
 	}
 }
@@ -51,7 +51,8 @@ func TestTemplatesListedWithTheClustersThatNeedThem(t *testing.T) {
 	for _, v := range got.Templates {
 		ids = append(ids, v.VMID)
 	}
-	if !slices.Equal(ids, []int{9002, 9004, 9001}) || got.Templates[0].InUse != "" || got.Templates[0].Line != "kubehenge-kubeadm-v1.36.5-ubuntu-26.04" ||
+	if !slices.Equal(ids, []int{9002, 9004, 9001}) || got.Templates[0].InUse != "" || got.Templates[0].Line != "kubehenge-kubeadm-v1.36.5-almalinux-10" ||
+		got.Templates[0].NodeOS != "AlmaLinux 10" || len(got.NodeOSes) != len(templates.NodeOSes()) ||
 		got.Templates[1].InUse != "" || !got.Templates[1].Newest || got.Templates[1].Build != "build-202610150000" ||
 		got.Templates[2].InUse != "default/one" || got.Templates[2].Newest || got.Refresh != nil {
 		t.Fatalf("templates = %s", rec.Body)
@@ -91,7 +92,7 @@ func TestTemplateBuiltOnTheAdministratorsSession(t *testing.T) {
 	}
 	a := h.browser()
 	a.signIn("admin@pve")
-	body := `{"distribution":"kubeadm","kubernetesVersion":"v1.37.1","node":"pve1","storage":"ceph","importStorage":"local","bridge":"vmbr0","vlan":30,` +
+	body := `{"distribution":"kubeadm","kubernetesVersion":"v1.37.1","nodeOS":"rocky-10","node":"pve1","storage":"ceph","importStorage":"local","bridge":"vmbr0","vlan":30,` +
 		`"buildAddress":"192.0.2.50/24","buildGateway":"192.0.2.1","buildDNS":["192.0.2.1"]}`
 	expect(t, a.do("POST", "/api/templates", body), http.StatusAccepted)
 	// One job at a time, of any kind.
@@ -105,7 +106,7 @@ func TestTemplateBuiltOnTheAdministratorsSession(t *testing.T) {
 	if job.State != "succeeded" || !slices.Contains(job.Log, "Downloading the image") || !strings.Contains(strings.Join(job.Log, "\n"), "is VM 9010") {
 		t.Fatalf("job = %+v", job)
 	}
-	if _, built := templates.BuildOf(gotTemplate.Tags); !built || gotTemplate.LineName != "kubehenge-kubeadm-v1.37.1-ubuntu-26.04" ||
+	if _, built := templates.BuildOf(gotTemplate.Tags); !built || gotTemplate.LineName != "kubehenge-kubeadm-v1.37.1-rocky-10" ||
 		!strings.HasPrefix(gotTemplate.Name, gotTemplate.LineName+"-build-") || gotBuilder.Pool != templatePool || gotBuilder.Node != "pve1" ||
 		gotBuilder.Storage != "ceph" || gotBuilder.VLAN != 30 || gotBuilder.Network == nil || gotBuilder.Network.Gateway.String() != "192.0.2.1" {
 		t.Fatalf("built %+v with %+v", gotTemplate, gotBuilder)
@@ -129,8 +130,8 @@ func TestFinishedTemplateBuildIsListed(t *testing.T) {
 		h.accounts.mu.Lock()
 		defer h.accounts.mu.Unlock()
 		h.accounts.members = append(h.accounts.members, pve.Member{
-			VMID: 9010, Node: "pve1", Type: "qemu", Name: "kubehenge-kubeadm-v1.37.1-ubuntu-26.04",
-			Template: 1, Tags: "kubeadm;kubehenge;kubernetes-v1.37.1;ubuntu-26.04",
+			VMID: 9010, Node: "pve1", Type: "qemu", Name: "kubehenge-kubeadm-v1.37.1-almalinux-10",
+			Template: 1, Tags: "kubeadm;kubehenge;kubernetes-v1.37.1;os-almalinux-10",
 		})
 		return 9010, nil
 	}
@@ -182,6 +183,8 @@ func TestTemplateRequestsAreChecked(t *testing.T) {
 		"distribution": `{"distribution":"talos","node":"pve1","storage":"ceph","importStorage":"local","bridge":"vmbr0"}`,
 		"version":      `{"distribution":"kubeadm","kubernetesVersion":"1.37","node":"pve1","storage":"ceph","importStorage":"local","bridge":"vmbr0"}`,
 		"node":         `{"distribution":"rke2","node":"","storage":"ceph","importStorage":"local","bridge":"vmbr0"}`,
+		"node OS":      `{"distribution":"rke2","nodeOS":"leap-16.1","node":"pve1","storage":"ceph","importStorage":"local","bridge":"vmbr0"}`,
+		"node OS name": `{"distribution":"rke2","nodeOS":"almalinux","node":"pve1","storage":"ceph","importStorage":"local","bridge":"vmbr0"}`,
 		"gateway":      `{"distribution":"rke2","node":"pve1","storage":"ceph","importStorage":"local","bridge":"vmbr0","buildAddress":"192.0.2.50/24","buildGateway":"198.51.100.1","buildDNS":["192.0.2.1"]}`,
 	} {
 		t.Run(name, func(t *testing.T) {

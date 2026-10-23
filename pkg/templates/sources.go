@@ -4,16 +4,18 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/armor"
 )
 
 // Resolved is an image ready for Proxmox VE's download-url call.
@@ -34,14 +36,9 @@ const TalosSchematic = `customization:
       - siderolabs/qemu-guest-agent
 `
 
-const (
-	// UbuntuSigningKeyFingerprint is the UEC Image Automatic Signing Key, which signs the checksums
-	// of Ubuntu's cloud images.
-	UbuntuSigningKeyFingerprint = "D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81"
-	// KubernetesPackagesKeyFingerprint signs pkgs.k8s.io. The key is fetched at build time because
-	// its expiry is extended in place; only this fingerprint is trusted.
-	KubernetesPackagesKeyFingerprint = "DE15B14486CD377B9E876E1A234654DA9A296436"
-)
+// KubernetesPackagesKeyFingerprint signs pkgs.k8s.io. The key is fetched at build time because
+// its expiry is extended in place; only this fingerprint is trusted.
+const KubernetesPackagesKeyFingerprint = "DE15B14486CD377B9E876E1A234654DA9A296436"
 
 const (
 	// sourcesTimeout bounds each request for metadata; the images themselves Proxmox VE downloads.
@@ -50,24 +47,20 @@ const (
 	maxResponseBytes = 16 << 20
 )
 
-//go:embed keys/ubuntu-cloud-images.asc
-var ubuntuSigningKey []byte
-
-// Sources fetches image metadata from the publishers.
+// Sources fetches image metadata and repository keys from the publishers.
 type Sources struct {
 	HTTP            *http.Client
 	TalosFactoryURL string
-	UbuntuCloudURL  string
-	KubernetesPkgs  string
+	// Mirrors serve a publisher's files from another place, by the publisher's address
+	// (https://host); a test points them at its own server.
+	Mirrors map[string]string
 }
 
-// DefaultSources uses the public Talos Image Factory, Ubuntu cloud images and pkgs.k8s.io.
+// DefaultSources uses the public Talos Image Factory and every publisher's own address.
 func DefaultSources() *Sources {
 	return &Sources{
 		HTTP:            &http.Client{Timeout: sourcesTimeout},
 		TalosFactoryURL: "https://factory.talos.dev",
-		UbuntuCloudURL:  "https://cloud-images.ubuntu.com/releases",
-		KubernetesPkgs:  "https://pkgs.k8s.io",
 	}
 }
 
@@ -76,27 +69,79 @@ func (s *Sources) Resolve(ctx context.Context, ref ImageRef) (Resolved, error) {
 	switch ref.Kind {
 	case TalosFactory:
 		return s.talos(ctx, ref.Version)
-	case UbuntuCloud:
-		return s.ubuntu(ctx, ref.Version)
+	case NodeOSImage:
+		f, r, err := Available(ref.NodeOS)
+		if err != nil {
+			return Resolved{}, err
+		}
+		resolved, err := f.Image(ctx, s, r)
+		if err != nil {
+			return Resolved{}, fmt.Errorf("the image of %s %s: %w", f.Title(), r.Name, err)
+		}
+		return resolved, nil
 	}
 	return Resolved{}, fmt.Errorf("unknown image kind %q", ref.Kind)
 }
 
-// KubernetesPackagesKey fetches the pkgs.k8s.io signing key for a Kubernetes minor series, such as
-// v1.37, and returns it ASCII-armoured after checking its fingerprint.
-func (s *Sources) KubernetesPackagesKey(ctx context.Context, series string) (string, error) {
-	key, err := s.do(ctx, http.MethodGet, fmt.Sprintf("%s/core:/stable:/%s/deb/Release.key", s.KubernetesPkgs, series), nil)
+// RepositoryKey fetches a package repository's signing key and returns it ASCII-armoured after
+// checking that it is one key with one of the fingerprints k allows.
+func (s *Sources) RepositoryKey(ctx context.Context, k RepositoryKey) (string, error) {
+	key, err := s.get(ctx, k.URL)
 	if err != nil {
 		return "", err
 	}
-	keyring, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(key))
+	e, err := oneKey(key)
 	if err != nil {
-		return "", fmt.Errorf("reading the pkgs.k8s.io key: %w", err)
+		return "", fmt.Errorf("reading the key of %s: %w", k.Name, err)
 	}
-	if len(keyring) != 1 || fingerprint(keyring[0]) != KubernetesPackagesKeyFingerprint {
-		return "", fmt.Errorf("pkgs.k8s.io serves a key other than %s", KubernetesPackagesKeyFingerprint)
+	if !slices.Contains(k.Fingerprints, fingerprint(e)) {
+		return "", fmt.Errorf("%s serves a key other than %s", k.URL, strings.Join(k.Fingerprints, " or "))
 	}
-	return string(key), nil
+	// Written out again from what was checked, so that nothing else the file held reaches the
+	// node's package manager.
+	var out bytes.Buffer
+	w, err := armor.Encode(&out, openpgp.PublicKeyType, nil)
+	if err != nil {
+		return "", fmt.Errorf("writing the key of %s: %w", k.Name, err)
+	}
+	if err = e.Serialize(w); err != nil {
+		return "", fmt.Errorf("writing the key of %s: %w", k.Name, err)
+	}
+	if err = w.Close(); err != nil {
+		return "", fmt.Errorf("writing the key of %s: %w", k.Name, err)
+	}
+	out.WriteString("\n")
+	return out.String(), nil
+}
+
+// oneKey reads an armoured file that holds exactly one public key. The keyring reader stops at the
+// end of the first armoured block, so a second block after it is refused here.
+func oneKey(armoured []byte) (*openpgp.Entity, error) {
+	if n := bytes.Count(armoured, []byte("-----BEGIN PGP ")); n != 1 {
+		return nil, fmt.Errorf("%d armoured blocks, not one", n)
+	}
+	keyring, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(armoured))
+	if err != nil {
+		return nil, err //nolint:wrapcheck // the callers say whose key it is
+	}
+	if len(keyring) != 1 {
+		return nil, fmt.Errorf("%d keys, not one", len(keyring))
+	}
+	return keyring[0], nil
+}
+
+// at is where a publisher's URL is fetched from: the publisher itself unless a mirror stands in.
+func (s *Sources) at(url string) string {
+	for publisher, mirror := range s.Mirrors {
+		if rest, ok := strings.CutPrefix(url, publisher); ok && (rest == "" || strings.HasPrefix(rest, "/")) {
+			return mirror + rest
+		}
+	}
+	return url
+}
+
+func (s *Sources) get(ctx context.Context, url string) ([]byte, error) {
+	return s.do(ctx, http.MethodGet, s.at(url), nil)
 }
 
 func (s *Sources) talos(ctx context.Context, version string) (Resolved, error) {
@@ -117,68 +162,103 @@ func (s *Sources) talos(ctx context.Context, version string) (Resolved, error) {
 	}, nil
 }
 
-func (s *Sources) ubuntu(ctx context.Context, os string) (Resolved, error) {
-	release, ok := OperatingSystems[os]
-	if !ok {
-		return Resolved{}, fmt.Errorf("unsupported operating system %q", os)
-	}
-	dir := fmt.Sprintf("%s/%s/release-%s", s.UbuntuCloudURL, release.Codename, release.Build)
-	sums, err := s.do(ctx, http.MethodGet, dir+"/SHA256SUMS", nil)
+// signedImage resolves an image whose publisher lists its SHA-256 in a checksum file it signs with
+// a detached signature at sigURL: the signature is checked against the embedded key, which must be
+// the one with the pinned fingerprint, before the checksum is read. The template's disk is
+// downloaded under fileName.
+func (s *Sources) signedImage(ctx context.Context, signer signingKey, imageURL, sumsURL, sigURL, fileName string) (Resolved, error) {
+	sums, err := s.get(ctx, sumsURL)
 	if err != nil {
 		return Resolved{}, err
 	}
-	sig, err := s.do(ctx, http.MethodGet, dir+"/SHA256SUMS.gpg", nil)
+	sig, err := s.get(ctx, sigURL)
 	if err != nil {
 		return Resolved{}, err
 	}
-	err = verifyUbuntuChecksums(sums, sig)
-	if err != nil {
-		return Resolved{}, err
+	if err = signer.verify(sums, sig); err != nil {
+		return Resolved{}, fmt.Errorf("%s: %w", sumsURL, err)
 	}
-	file := os + "-server-cloudimg-amd64.img"
+	file := imageURL[strings.LastIndex(imageURL, "/")+1:]
 	sum, err := findChecksum(sums, file)
 	if err != nil {
 		return Resolved{}, err
 	}
 	return Resolved{
-		URL: dir + "/" + file,
-		// The .img is a qcow2; Proxmox VE accepts it for import only under that extension.
-		FileName:          fmt.Sprintf("template-%s-%s.qcow2", os, sum[:12]),
+		URL:               s.at(imageURL),
+		FileName:          fmt.Sprintf("template-%s-%s.qcow2", fileName, sum[:12]),
 		Checksum:          sum,
 		ChecksumAlgorithm: "sha256",
 	}, nil
 }
 
-func verifyUbuntuChecksums(sums, sig []byte) error {
-	keyring, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(ubuntuSigningKey))
+// signingKey is a publisher's embedded key and the fingerprint it must have.
+type signingKey struct {
+	name        string
+	armoured    []byte
+	fingerprint string
+}
+
+// verify checks a detached signature, armoured or binary, over data.
+func (k signingKey) verify(data, sig []byte) error {
+	key, err := oneKey(k.armoured)
 	if err != nil {
-		return fmt.Errorf("reading the embedded Ubuntu signing key: %w", err)
+		return fmt.Errorf("reading the embedded %s key: %w", k.name, err)
+	}
+	if fingerprint(key) != k.fingerprint {
+		return fmt.Errorf("the embedded %s key is not %s", k.name, k.fingerprint)
+	}
+	keyring := openpgp.EntityList{key}
+	v3, isV3, err := parseV3(sig)
+	switch {
+	case err != nil:
+		return fmt.Errorf("not signed by %s's key: %w", k.name, err)
+	case isV3:
+		if err = v3.verify(keyring[0], data, time.Now()); err != nil {
+			return fmt.Errorf("not signed by %s's key: %w", k.name, err)
+		}
+		return nil
 	}
 	check := openpgp.CheckDetachedSignature
 	if bytes.HasPrefix(bytes.TrimSpace(sig), []byte("-----BEGIN")) {
 		check = openpgp.CheckArmoredDetachedSignature
 	}
-	signer, err := check(keyring, bytes.NewReader(sums), bytes.NewReader(sig), nil)
+	signer, err := check(keyring, bytes.NewReader(data), bytes.NewReader(sig), nil)
 	if err != nil {
-		return fmt.Errorf("the cloud images' SHA256SUMS is not signed by Ubuntu's cloud image key: %w", err)
+		return fmt.Errorf("not signed by %s's key: %w", k.name, err)
 	}
-	if fp := fingerprint(signer); fp != UbuntuSigningKeyFingerprint {
-		return fmt.Errorf("the cloud images' SHA256SUMS is signed by %s, not %s", fp, UbuntuSigningKeyFingerprint)
+	if fp := fingerprint(signer); fp != k.fingerprint {
+		return fmt.Errorf("signed by %s, not %s's %s", fp, k.name, k.fingerprint)
 	}
 	return nil
 }
 
+// The lines of a checksum list: the BSD form, as Rocky Linux writes them, SHA256 (file) = hex, and
+// the GNU one, hex and the file, marked * when read as binary.
+var (
+	bsdChecksum = regexp.MustCompile(`^SHA256 \((?P<name>.+)\) = (?P<sum>[0-9A-Fa-f]+)$`)
+	gnuChecksum = regexp.MustCompile(`^(?P<sum>[0-9A-Fa-f]+)\s+\*?(?P<name>\S.*)$`)
+)
+
+// findChecksum reads a file's SHA-256 from a checksum list, in the GNU form or the BSD one.
 func findChecksum(sums []byte, file string) (string, error) {
 	for line := range strings.SplitSeq(string(sums), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 2 && strings.TrimPrefix(fields[1], "*") == file {
-			if _, err := hex.DecodeString(fields[0]); err != nil || len(fields[0]) != hex.EncodedLen(sha256.Size) {
-				return "", fmt.Errorf("malformed checksum for %s", file)
+		line = strings.TrimSpace(line)
+		var name, sum string
+		for _, form := range []*regexp.Regexp{bsdChecksum, gnuChecksum} {
+			if m := form.FindStringSubmatch(line); m != nil {
+				name, sum = m[form.SubexpIndex("name")], m[form.SubexpIndex("sum")]
+				break
 			}
-			return fields[0], nil
 		}
+		if name != file {
+			continue
+		}
+		if _, err := hex.DecodeString(sum); err != nil || len(sum) != hex.EncodedLen(sha256.Size) {
+			return "", fmt.Errorf("malformed checksum for %s", file)
+		}
+		return strings.ToLower(sum), nil
 	}
-	return "", fmt.Errorf("%s is not listed in SHA256SUMS", file)
+	return "", fmt.Errorf("%s is not listed in its checksum file", file)
 }
 
 func fingerprint(e *openpgp.Entity) string {

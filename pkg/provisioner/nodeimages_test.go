@@ -22,7 +22,7 @@ func day(d int) time.Time { return time.Date(2026, 10, d, 0, 0, 0, 0, time.UTC) 
 
 func cloudLine(t *testing.T) []string {
 	t.Helper()
-	line, err := MachineLine("rke2", "v1.36.5+rke2r1")
+	line, err := MachineLine("rke2", "v1.36.5+rke2r1", templates.DefaultNodeOS)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -110,7 +110,19 @@ func releaseOps(t *testing.T, patch []byte) map[string]any {
 		if op.Op != "add" {
 			t.Errorf("%s: op %s", op.Path, op.Op)
 		}
+		// Of the files appended, the first is the release's script; the rest are listed beside it.
+		if _, seen := byPath[op.Path]; seen && strings.HasSuffix(op.Path, "/files/-") {
+			more, ok := byPath[op.Path+"+"].([]any)
+			if !ok {
+				t.Fatalf("%s: the files after the first are %v", op.Path, byPath[op.Path+"+"])
+			}
+			byPath[op.Path+"+"] = append(more, op.Value)
+			continue
+		}
 		byPath[op.Path] = op.Value
+		if strings.HasSuffix(op.Path, "/files/-") {
+			byPath[op.Path+"+"] = []any{}
+		}
 	}
 	return byPath
 }
@@ -156,6 +168,16 @@ func TestReleasePatchesInstallTheRecordedFiles(t *testing.T) {
 			}
 			if file, ok := ops[tc.spec+"/files/-"].(map[string]any); !ok || file["path"] != releaseScriptPath || file["content"] != releaseScript || file["permissions"] != "0700" {
 				t.Errorf("script file %v", ops[tc.spec+"/files/-"])
+			}
+			// The default node OS enforces SELinux, which the distribution is told to work with.
+			dropIn := "/etc/rancher/" + string(release.distribution) + "/config.yaml.d/50-kubehenge-selinux.yaml"
+			more, ok := ops[tc.spec+"/files/-+"].([]any)
+			var first map[string]any
+			if ok && len(more) == 1 {
+				first, ok = more[0].(map[string]any)
+			}
+			if !ok || len(more) != 1 || first["path"] != dropIn || first["content"] != "selinux: true\n" || first["permissions"] != "0600" {
+				t.Errorf("further files %v, want only %s", more, dropIn)
 			}
 			if airGapped, ok := ops[tc.spec+"/agentConfig/airGapped"].(bool); !ok || !airGapped {
 				t.Errorf("airGapped %v, want true", ops[tc.spec+"/agentConfig/airGapped"])

@@ -169,7 +169,8 @@ func (s *Server) refreshNow(w http.ResponseWriter, r *http.Request, u user) {
 // and which builds are under way or asked for.
 type templateBuildsView struct {
 	Allowed bool `json:"allowed"`
-	// Requested are the request keys not started yet, such as kubeadm-v1.37.1 or cloud-image.
+	// Requested are the request keys not started yet, such as kubeadm-v1.37.1-almalinux-10 or
+	// rke2-almalinux-10.
 	Requested []string `json:"requested"`
 	// Building are the templates the run under way builds.
 	Building []string `json:"building"`
@@ -197,29 +198,43 @@ func (s *Server) templateBuilds(w http.ResponseWriter, r *http.Request, u user) 
 }
 
 type templateBuildRequest struct {
-	// Distribution is rke2 or k3s for the cloud image they share, or kubeadm.
+	// Distribution is rke2, k3s or kubeadm.
 	Distribution      string `json:"distribution"`
 	KubernetesVersion string `json:"kubernetesVersion,omitempty"`
+	// NodeOS is the node OS as one word, such as almalinux-10; empty means the default.
+	NodeOS string `json:"nodeOS,omitempty"`
 }
 
 // requestTemplateBuild has a missing template built for one who may create clusters. The build
 // runs in the management cluster with the builder's token, from images whose addresses and
-// checksums Kubehenge fixes; the request names only the distribution and version.
+// checksums Kubehenge fixes; the request names only the distribution, version and node OS.
 func (s *Server) requestTemplateBuild(w http.ResponseWriter, r *http.Request, u user) {
 	var req templateBuildRequest
 	if !readJSON(w, r, &req) {
 		return
 	}
-	plan := templates.Request{Distribution: templates.Distribution(req.Distribution), KubernetesVersion: req.KubernetesVersion}
-	key := provisioner.RequestLine(plan)
-	if key == "" || req.Distribution != string(templates.Kubeadm) && req.KubernetesVersion != "" {
+	if !slices.Contains([]string{string(templates.RKE2), string(templates.K3s), string(templates.Kubeadm)}, req.Distribution) {
 		writeError(w, http.StatusUnprocessableEntity, "distribution: RKE2, k3s or kubeadm")
 		return
 	}
-	if _, err := provisioner.ParseRequestLine(key); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "Kubernetes version: kubeadm versions look like v1.37.1")
+	if req.Distribution != string(templates.Kubeadm) && req.KubernetesVersion != "" {
+		writeError(w, http.StatusUnprocessableEntity, "Kubernetes version: only kubeadm templates are built per version")
 		return
 	}
+	plan := templates.Request{Distribution: templates.Distribution(req.Distribution), KubernetesVersion: req.KubernetesVersion, NodeOS: templates.DefaultNodeOS}
+	if req.NodeOS != "" {
+		o, err := templates.ParseNodeOS(req.NodeOS)
+		if err != nil {
+			writeError(w, http.StatusUnprocessableEntity, "node OS: "+err.Error())
+			return
+		}
+		plan.NodeOS = o
+	}
+	if _, err := templates.Plan(&plan); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	key := provisioner.RequestLine(&plan)
 	state, err := s.refreshState(r.Context(), u.kube)
 	if err != nil {
 		s.kubeError(w, err)
@@ -284,12 +299,16 @@ func (s *Server) nodeImage(ctx context.Context, kube client.Client, c *clusterv1
 		return nil, err
 	}
 	dist, _ := distribution(c.Spec.Topology.ClassRef.Name)
+	nodeOS, err := provisioner.ClusterNodeOS(c)
+	if err != nil {
+		return nil, fmt.Errorf("reading the cluster's node OS: %w", err)
+	}
 	v := &nodeImageView{Refreshes: policy.RefreshesNodeImages(), Since: since, Builds: []nodeBuildView{}, Last: c.Annotations[provisioner.NodeImageRefreshedAnnotation]}
 	seen := map[string]bool{}
 	var due *nodeRefreshView
 	soak := state.soak()
 	for _, version := range statusVersions(c) {
-		t, err := provisioner.MachineTemplate(dist, version)
+		t, err := provisioner.MachineTemplate(dist, version, nodeOS)
 		if err != nil || seen[t.LineName] {
 			continue
 		}

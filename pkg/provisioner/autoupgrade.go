@@ -187,13 +187,14 @@ func (ch Channels) Target(current, mode string) string {
 	return ""
 }
 
-// Releases tells which Kubernetes versions a distribution offers.
+// Releases tells which Kubernetes versions a distribution offers on a node OS.
 type Releases interface {
-	Channels(ctx context.Context, distribution string) (Channels, error)
+	Channels(ctx context.Context, distribution string, os templates.NodeOS) (Channels, error)
 }
 
-// ChannelServer reads RKE2's and k3s's release channels (update.rke2.io, update.k3s.io), and
-// kubeadm's from the templates Kubehenge has built: a kubeadm node needs one for its version.
+// ChannelServer reads RKE2's and k3s's release channels (update.rke2.io, update.k3s.io), whatever
+// the node OS, and kubeadm's from the templates Kubehenge has built for the node OS: a kubeadm node
+// needs one for its version.
 type ChannelServer struct {
 	HTTP    *http.Client
 	URLs    map[string]string
@@ -220,9 +221,9 @@ type channel struct {
 const maxChannelList = 4 << 20
 
 // Channels implements Releases.
-func (s *ChannelServer) Channels(ctx context.Context, distribution string) (Channels, error) {
+func (s *ChannelServer) Channels(ctx context.Context, distribution string, os templates.NodeOS) (Channels, error) {
 	if distribution == "kubeadm" {
-		return s.templateChannels(ctx)
+		return s.templateChannels(ctx, os)
 	}
 	url, ok := s.URLs[distribution]
 	if !ok {
@@ -265,13 +266,13 @@ func (s *ChannelServer) Channels(ctx context.Context, distribution string) (Chan
 
 var kubeadmTemplateVersion = regexp.MustCompile(`^kubernetes-(v1\.\d+\.\d+)$`)
 
-func (s *ChannelServer) templateChannels(ctx context.Context) (Channels, error) {
+func (s *ChannelServer) templateChannels(ctx context.Context, os templates.NodeOS) (Channels, error) {
 	seen, err := listPoolTemplates(ctx, s.Proxmox)
 	if err != nil {
 		return Channels{}, err
 	}
 	ch := Channels{Latest: map[int]kubeVersion{}}
-	for _, v := range seen.kubeadm {
+	for _, v := range seen.kubeadm[os] {
 		if old, seen := ch.Latest[v.Minor]; !seen || old.less(v) {
 			ch.Latest[v.Minor] = v
 		}
@@ -281,14 +282,14 @@ func (s *ChannelServer) templateChannels(ctx context.Context) (Channels, error) 
 }
 
 // poolTemplates is what the token sees of Kubehenge's templates, the controller's being those of
-// the template pool. The ClusterClasses clone from builds of templates of the default OS only; one
-// made from another cloud image, or without a build tag, is a source no machine of theirs could be
-// built from.
+// the template pool. The ClusterClasses clone from builds of templates of a node OS only; one
+// without a build tag, or of an operating system no family names, is a source no machine of theirs
+// could be built from.
 type poolTemplates struct {
-	// kubeadm are the Kubernetes versions of the kubeadm templates, newest first.
-	kubeadm []kubeVersion
-	// cloudImage tells whether the template RKE2's and k3s's machines are cloned from is there.
-	cloudImage bool
+	// kubeadm are the Kubernetes versions of each node OS's kubeadm templates, newest first.
+	kubeadm map[templates.NodeOS][]kubeVersion
+	// nodeOSes are the node OSes RKE2's and k3s's templates are there for, by distribution.
+	nodeOSes map[templates.Distribution][]templates.NodeOS
 	// storages are those any of Kubehenge's templates have disks on, whatever their OS.
 	storages []string
 	// builds are the builds of each line.
@@ -316,31 +317,42 @@ func listPoolTemplates(ctx context.Context, c *proxmox.Client) (poolTemplates, e
 	if err != nil {
 		return poolTemplates{}, fmt.Errorf("listing the Proxmox VE templates: %w", err)
 	}
-	seen := poolTemplates{storages: inv.Storages, builds: NodeImageBuilds{}}
+	seen := poolTemplates{
+		storages: inv.Storages, builds: NodeImageBuilds{},
+		kubeadm: map[templates.NodeOS][]kubeVersion{}, nodeOSes: make(map[templates.Distribution][]templates.NodeOS),
+	}
 	for _, r := range inv.Templates {
 		tags := templates.ParseTags(r.Tags)
 		at, built := templates.BuildOf(tags)
-		if !slices.Contains(tags, templates.DefaultOS) || !built {
+		os, known := templates.NodeOSOf(tags)
+		if _, _, err := templates.ReleaseOf(os); !built || !known || err != nil {
 			continue
 		}
 		line := templates.LineKey(tags)
 		seen.builds[line] = append(seen.builds[line], at)
-		if slices.Contains(tags, "cloud-image") {
-			seen.cloudImage = true
+		for _, d := range []templates.Distribution{templates.RKE2, templates.K3s} {
+			if slices.Contains(tags, string(d)) && !slices.Contains(seen.nodeOSes[d], os) {
+				seen.nodeOSes[d] = append(seen.nodeOSes[d], os)
+			}
 		}
-		if v, ok := kubeadmVersionOf(tags); ok && !slices.Contains(seen.kubeadm, v) {
-			seen.kubeadm = append(seen.kubeadm, v)
+		if v, ok := kubeadmVersionOf(tags); ok && !slices.Contains(seen.kubeadm[os], v) {
+			seen.kubeadm[os] = append(seen.kubeadm[os], v)
 		}
 	}
-	slices.SortFunc(seen.kubeadm, func(a, b kubeVersion) int {
-		switch {
-		case b.less(a):
-			return -1
-		case a.less(b):
-			return 1
-		}
-		return 0
-	})
+	for os := range seen.kubeadm {
+		slices.SortFunc(seen.kubeadm[os], func(a, b kubeVersion) int {
+			switch {
+			case b.less(a):
+				return -1
+			case a.less(b):
+				return 1
+			}
+			return 0
+		})
+	}
+	for d := range seen.nodeOSes {
+		slices.SortFunc(seen.nodeOSes[d], func(a, b templates.NodeOS) int { return strings.Compare(a.String(), b.String()) })
+	}
 	for line := range seen.builds {
 		slices.SortFunc(seen.builds[line], time.Time.Compare)
 	}
@@ -439,12 +451,17 @@ func (u *Upgrader) next(ctx context.Context, c *clusterv1.Cluster, channels map[
 		return "", err
 	}
 	dist := strings.TrimPrefix(c.Spec.Topology.ClassRef.Name, ClassPrefix)
-	ch, ok := channels[dist]
+	os, err := ClusterNodeOS(c)
+	if err != nil {
+		return "", err
+	}
+	key := dist + " " + os.String()
+	ch, ok := channels[key]
 	if !ok {
-		if ch, err = u.Releases.Channels(ctx, dist); err != nil {
-			return "", fmt.Errorf("reading the releases of %s: %w", dist, err)
+		if ch, err = u.Releases.Channels(ctx, dist, os); err != nil {
+			return "", fmt.Errorf("reading the releases of %s on %s: %w", dist, os, err)
 		}
-		channels[dist] = ch
+		channels[key] = ch
 	}
 	to := ch.Target(c.Spec.Topology.Version, policy.Mode)
 	if to == "" {

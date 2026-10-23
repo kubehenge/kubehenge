@@ -1,5 +1,5 @@
 {{- /*
-The weekly build of the Ubuntu VM templates (kubehenge template refresh), signed in with a token of
+The weekly build of the node OS VM templates (kubehenge template refresh), signed in with a token of
 its own that alone may build and delete templates. The controller starts the same Job for builds
 asked for in the interface; the interface only writes the requests ConfigMap.
 */}}
