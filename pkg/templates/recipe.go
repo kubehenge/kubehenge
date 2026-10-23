@@ -23,6 +23,8 @@ const (
 	buildLog = "/var/log/kubehenge-build.log"
 	// imagesPath is node/images.sh in a kubeadm node.
 	imagesPath = "/usr/libexec/kubehenge/images"
+	// nodePreset names the services a node's boot enables.
+	nodePreset = "/usr/lib/systemd/system-preset/80-kubehenge.preset"
 )
 
 // The commands a bake runs in the guest more than once.
@@ -189,6 +191,9 @@ func nodeChecks(b Bake) [][]string {
 	checks := [][]string{
 		{cloudInit, "status", "--wait"},
 		{systemctl, "is-active", "qemu-guest-agent"},
+		// A template's own boot keeps what the bake enabled; a clone's first boot applies the
+		// presets again, and keeps only what they name.
+		{"grep", "-qx", "enable qemu-guest-agent.service", nodePreset},
 		{"sh", "-c", `test "$(getenforce)" = Enforcing`},
 		{"sh", "-c", "semodule -l | grep -qx kubehenge-qga"},
 		{"sh", "-c", "! touch /usr/kubehenge 2> /dev/null"},
@@ -209,6 +214,7 @@ func nodeChecks(b Bake) [][]string {
 			[]string{"sh", "-c", "test -d /sys/module/br_netfilter && test -d /sys/module/nf_conntrack"},
 			[]string{"sh", "-c", "grep -qx '      type: spc_t' /etc/kubernetes/patches/etcd+strategic.yaml"},
 			[]string{systemctl, "is-enabled", "kubelet"},
+			[]string{"sh", "-c", "grep -qx 'enable containerd.service' " + nodePreset + " && grep -qx 'enable kubelet.service' " + nodePreset},
 			[]string{systemctl, "is-active", "containerd"},
 			// The control-plane images are in containerd, so nodes do not wait on the registry,
 			// and containerd starts pods on kubeadm's pause image among them.

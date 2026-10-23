@@ -47,6 +47,12 @@ fi
 install -D -m 0644 "${files}/node/kubehenge-qga.cil" /usr/share/kubehenge/kubehenge-qga.cil
 semodule -i /usr/share/kubehenge/kubehenge-qga.cil
 
+# A clone's first boot, with its new machine ID, applies the presets again, which enable only the
+# services they name.
+mkdir -p /usr/lib/systemd/system-preset
+printf 'enable qemu-guest-agent.service\n' > /usr/lib/systemd/system-preset/80-kubehenge.preset
+systemctl preset qemu-guest-agent
+
 # A node takes its updates as a new build of its template, which its cluster rolls out, and never
 # reboots on its own.
 systemctl mask transactional-update.timer rebootmgr.service

@@ -55,7 +55,11 @@ printf '[install]\nroot-fs-type = "xfs"\n' > /usr/lib/bootc/install/20-kubehenge
 # Proxmox VE's console for Kubehenge's VMs is their serial port.
 printf 'kargs = ["console=tty0", "console=ttyS0,115200n8"]\n' > /usr/lib/bootc/kargs.d/10-kubehenge.toml
 
-systemctl enable qemu-guest-agent
+# A clone's first boot, with its new machine ID, applies the presets again, and the family's end in
+# disabling every service they do not name.
+mkdir -p /usr/lib/systemd/system-preset
+printf 'enable qemu-guest-agent.service\n' > /usr/lib/systemd/system-preset/80-kubehenge.preset
+systemctl preset qemu-guest-agent
 # A node takes its updates as a new build of its template, which its cluster rolls out; fwupd
 # cannot go, since shim needs it.
 systemctl mask bootc-fetch-apply-updates.timer fwupd-refresh.timer

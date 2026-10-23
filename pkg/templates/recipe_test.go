@@ -281,7 +281,7 @@ func distributionChecks(t *testing.T, d Distribution) []string {
 	case Kubeadm:
 		return []string{
 			"kubeadm version -o short)\" = v1.37.1", "enable_selinux = true", "/sys/module/br_netfilter",
-			"/sys/module/nf_conntrack", "type: spc_t", "crictl images",
+			"/sys/module/nf_conntrack", "type: spc_t", "crictl images", "enable kubelet.service",
 		}
 	case Talos:
 	}
@@ -300,7 +300,7 @@ func TestNodeChecks(t *testing.T) {
 			t.Errorf("%s: the last check is %q, want no denials", b.Distribution, checks[len(checks)-1])
 		}
 		all := fmt.Sprint(checks)
-		for _, want := range append([]string{"getenforce", "kubehenge-qga", "/usr/kubehenge", "modinfo br_netfilter"}, distributionChecks(t, b.Distribution)...) {
+		for _, want := range append([]string{"getenforce", "kubehenge-qga", "/usr/kubehenge", "modinfo br_netfilter", "enable qemu-guest-agent.service"}, distributionChecks(t, b.Distribution)...) {
 			if !strings.Contains(all, want) {
 				t.Errorf("%s: no check of %s in %q", b.Distribution, want, checks)
 			}
