@@ -223,6 +223,49 @@ func TestTemplateRefreshKeepsWhatAMachineBeingMadeSelects(t *testing.T) {
 	}
 }
 
+// Of each Talos minor the two newest releases' templates stay, and any older one a cluster boots
+// or is upgraded to, a machine being made selects, or the run was asked to make.
+func TestTemplateRefreshCollectsTalosTemplatesByMinor(t *testing.T) {
+	t.Parallel()
+	pool := &fakePool{}
+	talos := func(v string) templates.Template {
+		line, err := templates.Plan(&templates.Request{Distribution: templates.Talos, TalosVersion: v})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return line
+	}
+	for _, v := range []string{"v1.12.1", "v1.13.8", "v1.13.9", "v1.13.10", "v1.13.11", "v1.13.12", "v1.14.0", "v1.14.2", "v1.14.3", "v1.14.4"} {
+		line := talos(v)
+		pool.list = append(pool.list, &proxmox.ClusterResource{VMID: uint64(9000 + len(pool.list)), Name: line.Name, Tags: strings.Join(line.Tags, ";")})
+	}
+	web := talosCluster("web", "v1.14.2")
+	web.Annotations[TalosImageAnnotation] = "v1.13.10"
+	pending := &unstructured.Unstructured{}
+	pending.SetAPIVersion("infrastructure.cluster.x-k8s.io/" + proxmoxMachineVersion)
+	pending.SetKind("ProxmoxMachine")
+	pending.SetNamespace("clusters")
+	pending.SetName("api-abc")
+	if err := unstructured.SetNestedStringSlice(pending.Object, talos("v1.13.8").Tags, "spec", "templateSelector", "matchTags"); err != nil {
+		t.Fatal(err)
+	}
+	r := &TemplateRefresh{
+		Kube: refreshKube(t, web, pending), Pool: pool, ClassNamespace: "kubehenge-system", Keep: DefaultBuildsKept,
+		Soak: DefaultNodeImageSoak, Now: func() time.Time { return day(22) }, MissingOnly: true,
+		Missing: []templates.Request{{Distribution: templates.Talos, TalosVersion: "v1.14.1"}},
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(pool.built, []string{"kubehenge-talos-v1.14.1"}) {
+		t.Errorf("built %v", pool.built)
+	}
+	slices.Sort(pool.deleted)
+	if want := []string{"kubehenge-talos-v1.13.9", "kubehenge-talos-v1.14.0"}; !slices.Equal(pool.deleted, want) {
+		t.Errorf("deleted %v, want %v", pool.deleted, want)
+	}
+}
+
 func TestTemplateRefreshGoesOnPastAFailedLine(t *testing.T) {
 	t.Parallel()
 	pool := &fakePool{fail: map[string]bool{"kubehenge-rke2-almalinux-10": true}}

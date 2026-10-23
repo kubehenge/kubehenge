@@ -198,6 +198,10 @@ type Addons struct {
 	backupTarget *BackupTarget
 	// gitOpsFound is what the controller found for GitOps before writing the charts' values.
 	gitOpsFound gitOpsState
+	// talosServing is set when every controller manager and scheduler of a Talos cluster serves a
+	// certificate of the cluster CA (talosServesControlPlaneMetrics), so that their metrics are
+	// scraped as on the other distributions.
+	talosServing bool
 }
 
 // addonsOf reads a cluster's add-on variables.
@@ -787,8 +791,8 @@ func traefikValues(endpoint string, certs *Certificates) map[string]any {
 		// A host port is held by the pod on it, so a node's new pod starts only once the old one is gone.
 		"updateStrategy": map[string]any{"rollingUpdate": map[string]any{"maxUnavailable": 1, "maxSurge": 0}},
 		"ports": map[string]any{
-			"web":       map[string]any{"hostPort": http},
-			"websecure": map[string]any{"hostPort": https},
+			"web":       map[string]any{hostPortKey: http},
+			"websecure": map[string]any{hostPortKey: https},
 		},
 		"service": map[string]any{"spec": map[string]any{"type": "ClusterIP"}},
 		"providers": map[string]any{

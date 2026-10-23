@@ -82,7 +82,7 @@ func (r *TemplateRefresh) Run(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("building %s: %w", lines[i].LineName, err))
 		}
 	}
-	if err := r.collect(ctx, clusters); err != nil {
+	if err := r.collect(ctx, clusters, talos); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
@@ -309,8 +309,9 @@ func (r *TemplateRefresh) build(ctx context.Context, line *templates.Template) e
 // collect deletes the builds nothing needs: of each line, all but the newest Keep and those still
 // in use. In use is the build a cluster's node image time picks for a line its machines run, and
 // one a machine still waiting for its VM selects. A kubeadm line no cluster runs or can upgrade to
-// keeps only its newest; the last build of a line is never deleted here.
-func (r *TemplateRefresh) collect(ctx context.Context, clusters []refreshedCluster) error {
+// keeps only its newest; the last build of a line is never deleted here. Talos templates go as
+// unneededTalos says.
+func (r *TemplateRefresh) collect(ctx context.Context, clusters []refreshedCluster, talos []string) error {
 	list, err := r.Pool.List(ctx)
 	if err != nil {
 		return fmt.Errorf("listing the templates: %w", err)
@@ -327,7 +328,76 @@ func (r *TemplateRefresh) collect(ctx context.Context, clusters []refreshedClust
 			errs = append(errs, fmt.Errorf("deleting %s: %w", b.Resource.Name, err))
 		}
 	}
+	for _, res := range unneededTalos(list, talos, pending, r.Missing, max(r.Keep, 1)) {
+		r.logf("deleting %s (VM %d), which nothing clones from", res.Name, res.VMID)
+		if err := r.Pool.DeleteBuild(ctx, res); err != nil {
+			errs = append(errs, fmt.Errorf("deleting %s: %w", res.Name, err))
+		}
+	}
 	return errors.Join(errs...)
+}
+
+// unneededTalos are the Talos templates collect deletes. A Talos release's template is made once,
+// so each release stands for a build of its minor's line: of each minor, all but the newest keep
+// releases go, unless a cluster's machines boot it or are upgraded to it, a machine still waiting
+// for its VM selects it, or the run was asked to make it.
+func unneededTalos(list []*proxmox.ClusterResource, inUse []string, pending map[string]bool, asked []templates.Request, keep int) []*proxmox.ClusterResource {
+	kept := map[string]bool{}
+	for _, v := range inUse {
+		kept[v] = true
+	}
+	for _, req := range asked {
+		if req.Distribution == templates.Talos {
+			kept[req.TalosVersion] = true
+		}
+	}
+	type release struct {
+		res     *proxmox.ClusterResource
+		version [3]int
+		raw     string
+	}
+	byMinor := map[int][]release{}
+	for _, res := range list {
+		tags := templates.ParseTags(res.Tags)
+		raw, ok := talosTemplateRelease(tags)
+		if !ok {
+			continue
+		}
+		var v [3]int
+		if _, err := fmt.Sscanf(raw, "v%d.%d.%d", &v[0], &v[1], &v[2]); err != nil {
+			continue
+		}
+		byMinor[v[1]] = append(byMinor[v[1]], release{res: res, version: v, raw: raw})
+	}
+	var out []*proxmox.ClusterResource
+	for _, minor := range slices.Sorted(maps.Keys(byMinor)) {
+		releases := byMinor[minor]
+		slices.SortFunc(releases, func(x, y release) int { return slices.Compare(y.version[:], x.version[:]) })
+		for i, r := range releases {
+			if i < keep || kept[r.raw] || pending[strings.Join(templates.ParseTags(r.res.Tags), ";")] {
+				continue
+			}
+			out = append(out, r.res)
+		}
+	}
+	return out
+}
+
+// talosTemplateRelease is the Talos release a template listing's tags are of, if they are a Talos
+// template's.
+func talosTemplateRelease(tags []string) (string, bool) {
+	if !slices.Contains(tags, string(templates.Talos)) {
+		return "", false
+	}
+	if _, built := templates.BuildOf(tags); built {
+		return "", false
+	}
+	for _, tag := range tags {
+		if v, ok := strings.CutPrefix(tag, string(templates.Talos)+"-"); ok {
+			return v, true
+		}
+	}
+	return "", false
 }
 
 // unneededBuilds are the builds collect deletes.

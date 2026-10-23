@@ -58,7 +58,7 @@ kubehenge template refresh --node pve1 --storage shared-storage --import-storage
 kubehenge template refresh --missing kubeadm-v1.38.0-almalinux-10 --missing-only --node pve1
 ```
 
-It also makes the Talos template of each release a Talos cluster runs or boots that the pool lacks, but never builds a Talos template again nor deletes one: a release's image does not change, and an administrator deletes the templates of releases no cluster boots any more. A cluster creator's request names a Talos template as `talos-v1.14.4`.
+It also makes the Talos template of each release a Talos cluster runs or boots that the pool lacks, but never builds a Talos template again: a release's image does not change. Each Talos release's template stands for a build of its minor version's line, so of each minor version the two newest releases' templates stay, with any older one a cluster boots or is upgraded to, a machine about to be created selects, or the run was asked to make; the others are deleted. A cluster creator's request names a Talos template as `talos-v1.14.4`.
 
 It reads the clusters from the Kubernetes cluster its kubeconfig or service account names; `--keep` and `--soak` set how many builds stay and how old a build is before clusters move to it.
 

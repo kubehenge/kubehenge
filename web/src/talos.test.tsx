@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 import { newForm, withTalosRelease } from "./create-form";
-import { fakeServer, reads } from "./fake-server";
+import { fakeServer, held, reads } from "./fake-server";
 import { failedText, forRelease, talosTargets, upgradedText, upgradingText } from "./Talos";
 import type { Cluster, ClusterClass, TalosReleases } from "./types";
 
@@ -254,6 +254,82 @@ describe("talos clusters", () => {
     ).resolves.toBeDisabled();
     expect(dialog.getByRole("option", { name: "v1.14.6" })).toBeEnabled();
     expect(dialog.getByText(/^v1\.15\.1 does not run Kubernetes 1\.36, which the cluster runs/u)).toBeInTheDocument();
+  });
+
+  it("holds a Kubernetes version back that the cluster's Talos release does not run", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web");
+    fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: { ...web, talos: { version: "v1.14.4" } } },
+      "GET /api/versions/talos": { body: { versions: ["v1.37.1", "v1.36.5"], stable: "v1.36.5" } },
+      "GET /api/talos/releases": { body: releases },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Upgrade" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Upgrade web" }));
+    await expect(dialog.findByRole("option", { name: "v1.37.1 (not run by Talos v1.14.4)" })).resolves.toBeDisabled();
+    expect(dialog.getByText(/^Talos v1\.14\.4 does not run v1\.37\.1: upgrade Talos first/u)).toBeInTheDocument();
+  });
+
+  it("waits for the Talos releases before offering a field, and names a typed one's mistake once", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const releasesRead = held();
+    fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: web },
+      "GET /api/talos/releases": releasesRead.route,
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Upgrade Talos" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Upgrade Talos on web" }));
+    expect(dialog.getByLabelText("Talos release")).toBeDisabled();
+    expect(dialog.getByRole("option", { name: "Loading…" })).toBeInTheDocument();
+    releasesRead.fail(new Error("lost"));
+    const field = await dialog.findByRole("textbox", { name: "Talos release" });
+    await user.clear(field);
+    await user.type(field, "v1.16");
+    expect(dialog.getByText("A release such as v1.14.4.")).toBeInTheDocument();
+    expect(dialog.queryByText("Such as v1.14.4.")).not.toBeInTheDocument();
+  });
+
+  it("restores a Talos cluster's etcd through its Talos API", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/backups");
+    const snapshot = {
+      name: "20261023T060000Z-v1.36.5.db.age",
+      time: "2026-10-23T06:00:00Z",
+      kubernetesVersion: "v1.36.5",
+    };
+    fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: web },
+      "GET /api/clusters/clusters/web/backups": {
+        body: { enabled: false, reachable: true, backups: [], restores: [], canBackUp: true, canRestore: true },
+      },
+      "GET /api/clusters/clusters/web/etcd-snapshots": {
+        body: {
+          enabled: false,
+          requested: false,
+          snapshots: [snapshot],
+          restoring: false,
+          automatic: true,
+          canSnapshot: true,
+          canRestore: true,
+        },
+      },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await expect(
+      screen.findByText(/the controller reads etcd through the control-plane nodes' Talos API\./u),
+    ).resolves.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: `Restore from ${snapshot.name}` }));
+    const dialog = screen.getByRole("dialog", { name: /^Restore etcd from/u });
+    expect(dialog).toHaveTextContent("wipes etcd on every control-plane node through its Talos API");
+    expect(dialog).toHaveTextContent("the others join it again. The cluster's API is down");
+    expect(dialog).not.toHaveTextContent("guest agent");
+    expect(dialog).not.toHaveTextContent("new machines");
   });
 
   it("holds Try again and the talosconfig to what the user may do", async () => {

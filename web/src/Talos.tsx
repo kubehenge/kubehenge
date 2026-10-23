@@ -63,6 +63,28 @@ export function forRelease(
 export const missingReleases = (r: TalosReleases): string[] =>
   offeredReleases(r).filter((v) => !r.templates.includes(v));
 
+/**
+ * releaseToMake is the release a new template is made of unless another is chosen: the default
+ * while it has none, else the newest release without one, as remaking a release's template adds
+ * nothing.
+ */
+export function releaseToMake(r: TalosReleases): string {
+  if (!filled(r.default) || !r.templates.includes(r.default)) {
+    return r.default;
+  }
+  return missingReleases(r)[0] ?? r.default;
+}
+
+/**
+ * loadingReleases stands in for a release field while the releases load, so that it is not typed
+ * into first; a plain element, so that Field ties its hint to it.
+ */
+export const loadingReleases = (id: string): JSX.Element => (
+  <select id={id} disabled value="">
+    <option value="">Loading…</option>
+  </select>
+);
+
 /** useTalosReleases reads the Talos releases once they are wanted; a failed read offers none and says why. */
 export function useTalosReleases(wanted: boolean): TalosReleases | undefined {
   const [releases, setReleases] = useState<TalosReleases>();
@@ -111,11 +133,7 @@ export function TalosReleaseSelect({
   onChange: (v: string) => void;
 }): JSX.Element {
   if (!releases) {
-    return (
-      <select id={id} disabled value="">
-        <option value="">Loading…</option>
-      </select>
-    );
+    return loadingReleases(id);
   }
   return (
     <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
@@ -269,6 +287,26 @@ export function TalosDialog({ cluster: c, onClose }: { cluster: Cluster; onClose
   const typed = version !== "" && !talosRelease.test(version);
   const kubernetes = kubernetesMinor(c.version);
   const held = targets.filter((v) => !runsKubernetes(releases, v, c.version));
+  const field = (id: string): JSX.Element => {
+    if (!releases) {
+      return loadingReleases(id);
+    }
+    if (targets.length === 0) {
+      return <input id={id} value={version} onChange={(e) => setVersion(e.target.value.trim())} />;
+    }
+    return (
+      <select id={id} value={version} onChange={(e) => setVersion(e.target.value)}>
+        <option value={current} disabled>
+          {current} (running)
+        </option>
+        {targets.map((v) => (
+          <option key={v} value={v} disabled={held.includes(v)}>
+            {held.includes(v) ? `${v} (does not run Kubernetes ${kubernetes})` : v}
+          </option>
+        ))}
+      </select>
+    );
+  };
   return (
     <Dialog
       title={`Upgrade Talos on ${c.name}`}
@@ -301,25 +339,10 @@ export function TalosDialog({ cluster: c, onClose }: { cluster: Cluster; onClose
       )}
       <Field
         label="Talos release"
-        hint={targets.length > 0 ? undefined : `Such as ${talosExample}.`}
+        hint={releases && targets.length === 0 && !typed ? `Such as ${talosExample}.` : undefined}
         error={typed ? `A release such as ${talosExample}.` : undefined}
       >
-        {(id) =>
-          targets.length > 0 ? (
-            <select id={id} value={version} onChange={(e) => setVersion(e.target.value)}>
-              <option value={current} disabled>
-                {current} (running)
-              </option>
-              {targets.map((v) => (
-                <option key={v} value={v} disabled={held.includes(v)}>
-                  {held.includes(v) ? `${v} (does not run Kubernetes ${kubernetes})` : v}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input id={id} value={version} onChange={(e) => setVersion(e.target.value.trim())} />
-          )
-        }
+        {field}
       </Field>
       {held.length > 0 && (
         <p className="muted">

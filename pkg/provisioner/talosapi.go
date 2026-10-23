@@ -13,6 +13,9 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/api/machine"
 	talosclient "github.com/siderolabs/talos/pkg/machinery/client"
 	talosconfig "github.com/siderolabs/talos/pkg/machinery/client/config"
+	"github.com/siderolabs/talos/pkg/machinery/constants"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -30,7 +33,30 @@ type TalosNode interface {
 	// EtcdSnapshot streams a snapshot of the etcd member on a control-plane node, with the
 	// member's etcd release.
 	EtcdSnapshot(ctx context.Context) (io.ReadCloser, string, error)
+	// BootID tells one boot of the node from the next.
+	BootID(ctx context.Context) (string, error)
+	// WipeEtcd resets the node without leaving etcd first, wiping its EPHEMERAL partition and etcd's
+	// data with it, and reboots it. Its machine configuration stays.
+	WipeEtcd(ctx context.Context) error
+	// Etcd is the state of the node's etcd service, as Talos names it, and whether it is healthy.
+	Etcd(ctx context.Context) (string, bool, error)
+	// UploadEtcdSnapshot hands the node the snapshot BootstrapRecovered restores etcd from.
+	UploadEtcdSnapshot(ctx context.Context, snapshot io.Reader) error
+	// BootstrapRecovered starts etcd on the node as a cluster of one from the uploaded snapshot.
+	BootstrapRecovered(ctx context.Context) error
 	Close() error
+}
+
+// errTalosNotReady is a node's refusal of a call it takes later in its boot.
+var errTalosNotReady = errors.New("the node is not ready for it yet")
+
+// notReady marks the errors of a node that is still booting, or not answering, as errTalosNotReady.
+func notReady(err error) error {
+	switch status.Code(err) { //nolint:exhaustive // every other code is a failure of its own
+	case codes.FailedPrecondition, codes.Unavailable:
+		return fmt.Errorf("%w: %w", errTalosNotReady, err)
+	}
+	return err
 }
 
 // TalosDialer reaches one Talos node at its address with a cluster's talosconfig.
@@ -145,12 +171,12 @@ func (n *talosNode) Reboot(ctx context.Context) error {
 }
 
 func (n *talosNode) EtcdSnapshot(ctx context.Context) (io.ReadCloser, string, error) {
-	status, err := n.c.EtcdStatus(ctx)
+	etcd, err := n.c.EtcdStatus(ctx)
 	if err != nil {
 		return nil, "", fmt.Errorf("%s: etcd status: %w", n.address, err)
 	}
 	version := ""
-	for _, m := range status.GetMessages() {
+	for _, m := range etcd.GetMessages() {
 		version = cmpOr(version, m.GetMemberStatus().GetProtocolVersion())
 	}
 	r, err := n.c.EtcdSnapshot(ctx, &machine.EtcdSnapshotRequest{})
@@ -158,6 +184,55 @@ func (n *talosNode) EtcdSnapshot(ctx context.Context) (io.ReadCloser, string, er
 		return nil, "", fmt.Errorf("%s: etcd snapshot: %w", n.address, err)
 	}
 	return r, version, nil
+}
+
+func (n *talosNode) BootID(ctx context.Context) (string, error) {
+	r, err := n.c.Read(ctx, "/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return "", fmt.Errorf("%s: reading the boot ID: %w", n.address, notReady(err))
+	}
+	defer func() { _ = r.Close() }()
+	id, err := io.ReadAll(r)
+	if err != nil {
+		return "", fmt.Errorf("%s: reading the boot ID: %w", n.address, notReady(err))
+	}
+	return strings.TrimSpace(string(id)), nil
+}
+
+func (n *talosNode) WipeEtcd(ctx context.Context) error {
+	err := n.c.ResetGeneric(ctx, &machine.ResetRequest{
+		Reboot:                 true,
+		SystemPartitionsToWipe: []*machine.ResetPartitionSpec{{Label: constants.EphemeralPartitionLabel, Wipe: true}},
+	})
+	if err != nil {
+		return fmt.Errorf("%s: wiping etcd: %w", n.address, notReady(err))
+	}
+	return nil
+}
+
+func (n *talosNode) Etcd(ctx context.Context) (string, bool, error) {
+	services, err := n.c.ServiceInfo(ctx, "etcd")
+	if err != nil {
+		return "", false, fmt.Errorf("%s: reading etcd's state: %w", n.address, notReady(err))
+	}
+	for _, s := range services {
+		return s.Service.GetState(), s.Service.GetHealth().GetHealthy(), nil
+	}
+	return "", false, fmt.Errorf("%s: %w: etcd is not among its services", n.address, errTalosNotReady)
+}
+
+func (n *talosNode) UploadEtcdSnapshot(ctx context.Context, snapshot io.Reader) error {
+	if _, err := n.c.EtcdRecover(ctx, snapshot); err != nil {
+		return fmt.Errorf("%s: uploading the snapshot: %w", n.address, notReady(err))
+	}
+	return nil
+}
+
+func (n *talosNode) BootstrapRecovered(ctx context.Context) error {
+	if err := n.c.Bootstrap(ctx, &machine.BootstrapRequest{RecoverEtcd: true}); err != nil {
+		return fmt.Errorf("%s: restoring etcd from the snapshot: %w", n.address, notReady(err))
+	}
+	return nil
 }
 
 // talosSnapshot streams a snapshot through the Talos API of the first control-plane node that

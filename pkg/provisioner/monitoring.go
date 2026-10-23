@@ -148,11 +148,14 @@ func monitoringValues(distribution templates.Distribution, proxy Image, addons *
 		inKubelet := map[string]any{"jobNameOverride": "kubelet", "service": off, "serviceMonitor": off}
 		values["kubeControllerManager"], values["kubeScheduler"], values["kubeProxy"] = inKubelet, inKubelet, inKubelet
 	case templates.Talos:
-		// Talos gives the controller manager and the scheduler serving certificates they sign
-		// themselves, and no way to hand them others, so no proxy could verify them; they go
-		// unscraped, their alerts with them.
-		off := map[string]any{"enabled": false}
-		values["kubeControllerManager"], values["kubeScheduler"] = off, off
+		if !addons.talosServing {
+			// Until Talos gives the controller manager and the scheduler a certificate of the
+			// cluster CA, they serve one they sign themselves, which Talos keeps inside their pods
+			// and offers no way to replace, so no proxy could verify them; they go unscraped, their
+			// alerts with them.
+			off := map[string]any{"enabled": false}
+			values["kubeControllerManager"], values["kubeScheduler"] = off, off
+		}
 	case templates.Kubeadm, templates.RKE2:
 	}
 	grafana := map[string]any{}
@@ -291,6 +294,12 @@ func metricsManifests(distribution templates.Distribution, proxy Image, addons *
 	case templates.K3s:
 	case templates.Talos:
 		out = append(out, metricsProxy(kubeProxyMetrics, kubeProxyMetricsPort, "http", nil, proxy))
+		if addons.talosServing {
+			out = append(out,
+				metricsProxy(controllerMetrics, controllerMetricsPort, "https", &controlPlaneAffinity, proxy),
+				metricsProxy(schedulerMetrics, schedulerMetricsPort, "https", &controlPlaneAffinity, proxy),
+			)
+		}
 	case templates.Kubeadm, templates.RKE2:
 		out = append(out,
 			metricsProxy(kubeProxyMetrics, kubeProxyMetricsPort, "http", nil, proxy),

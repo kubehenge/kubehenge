@@ -133,6 +133,10 @@ func EtcdRestoreStatusOf(c *clusterv1.Cluster) (EtcdRestoreStatus, bool) {
 // other control-plane machines, whose etcd still holds the cluster from before, for Cluster API to
 // make again once the cluster is unpaused. A restore that fails before etcd was restored starts the
 // control plane again as it was.
+//
+// A Talos cluster is restored through the nodes' Talos API instead, as Talos recovers etcd: every
+// control-plane node is reset with its EPHEMERAL partition wiped, the first is bootstrapped from the
+// snapshot, and the others join it again by themselves.
 type EtcdRestorer struct {
 	Client client.Client
 	// Reader reads the cluster past any cache: a reconcile queued while a restore ran can start
@@ -142,8 +146,12 @@ type EtcdRestorer struct {
 	ClassNamespace string
 	Targets        *ClusterTargets
 	// Guests runs the restore on the nodes; nil when the management cluster has no restore token,
-	// and every restore fails, to be done by hand.
+	// and every restore but a Talos cluster's fails, to be done by hand.
 	Guests Guests
+	// Talos reaches the nodes of Talos clusters.
+	Talos TalosDialer
+	// poll is how often a Talos restore looks at the nodes it waits for; talosRestorePoll when 0.
+	poll time.Duration
 	// Events reports on a Cluster how its restore went; may be nil.
 	Events events.EventRecorder
 	Now    func() time.Time
@@ -178,7 +186,7 @@ func (r *EtcdRestorer) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Re
 	if !ok {
 		return ctrl.Result{}, nil
 	}
-	run := &restoreRun{r: r, key: client.ObjectKeyFromObject(cluster), cluster: cluster, request: request}
+	run := &restoreRun{r: r, key: client.ObjectKeyFromObject(cluster), cluster: cluster, request: request, talos: isTalos(cluster)}
 	run.status = EtcdRestoreStatus{
 		Snapshot: request.Snapshot, By: request.By, RequestedAt: request.At, Phase: RestorePreparing, Started: r.now(),
 	}
@@ -210,6 +218,12 @@ type restoreRun struct {
 	snapshot EtcdSnapshot
 	// nodes are the control-plane nodes whose VMs run, the one restored on first.
 	nodes []RestoreNode
+
+	// talos restores through the Talos API, with the cluster's talosconfig.
+	talos       bool
+	talosconfig []byte
+	// retried is why a Talos restore's first attempt failed, when a second restored etcd.
+	retried error
 }
 
 func (run *restoreRun) do(ctx context.Context) error {
@@ -236,11 +250,14 @@ func (run *restoreRun) do(ctx context.Context) error {
 
 // prepare checks the snapshot and the nodes, and changes nothing.
 func (run *restoreRun) prepare(ctx context.Context) error {
-	if run.r.Guests == nil {
+	if run.r.Guests == nil && !run.talos {
 		return errors.New("this management cluster does not restore through the guest agent: an administrator turns that on, or restores by hand as the interface shows")
 	}
 	if !run.cluster.DeletionTimestamp.IsZero() {
 		return errors.New("the cluster is being deleted")
+	}
+	if run.talos {
+		return run.prepareTalos(ctx)
 	}
 	scripts, err := restoreScriptsFor(distributionOf(run.cluster))
 	if err != nil {
@@ -354,6 +371,9 @@ func (run *restoreRun) fetch(ctx context.Context) error {
 	if err := run.phase(ctx, RestoreFetching); err != nil {
 		return err
 	}
+	if run.talos {
+		return run.checkSnapshot(ctx)
+	}
 	password, err := newRestorePassword()
 	if err != nil {
 		return err
@@ -396,6 +416,9 @@ func (run *restoreRun) stop(ctx context.Context) error {
 	if err := run.phase(ctx, RestoreStopping); err != nil {
 		return err
 	}
+	if run.talos {
+		return run.wipeTalos(ctx)
+	}
 	for _, n := range run.nodes {
 		if err := run.on(ctx, n, "stopping the control plane", run.scripts.Stop); err != nil {
 			return err
@@ -408,12 +431,18 @@ func (run *restoreRun) restore(ctx context.Context) error {
 	if err := run.phase(ctx, RestoreRestoring); err != nil {
 		return err
 	}
+	if run.talos {
+		return run.recoverTalosEtcd(ctx)
+	}
 	return run.on(ctx, run.nodes[0], "restoring etcd", run.scripts.Restore)
 }
 
 func (run *restoreRun) start(ctx context.Context) error {
 	if err := run.phase(ctx, RestoreStarting); err != nil {
 		return err
+	}
+	if run.talos {
+		return run.waitTalosEtcd(ctx)
 	}
 	return run.on(ctx, run.nodes[0], "starting the control plane", run.scripts.Start)
 }
@@ -438,6 +467,9 @@ func (run *restoreRun) replace(ctx context.Context) error {
 // was restored, it starts every control-plane node again as it was; after, it finishes the
 // restore, since the other nodes' etcd would take back the cluster from before.
 func (run *restoreRun) recover(ctx context.Context, cause error) error {
+	if run.talos {
+		return run.recoverTalos(ctx, cause)
+	}
 	errs := []error{cause, run.removeTranscoded(ctx)}
 	if run.status.Phase == RestorePreparing {
 		return errors.Join(append(errs, run.unpause(ctx))...)
@@ -570,7 +602,17 @@ func (run *restoreRun) finish(ctx context.Context, err error) error {
 func (run *restoreRun) succeededMessage() string {
 	s := &run.status
 	m := "Restored etcd from " + s.Snapshot + " on " + s.Machine + "."
-	if len(s.Replaced) > 0 {
+	if run.retried != nil {
+		m += " The first attempt failed, " + run.retried.Error() + ", and a second restored it."
+	}
+	if run.talos && len(run.nodes) > 1 {
+		m += fmt.Sprintf(" The other %d control-plane nodes join it again by themselves.", len(run.nodes)-1)
+	}
+	switch {
+	case len(s.Replaced) == 0:
+	case run.talos:
+		m += fmt.Sprintf(" Cluster API makes the %d control-plane machines whose Talos API did not answer again.", len(s.Replaced))
+	default:
 		m += fmt.Sprintf(" Cluster API makes the other %d control-plane machines again.", len(s.Replaced))
 	}
 	if ptr.Deref(run.cluster.Spec.Paused, false) && !s.Paused {

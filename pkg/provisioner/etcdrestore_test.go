@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"filippo.io/age"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -121,10 +122,13 @@ func newRestoreFixture(t *testing.T, change func(*clusterv1.Cluster)) *restoreFi
 	if change != nil {
 		change(c)
 	}
-	objs := make([]client.Object, 0, 7)
-	objs = append(objs, c)
+	objs := make([]client.Object, 0, 8)
+	objs = append(objs, c, &corev1.Secret{
+		Namespace: "team-a", Name: TalosconfigSecret("web"), Data: map[string][]byte{TalosconfigKey: []byte("talosconfig of web")},
+	})
 	for i := range 3 {
 		m, pm := controlPlane(fmt.Sprintf("web-cp-%d", i), int64(101+i), fmt.Sprintf("pve%d", i+1))
+		m.Status.Addresses = clusterv1.MachineAddresses{{Type: clusterv1.MachineInternalIP, Address: fmt.Sprintf("10.0.0.%d", 11+i)}}
 		objs = append(objs, m, pm)
 	}
 	f := &restoreFixture{etcdFixture: newEtcdFixture(t, objs...), guests: &fakeGuests{off: map[int64]bool{}}}
@@ -157,7 +161,8 @@ func (f *restoreFixture) putSnapshot(name, identity, version string) {
 		f.t.Fatal(err)
 	}
 	metadata := map[string]string{
-		SnapshotMetaSHA256: sum, SnapshotMetaSize: strconv.FormatInt(size, 10), SnapshotMetaDistribution: "rke2", SnapshotMetaKubernetes: version,
+		SnapshotMetaSHA256: sum, SnapshotMetaSize: strconv.FormatInt(size, 10),
+		SnapshotMetaDistribution: string(distributionOf(f.cluster())), SnapshotMetaKubernetes: version,
 	}
 	if err = f.store.SetMetadata(context.Background(), snapshotFolder+"/"+name, metadata); err != nil {
 		f.t.Fatal(err)

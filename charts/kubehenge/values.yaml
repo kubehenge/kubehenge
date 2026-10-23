@@ -151,7 +151,7 @@ proxmox:
   # on the control-plane VMs through their guest agents, signing in for it with the API token under
   # the secret's key restore-token, which needs VM.Audit and VM.GuestAgent.Unrestricted on the
   # workload pool: a root shell in every cluster's VMs. Without it, the interface shows the steps
-  # to restore by hand.
+  # to restore by hand. Talos clusters are restored through their nodes' Talos API either way.
   etcdRestore: false
 
 # Building the node OS VM templates again every week, with the updates each node OS published

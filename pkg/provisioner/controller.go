@@ -479,6 +479,9 @@ func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster
 			return false, err
 		}
 	}
+	if isTalos(cluster) && addons.Monitoring.Enabled {
+		addons.talosServing = r.talosServesControlPlaneMetrics(ctx, cluster)
+	}
 	proxies, err := helmChartProxies(cluster, &r.Charts, distributionOf(cluster), storage, cni, addons)
 	if err != nil {
 		return false, err

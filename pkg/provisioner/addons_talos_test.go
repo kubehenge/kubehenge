@@ -4,7 +4,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/yaml"
 
 	"github.com/kubehenge/kubehenge/pkg/templates"
@@ -110,17 +115,85 @@ func TestMonitoringOnTalosScrapesWhatTalosLets(t *testing.T) {
 	if strings.Contains(joined, controllerMetrics) || strings.Contains(joined, schedulerMetrics) {
 		t.Errorf("proxies for components Talos gives no verifiable certificate: %v", proxied)
 	}
+
+	served := talosProxies(t, CNI{}, &Addons{Monitoring: Monitoring{Enabled: true}, talosServing: true})["web-monitoring"]
+	for _, component := range []string{"kubeControllerManager", "kubeScheduler"} {
+		if _, off := lookup[map[string]any](t, served, component)["enabled"]; off {
+			t.Errorf("%s unscraped on a Talos release that gives it a certificate of the cluster CA", component)
+		}
+	}
+	rendered = manifests(t, served)
+	for _, component := range []string{controllerMetrics, schedulerMetrics} {
+		found := false
+		for key := range rendered {
+			found = found || strings.Contains(key, component)
+		}
+		if !found {
+			t.Errorf("no proxy for %s on a Talos release that gives it a certificate of the cluster CA", component)
+		}
+	}
 }
 
-func TestNodeCollectorOnTalosReadsTheAuditLogAndNoJournal(t *testing.T) {
+func TestTalosControlPlaneMetricsAreScrapedOnceTheirCertificatesComeFromTheClusterCA(t *testing.T) {
+	t.Parallel()
+	pod := func(component string, args ...string) *corev1.Pod {
+		return &corev1.Pod{
+			Namespace: metav1.NamespaceSystem, Name: component + "-web-cp-0",
+			Labels: map[string]string{"component": component},
+			Spec:   corev1.PodSpec{Containers: []corev1.Container{{Name: component, Command: append([]string{"/usr/local/bin/" + component}, args...)}}},
+		}
+	}
+	const serving = "--tls-cert-file=/system/secrets/kubernetes/serving/tls.crt"
+	for name, tc := range map[string]struct {
+		pods []client.Object
+		want bool
+	}{
+		"both served":         {[]client.Object{pod("kube-controller-manager", serving), pod("kube-scheduler", serving)}, true},
+		"signing their own":   {[]client.Object{pod("kube-controller-manager", "--bind-address=127.0.0.1"), pod("kube-scheduler", "--bind-address=127.0.0.1")}, false},
+		"one of them served":  {[]client.Object{pod("kube-controller-manager", serving), pod("kube-scheduler")}, false},
+		"no scheduler to see": {[]client.Object{pod("kube-controller-manager", serving)}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c := talosCluster("web", "v1.14.4")
+			workload := fake.NewClientBuilder().WithScheme(remoteScheme).WithObjects(tc.pods...).Build()
+			r := &Reconciler{Remotes: &Remotes{byCluster: map[string]remote{remoteKey(c): {client: workload, until: time.Now().Add(time.Hour)}}}}
+			if got := r.talosServesControlPlaneMetrics(t.Context(), c); got != tc.want {
+				t.Errorf("scraped %v, want %v", got, tc.want)
+			}
+		})
+	}
+	if (&Reconciler{}).talosServesControlPlaneMetrics(t.Context(), talosCluster("web", "v1.14.4")) {
+		t.Error("a cluster that cannot be reached counts as one whose certificates the proxies verify")
+	}
+}
+
+func TestNodeCollectorOnTalosReadsTheAuditLogAndWhatTalosSends(t *testing.T) {
 	t.Parallel()
 	node := talosProxies(t, CNI{}, logsOnWith(Logs{Collector: "node"}))["web-alloy-node"]
 	if node == nil {
 		t.Fatal("no node collector")
 	}
 	config := lookup[string](t, node, "alloy", "configMap", "content")
-	if strings.Contains(config, "loki.source.journal") || !strings.Contains(config, `"/var/log/audit/kube/kube-apiserver.log"`) {
+	if strings.Contains(config, "loki.source.journal") || !strings.Contains(config, `"/var/log/audit/kube/kube-apiserver.log"`) ||
+		!strings.Contains(config, `listen_address = "0.0.0.0:5170"`) || !strings.Contains(config, `"job" = "talos"`) {
 		t.Errorf("the node collector's configuration on Talos:\n%s", config)
+	}
+	if lookup[string](t, node, "alloy", "stabilityLevel") != "experimental" {
+		t.Error("otelcol.receiver.tcplog needs Alloy's experimental components")
+	}
+	port := lookup[map[string]any](t, node, "alloy", "extraPorts", 0)
+	if port["hostPort"] != float64(talosLogsPort) || port["targetPort"] != float64(talosLogsPort) || port["protocol"] != "TCP" {
+		t.Errorf("Talos's log port %v", port)
+	}
+	var policy map[string]any
+	for i := range lookup[[]any](t, node, "extraObjects") {
+		if o := lookup[map[string]any](t, node, "extraObjects", i); o["kind"] == "NetworkPolicy" {
+			policy = o
+		}
+	}
+	if policy == nil || lookup[[]any](t, policy, "spec", "policyTypes")[0] != "Ingress" || lookup[map[string]any](t, policy, "spec")["ingress"] != nil {
+		t.Errorf("the node collector's port is open beyond its node: %v", policy)
 	}
 	for i := range lookup[[]any](t, node, "alloy", "mounts", "extra") {
 		if m := lookup[map[string]any](t, node, "alloy", "mounts", "extra", i); m["name"] == "journal" {

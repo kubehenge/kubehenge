@@ -3,7 +3,7 @@ import { useEffect, useState, type JSX } from "react";
 import { api, bridgesOf } from "./api";
 import { isVLAN, list } from "./network";
 import { choosable, cpuNote, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSLabel } from "./node-os";
-import { offeredReleases, talosExample, talosRelease, useTalosReleases } from "./Talos";
+import { loadingReleases, offeredReleases, releaseToMake, talosExample, talosRelease, useTalosReleases } from "./Talos";
 import type {
   Bridge,
   Job,
@@ -80,7 +80,7 @@ export function Templates(): JSX.Element {
                 <td>{t.nodeOS ?? "Talos Linux"}</td>
                 <td>
                   {t.built === undefined ? (
-                    <span className="muted">Not rebuilt</span>
+                    <span className="muted">{t.tags.includes("talos") ? "Made once" : "Not rebuilt"}</span>
                   ) : (
                     <>
                       {new Date(t.built).toLocaleString()}
@@ -269,6 +269,12 @@ function talosHint(releases: TalosReleases | undefined): string {
   return `A Talos cluster can start on the releases with a template, and is upgraded from there.${
     filled(reason) ? ` ${sentence(reason)} Type the release, such as ${talosExample}.` : ""
   }`;
+}
+
+// releaseLabel names a release as the build dialog offers it: v1.14.4 (default, has a template).
+function releaseLabel(r: TalosReleases, v: string): string {
+  const notes = [...(v === r.default ? ["default"] : []), ...(r.templates.includes(v) ? ["has a template"] : [])];
+  return notes.length > 0 ? `${v} (${notes.join(", ")})` : v;
 }
 
 interface BuildForm {
@@ -466,16 +472,36 @@ function BuildDialog({
   const talos = entered.distribution === "talos";
   const releases = useTalosReleases(talos);
   // A lone choice is taken until the user picks; the cloud-init storage is optional, so stays the
-  // node's first; and the Talos release is the one templates are made of by default.
+  // node's first; and the Talos release is the one templates are made of by default, unless it has
+  // one already.
+  const releaseOffered = releases ? releaseToMake(releases) : "";
   const form: BuildForm = {
     ...entered,
-    talosVersion: filled(entered.talosVersion) ? entered.talosVersion : (releases?.default ?? ""),
+    talosVersion: filled(entered.talosVersion) ? entered.talosVersion : releaseOffered,
     storage: filled(entered.storage) ? entered.storage : (sole(diskStorages) ?? ""),
     importStorage: filled(entered.importStorage) ? entered.importStorage : (sole(onNode("import")) ?? ""),
     bridge: filled(entered.bridge) ? entered.bridge : (sole(bridgeNames) ?? ""),
   };
   const problems = buildProblems(form);
   const shown = (k: keyof BuildForm): string | undefined => (touched.has(k) ? problems[k] : undefined);
+  const releaseField = (id: string): JSX.Element => {
+    if (!releases) {
+      return loadingReleases(id);
+    }
+    const offered = offeredReleases(releases);
+    if (offered.length === 0) {
+      return <input id={id} value={form.talosVersion} onChange={(e) => set("talosVersion", e.target.value.trim())} />;
+    }
+    return (
+      <select id={id} value={form.talosVersion} onChange={(e) => set("talosVersion", e.target.value)}>
+        {offered.map((v) => (
+          <option key={v} value={v}>
+            {releaseLabel(releases, v)}
+          </option>
+        ))}
+      </select>
+    );
+  };
 
   const start = async (): Promise<void> => {
     setBusy(true);
@@ -534,21 +560,7 @@ function BuildDialog({
       {!talos && <NodeOSField nodeOSes={nodeOSes} value={form.nodeOS} onChange={(v) => set("nodeOS", v)} />}
       {talos && (
         <Field label="Talos release" hint={talosHint(releases)} error={shown("talosVersion")}>
-          {(id) =>
-            releases && offeredReleases(releases).length > 0 ? (
-              <select id={id} value={form.talosVersion} onChange={(e) => set("talosVersion", e.target.value)}>
-                {offeredReleases(releases).map((v) => (
-                  <option key={v} value={v}>
-                    {v}
-                    {v === releases.default ? " (default)" : ""}
-                    {releases.templates.includes(v) ? " (has a template)" : ""}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input id={id} value={form.talosVersion} onChange={(e) => set("talosVersion", e.target.value.trim())} />
-            )
-          }
+          {releaseField}
         </Field>
       )}
       {form.distribution === "kubeadm" && (

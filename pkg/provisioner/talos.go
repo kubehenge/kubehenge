@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -102,6 +104,46 @@ func checkTalos(old, c *clusterv1.Cluster) error {
 		return fmt.Errorf("the nodes still on %s while they upgrade: %w", was, err)
 	}
 	return nil
+}
+
+// talosServesControlPlaneMetrics tells whether every controller manager and scheduler of a Talos
+// cluster is passed a serving certificate, which Talos then issues from the cluster CA as it does
+// the API server's, so that the metrics proxies on every control plane can verify them. Talos
+// releases before that pass none, and the components sign their own. A cluster that cannot be read
+// yet counts as one without; the next reconcile looks again.
+func (r *Reconciler) talosServesControlPlaneMetrics(ctx context.Context, c *clusterv1.Cluster) bool {
+	workload, found, err := r.Remotes.get(ctx, c)
+	if err != nil || !found {
+		return false
+	}
+	for _, component := range []string{"kube-controller-manager", "kube-scheduler"} {
+		var pods corev1.PodList
+		if err := workload.client.List(ctx, &pods, client.InNamespace(metav1.NamespaceSystem), client.MatchingLabels{"component": component}); err != nil {
+			r.Remotes.forget(c)
+			return false
+		}
+		if len(pods.Items) == 0 {
+			return false
+		}
+		for i := range pods.Items {
+			if servesOwnCertificate(&pods.Items[i]) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// servesOwnCertificate tells whether a control-plane pod runs without a serving certificate passed
+// to it.
+func servesOwnCertificate(p *corev1.Pod) bool {
+	passed := func(arg string) bool { return strings.HasPrefix(arg, "--tls-cert-file=") }
+	for i := range p.Spec.Containers {
+		if slices.ContainsFunc(p.Spec.Containers[i].Command, passed) || slices.ContainsFunc(p.Spec.Containers[i].Args, passed) {
+			return false
+		}
+	}
+	return true
 }
 
 // talosImageReady records the release a new Talos cluster's machines boot first, and says what the

@@ -687,6 +687,7 @@ func (o *controllerOptions) addEtcd(mgr manager.Manager, conn *pve.Config, remot
 		Reader:         mgr.GetAPIReader(),
 		ClassNamespace: o.r.ClassNamespace,
 		Targets:        targets,
+		Talos:          provisioner.DialTalos,
 		Events:         mgr.GetEventRecorder("kubehenge"),
 	}
 	if token := os.Getenv("KUBEHENGE_PROXMOX_RESTORE_TOKEN"); token != "" {
