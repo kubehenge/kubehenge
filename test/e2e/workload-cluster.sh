@@ -1847,7 +1847,12 @@ EOF
 agnhost_pod e2e-acme client pause
 wl -n e2e-acme wait --for=condition=Ready pod/dns pod/pebble pod/client --timeout=5m
 # shellcheck disable=SC2310 # polled with set -e off, so a failed query is only a retry.
-dns_answers() { soa=$(wl -n e2e-acme exec client -- dig +short "@${dns_ip}" e2e.test SOA 2>&1) && [ -n "${soa}" ]; }
+dns_answers() {
+    soa=$(wl -n e2e-acme exec client -- dig +short "@${dns_ip}" e2e.test SOA 2>&1) && [ -n "${soa}" ] && return
+    # A dig that dies says so only here: a timeout alone cannot tell a crashed client from a silent server.
+    printf 'dig: %s\n' "${soa:-no answer}" >&2
+    return 1
+}
 until_true 60 "BIND answers for e2e.test" dns_answers
 # Pebble makes a new root each time it starts, which only its management interface hands out. The
 # client fetches it there, verifying Pebble's own certificate.
