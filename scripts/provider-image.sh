@@ -6,23 +6,11 @@
 # with the digest versions.tf names, so what a release publishes is what anyone gets from that commit
 # and those patches. Further arguments go to ko, such as --insecure-registry.
 #
-# With --manifests, it renders instead the manifests of a provider whose block names their digests
-# (`manifests`) from the same source, with kustomize and the image versions.tf names, into
-# <directory>: config/default as control-plane-components.yaml and config/metadata/metadata.yaml.
-# It fails unless both come out with the digests named there.
-#
 #   scripts/provider-image.sh <provider> <repository> [ko flags]
-#   scripts/provider-image.sh --manifests <provider> <directory>
 set -eu
 
-usage="usage: $0 <provider> <repository> [ko flags] | --manifests <provider> <directory>"
-manifests=
-if [ "${1:-}" = --manifests ]; then
-    manifests=${3:?${usage}}
-fi
-[ -z "${manifests}" ] || shift
-provider=${1:?${usage}}
-repository=${2:?${usage}}
+provider=${1:?usage: $0 <provider> <repository> [ko flags]}
+repository=${2:?usage: $0 <provider> <repository> [ko flags]}
 shift 2
 scripts=$(cd "$(dirname "$0")" && pwd)
 versions=${scripts}/../management-cluster/versions.tf
@@ -54,29 +42,6 @@ for fix in "${scripts}/${provider}-patches"/*.patch; do
     [ -e "${fix}" ] || continue
     patch -d "${src}" -p1 --batch --forward --quiet < "${fix}"
 done
-
-# check <file> <role>: the file has the digest the block's manifests name for the role; status
-# turns 1 when it has not, so both files are checked and reported before the script fails.
-check() {
-    want=$(sed -n "/${block} = {/,/^  }/s/^ *$2 *= *\"\([0-9a-f]*\)\"/\1/p" "${versions}")
-    got=$(sha256sum "$1")
-    got=${got%% *}
-    if [ "${got}" != "${want}" ]; then
-        echo "provider-image: rendered $(basename "$1") as ${got}, but ${block} names ${want:-none}" >&2
-        status=1
-    fi
-}
-if [ -n "${manifests}" ]; then
-    out=${repository}
-    (cd "${src}/config/manager" && kustomize edit set image "controller=${image}")
-    kustomize build "${src}/config/default" > "${src}/control-plane-components.yaml"
-    status=0
-    check "${src}/config/metadata/metadata.yaml" metadata
-    check "${src}/control-plane-components.yaml" components
-    mkdir -p "${out}"
-    cp "${src}/config/metadata/metadata.yaml" "${src}/control-plane-components.yaml" "${out}/"
-    exit "${status}"
-fi
 
 build() {
     (cd "${src}" && GOTOOLCHAIN=${go} GOFLAGS='-trimpath -buildvcs=false' CGO_ENABLED=0 KO_DEFAULTBASEIMAGE=${base} \

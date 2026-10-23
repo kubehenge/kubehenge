@@ -113,13 +113,6 @@ KO=v0.19.1
 KO_SHA256=635ac6ea3fd376c935fee597fbb29ab2c2449f49ef1655085fe3aa9c25fed7a5
 release ko ko-build/ko "${KO}" "ko_${KO#v}_Linux_x86_64.tar.gz" "${KO_SHA256}" ko
 
-# Renders the manifests of the providers Kubehenge builds (scripts/provider-image.sh).
-# renovate: datasource=github-release-attachments depName=kubernetes-sigs/kustomize extractVersion=^kustomize/(?<version>.+)$
-KUSTOMIZE=v5.8.3
-KUSTOMIZE_SHA256=cb9e31198d3f63b44848bd0afc4c8efc56e6cfef9c93a4a39a211940e6decd61
-release kustomize kubernetes-sigs/kustomize "kustomize%2F${KUSTOMIZE}" \
-    "kustomize_${KUSTOMIZE}_linux_amd64.tar.gz" "${KUSTOMIZE_SHA256}" kustomize
-
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
 KUBECTL=v1.37.1
 KUBECTL_SHA256=65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8

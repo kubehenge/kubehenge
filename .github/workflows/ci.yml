@@ -53,6 +53,10 @@ jobs:
           # zizmor's online audits: impostor commits and actions with known vulnerabilities.
           GH_TOKEN: ${{ github.token }}
       - run: make integration
+      # The providers from Kubehenge's forks, as their pins stand or as Renovate moves them.
+      - run: make verify-providers
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   # The workflows are code with credentials attached, the release's among them, so actionlint and
   # zizmor check them in a job of their own as well as in `make test`: it answers within a minute,

@@ -1,15 +1,14 @@
 TOFU ?= tofu
 MODULES := management-cluster
-# Where `make image` pushes the controller's image, `make capmox-image` capmox's,
-# `make helm-addon-image` the Add-on Provider for Helm's and `make talos-control-plane-image` the
-# Talos control-plane provider's; KO_FLAGS such as --tags or --insecure-registry.
+# Where `make image` pushes the controller's image, `make capmox-image` capmox's and
+# `make helm-addon-image` the Add-on Provider for Helm's; KO_FLAGS such as --tags or
+# --insecure-registry.
 IMAGE ?= ghcr.io/kubehenge/kubehenge
 CAPMOX_IMAGE ?= ghcr.io/kubehenge/cluster-api-provider-proxmox
 HELM_ADDON_IMAGE ?= ghcr.io/kubehenge/cluster-api-addon-provider-helm
-TALOS_CONTROL_PLANE_IMAGE ?= ghcr.io/kubehenge/cluster-api-control-plane-provider-talos
 KO_FLAGS ?=
 
-.PHONY: build web gateway-api website dist index image capmox-image helm-addon-image talos-control-plane-image talos-control-plane-manifests lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-templates e2e-volumes e2e-interface e2e-appliance
+.PHONY: build web gateway-api website dist index image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-templates e2e-volumes e2e-interface e2e-appliance
 .PHONY: fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker unit-go unit-web unit-tofu unit-shell tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
@@ -130,7 +129,7 @@ image: web gateway-api
 	KO_DOCKER_REPO=$(IMAGE) KO_CONFIG_PATH=cmd/kubehenge ko build --bare --sbom=none $(KO_FLAGS) ./cmd/kubehenge
 
 # Build and push the provider images the management cluster runs as Kubehenge builds them
-# (the *_build blocks in management-cluster/versions.tf), check their digests and
+# (capmox_build and helm_addon_build in management-cluster/versions.tf), check their digests and
 # print their references by digest.
 capmox-image:
 	sh scripts/provider-image.sh capmox $(CAPMOX_IMAGE) $(KO_FLAGS)
@@ -138,13 +137,10 @@ capmox-image:
 helm-addon-image:
 	sh scripts/provider-image.sh helm-addon $(HELM_ADDON_IMAGE) $(KO_FLAGS)
 
-talos-control-plane-image:
-	sh scripts/provider-image.sh talos-control-plane $(TALOS_CONTROL_PLANE_IMAGE) $(KO_FLAGS)
-
-# Renders the Talos control-plane provider's manifests into the binary's embedded ones and fails
-# unless they have the digests talos_control_plane_build names.
-talos-control-plane-manifests:
-	sh scripts/provider-image.sh --manifests talos-control-plane pkg/provisioner/providers/talos-control-plane
+# Check the providers the management cluster runs from Kubehenge's forks: their files and images
+# by the digests versions.tf names, and their provenance and signatures from each fork's release.
+verify-providers:
+	sh scripts/verify-providers.sh
 
 # Lint and static tier: Go, the frontend, Terraform/OpenTofu, Helm charts, shell, the workflows,
 # YAML, Markdown, the e2e image's Dockerfile and the node images' Containerfiles, each at its
