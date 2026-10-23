@@ -54,6 +54,7 @@ var classProviders = map[string][]string{
 	"kubehenge-kubeadm": {"capi-kubeadm-bootstrap-system", "capi-kubeadm-control-plane-system"},
 	"kubehenge-rke2":    {"rke2-bootstrap-system", "rke2-control-plane-system"},
 	"kubehenge-k3s":     {"k3s-bootstrap-system", "k3s-control-plane-system"},
+	"kubehenge-talos":   {"talos-bootstrap-system", "talos-control-plane-system"},
 }
 
 func TestMain(m *testing.M) {

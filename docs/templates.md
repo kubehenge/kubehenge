@@ -4,7 +4,7 @@ Every cluster's nodes are clones of a Proxmox VE VM template. `kubehenge templat
 
 | Distribution | Template | One per |
 | --- | --- | --- |
-| Talos | the Talos Image Factory's image with the QEMU guest agent extension; made by the command only, ahead of Talos clusters, which no ClusterClass offers yet | Talos release |
+| Talos | the Talos Image Factory's image of the release with the QEMU guest agent extension, imported as it is; Talos is its own OS, so no node OS is part of it. Talos clusters' new machines clone it and are then upgraded in place to the cluster's release | Talos release |
 | RKE2, k3s | a node OS with cloud-init, the QEMU guest agent and the distribution's SELinux policy; the distribution installs itself when a node boots, from files checked against the checksums recorded for its release ([architecture.md](architecture.md#each-clusters-own-corner-of-proxmox-ve)) | distribution and node OS |
 | kubeadm | a node OS with cloud-init, the QEMU guest agent, containerd, the kubelet and kubeadm from pkgs.k8s.io as Kubernetes' installation guide sets them up, and the control-plane images pulled ahead, each kept only once Kubernetes' release signature for it checks out, with containerd set to kubeadm's pause image | node OS and Kubernetes version |
 
@@ -35,7 +35,7 @@ kubehenge template create k3s --node-os rocky-10 --node pve1 --storage shared-st
 kubehenge template create kubeadm --kubernetes-version v1.37.1 --node pve1
 ```
 
-`--node-os` chooses the node OS, `almalinux-10` unless set. A node OS template is built by a VM of its own, which boots the family's cloud image: in image mode it composes the node image from the family's packages, checks it with `bootc container lint` and installs it onto the template's disk, then boots it once on its own; a transactional node OS installs what a node needs as a new snapshot and reboots into it. That VM needs to reach the package repositories: it uses DHCP on `--bridge`, or a static address given with `--build-address`, `--build-gateway` and `--build-dns`. Its cloud-init data comes on an ISO uploaded to `--iso-storage` (the node's first ISO storage by default) and removed afterwards.
+`--node-os` chooses the node OS, `almalinux-10` unless set; a Talos template takes none, Talos being its own OS. A node OS template is built by a VM of its own, which boots the family's cloud image: in image mode it composes the node image from the family's packages, checks it with `bootc container lint` and installs it onto the template's disk, then boots it once on its own; a transactional node OS installs what a node needs as a new snapshot and reboots into it. That VM needs to reach the package repositories: it uses DHCP on `--bridge`, or a static address given with `--build-address`, `--build-gateway` and `--build-dns`. Its cloud-init data comes on an ISO uploaded to `--iso-storage` (the node's first ISO storage by default) and removed afterwards.
 
 Creating is idempotent: a template with the same tags in the template pool is found and reused, and for a node OS template, any build of it (see below). One with those tags in another pool is not, since clusters cannot clone from it. `--new-build` makes a new build of a node OS template even when one exists. A failed run removes what it made; `--keep-on-failure` leaves the VM for inspection, and a later run refuses to start until it is removed.
 
@@ -57,6 +57,8 @@ The CronJob runs `kubehenge template refresh` with an API token of its own, made
 kubehenge template refresh --node pve1 --storage shared-storage --import-storage local --pool kubehenge-templates
 kubehenge template refresh --missing kubeadm-v1.38.0-almalinux-10 --missing-only --node pve1
 ```
+
+It also makes the Talos template of each release a Talos cluster runs or boots that the pool lacks, but never builds a Talos template again nor deletes one: a release's image does not change, and an administrator deletes the templates of releases no cluster boots any more. A cluster creator's request names a Talos template as `talos-v1.14.4`.
 
 It reads the clusters from the Kubernetes cluster its kubeconfig or service account names; `--keep` and `--soak` set how many builds stay and how old a build is before clusters move to it.
 

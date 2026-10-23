@@ -22,8 +22,9 @@ import (
 // a Rancher cluster's nodes made smaller than it needs, load-balancer addresses that clash with the
 // nodes' network or another cluster's, Datastore.Allocate on a storage that is not the cluster's
 // alone, volume snapshots where they cannot be taken, Sys.Audit on / where no cluster may hold it,
-// and autoscaled pools whose bounds the autoscaler cannot work with or whose nodes would run out of
-// addresses. A cluster that already fell short before a change is not held to it for unrelated
+// autoscaled pools whose bounds the autoscaler cannot work with or whose nodes would run out of
+// addresses, and a Talos release that does not run the Kubernetes version or that Talos cannot
+// upgrade to from the one before. A cluster that already fell short before a change is not held to it for unrelated
 // edits.
 type ClusterValidator struct {
 	Hooks *Hooks
@@ -89,6 +90,9 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 	}
 	if err := checkNodeAddresses(old, c); err != nil {
 		errs = append(errs, field.Forbidden(topology.Child("variables").Key("network"), err.Error()))
+	}
+	if err := checkTalos(old, c); err != nil {
+		errs = append(errs, field.Forbidden(topology.Child("variables").Key(TalosVersionVariable), err.Error()))
 	}
 	if addressesChanged(old, c) {
 		if err := v.Hooks.checkLoadBalancer(ctx, c); err != nil {

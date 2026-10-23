@@ -209,6 +209,9 @@ func TestGeneratePatchesSelectTheBuildOfTheNodeImageTime(t *testing.T) {
 	c, class := refreshCluster(t, "web", nil)
 	talos, _ := refreshCluster(t, "metal", nil)
 	talos.Spec.Topology.ClassRef.Name = "kubehenge-talos"
+	talos.Spec.Topology.Variables = append(talos.Spec.Topology.Variables,
+		clusterv1.ClusterVariable{Name: TalosVersionVariable, Value: apiextensionsv1.JSON{Raw: []byte(`"v1.14.4"`)}})
+	talos.Annotations[TalosImageAnnotation] = "v1.14.3"
 	scheme := runtime.NewScheme()
 	if err := clusterv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
@@ -249,7 +252,11 @@ func TestGeneratePatchesSelectTheBuildOfTheNodeImageTime(t *testing.T) {
 		!strings.Contains(string(resp.Items[0].Patch), "/spec/template/spec/templateSelector/matchTags") {
 		t.Fatalf("items %+v", resp.Items)
 	}
-	if resp := request("metal"); len(resp.Items) != 0 {
-		t.Errorf("Talos machines patched: %+v", resp.Items)
+	// Talos machines boot the release the cluster records, whatever talosVersion says: they are
+	// upgraded in place, without a rollout.
+	resp = request("metal")
+	if len(resp.Items) != 1 || !strings.Contains(string(resp.Items[0].Patch), `"talos-v1.14.3"`) ||
+		strings.Contains(string(resp.Items[0].Patch), "build-") {
+		t.Errorf("Talos machines: %+v", resp.Items)
 	}
 }

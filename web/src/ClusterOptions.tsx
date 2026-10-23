@@ -23,6 +23,7 @@ import {
   useHAOffered,
 } from "./Placement";
 import { PodSecurityFields, cisText, enforced, podSecurityOf, podSecurityText } from "./PodSecurity";
+import { TalosDialog, talosOf } from "./Talos";
 import type { Cluster, NodeOSChoice, OIDCProvider } from "./types";
 import {
   Dialog,
@@ -66,6 +67,7 @@ export type OptionAction =
   | "gitops"
   | "upgrades"
   | "certificates"
+  | "talos"
   | "oidc";
 
 /** A setting the Options view lists, and the action of the dialog that changes it. */
@@ -136,6 +138,9 @@ export function OptionDialog({
     }
     case "haGroups": {
       return <HAGroupsDialog cluster={c} onClose={onClose} />;
+    }
+    case "talos": {
+      return <TalosDialog cluster={c} onClose={onClose} />;
     }
     case "oidc": {
       break;
@@ -210,8 +215,13 @@ export function Options<A extends string = never>({
   const haGroups = useHAGroupsOffer(c);
   const cis = c.variables["cis"] === true;
   const podSecurity = enforced(podSecurityOf(c.variables["podSecurity"]), cis);
+  const talos: OptionRow[] =
+    c.distribution === "talos"
+      ? [{ label: "Talos release", value: talosOf(c), action: "talos", button: "Upgrade", name: "Talos" }]
+      : [];
   const rows: OptionRow<OptionAction | A>[] = [
     ...nodeOSRows(c),
+    ...talos,
     { label: "Pod network", value: cniName(text(c.variables["cni"]) ?? "") || "The distribution's own" },
     {
       label: "Load balancer",
@@ -307,7 +317,7 @@ export function Options<A extends string = never>({
     },
     {
       label: "Automatic upgrades",
-      value: describe(upgrades, refreshesNodes(upgrades, c.distribution)),
+      value: describe(upgrades, refreshesNodes(upgrades), c.distribution),
       action: "upgrades",
       name: "automatic upgrades",
     },

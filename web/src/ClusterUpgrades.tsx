@@ -10,7 +10,10 @@ export type UpgradeMode = (typeof upgradeModes)[number];
 
 export interface UpgradePolicy {
   mode?: UpgradeMode | undefined;
-  /** The nodes move to new builds of their VM template inside the window; unset means on. */
+  /**
+   * The nodes move to new builds of their VM template inside the window, or on Talos to the newest
+   * patch release of their Talos minor version; unset means on.
+   */
   nodeImages?: boolean | undefined;
   window?:
     | {
@@ -52,9 +55,13 @@ const lastMonthDay = 31;
 const stepMinutes = 30;
 const shortestHours = 0.5;
 
-/** refreshesNodes tells whether a policy moves the nodes to new template builds: on unless it says off, and never for Talos, whose nodes take their updates by upgrading Talos. */
-export const refreshesNodes = (p: UpgradePolicy, distribution: string): boolean =>
-  distribution !== "talos" && p.nodeImages !== false;
+/** refreshesNodes tells whether a policy moves the nodes to new template builds, or Talos patch releases: on unless it says off. */
+export const refreshesNodes = (p: UpgradePolicy): boolean => p.nodeImages !== false;
+
+// Talos nodes take their updates as Talos patch releases, upgraded in place, where the others are
+// replaced with clones of new template builds.
+const nodeUpdates = (distribution: string): string =>
+  distribution === "talos" ? "Talos patch releases" : "new node images";
 
 /** ModeSelect chooses an automatic upgrade policy's mode, for the dialog and the create wizard. */
 export function ModeSelect({
@@ -85,8 +92,8 @@ export function ModeSelect({
 }
 
 // describe says in words when a policy upgrades a cluster, and moves its nodes to new template
-// builds when nodeImages says the cluster's nodes may be.
-export function describe(p: UpgradePolicy, nodeImages = false): string {
+// builds, or Talos patch releases, when nodeImages says the cluster's nodes may be.
+export function describe(p: UpgradePolicy, nodeImages = false, distribution = ""): string {
   const upgrades = p.mode !== undefined && p.mode !== "off";
   if (!upgrades && !nodeImages) {
     return "Off";
@@ -95,10 +102,10 @@ export function describe(p: UpgradePolicy, nodeImages = false): string {
   const monthDays = w.monthDays ?? [];
   const days = [...(w.weekdays ?? []), ...(monthDays.length > 0 ? [`day ${monthDays.join(", ")} of the month`] : [])];
   const hours = (w.durationMinutes ?? defaultMinutes) / minutesPerHour;
-  const what = [
-    ...(upgrades ? [p.mode === "patch" ? "Patch releases" : "Patch and minor releases"] : []),
-    ...(nodeImages ? [upgrades ? "new node images" : "New node images"] : []),
-  ].join(" and ");
+  // Beside Talos's own releases, Kubernetes' are named as such.
+  const kubernetes = `${distribution === "talos" ? "Kubernetes " : ""}${p.mode === "patch" ? "patch releases" : "patch and minor releases"}`;
+  const phrase = [...(upgrades ? [kubernetes] : []), ...(nodeImages ? [nodeUpdates(distribution)] : [])].join(" and ");
+  const what = phrase.charAt(0).toUpperCase() + phrase.slice(1);
   return `${what}, ${days.length > 0 ? days.join(", ") : "every day"} from ${w.start ?? defaultStart} for ${hours} h (${
     w.timeZone ?? "UTC"
   })`;
@@ -122,8 +129,7 @@ export function windowProblems(monthDays: string, hours: string): { monthDays?: 
 // PolicyFields are the dialog's fields, as typed.
 interface PolicyFields {
   mode: UpgradeMode;
-  // Undefined for Talos, whose nodes have no template builds to move to.
-  nodeImages: boolean | undefined;
+  nodeImages: boolean;
   days: string[];
   monthDays: string;
   start: string;
@@ -131,10 +137,10 @@ interface PolicyFields {
   timeZone: string;
 }
 
-function fieldsOf(current: UpgradePolicy, distribution: string): PolicyFields {
+function fieldsOf(current: UpgradePolicy): PolicyFields {
   const w = current.window ?? {};
-  const nodeImages = distribution === "talos" ? undefined : refreshesNodes(current, distribution);
-  const active = (current.mode !== undefined && current.mode !== "off") || nodeImages === true;
+  const nodeImages = refreshesNodes(current);
+  const active = (current.mode !== undefined && current.mode !== "off") || nodeImages;
   return {
     mode: current.mode ?? "off",
     nodeImages,
@@ -148,11 +154,11 @@ function fieldsOf(current: UpgradePolicy, distribution: string): PolicyFields {
 }
 
 // windowed tells whether the fields need a window: something happens in it.
-const windowed = (f: Pick<PolicyFields, "mode" | "nodeImages">): boolean => f.mode !== "off" || f.nodeImages === true;
+const windowed = (f: Pick<PolicyFields, "mode" | "nodeImages">): boolean => f.mode !== "off" || f.nodeImages;
 
 // policyOf is the policy the fields save; nodeImages is written only when off, as on is the default.
 function policyOf(f: PolicyFields): UpgradePolicy {
-  const off = f.nodeImages === false ? { nodeImages: false } : {};
+  const off = f.nodeImages ? {} : { nodeImages: false };
   if (!windowed(f)) {
     return { mode: "off", ...off };
   }
@@ -172,7 +178,8 @@ function policyOf(f: PolicyFields): UpgradePolicy {
 }
 
 export function UpgradesDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
-  const initial = fieldsOf(upgradePolicy(c.variables["upgrades"]), c.distribution);
+  const initial = fieldsOf(upgradePolicy(c.variables["upgrades"]));
+  const talos = c.distribution === "talos";
   const [mode, setMode] = useState<UpgradeMode>(initial.mode);
   const [nodeImages, setNodeImages] = useState(initial.nodeImages);
   const [days, setDays] = useState<string[]>(initial.days);
@@ -225,24 +232,20 @@ export function UpgradesDialog({ cluster: c, onClose }: { cluster: Cluster; onCl
         the window closes first.
       </p>
       <Field label="Upgrade automatically">{(id) => <ModeSelect id={id} value={mode} onChange={setMode} />}</Field>
-      {nodeImages !== undefined && (
-        <>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={nodeImages}
-              aria-describedby={nodeImagesHint}
-              onChange={(e) => setNodeImages(e.target.checked)}
-            />{" "}
-            Move the nodes to new template builds
-          </label>
-          <p className="muted" id={nodeImagesHint}>
-            When the VM templates are built again with the node OS&apos;s updates, the nodes are replaced one at a time
-            with clones of the new build inside the window, once the build is a day old, whatever the upgrade setting
-            says.
-          </p>
-        </>
-      )}
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={nodeImages}
+          aria-describedby={nodeImagesHint}
+          onChange={(e) => setNodeImages(e.target.checked)}
+        />{" "}
+        {talos ? "Move the nodes to new Talos patch releases" : "Move the nodes to new template builds"}
+      </label>
+      <p className="muted" id={nodeImagesHint}>
+        {talos
+          ? "When Talos publishes a newer patch release of the minor version the nodes run, they are upgraded to it in place inside the window, one at a time and control planes first, whatever the upgrade setting says."
+          : "When the VM templates are built again with the node OS's updates, the nodes are replaced one at a time with clones of the new build inside the window, once the build is a day old, whatever the upgrade setting says."}
+      </p>
       {withWindow && (
         <>
           <fieldset className="group">

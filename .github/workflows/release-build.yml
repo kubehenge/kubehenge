@@ -29,6 +29,9 @@ on:
       helm-addon:
         description: The digest of the Add-on Provider for Helm's image
         value: ${{ jobs.build.outputs.helm-addon }}
+      talos-control-plane:
+        description: The digest of the Talos control-plane provider's image
+        value: ${{ jobs.build.outputs.talos-control-plane }}
     # An environment's secret reaches a called workflow only when the caller names it, and only
     # the job that sets that environment receives its value: the sign job.
     secrets:
@@ -49,6 +52,7 @@ env:
   CONTROLLER_REPOSITORY: ghcr.io/kubehenge/kubehenge
   CAPMOX_REPOSITORY: ghcr.io/kubehenge/cluster-api-provider-proxmox
   HELM_ADDON_REPOSITORY: ghcr.io/kubehenge/cluster-api-addon-provider-helm
+  TALOS_CONTROL_PLANE_REPOSITORY: ghcr.io/kubehenge/cluster-api-control-plane-provider-talos
 
 jobs:
   # Nothing is built until the commit has shown it is one to release: a signed tag on a signed
@@ -216,6 +220,7 @@ jobs:
       controller: ${{ steps.images.outputs.controller }}
       capmox: ${{ steps.images.outputs.capmox }}
       helm-addon: ${{ steps.images.outputs.helm-addon }}
+      talos-control-plane: ${{ steps.images.outputs.talos-control-plane }}
     env:
       VERSION: ${{ needs.gate.outputs.version }}
     steps:
@@ -248,6 +253,9 @@ jobs:
           digest capmox "$CAPMOX_REPOSITORY" "$printed"
           printed=$(make -s helm-addon-image HELM_ADDON_IMAGE="$HELM_ADDON_REPOSITORY" | tail -n 1)
           digest helm-addon "$HELM_ADDON_REPOSITORY" "$printed"
+          printed=$(make -s talos-control-plane-image \
+            TALOS_CONTROL_PLANE_IMAGE="$TALOS_CONTROL_PLANE_REPOSITORY" | tail -n 1)
+          digest talos-control-plane "$TALOS_CONTROL_PLANE_REPOSITORY" "$printed"
 
       - name: Appliance archive and index
         env:
@@ -329,6 +337,7 @@ jobs:
       CONTROLLER: ${{ needs.build.outputs.controller }}
       CAPMOX: ${{ needs.build.outputs.capmox }}
       HELM_ADDON: ${{ needs.build.outputs.helm-addon }}
+      TALOS_CONTROL_PLANE: ${{ needs.build.outputs.talos-control-plane }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -359,6 +368,9 @@ jobs:
           scripts/sbom.sh image "$HELM_ADDON_REPOSITORY@$HELM_ADDON" \
             sigs.k8s.io/cluster-api-addon-provider-helm \
             sbom/cluster-api-addon-provider-helm.spdx.json
+          scripts/sbom.sh image "$TALOS_CONTROL_PLANE_REPOSITORY@$TALOS_CONTROL_PLANE" \
+            github.com/siderolabs/cluster-api-control-plane-provider-talos \
+            sbom/cluster-api-control-plane-provider-talos.spdx.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-sboms
@@ -382,6 +394,7 @@ jobs:
       CONTROLLER: ${{ needs.build.outputs.controller }}
       CAPMOX: ${{ needs.build.outputs.capmox }}
       HELM_ADDON: ${{ needs.build.outputs.helm-addon }}
+      TALOS_CONTROL_PLANE: ${{ needs.build.outputs.talos-control-plane }}
     steps:
       # The one file of the repository this job runs, which installs cosign and checks its digest.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -417,7 +430,8 @@ jobs:
           set -eu
           echo "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           cosign sign --yes "$CONTROLLER_REPOSITORY@$CONTROLLER" "$CAPMOX_REPOSITORY@$CAPMOX" \
-            "$HELM_ADDON_REPOSITORY@$HELM_ADDON"
+            "$HELM_ADDON_REPOSITORY@$HELM_ADDON" \
+            "$TALOS_CONTROL_PLANE_REPOSITORY@$TALOS_CONTROL_PLANE"
 
       - name: Provenance of the files
         id: provenance
@@ -475,6 +489,19 @@ jobs:
           subject-name: ${{ env.HELM_ADDON_REPOSITORY }}
           subject-digest: ${{ env.HELM_ADDON }}
           sbom-path: sbom/cluster-api-addon-provider-helm.spdx.json
+          push-to-registry: true
+      - name: Provenance of the Talos control-plane provider image
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.TALOS_CONTROL_PLANE_REPOSITORY }}
+          subject-digest: ${{ env.TALOS_CONTROL_PLANE }}
+          push-to-registry: true
+      - name: SBOM of the Talos control-plane provider image
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.TALOS_CONTROL_PLANE_REPOSITORY }}
+          subject-digest: ${{ env.TALOS_CONTROL_PLANE }}
+          sbom-path: sbom/cluster-api-control-plane-provider-talos.spdx.json
           push-to-registry: true
 
       # The attestations are stored on the repository too, but only a verifier with GitHub's API

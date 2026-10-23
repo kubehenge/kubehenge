@@ -51,7 +51,7 @@ type versionChange struct {
 // own first.
 var componentOrder = []string{
 	"talos", "kubernetes", "cluster_api", "capmox", "rke2", "k3s", "ipam_in_cluster", "helm_addon",
-	"cert_manager", "capi_operator", "kubehenge",
+	"talos_bootstrap", "talos_control_plane", "cert_manager", "capi_operator", "kubehenge",
 }
 
 // managementUpgrade is nil until an apply of a release that records itself has succeeded.

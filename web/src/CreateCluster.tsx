@@ -27,11 +27,12 @@ import {
   namespaceOf,
   withNamespace,
   withRoom,
+  withTalosRelease,
   type FieldKey,
   type Form,
   type Step,
 } from "./create-form";
-import { GeneralStep, IdentityStep, MachinesStep, NetworkStep } from "./CreateSteps";
+import { GeneralStep, IdentityStep, MachinesStep, NetworkStep, useClassTalos } from "./CreateSteps";
 import { haGroupsOffer, offersHA, useHARules } from "./Placement";
 import { navigate } from "./router";
 import type { Bridge, Cluster, ClusterClass, PveNode, Storage, Versions } from "./types";
@@ -94,6 +95,7 @@ export function CreateCluster({
   // Kubeadm offers the versions with a template on the node OS chosen.
   const kubeadmOS = versionsNodeOS(entered, cls);
   const offered = cls ? versionsBy[versionsKey(cls.distribution, kubeadmOS)] : undefined;
+  const talos = useClassTalos(cls);
 
   useEffect(() => {
     let current = true;
@@ -176,7 +178,7 @@ export function CreateCluster({
   // Where there is only one bridge or storage to choose, it is chosen until another is.
   const form: Form = withBackupChoices(
     {
-      ...entered,
+      ...withTalosRelease(entered, talos, offered),
       namespace: namespaces.length > 1 ? namespaceOf(entered, namespaces) : "",
       bridge: filled(entered.bridge)
         ? entered.bridge
@@ -306,6 +308,7 @@ export function CreateCluster({
               classes={classes}
               cls={cls}
               offered={offered}
+              talos={talos}
               onChooseClass={chooseClass}
               namespaces={namespaces}
               onChooseNamespace={chooseNamespace}

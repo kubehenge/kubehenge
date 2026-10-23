@@ -35,9 +35,9 @@ export function filled(s: string | null | undefined): s is string {
   return s !== undefined && s !== null && s !== "";
 }
 
-const distributionNames: Record<string, string> = { rke2: "RKE2", k3s: "k3s", kubeadm: "kubeadm" };
+const distributionNames: Record<string, string> = { rke2: "RKE2", k3s: "k3s", kubeadm: "kubeadm", talos: "Talos" };
 
-/** distributionName is how a distribution is written for people: RKE2, k3s, kubeadm. */
+/** distributionName is how a distribution is written for people: RKE2, k3s, kubeadm, Talos. */
 export const distributionName = (d: string): string => distributionNames[d] ?? d;
 
 const cniNames: Record<string, string> = { cilium: "Cilium", calico: "Calico", canal: "Canal", flannel: "Flannel" };

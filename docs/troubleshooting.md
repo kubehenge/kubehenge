@@ -125,6 +125,7 @@ The interface refuses a cluster whose template the controller does not find in t
 
 - RKE2 and k3s need a build of the shared template (**Build a template**, For: RKE2 and k3s, on the Administration page, or `kubehenge template create rke2` with the default `--os`).
 - kubeadm needs a build of the template of the cluster's exact Kubernetes version, for creating a cluster and for upgrading one.
+- Talos needs the template of the release in the cluster's `kubehenge.dev/talos-image` annotation (**Build a template**, For: Talos, or `kubehenge template create talos --talos-version <release>`); Talos templates are never deleted by the weekly build, so an administrator deletes those of releases no cluster boots any more.
 - A cluster's machines clone the build its node image time picks ([templates.md](templates.md#how-clusters-find-them)); with that build deleted they take the one before it, or the oldest left, and with none left of the line, none.
 - The template has to be in the template pool, `kubehenge-templates`, the only one Cluster API may clone from.
 - Two templates with the same tags are no match either.

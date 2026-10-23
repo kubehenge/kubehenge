@@ -99,6 +99,12 @@ func (h *Hooks) BeforeClusterUpgrade(ctx context.Context, req *runtimehooksv1.Be
 		resp.Message = err.Error()
 		return
 	}
+	// A node rebooting into another Talos release would leave the rollout one machine short.
+	if upgrading := req.Cluster.Annotations[TalosUpgradingAnnotation]; upgrading != "" {
+		resp.RetryAfterSeconds = 30
+		resp.Message = "waiting for the Talos upgrade of " + upgrading
+		return
+	}
 	moved, err := h.newestNodeImages(ctx, &req.Cluster, req.ToKubernetesVersion)
 	switch {
 	case err != nil:
@@ -165,6 +171,18 @@ func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.Bef
 		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
 		return
 	}
+	if isTalos(cluster) {
+		waiting, err := h.talosImageReady(ctx, cluster, class)
+		if err != nil {
+			resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
+			return
+		}
+		if waiting != "" {
+			resp.RetryAfterSeconds = 10
+			resp.Message = waiting
+			return
+		}
+	}
 	s := &corev1.Secret{}
 	err := h.Reader.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: credentialsSecretName(cluster)}, s)
 	switch {
@@ -193,6 +211,7 @@ func (h *Hooks) refusal(ctx context.Context, cluster *clusterv1.Cluster, class *
 		func() error { return h.checkDatastoreAllocate(ctx, cluster, class) },
 		func() error { return h.checkVolumeSnapshots(ctx, cluster, class) },
 		func() error { return h.checkSysAudit(cluster) },
+		func() error { return checkTalos(nil, cluster) },
 	} {
 		if err := check(); err != nil {
 			return err
@@ -204,6 +223,9 @@ func (h *Hooks) refusal(ctx context.Context, cluster *clusterv1.Cluster, class *
 // newestNodeImages moves a cluster's node image time to now when that changes the build its
 // machines at the version are cloned from, and tells whether it did.
 func (h *Hooks) newestNodeImages(ctx context.Context, c *clusterv1.Cluster, version string) (bool, error) {
+	if h.Client != nil && isTalos(c) {
+		return h.newestTalosImage(ctx, c)
+	}
 	if h.Client == nil || !RefreshesNodes(c) {
 		return false, nil
 	}

@@ -18,7 +18,9 @@ What Kubehenge's first release does, what comes next, and what may come later.
 
 ## Next
 
-- A Talos ClusterClass, once Cluster API's Talos providers support ClusterClass in a release.
+- A Talos ClusterClass, with each node's Talos release upgraded in place one node at a time, control planes first, and automatic patch upgrades inside the maintenance window.
+- Restoring a Talos cluster's etcd snapshot, through the Talos API rather than the guest agent.
+- The Talos control-plane provider from an upstream release once one carries ClusterClass support, in place of Kubehenge's build.
 
 ## Later
 

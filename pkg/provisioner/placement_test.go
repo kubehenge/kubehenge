@@ -207,11 +207,30 @@ func TestOnlineNodesLeavesOutNodesThatAreDown(t *testing.T) {
 func TestNodesForTheNodeOSesCPU(t *testing.T) {
 	t.Parallel()
 	online := []Node{{"pve1", 2}, {"pve2", 3}, {"pve3", 4}}
-	if got := nodesFor(online, templates.DefaultNodeOS); !slices.Equal(got, []string{"pve1", "pve2", "pve3"}) {
+	if got := nodesFor(online, templates.CPULevel(templates.DefaultNodeOS)); !slices.Equal(got, []string{"pve1", "pve2", "pve3"}) {
 		t.Errorf("AlmaLinux runs on %v", got)
 	}
-	if got := nodesFor(online, templates.NodeOS{Family: "rocky", Release: "10"}); !slices.Equal(got, []string{"pve2", "pve3"}) {
+	if got := nodesFor(online, templates.CPULevel(templates.NodeOS{Family: "rocky", Release: "10"})); !slices.Equal(got, []string{"pve2", "pve3"}) {
 		t.Errorf("Rocky Linux runs on %v", got)
+	}
+	// Talos is its own OS: a nodeOS variable, which its class does not have, would not move it.
+	talos := talosCluster("web", "v1.14.4")
+	talos.Spec.Topology.Variables = append(talos.Spec.Topology.Variables, nodeOSVariable(t, "rocky", "10"))
+	level, err := clusterCPULevel(talos)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := nodesFor(online, level); !slices.Equal(got, []string{"pve1", "pve2", "pve3"}) {
+		t.Errorf("Talos runs on %v", got)
+	}
+}
+
+func TestCheckNodeOSLeavesTalosAlone(t *testing.T) {
+	t.Parallel()
+	c := talosCluster("web", "v1.14.4")
+	h := &Hooks{Nodes: &fakeNodes{online: []string{"pve1"}, levels: map[string]int{"pve1": 1}}}
+	if err := h.checkNodeOS(t.Context(), c); err != nil {
+		t.Errorf("a Talos cluster refused for its node OS: %v", err)
 	}
 }
 

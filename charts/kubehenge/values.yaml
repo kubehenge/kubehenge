@@ -15,6 +15,26 @@ providerNamespaces:
   kubehenge-kubeadm: [kubeadm-bootstrap-system, kubeadm-control-plane-system]
   kubehenge-rke2: [rke2-bootstrap-system, rke2-control-plane-system]
   kubehenge-k3s: [k3s-bootstrap-system, k3s-control-plane-system]
+  kubehenge-talos: [talos-bootstrap-system, talos-control-plane-system]
+
+talos:
+  # The images Talos workload clusters' nodes pull only with their publishers' keyless signatures,
+  # as Talos's ImageVerificationConfig rules: the Image Factory's builds of a release differ in
+  # their bytes, so no digest of its installer stays valid, and Talos's Kubernetes upgrades name the
+  # components by tag. The management cluster's module passes its own, which its nodes pull by.
+  imageSignatures:
+    - image: factory.talos.dev/*
+      keyless:
+        issuer: https://accounts.google.com
+        subject: image-factory-signing@talos-production.iam.gserviceaccount.com
+    - image: ghcr.io/siderolabs/*
+      keyless:
+        issuer: https://accounts.google.com
+        subjectRegex: ^(releasemgr-svc@talos-production\.iam\.gserviceaccount\.com|[^@]+@siderolabs\.com)$
+    - image: registry.k8s.io/*
+      keyless:
+        issuer: https://accounts.google.com
+        subject: krel-trust@k8s-releng-prod.iam.gserviceaccount.com
 
 interface:
   # Namespace the web interface creates clusters in; it changes and hands out kubeconfigs only of

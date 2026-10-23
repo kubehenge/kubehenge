@@ -7,17 +7,19 @@
 # <test> is management-cluster (applies the management cluster, runs the templates and volumes tests
 # while it is up, and destroys it), management-cluster-upgrade (applies and destroys it), appliance
 # (installs the appliance, which sets the management cluster up and removes it), or kubeadm, rke2,
-# k3s, rancher, cluster-mesh, node-image-refresh or autoscaler, which first apply the management
-# cluster and create the templates they need, and leave it up.
+# k3s, talos, rancher, cluster-mesh, node-image-refresh or autoscaler, which first apply the
+# management cluster and create the templates they need, and leave it up.
 #
 # The workload clusters start one minor version behind the management cluster's Kubernetes and are
-# upgraded to it; KUBEHENGE_E2E_FROM names the release they start on.
+# upgraded to it; KUBEHENGE_E2E_FROM names the release they start on. The Talos cluster starts on
+# the Talos release KUBEHENGE_E2E_TALOS_FROM names, by default the one before the release
+# templates are made from, and its nodes are upgraded in place to the latter.
 set -eu
 
 work=$(readlink -f "${1:?usage: $0 <work directory> <test>}")
 test=${2:?usage: $0 <work directory> <test>}
 case "${test}" in
-    management-cluster | management-cluster-upgrade | appliance | kubeadm | rke2 | k3s | rancher | cluster-mesh | node-image-refresh | autoscaler) ;;
+    management-cluster | management-cluster-upgrade | appliance | kubeadm | rke2 | k3s | talos | rancher | cluster-mesh | node-image-refresh | autoscaler) ;;
     *)
         echo "unknown test ${test}" >&2
         exit 2
@@ -32,6 +34,20 @@ repo=$(readlink -f "$(dirname "$0")/../../..")
 from=${KUBEHENGE_E2E_FROM:-v1.36.5}
 to=$(sed -n 's/^ *kubernetes *= *"\(v[^"]*\)".*/\1/p' "${repo}/management-cluster/versions.tf")
 [ -n "${to}" ]
+if [ "${test}" = talos ]; then
+    talos_to=$(sed -n 's/^[[:space:]]*DefaultTalosVersion = "\(v[^"]*\)".*/\1/p' "${repo}/pkg/templates/plan.go")
+    [ -n "${talos_to}" ]
+    # The newest release before it that the Image Factory serves, the templates' source, which is
+    # the patch before it unless it opens a minor version.
+    talos_from=${KUBEHENGE_E2E_TALOS_FROM:-$(curl -fsS --retry 5 --retry-all-errors https://factory.talos.dev/versions |
+        jq -r --arg to "${talos_to}" '
+            def key: ltrimstr("v") | split(".") | map(tonumber);
+            ($to | key) as $t | [.[] | select(test("^v[0-9]+[.][0-9]+[.][0-9]+$")) | select(key < $t)] | max_by(key) // empty')}
+    [ -n "${talos_from}" ] || {
+        echo "the Image Factory serves no Talos release before ${talos_to}" >&2
+        exit 1
+    }
+fi
 
 mkdir -p "${work}/mgmt" "${work}/plugins"
 # OpenTofu reads only the root module's lock, so the module's own checks the providers.
@@ -60,7 +76,7 @@ template() { # distribution [flags]
 # the build address.
 templates=
 case "${test}" in
-    rke2 | k3s | kubeadm | rancher | cluster-mesh | node-image-refresh | autoscaler)
+    rke2 | k3s | kubeadm | talos | rancher | cluster-mesh | node-image-refresh | autoscaler)
         make -s -C "${repo}" build
         {
             waited=0
@@ -83,6 +99,12 @@ case "${test}" in
                 kubeadm)
                     template kubeadm --kubernetes-version "${from}"
                     template kubeadm --kubernetes-version "${to}"
+                    ;;
+                # The release the cluster starts on, and the one its machines boot once the
+                # Kubernetes upgrade replaces them.
+                talos)
+                    template talos --talos-version "${talos_from}"
+                    template talos --talos-version "${talos_to}"
                     ;;
                 *) ;;
             esac
@@ -113,11 +135,14 @@ case "${TF_VAR_controller_image}" in
     # Anything else ends in the pushed image's digest.
     *) ;;
 esac
-# capmox and the Add-on Provider for Helm as a release publishes them, by the digests the module
-# names; the mirror serves them as ghcr.io's.
+# The providers Kubehenge builds, as a release publishes them, by the digests the module names; the
+# mirror serves them as ghcr.io's.
 make -s -C "${repo}" capmox-image CAPMOX_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-provider-proxmox" \
     KO_FLAGS=--insecure-registry > /dev/null
 make -s -C "${repo}" helm-addon-image HELM_ADDON_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-addon-provider-helm" \
+    KO_FLAGS=--insecure-registry > /dev/null
+make -s -C "${repo}" talos-control-plane-image \
+    TALOS_CONTROL_PLANE_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-control-plane-provider-talos" \
     KO_FLAGS=--insecure-registry > /dev/null
 
 # The tests' own output is shown as it comes rather than when each make target ends.
@@ -177,7 +202,7 @@ esac
 # nodes reach it by, under a certificate of a CA made for the run; the management cluster offers it
 # as a backup target.
 case "${test}" in
-    rke2 | k3s | kubeadm)
+    rke2 | k3s | kubeadm | talos)
         s3=${work}/s3
         mkdir -p "${s3}"
         openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 -subj /CN=kubehenge-e2e-s3-ca \
@@ -234,6 +259,11 @@ case "${test}" in
     kubeadm)
         export KUBEHENGE_E2E_CNI="${KUBEHENGE_E2E_CNI:-cilium}"
         e2e e2e-workload-cluster CLASS=kubehenge-kubeadm VERSION="${from}" UPGRADE="${to}"
+        ;;
+    talos)
+        # Talos's own CNI, flannel: the kubeadm run covers Cilium.
+        export KUBEHENGE_E2E_TALOS_VERSION="${talos_from}" KUBEHENGE_E2E_TALOS_UPGRADE="${talos_to}"
+        e2e e2e-workload-cluster CLASS=kubehenge-talos VERSION="${from}" UPGRADE="${to}"
         ;;
     rancher)
         export KUBEHENGE_E2E_RANCHER_ENDPOINT=172.20.99.20 KUBEHENGE_E2E_RANCHER_ADDRESSES=172.20.99.21-172.20.99.24

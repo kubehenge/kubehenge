@@ -12,6 +12,8 @@ namespaces:
   - kubeadm-control-plane-system
   - rke2-control-plane-system
   - k3s-control-plane-system
+  - talos-bootstrap-system
+  - talos-control-plane-system
   - proxmox-infrastructure-system
   - in-cluster-ipam-system
   - helm-addon-system
@@ -220,6 +222,48 @@ providers:
           target:
             kind: Deployment
       version: v0.0.0
+  - kind: BootstrapProvider
+    name: talos
+    namespace: talos-bootstrap-system
+    manifests:
+      metadata: https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/releases/download/v0.0.0-alpha.3/metadata.yaml@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      components: https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/releases/download/v0.0.0-alpha.3/bootstrap-components.yaml@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    spec:
+      deployment:
+        containers:
+          - name: manager
+            imageUrl: ghcr.io/siderolabs/cluster-api-talos-controller:v0.0.0-alpha.3@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      fetchConfig:
+        selector:
+          matchLabels:
+            kubehenge.dev/provider-manifests: bootstrapprovider-talos
+            provider.cluster.x-k8s.io/version: v0.0.0-alpha.3
+      patches:
+        - patch: *left-to-scaling
+          target:
+            kind: Deployment
+      version: v0.0.0-alpha.3
+  - kind: ControlPlaneProvider
+    name: talos
+    namespace: talos-control-plane-system
+    manifests:
+      metadata: kubehenge:talos-control-plane/metadata.yaml@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      components: kubehenge:talos-control-plane/control-plane-components.yaml@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    spec:
+      deployment:
+        containers:
+          - name: manager
+            imageUrl: ghcr.io/kubehenge/cluster-api-control-plane-provider-talos@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      fetchConfig:
+        selector:
+          matchLabels:
+            kubehenge.dev/provider-manifests: controlplaneprovider-talos
+            provider.cluster.x-k8s.io/version: v0.0.0-pr251
+      patches:
+        - patch: *left-to-scaling
+          target:
+            kind: Deployment
+      version: v0.0.0-pr251
   - kind: InfrastructureProvider
     name: proxmox
     namespace: proxmox-infrastructure-system

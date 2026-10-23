@@ -79,12 +79,18 @@ type EtcdDialer struct {
 	Remotes *Remotes
 	// Now is the clock the certificate is signed by; unset, the system's.
 	Now func() time.Time
+	// Talos reaches a Talos cluster's control-plane nodes, whose etcd runs as a Talos service, not a
+	// pod: their Talos API streams the snapshot.
+	Talos TalosDialer
 }
 
 var _ EtcdSource = &EtcdDialer{}
 
 // Snapshot streams a snapshot from the first member that answers.
 func (d *EtcdDialer) Snapshot(ctx context.Context, cluster *clusterv1.Cluster) (*EtcdStream, error) {
+	if isTalos(cluster) {
+		return d.talosSnapshot(ctx, cluster)
+	}
 	ca, err := etcdCA(ctx, d.Reader, cluster)
 	if err != nil {
 		return nil, err
