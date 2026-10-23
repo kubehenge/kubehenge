@@ -44,9 +44,9 @@ locals {
     # no TalosControlPlaneTemplate, which a ClusterClass's control plane needs. The forks publish
     # pre-releases.
     # renovate: datasource=github-releases depName=kubehenge/cluster-api-bootstrap-provider-talos
-    talos_bootstrap = "v0.7.0-alpha.4"
+    talos_bootstrap = "v0.7.0-alpha.5"
     # renovate: datasource=github-releases depName=kubehenge/cluster-api-control-plane-provider-talos
-    talos_control_plane = "v0.6.0-alpha.1"
+    talos_control_plane = "v0.6.0-alpha.2"
   }
 
   # The charts the management cluster runs beneath its providers, with their images, by digest.
@@ -123,13 +123,13 @@ locals {
     # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api-addon-provider-helm
     "kubernetes-sigs/cluster-api-addon-provider-helm/releases/download/v0.6.4/addon-components.yaml" = "a70f4eb77eac626231daca1e2a046b4b069bb84320efa327cc8c56a9c4ca03e6"
     # renovate: datasource=github-release-attachments depName=kubehenge/cluster-api-bootstrap-provider-talos
-    "kubehenge/cluster-api-bootstrap-provider-talos/releases/download/v0.7.0-alpha.4/metadata.yaml" = "d5774698bf60bd884217a24870366979b5c2ba9dc90fb1bf94e5edc13a7fe152"
+    "kubehenge/cluster-api-bootstrap-provider-talos/releases/download/v0.7.0-alpha.5/metadata.yaml" = "d5774698bf60bd884217a24870366979b5c2ba9dc90fb1bf94e5edc13a7fe152"
     # renovate: datasource=github-release-attachments depName=kubehenge/cluster-api-bootstrap-provider-talos
-    "kubehenge/cluster-api-bootstrap-provider-talos/releases/download/v0.7.0-alpha.4/bootstrap-components.yaml" = "91a1ba88fd8d98a9e202a1f0e13ec6dc71c121373b62cff121b1e5f603c16e32"
+    "kubehenge/cluster-api-bootstrap-provider-talos/releases/download/v0.7.0-alpha.5/bootstrap-components.yaml" = "f2d0cecc9416664125b96cfbc1077bc1310e7abfe977ec59824031cb56205206"
     # renovate: datasource=github-release-attachments depName=kubehenge/cluster-api-control-plane-provider-talos
-    "kubehenge/cluster-api-control-plane-provider-talos/releases/download/v0.6.0-alpha.1/metadata.yaml" = "12f69f607250e060f7dc0b52cb58aa606c33cab227aa876182baa45475ddf0e1"
+    "kubehenge/cluster-api-control-plane-provider-talos/releases/download/v0.6.0-alpha.2/metadata.yaml" = "12f69f607250e060f7dc0b52cb58aa606c33cab227aa876182baa45475ddf0e1"
     # renovate: datasource=github-release-attachments depName=kubehenge/cluster-api-control-plane-provider-talos
-    "kubehenge/cluster-api-control-plane-provider-talos/releases/download/v0.6.0-alpha.1/control-plane-components.yaml" = "3f94b208f39af788d608d88e2b4ddfec2e067c2f76644cf89f1f4762a67009f9"
+    "kubehenge/cluster-api-control-plane-provider-talos/releases/download/v0.6.0-alpha.2/control-plane-components.yaml" = "de1a213310bc1f23db9740e9035cea56337b86fad5bf411146221a23ff0cc230"
   }
 
   # Each provider's controller image by digest at its tested version, in place of the tag its
@@ -157,9 +157,9 @@ locals {
     # renovate: datasource=docker depName=registry.k8s.io/cluster-api-helm/cluster-api-helm-controller
     "AddonProvider/helm" = "registry.k8s.io/cluster-api-helm/cluster-api-helm-controller:v0.6.4@sha256:97d2a86f8e35d23bb4656b26f4564b35f109e47a0dc4860b71089e52eb6e6a24"
     # renovate: datasource=docker depName=ghcr.io/kubehenge/cluster-api-bootstrap-provider-talos
-    "BootstrapProvider/talos" = "ghcr.io/kubehenge/cluster-api-bootstrap-provider-talos:v0.7.0-alpha.4@sha256:4a93037d959622457eb47657ea3746af0e262fd3ebc3bad0e4742893560873a5"
+    "BootstrapProvider/talos" = "ghcr.io/kubehenge/cluster-api-bootstrap-provider-talos:v0.7.0-alpha.5@sha256:5563ee245820933a33162280ee46a36d7bb765ef3519b7b6c5da7d6e0aef1cb2"
     # renovate: datasource=docker depName=ghcr.io/kubehenge/cluster-api-control-plane-provider-talos
-    "ControlPlaneProvider/talos" = "ghcr.io/kubehenge/cluster-api-control-plane-provider-talos:v0.6.0-alpha.1@sha256:5e4792eafce6962cda8e8dc05f63bdce56cd15aa1959430c4481854a1cd55bfb"
+    "ControlPlaneProvider/talos" = "ghcr.io/kubehenge/cluster-api-control-plane-provider-talos:v0.6.0-alpha.2@sha256:836b3dbc56068c862f7d718545bf818021c802a55c553d3c3399307be790e882"
   }
 
   # capmox up to v0.9.1 refuses the changed machine template of a kubeadm cluster's upgrade (#735);
