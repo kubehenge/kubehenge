@@ -712,7 +712,8 @@ func defaultCertificate(domain string) *unstructured.Unstructured {
 			"secretName": ingressTLSSecret,
 			"dnsNames":   []any{domain, "*." + domain},
 			"issuerRef":  map[string]any{"name": ingressIssuer, "kind": clusterIssuerKind, "group": certManagerGroup},
-			"privateKey": map[string]any{"algorithm": "ECDSA", "size": keyBits, "rotationPolicy": "Always"},
+			// int64, the only integer an unstructured object can be copied with.
+			"privateKey": map[string]any{"algorithm": "ECDSA", "size": int64(keyBits), "rotationPolicy": "Always"},
 		},
 	}}
 }
@@ -721,7 +722,9 @@ func defaultCertificate(domain string) *unstructured.Unstructured {
 // its CRDs, its namespace, or its webhook, which checks the issuer and the certificate.
 func applyCertificates(ctx context.Context, workload client.Client, objects []*unstructured.Unstructured) (bool, error) {
 	for _, o := range objects {
-		err := workload.Apply(ctx, client.ApplyConfigurationFromUnstructured(o), client.FieldOwner(fieldOwner), client.ForceOwnership)
+		// A copy, since the client writes the server's answer back into what it applies, and an
+		// object carrying the managedFields that answer holds cannot be applied again.
+		err := workload.Apply(ctx, client.ApplyConfigurationFromUnstructured(o.DeepCopy()), client.FieldOwner(fieldOwner), client.ForceOwnership)
 		if meta.IsNoMatchError(err) || apierrors.IsInternalError(err) || apierrors.IsNotFound(err) {
 			return true, nil
 		}

@@ -16,6 +16,7 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -270,7 +271,13 @@ func newCertWorkload(t *testing.T, objs ...client.Object) *certWorkload {
 			if !w.installed {
 				return &meta.NoKindMatchError{GroupKind: o.GroupVersionKind().GroupKind()}
 			}
-			w.applied[key(o, o.GetKind())] = o.Object
+			// As the API server and the client do: an apply carrying managedFields is refused, and
+			// the answer, which carries them, is written back into the object applied.
+			if o.GetManagedFields() != nil {
+				return apierrors.NewBadRequest("metadata.managedFields must be nil")
+			}
+			w.applied[key(o, o.GetKind())] = o.DeepCopy().Object
+			o.SetManagedFields([]metav1.ManagedFieldsEntry{{Manager: fieldOwner, Operation: metav1.ManagedFieldsOperationApply}})
 			return nil
 		},
 		Delete: func(_ context.Context, _ client.WithWatch, obj client.Object, _ ...client.DeleteOption) error {
