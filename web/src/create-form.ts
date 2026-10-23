@@ -37,6 +37,7 @@ import {
 import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implementation } from "./LoadBalancer";
 import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
 import { addressBits, addressCount, inList, ipv4, isVLAN, list, rangeProblem, whole } from "./network";
+import { choosable, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import { allowedNodes, anyNode, haText, placeProblem, placeText, type HAGroupsOffer, type Place } from "./Placement";
 import {
@@ -47,7 +48,16 @@ import {
   podSecurityVariable,
   type PodSecurity,
 } from "./PodSecurity";
-import type { Bridge, Cluster, ClusterClass, CreateRequest, OIDCProvider, Schema, Storage } from "./types";
+import type {
+  Bridge,
+  Cluster,
+  ClusterClass,
+  CreateRequest,
+  NodeOSChoice,
+  OIDCProvider,
+  Schema,
+  Storage,
+} from "./types";
 import {
   browserZone,
   cniName,
@@ -92,6 +102,8 @@ export interface Form {
   namespace: string;
   name: string;
   className: string;
+  /** The node OS as one word, such as almalinux-10; empty while the class offers none. */
+  nodeOS: string;
   version: string;
   controlPlaneReplicas: number;
   /** The workers, or with workerAutoscale the fewest the cluster autoscaler keeps. */
@@ -380,6 +392,7 @@ export const newForm = (): Form => ({
   namespace: "",
   name: "",
   className: "",
+  nodeOS: "",
   version: "",
   controlPlaneReplicas: 1,
   workerReplicas: 1,
@@ -441,6 +454,36 @@ export function withNamespace(f: Form, namespace: string, current = f.namespace)
   return { ...f, namespace, meshPeers: namespace === current ? f.meshPeers : [] };
 }
 
+/** chosenNodeOS is the node OS a form's nodes run: the one chosen, else the class's default; none for Talos. */
+export function chosenNodeOS(f: Form, c: ClusterClass | undefined): NodeOSChoice | undefined {
+  return findNodeOS(c?.nodeOSes, f.nodeOS) ?? defaultNodeOS(c?.nodeOSes);
+}
+
+/** templateMissing says why no cluster of the class on the form's node OS can be built yet, if none can. */
+export function templateMissing(f: Form, c: ClusterClass | undefined): string | undefined {
+  return (c?.nodeOSes ?? []).length > 0 ? chosenNodeOS(f, c)?.noTemplate : c?.noTemplate;
+}
+
+// classNodeOS is the node OS a form keeps on a change of class: the one chosen, while the class
+// offers it, else the class's default.
+function classNodeOS(f: Form, c: ClusterClass | undefined, kept: boolean): string {
+  const held = findNodeOS(c?.nodeOSes, f.nodeOS);
+  const os = kept && held !== undefined && choosable(held) ? held : defaultNodeOS(c?.nodeOSes);
+  return os === undefined ? "" : nodeOSKey(os);
+}
+
+/** versionsNodeOS is the node OS the versions offered depend on: kubeadm's, whose templates are per version. */
+export function versionsNodeOS(f: Form, c: ClusterClass | undefined): string | undefined {
+  const os = c?.distribution === "kubeadm" ? chosenNodeOS(f, c) : undefined;
+  return os === undefined ? undefined : nodeOSKey(os);
+}
+
+// nodeOSVariable is the nodeOS variable of a form, for a class with node OSes.
+function nodeOSVariable(form: Form, c: ClusterClass): Record<string, unknown> {
+  const os = chosenNodeOS(form, c);
+  return os === undefined ? {} : { nodeOS: nodeOSRef(os) };
+}
+
 /**
  * withClass chooses a distribution's class, bringing its defaults, but only into what the user has
  * not set: a choice made on a later step stays, unless the new distribution does not offer it.
@@ -451,6 +494,7 @@ export function withClass(f: Form, c: ClusterClass | undefined, kept: (k: keyof 
   return {
     ...f,
     className: c?.name ?? "",
+    nodeOS: classNodeOS(f, c, kept("nodeOS")),
     version: f.version && c && new RegExp(c.versionFormat.pattern, "u").test(f.version) ? f.version : "",
     cni: kept("cni") && (cni?.enum ?? []).includes(f.cni) ? f.cni : cniDefault,
     controlPlaneMachine: kept("controlPlaneMachine")
@@ -566,6 +610,7 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
     storage: form.storage,
     controlPlaneMachine: form.controlPlaneMachine,
     workerMachine: form.workerMachine,
+    ...nodeOSVariable(form, c),
   };
   const nodes = allowedNodes(form.place);
   if (nodes !== undefined) {
@@ -638,6 +683,11 @@ function meshChoice(form: Form): string {
   return form.meshPeers.length > 0 ? `On, with ${form.meshPeers.toSorted().join(", ")}` : "On, with no peers yet";
 }
 
+function nodeOSRow(form: Form, c: ClusterClass): [string, string][] {
+  const os = chosenNodeOS(form, c);
+  return os === undefined ? [] : [["Node OS", os.title]];
+}
+
 // summary is what the Confirm step shows: each setting by its name, as the user chose it; Proxmox
 // VE HA, the CSI plugin's release and the HA group labels only where they can be chosen.
 export function summary(
@@ -654,6 +704,7 @@ export function summary(
     ...(form.namespace ? [["Namespace", form.namespace] as [string, string]] : []),
     ["Name", form.name],
     ["Distribution", distributionName(c.distribution)],
+    ...nodeOSRow(form, c),
     ["Kubernetes version", form.version],
     ["Control-plane nodes", String(form.controlPlaneReplicas)],
     [
@@ -775,6 +826,7 @@ export const rancherMinimumCores = 4;
 export type FieldKey =
   | "name"
   | "class"
+  | "nodeOS"
   | "version"
   | "controlPlaneReplicas"
   | "workerReplicas"
@@ -817,10 +869,14 @@ function generalProblems(form: Form, c: ClusterClass | undefined): Problems {
     p.name =
       "Lowercase letters, digits and dashes, starting with a letter and ending with a letter or digit, at most 40 characters.";
   }
+  const os = chosenNodeOS(form, c);
+  const missing = templateMissing(form, c);
   if (!c) {
     p.class = "Choose a distribution.";
-  } else if (filled(c.noTemplate)) {
-    p.class = sentence(c.noTemplate);
+  } else if (os !== undefined && !choosable(os)) {
+    p.nodeOS = sentence(`${os.title} cannot be chosen yet: ${os.unreleased ?? ""}`);
+  } else if (filled(missing)) {
+    p[os === undefined ? "class" : "nodeOS"] = sentence(missing);
   } else if (!new RegExp(c.versionFormat.pattern, "u").test(form.version)) {
     p.version = `${distributionName(c.distribution)} versions look like ${versionExamples[c.distribution] ?? "v1.36.5"}.`;
   }

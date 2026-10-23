@@ -75,7 +75,35 @@ export interface ClusterClass {
   variables: ClassVariable[];
   annotations?: Record<string, string>;
   versionFormat: { pattern: string };
-  /** Why no cluster of the class can be built yet: the template its machines clone is missing. */
+  /** Why no cluster of the class on its default node OS can be built yet: the template its machines clone is missing. */
+  noTemplate?: string;
+  /** The operating systems the class's nodes may run, in the order to offer them; absent for Talos. */
+  nodeOSes?: NodeOSChoice[];
+}
+
+/** A node OS as a cluster's nodeOS variable names it: a family, such as almalinux, and one of its releases. */
+export interface NodeOSRef {
+  family: string;
+  release: string;
+}
+
+/** A node OS Kubehenge builds VM templates of. */
+export interface NodeOS extends NodeOSRef {
+  /** As people read it, such as AlmaLinux 10. */
+  title: string;
+  /** The QEMU CPU type its VMs get, such as x86-64-v2-AES; the Proxmox VE nodes' CPUs have to offer it. */
+  cpuType: string;
+  /** The mandatory access control it enforces, such as selinux. */
+  mac: string;
+  /** What a cluster runs unless it chooses another. */
+  default?: boolean;
+  /** Why it cannot be chosen yet. */
+  unreleased?: string;
+}
+
+/** A node OS a class's clusters may run, and why none of them can be built on it yet. */
+export interface NodeOSChoice extends NodeOS {
+  /** Why no cluster of the class on it can be built yet: its template is missing. */
   noTemplate?: string;
 }
 
@@ -300,6 +328,8 @@ export interface Cluster {
   mesh?: MeshPeer[];
   /** Which template builds the nodes run and when they next move; absent for Talos. */
   nodeImage?: NodeImage;
+  /** The operating system the nodes run; absent for Talos. */
+  nodeOS?: NodeOS;
   /** The deploy key and the repository host's keys Kubehenge made for the cluster's GitOps. */
   gitops?: GitOpsKeys;
 }
@@ -417,7 +447,7 @@ export interface ManagementSettings {
   backupTargets?: BackupTarget[];
   /** The controller restores clusters' etcd through the Proxmox VE guest agent. */
   etcdRestore?: boolean;
-  /** The weekly build of the Ubuntu VM templates; absent, it runs with its defaults. */
+  /** The weekly build of the node OS VM templates; absent, it runs with its defaults. */
   templateRefresh?: TemplateRefreshSettings;
   /** Clusters may choose the cloud controller manager's HA group labels, with Sys.Audit on / for their token. */
   clusterSysAudit?: boolean;
@@ -431,7 +461,7 @@ export interface ManagementSettings {
   headlampActions?: boolean;
 }
 
-/** When and where the Ubuntu VM templates are built again; empty fields take the defaults. */
+/** When and where the node OS VM templates are built again; empty fields take the defaults. */
 export interface TemplateRefreshSettings {
   enabled: boolean;
   weekday?: string;
@@ -688,6 +718,8 @@ export interface VMTemplate {
   newest?: boolean;
   /** The cluster that clones from it, which keeps it from being deleted. */
   inUse?: string;
+  /** The operating system its machines run, such as AlmaLinux 10; absent for a Talos template. */
+  nodeOS?: string;
 }
 
 /** The weekly template build: its schedule, what was asked for, and how the last run went. */
@@ -717,20 +749,32 @@ export interface Templates {
   job?: Job;
   /** The weekly build, when it is on. */
   refresh?: TemplateRefresh;
+  /** The node OSes templates can be built of, and those not released yet. */
+  nodeOSes?: NodeOS[];
 }
 
 /** Whether a cluster creator may have a missing template built, and which builds are under way. */
 export interface TemplateBuilds {
   allowed: boolean;
-  /** Request keys not started yet, such as kubeadm-v1.37.1 or cloud-image. */
+  /** Request keys not started yet, such as rke2-almalinux-10 or kubeadm-v1.37.1-almalinux-10. */
   requested: string[];
   building: string[];
 }
 
-export interface TemplateRequest {
-  /** rke2 is the cloud image RKE2 and k3s share. */
-  distribution: "rke2" | "kubeadm";
+/** A cluster creator's request for a missing template. */
+export interface TemplateBuildRequest {
+  distribution: string;
+  /** For kubeadm, whose templates are of one Kubernetes version each. */
   kubernetesVersion?: string;
+  /** The node OS as one word, such as almalinux-10; absent, the default. */
+  nodeOS?: string;
+}
+
+export interface TemplateRequest {
+  distribution: "rke2" | "k3s" | "kubeadm";
+  kubernetesVersion?: string;
+  /** The node OS as one word, such as almalinux-10; absent, the default. */
+  nodeOS?: string;
   node: string;
   storage: string;
   importStorage: string;

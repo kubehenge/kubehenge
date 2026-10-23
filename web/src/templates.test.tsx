@@ -7,6 +7,7 @@ import { Templates, buildProblems, buildRequest } from "./Templates";
 
 const form = {
   distribution: "kubeadm" as const,
+  nodeOS: "",
   kubernetesVersion: "v1.37.1",
   node: "pve1",
   storage: "ceph",
@@ -28,8 +29,9 @@ describe("vM templates", () => {
     expect(buildProblems({ ...form, buildAddress: "192.0.2.50/24" })).toStrictEqual({
       buildAddress: "A static address needs its prefix length, a gateway and a DNS server.",
     });
-    expect(buildRequest({ ...form, distribution: "rke2", vlan: "30" })).toStrictEqual({
-      distribution: "rke2",
+    expect(buildRequest({ ...form, distribution: "k3s", nodeOS: "rocky-10", vlan: "30" })).toStrictEqual({
+      distribution: "k3s",
+      nodeOS: "rocky-10",
       node: "pve1",
       storage: "ceph",
       importStorage: "local",
@@ -59,22 +61,44 @@ describe("vM templates", () => {
             {
               vmid: 9001,
               node: "pve1",
-              name: "kubehenge-ubuntu-26.04-build-202610110100",
-              line: "kubehenge-ubuntu-26.04",
+              name: "kubehenge-rke2-almalinux-10-build-202610110100",
+              line: "kubehenge-rke2-almalinux-10",
               build: "build-202610110100",
               built: "2026-10-11T01:00:00Z",
               newest: true,
-              tags: [],
+              tags: ["kubehenge", "rke2", "os-almalinux-10", "build-202610110100"],
               inUse: "default/web",
+              nodeOS: "AlmaLinux 10",
             },
             {
               vmid: 9002,
               node: "pve1",
-              name: "kubehenge-kubeadm-v1.36.5-ubuntu-26.04-build-202610040100",
-              line: "kubehenge-kubeadm-v1.36.5-ubuntu-26.04",
+              name: "kubehenge-kubeadm-v1.36.5-rocky-10-build-202610040100",
+              line: "kubehenge-kubeadm-v1.36.5-rocky-10",
               build: "build-202610040100",
               built: "2026-10-04T01:00:00Z",
-              tags: [],
+              tags: ["kubehenge", "kubeadm", "os-rocky-10", "kubernetes-v1.36.5", "build-202610040100"],
+              nodeOS: "Rocky Linux 10",
+            },
+            { vmid: 9003, node: "pve1", name: "kubehenge-talos-v1.12.0", line: "kubehenge-talos-v1.12.0", tags: [] },
+          ],
+          nodeOSes: [
+            {
+              family: "almalinux",
+              release: "10",
+              title: "AlmaLinux 10",
+              cpuType: "x86-64-v2-AES",
+              mac: "selinux",
+              default: true,
+            },
+            { family: "rocky", release: "10", title: "Rocky Linux 10", cpuType: "x86-64-v3", mac: "selinux" },
+            {
+              family: "leap",
+              release: "16.1",
+              title: "openSUSE Leap 16.1",
+              cpuType: "x86-64-v2-AES",
+              mac: "selinux",
+              unreleased: "not released yet",
             },
           ],
           job: {
@@ -112,15 +136,30 @@ describe("vM templates", () => {
     const user = userEvent.setup({ delay: null });
     render(<Templates />);
 
-    const inUse = within(await screen.findByRole("row", { name: /kubehenge-ubuntu-26.04 \(9001\)/u }));
+    const inUse = within(await screen.findByRole("row", { name: /kubehenge-rke2-almalinux-10 \(9001\)/u }));
     expect(inUse.getByText(/\(newest\)/u)).toBeInTheDocument();
-    expect(inUse.getByRole("button", { name: "Delete kubehenge-ubuntu-26.04-build-202610110100" })).toBeDisabled();
+    expect(inUse.getByRole("cell", { name: "AlmaLinux 10" })).toBeInTheDocument();
+    expect(inUse.getByRole("button", { name: "Delete kubehenge-rke2-almalinux-10-build-202610110100" })).toBeDisabled();
+    const kubeadm = within(screen.getByRole("row", { name: /kubehenge-kubeadm-v1.36.5-rocky-10 \(9002\)/u }));
+    expect(kubeadm.getByRole("cell", { name: "Rocky Linux 10" })).toBeInTheDocument();
+    const talos = within(screen.getByRole("row", { name: /kubehenge-talos-v1.12.0 \(9003\)/u }));
+    expect(talos.getByRole("cell", { name: "Talos Linux" })).toBeInTheDocument();
     expect(screen.getByText(/failed: no import storage/u)).toBeInTheDocument();
     // The weekly build is off on this appliance.
     expect(within(screen.getByRole("region", { name: "Automatic builds" })).getByText(/^Off\./u)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Build a template" }));
     const dialog = screen.getByRole("dialog", { name: "Build a template" });
+    const distributions = within(within(dialog).getByLabelText("For"))
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+    expect(distributions).toStrictEqual(["RKE2", "k3s", "kubeadm"]);
+    // The default node OS comes chosen; one not released yet is shown but cannot be chosen.
+    const nodeOS = within(dialog).getByLabelText("Node OS");
+    expect(nodeOS).toHaveValue("almalinux-10");
+    expect(within(nodeOS).getByRole("option", { name: "openSUSE Leap 16.1: not released yet" })).toBeDisabled();
+    await user.selectOptions(nodeOS, "rocky-10");
+    expect(nodeOS).toHaveAccessibleDescription("Rocky Linux 10 needs Proxmox VE nodes with x86-64-v3 CPUs.");
     await user.selectOptions(within(dialog).getByLabelText("For"), "kubeadm");
     await user.type(within(dialog).getByLabelText("Kubernetes version"), "v1.37.1");
     await waitFor(() => expect(within(dialog).getByRole("option", { name: "ceph" })).toBeInTheDocument());
@@ -140,6 +179,7 @@ describe("vM templates", () => {
       expect(sent()).toStrictEqual({
         distribution: "kubeadm",
         kubernetesVersion: "v1.37.1",
+        nodeOS: "rocky-10",
         node: "pve1",
         storage: "ceph",
         importStorage: "local",
@@ -161,7 +201,7 @@ describe("vM templates", () => {
         state: "failed",
         trigger: "schedule",
         finished: "2026-10-18T00:20:00Z",
-        lines: ["kubehenge-ubuntu-26.04"],
+        lines: ["kubehenge-rke2-almalinux-10"],
         error: "the mirror is down",
         log: ["building", "failed"],
       },

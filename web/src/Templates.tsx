@@ -2,7 +2,8 @@ import { useEffect, useState, type JSX } from "react";
 
 import { api, bridgesOf } from "./api";
 import { isVLAN, list } from "./network";
-import type { Bridge, PveNode, Storage, TemplateRefresh, TemplateRequest, VMTemplate } from "./types";
+import { choosable, cpuNote, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSLabel } from "./node-os";
+import type { Bridge, Job, NodeOS, PveNode, Storage, TemplateRefresh, TemplateRequest, VMTemplate } from "./types";
 import {
   Choice,
   Dialog,
@@ -36,9 +37,10 @@ export function Templates(): JSX.Element {
     <div className="box">
       <h3>VM templates</h3>
       <p className="muted">
-        Every cluster's machines are clones of one of these. RKE2 and k3s share one template; kubeadm needs one for each
-        Kubernetes version its clusters run or upgrade to. Each build of an Ubuntu template is a template of its own;
-        clusters move to a newer build inside their maintenance windows.
+        Every cluster's machines are clones of one of these. RKE2 and k3s need a template each for every node OS their
+        clusters run; kubeadm needs one for each node OS and Kubernetes version its clusters run or upgrade to. Each
+        build of a node OS template is a template of its own; clusters move to a newer build inside their maintenance
+        windows.
       </p>
       <ErrorBox message={error} />
       {data && data.templates.length === 0 && <p>No templates yet: clusters cannot be created until there is one.</p>}
@@ -47,6 +49,7 @@ export function Templates(): JSX.Element {
           <thead>
             <tr>
               <th>Template</th>
+              <th>Node OS</th>
               <th>Build</th>
               <th>Node</th>
               <th>Used by</th>
@@ -61,6 +64,7 @@ export function Templates(): JSX.Element {
                 <td>
                   {t.line} <span className="muted">({t.vmid})</span>
                 </td>
+                <td>{t.nodeOS ?? "Talos Linux"}</td>
                 <td>
                   {t.built === undefined ? (
                     <span className="muted">Not rebuilt</span>
@@ -89,23 +93,7 @@ export function Templates(): JSX.Element {
           </tbody>
         </table>
       )}
-      {job && (
-        <div aria-live="polite">
-          <p className={job.state === "failed" ? "error" : "muted"}>
-            {job.state === "running" && `Building, started by ${job.user}…`}
-            {job.state === "succeeded" && `The last build, by ${job.user}, succeeded.`}
-            {job.state === "failed" && `The last build, by ${job.user}, failed: ${job.error ?? ""}`}
-          </p>
-          {(job.log ?? []).length > 0 && (
-            <details open={building}>
-              <summary>Log</summary>
-              <pre className="log" aria-label="Template log">
-                {(job.log ?? []).slice(-logLines).join("\n")}
-              </pre>
-            </details>
-          )}
-        </div>
-      )}
+      {job && <BuildJob job={job} />}
       <div className="actions">
         <button type="button" className="primary" disabled={!data || building} onClick={() => setCreating(true)}>
           Build a template
@@ -121,6 +109,7 @@ export function Templates(): JSX.Element {
       )}
       {creating && (
         <BuildDialog
+          nodeOSes={data?.nodeOSes ?? []}
           onClose={() => setCreating(false)}
           onStarted={() => {
             setCreating(false);
@@ -137,6 +126,28 @@ export function Templates(): JSX.Element {
             void reload();
           }}
         />
+      )}
+    </div>
+  );
+}
+
+// BuildJob says how the last build an administrator started went, with its log.
+function BuildJob({ job }: { job: Job }): JSX.Element {
+  const log = job.log ?? [];
+  return (
+    <div aria-live="polite">
+      <p className={job.state === "failed" ? "error" : "muted"}>
+        {job.state === "running" && `Building, started by ${job.user}…`}
+        {job.state === "succeeded" && `The last build, by ${job.user}, succeeded.`}
+        {job.state === "failed" && `The last build, by ${job.user}, failed: ${job.error ?? ""}`}
+      </p>
+      {log.length > 0 && (
+        <details open={job.state === "running"}>
+          <summary>Log</summary>
+          <pre className="log" aria-label="Template log">
+            {log.slice(-logLines).join("\n")}
+          </pre>
+        </details>
       )}
     </div>
   );
@@ -160,7 +171,7 @@ function lastRun(last: NonNullable<TemplateRefresh["last"]>): string {
   return `The last run${by} failed${at}: ${last.error ?? ""}`;
 }
 
-// AutomaticBuilds is the weekly build of the Ubuntu templates: when it runs, how its last run went,
+// AutomaticBuilds is the weekly build of the node OS templates: when it runs, how its last run went,
 // and Build now.
 function AutomaticBuilds({
   refresh,
@@ -176,8 +187,8 @@ function AutomaticBuilds({
       <section aria-label="Automatic builds">
         <h4>Automatic builds</h4>
         <p className="muted">
-          Off. With them on, Kubehenge builds the Ubuntu templates again every week with Ubuntu's updates, and clusters
-          move to them in their maintenance windows; switch them on in the management cluster's settings.
+          Off. With them on, Kubehenge builds the node OS templates again every week with each node OS's updates, and
+          clusters move to them in their maintenance windows; switch them on in the management cluster's settings.
         </p>
       </section>
     );
@@ -200,10 +211,10 @@ function AutomaticBuilds({
     <section aria-label="Automatic builds">
       <h4>Automatic builds</h4>
       <p>
-        Every {weekdayName(refresh.weekday)} at {refresh.time} ({refresh.timeZone}), Kubehenge builds the Ubuntu
-        templates clusters run again, with Ubuntu's updates. A cluster's nodes move to a new build in its maintenance
-        window once the build is {refresh.soakHours} hours old, unless the cluster switches that off. The two newest
-        builds of each template stay, and any older one a cluster still runs.
+        Every {weekdayName(refresh.weekday)} at {refresh.time} ({refresh.timeZone}), Kubehenge builds the node OS
+        templates clusters run again, with each node OS's updates. A cluster's nodes move to a new build in its
+        maintenance window once the build is {refresh.soakHours} hours old, unless the cluster switches that off. The
+        two newest builds of each template stay, and any older one a cluster still runs.
       </p>
       {refresh.next !== undefined && <p className="muted">Next build: {new Date(refresh.next).toLocaleString()}.</p>}
       <div aria-live="polite">
@@ -238,10 +249,12 @@ function AutomaticBuilds({
   );
 }
 
-const distributions = ["rke2", "kubeadm"] as const;
+const distributions = ["rke2", "k3s", "kubeadm"] as const;
 
 interface BuildForm {
   distribution: (typeof distributions)[number];
+  /** The node OS as one word, such as almalinux-10; empty, the default. */
+  nodeOS: string;
   kubernetesVersion: string;
   node: string;
   storage: string;
@@ -264,6 +277,9 @@ export function buildRequest(f: BuildForm): TemplateRequest {
   };
   if (f.distribution === "kubeadm") {
     req.kubernetesVersion = f.kubernetesVersion.trim();
+  }
+  if (f.nodeOS) {
+    req.nodeOS = f.nodeOS;
   }
   if (f.isoStorage) {
     req.isoStorage = f.isoStorage;
@@ -306,15 +322,25 @@ export function buildProblems(f: BuildForm): Partial<Record<keyof BuildForm, str
   return p;
 }
 
-function BuildDialog({ onClose, onStarted }: { onClose: () => void; onStarted: () => void }): JSX.Element {
+function BuildDialog({
+  nodeOSes,
+  onClose,
+  onStarted,
+}: {
+  nodeOSes: NodeOS[];
+  onClose: () => void;
+  onStarted: () => void;
+}): JSX.Element {
   const [nodes, setNodes] = useState<PveNode[]>([]);
   const [storages, setStorages] = useState<Storage[]>([]);
   const [bridges, setBridges] = useState<Bridge[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [touched, setTouched] = useState<ReadonlySet<keyof BuildForm>>(new Set());
+  const usual = defaultNodeOS(nodeOSes);
   const [entered, setEntered] = useState<BuildForm>({
     distribution: "rke2",
+    nodeOS: usual === undefined ? "" : nodeOSKey(usual),
     kubernetesVersion: "",
     node: "",
     storage: "",
@@ -414,9 +440,10 @@ function BuildDialog({ onClose, onStarted }: { onClose: () => void; onStarted: (
       }
     >
       <p className="muted">
-        Builds with your Proxmox VE session, in a few minutes. The image is checked against its publisher's signed
-        checksums, booted once to install updates and what the distribution needs, then turned into a template. A
-        template that exists already gets a new build beside it, which clusters move to in their maintenance windows.
+        Builds with your Proxmox VE session, in a few minutes. The node OS&apos;s image is checked against its
+        publisher&apos;s signed checksums and booted once to compose the node from the node OS&apos;s own signed
+        packages, only what a node needs and what the distribution needs, then turned into a template. A template that
+        exists already gets a new build beside it, which clusters move to in their maintenance windows.
       </p>
       <Field label="For">
         {(id) => (
@@ -430,15 +457,29 @@ function BuildDialog({ onClose, onStarted }: { onClose: () => void; onStarted: (
               }
             }}
           >
-            <option value="rke2">RKE2 and k3s</option>
+            <option value="rke2">RKE2</option>
+            <option value="k3s">k3s</option>
             <option value="kubeadm">kubeadm</option>
           </select>
         )}
       </Field>
+      {nodeOSes.length > 0 && (
+        <Field label="Node OS" hint={cpuNote(findNodeOS(nodeOSes, form.nodeOS), nodeOSes)}>
+          {(id) => (
+            <select id={id} value={form.nodeOS} onChange={(e) => set("nodeOS", e.target.value)}>
+              {nodeOSes.map((o) => (
+                <option key={nodeOSKey(o)} value={nodeOSKey(o)} disabled={!choosable(o)}>
+                  {nodeOSLabel(o)}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
+      )}
       {form.distribution === "kubeadm" && (
         <Field
           label="Kubernetes version"
-          hint="Such as v1.36.5: a kubeadm cluster can be created at, or upgraded to, versions with a template."
+          hint="Such as v1.36.5: a kubeadm cluster can be created at, or upgraded to, versions with a template on its node OS."
           error={shown("kubernetesVersion")}
         >
           {(id) => (
@@ -485,7 +526,7 @@ function BuildDialog({ onClose, onStarted }: { onClose: () => void; onStarted: (
       </Field>
       <Field
         label="Bridge"
-        hint="The VM that prepares the image needs to reach Ubuntu's and Kubernetes' package mirrors."
+        hint="The VM that prepares the image needs to reach the node OS's and Kubernetes' package repositories."
         error={shown("bridge")}
       >
         {(id) => <Choice id={id} value={form.bridge} options={bridgeNames} onChoose={(v) => set("bridge", v)} />}

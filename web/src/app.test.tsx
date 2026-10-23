@@ -18,7 +18,7 @@ import {
 } from "./create-form";
 import { fakeServer, held, reads, type Route } from "./fake-server";
 import { addressCount } from "./network";
-import type { Cluster, ClusterClass, ClusterHealth, Machine } from "./types";
+import type { Cluster, ClusterClass, ClusterHealth, Machine, NodeOSChoice } from "./types";
 
 const rke2: ClusterClass = {
   name: "kubehenge-rke2",
@@ -75,6 +75,30 @@ const rke2: ClusterClass = {
       },
     },
   ],
+};
+
+const alma: NodeOSChoice = {
+  family: "almalinux",
+  release: "10",
+  title: "AlmaLinux 10",
+  cpuType: "x86-64-v2-AES",
+  mac: "selinux",
+  default: true,
+};
+
+const rocky: NodeOSChoice = {
+  family: "rocky",
+  release: "10",
+  title: "Rocky Linux 10",
+  cpuType: "x86-64-v3",
+  mac: "selinux",
+};
+
+// rke2OS is rke2 as the server lists it: with the node OSes its clusters may run.
+const rke2OS: ClusterClass = {
+  ...rke2,
+  variables: [...rke2.variables, { name: "nodeOS", required: false, schema: { type: "object" } }],
+  nodeOSes: [alma, rocky],
 };
 
 const runningOn = (name: string, proxmoxNode: string, role: Machine["role"] = "control-plane"): Machine => ({
@@ -511,6 +535,7 @@ describe("create", () => {
     namespace: "",
     name: "web",
     className: "kubehenge-rke2",
+    nodeOS: "",
     version: "v1.36.5+rke2r1",
     controlPlaneReplicas: 3,
     workerReplicas: 2,
@@ -855,6 +880,27 @@ describe("create", () => {
     ).toHaveLength(1);
   });
 
+  it("runs the nodes on the node OS chosen, the class's default unless another is", () => {
+    const missing =
+      "there is no RKE2 VM template on Rocky Linux 10 yet; an administrator builds it on the Administration page";
+    const onOS = { ...rke2OS, nodeOSes: [alma, { ...rocky, noTemplate: missing }] };
+    expect(request(form, onOS).variables["nodeOS"]).toStrictEqual({ family: "almalinux", release: "10" });
+    expect(Object.fromEntries(summary(form, onOS))["Node OS"]).toBe("AlmaLinux 10");
+    expect(problems("General", form, onOS)).toStrictEqual([]);
+    const onRocky = { ...form, nodeOS: "rocky-10" };
+    expect(request(onRocky, onOS).variables["nodeOS"]).toStrictEqual({ family: "rocky", release: "10" });
+    expect(Object.fromEntries(summary(onRocky, onOS))["Node OS"]).toBe("Rocky Linux 10");
+    // The class's own message is for its default node OS; the one chosen has its own.
+    expect(fieldProblems("General", onRocky, { ...onOS, noTemplate: "for the default" })).toStrictEqual({
+      nodeOS:
+        "There is no RKE2 VM template on Rocky Linux 10 yet; an administrator builds it on the Administration page.",
+    });
+    expect(fieldProblems("General", form, { ...onOS, noTemplate: "for the default" })).toStrictEqual({});
+    // Talos offers none, and a class that does not define the variable is sent none.
+    expect(request(form, rke2).variables).not.toHaveProperty("nodeOS");
+    expect(Object.fromEntries(summary(form, rke2))).not.toHaveProperty("Node OS");
+  });
+
   it("leaves out variables the class does not define", () => {
     const k3s = { ...rke2, variables: rke2.variables.filter((v) => v.name !== "headlamp") };
     expect(request(form, k3s).variables).not.toHaveProperty("headlamp");
@@ -1095,7 +1141,7 @@ describe("create", () => {
     window.history.replaceState(null, "", "/clusters/new");
     const calls = fakeServer({
       "GET /api/session": () => ({ body: { user: "alice@pve", csrf: "c1" } }),
-      "GET /api/classes": () => ({ body: [rke2] }),
+      "GET /api/classes": () => ({ body: [rke2OS] }),
       "GET /api/proxmox/storages": () => ({
         body: [
           {
@@ -1134,6 +1180,9 @@ describe("create", () => {
     await user.type(await screen.findByLabelText("Name"), "lab");
     await waitFor(() => expect(screen.getByRole("option", { name: "RKE2" })).toBeInTheDocument());
     await user.selectOptions(screen.getByLabelText("Distribution"), "kubehenge-rke2");
+    expect(screen.getByLabelText("Node OS")).toHaveValue("almalinux-10");
+    await user.selectOptions(screen.getByLabelText("Node OS"), "rocky-10");
+    expect(screen.getByLabelText("Node OS")).toHaveAccessibleDescription(/needs Proxmox VE nodes with x86-64-v3 CPUs/u);
     await user.type(screen.getByLabelText("Kubernetes version"), "v1.36.5+rke2r1");
     await user.click(screen.getByRole("button", { name: "Next" }));
 
@@ -1206,6 +1255,7 @@ describe("create", () => {
       variables: {
         storage: "local-lvm",
         allowedNodes: ["pve2"],
+        nodeOS: { family: "rocky", release: "10" },
         cni: "canal",
         workerMachine: { cores: 4 },
         controlPlaneMachine: { cores: 4 },

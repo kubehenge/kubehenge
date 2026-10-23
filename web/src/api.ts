@@ -22,6 +22,7 @@ import type {
   SetupStatus,
   Storage,
   StoredCredential,
+  TemplateBuildRequest,
   TemplateBuilds,
   TemplateRefresh,
   TemplateRequest,
@@ -204,7 +205,8 @@ export interface Api {
   removeManagement: (passphrase: string) => Promise<Job>;
   upgrades: () => Promise<Upgrades>;
   upgrade: (version: string) => Promise<void>;
-  versions: (distribution: string) => Promise<Versions>;
+  /** nodeOS, such as almalinux-10, narrows kubeadm's versions to those with a template on it. */
+  versions: (distribution: string, nodeOS?: string) => Promise<Versions>;
   templates: () => Promise<Templates>;
   createTemplate: (req: TemplateRequest) => Promise<Job>;
   deleteTemplate: (vmid: number) => Promise<void>;
@@ -212,7 +214,7 @@ export interface Api {
   refreshTemplates: () => Promise<TemplateRefresh>;
   templateBuilds: () => Promise<TemplateBuilds>;
   /** Asks for a missing template, for one who may create clusters. */
-  requestTemplateBuild: (distribution: string, kubernetesVersion?: string) => Promise<void>;
+  requestTemplateBuild: (req: TemplateBuildRequest) => Promise<void>;
 
   upgradeSettings: (settings: Upgrades["settings"]) => Promise<Upgrades["settings"]>;
   /** Lets the appliance keep the state passphrase and a token of its own to apply unattended. */
@@ -274,14 +276,17 @@ export const api: Api = {
   removeManagement: (passphrase) => request("POST", "/api/setup/remove", { passphrase, confirm: "remove" }),
   upgrades: () => request("GET", "/api/appliance/upgrades"),
   upgrade: (version) => act("POST", "/api/appliance/upgrades", { version }),
-  versions: (distribution) => request("GET", `/api/versions/${encodeURIComponent(distribution)}`),
+  versions: (distribution, nodeOS) =>
+    request(
+      "GET",
+      `/api/versions/${encodeURIComponent(distribution)}${nodeOS === undefined ? "" : `?nodeOS=${encodeURIComponent(nodeOS)}`}`,
+    ),
   templates: () => request("GET", "/api/templates"),
   createTemplate: (req) => request("POST", "/api/templates", req),
   deleteTemplate: (vmid) => act("DELETE", `/api/templates/${vmid}`),
   refreshTemplates: () => request("POST", "/api/templates/refresh"),
   templateBuilds: () => request("GET", "/api/template-builds"),
-  requestTemplateBuild: (distribution, kubernetesVersion) =>
-    act("POST", "/api/template-builds", { distribution, kubernetesVersion }),
+  requestTemplateBuild: (req) => act("POST", "/api/template-builds", req),
 
   upgradeSettings: (settings) => request("PUT", "/api/appliance/upgrades/settings", settings),
   automaticManagement: (passphrase) => request("PUT", "/api/appliance/upgrades/management", { passphrase }),

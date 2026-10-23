@@ -92,7 +92,11 @@ describe("cluster upgrades", () => {
             refreshes: true,
             since: "2026-10-09T00:00:00Z",
             builds: [
-              { template: "kubehenge-ubuntu-26.04", build: "build-202610080000", built: "2026-10-08T00:00:00Z" },
+              {
+                template: "kubehenge-rke2-almalinux-10",
+                build: "build-202610080000",
+                built: "2026-10-08T00:00:00Z",
+              },
             ],
             last: "build-202610010000 to build-202610080000 at 2026-10-09T02:10:00Z",
             next: { build: "build-202610150000", due: "2026-10-17T02:00:00Z" },
@@ -102,7 +106,7 @@ describe("cluster upgrades", () => {
     });
     render(<App />);
     await expect(
-      screen.findByText(`kubehenge-ubuntu-26.04, the build of ${built("2026-10-08T00:00:00Z")}`),
+      screen.findByText(`kubehenge-rke2-almalinux-10, the build of ${built("2026-10-08T00:00:00Z")}`),
     ).resolves.toBeInTheDocument();
     expect(
       screen.getByText(`${built("2026-10-17T02:00:00Z")}, to the build of ${built("2026-10-15T00:00:00Z")}`),
