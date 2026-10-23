@@ -247,6 +247,18 @@ kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"logs":512,"backup
 {{- end -}}
 
 {{/*
+The memory, in MiB, each add-on adds to what each control plane uses itself, the same for every
+distribution: the most the end-to-end tests saw a control plane's working set grow by as the add-on
+was switched on, with a quarter on top, as the node figures have. It is mostly the API server
+holding the add-on's resource types and objects, and its pods on the control planes. The
+measurements of an add-on switched on while cert-manager was already there leave cert-manager's own
+share to monitoring's.
+*/}}
+{{- define "kubehenge.addonControlPlaneMemory" -}}
+kubehenge.dev/addon-control-plane-memory: '{"monitoring":384,"logs":128,"backups":64,"kyverno":256,"istio":128,"certManager":64,"rancher":512,"rancherAgent":128,"argocd":384,"flux":192}'
+{{- end -}}
+
+{{/*
 The S3 stores an administrator set for backups, which a cluster's backups variable names one of:
 the interface offers them and the controller reads them here.
 */}}

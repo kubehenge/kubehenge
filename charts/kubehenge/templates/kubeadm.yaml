@@ -24,10 +24,11 @@ metadata:
     # vCPUs and memory from a number of workers.
     kubehenge.dev/control-plane-sizes: '[{"workers":0,"cores":2,"memoryMiB":4096},{"workers":226,"cores":4,"memoryMiB":8192},{"workers":451,"cores":8,"memoryMiB":16384},{"workers":1301,"cores":16,"memoryMiB":32768}]'
     {{- include "kubehenge.addonMemory" . | nindent 4 }}
+    {{- include "kubehenge.addonControlPlaneMemory" . | nindent 4 }}
     {{- include "kubehenge.backupTargets" . | nindent 4 }}
-    # What a node uses besides the add-ons' pods, measured by the end-to-end tests with a tenth on
-    # top: a control plane with every add-on on, a worker idle.
-    kubehenge.dev/node-memory: '{"controlPlane":2560,"worker":704}'
+    # What a node uses before any add-on, measured by the end-to-end tests: a control plane with a
+    # quarter on top, which the kernel's caches and the API server's peaks take; a worker with a tenth.
+    kubehenge.dev/node-memory: '{"controlPlane":2368,"worker":704}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"

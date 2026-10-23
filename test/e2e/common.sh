@@ -73,6 +73,16 @@ pod_memory() {
         "    \(.name): \(.bytes / 1048576 | floor) MiB"'
 }
 
+# control_plane_use <kubeconfig> <add-on>: each control plane's memory in use once the add-on is
+# on, from its kubelet's working set. From one add-on to the next it grows by what the class's
+# kubehenge.dev/addon-control-plane-memory figures size.
+control_plane_use() {
+    for node in $(KUBECONFIG="$1" kubectl get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[*].metadata.name}'); do
+        KUBECONFIG="$1" kubectl get --raw "/api/v1/nodes/${node}/proxy/stats/summary" |
+            jq -r --arg n "${node}" --arg a "$2" '"with \($a): \($n) has \(.node.memory.workingSetBytes / 1048576 | floor) MiB of memory in use"'
+    done
+}
+
 # absent <kubectl get command...>: whether the API server answers that the object does not exist.
 # Any other failure, an unreachable server among them, is not taken for absence.
 absent() {

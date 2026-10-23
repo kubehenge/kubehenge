@@ -29,8 +29,8 @@
 #   reached from the machine running this test). KUBEHENGE_E2E_LOAD_BALANCER is the load balancer,
 #   metallb (default) or kube-vip.
 # KUBEHENGE_E2E_CONTROL_PLANE_MEMORY and KUBEHENGE_E2E_WORKER_MEMORY (MiB) and
-# KUBEHENGE_E2E_CONTROL_PLANE_CORES size the nodes; the worker's memory is by default the least
-# the class lets it have with the add-ons. KUBEHENGE_E2E_RESTARTS=report prints restarts while every
+# KUBEHENGE_E2E_CONTROL_PLANE_CORES size the nodes; the memory is by default the least the class
+# lets each have with the add-ons. KUBEHENGE_E2E_RESTARTS=report prints restarts while every
 # add-on is on instead of failing, for a host whose KVM lacks pause-loop exiting: there guests that
 # outnumber its CPUs starve each other, whatever their sizes.
 # KUBEHENGE_E2E_CNI chooses the CNI (required by kubeadm). KUBEHENGE_E2E_PODS and
@@ -276,7 +276,16 @@ worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq 
     | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
         $node.worker + $addon.headlamp + $addon.monitoring + $addon.logs + $addon.backups + $addon.kyverno + $addon.istio + $addon.loadBalancer + $addon.certManager + $addon.argocd + $addon.rancherAgent]
     | max')}
-echo "workers with ${worker_memory} MiB of memory"
+# The control plane likewise: the least the class's sizing guide gives it beside one worker, or what
+# it uses itself with every add-on but Rancher, whichever is more.
+control_plane_memory=${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-$(printf '%s' "${class_json}" | jq -r '
+    (.metadata.annotations["kubehenge.dev/addon-control-plane-memory"] // "{}" | fromjson) as $grows
+    | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
+    | [(.metadata.annotations["kubehenge.dev/control-plane-sizes"] | fromjson | map(select(.workers <= 1)) | last | .memoryMiB),
+        (.spec.variables[] | select(.name == "controlPlaneMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
+        $node.controlPlane + ([$grows.headlamp, $grows.monitoring, $grows.logs, $grows.backups, $grows.kyverno, $grows.istio, $grows.loadBalancer, $grows.certManager, $grows.argocd, $grows.rancherAgent] | map(. // 0) | add)]
+    | max')}
+echo "workers with ${worker_memory} MiB of memory, the control plane with ${control_plane_memory} MiB"
 cat > "${work}/cluster.yaml" << EOF
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
@@ -313,7 +322,7 @@ ${network_spec}
       - name: loadBalancer
         value: {enabled: true, implementation: ${load_balancer}, addresses: ${load_balancer_addresses}}
       - name: controlPlaneMachine
-        value: {memoryMiB: ${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-4096}, cores: ${KUBEHENGE_E2E_CONTROL_PLANE_CORES:-2}}
+        value: {memoryMiB: ${control_plane_memory}, cores: ${KUBEHENGE_E2E_CONTROL_PLANE_CORES:-2}}
       - name: workerMachine
         value: {memoryMiB: ${worker_memory}}
 ${cni_variable}
@@ -1122,6 +1131,7 @@ headlamp_can() {
     wl auth can-i "$1" "$2" --all-namespaces --as=system:serviceaccount:headlamp:headlamp 2> /dev/null || true
 }
 until_true 120 "Headlamp refuses to list pods without a token" headlamp_refuses
+control_plane_use "${work}/workload" headlamp
 
 step "Headlamp read-only for everyone"
 set_variable headlamp '{"enabled":true,"access":"view"}'
@@ -1174,6 +1184,7 @@ case ${pod_security} in
     *violate*) fail "Kyverno's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
     *) ;;
 esac
+control_plane_use "${work}/workload" kyverno
 
 # Before monitoring: on Cilium, switching Istio on restarts Cilium's agents and operator, and with
 # monitoring's pods busy beside them a worker of the least size runs short of CPU.
@@ -1219,6 +1230,7 @@ until_true 60 "a client in the mesh reaches the server" fetches e2e-mesh
 # What ztunnel let through carries the client's workload identity.
 mesh_identity() { wl -n istio-node logs -l app=ztunnel --tail=-1 --prefix=false | grep -q 'spiffe://cluster.local/ns/e2e-mesh/sa/default'; }
 until_true 60 "ztunnel names the client's workload identity" mesh_identity
+control_plane_use "${work}/workload" istio
 
 step "monitoring switched on"
 set_variable monitoring '{"enabled":true}'
@@ -1278,6 +1290,7 @@ case ${pod_security} in
     *violate*) fail "monitoring's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
     *) ;;
 esac
+control_plane_use "${work}/workload" monitoring
 
 step "logs switched on, collected on every node"
 set_variable logs '{"enabled":true,"collector":"node","retentionDays":7,"sizeGiB":10}'
@@ -1365,6 +1378,7 @@ case ${pod_security} in
     *violate*) fail "Loki's and the events collector's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
     *) ;;
 esac
+control_plane_use "${work}/workload" logs
 
 step "logs collected through the Kubernetes API instead"
 set_variable logs '{"enabled":true,"collector":"api","retentionDays":7,"sizeGiB":10}'
@@ -1521,6 +1535,7 @@ until_true 1200 "the backup completed" phase_is backup e2e Completed
 volume_backups=$(wl -n velero get podvolumebackups -l velero.io/backup-name=e2e -o json |
     jq '[.items[] | select(.spec.pod.namespace == "e2e-backup" and .status.phase == "Completed")] | length')
 [ "${volume_backups}" = 1 ] || fail "the pod's volume was not backed up: ${volume_backups} volume backups"
+control_plane_use "${work}/workload" backups
 
 step "the backup in the S3 store: under the cluster's own prefix, encrypted"
 keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
@@ -1637,6 +1652,7 @@ https_answers() {
 }
 until_true 300 "an Ingress served over HTTPS with the default certificate" https_answers "${work}/ingress-ca.crt" web.e2e.test /hostname '^web$'
 until_true 300 "an HTTPRoute served over HTTPS with the default certificate" https_answers "${work}/ingress-ca.crt" gateway.e2e.test /hostname '^web$'
+control_plane_use "${work}/workload" certificates
 
 # Pebble, an ACME server made for tests, validates challenges against the DNS server it is given:
 # BIND, which takes the DNS-01 records over RFC 2136 and answers for the HTTP-01 name.
@@ -2136,6 +2152,7 @@ until_true 600 "Flux installed by its operator" wl -n flux-system wait --for=con
 until_true 600 "Flux syncs the repository" synced one
 push two
 until_true 300 "Flux syncs a new commit" synced two
+control_plane_use "${work}/workload" flux
 pod_security=$(wl label --dry-run=server --overwrite namespace flux-system pod-security.kubernetes.io/enforce=restricted 2>&1)
 case ${pod_security} in
     *violate*) fail "Flux's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
@@ -2164,6 +2181,7 @@ case ${pod_security} in
     *violate*) fail "Argo CD's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
     *) ;;
 esac
+control_plane_use "${work}/workload" argocd
 
 # The class's minimum sizes have to carry every add-on at once.
 step "every add-on at once, with nothing restarted"

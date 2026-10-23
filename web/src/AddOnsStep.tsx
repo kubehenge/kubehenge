@@ -437,7 +437,15 @@ export function AddOnsStep({
         <p className="hint" id="addon-memory">
           The add-ons chosen use about {used.mib} MiB of memory ({used.names.join(", ")}), so each{" "}
           {form.workerReplicas > 0 ? "worker" : "control plane"} has at least{" "}
-          {machineLeast(form, cls, carrier).memoryMiB} MiB.
+          {machineLeast(form, cls, carrier).memoryMiB} MiB
+          {form.workerReplicas > 0 && (
+            <>
+              {" "}
+              and each control plane, whose API server holds their objects, at least{" "}
+              {machineLeast(form, cls, "controlPlaneMachine").memoryMiB} MiB
+            </>
+          )}
+          .
         </p>
       )}
       {variable(cls, "upgrades") && (

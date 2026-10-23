@@ -15,7 +15,7 @@ func addonClass() *clusterv1.ClusterClass {
 		Annotations: map[string]string{
 			ControlPlaneSizesAnnotation: rke2Sizes,
 			AddonMemoryAnnotation:       `{"headlamp":50,"monitoring":3000,"kyverno":300,"istio":200,"clusterMesh":100,"certManager":100,"rancher":1500,"rancherAgent":250}`,
-			NodeMemoryAnnotation:        `{"controlPlane":4800,"worker":640}`,
+			NodeMemoryAnnotation:        `{"controlPlane":3840,"worker":640}`,
 		},
 		Spec: clusterv1.ClusterClassSpec{Variables: []clusterv1.ClusterClassVariable{
 			machineVariable("controlPlaneMachine"), machineVariable("workerMachine"),
@@ -69,10 +69,10 @@ func TestWorkersHaveRoomForTheAddons(t *testing.T) {
 		},
 		{"without workers, the agent", sized(`{"cores":4,"memoryMiB":8192}`), ""},
 		{
-			"without workers, every add-on", withAddons(sized(`{"cores":4,"memoryMiB":8192}`), everyAddon),
-			"need 4000 MiB of memory on its control planes, which run them without workers, beyond the 4800 MiB a control plane uses itself, and the control planes have 3392 MiB for them",
+			"without workers, every add-on", withAddons(sized(`{"cores":4,"memoryMiB":7680}`), everyAddon),
+			"need 4000 MiB of memory on its control planes, which run them without workers, beyond the 3840 MiB a control plane uses itself with them, and the control planes have 3840 MiB for them",
 		},
-		{"without workers, room on the control planes", withAddons(sized(`{"cores":4,"memoryMiB":8804}`), everyAddon), ""},
+		{"without workers, room on the control planes", withAddons(sized(`{"cores":4,"memoryMiB":7840}`), everyAddon), ""},
 	} {
 		err := checkAddonRoom(nil, tc.c, class)
 		switch {
@@ -81,6 +81,53 @@ func TestWorkersHaveRoomForTheAddons(t *testing.T) {
 		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
 			t.Errorf("%s: %v, want a refusal naming %q", tc.name, err, tc.want)
 		}
+	}
+}
+
+func TestControlPlanesHaveRoomForTheAddons(t *testing.T) {
+	t.Parallel()
+	class := addonClass()
+	class.Annotations[AddonControlPlaneMemoryAnnotation] = `{"monitoring":768,"kyverno":256,"rancherAgent":512}`
+	every := func(controlPlane string) *clusterv1.Cluster {
+		return workerMemory(withAddons(sized(controlPlane, new(int32(1))), everyAddon), `{"memoryMiB":4644}`)
+	}
+	for _, tc := range []struct {
+		name string
+		c    *clusterv1.Cluster
+		want string
+	}{
+		{"nothing on", withAddons(sized("", new(int32(1))), map[string]string{"rancher": `{"register":false}`}), ""},
+		{
+			"the agent on the least control plane", sized("", new(int32(1))),
+			"with the cluster's add-ons (Rancher's agent), whose objects grow the API server, each control plane needs 4352 MiB of memory, and has 4096 MiB",
+		},
+		{"the agent on a control plane with room", sized(`{"memoryMiB":4352}`, new(int32(1))), ""},
+		{"every add-on, the room the agent leaves", every(`{"memoryMiB":4352}`), "each control plane needs 5376 MiB of memory, and has 4352 MiB"},
+		{"every add-on on a control plane with room", every(`{"memoryMiB":5376}`), ""},
+		{
+			"without workers, every add-on", withAddons(sized(`{"cores":4,"memoryMiB":9375}`), everyAddon),
+			"beyond the 5376 MiB a control plane uses itself with them, and the control planes have 3999 MiB for them",
+		},
+		{"without workers, room on the control planes", withAddons(sized(`{"cores":4,"memoryMiB":9376}`), everyAddon), ""},
+	} {
+		err := checkAddonRoom(nil, tc.c, class)
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%s: refused: %v", tc.name, err)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+			t.Errorf("%s: %v, want a refusal naming %q", tc.name, err, tc.want)
+		}
+	}
+	short := sized("", new(int32(1)))
+	edited := short.DeepCopy()
+	edited.Labels = map[string]string{"team": "a"}
+	if err := checkAddonRoom(short, edited, class); err != nil {
+		t.Errorf("an unrelated edit to a cluster whose control planes are already short: %v", err)
+	}
+	bare := withAddons(sized("", new(int32(1))), map[string]string{"rancher": `{"register":false}`})
+	if err := checkAddonRoom(bare, withAddons(bare.DeepCopy(), map[string]string{"monitoring": `{"enabled":true}`}), class); err == nil ||
+		!strings.Contains(err.Error(), "each control plane needs 4608 MiB") {
+		t.Errorf("monitoring switched on in a cluster whose control planes have no room for it: %v", err)
 	}
 }
 

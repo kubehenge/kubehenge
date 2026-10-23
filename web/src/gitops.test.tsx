@@ -87,7 +87,7 @@ describe("the GitOps settings", () => {
     expect(request(form, cls).variables["gitops"]).toMatchObject({ enabled: true, engine: "flux" });
     expect(request({ ...form, gitops: newGitOps() }, cls).variables).not.toHaveProperty("gitops");
     expect(Object.fromEntries(summary(form, cls))).toMatchObject({ GitOps: `Flux, syncing ${repo} (main)` });
-    expect(addonMemory(form, cls)).toStrictEqual({ names: ["Flux"], mib: 384 });
+    expect(addonMemory(form, cls)).toStrictEqual({ names: ["Flux"], mib: 384, controlPlaneMiB: 0 });
     expect(fieldProblems("Add-ons", { ...form, gitops: choice({ url: "" }) }, cls)).toHaveProperty("gitops.url");
     expect(fieldProblems("Add-ons", { ...form, gitops: choice({ url: "" }) }, { ...cls, variables: [] })).toStrictEqual(
       {},

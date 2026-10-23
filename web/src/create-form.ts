@@ -236,12 +236,17 @@ function classFigures(c: ClusterClass | undefined, annotation: string): Record<s
 }
 
 /**
- * addonMemory is the memory, in MiB, the add-ons a form chooses use by its class's figures, and
- * which they are. Rancher's agent counts wherever the cluster would register, as the controller
- * counts it: once a cluster installs Rancher, every other one registers with it.
+ * addonMemory is the memory, in MiB, the pods of the add-ons a form chooses use by its class's
+ * figures, what they add to each control plane's own use, and which they are. Rancher's agent counts
+ * wherever the cluster would register, as the controller counts it: once a cluster installs Rancher,
+ * every other one registers with it.
  */
-export function addonMemory(form: Form, c: ClusterClass | undefined): { names: string[]; mib: number } {
+export function addonMemory(
+  form: Form,
+  c: ClusterClass | undefined,
+): { names: string[]; mib: number; controlPlaneMiB: number } {
   const figures = classFigures(c, "kubehenge.dev/addon-memory");
+  const grows = classFigures(c, "kubehenge.dev/addon-control-plane-memory");
   const on: Record<(typeof addonNames)[number][0], boolean> = {
     headlamp: form.headlamp,
     monitoring: form.monitoring,
@@ -259,14 +264,17 @@ export function addonMemory(form: Form, c: ClusterClass | undefined): { names: s
   };
   const names: string[] = [];
   let mib = 0;
+  let controlPlaneMiB = 0;
   for (const [key, name] of addonNames) {
     const figure = quantity(figures[key]) ?? 0;
-    if (on[key] && figure > 0) {
+    const growth = quantity(grows[key]) ?? 0;
+    if (on[key] && (figure > 0 || growth > 0)) {
       names.push(name);
       mib += figure;
+      controlPlaneMiB += growth;
     }
   }
-  return { names, mib };
+  return { names, mib, controlPlaneMiB };
 }
 
 const plainLeast = (form: Form, c: ClusterClass | undefined, key: "controlPlaneMachine" | "workerMachine"): Machine =>
@@ -279,25 +287,38 @@ const carries = (form: Form, key: "controlPlaneMachine" | "workerMachine"): bool
 
 /**
  * addonNeedMiB is the memory each node that carries a form's add-ons needs for them, as the
- * controller asks: what such a node uses itself, by its class, and its share of the add-ons'.
- * Without add-ons it is 0.
+ * controller asks: what such a node uses itself with them, by its class, and its share of the
+ * add-ons' pods. Without add-ons it is 0.
  */
 export function addonNeedMiB(form: Form, c: ClusterClass | undefined): number {
   const key = form.workerReplicas > 0 ? "workerMachine" : "controlPlaneMachine";
   const nodes = key === "workerMachine" ? form.workerReplicas : form.controlPlaneReplicas;
-  const { mib } = addonMemory(form, c);
+  const { mib, controlPlaneMiB } = addonMemory(form, c);
   if (mib === 0 || nodes <= 0) {
     return 0;
   }
   const own =
-    quantity(classFigures(c, "kubehenge.dev/node-memory")[key === "workerMachine" ? "worker" : "controlPlane"]) ??
-    plainLeast(form, c, key).memoryMiB;
+    key === "workerMachine"
+      ? (quantity(classFigures(c, "kubehenge.dev/node-memory")["worker"]) ?? plainLeast(form, c, key).memoryMiB)
+      : (quantity(classFigures(c, "kubehenge.dev/node-memory")["controlPlane"]) ?? plainLeast(form, c, key).memoryMiB) +
+        controlPlaneMiB;
   return own + Math.ceil(mib / nodes / memoryStepMiB) * memoryStepMiB;
 }
 
 /**
- * machineLeast is the least a form lets its machines of one kind have: the class's, or for the nodes
- * that carry the add-ons what those need, whichever is more.
+ * controlPlaneNeedMiB is the memory each control plane of a form with workers and add-ons needs, as
+ * the controller asks: what it uses itself, by its class, with what the add-ons add to it. Otherwise
+ * it is 0.
+ */
+export function controlPlaneNeedMiB(form: Form, c: ClusterClass | undefined): number {
+  const own = quantity(classFigures(c, "kubehenge.dev/node-memory")["controlPlane"]);
+  const { names, controlPlaneMiB } = addonMemory(form, c);
+  return form.workerReplicas > 0 && names.length > 0 && own !== undefined ? own + controlPlaneMiB : 0;
+}
+
+/**
+ * machineLeast is the least a form lets its machines of one kind have: the class's, or what the
+ * add-ons ask of them, whichever is more.
  */
 export function machineLeast(
   form: Form,
@@ -305,7 +326,13 @@ export function machineLeast(
   key: "controlPlaneMachine" | "workerMachine",
 ): Machine {
   const min = plainLeast(form, c, key);
-  return carries(form, key) ? { ...min, memoryMiB: Math.max(min.memoryMiB, addonNeedMiB(form, c)) } : min;
+  let need = 0;
+  if (carries(form, key)) {
+    need = addonNeedMiB(form, c);
+  } else if (key === "controlPlaneMachine") {
+    need = controlPlaneNeedMiB(form, c);
+  }
+  return { ...min, memoryMiB: Math.max(min.memoryMiB, need) };
 }
 
 /**
@@ -870,10 +897,12 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
     const min = machineLeast(form, c, key);
     const alone =
       key === "controlPlaneMachine" && form.workerReplicas === 0 ? " Without workers, they run the workloads too." : "";
-    const addons =
-      min.memoryMiB > plainLeast(form, c, key).memoryMiB
+    let addons = "";
+    if (min.memoryMiB > plainLeast(form, c, key).memoryMiB) {
+      addons = carries(form, key)
         ? ` The add-ons chosen need that much: ${addonMemory(form, c).mib} MiB, shared by the ${key === "workerMachine" ? "workers" : "control planes"}.`
-        : "";
+        : " The add-ons chosen need that much, as the API server holds their objects.";
+    }
     if (!whole(m.cores, min.cores)) {
       p[key] = `A whole number of cores, at least ${min.cores}.${alone}`;
     } else if (
