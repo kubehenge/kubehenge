@@ -93,7 +93,8 @@ func (f *elFamily) recipe(b Bake, keys map[string]string) (Recipe, error) {
 	if err != nil {
 		return Recipe{}, err
 	}
-	image := &NodeImageBoot{UserData: "#cloud-config\n", Checks: nodeChecks(b)}
+	// Not an empty cloud-config, which EL 10's cloud-init fails on in its first stage.
+	image := &NodeImageBoot{UserData: "#cloud-config\n{}\n", Checks: nodeChecks(b)}
 	if b.Distribution == Kubeadm {
 		// The images go into containerd's store in /var, which only a booted node has.
 		image.UserData = fmt.Sprintf("#cloud-config\nruncmd:\n  - [%s, %s]\n", imagesPath, b.KubernetesVersion)
