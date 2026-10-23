@@ -83,9 +83,11 @@ onBeforeUnmount(() => stop());
             <ul>
               <li>
                 <b>Raises clusters.</b> kubeadm, RKE2 or k3s, built by Cluster API from VM templates, from
-                <b>Create cluster</b> in the interface or with <code>kubectl apply</code>. Each gets a Proxmox VE pool,
-                user and API token of its own, an ingress controller on every node, and, if you like, addresses for its
-                load-balanced Services from MetalLB or kube-vip.
+                <b>Create cluster</b> in the interface or with <code>kubectl apply</code>. Their nodes run AlmaLinux or
+                Rocky Linux as an image-mode system: read-only, SELinux enforcing, nothing on it a node does not need,
+                and built again every week with its updates. Each cluster gets a Proxmox VE pool, user and API token of
+                its own, an ingress controller on every node, and, if you like, addresses for its load-balanced Services
+                from MetalLB or kube-vip.
               </li>
               <li>
                 <b>Decorates them.</b> Add-ons per cluster, when it is created or later: Headlamp, a web interface
