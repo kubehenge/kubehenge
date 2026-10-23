@@ -73,7 +73,7 @@ func newIdentities(t *testing.T, c *clusterv1.Cluster, clock *time.Time) identit
 	config := &rest.Config{Host: "https://10.0.0.20:6443", CAData: []byte("the cluster CA")}
 	w := &WorkloadIdentities{
 		Client: r.Client, ClassNamespace: r.ClassNamespace,
-		Remotes: &Remotes{byCluster: map[string]remote{remoteKey(c): {config: config, client: workload, until: clock.Add(24 * time.Hour)}}},
+		Remotes: &Remotes{byCluster: map[string]remote{remoteKey(c): {config: config, client: workload, until: time.Now().Add(time.Hour)}}},
 		now:     func() time.Time { return *clock },
 	}
 	return identitiesFixture{w: w, kube: kube, workload: workload, issuer: issuer}

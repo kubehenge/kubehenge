@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -89,6 +90,10 @@ type fakePVE struct {
 	requests []string
 	// clusterName, when set, is what /cluster/status names the Proxmox VE cluster.
 	clusterName string
+	// nextIDs are what /cluster/nextid offers, in turn; taken are VMIDs other VMs hold. Creating
+	// VM 4242 makes it the volume owner.
+	nextIDs []int
+	taken   map[int]bool
 }
 
 func newFakePVE(at string, volumes map[string][]string) *fakePVE {
@@ -110,8 +115,7 @@ func (f *fakePVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.Split(strings.TrimPrefix(r.URL.Path, "/api2/json/"), "/")
 	f.requests = append(f.requests, r.Method+" "+strings.TrimPrefix(r.URL.Path, "/api2/json"))
 	switch {
-	case r.URL.Path == "/api2/json/cluster/status" && f.clusterName != "":
-		a.reply([]map[string]any{{"type": "cluster", "name": f.clusterName}})
+	case f.creation(a, r, path, body):
 	case r.URL.Path == "/api2/json/cluster/resources":
 		f.resources(a)
 	case r.URL.Path == "/api2/json/storage":
@@ -216,6 +220,45 @@ func (f *fakePVE) content(storage, vmid string) []map[string]any {
 		}
 	}
 	return content
+}
+
+// creation answers what creating a cluster's objects reads beyond its own VM: the cluster's status,
+// the next free VMID and the create itself. It reports whether it answered.
+func (f *fakePVE) creation(a answer, r *http.Request, path []string, body map[string]any) bool {
+	switch {
+	case r.URL.Path == "/api2/json/cluster/status" && f.clusterName != "":
+		a.reply([]map[string]any{{"type": "cluster", "name": f.clusterName}})
+	case r.URL.Path == "/api2/json/cluster/nextid" && len(f.nextIDs) > 0:
+		a.reply(strconv.Itoa(f.nextIDs[0]))
+		f.nextIDs = f.nextIDs[1:]
+	case len(path) == 3 && path[0] == "nodes" && path[2] == "qemu" && r.Method == http.MethodPost:
+		f.create(a, path[1], body)
+	default:
+		return false
+	}
+	return true
+}
+
+// create creates a VM on node: VM 4242 becomes the volume owner, and a taken VMID is refused as
+// Proxmox VE refuses it.
+func (f *fakePVE) create(a answer, node string, body map[string]any) {
+	id, ok := body["vmid"].(float64)
+	if !ok {
+		a.fail("no vmid")
+		return
+	}
+	vmid := int(id)
+	switch {
+	case f.taken[vmid]:
+		a.fail(fmt.Sprintf("unable to create VM %d - VM %d already exists on node '%s'", vmid, vmid, node))
+	case vmid == 4242:
+		f.destroyed, f.at = false, node
+		f.config = map[string]string{"name": fmt.Sprint(body["name"])}
+		f.pool = fmt.Sprint(body["pool"])
+		a.reply("UPID:create")
+	default:
+		a.fail(fmt.Sprintf("creating VM %d is not modelled", vmid))
+	}
 }
 
 // vm answers for the volume owner VM.
@@ -621,6 +664,42 @@ func TestSteadyReconcileReadsOnlyTheClustersOwn(t *testing.T) {
 	}
 	if !slices.Equal(f.requests, want) {
 		t.Fatalf("asked\n%s\nwant\n%s", strings.Join(f.requests, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestVolumeOwnerTakesAnotherVMIDWhenTheOfferedOneIsTaken(t *testing.T) {
+	t.Parallel()
+	f := newFakePVE("a", nil)
+	// No owner yet; VM 100 is created by something else between nextid and the create.
+	f.destroyed, f.token, f.clusterName = true, true, "lab"
+	f.nextIDs, f.taken = []int{100, 4242}, map[int]bool{100: true}
+	p := &Proxmox{Client: serve(t, f), Settings: Settings{Role: "kubehenge-cluster"}}
+	var recorded []int
+	record := func(c Credentials) error { recorded = append(recorded, c.VolumeOwner); return nil }
+	c, err := p.Ensure(context.Background(), webNames, Access{}, Credentials{TokenID: webNames.TokenID(), TokenSecret: "s3cret"}, record)
+	if err != nil || c.VolumeOwner != 4242 || c.VolumeOwnerNode != "a" {
+		t.Fatalf("Ensure = %+v, %v; want volume owner 4242 on a", c, err)
+	}
+	if !slices.Equal(recorded, []int{100, 4242}) {
+		t.Errorf("recorded volume owners %v; want 100, then 4242 once 100 was taken", recorded)
+	}
+	if f.destroyed || f.config["name"] != webNames.VolumeOwner {
+		t.Errorf("volume owner VM 4242 is %v, destroyed %v", f.config, f.destroyed)
+	}
+}
+
+func TestVolumeOwnerGivesUpAfterItsAttempts(t *testing.T) {
+	t.Parallel()
+	f := newFakePVE("a", nil)
+	f.destroyed, f.token, f.clusterName = true, true, "lab"
+	f.nextIDs, f.taken = slices.Repeat([]int{100}, volumeOwnerAttempts+1), map[int]bool{100: true}
+	p := &Proxmox{Client: serve(t, f), Settings: Settings{Role: "kubehenge-cluster"}}
+	_, err := p.Ensure(context.Background(), webNames, Access{}, Credentials{TokenID: webNames.TokenID(), TokenSecret: "s3cret"}, func(Credentials) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("Ensure gave %v; want Proxmox VE's refusal once every attempt found the VMID taken", err)
+	}
+	if len(f.nextIDs) != 1 {
+		t.Errorf("%d VMIDs left unasked; want %d attempts", len(f.nextIDs), volumeOwnerAttempts)
 	}
 }
 
