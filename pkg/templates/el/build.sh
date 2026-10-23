@@ -21,8 +21,10 @@ dnf -y install podman rpm-ostree bootc ostree skopeo
 
 container=$(podman create "${tools}")
 mounted=$(podman mount "${container}")
-cp -a "${mounted}/usr/libexec/bootc-base-imagectl" /usr/libexec/
-cp -a "${mounted}/usr/share/doc/bootc-base-imagectl" /usr/share/doc/
+# Without the container's labels, which only an unconfined caller could run them with.
+cp -R --preserve=mode,ownership,timestamps "${mounted}/usr/libexec/bootc-base-imagectl" /usr/libexec/
+cp -R --preserve=mode,ownership,timestamps "${mounted}/usr/share/doc/bootc-base-imagectl" /usr/share/doc/
+restorecon -R /usr/libexec/bootc-base-imagectl /usr/share/doc/bootc-base-imagectl
 podman umount "${container}"
 podman rm "${container}"
 podman rmi "${tools}"

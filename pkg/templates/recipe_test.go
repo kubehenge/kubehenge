@@ -412,15 +412,20 @@ variables:
 packages:
   - almalinux-repos
   - cloud-utils-growpart
-opt-usrlocal: "var"
 include:
   - minimal/manifest.yaml
   - standard/generic-growfs.yaml
 `
-	if got := almaLinux10EL.manifest(); got != want {
+	if got := almaLinux10EL.manifest(Kubeadm); got != want {
 		t.Errorf("got\n%s\nwant\n%s", got, want)
 	}
-	if got := rocky10EL.manifest(); !strings.Contains(got, "  - rocky-repos\n") || !strings.Contains(got, `distro: "rocky10"`) {
+	// RKE2 and k3s install into /usr/local at boot, so it lives in /var on their nodes.
+	for _, d := range []Distribution{RKE2, K3s} {
+		if got := almaLinux10EL.manifest(d); !strings.Contains(got, "\nopt-usrlocal: \"var\"\n") {
+			t.Errorf("%s's manifest:\n%s", d, got)
+		}
+	}
+	if got := rocky10EL.manifest(Kubeadm); !strings.Contains(got, "  - rocky-repos\n") || !strings.Contains(got, `distro: "rocky10"`) {
 		t.Errorf("Rocky Linux's manifest:\n%s", got)
 	}
 }
