@@ -1,7 +1,7 @@
 #!/bin/sh
 # Installs what a node needs into the family's immutable image as one new snapshot of its read-only
-# root (node.sh, run by transactional-update), which the bake then reboots into. Run in the
-# directory holding the bake's files:
+# root (node.sh, run by transactional-update), which the bake then reboots into. It works in the
+# directory holding the bake's files, the parent of its own:
 #
 #   build.sh <distribution> [<Kubernetes version>]
 set -eu
