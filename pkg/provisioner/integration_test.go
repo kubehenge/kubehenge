@@ -619,12 +619,17 @@ func checkDatastoreAllocateAdmission(ctx context.Context, t *testing.T, c client
 	}
 }
 
-// checkClassAddonRoom holds a class's memory figures: one for every add-on and every node kind, a
-// cluster at the class's defaults holding every add-on but Rancher, logs and backups, and the least cluster Rancher
-// runs on, without workers, holding Rancher.
+// checkClassAddonRoom holds a class's memory and CPU figures: one for every add-on and every node
+// kind, a cluster at the class's defaults holding every add-on but Rancher, logs and backups, the
+// default worker's CPU holding every add-on but Rancher, as the end-to-end tests have it, and the
+// least cluster Rancher runs on, without workers, holding Rancher.
 func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker *clusterv1.Cluster, alone controlPlaneSize) {
 	t.Helper()
-	addons, _, err := classMemory(class, AddonMemoryAnnotation)
+	addons, _, err := classFigures(class, AddonMemoryAnnotation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cpu, _, err := classFigures(class, AddonCPUAnnotation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -632,12 +637,25 @@ func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker 
 		if addons[key] <= 0 {
 			t.Errorf("%s: no memory figure for %s", class.Name, key)
 		}
+		// Some add-ons' pods ask for no CPU at all, so a figure of 0 is one.
+		if _, ok := cpu[key]; !ok {
+			t.Errorf("%s: no CPU figure for %s", class.Name, key)
+		}
 	}
-	if nodes, _, err := classMemory(class, NodeMemoryAnnotation); err != nil || nodes["controlPlane"] <= 0 || nodes["worker"] <= 0 {
-		t.Errorf("%s: node memory %v, %v", class.Name, nodes, err)
+	for _, annotation := range []string{NodeMemoryAnnotation, NodeCPUAnnotation} {
+		if nodes, _, err := classFigures(class, annotation); err != nil || nodes["controlPlane"] <= 0 || nodes["worker"] <= 0 {
+			t.Errorf("%s: %s %v, %v", class.Name, annotation, nodes, err)
+		}
 	}
 	if err := checkAddonRoom(nil, withAddons(oneWorker.DeepCopy(), everyAddon), class); err != nil {
 		t.Errorf("%s: every add-on on the default worker: %v", class.Name, err)
+	}
+	all := withAddons(withAddons(oneWorker.DeepCopy(), everyAddon), map[string]string{
+		"logs": `{"enabled":true}`, "backups": `{"enabled":true,"target":"store"}`, "gitops": `{"enabled":true,"engine":"flux"}`,
+		"loadBalancer": `{"enabled":true,"implementation":"kube-vip","addresses":["192.0.2.100-192.0.2.110"]}`,
+	})
+	if err := checkRoomFor(addonCPU, nil, all, class); err != nil {
+		t.Errorf("%s: every add-on but Rancher on the default worker's CPU: %v", class.Name, err)
 	}
 	rancher := withAddons(&clusterv1.Cluster{}, map[string]string{
 		"rancher":             `{"install":true,"hostname":"rancher.example.org"}`,

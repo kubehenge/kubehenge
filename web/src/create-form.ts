@@ -246,8 +246,9 @@ const meshChosen = (form: Form): boolean => form.clusterMesh && form.cni === "ci
 /** logsChosen says whether a form's cluster keeps logs: chosen beside monitoring, which they need. */
 export const logsChosen = (form: Form): boolean => form.logs.enabled && form.monitoring;
 
-// classFigures reads one of a class's annotations of memory figures: kubehenge.dev/addon-memory by
-// add-on, or kubehenge.dev/node-memory, what a controlPlane or worker uses itself.
+// classFigures reads one of a class's annotations of figures: kubehenge.dev/addon-memory or
+// kubehenge.dev/addon-cpu by add-on, or kubehenge.dev/node-memory or kubehenge.dev/node-cpu, what a
+// controlPlane or worker takes itself.
 function classFigures(c: ClusterClass | undefined, annotation: string): Record<string, unknown> {
   try {
     return record(JSON.parse(c?.annotations?.[annotation] ?? "{}"));
@@ -267,8 +268,31 @@ export function addonMemory(
   form: Form,
   c: ClusterClass | undefined,
 ): { names: string[]; mib: number; controlPlaneMiB: number } {
-  const figures = classFigures(c, "kubehenge.dev/addon-memory");
-  const grows = classFigures(c, "kubehenge.dev/addon-control-plane-memory");
+  const { names, total, growth } = addonTotal(form, c, {
+    pods: "kubehenge.dev/addon-memory",
+    growth: "kubehenge.dev/addon-control-plane-memory",
+  });
+  return { names, mib: total, controlPlaneMiB: growth };
+}
+
+/**
+ * addonCPU is the CPU, in millicores, the pods of the add-ons a form chooses request by its class's
+ * figures, and which add-ons ask for any, counted as addonMemory counts them.
+ */
+export function addonCPU(form: Form, c: ClusterClass | undefined): { names: string[]; millicores: number } {
+  const { names, total } = addonTotal(form, c, { pods: "kubehenge.dev/addon-cpu" });
+  return { names, millicores: total };
+}
+
+// addonTotal sums a class's figures by add-on over the add-ons a form chooses: the pods' annotation,
+// and where given the one of what they add to each control plane's own use.
+function addonTotal(
+  form: Form,
+  c: ClusterClass | undefined,
+  annotations: { pods: string; growth?: string },
+): { names: string[]; total: number; growth: number } {
+  const figures = classFigures(c, annotations.pods);
+  const grows = annotations.growth === undefined ? {} : classFigures(c, annotations.growth);
   const on: Record<(typeof addonNames)[number][0], boolean> = {
     headlamp: form.headlamp,
     monitoring: form.monitoring,
@@ -285,18 +309,18 @@ export function addonMemory(
     flux: form.gitops.engine === "flux",
   };
   const names: string[] = [];
-  let mib = 0;
-  let controlPlaneMiB = 0;
+  let total = 0;
+  let growth = 0;
   for (const [key, name] of addonNames) {
     const figure = quantity(figures[key]) ?? 0;
-    const growth = quantity(grows[key]) ?? 0;
-    if (on[key] && (figure > 0 || growth > 0)) {
+    const grown = quantity(grows[key]) ?? 0;
+    if (on[key] && (figure > 0 || grown > 0)) {
       names.push(name);
-      mib += figure;
-      controlPlaneMiB += growth;
+      total += figure;
+      growth += grown;
     }
   }
-  return { names, mib, controlPlaneMiB };
+  return { names, total, growth };
 }
 
 /**
@@ -333,6 +357,26 @@ export function addonNeedMiB(form: Form, c: ClusterClass | undefined): number {
   return own + Math.ceil(mib / nodes / memoryStepMiB) * memoryStepMiB;
 }
 
+const millicoresPerCore = 1000;
+
+/**
+ * addonNeedCores is the cores each node that carries a form's add-ons needs for the CPU their pods
+ * request, as the controller asks: what such a node takes itself, by its class, and its share of
+ * the add-ons'. Without add-ons that request CPU it is 0.
+ */
+export function addonNeedCores(form: Form, c: ClusterClass | undefined): number {
+  const key = form.workerReplicas > 0 ? "workerMachine" : "controlPlaneMachine";
+  const nodes = key === "workerMachine" ? form.workerReplicas : form.controlPlaneReplicas;
+  const { millicores } = addonCPU(form, c);
+  if (millicores === 0 || nodes <= 0) {
+    return 0;
+  }
+  const own =
+    quantity(classFigures(c, "kubehenge.dev/node-cpu")[key === "workerMachine" ? "worker" : "controlPlane"]) ??
+    plainLeast(form, c, key).cores * millicoresPerCore;
+  return Math.ceil((own + Math.ceil(millicores / nodes)) / millicoresPerCore);
+}
+
 /**
  * controlPlaneNeedMiB is the memory each control plane of a form with workers and add-ons needs, as
  * the controller asks: what it uses itself, by its class, with what the add-ons add to it. Otherwise
@@ -354,18 +398,23 @@ export function machineLeast(
   key: "controlPlaneMachine" | "workerMachine",
 ): Machine {
   const min = plainLeast(form, c, key);
-  let need = 0;
   if (carries(form, key)) {
-    need = addonNeedMiB(form, c);
-  } else if (key === "controlPlaneMachine") {
-    need = controlPlaneNeedMiB(form, c);
+    return {
+      ...min,
+      cores: Math.max(min.cores, addonNeedCores(form, c)),
+      memoryMiB: Math.max(min.memoryMiB, addonNeedMiB(form, c)),
+    };
   }
-  return { ...min, memoryMiB: Math.max(min.memoryMiB, need) };
+  if (key === "controlPlaneMachine") {
+    return { ...min, memoryMiB: Math.max(min.memoryMiB, controlPlaneNeedMiB(form, c)) };
+  }
+  return min;
 }
 
 /**
  * withRoom raises a form's machines to the least its other choices ask of them: control planes that
- * run the workloads without workers, the add-ons' memory and Rancher's cores. It lowers nothing.
+ * run the workloads without workers, the add-ons' memory and CPU, and Rancher's cores. It lowers
+ * nothing.
  */
 export function withRoom(form: Form, c: ClusterClass | undefined): Form {
   const raised = { ...form };
@@ -1043,14 +1092,20 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
     const min = machineLeast(form, c, key);
     const alone =
       key === "controlPlaneMachine" && mostWorkers(form) === 0 ? " Without workers, they run the workloads too." : "";
+    const plain = plainLeast(form, c, key);
+    const sharers = key === "workerMachine" ? "workers" : "control planes";
     let addons = "";
-    if (min.memoryMiB > plainLeast(form, c, key).memoryMiB) {
+    if (min.memoryMiB > plain.memoryMiB) {
       addons = carries(form, key)
-        ? ` The add-ons chosen need that much: ${addonMemory(form, c).mib} MiB, shared by the ${key === "workerMachine" ? "workers" : "control planes"}.`
+        ? ` The add-ons chosen need that much: ${addonMemory(form, c).mib} MiB, shared by the ${sharers}.`
         : " The add-ons chosen need that much, as the API server holds their objects.";
     }
+    const addonCores =
+      min.cores > plain.cores
+        ? ` The add-ons chosen need that many: their pods ask for ${addonCPU(form, c).millicores} millicores of CPU, shared by the ${sharers}.`
+        : "";
     if (!whole(m.cores, min.cores)) {
-      p[key] = `A whole number of cores, at least ${min.cores}.${alone}`;
+      p[key] = `A whole number of cores, at least ${min.cores}.${alone}${addonCores}`;
     } else if (
       form.rancherInstall &&
       m.cores < rancherMinimumCores &&
