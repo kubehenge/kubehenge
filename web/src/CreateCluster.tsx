@@ -21,6 +21,7 @@ import {
   steps,
   summary,
   variable,
+  versionsNodeOS,
   withBackupChoices,
   withClass,
   namespaceOf,
@@ -35,6 +36,10 @@ import { haGroupsOffer, offersHA, useHARules } from "./Placement";
 import { navigate } from "./router";
 import type { Bridge, Cluster, ClusterClass, PveNode, Storage, Versions } from "./types";
 import { Dialog, ErrorBox, errorMessage, filled, sole, usePrivilege } from "./ui";
+
+// versionsKey is where the versions offered are kept: a distribution's, kubeadm's per node OS.
+const versionsKey = (distribution: string, nodeOS: string | undefined): string =>
+  nodeOS === undefined ? distribution : `${distribution} ${nodeOS}`;
 
 // The choices that can ask more of the machines, which then grow to it.
 const raising = new Set<keyof Form>([
@@ -86,30 +91,41 @@ export function CreateCluster({
     setTouched((t) => (t.has(k) ? t : new Set([...t, k])));
   };
   const [versionsBy, setVersionsBy] = useState<Record<string, Versions>>({});
-  const offered = cls ? versionsBy[cls.distribution] : undefined;
+  // Kubeadm offers the versions with a template on the node OS chosen.
+  const kubeadmOS = versionsNodeOS(entered, cls);
+  const offered = cls ? versionsBy[versionsKey(cls.distribution, kubeadmOS)] : undefined;
 
   useEffect(() => {
-    const d = cls?.distribution;
-    if (!filled(d)) {
-      return;
-    }
-    const store = (v: Versions): void => {
-      setVersionsBy((all) => ({ ...all, [d]: v }));
-      // A distribution's stable release, or kubeadm's newest template, unless one was chosen.
+    let current = true;
+    const store = (distribution: string, v: Versions): void => {
+      if (!current) {
+        return;
+      }
+      setVersionsBy((all) => ({ ...all, [versionsKey(distribution, kubeadmOS)]: v }));
+      // A distribution's stable release, or kubeadm's newest template, unless one was chosen; a
+      // kubeadm version without a template on the node OS chosen now is not kept.
       const first = v.stable ?? v.versions[0];
       if (filled(first)) {
-        setEntered((f) => (f.version ? f : { ...f, version: first }));
+        setEntered((f) =>
+          f.version && (kubeadmOS === undefined || v.versions.includes(f.version)) ? f : { ...f, version: first },
+        );
       }
     };
     async function loadVersions(distribution: string): Promise<void> {
       try {
-        store(await api.versions(distribution));
+        store(distribution, await api.versions(distribution, kubeadmOS));
       } catch (err) {
-        store({ versions: [], error: errorMessage(err) });
+        store(distribution, { versions: [], error: errorMessage(err) });
       }
     }
-    void loadVersions(d);
-  }, [cls?.distribution]);
+    const d = cls?.distribution;
+    if (filled(d)) {
+      void loadVersions(d);
+    }
+    return () => {
+      current = false;
+    };
+  }, [cls?.distribution, kubeadmOS]);
 
   useEffect(() => {
     async function loadClasses(): Promise<void> {
