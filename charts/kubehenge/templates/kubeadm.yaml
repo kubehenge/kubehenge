@@ -1,7 +1,7 @@
 {{- $class := "kubehenge-kubeadm" }}
 {{- $clusterSpec := include "kubehenge.proxmoxClusterSpec" . }}
 {{- /* Placeholder tags: the controller's patch selects the build of each machine's version's template. */}}
-{{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "kubeadm" "kubehenge" "ubuntu-26.04")) }}
+{{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "kubeadm" "kubehenge" "os-almalinux-10")) }}
 {{- $controlPlaneSpec := include "kubehenge.kubeadmControlPlaneSpec" . }}
 {{- $workerSpec := include "kubehenge.kubeadmWorkerSpec" . }}
 {{- $clusterName := include "kubehenge.hashedName" (dict "name" $class "spec" $clusterSpec) }}
@@ -91,6 +91,7 @@ spec:
     {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 1 "workerMinMemoryMiB" 2048 "clusters" .Values.clusters) | nindent 4 }}
     {{- include "kubehenge.addonVariables" . | nindent 4 }}
     {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
+    {{- include "kubehenge.nodeOSVariable" . | nindent 4 }}
     {{- include "kubehenge.autoscalerVariable" . | nindent 4 }}
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
     {{- include "kubehenge.cisVariable" . | nindent 4 }}
@@ -296,7 +297,7 @@ lookup sends nothing.
     set -eu
     ip=$(ip -4 -o route get 192.0.2.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p')
     [ -n "$ip" ]
-    printf 'KUBELET_EXTRA_ARGS=--node-ip=%s\n' "$ip" > /etc/default/kubelet
+    printf 'KUBELET_EXTRA_ARGS=--node-ip=%s\n' "$ip" > /etc/sysconfig/kubelet
 {{- end -}}
 
 {{- define "kubehenge.kubeadmControlPlaneSpec" -}}
@@ -378,12 +379,12 @@ template:
 {{- end -}}
 
 {{/*
-kubeadm and the kubelet's package write the kubelet's configuration and service files readable by
-every user, where the CIS benchmark asks for root alone. They hold no secret; the kubelet only reads
-them at start. Set on each node, so a node is the same whichever template it was cloned from.
+kubeadm writes the kubelet's configuration readable by every user, where the CIS benchmark asks for
+root alone. It holds no secret; the kubelet only reads it at start. The kubelet's service files are
+in the node's read-only /usr, where the template already has them root's alone.
 */}}
 {{- define "kubehenge.kubeletFileModes" -}}
-- chmod 0600 /var/lib/kubelet/config.yaml /usr/lib/systemd/system/kubelet.service /usr/lib/systemd/system/kubelet.service.d/10-kubeadm.conf
+- chmod 0600 /var/lib/kubelet/config.yaml
 {{- end -}}
 
 {{- define "kubehenge.kubeadmWorkerSpec" -}}

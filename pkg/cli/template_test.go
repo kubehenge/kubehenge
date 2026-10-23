@@ -12,7 +12,7 @@ import (
 
 func TestDeletingABuildAClusterRunsIsRefused(t *testing.T) {
 	t.Parallel()
-	line, err := templates.Plan(templates.Request{Distribution: templates.RKE2})
+	line, err := templates.Plan(&templates.Request{Distribution: templates.RKE2})
 	if err != nil {
 		t.Fatal(err)
 	}

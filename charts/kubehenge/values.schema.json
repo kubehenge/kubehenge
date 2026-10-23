@@ -177,7 +177,7 @@
       }
     },
     "templateRefresh": {
-      "description": "The weekly build of the Ubuntu VM templates, and the builds asked for in the interface.",
+      "description": "The weekly build of the node OS VM templates, and the builds asked for in the interface.",
       "type": "object",
       "additionalProperties": false,
       "properties": {

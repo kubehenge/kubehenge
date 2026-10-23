@@ -9,7 +9,10 @@
 // Settings come from the environment: KUBEHENGE_PROXMOX_URL, KUBEHENGE_PROXMOX_TOKEN and optionally
 // KUBEHENGE_PROXMOX_CA; KUBEHENGE_E2E_NODE, _STORAGE, _IMPORT_STORAGE, _POOL, _BRIDGE; and, where the
 // bridge has no DHCP, KUBEHENGE_E2E_ADDRESS (with prefix), _GATEWAY and _DNS (comma-separated) for the
-// VMs that bake and boot images. KUBEHENGE_E2E_KUBERNETES_VERSION picks the kubeadm template's version.
+// VMs that bake and boot images. KUBEHENGE_E2E_KUBERNETES_VERSION picks the kubeadm templates' version.
+// Talos is made, and kubeadm, whose template carries the most, on every node OS available; one whose
+// CPU level no node of the host reaches is skipped, saying so. RKE2's and k3s's templates are made
+// and booted by the workload cluster tests.
 
 package templates
 
@@ -76,18 +79,32 @@ func e2eBuilder(t *testing.T) *Builder {
 func TestTemplatesEndToEnd(t *testing.T) {
 	b := e2eBuilder(t)
 	kubernetes := env(t, "KUBEHENGE_E2E_KUBERNETES_VERSION", "v1.37.1")
-	for _, req := range []Request{
-		{Distribution: Talos},
-		{Distribution: RKE2},
-		{Distribution: Kubeadm, KubernetesVersion: kubernetes},
-	} {
-		t.Run(string(req.Distribution), func(t *testing.T) {
+	nodeOSes := AvailableNodeOSes()
+	requests := append(make([]Request, 0, 1+len(nodeOSes)), Request{Distribution: Talos})
+	for _, o := range nodeOSes {
+		nodeOS, err := ParseNodeOS(o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requests = append(requests, Request{Distribution: Kubeadm, NodeOS: nodeOS, KubernetesVersion: kubernetes})
+	}
+	for _, req := range requests {
+		name := string(req.Distribution)
+		if req.Distribution != Talos {
+			name += "/" + req.NodeOS.String()
+		}
+		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
-			tmpl, err := Plan(req)
+			tmpl, err := Plan(&req)
 			if err != nil {
 				t.Fatal(err)
 			}
-			// An Ubuntu template is made as a build of its line, as clusters select it.
+			if tmpl.Bake != nil {
+				if err = b.checkCPU(ctx, tmpl.Bake.NodeOS); err != nil {
+					t.Skip(err)
+				}
+			}
+			// A node OS template is made as a build of its line, as clusters select it.
 			if tmpl.Refreshed() {
 				if tmpl, err = tmpl.Build(time.Now()); err != nil {
 					t.Fatal(err)
@@ -184,6 +201,11 @@ func bootClone(t *testing.T, b *Builder, template int, bake Bake) {
 	if err = waitTask(ctx, task, err, 2*time.Minute); err != nil {
 		t.Fatal(err)
 	}
+	// As Cluster API's Proxmox VE provider gives a machine the disk its class asks.
+	task, err = vm.ResizeDisk(ctx, "scsi0", "+8G")
+	if err = waitTask(ctx, task, err, 2*time.Minute); err != nil {
+		t.Fatal(err)
+	}
 	if vm, err = node.VirtualMachine(ctx, cloneID); err != nil {
 		t.Fatal(err)
 	}
@@ -214,26 +236,26 @@ func bootClone(t *testing.T, b *Builder, template int, bake Bake) {
 	if err = vm.WaitForAgent(ctx, 600); err != nil {
 		t.Fatal(err)
 	}
-	checks := [][]string{
-		{"cloud-init", "status", "--wait"},
+	// The node's own checks first, cloud-init's at their head: it finished without warnings.
+	checks := append(nodeChecks(bake), [][]string{
 		{"test", "-s", "/run/kubehenge-e2e"},
 		{"sh", "-c", fmt.Sprintf("test \"$(hostname)\" = kubehenge-e2e-%d", cloneID)},
-		// The bake removed its host keys; this boot made new ones.
-		{"test", "-s", "/etc/ssh/ssh_host_ed25519_key"},
-		{"sh", "-c", "! grep -q kubehenge-bake /var/lib/cloud/data/instance-id"},
-	}
-	if bake.KubernetesVersion != "" {
-		checks = append(checks,
-			[]string{"sh", "-c", `test "$(kubeadm version -o short)" = ` + bake.KubernetesVersion},
-			[]string{"sh", "-c", "crictl images | grep -q kube-apiserver"},
-		)
-	}
+		// The bake's boots left none of their identity: this one is the clone's own.
+		{"sh", "-c", fmt.Sprintf("test \"$(cat /var/lib/cloud/data/instance-id)\" = kubehenge-e2e-%d", cloneID)},
+		{"sh", "-c", "test -s /etc/machine-id && ! grep -q uninitialized /etc/machine-id"},
+		{"sh", "-c", fmt.Sprintf(`. /etc/os-release && test "${ID}" = %q`, osReleaseID[bake.NodeOS.Family])},
+		// The root file system grew to the disk the clone was given, beyond the template's.
+		{"sh", "-c", `root=$(findmnt -n -o TARGET /sysroot || echo /); disk=$(lsblk -dbno SIZE /dev/sda); fs=$(df -B1 --output=size "${root}" | tail -n 1); test $((fs * 10)) -gt $((disk * 8))`},
+	}...)
 	for _, c := range checks {
 		if err := b.exec(ctx, vm, c, 20*time.Minute); err != nil {
 			t.Error(err)
 		}
 	}
 }
+
+// osReleaseID is each family's ID in /etc/os-release.
+var osReleaseID = map[string]string{almaLinuxName: "almalinux", rockyName: "rocky", leapName: "opensuse-leap"}
 
 func assertNoLeftovers(t *testing.T, b *Builder) {
 	t.Helper()

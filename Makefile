@@ -138,12 +138,12 @@ helm-addon-image:
 	sh scripts/provider-image.sh helm-addon $(HELM_ADDON_IMAGE) $(KO_FLAGS)
 
 # Lint and static tier: Go, the frontend, Terraform/OpenTofu, Helm charts, shell, the workflows,
-# YAML, Markdown and the e2e image's Dockerfile, each at its strictest settings; the files are the
-# repository's own, as git lists them.
+# YAML, Markdown, the e2e image's Dockerfile and the node images' Containerfiles, each at its
+# strictest settings; the files are the repository's own, as git lists them.
 lint: lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker
 
 FILES = git ls-files --cached --others --exclude-standard
-SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh test/integration/*.sh test/unit/*.sh appliance/*.sh appliance/pve-entry/*.sh scripts/*.sh pkg/provisioner/*.sh pkg/templates/*.sh charts/kubehenge/files/*.sh
+SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh test/integration/*.sh test/unit/*.sh appliance/*.sh appliance/pve-entry/*.sh scripts/*.sh pkg/provisioner/*.sh pkg/templates/*/*.sh charts/kubehenge/files/*.sh
 SHFMT_FLAGS := -i 4 -ci -sr
 # Installed from lock files, which check every package's hash, their dependencies' included.
 YAMLLINT := uv run --locked --project scripts/lint yamllint
@@ -215,7 +215,7 @@ lint-markdown: web/node_modules/.package-lock.json
 	$(MARKDOWNLINT) $$($(FILES) '*.md')
 
 lint-docker:
-	hadolint --failure-threshold style test/e2e/pve/Dockerfile
+	hadolint --failure-threshold style test/e2e/pve/Dockerfile pkg/templates/el/*Containerfile
 
 # Unit tier: the Go packages, under the race detector, the frontend, each Terraform/OpenTofu
 # configuration against mocked providers, and the shell scripts' own tests.

@@ -67,7 +67,7 @@ type Settings struct {
 	// ClusterDatastoreAllocate lets a cluster choose the CSI plugin's newest release, whose token
 	// then holds Datastore.Allocate on the cluster's storage.
 	ClusterDatastoreAllocate bool `json:"clusterDatastoreAllocate,omitempty"`
-	// TemplateRefresh is the weekly build of the Ubuntu VM templates; unset, it runs with the
+	// TemplateRefresh is the weekly build of the node OS VM templates; unset, it runs with the
 	// module's defaults.
 	TemplateRefresh *TemplateRefresh `json:"templateRefresh,omitempty"`
 	// ClusterSysAudit lets a cluster choose the cloud controller manager's HA group labels, whose
@@ -85,9 +85,9 @@ type Settings struct {
 	ExtraClusterNamespaces []string `json:"extraClusterNamespaces,omitempty"`
 }
 
-// TemplateRefresh is when and where the Ubuntu VM templates are built again. Empty fields take the
-// module's defaults: Sunday at 01:00 UTC, the first cluster storage, DHCP for the VM that
-// prepares an image.
+// TemplateRefresh is when and where the node OS VM templates are built again. Empty fields take the
+// module's defaults: Sunday at 01:00 UTC, the first cluster storage, DHCP for the VM that builds a
+// node image.
 type TemplateRefresh struct {
 	Enabled  bool   `json:"enabled"`
 	Weekday  string `json:"weekday,omitempty"`

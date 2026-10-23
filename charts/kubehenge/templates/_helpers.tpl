@@ -1222,6 +1222,37 @@ The kubelet settings cis adds, as kubelet flags.
 {{- end -}}
 
 {{/*
+The operating system of an RKE2, k3s or kubeadm cluster's nodes. files/node-oses.json lists the node
+OSes Kubehenge builds templates of; a unit test holds it to the families in pkg/templates.
+*/}}
+{{- define "kubehenge.nodeOSVariable" -}}
+{{- $oses := .Files.Get "files/node-oses.json" | fromJson }}
+- name: nodeOS
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        Operating system of the nodes, a family and one of its releases, as Kubehenge builds its VM
+        templates: the family's own signed packages and only those a node needs, SELinux enforcing
+        with the distribution's policy, and for AlmaLinux and Rocky Linux an image-mode system whose
+        /usr is read-only. Changing it replaces every node with a clone of the new node OS's
+        template, one at a time as in an upgrade; that template has to be built first.
+      required: [family, release]
+      default: {{ toJson $oses.default }}
+      properties:
+        family:
+          type: string
+          enum: {{ toJson $oses.families }}
+        release:
+          type: string
+          minLength: 1
+      x-kubernetes-validations:
+        - rule: "(self.family + '-' + self.release) in {{ toJson $oses.available | replace "\"" "'" }}"
+          message: "a release of the family Kubehenge builds templates of: {{ join ", " $oses.available }}"
+{{- end -}}
+
+{{/*
 Automatic Kubernetes upgrades and node image refreshes, which Kubehenge's controller starts; no patch
 reads it.
 */}}
@@ -1248,8 +1279,8 @@ reads it.
           default: true
           description: >-
             Replace the nodes inside the window with clones of the newest build of their VM
-            template, which carries Ubuntu's updates, once that build is a day old, whatever mode
-            says. Nodes are replaced one at a time, as in an upgrade. Talos nodes take their
+            template, which carries their node OS's updates, once that build is a day old, whatever
+            mode says. Nodes are replaced one at a time, as in an upgrade. Talos nodes take their
             updates by upgrading Talos instead.
         window:
           type: object
@@ -1526,6 +1557,11 @@ content: |
     hostAliases:
       - ip: 127.0.0.1
         hostnames: [kubernetes]
+    # It reads the node's own admin kubeconfig, whose SELinux type no confined container may read,
+    # as the control plane's static pods beside it do.
+    securityContext:
+      seLinuxOptions:
+        type: spc_t
     containers:
       - name: kube-vip
         image: {{ .root.Values.kubeVip }}

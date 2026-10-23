@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -32,8 +33,8 @@ const DefaultBuildsKept = 2
 // takes with every step at its timeout, so that a build another run has under way is left alone.
 const leftoverAge = 3 * time.Hour
 
-// TemplateRefresh builds the template lines clusters run again, with the updates Ubuntu published
-// since, and deletes the builds nothing can clone from any more.
+// TemplateRefresh builds the template lines clusters run again, with the updates their node OS
+// published since, and deletes the builds nothing can clone from any more.
 type TemplateRefresh struct {
 	// Kube reads the clusters and their machines in every namespace.
 	Kube           client.Reader
@@ -169,17 +170,17 @@ func poolBuilds(list []*proxmox.ClusterResource) map[string][]templates.Built {
 	return out
 }
 
-// toBuild are the lines this run builds: the cloud image RKE2 and k3s share and the kubeadm line
-// of every version a cluster's machines run, then each missing line asked for that has no build.
+// toBuild are the lines this run builds, refreshedRequests's, then each missing line asked for
+// that has no build.
 func (r *TemplateRefresh) toBuild(clusters []refreshedCluster, builds map[string][]templates.Built) ([]templates.Template, error) {
 	var reqs []templates.Request
 	if !r.MissingOnly {
-		reqs = refreshedRequests(clusters)
+		reqs = refreshedRequests(clusters, builds)
 	}
 	var out []templates.Template
 	seen := map[string]bool{}
 	add := func(req templates.Request, onlyMissing bool) error {
-		t, err := templates.Plan(req)
+		t, err := templates.Plan(&req)
 		if err != nil {
 			return fmt.Errorf("planning the %s template: %w", req.Distribution, err)
 		}
@@ -204,16 +205,28 @@ func (r *TemplateRefresh) toBuild(clusters []refreshedCluster, builds map[string
 	return out, nil
 }
 
-// refreshedRequests are the lines every run builds: the cloud image RKE2 and k3s share and the
-// kubeadm line of every version a cluster's machines run.
-func refreshedRequests(clusters []refreshedCluster) []templates.Request {
-	reqs := []templates.Request{{Distribution: templates.RKE2}}
+// refreshedRequests are the lines every run builds: RKE2's on the default node OS, so that a first
+// cluster finds its template; every line a cluster's machines run; and every RKE2 and k3s line the
+// pool holds, which someone asked for and no Kubernetes version outdates. A line of a node OS that
+// can no longer be built is left as it is.
+func refreshedRequests(clusters []refreshedCluster, builds map[string][]templates.Built) []templates.Request {
+	reqs := []templates.Request{{Distribution: templates.RKE2, NodeOS: templates.DefaultNodeOS}}
+	add := func(line []string, kubeadm bool) {
+		req, ok := templates.RequestOf(line)
+		if !ok || req.Distribution == templates.Kubeadm && !kubeadm {
+			return
+		}
+		if _, _, err := templates.Available(req.NodeOS); err == nil && !slices.Contains(reqs, req) {
+			reqs = append(reqs, req)
+		}
+	}
 	for _, c := range clusters {
 		for _, line := range c.lines {
-			if v, ok := kubeadmVersionOf(line); ok {
-				reqs = append(reqs, templates.Request{Distribution: templates.Kubeadm, KubernetesVersion: v.Raw})
-			}
+			add(line, true)
 		}
+	}
+	for _, key := range slices.Sorted(maps.Keys(builds)) {
+		add(strings.Split(key, ";"), false)
 	}
 	return reqs
 }
@@ -295,14 +308,14 @@ func buildTimes(builds map[string][]templates.Built) NodeImageBuilds {
 }
 
 // buildUsage is what the clusters run: the lines (run), each line's build a cluster picks (used,
-// by line and build tag), and the Kubernetes versions of kubeadm lines.
+// by line and build tag), and the Kubernetes versions of kubeadm lines by node OS.
 type buildUsage struct {
 	run, used map[string]bool
-	kubeadm   []kubeVersion
+	kubeadm   map[templates.NodeOS][]kubeVersion
 }
 
 func usageOf(record NodeImageBuilds, clusters []refreshedCluster, soak time.Duration) buildUsage {
-	u := buildUsage{run: map[string]bool{}, used: map[string]bool{}}
+	u := buildUsage{run: map[string]bool{}, used: map[string]bool{}, kubeadm: map[templates.NodeOS][]kubeVersion{}}
 	for _, c := range clusters {
 		for _, line := range c.lines {
 			key := templates.LineKey(line)
@@ -311,21 +324,24 @@ func usageOf(record NodeImageBuilds, clusters []refreshedCluster, soak time.Dura
 				u.used[key+";"+templates.BuildTag(at)] = true
 			}
 			if v, ok := kubeadmVersionOf(line); ok {
-				u.kubeadm = append(u.kubeadm, v)
+				os, _ := templates.NodeOSOf(line)
+				u.kubeadm[os] = append(u.kubeadm[os], v)
 			}
 		}
 	}
 	return u
 }
 
-// reachable tells whether a line is one clusters may still need: the cloud image's, any but a
-// kubeadm one, or a kubeadm version above one a cluster runs, which an upgrade could take.
-func reachable(key string, running []kubeVersion) bool {
-	v, ok := kubeadmVersionOf(strings.Split(key, ";"))
+// reachable tells whether a line is one clusters may still need: any but a kubeadm one, or a
+// kubeadm version above one a cluster on its node OS runs, which an upgrade could take.
+func reachable(key string, running map[templates.NodeOS][]kubeVersion) bool {
+	tags := strings.Split(key, ";")
+	v, ok := kubeadmVersionOf(tags)
 	if !ok {
 		return true
 	}
-	return slices.ContainsFunc(running, func(r kubeVersion) bool { return r.less(v) })
+	os, _ := templates.NodeOSOf(tags)
+	return slices.ContainsFunc(running[os], func(r kubeVersion) bool { return r.less(v) })
 }
 
 // pendingSelections are the tag sets the ProxmoxMachines still waiting for their VM select, which

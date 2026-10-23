@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/luthermonson/go-proxmox"
@@ -15,17 +17,32 @@ import (
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+
+	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
+// fakeNodes are online nodes whose CPUs reach x86-64-v3 unless levels says otherwise.
 type fakeNodes struct {
 	online []string
+	levels map[string]int
 	err    error
 	asked  int
 }
 
-func (f *fakeNodes) OnlineNodes(context.Context) ([]string, error) {
+func (f *fakeNodes) OnlineNodes(context.Context) ([]Node, error) {
 	f.asked++
-	return f.online, f.err
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := make([]Node, len(f.online))
+	for i, n := range f.online {
+		level, ok := f.levels[n]
+		if !ok {
+			level = 3
+		}
+		out[i] = Node{Name: n, CPULevel: level}
+	}
+	return out, nil
 }
 
 func TestPlacement(t *testing.T) {
@@ -141,23 +158,125 @@ func TestGeneratePatchesAsksForANewCluster(t *testing.T) {
 	}
 }
 
+// The CPU flags of a Westmere, which reaches x86-64-v2, and of a Zen 3, which reaches v3.
+const (
+	westmereFlags = "fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 " +
+		"syscall nx lm constant_tsc rep_good nopl pni pclmulqdq ssse3 cx16 sse4_1 sse4_2 x2apic popcnt aes hypervisor lahf_lm"
+	zen3Flags = westmereFlags + " avx f16c rdrand abm sse4a misalignsse 3dnowprefetch fma bmi1 avx2 smep bmi2 erms movbe xsave xsaveopt"
+)
+
 func TestOnlineNodesLeavesOutNodesThatAreDown(t *testing.T) {
 	t.Parallel()
+	var mu sync.Mutex
+	statuses := map[string]int{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var data any = []any{}
-		if r.URL.Path == "/api2/json/nodes" {
+		switch r.URL.Path {
+		case "/api2/json/nodes":
 			data = []map[string]any{{"node": "pve3", "status": "online"}, {"node": "pve2", "status": "offline"}, {"node": "pve1", "status": "online"}}
+		case "/api2/json/nodes/pve1/status", "/api2/json/nodes/pve3/status":
+			mu.Lock()
+			statuses[r.URL.Path]++
+			mu.Unlock()
+			flags := zen3Flags
+			if strings.Contains(r.URL.Path, "pve1") {
+				flags = westmereFlags
+			}
+			data = map[string]any{"cpuinfo": map[string]any{"flags": flags, "model": "a CPU"}}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
 	}))
 	t.Cleanup(srv.Close)
 	p := &Proxmox{Client: proxmox.NewClient(srv.URL + "/api2/json")}
-	online, err := p.OnlineNodes(t.Context())
+	for range 2 {
+		online, err := p.OnlineNodes(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(online, []Node{{"pve1", 2}, {"pve3", 3}}) {
+			t.Errorf("online = %v", online)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if statuses["/api2/json/nodes/pve1/status"] != 1 || statuses["/api2/json/nodes/pve3/status"] != 1 {
+		t.Errorf("read the nodes' CPUs %v times; once each is enough", statuses)
+	}
+}
+
+func TestNodesForTheNodeOSesCPU(t *testing.T) {
+	t.Parallel()
+	online := []Node{{"pve1", 2}, {"pve2", 3}, {"pve3", 4}}
+	if got := nodesFor(online, templates.DefaultNodeOS); !slices.Equal(got, []string{"pve1", "pve2", "pve3"}) {
+		t.Errorf("AlmaLinux runs on %v", got)
+	}
+	if got := nodesFor(online, templates.NodeOS{Family: "rocky", Release: "10"}); !slices.Equal(got, []string{"pve2", "pve3"}) {
+		t.Errorf("Rocky Linux runs on %v", got)
+	}
+}
+
+func TestCheckNodeOSRefusesWhatNoAllowedNodeRuns(t *testing.T) {
+	t.Parallel()
+	rocky := nodeOSVariable(t, "rocky", "10")
+	for _, tc := range []struct {
+		name    string
+		vars    []clusterv1.ClusterVariable
+		online  []string
+		levels  map[string]int
+		refused string
+	}{
+		{"the default on any node", nil, []string{"pve1"}, map[string]int{"pve1": 2}, ""},
+		{"Rocky Linux on a node of its level", []clusterv1.ClusterVariable{rocky}, []string{"pve1", "pve2"}, map[string]int{"pve1": 2}, ""},
+		{"Rocky Linux where no node reaches its level", []clusterv1.ClusterVariable{rocky}, []string{"pve1"}, map[string]int{"pve1": 2}, "x86-64-v3"},
+		{
+			"Rocky Linux where only a node the cluster may not use reaches it",
+			[]clusterv1.ClusterVariable{rocky, clusterVariable(t, allowedNodesVariable, []string{"pve1"})},
+			[]string{"pve1", "pve2"},
+			map[string]int{"pve1": 2},
+			"(pve1)",
+		},
+		{"nothing online to judge by", []clusterv1.ClusterVariable{rocky}, nil, nil, ""},
+		{"a node OS not released", []clusterv1.ClusterVariable{nodeOSVariable(t, "leap", "16.1")}, []string{"pve1"}, nil, "not released"},
+		{"an unknown one", []clusterv1.ClusterVariable{nodeOSVariable(t, "plan9", "4")}, []string{"pve1"}, nil, "unknown node OS family"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := cluster(tc.vars...)
+			h := &Hooks{Nodes: &fakeNodes{online: tc.online, levels: tc.levels}}
+			err := h.checkNodeOS(t.Context(), c)
+			if tc.refused == "" && err != nil || tc.refused != "" && (err == nil || !strings.Contains(err.Error(), tc.refused)) {
+				t.Errorf("checkNodeOS = %v, want a refusal naming %q", err, tc.refused)
+			}
+		})
+	}
+}
+
+func clusterVariable(t *testing.T, name string, value any) clusterv1.ClusterVariable {
+	t.Helper()
+	raw, err := json.Marshal(value)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(online, []string{"pve1", "pve3"}) {
-		t.Errorf("online = %v", online)
+	return clusterv1.ClusterVariable{Name: name, Value: apiextensionsv1.JSON{Raw: raw}}
+}
+
+func nodeOSVariable(t *testing.T, family, release string) clusterv1.ClusterVariable {
+	t.Helper()
+	return clusterVariable(t, NodeOSVariable, templates.NodeOS{Family: family, Release: release})
+}
+
+func TestPlacerRecordsOnlyTheNodesThatRunTheNodeOS(t *testing.T) {
+	t.Parallel()
+	web := cluster(nodeOSVariable(t, "rocky", "10"))
+	_, c := newReconciler(t, nil, web)
+	p := &Placer{Client: c, ClassNamespace: "kubehenge-system", Nodes: &fakeNodes{online: []string{"pve1", "pve2"}, levels: map[string]int{"pve1": 2}}}
+	p.placeAll(t.Context())
+	got := &clusterv1.Cluster{}
+	if err := c.Get(t.Context(), client.ObjectKeyFromObject(web), got); err != nil {
+		t.Fatal(err)
+	}
+	if v := got.Annotations[OnlineNodesAnnotation]; v != "pve2" {
+		t.Errorf("web records %q", v)
 	}
 }
 

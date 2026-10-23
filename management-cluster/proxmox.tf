@@ -278,7 +278,7 @@ resource "proxmox_acl" "provisioner" {
   propagate = each.value.propagate
 }
 
-# The template refresh builds the Ubuntu templates again every week with a user and token of their
+# The template refresh builds the node OS templates again every week with a user and token of their
 # own, so that nothing else in the management cluster can make or delete templates. Deleting a
 # downloaded image or a cloud-init ISO takes Datastore.Allocate on its storage, which reaches every
 # file there; Sys.AccessNetwork on the node lets Proxmox VE download the image, and nothing more.

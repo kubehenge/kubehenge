@@ -1,6 +1,7 @@
 {{- $class := "kubehenge-rke2" }}
 {{- $clusterSpec := include "kubehenge.proxmoxClusterSpec" . }}
-{{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "cloud-image" "kubehenge" "ubuntu-26.04") "serviceJoins" true) }}
+{{- /* Placeholder tags: the controller's patch selects the build of the node OS's template. */}}
+{{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "kubehenge" "os-almalinux-10" "rke2") "serviceJoins" true) }}
 {{- $controlPlaneSpec := include "kubehenge.rke2ControlPlaneSpec" . }}
 {{- $workerSpec := include "kubehenge.rke2WorkerSpec" . }}
 {{- $clusterName := include "kubehenge.hashedName" (dict "name" $class "spec" $clusterSpec) }}
@@ -87,6 +88,7 @@ spec:
     {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 2 "workerMinMemoryMiB" 4096 "clusters" .Values.clusters) | nindent 4 }}
     {{- include "kubehenge.addonVariables" . | nindent 4 }}
     {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
+    {{- include "kubehenge.nodeOSVariable" . | nindent 4 }}
     {{- include "kubehenge.autoscalerVariable" . | nindent 4 }}
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
     {{- include "kubehenge.cisVariable" . | nindent 4 }}
