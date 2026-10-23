@@ -665,7 +665,10 @@ addons:
           tag: v3.5.6@sha256:8e5cc5bb008df8a09dba439462e58c94c55b7735888d3ebde0c25fc05e4e5335
       redis:
         image:
-          # renovate: datasource=docker depName=ecr-public.aws.com/docker/library/redis
+          # The same image as the chart's ECR Public copy, whose anonymous data quota per address
+          # refuses pulls from busy shared egress.
+          repository: docker.io/library/redis
+          # renovate: datasource=docker depName=docker.io/library/redis
           tag: 8.10.2-alpine@sha256:0bf6577d7774e592b29d093e3ac9390eb91e13d72c21e506afce736de5e0eeb0
   fluxOperator:
     repository: oci://ghcr.io/controlplaneio-fluxcd/charts
