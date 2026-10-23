@@ -235,6 +235,7 @@ spec:
 {{- define "kubehenge.rke2AgentConfig" -}}
 preRKE2Commands:
   - sysctl --system
+  - {{ include "kubehenge.runcProfileLoad" . | quote }}
 agentConfig:
   # The kubelet refuses to start on kernel settings other than its own (kubehenge.sysctlFile).
   protectKernelDefaults: true
@@ -256,6 +257,7 @@ template:
     {{- include "kubehenge.rke2AgentConfig" (dict "controlPlane" true) | nindent 4 }}
     files:
       {{- include "kubehenge.sysctlFile" . | nindent 6 }}
+      {{- include "kubehenge.runcProfileFile" (dict "distribution" "rke2") | nindent 6 }}
       {{- include "kubehenge.auditPolicyFile" (dict "root" . "path" "/etc/rancher/rke2/audit-policy.yaml") | nindent 6 }}
       # Given a policy, RKE2 audits the API server and keeps a month of the log.
       - path: /etc/rancher/rke2/config.yaml.d/50-kubehenge-audit.yaml
@@ -297,4 +299,5 @@ template:
     {{- include "kubehenge.rke2AgentConfig" (dict) | nindent 4 }}
     files:
       {{- include "kubehenge.sysctlFile" . | nindent 6 }}
+      {{- include "kubehenge.runcProfileFile" (dict "distribution" "rke2") | nindent 6 }}
 {{- end -}}
