@@ -64,6 +64,10 @@ const (
 	ingressTLSSecret = "kubehenge-ingress-tls" //nolint:gosec // a Secret's name, not a credential
 	ingressCASecret  = "kubehenge-ingress-ca"  //nolint:gosec // a Secret's name, not a credential
 	dns01Secret      = "kubehenge-dns01"       //nolint:gosec // a Secret's name, not a credential
+	// traefikValuesSecret in kube-system holds, under traefikValuesKey, the values RKE2's and k3s's
+	// Traefik take from the cluster's certificates; the classes' HelmChartConfig names it.
+	traefikValuesSecret = "kubehenge-traefik" //nolint:gosec // a Secret's name, not a credential
+	traefikValuesKey    = "values.yaml"
 
 	certManagerGroup = "cert-manager.io"
 	traefikGateway   = "traefik-gateway"

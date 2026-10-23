@@ -618,6 +618,35 @@ func rke2CiliumConfig(cluster *clusterv1.Cluster, id int, addons *Addons) (*core
 	}, nil
 }
 
+func traefikConfigName(cluster *clusterv1.Cluster) string {
+	return cluster.Name + "-traefik"
+}
+
+// traefikConfig wraps, for the ClusterResourceSet, the values Secret the HelmChartConfig of RKE2's
+// and k3s's Traefik names (kubehenge.traefikValuesSecrets): the part of Traefik's configuration
+// that follows the cluster's certificates. A change reaches the running cluster, where one in the
+// HelmChartConfig's file would replace the control planes. It is there, if only empty, for every
+// cluster, since helm-controller installs Traefik only once it is.
+func traefikConfig(cluster *clusterv1.Cluster, certs *Certificates) (*corev1.Secret, error) {
+	values := traefikCertificateValues(certs)
+	if values == nil {
+		values = map[string]any{}
+	}
+	content, err := yaml.Marshal(values)
+	if err != nil {
+		return nil, fmt.Errorf("encoding Traefik's values: %w", err)
+	}
+	manifest, err := workloadManifest(traefikValuesSecret, map[string]string{traefikValuesKey: string(content)})
+	if err != nil {
+		return nil, err
+	}
+	return &corev1.Secret{
+		Name: traefikConfigName(cluster), Namespace: cluster.Namespace,
+		Type: addonsv1.ClusterResourceSetSecretType,
+		Data: map[string][]byte{traefikValuesSecret + ".yaml": manifest},
+	}, nil
+}
+
 // clusterResourceSet applies the cluster's Proxmox VE Secret and the other Secrets given, such as
 // Calico's resources when Kubehenge installs Calico; each is retried on its own until it applies.
 func clusterResourceSet(cluster *clusterv1.Cluster, secrets []*corev1.Secret) *addonsv1.ClusterResourceSet {

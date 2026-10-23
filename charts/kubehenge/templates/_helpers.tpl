@@ -1016,11 +1016,8 @@ TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TL
 {{- end -}}
 
 {{/*
-The Gateway and TLS values of the Traefik RKE2 and k3s bring, rendered by Cluster API from the
-cluster's variables. Its Gateway's HTTP listener takes routes from every namespace; with DNS-01 or
-the cluster's CA, the wildcard certificate the controller asks cert-manager for is Traefik's
-default and that of an HTTPS listener as well. HTTP-01 proves no wildcard, so it gives neither.
-Traefik serves its own self-signed certificate until cert-manager has issued the Secret.
+The Gateway values of the Traefik RKE2 and k3s bring: its Gateway's HTTP listener takes routes
+from every namespace.
 */}}
 {{- define "kubehenge.traefikGatewayValues" -}}
 gateway:
@@ -1028,21 +1025,18 @@ gateway:
     web:
       namespacePolicy:
         from: All
-{{ "{{- with .certificates }}{{ if and .enabled .domain (ne (.issuer | default \"acme-dns01\") \"acme-http01\") }}" }}
-    websecure:
-      port: 8443
-      protocol: HTTPS
-      mode: Terminate
-      certificateRefs:
-        - kind: Secret
-          name: kubehenge-ingress-tls
-      namespacePolicy:
-        from: All
-tlsStore:
-  default:
-    defaultCertificate:
-      secretName: kubehenge-ingress-tls
-{{ "{{- end }}{{ end }}" }}
+{{- end -}}
+
+{{/*
+The Secret in kube-system whose values.yaml Kubehenge's controller keeps in step with the
+cluster's certificates, merged over the HelmChartConfig's own values: the default certificate and
+the Gateway's HTTPS listener. helm-controller upgrades Traefik when it changes, and installs it
+only once the Secret is there.
+*/}}
+{{- define "kubehenge.traefikValuesSecrets" -}}
+valuesSecrets:
+  - name: kubehenge-traefik
+    keys: [values.yaml]
 {{- end -}}
 
 {{- define "kubehenge.oidcEnabled" -}}

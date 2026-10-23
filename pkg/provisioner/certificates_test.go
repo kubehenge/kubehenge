@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"encoding/base64"
@@ -129,6 +130,63 @@ func TestTraefikServesTheDefaultCertificate(t *testing.T) {
 	}
 	if _, ok := lookup[map[string]any](t, values, "providers", "kubernetesGateway")["statusAddress"]; ok {
 		t.Error("a Gateway address with no API address")
+	}
+}
+
+// RKE2's and k3s's Traefik take what follows the certificates from a Secret the cluster's
+// ClusterResourceSet keeps in the running cluster, the same values the Traefik Kubehenge installs
+// into kubeadm clusters gets, and empty while there is no default certificate.
+func TestRKE2AndK3sTraefikTakeTheDefaultCertificateFromTheRunningCluster(t *testing.T) {
+	t.Parallel()
+	traefikSecretValues := func(class string, certs Certificates) (map[string]any, bool) {
+		c := certificatesCluster(`{"enabled": false}`)
+		c.Spec.Topology.ClassRef.Name = class
+		secrets, err := resourceSetSecrets(c, &corev1.Secret{Name: "proxmox"}, CNI{}, &Addons{Certificates: certs}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		i := slices.IndexFunc(secrets, func(s *corev1.Secret) bool { return s.Name == traefikConfigName(c) })
+		if i < 0 {
+			return nil, false
+		}
+		var applied corev1.Secret
+		if err := yaml.Unmarshal(secrets[i].Data[traefikValuesSecret+".yaml"], &applied); err != nil {
+			t.Fatal(err)
+		}
+		if applied.Kind != secretKind || applied.Name != traefikValuesSecret || applied.Namespace != "kube-system" {
+			t.Fatalf("%s: applies %s %s/%s", class, applied.Kind, applied.Namespace, applied.Name)
+		}
+		var values map[string]any
+		if err := yaml.Unmarshal([]byte(applied.StringData[traefikValuesKey]), &values); err != nil {
+			t.Fatal(err)
+		}
+		return values, true
+	}
+	ca := Certificates{Enabled: true, Issuer: IssuerCA, Domain: "lab.example.org"}
+	for _, class := range []string{ClassPrefix + "rke2", ClassPrefix + "k3s"} {
+		values, found := traefikSecretValues(class, ca)
+		if !found {
+			t.Fatalf("%s: no values for Traefik", class)
+		}
+		want, err := yaml.Marshal(traefikCertificateValues(&ca))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := yaml.Marshal(values)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("%s: Traefik's values\n%s\nwant\n%s", class, got, want)
+		}
+		for _, certs := range []Certificates{{}, {Enabled: true, Issuer: IssuerACMEHTTP01, Domain: "lab.example.org"}} {
+			if values, found = traefikSecretValues(class, certs); !found || len(values) != 0 {
+				t.Errorf("%s %+v: Traefik's values %v, found %v", class, certs, values, found)
+			}
+		}
+	}
+	if _, found := traefikSecretValues(ClassPrefix+"kubeadm", ca); found {
+		t.Error("a kubeadm cluster, whose Traefik Kubehenge installs, got the values of RKE2's")
 	}
 }
 

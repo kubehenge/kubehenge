@@ -121,7 +121,9 @@ spec:
             # worker joins, and the cluster's API address would serve no ingress. Routes whose TLS
             # options conflict fail rather than fall back to the defaults, which would drop a host's
             # client-certificate check (GHSA-g55h-rg46-x9c5). Its Gateway API provider is on, as in
-            # the Traefik Kubehenge installs into kubeadm clusters.
+            # the Traefik Kubehenge installs into kubeadm clusters. What follows the cluster's
+            # certificates comes from the values Secret it names, which Kubehenge keeps in the
+            # running cluster: in the file, every change of it would replace the control planes.
             - op: add
               path: /spec/template/spec/files/-
               valueFrom:
@@ -136,6 +138,7 @@ spec:
                       name: rke2-traefik
                       namespace: kube-system
                     spec:
+                      {{- include "kubehenge.traefikValuesSecrets" . | nindent 22 }}
                       valuesContent: |-
                         core:
                           strictTLSOptions: true
