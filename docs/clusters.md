@@ -92,25 +92,25 @@ Each new VM goes to one of the nodes it may use that is online: the one running 
 
 The defaults are 2 cores and 4096 MiB, with a 30 GiB disk for the control plane and 40 GiB for workers. Disks are at least 20 GiB. A control-plane node needs at least 2 cores and 4096 MiB, the first row of the k3s and RKE2 server sizing guides; kubeadm, which documents no sizes, follows RKE2's guide. With more workers the guides ask for more, and Kubehenge refuses a cluster whose control planes fall short, when it is created and when its workers or machines change: RKE2 and kubeadm need 4 cores and 8192 MiB from 226 workers, 8 cores and 16384 MiB from 451, and 16 cores and 32768 MiB from 1,301; k3s needs the same from 351, 901 and 1,801 workers. A worker needs at least 1024 MiB on k3s, 2048 MiB on kubeadm, and 2 cores and 4096 MiB on RKE2, never less than its distribution's minimum for a node. The guides size servers whose workloads run on workers; a cluster without workers runs them on its control planes, so each needs a worker's least on top: 3 cores and 5120 MiB on k3s, 3 cores and 6144 MiB on kubeadm, 4 cores and 8192 MiB on RKE2. The interface raises the control planes to that when the workers are set to none. The interface keeps the sizes once the cluster exists; with kubectl a change of size rolls the nodes, and a disk only grows.
 
-The add-ons need memory too, on the workers, or on the control planes of a cluster without workers. Each of those nodes needs its distribution's least, or what such a node uses itself plus its share of the add-ons' memory, whichever is more. The end-to-end tests measure the figures, which have room to grow:
+The add-ons need memory too. Their pods run on the workers, or on the control planes of a cluster without workers, and each of those nodes needs its distribution's least, or what such a node uses itself plus its share of the pods' memory, whichever is more. Every control plane also holds the add-ons' resource types and objects in its API server, so what it uses itself grows with each add-on, workers or not. The end-to-end tests measure the figures, which have room to grow:
 
-| Add-on | Memory |
-| --- | --- |
-| Headlamp | 64 MiB |
-| Monitoring | 1536 MiB |
-| Logs | 512 MiB |
-| Backups | 384 MiB |
-| Kyverno | 384 MiB |
-| Istio | 384 MiB |
-| Cilium Cluster Mesh | 128 MiB |
-| Load balancer | 128 MiB |
-| GitOps with Argo CD | 512 MiB |
-| GitOps with Flux | 384 MiB |
-| cert-manager, with monitoring, Rancher or certificates | 192 MiB |
-| Rancher | 2048 MiB |
-| Rancher's agent, in every cluster that registers | 512 MiB |
+| Add-on | Pods | Each control plane, kubeadm and RKE2 | Each control plane, k3s |
+| --- | --- | --- | --- |
+| Headlamp | 64 MiB | 8 MiB | |
+| Monitoring | 1536 MiB | 32 MiB | 616 MiB |
+| Logs | 512 MiB | 56 MiB | |
+| Backups | 384 MiB | 184 MiB | 24 MiB |
+| Kyverno | 384 MiB | 552 MiB | 520 MiB |
+| Istio | 384 MiB | 288 MiB | 504 MiB |
+| Cilium Cluster Mesh | 128 MiB | | |
+| Load balancer | 128 MiB | | |
+| GitOps with Argo CD | 512 MiB | 432 MiB | 360 MiB |
+| GitOps with Flux | 384 MiB | | |
+| cert-manager, with monitoring, Rancher or certificates | 192 MiB | 48 MiB | |
+| Rancher | 2048 MiB | 512 MiB | 512 MiB |
+| Rancher's agent, in every cluster that registers | 512 MiB | | |
 
-A worker counts 448 MiB for itself on k3s and 704 MiB on kubeadm and RKE2; a control plane counts 2560 MiB. A single k3s worker with every add-on but Rancher and GitOps needs 4672 MiB, 4288 MiB without backups, 4160 MiB without logs, or 3776 MiB without either, and GitOps with Argo CD on top takes each 512 MiB further; the default machines hold every add-on but Rancher, logs, backups and GitOps on every distribution, and a second worker makes room for logs and backups too. Kubehenge refuses a cluster short of that room when it is created and when an add-on is switched on or its nodes change. The interface raises the machines to it as add-ons are chosen and shows the add-ons' total on the Add-ons step.
+A worker counts 448 MiB for itself on k3s and 704 MiB on kubeadm and RKE2. A control plane counts 1848 MiB on k3s, 2392 MiB on kubeadm and 3120 MiB on RKE2 before any add-on; with every add-on but Rancher it needs 3872 MiB on k3s, 3992 MiB on kubeadm and 4720 MiB on RKE2, above RKE2's least of 4096 MiB. A single k3s worker with every add-on but Rancher and GitOps needs 4672 MiB, 4288 MiB without backups, 4160 MiB without logs, or 3776 MiB without either, and GitOps with Argo CD on top takes each 512 MiB further; the default machines hold every add-on but Rancher, logs, backups and GitOps on every distribution, and a second worker makes room for logs and backups too. Kubehenge refuses a cluster short of that room when it is created and when an add-on is switched on or its nodes change. The interface raises the machines to it as add-ons are chosen and shows the add-ons' total on the Add-ons step.
 
 ### Add-ons
 

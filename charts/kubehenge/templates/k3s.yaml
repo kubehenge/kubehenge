@@ -23,11 +23,13 @@ metadata:
     # k3s's server sizing guide: the control planes' least vCPUs and memory from a number of workers.
     kubehenge.dev/control-plane-sizes: '[{"workers":0,"cores":2,"memoryMiB":4096},{"workers":351,"cores":4,"memoryMiB":8192},{"workers":901,"cores":8,"memoryMiB":16384},{"workers":1801,"cores":16,"memoryMiB":32768}]'
     {{- include "kubehenge.addonMemory" . | nindent 4 }}
-    {{- include "kubehenge.addonControlPlaneMemory" . | nindent 4 }}
+    # What each add-on adds to a control plane, where k3s runs the API server in its own process:
+    # measured as the chart's kubehenge.addonControlPlaneMemory figures are, on k3s.
+    kubehenge.dev/addon-control-plane-memory: '{"monitoring":616,"backups":24,"kyverno":520,"istio":504,"rancher":512,"argocd":360}'
     {{- include "kubehenge.backupTargets" . | nindent 4 }}
     # What a node uses before any add-on, measured by the end-to-end tests: a control plane with a
     # quarter on top, which the kernel's caches and the API server's peaks take; a worker with a tenth.
-    kubehenge.dev/node-memory: '{"controlPlane":1856,"worker":448}'
+    kubehenge.dev/node-memory: '{"controlPlane":1848,"worker":448}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"

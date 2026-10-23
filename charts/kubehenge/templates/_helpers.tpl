@@ -247,15 +247,18 @@ kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"logs":512,"backup
 {{- end -}}
 
 {{/*
-The memory, in MiB, each add-on adds to what each control plane uses itself, the same for every
-distribution: the most the end-to-end tests saw a control plane's working set grow by as the add-on
-was switched on, with a quarter on top, as the node figures have. It is mostly the API server
-holding the add-on's resource types and objects, and its pods on the control planes. The
-measurements of an add-on switched on while cert-manager was already there leave cert-manager's own
-share to monitoring's.
+The memory, in MiB, each add-on adds to what each control plane uses itself, where the API server
+runs as a pod of its own (kubeadm and RKE2; k3s has figures of its own): what the end-to-end tests
+saw the highest working set of a control plane so far grow by as the add-on was switched on, the
+more of kubeadm's and RKE2's, with a quarter on top as the node figures have, in steps of 8. RKE2's
+working set dipped where the node reclaimed its caches, so it takes kubeadm's figures where those are
+higher. It is mostly the API server holding the add-on's resource types and objects, and the
+add-on's pods on the control planes. Flux's stayed within what the working set varies by. Rancher's
+own cluster used 409 MiB more than an idle k3s control plane, and a cluster registered with it no
+more than that, so Rancher's agent counts nothing here.
 */}}
 {{- define "kubehenge.addonControlPlaneMemory" -}}
-kubehenge.dev/addon-control-plane-memory: '{"monitoring":384,"logs":128,"backups":64,"kyverno":256,"istio":128,"certManager":64,"rancher":512,"rancherAgent":128,"argocd":384,"flux":192}'
+kubehenge.dev/addon-control-plane-memory: '{"headlamp":8,"monitoring":32,"logs":56,"backups":184,"kyverno":552,"istio":288,"certManager":48,"rancher":512,"argocd":432}'
 {{- end -}}
 
 {{/*
