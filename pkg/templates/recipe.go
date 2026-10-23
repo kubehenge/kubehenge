@@ -197,7 +197,11 @@ func nodeChecks(b Bake) [][]string {
 	}
 	switch b.Distribution {
 	case RKE2, K3s:
-		checks = append(checks, []string{"sh", "-c", fmt.Sprintf("rpm -q %[1]s-selinux container-selinux > /dev/null && semodule -l | grep -qx %[1]s", b.Distribution)})
+		checks = append(checks,
+			[]string{"sh", "-c", fmt.Sprintf("rpm -q %[1]s-selinux container-selinux > /dev/null && semodule -l | grep -qx %[1]s", b.Distribution)},
+			// The distribution installs itself there when a node boots.
+			[]string{"sh", "-c", "touch /usr/local/.kubehenge && rm /usr/local/.kubehenge"},
+		)
 	case Kubeadm:
 		checks = append(checks,
 			[]string{"sh", "-c", `test "$(kubeadm version -o short)" = ` + b.KubernetesVersion},
