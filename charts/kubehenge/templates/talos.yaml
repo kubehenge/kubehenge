@@ -26,10 +26,11 @@ metadata:
     # server sizing guide: the least vCPUs and memory from a number of workers.
     kubehenge.dev/control-plane-sizes: '[{"workers":0,"cores":2,"memoryMiB":4096},{"workers":226,"cores":4,"memoryMiB":8192},{"workers":451,"cores":8,"memoryMiB":16384},{"workers":1301,"cores":16,"memoryMiB":32768}]'
     {{- include "kubehenge.addonMemory" . | nindent 4 }}
+    {{- include "kubehenge.addonControlPlaneMemory" . | nindent 4 }}
     {{- include "kubehenge.backupTargets" . | nindent 4 }}
-    # What a node uses besides the add-ons' pods: kubeadm's measured figures, for the same
-    # Kubernetes components on a system that runs nothing else.
-    kubehenge.dev/node-memory: '{"controlPlane":2560,"worker":704}'
+    # What a node uses before any add-on: kubeadm's measured figures, for the same Kubernetes
+    # components on a system that runs nothing else.
+    kubehenge.dev/node-memory: '{"controlPlane":2392,"worker":704}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"
