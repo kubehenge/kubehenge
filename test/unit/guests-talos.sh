@@ -86,7 +86,8 @@ case $1 in
                     {"name":"ens18","ip-addresses":[{"ip-address":"fe80::1","ip-address-type":"ipv6","prefix":64},
                         {"ip-address":"172.20.99.11","ip-address-type":"ipv4","prefix":24}]}]'
                 ;;
-            'exec 105') echo '{"exitcode":0,"out-data":"guest 105 says hi\n"}' ;;
+            # printf, since dash's echo would turn the JSON's \n into a newline.
+            'exec 105') printf '%s\n' '{"exitcode":0,"out-data":"guest 105 says hi\n"}' ;;
             *)
                 echo 'QEMU guest agent is not running'
                 exit 255
