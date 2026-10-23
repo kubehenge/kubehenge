@@ -58,18 +58,21 @@ func (f *elFamily) repositories(b Bake) []*repository {
 }
 
 // manifest is what bootc-base-imagectl composes the minimal root file system from: upstream's
-// minimal manifest, with what grows the root file system to a clone's disk and /usr/local and /opt
-// in /var.
-func (f *elFamily) manifest() string {
+// minimal manifest, with what grows the root file system to a clone's disk.
+func (f *elFamily) manifest(d Distribution) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "releasever: %s\nrepos:\n", f.releasever)
 	for _, r := range f.repos {
 		fmt.Fprintf(&sb, "  - %s\n", r)
 	}
 	fmt.Fprintf(&sb, "variables:\n  distro: %q\npackages:\n  - %s\n  - cloud-utils-growpart\n", f.distro, f.reposPackage)
-	// RKE2 and k3s install themselves into /usr/local at boot, which the minimal manifest keeps in
-	// the read-only /usr; in /var the policy labels it as it would /usr/local.
-	sb.WriteString("opt-usrlocal: \"var\"\n")
+	if d == RKE2 || d == K3s {
+		// They install themselves into /usr/local when a node boots, which the minimal manifest
+		// keeps in the read-only /usr; in /var the policy labels it as it would /usr/local. kubeadm's
+		// nodes keep it in /usr, where the image's packages, the CNI plugins in /opt among them, can
+		// install into it.
+		sb.WriteString("opt-usrlocal: \"var\"\n")
+	}
 	sb.WriteString("include:\n  - minimal/manifest.yaml\n  - standard/generic-growfs.yaml\n")
 	return sb.String()
 }
@@ -85,7 +88,7 @@ func (f *elFamily) recipe(b Bake, keys map[string]string) (Recipe, error) {
 	if err != nil {
 		return Recipe{}, err
 	}
-	files[imageModeFilesDir+"/manifest.yaml"] = f.manifest()
+	files[imageModeFilesDir+"/manifest.yaml"] = f.manifest(b.Distribution)
 	userData, err := bakeUserData(files, build)
 	if err != nil {
 		return Recipe{}, err
