@@ -156,6 +156,19 @@ spec:
             - op: add
               path: /spec/template/spec/controlPlaneConfig/controlplane/strategicPatches/-
               value: {{ dict "apiVersion" "v1alpha1" "kind" "KubeFlannelCNIConfig" "$patch" "delete" | toJson | quote }}
+    # Talos's flannel enforces network policies only when asked to, through kube-network-policies.
+    - name: talos-flannel-policies
+      enabledIf: {{ "{{ if eq .cni \"flannel\" }}true{{ end }}" | quote }}
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+            kind: TalosControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/controlPlaneConfig/controlplane/strategicPatches/-
+              value: {{ dict "apiVersion" "v1alpha1" "kind" "KubeFlannelCNIConfig" "kubeNetworkPoliciesEnabled" true | toJson | quote }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
 kind: ProxmoxClusterTemplate
