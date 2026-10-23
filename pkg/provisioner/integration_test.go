@@ -756,7 +756,8 @@ func TestIntegrationClassArguments(t *testing.T) {
 // use. Run unconfined, that runc left every process kubectl exec starts unable to signal itself.
 func TestIntegrationClassesNameTheirRunc(t *testing.T) {
 	t.Parallel()
-	const load = "[ ! -d /sys/kernel/security/apparmor ] || apparmor_parser --replace /etc/apparmor.d/kubehenge-runc"
+	const load = "[ ! -d /sys/kernel/security/apparmor ] || { mkdir -p /etc/apparmor.d/disable && " +
+		"ln -sf /etc/apparmor.d/runc /etc/apparmor.d/disable/runc && apparmor_parser --replace /etc/apparmor.d/kubehenge-runc; }"
 	seen := map[string]bool{}
 	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
 		if o.GetKind() != "ConfigMap" || o.GetLabels()["kubehenge.dev/class"] == "" {
@@ -781,7 +782,9 @@ func TestIntegrationClassesNameTheirRunc(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := fmt.Sprintf("profile kubehenge-runc /var/lib/rancher/%s/data/*/bin/runc flags=(unconfined) {", where.release.distribution)
+			// containerd's container profile takes signals from a profile named runc, not another.
+			want := fmt.Sprintf("profile runc /{usr/{bin,sbin}/runc,var/lib/rancher/%s/data/*/bin/runc} flags=(unconfined) {",
+				where.release.distribution)
 			profiles := 0
 			for _, f := range files {
 				file, ok := f.(map[string]any)
