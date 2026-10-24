@@ -31,8 +31,16 @@ check_nodes() {
     kubectl get nodes -o wide
 }
 
+# providers_ready: whether every provider runs the version its spec names and is Ready. Not with
+# kubectl wait, which takes a condition from an older generation as unmet: the operator leaves Ready
+# as it was when an upgraded provider's Deployment stays available, observed generation and all.
+providers_ready() {
+    kubectl get "${provider_kinds}" --all-namespaces -o json | jq -e '.items | length > 0 and all(.[];
+        .status.installedVersion == .spec.version and any(.status.conditions[]?; .type == "Ready" and .status == "True"))' > /dev/null
+}
+
 check_providers() {
-    kubectl wait --for=condition=Ready "${provider_kinds}" --all --all-namespaces --timeout=15m
+    until_true 900 "every provider ready at its version" providers_ready
     kubectl get "${provider_kinds}" --all-namespaces
     providers=$(kubectl get "${provider_kinds}" --all-namespaces -o name)
     for p in cluster-api kubeadm rke2 k3s proxmox in-cluster helm; do
