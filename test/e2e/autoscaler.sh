@@ -15,7 +15,8 @@
 # KUBEHENGE_E2E_PREFIX, KUBEHENGE_E2E_GATEWAY, KUBEHENGE_E2E_DNS, KUBEHENGE_E2E_STORAGE; the
 # cluster's node addresses, four, and virtual IP: KUBEHENGE_E2E_ADDRESSES, KUBEHENGE_E2E_ENDPOINT.
 # KUBEHENGE_E2E_VERSION is the k3s version. KUBEHENGE_E2E_CONTROL_PLANE_CORES and _MEMORY (MiB)
-# size the control plane, by default 2 cores and 4096 MiB; each worker has 2 cores and 2048 MiB.
+# size the control plane, by default 3 cores and 5120 MiB, the least of a control plane without
+# workers, which the cluster becomes once autoscaling is off; each worker has 2 cores and 2048 MiB.
 set -eu
 
 : "${KUBECONFIG:?KUBECONFIG must point at the management cluster}"
@@ -140,7 +141,7 @@ spec:
       - name: storage
         value: ${KUBEHENGE_E2E_STORAGE}
       - name: controlPlaneMachine
-        value: {cores: ${KUBEHENGE_E2E_CONTROL_PLANE_CORES:-2}, memoryMiB: ${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-4096}}
+        value: {cores: ${KUBEHENGE_E2E_CONTROL_PLANE_CORES:-3}, memoryMiB: ${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-5120}}
       - name: workerMachine
         value: {cores: 2, memoryMiB: 2048, diskGiB: 20}
       - name: autoscaler
