@@ -1098,6 +1098,173 @@ on_machines() {
         guest "${pm_node}" "${pm_vmid}" "$2"
     done
 }
+
+# etcd is taken, restored and uploaded before any add-on runs: replacing a server holds two beside
+# the worker, which the runner has room for only while the cluster is this small, and every add-on
+# after it then runs on a restored cluster.
+step "an S3 store for the backups and etcd snapshots"
+target=$(printf '%s' "${class_json}" | jq -c --arg t "${KUBEHENGE_E2E_BACKUP_TARGET}" \
+    '.metadata.annotations["kubehenge.dev/backup-targets"] // "[]" | fromjson | .[] | select(.name == $t)')
+[ -n "${target}" ] || fail "${class} offers no backup target ${KUBEHENGE_E2E_BACKUP_TARGET}"
+s3_endpoint=$(printf '%s' "${target}" | jq -r .endpoint)
+bucket=$(printf '%s' "${target}" | jq -r .bucket)
+region=$(printf '%s' "${target}" | jq -r '.region // "us-east-1"')
+# Where the cluster's backups go in the bucket, as Kubehenge names it.
+prefix=$(printf '%s' "${target}" | jq -r --arg own "${ns}.${name}/velero" 'if (.prefix // "") == "" then $own else .prefix + "/" + $own end')
+s3_port=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlsplit(sys.argv[1]).port or 443)' "${s3_endpoint}")
+curl -sS --fail -L -o "${work}/seaweedfs.tar.gz" \
+    "https://github.com/seaweedfs/seaweedfs/releases/download/${SEAWEEDFS_VERSION}/linux_amd64.tar.gz"
+printf '%s  %s\n' "${SEAWEEDFS_SHA256}" "${work}/seaweedfs.tar.gz" | sha256sum -c - > /dev/null ||
+    fail "SeaweedFS's download does not have its SHA-256"
+tar -xzf "${work}/seaweedfs.tar.gz" -C "${work}" weed
+s3_key=e2e$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
+s3_secret=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
+jq -n --arg k "${s3_key}" --arg s "${s3_secret}" \
+    '{identities: [{name: "e2e", credentials: [{accessKey: $k, secretKey: $s}], actions: ["Admin", "Read", "Write", "List", "Tagging"]}]}' \
+    > "${work}/s3.json"
+mkdir -p "${work}/s3-data"
+"${work}/weed" server -dir="${work}/s3-data" -ip=127.0.0.1 -ip.bind=0.0.0.0 -master.port=19333 -master.volumeSizeLimitMB=256 \
+    -volume.port=18080 -filer.port=18888 -s3 -s3.port="${s3_port}" -s3.config="${work}/s3.json" \
+    -s3.cert.file="${KUBEHENGE_E2E_BACKUP_CERT}" -s3.key.file="${KUBEHENGE_E2E_BACKUP_KEY}" > "${work}/s3.log" 2>&1 &
+s3_pid=$!
+s3() { curl -sS --fail --cacert "${KUBEHENGE_E2E_BACKUP_CA}" --aws-sigv4 "aws:amz:${region}:s3" --user "${s3_key}:${s3_secret}" "$@"; }
+until_true 120 "the S3 store takes a bucket" s3 -X PUT -o /dev/null "${s3_endpoint}/${bucket}"
+# As the interface stores a cluster's own key for its target.
+kubectl -n "${ns}" create secret generic "${name}.backup" --type=kubehenge.dev/user-credential \
+    --from-literal=accessKeyID="${s3_key}" --from-literal=secretAccessKey="${s3_secret}"
+kubectl -n "${ns}" label secret "${name}.backup" kubehenge.dev/user-credential=backup "kubehenge.dev/credential-cluster=${name}"
+
+step "etcd snapshots: one taken into the S3 store, encrypted, and read back"
+# A ConfigMap rather than a Secret, which the cluster encrypts in etcd: the database holds it in
+# plain text, so it is seen there and must not be seen in the store.
+etcd_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+wl -n default create configmap e2e-before-snapshot --from-literal=marker="${etcd_marker}"
+set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2}"
+# As the interface's Take a snapshot now asks for one.
+now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+kubectl -n "${ns}" annotate cluster "${name}" --overwrite \
+    "kubehenge.dev/etcd-snapshot-requested={\"by\":\"e2e\",\"at\":\"${now}\"}"
+# snapshot_taken: whether the controller has taken the snapshot asked for; one it tried and failed
+# fails the test with why.
+snapshot_taken() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    cluster_json=$(kubectl -n "${ns}" get cluster "${name}" -o json) || return 1
+    if printf '%s' "${cluster_json}" | jq -e '.metadata.annotations["kubehenge.dev/etcd-snapshot-requested"]' > /dev/null; then
+        return 1
+    fi
+    if ! printf '%s' "${cluster_json}" |
+        jq -e '.status.conditions[]? | select(.type == "EtcdSnapshotSucceeded" and .status == "True")' > /dev/null; then
+        printf '%s' "${cluster_json}" | jq '.status.conditions[]? | select(.type == "EtcdSnapshotSucceeded")' >&2
+        kubectl -n kubehenge-system logs deployment/kubehenge-controller --tail=100 >&2
+        fail "the etcd snapshot was not taken"
+    fi
+}
+until_true 900 "an etcd snapshot taken" snapshot_taken
+snapshot=$(kubectl -n "${ns}" get cluster "${name}" -o json | jq -c '.metadata.annotations["kubehenge.dev/etcd-snapshot"] | fromjson')
+snapshot_name=$(printf '%s' "${snapshot}" | jq -r .name)
+etcd_prefix=$(printf '%s' "${target}" | jq -r --arg own "${ns}.${name}/etcd" 'if (.prefix // "") == "" then $own else .prefix + "/" + $own end')
+keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
+[ "${keys}" = "${etcd_prefix}/${snapshot_name}" ] || fail "the store's etcd snapshots are not the one taken: ${keys}"
+s3 -o "${work}/snapshot.db.age" "${s3_endpoint}/${bucket}/${etcd_prefix}/${snapshot_name}"
+header=$(head -c 21 "${work}/snapshot.db.age")
+[ "${header}" = age-encryption.org/v1 ] || fail "the etcd snapshot in the store is not encrypted with age"
+grep -r -q -F "${etcd_marker}" "${work}/s3-data" && fail "the store keeps the etcd snapshot unencrypted"
+kubectl -n "${ns}" get secret "${name}-backup-keys" -o jsonpath='{.data.etcd-snapshot-identity}' | base64 -d > "${work}/etcd-identity"
+go -C "$(dirname "$0")/../.." run ./cmd/kubehenge etcd-snapshot decrypt --identity "${work}/etcd-identity" \
+    "${work}/snapshot.db.age" "${work}/snapshot.db"
+sum=$(sha256sum "${work}/snapshot.db" | cut -d ' ' -f 1)
+taken_sum=$(printf '%s' "${snapshot}" | jq -r .sha256)
+[ "${sum}" = "${taken_sum}" ] || fail "the decrypted snapshot does not have the SHA-256 it was taken with"
+curl -sS --fail -L -o "${work}/etcd.tar.gz" \
+    "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz"
+printf '%s  %s\n' "${ETCD_SHA256}" "${work}/etcd.tar.gz" | sha256sum -c - > /dev/null ||
+    fail "etcd's download does not have its SHA-256"
+tar -xzf "${work}/etcd.tar.gz" -C "${work}" --strip-components=1 "etcd-${ETCD_VERSION}-linux-amd64/etcdutl"
+status=$("${work}/etcdutl" snapshot status "${work}/snapshot.db" -w json) || fail "etcdutl cannot read the snapshot"
+# The revision recorded is the member's just before the snapshot began; writes in between add to
+# the snapshot's.
+db_revision=$(printf '%s' "${status}" | jq .revision)
+taken_revision=$(printf '%s' "${snapshot}" | jq '.revision // 0')
+[ "${taken_revision}" -gt 0 ] || fail "no revision was recorded for the snapshot: ${snapshot}"
+[ "${db_revision}" -ge "${taken_revision}" ] ||
+    fail "the snapshot is older than the revision recorded for it: ${status}"
+grep -a -q -F "${etcd_marker}" "${work}/snapshot.db" || fail "the snapshot does not hold the ConfigMap made before it"
+
+step "etcd restored from the snapshot through the guest agent"
+wl -n default delete configmap e2e-before-snapshot
+wl -n default create configmap e2e-after-snapshot --from-literal=marker=after
+# As the interface's Restore asks for it.
+now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+kubectl -n "${ns}" annotate cluster "${name}" \
+    "kubehenge.dev/etcd-restore={\"snapshot\":\"${snapshot_name}\",\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"by\":\"e2e\",\"at\":\"${now}\"}"
+# etcd_restored: whether the restore has ended and the controller let the cluster go; a failed one
+# fails the test with why.
+etcd_restored() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    cluster_json=$(kubectl -n "${ns}" get cluster "${name}" -o json) || return 1
+    restore=$(printf '%s' "${cluster_json}" | jq -c '.metadata.annotations["kubehenge.dev/etcd-restore-status"] // "{}" | fromjson')
+    case $(printf '%s' "${restore}" | jq -r '.phase // ""') in
+        Succeeded) ;;
+        Failed)
+            kubectl -n kubehenge-system logs deployment/kubehenge-controller --tail=100 >&2
+            fail "the etcd restore failed: ${restore}"
+            ;;
+        *) return 1 ;;
+    esac
+    printf '%s' "${cluster_json}" | jq -e '(.metadata.annotations["kubehenge.dev/etcd-restore"] | not) and (.spec.paused // false | not)' > /dev/null
+}
+until_true 2400 "etcd restored" etcd_restored
+until_true 1200 "cluster ${name} available after the restore" available_or_failed
+wl wait --for=condition=Ready nodes --all --timeout=10m
+until_true 300 "the ConfigMap made before the snapshot back" wl -n default get configmap e2e-before-snapshot
+# shellcheck disable=SC2310 # absent's answer is what is checked.
+absent wl -n default get configmap e2e-after-snapshot || fail "a ConfigMap made after the snapshot outlived the restore"
+wl -n default delete configmap e2e-before-snapshot
+keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
+[ "${keys}" = "${etcd_prefix}/${snapshot_name}" ] || fail "the restore left objects in the store: ${keys}"
+
+case ${distribution} in
+    rke2 | k3s)
+        step "${distribution}'s own etcd snapshots uploaded to the same store, and switched off"
+        # The drop-in is part of the servers' bootstrap, so switching the upload replaces them.
+        servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+        servers_replaced() {
+            kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o json |
+                jq -e --arg old " ${servers} " '(.items | length > 0) and all(.items[]; .metadata.name as $name |
+                    .status.phase == "Running" and (($old | contains(" " + $name + " ")) | not))' > /dev/null
+        }
+        set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2,\"distributionUpload\":true}"
+        until_true 300 "the upload's Secret in kube-system" wl -n kube-system get secret kubehenge-etcd-s3
+        upload_secret=$(wl -n kube-system get secret kubehenge-etcd-s3 -o json)
+        printf '%s' "${upload_secret}" | jq -e '.type == "etcd.k3s.cattle.io/s3-config-secret" and
+            (.data["etcd-s3-skip-ssl-verify"] | @base64d) == "false" and (.data["etcd-s3-insecure"] | @base64d) == "false" and
+            (.data["etcd-s3-endpoint-ca"] | @base64d | length > 0)' > /dev/null ||
+            fail "the upload's Secret does not verify the store's certificate"
+        until_true 1800 "the control planes replaced for the upload" servers_replaced
+        kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
+        upload_prefix=$(printf '%s' "${target}" | jq -r --arg own "${ns}.${name}/${distribution}-etcd" 'if (.prefix // "") == "" then $own else .prefix + "/" + $own end')
+        servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+        # The server reads the drop-in and the Secret, so the snapshot asked for goes to the store too.
+        # shellcheck disable=SC2310 # a failed save fails the test with the reason.
+        on_machines "${servers%% *}" "PATH=\$PATH:/usr/local/bin:/opt/rke2/bin ${distribution} etcd-snapshot save --name e2e-upload" > /dev/null ||
+            fail "${distribution} could not take a snapshot of its own"
+        uploaded() {
+            # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+            listing=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${upload_prefix}/") || return 1
+            printf '%s' "${listing}" | grep -q "<Key>${upload_prefix}/e2e-upload"
+        }
+        until_true 300 "${distribution}'s snapshot in the store" uploaded
+        servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+        set_variable etcdSnapshots "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
+        # The Secret stays until no server runs with the drop-in, which a server not yet replaced
+        # still reads on each scheduled snapshot, so it goes only once the servers are replaced.
+        until_true 1800 "the control planes replaced without the upload" servers_replaced
+        kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
+        until_true 300 "the upload's Secret gone" absent wl -n kube-system get secret kubehenge-etcd-s3
+        ;;
+    *) set_variable etcdSnapshots "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}" ;;
+esac
+
 # restarts: each pod's container restarts, by namespace/name.
 restarts() {
     wl get pods -A -o json |
@@ -1448,40 +1615,8 @@ set_variable logs '{"enabled":true,"collector":"node","retentionDays":7,"sizeGiB
 until_true 600 "Alloy installed on the nodes" sh -c "KUBECONFIG=${work}/workload kubectl -n logging-node get daemonset/alloy-node >/dev/null 2>&1"
 wl -n logging-node rollout status daemonset/alloy-node --timeout=10m
 
-step "an S3 store for the backups"
-target=$(printf '%s' "${class_json}" | jq -c --arg t "${KUBEHENGE_E2E_BACKUP_TARGET}" \
-    '.metadata.annotations["kubehenge.dev/backup-targets"] // "[]" | fromjson | .[] | select(.name == $t)')
-[ -n "${target}" ] || fail "${class} offers no backup target ${KUBEHENGE_E2E_BACKUP_TARGET}"
-s3_endpoint=$(printf '%s' "${target}" | jq -r .endpoint)
-bucket=$(printf '%s' "${target}" | jq -r .bucket)
-region=$(printf '%s' "${target}" | jq -r '.region // "us-east-1"')
-# Where the cluster's backups go in the bucket, as Kubehenge names it.
-prefix=$(printf '%s' "${target}" | jq -r --arg own "${ns}.${name}/velero" 'if (.prefix // "") == "" then $own else .prefix + "/" + $own end')
-s3_port=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlsplit(sys.argv[1]).port or 443)' "${s3_endpoint}")
-curl -sS --fail -L -o "${work}/seaweedfs.tar.gz" \
-    "https://github.com/seaweedfs/seaweedfs/releases/download/${SEAWEEDFS_VERSION}/linux_amd64.tar.gz"
-printf '%s  %s\n' "${SEAWEEDFS_SHA256}" "${work}/seaweedfs.tar.gz" | sha256sum -c - > /dev/null ||
-    fail "SeaweedFS's download does not have its SHA-256"
-tar -xzf "${work}/seaweedfs.tar.gz" -C "${work}" weed
-s3_key=e2e$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
-s3_secret=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
-jq -n --arg k "${s3_key}" --arg s "${s3_secret}" \
-    '{identities: [{name: "e2e", credentials: [{accessKey: $k, secretKey: $s}], actions: ["Admin", "Read", "Write", "List", "Tagging"]}]}' \
-    > "${work}/s3.json"
-mkdir -p "${work}/s3-data"
-"${work}/weed" server -dir="${work}/s3-data" -ip=127.0.0.1 -ip.bind=0.0.0.0 -master.port=19333 -master.volumeSizeLimitMB=256 \
-    -volume.port=18080 -filer.port=18888 -s3 -s3.port="${s3_port}" -s3.config="${work}/s3.json" \
-    -s3.cert.file="${KUBEHENGE_E2E_BACKUP_CERT}" -s3.key.file="${KUBEHENGE_E2E_BACKUP_KEY}" > "${work}/s3.log" 2>&1 &
-s3_pid=$!
-s3() { curl -sS --fail --cacert "${KUBEHENGE_E2E_BACKUP_CA}" --aws-sigv4 "aws:amz:${region}:s3" --user "${s3_key}:${s3_secret}" "$@"; }
-until_true 120 "the S3 store takes a bucket" s3 -X PUT -o /dev/null "${s3_endpoint}/${bucket}"
-
 step "backups with Velero: a volume and a Secret backed up, deleted and restored"
 marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-# As the interface stores a cluster's own key for its target.
-kubectl -n "${ns}" create secret generic "${name}.backup" --type=kubehenge.dev/user-credential \
-    --from-literal=accessKeyID="${s3_key}" --from-literal=secretAccessKey="${s3_secret}"
-kubectl -n "${ns}" label secret "${name}.backup" kubehenge.dev/user-credential=backup "kubehenge.dev/credential-cluster=${name}"
 set_variable backups "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
 until_true 900 "Velero installed" wl -n velero rollout status deployment/velero --timeout=10s
 until_true 600 "Velero's node agent on every node" wl -n velero rollout status daemonset/node-agent --timeout=10s
@@ -1588,7 +1723,8 @@ control_plane_use "${work}/workload" backups
 
 step "the backup in the S3 store: under the cluster's own prefix, encrypted"
 keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
-stray=$(printf '%s\n' "${keys}" | grep -v -e "^${prefix}/" -e '^$' || true)
+# The etcd snapshots taken before stay in the store under the cluster's etcd prefixes.
+stray=$(printf '%s\n' "${keys}" | grep -v -e "^${prefix}/" -e "^${etcd_prefix}/" -e "^${upload_prefix:-${etcd_prefix}}/" -e '^$' || true)
 [ -z "${stray}" ] || fail "objects outside the cluster's prefix ${prefix}: ${stray}"
 printf '%s\n' "${keys}" | grep -q "^${prefix}/kopia/e2e-backup/" || fail "no Kopia repository for e2e-backup under ${prefix}"
 tarball="${s3_endpoint}/${bucket}/${prefix}/backups/e2e/e2e.tar.gz"
@@ -2329,137 +2465,6 @@ s3 -o /dev/null "${tarball}" -H 'x-amz-server-side-encryption-customer-algorithm
     fail "the backup went from the store with Velero"
 kill "${recorder_pid}" 2> /dev/null || true
 recorder_pid=
-
-step "etcd snapshots: one taken into the S3 store, encrypted, and read back"
-# A ConfigMap rather than a Secret, which the cluster encrypts in etcd: the database holds it in
-# plain text, so it is seen there and must not be seen in the store.
-etcd_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-wl -n default create configmap e2e-before-snapshot --from-literal=marker="${etcd_marker}"
-set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2}"
-# As the interface's Take a snapshot now asks for one.
-now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-kubectl -n "${ns}" annotate cluster "${name}" --overwrite \
-    "kubehenge.dev/etcd-snapshot-requested={\"by\":\"e2e\",\"at\":\"${now}\"}"
-# snapshot_taken: whether the controller has taken the snapshot asked for; one it tried and failed
-# fails the test with why.
-snapshot_taken() {
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-    cluster_json=$(kubectl -n "${ns}" get cluster "${name}" -o json) || return 1
-    if printf '%s' "${cluster_json}" | jq -e '.metadata.annotations["kubehenge.dev/etcd-snapshot-requested"]' > /dev/null; then
-        return 1
-    fi
-    if ! printf '%s' "${cluster_json}" |
-        jq -e '.status.conditions[]? | select(.type == "EtcdSnapshotSucceeded" and .status == "True")' > /dev/null; then
-        printf '%s' "${cluster_json}" | jq '.status.conditions[]? | select(.type == "EtcdSnapshotSucceeded")' >&2
-        kubectl -n kubehenge-system logs deployment/kubehenge-controller --tail=100 >&2
-        fail "the etcd snapshot was not taken"
-    fi
-}
-until_true 900 "an etcd snapshot taken" snapshot_taken
-snapshot=$(kubectl -n "${ns}" get cluster "${name}" -o json | jq -c '.metadata.annotations["kubehenge.dev/etcd-snapshot"] | fromjson')
-snapshot_name=$(printf '%s' "${snapshot}" | jq -r .name)
-etcd_prefix=$(printf '%s' "${target}" | jq -r --arg own "${ns}.${name}/etcd" 'if (.prefix // "") == "" then $own else .prefix + "/" + $own end')
-keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
-[ "${keys}" = "${etcd_prefix}/${snapshot_name}" ] || fail "the store's etcd snapshots are not the one taken: ${keys}"
-s3 -o "${work}/snapshot.db.age" "${s3_endpoint}/${bucket}/${etcd_prefix}/${snapshot_name}"
-header=$(head -c 21 "${work}/snapshot.db.age")
-[ "${header}" = age-encryption.org/v1 ] || fail "the etcd snapshot in the store is not encrypted with age"
-grep -r -q -F "${etcd_marker}" "${work}/s3-data" && fail "the store keeps the etcd snapshot unencrypted"
-kubectl -n "${ns}" get secret "${name}-backup-keys" -o jsonpath='{.data.etcd-snapshot-identity}' | base64 -d > "${work}/etcd-identity"
-go -C "$(dirname "$0")/../.." run ./cmd/kubehenge etcd-snapshot decrypt --identity "${work}/etcd-identity" \
-    "${work}/snapshot.db.age" "${work}/snapshot.db"
-sum=$(sha256sum "${work}/snapshot.db" | cut -d ' ' -f 1)
-taken_sum=$(printf '%s' "${snapshot}" | jq -r .sha256)
-[ "${sum}" = "${taken_sum}" ] || fail "the decrypted snapshot does not have the SHA-256 it was taken with"
-curl -sS --fail -L -o "${work}/etcd.tar.gz" \
-    "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz"
-printf '%s  %s\n' "${ETCD_SHA256}" "${work}/etcd.tar.gz" | sha256sum -c - > /dev/null ||
-    fail "etcd's download does not have its SHA-256"
-tar -xzf "${work}/etcd.tar.gz" -C "${work}" --strip-components=1 "etcd-${ETCD_VERSION}-linux-amd64/etcdutl"
-status=$("${work}/etcdutl" snapshot status "${work}/snapshot.db" -w json) || fail "etcdutl cannot read the snapshot"
-# The revision recorded is the member's just before the snapshot began; writes in between add to
-# the snapshot's.
-db_revision=$(printf '%s' "${status}" | jq .revision)
-taken_revision=$(printf '%s' "${snapshot}" | jq '.revision // 0')
-[ "${taken_revision}" -gt 0 ] || fail "no revision was recorded for the snapshot: ${snapshot}"
-[ "${db_revision}" -ge "${taken_revision}" ] ||
-    fail "the snapshot is older than the revision recorded for it: ${status}"
-grep -a -q -F "${etcd_marker}" "${work}/snapshot.db" || fail "the snapshot does not hold the ConfigMap made before it"
-
-step "etcd restored from the snapshot through the guest agent"
-wl -n default delete configmap e2e-before-snapshot
-wl -n default create configmap e2e-after-snapshot --from-literal=marker=after
-# As the interface's Restore asks for it.
-now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-kubectl -n "${ns}" annotate cluster "${name}" \
-    "kubehenge.dev/etcd-restore={\"snapshot\":\"${snapshot_name}\",\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"by\":\"e2e\",\"at\":\"${now}\"}"
-# etcd_restored: whether the restore has ended and the controller let the cluster go; a failed one
-# fails the test with why.
-etcd_restored() {
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-    cluster_json=$(kubectl -n "${ns}" get cluster "${name}" -o json) || return 1
-    restore=$(printf '%s' "${cluster_json}" | jq -c '.metadata.annotations["kubehenge.dev/etcd-restore-status"] // "{}" | fromjson')
-    case $(printf '%s' "${restore}" | jq -r '.phase // ""') in
-        Succeeded) ;;
-        Failed)
-            kubectl -n kubehenge-system logs deployment/kubehenge-controller --tail=100 >&2
-            fail "the etcd restore failed: ${restore}"
-            ;;
-        *) return 1 ;;
-    esac
-    printf '%s' "${cluster_json}" | jq -e '(.metadata.annotations["kubehenge.dev/etcd-restore"] | not) and (.spec.paused // false | not)' > /dev/null
-}
-until_true 2400 "etcd restored" etcd_restored
-until_true 1200 "cluster ${name} available after the restore" available_or_failed
-wl wait --for=condition=Ready nodes --all --timeout=10m
-until_true 300 "the ConfigMap made before the snapshot back" wl -n default get configmap e2e-before-snapshot
-# shellcheck disable=SC2310 # absent's answer is what is checked.
-absent wl -n default get configmap e2e-after-snapshot || fail "a ConfigMap made after the snapshot outlived the restore"
-wl -n default delete configmap e2e-before-snapshot
-keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
-[ "${keys}" = "${etcd_prefix}/${snapshot_name}" ] || fail "the restore left objects in the store: ${keys}"
-
-case ${distribution} in
-    rke2 | k3s)
-        step "${distribution}'s own etcd snapshots uploaded to the same store, and switched off"
-        # The drop-in is part of the servers' bootstrap, so switching the upload replaces them.
-        servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
-        servers_replaced() {
-            kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o json |
-                jq -e --arg old " ${servers} " '(.items | length > 0) and all(.items[]; .metadata.name as $name |
-                    .status.phase == "Running" and (($old | contains(" " + $name + " ")) | not))' > /dev/null
-        }
-        set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2,\"distributionUpload\":true}"
-        until_true 300 "the upload's Secret in kube-system" wl -n kube-system get secret kubehenge-etcd-s3
-        upload_secret=$(wl -n kube-system get secret kubehenge-etcd-s3 -o json)
-        printf '%s' "${upload_secret}" | jq -e '.type == "etcd.k3s.cattle.io/s3-config-secret" and
-            (.data["etcd-s3-skip-ssl-verify"] | @base64d) == "false" and (.data["etcd-s3-insecure"] | @base64d) == "false" and
-            (.data["etcd-s3-endpoint-ca"] | @base64d | length > 0)' > /dev/null ||
-            fail "the upload's Secret does not verify the store's certificate"
-        until_true 1800 "the control planes replaced for the upload" servers_replaced
-        kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
-        upload_prefix=$(printf '%s' "${target}" | jq -r --arg own "${ns}.${name}/${distribution}-etcd" 'if (.prefix // "") == "" then $own else .prefix + "/" + $own end')
-        servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
-        # The server reads the drop-in and the Secret, so the snapshot asked for goes to the store too.
-        # shellcheck disable=SC2310 # a failed save fails the test with the reason.
-        on_machines "${servers%% *}" "PATH=\$PATH:/usr/local/bin:/opt/rke2/bin ${distribution} etcd-snapshot save --name e2e-upload" > /dev/null ||
-            fail "${distribution} could not take a snapshot of its own"
-        uploaded() {
-            # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-            listing=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${upload_prefix}/") || return 1
-            printf '%s' "${listing}" | grep -q "<Key>${upload_prefix}/e2e-upload"
-        }
-        until_true 300 "${distribution}'s snapshot in the store" uploaded
-        servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
-        set_variable etcdSnapshots "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
-        # The Secret stays until no server runs with the drop-in, which a server not yet replaced
-        # still reads on each scheduled snapshot, so it goes only once the servers are replaced.
-        until_true 1800 "the control planes replaced without the upload" servers_replaced
-        kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
-        until_true 300 "the upload's Secret gone" absent wl -n kube-system get secret kubehenge-etcd-s3
-        ;;
-    *) set_variable etcdSnapshots "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}" ;;
-esac
 kill "${s3_pid}"
 s3_pid=
 # removed <kubectl get...>: whether the object is gone, or its kind with it, as cert-manager's own
