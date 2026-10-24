@@ -41,7 +41,7 @@ func TestIntegrationClassesKeepRemovedServersDown(t *testing.T) {
 				t.Fatal(err)
 			}
 			path := "/etc/systemd/system/" + want.unit + ".service.d/10-kubehenge-removed.conf"
-			condition := "ConditionPathExists=!/var/lib/rancher/" + want.dir + "/server/db/etcd/tombstone\n"
+			check := "ExecStartPre=/bin/sh -c '! test -e /var/lib/rancher/" + want.dir + "/server/db/etcd/tombstone'\n"
 			written := false
 			for _, f := range files {
 				file, ok := f.(map[string]any)
@@ -50,7 +50,7 @@ func TestIntegrationClassesKeepRemovedServersDown(t *testing.T) {
 				}
 				written = true
 				content, ok := file["content"].(string)
-				if !ok || !strings.HasPrefix(content, "[Unit]\n") || !strings.Contains(content, condition) {
+				if !ok || !strings.HasPrefix(content, "[Service]\n") || !strings.Contains(content, check) {
 					t.Errorf("%s %s: %v", tpl.GetKind(), tpl.GetName(), file["content"])
 				}
 			}

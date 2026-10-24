@@ -1085,15 +1085,17 @@ Keeps an RKE2 or k3s server (.distribution) down once its etcd member is removed
 providers remove the member before the machine's VM goes, and the server, still running, leaves a
 tombstone; started again, it wipes its database and joins as a new member, which the VM's deletion
 then takes away as a voter: beside a single new server, etcd loses its quorum. Cluster API never
-adds a removed machine back, so nothing needs it to rejoin.
+adds a removed machine back, so nothing needs it to rejoin. A unit condition would not hold it:
+systemd tests conditions only on a start it is asked for, not when Restart= starts the unit again,
+so the check runs before every start instead.
 */}}
 {{- define "kubehenge.removedServerFile" -}}
 - path: /etc/systemd/system/{{ ternary "rke2-server" "k3s" (eq .distribution "rke2") }}.service.d/10-kubehenge-removed.conf
   owner: root:root
   permissions: "0644"
   content: |
-    [Unit]
-    ConditionPathExists=!/var/lib/rancher/{{ .distribution }}/server/db/etcd/tombstone
+    [Service]
+    ExecStartPre=/bin/sh -c '! test -e /var/lib/rancher/{{ .distribution }}/server/db/etcd/tombstone'
 {{- end -}}
 
 {{/*
