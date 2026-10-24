@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -366,7 +367,7 @@ func TestRemoveVelero(t *testing.T) {
 	).WithInterceptorFuncs(interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 		if list.GetObjectKind().GroupVersionKind().Kind == crdGVK.Kind+"List" {
 			if _, full := list.(*unstructured.UnstructuredList); full {
-				return fmt.Errorf("every resource definition listed in full")
+				return errors.New("every resource definition listed in full")
 			}
 		}
 		return c.List(ctx, list, opts...)
