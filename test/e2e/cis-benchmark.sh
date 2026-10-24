@@ -83,7 +83,7 @@ spec:
     spec:
       hostPID: true
       # SELinux keeps a confined container out of the host's configuration and data, whatever it mounts.
-      securityContext: {seLinuxOptions: {type: spc_t}}
+      securityContext: {seLinuxOptions: {type: spc_t, level: s0}}
       restartPolicy: Never
       tolerations: [{operator: Exists}]
       affinity:

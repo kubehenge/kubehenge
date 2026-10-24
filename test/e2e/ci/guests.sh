@@ -99,6 +99,7 @@ guest_script() {
         state)
             echo 'uptime; echo; free -m; echo; grep -H . /proc/pressure/*; echo
                 ps -eo pid,stat,pcpu,rss,etime,comm --sort=-rss | head -n 30; echo
+                ps -eo label,pid,comm | grep -v kernel_t | head -n 150; echo
                 systemctl --failed --no-pager --plain
                 for u in k3s k3s-agent rke2-server rke2-agent kubelet containerd; do
                     systemctl cat "$u" > /dev/null 2>&1 || continue

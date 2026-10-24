@@ -1547,10 +1547,12 @@ content: |
       - ip: 127.0.0.1
         hostnames: [kubernetes]
     # It reads the node's own admin kubeconfig, whose SELinux type no confined container may read,
-    # as the control plane's static pods beside it do.
+    # as the control plane's static pods beside it do. Categories mean nothing to an unconfined
+    # type, and on k3s the runtime's change into new ones is refused under no_new_privs.
     securityContext:
       seLinuxOptions:
         type: spc_t
+        level: s0
     containers:
       - name: kube-vip
         image: {{ .root.Values.kubeVip }}
