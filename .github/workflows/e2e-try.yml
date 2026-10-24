@@ -114,6 +114,12 @@ jobs:
           # than drop the cache, and a stalled guest stalls its etcd. Reclaim starts earlier too, in
           # the background, so that a guest faulting in memory waits less on it.
           sudo sysctl -q vm.swappiness=10 vm.watermark_scale_factor=200
+          # A Proxmox VE host merges its guests' identical pages (ksmtuned), and these guests, made
+          # from one image, share a lot; the runner's kernel does so only once told. Without it a
+          # control plane's surge, two servers beside the worker, outgrows the runner and swaps
+          # etcd out.
+          echo 1000 | sudo tee /sys/kernel/mm/ksm/pages_to_scan >/dev/null
+          echo 1 | sudo tee /sys/kernel/mm/ksm/use_zero_pages /sys/kernel/mm/ksm/run >/dev/null
           nproc && grep -m1 'model name' /proc/cpuinfo && free -m && df -h / /mnt
       # The guests' vCPUs outnumber the runner's, so a failure may come from the runner itself: its
       # load, each VM's share of its CPUs and memory, and how often and why the guests leave for its
@@ -188,7 +194,8 @@ jobs:
         if: failure()
         run: |
           out="$RUNNER_TEMP/artifacts" && mkdir -p "$out"
-          free -m > "$out/memory.txt"; sudo dmesg | tee "$out/dmesg.txt" >/dev/null || true
+          { free -m; grep -H . /sys/kernel/mm/ksm/pages_*; } > "$out/memory.txt"
+          sudo dmesg | tee "$out/dmesg.txt" >/dev/null || true
           pve() { docker exec kubehenge-e2e-pve "$@"; }
           pve journalctl -b --no-pager > "$out/proxmox-journal.txt" || true
           # Proxmox VE logs its API's requests here, not to the journal.
