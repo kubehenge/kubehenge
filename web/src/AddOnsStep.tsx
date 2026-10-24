@@ -1,10 +1,12 @@
 import type { JSX } from "react";
 
 import { BackupFieldset, backupCredentialHint, backupKeys, backupsHint, classTargets } from "./Backups";
+import { CertificatesFields } from "./Certificates";
 import { MeshPeersField, meshHint } from "./ClusterMesh";
 import { ModeSelect } from "./ClusterUpgrades";
 import { addonMemory, logsChosen, machineLeast, offersMesh, rancherMinimumCores, variable } from "./create-form";
 import type { StepProps } from "./CreateSteps";
+import { GitOpsFields, gitOpsFields, gitOpsTrustHint } from "./GitOps";
 import { LogsFields, logsHint, logsNeedMonitoring } from "./Logs";
 import { PodSecurityFields, cisHint } from "./PodSecurity";
 import type { ClusterClass } from "./types";
@@ -16,6 +18,56 @@ function upgradesHint(cls: ClusterClass | undefined): string {
   return cls?.distribution === "talos"
     ? window
     : `${window} The nodes move to new builds of their VM template in the same window, whatever this says.`;
+}
+
+// HeadlampAddOn installs Headlamp, at a host name of its own if one is given, and read-only for
+// everyone if asked.
+function HeadlampAddOn({ form, set }: Pick<StepProps, "form" | "set">): JSX.Element {
+  return (
+    <>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.headlamp}
+          aria-describedby="headlamp-hint"
+          onChange={(e) => set("headlamp", e.target.checked)}
+        />{" "}
+        Install Headlamp
+      </label>
+      <p className="hint" id="headlamp-hint">
+        {headlampHint}
+      </p>
+      {form.headlamp && (
+        <fieldset className="group">
+          <legend>Headlamp</legend>
+          <Field
+            label="Host name"
+            hint="Optional: also serve it at this name through the cluster's ingress controller."
+          >
+            {(id) => (
+              <input
+                id={id}
+                value={form.headlampHostname}
+                onChange={(e) => set("headlampHostname", e.target.value.trim())}
+              />
+            )}
+          </Field>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={form.headlampView}
+              aria-describedby="headlamp-view-hint"
+              onChange={(e) => set("headlampView", e.target.checked)}
+            />{" "}
+            {headlampViewLabel}
+          </label>
+          <p className="hint" id="headlamp-view-hint">
+            {headlampViewHint}
+          </p>
+        </fieldset>
+      )}
+    </>
+  );
 }
 
 // LogsAddOn keeps logs, offered only beside monitoring, whose Grafana reads them.
@@ -132,6 +184,136 @@ function BackupsChoice({
   );
 }
 
+// A credential of the new cluster's reaches as far into what it runs as its admin kubeconfig,
+// which Sys.Modify on its pool grants.
+const tokenRefusal =
+  "Storing it needs Sys.Modify on the workload pool, which you do not hold; someone who does stores it under the cluster's Options once it is created.";
+
+// CertificatesAddOn sets the certificates up, with the DNS provider's credential typed in here for
+// the new cluster.
+function CertificatesAddOn({
+  form,
+  set,
+  canTrust,
+  showAll = false,
+}: Pick<StepProps, "form" | "set"> & { canTrust: boolean | undefined; showAll: boolean | undefined }): JSX.Element {
+  return (
+    <fieldset className="group">
+      <legend>Certificates</legend>
+      <CertificatesFields
+        value={form.certificates}
+        onChange={(f) => set("certificates", f)}
+        showAll={showAll}
+        mayShare={canTrust !== false}
+        shareRefusal="You do not hold it on the workload pool."
+        renderCredential={(label, hint) => (
+          <Field
+            label={label}
+            hint={
+              <>
+                {hint}{" "}
+                {canTrust === false
+                  ? tokenRefusal
+                  : "Empty: store it later under the cluster's Options; until then the cluster waits for it."}
+              </>
+            }
+          >
+            {(id) => (
+              <input
+                id={id}
+                type="password"
+                autoComplete="new-password"
+                spellCheck={false}
+                disabled={canTrust === false}
+                value={form.dns01Token}
+                onChange={(e) => set("dns01Token", e.target.value)}
+              />
+            )}
+          </Field>
+        )}
+      />
+    </fieldset>
+  );
+}
+
+// GitOpsChoices are the wizard's GitOps settings. The credentials they name are stored once the
+// cluster exists, in its options.
+function GitOpsChoices({ form, set, shown, canTrust }: StepProps & { canTrust: boolean | undefined }): JSX.Element {
+  return (
+    <>
+      <GitOpsFields
+        value={form.gitops}
+        onChange={(g) => set("gitops", g)}
+        problems={Object.fromEntries(gitOpsFields.map((f) => [f, shown(`gitops.${f}`)]))}
+        locked={canTrust === false && form.gitops.engine === ""}
+      />
+      {canTrust === false && <p className="hint">{gitOpsTrustHint}</p>}
+      {form.gitops.engine !== "" && form.gitops.clientSecret === "stored" && (
+        <p className="hint">
+          Store the client secret in the cluster&apos;s GitOps options once it is created; until then{" "}
+          {form.gitops.engine === "flux"
+            ? "Flux's web interface is not served."
+            : "Argo CD signs in without one, with PKCE."}
+        </p>
+      )}
+    </>
+  );
+}
+
+function RancherAddOn({ form, set, shown, canTrust }: StepProps & { canTrust: boolean | undefined }): JSX.Element {
+  return (
+    <>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.rancherInstall}
+          disabled={canTrust === false && !form.rancherInstall}
+          aria-describedby="rancher-hint"
+          onChange={(e) => set("rancherInstall", e.target.checked)}
+        />{" "}
+        Install Rancher
+      </label>
+      <p className="hint" id="rancher-hint">
+        Into this cluster; every other cluster then registers with it.
+        {form.rancherInstall &&
+          ` Rancher needs at least ${rancherMinimumCores} cores on every node, so the machines have at least that many.`}
+        {canTrust === false &&
+          " Rancher holds every registered cluster's admin credentials, so installing it needs Sys.Modify on the workload pool."}
+      </p>
+      {form.rancherInstall ? (
+        <Field
+          label="Rancher host name"
+          hint="Resolves to this cluster's API address, where its ingress controller answers."
+          error={shown("rancherHostname")}
+        >
+          {(id) => (
+            <input
+              id={id}
+              value={form.rancherHostname}
+              onChange={(e) => set("rancherHostname", e.target.value.trim())}
+            />
+          )}
+        </Field>
+      ) : (
+        <>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={form.rancherRegister}
+              aria-describedby="register-hint"
+              onChange={(e) => set("rancherRegister", e.target.checked)}
+            />{" "}
+            Register with Rancher
+          </label>
+          <p className="hint" id="register-hint">
+            {registerHint}
+          </p>
+        </>
+      )}
+    </>
+  );
+}
+
 export function AddOnsStep({
   form,
   set,
@@ -139,56 +321,18 @@ export function AddOnsStep({
   cls,
   canTrust,
   namespace,
+  showAll,
 }: StepProps & {
   cls: ClusterClass | undefined;
   canTrust: boolean | undefined;
   namespace: string | undefined;
+  showAll?: boolean;
 }): JSX.Element {
   const used = addonMemory(form, cls);
   const carrier = form.workerReplicas > 0 ? "workerMachine" : "controlPlaneMachine";
   return (
     <>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={form.headlamp}
-          aria-describedby="headlamp-hint"
-          onChange={(e) => set("headlamp", e.target.checked)}
-        />{" "}
-        Install Headlamp
-      </label>
-      <p className="hint" id="headlamp-hint">
-        {headlampHint}
-      </p>
-      {form.headlamp && (
-        <fieldset className="group">
-          <legend>Headlamp</legend>
-          <Field
-            label="Host name"
-            hint="Optional: also serve it at this name through the cluster's ingress controller."
-          >
-            {(id) => (
-              <input
-                id={id}
-                value={form.headlampHostname}
-                onChange={(e) => set("headlampHostname", e.target.value.trim())}
-              />
-            )}
-          </Field>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={form.headlampView}
-              aria-describedby="headlamp-view-hint"
-              onChange={(e) => set("headlampView", e.target.checked)}
-            />{" "}
-            {headlampViewLabel}
-          </label>
-          <p className="hint" id="headlamp-view-hint">
-            {headlampViewHint}
-          </p>
-        </fieldset>
-      )}
+      <HeadlampAddOn form={form} set={set} />
       <label className="check">
         <input
           type="checkbox"
@@ -283,59 +427,25 @@ export function AddOnsStep({
           )}
         </>
       )}
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={form.rancherInstall}
-          disabled={canTrust === false && !form.rancherInstall}
-          aria-describedby="rancher-hint"
-          onChange={(e) => set("rancherInstall", e.target.checked)}
-        />{" "}
-        Install Rancher
-      </label>
-      <p className="hint" id="rancher-hint">
-        Into this cluster; every other cluster then registers with it.
-        {form.rancherInstall &&
-          ` Rancher needs at least ${rancherMinimumCores} cores on every node, so the machines have at least that many.`}
-        {canTrust === false &&
-          " Rancher holds every registered cluster's admin credentials, so installing it needs Sys.Modify on the workload pool."}
-      </p>
-      {form.rancherInstall ? (
-        <Field
-          label="Rancher host name"
-          hint="Resolves to this cluster's API address, where its ingress controller answers."
-          error={shown("rancherHostname")}
-        >
-          {(id) => (
-            <input
-              id={id}
-              value={form.rancherHostname}
-              onChange={(e) => set("rancherHostname", e.target.value.trim())}
-            />
-          )}
-        </Field>
-      ) : (
-        <>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={form.rancherRegister}
-              aria-describedby="register-hint"
-              onChange={(e) => set("rancherRegister", e.target.checked)}
-            />{" "}
-            Register with Rancher
-          </label>
-          <p className="hint" id="register-hint">
-            {registerHint}
-          </p>
-        </>
-      )}
+      <RancherAddOn form={form} set={set} shown={shown} canTrust={canTrust} />
       {variable(cls, "backups") && <BackupsChoice form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} />}
+      {variable(cls, "certificates") && (
+        <CertificatesAddOn form={form} set={set} canTrust={canTrust} showAll={showAll} />
+      )}
+      {variable(cls, "gitops") && <GitOpsChoices form={form} set={set} shown={shown} canTrust={canTrust} />}
       {used.mib > 0 && (
         <p className="hint" id="addon-memory">
           The add-ons chosen use about {used.mib} MiB of memory ({used.names.join(", ")}), so each{" "}
           {form.workerReplicas > 0 ? "worker" : "control plane"} has at least{" "}
-          {machineLeast(form, cls, carrier).memoryMiB} MiB.
+          {machineLeast(form, cls, carrier).memoryMiB} MiB
+          {form.workerReplicas > 0 && (
+            <>
+              {" "}
+              and each control plane, whose API server holds their objects, at least{" "}
+              {machineLeast(form, cls, "controlPlaneMachine").memoryMiB} MiB
+            </>
+          )}
+          .
         </p>
       )}
       {variable(cls, "upgrades") && (

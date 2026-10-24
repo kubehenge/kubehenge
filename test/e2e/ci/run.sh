@@ -206,9 +206,6 @@ templates_made
 # Nested vCPUs cost no memory, and with two an RKE2 control plane stopped answering its own lease
 # renewals while everything started.
 export KUBEHENGE_E2E_CONTROL_PLANE_CORES=4
-# The control planes' least memory, so that every add-on is seen to fit in it; the workers get
-# theirs with the add-ons from the test itself.
-export KUBEHENGE_E2E_CONTROL_PLANE_MEMORY=4096
 case "${test}" in
     rke2)
         # MetalLB is the default the other distributions run; kube-vip gets a cluster of its own.

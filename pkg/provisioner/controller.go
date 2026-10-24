@@ -78,6 +78,8 @@ type Reconciler struct {
 	SysAuditGroup string
 	// VolumeSnapshots is what lets a cluster's CSI plugin take volume snapshots as root@pam.
 	VolumeSnapshots VolumeSnapshots
+	// HostKeys reads an SSH server's host keys as known_hosts lines; unset, from the server itself.
+	HostKeys func(ctx context.Context, address string) (string, error)
 
 	ids ciliumIDs
 }
@@ -183,30 +185,31 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // that takes, so that nothing else of this cluster waits with it: removing Rancher, which waits on
 // every cluster registered with it, removing Istio, which waits on the cluster's workloads,
 // removing volume snapshots, which deletes root@pam's configuration in the cluster, linking the
-// cluster's Cluster Mesh peers, and what its load balancer needs in the cluster. It
-// reports whether any of it waits.
+// cluster's Cluster Mesh peers, what its certificates and its load balancer need in the cluster,
+// and its GitOps engine's repository and removal. It reports whether any of it waits.
 func (r *Reconciler) afterTheRest(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons, rancherRefused string) (bool, error) {
+	certificatesWaiting, err := r.reconcileCertificates(ctx, cluster, &addons.Certificates)
+	if err != nil {
+		return false, err
+	}
 	rancherWaiting := false
 	if !addons.Rancher.Install && rancherRefused == "" {
 		var with []string
-		if !addons.Monitoring.Enabled {
+		if !addons.Monitoring.Enabled && !addons.Certificates.on() {
 			with = append(with, certManagerProxy(cluster))
 		}
-		var err error
 		if rancherWaiting, err = r.removeRancherWhenFree(ctx, cluster, with...); err != nil {
 			return false, err
 		}
 	}
 	istioWaiting := false
 	if !addons.Istio.Enabled {
-		var err error
 		if istioWaiting, err = r.removeIstio(ctx, cluster); err != nil {
 			return false, err
 		}
 	}
 	snapshotsWaiting := false
 	if !addons.VolumeSnapshots {
-		var err error
 		if snapshotsWaiting, err = r.removeVolumeSnapshots(ctx, cluster); err != nil {
 			return false, err
 		}
@@ -216,7 +219,11 @@ func (r *Reconciler) afterTheRest(ctx context.Context, cluster *clusterv1.Cluste
 		return false, err
 	}
 	lbWaiting, err := r.reconcileLoadBalancer(ctx, cluster, addons.LoadBalancer)
-	return rancherWaiting || istioWaiting || snapshotsWaiting || meshWaiting || lbWaiting, err
+	if err != nil {
+		return false, err
+	}
+	gitOpsWaiting, err := r.reconcileGitOps(ctx, cluster, addons)
+	return certificatesWaiting || rancherWaiting || istioWaiting || snapshotsWaiting || meshWaiting || lbWaiting || gitOpsWaiting, err
 }
 
 // removeRancherWhenFree removes Rancher from a cluster that switched it off, or reports that it
@@ -398,6 +405,9 @@ func (r *Reconciler) addons(ctx context.Context, cluster *clusterv1.Cluster) (Ad
 		}
 		addons.Rancher.Install = false
 	}
+	if addons.gitOpsFound, err = r.gitOpsState(ctx, cluster, &addons.GitOps); err != nil {
+		return addons, "", err
+	}
 	return addons, refused, nil
 }
 
@@ -490,10 +500,17 @@ func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster
 }
 
 // resourceSetSecrets are the Secrets of the cluster's ClusterResourceSet: its Proxmox VE Secret,
-// Calico's resources when Kubehenge installs Calico, and the configuration of the distribution's
-// own Cilium when it runs that.
+// the values of RKE2's or k3s's own Traefik, Calico's resources when Kubehenge installs Calico, and
+// the configuration of the distribution's own Cilium when it runs that.
 func resourceSetSecrets(cluster *clusterv1.Cluster, resources *corev1.Secret, cni CNI, addons *Addons, calicoImages []Image) ([]*corev1.Secret, error) {
 	secrets := []*corev1.Secret{resources}
+	if d := distributionOf(cluster); d == templates.RKE2 || d == templates.K3s {
+		traefik, err := traefikConfig(cluster, &addons.Certificates)
+		if err != nil {
+			return nil, err
+		}
+		secrets = append(secrets, traefik)
+	}
 	switch {
 	case cni.Name == cniCalico:
 		calico, err := calicoResources(cluster, cni, calicoImages)
@@ -522,7 +539,7 @@ func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluste
 			wait = r.policiesWait
 		case rancherProxy(cluster):
 			wait = r.rancherConfigWaits
-		case traefikProxy(cluster):
+		case traefikProxy(cluster), certManagerProxy(cluster):
 			wait = gatewayAPIWaits
 		case veleroProxy(cluster):
 			wait = func(ctx context.Context, c *clusterv1.Cluster) (bool, error) {

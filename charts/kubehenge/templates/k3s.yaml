@@ -23,10 +23,13 @@ metadata:
     # k3s's server sizing guide: the control planes' least vCPUs and memory from a number of workers.
     kubehenge.dev/control-plane-sizes: '[{"workers":0,"cores":2,"memoryMiB":4096},{"workers":351,"cores":4,"memoryMiB":8192},{"workers":901,"cores":8,"memoryMiB":16384},{"workers":1801,"cores":16,"memoryMiB":32768}]'
     {{- include "kubehenge.addonMemory" . | nindent 4 }}
+    # What each add-on adds to a control plane, where k3s runs the API server in its own process:
+    # measured as the chart's kubehenge.addonControlPlaneMemory figures are, on k3s.
+    kubehenge.dev/addon-control-plane-memory: '{"monitoring":616,"backups":24,"kyverno":520,"istio":504,"rancher":512,"argocd":360}'
     {{- include "kubehenge.backupTargets" . | nindent 4 }}
-    # What a node uses besides the add-ons' pods, measured by the end-to-end tests with a tenth on
-    # top: a control plane with every add-on on, a worker idle.
-    kubehenge.dev/node-memory: '{"controlPlane":2560,"worker":448}'
+    # What a node uses before any add-on, measured by the end-to-end tests: a control plane with a
+    # quarter on top, which the kernel's caches and the API server's peaks take; a worker with a tenth.
+    kubehenge.dev/node-memory: '{"controlPlane":1848,"worker":448}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"
@@ -119,11 +122,15 @@ spec:
               valueFrom:
                 template: |
                   {{- include "kubehenge.admissionFile" (dict "root" . "path" "/etc/rancher/k3s/pod-security.yaml") | nindent 18 }}
-            # Traefik runs as RKE2 runs its own, on every node's ports 80 and 443, rather than behind
-            # k3s's servicelb, so that it answers there whatever load balancer the cluster has.
-            # Routes whose TLS options conflict fail rather than fall back to the defaults, which
-            # would drop a host's client-certificate check (GHSA-g55h-rg46-x9c5). Its Gateway API
-            # provider is on, as in the Traefik Kubehenge installs into kubeadm clusters.
+            # The file is on the servers before k3s starts, so its Traefik never runs on k3s's own
+            # values. Traefik runs as RKE2 runs its own, on every node's ports 80 and 443, rather
+            # than behind k3s's servicelb, so that it answers there whatever load balancer the
+            # cluster has. Routes whose TLS options conflict fail rather than fall back to the
+            # defaults, which would drop a host's client-certificate check (GHSA-g55h-rg46-x9c5). Its
+            # Gateway API provider is on, as in the Traefik Kubehenge installs into kubeadm clusters.
+            # What follows the cluster's certificates comes from the values Secret it names, which
+            # Kubehenge keeps in the running cluster: in the file, every change of it would replace
+            # the servers.
             - op: add
               path: /spec/template/spec/kthreesConfigSpec/files/-
               valueFrom:
@@ -138,6 +145,7 @@ spec:
                       name: traefik
                       namespace: kube-system
                     spec:
+                      {{- include "kubehenge.traefikValuesSecrets" . | nindent 22 }}
                       valuesContent: |-
                         deployment:
                           kind: DaemonSet
@@ -161,13 +169,9 @@ spec:
                             enabled: true
                             statusAddress:
                               ip: {{ "{{ .controlPlaneEndpoint | quote }}" }}
-                        gateway:
-                          listeners:
-                            web:
-                              namespacePolicy:
-                                from: All
                         core:
                           strictTLSOptions: true
+                        {{- include "kubehenge.traefikGatewayValues" . | nindent 24 }}
     # The k3s provider takes the ranges only from its own server configuration, never from the
     # Cluster's clusterNetwork, which Kubehenge's range check and every other distribution read.
     {{- range $range := list (dict "name" "pods" "field" "clusterCidr") (dict "name" "services" "field" "serviceCidr") }}
@@ -299,6 +303,7 @@ spec:
 {{- define "kubehenge.k3sAgentConfig" -}}
 preK3sCommands:
   - sysctl --system
+  - {{ include "kubehenge.runcProfileLoad" . | quote }}
 agentConfig:
   kubeletArgs:
     # capmox names a machine by its VM's SMBIOS UUID, which cloud-init reads as the instance ID.
@@ -322,6 +327,7 @@ template:
       {{- include "kubehenge.k3sAgentConfig" (dict "controlPlane" true) | nindent 6 }}
       files:
         {{- include "kubehenge.sysctlFile" . | nindent 8 }}
+        {{- include "kubehenge.runcProfileFile" (dict "distribution" "k3s") | nindent 8 }}
         {{- include "kubehenge.auditPolicyFile" (dict "root" . "path" "/etc/rancher/k3s/audit-policy.yaml") | nindent 8 }}
         # The k3s provider has no setting for secrets encryption; k3s keeps the key in its
         # datastore, so every server holds the same one. The API server's arguments are here, in
@@ -362,4 +368,5 @@ template:
     {{- include "kubehenge.k3sAgentConfig" (dict) | nindent 4 }}
     files:
       {{- include "kubehenge.sysctlFile" . | nindent 6 }}
+      {{- include "kubehenge.runcProfileFile" (dict "distribution" "k3s") | nindent 6 }}
 {{- end -}}

@@ -291,6 +291,8 @@ export interface Cluster {
   mesh?: MeshPeer[];
   /** Which template builds the nodes run and when they next move; absent for Talos. */
   nodeImage?: NodeImage;
+  /** The deploy key and the repository host's keys Kubehenge made for the cluster's GitOps. */
+  gitops?: GitOpsKeys;
 }
 
 /** The VM template builds a cluster's nodes are cloned from. */
@@ -304,6 +306,13 @@ export interface NodeImage {
   last?: string;
   /** The coming refresh: the build it takes, none while it is not built yet, and its earliest start. */
   next?: { build?: string; due: string };
+}
+
+/** What the controller made for a cluster's GitOps: public halves and fingerprints only. */
+export interface GitOpsKeys {
+  deployKey?: string;
+  deployKeyFingerprint?: string;
+  hostKeys?: string[];
 }
 
 /** A cluster another lists to link with in a Cluster Mesh; refused says why the two are not linked. */

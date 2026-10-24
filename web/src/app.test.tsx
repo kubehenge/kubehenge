@@ -5,7 +5,17 @@ import { describe, expect, it, vi } from "vitest";
 import { noAnswer } from "./api";
 import { App } from "./App";
 import { ClusterList } from "./ClusterList";
-import { addonMemory, fieldProblems, problems, request, summary, withRoom, type Form } from "./create-form";
+import {
+  addonMemory,
+  addonNeedMiB,
+  fieldProblems,
+  newForm,
+  problems,
+  request,
+  summary,
+  withRoom,
+  type Form,
+} from "./create-form";
 import { fakeServer, held, reads, type Route } from "./fake-server";
 import { addressCount } from "./network";
 import type { Cluster, ClusterClass, ClusterHealth, Machine } from "./types";
@@ -538,6 +548,9 @@ describe("create", () => {
     rancherInstall: false,
     rancherHostname: "",
     rancherRegister: false,
+    certificates: newForm().certificates,
+    dns01Token: "",
+    gitops: newForm().gitops,
     oidc: [],
     upgradeMode: "off",
     backups: false,
@@ -673,7 +686,7 @@ describe("create", () => {
       "Cluster Mesh": "On, with no peers yet",
     });
     expect(request(meshed, withMesh).variables["clusterMesh"]).toStrictEqual({ enabled: true, peers: ["api", "db"] });
-    expect(addonMemory(meshed, withMesh)).toStrictEqual({ names: ["Cluster Mesh"], mib: 256 });
+    expect(addonMemory(meshed, withMesh)).toStrictEqual({ names: ["Cluster Mesh"], mib: 256, controlPlaneMiB: 0 });
 
     const canal = { ...meshed, cni: "canal" };
     expect(Object.fromEntries(summary(canal, withMesh))).not.toHaveProperty("Cluster Mesh");
@@ -704,7 +717,11 @@ describe("create", () => {
     expect(Object.fromEntries(summary(logged, withLogs))).toMatchObject({
       Logs: "On, collected through the API, 14 days in 20 GiB",
     });
-    expect(addonMemory(logged, withLogs)).toStrictEqual({ names: ["monitoring", "logs"], mib: 2048 });
+    expect(addonMemory(logged, withLogs)).toStrictEqual({
+      names: ["monitoring", "logs"],
+      mib: 2048,
+      controlPlaneMiB: 0,
+    });
 
     const unmonitored = { ...logged, monitoring: false };
     expect(request(unmonitored, withLogs).variables).not.toHaveProperty("logs");
@@ -750,7 +767,7 @@ describe("create", () => {
       implementation: "kube-vip",
     });
     expect(request(metallb, rke2).variables).not.toHaveProperty("loadBalancer");
-    expect(addonMemory(metallb, withLB)).toStrictEqual({ names: ["the load balancer"], mib: 96 });
+    expect(addonMemory(metallb, withLB)).toStrictEqual({ names: ["the load balancer"], mib: 96, controlPlaneMiB: 0 });
     expect(fieldProblems("Network", metallb, withLB)).toStrictEqual({});
 
     for (const [addresses, problem] of [
@@ -910,10 +927,14 @@ describe("create", () => {
       ...rke2,
       annotations: {
         "kubehenge.dev/addon-memory": addons,
-        "kubehenge.dev/node-memory": '{"controlPlane":4800,"worker":640}',
+        "kubehenge.dev/node-memory": '{"controlPlane":4096,"worker":640}',
       },
     };
-    expect(addonMemory(form, figured)).toStrictEqual({ names: ["Headlamp", "monitoring", "cert-manager"], mib: 6150 });
+    expect(addonMemory(form, figured)).toStrictEqual({
+      names: ["Headlamp", "monitoring", "cert-manager"],
+      mib: 6150,
+      controlPlaneMiB: 0,
+    });
     expect(addonMemory({ ...form, rancherRegister: true }, figured).mib).toBe(6400);
     expect(
       addonMemory(
@@ -947,14 +968,42 @@ describe("create", () => {
     };
     expect(fieldProblems("Machines", alone, figured)).toStrictEqual({
       controlPlaneMachine:
-        "Memory of at least 10952 MiB, in steps of 8. Without workers, they run the workloads too. The add-ons chosen need that much: 6150 MiB, shared by the control planes.",
+        "Memory of at least 10248 MiB, in steps of 8. Without workers, they run the workloads too. The add-ons chosen need that much: 6150 MiB, shared by the control planes.",
     });
     expect(
       withRoom({ ...alone, controlPlaneMachine: { cores: 2, memoryMiB: 4096, diskGiB: 30 } }, figured),
     ).toMatchObject({
-      controlPlaneMachine: { cores: 4, memoryMiB: 10_952 },
+      controlPlaneMachine: { cores: 4, memoryMiB: 10_248 },
       workerMachine: form.workerMachine,
     });
+  });
+
+  it("gives the control planes room for what the add-ons add to their own use", () => {
+    const grown: ClusterClass = {
+      ...rke2,
+      annotations: {
+        "kubehenge.dev/addon-memory": '{"headlamp":50,"monitoring":1500,"certManager":100}',
+        "kubehenge.dev/addon-control-plane-memory": '{"monitoring":900,"certManager":100}',
+        "kubehenge.dev/node-memory": '{"controlPlane":3200,"worker":640}',
+      },
+    };
+    const least = { cores: 2, memoryMiB: 4096, diskGiB: 30 };
+    const withWorkers = { ...form, workerReplicas: 1, controlPlaneMachine: least };
+    expect(addonMemory(withWorkers, grown)).toStrictEqual({
+      names: ["Headlamp", "monitoring", "cert-manager"],
+      mib: 1650,
+      controlPlaneMiB: 1000,
+    });
+    expect(fieldProblems("Machines", withWorkers, grown).controlPlaneMachine).toBe(
+      "Memory of at least 4200 MiB, in steps of 8. The add-ons chosen need that much, as the API server holds their objects.",
+    );
+    expect(withRoom(withWorkers, grown).controlPlaneMachine).toStrictEqual({ ...least, memoryMiB: 4200 });
+    // Headlamp alone adds nothing to them.
+    const headlamp = { ...withWorkers, monitoring: false, rancherRegister: false };
+    expect(fieldProblems("Machines", headlamp, grown).controlPlaneMachine).toBeUndefined();
+    // Without workers it adds to what they use themselves, under the add-ons' pods.
+    const alone = { ...withWorkers, workerReplicas: 0, controlPlaneReplicas: 1 };
+    expect(addonNeedMiB(alone, grown)).toBe(3200 + 1000 + 1656);
   });
 
   it("says why the sign-in page is back, what a lost connection means, and who may create", async () => {

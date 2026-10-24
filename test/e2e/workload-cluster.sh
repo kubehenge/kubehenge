@@ -8,10 +8,12 @@
 # component scraped with its server verified) and logs (a pod's lines, and with the node collector
 # the journal and the audit log, read in Loki through Grafana) on and off, back a namespace with a
 # volume and a Secret up with Velero to an S3 store the test serves, delete it and restore it, check
-# the store holds the backup encrypted, switch backups and the load balancer off, scale its workers
-# up and down, upgrade it by one minor version (for RKE2 and k3s with the first
-# new server's join refused at first), replace a node that dies, delete it, and check that nothing
-# of it is left on Proxmox VE.
+# the store holds the backup encrypted, switch certificates on (from the cluster's own CA, then from
+# an ACME server over DNS-01 and over HTTP-01) and GitOps (Flux, then Argo CD, syncing a repository
+# on a Git server in the cluster through a deploy key), switch backups, certificates, GitOps and the
+# load balancer off, scale its workers up and down, upgrade it by one minor version (for RKE2 and
+# k3s with the first new server's join refused at first), replace a node that dies, delete it, and
+# check that nothing of it is left on Proxmox VE.
 #
 #   test/e2e/workload-cluster.sh <ClusterClass> <version> <upgrade version>
 #
@@ -27,8 +29,8 @@
 #   reached from the machine running this test). KUBEHENGE_E2E_LOAD_BALANCER is the load balancer,
 #   metallb (default) or kube-vip.
 # KUBEHENGE_E2E_CONTROL_PLANE_MEMORY and KUBEHENGE_E2E_WORKER_MEMORY (MiB) and
-# KUBEHENGE_E2E_CONTROL_PLANE_CORES size the nodes; the worker's memory is by default the least
-# the class lets it have with the add-ons. KUBEHENGE_E2E_RESTARTS=report prints restarts while every
+# KUBEHENGE_E2E_CONTROL_PLANE_CORES size the nodes; the memory is by default the least the class
+# lets each have with the add-ons. KUBEHENGE_E2E_RESTARTS=report prints restarts while every
 # add-on is on instead of failing, for a host whose KVM lacks pause-loop exiting: there guests that
 # outnumber its CPUs starve each other, whatever their sizes.
 # KUBEHENGE_E2E_CNI chooses the CNI (required by kubeadm). KUBEHENGE_E2E_PODS and
@@ -36,7 +38,7 @@
 # network; unset, the distribution's defaults apply.
 # KUBEHENGE_E2E_OIDC_ADDRESS is an IPv4 address of the machine running this test that the cluster's
 # nodes reach; the test serves an OpenID issuer there, on KUBEHENGE_E2E_OIDC_PORT (default 8943),
-# which the cluster trusts. Needs openssl and python3.
+# which the cluster trusts. Needs openssl, python3 and ssh-keygen.
 # KUBEHENGE_E2E_DATASTORE_ALLOCATE=1 switches the CSI plugin's newest release on and off again, on a
 # KUBEHENGE_E2E_STORAGE that the management cluster, the templates and other clusters leave alone,
 # with a management cluster that lets clusters choose it; KUBEHENGE_E2E_LOCAL_STORAGE names one of
@@ -272,9 +274,18 @@ worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq 
     (.metadata.annotations["kubehenge.dev/addon-memory"] | fromjson) as $addon
     | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
     | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
-        $node.worker + $addon.headlamp + $addon.monitoring + $addon.logs + $addon.backups + $addon.kyverno + $addon.istio + $addon.loadBalancer + $addon.certManager + $addon.rancherAgent]
+        $node.worker + $addon.headlamp + $addon.monitoring + $addon.logs + $addon.backups + $addon.kyverno + $addon.istio + $addon.loadBalancer + $addon.certManager + $addon.argocd + $addon.rancherAgent]
     | max')}
-echo "workers with ${worker_memory} MiB of memory"
+# The control plane likewise: the least the class's sizing guide gives it beside one worker, or what
+# it uses itself with every add-on but Rancher, whichever is more.
+control_plane_memory=${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-$(printf '%s' "${class_json}" | jq -r '
+    (.metadata.annotations["kubehenge.dev/addon-control-plane-memory"] // "{}" | fromjson) as $grows
+    | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
+    | [(.metadata.annotations["kubehenge.dev/control-plane-sizes"] | fromjson | map(select(.workers <= 1)) | last | .memoryMiB),
+        (.spec.variables[] | select(.name == "controlPlaneMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
+        $node.controlPlane + ([$grows.headlamp, $grows.monitoring, $grows.logs, $grows.backups, $grows.kyverno, $grows.istio, $grows.loadBalancer, $grows.certManager, $grows.argocd, $grows.rancherAgent] | map(. // 0) | add)]
+    | max')}
+echo "workers with ${worker_memory} MiB of memory, the control plane with ${control_plane_memory} MiB"
 cat > "${work}/cluster.yaml" << EOF
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
@@ -311,7 +322,7 @@ ${network_spec}
       - name: loadBalancer
         value: {enabled: true, implementation: ${load_balancer}, addresses: ${load_balancer_addresses}}
       - name: controlPlaneMachine
-        value: {memoryMiB: ${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-4096}, cores: ${KUBEHENGE_E2E_CONTROL_PLANE_CORES:-2}}
+        value: {memoryMiB: ${control_plane_memory}, cores: ${KUBEHENGE_E2E_CONTROL_PLANE_CORES:-2}}
       - name: workerMachine
         value: {memoryMiB: ${worker_memory}}
 ${cni_variable}
@@ -364,10 +375,13 @@ step "sign-in through the cluster's identity provider, tokens beside it"
 check_sign_in
 
 step "the cluster uses its pod and service ranges"
-# The Cluster's own, or else the class's defaults, as Kubehenge's controller reads them.
-ranges=$(kubectl -n "${ns}" get "cluster/${name}" -o json | jq -c --argjson class "${class_json}" '{
-    pods: (.spec.clusterNetwork.pods.cidrBlocks // [$class.metadata.annotations["kubehenge.dev/default-pods"]]),
-    services: (.spec.clusterNetwork.services.cidrBlocks // [$class.metadata.annotations["kubehenge.dev/default-services"]])}')
+# The Cluster's own, or else the class's defaults, as Kubehenge's controller reads them. Only the
+# defaults go to jq as an argument: the whole class is larger than Linux allows one argument to be.
+class_ranges=$(printf '%s' "${class_json}" | jq -c '.metadata.annotations |
+    {pods: [.["kubehenge.dev/default-pods"]], services: [.["kubehenge.dev/default-services"]]}')
+ranges=$(kubectl -n "${ns}" get "cluster/${name}" -o json | jq -c --argjson class "${class_ranges}" '{
+    pods: (.spec.clusterNetwork.pods.cidrBlocks // $class.pods),
+    services: (.spec.clusterNetwork.services.cidrBlocks // $class.services)}')
 # outside <ranges JSON list> <addresses...>: prints the addresses outside every range.
 outside() { python3 -c 'import ipaddress, json, sys
 nets = [ipaddress.ip_network(n) for n in json.loads(sys.argv[1])]
@@ -1117,6 +1131,7 @@ headlamp_can() {
     wl auth can-i "$1" "$2" --all-namespaces --as=system:serviceaccount:headlamp:headlamp 2> /dev/null || true
 }
 until_true 120 "Headlamp refuses to list pods without a token" headlamp_refuses
+control_plane_use "${work}/workload" headlamp
 
 step "Headlamp read-only for everyone"
 set_variable headlamp '{"enabled":true,"access":"view"}'
@@ -1169,6 +1184,7 @@ case ${pod_security} in
     *violate*) fail "Kyverno's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
     *) ;;
 esac
+control_plane_use "${work}/workload" kyverno
 
 # Before monitoring: on Cilium, switching Istio on restarts Cilium's agents and operator, and with
 # monitoring's pods busy beside them a worker of the least size runs short of CPU.
@@ -1214,6 +1230,7 @@ until_true 60 "a client in the mesh reaches the server" fetches e2e-mesh
 # What ztunnel let through carries the client's workload identity.
 mesh_identity() { wl -n istio-node logs -l app=ztunnel --tail=-1 --prefix=false | grep -q 'spiffe://cluster.local/ns/e2e-mesh/sa/default'; }
 until_true 60 "ztunnel names the client's workload identity" mesh_identity
+control_plane_use "${work}/workload" istio
 
 step "monitoring switched on"
 set_variable monitoring '{"enabled":true}'
@@ -1273,6 +1290,7 @@ case ${pod_security} in
     *violate*) fail "monitoring's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
     *) ;;
 esac
+control_plane_use "${work}/workload" monitoring
 
 step "logs switched on, collected on every node"
 set_variable logs '{"enabled":true,"collector":"node","retentionDays":7,"sizeGiB":10}'
@@ -1360,6 +1378,7 @@ case ${pod_security} in
     *violate*) fail "Loki's and the events collector's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
     *) ;;
 esac
+control_plane_use "${work}/workload" logs
 
 step "logs collected through the Kubernetes API instead"
 set_variable logs '{"enabled":true,"collector":"api","retentionDays":7,"sizeGiB":10}'
@@ -1516,6 +1535,7 @@ until_true 1200 "the backup completed" phase_is backup e2e Completed
 volume_backups=$(wl -n velero get podvolumebackups -l velero.io/backup-name=e2e -o json |
     jq '[.items[] | select(.spec.pod.namespace == "e2e-backup" and .status.phase == "Completed")] | length')
 [ "${volume_backups}" = 1 ] || fail "the pod's volume was not backed up: ${volume_backups} volume backups"
+control_plane_use "${work}/workload" backups
 
 step "the backup in the S3 store: under the cluster's own prefix, encrypted"
 keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
@@ -1560,6 +1580,608 @@ restored=$(wl -n e2e-backup exec data -- cat /data/marker)
 restored=$(wl -n e2e-backup get secret e2e -o jsonpath='{.data.marker}' | base64 -d)
 [ "${restored}" = "${marker}" ] || fail "the Secret did not come back"
 wl delete namespace e2e-backup --wait --timeout=5m
+
+step "certificates switched on, from the cluster's own CA"
+set_variable certificates '{"enabled":true,"issuer":"ca","domain":"e2e.test"}'
+ingress_ca=${name}-ingress-ca
+until_true 300 "the cluster's CA beside it" sh -c "kubectl -n ${ns} get secret ${ingress_ca} >/dev/null 2>&1"
+ca_domain=$(kubectl -n "${ns}" get secret "${ingress_ca}" -o jsonpath='{.metadata.annotations.kubehenge\.dev/ingress-ca-domain}')
+[ "${ca_domain}" = e2e.test ] || fail "the cluster's CA records the domain '${ca_domain}', not e2e.test"
+ca_data=$(kubectl -n "${ns}" get secret "${ingress_ca}" -o jsonpath='{.data.tls\.crt}')
+printf '%s' "${ca_data}" | base64 -d > "${work}/ingress-ca.crt"
+ca_text=$(openssl x509 -in "${work}/ingress-ca.crt" -noout -text)
+# A CA that vouches only for names in the domain and for no address cannot stand in for any other
+# server its users reach, however far it is trusted.
+printf '%s\n' "${ca_text}" | grep -A1 'Permitted:' | grep -qx ' *DNS:e2e.test' || fail "the cluster's CA is not constrained to e2e.test"
+printf '%s\n' "${ca_text}" | grep -q 'IP:0.0.0.0/0.0.0.0' || fail "the cluster's CA may vouch for IP addresses"
+printf '%s\n' "${ca_text}" | grep -q 'ASN1 OID: prime256v1' || fail "the cluster's CA's key is not ECDSA P-256"
+openssl x509 -in "${work}/ingress-ca.crt" -noout -checkend $((9 * 365 * 86400)) > /dev/null || fail "the cluster's CA runs out within nine years"
+marked=$(kubectl -n "${ns}" get cluster "${name}" -o json | jq '.metadata.annotations // {} | has("kubehenge.dev/certificates")')
+[ "${marked}" = true ] || fail "the Cluster is not marked as having certificates"
+# shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+ca_copied() { ca_copy=$(wl -n cert-manager get secret kubehenge-ingress-ca -o jsonpath='{.data.tls\.crt}' 2> /dev/null) && [ "${ca_copy}" = "${ca_data}" ]; }
+until_true 300 "the cluster's CA in the workload cluster" ca_copied
+until_true 600 "the default certificate issued" wl -n kube-system wait --for=condition=Ready certificate.cert-manager.io/kubehenge-ingress --timeout=10s
+# default_certificate: whether the default certificate covers the domain and every name one level
+# below it, with an ECDSA P-256 key.
+default_certificate() {
+    leaf=$(wl -n kube-system get secret kubehenge-ingress-tls -o jsonpath='{.data.tls\.crt}')
+    leaf=$(printf '%s' "${leaf}" | base64 -d | openssl x509 -noout -text)
+    sans=$(printf '%s\n' "${leaf}" | grep -A1 'Subject Alternative Name' | tail -n 1 | tr -d ' ' | tr ',' '\n' | LC_ALL=C sort | tr '\n' ' ')
+    [ "${sans}" = 'DNS:*.e2e.test DNS:e2e.test ' ] || fail "the default certificate names ${sans}, not e2e.test and *.e2e.test"
+    printf '%s\n' "${leaf}" | grep -q 'ASN1 OID: prime256v1' || fail "the default certificate's key is not ECDSA P-256"
+}
+default_certificate
+# websecure_programmed: whether Traefik's Gateway has its HTTPS listener, terminating TLS with the
+# default certificate for routes from every namespace, and has programmed it.
+websecure_programmed() {
+    wl -n kube-system get gateway traefik-gateway -o json 2> /dev/null | jq -e '
+        any(.spec.listeners[]; .name == "websecure" and .port == 8443 and .protocol == "HTTPS" and .tls.mode == "Terminate" and
+            any(.tls.certificateRefs[]; .name == "kubehenge-ingress-tls") and .allowedRoutes.namespaces.from == "All") and
+        any(.status.listeners[]?; .name == "websecure" and
+            any(.conditions[]; .type == "Programmed" and .status == "True") and any(.conditions[]; .type == "ResolvedRefs" and .status == "True"))' > /dev/null
+}
+until_true 300 "Traefik's Gateway serves HTTPS with the default certificate" websecure_programmed
+wl create namespace e2e-certs
+agnhost_pod e2e-certs web netexec --http-port=8080
+wl -n e2e-certs expose pod web --port=80 --target-port=8080
+# Neither names a certificate: the default one serves both.
+wl -n e2e-certs create ingress web --rule='web.e2e.test/*=web:80'
+wl -n e2e-certs apply -f - << 'EOF'
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: web
+spec:
+  parentRefs:
+    - name: traefik-gateway
+      namespace: kube-system
+      sectionName: websecure
+  hostnames: [gateway.e2e.test]
+  rules:
+    - backendRefs:
+        - name: web
+          port: 80
+EOF
+wl -n e2e-certs wait --for=condition=Ready pod/web --timeout=5m
+# https_answers <CA file> <host name> <path> <pattern>: whether the API address answers the path at
+# the host name over HTTPS, with a certificate the CA vouches for, matching the pattern.
+https_answers() {
+    https_answer=$(curl -sS --fail --max-time 5 --cacert "$1" --resolve "$2:443:${KUBEHENGE_E2E_ENDPOINT}" "https://$2$3" 2> /dev/null) || return 1
+    printf '%s' "${https_answer}" | grep -qiE "$4"
+}
+until_true 300 "an Ingress served over HTTPS with the default certificate" https_answers "${work}/ingress-ca.crt" web.e2e.test /hostname '^web$'
+until_true 300 "an HTTPRoute served over HTTPS with the default certificate" https_answers "${work}/ingress-ca.crt" gateway.e2e.test /hostname '^web$'
+control_plane_use "${work}/workload" certificates
+
+# Pebble, an ACME server made for tests, validates challenges against the DNS server it is given:
+# BIND, which takes the DNS-01 records over RFC 2136 and answers for the HTTP-01 name.
+step "an ACME server, and a DNS server for its challenges"
+# renovate: datasource=docker depName=docker.io/internetsystemsconsortium/bind9
+bind_image=docker.io/internetsystemsconsortium/bind9:9.20@sha256:66092edb53c081fa11b1fa8219e99065b0f497cb38f568ba789702a4c10e2590
+# renovate: datasource=docker depName=ghcr.io/letsencrypt/pebble
+pebble_image=ghcr.io/letsencrypt/pebble:2.10.1@sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199
+# The HTTP-01 names live in the cluster's own DNS, as Services in e2e-certs whose endpoint is the API
+# address, where Traefik answers on port 80; cert-manager's self-check finds them there, and Pebble
+# in BIND's copy of the same records, so that nothing outside the cluster need resolve them.
+http01_zone=e2e-certs.svc.cluster.local
+http01_host=http01.${http01_zone}
+http01_headlamp=headlamp.${http01_zone}
+wl create namespace e2e-acme
+wl -n e2e-acme apply -f - << 'EOF'
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns
+spec:
+  selector:
+    app: dns
+  ports:
+    - name: dns
+      protocol: UDP
+      port: 53
+      targetPort: 5353
+    - name: dns-tcp
+      protocol: TCP
+      port: 53
+      targetPort: 5353
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pebble
+spec:
+  selector:
+    app: pebble
+  ports:
+    - name: acme
+      port: 14000
+    - name: management
+      port: 15000
+EOF
+dns_ip=$(wl -n e2e-acme get service dns -o jsonpath='{.spec.clusterIP}')
+tsig=$(head -c 32 /dev/urandom | base64 -w0)
+mkdir -p "${work}/dns"
+cat > "${work}/dns/named.conf" << EOF
+options {
+    directory "/var/cache/bind";
+    pid-file none;
+    listen-on port 5353 { any; };
+    listen-on-v6 { none; };
+    recursion no;
+    dnssec-validation no;
+    allow-transfer { none; };
+};
+controls { };
+key "e2e" {
+    algorithm hmac-sha256;
+    secret "${tsig}";
+};
+zone "e2e.test" {
+    type primary;
+    file "/var/lib/bind/e2e.test.zone";
+    allow-update { key "e2e"; };
+};
+zone "${http01_zone}" {
+    type primary;
+    file "/var/lib/bind/http01.zone";
+};
+EOF
+cat > "${work}/dns/e2e.test.zone" << EOF
+\$TTL 60
+@ IN SOA ns hostmaster 1 60 60 600 60
+@ IN NS ns
+ns IN A ${dns_ip}
+EOF
+cat > "${work}/dns/http01.zone" << EOF
+\$TTL 60
+@ IN SOA ns hostmaster 1 60 60 600 60
+@ IN NS ns
+ns IN A ${dns_ip}
+${http01_host}. IN A ${KUBEHENGE_E2E_ENDPOINT}
+${http01_headlamp}. IN A ${KUBEHENGE_E2E_ENDPOINT}
+EOF
+wl -n e2e-acme create secret generic dns --from-file="${work}/dns"
+openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=pebble \
+    -keyout "${work}/pebble.key" -out "${work}/pebble.csr" 2> /dev/null
+printf 'subjectAltName = DNS:pebble.e2e-acme.svc, DNS:pebble.e2e-acme.svc.cluster.local\nextendedKeyUsage = serverAuth\n' > "${work}/pebble.cnf"
+openssl x509 -req -in "${work}/pebble.csr" -CA "${work}/ca.crt" -CAkey "${work}/ca.key" -CAserial "${work}/ca.srl" \
+    -days 1 -extfile "${work}/pebble.cnf" -out "${work}/pebble.crt" 2> /dev/null
+wl -n e2e-acme create secret tls pebble-tls --cert="${work}/pebble.crt" --key="${work}/pebble.key"
+# Both run as Pod Security's restricted level and Kyverno require: BIND as an unprivileged user on
+# an unprivileged port, with its zones copied where it may write their journals.
+wl -n e2e-acme apply -f - << EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pebble
+data:
+  pebble.json: |
+    {"pebble": {"listenAddress": "0.0.0.0:14000", "managementListenAddress": "0.0.0.0:15000",
+      "certificate": "/tls/tls.crt", "privateKey": "/tls/tls.key", "httpPort": 80, "tlsPort": 443,
+      "ocspResponderURL": "", "externalAccountBindingRequired": false}}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dns
+  labels:
+    app: dns
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: named
+      image: ${bind_image}
+      command: [/bin/sh, -c, "cp /config/*.zone /var/lib/bind/ && exec /usr/sbin/named -g -c /config/named.conf"]
+      ports:
+        - containerPort: 5353
+          protocol: UDP
+        - containerPort: 5353
+          protocol: TCP
+      readinessProbe:
+        tcpSocket:
+          port: 5353
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+      volumeMounts:
+        - name: config
+          mountPath: /config
+          readOnly: true
+        - name: zones
+          mountPath: /var/lib/bind
+        - name: cache
+          mountPath: /var/cache/bind
+        - name: run
+          mountPath: /run/named
+  volumes:
+    - name: config
+      secret:
+        secretName: dns
+    - name: zones
+      emptyDir: {}
+    - name: cache
+      emptyDir: {}
+    - name: run
+      emptyDir: {}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pebble
+  labels:
+    app: pebble
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: pebble
+      image: ${pebble_image}
+      args: [-config, /config/pebble.json, -dnsserver, "${dns_ip}:53"]
+      env:
+        # Validations at once and no nonces refused at random: the test is of the cluster, not of
+        # an ACME client's patience.
+        - name: PEBBLE_VA_NOSLEEP
+          value: "1"
+        - name: PEBBLE_WFE_NONCEREJECT
+          value: "0"
+      ports:
+        - containerPort: 14000
+        - containerPort: 15000
+      readinessProbe:
+        tcpSocket:
+          port: 14000
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+      volumeMounts:
+        - name: config
+          mountPath: /config
+          readOnly: true
+        - name: tls
+          mountPath: /tls
+          readOnly: true
+  volumes:
+    - name: config
+      configMap:
+        name: pebble
+    - name: tls
+      secret:
+        secretName: pebble-tls
+EOF
+agnhost_pod e2e-acme client pause
+wl -n e2e-acme wait --for=condition=Ready pod/dns pod/pebble pod/client --timeout=5m
+# shellcheck disable=SC2310 # polled with set -e off, so a failed query is only a retry.
+dns_answers() {
+    soa=$(wl -n e2e-acme exec client -- dig +short "@${dns_ip}" e2e.test SOA 2>&1) && [ -n "${soa}" ] && return
+    # A dig that dies says so only here: a timeout alone cannot tell a crashed client from a silent server.
+    printf 'dig: %s\n' "${soa:-no answer}" >&2
+    return 1
+}
+until_true 60 "BIND answers for e2e.test" dns_answers
+# Pebble makes a new root each time it starts, which only its management interface hands out. The
+# client fetches it there, verifying Pebble's own certificate.
+acme_root() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed fetch is only a retry.
+    wl -n e2e-acme exec -i client -- sh -c 'cat > /tmp/ca.crt && curl -sS --fail --max-time 5 --cacert /tmp/ca.crt https://pebble.e2e-acme.svc:15000/roots/0' \
+        < "${work}/ca.crt" > "${work}/acme-root.crt" 2> /dev/null && grep -q 'BEGIN CERTIFICATE' "${work}/acme-root.crt"
+}
+until_true 120 "Pebble's root" acme_root
+acme_server=https://pebble.e2e-acme.svc:14000/dir
+# ingress_tls <namespace> <host name>: the cluster issuer the Ingress for the host name asks
+# cert-manager for, and the Secrets it names, as JSON.
+ingress_tls() {
+    wl -n "$1" get ingress -o json | jq -c --arg h "$2" '[.items[] | select(any(.spec.rules[]; .host == $h)) |
+        {issuer: .metadata.annotations["cert-manager.io/cluster-issuer"], secrets: [.spec.tls[]?.secretName]}]'
+}
+
+step "certificates over ACME's DNS-01 challenge, with the cluster's own DNS credential"
+# The credential as the interface stores it, and the mark it leaves on the Cluster.
+cluster_uid=$(kubectl -n "${ns}" get cluster "${name}" -o jsonpath='{.metadata.uid}')
+stored_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+kubectl -n "${ns}" apply -f - << EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${name}.dns01
+  labels:
+    kubehenge.dev/user-credential: dns01
+    kubehenge.dev/credential-cluster: ${name}
+  annotations:
+    kubehenge.dev/credential-set-by: e2e@pve
+    kubehenge.dev/credential-set-at: "${stored_at}"
+  ownerReferences:
+    - apiVersion: cluster.x-k8s.io/v1beta2
+      kind: Cluster
+      name: ${name}
+      uid: ${cluster_uid}
+type: kubehenge.dev/user-credential
+stringData:
+  token: "${tsig}"
+EOF
+kubectl -n "${ns}" annotate cluster "${name}" --overwrite "kubehenge.dev/credentials-stored-at=${stored_at}"
+dns01=$(jq -cn --arg s "${acme_server}" --rawfile ca "${work}/ca.crt" --arg d "${dns_ip}:53" '{enabled: true, issuer: "acme-dns01", domain: "e2e.test",
+    acme: {server: $s, caBundle: $ca}, dns01: {provider: "rfc2136", nameservers: [$d], rfc2136: {nameserver: $d, tsigKeyName: "e2e", tsigAlgorithm: "HMACSHA256"}}}')
+set_variable certificates "${dns01}"
+# One name one level too deep for the default certificate, and one it covers.
+set_variable headlamp '{"enabled":true,"hostname":"headlamp.apps.e2e.test"}'
+set_variable monitoring '{"enabled":true,"hostname":"grafana.e2e.test"}'
+# shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+dns01_copied() {
+    dns01_token=$(wl -n cert-manager get secret kubehenge-dns01 -o jsonpath='{.data.token}' 2> /dev/null) &&
+        dns01_token=$(printf '%s' "${dns01_token}" | base64 -d) && [ "${dns01_token}" = "${tsig}" ]
+}
+until_true 300 "the cluster's DNS credential in the workload cluster" dns01_copied
+# cert-manager looks for its records only at BIND, which alone knows e2e.test.
+recursive() {
+    wl -n cert-manager get deployment cert-manager -o json 2> /dev/null |
+        jq -e --arg a "--dns01-recursive-nameservers=${dns_ip}:53" '.spec.template.spec.containers[0].args | index($a) and index("--dns01-recursive-nameservers-only=true")' > /dev/null
+}
+until_true 300 "cert-manager checks its records at BIND" recursive
+wl -n cert-manager rollout status deployment/cert-manager --timeout=5m
+# Issued by Pebble, the default certificate is one its root vouches for; the CA's never is.
+until_true 900 "an Ingress served over HTTPS with the default certificate from the ACME server" \
+    https_answers "${work}/acme-root.crt" web.e2e.test /hostname '^web$'
+until_true 120 "an HTTPRoute served over HTTPS with the default certificate from the ACME server" \
+    https_answers "${work}/acme-root.crt" gateway.e2e.test /hostname '^web$'
+default_certificate
+wl -n cert-manager get secret kubehenge-ingress-acme > /dev/null
+until_true 900 "Headlamp served at a name of its own, with a certificate of its own" https_answers "${work}/acme-root.crt" headlamp.apps.e2e.test / '<html'
+headlamp_tls=$(ingress_tls headlamp headlamp.apps.e2e.test)
+[ "${headlamp_tls}" = '[{"issuer":"kubehenge-ingress","secrets":["headlamp-tls"]}]' ] ||
+    fail "Headlamp's Ingress asks for ${headlamp_tls}, not its own certificate from kubehenge-ingress"
+until_true 600 "Grafana served with the default certificate" https_answers "${work}/acme-root.crt" grafana.e2e.test /api/health '"database"'
+grafana_tls=$(ingress_tls monitoring grafana.e2e.test)
+printf '%s' "${grafana_tls}" | jq -e 'length == 1 and .[0].issuer == null' > /dev/null ||
+    fail "Grafana's Ingress asks for a certificate of its own, which the default one makes needless: ${grafana_tls}"
+
+step "certificates over ACME's HTTP-01 challenge, through the Gateway"
+# Headless and without a selector, a Service resolves to the endpoints written for it.
+for http01_service in http01 headlamp; do
+    wl -n e2e-certs apply -f - << EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${http01_service}
+spec:
+  clusterIP: None
+  ports:
+    - name: http
+      port: 80
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: ${http01_service}
+  labels:
+    kubernetes.io/service-name: ${http01_service}
+    endpointslice.kubernetes.io/managed-by: e2e.kubehenge.dev
+addressType: IPv4
+ports:
+  - name: http
+    port: 80
+    protocol: TCP
+endpoints:
+  - addresses: [${KUBEHENGE_E2E_ENDPOINT}]
+EOF
+done
+# http01_resolved <name>: whether the cluster's DNS and BIND both give the name the API address.
+# shellcheck disable=SC2310 # polled with set -e off, so a failed query is only a retry.
+http01_resolved() {
+    http01_cluster=$(wl -n e2e-acme exec client -- dig +short "$1" A 2>&1) &&
+        http01_bind=$(wl -n e2e-acme exec client -- dig +short "@${dns_ip}" "$1" A 2>&1) &&
+        [ "${http01_cluster}" = "${KUBEHENGE_E2E_ENDPOINT}" ] && [ "${http01_bind}" = "${KUBEHENGE_E2E_ENDPOINT}" ]
+}
+until_true 60 "${http01_host} resolved to the API address" http01_resolved "${http01_host}"
+until_true 60 "${http01_headlamp} resolved to the API address" http01_resolved "${http01_headlamp}"
+# Pebble and cert-manager's self-check fetch the challenge from a pod; any answer at all is Traefik's,
+# a 404 while nothing routes the name.
+# shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+http01_reached() {
+    http01_status=$(wl -n e2e-acme exec client -- curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "http://${http01_host}/" 2> /dev/null) &&
+        [ "${http01_status}" != 000 ]
+}
+until_true 60 "Traefik reached from a pod at ${http01_host} on port 80" http01_reached
+http01=$(jq -cn --arg s "${acme_server}" --rawfile ca "${work}/ca.crt" '{enabled: true, issuer: "acme-http01", acme: {server: $s, caBundle: $ca}}')
+set_variable certificates "${http01}"
+set_variable headlamp "{\"enabled\":true,\"hostname\":\"${http01_headlamp}\"}"
+set_variable monitoring '{"enabled":true}'
+until_true 300 "the default certificate removed" absent wl -n kube-system get certificate.cert-manager.io/kubehenge-ingress
+until_true 300 "its Secret removed with it" absent wl -n kube-system get secret/kubehenge-ingress-tls
+until_true 300 "the DNS credential removed from the workload cluster" absent wl -n cert-manager get secret/kubehenge-dns01
+websecure_gone() { wl -n kube-system get gateway traefik-gateway -o json | jq -e 'all(.spec.listeners[]; .name != "websecure")' > /dev/null; }
+until_true 300 "the Gateway's HTTPS listener removed with the default certificate" websecure_gone
+# On the HTTPS entry point alone, so that the challenge's route is the only one for the name over
+# HTTP. ingress-shim gives it a certificate from the cluster's default issuer.
+wl -n e2e-certs apply -f - << EOF
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: http01
+  annotations:
+    kubernetes.io/tls-acme: "true"
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  tls:
+    - hosts: [${http01_host}]
+      secretName: http01-tls
+  rules:
+    - host: ${http01_host}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 80
+EOF
+until_true 900 "an Ingress served with its own certificate over HTTP-01" https_answers "${work}/acme-root.crt" "${http01_host}" /hostname '^web$'
+until_true 900 "Headlamp served with its own certificate over HTTP-01" https_answers "${work}/acme-root.crt" "${http01_headlamp}" / '<html'
+headlamp_tls=$(ingress_tls headlamp "${http01_headlamp}")
+[ "${headlamp_tls}" = '[{"issuer":"kubehenge-ingress","secrets":["headlamp-tls"]}]' ] ||
+    fail "Headlamp's Ingress asks for ${headlamp_tls}, not its own certificate from kubehenge-ingress"
+
+step "GitOps with Flux, then Argo CD, from a Git server in the cluster through a deploy key"
+# The repository lives in the cluster itself, so that no outside service is needed. The engine
+# reads it over SSH with the deploy key the controller makes; its host key is given, since the
+# controller, outside the cluster, cannot reach the server to read it.
+ssh-keygen -q -t ed25519 -N '' -C '' -f "${work}/git-host"
+git_host=gitea.e2e-git.svc.cluster.local
+known_hosts="[${git_host}]:2222 $(cut -d' ' -f1,2 "${work}/git-host.pub")"
+git_password=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+wl create namespace e2e-git
+wl -n e2e-git create secret generic gitea-host-key --from-file=host="${work}/git-host"
+wl -n e2e-git apply -f - << EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitea
+spec:
+  selector:
+    matchLabels: {app: gitea}
+  template:
+    metadata:
+      labels: {app: gitea}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: gitea
+          image: ${gitea}
+          env:
+            - {name: GITEA__security__INSTALL_LOCK, value: "true"}
+            - {name: GITEA__service__DISABLE_REGISTRATION, value: "true"}
+            - {name: GITEA__server__SSH_SERVER_HOST_KEYS, value: /etc/gitea-host-key/host}
+            - {name: GITEA__server__ROOT_URL, value: "http://${git_host}:3000/"}
+          ports:
+            - {name: http, containerPort: 3000}
+            - {name: ssh, containerPort: 2222}
+          readinessProbe:
+            httpGet: {path: /api/healthz, port: http}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/gitea}
+            - {name: config, mountPath: /etc/gitea}
+            - {name: host-key, mountPath: /etc/gitea-host-key, readOnly: true}
+      volumes:
+        - {name: data, emptyDir: {}}
+        - {name: config, emptyDir: {}}
+        - {name: host-key, secret: {secretName: gitea-host-key}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitea
+spec:
+  selector: {app: gitea}
+  ports:
+    - {name: http, port: 3000, targetPort: http}
+    - {name: ssh, port: 2222, targetPort: ssh}
+EOF
+wl -n e2e-git rollout status deployment/gitea --timeout=5m
+wl -n e2e-git exec deployment/gitea -- gitea admin user create --username e2e --password "${git_password}" \
+    --email e2e@example.org --admin --must-change-password=false
+agnhost_pod e2e-git client pause
+wl -n e2e-git wait --for=condition=Ready pod/client --timeout=5m
+# git_api <method> <path> [<curl options>]: a call to the Git server's API, as its admin.
+git_api() {
+    git_method=$1 git_path=$2
+    shift 2
+    KUBECONFIG=${work}/workload kubectl -n e2e-git exec client -- curl -sS --fail --max-time 10 -u "e2e:${git_password}" \
+        -H 'Content-Type: application/json' -X "${git_method}" "$@" "http://gitea:3000/api/v1/${git_path}"
+}
+# manifest <revision>: what the repository asks for, base64-encoded as the API takes a file.
+manifest() {
+    printf 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: e2e-gitops\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: synced\n  namespace: e2e-gitops\ndata:\n  revision: "%s"\n' "$1" | base64 -w0
+}
+contents=repos/e2e/clusters/contents/apps/cluster.yaml
+git_api POST user/repos -d '{"name":"clusters","private":true,"auto_init":true,"default_branch":"main"}' > /dev/null
+git_file=$(manifest one)
+git_request=$(jq -cn --arg c "${git_file}" '{content: $c, branch: "main", message: "one"}')
+git_api POST "${contents}" -d "${git_request}" > /dev/null
+# push <revision>: commits the manifest at a new revision.
+push() {
+    git_current=$(git_api GET "${contents}")
+    git_file=$(manifest "$1")
+    git_request=$(printf '%s' "${git_current}" | jq -c --arg c "${git_file}" --arg m "$1" '{content: $c, sha: .sha, branch: "main", message: $m}')
+    git_api PUT "${contents}" -d "${git_request}" > /dev/null
+}
+# synced <revision>: whether the cluster runs the manifest at that revision.
+synced() {
+    # shellcheck disable=SC2310 # wl wraps one kubectl call; a missing ConfigMap is only a retry.
+    synced_revision=$(wl -n e2e-gitops get configmap synced -o jsonpath='{.data.revision}' 2> /dev/null) || return 1
+    [ "${synced_revision}" = "$1" ]
+}
+gitops_value() {
+    jq -cn --arg url "ssh://git@${git_host}:2222/e2e/clusters.git" --arg hosts "${known_hosts}" --arg engine "$1" --argjson on "$2" \
+        '{enabled: $on, engine: $engine, auth: "deployKey", repository: {url: $url, revision: "main", path: "apps"}, knownHosts: $hosts, signIn: {clientSecret: "none"}}'
+}
+gitops=$(gitops_value flux true)
+set_variable gitops "${gitops}"
+# deploy_key: the public half of the deploy key the controller made, once it has made it.
+deploy_key() {
+    encoded_key=$(kubectl -n "${ns}" get secret "${name}-gitops" -o jsonpath='{.data.identity\.pub}' 2> /dev/null) || return 1
+    [ -n "${encoded_key}" ] && printf '%s' "${encoded_key}" | base64 -d
+}
+has_deploy_key() { deploy_key > /dev/null; }
+until_true 300 "the cluster's deploy key made" has_deploy_key
+public_key=$(deploy_key)
+# Read only, as the interface tells its users to add it.
+git_request=$(jq -cn --arg k "${public_key}" '{title: "kubehenge", key: $k, read_only: true}')
+git_api POST repos/e2e/clusters/keys -d "${git_request}" > /dev/null
+until_true 600 "Flux installed by its operator" wl -n flux-system wait --for=condition=Ready fluxinstance/flux --timeout=10s
+until_true 600 "Flux syncs the repository" synced one
+push two
+until_true 300 "Flux syncs a new commit" synced two
+control_plane_use "${work}/workload" flux
+pod_security=$(wl label --dry-run=server --overwrite namespace flux-system pod-security.kubernetes.io/enforce=restricted 2>&1)
+case ${pod_security} in
+    *violate*) fail "Flux's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
+    *) ;;
+esac
+
+gitops=$(gitops_value argocd true)
+set_variable gitops "${gitops}"
+# Flux goes first and leaves what it synced running, so that the two never fight over it.
+until_true 600 "Flux uninstalled" absent wl get crd kustomizations.kustomize.toolkit.fluxcd.io
+until_true 600 "the Flux Operator removed" absent wl -n flux-system get deployment/flux-operator
+# shellcheck disable=SC2310 # each answers the check.
+absent wl -n flux-system get secret/kubehenge-gitops || fail "Flux's copy of the deploy key outlives Flux"
+# shellcheck disable=SC2310 # each answers the check.
+synced two || fail "what Flux synced went with it"
+until_true 900 "Argo CD available" wl -n argocd wait --for=condition=Available deployment/argocd-server deployment/argocd-repo-server --timeout=10s
+until_true 300 "Argo CD's application controller ready" wl -n argocd rollout status statefulset/argocd-application-controller --timeout=10s
+push three
+until_true 600 "Argo CD syncs a new commit" synced three
+app_status=$(wl -n argocd get application kubehenge -o jsonpath='{.status.sync.status} {.status.health.status}')
+[ "${app_status}" = "Synced Healthy" ] || fail "Argo CD's application is ${app_status}"
+admin=$(wl -n argocd get configmap argocd-cm -o jsonpath='{.data.admin\.enabled}')
+[ "${admin}" = false ] || fail "Argo CD's built-in admin is enabled"
+pod_security=$(wl label --dry-run=server --overwrite namespace argocd pod-security.kubernetes.io/enforce=restricted 2>&1)
+case ${pod_security} in
+    *violate*) fail "Argo CD's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
+    *) ;;
+esac
+control_plane_use "${work}/workload" argocd
 
 # The class's minimum sizes have to carry every add-on at once.
 step "every add-on at once, with nothing restarted"
@@ -1617,6 +2239,9 @@ set_variable monitoring '{"enabled":false}'
 set_variable podSecurity '{"admission":"restricted","kyverno":"off"}'
 set_variable istio '{"enabled":false}'
 set_variable backups "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
+set_variable certificates '{"enabled":false}'
+gitops=$(gitops_value argocd false)
+set_variable gitops "${gitops}"
 until_true 600 "Headlamp removed" absent wl -n headlamp get deployment/headlamp
 until_true 600 "Loki removed" absent wl -n logging get statefulset/loki
 until_true 300 "Alloy removed" absent wl -n logging get deployment/alloy
@@ -1652,6 +2277,37 @@ s3 -o /dev/null "${tarball}" -H 'x-amz-server-side-encryption-customer-algorithm
     fail "the backup went from the store with Velero"
 kill "${s3_pid}"
 s3_pid=
+# removed <kubectl get...>: whether the object is gone, or its kind with it, as cert-manager's own
+# kinds go once nothing needs cert-manager.
+removed() {
+    # shellcheck disable=SC2310 # the absence is the answer looked for.
+    absent "$@" && return
+    removed_out=$("$@" -o name 2>&1) && return 1
+    case ${removed_out} in
+        *"the server doesn't have a resource type"*) ;;
+        *) return 1 ;;
+    esac
+}
+until_true 300 "the certificates' issuer removed" removed wl get clusterissuers.cert-manager.io/kubehenge-ingress
+until_true 300 "the default certificate removed" removed wl -n kube-system get certificates.cert-manager.io/kubehenge-ingress
+until_true 300 "the DNS credential removed from the workload cluster" absent wl -n cert-manager get secret/kubehenge-dns01
+# shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+unmarked() {
+    marked=$(kubectl -n "${ns}" get cluster "${name}" -o json | jq '.metadata.annotations // {} | has("kubehenge.dev/certificates")') &&
+        [ "${marked}" = false ]
+}
+until_true 300 "the Cluster no longer marked as having certificates" unmarked
+until_true 900 "cert-manager removed, with nothing left that needs it" absent wl -n cert-manager get deployment/cert-manager
+# The CA stays while the cluster lives, so that certificates switched on again keep it.
+kubectl -n "${ns}" get secret "${ingress_ca}" > /dev/null || fail "the cluster's CA went with its certificates"
+wl delete namespace e2e-certs e2e-acme --wait --timeout=5m
+until_true 600 "Argo CD removed" absent wl -n argocd get deployment/argocd-server
+until_true 300 "Argo CD's CRDs removed" absent wl get crd applications.argoproj.io
+# shellcheck disable=SC2310 # each answers the check.
+absent wl -n argocd get secret/kubehenge-repository || fail "Argo CD's copy of the deploy key outlives Argo CD"
+# shellcheck disable=SC2310 # each answers the check.
+synced three || fail "what Argo CD synced went with it"
+wl delete namespace e2e-gitops e2e-git --wait --timeout=5m
 
 step "the load balancer switched off"
 servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')

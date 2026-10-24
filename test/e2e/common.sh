@@ -6,7 +6,10 @@
 agnhost=registry.k8s.io/e2e-test-images/agnhost:2.66.1@sha256:6e2eef87d0dc77e070a7549bc5fdfa290c0fefe3359eb33c2ad1eda692fe66a4
 # renovate: datasource=docker depName=registry.k8s.io/pause
 pause_image=registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
-export agnhost pause_image
+# The Git server the GitOps engines sync from, rootless as Pod Security's restricted level needs.
+# renovate: datasource=docker depName=docker.io/gitea/gitea
+gitea=docker.io/gitea/gitea:28.2.0-rootless@sha256:94807314454f6525994a3b76286ba12bc7e7f8cd14f61d9e67431767f8103306
+export agnhost pause_image gitea
 
 # Each step shows the time since the test started, which is how a slow run shows where it lost it.
 e2e_started=$(date +%s)
@@ -68,6 +71,16 @@ pod_memory() {
     printf '%s' "${pods}" | jq -r 'group_by(.ns)[] | "  \(.[0].ns): \(map(.bytes) | add / 1048576 | floor) MiB in \(length) pods"'
     printf '%s' "${pods}" | jq -r '.[] | select(.ns == "metallb-system" or (.ns == "kube-system" and (.name | startswith("kube-vip")))) |
         "    \(.name): \(.bytes / 1048576 | floor) MiB"'
+}
+
+# control_plane_use <kubeconfig> <add-on>: each control plane's memory in use once the add-on is
+# on, from its kubelet's working set. From one add-on to the next it grows by what the class's
+# kubehenge.dev/addon-control-plane-memory figures size.
+control_plane_use() {
+    for node in $(KUBECONFIG="$1" kubectl get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[*].metadata.name}'); do
+        KUBECONFIG="$1" kubectl get --raw "/api/v1/nodes/${node}/proxy/stats/summary" |
+            jq -r --arg n "${node}" --arg a "$2" '"with \($a): \($n) has \(.node.memory.workingSetBytes / 1048576 | floor) MiB of memory in use"'
+    done
 }
 
 # absent <kubectl get command...>: whether the API server answers that the object does not exist.

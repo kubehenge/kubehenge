@@ -249,6 +249,8 @@ func TestReconcileSwitchesMonitoringOnAndOff(t *testing.T) {
 	t.Parallel()
 	c := storageCluster()
 	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: "monitoring", Value: apiextensionsv1.JSON{Raw: []byte(`{"enabled":true}`)}})
+	// cert-manager waits for the Gateway API.
+	c.Annotations = map[string]string{gatewayAPIAnnotation: "v1.6.3"}
 	r, kube := newReconciler(t, &fakeCloud{}, c)
 	if err := reconcile(t, r, c); err != nil {
 		t.Fatal(err)

@@ -19,10 +19,11 @@ metadata:
     # RKE2's server sizing guide: the control planes' least vCPUs and memory from a number of workers.
     kubehenge.dev/control-plane-sizes: '[{"workers":0,"cores":2,"memoryMiB":4096},{"workers":226,"cores":4,"memoryMiB":8192},{"workers":451,"cores":8,"memoryMiB":16384},{"workers":1301,"cores":16,"memoryMiB":32768}]'
     {{- include "kubehenge.addonMemory" . | nindent 4 }}
+    {{- include "kubehenge.addonControlPlaneMemory" . | nindent 4 }}
     {{- include "kubehenge.backupTargets" . | nindent 4 }}
-    # What a node uses besides the add-ons' pods, measured by the end-to-end tests with a tenth on
-    # top: a control plane with every add-on on, a worker idle.
-    kubehenge.dev/node-memory: '{"controlPlane":2560,"worker":704}'
+    # What a node uses before any add-on, measured by the end-to-end tests: a control plane with a
+    # quarter on top, which the kernel's caches and the API server's peaks take; a worker with a tenth.
+    kubehenge.dev/node-memory: '{"controlPlane":3120,"worker":704}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"
@@ -116,11 +117,14 @@ spec:
               valueFrom:
                 template: |
                   {{- include "kubehenge.admissionFile" (dict "root" . "path" "/etc/rancher/rke2/pod-security.yaml") | nindent 18 }}
-            # RKE2's Traefik tolerates no taint, so it would leave the control planes once a worker
-            # joins, and the cluster's API address would serve no ingress. Routes whose TLS options
-            # conflict fail rather than fall back to the defaults, which would drop a host's
+            # The file is on the control planes before RKE2 starts, so its Traefik never runs on
+            # RKE2's own values. RKE2's Traefik tolerates no taint, so it would leave the control planes once a
+            # worker joins, and the cluster's API address would serve no ingress. Routes whose TLS
+            # options conflict fail rather than fall back to the defaults, which would drop a host's
             # client-certificate check (GHSA-g55h-rg46-x9c5). Its Gateway API provider is on, as in
-            # the Traefik Kubehenge installs into kubeadm clusters.
+            # the Traefik Kubehenge installs into kubeadm clusters. What follows the cluster's
+            # certificates comes from the values Secret it names, which Kubehenge keeps in the
+            # running cluster: in the file, every change of it would replace the control planes.
             - op: add
               path: /spec/template/spec/files/-
               valueFrom:
@@ -135,6 +139,7 @@ spec:
                       name: rke2-traefik
                       namespace: kube-system
                     spec:
+                      {{- include "kubehenge.traefikValuesSecrets" . | nindent 22 }}
                       valuesContent: |-
                         core:
                           strictTLSOptions: true
@@ -147,11 +152,7 @@ spec:
                             enabled: true
                             statusAddress:
                               ip: {{ "{{ .controlPlaneEndpoint | quote }}" }}
-                        gateway:
-                          listeners:
-                            web:
-                              namespacePolicy:
-                                from: All
+                        {{- include "kubehenge.traefikGatewayValues" . | nindent 24 }}
             - op: add
               path: /spec/template/spec/serverConfig/cni
               valueFrom:
@@ -235,6 +236,7 @@ spec:
 {{- define "kubehenge.rke2AgentConfig" -}}
 preRKE2Commands:
   - sysctl --system
+  - {{ include "kubehenge.runcProfileLoad" . | quote }}
 agentConfig:
   # The kubelet refuses to start on kernel settings other than its own (kubehenge.sysctlFile).
   protectKernelDefaults: true
@@ -256,6 +258,7 @@ template:
     {{- include "kubehenge.rke2AgentConfig" (dict "controlPlane" true) | nindent 4 }}
     files:
       {{- include "kubehenge.sysctlFile" . | nindent 6 }}
+      {{- include "kubehenge.runcProfileFile" (dict "distribution" "rke2") | nindent 6 }}
       {{- include "kubehenge.auditPolicyFile" (dict "root" . "path" "/etc/rancher/rke2/audit-policy.yaml") | nindent 6 }}
       # Given a policy, RKE2 audits the API server and keeps a month of the log.
       - path: /etc/rancher/rke2/config.yaml.d/50-kubehenge-audit.yaml
@@ -297,4 +300,5 @@ template:
     {{- include "kubehenge.rke2AgentConfig" (dict) | nindent 4 }}
     files:
       {{- include "kubehenge.sysctlFile" . | nindent 6 }}
+      {{- include "kubehenge.runcProfileFile" (dict "distribution" "rke2") | nindent 6 }}
 {{- end -}}

@@ -271,11 +271,11 @@ volumePolicies:
 // schedule's backups outlive it, so that switching backups off leaves them in the target.
 func veleroValues(charts *Charts, b *Backups, t *BackupTarget, cluster *clusterv1.Cluster) map[string]any {
 	config := map[string]any{
-		"region":                      t.Region,
+		regionKey:                     t.Region,
 		"customerKeyEncryptionSecret": veleroSSECSecret + "/" + veleroSSECKey,
 	}
 	if t.Region == "" {
-		config["region"] = defaultBackupRegion
+		config[regionKey] = defaultBackupRegion
 	}
 	if t.Endpoint != "" {
 		config["s3Url"] = t.Endpoint
@@ -285,8 +285,8 @@ func veleroValues(charts *Charts, b *Backups, t *BackupTarget, cluster *clusterv
 		config["checksumAlgorithm"] = ""
 	}
 	location := map[string]any{
-		"name": veleroLocation, "provider": "aws", "bucket": t.Bucket, "default": true,
-		"prefix": BackupPrefix(t.Prefix, cluster.Namespace, cluster.Name), "config": config,
+		"name": veleroLocation, "provider": "aws", "bucket": t.Bucket, defaultKey: true,
+		"prefix": BackupPrefix(t.Prefix, cluster.Namespace, cluster.Name), configKey: config,
 	}
 	if t.CACertificate != "" {
 		location["caCert"] = base64.StdEncoding.EncodeToString([]byte(t.CACertificate))

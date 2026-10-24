@@ -159,8 +159,8 @@ func snapshotCharts(charts *Charts, distribution templates.Distribution) []chart
 	var proxies []chartProxy
 	if distribution != templates.RKE2 {
 		proxies = append(proxies, chartProxy{snapshotControllerRelease, snapshotControllerRelease, metav1.NamespaceSystem, charts.SnapshotController, map[string]any{
-			"installCRDs": true,
-			"keepCRDs":    true,
+			installCRDsKey: true,
+			"keepCRDs":     true,
 			controllerKey: map[string]any{
 				// Beside the CSI plugin's controller, so that a cluster without workers takes
 				// snapshots too.
@@ -175,8 +175,8 @@ func snapshotCharts(charts *Charts, distribution templates.Distribution) []chart
 		}})
 	}
 	return append(proxies, chartProxy{snapshotClassRelease, snapshotClassRelease, metav1.NamespaceSystem, charts.SnapshotController, map[string]any{
-		"installCRDs": false,
-		controllerKey: map[string]any{"enabled": false},
+		installCRDsKey: false,
+		controllerKey:  map[string]any{"enabled": false},
 		"volumeSnapshotClasses": []any{map[string]any{
 			"name":           snapshotClass,
 			annotationsKey:   map[string]any{"snapshot.storage.kubernetes.io/is-default-class": strconv.FormatBool(true)},

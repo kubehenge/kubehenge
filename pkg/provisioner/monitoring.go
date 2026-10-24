@@ -146,7 +146,12 @@ func monitoringValues(distribution templates.Distribution, proxy Image, addons *
 	}
 	grafana := map[string]any{}
 	if m.Hostname != "" {
-		grafana["ingress"] = map[string]any{"enabled": true, "hosts": []any{m.Hostname}, "tls": []any{ingressTLS(m.Hostname, m.TLSSecret)}}
+		tls, annotations := addonIngress(&addons.Certificates, "grafana", m.Hostname, m.TLSSecret)
+		ingress := map[string]any{"enabled": true, "hosts": []any{m.Hostname}, "tls": []any{tls}}
+		if annotations != nil {
+			ingress["annotations"] = annotations
+		}
+		grafana[ingressKey] = ingress
 		grafana["grafana.ini"] = map[string]any{"server": map[string]any{"root_url": "https://" + m.Hostname}}
 	}
 	if addons.logsOn() {
@@ -310,7 +315,7 @@ func certificate(namespace, name, issuer string, spec map[string]any) map[string
 	spec["privateKey"] = map[string]any{"algorithm": "ECDSA", "size": keyBits}
 	spec["issuerRef"] = map[string]any{"kind": clusterIssuerKind, "name": issuer}
 	return map[string]any{
-		apiVersionKey: certManagerAPI, "kind": "Certificate",
+		apiVersionKey: certManagerAPI, "kind": certificateKind,
 		"metadata": map[string]any{"name": name, "namespace": namespace}, "spec": spec,
 	}
 }

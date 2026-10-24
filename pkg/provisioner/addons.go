@@ -40,6 +40,10 @@ const (
 	apiVersionKey = "apiVersion"
 	// Keys of the charts' values and of pod specs written as maps.
 	seccompProfileKey = "seccompProfile"
+	ingressKey        = "ingress"
+	valueKey          = "value"
+	createKey         = "create"
+	v1alpha1          = "v1alpha1"
 	requestsKey       = "requests"
 	tolerationsKey    = "tolerations"
 	memoryKey         = "memory"
@@ -49,6 +53,10 @@ const (
 	securityKey       = "securityContext"
 	nonRootKey        = "runAsNonRoot"
 	readOnlyRootKey   = "readOnlyRootFilesystem"
+	configKey         = "config"
+	regionKey         = "region"
+	defaultKey        = "default"
+	installCRDsKey    = "installCRDs"
 	// The least CPU and memory the small add-on pods ask for.
 	cpu10m     = "10m"
 	memory64Mi = "64Mi"
@@ -124,6 +132,11 @@ type Charts struct {
 	KubeVip              Chart
 	KubeVipImage         Image
 	KubeVipCloudProvider Chart
+	// The GitOps engines a cluster chooses from: Argo CD, or the Flux Operator, which installs
+	// FluxVersion, the Flux release inside its image.
+	ArgoCD       Chart
+	FluxOperator Chart
+	FluxVersion  string
 	// PodSecurityExempt are the namespaces Kyverno's policies leave alone, those the ClusterClasses'
 	// Pod Security Admission exempts.
 	PodSecurityExempt []string
@@ -140,6 +153,8 @@ type Addons struct {
 	Istio        Istio
 	ClusterMesh  ClusterMesh
 	LoadBalancer LoadBalancer
+	Certificates Certificates
+	GitOps       GitOps
 	// CIS is the cluster's cis variable, which the add-ons make room for.
 	CIS bool
 	// CSINewest runs the CSI plugin's newest release, once the cluster's user holds
@@ -152,6 +167,8 @@ type Addons struct {
 	// backupTarget is the target the backups name, found in the cluster's class; nil while it is
 	// not, when Velero is neither installed nor removed.
 	backupTarget *BackupTarget
+	// gitOpsFound is what the controller found for GitOps before writing the charts' values.
+	gitOpsFound gitOpsState
 }
 
 // addonsOf reads a cluster's add-on variables.
@@ -186,12 +203,23 @@ func addonsOf(cluster *clusterv1.Cluster) (Addons, error) {
 	if a.LoadBalancer, _, err = optionalVariable[LoadBalancer](cluster, loadBalancerVariable); err != nil {
 		return a, err
 	}
+	if a.Certificates, err = CertificatesOf(cluster); err != nil {
+		return a, err
+	}
+	if a.GitOps, _, err = optionalVariable[GitOps](cluster, gitopsVariable); err != nil {
+		return a, err
+	}
 	a.Rancher, err = rancherOf(cluster)
 	return a, err
 }
 
-// certManagerProxy names the cluster's cert-manager proxy, installed for Rancher and for
-// monitoring, either or both.
+// certManager reports whether the cluster runs cert-manager, which Rancher, monitoring and the
+// certificates add-on each need.
+func (a *Addons) certManager() bool {
+	return a.Rancher.Install || a.Monitoring.Enabled || a.Certificates.on()
+}
+
+// certManagerProxy names the cluster's cert-manager proxy, installed for whichever add-ons need it.
 func certManagerProxy(cluster *clusterv1.Cluster) string {
 	return cluster.Name + "-" + certManagerAddon
 }
@@ -231,8 +259,8 @@ func rancherValues(r Rancher, base map[string]any) map[string]any {
 		"hostname":     r.Hostname,
 		"replicas":     replicas,
 		"agentTLSMode": "strict",
-		"ingress":      map[string]any{"tls": map[string]any{"source": "rancher"}},
-		"extraEnv":     append(env, map[string]any{"name": "CATTLE_SERVER_URL", "value": "https://" + r.Hostname}),
+		ingressKey:     map[string]any{"tls": map[string]any{"source": "rancher"}},
+		"extraEnv":     append(env, map[string]any{"name": "CATTLE_SERVER_URL", valueKey: "https://" + r.Hostname}),
 		"startupProbe": map[string]any{"timeoutSeconds": probeTimeout, "periodSeconds": probePeriod, "failureThreshold": probeFailures},
 	}
 }
@@ -590,6 +618,35 @@ func rke2CiliumConfig(cluster *clusterv1.Cluster, id int, addons *Addons) (*core
 	}, nil
 }
 
+func traefikConfigName(cluster *clusterv1.Cluster) string {
+	return cluster.Name + "-traefik"
+}
+
+// traefikConfig wraps, for the ClusterResourceSet, the values Secret the HelmChartConfig of RKE2's
+// and k3s's Traefik names (kubehenge.traefikValuesSecrets): the part of Traefik's configuration
+// that follows the cluster's certificates. A change reaches the running cluster, where one in the
+// HelmChartConfig's file would replace the control planes. It is there, if only empty, for every
+// cluster, since helm-controller installs Traefik only once it is.
+func traefikConfig(cluster *clusterv1.Cluster, certs *Certificates) (*corev1.Secret, error) {
+	values := traefikCertificateValues(certs)
+	if values == nil {
+		values = map[string]any{}
+	}
+	content, err := yaml.Marshal(values)
+	if err != nil {
+		return nil, fmt.Errorf("encoding Traefik's values: %w", err)
+	}
+	manifest, err := workloadManifest(traefikValuesSecret, map[string]string{traefikValuesKey: string(content)})
+	if err != nil {
+		return nil, err
+	}
+	return &corev1.Secret{
+		Name: traefikConfigName(cluster), Namespace: cluster.Namespace,
+		Type: addonsv1.ClusterResourceSetSecretType,
+		Data: map[string][]byte{traefikValuesSecret + ".yaml": manifest},
+	}, nil
+}
+
 // clusterResourceSet applies the cluster's Proxmox VE Secret and the other Secrets given, such as
 // Calico's resources when Kubehenge installs Calico; each is retried on its own until it applies.
 func clusterResourceSet(cluster *clusterv1.Cluster, secrets []*corev1.Secret) *addonsv1.ClusterResourceSet {
@@ -615,18 +672,18 @@ func clusterResourceSet(cluster *clusterv1.Cluster, secrets []*corev1.Secret) *a
 // every request with its token, the user's own dropped, so whoever reaches Headlamp reads the
 // cluster without signing in and nobody changes anything through it. Plugins are those in the
 // image, nothing fetched at run time.
-func headlampValues(h Headlamp) map[string]any {
+func headlampValues(h Headlamp, certs *Certificates) map[string]any {
 	// The image's own user and group.
 	const user, group = 100, 101
-	binding := map[string]any{"create": false}
-	config := map[string]any{"oidc": map[string]any{"secret": map[string]any{"create": false}}}
+	binding := map[string]any{createKey: false}
+	config := map[string]any{"oidc": map[string]any{"secret": map[string]any{createKey: false}}}
 	if h.Access == headlampViewAccess {
-		binding = map[string]any{"create": true, "clusterRoleName": "view"}
+		binding = map[string]any{createKey: true, "clusterRoleName": "view"}
 		config["unsafeUseServiceAccountToken"] = true
 	}
 	values := map[string]any{
 		"clusterRoleBinding": binding,
-		"config":             config,
+		configKey:            config,
 		"pluginsManager":     map[string]any{"enabled": false},
 		// The chart's own default leaves out what Pod Security's restricted level requires.
 		securityKey: restrictedContainer(map[string]any{
@@ -643,11 +700,16 @@ func headlampValues(h Headlamp) map[string]any {
 		},
 	}
 	if h.Hostname != "" {
-		values["ingress"] = map[string]any{
+		tls, annotations := addonIngress(certs, headlampAddon, h.Hostname, h.TLSSecret)
+		ingress := map[string]any{
 			"enabled": true,
 			"hosts":   []any{map[string]any{"host": h.Hostname, "paths": []any{map[string]any{"path": "/", "type": "Prefix"}}}},
-			"tls":     []any{ingressTLS(h.Hostname, h.TLSSecret)},
+			"tls":     []any{tls},
 		}
+		if annotations != nil {
+			ingress["annotations"] = annotations
+		}
+		values[ingressKey] = ingress
 	}
 	return values
 }
@@ -663,17 +725,19 @@ func traefikProxy(cluster *clusterv1.Cluster) string {
 // planes too, so that the cluster's API address serves it as well. Its namespace is kube-system,
 // which Pod Security exempts, since host ports are beyond the baseline level.
 //
-// Its Gateway API provider is on, as the ClusterClasses switch it on in the distributions' own
-// Traefik: the chart creates the GatewayClass traefik and the Gateway traefik-gateway beside
-// Traefik, whose HTTP listener takes routes from every namespace, as Traefik takes Ingresses from
-// every namespace. The Gateway reports the cluster's API address, where Traefik answers too.
-func traefikValues(endpoint string) map[string]any {
+// Its Gateway API provider is on, as in the Traefik RKE2 and k3s bring: the chart creates the
+// GatewayClass traefik and the Gateway traefik-gateway beside Traefik, whose HTTP listener takes
+// routes from every namespace, as Traefik takes Ingresses from every namespace. The Gateway reports
+// the cluster's API address, where Traefik answers too. With a default certificate, the Gateway
+// listens for HTTPS as well, with the values the RKE2 and k3s classes give their Traefik
+// (kubehenge.traefikGatewayValues).
+func traefikValues(endpoint string, certs *Certificates) map[string]any {
 	const http, https = 80, 443
 	gatewayProvider := map[string]any{"enabled": true}
 	if endpoint != "" {
 		gatewayProvider["statusAddress"] = map[string]any{"ip": endpoint}
 	}
-	return map[string]any{
+	return overlay(map[string]any{
 		"deployment": map[string]any{"kind": "DaemonSet"},
 		// A host port is held by the pod on it, so a node's new pod starts only once the old one is gone.
 		"updateStrategy": map[string]any{"rollingUpdate": map[string]any{"maxUnavailable": 1, "maxSurge": 0}},
@@ -687,16 +751,16 @@ func traefikValues(endpoint string) map[string]any {
 			"kubernetesIngress": map[string]any{"publishedService": map[string]any{"enabled": false}},
 			"kubernetesGateway": gatewayProvider,
 		},
-		"gateway": map[string]any{"listeners": map[string]any{"web": map[string]any{"namespacePolicy": map[string]any{"from": "All"}}}},
+		"gateway": map[string]any{"listeners": map[string]any{webListener: map[string]any{"namespacePolicy": map[string]any{"from": "All"}}}},
 		// Routes whose TLS options conflict fail rather than fall back to the defaults, which would
 		// drop a host's client-certificate check (GHSA-g55h-rg46-x9c5).
 		"core":         map[string]any{"strictTLSOptions": true},
 		tolerationsKey: []any{toleration(controlPlaneTaint.Key, controlPlaneTaint.Effect)},
 		"resources":    map[string]any{requestsKey: map[string]any{cpuKey: cpu10m, memoryKey: memory64Mi}},
-	}
+	}, traefikCertificateValues(certs))
 }
 
-var helmChartProxyGVK = schema.GroupVersionKind{Group: "addons.cluster.x-k8s.io", Version: "v1alpha1", Kind: "HelmChartProxy"}
+var helmChartProxyGVK = schema.GroupVersionKind{Group: "addons.cluster.x-k8s.io", Version: v1alpha1, Kind: "HelmChartProxy"}
 
 // headlampProxy names the cluster's Headlamp proxy, which goes again when Headlamp is switched off.
 func headlampProxy(cluster *clusterv1.Cluster) string {
@@ -838,8 +902,8 @@ func cniChart(cluster *clusterv1.Cluster, charts *Charts, cni CNI, addons *Addon
 }
 
 // helmChartProxies installs the cloud controller manager and the CSI plugin into the cluster, the
-// CNI named by cni unless none is, the add-ons switched on, the load balancer, and on kubeadm,
-// which brings no ingress controller, Traefik. The Add-on Provider for Helm
+// CNI named by cni unless none is, the add-ons switched on, the load balancer, the GitOps engine,
+// and on kubeadm, which brings no ingress controller, Traefik. The Add-on Provider for Helm
 // selects only Clusters in a proxy's own namespace, so each cluster gets its own proxies beside it.
 func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution templates.Distribution, storage string, cni CNI, addons *Addons) ([]*unstructured.Unstructured, error) {
 	wanted := proxmoxCharts(charts, distribution, storage, addons)
@@ -849,13 +913,10 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 	}
 	wanted = append(wanted, cniCharts...)
 	if addons.Headlamp.Enabled {
-		wanted = append(wanted, chartProxy{headlampAddon, headlampAddon, headlampAddon, charts.Headlamp, headlampValues(addons.Headlamp)})
+		wanted = append(wanted, chartProxy{headlampAddon, headlampAddon, headlampAddon, charts.Headlamp, headlampValues(addons.Headlamp, &addons.Certificates)})
 	}
-	if addons.Rancher.Install || addons.Monitoring.Enabled {
-		// A Secret goes with its Certificate, so that nothing an add-on asked for outlives it.
-		wanted = append(wanted, chartProxy{certManagerAddon, certManagerAddon, certManagerAddon, charts.CertManager, map[string]any{
-			"crds": map[string]any{"enabled": true}, "enableCertificateOwnerRef": true,
-		}})
+	if addons.certManager() {
+		wanted = append(wanted, chartProxy{certManagerAddon, certManagerAddon, certManagerAddon, charts.CertManager, certManagerValues(&addons.Certificates)})
 	}
 	if addons.Rancher.Install {
 		if addons.Rancher.Hostname == "" {
@@ -884,12 +945,23 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 	if addons.Istio.Enabled {
 		wanted = append(wanted, istioCharts(charts, distribution, cni)...)
 	}
+	serving, err := servingCharts(cluster, charts, distribution, addons)
+	if err != nil {
+		return nil, err
+	}
+	return chartProxyObjects(cluster, append(wanted, serving...))
+}
+
+// servingCharts are those that bring traffic into the cluster and what it runs from Git: on
+// kubeadm, which brings no ingress controller, Traefik; the load balancer; the GitOps engine.
+func servingCharts(cluster *clusterv1.Cluster, charts *Charts, distribution templates.Distribution, addons *Addons) ([]chartProxy, error) {
+	var wanted []chartProxy
 	if distribution == templates.Kubeadm {
 		endpoint, _, err := optionalVariable[string](cluster, "controlPlaneEndpoint")
 		if err != nil {
 			return nil, err
 		}
-		wanted = append(wanted, chartProxy{"traefik", "traefik", metav1.NamespaceSystem, charts.Traefik, traefikValues(endpoint)})
+		wanted = append(wanted, chartProxy{"traefik", "traefik", metav1.NamespaceSystem, charts.Traefik, traefikValues(endpoint, &addons.Certificates)})
 	}
 	if addons.LoadBalancer.Enabled {
 		lb, err := loadBalancerCharts(charts, addons.LoadBalancer)
@@ -898,13 +970,20 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 		}
 		wanted = append(wanted, lb...)
 	}
-	return chartProxyObjects(cluster, wanted)
+	if addons.GitOps.Enabled {
+		g, err := gitOpsCharts(charts, &addons.Certificates, &addons.GitOps, &addons.gitOpsFound)
+		if err != nil {
+			return nil, fmt.Errorf("cluster %s/%s: %w", cluster.Namespace, cluster.Name, err)
+		}
+		wanted = append(wanted, g...)
+	}
+	return wanted, nil
 }
 
 // chartProxyObjects makes the cluster's HelmChartProxies of the charts it wants, in their order,
-// each selecting the cluster alone.
+// each selecting the cluster alone, with its chart's values beneath its own.
 func chartProxyObjects(cluster *clusterv1.Cluster, wanted []chartProxy) ([]*unstructured.Unstructured, error) {
-	var proxies []*unstructured.Unstructured
+	proxies := make([]*unstructured.Unstructured, 0, len(wanted))
 	for i := range wanted {
 		p := &wanted[i]
 		values, err := yaml.Marshal(overlay(p.chart.Values, p.values))
@@ -924,7 +1003,9 @@ func chartProxyObjects(cluster *clusterv1.Cluster, wanted []chartProxy) ([]*unst
 			"namespace":       p.namespace,
 			"options":         map[string]any{"install": map[string]any{"createNamespace": true}},
 			// Values are plain text in HelmReleaseProxy objects; they hold no secret, only where it is.
-			"valuesTemplate": string(values),
+			// The provider renders them as a Go template, which none of them is: what a cluster's
+			// owner typed in, a repository's URL or a group's name, comes through as it is.
+			"valuesTemplate": strings.ReplaceAll(string(values), "{{", `{{"{{"}}`),
 		}
 		proxies = append(proxies, u)
 	}
@@ -968,7 +1049,7 @@ func credentialsSecret(cluster *clusterv1.Cluster, c Credentials, ready bool) *c
 			"tokenSecret":     []byte(c.TokenSecret),
 			"volumeOwner":     []byte(strconv.Itoa(c.VolumeOwner)),
 			"volumeOwnerNode": []byte(c.VolumeOwnerNode),
-			"region":          []byte(c.Region),
+			regionKey:         []byte(c.Region),
 			"ready":           []byte(strconv.FormatBool(ready)),
 		},
 	}
@@ -984,7 +1065,7 @@ func credentialsFrom(s *corev1.Secret) (Credentials, error) {
 		TokenSecret:     string(s.Data["tokenSecret"]),
 		VolumeOwner:     owner,
 		VolumeOwnerNode: string(s.Data["volumeOwnerNode"]),
-		Region:          string(s.Data["region"]),
+		Region:          string(s.Data[regionKey]),
 	}, nil
 }
 

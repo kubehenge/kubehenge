@@ -239,10 +239,26 @@ Istio uses about 100 MiB, but istiod and the ztunnel beside it ask for 384 MiB, 
 share has to have; the clustermesh-apiserver uses about 50 MiB. The load balancer is MetalLB's
 controller and a node's speaker, or kube-vip and its cloud provider. Logs are Loki, which asks for
 256 MiB, the Alloy that reads the events and a node's Alloy. Backups are Velero's server and a
-node's agent, which grow while a backup reads a volume.
+node's agent, which grow while a backup reads a volume. Argo CD is its application, ApplicationSet
+and repository controllers, its server and Redis; Flux is the operator and Flux's four controllers.
 */}}
 {{- define "kubehenge.addonMemory" -}}
-kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"logs":512,"backups":384,"kyverno":384,"istio":384,"clusterMesh":128,"loadBalancer":128,"certManager":192,"rancher":2048,"rancherAgent":512}'
+kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"logs":512,"backups":384,"kyverno":384,"istio":384,"clusterMesh":128,"loadBalancer":128,"certManager":192,"rancher":2048,"rancherAgent":512,"argocd":512,"flux":384}'
+{{- end -}}
+
+{{/*
+The memory, in MiB, each add-on adds to what each control plane uses itself, where the API server
+runs as a pod of its own (kubeadm and RKE2; k3s has figures of its own): what the end-to-end tests
+saw the highest working set of a control plane so far grow by as the add-on was switched on, the
+more of kubeadm's and RKE2's, with a quarter on top as the node figures have, in steps of 8. RKE2's
+working set dipped where the node reclaimed its caches, so it takes kubeadm's figures where those are
+higher. It is mostly the API server holding the add-on's resource types and objects, and the
+add-on's pods on the control planes. Flux's stayed within what the working set varies by. Rancher's
+own cluster used 409 MiB more than an idle k3s control plane, and a cluster registered with it no
+more than that, so Rancher's agent counts nothing here.
+*/}}
+{{- define "kubehenge.addonControlPlaneMemory" -}}
+kubehenge.dev/addon-control-plane-memory: '{"headlamp":8,"monitoring":32,"logs":56,"backups":184,"kyverno":552,"istio":288,"certManager":48,"rancher":512,"argocd":432}'
 {{- end -}}
 
 {{/*
@@ -287,8 +303,8 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           type: string
           minLength: 1
           description: >-
-            Secret in the headlamp namespace holding the certificate for hostname; the ingress
-            controller's own default certificate when unset.
+            Secret in the headlamp namespace holding the certificate for hostname. When unset, the
+            certificates add-on's while it is on, else the ingress controller's own default.
 - name: monitoring
   required: false
   schema:
@@ -311,8 +327,8 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           type: string
           minLength: 1
           description: >-
-            Secret in the monitoring namespace holding the certificate for hostname; the ingress
-            controller's own default certificate when unset.
+            Secret in the monitoring namespace holding the certificate for hostname. When unset, the
+            certificates add-on's while it is on, else the ingress controller's own default.
 - name: logs
   required: false
   schema:
@@ -539,6 +555,330 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
       x-kubernetes-validations:
         - rule: "!self.install || has(self.hostname)"
           message: Rancher needs a hostname.
+- name: certificates
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        Certificates from cert-manager for the cluster's Ingresses, routes and Gateways. With DNS-01
+        or the cluster's CA, a certificate for domain and every name one label beneath it is the one
+        Traefik serves wherever no other is asked for, and Traefik's Gateway listens for HTTPS with
+        it. An Ingress annotated cert-manager.io/cluster-issuer: kubehenge-ingress, or
+        kubernetes.io/tls-acme: "true", gets its own certificate from the same issuer. Installs
+        cert-manager too.
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        issuer:
+          type: string
+          enum: [acme-dns01, acme-http01, ca]
+          default: acme-dns01
+          description: >-
+            Where certificates come from: an ACME server such as Let's Encrypt, proving the names
+            through the DNS provider's API (acme-dns01) or over HTTP on port 80 (acme-http01, which
+            gives no default certificate), or a CA of the cluster's own (ca), whose certificate the
+            interface hands out for clients to trust.
+        domain:
+          type: string
+          format: hostname
+          maxLength: 253
+          description: >-
+            The domain of the default certificate, which covers it and *.domain. The cluster's CA
+            signs names in it alone, and a new domain makes a new CA.
+        acme:
+          type: object
+          properties:
+            email:
+              type: string
+              format: email
+              description: The ACME account's contact, told of certificates about to expire.
+            server:
+              type: string
+              pattern: "^https://"
+              description: The ACME server's directory; Let's Encrypt's when unset.
+            staging:
+              type: boolean
+              default: false
+              description: Let's Encrypt's staging directory, whose certificates no browser trusts.
+            caBundle:
+              type: string
+              minLength: 1
+              description: >-
+                PEM of the CA that signed the ACME server's own certificate, for a server whose
+                certificate the system's CAs do not vouch for.
+          x-kubernetes-validations:
+            - rule: "!has(self.server) || !self.staging"
+              message: Staging is Let's Encrypt's own directory; it cannot go with another server.
+        dns01:
+          type: object
+          properties:
+            provider:
+              type: string
+              enum: [cloudflare, route53, digitalocean, azuredns, clouddns, rfc2136, acmedns, akamai]
+              description: >-
+                The DNS provider whose API sets the challenge's record. Its credential is the one
+                stored for the cluster in the interface, unless existingSecret or sharedCredential
+                says otherwise: Cloudflare's or DigitalOcean's API token, Route 53's secret access
+                key, the Azure service principal's client secret, the Google service account's JSON
+                key, the TSIG secret, or the ACME-DNS account's JSON.
+            existingSecret:
+              type: string
+              minLength: 1
+              maxLength: 253
+              pattern: "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+              description: >-
+                A Secret in the workload cluster's cert-manager namespace holding the credential
+                under the key token; Akamai's under clientToken, clientSecret and accessToken.
+            sharedCredential:
+              type: boolean
+              default: false
+              description: >-
+                Take the DNS-01 credential an administrator stored for every cluster rather than
+                one of the cluster's own.
+            nameservers:
+              type: array
+              maxItems: 8
+              description: >-
+                The DNS servers (host:port) cert-manager checks the challenge's record with, for a
+                domain whose answers inside the cluster differ from the public ones.
+              items:
+                type: string
+                pattern: "^[^\\s]+:[0-9]{1,5}$"
+            route53:
+              type: object
+              properties:
+                region:
+                  type: string
+                  minLength: 1
+                accessKeyID:
+                  type: string
+                  minLength: 1
+                hostedZoneID:
+                  type: string
+                  minLength: 1
+            azureDNS:
+              type: object
+              properties:
+                subscriptionID:
+                  type: string
+                  minLength: 1
+                resourceGroupName:
+                  type: string
+                  minLength: 1
+                tenantID:
+                  type: string
+                  minLength: 1
+                clientID:
+                  type: string
+                  minLength: 1
+                hostedZoneName:
+                  type: string
+                  minLength: 1
+                environment:
+                  type: string
+                  enum: [AzurePublicCloud, AzureChinaCloud, AzureUSGovernmentCloud]
+            cloudDNS:
+              type: object
+              properties:
+                project:
+                  type: string
+                  minLength: 1
+                hostedZoneName:
+                  type: string
+                  minLength: 1
+            rfc2136:
+              type: object
+              properties:
+                nameserver:
+                  type: string
+                  pattern: "^[^\\s]+:[0-9]{1,5}$"
+                  description: The DNS server (host:port) that takes the dynamic update.
+                tsigKeyName:
+                  type: string
+                  minLength: 1
+                tsigAlgorithm:
+                  type: string
+                  enum: [HMACMD5, HMACSHA1, HMACSHA256, HMACSHA512]
+                  default: HMACSHA256
+            acmeDNS:
+              type: object
+              properties:
+                host:
+                  type: string
+                  pattern: "^https://"
+            akamai:
+              type: object
+              properties:
+                serviceConsumerDomain:
+                  type: string
+                  minLength: 1
+          x-kubernetes-validations:
+            - rule: "!has(self.existingSecret) || !self.sharedCredential"
+              message: The credential comes from an existing Secret or from the one shared by every cluster, not both.
+            - rule: "!has(self.provider) || self.provider != 'akamai' || has(self.existingSecret)"
+              message: Akamai's three secrets come only from an existing Secret.
+            - rule: "!has(self.provider) || self.provider != 'akamai' || (has(self.akamai) && has(self.akamai.serviceConsumerDomain))"
+              message: Akamai needs its service consumer domain.
+            - rule: "!has(self.provider) || self.provider != 'route53' || (has(self.route53) && has(self.route53.region) && has(self.route53.accessKeyID))"
+              message: Route 53 needs its region and access key ID.
+            - rule: "!has(self.provider) || self.provider != 'azuredns' || (has(self.azureDNS) && has(self.azureDNS.subscriptionID) && has(self.azureDNS.resourceGroupName) && has(self.azureDNS.tenantID) && has(self.azureDNS.clientID))"
+              message: Azure DNS needs its subscription, resource group, tenant and client IDs.
+            - rule: "!has(self.provider) || self.provider != 'clouddns' || (has(self.cloudDNS) && has(self.cloudDNS.project))"
+              message: Google Cloud DNS needs its project.
+            - rule: "!has(self.provider) || self.provider != 'rfc2136' || (has(self.rfc2136) && has(self.rfc2136.nameserver) && has(self.rfc2136.tsigKeyName))"
+              message: RFC 2136 needs its nameserver and TSIG key name.
+            - rule: "!has(self.provider) || self.provider != 'acmedns' || (has(self.acmeDNS) && has(self.acmeDNS.host))"
+              message: ACME-DNS needs its host.
+      x-kubernetes-validations:
+        - rule: "!self.enabled || self.issuer == 'acme-http01' || has(self.domain)"
+          message: DNS-01 and the cluster's CA need a domain.
+        - rule: "!self.enabled || self.issuer != 'acme-dns01' || (has(self.dns01) && has(self.dns01.provider))"
+          message: DNS-01 needs a DNS provider.
+- name: gitops
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        GitOps: Argo CD or Flux keeps the cluster in step with a directory of a Git repository,
+        applying what it holds and removing what goes from it. Switching it off, or to the other
+        engine, removes the engine and leaves what it deployed running.
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        engine:
+          type: string
+          enum: [argocd, flux]
+          default: argocd
+          description: >-
+            Argo CD, with a web interface that signs in through the cluster's first OIDC provider,
+            or Flux, installed by the Flux Operator, whose web interface is optional.
+        repository:
+          type: object
+          required: [url]
+          properties:
+            url:
+              type: string
+              maxLength: 2048
+              pattern: "^(https|ssh)://[^\\s]+$"
+              description: >-
+                The repository, as https://host/path or ssh://user@host[:port]/path; ssh:// is
+                read with a deploy key or a Secret of your own.
+            revision:
+              type: string
+              maxLength: 255
+              pattern: "^[A-Za-z0-9._/-]+$"
+              default: main
+              description: A branch, or a full ref such as refs/tags/v1.
+            path:
+              type: string
+              maxLength: 1024
+              pattern: "^[A-Za-z0-9._/-]+$"
+              default: "."
+              description: >-
+                The directory synced, with plain manifests or a kustomization; the repository's
+                root by default.
+          x-kubernetes-validations:
+            - rule: "!self.url.matches('^https://[^/]*@')"
+              message: A token goes into the cluster's gitops credential, not into the URL.
+            - rule: "!has(self.path) || !self.path.matches('(^|/)[.][.](/|$)')"
+              message: The path stays inside the repository.
+        auth:
+          type: string
+          enum: [none, deployKey, token, existingSecret]
+          default: none
+          description: >-
+            How the engine reads the repository: none for a public one over HTTPS; deployKey, a key
+            pair Kubehenge makes, whose public half you add to the repository as a read-only
+            deploy key; token, a user name and token over HTTPS, stored as the cluster's gitops
+            credential; or existingSecret, a Secret of your own in the engine's namespace.
+        existingSecret:
+          type: string
+          minLength: 1
+          maxLength: 253
+          description: >-
+            With auth existingSecret: for Flux, a Secret in flux-system as a GitRepository's
+            secretRef takes it (identity and known_hosts, or username and password); for Argo CD,
+            a repository Secret in argocd labelled argocd.argoproj.io/secret-type=repository for
+            this URL.
+        knownHosts:
+          type: string
+          maxLength: 16384
+          description: >-
+            The SSH host keys of the repository's server, as known_hosts lines. When unset,
+            Kubehenge reads them from the server once and trusts them from then on; the interface
+            shows their fingerprints to compare.
+        hostname:
+          type: string
+          format: hostname
+          description: Serve the engine's web interface at this name through the cluster's ingress controller.
+        tlsSecret:
+          type: string
+          minLength: 1
+          description: >-
+            Secret in the engine's namespace holding the certificate for hostname. When unset, the
+            certificates add-on's while it is on, else the ingress controller's own default.
+        admins:
+          type: array
+          maxItems: 64
+          description: >-
+            Groups of the cluster's first OIDC provider that administer Argo CD; nobody else has
+            any rights in it. Flux's web interface acts as the signed-in user, with the cluster's
+            own RBAC.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 256
+            pattern: "^[^,\\s]+$"
+        signIn:
+          type: object
+          description: >-
+            How the web interface signs in through the cluster's first OIDC provider: as that
+            provider's client unless clientID names another, without a client secret, using PKCE,
+            unless one is given. Argo CD's local admin stays disabled.
+          properties:
+            clientID:
+              type: string
+              minLength: 1
+              maxLength: 256
+            clientSecret:
+              type: string
+              enum: [none, stored, existingSecret]
+              default: none
+              description: >-
+                none for a public client; stored, the cluster's oidc-client credential; or
+                existingSecret, a Secret of your own in the engine's namespace with the key
+                clientSecret, labelled app.kubernetes.io/part-of=argocd for Argo CD.
+            existingSecret:
+              type: string
+              minLength: 1
+              maxLength: 253
+          x-kubernetes-validations:
+            - rule: "!has(self.clientSecret) || self.clientSecret != 'existingSecret' || has(self.existingSecret)"
+              message: A client secret from a Secret of your own needs the Secret's name.
+        ui:
+          type: boolean
+          default: false
+          description: >-
+            Flux's web interface, at hostname: it shows every Flux object and the workloads they
+            deployed, and lets those signed in reconcile, suspend and resume them, with the rights
+            the cluster's RBAC gives them. It signs in with a client secret.
+      x-kubernetes-validations:
+        - rule: "!self.enabled || has(self.repository)"
+          message: GitOps needs a repository.
+        - rule: "!has(self.repository) || !has(self.auth) || self.auth != 'deployKey' || self.repository.url.startsWith('ssh://')"
+          message: A deploy key reads the repository over ssh://.
+        - rule: "!has(self.repository) || !has(self.auth) || !(self.auth in ['none', 'token']) || self.repository.url.startsWith('https://')"
+          message: Without a key, the repository is read over https://.
+        - rule: "!has(self.auth) || self.auth != 'existingSecret' || has(self.existingSecret)"
+          message: Credentials from a Secret of your own need the Secret's name.
+        - rule: "!has(self.ui) || !self.ui || (has(self.engine) && self.engine == 'flux' && has(self.hostname))"
+          message: The web interface is Flux's, and needs a hostname.
+        - rule: "!has(self.ui) || !self.ui || (has(self.signIn) && has(self.signIn.clientSecret) && self.signIn.clientSecret != 'none')"
+          message: Flux's web interface signs in with a client secret.
 {{- end -}}
 
 {{/*
@@ -666,6 +1006,46 @@ Proxmox VE HA take it from there. Applied before the distribution starts with sy
 {{- end -}}
 
 {{/*
+An AppArmor profile for the runc that RKE2 and k3s bring (.distribution names which), confining
+nothing, as Ubuntu's own profile for its /usr/sbin/runc does. Without one their runc runs
+unconfined, and Ubuntu stacks the container's profile on unconfined when an unprivileged
+unconfined process changes profile (kernel.apparmor_restrict_unprivileged_unconfined). runc changes
+a process that kubectl exec starts only once it runs as the container's user, without the
+capabilities that would exempt it, so the process got the label
+cri-containerd.apparmor.d//&unconfined, which the container's profile lets signal nothing, itself
+included: dig, among others, crashed when it stopped its own threads. From a profile of its own the
+change is no longer one from unconfined.
+The profile must be named runc: containerd's container profile takes signals only from unconfined,
+runc, crun, containerd's own profile and the container itself, so under any other name runc could
+not stop a container. It therefore takes the place of Ubuntu's profile of that name and names
+Ubuntu's runc as well; kubehenge.runcProfileLoad disables Ubuntu's file, since AppArmor loads the
+files at boot in no set order and two profiles of one name would replace each other. It loads this
+one on the first boot; AppArmor loads it on every boot after.
+*/}}
+{{- define "kubehenge.runcProfileFile" -}}
+- path: /etc/apparmor.d/kubehenge-runc
+  owner: root:root
+  permissions: "0644"
+  content: |
+    abi <abi/4.0>,
+    include <tunables/global>
+
+    profile runc /{usr/{bin,sbin}/runc,var/lib/rancher/{{ .distribution }}/data/*/bin/runc} flags=(unconfined) {
+      userns,
+
+      include if exists <local/runc>
+    }
+{{- end -}}
+
+{{/*
+The command loading kubehenge.runcProfileFile before the distribution starts, on a node whose
+kernel runs AppArmor, with Ubuntu's runc profile disabled in its place.
+*/}}
+{{- define "kubehenge.runcProfileLoad" -}}
+[ ! -d /sys/kernel/security/apparmor ] || { mkdir -p /etc/apparmor.d/disable && ln -sf /etc/apparmor.d/runc /etc/apparmor.d/disable/runc && apparmor_parser --replace /etc/apparmor.d/kubehenge-runc; }
+{{- end -}}
+
+{{/*
 The API server's audit policy as a bootstrap file at path, the same for every distribution.
 */}}
 {{- define "kubehenge.auditPolicyFile" -}}
@@ -688,6 +1068,30 @@ TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TL
 {{- $quoted := list }}
 {{- range . }}{{ $quoted = append $quoted (quote .) }}{{ end }}
 {{- join " " $quoted }}
+{{- end -}}
+
+{{/*
+The Gateway values of the Traefik RKE2 and k3s bring: its Gateway's HTTP listener takes routes
+from every namespace.
+*/}}
+{{- define "kubehenge.traefikGatewayValues" -}}
+gateway:
+  listeners:
+    web:
+      namespacePolicy:
+        from: All
+{{- end -}}
+
+{{/*
+The Secret in kube-system whose values.yaml Kubehenge's controller keeps in step with the
+cluster's certificates, merged over the HelmChartConfig's own values: the default certificate and
+the Gateway's HTTPS listener. helm-controller upgrades Traefik when it changes, and installs it
+only once the Secret is there.
+*/}}
+{{- define "kubehenge.traefikValuesSecrets" -}}
+valuesSecrets:
+  - name: kubehenge-traefik
+    keys: [values.yaml]
 {{- end -}}
 
 {{- define "kubehenge.oidcEnabled" -}}

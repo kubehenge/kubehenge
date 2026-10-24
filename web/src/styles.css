@@ -696,6 +696,15 @@ details.advanced > summary {
   max-height: 420px;
 }
 
+/* A key to copy whole: one selection, wrapped anywhere. */
+.key {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  word-break: break-all;
+  user-select: all;
+  margin: 4px 0;
+}
+
 .log {
   font-size: 12px;
   white-space: pre-wrap;

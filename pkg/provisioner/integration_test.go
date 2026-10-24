@@ -751,6 +751,64 @@ func TestIntegrationClassArguments(t *testing.T) {
 	}
 }
 
+// Every RKE2 and k3s node names the runc its distribution brings in an AppArmor profile of its own
+// and loads it before the distribution starts, as Ubuntu does for its own runc, which kubeadm nodes
+// use. Run unconfined, that runc left every process kubectl exec starts unable to signal itself.
+func TestIntegrationClassesNameTheirRunc(t *testing.T) {
+	t.Parallel()
+	const load = "[ ! -d /sys/kernel/security/apparmor ] || { mkdir -p /etc/apparmor.d/disable && " +
+		"ln -sf /etc/apparmor.d/runc /etc/apparmor.d/disable/runc && apparmor_parser --replace /etc/apparmor.d/kubehenge-runc; }"
+	seen := map[string]bool{}
+	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
+		if o.GetKind() != "ConfigMap" || o.GetLabels()["kubehenge.dev/class"] == "" {
+			continue
+		}
+		data, _, err := unstructured.NestedString(o.Object, "data", "templates.yaml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tpl := range decodeAll(t, []byte(data)) {
+			where, ok := releaseTemplates[tpl.GetKind()]
+			if !ok {
+				continue
+			}
+			seen[tpl.GetKind()] = true
+			fields := strings.Split(strings.TrimPrefix(where.spec, "/"), "/")
+			commands, _, err := unstructured.NestedStringSlice(tpl.Object, append(fields, where.commands)...)
+			if err != nil || !slices.Contains(commands, load) {
+				t.Errorf("%s: commands %q, %v, without the profile's load", tpl.GetKind(), commands, err)
+			}
+			files, _, err := unstructured.NestedSlice(tpl.Object, append(fields, "files")...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// containerd's container profile takes signals from a profile named runc, not another.
+			want := fmt.Sprintf("profile runc /{usr/{bin,sbin}/runc,var/lib/rancher/%s/data/*/bin/runc} flags=(unconfined) {",
+				where.release.distribution)
+			profiles := 0
+			for _, f := range files {
+				file, ok := f.(map[string]any)
+				if !ok {
+					t.Fatalf("%s: file %v", tpl.GetKind(), f)
+				}
+				if file["path"] != "/etc/apparmor.d/kubehenge-runc" {
+					continue
+				}
+				profiles++
+				if content, ok := file["content"].(string); !ok || !strings.Contains(content, want) {
+					t.Errorf("%s: the runc profile is\n%s\nwant %q", tpl.GetKind(), content, want)
+				}
+			}
+			if profiles != 1 {
+				t.Errorf("%s: %d runc profiles", tpl.GetKind(), profiles)
+			}
+		}
+	}
+	if len(seen) != len(releaseTemplates) {
+		t.Errorf("templates checked %v, want every one of %v", seen, slices.Sorted(maps.Keys(releaseTemplates)))
+	}
+}
+
 // jsonPatches are the operations of a ClusterClass's patches, every definition's in turn.
 func jsonPatches(t *testing.T, patches []any) []map[string]any {
 	t.Helper()
