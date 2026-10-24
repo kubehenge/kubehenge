@@ -636,16 +636,28 @@ const veleroAPIGroup = "velero.io"
 // are taken off, which nothing would take off with Velero gone, and the velero namespace. It
 // reports whether all of it is gone.
 func removeVelero(ctx context.Context, workload client.Client) (bool, error) {
-	crds := &unstructured.UnstructuredList{}
-	crds.SetGroupVersionKind(crdGVK.GroupVersion().WithKind(crdGVK.Kind + "List"))
-	if err := workload.List(ctx, crds); err != nil {
+	// Their names only: every definition in full, schemas and all, is megabytes the API server would
+	// build on each pass until Velero is gone. A definition's name is its plural and its group.
+	defs := &metav1.PartialObjectMetadataList{}
+	defs.SetGroupVersionKind(crdGVK.GroupVersion().WithKind(crdGVK.Kind + "List"))
+	if err := workload.List(ctx, defs); err != nil {
 		return false, fmt.Errorf("listing the resource definitions: %w", err)
 	}
 	left := false
-	for i := range crds.Items {
-		crd := &crds.Items[i]
-		group, _, _ := unstructured.NestedString(crd.Object, "spec", "group")
-		if group != veleroAPIGroup {
+	for i := range defs.Items {
+		if !strings.HasSuffix(defs.Items[i].Name, "."+veleroAPIGroup) {
+			continue
+		}
+		crd := &unstructured.Unstructured{}
+		crd.SetGroupVersionKind(crdGVK)
+		err := workload.Get(ctx, client.ObjectKey{Name: defs.Items[i].Name}, crd)
+		switch {
+		case apierrors.IsNotFound(err):
+			continue
+		case err != nil:
+			return false, fmt.Errorf("reading %s: %w", defs.Items[i].Name, err)
+		}
+		if group, _, _ := unstructured.NestedString(crd.Object, "spec", "group"); group != veleroAPIGroup {
 			continue
 		}
 		left = true
