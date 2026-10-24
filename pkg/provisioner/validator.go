@@ -15,13 +15,17 @@ import (
 
 // ClusterValidator answers the API server for Kubehenge's clusters as they are created and changed,
 // so that what BeforeClusterCreate would refuse later is refused at once, and a change made after
-// creation is held to the same: control planes too small for the cluster's workers, nodes without
+// creation is held to the same: a node OS that cannot be built or whose CPU type no node it may
+// use offers, control planes too small for the cluster's workers, nodes without
 // the memory its add-ons use, logs without monitoring, backups to a target the class lacks or on
 // a schedule Velero cannot read, Rancher switched on beside another, or on nodes too small for it,
 // a Rancher cluster's nodes made smaller than it needs, load-balancer addresses that clash with the
 // nodes' network or another cluster's, Datastore.Allocate on a storage that is not the cluster's
-// alone, volume snapshots where they cannot be taken, and Sys.Audit on / where no cluster may hold
-// it. A cluster that already fell short before a change is not held to it for unrelated edits.
+// alone, volume snapshots where they cannot be taken, Sys.Audit on / where no cluster may hold it,
+// autoscaled pools whose bounds the autoscaler cannot work with or whose nodes would run out of
+// addresses, and a Talos release that does not run the Kubernetes version or that Talos cannot
+// upgrade to from the one before. A cluster that already fell short before a change is not held to it for unrelated
+// edits.
 type ClusterValidator struct {
 	Hooks *Hooks
 }
@@ -61,6 +65,7 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 	}
 	var errs field.ErrorList
 	topology := field.NewPath("spec", "topology")
+	errs = append(errs, v.validateNodeOS(ctx, old, c)...)
 	if err := checkControlPlaneSize(old, c, class); err != nil {
 		errs = append(errs, field.Forbidden(topology, err.Error()))
 	}
@@ -79,6 +84,16 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 	}
 	errs = append(errs, validateCertificates(c)...)
 	errs = append(errs, validateGitOps(c)...)
+	errs = append(errs, validateAutoscaling(c)...)
+	if err := checkEtcdSnapshots(old, c, class); err != nil {
+		errs = append(errs, field.Invalid(topology.Child("variables").Key(etcdSnapshotsVariable), etcdSnapshotsVariable, err.Error()))
+	}
+	if err := checkNodeAddresses(old, c); err != nil {
+		errs = append(errs, field.Forbidden(topology.Child("variables").Key("network"), err.Error()))
+	}
+	if err := checkTalos(old, c); err != nil {
+		errs = append(errs, field.Forbidden(topology.Child("variables").Key(TalosVersionVariable), err.Error()))
+	}
 	if addressesChanged(old, c) {
 		if err := v.Hooks.checkLoadBalancer(ctx, c); err != nil {
 			errs = append(errs, field.Forbidden(topology.Child("variables").Key(loadBalancerVariable), err.Error()))
@@ -91,6 +106,18 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 	// Invalid, not the plain denial a validator's error becomes, so that the interface shows the
 	// reason as it does the API server's own validation.
 	return apierrors.NewInvalid(clusterv1.GroupVersion.WithKind("Cluster").GroupKind(), c.Name, errs) //nolint:wrapcheck // made here, not passed on
+}
+
+// validateNodeOS checks the node OS when it changes, and when the nodes the cluster may use do, which
+// may leave none whose CPU runs it.
+func (v *ClusterValidator) validateNodeOS(ctx context.Context, old, c *clusterv1.Cluster) field.ErrorList {
+	if old != nil && !variableChanged(old, c, NodeOSVariable) && !variableChanged(old, c, allowedNodesVariable) {
+		return nil
+	}
+	if err := v.Hooks.checkNodeOS(ctx, c); err != nil {
+		return field.ErrorList{field.Forbidden(field.NewPath("spec", "topology", "variables").Key(NodeOSVariable), err.Error())}
+	}
+	return nil
 }
 
 // validateGrants holds the privileges a cluster asks for beyond its pool to what the management

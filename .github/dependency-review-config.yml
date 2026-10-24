@@ -19,8 +19,17 @@ allow-licenses:
   - PSF-2.0
   - Python-2.0
 # yamllint, under the GPL, only checks the repository's YAML in CI: nothing Kubehenge distributes
-# includes or links it.
+# includes or links it. spdystream's LICENSE is Apache-2.0 and its NOTICE adds only BSD-3-Clause
+# code from the Go project; the licence data adds LicenseRef-scancode-unknown beside the two.
+# ghodss/yaml's one LICENSE file holds MIT and the Go project's BSD-3-Clause, which the licence
+# data names LicenseRef-bad-mit-bsd-3-clause. go-digest's code is Apache-2.0; CC-BY-SA-4.0 covers
+# only its documentation (LICENSE.docs). runtime-spec is Apache-2.0; the DCO the licence data adds
+# is the contributors' sign-off, which grants nothing and asks nothing of users.
 allow-dependencies-licenses:
+  - pkg:golang/github.com/ghodss/yaml
+  - pkg:golang/github.com/moby/spdystream
+  - pkg:golang/github.com/opencontainers/go-digest
+  - pkg:golang/github.com/opencontainers/runtime-spec
   - pkg:pypi/yamllint
 fail-on-severity: low
 fail-on-scopes: [runtime, development, unknown]

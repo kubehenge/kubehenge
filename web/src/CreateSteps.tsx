@@ -1,10 +1,13 @@
 import { useEffect, useState, type JSX } from "react";
 
 import { api } from "./api";
+import { WorkerFields } from "./Autoscaling";
 import {
+  chosenNodeOS,
   controlPlaneSizes,
   machineLeast,
   memoryStepMiB,
+  templateMissing,
   variable,
   versionExamples,
   versionLabel,
@@ -15,16 +18,226 @@ import {
 import { CSIField, SnapshotsField } from "./CsiPlugin";
 import { LoadBalancerFields } from "./LoadBalancer";
 import { addressBits } from "./network";
+import { choosable, cpuNote, findNodeOS, macName, nodeOSKey, nodeOSLabel } from "./node-os";
 import { OIDCProviders } from "./OIDCProviders";
 import { HAField, HAGroupsField, PlacementFields, type HARulesRead } from "./Placement";
-import type { Bridge, ClusterClass, PveNode, Storage, TemplateBuilds, Versions } from "./types";
-import { ErrorBox, Field, bytes, cniName, distributionName, errorMessage, filled, maxWorkers, sentence } from "./ui";
+import {
+  TalosReleaseSelect,
+  forRelease,
+  missingReleases,
+  talosExample,
+  talosRelease,
+  talosReleaseHint,
+  useTalosReleases,
+} from "./Talos";
+import type {
+  Bridge,
+  ClusterClass,
+  NodeOSChoice,
+  PveNode,
+  Storage,
+  TalosReleases,
+  TemplateBuildRequest,
+  TemplateBuilds,
+  Versions,
+} from "./types";
+import {
+  ErrorBox,
+  Field,
+  bytes,
+  cniName,
+  distributionName,
+  errorMessage,
+  filled,
+  sentence,
+  shownNumber,
+  typedNumber,
+} from "./ui";
 
 const kubeadmVersion = /^v1\.\d+\.\d+$/u;
 
+// The template a distribution asks for: one per Kubernetes version and node OS for kubeadm, one per
+// Talos release for Talos, which is its own OS, and RKE2's or k3s's own on each node OS.
+type TemplateKind = "kubeadm" | "talos" | "distribution";
+
+const templateKind = (distribution: string): TemplateKind =>
+  distribution === "kubeadm" || distribution === "talos" ? distribution : "distribution";
+
+// The version a missing template is asked for by: chosen from the releases missing one, or typed
+// in when none could be read.
+interface VersionToBuild {
+  label: string;
+  pattern: RegExp;
+  example: string;
+  missing: string[];
+  /** The release templates are made of by default, which the list marks. */
+  preferred?: string;
+}
+
+// What a class's missing template is asked for with.
+interface Asking {
+  kind: TemplateKind;
+  distribution: string;
+  field?: VersionToBuild;
+}
+
+// The node OS chosen, but for Talos, and why it has no template, if it has none.
+interface ChosenNodeOS {
+  os: NodeOSChoice | undefined;
+  missing: string | undefined;
+}
+
+// templateBuildRequest is the request for a missing template: the distribution's on the node OS,
+// kubeadm's of a version on it, or Talos's of a release.
+function templateBuildRequest(
+  { kind, distribution }: Asking,
+  version: string,
+  os: NodeOSChoice | undefined,
+): TemplateBuildRequest {
+  if (kind === "talos") {
+    return { distribution, talosVersion: version };
+  }
+  return {
+    distribution,
+    ...(kind === "kubeadm" && { kubernetesVersion: version }),
+    ...(os !== undefined && { nodeOS: nodeOSKey(os) }),
+  };
+}
+
+// requestKey is how the server lists a request: the template line's name without its kubehenge- prefix.
+const requestKey = (req: TemplateBuildRequest): string =>
+  [req.distribution, req.kubernetesVersion ?? req.talosVersion ?? "", req.nodeOS ?? ""].filter(Boolean).join("-");
+
+// askFor is what a class's missing template is asked for with, or undefined when there is nothing
+// to ask for: on a node OS that can be chosen, the distribution's template while it is missing or
+// any kubeadm version; or a Talos release without a template.
+function askFor(
+  cls: ClusterClass | undefined,
+  talos: TalosReleases | undefined,
+  { os, missing: missingTemplate }: ChosenNodeOS,
+): Asking | undefined {
+  if (cls === undefined) {
+    return undefined;
+  }
+  const { distribution } = cls;
+  const kind = templateKind(distribution);
+  if (kind !== "talos" && os !== undefined && !choosable(os)) {
+    return undefined;
+  }
+  if (kind === "distribution") {
+    return filled(missingTemplate) ? { kind, distribution } : undefined;
+  }
+  if (kind === "kubeadm") {
+    const field = { label: "Kubernetes version to build", pattern: kubeadmVersion, example: "v1.36.5", missing: [] };
+    return { kind, distribution, field };
+  }
+  const missing = talos ? missingReleases(talos) : [];
+  if (!talos || (missing.length === 0 && !filled(talos.error))) {
+    return undefined;
+  }
+  const field = {
+    label: "Talos release to build",
+    pattern: talosRelease,
+    example: talosExample,
+    missing,
+    preferred: talos.default,
+  };
+  return { kind, distribution, field };
+}
+
+function VersionField({
+  field,
+  version,
+  chosen,
+  onChange,
+}: {
+  field: VersionToBuild;
+  version: string;
+  chosen: string;
+  onChange: (v: string) => void;
+}): JSX.Element {
+  if (field.missing.length > 0) {
+    return (
+      <Field label={field.label}>
+        {(id) => (
+          <select id={id} value={chosen} onChange={(e) => onChange(e.target.value)}>
+            {field.missing.map((v) => (
+              <option key={v} value={v}>
+                {v === field.preferred ? `${v} (default)` : v}
+              </option>
+            ))}
+          </select>
+        )}
+      </Field>
+    );
+  }
+  return (
+    <Field
+      label={field.label}
+      hint={`Such as ${field.example}.`}
+      error={version !== "" && !field.pattern.test(version) ? `A version such as ${field.example}.` : undefined}
+    >
+      {(id) => <input id={id} value={version} onChange={(e) => onChange(e.target.value.trim())} />}
+    </Field>
+  );
+}
+
+function askText(kind: TemplateKind, os: NodeOSChoice | undefined): string {
+  const on = os === undefined ? "" : ` on ${os.title}`;
+  const words: Record<TemplateKind, string> = {
+    kubeadm: `Kubeadm offers the versions that have a VM template${on}. Another one gets its template built on request, which takes about twenty minutes.`,
+    talos:
+      "Talos offers the releases that have a VM template. Another one gets its template made on request, which takes a few minutes.",
+    distribution: `Kubehenge builds the missing template${on} on request, which takes about twenty minutes.`,
+  };
+  return words[kind];
+}
+
+/**
+ * requestName is how a template build request's key reads: talos-v1.14.4 as Talos v1.14.4,
+ * kubeadm-v1.37.1-almalinux-10 as kubeadm v1.37.1 on AlmaLinux 10, rke2-rocky-10 as RKE2 on Rocky
+ * Linux 10, with the node OS's title where oses has it.
+ */
+export function requestName(key: string, oses?: NodeOSChoice[]): string {
+  if (key === "refresh") {
+    return "the weekly build";
+  }
+  const { dist, rest } = /^(?<dist>rke2|k3s|kubeadm|talos)-(?<rest>.+)$/u.exec(key)?.groups ?? {};
+  if (dist === undefined || rest === undefined) {
+    return key;
+  }
+  const name = distributionName(dist);
+  if (dist === "talos") {
+    return `${name} ${rest}`;
+  }
+  // A Kubernetes version has no dash, so the first one ends it.
+  const parts: Partial<Record<"version" | "os", string>> =
+    (dist === "kubeadm" ? /^(?<version>[^-]+)-(?<os>.+)$/u.exec(rest)?.groups : { os: rest }) ?? {};
+  const { version, os } = parts;
+  if (os === undefined) {
+    return key;
+  }
+  const title = findNodeOS(oses, os)?.title ?? os;
+  return version === undefined ? `${name} on ${title}` : `${name} ${version} on ${title}`;
+}
+
 // TemplateAsk lets one who may create clusters have a missing template built, when the
-// administrators allow it: the cloud image RKE2 and k3s share, or a kubeadm version's template.
-function TemplateAsk({ cls }: { cls: ClusterClass | undefined }): JSX.Element | null {
+// administrators allow it: the distribution's template on the node OS chosen, a kubeadm version's on
+// it, or a Talos release's.
+function TemplateAsk({
+  cls,
+  talos,
+  os,
+  missing: missingTemplate,
+  oses,
+}: {
+  cls: ClusterClass | undefined;
+  talos: TalosReleases | undefined;
+  os: NodeOSChoice | undefined;
+  missing: string | undefined;
+  /** Every class's node OSes, to name those of the requests others made. */
+  oses: NodeOSChoice[];
+}): JSX.Element | null {
   const [builds, setBuilds] = useState<TemplateBuilds>();
   const [version, setVersion] = useState("");
   const [busy, setBusy] = useState(false);
@@ -46,21 +259,24 @@ function TemplateAsk({ cls }: { cls: ClusterClass | undefined }): JSX.Element | 
       current = false;
     };
   }, []);
-  const distribution = cls?.distribution;
-  const kubeadm = distribution === "kubeadm";
-  if (builds?.allowed !== true || distribution === undefined || distribution === "talos") {
+  const asking = askFor(cls, talos, { os, missing: missingTemplate });
+  if (builds?.allowed !== true || asking === undefined) {
     return null;
   }
-  if (!kubeadm && !filled(cls?.noTemplate)) {
-    return null;
-  }
-  const key = kubeadm ? `kubeadm-${version}` : "cloud-image";
-  const asked = builds.requested.includes(key);
+  const { kind, field } = asking;
+  const missing = field?.missing ?? [];
+  const chosen = missing.length > 0 && !missing.includes(version) ? (missing[0] ?? "") : version;
+  const valid = field === undefined || field.pattern.test(chosen);
+  const req = templateBuildRequest(asking, chosen, os);
+  const key = requestKey(req);
+  // The run under way lists the templates it builds by their line's name, the key with kubehenge-
+  // before it, not by the keys they were asked for by.
+  const asked = builds.requested.includes(key) || builds.building.includes(`kubehenge-${key}`);
   const ask = async (): Promise<void> => {
     setBusy(true);
     setError(undefined);
     try {
-      await api.requestTemplateBuild(distribution, kubeadm ? version : undefined);
+      await api.requestTemplateBuild(req);
       setBuilds(await api.templateBuilds());
     } catch (err) {
       setError(errorMessage(err));
@@ -72,26 +288,16 @@ function TemplateAsk({ cls }: { cls: ClusterClass | undefined }): JSX.Element | 
     <fieldset className="group">
       <legend>Missing template</legend>
       <p className="muted">
-        {kubeadm
-          ? "Kubeadm offers the versions that have a VM template. Another one gets its template built on request, which takes about a quarter of an hour."
-          : "Kubehenge builds the missing template on request, which takes about a quarter of an hour."}
+        {askText(kind, os)}
         {builds.building.length > 0 && ` Building now: ${builds.building.join(", ")}.`}
-        {builds.requested.length > 0 && ` Asked for: ${builds.requested.join(", ")}.`}
+        {builds.requested.length > 0 && ` Asked for: ${builds.requested.map((k) => requestName(k, oses)).join(", ")}.`}
       </p>
-      {kubeadm && (
-        <Field
-          label="Kubernetes version to build"
-          hint="Such as v1.36.5."
-          error={version !== "" && !kubeadmVersion.test(version) ? "A version such as v1.36.5." : undefined}
-        >
-          {(id) => <input id={id} value={version} onChange={(e) => setVersion(e.target.value.trim())} />}
-        </Field>
-      )}
+      {field && <VersionField field={field} version={version} chosen={chosen} onChange={setVersion} />}
       <ErrorBox message={error} />
       <div className="actions">
         <button
           type="button"
-          disabled={busy || asked || (kubeadm && !kubeadmVersion.test(version))}
+          disabled={busy || asked || !valid}
           onClick={() => {
             void ask();
           }}
@@ -103,16 +309,47 @@ function TemplateAsk({ cls }: { cls: ClusterClass | undefined }): JSX.Element | 
   );
 }
 
-// Number fields keep an empty or unfinished entry as NaN, which the checks refuse, rather than
-// turning it into 0 under the cursor.
-const shownNumber = (n: number): string => (Number.isNaN(n) ? "" : String(n));
-const typedNumber = (s: string): number => (s.trim() === "" ? Number.NaN : Number(s));
+// NodeOSField chooses what the nodes run, for every distribution but Talos, whose nodes run Talos.
+function NodeOSField({ form, set, shown, cls }: StepProps & { cls: ClusterClass | undefined }): JSX.Element | null {
+  const oses = cls?.nodeOSes ?? [];
+  const os = chosenNodeOS(form, cls);
+  if (os === undefined) {
+    return null;
+  }
+  const note = cpuNote(os, oses);
+  return (
+    <Field
+      label="Node OS"
+      error={shown("nodeOS")}
+      hint={`Kubehenge builds its templates from ${os.title}'s own signed packages, only what a node needs, with ${macName(os.mac)} enforcing.${note === undefined ? "" : ` ${note}`}`}
+    >
+      {(id) => (
+        <select id={id} value={nodeOSKey(os)} onChange={(e) => set("nodeOS", e.target.value)}>
+          {oses.map((o) => (
+            <option key={nodeOSKey(o)} value={nodeOSKey(o)} disabled={!choosable(o)}>
+              {nodeOSLabel(o)}
+            </option>
+          ))}
+        </select>
+      )}
+    </Field>
+  );
+}
+
+/** useClassTalos reads the Talos releases for a class whose clusters name one. */
+export const useClassTalos = (cls: ClusterClass | undefined): TalosReleases | undefined =>
+  useTalosReleases(variable(cls, "talosVersion") !== undefined);
+
+const versionHints: Record<string, string> = {
+  kubeadm: "The versions with a VM template.",
+  talos: "The newest release of each minor version Kubernetes still patches that the Talos release runs.",
+};
 
 function versionHint(cls: ClusterClass | undefined, offered: Versions | undefined): string | undefined {
   if (offered && offered.versions.length > 0) {
-    return cls?.distribution === "kubeadm"
-      ? "The versions with a VM template."
-      : "The newest release of each minor version Kubernetes still patches.";
+    return (
+      versionHints[cls?.distribution ?? ""] ?? "The newest release of each minor version Kubernetes still patches."
+    );
   }
   if (!cls) {
     return undefined;
@@ -174,6 +411,7 @@ export function GeneralStep({
   classes,
   cls,
   offered,
+  talos,
   onChooseClass,
   namespaces,
   onChooseNamespace,
@@ -181,11 +419,14 @@ export function GeneralStep({
   classes: ClusterClass[];
   cls: ClusterClass | undefined;
   offered: Versions | undefined;
+  /** The Talos releases, for a Talos class; undefined while they load. */
+  talos?: TalosReleases | undefined;
   onChooseClass: (name: string) => void;
   namespaces: string[];
   onChooseNamespace: (namespace: string) => void;
 }): JSX.Element {
-  const alone = machineLeast({ ...form, workerReplicas: 0 }, cls, "controlPlaneMachine");
+  const alone = machineLeast({ ...form, workerReplicas: 0, workerAutoscale: false }, cls, "controlPlaneMachine");
+  const runs = forRelease(offered, talos, form.talosVersion);
   return (
     <>
       {namespaces.length > 1 && (
@@ -221,12 +462,31 @@ export function GeneralStep({
           </select>
         )}
       </Field>
-      <Field label="Kubernetes version" error={shown("version")} hint={versionHint(cls, offered)}>
+      <NodeOSField form={form} set={set} shown={shown} cls={cls} />
+      {variable(cls, "talosVersion") !== undefined && (
+        <Field label="Talos release" error={shown("talosVersion")} hint={talosReleaseHint(talos)}>
+          {(id) => (
+            <TalosReleaseSelect
+              id={id}
+              value={form.talosVersion}
+              releases={talos}
+              onChange={(v) => set("talosVersion", v)}
+            />
+          )}
+        </Field>
+      )}
+      <Field label="Kubernetes version" error={shown("version")} hint={versionHint(cls, runs)}>
         {(id) => (
-          <VersionInput id={id} value={form.version} onChange={(v) => set("version", v)} cls={cls} offered={offered} />
+          <VersionInput id={id} value={form.version} onChange={(v) => set("version", v)} cls={cls} offered={runs} />
         )}
       </Field>
-      <TemplateAsk cls={cls} />
+      <TemplateAsk
+        cls={cls}
+        talos={talos}
+        os={chosenNodeOS(form, cls)}
+        missing={templateMissing(form, cls)}
+        oses={classes.flatMap((c) => c.nodeOSes ?? [])}
+      />
       <Field label="Control-plane nodes" hint="Three or more keep the cluster running when one node fails.">
         {(id) => (
           <select
@@ -242,29 +502,19 @@ export function GeneralStep({
           </select>
         )}
       </Field>
-      <Field
-        label="Workers"
-        error={shown("workerReplicas")}
-        hint={
-          form.workerReplicas === 0
-            ? `With none, the control planes run the workloads too, so they have at least ${alone.cores} cores and ${alone.memoryMiB} MiB.`
-            : undefined
-        }
-      >
-        {(id) => (
-          <input
-            id={id}
-            type="number"
-            min={0}
-            max={maxWorkers}
-            value={shownNumber(form.workerReplicas)}
-            onChange={(e) => set("workerReplicas", typedNumber(e.target.value))}
-          />
-        )}
-      </Field>
+      <WorkerFields
+        form={form}
+        set={set}
+        shown={shown}
+        cls={cls}
+        alone={`With none, the control planes run the workloads too, so they have at least ${alone.cores} cores and ${alone.memoryMiB} MiB.`}
+      />
     </>
   );
 }
+
+// Talos brings Flannel itself; Kubehenge installs the other pod networks its class offers.
+const ownNetworks: Record<string, string> = { talos: "flannel" };
 
 export function NetworkStep({
   form,
@@ -371,6 +621,9 @@ export function NetworkStep({
               {(cni.enum ?? []).map((v) => (
                 <option key={String(v)} value={String(v)}>
                   {cniName(String(v))}
+                  {v === ownNetworks[cls?.distribution ?? ""]
+                    ? ` (${distributionName(cls?.distribution ?? "")}'s own)`
+                    : ""}
                 </option>
               ))}
             </select>

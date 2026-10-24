@@ -8,16 +8,18 @@ What Kubehenge's first release does, what comes next, and what may come later.
 - In every cluster: Proxmox CSI plugin, Proxmox cloud controller manager, control-plane virtual IP, CNI (the distribution's own or one chosen per cluster), Traefik as the ingress controller on every node, the Gateway API with Traefik's Gateway, and optionally addresses for Services of type LoadBalancer with MetalLB or kube-vip.
 - Add-ons: Rancher, with Kubehenge's clusters registered in it, Headlamp, monitoring, logs with Loki and Grafana Alloy, pod security through Pod Security Admission, Kyverno or both, CIS hardening, Istio in ambient mode, Cilium Cluster Mesh, connecting the pod networks of clusters that run Cilium, certificates from cert-manager, by ACME (DNS-01 or HTTP-01) or from a CA of the cluster's own, with a default certificate for Traefik and its Gateway, and GitOps with Argo CD or Flux, syncing each cluster from a Git repository.
 - A security baseline from the CIS Kubernetes Benchmark in every cluster.
-- The VM templates for every distribution (`kubehenge template`), built again every week with Ubuntu's updates, and the nodes of every kubeadm, RKE2 and k3s cluster moved to each build inside their maintenance windows once it has soaked for a day.
+- The VM templates for every distribution (`kubehenge template`), on a node OS each cluster chooses (AlmaLinux 10 or Rocky Linux 10, in image mode, SELinux enforcing), built again every week with their updates, and the nodes of every kubeadm, RKE2 and k3s cluster moved to each build inside their maintenance windows once it has soaked for a day.
 - The appliance: one line in the Proxmox VE shell installs it as an LXC container, whose interface creates the management cluster and keeps it upgraded; the same management cluster from one Terraform/OpenTofu apply for those who prefer it.
-- The interface: create, list, scale, upgrade and delete clusters, choose the distribution and add-ons, download a kubeconfig, with permissions following Proxmox VE's on each cluster's pool.
+- The interface: create, list, scale, upgrade and delete clusters, choose the distribution and add-ons, download a kubeconfig, with permissions following Proxmox VE's on each cluster's pool; optionally, the shared Headlamp opens each cluster signed in as cluster-admin for those who may download its kubeconfig.
+- The cluster autoscaler for worker pools, from none up to 100 workers, running in the management cluster or, by choice, on the cluster's own control planes.
 - Upgrades without a shell: the appliance upgrades itself from a button, or automatically to new patch or minor releases of Kubehenge, installing only signed releases; each cluster can upgrade Kubernetes automatically inside a maintenance window its owner sets.
 - The optional Kubernetes entry inside Proxmox VE's own interface.
 - Placement: a cluster's VMs spread over every online node, or over the nodes chosen by hand or from one of Proxmox VE's HA node-affinity rules, which an administrator can offer to cluster creators without `Sys.Audit` on `/`; the cluster page shows which node each VM runs on and warns when control-plane VMs share one; optionally, Proxmox VE HA keeps the control-plane VMs apart and restarts them after a node failure.
 
 ## Next
 
-- A Talos ClusterClass, once Cluster API's Talos providers support ClusterClass in a release.
+- A Talos ClusterClass, with each node's Talos release upgraded in place one node at a time, control planes first, and automatic patch upgrades inside the maintenance window.
+- The controller manager's and scheduler's metrics on Talos, once a Talos release gives them serving certificates of the cluster CA; Kubehenge scrapes them from the first release that does.
 
 ## Later
 

@@ -75,7 +75,35 @@ export interface ClusterClass {
   variables: ClassVariable[];
   annotations?: Record<string, string>;
   versionFormat: { pattern: string };
-  /** Why no cluster of the class can be built yet: the template its machines clone is missing. */
+  /** Why no cluster of the class on its default node OS can be built yet: the template its machines clone is missing. */
+  noTemplate?: string;
+  /** The operating systems the class's nodes may run, in the order to offer them; absent for Talos. */
+  nodeOSes?: NodeOSChoice[];
+}
+
+/** A node OS as a cluster's nodeOS variable names it: a family, such as almalinux, and one of its releases. */
+export interface NodeOSRef {
+  family: string;
+  release: string;
+}
+
+/** A node OS Kubehenge builds VM templates of. */
+export interface NodeOS extends NodeOSRef {
+  /** As people read it, such as AlmaLinux 10. */
+  title: string;
+  /** The QEMU CPU type its VMs get, such as x86-64-v2-AES; the Proxmox VE nodes' CPUs have to offer it. */
+  cpuType: string;
+  /** The mandatory access control it enforces, such as selinux. */
+  mac: string;
+  /** What a cluster runs unless it chooses another. */
+  default?: boolean;
+  /** Why it cannot be chosen yet. */
+  unreleased?: string;
+}
+
+/** A node OS a class's clusters may run, and why none of them can be built on it yet. */
+export interface NodeOSChoice extends NodeOS {
+  /** Why no cluster of the class on it can be built yet: its template is missing. */
   noTemplate?: string;
 }
 
@@ -94,10 +122,18 @@ export interface Replicas {
   upToDate: number;
 }
 
+/** The least and the most workers the cluster autoscaler keeps a pool between. */
+export interface Autoscaling {
+  min: number;
+  max: number;
+}
+
 export interface WorkerPool {
   name: string;
   class: string;
+  /** For an autoscaled pool, the workers it asks for at the moment. */
   replicas: number;
+  autoscaling?: Autoscaling;
 }
 
 export interface Machine {
@@ -113,6 +149,8 @@ export interface Machine {
   waiting?: string;
   addresses?: string[];
   created: string;
+  /** The Talos release its node runs, on a Talos cluster. */
+  talos?: string;
 }
 
 /** A section of the health page from one source: what was read, or why it was not. */
@@ -213,6 +251,7 @@ export interface PoolState {
   upToDate: number;
   rollingOut: boolean;
   message?: string;
+  autoscaling?: Autoscaling;
 }
 
 export interface HealthCheck {
@@ -291,8 +330,40 @@ export interface Cluster {
   mesh?: MeshPeer[];
   /** Which template builds the nodes run and when they next move; absent for Talos. */
   nodeImage?: NodeImage;
+  /** The operating system the nodes run; absent for Talos. */
+  nodeOS?: NodeOS;
   /** The deploy key and the repository host's keys Kubehenge made for the cluster's GitOps. */
   gitops?: GitOpsKeys;
+  /** How a Talos cluster's nodes stand with its Talos release. */
+  talos?: TalosStatus;
+}
+
+/** A Talos cluster's nodes, upgraded in place to its Talos release one at a time. */
+export interface TalosStatus {
+  /** The release the nodes are upgraded to. */
+  version: string;
+  /** The release new machines boot first, before their upgrade. */
+  image?: string;
+  /** The node under way, as "<node> to <release> since <time>[, rebooted at <time>]". */
+  upgrading?: string;
+  /** The last node done, as "<node> to <release> at <time>". */
+  upgraded?: string;
+  /** The node that failed, as "<node> to <release> at <time>: <why>", which holds the rest. */
+  failed?: string;
+}
+
+/** The Talos releases a cluster can start on, be upgraded to, and have a template made of. */
+export interface TalosReleases {
+  /** The releases the template pool has a template of, newest first. */
+  templates: string[];
+  /** The newest release of each minor version the Image Factory builds, newest first. */
+  releases: string[];
+  /** The release templates are made of unless another is asked for. */
+  default: string;
+  /** The Kubernetes minor versions each release runs, such as "1.36", oldest first. */
+  kubernetes: Record<string, string[]>;
+  /** Why releases is empty. */
+  error?: string;
 }
 
 /** The VM template builds a cluster's nodes are cloned from. */
@@ -348,6 +419,9 @@ export interface Storage {
 export interface PveNode {
   node: string;
   online: boolean;
+  /** Memory in use and in all, in bytes, while the node is online. */
+  memory?: number;
+  maxMemory?: number;
 }
 
 /** HARule is an enabled HA node-affinity rule of Proxmox VE, offered as a place for a cluster. */
@@ -403,7 +477,9 @@ export interface ManagementSettings {
   /** Clusters may choose the CSI plugin's newest release, with Datastore.Allocate on their storage. */
   clusterDatastoreAllocate?: boolean;
   backupTargets?: BackupTarget[];
-  /** The weekly build of the Ubuntu VM templates; absent, it runs with its defaults. */
+  /** The controller restores clusters' etcd through the Proxmox VE guest agent. */
+  etcdRestore?: boolean;
+  /** The weekly build of the node OS VM templates; absent, it runs with its defaults. */
   templateRefresh?: TemplateRefreshSettings;
   /** Clusters may choose the cloud controller manager's HA group labels, with Sys.Audit on / for their token. */
   clusterSysAudit?: boolean;
@@ -411,9 +487,13 @@ export interface ManagementSettings {
   clusterVolumeSnapshots?: boolean;
   /** More namespaces the interface creates and manages clusters in, beside its own. */
   extraClusterNamespaces?: string[];
+  /** The shared Headlamp signs those who may download a cluster's kubeconfig in as cluster-admin. */
+  headlampSignIn?: boolean;
+  /** The shared Headlamp offers its Helm app catalog and Prometheus charts, with each user's own credentials. */
+  headlampActions?: boolean;
 }
 
-/** When and where the Ubuntu VM templates are built again; empty fields take the defaults. */
+/** When and where the node OS VM templates are built again; empty fields take the defaults. */
 export interface TemplateRefreshSettings {
   enabled: boolean;
   weekday?: string;
@@ -497,8 +577,91 @@ export interface ClusterBackups {
   canRestore: boolean;
 }
 
+/** An etcd snapshot of a cluster, as it is stored in the target. */
+export interface EtcdSnapshot {
+  name: string;
+  time: string;
+  kubernetesVersion?: string;
+  distribution?: string;
+  revision?: number;
+  etcdVersion?: string;
+  /** Of the snapshot before it was encrypted. */
+  sha256?: string;
+  size?: number;
+  storedSize?: number;
+}
+
+export type EtcdRestorePhase =
+  | "Preparing"
+  | "Fetching"
+  | "Stopping"
+  | "Restoring"
+  | "Starting"
+  | "Replacing"
+  | "Succeeded"
+  | "Failed";
+
+/** How a restore of a cluster's etcd went, or is going. */
+export interface EtcdRestoreStatus {
+  snapshot: string;
+  by?: string;
+  requestedAt: string;
+  phase: EtcdRestorePhase;
+  /** The control-plane machine etcd is restored on, and its node. */
+  machine?: string;
+  node?: string;
+  /** The other control-plane machines, replaced once etcd is back. */
+  replaced?: string[];
+  message?: string;
+  started: string;
+  finished?: string;
+}
+
+/** What the backups view shows of a cluster's etcd snapshots. */
+export interface ClusterEtcdSnapshots {
+  enabled: boolean;
+  target?: string;
+  schedule?: string;
+  timeZone?: string;
+  keep?: number;
+  /** Set while RKE2's or k3s's servers also upload snapshots of their own to the target. */
+  distributionUpload?: boolean;
+  last?: EtcdSnapshot;
+  condition?: Condition;
+  /** A snapshot asked for has not been taken yet. */
+  requested: boolean;
+  snapshots: EtcdSnapshot[];
+  message?: string;
+  restore?: EtcdRestoreStatus;
+  restoring: boolean;
+  /** The controller restores through the guest agent, or a Talos cluster's Talos API; otherwise the steps are done by hand. */
+  automatic: boolean;
+  /** VM.Allocate on the cluster's pool. */
+  canSnapshot: boolean;
+  /** Sys.Modify on the cluster's pool. */
+  canRestore: boolean;
+}
+
+/** One step of restoring a cluster's etcd by hand. */
+export interface EtcdRestoreStep {
+  title: string;
+  /** Where the command runs: a node, or wherever kubectl reaches the management cluster. */
+  where: string;
+  command: string;
+}
+
+/** The steps that restore a cluster's etcd from a snapshot by hand. */
+export interface EtcdRestorePlan {
+  snapshot: EtcdSnapshot;
+  distribution: string;
+  steps: EtcdRestoreStep[];
+  replaced?: string[];
+}
+
 export interface Job {
   user: string;
+  /** A run the appliance started on its own, as user, in an automatic upgrade. */
+  automatic?: boolean;
   kind?: "apply" | "remove" | "template";
   started: string;
   finished?: string;
@@ -526,6 +689,36 @@ export interface SetupStatus {
   proxmoxInsecure?: boolean;
   /** An earlier run left its encrypted state, so the setup takes that run's passphrase. */
   resumes?: boolean;
+  /** Which release last applied the management cluster, and what applying this one changes. */
+  upgrade?: ManagementUpgrade;
+}
+
+/** A component of the management cluster whose version applying the appliance's release changes. */
+export interface VersionChange {
+  /** The module's name for it, such as talos or cluster_api. */
+  component: string;
+  from?: string;
+  to?: string;
+}
+
+export interface ManagementUpgrade {
+  /** The release that last applied the management cluster. */
+  applied: string;
+  /** The appliance's own release. */
+  carried: string;
+  behind: boolean;
+  changes?: VersionChange[];
+}
+
+/** Whether the management cluster follows the appliance's upgrades on its own. */
+export interface ManagementAutomatic {
+  /** There is a management cluster to upgrade. */
+  possible: boolean;
+  on: boolean;
+  by?: string;
+  since?: string;
+  /** The Proxmox VE user the runs act as. */
+  user: string;
 }
 
 export type UpgradePolicy = "off" | "patch" | "minor";
@@ -557,6 +750,8 @@ export interface VMTemplate {
   newest?: boolean;
   /** The cluster that clones from it, which keeps it from being deleted. */
   inUse?: string;
+  /** The operating system its machines run, such as AlmaLinux 10; absent for a Talos template. */
+  nodeOS?: string;
 }
 
 /** The weekly template build: its schedule, what was asked for, and how the last run went. */
@@ -586,20 +781,35 @@ export interface Templates {
   job?: Job;
   /** The weekly build, when it is on. */
   refresh?: TemplateRefresh;
+  /** The node OSes templates can be built of, and those not released yet. */
+  nodeOSes?: NodeOS[];
 }
 
 /** Whether a cluster creator may have a missing template built, and which builds are under way. */
 export interface TemplateBuilds {
   allowed: boolean;
-  /** Request keys not started yet, such as kubeadm-v1.37.1 or cloud-image. */
+  /** Request keys not started yet, such as rke2-almalinux-10, kubeadm-v1.37.1-almalinux-10 or talos-v1.14.4. */
   requested: string[];
   building: string[];
 }
 
-export interface TemplateRequest {
-  /** rke2 is the cloud image RKE2 and k3s share. */
-  distribution: "rke2" | "kubeadm";
+/** A cluster creator's request for a missing template. */
+export interface TemplateBuildRequest {
+  distribution: string;
+  /** For kubeadm, whose templates are of one Kubernetes version each. */
   kubernetesVersion?: string;
+  /** For Talos, whose templates are of one Talos release each. */
+  talosVersion?: string;
+  /** The node OS as one word, such as almalinux-10; absent, the default. Talos is its own OS and takes none. */
+  nodeOS?: string;
+}
+
+export interface TemplateRequest {
+  distribution: "rke2" | "k3s" | "kubeadm" | "talos";
+  kubernetesVersion?: string;
+  talosVersion?: string;
+  /** The node OS as one word, such as almalinux-10; absent, the default. Talos is its own OS and takes none. */
+  nodeOS?: string;
   node: string;
   storage: string;
   importStorage: string;
@@ -624,6 +834,8 @@ export interface Upgrades {
     time: string;
     error?: string;
   };
+  /** Absent outside the appliance. */
+  management?: ManagementAutomatic;
 }
 
 export interface CreateRequest {
@@ -634,6 +846,8 @@ export interface CreateRequest {
   version: string;
   controlPlaneReplicas: number;
   workerReplicas: number;
+  /** Has the cluster autoscaler size the worker pool in place of workerReplicas. */
+  workerAutoscaling?: Autoscaling;
   variables: Record<string, unknown>;
   pods?: string[];
   services?: string[];
@@ -643,5 +857,15 @@ export interface ChangeRequest {
   version?: string;
   controlPlaneReplicas?: number;
   workerPools?: Record<string, number>;
+  /** Switches autoscaling on for pools by name, or off with null. */
+  autoscaling?: Record<string, Autoscaling | null>;
   variables?: Record<string, unknown>;
+}
+
+/** The autoscaler variable: where the cluster autoscaler runs and how it scales. */
+export interface AutoscalerSettings {
+  placement?: "management" | "workload";
+  expander?: "least-waste" | "most-pods" | "random";
+  scaleDownDelayAfterAddMinutes?: number;
+  scaleDownUnneededMinutes?: number;
 }

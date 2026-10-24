@@ -15,6 +15,26 @@ providerNamespaces:
   kubehenge-kubeadm: [kubeadm-bootstrap-system, kubeadm-control-plane-system]
   kubehenge-rke2: [rke2-bootstrap-system, rke2-control-plane-system]
   kubehenge-k3s: [k3s-bootstrap-system, k3s-control-plane-system]
+  kubehenge-talos: [talos-bootstrap-system, talos-control-plane-system]
+
+talos:
+  # The images Talos workload clusters' nodes pull only with their publishers' keyless signatures,
+  # as Talos's ImageVerificationConfig rules: the Image Factory's builds of a release differ in
+  # their bytes, so no digest of its installer stays valid, and Talos's Kubernetes upgrades name the
+  # components by tag. The management cluster's module passes its own, which its nodes pull by.
+  imageSignatures:
+    - image: factory.talos.dev/*
+      keyless:
+        issuer: https://accounts.google.com
+        subject: image-factory-signing@talos-production.iam.gserviceaccount.com
+    - image: ghcr.io/siderolabs/*
+      keyless:
+        issuer: https://accounts.google.com
+        subjectRegex: ^(releasemgr-svc@talos-production\.iam\.gserviceaccount\.com|[^@]+@siderolabs\.com)$
+    - image: registry.k8s.io/*
+      keyless:
+        issuer: https://accounts.google.com
+        subject: krel-trust@k8s-releng-prod.iam.gserviceaccount.com
 
 interface:
   # Namespace the web interface creates clusters in; it changes and hands out kubeconfigs only of
@@ -32,6 +52,18 @@ interface:
   # Sys.Audit on / already, into the ConfigMap kubehenge-ha-rules, which only then the interface
   # may read.
   offerHARules: false
+  # Whether the appliance's shared Headlamp signs those who may download a cluster's admin
+  # kubeconfig (Sys.Modify on its pool) in as cluster-admin, with a token made for their session.
+  # The controller then keeps two identities in each cluster of namespace and extraNamespaces: one
+  # bound to cluster-admin, and one that may only make its tokens, whose own token it keeps beside
+  # the Cluster for the interface. Switched off, it removes them, which ends every token made.
+  headlampSignIn: false
+  # Whether the appliance's shared Headlamp offers the Helm app catalog and the Prometheus charts
+  # it ships with: listing, installing, upgrading, rolling back and uninstalling Helm releases from
+  # repositories, with each user's own credentials in the cluster. Only those who may set the
+  # appliance up (Sys.Modify on / among others) add or remove a repository, as one list serves
+  # every user and cluster. The interface reads this from the ConfigMap kubehenge-interface.
+  headlampActions: false
 
 # What clusters may use on Proxmox VE: the storages for their disks and volumes, and the bridges
 # their nodes attach to, which the management cluster's Cluster API token has rights on. The
@@ -115,11 +147,17 @@ proxmox:
   # appliance, never by this chart. Empty: no cluster may take them.
   volumeSnapshots:
     rootSecret: ""
+  # Whether the controller restores clusters' etcd from their snapshots itself, running the restore
+  # on the control-plane VMs through their guest agents, signing in for it with the API token under
+  # the secret's key restore-token, which needs VM.Audit and VM.GuestAgent.Unrestricted on the
+  # workload pool: a root shell in every cluster's VMs. Without it, the interface shows the steps
+  # to restore by hand. Talos clusters are restored through their nodes' Talos API either way.
+  etcdRestore: false
 
-# Building the Ubuntu VM templates again every week, with the updates Ubuntu published since, as a
-# CronJob signed in with a token of its own. Clusters move their nodes to a new build inside their
-# maintenance windows (their upgrades variable's nodeImages) once it is soakHours old; of each
-# template the two newest builds stay, and any older one a cluster still clones from.
+# Building the node OS VM templates again every week, with the updates each node OS published
+# since, as a CronJob signed in with a token of its own. Clusters move their nodes to a new build
+# inside their maintenance windows (their upgrades variable's nodeImages) once it is soakHours old;
+# of each template the two newest builds stay, and any older one a cluster still clones from.
 templateRefresh:
   # On, as with the module and the appliance. It needs node, storage and importStorage below and the
   # builder's Secret; set enabled to false to install without them.
@@ -141,9 +179,9 @@ templateRefresh:
   importStorage: ""
   isoStorage: ""
   pool: kubehenge-templates
-  # The network of the VM that prepares an image, which needs Ubuntu's and Kubernetes' package
-  # mirrors: a bridge and VLAN tag, and a static address with prefix, gateway and DNS servers, or
-  # DHCP when address is empty.
+  # The network of the VM that builds a node image, which needs the node OS's and Kubernetes'
+  # package repositories: a bridge and VLAN tag, and a static address with prefix, gateway and DNS
+  # servers, or DHCP when address is empty.
   bridge: vmbr0
   vlan: 0
   address: ""
@@ -158,6 +196,28 @@ templateRefresh:
 # cluster's load balancer, its Services' addresses.
 # renovate: datasource=docker depName=ghcr.io/kube-vip/kube-vip
 kubeVip: ghcr.io/kube-vip/kube-vip:v1.3.1@sha256:1962f9daf226503f7e6b107f595cb28b7917fd2d0113957075e19a3e5a6c1e33
+
+# The management cluster's API as workload clusters reach it, such as https://192.0.2.10:6443; the
+# management cluster's module sets it. Without it, no cluster's autoscaler can run inside the
+# cluster (the autoscaler variable's placement workload).
+managementEndpoint: ""
+
+# The cluster autoscaler the controller runs for each cluster with an autoscaled pool.
+autoscaler:
+  # Namespace of the autoscalers that run in the management cluster and their accounts.
+  namespace: kubehenge-autoscaler
+  # A release for each Kubernetes minor version, as each carries its minor's scheduler. A cluster
+  # runs the one of its minor, else the newest before it; one older than them all, the oldest. A
+  # new minor is a new line: Renovate moves each line within its own minor.
+  images:
+    # renovate: datasource=docker depName=registry.k8s.io/autoscaling/cluster-autoscaler
+    - registry.k8s.io/autoscaling/cluster-autoscaler:v1.33.6@sha256:7b44e0f075b2c8f9952e339b6c396cd4d1c3831c24c0fe092a3e708c45e6ec51
+    # renovate: datasource=docker depName=registry.k8s.io/autoscaling/cluster-autoscaler
+    - registry.k8s.io/autoscaling/cluster-autoscaler:v1.34.5@sha256:5c3a56440ffc76eac79e7d7e840153c1fbe7b6e02d415e76a45ba2e0ef99a266
+    # renovate: datasource=docker depName=registry.k8s.io/autoscaling/cluster-autoscaler
+    - registry.k8s.io/autoscaling/cluster-autoscaler:v1.35.2@sha256:aac369dc283927a623deb1af54696efcc722ae79255aa07788422e495bab887d
+    # renovate: datasource=docker depName=registry.k8s.io/autoscaling/cluster-autoscaler
+    - registry.k8s.io/autoscaling/cluster-autoscaler:v1.36.1@sha256:461388d03eb5b55db58941ee7a81d9a619dd15302b01cbab9f5a9946715994b4
 
 # The proxy on k3s control planes through which Cluster API reaches each node's etcd; the k3s
 # provider would otherwise pull it by tag alone.

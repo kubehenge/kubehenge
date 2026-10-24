@@ -21,8 +21,8 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
-// ServingCertApprover approves the serving certificates the kubelets of kubeadm clusters ask the
-// cluster CA for. Kubernetes approves none by itself: a kubelet may name any address, and only
+// ServingCertApprover approves the serving certificates the kubelets of kubeadm and Talos clusters
+// ask the cluster CA for. Kubernetes approves none by itself: a kubelet may name any address, and only
 // what made the machine knows which are its own. RKE2 and k3s sign their kubelets' certificates
 // themselves.
 type ServingCertApprover struct {
@@ -55,7 +55,8 @@ func (a *ServingCertApprover) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 		return ctrl.Result{}, fmt.Errorf("reading cluster %s: %w", req.NamespacedName, err)
 	}
-	if !Owns(cluster, a.ClassNamespace) || distributionOf(cluster) != templates.Kubeadm || !cluster.DeletionTimestamp.IsZero() {
+	d := distributionOf(cluster)
+	if !Owns(cluster, a.ClassNamespace) || d != templates.Kubeadm && d != templates.Talos || !cluster.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
 	}
 	workload, found, err := a.Remotes.get(ctx, cluster)

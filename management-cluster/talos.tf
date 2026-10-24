@@ -15,6 +15,16 @@ locals {
     { image = "ghcr.io/siderolabs/*", keyless = { issuer = "https://accounts.google.com", subjectRegex = "^(releasemgr-svc@talos-production\\.iam\\.gserviceaccount\\.com|[^@]+@siderolabs\\.com)$" } },
     { image = "registry.k8s.io/*", keyless = { issuer = "https://accounts.google.com", subject = "krel-trust@k8s-releng-prod.iam.gserviceaccount.com" } },
   ]
+  # The Talos providers' controllers, which only the management cluster runs, come from Kubehenge's
+  # forks of them and are pulled only as each fork's release workflow signed them for a version tag,
+  # keyless through GitHub's OIDC issuer.
+  provider_image_signatures = [for repository in ["cluster-api-bootstrap-provider-talos", "cluster-api-control-plane-provider-talos"] : {
+    image = "ghcr.io/kubehenge/${repository}"
+    keyless = {
+      issuer       = "https://token.actions.githubusercontent.com"
+      subjectRegex = "^https://github\\.com/kubehenge/${repository}/\\.github/workflows/release\\.yaml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$"
+    }
+  }]
 
   patient_lease_args = {
     leader-elect-lease-duration = local.patient_leases.leaderElection.leaseDuration
@@ -105,7 +115,7 @@ data "talos_machine_configuration" "node" {
         name       = var.api_address
         link       = "lan"
       }),
-      yamlencode({ apiVersion = "v1alpha1", kind = "ImageVerificationConfig", rules = local.image_signatures }),
+      yamlencode({ apiVersion = "v1alpha1", kind = "ImageVerificationConfig", rules = concat(local.image_signatures, local.provider_image_signatures) }),
       ], [
       for registry, endpoints in var.registry_mirrors : yamlencode({
         apiVersion = "v1alpha1"

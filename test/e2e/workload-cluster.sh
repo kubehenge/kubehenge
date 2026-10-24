@@ -3,17 +3,21 @@
 # cluster: create a cluster trusting an OpenID issuer, hardened to the CIS benchmark and enforcing
 # Pod Security's restricted level, check sign-in through it, its nodes against the benchmark, its
 # cloud controller manager, ingress controller, Gateway API, load balancer and persistent volumes,
-# what the health page's read-only identities may see in it, switch Headlamp (and its read-only
-# access for everyone), Kyverno, Istio (a namespace's traffic over mutual TLS), monitoring (every
+# what the health page's read-only identities may see in it, that the shared Headlamp's sign-in
+# identities are there for the interface's namespaces alone and do no more than they should, switch
+# Headlamp (and its read-only access for everyone), Kyverno, Istio (a namespace's traffic over mutual TLS), monitoring (every
 # component scraped with its server verified) and logs (a pod's lines, and with the node collector
 # the journal and the audit log, read in Loki through Grafana) on and off, back a namespace with a
 # volume and a Secret up with Velero to an S3 store the test serves, delete it and restore it, check
 # the store holds the backup encrypted, switch certificates on (from the cluster's own CA, then from
 # an ACME server over DNS-01 and over HTTP-01) and GitOps (Flux, then Argo CD, syncing a repository
-# on a Git server in the cluster through a deploy key), switch backups, certificates, GitOps and the
-# load balancer off, scale its workers up and down, upgrade it by one minor version (for RKE2 and
-# k3s with the first new server's join refused at first), replace a node that dies, delete it, and
-# check that nothing of it is left on Proxmox VE.
+# on a Git server in the cluster through a deploy key), on Talos upgrade the nodes in place to a
+# newer Talos release with every add-on on, switch backups, certificates and GitOps off, take an
+# etcd snapshot into the same store, read it back and restore etcd from it through the guest agent
+# (on Talos through the Talos API), on RKE2 and k3s have the servers upload a snapshot of their
+# own there and switch that off, switch the load balancer off, scale its workers up and down,
+# upgrade it by one minor version (for RKE2 and k3s with the first new server's join refused at
+# first), replace a node that dies, delete it, and check that nothing of it is left on Proxmox VE.
 #
 #   test/e2e/workload-cluster.sh <ClusterClass> <version> <upgrade version>
 #
@@ -33,6 +37,8 @@
 # lets each have with the add-ons. KUBEHENGE_E2E_RESTARTS=report prints restarts while every
 # add-on is on instead of failing, for a host whose KVM lacks pause-loop exiting: there guests that
 # outnumber its CPUs starve each other, whatever their sizes.
+# KUBEHENGE_E2E_NODE_OS is the nodes' operating system as one word, such as rocky-10, whose
+# template has to exist; unset, the class's default applies. Talos nodes run Talos and take none.
 # KUBEHENGE_E2E_CNI chooses the CNI (required by kubeadm). KUBEHENGE_E2E_PODS and
 # KUBEHENGE_E2E_SERVICES set the cluster's pod and service ranges, which must not overlap the nodes'
 # network; unset, the distribution's defaults apply.
@@ -46,19 +52,28 @@
 # KUBEHENGE_E2E_BACKUP_TARGET names a backup target the management cluster was set up with whose
 # endpoint is on this machine, at an https:// address the cluster's nodes reach; the test serves
 # SeaweedFS's S3 gateway there with KUBEHENGE_E2E_BACKUP_CERT and KUBEHENGE_E2E_BACKUP_KEY, which
-# KUBEHENGE_E2E_BACKUP_CA, the target's CA, signed.
+# KUBEHENGE_E2E_BACKUP_CA, the target's CA, signed. The etcd snapshots go to the same target; the
+# management cluster restores etcd through the guest agent (etcd_restore; Talos clusters through
+# their Talos API either way), and Go builds the
+# kubehenge command that decrypts a snapshot.
 # KUBEHENGE_E2E_HA_GROUPS=1 switches the cloud controller manager's HA group labels on and off again,
 # with a management cluster that lets clusters choose them; the test makes an HA node-affinity rule
 # over every node, which needs Proxmox VE 9, and removes it again.
 # KUBEHENGE_E2E_NAMESPACE names one of the namespaces the management cluster's
 # extra_cluster_namespaces gives the web interface: the cluster is then created there with the
 # interface's own account, as the interface creates one in a namespace of its creator's choice, and
-# the namespace is left in place. Unset, the cluster gets a namespace of its own, created and deleted
-# with it.
+# the namespace is left in place; with the management cluster's headlamp_sign_in, the cluster gets
+# the shared Headlamp's sign-in identities there. Unset, the cluster gets a namespace of its own,
+# created and deleted with it, and none of those identities.
 # KUBEHENGE_E2E_VOLUME_SNAPSHOTS=1 switches volume snapshots on, takes a snapshot of a volume with
 # data, restores it into a new one and checks the data, and switches them off again, with a
 # management cluster that lets clusters take them, root@pam's password stored, and a
 # KUBEHENGE_E2E_STORAGE local to each node.
+# KUBEHENGE_E2E_TALOS_VERSION and KUBEHENGE_E2E_TALOS_UPGRADE are, for kubehenge-talos, the Talos
+# release the cluster starts on and a newer one its nodes are upgraded to in place, both with a
+# template in the template pool. Talos has no SSH, no systemd and no guest agent that runs commands:
+# the steps that read a node from inside read it through Talos's API, with talosctl and the
+# cluster's talosconfig, or are left out.
 set -eu
 
 class=${1:?usage: $0 <ClusterClass> <version> <upgrade version>}
@@ -76,6 +91,10 @@ load_balancer=${KUBEHENGE_E2E_LOAD_BALANCER:-metallb}
 # renovate: datasource=github-release-attachments depName=seaweedfs/seaweedfs
 SEAWEEDFS_VERSION=4.48
 SEAWEEDFS_SHA256=4a7d108384d044d95212d1342cdda9533fa55842c1c9b41f606ca3c8a9561124
+# etcdutl, which reads the etcd snapshots back.
+# renovate: datasource=github-releases depName=etcd-io/etcd
+ETCD_VERSION=v3.7.2
+ETCD_SHA256=3a3679bc51a4ee9d30bccea1da7cd4fe62c6fc1d2ca1255068d2c53bf3026135
 
 # shellcheck source=common.sh
 . "$(dirname "$0")/common.sh"
@@ -190,13 +209,13 @@ signed_in() {
 check_sign_in() {
     wl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d > "${work}/workload-ca"
     until_true 600 "the API server is ready" sh -c "KUBECONFIG=${work}/workload kubectl get --raw /readyz >/dev/null 2>&1"
-    # Requests without credentials reach kubeadm's health checks, which kubeadm needs, and nothing
-    # else; on RKE2 and k3s, nothing at all.
+    # Requests without credentials reach the health checks on kubeadm and Talos, whose join and API
+    # server probes need them, and nothing else; on RKE2 and k3s, nothing at all.
     server=$(wl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
     for path in /readyz /version; do
         code=$(curl -sS --cacert "${work}/workload-ca" -o /dev/null -w '%{http_code}' "${server}${path}")
         case ${distribution}${path} in
-            kubeadm/readyz) want=200 ;;
+            kubeadm/readyz | talos/readyz) want=200 ;;
             *) want=401 ;;
         esac
         [ "${code}" = "${want}" ] || fail "a request without credentials to ${path} got ${code}, not ${want}"
@@ -265,6 +284,24 @@ cni_variable=
 if [ -n "${KUBEHENGE_E2E_CNI:-}" ]; then
     cni_variable=$(printf '      - name: cni\n        value: %s\n' "${KUBEHENGE_E2E_CNI}")
 fi
+talos_variable=
+node_os=
+if [ "${distribution}" = talos ]; then
+    # Talos is its own OS: its class has no nodeOS variable.
+    [ -z "${KUBEHENGE_E2E_NODE_OS:-}" ] || fail "Talos nodes run Talos, not ${KUBEHENGE_E2E_NODE_OS}"
+    talos_from=${KUBEHENGE_E2E_TALOS_VERSION:?the Talos release the cluster starts on}
+    talos_to=${KUBEHENGE_E2E_TALOS_UPGRADE:?the Talos release its nodes are upgraded to}
+    talos_variable=$(printf '      - name: talosVersion\n        value: %s\n' "${talos_from}")
+    echo "nodes on Talos ${talos_from}"
+else
+    node_os=$(kubectl -n kubehenge-system get clusterclass "${class}" -o json |
+        jq -r '.spec.variables[] | select(.name == "nodeOS") | .schema.openAPIV3Schema.default | "\(.family)-\(.release)"')
+    if [ -n "${KUBEHENGE_E2E_NODE_OS:-}" ]; then
+        node_os=${KUBEHENGE_E2E_NODE_OS}
+        cni_variable=$(printf '%s\n      - name: nodeOS\n        value: {family: %s, release: "%s"}\n' "${cni_variable}" "${node_os%%-*}" "${node_os#*-}")
+    fi
+    echo "nodes on ${node_os}"
+fi
 oidc=$(jq -cn --arg i "${issuer}" --rawfile ca "${work}/ca.crt" '[{issuerURL: $i, clientID: "kubehenge-e2e", certificateAuthority: $ca}]')
 class_json=$(kubectl -n kubehenge-system get clusterclass "${class}" -o json)
 # Unless set, the worker gets the least Kubehenge lets it have with every add-on but Rancher on, so
@@ -326,6 +363,7 @@ ${network_spec}
       - name: workerMachine
         value: {memoryMiB: ${worker_memory}}
 ${cni_variable}
+${talos_variable}
       - name: oidc
         value: ${oidc}
       # The strictest level from the start, so that every component Kubehenge installs is seen to
@@ -410,8 +448,92 @@ printf '%s' "${nodes}" | jq -e '.items | all(any(.status.addresses[]; .type == "
     fail "nodes have no InternalIP"
 wl get nodes -L topology.kubernetes.io/region,topology.kubernetes.io/zone
 
-step "the nodes pass the CIS Kubernetes Benchmark"
-cis_benchmark
+if [ "${distribution}" = talos ]; then
+    # talos_addresses: the address of each of the cluster's machines, where its Talos API answers.
+    talos_addresses() {
+        kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name}" -o json |
+            jq -r '.items[] | [.status.addresses[]? | select(.type == "InternalIP") | .address][0] // empty'
+    }
+    # machine_address <Machine name>: that machine's address.
+    machine_address() {
+        kubectl -n "${ns}" get machine "$1" -o json | jq -r '[.status.addresses[]? | select(.type == "InternalIP") | .address][0] // empty'
+    }
+    # talos_api <address> <talosctl arguments...>: the Talos API of the node at the address, with the
+    # cluster's talosconfig, asked directly rather than through a control plane.
+    talos_api() {
+        talos_address=$1
+        shift
+        talosctl --talosconfig "${work}/talosconfig" --endpoints "${talos_address}" --nodes "${talos_address}" "$@"
+    }
+    # talos_read <address> <file...>: each line of the files on the node after its file's name, as
+    # grep -H prints them where the guest agent reads a node.
+    talos_read() {
+        read_address=$1
+        shift
+        for read_file in "$@"; do
+            # shellcheck disable=SC2310 # its failure is returned.
+            read_lines=$(talos_api "${read_address}" read "${read_file}") || return 1
+            printf '%s\n' "${read_lines}" | sed "s|^|${read_file}:|"
+        done
+    }
+    # talos_cpu <address>: the CPU the node sees, as the guest agent reads it elsewhere: its model,
+    # whether it has PCID, and the kernel's word on each vulnerability.
+    talos_cpu() {
+        # shellcheck disable=SC2310 # its failure is returned.
+        cpu_info=$(talos_api "$1" read /proc/cpuinfo) || return 1
+        printf '%s\n' "${cpu_info}" | grep -m1 'model name'
+        if printf '%s\n' "${cpu_info}" | grep -qw pcid; then echo 'pcid: yes'; else echo 'pcid: no'; fi
+        # shellcheck disable=SC2310 # its failure is returned.
+        cpu_flaws=$(talos_api "$1" list /sys/devices/system/cpu/vulnerabilities) || return 1
+        cpu_files=$(printf '%s\n' "${cpu_flaws}" | awk 'NR > 1 && $2 != "." { print "/sys/devices/system/cpu/vulnerabilities/" $2 }')
+        # shellcheck disable=SC2086 # one file per word
+        talos_read "$1" ${cpu_files}
+    }
+    # talos_release <address>: the Talos release the node at the address says it runs.
+    talos_release() {
+        # shellcheck disable=SC2310 # its failure is returned.
+        talos_version=$(talos_api "$1" version) || return 1
+        printf '%s\n' "${talos_version}" | awk '/^Server:/ { server = 1 } server && $1 == "Tag:" { print $2 }'
+    }
+    # machines_on_talos <release>: every Machine's node is Ready, its kubelet reporting the release.
+    machines_on_talos() {
+        talos_machines=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name}" -o json) || return 1
+        printf '%s' "${talos_machines}" | jq -e --arg os "Talos ($1)" '.items | length > 0 and all(.status.nodeInfo.osImage == $os and
+            any(.status.conditions[]?; .type == "NodeReady" and .status == "True"))' > /dev/null
+    }
+    # talos_annotation <name>: the Cluster's kubehenge.dev/<name> annotation, empty without one.
+    talos_annotation() {
+        kubectl -n "${ns}" get "cluster/${name}" -o json | jq -r --arg a "kubehenge.dev/$1" '.metadata.annotations[$a] // ""'
+    }
+
+    step "the nodes run Talos ${talos_from}, reached through Talos's API with the cluster's talosconfig"
+    talos_image=$(talos_annotation talos-image)
+    [ "${talos_image}" = "${talos_from}" ] || fail "the cluster's machines boot Talos '${talos_image}', not ${talos_from}"
+    # shellcheck disable=SC2310 # a failed read fails the step.
+    machines_on_talos "${talos_from}" || fail "the machines' kubelets do not all report Talos ${talos_from}"
+    # As the interface hands it out: the Secret Talos's providers keep beside the cluster.
+    talosconfig=$(kubectl -n "${ns}" get secret "${name}-talosconfig" -o jsonpath='{.data.talosconfig}')
+    [ -n "${talosconfig}" ] || fail "the cluster has no talosconfig"
+    (
+        umask 077
+        printf '%s' "${talosconfig}" | base64 -d > "${work}/talosconfig"
+    )
+    talos_info=$(talosctl --talosconfig "${work}/talosconfig" config info -o json) || fail "the talosconfig does not parse"
+    printf '%s' "${talos_info}" | jq -e '.context != "" and any(.roles[]?; . == "os:admin")' > /dev/null ||
+        fail "the talosconfig has no context, or no administrator's certificate: ${talos_info}"
+    for address in $(talos_addresses); do
+        # shellcheck disable=SC2310 # a node that does not answer fails the step.
+        release=$(talos_release "${address}") || fail "the Talos API of ${address} does not answer with the talosconfig"
+        [ "${release}" = "${talos_from}" ] || fail "the Talos API of ${address} reports '${release}', not ${talos_from}"
+    done
+fi
+
+# kube-bench carries no benchmark for Talos, whose components keep their configuration where none
+# of its checks look.
+if [ "${distribution}" != talos ]; then
+    step "the nodes pass the CIS Kubernetes Benchmark"
+    cis_benchmark
+fi
 
 step "the cluster runs its CNI, which enforces network policies"
 cni=$(kubectl -n "${ns}" get "cluster/${name}" -o json | jq -r '.spec.topology.variables[] | select(.name == "cni") | .value')
@@ -419,8 +541,8 @@ case ${cni} in
     cilium) wl -n kube-system rollout status daemonset/cilium --timeout=10m ;;
     calico) until_true 600 "calico-node" sh -c "KUBECONFIG=${work}/workload kubectl -n calico-system rollout status daemonset/calico-node --timeout=10s >/dev/null 2>&1" ;;
     canal) wl -n kube-system rollout status daemonset/rke2-canal --timeout=10m ;;
-    # k3s's flannel runs inside k3s itself.
-    flannel) ;;
+    # k3s's flannel runs inside k3s itself, Talos's as a DaemonSet of its own.
+    flannel) [ "${distribution}" != talos ] || wl -n kube-system rollout status daemonset/kube-flannel --timeout=10m ;;
     *) fail "no check for CNI ${cni}" ;;
 esac
 case ${cni} in
@@ -429,7 +551,7 @@ case ${cni} in
         printf '%s' "${nodes}" | jq -e '.items | all(.metadata.annotations | keys | any(startswith("flannel.alpha.coreos.com/")) | not)' > /dev/null ||
             fail "flannel runs beside ${cni}"
         ;;
-    # Canal and k3s's own CNI carry flannel by design.
+    # Canal, and k3s's and Talos's own CNI, carry flannel by design.
     *) ;;
 esac
 # agnhost_pod <namespace> <name> <args...>: an agnhost pod at Pod Security's restricted level,
@@ -469,8 +591,9 @@ wl -n e2e-policy wait --for=condition=Ready pod/server --timeout=10s > /dev/null
 wl delete namespace e2e-policy --wait=false
 
 step "the health page's identities see a crash loop, and nothing they need not"
-# identity_kubeconfig <health | health-logs>: a kubeconfig of the token Kubehenge's controller keeps
-# beside the cluster, written to a file only this user reads rather than passed as an argument.
+# identity_kubeconfig <health | health-logs | headlamp-issuer>: a kubeconfig of the token
+# Kubehenge's controller keeps beside the cluster, written to a file only this user reads rather
+# than passed as an argument.
 identity_kubeconfig() {
     identity_secret=$(kubectl -n "${ns}" get "secret/${name}-$1" -o json 2> /dev/null) || return 1
     (
@@ -514,6 +637,42 @@ crash_log=$(KUBECONFIG="${work}/health-logs" kubectl get --raw "/api/v1/namespac
     fail "the logs identity cannot read the pod's log"
 printf '%s' "${crash_log}" | grep -q no-such-command || fail "the pod's log does not tell why it stopped: ${crash_log}"
 wl delete namespace e2e-health --wait=false
+
+step "the shared Headlamp's sign-in identities, only for the interface's namespaces"
+headlamp_namespaces=$(kubectl -n kubehenge-system get deployment/kubehenge-controller -o json |
+    jq -r '[.spec.template.spec.containers[0].args[] | select(startswith("--headlamp-sign-in-namespaces=")) | split("=")[1] | split(",")[]] | join(" ")')
+signed_in=
+case " ${headlamp_namespaces} " in
+    *" ${ns} "*) signed_in=yes ;;
+    *) ;;
+esac
+if [ -n "${signed_in}" ]; then
+    until_true 300 "the Headlamp issuer's token beside the cluster" identity_kubeconfig headlamp-issuer
+    # The issuer makes the Headlamp account's tokens, as the interface does for a session, and
+    # nothing else; a token made acts as cluster-admin.
+    (
+        umask 077
+        KUBECONFIG="${work}/headlamp-issuer" kubectl -n kube-system create token kubehenge-headlamp --duration=10m > "${work}/headlamp-token" ||
+            fail "the issuer cannot make the Headlamp account's token"
+        KUBECONFIG="${work}/headlamp-issuer" kubectl config view --raw -o json |
+            jq --rawfile t "${work}/headlamp-token" '.users[0].user.token = ($t | rtrimstr("\n"))' > "${work}/headlamp-admin"
+    )
+    admin_can=$(KUBECONFIG="${work}/headlamp-admin" kubectl auth can-i '*' '*' --all-namespaces || true)
+    [ "${admin_can}" = yes ] || fail "the Headlamp account's token is not cluster-admin"
+    refused headlamp-issuer get secrets -n kube-system
+    refused headlamp-issuer list pods --all-namespaces
+    refused headlamp-issuer create serviceaccounts/kubehenge-health --subresource=token -n kube-system
+    refused headlamp-issuer create serviceaccounts/kubehenge-headlamp-issuer --subresource=token -n kube-system
+    mounted=$(wl -n kube-system get serviceaccount kubehenge-headlamp -o jsonpath='{.automountServiceAccountToken}')
+    [ "${mounted}" = false ] || fail "the Headlamp account's token is mounted into pods"
+else
+    found=$(wl -n kube-system get serviceaccount kubehenge-headlamp -o name --ignore-not-found)
+    [ -z "${found}" ] ||
+        fail "the Headlamp account is in a cluster outside the interface's namespaces (${headlamp_namespaces:-sign-in off})"
+    found=$(kubectl -n "${ns}" get "secret/${name}-headlamp-issuer" -o name --ignore-not-found)
+    [ -z "${found}" ] ||
+        fail "the Headlamp issuer's token is beside a cluster outside the interface's namespaces"
+fi
 
 step "the ingress controller serves a host name on the API address and every node"
 wl create namespace e2e-ingress
@@ -1055,10 +1214,12 @@ restarts() {
         jq -c '[.items[] | {key: "\(.metadata.namespace)/\(.metadata.name)", value: ([.status.containerStatuses[]?.restartCount] | add // 0)}] | from_entries'
 }
 # server_restarts: how often systemd has restarted the control planes' distribution service. k3s runs
-# every control-plane component in it, so it is the one place k3s's restarts show.
+# every control-plane component in it, so it is the one place k3s's restarts show. Talos has no
+# systemd: its control planes' components are the kubelet's static pods, counted with the others.
 case ${class} in
     kubehenge-rke2) server_unit=rke2-server ;;
     kubehenge-k3s) server_unit=k3s ;;
+    kubehenge-talos) server_unit= ;;
     *) server_unit=kubelet ;;
 esac
 servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
@@ -1068,16 +1229,24 @@ server_restarts() {
     printf '%s\n' "${counts}" | awk '{ n += $1 } END { print n + 0 }'
 }
 pods_before=$(restarts)
-# shellcheck disable=SC2310 # a failed count fails the step.
-servers_before=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
+if [ -n "${server_unit}" ]; then
+    # shellcheck disable=SC2310 # a failed count fails the step.
+    servers_before=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
+fi
 echo "memory before the add-ons:"
 pod_memory "${work}/workload"
 # What the guests are told of the CPU decides which mitigations their kernels run, and those cost
 # the most under nested virtualisation: the figure to read beside a slow run.
 echo "the CPU a control plane sees:"
-# shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
-on_machines "${servers%% *}" "grep -m1 'model name' /proc/cpuinfo; grep -qw pcid /proc/cpuinfo && echo 'pcid: yes' || echo 'pcid: no'; grep -H . /sys/devices/system/cpu/vulnerabilities/*" ||
-    echo "  cannot read it"
+if [ "${distribution}" = talos ]; then
+    cpu_address=$(machine_address "${servers%% *}")
+    # shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
+    talos_cpu "${cpu_address}" || echo "  cannot read it"
+else
+    # shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
+    on_machines "${servers%% *}" "grep -m1 'model name' /proc/cpuinfo; grep -qw pcid /proc/cpuinfo && echo 'pcid: yes' || echo 'pcid: no'; grep -H . /sys/devices/system/cpu/vulnerabilities/*" ||
+        echo "  cannot read it"
+fi
 
 step "Headlamp switched on"
 set_variable headlamp '{"enabled":true}'
@@ -1238,9 +1407,22 @@ prometheus=statefulset/prometheus-kube-prometheus-stack-prometheus
 until_true 1200 "Prometheus installed" sh -c "KUBECONFIG=${work}/workload kubectl -n monitoring get ${prometheus} >/dev/null 2>&1"
 wl -n monitoring rollout status "${prometheus}" --timeout=15m
 # Every component's job, each scraped with its server verified; k3s's components are in its
-# kubelet's metrics.
+# kubelet's metrics. Talos's controller manager and scheduler are scraped only on releases that pass
+# them a serving certificate of the cluster CA; before those they sign their own, which nothing
+# could verify.
 jobs="apiserver kubelet coredns kube-state-metrics node-exporter kube-etcd"
-[ "${distribution}" = k3s ] || jobs="${jobs} kube-controller-manager kube-scheduler kube-proxy"
+case ${distribution} in
+    k3s) ;;
+    talos)
+        jobs="${jobs} kube-proxy"
+        control_plane_pods=$(wl -n kube-system get pods -l 'component in (kube-controller-manager,kube-scheduler)' -o json)
+        if printf '%s' "${control_plane_pods}" |
+            jq -e '(.items | length > 0) and all(.items[]; any(.spec.containers[].command[]?; startswith("--tls-cert-file=")))' > /dev/null; then
+            jobs="${jobs} kube-controller-manager kube-scheduler"
+        fi
+        ;;
+    *) jobs="${jobs} kube-controller-manager kube-scheduler kube-proxy" ;;
+esac
 targets='/api/v1/namespaces/monitoring/services/http:kube-prometheus-stack-prometheus:9090/proxy/api/v1/targets?state=active'
 all_up() {
     # shellcheck disable=SC2310 # wl wraps one kubectl call; a failed request is only a retry.
@@ -1369,7 +1551,19 @@ short_line=e2e-short-lived-${suffix}
 log_pod short "${short_line}" '[]' 'true'
 wl -n e2e-logs wait --for=jsonpath='{.status.phase}'=Succeeded pod/short --timeout=5m
 until_true 300 "the short-lived pod's line in Loki" logged '{namespace="e2e-logs", pod="short", container="log", job="pods"}' "${short_line}"
-until_true 300 "the nodes' journals in Loki" logged '{job="journal"}' ""
+if [ "${distribution}" = talos ]; then
+    # Talos keeps no journal: it sends its services' and the kernel's logs to the collector on its
+    # node's loopback, and its API server's audit log lies in a directory of its own.
+    collector=$(wl -n logging-node get daemonset/alloy-node -o json)
+    audit_dir=$(printf '%s' "${collector}" | jq -r '.spec.template.spec.volumes[] | select(.name == "audit") | .hostPath.path')
+    [ "${audit_dir}" = /var/log/audit/kube ] || fail "the collector reads the audit log from '${audit_dir}', not /var/log/audit/kube"
+    printf '%s' "${collector}" | jq -e 'any(.spec.template.spec.volumes[]; .name == "journal") | not' > /dev/null ||
+        fail "the collector mounts a journal Talos does not keep"
+    until_true 300 "Talos's service logs in Loki" logged '{job="talos", unit="kubelet"}' ""
+    until_true 300 "the nodes' kernel logs in Loki" logged '{job="talos", unit="kernel"}' ""
+else
+    until_true 300 "the nodes' journals in Loki" logged '{job="journal"}' ""
+fi
 # The API server audited the pod's creation, after the collector started reading the log.
 until_true 300 "the API server's audit log in Loki" logged '{job="audit"} |= "e2e-logs"' '"name":"short"'
 wl -n e2e-logs delete pod/short --wait --timeout=2m
@@ -2192,10 +2386,12 @@ found_restarts() {
         fail "$*"
     fi
 }
-# shellcheck disable=SC2310 # a failed count fails the step.
-servers_after=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
-[ "${servers_after}" = "${servers_before}" ] ||
-    found_restarts "${server_unit} restarted $((servers_after - servers_before)) times on the control planes while the add-ons were installed"
+if [ -n "${server_unit}" ]; then
+    # shellcheck disable=SC2310 # a failed count fails the step.
+    servers_after=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
+    [ "${servers_after}" = "${servers_before}" ] ||
+        found_restarts "${server_unit} restarted $((servers_after - servers_before)) times on the control planes while the add-ons were installed"
+fi
 pods_after=$(restarts)
 restarted=$(jq -rn --argjson b "${pods_before}" --argjson a "${pods_after}" '$a | to_entries[] | select(.value > ($b[.key] // 0)) | "\(.key) \(.value - ($b[.key] // 0))"')
 if [ -n "${restarted}" ]; then
@@ -2207,9 +2403,16 @@ if [ -n "${restarted}" ]; then
         "\($m.namespace)/\($m.name): \(.reason // "?") exit \(.exitCode // "?") at \(.finishedAt // "?")"'
     for m in $(kubectl -n "${ns}" get machines -o jsonpath='{.items[*].metadata.name}'); do
         echo "pressure on ${m}:"
-        # shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
-        on_machines "${m}" "grep -H . /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io" ||
-            echo "  cannot read it"
+        if [ "${distribution}" = talos ]; then
+            pressure_address=$(machine_address "${m}")
+            # shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
+            talos_read "${pressure_address}" /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io ||
+                echo "  cannot read it"
+        else
+            # shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
+            on_machines "${m}" "grep -H . /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io" ||
+                echo "  cannot read it"
+        fi
     done
     found_restarts "containers restarted while the add-ons were installed (pod, restarts): ${restarted}"
 fi
@@ -2226,6 +2429,86 @@ system_images=$(wl -n kube-system get deployments,daemonsets,statefulsets -o jso
     (.spec.template.spec.initContainers // [])[], .spec.template.spec.containers[] | "kube-system/\($m.name) \(.image)"')
 unpinned=$(printf '%s\n%s\n' "${images}" "${system_images}" | grep -v -e '@sha256:[0-9a-f]\{64\}$' -e '^$' | sort -u)
 [ -z "${unpinned}" ] || fail "images named without a digest (pod, image): ${unpinned}"
+
+if [ "${distribution}" = talos ]; then
+    # With every add-on on, as a cluster in use is upgraded: the controller drains each node, has it
+    # reboot into the new release and lets it back, the control plane first, on the same machines.
+    step "Talos upgraded in place to ${talos_to}, node by node, with every add-on on"
+    machine_names() { kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name}" -o json | jq -c '[.items[].metadata.name] | sort'; }
+    talos_machines_before=$(machine_names)
+    talos_since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    talos_cordoned=' '
+    set_variable talosVersion "\"${talos_to}\""
+    # talos_upgraded: whether every node runs the release, none being upgraded any more; notes each
+    # node seen cordoned on the way, and fails the test at a failed upgrade.
+    talos_upgraded() {
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+        talos_cluster=$(kubectl -n "${ns}" get "cluster/${name}" -o json) || return 1
+        talos_failed=$(printf '%s' "${talos_cluster}" | jq -r '.metadata.annotations["kubehenge.dev/talos-upgrade-failed"] // ""')
+        [ -z "${talos_failed}" ] || fail "a node's Talos upgrade failed: ${talos_failed}"
+        # The API is down while the one control plane reboots.
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+        if talos_nodes=$(wl get nodes -o json 2> /dev/null); then
+            for talos_node in $(printf '%s' "${talos_nodes}" | jq -r '.items[] | select(.spec.unschedulable == true) | .metadata.name'); do
+                case ${talos_cordoned} in
+                    *" ${talos_node} "*) ;;
+                    *) talos_cordoned="${talos_cordoned}${talos_node} " ;;
+                esac
+            done
+        fi
+        printf '%s' "${talos_cluster}" | jq -e '.metadata.annotations["kubehenge.dev/talos-upgrading"] == null' > /dev/null || return 1
+        machines_on_talos "${talos_to}"
+    }
+    until_true 2700 "every node on Talos ${talos_to}" talos_upgraded
+    talos_machines_after=$(machine_names)
+    [ "${talos_machines_after}" = "${talos_machines_before}" ] ||
+        fail "the machines ${talos_machines_before} were replaced by ${talos_machines_after}, not upgraded in place"
+    talos_last=$(talos_annotation talos-upgraded)
+    case ${talos_last} in
+        *" to ${talos_to} at "*) ;;
+        *) fail "kubehenge.dev/talos-upgraded records '${talos_last}', not an upgrade to ${talos_to}" ;;
+    esac
+    # A node is cordoned only while it is upgraded, which a poll can miss; its kubelet tells of it
+    # too.
+    not_schedulable=$(wl get events -A --field-selector reason=NodeNotSchedulable -o json |
+        jq -r --arg s "${talos_since}" '[.items[] | select((.lastTimestamp // .eventTime // "") >= $s) | .involvedObject.name] | unique | join(" ")')
+    for talos_node in $(wl get nodes -o jsonpath='{.items[*].metadata.name}'); do
+        case " ${talos_cordoned} ${not_schedulable} " in
+            *" ${talos_node} "*) ;;
+            *) fail "node ${talos_node} was upgraded without being drained" ;;
+        esac
+    done
+    cordoned=$(wl get nodes -o json | jq -r '[.items[] | select(.spec.unschedulable == true) | .metadata.name] | join(" ")')
+    [ -z "${cordoned}" ] || fail "nodes left cordoned after their upgrade: ${cordoned}"
+    for address in $(talos_addresses); do
+        # shellcheck disable=SC2310 # a node that does not answer fails the step.
+        release=$(talos_release "${address}") || fail "the Talos API of ${address} does not answer"
+        [ "${release}" = "${talos_to}" ] || fail "the Talos API of ${address} reports '${release}', not ${talos_to}"
+    done
+    # Machines made before the next Kubernetes upgrade still boot the release before, and the
+    # controller upgrades them in turn.
+    talos_image=$(talos_annotation talos-image)
+    [ "${talos_image}" = "${talos_from}" ] || fail "new machines boot Talos '${talos_image}' before a Kubernetes upgrade, not ${talos_from}"
+    # releases_deployed: every add-on's Helm release is deployed and ready.
+    releases_deployed() {
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+        proxies=$(kubectl -n "${ns}" get helmreleaseproxies -l "cluster.x-k8s.io/cluster-name=${name}" -o json) || return 1
+        printf '%s' "${proxies}" | jq -e '.items | length > 0 and all(.status.status == "deployed" and
+            any(.status.conditions[]?; .type == "Ready" and .status == "True"))' > /dev/null
+    }
+    # workloads_ready: every Deployment, StatefulSet and DaemonSet in the cluster has its pods ready.
+    workloads_ready() {
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+        workloads=$(wl get deployments,statefulsets,daemonsets -A -o json) || return 1
+        printf '%s' "${workloads}" | jq -e '.items | all(if .kind == "DaemonSet"
+            then (.status.numberReady // 0) == .status.desiredNumberScheduled
+            else (.status.readyReplicas // 0) == (.spec.replicas // 1) end)' > /dev/null
+    }
+    until_true 900 "every add-on's release deployed after the upgrade" releases_deployed
+    until_true 900 "every workload ready after the upgrade" workloads_ready
+    until_true 600 "monitoring reaches every component after the upgrade" all_up
+    wl get nodes -o wide
+fi
 
 step "every add-on switched off at once"
 set_variable headlamp '{"enabled":false}'
@@ -2275,6 +2558,163 @@ kubectl -n "${ns}" get secret "${name}-backup-keys" > /dev/null || fail "the bac
 s3 -o /dev/null "${tarball}" -H 'x-amz-server-side-encryption-customer-algorithm: AES256' \
     -H "x-amz-server-side-encryption-customer-key: ${sse_key}" -H "x-amz-server-side-encryption-customer-key-MD5: ${sse_md5}" ||
     fail "the backup went from the store with Velero"
+
+step "etcd snapshots: one taken into the S3 store, encrypted, and read back"
+# A ConfigMap rather than a Secret, which the cluster encrypts in etcd: the database holds it in
+# plain text, so it is seen there and must not be seen in the store.
+etcd_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+wl -n default create configmap e2e-before-snapshot --from-literal=marker="${etcd_marker}"
+set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2}"
+# As the interface's Take a snapshot now asks for one.
+now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+kubectl -n "${ns}" annotate cluster "${name}" --overwrite \
+    "kubehenge.dev/etcd-snapshot-requested={\"by\":\"e2e\",\"at\":\"${now}\"}"
+# snapshot_taken: whether the controller has taken the snapshot asked for; one it tried and failed
+# fails the test with why.
+snapshot_taken() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    cluster_json=$(kubectl -n "${ns}" get cluster "${name}" -o json) || return 1
+    if printf '%s' "${cluster_json}" | jq -e '.metadata.annotations["kubehenge.dev/etcd-snapshot-requested"]' > /dev/null; then
+        return 1
+    fi
+    if ! printf '%s' "${cluster_json}" |
+        jq -e '.status.conditions[]? | select(.type == "EtcdSnapshotSucceeded" and .status == "True")' > /dev/null; then
+        printf '%s' "${cluster_json}" | jq '.status.conditions[]? | select(.type == "EtcdSnapshotSucceeded")' >&2
+        kubectl -n kubehenge-system logs deployment/kubehenge-controller --tail=100 >&2
+        fail "the etcd snapshot was not taken"
+    fi
+}
+until_true 900 "an etcd snapshot taken" snapshot_taken
+snapshot=$(kubectl -n "${ns}" get cluster "${name}" -o json | jq -c '.metadata.annotations["kubehenge.dev/etcd-snapshot"] | fromjson')
+snapshot_name=$(printf '%s' "${snapshot}" | jq -r .name)
+etcd_prefix=$(printf '%s' "${target}" | jq -r --arg own "${ns}.${name}/etcd" 'if (.prefix // "") == "" then $own else .prefix + "/" + $own end')
+keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
+[ "${keys}" = "${etcd_prefix}/${snapshot_name}" ] || fail "the store's etcd snapshots are not the one taken: ${keys}"
+s3 -o "${work}/snapshot.db.age" "${s3_endpoint}/${bucket}/${etcd_prefix}/${snapshot_name}"
+header=$(head -c 21 "${work}/snapshot.db.age")
+[ "${header}" = age-encryption.org/v1 ] || fail "the etcd snapshot in the store is not encrypted with age"
+grep -r -q -F "${etcd_marker}" "${work}/s3-data" && fail "the store keeps the etcd snapshot unencrypted"
+kubectl -n "${ns}" get secret "${name}-backup-keys" -o jsonpath='{.data.etcd-snapshot-identity}' | base64 -d > "${work}/etcd-identity"
+go -C "$(dirname "$0")/../.." run ./cmd/kubehenge etcd-snapshot decrypt --identity "${work}/etcd-identity" \
+    "${work}/snapshot.db.age" "${work}/snapshot.db"
+sum=$(sha256sum "${work}/snapshot.db" | cut -d ' ' -f 1)
+taken_sum=$(printf '%s' "${snapshot}" | jq -r .sha256)
+[ "${sum}" = "${taken_sum}" ] || fail "the decrypted snapshot does not have the SHA-256 it was taken with"
+curl -sS --fail -L -o "${work}/etcd.tar.gz" \
+    "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz"
+printf '%s  %s\n' "${ETCD_SHA256}" "${work}/etcd.tar.gz" | sha256sum -c - > /dev/null ||
+    fail "etcd's download does not have its SHA-256"
+tar -xzf "${work}/etcd.tar.gz" -C "${work}" --strip-components=1 "etcd-${ETCD_VERSION}-linux-amd64/etcdutl"
+status=$("${work}/etcdutl" snapshot status "${work}/snapshot.db" -w json) || fail "etcdutl cannot read the snapshot"
+if [ "${distribution}" = talos ]; then
+    # Talos's API streams the snapshot without telling the store's revision.
+    printf '%s' "${snapshot}" | jq -e 'has("revision") | not' > /dev/null ||
+        fail "the snapshot records a revision Talos never told: ${snapshot}"
+else
+    # The revision recorded is etcd's when the snapshot began; writes while it streamed add to it.
+    db_revision=$(printf '%s' "${status}" | jq .revision)
+    taken_revision=$(printf '%s' "${snapshot}" | jq .revision)
+    [ "${db_revision}" -ge "${taken_revision}" ] ||
+        fail "the snapshot is older than the revision recorded for it: ${status}"
+fi
+grep -a -q -F "${etcd_marker}" "${work}/snapshot.db" || fail "the snapshot does not hold the ConfigMap made before it"
+
+# etcd_restore_requested: asks for a restore from the snapshot, as the interface's Restore does.
+etcd_restore_requested() {
+    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    kubectl -n "${ns}" annotate cluster "${name}" \
+        "kubehenge.dev/etcd-restore={\"snapshot\":\"${snapshot_name}\",\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"by\":\"e2e\",\"at\":\"${now}\"}"
+}
+if [ "${distribution}" = talos ]; then
+    step "etcd restored from the snapshot through the Talos API, the control planes wiped and joining it again"
+else
+    step "etcd restored from the snapshot through the guest agent"
+fi
+control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+wl -n default delete configmap e2e-before-snapshot
+wl -n default create configmap e2e-after-snapshot --from-literal=marker=after
+etcd_restore_requested
+# etcd_restored: whether the restore has ended and the controller let the cluster go; a failed one
+# fails the test with why.
+etcd_restored() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    cluster_json=$(kubectl -n "${ns}" get cluster "${name}" -o json) || return 1
+    restore=$(printf '%s' "${cluster_json}" | jq -c '.metadata.annotations["kubehenge.dev/etcd-restore-status"] // "{}" | fromjson')
+    case $(printf '%s' "${restore}" | jq -r '.phase // ""') in
+        Succeeded) ;;
+        Failed)
+            kubectl -n kubehenge-system logs deployment/kubehenge-controller --tail=100 >&2
+            fail "the etcd restore failed: ${restore}"
+            ;;
+        *) return 1 ;;
+    esac
+    printf '%s' "${cluster_json}" | jq -e '(.metadata.annotations["kubehenge.dev/etcd-restore"] | not) and (.spec.paused // false | not)' > /dev/null
+}
+until_true 2400 "etcd restored" etcd_restored
+until_true 1200 "cluster ${name} available after the restore" available_or_failed
+wl wait --for=condition=Ready nodes --all --timeout=10m
+until_true 300 "the ConfigMap made before the snapshot back" wl -n default get configmap e2e-before-snapshot
+# shellcheck disable=SC2310 # absent's answer is what is checked.
+absent wl -n default get configmap e2e-after-snapshot || fail "a ConfigMap made after the snapshot outlived the restore"
+wl -n default delete configmap e2e-before-snapshot
+keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
+[ "${keys}" = "${etcd_prefix}/${snapshot_name}" ] || fail "the restore left objects in the store: ${keys}"
+if [ "${distribution}" = talos ]; then
+    # Talos's control planes join the restored etcd again rather than being made anew.
+    restored_control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+    [ "${restored_control_planes}" = "${control_planes}" ] ||
+        fail "the restore replaced control planes: ${control_planes} became ${restored_control_planes}"
+    first_control_plane=$(machine_address "${control_planes%% *}")
+    # etcd_rejoined: whether every control plane is a voting member of the restored etcd again.
+    etcd_rejoined() {
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+        members=$(talos_api "${first_control_plane}" etcd members) || return 1
+        voting=$(printf '%s\n' "${members}" | awk 'NR > 1 && $NF == "false" { n++ } END { print n + 0 }')
+        wanted=$(printf '%s' "${control_planes}" | wc -w)
+        [ "${voting}" -eq "${wanted}" ]
+    }
+    until_true 900 "every control plane a member of the restored etcd" etcd_rejoined
+fi
+
+case ${distribution} in
+    rke2 | k3s)
+        step "${distribution}'s own etcd snapshots uploaded to the same store, and switched off"
+        # The drop-in is part of the servers' bootstrap, so switching the upload replaces them.
+        servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+        servers_replaced() {
+            kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o json |
+                jq -e --arg old " ${servers} " '(.items | length > 0) and all(.items[]; .metadata.name as $name |
+                    .status.phase == "Running" and (($old | contains(" " + $name + " ")) | not))' > /dev/null
+        }
+        set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2,\"distributionUpload\":true}"
+        until_true 300 "the upload's Secret in kube-system" wl -n kube-system get secret kubehenge-etcd-s3
+        upload_secret=$(wl -n kube-system get secret kubehenge-etcd-s3 -o json)
+        printf '%s' "${upload_secret}" | jq -e '.type == "etcd.k3s.cattle.io/s3-config-secret" and
+            (.data["etcd-s3-skip-ssl-verify"] | @base64d) == "false" and (.data["etcd-s3-insecure"] | @base64d) == "false" and
+            (.data["etcd-s3-endpoint-ca"] | @base64d | length > 0)' > /dev/null ||
+            fail "the upload's Secret does not verify the store's certificate"
+        until_true 1800 "the control planes replaced for the upload" servers_replaced
+        kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
+        upload_prefix=$(printf '%s' "${target}" | jq -r --arg own "${ns}.${name}/${distribution}-etcd" 'if (.prefix // "") == "" then $own else .prefix + "/" + $own end')
+        servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+        # The server reads the drop-in and the Secret, so the snapshot asked for goes to the store too.
+        # shellcheck disable=SC2310 # a failed save fails the test with the reason.
+        on_machines "${servers%% *}" "PATH=\$PATH:/usr/local/bin:/opt/rke2/bin ${distribution} etcd-snapshot save --name e2e-upload" > /dev/null ||
+            fail "${distribution} could not take a snapshot of its own"
+        uploaded() {
+            # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+            listing=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${upload_prefix}/") || return 1
+            printf '%s' "${listing}" | grep -q "<Key>${upload_prefix}/e2e-upload"
+        }
+        until_true 300 "${distribution}'s snapshot in the store" uploaded
+        servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+        set_variable etcdSnapshots "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
+        until_true 300 "the upload's Secret gone" absent wl -n kube-system get secret kubehenge-etcd-s3
+        until_true 1800 "the control planes replaced without the upload" servers_replaced
+        kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
+        ;;
+    *) set_variable etcdSnapshots "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}" ;;
+esac
 kill "${s3_pid}"
 s3_pid=
 # removed <kubectl get...>: whether the object is gone, or its kind with it, as cert-manager's own
@@ -2353,6 +2793,11 @@ step "scale workers back to 1"
 workers 1
 
 step "upgrade to ${upgrade}"
+if [ "${distribution}" = talos ]; then
+    # A worker the scaling made booted the release before, and is upgraded in place first.
+    until_true 2700 "every node on Talos ${talos_to} before the upgrade" talos_upgraded
+    talos_last=$(talos_annotation talos-upgraded)
+fi
 old_servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
 kubectl -n "${ns}" patch "cluster/${name}" --type=merge -p "{\"spec\":{\"topology\":{\"version\":\"${upgrade}\"}}}"
 case ${class} in
@@ -2408,6 +2853,15 @@ kubelet=${upgrade%%+*}
 until_true 3600 "every node on ${kubelet}" sh -c "KUBECONFIG=${work}/workload kubectl get nodes -o json | jq -e --arg v '${kubelet}' '(.items | length == 2) and (.items | all(.status.nodeInfo.kubeletVersion | startswith(\$v))) and (.items | all(any(.status.conditions[]; .type == \"Ready\" and .status == \"True\")))' >/dev/null"
 kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
 wl get nodes -o wide
+if [ "${distribution}" = talos ]; then
+    # The upgrade replaced every machine, so its new ones were cloned from the release the nodes
+    # run and need no upgrade in place.
+    talos_image=$(talos_annotation talos-image)
+    [ "${talos_image}" = "${talos_to}" ] || fail "the upgrade's machines boot Talos '${talos_image}', not ${talos_to}"
+    until_true 600 "every machine on Talos ${talos_to} after the upgrade" machines_on_talos "${talos_to}"
+    talos_now=$(talos_annotation talos-upgraded)
+    [ "${talos_now}" = "${talos_last}" ] || fail "a machine the upgrade made was upgraded in place: ${talos_now}"
+fi
 # The new control-plane nodes have to carry the authentication configuration too.
 check_sign_in
 # The distribution's own Gateway API chart takes over what its Traefik CRD chart shipped before,
@@ -2417,6 +2871,36 @@ if [ -n "${gateway_api_chart}" ]; then
 fi
 until_true 300 "the Gateway API's objects after the upgrade, each held once" gateway_api_held
 until_true 300 "Traefik's Gateway is programmed after the upgrade" gateway_programmed
+
+# Talos is its own OS, with no shell for the guest agent to run the check in; its nodes' release is
+# checked through the Talos API above.
+if [ "${distribution}" != talos ]; then
+    step "every node runs ${node_os} with SELinux enforcing, and nothing it ran was denied"
+    # After every add-on, the upgrade and the restore, so that a denial any of them met shows here.
+    case ${node_os} in
+        almalinux-*) os_id=almalinux ;;
+        rocky-*) os_id=rocky ;;
+        leap-*) os_id=opensuse-leap ;;
+        *) fail "no operating system ID known for ${node_os}" ;;
+    esac
+    selinux_check="
+        . /etc/os-release
+        case \"\${ID} \${VERSION_ID}\" in
+            '${os_id} ${node_os#*-}' | '${os_id} ${node_os#*-}'.*) ;;
+            *) echo \"runs \${ID} \${VERSION_ID}\"; exit 1 ;;
+        esac
+        [ \"\$(getenforce)\" = Enforcing ] || { echo \"SELinux is \$(getenforce)\"; exit 1; }
+        if touch /usr/.kubehenge-e2e 2> /dev/null; then rm -f /usr/.kubehenge-e2e; echo '/usr is writable'; exit 1; fi
+        denials=\$({ journalctl -k -b --no-pager -q; cat /var/log/audit/audit.log 2>/dev/null; } | grep 'avc: *denied' || true)
+        [ -z \"\${denials}\" ] || { printf '%s\n' \"\${denials}\" | tail -n 20; exit 1; }"
+    for m in $(kubectl -n "${ns}" get machines -o jsonpath='{.items[*].metadata.name}'); do
+        # shellcheck disable=SC2310 # its output says why, which the failure reports.
+        if ! out=$(on_machines "${m}" "${selinux_check}"); then
+            printf '%s\n' "${out}" >&2
+            fail "${m} does not enforce SELinux on ${node_os}, or something it ran was denied"
+        fi
+    done
+fi
 
 step "a dead worker is replaced"
 # The class's 300 s before a not-ready node counts as dead only adds waiting here; the integration
@@ -2474,6 +2958,15 @@ elif ! kubectl delete namespace "${ns}" --wait --timeout=5m; then
     # Its conditions say what is left in it and whose finalizers hold that.
     left=$(kubectl get namespace "${ns}" -o jsonpath='{range .status.conditions[?(@.status=="True")]}{.message}; {end}' || true)
     fail "namespace ${ns} is still there: ${left}"
+fi
+if [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
+    # What was kept beside the cluster goes with it, Cluster API's Secrets and the controller's,
+    # which carry no label of the cluster. A failed request is not an empty list.
+    secrets_gone() {
+        secrets=$(kubectl -n "${ns}" get secrets -o json) || return 1
+        printf '%s' "${secrets}" | jq -e --arg n "${name}" '[.items[] | select(.metadata.name | startswith($n + "-"))] | length == 0' > /dev/null
+    }
+    until_true 300 "the cluster's Secrets in ${ns} removed" secrets_gone
 fi
 
 # Another test may be using the class on the same management cluster.

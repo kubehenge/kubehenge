@@ -36,6 +36,7 @@ type Accounts interface {
 	Resources
 	Guests
 	Removals
+	Upgraders
 }
 
 // SignIns are the Proxmox VE sign-ins the interface's sessions rest on.
@@ -103,6 +104,9 @@ type Server struct {
 	// controller's automatic upgrades read; nil leaves their version to be typed in.
 	Releases     provisioner.Releases
 	releaseCache releaseCache
+	// TalosReleases lists the Talos releases the Image Factory builds; nil offers only those the
+	// template pool has.
+	TalosReleases func(ctx context.Context) ([]string, error)
 	// Headlamp is set when a shared Headlamp server runs beside the interface.
 	Headlamp *Headlamp
 	// WorkloadPool is the Proxmox VE pool every cluster's own pool nests under.
@@ -122,7 +126,9 @@ type Server struct {
 	// ConnectWorkload reaches a workload cluster's API server with the token of one of Kubehenge's
 	// identities in it; unset, it connects over HTTPS trusting the cluster's CA alone.
 	ConnectWorkload func(server string, ca []byte, token string) (*Workload, error)
-	Log             *slog.Logger
+	// OpenStore reaches the backup targets clusters' etcd snapshots are in; unset, over HTTPS.
+	OpenStore provisioner.OpenStore
+	Log       *slog.Logger
 
 	sessions   *sessions
 	limiter    *limiter
@@ -180,6 +186,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/appliance/upgrades", s.signedIn(s.upgradesStatus))
 	mux.HandleFunc("POST /api/appliance/upgrades", s.signedIn(s.upgrade))
 	mux.HandleFunc("PUT /api/appliance/upgrades/settings", s.signedIn(s.upgradeSettings))
+	mux.HandleFunc("PUT /api/appliance/upgrades/management", s.signedIn(s.keepUnattended))
+	mux.HandleFunc("DELETE /api/appliance/upgrades/management", s.signedIn(s.forgetUnattended))
 	mux.HandleFunc("GET /api/templates", s.signedIn(s.listTemplates))
 	mux.HandleFunc("POST /api/templates", s.signedIn(s.createTemplate))
 	mux.HandleFunc("DELETE /api/templates/{vmid}", s.signedIn(s.deleteTemplate))
@@ -189,21 +197,10 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/classes", s.managed(s.classes))
 	mux.HandleFunc("GET /api/versions/{distribution}", s.signedIn(s.versions))
+	mux.HandleFunc("GET /api/talos/releases", s.signedIn(s.talosReleases))
 	mux.HandleFunc("GET /api/clusters", s.managed(s.listClusters))
 	mux.HandleFunc("POST /api/clusters", s.managed(s.createCluster))
-	mux.HandleFunc("GET /api/clusters/{namespace}/{name}", s.managed(s.getCluster))
-	mux.HandleFunc("PATCH /api/clusters/{namespace}/{name}", s.managed(s.changeCluster))
-	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}", s.managed(s.deleteCluster))
-	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/kubeconfig", s.managed(s.kubeconfig))
-	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/health", s.managed(s.clusterHealth))
-	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/pods/{podNamespace}/{pod}/logs", s.managed(s.podLogs))
-	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/backups", s.managed(s.clusterBackups))
-	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/backups", s.managed(s.backUp))
-	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/restores", s.managed(s.restore))
-	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/certificates/ca", s.managed(s.ingressCA))
-	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.clusterCredential))
-	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.storeClusterCredential))
-	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.removeClusterCredential))
+	s.clusterRoutes(mux)
 	mux.HandleFunc("GET /api/credentials/{purpose}", s.managed(s.applianceCredential))
 	mux.HandleFunc("PUT /api/credentials/{purpose}", s.managed(s.storeApplianceCredential))
 	mux.HandleFunc("DELETE /api/credentials/{purpose}", s.managed(s.removeApplianceCredential))
@@ -213,6 +210,30 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("/", s.assets)
 	return securityHeaders(mux)
+}
+
+// clusterRoutes are the routes of one cluster.
+func (s *Server) clusterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}", s.managed(s.getCluster))
+	mux.HandleFunc("PATCH /api/clusters/{namespace}/{name}", s.managed(s.changeCluster))
+	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}", s.managed(s.deleteCluster))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/kubeconfig", s.managed(s.kubeconfig))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/talosconfig", s.managed(s.talosconfig))
+	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/talos-upgrade-failure", s.managed(s.retryTalosUpgrade))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/health", s.managed(s.clusterHealth))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/pods/{podNamespace}/{pod}/logs", s.managed(s.podLogs))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/backups", s.managed(s.clusterBackups))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/backups", s.managed(s.backUp))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/restores", s.managed(s.restore))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/certificates/ca", s.managed(s.ingressCA))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/etcd-snapshots", s.managed(s.etcdSnapshots))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/etcd-snapshots", s.managed(s.takeEtcdSnapshot))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/etcd-snapshots/{snapshot}", s.managed(s.downloadEtcdSnapshot))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/etcd-snapshots/{snapshot}/restore-plan", s.managed(s.etcdRestorePlan))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/etcd-restores", s.managed(s.restoreEtcd))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.clusterCredential))
+	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.storeClusterCredential))
+	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.removeClusterCredential))
 }
 
 func (s *Server) init() {

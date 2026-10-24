@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
 import { describe as describePolicy, windowProblems } from "./ClusterUpgrades";
-import { fakeServer } from "./fake-server";
+import { fakeServer, type Answer } from "./fake-server";
 
 const cluster = {
   namespace: "clusters",
@@ -43,6 +43,9 @@ describe("cluster upgrades", () => {
     expect(describePolicy({ mode: "patch" }, true)).toBe(
       "Patch releases and new node images, every day from 02:00 for 4 h (UTC)",
     );
+    expect(describePolicy({ mode: "patch" }, true, "talos")).toBe(
+      "Kubernetes patch releases and Talos patch releases, every day from 02:00 for 4 h (UTC)",
+    );
   });
 
   it("switches the node image refresh off, and keeps a window while it is on", async () => {
@@ -66,7 +69,7 @@ describe("cluster upgrades", () => {
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { upgrades: { mode: "off", nodeImages: false } } }));
   });
 
-  it("offers no node image refresh for Talos", async () => {
+  it("moves Talos nodes to new Talos patch releases in the window", async () => {
     window.history.replaceState(null, "", "/clusters/clusters/web/options");
     const talos = { ...cluster, class: "kubehenge-talos", distribution: "talos", version: "v1.36.5" };
     fakeServer({
@@ -75,10 +78,70 @@ describe("cluster upgrades", () => {
     });
     const user = userEvent.setup({ delay: null });
     render(<App />);
-    await user.click(await screen.findByRole("button", { name: "Edit automatic upgrades" }));
+    await expect(
+      screen.findByText("Talos patch releases, every day from 02:00 for 4 h (UTC)"),
+    ).resolves.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Edit automatic upgrades" }));
     const dialog = screen.getByRole("dialog", { name: "Automatic upgrades" });
     expect(within(dialog).queryByLabelText("Move the nodes to new template builds")).not.toBeInTheDocument();
-    expect(within(dialog).queryByLabelText("From")).not.toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Move the nodes to new Talos patch releases")).toBeChecked();
+    expect(within(dialog).getByLabelText("Move the nodes to new Talos patch releases")).toHaveAccessibleDescription(
+      /upgraded to it in place inside the window/u,
+    );
+    expect(within(dialog).getByLabelText("From")).toHaveValue("02:00");
+  });
+
+  it("upgrades a Talos cluster's nodes one minor version at a time, as the server allows", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const talos = {
+      ...cluster,
+      class: "kubehenge-talos",
+      distribution: "talos",
+      version: "v1.36.5",
+      variables: { talosVersion: "v1.14.2" },
+      talos: { version: "v1.14.2" },
+    };
+    let answer: Answer = { status: 422, body: { error: "talos v1.15.3 does not run kubernetes v1.36.5" } };
+    const calls = fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: talos },
+      "GET /api/talos/releases": {
+        body: {
+          templates: ["v1.14.2"],
+          releases: ["v1.16.0", "v1.15.3", "v1.14.4"],
+          default: "v1.14.4",
+          kubernetes: { "v1.15.3": ["1.35", "1.36"] },
+        },
+      },
+      "PATCH /api/clusters/clusters/web": () => answer,
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const row = within(await screen.findByRole("row", { name: /^Talos release v1\.14\.2/u }));
+    await user.click(row.getByRole("button", { name: "Upgrade Talos" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Upgrade Talos on web" }));
+    expect(dialog.getByText(/one minor version at a time/u)).toBeInTheDocument();
+    expect(dialog.getByText(/upgraded in place, one at a time/u)).toBeInTheDocument();
+    // A newer patch of its minor version or the next minor's newest; not two minors on.
+    await waitFor(() =>
+      expect(
+        within(dialog.getByLabelText("Talos release"))
+          .getAllByRole("option")
+          .map((o) => o.textContent),
+      ).toStrictEqual(["v1.14.2 (running)", "v1.15.3", "v1.14.4"]),
+    );
+    await user.selectOptions(dialog.getByLabelText("Talos release"), "v1.15.3");
+    await user.click(dialog.getByRole("button", { name: "Upgrade" }));
+    await expect(dialog.findByRole("alert")).resolves.toHaveTextContent(
+      "Talos v1.15.3 does not run kubernetes v1.36.5.",
+    );
+    answer = { status: 200, body: talos };
+    await user.click(dialog.getByRole("button", { name: "Upgrade" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls.filter((c) => c.key === "PATCH /api/clusters/clusters/web").map((c) => c.body)).toStrictEqual([
+      { variables: { talosVersion: "v1.15.3" } },
+      { variables: { talosVersion: "v1.15.3" } },
+    ]);
   });
 
   it("shows which template builds the nodes run and when they move on", async () => {
@@ -92,7 +155,11 @@ describe("cluster upgrades", () => {
             refreshes: true,
             since: "2026-10-09T00:00:00Z",
             builds: [
-              { template: "kubehenge-ubuntu-26.04", build: "build-202610080000", built: "2026-10-08T00:00:00Z" },
+              {
+                template: "kubehenge-rke2-almalinux-10",
+                build: "build-202610080000",
+                built: "2026-10-08T00:00:00Z",
+              },
             ],
             last: "build-202610010000 to build-202610080000 at 2026-10-09T02:10:00Z",
             next: { build: "build-202610150000", due: "2026-10-17T02:00:00Z" },
@@ -102,7 +169,7 @@ describe("cluster upgrades", () => {
     });
     render(<App />);
     await expect(
-      screen.findByText(`kubehenge-ubuntu-26.04, the build of ${built("2026-10-08T00:00:00Z")}`),
+      screen.findByText(`kubehenge-rke2-almalinux-10, the build of ${built("2026-10-08T00:00:00Z")}`),
     ).resolves.toBeInTheDocument();
     expect(
       screen.getByText(`${built("2026-10-17T02:00:00Z")}, to the build of ${built("2026-10-15T00:00:00Z")}`),

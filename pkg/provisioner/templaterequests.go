@@ -30,19 +30,13 @@ const (
 	// the ConfigMap that holds its schedule and how its last run went.
 	TemplateRefreshName = "kubehenge-template-refresh"
 	// TemplateRequestsName is the ConfigMap the interface asks for builds in: a key per request,
-	// RefreshRequest or a line (CloudImageLine, KubeadmLinePrefix and a version), whose value is a
-	// TemplateRequest.
+	// RefreshRequest or a line (RequestLine), whose value is a TemplateRequest.
 	TemplateRequestsName = "kubehenge-template-requests"
 	// TemplateRefreshLabel marks the refresh's Jobs, whoever started them.
 	TemplateRefreshLabel = "kubehenge.dev/template-refresh"
 
 	// RefreshRequest asks for a refresh of every line now, as the schedule would.
 	RefreshRequest = "refresh"
-	// CloudImageLine asks for the template RKE2 and k3s share, if it has no build.
-	CloudImageLine = "cloud-image"
-	// KubeadmLinePrefix and a Kubernetes version ask for that version's kubeadm template, if it
-	// has no build.
-	KubeadmLinePrefix = "kubeadm-"
 )
 
 // The keys of TemplateRefreshName's ConfigMap. The chart writes the schedule's, the refresh its
@@ -115,31 +109,46 @@ type TemplateRequest struct {
 	At time.Time `json:"at"`
 }
 
-// RequestLine is the request key of a missing line, or "" for none Kubehenge builds.
-func RequestLine(req templates.Request) string {
-	switch req.Distribution {
-	case templates.RKE2, templates.K3s:
-		return CloudImageLine
-	case templates.Kubeadm:
-		return KubeadmLinePrefix + req.KubernetesVersion
-	case templates.Talos:
+// RequestLine is the request key of a missing line, or "" for none Kubehenge builds: the line's
+// name without the kubehenge- every line starts with, so talos-<release> for a Talos release's
+// template, which no node OS is part of.
+func RequestLine(req *templates.Request) string {
+	t, err := templates.Plan(req)
+	if err != nil {
+		return ""
 	}
-	return ""
+	return strings.TrimPrefix(t.LineName, lineNamePrefix)
 }
 
-// ParseRequestLine is the template request a line key names.
+const lineNamePrefix = "kubehenge-"
+
+// ParseRequestLine is the template request a line key names: <distribution>-<node OS>, for kubeadm
+// <distribution>-<Kubernetes version>-<node OS>, and for Talos, which is its own OS,
+// talos-<Talos release>.
 func ParseRequestLine(key string) (templates.Request, error) {
-	var req templates.Request
-	switch {
-	case key == CloudImageLine:
-		req = templates.Request{Distribution: templates.RKE2}
-	case strings.HasPrefix(key, KubeadmLinePrefix):
-		req = templates.Request{Distribution: templates.Kubeadm, KubernetesVersion: strings.TrimPrefix(key, KubeadmLinePrefix)}
+	dist, rest, _ := strings.Cut(key, "-")
+	req := templates.Request{Distribution: templates.Distribution(dist)}
+	switch req.Distribution {
+	case templates.RKE2, templates.K3s:
+	case templates.Kubeadm:
+		req.KubernetesVersion, rest, _ = strings.Cut(rest, "-")
+	case templates.Talos:
+		req.TalosVersion = rest
 	default:
 		return req, fmt.Errorf("no template line %q", key)
 	}
-	if _, err := templates.Plan(req); err != nil {
+	if req.Distribution != templates.Talos {
+		o, err := templates.ParseNodeOS(rest)
+		if err != nil {
+			return req, fmt.Errorf("template line %q: %w", key, err)
+		}
+		req.NodeOS = o
+	}
+	if _, err := templates.Plan(&req); err != nil {
 		return req, fmt.Errorf("template line %q: %w", key, err)
+	}
+	if RequestLine(&req) != key {
+		return req, fmt.Errorf("no template line %q", key)
 	}
 	return req, nil
 }

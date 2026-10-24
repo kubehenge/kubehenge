@@ -1,10 +1,12 @@
 #!/bin/sh
 # End-to-end test of the weekly template refresh on a Proxmox VE host, against a running management
-# cluster whose refresh is on with no soak, and the cloud image's template built once: a one-node
-# k3s cluster runs that build; a run of the refresh, asked for as Build now asks, makes a new one;
-# the cluster's node stays on its build while the maintenance window is closed and moves to the new
-# one once it opens; a second run makes a third build and deletes the first, which nothing runs any
-# more, while the two newest stay; nothing of the cluster is left afterwards.
+# cluster whose refresh is on with no soak, k3s's template on the default node OS built once, and
+# on Rocky Linux 10 too: a one-node k3s cluster runs that build; a run of the refresh, asked for as
+# Build now asks, makes a new one; the cluster's node stays on its build while the maintenance window
+# is closed and moves to the new one once it opens; a second run makes a third build and deletes the
+# first, which nothing runs any more, while the two newest stay; the cluster's node OS changed to
+# Rocky Linux replaces its node with a clone of that template, SELinux enforcing on it; nothing of
+# the cluster is left afterwards.
 #
 #   test/e2e/node-image-refresh.sh
 #
@@ -43,11 +45,14 @@ pve_get() { curl -sS --fail ${curl_ca} -H "Authorization: PVEAPIToken=${KUBEHENG
 json_list() { printf '%s' "$1" | jq -R 'split(",")'; }
 system() { kubectl -n kubehenge-system "$@"; }
 
-# builds: the build tags of the cloud image's templates in the template pool, oldest first.
+# builds [node OS]: the build tags of k3s's templates on the node OS, by default the class's, in the
+# template pool, oldest first.
+default_os=$(kubectl -n kubehenge-system get clusterclass kubehenge-k3s -o json |
+    jq -r '.spec.variables[] | select(.name == "nodeOS") | .schema.openAPIV3Schema.default | "\(.family)-\(.release)"')
 builds() {
     pve_get cluster/resources?type=vm |
-        jq -r --arg p "${pool}" '[.data[] | select(.type == "qemu" and .template == 1 and .pool == $p)
-            | .name | capture("^kubehenge-ubuntu-[0-9.]+-(?<b>build-[0-9]{12})$").b] | sort[]'
+        jq -r --arg p "${pool}" --arg os "${1:-${default_os}}" '[.data[] | select(.type == "qemu" and .template == 1 and .pool == $p)
+            | .name | capture("^kubehenge-k3s-" + $os + "-(?<b>build-[0-9]{12})$").b] | sort[]'
 }
 builds_are() {
     got=$(builds)
@@ -118,7 +123,7 @@ set_upgrades() {
     kubectl -n "${ns}" patch cluster/node-image --type=merge -p "{\"spec\":{\"topology\":{\"variables\":${vars}}}}"
 }
 
-step "the cloud image's first build"
+step "the first build of k3s's template on ${default_os}"
 first=$(builds)
 case "${first}" in
     *[[:space:]]* | "") fail "the template pool holds the builds '${first}', not one" ;;
@@ -211,6 +216,40 @@ third=$(builds | tail -n 1)
 until_true 120 "the two newest builds alone are there" builds_are "${second} ${third} "
 # shellcheck disable=SC2310 # runs only reads, and its failure is the answer looked for.
 runs "${second}" || fail 'the node left its build'
+
+step "the node OS changed to Rocky Linux 10 replaces the node, which enforces SELinux"
+rocky_builds=$(builds rocky-10)
+[ -n "${rocky_builds}" ] || fail 'the template pool holds no build of k3s on Rocky Linux 10'
+machine=$(machine_name)
+vars=$(kubectl -n "${ns}" get cluster/node-image -o json |
+    jq -c '[.spec.topology.variables[] | select(.name != "nodeOS")] + [{name: "nodeOS", value: {family: "rocky", release: "10"}}]')
+kubectl -n "${ns}" patch cluster/node-image --type=merge -p "{\"spec\":{\"topology\":{\"variables\":${vars}}}}"
+# A change of node OS is no node image refresh: the node moves at once, window closed or not.
+until_true 2400 "the cluster runs a build of k3s on Rocky Linux 10" runs os-rocky-10
+now=$(machine_name)
+[ "${now}" != "${machine}" ] || fail 'the node runs Rocky Linux without having been replaced'
+pm=$(kubectl -n "${ns}" get proxmoxmachines -o jsonpath='{.items[0].metadata.name}')
+pm_node=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.status.proxmoxNode}')
+pm_vmid=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.spec.virtualMachineID}')
+cpu=$(pve_get "nodes/${pm_node}/qemu/${pm_vmid}/config" | jq -r .data.cpu)
+case "${cpu}" in
+    x86-64-v3* | host*) echo "CPU type ${cpu}" ;;
+    *) fail "the Rocky Linux node runs on CPU type ${cpu}, below its x86-64-v3" ;;
+esac
+request=$(jq -cn '{command: ["sh", "-c", ". /etc/os-release; echo \"${ID} ${VERSION_ID} $(getenforce)\"; ! { journalctl -k -b --no-pager -q; cat /var/log/audit/audit.log 2>/dev/null; } | grep \"avc: *denied\""]}')
+# shellcheck disable=SC2086 # curl_ca is empty or one option and its argument.
+pid=$(curl -sS --fail ${curl_ca} -H "Authorization: PVEAPIToken=${KUBEHENGE_PROXMOX_TOKEN}" -H 'Content-Type: application/json' \
+    -X POST -d "${request}" "${KUBEHENGE_PROXMOX_URL}/api2/json/nodes/${pm_node}/qemu/${pm_vmid}/agent/exec" | jq -r .data.pid)
+# shellcheck disable=SC2310 # a failed read is a check that has not exited yet, asked again.
+exited() { result=$(pve_get "nodes/${pm_node}/qemu/${pm_vmid}/agent/exec-status?pid=${pid}") && printf '%s' "${result}" | jq -e '.data.exited == 1' > /dev/null; }
+until_true 60 "the check in the node exits" exited
+out=$(printf '%s' "${result}" | jq -r '.data."out-data" // ""')
+echo "${out}"
+case "${out}" in
+    "rocky 10."*" Enforcing"*) ;;
+    *) fail "the node runs '${out}', not Rocky Linux 10 with SELinux enforcing" ;;
+esac
+printf '%s' "${result}" | jq -e '.data.exitcode == 0' > /dev/null || fail 'SELinux denied something on the node'
 
 step "nothing of the cluster is left"
 kubectl -n "${ns}" delete cluster/node-image --wait --timeout=30m

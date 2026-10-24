@@ -1,6 +1,7 @@
 {{- $class := "kubehenge-rke2" }}
 {{- $clusterSpec := include "kubehenge.proxmoxClusterSpec" . }}
-{{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "cloud-image" "kubehenge" "ubuntu-26.04") "serviceJoins" true) }}
+{{- /* Placeholder tags: the controller's patch selects the build of the node OS's template. */}}
+{{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "kubehenge" "os-almalinux-10" "rke2") "serviceJoins" true) }}
 {{- $controlPlaneSpec := include "kubehenge.rke2ControlPlaneSpec" . }}
 {{- $workerSpec := include "kubehenge.rke2WorkerSpec" . }}
 {{- $clusterName := include "kubehenge.hashedName" (dict "name" $class "spec" $clusterSpec) }}
@@ -44,6 +45,7 @@ metadata:
     # root@pam's password for it.
     kubehenge.dev/volume-snapshots: "true"
     {{- end }}
+    {{- include "kubehenge.etcdRestore" . | nindent 4 }}
 spec:
   infrastructure:
     templateRef:
@@ -86,6 +88,8 @@ spec:
     {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 2 "workerMinMemoryMiB" 4096 "clusters" .Values.clusters) | nindent 4 }}
     {{- include "kubehenge.addonVariables" . | nindent 4 }}
     {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
+    {{- include "kubehenge.nodeOSVariable" . | nindent 4 }}
+    {{- include "kubehenge.autoscalerVariable" . | nindent 4 }}
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
     {{- include "kubehenge.cisVariable" . | nindent 4 }}
     - name: cni
@@ -157,6 +161,22 @@ spec:
               path: /spec/template/spec/serverConfig/cni
               valueFrom:
                 variable: cni
+    # The RKE2 provider's own etcd.backupConfig would write the store's keys into the servers'
+    # bootstrap data and skip verifying its certificate unless told otherwise.
+    - name: rke2-etcd-upload
+      enabledIf: {{ include "kubehenge.etcdUploadEnabled" . }}
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: RKE2ControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/files/-
+              valueFrom:
+                template: |
+                  {{- include "kubehenge.etcdUploadFile" (dict "path" "/etc/rancher/rke2/config.yaml.d/60-kubehenge-etcd-s3.yaml") | nindent 18 }}
     - name: rke2-oidc
       enabledIf: {{ include "kubehenge.oidcEnabled" . }}
       definitions:
@@ -236,7 +256,6 @@ spec:
 {{- define "kubehenge.rke2AgentConfig" -}}
 preRKE2Commands:
   - sysctl --system
-  - {{ include "kubehenge.runcProfileLoad" . | quote }}
 agentConfig:
   # The kubelet refuses to start on kernel settings other than its own (kubehenge.sysctlFile).
   protectKernelDefaults: true
@@ -258,7 +277,6 @@ template:
     {{- include "kubehenge.rke2AgentConfig" (dict "controlPlane" true) | nindent 4 }}
     files:
       {{- include "kubehenge.sysctlFile" . | nindent 6 }}
-      {{- include "kubehenge.runcProfileFile" (dict "distribution" "rke2") | nindent 6 }}
       {{- include "kubehenge.auditPolicyFile" (dict "root" . "path" "/etc/rancher/rke2/audit-policy.yaml") | nindent 6 }}
       # Given a policy, RKE2 audits the API server and keeps a month of the log.
       - path: /etc/rancher/rke2/config.yaml.d/50-kubehenge-audit.yaml
@@ -300,5 +318,4 @@ template:
     {{- include "kubehenge.rke2AgentConfig" (dict) | nindent 4 }}
     files:
       {{- include "kubehenge.sysctlFile" . | nindent 6 }}
-      {{- include "kubehenge.runcProfileFile" (dict "distribution" "rke2") | nindent 6 }}
 {{- end -}}

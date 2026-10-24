@@ -48,6 +48,19 @@ func (ti *tokenIssuer) count() int {
 	return len(ti.issued)
 }
 
+// tokensOf counts the tokens made of an account.
+func (ti *tokenIssuer) tokensOf(account string) int {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	n := 0
+	for _, a := range ti.issued {
+		if a == account {
+			n++
+		}
+	}
+	return n
+}
+
 func initialised(c *clusterv1.Cluster) *clusterv1.Cluster {
 	c.Status.Conditions = append(c.Status.Conditions, metav1.Condition{
 		Type: clusterv1.ClusterControlPlaneInitializedCondition, Status: metav1.ConditionTrue, Reason: "Up",
@@ -72,7 +85,7 @@ func newIdentities(t *testing.T, c *clusterv1.Cluster, clock *time.Time) identit
 	workload := interceptor.NewClient(inside, interceptor.Funcs{SubResourceCreate: issuer.create})
 	config := &rest.Config{Host: "https://10.0.0.20:6443", CAData: []byte("the cluster CA")}
 	w := &WorkloadIdentities{
-		Client: r.Client, ClassNamespace: r.ClassNamespace,
+		Client: r.Client, ClassNamespace: r.ClassNamespace, MountNamespace: autoscalerNamespace,
 		Remotes: &Remotes{byCluster: map[string]remote{remoteKey(c): {config: config, client: workload, until: time.Now().Add(time.Hour)}}},
 		now:     func() time.Time { return *clock },
 	}
@@ -296,6 +309,130 @@ func TestBackupIdentitiesGoWithBackups(t *testing.T) {
 	}
 	if got := secretsBeside(t, f.kube, c, IdentityHealth, IdentityLogs); len(got) != 2 {
 		t.Errorf("only %v kept with backups off, want the health identities'", got)
+	}
+}
+
+// The Headlamp issuer comes with the sign-in, for the interface's clusters alone, with the admin
+// account whose tokens it makes; its own token goes beside the cluster, the admin account's never
+// does, and switched off both go, the admin account first, once the cluster can be reached.
+func TestHeadlampIdentities(t *testing.T) {
+	t.Parallel()
+	clock := time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
+	c := initialised(storageCluster())
+	f := newIdentities(t, c, &clock)
+	w, kube, workload, issuer := f.w, f.kube, f.workload, f.issuer
+	ctx := context.Background()
+	admin := client.ObjectKey{Namespace: metav1.NamespaceSystem, Name: HeadlampAccount}
+
+	w.HeadlampNamespaces = []string{c.Namespace + "-elsewhere"}
+	reconcileIdentities(t, w, c)
+	if got := secretsBeside(t, kube, c, IdentityHeadlampIssuer); len(got) != 0 {
+		t.Fatal("the issuer's token beside a cluster outside the interface's namespace")
+	}
+	if err := workload.Get(ctx, admin, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("the admin account in a cluster outside the interface's namespace: %v", err)
+	}
+
+	w.HeadlampNamespaces = []string{"elsewhere", c.Namespace}
+	reconcileIdentities(t, w, c)
+	s := &corev1.Secret{}
+	if err := kube.Get(ctx, client.ObjectKey{Namespace: c.Namespace, Name: IdentitySecretName(c.Name, IdentityHeadlampIssuer)}, s); err != nil {
+		t.Fatal(err)
+	}
+	if string(s.Data[IdentityServerKey]) != "https://10.0.0.20:6443" || len(s.Data[IdentityTokenKey]) == 0 || len(s.OwnerReferences) != 1 {
+		t.Errorf("the issuer's Secret holds %q, owned by %v", s.Data, s.OwnerReferences)
+	}
+	issuer.mu.Lock()
+	issued := slices.Clone(issuer.issued)
+	issuer.mu.Unlock()
+	if !slices.Contains(issued, "kubehenge-headlamp-issuer") || slices.Contains(issued, HeadlampAccount) {
+		t.Errorf("tokens made for %v: want the issuer's, never the admin account's", issued)
+	}
+	checkHeadlampAccess(t, workload)
+
+	// Switched off while the cluster cannot be reached, the token stays to tell what is to go.
+	w.HeadlampNamespaces = nil
+	reachable := w.Remotes
+	w.Remotes = nil
+	if got := reconcileIdentities(t, w, c); got.RequeueAfter != waitInterval {
+		t.Errorf("with the cluster out of reach: requeued after %v, want %v", got.RequeueAfter, waitInterval)
+	}
+	if got := secretsBeside(t, kube, c, IdentityHeadlampIssuer); len(got) != 1 {
+		t.Fatal("the issuer's token went before the identities in the cluster")
+	}
+	w.Remotes = reachable
+	reconcileIdentities(t, w, c)
+	if got := secretsBeside(t, kube, c, IdentityHeadlampIssuer); len(got) != 0 {
+		t.Error("the issuer's token is still beside the cluster")
+	}
+	for _, o := range []client.Object{
+		&corev1.ServiceAccount{Namespace: metav1.NamespaceSystem, Name: HeadlampAccount},
+		&rbacv1.ClusterRoleBinding{Name: HeadlampAccount},
+		&corev1.ServiceAccount{Namespace: metav1.NamespaceSystem, Name: "kubehenge-headlamp-issuer"},
+		&rbacv1.Role{Namespace: metav1.NamespaceSystem, Name: "kubehenge-headlamp-issuer"},
+		&rbacv1.RoleBinding{Namespace: metav1.NamespaceSystem, Name: "kubehenge-headlamp-issuer"},
+	} {
+		if err := workload.Get(ctx, client.ObjectKeyFromObject(o), o); !apierrors.IsNotFound(err) {
+			t.Errorf("%T %s is still in the cluster: %v", o, o.GetName(), err)
+		}
+	}
+	if got := secretsBeside(t, kube, c, IdentityHealth, IdentityLogs); len(got) != 2 {
+		t.Errorf("only %v kept with the sign-in off, want the health identities'", got)
+	}
+}
+
+// checkHeadlampAccess checks the Headlamp identities in the workload cluster: the admin account
+// bound to cluster-admin, the issuer to making its tokens alone, neither token mounted into pods.
+func checkHeadlampAccess(t *testing.T, workload client.Client) {
+	t.Helper()
+	ctx := context.Background()
+	admin := &rbacv1.ClusterRoleBinding{}
+	if err := workload.Get(ctx, client.ObjectKey{Name: HeadlampAccount}, admin); err != nil {
+		t.Fatal(err)
+	}
+	wantAdmin := []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: HeadlampAccount, Namespace: metav1.NamespaceSystem}}
+	if admin.RoleRef.Kind != "ClusterRole" || admin.RoleRef.Name != "cluster-admin" || !slices.Equal(admin.Subjects, wantAdmin) {
+		t.Errorf("the admin account is bound to %v as %v", admin.RoleRef, admin.Subjects)
+	}
+	sa := &corev1.ServiceAccount{}
+	if err := workload.Get(ctx, client.ObjectKey{Namespace: metav1.NamespaceSystem, Name: HeadlampAccount}, sa); err != nil {
+		t.Fatal(err)
+	}
+	if sa.AutomountServiceAccountToken == nil || *sa.AutomountServiceAccountToken {
+		t.Error("the admin account has its token mounted into pods")
+	}
+	rules := namespacedRights(t, workload, metav1.NamespaceSystem, "kubehenge-headlamp-issuer")
+	if len(rules) != 1 || !slices.Equal(rules[0].Verbs, []string{"create"}) ||
+		!slices.Equal(rules[0].Resources, []string{"serviceaccounts/token"}) || !slices.Equal(rules[0].ResourceNames, []string{HeadlampAccount}) {
+		t.Errorf("the issuer may do %+v, want make the admin account's tokens alone", rules)
+	}
+}
+
+// The admin account goes before anything else of the issuer's, so that no token made of it outlives
+// the sign-in being switched off.
+func TestHeadlampAdminAccountGoesFirst(t *testing.T) {
+	t.Parallel()
+	var deleted []string
+	inside := fake.NewClientBuilder().WithScheme(remoteScheme).WithObjects(&corev1.Namespace{Name: metav1.NamespaceSystem}).Build()
+	workload := interceptor.NewClient(inside, interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			deleted = append(deleted, fmt.Sprintf("%T %s", obj, obj.GetName()))
+			return c.Delete(ctx, obj, opts...)
+		},
+	})
+	id := identityOf(IdentityHeadlampIssuer)
+	if _, err := id.ensure(context.Background(), workload); err != nil {
+		t.Fatal(err)
+	}
+	if err := id.remove(context.Background(), workload); err != nil {
+		t.Fatal(err)
+	}
+	if len(deleted) != 5 || deleted[0] != "*v1.ServiceAccount "+HeadlampAccount {
+		t.Errorf("deleted %v, want the admin account first and all five", deleted)
+	}
+	// Deleting again, with nothing left, is no error.
+	if err := id.remove(context.Background(), workload); err != nil {
+		t.Error(err)
 	}
 }
 

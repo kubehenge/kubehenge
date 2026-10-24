@@ -31,7 +31,7 @@ func checkRancherNodes(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass
 	}
 	for i := range topology.Workers.MachineDeployments {
 		md := &topology.Workers.MachineDeployments[i]
-		if md.Replicas != nil && *md.Replicas == 0 {
+		if workerRange(md).most == 0 {
 			continue
 		}
 		cores, _, err := nodeSize(cluster, class, "workerMachine", md.Variables.Overrides)

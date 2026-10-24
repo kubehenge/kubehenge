@@ -30,7 +30,7 @@ Before 1.0.0, a minor release may change behaviour: read its release notes ([cha
 | patch releases | the newest release of the installed minor version, such as 0.1.x |
 | minor releases | the newest release of the installed major version, such as 0.x |
 
-**At hour** picks the hour of the day (03:00 by default), in the **Time zone** below it, which starts out as the browser's when automatic upgrades are switched on. The interface checks once a day in that hour, never during a run of the management cluster or a template build, and only Kubehenge's own software is upgraded: the management cluster and the workload clusters are not touched.
+**At hour** picks the hour of the day (03:00 by default), in the **Time zone** below it, which starts out as the browser's when automatic upgrades are switched on. The interface checks once a day in that hour, never during a run of the management cluster or a template build, and only Kubehenge's own software is upgraded: the workload clusters are not touched, and the management cluster follows only where its own automatic upgrades are on ([below](#automatically-after-kubehenge)).
 
 ### What is installed
 
@@ -70,6 +70,8 @@ On the Administration page, the **Management cluster** section shows the setting
 - upgrades each Cluster API provider through the Cluster API Operator, and Kubehenge's ClusterClasses and controller;
 - puts back anything that drifted from the settings.
 
+**When it is behind.** Every apply records the Kubehenge release that ran it, which the section shows as **Applied with**. Once Kubehenge has been upgraded past that release, the top of the Administration page says so: "The management cluster runs what Kubehenge 0.1.0 applied; this appliance carries 0.2.0." **Upgrade the management cluster** beside it lists the components whose versions change, from the old to the new (Talos, Kubernetes, Cluster API and its providers, cert-manager, the Cluster API Operator, and Kubehenge's ClusterClasses and controller by its chart's version), asks for the state passphrase, and applies the settings as they are, as **Apply again…** does.
+
 **What a running management cluster keeps.** Its nodes keep their addresses, and nodes are only added after them: a single node grows to three by adding two addresses after its own, but none is taken away, since a node given another address is cut off from Talos and etcd, and a node removed leaves its etcd member behind. The API address, gateway, pod and service ranges and the VM disks' storage stay as they were. The appliance refuses such changes. The page shows the API address, gateway, pod and service ranges and VM disks read-only, and keeps Node addresses editable only for adding addresses after the existing ones. Anything else, such as the nodes the VMs run on, the bridge, DNS servers, registry mirrors, identity providers and what clusters may use, can change. With Terraform/OpenTofu the same holds, but nothing refuses it: do not change `node_addresses`, `api_address`, `gateway`, `pod_subnets`, `service_subnets` or `vm_datastore` of a running management cluster, and only append to `node_addresses`.
 
 **When a release changes a ClusterClass**, applying it rolls the clusters of that class: a ClusterClass's machine and bootstrap templates are named after their contents, and Cluster API replaces the nodes of every cluster whose class now points at new templates, one at a time as for an upgrade, so each cluster needs [spare addresses](install.md#network-and-addresses). The [changelog](changelog.md) says which classes a release changes; apply such a release when the rollouts suit you.
@@ -77,6 +79,23 @@ On the Administration page, the **Management cluster** section shows the setting
 The same page can move the management cluster to other Proxmox VE nodes or add nodes to it: a VM given another node is migrated there.
 
 It runs with your Proxmox VE session, like the first run, and takes about as long. The page follows the log. If it fails, the page shows the error and the log; fix the cause and apply again.
+
+### Automatically after Kubehenge
+
+**Management cluster**, under the automatic upgrades in the Kubehenge box, is **Upgraded by hand** by default. Set to **Upgraded automatically too**, the appliance applies the management cluster again on its own once it runs a newer Kubehenge release than the one that last applied it:
+
+- in the hour Kubehenge's own upgrades use (**At hour**, **Time zone**), whether or not those are on;
+- at most once a day, never during another run or a template build, and only after an upgrade of Kubehenge asked for in the same hour, which brings what it moves to;
+- as a run like any other, which the page follows, shown as started automatically.
+
+A run that fails stays on the page with its error and log, and is tried again in the next day's hour, not before; **Upgrade the management cluster** runs it at once.
+
+Nobody is signed in then, so switching it on has the appliance keep what an apply needs, which it otherwise never does:
+
+- **the state passphrase**, asked for and checked against the state when switching it on. No key derived from it can stand in: OpenTofu derives a new key for every state it writes.
+- **an API token of a Proxmox VE user of its own**, `kubehenge-upgrader@pve`, with the Administrator role on `/`: an apply creates users, roles, ACLs, pools and VMs, as the first run does. Switching it on creates the user and its token with your session, so it takes `Sys.Console` on `/` of you besides the [setup privileges](install.md#who-may-set-it-up), as the token holds it.
+
+Both are kept in a file in the appliance's state directory, which only the interface's own user, and root, can read. **What that risks:** anyone who gets root on the appliance, or takes over its interface, can then read the management cluster's state, which holds its admin kubeconfig and talosconfig, and act as an administrator of the whole Proxmox VE cluster with the token. Switching it off deletes the file first, then the user with its token; removing the management cluster does the same.
 
 ### With Terraform/OpenTofu
 
@@ -93,10 +112,11 @@ tofu apply
 
 ### By hand
 
-**Upgrade** on a cluster's page offers the newest release of its own minor version, when that is newer than the one running, and the newest of the next minor version, in the distribution's own form (`v1.37.1`, `v1.37.1+rke2r1`, `v1.37.1+k3s1`): RKE2's and k3s's from their release channels, kubeadm's from the VM templates there are. When there is neither, the version can be typed in; for kubeadm, the dialog asks for a template of a newer version first. The interface refuses skipping a minor version or going back. Cluster API replaces the control-plane nodes one by one, then the workers, each new node created before an old one is removed. With kubectl, set `spec.topology.version` ([clusters.md](clusters.md#day-two)).
+**Upgrade** on a cluster's page offers the newest release of its own minor version, when that is newer than the one running, and the newest of the next minor version, in the distribution's own form (`v1.37.1`, `v1.37.1+rke2r1`, `v1.37.1+k3s1`): RKE2's and k3s's from their release channels, kubeadm's from the VM templates there are, Talos's from Kubernetes' own, among the minor versions the cluster's Talos release runs. When there is neither, the version can be typed in; for kubeadm, the dialog asks for a template of a newer version first. The interface refuses skipping a minor version or going back. Cluster API replaces the control-plane nodes one by one, then the workers, each new node created before an old one is removed. With kubectl, set `spec.topology.version` ([clusters.md](clusters.md#day-two)).
 
 - **kubeadm** nodes boot from a template built for their exact Kubernetes version: create the template of the new version first ([templates.md](templates.md)).
 - **RKE2 and k3s** install the requested version when a node boots, from the same template.
+- **Talos** nodes run the Kubernetes version Talos is told to, from the template of the cluster's Talos release, which the new nodes move to with the upgrade once it is in the pool. A Kubernetes version the Talos release does not run needs a Talos upgrade first ([clusters.md](clusters.md#talos-upgrades)).
 
 ### Automatically inside a window
 
@@ -105,7 +125,7 @@ tofu apply
 | Field | Variable | What it is |
 | --- | --- | --- |
 | Upgrade automatically | `mode` | `off` (the default); `patch` releases: the newest release of the cluster's minor version; `minor`, patch and minor releases: also the next minor version. |
-| Move the nodes to new template builds | `nodeImages` | On by default, for kubeadm, RKE2 and k3s: replace the nodes with clones of each new build of their VM template once it is a day old, whatever `mode` says ([below](#the-nodes-operating-system)). |
+| Move the nodes to new template builds | `nodeImages` | On by default, for kubeadm, RKE2 and k3s: replace the nodes with clones of each new build of their VM template once it is a day old, whatever `mode` says ([below](#the-nodes-operating-system)). On Talos, **Move the nodes to new Talos patch releases**: upgrade the nodes in place to the newest patch release of their Talos minor version ([clusters.md](clusters.md#talos-upgrades)). |
 | Days | `window.weekdays` | Days of the week the window opens on. |
 | Days of the month | `window.monthDays` | Such as `1, 15`. A day listed here or in Days counts; every day when both are empty. |
 | From | `window.start` | When the window opens, `HH:MM`; `02:00` by default. |
@@ -124,12 +144,13 @@ Where the versions come from:
 | --- | --- |
 | RKE2, k3s | the distribution's own release channels; the management cluster's nodes need to reach them |
 | kubeadm | the kubeadm templates on Proxmox VE: the newest version a template has been built for, so building a newer template is what offers one |
+| Talos | Kubernetes' own newest release of each minor version (`dl.k8s.io`), the stable one being what the Talos release Kubehenge carries installs by default; never one the cluster's Talos release does not run, and never while its nodes are being upgraded |
 
 Cluster API then rolls the nodes as for any upgrade. A rollout that has started finishes even if the window closes. The last automatic upgrade shows in the cluster's **Summary** as **Last automatic upgrade**, and is recorded on the Cluster in the annotation `kubehenge.dev/auto-upgraded`.
 
 ### The nodes' operating system
 
-The management cluster builds the Ubuntu VM templates again every week, with the updates Ubuntu published since ([templates.md](templates.md#the-weekly-build)). Inside each cluster's window, under the same conditions as an upgrade, the controller moves the nodes of a cluster with `nodeImages` on to the newest build that is at least a day old: it sets the cluster's node image time (the annotation `kubehenge.dev/node-image`) to now, which has every machine template select that build, and Cluster API replaces the nodes one at a time. A Kubernetes upgrade due at the same time comes first; the nodes it creates are already clones of the newest build. The last move shows in the cluster's **Summary** as **Last node refresh**, recorded in the annotation `kubehenge.dev/node-image-refreshed`. While a newer build waits for the window, the controller records that it holds the cluster, with the build and when the window opens, in the annotation `kubehenge.dev/node-image-held` (such as `build-202610180100 at 2026-10-24T00:00:00Z`), which the **Summary** shows as **Next node refresh**; it is gone once the move starts.
+The management cluster builds the node OS VM templates again every week, with the updates each node OS published since ([templates.md](templates.md#the-weekly-build)). Changing a cluster's node OS (its `nodeOS` variable, under **Options**) replaces its nodes the same way, one at a time, at once rather than in the window, once the new node OS's template is built. Inside each cluster's window, under the same conditions as an upgrade, the controller moves the nodes of a cluster with `nodeImages` on to the newest build that is at least a day old: it sets the cluster's node image time (the annotation `kubehenge.dev/node-image`) to now, which has every machine template select that build, and Cluster API replaces the nodes one at a time. A Kubernetes upgrade due at the same time comes first; the nodes it creates are already clones of the newest build. The last move shows in the cluster's **Summary** as **Last node refresh**, recorded in the annotation `kubehenge.dev/node-image-refreshed`. While a newer build waits for the window, the controller records that it holds the cluster, with the build and when the window opens, in the annotation `kubehenge.dev/node-image-held` (such as `build-202610180100 at 2026-10-24T00:00:00Z`), which the **Summary** shows as **Next node refresh**; it is gone once the move starts.
 
 Holding a cluster on its build is switching `nodeImages` off. Deleting a build that turns out broken stops the clusters that have not moved to it yet. Neither the Administration page nor `kubehenge template delete … --build` deletes a build a cluster runs; both name the clusters instead. For a build found broken that clusters already run, `--roll-clusters` deletes it anyway, and those clusters' nodes are replaced at once, outside their windows, with clones of the build before it. The last build of a template is never deleted while a cluster runs it.
 

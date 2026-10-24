@@ -17,18 +17,36 @@ rules:
   - apiGroups: [cluster.x-k8s.io]
     resources: [clusters]
     verbs: [get, list, watch, patch, update]
+  # The condition that tells whether a cluster's last etcd snapshot was taken.
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [clusters/status]
+    verbs: [patch]
   - apiGroups: [cluster.x-k8s.io]
     resources: [clusterclasses]
     verbs: [get, list, watch]
   # With Proxmox VE HA, a pre-terminate hook holds a control-plane Machine's deletion until its VM is
   # out of HA, and marking a ProxmoxMachine has capmox find its VM on the node HA moved it to. Without
-  # it, the controller takes back the hooks it set.
+  # it, the controller takes back the hooks it set. An etcd restore deletes the control-plane
+  # Machines etcd was not restored on, for Cluster API to make again.
   - apiGroups: [cluster.x-k8s.io]
     resources: [machines]
-    verbs: [get, list, watch, patch]
+    verbs: [get, list, watch, patch, delete]
   - apiGroups: [infrastructure.cluster.x-k8s.io]
     resources: [proxmoxmachines]
     verbs: [get, list, watch, patch]
+  # What a node of each autoscaled pool holds goes onto its MachineDeployment, for the autoscaler.
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [machinedeployments]
+    verbs: [get, list, watch, patch]
+  # Each cluster's autoscaler gets the autoscaler role in the cluster's namespace, which can be any;
+  # bind lets the controller grant that role and no other.
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [rolebindings]
+    verbs: [get, create, update, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles]
+    resourceNames: [kubehenge-autoscaler]
+    verbs: [bind]
   # Each cluster's token and the ClusterResourceSet Secret delivering it live in the cluster's
   # namespace, which can be any. delete: an identity's token goes once the cluster no longer wants
   # the identity, such as the backup ones when backups are switched off.
@@ -100,10 +118,10 @@ rules:
     resourceNames: [kubehenge-ha-rules]
     verbs: [update, delete]
   - apiGroups: [controlplane.cluster.x-k8s.io]
-    resources: [kubeadmcontrolplanetemplates, rke2controlplanetemplates, kthreescontrolplanetemplates]
+    resources: [kubeadmcontrolplanetemplates, rke2controlplanetemplates, kthreescontrolplanetemplates, taloscontrolplanetemplates]
     verbs: [create, patch, deletecollection]
   - apiGroups: [bootstrap.cluster.x-k8s.io]
-    resources: [kubeadmconfigtemplates, rke2configtemplates, kthreesconfigtemplates]
+    resources: [kubeadmconfigtemplates, rke2configtemplates, kthreesconfigtemplates, talosconfigtemplates]
     verbs: [create, patch, deletecollection]
   - apiGroups: [cluster.x-k8s.io]
     resources: [clusterclasses]
@@ -240,6 +258,11 @@ spec:
             - --velero-plugin-image={{ .Values.addons.velero.plugin }}
             - --kube-vip-image={{ .Values.kubeVip }}
             - --flux-version={{ .Values.addons.fluxOperator.flux }}
+            - --autoscaler-namespace={{ .Values.autoscaler.namespace }}
+            - --autoscaler-images={{ join "," .Values.autoscaler.images }}
+            {{- with .Values.managementEndpoint }}
+            - --management-endpoint={{ . }}
+            {{- end }}
             - --pod-security-exempt={{ join "," .Values.podSecurityExempt }}
             - --proxmox-ca=/etc/kubehenge/proxmox/ca.crt
             {{- if .Values.interface.offerHARules }}
@@ -250,6 +273,9 @@ spec:
             - --template-refresh
             {{- end }}
             - --proxmox-insecure={{ .Values.proxmox.insecure }}
+            {{- if .Values.interface.headlampSignIn }}
+            - --headlamp-sign-in-namespaces={{ prepend (.Values.interface.extraNamespaces | default list) .Values.interface.namespace | join "," }}
+            {{- end }}
             {{- range $class, $namespaces := .Values.providerNamespaces }}
             - --class-providers={{ $class }}={{ join "," $namespaces }}
             {{- end }}
@@ -275,6 +301,13 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.proxmox.secret }}
                   key: ha-token
+            {{- end }}
+            {{- if .Values.proxmox.etcdRestore }}
+            - name: KUBEHENGE_PROXMOX_RESTORE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.proxmox.secret }}
+                  key: restore-token
             {{- end }}
           ports:
             - name: extension

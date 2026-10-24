@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -53,6 +54,7 @@ var classProviders = map[string][]string{
 	"kubehenge-kubeadm": {"capi-kubeadm-bootstrap-system", "capi-kubeadm-control-plane-system"},
 	"kubehenge-rke2":    {"rke2-bootstrap-system", "rke2-control-plane-system"},
 	"kubehenge-k3s":     {"k3s-bootstrap-system", "k3s-control-plane-system"},
+	"kubehenge-talos":   {"talos-bootstrap-system", "talos-control-plane-system"},
 }
 
 func TestMain(m *testing.M) {
@@ -751,64 +753,6 @@ func TestIntegrationClassArguments(t *testing.T) {
 	}
 }
 
-// Every RKE2 and k3s node names the runc its distribution brings in an AppArmor profile of its own
-// and loads it before the distribution starts, as Ubuntu does for its own runc, which kubeadm nodes
-// use. Run unconfined, that runc left every process kubectl exec starts unable to signal itself.
-func TestIntegrationClassesNameTheirRunc(t *testing.T) {
-	t.Parallel()
-	const load = "[ ! -d /sys/kernel/security/apparmor ] || { mkdir -p /etc/apparmor.d/disable && " +
-		"ln -sf /etc/apparmor.d/runc /etc/apparmor.d/disable/runc && apparmor_parser --replace /etc/apparmor.d/kubehenge-runc; }"
-	seen := map[string]bool{}
-	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
-		if o.GetKind() != "ConfigMap" || o.GetLabels()["kubehenge.dev/class"] == "" {
-			continue
-		}
-		data, _, err := unstructured.NestedString(o.Object, "data", "templates.yaml")
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, tpl := range decodeAll(t, []byte(data)) {
-			where, ok := releaseTemplates[tpl.GetKind()]
-			if !ok {
-				continue
-			}
-			seen[tpl.GetKind()] = true
-			fields := strings.Split(strings.TrimPrefix(where.spec, "/"), "/")
-			commands, _, err := unstructured.NestedStringSlice(tpl.Object, append(fields, where.commands)...)
-			if err != nil || !slices.Contains(commands, load) {
-				t.Errorf("%s: commands %q, %v, without the profile's load", tpl.GetKind(), commands, err)
-			}
-			files, _, err := unstructured.NestedSlice(tpl.Object, append(fields, "files")...)
-			if err != nil {
-				t.Fatal(err)
-			}
-			// containerd's container profile takes signals from a profile named runc, not another.
-			want := fmt.Sprintf("profile runc /{usr/{bin,sbin}/runc,var/lib/rancher/%s/data/*/bin/runc} flags=(unconfined) {",
-				where.release.distribution)
-			profiles := 0
-			for _, f := range files {
-				file, ok := f.(map[string]any)
-				if !ok {
-					t.Fatalf("%s: file %v", tpl.GetKind(), f)
-				}
-				if file["path"] != "/etc/apparmor.d/kubehenge-runc" {
-					continue
-				}
-				profiles++
-				if content, ok := file["content"].(string); !ok || !strings.Contains(content, want) {
-					t.Errorf("%s: the runc profile is\n%s\nwant %q", tpl.GetKind(), content, want)
-				}
-			}
-			if profiles != 1 {
-				t.Errorf("%s: %d runc profiles", tpl.GetKind(), profiles)
-			}
-		}
-	}
-	if len(seen) != len(releaseTemplates) {
-		t.Errorf("templates checked %v, want every one of %v", seen, slices.Sorted(maps.Keys(releaseTemplates)))
-	}
-}
-
 // jsonPatches are the operations of a ClusterClass's patches, every definition's in turn.
 func jsonPatches(t *testing.T, patches []any) []map[string]any {
 	t.Helper()
@@ -989,6 +933,40 @@ func TestIntegrationChartVolumeSnapshots(t *testing.T) {
 		secret := strings.Contains(args, "--root-secret=kubehenge-root-pam")
 		if secret != on || strings.Contains(args, "--root-secret") != on || classes != len(classProviders) {
 			t.Errorf("volume snapshots %t: the controller gets the Secret: %t; %d classes", on, secret, classes)
+		}
+	}
+}
+
+// Only a management cluster that restores through the guest agent hands the controller the restore
+// token, and its classes say so for the interface to offer the restore. A Talos cluster is restored
+// through its nodes' Talos API, so its class says so either way.
+func TestIntegrationChartEtcdRestore(t *testing.T) {
+	t.Parallel()
+	for _, on := range []bool{false, true} {
+		values := []string{"testdata/integration-values.yaml"}
+		if on {
+			values = append(values, "testdata/etcd-restore-values.yaml")
+		}
+		var token bool
+		classes := 0
+		for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, values...) {
+			switch o.GetKind() {
+			case "ClusterClass":
+				want := on || o.GetName() == "kubehenge-talos"
+				if got := o.GetAnnotations()[AutomaticRestoreAnnotation]; got != strconv.FormatBool(want) {
+					t.Errorf("restore %t: %s says %q", on, o.GetName(), got)
+				}
+				classes++
+			case "Deployment":
+				containers, _, err := unstructured.NestedSlice(o.Object, "spec", "template", "spec", "containers")
+				if err != nil {
+					t.Fatal(err)
+				}
+				token = token || strings.Contains(fmt.Sprint(containers), "KUBEHENGE_PROXMOX_RESTORE_TOKEN")
+			}
+		}
+		if token != on || classes != len(classProviders) {
+			t.Errorf("restore %t: the controller gets the restore token: %t; %d classes", on, token, classes)
 		}
 	}
 }

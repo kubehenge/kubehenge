@@ -7,6 +7,7 @@ import (
 	"time"
 
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
+	appsv1 "k8s.io/api/apps/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -22,15 +23,16 @@ import (
 
 // remoteScheme holds the types read and written in workload clusters: Secrets, ConfigMaps and the
 // other core types, persistent volumes, certificate signing requests, network policies, the
-// interface's identities' roles and token requests, CRDs and admission policies, and Rancher's and
-// Velero's own and the distributions' HelmCharts through unstructured objects or their metadata.
+// interface's identities' roles and token requests, CRDs and admission policies, the autoscaler
+// that runs inside a cluster, and Rancher's and Velero's own and the distributions' HelmCharts
+// through unstructured objects or their metadata.
 var remoteScheme = newRemoteScheme()
 
 func newRemoteScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
 	for _, add := range []func(*runtime.Scheme) error{
 		corev1.AddToScheme, storagev1.AddToScheme, certificatesv1.AddToScheme, networkingv1.AddToScheme,
-		rbacv1.AddToScheme, authenticationv1.AddToScheme,
+		rbacv1.AddToScheme, authenticationv1.AddToScheme, appsv1.AddToScheme,
 		apiextensionsv1.AddToScheme, admissionregistrationv1.AddToScheme,
 	} {
 		if err := add(s); err != nil {

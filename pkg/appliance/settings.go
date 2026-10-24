@@ -52,13 +52,22 @@ type Settings struct {
 	// ProxmoxHA has Proxmox VE HA keep the clusters' control-plane VMs on separate nodes, with a
 	// second controller token that holds Sys.Console on /.
 	ProxmoxHA bool `json:"proxmoxHA,omitempty"`
+	// EtcdRestore has the controller restore clusters' etcd through the VMs' guest agents, with a
+	// controller token of its own that holds VM.GuestAgent.Unrestricted on the workload pool.
+	EtcdRestore bool `json:"etcdRestore,omitempty"`
+	// HeadlampSignIn has the shared Headlamp sign those who may download a cluster's admin
+	// kubeconfig in as cluster-admin.
+	HeadlampSignIn bool `json:"headlampSignIn,omitempty"`
+	// HeadlampActions has the shared Headlamp offer the Helm app catalog and the Prometheus charts
+	// it ships with, acting with each user's own credentials in the cluster.
+	HeadlampActions bool `json:"headlampActions,omitempty"`
 	// OfferHARules offers Proxmox VE's HA node-affinity rules, their names and nodes only, to those
 	// who may create or change a cluster without Sys.Audit on / of their own.
 	OfferHARules bool `json:"offerHARules,omitempty"`
 	// ClusterDatastoreAllocate lets a cluster choose the CSI plugin's newest release, whose token
 	// then holds Datastore.Allocate on the cluster's storage.
 	ClusterDatastoreAllocate bool `json:"clusterDatastoreAllocate,omitempty"`
-	// TemplateRefresh is the weekly build of the Ubuntu VM templates; unset, it runs with the
+	// TemplateRefresh is the weekly build of the node OS VM templates; unset, it runs with the
 	// module's defaults.
 	TemplateRefresh *TemplateRefresh `json:"templateRefresh,omitempty"`
 	// ClusterSysAudit lets a cluster choose the cloud controller manager's HA group labels, whose
@@ -76,9 +85,9 @@ type Settings struct {
 	ExtraClusterNamespaces []string `json:"extraClusterNamespaces,omitempty"`
 }
 
-// TemplateRefresh is when and where the Ubuntu VM templates are built again. Empty fields take the
-// module's defaults: Sunday at 01:00 UTC, the first cluster storage, DHCP for the VM that
-// prepares an image.
+// TemplateRefresh is when and where the node OS VM templates are built again. Empty fields take the
+// module's defaults: Sunday at 01:00 UTC, the first cluster storage, DHCP for the VM that builds a
+// node image.
 type TemplateRefresh struct {
 	Enabled  bool   `json:"enabled"`
 	Weekday  string `json:"weekday,omitempty"`

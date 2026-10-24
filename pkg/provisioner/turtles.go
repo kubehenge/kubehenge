@@ -69,7 +69,7 @@ func writeRancherConfig(ctx context.Context, workload client.Client, values stri
 		cm = &corev1.ConfigMap{
 			Namespace:   rancherNamespace,
 			Name:        rancherConfigMap,
-			Labels:      map[string]string{"app.kubernetes.io/managed-by": "Helm"},
+			Labels:      map[string]string{managedByLabel: "Helm"},
 			Annotations: map[string]string{"meta.helm.sh/release-name": rancherAddon, "meta.helm.sh/release-namespace": rancherNamespace},
 			Data:        map[string]string{turtlesChart: values},
 		}

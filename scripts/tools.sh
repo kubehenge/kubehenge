@@ -118,6 +118,12 @@ KUBECTL=v1.37.1
 KUBECTL_SHA256=65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8
 tool kubectl "https://dl.k8s.io/release/${KUBECTL}/bin/linux/amd64/kubectl" "${KUBECTL_SHA256}"
 
+# The end-to-end tests reach Talos nodes through their API with it.
+# renovate: datasource=github-release-attachments depName=siderolabs/talos
+TALOSCTL=v1.14.4
+TALOSCTL_SHA256=0a69e3f9b682c5cd844b78dae305f6056ceb86c5fcc6913dcea78c527ed97cee
+release talosctl siderolabs/talos "${TALOSCTL}" talosctl-linux-amd64 "${TALOSCTL_SHA256}"
+
 # renovate: datasource=github-release-attachments depName=rhysd/actionlint
 ACTIONLINT=v1.7.12
 ACTIONLINT_SHA256=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8

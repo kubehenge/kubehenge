@@ -46,7 +46,10 @@ type Appliance struct {
 	ProxmoxURL      string
 	ProxmoxCA       string
 	ProxmoxInsecure bool
-	Log             *slog.Logger
+	// Release is the appliance's own release, which carries the module; every apply records it, so
+	// that the interface can tell when the management cluster runs what an older one applied.
+	Release string
+	Log     *slog.Logger
 	// InterfaceKubeconfig makes the interface's kubeconfig from the management cluster's admin
 	// kubeconfig and API endpoint, once an apply has succeeded.
 	InterfaceKubeconfig func(ctx context.Context, admin []byte, endpoint string) ([]byte, error)
@@ -126,7 +129,7 @@ func (a *Appliance) Apply(settings *Settings, passphrase string, ticket *pve.Tic
 		return err
 	}
 	return a.start(ticket, "apply", func(ctx context.Context, j *Job) error {
-		kubeconfig, err := a.run(ctx, j, &s, passphrase, ticket)
+		kubeconfig, err := a.run(ctx, j, &s, passphrase, ticketAuth(ticket))
 		if err != nil {
 			return err
 		}
@@ -164,7 +167,7 @@ func (a *Appliance) HAReleased() error {
 // holds the same lock as runs of the module: an upgrade's restart would cut it off, and removing
 // the management cluster deletes the templates. It returns at once.
 func (a *Appliance) BuildTemplate(ticket *pve.Ticket, run func(ctx context.Context, j *Job) error) error {
-	return a.startIn(&a.templateJob, ticket, "template", run)
+	return a.startIn(&a.templateJob, sessionRunner(ticket), "template", run)
 }
 
 // TemplateJob returns the last template build, or nil.
@@ -198,7 +201,7 @@ func (a *Appliance) Remove(passphrase string, ticket *pve.Ticket, before func(ct
 		return errors.New("there is no management cluster to remove")
 	}
 	return a.start(ticket, "remove", func(ctx context.Context, j *Job) error {
-		env, err := a.env(passphrase, ticket)
+		env, err := a.env(passphrase, ticketAuth(ticket))
 		if err != nil {
 			return err
 		}
@@ -218,7 +221,7 @@ func (a *Appliance) Remove(passphrase string, ticket *pve.Ticket, before func(ct
 		}
 		// The state now records nothing. It goes, so that the next setup starts with a passphrase of
 		// its own; the settings stay to fill that setup in.
-		for _, name := range []string{a.KubeconfigPath(), filepath.Join(a.workdir(), "terraform.tfstate"), filepath.Join(a.workdir(), "terraform.tfstate.backup")} {
+		for _, name := range []string{a.KubeconfigPath(), filepath.Join(a.workdir(), "terraform.tfstate"), filepath.Join(a.workdir(), "terraform.tfstate.backup"), a.appliedPath()} {
 			if err := os.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return fmt.Errorf("clearing the removed cluster's state: %w", err)
 			}
@@ -234,24 +237,18 @@ func (a *Appliance) Credential(ctx context.Context, passphrase, name string) ([]
 	if name != "kubeconfig" && name != "talosconfig" {
 		return nil, fmt.Errorf("no credential %q", name)
 	}
-	if err := ValidPassphrase(passphrase); err != nil {
+	out, err := a.stateOutput(ctx, passphrase, name)
+	if err != nil {
 		return nil, err
 	}
-	a.mu.Lock()
-	running := a.job.running()
-	a.mu.Unlock()
-	if running {
-		return nil, ErrBusy
-	}
-	if _, err := os.Stat(filepath.Join(a.workdir(), "terraform.tfstate")); err != nil {
-		return nil, errors.New("there is no management cluster state yet")
-	}
-	env := []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + a.Dir, "TF_IN_AUTOMATION=1", "TF_ENCRYPTION=" + encryption(passphrase)}
-	out, err := a.output(ctx, env, name)
-	if err != nil {
-		return nil, ErrPassphrase
-	}
 	return []byte(out), nil
+}
+
+// CheckPassphrase tells whether the passphrase opens the management cluster's state, ErrPassphrase
+// when it does not.
+func (a *Appliance) CheckPassphrase(ctx context.Context, passphrase string) error {
+	_, err := a.stateOutput(ctx, passphrase, "api_endpoint")
+	return err
 }
 
 // LoadLast restores the last jobs' records after a restart, so their outcomes are still shown. A
@@ -271,8 +268,30 @@ func (a *Appliance) LoadLast() {
 		if v.State == stateRunning {
 			v.State, v.Error = stateFailed, "the appliance stopped during the run"
 		}
-		*slot = &Job{User: v.User, Kind: v.Kind, Started: v.Started, Finished: v.Finished, State: v.State, Error: v.Error, log: v.Log}
+		*slot = &Job{User: v.User, Automatic: v.Automatic, Kind: v.Kind, Started: v.Started, Finished: v.Finished, State: v.State, Error: v.Error, log: v.Log}
 	}
+}
+
+// stateOutput reads one output of the encrypted state with the passphrase, outside any run.
+func (a *Appliance) stateOutput(ctx context.Context, passphrase, name string) (string, error) {
+	if err := ValidPassphrase(passphrase); err != nil {
+		return "", err
+	}
+	a.mu.Lock()
+	running := a.job.running()
+	a.mu.Unlock()
+	if running {
+		return "", ErrBusy
+	}
+	if _, err := os.Stat(filepath.Join(a.workdir(), "terraform.tfstate")); err != nil {
+		return "", errors.New("there is no management cluster state yet")
+	}
+	env := []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + a.Dir, "TF_IN_AUTOMATION=1", "TF_ENCRYPTION=" + encryption(passphrase)}
+	out, err := a.output(ctx, env, name)
+	if err != nil {
+		return "", ErrPassphrase
+	}
+	return out, nil
 }
 
 func (a *Appliance) workdir() string { return filepath.Join(a.Dir, "management") }
@@ -291,15 +310,27 @@ func (a *Appliance) running() error {
 	return nil
 }
 
-// start runs one run of the module in the background.
+// start runs one run of the module in the background, on the user's ticket.
 func (a *Appliance) start(ticket *pve.Ticket, what string, run func(ctx context.Context, j *Job) error) error {
-	return a.startIn(&a.job, ticket, what, run)
+	return a.startIn(&a.job, sessionRunner(ticket), what, run)
+}
+
+// runner is whom a job acts as, and until when it may run.
+type runner struct {
+	user      string
+	automatic bool
+	until     time.Time
+}
+
+// sessionRunner runs a job on a signed-in user's ticket, which it cannot outlive.
+func sessionRunner(t *pve.Ticket) runner {
+	return runner{user: t.Username, until: t.Issued.Add(pve.TicketLifetime)}
 }
 
 // startIn runs one job in the background and keeps it in slot; only one job of any kind runs at a
-// time. The job outlives the request that started it, but not the ticket it runs on. It is recorded
-// on disk when it starts and when it ends, so a restart in between shows it as cut off.
-func (a *Appliance) startIn(slot **Job, ticket *pve.Ticket, what string, run func(ctx context.Context, j *Job) error) error {
+// time. The job outlives the request that started it, but not the time its runner allows. It is
+// recorded on disk when it starts and when it ends, so a restart in between shows it as cut off.
+func (a *Appliance) startIn(slot **Job, by runner, what string, run func(ctx context.Context, j *Job) error) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if err := a.running(); err != nil {
@@ -312,10 +343,10 @@ func (a *Appliance) startIn(slot **Job, ticket *pve.Ticket, what string, run fun
 	case err != nil:
 		return err
 	}
-	j := &Job{User: ticket.Username, Kind: what, Started: time.Now(), State: stateRunning}
+	j := &Job{User: by.user, Automatic: by.automatic, Kind: what, Started: time.Now(), State: stateRunning}
 	*slot = j
-	a.saveLog(slot, &JobView{User: j.User, Kind: what, Started: j.Started, State: stateRunning, Log: []string{}})
-	ctx, cancel := context.WithDeadline(context.Background(), ticket.Issued.Add(pve.TicketLifetime))
+	a.saveLog(slot, &JobView{User: j.User, Automatic: j.Automatic, Kind: what, Started: j.Started, State: stateRunning, Log: []string{}})
+	ctx, cancel := context.WithDeadline(context.Background(), by.until)
 	go func() {
 		defer cancel()
 		err := run(ctx, j)
@@ -326,7 +357,7 @@ func (a *Appliance) startIn(slot **Job, ticket *pve.Ticket, what string, run fun
 		// The record is on disk before the outcome shows, so a restart right after still has it;
 		// from then on an upgrade may restart the service, and a new job may start once the
 		// outcome shows.
-		a.saveLog(slot, &JobView{User: j.User, Kind: what, Started: j.Started, Finished: time.Now(), State: state, Error: errText, Log: j.Log()})
+		a.saveLog(slot, &JobView{User: j.User, Automatic: j.Automatic, Kind: what, Started: j.Started, Finished: time.Now(), State: state, Error: errText, Log: j.Log()})
 		unlock()
 		j.mu.Lock()
 		j.Finished, j.State, j.Error = time.Now(), state, errText

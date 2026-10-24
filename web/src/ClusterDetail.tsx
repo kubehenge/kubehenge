@@ -1,12 +1,15 @@
 import { useEffect, useState, type JSX } from "react";
 
 import { api } from "./api";
-import { BackupsDialog, BackupsView, backupsOf, useBackupsRows } from "./Backups";
+import { AutoscalerDialog, ScaleDialog, autoscalerText, poolText } from "./Autoscaling";
+import { BackupsDialog, BackupsView, backupsOf, backupsRows, useClassTargets } from "./Backups";
 import { issuesFromCA, saveCA } from "./Certificates";
 import { OptionDialog, Options, type OptionAction } from "./ClusterOptions";
-import { controlPlaneSizes } from "./create-form";
+import { EtcdSnapshotsDialog, EtcdSnapshotsView, etcdSnapshotsOf, etcdSnapshotsRows } from "./EtcdSnapshots";
 import { HealthView } from "./Health";
+import { nodeOSKey } from "./node-os";
 import { Link, navigate } from "./router";
+import { TalosFailure, TalosRows, runsKubernetes, useTalosReleases } from "./Talos";
 import type { Cluster, Machine, Versions } from "./types";
 import {
   Dialog,
@@ -18,7 +21,6 @@ import {
   distributionName,
   errorMessage,
   filled,
-  maxWorkers,
   pollIdle,
   saveFile,
   settled,
@@ -27,17 +29,21 @@ import {
   type Health,
 } from "./ui";
 
-type Action = "scale" | "upgrade" | "delete" | "backups" | OptionAction;
+type Action = "scale" | "upgrade" | "delete" | "backups" | "autoscaler" | "etcdSnapshots" | OptionAction;
 
 // A cluster on its way somewhere is looked at more often than a settled one.
 const pollChanging = 5000;
 
 const httpNotFound = 404;
 
-/** headlampURL is a cluster's page in the shared Headlamp, served on its own port of this host. */
+/**
+ * headlampURL is a cluster's page in the shared Headlamp, served on its own port of this host.
+ * A cluster's goes through the gate's opening of it, which signs in again a session that signed
+ * out of the cluster in Headlamp, and leads on to the cluster's page there.
+ */
 export function headlampURL(port: number, cluster?: string): string {
   const host = location.hostname.includes(":") ? `[${location.hostname}]` : location.hostname;
-  return `https://${host}:${port}/${filled(cluster) ? `c/${encodeURIComponent(cluster)}` : ""}`;
+  return `https://${host}:${port}/${filled(cluster) ? `kubehenge/open/${encodeURIComponent(cluster)}` : ""}`;
 }
 
 // headlampOf is the cluster's page in the shared Headlamp, when one runs and can reach the cluster.
@@ -218,6 +224,19 @@ export function ClusterDetail({
             Kubeconfig
           </button>
         )}
+        {c.allowed.kubeconfig && c.distribution === "talos" && (
+          <button
+            type="button"
+            title="Signs in to the nodes' Talos API, for talosctl"
+            onClick={() => {
+              void download(async () => {
+                saveFile(await api.talosconfig(c.namespace, c.name), `${c.name}.talosconfig`);
+              });
+            }}
+          >
+            Talosconfig
+          </button>
+        )}
         {issuesFromCA(c) && (
           <button
             type="button"
@@ -251,10 +270,24 @@ export function ClusterDetail({
           ))}
         </nav>
         <div className="object-view">
-          {view === "" && <Summary cluster={c} />}
+          {view === "" && (
+            <Summary
+              cluster={c}
+              can={can}
+              why={why}
+              onChanged={() => {
+                void reload();
+              }}
+            />
+          )}
           {view === "health" && <HealthView cluster={c} headlamp={inHeadlamp} />}
           {view === "machines" && <Machines cluster={c} />}
-          {view === "backups" && <BackupsView cluster={c} can={can} onEdit={setAction} />}
+          {view === "backups" && (
+            <>
+              <BackupsView cluster={c} can={can} onEdit={setAction} />
+              <EtcdSnapshotsView cluster={c} can={can} onEdit={setAction} />
+            </>
+          )}
           {view === "options" && <OptionsView cluster={c} can={can} onEdit={setAction} />}
         </div>
       </div>
@@ -285,11 +318,17 @@ function ActionDialog({
   if (action === "backups") {
     return <BackupsDialog cluster={c} onClose={onClose} />;
   }
+  if (action === "autoscaler") {
+    return <AutoscalerDialog cluster={c} onClose={onClose} />;
+  }
+  if (action === "etcdSnapshots") {
+    return <EtcdSnapshotsDialog cluster={c} onClose={onClose} />;
+  }
   return <OptionDialog action={action} cluster={c} onClose={onClose} />;
 }
 
 // OptionsView is the Options view, with the rows of the settings whose dialogs live with views of
-// their own.
+// their own, and the autoscaler's, which lives with the Scale dialog's.
 function OptionsView({
   cluster: c,
   can,
@@ -299,11 +338,26 @@ function OptionsView({
   can: boolean;
   onEdit: (a: Action) => void;
 }): JSX.Element {
-  const more = useBackupsRows(c);
+  const offered = (useClassTargets(c.class) ?? []).length > 0;
+  const more = [
+    ...backupsRows(c, offered),
+    ...etcdSnapshotsRows(c, offered),
+    { label: "Autoscaler", value: autoscalerText(c), action: "autoscaler" as const, name: "the autoscaler" },
+  ];
   return <Options cluster={c} can={can} onEdit={onEdit} more={more} />;
 }
 
-function Summary({ cluster: c }: { cluster: Cluster }): JSX.Element {
+function Summary({
+  cluster: c,
+  can,
+  why,
+  onChanged,
+}: {
+  cluster: Cluster;
+  can: boolean;
+  why: string | undefined;
+  onChanged: () => void;
+}): JSX.Element {
   return (
     <div className="box">
       <dl className="summary">
@@ -313,8 +367,15 @@ function Summary({ cluster: c }: { cluster: Cluster }): JSX.Element {
         </dd>
         <dt>Distribution</dt>
         <dd>{distributionName(c.distribution)}</dd>
+        {c.nodeOS && (
+          <>
+            <dt>Node OS</dt>
+            <dd>{c.nodeOS.title}</dd>
+          </>
+        )}
         <dt>Kubernetes</dt>
         <dd>{c.version}</dd>
+        {c.talos && <TalosRows talos={c.talos} />}
         <dt>API endpoint</dt>
         <dd>{c.endpoint ?? "Not assigned yet"}</dd>
         <dt>Pod range</dt>
@@ -331,6 +392,12 @@ function Summary({ cluster: c }: { cluster: Cluster }): JSX.Element {
             ? "None; the control planes run the workloads"
             : `${c.workers.ready} of ${c.workers.desired} ready`}
         </dd>
+        {c.workerPools.some((p) => p.autoscaling) && (
+          <>
+            <dt>Worker pools</dt>
+            <dd>{c.workerPools.map((p) => `${p.name}: ${poolText(p)}`).join("; ")}</dd>
+          </>
+        )}
         <dt>Proxmox VE pool</dt>
         <dd>{poolName(c.pool)}</dd>
         <dt>Namespace</dt>
@@ -348,6 +415,9 @@ function Summary({ cluster: c }: { cluster: Cluster }): JSX.Element {
         )}
         {c.nodeImage && <NodeImageRows image={c.nodeImage} />}
       </dl>
+      {filled(c.talos?.failed) && (
+        <TalosFailure cluster={c} failed={c.talos.failed} can={can} why={why} onRetried={onChanged} />
+      )}
     </div>
   );
 }
@@ -393,26 +463,34 @@ export function crowding(machines: Machine[]): string | undefined {
 function Machines({ cluster: c }: { cluster: Cluster }) {
   const machines = c.machines ?? [];
   const crowded = crowding(machines);
+  const talos = c.distribution === "talos";
+  const columns = [
+    "Name",
+    "Role",
+    "Proxmox VE node",
+    "Status",
+    "Phase",
+    // Beside the Talos release, the version is named for what it is.
+    talos ? "Kubernetes" : "Version",
+    ...(talos ? ["Talos"] : []),
+    "Addresses",
+    "Age",
+  ];
   return (
     <div className="box scroll">
       {crowded !== undefined && <p className="warning">{crowded}</p>}
       <table className="grid">
         <thead>
           <tr>
-            <th>Name</th>
-            <th>Role</th>
-            <th>Proxmox VE node</th>
-            <th>Status</th>
-            <th>Phase</th>
-            <th>Version</th>
-            <th>Addresses</th>
-            <th>Age</th>
+            {columns.map((h) => (
+              <th key={h}>{h}</th>
+            ))}
           </tr>
         </thead>
         <tbody>
           {machines.length === 0 && (
             <tr>
-              <td colSpan={8} className="muted">
+              <td colSpan={columns.length} className="muted">
                 No machines yet.
               </td>
             </tr>
@@ -432,6 +510,7 @@ function Machines({ cluster: c }: { cluster: Cluster }) {
                 </td>
                 <td>{m.phase}</td>
                 <td>{m.version ?? ""}</td>
+                {talos && <td>{m.talos ?? ""}</td>}
                 <td>{(m.addresses ?? []).join(", ")}</td>
                 <td title={new Date(m.created).toLocaleString()}>{age(m.created)}</td>
               </tr>
@@ -440,76 +519,6 @@ function Machines({ cluster: c }: { cluster: Cluster }) {
         </tbody>
       </table>
     </div>
-  );
-}
-
-// Options lists what can be set on a cluster after it was created, each with its Edit button, as
-// Proxmox VE's Options panels do.
-function ScaleDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
-  const current = c.controlPlane.desired || 1;
-  const [controlPlane, setControlPlane] = useState(current);
-  // Kept as typed, so a cleared field stays empty instead of turning into 0.
-  const [pools, setPools] = useState<Record<string, string>>(
-    Object.fromEntries(c.workerPools.map((p) => [p.name, String(p.replicas)])),
-  );
-  const { busy, error, send } = useChange(c, onClose);
-  const invalid = Object.fromEntries(
-    Object.entries(pools).map(([k, v]) => [
-      k,
-      /^\d+$/u.test(v) && Number(v) <= maxWorkers ? undefined : `A whole number from 0 to ${maxWorkers}.`,
-    ]),
-  );
-  const changed = controlPlane !== current || c.workerPools.some((p) => pools[p.name] !== String(p.replicas));
-  return (
-    <Dialog
-      title={`Scale ${c.name}`}
-      onClose={onClose}
-      onSubmit={() => {
-        void send({
-          controlPlaneReplicas: controlPlane,
-          workerPools: Object.fromEntries(Object.entries(pools).map(([k, v]) => [k, Number(v)])),
-        });
-      }}
-      actions={
-        <>
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="primary" disabled={busy || !changed || Object.values(invalid).some(Boolean)}>
-            Scale
-          </button>
-        </>
-      }
-    >
-      <Field label="Control-plane nodes" hint="Three or more keep the cluster running when one node fails.">
-        {(id) => (
-          <select id={id} value={controlPlane} onChange={(e) => setControlPlane(Number(e.target.value))}>
-            {[...new Set([...controlPlaneSizes, current])]
-              .toSorted((a, b) => a - b)
-              .map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-          </select>
-        )}
-      </Field>
-      {c.workerPools.map((p) => (
-        <Field key={p.name} label={`Workers (${p.name})`} error={invalid[p.name]}>
-          {(id) => (
-            <input
-              id={id}
-              type="number"
-              min={0}
-              max={maxWorkers}
-              value={pools[p.name] ?? ""}
-              onChange={(e) => setPools({ ...pools, [p.name]: e.target.value })}
-            />
-          )}
-        </Field>
-      ))}
-      <ErrorBox message={error} />
-    </Dialog>
   );
 }
 
@@ -542,17 +551,22 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
   const [version, setVersion] = useState(c.version);
   const [offered, setOffered] = useState<Versions>();
   const { busy, error, send } = useChange(c, onClose);
+  // A kubeadm cluster moves only to versions with a template on its node OS.
+  const kubeadmOS = c.distribution === "kubeadm" && c.nodeOS ? nodeOSKey(c.nodeOS) : undefined;
   useEffect(() => {
     async function loadVersions(): Promise<void> {
       try {
-        setOffered(await api.versions(c.distribution));
+        setOffered(await api.versions(c.distribution, kubeadmOS));
       } catch (err) {
         setOffered({ versions: [], error: errorMessage(err) });
       }
     }
     void loadVersions();
-  }, [c.distribution]);
+  }, [c.distribution, kubeadmOS]);
   const targets = upgradeTargets(c.version, [...(offered?.versions ?? []), ...(offered?.older ?? [])]);
+  const talos = useTalosReleases(c.talos !== undefined);
+  const running = c.talos?.version ?? "";
+  const held = c.talos ? targets.filter((v) => !runsKubernetes(talos, running, v)) : [];
   return (
     <Dialog
       title={`Upgrade ${c.name}`}
@@ -582,8 +596,8 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
                 {c.version} (running)
               </option>
               {targets.map((v) => (
-                <option key={v} value={v}>
-                  {v}
+                <option key={v} value={v} disabled={held.includes(v)}>
+                  {held.includes(v) ? `${v} (not run by Talos ${running})` : v}
                 </option>
               ))}
             </select>
@@ -598,6 +612,14 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
             (c.distribution === "kubeadm"
               ? "No VM template of a newer version: build one on the Administration page first."
               : "This is the newest release of its minor version and the next.")}
+        </p>
+      )}
+      {c.talos && (
+        <p className="muted">
+          {held.length > 0
+            ? `Talos ${running} does not run ${held.join(" or ")}: upgrade Talos first, under Options.`
+            : `The version has to be one Talos ${running} runs; a newer one may need a newer Talos release first, under Options.`}
+          {filled(c.talos.upgrading) && " The upgrade waits until the Talos upgrade under way is done."}
         </p>
       )}
       <ErrorBox message={error} />
@@ -641,6 +663,7 @@ function DeleteDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
         This deletes the cluster's VMs and its persistent volumes, and removes it from Rancher. It cannot be undone.
         {backupsOf(c.variables["backups"]).enabled &&
           " Its backups stay in the target, and a cluster created again under the same name and target can restore them."}
+        {etcdSnapshotsOf(c.variables["etcdSnapshots"]).enabled && " Its etcd snapshots stay in the target too."}
       </p>
       <Field label="Confirm name" hint={`Type ${c.name}.`}>
         {(id) => <input id={id} value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" />}

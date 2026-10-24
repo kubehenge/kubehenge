@@ -28,6 +28,7 @@ import (
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
+	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
 // fakeAccounts is Proxmox VE with password users, TOTP for some, and privileges granted on paths
@@ -53,6 +54,30 @@ type fakeAccounts struct {
 	released []string
 	// loadReads records the VMs whose load was read.
 	loadReads []int
+	// users are the users made with an administrator token, by ID; usersDeleted counts deletions.
+	users        map[string]string
+	usersDeleted int
+}
+
+func (f *fakeAccounts) CreateAdministratorToken(_ context.Context, t *pve.Ticket, userid, name, _ string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.effective(t.Username, "/").Has("Permissions.Modify", "User.Modify") {
+		return "", pve.ErrForbidden
+	}
+	if f.users == nil {
+		f.users = map[string]string{}
+	}
+	f.users[userid] = userid + "!" + name + "=5ec2e7"
+	return f.users[userid], nil
+}
+
+func (f *fakeAccounts) DeleteUser(_ context.Context, _ *pve.Ticket, userid string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.users, userid)
+	f.usersDeleted++
+	return nil
 }
 
 func (f *fakeAccounts) SignIn(_ context.Context, username, password string) (*pve.Ticket, *pve.Challenge, error) {
@@ -330,6 +355,9 @@ func rke2Class() *clusterv1.ClusterClass {
 			{Name: "ccm", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
 			{Name: "certificates", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
 			{Name: "gitops", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+			{Name: "nodeOS", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object", Default: &apiextensionsv1.JSON{
+				Raw: []byte(`{"family":"almalinux","release":"10"}`),
+			}})},
 			{Name: "oidc", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "array", Default: &apiextensionsv1.JSON{
 				Raw: []byte(`[{"issuerURL":"https://sso.example","clientID":"kubernetes"},{"issuerURL":"https://lab.example","clientID":"lab"}]`),
 			}})},
@@ -640,28 +668,41 @@ func TestCreateNeedsTheTemplate(t *testing.T) {
 		if err := h.kube.Get(t.Context(), key, class); err != nil {
 			t.Fatal(err)
 		}
-		class.Annotations[provisioner.CloudImageTemplateAnnotation] = found
+		class.Annotations[provisioner.NodeOSTemplatesAnnotation] = found
 		if err := h.kube.Update(t.Context(), class); err != nil {
 			t.Fatal(err)
 		}
 	}
 	b := h.browser()
 	b.signIn("dev@pve")
-	record("false")
+	record("rocky-10")
 	var classes []classView
 	if err := json.Unmarshal(b.do("GET", "/api/classes", "").Body.Bytes(), &classes); err != nil {
 		t.Fatal(err)
 	}
-	if len(classes) != 1 || !strings.Contains(classes[0].NoTemplate, "no VM template for RKE2 and k3s") {
+	if len(classes) != 1 || !strings.Contains(classes[0].NoTemplate, "no RKE2 VM template on AlmaLinux 10") {
 		t.Fatalf("classes = %+v", classes)
+	}
+	choices := map[string]string{}
+	for _, o := range classes[0].NodeOSes {
+		choices[o.String()] = o.NoTemplate
+	}
+	if len(choices) != len(templates.NodeOSes()) || choices["rocky-10"] != "" || choices["almalinux-10"] == "" {
+		t.Fatalf("node OSes = %+v", classes[0].NodeOSes)
 	}
 	rec := b.do("POST", "/api/clusters", createBody)
 	expect(t, rec, http.StatusConflict)
 	if !strings.Contains(rec.Body.String(), "Administration page") {
 		t.Fatalf("refusal = %s", rec.Body)
 	}
-	record("true")
-	expect(t, b.do("POST", "/api/clusters", createBody), http.StatusCreated)
+	onRocky := strings.Replace(createBody, `"storage":`, `"nodeOS":{"family":"rocky","release":"10"},"storage":`, 1)
+	expect(t, b.do("POST", "/api/clusters", onRocky), http.StatusCreated)
+	for _, refused := range []string{`{"family":"leap","release":"16.1"}`, `{"family":"plan9","release":"4"}`, `"rocky-10"`} {
+		body := strings.Replace(strings.Replace(createBody, `"web"`, `"other"`, 1), `"storage":`, `"nodeOS":`+refused+`,"storage":`, 1)
+		expect(t, b.do("POST", "/api/clusters", body), http.StatusUnprocessableEntity)
+	}
+	record("almalinux-10,rocky-10")
+	expect(t, b.do("POST", "/api/clusters", strings.Replace(createBody, `"web"`, `"second"`, 1)), http.StatusCreated)
 }
 
 func TestMissingKubeadmTemplate(t *testing.T) {
@@ -675,12 +716,16 @@ func TestMissingKubeadmTemplate(t *testing.T) {
 		class               *clusterv1.ClusterClass
 	}{
 		{"not looked at yet", "v1.36.5", "", class(nil)},
-		{"none", "", "no kubeadm VM template yet", class(map[string]string{versions: ""})},
-		{"the version's", "v1.36.5", "", class(map[string]string{versions: "v1.37.1,v1.36.5"})},
-		{"another version's", "v1.35.2", "no kubeadm VM template of v1.35.2", class(map[string]string{versions: "v1.37.1,v1.36.5"})},
-		{"the class only", "", "", class(map[string]string{versions: "v1.37.1"})},
+		{"none", "", "no kubeadm VM template on AlmaLinux 10 yet", class(map[string]string{versions: "{}"})},
+		{"another node OS's only", "", "no kubeadm VM template on AlmaLinux 10 yet", class(map[string]string{versions: `{"rocky-10":["v1.37.1"]}`})},
+		{"the version's", "v1.36.5", "", class(map[string]string{versions: `{"almalinux-10":["v1.37.1","v1.36.5"]}`})},
+		{
+			"another version's", "v1.35.2", "no kubeadm VM template of v1.35.2 on AlmaLinux 10",
+			class(map[string]string{versions: `{"almalinux-10":["v1.37.1","v1.36.5"]}`}),
+		},
+		{"the class only", "", "", class(map[string]string{versions: `{"almalinux-10":["v1.37.1"]}`})},
 	} {
-		if got := missingTemplate(c.class, "kubeadm", c.version); (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
+		if got := missingTemplate(c.class, "kubeadm", c.version, templates.DefaultNodeOS); (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
 			t.Errorf("%s: missingTemplate = %q, want %q", c.name, got, c.want)
 		}
 	}
@@ -1329,9 +1374,15 @@ func TestClasses(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &classes); err != nil || len(classes) != 1 {
 		t.Fatalf("classes = %s", rec.Body)
 	}
-	if c := classes[0]; c.Distribution != "rke2" || len(c.Variables) != 10 || !c.Variables[0].Required || c.Variables[0].Schema.Format != "ipv4" ||
-		c.Annotations["kubehenge.dev/default-pods"] != "10.42.0.0/16" {
-		t.Fatalf("class = %+v", c)
+	if c := classes[0]; c.Distribution != "rke2" || len(c.Variables) != 11 || !c.Variables[0].Required || c.Variables[0].Schema.Format != "ipv4" ||
+		c.Annotations["kubehenge.dev/default-pods"] != "10.42.0.0/16" || len(c.NodeOSes) != len(templates.NodeOSes()) {
+		t.Fatalf("class = %s", rec.Body)
+	}
+	// Leap waits for its release; what the interface may offer, the page is told.
+	for _, o := range classes[0].NodeOSes {
+		if (o.Unreleased != "") != (o.Family == "leap") || o.Default != (o.NodeOS == templates.DefaultNodeOS) || o.MAC != templates.SELinux {
+			t.Errorf("node OS %+v", o)
+		}
 	}
 }
 

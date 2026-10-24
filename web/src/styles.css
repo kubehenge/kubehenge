@@ -289,6 +289,10 @@ output.notice {
   margin: 0;
 }
 
+.summary + .summary {
+  margin-top: 4px;
+}
+
 /* An object's page: its views in a menu on the left, as Proxmox VE shows a VM's. */
 
 .object {
@@ -899,6 +903,31 @@ details.advanced > summary {
   max-height: 60vh;
   overflow: auto;
   margin: 8px 0 0;
+  padding: 8px;
+  background: var(--panel-head);
+  border: 1px solid var(--border);
+  white-space: pre;
+}
+
+/* Commands to paste keep their own lines, so their dialog takes more of a wide screen too. */
+.dialog:has(.restore-steps) {
+  width: min(900px, 96vw);
+}
+
+.restore-steps .steps {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.restore-steps .steps p {
+  margin: 8px 0 4px;
+}
+
+.restore-command {
+  font-size: 12px;
+  max-height: 240px;
+  overflow: auto;
+  margin: 0;
   padding: 8px;
   background: var(--panel-head);
   border: 1px solid var(--border);

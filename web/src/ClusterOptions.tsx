@@ -1,5 +1,6 @@
-import { useId, useState, type JSX } from "react";
+import { Fragment, useEffect, useId, useState, type JSX } from "react";
 
+import { api } from "./api";
 import { CertificatesDialog, certificatesOf, certificatesText } from "./Certificates";
 import { ClusterMeshDialog, meshText, runsCilium } from "./ClusterMesh";
 import { UpgradesDialog, describe, refreshesNodes, upgradePolicy } from "./ClusterUpgrades";
@@ -7,6 +8,7 @@ import { CSIDialog, SnapshotsDialog, csiOn, snapshotsOn, useCSIOffer, useSnapsho
 import { GitOpsDialog, gitOpsOf, gitOpsText } from "./GitOps";
 import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBalancer";
 import { LogsDialog, logsOf, logsText } from "./Logs";
+import { choosable, cpuNote, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
 import { OIDCProviders, cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import {
   HADialog,
@@ -21,13 +23,16 @@ import {
   useHAOffered,
 } from "./Placement";
 import { PodSecurityFields, cisText, enforced, podSecurityOf, podSecurityText } from "./PodSecurity";
-import type { Cluster, OIDCProvider } from "./types";
+import { TalosDialog, talosOf } from "./Talos";
+import type { Cluster, NodeOSChoice, OIDCProvider } from "./types";
 import {
   Dialog,
   ErrorBox,
   Field,
   cniName,
+  errorMessage,
   filled,
+  sentence,
   headlampHint,
   headlampText,
   headlampViewHint,
@@ -45,6 +50,7 @@ import { flag, record, text, texts } from "./values";
 
 /** What the Options view changes, each through a dialog of its own. */
 export type OptionAction =
+  | "nodeOS"
   | "placement"
   | "ha"
   | "csi"
@@ -61,6 +67,7 @@ export type OptionAction =
   | "gitops"
   | "upgrades"
   | "certificates"
+  | "talos"
   | "oidc";
 
 /** A setting the Options view lists, and the action of the dialog that changes it. */
@@ -114,6 +121,9 @@ export function OptionDialog({
     case "certificates": {
       return <CertificatesDialog cluster={c} onClose={onClose} />;
     }
+    case "nodeOS": {
+      return <NodeOSDialog cluster={c} onClose={onClose} />;
+    }
     case "placement": {
       return <PlacementDialog cluster={c} onClose={onClose} />;
     }
@@ -128,6 +138,9 @@ export function OptionDialog({
     }
     case "haGroups": {
       return <HAGroupsDialog cluster={c} onClose={onClose} />;
+    }
+    case "talos": {
+      return <TalosDialog cluster={c} onClose={onClose} />;
     }
     case "oidc": {
       break;
@@ -172,10 +185,14 @@ function rancherText(r: RancherValue): string {
   return r.register === false ? "Not registered" : registeredWithRancher;
 }
 
+// nodeOSRows is the node OS's row, for every cluster but a Talos one, whose nodes run Talos.
+const nodeOSRows = (c: Cluster): OptionRow[] =>
+  c.nodeOS ? [{ label: "Node OS", value: c.nodeOS.title, action: "nodeOS", name: "the node OS" }] : [];
+
 /**
  * Options lists what can be set on a cluster after it was created, each with its Edit button, as
- * Proxmox VE's Options panels do. more are the rows of settings whose dialogs live with the views
- * of their own, after logs.
+ * Proxmox VE's Options panels do. more are the rows of settings whose dialogs live elsewhere, with
+ * views of their own or the Scale dialog's, after logs.
  */
 export function Options<A extends string = never>({
   cluster: c,
@@ -198,7 +215,13 @@ export function Options<A extends string = never>({
   const haGroups = useHAGroupsOffer(c);
   const cis = c.variables["cis"] === true;
   const podSecurity = enforced(podSecurityOf(c.variables["podSecurity"]), cis);
+  const talos: OptionRow[] =
+    c.distribution === "talos"
+      ? [{ label: "Talos release", value: talosOf(c), action: "talos", button: "Upgrade", name: "Talos" }]
+      : [];
   const rows: OptionRow<OptionAction | A>[] = [
+    ...nodeOSRows(c),
+    ...talos,
     { label: "Pod network", value: cniName(text(c.variables["cni"]) ?? "") || "The distribution's own" },
     {
       label: "Load balancer",
@@ -294,7 +317,7 @@ export function Options<A extends string = never>({
     },
     {
       label: "Automatic upgrades",
-      value: describe(upgrades, refreshesNodes(upgrades, c.distribution)),
+      value: describe(upgrades, refreshesNodes(upgrades), c.distribution),
       action: "upgrades",
       name: "automatic upgrades",
     },
@@ -328,6 +351,109 @@ export function Options<A extends string = never>({
         </tbody>
       </table>
     </div>
+  );
+}
+
+// A node OS the cluster can move to: released, and with a template of it built.
+const movable = (o: NodeOSChoice): boolean => choosable(o) && !filled(o.noTemplate);
+
+// nodeOSNote says why a node OS cannot be moved to, or else what it asks of the nodes' CPUs.
+function nodeOSNote(o: NodeOSChoice, oses: NodeOSChoice[]): string | undefined {
+  if (filled(o.unreleased)) {
+    return sentence(`It cannot be chosen yet: ${o.unreleased}`);
+  }
+  return filled(o.noTemplate) ? sentence(o.noTemplate) : cpuNote(o, oses);
+}
+
+function NodeOSDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+  const running = c.nodeOS === undefined ? "" : nodeOSKey(c.nodeOS);
+  const [oses, setOses] = useState<NodeOSChoice[]>();
+  const [loadError, setLoadError] = useState<string>();
+  const [chosen, setChosen] = useState(running);
+  const { busy, error, send } = useChange(c, onClose);
+  const group = useId();
+  useEffect(() => {
+    let current = true;
+    async function load(): Promise<void> {
+      try {
+        const classes = await api.classes();
+        if (current) {
+          setOses(classes.find((x) => x.name === c.class)?.nodeOSes ?? []);
+        }
+      } catch (err) {
+        if (current) {
+          setLoadError(errorMessage(err));
+        }
+      }
+    }
+    void load();
+    return () => {
+      current = false;
+    };
+  }, [c.class]);
+  const os = findNodeOS(oses, chosen);
+  return (
+    <Dialog
+      title="Node OS"
+      onClose={onClose}
+      onSubmit={() => {
+        if (os !== undefined) {
+          void send({ variables: { nodeOS: nodeOSRef(os) } });
+        }
+      }}
+      actions={
+        <>
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="primary"
+            disabled={busy || chosen === running || os === undefined || !movable(os)}
+          >
+            Save
+          </button>
+        </>
+      }
+    >
+      <p className="muted">
+        What the cluster&apos;s nodes run. Saving another replaces every node with a clone of its VM template, one at a
+        time as in an upgrade; that template has to be built first.
+      </p>
+      {oses === undefined && !filled(loadError) && <p className="muted">Loading…</p>}
+      <ErrorBox message={loadError} />
+      {oses !== undefined && (
+        <div role="radiogroup" aria-label="Node OS">
+          {oses.map((o, i) => {
+            const key = nodeOSKey(o);
+            const note = key === running ? undefined : nodeOSNote(o, oses);
+            const noteId = `${group}-${i}`;
+            return (
+              <Fragment key={key}>
+                <label className="check">
+                  <input
+                    type="radio"
+                    name={group}
+                    checked={chosen === key}
+                    disabled={key !== running && !movable(o)}
+                    aria-describedby={note === undefined ? undefined : noteId}
+                    onChange={() => setChosen(key)}
+                  />{" "}
+                  {o.title}
+                  {key === running && " (running)"}
+                </label>
+                {note !== undefined && (
+                  <p className="hint" id={noteId}>
+                    {note}
+                  </p>
+                )}
+              </Fragment>
+            );
+          })}
+        </div>
+      )}
+      <ErrorBox message={error} />
+    </Dialog>
   );
 }
 

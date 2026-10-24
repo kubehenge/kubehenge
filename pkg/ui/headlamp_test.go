@@ -49,6 +49,10 @@ type upstreamRequest struct {
 	host    string
 	// stateless are the headers with which Headlamp's dynamic clusters pick a kubeconfig and user.
 	stateless []string
+	// authorization is the credential Headlamp would pass on to the cluster.
+	authorization string
+	method        string
+	body          string
 }
 
 func withHeadlamp(t *testing.T, h *harness) *[]upstreamRequest {
@@ -72,8 +76,12 @@ func withHeadlamp(t *testing.T, h *harness) *[]upstreamRequest {
 				stateless = append(stateless, name)
 			}
 		}
+		body, _ := io.ReadAll(r.Body)
 		mu.Lock()
-		*seen = append(*seen, upstreamRequest{path: r.URL.Path, cookies: cookies, proto: r.Header.Get("X-Forwarded-Proto"), host: r.Host, stateless: stateless})
+		*seen = append(*seen, upstreamRequest{
+			path: r.URL.Path, cookies: cookies, proto: r.Header.Get("X-Forwarded-Proto"), host: r.Host, stateless: stateless,
+			authorization: r.Header.Get("Authorization"), method: r.Method, body: string(body),
+		})
 		mu.Unlock()
 		// Headlamp's answers, as Headlamp gives them.
 		switch r.URL.Path {
@@ -87,6 +95,11 @@ func withHeadlamp(t *testing.T, h *harness) *[]upstreamRequest {
 			})
 			// Headlamp's own address, which the browser cannot reach: only its path may be kept.
 			http.Redirect(w, r, "https://"+r.Host+"/auth?cluster=default.one", http.StatusSeeOther) //nolint:gosec // the fake Headlamp
+			return
+		}
+		if r.URL.Path == "/plugins" {
+			_, _ = w.Write([]byte(`[{"path":"static-plugins/app-catalog","type":"shipped","source":"shipped","name":"app-catalog"},` +
+				`{"path":"plugins/own","type":"development","source":"development","name":"own"}]`))
 			return
 		}
 		if r.URL.Path == "/config" {

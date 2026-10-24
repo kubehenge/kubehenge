@@ -55,6 +55,9 @@ module "management" {
   proxmox_ha             = var.settings.proxmoxHA
   offer_ha_rules         = var.settings.offerHARules
   template_refresh       = var.settings.templateRefresh
+  etcd_restore           = var.settings.etcdRestore
+  headlamp_sign_in       = var.settings.headlampSignIn
+  headlamp_actions       = var.settings.headlampActions
 
   cluster_datastore_allocate = var.settings.clusterDatastoreAllocate
   cluster_sys_audit          = var.settings.clusterSysAudit
@@ -78,14 +81,16 @@ output "api_endpoint" {
 }
 `
 
-func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase string, ticket *pve.Ticket) ([]byte, error) {
+// run applies the module with the settings, signing in to Proxmox VE as auth says (ticketAuth or
+// tokenAuth), and returns the interface's kubeconfig.
+func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase string, auth []string) ([]byte, error) {
 	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
 		return nil, fmt.Errorf("preparing the module's working directory: %w", err)
 	}
 	if err := a.writeConfig(s); err != nil {
 		return nil, err
 	}
-	env, err := a.env(passphrase, ticket)
+	env, err := a.env(passphrase, auth)
 	if err != nil {
 		return nil, err
 	}
@@ -121,6 +126,9 @@ func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase str
 		j.Add("Removing any root@pam password from the management cluster")
 	}
 	if err = a.StoreRootPassword(ctx, []byte(admin), s.ClusterVolumeSnapshots, s.RootPassword); err != nil {
+		return nil, err
+	}
+	if err = a.recordApplied(); err != nil {
 		return nil, err
 	}
 	return kubeconfig, nil
@@ -179,6 +187,9 @@ func (a *Appliance) writeConfig(s *Settings) error {
 		"proxmoxHA":              s.ProxmoxHA,
 		"offerHARules":           s.OfferHARules,
 		"templateRefresh":        moduleTemplateRefresh(s.TemplateRefresh),
+		"etcdRestore":            s.EtcdRestore,
+		"headlampSignIn":         s.HeadlampSignIn,
+		"headlampActions":        s.HeadlampActions,
 
 		"clusterDatastoreAllocate": s.ClusterDatastoreAllocate,
 		"clusterSysAudit":          s.ClusterSysAudit,
@@ -213,9 +224,19 @@ func (a *Appliance) writeConfig(s *Settings) error {
 	return writeFileAtomic(filepath.Join(dir, "settings.json"), settings)
 }
 
+// ticketAuth has the module's Proxmox VE provider act with a user's session.
+func ticketAuth(t *pve.Ticket) []string {
+	return []string{"PROXMOX_VE_AUTH_TICKET=" + t.Ticket, "PROXMOX_VE_CSRF_PREVENTION_TOKEN=" + t.CSRF}
+}
+
+// tokenAuth has it act with an API token, user@realm!name=secret.
+func tokenAuth(token string) []string {
+	return []string{"PROXMOX_VE_API_TOKEN=" + token}
+}
+
 // env is all OpenTofu gets: nothing of the appliance's own environment beyond the path and any
 // proxy, so no other credential reaches it.
-func (a *Appliance) env(passphrase string, ticket *pve.Ticket) ([]string, error) {
+func (a *Appliance) env(passphrase string, auth []string) ([]string, error) {
 	cache := filepath.Join(a.Dir, "plugins")
 	if err := os.MkdirAll(cache, privateDir); err != nil {
 		return nil, fmt.Errorf("preparing OpenTofu's plugin cache: %w", err)
@@ -227,9 +248,8 @@ func (a *Appliance) env(passphrase string, ticket *pve.Ticket) ([]string, error)
 		"TF_INPUT=0",
 		"TF_PLUGIN_CACHE_DIR=" + cache,
 		"TF_ENCRYPTION=" + encryption(passphrase),
-		"PROXMOX_VE_AUTH_TICKET=" + ticket.Ticket,
-		"PROXMOX_VE_CSRF_PREVENTION_TOKEN=" + ticket.CSRF,
 	}
+	env = append(env, auth...)
 	for _, k := range []string{"HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy"} {
 		if v, ok := os.LookupEnv(k); ok {
 			env = append(env, k+"="+v)

@@ -203,6 +203,8 @@ type poolView struct {
 	UpToDate   int32  `json:"upToDate"`
 	RollingOut bool   `json:"rollingOut"`
 	Message    string `json:"message,omitempty"`
+	// Autoscaling is set for a pool the cluster autoscaler sizes.
+	Autoscaling *poolAutoscaling `json:"autoscaling,omitempty"`
 }
 
 type controlPlaneView struct {

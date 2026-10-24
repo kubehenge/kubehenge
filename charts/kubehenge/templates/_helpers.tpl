@@ -270,6 +270,14 @@ kubehenge.dev/backup-targets: {{ .Values.backupTargets | toJson | quote }}
 {{- end -}}
 
 {{/*
+Whether the controller restores etcd through the VMs' guest agents, which the interface offers
+then; otherwise it shows the steps to restore by hand.
+*/}}
+{{- define "kubehenge.etcdRestore" -}}
+kubehenge.dev/etcd-restore-automatic: {{ .Values.proxmox.etcdRestore | toString | quote }}
+{{- end -}}
+
+{{/*
 Add-ons Kubehenge's controller installs into a cluster, the same for every distribution.
 */}}
 {{- define "kubehenge.addonVariables" -}}
@@ -428,6 +436,62 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
       x-kubernetes-validations:
         - rule: "!self.enabled || has(self.target)"
           message: Backups need a target.
+- name: etcdSnapshots
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        Snapshots of the cluster's etcd, which holds every object of the cluster but its volumes'
+        data, on a schedule to one of the S3 targets an administrator set, beside the cluster's
+        Velero backups in an etcd folder of its own. Kubehenge's controller takes each snapshot
+        through the cluster's API server with a client certificate it signs for itself, encrypts
+        it with age to a key of the cluster's own in the <cluster>-backup-keys Secret, and stores
+        it with the credential typed into the interface for the cluster, or else the one for every
+        cluster; no key or credential enters the cluster. Restoring one brings back the cluster's
+        objects as they were, for a cluster that lost its etcd quorum or had its objects deleted
+        or damaged.
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        target:
+          type: string
+          minLength: 1
+          maxLength: 63
+          description: The administrator's target to store the snapshots in, by name.
+        schedule:
+          type: string
+          minLength: 1
+          maxLength: 128
+          default: "0 */12 * * *"
+          description: When to take a snapshot, as a cron expression of five fields or a descriptor such as @daily.
+        timeZone:
+          type: string
+          default: UTC
+          description: IANA time zone the schedule is read in, such as Europe/Berlin.
+        keep:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 14
+          description: How many snapshots to keep; the oldest beyond are deleted from the target.
+        distributionUpload:
+          type: boolean
+          default: false
+          description: >-
+            RKE2 and k3s only: have the cluster's servers also take snapshots themselves on the same
+            schedule, read in UTC, and upload them to the target's <distribution>-etcd folder of the
+            cluster, keeping as many, as etcd holds them and not encrypted by Kubehenge. For it the
+            controller puts the target and its access key into the Secret kubehenge-etcd-s3 in the
+            cluster's kube-system, where whoever may read Secrets there reads the key and with it
+            everything the key reaches in the target. Switching it, or changing the schedule or keep
+            while it is on, replaces the control-plane machines.
+      x-kubernetes-validations:
+        - rule: "!self.enabled || has(self.target)"
+          message: etcd snapshots need a target.
+        - rule: "!has(self.distributionUpload) || !self.distributionUpload || self.enabled"
+          message: The distribution's own upload takes the target, schedule and keep of etcd snapshots, which are off.
 - name: podSecurity
   required: false
   schema:
@@ -971,6 +1035,7 @@ paths kubeadm needs them to; without, the API server is to be given anonymous-au
 {{- define "kubehenge.oidcFile" -}}
 path: {{ .path }}
 {{ printf "{{- $anonymous := %t }}" .anonymous }}
+{{ "{{- $talos := false }}" }}
 {{ .root.Files.Get "files/authentication-config.tpl" }}
 {{- end -}}
 
@@ -982,6 +1047,7 @@ renders with the cluster's variables, the chart's exempt namespaces written into
 {{- define "kubehenge.admissionFile" -}}
 path: {{ .path }}
 {{ printf "{{- $exempt := list %s }}" (include "kubehenge.quotedList" .root.Values.podSecurityExempt) }}
+{{ "{{- $talos := false }}" }}
 {{ .root.Files.Get "files/admission.tpl" }}
 {{- end -}}
 
@@ -1003,46 +1069,6 @@ Proxmox VE HA take it from there. Applied before the distribution starts with sy
     kernel.panic_on_oops=1
     kernel.keys.root_maxkeys=1000000
     kernel.keys.root_maxbytes=25000000
-{{- end -}}
-
-{{/*
-An AppArmor profile for the runc that RKE2 and k3s bring (.distribution names which), confining
-nothing, as Ubuntu's own profile for its /usr/sbin/runc does. Without one their runc runs
-unconfined, and Ubuntu stacks the container's profile on unconfined when an unprivileged
-unconfined process changes profile (kernel.apparmor_restrict_unprivileged_unconfined). runc changes
-a process that kubectl exec starts only once it runs as the container's user, without the
-capabilities that would exempt it, so the process got the label
-cri-containerd.apparmor.d//&unconfined, which the container's profile lets signal nothing, itself
-included: dig, among others, crashed when it stopped its own threads. From a profile of its own the
-change is no longer one from unconfined.
-The profile must be named runc: containerd's container profile takes signals only from unconfined,
-runc, crun, containerd's own profile and the container itself, so under any other name runc could
-not stop a container. It therefore takes the place of Ubuntu's profile of that name and names
-Ubuntu's runc as well; kubehenge.runcProfileLoad disables Ubuntu's file, since AppArmor loads the
-files at boot in no set order and two profiles of one name would replace each other. It loads this
-one on the first boot; AppArmor loads it on every boot after.
-*/}}
-{{- define "kubehenge.runcProfileFile" -}}
-- path: /etc/apparmor.d/kubehenge-runc
-  owner: root:root
-  permissions: "0644"
-  content: |
-    abi <abi/4.0>,
-    include <tunables/global>
-
-    profile runc /{usr/{bin,sbin}/runc,var/lib/rancher/{{ .distribution }}/data/*/bin/runc} flags=(unconfined) {
-      userns,
-
-      include if exists <local/runc>
-    }
-{{- end -}}
-
-{{/*
-The command loading kubehenge.runcProfileFile before the distribution starts, on a node whose
-kernel runs AppArmor, with Ubuntu's runc profile disabled in its place.
-*/}}
-{{- define "kubehenge.runcProfileLoad" -}}
-[ ! -d /sys/kernel/security/apparmor ] || { mkdir -p /etc/apparmor.d/disable && ln -sf /etc/apparmor.d/runc /etc/apparmor.d/disable/runc && apparmor_parser --replace /etc/apparmor.d/kubehenge-runc; }
 {{- end -}}
 
 {{/*
@@ -1127,12 +1153,65 @@ streaming sessions that end when idle. Each class adds its distribution's own on
 {{ "{{ if .cis }}true{{ end }}" | quote }}
 {{- end -}}
 
+{{- define "kubehenge.etcdUploadEnabled" -}}
+{{ "{{ with .etcdSnapshots }}{{ if and .enabled .distributionUpload }}true{{ end }}{{ end }}" | quote }}
+{{- end -}}
+
+{{/*
+The drop-in that has RKE2's or k3s's servers upload their own etcd snapshots, with the target read
+from the Secret Kubehenge's controller keeps in kube-system: given any other etcd-s3 setting, the
+servers ignore that Secret, and the store's keys would have to be written here, into the
+bootstrap data. The retention, an etcd-snapshot setting, counts each server's local snapshots and
+the uploads of all servers together.
+*/}}
+{{- define "kubehenge.etcdUploadFile" -}}
+path: {{ .path }}
+owner: root:root
+permissions: "0600"
+content: |
+  etcd-s3: true
+  etcd-s3-config-secret: kubehenge-etcd-s3
+  etcd-snapshot-schedule-cron: {{ "{{ .etcdSnapshots.schedule | quote }}" }}
+  etcd-snapshot-retention: {{ "{{ .etcdSnapshots.keep }}" }}
+{{- end -}}
+
 {{/*
 The kubelet settings cis adds, as kubelet flags.
 */}}
 {{- define "kubehenge.cisKubeletArgs" -}}
 - seccomp-default=true
 - streaming-connection-idle-timeout=5m
+{{- end -}}
+
+{{/*
+The operating system of an RKE2, k3s or kubeadm cluster's nodes. files/node-oses.json lists the node
+OSes Kubehenge builds templates of; a unit test holds it to the families in pkg/templates.
+*/}}
+{{- define "kubehenge.nodeOSVariable" -}}
+{{- $oses := .Files.Get "files/node-oses.json" | fromJson }}
+- name: nodeOS
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        Operating system of the nodes, a family and one of its releases, as Kubehenge builds its VM
+        templates: the family's own signed packages and only those a node needs, SELinux enforcing
+        with the distribution's policy, and for AlmaLinux and Rocky Linux an image-mode system whose
+        /usr is read-only. Changing it replaces every node with a clone of the new node OS's
+        template, one at a time as in an upgrade; that template has to be built first.
+      required: [family, release]
+      default: {{ toJson $oses.default }}
+      properties:
+        family:
+          type: string
+          enum: {{ toJson $oses.families }}
+        release:
+          type: string
+          minLength: 1
+      x-kubernetes-validations:
+        - rule: "(self.family + '-' + self.release) in {{ toJson $oses.available | replace "\"" "'" }}"
+          message: "a release of the family Kubehenge builds templates of: {{ join ", " $oses.available }}"
 {{- end -}}
 
 {{/*
@@ -1162,8 +1241,8 @@ reads it.
           default: true
           description: >-
             Replace the nodes inside the window with clones of the newest build of their VM
-            template, which carries Ubuntu's updates, once that build is a day old, whatever mode
-            says. Nodes are replaced one at a time, as in an upgrade. Talos nodes take their
+            template, which carries their node OS's updates, once that build is a day old, whatever
+            mode says. Nodes are replaced one at a time, as in an upgrade. Talos nodes take their
             updates by upgrading Talos instead.
         window:
           type: object
@@ -1194,6 +1273,50 @@ reads it.
               type: string
               default: UTC
               description: IANA time zone of start, such as Europe/Berlin.
+{{- end -}}
+
+{{/*
+The cluster autoscaler of a cluster with an autoscaled pool, which Kubehenge's controller runs; no
+patch reads it. A pool is autoscaled by Cluster API's own annotations on it.
+*/}}
+{{- define "kubehenge.autoscalerVariable" -}}
+- name: autoscaler
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        How the cluster autoscaler scales the cluster's autoscaled pools: those whose topology entry
+        carries cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size and -max-size and no
+        replicas. Kubehenge's controller runs it while the cluster has such a pool.
+      properties:
+        placement:
+          type: string
+          enum: [management, workload]
+          default: management
+          description: >-
+            Where the autoscaler runs. management keeps it in the management cluster, and the
+            cluster holds no credential of the management cluster. workload runs it on the
+            cluster's control planes, sparing the management cluster its memory, and puts a
+            management-cluster token inside the cluster that can read every cluster's machines in
+            its namespace; the admission policy still lets it scale only this cluster's pools.
+        expander:
+          type: string
+          enum: [least-waste, most-pods, random]
+          default: least-waste
+          description: Which pool grows when several could take the waiting pods.
+        scaleDownDelayAfterAddMinutes:
+          type: integer
+          minimum: 1
+          maximum: 1440
+          default: 10
+          description: How long after a scale-up the autoscaler waits before it removes any node.
+        scaleDownUnneededMinutes:
+          type: integer
+          minimum: 1
+          maximum: 1440
+          default: 10
+          description: How long a node stays unneeded before the autoscaler removes it.
 {{- end -}}
 
 {{/*
@@ -1396,6 +1519,11 @@ content: |
     hostAliases:
       - ip: 127.0.0.1
         hostnames: [kubernetes]
+    # It reads the node's own admin kubeconfig, whose SELinux type no confined container may read,
+    # as the control plane's static pods beside it do.
+    securityContext:
+      seLinuxOptions:
+        type: spc_t
     containers:
       - name: kube-vip
         image: {{ .root.Values.kubeVip }}

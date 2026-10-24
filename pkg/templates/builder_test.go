@@ -207,7 +207,7 @@ func shownAs(vm map[string]any, name string, template int) map[string]any {
 
 func rke2(t *testing.T) (Template, string) {
 	t.Helper()
-	tmpl, err := Plan(Request{Distribution: RKE2})
+	tmpl, err := Plan(&Request{Distribution: RKE2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,7 +401,7 @@ func TestCreateFreshTakesAnotherVMIDWhenTheOfferedOneIsTaken(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := &Builder{Client: client, Storage: "local-lvm", Pool: testPool}
-	vmid, err := b.createFresh(ctx, cluster, node, &tmpl, "local:import/image.qcow2", "x86-64-v2-AES", "https://example.test/image.qcow2")
+	vmid, err := b.createFresh(ctx, cluster, node, &tmpl, "local:import/image.qcow2", "x86-64-v2-AES", "https://example.test/image.qcow2", nil)
 	if err != nil || vmid != 101 {
 		t.Fatalf("createFresh gave %d, %v; want VM 101 after 100 was taken", vmid, err)
 	}
@@ -430,7 +430,7 @@ func TestCreateFreshGivesUpAfterItsAttempts(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := &Builder{Client: client, Storage: "local-lvm", Pool: testPool}
-	_, err = b.createFresh(ctx, cluster, node, &tmpl, "local:import/image.qcow2", "x86-64-v2-AES", "https://example.test/image.qcow2")
+	_, err = b.createFresh(ctx, cluster, node, &tmpl, "local:import/image.qcow2", "x86-64-v2-AES", "https://example.test/image.qcow2", nil)
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("createFresh gave %v; want Proxmox VE's refusal once every attempt found the VM ID taken", err)
 	}

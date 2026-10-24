@@ -221,8 +221,16 @@ run "controller_and_clusters_are_least_privilege" {
         kubehenge-kubeadm = ["kubeadm-bootstrap-system", "kubeadm-control-plane-system"]
         kubehenge-rke2    = ["rke2-bootstrap-system", "rke2-control-plane-system"]
         kubehenge-k3s     = ["k3s-bootstrap-system", "k3s-control-plane-system"]
+        kubehenge-talos   = ["talos-bootstrap-system", "talos-control-plane-system"]
       }
-      interface = { extraNamespaces = [], offerHARules = false }
+      # Talos workload clusters require the signatures the management cluster's nodes do, but for
+      # those of the providers only the management cluster runs.
+      talos = { imageSignatures = [
+        { image = "factory.talos.dev/*", keyless = { issuer = "https://accounts.google.com", subject = "image-factory-signing@talos-production.iam.gserviceaccount.com" } },
+        { image = "ghcr.io/siderolabs/*", keyless = { issuer = "https://accounts.google.com", subjectRegex = "^(releasemgr-svc@talos-production\\.iam\\.gserviceaccount\\.com|[^@]+@siderolabs\\.com)$" } },
+        { image = "registry.k8s.io/*", keyless = { issuer = "https://accounts.google.com", subject = "krel-trust@k8s-releng-prod.iam.gserviceaccount.com" } },
+      ] }
+      interface = { extraNamespaces = [], offerHARules = false, headlampSignIn = false, headlampActions = false }
       clusters  = { storages = ["local-lvm", "ceph"], bridges = ["vmbr0", "vmbr1"] }
       proxmox = {
         url          = "https://pve.example.org:8006"
@@ -231,6 +239,7 @@ run "controller_and_clusters_are_least_privilege" {
         clusterGroup = "kubehenge-clusters"
         clusterRole  = "kubehenge-cluster-vms"
         ha           = false
+        etcdRestore  = false
         datastoreAllocate = {
           role               = ""
           managementStorages = ["local-lvm", "local"]
@@ -257,9 +266,10 @@ run "controller_and_clusters_are_least_privilege" {
         dns           = []
         creatorBuilds = false
       }
-      clusterOIDC   = []
-      backupTargets = []
-      image         = "ghcr.io/kubehenge/kubehenge@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+      clusterOIDC        = []
+      backupTargets      = []
+      image              = "ghcr.io/kubehenge/kubehenge@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+      managementEndpoint = "https://192.0.2.10:6443"
     }
     error_message = "the Kubehenge chart's values differ"
   }
@@ -316,8 +326,10 @@ run "controller_and_clusters_are_least_privilege" {
         ["factory.talos.dev/*", "https://accounts.google.com", "image-factory-signing@talos-production.iam.gserviceaccount.com"],
         ["ghcr.io/siderolabs/*", "https://accounts.google.com", "^(releasemgr-svc@talos-production\\.iam\\.gserviceaccount\\.com|[^@]+@siderolabs\\.com)$"],
         ["registry.k8s.io/*", "https://accounts.google.com", "krel-trust@k8s-releng-prod.iam.gserviceaccount.com"],
+        ["ghcr.io/kubehenge/cluster-api-bootstrap-provider-talos", "https://token.actions.githubusercontent.com", "^https://github\\.com/kubehenge/cluster-api-bootstrap-provider-talos/\\.github/workflows/release\\.yaml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$"],
+        ["ghcr.io/kubehenge/cluster-api-control-plane-provider-talos", "https://token.actions.githubusercontent.com", "^https://github\\.com/kubehenge/cluster-api-control-plane-provider-talos/\\.github/workflows/release\\.yaml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$"],
     ]]
-    error_message = "Talos must pull the Image Factory's, Sidero's and Kubernetes' images only with their publishers' signatures"
+    error_message = "Talos must pull the Image Factory's, Sidero's and Kubernetes' images, and the Talos providers' from Kubehenge's forks, only with their publishers' signatures"
   }
 
   assert {
@@ -336,6 +348,15 @@ run "controller_and_clusters_are_least_privilege" {
   assert {
     condition     = length(proxmox_virtual_environment_group.clusters_audit) == 0 && length(proxmox_acl.clusters_audit) == 0
     error_message = "no cluster may hold Sys.Audit on / unless the administrator lets clusters choose it"
+  }
+
+  assert {
+    condition = (
+      length(proxmox_acl.etcd_restore) == 0 && length(proxmox_user_token.etcd_restore) == 0 &&
+      !contains([for s in helm_release.cluster_api_providers.set_sensitive : s.name], "secrets.kubehenge-proxmox.data.restore-token") &&
+      !yamldecode(helm_release.kubehenge.values[0]).proxmox.etcdRestore
+    )
+    error_message = "no restore token unless restores through the guest agent are asked for"
   }
 }
 
@@ -409,6 +430,38 @@ run "cluster_volume_snapshots" {
       length([for k, a in proxmox_acl.provisioner : k if a.path == "/" && a.role_id != "kubehenge-audit"]) == 0
     )
     error_message = "volume snapshots grant no token anything more"
+  }
+}
+
+run "etcd_restore" {
+  command = plan
+
+  variables {
+    etcd_restore = true
+  }
+
+  assert {
+    condition = (
+      toset(proxmox_virtual_environment_role.etcd_restore[0].privileges) == toset(["VM.Audit", "VM.GuestAgent.Unrestricted"]) &&
+      proxmox_acl.etcd_restore[0].path == "/pool/${var.workload_pool}" && proxmox_acl.etcd_restore[0].propagate &&
+      proxmox_acl.etcd_restore[0].user_id == "kubehenge-etcd-restore@pve" &&
+      proxmox_virtual_environment_user.etcd_restore[0].password == null &&
+      !proxmox_user_token.etcd_restore[0].privileges_separation
+    )
+    error_message = "the restore token holds VM.Audit and VM.GuestAgent.Unrestricted on the workload pool alone, for a password-less user of its own"
+  }
+
+  assert {
+    condition = (
+      contains([for s in helm_release.cluster_api_providers.set_sensitive : s.name], "secrets.kubehenge-proxmox.data.restore-token") &&
+      yamldecode(helm_release.kubehenge.values[0]).proxmox.etcdRestore
+    )
+    error_message = "the controller gets the restore token, kept out of the plain values"
+  }
+
+  assert {
+    condition     = contains(output.proxmox_objects.users, "kubehenge-etcd-restore@pve") && contains(output.proxmox_objects.roles, "kubehenge-etcd-restore")
+    error_message = "a destroy is checked for the restore user and role too"
   }
 }
 
@@ -592,7 +645,7 @@ run "extra_cluster_namespaces" {
 
   assert {
     condition = (
-      yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = ["team-a", "team-b"], offerHARules = false } &&
+      yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = ["team-a", "team-b"], offerHARules = false, headlampSignIn = false, headlampActions = false } &&
       toset(keys(proxmox_acl.provisioner)) == toset([
         "/ kubehenge-audit",
         "/nodes kubehenge-audit",
@@ -636,11 +689,11 @@ run "providers" {
       for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : "${p.kind}/${p.name}"
       ]) == toset([
       "CoreProvider/cluster-api",
-      "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/k3s",
-      "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "ControlPlaneProvider/k3s",
+      "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/k3s", "BootstrapProvider/talos",
+      "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "ControlPlaneProvider/k3s", "ControlPlaneProvider/talos",
       "InfrastructureProvider/proxmox", "IPAMProvider/in-cluster", "AddonProvider/helm",
     ])
-    error_message = "the provider set differs from Cluster API core, kubeadm, RKE2, k3s, capmox, in-cluster IPAM and Helm"
+    error_message = "the provider set differs from Cluster API core, kubeadm, RKE2, k3s, Talos, capmox, in-cluster IPAM and Helm"
   }
 
   assert {
@@ -658,8 +711,8 @@ run "providers" {
       for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : "${p.kind}/${p.name}"
       if anytrue([for patch in try(p.spec.patches, []) : try(yamldecode(patch.patch).spec.replicas, "set") == null])
       ]) == toset([
-      "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/k3s",
-      "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "ControlPlaneProvider/k3s",
+      "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/k3s", "BootstrapProvider/talos",
+      "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "ControlPlaneProvider/k3s", "ControlPlaneProvider/talos",
     ])
     error_message = "the distributions' providers, and only they, must leave their replica count to Kubehenge's controller"
   }
@@ -675,7 +728,7 @@ run "providers" {
         "CoreProvider/cluster-api", "BootstrapProvider/kubeadm", "BootstrapProvider/rke2",
         "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "InfrastructureProvider/proxmox", "AddonProvider/helm",
     ] : k => ["60s", "40s", "10s", ""] }
-    error_message = "every provider that takes lease flags gets the long leases and no lease name; k3s and in-cluster IPAM take none"
+    error_message = "every provider that takes lease flags gets the long leases and no lease name; k3s, Talos and in-cluster IPAM take none"
   }
 
   assert {
@@ -830,6 +883,32 @@ run "cluster_oidc" {
       },
     ]
     error_message = "the providers must reach the chart's clusterOIDC in its own names, defaults filled in"
+  }
+}
+
+run "headlamp_sign_in" {
+  command = plan
+
+  variables {
+    headlamp_sign_in = true
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = [], offerHARules = false, headlampSignIn = true, headlampActions = false }
+    error_message = "the chart must be told to have the shared Headlamp sign people in, its namespaces left as they are"
+  }
+}
+
+run "headlamp_actions" {
+  command = plan
+
+  variables {
+    headlamp_actions = true
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = [], offerHARules = false, headlampSignIn = false, headlampActions = true }
+    error_message = "the chart must be told to have the shared Headlamp offer its actions, nothing else of the interface changed"
   }
 }
 

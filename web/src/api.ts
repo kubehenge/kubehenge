@@ -7,9 +7,12 @@ import type {
   ClusterClass,
   ClusterHealth,
   ClusterRef,
+  ClusterEtcdSnapshots,
   CreateRequest,
+  EtcdRestorePlan,
   HARules,
   Job,
+  ManagementAutomatic,
   ManagementSettings,
   PodLogs,
   PveNode,
@@ -19,6 +22,8 @@ import type {
   SetupStatus,
   Storage,
   StoredCredential,
+  TalosReleases,
+  TemplateBuildRequest,
   TemplateBuilds,
   TemplateRefresh,
   TemplateRequest,
@@ -150,6 +155,13 @@ function remember(s: Session): Session {
 const clusterPath = (ns: string, name: string): string =>
   `/api/clusters/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`;
 
+/**
+ * etcdSnapshotURL is where a cluster's snapshot downloads decrypted. A download asks for no change,
+ * so a plain link fetches it and the browser streams it to disk, whatever its size.
+ */
+export const etcdSnapshotURL = (ns: string, name: string, snapshot: string): string =>
+  `${clusterPath(ns, name)}/etcd-snapshots/${encodeURIComponent(snapshot)}`;
+
 // A cluster's credential, or with no cluster, the one for every cluster.
 const credentialPath = (purpose: string, cluster?: ClusterRef): string =>
   cluster === undefined
@@ -173,6 +185,11 @@ export interface Api {
   backUp: (ns: string, name: string) => Promise<BackupRun>;
   /** restore brings back a backup: of the namespaces named, or of every one when none is. */
   restore: (ns: string, name: string, req: { backup: string; namespaces: string[] }) => Promise<RestoreRun>;
+  etcdSnapshots: (ns: string, name: string) => Promise<ClusterEtcdSnapshots>;
+  takeEtcdSnapshot: (ns: string, name: string) => Promise<void>;
+  etcdRestorePlan: (ns: string, name: string, snapshot: string) => Promise<EtcdRestorePlan>;
+  /** restoreEtcd asks the controller to take the cluster's etcd back to a snapshot. */
+  restoreEtcd: (ns: string, name: string, snapshot: string) => Promise<void>;
 
   setupStatus: () => Promise<SetupStatus>;
   /** rootPassword is root@pam's for volume snapshots; empty keeps the one stored. */
@@ -181,6 +198,10 @@ export interface Api {
   health: (ns: string, name: string) => Promise<ClusterHealth>;
   podLogs: (cluster: ClusterRef, pod: { namespace: string; name: string }, container: string) => Promise<PodLogs>;
   kubeconfig: (ns: string, name: string) => Promise<Blob>;
+  /** talosconfig is a Talos cluster's, which signs in to its nodes' Talos API. */
+  talosconfig: (ns: string, name: string) => Promise<Blob>;
+  /** retryTalosUpgrade takes back the failed node upgrade that holds a Talos cluster's others. */
+  retryTalosUpgrade: (ns: string, name: string) => Promise<void>;
   ingressCA: (ns: string, name: string) => Promise<Blob>;
   storedCredential: (purpose: string, cluster?: ClusterRef) => Promise<StoredCredential>;
   storeCredential: (purpose: string, values: Record<string, string>, cluster?: ClusterRef) => Promise<StoredCredential>;
@@ -189,7 +210,9 @@ export interface Api {
   removeManagement: (passphrase: string) => Promise<Job>;
   upgrades: () => Promise<Upgrades>;
   upgrade: (version: string) => Promise<void>;
-  versions: (distribution: string) => Promise<Versions>;
+  /** nodeOS, such as almalinux-10, narrows kubeadm's versions to those with a template on it. */
+  versions: (distribution: string, nodeOS?: string) => Promise<Versions>;
+  talosReleases: () => Promise<TalosReleases>;
   templates: () => Promise<Templates>;
   createTemplate: (req: TemplateRequest) => Promise<Job>;
   deleteTemplate: (vmid: number) => Promise<void>;
@@ -197,9 +220,13 @@ export interface Api {
   refreshTemplates: () => Promise<TemplateRefresh>;
   templateBuilds: () => Promise<TemplateBuilds>;
   /** Asks for a missing template, for one who may create clusters. */
-  requestTemplateBuild: (distribution: string, kubernetesVersion?: string) => Promise<void>;
+  requestTemplateBuild: (req: TemplateBuildRequest) => Promise<void>;
 
   upgradeSettings: (settings: Upgrades["settings"]) => Promise<Upgrades["settings"]>;
+  /** Lets the appliance keep the state passphrase and a token of its own to apply unattended. */
+  automaticManagement: (passphrase: string) => Promise<ManagementAutomatic>;
+  /** Deletes what automaticManagement kept, and its Proxmox VE user. */
+  stopAutomaticManagement: () => Promise<ManagementAutomatic>;
 
   storages: () => Promise<Storage[]>;
   nodes: () => Promise<PveNode[]>;
@@ -227,6 +254,10 @@ export const api: Api = {
   backups: (ns, name) => request("GET", `${clusterPath(ns, name)}/backups`),
   backUp: (ns, name) => request("POST", `${clusterPath(ns, name)}/backups`),
   restore: (ns, name, req) => request("POST", `${clusterPath(ns, name)}/restores`, req),
+  etcdSnapshots: (ns, name) => request("GET", `${clusterPath(ns, name)}/etcd-snapshots`),
+  takeEtcdSnapshot: (ns, name) => act("POST", `${clusterPath(ns, name)}/etcd-snapshots`),
+  etcdRestorePlan: (ns, name, snapshot) => request("GET", `${etcdSnapshotURL(ns, name, snapshot)}/restore-plan`),
+  restoreEtcd: (ns, name, snapshot) => act("POST", `${clusterPath(ns, name)}/etcd-restores`, { snapshot }),
 
   setupStatus: () => request("GET", "/api/setup"),
   setup: (settings, passphrase, rootPassword) =>
@@ -243,6 +274,8 @@ export const api: Api = {
       `${clusterPath(cluster.namespace, cluster.name)}/pods/${encodeURIComponent(pod.namespace)}/${encodeURIComponent(pod.name)}/logs?container=${encodeURIComponent(container)}`,
     ),
   kubeconfig: (ns, name) => download("GET", `${clusterPath(ns, name)}/kubeconfig`),
+  talosconfig: (ns, name) => download("GET", `${clusterPath(ns, name)}/talosconfig`),
+  retryTalosUpgrade: (ns, name) => act("DELETE", `${clusterPath(ns, name)}/talos-upgrade-failure`),
   ingressCA: (ns, name) => download("GET", `${clusterPath(ns, name)}/certificates/ca`),
   storedCredential: (purpose, cluster) => request("GET", credentialPath(purpose, cluster)),
   storeCredential: (purpose, values, cluster) => request("PUT", credentialPath(purpose, cluster), { values }),
@@ -251,16 +284,22 @@ export const api: Api = {
   removeManagement: (passphrase) => request("POST", "/api/setup/remove", { passphrase, confirm: "remove" }),
   upgrades: () => request("GET", "/api/appliance/upgrades"),
   upgrade: (version) => act("POST", "/api/appliance/upgrades", { version }),
-  versions: (distribution) => request("GET", `/api/versions/${encodeURIComponent(distribution)}`),
+  versions: (distribution, nodeOS) =>
+    request(
+      "GET",
+      `/api/versions/${encodeURIComponent(distribution)}${nodeOS === undefined ? "" : `?nodeOS=${encodeURIComponent(nodeOS)}`}`,
+    ),
+  talosReleases: () => request("GET", "/api/talos/releases"),
   templates: () => request("GET", "/api/templates"),
   createTemplate: (req) => request("POST", "/api/templates", req),
   deleteTemplate: (vmid) => act("DELETE", `/api/templates/${vmid}`),
   refreshTemplates: () => request("POST", "/api/templates/refresh"),
   templateBuilds: () => request("GET", "/api/template-builds"),
-  requestTemplateBuild: (distribution, kubernetesVersion) =>
-    act("POST", "/api/template-builds", { distribution, kubernetesVersion }),
+  requestTemplateBuild: (req) => act("POST", "/api/template-builds", req),
 
   upgradeSettings: (settings) => request("PUT", "/api/appliance/upgrades/settings", settings),
+  automaticManagement: (passphrase) => request("PUT", "/api/appliance/upgrades/management", { passphrase }),
+  stopAutomaticManagement: () => request("DELETE", "/api/appliance/upgrades/management"),
 
   storages: () => request("GET", "/api/proxmox/storages"),
   nodes: () => request("GET", "/api/proxmox/nodes"),

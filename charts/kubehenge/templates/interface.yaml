@@ -36,7 +36,8 @@ metadata:
 {{- end }}
 ---
 # Where the interface creates and changes clusters, its own namespace first. It reads this rather
-# than a setting of its own, so that its rights and its offer change together.
+# than a setting of its own, so that its rights and its offer change together. Likewise whether
+# the shared Headlamp offers its actions, so that it changes with the release applied.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -44,6 +45,9 @@ metadata:
   namespace: {{ .Release.Namespace }}
 data:
   namespaces: {{ toJson $namespaces | quote }}
+  {{- if .Values.interface.headlampActions }}
+  headlampActions: "true"
+  {{- end }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -154,9 +158,9 @@ rules:
   - apiGroups: [cluster.x-k8s.io]
     resources: [clusters]
     verbs: [create, update, patch, delete]
-  # Each cluster's <name>-kubeconfig, handed to users with Sys.Modify on its pool, its health
-  # identities' tokens, and the credentials users type in, which the policy below holds every write
-  # and deletion to.
+  # Each cluster's <name>-kubeconfig, and a Talos cluster's <name>-talosconfig, handed to users with
+  # Sys.Modify on its pool, its health identities' tokens, and the credentials users type in, which
+  # the policy below holds every write and deletion to.
   - apiGroups: [""]
     resources: [secrets]
     verbs: [get, create, update, delete]

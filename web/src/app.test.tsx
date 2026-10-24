@@ -18,7 +18,7 @@ import {
 } from "./create-form";
 import { fakeServer, held, reads, type Route } from "./fake-server";
 import { addressCount } from "./network";
-import type { Cluster, ClusterClass, ClusterHealth, Machine } from "./types";
+import type { Cluster, ClusterClass, ClusterHealth, Machine, NodeOSChoice } from "./types";
 
 const rke2: ClusterClass = {
   name: "kubehenge-rke2",
@@ -75,6 +75,30 @@ const rke2: ClusterClass = {
       },
     },
   ],
+};
+
+const alma: NodeOSChoice = {
+  family: "almalinux",
+  release: "10",
+  title: "AlmaLinux 10",
+  cpuType: "x86-64-v2-AES",
+  mac: "selinux",
+  default: true,
+};
+
+const rocky: NodeOSChoice = {
+  family: "rocky",
+  release: "10",
+  title: "Rocky Linux 10",
+  cpuType: "x86-64-v3",
+  mac: "selinux",
+};
+
+// rke2OS is rke2 as the server lists it: with the node OSes its clusters may run.
+const rke2OS: ClusterClass = {
+  ...rke2,
+  variables: [...rke2.variables, { name: "nodeOS", required: false, schema: { type: "object" } }],
+  nodeOSes: [alma, rocky],
 };
 
 const runningOn = (name: string, proxmoxNode: string, role: Machine["role"] = "control-plane"): Machine => ({
@@ -405,7 +429,7 @@ describe("clusters", () => {
     const links = screen.getAllByRole("link", { name: "Headlamp" });
     expect(links.map((a) => a.getAttribute("href"))).toStrictEqual([
       `https://${location.hostname}:8444/`,
-      `https://${location.hostname}:8444/c/default.web`,
+      `https://${location.hostname}:8444/kubehenge/open/default.web`,
     ]);
     for (const a of links) {
       expect(a).toHaveAttribute("rel", "noopener noreferrer");
@@ -511,9 +535,13 @@ describe("create", () => {
     namespace: "",
     name: "web",
     className: "kubehenge-rke2",
+    nodeOS: "",
     version: "v1.36.5+rke2r1",
+    talosVersion: "",
     controlPlaneReplicas: 3,
     workerReplicas: 2,
+    workerAutoscale: false,
+    workerMax: 3,
     endpoint: "10.0.0.20",
     bridge: "vmbr0",
     vlan: "",
@@ -806,9 +834,47 @@ describe("create", () => {
     expect(Object.fromEntries(summary({ ...form, upgradeMode: "minor" }, withUpgrades))["Automatic upgrades"]).toBe(
       `Patch and minor releases and new node images, every day from 02:00 for 4 h (${zone})`,
     );
-    expect(Object.fromEntries(summary(form, { ...withUpgrades, distribution: "talos" }))["Automatic upgrades"]).toBe(
-      "Off",
+    // Talos nodes take Talos patch releases in the same window.
+    const talos = { ...withUpgrades, distribution: "talos" };
+    expect(request(form, talos).variables["upgrades"]).toStrictEqual({
+      mode: "off",
+      window: { start: "02:00", durationMinutes: 240, timeZone: zone },
+    });
+    expect(Object.fromEntries(summary(form, talos))["Automatic upgrades"]).toBe(
+      `Talos patch releases, every day from 02:00 for 4 h (${zone})`,
     );
+  });
+
+  it("autoscales the workers between the fewest and the most", () => {
+    const withAutoscaler: ClusterClass = {
+      ...rke2,
+      variables: [...rke2.variables, { name: "autoscaler", required: false, schema: { type: "object" } }],
+    };
+    const scaled = { ...form, workerAutoscale: true, workerReplicas: 1, workerMax: 4 };
+    // A class without the autoscaler takes the fixed number.
+    expect(request(scaled, rke2)).not.toHaveProperty("workerAutoscaling");
+    expect(request(scaled, withAutoscaler)).toMatchObject({ workerReplicas: 1, workerAutoscaling: { min: 1, max: 4 } });
+    expect(Object.fromEntries(summary(scaled, withAutoscaler))["Workers"]).toBe("1 to 4, autoscaled");
+    expect(problems("General", scaled, withAutoscaler)).toStrictEqual([]);
+    expect(fieldProblems("General", { ...scaled, workerMax: 0 }, withAutoscaler)).toStrictEqual({
+      workerMax: "A whole number from 1 to 100, no fewer than the fewest.",
+    });
+    expect(fieldProblems("General", { ...scaled, workerReplicas: 5 }, withAutoscaler)).toStrictEqual({
+      workerMax: "A whole number from 5 to 100, no fewer than the fewest.",
+    });
+    // The addresses count every worker the pool may have: three control planes, four workers and one for rollouts.
+    expect(fieldProblems("Network", { ...scaled, addresses: "10.0.0.21-10.0.0.27" }, withAutoscaler).addresses).toMatch(
+      /7 given; the nodes need 8/u,
+    );
+    // A pool that may grow keeps the control planes to the control plane's work, even from none.
+    const fromNone = { ...scaled, workerReplicas: 0, headlamp: false, monitoring: false };
+    expect(fieldProblems("Machines", fromNone, withAutoscaler)).toStrictEqual({});
+    // The add-ons need a worker that stays.
+    expect(fieldProblems("Add-ons", { ...fromNone, headlamp: true }, withAutoscaler)).toStrictEqual({
+      addons:
+        "The add-ons chosen need a worker that stays: set the fewest workers to at least 1 on the General step, or choose none.",
+    });
+    expect(fieldProblems("Add-ons", { ...scaled, headlamp: true }, withAutoscaler)).toStrictEqual({});
   });
 
   it("keeps an emptied number empty, for the check to name", () => {
@@ -818,6 +884,27 @@ describe("create", () => {
     expect(
       problems("Machines", { ...form, workerMachine: { cores: Number.NaN, memoryMiB: 4096, diskGiB: 40 } }, rke2),
     ).toHaveLength(1);
+  });
+
+  it("runs the nodes on the node OS chosen, the class's default unless another is", () => {
+    const missing =
+      "there is no RKE2 VM template on Rocky Linux 10 yet; an administrator builds it on the Administration page";
+    const onOS = { ...rke2OS, nodeOSes: [alma, { ...rocky, noTemplate: missing }] };
+    expect(request(form, onOS).variables["nodeOS"]).toStrictEqual({ family: "almalinux", release: "10" });
+    expect(Object.fromEntries(summary(form, onOS))["Node OS"]).toBe("AlmaLinux 10");
+    expect(problems("General", form, onOS)).toStrictEqual([]);
+    const onRocky = { ...form, nodeOS: "rocky-10" };
+    expect(request(onRocky, onOS).variables["nodeOS"]).toStrictEqual({ family: "rocky", release: "10" });
+    expect(Object.fromEntries(summary(onRocky, onOS))["Node OS"]).toBe("Rocky Linux 10");
+    // The class's own message is for its default node OS; the one chosen has its own.
+    expect(fieldProblems("General", onRocky, { ...onOS, noTemplate: "for the default" })).toStrictEqual({
+      nodeOS:
+        "There is no RKE2 VM template on Rocky Linux 10 yet; an administrator builds it on the Administration page.",
+    });
+    expect(fieldProblems("General", form, { ...onOS, noTemplate: "for the default" })).toStrictEqual({});
+    // Talos offers none, and a class that does not define the variable is sent none.
+    expect(request(form, rke2).variables).not.toHaveProperty("nodeOS");
+    expect(Object.fromEntries(summary(form, rke2))).not.toHaveProperty("Node OS");
   });
 
   it("leaves out variables the class does not define", () => {
@@ -1060,7 +1147,7 @@ describe("create", () => {
     window.history.replaceState(null, "", "/clusters/new");
     const calls = fakeServer({
       "GET /api/session": () => ({ body: { user: "alice@pve", csrf: "c1" } }),
-      "GET /api/classes": () => ({ body: [rke2] }),
+      "GET /api/classes": () => ({ body: [rke2OS] }),
       "GET /api/proxmox/storages": () => ({
         body: [
           {
@@ -1099,6 +1186,9 @@ describe("create", () => {
     await user.type(await screen.findByLabelText("Name"), "lab");
     await waitFor(() => expect(screen.getByRole("option", { name: "RKE2" })).toBeInTheDocument());
     await user.selectOptions(screen.getByLabelText("Distribution"), "kubehenge-rke2");
+    expect(screen.getByLabelText("Node OS")).toHaveValue("almalinux-10");
+    await user.selectOptions(screen.getByLabelText("Node OS"), "rocky-10");
+    expect(screen.getByLabelText("Node OS")).toHaveAccessibleDescription(/needs Proxmox VE nodes with x86-64-v3 CPUs/u);
     await user.type(screen.getByLabelText("Kubernetes version"), "v1.36.5+rke2r1");
     await user.click(screen.getByRole("button", { name: "Next" }));
 
@@ -1171,6 +1261,7 @@ describe("create", () => {
       variables: {
         storage: "local-lvm",
         allowedNodes: ["pve2"],
+        nodeOS: { family: "rocky", release: "10" },
         cni: "canal",
         workerMachine: { cores: 4 },
         controlPlaneMachine: { cores: 4 },

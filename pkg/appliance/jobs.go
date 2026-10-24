@@ -16,6 +16,8 @@ const (
 // Job is one run of the module.
 type Job struct {
 	User string `json:"user"`
+	// Automatic tells a run the appliance started on its own, as User, from an automatic upgrade.
+	Automatic bool `json:"automatic,omitempty"`
 	// Kind is apply or remove.
 	Kind     string    `json:"kind"`
 	Started  time.Time `json:"started"`
@@ -62,7 +64,7 @@ func (j *Job) view() *JobView {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	shown := j.log[max(0, len(j.log)-shownLines):]
-	v := &JobView{User: j.User, Kind: j.Kind, Started: j.Started, Finished: j.Finished, State: j.State, Error: j.Error, Log: append([]string{}, shown...)}
+	v := &JobView{User: j.User, Automatic: j.Automatic, Kind: j.Kind, Started: j.Started, Finished: j.Finished, State: j.State, Error: j.Error, Log: append([]string{}, shown...)}
 	if len(shown) < len(j.log) {
 		v.Lines = len(j.log)
 	}
@@ -71,13 +73,14 @@ func (j *Job) view() *JobView {
 
 // JobView is a job as the interface shows it.
 type JobView struct {
-	User     string    `json:"user"`
-	Kind     string    `json:"kind"`
-	Started  time.Time `json:"started"`
-	Finished time.Time `json:"finished,omitzero"`
-	State    string    `json:"state"`
-	Error    string    `json:"error,omitempty"`
-	Log      []string  `json:"log"`
+	User      string    `json:"user"`
+	Automatic bool      `json:"automatic,omitempty"`
+	Kind      string    `json:"kind"`
+	Started   time.Time `json:"started"`
+	Finished  time.Time `json:"finished,omitzero"`
+	State     string    `json:"state"`
+	Error     string    `json:"error,omitempty"`
+	Log       []string  `json:"log"`
 	// Lines is how many lines the log has in all, where Log holds only the last of them.
 	Lines int `json:"lines,omitempty"`
 }

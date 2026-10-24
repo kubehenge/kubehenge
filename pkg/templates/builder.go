@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/luthermonson/go-proxmox"
+
+	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
 // Builder creates templates on one Proxmox VE node through its API, without SSH.
@@ -42,9 +44,11 @@ type Builder struct {
 	CPUType string
 
 	// selectableSettle and selectablePoll pace waitSelectable; zero means selectableSettle and
-	// pollLongest.
+	// pve.PollLongest.
 	selectableSettle time.Duration
 	selectablePoll   time.Duration
+	// execRetry paces waitForExec; zero means defaultExecRetry.
+	execRetry time.Duration
 }
 
 // Network is a static address for a VM being baked; without it the VM asks DHCP.
@@ -57,8 +61,8 @@ type Network struct {
 // ErrNoTemplate is Find's answer when no template carries the tags.
 var ErrNoTemplate = errors.New("no template carries these tags")
 
-// DefaultCPUType runs on every x86-64 host Talos and Ubuntu support, so clones can migrate between
-// nodes of different CPUs.
+// DefaultCPUType runs on every x86-64 host Talos and most node OSes support, so clones can migrate
+// between nodes of different CPUs. A node OS built for a higher level names its own (Release.CPUType).
 const DefaultCPUType = "x86-64-v2-AES"
 
 const (
@@ -88,27 +92,9 @@ const (
 // already shows it.
 const selectableSettle = 5 * time.Second
 
-// Most tasks, such as a configuration change, end within a fraction of a second; a download or a
-// disk import takes minutes. So polling asks again soon at first and less often the longer one runs.
-const (
-	pollFirst   = 100 * time.Millisecond
-	pollLongest = 2 * time.Second
-	pollGrowth  = 2
-)
-
-func backoff(interval time.Duration) time.Duration {
-	return min(pollGrowth*interval, pollLongest)
-}
-
-// bakeDiskSize is the disk a baked template gets. Ubuntu's cloud image is about 3.5 GB, too small
-// for its own updates; cloud-init grows the file system to the disk on first boot. Clones can only
-// grow it further, so it stays modest.
-func bakeDiskSize(b Bake) string {
-	if b.KubernetesVersion != "" {
-		return "12G" // room for the control-plane images pulled ahead
-	}
-	return "8G"
-}
+// defaultExecRetry is how often waitForExec tries the guest agent; enabling guest-exec takes a family's
+// cloud image a quarter of a minute.
+const defaultExecRetry = 5 * time.Second
 
 // Find returns the template in the builder's pool whose tags are exactly t's, or ErrNoTemplate.
 // The cluster's resource view reads tags and pools afresh, but takes a VM's name and whether it is
@@ -234,15 +220,10 @@ func (b *Builder) Create(ctx context.Context, t *Template) (_ int, err error) {
 	case !errors.Is(err, ErrNoTemplate):
 		return 0, err
 	}
-	err = b.checkNotInProgress(ctx, t)
+	cpuType, recipe, err := b.prepare(ctx, t)
 	if err != nil {
 		return 0, err
 	}
-	cpuType, err := b.cpuType(ctx, t)
-	if err != nil {
-		return 0, err
-	}
-
 	image, err := b.Sources.Resolve(ctx, t.Image)
 	if err != nil {
 		return 0, err
@@ -271,7 +252,7 @@ func (b *Builder) Create(ctx context.Context, t *Template) (_ int, err error) {
 	if err != nil {
 		return 0, fmt.Errorf("reading the Proxmox VE cluster: %w", err)
 	}
-	vmid, err := b.createFresh(ctx, cluster, node, t, volume, cpuType, image.URL)
+	vmid, err := b.createFresh(ctx, cluster, node, t, volume, cpuType, image.URL, recipe)
 	if err != nil {
 		return 0, err
 	}
@@ -284,7 +265,7 @@ func (b *Builder) Create(ctx context.Context, t *Template) (_ int, err error) {
 			b.discard(context.WithoutCancel(ctx), node, vm)
 		}
 	}()
-	err = b.finish(ctx, node, vm, vmid, t)
+	err = b.finish(ctx, node, vm, vmid, t, recipe)
 	if err != nil {
 		return 0, err
 	}
@@ -445,12 +426,12 @@ func (b *Builder) config(ctx context.Context, r *proxmox.ClusterResource) (*prox
 
 // finish tags the new VM as a build under way, bakes it if the template asks for it, gives it its
 // final tags and size, and turns it into the template.
-func (b *Builder) finish(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, vmid int, t *Template) error {
+func (b *Builder) finish(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, vmid int, t *Template, recipe *Recipe) error {
 	if err := markBuilding(ctx, vm); err != nil {
 		return err
 	}
-	if t.Bake != nil {
-		if err := b.bake(ctx, node, vm, *t.Bake); err != nil {
+	if recipe != nil {
+		if err := b.bake(ctx, node, vm, recipe); err != nil {
 			return fmt.Errorf("baking %s: %w", t.Name, err)
 		}
 	}
@@ -458,7 +439,7 @@ func (b *Builder) finish(ctx context.Context, node *proxmox.Node, vm *proxmox.Vi
 		proxmox.VirtualMachineOption{Name: "tags", Value: strings.Join(t.Tags, ";")},
 		proxmox.VirtualMachineOption{Name: "cores", Value: templateCores},
 		proxmox.VirtualMachineOption{Name: "memory", Value: templateMemoryMB},
-		proxmox.VirtualMachineOption{Name: "boot", Value: "order=scsi0"},
+		bootFrom(templateDisk),
 	)
 	err = waitTask(ctx, task, err, configTimeout)
 	if err != nil {
@@ -550,7 +531,7 @@ func createdAt(meta string) (time.Time, bool) {
 // before Create returns.
 func (b *Builder) waitSelectable(ctx context.Context, t *Template, vmid int) error {
 	settle := cmp.Or(b.selectableSettle, selectableSettle)
-	poll := cmp.Or(b.selectablePoll, pollLongest)
+	poll := cmp.Or(b.selectablePoll, pve.PollLongest)
 	deadline := time.Now().Add(selectableTimeout)
 	var since time.Time
 	for {
@@ -625,17 +606,89 @@ func (b *Builder) download(ctx context.Context, storage *proxmox.Storage, image 
 	return waitTask(ctx, task, err, transferTimeout)
 }
 
-// cpuType is the CPU type a new template gets, as CPUType says.
+// prepare works out, before anything is made, the new template's CPU type and the bake's recipe,
+// refusing a template already being made and a node OS this node's CPU cannot run.
+func (b *Builder) prepare(ctx context.Context, t *Template) (string, *Recipe, error) {
+	if err := b.checkNotInProgress(ctx, t); err != nil {
+		return "", nil, err
+	}
+	cpuType, err := b.cpuType(ctx, t)
+	if err != nil || t.Bake == nil {
+		return cpuType, nil, err
+	}
+	if err = b.checkCPU(ctx, t.Bake.NodeOS); err != nil {
+		return "", nil, err
+	}
+	recipe, err := b.recipe(ctx, t.Bake)
+	return cpuType, recipe, err
+}
+
+// recipe fetches the keys of the package repositories a bake adds, each checked against the
+// fingerprints its family allows, and works out what the bake does.
+func (b *Builder) recipe(ctx context.Context, bake *Bake) (*Recipe, error) {
+	f, r, err := Available(bake.NodeOS)
+	if err != nil {
+		return nil, err
+	}
+	keys := map[string]string{}
+	for _, k := range f.Keys(r, *bake) {
+		armoured, kerr := b.Sources.RepositoryKey(ctx, k)
+		if kerr != nil {
+			return nil, kerr
+		}
+		keys[k.Name] = armoured
+	}
+	recipe, err := f.Recipe(r, *bake, keys)
+	if err != nil {
+		return nil, fmt.Errorf("the bake of %s %s: %w", f.Title(), r.Name, err)
+	}
+	return &recipe, nil
+}
+
+// nodeStatus is the part of a Proxmox VE node's status checkCPU reads.
+type nodeStatus struct {
+	CPUInfo cpuInfo `json:"cpuinfo"`
+}
+
+type cpuInfo struct {
+	Flags string `json:"flags"`
+}
+
+// checkCPU refuses a bake on a node whose CPU cannot run the node OS: the VM would stop at boot
+// without a word from its guest.
+func (b *Builder) checkCPU(ctx context.Context, o NodeOS) error {
+	need := CPULevel(o)
+	if need <= 1 {
+		return nil
+	}
+	var status nodeStatus
+	if err := b.Client.Get(ctx, "/nodes/"+b.Node+"/status", &status); err != nil {
+		return fmt.Errorf("reading node %s's CPU: %w", b.Node, err)
+	}
+	if have := CPULevelOf(status.CPUInfo.Flags); have < need {
+		return fmt.Errorf("node %s's CPU reaches x86-64-v%d, and %s needs x86-64-v%d: build its templates on another node", b.Node, have, o, need)
+	}
+	return nil
+}
+
+// cpuType is the CPU type a new template gets, as CPUType says; a line's first build gets the least
+// its node OS runs on.
 func (b *Builder) cpuType(ctx context.Context, t *Template) (string, error) {
 	if b.CPUType != "" {
 		return b.CPUType, nil
 	}
+	least := DefaultCPUType
+	if t.Bake != nil {
+		if _, r, err := ReleaseOf(t.Bake.NodeOS); err == nil {
+			least = CPUTypeOf(r)
+		}
+	}
 	if _, built := BuildOf(t.Tags); !built {
-		return DefaultCPUType, nil
+		return least, nil
 	}
 	builds, err := b.Builds(ctx, &Template{Tags: LineOf(t.Tags)})
 	if err != nil || len(builds) == 0 {
-		return DefaultCPUType, err
+		return least, err
 	}
 	c, err := b.config(ctx, builds[0].Resource)
 	if err != nil {
@@ -654,14 +707,16 @@ const createAttempts = 5
 
 // createFresh creates t's VM under the next free VM ID, asking for another while the one offered
 // turns out taken.
-func (b *Builder) createFresh(ctx context.Context, cluster *proxmox.Cluster, node *proxmox.Node, t *Template, volume, cpuType, source string) (int, error) {
+func (b *Builder) createFresh(
+	ctx context.Context, cluster *proxmox.Cluster, node *proxmox.Node, t *Template, volume, cpuType, source string, recipe *Recipe,
+) (int, error) {
 	for attempt := 1; ; attempt++ {
 		vmid, err := cluster.NextID(ctx)
 		if err != nil {
 			return 0, fmt.Errorf("choosing a VM ID: %w", err)
 		}
 		b.logf("creating VM %d %s from %s", vmid, t.Name, source)
-		err = b.createVM(ctx, node, vmid, t, volume, cpuType)
+		err = b.createVM(ctx, node, vmid, t, volume, cpuType, recipe)
 		if err == nil {
 			return vmid, nil
 		}
@@ -672,10 +727,21 @@ func (b *Builder) createFresh(ctx context.Context, cluster *proxmox.Cluster, nod
 	}
 }
 
-func (b *Builder) createVM(ctx context.Context, node *proxmox.Node, vmid int, t *Template, volume, cpuType string) error {
+// createVM creates the VM that becomes the template. In image mode its own disk starts empty, and
+// the family's image boots from a second disk beside it to build the node image onto it.
+func (b *Builder) createVM(ctx context.Context, node *proxmox.Node, vmid int, t *Template, volume, cpuType string, recipe *Recipe) error {
 	cores, memory := templateCores, templateMemoryMB
-	if t.Bake != nil {
-		cores, memory = bakeCores, bakeMemoryMB
+	imported := fmt.Sprintf("%s:0,import-from=%s,discard=on,ssd=1", b.Storage, volume)
+	disks := []proxmox.VirtualMachineOption{{Name: templateDisk, Value: imported}, bootFrom(templateDisk)}
+	if recipe != nil {
+		cores, memory = bakeCores, cmp.Or(recipe.MemoryMiB, bakeMemoryMB)
+		if recipe.Image != nil {
+			disks = []proxmox.VirtualMachineOption{
+				{Name: templateDisk, Value: fmt.Sprintf("%s:%d,discard=on,ssd=1", b.Storage, recipe.DiskGiB)},
+				{Name: builderDisk, Value: imported},
+				bootFrom(builderDisk),
+			}
+		}
 	}
 	options := []proxmox.VirtualMachineOption{
 		{Name: "name", Value: t.Name},
@@ -686,16 +752,15 @@ func (b *Builder) createVM(ctx context.Context, node *proxmox.Node, vmid int, t 
 		{Name: "cores", Value: cores},
 		{Name: "memory", Value: memory},
 		{Name: "scsihw", Value: "virtio-scsi-pci"},
-		{Name: "scsi0", Value: fmt.Sprintf("%s:0,import-from=%s,discard=on,ssd=1", b.Storage, volume)},
-		{Name: "boot", Value: "order=scsi0"},
 		{Name: "serial0", Value: "socket"},
 		{Name: "vga", Value: "serial0"},
 		{Name: "agent", Value: "enabled=1"},
 	}
+	options = append(options, disks...)
 	if b.Pool != "" {
 		options = append(options, proxmox.VirtualMachineOption{Name: "pool", Value: b.Pool})
 	}
-	if t.Bake != nil {
+	if recipe != nil {
 		net := "virtio,bridge=" + b.Bridge
 		if b.VLAN > 0 {
 			net += fmt.Sprintf(",tag=%d", b.VLAN)
@@ -715,34 +780,56 @@ func markBuilding(ctx context.Context, vm *proxmox.VirtualMachine) error {
 	return waitTask(ctx, task, err, configTimeout)
 }
 
-func (b *Builder) bake(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, bake Bake) error {
-	isoStorage, err := b.attachCloudInit(ctx, node, vm, bake)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		iso := fmt.Sprintf("iso/"+proxmox.UserDataISOFormat, vm.VMID)
-		if storage, serr := node.Storage(context.WithoutCancel(ctx), isoStorage); serr == nil {
-			if derr := deleteVolume(context.WithoutCancel(ctx), storage, isoStorage+":"+iso); derr != nil {
-				b.logf("could not remove the cloud-init ISO: %v", derr)
-			}
-		}
-	}()
+// templateDisk is the template's own disk, which capmox clones boot from; builderDisk is where the
+// family's image boots in image mode, beside it.
+const (
+	templateDisk = "scsi0"
+	builderDisk  = "scsi1"
+)
 
-	task, err := vm.Start(ctx)
-	err = waitTask(ctx, task, err, shortTaskTimeout)
+// bootFrom has the VM boot from the disk alone; capmox appends its cloud-init ISO to it.
+func bootFrom(disk string) proxmox.VirtualMachineOption {
+	return proxmox.VirtualMachineOption{Name: "boot", Value: "order=" + disk}
+}
+
+// bake carries out the recipe: the first boot, a reboot into what it installed if the recipe asks,
+// in image mode a boot of the node image on its own disk, then the clean-up that leaves a first
+// boot for every clone.
+func (b *Builder) bake(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, recipe *Recipe) error {
+	isoStorage, err := b.isoStorage(ctx, node)
 	if err != nil {
 		return err
 	}
-	b.logf("VM %d is installing updates; waiting for its guest agent", vm.VMID)
-	if err = vm.WaitForAgent(ctx, int(bakeTimeout.Seconds())); err != nil {
-		return fmt.Errorf("the guest agent did not start: %w", err)
-	}
-	err = b.check(ctx, vm, bake)
-	if err != nil {
+	defer b.removeSeed(context.WithoutCancel(ctx), node, vm, isoStorage)
+	if err = growDisk(ctx, vm, recipe); err != nil {
 		return err
 	}
-	for _, step := range BakeCleanup {
+	if err = b.boot(ctx, node, vm, isoStorage, "bake", recipe.UserData); err != nil {
+		return err
+	}
+	b.logf("VM %d is building the node; waiting for its guest agent", vm.VMID)
+	if err = b.waitAndCheck(ctx, vm, recipe.Checks, recipe.Log); err != nil {
+		return err
+	}
+	if recipe.Reboot {
+		b.logf("VM %d boots what it installed", vm.VMID)
+		if err = restart(ctx, vm); err != nil {
+			return err
+		}
+		if err = b.waitAndCheck(ctx, vm, recipe.RebootChecks, recipe.Log); err != nil {
+			return err
+		}
+	}
+	if recipe.Image != nil {
+		b.logf("VM %d boots the node image it installed", vm.VMID)
+		if err = b.bootNodeImage(ctx, node, vm, isoStorage, recipe.Image); err != nil {
+			return err
+		}
+		if err = b.waitAndCheck(ctx, vm, recipe.Image.Checks, ""); err != nil {
+			return err
+		}
+	}
+	for _, step := range recipe.Cleanup {
 		if err := b.exec(ctx, vm, step, longTaskTimeout); err != nil {
 			return err
 		}
@@ -750,51 +837,86 @@ func (b *Builder) bake(ctx context.Context, node *proxmox.Node, vm *proxmox.Virt
 	return detach(ctx, vm)
 }
 
-// attachCloudInit grows the VM's disk for the bake and gives it the bake's cloud-init ISO, on the
-// storage it returns.
-func (b *Builder) attachCloudInit(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, bake Bake) (string, error) {
-	key := ""
-	if bake.KubernetesVersion != "" {
-		var err error
-		if key, err = b.Sources.KubernetesPackagesKey(ctx, minorSeries(bake.KubernetesVersion)); err != nil {
-			return "", err
-		}
+// growDisk gives the disk the bake runs on the room it needs: in image mode the builder's, whose
+// image is a few GB at most, otherwise the template's own, which cloud-init grows its file system to.
+func growDisk(ctx context.Context, vm *proxmox.VirtualMachine, recipe *Recipe) error {
+	disk, size := templateDisk, recipe.DiskGiB
+	if recipe.Image != nil {
+		disk, size = builderDisk, recipe.BuilderDiskGiB
 	}
-	userData, err := BakeUserData(bake, key)
-	if err != nil {
-		return "", err
-	}
-	mac, err := macAddress(vm.VirtualMachineConfig.Nets["net0"])
-	if err != nil {
-		return "", err
-	}
-	isoStorage, err := b.isoStorage(ctx, node)
-	if err != nil {
-		return "", err
-	}
-	task, err := vm.ResizeDisk(ctx, "scsi0", bakeDiskSize(bake))
+	task, err := vm.ResizeDisk(ctx, disk, fmt.Sprintf("%dG", size))
 	if err = waitTask(ctx, task, err, shortTaskTimeout); err != nil {
-		return "", fmt.Errorf("growing the disk: %w", err)
+		return fmt.Errorf("growing the disk: %w", err)
 	}
-	metaData := fmt.Sprintf("instance-id: kubehenge-bake-%d\nlocal-hostname: kubehenge-bake-%d\n", vm.VMID, vm.VMID)
-	seed := map[string]string{"user-data": userData, "meta-data": metaData, "network-config": NetworkConfig(mac, b.Network)}
-	if err = attachSeed(ctx, node, isoStorage, vm, bakeDevice, seed); err != nil {
-		return "", err
-	}
-	return isoStorage, nil
+	return nil
 }
 
-// check runs the bake's checks in the guest.
-func (b *Builder) check(ctx context.Context, vm *proxmox.VirtualMachine, bake Bake) error {
-	for _, check := range BakeChecks(bake) {
+// boot gives the VM a cloud-init seed with the user data, as a first boot named after the stage,
+// and starts it.
+func (b *Builder) boot(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, isoStorage, stage, userData string) error {
+	mac, err := macAddress(vm.VirtualMachineConfig.Nets["net0"])
+	if err != nil {
+		return err
+	}
+	metaData := fmt.Sprintf("instance-id: kubehenge-%s-%d\nlocal-hostname: kubehenge-%s-%d\n", stage, vm.VMID, stage, vm.VMID)
+	seed := map[string]string{"user-data": userData, "meta-data": metaData, "network-config": NetworkConfig(mac, b.Network)}
+	if err = attachSeed(ctx, node, isoStorage, vm, bakeDevice, seed); err != nil {
+		return err
+	}
+	task, err := vm.Start(ctx)
+	return waitTask(ctx, task, err, shortTaskTimeout)
+}
+
+// bootNodeImage stops the builder, removes its disk for good and boots the node image the builder
+// installed onto the template's own disk, with a seed of its own as a clone's first boot has.
+func (b *Builder) bootNodeImage(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, isoStorage string, image *NodeImageBoot) error {
+	if err := shutdown(ctx, vm); err != nil {
+		return err
+	}
+	task, err := vm.UnlinkDisk(ctx, builderDisk, true)
+	if err = waitTask(ctx, task, err, longTaskTimeout); err != nil {
+		return fmt.Errorf("removing the builder's disk: %w", err)
+	}
+	task, err = vm.Config(ctx, bootFrom(templateDisk), proxmox.VirtualMachineOption{Name: "delete", Value: bakeDevice})
+	if err = waitTask(ctx, task, err, configTimeout); err != nil {
+		return err
+	}
+	b.removeSeed(ctx, node, vm, isoStorage)
+	return b.boot(ctx, node, vm, isoStorage, "node", image.UserData)
+}
+
+// removeSeed deletes the cloud-init ISO from its storage.
+func (b *Builder) removeSeed(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, isoStorage string) {
+	iso := fmt.Sprintf("iso/"+proxmox.UserDataISOFormat, vm.VMID)
+	if storage, err := node.Storage(ctx, isoStorage); err == nil {
+		if derr := deleteVolume(ctx, storage, isoStorage+":"+iso); derr != nil {
+			b.logf("could not remove the cloud-init ISO: %v", derr)
+		}
+	}
+}
+
+// waitAndCheck waits for the guest agent and runs the checks in the guest. On a failure it adds
+// cloud-init's own account and the end of the bake's log, which the exit code does not carry.
+func (b *Builder) waitAndCheck(ctx context.Context, vm *proxmox.VirtualMachine, checks [][]string, log string) error {
+	if err := vm.WaitForAgent(ctx, int(bakeTimeout.Seconds())); err != nil {
+		return fmt.Errorf("the guest agent did not start: %w", err)
+	}
+	if err := b.waitForExec(ctx, vm); err != nil {
+		return err
+	}
+	for _, check := range checks {
 		err := b.exec(ctx, vm, check, bakeTimeout)
 		if err == nil {
 			continue
 		}
 		if check[0] == cloudInit {
-			// cloud-init's own account of what failed, which its exit code does not carry.
 			if out, lerr := b.output(ctx, vm, []string{cloudInit, "status", "--long"}); lerr == nil {
-				return fmt.Errorf("%w\n%s", err, out)
+				err = fmt.Errorf("%w\n%s", err, out)
+			}
+		}
+		if log != "" {
+			if out, lerr := b.output(ctx, vm, []string{"tail", "-n", "40", log}); lerr == nil {
+				err = fmt.Errorf("%w\nthe end of %s:\n%s", err, log, out)
 			}
 		}
 		return err
@@ -802,12 +924,28 @@ func (b *Builder) check(ctx context.Context, vm *proxmox.VirtualMachine, bake Ba
 	return nil
 }
 
-// detach shuts the baked VM down and removes the cloud-init ISO's drive and the network it
-// needed for the bake.
-func detach(ctx context.Context, vm *proxmox.VirtualMachine) error {
+// waitForExec waits until the guest agent runs commands. A family's own cloud image answers pings
+// before the bake's first boot has allowed guest-exec, which its agent refuses until then.
+func (b *Builder) waitForExec(ctx context.Context, vm *proxmox.VirtualMachine) error {
+	ctx, cancel := context.WithTimeout(ctx, bakeTimeout)
+	defer cancel()
+	for {
+		err := b.exec(ctx, vm, []string{"true"}, time.Minute)
+		if err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("the guest agent runs no commands: %w", err)
+		case <-time.After(cmp.Or(b.execRetry, defaultExecRetry)):
+		}
+	}
+}
+
+// shutdown stops the VM through its guest and makes sure it stopped.
+func shutdown(ctx context.Context, vm *proxmox.VirtualMachine) error {
 	task, err := vm.Shutdown(ctx)
-	err = waitTask(ctx, task, err, longTaskTimeout)
-	if err != nil {
+	if err = waitTask(ctx, task, err, longTaskTimeout); err != nil {
 		return err
 	}
 	if err = vm.Ping(ctx); err != nil {
@@ -816,70 +954,47 @@ func detach(ctx context.Context, vm *proxmox.VirtualMachine) error {
 	if !vm.IsStopped() {
 		return fmt.Errorf("VM %d did not stop after shutdown", vm.VMID)
 	}
-	task, err = vm.Config(ctx, proxmox.VirtualMachineOption{Name: "delete", Value: bakeDevice + ",net0"})
+	return nil
+}
+
+// restart shuts the VM down and starts it again. A shutdown and a start, rather than a reboot,
+// leave no doubt that the guest agent answering afterwards is the new boot's.
+func restart(ctx context.Context, vm *proxmox.VirtualMachine) error {
+	if err := shutdown(ctx, vm); err != nil {
+		return err
+	}
+	task, err := vm.Start(ctx)
+	return waitTask(ctx, task, err, shortTaskTimeout)
+}
+
+// detach shuts the baked VM down and removes the cloud-init ISO's drive and the network it
+// needed for the bake.
+func detach(ctx context.Context, vm *proxmox.VirtualMachine) error {
+	if err := shutdown(ctx, vm); err != nil {
+		return err
+	}
+	task, err := vm.Config(ctx, proxmox.VirtualMachineOption{Name: "delete", Value: bakeDevice + ",net0"})
 	return waitTask(ctx, task, err, configTimeout)
 }
 
 func (b *Builder) exec(ctx context.Context, vm *proxmox.VirtualMachine, command []string, timeout time.Duration) error {
-	status, err := b.run(ctx, vm, command, timeout)
+	status, err := pve.GuestExec(ctx, b.Client, vm, command, "", timeout)
 	if err != nil {
 		return fmt.Errorf("running %q: %w", strings.Join(command, " "), err)
 	}
 	if status.ExitCode != 0 {
-		return fmt.Errorf("%q exited %d: %s", strings.Join(command, " "), status.ExitCode, status.output())
+		return fmt.Errorf("%q exited %d: %s", strings.Join(command, " "), status.ExitCode, status.Output())
 	}
 	return nil
 }
 
 // output runs a command in the VM and returns what it printed, whatever its exit code.
 func (b *Builder) output(ctx context.Context, vm *proxmox.VirtualMachine, command []string) (string, error) {
-	status, err := b.run(ctx, vm, command, time.Minute)
+	status, err := pve.GuestExec(ctx, b.Client, vm, command, "", time.Minute)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("running %q: %w", strings.Join(command, " "), err)
 	}
-	return status.output(), nil
-}
-
-// execStatus is the guest agent's report on a command. go-proxmox's own type declares
-// err-truncated a bool, which Proxmox VE sends as a number, so commands with long error output fail
-// to decode there.
-type execStatus struct {
-	Exited       int    `json:"exited"`
-	ExitCode     int    `json:"exitcode"`
-	OutData      string `json:"out-data"`
-	ErrData      string `json:"err-data"`
-	OutTruncated any    `json:"out-truncated"`
-	ErrTruncated any    `json:"err-truncated"`
-}
-
-func (s *execStatus) output() string {
-	return strings.TrimSpace(s.OutData + "\n" + s.ErrData)
-}
-
-func (b *Builder) run(ctx context.Context, vm *proxmox.VirtualMachine, command []string, timeout time.Duration) (*execStatus, error) {
-	pid, err := vm.AgentExec(ctx, command, "")
-	if err != nil {
-		return nil, fmt.Errorf("starting it through the guest agent: %w", err)
-	}
-	deadline := time.Now().Add(timeout)
-	for interval := pollFirst; ; interval = backoff(interval) {
-		var status execStatus
-		path := fmt.Sprintf("/nodes/%s/qemu/%d/agent/exec-status?pid=%d", vm.Node, vm.VMID, pid)
-		if err := b.Client.Get(ctx, path, &status); err != nil {
-			return nil, fmt.Errorf("reading its status from the guest agent: %w", err)
-		}
-		if status.Exited != 0 {
-			return &status, nil
-		}
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("still running after %s", timeout)
-		}
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("waiting for it to end: %w", ctx.Err())
-		case <-time.After(interval):
-		}
-	}
+	return status.Output(), nil
 }
 
 func (b *Builder) isoStorage(ctx context.Context, node *proxmox.Node) (string, error) {
@@ -937,7 +1052,7 @@ func waitTask(ctx context.Context, task *proxmox.Task, err error, timeout time.D
 	}
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
-	for interval := pollFirst; ; interval = backoff(interval) {
+	for interval := pve.PollFirst; ; interval = pve.Backoff(interval) {
 		if err := task.Ping(ctx); err != nil {
 			return fmt.Errorf("task %s: %w", task.UPID, err)
 		}
@@ -975,7 +1090,13 @@ func NetworkConfig(mac string, n *Network) string {
 		sb.WriteString("    dhcp4: true\n")
 		return sb.String()
 	}
-	fmt.Fprintf(&sb, "    addresses: [%q]\n    routes:\n      - to: default\n        via: %s\n", n.Address.String(), n.Gateway)
+	// The default route as a prefix: cloud-init's NetworkManager renderer, the one on EL, refuses
+	// the word default and brings up no network at all.
+	anywhere := netip.PrefixFrom(netip.IPv4Unspecified(), 0)
+	if n.Gateway.Is6() {
+		anywhere = netip.PrefixFrom(netip.IPv6Unspecified(), 0)
+	}
+	fmt.Fprintf(&sb, "    addresses: [%q]\n    routes:\n      - to: %s\n        via: %s\n", n.Address.String(), anywhere, n.Gateway)
 	if len(n.DNS) > 0 {
 		dns := make([]string, len(n.DNS))
 		for i, d := range n.DNS {

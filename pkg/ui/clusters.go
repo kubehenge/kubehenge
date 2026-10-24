@@ -20,6 +20,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -53,7 +54,9 @@ const maxClusterName = 40
 // Variables a cluster may change after creation; the others describe where its VMs live.
 var changeableVariables = map[string]bool{
 	"headlamp": true, "monitoring": true, "logs": true, "backups": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, csiVariable: true, ccmVariable: true,
-	certificatesVariable: true, gitopsVariable: true,
+	certificatesVariable: true, gitopsVariable: true, autoscalerVariable: true,
+	// A new node OS rolls every node onto its template, as a node image refresh does.
+	provisioner.NodeOSVariable: true,
 }
 
 // autoUpgraded is where Kubehenge's controller records the last automatic upgrade.
@@ -64,6 +67,7 @@ var versionFormat = map[string]*regexp.Regexp{
 	string(templates.Kubeadm): regexp.MustCompile(`^v1\.\d+\.\d+$`),
 	string(templates.RKE2):    regexp.MustCompile(`^v1\.\d+\.\d+\+rke2r\d+$`),
 	string(templates.K3s):     regexp.MustCompile(`^v1\.\d+\.\d+\+k3s\d+$`),
+	string(templates.Talos):   regexp.MustCompile(`^v1\.\d+\.\d+$`),
 }
 
 func (s *Server) poolPath(namespace, name string) (string, error) {
@@ -82,8 +86,34 @@ type classView struct {
 	Variables    []classVariable    `json:"variables"`
 	Annotations  map[string]string  `json:"annotations,omitempty"`
 	Versions     *regexpDescription `json:"versionFormat"`
-	// NoTemplate says why no cluster of the class can be built yet.
+	// NoTemplate says why no cluster of the class on the default node OS can be built yet.
 	NoTemplate string `json:"noTemplate,omitempty"`
+	// NodeOSes are the operating systems the class's nodes may run, but for Talos's.
+	NodeOSes []nodeOSChoice `json:"nodeOSes,omitempty"`
+}
+
+// nodeOSChoice is a node OS a cluster may run, and why none can be built on it yet.
+type nodeOSChoice struct {
+	templates.NodeOSInfo
+
+	NoTemplate string `json:"noTemplate,omitempty"`
+}
+
+// nodeOSChoices are the node OSes of every family, those not released yet among them, so that the
+// wizard can say why they cannot be chosen.
+func nodeOSChoices(c *clusterv1.ClusterClass, dist string) []nodeOSChoice {
+	if dist == string(templates.Talos) {
+		return nil
+	}
+	var out []nodeOSChoice
+	for _, info := range templates.NodeOSes() {
+		choice := nodeOSChoice{NodeOSInfo: info}
+		if info.Unreleased == "" {
+			choice.NoTemplate = missingTemplate(c, dist, "", info.NodeOS)
+		}
+		out = append(out, choice)
+	}
+	return out
 }
 
 type classVariable struct {
@@ -116,7 +146,7 @@ func (s *Server) classes(w http.ResponseWriter, r *http.Request, u user) {
 func (s *Server) classView(c *clusterv1.ClusterClass, dist string) classView {
 	v := classView{
 		Name: c.Name, Distribution: dist, Variables: []classVariable{}, Versions: &regexpDescription{Pattern: versionFormat[dist].String()},
-		NoTemplate: missingTemplate(c, dist, ""),
+		NoTemplate: missingTemplate(c, dist, "", templates.DefaultNodeOS), NodeOSes: nodeOSChoices(c, dist),
 	}
 	for i := range c.Spec.Variables {
 		cv := &c.Spec.Variables[i]
@@ -200,8 +230,36 @@ type clusterView struct {
 	Mesh []provisioner.MeshPeer `json:"mesh,omitempty"`
 	// NodeImage is which template builds the nodes run and when they next move, but for Talos.
 	NodeImage *nodeImageView `json:"nodeImage,omitempty"`
+	// NodeOS is what the nodes run, but for Talos.
+	NodeOS *templates.NodeOSInfo `json:"nodeOS,omitempty"`
 	// GitOps is the deploy key and the repository host's keys the controller made for the cluster.
 	GitOps *gitOpsView `json:"gitops,omitempty"`
+	// Talos is how a Talos cluster's nodes stand with its Talos release.
+	Talos *talosView `json:"talos,omitempty"`
+}
+
+// talosView is how a Talos cluster's nodes are upgraded in place to its Talos release.
+type talosView struct {
+	// Version is the release the nodes are upgraded to.
+	Version string `json:"version"`
+	// Image is the release new machines boot first, before their upgrade.
+	Image string `json:"image,omitempty"`
+	// Upgrading names the node being upgraded and to which release, Upgraded the last that was,
+	// Failed the one that failed and why, which holds the rest until it is tried again.
+	Upgrading string `json:"upgrading,omitempty"`
+	Upgraded  string `json:"upgraded,omitempty"`
+	Failed    string `json:"failed,omitempty"`
+}
+
+func talosViewOf(c *clusterv1.Cluster) *talosView {
+	version, _ := provisioner.TalosVersion(c)
+	image, _ := provisioner.TalosImage(c)
+	return &talosView{
+		Version: version, Image: image,
+		Upgrading: c.Annotations[provisioner.TalosUpgradingAnnotation],
+		Upgraded:  c.Annotations[provisioner.TalosUpgradedAnnotation],
+		Failed:    c.Annotations[provisioner.TalosUpgradeFailedAnnotation],
+	}
 }
 
 type conditionView struct {
@@ -223,6 +281,9 @@ type workerPoolView struct {
 	Name     string `json:"name"`
 	Class    string `json:"class"`
 	Replicas int32  `json:"replicas"`
+	// Autoscaling is set for a pool the cluster autoscaler sizes, whose replicas are then the
+	// workers its MachineDeployment asks for at the moment.
+	Autoscaling *poolAutoscaling `json:"autoscaling,omitempty"`
 }
 
 type allowedView struct {
@@ -243,8 +304,10 @@ type machineView struct {
 	ProxmoxNode string `json:"proxmoxNode,omitempty"`
 	Role        string `json:"role"`
 	Version     string `json:"version,omitempty"`
-	Phase       string `json:"phase"`
-	Ready       bool   `json:"ready"`
+	// Talos is the Talos release a Talos cluster's node runs, as its kubelet reports it.
+	Talos string `json:"talos,omitempty"`
+	Phase string `json:"phase"`
+	Ready bool   `json:"ready"`
 	// Waiting is what keeps a machine that is not ready from it, as Cluster API sums it up.
 	Waiting   string    `json:"waiting,omitempty"`
 	Addresses []string  `json:"addresses,omitempty"`
@@ -279,6 +342,9 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 	if s.Headlamp != nil && ours {
 		v.Headlamp = headlampContext(c.Namespace, c.Name)
 	}
+	if dist == string(templates.Talos) {
+		v.Talos = talosViewOf(c)
+	}
 	if e := c.Spec.ControlPlaneEndpoint; e.Host != "" {
 		v.Endpoint = e.Host
 		if e.Port != 0 {
@@ -300,7 +366,7 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 	}
 	for i := range c.Spec.Topology.Workers.MachineDeployments {
 		md := &c.Spec.Topology.Workers.MachineDeployments[i]
-		wp := workerPoolView{Name: md.Name, Class: md.Class}
+		wp := workerPoolView{Name: md.Name, Class: md.Class, Autoscaling: autoscalingOf(md.Metadata.Annotations)}
 		if md.Replicas != nil {
 			wp.Replicas = *md.Replicas
 		}
@@ -309,7 +375,24 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 	for _, cv := range c.Spec.Topology.Variables {
 		v.Variables[cv.Name] = json.RawMessage(cv.Value.Raw)
 	}
+	if provisioner.RefreshesNodes(c) {
+		v.NodeOS = nodeOSInfo(c)
+	}
 	return v
+}
+
+// nodeOSInfo describes the node OS a cluster's nodes run, or nil when its variable cannot be read.
+func nodeOSInfo(c *clusterv1.Cluster) *templates.NodeOSInfo {
+	o, err := provisioner.ClusterNodeOS(c)
+	if err != nil {
+		return nil
+	}
+	for _, info := range templates.NodeOSes() {
+		if info.NodeOS == o {
+			return &info
+		}
+	}
+	return &templates.NodeOSInfo{NodeOS: o, Title: o.String()}
 }
 
 func replicas(desired, ready, available, upToDate *int32) replicasView {
@@ -504,6 +587,10 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	v := s.view(c, access.path, access.held, u.namespaces)
 	s.addExtras(r, u, c, &v)
+	if err := countAutoscaled(r.Context(), u.kube, c, &v); err != nil {
+		s.kubeError(w, err)
+		return
+	}
 	var machines clusterv1.MachineList
 	if err := u.kube.List(r.Context(), &machines, client.InNamespace(c.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: c.Name}); err != nil {
 		s.kubeError(w, err)
@@ -522,6 +609,9 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 			Phase:       m.Status.Phase,
 			Ready:       meta.IsStatusConditionTrue(m.Status.Conditions, clusterv1.MachineReadyCondition),
 			Created:     m.CreationTimestamp.Time,
+		}
+		if v.Talos != nil {
+			mv.Talos, _ = provisioner.MachineTalos(m)
 		}
 		if _, cp := m.Labels[clusterv1.MachineControlPlaneLabel]; cp {
 			mv.Role = controlPlaneRole
@@ -569,13 +659,15 @@ func (s *Server) vmNodes(r *http.Request, u user, c *clusterv1.Cluster, poolPath
 
 type createRequest struct {
 	// Namespace is one of those the interface manages; unset, its first.
-	Namespace            string                     `json:"namespace,omitempty"`
-	Name                 string                     `json:"name"`
-	Class                string                     `json:"class"`
-	Version              string                     `json:"version"`
-	ControlPlaneReplicas int32                      `json:"controlPlaneReplicas"`
-	WorkerReplicas       int32                      `json:"workerReplicas"`
-	Variables            map[string]json.RawMessage `json:"variables"`
+	Namespace            string `json:"namespace,omitempty"`
+	Name                 string `json:"name"`
+	Class                string `json:"class"`
+	Version              string `json:"version"`
+	ControlPlaneReplicas int32  `json:"controlPlaneReplicas"`
+	WorkerReplicas       int32  `json:"workerReplicas"`
+	// WorkerAutoscaling has the cluster autoscaler size the worker pool in place of WorkerReplicas.
+	WorkerAutoscaling *poolAutoscaling           `json:"workerAutoscaling,omitempty"`
+	Variables         map[string]json.RawMessage `json:"variables"`
 	// Pods and Services are the cluster's own ranges; unset, ones clear of the nodes' network are
 	// chosen.
 	Pods     []string `json:"pods,omitempty"`
@@ -655,6 +747,9 @@ func (req *createRequest) invalid() string {
 	if !validWorkers(req.WorkerReplicas) {
 		return workerCounts
 	}
+	if a := req.WorkerAutoscaling; a != nil && !a.valid() {
+		return autoscalingCounts
+	}
 	return ""
 }
 
@@ -682,11 +777,42 @@ func (s *Server) createClass(w http.ResponseWriter, r *http.Request, u user, req
 	}
 	// A cluster made without its template would wait for ever for its first VM.
 	dist, _ := distribution(req.Class)
-	if missing := missingTemplate(class, dist, req.Version); missing != "" {
+	version := req.Version
+	var nodeOS templates.NodeOS
+	if dist == string(templates.Talos) {
+		// A Talos template is a Talos release's, whatever Kubernetes version runs on it, and Talos
+		// is its own OS: the class has no nodeOS variable to set.
+		if err := json.Unmarshal(req.Variables[provisioner.TalosVersionVariable], &version); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, "Talos version: choose a Talos release")
+			return nil, false
+		}
+	} else {
+		var err error
+		if nodeOS, err = requestNodeOS(req.Variables[provisioner.NodeOSVariable]); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return nil, false
+		}
+	}
+	if missing := missingTemplate(class, dist, version, nodeOS); missing != "" {
 		writeError(w, http.StatusConflict, missing)
 		return nil, false
 	}
 	return class, true
+}
+
+// requestNodeOS is the node OS a request's nodeOS variable names, the default where it names none,
+// once Kubehenge builds templates of it.
+func requestNodeOS(raw json.RawMessage) (templates.NodeOS, error) {
+	o := templates.DefaultNodeOS
+	if raw != nil {
+		if err := json.Unmarshal(raw, &o); err != nil {
+			return o, fmt.Errorf("node OS: %w", err)
+		}
+	}
+	if _, _, err := templates.Available(o); err != nil {
+		return o, fmt.Errorf("node OS: %w", err)
+	}
+	return o, nil
 }
 
 // mayCreate makes the checks Proxmox VE makes of a user creating a VM in the workload pool, on that
@@ -696,7 +822,8 @@ func (s *Server) mayCreate(w http.ResponseWriter, r *http.Request, u user, class
 	if !s.require(w, r, u, s.workloadPoolPath(), privChange) ||
 		!s.mayUseStorage(w, r, u, class, req.Variables["storage"]) ||
 		!s.mayUseNetwork(w, r, u, class, req.Variables["network"]) ||
-		!s.mayPlace(w, r, u, req.Variables[allowedNodesVariable], nil) {
+		!s.mayPlace(w, r, u, req.Variables[allowedNodesVariable], nil) ||
+		!s.mayPlaceAutoscaler(w, r, u, req.Variables[autoscalerVariable], nil) {
 		return false
 	}
 	if installsRancher(req.Variables["rancher"]) && !s.allowRancher(w, r, u, client.ObjectKey{Namespace: req.Namespace, Name: req.Name}) {
@@ -810,6 +937,9 @@ func (s *Server) newCluster(u user, req *createRequest, pods, services []string)
 				{Class: workerClass, Name: workerPool, Replicas: &req.WorkerReplicas},
 			}},
 		}},
+	}
+	if req.WorkerAutoscaling != nil {
+		setAutoscaling(&c.Spec.Topology.Workers.MachineDeployments[0], req.WorkerAutoscaling, 0)
 	}
 	for _, name := range slices.Sorted(maps.Keys(req.Variables)) {
 		c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{
@@ -930,8 +1060,10 @@ type changeRequest struct {
 	Version              *string `json:"version"`
 	ControlPlaneReplicas *int32  `json:"controlPlaneReplicas"`
 	// WorkerPools sets the replicas of worker pools by name.
-	WorkerPools map[string]int32           `json:"workerPools"`
-	Variables   map[string]json.RawMessage `json:"variables"`
+	WorkerPools map[string]int32 `json:"workerPools"`
+	// Autoscaling switches the cluster autoscaler on for worker pools by name, or off with null.
+	Autoscaling map[string]*poolAutoscaling `json:"autoscaling"`
+	Variables   map[string]json.RawMessage  `json:"variables"`
 }
 
 func (s *Server) changeCluster(w http.ResponseWriter, r *http.Request, u user) {
@@ -947,7 +1079,16 @@ func (s *Server) changeCluster(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusConflict, "the cluster is being deleted")
 		return
 	}
-	if msg := applyTopology(c, &req); msg != "" {
+	// Autoscaling goes first, so that a change switching a pool's off may also fix its workers.
+	msg, err := applyAutoscaling(r.Context(), u.kube, c, req.Autoscaling)
+	if err != nil {
+		s.kubeError(w, err)
+		return
+	}
+	if msg == "" {
+		msg = applyTopology(c, &req)
+	}
+	if msg != "" {
 		writeError(w, http.StatusUnprocessableEntity, msg)
 		return
 	}
@@ -980,6 +1121,9 @@ func applyTopology(c *clusterv1.Cluster, req *changeRequest) string {
 	for name, n := range req.WorkerPools {
 		if !validWorkers(n) {
 			return workerCounts + " in each pool"
+		}
+		if isAutoscaled(c, name) {
+			return "pool " + name + ": the cluster autoscaler sizes it; switch autoscaling off to fix its workers"
 		}
 		if !setWorkerReplicas(c, name, n) {
 			return "the cluster has no worker pool " + name
@@ -1051,6 +1195,35 @@ func (s *Server) allowVariable(w http.ResponseWriter, r *http.Request, u user, c
 		return string(value) == jsonNull || sameJSON(old, value) || s.mayPlace(w, r, u, value, old)
 	case certificatesVariable:
 		return checkSharedDNS01(w, u, access.path, access.held, value, old)
+	case autoscalerVariable:
+		return s.mayPlaceAutoscaler(w, r, u, value, old)
+	case provisioner.NodeOSVariable:
+		return sameJSON(old, value) || s.allowNodeOS(w, r, u, c, value)
+	}
+	return true
+}
+
+// allowNodeOS checks that a cluster can move its nodes to the node OS value: a template of it at
+// the cluster's version must be there, or the rollout would wait for ever for its first VM.
+func (s *Server) allowNodeOS(w http.ResponseWriter, r *http.Request, u user, c *clusterv1.Cluster, value json.RawMessage) bool {
+	dist, _ := distribution(c.Spec.Topology.ClassRef.Name)
+	if dist == string(templates.Talos) {
+		writeError(w, http.StatusUnprocessableEntity, "node OS: Talos nodes run Talos")
+		return false
+	}
+	nodeOS, err := requestNodeOS(value)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return false
+	}
+	class := &clusterv1.ClusterClass{}
+	if err := u.kube.Get(r.Context(), client.ObjectKey{Namespace: s.ClassNamespace, Name: c.Spec.Topology.ClassRef.Name}, class); err != nil {
+		s.kubeError(w, err)
+		return false
+	}
+	if missing := missingTemplate(class, dist, c.Spec.Topology.Version, nodeOS); missing != "" {
+		writeError(w, http.StatusConflict, missing)
+		return false
 	}
 	return true
 }
@@ -1132,6 +1305,48 @@ func (s *Server) kubeconfig(w http.ResponseWriter, r *http.Request, u user) {
 	w.Header().Set("Content-Type", "application/yaml")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", c.Name+".kubeconfig"))
 	_, _ = w.Write(secret.Data["value"])
+}
+
+// talosconfig hands out a Talos cluster's talosconfig, which signs in to its nodes' Talos API as
+// os:admin, to those its kubeconfig goes to: either is the whole cluster.
+func (s *Server) talosconfig(w http.ResponseWriter, r *http.Request, u user) {
+	c, _, ok := s.cluster(w, r, u, privKubeconfig)
+	if !ok {
+		return
+	}
+	if dist, _ := distribution(c.Spec.Topology.ClassRef.Name); dist != string(templates.Talos) {
+		writeError(w, http.StatusNotFound, "only a Talos cluster has a talosconfig")
+		return
+	}
+	secret := &corev1.Secret{}
+	if err := u.kube.Get(r.Context(), client.ObjectKey{Namespace: c.Namespace, Name: provisioner.TalosconfigSecret(c.Name)}, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			writeError(w, http.StatusConflict, "the cluster has no talosconfig yet")
+			return
+		}
+		s.kubeError(w, err)
+		return
+	}
+	s.Log.Info("handed out talosconfig", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
+	w.Header().Set("Content-Type", "application/yaml")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", c.Name+".talosconfig"))
+	_, _ = w.Write(secret.Data[provisioner.TalosconfigKey])
+}
+
+// retryTalosUpgrade takes back the failure that holds a Talos cluster's node upgrades, so that the
+// controller tries again.
+func (s *Server) retryTalosUpgrade(w http.ResponseWriter, r *http.Request, u user) {
+	c, _, ok := s.cluster(w, r, u, privChange)
+	if !ok {
+		return
+	}
+	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:null}}}`, provisioner.TalosUpgradeFailedAnnotation)
+	if err := u.kube.Patch(r.Context(), c, client.RawPatch(types.MergePatchType, patch)); err != nil {
+		s.kubeError(w, err)
+		return
+	}
+	s.Log.Info("Talos upgrade tried again", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // kubeError answers with what the management cluster refused. Validation messages are the user's

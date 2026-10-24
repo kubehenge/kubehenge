@@ -57,12 +57,13 @@ func newTemplateRefreshCommand(conn *pve.Config) *cobra.Command {
 		Short: "Build the templates clusters run again, and delete the builds nothing needs",
 		Long: `Build the templates clusters run again, and delete the builds nothing needs.
 
-It runs in the management cluster, as the template refresh CronJob's Job. Each Ubuntu template the
-clusters' machines are cloned from, the cloud image RKE2 and k3s share and a kubeadm template per
-Kubernetes version, is built again with the updates Ubuntu published since, as a new template tagged
-with when it was made. Clusters move to a build inside their maintenance windows once it is --soak
-old. Of each template, the --keep newest builds stay, and any older one a cluster or a machine
-being created still clones from.
+It runs in the management cluster, as the template refresh CronJob's Job. Each node OS template
+the clusters' machines are cloned from, RKE2's and k3s's per node OS and kubeadm's per Kubernetes
+version and node OS, is built again with the updates its node OS published since, as a new template
+tagged with when it was made; so are RKE2's on the default node OS and every RKE2 and k3s template
+the pool holds. Clusters move to a build inside their maintenance windows once it is --soak old. Of
+each template, the --keep newest builds stay, and any older one a cluster or a machine being
+created still clones from.
 
 One run goes at a time, held by a Lease in --namespace. How the run went is written to the
 ConfigMap kubehenge-template-refresh there, which the interface shows.
@@ -79,7 +80,7 @@ The API token is read from KUBEHENGE_PROXMOX_TOKEN.`,
 	f.StringVar(&o.classNamespace, "class-namespace", os.Getenv("POD_NAMESPACE"), "namespace of Kubehenge's ClusterClasses (env POD_NAMESPACE)")
 	f.IntVar(&o.keep, "keep", provisioner.DefaultBuildsKept, "builds of each template kept beside those in use")
 	f.DurationVar(&o.soak, "soak", provisioner.DefaultNodeImageSoak, "how old a build is before clusters move to it; the controller's --node-image-soak")
-	f.StringArrayVar(&o.missing, "missing", nil, "a template to build if it has no build yet: cloud-image, or kubeadm- and a Kubernetes version (repeatable)")
+	f.StringArrayVar(&o.missing, "missing", nil, "a template to build if it has no build yet, such as rke2-almalinux-10 or kubeadm-v1.37.1-almalinux-10 (repeatable)")
 	f.BoolVar(&o.missingOnly, "missing-only", false, "build only the --missing templates, and only those without a build")
 	f.StringVar(&o.trigger, "trigger", "", "what started the run, shown with its status")
 	f.StringVar(&o.tokenSecret, "token-secret", "", "the Secret KUBEHENGE_PROXMOX_TOKEN comes from, named in the run's status when it is missing")

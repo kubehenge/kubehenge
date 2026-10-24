@@ -1,6 +1,7 @@
 {{- $class := "kubehenge-k3s" }}
 {{- $clusterSpec := include "kubehenge.proxmoxClusterSpec" . }}
-{{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "cloud-image" "kubehenge" "ubuntu-26.04") "serviceJoins" true) }}
+{{- /* Placeholder tags: the controller's patch selects the build of the node OS's template. */}}
+{{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "k3s" "kubehenge" "os-almalinux-10") "serviceJoins" true) }}
 {{- $controlPlaneSpec := include "kubehenge.k3sControlPlaneSpec" . }}
 {{- $workerSpec := include "kubehenge.k3sWorkerSpec" . }}
 {{- $clusterName := include "kubehenge.hashedName" (dict "name" $class "spec" $clusterSpec) }}
@@ -50,6 +51,7 @@ metadata:
     # root@pam's password for it.
     kubehenge.dev/volume-snapshots: "true"
     {{- end }}
+    {{- include "kubehenge.etcdRestore" . | nindent 4 }}
 spec:
   infrastructure:
     templateRef:
@@ -91,6 +93,8 @@ spec:
     {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 1 "workerMinMemoryMiB" 1024 "clusters" .Values.clusters) | nindent 4 }}
     {{- include "kubehenge.addonVariables" . | nindent 4 }}
     {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
+    {{- include "kubehenge.nodeOSVariable" . | nindent 4 }}
+    {{- include "kubehenge.autoscalerVariable" . | nindent 4 }}
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
     {{- include "kubehenge.cisVariable" . | nindent 4 }}
     - name: cni
@@ -239,6 +243,21 @@ spec:
             - op: add
               path: /spec/template/spec/kthreesConfigSpec/serverConfig/disableComponents
               value: [servicelb]
+    # The k3s provider has no setting for etcd snapshots.
+    - name: k3s-etcd-upload
+      enabledIf: {{ include "kubehenge.etcdUploadEnabled" . }}
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: KThreesControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/kthreesConfigSpec/files/-
+              valueFrom:
+                template: |
+                  {{- include "kubehenge.etcdUploadFile" (dict "path" "/etc/rancher/k3s/config.yaml.d/60-kubehenge-etcd-s3.yaml") | nindent 18 }}
     - name: k3s-oidc
       enabledIf: {{ include "kubehenge.oidcEnabled" . }}
       definitions:
@@ -303,7 +322,6 @@ spec:
 {{- define "kubehenge.k3sAgentConfig" -}}
 preK3sCommands:
   - sysctl --system
-  - {{ include "kubehenge.runcProfileLoad" . | quote }}
 agentConfig:
   kubeletArgs:
     # capmox names a machine by its VM's SMBIOS UUID, which cloud-init reads as the instance ID.
@@ -327,7 +345,6 @@ template:
       {{- include "kubehenge.k3sAgentConfig" (dict "controlPlane" true) | nindent 6 }}
       files:
         {{- include "kubehenge.sysctlFile" . | nindent 8 }}
-        {{- include "kubehenge.runcProfileFile" (dict "distribution" "k3s") | nindent 8 }}
         {{- include "kubehenge.auditPolicyFile" (dict "root" . "path" "/etc/rancher/k3s/audit-policy.yaml") | nindent 8 }}
         # The k3s provider has no setting for secrets encryption; k3s keeps the key in its
         # datastore, so every server holds the same one. The API server's arguments are here, in
@@ -368,5 +385,4 @@ template:
     {{- include "kubehenge.k3sAgentConfig" (dict) | nindent 4 }}
     files:
       {{- include "kubehenge.sysctlFile" . | nindent 6 }}
-      {{- include "kubehenge.runcProfileFile" (dict "distribution" "k3s") | nindent 6 }}
 {{- end -}}

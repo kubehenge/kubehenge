@@ -1,0 +1,302 @@
+{{- $class := "kubehenge-talos" }}
+{{- $clusterSpec := include "kubehenge.proxmoxClusterSpec" . }}
+{{- /*
+Placeholder tags: the controller's patch selects the template of the Talos release each machine
+boots. Talos has no cloud-init for capmox to wait for, only the guest agent of its schematic.
+*/}}
+{{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "kubehenge" "talos") "serviceJoins" true) }}
+{{- $controlPlaneSpec := include "kubehenge.talosControlPlaneSpec" . }}
+{{- $workerSpec := include "kubehenge.talosWorkerSpec" . }}
+{{- $clusterName := include "kubehenge.hashedName" (dict "name" $class "spec" $clusterSpec) }}
+{{- $machineName := include "kubehenge.hashedName" (dict "name" (printf "%s-machine" $class) "spec" $machineSpec) }}
+{{- $controlPlaneName := include "kubehenge.hashedName" (dict "name" (printf "%s-control-plane" $class) "spec" $controlPlaneSpec) }}
+{{- $workerName := include "kubehenge.hashedName" (dict "name" (printf "%s-worker" $class) "spec" $workerSpec) }}
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: ClusterClass
+metadata:
+  name: {{ $class }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # Talos brings flannel; Kubehenge's controller installs the others the cni variable names.
+    kubehenge.dev/cni: cilium,calico
+    # Talos's own ranges, for a Cluster that sets none.
+    kubehenge.dev/default-pods: 10.244.0.0/16
+    kubehenge.dev/default-services: 10.96.0.0/12
+    # Talos's control planes run the same components as kubeadm's, so they follow the same RKE2
+    # server sizing guide: the least vCPUs and memory from a number of workers.
+    kubehenge.dev/control-plane-sizes: '[{"workers":0,"cores":2,"memoryMiB":4096},{"workers":226,"cores":4,"memoryMiB":8192},{"workers":451,"cores":8,"memoryMiB":16384},{"workers":1301,"cores":16,"memoryMiB":32768}]'
+    {{- include "kubehenge.addonMemory" . | nindent 4 }}
+    {{- include "kubehenge.addonControlPlaneMemory" . | nindent 4 }}
+    {{- include "kubehenge.backupTargets" . | nindent 4 }}
+    # What a node uses before any add-on: kubeadm's measured figures, for the same Kubernetes
+    # components on a system that runs nothing else.
+    kubehenge.dev/node-memory: '{"controlPlane":2392,"worker":704}'
+    {{- if .Values.proxmox.ha }}
+    # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
+    kubehenge.dev/proxmox-ha: "true"
+    {{- end }}
+    {{- if .Values.proxmox.datastoreAllocate.role }}
+    # Tells the interface to offer the csi variable's datastoreAllocate, on the storages the
+    # management cluster does not use: an administrator let clusters choose it.
+    kubehenge.dev/datastore-allocate: "true"
+    kubehenge.dev/management-storages: {{ join "," .Values.proxmox.datastoreAllocate.managementStorages | quote }}
+    {{- end }}
+    {{- if .Values.proxmox.sysAuditGroup }}
+    # Tells the interface to offer the ccm variable's haGroups: an administrator let clusters hold
+    # Sys.Audit on /.
+    kubehenge.dev/sys-audit: "true"
+    {{- end }}
+    {{- if .Values.proxmox.volumeSnapshots.rootSecret }}
+    # Tells the interface to offer the csi variable's volumeSnapshots: an administrator stored
+    # root@pam's password for it.
+    kubehenge.dev/volume-snapshots: "true"
+    {{- end }}
+    # The controller restores etcd through the nodes' Talos API, with no guest agent to let in.
+    kubehenge.dev/etcd-restore-automatic: "true"
+spec:
+  infrastructure:
+    templateRef:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+      kind: ProxmoxClusterTemplate
+      name: {{ $clusterName }}
+  controlPlane:
+    templateRef:
+      apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+      kind: TalosControlPlaneTemplate
+      name: {{ $controlPlaneName }}
+    machineInfrastructure:
+      templateRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+        kind: ProxmoxMachineTemplate
+        name: {{ $machineName }}
+    naming:
+      template: {{ "{{ .cluster.name }}-control-plane-{{ .random }}" | quote }}
+    healthCheck:
+      {{- include "kubehenge.healthCheck" "controlPlane" | nindent 6 }}
+  workers:
+    machineDeployments:
+      - class: worker
+        naming:
+          template: {{ "{{ .cluster.name }}-{{ .machineDeployment.topologyName }}-{{ .random }}" | quote }}
+        bootstrap:
+          templateRef:
+            apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+            kind: TalosConfigTemplate
+            name: {{ $workerName }}
+        infrastructure:
+          templateRef:
+            apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+            kind: ProxmoxMachineTemplate
+            name: {{ $machineName }}
+        healthCheck:
+          {{- include "kubehenge.healthCheck" "workers" | nindent 10 }}
+  variables:
+    {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 1 "workerMinMemoryMiB" 1024 "clusters" .Values.clusters) | nindent 4 }}
+    {{- include "kubehenge.addonVariables" . | nindent 4 }}
+    {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
+    {{- include "kubehenge.autoscalerVariable" . | nindent 4 }}
+    {{- include "kubehenge.oidcVariable" . | nindent 4 }}
+    {{- include "kubehenge.cisVariable" . | nindent 4 }}
+    - name: cni
+      required: false
+      schema:
+        openAPIV3Schema:
+          type: string
+          description: The CNI plugin, fixed once the cluster exists. Talos's own is flannel, with Kubernetes network policies.
+          enum: [flannel, cilium, calico]
+          default: flannel
+          {{- include "kubehenge.cniFixed" . | nindent 10 }}
+    # Kubehenge's controller upgrades the nodes to it in place through the Talos API; no patch
+    # reads it.
+    - name: talosVersion
+      required: true
+      schema:
+        openAPIV3Schema:
+          type: string
+          description: >-
+            The Talos release the nodes run. Changing it upgrades them in place through Talos's own
+            A/B upgrade, one node at a time, control planes first; a minor version at a time and
+            never back to an older one.
+          pattern: "^v1\\.[0-9]+\\.[0-9]+$"
+  patches:
+    {{- include "kubehenge.proxmoxPatches" . | nindent 4 }}
+    # The control planes hold the endpoint with Talos's own virtual IP, elected through etcd, on the
+    # VM's one network link.
+    - name: talos-control-plane
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+            kind: TalosControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/controlPlaneConfig/controlplane/strategicPatches/-
+              valueFrom:
+                template: {{ `{{ dict "apiVersion" "v1alpha1" "kind" "Layer2VIPConfig" "name" .controlPlaneEndpoint "link" "lan" | toJson | toJson }}` | quote }}
+            - op: add
+              path: /spec/template/spec/controlPlaneConfig/controlplane/strategicPatches/-
+              valueFrom:
+                template: |
+                  {{- include "kubehenge.talosAdmission" . | nindent 18 }}
+            - op: add
+              path: /spec/template/spec/controlPlaneConfig/controlplane/strategicPatches/-
+              valueFrom:
+                template: |
+                  {{- include "kubehenge.talosAuthentication" . | nindent 18 }}
+    # Another CNI than flannel takes the place of Talos's.
+    - name: talos-cni
+      enabledIf: {{ "{{ if ne .cni \"flannel\" }}true{{ end }}" | quote }}
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+            kind: TalosControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/controlPlaneConfig/controlplane/strategicPatches/-
+              value: {{ dict "apiVersion" "v1alpha1" "kind" "KubeFlannelCNIConfig" "$patch" "delete" | toJson | quote }}
+    # Talos's flannel enforces network policies only when asked to, through kube-network-policies.
+    - name: talos-flannel-policies
+      enabledIf: {{ "{{ if eq .cni \"flannel\" }}true{{ end }}" | quote }}
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+            kind: TalosControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/controlPlaneConfig/controlplane/strategicPatches/-
+              value: {{ dict "apiVersion" "v1alpha1" "kind" "KubeFlannelCNIConfig" "kubeNetworkPoliciesEnabled" true | toJson | quote }}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+kind: ProxmoxClusterTemplate
+metadata:
+  name: {{ $clusterName }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- $clusterSpec | nindent 2 }}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+kind: ProxmoxMachineTemplate
+metadata:
+  name: {{ $machineName }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- $machineSpec | nindent 2 }}
+---
+{{ include "kubehenge.classTemplates" (dict "class" $class "namespace" .Release.Namespace "templates" (list
+  (dict "apiVersion" "controlplane.cluster.x-k8s.io/v1beta1" "kind" "TalosControlPlaneTemplate" "name" $controlPlaneName "spec" $controlPlaneSpec)
+  (dict "apiVersion" "bootstrap.cluster.x-k8s.io/v1beta1" "kind" "TalosConfigTemplate" "name" $workerName "spec" $workerSpec)
+)) }}
+
+{{/*
+The admission and authentication configurations every class gets (files/admission.tpl,
+files/authentication-config.tpl), as Talos's documents: templates Cluster API renders with the
+cluster's variables into one strategic patch each. The API server's probes come without
+credentials, so its health checks stay open to them.
+*/}}
+{{- define "kubehenge.talosAdmission" -}}
+{{ printf "{{- $exempt := list %s }}" (include "kubehenge.quotedList" .Values.podSecurityExempt) }}
+{{ "{{- $talos := true }}" }}
+{{ .Files.Get "files/admission.tpl" }}
+{{- end -}}
+
+{{- define "kubehenge.talosAuthentication" -}}
+{{ "{{- $anonymous := true }}" }}
+{{ "{{- $talos := true }}" }}
+{{ .Files.Get "files/authentication-config.tpl" }}
+{{- end -}}
+
+{{/*
+Talos's machine configuration, as the strategic patches the Talos bootstrap provider applies to the
+documents it generates, in order: the first removes generated documents that later ones replace or
+that nothing here wants. Each is a document as JSON, which Talos reads as YAML.
+
+Both roles:
+- Talos's discovery service: no membership reports to Sidero's public one, which nothing uses.
+- The Proxmox VE cloud controller manager initialises the nodes, and names each machine by its VM.
+- The kubelet asks the cluster CA for its serving certificate, which Kubehenge's controller approves
+  for the node's own name and addresses, as on kubeadm. Talos's kubelet already refuses kernel
+  settings other than its own, runs every container under the runtime's seccomp profile, ends idle
+  streaming sessions after five minutes, and speaks TLS 1.3 only.
+- Talos and the node's container runtime pull the images of Sidero's and Kubernetes' registries only
+  with their publishers' keyless signatures (talos.imageSignatures).
+- Talos sends what its services and the kernel log to the logs add-on's node collector, on the
+  node's loopback, where Talos keeps it otherwise only in memory. Without logs nothing listens
+  there, and Talos tries again each second until something does.
+*/}}
+{{- define "kubehenge.talosCommonPatches" -}}
+{{- $logs := "tcp://127.0.0.1:5170/" }}
+- {{ dict "cluster" (dict "externalCloudProvider" (dict "enabled" true)) | toJson | quote }}
+- {{ dict "machine" (dict "logging" (dict "destinations" (list (dict "endpoint" $logs "format" "json_lines")))) | toJson | quote }}
+- {{ dict "apiVersion" "v1alpha1" "kind" "KmsgLogConfig" "name" "kubehenge-logs" "url" $logs | toJson | quote }}
+- {{ dict "apiVersion" "v1alpha1" "kind" "KubeletConfig" "config" (dict "serverTLSBootstrap" true) | toJson | quote }}
+- {{ dict "apiVersion" "v1alpha1" "kind" "ImageVerificationConfig" "rules" .Values.talos.imageSignatures | toJson | quote }}
+{{- end -}}
+
+{{/*
+The control planes besides:
+- The audit policy every class's API server logs by; Talos keeps a month of it, in at most a
+  gigabyte, under /var/log/audit/kube.
+- EventRateLimit beside Talos's own admission plugins, configured with Pod Security Admission
+  (kubehenge.talosAdmission); the API server checks the kubelets' serving certificates against the
+  cluster CA; projected tokens last their hour, as every client reloads them.
+- The controller manager's and scheduler's patient leader election (kubehenge.patientLeaseArgs),
+  and their metrics without credentials on loopback, where Talos has them listen, as kubeadm's:
+  the metrics proxy on the node's address authenticates Prometheus instead.
+- etcd's metrics on loopback without TLS, as kubeadm's, behind the metrics proxy.
+- The VM's one network link, named for the virtual IP (talos-control-plane).
+Talos already turns profiling off, speaks TLS 1.3 only, and encrypts Secrets in etcd with a key of
+the cluster's, the same on every control plane.
+*/}}
+{{- define "kubehenge.talosControlPlaneSpec" -}}
+{{- $leases := dict "authorization-always-allow-paths" "/healthz,/readyz,/livez,/metrics" }}
+{{- range $arg := fromYamlArray (include "kubehenge.patientLeaseArgs" $) }}
+{{- $_ := set $leases (splitn "=" 2 $arg)._0 (splitn "=" 2 $arg)._1 }}
+{{- end }}
+{{- $removed := list
+  (dict "apiVersion" "v1alpha1" "kind" "DiscoveryServiceConfig" "name" "default" "$patch" "delete")
+  (dict "apiVersion" "v1alpha1" "kind" "KubeAdmissionControlConfig" "name" "PodSecurity" "$patch" "delete")
+  (dict "apiVersion" "v1alpha1" "kind" "KubeAuthenticationConfig" "$patch" "delete")
+  (dict "apiVersion" "v1alpha1" "kind" "KubeAuditPolicyConfig" "$patch" "delete") }}
+{{- $docs := list }}
+{{- range $removed }}{{ $docs = append $docs (toJson .) }}{{ end }}
+template:
+  spec:
+    controlPlaneConfig:
+      controlplane:
+        generateType: controlplane
+        {{- include "kubehenge.talosHostname" . | nindent 8 }}
+        strategicPatches:
+          - {{ join "\n---\n" $docs | quote }}
+          {{- include "kubehenge.talosCommonPatches" . | nindent 10 }}
+          - {{ dict "cluster" (dict "etcd" (dict "extraArgs" (dict "listen-metrics-urls" "http://127.0.0.1:2381"))) | toJson | quote }}
+          - {{ dict "apiVersion" "v1alpha1" "kind" "KubeAuditPolicyConfig" "configuration" (.Files.Get "files/audit-policy.yaml" | fromYaml) | toJson | quote }}
+          - {{ dict "apiVersion" "v1alpha1" "kind" "KubeAPIServerConfig" "extraArgs" (dict "enable-admission-plugins" "EventRateLimit" "kubelet-certificate-authority" "/system/secrets/kubernetes/kube-apiserver/ca.crt" "service-account-extend-token-expiration" "false") | toJson | quote }}
+          - {{ dict "apiVersion" "v1alpha1" "kind" "KubeControllerManagerConfig" "extraArgs" $leases | toJson | quote }}
+          - {{ dict "apiVersion" "v1alpha1" "kind" "KubeSchedulerConfig" "extraArgs" $leases | toJson | quote }}
+          - {{ dict "apiVersion" "v1alpha1" "kind" "LinkAliasConfig" "name" "lan" "selector" (dict "match" "link.driver == \"virtio_net\"") | toJson | quote }}
+{{- end -}}
+
+{{- define "kubehenge.talosWorkerSpec" -}}
+template:
+  spec:
+    generateType: worker
+    {{- include "kubehenge.talosHostname" . | nindent 4 }}
+    strategicPatches:
+      - {{ dict "apiVersion" "v1alpha1" "kind" "DiscoveryServiceConfig" "name" "default" "$patch" "delete" | toJson | quote }}
+      {{- include "kubehenge.talosCommonPatches" . | nindent 6 }}
+{{- end -}}
+
+{{/*
+The node's name, its VM's: a clone carries no name of its own. The machine configuration schema the
+nodes are generated with (talosVersion) is the release they boot first, which Kubehenge's
+controller patches in (generate-patches.kubehenge).
+*/}}
+{{- define "kubehenge.talosHostname" -}}
+hostname:
+  source: InfrastructureName
+{{- end -}}

@@ -17,6 +17,7 @@ import (
 	"github.com/luthermonson/go-proxmox"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -186,23 +187,27 @@ func (ch Channels) Target(current, mode string) string {
 	return ""
 }
 
-// Releases tells which Kubernetes versions a distribution offers.
+// Releases tells which Kubernetes versions a distribution offers on a node OS.
 type Releases interface {
-	Channels(ctx context.Context, distribution string) (Channels, error)
+	Channels(ctx context.Context, distribution string, os templates.NodeOS) (Channels, error)
 }
 
-// ChannelServer reads RKE2's and k3s's release channels (update.rke2.io, update.k3s.io), and
-// kubeadm's from the templates Kubehenge has built: a kubeadm node needs one for its version.
+// ChannelServer reads RKE2's and k3s's release channels (update.rke2.io, update.k3s.io), whatever
+// the node OS; kubeadm's from the templates Kubehenge has built for the node OS, as a kubeadm node
+// needs one for its version; and Talos's from Kubernetes's own, for the minor versions the Talos
+// release Kubehenge makes templates of runs. Talos is its own OS, so the node OS plays no part there.
 type ChannelServer struct {
 	HTTP    *http.Client
 	URLs    map[string]string
 	Proxmox *proxmox.Client
 }
 
-// DefaultChannelURLs are the publishers' own.
+// DefaultChannelURLs are the publishers' own. Talos's is where Kubernetes names the newest release
+// of each minor version, in stable-1.<minor>.txt.
 var DefaultChannelURLs = map[string]string{
-	"rke2": "https://update.rke2.io/v1-release/channels",
-	"k3s":  "https://update.k3s.io/v1-release/channels",
+	"rke2":  "https://update.rke2.io/v1-release/channels",
+	"k3s":   "https://update.k3s.io/v1-release/channels",
+	"talos": "https://dl.k8s.io/release",
 }
 
 // channelList is a release channel server's answer.
@@ -219,28 +224,26 @@ type channel struct {
 const maxChannelList = 4 << 20
 
 // Channels implements Releases.
-func (s *ChannelServer) Channels(ctx context.Context, distribution string) (Channels, error) {
+func (s *ChannelServer) Channels(ctx context.Context, distribution string, os templates.NodeOS) (Channels, error) {
 	if distribution == "kubeadm" {
-		return s.templateChannels(ctx)
+		return s.templateChannels(ctx, os)
 	}
 	url, ok := s.URLs[distribution]
 	if !ok {
 		return Channels{}, fmt.Errorf("no release channels for %s", distribution)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
-	if err != nil {
-		return Channels{}, fmt.Errorf("reading %s: %w", url, err)
+	if distribution == string(templates.Talos) {
+		return s.kubernetesChannels(ctx, url)
 	}
-	resp, err := s.HTTP.Do(req)
+	raw, found, err := s.get(ctx, url)
 	if err != nil {
-		return Channels{}, fmt.Errorf("reading %s: %w", url, err)
+		return Channels{}, err
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return Channels{}, fmt.Errorf("%s: %s", url, resp.Status)
+	if !found {
+		return Channels{}, fmt.Errorf("%s: not found", url)
 	}
 	var body channelList
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxChannelList)).Decode(&body); err != nil {
+	if err := json.Unmarshal(raw, &body); err != nil {
 		return Channels{}, fmt.Errorf("%s: %w", url, err)
 	}
 	ch := Channels{Latest: map[int]kubeVersion{}}
@@ -262,15 +265,75 @@ func (s *ChannelServer) Channels(ctx context.Context, distribution string) (Chan
 	return ch, nil
 }
 
+// get reads a channel server's answer, and whether there is one at url.
+func (s *ChannelServer) get(ctx context.Context, url string) ([]byte, bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return nil, false, fmt.Errorf("reading %s: %w", url, err)
+	}
+	resp, err := s.HTTP.Do(req)
+	if err != nil {
+		return nil, false, fmt.Errorf("reading %s: %w", url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusNotFound:
+		return nil, false, nil
+	default:
+		return nil, false, fmt.Errorf("%s: %s", url, resp.Status)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxChannelList))
+	if err != nil {
+		return nil, false, fmt.Errorf("reading %s: %w", url, err)
+	}
+	return body, true, nil
+}
+
+// kubernetesChannels are the newest Kubernetes release of each minor version the Talos release
+// Kubehenge makes templates of runs, as Kubernetes names them; stable is the minor of the release
+// Talos itself installs by default.
+func (s *ChannelServer) kubernetesChannels(ctx context.Context, base string) (Channels, error) {
+	minors, err := templates.TalosKubernetesMinors(templates.DefaultTalosVersion)
+	if err != nil {
+		return Channels{}, fmt.Errorf("the Kubernetes channels of Talos: %w", err)
+	}
+	stable, ok := parseKubeVersion(templates.TalosDefaultKubernetes)
+	if !ok {
+		return Channels{}, fmt.Errorf("talos's default kubernetes %q is no version", templates.TalosDefaultKubernetes)
+	}
+	ch := Channels{Latest: map[int]kubeVersion{}, StableMinor: stable.Minor}
+	for _, m := range minors {
+		url := fmt.Sprintf("%s/stable-1.%d.txt", base, m)
+		raw, found, err := s.get(ctx, url)
+		if err != nil {
+			return Channels{}, err
+		}
+		if !found {
+			// A minor Talos runs that Kubernetes has not released yet.
+			continue
+		}
+		v, ok := parseKubeVersion(strings.TrimSpace(string(raw)))
+		if !ok || v.Minor != m || v.Build != 0 {
+			return Channels{}, fmt.Errorf("%s names no Kubernetes 1.%d release: %q", url, m, raw)
+		}
+		ch.Latest[m] = v
+	}
+	if _, ok := ch.Latest[ch.StableMinor]; !ok {
+		return Channels{}, fmt.Errorf("%s names no Kubernetes 1.%d release", base, ch.StableMinor)
+	}
+	return ch, nil
+}
+
 var kubeadmTemplateVersion = regexp.MustCompile(`^kubernetes-(v1\.\d+\.\d+)$`)
 
-func (s *ChannelServer) templateChannels(ctx context.Context) (Channels, error) {
+func (s *ChannelServer) templateChannels(ctx context.Context, os templates.NodeOS) (Channels, error) {
 	seen, err := listPoolTemplates(ctx, s.Proxmox)
 	if err != nil {
 		return Channels{}, err
 	}
 	ch := Channels{Latest: map[int]kubeVersion{}}
-	for _, v := range seen.kubeadm {
+	for _, v := range seen.kubeadm[os] {
 		if old, seen := ch.Latest[v.Minor]; !seen || old.less(v) {
 			ch.Latest[v.Minor] = v
 		}
@@ -280,18 +343,35 @@ func (s *ChannelServer) templateChannels(ctx context.Context) (Channels, error) 
 }
 
 // poolTemplates is what the token sees of Kubehenge's templates, the controller's being those of
-// the template pool. The ClusterClasses clone from builds of templates of the default OS only; one
-// made from another cloud image, or without a build tag, is a source no machine of theirs could be
-// built from.
+// the template pool. The ClusterClasses clone from builds of templates of a node OS only; one
+// without a build tag, or of an operating system no family names, is a source no machine of theirs
+// could be built from.
 type poolTemplates struct {
-	// kubeadm are the Kubernetes versions of the kubeadm templates, newest first.
-	kubeadm []kubeVersion
-	// cloudImage tells whether the template RKE2's and k3s's machines are cloned from is there.
-	cloudImage bool
+	// kubeadm are the Kubernetes versions of each node OS's kubeadm templates, newest first.
+	kubeadm map[templates.NodeOS][]kubeVersion
+	// nodeOSes are the node OSes RKE2's and k3s's templates are there for, by distribution.
+	nodeOSes map[templates.Distribution][]templates.NodeOS
 	// storages are those any of Kubehenge's templates have disks on, whatever their OS.
 	storages []string
 	// builds are the builds of each line.
 	builds NodeImageBuilds
+	// talos are the Talos releases of the Talos templates, newest first.
+	talos []string
+}
+
+// talosVersionOf is the Talos release a Talos template's tags name: exactly a release's tags, as
+// the Talos ClusterClass's machines select them.
+func talosVersionOf(tags []string) (string, bool) {
+	for _, tag := range tags {
+		v, ok := strings.CutPrefix(tag, "talos-")
+		if !ok {
+			continue
+		}
+		if line, err := TalosLine(v); err == nil && slices.Equal(line, templates.NormaliseTags(tags)) {
+			return v, true
+		}
+	}
+	return "", false
 }
 
 // kubeadmVersionOf is the Kubernetes version a kubeadm template's tags name.
@@ -315,35 +395,74 @@ func listPoolTemplates(ctx context.Context, c *proxmox.Client) (poolTemplates, e
 	if err != nil {
 		return poolTemplates{}, fmt.Errorf("listing the Proxmox VE templates: %w", err)
 	}
-	seen := poolTemplates{storages: inv.Storages, builds: NodeImageBuilds{}}
+	seen := poolTemplates{
+		storages: inv.Storages, builds: NodeImageBuilds{},
+		kubeadm: map[templates.NodeOS][]kubeVersion{}, nodeOSes: make(map[templates.Distribution][]templates.NodeOS),
+	}
 	for _, r := range inv.Templates {
-		tags := templates.ParseTags(r.Tags)
-		at, built := templates.BuildOf(tags)
-		if !slices.Contains(tags, templates.DefaultOS) || !built {
-			continue
-		}
-		line := templates.LineKey(tags)
-		seen.builds[line] = append(seen.builds[line], at)
-		if slices.Contains(tags, "cloud-image") {
-			seen.cloudImage = true
-		}
-		if v, ok := kubeadmVersionOf(tags); ok && !slices.Contains(seen.kubeadm, v) {
-			seen.kubeadm = append(seen.kubeadm, v)
-		}
+		seen.add(templates.ParseTags(r.Tags))
 	}
-	slices.SortFunc(seen.kubeadm, func(a, b kubeVersion) int {
-		switch {
-		case b.less(a):
-			return -1
-		case a.less(b):
-			return 1
-		}
-		return 0
-	})
-	for line := range seen.builds {
-		slices.SortFunc(seen.builds[line], time.Time.Compare)
-	}
+	seen.sort()
 	return seen, nil
+}
+
+// add records what the template of these tags offers: a Talos release, which has no builds, or a
+// build of a node OS line.
+func (p *poolTemplates) add(tags []string) {
+	if v, ok := talosVersionOf(tags); ok && !slices.Contains(p.talos, v) {
+		p.talos = append(p.talos, v)
+	}
+	at, built := templates.BuildOf(tags)
+	os, known := templates.NodeOSOf(tags)
+	if _, _, err := templates.ReleaseOf(os); !built || !known || err != nil {
+		return
+	}
+	line := templates.LineKey(tags)
+	p.builds[line] = append(p.builds[line], at)
+	for _, d := range []templates.Distribution{templates.RKE2, templates.K3s} {
+		if slices.Contains(tags, string(d)) && !slices.Contains(p.nodeOSes[d], os) {
+			p.nodeOSes[d] = append(p.nodeOSes[d], os)
+		}
+	}
+	if v, ok := kubeadmVersionOf(tags); ok && !slices.Contains(p.kubeadm[os], v) {
+		p.kubeadm[os] = append(p.kubeadm[os], v)
+	}
+}
+
+// sort puts the versions and releases newest first, the node OSes by name and the builds oldest
+// first.
+func (p *poolTemplates) sort() {
+	for os := range p.kubeadm {
+		slices.SortFunc(p.kubeadm[os], func(a, b kubeVersion) int {
+			switch {
+			case b.less(a):
+				return -1
+			case a.less(b):
+				return 1
+			}
+			return 0
+		})
+	}
+	for d := range p.nodeOSes {
+		slices.SortFunc(p.nodeOSes[d], func(a, b templates.NodeOS) int { return strings.Compare(a.String(), b.String()) })
+	}
+	slices.SortFunc(p.talos, newerFirst)
+	for line := range p.builds {
+		slices.SortFunc(p.builds[line], time.Time.Compare)
+	}
+}
+
+// newerFirst orders v1.x.y releases newest first.
+func newerFirst(a, b string) int {
+	va, _ := parseKubeVersion(a)
+	vb, _ := parseKubeVersion(b)
+	switch {
+	case vb.less(va):
+		return -1
+	case va.less(vb):
+		return 1
+	}
+	return 0
 }
 
 // autoUpgraded records the last automatic upgrade on the Cluster.
@@ -358,9 +477,11 @@ type Upgrader struct {
 	// RancherKubernetes holds back the cluster that runs Rancher, as the hook would.
 	RancherKubernetes KubernetesMinors
 	// Soak is how long a template build waits before clusters are offered it.
-	Soak     time.Duration
-	Interval time.Duration
-	Now      func() time.Time
+	Soak time.Duration
+	// TalosImages lists the Talos releases Talos clusters move to the newest patch of.
+	TalosImages TalosImages
+	Interval    time.Duration
+	Now         func() time.Time
 }
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable: one replica upgrades.
@@ -437,13 +558,9 @@ func (u *Upgrader) next(ctx context.Context, c *clusterv1.Cluster, channels map[
 	if err != nil || !open {
 		return "", err
 	}
-	dist := strings.TrimPrefix(c.Spec.Topology.ClassRef.Name, ClassPrefix)
-	ch, ok := channels[dist]
-	if !ok {
-		if ch, err = u.Releases.Channels(ctx, dist); err != nil {
-			return "", fmt.Errorf("reading the releases of %s: %w", dist, err)
-		}
-		channels[dist] = ch
+	ch, err := u.channelsOf(ctx, c, channels)
+	if err != nil {
+		return "", err
 	}
 	to := ch.Target(c.Spec.Topology.Version, policy.Mode)
 	if to == "" {
@@ -452,7 +569,41 @@ func (u *Upgrader) next(ctx context.Context, c *clusterv1.Cluster, channels map[
 	if r, err := rancherOf(c); err == nil && r.Install && !u.RancherKubernetes.Allows(to) {
 		return "", nil
 	}
+	if isTalos(c) {
+		// The Talos release moves first, by hand: a minor version it does not run waits for it.
+		talos, err := TalosVersion(c)
+		if err != nil || templates.TalosRunsKubernetes(talos, to) != nil {
+			return "", err
+		}
+		if _, upgrading := c.Annotations[TalosUpgradingAnnotation]; upgrading {
+			return "", nil
+		}
+	}
 	return to, nil
+}
+
+// channelsOf reads the release channels of a cluster's distribution on its node OS, once a round
+// for all the clusters that share them. Talos is its own OS, so its channels are read without one.
+func (u *Upgrader) channelsOf(ctx context.Context, c *clusterv1.Cluster, channels map[string]Channels) (Channels, error) {
+	dist := strings.TrimPrefix(c.Spec.Topology.ClassRef.Name, ClassPrefix)
+	var os templates.NodeOS
+	where := dist
+	if !isTalos(c) {
+		var err error
+		if os, err = ClusterNodeOS(c); err != nil {
+			return Channels{}, err
+		}
+		where = dist + " on " + os.String()
+	}
+	if ch, ok := channels[where]; ok {
+		return ch, nil
+	}
+	ch, err := u.Releases.Channels(ctx, dist, os)
+	if err != nil {
+		return Channels{}, fmt.Errorf("reading the releases of %s: %w", where, err)
+	}
+	channels[where] = ch
+	return ch, nil
 }
 
 // refresh moves a cluster's node image time to now, which has Cluster API replace its machines with
@@ -460,7 +611,13 @@ func (u *Upgrader) next(ctx context.Context, c *clusterv1.Cluster, channels map[
 // window and a build it does not run yet has been offered. Outside the window it records that it
 // holds the cluster, and until when.
 func (u *Upgrader) refresh(ctx context.Context, c *clusterv1.Cluster) error {
-	if !Owns(c, u.ClassNamespace) || !c.DeletionTimestamp.IsZero() || !RefreshesNodes(c) {
+	if !Owns(c, u.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
+		return nil
+	}
+	if isTalos(c) {
+		return u.talosPatch(ctx, c)
+	}
+	if !RefreshesNodes(c) {
 		return nil
 	}
 	policy, _, err := optionalVariable[UpgradePolicy](c, "upgrades")
@@ -504,6 +661,76 @@ func (u *Upgrader) refresh(ctx context.Context, c *clusterv1.Cluster) error {
 	}
 	ctrl.LoggerFrom(ctx).WithName("upgrader").Info("node image refresh started", "cluster", client.ObjectKeyFromObject(c), "from", templates.BuildTag(from), "to", templates.BuildTag(to))
 	return nil
+}
+
+// talosPatch moves a Talos cluster's talosVersion to the newest patch release of its minor version,
+// as node image refreshes bring the other distributions' nodes their updates: when the cluster is
+// settled inside its window, nodeImages is on, and no node upgrade is under way or failed. The
+// TalosUpgrader then upgrades the nodes in place.
+func (u *Upgrader) talosPatch(ctx context.Context, c *clusterv1.Cluster) error {
+	policy, _, err := optionalVariable[UpgradePolicy](c, "upgrades")
+	if err != nil || !policy.RefreshesNodeImages() || u.TalosImages == nil {
+		return err
+	}
+	_, upgrading := c.Annotations[TalosUpgradingAnnotation]
+	_, failed := c.Annotations[TalosUpgradeFailedAnnotation]
+	if upgrading || failed || !settled(c) {
+		return nil
+	}
+	open, err := policy.Window.Open(u.Now())
+	if err != nil || !open {
+		return err
+	}
+	current, err := TalosVersion(c)
+	if err != nil {
+		return err
+	}
+	releases, err := u.TalosImages.TalosReleases(ctx)
+	if err != nil {
+		return fmt.Errorf("patching Talos of %s/%s: %w", c.Namespace, c.Name, err)
+	}
+	to := newestTalosPatch(current, releases)
+	if to == current {
+		return nil
+	}
+	if err = templates.TalosRunsKubernetes(to, c.Spec.Topology.Version); err != nil {
+		// A patch release that drops the cluster's Kubernetes waits for the person to move both.
+		return nil //nolint:nilerr // not a failure of the upgrader
+	}
+	base := client.MergeFromWithOptions(c.DeepCopy(), client.MergeFromWithOptimisticLock{})
+	value, err := json.Marshal(to)
+	if err != nil {
+		return fmt.Errorf("the Talos release: %w", err)
+	}
+	for i := range c.Spec.Topology.Variables {
+		if c.Spec.Topology.Variables[i].Name == TalosVersionVariable {
+			c.Spec.Topology.Variables[i].Value.Raw = value
+		}
+	}
+	if c.Annotations == nil {
+		c.Annotations = map[string]string{}
+	}
+	c.Annotations[autoUpgraded] = fmt.Sprintf("Talos %s to %s at %s", current, to, u.Now().UTC().Format(time.RFC3339))
+	if err := u.Client.Patch(ctx, c, base); err != nil {
+		return fmt.Errorf("starting an automatic Talos upgrade: %w", err)
+	}
+	ctrl.LoggerFrom(ctx).WithName("upgrader").Info("automatic Talos upgrade started", "cluster", client.ObjectKeyFromObject(c), "from", current, "to", to)
+	return nil
+}
+
+// newestTalosPatch is the newest of releases of current's minor version, or current.
+func newestTalosPatch(current string, releases []string) string {
+	minor, err := templates.TalosMinor(current)
+	if err != nil {
+		return current
+	}
+	newest := current
+	for _, r := range releases {
+		if m, err := templates.TalosMinor(r); err == nil && m == minor && newerFirst(r, newest) < 0 {
+			newest = r
+		}
+	}
+	return newest
 }
 
 // waiting is the build a cluster's nodes run of a line (from) and the newer one offered that they
@@ -580,9 +807,10 @@ func ClassBuilds(ctx context.Context, r client.Reader, c *clusterv1.Cluster) (No
 }
 
 // settled tells whether a cluster is available with nothing rolling out, so an upgrade starts
-// from a known good state and never stacks on another.
+// from a known good state and never stacks on another, nor on a restore.
 func settled(c *clusterv1.Cluster) bool {
-	if !meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.AvailableCondition) ||
+	if RestoreInProgress(c) || ptr.Deref(c.Spec.Paused, false) ||
+		!meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.AvailableCondition) ||
 		!meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.ClusterTopologyReconciledCondition) ||
 		c.Status.ObservedGeneration != c.Generation {
 		return false

@@ -15,33 +15,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// OnlineNodesAnnotation lists, on each Cluster, the Proxmox VE nodes last seen online. Changing it
-// has Cluster API compute the cluster's topology again, and with it the nodes capmox may use.
+// OnlineNodesAnnotation lists, on each Cluster, the Proxmox VE nodes last seen online whose CPU runs
+// the cluster's node OS, or Talos. Changing it has Cluster API compute the cluster's topology again, and with
+// it the nodes capmox may use.
 const OnlineNodesAnnotation = "kubehenge.dev/online-nodes"
 
 // allowedNodesVariable is the ClusterClass variable naming the nodes a cluster's VMs keep to.
 const allowedNodesVariable = "allowedNodes"
-
-// Nodes tells which Proxmox VE nodes are online; *Proxmox is the real one.
-type Nodes interface {
-	OnlineNodes(ctx context.Context) ([]string, error)
-}
-
-// OnlineNodes lists the nodes Proxmox VE reports online, sorted.
-func (p *Proxmox) OnlineNodes(ctx context.Context) ([]string, error) {
-	var nodes []pveNode
-	if err := p.Client.Get(ctx, "/nodes", &nodes); err != nil {
-		return nil, fmt.Errorf("listing nodes: %w", err)
-	}
-	var online []string
-	for _, n := range nodes {
-		if n.Status == nodeOnline {
-			online = append(online, n.Node)
-		}
-	}
-	slices.Sort(online)
-	return online, nil
-}
 
 // Placer keeps OnlineNodesAnnotation current on every Kubehenge cluster.
 type Placer struct {
@@ -82,10 +62,18 @@ func (p *Placer) placeAll(ctx context.Context) {
 		log.Error(err, "listing clusters")
 		return
 	}
-	value := strings.Join(online, ",")
 	for i := range clusters.Items {
 		c := &clusters.Items[i]
-		if !Owns(c, p.ClassNamespace) || !c.DeletionTimestamp.IsZero() || c.Annotations[OnlineNodesAnnotation] == value {
+		if !Owns(c, p.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
+			continue
+		}
+		level, err := clusterCPULevel(c)
+		if err != nil {
+			log.Error(err, "reading the cluster's node OS", "cluster", client.ObjectKeyFromObject(c))
+			continue
+		}
+		value := strings.Join(nodesFor(online, level), ",")
+		if c.Annotations[OnlineNodesAnnotation] == value {
 			continue
 		}
 		patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`, OnlineNodesAnnotation, value)
@@ -138,6 +126,8 @@ func (h *Hooks) GeneratePatches(ctx context.Context, req *runtimehooksv1.Generat
 			patch, err = h.placementPatch(ctx, &item.HolderReference, chosen)
 		case kindOf(item) == proxmoxMachineTemplate:
 			patch, err = images.patch(ctx, item)
+		case talosContractPaths[kindOf(item)] != "":
+			patch, err = images.contract(ctx, item)
 		case h.Releases != nil:
 			patch, err = h.Releases.patch(ctx, item, req.Variables)
 		}
@@ -177,7 +167,7 @@ func addOp(path string, value any) map[string]any {
 }
 
 // onlineNodes are the nodes recorded on the cluster, or, for a cluster the Placer has not got to
-// yet, such as one being created, those Proxmox VE reports now.
+// yet, such as one being created, those Proxmox VE reports now that run its node OS, or Talos.
 func (h *Hooks) onlineNodes(ctx context.Context, key client.ObjectKey) ([]string, error) {
 	cluster := &clusterv1.Cluster{}
 	if err := h.Reader.Get(ctx, key, cluster); err != nil {
@@ -192,9 +182,13 @@ func (h *Hooks) onlineNodes(ctx context.Context, key client.ObjectKey) ([]string
 	if h.Nodes == nil {
 		return nil, nil
 	}
+	level, err := clusterCPULevel(cluster)
+	if err != nil {
+		return nil, err
+	}
 	online, err := h.Nodes.OnlineNodes(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reading the Proxmox VE nodes: %w", err)
 	}
-	return online, nil
+	return nodesFor(online, level), nil
 }

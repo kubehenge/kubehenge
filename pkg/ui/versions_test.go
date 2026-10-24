@@ -51,12 +51,18 @@ func TestVersionsFromTheReleaseChannels(t *testing.T) {
 	if len(k3s.Versions) != 0 || k3s.Error == "" {
 		t.Fatalf("k3s = %+v", k3s)
 	}
-	expect(t, d.do("GET", "/api/versions/talos", ""), http.StatusNotFound)
+	// Talos's are Kubernetes' own, read like a channel server's; not configured here either.
+	var talos versionsView
+	_ = json.Unmarshal(d.do("GET", "/api/versions/talos", "").Body.Bytes(), &talos)
+	if len(talos.Versions) != 0 || talos.Error == "" {
+		t.Fatalf("talos = %+v", talos)
+	}
+	expect(t, d.do("GET", "/api/versions/flatcar", ""), http.StatusNotFound)
 }
 
 func TestKubeadmVersionsAreThoseWithATemplate(t *testing.T) {
 	t.Parallel()
-	kubeadmVersions := func(recorded *string) versionsView {
+	kubeadmVersions := func(recorded *string, query ...string) versionsView {
 		t.Helper()
 		class := &clusterv1.ClusterClass{Namespace: "kubehenge-system", Name: "kubehenge-kubeadm"}
 		if recorded != nil {
@@ -67,16 +73,22 @@ func TestKubeadmVersionsAreThoseWithATemplate(t *testing.T) {
 		d := h.browser()
 		d.signIn("dev@pve")
 		var got versionsView
-		if err := json.Unmarshal(d.do("GET", "/api/versions/kubeadm", "").Body.Bytes(), &got); err != nil {
+		if err := json.Unmarshal(d.do("GET", "/api/versions/kubeadm"+strings.Join(query, ""), "").Body.Bytes(), &got); err != nil {
 			t.Fatal(err)
 		}
 		return got
 	}
-	recorded := "v1.37.1,v1.36.5,v1.36.4"
+	recorded := `{"almalinux-10":["v1.37.1","v1.36.5","v1.36.4"],"rocky-10":["v1.36.5"]}`
 	if got := kubeadmVersions(&recorded); !slices.Equal(got.Versions, []string{"v1.37.1", "v1.36.5"}) || got.Error != "" {
 		t.Fatalf("versions = %+v", got)
 	}
-	none := ""
+	if got := kubeadmVersions(&recorded, "?nodeOS=rocky-10"); !slices.Equal(got.Versions, []string{"v1.36.5"}) || got.Error != "" {
+		t.Fatalf("Rocky Linux's versions = %+v", got)
+	}
+	if got := kubeadmVersions(&recorded, "?nodeOS=leap-16.1"); len(got.Versions) != 0 || !strings.Contains(got.Error, "openSUSE Leap 16.1") {
+		t.Fatalf("Leap's versions = %+v", got)
+	}
+	none := "{}"
 	if got := kubeadmVersions(&none); len(got.Versions) != 0 || !strings.Contains(got.Error, "Administration page") {
 		t.Fatalf("without templates = %+v", got)
 	}

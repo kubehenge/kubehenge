@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/pflag"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/selection"
@@ -37,6 +38,7 @@ import (
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
+	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
 const (
@@ -60,6 +62,9 @@ const (
 	haRulesInterval = 30 * time.Second
 	// templateRequestsInterval is how soon a build asked for in the interface starts.
 	templateRequestsInterval = 15 * time.Second
+	// talosUpgradeInterval is how soon a Talos node's upgrade starts after the one before, or after
+	// its node came back.
+	talosUpgradeInterval = 30 * time.Second
 )
 
 // controllerOptions are the controller command's flags.
@@ -111,6 +116,9 @@ type controllerOptions struct {
 	offerHARules      bool
 	nodeImageSoak     time.Duration
 	templateRefresh   bool
+	autoscaler        provisioner.AutoscalerReconciler
+	autoscalerImages  []string
+	headlampSignIn    []string
 }
 
 func newControllerCommand(conn *pve.Config) *cobra.Command {
@@ -124,12 +132,15 @@ It gives each cluster built from a Kubehenge ClusterClass its own Proxmox VE poo
 API token scoped to that pool for the cluster's cloud controller manager and CSI plugin, before
 Cluster API creates any of its VMs (as the BeforeClusterCreate hook of a Runtime Extension), and
 removes them once the cluster's VMs are gone. It installs the add-ons each cluster switches on, and
-registers every cluster with the Rancher one of them installs. A distribution's Cluster API
-providers run only while a cluster uses it.
+registers every cluster with the Rancher one of them installs, and runs a cluster autoscaler for
+each cluster with an autoscaled pool. A distribution's Cluster API providers run only while a
+cluster uses it.
 
 The API token is read from KUBEHENGE_PROXMOX_TOKEN. With a second one in KUBEHENGE_PROXMOX_HA_TOKEN,
 holding Sys.Audit and Sys.Console on /, Proxmox VE HA keeps each cluster's control-plane VMs on
-separate nodes.`,
+separate nodes. With one in KUBEHENGE_PROXMOX_RESTORE_TOKEN, holding VM.Audit and
+VM.GuestAgent.Unrestricted on the workload pool, it restores clusters' etcd from their snapshots
+through the VMs' guest agents.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.run(cmd.Context(), conn)
@@ -143,9 +154,11 @@ separate nodes.`,
 	f.StringVar(&o.settings.Node, "volume-owner-node", "", "Proxmox VE node for the VMs that own clusters' volumes; default the first online node")
 	f.StringVar(&o.settings.Region, "region", "", "region the clusters see Proxmox VE as; default the Proxmox VE cluster's name")
 	o.addonFlags(f)
+	o.addAutoscalerFlags(f)
 	f.StringSliceVar(&o.r.Charts.PodSecurityExempt, "pod-security-exempt", nil, "namespaces Kyverno's pod security policies leave alone, those the ClusterClasses' Pod Security Admission exempts (comma-separated)")
 	f.StringArrayVar(&o.classProviders, "class-providers", nil, "namespaces of the Cluster API providers only one ClusterClass's clusters use, as <class>=<namespace>,<namespace>; they run only while a cluster does (repeatable)")
 	f.BoolVar(&o.offerHARules, "offer-ha-rules", false, "offer Proxmox VE's HA node-affinity rules, their names and nodes only, to those who may create a cluster but not read the rules, through the ConfigMap "+provisioner.HARulesName)
+	f.StringSliceVar(&o.headlampSignIn, "headlamp-sign-in-namespaces", nil, "the interface's namespaces, whose clusters get identities through which the appliance's shared Headlamp signs those who may download a cluster's admin kubeconfig in as cluster-admin (comma-separated); none, nobody is signed in and the identities are removed")
 	f.DurationVar(&o.upgradeInterval, "upgrade-interval", defaultUpgradeInterval, "how often clusters are checked for an automatic upgrade due in their window")
 	f.DurationVar(&o.nodeImageSoak, "node-image-soak", provisioner.DefaultNodeImageSoak, "how old a template build is before clusters move to it; the template refresh's --soak")
 	f.BoolVar(&o.templateRefresh, "template-refresh", false, "start the template refresh CronJob's Job for the builds asked for in the interface")
@@ -210,6 +223,15 @@ func (o *controllerOptions) grantFlags(f *pflag.FlagSet) {
 	f.StringVar(&o.csiNewestChart, "csi-newest-chart", "", "the CSI plugin's newest release, for clusters whose token holds Datastore.Allocate on their storage, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.settings.DatastoreRole, "datastore-allocate-role", "", "Proxmox VE role, holding Datastore.Allocate, each cluster that asks for it gets on its storage; empty to let no cluster hold it")
 	f.StringSliceVar(&o.r.DatastoreAllocate.Management, "management-storages", nil, "storages the management cluster uses, on which no cluster may hold Datastore.Allocate (comma-separated)")
+}
+
+// addAutoscalerFlags adds the flags of the cluster autoscalers the controller runs. Their images
+// are required, as the add-ons' are.
+func (o *controllerOptions) addAutoscalerFlags(f *pflag.FlagSet) {
+	f.StringVar(&o.autoscaler.Namespace, "autoscaler-namespace", "kubehenge-autoscaler", "namespace of the cluster autoscalers that run in the management cluster, their accounts, the autoscaler identity's tokens they mount and the admission policy's ConfigMap")
+	f.StringSliceVar(&o.autoscalerImages, "autoscaler-images", nil, "the cluster autoscaler's images, one for each Kubernetes minor version, as <registry>/<repository>:v1.<minor>.<patch>@sha256:<digest> (comma-separated)")
+	f.StringVar(&o.autoscaler.Management.Server, "management-endpoint", "", "the management cluster's API as workload clusters reach it, such as https://192.0.2.10:6443, for autoscalers that run inside their cluster; none can without it")
+	_ = cobra.MarkFlagRequired(f, "autoscaler-images")
 }
 
 func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
@@ -287,7 +309,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	if err = o.addPlacement(mgr, extensions, scheme, hooks, conn, cloud); err != nil {
 		return err
 	}
-	if err = o.addUpgrader(mgr, c, rancherMinors); err != nil {
+	if err = o.addUpgrader(mgr, c, rancherMinors, remotes); err != nil {
 		return err
 	}
 	if err = o.addProbes(mgr); err != nil {
@@ -324,8 +346,11 @@ func (o *controllerOptions) newExtensionServer() (*server.Server, error) {
 }
 
 // addReclaimer adds what deletes the volumes of clusters' released persistent volumes, signed in
-// with each cluster's own token.
+// with each cluster's own token, and what snapshots and restores clusters' etcd.
 func (o *controllerOptions) addReclaimer(mgr manager.Manager, conn *pve.Config, cloud *provisioner.Proxmox, remotes *provisioner.Remotes) error {
+	if err := o.addEtcd(mgr, conn, remotes); err != nil {
+		return err
+	}
 	reclaimer := &provisioner.Reclaimer{
 		Client:         mgr.GetClient(),
 		ClassNamespace: o.r.ClassNamespace,
@@ -413,6 +438,9 @@ func (o *controllerOptions) parseCharts() error {
 	if o.r.Charts.CalicoImages, err = provisioner.ParseCalicoImages(o.calicoImages); err != nil {
 		return fmt.Errorf("--calico-images: %w", err)
 	}
+	if o.autoscaler.Images, err = provisioner.ParseAutoscalerImages(o.autoscalerImages); err != nil {
+		return fmt.Errorf("--autoscaler-images: %w", err)
+	}
 	return nil
 }
 
@@ -445,13 +473,12 @@ func (o *controllerOptions) newManager(scheme *runtime.Scheme, extensions *serve
 			Label:      labels.NewSelector().Add(*ofClass),
 		},
 	}
-	if len(distributions.Providers) > 0 {
-		deployments := map[string]cache.Config{}
-		for _, ns := range distributions.Namespaces() {
-			deployments[ns] = cache.Config{}
-		}
-		cached[&appsv1.Deployment{}] = cache.ByObject{Namespaces: deployments}
+	// The providers' Deployments, and the cluster autoscalers' that run in the management cluster.
+	deployments := map[string]cache.Config{o.autoscaler.Namespace: {}}
+	for _, ns := range distributions.Namespaces() {
+		deployments[ns] = cache.Config{}
 	}
+	cached[&appsv1.Deployment{}] = cache.ByObject{Namespaces: deployments}
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                        scheme,
 		LeaderElection:                o.leaderElect,
@@ -469,9 +496,12 @@ func (o *controllerOptions) newManager(scheme *runtime.Scheme, extensions *serve
 			ByObject:         cached,
 		},
 		// Secrets are read directly: caching them would mean watching every Secret in the
-		// management cluster. Machines too: the cache holds only control-plane ones, and every
-		// Machine is counted while a cluster is deleted.
-		Client: client.Options{Cache: &client.CacheOptions{DisableFor: []client.Object{&corev1.Secret{}, &clusterv1.Machine{}}}},
+		// management cluster, and the same goes for the autoscalers' ServiceAccounts and
+		// RoleBindings. Machines too: the cache holds only control-plane ones, and every Machine is
+		// counted while a cluster is deleted.
+		Client: client.Options{Cache: &client.CacheOptions{DisableFor: []client.Object{
+			&corev1.Secret{}, &clusterv1.Machine{}, &corev1.ServiceAccount{}, &rbacv1.RoleBinding{},
+		}}},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("the controller manager: %w", err)
@@ -480,9 +510,9 @@ func (o *controllerOptions) newManager(scheme *runtime.Scheme, extensions *serve
 }
 
 // setUpControllers adds the reconciler, the registrar, what taints control-plane nodes, what
-// approves kubeadm kubelets' serving certificates, what keeps the interface's identities in the
-// clusters and, when some distribution's providers run only while used, the controller that
-// starts and stops them.
+// approves kubeadm kubelets' serving certificates, what keeps the identities in the clusters, what
+// runs their autoscalers and, when some distribution's providers run only while used, the
+// controller that starts and stops them.
 func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *provisioner.Registrar, distributions *provisioner.Distributions) error {
 	o.r.Client = mgr.GetClient()
 	o.r.Registrar = registrar
@@ -502,7 +532,10 @@ func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *pro
 	if err := approver.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the kubelet serving certificates: %w", err)
 	}
-	identities := &provisioner.WorkloadIdentities{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Remotes: registrar.Remotes}
+	identities := &provisioner.WorkloadIdentities{
+		Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, MountNamespace: o.autoscaler.Namespace, Remotes: registrar.Remotes,
+		HeadlampNamespaces: o.headlampSignIn,
+	}
 	if err := identities.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the workload identities: %w", err)
 	}
@@ -514,12 +547,41 @@ func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *pro
 	if err = gatewayAPI.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the Gateway API: %w", err)
 	}
+	if err = o.addAutoscalers(mgr, registrar.Remotes); err != nil {
+		return err
+	}
 	if len(distributions.Providers) == 0 {
 		return nil
 	}
 	distributions.Client = mgr.GetClient()
 	if err = distributions.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the distributions' providers: %w", err)
+	}
+	return nil
+}
+
+// addAutoscalers adds what runs a cluster autoscaler for every cluster with an autoscaled pool. One
+// that runs inside its cluster trusts the management cluster's API with the CA the controller's own
+// account trusts it with.
+func (o *controllerOptions) addAutoscalers(mgr manager.Manager, remotes *provisioner.Remotes) error {
+	a := &o.autoscaler
+	a.Client = mgr.GetClient()
+	a.ClassNamespace = o.r.ClassNamespace
+	a.Remotes = remotes
+	a.Events = mgr.GetEventRecorder("kubehenge")
+	if a.Management.Server != "" {
+		cfg := mgr.GetConfig()
+		a.Management.CA = cfg.CAData
+		if len(a.Management.CA) == 0 && cfg.CAFile != "" {
+			ca, err := os.ReadFile(cfg.CAFile)
+			if err != nil {
+				return fmt.Errorf("the management cluster's CA: %w", err)
+			}
+			a.Management.CA = ca
+		}
+	}
+	if err := a.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("the cluster autoscalers: %w", err)
 	}
 	return nil
 }
@@ -549,9 +611,10 @@ func (o *controllerOptions) addPlacement(mgr manager.Manager, extensions *server
 	return o.addHA(mgr, conn, cloud.Client)
 }
 
-// addUpgrader adds what upgrades clusters automatically in their windows, and what records the
-// Kubernetes versions kubeadm templates exist for, which both the upgrader and the interface go by.
-func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, rancherMinors provisioner.KubernetesMinors) error {
+// addUpgrader adds what upgrades clusters automatically in their windows, what upgrades Talos
+// clusters' nodes in place to their Talos release, and what records the templates there are, which
+// the upgraders and the interface go by.
+func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, rancherMinors provisioner.KubernetesMinors, remotes *provisioner.Remotes) error {
 	versions := &provisioner.TemplateVersions{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Proxmox: c, Interval: templateVersionsInterval}
 	if err := mgr.Add(versions); err != nil {
 		return fmt.Errorf("the template versions: %w", err)
@@ -567,10 +630,25 @@ func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, 
 		RancherKubernetes: rancherMinors,
 		Interval:          o.upgradeInterval,
 		Soak:              o.nodeImageSoak,
+		TalosImages:       templates.DefaultSources(),
 		Now:               time.Now,
 	}
 	if err := mgr.Add(upgrader); err != nil {
 		return fmt.Errorf("the upgrader: %w", err)
+	}
+	talos := &provisioner.TalosUpgrader{
+		Client:         mgr.GetClient(),
+		Reader:         mgr.GetAPIReader(),
+		ClassNamespace: o.r.ClassNamespace,
+		Images:         templates.DefaultSources(),
+		Dial:           provisioner.DialTalos,
+		Nodes:          &provisioner.RemoteDrainer{Remotes: remotes},
+		Events:         mgr.GetEventRecorder("kubehenge"),
+		Interval:       talosUpgradeInterval,
+		Now:            time.Now,
+	}
+	if err := mgr.Add(talos); err != nil {
+		return fmt.Errorf("the Talos upgrader: %w", err)
 	}
 	if !o.templateRefresh {
 		return nil
@@ -584,6 +662,41 @@ func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, 
 	}
 	if err := mgr.Add(requests); err != nil {
 		return fmt.Errorf("the template requests: %w", err)
+	}
+	return nil
+}
+
+// addEtcd adds what snapshots clusters' etcd into their backup targets, and what restores it from
+// a snapshot through the VMs' guest agents, signed in with KUBEHENGE_PROXMOX_RESTORE_TOKEN. Without
+// that token every restore is done by hand.
+func (o *controllerOptions) addEtcd(mgr manager.Manager, conn *pve.Config, remotes *provisioner.Remotes) error {
+	targets := &provisioner.ClusterTargets{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, OpenStore: provisioner.OpenTarget}
+	snapshotter := &provisioner.EtcdSnapshotter{
+		Client:         mgr.GetClient(),
+		ClassNamespace: o.r.ClassNamespace,
+		Etcd:           &provisioner.EtcdDialer{Reader: mgr.GetAPIReader(), Remotes: remotes, Talos: provisioner.DialTalos},
+		Targets:        targets,
+		Events:         mgr.GetEventRecorder("kubehenge"),
+	}
+	if err := snapshotter.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("the etcd snapshotter: %w", err)
+	}
+	restorer := &provisioner.EtcdRestorer{
+		Client:         mgr.GetClient(),
+		ClassNamespace: o.r.ClassNamespace,
+		Targets:        targets,
+		Talos:          provisioner.DialTalos,
+		Events:         mgr.GetEventRecorder("kubehenge"),
+	}
+	if token := os.Getenv("KUBEHENGE_PROXMOX_RESTORE_TOKEN"); token != "" {
+		c, err := pve.Connect(pve.Config{URL: conn.URL, Token: token, CAFile: conn.CAFile})
+		if err != nil {
+			return fmt.Errorf("connecting to Proxmox VE for restores: %w", err)
+		}
+		restorer.Guests = &provisioner.ProxmoxGuests{Client: c}
+	}
+	if err := restorer.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("the etcd restorer: %w", err)
 	}
 	return nil
 }

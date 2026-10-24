@@ -37,6 +37,7 @@ import {
 import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implementation } from "./LoadBalancer";
 import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
 import { addressBits, addressCount, inList, ipv4, isVLAN, list, rangeProblem, whole } from "./network";
+import { choosable, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import { allowedNodes, anyNode, haText, placeProblem, placeText, type HAGroupsOffer, type Place } from "./Placement";
 import {
@@ -47,7 +48,19 @@ import {
   podSecurityVariable,
   type PodSecurity,
 } from "./PodSecurity";
-import type { Bridge, Cluster, ClusterClass, CreateRequest, OIDCProvider, Schema, Storage } from "./types";
+import { forRelease, talosRelease } from "./Talos";
+import type {
+  Bridge,
+  Cluster,
+  ClusterClass,
+  CreateRequest,
+  NodeOSChoice,
+  OIDCProvider,
+  Schema,
+  Storage,
+  TalosReleases,
+  Versions,
+} from "./types";
 import {
   browserZone,
   cniName,
@@ -92,9 +105,17 @@ export interface Form {
   namespace: string;
   name: string;
   className: string;
+  /** The node OS as one word, such as almalinux-10; empty while the class offers none. */
+  nodeOS: string;
   version: string;
+  /** The Talos release a Talos cluster's nodes run; empty takes the newest with a template. */
+  talosVersion: string;
   controlPlaneReplicas: number;
+  /** The workers, or with workerAutoscale the fewest the cluster autoscaler keeps. */
   workerReplicas: number;
+  workerAutoscale: boolean;
+  /** The most workers the cluster autoscaler adds, with workerAutoscale. */
+  workerMax: number;
   endpoint: string;
   bridge: string;
   vlan: string;
@@ -153,6 +174,7 @@ export const versionExamples: Record<string, string> = {
   rke2: "v1.36.5+rke2r1",
   k3s: "v1.36.5+k3s1",
   kubeadm: "v1.36.5",
+  talos: "v1.36.5",
 };
 
 export function variable(c: ClusterClass | undefined, name: string): Schema | undefined {
@@ -277,8 +299,14 @@ export function addonMemory(
   return { names, mib, controlPlaneMiB };
 }
 
+/**
+ * mostWorkers is the most workers a form's cluster can have at once. An autoscaled pool that may
+ * grow keeps the control planes to the control plane's work, whatever its fewest.
+ */
+export const mostWorkers = (form: Form): number => (form.workerAutoscale ? form.workerMax : form.workerReplicas);
+
 const plainLeast = (form: Form, c: ClusterClass | undefined, key: "controlPlaneMachine" | "workerMachine"): Machine =>
-  key === "controlPlaneMachine" ? controlPlaneMinimums(c, form.workerReplicas) : machineMinimums(c, key);
+  key === "controlPlaneMachine" ? controlPlaneMinimums(c, mostWorkers(form)) : machineMinimums(c, key);
 
 // carries says whether a form's machines of one kind run its add-ons: the workers, or without
 // workers the control planes.
@@ -313,7 +341,7 @@ export function addonNeedMiB(form: Form, c: ClusterClass | undefined): number {
 export function controlPlaneNeedMiB(form: Form, c: ClusterClass | undefined): number {
   const own = quantity(classFigures(c, "kubehenge.dev/node-memory")["controlPlane"]);
   const { names, controlPlaneMiB } = addonMemory(form, c);
-  return form.workerReplicas > 0 && names.length > 0 && own !== undefined ? own + controlPlaneMiB : 0;
+  return mostWorkers(form) > 0 && names.length > 0 && own !== undefined ? own + controlPlaneMiB : 0;
 }
 
 /**
@@ -365,14 +393,29 @@ export const withBackupChoices = (f: Form, c: ClusterClass | undefined, canTrust
   backupOwnKey: f.backupOwnKey && canTrust !== false,
 });
 
+/**
+ * withTalosRelease takes the newest Talos release with a template until another is chosen, and
+ * the newest Kubernetes version offered that the release runs whenever the one chosen is not.
+ */
+export function withTalosRelease(f: Form, talos: TalosReleases | undefined, offered: Versions | undefined): Form {
+  const talosVersion = filled(f.talosVersion) ? f.talosVersion : (talos?.templates[0] ?? "");
+  const runs = forRelease(offered, talos, talosVersion)?.versions ?? [];
+  const version = filled(f.version) && runs.length > 0 && !runs.includes(f.version) ? (runs[0] ?? "") : f.version;
+  return { ...f, talosVersion, version };
+}
+
 /** newForm is the wizard before anything is chosen. */
 export const newForm = (): Form => ({
   namespace: "",
   name: "",
   className: "",
+  nodeOS: "",
   version: "",
+  talosVersion: "",
   controlPlaneReplicas: 1,
   workerReplicas: 1,
+  workerAutoscale: false,
+  workerMax: 3,
   endpoint: "",
   bridge: "",
   vlan: "",
@@ -429,6 +472,36 @@ export function withNamespace(f: Form, namespace: string, current = f.namespace)
   return { ...f, namespace, meshPeers: namespace === current ? f.meshPeers : [] };
 }
 
+/** chosenNodeOS is the node OS a form's nodes run: the one chosen, else the class's default; none for Talos. */
+export function chosenNodeOS(f: Form, c: ClusterClass | undefined): NodeOSChoice | undefined {
+  return findNodeOS(c?.nodeOSes, f.nodeOS) ?? defaultNodeOS(c?.nodeOSes);
+}
+
+/** templateMissing says why no cluster of the class on the form's node OS can be built yet, if none can. */
+export function templateMissing(f: Form, c: ClusterClass | undefined): string | undefined {
+  return (c?.nodeOSes ?? []).length > 0 ? chosenNodeOS(f, c)?.noTemplate : c?.noTemplate;
+}
+
+// classNodeOS is the node OS a form keeps on a change of class: the one chosen, while the class
+// offers it, else the class's default.
+function classNodeOS(f: Form, c: ClusterClass | undefined, kept: boolean): string {
+  const held = findNodeOS(c?.nodeOSes, f.nodeOS);
+  const os = kept && held !== undefined && choosable(held) ? held : defaultNodeOS(c?.nodeOSes);
+  return os === undefined ? "" : nodeOSKey(os);
+}
+
+/** versionsNodeOS is the node OS the versions offered depend on: kubeadm's, whose templates are per version. */
+export function versionsNodeOS(f: Form, c: ClusterClass | undefined): string | undefined {
+  const os = c?.distribution === "kubeadm" ? chosenNodeOS(f, c) : undefined;
+  return os === undefined ? undefined : nodeOSKey(os);
+}
+
+// nodeOSVariable is the nodeOS variable of a form, for a class with node OSes.
+function nodeOSVariable(form: Form, c: ClusterClass): Record<string, unknown> {
+  const os = chosenNodeOS(form, c);
+  return os === undefined ? {} : { nodeOS: nodeOSRef(os) };
+}
+
 /**
  * withClass chooses a distribution's class, bringing its defaults, but only into what the user has
  * not set: a choice made on a later step stays, unless the new distribution does not offer it.
@@ -439,12 +512,14 @@ export function withClass(f: Form, c: ClusterClass | undefined, kept: (k: keyof 
   return {
     ...f,
     className: c?.name ?? "",
+    nodeOS: classNodeOS(f, c, kept("nodeOS")),
     version: f.version && c && new RegExp(c.versionFormat.pattern, "u").test(f.version) ? f.version : "",
     cni: kept("cni") && (cni?.enum ?? []).includes(f.cni) ? f.cni : cniDefault,
     controlPlaneMachine: kept("controlPlaneMachine")
       ? f.controlPlaneMachine
       : machineDefaults(variable(c, "controlPlaneMachine")),
     workerMachine: kept("workerMachine") ? f.workerMachine : machineDefaults(variable(c, "workerMachine")),
+    workerAutoscale: f.workerAutoscale && variable(c, "autoscaler") !== undefined,
     oidc: kept("oidc") ? f.oidc : oidcProviders(variable(c, "oidc")?.default),
   };
 }
@@ -534,6 +609,19 @@ export function pendingCredentials(form: Form, c: ClusterClass): PendingCredenti
   return pending;
 }
 
+// distributionVariables are what the form chooses of the distribution itself: its pod network and,
+// on Talos, the release.
+function distributionVariables(form: Form): Record<string, unknown> {
+  const variables: Record<string, unknown> = {};
+  if (form.cni) {
+    variables["cni"] = form.cni;
+  }
+  if (form.talosVersion) {
+    variables["talosVersion"] = form.talosVersion;
+  }
+  return variables;
+}
+
 // request turns the form into the API's request, with only the variables the class defines.
 export function request(form: Form, c: ClusterClass): CreateRequest {
   const defined = new Set(c.variables.map((v) => v.name));
@@ -553,6 +641,7 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
     storage: form.storage,
     controlPlaneMachine: form.controlPlaneMachine,
     workerMachine: form.workerMachine,
+    ...nodeOSVariable(form, c),
   };
   const nodes = allowedNodes(form.place);
   if (nodes !== undefined) {
@@ -571,9 +660,7 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   if (form.haGroups && defined.has("ccm")) {
     variables["ccm"] = { haGroups: true };
   }
-  if (form.cni) {
-    variables["cni"] = form.cni;
-  }
+  Object.assign(variables, distributionVariables(form));
   const lb = loadBalancerVariable({ implementation: form.loadBalancer, addresses: list(form.loadBalancerAddresses) });
   if (lb) {
     variables["loadBalancer"] = lb;
@@ -583,7 +670,7 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   // A cluster whose nodes move to new template builds needs its window in the browser's time zone
   // even with Kubernetes upgrades off.
   const upgrades = newUpgrades(form.upgradeMode, browserZone());
-  if (form.upgradeMode !== "off" || (defined.has("upgrades") && refreshesNodes(upgrades, c.distribution))) {
+  if (form.upgradeMode !== "off" || (defined.has("upgrades") && refreshesNodes(upgrades))) {
     variables["upgrades"] = upgrades;
   }
   const req: CreateRequest = {
@@ -595,6 +682,9 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
     workerReplicas: form.workerReplicas,
     variables: Object.fromEntries(Object.entries(variables).filter(([k]) => defined.has(k))),
   };
+  if (autoscales(form, c)) {
+    req.workerAutoscaling = { min: form.workerReplicas, max: form.workerMax };
+  }
   if (form.pods) {
     req.pods = [form.pods];
   }
@@ -622,6 +712,21 @@ function meshChoice(form: Form): string {
   return form.meshPeers.length > 0 ? `On, with ${form.meshPeers.toSorted().join(", ")}` : "On, with no peers yet";
 }
 
+// releaseRows say what the cluster runs: its distribution, the node OS or on Talos, which is its own
+// OS, the Talos release, and Kubernetes.
+function releaseRows(form: Form, c: ClusterClass, defined: Set<string>): [string, string][] {
+  const rows: [string, string][] = [["Distribution", distributionName(c.distribution)]];
+  const os = chosenNodeOS(form, c);
+  if (os !== undefined) {
+    rows.push(["Node OS", os.title]);
+  }
+  if (defined.has("talosVersion")) {
+    rows.push(["Talos release", form.talosVersion]);
+  }
+  rows.push(["Kubernetes version", form.version]);
+  return rows;
+}
+
 // summary is what the Confirm step shows: each setting by its name, as the user chose it; Proxmox
 // VE HA, the CSI plugin's release and the HA group labels only where they can be chosen.
 export function summary(
@@ -637,10 +742,12 @@ export function summary(
   const rows: [string, string][] = [
     ...(form.namespace ? [["Namespace", form.namespace] as [string, string]] : []),
     ["Name", form.name],
-    ["Distribution", distributionName(c.distribution)],
-    ["Kubernetes version", form.version],
+    ...releaseRows(form, c, defined),
     ["Control-plane nodes", String(form.controlPlaneReplicas)],
-    ["Workers", String(form.workerReplicas)],
+    [
+      "Workers",
+      autoscales(form, c) ? `${form.workerReplicas} to ${form.workerMax}, autoscaled` : String(form.workerReplicas),
+    ],
     ["Bridge", form.vlan ? `${form.bridge}, VLAN ${form.vlan}` : form.bridge],
     ["API address", form.endpoint],
     ["Node addresses", list(form.addresses).join(", ")],
@@ -677,7 +784,7 @@ export function summary(
     rows.push(["HA group labels", haGroupsText(form.haGroups)]);
   }
   rows.push(["Control-plane machines", machine(form.controlPlaneMachine)]);
-  if (form.workerReplicas > 0) {
+  if (mostWorkers(form) > 0) {
     rows.push(["Worker machines", machine(form.workerMachine)]);
   }
   if (defined.has("cni")) {
@@ -686,7 +793,7 @@ export function summary(
   rows.push(...addOnRows(form, defined));
   if (defined.has("upgrades")) {
     const upgrades = newUpgrades(form.upgradeMode, browserZone());
-    rows.push(["Automatic upgrades", describe(upgrades, refreshesNodes(upgrades, c.distribution))]);
+    rows.push(["Automatic upgrades", describe(upgrades, refreshesNodes(upgrades), c.distribution)]);
   }
   if (defined.has("oidc")) {
     const providers = cleanProviders(form.oidc);
@@ -756,9 +863,13 @@ export const rancherMinimumCores = 4;
 export type FieldKey =
   | "name"
   | "class"
+  | "nodeOS"
   | "version"
+  | "talosVersion"
   | "controlPlaneReplicas"
   | "workerReplicas"
+  | "workerMax"
+  | "addons"
   | "bridge"
   | "vlan"
   | "endpoint"
@@ -796,17 +907,46 @@ function generalProblems(form: Form, c: ClusterClass | undefined): Problems {
     p.name =
       "Lowercase letters, digits and dashes, starting with a letter and ending with a letter or digit, at most 40 characters.";
   }
+  const os = chosenNodeOS(form, c);
+  const missing = templateMissing(form, c);
   if (!c) {
     p.class = "Choose a distribution.";
-  } else if (filled(c.noTemplate)) {
-    p.class = sentence(c.noTemplate);
-  } else if (!new RegExp(c.versionFormat.pattern, "u").test(form.version)) {
-    p.version = `${distributionName(c.distribution)} versions look like ${versionExamples[c.distribution] ?? "v1.36.5"}.`;
+  } else if (os !== undefined && !choosable(os)) {
+    p.nodeOS = sentence(`${os.title} cannot be chosen yet: ${os.unreleased ?? ""}`);
+  } else if (filled(missing)) {
+    p[os === undefined ? "class" : "nodeOS"] = sentence(missing);
+  } else {
+    if (variable(c, "talosVersion") !== undefined && !talosRelease.test(form.talosVersion)) {
+      p.talosVersion = "Choose a Talos release with a VM template.";
+    }
+    if (!new RegExp(c.versionFormat.pattern, "u").test(form.version)) {
+      p.version = `${distributionName(c.distribution)} versions look like ${versionExamples[c.distribution] ?? "v1.36.5"}.`;
+    }
   }
   if (!whole(form.workerReplicas, 0, maxWorkers)) {
     p.workerReplicas = `A whole number from 0 to ${maxWorkers}.`;
   }
+  if (autoscales(form, c)) {
+    const least = Number.isNaN(form.workerReplicas) ? 0 : Math.max(form.workerReplicas, 1);
+    if (!whole(form.workerMax, least, maxWorkers)) {
+      p.workerMax = `A whole number from ${least} to ${maxWorkers}, no fewer than the fewest.`;
+    }
+  }
   return p;
+}
+
+/** autoscales says whether a form's worker pool is autoscaled: chosen, and offered by its class. */
+export const autoscales = (form: Form, c: ClusterClass | undefined): boolean =>
+  form.workerAutoscale && variable(c, "autoscaler") !== undefined;
+
+/**
+ * addonsProblem is what keeps a form's add-ons from running: an autoscaled pool that may go down to
+ * no workers, while the control planes stay kept for the control plane.
+ */
+export function addonsProblem(form: Form, c: ClusterClass | undefined): string | undefined {
+  return autoscales(form, c) && form.workerReplicas === 0 && addonMemory(form, c).mib > 0
+    ? "The add-ons chosen need a worker that stays: set the fewest workers to at least 1 on the General step, or choose none."
+    : undefined;
 }
 
 function addressProblems(form: Form): Problems {
@@ -814,7 +954,7 @@ function addressProblems(form: Form): Problems {
   const entries = list(form.addresses);
   const { count, bad } = addressCount(entries, form.gateway, form.prefix);
   // A rollout makes each new node before it removes an old one.
-  const needed = form.controlPlaneReplicas + form.workerReplicas + 1;
+  const needed = form.controlPlaneReplicas + mostWorkers(form) + 1;
   if (entries.length === 0) {
     p.addresses = "At least one range, network or address.";
   } else if (bad !== undefined) {
@@ -896,7 +1036,7 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
   ] as const) {
     const min = machineLeast(form, c, key);
     const alone =
-      key === "controlPlaneMachine" && form.workerReplicas === 0 ? " Without workers, they run the workloads too." : "";
+      key === "controlPlaneMachine" && mostWorkers(form) === 0 ? " Without workers, they run the workloads too." : "";
     let addons = "";
     if (min.memoryMiB > plainLeast(form, c, key).memoryMiB) {
       addons = carries(form, key)
@@ -930,6 +1070,10 @@ function addOnProblems(form: Form, c: ClusterClass | undefined): Problems {
   const logs = logsChosen(form) ? logsProblem(form.logs) : undefined;
   if (logs !== undefined) {
     p.logs = logs;
+  }
+  const addons = addonsProblem(form, c);
+  if (addons !== undefined) {
+    p.addons = addons;
   }
   const certificates = variable(c, "certificates") ? Object.values(certificatesProblems(form.certificates)) : [];
   if (certificates.length > 0) {

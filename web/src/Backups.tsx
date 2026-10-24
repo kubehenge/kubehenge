@@ -179,6 +179,10 @@ export function scheduleText(schedule: string): string {
   if (hourly !== undefined && Number(hourly["m"]) <= lastMinute) {
     return `Every hour at minute ${Number(hourly["m"])}`;
   }
+  const hours = /^(?<m>\d{1,2}) \*\/(?<n>\d{1,2}) \* \* \*$/u.exec(s)?.groups;
+  if (hours !== undefined && Number(hours["m"]) <= lastMinute && Number(hours["n"]) >= 1) {
+    return `Every ${Number(hours["n"])} hours from 00:${twoDigits(Number(hours["m"]))}`;
+  }
   return `By the cron schedule ${s}`;
 }
 
@@ -251,12 +255,9 @@ export function backupProblems(
   kept?: string,
 ): Partial<Record<BackupField, string>> {
   const p: Partial<Record<BackupField, string>> = {};
-  if (targets.length === 0 && !filled(kept)) {
-    p.target = "An administrator has set no backup target yet; they add one in the appliance's settings.";
-  } else if (!filled(f.target)) {
-    p.target = "Choose a target.";
-  } else if (f.target !== kept && !targets.some((t) => t.name === f.target)) {
-    p.target = "Not one of the targets an administrator set.";
+  const target = targetProblem(f.target, targets, kept);
+  if (target !== undefined) {
+    p.target = target;
   }
   const schedule = scheduleProblem(f.schedule);
   if (schedule !== undefined) {
@@ -267,6 +268,20 @@ export function backupProblems(
     p.retention = `A whole number of days from 1 to ${maxRetentionDays}.`;
   }
   return p;
+}
+
+/** targetProblem says what Kubehenge would refuse in the target chosen; kept is the one set already. */
+export function targetProblem(target: string, targets: OfferedTarget[], kept?: string): string | undefined {
+  if (targets.length === 0 && !filled(kept)) {
+    return "An administrator has set no backup target yet; they add one in the appliance's settings.";
+  }
+  if (!filled(target)) {
+    return "Choose a target.";
+  }
+  if (target !== kept && !targets.some((t) => t.name === target)) {
+    return "Not one of the targets an administrator set.";
+  }
+  return undefined;
 }
 
 /** backupsVariable is the variable the fields set, keeping a Secret the cluster names for the keys. */
@@ -402,9 +417,8 @@ export function BackupFieldset({
   );
 }
 
-/** useBackupsRows is the Options view's row of a cluster's backups, where its class offers them. */
-export function useBackupsRows(c: Cluster): OptionRow<"backups">[] {
-  const offered = (useClassTargets(c.class) ?? []).length > 0;
+/** backupsRows is the Options view's row of a cluster's backups, where its class offers them. */
+export function backupsRows(c: Cluster, offered: boolean): OptionRow<"backups">[] {
   const b = backupsOf(c.variables["backups"]);
   if (!b.enabled && !offered) {
     return [];

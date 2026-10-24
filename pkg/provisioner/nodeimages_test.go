@@ -3,6 +3,8 @@ package provisioner
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -10,6 +12,7 @@ import (
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -22,7 +25,7 @@ func day(d int) time.Time { return time.Date(2026, 10, d, 0, 0, 0, 0, time.UTC) 
 
 func cloudLine(t *testing.T) []string {
 	t.Helper()
-	line, err := MachineLine("rke2", "v1.36.5+rke2r1")
+	line, err := MachineLine("rke2", "v1.36.5+rke2r1", templates.DefaultNodeOS)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,6 +212,9 @@ func TestGeneratePatchesSelectTheBuildOfTheNodeImageTime(t *testing.T) {
 	c, class := refreshCluster(t, "web", nil)
 	talos, _ := refreshCluster(t, "metal", nil)
 	talos.Spec.Topology.ClassRef.Name = "kubehenge-talos"
+	talos.Spec.Topology.Variables = append(talos.Spec.Topology.Variables,
+		clusterv1.ClusterVariable{Name: TalosVersionVariable, Value: apiextensionsv1.JSON{Raw: []byte(`"v1.14.4"`)}})
+	talos.Annotations[TalosImageAnnotation] = "v1.14.3"
 	scheme := runtime.NewScheme()
 	if err := clusterv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
@@ -249,7 +255,65 @@ func TestGeneratePatchesSelectTheBuildOfTheNodeImageTime(t *testing.T) {
 		!strings.Contains(string(resp.Items[0].Patch), "/spec/template/spec/templateSelector/matchTags") {
 		t.Fatalf("items %+v", resp.Items)
 	}
-	if resp := request("metal"); len(resp.Items) != 0 {
-		t.Errorf("Talos machines patched: %+v", resp.Items)
+	// Talos machines boot the release the cluster records, whatever talosVersion says: they are
+	// upgraded in place, without a rollout.
+	resp = request("metal")
+	if len(resp.Items) != 1 || !strings.Contains(string(resp.Items[0].Patch), `"talos-v1.14.3"`) ||
+		strings.Contains(string(resp.Items[0].Patch), "build-") {
+		t.Errorf("Talos machines: %+v", resp.Items)
+	}
+}
+
+func TestTalosMachinesAreGeneratedInTheSchemaOfTheirFirstRelease(t *testing.T) {
+	t.Parallel()
+	c, class := refreshCluster(t, "metal", nil)
+	c.Spec.Topology.ClassRef.Name = "kubehenge-talos"
+	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables,
+		clusterv1.ClusterVariable{Name: TalosVersionVariable, Value: apiextensionsv1.JSON{Raw: []byte(`"v1.14.4"`)}})
+	c.Annotations[TalosImageAnnotation] = "v1.13.12"
+	other, _ := refreshCluster(t, "web", nil)
+	scheme := runtime.NewScheme()
+	if err := clusterv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(c, other, class).Build()
+	h := &Hooks{Reader: kube, ClassNamespace: "kubehenge-system", Soak: DefaultNodeImageSoak}
+	generate := func(name string) map[types.UID]string {
+		t.Helper()
+		raw, err := json.Marshal(map[string]any{"cluster": map[string]any{"name": name, "namespace": "clusters"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := &runtimehooksv1.GeneratePatchesRequest{
+			Variables: []runtimehooksv1.Variable{{Name: runtimehooksv1.BuiltinsName, Value: apiextensionsv1.JSON{Raw: raw}}},
+		}
+		for _, kind := range []string{talosControlPlaneTemplate, talosConfigTemplate} {
+			req.Items = append(req.Items, runtimehooksv1.GeneratePatchesRequestItem{
+				UID:    types.UID(kind),
+				Object: runtime.RawExtension{Raw: fmt.Appendf(nil, `{"apiVersion":"example/v1","kind":%q}`, kind)},
+			})
+		}
+		resp := &runtimehooksv1.GeneratePatchesResponse{}
+		h.GeneratePatches(context.Background(), req, resp)
+		if resp.Status != runtimehooksv1.ResponseStatusSuccess {
+			t.Fatalf("%s: %s", name, resp.Message)
+		}
+		patches := map[types.UID]string{}
+		for _, item := range resp.Items {
+			patches[item.UID] = string(item.Patch)
+		}
+		return patches
+	}
+	// The schema of the release the machines boot, not of talosVersion they are upgraded to.
+	patches := generate("metal")
+	want := map[types.UID]string{
+		talosControlPlaneTemplate: `[{"op":"add","path":"/spec/template/spec/controlPlaneConfig/controlplane/talosVersion","value":"v1.13"}]`,
+		talosConfigTemplate:       `[{"op":"add","path":"/spec/template/spec/talosVersion","value":"v1.13"}]`,
+	}
+	if !maps.Equal(patches, want) {
+		t.Errorf("patches %v, want %v", patches, want)
+	}
+	if patches := generate("web"); len(patches) != 0 {
+		t.Errorf("another distribution's cluster patched: %v", patches)
 	}
 }

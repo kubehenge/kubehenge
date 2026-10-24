@@ -110,7 +110,7 @@ variable "version_overrides" {
   validation {
     condition = alltrue([for k in keys(var.version_overrides) : contains([
       "talos", "kubernetes", "cluster_api", "capmox",
-      "rke2", "k3s", "ipam_in_cluster", "helm_addon",
+      "rke2", "k3s", "ipam_in_cluster", "helm_addon", "talos_bootstrap", "talos_control_plane",
     ], k)])
     error_message = "version_overrides takes only the keys of the tested set in versions.tf."
   }
@@ -124,8 +124,8 @@ variable "provider_images" {
   validation {
     condition = alltrue([for k in keys(var.provider_images) : contains([
       "CoreProvider/cluster-api",
-      "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/k3s",
-      "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "ControlPlaneProvider/k3s",
+      "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/k3s", "BootstrapProvider/talos",
+      "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "ControlPlaneProvider/k3s", "ControlPlaneProvider/talos",
       "InfrastructureProvider/proxmox", "IPAMProvider/in-cluster", "AddonProvider/helm",
     ], k)])
     error_message = "provider_images takes only the providers the management cluster installs, as \"<kind>/<name>\"."
@@ -226,7 +226,7 @@ variable "bootstrap_datastore" {
 }
 
 variable "registry_mirrors" {
-  description = "Image registry mirrors for the management cluster's nodes, by registry name (such as ghcr.io or docker.io): endpoint URLs tried in order before the registry itself. A mirror of factory.talos.dev, ghcr.io or registry.k8s.io serves the images' cosign signatures too, which the nodes require on Sidero's and Kubernetes' images."
+  description = "Image registry mirrors for the management cluster's nodes, by registry name (such as ghcr.io or docker.io): endpoint URLs tried in order before the registry itself. A mirror of factory.talos.dev, ghcr.io or registry.k8s.io serves the images' cosign signatures too, which the nodes require on Sidero's and Kubernetes' images and on the Talos providers'."
   type        = map(list(string))
   default     = {}
 }
@@ -297,7 +297,7 @@ variable "cluster_datastore_allocate" {
 
 variable "template_refresh" {
   description = <<-EOT
-    Build the Ubuntu VM templates again every week, with the updates Ubuntu published since, and move each cluster's nodes to the new build inside its maintenance window once the build is soak_hours old. The two newest builds of each template stay, and any older one a cluster still clones from. The builds run in the management cluster with an API token of their own, which may create and delete VMs in the template pool, download to import_datastore and write to iso_datastore; it gets full control of those two storages (Proxmox VE deletes a file there only for Datastore.Allocate), so dedicated ones are best. The node defaults to the first of proxmox_nodes, storage to the first of workload_datastores, import_datastore to image_datastore and iso_datastore to bootstrap_datastore. The VM that prepares an image attaches to bridge (default the first of workload_bridges) and takes address (with prefix, gateway and dns), or DHCP when address is null. creator_builds lets those who may create clusters have a missing template built, such as for a Kubernetes version no kubeadm template exists for yet.
+    Build the node OS VM templates again every week, with the updates each node OS published since, and move each cluster's nodes to the new build inside its maintenance window once the build is soak_hours old. The two newest builds of each template stay, and any older one a cluster still clones from. The builds run in the management cluster with an API token of their own, which may create and delete VMs in the template pool, download to import_datastore and write to iso_datastore; it gets full control of those two storages (Proxmox VE deletes a file there only for Datastore.Allocate), so dedicated ones are best. The node defaults to the first of proxmox_nodes, storage to the first of workload_datastores, import_datastore to image_datastore and iso_datastore to bootstrap_datastore. The VM that builds a node image attaches to bridge (default the first of workload_bridges) and takes address (with prefix, gateway and dns), or DHCP when address is null. creator_builds lets those who may create clusters have a missing template built, such as for a Kubernetes version no kubeadm template exists for yet.
   EOT
   type = object({
     enabled          = optional(bool, true)
@@ -372,6 +372,27 @@ variable "extra_cluster_namespaces" {
     )
     error_message = "extra_cluster_namespaces names each namespace once, as a DNS label, and none of clusters, default, kube-*, *-system or cert-manager."
   }
+}
+
+variable "etcd_restore" {
+  description = "Have Kubehenge's controller restore clusters' etcd from their snapshots itself, running the restore on the control-plane VMs through their guest agents. The controller gets an API token of its own for it, with VM.Audit and VM.GuestAgent.Unrestricted on the workload pool, which amounts to a root shell in every cluster's VMs. Without it, the interface shows the steps to restore by hand."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "headlamp_sign_in" {
+  description = "Have the appliance's shared Headlamp sign those who may download a cluster's admin kubeconfig (Sys.Modify on its pool) in as cluster-admin, with a token made for their session that never reaches the browser. Kubehenge's controller then keeps, in every cluster of clusters and extra_cluster_namespaces, an identity bound to cluster-admin and one that may only make its tokens, whose own token it keeps beside the Cluster for the interface: whoever reads Secrets there, as the interface does, can act as cluster-admin in those clusters, as the admin kubeconfigs beside them already let them. Set back to false, the controller removes both, which ends every token made."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "headlamp_actions" {
+  description = "Have the appliance's shared Headlamp offer the Helm app catalog and the Prometheus charts it ships with: Helm releases listed, installed from repositories, upgraded, rolled back and uninstalled with each user's own credentials in the cluster. Only those who may set the appliance up add or remove a repository, since one list serves every user and cluster. Port forwards stay with Headlamp's desktop app, and node drain is offered either way."
+  type        = bool
+  default     = false
+  nullable    = false
 }
 
 variable "controller_image" {

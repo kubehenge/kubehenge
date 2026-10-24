@@ -48,7 +48,8 @@ jobs:
               tests=$(git diff --name-only "$GROUP_BASE" HEAD | test/e2e/ci/scope.sh)
               ;;
             *) tests='["management-cluster", "management-cluster-upgrade", "appliance", "kubeadm",
-                 "rke2", "k3s", "rancher", "cluster-mesh", "node-image-refresh"]' ;;
+                 "rke2", "k3s", "talos", "rancher", "cluster-mesh", "node-image-refresh",
+                 "autoscaler"]' ;;
           esac
           echo "tests=$(printf '%s' "$tests" | jq -c .)" >> "$GITHUB_OUTPUT"
 

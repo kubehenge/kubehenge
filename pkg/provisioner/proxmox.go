@@ -59,6 +59,8 @@ type Proxmox struct {
 	// runs.
 	mu     sync.Mutex
 	region string
+	// cpuLevels are the online nodes' x86-64 levels as read.
+	cpuLevels map[string]int
 }
 
 // Access is what a cluster's user holds beyond its own pool and its group's rights.
