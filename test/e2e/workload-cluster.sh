@@ -2452,9 +2452,11 @@ case ${distribution} in
         until_true 300 "${distribution}'s snapshot in the store" uploaded
         servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
         set_variable etcdSnapshots "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
-        until_true 300 "the upload's Secret gone" absent wl -n kube-system get secret kubehenge-etcd-s3
+        # The Secret stays until no server runs with the drop-in, which a server not yet replaced
+        # still reads on each scheduled snapshot, so it goes only once the servers are replaced.
         until_true 1800 "the control planes replaced without the upload" servers_replaced
         kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
+        until_true 300 "the upload's Secret gone" absent wl -n kube-system get secret kubehenge-etcd-s3
         ;;
     *) set_variable etcdSnapshots "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}" ;;
 esac
