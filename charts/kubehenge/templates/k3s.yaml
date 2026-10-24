@@ -124,6 +124,18 @@ spec:
               valueFrom:
                 template: |
                   {{- include "kubehenge.admissionFile" (dict "root" . "path" "/etc/rancher/k3s/pod-security.yaml") | nindent 18 }}
+            # k3s runs the API server in its own process, beside the controllers and the kubelet,
+            # so the limit is the whole process's.
+            - op: add
+              path: /spec/template/spec/kthreesConfigSpec/files/-
+              valueFrom:
+                template: |
+                  path: /etc/systemd/system/k3s.service.d/20-kubehenge-memory.conf
+                  owner: root:root
+                  permissions: "0644"
+                  content: |
+                    [Service]
+                    Environment=GOMEMLIMIT={{ include "kubehenge.apiServerMemoryLimit" (dict "share" 50) }}
             # The file is on the servers before k3s starts, so its Traefik never runs on k3s's own
             # values. Traefik runs as RKE2 runs its own, on every node's ports 80 and 443, rather
             # than behind k3s's servicelb, so that it answers there whatever load balancer the
@@ -345,6 +357,7 @@ template:
       files:
         {{- include "kubehenge.sysctlFile" . | nindent 8 }}
         {{- include "kubehenge.runcProfileFile" (dict "distribution" "k3s") | nindent 8 }}
+        {{- include "kubehenge.removedServerFile" (dict "distribution" "k3s") | nindent 8 }}
         {{- include "kubehenge.auditPolicyFile" (dict "root" . "path" "/etc/rancher/k3s/audit-policy.yaml") | nindent 8 }}
         # The k3s provider has no setting for secrets encryption; k3s keeps the key in its
         # datastore, so every server holds the same one. The API server's arguments are here, in

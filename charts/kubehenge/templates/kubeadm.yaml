@@ -140,6 +140,12 @@ spec:
                     secret:
                       name: {{ "{{ .builtin.cluster.name }}" }}-encryption
                       key: encryption-config.yaml
+            - op: add
+              path: /spec/template/spec/kubeadmConfigSpec/clusterConfiguration/apiServer/extraEnvs
+              valueFrom:
+                template: |
+                  - name: GOMEMLIMIT
+                    value: {{ include "kubehenge.apiServerMemoryLimit" (dict "share" 40) }}
     # kubeadm applies its patches for a target in the order of their names, this one after the
     # kubelet's own (kubehenge.kubeletConfigFile).
     - name: kubeadm-cis

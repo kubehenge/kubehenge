@@ -1070,6 +1070,33 @@ Proxmox VE HA take it from there. Applied before the distribution starts with sy
 {{- end -}}
 
 {{/*
+The Go memory limit of a control plane's API server, as a Cluster API template over the cluster's
+variables (.share is the percentage of the control plane's memory). Go collects its heap only once
+it has grown to twice what the last collection left, so the API server, holding about 900 MiB, sat
+at 2.2 to 2.4 GiB, and as every add-on was removed at once a 4096 MiB control plane ran out of
+memory and stalled without an OOM kill. Under the limit it collects sooner instead, as it nears it.
+*/}}
+{{- define "kubehenge.apiServerMemoryLimit" -}}
+{{ printf "{{ div (mul .controlPlaneMachine.memoryMiB %d) 100 }}MiB" .share }}
+{{- end -}}
+
+{{/*
+Keeps an RKE2 or k3s server (.distribution) down once its etcd member is removed. The control-plane
+providers remove the member before the machine's VM goes, and the server, still running, leaves a
+tombstone; started again, it wipes its database and joins as a new member, which the VM's deletion
+then takes away as a voter: beside a single new server, etcd loses its quorum. Cluster API never
+adds a removed machine back, so nothing needs it to rejoin.
+*/}}
+{{- define "kubehenge.removedServerFile" -}}
+- path: /etc/systemd/system/{{ ternary "rke2-server" "k3s" (eq .distribution "rke2") }}.service.d/10-kubehenge-removed.conf
+  owner: root:root
+  permissions: "0644"
+  content: |
+    [Unit]
+    ConditionPathExists=!/var/lib/rancher/{{ .distribution }}/server/db/tombstone
+{{- end -}}
+
+{{/*
 An AppArmor profile for the runc that RKE2 and k3s bring (.distribution names which), confining
 nothing, as Ubuntu's own profile for its /usr/sbin/runc does. Without one their runc runs
 unconfined, and Ubuntu stacks the container's profile on unconfined when an unprivileged
