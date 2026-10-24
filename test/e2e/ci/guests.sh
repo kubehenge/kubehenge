@@ -111,10 +111,12 @@ guest_script() {
             ;;
         # Every line about etcd of the server's whole journal, which would otherwise have rolled out
         # of the part above when the API stayed down for long; RKE2's and kubeadm's etcd run as static
-        # pods, whose logs are below.
+        # pods, whose logs are below. The API server's watches report etcd's errors again, one line
+        # per watch each time, so that a minute without a leader would leave only them.
         etcd-journal)
             echo 'journalctl --no-pager -o short-iso-precise -u k3s -u rke2-server |
-                grep -iE "etcd|raft|learner|promot|quorum|leader|member" | tail -n 3000'
+                grep -iE "etcd|raft|learner|promot|quorum|leader|member" |
+                grep -vE "watcher\.go|reflector\.go|cacher\.go" | tail -n 3000'
             ;;
         # The control plane's static pods and kube-vip as the kubelet keeps their logs on the node,
         # readable while the API is down; the previous log of every container that restarted beside
