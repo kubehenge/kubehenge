@@ -1193,6 +1193,17 @@ grep -a -q -F "${etcd_marker}" "${work}/snapshot.db" || fail "the snapshot does 
 step "etcd restored from the snapshot through the guest agent"
 wl -n default delete configmap e2e-before-snapshot
 wl -n default create configmap e2e-after-snapshot --from-literal=marker=after
+# lease_times: each Lease's last renewal, by namespace/name. An API server's identity Lease names one
+# process and outlives it by an hour, and the nodes' Leases go with their nodes, so neither is in.
+lease_times() {
+    wl get leases -A -l '!apiserver.kubernetes.io/identity' -o json |
+        jq -c '[.items[] | select(.metadata.namespace != "kube-node-lease") |
+            {key: "\(.metadata.namespace)/\(.metadata.name)", value: (.spec.renewTime // "")}] | from_entries'
+}
+# The Leases the cluster's components renew, which the restart baseline waits on.
+held_from=$(date +%s)
+held_since=$(date -u -d "@$((held_from - 60))" +%Y-%m-%dT%H:%M:%SZ)
+held_leases=$(lease_times | jq -c --arg since "${held_since}" '[to_entries[] | select(.value > $since) | .key]')
 # As the interface's Restore asks for it.
 now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 kubectl -n "${ns}" annotate cluster "${name}" \
@@ -1283,6 +1294,18 @@ server_restarts() {
     counts=$(on_machines "${servers}" "systemctl show -p NRestarts --value ${server_unit}") || return 1
     printf '%s\n' "${counts}" | awk '{ n += $1 } END { print n + 0 }'
 }
+# A component that could not renew its Lease while the API was away, through the restore or a
+# control plane's replacement, exits only once its renew deadline has passed, which may be after the
+# API is back. Once each Lease renewed before the restore is renewed again after this point, every
+# such restart has happened and is in the baseline.
+leases_at=$(lease_times)
+leases_renewed() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    times=$(lease_times) || return 1
+    printf '%s' "${times}" | jq -e --argjson held "${held_leases}" --argjson at "${leases_at}" \
+        '. as $now | all($held[]; ($now[.] // "") > ($at[.] // ""))' > /dev/null
+}
+until_true 300 "the components' Leases renewed after the restore" leases_renewed
 pods_before=$(restarts)
 # shellcheck disable=SC2310 # a failed count fails the step.
 servers_before=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
