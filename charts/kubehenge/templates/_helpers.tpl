@@ -1093,7 +1093,7 @@ adds a removed machine back, so nothing needs it to rejoin.
   permissions: "0644"
   content: |
     [Unit]
-    ConditionPathExists=!/var/lib/rancher/{{ .distribution }}/server/db/tombstone
+    ConditionPathExists=!/var/lib/rancher/{{ .distribution }}/server/db/etcd/tombstone
 {{- end -}}
 
 {{/*

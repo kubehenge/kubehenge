@@ -41,7 +41,7 @@ func TestIntegrationClassesKeepRemovedServersDown(t *testing.T) {
 				t.Fatal(err)
 			}
 			path := "/etc/systemd/system/" + want.unit + ".service.d/10-kubehenge-removed.conf"
-			condition := "ConditionPathExists=!/var/lib/rancher/" + want.dir + "/server/db/tombstone\n"
+			condition := "ConditionPathExists=!/var/lib/rancher/" + want.dir + "/server/db/etcd/tombstone\n"
 			written := false
 			for _, f := range files {
 				file, ok := f.(map[string]any)
