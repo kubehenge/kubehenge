@@ -663,6 +663,7 @@ func (o *controllerOptions) addEtcd(mgr manager.Manager, conn *pve.Config, remot
 	}
 	restorer := &provisioner.EtcdRestorer{
 		Client:         mgr.GetClient(),
+		Reader:         mgr.GetAPIReader(),
 		ClassNamespace: o.r.ClassNamespace,
 		Targets:        targets,
 		Events:         mgr.GetEventRecorder("kubehenge"),

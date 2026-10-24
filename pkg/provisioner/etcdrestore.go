@@ -134,7 +134,11 @@ func EtcdRestoreStatusOf(c *clusterv1.Cluster) (EtcdRestoreStatus, bool) {
 // make again once the cluster is unpaused. A restore that fails before etcd was restored starts the
 // control plane again as it was.
 type EtcdRestorer struct {
-	Client         client.Client
+	Client client.Client
+	// Reader reads the cluster past any cache: a reconcile queued while a restore ran can start
+	// before the cache has the restore's end, and would take it for one the controller was stopped
+	// in, running its recovery again and overwriting how it ended.
+	Reader         client.Reader
 	ClassNamespace string
 	Targets        *ClusterTargets
 	// Guests runs the restore on the nodes; nil when the management cluster has no restore token,
@@ -161,7 +165,7 @@ func (r *EtcdRestorer) SetupWithManager(mgr ctrl.Manager) error {
 // Reconcile implements reconcile.Reconciler.
 func (r *EtcdRestorer) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	cluster := &clusterv1.Cluster{}
-	if err := r.Client.Get(ctx, req.NamespacedName, cluster); err != nil {
+	if err := r.Reader.Get(ctx, req.NamespacedName, cluster); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}

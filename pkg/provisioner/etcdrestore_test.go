@@ -24,6 +24,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
@@ -134,7 +135,7 @@ func newRestoreFixture(t *testing.T, change func(*clusterv1.Cluster)) *restoreFi
 	f.data = etcdData(64 << 10)
 	f.putSnapshot(restoreSnapshot, string(keys.Data[BackupKeysKeyEtcd]), "v1.37.1+rke2r1")
 	f.r = &EtcdRestorer{
-		Client: f.kube, ClassNamespace: "kubehenge-system", Targets: f.targets, Guests: f.guests,
+		Client: f.kube, Reader: f.kube, ClassNamespace: "kubehenge-system", Targets: f.targets, Guests: f.guests,
 		Now: func() time.Time { return etcdNow },
 	}
 	return f
@@ -344,6 +345,51 @@ func TestEtcdRestorerFinishesARestoreInterrupted(t *testing.T) {
 	}
 	if got := f.deleting(); !slices.Equal(got, []string{"web-cp-1", "web-cp-2"}) {
 		t.Errorf("deleting %v", got)
+	}
+}
+
+// A reconcile queued while a restore ran can start before the cache has the restore's end: the
+// restore is not taken for one the controller was stopped in, nothing runs again, and how it ended
+// stays.
+func TestEtcdRestorerReadsPastTheCache(t *testing.T) {
+	t.Parallel()
+	f := newRestoreFixture(t, nil)
+	var during *clusterv1.Cluster
+	f.guests.seen = func(_ int64, step, _ string) {
+		if step == stepFetch {
+			during = f.cluster()
+		}
+	}
+	f.guests.fail = func(_ int64, step string) error {
+		if step == stepFetch {
+			return errors.New("curl: (60) SSL certificate problem")
+		}
+		return nil
+	}
+	f.reconcile()
+	ended, ran := f.status(), len(f.guests.runs())
+
+	kube, ok := f.kube.(client.WithWatch)
+	if !ok {
+		t.Fatal("the fixture's client does not watch")
+	}
+	served := false
+	f.r.Client = interceptor.NewClient(kube, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if cached, isCluster := obj.(*clusterv1.Cluster); isCluster && !served {
+				served = true
+				during.DeepCopyInto(cached)
+				return nil
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	f.reconcile()
+	if got := f.guests.runs(); len(got) != ran {
+		t.Errorf("ran %v after the restore ended", got[ran:])
+	}
+	if st := f.status(); st.Phase != RestoreFailed || st.Message != ended.Message {
+		t.Errorf("the restore that ended %q now says %q", ended.Message, st.Message)
 	}
 }
 
