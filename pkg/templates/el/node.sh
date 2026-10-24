@@ -64,6 +64,15 @@ systemctl preset qemu-guest-agent
 # cannot go, since shim needs it.
 systemctl mask bootc-fetch-apply-updates.timer fwupd-refresh.timer
 
+# The image has no /var/log/journal, so the journal would stay in memory and go with each reboot;
+# the CIS benchmarks ask for it on disk, and kube-bench reads it there.
+mkdir -p /usr/lib/systemd/journald.conf.d
+printf '[Journal]\nStorage=persistent\n' > /usr/lib/systemd/journald.conf.d/50-kubehenge.conf
+
 if [ "${distribution}" = kubeadm ]; then
+    # kubeadm's packages install the CNI plugins into /opt, which stays in the read-only image; the
+    # cluster's CNI installs its own beside them, in an overlay that ostree keeps in /var.
+    printf 'enable ostree-state-overlay@.service opt\n' >> /usr/lib/systemd/system-preset/80-kubehenge.preset
+    systemctl enable ostree-state-overlay@opt.service
     sh "${files}/node/kubeadm.sh"
 fi

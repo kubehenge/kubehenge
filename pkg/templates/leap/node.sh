@@ -57,6 +57,10 @@ systemctl preset qemu-guest-agent
 # reboots on its own.
 systemctl mask transactional-update.timer rebootmgr.service
 
+# The CIS benchmarks ask for the journal on disk, and kube-bench reads it there.
+mkdir -p /usr/lib/systemd/journald.conf.d
+printf '[Journal]\nStorage=persistent\n' > /usr/lib/systemd/journald.conf.d/50-kubehenge.conf
+
 if [ "${distribution}" = kubeadm ]; then
     sh "${files}/node/kubeadm.sh"
 fi

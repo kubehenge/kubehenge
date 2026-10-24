@@ -199,6 +199,7 @@ func nodeChecks(b Bake) [][]string {
 		{"sh", "-c", "! touch /usr/kubehenge 2> /dev/null"},
 		// Every distribution's pod network bridges through it.
 		{"sh", "-c", "modinfo br_netfilter > /dev/null"},
+		{"sh", "-c", `test -d "/var/log/journal/$(cat /etc/machine-id)"`},
 	}
 	switch b.Distribution {
 	case RKE2, K3s:
@@ -215,12 +216,18 @@ func nodeChecks(b Bake) [][]string {
 			[]string{"sh", "-c", "grep -qx '      type: spc_t' /etc/kubernetes/patches/etcd+strategic.yaml"},
 			[]string{systemctl, "is-enabled", "kubelet"},
 			[]string{"sh", "-c", "grep -qx 'enable containerd.service' " + nodePreset + " && grep -qx 'enable kubelet.service' " + nodePreset},
+			// The CNI installs its plugins there, beside the image's.
+			[]string{"sh", "-c", "touch /opt/cni/bin/.kubehenge && rm /opt/cni/bin/.kubehenge && test -x /opt/cni/bin/loopback"},
 			[]string{systemctl, "is-active", "containerd"},
 			// The control-plane images are in containerd, so nodes do not wait on the registry,
 			// and containerd starts pods on kubeadm's pause image among them.
 			[]string{"sh", "-c", "crictl images | grep -q kube-apiserver"},
 			[]string{"sh", "-c", `grep -qF "$(kubeadm config images list --kubernetes-version ` + b.KubernetesVersion + ` | grep /pause:)" /etc/containerd/config.toml`},
 		)
+		if _, r, err := ReleaseOf(b.NodeOS); err == nil && r.Mode == ImageMode {
+			// An image-mode clone's /opt is writable only while the presets keep its overlay.
+			checks = append(checks, []string{"grep", "-qx", "enable ostree-state-overlay@.service opt", nodePreset})
+		}
 	case Talos:
 	}
 	return append(checks, []string{"sh", "-c", avcDenied})
