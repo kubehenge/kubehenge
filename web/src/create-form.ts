@@ -850,7 +850,7 @@ export function addonsProblem(form: Form, c: ClusterClass | undefined): string |
   const agent =
     form.rancherInstall || !form.rancherRegister
       ? 0
-      : (quantity(classFigures(c, "kubehenge.dev/addon-memory").rancherAgent) ?? 0);
+      : (quantity(classFigures(c, "kubehenge.dev/addon-memory")["rancherAgent"]) ?? 0);
   return autoscales(form, c) && form.workerReplicas === 0 && addonMemory(form, c).mib - agent > 0
     ? "The add-ons chosen need a worker that stays: set the fewest workers to at least 1 on the General step, or choose none."
     : undefined;
