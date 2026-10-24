@@ -3,7 +3,6 @@ package provisioner
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -13,7 +12,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
@@ -156,21 +154,6 @@ func ClusterNodeOS(c *clusterv1.Cluster) (templates.NodeOS, error) {
 	return o, nil
 }
 
-// variablesNodeOS is the node OS a patch request's variables name, or the default.
-func variablesNodeOS(variables []runtimehooksv1.Variable) (templates.NodeOS, error) {
-	for _, v := range variables {
-		if v.Name != NodeOSVariable {
-			continue
-		}
-		var o templates.NodeOS
-		if err := json.Unmarshal(v.Value.Raw, &o); err != nil {
-			return templates.NodeOS{}, fmt.Errorf("variable %s: %w", NodeOSVariable, err)
-		}
-		return o, nil
-	}
-	return templates.DefaultNodeOS, nil
-}
-
 // MachineLine is the template line a machine of the distribution at a Kubernetes version, on the
 // node OS, is cloned from: RKE2 and k3s have one each, kubeadm one per version.
 func MachineLine(distribution, version string, os templates.NodeOS) ([]string, error) {
@@ -248,10 +231,10 @@ func kindOf(item *runtimehooksv1.GeneratePatchesRequestItem) string {
 }
 
 // nodeImages picks, for one patch request, the template build each of a cluster's machine
-// templates selects. It reads the cluster and its class once for all the request's templates.
+// templates selects. It reads the cluster's class once for all the request's templates.
 type nodeImages struct {
-	hooks     *Hooks
-	variables []runtimehooksv1.Variable
+	hooks   *Hooks
+	cluster *clusterv1.Cluster
 
 	loaded       bool
 	refreshed    bool
@@ -265,26 +248,7 @@ func (n *nodeImages) load(ctx context.Context) error {
 	if n.loaded {
 		return nil
 	}
-	var key client.ObjectKey
-	for _, v := range n.variables {
-		if v.Name != runtimehooksv1.BuiltinsName {
-			continue
-		}
-		var b runtimehooksv1.Builtins
-		if err := json.Unmarshal(v.Value.Raw, &b); err != nil {
-			return fmt.Errorf("variable %s: %w", runtimehooksv1.BuiltinsName, err)
-		}
-		if b.Cluster != nil {
-			key = client.ObjectKey{Namespace: b.Cluster.Namespace, Name: b.Cluster.Name}
-		}
-	}
-	if key.Name == "" {
-		return errors.New("the patch request names no cluster")
-	}
-	c := &clusterv1.Cluster{}
-	if err := n.hooks.Reader.Get(ctx, key, c); err != nil {
-		return fmt.Errorf("reading cluster %s: %w", key, err)
-	}
+	c := n.cluster
 	var err error
 	n.distribution = strings.TrimPrefix(c.Spec.Topology.ClassRef.Name, ClassPrefix)
 	n.refreshed = RefreshesNodes(c)
@@ -292,7 +256,7 @@ func (n *nodeImages) load(ctx context.Context) error {
 	if !n.refreshed {
 		return nil
 	}
-	if n.os, err = variablesNodeOS(n.variables); err != nil {
+	if n.os, err = ClusterNodeOS(c); err != nil {
 		return err
 	}
 	if n.t, err = NodeImageTime(c); err != nil {

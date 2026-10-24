@@ -19,6 +19,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -97,7 +98,7 @@ const (
 
 // patch has an RKE2 or k3s node install its release from checked files, through its bootstrap
 // provider's air-gapped install; it is nil for any other template.
-func (r *ReleaseChecksums) patch(ctx context.Context, item *runtimehooksv1.GeneratePatchesRequestItem, variables []runtimehooksv1.Variable) ([]byte, error) {
+func (r *ReleaseChecksums) patch(ctx context.Context, item *runtimehooksv1.GeneratePatchesRequestItem, cluster *clusterv1.Cluster) ([]byte, error) {
 	var object metav1.TypeMeta
 	if len(item.Object.Raw) > 0 {
 		if err := json.Unmarshal(item.Object.Raw, &object); err != nil {
@@ -118,9 +119,12 @@ func (r *ReleaseChecksums) patch(ctx context.Context, item *runtimehooksv1.Gener
 	}
 	files := release.files
 	if release == rke2Release {
-		cni, cniErr := stringVariable(variables, "cni", "canal")
+		cni, set, cniErr := optionalVariable[string](cluster, "cni")
 		if cniErr != nil {
 			return nil, cniErr
+		}
+		if !set {
+			cni = "canal"
 		}
 		if !slices.Contains(rke2CNIs, cni) {
 			return nil, fmt.Errorf("RKE2 brings no CNI %q", cni)
@@ -131,7 +135,7 @@ func (r *ReleaseChecksums) patch(ctx context.Context, item *runtimehooksv1.Gener
 	if err != nil {
 		return nil, err
 	}
-	nodeOS, err := variablesNodeOS(variables)
+	nodeOS, err := ClusterNodeOS(cluster)
 	if err != nil {
 		return nil, err
 	}
@@ -181,20 +185,6 @@ func builtinVersion(variables []runtimehooksv1.Variable, controlPlane bool) (str
 		}
 	}
 	return "", errors.New("the template's variables carry no Kubernetes version")
-}
-
-func stringVariable(variables []runtimehooksv1.Variable, name, fallback string) (string, error) {
-	for _, v := range variables {
-		if v.Name != name {
-			continue
-		}
-		var s string
-		if err := json.Unmarshal(v.Value.Raw, &s); err != nil {
-			return "", fmt.Errorf("variable %s: %w", name, err)
-		}
-		return s, nil
-	}
-	return fallback, nil
 }
 
 type releaseSums struct{ file, script string }

@@ -70,13 +70,24 @@ func TestPlacement(t *testing.T) {
 	}
 }
 
-// generate asks the hook for the patches of web's templates, with the variables given.
-func generate(t *testing.T, h *Hooks, variables ...runtimehooksv1.Variable) *runtimehooksv1.GeneratePatchesResponse {
+// clusterBuiltins are the variables Cluster API gives Kubehenge's patch: the builtins, which name the
+// cluster, and none of the ClusterClass's own.
+func clusterBuiltins(t *testing.T, namespace, name string) []runtimehooksv1.Variable {
+	t.Helper()
+	raw, err := json.Marshal(runtimehooksv1.Builtins{Cluster: &runtimehooksv1.ClusterBuiltins{Namespace: namespace, Name: name}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []runtimehooksv1.Variable{{Name: runtimehooksv1.BuiltinsName, Value: apiextensionsv1.JSON{Raw: raw}}}
+}
+
+// generate asks the hook for the patches of web's templates.
+func generate(t *testing.T, h *Hooks) *runtimehooksv1.GeneratePatchesResponse {
 	t.Helper()
 	holder := func(path string) runtimehooksv1.HolderReference {
 		return runtimehooksv1.HolderReference{Kind: "Cluster", Namespace: "team-a", Name: "web", FieldPath: path}
 	}
-	req := &runtimehooksv1.GeneratePatchesRequest{Variables: variables, Items: []runtimehooksv1.GeneratePatchesRequestItem{
+	req := &runtimehooksv1.GeneratePatchesRequest{Variables: clusterBuiltins(t, "team-a", "web"), Items: []runtimehooksv1.GeneratePatchesRequestItem{
 		{UID: "control-plane", HolderReference: holder("spec.controlPlaneRef")},
 		{UID: "infrastructure", HolderReference: holder("spec.infrastructureRef")},
 	}}
@@ -111,28 +122,35 @@ func patchedNodes(t *testing.T, resp *runtimehooksv1.GeneratePatchesResponse) []
 	return ops[0].Value
 }
 
-func allowed(nodes string) runtimehooksv1.Variable {
-	return runtimehooksv1.Variable{Name: "allowedNodes", Value: apiextensionsv1.JSON{Raw: []byte(nodes)}}
+func allowed(nodes string) clusterv1.ClusterVariable {
+	return clusterv1.ClusterVariable{Name: "allowedNodes", Value: apiextensionsv1.JSON{Raw: []byte(nodes)}}
 }
 
 func TestGeneratePatchesNamesTheOnlineNodes(t *testing.T) {
 	t.Parallel()
-	c := cluster()
-	c.Annotations = map[string]string{OnlineNodesAnnotation: "pve1,pve2"}
-	h, _ := hooksFor(t, c)
-	nodes := &fakeNodes{online: []string{"pve9"}}
-	h.Nodes = nodes
-	if got := patchedNodes(t, generate(t, h)); !slices.Equal(got, []string{"pve1", "pve2"}) {
-		t.Errorf("unchosen: %v", got)
+	for _, tc := range []struct {
+		name      string
+		variables []clusterv1.ClusterVariable
+		want      []string
+	}{
+		{"unchosen", nil, []string{"pve1", "pve2"}},
+		// The cluster's choice, which the request never carries.
+		{"chosen", []clusterv1.ClusterVariable{allowed(`["pve2","pve3"]`)}, []string{"pve2"}},
+	} {
+		c := cluster(tc.variables...)
+		c.Annotations = map[string]string{OnlineNodesAnnotation: "pve1,pve2"}
+		h, _ := hooksFor(t, c)
+		nodes := &fakeNodes{online: []string{"pve9"}}
+		h.Nodes = nodes
+		if got := patchedNodes(t, generate(t, h)); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+		}
+		if nodes.asked != 0 {
+			t.Errorf("%s: asked Proxmox VE %d times although the cluster records its nodes", tc.name, nodes.asked)
+		}
 	}
-	if got := patchedNodes(t, generate(t, h, allowed(`["pve2","pve3"]`))); !slices.Equal(got, []string{"pve2"}) {
-		t.Errorf("chosen: %v", got)
-	}
-	if nodes.asked != 0 {
-		t.Errorf("asked Proxmox VE %d times although the cluster records its nodes", nodes.asked)
-	}
-	resp := generate(t, h, allowed(`"pve1"`))
-	if resp.Status != runtimehooksv1.ResponseStatusFailure {
+	h, _ := hooksFor(t, cluster(allowed(`"pve1"`)))
+	if resp := generate(t, h); resp.Status != runtimehooksv1.ResponseStatusFailure {
 		t.Errorf("a malformed variable answers %s", resp.Status)
 	}
 }

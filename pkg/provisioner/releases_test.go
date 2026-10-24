@@ -14,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -89,8 +90,8 @@ func releaseItem(t *testing.T, kind, controlPlane, workers string) *runtimehooks
 	}
 }
 
-func cniVariable(cni string) []runtimehooksv1.Variable {
-	return []runtimehooksv1.Variable{{Name: "cni", Value: apiextensionsv1.JSON{Raw: []byte(`"` + cni + `"`)}}}
+func cniVariable(cni string) []clusterv1.ClusterVariable {
+	return []clusterv1.ClusterVariable{{Name: "cni", Value: apiextensionsv1.JSON{Raw: []byte(`"` + cni + `"`)}}}
 }
 
 type releaseOp struct {
@@ -131,7 +132,7 @@ func TestReleasePatchesInstallTheRecordedFiles(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, kind, version, spec, commands string
-		variables                           []runtimehooksv1.Variable
+		variables                           []clusterv1.ClusterVariable
 		files                               []string
 	}{
 		{
@@ -154,7 +155,7 @@ func TestReleasePatchesInstallTheRecordedFiles(t *testing.T) {
 			if !strings.HasSuffix(tc.kind, "ControlPlaneTemplate") {
 				controlPlane, workers = "v1.0.0", tc.version
 			}
-			patch, err := r.patch(t.Context(), releaseItem(t, tc.kind, controlPlane, workers), tc.variables)
+			patch, err := r.patch(t.Context(), releaseItem(t, tc.kind, controlPlane, workers), cluster(tc.variables...))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -197,13 +198,13 @@ func TestReleaseRecordNeverChanges(t *testing.T) {
 	t.Parallel()
 	r, f, _ := newReleaseChecksums(t)
 	item := releaseItem(t, "RKE2ControlPlaneTemplate", "v1.37.1+rke2r1", "v1.36.5+rke2r1")
-	first, err := r.patch(t.Context(), item, nil)
+	first, err := r.patch(t.Context(), item, cluster())
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.set("/rancher/rke2/v1.37.1+rke2r1/install.sh", "#!/bin/sh\n# replaced under the tag\n")
 	f.set("/rancher/rke2/releases/download/v1.37.1+rke2r1/sha256sum-amd64.txt", rke2Listing+"# replaced\n")
-	again, err := r.patch(t.Context(), item, nil)
+	again, err := r.patch(t.Context(), item, cluster())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,10 +212,10 @@ func TestReleaseRecordNeverChanges(t *testing.T) {
 		t.Errorf("the patch followed the replaced release:\n%s\nwant\n%s", again, first)
 	}
 	// Recording a second release keeps the first.
-	if _, err = r.patch(t.Context(), releaseItem(t, "RKE2ConfigTemplate", "v1.37.1+rke2r1", "v1.36.5+rke2r1"), nil); err != nil {
+	if _, err = r.patch(t.Context(), releaseItem(t, "RKE2ConfigTemplate", "v1.37.1+rke2r1", "v1.36.5+rke2r1"), cluster()); err != nil {
 		t.Fatal(err)
 	}
-	if again, err = r.patch(t.Context(), item, nil); err != nil || !bytes.Equal(again, first) {
+	if again, err = r.patch(t.Context(), item, cluster()); err != nil || !bytes.Equal(again, first) {
 		t.Errorf("after recording another release: %v\n%s\nwant\n%s", err, again, first)
 	}
 }
@@ -224,7 +225,7 @@ func TestReleasePatchesRefuse(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		item      func(t *testing.T) *runtimehooksv1.GeneratePatchesRequestItem
-		variables []runtimehooksv1.Variable
+		variables []clusterv1.ClusterVariable
 		breakIt   func(f *fakeReleases)
 		want      string
 	}{
@@ -288,7 +289,7 @@ func TestReleasePatchesRefuse(t *testing.T) {
 			if tc.breakIt != nil {
 				tc.breakIt(f)
 			}
-			_, err := r.patch(t.Context(), tc.item(t), tc.variables)
+			_, err := r.patch(t.Context(), tc.item(t), cluster(tc.variables...))
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want an error with %q", err, tc.want)
 			}
@@ -308,7 +309,7 @@ func TestReleasePatchesLeaveOtherTemplates(t *testing.T) {
 		if kind == "" {
 			item.Object.Raw = nil
 		}
-		if patch, err := r.patch(t.Context(), item, nil); patch != nil || err != nil {
+		if patch, err := r.patch(t.Context(), item, cluster()); patch != nil || err != nil {
 			t.Errorf("%q: %s, %v", kind, patch, err)
 		}
 	}
@@ -317,8 +318,9 @@ func TestReleasePatchesLeaveOtherTemplates(t *testing.T) {
 func TestGeneratePatchesFailOnARelease(t *testing.T) {
 	t.Parallel()
 	r, _, _ := newReleaseChecksums(t)
-	h := &Hooks{Reader: r.Reader, Releases: r}
-	req := &runtimehooksv1.GeneratePatchesRequest{Items: []runtimehooksv1.GeneratePatchesRequestItem{
+	h, _ := hooksFor(t, cluster())
+	h.Releases = r
+	req := &runtimehooksv1.GeneratePatchesRequest{Variables: clusterBuiltins(t, "team-a", "web"), Items: []runtimehooksv1.GeneratePatchesRequestItem{
 		*releaseItem(t, "RKE2ControlPlaneTemplate", "v1.37.1+rke2r1", ""),
 		*releaseItem(t, "RKE2ConfigTemplate", "", "v1.35.0+rke2r1"),
 	}}
