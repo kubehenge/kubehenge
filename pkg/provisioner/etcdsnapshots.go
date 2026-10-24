@@ -661,9 +661,13 @@ func (s *EtcdSnapshotter) eventf(cluster *clusterv1.Cluster, kind, reason, forma
 	}
 }
 
-// record takes the request away, records the snapshot taken, if any, as the last, and sets the
-// condition.
+// record sets the condition, then takes the request away and records the snapshot taken, if any, as
+// the last. The condition is a write of its own, to the status, so it goes first: whoever asked
+// reads the request gone as the answer, and the condition then says how it went.
 func (s *EtcdSnapshotter) record(ctx context.Context, cluster *clusterv1.Cluster, taken *EtcdSnapshot, cond *metav1.Condition) error {
+	if err := s.condition(ctx, cluster, cond); err != nil {
+		return err
+	}
 	patch := client.MergeFrom(cluster.DeepCopy())
 	delete(cluster.Annotations, EtcdSnapshotRequestAnnotation)
 	if taken != nil {
@@ -676,7 +680,7 @@ func (s *EtcdSnapshotter) record(ctx context.Context, cluster *clusterv1.Cluster
 	if err := s.Client.Patch(ctx, cluster, patch); err != nil {
 		return fmt.Errorf("recording the snapshot: %w", err)
 	}
-	return s.condition(ctx, cluster, cond)
+	return nil
 }
 
 // condition sets the snapshot condition on the cluster, or takes it away when cond is nil, beside

@@ -29,6 +29,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 // memStore is a bucket in memory.
@@ -352,6 +353,53 @@ func TestEtcdSnapshotterRefusesAStreamCutOff(t *testing.T) {
 	res = reconcileEtcd(t, s)
 	if etcd.calls.Load() != 1 || res.RequeueAfter != 4*time.Minute {
 		t.Errorf("%d snapshots, next in %s", etcd.calls.Load(), res.RequeueAfter)
+	}
+}
+
+// Whoever asked for a snapshot reads the request gone as the answer, so by then the condition says
+// how it went, also for the first snapshot a cluster takes.
+func TestEtcdSnapshotterAnswersOnceTheConditionIsSet(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		data []byte
+		want metav1.ConditionStatus
+	}{
+		"taken":  {etcdData(10 << 10), metav1.ConditionTrue},
+		"failed": {etcdData(10 << 10)[:100], metav1.ConditionFalse},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newEtcdFixture(t, withRequest(etcdCluster(`{"enabled":true,"target":"store"}`)))
+			kube, ok := f.kube.(client.WithWatch)
+			if !ok {
+				t.Fatal("the fixture's client does not watch")
+			}
+			var answered *metav1.Condition
+			watched := interceptor.NewClient(kube, interceptor.Funcs{
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					if err := c.Patch(ctx, obj, patch, opts...); err != nil {
+						return err
+					}
+					if _, requested := obj.GetAnnotations()[EtcdSnapshotRequestAnnotation]; !requested && answered == nil {
+						now := &clusterv1.Cluster{}
+						if err := c.Get(ctx, client.ObjectKeyFromObject(obj), now); err != nil {
+							return err
+						}
+						answered = &metav1.Condition{Type: "none"}
+						if cond := meta.FindStatusCondition(now.Status.Conditions, EtcdSnapshotCondition); cond != nil {
+							answered = cond
+						}
+					}
+					return nil
+				},
+			})
+			s := f.snapshotter(&fakeEtcd{data: tc.data}, etcdNow)
+			s.Client = watched
+			reconcileEtcd(t, s)
+			if answered == nil || answered.Type != EtcdSnapshotCondition || answered.Status != tc.want {
+				t.Errorf("the request went with the condition %+v, want %s", answered, tc.want)
+			}
+		})
 	}
 }
 
