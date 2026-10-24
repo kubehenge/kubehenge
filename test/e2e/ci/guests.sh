@@ -168,8 +168,10 @@ in_guest() {
         printf '%s\n' "${result}"
         return 1
     fi
+    # The truncation flags come beside any output, false as 0, which jq would take for true.
     printf '%s' "${result}" | jq -r '((."out-data", ."err-data") // empty | select(. != "")),
-        (if ."out-truncated" or ."err-truncated" then "(the guest agent cut the output short)" else empty end),
+        (if [."out-truncated", ."err-truncated"] | any(. == true or . == 1)
+            then "(the guest agent cut the output short)" else empty end),
         "exit code: \(.exitcode // "none, still running when the wait ended")"'
 }
 
