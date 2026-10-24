@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -138,13 +139,20 @@ func TestAutoscaledPoolsCountTheirLeastForAddonsAndTheirMostForControlPlanes(t *
 	if err = checkAddonRoom(nil, c, class); err != nil {
 		t.Errorf("add-ons on the least of two workers: %v", err)
 	}
-	// Without add-ons the agent's room alone is needed, which one worker holds; a pool from none
-	// keeps the control planes tainted, so nothing runs there.
+	// Without add-ons only Rancher's agent counts, and it holds no worker up: a pool from none keeps
+	// the control planes tainted, so nothing runs there, and the agent's pod brings a worker up.
 	bare := sized("")
 	bare.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{autoscaledPoolOf("0", "3")}
 	room, err := addonRoomOf(bare, class)
-	if err != nil || room.WithoutWorkers {
-		t.Errorf("a pool from none: %+v, %v, want the workers to hold the add-ons", room, err)
+	if err != nil || room.WithoutWorkers || len(room.Addons) != 0 || room.Need != 0 {
+		t.Errorf("a pool from none: %+v, %v, want the workers to hold nothing", room, err)
+	}
+	if err = checkAddonRoom(nil, bare, class); err != nil {
+		t.Errorf("a pool from none with only Rancher's agent: %v", err)
+	}
+	bare.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{autoscaledPoolOf("1", "3")}
+	if room, err = addonRoomOf(bare, class); err != nil || !slices.Contains(room.Addons, rancherAgentFigure) {
+		t.Errorf("a pool that keeps a worker: %+v, %v, want Rancher's agent counted", room, err)
 	}
 
 	many := sized("")

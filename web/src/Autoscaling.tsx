@@ -127,7 +127,8 @@ const entryLeast = (e: PoolEntry): number => number(e.autoscale ? e.min : e.repl
 const poolMost = (p: WorkerPool): number => p.autoscaling?.max ?? p.replicas;
 
 // The add-ons that use memory on the nodes by the classes' figures, read from the variables; the
-// server counts them exactly and refuses what they leave no room for.
+// server counts them exactly and refuses what they leave no room for. Logs need monitoring, and
+// Rancher's agent holds no worker up.
 function runsAddons(c: Cluster): boolean {
   const on = (name: string): boolean => flag(record(c.variables[name])["enabled"]) === true;
   const kyverno = text(record(c.variables["podSecurity"])["kyverno"]);
@@ -136,6 +137,9 @@ function runsAddons(c: Cluster): boolean {
     on("monitoring") ||
     on("istio") ||
     on("clusterMesh") ||
+    on("backups") ||
+    on("certificates") ||
+    on("gitops") ||
     flag(record(c.variables["rancher"])["install"]) === true ||
     c.variables["loadBalancer"] !== undefined ||
     (kyverno !== undefined && kyverno !== "off")

@@ -179,12 +179,6 @@ func addonRoomOf(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) (add
 	if err != nil {
 		return room, err
 	}
-	grown := 0
-	for _, a := range on {
-		room.Need += memory[a]
-		grown += growth[a]
-	}
-	room.Addons = slices.DeleteFunc(on, func(a string) bool { return memory[a] == 0 && growth[a] == 0 })
 	topology := cluster.Spec.Topology
 	room.Base = nodes["worker"]
 	if room.Base == 0 {
@@ -205,6 +199,17 @@ func addonRoomOf(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) (add
 		}
 		room.Have += int(r.least) * max(mem-room.Base, 0)
 	}
+	if workers == 0 && most > 0 {
+		// Rancher's agent alone holds no worker up: it runs only once there is a Rancher to register
+		// with, and its pod waiting for room brings a worker up from none.
+		on = slices.DeleteFunc(on, func(a string) bool { return a == rancherAgentFigure })
+	}
+	grown := 0
+	for _, a := range on {
+		room.Need += memory[a]
+		grown += growth[a]
+	}
+	room.Addons = slices.DeleteFunc(on, func(a string) bool { return memory[a] == 0 && growth[a] == 0 })
 	if workers > 0 || most > 0 {
 		room.Autoscaled = workers == 0
 		if len(room.Addons) == 0 || nodes["controlPlane"] == 0 {

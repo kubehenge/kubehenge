@@ -845,7 +845,13 @@ export const autoscales = (form: Form, c: ClusterClass | undefined): boolean =>
  * no workers, while the control planes stay kept for the control plane.
  */
 export function addonsProblem(form: Form, c: ClusterClass | undefined): string | undefined {
-  return autoscales(form, c) && form.workerReplicas === 0 && addonMemory(form, c).mib > 0
+  // Rancher's agent alone holds no worker up: it runs only once there is a Rancher to register with,
+  // and its pod waiting for room brings a worker up from none.
+  const agent =
+    form.rancherInstall || !form.rancherRegister
+      ? 0
+      : (quantity(classFigures(c, "kubehenge.dev/addon-memory").rancherAgent) ?? 0);
+  return autoscales(form, c) && form.workerReplicas === 0 && addonMemory(form, c).mib - agent > 0
     ? "The add-ons chosen need a worker that stays: set the fewest workers to at least 1 on the General step, or choose none."
     : undefined;
 }

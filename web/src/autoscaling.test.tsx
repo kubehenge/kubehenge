@@ -115,6 +115,16 @@ describe("the pools' checks", () => {
       "md-0": { least: "The cluster's add-ons need a worker that stays: at least 1." },
     });
     expect(poolProblems({ c: autoscaled, controlPlane: 1, entries: none })).toStrictEqual({});
+    for (const variables of [
+      { backups: { enabled: true } },
+      { certificates: { enabled: true } },
+      { gitops: { enabled: true } },
+    ]) {
+      const c: Cluster = { ...autoscaled, variables: { ...autoscaled.variables, ...variables } };
+      expect(poolProblems({ c, controlPlane: 1, entries: none })).toStrictEqual({
+        "md-0": { least: "The cluster's add-ons need a worker that stays: at least 1." },
+      });
+    }
   });
 
   it("holds the most to the fewest and to whole numbers", () => {

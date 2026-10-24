@@ -837,7 +837,8 @@ describe("create", () => {
     // A pool that may grow keeps the control planes to the control plane's work, even from none.
     const fromNone = { ...scaled, workerReplicas: 0, headlamp: false, monitoring: false };
     expect(fieldProblems("Machines", fromNone, withAutoscaler)).toStrictEqual({});
-    // The add-ons need a worker that stays.
+    // Rancher's agent alone holds no worker up; the add-ons need a worker that stays.
+    expect(fieldProblems("Add-ons", fromNone, withAutoscaler)).toStrictEqual({});
     expect(fieldProblems("Add-ons", { ...fromNone, headlamp: true }, withAutoscaler)).toStrictEqual({
       addons:
         "The add-ons chosen need a worker that stays: set the fewest workers to at least 1 on the General step, or choose none.",
