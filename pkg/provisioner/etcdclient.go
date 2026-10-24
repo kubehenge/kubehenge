@@ -58,7 +58,7 @@ const (
 type EtcdStream struct {
 	io.ReadCloser
 
-	// Revision is the store's revision at the snapshot.
+	// Revision is the member's revision just before the snapshot began, which the snapshot holds.
 	Revision int64
 	// Version is the etcd release of the member that took it.
 	Version string
@@ -262,6 +262,14 @@ func snapshotThrough(ctx context.Context, dial func(context.Context) (net.Conn, 
 	if err != nil {
 		return nil, fmt.Errorf("reaching etcd: %w", err)
 	}
+	// etcd sends no response header with a snapshot, so the revision is read first, from the same
+	// member: the snapshot commits and reads that member's store after it, so it holds at least
+	// this revision. Serializable, the member answers from its own store, also without a quorum.
+	read, err := cli.Get(ctx, etcdClientName, clientv3.WithSerializable(), clientv3.WithCountOnly())
+	if err != nil {
+		_ = cli.Close()
+		return nil, fmt.Errorf("reading the member's revision: %w", err)
+	}
 	resp, err := cli.SnapshotWithVersion(ctx)
 	if err != nil {
 		_ = cli.Close()
@@ -270,7 +278,7 @@ func snapshotThrough(ctx context.Context, dial func(context.Context) (net.Conn, 
 	return &EtcdStream{
 		ReadCloser: &closing{ReadCloser: resp.Snapshot, then: cli.Close},
 		Version:    resp.Version,
-		Revision:   resp.Header.GetRevision(),
+		Revision:   read.Header.GetRevision(),
 	}, nil
 }
 

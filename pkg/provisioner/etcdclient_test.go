@@ -84,28 +84,32 @@ func (ca *testCA) serving(t *testing.T) *tls.Certificate {
 	return &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }
 
-// fakeMember is an etcd member's maintenance API, which streams its database in chunks as etcd does.
+// fakeMember is an etcd member's maintenance API, which streams its database in chunks as etcd does:
+// without a response header, and with writes going on once the snapshot has begun.
 type fakeMember struct {
 	etcdserverpb.UnimplementedMaintenanceServer
 
 	data   []byte
 	mu     sync.Mutex
 	client string
+	// revision is the store's; held is the one the last snapshot holds.
+	revision, held int64
 }
 
 func (m *fakeMember) Snapshot(_ *etcdserverpb.SnapshotRequest, srv etcdserverpb.Maintenance_SnapshotServer) error {
+	m.mu.Lock()
 	if p, ok := peer.FromContext(srv.Context()); ok {
 		if info, ok := p.AuthInfo.(credentials.TLSInfo); ok && len(info.State.PeerCertificates) > 0 {
-			m.mu.Lock()
 			m.client = info.State.PeerCertificates[0].Subject.CommonName
-			m.mu.Unlock()
 		}
 	}
+	m.held = m.revision
+	m.revision++
+	m.mu.Unlock()
 	const chunk = 32 << 10
 	for off := 0; off < len(m.data); off += chunk {
 		end := min(off+chunk, len(m.data))
 		err := srv.Send(&etcdserverpb.SnapshotResponse{
-			Header:         &etcdserverpb.ResponseHeader{Revision: 4711},
 			RemainingBytes: uint64(len(m.data) - end), //nolint:gosec // end is at most the length
 			Blob:           m.data[off:end],
 			Version:        "3.6.5",
@@ -115,6 +119,19 @@ func (m *fakeMember) Snapshot(_ *etcdserverpb.SnapshotRequest, srv etcdserverpb.
 		}
 	}
 	return nil
+}
+
+// fakeKV is the member's key-value API, which answers with its store's revision.
+type fakeKV struct {
+	etcdserverpb.UnimplementedKVServer
+
+	member *fakeMember
+}
+
+func (kv *fakeKV) Range(context.Context, *etcdserverpb.RangeRequest) (*etcdserverpb.RangeResponse, error) {
+	kv.member.mu.Lock()
+	defer kv.member.mu.Unlock()
+	return &etcdserverpb.RangeResponse{Header: &etcdserverpb.ResponseHeader{Revision: kv.member.revision}}, nil
 }
 
 // startMember serves a member over a connection in memory, trusting clients by ca's certificate.
@@ -127,8 +144,9 @@ func startMember(t *testing.T, ca *testCA, serving *tls.Certificate, data []byte
 		ClientCAs: clients, ClientAuth: tls.RequireAndVerifyClientCert,
 	})
 	srv := grpc.NewServer(grpc.Creds(creds))
-	member := &fakeMember{data: data}
+	member := &fakeMember{data: data, revision: 4711}
 	etcdserverpb.RegisterMaintenanceServer(srv, member)
+	etcdserverpb.RegisterKVServer(srv, &fakeKV{member: member})
 	lis := bufconn.Listen(1 << 20)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
@@ -167,13 +185,40 @@ func TestSnapshotThroughSignsItsOwnClientCertificate(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Errorf("closing: %v", err)
 	}
-	if !bytes.Equal(got, data) || stream.Revision != 4711 || stream.Version != "3.6.5" {
-		t.Errorf("streamed %d of %d bytes, revision %d, version %s", len(got), len(data), stream.Revision, stream.Version)
+	if !bytes.Equal(got, data) || stream.Version != "3.6.5" {
+		t.Errorf("streamed %d of %d bytes, version %s", len(got), len(data), stream.Version)
 	}
 	member.mu.Lock()
 	defer member.mu.Unlock()
 	if member.client != etcdClientName {
 		t.Errorf("the member saw client %q", member.client)
+	}
+}
+
+// The revision recorded is one the snapshot holds: the member's, read before the snapshot began, as
+// the stream itself carries none and writes after it move the store on past the snapshot.
+func TestSnapshotThroughRecordsARevisionTheSnapshotHolds(t *testing.T) {
+	t.Parallel()
+	ca := newTestCA(t)
+	member, dial := startMember(t, ca, ca.serving(t), etcdData(100<<10))
+	tlsConfig, err := etcdClientTLS(ca.pair, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	stream, err := snapshotThrough(ctx, dial, tlsConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(io.Discard, stream); err != nil {
+		t.Fatal(err)
+	}
+	_ = stream.Close()
+	member.mu.Lock()
+	defer member.mu.Unlock()
+	if stream.Revision == 0 || stream.Revision > member.held {
+		t.Errorf("recorded revision %d for a snapshot holding %d", stream.Revision, member.held)
 	}
 }
 

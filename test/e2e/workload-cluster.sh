@@ -2370,9 +2370,11 @@ printf '%s  %s\n' "${ETCD_SHA256}" "${work}/etcd.tar.gz" | sha256sum -c - > /dev
     fail "etcd's download does not have its SHA-256"
 tar -xzf "${work}/etcd.tar.gz" -C "${work}" --strip-components=1 "etcd-${ETCD_VERSION}-linux-amd64/etcdutl"
 status=$("${work}/etcdutl" snapshot status "${work}/snapshot.db" -w json) || fail "etcdutl cannot read the snapshot"
-# The revision recorded is etcd's when the snapshot began; writes while it streamed add to it.
+# The revision recorded is the member's just before the snapshot began; writes in between add to
+# the snapshot's.
 db_revision=$(printf '%s' "${status}" | jq .revision)
-taken_revision=$(printf '%s' "${snapshot}" | jq .revision)
+taken_revision=$(printf '%s' "${snapshot}" | jq '.revision // 0')
+[ "${taken_revision}" -gt 0 ] || fail "no revision was recorded for the snapshot: ${snapshot}"
 [ "${db_revision}" -ge "${taken_revision}" ] ||
     fail "the snapshot is older than the revision recorded for it: ${status}"
 grep -a -q -F "${etcd_marker}" "${work}/snapshot.db" || fail "the snapshot does not hold the ConfigMap made before it"
