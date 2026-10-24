@@ -100,6 +100,7 @@ ns=${KUBEHENGE_E2E_NAMESPACE:-${name}}
 issuer_pid=
 grafana_pid=
 s3_pid=
+recorder_pid=
 # The HA rule the nodes are labelled with, and the guest it needs.
 ha_rule=''
 ha_vmid=''
@@ -109,6 +110,7 @@ cleanup() {
     [ -z "${issuer_pid}" ] || kill "${issuer_pid}" 2> /dev/null || true
     [ -z "${grafana_pid}" ] || kill "${grafana_pid}" 2> /dev/null || true
     [ -z "${s3_pid}" ] || kill "${s3_pid}" 2> /dev/null || true
+    [ -z "${recorder_pid}" ] || kill "${recorder_pid}" 2> /dev/null || true
     # shellcheck disable=SC2310 # each removal is tried, whatever happened to those before it
     remove_ha_rule || true
     if [ "${status}" -ne 0 ] && [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
@@ -2275,6 +2277,9 @@ unpinned=$(printf '%s\n%s\n' "${images}" "${system_images}" | grep -v -e '@sha25
 [ -z "${unpinned}" ] || fail "images named without a digest (pod, image): ${unpinned}"
 
 step "every add-on switched off at once"
+# Removing them all at once is the control planes' heaviest moment.
+control_plane_record "${work}/workload" &
+recorder_pid=$!
 set_variable headlamp '{"enabled":false}'
 # Logs go first: they need monitoring, which is refused off while they are on.
 # shellcheck disable=SC2310 # the refusal is the answer looked for.
@@ -2322,6 +2327,8 @@ kubectl -n "${ns}" get secret "${name}-backup-keys" > /dev/null || fail "the bac
 s3 -o /dev/null "${tarball}" -H 'x-amz-server-side-encryption-customer-algorithm: AES256' \
     -H "x-amz-server-side-encryption-customer-key: ${sse_key}" -H "x-amz-server-side-encryption-customer-key-MD5: ${sse_md5}" ||
     fail "the backup went from the store with Velero"
+kill "${recorder_pid}" 2> /dev/null || true
+recorder_pid=
 
 step "etcd snapshots: one taken into the S3 store, encrypted, and read back"
 # A ConfigMap rather than a Secret, which the cluster encrypts in etcd: the database holds it in
