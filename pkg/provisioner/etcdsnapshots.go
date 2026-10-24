@@ -343,7 +343,10 @@ func (s *sealed) abort() {
 // workload cluster: the controller signs itself an etcd client certificate for each snapshot,
 // reaches etcd through the cluster's API server, and stores the snapshot itself.
 type EtcdSnapshotter struct {
-	Client         client.Client
+	Client client.Client
+	// Reader reads the cluster past any cache: a reconcile queued while a snapshot streamed can
+	// start before the cache has the request taken away, and would take another.
+	Reader         client.Reader
 	ClassNamespace string
 	Etcd           EtcdSource
 	Targets        *ClusterTargets
@@ -375,7 +378,7 @@ func (s *EtcdSnapshotter) SetupWithManager(mgr ctrl.Manager) error {
 // Reconcile implements reconcile.Reconciler.
 func (s *EtcdSnapshotter) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	cluster := &clusterv1.Cluster{}
-	if err := s.Client.Get(ctx, req.NamespacedName, cluster); err != nil {
+	if err := s.Reader.Get(ctx, req.NamespacedName, cluster); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}

@@ -220,7 +220,7 @@ func newEtcdFixture(t *testing.T, objs ...client.Object) *etcdFixture {
 
 func (f *etcdFixture) snapshotter(etcd EtcdSource, now time.Time) *EtcdSnapshotter {
 	return &EtcdSnapshotter{
-		Client: f.kube, ClassNamespace: "kubehenge-system", Etcd: etcd, Targets: f.targets,
+		Client: f.kube, Reader: f.kube, ClassNamespace: "kubehenge-system", Etcd: etcd, Targets: f.targets,
 		Now: func() time.Time { return now },
 	}
 }
@@ -400,6 +400,40 @@ func TestEtcdSnapshotterAnswersOnceTheConditionIsSet(t *testing.T) {
 				t.Errorf("the request went with the condition %+v, want %s", answered, tc.want)
 			}
 		})
+	}
+}
+
+// A reconcile queued while a snapshot streamed can start before the cache has the request taken
+// away: the request answered is not taken again.
+func TestEtcdSnapshotterReadsPastTheCache(t *testing.T) {
+	t.Parallel()
+	asked := withRequest(etcdCluster(`{"enabled":true,"target":"store"}`))
+	f := newEtcdFixture(t, asked)
+	etcd := &fakeEtcd{data: etcdData(10 << 10)}
+	s := f.snapshotter(etcd, etcdNow)
+	reconcileEtcd(t, s)
+
+	kube, ok := f.kube.(client.WithWatch)
+	if !ok {
+		t.Fatal("the fixture's client does not watch")
+	}
+	served := false
+	s.Client = interceptor.NewClient(kube, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if cached, isCluster := obj.(*clusterv1.Cluster); isCluster && !served {
+				served = true
+				if err := c.Get(ctx, key, obj, opts...); err != nil {
+					return err
+				}
+				cached.Annotations[EtcdSnapshotRequestAnnotation] = asked.Annotations[EtcdSnapshotRequestAnnotation]
+				return nil
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	reconcileEtcd(t, s)
+	if etcd.calls.Load() != 1 {
+		t.Errorf("%d snapshots taken for one request", etcd.calls.Load())
 	}
 }
 

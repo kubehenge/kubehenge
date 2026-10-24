@@ -653,6 +653,7 @@ func (o *controllerOptions) addEtcd(mgr manager.Manager, conn *pve.Config, remot
 	targets := &provisioner.ClusterTargets{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, OpenStore: provisioner.OpenTarget}
 	snapshotter := &provisioner.EtcdSnapshotter{
 		Client:         mgr.GetClient(),
+		Reader:         mgr.GetAPIReader(),
 		ClassNamespace: o.r.ClassNamespace,
 		Etcd:           &provisioner.EtcdDialer{Reader: mgr.GetAPIReader(), Remotes: remotes},
 		Targets:        targets,
