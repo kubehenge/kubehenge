@@ -47,7 +47,11 @@ func (a *Accounts) CreateAdministratorToken(ctx context.Context, t *Ticket, user
 // that does not exist is no error.
 func (a *Accounts) DeleteUser(ctx context.Context, t *Ticket, userid string) error {
 	err := a.send(ctx, t, http.MethodDelete, "/access/users/"+url.PathEscape(userid), nil, nil)
-	if err != nil && !notFound(err) {
+	// Proxmox VE names a missing user its own way.
+	if apiErr, ok := errors.AsType[*APIError](err); ok && strings.Contains(apiErr.Status, "no such user") {
+		return nil
+	}
+	if err != nil {
 		return fmt.Errorf("deleting the user %s: %w", userid, err)
 	}
 	return nil

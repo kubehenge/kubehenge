@@ -54,7 +54,7 @@ func (f *fakeUsersAPI) accounts(t *testing.T) *Accounts {
 					return
 				}
 				defer func() { _ = conn.Close() }()
-				_, _ = io.WriteString(conn, "HTTP/1.1 500 delete user failed: user '"+user+"' does not exist\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+				_, _ = io.WriteString(conn, "HTTP/1.1 500 no such user ('"+user+"')\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
 				return
 			}
 			delete(f.users, user)
