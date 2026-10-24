@@ -559,6 +559,8 @@ type ClusterTarget struct {
 	Store  ObjectStore
 	Folder string
 	Keys   *corev1.Secret
+	// CACertificate is the target's CA, when it has one, for whatever else fetches from the store.
+	CACertificate string
 }
 
 // EtcdIdentity is the age identity the cluster's snapshots are encrypted to.
@@ -641,7 +643,10 @@ func (ts *ClusterTargets) Open(ctx context.Context, cluster *clusterv1.Cluster, 
 	if err != nil {
 		return nil, err
 	}
-	return &ClusterTarget{Store: store, Folder: EtcdSnapshotPrefix(target.Prefix, cluster.Namespace, cluster.Name), Keys: keys}, nil
+	return &ClusterTarget{
+		Store: store, Folder: EtcdSnapshotPrefix(target.Prefix, cluster.Namespace, cluster.Name), Keys: keys,
+		CACertificate: target.CACertificate,
+	}, nil
 }
 
 func (s *EtcdSnapshotter) failure(ctx context.Context, cluster *clusterv1.Cluster, err error) {

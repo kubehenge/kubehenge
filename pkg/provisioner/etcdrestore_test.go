@@ -232,6 +232,11 @@ func TestEtcdRestorerRestores(t *testing.T) {
 		if !strings.Contains(script, hex.EncodeToString(sum[:])) || !strings.Contains(script, "X-Amz-Expires=3600") {
 			t.Errorf("the fetch checks no checksum or has no link:\n%s", script)
 		}
+		// The store's certificate is signed by the target's own CA, which the node does not trust.
+		if !strings.Contains(script, "\nca='-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n'\n") ||
+			!strings.Contains(script, `trust=(--cacert "$work/store-ca.pem")`) {
+			t.Errorf("the fetch does not trust the target's CA:\n%s", script)
+		}
 		objects := f.transcoded()
 		password := passwordLine.FindStringSubmatch(script)
 		if len(objects) != 1 || password == nil {
@@ -459,7 +464,9 @@ func TestRestoreScripts(t *testing.T) {
 		}
 		for name, body := range map[string]string{
 			"stop": s.Stop, "restore": s.Restore, "start": s.Start, "start without waiting": s.StartNoWait,
-			"restored": s.Restored, "clean": s.Clean, "fetch": fetchScriptFor("https://s3.example.org/x?a=1&b='2'", "pass'word", "abc"),
+			"restored": s.Restored, "clean": s.Clean,
+			"fetch":            fetchScriptFor("https://s3.example.org/x?a=1&b='2'", "pass'word", "abc", "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n"),
+			"fetch without CA": fetchScriptFor("https://s3.example.org/x", "password", "abc", ""),
 		} {
 			if !strings.HasSuffix(body, "} </dev/null\n") {
 				t.Errorf("%s %s reads its standard input", d, name)

@@ -147,8 +147,15 @@ echo "started the control plane"
 `
 
 	// fetchScript downloads the transcoded snapshot from a link, decrypts it and checks it against
-	// the checksum the snapshot was stored with. The link and password are set before it.
-	fetchScript = `curl -fsS --retry 3 --config - -o "$work/snapshot.enc" <<<"url = \"$url\""
+	// the checksum the snapshot was stored with. The link, password and the target's CA, empty when
+	// it has none, are set before it: a store with a CA of its own is one the node does not trust.
+	fetchScript = `trust=()
+if [ -n "$ca" ]; then
+  printf '%%s\n' "$ca" >"$work/store-ca.pem"
+  trust=(--cacert "$work/store-ca.pem")
+fi
+curl -fsS --retry 3 "${trust[@]}" --config - -o "$work/snapshot.enc" <<<"url = \"$url\""
+rm -f "$work/store-ca.pem"
 KUBEHENGE_PASSWORD="$password" openssl enc -d -aes-256-ctr -pbkdf2 -iter %d -md sha256 \
   -pass env:KUBEHENGE_PASSWORD -in "$work/snapshot.enc" -out "$work/snapshot.db"
 rm -f "$work/snapshot.enc"
@@ -226,9 +233,10 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// fetchScriptFor downloads a transcoded snapshot from link onto a node and checks it.
-func fetchScriptFor(link, password, sum string) string {
-	return script(fmt.Sprintf(fetchScript, opensslIterations), "url", link, "password", password, "sha256", sum)
+// fetchScriptFor downloads a transcoded snapshot from link onto a node, trusting the store by ca
+// when it is set, and checks it.
+func fetchScriptFor(link, password, sum, ca string) string {
+	return script(fmt.Sprintf(fetchScript, opensslIterations), "url", link, "password", password, "sha256", sum, "ca", ca)
 }
 
 // newRestorePassword is the password a snapshot is transcoded with for one restore.

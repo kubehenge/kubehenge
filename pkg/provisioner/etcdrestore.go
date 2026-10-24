@@ -367,7 +367,7 @@ func (run *restoreRun) fetch(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("signing a link to the transcoded snapshot: %w", err)
 	}
-	return run.on(ctx, run.nodes[0], "fetching the snapshot", fetchScriptFor(link, password, run.snapshot.SHA256))
+	return run.on(ctx, run.nodes[0], "fetching the snapshot", fetchScriptFor(link, password, run.snapshot.SHA256, run.target.CACertificate))
 }
 
 // transcode stores the snapshot under key encrypted with password, as it is read.
