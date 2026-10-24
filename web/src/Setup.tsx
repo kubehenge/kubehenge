@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type JSX,
+  type ReactNode,
   type RefObject,
 } from "react";
 
@@ -78,6 +79,7 @@ export interface SetupForm {
   offerHARules: boolean;
   clusterDatastoreAllocate: boolean;
   backupTargets: BackupTarget[];
+  etcdRestore: boolean;
   // The weekly build of the Ubuntu VM templates.
   refresh: boolean;
   refreshWeekday: string;
@@ -96,6 +98,8 @@ export interface SetupForm {
   moreNamespaces: boolean;
   // Separated by commas or lines.
   extraNamespaces: string;
+  headlampSignIn: boolean;
+  headlampActions: boolean;
   passphrase: string;
   confirm: string;
 }
@@ -218,6 +222,9 @@ export function settings(f: SetupForm): ManagementSettings {
   if (f.backupTargets.length > 0) {
     s.backupTargets = cleanTargets(f.backupTargets);
   }
+  if (f.etcdRestore) {
+    s.etcdRestore = true;
+  }
   s.templateRefresh = refreshSettings(f);
   if (f.clusterSysAudit) {
     s.clusterSysAudit = true;
@@ -227,6 +234,12 @@ export function settings(f: SetupForm): ManagementSettings {
   }
   if (f.moreNamespaces && list(f.extraNamespaces).length > 0) {
     s.extraClusterNamespaces = list(f.extraNamespaces);
+  }
+  if (f.headlampSignIn) {
+    s.headlampSignIn = true;
+  }
+  if (f.headlampActions) {
+    s.headlampActions = true;
   }
   return s;
 }
@@ -300,12 +313,15 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     offerHARules: saved.offerHARules === true,
     clusterDatastoreAllocate: saved.clusterDatastoreAllocate === true,
     backupTargets: saved.backupTargets ?? [],
+    etcdRestore: saved.etcdRestore === true,
     ...refreshFields(saved.templateRefresh),
     clusterSysAudit: saved.clusterSysAudit === true,
     clusterVolumeSnapshots: saved.clusterVolumeSnapshots === true,
     rootPassword: "",
     moreNamespaces: (saved.extraClusterNamespaces ?? []).length > 0,
     extraNamespaces: (saved.extraClusterNamespaces ?? []).join(", "),
+    headlampSignIn: saved.headlampSignIn === true,
+    headlampActions: saved.headlampActions === true,
     passphrase: "",
     confirm: "",
   };
@@ -642,7 +658,9 @@ function LastRun({ status, manage }: { status: SetupStatus; manage: boolean }) {
     <>
       {manage && job.state === "succeeded" && job.kind !== "remove" && (
         <p className="muted">
-          Last applied {when} by {job.user}.
+          {job.automatic === true
+            ? `Last applied ${when} by an automatic upgrade, as ${job.user}.`
+            : `Last applied ${when} by ${job.user}.`}
         </p>
       )}
       {job.state === "succeeded" && job.kind === "remove" && (
@@ -652,7 +670,9 @@ function LastRun({ status, manage }: { status: SetupStatus; manage: boolean }) {
       )}
       {job.state === "failed" && (
         <div className="error" role="alert">
-          The last run failed: {job.error}
+          {job.automatic === true
+            ? `The automatic upgrade of ${when} failed, and is tried again in the next day's upgrade hour: ${job.error ?? ""}`
+            : `The last run failed: ${job.error ?? ""}`}
           {(job.log ?? []).length > 0 && (
             <details>
               <summary>Log</summary>
@@ -703,6 +723,16 @@ function optInRows(s: ManagementSettings): [string, string][] {
   ];
 }
 
+function headlampRows(s: ManagementSettings): [string, string][] {
+  return [
+    [
+      "Headlamp sign-in",
+      s.headlampSignIn === true ? "Signs those who may download a cluster's kubeconfig in as cluster-admin" : "Off",
+    ],
+    ["Headlamp actions", s.headlampActions === true ? "Helm app catalog and Prometheus charts" : "Off"],
+  ];
+}
+
 function ManagedSummary({
   status,
   settings: s,
@@ -730,6 +760,7 @@ function ManagedSummary({
     ...optInRows(s),
     ["Template refresh", refreshSummary(s)],
     ["Namespaces for clusters", [ownNamespace, ...(s.extraClusterNamespaces ?? [])].join(", ")],
+    ...headlampRows(s),
     [
       "Identity providers",
       s.clusterOIDC && s.clusterOIDC.length > 0 ? s.clusterOIDC.map((p) => p.issuerURL).join(", ") : "None",
@@ -738,10 +769,14 @@ function ManagedSummary({
       "Backup targets",
       s.backupTargets && s.backupTargets.length > 0 ? s.backupTargets.map((t) => targetSummary(t)).join(", ") : "None",
     ],
+    ["etcd restores", s.etcdRestore === true ? "Through the Proxmox VE guest agent" : "By hand, with the steps shown"],
     ["Registry mirrors", s.registryMirrors ? formatMirrors(s.registryMirrors).split("\n").join(", ") : "None"],
     ["Pod ranges", s.podSubnets?.join(", ") ?? "Chosen clear of the nodes' network"],
     ["Service ranges", s.serviceSubnets?.join(", ") ?? "Chosen clear of the nodes' network"],
   ];
+  if (status.upgrade) {
+    rows.unshift(["Applied with", `Kubehenge ${status.upgrade.applied}`]);
+  }
   return (
     <section className="panel">
       <div className="box">
@@ -778,20 +813,36 @@ function ManagedSummary({
           />
         </div>
       )}
-      {applying && <ApplyAgain settings={s} onClose={() => setApplying(false)} onStarted={onStarted} />}
+      {applying && (
+        <ApplyDialog
+          title="Apply the management cluster again"
+          action="Apply"
+          settings={s}
+          onClose={() => setApplying(false)}
+          onStarted={onStarted}
+        />
+      )}
     </section>
   );
 }
 
-function ApplyAgain({
+// ApplyDialog applies the saved settings again as they are, once given the state passphrase; what
+// it brings goes above the passphrase.
+export function ApplyDialog({
+  title,
+  action,
   settings: s,
   onClose,
   onStarted,
+  children,
 }: {
+  title: string;
+  action: string;
   settings: ManagementSettings;
   onClose: () => void;
   onStarted: () => void;
-}) {
+  children?: ReactNode;
+}): JSX.Element {
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -812,7 +863,7 @@ function ApplyAgain({
   };
   return (
     <Dialog
-      title="Apply the management cluster again"
+      title={title}
       onClose={onClose}
       onSubmit={() => {
         void apply();
@@ -823,11 +874,12 @@ function ApplyAgain({
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || short}>
-            Apply
+            {action}
           </button>
         </>
       }
     >
+      {children}
       <p className="muted">Runs with your Proxmox VE session, which is not stored, and takes ten to twenty minutes.</p>
       <Field
         label="State passphrase"
@@ -874,7 +926,8 @@ function Progress({ job }: { job: Job }): JSX.Element {
         <h2>{job.kind === "remove" ? "Removing the management cluster" : "Applying the management cluster"}</h2>
         <span className="spacer" />
         <span className="muted">
-          started by {job.user}, {elapsed(job.started)} ago
+          {job.automatic === true ? `started automatically as ${job.user}` : `started by ${job.user}`},{" "}
+          {elapsed(job.started)} ago
         </span>
       </div>
       <p className="pad muted">
@@ -1054,6 +1107,92 @@ function HARulesChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element {
         rules with its own token, which holds Sys.Audit on / already, so Proxmox VE grants nothing new. Risks: everyone
         with VM.Allocate on the clusters&apos; pool or a cluster&apos;s own pool learns the rules&apos; names and which
         nodes they cover.
+      </p>
+    </fieldset>
+  );
+}
+
+function HeadlampChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element {
+  const hint = useId();
+  return (
+    <fieldset className="group">
+      <legend>Headlamp sign-in</legend>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.headlampSignIn}
+          aria-describedby={hint}
+          onChange={(e) => set("headlampSignIn", e.target.checked)}
+        />{" "}
+        Sign those who may download a cluster&apos;s kubeconfig in to it in Headlamp (recommended)
+      </label>
+      <p className="muted" id={hint}>
+        Grants: whoever holds Sys.Modify on a cluster&apos;s pool opens it in the appliance&apos;s Headlamp as
+        cluster-admin, without pasting a token, with one made for their session that never reaches the browser. No one
+        else gets more than today. Risks: each cluster in the interface&apos;s namespaces gets an account bound to
+        cluster-admin and one that may make its tokens, whose token waits beside the cluster in the management cluster,
+        where the admin kubeconfigs already are; Headlamp acts as that account, not as the Proxmox VE user, whom the
+        interface&apos;s log names beside the token&apos;s ID. Switching it off removes both accounts, which ends every
+        token made.
+      </p>
+    </fieldset>
+  );
+}
+
+function HeadlampActionsChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element {
+  const hint = useId();
+  return (
+    <fieldset className="group">
+      <legend>Headlamp actions</legend>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.headlampActions}
+          aria-describedby={hint}
+          onChange={(e) => set("headlampActions", e.target.checked)}
+        />{" "}
+        Offer Helm and Prometheus charts in the appliance&apos;s Headlamp
+      </label>
+      <p className="muted" id={hint}>
+        Grants: Headlamp&apos;s Helm app catalog and Prometheus charts, with which everyone who sees a cluster lists,
+        installs, upgrades, rolls back and uninstalls its Helm releases. Each acts in the cluster with their own
+        credentials there, or the sign-in above, so the cluster lets them do no more than it already does. Only those
+        who may set the appliance up add or remove a Helm repository, since one list serves every user and cluster.
+        Risks: the appliance fetches the charts, from those repositories alone and over HTTPS. Node drain is offered
+        either way, with the user&apos;s own credentials; port forwards work in Headlamp&apos;s desktop app alone and
+        stay off here.
+      </p>
+    </fieldset>
+  );
+}
+
+const etcdRestoreGrant =
+  "Kubehenge's controller gets an API token of its own with VM.GuestAgent.Unrestricted and VM.Audit on the clusters' pool. It runs commands as root in every cluster VM through the guest agent, so whoever takes the management cluster has a root shell in all of them; switching this on takes VM.GuestAgent.Unrestricted on / of you too.";
+
+function EtcdRestoreChoice({ form, set, onAsk }: Omit<FieldsProps, "shown"> & { onAsk: () => void }): JSX.Element {
+  const hint = useId();
+  return (
+    <fieldset className="group">
+      <legend>etcd restores</legend>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.etcdRestore}
+          aria-describedby={hint}
+          onChange={(e) => {
+            if (e.target.checked) {
+              onAsk();
+            } else {
+              set("etcdRestore", false);
+            }
+          }}
+        />{" "}
+        Restore clusters&apos; etcd through the Proxmox VE guest agent
+      </label>
+      <p className="muted" id={hint}>
+        Restoring a cluster&apos;s etcd from a snapshot stops the control plane on its VMs and restores on one of them.
+        Switched on, Kubehenge does that itself when someone with Sys.Modify on the cluster&apos;s pool asks; switched
+        off, the interface lists the commands to run on the VMs by hand. {etcdRestoreGrant}
       </p>
     </fieldset>
   );
@@ -1310,6 +1449,54 @@ function NamespacesChoice({ form, set, shown }: FieldsProps): JSX.Element {
   );
 }
 
+// EtcdRestoreConfirm asks before the restore token is granted. It stands outside the setup form,
+// whose submit would otherwise apply the settings along with the dialog's.
+function EtcdRestoreConfirm({
+  open,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}): JSX.Element | null {
+  if (!open) {
+    return null;
+  }
+  return (
+    <Dialog
+      title="Restore etcd through the guest agent?"
+      onClose={onClose}
+      onSubmit={onConfirm}
+      actions={
+        <>
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="danger">
+            Switch on
+          </button>
+        </>
+      }
+    >
+      <p>
+        <strong>What it grants.</strong> {etcdRestoreGrant}
+      </p>
+      <p>
+        <strong>What it risks.</strong> The token sits in the management cluster beside Kubehenge&apos;s other
+        credentials. Anyone who reads it, or who controls Kubehenge&apos;s controller, can run anything as root in any
+        cluster VM: read every Secret, change any workload, or stop a cluster. A restore itself takes every object of a
+        cluster back to the snapshot.
+      </p>
+      <p>
+        <strong>Left off</strong>, there is no such token: a restore takes the same steps, run by hand by someone with a
+        shell on the VMs.
+      </p>
+      <p className="hint">The change takes effect when the settings are applied.</p>
+    </Dialog>
+  );
+}
+
 function AdvancedFields({
   form,
   set,
@@ -1404,6 +1591,7 @@ function SetupWizard({
   // A field's problem shows once it has been changed, or after the run was asked for.
   const [touched, setTouched] = useState<ReadonlySet<string>>(new Set());
   const [attempted, setAttempted] = useState(false);
+  const [askingRestore, setAskingRestore] = useState(false);
   const touch = (k: string): void => setTouched((t) => (t.has(k) ? t : new Set([...t, k])));
   const set = <K extends keyof SetupForm>(k: K, v: SetupForm[K]): void => {
     setForm((f) => ({ ...f, [k]: v }));
@@ -1708,6 +1896,8 @@ function SetupWizard({
         <SysAuditChoice form={form} set={set} />
         <VolumeSnapshotsChoice form={form} set={set} shown={shown} fixed={fixed} />
         <NamespacesChoice form={form} set={set} shown={shown} />
+        <HeadlampChoice form={form} set={set} />
+        <HeadlampActionsChoice form={form} set={set} />
         <fieldset className="group">
           <legend>Identity providers</legend>
           <p className="muted">
@@ -1720,12 +1910,13 @@ function SetupWizard({
         <fieldset className="group">
           <legend>Backup targets</legend>
           <p className="muted">
-            S3 stores clusters back up to with Velero. Each cluster writes into a folder of its own beneath the prefix,
-            with an access key of its own or the one for every cluster, and encrypts what it writes with keys of its
-            own.
+            S3 stores clusters back up to, with Velero and as etcd snapshots. Each cluster writes into a folder of its
+            own beneath the prefix, with an access key of its own or the one for every cluster, and encrypts what it
+            writes with keys of its own.
           </p>
           <BackupTargets initial={form.backupTargets} showAll={attempted} onChange={(v) => set("backupTargets", v)} />
         </fieldset>
+        <EtcdRestoreChoice form={form} set={set} onAsk={() => setAskingRestore(true)} />
         <AdvancedFields form={form} set={set} shown={shown} fixed={fixed !== undefined} detailsRef={advancedRef} />
         <PassphraseFields
           form={form}
@@ -1746,6 +1937,14 @@ function SetupWizard({
           </button>
         </div>
       </form>
+      <EtcdRestoreConfirm
+        open={askingRestore}
+        onClose={() => setAskingRestore(false)}
+        onConfirm={() => {
+          set("etcdRestore", true);
+          setAskingRestore(false);
+        }}
+      />
     </section>
   );
 }

@@ -8,7 +8,7 @@ CAPMOX_IMAGE ?= ghcr.io/kubehenge/cluster-api-provider-proxmox
 HELM_ADDON_IMAGE ?= ghcr.io/kubehenge/cluster-api-addon-provider-helm
 KO_FLAGS ?=
 
-.PHONY: build web gateway-api website dist index image capmox-image helm-addon-image lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-templates e2e-volumes e2e-interface e2e-appliance
+.PHONY: build web gateway-api website dist index image capmox-image helm-addon-image lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-templates e2e-volumes e2e-interface e2e-appliance
 .PHONY: fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker unit-go unit-web unit-tofu unit-shell tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
@@ -86,8 +86,11 @@ dist: web gateway-api
 	test -f $(HEADLAMP_TARBALL) || curl -fsSL --proto '=https' --retry 5 --retry-all-errors -o $(HEADLAMP_TARBALL) \
 		https://github.com/kubernetes-sigs/headlamp/releases/download/$(HEADLAMP_TAG)/Headlamp-$(HEADLAMP_VERSION)-linux-x64.tar.gz
 	echo '$(HEADLAMP_SHA256)  $(HEADLAMP_TARBALL)' | sha256sum -c --quiet - || { rm -f $(HEADLAMP_TARBALL); exit 1; }
+	# Of the plugins Headlamp ships, the Helm app catalog and the Prometheus charts, which the interface
+	# serves while the shared Headlamp offers its actions; the plugin catalog would install any plugin.
 	tar -xzf $(HEADLAMP_TARBALL) -C dist/stage/share/kubehenge/headlamp --strip-components=2 \
-		$(foreach f,headlamp-server frontend LICENSE NOTICE,Headlamp-$(HEADLAMP_VERSION)-linux-x64/resources/$(f))
+		$(foreach f,headlamp-server frontend LICENSE NOTICE .plugins/app-catalog .plugins/prometheus,Headlamp-$(HEADLAMP_VERSION)-linux-x64/resources/$(f))
+	mv dist/stage/share/kubehenge/headlamp/.plugins dist/stage/share/kubehenge/headlamp/static-plugins
 	cp $(addprefix appliance/,$(UNITS)) dist/stage/share/kubehenge/appliance/
 	mkdir -p dist/stage/share/kubehenge/pve-entry
 	cp $(addprefix appliance/pve-entry/,install.sh kubehenge-entry.js README.md) dist/stage/share/kubehenge/pve-entry/
@@ -264,6 +267,10 @@ e2e-cluster-mesh:
 # test/e2e/node-image-refresh.sh.
 e2e-node-image-refresh:
 	test/e2e/node-image-refresh.sh
+
+# Against the management cluster in KUBECONFIG; settings in test/e2e/autoscaler.sh.
+e2e-autoscaler:
+	test/e2e/autoscaler.sh
 
 # Settings come from KUBEHENGE_PROXMOX_* and KUBEHENGE_E2E_*; see pkg/templates/e2e_test.go.
 e2e-templates:

@@ -7,9 +7,12 @@ import type {
   ClusterClass,
   ClusterHealth,
   ClusterRef,
+  ClusterEtcdSnapshots,
   CreateRequest,
+  EtcdRestorePlan,
   HARules,
   Job,
+  ManagementAutomatic,
   ManagementSettings,
   PodLogs,
   PveNode,
@@ -150,6 +153,13 @@ function remember(s: Session): Session {
 const clusterPath = (ns: string, name: string): string =>
   `/api/clusters/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`;
 
+/**
+ * etcdSnapshotURL is where a cluster's snapshot downloads decrypted. A download asks for no change,
+ * so a plain link fetches it and the browser streams it to disk, whatever its size.
+ */
+export const etcdSnapshotURL = (ns: string, name: string, snapshot: string): string =>
+  `${clusterPath(ns, name)}/etcd-snapshots/${encodeURIComponent(snapshot)}`;
+
 // A cluster's credential, or with no cluster, the one for every cluster.
 const credentialPath = (purpose: string, cluster?: ClusterRef): string =>
   cluster === undefined
@@ -173,6 +183,11 @@ export interface Api {
   backUp: (ns: string, name: string) => Promise<BackupRun>;
   /** restore brings back a backup: of the namespaces named, or of every one when none is. */
   restore: (ns: string, name: string, req: { backup: string; namespaces: string[] }) => Promise<RestoreRun>;
+  etcdSnapshots: (ns: string, name: string) => Promise<ClusterEtcdSnapshots>;
+  takeEtcdSnapshot: (ns: string, name: string) => Promise<void>;
+  etcdRestorePlan: (ns: string, name: string, snapshot: string) => Promise<EtcdRestorePlan>;
+  /** restoreEtcd asks the controller to take the cluster's etcd back to a snapshot. */
+  restoreEtcd: (ns: string, name: string, snapshot: string) => Promise<void>;
 
   setupStatus: () => Promise<SetupStatus>;
   /** rootPassword is root@pam's for volume snapshots; empty keeps the one stored. */
@@ -200,6 +215,10 @@ export interface Api {
   requestTemplateBuild: (distribution: string, kubernetesVersion?: string) => Promise<void>;
 
   upgradeSettings: (settings: Upgrades["settings"]) => Promise<Upgrades["settings"]>;
+  /** Lets the appliance keep the state passphrase and a token of its own to apply unattended. */
+  automaticManagement: (passphrase: string) => Promise<ManagementAutomatic>;
+  /** Deletes what automaticManagement kept, and its Proxmox VE user. */
+  stopAutomaticManagement: () => Promise<ManagementAutomatic>;
 
   storages: () => Promise<Storage[]>;
   nodes: () => Promise<PveNode[]>;
@@ -227,6 +246,10 @@ export const api: Api = {
   backups: (ns, name) => request("GET", `${clusterPath(ns, name)}/backups`),
   backUp: (ns, name) => request("POST", `${clusterPath(ns, name)}/backups`),
   restore: (ns, name, req) => request("POST", `${clusterPath(ns, name)}/restores`, req),
+  etcdSnapshots: (ns, name) => request("GET", `${clusterPath(ns, name)}/etcd-snapshots`),
+  takeEtcdSnapshot: (ns, name) => act("POST", `${clusterPath(ns, name)}/etcd-snapshots`),
+  etcdRestorePlan: (ns, name, snapshot) => request("GET", `${etcdSnapshotURL(ns, name, snapshot)}/restore-plan`),
+  restoreEtcd: (ns, name, snapshot) => act("POST", `${clusterPath(ns, name)}/etcd-restores`, { snapshot }),
 
   setupStatus: () => request("GET", "/api/setup"),
   setup: (settings, passphrase, rootPassword) =>
@@ -261,6 +284,8 @@ export const api: Api = {
     act("POST", "/api/template-builds", { distribution, kubernetesVersion }),
 
   upgradeSettings: (settings) => request("PUT", "/api/appliance/upgrades/settings", settings),
+  automaticManagement: (passphrase) => request("PUT", "/api/appliance/upgrades/management", { passphrase }),
+  stopAutomaticManagement: () => request("DELETE", "/api/appliance/upgrades/management"),
 
   storages: () => request("GET", "/api/proxmox/storages"),
   nodes: () => request("GET", "/api/proxmox/nodes"),

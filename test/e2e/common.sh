@@ -83,6 +83,25 @@ control_plane_use() {
     done
 }
 
+# control_plane_record <kubeconfig>: until killed, every 15 s, each control plane's memory in use
+# with its five largest containers, and the API server's resident memory and live heap, so a step
+# that leaves a control plane short shows what grew. A server too pressed to answer in 10 s leaves
+# a gap.
+control_plane_record() {
+    while :; do
+        now=$(date -u +%T)
+        for node in $(KUBECONFIG="$1" kubectl --request-timeout=10s get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[*].metadata.name}' 2> /dev/null); do
+            KUBECONFIG="$1" kubectl --request-timeout=10s get --raw "/api/v1/nodes/${node}/proxy/stats/summary" 2> /dev/null |
+                jq -r --arg t "${now}" '"\($t) \(.node.nodeName): \(.node.memory.workingSetBytes / 1048576 | floor) MiB in use; " +
+                    ([.pods[].containers[] | {name, mib: ((.memory.workingSetBytes // 0) / 1048576 | floor)}] | sort_by(-.mib) | .[:5] | map("\(.name) \(.mib)") | join(", "))' || true
+        done
+        KUBECONFIG="$1" kubectl --request-timeout=10s get --raw /metrics 2> /dev/null |
+            awk -v t="${now}" '/^process_resident_memory_bytes / { r = $2 } /^go_memstats_heap_inuse_bytes / { h = $2 } /^go_memstats_next_gc_bytes / { g = $2 }
+                END { if (r) printf "%s API server: %d MiB resident, %d MiB of heap in use, next collection at %d MiB\n", t, r / 1048576, h / 1048576, g / 1048576 }' || true
+        sleep 15
+    done
+}
+
 # absent <kubectl get command...>: whether the API server answers that the object does not exist.
 # Any other failure, an unreachable server among them, is not taken for absence.
 absent() {

@@ -44,6 +44,7 @@ metadata:
     # root@pam's password for it.
     kubehenge.dev/volume-snapshots: "true"
     {{- end }}
+    {{- include "kubehenge.etcdRestore" . | nindent 4 }}
 spec:
   infrastructure:
     templateRef:
@@ -86,6 +87,7 @@ spec:
     {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 2 "workerMinMemoryMiB" 4096 "clusters" .Values.clusters) | nindent 4 }}
     {{- include "kubehenge.addonVariables" . | nindent 4 }}
     {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
+    {{- include "kubehenge.autoscalerVariable" . | nindent 4 }}
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
     {{- include "kubehenge.cisVariable" . | nindent 4 }}
     - name: cni
@@ -117,6 +119,11 @@ spec:
               valueFrom:
                 template: |
                   {{- include "kubehenge.admissionFile" (dict "root" . "path" "/etc/rancher/rke2/pod-security.yaml") | nindent 18 }}
+            - op: add
+              path: /spec/template/spec/serverConfig/kubeAPIServer/extraEnv
+              valueFrom:
+                template: |
+                  GOMEMLIMIT: {{ include "kubehenge.apiServerMemoryLimit" (dict "share" 40) }}
             # The file is on the control planes before RKE2 starts, so its Traefik never runs on
             # RKE2's own values. RKE2's Traefik tolerates no taint, so it would leave the control planes once a
             # worker joins, and the cluster's API address would serve no ingress. Routes whose TLS
@@ -157,6 +164,22 @@ spec:
               path: /spec/template/spec/serverConfig/cni
               valueFrom:
                 variable: cni
+    # The RKE2 provider's own etcd.backupConfig would write the store's keys into the servers'
+    # bootstrap data and skip verifying its certificate unless told otherwise.
+    - name: rke2-etcd-upload
+      enabledIf: {{ include "kubehenge.etcdUploadEnabled" . }}
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: RKE2ControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/files/-
+              valueFrom:
+                template: |
+                  {{- include "kubehenge.etcdUploadFile" (dict "path" "/etc/rancher/rke2/config.yaml.d/60-kubehenge-etcd-s3.yaml") | nindent 18 }}
     - name: rke2-oidc
       enabledIf: {{ include "kubehenge.oidcEnabled" . }}
       definitions:
@@ -259,6 +282,7 @@ template:
     files:
       {{- include "kubehenge.sysctlFile" . | nindent 6 }}
       {{- include "kubehenge.runcProfileFile" (dict "distribution" "rke2") | nindent 6 }}
+      {{- include "kubehenge.removedServerFile" (dict "distribution" "rke2") | nindent 6 }}
       {{- include "kubehenge.auditPolicyFile" (dict "root" . "path" "/etc/rancher/rke2/audit-policy.yaml") | nindent 6 }}
       # Given a policy, RKE2 audits the API server and keeps a month of the log.
       - path: /etc/rancher/rke2/config.yaml.d/50-kubehenge-audit.yaml

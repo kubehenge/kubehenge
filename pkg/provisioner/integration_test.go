@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -989,6 +990,38 @@ func TestIntegrationChartVolumeSnapshots(t *testing.T) {
 		secret := strings.Contains(args, "--root-secret=kubehenge-root-pam")
 		if secret != on || strings.Contains(args, "--root-secret") != on || classes != len(classProviders) {
 			t.Errorf("volume snapshots %t: the controller gets the Secret: %t; %d classes", on, secret, classes)
+		}
+	}
+}
+
+// Only a management cluster that restores through the guest agent hands the controller the restore
+// token, and its classes say so for the interface to offer the restore.
+func TestIntegrationChartEtcdRestore(t *testing.T) {
+	t.Parallel()
+	for _, on := range []bool{false, true} {
+		values := []string{"testdata/integration-values.yaml"}
+		if on {
+			values = append(values, "testdata/etcd-restore-values.yaml")
+		}
+		var token bool
+		classes := 0
+		for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, values...) {
+			switch o.GetKind() {
+			case "ClusterClass":
+				if got := o.GetAnnotations()[AutomaticRestoreAnnotation]; got != strconv.FormatBool(on) {
+					t.Errorf("restore %t: %s says %q", on, o.GetName(), got)
+				}
+				classes++
+			case "Deployment":
+				containers, _, err := unstructured.NestedSlice(o.Object, "spec", "template", "spec", "containers")
+				if err != nil {
+					t.Fatal(err)
+				}
+				token = token || strings.Contains(fmt.Sprint(containers), "KUBEHENGE_PROXMOX_RESTORE_TOKEN")
+			}
+		}
+		if token != on || classes != len(classProviders) {
+			t.Errorf("restore %t: the controller gets the restore token: %t; %d classes", on, token, classes)
 		}
 	}
 }

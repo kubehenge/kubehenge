@@ -36,6 +36,7 @@ type Accounts interface {
 	Resources
 	Guests
 	Removals
+	Upgraders
 }
 
 // SignIns are the Proxmox VE sign-ins the interface's sessions rest on.
@@ -122,7 +123,9 @@ type Server struct {
 	// ConnectWorkload reaches a workload cluster's API server with the token of one of Kubehenge's
 	// identities in it; unset, it connects over HTTPS trusting the cluster's CA alone.
 	ConnectWorkload func(server string, ca []byte, token string) (*Workload, error)
-	Log             *slog.Logger
+	// OpenStore reaches the backup targets clusters' etcd snapshots are in; unset, over HTTPS.
+	OpenStore provisioner.OpenStore
+	Log       *slog.Logger
 
 	sessions   *sessions
 	limiter    *limiter
@@ -180,6 +183,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/appliance/upgrades", s.signedIn(s.upgradesStatus))
 	mux.HandleFunc("POST /api/appliance/upgrades", s.signedIn(s.upgrade))
 	mux.HandleFunc("PUT /api/appliance/upgrades/settings", s.signedIn(s.upgradeSettings))
+	mux.HandleFunc("PUT /api/appliance/upgrades/management", s.signedIn(s.keepUnattended))
+	mux.HandleFunc("DELETE /api/appliance/upgrades/management", s.signedIn(s.forgetUnattended))
 	mux.HandleFunc("GET /api/templates", s.signedIn(s.listTemplates))
 	mux.HandleFunc("POST /api/templates", s.signedIn(s.createTemplate))
 	mux.HandleFunc("DELETE /api/templates/{vmid}", s.signedIn(s.deleteTemplate))
@@ -191,6 +196,20 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/versions/{distribution}", s.signedIn(s.versions))
 	mux.HandleFunc("GET /api/clusters", s.managed(s.listClusters))
 	mux.HandleFunc("POST /api/clusters", s.managed(s.createCluster))
+	s.clusterRoutes(mux)
+	mux.HandleFunc("GET /api/credentials/{purpose}", s.managed(s.applianceCredential))
+	mux.HandleFunc("PUT /api/credentials/{purpose}", s.managed(s.storeApplianceCredential))
+	mux.HandleFunc("DELETE /api/credentials/{purpose}", s.managed(s.removeApplianceCredential))
+
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusNotFound, "no such API")
+	})
+	mux.HandleFunc("/", s.assets)
+	return securityHeaders(mux)
+}
+
+// clusterRoutes are the routes of one cluster.
+func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}", s.managed(s.getCluster))
 	mux.HandleFunc("PATCH /api/clusters/{namespace}/{name}", s.managed(s.changeCluster))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}", s.managed(s.deleteCluster))
@@ -201,18 +220,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/backups", s.managed(s.backUp))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/restores", s.managed(s.restore))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/certificates/ca", s.managed(s.ingressCA))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/etcd-snapshots", s.managed(s.etcdSnapshots))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/etcd-snapshots", s.managed(s.takeEtcdSnapshot))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/etcd-snapshots/{snapshot}", s.managed(s.downloadEtcdSnapshot))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/etcd-snapshots/{snapshot}/restore-plan", s.managed(s.etcdRestorePlan))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/etcd-restores", s.managed(s.restoreEtcd))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.clusterCredential))
 	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.storeClusterCredential))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.removeClusterCredential))
-	mux.HandleFunc("GET /api/credentials/{purpose}", s.managed(s.applianceCredential))
-	mux.HandleFunc("PUT /api/credentials/{purpose}", s.managed(s.storeApplianceCredential))
-	mux.HandleFunc("DELETE /api/credentials/{purpose}", s.managed(s.removeApplianceCredential))
-
-	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
-		writeError(w, http.StatusNotFound, "no such API")
-	})
-	mux.HandleFunc("/", s.assets)
-	return securityHeaders(mux)
 }
 
 func (s *Server) init() {

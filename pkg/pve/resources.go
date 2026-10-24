@@ -43,6 +43,10 @@ type Storage struct {
 type Node struct {
 	Node   string `json:"node"`
 	Online bool   `json:"online"`
+	// Memory is what the node uses and MaxMemory what it has, in bytes, 0 where Proxmox VE does not
+	// say, as for a node that is down.
+	Memory    int64 `json:"memory,omitempty"`
+	MaxMemory int64 `json:"maxMemory,omitempty"`
 }
 
 // Bridge is a Linux or Open vSwitch bridge on a node.
@@ -159,13 +163,15 @@ func (a *Accounts) Nodes(ctx context.Context, t *Ticket) ([]Node, error) {
 	var res []struct {
 		Node   string `json:"node"`
 		Status string `json:"status"`
+		Mem    int64  `json:"mem"`
+		MaxMem int64  `json:"maxmem"`
 	}
 	if err := a.get(ctx, t, "/cluster/resources?type=node", &res); err != nil {
 		return nil, err
 	}
 	nodes := make([]Node, 0, len(res))
 	for _, r := range res {
-		nodes = append(nodes, Node{Node: r.Node, Online: r.Status == "online"})
+		nodes = append(nodes, Node{Node: r.Node, Online: r.Status == "online", Memory: r.Mem, MaxMemory: r.MaxMem})
 	}
 	return nodes, nil
 }

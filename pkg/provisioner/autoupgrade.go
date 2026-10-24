@@ -17,6 +17,7 @@ import (
 	"github.com/luthermonson/go-proxmox"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -580,9 +581,10 @@ func ClassBuilds(ctx context.Context, r client.Reader, c *clusterv1.Cluster) (No
 }
 
 // settled tells whether a cluster is available with nothing rolling out, so an upgrade starts
-// from a known good state and never stacks on another.
+// from a known good state and never stacks on another, nor on a restore.
 func settled(c *clusterv1.Cluster) bool {
-	if !meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.AvailableCondition) ||
+	if RestoreInProgress(c) || ptr.Deref(c.Spec.Paused, false) ||
+		!meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.AvailableCondition) ||
 		!meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.ClusterTopologyReconciledCondition) ||
 		c.Status.ObservedGeneration != c.Generation {
 		return false

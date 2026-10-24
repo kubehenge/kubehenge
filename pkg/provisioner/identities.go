@@ -3,6 +3,8 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
@@ -11,6 +13,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -19,11 +23,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
-// Identity is one of the identities the interface reaches inside a workload cluster with: a
-// ServiceAccount there named kubehenge-<identity>, whose token is kept beside the Cluster in the
-// Secret <cluster>-<identity>. Each does one job, so that what serves one purpose cannot do
-// another's whatever the interface does with it, and the workload cluster's audit log tells them
-// apart. None may read a Secret or exec.
+// Identity is one of the identities the interface and the cluster autoscaler reach inside a
+// workload cluster with: a ServiceAccount there named kubehenge-<identity>, whose token is kept in
+// a Secret of the management cluster. Each does one job, so that what serves one purpose cannot do
+// another's whatever the holder does with it, and the workload cluster's audit log tells them
+// apart. None may read a Secret or exec; the tokens IdentityHeadlampIssuer makes are another
+// account's.
 type Identity string
 
 const (
@@ -37,16 +42,39 @@ const (
 	IdentityBackups Identity = "backups"
 	// IdentityRestores starts a restore, for those the interface lets restore.
 	IdentityRestores Identity = "restores"
+	// IdentityAutoscaler is the cluster autoscaler's: it reads what it simulates the scheduler over,
+	// drains and taints the nodes it removes, and reports on itself.
+	IdentityAutoscaler Identity = "autoscaler"
+	// IdentityHeadlampIssuer makes tokens of HeadlampAccount and does nothing else, for the shared
+	// Headlamp to sign those in as who may download the cluster's admin kubeconfig.
+	IdentityHeadlampIssuer Identity = "headlamp-issuer"
 )
+
+// HeadlampAccount is the ServiceAccount in kube-system the shared Headlamp signs people in to a
+// cluster as, bound to cluster-admin. IdentityHeadlampIssuer makes its tokens, one per session, and
+// none is kept beside the Cluster.
+const HeadlampAccount = "kubehenge-headlamp"
+
+// roleKind is the kind of an RBAC Role, which k8s.io/api/rbac/v1 names no constant for.
+const roleKind = "Role"
 
 // IdentitySecretName is the Secret beside a Cluster holding one of its identities' tokens.
 func IdentitySecretName(cluster string, id Identity) string { return cluster + "-" + string(id) }
+
+// mountedSecretName names a mounted identity's Secret in the namespace of the pods that mount it,
+// which hold those of every cluster.
+func mountedSecretName(cluster client.ObjectKey, id Identity) string {
+	return qualifiedName(cluster.Namespace, cluster.Name) + "-" + string(id)
+}
 
 // The keys of an identity's Secret: the workload cluster's API server, its CA and the token.
 const (
 	IdentityServerKey = "server"
 	IdentityCAKey     = "ca.crt"
 	IdentityTokenKey  = "token"
+	// IdentityKubeconfigKey holds, in a mounted identity's Secret, a kubeconfig that reads the CA and
+	// the token from the files beside it.
+	IdentityKubeconfigKey = "kubeconfig"
 	// IdentityExpiresAnnotation is when an identity's token runs out, in RFC 3339.
 	IdentityExpiresAnnotation = "kubehenge.dev/token-expires"
 )
@@ -65,13 +93,30 @@ type workloadIdentity struct {
 	id Identity
 	// namespace holds the ServiceAccount; the identity waits while it does not exist.
 	namespace string
-	// clusterWide grants the rules with a ClusterRole, which rules on nodes and the API server's
-	// paths need; otherwise with a Role in the namespace.
-	clusterWide bool
-	rules       []rbacv1.PolicyRule
+	// clusterRules are granted with a ClusterRole, which rules on nodes and the API server's paths
+	// need; rules with a Role in the namespace.
+	clusterRules []rbacv1.PolicyRule
+	rules        []rbacv1.PolicyRule
+	// issues is an account beside the identity whose tokens it makes: created before the identity,
+	// and deleted before it, which ends every token made of the account.
+	issues *issuedAccount
 	// wanted says whether a cluster has the identity. One that no longer does loses its Secret;
-	// what it is in the workload cluster goes with its namespace.
-	wanted func(*clusterv1.Cluster) (bool, error)
+	// what it is in the workload cluster goes with its namespace, or with what uses it there,
+	// unless deleteInside says otherwise.
+	wanted func(*WorkloadIdentities, *clusterv1.Cluster) (bool, error)
+	// deleteInside has an identity no longer wanted deleted from inside the workload cluster before
+	// its Secret goes, for a namespace that stays.
+	deleteInside bool
+	// mounted keeps the Secret for a pod in the management cluster to mount, in
+	// WorkloadIdentities.MountNamespace, as a pod mounts Secrets of its own namespace alone. It
+	// carries a kubeconfig too, which client-go reads the token through as the token changes.
+	mounted bool
+}
+
+// issuedAccount is a ServiceAccount bound to a ClusterRole the workload cluster has of its own.
+type issuedAccount struct {
+	name        string
+	clusterRole string
 }
 
 func (w *workloadIdentity) account() string { return "kubehenge-" + string(w.id) }
@@ -79,8 +124,8 @@ func (w *workloadIdentity) account() string { return "kubehenge-" + string(w.id)
 // workloadIdentities are the identities kept in every workload cluster that wants them.
 var workloadIdentities = []workloadIdentity{
 	{
-		id: IdentityHealth, namespace: metav1.NamespaceSystem, clusterWide: true, wanted: always,
-		rules: []rbacv1.PolicyRule{
+		id: IdentityHealth, namespace: metav1.NamespaceSystem, wanted: always,
+		clusterRules: []rbacv1.PolicyRule{
 			{APIGroups: []string{""}, Resources: []string{"nodes", "pods", "events", "persistentvolumeclaims"}, Verbs: []string{"get", "list"}},
 			{APIGroups: []string{"events.k8s.io"}, Resources: []string{"events"}, Verbs: []string{"get", "list"}},
 			{NonResourceURLs: []string{"/readyz", "/readyz/*"}, Verbs: []string{"get"}},
@@ -88,8 +133,8 @@ var workloadIdentities = []workloadIdentity{
 	},
 	{
 		// The logs and no pod itself.
-		id: IdentityLogs, namespace: metav1.NamespaceSystem, clusterWide: true, wanted: always,
-		rules: []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"pods/log"}, Verbs: []string{"get"}}},
+		id: IdentityLogs, namespace: metav1.NamespaceSystem, wanted: always,
+		clusterRules: []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"pods/log"}, Verbs: []string{"get"}}},
 	},
 	{
 		// The provisioner makes the velero namespace before Velero's chart, and removes it with
@@ -108,23 +153,72 @@ var workloadIdentities = []workloadIdentity{
 			{APIGroups: []string{veleroAPIGroup}, Resources: []string{"restores"}, Verbs: []string{"create"}},
 		},
 	},
+	{
+		// The autoscaler beside the cluster in the management cluster mounts its token. One inside the
+		// cluster runs as the same account, which the AutoscalerReconciler keeps there itself and
+		// removes with the autoscaler.
+		id: IdentityAutoscaler, namespace: metav1.NamespaceSystem, wanted: autoscalesBeside, mounted: true,
+		clusterRules: autoscalerWorkloadRules, rules: autoscalerStatusRules,
+	},
+	{
+		// Its own token goes beside the Cluster like the others'; the tokens it makes are cluster-admin
+		// and stay in the interface's memory, one per session.
+		id: IdentityHeadlampIssuer, namespace: metav1.NamespaceSystem, wanted: signsInToHeadlamp, deleteInside: true,
+		issues: &issuedAccount{name: HeadlampAccount, clusterRole: "cluster-admin"},
+		rules: []rbacv1.PolicyRule{{
+			APIGroups: []string{""}, Resources: []string{"serviceaccounts/token"}, ResourceNames: []string{HeadlampAccount}, Verbs: []string{"create"},
+		}},
+	},
 }
 
-func always(*clusterv1.Cluster) (bool, error) { return true, nil }
+// identityOf is the identity kept as id.
+func identityOf(id Identity) *workloadIdentity {
+	for i := range workloadIdentities {
+		if workloadIdentities[i].id == id {
+			return &workloadIdentities[i]
+		}
+	}
+	panic("no identity " + string(id))
+}
 
-func backsUp(cluster *clusterv1.Cluster) (bool, error) {
+func always(*WorkloadIdentities, *clusterv1.Cluster) (bool, error) { return true, nil }
+
+func backsUp(_ *WorkloadIdentities, cluster *clusterv1.Cluster) (bool, error) {
 	b, _, err := optionalVariable[Backups](cluster, backupsVariable)
 	return b.Enabled, err
 }
 
-// WorkloadIdentities keeps the interface's identities in every workload cluster that wants them,
-// and short-lived tokens for them in Secrets beside the Cluster, which the interface reads. A token
-// is made only with the TokenRequest API, never stored in the workload cluster, and lasts an hour.
+// autoscalesBeside says whether the cluster's autoscaler runs in the management cluster.
+func autoscalesBeside(_ *WorkloadIdentities, cluster *clusterv1.Cluster) (bool, error) {
+	if !autoscaled(cluster) {
+		return false, nil
+	}
+	s, err := autoscalerSettingsOf(cluster)
+	return s.Placement == PlacementManagement, err
+}
+
+// signsInToHeadlamp says whether the shared Headlamp signs people in to the cluster: one of the
+// interface's, with the sign-in on.
+func signsInToHeadlamp(w *WorkloadIdentities, cluster *clusterv1.Cluster) (bool, error) {
+	return slices.Contains(w.HeadlampNamespaces, cluster.Namespace), nil
+}
+
+// WorkloadIdentities keeps the identities in every workload cluster that wants them, and
+// short-lived tokens for them in Secrets of the management cluster, which the interface reads and
+// the autoscalers mount. A token is made only with the TokenRequest API, never stored in the
+// workload cluster, and lasts an hour.
 type WorkloadIdentities struct {
 	Client         client.Client
 	ClassNamespace string
+	// MountNamespace holds the Secrets of the mounted identities, beside the pods that mount them:
+	// the autoscalers' namespace.
+	MountNamespace string
 	// Remotes reaches the workload clusters.
 	Remotes *Remotes
+	// HeadlampNamespaces are the interface's namespaces, whose clusters the shared Headlamp signs
+	// people in to with IdentityHeadlampIssuer. With none, it signs nobody in, and the identity is
+	// taken out of every cluster that has it.
+	HeadlampNamespaces []string
 
 	now func() time.Time
 }
@@ -151,21 +245,36 @@ func (w *WorkloadIdentities) Reconcile(ctx context.Context, req ctrl.Request) (c
 	cluster := &clusterv1.Cluster{}
 	if err := w.Client.Get(ctx, req.NamespacedName, cluster); err != nil {
 		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, nil
+			return ctrl.Result{}, w.removeMounted(ctx, req.NamespacedName)
 		}
 		return ctrl.Result{}, fmt.Errorf("reading cluster %s: %w", req.NamespacedName, err)
 	}
-	if !Owns(cluster, w.ClassNamespace) || !cluster.DeletionTimestamp.IsZero() {
+	if !Owns(cluster, w.ClassNamespace) {
 		return ctrl.Result{}, nil
 	}
-	wanted, err := w.removeUnwanted(ctx, cluster)
-	if err != nil || len(wanted) == 0 {
+	// The other Secrets are the Cluster's and go with it.
+	if !cluster.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, w.removeMounted(ctx, req.NamespacedName)
+	}
+	wanted, removed, err := w.removeUnwanted(ctx, cluster)
+	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if !removed {
+		return ctrl.Result{RequeueAfter: waitInterval}, nil
+	}
+	if len(wanted) == 0 {
+		return ctrl.Result{}, nil
 	}
 	// Until then the API server may not answer, and a node or pod to read is yet to come.
 	if !meta.IsStatusConditionTrue(cluster.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition) {
 		return ctrl.Result{RequeueAfter: waitInterval}, nil
 	}
+	return w.renewDue(ctx, cluster, wanted)
+}
+
+// renewDue renews the tokens of the identities that are due, and says when to look again.
+func (w *WorkloadIdentities) renewDue(ctx context.Context, cluster *clusterv1.Cluster, wanted []*workloadIdentity) (ctrl.Result, error) {
 	due, next, err := w.renewalDue(ctx, cluster, wanted, w.clock())
 	if err != nil || len(due) == 0 {
 		return ctrl.Result{RequeueAfter: next}, err
@@ -189,7 +298,7 @@ func (w *WorkloadIdentities) Reconcile(ctx context.Context, req ctrl.Request) (c
 	return ctrl.Result{RequeueAfter: next}, nil
 }
 
-// renew puts the identity into the workload cluster and a new token of it beside the Cluster. It
+// renew puts the identity into the workload cluster and a new token of it into its Secret. It
 // reports false while the identity's namespace does not exist.
 func (w *WorkloadIdentities) renew(ctx context.Context, cluster *clusterv1.Cluster, workload remote, id *workloadIdentity) (bool, error) {
 	ready, err := id.ensure(ctx, workload.client)
@@ -200,7 +309,7 @@ func (w *WorkloadIdentities) renew(ctx context.Context, cluster *clusterv1.Clust
 	if !ready {
 		return false, nil
 	}
-	token, expires, err := id.requestToken(ctx, workload.client)
+	token, expires, err := requestToken(ctx, workload.client, id.namespace, id.account())
 	if err != nil {
 		w.Remotes.forget(cluster)
 		return false, err
@@ -208,35 +317,98 @@ func (w *WorkloadIdentities) renew(ctx context.Context, cluster *clusterv1.Clust
 	return true, w.writeToken(ctx, cluster, workload, id, token, expires)
 }
 
-// removeUnwanted deletes the Secrets of the identities the cluster no longer wants, and returns
-// those it does.
-func (w *WorkloadIdentities) removeUnwanted(ctx context.Context, cluster *clusterv1.Cluster) ([]*workloadIdentity, error) {
+// secretKey is where the cluster's Secret of the identity is kept.
+func (w *WorkloadIdentities) secretKey(cluster client.ObjectKey, id *workloadIdentity) client.ObjectKey {
+	if id.mounted {
+		return client.ObjectKey{Namespace: w.MountNamespace, Name: mountedSecretName(cluster, id.id)}
+	}
+	return client.ObjectKey{Namespace: cluster.Namespace, Name: IdentitySecretName(cluster.Name, id.id)}
+}
+
+// removeUnwanted deletes the identities the cluster no longer wants, and returns those it does. It
+// reports false while one still has to be deleted from a workload cluster it cannot reach.
+func (w *WorkloadIdentities) removeUnwanted(ctx context.Context, cluster *clusterv1.Cluster) ([]*workloadIdentity, bool, error) {
 	var wanted []*workloadIdentity
+	removed := true
 	for i := range workloadIdentities {
 		id := &workloadIdentities[i]
-		on, err := id.wanted(cluster)
+		on, err := id.wanted(w, cluster)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if on {
 			wanted = append(wanted, id)
 			continue
 		}
-		// Read first, so that a cluster that never had the identity costs no delete on every reconcile.
-		name := IdentitySecretName(cluster.Name, id.id)
-		s := &corev1.Secret{}
-		err = w.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: name}, s)
-		if apierrors.IsNotFound(err) {
-			continue
-		}
+		gone, err := w.removeIdentity(ctx, cluster, id)
 		if err != nil {
-			return nil, fmt.Errorf("reading Secret %s: %w", name, err)
+			return nil, false, err
 		}
-		if err := client.IgnoreNotFound(w.Client.Delete(ctx, s, client.Preconditions{UID: &s.UID})); err != nil {
-			return nil, fmt.Errorf("deleting Secret %s: %w", name, err)
+		removed = removed && gone
+	}
+	return wanted, removed, nil
+}
+
+// removeIdentity deletes an identity no longer wanted: from the workload cluster where it says so,
+// then its Secret, which tells that it was made. It reports false while the workload cluster cannot
+// be reached, with the Secret kept to try again.
+func (w *WorkloadIdentities) removeIdentity(ctx context.Context, cluster *clusterv1.Cluster, id *workloadIdentity) (bool, error) {
+	key := w.secretKey(client.ObjectKeyFromObject(cluster), id)
+	// Read first, so that a cluster that never had the identity costs no delete on every reconcile.
+	s := &corev1.Secret{}
+	err := w.Client.Get(ctx, key, s)
+	if apierrors.IsNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reading Secret %s: %w", key, err)
+	}
+	if id.deleteInside {
+		workload, found, err := w.Remotes.get(ctx, cluster)
+		if err != nil || !found {
+			return false, err
+		}
+		if err := id.remove(ctx, workload.client); err != nil {
+			w.Remotes.forget(cluster)
+			return false, err
 		}
 	}
-	return wanted, nil
+	return true, w.deleteSecret(ctx, key, s)
+}
+
+// removeMounted deletes a cluster's Secrets of the mounted identities, which, outside the Cluster's
+// namespace, it cannot own.
+func (w *WorkloadIdentities) removeMounted(ctx context.Context, cluster client.ObjectKey) error {
+	for i := range workloadIdentities {
+		if id := &workloadIdentities[i]; id.mounted {
+			if err := w.removeSecret(ctx, w.secretKey(cluster, id)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// removeSecret deletes a Secret. It reads first, so that one never made costs no delete on every
+// reconcile.
+func (w *WorkloadIdentities) removeSecret(ctx context.Context, key client.ObjectKey) error {
+	s := &corev1.Secret{}
+	err := w.Client.Get(ctx, key, s)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading Secret %s: %w", key, err)
+	}
+	return w.deleteSecret(ctx, key, s)
+}
+
+// deleteSecret deletes the Secret read, and none made since under its name.
+func (w *WorkloadIdentities) deleteSecret(ctx context.Context, key client.ObjectKey, s *corev1.Secret) error {
+	if err := client.IgnoreNotFound(w.Client.Delete(ctx, s, client.Preconditions{UID: &s.UID})); err != nil {
+		return fmt.Errorf("deleting Secret %s: %w", key, err)
+	}
+	return nil
 }
 
 func (w *WorkloadIdentities) clock() time.Time {
@@ -252,15 +424,13 @@ func (w *WorkloadIdentities) renewalDue(ctx context.Context, cluster *clusterv1.
 	var due []*workloadIdentity
 	next := tokenRenewal
 	for _, id := range ids {
-		name := IdentitySecretName(cluster.Name, id.id)
+		key := w.secretKey(client.ObjectKeyFromObject(cluster), id)
 		s := &corev1.Secret{}
-		err := w.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: name}, s)
-		if err != nil && !apierrors.IsNotFound(err) {
-			return nil, 0, fmt.Errorf("reading Secret %s: %w", name, err)
+		if err := w.Client.Get(ctx, key, s); err != nil && !apierrors.IsNotFound(err) {
+			return nil, 0, fmt.Errorf("reading Secret %s: %w", key, err)
 		}
-		expires, ok := tokenExpiry(s)
-		left := expires.Add(tokenRenewal - tokenLifetime).Sub(now)
-		if err != nil || !ok || left <= 0 {
+		left := tokenLeft(s, now)
+		if left == 0 {
 			due = append(due, id)
 			continue
 		}
@@ -269,30 +439,127 @@ func (w *WorkloadIdentities) renewalDue(ctx context.Context, cluster *clusterv1.
 	return due, next, nil
 }
 
-// tokenExpiry is when an identity's Secret's token runs out, or false when it holds none to go by:
-// one without the annotation, or with one Kubehenge did not write, is made again.
-func tokenExpiry(s *corev1.Secret) (time.Time, bool) {
+// tokenLeft says how long a token's Secret stays fresh, or 0 once a new token is due: tokenRenewal
+// after it was made, or at once for one that holds none to go by, such as one without the
+// annotation, or with one Kubehenge did not write.
+func tokenLeft(s *corev1.Secret, now time.Time) time.Duration {
 	expires, err := time.Parse(time.RFC3339, s.Annotations[IdentityExpiresAnnotation])
-	return expires, err == nil && len(s.Data[IdentityTokenKey]) > 0
+	if err != nil || len(s.Data[IdentityTokenKey]) == 0 {
+		return 0
+	}
+	return max(expires.Add(tokenRenewal-tokenLifetime).Sub(now), 0)
 }
 
-// writeToken keeps a token of the identity, with what reaches the cluster, in its Secret beside the
-// Cluster and owned by it.
+// writeToken keeps a token of the identity, with what reaches the cluster, in its Secret: beside
+// the Cluster and owned by it, or, mounted, labelled with the cluster.
 func (w *WorkloadIdentities) writeToken(ctx context.Context, cluster *clusterv1.Cluster, workload remote, id *workloadIdentity, token string, expires time.Time) error {
-	s := &corev1.Secret{Namespace: cluster.Namespace, Name: IdentitySecretName(cluster.Name, id.id)}
-	return applyOwned(ctx, w.Client, cluster, s, func(got *corev1.Secret) {
-		got.Type = corev1.SecretTypeOpaque
-		got.Data = map[string][]byte{
-			IdentityServerKey: []byte(workload.config.Host),
-			IdentityCAKey:     workload.config.CAData,
-			IdentityTokenKey:  []byte(token),
+	key := client.ObjectKeyFromObject(cluster)
+	at := w.secretKey(key, id)
+	data := tokenData(workload.config.Host, workload.config.CAData, token)
+	s := &corev1.Secret{Namespace: at.Namespace, Name: at.Name}
+	if !id.mounted {
+		return applyOwned(ctx, w.Client, cluster, s, func(got *corev1.Secret) { setToken(got, data, expires) })
+	}
+	if err := withKubeconfig(data); err != nil {
+		return err
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, w.Client, s, func() error {
+		if s.Labels == nil {
+			s.Labels = map[string]string{}
 		}
-		metav1.SetMetaDataAnnotation(&got.ObjectMeta, IdentityExpiresAnnotation, expires.UTC().Format(time.RFC3339))
+		maps.Copy(s.Labels, map[string]string{ClusterNamespaceLabel: key.Namespace, ClusterNameLabel: key.Name})
+		setToken(s, data, expires)
+		return nil
 	})
+	if err != nil {
+		return fmt.Errorf("applying Secret %s: %w", at, err)
+	}
+	return nil
 }
 
-// ensure creates the identity in the workload cluster with its role, and puts back what was changed
-// of them. It reports false, with nothing done, while the identity's namespace does not exist.
+// tokenData is what a token's Secret holds: the token, the server it is for and its CA.
+func tokenData(server string, ca []byte, token string) map[string][]byte {
+	return map[string][]byte{IdentityServerKey: []byte(server), IdentityCAKey: ca, IdentityTokenKey: []byte(token)}
+}
+
+// withKubeconfig adds to a token's data, for a pod to mount, a kubeconfig that reads the CA and the
+// token from the files beside it. client-go resolves a kubeconfig's relative paths against its own
+// directory and reads a token file again as it changes, so a pod takes each new token without a
+// restart.
+func withKubeconfig(data map[string][]byte) error {
+	server := string(data[IdentityServerKey])
+	config := clientcmdapi.NewConfig()
+	config.Clusters["cluster"] = &clientcmdapi.Cluster{Server: server, CertificateAuthority: IdentityCAKey}
+	config.AuthInfos["identity"] = &clientcmdapi.AuthInfo{TokenFile: IdentityTokenKey}
+	config.Contexts["cluster"] = &clientcmdapi.Context{Cluster: "cluster", AuthInfo: "identity"}
+	config.CurrentContext = "cluster"
+	written, err := clientcmd.Write(*config)
+	if err != nil {
+		return fmt.Errorf("writing a kubeconfig for %s: %w", server, err)
+	}
+	data[IdentityKubeconfigKey] = written
+	return nil
+}
+
+// setToken makes a Secret hold a token's data and when the token runs out.
+func setToken(s *corev1.Secret, data map[string][]byte, expires time.Time) {
+	s.Type = corev1.SecretTypeOpaque
+	s.Data = data
+	metav1.SetMetaDataAnnotation(&s.ObjectMeta, IdentityExpiresAnnotation, expires.UTC().Format(time.RFC3339))
+}
+
+// identityObject is one of what an identity is in a workload cluster, with what puts it right.
+type identityObject struct {
+	kind   string
+	obj    client.Object
+	mutate func()
+}
+
+// issuedObjects are the account the identity issues tokens of, with its binding.
+func (w *workloadIdentity) issuedObjects() []identityObject {
+	a := w.issues
+	if a == nil {
+		return nil
+	}
+	sa := &corev1.ServiceAccount{Namespace: w.namespace, Name: a.name}
+	binding := &rbacv1.ClusterRoleBinding{Name: a.name}
+	ref := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: a.clusterRole}
+	subjects := []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: a.name, Namespace: w.namespace}}
+	return []identityObject{
+		{rbacv1.ServiceAccountKind, sa, func() { sa.AutomountServiceAccountToken = new(false) }},
+		{"ClusterRoleBinding", binding, func() { binding.RoleRef, binding.Subjects = ref, subjects }},
+	}
+}
+
+// ownObjects are what the identity itself is in a workload cluster: its ServiceAccount, then each
+// role with its binding.
+func (w *workloadIdentity) ownObjects() []identityObject {
+	account := w.account()
+	subjects := []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: account, Namespace: w.namespace}}
+	sa := &corev1.ServiceAccount{Namespace: w.namespace, Name: account}
+	objects := []identityObject{{rbacv1.ServiceAccountKind, sa, func() { sa.AutomountServiceAccountToken = new(false) }}}
+	if len(w.clusterRules) > 0 {
+		role := &rbacv1.ClusterRole{Name: account}
+		binding := &rbacv1.ClusterRoleBinding{Name: account}
+		ref := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: account}
+		objects = append(objects,
+			identityObject{"ClusterRole", role, func() { role.Rules = w.clusterRules }},
+			identityObject{"ClusterRoleBinding", binding, func() { binding.RoleRef, binding.Subjects = ref, subjects }})
+	}
+	if len(w.rules) > 0 {
+		role := &rbacv1.Role{Namespace: w.namespace, Name: account}
+		binding := &rbacv1.RoleBinding{Namespace: w.namespace, Name: account}
+		ref := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: roleKind, Name: account}
+		objects = append(objects,
+			identityObject{roleKind, role, func() { role.Rules = w.rules }},
+			identityObject{"RoleBinding", binding, func() { binding.RoleRef, binding.Subjects = ref, subjects }})
+	}
+	return objects
+}
+
+// ensure creates the identity in the workload cluster with the account it issues and its roles,
+// and puts back what was changed of them. It reports false, with nothing done, while the
+// identity's namespace does not exist.
 func (w *workloadIdentity) ensure(ctx context.Context, workload client.Client) (bool, error) {
 	if err := workload.Get(ctx, client.ObjectKey{Name: w.namespace}, &corev1.Namespace{}); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -300,46 +567,37 @@ func (w *workloadIdentity) ensure(ctx context.Context, workload client.Client) (
 		}
 		return false, fmt.Errorf("reading namespace %s: %w", w.namespace, err)
 	}
-	account := w.account()
-	subjects := []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: account, Namespace: w.namespace}}
-	type applied struct {
-		kind   string
-		obj    client.Object
-		mutate func()
-	}
-	sa := &corev1.ServiceAccount{Namespace: w.namespace, Name: account}
-	objects := []applied{{"ServiceAccount", sa, func() { sa.AutomountServiceAccountToken = new(false) }}}
-	if w.clusterWide {
-		role := &rbacv1.ClusterRole{Name: account}
-		binding := &rbacv1.ClusterRoleBinding{Name: account}
-		ref := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: account}
-		objects = append(objects,
-			applied{"ClusterRole", role, func() { role.Rules = w.rules }},
-			applied{"ClusterRoleBinding", binding, func() { binding.RoleRef, binding.Subjects = ref, subjects }})
-	} else {
-		role := &rbacv1.Role{Namespace: w.namespace, Name: account}
-		binding := &rbacv1.RoleBinding{Namespace: w.namespace, Name: account}
-		ref := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: account}
-		objects = append(objects,
-			applied{"Role", role, func() { role.Rules = w.rules }},
-			applied{"RoleBinding", binding, func() { binding.RoleRef, binding.Subjects = ref, subjects }})
-	}
-	for _, o := range objects {
+	for _, o := range slices.Concat(w.issuedObjects(), w.ownObjects()) {
 		if _, err := controllerutil.CreateOrUpdate(ctx, workload, o.obj, func() error { o.mutate(); return nil }); err != nil {
-			return false, fmt.Errorf("applying %s %s: %w", o.kind, account, err)
+			return false, fmt.Errorf("applying %s %s: %w", o.kind, o.obj.GetName(), err)
 		}
 	}
 	return true, nil
 }
 
-// requestToken asks the workload cluster for a new token of the identity, and when it runs out.
-func (w *workloadIdentity) requestToken(ctx context.Context, workload client.Client) (string, time.Time, error) {
+// remove deletes the identity from the workload cluster. The account it issues goes first, its
+// binding right after: the API server takes no token of an account that is gone, once its token
+// cache lets go of one it took in the last seconds, and the account's rights go with its binding.
+// Then the identity's own rights, and its account last.
+func (w *workloadIdentity) remove(ctx context.Context, workload client.Client) error {
+	own := w.ownObjects()
+	slices.Reverse(own)
+	for _, o := range slices.Concat(w.issuedObjects(), own) {
+		if err := client.IgnoreNotFound(workload.Delete(ctx, o.obj)); err != nil {
+			return fmt.Errorf("deleting %s %s: %w", o.kind, o.obj.GetName(), err)
+		}
+	}
+	return nil
+}
+
+// requestToken asks a cluster for a new token of a ServiceAccount, good for tokenLifetime, and when
+// it runs out.
+func requestToken(ctx context.Context, c client.Client, namespace, account string) (string, time.Time, error) {
 	req := &authenticationv1.TokenRequest{Spec: authenticationv1.TokenRequestSpec{
 		ExpirationSeconds: new(int64(tokenLifetime / time.Second)),
 	}}
-	account := w.account()
-	sa := &corev1.ServiceAccount{Namespace: w.namespace, Name: account}
-	if err := workload.SubResource("token").Create(ctx, sa, req); err != nil {
+	sa := &corev1.ServiceAccount{Namespace: namespace, Name: account}
+	if err := c.SubResource("token").Create(ctx, sa, req); err != nil {
 		return "", time.Time{}, fmt.Errorf("requesting a token for %s: %w", account, err)
 	}
 	if req.Status.Token == "" {

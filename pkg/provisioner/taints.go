@@ -29,9 +29,9 @@ var controlPlaneTaint = corev1.Taint{Key: controlPlaneRole, Effect: corev1.Taint
 // only in the workload cluster, which is not watched.
 const workerCheckInterval = time.Minute
 
-// TaintReconciler keeps a cluster's control-plane nodes tainted while it has workers, so etcd and
-// the API server do not share their nodes with workloads, and takes the taint off while it has
-// none, so a cluster of control planes alone still runs them.
+// TaintReconciler keeps a cluster's control-plane nodes tainted while it has workers or an
+// autoscaled pool, so etcd and the API server do not share their nodes with workloads, and takes
+// the taint off otherwise, so a cluster of control planes alone still runs them.
 type TaintReconciler struct {
 	Client         client.Client
 	ClassNamespace string
@@ -71,32 +71,34 @@ func (r *TaintReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if !found {
 		return ctrl.Result{RequeueAfter: waitInterval}, nil
 	}
-	if err := taintControlPlanes(ctx, workload.client, wantsWorkers(cluster)); err != nil {
+	if err := taintControlPlanes(ctx, workload.client, wantsWorkers(cluster), autoscaled(cluster)); err != nil {
 		r.Remotes.forget(cluster)
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: workerCheckInterval}, nil
 }
 
-// wantsWorkers tells whether any of the cluster's machine deployments asks for workers. Unset
-// replicas are Cluster API's default of one.
+// wantsWorkers tells whether any of the cluster's machine deployments asks for workers: unset
+// replicas are Cluster API's default of one, and an autoscaled pool asks for its most.
 func wantsWorkers(cluster *clusterv1.Cluster) bool {
 	return slices.ContainsFunc(cluster.Spec.Topology.Workers.MachineDeployments, func(md clusterv1.MachineDeploymentTopology) bool {
-		return md.Replicas == nil || *md.Replicas > 0
+		return workerRange(&md).most > 0
 	})
 }
 
 // taintControlPlanes taints the control-plane nodes once a worker has joined a cluster that wants
 // workers, and takes the taint off otherwise. A worker that is not ready keeps them tainted:
-// moving workloads onto the control planes whenever a worker fails would crowd etcd just then.
-func taintControlPlanes(ctx context.Context, workload client.Client, wantsWorkers bool) error {
+// moving workloads onto the control planes whenever a worker fails would crowd etcd just then. A
+// cluster with an autoscaled pool keeps them tainted before any worker joins too: a workload that
+// finds no room is what has the autoscaler add the first worker.
+func taintControlPlanes(ctx context.Context, workload client.Client, wantsWorkers, autoscaled bool) error {
 	nodes := &corev1.NodeList{}
 	if err := workload.List(ctx, nodes); err != nil {
 		return fmt.Errorf("listing nodes: %w", err)
 	}
 	isControlPlane := func(n corev1.Node) bool { _, ok := n.Labels[controlPlaneRole]; return ok }
 	isTaint := func(t corev1.Taint) bool { return controlPlaneTaint.MatchTaint(&t) }
-	tainted := wantsWorkers && slices.ContainsFunc(nodes.Items, func(n corev1.Node) bool { return !isControlPlane(n) })
+	tainted := autoscaled || wantsWorkers && slices.ContainsFunc(nodes.Items, func(n corev1.Node) bool { return !isControlPlane(n) })
 	for i := range nodes.Items {
 		n := &nodes.Items[i]
 		if !isControlPlane(*n) || slices.ContainsFunc(n.Spec.Taints, isTaint) == tainted {

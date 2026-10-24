@@ -94,10 +94,18 @@ export interface Replicas {
   upToDate: number;
 }
 
+/** The least and the most workers the cluster autoscaler keeps a pool between. */
+export interface Autoscaling {
+  min: number;
+  max: number;
+}
+
 export interface WorkerPool {
   name: string;
   class: string;
+  /** For an autoscaled pool, the workers it asks for at the moment. */
   replicas: number;
+  autoscaling?: Autoscaling;
 }
 
 export interface Machine {
@@ -213,6 +221,7 @@ export interface PoolState {
   upToDate: number;
   rollingOut: boolean;
   message?: string;
+  autoscaling?: Autoscaling;
 }
 
 export interface HealthCheck {
@@ -348,6 +357,9 @@ export interface Storage {
 export interface PveNode {
   node: string;
   online: boolean;
+  /** Memory in use and in all, in bytes, while the node is online. */
+  memory?: number;
+  maxMemory?: number;
 }
 
 /** HARule is an enabled HA node-affinity rule of Proxmox VE, offered as a place for a cluster. */
@@ -403,6 +415,8 @@ export interface ManagementSettings {
   /** Clusters may choose the CSI plugin's newest release, with Datastore.Allocate on their storage. */
   clusterDatastoreAllocate?: boolean;
   backupTargets?: BackupTarget[];
+  /** The controller restores clusters' etcd through the Proxmox VE guest agent. */
+  etcdRestore?: boolean;
   /** The weekly build of the Ubuntu VM templates; absent, it runs with its defaults. */
   templateRefresh?: TemplateRefreshSettings;
   /** Clusters may choose the cloud controller manager's HA group labels, with Sys.Audit on / for their token. */
@@ -411,6 +425,10 @@ export interface ManagementSettings {
   clusterVolumeSnapshots?: boolean;
   /** More namespaces the interface creates and manages clusters in, beside its own. */
   extraClusterNamespaces?: string[];
+  /** The shared Headlamp signs those who may download a cluster's kubeconfig in as cluster-admin. */
+  headlampSignIn?: boolean;
+  /** The shared Headlamp offers its Helm app catalog and Prometheus charts, with each user's own credentials. */
+  headlampActions?: boolean;
 }
 
 /** When and where the Ubuntu VM templates are built again; empty fields take the defaults. */
@@ -497,8 +515,91 @@ export interface ClusterBackups {
   canRestore: boolean;
 }
 
+/** An etcd snapshot of a cluster, as it is stored in the target. */
+export interface EtcdSnapshot {
+  name: string;
+  time: string;
+  kubernetesVersion?: string;
+  distribution?: string;
+  revision?: number;
+  etcdVersion?: string;
+  /** Of the snapshot before it was encrypted. */
+  sha256?: string;
+  size?: number;
+  storedSize?: number;
+}
+
+export type EtcdRestorePhase =
+  | "Preparing"
+  | "Fetching"
+  | "Stopping"
+  | "Restoring"
+  | "Starting"
+  | "Replacing"
+  | "Succeeded"
+  | "Failed";
+
+/** How a restore of a cluster's etcd went, or is going. */
+export interface EtcdRestoreStatus {
+  snapshot: string;
+  by?: string;
+  requestedAt: string;
+  phase: EtcdRestorePhase;
+  /** The control-plane machine etcd is restored on, and its node. */
+  machine?: string;
+  node?: string;
+  /** The other control-plane machines, replaced once etcd is back. */
+  replaced?: string[];
+  message?: string;
+  started: string;
+  finished?: string;
+}
+
+/** What the backups view shows of a cluster's etcd snapshots. */
+export interface ClusterEtcdSnapshots {
+  enabled: boolean;
+  target?: string;
+  schedule?: string;
+  timeZone?: string;
+  keep?: number;
+  /** Set while RKE2's or k3s's servers also upload snapshots of their own to the target. */
+  distributionUpload?: boolean;
+  last?: EtcdSnapshot;
+  condition?: Condition;
+  /** A snapshot asked for has not been taken yet. */
+  requested: boolean;
+  snapshots: EtcdSnapshot[];
+  message?: string;
+  restore?: EtcdRestoreStatus;
+  restoring: boolean;
+  /** The controller restores through the guest agent; otherwise the steps are done by hand. */
+  automatic: boolean;
+  /** VM.Allocate on the cluster's pool. */
+  canSnapshot: boolean;
+  /** Sys.Modify on the cluster's pool. */
+  canRestore: boolean;
+}
+
+/** One step of restoring a cluster's etcd by hand. */
+export interface EtcdRestoreStep {
+  title: string;
+  /** Where the command runs: a node, or wherever kubectl reaches the management cluster. */
+  where: string;
+  command: string;
+}
+
+/** The steps that restore a cluster's etcd from a snapshot by hand. */
+export interface EtcdRestorePlan {
+  snapshot: EtcdSnapshot;
+  distribution: string;
+  steps: EtcdRestoreStep[];
+  replaced?: string[];
+}
+
 export interface Job {
   user: string;
+  /** A run the appliance started on its own, as user, in an automatic upgrade. */
+  automatic?: boolean;
   kind?: "apply" | "remove" | "template";
   started: string;
   finished?: string;
@@ -526,6 +627,36 @@ export interface SetupStatus {
   proxmoxInsecure?: boolean;
   /** An earlier run left its encrypted state, so the setup takes that run's passphrase. */
   resumes?: boolean;
+  /** Which release last applied the management cluster, and what applying this one changes. */
+  upgrade?: ManagementUpgrade;
+}
+
+/** A component of the management cluster whose version applying the appliance's release changes. */
+export interface VersionChange {
+  /** The module's name for it, such as talos or cluster_api. */
+  component: string;
+  from?: string;
+  to?: string;
+}
+
+export interface ManagementUpgrade {
+  /** The release that last applied the management cluster. */
+  applied: string;
+  /** The appliance's own release. */
+  carried: string;
+  behind: boolean;
+  changes?: VersionChange[];
+}
+
+/** Whether the management cluster follows the appliance's upgrades on its own. */
+export interface ManagementAutomatic {
+  /** There is a management cluster to upgrade. */
+  possible: boolean;
+  on: boolean;
+  by?: string;
+  since?: string;
+  /** The Proxmox VE user the runs act as. */
+  user: string;
 }
 
 export type UpgradePolicy = "off" | "patch" | "minor";
@@ -624,6 +755,8 @@ export interface Upgrades {
     time: string;
     error?: string;
   };
+  /** Absent outside the appliance. */
+  management?: ManagementAutomatic;
 }
 
 export interface CreateRequest {
@@ -634,6 +767,8 @@ export interface CreateRequest {
   version: string;
   controlPlaneReplicas: number;
   workerReplicas: number;
+  /** Has the cluster autoscaler size the worker pool in place of workerReplicas. */
+  workerAutoscaling?: Autoscaling;
   variables: Record<string, unknown>;
   pods?: string[];
   services?: string[];
@@ -643,5 +778,15 @@ export interface ChangeRequest {
   version?: string;
   controlPlaneReplicas?: number;
   workerPools?: Record<string, number>;
+  /** Switches autoscaling on for pools by name, or off with null. */
+  autoscaling?: Record<string, Autoscaling | null>;
   variables?: Record<string, unknown>;
+}
+
+/** The autoscaler variable: where the cluster autoscaler runs and how it scales. */
+export interface AutoscalerSettings {
+  placement?: "management" | "workload";
+  expander?: "least-waste" | "most-pods" | "random";
+  scaleDownDelayAfterAddMinutes?: number;
+  scaleDownUnneededMinutes?: number;
 }

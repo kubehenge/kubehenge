@@ -46,6 +46,9 @@ type setupView struct {
 	// Resumes tells that an earlier run left its encrypted state, so the setup takes that run's
 	// passphrase rather than a new one.
 	Resumes bool `json:"resumes,omitempty"`
+	// Upgrade tells which release last applied the management cluster, and what applying the
+	// appliance's own would change.
+	Upgrade *managementUpgrade `json:"upgrade,omitempty"`
 }
 
 func (s *Server) setupStatus(w http.ResponseWriter, r *http.Request, u user) {
@@ -73,6 +76,9 @@ func (s *Server) applianceStatus(w http.ResponseWriter, r *http.Request, u user,
 	}
 	v.Job, v.Settings = a.Current(), a.SavedSettings()
 	v.Resumes = !v.Ready && a.HasState()
+	if v.Ready {
+		v.Upgrade = s.managementUpgrade()
+	}
 	v.ApplianceVMID, v.ProxmoxInsecure = s.ApplianceVMID, s.ProxmoxInsecure
 	if !s.CertificateExpires.IsZero() {
 		v.CertificateExpires = &s.CertificateExpires
@@ -220,7 +226,7 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request, u user) {
 		s.proxmoxError(w, err)
 		return
 	}
-	err = a.Remove(req.Passphrase, ticket, s.templateRemover(ticket), func() { s.activeKube.Store(nil) }) //nolint:contextcheck // the job outlives the request on purpose
+	err = a.Remove(req.Passphrase, ticket, s.beforeRemoval(ticket), func() { s.activeKube.Store(nil) }) //nolint:contextcheck // the job outlives the request on purpose
 	switch {
 	case jobConflict(err):
 		writeError(w, http.StatusConflict, err.Error())
@@ -252,6 +258,9 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 	privileges := setupPrivileges
 	if req.Settings.ProxmoxHA || releasing {
 		privileges = append(slices.Clone(privileges), haPrivilege)
+	}
+	if req.Settings.EtcdRestore {
+		privileges = append(slices.Clone(privileges), restorePrivilege)
 	}
 	if !s.require(w, r, u, "/", privileges...) {
 		return
@@ -314,6 +323,19 @@ func jobConflict(err error) bool {
 	return errors.Is(err, appliance.ErrBusy) || errors.Is(err, appliance.ErrTemplateBusy) || errors.Is(err, appliance.ErrUpgrading)
 }
 
+// beforeRemoval removes, as the ticket's user, what the management-cluster module did not create
+// but goes with the management cluster: the clusters' templates, and the user automatic upgrades
+// act as.
+func (s *Server) beforeRemoval(ticket *pve.Ticket) func(context.Context, *appliance.Job) error {
+	templates := s.templateRemover(ticket)
+	return func(ctx context.Context, j *appliance.Job) error {
+		if err := templates(ctx, j); err != nil {
+			return err
+		}
+		return s.dropUpgrader(ctx, ticket, j)
+	}
+}
+
 // templateRemover deletes the clusters' templates, which the management-cluster module keeps in
 // its pool but did not create, as the ticket's user.
 func (s *Server) templateRemover(ticket *pve.Ticket) func(context.Context, *appliance.Job) error {
@@ -337,6 +359,10 @@ func (s *Server) templateRemover(ticket *pve.Ticket) func(context.Context, *appl
 // administrator who switches Proxmox VE HA for Kubehenge on grants it to Kubehenge's token, and the
 // one who switches it off removes what the controller left.
 const haPrivilege = "Sys.Console"
+
+// restorePrivilege is what the restore token holds on the workload pool: the administrator who
+// turns restores through the guest agent on grants it to Kubehenge, so holds it too.
+const restorePrivilege = "VM.GuestAgent.Unrestricted"
 
 // applied is what follows a successful apply: the interface switches to the management cluster,
 // and when the apply switched Proxmox VE HA off, the clusters leave HA.

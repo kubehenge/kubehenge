@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -104,8 +105,8 @@ func TestIstioFindsTheCNIConfiguration(t *testing.T) {
 		t.Errorf("Cilium takes istio-cni's plugin out: %v", with["web-cni"])
 	}
 	_, without := proxySpecs(t, templates.K3s, cilium, &Addons{})
-	if cni, ok := without["web-cni"]["cni"].(map[string]any); !ok || cni["exclusive"] != nil {
-		t.Errorf("without Istio, Cilium's CNI settings change: %v", without["web-cni"])
+	if !reflect.DeepEqual(without["web-cni"]["cni"], with["web-cni"]["cni"]) {
+		t.Errorf("switching Istio changes Cilium's CNI settings, which restarts every agent: %v, then %v", without["web-cni"]["cni"], with["web-cni"]["cni"])
 	}
 }
 

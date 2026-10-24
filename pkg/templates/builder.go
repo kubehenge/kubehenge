@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/luthermonson/go-proxmox"
+
+	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
 // Builder creates templates on one Proxmox VE node through its API, without SSH.
@@ -42,7 +44,7 @@ type Builder struct {
 	CPUType string
 
 	// selectableSettle and selectablePoll pace waitSelectable; zero means selectableSettle and
-	// pollLongest.
+	// pve.PollLongest.
 	selectableSettle time.Duration
 	selectablePoll   time.Duration
 }
@@ -87,18 +89,6 @@ const (
 // seconds, so a worker can still answer from before the template for a while after another
 // already shows it.
 const selectableSettle = 5 * time.Second
-
-// Most tasks, such as a configuration change, end within a fraction of a second; a download or a
-// disk import takes minutes. So polling asks again soon at first and less often the longer one runs.
-const (
-	pollFirst   = 100 * time.Millisecond
-	pollLongest = 2 * time.Second
-	pollGrowth  = 2
-)
-
-func backoff(interval time.Duration) time.Duration {
-	return min(pollGrowth*interval, pollLongest)
-}
 
 // bakeDiskSize is the disk a baked template gets. Ubuntu's cloud image is about 3.5 GB, too small
 // for its own updates; cloud-init grows the file system to the disk on first boot. Clones can only
@@ -550,7 +540,7 @@ func createdAt(meta string) (time.Time, bool) {
 // before Create returns.
 func (b *Builder) waitSelectable(ctx context.Context, t *Template, vmid int) error {
 	settle := cmp.Or(b.selectableSettle, selectableSettle)
-	poll := cmp.Or(b.selectablePoll, pollLongest)
+	poll := cmp.Or(b.selectablePoll, pve.PollLongest)
 	deadline := time.Now().Add(selectableTimeout)
 	var since time.Time
 	for {
@@ -821,65 +811,23 @@ func detach(ctx context.Context, vm *proxmox.VirtualMachine) error {
 }
 
 func (b *Builder) exec(ctx context.Context, vm *proxmox.VirtualMachine, command []string, timeout time.Duration) error {
-	status, err := b.run(ctx, vm, command, timeout)
+	status, err := pve.GuestExec(ctx, b.Client, vm, command, "", timeout)
 	if err != nil {
 		return fmt.Errorf("running %q: %w", strings.Join(command, " "), err)
 	}
 	if status.ExitCode != 0 {
-		return fmt.Errorf("%q exited %d: %s", strings.Join(command, " "), status.ExitCode, status.output())
+		return fmt.Errorf("%q exited %d: %s", strings.Join(command, " "), status.ExitCode, status.Output())
 	}
 	return nil
 }
 
 // output runs a command in the VM and returns what it printed, whatever its exit code.
 func (b *Builder) output(ctx context.Context, vm *proxmox.VirtualMachine, command []string) (string, error) {
-	status, err := b.run(ctx, vm, command, time.Minute)
+	status, err := pve.GuestExec(ctx, b.Client, vm, command, "", time.Minute)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("running %q: %w", strings.Join(command, " "), err)
 	}
-	return status.output(), nil
-}
-
-// execStatus is the guest agent's report on a command. go-proxmox's own type declares
-// err-truncated a bool, which Proxmox VE sends as a number, so commands with long error output fail
-// to decode there.
-type execStatus struct {
-	Exited       int    `json:"exited"`
-	ExitCode     int    `json:"exitcode"`
-	OutData      string `json:"out-data"`
-	ErrData      string `json:"err-data"`
-	OutTruncated any    `json:"out-truncated"`
-	ErrTruncated any    `json:"err-truncated"`
-}
-
-func (s *execStatus) output() string {
-	return strings.TrimSpace(s.OutData + "\n" + s.ErrData)
-}
-
-func (b *Builder) run(ctx context.Context, vm *proxmox.VirtualMachine, command []string, timeout time.Duration) (*execStatus, error) {
-	pid, err := vm.AgentExec(ctx, command, "")
-	if err != nil {
-		return nil, fmt.Errorf("starting it through the guest agent: %w", err)
-	}
-	deadline := time.Now().Add(timeout)
-	for interval := pollFirst; ; interval = backoff(interval) {
-		var status execStatus
-		path := fmt.Sprintf("/nodes/%s/qemu/%d/agent/exec-status?pid=%d", vm.Node, vm.VMID, pid)
-		if err := b.Client.Get(ctx, path, &status); err != nil {
-			return nil, fmt.Errorf("reading its status from the guest agent: %w", err)
-		}
-		if status.Exited != 0 {
-			return &status, nil
-		}
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("still running after %s", timeout)
-		}
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("waiting for it to end: %w", ctx.Err())
-		case <-time.After(interval):
-		}
-	}
+	return status.Output(), nil
 }
 
 func (b *Builder) isoStorage(ctx context.Context, node *proxmox.Node) (string, error) {
@@ -937,7 +885,7 @@ func waitTask(ctx context.Context, task *proxmox.Task, err error, timeout time.D
 	}
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
-	for interval := pollFirst; ; interval = backoff(interval) {
+	for interval := pve.PollFirst; ; interval = pve.Backoff(interval) {
 		if err := task.Ping(ctx); err != nil {
 			return fmt.Errorf("task %s: %w", task.UPID, err)
 		}

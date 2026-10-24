@@ -29,7 +29,7 @@ Before the first cluster, the VM templates for its distribution have to exist ([
 | Distribution | kubeadm, RKE2 or k3s: one per ClusterClass in the management cluster. A distribution whose VM template is not in the template pool yet says so, and the cluster cannot be created until it is built ([templates.md](templates.md)): by an administrator, or, where the administrator lets cluster creators have missing templates built, with **Have the template built** right there. |
 | Kubernetes version | For RKE2 and k3s, the newest release of each minor version Kubernetes still patches (the four newest, which takes in the one Kubernetes keeps a few weeks after a release) from their release channels, the stable one chosen first; a cluster already on an older minor version can still be upgraded from it; for kubeadm, the newest version of each minor version a VM template has been built for, the newest chosen first; where cluster creators may have missing templates built, **Kubernetes version to build** asks for another version's, which is offered here once built, after about a quarter of an hour. They are in the distribution's own form: `v1.36.5` for kubeadm, `v1.36.5+rke2r1` for RKE2, `v1.36.5+k3s1` for k3s. When the list cannot be read, the version is typed in. |
 | Control-plane nodes | 1, 3, 5 or 7. Three or more keep the cluster running when one fails. |
-| Workers | 0 to 100. With none, the control-plane nodes run the workloads too. |
+| Workers | 0 to 100. With none, the control-plane nodes run the workloads too. **Worker count**, **Autoscaled** instead has the cluster autoscaler keep the workers between the **Fewest workers** (0 to 100) and the **Most workers** (1 to 100), [below](#autoscaling). |
 
 ### Network
 
@@ -38,7 +38,7 @@ Before the first cluster, the VM templates for its distribution have to exist ([
 | Bridge | The bridge the cluster's VMs attach to: one of those chosen for clusters when the management cluster was set up. Bridges you may not use (no `SDN.Use`) are shown but disabled; when only one is left to choose, it is chosen. When the management cluster names none and Proxmox VE lists no bridges to you (no `Sys.Audit` on the nodes), you type the name in. |
 | VLAN tag | Optional, 1 to 4094. |
 | API address | The control plane's virtual IP: an unused address in the nodes' network, outside the node addresses. |
-| Node addresses | Where the nodes take their addresses from: ranges (`192.0.2.21-192.0.2.29`), networks or single addresses inside the gateway's network, one per line or separated by commas. The wizard asks for at least one address more than there are nodes, for the extra node an upgrade or a replacement adds; leave more for scaling up. |
+| Node addresses | Where the nodes take their addresses from: ranges (`192.0.2.21-192.0.2.29`), networks or single addresses inside the gateway's network, one per line or separated by commas. The wizard asks for at least one address more than there are nodes, for the extra node an upgrade or a replacement adds, counting an autoscaled pool at its most; leave more for scaling up. |
 | Prefix length | Of the nodes' network. |
 | Gateway | The nodes' default gateway. |
 | DNS servers | IPv4 addresses, one per line or separated by commas. |
@@ -92,7 +92,7 @@ Each new VM goes to one of the nodes it may use that is online: the one running 
 
 The defaults are 2 cores and 4096 MiB, with a 30 GiB disk for the control plane and 40 GiB for workers. Disks are at least 20 GiB. A control-plane node needs at least 2 cores and 4096 MiB, the first row of the k3s and RKE2 server sizing guides; kubeadm, which documents no sizes, follows RKE2's guide. With more workers the guides ask for more, and Kubehenge refuses a cluster whose control planes fall short, when it is created and when its workers or machines change: RKE2 and kubeadm need 4 cores and 8192 MiB from 226 workers, 8 cores and 16384 MiB from 451, and 16 cores and 32768 MiB from 1,301; k3s needs the same from 351, 901 and 1,801 workers. A worker needs at least 1024 MiB on k3s, 2048 MiB on kubeadm, and 2 cores and 4096 MiB on RKE2, never less than its distribution's minimum for a node. The guides size servers whose workloads run on workers; a cluster without workers runs them on its control planes, so each needs a worker's least on top: 3 cores and 5120 MiB on k3s, 3 cores and 6144 MiB on kubeadm, 4 cores and 8192 MiB on RKE2. The interface raises the control planes to that when the workers are set to none. The interface keeps the sizes once the cluster exists; with kubectl a change of size rolls the nodes, and a disk only grows.
 
-The add-ons need memory too. Their pods run on the workers, or on the control planes of a cluster without workers, and each of those nodes needs its distribution's least, or what such a node uses itself plus its share of the pods' memory, whichever is more. Every control plane also holds the add-ons' resource types and objects in its API server, so what it uses itself grows with each add-on, workers or not. The end-to-end tests measure the figures, which have room to grow:
+The add-ons need memory too. Their pods run on the workers, or on the control planes of a cluster without workers, and each of those nodes needs its distribution's least, or what such a node uses itself plus its share of the pods' memory, whichever is more. Every control plane also holds the add-ons' resource types and objects in its API server, so what it uses itself grows with each add-on, workers or not. The API server runs with a Go memory limit of 40 % of its control plane's memory (on k3s, half of it for the server's whole process), so it frees memory once it nears the limit rather than at twice what it holds. The end-to-end tests measure the figures, which have room to grow:
 
 | Add-on | Pods | Each control plane, kubeadm and RKE2 | Each control plane, k3s |
 | --- | --- | --- | --- |
@@ -146,17 +146,40 @@ Kubehenge's controller first gives the cluster its Proxmox VE pool, user, token 
 
 The buttons along the top act on the whole cluster: **Scale**, **Upgrade**, **Kubeconfig**, **Headlamp** and **Delete**. **Kubeconfig** and **Headlamp** appear once the cluster is available (Kubeconfig for those with `Sys.Modify` on its pool, Headlamp for clusters in the interface's namespaces); without `VM.Allocate` on its pool, or while it is being deleted, the others are disabled and the page says why. The menu on the left switches between its views, as Proxmox VE's does for a VM:
 
-- **Summary:** status, distribution, Kubernetes version, API endpoint, pod and service ranges, ready control-plane nodes and workers, Proxmox VE pool, namespace, who created it when, the last automatic upgrade, and for kubeadm, RKE2 and k3s which build of their VM template the nodes run, when they next move to a newer one and when they last did ([Node image refresh](#node-image-refresh)).
+- **Summary:** status, distribution, Kubernetes version, API endpoint, pod and service ranges, ready control-plane nodes and workers, with autoscaled pools as `md-0: 2 of 0 to 5, autoscaled`, Proxmox VE pool, namespace, who created it when, the last automatic upgrade, and for kubeadm, RKE2 and k3s which build of their VM template the nodes run, when they next move to a newer one and when they last did ([Node image refresh](#node-image-refresh)).
 - **Health:** whether the cluster is healthy, changing, degraded or unreachable, with tiles for the control plane (and etcd, on kubeadm), workers, node pressure, unwell pods, add-ons and machine health checks; then what needs attention, most serious first, each linking to its details. Below come the nodes (ready, pressure, cordons and taints, what their pods ask for, and the VM's CPU over the last hour and its memory, as far as you may see the VMs), the pods that are not well (crash loops, images that do not pull, pods that cannot be scheduled, containers killed for memory), volume claims still waiting, the add-ons' Helm releases, the worker pools, the control plane's and the health checks' conditions, the last hour's warnings from inside the cluster and from Cluster API, and last the cluster's own conditions. Those with `Sys.Modify` on the cluster's pool also get **Logs** on each unwell pod: the last 60 lines of a container, from its last run when it has not run since. With the shared Headlamp running, each pod also links to its page there. The page reads inside clusters of the interface's namespaces only; for others it shows what Cluster API knows.
 - **Machines:** each node's role, status, phase, version, addresses, age, and the Proxmox VE node its VM runs on, as far as you may see the cluster's VMs. When one Proxmox VE node runs more than one of the control-plane VMs, the page warns and says what losing that node would cost; migrating one of them in Proxmox VE to a node of its own fixes it.
 - **Backups:** the cluster's backups and restores, with **Back up now** and **Restore** ([Back up and restore](#back-up-and-restore)).
-- **Options:** the pod network, CIS hardening, placement, Headlamp, monitoring, logs, backups, certificates, pod security, Istio, Cluster Mesh (on a cluster that runs Cilium), GitOps, Rancher, automatic upgrades and identity providers, each with **Edit** (**Remove** for Rancher on the cluster that runs it), disabled for those who may not change the cluster (the pod network and CIS hardening are fixed). A change of placement applies to the VMs created after it, by scaling up, an upgrade or a replacement; those running stay where they are. Nodes the cluster has that you cannot see are listed too, and may be kept.
+- **Options:** the pod network, CIS hardening, placement, Headlamp, monitoring, logs, backups, certificates, the autoscaler ([below](#autoscaling)), pod security, Istio, Cluster Mesh (on a cluster that runs Cilium), GitOps, Rancher, automatic upgrades and identity providers, each with **Edit** (**Remove** for Rancher on the cluster that runs it), disabled for those who may not change the cluster (the pod network and CIS hardening are fixed). A change of placement applies to the VMs created after it, by scaling up, an upgrade or a replacement; those running stay where they are. Nodes the cluster has that you cannot see are listed too, and may be kept.
 
 The status reads **Provisioning**, **Available**, **Upgrading** or **Reconciling** while a change rolls out, **Deleting**, or **Failed**. A cluster deleted while its page is open says so.
 
 ## Scale
 
-**Scale** sets the control-plane nodes (1, 3, 5 or 7: an odd number, so etcd keeps a majority when one fails) and the workers of each worker pool (0 to 100).
+**Scale** sets the control-plane nodes (1, 3, 5 or 7: an odd number, so etcd keeps a majority when one fails) and, for each worker pool, either its workers (0 to 100) or, under **Scaling**, **Autoscaled** between its fewest and most workers ([below](#autoscaling)).
+
+## Autoscaling
+
+An autoscaled pool is sized by the [cluster autoscaler](https://github.com/kubernetes/autoscaler/tree/master/cluster-autoscaler) through Cluster API: it adds a worker while pods wait for room it would give them, up to the pool's most, and removes a worker that has stayed unneeded for 10 minutes, down to its fewest. Kubehenge's controller runs one autoscaler per cluster while any of its pools is autoscaled, and removes it with everything it was given once none is.
+
+- **Switching on** in the Scale dialog sets the pool's fewest and most and leaves its number of workers to the autoscaler, starting from those it has. **Switching off** fixes the pool at the workers it runs at that moment, unless you type another number; nothing is added or removed by switching.
+- **From none.** A pool with 0 as its fewest empties while nothing waits. The autoscaler reads what a new worker would hold from the pool's machines, cores and 90% of their memory and disk, the rest being what the node keeps for itself, and the pool's node labels (`node.cluster.x-k8s.io/…`), so a pod's node selector can bring a worker up from none. A pod that asks for more than 90% of a worker's memory is never given one.
+- **Control planes** stay kept for the control plane while a pool may grow, even while every pool is at none: a workload never lands on them only to be moved once a worker comes. A cluster whose pools may all go down to none therefore runs no workloads at those times.
+- **Add-ons** need a worker that stays: with any add-on that uses memory, at least one autoscaled pool keeps a fewest of 1 or more, and the add-ons' memory is shared out over the pools' fewest. The interface says so on the fewest, and Kubehenge refuses the cluster otherwise. Rancher's agent alone does not count: it runs only once there is a Rancher to register with, and its pod then brings a worker up from none.
+- **Addresses.** The node addresses must hold every pool at its most, the control planes and one more for a rollout. The Scale dialog shows the room left on the most, and Kubehenge refuses a change that leaves fewer addresses than that, unless the cluster was already short by as much.
+- **Room on Proxmox VE.** When the workers a pool may still add need more memory than the Proxmox VE nodes the cluster may use have free, the Scale dialog warns; it is advice, since memory frees and fills as other VMs come and go. A worker that finds no room waits: the cluster's events show `AutoscalerNoRoom` with the Proxmox VE provider's reason, and after 30 minutes the autoscaler gives the machine up and tries again. Shared storage suits autoscaled pools best, as it lets a new worker start on whichever allowed node has the room.
+- **Expander and timing**, under **Options**, **Edit** beside Autoscaler: which pool grows when several could take the waiting pods (the one left with the least unused room, by default, the one that takes the most pods, or any), how long after adding a worker before any is removed, and how long a worker stays unneeded before it goes, each 10 minutes by default.
+
+**Which release.** A cluster runs the cluster autoscaler release of its Kubernetes minor version, since each carries that minor's scheduler; a minor without a release yet runs the newest earlier one, and a cluster older than every release Kubehenge carries runs the oldest. They are, by Kubernetes minor:
+
+| Kubernetes | Cluster autoscaler |
+| --- | --- |
+| 1.33 and older | 1.33.6 |
+| 1.34 | 1.34.5 |
+| 1.35 | 1.35.2 |
+| 1.36 and newer | 1.36.1 |
+
+**Where it runs.** By default each cluster's autoscaler runs in the management cluster, in the `kubehenge-autoscaler` namespace, and reaches its cluster with a token of its own there; the cluster holds no credential of the management cluster. Each asks for 64 MiB of memory, with a limit of 512 MiB. **Runs**, **On the cluster's own control planes** moves it into the cluster, sparing the management cluster that memory. It then needs the management cluster's API reachable from the cluster's nodes, and puts a management cluster token inside the cluster. That token reads the MachineDeployments, MachineSets and Machines of every cluster in the namespace, which an admission policy cannot narrow; the policy still lets it scale only this cluster's pools and mark only its machines. Anyone with the cluster's admin rights can read the token, so this choice needs `VM.Audit` on the workload pool, which sees every cluster's VMs anyway. Without the management cluster's address, set by its module, the autoscaler stays out and the cluster shows an `AutoscalerNotPlaced` event.
 
 ## Upgrade
 
@@ -191,11 +214,15 @@ The administrator switches the weekly build on or off and sets its day and time 
 
 ## Open a cluster in Headlamp
 
-The appliance runs one Headlamp for the clusters of the interface's namespaces, on port 8443 of the appliance, behind the interface's sign-in. **Headlamp** in the top bar opens it, and **Headlamp** on a cluster's page opens that cluster (`https://<appliance>:8443/c/clusters.<name>`). It lists only the clusters you may see, checked against `VM.Audit` on each cluster's pool.
+The appliance runs one Headlamp for the clusters of the interface's namespaces, on port 8443 of the appliance, behind the interface's sign-in. **Headlamp** in the top bar opens it, and **Headlamp** on a cluster's page opens that cluster (`https://<appliance>:8443/kubehenge/open/<namespace>.<name>`, which leads on to `/c/<namespace>.<name>`, such as `/c/clusters.web`). It lists only the clusters you may see, checked against `VM.Audit` on each cluster's pool.
 
 Headlamp itself holds no credentials. Sign in to each cluster with your own token, such as a ServiceAccount token made with `kubectl create token`, or through the cluster's first OpenID Connect provider: the first of its own list, or, for a cluster that sets none, the first of the providers every cluster trusts. For the latter, the provider must accept `https://<appliance>:8443/oidc-callback` as a redirect URL; Headlamp signs in as a public client with PKCE, so no client secret is stored.
 
-The shared Headlamp does not offer what a shared server must not: port forwards, Helm, node draining, its external proxy, plugin changes, adding clusters or kubeconfigs, setting a token for others, its WebSocket multiplexer and its metrics.
+Where the administrator switched on the [Headlamp sign-in](install.md#headlamp-sign-in), a cluster opens already signed in as cluster-admin for whoever holds `Sys.Modify` on its pool, the privilege the admin kubeconfig takes. The token is made for your session, lasts an hour at most and never longer than the session, and stays in the appliance: the browser never holds it. A token of your own, or a sign-in through the identity provider, takes its place while Headlamp keeps it. In the cluster's audit log, what you do appears as the ServiceAccount `kube-system/kubehenge-headlamp`; the appliance's log names you beside the token's ID, which the audit log records with each request. Losing `Sys.Modify` ends the sign-in within 30 seconds; switching the setting off ends every token made. **Log out** in Headlamp signs you out of that cluster: the appliance drops your session's token, and Headlamp asks for a token or a sign-in of your own, until you open the cluster again with **Headlamp** on its page here, which signs you in again.
+
+Where the administrator switched on the [Headlamp actions](install.md#headlamp-actions), Headlamp also offers the Helm app catalog and the Prometheus charts it ships with. The catalog lists a cluster's Helm releases and installs, upgrades, rolls back and uninstalls them, acting with your own credentials in the cluster, or the sign-in's, so the cluster lets you do no more than it already does; it installs charts only from the Helm repositories set for the appliance, which only those who may set the appliance up add or remove. The Prometheus plugin charts a cluster's metrics from a Prometheus running in it, such as the monitoring add-on's, through the cluster's API with your credentials. Node drain is offered either way, with your own credentials.
+
+The shared Headlamp does not offer what a shared server must not: port forwards (Headlamp offers them in its desktop app alone, where a forward listens on your own machine), its external proxy, plugin changes, adding clusters or kubeconfigs, setting a token for others, its WebSocket multiplexer and its own metrics.
 
 ## Signing in with OpenID Connect
 
@@ -330,9 +357,60 @@ With **Take volume snapshots** (the `csi` variable's `volumeSnapshots`), the clu
 
 When Kubehenge cannot give the plugin `root@pam`, such as after the administrator removed the password, the plugin keeps the cluster's token and `kubectl describe cluster` shows a `VolumeSnapshotsRefused` event saying why.
 
+## etcd snapshots
+
+A cluster with etcd snapshots on has Kubehenge's controller copy its etcd database, every object the cluster's API holds, to one of the backup targets an administrator set: on the cluster's schedule, by default every 12 hours from 00:00 UTC with each cluster a few minutes after the hour of its own, and whenever asked. It keeps the newest 14 by default and deletes older ones. Snapshots go under `<prefix>/<namespace>.<name>/etcd` in the target's bucket, beside the cluster's Velero backups, named by when they were taken in UTC and the Kubernetes version, as `20261021T120000Z-v1.36.5-rke2r1.db.age`. Each object carries the Kubernetes version, the distribution, etcd's revision and the SHA-256 and size of the database in its metadata. Snapshots work on their own, with or without Velero backups.
+
+Nothing runs in the cluster for them, and no etcd key or S3 access key enters it, unless the distribution's own upload is on ([below](#the-distributions-own-upload)). For each snapshot the controller signs itself an etcd client certificate valid for an hour, in memory, from the cluster's etcd CA, which the control-plane provider keeps in the management cluster. It reaches one etcd member through the cluster's API server, by a port-forward to the member's pod on kubeadm and RKE2 or to the k3s provider's etcd proxy on k3s, and streams the database into the target as it comes, checking etcd's own checksum at its end, so that a snapshot cut off is never kept. Each snapshot is encrypted with [age](https://age-encryption.org) to a key of the cluster's own, `etcd-snapshot-identity` in the Secret `<name>-backup-keys` beside the Cluster, made with the cluster's other backup keys and outliving it as they do. It is written with the same access key as Velero's backups. RKE2 and k3s also keep the snapshots they take themselves on their nodes, as they always do.
+
+The **Backups** view's etcd snapshots section says when the last snapshot was taken and what went wrong with the last try, and lists the snapshots in the target. Snapshots are switched on, and their target, schedule, time zone and number kept chosen, under Options or from **Set up etcd snapshots…**.
+
+- **Take a snapshot now** has the controller take one at once. It needs `VM.Allocate` on the cluster's pool.
+- **Download** hands the snapshot out decrypted, as etcd wrote it. It holds every Secret of the cluster, so it needs `Sys.Modify` on the cluster's pool, as the admin kubeconfig does.
+- **Restore…** restores the cluster's etcd from it ([below](#restore-etcd)). It needs `Sys.Modify` on the cluster's pool.
+
+With kubectl, the annotation `kubehenge.dev/etcd-snapshot-requested` with `{"at":"<time>"}` asks for a snapshot, and `kubehenge.dev/etcd-snapshot` records the last one. A snapshot copied from the target decrypts with `kubehenge etcd-snapshot decrypt --identity <key file> <snapshot.db.age> <snapshot.db>`, which checks etcd's checksum too, or with any age client, the key file holding the key from `<name>-backup-keys`:
+
+```sh
+kubectl --namespace clusters get secret web-backup-keys -o jsonpath='{.data.etcd-snapshot-identity}' | base64 -d > web.key
+age --decrypt --identity web.key --output snapshot.db 20261021T120000Z-v1.36.5-rke2r1.db.age
+```
+
+### The distribution's own upload
+
+On RKE2 and k3s, **Also have RKE2 upload snapshots of its own** (`distributionUpload: true`, off by default) has the cluster's servers upload the snapshots they take themselves to the same target too, under `<prefix>/<namespace>.<name>/rke2-etcd` or `k3s-etcd`, on the cluster's schedule and keeping as many. They go on while the management cluster is down, which Kubehenge's own snapshots do not. kubeadm has no upload of its own. Both distributions get the same: a configuration drop-in that points the servers at a Secret Kubehenge writes into the cluster, with the target's certificate verified.
+
+What it grants: the target's access key goes into the Secret `kubehenge-etcd-s3` in the cluster's `kube-system`. Whoever may read Secrets there, every cluster admin among them, reads it, and with it everything the key reaches in the target: the other clusters' backups and snapshots too when it is the credential for every cluster, so give the cluster a credential of its own for a bucket or folder of its own first. The key stays out of the machines' bootstrap data, which is why CAPRKE2's own `etcd.backupConfig` is not used: that puts the key into every server's bootstrap data and skips TLS verification by default; the k3s provider has no such setting at all.
+
+What it risks and costs:
+
+- The snapshots are stored as etcd wrote them, not encrypted by Kubehenge, and hold every Secret of the cluster.
+- Kubehenge neither lists nor restores them. They are restored by hand with the distribution's own steps: on the first server, with every server stopped, `rke2 server --cluster-reset --etcd-s3 --etcd-s3-bucket=<bucket> --etcd-s3-folder=<folder> --etcd-s3-endpoint=<host> --etcd-s3-access-key=… --etcd-s3-secret-key=… --cluster-reset-restore-path=<snapshot>` (or `k3s server` the same), then the other servers rejoin as in step 6 [below](#restore-etcd).
+- The distribution reads the schedule in UTC whatever the time zone chosen, and counts the number kept across all servers together.
+- The drop-in is part of the control plane's bootstrap, so switching the upload on or off, or changing the schedule or the number kept while it is on, replaces the control-plane machines one at a time.
+
+The upload needs etcd snapshots on, and is refused on kubeadm. Switching snapshots off switches it off too, and the controller takes the Secret out of the cluster again once every server that still has the drop-in has been replaced, so that the servers not yet replaced keep uploading on schedule.
+
+### Restore etcd
+
+Restoring etcd takes every object of the cluster back to the snapshot: Deployments, Secrets, roles, custom resources and the rest of what its API holds return to how they were, and whatever was created since is gone. The data in volumes is not restored and stays as it is now. It is for a cluster that lost its etcd quorum, or whose state is corrupted or was deleted in bulk; to bring back applications with their data, restore a [Velero backup](#back-up-and-restore). A cluster is restored only from a snapshot of its own distribution and Kubernetes minor version, whose objects its API server reads.
+
+A restore:
+
+1. pauses the cluster in Cluster API, so that it replaces no machine meanwhile;
+2. copies the snapshot to the first control-plane node and checks its SHA-256;
+3. stops etcd and the API server on every control-plane node;
+4. restores etcd on the first node as a cluster of one member: with `etcdutl snapshot restore`, run from the etcd image the node already runs, on kubeadm, keeping the database from before beside it; with `rke2 server --cluster-reset --cluster-reset-restore-path=<file> --etcd-s3=false` on RKE2, and `k3s server` the same on k3s;
+5. starts its control plane and waits for its API server;
+6. deletes the other control-plane machines, whose etcd still holds the cluster from before, and gives the cluster back to Cluster API, which makes them again to join the restored member.
+
+Where an administrator has switched on [etcd restores](install.md#etcd-restores), **Restore…** asks for the cluster's name and Kubehenge runs these steps itself through the control-plane VMs' guest agents, the section showing which step it is at. The snapshot reaches the node decrypted by the controller and encrypted again for the copy with a password of its own for that restore, from a link into the target that expires within the hour. A control-plane VM that is off is replaced with the others. A restore that fails before etcd was restored starts every control plane again as it was; one that fails after finishes the restore.
+
+Otherwise **Restore…** lists the steps for the chosen snapshot, with the commands for the cluster's distribution: those for the nodes run as root over SSH or the VM's console, after downloading the snapshot to the first node as `/var/lib/kubehenge-restore/snapshot.db`, and the `kubectl` ones with the management cluster's kubeconfig.
+
 ## Delete
 
-**Delete** asks for the cluster's name. It deletes the cluster's VMs and its persistent volumes, and removes it from Rancher first. It cannot be undone. Its backups stay in their target, and its backup keys beside it ([Back up and restore](#back-up-and-restore)). Once the VMs are gone, Kubehenge's controller removes the cluster's pool, user, token and volume owner VM. If a node that may hold some of the cluster's volumes on its local storage is offline, the controller waits for it. Cluster API removes each VM's cloud-init ISO (`user-data-<VMID>.iso` on the cloud-init storage) with the VM; only a VM deleted by hand, outside Cluster API, leaves its ISO behind, which can then be removed under the storage's ISO Images in Proxmox VE.
+**Delete** asks for the cluster's name. It deletes the cluster's VMs and its persistent volumes, and removes it from Rancher first. It cannot be undone. Its backups and etcd snapshots stay in their target, and its backup keys beside it ([Back up and restore](#back-up-and-restore)). Once the VMs are gone, Kubehenge's controller removes the cluster's pool, user, token and volume owner VM. If a node that may hold some of the cluster's volumes on its local storage is offline, the controller waits for it. Cluster API removes each VM's cloud-init ISO (`user-data-<VMID>.iso` on the cloud-init storage) with the VM; only a VM deleted by hand, outside Cluster API, leaves its ISO behind, which can then be removed under the storage's ISO Images in Proxmox VE.
 
 Deleting the cluster that runs Rancher first removes every registered cluster from Rancher.
 
@@ -357,11 +435,18 @@ The interface checks the signed-in user's Proxmox VE privileges on each cluster'
 | See its backups and restores | `VM.Audit` | the cluster's pool |
 | Back up now | `VM.Allocate` | the cluster's pool |
 | Restore a backup | `Sys.Modify` | the cluster's pool |
+| See its etcd snapshots | `VM.Audit` | the cluster's pool |
+| Take an etcd snapshot now | `VM.Allocate` | the cluster's pool |
+| Download an etcd snapshot, restore etcd | `Sys.Modify` | the cluster's pool |
 | Store a cluster's own backup access key | `Sys.Modify` | the workload pool when creating, the cluster's pool when changing |
 | Download the admin kubeconfig | `Sys.Modify` | the cluster's pool |
+| Open the cluster in the shared Headlamp signed in as cluster-admin, where the [Headlamp sign-in](install.md#headlamp-sign-in) is on | `Sys.Modify` | the cluster's pool |
+| Use the Helm app catalog and the Prometheus charts in the shared Headlamp, where the [Headlamp actions](install.md#headlamp-actions) are on, with the cluster's own rights for what they do in it | `VM.Audit` | the cluster's pool |
+| Add, update or remove a Helm repository in the shared Headlamp | the setup's privileges | `/` |
 | Read an unwell pod's logs on the health page | `Sys.Modify` | the cluster's pool |
 | Trust identity providers beyond those set for every cluster | `Sys.Modify` | the workload pool when creating, the cluster's pool when changing |
 | Choose the repository GitOps syncs from | `Sys.Modify` | the workload pool when creating, the cluster's pool when changing |
+| Run a cluster's autoscaler on its own control planes | `VM.Audit` | the workload pool |
 | Use the Administration page | the [setup privileges](install.md#who-may-set-it-up) | `/` |
 
 - A node's own bridges are in the zone `localnetwork`: `/sdn/zones/localnetwork/vmbr0`.
@@ -448,7 +533,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 
 - **The ClusterClasses** are `kubehenge-kubeadm`, `kubehenge-rke2` and `kubehenge-k3s`, in `kubehenge-system`.
 - **The namespace** decides the pool: `<workload pool>/<namespace>.<name>`. Clusters in the interface's namespaces (`clusters`, and any [added for clusters](#more-namespaces-for-clusters)) are also looked after from the interface; any other namespace works, and the interface shows those clusters read-only. The ClusterClasses stay in `kubehenge-system`, which `topology.classRef.namespace` names, so every namespace uses the same ones. Keep names to 40 characters, as the interface does, so that the nodes' host names stay within one DNS label.
-- **Worker pools** are machine deployments of the class `worker`; a Cluster may have several.
+- **Worker pools** are machine deployments of the class `worker`; a Cluster may have several. An autoscaled pool has no `replicas` and carries Cluster API's annotations `cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size` and `-max-size` under `metadata.annotations` (at most 100), with the pool's node labels under `metadata.labels`.
 - **Ranges** come from `spec.clusterNetwork`; without it, the distribution's own apply (`10.244.0.0/16` and `10.96.0.0/12` for kubeadm, `10.42.0.0/16` and `10.43.0.0/16` for RKE2 and k3s). Kubehenge refuses to create a cluster whose ranges overlap its nodes' network.
 
 ### Variables
@@ -467,11 +552,13 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `loadBalancer` | no | Addresses for Services of type `LoadBalancer` ([above](#load-balancer)): `enabled` (default false); `implementation`, `metallb` (default) or `kube-vip`; `addresses`, a list of ranges, networks in CIDR notation or single addresses on the nodes' network, needed while `enabled`. |
 | `headlamp` | no | `enabled` (default false); `hostname`, to serve it through the cluster's ingress controller; `tlsSecret`, a Secret in the `headlamp` namespace with the certificate for `hostname` (when unset, one from the certificates add-on while it is on, else the ingress controller's default certificate); `access`, `token` (default: everyone signs in with their own token or through OpenID Connect) or `view` (Headlamp shows everyone who reaches it the cluster read-only through its own account, bound to the `view` ClusterRole). |
 | `backups` | no | Velero ([above](#back-up-and-restore)): `enabled` (default false); `target`, the name of one of the administrator's targets, needed while `enabled`; `schedule`, a cron expression of five fields or a descriptor such as `@weekly` (default `0 2 * * *`); `timeZone` (default `UTC`); `retentionDays` (1 to 3650, default 7); `volumes`, `all` (default) or `annotated`, only the volumes a pod names in its `backup.velero.io/backup-volumes` annotation; `existingSecret`, a Secret of the owner's own in the cluster's `velero` namespace with the store's keys as Velero's credentials file under the key `cloud`, instead of the credential stored through the interface for the cluster, or else for every cluster; Kubehenge creates the namespace, and switching backups off deletes it with the Secret. |
+| `etcdSnapshots` | no | etcd snapshots ([above](#etcd-snapshots)): `enabled` (default false); `target`, the name of one of the administrator's targets, needed while `enabled`; `schedule`, as for `backups` (default `0 */12 * * *`); `timeZone` (default `UTC`); `keep`, the number of snapshots kept (1 to 1000, default 14); `distributionUpload` (default false), on RKE2 and k3s only and while `enabled`, the distribution's own upload ([above](#the-distributions-own-upload)). They are written with the credential stored through the interface for the cluster, or else for every cluster. |
 | `certificates` | no | `enabled` (default false); `issuer`, `acme-dns01` (default), `acme-http01` or `ca`; `domain`, needed with `acme-dns01` and `ca`; `acme`: `email`, `server`, `staging`, `caBundle`; `dns01`: `provider`, its settings, `existingSecret`, `sharedCredential`, `nameservers` ([above](#certificates)). |
 | `rancher` | no | `install` (default false), which needs `hostname` and at least 4 vCPUs on every node; `register` (default true), to register with the Rancher Kubehenge installed. Setting `install` back to false removes every registered cluster from Rancher, then uninstalls it. A second cluster with `install` gets no Rancher; `kubectl describe cluster` shows a `RancherRefused` event. |
 | `gitops` | no | `enabled` (default false); `engine`, `argocd` (default) or `flux`; `repository`, with `url` (`https://` or `ssh://`), `revision` (a branch or full ref, default `main`) and `path` (default `.`); `auth`, `none` (default), `deployKey` (over `ssh://`; the key is in the Secret `<name>-gitops` beside the Cluster, its public half under `identity.pub`), `token` (the cluster's `gitops` credential, `username` and `password`) or `existingSecret` with `existingSecret`; `knownHosts`, the server's host keys as known_hosts lines, read from the server once when unset; `hostname` and `tlsSecret`, to serve the web interface through the ingress controller; `admins`, the first provider's groups that administer Argo CD; `signIn`, with `clientID` (the provider's own when unset) and `clientSecret`, `none` (default, PKCE), `stored` (the cluster's `oidc-client` credential, key `clientSecret`) or `existingSecret` with `existingSecret`; `ui` (default false), Flux's web interface, which needs `hostname` and a client secret. `ui` and `admins` need an identity provider in `oidc`. |
 | `oidc` | no | Up to eight providers: `issuerURL`, `clientID`, `usernameClaim`, `usernamePrefix`, `groupsClaim`, `groupsPrefix`, `scopes`, `certificateAuthority` ([above](#signing-in-with-openid-connect)). Unset, the providers set for every cluster. |
 | `upgrades` | no | Automatic Kubernetes upgrades: `mode` (`off`, `patch` or `minor`; default `off`) and `window` ([upgrading.md](upgrading.md#automatically-inside-a-window)); `nodeImages` (default true), whether the nodes move to new builds of their VM template in the window ([above](#node-image-refresh)). |
+| `autoscaler` | no | How the cluster autoscaler sizes the autoscaled pools ([above](#autoscaling)): `placement`, `management` (default) or `workload`; `expander`, `least-waste` (default), `most-pods` or `random`; `scaleDownDelayAfterAddMinutes` and `scaleDownUnneededMinutes`, 1 to 1440, default 10. |
 
 ### Day two
 

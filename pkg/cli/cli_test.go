@@ -188,6 +188,7 @@ func TestChartValuesGoToTheirCharts(t *testing.T) {
 			alloyImage:  "docker.io/example/alloy:v1" + digest,
 			veleroImage: "docker.io/example/velero:v1" + digest, veleroPlugin: "docker.io/example/plugin:v1" + digest,
 			calicoImages: []string{"quay.io/calico/node:v3.33.0" + digest}, chartValues: values,
+			autoscalerImages: []string{"registry.k8s.io/autoscaling/cluster-autoscaler:v1.36.1" + digest},
 		}
 		for _, f := range []*string{
 			&o.ccmChart, &o.csiChart, &o.csiNewestChart, &o.snapshotChart, &o.ciliumChart, &o.calicoChart, &o.headlampChart, &o.certManagerChart, &o.rancherChart,

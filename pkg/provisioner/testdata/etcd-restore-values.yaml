@@ -1,0 +1,4 @@
+---
+# On top of integration-values.yaml: the module's values with etcd_restore.
+proxmox:
+  etcdRestore: true

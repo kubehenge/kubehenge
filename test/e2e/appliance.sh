@@ -1,16 +1,18 @@
 #!/bin/sh
 # End-to-end test of the appliance on a Proxmox VE node: install it from a release archive, sign in
 # with Proxmox VE users, set the management cluster up from the interface, place by an HA rule
-# offered to a cluster creator, reach the shared Headlamp behind the interface's sign-in, upgrade the appliance under the running management cluster, remove
-# the management cluster from the interface and then the appliance, and check that Proxmox VE is
-# left as it was.
+# offered to a cluster creator, reach the shared Headlamp behind the interface's sign-in, with the
+# plugins it ships and its Helm routes' limits, and log out of a cluster in it, switch automatic
+# upgrades of the management cluster on and off, upgrade the appliance under the running management
+# cluster and then the management cluster to what it carries, remove the management cluster from
+# the interface and then the appliance, and check that Proxmox VE is left as it was.
 #
 #   test/e2e/appliance.sh <release> <newer release> <settings>
 #
 # Runs as root on the node, as appliance/install.sh does, and needs jq. <release> and <newer release>
 # are archives `make dist` built with two versions; <settings> is a JSON file of the management
 # cluster's settings as the interface's setup sends them (pkg/appliance/settings.go), with
-# offerHARules on and the default workload pool. The appliance
+# offerHARules and headlampActions on and the default workload pool. The appliance
 # is container KUBEHENGE_E2E_APPLIANCE_ID at KUBEHENGE_E2E_APPLIANCE_ADDRESS (with its prefix length)
 # on KUBEHENGE_E2E_BRIDGE (default vmbr0), with the gateway KUBEHENGE_E2E_GATEWAY and the name
 # servers KUBEHENGE_E2E_DNS; its disk goes on KUBEHENGE_E2E_STORAGE when that is set.
@@ -31,7 +33,7 @@ ip=${address%/*}
 ui=https://${ip} headlamp=https://${ip}:8443
 # The appliance's certificate is signed by the cluster's CA for its address.
 ca=/etc/pve/pve-root-ca.pem
-admin=kubehenge-e2e-admin@pve user=kubehenge-e2e-user@pve
+admin=kubehenge-e2e-admin@pve user=kubehenge-e2e-user@pve upgrader=kubehenge-upgrader@pve
 # The HA rule offered to cluster creators, and the guest it needs: Proxmox VE takes a rule only for
 # HA resources, and a resource only for a guest that exists.
 ha_rule=kubehenge-e2e-placement ha_vmid=
@@ -65,9 +67,25 @@ request() {
     curl -sS --cacert "${ca}" -b "${jar}" -c "${jar}" -o "${work}/body" -w '%{http_code}' "$@" > "${work}/status"
 }
 
-# post <cookie jar> <CSRF token> <URL> <JSON>
+# post <cookie jar> <CSRF token> <URL> <JSON>, and put and delete the same
 post() {
     request "$1" -H 'Content-Type: application/json' -H "X-Kubehenge-CSRF: $2" -d "$4" "$3"
+}
+put() {
+    request "$1" -X PUT -H 'Content-Type: application/json' -H "X-Kubehenge-CSRF: $2" -d "$4" "$3"
+}
+delete() {
+    request "$1" -X DELETE -H "X-Kubehenge-CSRF: $2" "$3"
+}
+
+# upgrader_is <present|absent> <message>: checks whether Proxmox VE has the user automatic upgrades
+# of the management cluster act as.
+upgrader_is() {
+    if pvesh get "/access/users/${upgrader}" --output-format json < /dev/null > /dev/null 2>&1; then
+        [ "$1" = present ] || fail "$2"
+    else
+        [ "$1" = absent ] || fail "$2"
+    fi
 }
 
 # expect <status> <what> <command...>: runs a request and checks the status it got.
@@ -88,6 +106,13 @@ fail_with_body() {
 # body_is <jq filter> <message>: checks the last answer's body.
 body_is() {
     jq -e "$1" "${work}/body" > /dev/null || fail_with_body "$2"
+}
+
+# body_has <message> <jq arguments...>: body_is with a filter that takes arguments.
+body_has() {
+    message=$1
+    shift
+    jq -e "$@" "${work}/body" > /dev/null || fail_with_body "${message}"
 }
 
 # answers: whether the interface is up again, on its certificate.
@@ -134,6 +159,14 @@ headlamp_serves() {
     request "${work}/admin.jar" "${headlamp}/"
     got=$(cat "${work}/status")
     [ "${got}" = 200 ] && grep -q Headlamp "${work}/body"
+}
+
+# headlamp_offers_actions: whether Headlamp's plugin list holds the app catalog it ships, which the
+# gate leaves out until it has read that the actions are on.
+headlamp_offers_actions() {
+    request "${work}/admin.jar" "${headlamp}/plugins"
+    got=$(cat "${work}/status")
+    [ "${got}" = 200 ] && jq -e 'any(.[]; .path == "static-plugins/app-catalog")' "${work}/body" > /dev/null
 }
 
 # upgrade <release>: install.sh --upgrade of the appliance, its exit status in $upgraded and its
@@ -286,6 +319,55 @@ expect 200 "Headlamp's configuration" request "${work}/admin.jar" "${headlamp}/c
 body_is 'has("clusters")' "Headlamp's configuration has no clusters"
 expect 403 "Headlamp's plugin upload" request "${work}/admin.jar" "${headlamp}/user-plugins/x"
 
+step "the shared Headlamp's actions"
+# The settings switch them on; the interface reads that from the chart's ConfigMap every half minute.
+until_true 120 "the plugins Headlamp ships in its plugin list" headlamp_offers_actions
+expect 200 "the app catalog" request "${work}/admin.jar" "${headlamp}/static-plugins/app-catalog/main.js"
+expect 200 "the Prometheus charts" request "${work}/admin.jar" "${headlamp}/static-plugins/prometheus/main.js"
+expect 403 "a chart from a path on the appliance" request "${work}/admin.jar" -H 'Content-Type: application/json' \
+    -d '{"name":"x","namespace":"default","chart":"/etc","version":"1","description":"x"}' \
+    "${headlamp}/clusters/clusters.e2e/helm/release/install?namespace=default"
+expect 403 "a Helm repository over HTTP" request "${work}/admin.jar" -H 'Content-Type: application/json' \
+    -d '{"name":"x","url":"http://charts.example"}' "${headlamp}/clusters/clusters.e2e/helm/repositories"
+expect 403 "a port forward" request "${work}/admin.jar" -H 'Content-Type: application/json' \
+    -d '{"namespace":"default","pod":"x","targetPort":"80"}' "${headlamp}/clusters/clusters.e2e/portforward"
+
+step "Headlamp's log out of a cluster through the gate, and opening the cluster again"
+# Headlamp's frontend names the cluster in unpadded URL-safe base64 and posts JSON. The gate judges
+# a cluster by its pool, which the administrator holds on / whether or not the cluster exists.
+logout=${headlamp}/encoded-clusters/$(printf clusters.e2e | base64 -w0 | tr '+/' '-_' | tr -d '=')/clear-token
+expect 200 "Headlamp's log out" request "${work}/admin.jar" -D "${work}/headers" \
+    -H 'Content-Type: application/json' -d '{"token":null}' "${logout}"
+grep -qi '^set-cookie: headlamp-auth-clusterse2e\.0=;' "${work}/headers" ||
+    fail "Headlamp's log out did not clear the cluster's token cookie"
+expect 403 "Headlamp's log out by GET" request "${work}/admin.jar" "${logout}"
+expect 404 "Headlamp's log out of a cluster the user does not see" request "${work}/user.jar" \
+    -H 'Content-Type: application/json' -d '{"token":null}' "${logout}"
+expect 303 "opening the cluster from the interface" request "${work}/admin.jar" -D "${work}/headers" \
+    "${headlamp}/kubehenge/open/clusters.e2e/pods"
+grep -qi '^location: /c/clusters\.e2e/pods' "${work}/headers" ||
+    fail "opening the cluster did not lead on to its page in Headlamp"
+expect 404 "opening a cluster the user does not see" request "${work}/user.jar" "${headlamp}/kubehenge/open/clusters.e2e"
+
+step "automatic upgrades of the management cluster, switched on and off"
+# Their hour half a day away, so that none starts during the test.
+hour=$((($(date -u +%H | sed 's/^0//') + 12) % 24))
+body=$(jq -n --argjson h "${hour}" '{policy: "off", hour: $h, timeZone: "UTC"}')
+expect 200 "the upgrade hour" put "${work}/admin.jar" "${admin_csrf}" "${ui}/api/appliance/upgrades/settings" "${body}"
+body=$(jq -n --arg p "not-${passphrase}" '{passphrase: $p}')
+expect 403 "switching them on with a wrong passphrase" put "${work}/admin.jar" "${admin_csrf}" "${ui}/api/appliance/upgrades/management" "${body}"
+upgrader_is absent "a wrong passphrase made ${upgrader}"
+on=$(jq -n --arg p "${passphrase}" '{passphrase: $p}')
+expect 200 "switching them on" put "${work}/admin.jar" "${admin_csrf}" "${ui}/api/appliance/upgrades/management" "${on}"
+# shellcheck disable=SC2016 # jq's variables, not the shell's.
+body_has "they are not on" --arg u "${upgrader}" '.on and .user == $u'
+upgrader_is present "switching them on made no ${upgrader}"
+expect 200 "switching them off" delete "${work}/admin.jar" "${admin_csrf}" "${ui}/api/appliance/upgrades/management"
+body_is '.on | not' "they are still on"
+upgrader_is absent "switching them off left ${upgrader}"
+# Left on, so that removing the management cluster has to take them away.
+expect 200 "switching them on again" put "${work}/admin.jar" "${admin_csrf}" "${ui}/api/appliance/upgrades/management" "${on}"
+
 step "upgrade the appliance with the management cluster up"
 upgrade "${newer}"
 if [ "${upgraded}" -ne 0 ]; then
@@ -300,6 +382,20 @@ sign_in "${work}/admin.jar" "${admin}"
 admin_csrf=${csrf}
 until_true 120 "the interface to find the management cluster again" ready_again
 upgrade_refused "${release}" 'newer than'
+
+step "upgrade the management cluster to what the newer release carries"
+old=$(tar -xzOf "${release}" ./share/kubehenge/VERSION)
+setup_status
+# shellcheck disable=SC2016 # jq's variables, not the shell's.
+body_has "the interface does not say the management cluster runs what ${old} applied" \
+    --arg old "${old}" --arg new "${version}" '.upgrade.behind and .upgrade.applied == $old and .upgrade.carried == $new'
+body=$(jq -c --arg p "${passphrase}" '{passphrase: $p, settings: .settings}' "${work}/body")
+expect 202 "upgrading the management cluster" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup" "${body}"
+until_true 3600 "the management cluster's upgrade to end" job_ended
+job_was apply succeeded true
+# shellcheck disable=SC2016 # jq's variables, not the shell's.
+body_has "the management cluster is not recorded as applied by ${version}" \
+    --arg new "${version}" '(.upgrade.behind | not) and .upgrade.applied == $new'
 
 step "remove the management cluster from the interface"
 body=$(jq -n --arg p "${passphrase}" '{passphrase: $p, confirm: "delete"}')

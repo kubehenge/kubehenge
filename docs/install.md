@@ -221,7 +221,7 @@ The signed-in user needs these privileges on `/`, which the Administrator role h
 
 Proxmox VE checks every call of the run again on its own. Anyone without them sees that Kubehenge is not set up yet. The same privileges open the Administration page later: Kubehenge's upgrades, repair access, the VM templates, the management cluster's settings (applying them again or changing them) and removal. They also bring the warnings about the [backup](#back-up-the-appliance) and the [certificate](#the-appliances-certificate).
 
-The run acts with your own Proxmox VE session: the interface renews your ticket and hands it to OpenTofu through its environment only; it is never stored, and no administrator token is created. A ticket lasts two hours, so the run has to finish within that.
+The run acts with your own Proxmox VE session: the interface renews your ticket and hands it to OpenTofu through its environment only; it is never stored, and no administrator token is created. A ticket lasts two hours, so the run has to finish within that. The one exception is opt-in: automatic upgrades of the management cluster, off unless an administrator switches them on, have the appliance keep the state passphrase and an Administrator token of a user of its own ([upgrading.md](upgrading.md#automatically-after-kubehenge)).
 
 ### The settings
 
@@ -239,7 +239,8 @@ The run acts with your own Proxmox VE session: the interface renews your ticket 
 | DNS servers | IP addresses, one per line or separated by commas. |
 | What clusters may use | The storages and bridges clusters may put their disks on and attach to, from any node; at least one of each. The page says which nodes have each, or that a storage is shared. Cluster API's token gets rights on exactly these, and the ClusterClasses accept no others, from the interface or kubectl. |
 | Identity providers | OpenID Connect providers every new cluster trusts unless it names its own ([clusters.md](clusters.md#signing-in-with-openid-connect)). A change applies to clusters created afterwards. |
-| Backup targets | S3 stores clusters back up to with Velero, when they switch backups on ([below](#backup-targets)). A changed target reaches the clusters that back up to it within ten minutes; one taken away leaves their Velero as it is. |
+| Backup targets | S3 stores clusters back up to with Velero, and keep their etcd snapshots in, when they switch either on ([below](#backup-targets)). A changed target reaches the clusters that back up to it within ten minutes; one taken away leaves their Velero as it is. |
+| etcd restores | Off by default, and the interface then shows the steps to restore a cluster's etcd by hand. When on, Kubehenge restores it itself through the VMs' guest agents ([below](#etcd-restores)). |
 | Proxmox VE HA | Off by default. When on, Proxmox VE HA keeps each cluster's control-plane VMs on separate nodes and restarts them on another node after a node fails, for every cluster on shared storage that does not opt out ([clusters.md](clusters.md#machines)). See [below](#proxmox-ve-ha) before switching it on. |
 | HA rules for cluster creators | Off by default. When on, everyone who may create or change a cluster can place it on the nodes of one of Proxmox VE's HA node-affinity rules without `Sys.Audit` on `/` of their own ([clusters.md](clusters.md#machines)). See [below](#ha-rules-for-cluster-creators). |
 | CSI plugin | Off by default. When on, clusters may choose the CSI plugin's newest release ([below](#the-csi-plugins-newest-release)). |
@@ -247,6 +248,8 @@ The run acts with your own Proxmox VE session: the interface renews your ticket 
 | HA group labels | Off by default. When on, clusters may have their nodes labelled with Proxmox VE's HA groups ([below](#ha-group-labels)). |
 | Volume snapshots | Off by default. When on, with `root@pam`'s password, clusters may take volume snapshots, with their CSI plugin signed in as `root@pam` ([below](#volume-snapshots)). |
 | Namespaces for clusters | Off by default: the interface creates and manages clusters in `clusters` only. When on, cluster creators choose among `clusters` and the namespaces named here, separated by commas, such as one per team ([clusters.md](clusters.md#more-namespaces-for-clusters)). A namespace that does not exist yet is created; one taken off the list keeps its clusters. |
+| Headlamp sign-in | Off by default, recommended. When on, the shared Headlamp opens each cluster signed in as cluster-admin for those who may download its admin kubeconfig ([clusters.md](clusters.md#open-a-cluster-in-headlamp)). See [below](#headlamp-sign-in) before switching it on. |
+| Headlamp actions | Off by default. When on, the shared Headlamp offers the Helm app catalog and the Prometheus charts it ships with, acting with each user's own credentials in the cluster ([clusters.md](clusters.md#open-a-cluster-in-headlamp)). See [below](#headlamp-actions). |
 | Advanced: Registry mirrors | `registry=endpoint`, one per line, such as `ghcr.io=https://mirror.example.org:5000`: endpoints the management cluster's nodes try before the registry itself. |
 | Advanced: Pod ranges, Service ranges | The management cluster's own. When empty, the first of a few private ranges clear of the nodes' network, the API address and the gateway is taken: `10.244.0.0/16` and `10.96.0.0/12` when they are clear. |
 | State passphrase | Encrypts the management cluster's state on the appliance ([below](#the-state-passphrase)); asked for twice on the first run. |
@@ -269,6 +272,10 @@ Reading Proxmox VE's HA rules takes `Sys.Audit` on `/`, which reaches the whole 
 
 The CSI plugin's newer releases need `Datastore.Allocate` on a cluster's storage, which covers every volume on it and its definition, so clusters run its last release without it unless this setting is on. With it, a cluster may choose the newest release on a storage of its own ([clusters.md](clusters.md#persistent-volumes)); its token then holds `Datastore.Allocate` there. The setting creates a role, `<name>-cluster-datastore`, holding `Datastore.Allocate`, `Datastore.AllocateSpace` and `Datastore.Audit`, and gives Kubehenge's controller `Datastore.Allocate` on each storage for clusters that the management cluster's disks, its Talos image, the cloud-init images and the template builds' downloads and uploads are not on, so that it can grant the role there. Switching it off removes the role, and with it every cluster's grant; those clusters go back to the earlier release.
 
+#### etcd restores
+
+Restoring a cluster's etcd from a snapshot ([clusters.md](clusters.md#restore-etcd)) stops the control plane on every control-plane VM and restores on one of them, which takes commands run as root on the VMs. With this setting the controller gets a user and API token of its own holding `VM.Audit` and `VM.GuestAgent.Unrestricted` on the workload pool, and runs each step through the QEMU guest agent. That privilege amounts to a root shell in every cluster's VMs: whoever reads the controller's Secret in the management cluster, or holds its admin kubeconfig, can read every Secret of every cluster and change any workload. It reaches no Proxmox VE node and no VM outside the workload pool, and the controller uses it only for a restore someone with `Sys.Modify` on the cluster's pool asked for. Switching the setting on takes `VM.GuestAgent.Unrestricted` on `/` of you as well. Off, there is no such token, and a restore takes the same steps, run by hand from the interface's list.
+
 #### Backup targets
 
 Each target is an S3 store and a bucket in it, which any S3-compatible store serves: AWS S3, MinIO, Ceph's RADOS Gateway, SeaweedFS, Garage, or the S3 store a Proxmox Backup Server 4.2 or later keeps a datastore on, so that the clusters' backups and the Proxmox VE backups share one store. The store must take server-side encryption with keys the client sends (SSE-C), with which every cluster encrypts what it writes.
@@ -279,7 +286,7 @@ Each target is an S3 store and a bucket in it, which any S3-compatible store ser
 | Endpoint | The store's `https://` URL; empty for AWS S3 itself. |
 | Bucket | The bucket, which has to exist. |
 | Region | The bucket's region; `us-east-1` when empty. |
-| Prefix | A folder in the bucket. Each cluster writes under `<prefix>/<namespace>.<cluster>/velero`. |
+| Prefix | A folder in the bucket. Each cluster writes under `<prefix>/<namespace>.<cluster>/velero`, and its etcd snapshots under `<prefix>/<namespace>.<cluster>/etcd`. |
 | CA certificate | PEM, when the system's CAs do not cover the store's certificate. |
 | Send checksums | On by default; off for a store that refuses the checksums the AWS SDK sends with every upload. |
 
@@ -317,18 +324,34 @@ The CSI plugin copies a volume for a snapshot, a restore or a clone through a Pr
 - **Where the password lives:** you type it in the setup, which checks it by signing in as `root@pam` and refuses it when Proxmox VE asks for a second factor. It is kept in the management cluster only, as the Secret `kubehenge-root-pam` in `kubehenge-system`, never in the appliance's state, settings or logs, and the interface never shows it again. An apply that changes nothing else leaves the stored one as it is; give it again when `root@pam`'s password changes.
 - **Switching it off** deletes the Secret. Clusters that took snapshots keep their CSI plugin on the cluster's token, without snapshots, and show a `VolumeSnapshotsRefused` event until the option is switched off for them.
 
+#### Headlamp sign-in
+
+Without it, everyone signs in to each cluster in the shared Headlamp with a token or an identity provider of their own. With it, those who hold `Sys.Modify` on a cluster's pool, who may download its admin kubeconfig anyway, open it signed in as cluster-admin; nobody else gets more than before. It needs no Proxmox VE privilege beyond the setup's own.
+
+- **What it grants:** Kubehenge's controller keeps two ServiceAccounts in the `kube-system` of every cluster in the interface's namespaces: `kubehenge-headlamp`, bound to `cluster-admin`, and `kubehenge-headlamp-issuer`, which may make `kubehenge-headlamp`'s tokens and do nothing else. The issuer's token lasts an hour and is renewed every 20 minutes, in the Secret `<cluster>-headlamp-issuer` beside the Cluster, like the health page's. When such a user first opens a cluster, the interface makes a token of `kubehenge-headlamp` for their session, for an hour at most and no longer than the session (ten minutes at the least, the shortest Kubernetes makes), keeps it in memory and puts it on the requests the gate passes to Headlamp for that cluster. It never reaches the browser. A token of the user's own, or a sign-in through the cluster's identity provider, takes its place while Headlamp keeps it, and logging out of the cluster in Headlamp drops the session's token until the user opens the cluster from the interface again.
+- **What it risks:** whoever reads Secrets in the interface's namespaces, as the interface and the management cluster's administrators can, can act as cluster-admin in those clusters for as long as the issuer's token lasts. They can already, with the admin kubeconfigs kept there. Headlamp acts as `kubehenge-headlamp`, so the cluster's audit log names that account rather than the Proxmox VE user; the interface logs each token it makes with its user and the token's ID, which the audit log records with every request (`authentication.kubernetes.io/credential-id`).
+- **Switching it off** removes both accounts from every cluster, `kubehenge-headlamp` first, which ends every token made for it at once, and then the issuer's Secret.
+
+#### Headlamp actions
+
+Without them, the shared Headlamp shows and changes a cluster's objects and drains its nodes, with each user's own credentials there. With them, it also offers two plugins Headlamp ships with: the app catalog, which lists, installs, upgrades, rolls back and uninstalls Helm releases, and the Prometheus charts of a cluster's metrics. They need no Proxmox VE privilege beyond the setup's own.
+
+- **What they grant:** everyone who sees a cluster uses both plugins on it. Headlamp acts in the cluster with the user's own credentials, or the [sign-in](#headlamp-sign-in)'s, so the cluster's own rights decide what they may install or remove. Charts come only from the Helm repositories set for the appliance, named `repository/chart`; a chart named by a path on the appliance, an address or an OCI reference is refused, as are dependencies fetched from where a chart says.
+- **What they risk:** Headlamp keeps one list of Helm repositories for every user and cluster, and the appliance fetches their charts. Only those who hold the setup's privileges on `/` add, update or remove a repository, over HTTPS with its certificate checked and any credentials sent to its own host alone, so nobody else can point another user's install at a chart of their choosing.
+- **Not offered either way:** port forwards, which Headlamp offers in its desktop app alone, as a forward listens on the machine Headlamp runs on, here the appliance, for everyone signed in to the cluster; the external proxy, which would fetch any address from the appliance, and so the app catalog's search of Artifact Hub; and Headlamp's own metrics, which count every user's requests to every cluster.
+
 The appliance keeps the module's other settings at their defaults: the management cluster is named `kubehenge`, its nodes have 4 vCPUs, 4 GiB of memory and a 32 GB disk, and it creates the pools `kubehenge` (clusters), `kubehenge-templates` (VM templates) and `kubehenge-management` (its own VMs).
 
 ### The state passphrase
 
-The management cluster's state holds its secrets, among them its admin kubeconfig and talosconfig. The appliance encrypts it with a key derived from the passphrase: at least 16 printable characters, on one line. The passphrase is never stored. Every later apply, the repair access on the Administration page and removal ask for it again, and without it the state cannot be read. Keep it in a password manager.
+The management cluster's state holds its secrets, among them its admin kubeconfig and talosconfig. The appliance encrypts it with a key derived from the passphrase: at least 16 printable characters, on one line. The passphrase is not stored, unless automatic upgrades of the management cluster are switched on ([upgrading.md](upgrading.md#automatically-after-kubehenge)). Every later apply, the repair access on the Administration page and removal ask for it again, and without it the state cannot be read. Keep it in a password manager.
 
 A first run that failed part of the way keeps its state, which records what it made, so the next try asks once for that run's passphrase rather than a new one. After a [removal](uninstalling.md#in-the-appliance) the emptied state goes, and the next setup chooses a passphrase afresh.
 
 **A lost passphrase cannot be recovered**, and nothing stands in for it. The management cluster and every cluster keep running, and the interface still creates, changes and deletes clusters with an account of its own. What is lost is applying the management cluster again (it stays at the versions it has), repair access, and removal from the page. To start over:
 
 1. Delete every cluster in the interface, and wait until they are gone, so that the management cluster cleans up their Proxmox VE objects.
-2. In Proxmox VE, delete the VMs in the pools `kubehenge-management` (the management cluster) and `kubehenge-templates` (the VM templates), then the pools `kubehenge-management`, `kubehenge-templates` and `kubehenge`, the users `kubehenge-cluster-api@pve`, `kubehenge-provisioner@pve` and `kubehenge-template-builder@pve` (their API tokens go with them), the group `kubehenge-clusters`, and the roles named `kubehenge-…`.
+2. In Proxmox VE, delete the VMs in the pools `kubehenge-management` (the management cluster) and `kubehenge-templates` (the VM templates), then the pools `kubehenge-management`, `kubehenge-templates` and `kubehenge`, the users `kubehenge-cluster-api@pve`, `kubehenge-provisioner@pve`, `kubehenge-template-builder@pve` and, where automatic upgrades of the management cluster were on, `kubehenge-upgrader@pve` (their API tokens go with them), the group `kubehenge-clusters`, and the roles named `kubehenge-…`.
 3. [Remove the appliance](uninstalling.md#remove-the-appliance) and install it again, which starts from an empty state.
 
 ### While it runs
@@ -446,6 +469,9 @@ tofu output -raw talosconfig > talosconfig
 | `cluster_sys_audit` | `false` | Let clusters choose the cloud controller manager's HA group labels, with `Sys.Audit` on `/`, unpropagated, for the cluster's token through a group the controller adds its user to ([above](#ha-group-labels)). |
 | `cluster_volume_snapshots` | `false` | Let clusters take volume snapshots, with their CSI plugin signed in as `root@pam` ([above](#volume-snapshots)). The controller reads `root@pam`'s password from the Secret `kubehenge-root-pam` in `kubehenge-system`, under `password`, which the module does not create: `kubectl -n kubehenge-system create secret generic kubehenge-root-pam --from-file=password=/dev/stdin`, then type the password, Enter and Ctrl-D. |
 | `extra_cluster_namespaces` | `[]` | Namespaces the interface creates and manages clusters in beside `clusters` ([clusters.md](clusters.md#more-namespaces-for-clusters)). Each is created if missing and kept when taken off the list; `default`, `cert-manager`, `kube-*` and `*-system` are refused. |
+| `etcd_restore` | `false` | Have the controller restore clusters' etcd itself through the VMs' guest agents, giving it a token with `VM.Audit` and `VM.GuestAgent.Unrestricted` on the workload pool ([above](#etcd-restores)). Without it, the interface shows the steps to restore by hand. |
+| `headlamp_sign_in` | `false` | Have the appliance's shared Headlamp sign those who may download a cluster's admin kubeconfig in as cluster-admin, through two ServiceAccounts the controller keeps in every cluster of the interface's namespaces ([above](#headlamp-sign-in)). Without the appliance it does nothing but keep those accounts. |
+| `headlamp_actions` | `false` | Have the appliance's shared Headlamp offer the Helm app catalog and the Prometheus charts it ships with, acting with each user's own credentials in the cluster ([above](#headlamp-actions)). Without the appliance it does nothing. |
 
 Outputs: `kubeconfig` and `talosconfig` (sensitive), `api_endpoint`, and `proxmox_objects`, which lists everything the module made on Proxmox VE.
 

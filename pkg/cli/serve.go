@@ -181,7 +181,7 @@ func (o *serveOptions) setUpAppliance(conn *pve.Config) error {
 	if err != nil {
 		return fmt.Errorf("--proxmox-ca: %w", err)
 	}
-	a.ProxmoxURL, a.ProxmoxCA, a.ProxmoxInsecure, a.Log = conn.URL, string(ca), conn.Insecure, s.Log
+	a.ProxmoxURL, a.ProxmoxCA, a.ProxmoxInsecure, a.Log, a.Release = conn.URL, string(ca), conn.Insecure, s.Log, release.Version
 	s.ProxmoxInsecure = conn.Insecure
 	a.InterfaceKubeconfig = appliance.InterfaceKubeconfig
 	a.StoreRootPassword = appliance.StoreRootPassword

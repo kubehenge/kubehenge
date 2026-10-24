@@ -28,6 +28,7 @@ const form: SetupForm = {
   offerHARules: false,
   clusterDatastoreAllocate: false,
   backupTargets: [],
+  etcdRestore: false,
   refresh: true,
   refreshWeekday: "Sun",
   refreshTime: "01:00",
@@ -42,6 +43,8 @@ const form: SetupForm = {
   rootPassword: "",
   moreNamespaces: false,
   extraNamespaces: "",
+  headlampSignIn: false,
+  headlampActions: false,
   passphrase: "correct horse battery staple",
   confirm: "correct horse battery staple",
 };
@@ -224,6 +227,33 @@ describe("setup", () => {
     expect(setupFieldProblems({ ...form, extraNamespaces: "kube-system" }).extraNamespaces).toBeUndefined();
   });
 
+  it("asks for restores through the guest agent only when they are switched on", () => {
+    expect(settings({ ...form, etcdRestore: true })).toHaveProperty("etcdRestore", true);
+    expect(settings(form)).not.toHaveProperty("etcdRestore");
+    expect([
+      formOf(settings({ ...form, etcdRestore: true })).etcdRestore,
+      formOf(settings(form)).etcdRestore,
+    ]).toStrictEqual([true, false]);
+  });
+
+  it("asks for the Headlamp sign-in only when it is switched on", () => {
+    expect(settings({ ...form, headlampSignIn: true })).toHaveProperty("headlampSignIn", true);
+    expect(settings(form)).not.toHaveProperty("headlampSignIn");
+    expect([
+      formOf(settings({ ...form, headlampSignIn: true })).headlampSignIn,
+      formOf(settings(form)).headlampSignIn,
+    ]).toStrictEqual([true, false]);
+  });
+
+  it("asks for the Headlamp actions only when they are switched on", () => {
+    expect(settings({ ...form, headlampActions: true })).toHaveProperty("headlampActions", true);
+    expect(settings(form)).not.toHaveProperty("headlampActions");
+    expect([
+      formOf(settings({ ...form, headlampActions: true })).headlampActions,
+      formOf(settings(form)).headlampActions,
+    ]).toStrictEqual([true, false]);
+  });
+
   it("passes the clusters' identity providers on, empty fields left to the defaults", () => {
     const s = settings({
       ...form,
@@ -328,6 +358,14 @@ describe("setup", () => {
     await user.type(screen.getByLabelText("DNS servers"), "192.0.2.1");
     await user.click(forClusters("Storages").getByRole("checkbox", { name: "local-lvm" }));
     await user.click(forClusters("Bridges").getByRole("checkbox", { name: "vmbr0" }));
+    const signIn = screen.getByLabelText(/^Sign those who may download a cluster's kubeconfig in/u);
+    expect(signIn).not.toBeChecked();
+    expect(signIn).toHaveAccessibleDescription(/Grants: .* cluster-admin.* Risks: /u);
+    await user.click(signIn);
+    const actions = screen.getByLabelText("Offer Helm and Prometheus charts in the appliance's Headlamp");
+    expect(actions).not.toBeChecked();
+    expect(actions).toHaveAccessibleDescription(/Grants: .* own credentials.* Risks: /u);
+    await user.click(actions);
     await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple");
     await user.type(screen.getByLabelText("Repeat passphrase"), "correct horse battery staple");
     await submit(user);
@@ -344,6 +382,8 @@ describe("setup", () => {
         imageDatastore: "local",
         bootstrapDatastore: "local",
         workloadBridges: ["vmbr0"],
+        headlampSignIn: true,
+        headlampActions: true,
       },
     });
   });
@@ -566,6 +606,78 @@ describe("setup", () => {
     expect(wizard.getByLabelText("VM disks")).toHaveValue("local-lvm");
     await user.click(wizard.getByRole("button", { name: "Cancel" }));
     expect(screen.getByRole("button", { name: "Apply again…" })).toBeInTheDocument();
+  });
+
+  it("switches restores through the guest agent on only once what they grant is confirmed", async () => {
+    window.history.replaceState(null, "", "/administration");
+    const saved = {
+      nodes: ["pve1"],
+      imageDatastore: "local",
+      vmDatastore: "local-lvm",
+      bridge: "vmbr0",
+      nodeAddresses: ["192.0.2.11/24"],
+      apiAddress: "192.0.2.10",
+      gateway: "192.0.2.1",
+      dnsServers: ["192.0.2.1"],
+      workloadDatastores: ["local-lvm"],
+      workloadBridges: ["vmbr0"],
+      bootstrapDatastore: "local",
+    };
+    const calls = fakeServer({
+      ...administrator,
+      ...administration,
+      "GET /api/setup": { body: { appliance: true, ready: true, allowed: true, settings: saved } },
+      "GET /api/proxmox/nodes": { body: [{ node: "pve1", online: true }] },
+      "GET /api/proxmox/storages": {
+        body: [
+          {
+            storage: "local",
+            node: "pve1",
+            shared: false,
+            content: ["iso", "import", "images"],
+            avail: 0,
+            total: 0,
+            usable: true,
+          },
+          { storage: "local-lvm", node: "pve1", shared: false, content: ["images"], avail: 0, total: 0, usable: true },
+        ],
+      },
+      "GET /api/proxmox/nodes/pve1/bridges": {
+        body: [{ bridge: "vmbr0", node: "pve1", vlanAware: false, usable: true }],
+      },
+      "POST /api/setup": {
+        status: 202,
+        body: { user: "root@pam", kind: "apply", started: new Date().toISOString(), state: "running", log: [] },
+      },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await expect(screen.findByText("By hand, with the steps shown")).resolves.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Edit…" }));
+    const wizard = within(screen.getByRole("region", { name: "Management cluster" }));
+    const choice = wizard.getByLabelText("Restore clusters' etcd through the Proxmox VE guest agent");
+
+    await user.click(choice);
+    let dialog = screen.getByRole("dialog", { name: "Restore etcd through the guest agent?" });
+    expect(dialog).toHaveTextContent("VM.GuestAgent.Unrestricted");
+    expect(dialog).toHaveTextContent("root shell");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(choice).not.toBeChecked();
+
+    await user.click(choice);
+    dialog = screen.getByRole("dialog", { name: "Restore etcd through the guest agent?" });
+    await user.click(within(dialog).getByRole("button", { name: "Switch on" }));
+    expect(choice).toBeChecked();
+    expect(calls.map((c) => c.key)).not.toContain("POST /api/setup");
+
+    await user.type(wizard.getByLabelText("State passphrase"), "correct horse battery staple");
+    await user.click(wizard.getByRole("button", { name: "Apply" }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.key === "POST /api/setup")?.body).toMatchObject({
+        settings: { etcdRestore: true },
+        passphrase: "correct horse battery staple",
+      }),
+    );
   });
 
   it("says so for an address with no page, and tells of an upgrade under the page", async () => {

@@ -3,17 +3,20 @@
 # cluster: create a cluster trusting an OpenID issuer, hardened to the CIS benchmark and enforcing
 # Pod Security's restricted level, check sign-in through it, its nodes against the benchmark, its
 # cloud controller manager, ingress controller, Gateway API, load balancer and persistent volumes,
-# what the health page's read-only identities may see in it, switch Headlamp (and its read-only
-# access for everyone), Kyverno, Istio (a namespace's traffic over mutual TLS), monitoring (every
+# what the health page's read-only identities may see in it, that the shared Headlamp's sign-in
+# identities are there for the interface's namespaces alone and do no more than they should, switch
+# Headlamp (and its read-only access for everyone), Kyverno, Istio (a namespace's traffic over mutual TLS), monitoring (every
 # component scraped with its server verified) and logs (a pod's lines, and with the node collector
 # the journal and the audit log, read in Loki through Grafana) on and off, back a namespace with a
 # volume and a Secret up with Velero to an S3 store the test serves, delete it and restore it, check
 # the store holds the backup encrypted, switch certificates on (from the cluster's own CA, then from
 # an ACME server over DNS-01 and over HTTP-01) and GitOps (Flux, then Argo CD, syncing a repository
-# on a Git server in the cluster through a deploy key), switch backups, certificates, GitOps and the
-# load balancer off, scale its workers up and down, upgrade it by one minor version (for RKE2 and
-# k3s with the first new server's join refused at first), replace a node that dies, delete it, and
-# check that nothing of it is left on Proxmox VE.
+# on a Git server in the cluster through a deploy key), switch backups, certificates and GitOps off,
+# take an etcd snapshot into the same store, read it back and restore etcd from it through the
+# guest agent, on RKE2 and k3s have the servers upload a snapshot of their own there and switch that
+# off, switch the load balancer off, scale its workers up and down, upgrade it by one minor version
+# (for RKE2 and k3s with the first new server's join refused at first), replace a node that dies,
+# delete it, and check that nothing of it is left on Proxmox VE.
 #
 #   test/e2e/workload-cluster.sh <ClusterClass> <version> <upgrade version>
 #
@@ -46,15 +49,18 @@
 # KUBEHENGE_E2E_BACKUP_TARGET names a backup target the management cluster was set up with whose
 # endpoint is on this machine, at an https:// address the cluster's nodes reach; the test serves
 # SeaweedFS's S3 gateway there with KUBEHENGE_E2E_BACKUP_CERT and KUBEHENGE_E2E_BACKUP_KEY, which
-# KUBEHENGE_E2E_BACKUP_CA, the target's CA, signed.
+# KUBEHENGE_E2E_BACKUP_CA, the target's CA, signed. The etcd snapshots go to the same target; the
+# management cluster restores etcd through the guest agent (etcd_restore), and Go builds the
+# kubehenge command that decrypts a snapshot.
 # KUBEHENGE_E2E_HA_GROUPS=1 switches the cloud controller manager's HA group labels on and off again,
 # with a management cluster that lets clusters choose them; the test makes an HA node-affinity rule
 # over every node, which needs Proxmox VE 9, and removes it again.
 # KUBEHENGE_E2E_NAMESPACE names one of the namespaces the management cluster's
 # extra_cluster_namespaces gives the web interface: the cluster is then created there with the
 # interface's own account, as the interface creates one in a namespace of its creator's choice, and
-# the namespace is left in place. Unset, the cluster gets a namespace of its own, created and deleted
-# with it.
+# the namespace is left in place; with the management cluster's headlamp_sign_in, the cluster gets
+# the shared Headlamp's sign-in identities there. Unset, the cluster gets a namespace of its own,
+# created and deleted with it, and none of those identities.
 # KUBEHENGE_E2E_VOLUME_SNAPSHOTS=1 switches volume snapshots on, takes a snapshot of a volume with
 # data, restores it into a new one and checks the data, and switches them off again, with a
 # management cluster that lets clusters take them, root@pam's password stored, and a
@@ -76,6 +82,10 @@ load_balancer=${KUBEHENGE_E2E_LOAD_BALANCER:-metallb}
 # renovate: datasource=github-release-attachments depName=seaweedfs/seaweedfs
 SEAWEEDFS_VERSION=4.48
 SEAWEEDFS_SHA256=4a7d108384d044d95212d1342cdda9533fa55842c1c9b41f606ca3c8a9561124
+# etcdutl, which reads the etcd snapshots back.
+# renovate: datasource=github-releases depName=etcd-io/etcd
+ETCD_VERSION=v3.7.2
+ETCD_SHA256=3a3679bc51a4ee9d30bccea1da7cd4fe62c6fc1d2ca1255068d2c53bf3026135
 
 # shellcheck source=common.sh
 . "$(dirname "$0")/common.sh"
@@ -90,6 +100,7 @@ ns=${KUBEHENGE_E2E_NAMESPACE:-${name}}
 issuer_pid=
 grafana_pid=
 s3_pid=
+recorder_pid=
 # The HA rule the nodes are labelled with, and the guest it needs.
 ha_rule=''
 ha_vmid=''
@@ -99,6 +110,7 @@ cleanup() {
     [ -z "${issuer_pid}" ] || kill "${issuer_pid}" 2> /dev/null || true
     [ -z "${grafana_pid}" ] || kill "${grafana_pid}" 2> /dev/null || true
     [ -z "${s3_pid}" ] || kill "${s3_pid}" 2> /dev/null || true
+    [ -z "${recorder_pid}" ] || kill "${recorder_pid}" 2> /dev/null || true
     # shellcheck disable=SC2310 # each removal is tried, whatever happened to those before it
     remove_ha_rule || true
     if [ "${status}" -ne 0 ] && [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
@@ -469,8 +481,9 @@ wl -n e2e-policy wait --for=condition=Ready pod/server --timeout=10s > /dev/null
 wl delete namespace e2e-policy --wait=false
 
 step "the health page's identities see a crash loop, and nothing they need not"
-# identity_kubeconfig <health | health-logs>: a kubeconfig of the token Kubehenge's controller keeps
-# beside the cluster, written to a file only this user reads rather than passed as an argument.
+# identity_kubeconfig <health | health-logs | headlamp-issuer>: a kubeconfig of the token
+# Kubehenge's controller keeps beside the cluster, written to a file only this user reads rather
+# than passed as an argument.
 identity_kubeconfig() {
     identity_secret=$(kubectl -n "${ns}" get "secret/${name}-$1" -o json 2> /dev/null) || return 1
     (
@@ -514,6 +527,42 @@ crash_log=$(KUBECONFIG="${work}/health-logs" kubectl get --raw "/api/v1/namespac
     fail "the logs identity cannot read the pod's log"
 printf '%s' "${crash_log}" | grep -q no-such-command || fail "the pod's log does not tell why it stopped: ${crash_log}"
 wl delete namespace e2e-health --wait=false
+
+step "the shared Headlamp's sign-in identities, only for the interface's namespaces"
+headlamp_namespaces=$(kubectl -n kubehenge-system get deployment/kubehenge-controller -o json |
+    jq -r '[.spec.template.spec.containers[0].args[] | select(startswith("--headlamp-sign-in-namespaces=")) | split("=")[1] | split(",")[]] | join(" ")')
+signed_in=
+case " ${headlamp_namespaces} " in
+    *" ${ns} "*) signed_in=yes ;;
+    *) ;;
+esac
+if [ -n "${signed_in}" ]; then
+    until_true 300 "the Headlamp issuer's token beside the cluster" identity_kubeconfig headlamp-issuer
+    # The issuer makes the Headlamp account's tokens, as the interface does for a session, and
+    # nothing else; a token made acts as cluster-admin.
+    (
+        umask 077
+        KUBECONFIG="${work}/headlamp-issuer" kubectl -n kube-system create token kubehenge-headlamp --duration=10m > "${work}/headlamp-token" ||
+            fail "the issuer cannot make the Headlamp account's token"
+        KUBECONFIG="${work}/headlamp-issuer" kubectl config view --raw -o json |
+            jq --rawfile t "${work}/headlamp-token" '.users[0].user.token = ($t | rtrimstr("\n"))' > "${work}/headlamp-admin"
+    )
+    admin_can=$(KUBECONFIG="${work}/headlamp-admin" kubectl auth can-i '*' '*' --all-namespaces || true)
+    [ "${admin_can}" = yes ] || fail "the Headlamp account's token is not cluster-admin"
+    refused headlamp-issuer get secrets -n kube-system
+    refused headlamp-issuer list pods --all-namespaces
+    refused headlamp-issuer create serviceaccounts/kubehenge-health --subresource=token -n kube-system
+    refused headlamp-issuer create serviceaccounts/kubehenge-headlamp-issuer --subresource=token -n kube-system
+    mounted=$(wl -n kube-system get serviceaccount kubehenge-headlamp -o jsonpath='{.automountServiceAccountToken}')
+    [ "${mounted}" = false ] || fail "the Headlamp account's token is mounted into pods"
+else
+    found=$(wl -n kube-system get serviceaccount kubehenge-headlamp -o name --ignore-not-found)
+    [ -z "${found}" ] ||
+        fail "the Headlamp account is in a cluster outside the interface's namespaces (${headlamp_namespaces:-sign-in off})"
+    found=$(kubectl -n "${ns}" get "secret/${name}-headlamp-issuer" -o name --ignore-not-found)
+    [ -z "${found}" ] ||
+        fail "the Headlamp issuer's token is beside a cluster outside the interface's namespaces"
+fi
 
 step "the ingress controller serves a host name on the API address and every node"
 wl create namespace e2e-ingress
@@ -1049,6 +1098,184 @@ on_machines() {
         guest "${pm_node}" "${pm_vmid}" "$2"
     done
 }
+
+# etcd is taken, restored and uploaded before any add-on runs: replacing a server holds two beside
+# the worker, which the runner has room for only while the cluster is this small, and every add-on
+# after it then runs on a restored cluster.
+step "an S3 store for the backups and etcd snapshots"
+target=$(printf '%s' "${class_json}" | jq -c --arg t "${KUBEHENGE_E2E_BACKUP_TARGET}" \
+    '.metadata.annotations["kubehenge.dev/backup-targets"] // "[]" | fromjson | .[] | select(.name == $t)')
+[ -n "${target}" ] || fail "${class} offers no backup target ${KUBEHENGE_E2E_BACKUP_TARGET}"
+s3_endpoint=$(printf '%s' "${target}" | jq -r .endpoint)
+bucket=$(printf '%s' "${target}" | jq -r .bucket)
+region=$(printf '%s' "${target}" | jq -r '.region // "us-east-1"')
+# Where the cluster's backups go in the bucket, as Kubehenge names it.
+prefix=$(printf '%s' "${target}" | jq -r --arg own "${ns}.${name}/velero" 'if (.prefix // "") == "" then $own else .prefix + "/" + $own end')
+s3_port=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlsplit(sys.argv[1]).port or 443)' "${s3_endpoint}")
+curl -sS --fail -L -o "${work}/seaweedfs.tar.gz" \
+    "https://github.com/seaweedfs/seaweedfs/releases/download/${SEAWEEDFS_VERSION}/linux_amd64.tar.gz"
+printf '%s  %s\n' "${SEAWEEDFS_SHA256}" "${work}/seaweedfs.tar.gz" | sha256sum -c - > /dev/null ||
+    fail "SeaweedFS's download does not have its SHA-256"
+tar -xzf "${work}/seaweedfs.tar.gz" -C "${work}" weed
+s3_key=e2e$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
+s3_secret=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
+jq -n --arg k "${s3_key}" --arg s "${s3_secret}" \
+    '{identities: [{name: "e2e", credentials: [{accessKey: $k, secretKey: $s}], actions: ["Admin", "Read", "Write", "List", "Tagging"]}]}' \
+    > "${work}/s3.json"
+mkdir -p "${work}/s3-data"
+"${work}/weed" server -dir="${work}/s3-data" -ip=127.0.0.1 -ip.bind=0.0.0.0 -master.port=19333 -master.volumeSizeLimitMB=256 \
+    -volume.port=18080 -filer.port=18888 -s3 -s3.port="${s3_port}" -s3.config="${work}/s3.json" \
+    -s3.cert.file="${KUBEHENGE_E2E_BACKUP_CERT}" -s3.key.file="${KUBEHENGE_E2E_BACKUP_KEY}" > "${work}/s3.log" 2>&1 &
+s3_pid=$!
+s3() { curl -sS --fail --cacert "${KUBEHENGE_E2E_BACKUP_CA}" --aws-sigv4 "aws:amz:${region}:s3" --user "${s3_key}:${s3_secret}" "$@"; }
+until_true 120 "the S3 store takes a bucket" s3 -X PUT -o /dev/null "${s3_endpoint}/${bucket}"
+# As the interface stores a cluster's own key for its target.
+kubectl -n "${ns}" create secret generic "${name}.backup" --type=kubehenge.dev/user-credential \
+    --from-literal=accessKeyID="${s3_key}" --from-literal=secretAccessKey="${s3_secret}"
+kubectl -n "${ns}" label secret "${name}.backup" kubehenge.dev/user-credential=backup "kubehenge.dev/credential-cluster=${name}"
+
+step "etcd snapshots: one taken into the S3 store, encrypted, and read back"
+# A ConfigMap rather than a Secret, which the cluster encrypts in etcd: the database holds it in
+# plain text, so it is seen there and must not be seen in the store.
+etcd_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+wl -n default create configmap e2e-before-snapshot --from-literal=marker="${etcd_marker}"
+set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2}"
+# As the interface's Take a snapshot now asks for one.
+now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+kubectl -n "${ns}" annotate cluster "${name}" --overwrite \
+    "kubehenge.dev/etcd-snapshot-requested={\"by\":\"e2e\",\"at\":\"${now}\"}"
+# snapshot_taken: whether the controller has taken the snapshot asked for; one it tried and failed
+# fails the test with why.
+snapshot_taken() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    cluster_json=$(kubectl -n "${ns}" get cluster "${name}" -o json) || return 1
+    if printf '%s' "${cluster_json}" | jq -e '.metadata.annotations["kubehenge.dev/etcd-snapshot-requested"]' > /dev/null; then
+        return 1
+    fi
+    if ! printf '%s' "${cluster_json}" |
+        jq -e '.status.conditions[]? | select(.type == "EtcdSnapshotSucceeded" and .status == "True")' > /dev/null; then
+        printf '%s' "${cluster_json}" | jq '.status.conditions[]? | select(.type == "EtcdSnapshotSucceeded")' >&2
+        kubectl -n kubehenge-system logs deployment/kubehenge-controller --tail=100 >&2
+        fail "the etcd snapshot was not taken"
+    fi
+}
+until_true 900 "an etcd snapshot taken" snapshot_taken
+snapshot=$(kubectl -n "${ns}" get cluster "${name}" -o json | jq -c '.metadata.annotations["kubehenge.dev/etcd-snapshot"] | fromjson')
+snapshot_name=$(printf '%s' "${snapshot}" | jq -r .name)
+etcd_prefix=$(printf '%s' "${target}" | jq -r --arg own "${ns}.${name}/etcd" 'if (.prefix // "") == "" then $own else .prefix + "/" + $own end')
+keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
+[ "${keys}" = "${etcd_prefix}/${snapshot_name}" ] || fail "the store's etcd snapshots are not the one taken: ${keys}"
+s3 -o "${work}/snapshot.db.age" "${s3_endpoint}/${bucket}/${etcd_prefix}/${snapshot_name}"
+header=$(head -c 21 "${work}/snapshot.db.age")
+[ "${header}" = age-encryption.org/v1 ] || fail "the etcd snapshot in the store is not encrypted with age"
+grep -r -q -F "${etcd_marker}" "${work}/s3-data" && fail "the store keeps the etcd snapshot unencrypted"
+kubectl -n "${ns}" get secret "${name}-backup-keys" -o jsonpath='{.data.etcd-snapshot-identity}' | base64 -d > "${work}/etcd-identity"
+go -C "$(dirname "$0")/../.." run ./cmd/kubehenge etcd-snapshot decrypt --identity "${work}/etcd-identity" \
+    "${work}/snapshot.db.age" "${work}/snapshot.db"
+sum=$(sha256sum "${work}/snapshot.db" | cut -d ' ' -f 1)
+taken_sum=$(printf '%s' "${snapshot}" | jq -r .sha256)
+[ "${sum}" = "${taken_sum}" ] || fail "the decrypted snapshot does not have the SHA-256 it was taken with"
+curl -sS --fail -L -o "${work}/etcd.tar.gz" \
+    "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz"
+printf '%s  %s\n' "${ETCD_SHA256}" "${work}/etcd.tar.gz" | sha256sum -c - > /dev/null ||
+    fail "etcd's download does not have its SHA-256"
+tar -xzf "${work}/etcd.tar.gz" -C "${work}" --strip-components=1 "etcd-${ETCD_VERSION}-linux-amd64/etcdutl"
+status=$("${work}/etcdutl" snapshot status "${work}/snapshot.db" -w json) || fail "etcdutl cannot read the snapshot"
+# The revision recorded is the member's just before the snapshot began; writes in between add to
+# the snapshot's.
+db_revision=$(printf '%s' "${status}" | jq .revision)
+taken_revision=$(printf '%s' "${snapshot}" | jq '.revision // 0')
+[ "${taken_revision}" -gt 0 ] || fail "no revision was recorded for the snapshot: ${snapshot}"
+[ "${db_revision}" -ge "${taken_revision}" ] ||
+    fail "the snapshot is older than the revision recorded for it: ${status}"
+grep -a -q -F "${etcd_marker}" "${work}/snapshot.db" || fail "the snapshot does not hold the ConfigMap made before it"
+
+step "etcd restored from the snapshot through the guest agent"
+wl -n default delete configmap e2e-before-snapshot
+wl -n default create configmap e2e-after-snapshot --from-literal=marker=after
+# lease_times: each Lease's last renewal, by namespace/name. An API server's identity Lease names one
+# process and outlives it by an hour, and the nodes' Leases go with their nodes, so neither is in.
+lease_times() {
+    wl get leases -A -l '!apiserver.kubernetes.io/identity' -o json |
+        jq -c '[.items[] | select(.metadata.namespace != "kube-node-lease") |
+            {key: "\(.metadata.namespace)/\(.metadata.name)", value: (.spec.renewTime // "")}] | from_entries'
+}
+# The Leases the cluster's components renew, which the restart baseline waits on.
+held_from=$(date +%s)
+held_since=$(date -u -d "@$((held_from - 60))" +%Y-%m-%dT%H:%M:%SZ)
+held_leases=$(lease_times | jq -c --arg since "${held_since}" '[to_entries[] | select(.value > $since) | .key]')
+# As the interface's Restore asks for it.
+now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+kubectl -n "${ns}" annotate cluster "${name}" \
+    "kubehenge.dev/etcd-restore={\"snapshot\":\"${snapshot_name}\",\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"by\":\"e2e\",\"at\":\"${now}\"}"
+# etcd_restored: whether the restore has ended and the controller let the cluster go; a failed one
+# fails the test with why.
+etcd_restored() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    cluster_json=$(kubectl -n "${ns}" get cluster "${name}" -o json) || return 1
+    restore=$(printf '%s' "${cluster_json}" | jq -c '.metadata.annotations["kubehenge.dev/etcd-restore-status"] // "{}" | fromjson')
+    case $(printf '%s' "${restore}" | jq -r '.phase // ""') in
+        Succeeded) ;;
+        Failed)
+            kubectl -n kubehenge-system logs deployment/kubehenge-controller --tail=100 >&2
+            fail "the etcd restore failed: ${restore}"
+            ;;
+        *) return 1 ;;
+    esac
+    printf '%s' "${cluster_json}" | jq -e '(.metadata.annotations["kubehenge.dev/etcd-restore"] | not) and (.spec.paused // false | not)' > /dev/null
+}
+until_true 2400 "etcd restored" etcd_restored
+until_true 1200 "cluster ${name} available after the restore" available_or_failed
+wl wait --for=condition=Ready nodes --all --timeout=10m
+until_true 300 "the ConfigMap made before the snapshot back" wl -n default get configmap e2e-before-snapshot
+# shellcheck disable=SC2310 # absent's answer is what is checked.
+absent wl -n default get configmap e2e-after-snapshot || fail "a ConfigMap made after the snapshot outlived the restore"
+wl -n default delete configmap e2e-before-snapshot
+keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
+[ "${keys}" = "${etcd_prefix}/${snapshot_name}" ] || fail "the restore left objects in the store: ${keys}"
+
+case ${distribution} in
+    rke2 | k3s)
+        step "${distribution}'s own etcd snapshots uploaded to the same store, and switched off"
+        # The drop-in is part of the servers' bootstrap, so switching the upload replaces them.
+        servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+        servers_replaced() {
+            kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o json |
+                jq -e --arg old " ${servers} " '(.items | length > 0) and all(.items[]; .metadata.name as $name |
+                    .status.phase == "Running" and (($old | contains(" " + $name + " ")) | not))' > /dev/null
+        }
+        set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2,\"distributionUpload\":true}"
+        until_true 300 "the upload's Secret in kube-system" wl -n kube-system get secret kubehenge-etcd-s3
+        upload_secret=$(wl -n kube-system get secret kubehenge-etcd-s3 -o json)
+        printf '%s' "${upload_secret}" | jq -e '.type == "etcd.k3s.cattle.io/s3-config-secret" and
+            (.data["etcd-s3-skip-ssl-verify"] | @base64d) == "false" and (.data["etcd-s3-insecure"] | @base64d) == "false" and
+            (.data["etcd-s3-endpoint-ca"] | @base64d | length > 0)' > /dev/null ||
+            fail "the upload's Secret does not verify the store's certificate"
+        until_true 1800 "the control planes replaced for the upload" servers_replaced
+        kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
+        upload_prefix=$(printf '%s' "${target}" | jq -r --arg own "${ns}.${name}/${distribution}-etcd" 'if (.prefix // "") == "" then $own else .prefix + "/" + $own end')
+        servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+        # The server reads the drop-in and the Secret, so the snapshot asked for goes to the store too.
+        # shellcheck disable=SC2310 # a failed save fails the test with the reason.
+        on_machines "${servers%% *}" "PATH=\$PATH:/usr/local/bin:/opt/rke2/bin ${distribution} etcd-snapshot save --name e2e-upload" > /dev/null ||
+            fail "${distribution} could not take a snapshot of its own"
+        uploaded() {
+            # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+            listing=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${upload_prefix}/") || return 1
+            printf '%s' "${listing}" | grep -q "<Key>${upload_prefix}/e2e-upload"
+        }
+        until_true 300 "${distribution}'s snapshot in the store" uploaded
+        servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+        set_variable etcdSnapshots "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
+        # The Secret stays until no server runs with the drop-in, which a server not yet replaced
+        # still reads on each scheduled snapshot, so it goes only once the servers are replaced.
+        until_true 1800 "the control planes replaced without the upload" servers_replaced
+        kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
+        until_true 300 "the upload's Secret gone" absent wl -n kube-system get secret kubehenge-etcd-s3
+        ;;
+    *) set_variable etcdSnapshots "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}" ;;
+esac
+
 # restarts: each pod's container restarts, by namespace/name.
 restarts() {
     wl get pods -A -o json |
@@ -1067,6 +1294,18 @@ server_restarts() {
     counts=$(on_machines "${servers}" "systemctl show -p NRestarts --value ${server_unit}") || return 1
     printf '%s\n' "${counts}" | awk '{ n += $1 } END { print n + 0 }'
 }
+# A component that could not renew its Lease while the API was away, through the restore or a
+# control plane's replacement, exits only once its renew deadline has passed, which may be after the
+# API is back. Once each Lease renewed before the restore is renewed again after this point, every
+# such restart has happened and is in the baseline.
+leases_at=$(lease_times)
+leases_renewed() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    times=$(lease_times) || return 1
+    printf '%s' "${times}" | jq -e --argjson held "${held_leases}" --argjson at "${leases_at}" \
+        '. as $now | all($held[]; ($now[.] // "") > ($at[.] // ""))' > /dev/null
+}
+until_true 300 "the components' Leases renewed after the restore" leases_renewed
 pods_before=$(restarts)
 # shellcheck disable=SC2310 # a failed count fails the step.
 servers_before=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
@@ -1399,40 +1638,8 @@ set_variable logs '{"enabled":true,"collector":"node","retentionDays":7,"sizeGiB
 until_true 600 "Alloy installed on the nodes" sh -c "KUBECONFIG=${work}/workload kubectl -n logging-node get daemonset/alloy-node >/dev/null 2>&1"
 wl -n logging-node rollout status daemonset/alloy-node --timeout=10m
 
-step "an S3 store for the backups"
-target=$(printf '%s' "${class_json}" | jq -c --arg t "${KUBEHENGE_E2E_BACKUP_TARGET}" \
-    '.metadata.annotations["kubehenge.dev/backup-targets"] // "[]" | fromjson | .[] | select(.name == $t)')
-[ -n "${target}" ] || fail "${class} offers no backup target ${KUBEHENGE_E2E_BACKUP_TARGET}"
-s3_endpoint=$(printf '%s' "${target}" | jq -r .endpoint)
-bucket=$(printf '%s' "${target}" | jq -r .bucket)
-region=$(printf '%s' "${target}" | jq -r '.region // "us-east-1"')
-# Where the cluster's backups go in the bucket, as Kubehenge names it.
-prefix=$(printf '%s' "${target}" | jq -r --arg own "${ns}.${name}/velero" 'if (.prefix // "") == "" then $own else .prefix + "/" + $own end')
-s3_port=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlsplit(sys.argv[1]).port or 443)' "${s3_endpoint}")
-curl -sS --fail -L -o "${work}/seaweedfs.tar.gz" \
-    "https://github.com/seaweedfs/seaweedfs/releases/download/${SEAWEEDFS_VERSION}/linux_amd64.tar.gz"
-printf '%s  %s\n' "${SEAWEEDFS_SHA256}" "${work}/seaweedfs.tar.gz" | sha256sum -c - > /dev/null ||
-    fail "SeaweedFS's download does not have its SHA-256"
-tar -xzf "${work}/seaweedfs.tar.gz" -C "${work}" weed
-s3_key=e2e$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
-s3_secret=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
-jq -n --arg k "${s3_key}" --arg s "${s3_secret}" \
-    '{identities: [{name: "e2e", credentials: [{accessKey: $k, secretKey: $s}], actions: ["Admin", "Read", "Write", "List", "Tagging"]}]}' \
-    > "${work}/s3.json"
-mkdir -p "${work}/s3-data"
-"${work}/weed" server -dir="${work}/s3-data" -ip=127.0.0.1 -ip.bind=0.0.0.0 -master.port=19333 -master.volumeSizeLimitMB=256 \
-    -volume.port=18080 -filer.port=18888 -s3 -s3.port="${s3_port}" -s3.config="${work}/s3.json" \
-    -s3.cert.file="${KUBEHENGE_E2E_BACKUP_CERT}" -s3.key.file="${KUBEHENGE_E2E_BACKUP_KEY}" > "${work}/s3.log" 2>&1 &
-s3_pid=$!
-s3() { curl -sS --fail --cacert "${KUBEHENGE_E2E_BACKUP_CA}" --aws-sigv4 "aws:amz:${region}:s3" --user "${s3_key}:${s3_secret}" "$@"; }
-until_true 120 "the S3 store takes a bucket" s3 -X PUT -o /dev/null "${s3_endpoint}/${bucket}"
-
 step "backups with Velero: a volume and a Secret backed up, deleted and restored"
 marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-# As the interface stores a cluster's own key for its target.
-kubectl -n "${ns}" create secret generic "${name}.backup" --type=kubehenge.dev/user-credential \
-    --from-literal=accessKeyID="${s3_key}" --from-literal=secretAccessKey="${s3_secret}"
-kubectl -n "${ns}" label secret "${name}.backup" kubehenge.dev/user-credential=backup "kubehenge.dev/credential-cluster=${name}"
 set_variable backups "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
 until_true 900 "Velero installed" wl -n velero rollout status deployment/velero --timeout=10s
 until_true 600 "Velero's node agent on every node" wl -n velero rollout status daemonset/node-agent --timeout=10s
@@ -1539,7 +1746,8 @@ control_plane_use "${work}/workload" backups
 
 step "the backup in the S3 store: under the cluster's own prefix, encrypted"
 keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
-stray=$(printf '%s\n' "${keys}" | grep -v -e "^${prefix}/" -e '^$' || true)
+# The etcd snapshots taken before stay in the store under the cluster's etcd prefixes.
+stray=$(printf '%s\n' "${keys}" | grep -v -e "^${prefix}/" -e "^${etcd_prefix}/" -e "^${upload_prefix:-${etcd_prefix}}/" -e '^$' || true)
 [ -z "${stray}" ] || fail "objects outside the cluster's prefix ${prefix}: ${stray}"
 printf '%s\n' "${keys}" | grep -q "^${prefix}/kopia/e2e-backup/" || fail "no Kopia repository for e2e-backup under ${prefix}"
 tarball="${s3_endpoint}/${bucket}/${prefix}/backups/e2e/e2e.tar.gz"
@@ -2228,6 +2436,9 @@ unpinned=$(printf '%s\n%s\n' "${images}" "${system_images}" | grep -v -e '@sha25
 [ -z "${unpinned}" ] || fail "images named without a digest (pod, image): ${unpinned}"
 
 step "every add-on switched off at once"
+# Removing them all at once is the control planes' heaviest moment.
+control_plane_record "${work}/workload" &
+recorder_pid=$!
 set_variable headlamp '{"enabled":false}'
 # Logs go first: they need monitoring, which is refused off while they are on.
 # shellcheck disable=SC2310 # the refusal is the answer looked for.
@@ -2275,6 +2486,8 @@ kubectl -n "${ns}" get secret "${name}-backup-keys" > /dev/null || fail "the bac
 s3 -o /dev/null "${tarball}" -H 'x-amz-server-side-encryption-customer-algorithm: AES256' \
     -H "x-amz-server-side-encryption-customer-key: ${sse_key}" -H "x-amz-server-side-encryption-customer-key-MD5: ${sse_md5}" ||
     fail "the backup went from the store with Velero"
+kill "${recorder_pid}" 2> /dev/null || true
+recorder_pid=
 kill "${s3_pid}"
 s3_pid=
 # removed <kubectl get...>: whether the object is gone, or its kind with it, as cert-manager's own
@@ -2474,6 +2687,15 @@ elif ! kubectl delete namespace "${ns}" --wait --timeout=5m; then
     # Its conditions say what is left in it and whose finalizers hold that.
     left=$(kubectl get namespace "${ns}" -o jsonpath='{range .status.conditions[?(@.status=="True")]}{.message}; {end}' || true)
     fail "namespace ${ns} is still there: ${left}"
+fi
+if [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
+    # What was kept beside the cluster goes with it, Cluster API's Secrets and the controller's,
+    # which carry no label of the cluster. A failed request is not an empty list.
+    secrets_gone() {
+        secrets=$(kubectl -n "${ns}" get secrets -o json) || return 1
+        printf '%s' "${secrets}" | jq -e --arg n "${name}" '[.items[] | select(.metadata.name | startswith($n + "-"))] | length == 0' > /dev/null
+    }
+    until_true 300 "the cluster's Secrets in ${ns} removed" secrets_gone
 fi
 
 # Another test may be using the class on the same management cluster.

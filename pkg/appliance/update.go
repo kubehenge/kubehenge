@@ -84,6 +84,12 @@ func (s Spool) Status() *UpdateStatus {
 	return &st
 }
 
+// Pending tells whether a request waits for the updater to take it.
+func (s Spool) Pending() bool {
+	_, err := os.Lstat(filepath.Join(s.requests(), "upgrade.json"))
+	return err == nil
+}
+
 func (s Spool) requests() string { return filepath.Join(string(s), "requests") }
 
 // Updater replaces the appliance's software with a signed newer release. It runs as root, so it

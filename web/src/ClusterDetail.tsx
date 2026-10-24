@@ -1,10 +1,11 @@
 import { useEffect, useState, type JSX } from "react";
 
 import { api } from "./api";
-import { BackupsDialog, BackupsView, backupsOf, useBackupsRows } from "./Backups";
+import { AutoscalerDialog, ScaleDialog, autoscalerText, poolText } from "./Autoscaling";
+import { BackupsDialog, BackupsView, backupsOf, backupsRows, useClassTargets } from "./Backups";
 import { issuesFromCA, saveCA } from "./Certificates";
 import { OptionDialog, Options, type OptionAction } from "./ClusterOptions";
-import { controlPlaneSizes } from "./create-form";
+import { EtcdSnapshotsDialog, EtcdSnapshotsView, etcdSnapshotsOf, etcdSnapshotsRows } from "./EtcdSnapshots";
 import { HealthView } from "./Health";
 import { Link, navigate } from "./router";
 import type { Cluster, Machine, Versions } from "./types";
@@ -18,7 +19,6 @@ import {
   distributionName,
   errorMessage,
   filled,
-  maxWorkers,
   pollIdle,
   saveFile,
   settled,
@@ -27,17 +27,21 @@ import {
   type Health,
 } from "./ui";
 
-type Action = "scale" | "upgrade" | "delete" | "backups" | OptionAction;
+type Action = "scale" | "upgrade" | "delete" | "backups" | "autoscaler" | "etcdSnapshots" | OptionAction;
 
 // A cluster on its way somewhere is looked at more often than a settled one.
 const pollChanging = 5000;
 
 const httpNotFound = 404;
 
-/** headlampURL is a cluster's page in the shared Headlamp, served on its own port of this host. */
+/**
+ * headlampURL is a cluster's page in the shared Headlamp, served on its own port of this host.
+ * A cluster's goes through the gate's opening of it, which signs in again a session that signed
+ * out of the cluster in Headlamp, and leads on to the cluster's page there.
+ */
 export function headlampURL(port: number, cluster?: string): string {
   const host = location.hostname.includes(":") ? `[${location.hostname}]` : location.hostname;
-  return `https://${host}:${port}/${filled(cluster) ? `c/${encodeURIComponent(cluster)}` : ""}`;
+  return `https://${host}:${port}/${filled(cluster) ? `kubehenge/open/${encodeURIComponent(cluster)}` : ""}`;
 }
 
 // headlampOf is the cluster's page in the shared Headlamp, when one runs and can reach the cluster.
@@ -254,7 +258,12 @@ export function ClusterDetail({
           {view === "" && <Summary cluster={c} />}
           {view === "health" && <HealthView cluster={c} headlamp={inHeadlamp} />}
           {view === "machines" && <Machines cluster={c} />}
-          {view === "backups" && <BackupsView cluster={c} can={can} onEdit={setAction} />}
+          {view === "backups" && (
+            <>
+              <BackupsView cluster={c} can={can} onEdit={setAction} />
+              <EtcdSnapshotsView cluster={c} can={can} onEdit={setAction} />
+            </>
+          )}
           {view === "options" && <OptionsView cluster={c} can={can} onEdit={setAction} />}
         </div>
       </div>
@@ -285,11 +294,17 @@ function ActionDialog({
   if (action === "backups") {
     return <BackupsDialog cluster={c} onClose={onClose} />;
   }
+  if (action === "autoscaler") {
+    return <AutoscalerDialog cluster={c} onClose={onClose} />;
+  }
+  if (action === "etcdSnapshots") {
+    return <EtcdSnapshotsDialog cluster={c} onClose={onClose} />;
+  }
   return <OptionDialog action={action} cluster={c} onClose={onClose} />;
 }
 
 // OptionsView is the Options view, with the rows of the settings whose dialogs live with views of
-// their own.
+// their own, and the autoscaler's, which lives with the Scale dialog's.
 function OptionsView({
   cluster: c,
   can,
@@ -299,7 +314,12 @@ function OptionsView({
   can: boolean;
   onEdit: (a: Action) => void;
 }): JSX.Element {
-  const more = useBackupsRows(c);
+  const offered = (useClassTargets(c.class) ?? []).length > 0;
+  const more = [
+    ...backupsRows(c, offered),
+    ...etcdSnapshotsRows(c, offered),
+    { label: "Autoscaler", value: autoscalerText(c), action: "autoscaler" as const, name: "the autoscaler" },
+  ];
   return <Options cluster={c} can={can} onEdit={onEdit} more={more} />;
 }
 
@@ -331,6 +351,12 @@ function Summary({ cluster: c }: { cluster: Cluster }): JSX.Element {
             ? "None; the control planes run the workloads"
             : `${c.workers.ready} of ${c.workers.desired} ready`}
         </dd>
+        {c.workerPools.some((p) => p.autoscaling) && (
+          <>
+            <dt>Worker pools</dt>
+            <dd>{c.workerPools.map((p) => `${p.name}: ${poolText(p)}`).join("; ")}</dd>
+          </>
+        )}
         <dt>Proxmox VE pool</dt>
         <dd>{poolName(c.pool)}</dd>
         <dt>Namespace</dt>
@@ -440,76 +466,6 @@ function Machines({ cluster: c }: { cluster: Cluster }) {
         </tbody>
       </table>
     </div>
-  );
-}
-
-// Options lists what can be set on a cluster after it was created, each with its Edit button, as
-// Proxmox VE's Options panels do.
-function ScaleDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
-  const current = c.controlPlane.desired || 1;
-  const [controlPlane, setControlPlane] = useState(current);
-  // Kept as typed, so a cleared field stays empty instead of turning into 0.
-  const [pools, setPools] = useState<Record<string, string>>(
-    Object.fromEntries(c.workerPools.map((p) => [p.name, String(p.replicas)])),
-  );
-  const { busy, error, send } = useChange(c, onClose);
-  const invalid = Object.fromEntries(
-    Object.entries(pools).map(([k, v]) => [
-      k,
-      /^\d+$/u.test(v) && Number(v) <= maxWorkers ? undefined : `A whole number from 0 to ${maxWorkers}.`,
-    ]),
-  );
-  const changed = controlPlane !== current || c.workerPools.some((p) => pools[p.name] !== String(p.replicas));
-  return (
-    <Dialog
-      title={`Scale ${c.name}`}
-      onClose={onClose}
-      onSubmit={() => {
-        void send({
-          controlPlaneReplicas: controlPlane,
-          workerPools: Object.fromEntries(Object.entries(pools).map(([k, v]) => [k, Number(v)])),
-        });
-      }}
-      actions={
-        <>
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="primary" disabled={busy || !changed || Object.values(invalid).some(Boolean)}>
-            Scale
-          </button>
-        </>
-      }
-    >
-      <Field label="Control-plane nodes" hint="Three or more keep the cluster running when one node fails.">
-        {(id) => (
-          <select id={id} value={controlPlane} onChange={(e) => setControlPlane(Number(e.target.value))}>
-            {[...new Set([...controlPlaneSizes, current])]
-              .toSorted((a, b) => a - b)
-              .map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-          </select>
-        )}
-      </Field>
-      {c.workerPools.map((p) => (
-        <Field key={p.name} label={`Workers (${p.name})`} error={invalid[p.name]}>
-          {(id) => (
-            <input
-              id={id}
-              type="number"
-              min={0}
-              max={maxWorkers}
-              value={pools[p.name] ?? ""}
-              onChange={(e) => setPools({ ...pools, [p.name]: e.target.value })}
-            />
-          )}
-        </Field>
-      ))}
-      <ErrorBox message={error} />
-    </Dialog>
   );
 }
 
@@ -641,6 +597,7 @@ function DeleteDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
         This deletes the cluster's VMs and its persistent volumes, and removes it from Rancher. It cannot be undone.
         {backupsOf(c.variables["backups"]).enabled &&
           " Its backups stay in the target, and a cluster created again under the same name and target can restore them."}
+        {etcdSnapshotsOf(c.variables["etcdSnapshots"]).enabled && " Its etcd snapshots stay in the target too."}
       </p>
       <Field label="Confirm name" hint={`Type ${c.name}.`}>
         {(id) => <input id={id} value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" />}

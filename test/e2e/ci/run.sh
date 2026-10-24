@@ -7,8 +7,8 @@
 # <test> is management-cluster (applies the management cluster, runs the templates and volumes tests
 # while it is up, and destroys it), management-cluster-upgrade (applies and destroys it), appliance
 # (installs the appliance, which sets the management cluster up and removes it), or kubeadm, rke2,
-# k3s, rancher, cluster-mesh or node-image-refresh, which first apply the management cluster and
-# create the templates they need, and leave it up.
+# k3s, rancher, cluster-mesh, node-image-refresh or autoscaler, which first apply the management
+# cluster and create the templates they need, and leave it up.
 #
 # The workload clusters start one minor version behind the management cluster's Kubernetes and are
 # upgraded to it; KUBEHENGE_E2E_FROM names the release they start on.
@@ -17,7 +17,7 @@ set -eu
 work=$(readlink -f "${1:?usage: $0 <work directory> <test>}")
 test=${2:?usage: $0 <work directory> <test>}
 case "${test}" in
-    management-cluster | management-cluster-upgrade | appliance | kubeadm | rke2 | k3s | rancher | cluster-mesh | node-image-refresh) ;;
+    management-cluster | management-cluster-upgrade | appliance | kubeadm | rke2 | k3s | rancher | cluster-mesh | node-image-refresh | autoscaler) ;;
     *)
         echo "unknown test ${test}" >&2
         exit 2
@@ -60,7 +60,7 @@ template() { # distribution [flags]
 # the build address.
 templates=
 case "${test}" in
-    rke2 | k3s | kubeadm | rancher | cluster-mesh | node-image-refresh)
+    rke2 | k3s | kubeadm | rancher | cluster-mesh | node-image-refresh | autoscaler)
         make -s -C "${repo}" build
         {
             waited=0
@@ -74,7 +74,7 @@ case "${test}" in
             done
             case "${test}" in
                 rke2) template rke2 ;;
-                k3s | rancher | cluster-mesh | node-image-refresh) template k3s ;;
+                k3s | rancher | cluster-mesh | node-image-refresh | autoscaler) template k3s ;;
                 kubeadm)
                     template kubeadm --kubernetes-version "${from}"
                     template kubeadm --kubernetes-version "${to}"
@@ -145,7 +145,8 @@ case "${test}" in
             gateway: "172.20.99.1", dnsServers: ["172.20.99.1"],
             workloadDatastores: ["local"], workloadBridges: ["vmbr0"],
             registryMirrors: {"ghcr.io": ["http://172.21.99.3:5000"]}, controllerImage: $image,
-            offerHARules: true, extraClusterNamespaces: ["e2e-team"]
+            offerHARules: true, extraClusterNamespaces: ["e2e-team"], headlampSignIn: true,
+            headlampActions: true
         }' > "${work}/appliance-settings.json"
         pve=kubehenge-e2e-pve
         docker exec "${pve}" sh -c 'rm -rf /root/kubehenge && mkdir -p /root/kubehenge/test'
@@ -245,6 +246,11 @@ case "${test}" in
     node-image-refresh)
         export KUBEHENGE_E2E_VERSION="${from}+k3s1"
         e2e e2e-node-image-refresh
+        ;;
+    autoscaler)
+        export KUBEHENGE_E2E_ENDPOINT=172.20.99.20 KUBEHENGE_E2E_ADDRESSES=172.20.99.21-172.20.99.24
+        export KUBEHENGE_E2E_VERSION="${from}+k3s1"
+        e2e e2e-autoscaler
         ;;
     # Checked before anything was built.
     *) ;;

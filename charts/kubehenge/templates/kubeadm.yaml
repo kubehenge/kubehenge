@@ -49,6 +49,7 @@ metadata:
     # root@pam's password for it.
     kubehenge.dev/volume-snapshots: "true"
     {{- end }}
+    {{- include "kubehenge.etcdRestore" . | nindent 4 }}
 spec:
   infrastructure:
     templateRef:
@@ -90,6 +91,7 @@ spec:
     {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 1 "workerMinMemoryMiB" 2048 "clusters" .Values.clusters) | nindent 4 }}
     {{- include "kubehenge.addonVariables" . | nindent 4 }}
     {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
+    {{- include "kubehenge.autoscalerVariable" . | nindent 4 }}
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
     {{- include "kubehenge.cisVariable" . | nindent 4 }}
     - name: cni
@@ -138,6 +140,12 @@ spec:
                     secret:
                       name: {{ "{{ .builtin.cluster.name }}" }}-encryption
                       key: encryption-config.yaml
+            - op: add
+              path: /spec/template/spec/kubeadmConfigSpec/clusterConfiguration/apiServer/extraEnvs
+              valueFrom:
+                template: |
+                  - name: GOMEMLIMIT
+                    value: {{ include "kubehenge.apiServerMemoryLimit" (dict "share" 40) }}
     # kubeadm applies its patches for a target in the order of their names, this one after the
     # kubelet's own (kubehenge.kubeletConfigFile).
     - name: kubeadm-cis

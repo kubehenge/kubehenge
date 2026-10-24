@@ -77,10 +77,12 @@ func addonsOn(cluster *clusterv1.Cluster) ([]string, error) {
 // with the add-ons. With workers and add-ons, ControlPlaneNeed is what each control plane uses
 // itself with them, and ControlPlaneHave the memory each has.
 type addonRoom struct {
-	Addons                             []string
-	Need, Have                         int
-	Base                               int
-	WithoutWorkers                     bool
+	Addons         []string
+	Need, Have     int
+	Base           int
+	WithoutWorkers bool
+	// Autoscaled is a cluster whose workers all come and go with the autoscaler, down to none.
+	Autoscaled                         bool
 	ControlPlaneNeed, ControlPlaneHave int
 }
 
@@ -114,6 +116,10 @@ func checkAddonRoom(old, cluster *clusterv1.Cluster, class *clusterv1.ClusterCla
 		if room.WithoutWorkers {
 			return fmt.Errorf("the cluster's add-ons (%s) need %d MiB of memory on its control planes, which run them without workers, beyond the %d MiB a control plane uses itself with them, and the control planes have %d MiB for them",
 				addons, room.Need, room.Base, room.Have)
+		}
+		if room.Autoscaled {
+			return fmt.Errorf("the cluster's add-ons (%s) need %d MiB of memory on its workers, beyond the %d MiB a worker uses itself, and its autoscaled pools may go down to no workers; at least one of them has to keep one",
+				addons, room.Need, room.Base)
 		}
 		return fmt.Errorf("the cluster's add-ons (%s) need %d MiB of memory on its workers, beyond the %d MiB a worker uses itself, and the workers have %d MiB for them",
 			addons, room.Need, room.Base, room.Have)
@@ -173,32 +179,39 @@ func addonRoomOf(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) (add
 	if err != nil {
 		return room, err
 	}
+	topology := cluster.Spec.Topology
+	room.Base = nodes["worker"]
+	if room.Base == 0 {
+		room.Base = classMinimumSize(class, "workerMachine").MemoryMiB
+	}
+	// An autoscaled pool counts with its least workers, the room the add-ons always have; the control
+	// planes stay tainted while any pool is autoscaled (TaintReconciler), so the add-ons never move
+	// there.
+	workers, most := int32(0), int32(0)
+	for i := range topology.Workers.MachineDeployments {
+		md := &topology.Workers.MachineDeployments[i]
+		r := workerRange(md)
+		workers += r.least
+		most += r.most
+		_, mem, sizeErr := nodeSize(cluster, class, "workerMachine", md.Variables.Overrides)
+		if sizeErr != nil {
+			return room, sizeErr
+		}
+		room.Have += int(r.least) * max(mem-room.Base, 0)
+	}
+	if workers == 0 && most > 0 {
+		// Rancher's agent alone holds no worker up: it runs only once there is a Rancher to register
+		// with, and its pod waiting for room brings a worker up from none.
+		on = slices.DeleteFunc(on, func(a string) bool { return a == rancherAgentFigure })
+	}
 	grown := 0
 	for _, a := range on {
 		room.Need += memory[a]
 		grown += growth[a]
 	}
 	room.Addons = slices.DeleteFunc(on, func(a string) bool { return memory[a] == 0 && growth[a] == 0 })
-	topology := cluster.Spec.Topology
-	room.Base = nodes["worker"]
-	if room.Base == 0 {
-		room.Base = classMinimumSize(class, "workerMachine").MemoryMiB
-	}
-	workers := int32(0)
-	for i := range topology.Workers.MachineDeployments {
-		md := &topology.Workers.MachineDeployments[i]
-		replicas := int32(1)
-		if md.Replicas != nil {
-			replicas = *md.Replicas
-		}
-		workers += replicas
-		_, mem, sizeErr := nodeSize(cluster, class, "workerMachine", md.Variables.Overrides)
-		if sizeErr != nil {
-			return room, sizeErr
-		}
-		room.Have += int(replicas) * max(mem-room.Base, 0)
-	}
-	if workers > 0 {
+	if workers > 0 || most > 0 {
+		room.Autoscaled = workers == 0
 		if len(room.Addons) == 0 || nodes["controlPlane"] == 0 {
 			return room, nil
 		}

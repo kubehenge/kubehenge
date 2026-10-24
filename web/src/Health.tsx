@@ -161,7 +161,10 @@ function workersTile(h: ClusterHealth): Tile {
           label: "Workers",
           value: "None",
           state: "ok",
-          detail: "The control plane runs the workloads",
+          // The control planes stay tainted while a pool may grow, so pods wait for a worker instead.
+          detail: h.pools.items.some((p) => p.autoscaling !== undefined)
+            ? "The cluster autoscaler adds workers once pods wait for room"
+            : "The control plane runs the workloads",
         };
   }
   const ready = nodes.filter((n) => n.ready).length;
@@ -696,7 +699,14 @@ function Pools({ pools }: { pools: HealthSection<PoolState> }): JSX.Element | nu
                   <Status state={s.state} text={s.text} />
                   {filled(p.message) && <div className="hint message">{p.message}</div>}
                 </td>
-                <td>{p.desired}</td>
+                <td>
+                  {p.desired}
+                  {p.autoscaling && (
+                    <div className="hint">
+                      autoscaled, {p.autoscaling.min} to {p.autoscaling.max}
+                    </div>
+                  )}
+                </td>
                 <td>{p.ready}</td>
                 <td>{p.available}</td>
                 <td>{p.upToDate}</td>

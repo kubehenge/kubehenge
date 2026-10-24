@@ -270,6 +270,14 @@ kubehenge.dev/backup-targets: {{ .Values.backupTargets | toJson | quote }}
 {{- end -}}
 
 {{/*
+Whether the controller restores etcd through the VMs' guest agents, which the interface offers
+then; otherwise it shows the steps to restore by hand.
+*/}}
+{{- define "kubehenge.etcdRestore" -}}
+kubehenge.dev/etcd-restore-automatic: {{ .Values.proxmox.etcdRestore | toString | quote }}
+{{- end -}}
+
+{{/*
 Add-ons Kubehenge's controller installs into a cluster, the same for every distribution.
 */}}
 {{- define "kubehenge.addonVariables" -}}
@@ -428,6 +436,62 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
       x-kubernetes-validations:
         - rule: "!self.enabled || has(self.target)"
           message: Backups need a target.
+- name: etcdSnapshots
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        Snapshots of the cluster's etcd, which holds every object of the cluster but its volumes'
+        data, on a schedule to one of the S3 targets an administrator set, beside the cluster's
+        Velero backups in an etcd folder of its own. Kubehenge's controller takes each snapshot
+        through the cluster's API server with a client certificate it signs for itself, encrypts
+        it with age to a key of the cluster's own in the <cluster>-backup-keys Secret, and stores
+        it with the credential typed into the interface for the cluster, or else the one for every
+        cluster; no key or credential enters the cluster. Restoring one brings back the cluster's
+        objects as they were, for a cluster that lost its etcd quorum or had its objects deleted
+        or damaged.
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        target:
+          type: string
+          minLength: 1
+          maxLength: 63
+          description: The administrator's target to store the snapshots in, by name.
+        schedule:
+          type: string
+          minLength: 1
+          maxLength: 128
+          default: "0 */12 * * *"
+          description: When to take a snapshot, as a cron expression of five fields or a descriptor such as @daily.
+        timeZone:
+          type: string
+          default: UTC
+          description: IANA time zone the schedule is read in, such as Europe/Berlin.
+        keep:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 14
+          description: How many snapshots to keep; the oldest beyond are deleted from the target.
+        distributionUpload:
+          type: boolean
+          default: false
+          description: >-
+            RKE2 and k3s only: have the cluster's servers also take snapshots themselves on the same
+            schedule, read in UTC, and upload them to the target's <distribution>-etcd folder of the
+            cluster, keeping as many, as etcd holds them and not encrypted by Kubehenge. For it the
+            controller puts the target and its access key into the Secret kubehenge-etcd-s3 in the
+            cluster's kube-system, where whoever may read Secrets there reads the key and with it
+            everything the key reaches in the target. Switching it, or changing the schedule or keep
+            while it is on, replaces the control-plane machines.
+      x-kubernetes-validations:
+        - rule: "!self.enabled || has(self.target)"
+          message: etcd snapshots need a target.
+        - rule: "!has(self.distributionUpload) || !self.distributionUpload || self.enabled"
+          message: The distribution's own upload takes the target, schedule and keep of etcd snapshots, which are off.
 - name: podSecurity
   required: false
   schema:
@@ -1006,6 +1070,35 @@ Proxmox VE HA take it from there. Applied before the distribution starts with sy
 {{- end -}}
 
 {{/*
+The Go memory limit of a control plane's API server, as a Cluster API template over the cluster's
+variables (.share is the percentage of the control plane's memory). Go collects its heap only once
+it has grown to twice what the last collection left, so the API server, holding about 900 MiB, sat
+at 2.2 to 2.4 GiB, and as every add-on was removed at once a 4096 MiB control plane ran out of
+memory and stalled without an OOM kill. Under the limit it collects sooner instead, as it nears it.
+*/}}
+{{- define "kubehenge.apiServerMemoryLimit" -}}
+{{ printf "{{ div (mul .controlPlaneMachine.memoryMiB %d) 100 }}MiB" .share }}
+{{- end -}}
+
+{{/*
+Keeps an RKE2 or k3s server (.distribution) down once its etcd member is removed. The control-plane
+providers remove the member before the machine's VM goes, and the server, still running, leaves a
+tombstone; started again, it wipes its database and joins as a new member, which the VM's deletion
+then takes away as a voter: beside a single new server, etcd loses its quorum. Cluster API never
+adds a removed machine back, so nothing needs it to rejoin. A unit condition would not hold it:
+systemd tests conditions only on a start it is asked for, not when Restart= starts the unit again,
+so the check runs before every start instead.
+*/}}
+{{- define "kubehenge.removedServerFile" -}}
+- path: /etc/systemd/system/{{ ternary "rke2-server" "k3s" (eq .distribution "rke2") }}.service.d/10-kubehenge-removed.conf
+  owner: root:root
+  permissions: "0644"
+  content: |
+    [Service]
+    ExecStartPre=/bin/sh -c '! test -e /var/lib/rancher/{{ .distribution }}/server/db/etcd/tombstone'
+{{- end -}}
+
+{{/*
 An AppArmor profile for the runc that RKE2 and k3s bring (.distribution names which), confining
 nothing, as Ubuntu's own profile for its /usr/sbin/runc does. Without one their runc runs
 unconfined, and Ubuntu stacks the container's profile on unconfined when an unprivileged
@@ -1127,6 +1220,28 @@ streaming sessions that end when idle. Each class adds its distribution's own on
 {{ "{{ if .cis }}true{{ end }}" | quote }}
 {{- end -}}
 
+{{- define "kubehenge.etcdUploadEnabled" -}}
+{{ "{{ with .etcdSnapshots }}{{ if and .enabled .distributionUpload }}true{{ end }}{{ end }}" | quote }}
+{{- end -}}
+
+{{/*
+The drop-in that has RKE2's or k3s's servers upload their own etcd snapshots, with the target read
+from the Secret Kubehenge's controller keeps in kube-system: given any other etcd-s3 setting, the
+servers ignore that Secret, and the store's keys would have to be written here, into the
+bootstrap data. The retention, an etcd-snapshot setting, counts each server's local snapshots and
+the uploads of all servers together.
+*/}}
+{{- define "kubehenge.etcdUploadFile" -}}
+path: {{ .path }}
+owner: root:root
+permissions: "0600"
+content: |
+  etcd-s3: true
+  etcd-s3-config-secret: kubehenge-etcd-s3
+  etcd-snapshot-schedule-cron: {{ "{{ .etcdSnapshots.schedule | quote }}" }}
+  etcd-snapshot-retention: {{ "{{ .etcdSnapshots.keep }}" }}
+{{- end -}}
+
 {{/*
 The kubelet settings cis adds, as kubelet flags.
 */}}
@@ -1194,6 +1309,50 @@ reads it.
               type: string
               default: UTC
               description: IANA time zone of start, such as Europe/Berlin.
+{{- end -}}
+
+{{/*
+The cluster autoscaler of a cluster with an autoscaled pool, which Kubehenge's controller runs; no
+patch reads it. A pool is autoscaled by Cluster API's own annotations on it.
+*/}}
+{{- define "kubehenge.autoscalerVariable" -}}
+- name: autoscaler
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        How the cluster autoscaler scales the cluster's autoscaled pools: those whose topology entry
+        carries cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size and -max-size and no
+        replicas. Kubehenge's controller runs it while the cluster has such a pool.
+      properties:
+        placement:
+          type: string
+          enum: [management, workload]
+          default: management
+          description: >-
+            Where the autoscaler runs. management keeps it in the management cluster, and the
+            cluster holds no credential of the management cluster. workload runs it on the
+            cluster's control planes, sparing the management cluster its memory, and puts a
+            management-cluster token inside the cluster that can read every cluster's machines in
+            its namespace; the admission policy still lets it scale only this cluster's pools.
+        expander:
+          type: string
+          enum: [least-waste, most-pods, random]
+          default: least-waste
+          description: Which pool grows when several could take the waiting pods.
+        scaleDownDelayAfterAddMinutes:
+          type: integer
+          minimum: 1
+          maximum: 1440
+          default: 10
+          description: How long after a scale-up the autoscaler waits before it removes any node.
+        scaleDownUnneededMinutes:
+          type: integer
+          minimum: 1
+          maximum: 1440
+          default: 10
+          description: How long a node stays unneeded before the autoscaler removes it.
 {{- end -}}
 
 {{/*

@@ -111,10 +111,12 @@ guest_script() {
             ;;
         # Every line about etcd of the server's whole journal, which would otherwise have rolled out
         # of the part above when the API stayed down for long; RKE2's and kubeadm's etcd run as static
-        # pods, whose logs are below.
+        # pods, whose logs are below. The API server's watches report etcd's errors again, one line
+        # per watch each time, so that a minute without a leader would leave only them.
         etcd-journal)
             echo 'journalctl --no-pager -o short-iso-precise -u k3s -u rke2-server |
-                grep -iE "etcd|raft|learner|promot|quorum|leader|member" | tail -n 3000'
+                grep -iE "etcd|raft|learner|promot|quorum|leader|member" |
+                grep -vE "watcher\.go|reflector\.go|cacher\.go" | tail -n 3000'
             ;;
         # The control plane's static pods and kube-vip as the kubelet keeps their logs on the node,
         # readable while the API is down; the previous log of every container that restarted beside
@@ -168,8 +170,10 @@ in_guest() {
         printf '%s\n' "${result}"
         return 1
     fi
+    # The truncation flags come beside any output, false as 0, which jq would take for true.
     printf '%s' "${result}" | jq -r '((."out-data", ."err-data") // empty | select(. != "")),
-        (if ."out-truncated" or ."err-truncated" then "(the guest agent cut the output short)" else empty end),
+        (if [."out-truncated", ."err-truncated"] | any(. == true or . == 1)
+            then "(the guest agent cut the output short)" else empty end),
         "exit code: \(.exitcode // "none, still running when the wait ended")"'
 }
 

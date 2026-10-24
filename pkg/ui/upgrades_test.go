@@ -142,6 +142,24 @@ func TestSetupNeedsAnAdministrator(t *testing.T) {
 	expect(t, d.do("POST", "/api/setup", `{"settings":{},"passphrase":"correct horse battery staple"}`), http.StatusForbidden)
 }
 
+// Restores through the guest agent grant Kubehenge a token with VM.GuestAgent.Unrestricted, which
+// only who holds it may hand on.
+func TestSetupWithEtcdRestoresNeedsTheGuestAgent(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.server.Appliance = &appliance.Appliance{Dir: t.TempDir()}
+	a := h.browser()
+	a.signIn("admin@pve")
+	setUp := func(settings string) *httptest.ResponseRecorder {
+		return a.do("POST", "/api/setup", `{"settings":`+settings+`,"passphrase":"correct horse battery staple"}`)
+	}
+	expect(t, setUp(`{"etcdRestore":true}`), http.StatusForbidden)
+	h.accounts.mu.Lock()
+	h.accounts.grants["admin@pve"]["/"] = append(h.accounts.grants["admin@pve"]["/"], "VM.GuestAgent.Unrestricted")
+	h.accounts.mu.Unlock()
+	expect(t, setUp(`{"etcdRestore":true}`), http.StatusUnprocessableEntity)
+}
+
 // Switching Proxmox VE HA on grants Kubehenge's token Sys.Console on /, and switching it off removes
 // the HA objects the controller left, both of which Proxmox VE lets only Sys.Console do.
 func TestSetupWithProxmoxHANeedsSysConsole(t *testing.T) {
@@ -394,8 +412,11 @@ func TestAutomaticUpgradeSleepsUntilItsHour(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	up := withUpgrades(t, h)
-	if _, on := up.untilHour(h.clock); on {
+	if _, on := up.untilHour(h.clock, false); on {
 		t.Fatal("waiting for an hour with the policy off")
+	}
+	if wait, on := up.untilHour(h.clock, true); !on || wait != 18*time.Hour {
+		t.Fatalf("with the management cluster's automatic upgrades on: %s, %v", wait, on)
 	}
 	if err := os.WriteFile(up.SettingsPath, []byte(`{"policy":"patch","hour":3,"timeZone":"Europe/Berlin"}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -411,7 +432,7 @@ func TestAutomaticUpgradeSleepsUntilItsHour(t *testing.T) {
 		time.Date(2026, 10, 24, 23, 0, 0, 0, berlin):   5 * time.Hour, // summer time ends at 03:00 on the 25th
 		time.Date(2026, 10, 14, 23, 0, 0, 0, time.UTC): 2 * time.Hour,
 	} {
-		if got, on := up.untilHour(now); !on || got != want {
+		if got, on := up.untilHour(now, false); !on || got != want {
 			t.Errorf("at %s: %s, want %s", now, got, want)
 		}
 	}

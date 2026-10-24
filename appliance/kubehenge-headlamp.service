@@ -18,6 +18,12 @@ Environment=HOME=/var/lib/kubehenge-headlamp-server
 # people back to, https://<appliance>:8443/oidc-callback. Headlamp answers only to its loopback
 # address, so it cannot work this out from requests.
 EnvironmentFile=-/etc/kubehenge/headlamp.env
+# The plugins Headlamp ships, which the interface serves only while the shared Headlamp offers its
+# actions.
+Environment=HEADLAMP_STATIC_PLUGINS_DIR=/usr/local/share/kubehenge/headlamp/static-plugins
+# Helm takes a chart named repository/chart for a directory of that name where one exists: here,
+# in Headlamp's own state, none does.
+WorkingDirectory=/var/lib/kubehenge-headlamp-server
 ExecStart=/usr/local/share/kubehenge/headlamp/headlamp-server \
     -listen-addr 127.0.0.1 \
     -port 4467 \

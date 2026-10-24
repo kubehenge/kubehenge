@@ -222,7 +222,7 @@ run "controller_and_clusters_are_least_privilege" {
         kubehenge-rke2    = ["rke2-bootstrap-system", "rke2-control-plane-system"]
         kubehenge-k3s     = ["k3s-bootstrap-system", "k3s-control-plane-system"]
       }
-      interface = { extraNamespaces = [], offerHARules = false }
+      interface = { extraNamespaces = [], offerHARules = false, headlampSignIn = false, headlampActions = false }
       clusters  = { storages = ["local-lvm", "ceph"], bridges = ["vmbr0", "vmbr1"] }
       proxmox = {
         url          = "https://pve.example.org:8006"
@@ -231,6 +231,7 @@ run "controller_and_clusters_are_least_privilege" {
         clusterGroup = "kubehenge-clusters"
         clusterRole  = "kubehenge-cluster-vms"
         ha           = false
+        etcdRestore  = false
         datastoreAllocate = {
           role               = ""
           managementStorages = ["local-lvm", "local"]
@@ -257,9 +258,10 @@ run "controller_and_clusters_are_least_privilege" {
         dns           = []
         creatorBuilds = false
       }
-      clusterOIDC   = []
-      backupTargets = []
-      image         = "ghcr.io/kubehenge/kubehenge@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+      clusterOIDC        = []
+      backupTargets      = []
+      image              = "ghcr.io/kubehenge/kubehenge@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+      managementEndpoint = "https://192.0.2.10:6443"
     }
     error_message = "the Kubehenge chart's values differ"
   }
@@ -337,6 +339,15 @@ run "controller_and_clusters_are_least_privilege" {
     condition     = length(proxmox_virtual_environment_group.clusters_audit) == 0 && length(proxmox_acl.clusters_audit) == 0
     error_message = "no cluster may hold Sys.Audit on / unless the administrator lets clusters choose it"
   }
+
+  assert {
+    condition = (
+      length(proxmox_acl.etcd_restore) == 0 && length(proxmox_user_token.etcd_restore) == 0 &&
+      !contains([for s in helm_release.cluster_api_providers.set_sensitive : s.name], "secrets.kubehenge-proxmox.data.restore-token") &&
+      !yamldecode(helm_release.kubehenge.values[0]).proxmox.etcdRestore
+    )
+    error_message = "no restore token unless restores through the guest agent are asked for"
+  }
 }
 
 run "cluster_sys_audit" {
@@ -409,6 +420,38 @@ run "cluster_volume_snapshots" {
       length([for k, a in proxmox_acl.provisioner : k if a.path == "/" && a.role_id != "kubehenge-audit"]) == 0
     )
     error_message = "volume snapshots grant no token anything more"
+  }
+}
+
+run "etcd_restore" {
+  command = plan
+
+  variables {
+    etcd_restore = true
+  }
+
+  assert {
+    condition = (
+      toset(proxmox_virtual_environment_role.etcd_restore[0].privileges) == toset(["VM.Audit", "VM.GuestAgent.Unrestricted"]) &&
+      proxmox_acl.etcd_restore[0].path == "/pool/${var.workload_pool}" && proxmox_acl.etcd_restore[0].propagate &&
+      proxmox_acl.etcd_restore[0].user_id == "kubehenge-etcd-restore@pve" &&
+      proxmox_virtual_environment_user.etcd_restore[0].password == null &&
+      !proxmox_user_token.etcd_restore[0].privileges_separation
+    )
+    error_message = "the restore token holds VM.Audit and VM.GuestAgent.Unrestricted on the workload pool alone, for a password-less user of its own"
+  }
+
+  assert {
+    condition = (
+      contains([for s in helm_release.cluster_api_providers.set_sensitive : s.name], "secrets.kubehenge-proxmox.data.restore-token") &&
+      yamldecode(helm_release.kubehenge.values[0]).proxmox.etcdRestore
+    )
+    error_message = "the controller gets the restore token, kept out of the plain values"
+  }
+
+  assert {
+    condition     = contains(output.proxmox_objects.users, "kubehenge-etcd-restore@pve") && contains(output.proxmox_objects.roles, "kubehenge-etcd-restore")
+    error_message = "a destroy is checked for the restore user and role too"
   }
 }
 
@@ -592,7 +635,7 @@ run "extra_cluster_namespaces" {
 
   assert {
     condition = (
-      yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = ["team-a", "team-b"], offerHARules = false } &&
+      yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = ["team-a", "team-b"], offerHARules = false, headlampSignIn = false, headlampActions = false } &&
       toset(keys(proxmox_acl.provisioner)) == toset([
         "/ kubehenge-audit",
         "/nodes kubehenge-audit",
@@ -830,6 +873,32 @@ run "cluster_oidc" {
       },
     ]
     error_message = "the providers must reach the chart's clusterOIDC in its own names, defaults filled in"
+  }
+}
+
+run "headlamp_sign_in" {
+  command = plan
+
+  variables {
+    headlamp_sign_in = true
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = [], offerHARules = false, headlampSignIn = true, headlampActions = false }
+    error_message = "the chart must be told to have the shared Headlamp sign people in, its namespaces left as they are"
+  }
+}
+
+run "headlamp_actions" {
+  command = plan
+
+  variables {
+    headlamp_actions = true
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = [], offerHARules = false, headlampSignIn = false, headlampActions = true }
+    error_message = "the chart must be told to have the shared Headlamp offer its actions, nothing else of the interface changed"
   }
 }
 

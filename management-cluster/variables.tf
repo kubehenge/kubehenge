@@ -374,6 +374,27 @@ variable "extra_cluster_namespaces" {
   }
 }
 
+variable "etcd_restore" {
+  description = "Have Kubehenge's controller restore clusters' etcd from their snapshots itself, running the restore on the control-plane VMs through their guest agents. The controller gets an API token of its own for it, with VM.Audit and VM.GuestAgent.Unrestricted on the workload pool, which amounts to a root shell in every cluster's VMs. Without it, the interface shows the steps to restore by hand."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "headlamp_sign_in" {
+  description = "Have the appliance's shared Headlamp sign those who may download a cluster's admin kubeconfig (Sys.Modify on its pool) in as cluster-admin, with a token made for their session that never reaches the browser. Kubehenge's controller then keeps, in every cluster of clusters and extra_cluster_namespaces, an identity bound to cluster-admin and one that may only make its tokens, whose own token it keeps beside the Cluster for the interface: whoever reads Secrets there, as the interface does, can act as cluster-admin in those clusters, as the admin kubeconfigs beside them already let them. Set back to false, the controller removes both, which ends every token made."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "headlamp_actions" {
+  description = "Have the appliance's shared Headlamp offer the Helm app catalog and the Prometheus charts it ships with: Helm releases listed, installed from repositories, upgraded, rolled back and uninstalled with each user's own credentials in the cluster. Only those who may set the appliance up add or remove a repository, since one list serves every user and cluster. Port forwards stay with Headlamp's desktop app, and node drain is offered either way."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "controller_image" {
   description = "Image of Kubehenge's controller by digest, as repository@sha256:<digest>, instead of the one the chart was released with."
   type        = string

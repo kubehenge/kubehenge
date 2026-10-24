@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/yaml"
 )
 
@@ -362,7 +364,14 @@ func TestRemoveVelero(t *testing.T) {
 	restore.SetFinalizers([]string{"restores.velero.io/external-resources-finalizer"})
 	workload := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
 		crd, other, restore, &corev1.Namespace{Name: VeleroNamespace},
-	).Build()
+	).WithInterceptorFuncs(interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+		if list.GetObjectKind().GroupVersionKind().Kind == crdGVK.Kind+"List" {
+			if _, full := list.(*unstructured.UnstructuredList); full {
+				return errors.New("every resource definition listed in full")
+			}
+		}
+		return c.List(ctx, list, opts...)
+	}}).Build()
 	gone, err := removeVelero(context.Background(), workload)
 	if err != nil || gone {
 		t.Fatalf("gone %v at once, %v", gone, err)

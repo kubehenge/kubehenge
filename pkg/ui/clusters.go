@@ -53,7 +53,7 @@ const maxClusterName = 40
 // Variables a cluster may change after creation; the others describe where its VMs live.
 var changeableVariables = map[string]bool{
 	"headlamp": true, "monitoring": true, "logs": true, "backups": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, csiVariable: true, ccmVariable: true,
-	certificatesVariable: true, gitopsVariable: true,
+	certificatesVariable: true, gitopsVariable: true, autoscalerVariable: true,
 }
 
 // autoUpgraded is where Kubehenge's controller records the last automatic upgrade.
@@ -223,6 +223,9 @@ type workerPoolView struct {
 	Name     string `json:"name"`
 	Class    string `json:"class"`
 	Replicas int32  `json:"replicas"`
+	// Autoscaling is set for a pool the cluster autoscaler sizes, whose replicas are then the
+	// workers its MachineDeployment asks for at the moment.
+	Autoscaling *poolAutoscaling `json:"autoscaling,omitempty"`
 }
 
 type allowedView struct {
@@ -300,7 +303,7 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 	}
 	for i := range c.Spec.Topology.Workers.MachineDeployments {
 		md := &c.Spec.Topology.Workers.MachineDeployments[i]
-		wp := workerPoolView{Name: md.Name, Class: md.Class}
+		wp := workerPoolView{Name: md.Name, Class: md.Class, Autoscaling: autoscalingOf(md.Metadata.Annotations)}
 		if md.Replicas != nil {
 			wp.Replicas = *md.Replicas
 		}
@@ -504,6 +507,10 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	v := s.view(c, access.path, access.held, u.namespaces)
 	s.addExtras(r, u, c, &v)
+	if err := countAutoscaled(r.Context(), u.kube, c, &v); err != nil {
+		s.kubeError(w, err)
+		return
+	}
 	var machines clusterv1.MachineList
 	if err := u.kube.List(r.Context(), &machines, client.InNamespace(c.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: c.Name}); err != nil {
 		s.kubeError(w, err)
@@ -569,13 +576,15 @@ func (s *Server) vmNodes(r *http.Request, u user, c *clusterv1.Cluster, poolPath
 
 type createRequest struct {
 	// Namespace is one of those the interface manages; unset, its first.
-	Namespace            string                     `json:"namespace,omitempty"`
-	Name                 string                     `json:"name"`
-	Class                string                     `json:"class"`
-	Version              string                     `json:"version"`
-	ControlPlaneReplicas int32                      `json:"controlPlaneReplicas"`
-	WorkerReplicas       int32                      `json:"workerReplicas"`
-	Variables            map[string]json.RawMessage `json:"variables"`
+	Namespace            string `json:"namespace,omitempty"`
+	Name                 string `json:"name"`
+	Class                string `json:"class"`
+	Version              string `json:"version"`
+	ControlPlaneReplicas int32  `json:"controlPlaneReplicas"`
+	WorkerReplicas       int32  `json:"workerReplicas"`
+	// WorkerAutoscaling has the cluster autoscaler size the worker pool in place of WorkerReplicas.
+	WorkerAutoscaling *poolAutoscaling           `json:"workerAutoscaling,omitempty"`
+	Variables         map[string]json.RawMessage `json:"variables"`
 	// Pods and Services are the cluster's own ranges; unset, ones clear of the nodes' network are
 	// chosen.
 	Pods     []string `json:"pods,omitempty"`
@@ -655,6 +664,9 @@ func (req *createRequest) invalid() string {
 	if !validWorkers(req.WorkerReplicas) {
 		return workerCounts
 	}
+	if a := req.WorkerAutoscaling; a != nil && !a.valid() {
+		return autoscalingCounts
+	}
 	return ""
 }
 
@@ -696,7 +708,8 @@ func (s *Server) mayCreate(w http.ResponseWriter, r *http.Request, u user, class
 	if !s.require(w, r, u, s.workloadPoolPath(), privChange) ||
 		!s.mayUseStorage(w, r, u, class, req.Variables["storage"]) ||
 		!s.mayUseNetwork(w, r, u, class, req.Variables["network"]) ||
-		!s.mayPlace(w, r, u, req.Variables[allowedNodesVariable], nil) {
+		!s.mayPlace(w, r, u, req.Variables[allowedNodesVariable], nil) ||
+		!s.mayPlaceAutoscaler(w, r, u, req.Variables[autoscalerVariable], nil) {
 		return false
 	}
 	if installsRancher(req.Variables["rancher"]) && !s.allowRancher(w, r, u, client.ObjectKey{Namespace: req.Namespace, Name: req.Name}) {
@@ -810,6 +823,9 @@ func (s *Server) newCluster(u user, req *createRequest, pods, services []string)
 				{Class: workerClass, Name: workerPool, Replicas: &req.WorkerReplicas},
 			}},
 		}},
+	}
+	if req.WorkerAutoscaling != nil {
+		setAutoscaling(&c.Spec.Topology.Workers.MachineDeployments[0], req.WorkerAutoscaling, 0)
 	}
 	for _, name := range slices.Sorted(maps.Keys(req.Variables)) {
 		c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{
@@ -930,8 +946,10 @@ type changeRequest struct {
 	Version              *string `json:"version"`
 	ControlPlaneReplicas *int32  `json:"controlPlaneReplicas"`
 	// WorkerPools sets the replicas of worker pools by name.
-	WorkerPools map[string]int32           `json:"workerPools"`
-	Variables   map[string]json.RawMessage `json:"variables"`
+	WorkerPools map[string]int32 `json:"workerPools"`
+	// Autoscaling switches the cluster autoscaler on for worker pools by name, or off with null.
+	Autoscaling map[string]*poolAutoscaling `json:"autoscaling"`
+	Variables   map[string]json.RawMessage  `json:"variables"`
 }
 
 func (s *Server) changeCluster(w http.ResponseWriter, r *http.Request, u user) {
@@ -947,7 +965,16 @@ func (s *Server) changeCluster(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusConflict, "the cluster is being deleted")
 		return
 	}
-	if msg := applyTopology(c, &req); msg != "" {
+	// Autoscaling goes first, so that a change switching a pool's off may also fix its workers.
+	msg, err := applyAutoscaling(r.Context(), u.kube, c, req.Autoscaling)
+	if err != nil {
+		s.kubeError(w, err)
+		return
+	}
+	if msg == "" {
+		msg = applyTopology(c, &req)
+	}
+	if msg != "" {
 		writeError(w, http.StatusUnprocessableEntity, msg)
 		return
 	}
@@ -980,6 +1007,9 @@ func applyTopology(c *clusterv1.Cluster, req *changeRequest) string {
 	for name, n := range req.WorkerPools {
 		if !validWorkers(n) {
 			return workerCounts + " in each pool"
+		}
+		if isAutoscaled(c, name) {
+			return "pool " + name + ": the cluster autoscaler sizes it; switch autoscaling off to fix its workers"
 		}
 		if !setWorkerReplicas(c, name, n) {
 			return "the cluster has no worker pool " + name
@@ -1051,6 +1081,8 @@ func (s *Server) allowVariable(w http.ResponseWriter, r *http.Request, u user, c
 		return string(value) == jsonNull || sameJSON(old, value) || s.mayPlace(w, r, u, value, old)
 	case certificatesVariable:
 		return checkSharedDNS01(w, u, access.path, access.held, value, old)
+	case autoscalerVariable:
+		return s.mayPlaceAutoscaler(w, r, u, value, old)
 	}
 	return true
 }

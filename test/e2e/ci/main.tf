@@ -91,6 +91,8 @@ module "management_cluster" {
   provider_images    = var.provider_images
   provider_manifests = var.provider_manifests
   backup_targets     = var.backup_targets
+  # test/e2e/workload-cluster.sh restores each cluster's etcd through the guest agent.
+  etcd_restore = true
 
   api_address = "172.20.99.10"
   gateway     = "172.20.99.1"
@@ -114,6 +116,11 @@ module "management_cluster" {
 
   # The k3s test's cluster is created in it with the interface's account (test/e2e/ci/run.sh).
   extra_cluster_namespaces = ["e2e-team"]
+
+  # Checked by the workload cluster tests: the k3s test's cluster, in one of the interface's
+  # namespaces, gets the sign-in identities, and the others' clusters, in namespaces of their own, do
+  # not.
+  headlamp_sign_in = true
 }
 
 output "kubeconfig" {

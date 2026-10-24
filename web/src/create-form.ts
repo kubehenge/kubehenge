@@ -94,7 +94,11 @@ export interface Form {
   className: string;
   version: string;
   controlPlaneReplicas: number;
+  /** The workers, or with workerAutoscale the fewest the cluster autoscaler keeps. */
   workerReplicas: number;
+  workerAutoscale: boolean;
+  /** The most workers the cluster autoscaler adds, with workerAutoscale. */
+  workerMax: number;
   endpoint: string;
   bridge: string;
   vlan: string;
@@ -277,8 +281,14 @@ export function addonMemory(
   return { names, mib, controlPlaneMiB };
 }
 
+/**
+ * mostWorkers is the most workers a form's cluster can have at once. An autoscaled pool that may
+ * grow keeps the control planes to the control plane's work, whatever its fewest.
+ */
+export const mostWorkers = (form: Form): number => (form.workerAutoscale ? form.workerMax : form.workerReplicas);
+
 const plainLeast = (form: Form, c: ClusterClass | undefined, key: "controlPlaneMachine" | "workerMachine"): Machine =>
-  key === "controlPlaneMachine" ? controlPlaneMinimums(c, form.workerReplicas) : machineMinimums(c, key);
+  key === "controlPlaneMachine" ? controlPlaneMinimums(c, mostWorkers(form)) : machineMinimums(c, key);
 
 // carries says whether a form's machines of one kind run its add-ons: the workers, or without
 // workers the control planes.
@@ -313,7 +323,7 @@ export function addonNeedMiB(form: Form, c: ClusterClass | undefined): number {
 export function controlPlaneNeedMiB(form: Form, c: ClusterClass | undefined): number {
   const own = quantity(classFigures(c, "kubehenge.dev/node-memory")["controlPlane"]);
   const { names, controlPlaneMiB } = addonMemory(form, c);
-  return form.workerReplicas > 0 && names.length > 0 && own !== undefined ? own + controlPlaneMiB : 0;
+  return mostWorkers(form) > 0 && names.length > 0 && own !== undefined ? own + controlPlaneMiB : 0;
 }
 
 /**
@@ -373,6 +383,8 @@ export const newForm = (): Form => ({
   version: "",
   controlPlaneReplicas: 1,
   workerReplicas: 1,
+  workerAutoscale: false,
+  workerMax: 3,
   endpoint: "",
   bridge: "",
   vlan: "",
@@ -445,6 +457,7 @@ export function withClass(f: Form, c: ClusterClass | undefined, kept: (k: keyof 
       ? f.controlPlaneMachine
       : machineDefaults(variable(c, "controlPlaneMachine")),
     workerMachine: kept("workerMachine") ? f.workerMachine : machineDefaults(variable(c, "workerMachine")),
+    workerAutoscale: f.workerAutoscale && variable(c, "autoscaler") !== undefined,
     oidc: kept("oidc") ? f.oidc : oidcProviders(variable(c, "oidc")?.default),
   };
 }
@@ -595,6 +608,9 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
     workerReplicas: form.workerReplicas,
     variables: Object.fromEntries(Object.entries(variables).filter(([k]) => defined.has(k))),
   };
+  if (autoscales(form, c)) {
+    req.workerAutoscaling = { min: form.workerReplicas, max: form.workerMax };
+  }
   if (form.pods) {
     req.pods = [form.pods];
   }
@@ -640,7 +656,10 @@ export function summary(
     ["Distribution", distributionName(c.distribution)],
     ["Kubernetes version", form.version],
     ["Control-plane nodes", String(form.controlPlaneReplicas)],
-    ["Workers", String(form.workerReplicas)],
+    [
+      "Workers",
+      autoscales(form, c) ? `${form.workerReplicas} to ${form.workerMax}, autoscaled` : String(form.workerReplicas),
+    ],
     ["Bridge", form.vlan ? `${form.bridge}, VLAN ${form.vlan}` : form.bridge],
     ["API address", form.endpoint],
     ["Node addresses", list(form.addresses).join(", ")],
@@ -677,7 +696,7 @@ export function summary(
     rows.push(["HA group labels", haGroupsText(form.haGroups)]);
   }
   rows.push(["Control-plane machines", machine(form.controlPlaneMachine)]);
-  if (form.workerReplicas > 0) {
+  if (mostWorkers(form) > 0) {
     rows.push(["Worker machines", machine(form.workerMachine)]);
   }
   if (defined.has("cni")) {
@@ -759,6 +778,8 @@ export type FieldKey =
   | "version"
   | "controlPlaneReplicas"
   | "workerReplicas"
+  | "workerMax"
+  | "addons"
   | "bridge"
   | "vlan"
   | "endpoint"
@@ -806,7 +827,33 @@ function generalProblems(form: Form, c: ClusterClass | undefined): Problems {
   if (!whole(form.workerReplicas, 0, maxWorkers)) {
     p.workerReplicas = `A whole number from 0 to ${maxWorkers}.`;
   }
+  if (autoscales(form, c)) {
+    const least = Number.isNaN(form.workerReplicas) ? 0 : Math.max(form.workerReplicas, 1);
+    if (!whole(form.workerMax, least, maxWorkers)) {
+      p.workerMax = `A whole number from ${least} to ${maxWorkers}, no fewer than the fewest.`;
+    }
+  }
   return p;
+}
+
+/** autoscales says whether a form's worker pool is autoscaled: chosen, and offered by its class. */
+export const autoscales = (form: Form, c: ClusterClass | undefined): boolean =>
+  form.workerAutoscale && variable(c, "autoscaler") !== undefined;
+
+/**
+ * addonsProblem is what keeps a form's add-ons from running: an autoscaled pool that may go down to
+ * no workers, while the control planes stay kept for the control plane.
+ */
+export function addonsProblem(form: Form, c: ClusterClass | undefined): string | undefined {
+  // Rancher's agent alone holds no worker up: it runs only once there is a Rancher to register with,
+  // and its pod waiting for room brings a worker up from none.
+  const agent =
+    form.rancherInstall || !form.rancherRegister
+      ? 0
+      : (quantity(classFigures(c, "kubehenge.dev/addon-memory")["rancherAgent"]) ?? 0);
+  return autoscales(form, c) && form.workerReplicas === 0 && addonMemory(form, c).mib - agent > 0
+    ? "The add-ons chosen need a worker that stays: set the fewest workers to at least 1 on the General step, or choose none."
+    : undefined;
 }
 
 function addressProblems(form: Form): Problems {
@@ -814,7 +861,7 @@ function addressProblems(form: Form): Problems {
   const entries = list(form.addresses);
   const { count, bad } = addressCount(entries, form.gateway, form.prefix);
   // A rollout makes each new node before it removes an old one.
-  const needed = form.controlPlaneReplicas + form.workerReplicas + 1;
+  const needed = form.controlPlaneReplicas + mostWorkers(form) + 1;
   if (entries.length === 0) {
     p.addresses = "At least one range, network or address.";
   } else if (bad !== undefined) {
@@ -896,7 +943,7 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
   ] as const) {
     const min = machineLeast(form, c, key);
     const alone =
-      key === "controlPlaneMachine" && form.workerReplicas === 0 ? " Without workers, they run the workloads too." : "";
+      key === "controlPlaneMachine" && mostWorkers(form) === 0 ? " Without workers, they run the workloads too." : "";
     let addons = "";
     if (min.memoryMiB > plainLeast(form, c, key).memoryMiB) {
       addons = carries(form, key)
@@ -930,6 +977,10 @@ function addOnProblems(form: Form, c: ClusterClass | undefined): Problems {
   const logs = logsChosen(form) ? logsProblem(form.logs) : undefined;
   if (logs !== undefined) {
     p.logs = logs;
+  }
+  const addons = addonsProblem(form, c);
+  if (addons !== undefined) {
+    p.addons = addons;
   }
   const certificates = variable(c, "certificates") ? Object.values(certificatesProblems(form.certificates)) : [];
   if (certificates.length > 0) {

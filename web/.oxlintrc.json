@@ -117,9 +117,15 @@
       }
     },
     {
-      // Each gathers every feature's own module: the create form's fields and checks, the add-ons
-      // step and the options view import one module per feature.
-      "files": ["src/create-form.ts", "src/AddOnsStep.tsx", "src/ClusterOptions.tsx"],
+      // Each gathers every feature's own module: the create form's fields and checks, its steps,
+      // the add-ons step, the options view and the cluster page import one module per feature.
+      "files": [
+        "src/create-form.ts",
+        "src/CreateSteps.tsx",
+        "src/AddOnsStep.tsx",
+        "src/ClusterOptions.tsx",
+        "src/ClusterDetail.tsx"
+      ],
       "rules": {
         "import/max-dependencies": "off"
       }

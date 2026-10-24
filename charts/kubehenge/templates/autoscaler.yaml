@@ -1,0 +1,156 @@
+{{- /*
+The cluster autoscalers the controller runs, one for each cluster with an autoscaled pool, in a
+namespace of their own, with an account each. An autoscaler's account may read the machines of
+its cluster's namespace and scale pools there (kubehenge-autoscaler, bound for it in that
+namespace); the admission policy holds it to its own cluster, as the interface's clusters share
+one namespace. The controller records each autoscaler's cluster and pools in the policy's
+ConfigMap before it binds the role, and an autoscaler the ConfigMap does not name changes nothing.
+*/}}
+{{- $ns := .Values.autoscaler.namespace }}
+{{- $controller := "kubehenge-controller" }}
+{{- $name := "kubehenge-autoscaler" }}
+{{- $prefix := printf "system:serviceaccount:%s:" $ns }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+---
+# The admission policy's parameter, here before any autoscaler is: the API server looks a binding's
+# parameter up before the policy's match conditions, so while it is missing the binding refuses
+# every change of MachineDeployments and Machines, Cluster API's own among them. Its entries are
+# the controller's; an upgrade leaves data the chart never set alone.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+---
+# What an autoscaler does to its cluster in the management cluster: read the machines and pools and
+# the machine templates their sizes come from, scale a pool and mark the machines it removes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+rules:
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [machinedeployments, machinesets, machinepools, machines]
+    verbs: [get, list, watch]
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [machinedeployments/scale]
+    verbs: [get, patch]
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [machines]
+    verbs: [update]
+  - apiGroups: [infrastructure.cluster.x-k8s.io]
+    resources: [proxmoxmachinetemplates]
+    verbs: [get, list, watch]
+---
+# The controller's part here: the autoscalers, their accounts, the tokens of those accounts that
+# autoscalers inside their clusters sign in with, and the policy's ConfigMap. The tokens of the
+# autoscaler identity in each cluster, which the autoscalers here mount, are Secrets, which the
+# controller's ClusterRole covers. A create cannot be held to a name.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $controller }}
+  namespace: {{ $ns }}
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [serviceaccounts]
+    verbs: [get, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [serviceaccounts/token]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [{{ $name }}]
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $controller }}
+  namespace: {{ $ns }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $controller }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $controller }}
+    namespace: {{ .Release.Namespace }}
+---
+# The ConfigMap's entries are <namespace>/<cluster>/<MachineDeployment>,<MachineDeployment> under
+# each autoscaler's account name. Machines are told apart by their cluster's label, which an
+# autoscaler may not change; a scale request carries only the MachineDeployment's name.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: v1
+    kind: ConfigMap
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [cluster.x-k8s.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [machinedeployments, machinedeployments/scale, machinesets, machinesets/scale, machinepools, machinepools/scale, machines]
+  matchConditions:
+    - name: autoscaler
+      expression: request.userInfo.username.startsWith('{{ $prefix }}')
+  variables:
+    - name: account
+      expression: request.userInfo.username.substring({{ len $prefix }})
+    # namespace, cluster and MachineDeployments, or none for an autoscaler of no cluster.
+    - name: entry
+      expression: >-
+        has(params.data) && variables.account in params.data
+        ? params.data[variables.account].split('/') : []
+    - name: known
+      expression: size(variables.entry) == 3
+    # A request to no subresource carries none, not an empty one.
+    - name: scale
+      expression: has(request.subResource) && request.subResource == 'scale'
+    - name: machine
+      expression: request.resource.resource == 'machines' && !has(request.subResource) && request.operation == 'UPDATE'
+  validations:
+    - expression: variables.known
+      messageExpression: "'the autoscaler ' + variables.account + ' serves no cluster'"
+    - expression: "!variables.known || request.namespace == variables.entry[0]"
+      message: an autoscaler changes nothing outside its cluster's namespace
+    - expression: >-
+        !variables.known || variables.machine
+        || (variables.scale && request.resource.resource == 'machinedeployments' && request.name in variables.entry[2].split(','))
+      messageExpression: "'the autoscaler ' + variables.account + ' scales the autoscaled pools of its own cluster, and changes nothing else but its machines'"
+    - expression: >-
+        !variables.known || !variables.machine
+        || (has(object.metadata.labels) && has(oldObject.metadata.labels)
+        && 'cluster.x-k8s.io/cluster-name' in object.metadata.labels
+        && object.metadata.labels['cluster.x-k8s.io/cluster-name'] == variables.entry[1]
+        && object.metadata.labels == oldObject.metadata.labels
+        && object.spec == oldObject.spec)
+      message: an autoscaler marks its own cluster's machines for removal and changes nothing else of them
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}
+spec:
+  policyName: {{ $name }}
+  validationActions: [Deny]
+  # Without the ConfigMap, no autoscaler changes anything.
+  paramRef:
+    name: {{ $name }}
+    namespace: {{ $ns }}
+    parameterNotFoundAction: Deny

@@ -126,7 +126,7 @@ func monitoringValues(distribution templates.Distribution, proxy Image, addons *
 			},
 			"tlsSecret": map[string]any{"enabled": true, "secretName": nodeExporter + "-tls", "caItem": "ca.crt"},
 			prometheus: map[string]any{"monitor": map[string]any{
-				"scheme": "https", "tlsConfig": clientTLS(nodeExporter + "." + nodeExporterNamespace + ".svc"),
+				"scheme": schemeHTTPS, "tlsConfig": clientTLS(nodeExporter + "." + nodeExporterNamespace + ".svc"),
 			}},
 		},
 		// cert-manager is there for the proxies already; it renews the webhook's certificate
@@ -253,14 +253,14 @@ func metricsManifests(distribution templates.Distribution, proxy Image, addons *
 		// node-exporter's chart has its proxy ask whether the client may get its Service's
 		// node-exporter subresource.
 		&rbacv1.Role{
-			APIVersion: rbacv1.SchemeGroupVersion.String(), Kind: "Role", Name: metricsIssuer, Namespace: nodeExporterNamespace,
+			APIVersion: rbacv1.SchemeGroupVersion.String(), Kind: roleKind, Name: metricsIssuer, Namespace: nodeExporterNamespace,
 			Rules: []rbacv1.PolicyRule{{
 				APIGroups: []string{""}, Resources: []string{"services/" + nodeExporter}, ResourceNames: []string{nodeExporter}, Verbs: []string{"get"},
 			}},
 		},
 		&rbacv1.RoleBinding{
 			APIVersion: rbacv1.SchemeGroupVersion.String(), Kind: "RoleBinding", Name: metricsIssuer, Namespace: nodeExporterNamespace,
-			RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: metricsIssuer},
+			RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: roleKind, Name: metricsIssuer},
 			Subjects: user,
 		},
 		&corev1.ServiceAccount{APIVersion: "v1", Kind: "ServiceAccount", Name: metricsProxyAccount, Namespace: metav1.NamespaceSystem},
@@ -338,11 +338,10 @@ var controlPlaneAffinity = corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
 func metricsProxy(name string, port int32, scheme string, affinity *corev1.Affinity, image Image) *appsv1.DaemonSet {
 	p := strconv.Itoa(int(port))
 	labels := map[string]string{appName: name}
-	user, no, yes := int64(proxyUser), false, true
 	upstream := []string{"--upstream=http://127.0.0.1:" + p + "/"}
 	mounts := []corev1.VolumeMount{{Name: "tls", MountPath: "/etc/kube-rbac-proxy", ReadOnly: true}}
 	volumes := []corev1.Volume{{Name: "tls", Secret: &corev1.SecretVolumeSource{SecretName: metricsProxyTLS}}}
-	if scheme == "https" {
+	if scheme == schemeHTTPS {
 		upstream = []string{"--upstream=https://localhost:" + p + "/", "--upstream-ca-file=/etc/kube-rbac-proxy-upstream/ca.crt"}
 		mounts = append(mounts, corev1.VolumeMount{Name: "upstream", MountPath: "/etc/kube-rbac-proxy-upstream", ReadOnly: true})
 		volumes = append(volumes, corev1.Volume{Name: "upstream", ConfigMap: &corev1.ConfigMapVolumeSource{Name: "kube-root-ca.crt"}})
@@ -358,10 +357,7 @@ func metricsProxy(name string, port int32, scheme string, affinity *corev1.Affin
 				PriorityClassName:  "system-node-critical",
 				Affinity:           affinity,
 				Tolerations:        []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
-				SecurityContext: &corev1.PodSecurityContext{
-					RunAsNonRoot: &yes, RunAsUser: &user, RunAsGroup: &user,
-					SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
-				},
+				SecurityContext:    restrictedPod(proxyUser),
 				Containers: []corev1.Container{{
 					Name:  "kube-rbac-proxy",
 					Image: image.String(),
@@ -373,12 +369,8 @@ func metricsProxy(name string, port int32, scheme string, affinity *corev1.Affin
 						"--tls-private-key-file=/etc/kube-rbac-proxy/tls.key",
 						"--tls-min-version=VersionTLS13",
 					}, upstream...),
-					Env: []corev1.EnvVar{{Name: "HOST_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"}}}},
-					SecurityContext: &corev1.SecurityContext{
-						AllowPrivilegeEscalation: &no,
-						ReadOnlyRootFilesystem:   &yes,
-						Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-					},
+					Env:             []corev1.EnvVar{{Name: "HOST_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"}}}},
+					SecurityContext: restrictedSecurity(),
 					Resources: corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("5m"), corev1.ResourceMemory: resource.MustParse("16Mi")},
 						Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("64Mi")},

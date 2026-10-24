@@ -138,6 +138,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if !cluster.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, cluster)
 	}
+	// A restore stops the cluster's API server and pauses it; the cluster is looked at again after.
+	if RestoreInProgress(cluster) {
+		return ctrl.Result{RequeueAfter: etcdSnapshotWait}, nil
+	}
 	if err := r.addFinalizer(ctx, cluster); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -186,7 +190,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // every cluster registered with it, removing Istio, which waits on the cluster's workloads,
 // removing volume snapshots, which deletes root@pam's configuration in the cluster, linking the
 // cluster's Cluster Mesh peers, what its certificates and its load balancer need in the cluster,
-// and its GitOps engine's repository and removal. It reports whether any of it waits.
+// its GitOps engine's repository and removal, and the target its RKE2 or k3s servers upload their
+// own etcd snapshots to. It reports whether any of it waits.
 func (r *Reconciler) afterTheRest(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons, rancherRefused string) (bool, error) {
 	certificatesWaiting, err := r.reconcileCertificates(ctx, cluster, &addons.Certificates)
 	if err != nil {
@@ -223,7 +228,12 @@ func (r *Reconciler) afterTheRest(ctx context.Context, cluster *clusterv1.Cluste
 		return false, err
 	}
 	gitOpsWaiting, err := r.reconcileGitOps(ctx, cluster, addons)
-	return certificatesWaiting || rancherWaiting || istioWaiting || snapshotsWaiting || meshWaiting || lbWaiting || gitOpsWaiting, err
+	if err != nil {
+		return false, err
+	}
+	uploadWaiting, err := r.reconcileEtcdUpload(ctx, cluster)
+	return certificatesWaiting || rancherWaiting || istioWaiting || snapshotsWaiting || meshWaiting || lbWaiting || gitOpsWaiting ||
+		uploadWaiting, err
 }
 
 // removeRancherWhenFree removes Rancher from a cluster that switched it off, or reports that it
