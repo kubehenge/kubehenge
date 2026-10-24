@@ -144,6 +144,10 @@ spec:
               valueFrom:
                 template: |
                   {{- include "kubehenge.talosAuthentication" . | nindent 18 }}
+            - op: add
+              path: /spec/template/spec/controlPlaneConfig/controlplane/strategicPatches/-
+              valueFrom:
+                template: {{ printf "apiVersion: v1alpha1\nkind: KubeAPIServerConfig\nenv:\n  GOMEMLIMIT: %s" (include "kubehenge.apiServerMemoryLimit" (dict "share" 40)) | toJson | quote }}
     # Another CNI than flannel takes the place of Talos's.
     - name: talos-cni
       enabledIf: {{ "{{ if ne .cni \"flannel\" }}true{{ end }}" | quote }}
