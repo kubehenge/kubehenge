@@ -19,7 +19,7 @@ import {
   haText,
   placeOf,
   placeText,
-  useHAGroupsOffer,
+  useHAGroupsOffered,
   useHAOffered,
 } from "./Placement";
 import { PodSecurityFields, cisText, enforced, podSecurityOf, podSecurityText } from "./PodSecurity";
@@ -212,7 +212,7 @@ export function Options<A extends string = never>({
   const haOffered = useHAOffered(c.class, text(c.variables["storage"]));
   const csi = useCSIOffer(c);
   const snapshots = useSnapshotsOffer(c);
-  const haGroups = useHAGroupsOffer(c);
+  const haGroups = useHAGroupsOffered(c);
   const cis = c.variables["cis"] === true;
   const podSecurity = enforced(podSecurityOf(c.variables["podSecurity"]), cis);
   const talos: OptionRow[] =
@@ -253,7 +253,7 @@ export function Options<A extends string = never>({
       name: "volume snapshots",
     });
   }
-  if (haGroups.offered || haGroupsOn(c)) {
+  if (haGroups || haGroupsOn(c)) {
     rows.push({
       label: "HA group labels",
       value: haGroupsText(haGroupsOn(c)),

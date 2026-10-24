@@ -39,7 +39,7 @@ import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs"
 import { addressBits, addressCount, inList, ipv4, isVLAN, list, rangeProblem, whole } from "./network";
 import { choosable, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
-import { allowedNodes, anyNode, haText, placeProblem, placeText, type HAGroupsOffer, type Place } from "./Placement";
+import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
 import {
   cisText,
   enforced,
@@ -481,7 +481,7 @@ export const newForm = (): Form => ({
   proxmoxHA: true,
   datastoreAllocate: false,
   volumeSnapshots: false,
-  haGroups: false,
+  haGroups: true,
   controlPlaneMachine: machineDefaults(undefined),
   workerMachine: machineDefaults(undefined),
   cni: "",
@@ -706,8 +706,9 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
       ...(form.volumeSnapshots && { volumeSnapshots: true }),
     };
   }
-  if (form.haGroups && defined.has("ccm")) {
-    variables["ccm"] = { haGroups: true };
+  // On is the class's default wherever its clusters may have the labels, and off where they may not.
+  if (!form.haGroups && defined.has("ccm")) {
+    variables["ccm"] = { haGroups: false };
   }
   Object.assign(variables, distributionVariables(form));
   const lb = loadBalancerVariable({ implementation: form.loadBalancer, addresses: list(form.loadBalancerAddresses) });
@@ -932,7 +933,6 @@ export type FieldKey =
   | "storage"
   | "datastoreAllocate"
   | "volumeSnapshots"
-  | "haGroups"
   | "placement"
   | "controlPlaneMachine"
   | "workerMachine"
@@ -1361,14 +1361,6 @@ export function csiProblems(step: Step, form: Form, csi: CSIOffer): Problems {
     return {};
   }
   return { datastoreAllocate: csi.problem };
-}
-
-/** haGroupsProblems holds the machines step to the HA group labels a new cluster chose. */
-export function haGroupsProblems(step: Step, form: Form, offer: HAGroupsOffer): Problems {
-  if (step !== "Machines" || !offer.offered || !form.haGroups || offer.problem === undefined) {
-    return {};
-  }
-  return { haGroups: offer.problem };
 }
 
 // offeredStorages are the storages, once each, that take disks, the user may use and the class

@@ -89,7 +89,7 @@ properties:
 {{- end -}}
 
 {{/*
-Call with (dict "controlPlaneDiskGiB" <n> "workerDiskGiB" <n> "minDiskGiB" <n> "workerMinCores" <n> "workerMinMemoryMiB" <n>).
+Call with (dict "controlPlaneDiskGiB" <n> "workerDiskGiB" <n> "minDiskGiB" <n> "workerMinCores" <n> "workerMinMemoryMiB" <n> "clusters" .Values.clusters "sysAudit" <whether clusters may hold Sys.Audit on />).
 A control plane's minimum is the first row of the k3s and RKE2 server sizing guides, 2 vCPUs and
 4 GiB; kubeadm, which documents no sizes past its 2 GiB to start, follows RKE2's, whose servers run
 the same components. On less, an add-on's install crowds out the API server and etcd. A worker's is
@@ -206,17 +206,22 @@ never below its distribution's documented minimum for a node.
     openAPIV3Schema:
       type: object
       description: The Proxmox VE cloud controller manager, which every cluster runs for its nodes.
+      {{- /* A default at the top as well, since CAPI adds a missing variable only from one there. */}}
+      {{- if .sysAudit }}
+      default:
+        haGroups: true
+      {{- end }}
       properties:
         haGroups:
           type: boolean
-          default: false
+          default: {{ .sysAudit }}
           description: >-
             Give the cluster's Proxmox VE token Sys.Audit on /, unpropagated, so that the cloud
             controller manager labels each node group.topology.proxmox.sinextra.dev/<group> for
             each Proxmox VE HA group, or node-affinity HA rule, its Proxmox VE node is in. The
-            token may then also read the rest of the Proxmox VE cluster's own configuration, but
-            nothing of its guests, storages or nodes. Only where Kubehenge's administrator lets
-            clusters choose it.
+            token may then also read the rest of the Proxmox VE cluster's own configuration
+            (firewall, backup jobs, HA, corosync), but nothing of its guests, storages or nodes.
+            On by default where Kubehenge's administrator lets clusters hold it, and only there.
 - name: controlPlaneMachine
   required: false
   schema:

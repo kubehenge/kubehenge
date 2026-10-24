@@ -116,8 +116,8 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error?: 
   }
 }
 
-/** A privilege on / the session reports: Sys.Audit, or Permissions.Modify. */
-export type RootPrivilege = "canAudit" | "canModifyPermissions";
+/** A privilege on / the session reports: Permissions.Modify. */
+export type RootPrivilege = "canModifyPermissions";
 
 /** usePrivilege reads whether the signed-in user holds a privilege on /; undefined until known. */
 export function usePrivilege(privilege: RootPrivilege): boolean | undefined {

@@ -110,7 +110,7 @@ describe("volume snapshots", () => {
         haOffered={false}
         csi={{ offered: false, problem: undefined }}
         snapshots={{ offered: true, problem: undefined }}
-        haGroups={{ offered: false, problem: undefined }}
+        haGroups={false}
         nodes={[]}
         rules={{ haRules: undefined, haRulesError: undefined }}
       />,

@@ -23,8 +23,6 @@ export interface Session {
   canCreate?: boolean;
   /** Whether the user may install Rancher and trust identity providers of their own: Sys.Modify on the workload pool. */
   canTrust?: boolean;
-  /** Whether the user holds Sys.Audit on /, which a cluster's token gets with the HA group labels. */
-  canAudit?: boolean;
   /** Whether the user holds Permissions.Modify on /, which giving a cluster's CSI plugin root@pam needs. */
   canModifyPermissions?: boolean;
   /** The namespace the interface creates clusters in unless the creator chooses another. */
@@ -481,7 +479,7 @@ export interface ManagementSettings {
   etcdRestore?: boolean;
   /** The weekly build of the node OS VM templates; absent, it runs with its defaults. */
   templateRefresh?: TemplateRefreshSettings;
-  /** Clusters may choose the cloud controller manager's HA group labels, with Sys.Audit on / for their token. */
+  /** Clusters have the cloud controller manager's HA group labels unless they switch them off, with Sys.Audit on / for their token; absent, they have them. */
   clusterSysAudit?: boolean;
   /** Clusters may take volume snapshots, with their CSI plugin signed in as root@pam. */
   clusterVolumeSnapshots?: boolean;

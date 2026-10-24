@@ -680,7 +680,7 @@ export function MachinesStep({
   haOffered: boolean;
   csi: { offered: boolean; problem: string | undefined };
   snapshots: { offered: boolean; problem: string | undefined };
-  haGroups: { offered: boolean; problem: string | undefined };
+  haGroups: boolean;
   nodes: PveNode[];
   rules: HARulesRead;
 }): JSX.Element {
@@ -727,9 +727,7 @@ export function MachinesStep({
           problem={snapshots.problem}
         />
       )}
-      {haGroups.offered && (
-        <HAGroupsField checked={form.haGroups} onChange={(on) => set("haGroups", on)} problem={haGroups.problem} />
-      )}
+      {haGroups && <HAGroupsField checked={form.haGroups} onChange={(on) => set("haGroups", on)} />}
       <MachineFields
         label="Control plane"
         value={form.controlPlaneMachine}

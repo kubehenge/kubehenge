@@ -38,7 +38,7 @@ const form: SetupForm = {
   refreshGateway: "",
   refreshDNS: "",
   creatorBuilds: false,
-  clusterSysAudit: false,
+  clusterSysAudit: true,
   clusterVolumeSnapshots: false,
   rootPassword: "",
   moreNamespaces: false,
@@ -194,11 +194,11 @@ describe("setup", () => {
     ]);
   });
 
-  it("lets clusters choose the HA group labels only when it is switched on", () => {
-    const on = settings({ ...form, clusterSysAudit: true });
-    expect(on).toHaveProperty("clusterSysAudit", true);
+  it("gives clusters the HA group labels unless it is switched off", () => {
+    const off = settings({ ...form, clusterSysAudit: false });
+    expect(off).toHaveProperty("clusterSysAudit", false);
     expect(settings(form)).not.toHaveProperty("clusterSysAudit");
-    expect([formOf(on).clusterSysAudit, formOf(settings(form)).clusterSysAudit]).toStrictEqual([true, false]);
+    expect([formOf(settings(form)).clusterSysAudit, formOf(off).clusterSysAudit]).toStrictEqual([true, false]);
   });
 
   it("names more namespaces for clusters only when they are switched on", () => {
