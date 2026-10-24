@@ -133,7 +133,8 @@ func (h *Hooks) BeforeClusterDelete(ctx context.Context, req *runtimehooksv1.Bef
 
 // BeforeClusterCreate holds a new cluster back until the Reconciler has created its Proxmox VE
 // objects; capmox would otherwise clone its first VMs into a pool that does not exist yet. It
-// refuses a cluster whose pod or service range overlaps its nodes' network, load-balancer
+// refuses a cluster on a node OS Kubehenge builds no templates of, or one no Proxmox VE node it may
+// use has the CPU for, a cluster whose pod or service range overlaps its nodes' network, load-balancer
 // addresses that clash with that network or another cluster's, logs without monitoring, backups
 // Velero cannot take, Datastore.Allocate on a storage that is not the cluster's alone, volume
 // snapshots where they cannot be taken, and Sys.Audit on / where no cluster may hold it.
@@ -180,6 +181,7 @@ func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.Bef
 // refusal is the first reason BeforeClusterCreate refuses the cluster for, or nil.
 func (h *Hooks) refusal(ctx context.Context, cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) error {
 	for _, check := range []func() error{
+		func() error { return h.checkNodeOS(ctx, cluster) },
 		func() error { return checkRanges(cluster, class) },
 		func() error { return h.checkLoadBalancer(ctx, cluster) },
 		func() error { return h.checkRancher(ctx, cluster, cluster.Spec.Topology.Version) },
@@ -213,7 +215,11 @@ func (h *Hooks) newestNodeImages(ctx context.Context, c *clusterv1.Cluster, vers
 	if err != nil {
 		return false, err
 	}
-	line, err := MachineLine(strings.TrimPrefix(c.Spec.Topology.ClassRef.Name, ClassPrefix), version)
+	nodeOS, err := ClusterNodeOS(c)
+	if err != nil {
+		return false, err
+	}
+	line, err := MachineLine(strings.TrimPrefix(c.Spec.Topology.ClassRef.Name, ClassPrefix), version, nodeOS)
 	if err != nil {
 		return false, err
 	}

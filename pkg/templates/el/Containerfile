@@ -1,0 +1,11 @@
+# The node's layer on the family's minimal image (node.sh), from the bake's files. They are mounted
+# from a stage of their own, which keeps them out of the image and gives them the label of image
+# content, which the build's processes may read under SELinux, as they may not the builder's own.
+FROM scratch AS files
+COPY . /
+
+FROM localhost/kubehenge-base:build
+ARG DISTRIBUTION
+ARG KUBERNETES
+RUN --mount=type=bind,from=files,target=/run/kubehenge-build sh /run/kubehenge-build/el/node.sh "${DISTRIBUTION}" "${KUBERNETES}"
+RUN bootc container lint

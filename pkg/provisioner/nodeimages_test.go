@@ -22,7 +22,7 @@ func day(d int) time.Time { return time.Date(2026, 10, d, 0, 0, 0, 0, time.UTC) 
 
 func cloudLine(t *testing.T) []string {
 	t.Helper()
-	line, err := MachineLine("rke2", "v1.36.5+rke2r1")
+	line, err := MachineLine("rke2", "v1.36.5+rke2r1", templates.DefaultNodeOS)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,11 +209,21 @@ func TestGeneratePatchesSelectTheBuildOfTheNodeImageTime(t *testing.T) {
 	c, class := refreshCluster(t, "web", nil)
 	talos, _ := refreshCluster(t, "metal", nil)
 	talos.Spec.Topology.ClassRef.Name = "kubehenge-talos"
+	rocky, _ := refreshCluster(t, "rocky", map[string]string{NodeOSVariable: `{"family":"rocky","release":"10"}`})
+	rockyLine, err := MachineLine("rke2", "v1.36.5+rke2r1", templates.NodeOS{Family: "rocky", Release: "10"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	builds, err := NodeImageBuilds{templates.LineKey(cloudLine(t)): {day(1), day(8), day(15)}, templates.LineKey(rockyLine): {day(2)}}.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	class.Annotations[NodeImageBuildsAnnotation] = builds
 	scheme := runtime.NewScheme()
 	if err := clusterv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(c, talos, class).Build()
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(c, talos, rocky, class).Build()
 	h := &Hooks{Reader: kube, ClassNamespace: "kubehenge-system", Soak: DefaultNodeImageSoak}
 	request := func(name string) *runtimehooksv1.GeneratePatchesResponse {
 		builtins := func(v any) apiextensionsv1.JSON {
@@ -251,5 +261,10 @@ func TestGeneratePatchesSelectTheBuildOfTheNodeImageTime(t *testing.T) {
 	}
 	if resp := request("metal"); len(resp.Items) != 0 {
 		t.Errorf("Talos machines patched: %+v", resp.Items)
+	}
+	// The request carries none of the cluster's own variables; its node OS is the Cluster's.
+	if resp := request("rocky"); len(resp.Items) != 1 || !strings.Contains(string(resp.Items[0].Patch), `"os-rocky-10"`) ||
+		!strings.Contains(string(resp.Items[0].Patch), `"build-202610020000"`) {
+		t.Errorf("a cluster on Rocky Linux: %+v", resp.Items)
 	}
 }

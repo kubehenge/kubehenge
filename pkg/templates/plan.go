@@ -1,15 +1,14 @@
 // Package templates creates the Proxmox VE VM templates that Kubehenge's clusters are cloned from.
 //
 // A template is identified by its tag set alone: Cluster API's Proxmox VE provider selects templates
-// by tags and needs exactly one match, so each distribution and version maps to one unique set, its
-// line. Ubuntu templates are built again to bring in their updates, and each build keeps a tag of
-// its own beside the line's (build-<YYYYMMDDhhmm>, UTC), so that a cluster's machines move to a new
-// build only when the cluster's patch names it.
+// by tags and needs exactly one match, so each distribution, node OS and version maps to one unique
+// set, its line. The node OS templates are built again to bring in their updates, and each build
+// keeps a tag of its own beside the line's (build-<YYYYMMDDhhmm>, UTC), so that a cluster's machines
+// move to a new build only when the cluster's patch names it.
 package templates
 
 import (
 	"fmt"
-	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -30,39 +29,25 @@ const (
 // kubehengeTag is on every template Kubehenge makes, which is how List tells them from others.
 const kubehengeTag = "kubehenge"
 
+// kubernetesTagPrefix and a version tag a kubeadm line.
+const kubernetesTagPrefix = "kubernetes-"
+
 // buildingTag marks, beside kubehengeTag, a VM the builder is still making into a template.
 const buildingTag = "kubehenge-building"
 
 // Distributions lists every supported distribution.
 var Distributions = []Distribution{Talos, RKE2, K3s, Kubeadm}
 
-const (
-	// DefaultTalosVersion is the Talos release templates are made from unless another is asked for.
-	// renovate: datasource=github-releases depName=siderolabs/talos
-	DefaultTalosVersion = "v1.14.4"
-	// DefaultOS is the cloud image RKE2, k3s and kubeadm templates are made from.
-	DefaultOS = "ubuntu-26.04"
-)
-
-// UbuntuRelease is an Ubuntu release and the build of its cloud image templates are made from.
-type UbuntuRelease struct {
-	Codename string
-	// Build names the build's directory on cloud-images.ubuntu.com, which never changes once
-	// published, and whose SHA256SUMS Ubuntu signs.
-	Build string
-}
-
-// OperatingSystems maps each supported cloud image to its Ubuntu release.
-var OperatingSystems = map[string]UbuntuRelease{
-	"ubuntu-26.04": {Codename: "resolute", Build: "20261016"},
-	"ubuntu-24.04": {Codename: "noble", Build: "20261017"},
-}
+// DefaultTalosVersion is the Talos release templates are made from unless another is asked for.
+// renovate: datasource=github-releases depName=siderolabs/talos
+const DefaultTalosVersion = "v1.14.4"
 
 // Request asks for the template of one distribution.
 type Request struct {
-	Distribution      Distribution
-	TalosVersion      string // Talos only
-	OS                string // RKE2, k3s and kubeadm
+	Distribution Distribution
+	TalosVersion string // Talos only
+	// NodeOS is what the nodes of RKE2, k3s and kubeadm run; empty means DefaultNodeOS.
+	NodeOS            NodeOS
 	KubernetesVersion string // kubeadm only
 }
 
@@ -75,14 +60,15 @@ type Template struct {
 	Tags []string
 	// Image is where the template's disk comes from.
 	Image ImageRef
-	// Bake, if set, boots the image once to install what it lacks before it becomes a template.
+	// Bake, if set, boots the image to make the node of it before it becomes a template.
 	Bake *Bake
 }
 
 // ImageRef names the disk image a template starts from. The source resolves it to a URL and checksum.
 type ImageRef struct {
 	Kind    ImageKind
-	Version string // Talos version, or the OS name for cloud images
+	Version string // Talos version
+	NodeOS  NodeOS // the node OS whose image a bake boots
 }
 
 // ImageKind is where an image comes from.
@@ -91,13 +77,16 @@ type ImageKind string
 const (
 	// TalosFactory is an image from the Talos Image Factory.
 	TalosFactory ImageKind = "talos-factory"
-	// UbuntuCloud is one of Ubuntu's cloud images.
-	UbuntuCloud ImageKind = "ubuntu-cloud"
+	// NodeOSImage is the image a node OS family publishes that a bake starts from.
+	NodeOSImage ImageKind = "node-os"
 )
 
-// Bake is what a template's image gets before it becomes a template.
+// Bake is what makes a node of a family's image before it becomes a template.
 type Bake struct {
-	// KubernetesVersion, if set, preinstalls kubeadm, the kubelet and containerd at that version.
+	NodeOS       NodeOS
+	Distribution Distribution
+	// KubernetesVersion, for kubeadm, preinstalls kubeadm, the kubelet and containerd at that
+	// version.
 	KubernetesVersion string
 }
 
@@ -108,7 +97,7 @@ var (
 )
 
 // Plan works out the template a request needs. It does no I/O.
-func Plan(req Request) (Template, error) {
+func Plan(req *Request) (Template, error) {
 	switch req.Distribution {
 	case Talos:
 		v := req.TalosVersion
@@ -122,16 +111,17 @@ func Plan(req Request) (Template, error) {
 			ImageRef{Kind: TalosFactory, Version: v}, nil)
 
 	case RKE2, K3s:
-		os, err := checkOS(req.OS)
+		os, err := checkNodeOS(req.NodeOS)
 		if err != nil {
 			return Template{}, err
 		}
-		// RKE2 and k3s install themselves at boot, so both share one template per OS.
-		return newTemplate("kubehenge-"+os, []string{kubehengeTag, "cloud-image", os},
-			ImageRef{Kind: UbuntuCloud, Version: os}, &Bake{})
+		// RKE2 and k3s install themselves at boot, but each needs its own SELinux policy, so each
+		// has its own template per node OS.
+		return newTemplate(fmt.Sprintf("kubehenge-%s-%s", req.Distribution, os), []string{kubehengeTag, string(req.Distribution), os.Tag()},
+			ImageRef{Kind: NodeOSImage, NodeOS: os}, &Bake{NodeOS: os, Distribution: req.Distribution})
 
 	case Kubeadm:
-		os, err := checkOS(req.OS)
+		os, err := checkNodeOS(req.NodeOS)
 		if err != nil {
 			return Template{}, err
 		}
@@ -139,20 +129,22 @@ func Plan(req Request) (Template, error) {
 		if !versionRE.MatchString(v) {
 			return Template{}, fmt.Errorf("kubernetes version %q is not of the form v1.2.3", v)
 		}
-		return newTemplate("kubehenge-kubeadm-"+v+"-"+os, []string{kubehengeTag, "kubeadm", os, "kubernetes-" + v},
-			ImageRef{Kind: UbuntuCloud, Version: os}, &Bake{KubernetesVersion: v})
+		return newTemplate(fmt.Sprintf("kubehenge-kubeadm-%s-%s", v, os), []string{kubehengeTag, "kubeadm", os.Tag(), kubernetesTagPrefix + v},
+			ImageRef{Kind: NodeOSImage, NodeOS: os}, &Bake{NodeOS: os, Distribution: Kubeadm, KubernetesVersion: v})
 	}
 	return Template{}, fmt.Errorf("unknown distribution %q, expected one of %v", req.Distribution, Distributions)
 }
 
-func checkOS(os string) (string, error) {
-	if os == "" {
-		return DefaultOS, nil
+// checkNodeOS is the node OS a request asks for, DefaultNodeOS when it names none, once it is one
+// templates can be made of.
+func checkNodeOS(o NodeOS) (NodeOS, error) {
+	if o == (NodeOS{}) {
+		o = DefaultNodeOS
 	}
-	if _, ok := OperatingSystems[os]; !ok {
-		return "", fmt.Errorf("unsupported operating system %q, expected one of %v", os, sortedKeys(OperatingSystems))
+	if _, _, err := Available(o); err != nil {
+		return NodeOS{}, err
 	}
-	return os, nil
+	return o, nil
 }
 
 func newTemplate(name string, tags []string, image ImageRef, bake *Bake) (Template, error) {
@@ -172,8 +164,9 @@ const (
 	buildLayout    = "200601021504"
 )
 
-// Refreshed tells whether the template is built again for its updates: the Ubuntu ones, which a
-// bake brings up to date. A Talos template is its release's image, the same at every build.
+// Refreshed tells whether the template is built again for its updates: the node OS ones, which a
+// bake makes of the family's packages as they stand. A Talos template is its release's image, the
+// same at every build.
 func (t *Template) Refreshed() bool {
 	return t.Bake != nil
 }
@@ -240,6 +233,23 @@ func ParseTags(s string) []string {
 	return NormaliseTags(strings.FieldsFunc(s, func(r rune) bool { return r == ';' || r == ',' || r == ' ' }))
 }
 
-func sortedKeys[V any](m map[string]V) []string {
-	return slices.Sorted(maps.Keys(m))
+// RequestOf is the request a node OS line was planned from, read back from its tags.
+func RequestOf(tags []string) (Request, bool) {
+	o, ok := NodeOSOf(tags)
+	if !ok {
+		return Request{}, false
+	}
+	req := Request{NodeOS: o}
+	for _, tag := range tags {
+		switch {
+		case tag == string(RKE2) || tag == string(K3s) || tag == string(Kubeadm):
+			req.Distribution = Distribution(tag)
+		case strings.HasPrefix(tag, kubernetesTagPrefix):
+			req.KubernetesVersion = strings.TrimPrefix(tag, kubernetesTagPrefix)
+		}
+	}
+	if req.Distribution == "" || (req.Distribution == Kubeadm) != (req.KubernetesVersion != "") {
+		return Request{}, false
+	}
+	return req, true
 }

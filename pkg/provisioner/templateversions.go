@@ -2,9 +2,9 @@ package provisioner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -14,20 +14,22 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
-// KubeadmVersionsAnnotation lists on the kubeadm ClusterClass the Kubernetes versions a template
-// in the template pool has been built for, newest first and separated by commas. The interface
-// offers these: Cluster API clones with its own token, so the users who create clusters need not
-// see the pool themselves.
+// KubeadmVersionsAnnotation lists on the kubeadm ClusterClass, for each node OS, the Kubernetes
+// versions a template in the template pool has been built for, newest first, as JSON: the node OS
+// (almalinux-10) to its versions. The interface offers these: Cluster API clones with its own
+// token, so the users who create clusters need not see the pool themselves.
 const KubeadmVersionsAnnotation = "kubehenge.dev/kubeadm-versions"
 
-// CloudImageTemplateAnnotation says on the RKE2 and k3s ClusterClasses, "true" or "false", whether
-// the template pool holds the template their machines are cloned from. Without it a cluster of
-// theirs waits for ever for its first VM.
-const CloudImageTemplateAnnotation = "kubehenge.dev/cloud-image-template"
+// NodeOSTemplatesAnnotation lists on the RKE2 and k3s ClusterClasses the node OSes the template
+// pool holds a template of their machines for, separated by commas. A cluster on another waits
+// for ever for its first VM.
+const NodeOSTemplatesAnnotation = "kubehenge.dev/node-os-templates"
 
-// TemplateVersions keeps KubeadmVersionsAnnotation, CloudImageTemplateAnnotation,
+// TemplateVersions keeps KubeadmVersionsAnnotation, NodeOSTemplatesAnnotation,
 // TemplateStoragesAnnotation, NodeImageBuildsAnnotation and SnapshotStoragesAnnotation current.
 type TemplateVersions struct {
 	Client         client.Client
@@ -79,20 +81,19 @@ func (p *TemplateVersions) publishTemplates(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	raw := make([]string, len(seen.kubeadm))
-	for i, v := range seen.kubeadm {
-		raw[i] = v.Raw
+	kubeadm, err := encodeKubeadmVersions(seen.kubeadm)
+	if err != nil {
+		return err
 	}
-	cloudImage := strconv.FormatBool(seen.cloudImage)
 	storages := strings.Join(seen.storages, ",")
 	builds, err := seen.builds.Encode()
 	if err != nil {
 		return err
 	}
 	return errors.Join(
-		p.annotate(ctx, "kubeadm", KubeadmVersionsAnnotation, strings.Join(raw, ",")),
-		p.annotate(ctx, "rke2", CloudImageTemplateAnnotation, cloudImage),
-		p.annotate(ctx, "k3s", CloudImageTemplateAnnotation, cloudImage),
+		p.annotate(ctx, "kubeadm", KubeadmVersionsAnnotation, kubeadm),
+		p.annotate(ctx, "rke2", NodeOSTemplatesAnnotation, joinNodeOSes(seen.nodeOSes[templates.RKE2])),
+		p.annotate(ctx, "k3s", NodeOSTemplatesAnnotation, joinNodeOSes(seen.nodeOSes[templates.K3s])),
 		p.annotate(ctx, "kubeadm", TemplateStoragesAnnotation, storages),
 		p.annotate(ctx, "rke2", TemplateStoragesAnnotation, storages),
 		p.annotate(ctx, "k3s", TemplateStoragesAnnotation, storages),
@@ -100,6 +101,38 @@ func (p *TemplateVersions) publishTemplates(ctx context.Context) error {
 		p.annotate(ctx, "rke2", NodeImageBuildsAnnotation, builds),
 		p.annotate(ctx, "k3s", NodeImageBuildsAnnotation, builds),
 	)
+}
+
+// encodeKubeadmVersions writes KubeadmVersionsAnnotation, the same for the same versions.
+func encodeKubeadmVersions(versions map[templates.NodeOS][]kubeVersion) (string, error) {
+	raw := map[string][]string{}
+	for nodeOS, list := range versions {
+		for _, v := range list {
+			raw[nodeOS.String()] = append(raw[nodeOS.String()], v.Raw)
+		}
+	}
+	out, err := json.Marshal(raw)
+	if err != nil {
+		return "", fmt.Errorf("writing %s: %w", KubeadmVersionsAnnotation, err)
+	}
+	return string(out), nil
+}
+
+// ParseKubeadmVersions reads KubeadmVersionsAnnotation: each node OS's versions, newest first.
+func ParseKubeadmVersions(s string) (map[string][]string, error) {
+	out := map[string][]string{}
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		return nil, fmt.Errorf("reading %s: %w", KubeadmVersionsAnnotation, err)
+	}
+	return out, nil
+}
+
+func joinNodeOSes(list []templates.NodeOS) string {
+	out := make([]string, len(list))
+	for i, o := range list {
+		out[i] = o.String()
+	}
+	return strings.Join(out, ",")
 }
 
 // annotate sets an annotation on a distribution's ClusterClass, once the chart has made it.

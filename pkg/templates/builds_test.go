@@ -16,7 +16,7 @@ func TestBuildTagsAndLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if build.Name != "kubehenge-ubuntu-26.04-build-202610172302" || build.LineName != line.Name || !slices.Contains(build.Tags, "build-202610172302") {
+	if build.Name != "kubehenge-rke2-almalinux-10-build-202610172302" || build.LineName != line.Name || !slices.Contains(build.Tags, "build-202610172302") {
 		t.Fatalf("build %+v", build)
 	}
 	got, built := BuildOf(build.Tags)
@@ -26,7 +26,7 @@ func TestBuildTagsAndLines(t *testing.T) {
 	if _, err = build.Build(at); err == nil {
 		t.Error("a build was built again")
 	}
-	talos, err := Plan(Request{Distribution: Talos})
+	talos, err := Plan(&Request{Distribution: Talos})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestEnsureKeepsTheNewestBuild(t *testing.T) {
 	line, _ := rke2(t)
 	day := func(d int) time.Time { return time.Date(2026, 10, d, 0, 0, 0, 0, time.UTC) }
 	older, newer := buildVM(t, &line, 101, day(1)), buildVM(t, &line, 102, day(8))
-	kubeadm, err := Plan(Request{Distribution: Kubeadm, KubernetesVersion: "v1.36.5"})
+	kubeadm, err := Plan(&Request{Distribution: Kubeadm, KubernetesVersion: "v1.36.5"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,8 @@ func TestANewVMIsTaggedOnceInThePool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = b.createVM(ctx, node, 104, &build, "local:import/ubuntu.qcow2", DefaultCPUType); err != nil {
+	recipe := &Recipe{Image: &NodeImageBoot{}, DiskGiB: 12, BuilderDiskGiB: 20, MemoryMiB: 4096}
+	if err = b.createVM(ctx, node, 104, &build, "local:import/almalinux.qcow2", DefaultCPUType, recipe); err != nil {
 		t.Fatal(err)
 	}
 	f.mu.Lock()
@@ -159,6 +160,11 @@ func TestANewVMIsTaggedOnceInThePool(t *testing.T) {
 	f.mu.Unlock()
 	if len(created) != 1 || created[0]["pool"] != testPool || created[0]["name"] != build.Name {
 		t.Fatalf("created %v; want one VM named %s in %s", created, build.Name, testPool)
+	}
+	// In image mode the template's own disk starts empty, and the family's image boots beside it.
+	if created[0]["scsi0"] != "local-lvm:12,discard=on,ssd=1" || created[0]["scsi1"] != "local-lvm:0,import-from=local:import/almalinux.qcow2,discard=on,ssd=1" ||
+		created[0]["boot"] != "order=scsi1" || fmt.Sprint(created[0]["memory"]) != "4096" {
+		t.Errorf("created %v", created[0])
 	}
 	if tags, given := created[0]["tags"]; given {
 		t.Errorf("the VM was created with the tags %v", tags)

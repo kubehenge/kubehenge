@@ -36,6 +36,8 @@
 # lets each have with the add-ons. KUBEHENGE_E2E_RESTARTS=report prints restarts while every
 # add-on is on instead of failing, for a host whose KVM lacks pause-loop exiting: there guests that
 # outnumber its CPUs starve each other, whatever their sizes.
+# KUBEHENGE_E2E_NODE_OS is the nodes' operating system as one word, such as rocky-10, whose
+# template has to exist; unset, the class's default applies.
 # KUBEHENGE_E2E_CNI chooses the CNI (required by kubeadm). KUBEHENGE_E2E_PODS and
 # KUBEHENGE_E2E_SERVICES set the cluster's pod and service ranges, which must not overlap the nodes'
 # network; unset, the distribution's defaults apply.
@@ -277,6 +279,13 @@ cni_variable=
 if [ -n "${KUBEHENGE_E2E_CNI:-}" ]; then
     cni_variable=$(printf '      - name: cni\n        value: %s\n' "${KUBEHENGE_E2E_CNI}")
 fi
+node_os=$(kubectl -n kubehenge-system get clusterclass "${class}" -o json |
+    jq -r '.spec.variables[] | select(.name == "nodeOS") | .schema.openAPIV3Schema.default | "\(.family)-\(.release)"')
+if [ -n "${KUBEHENGE_E2E_NODE_OS:-}" ]; then
+    node_os=${KUBEHENGE_E2E_NODE_OS}
+    cni_variable=$(printf '%s\n      - name: nodeOS\n        value: {family: %s, release: "%s"}\n' "${cni_variable}" "${node_os%%-*}" "${node_os#*-}")
+fi
+echo "nodes on ${node_os}"
 oidc=$(jq -cn --arg i "${issuer}" --rawfile ca "${work}/ca.crt" '[{issuerURL: $i, clientID: "kubehenge-e2e", certificateAuthority: $ca}]')
 class_json=$(kubectl -n kubehenge-system get clusterclass "${class}" -o json)
 # Unless set, the worker gets the least Kubehenge lets it have with every add-on but Rancher on, so
@@ -2630,6 +2639,32 @@ if [ -n "${gateway_api_chart}" ]; then
 fi
 until_true 300 "the Gateway API's objects after the upgrade, each held once" gateway_api_held
 until_true 300 "Traefik's Gateway is programmed after the upgrade" gateway_programmed
+
+step "every node runs ${node_os} with SELinux enforcing, and nothing it ran was denied"
+# After every add-on, the upgrade and the restore, so that a denial any of them met shows here.
+case ${node_os} in
+    almalinux-*) os_id=almalinux ;;
+    rocky-*) os_id=rocky ;;
+    leap-*) os_id=opensuse-leap ;;
+    *) fail "no operating system ID known for ${node_os}" ;;
+esac
+selinux_check="
+    . /etc/os-release
+    case \"\${ID} \${VERSION_ID}\" in
+        '${os_id} ${node_os#*-}' | '${os_id} ${node_os#*-}'.*) ;;
+        *) echo \"runs \${ID} \${VERSION_ID}\"; exit 1 ;;
+    esac
+    [ \"\$(getenforce)\" = Enforcing ] || { echo \"SELinux is \$(getenforce)\"; exit 1; }
+    if touch /usr/.kubehenge-e2e 2> /dev/null; then rm -f /usr/.kubehenge-e2e; echo '/usr is writable'; exit 1; fi
+    denials=\$({ journalctl -k -b --no-pager -q; cat /var/log/audit/audit.log 2>/dev/null; } | grep 'avc: *denied' || true)
+    [ -z \"\${denials}\" ] || { printf '%s\n' \"\${denials}\" | tail -n 20; exit 1; }"
+for m in $(kubectl -n "${ns}" get machines -o jsonpath='{.items[*].metadata.name}'); do
+    # shellcheck disable=SC2310 # its output says why, which the failure reports.
+    if ! out=$(on_machines "${m}" "${selinux_check}"); then
+        printf '%s\n' "${out}" >&2
+        fail "${m} does not enforce SELinux on ${node_os}, or something it ran was denied"
+    fi
+done
 
 step "a dead worker is replaced"
 # The class's 300 s before a not-ready node counts as dead only adds waiting here; the integration
