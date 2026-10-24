@@ -208,6 +208,10 @@ func nodeChecks(b Bake) [][]string {
 			// The distribution installs itself there when a node boots.
 			[]string{"sh", "-c", "touch /usr/local/.kubehenge && rm /usr/local/.kubehenge"},
 		)
+		if b.Distribution == RKE2 {
+			// RKE2 looks up the etcd user and group in /etc alone.
+			checks = append(checks, []string{"sh", "-c", "! getent passwd etcd > /dev/null || { grep -q '^etcd:' /etc/passwd && grep -q '^etcd:' /etc/group; }"})
+		}
 	case Kubeadm:
 		checks = append(checks,
 			[]string{"sh", "-c", `test "$(kubeadm version -o short)" = ` + b.KubernetesVersion},

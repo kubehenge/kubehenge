@@ -69,6 +69,17 @@ systemctl mask bootc-fetch-apply-updates.timer fwupd-refresh.timer
 mkdir -p /usr/lib/systemd/journald.conf.d
 printf '[Journal]\nStorage=persistent\n' > /usr/lib/systemd/journald.conf.d/50-kubehenge.conf
 
+if [ "${distribution}" = rke2 ]; then
+    # The image keeps its system users in /usr/lib for nss-altfiles, an etcd user among them, while
+    # RKE2 looks up the one its CIS profile runs etcd as in /etc alone.
+    for db in passwd group; do
+        if grep -q '^etcd:' "/usr/lib/${db}"; then
+            grep '^etcd:' "/usr/lib/${db}" >> "/etc/${db}"
+            sed -i '/^etcd:/d' "/usr/lib/${db}"
+        fi
+    done
+fi
+
 if [ "${distribution}" = kubeadm ]; then
     # kubeadm's packages install the CNI plugins into /opt, which stays in the read-only image; the
     # cluster's CNI installs its own beside them, in an overlay that ostree keeps in /var.
