@@ -247,23 +247,23 @@ providers:
     name: talos
     namespace: talos-control-plane-system
     manifests:
-      metadata: https://github.com/kubehenge/cluster-api-control-plane-provider-talos/releases/download/v0.0.0-alpha.2/metadata.yaml@sha256:0000000000000000000000000000000000000000000000000000000000000000
-      components: https://github.com/kubehenge/cluster-api-control-plane-provider-talos/releases/download/v0.0.0-alpha.2/control-plane-components.yaml@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      metadata: https://github.com/kubehenge/cluster-api-control-plane-provider-talos/releases/download/v0.0.0-alpha.3/metadata.yaml@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      components: https://github.com/kubehenge/cluster-api-control-plane-provider-talos/releases/download/v0.0.0-alpha.3/control-plane-components.yaml@sha256:0000000000000000000000000000000000000000000000000000000000000000
     spec:
       deployment:
         containers:
           - name: manager
-            imageUrl: ghcr.io/kubehenge/cluster-api-control-plane-provider-talos:v0.0.0-alpha.2@sha256:0000000000000000000000000000000000000000000000000000000000000000
+            imageUrl: ghcr.io/kubehenge/cluster-api-control-plane-provider-talos:v0.0.0-alpha.3@sha256:0000000000000000000000000000000000000000000000000000000000000000
       fetchConfig:
         selector:
           matchLabels:
             kubehenge.dev/provider-manifests: controlplaneprovider-talos
-            provider.cluster.x-k8s.io/version: v0.0.0-alpha.2
+            provider.cluster.x-k8s.io/version: v0.0.0-alpha.3
       patches:
         - patch: *left-to-scaling
           target:
             kind: Deployment
-      version: v0.0.0-alpha.2
+      version: v0.0.0-alpha.3
   - kind: InfrastructureProvider
     name: proxmox
     namespace: proxmox-infrastructure-system
