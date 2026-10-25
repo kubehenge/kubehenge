@@ -287,6 +287,29 @@ jobs:
                   k logs -n "$pns" -l app.kubernetes.io/instance --all-containers --prefix \
                     --tail=2000 --max-log-requests=20 || true
                 done > "$dir/logging.log" 2>&1 || true
+                # What each node collector counted in and out, which its pod serves on its own
+                # loopback alone, and its pod's sockets with what each holds unread; with the
+                # network policy logs of every node, which judge what reaches a pod from its node.
+                counters='^(otelcol_receiver_(accepted|refused)_log_records|otelcol_exporter_loki'
+                counters="$counters|loki_process_dropped|loki_write_(sent|dropped)_entries"
+                counters="$counters|loki_write_request_duration_seconds_count)"
+                names=(--no-headers -o custom-columns=NAME:.metadata.name)
+                k get pods -n logging-node "${names[@]}" 2>/dev/null | while read -r pod; do
+                  echo "== $pod"
+                  k exec -n logging-node "$pod" -- cat /proc/net/tcp /proc/net/tcp6 || true
+                  port=$((20000 + $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % 10000))
+                  k port-forward -n logging-node "pod/$pod" "$port:12345" > /dev/null 2>&1 &
+                  forward=$!
+                  sleep 3
+                  curl -sS --max-time 10 "http://127.0.0.1:$port/metrics" |
+                    grep -E "$counters" || true
+                  kill "$forward" 2>/dev/null || true
+                done > "$dir/collectors.txt" 2>&1 || true
+                k get pods -n kube-system "${names[@]}" 2>/dev/null |
+                  grep -E '^kube-flannel-' | while read -r pod; do
+                    k logs -n kube-system "$pod" -c kube-network-policies --prefix --tail=5000 ||
+                      true
+                  done > "$dir/network-policies.log" 2>&1 || true
                 # The run before a restart says why the container ended; when it cannot be had, the
                 # error says why. It is asked for container by container, since with all of them
                 # kubectl stops at the first one that never restarted.
