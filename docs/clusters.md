@@ -414,8 +414,8 @@ A restore:
 
 1. pauses the cluster in Cluster API, so that it replaces no machine meanwhile;
 2. copies the snapshot to the first control-plane node and checks its SHA-256;
-3. stops etcd and the API server on every control-plane node;
-4. restores etcd on the first node as a cluster of one member: with `etcdutl snapshot restore`, run from the etcd image the node already runs, on kubeadm, keeping the database from before beside it; with `rke2 server --cluster-reset --cluster-reset-restore-path=<file> --etcd-s3=false` on RKE2, and `k3s server` the same on k3s;
+3. stops etcd and the API server on every control-plane node, on kubeadm with the controller manager and the scheduler;
+4. restores etcd on the first node as a cluster of one member: with `etcdutl snapshot restore --bump-revision 1000000000 --mark-compacted`, run from the etcd image the node already runs, on kubeadm, keeping the database from before beside it, so that every client's watch ends and it reads the restored objects afresh; with `rke2 server --cluster-reset --cluster-reset-restore-path=<file> --etcd-s3=false` on RKE2, and `k3s server` the same on k3s;
 5. starts its control plane and waits for its API server;
 6. deletes the other control-plane machines, whose etcd still holds the cluster from before, and gives the cluster back to Cluster API, which makes them again to join the restored member.
 

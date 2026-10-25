@@ -58,21 +58,24 @@ wait_for() {
 }
 `
 
-	// kubeadm runs etcd and the API server as static pods: the kubelet stops them once their
-	// manifests are gone.
+	// kubeadm runs the control plane as static pods: the kubelet stops them once their manifests
+	// are gone. The controller manager and the scheduler stop too, so that none of them carries a
+	// cache of the objects from before the restore.
 	kubeadmStop = `mkdir -p "$work/manifests"
-for m in etcd kube-apiserver; do
+for m in etcd kube-apiserver kube-controller-manager kube-scheduler; do
   if [ -f "/etc/kubernetes/manifests/$m.yaml" ]; then
     mv "/etc/kubernetes/manifests/$m.yaml" "$work/manifests/"
   fi
 done
-stopped() { [ -z "$(crictl ps -q --name '^(etcd|kube-apiserver)$')" ]; }
+stopped() { [ -z "$(crictl ps -q --name '^(etcd|kube-apiserver|kube-controller-manager|kube-scheduler)$')" ]; }
 wait_for 300 stopped
-echo "etcd and the API server are stopped"
+echo "the control plane is stopped"
 `
 
 	// etcdutl comes from the etcd image the node already runs, so the restore writes the database
-	// the version of etcd that will open it.
+	// the version of etcd that will open it. The revision moves on past any a client saw before
+	// and everything up to it reads as compacted, so every watch from before ends and its client
+	// lists again, rather than taking the older revisions for news it already had.
 	kubeadmRestore = `manifest="$work/manifests/etcd.yaml"
 if [ ! -f "$manifest" ]; then
   echo "etcd is not stopped here: $manifest is missing" >&2
@@ -92,7 +95,7 @@ rm -rf "$work/data"
 ctr -n k8s.io container rm kubehenge-etcd-restore >/dev/null 2>&1 || true
 ctr -n k8s.io run --rm --mount "type=bind,src=$work,dst=$work,options=rbind:rw" "$image" kubehenge-etcd-restore \
   etcdutl snapshot restore "$work/snapshot.db" --name "$name" --initial-cluster "$name=$peer" \
-  --initial-advertise-peer-urls "$peer" --data-dir "$work/data"
+  --initial-advertise-peer-urls "$peer" --data-dir "$work/data" --bump-revision 1000000000 --mark-compacted
 old="$data.before-restore-$(date -u +%Y%m%dT%H%M%SZ)"
 mv "$data" "$old"
 mv "$work/data" "$data"
@@ -100,7 +103,7 @@ touch "$work/restored"
 echo "restored etcd into $data; its database from before is in $old"
 `
 
-	kubeadmStart = `for m in etcd kube-apiserver; do
+	kubeadmStart = `for m in etcd kube-apiserver kube-controller-manager kube-scheduler; do
   if [ -f "$work/manifests/$m.yaml" ]; then
     mv "$work/manifests/$m.yaml" /etc/kubernetes/manifests/
   fi

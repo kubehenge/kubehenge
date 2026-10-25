@@ -513,6 +513,18 @@ func TestRestoreScripts(t *testing.T) {
 		if !strings.Contains(s.Restore, want) {
 			t.Errorf("%s restores without %q", d, want)
 		}
+		if d == templates.Kubeadm {
+			// A client's cache from before the restore holds revisions the restored etcd reuses.
+			for _, flag := range []string{"--bump-revision 1000000000", "--mark-compacted"} {
+				if !strings.Contains(s.Restore, flag) {
+					t.Errorf("kubeadm restores without %s", flag)
+				}
+			}
+			loop := "for m in etcd kube-apiserver kube-controller-manager kube-scheduler; do"
+			if !strings.Contains(s.Stop, loop) || !strings.Contains(s.Start, loop) || !strings.Contains(s.StartNoWait, loop) {
+				t.Error("kubeadm does not stop and start its whole control plane around the restore")
+			}
+		}
 		for name, body := range map[string]string{
 			"stop": s.Stop, "restore": s.Restore, "start": s.Start, "start without waiting": s.StartNoWait,
 			"restored": s.Restored, "clean": s.Clean,

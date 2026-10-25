@@ -266,6 +266,8 @@ jobs:
                   kubectl --kubeconfig "$RUNNER_TEMP/workload.kubeconfig" --request-timeout=20s "$@"
                 }
                 k get nodes,pods -A -o wide > "$dir/resources.txt" 2>&1 || continue
+                # The scheduler names no taint when it turns a pod away.
+                k get nodes -o yaml > "$dir/nodes.yaml" 2>&1 || true
                 k get events -A --sort-by=.lastTimestamp > "$dir/events.txt" 2>&1 || true
                 # Why a volume or a snapshot is not ready: the objects' status, which keeps the last
                 # error after its event has gone, and the logs of the CSI plugin and the snapshot
