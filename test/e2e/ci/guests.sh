@@ -115,6 +115,15 @@ guest_script() {
                 for u in k3s k3s-agent rke2-server rke2-agent kubelet containerd; do
                     systemctl cat "$u" > /dev/null 2>&1 || continue
                     echo; systemctl show -p Id,ActiveState,SubState,Result,NRestarts,ExecMainStatus,ExecMainStartTimestamp "$u"
+                done
+                # Which chains the node has and what its built-in chains jump to: kube-proxy, the CNI and
+                # the network policies each add their own and rewrite the tables at once.
+                for save in iptables-save /var/lib/rancher/k3s/data/current/bin/aux/iptables-save; do
+                    command -v "$save" > /dev/null 2>&1 || continue
+                    for table in nat filter; do
+                        echo; "$save" -t "$table" | grep -E "^(\*|:|-A (PREROUTING|INPUT|FORWARD|OUTPUT|POSTROUTING) )"
+                    done
+                    break
                 done'
             ;;
         # The distribution's own services, as many lines as are left of the last hour or so.
