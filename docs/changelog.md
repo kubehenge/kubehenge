@@ -4,6 +4,7 @@ Every release's changes, newest first. Versions follow [Semantic Versioning](htt
 
 ## [Unreleased]
 
+- A k3s cluster with flannel runs kube-proxy in nftables mode. In iptables mode, k3s's network policy controller could overwrite kube-proxy's rules while a node started, and that node's pods then reached no Service, the API server among them, until a Service changed or an hour had passed.
 - Kubehenge checks that a cluster's control planes have the memory its add-ons add to what each uses itself, mostly their resource types and objects in the API server, with workers as well as without, and the interface raises the control planes to it. With every add-on but Rancher an RKE2 control plane needs 4720 MiB, where 4096 MiB ran out of memory once Argo CD started. The figures are measured as each add-on is switched on ([clusters.md](clusters.md#machines)).
 - A cluster's volume owner VM is created under another VM ID when the one Proxmox VE offered is taken by a VM created at the same moment, instead of the cluster's setup failing until its next try.
 - A kubeadm cluster's first control-plane node moves kube-vip from kubeadm's super-admin credentials to `admin.conf` while it is still bootstrapping, and finishes only once the new kube-vip holds the control-plane address. Until now the old kube-vip ran on for two minutes after `kubeadm init` and then left the address unanswered for about ten seconds, under whatever used the cluster by then.
