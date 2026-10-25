@@ -4,12 +4,14 @@ import { api } from "./api";
 import { AutoscalerDialog, ScaleDialog, autoscalerText, poolText } from "./Autoscaling";
 import { BackupsDialog, BackupsView, backupsOf, backupsRows, useClassTargets } from "./Backups";
 import { issuesFromCA, saveCA } from "./Certificates";
-import { OptionDialog, Options, type OptionAction } from "./ClusterOptions";
+import { OptionDialog, Options, type OptionAction, type OptionRow } from "./ClusterOptions";
 import { EtcdSnapshotsDialog, EtcdSnapshotsView, etcdSnapshotsOf, etcdSnapshotsRows } from "./EtcdSnapshots";
 import { HealthView } from "./Health";
 import { Machines, Placement } from "./Machines";
 import { nodeOSKey } from "./node-os";
 import { Link, navigate } from "./router";
+import { StagedBar, StagingProvider } from "./Staging";
+import { useStaging } from "./staging-context";
 import { TalosFailure, TalosRows, runsKubernetes, useTalosReleases } from "./Talos";
 import type { Cluster, Versions } from "./types";
 import {
@@ -198,106 +200,115 @@ export function ClusterDetail({
   };
 
   return (
-    <section className="page">
-      <div className="page-head">
-        <div className="page-title">
-          <h2>
-            <span className="id">{c.name}</span> <StatusBadge cluster={c} />
-          </h2>
-          <Facts cluster={c} />
+    <StagingProvider
+      key={`${c.namespace}/${c.name}`}
+      cluster={c}
+      onApplied={() => {
+        void reload();
+      }}
+    >
+      <section className="page">
+        <div className="page-head">
+          <div className="page-title">
+            <h2>
+              <span className="id">{c.name}</span> <StatusBadge cluster={c} />
+            </h2>
+            <Facts cluster={c} />
+          </div>
+          <div className="page-actions">
+            <button type="button" disabled={!can} title={why} onClick={() => setAction("scale")}>
+              Scale
+            </button>
+            <button type="button" disabled={!can} title={why} onClick={() => setAction("upgrade")}>
+              Upgrade
+            </button>
+            {c.allowed.kubeconfig && c.available && (
+              <button
+                type="button"
+                onClick={() => {
+                  void download(async () => {
+                    saveFile(await api.kubeconfig(c.namespace, c.name), `${c.name}.kubeconfig`);
+                  });
+                }}
+              >
+                Kubeconfig
+              </button>
+            )}
+            {c.allowed.kubeconfig && c.distribution === "talos" && (
+              <button
+                type="button"
+                title="Signs in to the nodes' Talos API, for talosctl"
+                onClick={() => {
+                  void download(async () => {
+                    saveFile(await api.talosconfig(c.namespace, c.name), `${c.name}.talosconfig`);
+                  });
+                }}
+              >
+                Talosconfig
+              </button>
+            )}
+            {issuesFromCA(c) && (
+              <button
+                type="button"
+                title="The certificate of the CA the cluster's certificates come from, for browsers and clients to trust"
+                onClick={() => {
+                  void download(async () => saveCA(c));
+                }}
+              >
+                CA certificate
+              </button>
+            )}
+            {inHeadlamp !== undefined && (
+              <a className="button" href={inHeadlamp} target="_blank" rel="noopener noreferrer">
+                Headlamp
+              </a>
+            )}
+            <button type="button" className="danger" disabled={!can} title={why} onClick={() => setAction("delete")}>
+              Delete
+            </button>
+          </div>
         </div>
-        <div className="page-actions">
-          <button type="button" disabled={!can} title={why} onClick={() => setAction("scale")}>
-            Scale
-          </button>
-          <button type="button" disabled={!can} title={why} onClick={() => setAction("upgrade")}>
-            Upgrade
-          </button>
-          {c.allowed.kubeconfig && c.available && (
-            <button
-              type="button"
-              onClick={() => {
-                void download(async () => {
-                  saveFile(await api.kubeconfig(c.namespace, c.name), `${c.name}.kubeconfig`);
-                });
-              }}
-            >
-              Kubeconfig
-            </button>
-          )}
-          {c.allowed.kubeconfig && c.distribution === "talos" && (
-            <button
-              type="button"
-              title="Signs in to the nodes' Talos API, for talosctl"
-              onClick={() => {
-                void download(async () => {
-                  saveFile(await api.talosconfig(c.namespace, c.name), `${c.name}.talosconfig`);
-                });
-              }}
-            >
-              Talosconfig
-            </button>
-          )}
-          {issuesFromCA(c) && (
-            <button
-              type="button"
-              title="The certificate of the CA the cluster's certificates come from, for browsers and clients to trust"
-              onClick={() => {
-                void download(async () => saveCA(c));
-              }}
-            >
-              CA certificate
-            </button>
-          )}
-          {inHeadlamp !== undefined && (
-            <a className="button" href={inHeadlamp} target="_blank" rel="noopener noreferrer">
-              Headlamp
-            </a>
-          )}
-          <button type="button" className="danger" disabled={!can} title={why} onClick={() => setAction("delete")}>
-            Delete
-          </button>
-        </div>
-      </div>
-      {why !== undefined && <p className="muted page-note">{why}</p>}
-      <ErrorBox message={error} />
-      <ErrorBox message={downloadError} />
+        {why !== undefined && <p className="muted page-note">{why}</p>}
+        <ErrorBox message={error} />
+        <ErrorBox message={downloadError} />
 
-      <nav className="views" aria-label={`${c.name}'s views`}>
-        {views.map((v, i) => (
-          <Link key={v.path} to={clusterPath(c.namespace, c.name, v.path)} current={view === v.path}>
-            {v.label}
-            <kbd aria-hidden="true">{i + 1}</kbd>
-          </Link>
-        ))}
-      </nav>
-      <div className="object">
-        <div className="object-view">
-          {view === "" && <Placement cluster={c} />}
-          {view === "" && (
-            <Summary
-              cluster={c}
-              can={can}
-              why={why}
-              onChanged={() => {
-                void reload();
-              }}
-            />
-          )}
-          {view === "health" && <HealthView cluster={c} headlamp={inHeadlamp} />}
-          {view === "machines" && <Machines cluster={c} />}
-          {view === "backups" && (
-            <>
-              <BackupsView cluster={c} can={can} onEdit={setAction} />
-              <EtcdSnapshotsView cluster={c} can={can} onEdit={setAction} />
-            </>
-          )}
-          {view === "options" && <OptionsView cluster={c} can={can} onEdit={setAction} />}
+        <nav className="views" aria-label={`${c.name}'s views`}>
+          {views.map((v, i) => (
+            <Link key={v.path} to={clusterPath(c.namespace, c.name, v.path)} current={view === v.path}>
+              {v.label}
+              <kbd aria-hidden="true">{i + 1}</kbd>
+            </Link>
+          ))}
+        </nav>
+        <StagedBar cluster={c} />
+        <div className="object">
+          <div className="object-view">
+            {view === "" && <Placement cluster={c} />}
+            {view === "" && (
+              <Summary
+                cluster={c}
+                can={can}
+                why={why}
+                onChanged={() => {
+                  void reload();
+                }}
+              />
+            )}
+            {view === "health" && <HealthView cluster={c} headlamp={inHeadlamp} />}
+            {view === "machines" && <Machines cluster={c} />}
+            {view === "backups" && (
+              <>
+                <BackupsView cluster={c} can={can} onEdit={setAction} />
+                <EtcdSnapshotsView cluster={c} can={can} onEdit={setAction} />
+              </>
+            )}
+            {view === "options" && <OptionsView cluster={c} can={can} onEdit={setAction} />}
+          </div>
         </div>
-      </div>
 
-      {action !== undefined && <ActionDialog action={action} cluster={c} onClose={close} />}
-    </section>
+        {action !== undefined && <ActionDialog action={action} cluster={c} onClose={close} />}
+      </section>
+    </StagingProvider>
   );
 }
 
@@ -321,13 +332,15 @@ function Facts({ cluster: c }: { cluster: Cluster }): JSX.Element {
 
 function ActionDialog({
   action,
-  cluster: c,
+  cluster: current,
   onClose,
 }: {
   action: Action;
   cluster: Cluster;
   onClose: () => void;
 }): JSX.Element {
+  // A dialog starts from what is staged, so that a second change builds on the first.
+  const c = useStaging()?.staged?.plan.cluster ?? current;
   if (action === "scale") {
     return <ScaleDialog cluster={c} onClose={onClose} />;
   }
@@ -361,12 +374,13 @@ function OptionsView({
   onEdit: (a: Action) => void;
 }): JSX.Element {
   const offered = (useClassTargets(c.class) ?? []).length > 0;
-  const more = [
-    ...backupsRows(c, offered),
-    ...etcdSnapshotsRows(c, offered),
-    { label: "Autoscaler", value: autoscalerText(c), action: "autoscaler" as const, name: "the autoscaler" },
+  const staged = useStaging()?.staged?.plan.cluster;
+  const more = (shown: Cluster): OptionRow<"backups" | "etcdSnapshots" | "autoscaler">[] => [
+    ...backupsRows(shown, offered),
+    ...etcdSnapshotsRows(shown, offered),
+    { label: "Autoscaler", value: autoscalerText(shown), action: "autoscaler", name: "the autoscaler" },
   ];
-  return <Options cluster={c} can={can} onEdit={onEdit} more={more} />;
+  return <Options cluster={c} staged={staged} can={can} onEdit={onEdit} more={more} />;
 }
 
 function Summary({

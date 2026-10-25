@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
 import { poolChange, poolEntry, poolProblems, roomFor, roomWarning } from "./Autoscaling";
-import { fakeServer } from "./fake-server";
+import { applyStaged, fakeServer } from "./fake-server";
 import type { Cluster, PveNode, WorkerPool } from "./types";
 
 const gib = 1024 * 1024 * 1024;
@@ -70,6 +70,7 @@ describe("the Scale dialog", () => {
     await user.clear(fewest);
     await user.type(fewest, "1");
     await user.click(within(dialog).getByRole("button", { name: "Scale" }));
+    await applyStaged(user);
     await waitFor(() =>
       expect(calls.findLast((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
         controlPlaneReplicas: 1,
@@ -96,6 +97,7 @@ describe("the Scale dialog", () => {
     expect(workers).toHaveValue(3);
     expect(workers).toHaveAccessibleDescription(/keeps the workers it runs now/u);
     await user.click(within(dialog).getByRole("button", { name: "Scale" }));
+    await applyStaged(user);
     await waitFor(() =>
       expect(calls.findLast((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
         controlPlaneReplicas: 1,
@@ -198,6 +200,7 @@ describe("the autoscaler's options", () => {
     expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
     await user.type(unneeded, "5");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await applyStaged(user);
     await waitFor(() =>
       expect(calls.findLast((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
         variables: {

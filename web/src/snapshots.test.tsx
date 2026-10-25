@@ -14,7 +14,7 @@ import {
   type FieldKey,
 } from "./create-form";
 import { MachinesStep, type StepProps } from "./CreateSteps";
-import { fakeServer } from "./fake-server";
+import { applyStaged, fakeServer } from "./fake-server";
 import { formOf, rootPasswordOf, settings, setupFieldProblems } from "./Setup";
 import type { Cluster, ClusterClass } from "./types";
 
@@ -149,6 +149,7 @@ describe("a cluster's volume snapshots", () => {
     await waitFor(() => expect(within(dialog).getByLabelText("Take volume snapshots")).toBeEnabled());
     await user.click(within(dialog).getByLabelText("Take volume snapshots"));
     await user.click(save);
+    await applyStaged(user);
     await waitFor(() =>
       expect(sent()).toStrictEqual({ variables: { csi: { datastoreAllocate: true, volumeSnapshots: true } } }),
     );
@@ -175,6 +176,7 @@ describe("a cluster's volume snapshots", () => {
     const dialog = screen.getByRole("dialog", { name: "Volume snapshots" });
     await user.click(within(dialog).getByLabelText("Take volume snapshots"));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { csi: { volumeSnapshots: false } } }));
   });
 

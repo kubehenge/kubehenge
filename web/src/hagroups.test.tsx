@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { newForm, request, summary, type FieldKey } from "./create-form";
 import { MachinesStep, type StepProps } from "./CreateSteps";
-import { fakeServer } from "./fake-server";
+import { applyStaged, fakeServer } from "./fake-server";
 import { offersHAGroups, sysAuditAnnotation } from "./Placement";
 import type { Cluster, ClusterClass } from "./types";
 
@@ -125,6 +125,7 @@ describe("a cluster's HA group labels", () => {
     expect(save).toBeDisabled();
     await user.click(within(dialog).getByLabelText(/HA groups/u));
     await user.click(save);
+    await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { ccm: { haGroups: false } } }));
   });
 
@@ -137,6 +138,7 @@ describe("a cluster's HA group labels", () => {
     const dialog = screen.getByRole("dialog", { name: "HA group labels" });
     await user.click(within(dialog).getByLabelText(/HA groups/u));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { ccm: { haGroups: true } } }));
   });
 
@@ -149,6 +151,7 @@ describe("a cluster's HA group labels", () => {
     const dialog = screen.getByRole("dialog", { name: "HA group labels" });
     await user.click(within(dialog).getByLabelText(/HA groups/u));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { ccm: { haGroups: false } } }));
   });
 

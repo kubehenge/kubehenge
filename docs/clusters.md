@@ -185,6 +185,10 @@ The buttons beside the cluster's name act on the whole cluster: **Scale**, **Upg
 
 The status reads **Provisioning**, **Available**, **Upgrading** or **Reconciling** while a change rolls out, **Deleting**, or **Failed**. A cluster deleted while its page is open says so.
 
+### Staged changes
+
+A cluster's settings change in two steps. **Save** in a dialog stages the change: the API server checks it with those staged before it, as it would make them, so a change it refuses shows its reason in the dialog, and nothing changes in the cluster yet. A bar above the views then counts what is staged and says what applying it does to the machines, and **Options** shows each staged value under the one in force. A dialog opened again starts from what is staged. **Review plan** lists each setting as it is and as it would be, and whether it replaces no machine, adds or removes machines, or replaces the control-plane machines, the workers or every machine, one at a time; **Apply** makes the changes together, as one change of the cluster. **Discard** drops them. Scaling, upgrading, Talos upgrades and every setting under **Options** are staged this way; deleting the cluster, backups, restores and snapshots run at once.
+
 ## Scale
 
 **Scale** sets the control-plane nodes (1, 3, 5 or 7: an odd number, so etcd keeps a majority when one fails) and, for each worker pool, either its workers (0 to 100) or, under **Scaling**, **Autoscaled** between its fewest and most workers ([below](#autoscaling)).

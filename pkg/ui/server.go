@@ -219,6 +219,7 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}", s.managed(s.getCluster))
 	mux.HandleFunc("PATCH /api/clusters/{namespace}/{name}", s.managed(s.changeCluster))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/plan", s.managed(s.planCluster))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}", s.managed(s.deleteCluster))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/kubeconfig", s.managed(s.kubeconfig))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/talosconfig", s.managed(s.talosconfig))

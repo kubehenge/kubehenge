@@ -764,6 +764,49 @@ button.go {
   opacity: 0.8;
 }
 
+/* Staged changes stay in view while the views scroll, as an editor's unsaved buffer does. */
+.staged {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 8px 8px 8px 14px;
+  background: var(--surface);
+  border: 1px solid var(--warning);
+  border-left-width: 4px;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgb(16 24 20 / 8%);
+}
+
+.staged-effect {
+  color: var(--dim);
+}
+
+.staged-value {
+  display: block;
+  color: var(--warning);
+  font-weight: 600;
+}
+
+/* A plan sets each setting's value as it is beside the one it would be, so it takes more room. */
+.dialog:has(.grid.plan) {
+  width: min(920px, 96vw);
+}
+
+.grid.plan tbody th {
+  color: var(--text);
+  font-size: 13.5px;
+  white-space: nowrap;
+}
+
+.grid.plan td.plan-replaces {
+  color: var(--warning);
+}
+
 .object-view {
   min-width: 0;
 }

@@ -897,6 +897,21 @@ export interface ChangeRequest {
   variables?: Record<string, unknown>;
 }
 
+/** What a change does to a cluster's machines. */
+export type Effect = "none" | "scales" | "control-plane" | "workers" | "all";
+
+/** A setting a change sets anew: a variable's name, or version, controlPlaneReplicas, workerPools or autoscaling. */
+export interface PlannedChange {
+  setting: string;
+  effect: Effect;
+}
+
+/** A change as it would land, checked by the API server without being made. */
+export interface Plan {
+  cluster: Cluster;
+  changes: PlannedChange[];
+}
+
 /** The autoscaler variable: where the cluster autoscaler runs and how it scales. */
 export interface AutoscalerSettings {
   placement?: "management" | "workload";

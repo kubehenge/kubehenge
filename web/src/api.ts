@@ -16,6 +16,7 @@ import type {
   ManagementAutomatic,
   ManagementSettings,
   PodLogs,
+  Plan,
   PveNode,
   Realm,
   RestoreRun,
@@ -182,6 +183,7 @@ export interface Api {
   cluster: (ns: string, name: string) => Promise<Cluster>;
   create: (req: CreateRequest) => Promise<Cluster>;
   change: (ns: string, name: string, req: ChangeRequest) => Promise<Cluster>;
+  plan: (ns: string, name: string, req: ChangeRequest) => Promise<Plan>;
   remove: (ns: string, name: string) => Promise<void>;
   backups: (ns: string, name: string) => Promise<ClusterBackups>;
   backUp: (ns: string, name: string) => Promise<BackupRun>;
@@ -254,6 +256,7 @@ export const api: Api = {
   cluster: (ns, name) => request("GET", clusterPath(ns, name)),
   create: (req) => request("POST", "/api/clusters", req),
   change: (ns, name, req) => request("PATCH", clusterPath(ns, name), req),
+  plan: (ns, name, req) => request("POST", `${clusterPath(ns, name)}/plan`, req),
   remove: (ns, name) => act("DELETE", clusterPath(ns, name)),
   backups: (ns, name) => request("GET", `${clusterPath(ns, name)}/backups`),
   backUp: (ns, name) => request("POST", `${clusterPath(ns, name)}/backups`),
