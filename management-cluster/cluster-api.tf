@@ -153,21 +153,25 @@ locals {
     for p in local.provider_specs : p.namespace if p.name == d
   ]) }
 
-  # Requests near what each provider holds, for those whose manifests carry none, and Talos's, whose
-  # ask for twice what they hold: without one a controller is BestEffort, the first a memory-short
-  # node kills, and Cluster API's core is the one every cluster depends on. Every provider starts
-  # at installation, whether a cluster uses it or not, so what they ask for must fit beside the
-  # rest on one node. No limits: a controller that grows while it syncs must not be killed for it.
+  # Each provider's request, near what it holds, in place of its manifests' resources: some carry
+  # none, which leaves a controller BestEffort, the first a memory-short node kills, and Cluster
+  # API's core is the one every cluster depends on; Talos's ask for twice what they hold, and every
+  # provider starts at installation, whether a cluster uses it or not, so they must fit beside each
+  # other on one node. No limits, which some manifests set: a controller that grows while it syncs
+  # must not be killed for it.
   memory_requests = {
-    "CoreProvider/cluster-api"     = "128Mi"
-    "BootstrapProvider/kubeadm"    = "64Mi"
-    "BootstrapProvider/rke2"       = "64Mi"
-    "BootstrapProvider/k3s"        = "64Mi"
-    "BootstrapProvider/talos"      = "64Mi"
-    "ControlPlaneProvider/kubeadm" = "64Mi"
-    "ControlPlaneProvider/k3s"     = "64Mi"
-    "ControlPlaneProvider/talos"   = "64Mi"
-    "AddonProvider/helm"           = "64Mi"
+    "CoreProvider/cluster-api"       = "128Mi"
+    "BootstrapProvider/kubeadm"      = "64Mi"
+    "BootstrapProvider/rke2"         = "64Mi"
+    "BootstrapProvider/k3s"          = "64Mi"
+    "BootstrapProvider/talos"        = "64Mi"
+    "ControlPlaneProvider/kubeadm"   = "64Mi"
+    "ControlPlaneProvider/rke2"      = "64Mi"
+    "ControlPlaneProvider/k3s"       = "64Mi"
+    "ControlPlaneProvider/talos"     = "64Mi"
+    "InfrastructureProvider/proxmox" = "64Mi"
+    "IPAMProvider/in-cluster"        = "64Mi"
+    "AddonProvider/helm"             = "64Mi"
   }
 
   # The component of the tested set each provider comes with.
@@ -212,11 +216,11 @@ locals {
   missing_images = sort([for key, image in local.provider_images : key if image == null])
 
   # Every Cluster API provider names its controller container "manager".
-  provider_containers = { for p in local.provider_specs : "${p.kind}/${p.name}" => merge(
-    { name = "manager", imageUrl = local.provider_images["${p.kind}/${p.name}"] },
-    contains(keys(local.memory_requests), "${p.kind}/${p.name}") ?
-    { resources = { requests = { cpu = "10m", memory = local.memory_requests["${p.kind}/${p.name}"] } } } : {},
-  ) }
+  provider_containers = { for p in local.provider_specs : "${p.kind}/${p.name}" => {
+    name      = "manager"
+    imageUrl  = local.provider_images["${p.kind}/${p.name}"]
+    resources = { requests = { cpu = "10m", memory = local.memory_requests["${p.kind}/${p.name}"] } }
+  } }
   # The operator installs each provider from the ConfigMap the providers chart's hook stores its
   # checked files in, not from the release.
   providers = [for p in local.provider_specs : merge(p, {

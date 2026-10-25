@@ -745,15 +745,11 @@ run "providers" {
   }
 
   assert {
-    condition = toset([
-      for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : "${p.kind}/${p.name}"
-      if can(p.spec.deployment.containers[0].resources.requests.memory) && !can(p.spec.deployment.containers[0].resources.limits)
-      ]) == toset([
-      "CoreProvider/cluster-api", "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/k3s",
-      "BootstrapProvider/talos", "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/k3s",
-      "ControlPlaneProvider/talos", "AddonProvider/helm",
+    condition = alltrue([
+      for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers :
+      can(p.spec.deployment.containers[0].resources.requests.memory) && !can(p.spec.deployment.containers[0].resources.limits)
     ])
-    error_message = "every provider whose manifests set no requests, and Talos's, gets a memory request, and no limit"
+    error_message = "every provider gets a memory request, and no limit"
   }
 
   assert {
@@ -991,7 +987,11 @@ run "provider_image" {
       "${p.kind}/${p.name}" => p.spec.deployment.containers
       if contains(["InfrastructureProvider/proxmox", "CoreProvider/cluster-api", "AddonProvider/helm"], "${p.kind}/${p.name}")
       } == {
-      "InfrastructureProvider/proxmox" = [{ name = "manager", imageUrl = "registry.example/capmox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }]
+      "InfrastructureProvider/proxmox" = [{
+        name      = "manager"
+        imageUrl  = "registry.example/capmox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        resources = { requests = { cpu = "10m", memory = "64Mi" } }
+      }]
       "CoreProvider/cluster-api" = [{
         name      = "manager"
         imageUrl  = "registry.example/capi@sha256:456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123"

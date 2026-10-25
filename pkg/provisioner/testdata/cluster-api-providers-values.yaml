@@ -185,6 +185,10 @@ providers:
         containers:
           - name: manager
             imageUrl: ghcr.io/rancher/cluster-api-provider-rke2-controlplane:v0.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
+            resources:
+              requests:
+                cpu: 10m
+                memory: 64Mi
       fetchConfig:
         selector:
           matchLabels:
@@ -286,6 +290,10 @@ providers:
         containers:
           - imageUrl: ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:0000000000000000000000000000000000000000000000000000000000000000
             name: manager
+            resources:
+              requests:
+                cpu: 10m
+                memory: 64Mi
       fetchConfig:
         selector:
           matchLabels:
@@ -336,6 +344,10 @@ providers:
         containers:
           - name: manager
             imageUrl: registry.k8s.io/capi-ipam-ic/cluster-api-ipam-in-cluster-controller:v0.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
+            resources:
+              requests:
+                cpu: 10m
+                memory: 64Mi
       fetchConfig:
         selector:
           matchLabels:
