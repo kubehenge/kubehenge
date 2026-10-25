@@ -153,17 +153,20 @@ locals {
     for p in local.provider_specs : p.namespace if p.name == d
   ]) }
 
-  # Requests for the providers whose manifests carry none, near what each holds: without one a
-  # controller is BestEffort, the first a memory-short node kills, and Cluster API's core is the
-  # one every cluster depends on. No limits: a controller that grows while it syncs must not be
-  # killed for it.
+  # Requests near what each provider holds, for those whose manifests carry none, and Talos's, whose
+  # ask for twice what they hold: without one a controller is BestEffort, the first a memory-short
+  # node kills, and Cluster API's core is the one every cluster depends on. Every provider starts
+  # at installation, whether a cluster uses it or not, so what they ask for must fit beside the
+  # rest on one node. No limits: a controller that grows while it syncs must not be killed for it.
   memory_requests = {
     "CoreProvider/cluster-api"     = "128Mi"
     "BootstrapProvider/kubeadm"    = "64Mi"
     "BootstrapProvider/rke2"       = "64Mi"
     "BootstrapProvider/k3s"        = "64Mi"
+    "BootstrapProvider/talos"      = "64Mi"
     "ControlPlaneProvider/kubeadm" = "64Mi"
     "ControlPlaneProvider/k3s"     = "64Mi"
+    "ControlPlaneProvider/talos"   = "64Mi"
     "AddonProvider/helm"           = "64Mi"
   }
 

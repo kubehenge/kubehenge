@@ -233,6 +233,10 @@ providers:
         containers:
           - name: manager
             imageUrl: ghcr.io/kubehenge/cluster-api-bootstrap-provider-talos:v0.0.0-alpha.5@sha256:0000000000000000000000000000000000000000000000000000000000000000
+            resources:
+              requests:
+                cpu: 10m
+                memory: 64Mi
       fetchConfig:
         selector:
           matchLabels:
@@ -254,6 +258,10 @@ providers:
         containers:
           - name: manager
             imageUrl: ghcr.io/kubehenge/cluster-api-control-plane-provider-talos:v0.0.0-alpha.3@sha256:0000000000000000000000000000000000000000000000000000000000000000
+            resources:
+              requests:
+                cpu: 10m
+                memory: 64Mi
       fetchConfig:
         selector:
           matchLabels:

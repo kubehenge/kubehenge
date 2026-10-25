@@ -750,9 +750,10 @@ run "providers" {
       if can(p.spec.deployment.containers[0].resources.requests.memory) && !can(p.spec.deployment.containers[0].resources.limits)
       ]) == toset([
       "CoreProvider/cluster-api", "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/k3s",
-      "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/k3s", "AddonProvider/helm",
+      "BootstrapProvider/talos", "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/k3s",
+      "ControlPlaneProvider/talos", "AddonProvider/helm",
     ])
-    error_message = "every provider whose manifests set no requests gets a memory request, and no limit"
+    error_message = "every provider whose manifests set no requests, and Talos's, gets a memory request, and no limit"
   }
 
   assert {
