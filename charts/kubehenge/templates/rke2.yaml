@@ -195,12 +195,14 @@ spec:
               path: /spec/template/spec/files/-
               valueFrom:
                 template: |
-                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/etc/rancher/rke2/authentication-config.yaml" "anonymous" false) | nindent 18 }}
+                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/var/lib/rancher/rke2/server/authentication-config.yaml" "anonymous" false) | nindent 18 }}
             # RKE2 mounts every file an argument names into the API server's static pod; mounting it
-            # again as an extra mount makes the pod invalid (a mount path must be unique).
+            # again as an extra mount makes the pod invalid (a mount path must be unique). The API
+            # server watches the file for changes, which RKE2's SELinux policy allows in RKE2's own
+            # directory, not in /etc.
             - op: add
               path: /spec/template/spec/serverConfig/kubeAPIServer/extraArgs/-
-              value: authentication-config=/etc/rancher/rke2/authentication-config.yaml
+              value: authentication-config=/var/lib/rancher/rke2/server/authentication-config.yaml
             # RKE2 switches anonymous requests off itself only while it is given no file.
             - op: add
               path: /spec/template/spec/serverConfig/kubeAPIServer/extraArgs/-
