@@ -247,7 +247,7 @@ talos_pod_logs() {
 
 # talos_part <part>: one part of a Talos node's state, as guest_script prints another VM's: the
 # machine's stage, its services' states and events, its memory, pressure and processes and the
-# kubelet's containers; its services' logs; the pods' logs; the kernel's log; etcd's members, status
+# kubelet's containers and Talos's TCP connections; its services' logs; the pods' logs; the kernel's log; etcd's members, status
 # and alarms. ${talos_services} names the node's services as it listed them.
 talos_part() {
     case $1 in
@@ -261,6 +261,8 @@ talos_part() {
             done
             talos 1000 processes
             talos 1000 containers --kubernetes
+            # Talos's own connections, its log destination's among them.
+            talos 300 netstat --tcp --all --programs
             ;;
         services)
             for s in ${talos_services}; do talos 10000 logs "${s}" --tail 10000; done

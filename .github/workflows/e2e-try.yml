@@ -281,6 +281,12 @@ jobs:
                   grep -E -- 'csi|snapshot' | while read -r pns pod; do
                     k logs -n "$pns" "$pod" --all-containers --prefix --tail=2000 || true
                   done > "$dir/volumes.log" 2>&1 || true
+                # Why logs do not reach Loki: what the collectors and Loki say of what they took in
+                # and passed on.
+                for pns in logging logging-node; do
+                  k logs -n "$pns" -l app.kubernetes.io/instance --all-containers --prefix \
+                    --tail=2000 --max-log-requests=20 || true
+                done > "$dir/logging.log" 2>&1 || true
                 # The run before a restart says why the container ended; when it cannot be had, the
                 # error says why. It is asked for container by container, since with all of them
                 # kubectl stops at the first one that never restarted.
