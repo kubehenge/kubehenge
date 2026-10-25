@@ -63,6 +63,11 @@ func TestIstioInstallsInAmbientMode(t *testing.T) {
 			t.Errorf("%s is not in ambient mode: %v", name, values[name])
 		}
 	}
+	for _, name := range []string{"web-istio-cni", "web-ztunnel"} {
+		if lookup[string](t, values[name], "seLinuxOptions", "type") != "spc_t" || lookup[string](t, values[name], "seLinuxOptions", "level") != "s0" {
+			t.Errorf("%s cannot write its sockets on an SELinux node: %v", name, values[name])
+		}
+	}
 	istiod := values["web-istiod"]
 	if lookup[string](t, istiod, "pilot", "trustedZtunnelNamespace") != "istio-node" {
 		t.Errorf("istiod does not trust the ztunnel beside istio-cni: %v", istiod)

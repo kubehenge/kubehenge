@@ -56,7 +56,11 @@ func istioCharts(charts *Charts, distribution templates.Distribution, cni CNI) [
 		values["profile"] = "ambient"
 		return values
 	}
-	cniValues := ambient(map[string]any{})
+	// istio-cni and ztunnel share sockets through a directory of the host, which SELinux keeps a
+	// confined container from writing, privileged or not; at s0, as categories mean nothing to an
+	// unconfined type.
+	unconfined := func() map[string]any { return map[string]any{"type": "spc_t", "level": "s0"} }
+	cniValues := ambient(map[string]any{"seLinuxOptions": unconfined()})
 	if distribution == templates.K3s && cni.Name == "" {
 		cniValues["global"] = map[string]any{"platform": "k3s"}
 	}
@@ -73,6 +77,7 @@ func istioCharts(charts *Charts, distribution templates.Distribution, cni CNI) [
 		})},
 		{istioCNI, istioCNI, istioNodeNamespace, charts.IstioCNI, cniValues},
 		{istioZtunnel, istioZtunnel, istioNodeNamespace, charts.IstioZtunnel, ambient(map[string]any{
+			"seLinuxOptions": unconfined(),
 			// The chart asks for 512 MiB on every node, room for a mesh of 200,000 pods.
 			"resources": map[string]any{requestsKey: map[string]any{cpuKey: "200m", memoryKey: "128Mi"}},
 		})},
