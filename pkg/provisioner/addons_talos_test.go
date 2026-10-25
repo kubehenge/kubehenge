@@ -4,8 +4,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"text/template"
 	"time"
 
+	"github.com/Masterminds/sprig/v3"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -166,6 +168,47 @@ func TestTalosControlPlaneMetricsAreScrapedOnceTheirCertificatesComeFromTheClust
 	if (&Reconciler{}).talosServesControlPlaneMetrics(t.Context(), talosCluster("web", "v1.14.4")) {
 		t.Error("a cluster that cannot be reached counts as one whose certificates the proxies verify")
 	}
+}
+
+// helmRendered is the text as a Go template with Sprig's functions makes of it, which is how the
+// Add-on Provider for Helm renders a proxy's values and Helm's tpl a chart's content.
+func helmRendered(t *testing.T, text string) string {
+	t.Helper()
+	tpl, err := template.New("values").Funcs(sprig.TxtFuncMap()).Parse(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if err := tpl.Execute(&out, map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	return out.String()
+}
+
+func TestTalosLogsKeepTheirUnitThroughTheProviderAndTheChart(t *testing.T) {
+	t.Parallel()
+	c := cluster()
+	c.Spec.Topology.ClassRef.Name = ClassPrefix + "talos"
+	c.Spec.Topology.Version = "v1.36.5"
+	proxies, err := helmChartProxies(c, &testCharts, templates.Talos, "local-lvm", CNI{}, logsOnWith(Logs{Collector: "node"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const unit = `template = "{{ if .unit }}{{ .unit }}{{ else if .facility }}kernel{{ end }}"`
+	for _, p := range proxies {
+		if p.GetName() != "web-alloy-node" {
+			continue
+		}
+		values := map[string]any{}
+		if err := yaml.Unmarshal([]byte(helmRendered(t, lookup[string](t, p.Object, "spec", "valuesTemplate"))), &values); err != nil {
+			t.Fatal(err)
+		}
+		if config := helmRendered(t, lookup[string](t, values, "alloy", "configMap", "content")); !strings.Contains(config, unit) {
+			t.Errorf("Alloy runs on Talos without the unit of what Talos sends:\n%s", config)
+		}
+		return
+	}
+	t.Fatal("no node collector")
 }
 
 func TestNodeCollectorOnTalosReadsTheAuditLogAndWhatTalosSends(t *testing.T) {

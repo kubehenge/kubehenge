@@ -550,7 +550,8 @@ func auditLog(distribution templates.Distribution) (string, string) {
 func alloyCommon(image Image, config, namespace string, objects ...any) (map[string]any, map[string]any) {
 	off := map[string]any{"enabled": false}
 	alloy := map[string]any{
-		"configMap":            map[string]any{"content": config},
+		// The chart renders the content as a Helm template, which would empty Alloy's own templates.
+		"configMap":            map[string]any{"content": strings.ReplaceAll(config, "{{", `{{"{{"}}`)},
 		"listenAddr":           "127.0.0.1",
 		"enableHttpServerPort": false,
 		"enableReporting":      false,
