@@ -159,7 +159,7 @@ Every page shows the fleet down its left side, grouped by where each cluster sta
 
 Each entry opens the view that says more: the health page for what it found, the machines for a rollout. The health pages are read for the whole fleet at most every 30 seconds.
 
-The same work under way also shows down the right side of a wide window, and folds away with **›** or `R`; in a narrower one **Running** in the top bar shows it.
+Down the right side of a wide window, **Runs** follows the work that goes on by itself once started: the same changes to clusters, and each cluster's etcd snapshots and restores and its backups and restores, each with how far it has come. Those who may set up the management cluster also see its applies, the template builds and refreshes, and the appliance's upgrades. A run that failed stays there for a day with the first error it reported; one that went well, for an hour. It folds away with **›** or `R`; in a narrower window **Running** in the top bar shows it.
 
 **Go to or run…** in the top bar, or `Ctrl K` (`⌘ K` on a Mac), finds any cluster, any of its views, a page or an action by a few letters of its name: `db opt` finds the options of `db`. Outside fields, single keys work too, and `?` lists them:
 

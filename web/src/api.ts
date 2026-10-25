@@ -19,6 +19,7 @@ import type {
   PveNode,
   Realm,
   RestoreRun,
+  RunInfo,
   Session,
   SetupStatus,
   Storage,
@@ -198,6 +199,7 @@ export interface Api {
 
   health: (ns: string, name: string) => Promise<ClusterHealth>;
   fleetHealth: () => Promise<FleetHealth[]>;
+  runs: () => Promise<RunInfo[]>;
   podLogs: (cluster: ClusterRef, pod: { namespace: string; name: string }, container: string) => Promise<PodLogs>;
   kubeconfig: (ns: string, name: string) => Promise<Blob>;
   /** talosconfig is a Talos cluster's, which signs in to its nodes' Talos API. */
@@ -271,6 +273,7 @@ export const api: Api = {
 
   health: (ns, name) => request("GET", `${clusterPath(ns, name)}/health`),
   fleetHealth: () => request("GET", "/api/fleet/health"),
+  runs: () => request("GET", "/api/runs"),
   podLogs: (cluster, pod, container) =>
     request(
       "GET",

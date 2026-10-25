@@ -3,7 +3,7 @@ import { createContext, use, useEffect, useMemo, useRef, type JSX, type ReactNod
 import { api } from "./api";
 import { clusterPath, type View } from "./ClusterDetail";
 import { Link } from "./router";
-import type { Cluster, FleetHealth, Replicas } from "./types";
+import type { Cluster, FleetHealth, Replicas, RunInfo } from "./types";
 import { distributionName, filled, pollIdle, settled, usePoll } from "./ui";
 
 // How often the fleet is read again while any cluster is changing.
@@ -18,6 +18,8 @@ export interface Fleet {
   clusters: Cluster[] | undefined;
   /** How each cluster's health page sums it up, by cluster key; undefined until read. */
   health: Map<string, FleetHealth> | undefined;
+  /** The work running or lately finished that the user may see; undefined until read. */
+  runs: RunInfo[] | undefined;
   error: string | undefined;
   reload: () => Promise<void>;
 }
@@ -42,6 +44,9 @@ export function FleetProvider({ reads = true, children }: { reads?: boolean; chi
     reads ? api.fleetHealth : noFleet,
     pollIdle,
   );
+  const { data: runs, reload: reloadRuns } = usePoll<RunInfo[] | undefined>(reads ? api.runs : noFleet, (list) =>
+    list?.some((r) => r.state === "running") === true ? pollChanging : pollIdle,
+  );
   const first = useRef(true);
   useEffect(() => {
     if (first.current) {
@@ -49,11 +54,12 @@ export function FleetProvider({ reads = true, children }: { reads?: boolean; chi
     } else if (reads) {
       void reload();
       void reloadHealth();
+      void reloadRuns();
     }
-  }, [reads, reload, reloadHealth]);
+  }, [reads, reload, reloadHealth, reloadRuns]);
   const fleet = useMemo(
-    () => ({ clusters: data, health: read && new Map(read.map((h) => [fleetKey(h), h])), error, reload }),
-    [data, read, error, reload],
+    () => ({ clusters: data, health: read && new Map(read.map((h) => [fleetKey(h), h])), runs, error, reload }),
+    [data, read, runs, error, reload],
   );
   return <FleetContext value={fleet}>{children}</FleetContext>;
 }

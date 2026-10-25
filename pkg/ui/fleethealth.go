@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -14,9 +13,6 @@ import (
 // fleetHealthItems is how many of a cluster's items needing attention the fleet's summary carries:
 // the worst, for the rail to say why, and a few after it.
 const fleetHealthItems = 3
-
-// fleetHealthReads is how many clusters' health is read at once.
-const fleetHealthReads = 4
 
 // fleetHealthView is how one cluster stands, as its health page sums it up.
 type fleetHealthView struct {
@@ -33,48 +29,22 @@ type fleetHealthView struct {
 // fleetHealth answers with the verdict and the worst items needing attention of every cluster the
 // user may see, from the reads the health pages share.
 func (s *Server) fleetHealth(w http.ResponseWriter, r *http.Request, u user) {
-	var list clusterv1.ClusterList
-	if err := u.kube.List(r.Context(), &list); err != nil {
-		s.kubeError(w, err)
+	shown, ok := s.shownClusters(w, r, u)
+	if !ok {
 		return
 	}
-	all, err := s.Accounts.AllPrivileges(r.Context(), u.ticket)
-	if err != nil {
-		s.proxmoxError(w, err)
-		return
-	}
-	views, err := s.visibleClusters(r.Context(), u, list.Items, all)
-	if err != nil {
-		s.proxmoxError(w, err)
-		return
-	}
-	seen := visibleKeys(views)
-	var shown []*clusterv1.Cluster
-	for i := range list.Items {
-		if c := &list.Items[i]; seen[clusterKey(c.Namespace, c.Name)] {
-			shown = append(shown, c)
-		}
-	}
-
 	ctx := r.Context()
 	out := make([]*fleetHealthView, len(shown))
-	sem := make(chan struct{}, fleetHealthReads)
-	var wg sync.WaitGroup
-	for i, c := range shown {
-		wg.Go(func() {
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			key := c.Namespace + "/" + c.Name + "/" + string(c.UID)
-			v, err := s.health.get(ctx, key, fleetHealthFresh, s.now, func(ctx context.Context) healthView {
-				return s.readHealth(ctx, u.kube, c, u.namespaces)
-			})
-			if err != nil {
-				return
-			}
-			out[i] = summed(c, &v)
+	inParallel(len(shown), func(i int) {
+		c := shown[i]
+		key := c.Namespace + "/" + c.Name + "/" + string(c.UID)
+		v, err := s.health.get(ctx, key, fleetHealthFresh, s.now, func(ctx context.Context) healthView {
+			return s.readHealth(ctx, u.kube, c, u.namespaces)
 		})
-	}
-	wg.Wait()
+		if err == nil {
+			out[i] = summed(c, &v)
+		}
+	})
 
 	// A cluster whose read the user did not wait for is left out, and shows again once read.
 	result := []*fleetHealthView{}
@@ -109,4 +79,32 @@ func summed(c *clusterv1.Cluster, v *healthView) *fleetHealthView {
 		Attention: slices.Clone(items),
 		More:      more,
 	}
+}
+
+// shownClusters are the clusters the user may see, or nil with the request answered when they
+// could not be read.
+func (s *Server) shownClusters(w http.ResponseWriter, r *http.Request, u user) ([]*clusterv1.Cluster, bool) {
+	var list clusterv1.ClusterList
+	if err := u.kube.List(r.Context(), &list); err != nil {
+		s.kubeError(w, err)
+		return nil, false
+	}
+	all, err := s.Accounts.AllPrivileges(r.Context(), u.ticket)
+	if err != nil {
+		s.proxmoxError(w, err)
+		return nil, false
+	}
+	views, err := s.visibleClusters(r.Context(), u, list.Items, all)
+	if err != nil {
+		s.proxmoxError(w, err)
+		return nil, false
+	}
+	seen := visibleKeys(views)
+	shown := []*clusterv1.Cluster{}
+	for i := range list.Items {
+		if c := &list.Items[i]; seen[clusterKey(c.Namespace, c.Name)] {
+			shown = append(shown, c)
+		}
+	}
+	return shown, true
 }

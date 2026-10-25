@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
@@ -295,56 +294,6 @@ func problem(err error) string {
 		return ue.Err.Error()
 	}
 	return err.Error()
-}
-
-// healthCache keeps each cluster's last read, and makes one read at a time per cluster however
-// many look, so ten viewers cost one round of reads.
-type healthCache struct {
-	mu        sync.Mutex
-	byCluster map[string]*healthRead
-}
-
-type healthRead struct {
-	done     chan struct{}
-	inFlight bool
-	view     healthView
-	at       time.Time
-}
-
-// get answers with a read younger than fresh, waiting for one in flight or starting one. The read
-// runs on past a viewer who leaves, for the others waiting on it.
-func (hc *healthCache) get(ctx context.Context, key string, fresh time.Duration, now func() time.Time, read func(context.Context) healthView) (healthView, error) {
-	hc.mu.Lock()
-	r, ok := hc.byCluster[key]
-	if !ok || !r.inFlight && now().Sub(r.at) >= fresh {
-		r = &healthRead{done: make(chan struct{}), inFlight: true}
-		if hc.byCluster == nil {
-			hc.byCluster = map[string]*healthRead{}
-		}
-		for k, kept := range hc.byCluster {
-			if !kept.inFlight && now().Sub(kept.at) > fleetHealthFresh {
-				delete(hc.byCluster, k)
-			}
-		}
-		hc.byCluster[key] = r
-		detached := context.WithoutCancel(ctx)
-		go func() {
-			v := read(detached)
-			hc.mu.Lock()
-			r.view, r.at, r.inFlight = v, now(), false
-			hc.mu.Unlock()
-			close(r.done)
-		}()
-	}
-	hc.mu.Unlock()
-	select {
-	case <-r.done:
-		hc.mu.Lock()
-		defer hc.mu.Unlock()
-		return r.view, nil
-	case <-ctx.Done():
-		return healthView{}, fmt.Errorf("waiting for the cluster's health: %w", ctx.Err())
-	}
 }
 
 func (s *Server) now() time.Time {

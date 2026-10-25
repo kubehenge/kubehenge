@@ -1,66 +1,132 @@
 import type { JSX } from "react";
 
-import { clusterPath } from "./ClusterDetail";
+import { clusterPath, type View } from "./ClusterDetail";
 import { ranked, useFleet, type Standing } from "./fleet";
 import { Link } from "./router";
-import type { Cluster } from "./types";
+import type { RunInfo } from "./types";
+import { age } from "./ui";
 
-/** A piece of work under way somewhere in the fleet. */
+/** Where a run stands in the column: under way, failed and waiting for a look, or done lately. */
+export type RunGroup = "running" | "failed" | "done";
+
+/** A piece of work somewhere in the fleet or the appliance. */
 export interface Run {
   key: string;
+  group: RunGroup;
   title: string;
   what: string;
   state: Standing["state"];
   to: string;
+  /** The first thing that went wrong, for a failed run. */
+  error?: string;
 }
 
-/** useRuns is the work under way, as the fleet's clusters show it. */
+const runGroups: { group: RunGroup; label: string }[] = [
+  { group: "running", label: "Running" },
+  { group: "failed", label: "Failed" },
+  { group: "done", label: "Done" },
+];
+
+// The view of a cluster's page that shows each kind of run.
+const runViews: Partial<Record<RunInfo["kind"], View>> = {
+  "etcd-snapshot": "backups",
+  "etcd-restore": "backups",
+  backup: "backups",
+  restore: "backups",
+};
+
+// The appliance's runs carry no cluster; each names what it works on.
+const applianceTitles: Partial<Record<RunInfo["kind"], string>> = {
+  "management-cluster": "Management cluster",
+  template: "Templates",
+  "template-refresh": "Templates",
+  "appliance-upgrade": "Appliance",
+};
+
+function described(r: RunInfo): string {
+  if (r.state === "running") {
+    return r.phase === undefined ? r.what : `${r.what}: ${r.phase}`;
+  }
+  const when = r.finished === undefined ? "" : `, ${age(r.finished)} ago`;
+  return `${r.what}${r.state === "failed" ? " failed" : ""}${when}`;
+}
+
+const groupOf: Record<RunInfo["state"], RunGroup> = { running: "running", failed: "failed", succeeded: "done" };
+const stateOf: Record<RunInfo["state"], Standing["state"]> = { running: "progress", failed: "error", succeeded: "ok" };
+
+const shownName = (namespace: string, name: string): string =>
+  namespace === "default" ? name : `${namespace}/${name}`;
+
+function fromServer(r: RunInfo): Run {
+  const ns = r.namespace ?? "";
+  const cluster = r.cluster ?? "";
+  const onCluster = cluster !== "";
+  return {
+    key: r.id,
+    group: groupOf[r.state],
+    title: onCluster ? shownName(ns, cluster) : (applianceTitles[r.kind] ?? "Appliance"),
+    what: described(r),
+    state: stateOf[r.state],
+    to: onCluster ? clusterPath(ns, cluster, runViews[r.kind] ?? "") : "/administration",
+    ...(r.error !== undefined && { error: r.error }),
+  };
+}
+
+/**
+ * useRuns is the work under way and lately finished: the changes the fleet's clusters show, then
+ * what the appliance and the clusters' snapshots, backups and restores report.
+ */
 export function useRuns(): Run[] {
   const fleet = useFleet();
-  return ranked(fleet?.clusters ?? [], fleet?.health)
+  const changes: Run[] = ranked(fleet?.clusters ?? [], fleet?.health)
     .filter(({ standing }) => standing.group === "running")
-    .map(({ cluster: c, standing: s }: { cluster: Cluster; standing: Standing }) => ({
+    .map(({ cluster: c, standing: s }) => ({
       key: `${c.namespace}/${c.name}`,
-      title: c.namespace === "default" ? c.name : `${c.namespace}/${c.name}`,
+      group: "running",
+      title: shownName(c.namespace, c.name),
       what: s.reason,
       state: s.state,
       to: clusterPath(c.namespace, c.name, s.view),
     }));
+  return [...changes, ...(fleet?.runs ?? []).map((r) => fromServer(r))];
 }
 
 /** RunsPanel follows the work under way beside whatever page is open, and folds away. */
 export function RunsPanel({ runs, onFold }: { runs: Run[]; onFold: () => void }): JSX.Element {
+  const running = runs.filter((r) => r.group === "running").length;
   return (
-    <aside className="runs" aria-label="Running">
+    <aside className="runs" aria-label="Runs">
       <div className="runs-head">
         <h2>
-          Running <span className="count">{runs.length}</span>
+          Runs <span className="count">{running} running</span>
         </h2>
-        <button
-          type="button"
-          className="icon"
-          aria-label="Fold the running work away"
-          title="Fold away (R)"
-          onClick={onFold}
-        >
+        <button type="button" className="icon" aria-label="Fold the runs away" title="Fold away (R)" onClick={onFold}>
           ›
         </button>
       </div>
-      {runs.length === 0 ? (
-        <p className="rail-note">Nothing is running.</p>
-      ) : (
-        <ul>
-          {runs.map((r) => (
-            <li key={r.key}>
-              <Link to={r.to} className="run">
-                <span className={`dot dot-${r.state}`} aria-hidden="true" />
-                <span className="run-title">{r.title}</span>
-                <span className="run-what">{r.what}</span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
+      {runGroups.map(({ group, label }) => {
+        const members = runs.filter((r) => r.group === group);
+        if (members.length === 0) {
+          return null;
+        }
+        return (
+          <section key={group} className={`runs-group runs-${group}`} aria-label={label}>
+            <h3>{label}</h3>
+            <ul>
+              {members.map((r) => (
+                <li key={r.key}>
+                  <Link to={r.to} className="run">
+                    <span className={`dot dot-${r.state}`} aria-hidden="true" />
+                    <span className="run-title">{r.title}</span>
+                    <span className="run-what">{r.what}</span>
+                    {r.error !== undefined && <span className="run-error">{r.error}</span>}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        );
+      })}
     </aside>
   );
 }

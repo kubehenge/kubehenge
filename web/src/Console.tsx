@@ -207,7 +207,8 @@ export function Console({
         canManage={canManage}
         settingUp={settingUp}
         path={path}
-        running={runs.length}
+        running={runs.filter((r) => r.group === "running").length}
+        anyRuns={runs.length > 0}
         runsShown={runsShown}
         open={open}
         onSignOut={onSignOut}
@@ -230,6 +231,7 @@ function TopBar({
   settingUp,
   path,
   running,
+  anyRuns,
   runsShown,
   open,
   onSignOut,
@@ -240,6 +242,7 @@ function TopBar({
   settingUp: boolean;
   path: string;
   running: number;
+  anyRuns: boolean;
   runsShown: boolean | undefined;
   open: Opens;
   onSignOut: () => void;
@@ -269,9 +272,9 @@ function TopBar({
         </>
       )}
       <span className="spacer" />
-      {!settingUp && running > 0 && (
+      {!settingUp && anyRuns && (
         <button type="button" className="runs-toggle" aria-pressed={runsShown} onClick={() => open.runs()}>
-          <span className="dot dot-progress" aria-hidden="true" /> Running {running}
+          <span className={`dot dot-${running > 0 ? "progress" : "idle"}`} aria-hidden="true" /> Running {running}
         </button>
       )}
       {headlamp !== undefined && (

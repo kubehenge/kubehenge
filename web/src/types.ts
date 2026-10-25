@@ -285,6 +285,30 @@ export interface FleetHealth {
   more?: number;
 }
 
+/** A piece of work that runs on its own once started, with how far it is or what went wrong. */
+export interface RunInfo {
+  id: string;
+  kind:
+    | "management-cluster"
+    | "template"
+    | "template-refresh"
+    | "appliance-upgrade"
+    | "etcd-snapshot"
+    | "etcd-restore"
+    | "backup"
+    | "restore";
+  namespace?: string;
+  cluster?: string;
+  what: string;
+  state: "running" | "succeeded" | "failed";
+  phase?: string;
+  by?: string;
+  started?: string;
+  finished?: string;
+  /** The first thing that went wrong. */
+  error?: string;
+}
+
 export interface ClusterHealth {
   read: string;
   verdict: "healthy" | "changing" | "degraded" | "unreachable";

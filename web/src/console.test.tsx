@@ -135,6 +135,7 @@ function serve(): Record<string, Route> {
   const routes: Record<string, Route> = {
     "GET /api/session": { body: { user: "alice@pve", csrf: "c1" } },
     "GET /api/clusters": { body: fleet },
+    "GET /api/runs": { body: [] },
   };
   for (const c of fleet) {
     routes[`GET /api/clusters/default/${c.name}`] = { body: c };
@@ -155,12 +156,60 @@ describe("the console", () => {
     const healthy = within(rail).getByRole("region", { name: "Healthy" });
     expect(within(healthy).getByRole("link")).toHaveAttribute("aria-current", "page");
 
-    const runs = screen.getByRole("complementary", { name: "Running" });
+    const runs = within(screen.getByRole("complementary", { name: "Runs" })).getByRole("region", { name: "Running" });
     expect(
       within(runs)
         .getAllByRole("link")
         .map((l) => l.textContent),
     ).toStrictEqual(["ciCreating: 1 of 3 control planes ready", "dbUpgrading to v1.36.5+rke2r1"]);
+  });
+
+  it("follows the snapshots, backups and the appliance's work, a failure with its first error", async () => {
+    window.history.replaceState(null, "", "/");
+    const routes = serve();
+    routes["GET /api/runs"] = {
+      body: [
+        {
+          id: "backup/default/web/daily-1",
+          kind: "backup",
+          namespace: "default",
+          cluster: "web",
+          what: "Scheduled backup",
+          state: "running",
+          phase: "120 of 300 items",
+        },
+        {
+          id: "appliance-upgrade",
+          kind: "appliance-upgrade",
+          what: "Upgrade the appliance to 0.3.1",
+          state: "failed",
+          finished: minutesAgo(5),
+          error: "the release's checksum does not match",
+        },
+        {
+          id: "etcd-snapshot/default/db",
+          kind: "etcd-snapshot",
+          namespace: "default",
+          cluster: "db",
+          what: "Take an etcd snapshot",
+          state: "succeeded",
+          finished: minutesAgo(12),
+        },
+      ],
+    };
+    render(<App />);
+    const runs = await screen.findByRole("complementary", { name: "Runs" });
+    const running = await within(runs).findByRole("link", { name: /^web Scheduled backup/u });
+    expect(running).toHaveAttribute("href", "/clusters/default/web/backups");
+    expect(running).toHaveTextContent("Scheduled backup: 120 of 300 items");
+    const failed = within(within(runs).getByRole("region", { name: "Failed" })).getByRole("link");
+    expect(failed).toHaveAttribute("href", "/administration");
+    expect(failed).toHaveTextContent("Upgrade the appliance to 0.3.1 failed, 5m ago");
+    expect(failed).toHaveTextContent("the release's checksum does not match");
+    expect(within(within(runs).getByRole("region", { name: "Done" })).getByRole("link")).toHaveTextContent(
+      "dbTake an etcd snapshot, 12m ago",
+    );
+    expect(screen.getByRole("button", { name: "Running 3" })).toBeInTheDocument();
   });
 
   it("moves a cluster its health page finds trouble in to those needing you, linked to that page", async () => {
