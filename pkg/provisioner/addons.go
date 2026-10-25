@@ -53,6 +53,7 @@ const (
 	annotationsKey    = "annotations"
 	securityKey       = "securityContext"
 	podSecurityKey    = "podSecurityContext"
+	extraArgsKey      = "extraArgs"
 	nonRootKey        = "runAsNonRoot"
 	readOnlyRootKey   = "readOnlyRootFilesystem"
 	configKey         = "config"
@@ -83,8 +84,8 @@ func runtimeDefault() map[string]any {
 	return map[string]any{"type": string(corev1.SeccompProfileTypeRuntimeDefault)}
 }
 
-// hostSELinux is the SELinux context of a pod that reads or writes the host's own directories,
-// which SELinux keeps every confined container from, privileged or not: unconfined, and at s0, as
+// hostSELinux is the SELinux context of an unprivileged pod that reads or writes the host's own
+// directories, which SELinux keeps every confined container from: unconfined, and at s0, as
 // categories mean nothing to an unconfined type.
 func hostSELinux() *corev1.SELinuxOptions {
 	return &corev1.SELinuxOptions{Type: "spc_t", Level: "s0"}
@@ -594,7 +595,7 @@ func ciliumValues(cluster *clusterv1.Cluster, id int, addons *Addons, operator m
 	// started with cni.exclusive goes on taking istio-cni's plugin out after Istio is switched on.
 	operator["rollOutPods"] = true
 	// As arguments rather than in Cilium's ConfigMap, a change to them restarts the operator only.
-	operator["extraArgs"] = leaseArgs("leader-election")
+	operator[extraArgsKey] = leaseArgs("leader-election")
 	// Without kube-proxy replacement, Cilium serves host ports, Traefik's on every node, only
 	// through the portmap plugin chained behind it, as RKE2 runs its own Cilium. Not exclusive, with
 	// Istio or without: Cilium would take istio-cni's plugin out of the node's CNI configuration, and
@@ -835,7 +836,7 @@ func proxmoxValues(storage string, addons *Addons) (map[string]any, map[string]a
 		"useDaemonSet": true,
 		"affinity":     controlPlane,
 		tolerationsKey: controlPlaneTolerations(toleration("node.cloudprovider.kubernetes.io/uninitialized", corev1.TaintEffectNoSchedule)),
-		"extraArgs":    leaseArgs("leader-elect"),
+		extraArgsKey:   leaseArgs("leader-elect"),
 	}
 	sidecar := func(args ...any) map[string]any {
 		return map[string]any{"args": append(args, leaseArgs("leader-election")...)}

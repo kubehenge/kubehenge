@@ -343,7 +343,7 @@ The **Backups** view says whether Velero reaches the target and when it last bac
 
 The view reaches Velero through two accounts of Kubehenge's in the cluster's `velero` namespace, one that reads the backups and starts one, and one that starts a restore; neither reads a Secret or anything outside Velero's own resources. With kubectl, `velero backup create` and `velero restore create --from-backup <backup>` work as anywhere else.
 
-Velero runs as `cluster-admin`, which backing up and restoring every resource needs, and its node agents read every pod's volumes as root from the host, so the `velero` namespace is exempt from pod security. Restoring a backup into another cluster, and deleting a backup before it runs out, are done with the Velero CLI against the cluster.
+Velero runs as `cluster-admin`, which backing up and restoring every resource needs, and its privileged backup pods read every pod's volumes as root from the host, so the `velero` namespace is exempt from pod security. Restoring a backup into another cluster, and deleting a backup before it runs out, are done with the Velero CLI against the cluster.
 
 ### Volume snapshots
 

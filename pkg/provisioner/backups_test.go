@@ -170,7 +170,13 @@ func TestVeleroValues(t *testing.T) {
 		t.Errorf("the server runs with more than it needs: %v", v["podSecurityContext"])
 	}
 	if lookup[string](t, v, "nodeAgent", "podSecurityContext", "seLinuxOptions", "type") != "spc_t" {
-		t.Errorf("the node agent cannot read the pods' volumes on an SELinux node: %v", v["nodeAgent"])
+		t.Errorf("the node agent cannot find the pods' volumes on an SELinux node: %v", v["nodeAgent"])
+	}
+	// The node agents read the configuration the chart makes, which has their backup pods read
+	// the volumes through the host.
+	if lookup[string](t, v, "nodeAgent", "extraArgs", 0) != "--node-agent-configmap=velero-node-agent-config" ||
+		lookup[string](t, v, "configMaps", "node-agent-config", "data", "config.json") != `{"privilegedFsBackup":true}` {
+		t.Errorf("the backup pods cannot read the volumes on an SELinux node: %v %v", v["nodeAgent"], v["configMaps"])
 	}
 	helper := lookup[map[string]any](t, v, "configMaps", "restore-helper", "data")
 	if !strings.Contains(fmt.Sprint(helper["image"]), "@sha256:") || !strings.Contains(fmt.Sprint(helper["secCtx"]), "runAsNonRoot: true") {
