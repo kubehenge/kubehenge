@@ -565,6 +565,22 @@ agnhost_pod() {
     shift 2
     wl -n "${agnhost_namespace}" run "${agnhost_name}" --image="${agnhost}" --override-type=strategic --overrides="${agnhost_overrides}" -- "$@"
 }
+# agnhost_deployment <namespace> <name> <args...>: one agnhost pod as agnhost_pod makes it, kept by
+# a Deployment labelled app=<name>, for a pod that has to outlive a drain of its node. Its pods take
+# <name> as their host name, which netexec answers with.
+agnhost_deployment() {
+    agnhost_namespace=$1 agnhost_name=$2
+    shift 2
+    jq -n --arg name "${agnhost_name}" --arg image "${agnhost}" '$ARGS.positional as $args | {
+        apiVersion: "apps/v1", kind: "Deployment", metadata: {name: $name},
+        spec: {replicas: 1, selector: {matchLabels: {app: $name}}, template: {
+            metadata: {labels: {app: $name}},
+            spec: {hostname: $name,
+                securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: "RuntimeDefault"}},
+                containers: [{name: $name, image: $image, args: $args,
+                    securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}}]}}}}' --args "$@" |
+        wl -n "${agnhost_namespace}" apply -f -
+}
 wl create namespace e2e-policy
 agnhost_pod e2e-policy server netexec --http-port=8080
 agnhost_pod e2e-policy client pause
@@ -1587,20 +1603,26 @@ until_true 600 "istio-cni on every node" wl -n istio-node rollout status daemons
 wl create namespace e2e-mesh
 wl label namespace e2e-mesh istio.io/dataplane-mode=ambient
 wl create namespace e2e-plain
-agnhost_pod e2e-mesh server netexec --http-port=8080
-agnhost_pod e2e-mesh client pause
-agnhost_pod e2e-plain client pause
-wl -n e2e-mesh wait --for=condition=Ready pod/server pod/client --timeout=5m
-wl -n e2e-plain wait --for=condition=Ready pod/client --timeout=5m
+# Kept by Deployments: they are used again once every add-on is switched off, and on Talos the
+# upgrade before that drains every node, which deletes pods of their own.
+agnhost_deployment e2e-mesh server netexec --http-port=8080
+agnhost_deployment e2e-mesh client pause
+agnhost_deployment e2e-plain client pause
+wl -n e2e-mesh wait --for=condition=Available deployment/server deployment/client --timeout=5m
+wl -n e2e-plain wait --for=condition=Available deployment/client --timeout=5m
 redirected() {
     # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-    marks=$(wl -n e2e-mesh get pod server client -o jsonpath='{.items[*].metadata.annotations.ambient\.istio\.io/redirection}') &&
+    marks=$(wl -n e2e-mesh get pods -l 'app in (server,client)' -o jsonpath='{.items[*].metadata.annotations.ambient\.istio\.io/redirection}') &&
         [ "${marks}" = "enabled enabled" ]
 }
 until_true 120 "the mesh's pods redirected through ztunnel" redirected
-mesh_ip=$(wl -n e2e-mesh get pod server -o jsonpath='{.status.podIP}')
-# fetch <namespace>: the server's host name, fetched over HTTP by the namespace's client.
-fetch() { KUBECONFIG=${work}/workload kubectl -n "$1" exec client -- curl -sS --max-time 5 "http://${mesh_ip}:8080/hostname" 2>&1; }
+# fetch <namespace>: the server's host name, fetched over HTTP by the namespace's client at the
+# address of the server's running pod, which a drain moves.
+fetch() {
+    mesh_ip=$(KUBECONFIG=${work}/workload kubectl -n e2e-mesh get pods -l app=server --field-selector=status.phase=Running \
+        -o jsonpath='{.items[0].status.podIP}' 2>&1) &&
+        KUBECONFIG=${work}/workload kubectl -n "$1" exec deployment/client -- curl -sS --max-time 5 "http://${mesh_ip}:8080/hostname" 2>&1
+}
 # shellcheck disable=SC2310 # polled with set -e off, so a failed fetch is only a retry.
 fetches() { fetched=$(fetch "$1") && [ "${fetched}" = server ]; }
 until_true 60 "a client outside the mesh reaches the server while mutual TLS is optional" fetches e2e-plain
