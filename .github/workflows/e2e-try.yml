@@ -305,6 +305,32 @@ jobs:
                     grep -E "$counters" || true
                   kill "$forward" 2>/dev/null || true
                 done > "$dir/collectors.txt" 2>&1 || true
+                # Which streams Loki holds over the last day, and the first and last lines of the
+                # nodes' own, with the times they were stored at: Loki itself serves only its pod's
+                # loopback, behind its proxy.
+                if k get pod -n logging loki-0 > /dev/null 2>&1; then
+                  port=$((20000 + $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % 10000))
+                  k port-forward -n logging pod/loki-0 "$port:3100" > /dev/null 2>&1 &
+                  forward=$!
+                  sleep 3
+                  since=$((($(date +%s) - 86400) * 1000000000))
+                  loki() {
+                    curl -sS --max-time 20 -G "http://127.0.0.1:$port/loki/api/v1/$1" \
+                      --data-urlencode "start=$since" "${@:2}"
+                    echo
+                  }
+                  {
+                    loki series --data-urlencode 'match[]={job=~".+"}'
+                    for direction in forward backward; do
+                      loki query_range --data-urlencode 'query={job=~"talos|journal"}' \
+                        --data-urlencode limit=20 --data-urlencode "direction=$direction"
+                    done
+                  } > "$dir/loki.json" 2>&1 || true
+                  curl -sS --max-time 10 "http://127.0.0.1:$port/metrics" | grep -E \
+                    '^loki_(discarded_|distributor_lines_received|ingester_streams_created)' \
+                    > "$dir/loki-counters.txt" 2>&1 || true
+                  kill "$forward" 2>/dev/null || true
+                fi
                 k get pods -n kube-system "${names[@]}" 2>/dev/null |
                   grep -E '^kube-flannel-' | while read -r pod; do
                     k logs -n kube-system "$pod" -c kube-network-policies --prefix --tail=5000 ||
