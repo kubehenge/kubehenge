@@ -419,7 +419,12 @@ describe("clusters", () => {
       }),
     });
     render(<App />);
-    await expect(screen.findByText("Waiting for its ClusterClass")).resolves.toBeInTheDocument();
+    const main = await screen.findByRole("main");
+    await expect(within(main).findByText("Waiting for its ClusterClass")).resolves.toBeInTheDocument();
+    const rail = screen.getByRole("navigation", { name: "Fleet" });
+    expect(within(within(rail).getByRole("region", { name: "Running" })).getByRole("link")).toHaveTextContent(
+      "webWaiting for its ClusterClass",
+    );
   });
 
   it("links a cluster to the shared Headlamp", async () => {

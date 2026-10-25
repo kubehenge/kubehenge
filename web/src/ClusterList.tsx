@@ -1,21 +1,38 @@
-import type { JSX } from "react";
+import { useEffect, useRef, type JSX } from "react";
 
-import { api } from "./api";
 import { clusterPath } from "./ClusterDetail";
+import { FleetProvider, standing, useFleet } from "./fleet";
 import { Link, navigate } from "./router";
 import type { Cluster } from "./types";
-import { ErrorBox, StatusBadge, age, distributionName, pollIdle, settled, usePoll } from "./ui";
+import { ErrorBox, StatusBadge, age, distributionName, filled, health } from "./ui";
 
 // The privilege creating a cluster needs, as Proxmox VE names it.
 const createNeeds = "Creating a cluster needs VM.Allocate on Kubehenge's workload pool.";
 
-// How often the list asks again while any cluster is changing.
-const pollChanging = 10_000;
-
 export function ClusterList({ canCreate }: { canCreate?: boolean | undefined }): JSX.Element {
-  const { data: clusters, error } = usePoll(api.clusters, (list) =>
-    list?.every((c) => settled(c)) === true ? pollIdle : pollChanging,
+  const fleet = useFleet();
+  // Opening the list shows the fleet as it is now, not as the console last read it.
+  const readBefore = useRef(fleet?.clusters !== undefined);
+  const reload = fleet?.reload;
+  useEffect(() => {
+    if (readBefore.current) {
+      void reload?.();
+    }
+  }, [reload]);
+  // The console reads the fleet for the rail beside the list; on its own the list reads it itself.
+  return fleet === null ? (
+    <FleetProvider>
+      <FleetList canCreate={canCreate} />
+    </FleetProvider>
+  ) : (
+    <FleetList canCreate={canCreate} />
   );
+}
+
+function FleetList({ canCreate }: { canCreate: boolean | undefined }): JSX.Element {
+  const fleet = useFleet();
+  const clusters = fleet?.clusters;
+  const error = fleet?.error;
   const refused = canCreate === false;
 
   return (
@@ -63,40 +80,51 @@ function Clusters({ clusters, refused }: { clusters: Cluster[]; refused: boolean
       <table className="grid">
         <thead>
           <tr>
-            <th>Name</th>
+            <th>Cluster</th>
             <th>Status</th>
-            <th>Distribution</th>
-            <th>Version</th>
-            <th>Control plane</th>
-            <th>Workers</th>
+            <th>Kubernetes</th>
+            <th className="number">Control plane</th>
+            <th className="number">Workers</th>
             <th>Endpoint</th>
-            <th>Created by</th>
             <th>Age</th>
           </tr>
         </thead>
         <tbody>
-          {clusters.map((c) => (
-            <tr key={`${c.namespace}/${c.name}`}>
-              <td>
-                <Link to={clusterPath(c.namespace, c.name)}>{c.name}</Link>
-                {c.namespace !== "default" && <span className="muted"> ({c.namespace})</span>}
-              </td>
-              <td>
-                <StatusBadge cluster={c} />
-              </td>
-              <td>{distributionName(c.distribution)}</td>
-              <td>{c.version}</td>
-              <td>
-                {c.controlPlane.ready}/{c.controlPlane.desired}
-              </td>
-              <td>
-                {c.workers.ready}/{c.workers.desired}
-              </td>
-              <td>{c.endpoint ?? ""}</td>
-              <td>{c.createdBy ?? ""}</td>
-              <td title={new Date(c.created).toLocaleString()}>{age(c.created)}</td>
-            </tr>
-          ))}
+          {clusters.map((c) => {
+            const s = standing(c);
+            return (
+              <tr key={`${c.namespace}/${c.name}`}>
+                <td className="id nowrap">
+                  {c.namespace !== "default" && <span className="muted">{c.namespace}/</span>}
+                  <Link to={clusterPath(c.namespace, c.name)}>{c.name}</Link>
+                </td>
+                <td className="state">
+                  <StatusBadge cluster={c} />
+                  {s.group !== "healthy" && s.reason !== health(c).text && <div className="hint">{s.reason}</div>}
+                </td>
+                <td className="nowrap">
+                  <span className="id">{c.version}</span>
+                  <div className="hint">
+                    {distributionName(c.distribution)}
+                    {c.talos && ` ${c.talos.version}`}
+                  </div>
+                </td>
+                <td className="number">
+                  {c.controlPlane.ready}/{c.controlPlane.desired}
+                </td>
+                <td className="number">
+                  {c.workers.ready}/{c.workers.desired}
+                </td>
+                <td className="id nowrap">{c.endpoint ?? ""}</td>
+                <td
+                  className="nowrap"
+                  title={`${new Date(c.created).toLocaleString()}${filled(c.createdBy) ? ` by ${c.createdBy}` : ""}`}
+                >
+                  {age(c.created)}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

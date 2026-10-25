@@ -149,9 +149,31 @@ Sums up every setting by name; **Request** below it shows what the interface sen
 
 Kubehenge's controller first gives the cluster its Proxmox VE pool, user, token and the VM that will own its persistent volumes; only then does Cluster API clone the VMs. The cluster shows **Provisioning** until it is available.
 
+## Finding your way
+
+Every page shows the fleet down its left side, grouped by where each cluster stands, each with why in a few words:
+
+- **Needs you:** something failed and waits for someone: a failed Talos upgrade, a failed machine, a cluster Cluster API reports failed, or one still not available an hour after it was created.
+- **Running:** a change is under way: a cluster being created, upgraded, rolled out, scaled or deleted.
+- **Healthy:** nothing is going on; the line under the name says what it runs.
+
+The same work under way also shows down the right side of a wide window, and folds away with **›** or `R`; in a narrower one **Running** in the top bar shows it.
+
+**Go to or run…** in the top bar, or `Ctrl K` (`⌘ K` on a Mac), finds any cluster, any of its views, a page or an action by a few letters of its name: `db opt` finds the options of `db`. Outside fields, single keys work too, and `?` lists them:
+
+| Key | Does |
+| --- | --- |
+| `/` | the same as `Ctrl K` |
+| `C` | the clusters |
+| `N` | a new cluster |
+| `A` | Administration, for those who may open it |
+| `[`, `]` | the cluster before or after the open one, in the fleet's order, on the same view |
+| `1` to `5` | the open cluster's Summary, Health, Machines, Backups and Options |
+| `R` | shows or folds away the running work |
+
 ## The cluster page
 
-The buttons along the top act on the whole cluster: **Scale**, **Upgrade**, **Kubeconfig**, **Headlamp** and **Delete**. **Kubeconfig** and **Headlamp** appear once the cluster is available (Kubeconfig for those with `Sys.Modify` on its pool, Headlamp for clusters in the interface's namespaces); without `VM.Allocate` on its pool, or while it is being deleted, the others are disabled and the page says why. The menu on the left switches between its views, as Proxmox VE's does for a VM:
+The buttons beside the cluster's name act on the whole cluster: **Scale**, **Upgrade**, **Kubeconfig**, **Headlamp** and **Delete**. **Kubeconfig** and **Headlamp** appear once the cluster is available (Kubeconfig for those with `Sys.Modify` on its pool, Headlamp for clusters in the interface's namespaces); without `VM.Allocate` on its pool, or while it is being deleted, the others are disabled and the page says why. The tabs under the name switch between its views:
 
 - **Summary:** status, distribution, Kubernetes version, API endpoint, pod and service ranges, ready control-plane nodes and workers, with autoscaled pools as `md-0: 2 of 0 to 5, autoscaled`, Proxmox VE pool, namespace, who created it when, the last automatic upgrade, and for kubeadm, RKE2 and k3s which build of their VM template the nodes run, when they next move to a newer one and when they last did ([Node image refresh](#node-image-refresh)), and for Talos the release the nodes run, the one new machines boot first when it differs, the node being upgraded and the last upgrade ([Talos upgrades](#talos-upgrades)).
 - **Health:** whether the cluster is healthy, changing, degraded or unreachable, with tiles for the control plane (and etcd, on kubeadm), workers, node pressure, unwell pods, add-ons and machine health checks; then what needs attention, most serious first, each linking to its details. Below come the nodes (ready, pressure, cordons and taints, what their pods ask for, and the VM's CPU over the last hour and its memory, as far as you may see the VMs), the pods that are not well (crash loops, images that do not pull, pods that cannot be scheduled, containers killed for memory), volume claims still waiting, the add-ons' Helm releases, the worker pools, the control plane's and the health checks' conditions, the last hour's warnings from inside the cluster and from Cluster API, and last the cluster's own conditions. Those with `Sys.Modify` on the cluster's pool also get **Logs** on each unwell pod: the last 60 lines of a container, from its last run when it has not run since. With the shared Headlamp running, each pod also links to its page there. The page reads inside clusters of the interface's namespaces only; for others it shows what Cluster API knows.

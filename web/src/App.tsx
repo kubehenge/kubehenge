@@ -11,9 +11,10 @@ import {
 } from "react";
 
 import { ApiError, api, setSignedOutHandler, setUpgradedHandler } from "./api";
-import { ClusterDetail, clusterPath, headlampURL, views, type View } from "./ClusterDetail";
+import { ClusterDetail, clusterPath, views, type View } from "./ClusterDetail";
 import { ClusterList } from "./ClusterList";
-import logo from "./logo.svg";
+import { Console } from "./Console";
+import { FleetProvider } from "./fleet";
 import { Link, match, usePath } from "./router";
 import { SignIn } from "./SignIn";
 import type { Session, SetupStatus } from "./types";
@@ -200,83 +201,66 @@ function Shell({
     main.current?.focus();
   }, [path]);
 
-  const onClusters = path === "/" || path.startsWith("/clusters/");
-  return (
-    <div className="shell">
-      <header className="topbar">
-        <Link to="/" className="brand">
-          <img src={logo} alt="" />
-          Kubehenge
-        </Link>
-        {!settingUp && (
-          <nav className="nav" aria-label="Pages">
-            <Link to="/" current={onClusters}>
-              Clusters
-            </Link>
-            {canManage && (
-              <Link to="/administration" current={path === "/administration"}>
-                Administration
-              </Link>
-            )}
-          </nav>
-        )}
-        <span className="spacer" />
-        {headlamp !== undefined && headlamp > 0 && !settingUp && (
-          <a href={headlampURL(headlamp)} target="_blank" rel="noopener noreferrer">
-            Headlamp
-          </a>
-        )}
-        <span className="user">{user}</span>
-        <button
-          type="button"
-          onClick={() => {
-            void signOut();
-          }}
-        >
-          Sign out
-        </button>
-      </header>
-      <main className="content" ref={main} tabIndex={-1}>
-        {upgradedTo !== undefined && (
-          <output className="warning notice">
-            Kubehenge was upgraded to {upgradedTo}. Reload the page to use the new version.{" "}
-            <button type="button" onClick={() => window.location.reload()}>
-              Reload
-            </button>
-          </output>
-        )}
-        {setup?.backup === false && !settingUp && (
-          <p className="warning" role="alert">
-            No Proxmox VE backup job includes this appliance, and it holds the only copy of the management cluster's
-            encrypted state. Add it to a backup job under Datacenter → Backup.
-          </p>
-        )}
-        {certificate && (
-          <p className="warning" role="alert">
-            {certificate.expired
-              ? "This appliance's certificate expired on "
-              : "This appliance's certificate expires on "}
-            {certificate.expires.toLocaleDateString(undefined, { dateStyle: "long" })}. Renew it in the shell of the
-            Proxmox VE node with Kubehenge's installer:{" "}
-            <code>sh install.sh --certificate --ctid {setup?.applianceVMID ?? "<appliance ID>"}</code>.
-          </p>
-        )}
-        {/* Keyed by path: a page that failed recovers by navigating away, the top bar stays. */}
-        <ErrorBoundary key={pageKey}>
-          <Suspense fallback={<p className="loading">Loading…</p>}>
-            <RoutePage
-              route={route}
-              canCreate={canCreate}
-              canTrust={canTrust}
-              namespaces={namespaces}
-              headlamp={headlamp}
-              onSetupChanged={reloadSetup}
-            />
-          </Suspense>
-        </ErrorBoundary>
-      </main>
-    </div>
+  const page = (
+    <>
+      {upgradedTo !== undefined && (
+        <output className="warning notice">
+          Kubehenge was upgraded to {upgradedTo}. Reload the page to use the new version.{" "}
+          <button type="button" onClick={() => window.location.reload()}>
+            Reload
+          </button>
+        </output>
+      )}
+      {setup?.backup === false && !settingUp && (
+        <p className="warning" role="alert">
+          No Proxmox VE backup job includes this appliance, and it holds the only copy of the management cluster's
+          encrypted state. Add it to a backup job under Datacenter → Backup.
+        </p>
+      )}
+      {certificate && (
+        <p className="warning" role="alert">
+          {certificate.expired
+            ? "This appliance's certificate expired on "
+            : "This appliance's certificate expires on "}
+          {certificate.expires.toLocaleDateString(undefined, { dateStyle: "long" })}. Renew it in the shell of the
+          Proxmox VE node with Kubehenge's installer:{" "}
+          <code>sh install.sh --certificate --ctid {setup?.applianceVMID ?? "<appliance ID>"}</code>.
+        </p>
+      )}
+      {/* Keyed by path: a page that failed recovers by navigating away, the top bar stays. */}
+      <ErrorBoundary key={pageKey}>
+        <Suspense fallback={<p className="loading">Loading…</p>}>
+          <RoutePage
+            route={route}
+            canCreate={canCreate}
+            canTrust={canTrust}
+            namespaces={namespaces}
+            headlamp={headlamp}
+            onSetupChanged={reloadSetup}
+          />
+        </Suspense>
+      </ErrorBoundary>
+    </>
   );
+  const frame = (
+    <Console
+      user={user}
+      headlamp={headlamp}
+      canCreate={canCreate}
+      canManage={canManage}
+      settingUp={needsSetup !== false}
+      path={path}
+      here={route.page === "cluster" ? route : undefined}
+      main={main}
+      onSignOut={() => {
+        void signOut();
+      }}
+    >
+      {page}
+    </Console>
+  );
+  // The fleet is read once the appliance is set up, for every page alike.
+  return <FleetProvider reads={needsSetup === false}>{frame}</FleetProvider>;
 }
 
 // certificateWarning is the warning about the appliance's certificate when it runs out within

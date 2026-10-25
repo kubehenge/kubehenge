@@ -200,75 +200,80 @@ export function ClusterDetail({
   };
 
   return (
-    <section className="panel">
-      <div className="toolbar">
-        <h2>
-          {c.name} <StatusBadge cluster={c} />
-        </h2>
-        <span className="spacer" />
-        <button type="button" disabled={!can} title={why} onClick={() => setAction("scale")}>
-          Scale
-        </button>
-        <button type="button" disabled={!can} title={why} onClick={() => setAction("upgrade")}>
-          Upgrade
-        </button>
-        {c.allowed.kubeconfig && c.available && (
-          <button
-            type="button"
-            onClick={() => {
-              void download(async () => {
-                saveFile(await api.kubeconfig(c.namespace, c.name), `${c.name}.kubeconfig`);
-              });
-            }}
-          >
-            Kubeconfig
+    <section className="page">
+      <div className="page-head">
+        <div className="page-title">
+          <h2>
+            <span className="id">{c.name}</span> <StatusBadge cluster={c} />
+          </h2>
+          <Facts cluster={c} />
+        </div>
+        <div className="page-actions">
+          <button type="button" disabled={!can} title={why} onClick={() => setAction("scale")}>
+            Scale
           </button>
-        )}
-        {c.allowed.kubeconfig && c.distribution === "talos" && (
-          <button
-            type="button"
-            title="Signs in to the nodes' Talos API, for talosctl"
-            onClick={() => {
-              void download(async () => {
-                saveFile(await api.talosconfig(c.namespace, c.name), `${c.name}.talosconfig`);
-              });
-            }}
-          >
-            Talosconfig
+          <button type="button" disabled={!can} title={why} onClick={() => setAction("upgrade")}>
+            Upgrade
           </button>
-        )}
-        {issuesFromCA(c) && (
-          <button
-            type="button"
-            title="The certificate of the CA the cluster's certificates come from, for browsers and clients to trust"
-            onClick={() => {
-              void download(async () => saveCA(c));
-            }}
-          >
-            CA certificate
+          {c.allowed.kubeconfig && c.available && (
+            <button
+              type="button"
+              onClick={() => {
+                void download(async () => {
+                  saveFile(await api.kubeconfig(c.namespace, c.name), `${c.name}.kubeconfig`);
+                });
+              }}
+            >
+              Kubeconfig
+            </button>
+          )}
+          {c.allowed.kubeconfig && c.distribution === "talos" && (
+            <button
+              type="button"
+              title="Signs in to the nodes' Talos API, for talosctl"
+              onClick={() => {
+                void download(async () => {
+                  saveFile(await api.talosconfig(c.namespace, c.name), `${c.name}.talosconfig`);
+                });
+              }}
+            >
+              Talosconfig
+            </button>
+          )}
+          {issuesFromCA(c) && (
+            <button
+              type="button"
+              title="The certificate of the CA the cluster's certificates come from, for browsers and clients to trust"
+              onClick={() => {
+                void download(async () => saveCA(c));
+              }}
+            >
+              CA certificate
+            </button>
+          )}
+          {inHeadlamp !== undefined && (
+            <a className="button" href={inHeadlamp} target="_blank" rel="noopener noreferrer">
+              Headlamp
+            </a>
+          )}
+          <button type="button" className="danger" disabled={!can} title={why} onClick={() => setAction("delete")}>
+            Delete
           </button>
-        )}
-        {inHeadlamp !== undefined && (
-          <a className="button" href={inHeadlamp} target="_blank" rel="noopener noreferrer">
-            Headlamp
-          </a>
-        )}
-        <button type="button" className="danger" disabled={!can} title={why} onClick={() => setAction("delete")}>
-          Delete
-        </button>
+        </div>
       </div>
-      {why !== undefined && <p className="muted pad">{why}</p>}
+      {why !== undefined && <p className="muted page-note">{why}</p>}
       <ErrorBox message={error} />
       <ErrorBox message={downloadError} />
 
+      <nav className="views" aria-label={`${c.name}'s views`}>
+        {views.map((v, i) => (
+          <Link key={v.path} to={clusterPath(c.namespace, c.name, v.path)} current={view === v.path}>
+            {v.label}
+            <kbd aria-hidden="true">{i + 1}</kbd>
+          </Link>
+        ))}
+      </nav>
       <div className="object">
-        <nav className="object-menu" aria-label={`${c.name}'s views`}>
-          {views.map((v) => (
-            <Link key={v.path} to={clusterPath(c.namespace, c.name, v.path)} current={view === v.path}>
-              {v.label}
-            </Link>
-          ))}
-        </nav>
         <div className="object-view">
           {view === "" && (
             <Summary
@@ -294,6 +299,24 @@ export function ClusterDetail({
 
       {action !== undefined && <ActionDialog action={action} cluster={c} onClose={close} />}
     </section>
+  );
+}
+
+const counted = (n: number, what: string): string => `${n} ${what}${n === 1 ? "" : "s"}`;
+
+// Facts are what a cluster is, in a line under its name.
+function Facts({ cluster: c }: { cluster: Cluster }): JSX.Element {
+  return (
+    <p className="facts">
+      <span>{distributionName(c.distribution)}</span>
+      <span className="id">{c.version}</span>
+      {c.talos && <span className="id">Talos {c.talos.version}</span>}
+      <span>
+        {counted(c.controlPlane.desired, "control plane")}, {counted(c.workers.desired, "worker")}
+      </span>
+      {filled(c.endpoint) && <span className="id">{c.endpoint}</span>}
+      {c.namespace !== "default" && <span>namespace {c.namespace}</span>}
+    </p>
   );
 }
 
