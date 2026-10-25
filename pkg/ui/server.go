@@ -199,6 +199,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/versions/{distribution}", s.signedIn(s.versions))
 	mux.HandleFunc("GET /api/talos/releases", s.signedIn(s.talosReleases))
 	mux.HandleFunc("GET /api/clusters", s.managed(s.listClusters))
+	mux.HandleFunc("GET /api/fleet/health", s.managed(s.fleetHealth))
 	mux.HandleFunc("POST /api/clusters", s.managed(s.createCluster))
 	s.clusterRoutes(mux)
 	mux.HandleFunc("GET /api/credentials/{purpose}", s.managed(s.applianceCredential))

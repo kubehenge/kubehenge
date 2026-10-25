@@ -6,7 +6,7 @@ import { App } from "./App";
 import { fakeServer, type Route } from "./fake-server";
 import { ranked, standing } from "./fleet";
 import { score } from "./Palette";
-import type { Cluster } from "./types";
+import type { Cluster, FleetHealth } from "./types";
 
 const minutesAgo = (n: number): string => new Date(Date.now() - n * 60_000).toISOString();
 
@@ -59,11 +59,12 @@ const fleet = [base, upgrading, failedTalos, creating];
 
 describe("the fleet", () => {
   it("says where each cluster stands and why", () => {
-    expect(standing(base)).toStrictEqual({ group: "healthy", state: "ok", reason: "RKE2 v1.36.5+rke2r1" });
+    expect(standing(base)).toStrictEqual({ group: "healthy", state: "ok", reason: "RKE2 v1.36.5+rke2r1", view: "" });
     expect(standing(failedTalos)).toStrictEqual({
       group: "needs",
       state: "error",
       reason: "Talos upgrade failed on edge-w-1",
+      view: "",
     });
     expect(standing(upgrading)).toMatchObject({ group: "running", reason: "Upgrading to v1.36.5+rke2r1" });
     expect(standing(creating)).toMatchObject({ group: "running", reason: "Creating: 1 of 3 control planes ready" });
@@ -82,6 +83,41 @@ describe("the fleet", () => {
         machines: [{ name: "web-w-9", role: "worker", phase: "Failed", ready: false, created: "" }],
       }),
     ).toMatchObject({ group: "needs", reason: "Machine web-w-9 failed" });
+  });
+
+  it("takes why a cluster needs someone from its health page, when the cluster itself says nothing", () => {
+    const read = minutesAgo(0);
+    const crashing: FleetHealth = {
+      namespace: "default",
+      name: "web",
+      read,
+      verdict: "degraded",
+      attention: [
+        { severity: "error", section: "pods", what: "Pod shop/api: CrashLoopBackOff" },
+        { severity: "warning", section: "addons", what: "Add-on ingress: pending-install" },
+      ],
+      more: 3,
+    };
+    expect(standing(base, crashing)).toStrictEqual({
+      group: "needs",
+      state: "error",
+      reason: "Pod shop/api: CrashLoopBackOff, and 4 more",
+      view: "health",
+    });
+    expect(standing(base, { ...crashing, verdict: "unreachable", attention: [] })).toMatchObject({
+      group: "needs",
+      reason: "Its API server does not answer",
+    });
+    expect(
+      standing(base, {
+        ...crashing,
+        attention: [{ severity: "progress", section: "addons", what: "Add-on x installing" }],
+        more: 0,
+      }),
+    ).toMatchObject({ group: "running", reason: "Add-on x installing" });
+    expect(standing(base, { ...crashing, verdict: "healthy", attention: [] })).toMatchObject({ group: "healthy" });
+    // What is under way says more than the errors a rollout passes through.
+    expect(standing(upgrading, { ...crashing, name: "db" })).toMatchObject({ group: "running" });
   });
 
   it("ranks those that need someone first, then the running, then the healthy", () => {
@@ -125,6 +161,30 @@ describe("the console", () => {
         .getAllByRole("link")
         .map((l) => l.textContent),
     ).toStrictEqual(["ciCreating: 1 of 3 control planes ready", "dbUpgrading to v1.36.5+rke2r1"]);
+  });
+
+  it("moves a cluster its health page finds trouble in to those needing you, linked to that page", async () => {
+    window.history.replaceState(null, "", "/");
+    const routes = serve();
+    routes["GET /api/fleet/health"] = {
+      body: [
+        {
+          namespace: "default",
+          name: "web",
+          read: minutesAgo(0),
+          verdict: "degraded",
+          attention: [{ severity: "error", section: "pods", what: "Pod shop/api: CrashLoopBackOff" }],
+        },
+      ],
+    };
+    render(<App />);
+    const rail = await screen.findByRole("navigation", { name: "Fleet" });
+    await waitFor(() =>
+      expect(within(within(rail).getByRole("region", { name: "Needs you" })).getAllByRole("link")).toHaveLength(2),
+    );
+    const web = within(rail).getByRole("link", { name: /^web Pod shop/u });
+    expect(web).toHaveAttribute("href", "/clusters/default/web/health");
+    expect(within(screen.getByRole("main")).getByText("Pod shop/api: CrashLoopBackOff")).toBeInTheDocument();
   });
 
   it("goes anywhere from the palette, by a few letters typed", async () => {

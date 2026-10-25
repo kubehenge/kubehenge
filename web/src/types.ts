@@ -272,6 +272,19 @@ export interface HealthEvent {
   last: string;
 }
 
+/** How one cluster stands, as its health page sums it up, for the fleet. */
+export interface FleetHealth {
+  namespace: string;
+  name: string;
+  read: string;
+  verdict: ClusterHealth["verdict"];
+  workload?: string;
+  /** The worst few items needing attention, the worst first. */
+  attention: Attention[];
+  /** How many more there are. */
+  more?: number;
+}
+
 export interface ClusterHealth {
   read: string;
   verdict: "healthy" | "changing" | "degraded" | "unreachable";

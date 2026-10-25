@@ -10,6 +10,7 @@ import type {
   ClusterEtcdSnapshots,
   CreateRequest,
   EtcdRestorePlan,
+  FleetHealth,
   HARules,
   Job,
   ManagementAutomatic,
@@ -196,6 +197,7 @@ export interface Api {
   setup: (settings: ManagementSettings, passphrase: string, rootPassword?: string) => Promise<Job>;
 
   health: (ns: string, name: string) => Promise<ClusterHealth>;
+  fleetHealth: () => Promise<FleetHealth[]>;
   podLogs: (cluster: ClusterRef, pod: { namespace: string; name: string }, container: string) => Promise<PodLogs>;
   kubeconfig: (ns: string, name: string) => Promise<Blob>;
   /** talosconfig is a Talos cluster's, which signs in to its nodes' Talos API. */
@@ -268,6 +270,7 @@ export const api: Api = {
     }),
 
   health: (ns, name) => request("GET", `${clusterPath(ns, name)}/health`),
+  fleetHealth: () => request("GET", "/api/fleet/health"),
   podLogs: (cluster, pod, container) =>
     request(
       "GET",

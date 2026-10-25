@@ -153,9 +153,11 @@ Kubehenge's controller first gives the cluster its Proxmox VE pool, user, token 
 
 Every page shows the fleet down its left side, grouped by where each cluster stands, each with why in a few words:
 
-- **Needs you:** something failed and waits for someone: a failed Talos upgrade, a failed machine, a cluster Cluster API reports failed, or one still not available an hour after it was created.
-- **Running:** a change is under way: a cluster being created, upgraded, rolled out, scaled or deleted.
-- **Healthy:** nothing is going on; the line under the name says what it runs.
+- **Needs you:** something failed and waits for someone: a failed Talos upgrade, a failed machine, a cluster Cluster API reports failed, or one still not available an hour after it was created. So does a cluster whose [health page](#the-cluster-page) finds trouble, such as an API server that does not answer, a node that is not ready or a pod that keeps crashing; the line names the worst of it.
+- **Running:** a change is under way: a cluster being created, upgraded, rolled out, scaled or deleted, or an add-on still being installed.
+- **Healthy:** nothing is going on and its health page finds nothing; the line under the name says what it runs.
+
+Each entry opens the view that says more: the health page for what it found, the machines for a rollout. The health pages are read for the whole fleet at most every 30 seconds.
 
 The same work under way also shows down the right side of a wide window, and folds away with **›** or `R`; in a narrower one **Running** in the top bar shows it.
 

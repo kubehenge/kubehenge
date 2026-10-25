@@ -158,7 +158,7 @@ export function Console({
   const [keys, setKeys] = useState(false);
   // undefined follows the window's width; true or false is the user's own choice.
   const [runsShown, setRunsShown] = useState<boolean>();
-  const order = fleet?.clusters === undefined ? [] : ranked(fleet.clusters).map((r) => r.cluster);
+  const order = fleet?.clusters === undefined ? [] : ranked(fleet.clusters, fleet.health).map((r) => r.cluster);
   const port = headlamp !== undefined && headlamp > 0 && !settingUp ? headlamp : undefined;
 
   const open: Opens = {

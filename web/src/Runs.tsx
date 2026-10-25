@@ -17,14 +17,14 @@ export interface Run {
 /** useRuns is the work under way, as the fleet's clusters show it. */
 export function useRuns(): Run[] {
   const fleet = useFleet();
-  return ranked(fleet?.clusters ?? [])
+  return ranked(fleet?.clusters ?? [], fleet?.health)
     .filter(({ standing }) => standing.group === "running")
     .map(({ cluster: c, standing: s }: { cluster: Cluster; standing: Standing }) => ({
       key: `${c.namespace}/${c.name}`,
       title: c.namespace === "default" ? c.name : `${c.namespace}/${c.name}`,
       what: s.reason,
       state: s.state,
-      to: clusterPath(c.namespace, c.name, s.state === "deleting" ? "" : "machines"),
+      to: clusterPath(c.namespace, c.name, s.view),
     }));
 }
 

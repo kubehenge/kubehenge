@@ -1,9 +1,9 @@
 import { useEffect, useRef, type JSX } from "react";
 
 import { clusterPath } from "./ClusterDetail";
-import { FleetProvider, standing, useFleet } from "./fleet";
+import { FleetProvider, fleetKey, standing, useFleet } from "./fleet";
 import { Link, navigate } from "./router";
-import type { Cluster } from "./types";
+import type { Cluster, FleetHealth } from "./types";
 import { ErrorBox, StatusBadge, age, distributionName, filled, health } from "./ui";
 
 // The privilege creating a cluster needs, as Proxmox VE names it.
@@ -60,13 +60,21 @@ function FleetList({ canCreate }: { canCreate: boolean | undefined }): JSX.Eleme
       {clusters === undefined ? (
         error === undefined && <p className="muted pad">Loading…</p>
       ) : (
-        <Clusters clusters={clusters} refused={refused} />
+        <Clusters clusters={clusters} found={fleet?.health} refused={refused} />
       )}
     </section>
   );
 }
 
-function Clusters({ clusters, refused }: { clusters: Cluster[]; refused: boolean }): JSX.Element {
+function Clusters({
+  clusters,
+  found,
+  refused,
+}: {
+  clusters: Cluster[];
+  found: Map<string, FleetHealth> | undefined;
+  refused: boolean;
+}): JSX.Element {
   if (clusters.length === 0) {
     return (
       <p className="muted pad">
@@ -91,7 +99,7 @@ function Clusters({ clusters, refused }: { clusters: Cluster[]; refused: boolean
         </thead>
         <tbody>
           {clusters.map((c) => {
-            const s = standing(c);
+            const s = standing(c, found?.get(fleetKey(c)));
             return (
               <tr key={`${c.namespace}/${c.name}`}>
                 <td className="id nowrap">
