@@ -371,7 +371,7 @@ func metricsProxy(name string, port int32, scheme string, affinity *corev1.Affin
 		volumes = append(volumes, corev1.Volume{Name: "upstream", ConfigMap: &corev1.ConfigMapVolumeSource{Name: "kube-root-ca.crt"}})
 	}
 	return &appsv1.DaemonSet{
-		APIVersion: appsv1.SchemeGroupVersion.String(), Kind: "DaemonSet",
+		APIVersion: appsv1.SchemeGroupVersion.String(), Kind: kindDaemonSet,
 		Name: name, Namespace: metav1.NamespaceSystem, Labels: labels,
 		Spec: appsv1.DaemonSetSpec{
 			Selector: &metav1.LabelSelector{MatchLabels: labels},

@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	kubefake "k8s.io/client-go/kubernetes/fake"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -376,5 +377,45 @@ func TestTalosProgressReadsAsWritten(t *testing.T) {
 	}
 	if _, ok := parseTalosProgress("web-cp-0 to 1.14 since yesterday"); ok {
 		t.Error("read a malformed one")
+	}
+}
+
+// After a node's upgrade, the DaemonSets' pods its shutdown rejected go, and nothing else does.
+func TestClearRejectedDaemonPods(t *testing.T) {
+	t.Parallel()
+	pod := func(name, node, kind string, phase corev1.PodPhase) *corev1.Pod {
+		p := &corev1.Pod{
+			Namespace: "istio-node", Name: name,
+			Spec:   corev1.PodSpec{NodeName: node},
+			Status: corev1.PodStatus{Phase: phase},
+		}
+		if kind != "" {
+			yes := true
+			p.OwnerReferences = []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: kind, Name: "owner", UID: "u", Controller: &yes}}
+		}
+		return p
+	}
+	cs := kubefake.NewClientset(
+		pod("ztunnel-rejected-1", "web-w-1", "DaemonSet", corev1.PodFailed),
+		pod("ztunnel-rejected-2", "web-w-1", "DaemonSet", corev1.PodFailed),
+		pod("ztunnel-running", "web-w-1", "DaemonSet", corev1.PodRunning),
+		pod("job-failed", "web-w-1", "Job", corev1.PodFailed),
+		pod("bare-failed", "web-w-1", "", corev1.PodFailed),
+		pod("ztunnel-elsewhere", "web-w-2", "DaemonSet", corev1.PodFailed),
+	)
+	if err := clearRejectedDaemonPods(t.Context(), cs, "web-w-1"); err != nil {
+		t.Fatal(err)
+	}
+	pods, err := cs.CoreV1().Pods("istio-node").List(t.Context(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	left := make([]string, 0, len(pods.Items))
+	for _, p := range pods.Items {
+		left = append(left, p.Name)
+	}
+	slices.Sort(left)
+	if want := []string{"bare-failed", "job-failed", "ztunnel-elsewhere", "ztunnel-running"}; !slices.Equal(left, want) {
+		t.Errorf("left %v, want %v", left, want)
 	}
 }

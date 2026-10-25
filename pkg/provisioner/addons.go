@@ -787,7 +787,7 @@ func traefikValues(endpoint string, certs *Certificates) map[string]any {
 		gatewayProvider["statusAddress"] = map[string]any{"ip": endpoint}
 	}
 	return overlay(map[string]any{
-		"deployment": map[string]any{"kind": "DaemonSet"},
+		"deployment": map[string]any{"kind": kindDaemonSet},
 		// A host port is held by the pod on it, so a node's new pod starts only once the old one is gone.
 		"updateStrategy": map[string]any{"rollingUpdate": map[string]any{"maxUnavailable": 1, "maxSurge": 0}},
 		"ports": map[string]any{

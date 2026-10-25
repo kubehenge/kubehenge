@@ -13,6 +13,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -29,6 +30,8 @@ import (
 // TalosUpgradeFailedAnnotation records why the last node upgrade failed: "<node> to <release> at
 // <time>: <why>". While it is there no node of the cluster is upgraded; removing it tries again.
 const TalosUpgradeFailedAnnotation = "kubehenge.dev/talos-upgrade-failed"
+
+const kindDaemonSet = "DaemonSet"
 
 const (
 	// talosDrainTimeout bounds the eviction of a node's pods before it reboots. A pod a disruption
@@ -435,6 +438,33 @@ func (d *RemoteDrainer) Uncordon(ctx context.Context, c *clusterv1.Cluster, node
 	}
 	if err := drain.RunCordonOrUncordon(h, n, false); err != nil {
 		return fmt.Errorf("uncordoning node %s: %w", node, err)
+	}
+	return clearRejectedDaemonPods(ctx, h.Client, node)
+}
+
+// clearRejectedDaemonPods deletes the DaemonSets' failed pods on a node. While a node shuts down,
+// its kubelet rejects every pod, and the DaemonSet controller makes a new one for it each time
+// (kubernetes/kubernetes#122912); the rejected pods stay behind Failed. The controller counts the
+// oldest pod on each node as the one that is ready or not, and deletes failed ones only one at a
+// time with a back-off growing to 15 minutes, so its DaemonSet would read not ready for that long
+// while its pod runs.
+func clearRejectedDaemonPods(ctx context.Context, cs kubernetes.Interface, node string) error {
+	pods, err := cs.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
+		FieldSelector: "spec.nodeName=" + node + ",status.phase=" + string(corev1.PodFailed),
+	})
+	if err != nil {
+		return fmt.Errorf("listing the failed pods on node %s: %w", node, err)
+	}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		owner := metav1.GetControllerOf(p)
+		if p.Spec.NodeName != node || p.Status.Phase != corev1.PodFailed || owner == nil || owner.Kind != kindDaemonSet {
+			continue
+		}
+		err := cs.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("deleting the failed pod %s/%s on node %s: %w", p.Namespace, p.Name, node, err)
+		}
 	}
 	return nil
 }
