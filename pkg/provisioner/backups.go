@@ -36,6 +36,9 @@ const (
 	// identities.
 	VeleroNamespace = "velero"
 	veleroRelease   = "velero"
+	// nodeAgentConfig is the node agents' configuration, which the chart's ConfigMap of that name
+	// carries.
+	nodeAgentConfig = veleroRelease + "-node-agent-config"
 	// VeleroSchedule is the Schedule the chart makes of the cluster's backups variable; a backup
 	// made at once copies its template.
 	VeleroSchedule = "velero-scheduled"
@@ -334,7 +337,7 @@ func veleroValues(charts *Charts, b *Backups, t *BackupTarget, cluster *clusterv
 			"volumeMounts": []any{map[string]any{"mountPath": "/target", "name": "plugins"}},
 			securityKey:    restrictedContainer(nil),
 		}},
-		"podSecurityContext": map[string]any{
+		podSecurityKey: map[string]any{
 			nonRootKey: true, "runAsUser": veleroUser, "runAsGroup": veleroGroup, "fsGroup": veleroGroup,
 			seccompProfileKey: runtimeDefault(),
 		},
@@ -351,6 +354,9 @@ func veleroValues(charts *Charts, b *Backups, t *BackupTarget, cluster *clusterv
 		"nodeAgent": map[string]any{
 			"resources":    map[string]any{requestsKey: map[string]any{cpuKey: "20m", memoryKey: memory64Mi}},
 			tolerationsKey: tolerations,
+			// It finds each pod's volumes on the node, each with SELinux categories of its own.
+			podSecurityKey: map[string]any{seLinuxKey: hostSELinux()},
+			extraArgsKey:   []any{"--node-agent-configmap=" + nodeAgentConfig},
 		},
 		"credentials": map[string]any{"useSecret": true, "existingSecret": cmp.Or(b.ExistingSecret, veleroCredentialsSecret)},
 		"configuration": map[string]any{
@@ -374,6 +380,9 @@ func veleroValues(charts *Charts, b *Backups, t *BackupTarget, cluster *clusterv
 		},
 		"configMaps": map[string]any{
 			strings.TrimPrefix(policyName, veleroRelease+"-"): map[string]any{"data": map[string]any{"policy.yaml": veleroPolicy}},
+			// Each pod's volumes are backed up by a pod of their own on its node, reading them
+			// through the host, which SELinux allows only a privileged one, as Velero offers.
+			strings.TrimPrefix(nodeAgentConfig, veleroRelease+"-"): map[string]any{"data": map[string]any{"config.json": `{"privilegedFsBackup":true}`}},
 			// The init container that holds a restored pod until its volumes are back, pinned and
 			// fit for a namespace held to Pod Security's restricted level.
 			"restore-helper": map[string]any{

@@ -80,7 +80,7 @@ export interface SetupForm {
   clusterDatastoreAllocate: boolean;
   backupTargets: BackupTarget[];
   etcdRestore: boolean;
-  // The weekly build of the Ubuntu VM templates.
+  // The weekly build of the node OS VM templates.
   refresh: boolean;
   refreshWeekday: string;
   refreshTime: string;
@@ -1240,13 +1240,13 @@ function RefreshChoice({ form, set, shown }: FieldsProps): JSX.Element {
           aria-describedby={hint}
           onChange={(e) => set("refresh", e.target.checked)}
         />{" "}
-        Build the Ubuntu VM templates again every week
+        Build the node OS VM templates again every week
       </label>
       <p className="muted" id={hint}>
-        Each build takes Ubuntu&apos;s updates. A cluster&apos;s nodes move to a build in the cluster&apos;s maintenance
-        window once it is a day old, unless the cluster switches that off; the two newest builds of each template stay.
-        The builds run with an API token of their own, which may create and delete VMs in the template pool and upload
-        and delete images on the storages they use.
+        Each build takes its node OS&apos;s updates. A cluster&apos;s nodes move to a build in the cluster&apos;s
+        maintenance window once it is a day old, unless the cluster switches that off; the two newest builds of each
+        template stay. The builds run with an API token of their own, which may create and delete VMs in the template
+        pool and upload and delete images on the storages they use.
       </p>
       {form.refresh && (
         <>
@@ -1337,9 +1337,9 @@ function RefreshChoice({ form, set, shown }: FieldsProps): JSX.Element {
             Let those who may create clusters have a missing template built
           </label>
           <p className="muted" id={creatorsHint}>
-            Recommended. A cluster creator whose Kubernetes version has no kubeadm template yet, or who finds no cloud
-            image, can ask for it from the create wizard; the build runs with the refresh&apos;s token, not theirs.
-            Without it, only an administrator can build templates.
+            Recommended. A cluster creator who finds no template of the distribution on the node OS chosen, or none of
+            the Kubernetes version for kubeadm, can ask for it from the create wizard; the build runs with the
+            refresh&apos;s token, not theirs. Without it, only an administrator can build templates.
           </p>
         </>
       )}

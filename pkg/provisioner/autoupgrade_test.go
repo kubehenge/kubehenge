@@ -116,21 +116,23 @@ func TestChannelServer(t *testing.T) {
 	}))
 	defer srv.Close()
 	s := &ChannelServer{HTTP: srv.Client(), URLs: map[string]string{"k3s": srv.URL}}
-	ch, err := s.Channels(context.Background(), "k3s")
+	ch, err := s.Channels(context.Background(), "k3s", templates.DefaultNodeOS)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ch.StableMinor != 36 || ch.Latest[37].Raw != "v1.37.1+k3s1" || len(ch.Latest) != 2 {
 		t.Fatalf("channels = %+v", ch)
 	}
-	if _, err := s.Channels(context.Background(), "talos"); err == nil {
+	if _, err := s.Channels(context.Background(), "talos", templates.DefaultNodeOS); err == nil {
 		t.Fatal("channels for an unknown distribution")
 	}
 }
 
 type fixedReleases map[string]Channels
 
-func (f fixedReleases) Channels(_ context.Context, d string) (Channels, error) { return f[d], nil }
+func (f fixedReleases) Channels(_ context.Context, d string, _ templates.NodeOS) (Channels, error) {
+	return f[d], nil
+}
 
 func settledCluster(name, version string, vars map[string]string) *clusterv1.Cluster {
 	one := int32(1)
@@ -220,13 +222,16 @@ func TestUpgrader(t *testing.T) {
 func TestKubeadmTargetsAreTemplatesTheClassSelects(t *testing.T) {
 	t.Parallel()
 	vms := []map[string]any{
-		{"vmid": 9001, "template": 1, "tags": "build-202610010000;kubeadm;kubehenge;kubernetes-v1.36.5;" + templates.DefaultOS},
-		{"vmid": 9002, "template": 1, "tags": "build-202610010000;kubeadm;kubehenge;kubernetes-v1.37.1;ubuntu-24.04"},
-		{"vmid": 9003, "template": 0, "tags": "build-202610010000;kubeadm;kubehenge;kubernetes-v1.37.2;" + templates.DefaultOS},
+		{"vmid": 9001, "template": 1, "tags": "build-202610010000;kubeadm;kubehenge;kubernetes-v1.36.5;os-almalinux-10"},
+		// Another node OS's, which clusters on the default do not run.
+		{"vmid": 9002, "template": 1, "tags": "build-202610010000;kubeadm;kubehenge;kubernetes-v1.37.1;os-rocky-10"},
+		{"vmid": 9003, "template": 0, "tags": "build-202610010000;kubeadm;kubehenge;kubernetes-v1.37.2;os-almalinux-10"},
 		// A VM ID reused a moment ago, which the resource view still shows as the template before.
-		{"vmid": 9004, "template": 1, "tags": "build-202610010000;kubeadm;kubehenge;kubernetes-v1.38.0;" + templates.DefaultOS},
+		{"vmid": 9004, "template": 1, "tags": "build-202610010000;kubeadm;kubehenge;kubernetes-v1.38.0;os-almalinux-10"},
 		// A template that is no build, which no machine selects.
-		{"vmid": 9005, "template": 1, "tags": "kubeadm;kubehenge;kubernetes-v1.39.0;" + templates.DefaultOS},
+		{"vmid": 9005, "template": 1, "tags": "kubeadm;kubehenge;kubernetes-v1.39.0;os-almalinux-10"},
+		// A node OS Kubehenge does not know.
+		{"vmid": 9006, "template": 1, "tags": "build-202610010000;kubeadm;kubehenge;kubernetes-v1.39.1;os-plan9-4"},
 	}
 	configs := map[string]any{}
 	for _, vm := range vms {
@@ -245,17 +250,23 @@ func TestKubeadmTargetsAreTemplatesTheClassSelects(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	s := &ChannelServer{Proxmox: proxmox.NewClient(srv.URL + "/api2/json")}
-	ch, err := s.Channels(context.Background(), "kubeadm")
+	ch, err := s.Channels(context.Background(), "kubeadm", templates.DefaultNodeOS)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ch.StableMinor != 36 || len(ch.Latest) != 1 || ch.Latest[36].Raw != "v1.36.5" {
 		t.Errorf("channels %+v", ch)
 	}
+	rocky := templates.NodeOS{Family: "rocky", Release: "10"}
+	if ch, err = s.Channels(context.Background(), "kubeadm", rocky); err != nil || len(ch.Latest) != 1 || ch.Latest[37].Raw != "v1.37.1" {
+		t.Errorf("Rocky Linux channels %+v, %v", ch, err)
+	}
 
-	// The patch that picks a machine's template and the upgrader name the same OS.
-	if line, err := MachineLine("kubeadm", "v1.36.5"); err != nil || !slices.Contains(line, templates.DefaultOS) {
-		t.Errorf("kubeadm machines select %v, %v; want %s templates", line, err, templates.DefaultOS)
+	// The patch that picks a machine's template and the upgrader name the same node OS.
+	for _, o := range []templates.NodeOS{templates.DefaultNodeOS, rocky} {
+		if line, err := MachineLine("kubeadm", "v1.36.5", o); err != nil || !slices.Contains(line, o.Tag()) {
+			t.Errorf("kubeadm machines on %s select %v, %v", o, line, err)
+		}
 	}
 }
 

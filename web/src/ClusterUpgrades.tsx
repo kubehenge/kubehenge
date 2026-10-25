@@ -237,8 +237,9 @@ export function UpgradesDialog({ cluster: c, onClose }: { cluster: Cluster; onCl
             Move the nodes to new template builds
           </label>
           <p className="muted" id={nodeImagesHint}>
-            When the VM templates are built again with Ubuntu&apos;s updates, the nodes are replaced one at a time with
-            clones of the new build inside the window, once the build is a day old, whatever the upgrade setting says.
+            When the VM templates are built again with the node OS&apos;s updates, the nodes are replaced one at a time
+            with clones of the new build inside the window, once the build is a day old, whatever the upgrade setting
+            says.
           </p>
         </>
       )}

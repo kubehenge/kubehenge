@@ -3,7 +3,6 @@ package provisioner
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -13,7 +12,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
@@ -143,10 +141,23 @@ func RefreshesNodes(c *clusterv1.Cluster) bool {
 	return strings.TrimPrefix(c.Spec.Topology.ClassRef.Name, ClassPrefix) != string(templates.Talos)
 }
 
-// MachineLine is the template line a machine of the distribution at a Kubernetes version is
-// cloned from: RKE2 and k3s share the cloud image's, kubeadm has one per version.
-func MachineLine(distribution, version string) ([]string, error) {
-	t, err := MachineTemplate(distribution, version)
+// NodeOSVariable is the ClusterClasses' variable naming the operating system of a cluster's nodes.
+const NodeOSVariable = "nodeOS"
+
+// ClusterNodeOS is the operating system a cluster's nodes run: its nodeOS variable, which Cluster
+// API defaults, or the default where it is missing.
+func ClusterNodeOS(c *clusterv1.Cluster) (templates.NodeOS, error) {
+	o, set, err := optionalVariable[templates.NodeOS](c, NodeOSVariable)
+	if err != nil || !set {
+		return templates.DefaultNodeOS, err
+	}
+	return o, nil
+}
+
+// MachineLine is the template line a machine of the distribution at a Kubernetes version, on the
+// node OS, is cloned from: RKE2 and k3s have one each, kubeadm one per version.
+func MachineLine(distribution, version string, os templates.NodeOS) ([]string, error) {
+	t, err := MachineTemplate(distribution, version, os)
 	if err != nil {
 		return nil, err
 	}
@@ -154,11 +165,10 @@ func MachineLine(distribution, version string) ([]string, error) {
 }
 
 // MachineTemplate is the line MachineLine names, as planned.
-func MachineTemplate(distribution, version string) (templates.Template, error) {
-	req := templates.Request{Distribution: templates.Distribution(distribution)}
+func MachineTemplate(distribution, version string, os templates.NodeOS) (templates.Template, error) {
+	req := templates.Request{Distribution: templates.Distribution(distribution), NodeOS: os}
 	switch req.Distribution {
 	case templates.RKE2, templates.K3s:
-		req.Distribution = templates.RKE2
 	case templates.Kubeadm:
 		req.KubernetesVersion = version
 	case templates.Talos:
@@ -166,17 +176,22 @@ func MachineTemplate(distribution, version string) (templates.Template, error) {
 	default:
 		return templates.Template{}, fmt.Errorf("no template line for %s machines", distribution)
 	}
-	t, err := templates.Plan(req)
+	t, err := templates.Plan(&req)
 	if err != nil {
-		return templates.Template{}, fmt.Errorf("planning the template of %s %s machines: %w", distribution, version, err)
+		return templates.Template{}, fmt.Errorf("planning the template of %s %s machines on %s: %w", distribution, version, os, err)
 	}
 	return t, nil
 }
 
-// ClusterLines are the template lines a cluster's machines run: its version's, and during an
-// upgrade the version each part still runs.
+// ClusterLines are the template lines a cluster's machines run: its version's on its node OS, and
+// during an upgrade the version each part still runs. Machines still on a node OS the cluster has
+// left are not among them: no new machine is ever cloned for it.
 func ClusterLines(c *clusterv1.Cluster) ([][]string, error) {
 	dist := strings.TrimPrefix(c.Spec.Topology.ClassRef.Name, ClassPrefix)
+	os, err := ClusterNodeOS(c)
+	if err != nil {
+		return nil, err
+	}
 	versions := []string{c.Spec.Topology.Version}
 	if cp := c.Status.ControlPlane; cp != nil {
 		for _, v := range cp.Versions {
@@ -191,7 +206,7 @@ func ClusterLines(c *clusterv1.Cluster) ([][]string, error) {
 	var lines [][]string
 	seen := map[string]bool{}
 	for _, v := range versions {
-		line, err := MachineLine(dist, v)
+		line, err := MachineLine(dist, v, os)
 		if err != nil {
 			return nil, err
 		}
@@ -216,14 +231,15 @@ func kindOf(item *runtimehooksv1.GeneratePatchesRequestItem) string {
 }
 
 // nodeImages picks, for one patch request, the template build each of a cluster's machine
-// templates selects. It reads the cluster and its class once for all the request's templates.
+// templates selects. It reads the cluster's class once for all the request's templates.
 type nodeImages struct {
-	hooks     *Hooks
-	variables []runtimehooksv1.Variable
+	hooks   *Hooks
+	cluster *clusterv1.Cluster
 
 	loaded       bool
 	refreshed    bool
 	distribution string
+	os           templates.NodeOS
 	t            time.Time
 	builds       NodeImageBuilds
 }
@@ -232,32 +248,16 @@ func (n *nodeImages) load(ctx context.Context) error {
 	if n.loaded {
 		return nil
 	}
-	var key client.ObjectKey
-	for _, v := range n.variables {
-		if v.Name != runtimehooksv1.BuiltinsName {
-			continue
-		}
-		var b runtimehooksv1.Builtins
-		if err := json.Unmarshal(v.Value.Raw, &b); err != nil {
-			return fmt.Errorf("variable %s: %w", runtimehooksv1.BuiltinsName, err)
-		}
-		if b.Cluster != nil {
-			key = client.ObjectKey{Namespace: b.Cluster.Namespace, Name: b.Cluster.Name}
-		}
-	}
-	if key.Name == "" {
-		return errors.New("the patch request names no cluster")
-	}
-	c := &clusterv1.Cluster{}
-	if err := n.hooks.Reader.Get(ctx, key, c); err != nil {
-		return fmt.Errorf("reading cluster %s: %w", key, err)
-	}
+	c := n.cluster
 	var err error
 	n.distribution = strings.TrimPrefix(c.Spec.Topology.ClassRef.Name, ClassPrefix)
 	n.refreshed = RefreshesNodes(c)
 	n.loaded = true
 	if !n.refreshed {
 		return nil
+	}
+	if n.os, err = ClusterNodeOS(c); err != nil {
+		return err
 	}
 	if n.t, err = NodeImageTime(c); err != nil {
 		return err
@@ -276,7 +276,7 @@ func (n *nodeImages) patch(ctx context.Context, item *runtimehooksv1.GeneratePat
 	if err != nil {
 		return nil, err
 	}
-	line, err := MachineLine(n.distribution, version)
+	line, err := MachineLine(n.distribution, version, n.os)
 	if err != nil {
 		return nil, err
 	}

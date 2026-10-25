@@ -7,6 +7,7 @@ import { issuesFromCA, saveCA } from "./Certificates";
 import { OptionDialog, Options, type OptionAction } from "./ClusterOptions";
 import { EtcdSnapshotsDialog, EtcdSnapshotsView, etcdSnapshotsOf, etcdSnapshotsRows } from "./EtcdSnapshots";
 import { HealthView } from "./Health";
+import { nodeOSKey } from "./node-os";
 import { Link, navigate } from "./router";
 import type { Cluster, Machine, Versions } from "./types";
 import {
@@ -333,6 +334,12 @@ function Summary({ cluster: c }: { cluster: Cluster }): JSX.Element {
         </dd>
         <dt>Distribution</dt>
         <dd>{distributionName(c.distribution)}</dd>
+        {c.nodeOS && (
+          <>
+            <dt>Node OS</dt>
+            <dd>{c.nodeOS.title}</dd>
+          </>
+        )}
         <dt>Kubernetes</dt>
         <dd>{c.version}</dd>
         <dt>API endpoint</dt>
@@ -498,16 +505,18 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
   const [version, setVersion] = useState(c.version);
   const [offered, setOffered] = useState<Versions>();
   const { busy, error, send } = useChange(c, onClose);
+  // A kubeadm cluster moves only to versions with a template on its node OS.
+  const kubeadmOS = c.distribution === "kubeadm" && c.nodeOS ? nodeOSKey(c.nodeOS) : undefined;
   useEffect(() => {
     async function loadVersions(): Promise<void> {
       try {
-        setOffered(await api.versions(c.distribution));
+        setOffered(await api.versions(c.distribution, kubeadmOS));
       } catch (err) {
         setOffered({ versions: [], error: errorMessage(err) });
       }
     }
     void loadVersions();
-  }, [c.distribution]);
+  }, [c.distribution, kubeadmOS]);
   const targets = upgradeTargets(c.version, [...(offered?.versions ?? []), ...(offered?.older ?? [])]);
   return (
     <Dialog

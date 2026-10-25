@@ -6,9 +6,10 @@
 #   test/e2e/ci/guests.sh summary <file>   from that record, each minute's CPUs and memory by VM, and
 #                                          each VM's peaks: what a test's steps ask of the machine
 #   test/e2e/ci/guests.sh collect <dir>    from inside each running VM, through its guest agent: its
-#                                          state, the distribution's and the kernel's logs, the logs of
-#                                          the control plane's static pods and of restarted containers,
-#                                          and its etcd members' view of their cluster
+#                                          state, the distribution's, the kernel's and cloud-init's
+#                                          logs, the logs of the control plane's static pods and of
+#                                          restarted containers, and its etcd members' view of their
+#                                          cluster
 #
 # record and summary read the VMs' QEMU processes on this machine, which runs Proxmox VE's container
 # on its own kernel; collect runs the commands in the container. Everything collect writes passes
@@ -98,6 +99,7 @@ guest_script() {
         state)
             echo 'uptime; echo; free -m; echo; grep -H . /proc/pressure/*; echo
                 ps -eo pid,stat,pcpu,rss,etime,comm --sort=-rss | head -n 30; echo
+                ps -eo label,pid,comm | grep -v kernel_t | head -n 150; echo
                 systemctl --failed --no-pager --plain
                 for u in k3s k3s-agent rke2-server rke2-agent kubelet containerd; do
                     systemctl cat "$u" > /dev/null 2>&1 || continue
@@ -137,6 +139,12 @@ guest_script() {
             ;;
         kernel)
             echo 'dmesg -T 2>&1 | tail -n 1500'
+            ;;
+        # The bootstrap's commands as cloud-init ran them, with what each printed, and cloud-init's
+        # own warnings and errors.
+        cloud-init)
+            echo 'tail -n 3000 /var/log/cloud-init-output.log; echo
+                grep -E "WARNING|ERROR|Traceback" /var/log/cloud-init.log | tail -n 300'
             ;;
         # The members of this node's etcd as it sees them, its own status (leader, raft index,
         # learner, errors) and health, through etcd's gateway with the node's etcd client
@@ -188,7 +196,7 @@ collect() {
             commands=$(guest_script state)
             in_guest "${vmid}" "${commands}" 2>&1 | redact | head -c 1000000 > "${dir}/state.txt"
             grep -q '^exit code: 0$' "${dir}/state.txt" || continue
-            for part in journal etcd-journal logs kernel etcd; do
+            for part in journal etcd-journal logs kernel cloud-init etcd; do
                 commands=$(guest_script "${part}")
                 in_guest "${vmid}" "${commands}" 2>&1 | redact | head -c 8000000 > "${dir}/${part}.txt"
             done

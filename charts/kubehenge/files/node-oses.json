@@ -1,0 +1,5 @@
+{
+  "default": {"family": "almalinux", "release": "10"},
+  "families": ["almalinux", "rocky"],
+  "available": ["almalinux-10", "rocky-10"]
+}

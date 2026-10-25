@@ -48,7 +48,16 @@ const releaseCacheFor = 10 * time.Minute
 func (s *Server) versions(w http.ResponseWriter, r *http.Request, _ user) {
 	switch d := r.PathValue("distribution"); d {
 	case string(templates.Kubeadm):
-		writeJSON(w, http.StatusOK, s.kubeadmVersions(r.Context()))
+		nodeOS := templates.DefaultNodeOS
+		if q := r.URL.Query().Get("nodeOS"); q != "" {
+			o, err := templates.ParseNodeOS(q)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			nodeOS = o
+		}
+		writeJSON(w, http.StatusOK, s.kubeadmVersions(r.Context(), nodeOS))
 	case string(templates.RKE2), string(templates.K3s):
 		writeJSON(w, http.StatusOK, s.publishedVersions(r.Context(), d))
 	default:
@@ -56,6 +65,7 @@ func (s *Server) versions(w http.ResponseWriter, r *http.Request, _ user) {
 	}
 }
 
+// publishedVersions are RKE2's or k3s's releases, the same whatever the node OS.
 func (s *Server) publishedVersions(ctx context.Context, distribution string) versionsView {
 	if s.Releases == nil {
 		return versionsView{Versions: []string{}, Error: "this interface does not read release channels"}
@@ -67,7 +77,7 @@ func (s *Server) publishedVersions(ctx context.Context, distribution string) ver
 	if ok && time.Since(cached.fetched) < releaseCacheFor {
 		return cached.view
 	}
-	ch, err := s.Releases.Channels(ctx, distribution)
+	ch, err := s.Releases.Channels(ctx, distribution, templates.DefaultNodeOS)
 	if err != nil {
 		s.Log.Warn("reading release channels", "distribution", distribution, "error", err)
 		return versionsView{Versions: []string{}, Error: "the release channels could not be read: " + err.Error()}
@@ -83,35 +93,63 @@ func (s *Server) publishedVersions(ctx context.Context, distribution string) ver
 	return view
 }
 
-// missingTemplate says why no cluster of the class, or none of that version ("" for any), can be
-// built yet: its machines are cloned from a template the controller did not find in the template
-// pool, and would wait for ever. Until the controller has looked, it says nothing.
-func missingTemplate(class *clusterv1.ClusterClass, distribution, version string) string {
+// missingTemplate says why no cluster of the class on the node OS, or none of that version ("" for
+// any), can be built yet: its machines are cloned from a template the controller did not find in
+// the template pool, and would wait for ever. Until the controller has looked, it says nothing.
+func missingTemplate(class *clusterv1.ClusterClass, distribution, version string, nodeOS templates.NodeOS) string {
+	title := nodeOSTitle(nodeOS)
 	switch distribution {
 	case string(templates.Kubeadm):
-		recorded, ok := class.Annotations[provisioner.KubeadmVersionsAnnotation]
+		raw, ok := class.Annotations[provisioner.KubeadmVersionsAnnotation]
+		if !ok {
+			return ""
+		}
+		recorded, err := provisioner.ParseKubeadmVersions(raw)
+		if err != nil {
+			return ""
+		}
+		versions := recorded[nodeOS.String()]
 		switch {
-		case !ok:
-		case recorded == "":
-			return "there is no kubeadm VM template yet; an administrator builds one on the Administration page"
-		case version != "" && !slices.Contains(strings.Split(recorded, ","), version):
-			return "there is no kubeadm VM template of " + version + " yet; an administrator builds it on the Administration page"
+		case len(versions) == 0:
+			return "there is no kubeadm VM template on " + title + " yet; an administrator builds one on the Administration page"
+		case version != "" && !slices.Contains(versions, version):
+			return "there is no kubeadm VM template of " + version + " on " + title + " yet; an administrator builds it on the Administration page"
 		}
 	case string(templates.RKE2), string(templates.K3s):
-		if class.Annotations[provisioner.CloudImageTemplateAnnotation] == "false" {
-			return "there is no VM template for RKE2 and k3s yet; an administrator builds it on the Administration page"
+		recorded, ok := class.Annotations[provisioner.NodeOSTemplatesAnnotation]
+		if ok && !slices.Contains(strings.Split(recorded, ","), nodeOS.String()) {
+			return "there is no " + distributionTitle(distribution) + " VM template on " + title + " yet; an administrator builds it on the Administration page"
 		}
 	}
 	return ""
 }
 
+// nodeOSTitle is a node OS as people read it, such as AlmaLinux 10.
+func nodeOSTitle(o templates.NodeOS) string {
+	if f, r, err := templates.ReleaseOf(o); err == nil {
+		return f.Title() + " " + r.Name
+	}
+	return o.String()
+}
+
+func distributionTitle(d string) string {
+	switch templates.Distribution(d) {
+	case templates.RKE2:
+		return "RKE2"
+	case templates.K3s:
+		return "k3s"
+	case templates.Kubeadm, templates.Talos:
+	}
+	return d
+}
+
 var kubeadmVersion = regexp.MustCompile(`^v1\.(\d+)\.(\d+)$`)
 
-// kubeadmVersions are the versions a kubeadm cluster can run: those a template of the classes' OS
+// kubeadmVersions are the versions a kubeadm cluster on the node OS can run: those a template of it
 // has been built for in the template pool, as the controller records them on the kubeadm class.
 // Cluster API clones with its own token, so they are offered whatever the user may see in
 // Proxmox VE.
-func (s *Server) kubeadmVersions(ctx context.Context) versionsView {
+func (s *Server) kubeadmVersions(ctx context.Context, nodeOS templates.NodeOS) versionsView {
 	kube := s.currentKube()
 	if kube == nil {
 		return versionsView{Versions: []string{}, Error: "the management cluster is not set up yet"}
@@ -121,13 +159,18 @@ func (s *Server) kubeadmVersions(ctx context.Context) versionsView {
 		s.Log.Warn("reading the kubeadm ClusterClass", "error", err)
 		return versionsView{Versions: []string{}, Error: "the kubeadm ClusterClass could not be read"}
 	}
-	recorded, ok := class.Annotations[provisioner.KubeadmVersionsAnnotation]
+	raw, ok := class.Annotations[provisioner.KubeadmVersionsAnnotation]
 	if !ok {
 		return versionsView{Versions: []string{}, Error: "Kubehenge's controller has not looked at the templates yet; try again in a minute"}
 	}
+	recorded, err := provisioner.ParseKubeadmVersions(raw)
+	if err != nil {
+		s.Log.Warn("reading the kubeadm ClusterClass", "error", err)
+		return versionsView{Versions: []string{}, Error: "the kubeadm ClusterClass could not be read"}
+	}
 	type version struct{ minor, patch int }
 	newest := map[int]version{}
-	for raw := range strings.SplitSeq(recorded, ",") {
+	for _, raw := range recorded[nodeOS.String()] {
 		if v := kubeadmVersion.FindStringSubmatch(raw); v != nil {
 			minor, _ := strconv.Atoi(v[1])
 			patch, _ := strconv.Atoi(v[2])
@@ -146,7 +189,7 @@ func (s *Server) kubeadmVersions(ctx context.Context) versionsView {
 		view.Versions = append(view.Versions, "v1."+strconv.Itoa(v.minor)+"."+strconv.Itoa(v.patch))
 	}
 	if len(view.Versions) == 0 {
-		view.Error = "no kubeadm template yet; an administrator builds one on the Administration page"
+		view.Error = "no kubeadm template on " + nodeOSTitle(nodeOS) + " yet; an administrator builds one on the Administration page"
 	}
 	return view
 }

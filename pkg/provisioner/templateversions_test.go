@@ -22,15 +22,18 @@ func TestKubeadmTemplateVersionsRecordedOnTheClass(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex
 	tags := []string{
-		"build-202610010000;kubeadm;kubehenge;kubernetes-v1.36.5;" + templates.DefaultOS,
-		"build-202610080000;kubeadm;kubehenge;kubernetes-v1.36.5;" + templates.DefaultOS,
-		"build-202610010000;kubeadm;kubehenge;kubernetes-v1.37.1;" + templates.DefaultOS,
-		"build-202610010000;kubeadm;kubehenge;kubernetes-v1.36.4;" + templates.DefaultOS,
+		"build-202610010000;kubeadm;kubehenge;kubernetes-v1.36.5;os-almalinux-10",
+		"build-202610080000;kubeadm;kubehenge;kubernetes-v1.36.5;os-almalinux-10",
+		"build-202610010000;kubeadm;kubehenge;kubernetes-v1.37.1;os-almalinux-10",
+		"build-202610010000;kubeadm;kubehenge;kubernetes-v1.36.4;os-almalinux-10",
 		// Not a build, which no class selects.
-		"kubeadm;kubehenge;kubernetes-v1.38.1;" + templates.DefaultOS,
-		// Another OS than the class selects.
-		"build-202610010000;kubeadm;kubehenge;kubernetes-v1.38.0;ubuntu-24.04",
-		"build-202610010000;cloud-image;kubehenge;" + templates.DefaultOS,
+		"kubeadm;kubehenge;kubernetes-v1.38.1;os-almalinux-10",
+		"build-202610010000;kubeadm;kubehenge;kubernetes-v1.38.0;os-rocky-10",
+		// A node OS Kubehenge does not know.
+		"build-202610010000;kubeadm;kubehenge;kubernetes-v1.38.0;os-plan9-4",
+		"build-202610010000;kubehenge;os-almalinux-10;rke2",
+		"build-202610010000;kubehenge;os-rocky-10;rke2",
+		"build-202610010000;k3s;kubehenge;os-rocky-10",
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var data any = []any{}
@@ -73,14 +76,14 @@ func TestKubeadmTemplateVersionsRecordedOnTheClass(t *testing.T) {
 	if err := p.publish(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := recorded(class.Name, KubeadmVersionsAnnotation); got != "v1.37.1,v1.36.5,v1.36.4" {
+	if got, _ := recorded(class.Name, KubeadmVersionsAnnotation); got != `{"almalinux-10":["v1.37.1","v1.36.5","v1.36.4"],"rocky-10":["v1.38.0"]}` {
 		t.Errorf("recorded %q", got)
 	}
 	if _, ok := recorded(rke2.Name, KubeadmVersionsAnnotation); ok {
 		t.Error("the RKE2 class got kubeadm's versions")
 	}
-	if got, _ := recorded(rke2.Name, CloudImageTemplateAnnotation); got != "true" {
-		t.Errorf("RKE2's template recorded as %q", got)
+	if got, _ := recorded(rke2.Name, NodeOSTemplatesAnnotation); got != "almalinux-10,rocky-10" {
+		t.Errorf("RKE2's templates recorded as %q", got)
 	}
 	for _, name := range []string{class.Name, rke2.Name} {
 		if got, _ := recorded(name, TemplateStoragesAnnotation); got != "ceph" {
@@ -92,26 +95,29 @@ func TestKubeadmTemplateVersionsRecordedOnTheClass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	line := "kubeadm;kubehenge;kubernetes-v1.36.5;" + templates.DefaultOS
-	if got := builds[line]; len(got) != 2 || !got[0].Before(got[1]) || len(builds) != 4 {
+	line := "kubeadm;kubehenge;kubernetes-v1.36.5;" + templates.DefaultNodeOS.Tag()
+	if got := builds[line]; len(got) != 2 || !got[0].Before(got[1]) || len(builds) != 7 {
 		t.Errorf("builds recorded %s", raw)
 	}
 	if again, _ := recorded(class.Name, NodeImageBuildsAnnotation); again != raw {
 		t.Errorf("the classes record the builds differently: %s and %s", raw, again)
 	}
+	if versions, err := ParseKubeadmVersions(`{"rocky-10":["v1.38.0"]}`); err != nil || versions["rocky-10"][0] != "v1.38.0" {
+		t.Errorf("read back %v, %v", versions, err)
+	}
 
-	// The last template deleted: none, which is not the same as not looked at yet. A cloud image
-	// of another OS is no source for the classes.
+	// The last template deleted: none, which is not the same as not looked at yet. A template of a
+	// node OS Kubehenge does not know is no source for the classes.
 	mu.Lock()
-	tags = []string{"build-202610010000;cloud-image;kubehenge;ubuntu-24.04"}
+	tags = []string{"build-202610010000;kubehenge;os-plan9-4;rke2"}
 	mu.Unlock()
 	if err := p.publish(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got, ok := recorded(class.Name, KubeadmVersionsAnnotation); !ok || got != "" {
-		t.Errorf("recorded %q, %v; want an empty list", got, ok)
+	if got, ok := recorded(class.Name, KubeadmVersionsAnnotation); !ok || got != "{}" {
+		t.Errorf("recorded %q, %v; want none", got, ok)
 	}
-	if got, _ := recorded(rke2.Name, CloudImageTemplateAnnotation); got != "false" {
-		t.Errorf("RKE2's template recorded as %q once gone", got)
+	if got, ok := recorded(rke2.Name, NodeOSTemplatesAnnotation); !ok || got != "" {
+		t.Errorf("RKE2's templates recorded as %q once gone", got)
 	}
 }

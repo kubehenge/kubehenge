@@ -1,6 +1,7 @@
 {{- $class := "kubehenge-rke2" }}
 {{- $clusterSpec := include "kubehenge.proxmoxClusterSpec" . }}
-{{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "cloud-image" "kubehenge" "ubuntu-26.04") "serviceJoins" true) }}
+{{- /* Placeholder tags: the controller's patch selects the build of the node OS's template. */}}
+{{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "kubehenge" "os-almalinux-10" "rke2") "serviceJoins" true) }}
 {{- $controlPlaneSpec := include "kubehenge.rke2ControlPlaneSpec" . }}
 {{- $workerSpec := include "kubehenge.rke2WorkerSpec" . }}
 {{- $clusterName := include "kubehenge.hashedName" (dict "name" $class "spec" $clusterSpec) }}
@@ -87,6 +88,7 @@ spec:
     {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 2 "workerMinMemoryMiB" 4096 "clusters" .Values.clusters) | nindent 4 }}
     {{- include "kubehenge.addonVariables" . | nindent 4 }}
     {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
+    {{- include "kubehenge.nodeOSVariable" . | nindent 4 }}
     {{- include "kubehenge.autoscalerVariable" . | nindent 4 }}
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
     {{- include "kubehenge.cisVariable" . | nindent 4 }}
@@ -193,31 +195,23 @@ spec:
               path: /spec/template/spec/files/-
               valueFrom:
                 template: |
-                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/etc/rancher/rke2/authentication-config.yaml" "anonymous" false) | nindent 18 }}
+                  {{- include "kubehenge.oidcFile" (dict "root" . "path" "/var/lib/rancher/rke2/server/authentication-config.yaml" "anonymous" false) | nindent 18 }}
             # RKE2 mounts every file an argument names into the API server's static pod; mounting it
-            # again as an extra mount makes the pod invalid (a mount path must be unique).
+            # again as an extra mount makes the pod invalid (a mount path must be unique). The API
+            # server watches the file for changes, which RKE2's SELinux policy allows in RKE2's own
+            # directory, not in /etc.
             - op: add
               path: /spec/template/spec/serverConfig/kubeAPIServer/extraArgs/-
-              value: authentication-config=/etc/rancher/rke2/authentication-config.yaml
+              value: authentication-config=/var/lib/rancher/rke2/server/authentication-config.yaml
             # RKE2 switches anonymous requests off itself only while it is given no file.
             - op: add
               path: /spec/template/spec/serverConfig/kubeAPIServer/extraArgs/-
               value: anonymous-auth=false
     # RKE2's profile keeps the admission configuration it is given, which enforces restricted
-    # under cis already. Under it a server refuses to start without an etcd user and group, whom it
-    # gives etcd's data and process.
+    # under cis already. The provider prepares a node for it, the etcd user and group included.
     - name: rke2-cis
       enabledIf: {{ include "kubehenge.cisEnabled" . }}
       definitions:
-        - selector:
-            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
-            kind: RKE2ControlPlaneTemplate
-            matchResources:
-              controlPlane: true
-          jsonPatches:
-            - op: add
-              path: /spec/template/spec/preRKE2Commands/-
-              value: id -u etcd >/dev/null 2>&1 || useradd --system --user-group --no-create-home --shell /usr/sbin/nologin --comment "etcd user" etcd
         {{- range $kind, $sel := dict "RKE2ControlPlaneTemplate" (dict "selector" (dict "controlPlane" true) "api" "controlplane.cluster.x-k8s.io/v1beta2") "RKE2ConfigTemplate" (dict "selector" (dict "machineDeploymentClass" (dict "names" (list "worker"))) "api" "bootstrap.cluster.x-k8s.io/v1beta2") }}
         - selector:
             apiVersion: {{ $sel.api }}
@@ -259,7 +253,6 @@ spec:
 {{- define "kubehenge.rke2AgentConfig" -}}
 preRKE2Commands:
   - sysctl --system
-  - {{ include "kubehenge.runcProfileLoad" . | quote }}
 agentConfig:
   # The kubelet refuses to start on kernel settings other than its own (kubehenge.sysctlFile).
   protectKernelDefaults: true
@@ -281,7 +274,6 @@ template:
     {{- include "kubehenge.rke2AgentConfig" (dict "controlPlane" true) | nindent 4 }}
     files:
       {{- include "kubehenge.sysctlFile" . | nindent 6 }}
-      {{- include "kubehenge.runcProfileFile" (dict "distribution" "rke2") | nindent 6 }}
       {{- include "kubehenge.removedServerFile" (dict "distribution" "rke2") | nindent 6 }}
       {{- include "kubehenge.auditPolicyFile" (dict "root" . "path" "/etc/rancher/rke2/audit-policy.yaml") | nindent 6 }}
       # Given a policy, RKE2 audits the API server and keeps a month of the log.
@@ -324,5 +316,4 @@ template:
     {{- include "kubehenge.rke2AgentConfig" (dict) | nindent 4 }}
     files:
       {{- include "kubehenge.sysctlFile" . | nindent 6 }}
-      {{- include "kubehenge.runcProfileFile" (dict "distribution" "rke2") | nindent 6 }}
 {{- end -}}

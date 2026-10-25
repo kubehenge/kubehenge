@@ -117,6 +117,9 @@ func monitoringValues(distribution templates.Distribution, proxy Image, addons *
 		"prometheus-node-exporter": map[string]any{
 			"fullnameOverride":  nodeExporter,
 			"namespaceOverride": nodeExporterNamespace,
+			// It reads the host's processes and file systems; Helm merges this into the chart's own
+			// pod settings.
+			securityKey: map[string]any{seLinuxKey: hostSELinux()},
 			// node-exporter itself listens on loopback only, behind the proxy.
 			"kubeRBACProxy": map[string]any{
 				"enabled":                  true,

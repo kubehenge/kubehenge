@@ -1,0 +1,15 @@
+; Commands the QEMU guest agent starts through guest-exec run as root, unconfined, as they would from a
+; root shell: Proxmox VE grants guest-exec only to holders of VM.GuestAgent.Unrestricted (or VM.Monitor),
+; who can already run anything in the guest. The agent itself stays in virt_qemu_ga_t.
+(typeattribute kubehenge_qga_exec)
+(typeattributeset kubehenge_qga_exec (shell_exec_t bin_t cloud_init_exec_t systemd_systemctl_exec_t))
+(typetransition virt_qemu_ga_t shell_exec_t process unconfined_service_t)
+(typetransition virt_qemu_ga_t bin_t process unconfined_service_t)
+(typetransition virt_qemu_ga_t cloud_init_exec_t process unconfined_service_t)
+(typetransition virt_qemu_ga_t systemd_systemctl_exec_t process unconfined_service_t)
+(allow virt_qemu_ga_t kubehenge_qga_exec (file (getattr open read execute map)))
+(allow virt_qemu_ga_t unconfined_service_t (process (transition signal sigkill)))
+(allow unconfined_service_t kubehenge_qga_exec (file (entrypoint)))
+(allow unconfined_service_t virt_qemu_ga_t (fd (use)))
+(allow unconfined_service_t virt_qemu_ga_t (fifo_file (getattr read write append ioctl lock)))
+(allow unconfined_service_t virt_qemu_ga_t (process (sigchld)))

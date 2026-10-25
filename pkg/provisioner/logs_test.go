@@ -201,7 +201,8 @@ func TestNodeCollectorReadsTheHost(t *testing.T) {
 		}
 		security := lookup[map[string]any](t, node, "alloy", "securityContext")
 		if lookup[float64](t, security, "runAsUser") != 0 || lookup[string](t, security, "capabilities", "drop", 0) != "ALL" ||
-			!lookup[bool](t, security, "readOnlyRootFilesystem") || lookup[bool](t, security, "allowPrivilegeEscalation") {
+			!lookup[bool](t, security, "readOnlyRootFilesystem") || lookup[bool](t, security, "allowPrivilegeEscalation") ||
+			lookup[string](t, security, "seLinuxOptions", "type") != "spc_t" {
 			t.Errorf("%s: security %v", distribution, security)
 		}
 		if lookup[bool](t, node, "serviceAccount", "automountServiceAccountToken") || lookup[bool](t, node, "rbac", "create") {

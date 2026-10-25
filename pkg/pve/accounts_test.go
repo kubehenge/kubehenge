@@ -60,18 +60,18 @@ func fakeTicketAPI(t *testing.T) *Accounts {
 			{"vmid": 152, "node": "one"},
 			{"vmid": 153, "node": "one"},
 			{"vmid": 154, "node": "two"},
-			{"vmid": 160, "node": "one", "type": "qemu", "name": "kubehenge-ubuntu-26.04", "template": 1, "tags": "cloud-image;kubehenge;ubuntu-26.04", "pool": "kubehenge-templates"},
-			{"vmid": 161, "node": "one", "type": "qemu", "name": "kubehenge-ubuntu-26.04", "template": 1, "tags": "cloud-image;kubehenge;ubuntu-26.04", "pool": "elsewhere"},
+			{"vmid": 160, "node": "one", "type": "qemu", "name": "kubehenge-rke2-almalinux-10", "template": 1, "tags": "kubehenge;os-almalinux-10;rke2", "pool": "kubehenge-templates"},
+			{"vmid": 161, "node": "one", "type": "qemu", "name": "kubehenge-rke2-almalinux-10", "template": 1, "tags": "kubehenge;os-almalinux-10;rke2", "pool": "elsewhere"},
 			{"vmid": 162, "node": "one", "type": "qemu", "name": "being-built", "template": 0, "pool": "kubehenge-templates"},
 			{"vmid": 163, "node": "one", "type": "lxc", "name": "a-container-template", "template": 1, "pool": "kubehenge-templates"},
 			// Behind the configurations: 164's VM ID was reused by a VM being built, 165 was removed.
-			{"vmid": 164, "node": "one", "type": "qemu", "name": "kubehenge-old", "template": 1, "tags": "cloud-image;kubehenge;ubuntu-24.04", "pool": "kubehenge-templates"},
-			{"vmid": 165, "node": "one", "type": "qemu", "name": "kubehenge-gone", "template": 1, "tags": "cloud-image;kubehenge;ubuntu-22.04", "pool": "kubehenge-templates"},
+			{"vmid": 164, "node": "one", "type": "qemu", "name": "kubehenge-old", "template": 1, "tags": "kubehenge;os-rocky-10;rke2", "pool": "kubehenge-templates"},
+			{"vmid": 165, "node": "one", "type": "qemu", "name": "kubehenge-gone", "template": 1, "tags": "k3s;kubehenge;os-rocky-10", "pool": "kubehenge-templates"},
 		})
 	})
 	mux.HandleFunc("GET /api2/json/nodes/one/qemu/{vmid}/config", func(w http.ResponseWriter, r *http.Request) {
 		configs := map[string]map[string]any{
-			"160": {"name": "kubehenge-ubuntu-26.04", "template": 1},
+			"160": {"name": "kubehenge-rke2-almalinux-10", "template": 1},
 			"162": {"name": "being-built"},
 			"164": {"name": "being-built-too"},
 		}
@@ -237,7 +237,7 @@ func TestTemplatesOfAPoolWithTheirTags(t *testing.T) {
 	t.Parallel()
 	a := fakeTicketAPI(t)
 	got, err := a.Templates(context.Background(), &Ticket{Username: "alice@pve", Ticket: "PVE:alice@pve:1"}, "kubehenge-templates")
-	want := []Member{{VMID: 160, Node: "one", Type: "qemu", Name: "kubehenge-ubuntu-26.04", Template: 1, Tags: "cloud-image;kubehenge;ubuntu-26.04"}}
+	want := []Member{{VMID: 160, Node: "one", Type: "qemu", Name: "kubehenge-rke2-almalinux-10", Template: 1, Tags: "kubehenge;os-almalinux-10;rke2"}}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("Templates = %+v, %v; want %+v", got, err, want)
 	}

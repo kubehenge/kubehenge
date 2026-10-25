@@ -56,7 +56,7 @@ func (p *fakePool) DeleteBuild(_ context.Context, r *proxmox.ClusterResource) er
 	return nil
 }
 
-func (p *fakePool) add(t *testing.T, req templates.Request, at time.Time) {
+func (p *fakePool) add(t *testing.T, req *templates.Request, at time.Time) {
 	t.Helper()
 	line, err := templates.Plan(req)
 	if err != nil {
@@ -98,14 +98,16 @@ func TestTemplateRefreshBuildsWhatClustersRunAndCollectsTheRest(t *testing.T) {
 	v135 := templates.Request{Distribution: templates.Kubeadm, KubernetesVersion: "v1.35.9"}
 	v137 := templates.Request{Distribution: templates.Kubeadm, KubernetesVersion: "v1.37.1"}
 	for _, at := range []time.Time{day(1), day(8), day(15)} {
-		pool.add(t, cloud, at)
-		pool.add(t, v136, at)
+		pool.add(t, &cloud, at)
+		pool.add(t, &v136, at)
 	}
 	// No cluster runs v1.35.9 and none can upgrade to it; v1.37.1 is a step up from v1.36.5.
-	pool.add(t, v135, day(1))
-	pool.add(t, v135, day(8))
-	pool.add(t, v137, day(1))
-	pool.add(t, v137, day(8))
+	pool.add(t, &v135, day(1))
+	pool.add(t, &v135, day(8))
+	pool.add(t, &v137, day(1))
+	pool.add(t, &v137, day(8))
+	// A line of another node OS no cluster runs yet, kept fresh for the clusters made of it.
+	pool.add(t, &templates.Request{Distribution: templates.K3s, NodeOS: templates.NodeOS{Family: "rocky", Release: "10"}}, day(1))
 	web, _ := refreshCluster(t, "web", nil)
 	web.Annotations[NodeImageAnnotation] = day(3).Format(time.RFC3339)
 	kube := refreshKube(t, web, kubeadmCluster("api", "v1.36.5", day(20)))
@@ -123,18 +125,20 @@ func TestTemplateRefreshBuildsWhatClustersRunAndCollectsTheRest(t *testing.T) {
 	if err := r.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(planned, []string{"kubehenge-ubuntu-26.04", "kubehenge-kubeadm-v1.36.5-ubuntu-26.04", "kubehenge-kubeadm-v1.38.0-ubuntu-26.04"}) {
+	if !slices.Equal(planned, []string{
+		"kubehenge-rke2-almalinux-10", "kubehenge-kubeadm-v1.36.5-almalinux-10", "kubehenge-k3s-rocky-10", "kubehenge-kubeadm-v1.38.0-almalinux-10",
+	}) {
 		t.Errorf("planned %v", planned)
 	}
-	if len(pool.built) != 3 || !slices.Equal(pool.leftover, planned) {
+	if len(pool.built) != 4 || !slices.Equal(pool.leftover, planned) {
 		t.Errorf("built %v after clearing %v", pool.built, pool.leftover)
 	}
-	// Of the cloud image's: web runs the build of the 1st, and the two newest stay. kubeadm
-	// v1.36.5's: the two newest, the 22nd's and the 15th's, which api runs. v1.35.9 keeps its newest.
+	// Of RKE2's: web runs the build of the 1st, and the two newest stay. kubeadm v1.36.5's: the two
+	// newest, the 22nd's and the 15th's, which api runs. v1.35.9 keeps its newest.
 	slices.Sort(pool.deleted)
 	want := []string{
-		"kubehenge-kubeadm-v1.35.9-ubuntu-26.04-build-202610010000", "kubehenge-kubeadm-v1.36.5-ubuntu-26.04-build-202610010000",
-		"kubehenge-kubeadm-v1.36.5-ubuntu-26.04-build-202610080000", "kubehenge-ubuntu-26.04-build-202610080000",
+		"kubehenge-kubeadm-v1.35.9-almalinux-10-build-202610010000", "kubehenge-kubeadm-v1.36.5-almalinux-10-build-202610010000",
+		"kubehenge-kubeadm-v1.36.5-almalinux-10-build-202610080000", "kubehenge-rke2-almalinux-10-build-202610080000",
 	}
 	if !slices.Equal(pool.deleted, want) {
 		t.Errorf("deleted %v, want %v", pool.deleted, want)
@@ -147,8 +151,8 @@ func TestBuildUsersNameTheClustersOfEachBuild(t *testing.T) {
 	cloud := templates.Request{Distribution: templates.RKE2}
 	v136 := templates.Request{Distribution: templates.Kubeadm, KubernetesVersion: "v1.36.5"}
 	for _, at := range []time.Time{day(1), day(8), day(15)} {
-		pool.add(t, cloud, at)
-		pool.add(t, v136, at)
+		pool.add(t, &cloud, at)
+		pool.add(t, &v136, at)
 	}
 	web, _ := refreshCluster(t, "web", nil)
 	web.Annotations[NodeImageAnnotation] = day(3).Format(time.RFC3339)
@@ -158,7 +162,7 @@ func TestBuildUsersNameTheClustersOfEachBuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	of := func(req templates.Request, at time.Time) []string {
-		line, err := templates.Plan(req)
+		line, err := templates.Plan(&req)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -184,9 +188,9 @@ func TestTemplateRefreshKeepsWhatAMachineBeingMadeSelects(t *testing.T) {
 	pool := &fakePool{}
 	cloud := templates.Request{Distribution: templates.RKE2}
 	for _, at := range []time.Time{day(1), day(8), day(15)} {
-		pool.add(t, cloud, at)
+		pool.add(t, &cloud, at)
 	}
-	line, err := templates.Plan(cloud)
+	line, err := templates.Plan(&cloud)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,11 +225,11 @@ func TestTemplateRefreshKeepsWhatAMachineBeingMadeSelects(t *testing.T) {
 
 func TestTemplateRefreshGoesOnPastAFailedLine(t *testing.T) {
 	t.Parallel()
-	pool := &fakePool{fail: map[string]bool{"kubehenge-ubuntu-26.04": true}}
+	pool := &fakePool{fail: map[string]bool{"kubehenge-rke2-almalinux-10": true}}
 	kube := refreshKube(t, kubeadmCluster("api", "v1.36.5", day(20)))
 	r := &TemplateRefresh{Kube: kube, Pool: pool, ClassNamespace: "kubehenge-system", Keep: 2, Now: func() time.Time { return day(22) }}
 	err := r.Run(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "kubehenge-ubuntu-26.04") || len(pool.built) != 1 {
+	if err == nil || !strings.Contains(err.Error(), "kubehenge-rke2-almalinux-10") || len(pool.built) != 1 {
 		t.Errorf("error %v, built %v", err, pool.built)
 	}
 }
@@ -248,26 +252,35 @@ func request(t *testing.T, by string) string {
 
 func TestRequestedJob(t *testing.T) {
 	t.Parallel()
-	job, err := requestedJob(refreshCronJob(), map[string]string{"kubeadm-v1.38.0": request(t, "dev@pve"), CloudImageLine: request(t, "ops@pve")}, day(20))
+	job, err := requestedJob(refreshCronJob(), map[string]string{
+		"kubeadm-v1.38.0-almalinux-10": request(t, "dev@pve"), "rke2-rocky-10": request(t, "ops@pve"),
+	}, day(20))
 	if err != nil {
 		t.Fatal(err)
 	}
 	args := job.Spec.Template.Spec.Containers[0].Args
-	want := []string{"template", "refresh", "--node=pve1", "--trigger=cloud-image for ops@pve; kubeadm-v1.38.0 for dev@pve", "--missing=cloud-image", "--missing=kubeadm-v1.38.0", "--missing-only"}
+	want := []string{
+		"template", "refresh", "--node=pve1", "--trigger=kubeadm-v1.38.0-almalinux-10 for dev@pve; rke2-rocky-10 for ops@pve",
+		"--missing=kubeadm-v1.38.0-almalinux-10", "--missing=rke2-rocky-10", "--missing-only",
+	}
 	if !slices.Equal(args, want) || job.Labels[TemplateRefreshLabel] != "true" || job.OwnerReferences[0].UID != "cron-uid" {
 		t.Errorf("job %+v with %v", job.ObjectMeta, args)
 	}
-	job, err = requestedJob(refreshCronJob(), map[string]string{RefreshRequest: request(t, "admin@pve"), "kubeadm-v1.38.0": request(t, "dev@pve")}, day(20))
+	job, err = requestedJob(refreshCronJob(), map[string]string{RefreshRequest: request(t, "admin@pve"), "kubeadm-v1.38.0-almalinux-10": request(t, "dev@pve")}, day(20))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if args := job.Spec.Template.Spec.Containers[0].Args; slices.Contains(args, "--missing-only") || !slices.Contains(args, "--missing=kubeadm-v1.38.0") {
+	if args := job.Spec.Template.Spec.Containers[0].Args; slices.Contains(args, "--missing-only") || !slices.Contains(args, "--missing=kubeadm-v1.38.0-almalinux-10") {
 		t.Errorf("a full run: %v", args)
 	}
 	for name, requests := range map[string]map[string]string{
-		"no such line":     {"talos-v1.14.4": request(t, "dev@pve")},
-		"no version":       {"kubeadm-1.38": request(t, "dev@pve")},
-		"no request in it": {CloudImageLine: "yes"},
+		"no such line":         {"talos-v1.14.4": request(t, "dev@pve")},
+		"no version":           {"kubeadm-1.38-almalinux-10": request(t, "dev@pve")},
+		"no node OS":           {"kubeadm-v1.38.0": request(t, "dev@pve")},
+		"an unknown node OS":   {"rke2-plan9-4": request(t, "dev@pve")},
+		"an unreleased one":    {"rke2-leap-16.1": request(t, "dev@pve")},
+		"not written as named": {"rke2-almalinux-10.0": request(t, "dev@pve")},
+		"no request in it":     {"rke2-almalinux-10": "yes"},
 	} {
 		if _, err := requestedJob(refreshCronJob(), requests, day(20)); err == nil {
 			t.Errorf("%s: a Job made", name)
@@ -278,7 +291,7 @@ func TestRequestedJob(t *testing.T) {
 func TestTemplateRequestsStartOneRunAtATime(t *testing.T) {
 	t.Parallel()
 	requests := &corev1.ConfigMap{Namespace: "kubehenge-system", Name: TemplateRequestsName}
-	requests.Data = map[string]string{CloudImageLine: request(t, "dev@pve")}
+	requests.Data = map[string]string{"rke2-almalinux-10": request(t, "dev@pve")}
 	running := &batchv1.Job{Namespace: "kubehenge-system", Name: "scheduled", Labels: map[string]string{TemplateRefreshLabel: "true"}}
 	kube := refreshKube(t, requests, refreshCronJob(), running)
 	r := &TemplateRequests{Client: kube, Reader: kube, Namespace: "kubehenge-system", Now: func() time.Time { return day(20) }}

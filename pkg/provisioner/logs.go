@@ -573,6 +573,7 @@ func alloyNodeValues(image Image, distribution templates.Distribution) map[strin
 		ReadOnlyRootFilesystem:   &yes,
 		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+		SELinuxOptions:           hostSELinux(),
 	}
 	alloy["resources"] = map[string]any{
 		requestsKey: map[string]any{cpuKey: "10m", memoryKey: "128Mi"},

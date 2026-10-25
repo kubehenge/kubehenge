@@ -134,10 +134,10 @@ proxmox:
   # to restore by hand.
   etcdRestore: false
 
-# Building the Ubuntu VM templates again every week, with the updates Ubuntu published since, as a
-# CronJob signed in with a token of its own. Clusters move their nodes to a new build inside their
-# maintenance windows (their upgrades variable's nodeImages) once it is soakHours old; of each
-# template the two newest builds stay, and any older one a cluster still clones from.
+# Building the node OS VM templates again every week, with the updates each node OS published
+# since, as a CronJob signed in with a token of its own. Clusters move their nodes to a new build
+# inside their maintenance windows (their upgrades variable's nodeImages) once it is soakHours old;
+# of each template the two newest builds stay, and any older one a cluster still clones from.
 templateRefresh:
   # On, as with the module and the appliance. It needs node, storage and importStorage below and the
   # builder's Secret; set enabled to false to install without them.
@@ -159,9 +159,9 @@ templateRefresh:
   importStorage: ""
   isoStorage: ""
   pool: kubehenge-templates
-  # The network of the VM that prepares an image, which needs Ubuntu's and Kubernetes' package
-  # mirrors: a bridge and VLAN tag, and a static address with prefix, gateway and DNS servers, or
-  # DHCP when address is empty.
+  # The network of the VM that builds a node image, which needs the node OS's and Kubernetes'
+  # package repositories: a bridge and VLAN tag, and a static address with prefix, gateway and DNS
+  # servers, or DHCP when address is empty.
   bridge: vmbr0
   vlan: 0
   address: ""

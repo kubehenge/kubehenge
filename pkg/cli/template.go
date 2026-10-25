@@ -10,6 +10,7 @@ import (
 
 	"github.com/luthermonson/go-proxmox"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -77,6 +78,28 @@ func newTemplateListCommand(conn *pve.Config) *cobra.Command {
 	return cmd
 }
 
+// nodeOSValue is a node OS on the command line, as one word such as almalinux-10.
+type nodeOSValue struct{ o *templates.NodeOS }
+
+func (v nodeOSValue) String() string { return v.o.String() }
+
+func (v nodeOSValue) Set(s string) error {
+	o, err := templates.ParseNodeOS(s)
+	if err != nil {
+		return err //nolint:wrapcheck // the flag's own message
+	}
+	*v.o = o
+	return nil
+}
+
+func (nodeOSValue) Type() string { return "node-os" }
+
+// nodeOSFlag adds --node-os, which starts at the default node OS.
+func nodeOSFlag(f *pflag.FlagSet, o *templates.NodeOS) {
+	*o = templates.DefaultNodeOS
+	f.Var(nodeOSValue{o}, "node-os", "operating system of the nodes (rke2, k3s, kubeadm): "+strings.Join(templates.AvailableNodeOSes(), ", "))
+}
+
 func newTemplateDeleteCommand(conn *pve.Config) *cobra.Command {
 	var (
 		req            templates.Request
@@ -88,8 +111,8 @@ func newTemplateDeleteCommand(conn *pve.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete {talos|rke2|k3s|kubeadm}",
 		Short: "Delete the template for a distribution, if it exists",
-		Long: `Delete the template for a distribution, if it exists: every build of an Ubuntu template, or with
---build the one build with that tag, as kubehenge template list shows it.
+		Long: `Delete the template for a distribution, if it exists: every build of a node OS template, or
+with --build the one build with that tag, as kubehenge template list shows it.
 
 A build a cluster's machines are cloned from is refused, as in the interface, naming the clusters:
 deleting it would replace their nodes at once, outside their maintenance windows. Which clusters
@@ -100,7 +123,7 @@ build before it; the last build of a template is never deleted while a cluster r
 		ValidArgs: []string{"talos", "rke2", "k3s", "kubeadm"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req.Distribution = templates.Distribution(args[0])
-			t, err := templates.Plan(req)
+			t, err := templates.Plan(&req)
 			if err != nil {
 				return fmt.Errorf("the template: %w", err)
 			}
@@ -126,7 +149,7 @@ build before it; the last build of a template is never deleted while a cluster r
 	}
 	f := cmd.Flags()
 	f.StringVar(&req.TalosVersion, "talos-version", templates.DefaultTalosVersion, "Talos release (talos)")
-	f.StringVar(&req.OS, "os", templates.DefaultOS, "cloud image (rke2, k3s, kubeadm)")
+	nodeOSFlag(f, &req.NodeOS)
 	f.StringVar(&req.KubernetesVersion, "kubernetes-version", "", "Kubernetes release (kubeadm)")
 	f.StringVar(&build, "build", "", "the build to delete, such as build-202610181200; default every build")
 	f.StringVar(&classNamespace, "class-namespace", "kubehenge-system", "namespace of Kubehenge's ClusterClasses in the management cluster")
@@ -281,7 +304,7 @@ func (b *builderFlags) add(cmd *cobra.Command) {
 	f.StringVar(&b.gateway, "build-gateway", "", "gateway for --build-address")
 	f.StringSliceVar(&b.dns, "build-dns", nil, "DNS servers for --build-address")
 	f.BoolVar(&b.builder.KeepOnFailure, "keep-on-failure", false, "leave the VM in place when preparing an image fails")
-	f.StringVar(&b.builder.CPUType, "cpu-type", "", "QEMU CPU type of the template, which its clones keep; host shows them the node's own CPU (default: that of the newest build of the template, else "+templates.DefaultCPUType+")")
+	f.StringVar(&b.builder.CPUType, "cpu-type", "", "QEMU CPU type of the template, which its clones keep; host shows them the node's own CPU (default: that of the newest build of the template, else the least its node OS runs on, "+templates.DefaultCPUType+" for most)")
 	_ = cmd.MarkFlagRequired("node")
 }
 
@@ -317,24 +340,25 @@ func newTemplateCreateCommand(conn *pve.Config) *cobra.Command {
 		Short: "Create the template for a distribution on a Proxmox VE node, unless it exists",
 		Long: `Create the template for a distribution on a Proxmox VE node, unless it exists.
 
-Talos templates are the Talos Image Factory's image with the QEMU guest agent. RKE2 and k3s share one
-template per operating system: Ubuntu's cloud image, updated and with the QEMU guest agent. kubeadm
-templates add containerd, the kubelet and kubeadm at one Kubernetes version. Ubuntu images are checked
-against Ubuntu's signed checksums.
+Talos templates are the Talos Image Factory's image with the QEMU guest agent. RKE2, k3s and kubeadm
+templates are of a node OS (--node-os): its packages alone, with cloud-init, the QEMU guest agent,
+SELinux enforcing with the distribution's policy, and for kubeadm containerd, the kubelet and kubeadm
+at one Kubernetes version. Every image and package is checked against its publisher's signature.
 
-Ubuntu templates are built again for their updates, each build a template of its own tagged with when
-it was made; clusters move to a new build inside their maintenance windows. Without --new-build the
-newest build is kept when there is one.
+Node OS templates are built again for their updates, each build a template of its own tagged with
+when it was made; clusters move to a new build inside their maintenance windows. Without --new-build
+the newest build is kept when there is one.
 
-Images that are not ready to use are booted once to prepare them; that VM needs to reach Ubuntu's and
-Kubernetes' package mirrors, through DHCP or the --build-address network.
+A node OS template is made by a VM that boots the family's cloud image and builds the node from the
+family's packages; that VM needs to reach the package repositories, through DHCP or the
+--build-address network.
 
 The API token is read from KUBEHENGE_PROXMOX_TOKEN.`,
 		Args:      cobra.ExactArgs(1),
 		ValidArgs: []string{"talos", "rke2", "k3s", "kubeadm"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req.Distribution = templates.Distribution(args[0])
-			t, err := templates.Plan(req)
+			t, err := templates.Plan(&req)
 			if err != nil {
 				return fmt.Errorf("the template: %w", err)
 			}
@@ -365,9 +389,9 @@ The API token is read from KUBEHENGE_PROXMOX_TOKEN.`,
 	}
 	f := cmd.Flags()
 	f.StringVar(&req.TalosVersion, "talos-version", templates.DefaultTalosVersion, "Talos release (talos)")
-	f.StringVar(&req.OS, "os", templates.DefaultOS, "cloud image (rke2, k3s, kubeadm): ubuntu-26.04 or ubuntu-24.04")
+	nodeOSFlag(f, &req.NodeOS)
 	f.StringVar(&req.KubernetesVersion, "kubernetes-version", "", "Kubernetes release, such as v1.37.1 (kubeadm)")
-	f.BoolVar(&newBuild, "new-build", false, "build an Ubuntu template again even if a build of it exists")
+	f.BoolVar(&newBuild, "new-build", false, "build a node OS template again even if a build of it exists")
 	flags.add(cmd)
 	cmd.PreRunE = func(_ *cobra.Command, args []string) error {
 		if args[0] == string(templates.Kubeadm) && req.KubernetesVersion == "" {

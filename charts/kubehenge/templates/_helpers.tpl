@@ -1099,46 +1099,6 @@ so the check runs before every start instead.
 {{- end -}}
 
 {{/*
-An AppArmor profile for the runc that RKE2 and k3s bring (.distribution names which), confining
-nothing, as Ubuntu's own profile for its /usr/sbin/runc does. Without one their runc runs
-unconfined, and Ubuntu stacks the container's profile on unconfined when an unprivileged
-unconfined process changes profile (kernel.apparmor_restrict_unprivileged_unconfined). runc changes
-a process that kubectl exec starts only once it runs as the container's user, without the
-capabilities that would exempt it, so the process got the label
-cri-containerd.apparmor.d//&unconfined, which the container's profile lets signal nothing, itself
-included: dig, among others, crashed when it stopped its own threads. From a profile of its own the
-change is no longer one from unconfined.
-The profile must be named runc: containerd's container profile takes signals only from unconfined,
-runc, crun, containerd's own profile and the container itself, so under any other name runc could
-not stop a container. It therefore takes the place of Ubuntu's profile of that name and names
-Ubuntu's runc as well; kubehenge.runcProfileLoad disables Ubuntu's file, since AppArmor loads the
-files at boot in no set order and two profiles of one name would replace each other. It loads this
-one on the first boot; AppArmor loads it on every boot after.
-*/}}
-{{- define "kubehenge.runcProfileFile" -}}
-- path: /etc/apparmor.d/kubehenge-runc
-  owner: root:root
-  permissions: "0644"
-  content: |
-    abi <abi/4.0>,
-    include <tunables/global>
-
-    profile runc /{usr/{bin,sbin}/runc,var/lib/rancher/{{ .distribution }}/data/*/bin/runc} flags=(unconfined) {
-      userns,
-
-      include if exists <local/runc>
-    }
-{{- end -}}
-
-{{/*
-The command loading kubehenge.runcProfileFile before the distribution starts, on a node whose
-kernel runs AppArmor, with Ubuntu's runc profile disabled in its place.
-*/}}
-{{- define "kubehenge.runcProfileLoad" -}}
-[ ! -d /sys/kernel/security/apparmor ] || { mkdir -p /etc/apparmor.d/disable && ln -sf /etc/apparmor.d/runc /etc/apparmor.d/disable/runc && apparmor_parser --replace /etc/apparmor.d/kubehenge-runc; }
-{{- end -}}
-
-{{/*
 The API server's audit policy as a bootstrap file at path, the same for every distribution.
 */}}
 {{- define "kubehenge.auditPolicyFile" -}}
@@ -1251,6 +1211,37 @@ The kubelet settings cis adds, as kubelet flags.
 {{- end -}}
 
 {{/*
+The operating system of an RKE2, k3s or kubeadm cluster's nodes. files/node-oses.json lists the node
+OSes Kubehenge builds templates of; a unit test holds it to the families in pkg/templates.
+*/}}
+{{- define "kubehenge.nodeOSVariable" -}}
+{{- $oses := .Files.Get "files/node-oses.json" | fromJson }}
+- name: nodeOS
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        Operating system of the nodes, a family and one of its releases, as Kubehenge builds its VM
+        templates: the family's own signed packages and only those a node needs, SELinux enforcing
+        with the distribution's policy, and for AlmaLinux and Rocky Linux an image-mode system whose
+        /usr is read-only. Changing it replaces every node with a clone of the new node OS's
+        template, one at a time as in an upgrade; that template has to be built first.
+      required: [family, release]
+      default: {{ toJson $oses.default }}
+      properties:
+        family:
+          type: string
+          enum: {{ toJson $oses.families }}
+        release:
+          type: string
+          minLength: 1
+      x-kubernetes-validations:
+        - rule: "(self.family + '-' + self.release) in {{ toJson $oses.available | replace "\"" "'" }}"
+          message: "a release of the family Kubehenge builds templates of: {{ join ", " $oses.available }}"
+{{- end -}}
+
+{{/*
 Automatic Kubernetes upgrades and node image refreshes, which Kubehenge's controller starts; no patch
 reads it.
 */}}
@@ -1277,8 +1268,8 @@ reads it.
           default: true
           description: >-
             Replace the nodes inside the window with clones of the newest build of their VM
-            template, which carries Ubuntu's updates, once that build is a day old, whatever mode
-            says. Nodes are replaced one at a time, as in an upgrade. Talos nodes take their
+            template, which carries their node OS's updates, once that build is a day old, whatever
+            mode says. Nodes are replaced one at a time, as in an upgrade. Talos nodes take their
             updates by upgrading Talos instead.
         window:
           type: object
@@ -1555,6 +1546,13 @@ content: |
     hostAliases:
       - ip: 127.0.0.1
         hostnames: [kubernetes]
+    # It reads the node's own admin kubeconfig, whose SELinux type no confined container may read,
+    # as the control plane's static pods beside it do. Categories mean nothing to an unconfined
+    # type, and on k3s the runtime's change into new ones is refused under no_new_privs.
+    securityContext:
+      seLinuxOptions:
+        type: spc_t
+        level: s0
     containers:
       - name: kube-vip
         image: {{ .root.Values.kubeVip }}

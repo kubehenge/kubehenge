@@ -54,6 +54,8 @@ const maxClusterName = 40
 var changeableVariables = map[string]bool{
 	"headlamp": true, "monitoring": true, "logs": true, "backups": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, csiVariable: true, ccmVariable: true,
 	certificatesVariable: true, gitopsVariable: true, autoscalerVariable: true,
+	// A new node OS rolls every node onto its template, as a node image refresh does.
+	provisioner.NodeOSVariable: true,
 }
 
 // autoUpgraded is where Kubehenge's controller records the last automatic upgrade.
@@ -82,8 +84,34 @@ type classView struct {
 	Variables    []classVariable    `json:"variables"`
 	Annotations  map[string]string  `json:"annotations,omitempty"`
 	Versions     *regexpDescription `json:"versionFormat"`
-	// NoTemplate says why no cluster of the class can be built yet.
+	// NoTemplate says why no cluster of the class on the default node OS can be built yet.
 	NoTemplate string `json:"noTemplate,omitempty"`
+	// NodeOSes are the operating systems the class's nodes may run, but for Talos's.
+	NodeOSes []nodeOSChoice `json:"nodeOSes,omitempty"`
+}
+
+// nodeOSChoice is a node OS a cluster may run, and why none can be built on it yet.
+type nodeOSChoice struct {
+	templates.NodeOSInfo
+
+	NoTemplate string `json:"noTemplate,omitempty"`
+}
+
+// nodeOSChoices are the node OSes of every family, those not released yet among them, so that the
+// wizard can say why they cannot be chosen.
+func nodeOSChoices(c *clusterv1.ClusterClass, dist string) []nodeOSChoice {
+	if dist == string(templates.Talos) {
+		return nil
+	}
+	var out []nodeOSChoice
+	for _, info := range templates.NodeOSes() {
+		choice := nodeOSChoice{NodeOSInfo: info}
+		if info.Unreleased == "" {
+			choice.NoTemplate = missingTemplate(c, dist, "", info.NodeOS)
+		}
+		out = append(out, choice)
+	}
+	return out
 }
 
 type classVariable struct {
@@ -116,7 +144,7 @@ func (s *Server) classes(w http.ResponseWriter, r *http.Request, u user) {
 func (s *Server) classView(c *clusterv1.ClusterClass, dist string) classView {
 	v := classView{
 		Name: c.Name, Distribution: dist, Variables: []classVariable{}, Versions: &regexpDescription{Pattern: versionFormat[dist].String()},
-		NoTemplate: missingTemplate(c, dist, ""),
+		NoTemplate: missingTemplate(c, dist, "", templates.DefaultNodeOS), NodeOSes: nodeOSChoices(c, dist),
 	}
 	for i := range c.Spec.Variables {
 		cv := &c.Spec.Variables[i]
@@ -200,6 +228,8 @@ type clusterView struct {
 	Mesh []provisioner.MeshPeer `json:"mesh,omitempty"`
 	// NodeImage is which template builds the nodes run and when they next move, but for Talos.
 	NodeImage *nodeImageView `json:"nodeImage,omitempty"`
+	// NodeOS is what the nodes run, but for Talos.
+	NodeOS *templates.NodeOSInfo `json:"nodeOS,omitempty"`
 	// GitOps is the deploy key and the repository host's keys the controller made for the cluster.
 	GitOps *gitOpsView `json:"gitops,omitempty"`
 }
@@ -312,7 +342,24 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 	for _, cv := range c.Spec.Topology.Variables {
 		v.Variables[cv.Name] = json.RawMessage(cv.Value.Raw)
 	}
+	if provisioner.RefreshesNodes(c) {
+		v.NodeOS = nodeOSInfo(c)
+	}
 	return v
+}
+
+// nodeOSInfo describes the node OS a cluster's nodes run, or nil when its variable cannot be read.
+func nodeOSInfo(c *clusterv1.Cluster) *templates.NodeOSInfo {
+	o, err := provisioner.ClusterNodeOS(c)
+	if err != nil {
+		return nil
+	}
+	for _, info := range templates.NodeOSes() {
+		if info.NodeOS == o {
+			return &info
+		}
+	}
+	return &templates.NodeOSInfo{NodeOS: o, Title: o.String()}
 }
 
 func replicas(desired, ready, available, upToDate *int32) replicasView {
@@ -694,11 +741,34 @@ func (s *Server) createClass(w http.ResponseWriter, r *http.Request, u user, req
 	}
 	// A cluster made without its template would wait for ever for its first VM.
 	dist, _ := distribution(req.Class)
-	if missing := missingTemplate(class, dist, req.Version); missing != "" {
+	if dist == string(templates.Talos) {
+		return class, true
+	}
+	nodeOS, err := requestNodeOS(req.Variables[provisioner.NodeOSVariable])
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return nil, false
+	}
+	if missing := missingTemplate(class, dist, req.Version, nodeOS); missing != "" {
 		writeError(w, http.StatusConflict, missing)
 		return nil, false
 	}
 	return class, true
+}
+
+// requestNodeOS is the node OS a request's nodeOS variable names, the default where it names none,
+// once Kubehenge builds templates of it.
+func requestNodeOS(raw json.RawMessage) (templates.NodeOS, error) {
+	o := templates.DefaultNodeOS
+	if raw != nil {
+		if err := json.Unmarshal(raw, &o); err != nil {
+			return o, fmt.Errorf("node OS: %w", err)
+		}
+	}
+	if _, _, err := templates.Available(o); err != nil {
+		return o, fmt.Errorf("node OS: %w", err)
+	}
+	return o, nil
 }
 
 // mayCreate makes the checks Proxmox VE makes of a user creating a VM in the workload pool, on that
@@ -1083,6 +1153,33 @@ func (s *Server) allowVariable(w http.ResponseWriter, r *http.Request, u user, c
 		return checkSharedDNS01(w, u, access.path, access.held, value, old)
 	case autoscalerVariable:
 		return s.mayPlaceAutoscaler(w, r, u, value, old)
+	case provisioner.NodeOSVariable:
+		return sameJSON(old, value) || s.allowNodeOS(w, r, u, c, value)
+	}
+	return true
+}
+
+// allowNodeOS checks that a cluster can move its nodes to the node OS value: a template of it at
+// the cluster's version must be there, or the rollout would wait for ever for its first VM.
+func (s *Server) allowNodeOS(w http.ResponseWriter, r *http.Request, u user, c *clusterv1.Cluster, value json.RawMessage) bool {
+	dist, _ := distribution(c.Spec.Topology.ClassRef.Name)
+	if dist == string(templates.Talos) {
+		writeError(w, http.StatusUnprocessableEntity, "node OS: Talos nodes run Talos")
+		return false
+	}
+	nodeOS, err := requestNodeOS(value)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return false
+	}
+	class := &clusterv1.ClusterClass{}
+	if err := u.kube.Get(r.Context(), client.ObjectKey{Namespace: s.ClassNamespace, Name: c.Spec.Topology.ClassRef.Name}, class); err != nil {
+		s.kubeError(w, err)
+		return false
+	}
+	if missing := missingTemplate(class, dist, c.Spec.Topology.Version, nodeOS); missing != "" {
+		writeError(w, http.StatusConflict, missing)
+		return false
 	}
 	return true
 }
