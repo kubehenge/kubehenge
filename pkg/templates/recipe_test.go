@@ -130,7 +130,7 @@ func checkRecipe(t *testing.T, f Family, r Release, b Bake) {
 	if b.Distribution == Kubeadm {
 		build += " " + b.KubernetesVersion
 	}
-	if want := [][]string{{"sh", "-c", build + " > " + buildLog + " 2>&1"}}; !slices.EqualFunc(c.Runcmd, want, slices.Equal) {
+	if want := [][]string{{"sh", "-c", build + " 2>&1 | " + timestamped + " > " + buildLog}}; !slices.EqualFunc(c.Runcmd, want, slices.Equal) {
 		t.Errorf("runcmd %q, want %q", c.Runcmd, want)
 	}
 	if len(recipe.Checks) != 1 || !slices.Equal(recipe.Checks[0], builtCheck) || recipe.Log != buildLog {

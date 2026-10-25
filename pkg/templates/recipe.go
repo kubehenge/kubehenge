@@ -177,9 +177,13 @@ func bakeUserData(files map[string]string, build []string) (string, error) {
 		fmt.Fprintf(&sb, "  - path: %s\n    permissions: %q\n    encoding: b64\n    content: %s\n",
 			path.Join(buildDir, name), mode, base64.StdEncoding.EncodeToString([]byte(files[name])))
 	}
-	fmt.Fprintf(&sb, "runcmd:\n  - [sh, -c, %q]\n", strings.Join(build, " ")+" > "+buildLog+" 2>&1")
+	fmt.Fprintf(&sb, "runcmd:\n  - [sh, -c, %q]\n", strings.Join(build, " ")+" 2>&1 | "+timestamped+" > "+buildLog)
 	return sb.String(), nil
 }
+
+// timestamped puts the time before each line of its input, the last one too if it has no newline,
+// so that the end of a bake that ran out of time tells a step that hung from one that only crawled.
+const timestamped = `while IFS= read -r line || [ -n "$line" ]; do printf '%s %s\n' "$(date -u +%H:%M:%S)" "$line"; done`
 
 // avcDenied finds no denial of SELinux in the kernel's log or the audit log, whichever has them.
 const avcDenied = `! journalctl -b -k -o cat --no-pager | grep -qF 'avc:  denied' && ! grep -qsF 'avc:  denied' /var/log/audit/audit.log`
