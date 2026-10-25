@@ -38,6 +38,8 @@ mkdir -p "${work}/mgmt" "${work}/plugins"
 cp "${repo}/test/e2e/ci/main.tf" "${repo}/management-cluster/.terraform.lock.hcl" "${work}/mgmt/"
 export TF_PLUGIN_CACHE_DIR="${work}/plugins"
 export TF_VAR_repository="${repo}" TF_VAR_proxmox_api_token="${KUBEHENGE_PROXMOX_TOKEN}"
+TF_VAR_refresh_weekday=$(LC_ALL=C date -u -d '+3 days' +%a)
+export TF_VAR_refresh_weekday
 TF_VAR_proxmox_ca_certificate=$(cat "${KUBEHENGE_PROXMOX_CA}")
 # OpenTofu's Proxmox VE provider trusts only the system's CAs and takes none of its own. Rather than
 # change this machine's trust store, the run's processes get the system's CAs with Proxmox VE's

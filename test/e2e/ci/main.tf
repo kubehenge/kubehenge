@@ -20,6 +20,13 @@ variable "controller_image" {
   type = string
 }
 
+# The weekday of the scheduled template refresh, three days after the run's start: the tests start
+# every run they look at themselves, and one the schedule started beside them would add builds of
+# its own.
+variable "refresh_weekday" {
+  type = string
+}
+
 variable "node_count" {
   type    = number
   default = 1
@@ -104,9 +111,9 @@ module "management_cluster" {
   controller_image = var.controller_image
 
   # No soak, so that the node image test sees a cluster move to a build as soon as it is made. Its
-  # builds take an address apart from the one run.sh's take, in case the schedule comes while those
-  # are under way.
+  # builds take an address apart from the one run.sh's take, so that the two never meet.
   template_refresh = {
+    weekday        = var.refresh_weekday
     soak_hours     = 0
     address        = "172.20.99.51/24"
     gateway        = "172.20.99.1"
