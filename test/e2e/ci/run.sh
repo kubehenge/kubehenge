@@ -35,8 +35,11 @@ from=${KUBEHENGE_E2E_FROM:-v1.36.5}
 to=$(sed -n 's/^ *kubernetes *= *"\(v[^"]*\)".*/\1/p' "${repo}/management-cluster/versions.tf")
 [ -n "${to}" ]
 if [ "${test}" = talos ]; then
-    talos_to=$(sed -n 's/^[[:space:]]*DefaultTalosVersion = "\(v[^"]*\)".*/\1/p' "${repo}/pkg/templates/plan.go")
-    [ -n "${talos_to}" ]
+    talos_to=$(sed -n 's/^\(const \)\{0,1\}[[:space:]]*DefaultTalosVersion = "\(v[^"]*\)".*/\2/p' "${repo}/pkg/templates/plan.go")
+    [ -n "${talos_to}" ] || {
+        echo "pkg/templates/plan.go names no DefaultTalosVersion" >&2
+        exit 1
+    }
     # The newest release before it that the Image Factory serves, the templates' source, which is
     # the patch before it unless it opens a minor version.
     talos_from=${KUBEHENGE_E2E_TALOS_FROM:-$(curl -fsS --retry 5 --retry-all-errors https://factory.talos.dev/versions |
