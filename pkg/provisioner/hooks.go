@@ -172,13 +172,13 @@ func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.Bef
 		return
 	}
 	if isTalos(cluster) {
-		waiting, err := h.talosImageReady(ctx, cluster, class)
+		waiting, retry, err := h.talosImageReady(ctx, cluster, class)
 		if err != nil {
 			resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
 			return
 		}
 		if waiting != "" {
-			resp.RetryAfterSeconds = 10
+			resp.RetryAfterSeconds = retry
 			resp.Message = waiting
 			return
 		}

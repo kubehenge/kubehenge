@@ -147,21 +147,27 @@ func servesOwnCertificate(p *corev1.Pod) bool {
 }
 
 // talosImageReady records the release a new Talos cluster's machines boot first, and says what the
-// cluster waits for while the template pool has no template of it.
-func (h *Hooks) talosImageReady(ctx context.Context, c *clusterv1.Cluster, class *clusterv1.ClusterClass) (string, error) {
+// cluster waits for, and how many seconds until it is asked again: Cluster API's own copy of the
+// cluster to carry the record, and a template of the release in the template pool.
+func (h *Hooks) talosImageReady(ctx context.Context, c *clusterv1.Cluster, class *clusterv1.ClusterClass) (string, int32, error) {
 	image, err := TalosImage(c)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
-	if _, recorded := c.Annotations[TalosImageAnnotation]; !recorded {
+	if _, recorded := c.Annotations[TalosImageAnnotation]; !recorded && h.Client != nil {
 		if err := h.setTalosImage(ctx, c, image); err != nil {
-			return "", err
+			return "", 0, err
 		}
+		// Cluster API patches the Cluster as it creates the topology, from the copy this hook was
+		// given, and that patch can clear every annotation the copy lacks: the record goes too
+		// unless Cluster API has read it back before it creates anything.
+		return "recording the Talos release the cluster's machines boot first", 1, nil
 	}
 	if !slices.Contains(ClassTalosTemplates(class), image) {
-		return fmt.Sprintf("waiting for a Talos %s template in the template pool; build it on the Administration page or with kubehenge template create talos --talos-version %s", image, image), nil
+		const templateWait = 10
+		return fmt.Sprintf("waiting for a Talos %s template in the template pool; build it on the Administration page or with kubehenge template create talos --talos-version %s", image, image), templateWait, nil
 	}
-	return "", nil
+	return "", 0, nil
 }
 
 // newestTalosImage has the machines of an upgrade boot the cluster's talosVersion, once its

@@ -134,14 +134,24 @@ func TestNewTalosClustersWaitForTheirReleasesTemplate(t *testing.T) {
 	t.Parallel()
 	c := talosCluster("web", "v1.14.4")
 	h, kube := talosHooks(t, c)
-	waiting, err := h.talosImageReady(context.Background(), c, talosClass("v1.14.3"))
-	if err != nil || !strings.Contains(waiting, "Talos v1.14.4 template") {
-		t.Errorf("without its template: %q, %v", waiting, err)
+	// Cluster API's patch at creation clears what its copy of the cluster lacks, so the cluster
+	// waits until the copy it is given carries the record.
+	waiting, retry, err := h.talosImageReady(context.Background(), c, talosClass("v1.14.3", "v1.14.4"))
+	if err != nil || !strings.Contains(waiting, "recording") || retry != 1 {
+		t.Errorf("before Cluster API has read the record: %q, %d, %v", waiting, retry, err)
 	}
 	if got := talosImageOf(t, kube, c); got != "v1.14.4" {
 		t.Errorf("the machines boot %q, want v1.14.4", got)
 	}
-	if waiting, err := h.talosImageReady(context.Background(), c, talosClass("v1.14.3", "v1.14.4")); err != nil || waiting != "" {
+	if err = kube.Get(context.Background(), client.ObjectKeyFromObject(c), c); err != nil {
+		t.Fatal(err)
+	}
+	waiting, retry, err = h.talosImageReady(context.Background(), c, talosClass("v1.14.3"))
+	if err != nil || !strings.Contains(waiting, "Talos v1.14.4 template") || retry != 10 {
+		t.Errorf("without its template: %q, %d, %v", waiting, retry, err)
+	}
+	waiting, _, err = h.talosImageReady(context.Background(), c, talosClass("v1.14.3", "v1.14.4"))
+	if err != nil || waiting != "" {
 		t.Errorf("with its template: %q, %v", waiting, err)
 	}
 }
