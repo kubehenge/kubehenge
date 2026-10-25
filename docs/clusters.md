@@ -228,7 +228,7 @@ The nodes of kubeadm, RKE2 and k3s clusters are clones of a VM template of their
 
 The cluster's **Summary** shows the build the nodes run, when they next move and to which build, and the last move. **Options**, **Edit** beside Automatic upgrades, switches it off for the cluster (**Move the nodes to new template builds**), which leaves them on their build until it is switched on again; with it on and Kubernetes upgrades off, the window still applies. Talos nodes take their updates by upgrading Talos instead ([below](#talos-upgrades)).
 
-The administrator switches the weekly build on or off and sets its day and time on the Administration page; it is on by default.
+The administrator switches the weekly build on or off and sets its day and time under **Administration**, **Templates**; it is on by default.
 
 ## Talos upgrades
 
@@ -366,7 +366,7 @@ The ACME server is Let's Encrypt's, or its staging directory with `acme.staging`
 The credential comes from one of three places, the first that applies:
 
 1. **`dns01.existingSecret`**: a Secret you create in the workload cluster's `cert-manager` namespace, with the credential under the key `token` (Akamai's under `clientToken`, `clientSecret` and `accessToken`). Kubehenge never sees it.
-2. **`dns01.sharedCredential: true`**: the DNS-01 credential an administrator stored for every cluster on the Administration page. Taking it needs `Sys.Modify` ([Who may do what](#who-may-do-what)), since it reaches every zone it was made for.
+2. **`dns01.sharedCredential: true`**: the DNS-01 credential an administrator stored for every cluster under **Administration**, **Certificates**. Taking it needs `Sys.Modify` ([Who may do what](#who-may-do-what)), since it reaches every zone it was made for.
 3. **The cluster's own**, typed in when creating the cluster or under **Options**. The interface keeps it in the Secret `<cluster>.dns01` beside the Cluster and never shows it again.
 
 Kubehenge's controller copies the stored credential into the `cert-manager` namespace of the workload cluster (`kubehenge-dns01`) and replaces the copy, or removes it, as soon as the credential is stored again or removed. A cluster without a credential gets a `NoDNS01Credential` event, and its certificates wait.
@@ -527,7 +527,7 @@ An administrator can let cluster creators choose among more namespaces than `clu
 
 Clusters are Kubernetes objects in the management cluster, so they can be created and changed with kubectl, or kept in Git with any GitOps tool.
 
-Get the management cluster's admin kubeconfig from the Administration page (**Repair access**, **Download admin kubeconfig**, with the state passphrase), or with `tofu output -raw kubeconfig` if you applied it with Terraform/OpenTofu. Whoever holds it controls every cluster: Proxmox VE privileges do not apply to kubectl.
+Get the management cluster's admin kubeconfig under **Administration**, **Appliance** (**Repair access**, **Download admin kubeconfig**, with the state passphrase), or with `tofu output -raw kubeconfig` if you applied it with Terraform/OpenTofu. Whoever holds it controls every cluster: Proxmox VE privileges do not apply to kubectl.
 
 ### A Cluster
 

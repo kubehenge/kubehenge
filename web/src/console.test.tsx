@@ -314,6 +314,23 @@ describe("the console", () => {
     expect(screen.queryByRole("dialog", { name: "Go to or run" })).not.toBeInTheDocument();
   });
 
+  it("opens each of Administration's pages from the palette, for those who may set Kubehenge up", async () => {
+    window.history.replaceState(null, "", "/");
+    const routes = serve();
+    routes["GET /api/setup"] = { body: { appliance: true, ready: true, allowed: true } };
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await screen.findByRole("link", { name: "Administration" });
+
+    await user.keyboard("{Control>}k{/Control}");
+    const palette = screen.getByRole("dialog", { name: "Go to or run" });
+    await user.type(within(palette).getByRole("combobox"), "adm temp");
+    expect(within(palette).getAllByRole("option")[0]).toHaveTextContent("Administration: Templates");
+    await user.keyboard("{Enter}");
+    expect(window.location.pathname).toBe("/administration/templates");
+    expect(screen.getByRole("link", { name: "Administration" })).toHaveAttribute("aria-current", "page");
+  });
+
   it("answers single keys outside fields: a cluster's views, the next cluster, the keys", async () => {
     window.history.replaceState(null, "", "/clusters/default/web");
     serve();

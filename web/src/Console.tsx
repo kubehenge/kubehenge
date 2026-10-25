@@ -1,5 +1,6 @@
 import { useState, type JSX, type ReactNode, type RefObject } from "react";
 
+import { adminPath, adminViews } from "./admin-views";
 import { clusterPath, headlampURL, views, type View } from "./ClusterDetail";
 import { FleetRail, ranked, useFleet } from "./fleet";
 import logo from "./logo.svg";
@@ -87,9 +88,17 @@ function pageCommands(canCreate: boolean | undefined, canManage: boolean): Comma
       label: "Administration",
       kind: "Page",
       keys: "A",
-      words: "appliance templates management credentials",
       run: () => navigate("/administration"),
     });
+    for (const v of adminViews) {
+      commands.push({
+        id: `administration/${v.path}`,
+        label: `Administration: ${v.label}`,
+        kind: "Page",
+        words: v.words,
+        run: () => navigate(adminPath(v.path)),
+      });
+    }
   }
   return commands;
 }
@@ -260,7 +269,7 @@ function TopBar({
               Clusters
             </Link>
             {canManage && (
-              <Link to="/administration" current={path === "/administration"}>
+              <Link to="/administration" current={path === "/administration" || path.startsWith("/administration/")}>
                 Administration
               </Link>
             )}

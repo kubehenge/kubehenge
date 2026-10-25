@@ -1,21 +1,10 @@
-import {
-  Suspense,
-  lazy,
-  useCallback,
-  useEffect,
-  useEffectEvent,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type JSX,
-} from "react";
+import { Suspense, useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type JSX } from "react";
 
 import { ApiError, api, setSignedOutHandler, setUpgradedHandler } from "./api";
-import { ClusterDetail, clusterPath, views, type View } from "./ClusterDetail";
-import { ClusterList } from "./ClusterList";
 import { Console } from "./Console";
 import { FleetProvider } from "./fleet";
-import { Link, match, usePath } from "./router";
+import { RoutePage, routeAt } from "./Pages";
+import { usePath } from "./router";
 import { SignIn } from "./SignIn";
 import type { Session, SetupStatus } from "./types";
 import { ErrorBoundary } from "./ui";
@@ -30,25 +19,6 @@ const setupRetry = 5000;
 
 // Answers from this status on are the server's own failures, which pass.
 const firstServerError = 500;
-
-// Pages only some people open, now and then, load when first opened: whoever only looks at clusters
-// never fetches them.
-const RunPage = lazy(async () => {
-  const m = await import("./RunPage");
-  return { default: m.RunPage };
-});
-const Administration = lazy(async () => {
-  const m = await import("./Administration");
-  return { default: m.Administration };
-});
-const Setup = lazy(async () => {
-  const m = await import("./Setup");
-  return { default: m.Setup };
-});
-const CreateCluster = lazy(async () => {
-  const m = await import("./CreateCluster");
-  return { default: m.CreateCluster };
-});
 
 export function App(): JSX.Element {
   // undefined while the session is being looked up, null when signed out.
@@ -276,112 +246,4 @@ function certificateWarning(expiry: string | undefined): { expires: Date; expire
   const expires = new Date(expiry);
   const left = expires.getTime() - Date.now();
   return left < certificateWarningDays * msPerDay ? { expires, expired: left < 0 } : undefined;
-}
-
-type Route =
-  | { page: "loading" | "setup" | "administration" | "forbidden" | "create" | "list" | "none" }
-  | { page: "cluster"; namespace: string; name: string; view: View }
-  | { page: "run"; id: string };
-
-interface At {
-  route: Route;
-  title: string;
-  // A page keeps its state across its own views: only another page starts afresh.
-  key: string;
-}
-
-// routeAt is the page at a path, with its title.
-function routeAt(path: string, needsSetup: boolean | undefined, canManage: boolean): At {
-  if (needsSetup === undefined) {
-    return { route: { page: "loading" }, title: "Kubehenge", key: path };
-  }
-  if (needsSetup) {
-    return { route: { page: "setup" }, title: "Set up", key: path };
-  }
-  if (path === "/administration") {
-    return { route: { page: canManage ? "administration" : "forbidden" }, title: "Administration", key: path };
-  }
-  if (path === "/clusters/new") {
-    return { route: { page: "create" }, title: "Create cluster", key: path };
-  }
-  const detail = match("/clusters/:namespace/:name", path) ?? match("/clusters/:namespace/:name/:view", path);
-  const view = views.find((v) => v.path === (detail?.["view"] ?? ""));
-  const namespace = detail?.["namespace"];
-  const name = detail?.["name"];
-  if (view && namespace !== undefined && name !== undefined) {
-    return {
-      route: { page: "cluster", namespace, name, view: view.path },
-      title: view.path ? `${name}: ${view.label}` : name,
-      key: clusterPath(namespace, name),
-    };
-  }
-  if (path === "/") {
-    return { route: { page: "list" }, title: "Clusters", key: path };
-  }
-  if (path.startsWith("/runs/") && path.length > "/runs/".length) {
-    return { route: { page: "run", id: path.slice("/runs/".length) }, title: "Run", key: path };
-  }
-  return { route: { page: "none" }, title: "No such page", key: path };
-}
-
-function RoutePage({
-  route,
-  canCreate,
-  canTrust,
-  namespaces,
-  headlamp,
-  onSetupChanged,
-}: {
-  route: Route;
-  canCreate: boolean | undefined;
-  canTrust: boolean | undefined;
-  namespaces: string[];
-  headlamp: number | undefined;
-  onSetupChanged: () => void;
-}): JSX.Element {
-  switch (route.page) {
-    case "loading": {
-      return <p className="loading">Loading…</p>;
-    }
-    case "setup": {
-      return <Setup onReady={onSetupChanged} />;
-    }
-    case "administration": {
-      return <Administration onGone={onSetupChanged} />;
-    }
-    case "forbidden": {
-      return (
-        <NoPage text="This page is for those who may set Kubehenge up: the Administrator role on / in Proxmox VE." />
-      );
-    }
-    case "create": {
-      return <CreateCluster canTrust={canTrust} namespaces={namespaces} />;
-    }
-    case "cluster": {
-      return <ClusterDetail namespace={route.namespace} name={route.name} view={route.view} headlamp={headlamp} />;
-    }
-    case "list": {
-      return <ClusterList canCreate={canCreate} />;
-    }
-    case "run": {
-      return <RunPage id={route.id} />;
-    }
-    case "none": {
-      break;
-    }
-  }
-  return <NoPage text="There is no page at this address." />;
-}
-
-function NoPage({ text }: { text: string }): JSX.Element {
-  return (
-    <section className="panel">
-      <div className="toolbar">
-        <h2>No such page</h2>
-      </div>
-      <p className="pad">
-        {text} <Link to="/">Go to the clusters</Link>.
-      </p>
-    </section>
-  );
 }
