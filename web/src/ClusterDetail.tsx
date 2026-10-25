@@ -7,17 +7,16 @@ import { issuesFromCA, saveCA } from "./Certificates";
 import { OptionDialog, Options, type OptionAction } from "./ClusterOptions";
 import { EtcdSnapshotsDialog, EtcdSnapshotsView, etcdSnapshotsOf, etcdSnapshotsRows } from "./EtcdSnapshots";
 import { HealthView } from "./Health";
+import { Machines, Placement } from "./Machines";
 import { nodeOSKey } from "./node-os";
 import { Link, navigate } from "./router";
 import { TalosFailure, TalosRows, runsKubernetes, useTalosReleases } from "./Talos";
-import type { Cluster, Machine, Versions } from "./types";
+import type { Cluster, Versions } from "./types";
 import {
   Dialog,
   ErrorBox,
   Field,
-  Status,
   StatusBadge,
-  age,
   distributionName,
   errorMessage,
   filled,
@@ -26,7 +25,6 @@ import {
   settled,
   useChange,
   usePoll,
-  type Health,
 } from "./ui";
 
 type Action = "scale" | "upgrade" | "delete" | "backups" | "autoscaler" | "etcdSnapshots" | OptionAction;
@@ -275,6 +273,7 @@ export function ClusterDetail({
       </nav>
       <div className="object">
         <div className="object-view">
+          {view === "" && <Placement cluster={c} />}
           {view === "" && (
             <Summary
               cluster={c}
@@ -441,106 +440,6 @@ function Summary({
       {filled(c.talos?.failed) && (
         <TalosFailure cluster={c} failed={c.talos.failed} can={can} why={why} onRetried={onChanged} />
       )}
-    </div>
-  );
-}
-
-// machineStatus says how far a machine is, as the cluster list says it of clusters.
-function machineStatus(m: Machine): { state: Health; text: string } {
-  if (m.ready) {
-    return { state: "ok", text: "Ready" };
-  }
-  if (m.phase === "Failed") {
-    return { state: "error", text: "Failed" };
-  }
-  if (m.phase === "Deleting") {
-    return { state: "deleting", text: "Deleting" };
-  }
-  return { state: "progress", text: "Not ready" };
-}
-
-/**
- * crowding says which Proxmox VE node runs more than one of the cluster's control-plane VMs, and
- * what losing it costs, or undefined when none does.
- */
-export function crowding(machines: Machine[]): string | undefined {
-  const controlPlane = machines.filter((m) => m.role === "control-plane");
-  const perNode = new Map<string, number>();
-  for (const m of controlPlane) {
-    if (filled(m.proxmoxNode)) {
-      perNode.set(m.proxmoxNode, (perNode.get(m.proxmoxNode) ?? 0) + 1);
-    }
-  }
-  const [node, count] = [...perNode.entries()].toSorted((a, b) => b[1] - a[1])[0] ?? ["", 0];
-  if (count < 2) {
-    return undefined;
-  }
-  // etcd needs a majority of the control-plane nodes.
-  const cost =
-    count * 2 > controlPlane.length
-      ? "losing that node stops the control plane"
-      : `losing that node takes ${count} of them`;
-  return `${node} runs ${count} of the ${controlPlane.length} control-plane VMs, so ${cost}. A new control-plane VM goes to the allowed node with the fewest of them; Proxmox VE can migrate one there now.`;
-}
-
-function Machines({ cluster: c }: { cluster: Cluster }) {
-  const machines = c.machines ?? [];
-  const crowded = crowding(machines);
-  const talos = c.distribution === "talos";
-  const columns = [
-    "Name",
-    "Role",
-    "Proxmox VE node",
-    "Status",
-    "Phase",
-    // Beside the Talos release, the version is named for what it is.
-    talos ? "Kubernetes" : "Version",
-    ...(talos ? ["Talos"] : []),
-    "Addresses",
-    "Age",
-  ];
-  return (
-    <div className="box scroll">
-      {crowded !== undefined && <p className="warning">{crowded}</p>}
-      <table className="grid">
-        <thead>
-          <tr>
-            {columns.map((h) => (
-              <th key={h}>{h}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {machines.length === 0 && (
-            <tr>
-              <td colSpan={columns.length} className="muted">
-                No machines yet.
-              </td>
-            </tr>
-          )}
-          {machines.map((m) => {
-            const s = machineStatus(m);
-            return (
-              <tr key={m.name}>
-                <td>
-                  {m.node ?? m.name}
-                  {filled(m.waiting) && <div className="hint message">{m.waiting}</div>}
-                </td>
-                <td>{m.role === "control-plane" ? "Control plane" : "Worker"}</td>
-                <td>{m.proxmoxNode ?? ""}</td>
-                <td>
-                  <Status state={s.state} text={s.text} />
-                </td>
-                <td>{m.phase}</td>
-                <td>{m.version ?? ""}</td>
-                {talos && <td>{m.talos ?? ""}</td>}
-                <td>{(m.addresses ?? []).join(", ")}</td>
-                <td title={new Date(m.created).toLocaleString()}>{age(m.created)}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
     </div>
   );
 }

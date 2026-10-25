@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { crowding } from "./ClusterDetail";
+import { crowding } from "./Machines";
 import type { Machine } from "./types";
 
 const unplaced = (name: string, role: Machine["role"] = "control-plane"): Machine => ({

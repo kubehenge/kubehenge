@@ -827,6 +827,103 @@ button.go {
   margin-top: 6px;
 }
 
+/* Where a cluster's machines run: a tile per Proxmox VE node. */
+
+.hosts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.host {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+  padding: 8px 10px 10px;
+  min-width: 0;
+}
+
+.host-empty {
+  border-style: dashed;
+  background: none;
+}
+
+.host-offline {
+  border-color: var(--error);
+}
+
+.host-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.host-name {
+  font-family: var(--mono);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-empty .host-name,
+.host-count {
+  color: var(--dim);
+}
+
+.host-count {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.host-offline .host-count {
+  color: var(--error);
+}
+
+.host-machines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.host-machine {
+  display: grid;
+  grid-template-columns: 12px 1fr auto;
+  align-items: center;
+  column-gap: 8px;
+  padding: 3px 4px;
+  border-radius: 4px;
+  color: var(--text);
+}
+
+.host-machine:hover {
+  background: var(--hover);
+  text-decoration: none;
+}
+
+.host-machine-name {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-machine-role {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
 /* Grids */
 
 .grid {
@@ -878,9 +975,15 @@ button.go {
   white-space: nowrap;
 }
 
+/* A counted column is as wide as its figures; its heading wraps to fit them. */
+.grid thead th.number {
+  white-space: normal;
+  width: 1%;
+}
+
 /* A state's reason runs on beside it rather than squeezing into a column of a few words. */
 .grid td.state {
-  min-width: 200px;
+  min-width: 180px;
 }
 
 .grid td.id .muted {
