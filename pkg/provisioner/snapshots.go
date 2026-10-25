@@ -168,9 +168,9 @@ func snapshotCharts(charts *Charts, distribution templates.Distribution) []chart
 					toleration(controlPlaneTaint.Key, controlPlaneTaint.Effect),
 					toleration("node-role.kubernetes.io/etcd", corev1.TaintEffectNoExecute),
 				},
-				"resources":          map[string]any{requestsKey: map[string]any{cpuKey: cpu10m, memoryKey: "32Mi"}},
-				"podSecurityContext": map[string]any{nonRootKey: true, seccompProfileKey: runtimeDefault()},
-				securityKey:          restrictedContainer(map[string]any{readOnlyRootKey: true}),
+				"resources":    map[string]any{requestsKey: map[string]any{cpuKey: cpu10m, memoryKey: "32Mi"}},
+				podSecurityKey: map[string]any{nonRootKey: true, seccompProfileKey: runtimeDefault()},
+				securityKey:    restrictedContainer(map[string]any{readOnlyRootKey: true}),
 			},
 		}})
 	}

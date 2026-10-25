@@ -334,7 +334,7 @@ func veleroValues(charts *Charts, b *Backups, t *BackupTarget, cluster *clusterv
 			"volumeMounts": []any{map[string]any{"mountPath": "/target", "name": "plugins"}},
 			securityKey:    restrictedContainer(nil),
 		}},
-		"podSecurityContext": map[string]any{
+		podSecurityKey: map[string]any{
 			nonRootKey: true, "runAsUser": veleroUser, "runAsGroup": veleroGroup, "fsGroup": veleroGroup,
 			seccompProfileKey: runtimeDefault(),
 		},
@@ -351,6 +351,8 @@ func veleroValues(charts *Charts, b *Backups, t *BackupTarget, cluster *clusterv
 		"nodeAgent": map[string]any{
 			"resources":    map[string]any{requestsKey: map[string]any{cpuKey: "20m", memoryKey: memory64Mi}},
 			tolerationsKey: tolerations,
+			// It reads every pod's volumes from the node, each with SELinux categories of its own.
+			podSecurityKey: map[string]any{seLinuxKey: hostSELinux()},
 		},
 		"credentials": map[string]any{"useSecret": true, "existingSecret": cmp.Or(b.ExistingSecret, veleroCredentialsSecret)},
 		"configuration": map[string]any{

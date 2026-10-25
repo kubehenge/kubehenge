@@ -110,6 +110,9 @@ func TestMonitoringVerifiesEveryScrape(t *testing.T) {
 				lookup[string](t, exporter, "prometheus", "monitor", "scheme") != "https" {
 				t.Errorf("node-exporter serves without client certificates: %v", exporter)
 			}
+			if lookup[string](t, exporter, "securityContext", "seLinuxOptions", "type") != "spc_t" {
+				t.Errorf("node-exporter cannot read the host on an SELinux node: %v", exporter)
+			}
 			if !strings.HasSuffix(lookup[string](t, exporter, "kubeRBACProxy", "image", "sha"), testCharts.KubeRBACProxy.Digest) {
 				t.Error("node-exporter's proxy is not pinned by digest")
 			}

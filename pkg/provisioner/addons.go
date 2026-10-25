@@ -40,6 +40,7 @@ const (
 	apiVersionKey = "apiVersion"
 	// Keys of the charts' values and of pod specs written as maps.
 	seccompProfileKey = "seccompProfile"
+	seLinuxKey        = "seLinuxOptions"
 	ingressKey        = "ingress"
 	valueKey          = "value"
 	createKey         = "create"
@@ -51,6 +52,7 @@ const (
 	controllerKey     = "controller"
 	annotationsKey    = "annotations"
 	securityKey       = "securityContext"
+	podSecurityKey    = "podSecurityContext"
 	nonRootKey        = "runAsNonRoot"
 	readOnlyRootKey   = "readOnlyRootFilesystem"
 	configKey         = "config"
@@ -79,6 +81,13 @@ func restrictedContainer(with map[string]any) map[string]any {
 // runtimeDefault is the seccomp profile Pod Security's restricted level asks for.
 func runtimeDefault() map[string]any {
 	return map[string]any{"type": string(corev1.SeccompProfileTypeRuntimeDefault)}
+}
+
+// hostSELinux is the SELinux context of a pod that reads or writes the host's own directories,
+// which SELinux keeps every confined container from, privileged or not: unconfined, and at s0, as
+// categories mean nothing to an unconfined type.
+func hostSELinux() *corev1.SELinuxOptions {
+	return &corev1.SELinuxOptions{Type: "spc_t", Level: "s0"}
 }
 
 // restrictedPod is a pod's security context at Pod Security's restricted level, running as the

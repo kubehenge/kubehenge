@@ -169,6 +169,9 @@ func TestVeleroValues(t *testing.T) {
 	if !lookup[bool](t, v, "podSecurityContext", "runAsNonRoot") || lookup[bool](t, v, "containerSecurityContext", "allowPrivilegeEscalation") {
 		t.Errorf("the server runs with more than it needs: %v", v["podSecurityContext"])
 	}
+	if lookup[string](t, v, "nodeAgent", "podSecurityContext", "seLinuxOptions", "type") != "spc_t" {
+		t.Errorf("the node agent cannot read the pods' volumes on an SELinux node: %v", v["nodeAgent"])
+	}
 	helper := lookup[map[string]any](t, v, "configMaps", "restore-helper", "data")
 	if !strings.Contains(fmt.Sprint(helper["image"]), "@sha256:") || !strings.Contains(fmt.Sprint(helper["secCtx"]), "runAsNonRoot: true") {
 		t.Errorf("restore helper %v", helper)
