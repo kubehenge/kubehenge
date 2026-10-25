@@ -33,6 +33,10 @@ const firstServerError = 500;
 
 // Pages only some people open, now and then, load when first opened: whoever only looks at clusters
 // never fetches them.
+const RunPage = lazy(async () => {
+  const m = await import("./RunPage");
+  return { default: m.RunPage };
+});
 const Administration = lazy(async () => {
   const m = await import("./Administration");
   return { default: m.Administration };
@@ -276,7 +280,8 @@ function certificateWarning(expiry: string | undefined): { expires: Date; expire
 
 type Route =
   | { page: "loading" | "setup" | "administration" | "forbidden" | "create" | "list" | "none" }
-  | { page: "cluster"; namespace: string; name: string; view: View };
+  | { page: "cluster"; namespace: string; name: string; view: View }
+  | { page: "run"; id: string };
 
 interface At {
   route: Route;
@@ -312,6 +317,9 @@ function routeAt(path: string, needsSetup: boolean | undefined, canManage: boole
   }
   if (path === "/") {
     return { route: { page: "list" }, title: "Clusters", key: path };
+  }
+  if (path.startsWith("/runs/") && path.length > "/runs/".length) {
+    return { route: { page: "run", id: path.slice("/runs/".length) }, title: "Run", key: path };
   }
   return { route: { page: "none" }, title: "No such page", key: path };
 }
@@ -354,6 +362,9 @@ function RoutePage({
     }
     case "list": {
       return <ClusterList canCreate={canCreate} />;
+    }
+    case "run": {
+      return <RunPage id={route.id} />;
     }
     case "none": {
       break;

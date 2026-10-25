@@ -1107,6 +1107,14 @@ func (s *Server) changeCluster(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	c, access := ch.c, ch.access
+	changes, err := plannedOf(r.Context(), u, ch)
+	if err != nil {
+		s.kubeError(w, err)
+		return
+	}
+	if len(changes) > 0 {
+		recordChange(c, u.ticket.Username, s.now(), changes)
+	}
 	if err := u.kube.Update(r.Context(), c); err != nil {
 		s.kubeError(w, err)
 		return

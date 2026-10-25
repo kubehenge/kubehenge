@@ -98,6 +98,9 @@ const settingLabels: Record<string, string[]> = {
 
 const labelsOf = (setting: string): string[] => settingLabels[setting] ?? [setting];
 
+/** settingLabel is what the page calls a setting. */
+export const settingLabel = (setting: string): string => labelsOf(setting)[0] ?? setting;
+
 const effects: Record<Effect, string> = {
   none: "Replaces no machine",
   scales: "Adds or removes machines",

@@ -296,7 +296,8 @@ export interface RunInfo {
     | "etcd-snapshot"
     | "etcd-restore"
     | "backup"
-    | "restore";
+    | "restore"
+    | "change";
   namespace?: string;
   cluster?: string;
   what: string;
@@ -307,6 +308,17 @@ export interface RunInfo {
   finished?: string;
   /** The first thing that went wrong. */
   error?: string;
+  /** The steps the run takes, where it reports them. */
+  steps?: RunStep[];
+  /** What a change of a cluster sets. */
+  settings?: string[];
+}
+
+/** A step of a run, and how far it has come. */
+export interface RunStep {
+  name: string;
+  state: "done" | "running" | "waiting" | "failed";
+  detail?: string;
 }
 
 export interface ClusterHealth {

@@ -3,6 +3,7 @@ import type { JSX } from "react";
 import { clusterPath, type View } from "./ClusterDetail";
 import { ranked, useFleet, type Standing } from "./fleet";
 import { Link } from "./router";
+import { settingLabel } from "./Staging";
 import type { RunInfo } from "./types";
 import { age } from "./ui";
 
@@ -35,6 +36,37 @@ const runViews: Partial<Record<RunInfo["kind"], View>> = {
   restore: "backups",
 };
 
+// Where the page of each kind of run sends its reader for more.
+const places: Partial<Record<RunInfo["kind"], string>> = {
+  "etcd-snapshot": "Open the backups",
+  "etcd-restore": "Open the backups",
+  backup: "Open the backups",
+  restore: "Open the backups",
+  change: "Open the cluster",
+};
+
+/** runPath is the address of a run's page. */
+export const runPath = (id: string): string => `/runs/${id}`;
+
+/** runTitle names a run: a change by the settings it sets. */
+export function runTitle(r: RunInfo): string {
+  if (r.kind !== "change" || (r.settings ?? []).length === 0) {
+    return r.what;
+  }
+  return `Change ${(r.settings ?? []).map((x) => settingLabel(x)).join(", ")}`;
+}
+
+/** runView is where a run's work shows in the rest of the interface, and how a link there reads. */
+export function runView(r: RunInfo): { to: string; place: string } {
+  if (r.cluster === undefined) {
+    return { to: "/administration", place: "Open Administration" };
+  }
+  return {
+    to: clusterPath(r.namespace ?? "", r.cluster, runViews[r.kind] ?? ""),
+    place: places[r.kind] ?? "Open the cluster",
+  };
+}
+
 // The appliance's runs carry no cluster; each names what it works on.
 const applianceTitles: Partial<Record<RunInfo["kind"], string>> = {
   "management-cluster": "Management cluster",
@@ -44,11 +76,12 @@ const applianceTitles: Partial<Record<RunInfo["kind"], string>> = {
 };
 
 function described(r: RunInfo): string {
+  const what = runTitle(r);
   if (r.state === "running") {
-    return r.phase === undefined ? r.what : `${r.what}: ${r.phase}`;
+    return r.phase === undefined ? what : `${what}: ${r.phase}`;
   }
   const when = r.finished === undefined ? "" : `, ${age(r.finished)} ago`;
-  return `${r.what}${r.state === "failed" ? " failed" : ""}${when}`;
+  return `${what}${r.state === "failed" ? " failed" : ""}${when}`;
 }
 
 const groupOf: Record<RunInfo["state"], RunGroup> = { running: "running", failed: "failed", succeeded: "done" };
@@ -67,7 +100,7 @@ function fromServer(r: RunInfo): Run {
     title: onCluster ? shownName(ns, cluster) : (applianceTitles[r.kind] ?? "Appliance"),
     what: described(r),
     state: stateOf[r.state],
-    to: onCluster ? clusterPath(ns, cluster, runViews[r.kind] ?? "") : "/administration",
+    to: runPath(r.id),
     ...(r.error !== undefined && { error: r.error }),
   };
 }
@@ -78,8 +111,13 @@ function fromServer(r: RunInfo): Run {
  */
 export function useRuns(): Run[] {
   const fleet = useFleet();
+  const runs = fleet?.runs ?? [];
+  // A change made here is followed by its own run; the fleet's standing says the same in less.
+  const followed = new Set(
+    runs.filter((r) => r.kind === "change" && r.state === "running").map((r) => `${r.namespace}/${r.cluster}`),
+  );
   const changes: Run[] = ranked(fleet?.clusters ?? [], fleet?.health)
-    .filter(({ standing }) => standing.group === "running")
+    .filter(({ cluster: c, standing }) => standing.group === "running" && !followed.has(`${c.namespace}/${c.name}`))
     .map(({ cluster: c, standing: s }) => ({
       key: `${c.namespace}/${c.name}`,
       group: "running",
@@ -88,7 +126,7 @@ export function useRuns(): Run[] {
       state: s.state,
       to: clusterPath(c.namespace, c.name, s.view),
     }));
-  return [...changes, ...(fleet?.runs ?? []).map((r) => fromServer(r))];
+  return [...changes, ...runs.map((r) => fromServer(r))];
 }
 
 /** RunsPanel follows the work under way beside whatever page is open, and folds away. */

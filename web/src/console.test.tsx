@@ -200,16 +200,74 @@ describe("the console", () => {
     render(<App />);
     const runs = await screen.findByRole("complementary", { name: "Runs" });
     const running = await within(runs).findByRole("link", { name: /^web Scheduled backup/u });
-    expect(running).toHaveAttribute("href", "/clusters/default/web/backups");
+    expect(running).toHaveAttribute("href", "/runs/backup/default/web/daily-1");
     expect(running).toHaveTextContent("Scheduled backup: 120 of 300 items");
     const failed = within(within(runs).getByRole("region", { name: "Failed" })).getByRole("link");
-    expect(failed).toHaveAttribute("href", "/administration");
+    expect(failed).toHaveAttribute("href", "/runs/appliance-upgrade");
     expect(failed).toHaveTextContent("Upgrade the appliance to 0.3.1 failed, 5m ago");
     expect(failed).toHaveTextContent("the release's checksum does not match");
     expect(within(within(runs).getByRole("region", { name: "Done" })).getByRole("link")).toHaveTextContent(
       "dbTake an etcd snapshot, 12m ago",
     );
     expect(screen.getByRole("button", { name: "Running 3" })).toBeInTheDocument();
+
+    const user = userEvent.setup({ delay: null });
+    await user.click(failed);
+    await expect(
+      screen.findByRole("heading", { name: /^Upgrade the appliance to 0\.3\.1/u }),
+    ).resolves.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("First errorthe release's checksum does not match");
+    expect(screen.getByRole("link", { name: "Open Administration" })).toHaveAttribute("href", "/administration");
+  });
+
+  it("follows a change made here by its steps, in place of the cluster's standing", async () => {
+    window.history.replaceState(null, "", "/");
+    const routes = serve();
+    routes["GET /api/runs"] = {
+      body: [
+        {
+          id: "change/default/db",
+          kind: "change",
+          namespace: "default",
+          cluster: "db",
+          what: "Change the cluster",
+          state: "running",
+          by: "dev@pve",
+          started: minutesAgo(6),
+          phase: "Replace the control-plane machines: 1 of 3",
+          settings: ["version", "podSecurity"],
+          steps: [
+            { name: "Accepted by the API server", state: "done" },
+            { name: "Replace the control-plane machines", state: "running", detail: "1 of 3" },
+            { name: "Settle", state: "waiting" },
+          ],
+        },
+      ],
+    };
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const runs = within(await screen.findByRole("complementary", { name: "Runs" }));
+    const change = await runs.findByRole("link", { name: /^db Change/u });
+    expect(change).toHaveTextContent(
+      "Change Kubernetes version, Pod security: Replace the control-plane machines: 1 of 3",
+    );
+    expect(runs.queryByRole("link", { name: /Upgrading to/u })).not.toBeInTheDocument();
+
+    await user.click(change);
+    await expect(
+      screen.findByRole("heading", { name: /^Change Kubernetes version, Pod security/u }),
+    ).resolves.toBeInTheDocument();
+    expect(
+      within(screen.getByRole("list", { name: "Steps" }))
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toStrictEqual([
+      "Accepted by the API serverDone",
+      "Replace the control-plane machinesUnder way1 of 3",
+      "SettleWaiting",
+    ]);
+    expect(screen.getByText("by dev@pve")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open the cluster" })).toHaveAttribute("href", "/clusters/default/db");
   });
 
   it("moves a cluster its health page finds trouble in to those needing you, linked to that page", async () => {

@@ -792,6 +792,74 @@ button.go {
   font-weight: 600;
 }
 
+/* A run's first error stays above its steps, where it is read before anything else. */
+.pinned-error {
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--error) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--error) 50%, transparent);
+  border-left: 4px solid var(--error);
+  border-radius: 4px;
+}
+
+.pinned-error strong {
+  color: var(--error);
+}
+
+.pinned-error p {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.steps {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.step {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.step:last-child {
+  border-bottom: 0;
+}
+
+.step-waiting {
+  color: var(--dim);
+}
+
+.step-running .step-name {
+  font-weight: 600;
+}
+
+.step-state {
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.step-detail {
+  grid-column: 2 / -1;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.run-log h3 {
+  margin: 0 0 8px;
+}
+
 /* A plan sets each setting's value as it is beside the one it would be, so it takes more room. */
 .dialog:has(.grid.plan) {
   width: min(920px, 96vw);

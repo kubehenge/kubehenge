@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"context"
+	"fmt"
 	"maps"
 	"net/http"
 	"regexp"
@@ -47,16 +49,22 @@ func (s *Server) planCluster(w http.ResponseWriter, r *http.Request, u user) {
 		s.kubeError(w, err)
 		return
 	}
-	class := &clusterv1.ClusterClass{}
-	ref := ch.before.Spec.Topology.ClassRef
-	if err := u.kube.Get(r.Context(), client.ObjectKey{Namespace: classNamespace(ref.Namespace, ch.before.Namespace), Name: ref.Name}, class); err != nil {
+	changes, err := plannedOf(r.Context(), u, ch)
+	if err != nil {
 		s.kubeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, planView{
-		Cluster: s.view(ch.c, ch.access.path, ch.access.held, u.namespaces),
-		Changes: planned(ch, variableReach(class)),
-	})
+	writeJSON(w, http.StatusOK, planView{Cluster: s.view(ch.c, ch.access.path, ch.access.held, u.namespaces), Changes: changes})
+}
+
+// plannedOf is what each setting of a change does to the cluster's machines, by its class.
+func plannedOf(ctx context.Context, u user, ch *changed) ([]plannedChange, error) {
+	class := &clusterv1.ClusterClass{}
+	ref := ch.before.Spec.Topology.ClassRef
+	if err := u.kube.Get(ctx, client.ObjectKey{Namespace: classNamespace(ref.Namespace, ch.before.Namespace), Name: ref.Name}, class); err != nil {
+		return nil, fmt.Errorf("reading the cluster's class %s: %w", ref.Name, err)
+	}
+	return planned(ch, variableReach(class)), nil
 }
 
 // classNamespace is where a cluster's class lives: the reference's namespace, else the cluster's.

@@ -86,6 +86,11 @@ func TestRunsListWhatRunsAndWhatFailedLately(t *testing.T) {
 	if r := admin[0]; r.Phase != "Fetching" || r.By != "dev@pve" || r.Cluster != "one" || !r.Started.Equal(now.Add(-2*time.Minute)) {
 		t.Errorf("restore %+v", r)
 	}
+	if got := stepStates(&admin[0]); !slices.Equal(got, []string{
+		"Preparing done ", "Fetching running ", "Stopping waiting ", "Restoring waiting ", "Starting waiting ", "Replacing waiting ",
+	}) {
+		t.Errorf("restore steps %q", got)
+	}
 	if r := admin[1]; r.Error != failed.Error || r.What != "Upgrade the appliance to 0.1.1" {
 		t.Errorf("upgrade %+v", r)
 	}
@@ -123,5 +128,14 @@ func TestVeleroStates(t *testing.T) {
 		if state, problem := veleroState(c.phase, c.failure, c.errs); state != c.state || problem != c.problem {
 			t.Errorf("%s: %q %q, want %q %q", c.phase, state, problem, c.state, c.problem)
 		}
+	}
+}
+
+func TestAFailedRestoreShowsThePhaseItFailedIn(t *testing.T) {
+	t.Parallel()
+	v := runView{Steps: restoreSteps(provisioner.RestoreRestoring, runFailed)}
+	want := []string{"Preparing done ", "Fetching done ", "Stopping done ", "Restoring failed ", "Starting waiting ", "Replacing waiting "}
+	if got := stepStates(&v); !slices.Equal(got, want) {
+		t.Errorf("steps = %q, want %q", got, want)
 	}
 }

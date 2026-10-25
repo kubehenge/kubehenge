@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/appliance"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
@@ -62,6 +63,10 @@ type runView struct {
 	Finished *time.Time `json:"finished,omitempty"`
 	// Error is the first thing that went wrong, as the run reports it.
 	Error string `json:"error,omitempty"`
+	// Steps are those a run takes, where it reports them.
+	Steps []runStep `json:"steps,omitempty"`
+	// Settings are what a change of a cluster sets.
+	Settings []string `json:"settings,omitempty"`
 }
 
 // runs answers with the work running or lately finished that the user may see: the appliance's
@@ -94,13 +99,20 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request, u user) {
 	found := make([][]runView, len(shown))
 	inParallel(len(shown), func(i int) {
 		c := shown[i]
+		if rec, ok := recentChange(c, now); ok {
+			var machines clusterv1.MachineList
+			if err := u.kube.List(ctx, &machines, client.InNamespace(c.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: c.Name}); err == nil {
+				found[i] = append(found[i], changeRun(c, machines.Items, rec))
+			}
+		}
 		if c.Namespace != s.Namespace || !backupsOf(c).Enabled {
 			return
 		}
 		key := c.Namespace + "/" + c.Name + "/" + string(c.UID)
-		found[i], _ = s.veleroRuns.get(ctx, key, runsFresh, s.now, func(ctx context.Context) []runView {
+		backups, _ := s.veleroRuns.get(ctx, key, runsFresh, s.now, func(ctx context.Context) []runView {
 			return s.readVeleroRuns(ctx, u, c)
 		})
+		found[i] = append(found[i], backups...)
 	})
 	for _, f := range found {
 		list = append(list, f...)
@@ -248,6 +260,7 @@ func etcdRuns(c *clusterv1.Cluster) []runView {
 			provisioner.RestoreStarting, provisioner.RestoreReplacing:
 			v.State, v.Phase = runRunning, string(st.Phase)
 		}
+		v.Steps = restoreSteps(cmp.Or(st.FailedIn, st.Phase), v.State)
 		list = append(list, v)
 	}
 	snapshot := base
@@ -268,6 +281,31 @@ func etcdRuns(c *clusterv1.Cluster) []runView {
 		snapshot.State, snapshot.Finished = runSucceeded, &last.Time
 	}
 	return append(list, snapshot)
+}
+
+// restoreOrder are the phases of an etcd restore, in the order it takes them.
+var restoreOrder = []provisioner.RestorePhase{
+	provisioner.RestorePreparing, provisioner.RestoreFetching, provisioner.RestoreStopping,
+	provisioner.RestoreRestoring, provisioner.RestoreStarting, provisioner.RestoreReplacing,
+}
+
+// restoreSteps are an etcd restore's phases as steps: those before the one it is in done, and that
+// one under way, or failed.
+func restoreSteps(at provisioner.RestorePhase, state string) []runStep {
+	current := slices.Index(restoreOrder, at)
+	steps := make([]runStep, len(restoreOrder))
+	for i, p := range restoreOrder {
+		steps[i] = runStep{Name: string(p), State: stepWaiting}
+		switch {
+		case state == runSucceeded, i < current:
+			steps[i].State = stepDone
+		case i == current && state == runRunning:
+			steps[i].State = stepRunning
+		case i == current && state == runFailed:
+			steps[i].State = stepFailed
+		}
+	}
+	return steps
 }
 
 // readVeleroRuns are the backups and restores Velero keeps in a cluster; one it cannot read has none.
