@@ -578,7 +578,7 @@ agnhost_deployment() {
             spec: {hostname: $name,
                 securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: "RuntimeDefault"}},
                 containers: [{name: $name, image: $image, args: $args,
-                    securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}}]}}}}' --args "$@" |
+                    securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}}]}}}}' --args -- "$@" |
         wl -n "${agnhost_namespace}" apply -f -
 }
 wl create namespace e2e-policy
