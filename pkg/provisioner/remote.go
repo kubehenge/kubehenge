@@ -16,6 +16,7 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -66,6 +67,31 @@ type remote struct {
 	config *rest.Config
 	client client.Client
 	until  time.Time
+}
+
+// ClusterAPIs tells whether workload clusters' API servers answer.
+type ClusterAPIs interface {
+	// Ready fails until the cluster's API server answers on the cluster's address that it is ready.
+	Ready(ctx context.Context, cluster *clusterv1.Cluster) error
+}
+
+// Ready implements ClusterAPIs.
+func (rs *Remotes) Ready(ctx context.Context, cluster *clusterv1.Cluster) error {
+	r, found, err := rs.get(ctx, cluster)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("cluster %s/%s has no kubeconfig yet", cluster.Namespace, cluster.Name)
+	}
+	cs, err := kubernetes.NewForConfig(r.config)
+	if err != nil {
+		return fmt.Errorf("reaching cluster %s/%s: %w", cluster.Namespace, cluster.Name, err)
+	}
+	if _, err := cs.CoreV1().RESTClient().Get().AbsPath("/readyz").DoRaw(ctx); err != nil {
+		return fmt.Errorf("the API server of cluster %s/%s: %w", cluster.Namespace, cluster.Name, err)
+	}
+	return nil
 }
 
 // get returns the cluster's client and its configuration, and false until Cluster API has made its

@@ -266,7 +266,7 @@ func traefikCertificateValues(c *Certificates) map[string]any {
 		"tlsStore": map[string]any{defaultKey: map[string]any{"defaultCertificate": map[string]any{"secretName": ingressTLSSecret}}},
 		"gateway": map[string]any{"listeners": map[string]any{"websecure": map[string]any{
 			"port":            websecure,
-			"protocol":        "HTTPS",
+			protocolKey:       "HTTPS",
 			"mode":            "Terminate",
 			"certificateRefs": []any{map[string]any{"kind": secretKind, "name": ingressTLSSecret}},
 			"namespacePolicy": map[string]any{"from": "All"},

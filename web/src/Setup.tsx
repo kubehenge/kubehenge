@@ -1192,7 +1192,8 @@ function EtcdRestoreChoice({ form, set, onAsk }: Omit<FieldsProps, "shown"> & { 
       <p className="muted" id={hint}>
         Restoring a cluster&apos;s etcd from a snapshot stops the control plane on its VMs and restores on one of them.
         Switched on, Kubehenge does that itself when someone with Sys.Modify on the cluster&apos;s pool asks; switched
-        off, the interface lists the commands to run on the VMs by hand. {etcdRestoreGrant}
+        off, the interface lists the commands to run on the VMs by hand. Talos clusters are restored through their
+        nodes&apos; Talos API either way. {etcdRestoreGrant}
       </p>
     </fieldset>
   );
@@ -1337,9 +1338,10 @@ function RefreshChoice({ form, set, shown }: FieldsProps): JSX.Element {
             Let those who may create clusters have a missing template built
           </label>
           <p className="muted" id={creatorsHint}>
-            Recommended. A cluster creator who finds no template of the distribution on the node OS chosen, or none of
-            the Kubernetes version for kubeadm, can ask for it from the create wizard; the build runs with the
-            refresh&apos;s token, not theirs. Without it, only an administrator can build templates.
+            Recommended. A cluster creator who finds no template of the distribution on the node OS chosen, none of the
+            Kubernetes version for kubeadm, or none of the Talos release for Talos, can ask for it from the create
+            wizard; the build runs with the refresh&apos;s token, not theirs. Without it, only an administrator can
+            build templates.
           </p>
         </>
       )}

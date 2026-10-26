@@ -221,7 +221,15 @@ run "controller_and_clusters_are_least_privilege" {
         kubehenge-kubeadm = ["kubeadm-bootstrap-system", "kubeadm-control-plane-system"]
         kubehenge-rke2    = ["rke2-bootstrap-system", "rke2-control-plane-system"]
         kubehenge-k3s     = ["k3s-bootstrap-system", "k3s-control-plane-system"]
+        kubehenge-talos   = ["talos-bootstrap-system", "talos-control-plane-system"]
       }
+      # Talos workload clusters require the signatures the management cluster's nodes do, but for
+      # those of the providers only the management cluster runs.
+      talos = { imageSignatures = [
+        { image = "factory.talos.dev/*", keyless = { issuer = "https://accounts.google.com", subject = "image-factory-signing@talos-production.iam.gserviceaccount.com" } },
+        { image = "ghcr.io/siderolabs/*", keyless = { issuer = "https://accounts.google.com", subjectRegex = "^(releasemgr-svc@talos-production\\.iam\\.gserviceaccount\\.com|[^@]+@siderolabs\\.com)$" } },
+        { image = "registry.k8s.io/*", keyless = { issuer = "https://accounts.google.com", subject = "krel-trust@k8s-releng-prod.iam.gserviceaccount.com" } },
+      ] }
       interface = { extraNamespaces = [], offerHARules = false, headlampSignIn = false, headlampActions = false }
       clusters  = { storages = ["local-lvm", "ceph"], bridges = ["vmbr0", "vmbr1"] }
       proxmox = {
@@ -318,8 +326,10 @@ run "controller_and_clusters_are_least_privilege" {
         ["factory.talos.dev/*", "https://accounts.google.com", "image-factory-signing@talos-production.iam.gserviceaccount.com"],
         ["ghcr.io/siderolabs/*", "https://accounts.google.com", "^(releasemgr-svc@talos-production\\.iam\\.gserviceaccount\\.com|[^@]+@siderolabs\\.com)$"],
         ["registry.k8s.io/*", "https://accounts.google.com", "krel-trust@k8s-releng-prod.iam.gserviceaccount.com"],
+        ["ghcr.io/kubehenge/cluster-api-bootstrap-provider-talos", "https://token.actions.githubusercontent.com", "^https://github\\.com/kubehenge/cluster-api-bootstrap-provider-talos/\\.github/workflows/release\\.yaml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$"],
+        ["ghcr.io/kubehenge/cluster-api-control-plane-provider-talos", "https://token.actions.githubusercontent.com", "^https://github\\.com/kubehenge/cluster-api-control-plane-provider-talos/\\.github/workflows/release\\.yaml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$"],
     ]]
-    error_message = "Talos must pull the Image Factory's, Sidero's and Kubernetes' images only with their publishers' signatures"
+    error_message = "Talos must pull the Image Factory's, Sidero's and Kubernetes' images, and the Talos providers' from Kubehenge's forks, only with their publishers' signatures"
   }
 
   assert {
@@ -679,11 +689,11 @@ run "providers" {
       for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : "${p.kind}/${p.name}"
       ]) == toset([
       "CoreProvider/cluster-api",
-      "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/k3s",
-      "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "ControlPlaneProvider/k3s",
+      "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/k3s", "BootstrapProvider/talos",
+      "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "ControlPlaneProvider/k3s", "ControlPlaneProvider/talos",
       "InfrastructureProvider/proxmox", "IPAMProvider/in-cluster", "AddonProvider/helm",
     ])
-    error_message = "the provider set differs from Cluster API core, kubeadm, RKE2, k3s, capmox, in-cluster IPAM and Helm"
+    error_message = "the provider set differs from Cluster API core, kubeadm, RKE2, k3s, Talos, capmox, in-cluster IPAM and Helm"
   }
 
   assert {
@@ -701,8 +711,8 @@ run "providers" {
       for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : "${p.kind}/${p.name}"
       if anytrue([for patch in try(p.spec.patches, []) : try(yamldecode(patch.patch).spec.replicas, "set") == null])
       ]) == toset([
-      "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/k3s",
-      "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "ControlPlaneProvider/k3s",
+      "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/k3s", "BootstrapProvider/talos",
+      "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "ControlPlaneProvider/k3s", "ControlPlaneProvider/talos",
     ])
     error_message = "the distributions' providers, and only they, must leave their replica count to Kubehenge's controller"
   }
@@ -718,7 +728,7 @@ run "providers" {
         "CoreProvider/cluster-api", "BootstrapProvider/kubeadm", "BootstrapProvider/rke2",
         "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "InfrastructureProvider/proxmox", "AddonProvider/helm",
     ] : k => ["60s", "40s", "10s", ""] }
-    error_message = "every provider that takes lease flags gets the long leases and no lease name; k3s and in-cluster IPAM take none"
+    error_message = "every provider that takes lease flags gets the long leases and no lease name; k3s, Talos and in-cluster IPAM take none"
   }
 
   assert {
@@ -735,14 +745,11 @@ run "providers" {
   }
 
   assert {
-    condition = toset([
-      for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : "${p.kind}/${p.name}"
-      if can(p.spec.deployment.containers[0].resources.requests.memory) && !can(p.spec.deployment.containers[0].resources.limits)
-      ]) == toset([
-      "CoreProvider/cluster-api", "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/k3s",
-      "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/k3s", "AddonProvider/helm",
+    condition = alltrue([
+      for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers :
+      can(p.spec.deployment.containers[0].resources.requests.memory) && !can(p.spec.deployment.containers[0].resources.limits)
     ])
-    error_message = "every provider whose manifests set no requests gets a memory request, and no limit"
+    error_message = "every provider gets a memory request, and no limit"
   }
 
   assert {
@@ -980,7 +987,11 @@ run "provider_image" {
       "${p.kind}/${p.name}" => p.spec.deployment.containers
       if contains(["InfrastructureProvider/proxmox", "CoreProvider/cluster-api", "AddonProvider/helm"], "${p.kind}/${p.name}")
       } == {
-      "InfrastructureProvider/proxmox" = [{ name = "manager", imageUrl = "registry.example/capmox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }]
+      "InfrastructureProvider/proxmox" = [{
+        name      = "manager"
+        imageUrl  = "registry.example/capmox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        resources = { requests = { cpu = "10m", memory = "64Mi" } }
+      }]
       "CoreProvider/cluster-api" = [{
         name      = "manager"
         imageUrl  = "registry.example/capi@sha256:456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123"

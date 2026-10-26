@@ -1,11 +1,11 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { newForm, withClass, type FieldKey } from "./create-form";
-import { GeneralStep, type StepProps } from "./CreateSteps";
+import { GeneralStep, requestName, type StepProps } from "./CreateSteps";
 import { fakeServer } from "./fake-server";
-import type { ClusterClass, NodeOSChoice } from "./types";
+import type { ClusterClass, NodeOSChoice, TalosReleases } from "./types";
 
 const noProblems = new Map<FieldKey, string>();
 
@@ -48,7 +48,15 @@ const rke2: ClusterClass = {
   ],
 };
 
-const step = (cls: ClusterClass, nodeOS = ""): void => {
+// Talos is its own OS: its class offers no node OSes.
+const talos: ClusterClass = {
+  name: "kubehenge-talos",
+  distribution: "talos",
+  variables: [{ name: "talosVersion", required: true, schema: { type: "string" } }],
+  versionFormat: { pattern: "" },
+};
+
+const step = (cls: ClusterClass, nodeOS = "", releases?: TalosReleases): void => {
   render(
     <GeneralStep
       form={{ ...withClass(newForm(), cls, () => false), ...(nodeOS && { nodeOS }) }}
@@ -57,6 +65,7 @@ const step = (cls: ClusterClass, nodeOS = ""): void => {
       classes={[cls]}
       cls={cls}
       offered={{ versions: ["v1.36.5"] }}
+      talos={releases}
       onChooseClass={vi.fn<(name: string) => void>()}
       namespaces={["clusters"]}
       onChooseNamespace={vi.fn<(namespace: string) => void>()}
@@ -92,6 +101,109 @@ describe("a missing template", () => {
     });
   });
 
+  it("is made of a Talos release the Image Factory builds", async () => {
+    const builds = { allowed: true, requested: [] as string[], building: [] as string[] };
+    const calls = fakeServer({
+      "GET /api/template-builds": () => ({ body: builds }),
+      "POST /api/template-builds": () => {
+        builds.requested = ["talos-v1.16.0"];
+        return { status: 202 };
+      },
+    });
+    const user = userEvent.setup({ delay: null });
+    step(talos, "", {
+      templates: ["v1.15.1"],
+      releases: ["v1.16.0", "v1.15.1", "v1.14.4"],
+      default: "v1.14.4",
+      kubernetes: {},
+    });
+    const button = await screen.findByRole("button", { name: "Have the template built" });
+    expect(screen.queryByLabelText("Node OS")).not.toBeInTheDocument();
+    // The releases without a template, newest first, the default marked.
+    expect(
+      within(screen.getByLabelText("Talos release to build"))
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toStrictEqual(["v1.16.0", "v1.14.4 (default)"]);
+    expect(screen.getByLabelText("Talos release to build")).toHaveValue("v1.16.0");
+    await user.click(button);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Asked for" })).toBeDisabled());
+    expect(calls.find((c) => c.key === "POST /api/template-builds")?.body).toStrictEqual({
+      distribution: "talos",
+      talosVersion: "v1.16.0",
+    });
+    expect(screen.getByText(/Asked for: Talos v1\.16\.0\./u)).toBeInTheDocument();
+  });
+
+  it("says which templates are asked for in words, and holds one the run under way builds", async () => {
+    expect(
+      [
+        "talos-v1.16.0",
+        "kubeadm-v1.37.1-almalinux-10",
+        "rke2-rocky-10",
+        "k3s-leap-16.1",
+        "kubeadm-v1.37.1",
+        "refresh",
+        "other",
+      ].map((k) => requestName(k, [alma, rocky])),
+    ).toStrictEqual([
+      "Talos v1.16.0",
+      "kubeadm v1.37.1 on AlmaLinux 10",
+      "RKE2 on Rocky Linux 10",
+      "k3s on leap-16.1",
+      "kubeadm-v1.37.1",
+      "the weekly build",
+      "other",
+    ]);
+    // The run names the templates it builds by their line, not by the keys they were asked for by.
+    fakeServer({
+      "GET /api/template-builds": {
+        body: { allowed: true, requested: ["talos-v1.14.9"], building: ["kubehenge-talos-v1.16.0"] },
+      },
+    });
+    step(talos, "", { templates: ["v1.15.1"], releases: ["v1.16.0", "v1.15.1"], default: "v1.15.1", kubernetes: {} });
+    await expect(screen.findByRole("button", { name: "Asked for" })).resolves.toBeDisabled();
+    expect(
+      screen.getByText(/Building now: kubehenge-talos-v1\.16\.0\. Asked for: Talos v1\.14\.9\./u),
+    ).toBeInTheDocument();
+  });
+
+  it("takes a typed Talos release when the Image Factory's cannot be read", async () => {
+    const calls = fakeServer({
+      "GET /api/template-builds": { body: { allowed: true, requested: [], building: [] } },
+      "POST /api/template-builds": { status: 202 },
+    });
+    const user = userEvent.setup({ delay: null });
+    step(talos, "", {
+      templates: [],
+      releases: [],
+      default: "",
+      kubernetes: {},
+      error: "the Talos releases could not be read",
+    });
+    const button = await screen.findByRole("button", { name: "Have the template built" });
+    expect(screen.getByText(/The Talos releases could not be read\./u)).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Talos release to build"), "v1.16");
+    expect(screen.getByLabelText("Talos release to build")).toHaveAttribute("aria-invalid", "true");
+    expect(button).toBeDisabled();
+    await user.type(screen.getByLabelText("Talos release to build"), ".0");
+    await user.click(button);
+    await waitFor(() =>
+      expect(calls.find((c) => c.key === "POST /api/template-builds")?.body).toStrictEqual({
+        distribution: "talos",
+        talosVersion: "v1.16.0",
+      }),
+    );
+  });
+
+  it("asks for no Talos template when every release has one", async () => {
+    const calls = fakeServer({ "GET /api/template-builds": { body: { allowed: true, requested: [], building: [] } } });
+    step(talos, "", { templates: ["v1.15.1"], releases: ["v1.15.1"], default: "v1.15.1", kubernetes: {} });
+    await waitFor(() => expect(calls.map((c) => c.key)).toContain("GET /api/template-builds"));
+    expect(screen.queryByRole("button", { name: "Have the template built" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Talos release")).toBeInTheDocument();
+  });
+
   it("asks for the distribution's template on the node OS chosen only while it is missing", async () => {
     const calls = fakeServer({
       "GET /api/template-builds": { body: { allowed: true, requested: [], building: [] } },
@@ -115,6 +227,7 @@ describe("a missing template", () => {
     });
     step(rke2, "rocky-10");
     await expect(screen.findByRole("button", { name: "Asked for" })).resolves.toBeDisabled();
+    expect(screen.getByText(/Asked for: RKE2 on Rocky Linux 10\./u)).toBeInTheDocument();
   });
 
   it("is not offered while the node OS chosen has its template", async () => {

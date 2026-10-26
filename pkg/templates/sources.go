@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -130,35 +131,81 @@ func oneKey(armoured []byte) (*openpgp.Entity, error) {
 	return keyring[0], nil
 }
 
-// at is where a publisher's URL is fetched from: the publisher itself unless a mirror stands in.
-func (s *Sources) at(url string) string {
-	for publisher, mirror := range s.Mirrors {
-		if rest, ok := strings.CutPrefix(url, publisher); ok && (rest == "" || strings.HasPrefix(rest, "/")) {
-			return mirror + rest
-		}
-	}
-	return url
-}
-
-func (s *Sources) get(ctx context.Context, url string) ([]byte, error) {
-	return s.do(ctx, http.MethodGet, s.at(url), nil)
-}
-
-func (s *Sources) talos(ctx context.Context, version string) (Resolved, error) {
+// TalosSchematicID registers TalosSchematic with the Image Factory, which names it by its content,
+// the same ID on every call.
+func (s *Sources) TalosSchematicID(ctx context.Context) (string, error) {
 	body, err := s.do(ctx, http.MethodPost, s.TalosFactoryURL+"/schematics", strings.NewReader(TalosSchematic))
 	if err != nil {
-		return Resolved{}, fmt.Errorf("registering the Talos schematic: %w", err)
+		return "", fmt.Errorf("registering the Talos schematic: %w", err)
 	}
 	var schematic struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(body, &schematic); err != nil || len(schematic.ID) != hex.EncodedLen(sha256.Size) {
-		return Resolved{}, fmt.Errorf("unexpected Image Factory answer %q", body)
+		return "", fmt.Errorf("unexpected Image Factory answer %q", body)
+	}
+	return schematic.ID, nil
+}
+
+// TalosInstaller is the installer image a node of TalosSchematic upgrades to a Talos release with,
+// from the Image Factory's registry, which signs it.
+func (s *Sources) TalosInstaller(ctx context.Context, version string) (string, error) {
+	if !versionRE.MatchString(version) {
+		return "", fmt.Errorf("talos version %q is not of the form v1.2.3", version)
+	}
+	id, err := s.TalosSchematicID(ctx)
+	if err != nil {
+		return "", err
+	}
+	u, err := url.Parse(s.TalosFactoryURL)
+	if err != nil || u.Host == "" {
+		return "", fmt.Errorf("image factory %q: no host", s.TalosFactoryURL)
+	}
+	return fmt.Sprintf("%s/nocloud-installer/%s:%s", u.Host, id, version), nil
+}
+
+// TalosReleases are the Talos releases the Image Factory builds, pre-releases left out.
+func (s *Sources) TalosReleases(ctx context.Context) ([]string, error) {
+	body, err := s.do(ctx, http.MethodGet, s.TalosFactoryURL+"/versions", nil)
+	if err != nil {
+		return nil, fmt.Errorf("listing the Talos releases: %w", err)
+	}
+	var all []string
+	if err := json.Unmarshal(body, &all); err != nil {
+		return nil, fmt.Errorf("unexpected Image Factory answer %q", body)
+	}
+	out := make([]string, 0, len(all))
+	for _, v := range all {
+		if versionRE.MatchString(v) {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+// at is where a publisher's URL is fetched from: the publisher itself unless a mirror stands in.
+func (s *Sources) at(address string) string {
+	for publisher, mirror := range s.Mirrors {
+		if rest, ok := strings.CutPrefix(address, publisher); ok && (rest == "" || strings.HasPrefix(rest, "/")) {
+			return mirror + rest
+		}
+	}
+	return address
+}
+
+func (s *Sources) get(ctx context.Context, address string) ([]byte, error) {
+	return s.do(ctx, http.MethodGet, s.at(address), nil)
+}
+
+func (s *Sources) talos(ctx context.Context, version string) (Resolved, error) {
+	id, err := s.TalosSchematicID(ctx)
+	if err != nil {
+		return Resolved{}, err
 	}
 	return Resolved{
 		// The uncompressed qcow2: Proxmox VE cannot decompress images it imports.
-		URL:      fmt.Sprintf("%s/image/%s/%s/nocloud-amd64.qcow2", s.TalosFactoryURL, schematic.ID, version),
-		FileName: fmt.Sprintf("template-talos-%s-%s-nocloud-amd64.qcow2", version, schematic.ID[:12]),
+		URL:      fmt.Sprintf("%s/image/%s/%s/nocloud-amd64.qcow2", s.TalosFactoryURL, id, version),
+		FileName: fmt.Sprintf("template-talos-%s-%s-nocloud-amd64.qcow2", version, id[:12]),
 	}, nil
 }
 
@@ -265,22 +312,22 @@ func fingerprint(e *openpgp.Entity) string {
 	return strings.ToUpper(hex.EncodeToString(e.PrimaryKey.Fingerprint))
 }
 
-func (s *Sources) do(ctx context.Context, method, url string, body io.Reader) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, method, url, body)
+func (s *Sources) do(ctx context.Context, method, address string, body io.Reader) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, method, address, body)
 	if err != nil {
-		return nil, fmt.Errorf("%s %s: %w", method, url, err)
+		return nil, fmt.Errorf("%s %s: %w", method, address, err)
 	}
 	resp, err := s.HTTP.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%s %s: %w", method, url, err)
+		return nil, fmt.Errorf("%s %s: %w", method, address, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
-		return nil, fmt.Errorf("%s %s: reading the answer: %w", method, url, err)
+		return nil, fmt.Errorf("%s %s: reading the answer: %w", method, address, err)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("%s %s: %s", method, url, resp.Status)
+		return nil, fmt.Errorf("%s %s: %s", method, address, resp.Status)
 	}
 	return data, nil
 }

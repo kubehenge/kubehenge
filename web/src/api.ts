@@ -22,6 +22,7 @@ import type {
   SetupStatus,
   Storage,
   StoredCredential,
+  TalosReleases,
   TemplateBuildRequest,
   TemplateBuilds,
   TemplateRefresh,
@@ -197,6 +198,10 @@ export interface Api {
   health: (ns: string, name: string) => Promise<ClusterHealth>;
   podLogs: (cluster: ClusterRef, pod: { namespace: string; name: string }, container: string) => Promise<PodLogs>;
   kubeconfig: (ns: string, name: string) => Promise<Blob>;
+  /** talosconfig is a Talos cluster's, which signs in to its nodes' Talos API. */
+  talosconfig: (ns: string, name: string) => Promise<Blob>;
+  /** retryTalosUpgrade takes back the failed node upgrade that holds a Talos cluster's others. */
+  retryTalosUpgrade: (ns: string, name: string) => Promise<void>;
   ingressCA: (ns: string, name: string) => Promise<Blob>;
   storedCredential: (purpose: string, cluster?: ClusterRef) => Promise<StoredCredential>;
   storeCredential: (purpose: string, values: Record<string, string>, cluster?: ClusterRef) => Promise<StoredCredential>;
@@ -207,6 +212,7 @@ export interface Api {
   upgrade: (version: string) => Promise<void>;
   /** nodeOS, such as almalinux-10, narrows kubeadm's versions to those with a template on it. */
   versions: (distribution: string, nodeOS?: string) => Promise<Versions>;
+  talosReleases: () => Promise<TalosReleases>;
   templates: () => Promise<Templates>;
   createTemplate: (req: TemplateRequest) => Promise<Job>;
   deleteTemplate: (vmid: number) => Promise<void>;
@@ -268,6 +274,8 @@ export const api: Api = {
       `${clusterPath(cluster.namespace, cluster.name)}/pods/${encodeURIComponent(pod.namespace)}/${encodeURIComponent(pod.name)}/logs?container=${encodeURIComponent(container)}`,
     ),
   kubeconfig: (ns, name) => download("GET", `${clusterPath(ns, name)}/kubeconfig`),
+  talosconfig: (ns, name) => download("GET", `${clusterPath(ns, name)}/talosconfig`),
+  retryTalosUpgrade: (ns, name) => act("DELETE", `${clusterPath(ns, name)}/talos-upgrade-failure`),
   ingressCA: (ns, name) => download("GET", `${clusterPath(ns, name)}/certificates/ca`),
   storedCredential: (purpose, cluster) => request("GET", credentialPath(purpose, cluster)),
   storeCredential: (purpose, values, cluster) => request("PUT", credentialPath(purpose, cluster), { values }),
@@ -281,6 +289,7 @@ export const api: Api = {
       "GET",
       `/api/versions/${encodeURIComponent(distribution)}${nodeOS === undefined ? "" : `?nodeOS=${encodeURIComponent(nodeOS)}`}`,
     ),
+  talosReleases: () => request("GET", "/api/talos/releases"),
   templates: () => request("GET", "/api/templates"),
   createTemplate: (req) => request("POST", "/api/templates", req),
   deleteTemplate: (vmid) => act("DELETE", `/api/templates/${vmid}`),

@@ -51,7 +51,13 @@ func TestVersionsFromTheReleaseChannels(t *testing.T) {
 	if len(k3s.Versions) != 0 || k3s.Error == "" {
 		t.Fatalf("k3s = %+v", k3s)
 	}
-	expect(t, d.do("GET", "/api/versions/talos", ""), http.StatusNotFound)
+	// Talos's are Kubernetes' own, read like a channel server's; not configured here either.
+	var talos versionsView
+	_ = json.Unmarshal(d.do("GET", "/api/versions/talos", "").Body.Bytes(), &talos)
+	if len(talos.Versions) != 0 || talos.Error == "" {
+		t.Fatalf("talos = %+v", talos)
+	}
+	expect(t, d.do("GET", "/api/versions/flatcar", ""), http.StatusNotFound)
 }
 
 func TestKubeadmVersionsAreThoseWithATemplate(t *testing.T) {

@@ -84,7 +84,7 @@ locals {
   } }
 
   # The providers Kubehenge's ClusterClasses use, and no others; each gets only the variables it
-  # uses. Talos's join with a Talos ClusterClass.
+  # uses.
   provider_specs = [
     { kind = "CoreProvider", name = "cluster-api", namespace = "capi-system", spec = {
       version      = local.versions.cluster_api
@@ -121,6 +121,15 @@ locals {
       version = local.versions.k3s
       patches = [local.replicas_left_to_scaling]
     } },
+    # Talos's providers take no lease flags either: only --enable-leader-election.
+    { kind = "BootstrapProvider", name = "talos", namespace = "talos-bootstrap-system", spec = {
+      version = local.versions.talos_bootstrap
+      patches = [local.replicas_left_to_scaling]
+    } },
+    { kind = "ControlPlaneProvider", name = "talos", namespace = "talos-control-plane-system", spec = {
+      version = local.versions.talos_control_plane
+      patches = [local.replicas_left_to_scaling]
+    } },
     { kind = "InfrastructureProvider", name = "proxmox", namespace = local.capmox_namespace, spec = {
       version      = local.versions.capmox
       configSecret = local.capmox_config
@@ -140,22 +149,29 @@ locals {
     } },
   ]
   # Each of Kubehenge's ClusterClasses and the namespaces of the providers only its clusters use.
-  class_provider_namespaces = { for d in ["kubeadm", "rke2", "k3s"] : "kubehenge-${d}" => sort([
+  class_provider_namespaces = { for d in ["kubeadm", "rke2", "k3s", "talos"] : "kubehenge-${d}" => sort([
     for p in local.provider_specs : p.namespace if p.name == d
   ]) }
 
-  # Requests for the providers whose manifests carry none, near what each holds: without one a
-  # controller is BestEffort, the first a memory-short node kills, and Cluster API's core is the
-  # one every cluster depends on. No limits: a controller that grows while it syncs must not be
-  # killed for it.
+  # Each provider's request, near what it holds, in place of its manifests' resources: some carry
+  # none, which leaves a controller BestEffort, the first a memory-short node kills, and Cluster
+  # API's core is the one every cluster depends on; Talos's ask for twice what they hold, and every
+  # provider starts at installation, whether a cluster uses it or not, so they must fit beside each
+  # other on one node. No limits, which some manifests set: a controller that grows while it syncs
+  # must not be killed for it.
   memory_requests = {
-    "CoreProvider/cluster-api"     = "128Mi"
-    "BootstrapProvider/kubeadm"    = "64Mi"
-    "BootstrapProvider/rke2"       = "64Mi"
-    "BootstrapProvider/k3s"        = "64Mi"
-    "ControlPlaneProvider/kubeadm" = "64Mi"
-    "ControlPlaneProvider/k3s"     = "64Mi"
-    "AddonProvider/helm"           = "64Mi"
+    "CoreProvider/cluster-api"       = "128Mi"
+    "BootstrapProvider/kubeadm"      = "64Mi"
+    "BootstrapProvider/rke2"         = "64Mi"
+    "BootstrapProvider/k3s"          = "64Mi"
+    "BootstrapProvider/talos"        = "64Mi"
+    "ControlPlaneProvider/kubeadm"   = "64Mi"
+    "ControlPlaneProvider/rke2"      = "64Mi"
+    "ControlPlaneProvider/k3s"       = "64Mi"
+    "ControlPlaneProvider/talos"     = "64Mi"
+    "InfrastructureProvider/proxmox" = "64Mi"
+    "IPAMProvider/in-cluster"        = "64Mi"
+    "AddonProvider/helm"             = "64Mi"
   }
 
   # The component of the tested set each provider comes with.
@@ -167,6 +183,8 @@ locals {
     "ControlPlaneProvider/kubeadm"   = "cluster_api"
     "ControlPlaneProvider/rke2"      = "rke2"
     "ControlPlaneProvider/k3s"       = "k3s"
+    "BootstrapProvider/talos"        = "talos_bootstrap"
+    "ControlPlaneProvider/talos"     = "talos_control_plane"
     "InfrastructureProvider/proxmox" = "capmox"
     "IPAMProvider/in-cluster"        = "ipam_in_cluster"
     "AddonProvider/helm"             = "helm_addon"
@@ -198,11 +216,11 @@ locals {
   missing_images = sort([for key, image in local.provider_images : key if image == null])
 
   # Every Cluster API provider names its controller container "manager".
-  provider_containers = { for p in local.provider_specs : "${p.kind}/${p.name}" => merge(
-    { name = "manager", imageUrl = local.provider_images["${p.kind}/${p.name}"] },
-    contains(keys(local.memory_requests), "${p.kind}/${p.name}") ?
-    { resources = { requests = { cpu = "10m", memory = local.memory_requests["${p.kind}/${p.name}"] } } } : {},
-  ) }
+  provider_containers = { for p in local.provider_specs : "${p.kind}/${p.name}" => {
+    name      = "manager"
+    imageUrl  = local.provider_images["${p.kind}/${p.name}"]
+    resources = { requests = { cpu = "10m", memory = local.memory_requests["${p.kind}/${p.name}"] } }
+  } }
   # The operator installs each provider from the ConfigMap the providers chart's hook stores its
   # checked files in, not from the release.
   providers = [for p in local.provider_specs : merge(p, {
@@ -355,6 +373,7 @@ resource "helm_release" "kubehenge" {
       workloadPool       = proxmox_virtual_environment_pool.workload.pool_id
       providerNamespaces = local.class_provider_namespaces
       managementEndpoint = local.api_endpoint
+      talos              = { imageSignatures = local.image_signatures }
       interface = {
         extraNamespaces = var.extra_cluster_namespaces
         offerHARules    = var.offer_ha_rules

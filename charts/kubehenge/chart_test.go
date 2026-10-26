@@ -105,7 +105,7 @@ func TestAuthenticationConfiguration(t *testing.T) {
 	} {
 		want := map[string]any{"apiVersion": "apiserver.config.k8s.io/v1", "kind": "AuthenticationConfiguration"}
 		maps.Copy(want, c.want)
-		config := bootstrapFile(t, renderAfter(t, "{{- $anonymous := "+c.anonymous+" }}\n", "files/authentication-config.tpl", c.variables))
+		config := bootstrapFile(t, renderAfter(t, "{{- $anonymous := "+c.anonymous+" }}\n{{- $talos := false }}\n", "files/authentication-config.tpl", c.variables))
 		if !reflect.DeepEqual(config, want) {
 			t.Errorf("anonymous %s, %s: configuration =\n%v", c.anonymous, c.variables, config)
 		}
@@ -134,7 +134,7 @@ func TestAdmissionConfiguration(t *testing.T) {
 		{`{"cis": true}`, restricted},
 		{`{"cis": true, "podSecurity": {"admission": "baseline"}}`, restricted},
 	} {
-		config := bootstrapFile(t, renderAfter(t, `{{- $exempt := list "kube-system" "node-exporter" }}`+"\n", "files/admission.tpl", c.variables))
+		config := bootstrapFile(t, renderAfter(t, `{{- $exempt := list "kube-system" "node-exporter" }}`+"\n{{- $talos := false }}\n", "files/admission.tpl", c.variables))
 		want := map[string]any{
 			"apiVersion": "apiserver.config.k8s.io/v1",
 			"kind":       "AdmissionConfiguration",

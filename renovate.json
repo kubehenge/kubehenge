@@ -78,6 +78,16 @@
       ]
     },
     {
+      "description": "Kubehenge's forks of the Talos providers publish pre-releases, which Renovate otherwise offers only within the same version; every one is taken, its files, image and signatures checked by make verify-providers.",
+      "matchPackageNames": [
+        "kubehenge/cluster-api-bootstrap-provider-talos",
+        "kubehenge/cluster-api-control-plane-provider-talos",
+        "ghcr.io/kubehenge/cluster-api-bootstrap-provider-talos",
+        "ghcr.io/kubehenge/cluster-api-control-plane-provider-talos"
+      ],
+      "ignoreUnstable": false
+    },
+    {
       "description": "The cluster autoscaler is pinned once for each Kubernetes minor version, as each release carries its minor's scheduler, so each line takes the patches of its own minor; a release for a new minor is added as a line of its own.",
       "matchDepNames": ["registry.k8s.io/autoscaling/cluster-autoscaler"],
       "matchUpdateTypes": ["major", "minor"],

@@ -23,12 +23,12 @@ func TestModuleVersionsOfTheReleasedModule(t *testing.T) {
 	t.Parallel()
 	a := &Appliance{Module: filepath.Join("..", "..", "management-cluster")}
 	got := a.ModuleVersions()
-	for _, key := range []string{"talos", "kubernetes", "cluster_api", "capmox", "rke2", "k3s", "ipam_in_cluster", "helm_addon", "cert_manager", "capi_operator", "kubehenge"} {
+	for _, key := range []string{"talos", "kubernetes", "cluster_api", "capmox", "rke2", "k3s", "ipam_in_cluster", "helm_addon", "talos_bootstrap", "talos_control_plane", "cert_manager", "capi_operator", "kubehenge"} {
 		if v := got[key]; v == "" || strings.ContainsAny(v, "@\" ") {
 			t.Errorf("version of %s = %q", key, v)
 		}
 	}
-	if len(got) != 11 {
+	if len(got) != 13 {
 		t.Errorf("versions = %v", got)
 	}
 }

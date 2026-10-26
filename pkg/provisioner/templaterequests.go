@@ -110,11 +110,9 @@ type TemplateRequest struct {
 }
 
 // RequestLine is the request key of a missing line, or "" for none Kubehenge builds: the line's
-// name without the kubehenge- every line starts with.
+// name without the kubehenge- every line starts with, so talos-<release> for a Talos release's
+// template, which no node OS is part of.
 func RequestLine(req *templates.Request) string {
-	if req.Distribution == templates.Talos {
-		return ""
-	}
 	t, err := templates.Plan(req)
 	if err != nil {
 		return ""
@@ -124,8 +122,9 @@ func RequestLine(req *templates.Request) string {
 
 const lineNamePrefix = "kubehenge-"
 
-// ParseRequestLine is the template request a line key names: <distribution>-<node OS>, and for
-// kubeadm <distribution>-<Kubernetes version>-<node OS>.
+// ParseRequestLine is the template request a line key names: <distribution>-<node OS>, for kubeadm
+// <distribution>-<Kubernetes version>-<node OS>, and for Talos, which is its own OS,
+// talos-<Talos release>.
 func ParseRequestLine(key string) (templates.Request, error) {
 	dist, rest, _ := strings.Cut(key, "-")
 	req := templates.Request{Distribution: templates.Distribution(dist)}
@@ -134,15 +133,17 @@ func ParseRequestLine(key string) (templates.Request, error) {
 	case templates.Kubeadm:
 		req.KubernetesVersion, rest, _ = strings.Cut(rest, "-")
 	case templates.Talos:
-		return req, fmt.Errorf("no template line %q: Talos templates are not built again", key)
+		req.TalosVersion = rest
 	default:
 		return req, fmt.Errorf("no template line %q", key)
 	}
-	o, err := templates.ParseNodeOS(rest)
-	if err != nil {
-		return req, fmt.Errorf("template line %q: %w", key, err)
+	if req.Distribution != templates.Talos {
+		o, err := templates.ParseNodeOS(rest)
+		if err != nil {
+			return req, fmt.Errorf("template line %q: %w", key, err)
+		}
+		req.NodeOS = o
 	}
-	req.NodeOS = o
 	if _, err := templates.Plan(&req); err != nil {
 		return req, fmt.Errorf("template line %q: %w", key, err)
 	}

@@ -266,6 +266,9 @@ jobs:
                   kubectl --kubeconfig "$RUNNER_TEMP/workload.kubeconfig" --request-timeout=20s "$@"
                 }
                 k get nodes,pods -A -o wide > "$dir/resources.txt" 2>&1 || continue
+                # The scheduler names no taint when it turns a pod away.
+                k get nodes -o yaml > "$dir/nodes.yaml" 2>&1 || true
+                k get deploy,sts,ds -A -o wide >> "$dir/resources.txt" 2>&1 || true
                 k get events -A --sort-by=.lastTimestamp > "$dir/events.txt" 2>&1 || true
                 # Why a volume or a snapshot is not ready: the objects' status, which keeps the last
                 # error after its event has gone, and the logs of the CSI plugin and the snapshot
@@ -281,6 +284,61 @@ jobs:
                   grep -E -- 'csi|snapshot' | while read -r pns pod; do
                     k logs -n "$pns" "$pod" --all-containers --prefix --tail=2000 || true
                   done > "$dir/volumes.log" 2>&1 || true
+                # Why logs do not reach Loki: what the collectors and Loki say of what they took in
+                # and passed on.
+                for pns in logging logging-node; do
+                  k logs -n "$pns" -l app.kubernetes.io/instance --all-containers --prefix \
+                    --tail=2000 --max-log-requests=20 || true
+                done > "$dir/logging.log" 2>&1 || true
+                # What each node collector counted in and out, which its pod serves on its own
+                # loopback alone, and its pod's sockets with what each holds unread; with the
+                # network policy logs of every node, which judge what reaches a pod from its node.
+                counters='^(otelcol_receiver_(accepted|refused)_log_records|otelcol_exporter_loki'
+                counters="$counters|loki_process_dropped|loki_write_(sent|dropped)_entries"
+                counters="$counters|loki_write_request_duration_seconds_count)"
+                names=(--no-headers -o custom-columns=NAME:.metadata.name)
+                k get pods -n logging-node "${names[@]}" 2>/dev/null | while read -r pod; do
+                  echo "== $pod"
+                  k exec -n logging-node "$pod" -- cat /proc/net/tcp /proc/net/tcp6 || true
+                  port=$((20000 + $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % 10000))
+                  k port-forward -n logging-node "pod/$pod" "$port:12345" > /dev/null 2>&1 &
+                  forward=$!
+                  sleep 3
+                  curl -sS --max-time 10 "http://127.0.0.1:$port/metrics" |
+                    grep -E "$counters" || true
+                  kill "$forward" 2>/dev/null || true
+                done > "$dir/collectors.txt" 2>&1 || true
+                # Which streams Loki holds over the last day, and the first and last lines of the
+                # nodes' own, with the times they were stored at: Loki itself serves only its pod's
+                # loopback, behind its proxy.
+                if k get pod -n logging loki-0 > /dev/null 2>&1; then
+                  port=$((20000 + $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % 10000))
+                  k port-forward -n logging pod/loki-0 "$port:3100" > /dev/null 2>&1 &
+                  forward=$!
+                  sleep 3
+                  since=$((($(date +%s) - 86400) * 1000000000))
+                  loki() {
+                    curl -sS --max-time 20 -G "http://127.0.0.1:$port/loki/api/v1/$1" \
+                      --data-urlencode "start=$since" "${@:2}"
+                    echo
+                  }
+                  {
+                    loki series --data-urlencode 'match[]={job=~".+"}'
+                    for direction in forward backward; do
+                      loki query_range --data-urlencode 'query={job=~"talos|journal"}' \
+                        --data-urlencode limit=20 --data-urlencode "direction=$direction"
+                    done
+                  } > "$dir/loki.json" 2>&1 || true
+                  curl -sS --max-time 10 "http://127.0.0.1:$port/metrics" | grep -E \
+                    '^loki_(discarded_|distributor_lines_received|ingester_streams_created)' \
+                    > "$dir/loki-counters.txt" 2>&1 || true
+                  kill "$forward" 2>/dev/null || true
+                fi
+                k get pods -n kube-system "${names[@]}" 2>/dev/null |
+                  grep -E '^kube-flannel-' | while read -r pod; do
+                    k logs -n kube-system "$pod" -c kube-network-policies --prefix --tail=5000 ||
+                      true
+                  done > "$dir/network-policies.log" 2>&1 || true
                 # The run before a restart says why the container ended; when it cannot be had, the
                 # error says why. It is asked for container by container, since with all of them
                 # kubectl stops at the first one that never restarted.

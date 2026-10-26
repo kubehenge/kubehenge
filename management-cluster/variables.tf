@@ -110,7 +110,7 @@ variable "version_overrides" {
   validation {
     condition = alltrue([for k in keys(var.version_overrides) : contains([
       "talos", "kubernetes", "cluster_api", "capmox",
-      "rke2", "k3s", "ipam_in_cluster", "helm_addon",
+      "rke2", "k3s", "ipam_in_cluster", "helm_addon", "talos_bootstrap", "talos_control_plane",
     ], k)])
     error_message = "version_overrides takes only the keys of the tested set in versions.tf."
   }
@@ -124,8 +124,8 @@ variable "provider_images" {
   validation {
     condition = alltrue([for k in keys(var.provider_images) : contains([
       "CoreProvider/cluster-api",
-      "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/k3s",
-      "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "ControlPlaneProvider/k3s",
+      "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/k3s", "BootstrapProvider/talos",
+      "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "ControlPlaneProvider/k3s", "ControlPlaneProvider/talos",
       "InfrastructureProvider/proxmox", "IPAMProvider/in-cluster", "AddonProvider/helm",
     ], k)])
     error_message = "provider_images takes only the providers the management cluster installs, as \"<kind>/<name>\"."
@@ -226,7 +226,7 @@ variable "bootstrap_datastore" {
 }
 
 variable "registry_mirrors" {
-  description = "Image registry mirrors for the management cluster's nodes, by registry name (such as ghcr.io or docker.io): endpoint URLs tried in order before the registry itself. A mirror of factory.talos.dev, ghcr.io or registry.k8s.io serves the images' cosign signatures too, which the nodes require on Sidero's and Kubernetes' images."
+  description = "Image registry mirrors for the management cluster's nodes, by registry name (such as ghcr.io or docker.io): endpoint URLs tried in order before the registry itself. A mirror of factory.talos.dev, ghcr.io or registry.k8s.io serves the images' cosign signatures too, which the nodes require on Sidero's and Kubernetes' images and on the Talos providers'."
   type        = map(list(string))
   default     = {}
 }

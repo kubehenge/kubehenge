@@ -10,8 +10,8 @@
 # which runs them all: leave a test out only for a path it cannot reach.
 set -eu
 
-all='management-cluster appliance kubeadm rke2 k3s cluster-mesh node-image-refresh autoscaler'
-workload='kubeadm rke2 k3s'
+all='management-cluster appliance kubeadm rke2 k3s talos cluster-mesh node-image-refresh autoscaler'
+workload='kubeadm rke2 k3s talos'
 need=
 [ "${1:-}" != --all ] || need=${all}
 [ -n "${need}" ] || while IFS= read -r path; do

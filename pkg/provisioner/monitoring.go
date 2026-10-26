@@ -142,10 +142,21 @@ func monitoringValues(distribution templates.Distribution, proxy Image, addons *
 		"alertmanager":   map[string]any{"alertmanagerSpec": map[string]any{"storage": claim(alertmanagerStorage)}},
 		"extraManifests": metricsManifests(distribution, proxy, addons),
 	}
-	if distribution == templates.K3s {
+	switch distribution {
+	case templates.K3s:
 		off := map[string]any{"enabled": false}
 		inKubelet := map[string]any{"jobNameOverride": "kubelet", "service": off, "serviceMonitor": off}
 		values["kubeControllerManager"], values["kubeScheduler"], values["kubeProxy"] = inKubelet, inKubelet, inKubelet
+	case templates.Talos:
+		if !addons.talosServing {
+			// Until Talos gives the controller manager and the scheduler a certificate of the
+			// cluster CA, they serve one they sign themselves, which Talos keeps inside their pods
+			// and offers no way to replace, so no proxy could verify them; they go unscraped, their
+			// alerts with them.
+			off := map[string]any{"enabled": false}
+			values["kubeControllerManager"], values["kubeScheduler"] = off, off
+		}
+	case templates.Kubeadm, templates.RKE2:
 	}
 	grafana := map[string]any{}
 	if m.Hostname != "" {
@@ -279,7 +290,17 @@ func metricsManifests(distribution templates.Distribution, proxy Image, addons *
 		out = append(out, lokiClient(monitoringAddon, grafanaUser))
 	}
 	// k3s's kube-proxy, controller manager and scheduler are in the kubelet's metrics.
-	if distribution != templates.K3s {
+	switch distribution {
+	case templates.K3s:
+	case templates.Talos:
+		out = append(out, metricsProxy(kubeProxyMetrics, kubeProxyMetricsPort, "http", nil, proxy))
+		if addons.talosServing {
+			out = append(out,
+				metricsProxy(controllerMetrics, controllerMetricsPort, "https", &controlPlaneAffinity, proxy),
+				metricsProxy(schedulerMetrics, schedulerMetricsPort, "https", &controlPlaneAffinity, proxy),
+			)
+		}
+	case templates.Kubeadm, templates.RKE2:
 		out = append(out,
 			metricsProxy(kubeProxyMetrics, kubeProxyMetricsPort, "http", nil, proxy),
 			metricsProxy(controllerMetrics, controllerMetricsPort, "https", &controlPlaneAffinity, proxy),
@@ -350,7 +371,7 @@ func metricsProxy(name string, port int32, scheme string, affinity *corev1.Affin
 		volumes = append(volumes, corev1.Volume{Name: "upstream", ConfigMap: &corev1.ConfigMapVolumeSource{Name: "kube-root-ca.crt"}})
 	}
 	return &appsv1.DaemonSet{
-		APIVersion: appsv1.SchemeGroupVersion.String(), Kind: "DaemonSet",
+		APIVersion: appsv1.SchemeGroupVersion.String(), Kind: kindDaemonSet,
 		Name: name, Namespace: metav1.NamespaceSystem, Labels: labels,
 		Spec: appsv1.DaemonSetSpec{
 			Selector: &metav1.LabelSelector{MatchLabels: labels},

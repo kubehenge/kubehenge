@@ -225,6 +225,25 @@ spec:
                 content: |
                   flannel-backend: none
                   disable-network-policy: true
+    # With flannel, k3s's network policy controller (kube-router) writes the whole iptables filter
+    # table back from a copy it read moments before, which drops the chains and jumps kube-proxy
+    # created in between. kube-proxy's first sync then fails, and kube-proxy retries it only once a
+    # Service changes or an hour has passed, so a node's pods reach no Service until then. kube-proxy's
+    # nftables mode keeps its rules in a table of its own, which the policy controller never writes.
+    - name: k3s-kube-proxy-nftables
+      enabledIf: {{ "{{ if eq .cni \"flannel\" }}true{{ end }}" | quote }}
+      definitions:
+        {{- range $kind, $sel := dict "KThreesControlPlaneTemplate" (dict "selector" (dict "controlPlane" true) "api" "controlplane.cluster.x-k8s.io/v1beta2" "args" "/spec/template/spec/kthreesConfigSpec/agentConfig/kubeProxyArgs") "KThreesConfigTemplate" (dict "selector" (dict "machineDeploymentClass" (dict "names" (list "worker"))) "api" "bootstrap.cluster.x-k8s.io/v1beta2" "args" "/spec/template/spec/agentConfig/kubeProxyArgs") }}
+        - selector:
+            apiVersion: {{ $sel.api }}
+            kind: {{ $kind }}
+            matchResources:
+              {{- toYaml $sel.selector | nindent 14 }}
+          jsonPatches:
+            - op: add
+              path: {{ $sel.args }}
+              value: [proxy-mode=nftables]
+        {{- end }}
     # Cilium chains the portmap plugin for host ports (ciliumValues), but k3s without flannel
     # leaves containerd's plugins in /opt/cni/bin, where Cilium installs only its own; k3s carries
     # portmap among the plugins of its data directory, which it has unpacked by the time pods start.

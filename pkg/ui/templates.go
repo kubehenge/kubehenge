@@ -220,10 +220,12 @@ func machineVersions(ctx context.Context, kube client.Client, c *clusterv1.Clust
 }
 
 type templateRequest struct {
-	// Distribution is rke2, k3s or kubeadm.
+	// Distribution is rke2, k3s, kubeadm or talos.
 	Distribution      string `json:"distribution"`
 	KubernetesVersion string `json:"kubernetesVersion,omitempty"`
-	// NodeOS is the node OS as one word, such as almalinux-10; empty means the default.
+	TalosVersion      string `json:"talosVersion,omitempty"`
+	// NodeOS is the node OS as one word, such as almalinux-10; empty means the default. Talos is
+	// its own OS and takes none.
 	NodeOS        string   `json:"nodeOS,omitempty"`
 	Node          string   `json:"node"`
 	Storage       string   `json:"storage"`
@@ -259,10 +261,15 @@ func (req *templateRequest) builder() (templates.Builder, templates.Template, er
 		plan.Distribution = templates.Distribution(req.Distribution)
 	case string(templates.Kubeadm):
 		plan.Distribution, plan.KubernetesVersion = templates.Kubeadm, req.KubernetesVersion
+	case string(templates.Talos):
+		plan = templates.Request{Distribution: templates.Talos, TalosVersion: req.TalosVersion}
+		if req.NodeOS != "" {
+			problems = append(problems, "Node OS: Talos is its own OS")
+		}
 	default:
-		problems = append(problems, "For: RKE2, k3s or kubeadm")
+		problems = append(problems, "For: RKE2, k3s, kubeadm or Talos")
 	}
-	if req.NodeOS != "" {
+	if req.NodeOS != "" && plan.Distribution != templates.Talos {
 		o, err := templates.ParseNodeOS(req.NodeOS)
 		if err == nil {
 			_, _, err = templates.Available(o)
@@ -334,10 +341,13 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request, u user) 
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	// Each build is a template of its own, which clusters move to inside their windows.
-	if t, err = t.Build(s.now()); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+	// Each build is a template of its own, which clusters move to inside their windows. A Talos
+	// release's template is made once: its nodes take updates as Talos releases.
+	if t.Refreshed() {
+		if t, err = t.Build(s.now()); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 	// A build takes minutes, so it gets the whole of a fresh ticket's life.
 	ticket, err := s.Accounts.Renew(r.Context(), u.ticket)

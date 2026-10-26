@@ -18,6 +18,7 @@ func TestIntegrationClassesLimitTheAPIServersMemory(t *testing.T) {
 		"kubehenge-kubeadm": {"/spec/template/spec/kubeadmConfigSpec/clusterConfiguration/apiServer/extraEnvs", "- name: GOMEMLIMIT\n  value: 1638MiB\n"},
 		"kubehenge-rke2":    {"/spec/template/spec/serverConfig/kubeAPIServer/extraEnv", "GOMEMLIMIT: 1638MiB\n"},
 		"kubehenge-k3s":     {"/spec/template/spec/kthreesConfigSpec/files/-", "Environment=GOMEMLIMIT=2048MiB\n"},
+		"kubehenge-talos":   {"/spec/template/spec/controlPlaneConfig/controlplane/strategicPatches/-", `"apiVersion: v1alpha1\nkind: KubeAPIServerConfig\nenv:\n  GOMEMLIMIT: 1638MiB"`},
 	}
 	found := map[string]bool{}
 	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {

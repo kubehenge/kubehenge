@@ -198,30 +198,44 @@ func (s *Server) templateBuilds(w http.ResponseWriter, r *http.Request, u user) 
 }
 
 type templateBuildRequest struct {
-	// Distribution is rke2, k3s or kubeadm.
+	// Distribution is rke2, k3s, kubeadm or talos.
 	Distribution      string `json:"distribution"`
 	KubernetesVersion string `json:"kubernetesVersion,omitempty"`
-	// NodeOS is the node OS as one word, such as almalinux-10; empty means the default.
-	NodeOS string `json:"nodeOS,omitempty"`
+	// NodeOS is the node OS as one word, such as almalinux-10; empty means the default. Talos is
+	// its own OS and takes none.
+	NodeOS       string `json:"nodeOS,omitempty"`
+	TalosVersion string `json:"talosVersion,omitempty"`
 }
 
 // requestTemplateBuild has a missing template built for one who may create clusters. The build
 // runs in the management cluster with the builder's token, from images whose addresses and
-// checksums Kubehenge fixes; the request names only the distribution, version and node OS.
+// checksums Kubehenge fixes; the request names only the distribution, version and node OS, or for
+// Talos the release.
 func (s *Server) requestTemplateBuild(w http.ResponseWriter, r *http.Request, u user) {
 	var req templateBuildRequest
 	if !readJSON(w, r, &req) {
 		return
 	}
-	if !slices.Contains([]string{string(templates.RKE2), string(templates.K3s), string(templates.Kubeadm)}, req.Distribution) {
-		writeError(w, http.StatusUnprocessableEntity, "distribution: RKE2, k3s or kubeadm")
+	talos := req.Distribution == string(templates.Talos)
+	if !slices.Contains([]string{string(templates.RKE2), string(templates.K3s), string(templates.Kubeadm), string(templates.Talos)}, req.Distribution) {
+		writeError(w, http.StatusUnprocessableEntity, "distribution: RKE2, k3s, kubeadm or Talos")
 		return
 	}
-	if req.Distribution != string(templates.Kubeadm) && req.KubernetesVersion != "" {
+	switch {
+	case req.Distribution != string(templates.Kubeadm) && req.KubernetesVersion != "":
 		writeError(w, http.StatusUnprocessableEntity, "Kubernetes version: only kubeadm templates are built per version")
 		return
+	case !talos && req.TalosVersion != "":
+		writeError(w, http.StatusUnprocessableEntity, "Talos version: only Talos templates are built per Talos release")
+		return
+	case talos && req.NodeOS != "":
+		writeError(w, http.StatusUnprocessableEntity, "node OS: Talos is its own OS")
+		return
 	}
-	plan := templates.Request{Distribution: templates.Distribution(req.Distribution), KubernetesVersion: req.KubernetesVersion, NodeOS: templates.DefaultNodeOS}
+	plan := templates.Request{Distribution: templates.Distribution(req.Distribution), KubernetesVersion: req.KubernetesVersion, TalosVersion: req.TalosVersion}
+	if !talos {
+		plan.NodeOS = templates.DefaultNodeOS
+	}
 	if req.NodeOS != "" {
 		o, err := templates.ParseNodeOS(req.NodeOS)
 		if err != nil {
@@ -231,6 +245,10 @@ func (s *Server) requestTemplateBuild(w http.ResponseWriter, r *http.Request, u 
 		plan.NodeOS = o
 	}
 	if _, err := templates.Plan(&plan); err != nil {
+		if talos {
+			writeError(w, http.StatusUnprocessableEntity, "Talos version: Talos releases look like "+templates.DefaultTalosVersion)
+			return
+		}
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}

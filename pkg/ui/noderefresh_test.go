@@ -118,13 +118,16 @@ func TestClusterCreatorsHaveMissingTemplatesBuiltWhenAllowed(t *testing.T) {
 			continue
 		}
 		expect(t, d.do("POST", "/api/template-builds", `{"distribution":"k3s","nodeOS":"rocky-10"}`), http.StatusAccepted)
+		expect(t, d.do("POST", "/api/template-builds", `{"distribution":"talos","talosVersion":"v1.14.3"}`), http.StatusAccepted)
 		for _, body := range []string{
-			`{"distribution":"talos"}`, `{"distribution":"kubeadm","kubernetesVersion":"1.38"}`, `{"distribution":"rke2","kubernetesVersion":"v1.38.0"}`,
+			`{"distribution":"talos","talosVersion":"1.14"}`, `{"distribution":"talos","talosVersion":"v1.14.3","nodeOS":"almalinux-10"}`,
+			`{"distribution":"kubeadm","kubernetesVersion":"1.38"}`, `{"distribution":"rke2","kubernetesVersion":"v1.38.0"}`,
+			`{"distribution":"kubeadm","kubernetesVersion":"v1.38.0","talosVersion":"v1.14.3"}`, `{"distribution":"flatcar"}`,
 			`{"distribution":"rke2","nodeOS":"leap-16.1"}`, `{"distribution":"rke2","nodeOS":"plan9-4"}`, `{"distribution":"rke2","nodeOS":"almalinux"}`,
 		} {
 			expect(t, d.do("POST", "/api/template-builds", body), http.StatusUnprocessableEntity)
 		}
-		if got := requested(t, h); len(got) != 2 || got["k3s-rocky-10"].By != "dev@pve" {
+		if got := requested(t, h); len(got) != 3 || got["k3s-rocky-10"].By != "dev@pve" || got["talos-v1.14.3"].By != "dev@pve" {
 			t.Errorf("requests %v", got)
 		}
 		// Seeing a cluster is not creating one.

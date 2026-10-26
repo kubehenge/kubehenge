@@ -12,6 +12,8 @@ namespaces:
   - kubeadm-control-plane-system
   - rke2-control-plane-system
   - k3s-control-plane-system
+  - talos-bootstrap-system
+  - talos-control-plane-system
   - proxmox-infrastructure-system
   - in-cluster-ipam-system
   - helm-addon-system
@@ -183,6 +185,10 @@ providers:
         containers:
           - name: manager
             imageUrl: ghcr.io/rancher/cluster-api-provider-rke2-controlplane:v0.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
+            resources:
+              requests:
+                cpu: 10m
+                memory: 64Mi
       fetchConfig:
         selector:
           matchLabels:
@@ -220,6 +226,56 @@ providers:
           target:
             kind: Deployment
       version: v0.0.0
+  - kind: BootstrapProvider
+    name: talos
+    namespace: talos-bootstrap-system
+    manifests:
+      metadata: https://github.com/kubehenge/cluster-api-bootstrap-provider-talos/releases/download/v0.0.0-alpha.5/metadata.yaml@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      components: https://github.com/kubehenge/cluster-api-bootstrap-provider-talos/releases/download/v0.0.0-alpha.5/bootstrap-components.yaml@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    spec:
+      deployment:
+        containers:
+          - name: manager
+            imageUrl: ghcr.io/kubehenge/cluster-api-bootstrap-provider-talos:v0.0.0-alpha.5@sha256:0000000000000000000000000000000000000000000000000000000000000000
+            resources:
+              requests:
+                cpu: 10m
+                memory: 64Mi
+      fetchConfig:
+        selector:
+          matchLabels:
+            kubehenge.dev/provider-manifests: bootstrapprovider-talos
+            provider.cluster.x-k8s.io/version: v0.0.0-alpha.5
+      patches:
+        - patch: *left-to-scaling
+          target:
+            kind: Deployment
+      version: v0.0.0-alpha.5
+  - kind: ControlPlaneProvider
+    name: talos
+    namespace: talos-control-plane-system
+    manifests:
+      metadata: https://github.com/kubehenge/cluster-api-control-plane-provider-talos/releases/download/v0.0.0-alpha.3/metadata.yaml@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      components: https://github.com/kubehenge/cluster-api-control-plane-provider-talos/releases/download/v0.0.0-alpha.3/control-plane-components.yaml@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    spec:
+      deployment:
+        containers:
+          - name: manager
+            imageUrl: ghcr.io/kubehenge/cluster-api-control-plane-provider-talos:v0.0.0-alpha.3@sha256:0000000000000000000000000000000000000000000000000000000000000000
+            resources:
+              requests:
+                cpu: 10m
+                memory: 64Mi
+      fetchConfig:
+        selector:
+          matchLabels:
+            kubehenge.dev/provider-manifests: controlplaneprovider-talos
+            provider.cluster.x-k8s.io/version: v0.0.0-alpha.3
+      patches:
+        - patch: *left-to-scaling
+          target:
+            kind: Deployment
+      version: v0.0.0-alpha.3
   - kind: InfrastructureProvider
     name: proxmox
     namespace: proxmox-infrastructure-system
@@ -234,6 +290,10 @@ providers:
         containers:
           - imageUrl: ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:0000000000000000000000000000000000000000000000000000000000000000
             name: manager
+            resources:
+              requests:
+                cpu: 10m
+                memory: 64Mi
       fetchConfig:
         selector:
           matchLabels:
@@ -284,6 +344,10 @@ providers:
         containers:
           - name: manager
             imageUrl: registry.k8s.io/capi-ipam-ic/cluster-api-ipam-in-cluster-controller:v0.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
+            resources:
+              requests:
+                cpu: 10m
+                memory: 64Mi
       fetchConfig:
         selector:
           matchLabels:

@@ -537,6 +537,7 @@ describe("create", () => {
     className: "kubehenge-rke2",
     nodeOS: "",
     version: "v1.36.5+rke2r1",
+    talosVersion: "",
     controlPlaneReplicas: 3,
     workerReplicas: 2,
     workerAutoscale: false,
@@ -833,8 +834,14 @@ describe("create", () => {
     expect(Object.fromEntries(summary({ ...form, upgradeMode: "minor" }, withUpgrades))["Automatic upgrades"]).toBe(
       `Patch and minor releases and new node images, every day from 02:00 for 4 h (${zone})`,
     );
-    expect(Object.fromEntries(summary(form, { ...withUpgrades, distribution: "talos" }))["Automatic upgrades"]).toBe(
-      "Off",
+    // Talos nodes take Talos patch releases in the same window.
+    const talos = { ...withUpgrades, distribution: "talos" };
+    expect(request(form, talos).variables["upgrades"]).toStrictEqual({
+      mode: "off",
+      window: { start: "02:00", durationMinutes: 240, timeZone: zone },
+    });
+    expect(Object.fromEntries(summary(form, talos))["Automatic upgrades"]).toBe(
+      `Talos patch releases, every day from 02:00 for 4 h (${zone})`,
     );
   });
 

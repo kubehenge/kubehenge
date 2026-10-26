@@ -29,8 +29,15 @@ const KubeadmVersionsAnnotation = "kubehenge.dev/kubeadm-versions"
 // for ever for its first VM.
 const NodeOSTemplatesAnnotation = "kubehenge.dev/node-os-templates"
 
+// TalosTemplatesAnnotation lists on the Talos ClusterClass the Talos releases a template in the
+// template pool is there for, newest first and separated by commas: a cluster starts on one of
+// these, and its new machines move to another only once it is there. Talos is its own OS, so no
+// node OS is part of it.
+const TalosTemplatesAnnotation = "kubehenge.dev/talos-templates"
+
 // TemplateVersions keeps KubeadmVersionsAnnotation, NodeOSTemplatesAnnotation,
-// TemplateStoragesAnnotation, NodeImageBuildsAnnotation and SnapshotStoragesAnnotation current.
+// TalosTemplatesAnnotation, TemplateStoragesAnnotation, NodeImageBuildsAnnotation and
+// SnapshotStoragesAnnotation current.
 type TemplateVersions struct {
 	Client         client.Client
 	ClassNamespace string
@@ -73,6 +80,7 @@ func (p *TemplateVersions) publishSnapshotStorages(ctx context.Context) error {
 		p.annotate(ctx, "kubeadm", SnapshotStoragesAnnotation, list),
 		p.annotate(ctx, "rke2", SnapshotStoragesAnnotation, list),
 		p.annotate(ctx, "k3s", SnapshotStoragesAnnotation, list),
+		p.annotate(ctx, "talos", SnapshotStoragesAnnotation, list),
 	)
 }
 
@@ -97,6 +105,8 @@ func (p *TemplateVersions) publishTemplates(ctx context.Context) error {
 		p.annotate(ctx, "kubeadm", TemplateStoragesAnnotation, storages),
 		p.annotate(ctx, "rke2", TemplateStoragesAnnotation, storages),
 		p.annotate(ctx, "k3s", TemplateStoragesAnnotation, storages),
+		p.annotate(ctx, "talos", TemplateStoragesAnnotation, storages),
+		p.annotate(ctx, "talos", TalosTemplatesAnnotation, strings.Join(seen.talos, ",")),
 		p.annotate(ctx, "kubeadm", NodeImageBuildsAnnotation, builds),
 		p.annotate(ctx, "rke2", NodeImageBuildsAnnotation, builds),
 		p.annotate(ctx, "k3s", NodeImageBuildsAnnotation, builds),

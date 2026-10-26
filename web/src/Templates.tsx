@@ -3,7 +3,18 @@ import { useEffect, useState, type JSX } from "react";
 import { api, bridgesOf } from "./api";
 import { isVLAN, list } from "./network";
 import { choosable, cpuNote, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSLabel } from "./node-os";
-import type { Bridge, Job, NodeOS, PveNode, Storage, TemplateRefresh, TemplateRequest, VMTemplate } from "./types";
+import { loadingReleases, offeredReleases, releaseToMake, talosExample, talosRelease, useTalosReleases } from "./Talos";
+import type {
+  Bridge,
+  Job,
+  NodeOS,
+  PveNode,
+  Storage,
+  TalosReleases,
+  TemplateRefresh,
+  TemplateRequest,
+  VMTemplate,
+} from "./types";
 import {
   Choice,
   Dialog,
@@ -14,6 +25,7 @@ import {
   logLines,
   pollIdle,
   pollRunning,
+  sentence,
   sole,
   usePoll,
   weekdayName,
@@ -38,9 +50,10 @@ export function Templates(): JSX.Element {
       <h3>VM templates</h3>
       <p className="muted">
         Every cluster's machines are clones of one of these. RKE2 and k3s need a template each for every node OS their
-        clusters run; kubeadm needs one for each node OS and Kubernetes version its clusters run or upgrade to. Each
-        build of a node OS template is a template of its own; clusters move to a newer build inside their maintenance
-        windows.
+        clusters run; kubeadm needs one for each node OS and Kubernetes version its clusters run or upgrade to; Talos,
+        which is its own OS, one for each Talos release its clusters start on. Each build of a node OS template is a
+        template of its own; clusters move to a newer build inside their maintenance windows. A Talos template is made
+        once: its nodes take updates by upgrading Talos in place.
       </p>
       <ErrorBox message={error} />
       {data && data.templates.length === 0 && <p>No templates yet: clusters cannot be created until there is one.</p>}
@@ -67,7 +80,7 @@ export function Templates(): JSX.Element {
                 <td>{t.nodeOS ?? "Talos Linux"}</td>
                 <td>
                   {t.built === undefined ? (
-                    <span className="muted">Not rebuilt</span>
+                    <span className="muted">{t.tags.includes("talos") ? "Made once" : "Not rebuilt"}</span>
                   ) : (
                     <>
                       {new Date(t.built).toLocaleString()}
@@ -249,13 +262,27 @@ function AutomaticBuilds({
   );
 }
 
-const distributions = ["rke2", "k3s", "kubeadm"] as const;
+const distributions = ["rke2", "k3s", "kubeadm", "talos"] as const;
+
+function talosHint(releases: TalosReleases | undefined): string {
+  const reason = releases?.error;
+  return `A Talos cluster can start on the releases with a template, and is upgraded from there.${
+    filled(reason) ? ` ${sentence(reason)} Type the release, such as ${talosExample}.` : ""
+  }`;
+}
+
+// releaseLabel names a release as the build dialog offers it: v1.14.4 (default, has a template).
+function releaseLabel(r: TalosReleases, v: string): string {
+  const notes = [...(v === r.default ? ["default"] : []), ...(r.templates.includes(v) ? ["has a template"] : [])];
+  return notes.length > 0 ? `${v} (${notes.join(", ")})` : v;
+}
 
 interface BuildForm {
   distribution: (typeof distributions)[number];
   /** The node OS as one word, such as almalinux-10; empty, the default. */
   nodeOS: string;
   kubernetesVersion: string;
+  talosVersion: string;
   node: string;
   storage: string;
   importStorage: string;
@@ -278,14 +305,20 @@ export function buildRequest(f: BuildForm): TemplateRequest {
   if (f.distribution === "kubeadm") {
     req.kubernetesVersion = f.kubernetesVersion.trim();
   }
+  // A Talos image becomes a template as it is, without booting the VM that prepares the others, and
+  // Talos is its own OS.
+  if (f.distribution === "talos") {
+    req.talosVersion = f.talosVersion.trim();
+    return req;
+  }
   if (f.nodeOS) {
     req.nodeOS = f.nodeOS;
   }
-  if (f.isoStorage) {
-    req.isoStorage = f.isoStorage;
-  }
   if (f.vlan) {
     req.vlan = Number(f.vlan);
+  }
+  if (f.isoStorage) {
+    req.isoStorage = f.isoStorage;
   }
   if (f.buildAddress.trim()) {
     req.buildAddress = f.buildAddress.trim();
@@ -301,6 +334,9 @@ export function buildProblems(f: BuildForm): Partial<Record<keyof BuildForm, str
   if (f.distribution === "kubeadm" && !kubernetesVersion.test(f.kubernetesVersion.trim())) {
     p.kubernetesVersion = "A version such as v1.36.5.";
   }
+  if (f.distribution === "talos" && !talosRelease.test(f.talosVersion.trim())) {
+    p.talosVersion = `A release such as ${talosExample}.`;
+  }
   if (!f.node) {
     p.node = "Choose a node.";
   }
@@ -313,13 +349,46 @@ export function buildProblems(f: BuildForm): Partial<Record<keyof BuildForm, str
   if (!f.bridge) {
     p.bridge = "Choose a bridge.";
   }
-  if (f.vlan && !isVLAN(f.vlan)) {
+  if (f.distribution !== "talos" && f.vlan && !isVLAN(f.vlan)) {
     p.vlan = "1 to 4094.";
   }
-  if (f.buildAddress.trim() && (!f.buildAddress.includes("/") || !f.buildGateway.trim() || !f.buildDNS.trim())) {
+  if (
+    f.distribution !== "talos" &&
+    f.buildAddress.trim() &&
+    (!f.buildAddress.includes("/") || !f.buildGateway.trim() || !f.buildDNS.trim())
+  ) {
     p.buildAddress = "A static address needs its prefix length, a gateway and a DNS server.";
   }
   return p;
+}
+
+// NodeOSField chooses the node OS a template is built of, for every distribution but Talos, which
+// is its own OS.
+function NodeOSField({
+  nodeOSes,
+  value,
+  onChange,
+}: {
+  nodeOSes: NodeOS[];
+  value: string;
+  onChange: (v: string) => void;
+}): JSX.Element | null {
+  if (nodeOSes.length === 0) {
+    return null;
+  }
+  return (
+    <Field label="Node OS" hint={cpuNote(findNodeOS(nodeOSes, value), nodeOSes)}>
+      {(id) => (
+        <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
+          {nodeOSes.map((o) => (
+            <option key={nodeOSKey(o)} value={nodeOSKey(o)} disabled={!choosable(o)}>
+              {nodeOSLabel(o)}
+            </option>
+          ))}
+        </select>
+      )}
+    </Field>
+  );
 }
 
 function BuildDialog({
@@ -342,6 +411,7 @@ function BuildDialog({
     distribution: "rke2",
     nodeOS: usual === undefined ? "" : nodeOSKey(usual),
     kubernetesVersion: "",
+    talosVersion: "",
     node: "",
     storage: "",
     importStorage: "",
@@ -399,15 +469,39 @@ function BuildDialog({
     .toSorted((a, b) => Number(b.shared) - Number(a.shared))
     .map((s) => s.storage);
   const bridgeNames = bridges.map((b) => b.bridge);
-  // A lone choice is taken until the user picks; the cloud-init storage is optional, so stays the node's first.
+  const talos = entered.distribution === "talos";
+  const releases = useTalosReleases(talos);
+  // A lone choice is taken until the user picks; the cloud-init storage is optional, so stays the
+  // node's first; and the Talos release is the one templates are made of by default, unless it has
+  // one already.
+  const releaseOffered = releases ? releaseToMake(releases) : "";
   const form: BuildForm = {
     ...entered,
+    talosVersion: filled(entered.talosVersion) ? entered.talosVersion : releaseOffered,
     storage: filled(entered.storage) ? entered.storage : (sole(diskStorages) ?? ""),
     importStorage: filled(entered.importStorage) ? entered.importStorage : (sole(onNode("import")) ?? ""),
     bridge: filled(entered.bridge) ? entered.bridge : (sole(bridgeNames) ?? ""),
   };
   const problems = buildProblems(form);
   const shown = (k: keyof BuildForm): string | undefined => (touched.has(k) ? problems[k] : undefined);
+  const releaseField = (id: string): JSX.Element => {
+    if (!releases) {
+      return loadingReleases(id);
+    }
+    const offered = offeredReleases(releases);
+    if (offered.length === 0) {
+      return <input id={id} value={form.talosVersion} onChange={(e) => set("talosVersion", e.target.value.trim())} />;
+    }
+    return (
+      <select id={id} value={form.talosVersion} onChange={(e) => set("talosVersion", e.target.value)}>
+        {offered.map((v) => (
+          <option key={v} value={v}>
+            {releaseLabel(releases, v)}
+          </option>
+        ))}
+      </select>
+    );
+  };
 
   const start = async (): Promise<void> => {
     setBusy(true);
@@ -440,10 +534,9 @@ function BuildDialog({
       }
     >
       <p className="muted">
-        Builds with your Proxmox VE session, in a few minutes. The node OS&apos;s image is checked against its
-        publisher&apos;s signed checksums and booted once to compose the node from the node OS&apos;s own signed
-        packages, only what a node needs and what the distribution needs, then turned into a template. A template that
-        exists already gets a new build beside it, which clusters move to in their maintenance windows.
+        {talos
+          ? "Makes the template with your Proxmox VE session, in a few minutes. The Talos Image Factory's image of the release, with the QEMU guest agent, is turned into a template as it is: Talos is its own OS, so no node OS is chosen. A release's template is made once; nodes cloned from it move on by upgrading Talos in place."
+          : "Builds with your Proxmox VE session, in a few minutes. The node OS's image is checked against its publisher's signed checksums and booted once to compose the node from the node OS's own signed packages, only what a node needs and what the distribution needs, then turned into a template. A template that exists already gets a new build beside it, which clusters move to in their maintenance windows."}
       </p>
       <Field label="For">
         {(id) => (
@@ -460,20 +553,14 @@ function BuildDialog({
             <option value="rke2">RKE2</option>
             <option value="k3s">k3s</option>
             <option value="kubeadm">kubeadm</option>
+            <option value="talos">Talos</option>
           </select>
         )}
       </Field>
-      {nodeOSes.length > 0 && (
-        <Field label="Node OS" hint={cpuNote(findNodeOS(nodeOSes, form.nodeOS), nodeOSes)}>
-          {(id) => (
-            <select id={id} value={form.nodeOS} onChange={(e) => set("nodeOS", e.target.value)}>
-              {nodeOSes.map((o) => (
-                <option key={nodeOSKey(o)} value={nodeOSKey(o)} disabled={!choosable(o)}>
-                  {nodeOSLabel(o)}
-                </option>
-              ))}
-            </select>
-          )}
+      {!talos && <NodeOSField nodeOSes={nodeOSes} value={form.nodeOS} onChange={(v) => set("nodeOS", v)} />}
+      {talos && (
+        <Field label="Talos release" hint={talosHint(releases)} error={shown("talosVersion")}>
+          {releaseField}
         </Field>
       )}
       {form.distribution === "kubeadm" && (
@@ -513,42 +600,52 @@ function BuildDialog({
           />
         )}
       </Field>
-      <Field label="Cloud-init image" hint="A storage with the ISO content type, while the image is prepared.">
-        {(id) => (
-          <Choice
-            id={id}
-            value={form.isoStorage}
-            options={onNode("iso")}
-            optional="The node's first"
-            onChoose={(v) => set("isoStorage", v)}
-          />
-        )}
-      </Field>
+      {!talos && (
+        <Field label="Cloud-init image" hint="A storage with the ISO content type, while the image is prepared.">
+          {(id) => (
+            <Choice
+              id={id}
+              value={form.isoStorage}
+              options={onNode("iso")}
+              optional="The node's first"
+              onChoose={(v) => set("isoStorage", v)}
+            />
+          )}
+        </Field>
+      )}
       <Field
         label="Bridge"
-        hint="The VM that prepares the image needs to reach the node OS's and Kubernetes' package repositories."
+        hint={
+          talos
+            ? "The template's network device; clones are attached to their cluster's own bridge."
+            : "The VM that prepares the image needs to reach the node OS's and Kubernetes' package repositories."
+        }
         error={shown("bridge")}
       >
         {(id) => <Choice id={id} value={form.bridge} options={bridgeNames} onChoose={(v) => set("bridge", v)} />}
       </Field>
-      <Field label="VLAN tag" hint="Optional." error={shown("vlan")}>
-        {(id) => (
-          <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
-        )}
-      </Field>
-      <details className="advanced">
-        <summary>Static address</summary>
-        <p className="muted">Without one, the VM that prepares the image asks DHCP.</p>
-        <Field label="Address" hint="With prefix length, such as 192.0.2.50/24." error={shown("buildAddress")}>
-          {(id) => <input id={id} value={form.buildAddress} onChange={(e) => set("buildAddress", e.target.value)} />}
+      {!talos && (
+        <Field label="VLAN tag" hint="Optional." error={shown("vlan")}>
+          {(id) => (
+            <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
+          )}
         </Field>
-        <Field label="Gateway">
-          {(id) => <input id={id} value={form.buildGateway} onChange={(e) => set("buildGateway", e.target.value)} />}
-        </Field>
-        <Field label="DNS servers" hint="Separated by commas.">
-          {(id) => <input id={id} value={form.buildDNS} onChange={(e) => set("buildDNS", e.target.value)} />}
-        </Field>
-      </details>
+      )}
+      {!talos && (
+        <details className="advanced">
+          <summary>Static address</summary>
+          <p className="muted">Without one, the VM that prepares the image asks DHCP.</p>
+          <Field label="Address" hint="With prefix length, such as 192.0.2.50/24." error={shown("buildAddress")}>
+            {(id) => <input id={id} value={form.buildAddress} onChange={(e) => set("buildAddress", e.target.value)} />}
+          </Field>
+          <Field label="Gateway">
+            {(id) => <input id={id} value={form.buildGateway} onChange={(e) => set("buildGateway", e.target.value)} />}
+          </Field>
+          <Field label="DNS servers" hint="Separated by commas.">
+            {(id) => <input id={id} value={form.buildDNS} onChange={(e) => set("buildDNS", e.target.value)} />}
+          </Field>
+        </details>
+      )}
       <ErrorBox message={error} />
     </Dialog>
   );

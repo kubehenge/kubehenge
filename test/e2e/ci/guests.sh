@@ -5,15 +5,26 @@
 #   test/e2e/ci/guests.sh record <file>    every 15 s until stopped: each VM's CPU time, memory and swap
 #   test/e2e/ci/guests.sh summary <file>   from that record, each minute's CPUs and memory by VM, and
 #                                          each VM's peaks: what a test's steps ask of the machine
-#   test/e2e/ci/guests.sh collect <dir>    from inside each running VM, through its guest agent: its
+#   test/e2e/ci/guests.sh collect <dir> [<work dir>]
+#                                          from inside each running VM, through its guest agent: its
 #                                          state, the distribution's, the kernel's and cloud-init's
 #                                          logs, the logs of the control plane's static pods and of
 #                                          restarted containers, and its etcd members' view of their
-#                                          cluster
+#                                          cluster; from a Talos VM, whose guest agent runs no
+#                                          commands, the same through Talos's API
 #
 # record and summary read the VMs' QEMU processes on this machine, which runs Proxmox VE's container
 # on its own kernel; collect runs the commands in the container. Everything collect writes passes
 # through redact, and each part is cut at a few megabytes.
+#
+# collect reads a Talos VM from this machine with talosctl and the talosconfig of the VM's cluster:
+# the management cluster's from the Terraform/OpenTofu state in run.sh's work directory (by default
+# $RUNNER_TEMP/e2e, where the workflow keeps it), a workload cluster's from its <cluster>-talosconfig
+# Secret, read with the management cluster's kubeconfig from the same place. They stay in a private
+# directory that collect removes when it ends, never in what it writes. A VM runs Talos when it is
+# tagged management (the management cluster's nodes) or talos, or when its cluster has a
+# talosconfig. Each talosctl call is cut off after KUBEHENGE_E2E_TALOSCTL_TIMEOUT seconds (60), and
+# a node whose API does not answer the first is asked nothing more.
 set -eu
 
 # A VM's QEMU process names its VM ID and name on its command line.
@@ -104,6 +115,15 @@ guest_script() {
                 for u in k3s k3s-agent rke2-server rke2-agent kubelet containerd; do
                     systemctl cat "$u" > /dev/null 2>&1 || continue
                     echo; systemctl show -p Id,ActiveState,SubState,Result,NRestarts,ExecMainStatus,ExecMainStartTimestamp "$u"
+                done
+                # Which chains the node has and what its built-in chains jump to: kube-proxy, the CNI and
+                # the network policies each add their own and rewrite the tables at once.
+                for save in iptables-save /var/lib/rancher/k3s/data/current/bin/aux/iptables-save; do
+                    command -v "$save" > /dev/null 2>&1 || continue
+                    for table in nat filter; do
+                        echo; "$save" -t "$table" | grep -E "^(\*|:|-A (PREROUTING|INPUT|FORWARD|OUTPUT|POSTROUTING) )"
+                    done
+                    break
                 done'
             ;;
         # The distribution's own services, as many lines as are left of the last hour or so.
@@ -185,14 +205,265 @@ in_guest() {
         "exit code: \(.exitcode // "none, still running when the wait ended")"'
 }
 
+talos_timeout=${KUBEHENGE_E2E_TALOSCTL_TIMEOUT:-60}
+
+# talosctl_node <talosctl arguments...>: asks the node at ${talos_address} directly with
+# ${talos_config}, rather than through a control plane, and leaves what talosctl printed in
+# ${private}/talosctl.out and its exit code in talos_code, 124 or 137 when it was cut off.
+talosctl_node() {
+    talos_code=0
+    timeout -k 10 "${talos_timeout}" talosctl --talosconfig "${talos_config}" --endpoints "${talos_address}" \
+        --nodes "${talos_address}" "$@" < /dev/null > "${private}/talosctl.out" 2>&1 || talos_code=$?
+}
+
+# talos <lines> <talosctl arguments...>: the command, the last lines of what it printed and its exit
+# code, as in_guest ends what a guest printed.
+talos() {
+    talos_lines=$1
+    shift
+    echo "== talosctl $*"
+    talosctl_node "$@"
+    tail -n "${talos_lines}" "${private}/talosctl.out"
+    case ${talos_code} in
+        124 | 137) echo "exit code: none, cut off after ${talos_timeout} s" ;;
+        *) echo "exit code: ${talos_code}" ;;
+    esac
+}
+
+# talos_pod_logs: the API server's logs as the kubelet keeps them on the node, readable while the
+# API is down, and the previous log of every container that restarted, as guest_script's logs part
+# reads them elsewhere. Talos runs etcd as a service, whose log is in the services part.
+talos_pod_logs() {
+    talos 100000 list /var/log/pods -r > "${private}/pod-list"
+    if [ "${talos_code}" -ne 0 ]; then
+        cat "${private}/pod-list"
+        return 0
+    fi
+    # talosctl names each file below the directory it lists.
+    awk '$NF ~ /\.log$/ && $1 != "==" { f = $NF; if (f !~ /^\//) f = "/var/log/pods/" f; print f }' \
+        "${private}/pod-list" > "${private}/pod-logs"
+    grep -E '^/var/log/pods/kube-system_kube-apiserver-[^/]+/[^/]+/[^/]+$' "${private}/pod-logs" |
+        while read -r f; do talos 1500 read "${f}"; done
+    # The kubelet numbers a container's runs, and keeps the one before the current.
+    awk '{ d = $0; sub(/[^\/]+$/, "", d); n = substr($0, length(d) + 1) + 0; count[d]++
+            if (!(d in low) || n < low[d]) { low[d] = n; first[d] = $0 } }
+        END { for (d in count) if (count[d] > 1) print first[d] }' "${private}/pod-logs" |
+        while read -r f; do
+            echo "== an earlier run of the container"
+            talos 400 read "${f}"
+        done
+}
+
+# talos_part <part>: one part of a Talos node's state, as guest_script prints another VM's: the
+# machine's stage, its services' states and events, its memory, pressure and processes and the
+# kubelet's containers and Talos's TCP connections; its services' logs; the pods' logs; the kernel's log; etcd's members, status
+# and alarms. ${talos_services} names the node's services as it listed them.
+talos_part() {
+    case $1 in
+        state)
+            cat "${private}/version" "${private}/services"
+            talos 100 get machinestatus -o yaml
+            for s in ${talos_services}; do talos 60 service "${s}"; done
+            talos 100 memory
+            for f in /proc/uptime /proc/loadavg /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io; do
+                talos 10 read "${f}"
+            done
+            talos 1000 processes
+            talos 1000 containers --kubernetes
+            # Talos's own connections, its log destination's among them.
+            talos 300 netstat --tcp --all --programs
+            ;;
+        services)
+            for s in ${talos_services}; do talos 10000 logs "${s}" --tail 10000; done
+            ;;
+        logs) talos_pod_logs ;;
+        kernel) talos 1500 dmesg ;;
+        etcd)
+            talos 200 etcd members
+            talos 100 etcd status
+            talos 100 etcd alarm list
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+# talos_collect <dir>: a Talos VM's parts, read through its API. A node whose API does not answer is
+# asked once, and its state says why.
+talos_collect() {
+    {
+        echo "Talos, read through its API at ${talos_address}"
+        talos 20 version
+    } > "${private}/version"
+    if [ "${talos_code}" -ne 0 ]; then
+        {
+            cat "${private}/version"
+            echo "its API does not answer, so nothing more was asked of it"
+        } | redact | head -c 1000000 > "$1/state.txt"
+        return 0
+    fi
+    talos 100 services > "${private}/services"
+    talos_services=$(awk '$1 != "==" && $2 ~ /^(machined|apid|trustd|containerd|cri|kubelet|etcd)$/ { printf "%s ", $2 }' \
+        "${private}/talosctl.out")
+    [ -n "${talos_services}" ] || talos_services='machined apid trustd containerd cri kubelet etcd '
+    for part in state services logs kernel etcd; do
+        # etcd runs on the control planes only.
+        if [ "${part}" = etcd ]; then
+            case " ${talos_services}" in
+                *" etcd "*) ;;
+                *) continue ;;
+            esac
+        fi
+        size=8000000
+        [ "${part}" != state ] || size=1000000
+        talos_part "${part}" 2>&1 | redact | head -c "${size}" > "$1/${part}.txt"
+    done
+}
+
+# tofu_output <output> <file>: one of the management cluster's Terraform/OpenTofu outputs into the
+# file, or why it could not be had into <file>.why.
+tofu_output() {
+    if [ -z "${work}" ] || [ ! -d "${work}/mgmt" ]; then
+        echo "no Terraform/OpenTofu state in '${work}/mgmt'" > "$2.why"
+        return 1
+    fi
+    tofu_code=0
+    timeout -k 10 60 tofu -chdir="${work}/mgmt" output -raw "$1" < /dev/null > "$2" 2> "$2.why" || tofu_code=$?
+    if [ "${tofu_code}" -ne 0 ]; then
+        rm -f "$2"
+        echo "Terraform/OpenTofu gave no $1, exit code ${tofu_code}" >> "$2.why"
+        return 1
+    fi
+}
+
+mgmt_kubectl() {
+    timeout -k 10 60 kubectl --kubeconfig "${kubeconfig}" --request-timeout=20s "$@" < /dev/null
+}
+
+# talos_machines: each machine Cluster API made on Proxmox VE as "<VM ID> <namespace> <cluster>
+# <address>" in ${private}/machines, from the management cluster; nothing, with why in
+# ${private}/machines.why, when it does not answer. Clears kubeconfig then.
+talos_machines() {
+    : > "${private}/machines"
+    kubeconfig=${work:+${work}/kubeconfig.yaml}
+    if [ -z "${kubeconfig}" ] || [ ! -s "${kubeconfig}" ]; then
+        kubeconfig=${private}/kubeconfig
+        # shellcheck disable=SC2310 # its failure is why nothing is asked of the management cluster.
+        if ! tofu_output kubeconfig "${kubeconfig}"; then
+            cp "${kubeconfig}.why" "${private}/machines.why"
+            kubeconfig=''
+            return 0
+        fi
+    fi
+    # shellcheck disable=SC2310 # its failure is recorded.
+    if ! mgmt_kubectl get proxmoxmachines -A -o json > "${private}/proxmoxmachines.json" 2> "${private}/machines.why"; then
+        kubeconfig=''
+        return 0
+    fi
+    jq -r '.items[] | select(.spec.virtualMachineID != null) | [.spec.virtualMachineID, .metadata.namespace,
+            (.metadata.labels["cluster.x-k8s.io/cluster-name"] // "-"),
+            ([.status.addresses[]? | select(.type == "InternalIP") | .address][0] // "-")] |
+        map(tostring) | join(" ")' "${private}/proxmoxmachines.json" > "${private}/machines" 2> "${private}/machines.why" ||
+        : > "${private}/machines"
+}
+
+# cluster_talosconfig <namespace> <cluster> <file>: the workload cluster's talosconfig from its
+# Secret into the file, once, or why there is none into <file>.why.
+cluster_talosconfig() {
+    if [ -e "$3" ] || [ -e "$3.why" ]; then
+        return 0
+    fi
+    if [ -z "${kubeconfig}" ]; then
+        cp "${private}/machines.why" "$3.why"
+        return 0
+    fi
+    # shellcheck disable=SC2310 # its failure is recorded.
+    if mgmt_kubectl -n "$1" get secret "$2-talosconfig" -o jsonpath='{.data.talosconfig}' > "$3.base64" 2> "$3.why" &&
+        base64 -d "$3.base64" > "$3" 2>> "$3.why" && [ -s "$3" ]; then
+        rm -f "$3.why"
+    else
+        rm -f "$3"
+        [ -s "$3.why" ] || echo "the Secret $2-talosconfig holds no talosconfig" > "$3.why"
+    fi
+    rm -f "$3.base64"
+}
+
+# agent_address <VM ID>: the VM's first IPv4 address as its guest agent reports it, past loopback and
+# the links a CNI adds.
+agent_address() {
+    timeout -k 10 60 docker exec kubehenge-e2e-pve qm guest cmd "$1" network-get-interfaces < /dev/null 2> /dev/null |
+        jq -r '[.[]? | select(.name | test("^(lo|cni|flannel|veth|cilium|lxc|kube-|vxlan|tunl|cali|docker|dummy)") | not) |
+            ."ip-addresses"[]? | select(."ip-address-type" == "ipv4") | ."ip-address"][0] // empty' 2> /dev/null || true
+}
+
+# talos_vm <VM ID> <tags>: whether the VM runs Talos. If it does, sets talos_config to its cluster's
+# talosconfig and talos_address to where its API answers, or talos_why to why it cannot be read.
+talos_vm() {
+    talos_config='' talos_address='' talos_why=''
+    machine=$(awk -v id="$1" '$1 == id { print $2, $3, $4; exit }' "${private}/machines")
+    read -r m_namespace m_cluster m_address << EOF
+${machine}
+EOF
+    case ";$2;" in
+        *";management;"*)
+            talos_config=${private}/management.talosconfig
+            if [ ! -e "${talos_config}" ] && [ ! -e "${talos_config}.why" ]; then
+                # shellcheck disable=SC2310 # its failure is recorded.
+                tofu_output talosconfig "${talos_config}" || true
+            fi
+            ;;
+        *)
+            if [ -n "${m_cluster}" ] && [ "${m_cluster}" != - ]; then
+                talos_config=${private}/${m_namespace}_${m_cluster}.talosconfig
+                cluster_talosconfig "${m_namespace}" "${m_cluster}" "${talos_config}"
+            else
+                talos_config=${private}/unknown.talosconfig
+                {
+                    echo "no Cluster API machine of the management cluster is this VM"
+                    cat "${private}/machines.why" 2> /dev/null || true
+                } > "${talos_config}.why"
+            fi
+            case ";$2;" in
+                *";talos;"*) ;;
+                *) [ -s "${talos_config}" ] || return 1 ;;
+            esac
+            ;;
+    esac
+    if [ ! -s "${talos_config}" ]; then
+        talos_why="no talosconfig: $(cat "${talos_config}.why" 2> /dev/null || true)"
+        return 0
+    fi
+    talos_address=${m_address}
+    case ${talos_address} in
+        '' | -) talos_address=$(agent_address "$1") ;;
+        *) ;;
+    esac
+    [ -n "${talos_address}" ] || talos_why="neither Cluster API nor the guest agent gives its address"
+}
+
 collect() {
-    out=$1
+    out=$1 work=$2
     mkdir -p "${out}"
+    private=$(mktemp -d)
+    trap 'rm -rf "${private}"' EXIT
+    trap 'exit 1' HUP INT TERM
+    talos_machines
     docker exec kubehenge-e2e-pve qm list | awk 'NR > 1 && $3 == "running" { print $1, $2 }' |
         while read -r vmid name; do
             dir="${out}/${vmid}-${name}" && mkdir -p "${dir}"
-            # A VM whose agent does not answer, or that has no shell, as Talos has none, is tried
-            # once; its first part says why.
+            tags=$(timeout -k 10 60 docker exec kubehenge-e2e-pve qm config "${vmid}" < /dev/null 2> /dev/null |
+                sed -n 's/^tags: //p' | tr ', ' ';;')
+            # shellcheck disable=SC2310 # it returns whether the VM runs Talos.
+            if talos_vm "${vmid}" "${tags}"; then
+                if [ -n "${talos_why}" ]; then
+                    printf 'Talos, whose guest agent runs no commands, cannot be read through its API: %s\n' \
+                        "${talos_why}" | redact | head -c 1000000 > "${dir}/state.txt"
+                else
+                    talos_collect "${dir}"
+                fi
+                continue
+            fi
+            # A VM whose agent does not answer, or that has no shell, is tried once; its first part
+            # says why.
             commands=$(guest_script state)
             in_guest "${vmid}" "${commands}" 2>&1 | redact | head -c 1000000 > "${dir}/state.txt"
             grep -q '^exit code: 0$' "${dir}/state.txt" || continue
@@ -206,9 +477,9 @@ collect() {
 case ${1:-} in
     record) record > "${2:?usage: $0 record <file>}" ;;
     summary) summary "${2:?usage: $0 summary <file>}" ;;
-    collect) collect "${2:?usage: $0 collect <directory>}" ;;
+    collect) collect "${2:?usage: $0 collect <directory> [<work directory>]}" "${3:-${RUNNER_TEMP:+${RUNNER_TEMP}/e2e}}" ;;
     *)
-        echo "usage: $0 record <file> | summary <file> | collect <directory>" >&2
+        echo "usage: $0 record <file> | summary <file> | collect <directory> [<work directory>]" >&2
         exit 2
         ;;
 esac

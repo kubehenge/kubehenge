@@ -16,6 +16,8 @@ A pushed version tag releases Kubehenge with no further step. CI checks the tag,
 | `ghcr.io/kubehenge/cluster-api-provider-proxmox:<capmox release>-<commit>` | While the management cluster runs capmox as built from an upstream commit (`capmox_build` in `management-cluster/versions.tf`) with the fixes in `scripts/capmox-patches`: that build. `scripts/provider-image.sh` builds it reproducibly and refuses an image whose digest differs from the one the module names, so anyone can rebuild it from that commit and those patches and compare. |
 | `ghcr.io/kubehenge/cluster-api-addon-provider-helm:<release>-<commit>` | While the management cluster runs the Add-on Provider for Helm with the fixes in `scripts/helm-addon-patches` (`helm_addon_build`): that build, made as capmox's is. |
 
+The Talos providers are not part of a Kubehenge release: the management cluster installs them from the releases of Kubehenge's forks, [cluster-api-bootstrap-provider-talos](https://github.com/kubehenge/cluster-api-bootstrap-provider-talos) and [cluster-api-control-plane-provider-talos](https://github.com/kubehenge/cluster-api-control-plane-provider-talos), each of which signs and attests its own image and files.
+
 ## How it is built and signed
 
 A pushed tag starts `.github/workflows/release.yml`, which calls `.github/workflows/release-build.yml` for everything that makes the release's bytes and signs them, then checks and publishes what comes out:
@@ -99,6 +101,6 @@ for image in ghcr.io/kubehenge/kubehenge:v<version> \
 done
 ```
 
-`gh release verify` checks GitHub's attestation of the published release: its tag and every file as they now stay. Until the packages on ghcr.io are public, the image checks need a login (`docker login ghcr.io`). `index.json` should hold the previous releases unchanged and one new entry whose checksum matches `SHA256SUMS`.
+`gh release verify` checks GitHub's attestation of the published release: its tag and every file as they now stay. `make verify-providers`, from the same checkout, checks the Talos providers the tag pins the same way, against their forks' release workflows. Until the packages on ghcr.io are public, the image checks need a login (`docker login ghcr.io`). `index.json` should hold the previous releases unchanged and one new entry whose checksum matches `SHA256SUMS`.
 
 How users check a release before installing it is in [install.md](install.md#verifying-a-release).

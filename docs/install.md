@@ -194,6 +194,8 @@ cosign verify "$image" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
+The Talos providers come from their forks' own releases, not Kubehenge's, each signed and attested by that fork's release workflow; the management cluster's nodes pull their images only with that signature. `make verify-providers`, from a checkout of the tag, checks their files and images against the digests the tag pins, with the GitHub CLI and cosign.
+
 How releases are built and signed is in [releasing.md](releasing.md).
 
 ## Sign in
@@ -367,7 +369,7 @@ The run creates, on Proxmox VE:
 - a group for the clusters' users, and the roles all of these use;
 - the Talos disk image, and the management cluster's VMs, tagged `kubehenge` and `management`.
 
-In the management cluster it installs cert-manager, the Cluster API Operator with Cluster API and its providers for Proxmox VE, kubeadm, RKE2, k3s, IP address management and Helm add-ons, and the `kubehenge` chart: Kubehenge's ClusterClasses and its controller. The kubeadm, RKE2 and k3s controllers run only while a cluster uses their distribution ([architecture.md](architecture.md#management-cluster)).
+In the management cluster it installs cert-manager, the Cluster API Operator with Cluster API and its providers for Proxmox VE, kubeadm, RKE2, k3s, Talos (from Kubehenge's forks, [cluster-api-bootstrap-provider-talos](https://github.com/kubehenge/cluster-api-bootstrap-provider-talos) and [cluster-api-control-plane-provider-talos](https://github.com/kubehenge/cluster-api-control-plane-provider-talos), maintained primarily for Kubehenge and open to anyone), IP address management and Helm add-ons, and the `kubehenge` chart: Kubehenge's ClusterClasses and its controller. The kubeadm, RKE2, k3s and Talos controllers run only while a cluster uses their distribution ([architecture.md](architecture.md#management-cluster)).
 
 ### Back up the appliance
 
@@ -379,20 +381,21 @@ Every cluster's nodes are clones of a VM template that `kubehenge template creat
 
 | Distribution | Template |
 | --- | --- |
-| RKE2 and k3s | one template, shared: `kubehenge template create rke2` |
-| kubeadm | one per Kubernetes version: `kubehenge template create kubeadm --kubernetes-version v1.36.5` |
+| RKE2, k3s | one each per node OS: `kubehenge template create rke2`, `kubehenge template create k3s --node-os rocky-10` |
+| kubeadm | one per node OS and Kubernetes version: `kubehenge template create kubeadm --kubernetes-version v1.36.5` |
+| Talos | one per Talos release, Talos being its own OS: `kubehenge template create talos --talos-version v1.14.4` |
 
-Create them after the management cluster: they go into its template pool, `kubehenge-templates`, which the setup creates. A kubeadm cluster can only be created at, or upgraded to, a version that has a template.
+Create them after the management cluster: they go into its template pool, `kubehenge-templates`, which the setup creates. A kubeadm cluster can only be created at, or upgraded to, a version that has a template on its node OS, and a Talos cluster only created on a Talos release that has one.
 
 On the Administration page, **VM templates** lists them, each with a cluster that clones from it, and **Build a template** makes one with your own Proxmox VE session, as the setup does:
 
 | Field | What it is |
 | --- | --- |
-| For | RKE2, k3s, or kubeadm with its Kubernetes version, such as `v1.36.5`. |
-| Node OS | The operating system of the nodes, AlmaLinux 10 unless chosen otherwise ([templates.md](templates.md#node-oses)). |
+| For | RKE2, k3s, kubeadm with its Kubernetes version, such as `v1.36.5`, or Talos with its release, such as `v1.14.4`. A Talos template is the Image Factory's image, imported without being booted, so the node OS and the fields for the build VM do not apply to it. |
+| Node OS | Not for Talos: the operating system of the nodes, AlmaLinux 10 unless chosen otherwise ([templates.md](templates.md#node-oses)). |
 | Node | The node the image is prepared on; for a node OS above `x86-64-v2`, one whose CPU reaches its level. |
 | Template disk | Where the template's disk goes. Shared storage, listed first, lets clones start on any node of a Proxmox VE cluster. |
-| Downloaded image | A storage with the `import` content type, for the node OS's downloaded cloud image. |
+| Downloaded image | A storage with the `import` content type, for the node OS's downloaded cloud image, or Talos's. |
 | Cloud-init image | A storage with the `iso` content type, used while the image is prepared; the node's first one when left empty. |
 | Bridge, VLAN tag | Where the VM that prepares the image attaches; it needs to reach the package repositories ([above](#internet-access)). |
 | Static address | Optional: an address with prefix length, a gateway and DNS servers for that VM, instead of DHCP. |
@@ -456,7 +459,7 @@ tofu output -raw talosconfig > talosconfig
 | `workload_datastores` | `["local-lvm"]` | Storages clusters may use. |
 | `workload_bridges` | `["vmbr0"]` | Bridges clusters may attach to, with any VLAN on them. |
 | `bootstrap_datastore` | `local` | Storage for cloud-init ISOs; Cluster API gets full control of it. |
-| `registry_mirrors` | `{}` | Registry mirrors for the management cluster's nodes, by registry name: endpoint URLs tried in order before the registry itself. A mirror of factory.talos.dev, ghcr.io or registry.k8s.io serves the images' cosign signatures too, which the nodes require on Sidero's and Kubernetes' images. |
+| `registry_mirrors` | `{}` | Registry mirrors for the management cluster's nodes, by registry name: endpoint URLs tried in order before the registry itself. A mirror of factory.talos.dev, ghcr.io or registry.k8s.io serves the images' cosign signatures too, which the nodes require on Sidero's and Kubernetes' images and on the Talos providers'. |
 | `backup_targets` | `[]` | S3 stores clusters back up to with Velero ([above](#backup-targets)): up to sixteen, each with `name` and `bucket`, and optionally `endpoint` (https; AWS S3 when unset), `region`, `prefix`, `ca_certificate` and `checksums` (default true). Access keys are stored through the interface, or named per cluster with `existingSecret` ([clusters.md](clusters.md#variables)). |
 | `cluster_oidc` | `[]` | OpenID Connect providers every new cluster trusts unless it names its own: up to eight, each with `issuer_url` (https) and `client_id`, and optionally `username_claim`, `username_prefix`, `groups_claim`, `groups_prefix`, `scopes` and `certificate_authority`. |
 | `version_overrides` | `{}` | Versions to use instead of the tested set, by its keys, to hold a component back. A provider held back needs its image in `provider_images` and its files' digests in `provider_manifests`. Lowering a version on a running cluster is not supported. |

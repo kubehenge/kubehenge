@@ -1,6 +1,7 @@
 {{- /*
 Rendered by Cluster API, not Helm, with the cluster's variables and $exempt, the namespaces the
-chart exempts: the API server's admission configuration.
+chart exempts: the API server's admission configuration, as a bootstrap file or, with $talos, as
+one Talos document per plugin in a single strategic patch.
 
 PodSecurity: the podSecurity variable's admission level becomes Pod Security Admission's default
 for every namespace that labels none of its own, and restricted on a cluster hardened to the CIS
@@ -33,6 +34,14 @@ rollout writes.
 {{- $plugins := list
   (dict "name" "PodSecurity" "configuration" $podSecurity)
   (dict "name" "EventRateLimit" "configuration" $eventRateLimit) }}
+{{- if $talos }}
+{{- $docs := list }}
+{{- range $plugins }}
+{{- $docs = append $docs (dict "apiVersion" "v1alpha1" "kind" "KubeAdmissionControlConfig" "name" .name "configuration" .configuration | toJson) }}
+{{- end }}
+{{ join "\n---\n" $docs | toJson }}
+{{- else }}
 owner: root:root
 permissions: "0600"
 content: {{ dict "apiVersion" "apiserver.config.k8s.io/v1" "kind" "AdmissionConfiguration" "plugins" $plugins | toJson | toJson }}
+{{- end }}

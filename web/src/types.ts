@@ -149,6 +149,8 @@ export interface Machine {
   waiting?: string;
   addresses?: string[];
   created: string;
+  /** The Talos release its node runs, on a Talos cluster. */
+  talos?: string;
 }
 
 /** A section of the health page from one source: what was read, or why it was not. */
@@ -332,6 +334,36 @@ export interface Cluster {
   nodeOS?: NodeOS;
   /** The deploy key and the repository host's keys Kubehenge made for the cluster's GitOps. */
   gitops?: GitOpsKeys;
+  /** How a Talos cluster's nodes stand with its Talos release. */
+  talos?: TalosStatus;
+}
+
+/** A Talos cluster's nodes, upgraded in place to its Talos release one at a time. */
+export interface TalosStatus {
+  /** The release the nodes are upgraded to. */
+  version: string;
+  /** The release new machines boot first, before their upgrade. */
+  image?: string;
+  /** The node under way, as "<node> to <release> since <time>[, rebooted at <time>]". */
+  upgrading?: string;
+  /** The last node done, as "<node> to <release> at <time>". */
+  upgraded?: string;
+  /** The node that failed, as "<node> to <release> at <time>: <why>", which holds the rest. */
+  failed?: string;
+}
+
+/** The Talos releases a cluster can start on, be upgraded to, and have a template made of. */
+export interface TalosReleases {
+  /** The releases the template pool has a template of, newest first. */
+  templates: string[];
+  /** The newest release of each minor version the Image Factory builds, newest first. */
+  releases: string[];
+  /** The release templates are made of unless another is asked for. */
+  default: string;
+  /** The Kubernetes minor versions each release runs, such as "1.36", oldest first. */
+  kubernetes: Record<string, string[]>;
+  /** Why releases is empty. */
+  error?: string;
 }
 
 /** The VM template builds a cluster's nodes are cloned from. */
@@ -602,7 +634,7 @@ export interface ClusterEtcdSnapshots {
   message?: string;
   restore?: EtcdRestoreStatus;
   restoring: boolean;
-  /** The controller restores through the guest agent; otherwise the steps are done by hand. */
+  /** The controller restores through the guest agent, or a Talos cluster's Talos API; otherwise the steps are done by hand. */
   automatic: boolean;
   /** VM.Allocate on the cluster's pool. */
   canSnapshot: boolean;
@@ -756,7 +788,7 @@ export interface Templates {
 /** Whether a cluster creator may have a missing template built, and which builds are under way. */
 export interface TemplateBuilds {
   allowed: boolean;
-  /** Request keys not started yet, such as rke2-almalinux-10 or kubeadm-v1.37.1-almalinux-10. */
+  /** Request keys not started yet, such as rke2-almalinux-10, kubeadm-v1.37.1-almalinux-10 or talos-v1.14.4. */
   requested: string[];
   building: string[];
 }
@@ -766,14 +798,17 @@ export interface TemplateBuildRequest {
   distribution: string;
   /** For kubeadm, whose templates are of one Kubernetes version each. */
   kubernetesVersion?: string;
-  /** The node OS as one word, such as almalinux-10; absent, the default. */
+  /** For Talos, whose templates are of one Talos release each. */
+  talosVersion?: string;
+  /** The node OS as one word, such as almalinux-10; absent, the default. Talos is its own OS and takes none. */
   nodeOS?: string;
 }
 
 export interface TemplateRequest {
-  distribution: "rke2" | "k3s" | "kubeadm";
+  distribution: "rke2" | "k3s" | "kubeadm" | "talos";
   kubernetesVersion?: string;
-  /** The node OS as one word, such as almalinux-10; absent, the default. */
+  talosVersion?: string;
+  /** The node OS as one word, such as almalinux-10; absent, the default. Talos is its own OS and takes none. */
   nodeOS?: string;
   node: string;
   storage: string;

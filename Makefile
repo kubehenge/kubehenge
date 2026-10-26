@@ -8,7 +8,7 @@ CAPMOX_IMAGE ?= ghcr.io/kubehenge/cluster-api-provider-proxmox
 HELM_ADDON_IMAGE ?= ghcr.io/kubehenge/cluster-api-addon-provider-helm
 KO_FLAGS ?=
 
-.PHONY: build web gateway-api website dist index image capmox-image helm-addon-image lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-templates e2e-volumes e2e-interface e2e-appliance
+.PHONY: build web gateway-api website dist index image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-templates e2e-volumes e2e-interface e2e-appliance
 .PHONY: fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker unit-go unit-web unit-tofu unit-shell tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
@@ -136,6 +136,11 @@ capmox-image:
 
 helm-addon-image:
 	sh scripts/provider-image.sh helm-addon $(HELM_ADDON_IMAGE) $(KO_FLAGS)
+
+# Check the providers the management cluster runs from Kubehenge's forks: their files and images
+# by the digests versions.tf names, and their provenance and signatures from each fork's release.
+verify-providers:
+	sh scripts/verify-providers.sh
 
 # Lint and static tier: Go, the frontend, Terraform/OpenTofu, Helm charts, shell, the workflows,
 # YAML, Markdown, the e2e image's Dockerfile and the node images' Containerfiles, each at its

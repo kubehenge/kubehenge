@@ -48,6 +48,7 @@ import {
   podSecurityVariable,
   type PodSecurity,
 } from "./PodSecurity";
+import { forRelease, talosRelease } from "./Talos";
 import type {
   Bridge,
   Cluster,
@@ -57,6 +58,8 @@ import type {
   OIDCProvider,
   Schema,
   Storage,
+  TalosReleases,
+  Versions,
 } from "./types";
 import {
   browserZone,
@@ -105,6 +108,8 @@ export interface Form {
   /** The node OS as one word, such as almalinux-10; empty while the class offers none. */
   nodeOS: string;
   version: string;
+  /** The Talos release a Talos cluster's nodes run; empty takes the newest with a template. */
+  talosVersion: string;
   controlPlaneReplicas: number;
   /** The workers, or with workerAutoscale the fewest the cluster autoscaler keeps. */
   workerReplicas: number;
@@ -169,6 +174,7 @@ export const versionExamples: Record<string, string> = {
   rke2: "v1.36.5+rke2r1",
   k3s: "v1.36.5+k3s1",
   kubeadm: "v1.36.5",
+  talos: "v1.36.5",
 };
 
 export function variable(c: ClusterClass | undefined, name: string): Schema | undefined {
@@ -387,6 +393,17 @@ export const withBackupChoices = (f: Form, c: ClusterClass | undefined, canTrust
   backupOwnKey: f.backupOwnKey && canTrust !== false,
 });
 
+/**
+ * withTalosRelease takes the newest Talos release with a template until another is chosen, and
+ * the newest Kubernetes version offered that the release runs whenever the one chosen is not.
+ */
+export function withTalosRelease(f: Form, talos: TalosReleases | undefined, offered: Versions | undefined): Form {
+  const talosVersion = filled(f.talosVersion) ? f.talosVersion : (talos?.templates[0] ?? "");
+  const runs = forRelease(offered, talos, talosVersion)?.versions ?? [];
+  const version = filled(f.version) && runs.length > 0 && !runs.includes(f.version) ? (runs[0] ?? "") : f.version;
+  return { ...f, talosVersion, version };
+}
+
 /** newForm is the wizard before anything is chosen. */
 export const newForm = (): Form => ({
   namespace: "",
@@ -394,6 +411,7 @@ export const newForm = (): Form => ({
   className: "",
   nodeOS: "",
   version: "",
+  talosVersion: "",
   controlPlaneReplicas: 1,
   workerReplicas: 1,
   workerAutoscale: false,
@@ -591,6 +609,19 @@ export function pendingCredentials(form: Form, c: ClusterClass): PendingCredenti
   return pending;
 }
 
+// distributionVariables are what the form chooses of the distribution itself: its pod network and,
+// on Talos, the release.
+function distributionVariables(form: Form): Record<string, unknown> {
+  const variables: Record<string, unknown> = {};
+  if (form.cni) {
+    variables["cni"] = form.cni;
+  }
+  if (form.talosVersion) {
+    variables["talosVersion"] = form.talosVersion;
+  }
+  return variables;
+}
+
 // request turns the form into the API's request, with only the variables the class defines.
 export function request(form: Form, c: ClusterClass): CreateRequest {
   const defined = new Set(c.variables.map((v) => v.name));
@@ -629,9 +660,7 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   if (form.haGroups && defined.has("ccm")) {
     variables["ccm"] = { haGroups: true };
   }
-  if (form.cni) {
-    variables["cni"] = form.cni;
-  }
+  Object.assign(variables, distributionVariables(form));
   const lb = loadBalancerVariable({ implementation: form.loadBalancer, addresses: list(form.loadBalancerAddresses) });
   if (lb) {
     variables["loadBalancer"] = lb;
@@ -641,7 +670,7 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   // A cluster whose nodes move to new template builds needs its window in the browser's time zone
   // even with Kubernetes upgrades off.
   const upgrades = newUpgrades(form.upgradeMode, browserZone());
-  if (form.upgradeMode !== "off" || (defined.has("upgrades") && refreshesNodes(upgrades, c.distribution))) {
+  if (form.upgradeMode !== "off" || (defined.has("upgrades") && refreshesNodes(upgrades))) {
     variables["upgrades"] = upgrades;
   }
   const req: CreateRequest = {
@@ -683,9 +712,19 @@ function meshChoice(form: Form): string {
   return form.meshPeers.length > 0 ? `On, with ${form.meshPeers.toSorted().join(", ")}` : "On, with no peers yet";
 }
 
-function nodeOSRow(form: Form, c: ClusterClass): [string, string][] {
+// releaseRows say what the cluster runs: its distribution, the node OS or on Talos, which is its own
+// OS, the Talos release, and Kubernetes.
+function releaseRows(form: Form, c: ClusterClass, defined: Set<string>): [string, string][] {
+  const rows: [string, string][] = [["Distribution", distributionName(c.distribution)]];
   const os = chosenNodeOS(form, c);
-  return os === undefined ? [] : [["Node OS", os.title]];
+  if (os !== undefined) {
+    rows.push(["Node OS", os.title]);
+  }
+  if (defined.has("talosVersion")) {
+    rows.push(["Talos release", form.talosVersion]);
+  }
+  rows.push(["Kubernetes version", form.version]);
+  return rows;
 }
 
 // summary is what the Confirm step shows: each setting by its name, as the user chose it; Proxmox
@@ -703,9 +742,7 @@ export function summary(
   const rows: [string, string][] = [
     ...(form.namespace ? [["Namespace", form.namespace] as [string, string]] : []),
     ["Name", form.name],
-    ["Distribution", distributionName(c.distribution)],
-    ...nodeOSRow(form, c),
-    ["Kubernetes version", form.version],
+    ...releaseRows(form, c, defined),
     ["Control-plane nodes", String(form.controlPlaneReplicas)],
     [
       "Workers",
@@ -756,7 +793,7 @@ export function summary(
   rows.push(...addOnRows(form, defined));
   if (defined.has("upgrades")) {
     const upgrades = newUpgrades(form.upgradeMode, browserZone());
-    rows.push(["Automatic upgrades", describe(upgrades, refreshesNodes(upgrades, c.distribution))]);
+    rows.push(["Automatic upgrades", describe(upgrades, refreshesNodes(upgrades), c.distribution)]);
   }
   if (defined.has("oidc")) {
     const providers = cleanProviders(form.oidc);
@@ -828,6 +865,7 @@ export type FieldKey =
   | "class"
   | "nodeOS"
   | "version"
+  | "talosVersion"
   | "controlPlaneReplicas"
   | "workerReplicas"
   | "workerMax"
@@ -877,8 +915,13 @@ function generalProblems(form: Form, c: ClusterClass | undefined): Problems {
     p.nodeOS = sentence(`${os.title} cannot be chosen yet: ${os.unreleased ?? ""}`);
   } else if (filled(missing)) {
     p[os === undefined ? "class" : "nodeOS"] = sentence(missing);
-  } else if (!new RegExp(c.versionFormat.pattern, "u").test(form.version)) {
-    p.version = `${distributionName(c.distribution)} versions look like ${versionExamples[c.distribution] ?? "v1.36.5"}.`;
+  } else {
+    if (variable(c, "talosVersion") !== undefined && !talosRelease.test(form.talosVersion)) {
+      p.talosVersion = "Choose a Talos release with a VM template.";
+    }
+    if (!new RegExp(c.versionFormat.pattern, "u").test(form.version)) {
+      p.version = `${distributionName(c.distribution)} versions look like ${versionExamples[c.distribution] ?? "v1.36.5"}.`;
+    }
   }
   if (!whole(form.workerReplicas, 0, maxWorkers)) {
     p.workerReplicas = `A whole number from 0 to ${maxWorkers}.`;

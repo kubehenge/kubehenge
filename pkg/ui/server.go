@@ -104,6 +104,9 @@ type Server struct {
 	// controller's automatic upgrades read; nil leaves their version to be typed in.
 	Releases     provisioner.Releases
 	releaseCache releaseCache
+	// TalosReleases lists the Talos releases the Image Factory builds; nil offers only those the
+	// template pool has.
+	TalosReleases func(ctx context.Context) ([]string, error)
 	// Headlamp is set when a shared Headlamp server runs beside the interface.
 	Headlamp *Headlamp
 	// WorkloadPool is the Proxmox VE pool every cluster's own pool nests under.
@@ -194,6 +197,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/classes", s.managed(s.classes))
 	mux.HandleFunc("GET /api/versions/{distribution}", s.signedIn(s.versions))
+	mux.HandleFunc("GET /api/talos/releases", s.signedIn(s.talosReleases))
 	mux.HandleFunc("GET /api/clusters", s.managed(s.listClusters))
 	mux.HandleFunc("POST /api/clusters", s.managed(s.createCluster))
 	s.clusterRoutes(mux)
@@ -214,6 +218,8 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/clusters/{namespace}/{name}", s.managed(s.changeCluster))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}", s.managed(s.deleteCluster))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/kubeconfig", s.managed(s.kubeconfig))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/talosconfig", s.managed(s.talosconfig))
+	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/talos-upgrade-failure", s.managed(s.retryTalosUpgrade))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/health", s.managed(s.clusterHealth))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/pods/{podNamespace}/{pod}/logs", s.managed(s.podLogs))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/backups", s.managed(s.clusterBackups))
