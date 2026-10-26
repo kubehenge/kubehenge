@@ -36,6 +36,15 @@ until_true() {
     done
 }
 
+# new_namespace <kubectl function> <namespace>: creates the namespace and waits for its default
+# service account. The service account controller adds it just after the namespace, and until then
+# the API server refuses pods there, which a pod created straight away can lose to.
+new_namespace() {
+    "$1" create namespace "$2"
+    until_true 60 "namespace $2's default service account" has_default_account "$1" "$2"
+}
+has_default_account() { "$1" -n "$2" get serviceaccount default > /dev/null 2>&1; }
+
 # class_providers <ClusterClass>: the namespaces of the Cluster API providers only that class's
 # clusters use, as Kubehenge's controller is told them.
 class_providers() {

@@ -150,7 +150,9 @@ type EtcdRestorer struct {
 	Guests Guests
 	// Talos reaches the nodes of Talos clusters.
 	Talos TalosDialer
-	// poll is how often a Talos restore looks at the nodes it waits for; talosRestorePoll when 0.
+	// APIs asks the restored cluster's API server whether it answers on the cluster's address.
+	APIs ClusterAPIs
+	// poll is how often a restore looks at what it waits for; talosRestorePoll when 0.
 	poll time.Duration
 	// Events reports on a Cluster how its restore went; may be nil.
 	Events events.EventRecorder
@@ -234,7 +236,7 @@ func (run *restoreRun) do(ctx context.Context) error {
 	}
 	ctrl.LoggerFrom(ctx).Info("restoring etcd", "snapshot", run.request.Snapshot, "by", run.request.By)
 	err := run.prepare(ctx)
-	for _, step := range []func(context.Context) error{run.pause, run.fetch, run.stop, run.restore, run.start} {
+	for _, step := range []func(context.Context) error{run.pause, run.fetch, run.stop, run.restore, run.start, run.answer} {
 		if err != nil {
 			break
 		}
@@ -445,6 +447,32 @@ func (run *restoreRun) start(ctx context.Context) error {
 		return run.waitTalosEtcd(ctx)
 	}
 	return run.on(ctx, run.nodes[0], "starting the control plane", run.scripts.Start)
+}
+
+// answer waits, for at most guestStepTimeout, until the cluster's API server answers on the
+// cluster's address, where Cluster API, the interface and the cluster's users reach it. The
+// restored node's own API server answering is not enough: the address moves by a leader election
+// that lapsed while etcd was stopped, and comes back only once the restored API server lets its
+// holder take it again.
+func (run *restoreRun) answer(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, guestStepTimeout)
+	defer cancel()
+	poll := run.r.poll
+	if poll == 0 {
+		poll = talosRestorePoll
+	}
+	for {
+		err := run.r.APIs.Ready(ctx, run.cluster)
+		if err == nil {
+			ctrl.LoggerFrom(ctx).Info("the cluster answers on its address")
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("the cluster's API server does not answer on its address: %w", err)
+		case <-time.After(poll):
+		}
+	}
 }
 
 // replace deletes the control-plane machines etcd was not restored on, for Cluster API to make

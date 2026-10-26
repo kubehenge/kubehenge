@@ -101,7 +101,7 @@ EOF
 }
 
 cis_benchmark() {
-    wl create namespace e2e-cis
+    new_namespace wl e2e-cis
     # kube-bench reads the host's processes and files, which only Pod Security's privileged level allows.
     wl label namespace e2e-cis pod-security.kubernetes.io/enforce=privileged
     if [ "${distribution}" = kubeadm ]; then

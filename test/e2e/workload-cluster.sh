@@ -581,7 +581,7 @@ agnhost_deployment() {
                     securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}}]}}}}' --args -- "$@" |
         wl -n "${agnhost_namespace}" apply -f -
 }
-wl create namespace e2e-policy
+new_namespace wl e2e-policy
 agnhost_pod e2e-policy server netexec --http-port=8080
 agnhost_pod e2e-policy client pause
 wl -n e2e-policy wait --for=condition=Ready pod/server pod/client --timeout=5m
@@ -631,7 +631,7 @@ refused() {
     refused_answer=$(KUBECONFIG="${work}/${refused_identity}" kubectl auth can-i "$@" 2> /dev/null || true)
     [ "${refused_answer}" = no ] || fail "${refused_identity} may $*"
 }
-wl create namespace e2e-health
+new_namespace wl e2e-health
 # An unknown command makes agnhost exit at once, so the pod restarts until it backs off.
 agnhost_pod e2e-health crasher no-such-command
 crash_seen() {
@@ -693,7 +693,7 @@ else
 fi
 
 step "the ingress controller serves a host name on the API address and every node"
-wl create namespace e2e-ingress
+new_namespace wl e2e-ingress
 agnhost_pod e2e-ingress web netexec --http-port=8080
 wl -n e2e-ingress expose pod web --port=80 --target-port=8080
 wl -n e2e-ingress create ingress web --rule='e2e.test/*=web:80'
@@ -842,7 +842,7 @@ until_true 300 "the API address serves the route" served "${KUBEHENGE_E2E_ENDPOI
 wl delete namespace e2e-ingress --wait=false
 
 step "a Service of type LoadBalancer answers on an address from the cluster's range, with ${load_balancer}"
-wl create namespace e2e-lb
+new_namespace wl e2e-lb
 agnhost_pod e2e-lb web netexec --http-port=8080
 # Off port 80, which Traefik holds on every node, so that k3s's servicelb can answer for it later.
 wl -n e2e-lb expose pod web --type=LoadBalancer --port=8080 --target-port=8080
@@ -1574,7 +1574,7 @@ case ${refused} in
     *) fail "a privileged pod is refused for another reason: ${refused}" ;;
 esac
 # A namespace labelled privileged is past Pod Security Admission, but not past Kyverno.
-wl create namespace e2e-privileged
+new_namespace wl e2e-privileged
 wl label namespace e2e-privileged pod-security.kubernetes.io/enforce=privileged
 set_variable podSecurity '{"admission":"restricted","kyverno":"restricted"}'
 kyverno_refuses() {
@@ -1600,9 +1600,9 @@ set_variable istio '{"enabled":true}'
 until_true 900 "istiod available" wl -n istio-system wait --for=condition=Available deployment/istiod --timeout=10s
 until_true 600 "ztunnel on every node" wl -n istio-node rollout status daemonset/ztunnel --timeout=10s
 until_true 600 "istio-cni on every node" wl -n istio-node rollout status daemonset/istio-cni-node --timeout=10s
-wl create namespace e2e-mesh
+new_namespace wl e2e-mesh
 wl label namespace e2e-mesh istio.io/dataplane-mode=ambient
-wl create namespace e2e-plain
+new_namespace wl e2e-plain
 # Kept by Deployments: they are used again once every add-on is switched off, and on Talos the
 # upgrade before that drains every node, which deletes pods of their own.
 agnhost_deployment e2e-mesh server netexec --http-port=8080
@@ -1763,7 +1763,7 @@ logged() { count=$(lines "$1" "$2") && [ "${count}" -ge 1 ]; }
 # shellcheck disable=SC2310 # the refusal is the answer looked for.
 wl get --request-timeout=20s --raw /api/v1/namespaces/logging/services/https:loki:3100/proxy/loki/api/v1/labels > /dev/null 2>&1 &&
     fail "Loki answers a client it does not know"
-wl create namespace e2e-logs
+new_namespace wl e2e-logs
 # log_pod <name> <line> <ports JSON> <then>: a pod at Pod Security's restricted level that writes the
 # line, declares the ports and then runs the command.
 log_pod() {
@@ -1872,7 +1872,7 @@ for check in "${name}-backups create backups.velero.io yes" "${name}-backups cre
     answer=$(can "$1" "$2" "$3")
     [ "${answer}" = "$4" ] || fail "$1 may $2 $3: ${answer}, not $4"
 done
-wl create namespace e2e-backup
+new_namespace wl e2e-backup
 wl -n e2e-backup create secret generic e2e --from-literal=marker="${marker}"
 wl apply -f - << EOF
 apiVersion: v1
@@ -2029,7 +2029,7 @@ websecure_programmed() {
             any(.conditions[]; .type == "Programmed" and .status == "True") and any(.conditions[]; .type == "ResolvedRefs" and .status == "True"))' > /dev/null
 }
 until_true 300 "Traefik's Gateway serves HTTPS with the default certificate" websecure_programmed
-wl create namespace e2e-certs
+new_namespace wl e2e-certs
 agnhost_pod e2e-certs web netexec --http-port=8080
 wl -n e2e-certs expose pod web --port=80 --target-port=8080
 # Neither names a certificate: the default one serves both.
@@ -2074,7 +2074,7 @@ pebble_image=ghcr.io/letsencrypt/pebble:2.10.1@sha256:ddf230642b1a584f519f32e347
 http01_zone=e2e-certs.svc.cluster.local
 http01_host=http01.${http01_zone}
 http01_headlamp=headlamp.${http01_zone}
-wl create namespace e2e-acme
+new_namespace wl e2e-acme
 wl -n e2e-acme apply -f - << 'EOF'
 apiVersion: v1
 kind: Service
@@ -2449,7 +2449,7 @@ ssh-keygen -q -t ed25519 -N '' -C '' -f "${work}/git-host"
 git_host=gitea.e2e-git.svc.cluster.local
 known_hosts="[${git_host}]:2222 $(cut -d' ' -f1,2 "${work}/git-host.pub")"
 git_password=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-wl create namespace e2e-git
+new_namespace wl e2e-git
 wl -n e2e-git create secret generic gitea-host-key --from-file=host="${work}/git-host"
 wl -n e2e-git apply -f - << EOF
 apiVersion: apps/v1
