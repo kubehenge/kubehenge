@@ -100,6 +100,29 @@ func (g *fakeGuests) runs() []string {
 	return slices.Clone(g.ran)
 }
 
+// fakeAPIs is a cluster's API server that does not answer on the cluster's address the first down
+// times it is asked.
+type fakeAPIs struct {
+	mu    sync.Mutex
+	down  int
+	asked int
+	// seen checks the restore as the cluster is asked.
+	seen func()
+}
+
+func (a *fakeAPIs) Ready(context.Context, *clusterv1.Cluster) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.asked++
+	if a.seen != nil {
+		a.seen()
+	}
+	if a.asked <= a.down {
+		return errors.New("dial tcp 10.0.0.10:6443: connect: no route to host")
+	}
+	return nil
+}
+
 const restoreSnapshot = "20261021T060000Z-v1.37.1-rke2r1.db.age"
 
 var restoreAsked = time.Date(2026, 10, 21, 11, 0, 0, 0, time.UTC)
@@ -108,6 +131,7 @@ type restoreFixture struct {
 	*etcdFixture
 
 	guests *fakeGuests
+	apis   *fakeAPIs
 	data   []byte
 	r      *EtcdRestorer
 }
@@ -131,7 +155,7 @@ func newRestoreFixture(t *testing.T, change func(*clusterv1.Cluster)) *restoreFi
 		m.Status.Addresses = clusterv1.MachineAddresses{{Type: clusterv1.MachineInternalIP, Address: fmt.Sprintf("10.0.0.%d", 11+i)}}
 		objs = append(objs, m, pm)
 	}
-	f := &restoreFixture{etcdFixture: newEtcdFixture(t, objs...), guests: &fakeGuests{off: map[int64]bool{}}}
+	f := &restoreFixture{etcdFixture: newEtcdFixture(t, objs...), guests: &fakeGuests{off: map[int64]bool{}}, apis: &fakeAPIs{}}
 	keys, err := clusterKeys(context.Background(), f.kube, c, true)
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +164,7 @@ func newRestoreFixture(t *testing.T, change func(*clusterv1.Cluster)) *restoreFi
 	f.putSnapshot(restoreSnapshot, string(keys.Data[BackupKeysKeyEtcd]), "v1.37.1+rke2r1")
 	f.r = &EtcdRestorer{
 		Client: f.kube, Reader: f.kube, ClassNamespace: "kubehenge-system", Targets: f.targets, Guests: f.guests,
-		Now: func() time.Time { return etcdNow },
+		APIs: f.apis, Now: func() time.Time { return etcdNow },
 	}
 	return f
 }
@@ -276,6 +300,37 @@ func TestEtcdRestorerRestores(t *testing.T) {
 	f.reconcile()
 	if got := len(f.guests.runs()); got != len(want) {
 		t.Errorf("ran %d steps after the restore", got-len(want))
+	}
+}
+
+// A restore ends only once the cluster answers on its address, which follows the restored node's
+// own API server by a few seconds, and only then are the other control planes replaced.
+func TestEtcdRestorerWaitsForTheClusterToAnswer(t *testing.T) {
+	t.Parallel()
+	f := newRestoreFixture(t, nil)
+	f.r.poll = time.Millisecond
+	f.apis.down = 2
+	f.apis.seen = func() {
+		if runs := f.guests.runs(); runs[len(runs)-1] != "101 start" {
+			t.Errorf("the cluster was asked after %v", runs)
+		}
+		if got := f.deleting(); len(got) != 0 {
+			t.Errorf("deleting %v before the cluster answered", got)
+		}
+		if c := f.cluster(); c.Spec.Paused == nil || !*c.Spec.Paused {
+			t.Error("the cluster was unpaused before it answered")
+		}
+	}
+	f.reconcile()
+
+	if f.apis.asked != 3 {
+		t.Errorf("asked the cluster %d times, want 3", f.apis.asked)
+	}
+	if st := f.status(); st.Phase != RestoreSucceeded {
+		t.Errorf("status %+v", st)
+	}
+	if got := f.deleting(); !slices.Equal(got, []string{"web-cp-1", "web-cp-2"}) {
+		t.Errorf("deleting %v", got)
 	}
 }
 
