@@ -67,9 +67,9 @@ k3s=https://github.com/k3s-io/cluster-api-k3s/releases/download/${K3S}
 fetch "${k3s}/bootstrap-components.yaml" 26301df3f6a1b9a14317061bd586a73711d54c956ee8f679982fb3301c6ab71d "${dir}/crds/k3s-bootstrap.yaml"
 fetch "${k3s}/control-plane-components.yaml" 2e3754bb42be197c31b7567496767f22091f4da74453eb366d29c8bd06e28270 "${dir}/crds/k3s-control-plane.yaml"
 fetch "https://github.com/kubehenge/cluster-api-bootstrap-provider-talos/releases/download/${TALOS_BOOTSTRAP}/bootstrap-components.yaml" \
-    f2d0cecc9416664125b96cfbc1077bc1310e7abfe977ec59824031cb56205206 "${dir}/crds/talos-bootstrap.yaml"
+    0a46d57902fa63a9ad47d986f26596bd93c8a82b0ca6af8bc89753f9a65eabd8 "${dir}/crds/talos-bootstrap.yaml"
 fetch "https://github.com/kubehenge/cluster-api-control-plane-provider-talos/releases/download/${TALOS_CONTROL_PLANE}/control-plane-components.yaml" \
-    214dba952c84d879339004cbd52ea33d7f1df42769f98b037423522518860363 "${dir}/crds/talos-control-plane.yaml"
+    806f88d687dd87862004aee1a557d8a7974df7bdb6bfb28f1f44e7ec7f1a2092 "${dir}/crds/talos-control-plane.yaml"
 fetch "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER}/cert-manager.crds.yaml" \
     262fef78478492cd35b73a1b227106b7802f9c056361d1f561d04b32d751337f "${dir}/crds/cert-manager.yaml"
 fetch "https://github.com/kubernetes-sigs/cluster-api-operator/releases/download/${CAPI_OPERATOR}/operator-components.yaml" \
