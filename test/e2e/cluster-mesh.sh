@@ -166,8 +166,8 @@ until_true 600 "east connected to west" peer_ready east west
 until_true 600 "west connected to east" peer_ready west east
 
 step "a pod of one reaches a pod of the other, by address and through a global service"
-east create namespace e2e-mesh
-west create namespace e2e-mesh
+new_namespace east e2e-mesh
+new_namespace west e2e-mesh
 agnhost_pod east server netexec --http-port=8080
 agnhost_pod west client pause
 east -n e2e-mesh wait --for=condition=Ready pod/server --timeout=5m

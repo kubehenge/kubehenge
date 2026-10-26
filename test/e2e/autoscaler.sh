@@ -165,7 +165,7 @@ cp_tainted || fail "the control plane takes workloads while the pool may grow"
 step "a pod waiting for room brings a worker up from none"
 watch_vms &
 watcher=$!
-workload create namespace e2e-autoscaler
+new_namespace workload e2e-autoscaler
 # One per worker: two of them take more memory than a worker of 2048 MiB offers.
 workload -n e2e-autoscaler apply -f - << EOF
 apiVersion: apps/v1
