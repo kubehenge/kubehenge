@@ -76,7 +76,7 @@ GO_SHA256=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
 tree go "https://go.dev/dl/go${GO}.linux-amd64.tar.gz" "${GO_SHA256}" bin go gofmt
 
 # renovate: datasource=node-version depName=node
-NODE=26.12.0
+NODE=26.12.1
 NODE_SHA256=d9f88af72ad34f7ddf8e67289829f1698f54b6254f7d4f54b7453117ff1a3d2c
 tree node "https://nodejs.org/dist/v${NODE}/node-v${NODE}-linux-x64.tar.gz" "${NODE_SHA256}" bin node npm npx
 
