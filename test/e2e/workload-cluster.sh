@@ -1267,7 +1267,10 @@ step "etcd snapshots: one taken into the S3 store, encrypted, and read back"
 # plain text, so it is seen there and must not be seen in the store.
 etcd_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
 wl -n default create configmap e2e-before-snapshot --from-literal=marker="${etcd_marker}"
-set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2}"
+# Once a day, twelve hours from now: the default schedule's slot after the cluster was made can have
+# passed already, and switching snapshots on would then take one of its own beside the one asked for.
+etcd_schedule="0 $((($(date -u +%-H) + 12) % 24)) * * *"
+set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2,\"schedule\":\"${etcd_schedule}\"}"
 # As the interface's Take a snapshot now asks for one.
 now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 kubectl -n "${ns}" annotate cluster "${name}" --overwrite \
@@ -1402,7 +1405,7 @@ case ${distribution} in
                 jq -e --arg old " ${servers} " '(.items | length > 0) and all(.items[]; .metadata.name as $name |
                     .status.phase == "Running" and (($old | contains(" " + $name + " ")) | not))' > /dev/null
         }
-        set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2,\"distributionUpload\":true}"
+        set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2,\"schedule\":\"${etcd_schedule}\",\"distributionUpload\":true}"
         until_true 300 "the upload's Secret in kube-system" wl -n kube-system get secret kubehenge-etcd-s3
         upload_secret=$(wl -n kube-system get secret kubehenge-etcd-s3 -o json)
         printf '%s' "${upload_secret}" | jq -e '.type == "etcd.k3s.cattle.io/s3-config-secret" and
