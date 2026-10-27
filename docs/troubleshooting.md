@@ -161,7 +161,7 @@ Nodes keep the taint `node.cloudprovider.kubernetes.io/uninitialized`, and pods 
 
 Persistent volumes that stay pending point the same way: the CSI plugin's controller uses the same address and token.
 
-The cloud controller manager logs `failed to get HA group for the node` with `403 Permission check failed (/, Sys.Audit)` for every node now and then. That is harmless: reading Proxmox VE's HA groups needs `Sys.Audit` on `/`, which a cluster's token holds only with **Label the nodes with their Proxmox VE HA groups** on (the `ccm` variable's `haGroups`, [clusters.md](clusters.md#machines)), and without it the nodes only go without the HA group labels. Where the option is not offered, the administrator switches on **HA group labels** in the setup ([install.md](install.md#ha-group-labels)). With it on, the messages stop within a few minutes; if they do not, `kubectl describe cluster` shows a `SysAuditRefused` event saying why.
+The cloud controller manager logs `failed to get HA group for the node` with `403 Permission check failed (/, Sys.Audit)` for every node now and then. That is harmless: reading Proxmox VE's HA groups needs `Sys.Audit` on `/`, which a cluster's token holds only with **Label the nodes with their Proxmox VE HA groups** on (the `ccm` variable's `haGroups`, on by default, [clusters.md](clusters.md#machines)), and without it the nodes only go without the HA group labels. The cluster switched it off, or the administrator switched off **HA group labels** in the setup for every cluster ([install.md](install.md#ha-group-labels)). With it on again, the messages stop within a few minutes; if they do not, `kubectl describe cluster` shows a `SysAuditRefused` event saying why.
 
 ### A cluster waits before any VM exists
 

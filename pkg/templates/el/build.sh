@@ -22,7 +22,23 @@ cd "$(dirname "$0")/.."
 # bake that slow on average would not finish in time anyway. node.sh does the same.
 sed -i '/^\[/a minrate=100k' /etc/yum.repos.d/*.repo
 
-dnf -y install podman rpm-ostree bootc ostree skopeo
+# A mirror can serve a broken file for a moment, as a repomd.xml that is not XML while it syncs, and
+# neither dnf nor rpm-ostree moves to the next mirror for it. Each step that reads the repositories
+# runs up to three times, half a minute apart.
+from_repositories() {
+    for attempt in 1 2 3; do
+        "$@" && return 0
+        [ "${attempt}" -lt 3 ] || return 1
+        echo "trying again in 30 s: $*" >&2
+        sleep 30
+    done
+}
+compose() {
+    rm -rf rootfs
+    /usr/libexec/bootc-base-imagectl build-rootfs --manifest=kubehenge-node "${PWD}/rootfs"
+}
+
+from_repositories dnf -y install podman rpm-ostree bootc ostree skopeo
 
 container=$(podman create "${tools}")
 mounted=$(podman mount "${container}")
@@ -36,11 +52,12 @@ podman rmi "${tools}"
 
 # Composed from the builder's own repositories and keys, which are the family's.
 cp el/manifest.yaml /usr/share/doc/bootc-base-imagectl/manifests/kubehenge-node.yaml
-/usr/libexec/bootc-base-imagectl build-rootfs --manifest=kubehenge-node "${PWD}/rootfs"
+from_repositories compose
 podman build --file el/base.Containerfile --tag localhost/kubehenge-base:build .
 rm -rf rootfs
 
-podman build --file el/Containerfile --build-arg "DISTRIBUTION=${distribution}" --build-arg "KUBERNETES=${kubernetes}" \
+# node.sh installs the node's packages.
+from_repositories podman build --file el/Containerfile --build-arg "DISTRIBUTION=${distribution}" --build-arg "KUBERNETES=${kubernetes}" \
     --tag localhost/kubehenge-node:build .
 
 podman run --rm --privileged --pid=host --volume /dev:/dev --volume /var/lib/containers:/var/lib/containers \

@@ -57,9 +57,10 @@
 # management cluster restores etcd through the guest agent (etcd_restore; Talos clusters through
 # their Talos API either way), and Go builds the
 # kubehenge command that decrypts a snapshot.
-# KUBEHENGE_E2E_HA_GROUPS=1 switches the cloud controller manager's HA group labels on and off again,
-# with a management cluster that lets clusters choose them; the test makes an HA node-affinity rule
-# over every node, which needs Proxmox VE 9, and removes it again.
+# KUBEHENGE_E2E_HA_GROUPS=1 checks the cloud controller manager's HA group labels, which a cluster
+# has by default where the management cluster leaves them on, then switches them off and on again;
+# the test makes an HA node-affinity rule over every node, which needs Proxmox VE 9, and removes it
+# again.
 # KUBEHENGE_E2E_NAMESPACE names one of the namespaces the management cluster's
 # extra_cluster_namespaces gives the web interface: the cluster is then created there with the
 # interface's own account, as the interface creates one in a namespace of its creator's choice, and
@@ -1184,9 +1185,13 @@ if [ "${KUBEHENGE_E2E_HA_GROUPS:-}" = 1 ]; then
     # The guest exists once Proxmox VE answers for it.
     ha_guest_exists() { pve_get "nodes/${ha_node}/qemu/${ha_vmid}/status/current" > /dev/null 2>&1; }
 
-    step "nodes labelled with their HA rule, with Sys.Audit on / for the cluster's token"
-    # shellcheck disable=SC2310 # a failed read fails the step
-    audit_is false || fail "the cluster's token holds Sys.Audit on / without asking for it"
+    step "nodes labelled with their HA rule, with Sys.Audit on / for the cluster's token by default"
+    # The cluster was created without its ccm variable, so it has what the class defaults it to.
+    ccm=$(kubectl -n "${ns}" get "cluster/${name}" -o json) || fail "cannot read cluster ${name}"
+    ccm=$(printf '%s' "${ccm}" | jq -c '.spec.topology.variables[] | select(.name == "ccm") | .value')
+    [ "${ccm}" = '{"haGroups":true}' ] ||
+        fail "the class defaulted the cluster's ccm variable to ${ccm:-nothing}, not the HA group labels"
+    until_true 300 "the cluster's token to hold Sys.Audit on /" audit_is true
     # A node-affinity rule over every node, for a guest of its own: Proxmox VE takes a rule only for
     # HA resources, and a resource only for a guest that exists.
     ha_node=$(pve_get nodes | jq -r '[.data[] | select(.status == "online") | .node][0]')
@@ -1200,15 +1205,15 @@ if [ "${KUBEHENGE_E2E_HA_GROUPS:-}" = 1 ]; then
     pve_post cluster/ha/resources --data-urlencode "sid=vm:${ha_vmid}" --data-urlencode state=ignored
     pve_post cluster/ha/rules --data-urlencode type=node-affinity --data-urlencode "rule=${ha_rule}" \
         --data-urlencode "resources=vm:${ha_vmid}" --data-urlencode "nodes=${ha_nodes}"
-    set_variable ccm '{"haGroups":true}'
-    until_true 300 "the cluster's token to hold Sys.Audit on /" audit_is true
     # The cloud controller manager labels the nodes when it next syncs them.
     until_true 900 "every node labelled with HA rule ${ha_rule}" labelled
     wl get nodes -L "group.topology.proxmox.sinextra.dev/${ha_rule}"
 
-    step "the cluster's token without Sys.Audit on / again"
+    step "the cluster's token without Sys.Audit on / once switched off, and with it again once on"
     set_variable ccm '{"haGroups":false}'
     until_true 300 "the cluster's token to lose Sys.Audit on /" audit_is false
+    set_variable ccm '{"haGroups":true}'
+    until_true 300 "the cluster's token to hold Sys.Audit on / again" audit_is true
     remove_ha_rule
 fi
 # guest <node> <vmid> <command>: runs a shell command in a VM through its guest agent and prints its

@@ -137,9 +137,9 @@ proxmox:
     role: ""
     managementStorages: []
   # Group holding Sys.Audit on /, unpropagated, that the controller adds the user of each cluster
-  # asking for the cloud controller manager's HA group labels (its ccm variable) to; the
-  # controller's token needs User.Modify on /access/groups/<group>. Empty: no cluster may ask for
-  # them.
+  # with the cloud controller manager's HA group labels (its ccm variable) to; the controller's
+  # token needs User.Modify on /access/groups/<group>. Set, every cluster has the labels unless it
+  # switches them off; empty, no cluster may have them.
   sysAuditGroup: ""
   # Secret in the release namespace holding root@pam's password (key password), with which the CSI
   # plugin of each cluster that takes volume snapshots (its csi variable's volumeSnapshots) signs

@@ -82,8 +82,6 @@ module "management_cluster" {
   bootstrap_datastore        = "local"
   workload_datastores        = ["local", "own"]
   cluster_datastore_allocate = true
-  # The rke2 test's cluster labels its nodes with their HA groups.
-  cluster_sys_audit = true
   # The k3s test's cluster takes volume snapshots, with the root@pam password test/e2e/ci/run.sh
   # stores.
   cluster_volume_snapshots = true

@@ -835,9 +835,6 @@ func (s *Server) mayCreate(w http.ResponseWriter, r *http.Request, u user, class
 	if takesSnapshots(req.Variables[csiVariable]) && !s.require(w, r, u, "/", privPermissionsModify) {
 		return false
 	}
-	if labelsHAGroups(req.Variables[ccmVariable]) && !s.require(w, r, u, "/", privSysAudit) {
-		return false
-	}
 	if !s.allowGitOps(w, r, u, s.workloadPoolPath(), req.Variables[gitopsVariable], nil) {
 		return false
 	}
@@ -1009,15 +1006,10 @@ func networkVariable(raw json.RawMessage) (string, string, bool) {
 const csiVariable = "csi"
 
 // ccmVariable configures a cluster's cloud controller manager; its haGroups gives the cluster's
-// token Sys.Audit on / for the HA group labels.
+// token Sys.Audit on / for the HA group labels. That reads the Proxmox VE cluster's configuration
+// and nothing of its guests, so it takes no right of the user's own: Kubehenge's administrator
+// decides whether clusters may hold it.
 const ccmVariable = "ccm"
-
-func labelsHAGroups(raw json.RawMessage) bool {
-	var v struct {
-		HAGroups bool `json:"haGroups"`
-	}
-	return raw != nil && json.Unmarshal(raw, &v) == nil && v.HAGroups
-}
 
 // csiOptions are the csi variable's switches; a value that is not one reads as all off.
 type csiOptions struct {
@@ -1185,8 +1177,6 @@ func (s *Server) allowVariable(w http.ResponseWriter, r *http.Request, u user, c
 		return !installsRancher(value) || installsRancher(old) || s.allowRancher(w, r, u, client.ObjectKeyFromObject(c))
 	case csiVariable:
 		return s.allowCSI(w, r, u, c, value, old)
-	case ccmVariable:
-		return !labelsHAGroups(value) || labelsHAGroups(old) || s.require(w, r, u, "/", privSysAudit)
 	case oidcVariable:
 		return sameJSON(old, value) || s.allowOIDC(w, r, u, c, access, value, old)
 	case gitopsVariable:

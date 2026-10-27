@@ -2,7 +2,7 @@ import { useEffect, useId, useState, type JSX } from "react";
 
 import { api } from "./api";
 import type { Cluster, ClusterClass, HARule, HARules, PveNode, Storage } from "./types";
-import { Dialog, ErrorBox, Field, errorMessage, filled, useChange, usePrivilege } from "./ui";
+import { Dialog, ErrorBox, Field, errorMessage, filled, useChange } from "./ui";
 import { flag, record, texts } from "./values";
 
 /** Where a cluster's VMs may run: any node, the nodes of an HA rule, or nodes chosen one by one. */
@@ -354,101 +354,65 @@ export function PlacementDialog({ cluster: c, onClose }: { cluster: Cluster; onC
 /** sysAuditAnnotation marks the classes whose clusters may choose the HA group labels. */
 export const sysAuditAnnotation = "kubehenge.dev/sys-audit";
 
-/** HAGroupsOffer is whether a cluster may choose the HA group labels, and what stands in the way. */
-export interface HAGroupsOffer {
-  offered: boolean;
-  problem: string | undefined;
-}
-
 /**
- * haGroupsOffer is what the class and the user's own privileges make of a cluster's choice of the HA
- * group labels; canAudit is whether the user holds Sys.Audit on /, undefined when not known.
+ * offersHAGroups tells whether the class's clusters may have the HA group labels. They take no right
+ * of the user's own: Sys.Audit on / reads the Proxmox VE cluster's configuration alone, and
+ * Kubehenge's administrator decides whether clusters may hold it.
  */
-export function haGroupsOffer(cls: ClusterClass | undefined, canAudit: boolean | undefined): HAGroupsOffer {
-  return {
-    offered: cls?.annotations?.[sysAuditAnnotation] === "true" && cls.variables.some((v) => v.name === "ccm"),
-    problem:
-      canAudit === false
-        ? "You do not hold Sys.Audit on /, which the cluster's Proxmox VE token would get."
-        : undefined,
-  };
-}
+export const offersHAGroups = (cls: ClusterClass | undefined): boolean =>
+  cls?.annotations?.[sysAuditAnnotation] === "true" && cls.variables.some((v) => v.name === "ccm");
 
 /** haGroupsOn reads whether the cluster's nodes are labelled with their Proxmox VE HA groups. */
 export const haGroupsOn = (c: Cluster): boolean => flag(record(c.variables["ccm"])["haGroups"]) === true;
 
-/** HAGroupsField chooses the HA group labels; one with a problem can be switched off, not on. */
+/** HAGroupsField chooses the HA group labels. */
 export function HAGroupsField({
   checked,
   onChange,
-  problem,
 }: {
   checked: boolean;
   onChange: (on: boolean) => void;
-  problem: string | undefined;
 }): JSX.Element {
   const hint = useId();
-  const reason = useId();
-  const refused = problem !== undefined;
   return (
     <>
       <label className="check">
-        <input
-          type="checkbox"
-          checked={checked}
-          disabled={refused && !checked}
-          aria-invalid={refused && checked}
-          aria-describedby={refused ? `${hint} ${reason}` : hint}
-          onChange={(e) => onChange(e.target.checked)}
-        />{" "}
+        <input type="checkbox" checked={checked} aria-describedby={hint} onChange={(e) => onChange(e.target.checked)} />{" "}
         Label the nodes with their Proxmox VE HA groups
       </label>
       <div className="hint" id={hint}>
         The cloud controller manager labels each node group.topology.proxmox.sinextra.dev/&lt;group&gt; for the HA
         groups or node-affinity rules its Proxmox VE node is in. Reading them takes Sys.Audit on /, which the
-        cluster&apos;s Proxmox VE token then gets, unpropagated: it can read the Proxmox VE cluster&apos;s own
-        configuration, but nothing of its guests, storages or nodes.
+        cluster&apos;s Proxmox VE token holds while they are on, unpropagated: it can read the Proxmox VE cluster&apos;s
+        own configuration (firewall rules, backup jobs, HA, the corosync configuration), but nothing of its guests,
+        storages or nodes.
       </div>
-      {refused && (
-        <p className={checked ? "field-error" : "hint"} id={reason} role={checked ? "alert" : undefined}>
-          {problem}
-        </p>
-      )}
     </>
   );
 }
 
-/** useHAGroupsOffer reads whether an existing cluster may choose the HA group labels, and what stands in the way. */
-export function useHAGroupsOffer(c: Cluster): HAGroupsOffer {
-  const [offer, setOffer] = useState<HAGroupsOffer>({ offered: false, problem: undefined });
-  const canAudit = usePrivilege("canAudit");
+/** useHAGroupsOffered reads whether an existing cluster may have the HA group labels. */
+export function useHAGroupsOffered(c: Cluster): boolean {
+  const [offered, setOffered] = useState(false);
   const className = c.class;
   useEffect(() => {
     async function load(): Promise<void> {
       try {
         const classes = await api.classes();
-        setOffer(
-          haGroupsOffer(
-            classes.find((x) => x.name === className),
-            canAudit,
-          ),
-        );
+        setOffered(offersHAGroups(classes.find((x) => x.name === className)));
       } catch {
         // Without the classes the option is not shown; the cluster keeps its setting.
-        setOffer({ offered: false, problem: undefined });
+        setOffered(false);
       }
     }
     void load();
-  }, [className, canAudit]);
-  return offer;
+  }, [className]);
+  return offered;
 }
 
 export function HAGroupsDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
   const [on, setOn] = useState(haGroupsOn(c));
-  const { problem } = useHAGroupsOffer(c);
   const { busy, error, send } = useChange(c, onClose);
-  // Switching it off needs nothing; switching it on, the user's own Sys.Audit on /.
-  const blocked = on && !haGroupsOn(c) && problem !== undefined;
   return (
     <Dialog
       title="HA group labels"
@@ -461,13 +425,13 @@ export function HAGroupsDialog({ cluster: c, onClose }: { cluster: Cluster; onCl
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="primary" disabled={busy || blocked || on === haGroupsOn(c)}>
+          <button type="submit" className="primary" disabled={busy || on === haGroupsOn(c)}>
             Save
           </button>
         </>
       }
     >
-      <HAGroupsField checked={on} onChange={setOn} problem={haGroupsOn(c) ? undefined : problem} />
+      <HAGroupsField checked={on} onChange={setOn} />
       <ErrorBox message={error} />
     </Dialog>
   );

@@ -878,7 +878,8 @@ func TestIntegrationChartDatastoreAllocate(t *testing.T) {
 }
 
 // Only a management cluster that lets clusters hold Sys.Audit on / hands the controller the group
-// holding it, and offers the classes' ccm variable in the interface.
+// holding it, offers the classes' ccm variable in the interface and switches the HA group labels on
+// for each cluster that leaves them unset.
 func TestIntegrationChartSysAudit(t *testing.T) {
 	t.Parallel()
 	for _, on := range []bool{false, true} {
@@ -898,8 +899,20 @@ func TestIntegrationChartSysAudit(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if !strings.Contains(fmt.Sprint(variables), "name:ccm") {
+				var schema map[string]any
+				for _, v := range variables {
+					if v, ok := v.(map[string]any); ok && v["name"] == ccmVariable {
+						schema, _, _ = unstructured.NestedMap(v, "schema", "openAPIV3Schema")
+					}
+				}
+				if schema == nil {
 					t.Errorf("%s has no ccm variable", o.GetName())
+					continue
+				}
+				whole, _, _ := unstructured.NestedBool(schema, "default", "haGroups")
+				property, _, _ := unstructured.NestedBool(schema, "properties", "haGroups", "default")
+				if whole != on || property != on {
+					t.Errorf("Sys.Audit %t: %s defaults the HA group labels to %t, and the property to %t", on, o.GetName(), whole, property)
 				}
 				classes++
 			case "Deployment":
