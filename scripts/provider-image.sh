@@ -36,7 +36,10 @@ archive=$(mktemp)
 trap 'rm -rf "$src" "$archive"' EXIT
 # No checksum for the archive: the digest check below covers the source, as any change to it changes
 # the binary. It goes to a file, which curl can start again on a retry, where a pipe could not.
-curl -fsSL --proto '=https' --retry 5 --retry-all-errors -o "${archive}" "https://github.com/${upstream}/archive/${commit}.tar.gz"
+curl -fsSL --proto '=https' --retry 5 --retry-all-errors -o "${archive}" "https://github.com/${upstream}/archive/${commit}.tar.gz" || {
+    echo "provider-image: could not download ${upstream} at ${commit}" >&2
+    exit 1
+}
 tar -xzf "${archive}" -C "${src}" --strip-components=1
 for fix in "${scripts}/${provider}-patches"/*.patch; do
     [ -e "${fix}" ] || continue
