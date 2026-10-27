@@ -31,7 +31,7 @@ The interface logs in JSON, one line per event, and every change names the user 
 
 ### The management cluster
 
-The Administration page's **Repair access** hands administrators the management cluster's own credentials, for what the interface cannot do. It needs the state passphrase and the [setup privileges](install.md#who-may-set-it-up), is refused while a run is going on, and every download is logged.
+**Repair access**, under **Administration**, **Appliance**, hands administrators the management cluster's own credentials, for what the interface cannot do. It needs the state passphrase and the [setup privileges](install.md#who-may-set-it-up), is refused while a run is going on, and every download is logged.
 
 - **Download admin kubeconfig** saves `management.kubeconfig`, for kubectl.
 - **Download admin talosconfig** saves `management.talosconfig`, for `talosctl`.

@@ -77,6 +77,8 @@ type EtcdRestoreStatus struct {
 	By          string       `json:"by,omitempty"`
 	RequestedAt time.Time    `json:"requestedAt"`
 	Phase       RestorePhase `json:"phase"`
+	// FailedIn is the phase a failed restore had got to.
+	FailedIn RestorePhase `json:"failedIn,omitempty"`
 	// Machine and Node are the control-plane machine etcd is restored on, and its node.
 	Machine string `json:"machine,omitempty"`
 	Node    string `json:"node,omitempty"`
@@ -615,6 +617,7 @@ func (run *restoreRun) finish(ctx context.Context, err error) error {
 	run.status.Finished = &at
 	kind, reason := corev1.EventTypeNormal, "EtcdRestored"
 	if err != nil {
+		run.status.FailedIn = run.status.Phase
 		run.status.Phase, run.status.Message = RestoreFailed, err.Error()
 		kind, reason = corev1.EventTypeWarning, "EtcdRestoreFailed"
 	} else {

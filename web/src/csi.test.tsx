@@ -17,7 +17,7 @@ import {
   type FieldKey,
 } from "./create-form";
 import { MachinesStep, type StepProps } from "./CreateSteps";
-import { fakeServer } from "./fake-server";
+import { applyStaged, fakeServer } from "./fake-server";
 import type { Cluster, ClusterClass, Storage } from "./types";
 
 const k3s: ClusterClass = {
@@ -181,6 +181,7 @@ describe("a cluster's CSI plugin", () => {
     await waitFor(() => expect(within(dialog).getByLabelText(/newest release/u)).toBeEnabled());
     await user.click(within(dialog).getByLabelText(/newest release/u));
     await user.click(save);
+    await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { csi: { datastoreAllocate: true } } }));
   });
 

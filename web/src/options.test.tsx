@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
-import { fakeServer } from "./fake-server";
+import { applyStaged, fakeServer } from "./fake-server";
 
 const cluster = {
   namespace: "clusters",
@@ -45,6 +45,7 @@ describe("a cluster's options", () => {
     await user.click(install);
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
     expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: { headlamp: { enabled: true } },
     });
@@ -55,6 +56,7 @@ describe("a cluster's options", () => {
     await user.type(within(dialog).getByLabelText("Grafana host name"), "grafana.example.org");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: { monitoring: { enabled: true, hostname: "grafana.example.org" } },
     });
@@ -69,6 +71,7 @@ describe("a cluster's options", () => {
     await user.selectOptions(within(dialog).getByLabelText("Kyverno"), "restricted");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: { podSecurity: { admission: "baseline", kyverno: "restricted" } },
     });
@@ -82,6 +85,7 @@ describe("a cluster's options", () => {
     await user.click(istio);
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: { istio: { enabled: true } },
     });
@@ -128,6 +132,7 @@ describe("a cluster's options", () => {
     await user.selectOptions(within(dialog).getByLabelText("Kyverno"), "restricted");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: { podSecurity: { admission: "restricted", kyverno: "restricted" } },
     });
@@ -166,6 +171,7 @@ describe("a cluster's options", () => {
     await user.type(addresses, "10.0.0.100-10.0.0.120");
     await user.click(save);
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: { loadBalancer: { enabled: true, implementation: "metallb", addresses: ["10.0.0.100-10.0.0.120"] } },
     });
@@ -196,6 +202,7 @@ describe("a cluster's options", () => {
     expect(within(dialog).queryByLabelText("Load-balancer addresses")).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: { loadBalancer: { enabled: false, implementation: "kube-vip", addresses: ["10.0.0.100-10.0.0.120"] } },
     });
@@ -261,6 +268,7 @@ describe("a cluster's options", () => {
     await user.type(size, "20");
     await user.click(save);
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: { logs: { enabled: true, collector: "api", retentionDays: 7, sizeGiB: 20 } },
     });
@@ -291,6 +299,7 @@ describe("a cluster's options", () => {
     expect(within(dialog).getByRole("status")).toHaveTextContent(/Logs are switched off with monitoring/u);
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: {
         monitoring: { enabled: false },
@@ -329,6 +338,7 @@ describe("a cluster's options", () => {
     };
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: { headlamp: { enabled: true, hostname: "headlamp.example.org", access: "view" } },
     });
@@ -343,6 +353,7 @@ describe("a cluster's options", () => {
     await user.click(within(dialog).getByLabelText("Read-only for everyone, without signing in"));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: { headlamp: { enabled: true, hostname: "headlamp.example.org" } },
     });

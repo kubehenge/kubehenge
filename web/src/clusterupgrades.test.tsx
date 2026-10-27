@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
 import { describe as describePolicy, windowProblems } from "./ClusterUpgrades";
-import { fakeServer, type Answer } from "./fake-server";
+import { applyStaged, fakeServer, type Answer } from "./fake-server";
 
 const cluster = {
   namespace: "clusters",
@@ -66,6 +66,7 @@ describe("cluster upgrades", () => {
     await user.click(within(dialog).getByLabelText("Move the nodes to new template builds"));
     expect(within(dialog).queryByLabelText("From")).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { upgrades: { mode: "off", nodeImages: false } } }));
   });
 
@@ -138,8 +139,9 @@ describe("cluster upgrades", () => {
     answer = { status: 200, body: talos };
     await user.click(dialog.getByRole("button", { name: "Upgrade" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
+    // The refused release was planned, never sent.
     expect(calls.filter((c) => c.key === "PATCH /api/clusters/clusters/web").map((c) => c.body)).toStrictEqual([
-      { variables: { talosVersion: "v1.15.3" } },
       { variables: { talosVersion: "v1.15.3" } },
     ]);
   });
@@ -204,6 +206,7 @@ describe("cluster upgrades", () => {
     expect(within(dialog).getByLabelText("Days of the month")).toHaveAttribute("aria-invalid", "true");
     await user.clear(within(dialog).getByLabelText("Days of the month"));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await applyStaged(user);
     await waitFor(() =>
       expect(sent()).toStrictEqual({
         // Weekdays in calendar order, whatever order they were ticked in.

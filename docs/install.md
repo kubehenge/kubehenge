@@ -221,7 +221,7 @@ The signed-in user needs these privileges on `/`, which the Administrator role h
 
 `Sys.Modify`, `Permissions.Modify`, `User.Modify`, `Group.Allocate`, `Realm.AllocateUser`, `Pool.Allocate`, `VM.Allocate`, `Datastore.AllocateSpace`, `Datastore.AllocateTemplate`
 
-Proxmox VE checks every call of the run again on its own. Anyone without them sees that Kubehenge is not set up yet. The same privileges open the Administration page later: Kubehenge's upgrades, repair access, the VM templates, the management cluster's settings (applying them again or changing them) and removal. They also bring the warnings about the [backup](#back-up-the-appliance) and the [certificate](#the-appliances-certificate).
+Proxmox VE checks every call of the run again on its own. Anyone without them sees that Kubehenge is not set up yet. The same privileges open Administration later, in four pages: **Management cluster**, its settings (applying them again or changing them) and its removal; **Appliance**, Kubehenge's upgrades and repair access; **Templates**, the VM templates and their weekly build; and **Certificates**, the DNS-01 credential for every cluster. They also bring the warnings about the [backup](#back-up-the-appliance) and the [certificate](#the-appliances-certificate).
 
 The run acts with your own Proxmox VE session: the interface renews your ticket and hands it to OpenTofu through its environment only; it is never stored, and no administrator token is created. A ticket lasts two hours, so the run has to finish within that. The one exception is opt-in: automatic upgrades of the management cluster, off unless an administrator switches them on, have the appliance keep the state passphrase and an Administrator token of a user of its own ([upgrading.md](upgrading.md#automatically-after-kubehenge)).
 
@@ -389,7 +389,7 @@ Every cluster's nodes are clones of a VM template that `kubehenge template creat
 
 Create them after the management cluster: they go into its template pool, `kubehenge-templates`, which the setup creates. A kubeadm cluster can only be created at, or upgraded to, a version that has a template on its node OS, and a Talos cluster only created on a Talos release that has one.
 
-On the Administration page, **VM templates** lists them, each with a cluster that clones from it, and **Build a template** makes one with your own Proxmox VE session, as the setup does:
+Under **Administration**, **Templates**, **VM templates** lists them, each with a cluster that clones from it, and **Build a template** makes one with your own Proxmox VE session, as the setup does:
 
 | Field | What it is |
 | --- | --- |

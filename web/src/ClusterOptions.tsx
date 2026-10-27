@@ -189,30 +189,39 @@ function rancherText(r: RancherValue): string {
 const nodeOSRows = (c: Cluster): OptionRow[] =>
   c.nodeOS ? [{ label: "Node OS", value: c.nodeOS.title, action: "nodeOS", name: "the node OS" }] : [];
 
+/** Which of the settings that a class or the user's rights offer only at times a cluster offers. */
+export interface Offered {
+  ha: boolean;
+  csi: boolean;
+  snapshots: boolean;
+  haGroups: boolean;
+}
+
+/** everything offers every setting, for a list that has to show whatever a change sets. */
+export const everything: Offered = { ha: true, csi: true, snapshots: true, haGroups: true };
+
+/** useOffered reads which of the settings offered only at times a cluster offers. */
+export function useOffered(c: Cluster): Offered {
+  const ha = useHAOffered(c.class, text(c.variables["storage"]));
+  const csi = useCSIOffer(c);
+  const snapshots = useSnapshotsOffer(c);
+  const haGroups = useHAGroupsOffered(c);
+  return { ha, csi: csi.offered, snapshots: snapshots.offered, haGroups };
+}
+
 /**
- * Options lists what can be set on a cluster after it was created, each with its Edit button, as
- * Proxmox VE's Options panels do. more are the rows of settings whose dialogs live elsewhere, with
- * views of their own or the Scale dialog's, after logs.
+ * optionRows are what can be set on a cluster after it was created. more are the rows of settings
+ * whose dialogs live elsewhere, with views of their own or the Scale dialog's, after logs.
  */
-export function Options<A extends string = never>({
-  cluster: c,
-  can,
-  onEdit,
-  more,
-}: {
-  cluster: Cluster;
-  can: boolean;
-  onEdit: (a: OptionAction | A) => void;
-  more?: OptionRow<A>[];
-}): JSX.Element {
+export function optionRows<A extends string = never>(
+  c: Cluster,
+  offered: Offered,
+  more: OptionRow<A>[] = [],
+): OptionRow<OptionAction | A>[] {
   const headlamp = hostedValue(c.variables["headlamp"]);
   const monitoring = hostedValue(c.variables["monitoring"]);
   const rancher = rancherValue(c.variables["rancher"]);
   const upgrades = upgradePolicy(c.variables["upgrades"]);
-  const haOffered = useHAOffered(c.class, text(c.variables["storage"]));
-  const csi = useCSIOffer(c);
-  const snapshots = useSnapshotsOffer(c);
-  const haGroups = useHAGroupsOffered(c);
   const cis = c.variables["cis"] === true;
   const podSecurity = enforced(podSecurityOf(c.variables["podSecurity"]), cis);
   const talos: OptionRow[] =
@@ -237,15 +246,15 @@ export function Options<A extends string = never>({
       name: "placement",
     },
   ];
-  if (haOffered) {
+  if (offered.ha) {
     rows.push({ label: "Proxmox VE HA", value: haText(haOn(c)), action: "ha", name: "Proxmox VE HA" });
   }
   // A cluster that runs the newest release keeps the row after its administrator withdraws the
   // choice, so that it can be switched back.
-  if (csi.offered || csiOn(c)) {
+  if (offered.csi || csiOn(c)) {
     rows.push({ label: "CSI plugin", value: csiText(csiOn(c)), action: "csi", name: "the CSI plugin" });
   }
-  if (snapshots.offered || snapshotsOn(c)) {
+  if (offered.snapshots || snapshotsOn(c)) {
     rows.push({
       label: "Volume snapshots",
       value: snapshotsText(snapshotsOn(c)),
@@ -253,7 +262,7 @@ export function Options<A extends string = never>({
       name: "volume snapshots",
     });
   }
-  if (haGroups || haGroupsOn(c)) {
+  if (offered.haGroups || haGroupsOn(c)) {
     rows.push({
       label: "HA group labels",
       value: haGroupsText(haGroupsOn(c)),
@@ -278,7 +287,7 @@ export function Options<A extends string = never>({
       name: "monitoring",
     },
     { label: "Logs", value: logsText(logsOf(c.variables["logs"])), action: "logs", name: "logs" },
-    ...(more ?? []),
+    ...more,
     {
       label: "Certificates",
       value: certificatesText(certificatesOf(c.variables["certificates"])),
@@ -331,6 +340,30 @@ export function Options<A extends string = never>({
       name: "identity providers",
     });
   }
+  return rows;
+}
+
+/**
+ * Options lists what can be set on a cluster after it was created, each with its Edit button, and
+ * what a staged change sets each to. more makes the rows of the settings whose dialogs live
+ * elsewhere, for the cluster as it is and as staged.
+ */
+export function Options<A extends string = never>({
+  cluster: c,
+  staged,
+  can,
+  onEdit,
+  more,
+}: {
+  cluster: Cluster;
+  staged?: Cluster | undefined;
+  can: boolean;
+  onEdit: (a: OptionAction | A) => void;
+  more?: (c: Cluster) => OptionRow<A>[];
+}): JSX.Element {
+  const offered = useOffered(c);
+  const rows = optionRows(c, offered, more?.(c));
+  const after = staged === undefined ? [] : optionRows(staged, offered, more?.(staged));
   return (
     <div className="box scroll">
       <table className="grid options">
@@ -338,7 +371,10 @@ export function Options<A extends string = never>({
           {rows.map(({ label, value, action, button = "Edit", name = label }) => (
             <tr key={label}>
               <th scope="row">{label}</th>
-              <td>{value}</td>
+              <td>
+                {value}
+                <StagedValue now={value} after={after.find((r) => r.label === label)?.value} />
+              </td>
               <td className="row-action">
                 {action !== undefined && (
                   <button type="button" disabled={!can} aria-label={`${button} ${name}`} onClick={() => onEdit(action)}>
@@ -352,6 +388,14 @@ export function Options<A extends string = never>({
       </table>
     </div>
   );
+}
+
+// StagedValue is what a staged change sets a setting to, where it sets it anew.
+function StagedValue({ now, after }: { now: string; after: string | undefined }): JSX.Element | null {
+  if (after === undefined || after === now) {
+    return null;
+  }
+  return <span className="staged-value">Staged: {after}</span>;
 }
 
 // A node OS the cluster can move to: released, and with a template of it built.

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
-import { fakeServer } from "./fake-server";
+import { applyStaged, fakeServer } from "./fake-server";
 
 const cluster = {
   namespace: "clusters",
@@ -62,6 +62,7 @@ describe("rancher", () => {
     expect(confirm).toBeDisabled();
     await user.type(within(dialog).getByLabelText("Confirm name"), "rancher");
     await user.click(confirm);
+    await applyStaged(user);
     await waitFor(() =>
       expect(sent()).toStrictEqual({ variables: { rancher: { install: false, hostname: "rancher.example.org" } } }),
     );

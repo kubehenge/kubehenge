@@ -75,14 +75,14 @@ export function ManagementBehind({
   if (u?.behind !== true || !settings || status.job?.state === "running") {
     return null;
   }
-  // A failed automatic run is otherwise only seen far down the page, under Management cluster.
+  // A failed automatic run is otherwise only seen on the Management cluster page, with its log.
   const failed = status.job?.automatic === true && status.job.state === "failed";
   return (
     <>
       <output className="warning notice">
         The management cluster runs what Kubehenge {u.applied} applied; this appliance carries {u.carried}.{" "}
         {failed &&
-          "Upgrading it automatically failed (the log is under Management cluster below); the next day's upgrade hour tries again. "}
+          "Upgrading it automatically failed (the log is on the Management cluster page); the next day's upgrade hour tries again. "}
         <button type="button" className="primary" onClick={() => setOpen(true)}>
           Upgrade the management cluster
         </button>
@@ -148,7 +148,7 @@ export function AutomaticManagement({
         hint={
           m.on
             ? `Applied again on its own, as ${m.user}, at the hour above once Kubehenge runs a newer release than the one that last applied it. Switched on ${since} by ${m.by ?? ""}.`
-            : "Stays as it is when Kubehenge upgrades, until it is upgraded under Management cluster below."
+            : "Stays as it is when Kubehenge upgrades, until it is upgraded on the Management cluster page."
         }
       >
         {(id) => (
