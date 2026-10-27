@@ -17,6 +17,11 @@ distribution=$1
 kubernetes=${2:-}
 cd "$(dirname "$0")/.."
 
+# dnf and rpm-ostree stay on one mirror from the mirror list until it serves under 1000 bytes/s, and
+# one serving 50 kB/s keeps a bake past its timeout. Under 100 kB/s they move to the next mirror; a
+# bake that slow on average would not finish in time anyway. node.sh does the same.
+sed -i '/^\[/a minrate=100k' /etc/yum.repos.d/*.repo
+
 dnf -y install podman rpm-ostree bootc ostree skopeo
 
 container=$(podman create "${tools}")

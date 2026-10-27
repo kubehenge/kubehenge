@@ -116,15 +116,19 @@ control_plane_record() {
 # and sidecars together, or its largest other init container, whichever is more. The add-ons' CPU
 # figures are these requests, so the print shows one that fell behind its chart.
 pod_cpu() {
-    pods=$(KUBECONFIG="$1" kubectl get pods -A --field-selector=status.phase!=Succeeded,status.phase!=Failed -o json)
-    KUBECONFIG="$1" kubectl get nodes -o json | jq -r --argjson pods "${pods}" '
+    # Both lists go to jq on its input: a cluster's pods outgrow what one argument may hold.
+    {
+        KUBECONFIG="$1" kubectl get nodes -o json &&
+            KUBECONFIG="$1" kubectl get pods -A --field-selector=status.phase!=Succeeded,status.phase!=Failed -o json
+    } | jq -rs '
         def milli: if . == null then 0 elif endswith("m") then .[:-1] | tonumber else tonumber * 1000 end;
         def req: (.resources.requests.cpu // .resources.limits.cpu) | milli;
-        ($pods.items | map({node: .spec.nodeName, ns: .metadata.namespace, cpu: ([
+        .[0] as $nodes
+        | (.[1].items | map({node: .spec.nodeName, ns: .metadata.namespace, cpu: ([
             ([.spec.containers[], (.spec.initContainers[]? | select(.restartPolicy == "Always")) | req] | add),
             ([.spec.initContainers[]? | select(.restartPolicy != "Always") | req] | max // 0)
         ] | max)})) as $p
-        | (.items[] | .metadata.name as $n
+        | ($nodes.items[] | .metadata.name as $n
             | "\($n): \($p | map(select(.node == $n) | .cpu) | add // 0)m of CPU requested of \(.status.allocatable.cpu | milli)m"),
         ($p | group_by(.ns)[] | "  \(.[0].ns): \(map(.cpu) | add)m in \(length) pods")'
 }

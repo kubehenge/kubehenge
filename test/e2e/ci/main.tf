@@ -88,7 +88,6 @@ module "management_cluster" {
 
   node_addresses = [for i in range(var.node_count) : "172.20.99.${11 + i}/24"]
   node_cores     = var.node_cores
-  node_memory_mb = 3072
   # As the templates', test/e2e/ci/run.sh.
   cpu_type = "host"
 

@@ -384,6 +384,10 @@ ${talos_variable}
         value: {admission: restricted}
       - name: cis
         value: true
+      # The test upgrades the cluster itself. Talos's automatic patch upgrades would start whenever a
+      # run reaches the default window, 02:00 to 06:00 UTC, since its nodes start a patch behind.
+      - name: upgrades
+        value: {mode: "off", nodeImages: false}
 EOF
 creator create -f "${work}/cluster.yaml"
 # capmox does not come back to a machine whose VM failed to provision, so the wait ends there rather
@@ -1281,7 +1285,10 @@ step "etcd snapshots: one taken into the S3 store, encrypted, and read back"
 # plain text, so it is seen there and must not be seen in the store.
 etcd_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
 wl -n default create configmap e2e-before-snapshot --from-literal=marker="${etcd_marker}"
-set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2}"
+# Once a day, twelve hours from now: the default schedule's slot after the cluster was made can have
+# passed already, and switching snapshots on would then take one of its own beside the one asked for.
+etcd_schedule="0 $((($(date -u +%-H) + 12) % 24)) * * *"
+set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2,\"schedule\":\"${etcd_schedule}\"}"
 # As the interface's Take a snapshot now asks for one.
 now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 kubectl -n "${ns}" annotate cluster "${name}" --overwrite \
@@ -1416,7 +1423,7 @@ case ${distribution} in
                 jq -e --arg old " ${servers} " '(.items | length > 0) and all(.items[]; .metadata.name as $name |
                     .status.phase == "Running" and (($old | contains(" " + $name + " ")) | not))' > /dev/null
         }
-        set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2,\"distributionUpload\":true}"
+        set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2,\"schedule\":\"${etcd_schedule}\",\"distributionUpload\":true}"
         until_true 300 "the upload's Secret in kube-system" wl -n kube-system get secret kubehenge-etcd-s3
         upload_secret=$(wl -n kube-system get secret kubehenge-etcd-s3 -o json)
         printf '%s' "${upload_secret}" | jq -e '.type == "etcd.k3s.cattle.io/s3-config-secret" and
@@ -2595,8 +2602,13 @@ until_true 900 "Argo CD available" wl -n argocd wait --for=condition=Available d
 until_true 300 "Argo CD's application controller ready" wl -n argocd rollout status statefulset/argocd-application-controller --timeout=10s
 push three
 until_true 600 "Argo CD syncs a new commit" synced three
-app_status=$(wl -n argocd get application kubehenge -o jsonpath='{.status.sync.status} {.status.health.status}')
-[ "${app_status}" = "Synced Healthy" ] || fail "Argo CD's application is ${app_status}"
+# The sync applies the ConfigMap before Argo CD records the sync's outcome on the application.
+app_settled() {
+    # shellcheck disable=SC2310 # wl wraps one kubectl call; a failed read is only a retry.
+    app_status=$(wl -n argocd get application kubehenge -o jsonpath='{.status.sync.status} {.status.health.status}') || return 1
+    [ "${app_status}" = "Synced Healthy" ]
+}
+until_true 120 "Argo CD's application synced and healthy" app_settled
 admin=$(wl -n argocd get configmap argocd-cm -o jsonpath='{.data.admin\.enabled}')
 [ "${admin}" = false ] || fail "Argo CD's built-in admin is enabled"
 pod_security=$(wl label --dry-run=server --overwrite namespace argocd pod-security.kubernetes.io/enforce=restricted 2>&1)
