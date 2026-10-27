@@ -262,6 +262,23 @@ kubehenge.dev/addon-control-plane-memory: '{"headlamp":8,"monitoring":32,"logs":
 {{- end -}}
 
 {{/*
+The CPU, in millicores, each add-on's pods request in a cluster, the same for every distribution:
+what its charts ask for at their pinned versions with the values Kubehenge gives them, counting the
+pods that run once and one node's share of those on every node. The scheduler places a pod only on
+a node with that much CPU not yet requested, however idle the node is. Kyverno's four controllers
+ask for 100m each. Istio is istiod's 100m, and a node's CNI agent's 100m and ztunnel's 200m. Logs
+are Loki's 55m with its proxy, and 10m for each Alloy; backups are Velero's server's 50m and a
+node's agent's 20m. Monitoring is its metrics proxies at 5m each, a node's and a control plane's;
+its other pods ask for none. The load balancer is kube-vip's cloud provider at 50m, MetalLB asking
+for none. Flux is its operator and four controllers at 10m each, Headlamp 10m, Rancher its Turtles
+controller. cert-manager, Argo CD, the clustermesh-apiserver, Rancher's own pods and its agent ask
+for none.
+*/}}
+{{- define "kubehenge.addonCPU" -}}
+kubehenge.dev/addon-cpu: '{"headlamp":10,"monitoring":20,"logs":75,"backups":70,"kyverno":400,"istio":400,"clusterMesh":0,"loadBalancer":50,"certManager":0,"rancher":10,"rancherAgent":0,"argocd":0,"flux":50}'
+{{- end -}}
+
+{{/*
 The S3 stores an administrator set for backups, which a cluster's backups variable names one of:
 the interface offers them and the controller reads them here.
 */}}

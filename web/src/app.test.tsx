@@ -6,6 +6,7 @@ import { noAnswer } from "./api";
 import { App } from "./App";
 import { ClusterList } from "./ClusterList";
 import {
+  addonCPU,
   addonMemory,
   addonNeedMiB,
   fieldProblems,
@@ -27,6 +28,9 @@ const rke2: ClusterClass = {
     "kubehenge.dev/addon-memory":
       '{"headlamp":64,"monitoring":1536,"kyverno":384,"certManager":192,"rancher":2048,"rancherAgent":512}',
     "kubehenge.dev/node-memory": '{"controlPlane":2560,"worker":704}',
+    "kubehenge.dev/addon-cpu":
+      '{"headlamp":10,"monitoring":20,"kyverno":400,"certManager":0,"rancher":10,"rancherAgent":0}',
+    "kubehenge.dev/node-cpu": '{"controlPlane":1555,"worker":745}',
   },
   versionFormat: { pattern: String.raw`^v1\.\d+\.\d+\+rke2r\d+$` },
   variables: [
@@ -1094,6 +1098,49 @@ describe("create", () => {
     expect(addonNeedMiB(alone, grown)).toBe(3200 + 1000 + 1656);
   });
 
+  it("gives the nodes that carry the add-ons the CPU their pods ask for", () => {
+    // Flux's figure as its pods asked for before Kubehenge gave them 10m each.
+    const figures =
+      '{"headlamp":10,"monitoring":20,"logs":75,"kyverno":400,"istio":400,"clusterMesh":0,"loadBalancer":50,"certManager":0,"rancherAgent":0,"flux":500}';
+    const figured: ClusterClass = {
+      ...rke2,
+      annotations: {
+        "kubehenge.dev/addon-cpu": figures,
+        "kubehenge.dev/node-cpu": '{"controlPlane":1555,"worker":745}',
+      },
+    };
+    expect(addonCPU(form, figured)).toStrictEqual({ names: ["Headlamp", "monitoring"], millicores: 30 });
+    const least = { cores: 2, memoryMiB: 8192, diskGiB: 40 };
+    const heavy: Form = {
+      ...form,
+      workerReplicas: 1,
+      workerMachine: least,
+      istio: true,
+      podSecurity: { admission: "privileged", kyverno: "baseline" },
+      logs: { ...form.logs, enabled: true },
+      loadBalancer: "metallb",
+      gitops: { ...form.gitops, engine: "flux" },
+    };
+    expect(addonCPU(heavy, figured)).toStrictEqual({
+      names: ["Headlamp", "monitoring", "logs", "Kyverno", "Istio", "the load balancer", "Flux"],
+      millicores: 1455,
+    });
+    // A worker needs the cores for what it requests itself and its share: one such worker does not
+    // hold them on two cores, two do.
+    expect(fieldProblems("Machines", heavy, figured)).toStrictEqual({
+      workerMachine:
+        "A whole number of cores, at least 3. The add-ons chosen need that many: their pods ask for 1455 millicores of CPU, shared by the workers.",
+    });
+    expect(withRoom(heavy, figured).workerMachine).toStrictEqual({ ...least, cores: 3 });
+    expect(fieldProblems("Machines", { ...heavy, workerReplicas: 2 }, figured)).toStrictEqual({});
+    // A class that says nothing of its nodes' own CPU counts their least for it.
+    const unmeasured: ClusterClass = { ...rke2, annotations: { "kubehenge.dev/addon-cpu": figures } };
+    expect(fieldProblems("Machines", heavy, unmeasured).workerMachine).toMatch(
+      /^A whole number of cores, at least 4\./u,
+    );
+    expect(fieldProblems("Machines", heavy, { ...rke2, annotations: {} })).toStrictEqual({});
+  });
+
   it("says why the sign-in page is back, what a lost connection means, and who may create", async () => {
     window.history.replaceState(null, "", "/");
     const routes: Record<string, Route> = {
@@ -1227,6 +1274,9 @@ describe("create", () => {
     expect(screen.getByText(/Rancher needs at least 4 cores on every node/u)).toBeInTheDocument();
     expect(
       screen.getByText(/^The add-ons chosen use about 2240 MiB of memory \(cert-manager, Rancher\)/u),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Their pods ask for 10 millicores of CPU \(Rancher\), so each worker has at least 4 cores\.$/u),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("checkbox", { name: /Install Rancher/u }));
     await user.click(screen.getByRole("button", { name: "Machines" }));

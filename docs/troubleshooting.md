@@ -189,6 +189,10 @@ A cluster with one control plane runs on two etcd members while that node is rep
 
 A message saying "the cluster's add-ons (…) need … MiB of memory on its workers, beyond the … MiB a worker uses itself": the workers together lack the memory the add-ons named take ([clusters.md](clusters.md#machines)). Give the workers more memory (`workerMachine`, or a worker pool's override), add workers, or leave an add-on off. Rancher's agent counts in every cluster that registers with Rancher; set `rancher` to `{register: false}` for a cluster that never will. "… on its control planes, which run them without workers …": the same for the control planes of a cluster without workers. A cluster that already fell short, after an upgrade of Kubehenge asked for more, can still be changed in other ways; only changes that leave it shorter are refused.
 
+### Not enough CPU for the add-ons
+
+A message saying "the cluster's add-ons (…) need … millicores of CPU on its workers, beyond the … millicores a worker uses itself": the CPU the add-ons' pods request does not fit in what the workers' cores leave beside their own pods' ([clusters.md](clusters.md#machines)). Kubernetes would leave the pods it finds no room for pending, with `Insufficient cpu` in their events, however idle the nodes are. Give the workers more cores (`workerMachine`, or a worker pool's override), add workers, or leave an add-on off; Kyverno and Istio ask for the most. The control-plane form of the message, and a cluster that already fell short, are as for memory above.
+
 ### Istio
 
 - **Pods in the mesh reach nothing, or fail their probes, under a NetworkPolicy:** ztunnel carries the enrolled pods' traffic on port 15008/TCP, and the kubelet's probes reach them from 169.254.7.127; a policy that denies by default has to allow both ([Istio's notes](https://istio.io/latest/docs/ambient/usage/networkpolicy/)).

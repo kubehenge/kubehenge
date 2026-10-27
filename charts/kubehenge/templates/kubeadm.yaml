@@ -29,6 +29,13 @@ metadata:
     # What a node uses before any add-on, measured by the end-to-end tests: a control plane with a
     # quarter on top, which the kernel's caches and the API server's peaks take; a worker with a tenth.
     kubehenge.dev/node-memory: '{"controlPlane":2392,"worker":704}'
+    {{- include "kubehenge.addonCPU" . | nindent 4 }}
+    # The CPU, in millicores, a node's own pods request besides the add-ons': on a worker the CNI's
+    # agent (Cilium's 100m; Calico's asks for none), a CoreDNS replica's 100m, Traefik's 10m and the
+    # CSI plugin's 20m; a control plane without workers adds the API server's 250m, the controller
+    # manager's 200m, the scheduler's and etcd's 100m each, the second CoreDNS replica, the CSI
+    # controller's 50m and the cloud controller manager's 10m. kube-proxy and kube-vip ask for none.
+    kubehenge.dev/node-cpu: '{"controlPlane":1040,"worker":230}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"

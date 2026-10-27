@@ -895,8 +895,13 @@ func (b *Builder) removeSeed(ctx context.Context, node *proxmox.Node, vm *proxmo
 	}
 }
 
+// bakeAccount prints the timestamped log it is given as a failed bake needs it: the first line of
+// each second, so that a step that ran long shows when it began, then the log's last lines. Its end
+// alone can be a package manager's list of hundreds of packages, printed in one second.
+const bakeAccount = `awk '$1 != t { t = $1; print }' "$1" | tail -n 60; echo ...; tail -n 20 "$1"`
+
 // waitAndCheck waits for the guest agent and runs the checks in the guest. On a failure it adds
-// cloud-init's own account and the end of the bake's log, which the exit code does not carry.
+// cloud-init's own account and the bake's log, which the exit code does not carry.
 func (b *Builder) waitAndCheck(ctx context.Context, vm *proxmox.VirtualMachine, checks [][]string, log string) error {
 	if err := vm.WaitForAgent(ctx, int(bakeTimeout.Seconds())); err != nil {
 		return fmt.Errorf("the guest agent did not start: %w", err)
@@ -915,8 +920,8 @@ func (b *Builder) waitAndCheck(ctx context.Context, vm *proxmox.VirtualMachine, 
 			}
 		}
 		if log != "" {
-			if out, lerr := b.output(ctx, vm, []string{"tail", "-n", "40", log}); lerr == nil {
-				err = fmt.Errorf("%w\nthe end of %s:\n%s", err, log, out)
+			if out, lerr := b.output(ctx, vm, []string{"sh", "-c", bakeAccount, "sh", log}); lerr == nil {
+				err = fmt.Errorf("%w\n%s, the first line of each second, then its end:\n%s", err, log, out)
 			}
 		}
 		return err

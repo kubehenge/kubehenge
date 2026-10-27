@@ -31,6 +31,14 @@ metadata:
     # What a node uses before any add-on, measured by the end-to-end tests: a control plane with a
     # quarter on top, which the kernel's caches and the API server's peaks take; a worker with a tenth.
     kubehenge.dev/node-memory: '{"controlPlane":1848,"worker":448}'
+    {{- include "kubehenge.addonCPU" . | nindent 4 }}
+    # The CPU, in millicores, a node's own pods request besides the add-ons': k3s runs its control
+    # plane, kube-proxy and flannel inside its own process, so on a worker the CNI's agent where one
+    # is chosen (Cilium's 100m; Calico's asks for none), CoreDNS's and the metrics server's 100m
+    # each, which may move to a worker, and the CSI plugin's 20m; a control plane without workers
+    # adds the CSI controller's 50m and the cloud controller manager's 10m. Traefik, the local path
+    # provisioner and kube-vip ask for none.
+    kubehenge.dev/node-cpu: '{"controlPlane":380,"worker":320}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"

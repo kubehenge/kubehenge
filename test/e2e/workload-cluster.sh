@@ -32,9 +32,10 @@
 #   KUBEHENGE_E2E_LOAD_BALANCER_ADDRESSES (comma-separated, unused, on the nodes' network and
 #   reached from the machine running this test). KUBEHENGE_E2E_LOAD_BALANCER is the load balancer,
 #   metallb (default) or kube-vip.
-# KUBEHENGE_E2E_CONTROL_PLANE_MEMORY and KUBEHENGE_E2E_WORKER_MEMORY (MiB) and
-# KUBEHENGE_E2E_CONTROL_PLANE_CORES size the nodes; the memory is by default the least the class
-# lets each have with the add-ons. KUBEHENGE_E2E_RESTARTS=report prints restarts while every
+# KUBEHENGE_E2E_CONTROL_PLANE_MEMORY and KUBEHENGE_E2E_WORKER_MEMORY (MiB),
+# KUBEHENGE_E2E_CONTROL_PLANE_CORES and KUBEHENGE_E2E_WORKER_CORES size the nodes; the memory, and
+# the worker's cores, are by default the least the class lets each have with the add-ons.
+# KUBEHENGE_E2E_RESTARTS=report prints restarts while every
 # add-on is on instead of failing, for a host whose KVM lacks pause-loop exiting: there guests that
 # outnumber its CPUs starve each other, whatever their sizes.
 # KUBEHENGE_E2E_NODE_OS is the nodes' operating system as one word, such as rocky-10, whose
@@ -315,7 +316,15 @@ worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq 
     | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
         $node.worker + $addon.headlamp + $addon.monitoring + $addon.logs + $addon.backups + $addon.kyverno + $addon.istio + $addon.loadBalancer + $addon.certManager + $addon.argocd + $addon.rancherAgent]
     | max')}
-# The control plane likewise: the least the class's sizing guide gives it beside one worker, or what
+# Its cores likewise, for the CPU a worker's own pods and every add-on's request, the GitOps engine
+# that asks for more of the two.
+worker_cores=${KUBEHENGE_E2E_WORKER_CORES:-$(printf '%s' "${class_json}" | jq -r '
+    (.metadata.annotations["kubehenge.dev/addon-cpu"] | fromjson) as $addon
+    | (.metadata.annotations["kubehenge.dev/node-cpu"] | fromjson) as $node
+    | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.cores.minimum),
+        (($node.worker + $addon.headlamp + $addon.monitoring + $addon.logs + $addon.backups + $addon.kyverno + $addon.istio + $addon.loadBalancer + $addon.certManager + ([$addon.argocd, $addon.flux] | max) + $addon.rancherAgent) / 1000 | ceil)]
+    | max')}
+# The control plane's memory likewise: the least the class's sizing guide gives it beside one worker, or what
 # it uses itself with every add-on but Rancher, whichever is more.
 control_plane_memory=${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-$(printf '%s' "${class_json}" | jq -r '
     (.metadata.annotations["kubehenge.dev/addon-control-plane-memory"] // "{}" | fromjson) as $grows
@@ -324,7 +333,7 @@ control_plane_memory=${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-$(printf '%s' "${clas
         (.spec.variables[] | select(.name == "controlPlaneMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
         $node.controlPlane + ([$grows.headlamp, $grows.monitoring, $grows.logs, $grows.backups, $grows.kyverno, $grows.istio, $grows.loadBalancer, $grows.certManager, $grows.argocd, $grows.rancherAgent] | map(. // 0) | add)]
     | max')}
-echo "workers with ${worker_memory} MiB of memory, the control plane with ${control_plane_memory} MiB"
+echo "workers with ${worker_memory} MiB of memory and ${worker_cores} cores, the control plane with ${control_plane_memory} MiB"
 cat > "${work}/cluster.yaml" << EOF
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
@@ -363,7 +372,7 @@ ${network_spec}
       - name: controlPlaneMachine
         value: {memoryMiB: ${control_plane_memory}, cores: ${KUBEHENGE_E2E_CONTROL_PLANE_CORES:-2}}
       - name: workerMachine
-        value: {memoryMiB: ${worker_memory}}
+        value: {memoryMiB: ${worker_memory}, cores: ${worker_cores}}
 ${cni_variable}
 ${talos_variable}
       - name: oidc
@@ -374,6 +383,10 @@ ${talos_variable}
         value: {admission: restricted}
       - name: cis
         value: true
+      # The test upgrades the cluster itself. Talos's automatic patch upgrades would start whenever a
+      # run reaches the default window, 02:00 to 06:00 UTC, since its nodes start a patch behind.
+      - name: upgrades
+        value: {mode: "off", nodeImages: false}
 EOF
 creator create -f "${work}/cluster.yaml"
 # capmox does not come back to a machine whose VM failed to provision, so the wait ends there rather
@@ -1476,6 +1489,8 @@ if [ -n "${server_unit}" ]; then
 fi
 echo "memory before the add-ons:"
 pod_memory "${work}/workload"
+echo "CPU requested before the add-ons:"
+pod_cpu "${work}/workload"
 # What the guests are told of the CPU decides which mitigations their kernels run, and those cost
 # the most under nested virtualisation: the figure to read beside a slow run.
 echo "the CPU a control plane sees:"
@@ -2582,8 +2597,13 @@ until_true 900 "Argo CD available" wl -n argocd wait --for=condition=Available d
 until_true 300 "Argo CD's application controller ready" wl -n argocd rollout status statefulset/argocd-application-controller --timeout=10s
 push three
 until_true 600 "Argo CD syncs a new commit" synced three
-app_status=$(wl -n argocd get application kubehenge -o jsonpath='{.status.sync.status} {.status.health.status}')
-[ "${app_status}" = "Synced Healthy" ] || fail "Argo CD's application is ${app_status}"
+# The sync applies the ConfigMap before Argo CD records the sync's outcome on the application.
+app_settled() {
+    # shellcheck disable=SC2310 # wl wraps one kubectl call; a failed read is only a retry.
+    app_status=$(wl -n argocd get application kubehenge -o jsonpath='{.status.sync.status} {.status.health.status}') || return 1
+    [ "${app_status}" = "Synced Healthy" ]
+}
+until_true 120 "Argo CD's application synced and healthy" app_settled
 admin=$(wl -n argocd get configmap argocd-cm -o jsonpath='{.data.admin\.enabled}')
 [ "${admin}" = false ] || fail "Argo CD's built-in admin is enabled"
 pod_security=$(wl label --dry-run=server --overwrite namespace argocd pod-security.kubernetes.io/enforce=restricted 2>&1)
@@ -2633,6 +2653,8 @@ if [ -n "${restarted}" ]; then
     found_restarts "containers restarted while the add-ons were installed (pod, restarts): ${restarted}"
 fi
 pod_memory "${work}/workload"
+echo "CPU requested with every add-on on:"
+pod_cpu "${work}/workload"
 
 step "every add-on's image named by digest"
 # Every pod outside kube-system, which only the add-ons, their operators and these tests create,
