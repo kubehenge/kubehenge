@@ -2597,8 +2597,13 @@ until_true 900 "Argo CD available" wl -n argocd wait --for=condition=Available d
 until_true 300 "Argo CD's application controller ready" wl -n argocd rollout status statefulset/argocd-application-controller --timeout=10s
 push three
 until_true 600 "Argo CD syncs a new commit" synced three
-app_status=$(wl -n argocd get application kubehenge -o jsonpath='{.status.sync.status} {.status.health.status}')
-[ "${app_status}" = "Synced Healthy" ] || fail "Argo CD's application is ${app_status}"
+# The sync applies the ConfigMap before Argo CD records the sync's outcome on the application.
+app_settled() {
+    # shellcheck disable=SC2310 # wl wraps one kubectl call; a failed read is only a retry.
+    app_status=$(wl -n argocd get application kubehenge -o jsonpath='{.status.sync.status} {.status.health.status}') || return 1
+    [ "${app_status}" = "Synced Healthy" ]
+}
+until_true 120 "Argo CD's application synced and healthy" app_settled
 admin=$(wl -n argocd get configmap argocd-cm -o jsonpath='{.data.admin\.enabled}')
 [ "${admin}" = false ] || fail "Argo CD's built-in admin is enabled"
 pod_security=$(wl label --dry-run=server --overwrite namespace argocd pod-security.kubernetes.io/enforce=restricted 2>&1)
