@@ -36,8 +36,9 @@ case "${distribution}" in
         exit 1
         ;;
 esac
+# A slow mirror is left for the next, as in build.sh.
 # shellcheck disable=SC2086 # one word per package
-dnf -y install --setopt=install_weak_deps=False ${packages}
+dnf -y install --setopt=install_weak_deps=False --setopt=minrate=100k ${packages}
 dnf clean all
 rm -f /etc/yum.repos.d/kubehenge-*.repo /etc/pki/rpm-gpg/kubehenge-*.asc
 rm -rf /var/cache/* /var/log/* /var/lib/dnf
