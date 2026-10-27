@@ -383,6 +383,10 @@ ${talos_variable}
         value: {admission: restricted}
       - name: cis
         value: true
+      # The test upgrades the cluster itself. Talos's automatic patch upgrades would start whenever a
+      # run reaches the default window, 02:00 to 06:00 UTC, since its nodes start a patch behind.
+      - name: upgrades
+        value: {mode: "off", nodeImages: false}
 EOF
 creator create -f "${work}/cluster.yaml"
 # capmox does not come back to a machine whose VM failed to provision, so the wait ends there rather
