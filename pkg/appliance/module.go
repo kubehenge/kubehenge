@@ -192,7 +192,7 @@ func (a *Appliance) writeConfig(s *Settings) error {
 		"headlampActions":        s.HeadlampActions,
 
 		"clusterDatastoreAllocate": s.ClusterDatastoreAllocate,
-		"clusterSysAudit":          s.ClusterSysAudit,
+		"clusterSysAudit":          s.GivesClusterSysAudit(),
 		"clusterVolumeSnapshots":   s.ClusterVolumeSnapshots,
 		// The module takes no null for a list.
 		"extraClusterNamespaces": append([]string{}, s.ExtraClusterNamespaces...),

@@ -658,12 +658,14 @@ func TestClusterDatastoreAllocateReachesTheModule(t *testing.T) {
 	}
 }
 
+// Clusters may hold Sys.Audit on / unless the settings switch it off.
 func TestClusterSysAuditReachesTheModule(t *testing.T) {
 	t.Parallel()
 	a, _ := newAppliance(t)
-	for _, on := range []bool{false, true} {
+	for _, set := range []*bool{nil, new(false), new(true)} {
+		on := set == nil || *set
 		s := settings("pve1")
-		s.ClusterSysAudit = on
+		s.ClusterSysAudit = set
 		if err := a.Apply(s, "correct horse battery staple", ticket(), func(context.Context, []byte) error { return nil }); err != nil {
 			t.Fatal(err)
 		}
@@ -678,7 +680,7 @@ func TestClusterSysAuditReachesTheModule(t *testing.T) {
 		if want := fmt.Sprintf(`"clusterSysAudit": %t`, on); err != nil || !strings.Contains(string(vars), want) {
 			t.Fatalf("tfvars want %s: %v\n%s", want, err, vars)
 		}
-		if a.SavedSettings().ClusterSysAudit != on {
+		if saved := a.SavedSettings(); saved.GivesClusterSysAudit() != on || (set == nil) != (saved.ClusterSysAudit == nil) {
 			t.Errorf("the setting %t was not kept", on)
 		}
 	}

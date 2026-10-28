@@ -31,7 +31,7 @@ The interface logs in JSON, one line per event, and every change names the user 
 
 ### The management cluster
 
-The Administration page's **Repair access** hands administrators the management cluster's own credentials, for what the interface cannot do. It needs the state passphrase and the [setup privileges](install.md#who-may-set-it-up), is refused while a run is going on, and every download is logged.
+**Repair access**, under **Administration**, **Appliance**, hands administrators the management cluster's own credentials, for what the interface cannot do. It needs the state passphrase and the [setup privileges](install.md#who-may-set-it-up), is refused while a run is going on, and every download is logged.
 
 - **Download admin kubeconfig** saves `management.kubeconfig`, for kubectl.
 - **Download admin talosconfig** saves `management.talosconfig`, for `talosctl`.
@@ -161,7 +161,7 @@ Nodes keep the taint `node.cloudprovider.kubernetes.io/uninitialized`, and pods 
 
 Persistent volumes that stay pending point the same way: the CSI plugin's controller uses the same address and token.
 
-The cloud controller manager logs `failed to get HA group for the node` with `403 Permission check failed (/, Sys.Audit)` for every node now and then. That is harmless: reading Proxmox VE's HA groups needs `Sys.Audit` on `/`, which a cluster's token holds only with **Label the nodes with their Proxmox VE HA groups** on (the `ccm` variable's `haGroups`, [clusters.md](clusters.md#machines)), and without it the nodes only go without the HA group labels. Where the option is not offered, the administrator switches on **HA group labels** in the setup ([install.md](install.md#ha-group-labels)). With it on, the messages stop within a few minutes; if they do not, `kubectl describe cluster` shows a `SysAuditRefused` event saying why.
+The cloud controller manager logs `failed to get HA group for the node` with `403 Permission check failed (/, Sys.Audit)` for every node now and then. That is harmless: reading Proxmox VE's HA groups needs `Sys.Audit` on `/`, which a cluster's token holds only with **Label the nodes with their Proxmox VE HA groups** on (the `ccm` variable's `haGroups`, on by default, [clusters.md](clusters.md#machines)), and without it the nodes only go without the HA group labels. The cluster switched it off, or the administrator switched off **HA group labels** in the setup for every cluster ([install.md](install.md#ha-group-labels)). With it on again, the messages stop within a few minutes; if they do not, `kubectl describe cluster` shows a `SysAuditRefused` event saying why.
 
 ### A cluster waits before any VM exists
 
@@ -188,6 +188,10 @@ A cluster with one control plane runs on two etcd members while that node is rep
 ### Not enough memory for the add-ons
 
 A message saying "the cluster's add-ons (…) need … MiB of memory on its workers, beyond the … MiB a worker uses itself": the workers together lack the memory the add-ons named take ([clusters.md](clusters.md#machines)). Give the workers more memory (`workerMachine`, or a worker pool's override), add workers, or leave an add-on off. Rancher's agent counts in every cluster that registers with Rancher; set `rancher` to `{register: false}` for a cluster that never will. "… on its control planes, which run them without workers …": the same for the control planes of a cluster without workers. A cluster that already fell short, after an upgrade of Kubehenge asked for more, can still be changed in other ways; only changes that leave it shorter are refused.
+
+### Not enough CPU for the add-ons
+
+A message saying "the cluster's add-ons (…) need … millicores of CPU on its workers, beyond the … millicores a worker uses itself": the CPU the add-ons' pods request does not fit in what the workers' cores leave beside their own pods' ([clusters.md](clusters.md#machines)). Kubernetes would leave the pods it finds no room for pending, with `Insufficient cpu` in their events, however idle the nodes are. Give the workers more cores (`workerMachine`, or a worker pool's override), add workers, or leave an add-on off; Kyverno and Istio ask for the most. The control-plane form of the message, and a cluster that already fell short, are as for memory above.
 
 ### Istio
 

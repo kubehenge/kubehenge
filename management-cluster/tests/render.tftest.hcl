@@ -161,6 +161,7 @@ run "controller_and_clusters_are_least_privilege" {
       "/nodes kubehenge-audit",
       "/pool/kubehenge kubehenge-provisioner-pools",
       "/access/groups/kubehenge-clusters kubehenge-provisioner-users",
+      "/access/groups/kubehenge-clusters-audit kubehenge-provisioner-users",
       "/access/realm/pve kubehenge-provisioner-realm",
       "/pool/kubehenge-templates kubehenge-templates-audit",
       "/storage/local-lvm kubehenge-cluster-storage",
@@ -244,7 +245,7 @@ run "controller_and_clusters_are_least_privilege" {
           role               = ""
           managementStorages = ["local-lvm", "local"]
         }
-        sysAuditGroup   = ""
+        sysAuditGroup   = "kubehenge-clusters-audit"
         volumeSnapshots = { rootSecret = "" }
       }
       templateRefresh = {
@@ -346,11 +347,6 @@ run "controller_and_clusters_are_least_privilege" {
   }
 
   assert {
-    condition     = length(proxmox_virtual_environment_group.clusters_audit) == 0 && length(proxmox_acl.clusters_audit) == 0
-    error_message = "no cluster may hold Sys.Audit on / unless the administrator lets clusters choose it"
-  }
-
-  assert {
     condition = (
       length(proxmox_acl.etcd_restore) == 0 && length(proxmox_user_token.etcd_restore) == 0 &&
       !contains([for s in helm_release.cluster_api_providers.set_sensitive : s.name], "secrets.kubehenge-proxmox.data.restore-token") &&
@@ -362,10 +358,6 @@ run "controller_and_clusters_are_least_privilege" {
 
 run "cluster_sys_audit" {
   command = plan
-
-  variables {
-    cluster_sys_audit = true
-  }
 
   assert {
     condition = (
@@ -401,6 +393,24 @@ run "cluster_sys_audit" {
   assert {
     condition     = contains(output.proxmox_objects.groups, "kubehenge-clusters-audit")
     error_message = "a destroy is checked for the group too"
+  }
+}
+
+run "cluster_sys_audit_off" {
+  command = plan
+
+  variables {
+    cluster_sys_audit = false
+  }
+
+  assert {
+    condition = (
+      length(proxmox_virtual_environment_group.clusters_audit) == 0 && length(proxmox_acl.clusters_audit) == 0 &&
+      !contains(keys(proxmox_acl.provisioner), "/access/groups/kubehenge-clusters-audit kubehenge-provisioner-users") &&
+      yamldecode(helm_release.kubehenge.values[0]).proxmox.sysAuditGroup == "" &&
+      !contains(output.proxmox_objects.groups, "kubehenge-clusters-audit")
+    )
+    error_message = "switched off, no cluster may hold Sys.Audit on / and the controller may add no one to a group for it"
   }
 }
 
@@ -651,6 +661,7 @@ run "extra_cluster_namespaces" {
         "/nodes kubehenge-audit",
         "/pool/kubehenge kubehenge-provisioner-pools",
         "/access/groups/kubehenge-clusters kubehenge-provisioner-users",
+        "/access/groups/kubehenge-clusters-audit kubehenge-provisioner-users",
         "/access/realm/pve kubehenge-provisioner-realm",
         "/pool/kubehenge-templates kubehenge-templates-audit",
         "/storage/local-lvm kubehenge-cluster-storage",

@@ -619,12 +619,17 @@ func checkDatastoreAllocateAdmission(ctx context.Context, t *testing.T, c client
 	}
 }
 
-// checkClassAddonRoom holds a class's memory figures: one for every add-on and every node kind, a
-// cluster at the class's defaults holding every add-on but Rancher, logs and backups, and the least cluster Rancher
-// runs on, without workers, holding Rancher.
+// checkClassAddonRoom holds a class's memory and CPU figures: one for every add-on and every node
+// kind, a cluster at the class's defaults holding every add-on but Rancher, logs and backups, the
+// default worker's CPU holding every add-on but Rancher, as the end-to-end tests have it, and the
+// least cluster Rancher runs on, without workers, holding Rancher.
 func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker *clusterv1.Cluster, alone controlPlaneSize) {
 	t.Helper()
-	addons, _, err := classMemory(class, AddonMemoryAnnotation)
+	addons, _, err := classFigures(class, AddonMemoryAnnotation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cpu, _, err := classFigures(class, AddonCPUAnnotation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -632,12 +637,25 @@ func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker 
 		if addons[key] <= 0 {
 			t.Errorf("%s: no memory figure for %s", class.Name, key)
 		}
+		// Some add-ons' pods ask for no CPU at all, so a figure of 0 is one.
+		if _, ok := cpu[key]; !ok {
+			t.Errorf("%s: no CPU figure for %s", class.Name, key)
+		}
 	}
-	if nodes, _, err := classMemory(class, NodeMemoryAnnotation); err != nil || nodes["controlPlane"] <= 0 || nodes["worker"] <= 0 {
-		t.Errorf("%s: node memory %v, %v", class.Name, nodes, err)
+	for _, annotation := range []string{NodeMemoryAnnotation, NodeCPUAnnotation} {
+		if nodes, _, err := classFigures(class, annotation); err != nil || nodes["controlPlane"] <= 0 || nodes["worker"] <= 0 {
+			t.Errorf("%s: %s %v, %v", class.Name, annotation, nodes, err)
+		}
 	}
 	if err := checkAddonRoom(nil, withAddons(oneWorker.DeepCopy(), everyAddon), class); err != nil {
 		t.Errorf("%s: every add-on on the default worker: %v", class.Name, err)
+	}
+	all := withAddons(withAddons(oneWorker.DeepCopy(), everyAddon), map[string]string{
+		"logs": `{"enabled":true}`, "backups": `{"enabled":true,"target":"store"}`, "gitops": `{"enabled":true,"engine":"flux"}`,
+		"loadBalancer": `{"enabled":true,"implementation":"kube-vip","addresses":["192.0.2.100-192.0.2.110"]}`,
+	})
+	if err := checkRoomFor(addonCPU, nil, all, class); err != nil {
+		t.Errorf("%s: every add-on but Rancher on the default worker's CPU: %v", class.Name, err)
 	}
 	rancher := withAddons(&clusterv1.Cluster{}, map[string]string{
 		"rancher":             `{"install":true,"hostname":"rancher.example.org"}`,
@@ -860,7 +878,8 @@ func TestIntegrationChartDatastoreAllocate(t *testing.T) {
 }
 
 // Only a management cluster that lets clusters hold Sys.Audit on / hands the controller the group
-// holding it, and offers the classes' ccm variable in the interface.
+// holding it, offers the classes' ccm variable in the interface and switches the HA group labels on
+// for each cluster that leaves them unset.
 func TestIntegrationChartSysAudit(t *testing.T) {
 	t.Parallel()
 	for _, on := range []bool{false, true} {
@@ -880,8 +899,20 @@ func TestIntegrationChartSysAudit(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if !strings.Contains(fmt.Sprint(variables), "name:ccm") {
+				var schema map[string]any
+				for _, v := range variables {
+					if v, ok := v.(map[string]any); ok && v["name"] == ccmVariable {
+						schema, _, _ = unstructured.NestedMap(v, "schema", "openAPIV3Schema")
+					}
+				}
+				if schema == nil {
 					t.Errorf("%s has no ccm variable", o.GetName())
+					continue
+				}
+				whole, _, _ := unstructured.NestedBool(schema, "default", "haGroups")
+				property, _, _ := unstructured.NestedBool(schema, "properties", "haGroups", "default")
+				if whole != on || property != on {
+					t.Errorf("Sys.Audit %t: %s defaults the HA group labels to %t, and the property to %t", on, o.GetName(), whole, property)
 				}
 				classes++
 			case "Deployment":

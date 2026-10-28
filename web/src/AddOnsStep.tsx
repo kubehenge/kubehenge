@@ -5,6 +5,7 @@ import { CertificatesFields } from "./Certificates";
 import { MeshPeersField, meshHint } from "./ClusterMesh";
 import { ModeSelect } from "./ClusterUpgrades";
 import {
+  addonCPU,
   addonMemory,
   addonsProblem,
   logsChosen,
@@ -325,10 +326,10 @@ function RancherAddOn({ form, set, shown, canTrust }: StepProps & { canTrust: bo
 }
 
 /**
- * AddonMemory says what keeps the add-ons chosen from running, or else how much memory they take
- * from the machines that carry them.
+ * AddonRoom says what keeps the add-ons chosen from running, or else how much memory and CPU they
+ * take from the machines that carry them.
  */
-function AddonMemory({ form, cls }: { form: StepProps["form"]; cls: ClusterClass | undefined }): JSX.Element | null {
+function AddonRoom({ form, cls }: { form: StepProps["form"]; cls: ClusterClass | undefined }): JSX.Element | null {
   const stranded = addonsProblem(form, cls);
   if (stranded !== undefined) {
     return (
@@ -338,23 +339,31 @@ function AddonMemory({ form, cls }: { form: StepProps["form"]; cls: ClusterClass
     );
   }
   const used = addonMemory(form, cls);
-  if (used.mib === 0) {
+  const requested = addonCPU(form, cls);
+  if (used.mib === 0 && requested.millicores === 0) {
     return null;
   }
-  const carrier = form.workerReplicas > 0 ? "workerMachine" : "controlPlaneMachine";
+  const least = machineLeast(form, cls, form.workerReplicas > 0 ? "workerMachine" : "controlPlaneMachine");
+  const node = form.workerReplicas > 0 ? "worker" : "control plane";
+  const sentences: string[] = [];
+  if (used.mib > 0) {
+    const controlPlanes =
+      mostWorkers(form) > 0
+        ? ` and each control plane, whose API server holds their objects, at least ${machineLeast(form, cls, "controlPlaneMachine").memoryMiB} MiB`
+        : "";
+    sentences.push(
+      `The add-ons chosen use about ${used.mib} MiB of memory (${used.names.join(", ")}), so each ${node} has at least ${least.memoryMiB} MiB${controlPlanes}.`,
+    );
+  }
+  if (requested.millicores > 0) {
+    const cores = form.rancherInstall ? Math.max(least.cores, rancherMinimumCores) : least.cores;
+    sentences.push(
+      `Their pods ask for ${requested.millicores} millicores of CPU (${requested.names.join(", ")}), so each ${node} has at least ${cores} cores.`,
+    );
+  }
   return (
-    <p className="hint" id="addon-memory">
-      The add-ons chosen use about {used.mib} MiB of memory ({used.names.join(", ")}), so each{" "}
-      {form.workerReplicas > 0 ? "worker" : "control plane"} has at least {machineLeast(form, cls, carrier).memoryMiB}{" "}
-      MiB
-      {mostWorkers(form) > 0 && (
-        <>
-          {" "}
-          and each control plane, whose API server holds their objects, at least{" "}
-          {machineLeast(form, cls, "controlPlaneMachine").memoryMiB} MiB
-        </>
-      )}
-      .
+    <p className="hint" id="addon-room">
+      {sentences.join(" ")}
     </p>
   );
 }
@@ -476,7 +485,7 @@ export function AddOnsStep({
         <CertificatesAddOn form={form} set={set} canTrust={canTrust} showAll={showAll} />
       )}
       {variable(cls, "gitops") && <GitOpsChoices form={form} set={set} shown={shown} canTrust={canTrust} />}
-      <AddonMemory form={form} cls={cls} />
+      <AddonRoom form={form} cls={cls} />
 
       {variable(cls, "upgrades") && (
         <Field label="Upgrade automatically" hint={upgradesHint(cls)}>

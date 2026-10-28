@@ -13,6 +13,7 @@ import {
 } from "react";
 
 import { ApiError, api } from "./api";
+import { useStaging } from "./staging-context";
 import type { ChangeRequest, Cluster } from "./types";
 
 // minPassphrase is the fewest characters the appliance takes for the state passphrase.
@@ -116,8 +117,8 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error?: 
   }
 }
 
-/** A privilege on / the session reports: Sys.Audit, or Permissions.Modify. */
-export type RootPrivilege = "canAudit" | "canModifyPermissions";
+/** A privilege on / the session reports: Permissions.Modify. */
+export type RootPrivilege = "canModifyPermissions";
 
 /** usePrivilege reads whether the signed-in user holds a privilege on /; undefined until known. */
 export function usePrivilege(privilege: RootPrivilege): boolean | undefined {
@@ -537,18 +538,20 @@ export function Dialog({
   );
 }
 
-// useChange sends one change and closes the dialog when it is accepted.
+// useChange stages one change on a page that stages them, or else makes it, and closes the dialog
+// once the server accepts it.
 export function useChange(
   c: Cluster,
   onClose: () => void,
 ): { busy: boolean; error: string | undefined; send: (req: ChangeRequest) => Promise<void> } {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const staging = useStaging();
   const send = async (req: ChangeRequest): Promise<void> => {
     setBusy(true);
     setError(undefined);
     try {
-      await api.change(c.namespace, c.name, req);
+      await (staging === null ? api.change(c.namespace, c.name, req) : staging.stage(req));
       onClose();
     } catch (err) {
       setError(errorMessage(err));

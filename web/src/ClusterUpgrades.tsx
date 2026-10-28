@@ -1,8 +1,7 @@
 import { useId, useState, type JSX } from "react";
 
-import { api } from "./api";
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, Field, browserZone, errorMessage, timeZones, weekdays } from "./ui";
+import { Dialog, ErrorBox, Field, browserZone, timeZones, useChange, weekdays } from "./ui";
 import { oneOf, quantities, quantity, record, text, texts } from "./values";
 
 export const upgradeModes = ["off", "patch", "minor"] as const;
@@ -187,26 +186,14 @@ export function UpgradesDialog({ cluster: c, onClose }: { cluster: Cluster; onCl
   const [start, setStart] = useState(initial.start);
   const [hours, setHours] = useState(initial.hours);
   const [timeZone, setTimeZone] = useState(initial.timeZone);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  const { busy, error, send } = useChange(c, onClose);
   const nodeImagesHint = useId();
   const withWindow = windowed({ mode, nodeImages });
   const problems = withWindow ? windowProblems(monthDays, hours) : {};
   const policy = (): UpgradePolicy => policyOf({ mode, nodeImages, days, monthDays, start, hours, timeZone });
   const changed = JSON.stringify(policy()) !== JSON.stringify(policyOf(initial));
 
-  const save = async (): Promise<void> => {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await api.change(c.namespace, c.name, { variables: { upgrades: policy() } });
-      onClose();
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const save = async (): Promise<void> => send({ variables: { upgrades: policy() } });
 
   return (
     <Dialog

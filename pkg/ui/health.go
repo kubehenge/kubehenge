@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
@@ -24,6 +23,9 @@ import (
 const (
 	// healthFresh is how long one read of a cluster's health serves everyone looking at it.
 	healthFresh = 10 * time.Second
+	// fleetHealthFresh is how long one serves the fleet's summary, which only needs the worst of
+	// each cluster and reads them all at once.
+	fleetHealthFresh = 30 * time.Second
 	// healthDeadline bounds each source's reads, so one that does not answer holds up no other.
 	healthDeadline = 5 * time.Second
 	// healthListLimit bounds a list from a workload cluster, such as the pods of a very large one.
@@ -294,56 +296,6 @@ func problem(err error) string {
 	return err.Error()
 }
 
-// healthCache keeps each cluster's last read for healthFresh, and makes one read at a time per
-// cluster however many look, so ten viewers cost one round of reads.
-type healthCache struct {
-	mu        sync.Mutex
-	byCluster map[string]*healthRead
-}
-
-type healthRead struct {
-	done     chan struct{}
-	inFlight bool
-	view     healthView
-	until    time.Time
-}
-
-// get answers with a fresh read, waiting for one in flight or starting one. The read runs on
-// past a viewer who leaves, for the others waiting on it.
-func (hc *healthCache) get(ctx context.Context, key string, now func() time.Time, read func(context.Context) healthView) (healthView, error) {
-	hc.mu.Lock()
-	r, ok := hc.byCluster[key]
-	if !ok || !r.inFlight && !now().Before(r.until) {
-		r = &healthRead{done: make(chan struct{}), inFlight: true}
-		if hc.byCluster == nil {
-			hc.byCluster = map[string]*healthRead{}
-		}
-		for k, kept := range hc.byCluster {
-			if !kept.inFlight && now().After(kept.until) {
-				delete(hc.byCluster, k)
-			}
-		}
-		hc.byCluster[key] = r
-		detached := context.WithoutCancel(ctx)
-		go func() {
-			v := read(detached)
-			hc.mu.Lock()
-			r.view, r.until, r.inFlight = v, now().Add(healthFresh), false
-			hc.mu.Unlock()
-			close(r.done)
-		}()
-	}
-	hc.mu.Unlock()
-	select {
-	case <-r.done:
-		hc.mu.Lock()
-		defer hc.mu.Unlock()
-		return r.view, nil
-	case <-ctx.Done():
-		return healthView{}, fmt.Errorf("waiting for the cluster's health: %w", ctx.Err())
-	}
-}
-
 func (s *Server) now() time.Time {
 	if s.clock != nil {
 		return s.clock()
@@ -360,7 +312,7 @@ func (s *Server) clusterHealth(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	key := c.Namespace + "/" + c.Name + "/" + string(c.UID)
-	shared, err := s.health.get(r.Context(), key, s.now, func(ctx context.Context) healthView {
+	shared, err := s.health.get(r.Context(), key, healthFresh, s.now, func(ctx context.Context) healthView {
 		return s.readHealth(ctx, u.kube, c, u.namespaces)
 	})
 	if err != nil {

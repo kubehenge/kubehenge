@@ -89,7 +89,7 @@ properties:
 {{- end -}}
 
 {{/*
-Call with (dict "controlPlaneDiskGiB" <n> "workerDiskGiB" <n> "minDiskGiB" <n> "workerMinCores" <n> "workerMinMemoryMiB" <n>).
+Call with (dict "controlPlaneDiskGiB" <n> "workerDiskGiB" <n> "minDiskGiB" <n> "workerMinCores" <n> "workerMinMemoryMiB" <n> "clusters" .Values.clusters "sysAudit" <whether clusters may hold Sys.Audit on />).
 A control plane's minimum is the first row of the k3s and RKE2 server sizing guides, 2 vCPUs and
 4 GiB; kubeadm, which documents no sizes past its 2 GiB to start, follows RKE2's, whose servers run
 the same components. On less, an add-on's install crowds out the API server and etcd. A worker's is
@@ -206,17 +206,22 @@ never below its distribution's documented minimum for a node.
     openAPIV3Schema:
       type: object
       description: The Proxmox VE cloud controller manager, which every cluster runs for its nodes.
+      {{- /* A default at the top as well, since CAPI adds a missing variable only from one there. */}}
+      {{- if .sysAudit }}
+      default:
+        haGroups: true
+      {{- end }}
       properties:
         haGroups:
           type: boolean
-          default: false
+          default: {{ .sysAudit }}
           description: >-
             Give the cluster's Proxmox VE token Sys.Audit on /, unpropagated, so that the cloud
             controller manager labels each node group.topology.proxmox.sinextra.dev/<group> for
             each Proxmox VE HA group, or node-affinity HA rule, its Proxmox VE node is in. The
-            token may then also read the rest of the Proxmox VE cluster's own configuration, but
-            nothing of its guests, storages or nodes. Only where Kubehenge's administrator lets
-            clusters choose it.
+            token may then also read the rest of the Proxmox VE cluster's own configuration
+            (firewall, backup jobs, HA, corosync), but nothing of its guests, storages or nodes.
+            On by default where Kubehenge's administrator lets clusters hold it, and only there.
 - name: controlPlaneMachine
   required: false
   schema:
@@ -259,6 +264,23 @@ more than that, so Rancher's agent counts nothing here.
 */}}
 {{- define "kubehenge.addonControlPlaneMemory" -}}
 kubehenge.dev/addon-control-plane-memory: '{"headlamp":8,"monitoring":32,"logs":56,"backups":184,"kyverno":552,"istio":288,"certManager":48,"rancher":512,"argocd":432}'
+{{- end -}}
+
+{{/*
+The CPU, in millicores, each add-on's pods request in a cluster, the same for every distribution:
+what its charts ask for at their pinned versions with the values Kubehenge gives them, counting the
+pods that run once and one node's share of those on every node. The scheduler places a pod only on
+a node with that much CPU not yet requested, however idle the node is. Kyverno's four controllers
+ask for 100m each. Istio is istiod's 100m, and a node's CNI agent's 100m and ztunnel's 200m. Logs
+are Loki's 55m with its proxy, and 10m for each Alloy; backups are Velero's server's 50m and a
+node's agent's 20m. Monitoring is its metrics proxies at 5m each, a node's and a control plane's;
+its other pods ask for none. The load balancer is kube-vip's cloud provider at 50m, MetalLB asking
+for none. Flux is its operator and four controllers at 10m each, Headlamp 10m, Rancher its Turtles
+controller. cert-manager, Argo CD, the clustermesh-apiserver, Rancher's own pods and its agent ask
+for none.
+*/}}
+{{- define "kubehenge.addonCPU" -}}
+kubehenge.dev/addon-cpu: '{"headlamp":10,"monitoring":20,"logs":75,"backups":70,"kyverno":400,"istio":400,"clusterMesh":0,"loadBalancer":50,"certManager":0,"rancher":10,"rancherAgent":0,"argocd":0,"flux":50}'
 {{- end -}}
 
 {{/*

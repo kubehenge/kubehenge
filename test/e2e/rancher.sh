@@ -157,6 +157,8 @@ server_url=$(rancher get settings.management.cattle.io server-url -o jsonpath='{
 rancher -n cattle-system get secret bootstrap-secret > /dev/null || fail "Rancher generated no first admin password"
 echo "memory with Rancher:"
 pod_memory "${work}/rancher"
+echo "CPU requested with Rancher:"
+pod_cpu "${work}/rancher"
 
 step "a k3s cluster registers with Rancher on its own"
 # Rancher's agents and controllers run in the namespaces Kubehenge exempts, but the job that cleans
@@ -175,6 +177,8 @@ printf '%s' "${agent}" |
     fail "the agent does not pin Rancher's CA"
 echo "memory with Rancher's agents:"
 pod_memory "${work}/downstream"
+echo "CPU requested with Rancher's agents:"
+pod_cpu "${work}/downstream"
 echo "memory with Rancher, a cluster registered:"
 pod_memory "${work}/rancher"
 
