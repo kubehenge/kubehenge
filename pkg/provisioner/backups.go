@@ -370,7 +370,7 @@ func veleroValues(charts *Charts, b *Backups, t *BackupTarget, cluster *clusterv
 				"template": map[string]any{
 					"ttl":                      fmt.Sprintf("%dh0m0s", b.RetentionDays*hoursPerDay),
 					"storageLocation":          veleroLocation,
-					"excludedNamespaces":       backupsExcluded(charts.PodSecurityExempt),
+					"excludedNamespaces":       backupsExcluded(charts.PodSecurityExempt.all()),
 					"excludedResources":        backupsExcludedResources,
 					"defaultVolumesToFsBackup": all,
 					"snapshotVolumes":          false,

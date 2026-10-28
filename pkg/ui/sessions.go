@@ -6,7 +6,9 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
+	"maps"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -31,9 +33,13 @@ type session struct {
 	csrf    string
 	created time.Time
 
+	// mu is held only for moments, never across a call to Proxmox VE: lookup and prune wait on it.
 	mu        sync.Mutex
 	ticket    *pve.Ticket
 	challenge *pve.Challenge
+	// renewing is set while one request renews the ticket; the session's other requests go on with
+	// the ticket they have, which still holds for as long again.
+	renewing bool
 }
 
 // sessions holds every session in memory only: tickets never touch the disk, and a restart signs
@@ -97,27 +103,37 @@ func (s *sessions) lookup(r *http.Request) *session {
 		return nil
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	sess := s.byID[c.Value]
+	s.mu.Unlock()
 	if sess == nil {
 		return nil
 	}
 	if s.ended(sess, s.now()) {
-		delete(s.byID, sess.id)
+		s.forget(sess)
 		return nil
 	}
 	return sess
 }
 
-// prune forgets ended sessions; lookup does it for the ones still asked for.
+// prune forgets ended sessions; lookup does it for the ones still asked for. Every user's requests
+// look their session up under s.mu, so no session's lock is waited for while holding it.
 func (s *sessions) prune() {
 	now := s.now()
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	for id, sess := range s.byID {
+	all := slices.Collect(maps.Values(s.byID))
+	s.mu.Unlock()
+	for _, sess := range all {
 		if s.ended(sess, now) {
-			delete(s.byID, id)
+			s.forget(sess)
 		}
+	}
+}
+
+func (s *sessions) forget(sess *session) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.byID[sess.id] == sess {
+		delete(s.byID, sess.id)
 	}
 }
 
@@ -153,22 +169,27 @@ func (s *sessions) pruneEvery(ctx context.Context, d time.Duration) {
 // signedIn returns the session's ticket, renewed when it is old. nil means the session holds only
 // a challenge, or Proxmox VE refused to renew (the user was disabled or expired). A renewal that
 // fails for any other reason keeps the ticket, which is still valid, and is tried again next time.
+// One request renews at a time, without the session's lock: a slow Proxmox VE holds up that request
+// alone.
 func (s *sessions) signedIn(ctx context.Context, sess *session) *pve.Ticket {
 	sess.mu.Lock()
+	ticket := sess.ticket
+	if ticket == nil || sess.renewing || s.now().Sub(ticket.Issued) < renewAfter {
+		sess.mu.Unlock()
+		return ticket
+	}
+	sess.renewing = true
+	sess.mu.Unlock()
+	renewed, err := s.accounts.Renew(ctx, ticket)
+	sess.mu.Lock()
 	defer sess.mu.Unlock()
-	if sess.ticket == nil {
-		return nil
-	}
-	if s.now().Sub(sess.ticket.Issued) < renewAfter {
-		return sess.ticket
-	}
-	renewed, err := s.accounts.Renew(ctx, sess.ticket)
+	sess.renewing = false
 	switch {
 	case errors.Is(err, pve.ErrAuthentication):
 		sess.ticket = nil
 		return nil
 	case err != nil:
-		return sess.ticket
+		return ticket
 	}
 	sess.ticket = renewed
 	return renewed

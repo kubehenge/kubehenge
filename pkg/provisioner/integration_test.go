@@ -66,22 +66,37 @@ func TestMain(m *testing.M) {
 }
 
 // startAPI starts an API server with the CRDs and installs the providers' chart and Kubehenge's in
-// it, as the management-cluster module does. The chart's webhook configurations point at a local server
-// instead, whose address and certificates the options hold; nothing serves them until a test does.
-func startAPI(t *testing.T) (client.Client, *envtest.WebhookInstallOptions) {
+// it, as the management-cluster module does, but for the chart's webhook configurations: they fail
+// closed while nothing answers them, which only startValidatingAPI's tests do.
+func startAPI(t *testing.T) client.Client {
 	t.Helper()
-	_, c, w := startAPIConfig(t)
+	objects, _ := apiObjects(t)
+	_, c, _ := startAPIWith(t, objects, nil)
+	return c
+}
+
+// startValidatingAPI is startAPI with the chart's webhook configurations, pointing at a local
+// server whose address and certificates the options hold; the test serves them.
+func startValidatingAPI(t *testing.T) (client.Client, *envtest.WebhookInstallOptions) {
+	t.Helper()
+	objects, webhooks := apiObjects(t)
+	_, c, w := startAPIWith(t, objects, webhooks)
 	return c, w
 }
 
 // startAPIConfig is startAPI with the administrator's configuration too, for clients of other
 // identities, and Kubehenge's chart installed with the module's values and then those of values.
-func startAPIConfig(t *testing.T, values ...string) (*rest.Config, client.Client, *envtest.WebhookInstallOptions) {
+func startAPIConfig(t *testing.T, values ...string) (*rest.Config, client.Client) {
 	t.Helper()
-	crds := os.Getenv("KUBEHENGE_INTEGRATION_CRDS")
-	if crds == "" || os.Getenv("KUBEBUILDER_ASSETS") == "" {
-		t.Fatal("KUBEBUILDER_ASSETS and KUBEHENGE_INTEGRATION_CRDS are unset: run the tier with `make integration`")
-	}
+	objects, _ := apiObjects(t, values...)
+	cfg, c, _ := startAPIWith(t, objects, nil)
+	return cfg, c
+}
+
+// apiObjects renders the providers' chart and Kubehenge's with the module's values and then those
+// of values, and parts out Kubehenge's webhook configurations.
+func apiObjects(t *testing.T, values ...string) ([]*unstructured.Unstructured, []*admissionregistrationv1.ValidatingWebhookConfiguration) {
+	t.Helper()
 	// The providers' release comes first, as in the module, and carries no webhooks of its own.
 	objects := renderChart(t, "cluster-api-providers", "../../management-cluster/charts/cluster-api-providers", "capi-operator-system",
 		"testdata/cluster-api-providers-values.yaml")
@@ -96,6 +111,15 @@ func startAPIConfig(t *testing.T, values ...string) (*rest.Config, client.Client
 			t.Fatal(err)
 		}
 		webhooks = append(webhooks, w)
+	}
+	return objects, webhooks
+}
+
+func startAPIWith(t *testing.T, objects []*unstructured.Unstructured, webhooks []*admissionregistrationv1.ValidatingWebhookConfiguration) (*rest.Config, client.Client, *envtest.WebhookInstallOptions) {
+	t.Helper()
+	crds := os.Getenv("KUBEHENGE_INTEGRATION_CRDS")
+	if crds == "" || os.Getenv("KUBEBUILDER_ASSETS") == "" {
+		t.Fatal("KUBEBUILDER_ASSETS and KUBEHENGE_INTEGRATION_CRDS are unset: run the tier with `make integration`")
 	}
 	scheme := runtime.NewScheme()
 	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, appsv1.AddToScheme, clusterv1.AddToScheme, addonsv1.AddToScheme} {
@@ -269,7 +293,7 @@ func appliedTemplates(ctx context.Context, t *testing.T, c client.Client, class 
 }
 
 func TestIntegrationDistributionTemplatesAndScaling(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
-	c, _ := startAPI(t)
+	c := startAPI(t)
 	ctx := context.Background()
 	d := &Distributions{Client: c, ClassNamespace: classNamespace, Providers: classProviders}
 	reconcileClass := func(t *testing.T, class string) {
@@ -337,7 +361,7 @@ func TestIntegrationDistributionTemplatesAndScaling(t *testing.T) { //nolint:par
 }
 
 func TestIntegrationClusterLifecycle(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
-	c, _ := startAPI(t)
+	c := startAPI(t)
 	ctx := context.Background()
 	cloud := &fakeCloud{}
 	r := &Reconciler{
@@ -428,7 +452,7 @@ func TestIntegrationClusterLifecycle(t *testing.T) { //nolint:paralleltest // st
 // The API server asks the controller about Kubehenge's clusters through the chart's webhook
 // configuration, and the class's own schema supplies the vCPUs a cluster leaves to its default.
 func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
-	c, w := startAPI(t)
+	c, w := startValidatingAPI(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	srv := webhook.NewServer(webhook.Options{Host: w.LocalServingHost, Port: w.LocalServingPort, CertDir: w.LocalServingCertDir})
@@ -439,7 +463,7 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 			t.Error(err)
 		}
 	}()
-	// The chart ignores the webhook while nothing answers, so the test waits until it does.
+	// The chart refuses every cluster while nothing answers the webhook, so the test waits until it does.
 	started := srv.StartedChecker()
 	for deadline := time.Now().Add(30 * time.Second); started(nil) != nil; time.Sleep(100 * time.Millisecond) {
 		if time.Now().After(deadline) {
@@ -1005,7 +1029,7 @@ func TestIntegrationChartEtcdRestore(t *testing.T) {
 // The HA reconciler's patches against capmox's CRD and Cluster API's: the hook a Machine's
 // deletion waits for, and the node a ProxmoxMachine's VM has moved to.
 func TestIntegrationProxmoxHA(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
-	c, _ := startAPI(t)
+	c := startAPI(t)
 	ctx := context.Background()
 	if err := c.Create(ctx, shared()); err != nil {
 		t.Fatal(err)

@@ -51,7 +51,7 @@ func TestControlPlanesFollowTheSizingGuide(t *testing.T) {
 		{"vCPUs short", sized(`{"cores":2,"memoryMiB":16384}`, new(int32(300))), "have 2 vCPUs and 16384 MiB"},
 		{"past the guide's last step", sized(`{"cores":8,"memoryMiB":16384}`, new(int32(2000))), "need at least 16 vCPUs and 32768 MiB"},
 	} {
-		created := callBeforeClusterCreate(h, tc.c)
+		created := callBeforeClusterCreate(t, h, tc.c)
 		switch {
 		case tc.want == "" && created.Status == runtimehooksv1.ResponseStatusFailure:
 			t.Errorf("%s: refused: %s", tc.name, created.Message)

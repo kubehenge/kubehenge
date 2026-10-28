@@ -32,6 +32,7 @@ func cookie(rec *httptest.ResponseRecorder, name string) *http.Cookie {
 func TestOpenIDSignIn(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
+	h.server.PublicURL = "https://kubehenge.example"
 	rec := get(t, h, "/api/openid/start?realm=sso")
 	loc, _ := url.Parse(rec.Header().Get("Location"))
 	if rec.Code != http.StatusSeeOther || loc.Host != "idp.example" || loc.Query().Get("state") != `"st-sso"` {
@@ -80,6 +81,24 @@ func TestOpenIDOnlyForOpenIDRealms(t *testing.T) {
 		if !strings.Contains(rec.Header().Get("Location"), "signin-error=") {
 			t.Errorf("%s: %s", realm, rec.Header().Get("Location"))
 		}
+	}
+}
+
+// The Host header is the client's to choose, so without a public address there is nowhere the
+// identity provider's code may safely go.
+func TestOpenIDNeedsThePublicURL(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	rec := get(t, h, "/api/openid/start?realm=sso")
+	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "signin-error=OpenID+sign-in+needs+the+interface") || cookie(rec, openIDCookie) != nil {
+		t.Fatalf("start without a public address: %s", loc)
+	}
+	h.server.PublicURL = "https://kubehenge.example"
+	state := cookie(get(t, h, "/api/openid/start?realm=sso"), openIDCookie)
+	h.server.PublicURL = ""
+	rec = get(t, h, "/api/openid/callback?code=good&state="+url.QueryEscape(`"st-sso"`), state)
+	if !strings.Contains(rec.Header().Get("Location"), "signin-error=OpenID") || cookie(rec, sessionCookie) != nil {
+		t.Fatalf("callback without a public address: %s", rec.Header().Get("Location"))
 	}
 }
 

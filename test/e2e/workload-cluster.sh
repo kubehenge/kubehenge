@@ -263,7 +263,7 @@ if [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
         jq -e --arg n "${ns}" 'index($n) > 0' > /dev/null || fail "the interface is not given namespace ${ns}"
     kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d > "${work}/management-ca.crt"
     management_server=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
-    interface_token=$(kubectl -n kubehenge-system get secret kubehenge-interface-token -o jsonpath='{.data.token}' | base64 -d)
+    interface_token=$(kubectl -n kubehenge-system create token kubehenge-interface --duration=2h)
     creator_config="${work}/interface.kubeconfig"
     kubectl --kubeconfig "${creator_config}" config set-cluster management --server="${management_server}" \
         --certificate-authority="${work}/management-ca.crt" --embed-certs > /dev/null

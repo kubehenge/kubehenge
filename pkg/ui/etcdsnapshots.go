@@ -199,9 +199,10 @@ func (s *Server) etcdRestorePlan(w http.ResponseWriter, r *http.Request, u user)
 	writeJSON(w, http.StatusOK, plan)
 }
 
-// etcdRestoreRequest is the snapshot a restore is asked for.
+// etcdRestoreRequest is the snapshot a restore is asked for, and the cluster's name to confirm it.
 type etcdRestoreRequest struct {
 	Snapshot string `json:"snapshot"`
+	Confirm  string `json:"confirm"`
 }
 
 // restoreEtcd asks the controller to restore the cluster's etcd from a snapshot, through the guest
@@ -213,7 +214,7 @@ func (s *Server) restoreEtcd(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	var req etcdRestoreRequest
-	if !readJSON(w, r, &req) {
+	if !readJSON(w, r, &req) || !confirmed(w, c, req.Confirm) {
 		return
 	}
 	if provisioner.RestoreInProgress(c) {
