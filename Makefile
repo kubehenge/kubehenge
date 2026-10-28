@@ -187,8 +187,9 @@ lint-web: web/node_modules/.package-lock.json
 tofu-init:
 	set -e; for m in $(MODULES); do $(TOFU) -chdir=$$m init -backend=false -input=false -lockfile=readonly >/dev/null; done
 
+# fmt gets the configuration's directories: from the root it walks web/node_modules, which npm ci may be rebuilding beside it.
 lint-tofu: tofu-init
-	$(TOFU) fmt -check -recursive -diff
+	$(TOFU) fmt -check -recursive -diff $(MODULES) test/e2e/ci
 	set -e; for m in $(MODULES); do \
 		$(TOFU) -chdir=$$m validate; \
 		tflint --chdir=$$m --recursive --config=$(CURDIR)/management-cluster/.tflint.hcl; \

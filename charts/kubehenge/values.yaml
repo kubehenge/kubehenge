@@ -137,9 +137,9 @@ proxmox:
     role: ""
     managementStorages: []
   # Group holding Sys.Audit on /, unpropagated, that the controller adds the user of each cluster
-  # asking for the cloud controller manager's HA group labels (its ccm variable) to; the
-  # controller's token needs User.Modify on /access/groups/<group>. Empty: no cluster may ask for
-  # them.
+  # with the cloud controller manager's HA group labels (its ccm variable) to; the controller's
+  # token needs User.Modify on /access/groups/<group>. Set, every cluster has the labels unless it
+  # switches them off; empty, no cluster may have them.
   sysAuditGroup: ""
   # Secret in the release namespace holding root@pam's password (key password), with which the CSI
   # plugin of each cluster that takes volume snapshots (its csi variable's volumeSnapshots) signs
@@ -222,7 +222,7 @@ autoscaler:
 # The proxy on k3s control planes through which Cluster API reaches each node's etcd; the k3s
 # provider would otherwise pull it by tag alone.
 # renovate: datasource=docker depName=docker.io/alpine/socat
-etcdProxy: docker.io/alpine/socat:1.8.1.3@sha256:22d77becaeeea8ef56b8c4bb2312323acafe85354be6a85714ff5050e3537842
+etcdProxy: docker.io/alpine/socat:1.8.1.3@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
 
 # Installed into clusters: the Proxmox VE cloud controller manager and CSI plugin into every one,
 # the CNI chosen for a cluster whose distribution has none of its own (kubeadm), and the add-ons a
@@ -294,32 +294,32 @@ addons:
   monitoring:
     repository: https://prometheus-community.github.io/helm-charts
     chart: kube-prometheus-stack
-    version: 92.11.0@sha256:c357a259965187edcbed86591461bfbd56997591afba09be3a49a09b2bec8a2c
+    version: 92.14.1@sha256:99e2d893fdbd4e397fa4fafd6298979f4622c2695a023dfb71615dd93d34a517
     # In front of the metrics etcd, kube-proxy and node-exporter serve without authentication.
     # renovate: datasource=docker depName=ghcr.io/kube-rbac-proxy/kube-rbac-proxy
-    kubeRBACProxy: ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.23.0@sha256:296fd0a10fb635414b4533b983f0d5a686ce0ce73567b7079b6595ba75034f1a
+    kubeRBACProxy: ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.23.1@sha256:f723251bdd90a806b5331b6e9f9287cc2832d3dd9f9479378cdbbddb9856724f
     values:
       prometheusOperator:
         image:
           # renovate: datasource=docker depName=quay.io/prometheus-operator/prometheus-operator
-          tag: v0.94.1@sha256:7c88d4e7bae63bd8d0f8da986054337c23b4472fa8d3c6817f5bc4b8407a2d6a
+          tag: v0.94.2@sha256:c7edf0379b7271ef1705dce258d2bb73820e299cc95559369e9f6fc3321639ec
         prometheusConfigReloader:
           image:
             # yamllint disable-line rule:line-length
             # renovate: datasource=docker depName=quay.io/prometheus-operator/prometheus-config-reloader
-            tag: v0.94.1@sha256:06b52bd4dbe3ed6dd5905aadaf8b9987d9da4c31d37bb86deaadae68cee2d26b
+            tag: v0.94.2@sha256:a1897c67478bc23434534e91ad3855280771196b1daf17144db9dbcb655bef71
         admissionWebhooks:
           deployment:
             image:
               # renovate: datasource=docker depName=quay.io/prometheus-operator/admission-webhook
-              tag: v0.94.1@sha256:691ecb7e05ce81b899639c187da7614ffa12698a60ab8e2747f454c0efb3a55e
+              tag: v0.94.2@sha256:4c49fc00fa9022bd49d467807cfef5e781a70f66c7e4df90ee95622efa788212
           patch:
             image:
               # renovate: datasource=docker depName=ghcr.io/jkroepke/kube-webhook-certgen
               tag: 1.11.0@sha256:778d97dc3986355625e14392419b3364c487a7c807d4d86ddad1df369129b082
         thanosImage:
           # renovate: datasource=docker depName=quay.io/thanos/thanos
-          tag: v0.42.4@sha256:b567818fe608067eb0f1d7c2c4fe361e7ad83c8a256234c97685f1d0bf670cc8
+          tag: v0.42.5@sha256:0a546b98a8dd47735456ab389983675ee363d68127e334937a9fceeea10da5e7
         # The chart's one second is less than a TLS handshake takes on a node whose CPU every
         # add-on starting at once keeps busy, so the operator was restarted while working.
         livenessProbe:
@@ -344,11 +344,11 @@ addons:
         thanosRulerSpec:
           image:
             # renovate: datasource=docker depName=quay.io/thanos/thanos
-            tag: v0.42.4@sha256:b567818fe608067eb0f1d7c2c4fe361e7ad83c8a256234c97685f1d0bf670cc8
+            tag: v0.42.5@sha256:0a546b98a8dd47735456ab389983675ee363d68127e334937a9fceeea10da5e7
       grafana:
         image:
           # renovate: datasource=docker depName=docker.io/grafana/grafana
-          tag: 13.2.4-distroless@sha256:ae3d3add290adbe6a88412229f5d76fd7bb82743050881698642d3d62f277e35
+          tag: 13.3.0-distroless@sha256:540b8afb775bf34aefce417e4329039daa5d44b6f2fbda6881397b1b247ca7df
         sidecar:
           image:
             # renovate: datasource=docker depName=quay.io/kiwigrid/k8s-sidecar
@@ -372,7 +372,7 @@ addons:
   loki:
     repository: https://grafana-community.github.io/helm-charts
     chart: loki
-    version: 19.0.3@sha256:bf3e8a09821c0f7aae095314fcbf16a20ee101e00523dcf0ddada2ae99821a99
+    version: 20.0.2@sha256:c26acef5f5127f200dedd97be805a35cf11c481e8ec1b2fea79e85d68ac4bbba
     values:
       loki:
         image:
@@ -381,10 +381,10 @@ addons:
   alloy:
     repository: https://grafana.github.io/helm-charts
     chart: alloy
-    version: 1.14.1@sha256:4b31686f69ef1e3280382cb311a40edb555ecf8ed049770e3efe5da70d614d53
+    version: 1.14.3@sha256:6f14c2c05f3c1b038c61df8ea4a27c7bcb9f1681ece276394a321c3fe4bb08ba
     # The whole reference: the chart puts its tag into a label, where a digest cannot go.
     # renovate: datasource=docker depName=docker.io/grafana/alloy
-    image: docker.io/grafana/alloy:v1.21.1@sha256:4039c971193053a84e53dd9ed3e7d4561c069256b024631cd3498a353ed7ece8
+    image: docker.io/grafana/alloy:v1.21.2@sha256:89a5a320168387336b9ac3c850609c3ba7757eadd4ae5f1d819deb35e9854b18
   # Velero, for clusters that switch backups on, with its plugin for S3. The chart's own image
   # trails Velero's releases, so the controller names Velero's image itself, which also restores
   # the volumes of the pods it brings back.
@@ -447,22 +447,22 @@ addons:
     repository: oci://ghcr.io/istio/release/charts
     chart: istiod
     # renovate: datasource=docker depName=ghcr.io/istio/release/charts/istiod
-    version: 1.31.2@sha256:92c8b0ab5c67dbd750e5625bc3dd7f7c995287079c36279ea649178adc5afa41
+    version: 1.31.3@sha256:c22f231186a118867001bce5dbf08001952eb94aab127791fd0509b571240949
     # Istio's charts take an image with a slash in its name as the whole reference.
     values:
       # renovate: datasource=docker depName=docker.io/istio/pilot
-      image: docker.io/istio/pilot:1.31.2@sha256:cc1376dfd15b82c2e1a5dae72c3064503391bc20969805c7901ed823dad94e94
+      image: docker.io/istio/pilot:1.31.3@sha256:6ad1e816c4d4767ba3f30a6286a96d121851ddb23d33e20736758acb5f3f4ea9
       global:
         # The proxies istiod injects into waypoints and gateways.
         proxy:
           # renovate: datasource=docker depName=docker.io/istio/proxyv2
-          image: docker.io/istio/proxyv2:1.31.2@sha256:de2028fe8f4cd36231f1a903218800f1ea2bdda7b8de49fb602d0bb399598256
+          image: docker.io/istio/proxyv2:1.31.3@sha256:eb74eacea98d3fb1e239ea84016085155478586a554158676b9b67d960151084
         proxy_init:
           # renovate: datasource=docker depName=docker.io/istio/proxyv2
-          image: docker.io/istio/proxyv2:1.31.2@sha256:de2028fe8f4cd36231f1a903218800f1ea2bdda7b8de49fb602d0bb399598256
+          image: docker.io/istio/proxyv2:1.31.3@sha256:eb74eacea98d3fb1e239ea84016085155478586a554158676b9b67d960151084
         agentgateway:
           # renovate: datasource=docker depName=docker.io/istio/agentgateway
-          image: docker.io/istio/agentgateway:1.31.2@sha256:74c7bdeac7ef1aa268fcb59fa93f9ff622765fefc61f04fe30bee3060b881e6c
+          image: docker.io/istio/agentgateway:1.31.3@sha256:74c7bdeac7ef1aa268fcb59fa93f9ff622765fefc61f04fe30bee3060b881e6c
       sidecarInjectorWebhook:
         templates:
           # Proxyless gRPC sidecars, which ambient mode never injects, from a template that names
@@ -472,49 +472,49 @@ addons:
     repository: oci://ghcr.io/istio/release/charts
     chart: base
     # renovate: datasource=docker depName=ghcr.io/istio/release/charts/base
-    version: 1.31.2@sha256:4e992fddb71ace84e46dc1eb8309402a20aa869d46c20f95bd64f12826bd842a
+    version: 1.31.3@sha256:2c9822f5a4ce68ac78d9e67e4b06fe82188ac76d2affe060756ac0423f25403d
   istioCNI:
     repository: oci://ghcr.io/istio/release/charts
     chart: cni
     # renovate: datasource=docker depName=ghcr.io/istio/release/charts/cni
-    version: 1.31.2@sha256:652d40a1d666c07bfeb346c84b66de30b656ac515f150e9ab32fd4dead25a636
+    version: 1.31.3@sha256:65bc2f95324d0a09e001204ea77009a447946bb01915529b3a46a438f0dcd87d
     values:
       # renovate: datasource=docker depName=docker.io/istio/install-cni
-      image: docker.io/istio/install-cni:1.31.2@sha256:442fb7cc984c743622a79d8e824515112d42b76d3ef1866f2f8e4ceadea6d172
+      image: docker.io/istio/install-cni:1.31.3@sha256:e98782038634ef4fadaf78b53dd8fa4134fda3d65838ead5fc1edef245451c0f
   istioZtunnel:
     repository: oci://ghcr.io/istio/release/charts
     chart: ztunnel
     # renovate: datasource=docker depName=ghcr.io/istio/release/charts/ztunnel
-    version: 1.31.2@sha256:cf3ac400874dc6bdf7affb1396dde3a46c10f1a60fb9542c65d2b6fc02de376c
+    version: 1.31.3@sha256:d280ca96bcd1649238c9b183c8116d3fd66d1272e4400b4d072df168644155fb
     values:
       # renovate: datasource=docker depName=docker.io/istio/ztunnel
-      image: docker.io/istio/ztunnel:1.31.2@sha256:63c8073f481210c0e2221adfe7910a24f83853d31a9772141c4f8b56577450a0
+      image: docker.io/istio/ztunnel:1.31.3@sha256:2c27371b3139ecbf4f5a017354bd540889482441712e88cd8e654ead5a3eb5b2
   # Installed with Rancher, which makes its CA and certificate through it, and with monitoring,
   # whose metrics proxies and Prometheus it gives their certificates.
   certManager:
     repository: https://charts.jetstack.io
     chart: cert-manager
-    version: v1.21.2@sha256:73a56e1728edd6c99f1f31082618c3259d279a76b7ebd3d4bdc5475c2442d34a
+    version: v1.21.3@sha256:9ec67938b2981d8b333af61b3fcf53e26b4f6f5deb7ccda3de4ea116bb373a17
     values:
       image:
         # renovate: datasource=docker depName=quay.io/jetstack/cert-manager-controller
-        tag: v1.21.2@sha256:70f532fd9cfde0b09d55687200942399d89838bc2d5d5b45152eb799a15912b8
+        tag: v1.21.3@sha256:9f4f96a33c7774cef24466fcd85031997531a03a8d117f151126baa8d1290dcc
       webhook:
         image:
           # renovate: datasource=docker depName=quay.io/jetstack/cert-manager-webhook
-          tag: v1.21.2@sha256:a60e2dac46dbb8a7f3df95c54ce941012f54c2fe022f0ee55aaa1ab40ed957ae
+          tag: v1.21.3@sha256:055ac8e9de6a0ba6763794838fe38944acc650f68ebe1b01dd8be079e580f458
       cainjector:
         image:
           # renovate: datasource=docker depName=quay.io/jetstack/cert-manager-cainjector
-          tag: v1.21.2@sha256:c85268c64f2e0e76684bf5fe8906caff34b82523561c6affe0fae3546bd87562
+          tag: v1.21.3@sha256:083d0e906f8eb44e255fe4ff817ae54e49f9ed82e22f1011bb4e9e4f4b8a641f
       startupapicheck:
         image:
           # renovate: datasource=docker depName=quay.io/jetstack/cert-manager-startupapicheck
-          tag: v1.21.2@sha256:46e75b6866359ffb5d82624f41e3ed1c70b2994982702ced547ce5edb418a8f5
+          tag: v1.21.3@sha256:1c519d4afca1413d1e4ccd78bdc756184418ab55a34569a3b3de39d32f9974e1
       acmesolver:
         image:
           # renovate: datasource=docker depName=quay.io/jetstack/cert-manager-acmesolver
-          tag: v1.21.2@sha256:699b40d622211ab7accad8a21b04c5fbaa1841ef7a12621e8de492dbe27b2503
+          tag: v1.21.3@sha256:c8c1225bb2fe8ab37a330b77f0d8c2ee6a41210fcb54fc07ca606ab9a022b8b7
   cloudControllerManager:
     repository: oci://ghcr.io/sergelogvinov/charts
     chart: proxmox-cloud-controller-manager
@@ -632,7 +632,7 @@ addons:
   cilium:
     repository: https://helm.cilium.io
     chart: cilium
-    version: 1.20.3@sha256:0805a5273118c436c9772bb9566d87ec558d8b25cc2ce5dc32918ecdd36f2c7c
+    version: 1.20.4@sha256:505abff8385811df1a949776fc42e9f10697989a332acc86d6e8933efcb855ed
   calico:
     repository: https://docs.tigera.io/calico/charts
     chart: tigera-operator
@@ -674,11 +674,11 @@ addons:
   traefik:
     repository: https://traefik.github.io/charts
     chart: traefik
-    version: 42.1.2@sha256:ecf9ac8bc0837e3260722566c2a49919332ca96b0b4e962405dfcfae51838699
+    version: 42.1.3@sha256:10ec2b032fd7ec9fa04a8816872e20ba0fafc47231f6394b5cb5d522f3b0ef50
     values:
       image:
         # renovate: datasource=docker depName=docker.io/library/traefik
-        tag: v3.7.16@sha256:6d3e069ee484ab1da5adfdda555a75eb9b1545ef09096a0cc7c3043101986a20
+        tag: v3.7.16@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65
   # The load balancers a cluster chooses from for its Services of type LoadBalancer: MetalLB, or
   # kube-vip with its cloud provider, which hands out the addresses. kube-vip runs the image above.
   metallb:
@@ -717,7 +717,7 @@ addons:
   argocd:
     repository: https://argoproj.github.io/argo-helm
     chart: argo-cd
-    version: 10.10.5@sha256:ba6447eeed42bc41d1f0527721047b236304e97669a7b6286d02be4a1644ba7a
+    version: 10.11.6@sha256:d8f096d87513b41ff754053a7f9604c943bf29c15436a79226fd51595ea67d05
     values:
       global:
         image:
@@ -729,16 +729,16 @@ addons:
           # refuses pulls from busy shared egress.
           repository: docker.io/library/redis
           # renovate: datasource=docker depName=docker.io/library/redis
-          tag: 8.10.2-alpine@sha256:0bf6577d7774e592b29d093e3ac9390eb91e13d72c21e506afce736de5e0eeb0
+          tag: 8.10.3-alpine@sha256:896f241f438ab6a210cfb24f573b84bea721a4cbe67f1b4fd07eb638b3b02a7b
   fluxOperator:
     repository: oci://ghcr.io/controlplaneio-fluxcd/charts
     chart: flux-operator
     # renovate: datasource=docker depName=ghcr.io/controlplaneio-fluxcd/charts/flux-operator
-    version: 0.61.0@sha256:8c039527c4a20599bc49bf69fa944e4ae08a0d7c1d585664261d9e78e51b0bde
+    version: 0.62.1@sha256:1135514a01cc11e206f5ff0b568ac30d9defd675022b7a9da88d4a3474fbdf13
     values:
       image:
         # renovate: datasource=docker depName=ghcr.io/controlplaneio-fluxcd/flux-operator
-        tag: v0.61.0@sha256:71041d9fff7f7b05f1a8123ebe73c73b7b156f4aacfe1e8e19b5aa953a98892c
+        tag: v0.62.1@sha256:1d09a3f96524d0895fb11e8072d84a3dd029cecdec0f869efa371be6b001469c
     # The Flux release the operator installs from the manifests inside its image above, which pin
     # every Flux image by digest. It moves with the operator: each operator release carries the
     # newest Flux.

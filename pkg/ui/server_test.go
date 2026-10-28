@@ -742,7 +742,6 @@ func TestCreateChecksProxmoxPrivileges(t *testing.T) {
 		"vnet":      {"dev@pve", strings.Replace(createBody, `"bridge":"vmbr0"`, `"bridge":"tenants"`, 1)},
 		"rancher":   {"dev@pve", strings.Replace(createBody, `"storage":`, `"rancher":{"install":true,"hostname":"rancher.example"},"storage":`, 1)},
 		"csi":       {"dev@pve", strings.Replace(createBody, `"storage":`, `"csi":{"datastoreAllocate":true},"storage":`, 1)},
-		"ccm":       {"dev@pve", strings.Replace(createBody, `"storage":`, `"ccm":{"haGroups":true},"storage":`, 1)},
 		"snapshots": {"dev@pve", strings.Replace(createBody, `"storage":`, `"csi":{"volumeSnapshots":true},"storage":`, 1)},
 		"viewer":    {"viewer@pve", createBody},
 	} {
@@ -1142,42 +1141,26 @@ func TestDatastoreAllocateNeedsTheUsersOwn(t *testing.T) {
 	expect(t, b.do("POST", "/api/clusters", strings.Replace(noStorage, `"web"`, `"bare"`, 1)), http.StatusUnprocessableEntity)
 }
 
-// Sys.Audit on / for a cluster's token takes the user's own there.
-func TestHAGroupLabelsNeedTheUsersOwnSysAudit(t *testing.T) {
+// Sys.Audit on / for a cluster's token reads only the Proxmox VE cluster's configuration, so the HA
+// group labels take no right of the user's own: Kubehenge's administrator decides on them.
+func TestHAGroupLabelsTakeNoRightOfTheUsersOwn(t *testing.T) {
 	t.Parallel()
 	c := cluster("default", "one")
 	h := newHarness(t, c)
 	b := h.browser()
 	b.signIn("dev@pve")
-	switchOn := func() *httptest.ResponseRecorder {
-		return b.do("PATCH", "/api/clusters/default/one", `{"variables":{"ccm":{"haGroups":true}}}`)
+	for _, on := range []bool{false, true} {
+		expect(t, b.do("PATCH", "/api/clusters/default/one", fmt.Sprintf(`{"variables":{"ccm":{"haGroups":%t}}}`, on)), http.StatusOK)
+		got := &clusterv1.Cluster{}
+		if err := h.kube.Get(t.Context(), client.ObjectKeyFromObject(c), got); err != nil {
+			t.Fatal(err)
+		}
+		if v, want := string(variableValue(got, "ccm")), fmt.Sprintf(`{"haGroups":%t}`, on); v != want {
+			t.Fatalf("ccm = %s, want %s", v, want)
+		}
 	}
-	expect(t, switchOn(), http.StatusForbidden)
-	if got := b.do("GET", "/api/session", "").Body.String(); !strings.Contains(got, `"canAudit":false`) {
-		t.Errorf("session = %s", got)
-	}
-	h.accounts.mu.Lock()
-	h.accounts.grants["dev@pve"]["/"] = []string{"Sys.Audit"}
-	h.accounts.mu.Unlock()
-	if got := b.do("GET", "/api/session", "").Body.String(); !strings.Contains(got, `"canAudit":true`) {
-		t.Errorf("session = %s", got)
-	}
-	expect(t, switchOn(), http.StatusOK)
-	got := &clusterv1.Cluster{}
-	if err := h.kube.Get(t.Context(), client.ObjectKeyFromObject(c), got); err != nil {
-		t.Fatal(err)
-	}
-	if v := string(variableValue(got, "ccm")); v != `{"haGroups":true}` {
-		t.Fatalf("ccm = %s", v)
-	}
-
-	// Switching it off takes nothing.
-	h.accounts.mu.Lock()
-	delete(h.accounts.grants["dev@pve"], "/")
-	h.accounts.mu.Unlock()
-	expect(t, b.do("PATCH", "/api/clusters/default/one", `{"variables":{"ccm":{"haGroups":false}}}`), http.StatusOK)
-	created := strings.Replace(createBody, `"storage":`, `"ccm":{"haGroups":true},"storage":`, 1)
-	expect(t, b.do("POST", "/api/clusters", created), http.StatusForbidden)
+	created := strings.Replace(createBody, `"storage":`, `"ccm":{"haGroups":false},"storage":`, 1)
+	expect(t, b.do("POST", "/api/clusters", created), http.StatusCreated)
 }
 
 // A cluster's CSI plugin signed in as root@pam holds all of Proxmox VE, which a user can give it only

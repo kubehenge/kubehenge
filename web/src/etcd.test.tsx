@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { App } from "./App";
 import { scheduleText } from "./Backups";
 import { etcdFieldsOf, etcdProblems, etcdSnapshotsText, restoreProblem } from "./EtcdSnapshots";
-import { fakeServer } from "./fake-server";
+import { applyStaged, fakeServer } from "./fake-server";
 import type { Cluster, ClusterClass, ClusterEtcdSnapshots, EtcdRestorePlan } from "./types";
 
 const targets = JSON.stringify([
@@ -167,6 +167,7 @@ describe("etcd snapshot settings", () => {
     expect(within(dialog).getByLabelText("Schedule")).toHaveAccessibleDescription(/Every 12 hours from 00:00/u);
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: {
         etcdSnapshots: { enabled: true, target: "store", schedule: "0 */12 * * *", timeZone: "UTC", keep: 14 },
@@ -202,6 +203,7 @@ describe("etcd snapshot settings", () => {
     await user.click(upload);
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: {
         etcdSnapshots: {
@@ -222,6 +224,7 @@ describe("etcd snapshot settings", () => {
     await user.click(within(dialog).getByLabelText("Take etcd snapshots"));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: {
         etcdSnapshots: { enabled: false, target: "store", schedule: "0 */6 * * *", timeZone: "UTC", keep: 10 },

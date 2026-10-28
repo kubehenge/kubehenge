@@ -31,7 +31,10 @@ tool() {
     wanted "$1" || return 0
     # --retry alone leaves out a connection the host resets mid-transfer (curl's exit 92); the
     # checksum makes trying again safe.
-    curl -fsSL --proto '=https' --retry 5 --retry-all-errors --tlsv1.2 -o "${work}/download" "$2"
+    curl -fsSL --proto '=https' --retry 5 --retry-all-errors --tlsv1.2 -o "${work}/download" "$2" || {
+        echo "tools: could not download $2" >&2
+        exit 1
+    }
     echo "$3  ${work}/download" | sha256sum -c --quiet -
     case "${4:-}" in
         '') install -m 0755 "${work}/download" "${dir}/$1" ;;
@@ -52,7 +55,10 @@ release() {
 tree() {
     # shellcheck disable=SC2310
     wanted "$1" || return 0
-    curl -fsSL --proto '=https' --retry 5 --retry-all-errors --tlsv1.2 -o "${work}/download" "$2"
+    curl -fsSL --proto '=https' --retry 5 --retry-all-errors --tlsv1.2 -o "${work}/download" "$2" || {
+        echo "tools: could not download $2" >&2
+        exit 1
+    }
     echo "$3  ${work}/download" | sha256sum -c --quiet -
     rm -rf "${dir:?}/lib/$1" && mkdir -p "${dir}/lib/$1"
     tar -xzf "${work}/download" -C "${dir}/lib/$1" --strip-components=1
@@ -76,13 +82,13 @@ GO_SHA256=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
 tree go "https://go.dev/dl/go${GO}.linux-amd64.tar.gz" "${GO_SHA256}" bin go gofmt
 
 # renovate: datasource=node-version depName=node
-NODE=26.12.0
-NODE_SHA256=d9f88af72ad34f7ddf8e67289829f1698f54b6254f7d4f54b7453117ff1a3d2c
+NODE=26.12.1
+NODE_SHA256=0fd1eb7770598f52a21995edf6ed35fc690400fa437c2386af329519e9143132
 tree node "https://nodejs.org/dist/v${NODE}/node-v${NODE}-linux-x64.tar.gz" "${NODE_SHA256}" bin node npm npx
 
 # renovate: datasource=github-release-attachments depName=astral-sh/uv
-UV=0.13.4
-UV_SHA256=2b428396f12572d4429cf210ca234dd599a33b3af0958a4d5ed569d63e3f344f
+UV=0.13.6
+UV_SHA256=f29c3e94ffabd7e6f3ba521dba169a9b7ec12100bf3257087f0f24f6123f3645
 tree uv "https://github.com/astral-sh/uv/releases/download/${UV}/uv-x86_64-unknown-linux-gnu.tar.gz" "${UV_SHA256}" . uv
 
 # renovate: datasource=github-release-attachments depName=opentofu/opentofu
@@ -96,8 +102,8 @@ HELM_SHA256=0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b
 tool helm "https://get.helm.sh/helm-${HELM}-linux-amd64.tar.gz" "${HELM_SHA256}" linux-amd64/helm
 
 # renovate: datasource=github-release-attachments depName=terraform-linters/tflint
-TFLINT=v0.64.0
-TFLINT_SHA256=cca9d13e2e1d7a2c627af60ff899a3c9b74212899416aeb96ec764d2ef954537
+TFLINT=v0.65.0
+TFLINT_SHA256=d4c545ed2e29d6338604b586f34f544f380f70f243aa72f7b484713835eaec61
 release tflint terraform-linters/tflint "${TFLINT}" tflint_linux_amd64.zip "${TFLINT_SHA256}" \
     tflint.zip
 
@@ -120,8 +126,8 @@ tool kubectl "https://dl.k8s.io/release/${KUBECTL}/bin/linux/amd64/kubectl" "${K
 
 # The end-to-end tests reach Talos nodes through their API with it.
 # renovate: datasource=github-release-attachments depName=siderolabs/talos
-TALOSCTL=v1.14.4
-TALOSCTL_SHA256=0a69e3f9b682c5cd844b78dae305f6056ceb86c5fcc6913dcea78c527ed97cee
+TALOSCTL=v1.14.5
+TALOSCTL_SHA256=ff432b68986709e6b69c563a08a2ced4232d5196b0dccd6d2e783e9d714d7d7d
 release talosctl siderolabs/talos "${TALOSCTL}" talosctl-linux-amd64 "${TALOSCTL_SHA256}"
 
 # renovate: datasource=github-release-attachments depName=rhysd/actionlint

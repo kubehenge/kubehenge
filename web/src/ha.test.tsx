@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { newForm, request, summary, type FieldKey } from "./create-form";
 import { MachinesStep, type StepProps } from "./CreateSteps";
-import { fakeServer } from "./fake-server";
+import { applyStaged, fakeServer } from "./fake-server";
 import { haAnnotation, offersHA } from "./Placement";
 import type { ClusterClass, Storage } from "./types";
 
@@ -67,7 +67,7 @@ describe("a new cluster's Proxmox VE HA", () => {
         haOffered={haOffered}
         csi={{ offered: false, problem: undefined }}
         snapshots={{ offered: false, problem: undefined }}
-        haGroups={{ offered: false, problem: undefined }}
+        haGroups={false}
         nodes={[]}
         rules={{ haRules: undefined, haRulesError: undefined }}
       />
@@ -127,6 +127,7 @@ describe("a cluster's Proxmox VE HA", () => {
     expect(save).toBeDisabled();
     await user.click(within(dialog).getByLabelText(/Proxmox VE HA$/u));
     await user.click(save);
+    await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { proxmoxHA: false } }));
   });
 

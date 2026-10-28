@@ -40,7 +40,9 @@ jobs:
   test:
     name: ${{ inputs.test }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 120
+    # node-image-refresh, four template builds from the families' mirrors, has taken from 73 to 109
+    # minutes when it passed.
+    timeout-minutes: 150
     outputs:
       handed-back: ${{ steps.host.outputs.handed-back || steps.load.outputs.handed-back }}
     steps:
@@ -159,8 +161,11 @@ jobs:
         with:
           path: ${{ runner.temp }}/pve-image.tar.zst
           key: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-${{ github.run_id }}
+      # Under the job's limit, so that a test past it fails and Collect still runs; a job stopped at
+      # its own limit keeps neither its log nor its artifacts.
       - name: ${{ inputs.test }}
         if: env.E2E_RUN == 'true'
+        timeout-minutes: 140
         env:
           TEST: ${{ inputs.test }}
         run: test/e2e/ci/run.sh "$RUNNER_TEMP/e2e" "$TEST"

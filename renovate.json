@@ -51,6 +51,19 @@
       "enabled": false
     },
     {
+      "description": "CEL's Go module is cel.dev/cel-go from v0.32.0, which no longer answers to github.com/google/cel-go, the path Talos' machinery imports; the old path stays below until it moves.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["github.com/google/cel-go"],
+      "allowedVersions": "<0.32.0"
+    },
+    {
+      "description": "Kustomize comes in through k8s.io/cli-runtime, and its releases build on Kubernetes' next minor: 0.21.3 requires a kube-openapi on structured-merge-diff v7, which apimachinery 0.37 cannot use. It moves only with the Kubernetes modules that require it.",
+      "matchManagers": ["gomod"],
+      "matchDepTypes": ["indirect"],
+      "matchPackageNames": ["sigs.k8s.io/kustomize/**"],
+      "enabled": false
+    },
+    {
       "description": "A Kubernetes module named by a commit follows its default branch when Renovate moves it, which builds on Kubernetes' next pre-release: controller-runtime is pinned to a commit of its release-0.25 branch and moves to the next v0.25 release instead, and kube-openapi, k8s.io/utils and sigs.k8s.io/json, which publish no releases, move with the Kubernetes modules that require them.",
       "matchManagers": ["gomod"],
       "matchPackageNames": ["k8s.io/**", "sigs.k8s.io/**"],
@@ -127,7 +140,7 @@
   ],
   "customManagers": [
     {
-      "description": "A download from a GitHub release whose tag sits on the line above its SHA-256: the tools in scripts/tools.sh, the OpenTofu appliance/install.sh runs, the Headlamp the appliance serves, the Gateway API install file the controller carries, the cosign kubeadm templates check their images with and the SeaweedFS the workload cluster test backs up to. The tag and the digest move together; the datasource finds the new digest in the release's checksum file, or hashes the download itself.",
+      "description": "A download from a GitHub release whose tag sits on the line above its SHA-256: the tools in scripts/tools.sh, the OpenTofu appliance/install.sh runs, the Headlamp the appliance serves, the Gateway API install file the controller carries, the cosign kubeadm templates check their images with, and the SeaweedFS the workload cluster test backs up to and the etcdutl it reads the etcd snapshots back with. The tag and the digest move together; the datasource finds the new digest in the release's checksum file, or hashes the download itself.",
       "customType": "regex",
       "managerFilePatterns": [
         "/^scripts/tools\\.sh$/",

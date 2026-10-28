@@ -120,7 +120,7 @@ resource "proxmox_acl" "clusters" {
 }
 
 # The cloud controller manager lists HA groups and rules for its HA group labels, which Proxmox VE
-# allows only with Sys.Audit on /. The controller adds the user of a cluster that asks for them to
+# allows only with Sys.Audit on /. The controller adds the user of each cluster with the labels to
 # this group: granting anything on / itself would take Permissions.Modify on /, with which the
 # controller could grant itself every privilege.
 resource "proxmox_virtual_environment_group" "clusters_audit" {

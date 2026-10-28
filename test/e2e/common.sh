@@ -111,6 +111,28 @@ control_plane_record() {
     done
 }
 
+# pod_cpu <kubeconfig>: the CPU each node's pods request of what the node offers them, then the CPU
+# the pods of each namespace request over all nodes, as the scheduler counts a pod: its containers
+# and sidecars together, or its largest other init container, whichever is more. The add-ons' CPU
+# figures are these requests, so the print shows one that fell behind its chart.
+pod_cpu() {
+    # Both lists go to jq on its input: a cluster's pods outgrow what one argument may hold.
+    {
+        KUBECONFIG="$1" kubectl get nodes -o json &&
+            KUBECONFIG="$1" kubectl get pods -A --field-selector=status.phase!=Succeeded,status.phase!=Failed -o json
+    } | jq -rs '
+        def milli: if . == null then 0 elif endswith("m") then .[:-1] | tonumber else tonumber * 1000 end;
+        def req: (.resources.requests.cpu // .resources.limits.cpu) | milli;
+        .[0] as $nodes
+        | (.[1].items | map({node: .spec.nodeName, ns: .metadata.namespace, cpu: ([
+            ([.spec.containers[], (.spec.initContainers[]? | select(.restartPolicy == "Always")) | req] | add),
+            ([.spec.initContainers[]? | select(.restartPolicy != "Always") | req] | max // 0)
+        ] | max)})) as $p
+        | ($nodes.items[] | .metadata.name as $n
+            | "\($n): \($p | map(select(.node == $n) | .cpu) | add // 0)m of CPU requested of \(.status.allocatable.cpu | milli)m"),
+        ($p | group_by(.ns)[] | "  \(.[0].ns): \(map(.cpu) | add)m in \(length) pods")'
+}
+
 # absent <kubectl get command...>: whether the API server answers that the object does not exist.
 # Any other failure, an unreachable server among them, is not taken for absence.
 absent() {

@@ -649,7 +649,7 @@ trap cleanup EXIT
 # fetch <url> <file> <sha256>: downloads and checks a file. Any failed transfer is tried again, a
 # connection reset mid-way included, which --retry alone leaves out.
 fetch() {
-    curl -fsSL --proto '=https' --retry 5 --retry-all-errors --tlsv1.2 -o "$2" "$1"
+    curl -fsSL --proto '=https' --retry 5 --retry-all-errors --tlsv1.2 -o "$2" "$1" || fail "could not download $1"
     echo "$3  $2" | sha256sum -c --quiet - || fail "$1 does not match its checksum"
 }
 

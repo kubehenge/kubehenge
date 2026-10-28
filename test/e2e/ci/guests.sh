@@ -265,6 +265,8 @@ talos_part() {
             talos 100 get machinestatus -o yaml
             for s in ${talos_services}; do talos 60 service "${s}"; done
             talos 100 memory
+            # Each cgroup's peak names what grew when Talos's OOM controller killed a pod.
+            talos 400 cgroups --preset memory
             for f in /proc/uptime /proc/loadavg /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io; do
                 talos 10 read "${f}"
             done

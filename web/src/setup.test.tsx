@@ -38,7 +38,7 @@ const form: SetupForm = {
   refreshGateway: "",
   refreshDNS: "",
   creatorBuilds: false,
-  clusterSysAudit: false,
+  clusterSysAudit: true,
   clusterVolumeSnapshots: false,
   rootPassword: "",
   moreNamespaces: false,
@@ -194,11 +194,11 @@ describe("setup", () => {
     ]);
   });
 
-  it("lets clusters choose the HA group labels only when it is switched on", () => {
-    const on = settings({ ...form, clusterSysAudit: true });
-    expect(on).toHaveProperty("clusterSysAudit", true);
+  it("gives clusters the HA group labels unless it is switched off", () => {
+    const off = settings({ ...form, clusterSysAudit: false });
+    expect(off).toHaveProperty("clusterSysAudit", false);
     expect(settings(form)).not.toHaveProperty("clusterSysAudit");
-    expect([formOf(on).clusterSysAudit, formOf(settings(form)).clusterSysAudit]).toStrictEqual([true, false]);
+    expect([formOf(settings(form)).clusterSysAudit, formOf(off).clusterSysAudit]).toStrictEqual([true, false]);
   });
 
   it("names more namespaces for clusters only when they are switched on", () => {
@@ -516,15 +516,19 @@ describe("setup", () => {
       },
     };
     fakeServer(routes);
+    const user = userEvent.setup({ delay: null });
     const { unmount } = render(<App />);
+    const pages = await screen.findByRole("navigation", { name: "Administration's pages" });
+    await user.click(within(pages).getByRole("link", { name: "Appliance" }));
     await expect(screen.findByRole("heading", { name: "Proxmox VE API" })).resolves.toBeInTheDocument();
+    expect(window.location.pathname).toBe("/administration/appliance");
     expect(screen.getByText(/Certificate verification is off/u)).toBeInTheDocument();
     expect(screen.getByText("sh install.sh --upgrade --ctid 105 --proxmox-ca <file>")).toBeInTheDocument();
     unmount();
 
     routes["GET /api/setup"] = { body: { appliance: true, ready: true, allowed: true } };
     render(<App />);
-    await expect(screen.findByRole("heading", { name: "Management cluster" })).resolves.toBeInTheDocument();
+    await expect(screen.findByRole("heading", { name: "Repair access" })).resolves.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Proxmox VE API" })).not.toBeInTheDocument();
   });
 

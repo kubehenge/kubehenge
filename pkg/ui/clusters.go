@@ -835,9 +835,6 @@ func (s *Server) mayCreate(w http.ResponseWriter, r *http.Request, u user, class
 	if takesSnapshots(req.Variables[csiVariable]) && !s.require(w, r, u, "/", privPermissionsModify) {
 		return false
 	}
-	if labelsHAGroups(req.Variables[ccmVariable]) && !s.require(w, r, u, "/", privSysAudit) {
-		return false
-	}
 	if !s.allowGitOps(w, r, u, s.workloadPoolPath(), req.Variables[gitopsVariable], nil) {
 		return false
 	}
@@ -1009,15 +1006,10 @@ func networkVariable(raw json.RawMessage) (string, string, bool) {
 const csiVariable = "csi"
 
 // ccmVariable configures a cluster's cloud controller manager; its haGroups gives the cluster's
-// token Sys.Audit on / for the HA group labels.
+// token Sys.Audit on / for the HA group labels. That reads the Proxmox VE cluster's configuration
+// and nothing of its guests, so it takes no right of the user's own: Kubehenge's administrator
+// decides whether clusters may hold it.
 const ccmVariable = "ccm"
-
-func labelsHAGroups(raw json.RawMessage) bool {
-	var v struct {
-		HAGroups bool `json:"haGroups"`
-	}
-	return raw != nil && json.Unmarshal(raw, &v) == nil && v.HAGroups
-}
 
 // csiOptions are the csi variable's switches; a value that is not one reads as all off.
 type csiOptions struct {
@@ -1066,34 +1058,62 @@ type changeRequest struct {
 	Variables   map[string]json.RawMessage  `json:"variables"`
 }
 
-func (s *Server) changeCluster(w http.ResponseWriter, r *http.Request, u user) {
+// changed is a change read and checked, applied to the cluster in memory, with the cluster as it was.
+type changed struct {
+	req    changeRequest
+	before *clusterv1.Cluster
+	c      *clusterv1.Cluster
+	access poolAccess
+}
+
+// prepareChange reads a change and applies it to the cluster in memory, or answers the request with
+// what is wrong with it.
+func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user) (*changed, bool) {
 	var req changeRequest
 	if !readJSON(w, r, &req) {
-		return
+		return nil, false
 	}
 	c, access, ok := s.cluster(w, r, u, privChange)
 	if !ok {
-		return
+		return nil, false
 	}
 	if !c.DeletionTimestamp.IsZero() {
 		writeError(w, http.StatusConflict, "the cluster is being deleted")
-		return
+		return nil, false
 	}
+	before := c.DeepCopy()
 	// Autoscaling goes first, so that a change switching a pool's off may also fix its workers.
 	msg, err := applyAutoscaling(r.Context(), u.kube, c, req.Autoscaling)
 	if err != nil {
 		s.kubeError(w, err)
-		return
+		return nil, false
 	}
 	if msg == "" {
 		msg = applyTopology(c, &req)
 	}
 	if msg != "" {
 		writeError(w, http.StatusUnprocessableEntity, msg)
-		return
+		return nil, false
 	}
 	if !s.applyVariables(w, r, u, c, access, req.Variables) {
+		return nil, false
+	}
+	return &changed{req: req, before: before, c: c, access: access}, true
+}
+
+func (s *Server) changeCluster(w http.ResponseWriter, r *http.Request, u user) {
+	ch, ok := s.prepareChange(w, r, u)
+	if !ok {
 		return
+	}
+	c, access := ch.c, ch.access
+	changes, err := plannedOf(r.Context(), u, ch)
+	if err != nil {
+		s.kubeError(w, err)
+		return
+	}
+	if len(changes) > 0 {
+		recordChange(c, u.ticket.Username, s.now(), changes)
 	}
 	if err := u.kube.Update(r.Context(), c); err != nil {
 		s.kubeError(w, err)
@@ -1185,8 +1205,6 @@ func (s *Server) allowVariable(w http.ResponseWriter, r *http.Request, u user, c
 		return !installsRancher(value) || installsRancher(old) || s.allowRancher(w, r, u, client.ObjectKeyFromObject(c))
 	case csiVariable:
 		return s.allowCSI(w, r, u, c, value, old)
-	case ccmVariable:
-		return !labelsHAGroups(value) || labelsHAGroups(old) || s.require(w, r, u, "/", privSysAudit)
 	case oidcVariable:
 		return sameJSON(old, value) || s.allowOIDC(w, r, u, c, access, value, old)
 	case gitopsVariable:

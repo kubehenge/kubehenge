@@ -1,0 +1,170 @@
+import type { JSX } from "react";
+
+import { clusterPath, type View } from "./ClusterDetail";
+import { ranked, useFleet, type Standing } from "./fleet";
+import { Link } from "./router";
+import { settingLabel } from "./Staging";
+import type { RunInfo } from "./types";
+import { age } from "./ui";
+
+/** Where a run stands in the column: under way, failed and waiting for a look, or done lately. */
+export type RunGroup = "running" | "failed" | "done";
+
+/** A piece of work somewhere in the fleet or the appliance. */
+export interface Run {
+  key: string;
+  group: RunGroup;
+  title: string;
+  what: string;
+  state: Standing["state"];
+  to: string;
+  /** The first thing that went wrong, for a failed run. */
+  error?: string;
+}
+
+const runGroups: { group: RunGroup; label: string }[] = [
+  { group: "running", label: "Running" },
+  { group: "failed", label: "Failed" },
+  { group: "done", label: "Done" },
+];
+
+// The view of a cluster's page that shows each kind of run.
+const runViews: Partial<Record<RunInfo["kind"], View>> = {
+  "etcd-snapshot": "backups",
+  "etcd-restore": "backups",
+  backup: "backups",
+  restore: "backups",
+};
+
+// Where the page of each kind of run sends its reader for more.
+const places: Partial<Record<RunInfo["kind"], string>> = {
+  "etcd-snapshot": "Open the backups",
+  "etcd-restore": "Open the backups",
+  backup: "Open the backups",
+  restore: "Open the backups",
+  change: "Open the cluster",
+};
+
+/** runPath is the address of a run's page. */
+export const runPath = (id: string): string => `/runs/${id}`;
+
+/** runTitle names a run: a change by the settings it sets. */
+export function runTitle(r: RunInfo): string {
+  if (r.kind !== "change" || (r.settings ?? []).length === 0) {
+    return r.what;
+  }
+  return `Change ${(r.settings ?? []).map((x) => settingLabel(x)).join(", ")}`;
+}
+
+/** runView is where a run's work shows in the rest of the interface, and how a link there reads. */
+export function runView(r: RunInfo): { to: string; place: string } {
+  if (r.cluster === undefined) {
+    return { to: "/administration", place: "Open Administration" };
+  }
+  return {
+    to: clusterPath(r.namespace ?? "", r.cluster, runViews[r.kind] ?? ""),
+    place: places[r.kind] ?? "Open the cluster",
+  };
+}
+
+// The appliance's runs carry no cluster; each names what it works on.
+const applianceTitles: Partial<Record<RunInfo["kind"], string>> = {
+  "management-cluster": "Management cluster",
+  template: "Templates",
+  "template-refresh": "Templates",
+  "appliance-upgrade": "Appliance",
+};
+
+function described(r: RunInfo): string {
+  const what = runTitle(r);
+  if (r.state === "running") {
+    return r.phase === undefined ? what : `${what}: ${r.phase}`;
+  }
+  const when = r.finished === undefined ? "" : `, ${age(r.finished)} ago`;
+  return `${what}${r.state === "failed" ? " failed" : ""}${when}`;
+}
+
+const groupOf: Record<RunInfo["state"], RunGroup> = { running: "running", failed: "failed", succeeded: "done" };
+const stateOf: Record<RunInfo["state"], Standing["state"]> = { running: "progress", failed: "error", succeeded: "ok" };
+
+const shownName = (namespace: string, name: string): string =>
+  namespace === "default" ? name : `${namespace}/${name}`;
+
+function fromServer(r: RunInfo): Run {
+  const ns = r.namespace ?? "";
+  const cluster = r.cluster ?? "";
+  const onCluster = cluster !== "";
+  return {
+    key: r.id,
+    group: groupOf[r.state],
+    title: onCluster ? shownName(ns, cluster) : (applianceTitles[r.kind] ?? "Appliance"),
+    what: described(r),
+    state: stateOf[r.state],
+    to: runPath(r.id),
+    ...(r.error !== undefined && { error: r.error }),
+  };
+}
+
+/**
+ * useRuns is the work under way and lately finished: the changes the fleet's clusters show, then
+ * what the appliance and the clusters' snapshots, backups and restores report.
+ */
+export function useRuns(): Run[] {
+  const fleet = useFleet();
+  const runs = fleet?.runs ?? [];
+  // A change made here is followed by its own run; the fleet's standing says the same in less.
+  const followed = new Set(
+    runs.filter((r) => r.kind === "change" && r.state === "running").map((r) => `${r.namespace}/${r.cluster}`),
+  );
+  const changes: Run[] = ranked(fleet?.clusters ?? [], fleet?.health)
+    .filter(({ cluster: c, standing }) => standing.group === "running" && !followed.has(`${c.namespace}/${c.name}`))
+    .map(({ cluster: c, standing: s }) => ({
+      key: `${c.namespace}/${c.name}`,
+      group: "running",
+      title: shownName(c.namespace, c.name),
+      what: s.reason,
+      state: s.state,
+      to: clusterPath(c.namespace, c.name, s.view),
+    }));
+  return [...changes, ...runs.map((r) => fromServer(r))];
+}
+
+/** RunsPanel follows the work under way beside whatever page is open, and folds away. */
+export function RunsPanel({ runs, onFold }: { runs: Run[]; onFold: () => void }): JSX.Element {
+  const running = runs.filter((r) => r.group === "running").length;
+  return (
+    <aside className="runs" aria-label="Runs">
+      <div className="runs-head">
+        <h2>
+          Runs <span className="count">{running} running</span>
+        </h2>
+        <button type="button" className="icon" aria-label="Fold the runs away" title="Fold away (R)" onClick={onFold}>
+          ›
+        </button>
+      </div>
+      {runGroups.map(({ group, label }) => {
+        const members = runs.filter((r) => r.group === group);
+        if (members.length === 0) {
+          return null;
+        }
+        return (
+          <section key={group} className={`runs-group runs-${group}`} aria-label={label}>
+            <h3>{label}</h3>
+            <ul>
+              {members.map((r) => (
+                <li key={r.key}>
+                  <Link to={r.to} className="run">
+                    <span className={`dot dot-${r.state}`} aria-hidden="true" />
+                    <span className="run-title">{r.title}</span>
+                    <span className="run-what">{r.what}</span>
+                    {r.error !== undefined && <span className="run-error">{r.error}</span>}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        );
+      })}
+    </aside>
+  );
+}

@@ -135,7 +135,8 @@ type Server struct {
 	activeKube atomic.Pointer[client.Client]
 	backups    backupCache
 	etags      etagCache
-	health     healthCache
+	health     readCache[healthView]
+	veleroRuns readCache[[]runView]
 	vmLoads    vmLoadCache
 	workloads  workloadConns
 	// clock is the health page's time; unset, the system's.
@@ -199,6 +200,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/versions/{distribution}", s.signedIn(s.versions))
 	mux.HandleFunc("GET /api/talos/releases", s.signedIn(s.talosReleases))
 	mux.HandleFunc("GET /api/clusters", s.managed(s.listClusters))
+	mux.HandleFunc("GET /api/fleet/health", s.managed(s.fleetHealth))
+	mux.HandleFunc("GET /api/runs", s.managed(s.runs))
 	mux.HandleFunc("POST /api/clusters", s.managed(s.createCluster))
 	s.clusterRoutes(mux)
 	mux.HandleFunc("GET /api/credentials/{purpose}", s.managed(s.applianceCredential))
@@ -216,6 +219,7 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}", s.managed(s.getCluster))
 	mux.HandleFunc("PATCH /api/clusters/{namespace}/{name}", s.managed(s.changeCluster))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/plan", s.managed(s.planCluster))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}", s.managed(s.deleteCluster))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/kubeconfig", s.managed(s.kubeconfig))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/talosconfig", s.managed(s.talosconfig))

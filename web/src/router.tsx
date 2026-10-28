@@ -58,11 +58,14 @@ export function Link({
   children,
   className,
   current,
+  label,
 }: {
   to: string;
   children: ReactNode;
   className?: string;
   current?: boolean;
+  /** The link's name, where its content alone does not say it. */
+  label?: string;
 }): JSX.Element {
   const onClick = (e: MouseEvent<HTMLAnchorElement>) => {
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
@@ -72,7 +75,14 @@ export function Link({
     navigate(to);
   };
   return (
-    <a href={to} onClick={onClick} className={className} aria-current={current === true ? "page" : undefined}>
+    <a
+      href={to}
+      onClick={onClick}
+      className={className}
+      aria-current={current === true ? "page" : undefined}
+      aria-label={label}
+      title={label}
+    >
       {children}
     </a>
   );

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { App } from "./App";
 import { backupsText, namespaceProblem, scheduleProblem, scheduleText } from "./Backups";
 import { fieldProblems, newForm, request, summary, withBackupChoices } from "./create-form";
-import { fakeServer } from "./fake-server";
+import { applyStaged, fakeServer } from "./fake-server";
 import type { ClusterClass } from "./types";
 import { browserZone } from "./ui";
 
@@ -195,6 +195,7 @@ describe("a cluster's backups", () => {
     expect(within(dialog).getByText("Not set.")).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: {
         backups: {
