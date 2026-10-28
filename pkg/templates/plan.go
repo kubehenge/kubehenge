@@ -40,7 +40,7 @@ var Distributions = []Distribution{Talos, RKE2, K3s, Kubeadm}
 
 // DefaultTalosVersion is the Talos release templates are made from unless another is asked for.
 // renovate: datasource=github-releases depName=siderolabs/talos
-const DefaultTalosVersion = "v1.14.4"
+const DefaultTalosVersion = "v1.14.5"
 
 // Request asks for the template of one distribution.
 type Request struct {

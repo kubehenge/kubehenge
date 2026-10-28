@@ -23,7 +23,7 @@ c675e598ab6414b2e2e1b4e8dc9d947dd2d3fd3138ad1107b07c83cfb4c96897  cis-2.0/contro
 6febdc4959f769153ffe3b605a8b4db794b29ed605e11cbe651575d0f7d768a5  cis-2.0/etcd.yaml
 716ac411115288c01553491b6fe96d85366c3d012af8bdc2abda9ae7d10884f9  cis-2.0/policies.yaml'
 # renovate: datasource=docker depName=docker.io/rancher/security-scan
-security_scan_image=docker.io/rancher/security-scan:v0.10.2@sha256:2c7e270a01771d97b46842149033e272394351fa6a0729598d62d9a2d8eee9e8
+security_scan_image=docker.io/rancher/security-scan:v0.10.4@sha256:9af5e01b6b3c8e51fa38fb1136f944c83662a765dcbdeec4c2facc6ac109dcdb
 
 # cis_exceptions: the checks the cluster fails by design, each with why, as a JSON list.
 cis_exceptions() {

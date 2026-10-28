@@ -91,12 +91,12 @@ load_balancer=${KUBEHENGE_E2E_LOAD_BALANCER:-metallb}
 
 # The S3 store the backups go to.
 # renovate: datasource=github-release-attachments depName=seaweedfs/seaweedfs
-SEAWEEDFS_VERSION=4.48
-SEAWEEDFS_SHA256=4a7d108384d044d95212d1342cdda9533fa55842c1c9b41f606ca3c8a9561124
+SEAWEEDFS_VERSION=4.51
+SEAWEEDFS_SHA256=c03be37416a8ee672c77766e20b22a4e1430744c3af2668599a4b6eeaec14cee
 # etcdutl, which reads the etcd snapshots back.
-# renovate: datasource=github-releases depName=etcd-io/etcd
-ETCD_VERSION=v3.7.2
-ETCD_SHA256=3a3679bc51a4ee9d30bccea1da7cd4fe62c6fc1d2ca1255068d2c53bf3026135
+# renovate: datasource=github-release-attachments depName=etcd-io/etcd
+ETCD_VERSION=v3.7.3
+ETCD_SHA256=5dfa9cc3b3ce3b4b491fbcc2057d3daa166bcc6676f743fcd20f8e5760cb9775
 
 # shellcheck source=common.sh
 . "$(dirname "$0")/common.sh"
