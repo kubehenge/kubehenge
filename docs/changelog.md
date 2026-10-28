@@ -4,6 +4,8 @@ Every release's changes, newest first. Versions follow [Semantic Versioning](htt
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-28
+
 - capmox, which creates the clusters' VMs, is built from a later commit of its main branch. A machine whose VM needs no configuration change is started instead of being reported ready while its VM stays off, and a transient error while attaching the bootstrap ISO is retried instead of failing the machine for good.
 - The installer names the address of a download that still fails after its retries, where curl's own message gives only the HTTP status.
 
