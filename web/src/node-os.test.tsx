@@ -164,7 +164,8 @@ describe("the node OS", () => {
     await expect(within(dialog).findByRole("alert")).resolves.toHaveTextContent(
       /^There is no kubeadm VM template of v1\.36\.5 on Rocky Linux 10 yet; .*Administration page\.$/u,
     );
-    expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+    expect(screen.queryByRole("button", { name: "Review plan" })).not.toBeInTheDocument();
+    expect(calls.find((c) => c.key === "POST /api/clusters/clusters/web/plan")?.body).toStrictEqual({
       variables: { nodeOS: { family: "rocky", release: "10" } },
     });
   });

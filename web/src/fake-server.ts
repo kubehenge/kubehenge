@@ -1,4 +1,6 @@
-import { vi } from "vitest";
+import { screen, waitFor, within } from "@testing-library/react";
+import type { UserEvent } from "@testing-library/user-event";
+import { expect, vi } from "vitest";
 
 /** What a route answers: a status, 200 unless given, and a JSON body or else a text. */
 export interface Answer {
@@ -20,6 +22,7 @@ export interface Call {
 const httpOK = 200;
 const httpAccepted = 202;
 const httpNoContent = 204;
+const httpBadRequest = 400;
 const httpNotFound = 404;
 
 // Statuses whose answer may have no body at all.
@@ -32,6 +35,42 @@ function pathOf(input: RequestInfo | URL): string {
   return input instanceof URL ? `${input.pathname}${input.search}` : input.url;
 }
 
+const answerOf = async (route: Route, body: unknown): Promise<Answer> =>
+  typeof route === "function" ? route(body) : route;
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
+
+// The settings a change names, as the server lists those it plans.
+function settingsOf(req: unknown): string[] {
+  if (!isRecord(req)) {
+    return [];
+  }
+  const topology = ["version", "controlPlaneReplicas", "workerPools", "autoscaling"].filter((k) => k in req);
+  return [...topology, ...Object.keys(isRecord(req["variables"]) ? req["variables"] : {})];
+}
+
+/**
+ * planOf answers a cluster's plan as the server would, from the routes a test gives the cluster:
+ * refused as its change route refuses, else with the cluster as that route answers it, or as its
+ * read does, and every setting the change names, replacing no machine.
+ */
+async function planOf(routes: Record<string, Route>, path: string, body: unknown): Promise<Answer | undefined> {
+  const change = routes[`PATCH ${path}`];
+  if (change === undefined) {
+    return undefined;
+  }
+  const answer = await answerOf(change, body);
+  if ((answer.status ?? httpOK) >= httpBadRequest) {
+    return answer;
+  }
+  const read = routes[`GET ${path}`];
+  const shown = read === undefined ? undefined : await answerOf(read, undefined);
+  const cluster = isRecord(answer.body) && "variables" in answer.body ? answer.body : shown?.body;
+  return { body: { cluster, changes: settingsOf(body).map((setting) => ({ setting, effect: "none" })) } };
+}
+
+const planPath = /^POST (?<path>.+)\/plan$/u;
+
 /**
  * fakeServer answers fetch from routes keyed by "METHOD path" and records the requests made. It
  * reads routes and headers as each request comes, so a test changes what the server says by
@@ -43,8 +82,10 @@ export function fakeServer(routes: Record<string, Route>, headers: Record<string
     const key = `${init.method ?? "GET"} ${pathOf(input)}`;
     const body: unknown = typeof init.body === "string" ? JSON.parse(init.body) : undefined;
     calls.push({ key, body, headers: new Headers(init.headers) });
-    const route = routes[key] ?? { status: httpNotFound, body: { error: `no route ${key}` } };
-    const answer = typeof route === "function" ? await route(body) : route;
+    const plan = planPath.exec(key)?.groups?.["path"];
+    const planned = routes[key] === undefined && plan !== undefined ? await planOf(routes, plan, body) : undefined;
+    const route = routes[key] ?? planned ?? { status: httpNotFound, body: { error: `no route ${key}` } };
+    const answer = await answerOf(route, body);
     const status = answer.status ?? httpOK;
     const text =
       answer.text ?? (answer.body === undefined && bodiless.has(status) ? null : JSON.stringify(answer.body ?? {}));
@@ -62,6 +103,13 @@ export function held(): { route: Route; fail: (err: Error) => void } {
     fail = reject;
   });
   return { route: async () => answer, fail: (err) => fail?.(err) };
+}
+
+/** applyStaged reviews the plan of what a cluster's page has staged and applies it. */
+export async function applyStaged(user: UserEvent): Promise<void> {
+  await user.click(await screen.findByRole("button", { name: "Review plan" }));
+  await user.click(within(screen.getByRole("dialog", { name: "Review plan" })).getByRole("button", { name: "Apply" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 }
 
 /** reads counts the requests made with a key. */

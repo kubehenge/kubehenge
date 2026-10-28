@@ -17,7 +17,7 @@ import {
   withRoom,
   type Form,
 } from "./create-form";
-import { fakeServer, held, reads, type Route } from "./fake-server";
+import { applyStaged, fakeServer, held, reads, type Route } from "./fake-server";
 import { addressCount } from "./network";
 import type { Cluster, ClusterClass, ClusterHealth, Machine, NodeOSChoice } from "./types";
 
@@ -346,6 +346,7 @@ describe("clusters", () => {
     await user.clear(workers);
     await user.type(workers, "4");
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Scale" }));
+    await applyStaged(user);
     await waitFor(() =>
       expect(calls.find((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
         controlPlaneReplicas: 1,
@@ -382,6 +383,7 @@ describe("clusters", () => {
     );
     await user.selectOptions(within(dialog).getByLabelText("Kubernetes version"), "v1.33.13+rke2r3");
     await user.click(within(dialog).getByRole("button", { name: "Upgrade" }));
+    await applyStaged(user);
     await waitFor(() =>
       expect(calls.find((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
         version: "v1.33.13+rke2r3",
@@ -419,7 +421,12 @@ describe("clusters", () => {
       }),
     });
     render(<App />);
-    await expect(screen.findByText("Waiting for its ClusterClass")).resolves.toBeInTheDocument();
+    const main = await screen.findByRole("main");
+    await expect(within(main).findByText("Waiting for its ClusterClass")).resolves.toBeInTheDocument();
+    const rail = screen.getByRole("navigation", { name: "Fleet" });
+    expect(within(within(rail).getByRole("region", { name: "Running" })).getByRole("link")).toHaveTextContent(
+      "webWaiting for its ClusterClass",
+    );
   });
 
   it("links a cluster to the shared Headlamp", async () => {

@@ -1058,34 +1058,62 @@ type changeRequest struct {
 	Variables   map[string]json.RawMessage  `json:"variables"`
 }
 
-func (s *Server) changeCluster(w http.ResponseWriter, r *http.Request, u user) {
+// changed is a change read and checked, applied to the cluster in memory, with the cluster as it was.
+type changed struct {
+	req    changeRequest
+	before *clusterv1.Cluster
+	c      *clusterv1.Cluster
+	access poolAccess
+}
+
+// prepareChange reads a change and applies it to the cluster in memory, or answers the request with
+// what is wrong with it.
+func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user) (*changed, bool) {
 	var req changeRequest
 	if !readJSON(w, r, &req) {
-		return
+		return nil, false
 	}
 	c, access, ok := s.cluster(w, r, u, privChange)
 	if !ok {
-		return
+		return nil, false
 	}
 	if !c.DeletionTimestamp.IsZero() {
 		writeError(w, http.StatusConflict, "the cluster is being deleted")
-		return
+		return nil, false
 	}
+	before := c.DeepCopy()
 	// Autoscaling goes first, so that a change switching a pool's off may also fix its workers.
 	msg, err := applyAutoscaling(r.Context(), u.kube, c, req.Autoscaling)
 	if err != nil {
 		s.kubeError(w, err)
-		return
+		return nil, false
 	}
 	if msg == "" {
 		msg = applyTopology(c, &req)
 	}
 	if msg != "" {
 		writeError(w, http.StatusUnprocessableEntity, msg)
-		return
+		return nil, false
 	}
 	if !s.applyVariables(w, r, u, c, access, req.Variables) {
+		return nil, false
+	}
+	return &changed{req: req, before: before, c: c, access: access}, true
+}
+
+func (s *Server) changeCluster(w http.ResponseWriter, r *http.Request, u user) {
+	ch, ok := s.prepareChange(w, r, u)
+	if !ok {
 		return
+	}
+	c, access := ch.c, ch.access
+	changes, err := plannedOf(r.Context(), u, ch)
+	if err != nil {
+		s.kubeError(w, err)
+		return
+	}
+	if len(changes) > 0 {
+		recordChange(c, u.ticket.Username, s.now(), changes)
 	}
 	if err := u.kube.Update(r.Context(), c); err != nil {
 		s.kubeError(w, err)

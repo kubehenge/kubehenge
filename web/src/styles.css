@@ -1,47 +1,72 @@
-/* Kubehenge's own theme, in the spirit of Proxmox VE's interface: compact, grey panels, blue
-   accents, light and dark following the system. */
+/* Kubehenge's console: a tool read for long stretches by the people who run the clusters. Dense
+   but calm, flat hairlines instead of boxes and shadows, names and versions in a monospace face,
+   colour kept for state. Dark and light follow the system. */
 
 :root {
-  --bg: #f1f1f1;
-  --panel: #ffffff;
-  --panel-head: #f5f5f5;
-  --border: #cfcfcf;
-  --text: #1f1f1f;
-  --muted: #666666;
-  /* Text colours are at least 4.5:1 against what they sit on (WCAG AA for 13 px text). */
-  --accent: #1f6fb2;
-  --accent-fill: #1f6fb2;
+  --bg: #f3f4f3;
+  --surface: #ffffff;
+  --surface-2: #eef0ef;
+  --line: #dde1df;
+  --line-strong: #c3c9c6;
+  --text: #161a18;
+  /* Text colours are at least 4.5:1 against what they sit on (WCAG AA for body text). */
+  --dim: #56605c;
+  --accent: #0d7468;
+  --accent-fill: #0d7468;
   --accent-text: #ffffff;
-  --row-alt: #fafafa;
-  --row-hover: #e6f1fa;
-  --progress: #d9a400;
-  --error: #c9302c;
-  --danger: #c9302c;
+  --selected: #e1efec;
+  --hover: #edf3f1;
+  --ok: #1e7d4b;
+  --warning: #956200;
+  --error: #c0392b;
+  --run: #2c5fc2;
+  --danger: #c0392b;
   --input-bg: #ffffff;
+  --shadow: 0 12px 32px rgb(16 24 20 / 18%);
+  --sans: "Atkinson Hyperlegible Next", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+  --rail: 264px;
+  --runs: 296px;
+  --top: 48px;
   /* A form reads down one column this wide, however wide the page: no control runs on for a
      whole screen. */
   --form-width: 820px;
-  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
-  font-size: 13px;
+  /* The state icons are masks, so each takes its colour from the theme. */
+  --icon-ok: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill-rule='evenodd' d='M6 0a6 6 0 1 1 0 12A6 6 0 0 1 6 0zm2.9 3.6L5.1 7.4 3.3 5.6l-1 1 2.8 2.8 4.8-4.8z'/%3E%3C/svg%3E");
+  --icon-error: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill-rule='evenodd' d='M6 0a6 6 0 1 1 0 12A6 6 0 0 1 6 0zM3.9 3.1l-.8.8L5.2 6 3.1 8.1l.8.8L6 6.8l2.1 2.1.8-.8L6.8 6l2.1-2.1-.8-.8L6 5.2z'/%3E%3C/svg%3E");
+  --icon-warning: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill-rule='evenodd' d='M6 .4l5.9 10.8H.1zM5.3 4h1.4v3.7H5.3zm0 4.6h1.4V10H5.3z'/%3E%3C/svg%3E");
+  --icon-progress: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Ccircle cx='6' cy='6' r='4.8' fill='none' stroke='black' stroke-opacity='.3' stroke-width='1.8'/%3E%3Cpath d='M6 1.2a4.8 4.8 0 0 1 4.8 4.8' fill='none' stroke='black' stroke-width='1.8'/%3E%3C/svg%3E");
+  --icon-idle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Ccircle cx='6' cy='6' r='5' fill='none' stroke='black' stroke-width='1.6'/%3E%3C/svg%3E");
+  color-scheme: light dark;
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.45;
   color: var(--text);
   background: var(--bg);
+  font-variant-numeric: tabular-nums;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #1b1b1b;
-    --panel: #262626;
-    --panel-head: #2f2f2f;
-    --border: #3d3d3d;
-    --text: #e2e2e2;
-    --muted: #9a9a9a;
-    --accent: #4a9fdc;
-    --accent-fill: #2b6ca3;
-    --error: #ff6b66;
-    --danger: #ff6b66;
-    --row-alt: #2a2a2a;
-    --row-hover: #20384b;
-    --input-bg: #1f1f1f;
+    --bg: #101211;
+    --surface: #161918;
+    --surface-2: #1c201e;
+    --line: #262b29;
+    --line-strong: #353c39;
+    --text: #e3e8e5;
+    --dim: #98a29d;
+    --accent: #45c2b1;
+    --accent-fill: #3fb5a5;
+    --accent-text: #062019;
+    --selected: #1d2a27;
+    --hover: #1a2220;
+    --ok: #5cc08c;
+    --warning: #e4b04c;
+    --error: #f0725f;
+    --run: #82acf4;
+    --danger: #f0725f;
+    --input-bg: #121514;
+    --shadow: 0 16px 40px rgb(0 0 0 / 55%);
   }
 }
 
@@ -65,31 +90,61 @@ a:hover {
 h2,
 h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
+}
+
+h3 {
+  font-size: 14px;
+}
+
+code,
+kbd,
+pre,
+.id {
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+
+kbd {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 0 4px;
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--dim);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  background: var(--surface);
 }
 
 button,
 .button {
   font: inherit;
   color: var(--text);
-  background: var(--panel-head);
-  border: 1px solid var(--border);
-  border-radius: 3px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
   padding: 4px 12px;
   cursor: pointer;
-  display: inline-block;
-  line-height: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 20px;
+  white-space: nowrap;
 }
 
 button:hover:not(:disabled),
 .button:hover {
-  border-color: var(--accent);
+  background: var(--hover);
+  border-color: var(--dim);
   text-decoration: none;
 }
 
 button:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: default;
 }
 
@@ -98,10 +153,30 @@ button.primary,
   background: var(--accent-fill);
   border-color: var(--accent-fill);
   color: var(--accent-text);
+  font-weight: 600;
+}
+
+button.primary:hover:not(:disabled),
+.button.primary:hover {
+  background: var(--accent-fill);
+  border-color: var(--text);
 }
 
 button.danger {
   color: var(--danger);
+}
+
+button.danger:hover:not(:disabled) {
+  border-color: var(--danger);
+}
+
+/* A square button whose label is one sign, its name in its aria-label. */
+button.icon {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  justify-content: center;
+  font-size: 16px;
 }
 
 input,
@@ -110,17 +185,17 @@ textarea {
   font: inherit;
   color: var(--text);
   background: var(--input-bg);
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  padding: 4px 6px;
-  line-height: 18px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  padding: 4px 8px;
+  line-height: 20px;
   width: 100%;
 }
 
 /* As tall as a button, so a row of fields and buttons lines up. */
 input:not([type="checkbox"], [type="radio"]),
 select {
-  height: 28px;
+  height: 30px;
 }
 
 input[type="checkbox"],
@@ -128,6 +203,7 @@ input[type="radio"] {
   width: auto;
   flex: none;
   margin: 0;
+  accent-color: var(--accent-fill);
 }
 
 /* A value shown but fixed reads as text, not as a box to type in. */
@@ -136,24 +212,29 @@ textarea:read-only,
 input:disabled,
 select:disabled,
 textarea:disabled {
-  color: var(--muted);
+  color: var(--dim);
   background: transparent;
 }
 
 input:focus,
 select:focus,
 textarea:focus,
-button:focus-visible {
+button:focus-visible,
+a:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
 }
 
+progress {
+  accent-color: var(--run);
+}
+
 .muted {
-  color: var(--muted);
+  color: var(--dim);
 }
 
 .pad {
-  padding: 12px;
+  padding: 12px 16px;
 }
 
 output.notice {
@@ -166,7 +247,7 @@ output.notice {
 }
 
 .loading {
-  color: var(--muted);
+  color: var(--dim);
   text-align: center;
   padding: 48px 12px;
 }
@@ -175,40 +256,61 @@ output.notice {
   flex: 1;
 }
 
-/* Shell */
+.count {
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+/* The console: the top bar over the fleet rail, the page and the running work. */
 
 .shell {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template:
+    "top top top" var(--top)
+    "rail main runs" 1fr
+    / var(--rail) minmax(0, 1fr) auto;
+  height: 100vh;
+}
+
+.shell-setup {
+  grid-template:
+    "top" var(--top)
+    "main" 1fr
+    / minmax(0, 1fr);
 }
 
 .topbar {
+  grid-area: top;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 6px 12px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border);
+  gap: 14px;
+  padding: 0 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
 }
 
 .brand {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--text);
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
+  width: calc(var(--rail) - 28px);
 }
 
 .brand img {
-  width: 1.4em;
-  height: 1.4em;
+  width: 22px;
+  height: 22px;
 }
 
 .user {
-  color: var(--muted);
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 12px;
 }
 
 .nav {
@@ -218,18 +320,45 @@ output.notice {
 
 .nav a {
   padding: 4px 10px;
-  border-radius: 3px;
-  color: var(--text);
-}
-
-.nav a[aria-current="page"] {
-  background: var(--row-hover);
+  border-radius: 6px;
+  color: var(--dim);
   font-weight: 600;
 }
 
+.nav a:hover {
+  color: var(--text);
+  background: var(--hover);
+  text-decoration: none;
+}
+
+.nav a[aria-current="page"] {
+  color: var(--text);
+  background: var(--selected);
+}
+
+/* The palette's button reads as a field to type in, which it opens. */
+button.go {
+  width: min(380px, 32vw);
+  justify-content: space-between;
+  color: var(--dim);
+  background: var(--surface-2);
+  border-color: var(--line);
+}
+
+.runs-toggle .dot {
+  margin-right: 2px;
+}
+
+.content,
+.rail,
+.runs {
+  scrollbar-width: thin;
+}
+
 .content {
-  padding: 12px;
-  flex: 1;
+  grid-area: main;
+  overflow: auto;
+  padding: 18px 22px 40px;
 }
 
 /* The page's content takes the focus after navigation; it is no control, so it shows no ring. */
@@ -237,124 +366,753 @@ output.notice {
   outline: none;
 }
 
-/* Panels */
+/* The fleet rail */
+
+.rail {
+  grid-area: rail;
+  overflow-y: auto;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  padding: 10px 0 24px;
+}
+
+.rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px 6px 16px;
+}
+
+.rail-head h2 {
+  font-size: 13px;
+  color: var(--dim);
+}
+
+.rail-needs h3 {
+  color: var(--error);
+}
+
+.rail-group ul,
+.runs ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.rail-item,
+.run {
+  display: grid;
+  grid-template-columns: 12px 1fr;
+  column-gap: 10px;
+  align-items: center;
+  padding: 5px 16px;
+  color: var(--text);
+  border-left: 2px solid transparent;
+}
+
+.rail-item:hover,
+.run:hover {
+  background: var(--hover);
+  text-decoration: none;
+}
+
+.rail-item[aria-current="page"] {
+  background: var(--selected);
+  border-left-color: var(--accent);
+}
+
+.rail-name,
+.run-title {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-name .ns {
+  color: var(--dim);
+  font-weight: 400;
+}
+
+.rail-why,
+.run-what {
+  grid-column: 2;
+  color: var(--dim);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-needs .rail-why {
+  color: var(--text);
+}
+
+.rail-note {
+  margin: 8px 16px;
+  color: var(--dim);
+  font-size: 13px;
+}
+
+/* The running work: beside the page on a wide screen, over it on a narrower one when asked for,
+   and folded away when nothing runs or the user folds it. */
+
+.runs {
+  grid-area: runs;
+  width: var(--runs);
+  overflow-y: auto;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  padding: 10px 0 24px;
+}
+
+.runs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px 6px 16px;
+}
+
+.runs-head h2 {
+  font-size: 13px;
+  color: var(--dim);
+}
+
+.run {
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+.run-what {
+  white-space: normal;
+}
+
+.rail-group h3,
+.runs-group h3 {
+  margin: 12px 16px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--dim);
+}
+
+.runs-failed h3,
+.run-error {
+  color: var(--error);
+}
+
+.runs-done .run-title,
+.runs-done .run-what {
+  color: var(--dim);
+}
+
+/* The first error stays readable in the column; the page the run links to has the rest. */
+.run-error {
+  grid-column: 2;
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+
+.shell.runs-folded .runs {
+  display: none;
+}
+
+@media (width < 1280px) {
+  .shell:not(.runs-shown) .runs {
+    display: none;
+  }
+
+  .shell.runs-shown .runs {
+    position: fixed;
+    top: var(--top);
+    right: 0;
+    bottom: 0;
+    z-index: 5;
+    box-shadow: var(--shadow);
+  }
+}
+
+@media (width >= 1280px) {
+  .shell:not(.runs-folded) .runs-toggle {
+    display: none;
+  }
+}
+
+@media (width < 900px) {
+  .shell {
+    grid-template:
+      "top" var(--top)
+      "main" 1fr
+      / minmax(0, 1fr);
+  }
+
+  .rail,
+  .brand ~ .go,
+  .user {
+    display: none;
+  }
+
+  .brand {
+    width: auto;
+  }
+}
+
+/* State: an icon of its own shape for each, so none relies on colour alone. */
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.status::before,
+.dot {
+  content: "";
+  flex: none;
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  background: currentcolor;
+  mask: var(--icon) center / contain no-repeat;
+}
+
+.dot {
+  width: 11px;
+  height: 11px;
+}
+
+.status-ok::before,
+.dot-ok {
+  --icon: var(--icon-ok);
+
+  color: var(--ok);
+}
+
+.status-error::before,
+.dot-error {
+  --icon: var(--icon-error);
+
+  color: var(--error);
+}
+
+.status-warning::before,
+.dot-warning {
+  --icon: var(--icon-warning);
+
+  color: var(--warning);
+}
+
+.status-progress::before,
+.status-deleting::before,
+.dot-progress,
+.dot-deleting {
+  --icon: var(--icon-progress);
+
+  color: var(--run);
+  animation: spin 1.2s linear infinite;
+}
+
+/* Deleting is no failure: a grey spinner. */
+.status-deleting::before,
+.dot-deleting {
+  color: var(--dim);
+}
+
+.status-idle::before,
+.dot-idle {
+  --icon: var(--icon-idle);
+
+  color: var(--dim);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status::before,
+  .dot {
+    animation: none;
+  }
+}
+
+/* Text only screen readers read, for what the page shows by colour or icon alone. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Pages and panels */
 
 .panel {
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: clip;
+}
+
+.panel + .panel {
+  margin-top: 16px;
 }
 
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  background: var(--panel-head);
-  border-bottom: 1px solid var(--border);
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
 }
 
 .toolbar h2 {
   display: flex;
   align-items: center;
+  gap: 10px;
+}
+
+/* A cluster's page: its name and facts, its actions, then its views as tabs. */
+
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px 24px;
+  margin-bottom: 14px;
+}
+
+.page-title {
+  flex: 1 1 360px;
+  min-width: 0;
+}
+
+.page-title h2 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 20px;
+}
+
+.page-title h2 .id {
+  font-size: 20px;
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 4px 0 0;
+  color: var(--dim);
+  font-size: 13px;
+}
+
+.page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.page-note {
+  margin: -6px 0 12px;
+}
+
+.views {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 16px;
+}
+
+.views a {
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
-}
-
-.columns {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-}
-
-.box {
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-.box h3 {
-  margin-bottom: 8px;
-}
-
-/* Values start where a form's controls do, so a summary lines up with the fields beside it. */
-.summary {
-  display: grid;
-  grid-template-columns: 180px 1fr;
-  gap: 4px 8px;
-  margin: 0;
-}
-
-.summary dt {
-  color: var(--muted);
-}
-
-.summary dd {
-  margin: 0;
-}
-
-.summary + .summary {
-  margin-top: 4px;
-}
-
-/* An object's page: its views in a menu on the left, as Proxmox VE shows a VM's. */
-
-.object {
-  display: grid;
-  grid-template-columns: 160px 1fr;
-  min-height: 300px;
-}
-
-.object-menu {
-  border-right: 1px solid var(--border);
-  background: var(--panel-head);
-  padding: 4px 0;
-}
-
-.object-menu a {
-  display: block;
-  padding: 6px 12px;
-  color: var(--text);
-  border-left: 3px solid transparent;
-}
-
-.object-menu a[aria-current="page"] {
-  background: var(--row-hover);
-  border-left-color: var(--accent);
+  padding: 8px 12px;
+  margin-bottom: -1px;
+  color: var(--dim);
   font-weight: 600;
+  border-bottom: 2px solid transparent;
+}
+
+.views a:hover {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.views a[aria-current="page"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.views kbd {
+  opacity: 0.8;
+}
+
+/* Staged changes stay in view while the views scroll, as an editor's unsaved buffer does. */
+.staged {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 8px 8px 8px 14px;
+  background: var(--surface);
+  border: 1px solid var(--warning);
+  border-left-width: 4px;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgb(16 24 20 / 8%);
+}
+
+.staged-effect {
+  color: var(--dim);
+}
+
+.staged-value {
+  display: block;
+  color: var(--warning);
+  font-weight: 600;
+}
+
+/* A run's first error stays above its steps, where it is read before anything else. */
+.pinned-error {
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--error) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--error) 50%, transparent);
+  border-left: 4px solid var(--error);
+  border-radius: 4px;
+}
+
+.pinned-error strong {
+  color: var(--error);
+}
+
+.pinned-error p {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.steps {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.step {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.step:last-child {
+  border-bottom: 0;
+}
+
+.step-waiting {
+  color: var(--dim);
+}
+
+.step-running .step-name {
+  font-weight: 600;
+}
+
+.step-state {
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.step-detail {
+  grid-column: 2 / -1;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.run-log h3 {
+  margin: 0 0 8px;
+}
+
+/* A plan sets each setting's value as it is beside the one it would be, so it takes more room. */
+.dialog:has(.grid.plan) {
+  width: min(920px, 96vw);
+}
+
+.grid.plan tbody th {
+  color: var(--text);
+  font-size: 13.5px;
+  white-space: nowrap;
+}
+
+.grid.plan td.plan-replaces {
+  color: var(--warning);
 }
 
 .object-view {
   min-width: 0;
 }
 
-/* The view's frame keeps its height; a rule under its last box would float halfway down. */
-.object-view > .box:last-child {
+.object-view > .box,
+.object-view > .panel,
+.object-view > form.box {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.object-view > * + * {
+  margin-top: 16px;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+}
+
+.box {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.object-view > .box {
+  border-bottom: 1px solid var(--line);
+}
+
+.box:last-child {
   border-bottom: none;
 }
 
-@media (width < 640px) {
-  .object {
-    grid-template-columns: 1fr;
-  }
+.object-view > .box:last-child {
+  border-bottom: 1px solid var(--line);
+}
 
-  .object-menu {
-    display: flex;
-    flex-wrap: wrap;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
+.box h3 {
+  margin-bottom: 10px;
+}
+
+/* Values start where a form's controls do, so a summary lines up with the fields beside it. */
+.summary {
+  display: grid;
+  grid-template-columns: 190px 1fr;
+  gap: 6px 12px;
+  margin: 0;
+}
+
+.summary dt {
+  color: var(--dim);
+}
+
+.summary dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.summary + .summary {
+  margin-top: 6px;
+}
+
+/* Where a cluster's machines run: a tile per Proxmox VE node. */
+
+.hosts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.host {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+  padding: 8px 10px 10px;
+  min-width: 0;
+}
+
+.host-empty {
+  border-style: dashed;
+  background: none;
+}
+
+.host-offline {
+  border-color: var(--error);
+}
+
+.host-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.host-name {
+  font-family: var(--mono);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-empty .host-name,
+.host-count {
+  color: var(--dim);
+}
+
+.host-count {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.host-offline .host-count {
+  color: var(--error);
+}
+
+.host-machines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.host-machine {
+  display: grid;
+  grid-template-columns: 12px 1fr auto;
+  align-items: center;
+  column-gap: 8px;
+  padding: 3px 4px;
+  border-radius: 4px;
+  color: var(--text);
+}
+
+.host-machine:hover {
+  background: var(--hover);
+  text-decoration: none;
+}
+
+.host-machine-name {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-machine-role {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+/* Grids */
+
+.grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.grid th {
+  text-align: left;
+  font-weight: 600;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.grid thead th {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.grid td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.grid tbody tr:last-child > * {
+  border-bottom: none;
+}
+
+.grid tbody tr:hover {
+  background: var(--hover);
+}
+
+.grid td.id,
+.grid td.id a {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.grid .number {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* A counted column is as wide as its figures; its heading wraps to fit them. */
+.grid thead th.number {
+  white-space: normal;
+  width: 1%;
+}
+
+/* A state's reason runs on beside it rather than squeezing into a column of a few words. */
+.grid td.state {
+  min-width: 180px;
+}
+
+.grid td.id .muted {
+  font-weight: 400;
 }
 
 .grid.options th {
-  width: 180px;
-  background: none;
-  font-weight: normal;
-  color: var(--muted);
+  width: 200px;
+  font-weight: 400;
+  font-size: 13.5px;
 }
 
-/* Every row as tall as one with its 28 px button, its label and value centred beside it. */
+/* Every row as tall as one with its button, its label and value centred beside it. */
 .grid.options th,
 .grid.options td {
-  height: calc(28px + 2 * 4px + 1px);
-  padding-top: 4px;
-  padding-bottom: 4px;
+  height: calc(30px + 2 * 6px + 1px);
+  padding-top: 6px;
+  padding-bottom: 6px;
   vertical-align: middle;
 }
 
@@ -370,38 +1128,9 @@ output.notice {
   vertical-align: middle;
 }
 
-/* Grids */
-
-.grid {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.grid th {
-  text-align: left;
-  font-weight: 600;
-  padding: 5px 8px;
-  border-bottom: 1px solid var(--border);
-  background: var(--panel-head);
-}
-
-.grid td {
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--border);
-  vertical-align: top;
-}
-
-.grid tbody tr:nth-child(even) {
-  background: var(--row-alt);
-}
-
-.grid tbody tr:hover {
-  background: var(--row-hover);
-}
-
 /* A shadow, not a border, so the row's text stays in line with the rows around it. */
 .grid tr.attention td:first-child {
-  box-shadow: inset 3px 0 0 var(--progress);
+  box-shadow: inset 3px 0 0 var(--warning);
 }
 
 .grid td.message,
@@ -410,93 +1139,29 @@ output.notice {
   word-break: break-word;
 }
 
-/* Status: an icon before plain text, as Proxmox VE's grids show it. The icons are images in the
-   stylesheet, which the content security policy allows where it would refuse inline styles. */
-.status {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 13px;
-  font-weight: normal;
-}
-
-.status::before {
-  content: "";
-  flex: none;
-  width: 12px;
-  height: 12px;
-  background-repeat: no-repeat;
-  background-size: 12px 12px;
-}
-
-.status-ok::before {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Ccircle cx='6' cy='6' r='6' fill='%231b7f2c'/%3E%3Cpath d='M3.2 6.2l1.9 1.9 3.8-4' stroke='%23fff' stroke-width='1.6' fill='none'/%3E%3C/svg%3E");
-}
-
-.status-error::before {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Ccircle cx='6' cy='6' r='6' fill='%23c9302c'/%3E%3Cpath d='M3.8 3.8l4.4 4.4M8.2 3.8l-4.4 4.4' stroke='%23fff' stroke-width='1.6'/%3E%3C/svg%3E");
-}
-
-.status-progress::before,
-.status-deleting::before {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Ccircle cx='6' cy='6' r='4.8' stroke='%23b0b0b0' stroke-width='1.8' fill='none'/%3E%3Cpath d='M6 1.2a4.8 4.8 0 0 1 4.8 4.8' stroke='%231f6fb2' stroke-width='1.8' fill='none'/%3E%3C/svg%3E");
-  animation: spin 1.2s linear infinite;
-}
-
-/* Deleting is no failure: a grey spinner. */
-.status-deleting::before {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Ccircle cx='6' cy='6' r='4.8' stroke='%23b0b0b0' stroke-width='1.8' fill='none'/%3E%3Cpath d='M6 1.2a4.8 4.8 0 0 1 4.8 4.8' stroke='%23707070' stroke-width='1.8' fill='none'/%3E%3C/svg%3E");
-}
-
-.status-idle::before {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Ccircle cx='6' cy='6' r='5' stroke='%23909090' stroke-width='1.6' fill='none'/%3E%3C/svg%3E");
-}
-
-.status-warning::before {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M6 .6L11.7 11.2H.3z' fill='%23d9a400'/%3E%3Cpath d='M6 4.2v3.5M6 8.6v1.3' stroke='%231f1f1f' stroke-width='1.5'/%3E%3C/svg%3E");
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .status::before {
-    animation: none;
-  }
-}
-
-/* Text only screen readers read, for what the page shows by colour or icon alone. */
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
+.grid.keys th {
+  width: 120px;
 }
 
 /* Forms */
 
 .field {
   display: grid;
-  grid-template-columns: 180px 1fr;
-  gap: 8px;
+  grid-template-columns: 190px 1fr;
+  gap: 10px;
   align-items: start;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
-/* Level with the text of the 28 px control beside it. */
+/* Level with the text of the 30 px control beside it. */
 .field label {
-  padding-top: 6px;
+  padding-top: 5px;
 }
 
 .hint {
-  color: var(--muted);
-  font-size: 12px;
-  margin-top: 2px;
+  color: var(--dim);
+  font-size: 12.5px;
+  margin-top: 3px;
 }
 
 .field.invalid input,
@@ -507,29 +1172,29 @@ output.notice {
 
 .field-error {
   color: var(--error);
-  font-size: 12px;
-  margin-top: 2px;
+  font-size: 12.5px;
+  margin-top: 3px;
 }
 
 .check {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
   margin: 8px 0;
 }
 
 .check:has(> input:disabled) {
-  color: var(--muted);
+  color: var(--dim);
 }
 
 /* A note on one choice sits under its words, not under the box or button before them. */
 .check + .hint {
-  margin: -6px 0 8px calc(13px + 6px);
+  margin: -6px 0 8px calc(13px + 8px);
 }
 
 fieldset.choices {
   border: none;
-  margin: 0 0 8px;
+  margin: 0 0 10px;
   padding: 0;
 }
 
@@ -539,7 +1204,7 @@ fieldset.choices legend {
 }
 
 fieldset.choices .check {
-  margin: 2px 0;
+  margin: 3px 0;
 }
 
 /* The choices sit closer together, so their notes need no pulling up. */
@@ -549,46 +1214,57 @@ fieldset.choices .check + .hint {
 
 .check.inline {
   display: inline-flex;
-  margin: 4px 12px 4px 0;
+  margin: 4px 14px 4px 0;
 }
 
 .box dl + h3 {
-  margin-top: 12px;
+  margin-top: 14px;
 }
 
 .actions {
   display: flex;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 8px;
   justify-content: flex-end;
-  margin-top: 12px;
+  margin-top: 14px;
 }
 
 .error {
   color: var(--error);
-  border: 1px solid var(--error);
-  padding: 6px 8px;
-  margin: 8px;
+  border: 1px solid color-mix(in srgb, var(--error) 50%, transparent);
+  border-left-width: 3px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--error) 7%, var(--surface));
+  padding: 8px 10px;
+  margin: 10px;
   white-space: pre-wrap;
+}
+
+.page > .error,
+.content > .error {
+  margin: 0 0 12px;
 }
 
 .dialog-body .error,
 .wizard .error,
 .box .error {
-  margin: 8px 0;
+  margin: 10px 0;
 }
 
 .warning {
-  border: 1px solid var(--progress);
-  border-left-width: 4px;
-  background: var(--panel);
-  padding: 6px 8px;
-  margin-bottom: 8px;
+  border: 1px solid color-mix(in srgb, var(--warning) 50%, transparent);
+  border-left-width: 3px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface));
+  padding: 8px 10px;
+  margin: 0 0 12px;
 }
 
 .group {
-  border: 1px solid var(--border);
-  margin: 8px 0;
-  padding: 8px 10px 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin: 10px 0;
+  padding: 10px 12px 0;
 }
 
 /* A fieldset without a box: one only there to switch its fields off together, or a dialog's only
@@ -603,7 +1279,7 @@ fieldset.choices .check + .hint {
 /* A box's fields start their controls where the fields around the box do: its label column gives
    up the box's border and left padding. */
 .group > .field {
-  grid-template-columns: calc(180px - 10px - 1px) 1fr;
+  grid-template-columns: calc(190px - 12px - 1px) 1fr;
 }
 
 /* Whatever opens a box, a note or a checkbox, starts where a field would, at the box's padding. */
@@ -614,7 +1290,7 @@ fieldset.choices .check + .hint {
 /* Fields keep their own gap below; a closing button needs one from the box's border. */
 .group > button:last-child,
 .group > .actions:last-child {
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .group legend {
@@ -629,15 +1305,17 @@ fieldset.choices .check + .hint {
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 16px;
 }
 
 /* Wide enough for Proxmox VE's longest realm name, "Linux PAM standard authentication (pam)". */
 .signin-panel {
-  width: 460px;
+  width: 480px;
   max-width: 100%;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  padding: 16px 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 22px 24px;
 }
 
 .signin .field {
@@ -647,29 +1325,37 @@ fieldset.choices .check + .hint {
 .tabs,
 .wizard-steps {
   display: flex;
-  gap: 0;
-  margin-bottom: 10px;
-  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
 }
 
 .tab {
-  border: 1px solid transparent;
-  border-bottom: none;
-  border-radius: 3px 3px 0 0;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
   background: none;
   margin-bottom: -1px;
+  padding: 8px 12px;
+  color: var(--dim);
+  font-weight: 600;
 }
 
-/* Bold would widen the tab and shift the ones after it at every step. */
+.tab:hover:not(:disabled) {
+  background: none;
+  color: var(--text);
+}
+
 .tab.active {
-  border-color: var(--border);
-  background: var(--panel);
+  color: var(--text);
+  border-bottom-color: var(--accent);
 }
 
 /* Wizard */
 
 .wizard {
-  padding: 10px 12px;
+  padding: 14px 16px;
   max-width: var(--form-width);
 }
 
@@ -680,11 +1366,13 @@ form.box > * {
 }
 
 details.advanced {
-  margin: 8px 0;
+  margin: 10px 0;
 }
 
 details.advanced > summary {
   cursor: pointer;
+  color: var(--dim);
+  font-weight: 600;
 }
 
 /* The frame closes round the wizard, instead of running on empty across the page. */
@@ -693,16 +1381,18 @@ details.advanced > summary {
 }
 
 .confirm {
-  background: var(--panel-head);
-  border: 1px solid var(--border);
-  padding: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
   overflow: auto;
   max-height: 420px;
+  font-size: 12.5px;
 }
 
 /* A key to copy whole: one selection, wrapped anywhere. */
 .key {
-  font-family: ui-monospace, monospace;
+  font-family: var(--mono);
   font-size: 12px;
   word-break: break-all;
   user-select: all;
@@ -710,32 +1400,39 @@ details.advanced > summary {
 }
 
 .log {
+  font-family: var(--mono);
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-word;
-  margin: 0 12px 12px;
+  margin: 0 16px 16px;
+  padding: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
 }
 
 /* Dialogs */
 
 .dialog {
   padding: 0;
-  border: 1px solid var(--border);
-  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
   color: var(--text);
-  width: min(640px, 92vw);
+  width: min(660px, 92vw);
+  box-shadow: var(--shadow);
 }
 
-.dialog::backdrop {
-  background: rgb(0 0 0 / 35%);
+.dialog::backdrop,
+.palette::backdrop {
+  background: rgb(0 0 0 / 40%);
 }
 
 .dialog-title {
   display: flex;
   align-items: center;
-  padding: 4px 6px 4px 12px;
-  background: var(--panel-head);
-  border-bottom: 1px solid var(--border);
+  padding: 10px 8px 10px 16px;
+  border-bottom: 1px solid var(--line);
 }
 
 .dialog-title h2 {
@@ -745,13 +1442,14 @@ details.advanced > summary {
 .dialog-close {
   border: none;
   background: none;
-  font-size: 18px;
-  line-height: 18px;
+  font-size: 20px;
+  line-height: 20px;
   padding: 2px 8px;
+  color: var(--dim);
 }
 
 .dialog-body {
-  padding: 12px;
+  padding: 16px;
 }
 
 /* A note that opens a dialog starts at the body's padding, as a field would. */
@@ -762,9 +1460,77 @@ details.advanced > summary {
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 6px;
-  padding: 8px 12px;
-  border-top: 1px solid var(--border);
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--line);
+}
+
+/* The palette: a field over a short list, at the top of the screen where the eye already is. */
+
+.palette {
+  margin: 12vh auto auto;
+  padding: 0;
+  width: min(620px, 92vw);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.palette input {
+  height: 48px;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  padding: 0 16px;
+  font-size: 16px;
+  background: transparent;
+}
+
+.palette input:focus {
+  outline: none;
+}
+
+.palette-list {
+  padding: 6px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.palette-list:empty {
+  display: none;
+}
+
+.palette-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.palette-option[aria-selected="true"] {
+  background: var(--selected);
+}
+
+.palette-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-kind {
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.palette-none {
+  margin: 0;
+  padding: 14px 16px;
+  color: var(--dim);
 }
 
 /* The health page */
@@ -772,12 +1538,12 @@ details.advanced > summary {
 .verdict {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin: 0 0 10px;
+  gap: 12px;
+  margin: 0 0 12px;
 }
 
 .verdict .status {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
 }
 
@@ -785,7 +1551,7 @@ details.advanced > summary {
    icon that says it without colour. */
 .tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 8px;
   margin: 0;
   padding: 0;
@@ -797,25 +1563,29 @@ details.advanced > summary {
   flex-direction: column;
   gap: 4px;
   height: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-left: 4px solid var(--border);
-  background: var(--panel-head);
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
   color: var(--text);
 }
 
 .tile:hover {
-  background: var(--row-hover);
+  background: var(--hover);
   text-decoration: none;
 }
 
 .tile-ok {
-  border-left-color: #1b7f2c;
+  border-left-color: var(--ok);
 }
 
-.tile-warning,
+.tile-warning {
+  border-left-color: var(--warning);
+}
+
 .tile-progress {
-  border-left-color: var(--progress);
+  border-left-color: var(--run);
 }
 
 .tile-error {
@@ -824,16 +1594,16 @@ details.advanced > summary {
 
 .tile-label,
 .tile-detail {
-  color: var(--muted);
+  color: var(--dim);
 }
 
 .tile-detail {
-  font-size: 12px;
+  font-size: 12.5px;
   overflow-wrap: anywhere;
 }
 
 .box h4 {
-  margin: 14px 0 6px;
+  margin: 16px 0 6px;
   font-size: 13px;
   font-weight: 600;
 }
@@ -842,7 +1612,7 @@ details.advanced > summary {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .section-head h3 {
@@ -852,9 +1622,9 @@ details.advanced > summary {
 .filter {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   margin-left: auto;
-  color: var(--muted);
+  color: var(--dim);
 }
 
 .filter select {
@@ -870,15 +1640,15 @@ details.advanced > summary {
 .use {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   white-space: nowrap;
 }
 
 .sparkline {
   flex: none;
-  width: 60px;
+  width: 64px;
   height: 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
 }
 
 .sparkline path {
@@ -890,28 +1660,30 @@ details.advanced > summary {
 
 .bar {
   flex: none;
-  width: 60px;
+  width: 64px;
   height: 8px;
 }
 
 /* Log lines keep their own breaks, so their dialog takes more of a wide screen. */
 .dialog:has(.pod-log) {
-  width: min(1000px, 96vw);
+  width: min(1040px, 96vw);
 }
 
 .pod-log {
   max-height: 60vh;
   overflow: auto;
-  margin: 8px 0 0;
-  padding: 8px;
-  background: var(--panel-head);
-  border: 1px solid var(--border);
+  margin: 10px 0 0;
+  padding: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
   white-space: pre;
+  font-size: 12px;
 }
 
 /* Commands to paste keep their own lines, so their dialog takes more of a wide screen too. */
 .dialog:has(.restore-steps) {
-  width: min(900px, 96vw);
+  width: min(920px, 96vw);
 }
 
 .restore-steps .steps {
@@ -920,7 +1692,7 @@ details.advanced > summary {
 }
 
 .restore-steps .steps p {
-  margin: 8px 0 4px;
+  margin: 10px 0 4px;
 }
 
 .restore-command {
@@ -928,8 +1700,9 @@ details.advanced > summary {
   max-height: 240px;
   overflow: auto;
   margin: 0;
-  padding: 8px;
-  background: var(--panel-head);
-  border: 1px solid var(--border);
+  padding: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
   white-space: pre;
 }
