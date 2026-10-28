@@ -94,9 +94,9 @@ load_balancer=${KUBEHENGE_E2E_LOAD_BALANCER:-metallb}
 SEAWEEDFS_VERSION=4.51
 SEAWEEDFS_SHA256=c03be37416a8ee672c77766e20b22a4e1430744c3af2668599a4b6eeaec14cee
 # etcdutl, which reads the etcd snapshots back.
-# renovate: datasource=github-releases depName=etcd-io/etcd
+# renovate: datasource=github-release-attachments depName=etcd-io/etcd
 ETCD_VERSION=v3.7.3
-ETCD_SHA256=3a3679bc51a4ee9d30bccea1da7cd4fe62c6fc1d2ca1255068d2c53bf3026135
+ETCD_SHA256=5dfa9cc3b3ce3b4b491fbcc2057d3daa166bcc6676f743fcd20f8e5760cb9775
 
 # shellcheck source=common.sh
 . "$(dirname "$0")/common.sh"
