@@ -4,6 +4,10 @@ Every release's changes, newest first. Versions follow [Semantic Versioning](htt
 
 ## [Unreleased]
 
+- When the installer removes a container whose interface failed to start or to reach Proxmox VE's API, it prints the interface's log first, which went with the container before. Its check of the new appliance verifies the appliance's certificate instead of skipping it, and `install.sh --help` lists every option.
+- `kubehenge template create` and `template refresh` refuse an empty `--node` before calling Proxmox VE.
+- The documentation says HA group labels are on by default, as they are, and moves the setup's opt-in settings to a page of their own ([install-settings.md](install-settings.md)). Troubleshooting covers failed installs, template builds, a changed Proxmox VE CA, clusters refused when applied with kubectl, and each warning event the controller writes.
+
 ## [0.3.1] - 2026-10-28
 
 - capmox, which creates the clusters' VMs, is built from a later commit of its main branch. A machine whose VM needs no configuration change is started instead of being reported ready while its VM stays off, and a transient error while attaching the bootstrap ISO is retried instead of failing the machine for good.
