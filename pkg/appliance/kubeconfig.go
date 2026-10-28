@@ -21,8 +21,8 @@ const (
 	interfaceSecret    = "kubehenge-interface-token" //nolint:gosec // a Secret's name, not a credential
 )
 
-// RootSecret is where Kubehenge's controller reads root@pam's password, under rootPasswordKey, for
-// the CSI plugin of clusters that take volume snapshots (the module's cluster_volume_snapshots).
+// RootSecret is where Kubehenge's controller reads root@pam's password, under rootPasswordKey, to
+// copy volumes for clusters that take volume snapshots (the module's cluster_volume_snapshots).
 const (
 	RootSecret      = "kubehenge-root-pam" //nolint:gosec // a Secret's name, not a credential
 	rootPasswordKey = "password"

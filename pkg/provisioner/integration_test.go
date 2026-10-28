@@ -931,8 +931,9 @@ func TestIntegrationChartSysAudit(t *testing.T) {
 }
 
 // Only a management cluster that lets clusters take volume snapshots names the controller the
-// Secret with root@pam's password, and offers them in the interface; the snapshot controller's
-// chart is the controller's in any case, pinned with its image.
+// Secret with root@pam's password and the image of the proxy beside the clusters' CSI plugins, and
+// offers them in the interface; the snapshot controller's chart is the controller's in any case,
+// pinned with its image.
 func TestIntegrationChartVolumeSnapshots(t *testing.T) {
 	t.Parallel()
 	for _, on := range []bool{false, true} {
@@ -964,6 +965,11 @@ func TestIntegrationChartVolumeSnapshots(t *testing.T) {
 		secret := strings.Contains(args, "--root-secret=kubehenge-root-pam")
 		if secret != on || strings.Contains(args, "--root-secret") != on || classes != len(classProviders) {
 			t.Errorf("volume snapshots %t: the controller gets the Secret: %t; %d classes", on, secret, classes)
+		}
+		// The proxy beside each cluster's CSI plugin runs from the controller's own image.
+		proxy := strings.Contains(args, "--csi-proxy-image=ghcr.io/kubehenge/kubehenge@sha256:")
+		if proxy != on || strings.Contains(args, "--csi-proxy-image") != on {
+			t.Errorf("volume snapshots %t: the controller gets the proxy's image: %t", on, proxy)
 		}
 	}
 }

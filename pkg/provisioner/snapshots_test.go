@@ -6,6 +6,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/luthermonson/go-proxmox"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -123,38 +125,59 @@ func TestVolumeSnapshotsRefusedAtAdmissionAndCreation(t *testing.T) {
 	}
 }
 
-func TestResourceSetSecretSignsTheCSIPluginInAsRoot(t *testing.T) {
+func TestResourceSetSecretProxiesTheCSIPlugin(t *testing.T) {
 	t.Parallel()
 	creds := Credentials{TokenID: "kubehenge.team-a.web@pve!cluster", TokenSecret: "s3cret", VolumeOwner: 4242, Region: "lab"} //nolint:gosec // test data
-	s, err := resourceSetSecret(cluster(), Endpoint{URL: "https://pve.example.org:8006", CA: "PEM"}, creds, "r00t")
+	s, err := resourceSetSecret(cluster(), Endpoint{URL: "https://pve.example.org:8006", CA: "PEM"}, creds, &Addons{VolumeSnapshots: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var token, root corev1.Secret
-	if err := yaml.UnmarshalStrict(s.Data["kubehenge-proxmox.yaml"], &token); err != nil {
+	if keys := slices.Sorted(maps.Keys(s.Data)); !slices.Equal(keys, []string{"kubehenge-proxmox-proxied.yaml", "kubehenge-proxmox.yaml", "kubehenge-volume-copies.yaml"}) {
+		t.Fatalf("the resource set's manifests %v", keys)
+	}
+	var proxied corev1.Secret
+	if err := yaml.UnmarshalStrict(s.Data["kubehenge-proxmox-proxied.yaml"], &proxied); err != nil {
 		t.Fatal(err)
 	}
-	if err := yaml.UnmarshalStrict(s.Data["kubehenge-proxmox-root.yaml"], &root); err != nil {
-		t.Fatal(err)
-	}
-	if keys := slices.Sorted(maps.Keys(root.StringData)); root.Namespace != "kube-system" || root.Name != "kubehenge-proxmox-root" || !slices.Equal(keys, []string{"csi.yaml"}) {
-		t.Errorf("root secret %s/%s keys %v", root.Namespace, root.Name, keys)
+	if keys := slices.Sorted(maps.Keys(proxied.StringData)); proxied.Namespace != "kube-system" || proxied.Name != "kubehenge-proxmox-proxied" || !slices.Equal(keys, []string{"csi.yaml"}) {
+		t.Errorf("proxied secret %s/%s keys %v", proxied.Namespace, proxied.Name, keys)
 	}
 	var cfg proxmoxConfig
-	if err := yaml.UnmarshalStrict([]byte(root.StringData["csi.yaml"]), &cfg); err != nil {
+	if err := yaml.UnmarshalStrict([]byte(proxied.StringData["csi.yaml"]), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	want := proxmoxCluster{URL: "https://pve.example.org:8006/api2/json", Username: "root@pam", Password: "r00t", Region: "lab"}
+	want := proxmoxCluster{URL: "http://127.0.0.1:8006/api2/json", TokenID: creds.TokenID, TokenSecret: creds.TokenSecret, Region: "lab"}
 	if cfg.Features.ControllerVMID != 4242 || len(cfg.Clusters) != 1 || cfg.Clusters[0] != want {
-		t.Errorf("root configuration %+v", cfg)
+		t.Errorf("proxied configuration %+v", cfg)
 	}
-	// The plugin refuses a configuration with both a token and a password.
-	if strings.Contains(root.StringData["csi.yaml"], "token") {
-		t.Errorf("the root configuration names a token:\n%s", root.StringData["csi.yaml"])
+
+	docs := strings.Split(strings.TrimPrefix(string(s.Data["kubehenge-volume-copies.yaml"]), "---\n"), "---\n")
+	if len(docs) != 3 {
+		t.Fatalf("the copy requests' namespace is %d objects, want the namespace, the Role and its binding:\n%s", len(docs), s.Data["kubehenge-volume-copies.yaml"])
 	}
-	for key, config := range token.StringData {
-		if strings.Contains(config, "r00t") || strings.Contains(config, "root@pam") {
-			t.Errorf("%s of the token's Secret holds root@pam's password", key)
+	var ns corev1.Namespace
+	var role rbacv1.Role
+	var binding rbacv1.RoleBinding
+	for i, into := range []any{&ns, &role, &binding} {
+		if err := yaml.UnmarshalStrict([]byte(docs[i]), into); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ns.Kind != "Namespace" || ns.Name != "kubehenge-volume-copies" {
+		t.Errorf("namespace %s %s", ns.Kind, ns.Name)
+	}
+	rule := rbacv1.PolicyRule{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get", "list", "create", "delete"}}
+	if role.Kind != "Role" || role.Namespace != "kubehenge-volume-copies" || len(role.Rules) != 1 || !reflect.DeepEqual(role.Rules[0], rule) {
+		t.Errorf("the proxy's Role %+v", role)
+	}
+	subject := rbacv1.Subject{Kind: "ServiceAccount", Namespace: "kube-system", Name: "proxmox-csi-plugin-controller"}
+	if binding.Kind != "RoleBinding" || binding.Namespace != "kubehenge-volume-copies" || binding.RoleRef.Name != role.Name ||
+		len(binding.Subjects) != 1 || binding.Subjects[0] != subject {
+		t.Errorf("the proxy's RoleBinding %+v", binding)
+	}
+	for key, manifest := range s.Data {
+		if strings.Contains(string(manifest), "root@pam") || strings.Contains(string(manifest), "password") {
+			t.Errorf("%s names root@pam or a password:\n%s", key, manifest)
 		}
 	}
 }
@@ -228,17 +251,15 @@ func TestReconcileSwitchesVolumeSnapshotsOnAndOff(t *testing.T) {
 	if err := kube.Get(ctx, client.ObjectKey{Namespace: "team-a", Name: "web-proxmox"}, wrapper); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(wrapper.Data["kubehenge-proxmox-root.yaml"]), "password: r00t\n") {
-		t.Errorf("the resource set carries no root configuration, or the password with its line end:\n%s", wrapper.Data["kubehenge-proxmox-root.yaml"])
+	for key, manifest := range wrapper.Data {
+		if strings.Contains(string(manifest), "r00t") {
+			t.Errorf("%s of the resource set holds root@pam's password", key)
+		}
 	}
-	version, csi, _ := proxyOf(t, kube, "web-proxmox-csi")
-	if !strings.HasPrefix(version, testCharts.CSINewest.Version+"@") {
-		t.Errorf("the CSI plugin's chart is %s, want the newest release", version)
+	if _, ok := wrapper.Data["kubehenge-proxmox-proxied.yaml"]; !ok {
+		t.Errorf("the resource set carries no proxied configuration: %v", slices.Sorted(maps.Keys(wrapper.Data)))
 	}
-	if lookup[string](t, csi, "existingConfigSecret") != "kubehenge-proxmox-root" || lookup[string](t, csi, "timeout") != "5m" ||
-		!lookup[bool](t, csi, "controller", "snapshotter", "enabled") {
-		t.Errorf("the CSI plugin's values do not take snapshots as root@pam: %v", csi)
-	}
+	checkProxiedCSI(t, kube)
 	_, controller, ok := proxyOf(t, kube, "web-snapshot-controller")
 	if !ok || !lookup[bool](t, controller, "installCRDs") || !lookup[bool](t, controller, "keepCRDs") {
 		t.Errorf("no snapshot controller with its CRDs: %v", controller)
@@ -258,10 +279,12 @@ func TestReconcileSwitchesVolumeSnapshotsOnAndOff(t *testing.T) {
 		t.Errorf("the VolumeSnapshotClass: %v", class)
 	}
 
-	root := &corev1.Secret{}
-	root.Namespace, root.Name = "kube-system", "kubehenge-proxmox-root"
-	if err := workload.Create(ctx, root); err != nil {
-		t.Fatal(err)
+	proxied := &corev1.Secret{Namespace: "kube-system", Name: "kubehenge-proxmox-proxied"}
+	requests := &corev1.Namespace{Name: "kubehenge-volume-copies"}
+	for _, o := range []client.Object{proxied, requests} {
+		if err := workload.Create(ctx, o); err != nil {
+			t.Fatal(err)
+		}
 	}
 	setVariable(t, kube, web, variableOf(csiVariable, `{}`))
 	if err := reconcile(t, r, web); err != nil {
@@ -270,23 +293,57 @@ func TestReconcileSwitchesVolumeSnapshotsOnAndOff(t *testing.T) {
 	if err := kube.Get(ctx, client.ObjectKeyFromObject(wrapper), wrapper); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := wrapper.Data["kubehenge-proxmox-root.yaml"]; ok {
-		t.Error("the resource set still carries the root configuration")
+	if keys := slices.Sorted(maps.Keys(wrapper.Data)); !slices.Equal(keys, []string{"kubehenge-proxmox.yaml"}) {
+		t.Errorf("the resource set still carries the proxy's manifests: %v", keys)
 	}
-	if err := workload.Get(ctx, client.ObjectKeyFromObject(root), root); err == nil {
-		t.Error("the workload cluster still holds the root configuration")
+	for _, o := range []client.Object{proxied, requests} {
+		if err := workload.Get(ctx, client.ObjectKeyFromObject(o), o); err == nil {
+			t.Errorf("the workload cluster still holds %s", o.GetName())
+		}
 	}
-	version, csi, _ = proxyOf(t, kube, "web-proxmox-csi")
+	checkDirectCSI(t, kube)
+	for _, name := range []string{"web-snapshot-class", "web-snapshot-controller"} {
+		if _, _, ok := proxyOf(t, kube, name); ok {
+			t.Errorf("%s is still there", name)
+		}
+	}
+}
+
+// checkProxiedCSI checks that web's CSI plugin is its newest release with the snapshot sidecar,
+// reaching Proxmox VE through the proxy beside it, and that its values name no root@pam.
+func checkProxiedCSI(t *testing.T, kube client.Client) {
+	t.Helper()
+	version, csi, _ := proxyOf(t, kube, "web-proxmox-csi")
+	if !strings.HasPrefix(version, testCharts.CSINewest.Version+"@") {
+		t.Errorf("the CSI plugin's chart is %s, want the newest release", version)
+	}
+	if lookup[string](t, csi, "existingConfigSecret") != "kubehenge-proxmox-proxied" || lookup[string](t, csi, "timeout") != "5m" ||
+		!lookup[bool](t, csi, "controller", "snapshotter", "enabled") {
+		t.Errorf("the CSI plugin's values do not take snapshots through the proxy: %v", csi)
+	}
+	if lookup[string](t, csi, "initContainers", 0, "image") != testCSIProxy ||
+		lookup[string](t, csi, "initContainers", 0, "restartPolicy") != "Always" ||
+		lookup[string](t, csi, "initContainers", 0, "args", 0) != "csi-proxy" ||
+		lookup[string](t, csi, "initContainers", 0, "args", 2) != "--proxmox-url=https://pve.example.org:8006" {
+		t.Errorf("the proxy beside the CSI plugin: %v", csi["initContainers"])
+	}
+	if raw, err := json.Marshal(csi); err != nil || strings.Contains(string(raw), "r00t") || strings.Contains(string(raw), "root@pam") {
+		t.Errorf("the CSI plugin's values name root@pam: %s %v", raw, err)
+	}
+}
+
+// checkDirectCSI checks that web's CSI plugin is its held release again, reaching Proxmox VE
+// directly with the cluster's token, without the snapshot sidecar, the proxy or the longer timeout.
+func checkDirectCSI(t *testing.T, kube client.Client) {
+	t.Helper()
+	version, csi, _ := proxyOf(t, kube, "web-proxmox-csi")
 	_, snapshots := lookup[map[string]any](t, csi, "controller", "snapshotter")["enabled"]
 	if !strings.HasPrefix(version, testCharts.CSI.Version+"@") || lookup[string](t, csi, "existingConfigSecret") != "kubehenge-proxmox" || snapshots {
 		t.Errorf("the CSI plugin did not go back to its token: %s %v", version, csi)
 	}
-	if _, has := csi["timeout"]; has {
-		t.Errorf("the CSI plugin keeps the longer timeout: %v", csi["timeout"])
-	}
-	for _, name := range []string{"web-snapshot-class", "web-snapshot-controller"} {
-		if _, _, ok := proxyOf(t, kube, name); ok {
-			t.Errorf("%s is still there", name)
+	for _, key := range []string{"timeout", "initContainers"} {
+		if _, has := csi[key]; has {
+			t.Errorf("the CSI plugin keeps its %s: %v", key, csi[key])
 		}
 	}
 }

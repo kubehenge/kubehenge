@@ -1315,15 +1315,11 @@ export interface SnapshotsOffer {
 }
 
 /**
- * snapshotsOffer is what the class, the storage and the user's own privileges make of a cluster's
- * choice of volume snapshots; canModifyPermissions is whether the user holds Permissions.Modify on
- * /, undefined when not known.
+ * snapshotsOffer is what the class and the storage make of a cluster's choice of volume snapshots.
+ * It takes no privilege of the user's own: Kubehenge copies only the cluster's own volumes, onto the
+ * storage the cluster already uses.
  */
-export function snapshotsOffer(
-  cls: ClusterClass | undefined,
-  storage: string | undefined,
-  canModifyPermissions: boolean | undefined,
-): SnapshotsOffer {
+export function snapshotsOffer(cls: ClusterClass | undefined, storage: string | undefined): SnapshotsOffer {
   const offered =
     cls?.annotations?.[volumeSnapshotsAnnotation] === "true" && cls.variables.some((v) => v.name === "csi");
   if (!cls || !offered) {
@@ -1336,12 +1332,6 @@ export function snapshotsOffer(
     return {
       offered,
       problem: `The CSI plugin takes volume snapshots only on storage local to each node (ZFS, LVM, LVM-thin, directory or btrfs), which storage ${storage} is not.`,
-    };
-  }
-  if (canModifyPermissions === false) {
-    return {
-      offered,
-      problem: "You do not hold Permissions.Modify on /, which giving the cluster's CSI plugin root@pam takes.",
     };
   }
   return { offered, problem: undefined };

@@ -173,7 +173,7 @@ func TestResourceSetSecret(t *testing.T) {
 	t.Parallel()
 	creds := Credentials{TokenID: "kubehenge.team-a.web@pve!cluster", TokenSecret: "s3cret", VolumeOwner: 4242, Region: "lab"} //nolint:gosec // test data
 	for _, insecure := range []bool{false, true} {
-		s, err := resourceSetSecret(cluster(), Endpoint{URL: "https://pve.example.org:8006", CA: "PEM", Insecure: insecure}, creds, "")
+		s, err := resourceSetSecret(cluster(), Endpoint{URL: "https://pve.example.org:8006", CA: "PEM", Insecure: insecure}, creds, &Addons{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -356,7 +356,10 @@ var testCharts = Charts{
 	},
 	FluxVersion:       "2.9.6",
 	PodSecurityExempt: []string{"kube-system", "node-exporter"},
+	CSIProxy:          testCSIProxy,
 }
+
+const testCSIProxy = "ghcr.io/kubehenge/kubehenge@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 func TestParseChart(t *testing.T) {
 	t.Parallel()

@@ -52,15 +52,14 @@ const cluster: Cluster = {
 const noProblems = new Map<FieldKey, string>();
 
 describe("volume snapshots", () => {
-  it("are offered where an administrator lets clusters take them, on node-local storage, to those who hold Permissions.Modify on /", () => {
+  it("are offered where an administrator lets clusters take them, on node-local storage", () => {
     expect([
-      snapshotsOffer(k3s, "local-zfs", true),
-      snapshotsOffer(k3s, "local-zfs", undefined),
-      snapshotsOffer({ ...k3s, annotations: {} }, "local-zfs", true),
-      snapshotsOffer({ ...k3s, variables: k3s.variables.slice(0, 1) }, "local-zfs", true),
-      snapshotsOffer(k3s, "", true).problem,
-      snapshotsOffer(k3s, "ceph", true).problem,
-      snapshotsOffer(k3s, "local", false).problem,
+      snapshotsOffer(k3s, "local-zfs"),
+      snapshotsOffer(k3s, "local"),
+      snapshotsOffer({ ...k3s, annotations: {} }, "local-zfs"),
+      snapshotsOffer({ ...k3s, variables: k3s.variables.slice(0, 1) }, "local-zfs"),
+      snapshotsOffer(k3s, "").problem,
+      snapshotsOffer(k3s, "ceph").problem,
     ]).toStrictEqual([
       { offered: true, problem: undefined },
       { offered: true, problem: undefined },
@@ -68,7 +67,6 @@ describe("volume snapshots", () => {
       { offered: false, problem: undefined },
       "Choose the cluster's storage first.",
       "The CSI plugin takes volume snapshots only on storage local to each node (ZFS, LVM, LVM-thin, directory or btrfs), which storage ceph is not.",
-      "You do not hold Permissions.Modify on /, which giving the cluster's CSI plugin root@pam takes.",
     ]);
   });
 
@@ -82,7 +80,7 @@ describe("volume snapshots", () => {
     });
     expect(
       Object.fromEntries(summary({ ...form, volumeSnapshots: true }, k3s, { snapshots: true }))["Volume snapshots"],
-    ).toBe("On, with the CSI plugin signed in as root@pam");
+    ).toBe("On, with Kubehenge copying the cluster's own volumes as root@pam");
     expect(Object.fromEntries(summary(form, k3s))).not.toHaveProperty("Volume snapshots");
   });
 
@@ -116,16 +114,16 @@ describe("volume snapshots", () => {
       />,
     );
     const box = screen.getByLabelText("Take volume snapshots");
-    expect(box).toHaveAccessibleDescription(/holds the whole Proxmox VE cluster/u);
+    expect(box).toHaveAccessibleDescription(/password never enters the cluster/u);
     await userEvent.setup({ delay: null }).click(box);
     expect(set).toHaveBeenCalledWith("volumeSnapshots", true);
   });
 });
 
-function openOptions(classes: ClusterClass[], canModifyPermissions: boolean, shown: Cluster = cluster): () => unknown {
+function openOptions(classes: ClusterClass[], shown: Cluster = cluster): () => unknown {
   window.history.replaceState(null, "", "/clusters/clusters/web/options");
   const calls = fakeServer({
-    "GET /api/session": { body: { user: "dev@pve", csrf: "c", canModifyPermissions } },
+    "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
     "GET /api/clusters/clusters/web": { body: shown },
     "GET /api/clusters": { body: [shown] },
     "GET /api/classes": { body: classes },
@@ -138,7 +136,7 @@ function openOptions(classes: ClusterClass[], canModifyPermissions: boolean, sho
 
 describe("a cluster's volume snapshots", () => {
   it("are switched on under Options, keeping the plugin's release", async () => {
-    const sent = openOptions([k3s], true);
+    const sent = openOptions([k3s]);
     const user = userEvent.setup({ delay: null });
     const heading = await screen.findByRole("rowheader", { name: "Volume snapshots" });
     expect(heading.closest("tr")).toHaveTextContent("Off");
@@ -155,17 +153,17 @@ describe("a cluster's volume snapshots", () => {
     );
   });
 
-  it("cannot be switched on without Permissions.Modify on /", async () => {
-    openOptions([k3s], false);
+  it("cannot be switched on where the cluster's storage is shared", async () => {
+    openOptions([k3s], { ...cluster, variables: { storage: "ceph", csi: { datastoreAllocate: true } } });
     const user = userEvent.setup({ delay: null });
     await user.click(await screen.findByRole("button", { name: "Edit volume snapshots" }));
     const dialog = screen.getByRole("dialog", { name: "Volume snapshots" });
-    await expect(within(dialog).findByText(/You do not hold Permissions.Modify on \//u)).resolves.toBeInTheDocument();
+    await expect(within(dialog).findByText(/which storage ceph is not/u)).resolves.toBeInTheDocument();
     expect(within(dialog).getByLabelText("Take volume snapshots")).toBeDisabled();
   });
 
   it("stay switchable off after an administrator withdraws them", async () => {
-    const sent = openOptions([{ ...k3s, annotations: {} }], true, {
+    const sent = openOptions([{ ...k3s, annotations: {} }], {
       ...cluster,
       variables: { storage: "local-zfs", csi: { volumeSnapshots: true } },
     });
@@ -181,7 +179,7 @@ describe("a cluster's volume snapshots", () => {
   });
 
   it("are not shown where an administrator has not let clusters take them", async () => {
-    openOptions([{ ...k3s, annotations: {} }], true);
+    openOptions([{ ...k3s, annotations: {} }]);
     await screen.findByRole("rowheader", { name: "Placement" });
     await expect(screen.findByRole("rowheader", { name: "Volume snapshots" }, { timeout: 200 })).rejects.toThrow(
       /Unable to find/u,

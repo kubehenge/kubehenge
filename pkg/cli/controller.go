@@ -65,6 +65,9 @@ const (
 	// talosUpgradeInterval is how soon a Talos node's upgrade starts after the one before, or after
 	// its node came back.
 	talosUpgradeInterval = 30 * time.Second
+	// volumeCopyInterval is how soon a volume copy asked for starts, which a CSI plugin's call waits
+	// on.
+	volumeCopyInterval = 3 * time.Second
 )
 
 // controllerOptions are the controller command's flags.
@@ -79,6 +82,7 @@ type controllerOptions struct {
 	csiChart          string
 	csiNewestChart    string
 	snapshotChart     string
+	csiProxyImage     string
 	ciliumChart       string
 	calicoChart       string
 	headlampChart     string
@@ -215,9 +219,10 @@ func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 
 // grantFlags are those that let clusters' tokens hold more than their pools: Datastore.Allocate
 // for the CSI plugin's newest release, Sys.Audit on / for the cloud controller manager's HA group
-// labels; and that let their CSI plugins sign in as root@pam for volume snapshots.
+// labels; and that let the controller copy their volumes as root@pam for volume snapshots.
 func (o *controllerOptions) grantFlags(f *pflag.FlagSet) {
-	f.StringVar(&o.r.VolumeSnapshots.RootSecret, "root-secret", "", "Secret in the class namespace holding root@pam's password under the key password, with which the CSI plugin of each cluster asking for volume snapshots signs in; empty to let no cluster take them")
+	f.StringVar(&o.r.VolumeSnapshots.RootSecret, "root-secret", "", "Secret in the class namespace holding root@pam's password under the key password, with which the controller makes the volume copies of each cluster asking for volume snapshots; empty to let no cluster take them")
+	f.StringVar(&o.csiProxyImage, "csi-proxy-image", "", "the image, as <repository>@sha256:<digest>, of the proxy beside the CSI plugin's controller in clusters that take volume snapshots, which runs kubehenge csi-proxy; needed with --root-secret")
 	f.StringVar(&o.snapshotChart, "snapshot-controller-chart", "", "the volume snapshot controller's chart, with its CRDs and the VolumeSnapshotClass, for clusters that take volume snapshots, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.settings.SysAuditGroup, "sys-audit-group", "", "Proxmox VE group holding Sys.Audit on / that the user of each cluster asking for the cloud controller manager's HA group labels joins; empty to let no cluster join it")
 	f.StringVar(&o.csiNewestChart, "csi-newest-chart", "", "the CSI plugin's newest release, for clusters whose token holds Datastore.Allocate on their storage, as <repository>/<name>:<version>@sha256:<digest>")
@@ -365,6 +370,31 @@ func (o *controllerOptions) addReclaimer(mgr manager.Manager, conn *pve.Config, 
 	if err := mgr.Add(reclaimer); err != nil {
 		return fmt.Errorf("the reclaimer: %w", err)
 	}
+	return o.addVolumeCopier(mgr, conn, remotes)
+}
+
+// addVolumeCopier adds what makes the volume copies of clusters that take volume snapshots, signed
+// in as root@pam, where the management cluster lets them.
+func (o *controllerOptions) addVolumeCopier(mgr manager.Manager, conn *pve.Config, remotes *provisioner.Remotes) error {
+	if o.r.VolumeSnapshots.RootSecret == "" {
+		return nil
+	}
+	accounts, err := pve.NewAccounts(pve.Config{URL: conn.URL, CAFile: conn.CAFile, Insecure: conn.Insecure})
+	if err != nil {
+		return fmt.Errorf("the volume copier: %w", err)
+	}
+	copier := &provisioner.VolumeCopier{
+		Client:          mgr.GetClient(),
+		ClassNamespace:  o.r.ClassNamespace,
+		VolumeSnapshots: o.r.VolumeSnapshots,
+		Accounts:        accounts,
+		Remotes:         remotes,
+		Events:          mgr.GetEventRecorder("kubehenge"),
+		Interval:        volumeCopyInterval,
+	}
+	if err := mgr.Add(copier); err != nil {
+		return fmt.Errorf("the volume copier: %w", err)
+	}
 	return nil
 }
 
@@ -435,6 +465,11 @@ func (o *controllerOptions) parseCharts() error {
 		}
 	}
 	var err error
+	if o.r.VolumeSnapshots.RootSecret != "" {
+		if o.r.Charts.CSIProxy, err = provisioner.ParseCSIProxyImage(o.csiProxyImage); err != nil {
+			return fmt.Errorf("--csi-proxy-image: %w", err)
+		}
+	}
 	if o.r.Charts.CalicoImages, err = provisioner.ParseCalicoImages(o.calicoImages); err != nil {
 		return fmt.Errorf("--calico-images: %w", err)
 	}

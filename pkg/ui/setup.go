@@ -290,9 +290,9 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 	writeJSON(w, http.StatusAccepted, a.Current())
 }
 
-// checkRootPassword signs in as root@pam with the password, as the CSI plugin will: with the
-// password alone, which Proxmox VE accepts only while root@pam has no second factor. Wrong guesses
-// are limited as wrong passphrases are.
+// checkRootPassword signs in as root@pam with the password, as the controller will to copy volumes:
+// with the password alone, which Proxmox VE accepts only while root@pam has no second factor. Wrong
+// guesses are limited as wrong passphrases are.
 func (s *Server) checkRootPassword(w http.ResponseWriter, r *http.Request, u user, password string) bool {
 	key := "root-password:" + u.ticket.Username
 	if !s.limiter.allow(key) {
@@ -310,7 +310,7 @@ func (s *Server) checkRootPassword(w http.ResponseWriter, r *http.Request, u use
 		return false
 	case challenge != nil:
 		writeError(w, http.StatusUnprocessableEntity,
-			"Volume snapshots: root@pam has a second factor, and the CSI plugin signs in with the password alone; remove root@pam's second factor in Proxmox VE first")
+			"Volume snapshots: root@pam has a second factor, and Kubehenge's controller signs in with the password alone; remove root@pam's second factor in Proxmox VE first")
 		return false
 	}
 	s.Log.Warn("root@pam's password given for volume snapshots", "user", u.ticket.Username)

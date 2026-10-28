@@ -218,7 +218,7 @@ func TestSetupWithProxmoxHANeedsSysConsole(t *testing.T) {
 	}
 }
 
-// root@pam's password is checked by signing in with it alone, as the CSI plugin will, before any
+// root@pam's password is checked by signing in with it alone, as the controller will, before any
 // run starts; a stored one serves while volume snapshots stay on.
 func TestSetupChecksRootPassword(t *testing.T) {
 	t.Parallel()

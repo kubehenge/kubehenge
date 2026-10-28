@@ -3,7 +3,7 @@ import { useEffect, useId, useState, type JSX } from "react";
 import { api } from "./api";
 import { csiOffer, snapshotsOffer, type CSIOffer, type SnapshotsOffer } from "./create-form";
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, useChange, usePrivilege } from "./ui";
+import { Dialog, ErrorBox, useChange } from "./ui";
 import { flag, record, text } from "./values";
 
 /** csiOn reads whether the cluster runs the plugin's newest release. */
@@ -149,9 +149,9 @@ export function SnapshotsField({
       </label>
       <div className="hint" id={hint}>
         The CSI plugin takes VolumeSnapshots, restores them into new volumes and clones volumes. Proxmox VE lets only
-        root@pam copy a volume, so the plugin signs in as root@pam instead of with the cluster&apos;s token: whoever
-        takes over the cluster or reads its Proxmox VE Secret holds the whole Proxmox VE cluster. Only on storage local
-        to each node: ZFS, LVM, LVM-thin, directory or btrfs.
+        root@pam copy a volume, so Kubehenge makes each copy as root@pam once it has checked that both volumes are the
+        cluster&apos;s own; root@pam&apos;s password never enters the cluster. Only on storage local to each node: ZFS,
+        LVM, LVM-thin, directory or btrfs.
       </div>
       {refused && (
         <p className={checked ? "field-error" : "hint"} id={reason} role={checked ? "alert" : undefined}>
@@ -165,7 +165,6 @@ export function SnapshotsField({
 /** useSnapshotsOffer reads whether an existing cluster may take volume snapshots, and what stands in the way. */
 export function useSnapshotsOffer(c: Cluster): SnapshotsOffer {
   const [offer, setOffer] = useState<SnapshotsOffer>({ offered: false, problem: undefined });
-  const can = usePrivilege("canModifyPermissions");
   const storage = text(c.variables["storage"]);
   const className = c.class;
   useEffect(() => {
@@ -176,7 +175,6 @@ export function useSnapshotsOffer(c: Cluster): SnapshotsOffer {
           snapshotsOffer(
             classes.find((x) => x.name === className),
             storage,
-            can,
           ),
         );
       } catch {
@@ -185,7 +183,7 @@ export function useSnapshotsOffer(c: Cluster): SnapshotsOffer {
       }
     }
     void load();
-  }, [className, storage, can]);
+  }, [className, storage]);
   return offer;
 }
 

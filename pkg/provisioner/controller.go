@@ -76,7 +76,7 @@ type Reconciler struct {
 	// SysAuditGroup is the Proxmox VE group holding Sys.Audit on / that a cluster's user joins for
 	// the cloud controller manager's HA group labels; empty when no cluster may.
 	SysAuditGroup string
-	// VolumeSnapshots is what lets a cluster's CSI plugin take volume snapshots as root@pam.
+	// VolumeSnapshots is what lets a cluster's CSI plugin take volume snapshots.
 	VolumeSnapshots VolumeSnapshots
 	// HostKeys reads an SSH server's host keys as known_hosts lines; unset, from the server itself.
 	HostKeys func(ctx context.Context, address string) (string, error)
@@ -161,12 +161,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 	addons.CSINewest = len(access.DatastoreAllocate) > 0
-	rootPassword, err := r.rootPassword(ctx, cluster)
-	if err != nil {
+	if addons.VolumeSnapshots, err = r.volumeSnapshotsOn(ctx, cluster); err != nil {
 		return ctrl.Result{}, err
 	}
-	addons.VolumeSnapshots = rootPassword != ""
-	addonWaiting, err := r.applyAddons(ctx, cluster, creds, &addons, rootPassword)
+	addons.copyProxy = copyProxy{image: r.Charts.CSIProxy, endpoint: r.Endpoint}
+	addonWaiting, err := r.applyAddons(ctx, cluster, creds, &addons)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -188,7 +187,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // afterTheRest does what waits on other clusters or on the workload cluster's own API, however long
 // that takes, so that nothing else of this cluster waits with it: removing Rancher, which waits on
 // every cluster registered with it, removing Istio, which waits on the cluster's workloads,
-// removing volume snapshots, which deletes root@pam's configuration in the cluster, linking the
+// removing volume snapshots, which deletes the CSI plugin's proxy in the cluster, linking the
 // cluster's Cluster Mesh peers, what its certificates and its load balancer need in the cluster,
 // its GitOps engine's repository and removal, and the target its RKE2 or k3s servers upload their
 // own etcd snapshots to. It reports whether any of it waits.
@@ -461,12 +460,12 @@ func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.C
 // applyAddons applies what the cluster gets installed: the Secrets of its ClusterResourceSet, the
 // set itself and the HelmChartProxies of its charts, and removes those switched off. It reports
 // whether an add-on's installation or removal waits on another.
-func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster, creds Credentials, addons *Addons, rootPassword string) (bool, error) {
+func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster, creds Credentials, addons *Addons) (bool, error) {
 	storage, err := variable[string](cluster, "storage")
 	if err != nil {
 		return false, err
 	}
-	resources, err := resourceSetSecret(cluster, r.Endpoint, creds, rootPassword)
+	resources, err := resourceSetSecret(cluster, r.Endpoint, creds, addons)
 	if err != nil {
 		return false, err
 	}

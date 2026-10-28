@@ -194,12 +194,13 @@ never below its distribution's documented minimum for a node.
           default: false
           description: >-
             Take VolumeSnapshots of the cluster's persistent volumes, restore them and clone
-            volumes. The plugin copies volumes through a Proxmox VE method that only root@pam may
-            call, so the cluster's CSI plugin signs in to Proxmox VE as root@pam: whoever takes over
-            the cluster or reads its Proxmox VE Secret holds the whole Proxmox VE cluster. Only
-            where Kubehenge's administrator has stored root@pam's password, and on storage local to
-            each node (ZFS, LVM, LVM-thin, directory or btrfs). Off, the plugin uses the cluster's
-            own token again and the snapshot components go.
+            volumes. Proxmox VE lets only root@pam copy a volume, so the plugin asks Kubehenge's
+            controller for each copy through a proxy beside it, and the controller makes it as
+            root@pam once it has checked that both volumes are the cluster's own; root@pam's
+            password never enters the cluster. Only where Kubehenge's administrator has stored
+            root@pam's password, and on storage local to each node (ZFS, LVM, LVM-thin, directory
+            or btrfs). Off, the plugin reaches Proxmox VE directly with the cluster's token again
+            and the snapshot components go.
 - name: ccm
   required: false
   schema:

@@ -141,10 +141,12 @@ proxmox:
   # token needs User.Modify on /access/groups/<group>. Set, every cluster has the labels unless it
   # switches them off; empty, no cluster may have them.
   sysAuditGroup: ""
-  # Secret in the release namespace holding root@pam's password (key password), with which the CSI
-  # plugin of each cluster that takes volume snapshots (its csi variable's volumeSnapshots) signs
-  # in: the plugin copies volumes through a method only root@pam may call. Written by the
-  # appliance, never by this chart. Empty: no cluster may take them.
+  # Secret in the release namespace holding root@pam's password (key password), with which the
+  # controller copies volumes for each cluster that takes volume snapshots (its csi variable's
+  # volumeSnapshots): Proxmox VE lets only root@pam copy a volume. The password stays in the
+  # management cluster; the cluster's CSI plugin asks for each copy through a proxy beside it, run
+  # from the controller's image, and the controller copies only the cluster's own volumes. Written
+  # by the appliance, never by this chart. Empty: no cluster may take them.
   volumeSnapshots:
     rootSecret: ""
   # Whether the controller restores clusters' etcd from their snapshots itself, running the restore

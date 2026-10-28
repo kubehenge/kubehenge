@@ -4,6 +4,8 @@ Every release's changes, newest first. Versions follow [Semantic Versioning](htt
 
 ## [Unreleased]
 
+- Volume snapshots no longer put `root@pam`'s password into the clusters that take them. The CSI plugin keeps the cluster's own token and asks for each volume copy through a proxy beside it; Kubehenge's controller makes the copy as `root@pam` from the management cluster, only for the cluster's own volumes on its own storage, one at a time and at most 60 an hour for each cluster, and logs each. A snapshot of a large volume now turns ready once its copy is whole instead of failing after 4 minutes, and switching volume snapshots on no longer takes `Permissions.Modify` on `/`.
+
 ## [0.3.1] - 2026-10-28
 
 - capmox, which creates the clusters' VMs, is built from a later commit of its main branch. A machine whose VM needs no configuration change is started instead of being reported ready while its VM stays off, and a transient error while attaching the bootstrap ISO is retried instead of failing the machine for good.

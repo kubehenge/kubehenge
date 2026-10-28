@@ -18,6 +18,8 @@ import (
 	"github.com/luthermonson/go-proxmox"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -657,6 +659,49 @@ func TestReclaimLeavesAnAttachedVolume(t *testing.T) {
 	}
 	if !slices.Equal(f.volumes["a/local"], []string{"local:4242/vm-4242-pvc-1.raw"}) {
 		t.Errorf("volumes left %v; want only the attached one", f.volumes["a/local"])
+	}
+}
+
+func TestReclaimDeletesTheVolumesOfDeletedSnapshots(t *testing.T) {
+	t.Parallel()
+	f := newFakePVE("a", map[string][]string{"a/local": {
+		"local:4242/vm-4242-snapshot-1.raw", "local:4242/vm-4242-snapshot-2.raw", "local:4242/vm-4242-snapshot-3.raw",
+	}})
+	pve := serve(t, f)
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, storagev1.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	content := snapshotContentList
+	content.Kind = "VolumeSnapshotContent"
+	scheme.AddKnownTypeWithName(content, &unstructured.Unstructured{})
+	scheme.AddKnownTypeWithName(snapshotContentList, &unstructured.UnstructuredList{})
+	snapshot := func(name, policy string, deleted bool) *unstructured.Unstructured {
+		u := &unstructured.Unstructured{Object: map[string]any{
+			"spec":   map[string]any{"driver": csiDriver, "deletionPolicy": policy},
+			"status": map[string]any{"snapshotHandle": "lab/a/local/4242/vm-4242-" + name + ".raw"},
+		}}
+		u.SetGroupVersionKind(content)
+		u.SetName(name)
+		u.SetFinalizers([]string{"snapshot.storage.kubernetes.io/volumesnapshotcontent-bound-protection"})
+		if deleted {
+			u.SetDeletionTimestamp(&metav1.Time{Time: time.Now()})
+		}
+		return u
+	}
+	workload := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		snapshot("snapshot-1", "Delete", true), snapshot("snapshot-2", "Delete", false), snapshot("snapshot-3", "Retain", true),
+	).Build()
+	r := &Reclaimer{Connect: func(string) (*proxmox.Client, error) { return pve, nil }}
+
+	creds := Credentials{TokenID: webNames.TokenID(), TokenSecret: "s3cret", VolumeOwner: 4242, VolumeOwnerNode: "a"}
+	if err := r.reclaimIn(context.Background(), cluster(), creds, workload); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"local:4242/vm-4242-snapshot-2.raw", "local:4242/vm-4242-snapshot-3.raw"}; !slices.Equal(f.volumes["a/local"], want) {
+		t.Errorf("volumes left %v; want %v", f.volumes["a/local"], want)
 	}
 }
 

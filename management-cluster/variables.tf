@@ -349,7 +349,7 @@ variable "cluster_sys_audit" {
 }
 
 variable "cluster_volume_snapshots" {
-  description = "Let each cluster choose volume snapshots, restores and clones of its persistent volumes. The Proxmox VE CSI plugin copies volumes through a method only root@pam may call (no API token passes), so the CSI plugin of a cluster that chooses them signs in to Proxmox VE as root@pam, and whoever takes over that cluster or reads its Proxmox VE Secret holds the whole Proxmox VE cluster. The password is no variable: Kubehenge's controller reads it from the Secret kubehenge-root-pam (key password) in the kubehenge-system namespace, which Kubehenge's appliance writes; root@pam must have no second factor. Only on storage local to each node (ZFS, LVM, LVM-thin, directory or btrfs)."
+  description = "Let each cluster choose volume snapshots, restores and clones of its persistent volumes. The Proxmox VE CSI plugin copies volumes through a method only root@pam may call (no API token passes), so Kubehenge's controller makes each copy as root@pam for the cluster, after checking that both volumes are the cluster's own; root@pam's password stays in the management cluster and never enters a workload cluster. The password is no variable: Kubehenge's controller reads it from the Secret kubehenge-root-pam (key password) in the kubehenge-system namespace, which Kubehenge's appliance writes; root@pam must have no second factor. Only on storage local to each node (ZFS, LVM, LVM-thin, directory or btrfs)."
   type        = bool
   default     = false
   nullable    = false

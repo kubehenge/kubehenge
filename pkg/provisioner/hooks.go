@@ -81,7 +81,7 @@ type Hooks struct {
 	Now  func() time.Time
 	// SysAuditGroup is the Proxmox VE group holding Sys.Audit on /; empty when no cluster may join it.
 	SysAuditGroup string
-	// VolumeSnapshots is what lets a cluster's CSI plugin take volume snapshots as root@pam.
+	// VolumeSnapshots is what lets a cluster's CSI plugin take volume snapshots.
 	VolumeSnapshots VolumeSnapshots
 }
 

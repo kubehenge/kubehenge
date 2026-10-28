@@ -408,7 +408,7 @@ export function setupFieldProblems(
   // Switched on again, the password stored with the first switch-on stays unless another is given.
   if (f.clusterVolumeSnapshots && was?.clusterVolumeSnapshots !== true && !filled(f.rootPassword)) {
     p.rootPassword =
-      "Give root@pam's password, which the CSI plugins of clusters taking volume snapshots sign in with.";
+      "Give root@pam's password, with which Kubehenge copies volumes for clusters taking volume snapshots.";
   }
   if (passphraseShort(f.passphrase)) {
     p.passphrase = `The passphrase needs at least ${minPassphrase} characters.`;
@@ -723,7 +723,9 @@ function optInRows(s: ManagementSettings): [string, string][] {
     ],
     [
       "Volume snapshots",
-      s.clusterVolumeSnapshots === true ? "Clusters may take them, with their CSI plugin signed in as root@pam" : "Off",
+      s.clusterVolumeSnapshots === true
+        ? "Clusters may take them, with Kubehenge copying their volumes as root@pam"
+        : "Off",
     ],
   ];
 }
@@ -1401,10 +1403,10 @@ function VolumeSnapshotsChoice({
       </label>
       <p className="muted" id={hint}>
         The CSI plugin copies volumes for snapshots, restores and clones through a Proxmox VE method that only root@pam
-        may call, with a password and without a second factor; no API token can. A cluster that chooses volume snapshots
-        gets root@pam&apos;s password in its CSI plugin&apos;s configuration, so whoever takes over that cluster or
-        reads that Secret holds the whole Proxmox VE cluster. The password is kept in the management cluster, never on
-        the appliance. Switching this off removes it, and clusters go back to their own tokens.
+        may call, with a password and without a second factor; no API token can. Kubehenge&apos;s controller makes each
+        copy a cluster asks for as root@pam, once it has checked that both volumes are that cluster&apos;s own, so the
+        password never enters a cluster. It is kept in the management cluster, never on the appliance. Switching this
+        off removes it, and clusters stop taking volume snapshots.
       </p>
       {form.clusterVolumeSnapshots && (
         <Field
