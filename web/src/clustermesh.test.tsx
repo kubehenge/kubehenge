@@ -7,7 +7,7 @@ import { AddOnsStep } from "./AddOnsStep";
 import { App } from "./App";
 import { newForm, type FieldKey, type Form } from "./create-form";
 import { NetworkStep } from "./CreateSteps";
-import { fakeServer } from "./fake-server";
+import { applyStaged, fakeServer } from "./fake-server";
 import type { Cluster, ClusterClass } from "./types";
 
 const cluster = (namespace: string, name: string, variables: Record<string, unknown>): Cluster => ({
@@ -71,6 +71,7 @@ describe("a Cluster Mesh", () => {
     await user.click(within(dialog).getByRole("checkbox", { name: "api" }));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: { clusterMesh: { enabled: true, peers: ["api", "db"] } },
     });

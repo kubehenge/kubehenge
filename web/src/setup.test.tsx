@@ -516,15 +516,19 @@ describe("setup", () => {
       },
     };
     fakeServer(routes);
+    const user = userEvent.setup({ delay: null });
     const { unmount } = render(<App />);
+    const pages = await screen.findByRole("navigation", { name: "Administration's pages" });
+    await user.click(within(pages).getByRole("link", { name: "Appliance" }));
     await expect(screen.findByRole("heading", { name: "Proxmox VE API" })).resolves.toBeInTheDocument();
+    expect(window.location.pathname).toBe("/administration/appliance");
     expect(screen.getByText(/Certificate verification is off/u)).toBeInTheDocument();
     expect(screen.getByText("sh install.sh --upgrade --ctid 105 --proxmox-ca <file>")).toBeInTheDocument();
     unmount();
 
     routes["GET /api/setup"] = { body: { appliance: true, ready: true, allowed: true } };
     render(<App />);
-    await expect(screen.findByRole("heading", { name: "Management cluster" })).resolves.toBeInTheDocument();
+    await expect(screen.findByRole("heading", { name: "Repair access" })).resolves.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Proxmox VE API" })).not.toBeInTheDocument();
   });
 

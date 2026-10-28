@@ -149,17 +149,47 @@ Sums up every setting by name; **Request** below it shows what the interface sen
 
 Kubehenge's controller first gives the cluster its Proxmox VE pool, user, token and the VM that will own its persistent volumes; only then does Cluster API clone the VMs. The cluster shows **Provisioning** until it is available.
 
+## Finding your way
+
+Every page shows the fleet down its left side, grouped by where each cluster stands, each with why in a few words:
+
+- **Needs you:** something failed and waits for someone: a failed Talos upgrade, a failed machine, a cluster Cluster API reports failed, or one still not available an hour after it was created. So does a cluster whose [health page](#the-cluster-page) finds trouble, such as an API server that does not answer, a node that is not ready or a pod that keeps crashing; the line names the worst of it.
+- **Running:** a change is under way: a cluster being created, upgraded, rolled out, scaled or deleted, or an add-on still being installed.
+- **Healthy:** nothing is going on and its health page finds nothing; the line under the name says what it runs.
+
+Each entry opens the view that says more: the health page for what it found, the machines for a rollout. The health pages are read for the whole fleet at most every 30 seconds.
+
+Down the right side of a wide window, **Runs** follows the work that goes on by itself once started: the same changes to clusters, and each cluster's etcd snapshots and restores and its backups and restores, each with how far it has come. Those who may set up the management cluster also see its applies, the template builds and refreshes, and the appliance's upgrades. A run that failed stays there for a day with the first error it reported; one that went well, for an hour. It folds away with **›** or `R`; in a narrower window **Running** in the top bar shows it.
+
+Each run opens a page of its own: what it does and on which cluster, who started it and how long it has taken, the first error pinned at the top, and its steps, each done, under way or waiting. A change [applied here](#staged-changes) is a run too, kept for a day, in place of the cluster's line under **Running**: accepted by the API server, then the control-plane machines or the workers it replaces, counted as the new ones are ready and the old ones gone, or the machines it adds or removes, then the cluster settling once its topology has taken the change in and it is available. An etcd restore shows its phases; the management cluster's applies and the template builds show the end of their log.
+
+**Go to or run…** in the top bar, or `Ctrl K` (`⌘ K` on a Mac), finds any cluster, any of its views, a page or an action by a few letters of its name: `db opt` finds the options of `db`. Outside fields, single keys work too, and `?` lists them:
+
+| Key | Does |
+| --- | --- |
+| `/` | the same as `Ctrl K` |
+| `C` | the clusters |
+| `N` | a new cluster |
+| `A` | Administration, for those who may open it |
+| `[`, `]` | the cluster before or after the open one, in the fleet's order, on the same view |
+| `1` to `5` | the open cluster's Summary, Health, Machines, Backups and Options |
+| `R` | shows or folds away the running work |
+
 ## The cluster page
 
-The buttons along the top act on the whole cluster: **Scale**, **Upgrade**, **Kubeconfig**, **Headlamp** and **Delete**. **Kubeconfig** and **Headlamp** appear once the cluster is available (Kubeconfig for those with `Sys.Modify` on its pool, Headlamp for clusters in the interface's namespaces); without `VM.Allocate` on its pool, or while it is being deleted, the others are disabled and the page says why. The menu on the left switches between its views, as Proxmox VE's does for a VM:
+The buttons beside the cluster's name act on the whole cluster: **Scale**, **Upgrade**, **Kubeconfig**, **Headlamp** and **Delete**. **Kubeconfig** and **Headlamp** appear once the cluster is available (Kubeconfig for those with `Sys.Modify` on its pool, Headlamp for clusters in the interface's namespaces); without `VM.Allocate` on its pool, or while it is being deleted, the others are disabled and the page says why. The tabs under the name switch between its views:
 
-- **Summary:** status, distribution, Kubernetes version, API endpoint, pod and service ranges, ready control-plane nodes and workers, with autoscaled pools as `md-0: 2 of 0 to 5, autoscaled`, Proxmox VE pool, namespace, who created it when, the last automatic upgrade, and for kubeadm, RKE2 and k3s which build of their VM template the nodes run, when they next move to a newer one and when they last did ([Node image refresh](#node-image-refresh)), and for Talos the release the nodes run, the one new machines boot first when it differs, the node being upgraded and the last upgrade ([Talos upgrades](#talos-upgrades)).
+- **Summary:** first the cluster's machines laid out by the Proxmox VE node their VMs run on, control planes first, each with its state; the other nodes you may see follow empty, as places new machines may go, and the machines whose node you may not see come last. It carries the Machines view's warning when one node runs more than one control-plane VM. Then its status, distribution, Kubernetes version, API endpoint, pod and service ranges, ready control-plane nodes and workers, with autoscaled pools as `md-0: 2 of 0 to 5, autoscaled`, Proxmox VE pool, namespace, who created it when, the last automatic upgrade, and for kubeadm, RKE2 and k3s which build of their VM template the nodes run, when they next move to a newer one and when they last did ([Node image refresh](#node-image-refresh)), and for Talos the release the nodes run, the one new machines boot first when it differs, the node being upgraded and the last upgrade ([Talos upgrades](#talos-upgrades)).
 - **Health:** whether the cluster is healthy, changing, degraded or unreachable, with tiles for the control plane (and etcd, on kubeadm), workers, node pressure, unwell pods, add-ons and machine health checks; then what needs attention, most serious first, each linking to its details. Below come the nodes (ready, pressure, cordons and taints, what their pods ask for, and the VM's CPU over the last hour and its memory, as far as you may see the VMs), the pods that are not well (crash loops, images that do not pull, pods that cannot be scheduled, containers killed for memory), volume claims still waiting, the add-ons' Helm releases, the worker pools, the control plane's and the health checks' conditions, the last hour's warnings from inside the cluster and from Cluster API, and last the cluster's own conditions. Those with `Sys.Modify` on the cluster's pool also get **Logs** on each unwell pod: the last 60 lines of a container, from its last run when it has not run since. With the shared Headlamp running, each pod also links to its page there. The page reads inside clusters of the interface's namespaces only; for others it shows what Cluster API knows.
 - **Machines:** each node's role, status, phase, version, addresses, age, and the Proxmox VE node its VM runs on, as far as you may see the cluster's VMs. When one Proxmox VE node runs more than one of the control-plane VMs, the page warns and says what losing that node would cost; migrating one of them in Proxmox VE to a node of its own fixes it.
 - **Backups:** the cluster's backups and restores, with **Back up now** and **Restore** ([Back up and restore](#back-up-and-restore)).
 - **Options:** the pod network, CIS hardening, placement, Headlamp, monitoring, logs, backups, certificates, the autoscaler ([below](#autoscaling)), pod security, Istio, Cluster Mesh (on a cluster that runs Cilium), GitOps, Rancher, automatic upgrades and identity providers, each with **Edit** (**Remove** for Rancher on the cluster that runs it), disabled for those who may not change the cluster (the pod network and CIS hardening are fixed). A change of placement applies to the VMs created after it, by scaling up, an upgrade or a replacement; those running stay where they are. Nodes the cluster has that you cannot see are listed too, and may be kept.
 
 The status reads **Provisioning**, **Available**, **Upgrading** or **Reconciling** while a change rolls out, **Deleting**, or **Failed**. A cluster deleted while its page is open says so.
+
+### Staged changes
+
+A cluster's settings change in two steps. **Save** in a dialog stages the change: the API server checks it with those staged before it, as it would make them, so a change it refuses shows its reason in the dialog, and nothing changes in the cluster yet. A bar above the views then counts what is staged and says what applying it does to the machines, and **Options** shows each staged value under the one in force. A dialog opened again starts from what is staged. **Review plan** lists each setting as it is and as it would be, and whether it replaces no machine, adds or removes machines, or replaces the control-plane machines, the workers or every machine, one at a time; **Apply** makes the changes together, as one change of the cluster. **Discard** drops them. Scaling, upgrading, Talos upgrades and every setting under **Options** are staged this way; deleting the cluster, backups, restores and snapshots run at once.
 
 ## Scale
 
@@ -198,7 +228,7 @@ The nodes of kubeadm, RKE2 and k3s clusters are clones of a VM template of their
 
 The cluster's **Summary** shows the build the nodes run, when they next move and to which build, and the last move. **Options**, **Edit** beside Automatic upgrades, switches it off for the cluster (**Move the nodes to new template builds**), which leaves them on their build until it is switched on again; with it on and Kubernetes upgrades off, the window still applies. Talos nodes take their updates by upgrading Talos instead ([below](#talos-upgrades)).
 
-The administrator switches the weekly build on or off and sets its day and time on the Administration page; it is on by default.
+The administrator switches the weekly build on or off and sets its day and time under **Administration**, **Templates**; it is on by default.
 
 ## Talos upgrades
 
@@ -336,7 +366,7 @@ The ACME server is Let's Encrypt's, or its staging directory with `acme.staging`
 The credential comes from one of three places, the first that applies:
 
 1. **`dns01.existingSecret`**: a Secret you create in the workload cluster's `cert-manager` namespace, with the credential under the key `token` (Akamai's under `clientToken`, `clientSecret` and `accessToken`). Kubehenge never sees it.
-2. **`dns01.sharedCredential: true`**: the DNS-01 credential an administrator stored for every cluster on the Administration page. Taking it needs `Sys.Modify` ([Who may do what](#who-may-do-what)), since it reaches every zone it was made for.
+2. **`dns01.sharedCredential: true`**: the DNS-01 credential an administrator stored for every cluster under **Administration**, **Certificates**. Taking it needs `Sys.Modify` ([Who may do what](#who-may-do-what)), since it reaches every zone it was made for.
 3. **The cluster's own**, typed in when creating the cluster or under **Options**. The interface keeps it in the Secret `<cluster>.dns01` beside the Cluster and never shows it again.
 
 Kubehenge's controller copies the stored credential into the `cert-manager` namespace of the workload cluster (`kubehenge-dns01`) and replaces the copy, or removes it, as soon as the credential is stored again or removed. A cluster without a credential gets a `NoDNS01Credential` event, and its certificates wait.
@@ -497,7 +527,7 @@ An administrator can let cluster creators choose among more namespaces than `clu
 
 Clusters are Kubernetes objects in the management cluster, so they can be created and changed with kubectl, or kept in Git with any GitOps tool.
 
-Get the management cluster's admin kubeconfig from the Administration page (**Repair access**, **Download admin kubeconfig**, with the state passphrase), or with `tofu output -raw kubeconfig` if you applied it with Terraform/OpenTofu. Whoever holds it controls every cluster: Proxmox VE privileges do not apply to kubectl.
+Get the management cluster's admin kubeconfig under **Administration**, **Appliance** (**Repair access**, **Download admin kubeconfig**, with the state passphrase), or with `tofu output -raw kubeconfig` if you applied it with Terraform/OpenTofu. Whoever holds it controls every cluster: Proxmox VE privileges do not apply to kubectl.
 
 ### A Cluster
 

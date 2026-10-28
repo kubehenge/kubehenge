@@ -1,20 +1,17 @@
 import { useEffect, type JSX } from "react";
 
+import { adminPath, adminViews, type AdminView } from "./admin-views";
+import { AdminPage } from "./AdminPages";
 import { api } from "./api";
-import { ApplianceUpgrades } from "./ApplianceUpgrades";
-import { SharedDNS01 } from "./Certificates";
-import { Credentials } from "./Credentials";
 import { ManagementBehind } from "./ManagementUpgrade";
-import { RemoveManagement } from "./RemoveManagement";
-import { ManagementCluster } from "./Setup";
-import { Templates } from "./Templates";
+import { Link } from "./router";
 import { ErrorBox, pollIdle, pollRunning, usePoll } from "./ui";
 
-// Administration is the appliance's own page for those who may set it up: Kubehenge's upgrades,
-// repair access, VM templates, the DNS-01 credential for every cluster, the management cluster's
-// settings and removal. One poll of the setup status serves them all, so they agree on whether a
-// run is going on.
-export function Administration({ onGone }: { onGone: () => void }): JSX.Element {
+// Administration is the appliance's own pages for those who may set it up: the management cluster's
+// settings and removal, Kubehenge's upgrades and repair access, VM templates, and the DNS-01
+// credential for every cluster. One poll of the setup status serves them all, so they agree on
+// whether a run is going on.
+export function Administration({ view, onGone }: { view: AdminView; onGone: () => void }): JSX.Element {
   const {
     data: status,
     error,
@@ -37,9 +34,20 @@ export function Administration({ onGone }: { onGone: () => void }): JSX.Element 
     );
   }
   const running = status.job?.state === "running";
-  const management = <ManagementCluster status={status} reload={reload} />;
   return (
-    <>
+    <section className="page">
+      <div className="page-head">
+        <div className="page-title">
+          <h2>Administration</h2>
+        </div>
+      </div>
+      <nav className="views" aria-label="Administration's pages">
+        {adminViews.map((v) => (
+          <Link key={v.path} to={adminPath(v.path)} current={view === v.path}>
+            {v.label}
+          </Link>
+        ))}
+      </nav>
       <ErrorBox message={error} />
       <ManagementBehind
         status={status}
@@ -47,41 +55,17 @@ export function Administration({ onGone }: { onGone: () => void }): JSX.Element 
           void reload();
         }}
       />
-      {/* A run going on is what the page is about until it ends, whoever started it. */}
-      {running && management}
-      <section className="panel columns">
-        <ApplianceUpgrades />
-        <Credentials running={running} />
-      </section>
-      {status.proxmoxInsecure === true && (
-        <section className="panel">
-          <h3>Proxmox VE API</h3>
-          <p>
-            Certificate verification is off: the appliance and the clusters reach the Proxmox VE API without checking
-            its certificate, as the appliance was installed with <code>--proxmox-insecure</code>. To check it against a
-            CA, run{" "}
-            <code>
-              sh install.sh --upgrade --ctid {status.applianceVMID ?? "<appliance ID>"} --proxmox-ca &lt;file&gt;
-            </code>{" "}
-            in the shell of the Proxmox VE node, then apply the management cluster again.
-          </p>
-        </section>
+      {running && view !== "" && (
+        <p className="page-note">
+          {status.job?.kind === "remove"
+            ? "The management cluster is being removed"
+            : "The management cluster is being applied"}
+          : <Link to="/runs/management-cluster">follow the run</Link>.
+        </p>
       )}
-      <section className="panel">
-        <Templates />
-      </section>
-      <section className="panel">
-        <SharedDNS01 />
-      </section>
-      {!running && management}
-      <section className="panel">
-        <RemoveManagement
-          running={running}
-          onStarted={() => {
-            void reload();
-          }}
-        />
-      </section>
-    </>
+      <div className="object-view">
+        <AdminPage view={view} status={status} running={running} reload={reload} />
+      </div>
+    </section>
   );
 }

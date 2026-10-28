@@ -200,9 +200,9 @@ func healthWorkload(now time.Time) *fake.Clientset {
 	return fake.NewClientset(node("one-cp-a", true, true), worker, crashing, pending, well, warning("w1", 3), warning("w2", 4), normal, old)
 }
 
-func healthHarness(t *testing.T) (*harness, *fakeWorkloads) {
+func healthHarness(t *testing.T, more ...client.Object) (*harness, *fakeWorkloads) {
 	t.Helper()
-	h := newHarness(t, healthCluster(time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC))...)
+	h := newHarness(t, append(healthCluster(time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)), more...)...)
 	workloads := &fakeWorkloads{kube: healthWorkload(h.clock), readyz: "[+]ping ok\n[-]etcd failed: reason withheld\nreadyz check failed\n"}
 	h.server.ConnectWorkload = workloads.connect
 	h.accounts.members = []pve.Member{
@@ -350,6 +350,61 @@ func TestHealthReadOnceForEveryViewer(t *testing.T) {
 	// Read again, on the connection kept for the same token.
 	if lists != 2 || len(workloads.connected()) != 1 || workloads.connected()[0] != "health-token" {
 		t.Errorf("after %v: %d reads, connections %v", healthFresh, lists, workloads.connected())
+	}
+}
+
+func TestFleetHealthSumsUpTheClustersTheUserSees(t *testing.T) {
+	t.Parallel()
+	two := cluster("default", "two")
+	two.UID = "uid-two"
+	h, workloads := healthHarness(t, two)
+	lists := 0
+	var mu sync.Mutex
+	workloads.kube.PrependReactor("list", "nodes", func(k8stesting.Action) (bool, runtime.Object, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		lists++
+		return false, nil, nil
+	})
+	fleet := func(user string) []fleetHealthView {
+		t.Helper()
+		b := h.browser()
+		b.signIn(user)
+		rec := b.do("GET", "/api/fleet/health", "")
+		expect(t, rec, http.StatusOK)
+		var v []fleetHealthView
+		if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+
+	viewer := fleet("viewer@pve")
+	if len(viewer) != 1 || viewer[0].Name != "one" {
+		t.Fatalf("viewer's fleet = %+v, want cluster one alone", viewer)
+	}
+	one := viewer[0]
+	if one.Verdict != verdictDegraded || len(one.Attention) != fleetHealthItems || one.More == 0 {
+		t.Errorf("one = %+v, want degraded with its %d worst items and a count of the rest", one, fleetHealthItems)
+	}
+	if one.Attention[0].Severity != severityError {
+		t.Errorf("first item %+v, want the worst", one.Attention[0])
+	}
+	if names := []string{fleet("admin@pve")[0].Name, fleet("admin@pve")[1].Name}; !slices.Equal(names, []string{"one", "two"}) {
+		t.Errorf("admin's fleet = %v", names)
+	}
+
+	// The fleet takes a read up to fleetHealthFresh old, where the health page reads again.
+	h.clock = h.clock.Add(healthFresh + time.Second)
+	fleet("viewer@pve")
+	if lists != 1 {
+		t.Errorf("%d reads of cluster one after %v, want the fleet to keep the first", lists, healthFresh)
+	}
+	b := h.browser()
+	b.signIn("viewer@pve")
+	readHealthView(t, b)
+	if lists != 2 {
+		t.Errorf("%d reads of cluster one, want the health page to read it again", lists)
 	}
 }
 

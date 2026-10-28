@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
 import { addonMemory, fieldProblems, newForm, request, summary } from "./create-form";
-import { fakeServer } from "./fake-server";
+import { applyStaged, fakeServer } from "./fake-server";
 import { GitOpsFields, gitOpsOf, gitOpsProblems, gitOpsVariable, newGitOps, type GitOpsChoice } from "./GitOps";
 import type { Cluster, ClusterClass } from "./types";
 
@@ -162,6 +162,7 @@ describe("a cluster's GitOps options", () => {
     await user.selectOptions(within(dialog).getByLabelText("Access"), "deployKey");
     await user.click(save);
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
     expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: {
         gitops: {
@@ -197,6 +198,7 @@ describe("a cluster's GitOps options", () => {
     await user.selectOptions(within(dialog).getByLabelText("GitOps"), "");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
     expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toMatchObject({
       variables: { gitops: { enabled: false, engine: "flux" } },
     });
