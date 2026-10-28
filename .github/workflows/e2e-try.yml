@@ -4,8 +4,10 @@ name: e2e try
 # One try at an end-to-end test (e2e-lane.yml), on a runner of its own, or handed back for the next
 # try when the runner's KVM lacks pause-loop exiting. Without it a vCPU spinning on a lock whose
 # holder lost its CPU keeps spinning, so guests that outnumber the runner's CPUs starve each other,
-# whatever their sizes. A runner is assigned at random, so the next try likely gets one that has
-# it; the last try runs wherever it lands, with restarts reported instead of failing.
+# whatever their sizes. A runner that loads Proxmox VE's image several times slower than the others
+# is handed back too: its guests run as slowly, past the tests' timeouts. A runner is assigned at
+# random, so the next try likely gets a sound one; the last try runs wherever it lands, with
+# restarts reported instead of failing.
 on:
   workflow_call:
     inputs:
@@ -40,7 +42,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 120
     outputs:
-      handed-back: ${{ steps.host.outputs.handed-back }}
+      handed-back: ${{ steps.host.outputs.handed-back || steps.load.outputs.handed-back }}
     steps:
       - name: Host
         id: host
@@ -88,11 +90,25 @@ jobs:
           path: ${{ runner.temp }}/pve-image.tar.zst
           key: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-${{ github.run_id }}
           restore-keys: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-
+      # Sound runners load it in 10 to 20 seconds, whatever their CPU.
       - name: Load Proxmox VE's image
+        id: load
         if: env.E2E_RUN == 'true' && steps.pve-cache.outputs.cache-matched-key != ''
+        env:
+          LAST: ${{ inputs.last }}
         run: |
+          start=$(date +%s)
           zstd -dc "$RUNNER_TEMP/pve-image.tar.zst" | docker load -q
           echo KUBEHENGE_E2E_PVE_BUILT=1 >> "$GITHUB_ENV"
+          took=$(($(date +%s) - start))
+          echo "loaded in ${took} s"
+          if [ "${took}" -gt 40 ] && [ "$LAST" = true ]; then
+            echo KUBEHENGE_E2E_RESTARTS=report >> "$GITHUB_ENV"
+          elif [ "${took}" -gt 40 ]; then
+            echo "handed back for the next try: the runner is slow"
+            echo E2E_RUN=false >> "$GITHUB_ENV"
+            echo handed-back=true >> "$GITHUB_OUTPUT"
+          fi
       - name: Tools
         if: env.E2E_RUN == 'true'
         run: |

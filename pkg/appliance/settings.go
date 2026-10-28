@@ -70,9 +70,9 @@ type Settings struct {
 	// TemplateRefresh is the weekly build of the node OS VM templates; unset, it runs with the
 	// module's defaults.
 	TemplateRefresh *TemplateRefresh `json:"templateRefresh,omitempty"`
-	// ClusterSysAudit lets a cluster choose the cloud controller manager's HA group labels, whose
-	// token then holds Sys.Audit on /.
-	ClusterSysAudit bool `json:"clusterSysAudit,omitempty"`
+	// ClusterSysAudit gives each cluster the cloud controller manager's HA group labels unless the
+	// cluster switches them off, its token then holding Sys.Audit on /; unset, it is on.
+	ClusterSysAudit *bool `json:"clusterSysAudit,omitempty"`
 	// ClusterVolumeSnapshots lets a cluster take volume snapshots, whose CSI plugin then signs in as
 	// root@pam with the password the appliance keeps in the management cluster.
 	ClusterVolumeSnapshots bool `json:"clusterVolumeSnapshots,omitempty"`
@@ -105,6 +105,12 @@ type TemplateRefresh struct {
 
 // RefreshWeekdays are the days the template refresh may run on, as the module names them.
 var RefreshWeekdays = []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+
+// GivesClusterSysAudit tells whether the settings let clusters hold Sys.Audit on / for their HA group
+// labels.
+func (s *Settings) GivesClusterSysAudit() bool {
+	return s.ClusterSysAudit == nil || *s.ClusterSysAudit
+}
 
 // RefreshesTemplates tells whether the settings have the templates built again every week.
 func (s *Settings) RefreshesTemplates() bool {

@@ -9,7 +9,6 @@ import {
   csiOffer,
   csiProblems,
   fieldProblems,
-  haGroupsProblems,
   snapshotsOffer,
   snapshotsProblems,
   newForm,
@@ -33,7 +32,7 @@ import {
   type Step,
 } from "./create-form";
 import { GeneralStep, IdentityStep, MachinesStep, NetworkStep, useClassTalos } from "./CreateSteps";
-import { haGroupsOffer, offersHA, useHARules } from "./Placement";
+import { offersHA, offersHAGroups, useHARules } from "./Placement";
 import { navigate } from "./router";
 import type { Bridge, Cluster, ClusterClass, PveNode, Storage, Versions } from "./types";
 import { Dialog, ErrorBox, errorMessage, filled, sole, usePrivilege } from "./ui";
@@ -75,7 +74,6 @@ export function CreateCluster({
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [nodes, setNodes] = useState<PveNode[]>([]);
   const rules = useHARules();
-  const canAudit = usePrivilege("canAudit");
   const canModifyPermissions = usePrivilege("canModifyPermissions");
   const [step, setStep] = useState<Step>("General");
   const [error, setError] = useState<string>();
@@ -191,7 +189,7 @@ export function CreateCluster({
   const haOffered = offersHA(cls, usableStorages, form.storage);
   const csi = csiOffer({ cls, storages: usableStorages, storage: form.storage, clusters });
   const snapshots = snapshotsOffer(cls, form.storage, canModifyPermissions);
-  const haGroups = haGroupsOffer(cls, canAudit);
+  const haGroups = offersHAGroups(cls);
 
   const chooseClass = (name: string): void => {
     const c = classes.find((x) => x.name === name);
@@ -214,7 +212,6 @@ export function CreateCluster({
     ...fieldProblems(step, form, cls),
     ...csiProblems(step, form, csi),
     ...snapshotsProblems(step, form, snapshots),
-    ...haGroupsProblems(step, form, haGroups),
   };
   const open = Object.values(byField);
   const shown = (k: FieldKey): string | undefined => (attempted.has(step) || touched.has(k) ? byField[k] : undefined);
@@ -360,7 +357,7 @@ export function CreateCluster({
                   ha: haOffered,
                   csi: csi.offered,
                   snapshots: snapshots.offered,
-                  haGroups: haGroups.offered,
+                  haGroups,
                 }).map(([k, v]) => (
                   <Fragment key={k}>
                     <dt>{k}</dt>

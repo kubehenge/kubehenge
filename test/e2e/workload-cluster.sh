@@ -32,9 +32,10 @@
 #   KUBEHENGE_E2E_LOAD_BALANCER_ADDRESSES (comma-separated, unused, on the nodes' network and
 #   reached from the machine running this test). KUBEHENGE_E2E_LOAD_BALANCER is the load balancer,
 #   metallb (default) or kube-vip.
-# KUBEHENGE_E2E_CONTROL_PLANE_MEMORY and KUBEHENGE_E2E_WORKER_MEMORY (MiB) and
-# KUBEHENGE_E2E_CONTROL_PLANE_CORES size the nodes; the memory is by default the least the class
-# lets each have with the add-ons. KUBEHENGE_E2E_RESTARTS=report prints restarts while every
+# KUBEHENGE_E2E_CONTROL_PLANE_MEMORY and KUBEHENGE_E2E_WORKER_MEMORY (MiB),
+# KUBEHENGE_E2E_CONTROL_PLANE_CORES and KUBEHENGE_E2E_WORKER_CORES size the nodes; the memory, and
+# the worker's cores, are by default the least the class lets each have with the add-ons.
+# KUBEHENGE_E2E_RESTARTS=report prints restarts while every
 # add-on is on instead of failing, for a host whose KVM lacks pause-loop exiting: there guests that
 # outnumber its CPUs starve each other, whatever their sizes.
 # KUBEHENGE_E2E_NODE_OS is the nodes' operating system as one word, such as rocky-10, whose
@@ -56,9 +57,10 @@
 # management cluster restores etcd through the guest agent (etcd_restore; Talos clusters through
 # their Talos API either way), and Go builds the
 # kubehenge command that decrypts a snapshot.
-# KUBEHENGE_E2E_HA_GROUPS=1 switches the cloud controller manager's HA group labels on and off again,
-# with a management cluster that lets clusters choose them; the test makes an HA node-affinity rule
-# over every node, which needs Proxmox VE 9, and removes it again.
+# KUBEHENGE_E2E_HA_GROUPS=1 checks the cloud controller manager's HA group labels, which a cluster
+# has by default where the management cluster leaves them on, then switches them off and on again;
+# the test makes an HA node-affinity rule over every node, which needs Proxmox VE 9, and removes it
+# again.
 # KUBEHENGE_E2E_NAMESPACE names one of the namespaces the management cluster's
 # extra_cluster_namespaces gives the web interface: the cluster is then created there with the
 # interface's own account, as the interface creates one in a namespace of its creator's choice, and
@@ -315,7 +317,15 @@ worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq 
     | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
         $node.worker + $addon.headlamp + $addon.monitoring + $addon.logs + $addon.backups + $addon.kyverno + $addon.istio + $addon.loadBalancer + $addon.certManager + $addon.argocd + $addon.rancherAgent]
     | max')}
-# The control plane likewise: the least the class's sizing guide gives it beside one worker, or what
+# Its cores likewise, for the CPU a worker's own pods and every add-on's request, the GitOps engine
+# that asks for more of the two.
+worker_cores=${KUBEHENGE_E2E_WORKER_CORES:-$(printf '%s' "${class_json}" | jq -r '
+    (.metadata.annotations["kubehenge.dev/addon-cpu"] | fromjson) as $addon
+    | (.metadata.annotations["kubehenge.dev/node-cpu"] | fromjson) as $node
+    | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.cores.minimum),
+        (($node.worker + $addon.headlamp + $addon.monitoring + $addon.logs + $addon.backups + $addon.kyverno + $addon.istio + $addon.loadBalancer + $addon.certManager + ([$addon.argocd, $addon.flux] | max) + $addon.rancherAgent) / 1000 | ceil)]
+    | max')}
+# The control plane's memory likewise: the least the class's sizing guide gives it beside one worker, or what
 # it uses itself with every add-on but Rancher, whichever is more.
 control_plane_memory=${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-$(printf '%s' "${class_json}" | jq -r '
     (.metadata.annotations["kubehenge.dev/addon-control-plane-memory"] // "{}" | fromjson) as $grows
@@ -324,7 +334,7 @@ control_plane_memory=${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-$(printf '%s' "${clas
         (.spec.variables[] | select(.name == "controlPlaneMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
         $node.controlPlane + ([$grows.headlamp, $grows.monitoring, $grows.logs, $grows.backups, $grows.kyverno, $grows.istio, $grows.loadBalancer, $grows.certManager, $grows.argocd, $grows.rancherAgent] | map(. // 0) | add)]
     | max')}
-echo "workers with ${worker_memory} MiB of memory, the control plane with ${control_plane_memory} MiB"
+echo "workers with ${worker_memory} MiB of memory and ${worker_cores} cores, the control plane with ${control_plane_memory} MiB"
 cat > "${work}/cluster.yaml" << EOF
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
@@ -363,7 +373,7 @@ ${network_spec}
       - name: controlPlaneMachine
         value: {memoryMiB: ${control_plane_memory}, cores: ${KUBEHENGE_E2E_CONTROL_PLANE_CORES:-2}}
       - name: workerMachine
-        value: {memoryMiB: ${worker_memory}}
+        value: {memoryMiB: ${worker_memory}, cores: ${worker_cores}}
 ${cni_variable}
 ${talos_variable}
       - name: oidc
@@ -374,6 +384,10 @@ ${talos_variable}
         value: {admission: restricted}
       - name: cis
         value: true
+      # The test upgrades the cluster itself. Talos's automatic patch upgrades would start whenever a
+      # run reaches the default window, 02:00 to 06:00 UTC, since its nodes start a patch behind.
+      - name: upgrades
+        value: {mode: "off", nodeImages: false}
 EOF
 creator create -f "${work}/cluster.yaml"
 # capmox does not come back to a machine whose VM failed to provision, so the wait ends there rather
@@ -1171,9 +1185,13 @@ if [ "${KUBEHENGE_E2E_HA_GROUPS:-}" = 1 ]; then
     # The guest exists once Proxmox VE answers for it.
     ha_guest_exists() { pve_get "nodes/${ha_node}/qemu/${ha_vmid}/status/current" > /dev/null 2>&1; }
 
-    step "nodes labelled with their HA rule, with Sys.Audit on / for the cluster's token"
-    # shellcheck disable=SC2310 # a failed read fails the step
-    audit_is false || fail "the cluster's token holds Sys.Audit on / without asking for it"
+    step "nodes labelled with their HA rule, with Sys.Audit on / for the cluster's token by default"
+    # The cluster was created without its ccm variable, so it has what the class defaults it to.
+    ccm=$(kubectl -n "${ns}" get "cluster/${name}" -o json) || fail "cannot read cluster ${name}"
+    ccm=$(printf '%s' "${ccm}" | jq -c '.spec.topology.variables[] | select(.name == "ccm") | .value')
+    [ "${ccm}" = '{"haGroups":true}' ] ||
+        fail "the class defaulted the cluster's ccm variable to ${ccm:-nothing}, not the HA group labels"
+    until_true 300 "the cluster's token to hold Sys.Audit on /" audit_is true
     # A node-affinity rule over every node, for a guest of its own: Proxmox VE takes a rule only for
     # HA resources, and a resource only for a guest that exists.
     ha_node=$(pve_get nodes | jq -r '[.data[] | select(.status == "online") | .node][0]')
@@ -1187,15 +1205,15 @@ if [ "${KUBEHENGE_E2E_HA_GROUPS:-}" = 1 ]; then
     pve_post cluster/ha/resources --data-urlencode "sid=vm:${ha_vmid}" --data-urlencode state=ignored
     pve_post cluster/ha/rules --data-urlencode type=node-affinity --data-urlencode "rule=${ha_rule}" \
         --data-urlencode "resources=vm:${ha_vmid}" --data-urlencode "nodes=${ha_nodes}"
-    set_variable ccm '{"haGroups":true}'
-    until_true 300 "the cluster's token to hold Sys.Audit on /" audit_is true
     # The cloud controller manager labels the nodes when it next syncs them.
     until_true 900 "every node labelled with HA rule ${ha_rule}" labelled
     wl get nodes -L "group.topology.proxmox.sinextra.dev/${ha_rule}"
 
-    step "the cluster's token without Sys.Audit on / again"
+    step "the cluster's token without Sys.Audit on / once switched off, and with it again once on"
     set_variable ccm '{"haGroups":false}'
     until_true 300 "the cluster's token to lose Sys.Audit on /" audit_is false
+    set_variable ccm '{"haGroups":true}'
+    until_true 300 "the cluster's token to hold Sys.Audit on / again" audit_is true
     remove_ha_rule
 fi
 # guest <node> <vmid> <command>: runs a shell command in a VM through its guest agent and prints its
@@ -1267,7 +1285,10 @@ step "etcd snapshots: one taken into the S3 store, encrypted, and read back"
 # plain text, so it is seen there and must not be seen in the store.
 etcd_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
 wl -n default create configmap e2e-before-snapshot --from-literal=marker="${etcd_marker}"
-set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2}"
+# Once a day, twelve hours from now: the default schedule's slot after the cluster was made can have
+# passed already, and switching snapshots on would then take one of its own beside the one asked for.
+etcd_schedule="0 $((($(date -u +%-H) + 12) % 24)) * * *"
+set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2,\"schedule\":\"${etcd_schedule}\"}"
 # As the interface's Take a snapshot now asks for one.
 now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 kubectl -n "${ns}" annotate cluster "${name}" --overwrite \
@@ -1402,7 +1423,7 @@ case ${distribution} in
                 jq -e --arg old " ${servers} " '(.items | length > 0) and all(.items[]; .metadata.name as $name |
                     .status.phase == "Running" and (($old | contains(" " + $name + " ")) | not))' > /dev/null
         }
-        set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2,\"distributionUpload\":true}"
+        set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2,\"schedule\":\"${etcd_schedule}\",\"distributionUpload\":true}"
         until_true 300 "the upload's Secret in kube-system" wl -n kube-system get secret kubehenge-etcd-s3
         upload_secret=$(wl -n kube-system get secret kubehenge-etcd-s3 -o json)
         printf '%s' "${upload_secret}" | jq -e '.type == "etcd.k3s.cattle.io/s3-config-secret" and
@@ -1473,6 +1494,8 @@ if [ -n "${server_unit}" ]; then
 fi
 echo "memory before the add-ons:"
 pod_memory "${work}/workload"
+echo "CPU requested before the add-ons:"
+pod_cpu "${work}/workload"
 # What the guests are told of the CPU decides which mitigations their kernels run, and those cost
 # the most under nested virtualisation: the figure to read beside a slow run.
 echo "the CPU a control plane sees:"
@@ -2579,8 +2602,13 @@ until_true 900 "Argo CD available" wl -n argocd wait --for=condition=Available d
 until_true 300 "Argo CD's application controller ready" wl -n argocd rollout status statefulset/argocd-application-controller --timeout=10s
 push three
 until_true 600 "Argo CD syncs a new commit" synced three
-app_status=$(wl -n argocd get application kubehenge -o jsonpath='{.status.sync.status} {.status.health.status}')
-[ "${app_status}" = "Synced Healthy" ] || fail "Argo CD's application is ${app_status}"
+# The sync applies the ConfigMap before Argo CD records the sync's outcome on the application.
+app_settled() {
+    # shellcheck disable=SC2310 # wl wraps one kubectl call; a failed read is only a retry.
+    app_status=$(wl -n argocd get application kubehenge -o jsonpath='{.status.sync.status} {.status.health.status}') || return 1
+    [ "${app_status}" = "Synced Healthy" ]
+}
+until_true 120 "Argo CD's application synced and healthy" app_settled
 admin=$(wl -n argocd get configmap argocd-cm -o jsonpath='{.data.admin\.enabled}')
 [ "${admin}" = false ] || fail "Argo CD's built-in admin is enabled"
 pod_security=$(wl label --dry-run=server --overwrite namespace argocd pod-security.kubernetes.io/enforce=restricted 2>&1)
@@ -2630,6 +2658,8 @@ if [ -n "${restarted}" ]; then
     found_restarts "containers restarted while the add-ons were installed (pod, restarts): ${restarted}"
 fi
 pod_memory "${work}/workload"
+echo "CPU requested with every add-on on:"
+pod_cpu "${work}/workload"
 
 step "every add-on's image named by digest"
 # Every pod outside kube-system, which only the add-ons, their operators and these tests create,

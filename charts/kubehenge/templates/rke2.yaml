@@ -25,6 +25,15 @@ metadata:
     # What a node uses before any add-on, measured by the end-to-end tests: a control plane with a
     # quarter on top, which the kernel's caches and the API server's peaks take; a worker with a tenth.
     kubehenge.dev/node-memory: '{"controlPlane":3120,"worker":704}'
+    {{- include "kubehenge.addonCPU" . | nindent 4 }}
+    # The CPU, in millicores, a node's own pods request besides the add-ons': on a worker RKE2's
+    # kube-proxy and canal's calico-node at 250m each (RKE2's Cilium asks for 100m, its Calico for
+    # none), a CoreDNS replica's 100m, its autoscaler's 25m, the metrics server's 100m, which
+    # tolerates no taint and so moves to a worker once rescheduled, and the CSI plugin's 20m; a
+    # control plane without workers adds the API server's 250m, etcd's and the controller
+    # manager's 200m each, the scheduler's 100m, the CSI controller's 50m and the cloud controller
+    # manager's 10m. Traefik and kube-vip ask for none.
+    kubehenge.dev/node-cpu: '{"controlPlane":1555,"worker":745}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"
@@ -85,7 +94,7 @@ spec:
           {{- include "kubehenge.healthCheck" "workers" | nindent 10 }}
   variables:
     {{- /* RKE2's static pods request 2 GiB between them (etcd, API server, controller manager, scheduler, kube-proxy). */}}
-    {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 2 "workerMinMemoryMiB" 4096 "clusters" .Values.clusters) | nindent 4 }}
+    {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 2 "workerMinMemoryMiB" 4096 "clusters" .Values.clusters "sysAudit" (not (empty .Values.proxmox.sysAuditGroup))) | nindent 4 }}
     {{- include "kubehenge.addonVariables" . | nindent 4 }}
     {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
     {{- include "kubehenge.nodeOSVariable" . | nindent 4 }}

@@ -226,8 +226,8 @@ export function settings(f: SetupForm): ManagementSettings {
     s.etcdRestore = true;
   }
   s.templateRefresh = refreshSettings(f);
-  if (f.clusterSysAudit) {
-    s.clusterSysAudit = true;
+  if (!f.clusterSysAudit) {
+    s.clusterSysAudit = false;
   }
   if (f.clusterVolumeSnapshots) {
     s.clusterVolumeSnapshots = true;
@@ -315,7 +315,7 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     backupTargets: saved.backupTargets ?? [],
     etcdRestore: saved.etcdRestore === true,
     ...refreshFields(saved.templateRefresh),
-    clusterSysAudit: saved.clusterSysAudit === true,
+    clusterSysAudit: saved.clusterSysAudit !== false,
     clusterVolumeSnapshots: saved.clusterVolumeSnapshots === true,
     rootPassword: "",
     moreNamespaces: (saved.extraClusterNamespaces ?? []).length > 0,
@@ -715,7 +715,12 @@ function optInRows(s: ManagementSettings): [string, string][] {
       "CSI plugin's newest release",
       s.clusterDatastoreAllocate === true ? "Clusters may choose it, on a storage of their own" : "Off",
     ],
-    ["HA group labels", s.clusterSysAudit === true ? "Clusters may choose them, with Sys.Audit on /" : "Off"],
+    [
+      "HA group labels",
+      s.clusterSysAudit === false
+        ? "Off for every cluster"
+        : "On unless a cluster switches them off, with Sys.Audit on /",
+    ],
     [
       "Volume snapshots",
       s.clusterVolumeSnapshots === true ? "Clusters may take them, with their CSI plugin signed in as root@pam" : "Off",
@@ -1361,13 +1366,14 @@ function SysAuditChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element 
           aria-describedby={hint}
           onChange={(e) => set("clusterSysAudit", e.target.checked)}
         />{" "}
-        Let clusters label their nodes with Proxmox VE&apos;s HA groups
+        Label clusters&apos; nodes with Proxmox VE&apos;s HA groups
       </label>
       <p className="muted" id={hint}>
         The cloud controller manager reads Proxmox VE&apos;s HA groups and node-affinity rules, which takes Sys.Audit on
-        /. A cluster that chooses the labels gets that, unpropagated, through a group Kubehenge&apos;s controller adds
-        its user to; it can then read the Proxmox VE cluster&apos;s own configuration, but nothing of its guests,
-        storages or nodes.
+        /. Each cluster gets that, unpropagated, through a group Kubehenge&apos;s controller adds its user to, unless
+        the cluster switches the labels off; its token can then read the Proxmox VE cluster&apos;s own configuration
+        (firewall rules, backup jobs, HA, the corosync configuration), but nothing of its guests, storages or nodes.
+        Off, no cluster gets Sys.Audit on / and nodes go without the labels.
       </p>
     </fieldset>
   );

@@ -23,8 +23,6 @@ export interface Session {
   canCreate?: boolean;
   /** Whether the user may install Rancher and trust identity providers of their own: Sys.Modify on the workload pool. */
   canTrust?: boolean;
-  /** Whether the user holds Sys.Audit on /, which a cluster's token gets with the HA group labels. */
-  canAudit?: boolean;
   /** Whether the user holds Permissions.Modify on /, which giving a cluster's CSI plugin root@pam needs. */
   canModifyPermissions?: boolean;
   /** The namespace the interface creates clusters in unless the creator chooses another. */
@@ -274,6 +272,55 @@ export interface HealthEvent {
   last: string;
 }
 
+/** How one cluster stands, as its health page sums it up, for the fleet. */
+export interface FleetHealth {
+  namespace: string;
+  name: string;
+  read: string;
+  verdict: ClusterHealth["verdict"];
+  workload?: string;
+  /** The worst few items needing attention, the worst first. */
+  attention: Attention[];
+  /** How many more there are. */
+  more?: number;
+}
+
+/** A piece of work that runs on its own once started, with how far it is or what went wrong. */
+export interface RunInfo {
+  id: string;
+  kind:
+    | "management-cluster"
+    | "template"
+    | "template-refresh"
+    | "appliance-upgrade"
+    | "etcd-snapshot"
+    | "etcd-restore"
+    | "backup"
+    | "restore"
+    | "change";
+  namespace?: string;
+  cluster?: string;
+  what: string;
+  state: "running" | "succeeded" | "failed";
+  phase?: string;
+  by?: string;
+  started?: string;
+  finished?: string;
+  /** The first thing that went wrong. */
+  error?: string;
+  /** The steps the run takes, where it reports them. */
+  steps?: RunStep[];
+  /** What a change of a cluster sets. */
+  settings?: string[];
+}
+
+/** A step of a run, and how far it has come. */
+export interface RunStep {
+  name: string;
+  state: "done" | "running" | "waiting" | "failed";
+  detail?: string;
+}
+
 export interface ClusterHealth {
   read: string;
   verdict: "healthy" | "changing" | "degraded" | "unreachable";
@@ -481,7 +528,7 @@ export interface ManagementSettings {
   etcdRestore?: boolean;
   /** The weekly build of the node OS VM templates; absent, it runs with its defaults. */
   templateRefresh?: TemplateRefreshSettings;
-  /** Clusters may choose the cloud controller manager's HA group labels, with Sys.Audit on / for their token. */
+  /** Clusters have the cloud controller manager's HA group labels unless they switch them off, with Sys.Audit on / for their token; absent, they have them. */
   clusterSysAudit?: boolean;
   /** Clusters may take volume snapshots, with their CSI plugin signed in as root@pam. */
   clusterVolumeSnapshots?: boolean;
@@ -860,6 +907,21 @@ export interface ChangeRequest {
   /** Switches autoscaling on for pools by name, or off with null. */
   autoscaling?: Record<string, Autoscaling | null>;
   variables?: Record<string, unknown>;
+}
+
+/** What a change does to a cluster's machines. */
+export type Effect = "none" | "scales" | "control-plane" | "workers" | "all";
+
+/** A setting a change sets anew: a variable's name, or version, controlPlaneReplicas, workerPools or autoscaling. */
+export interface PlannedChange {
+  setting: string;
+  effect: Effect;
+}
+
+/** A change as it would land, checked by the API server without being made. */
+export interface Plan {
+  cluster: Cluster;
+  changes: PlannedChange[];
 }
 
 /** The autoscaler variable: where the cluster autoscaler runs and how it scales. */

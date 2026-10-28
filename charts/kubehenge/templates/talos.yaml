@@ -31,6 +31,15 @@ metadata:
     # What a node uses before any add-on: kubeadm's measured figures, for the same Kubernetes
     # components on a system that runs nothing else.
     kubehenge.dev/node-memory: '{"controlPlane":2392,"worker":704}'
+    {{- include "kubehenge.addonCPU" . | nindent 4 }}
+    # The CPU, in millicores, a node keeps back or its own pods request besides the add-ons': on a
+    # worker the kubelet's 50m reserved for the system, Talos's kube-proxy at 100m, the CNI's agent
+    # (flannel's 200m with its network policy controller, Cilium's 100m; Calico's asks for none), a
+    # CoreDNS replica's 100m, Traefik's 10m and the CSI plugin's 20m; a control plane without
+    # workers adds the API server's 200m, the controller manager's 50m, the scheduler's 10m, the
+    # second CoreDNS replica, the CSI controller's 50m and the cloud controller manager's 10m. etcd
+    # runs outside Kubernetes.
+    kubehenge.dev/node-cpu: '{"controlPlane":900,"worker":480}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"
@@ -91,7 +100,7 @@ spec:
         healthCheck:
           {{- include "kubehenge.healthCheck" "workers" | nindent 10 }}
   variables:
-    {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 1 "workerMinMemoryMiB" 1024 "clusters" .Values.clusters) | nindent 4 }}
+    {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 1 "workerMinMemoryMiB" 1024 "clusters" .Values.clusters "sysAudit" (not (empty .Values.proxmox.sysAuditGroup))) | nindent 4 }}
     {{- include "kubehenge.addonVariables" . | nindent 4 }}
     {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
     {{- include "kubehenge.autoscalerVariable" . | nindent 4 }}

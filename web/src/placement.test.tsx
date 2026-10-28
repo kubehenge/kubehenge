@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
-import { fakeServer } from "./fake-server";
+import { applyStaged, fakeServer } from "./fake-server";
 import type { HARules } from "./types";
 
 const cluster = {
@@ -73,6 +73,7 @@ describe("a cluster's placement", () => {
     await user.click(within(dialog).getByLabelText(/^pve1/u));
     await user.click(within(dialog).getByLabelText(/^pve9/u));
     await user.click(save);
+    await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { allowedNodes: ["pve1", "pve9"] } }));
   });
 
@@ -83,6 +84,7 @@ describe("a cluster's placement", () => {
     await user.click(within(dialog).getByLabelText("Any node"));
     await user.click(within(dialog).getByLabelText("The nodes of an HA rule"));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { allowedNodes: ["pve2"] } }));
   });
 
@@ -97,6 +99,7 @@ describe("a cluster's placement", () => {
     expect(within(picker).getByRole("option", { name: "racks-a: pve1, pve2" })).toBeInTheDocument();
     await user.selectOptions(picker, "racks-a");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { allowedNodes: ["pve1", "pve2"] } }));
   });
 
@@ -110,6 +113,7 @@ describe("a cluster's placement", () => {
     const { dialog, sent, user } = await openPlacement();
     await user.click(within(dialog).getByLabelText("Any node"));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { allowedNodes: null } }));
   });
 });

@@ -47,6 +47,12 @@ const (
 	maxRestoreNamespaces = 100
 )
 
+// Velero's phases of a backup or restore that the interface tells apart.
+const (
+	veleroCompleted = "Completed"
+	veleroDeleting  = "Deleting"
+)
+
 // backupView is a backup as the view lists it.
 type backupView struct {
 	Name      string     `json:"name"`
@@ -306,7 +312,7 @@ func restoreOf(o *unstructured.Unstructured, volumes []unstructured.Unstructured
 			continue
 		}
 		view.Volumes++
-		if p, _, _ := unstructured.NestedString(pv.Object, "status", "phase"); p == "Completed" {
+		if p, _, _ := unstructured.NestedString(pv.Object, "status", "phase"); p == veleroCompleted {
 			view.VolumesDone++
 		}
 		view.BytesDone += intAt(pv, "status", "progress", "bytesDone")
@@ -399,7 +405,7 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request, u user) {
 		s.veleroError(w, c, err)
 		return
 	}
-	if phase, _, _ := unstructured.NestedString(backup.Object, "status", "phase"); phase != "Completed" && phase != "PartiallyFailed" {
+	if phase, _, _ := unstructured.NestedString(backup.Object, "status", "phase"); phase != veleroCompleted && phase != "PartiallyFailed" {
 		writeError(w, http.StatusConflict, fmt.Sprintf("backup %s is %s; only a finished backup can be restored", req.Backup, cmp.Or(phase, "new")))
 		return
 	}
