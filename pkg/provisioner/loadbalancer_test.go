@@ -65,7 +65,7 @@ func TestParseAddresses(t *testing.T) {
 	}
 }
 
-func TestCheckLoadBalancer(t *testing.T) {
+func TestCheckAddresses(t *testing.T) {
 	t.Parallel()
 	web := func(lb string) *clusterv1.Cluster { return lbCluster("web", 0, "10.0.0.10-10.0.0.20", "10.0.0.5", lb) }
 	for name, tc := range map[string]struct {
@@ -117,6 +117,25 @@ func TestCheckLoadBalancer(t *testing.T) {
 		},
 		"no addresses of its own, switched off": {cluster: cluster(), others: []*clusterv1.Cluster{web(onAt(`"10.0.0.100-10.0.0.120"`))}},
 		"no addresses of its own, switched on":  {cluster: withAddons(cluster(), map[string]string{loadBalancerVariable: onAt(`"10.0.0.100"`)}), want: "network"},
+		"nodes off the network":                 {cluster: lbCluster("web", 0, "10.0.1.10-10.0.1.20", "10.0.0.5", ""), want: "the nodes' addresses 10.0.1.10-10.0.1.20 are not on their network 10.0.0.0/24"},
+		"node addresses that don't read":        {cluster: lbCluster("web", 0, "10.0.0.10-", "10.0.0.5", ""), want: "network.addresses"},
+		"the endpoint among the nodes":          {cluster: lbCluster("web", 0, "10.0.0.0/24", "10.0.0.5", ""), want: "the control-plane endpoint 10.0.0.5 is among the nodes' addresses 10.0.0.0-10.0.0.255"},
+		"the endpoint off the network":          {cluster: lbCluster("web", 0, "10.0.0.10-10.0.0.20", "10.0.1.5", ""), want: "the control-plane endpoint 10.0.1.5 is not on the nodes' network"},
+		"the endpoint on the gateway":           {cluster: lbCluster("web", 0, "10.0.0.10-10.0.0.20", "10.0.0.1", ""), want: "the control-plane endpoint 10.0.0.1 is the gateway"},
+		"the nodes of another cluster": {
+			cluster: web(""),
+			others:  []*clusterv1.Cluster{lbCluster("db", 0, "10.0.0.20-10.0.0.30", "10.0.0.6", "")},
+			want:    "this cluster's addresses 10.0.0.10-10.0.0.20 overlap cluster team-a/db's 10.0.0.20-10.0.0.30",
+		},
+		"the endpoint of another cluster": {
+			cluster: web(""),
+			others:  []*clusterv1.Cluster{lbCluster("db", 0, "10.0.0.30-10.0.0.40", "10.0.0.5", "")},
+			want:    "this cluster's addresses 10.0.0.5 overlap cluster team-a/db's 10.0.0.5",
+		},
+		"another cluster's nodes on another VLAN": {
+			cluster: web(""),
+			others:  []*clusterv1.Cluster{lbCluster("db", 7, "10.0.0.10-10.0.0.20", "10.0.0.5", "")},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -124,7 +143,7 @@ func TestCheckLoadBalancer(t *testing.T) {
 			for i, o := range tc.others {
 				others[i] = *o
 			}
-			err := checkLoadBalancer(tc.cluster, others)
+			err := checkAddresses(tc.cluster, others)
 			switch {
 			case tc.want == "" && err != nil:
 				t.Errorf("refused: %v", err)
