@@ -46,7 +46,8 @@ while read -r component repository; do
         [ "${release}" = "${version}" ] || fail "${file} of kubehenge/${repository} is pinned at ${release}, the tested version at ${version}"
         mkdir -p "${work}/${repository}"
         curl -fsSL --proto '=https' --retry 5 --retry-all-errors -o "${work}/${repository}/${file}" \
-            "https://github.com/kubehenge/${repository}/releases/download/${release}/${file}"
+            "https://github.com/kubehenge/${repository}/releases/download/${release}/${file}" ||
+            fail "could not download ${file} of kubehenge/${repository} ${release}"
         echo "${digest}  ${work}/${repository}/${file}" | sha256sum --check --strict --quiet ||
             fail "${file} of kubehenge/${repository} ${release} does not have the SHA-256 versions.tf names"
         attested "${work}/${repository}/${file}"

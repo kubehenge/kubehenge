@@ -39,7 +39,10 @@ installed=$(cat "${dir}/versions" 2> /dev/null || true)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 fetch() { # url sha256 destination
-    curl -fsSL --proto '=https' --retry 5 --retry-all-errors --tlsv1.2 -o "${work}/download" "$1"
+    curl -fsSL --proto '=https' --retry 5 --retry-all-errors --tlsv1.2 -o "${work}/download" "$1" || {
+        echo "integration-assets: could not download $1" >&2
+        exit 1
+    }
     echo "$2  ${work}/download" | sha256sum -c --quiet -
     mv "${work}/download" "$3"
 }
