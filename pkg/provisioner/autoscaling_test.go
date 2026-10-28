@@ -111,9 +111,19 @@ func TestAutoscaledPoolsNeedAddressesAtTheirMost(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "give 10, and the cluster may run 11 machines at once") {
 		t.Errorf("ten addresses for eleven machines: %v", err)
 	}
-	// A cluster without an autoscaled pool is the interface's to check as it is created.
-	if err := checkNodeAddresses(nil, networkCluster("192.168.1.1", 24)); err != nil {
-		t.Errorf("a fixed pool: %v", err)
+	// Pools of fixed size need the same room: a rollout waits for ever for an address otherwise.
+	fixed := func(addresses string) *clusterv1.Cluster {
+		c := withAddresses(networkCluster("192.168.1.1", 24), addresses)
+		c.Spec.Topology.ControlPlane.Replicas = new(int32(3))
+		c.Spec.Topology.Workers.MachineDeployments[0].Replicas = new(int32(2))
+		return c
+	}
+	if err = checkNodeAddresses(nil, fixed(`["192.168.1.10-192.168.1.15"]`)); err != nil {
+		t.Errorf("six addresses for three control planes, two workers and a rollout: %v", err)
+	}
+	err = checkNodeAddresses(nil, fixed(`["192.168.1.10-192.168.1.14"]`))
+	if err == nil || !strings.Contains(err.Error(), "give 5, and the cluster may run 6 machines at once") {
+		t.Errorf("five addresses for six machines in fixed pools: %v", err)
 	}
 	short := autoscaledOn(`["192.168.1.10-192.168.1.15"]`, "5")
 	edited := short.DeepCopy()

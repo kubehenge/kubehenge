@@ -4,6 +4,9 @@ Every release's changes, newest first. Versions follow [Semantic Versioning](htt
 
 ## [Unreleased]
 
+- A Cluster applied with kubectl or through GitOps is held to the interface's rules by the API server: a name of at most 40 characters, a version in the distribution's form, upgrades of one minor version at most and never back, 1, 3, 5 or 7 control-plane nodes, at most 100 workers in each pool, and node addresses and a control-plane endpoint on the gateway's network with the endpoint outside the node addresses ([clusters.md](clusters.md)). Fixed pools need node addresses for every machine plus one for a rollout, as autoscaled ones already did, since a rollout otherwise waits for ever.
+- Two clusters on the same bridge and VLAN can no longer be given the same node addresses or control-plane endpoint, from the interface or kubectl alike.
+
 ## [0.3.1] - 2026-10-28
 
 - capmox, which creates the clusters' VMs, is built from a later commit of its main branch. A machine whose VM needs no configuration change is started instead of being reported ready while its VM stays off, and a transient error while attaching the bootstrap ISO is retried instead of failing the machine for good.
