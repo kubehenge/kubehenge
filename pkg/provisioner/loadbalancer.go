@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"slices"
@@ -408,7 +409,7 @@ func addressesOf(cluster *clusterv1.Cluster) (clusterAddresses, error) {
 		return a, fmt.Errorf("network.prefix: %w", err)
 	}
 	if a.machines, err = parseAddresses(network.Addrs); err != nil {
-		return a, fmt.Errorf("network.addresses: %w", err)
+		return a, unreadable{fmt.Errorf("network.addresses: %w", err)}
 	}
 	endpoint, err := variable[string](cluster, "controlPlaneEndpoint")
 	if err != nil {
@@ -423,25 +424,29 @@ func addressesOf(cluster *clusterv1.Cluster) (clusterAddresses, error) {
 	}
 	if lb.Enabled {
 		if a.services, err = parseAddresses(lb.Addresses); err != nil {
-			return a, fmt.Errorf("loadBalancer.addresses: %w", err)
+			return a, unreadable{fmt.Errorf("loadBalancer.addresses: %w", err)}
 		}
 	}
 	return a, nil
 }
 
-// checkLoadBalancer refuses load-balancer addresses outside the nodes' network, or ones that would
-// answer for the gateway, a node, a control-plane endpoint or another Service: two hosts answering
-// for one address take each other's traffic. Other clusters count where they share the network's
-// bridge and VLAN, and their load-balancer addresses count against this cluster's nodes too.
-func checkLoadBalancer(cluster *clusterv1.Cluster, others []clusterv1.Cluster) error {
+// unreadable is an address list entry that is no address, range or network, which the variables'
+// schema lets through as any string.
+type unreadable struct{ error }
+
+// checkAddresses refuses node addresses or a control-plane endpoint off the nodes' network, an
+// endpoint the nodes may take themselves, and load-balancer addresses off the network or on the
+// gateway, a node, an endpoint or another Service: two hosts answering for one address take each
+// other's traffic. Other clusters count where they share the network's bridge and VLAN.
+func checkAddresses(cluster *clusterv1.Cluster, others []clusterv1.Cluster) error {
 	own, err := addressesOf(cluster)
 	if err != nil {
 		lb, _, lbErr := optionalVariable[LoadBalancer](cluster, loadBalancerVariable)
-		if lbErr != nil || lb.Enabled {
+		if lbErr != nil || lb.Enabled || errors.As(err, new(unreadable)) {
 			return err
 		}
-		// Cluster API refuses the variables themselves; without load-balancer addresses of its own,
-		// there is nothing here to hold against other clusters yet.
+		// Cluster API refuses missing variables itself; until the cluster has them, it holds no
+		// addresses to compare with other clusters.
 		return nil
 	}
 	problems := own.problems()
@@ -463,9 +468,23 @@ func checkLoadBalancer(cluster *clusterv1.Cluster, others []clusterv1.Cluster) e
 	return nil
 }
 
-// problems are the cluster's load-balancer addresses that clash with its own network.
+// problems are where the cluster's addresses clash with its own network.
 func (a *clusterAddresses) problems() []string {
 	var problems []string
+	for _, m := range a.machines {
+		if !a.nodes.Contains(m.first) || !a.nodes.Contains(m.last) {
+			problems = append(problems, fmt.Sprintf("the nodes' addresses %s are not on their network %s", m, a.nodes))
+		}
+		if m.overlaps(a.endpoint) {
+			problems = append(problems, fmt.Sprintf("the control-plane endpoint %s is among the nodes' addresses %s, which a node may take", a.endpoint, m))
+		}
+	}
+	if !a.nodes.Contains(a.endpoint.first) {
+		problems = append(problems, fmt.Sprintf("the control-plane endpoint %s is not on the nodes' network %s", a.endpoint, a.nodes))
+	}
+	if a.endpoint.first == a.gateway {
+		problems = append(problems, fmt.Sprintf("the control-plane endpoint %s is the gateway", a.endpoint))
+	}
 	for i, s := range a.services {
 		if !a.nodes.Contains(s.first) || !a.nodes.Contains(s.last) {
 			problems = append(problems, fmt.Sprintf("the load-balancer addresses %s are not on the nodes' network %s", s, a.nodes))
@@ -518,6 +537,13 @@ func (a *clusterAddresses) clashes(name string, theirs *clusterAddresses) []stri
 		}
 	}
 	mine := slices.Concat([]addressSpan{a.endpoint}, a.machines)
+	for _, m := range mine {
+		for _, t := range slices.Concat([]addressSpan{theirs.endpoint}, theirs.machines) {
+			if m.overlaps(t) {
+				problems = append(problems, fmt.Sprintf("this cluster's addresses %s overlap cluster %s's %s", m, name, t))
+			}
+		}
+	}
 	for _, s := range theirs.services {
 		for _, m := range mine {
 			if s.overlaps(m) {
@@ -543,13 +569,13 @@ func addressesChanged(old, c *clusterv1.Cluster) bool {
 	return false
 }
 
-// checkLoadBalancer holds the cluster's addresses to checkLoadBalancer against every other cluster.
-func (h *Hooks) checkLoadBalancer(ctx context.Context, cluster *clusterv1.Cluster) error {
+// checkAddresses holds the cluster's addresses to checkAddresses against every other cluster.
+func (h *Hooks) checkAddresses(ctx context.Context, cluster *clusterv1.Cluster) error {
 	clusters := &clusterv1.ClusterList{}
 	if err := h.Reader.List(ctx, clusters); err != nil {
 		return fmt.Errorf("listing the clusters: %w", err)
 	}
-	return checkLoadBalancer(cluster, clusters.Items)
+	return checkAddresses(cluster, clusters.Items)
 }
 
 // k3sServiceLB is the label k3s's servicelb puts on the DaemonSets that answer for Services.

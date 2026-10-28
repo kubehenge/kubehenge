@@ -106,16 +106,12 @@ func validateAutoscaling(c *clusterv1.Cluster) field.ErrorList {
 	return errs
 }
 
-// checkNodeAddresses refuses a cluster with an autoscaled pool whose nodes' addresses are fewer than
-// the machines it may run at once: its control planes, every pool at its most and one more for a
-// rollout, which makes each new node before it removes an old one. The interface holds a cluster
-// with fixed pools to the same when it is created; an autoscaled pool grows later, when an address
-// short would leave a machine without one. A change to a cluster that was already short is refused
-// only when it leaves it shorter.
+// checkNodeAddresses refuses a cluster whose nodes' addresses are fewer than the machines it may run
+// at once: its control planes, every pool at its most and one more for a rollout, which makes each
+// new node before it removes an old one. Short of that, an upgrade or a node image refresh waits for
+// ever for an address, and an autoscaled pool grows into a machine without one. A change to a
+// cluster that was already short is refused only when it leaves it shorter.
 func checkNodeAddresses(old, c *clusterv1.Cluster) error {
-	if !autoscaled(c) {
-		return nil
-	}
 	now, ok := addressNeed(c)
 	if !ok || now.short() <= 0 {
 		return nil
