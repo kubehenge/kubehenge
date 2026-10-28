@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,7 +20,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/validation"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -47,10 +45,6 @@ const (
 	workerPool  = "md-0"
 )
 
-// The longest cluster name whose machines' host names, <name>-md-0-<three random parts>, stay
-// within one DNS label.
-const maxClusterName = 40
-
 // Variables a cluster may change after creation; the others describe where its VMs live.
 var changeableVariables = map[string]bool{
 	"headlamp": true, "monitoring": true, "logs": true, "backups": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, csiVariable: true, ccmVariable: true,
@@ -61,14 +55,6 @@ var changeableVariables = map[string]bool{
 
 // autoUpgraded is where Kubehenge's controller records the last automatic upgrade.
 const autoUpgraded = "kubehenge.dev/auto-upgraded"
-
-// versionFormat is each distribution's form of a Kubernetes version.
-var versionFormat = map[string]*regexp.Regexp{
-	string(templates.Kubeadm): regexp.MustCompile(`^v1\.\d+\.\d+$`),
-	string(templates.RKE2):    regexp.MustCompile(`^v1\.\d+\.\d+\+rke2r\d+$`),
-	string(templates.K3s):     regexp.MustCompile(`^v1\.\d+\.\d+\+k3s\d+$`),
-	string(templates.Talos):   regexp.MustCompile(`^v1\.\d+\.\d+$`),
-}
 
 func (s *Server) poolPath(namespace, name string) (string, error) {
 	n, err := provisioner.NamesFor(s.WorkloadPool, namespace, name)
@@ -145,7 +131,7 @@ func (s *Server) classes(w http.ResponseWriter, r *http.Request, u user) {
 
 func (s *Server) classView(c *clusterv1.ClusterClass, dist string) classView {
 	v := classView{
-		Name: c.Name, Distribution: dist, Variables: []classVariable{}, Versions: &regexpDescription{Pattern: versionFormat[dist].String()},
+		Name: c.Name, Distribution: dist, Variables: []classVariable{}, Versions: &regexpDescription{Pattern: provisioner.VersionFormats[templates.Distribution(dist)].String()},
 		NoTemplate: missingTemplate(c, dist, "", templates.DefaultNodeOS), NodeOSes: nodeOSChoices(c, dist),
 	}
 	for i := range c.Spec.Variables {
@@ -172,30 +158,10 @@ func (s *Server) classView(c *clusterv1.ClusterClass, dist string) classView {
 	return v
 }
 
-type version struct{ minor, patch, build int }
-
-var versionParts = regexp.MustCompile(`^v1\.(\d+)\.(\d+)(?:\+(?:rke2r|k3s)(\d+))?$`)
-
-// parseVersion reads v1.36.5, v1.36.5+rke2r1 or v1.36.5+k3s1.
-func parseVersion(s string) (version, bool) {
-	m := versionParts.FindStringSubmatch(s)
-	if m == nil {
-		return version{}, false
-	}
-	minor, _ := strconv.Atoi(m[1])
-	patch, _ := strconv.Atoi(m[2])
-	build, _ := strconv.Atoi(m[3])
-	return version{minor, patch, build}, true
-}
-
-func (a version) less(b version) bool {
-	return a.minor < b.minor || a.minor == b.minor && (a.patch < b.patch || a.patch == b.patch && a.build < b.build)
-}
-
 // distribution is the distribution one of Kubehenge's classes builds, by its name.
 func distribution(class string) (string, bool) {
 	d, ok := strings.CutPrefix(class, provisioner.ClassPrefix)
-	if !ok || versionFormat[d] == nil {
+	if !ok || provisioner.VersionFormats[templates.Distribution(d)] == nil {
 		return "", false
 	}
 	return d, true
@@ -674,16 +640,6 @@ type createRequest struct {
 	Services []string `json:"services,omitempty"`
 }
 
-func validControlPlane(n int32) bool { return n >= 1 && n <= 7 && n%2 == 1 }
-
-func validWorkers(n int32) bool { return n >= 0 && n <= 100 }
-
-// Messages for a control-plane or worker count out of range.
-const (
-	controlPlaneCounts = "control-plane nodes: 1, 3, 5 or 7, an odd number so etcd keeps a majority"
-	workerCounts       = "workers: 0 to 100"
-)
-
 func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
 	var req createRequest
 	if !readJSON(w, r, &req) {
@@ -731,21 +687,21 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
 // invalid says what is wrong with a create request on its own, before anything is looked up, or
 // returns "".
 func (req *createRequest) invalid() string {
-	if errs := validation.IsDNS1035Label(req.Name); len(errs) > 0 || len(req.Name) > maxClusterName {
-		return fmt.Sprintf("name: lowercase letters, digits and dashes, starting with a letter and ending with a letter or digit, at most %d characters", maxClusterName)
+	if !provisioner.ValidClusterName(req.Name) {
+		return "name: " + provisioner.ClusterNameRule
 	}
 	dist, ok := distribution(req.Class)
 	if !ok {
 		return "distribution: not one of Kubehenge's cluster classes"
 	}
-	if !versionFormat[dist].MatchString(req.Version) {
-		return fmt.Sprintf("Kubernetes version: %s versions look like %s", dist, versionExample(dist))
+	if msg := provisioner.VersionRule(templates.Distribution(dist), req.Version); msg != "" {
+		return msg
 	}
-	if !validControlPlane(req.ControlPlaneReplicas) {
-		return controlPlaneCounts
+	if !provisioner.ValidControlPlane(req.ControlPlaneReplicas) {
+		return provisioner.ControlPlaneRule
 	}
-	if !validWorkers(req.WorkerReplicas) {
-		return workerCounts
+	if !provisioner.ValidWorkers(req.WorkerReplicas) {
+		return provisioner.WorkersRule
 	}
 	if a := req.WorkerAutoscaling; a != nil && !a.valid() {
 		return autoscalingCounts
@@ -946,17 +902,6 @@ func (s *Server) newCluster(u user, req *createRequest, pods, services []string)
 	return c
 }
 
-func versionExample(dist string) string {
-	switch templates.Distribution(dist) {
-	case templates.RKE2:
-		return "v1.36.5+rke2r1"
-	case templates.K3s:
-		return "v1.36.5+k3s1"
-	case templates.Kubeadm, templates.Talos:
-	}
-	return "v1.36.5"
-}
-
 // allowRancher checks the right to install Rancher into the cluster key, and that no other cluster
 // runs it. Rancher gets the admin kubeconfig of every cluster that registers with it, so installing
 // it needs what taking all of their kubeconfigs would: Sys.Modify on the workload pool.
@@ -1133,14 +1078,14 @@ func applyTopology(c *clusterv1.Cluster, req *changeRequest) string {
 		c.Spec.Topology.Version = *req.Version
 	}
 	if req.ControlPlaneReplicas != nil {
-		if !validControlPlane(*req.ControlPlaneReplicas) {
-			return controlPlaneCounts
+		if !provisioner.ValidControlPlane(*req.ControlPlaneReplicas) {
+			return provisioner.ControlPlaneRule
 		}
 		c.Spec.Topology.ControlPlane.Replicas = req.ControlPlaneReplicas
 	}
 	for name, n := range req.WorkerPools {
-		if !validWorkers(n) {
-			return workerCounts + " in each pool"
+		if !provisioner.ValidWorkers(n) {
+			return provisioner.WorkersRule + " in each pool"
 		}
 		if isAutoscaled(c, name) {
 			return "pool " + name + ": the cluster autoscaler sizes it; switch autoscaling off to fix its workers"
@@ -1152,21 +1097,13 @@ func applyTopology(c *clusterv1.Cluster, req *changeRequest) string {
 	return ""
 }
 
-// checkUpgrade says what is wrong with moving the cluster to version, or returns "". Kubernetes
-// supports upgrading one minor version at a time and never downgrading.
+// checkUpgrade says what is wrong with moving the cluster to version, or returns "".
 func checkUpgrade(c *clusterv1.Cluster, version string) string {
 	dist, _ := distribution(c.Spec.Topology.ClassRef.Name)
-	if !versionFormat[dist].MatchString(version) {
-		return fmt.Sprintf("Kubernetes version: %s versions look like %s", dist, versionExample(dist))
+	if msg := provisioner.VersionRule(templates.Distribution(dist), version); msg != "" {
+		return msg
 	}
-	from, ok := parseVersion(c.Spec.Topology.Version)
-	if !ok {
-		return ""
-	}
-	if to, _ := parseVersion(version); to.minor > from.minor+1 || to.less(from) {
-		return fmt.Sprintf("Kubernetes version: from %s, one minor version up at most, and never back", c.Spec.Topology.Version)
-	}
-	return ""
+	return provisioner.UpgradeRule(c.Spec.Topology.Version, version)
 }
 
 // setWorkerReplicas sets the replicas of the worker pool name, telling whether the cluster has it.

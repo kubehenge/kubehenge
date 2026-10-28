@@ -484,13 +484,17 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 			ClassRef: clusterv1.ClusterClassRef{Name: "kubehenge-rke2", Namespace: classNamespace},
 			Version:  "v1.36.5+rke2r1",
 			Workers: clusterv1.WorkersTopology{MachineDeployments: []clusterv1.MachineDeploymentTopology{
-				{Class: "worker", Name: "md-0", Replicas: new(int32(300))},
+				{Class: "worker", Name: "md-0", Replicas: new(int32(100))},
+				{Class: "worker", Name: "md-1", Replicas: new(int32(100))},
+				{Class: "worker", Name: "md-2", Replicas: new(int32(100))},
 			}},
 		}},
 	}
 	if err := c.Create(ctx, many); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "with 300 workers need at least 4 vCPUs and 8192 MiB") {
 		t.Fatalf("300 workers on the class's default control planes: %v", err)
 	}
+
+	checkInterfaceRulesAdmission(ctx, t, c)
 
 	workerless := &clusterv1.Cluster{
 		Namespace: "team-a", Name: "workerless",
@@ -558,6 +562,41 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 	hooks.DatastoreAllocate = testDatastoreAllocate
 	checkDatastoreAllocateAdmission(ctx, t, c)
 	checkSysAuditAdmission(ctx, t, c, hooks)
+}
+
+// checkInterfaceRulesAdmission has the API server refuse what the interface refuses, for a cluster
+// applied with kubectl.
+func checkInterfaceRulesAdmission(ctx context.Context, t *testing.T, c client.Client) {
+	t.Helper()
+	offered := func(name string, controlPlanes int32, addresses, endpoint string) *clusterv1.Cluster {
+		cluster := &clusterv1.Cluster{
+			Namespace: "team-a", Name: name,
+			Spec: clusterv1.ClusterSpec{Topology: clusterv1.Topology{
+				ClassRef:     clusterv1.ClusterClassRef{Name: "kubehenge-k3s", Namespace: classNamespace},
+				Version:      "v1.36.5+k3s1",
+				ControlPlane: clusterv1.ControlPlaneTopology{Replicas: new(controlPlanes)},
+				Workers: clusterv1.WorkersTopology{MachineDeployments: []clusterv1.MachineDeploymentTopology{
+					{Class: "worker", Name: "md-0", Replicas: new(int32(1))},
+				}},
+			}},
+		}
+		return withAddons(cluster, map[string]string{
+			"network":              `{"bridge":"vmbr0","addresses":["` + addresses + `"],"prefix":24,"gateway":"10.0.0.1","dnsServers":["10.0.0.1"]}`,
+			"controlPlaneEndpoint": `"` + endpoint + `"`,
+		})
+	}
+	if err := c.Create(ctx, offered(strings.Repeat("a", MaxClusterName+1), 1, "10.0.0.10-10.0.0.20", "10.0.0.5")); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "at most 40 characters") {
+		t.Fatalf("a name too long for the machines' host names: %v", err)
+	}
+	if err := c.Create(ctx, offered("even", 2, "10.0.0.10-10.0.0.20", "10.0.0.5")); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "an odd number") {
+		t.Fatalf("two control planes: %v", err)
+	}
+	if err := c.Create(ctx, offered("first", 1, "10.0.0.10-10.0.0.20", "10.0.0.5")); err != nil {
+		t.Fatalf("a cluster on its own addresses: %v", err)
+	}
+	if err := c.Create(ctx, offered("taker", 1, "10.0.0.20-10.0.0.30", "10.0.0.6")); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "overlap cluster team-a/first's 10.0.0.10-10.0.0.20") {
+		t.Fatalf("a cluster on another's node addresses: %v", err)
+	}
 }
 
 // checkSysAuditAdmission has the API server ask the validator about clusters whose token is to hold

@@ -14,6 +14,15 @@ import (
 // rke2Sizes is RKE2's server sizing guide as the chart gives it.
 const rke2Sizes = `[{"workers":0,"cores":2,"memoryMiB":4096},{"workers":226,"cores":4,"memoryMiB":8192},{"workers":451,"cores":8,"memoryMiB":16384},{"workers":1301,"cores":16,"memoryMiB":32768}]`
 
+// pools are as many pools of at most MaxWorkers each as hold workers.
+func pools(workers int32) []*int32 {
+	var out []*int32
+	for ; workers > 0; workers -= min(workers, MaxWorkers) {
+		out = append(out, new(min(workers, MaxWorkers)))
+	}
+	return out
+}
+
 // sized is a cluster with machine deployments of these replicas, nil for one that leaves them
 // unset, and control planes of controlPlane, or the class's default when it is empty.
 func sized(controlPlane string, replicas ...*int32) *clusterv1.Cluster {
@@ -42,14 +51,14 @@ func TestControlPlanesFollowTheSizingGuide(t *testing.T) {
 		{"pools scaled to none", sized("", new(int32(0)), new(int32(0))), "without workers"},
 		{"no workers on a control plane and a worker's least", sized(`{"cores":4,"memoryMiB":8192}`), ""},
 		{"no workers, memory short", sized(`{"cores":4,"memoryMiB":6144}`), "have 4 vCPUs and 6144 MiB"},
-		{"226 workers on the default", sized("", new(int32(226))), "with 226 workers need at least 4 vCPUs and 8192 MiB of memory, and have 2 vCPUs and 4096 MiB"},
-		{"226 workers across pools", sized("", new(int32(200)), new(int32(26))), "with 226 workers"},
-		{"a pool without replicas starts with one", sized("", new(int32(225)), nil), "with 226 workers"},
-		{"225 workers on the default", sized("", new(int32(225))), ""},
-		{"control planes sized for their workers", sized(`{"cores":4,"memoryMiB":8192}`, new(int32(450))), ""},
-		{"memory left to the default", sized(`{"cores":4}`, new(int32(300))), "have 4 vCPUs and 4096 MiB"},
-		{"vCPUs short", sized(`{"cores":2,"memoryMiB":16384}`, new(int32(300))), "have 2 vCPUs and 16384 MiB"},
-		{"past the guide's last step", sized(`{"cores":8,"memoryMiB":16384}`, new(int32(2000))), "need at least 16 vCPUs and 32768 MiB"},
+		{"226 workers on the default", sized("", pools(226)...), "with 226 workers need at least 4 vCPUs and 8192 MiB of memory, and have 2 vCPUs and 4096 MiB"},
+		{"226 workers across uneven pools", sized("", new(int32(100)), new(int32(26)), new(int32(100))), "with 226 workers"},
+		{"a pool without replicas starts with one", sized("", append(pools(225), nil)...), "with 226 workers"},
+		{"225 workers on the default", sized("", pools(225)...), ""},
+		{"control planes sized for their workers", sized(`{"cores":4,"memoryMiB":8192}`, pools(450)...), ""},
+		{"memory left to the default", sized(`{"cores":4}`, pools(300)...), "have 4 vCPUs and 4096 MiB"},
+		{"vCPUs short", sized(`{"cores":2,"memoryMiB":16384}`, pools(300)...), "have 2 vCPUs and 16384 MiB"},
+		{"past the guide's last step", sized(`{"cores":8,"memoryMiB":16384}`, pools(2000)...), "need at least 16 vCPUs and 32768 MiB"},
 	} {
 		created := callBeforeClusterCreate(h, tc.c)
 		switch {
@@ -66,9 +75,9 @@ func TestClusterValidatorHoldsControlPlanesToTheirWorkers(t *testing.T) {
 	ctx := context.Background()
 	h, _ := hooksFor(t)
 	v := &ClusterValidator{Hooks: h}
-	few, many := sized("", new(int32(3))), sized("", new(int32(300)))
-	larger := sized(`{"cores":4,"memoryMiB":6144}`, new(int32(300)))
-	enough := sized(`{"cores":4,"memoryMiB":8192}`, new(int32(300)))
+	few, many := sized("", new(int32(3))), sized("", pools(300)...)
+	larger := sized(`{"cores":4,"memoryMiB":6144}`, pools(300)...)
+	enough := sized(`{"cores":4,"memoryMiB":8192}`, pools(300)...)
 	if _, err := v.ValidateCreate(ctx, many); err == nil || !strings.Contains(err.Error(), "need at least 4 vCPUs") {
 		t.Errorf("a new cluster of 300 workers on the default control planes: %v", err)
 	}
@@ -88,7 +97,7 @@ func TestClusterValidatorHoldsControlPlanesToTheirWorkers(t *testing.T) {
 	if _, err := v.ValidateUpdate(ctx, many, larger); err != nil {
 		t.Errorf("a short cluster's control planes made larger: %v", err)
 	}
-	if _, err := v.ValidateUpdate(ctx, many, sized("", new(int32(500)))); err == nil {
+	if _, err := v.ValidateUpdate(ctx, many, sized("", pools(500)...)); err == nil {
 		t.Error("more workers on control planes already short of them")
 	}
 	if _, err := v.ValidateUpdate(ctx, larger, many); err == nil {
