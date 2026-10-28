@@ -4,6 +4,8 @@ Every release's changes, newest first. Versions follow [Semantic Versioning](htt
 
 ## [Unreleased]
 
+- capmox, which creates the clusters' VMs, is built from a later commit of its main branch. A machine whose VM needs no configuration change is started instead of being reported ready while its VM stays off, and a transient error while attaching the bootstrap ISO is retried instead of failing the machine for good.
+
 ## [0.3.0] - 2026-10-27
 
 - The interface has a look and a frame of its own: the fleet down the left of every page, grouped into those that need you, those with work running and the healthy, each with why, counting what each cluster's health page finds; the work under way down the right, snapshots, backups, restores, template builds and the appliance's upgrades included, a failed run with its first error; a cluster's views as tabs under its name, its summary opening on its machines laid out by Proxmox VE node; a cluster's changes staged first, checked by the API server, and applied together after a plan that says what each replaces ([clusters.md](clusters.md#staged-changes)), then followed as a run whose page counts the machines replaced; a page for every run, its first error pinned above its steps; Administration in four short pages, the management cluster, the appliance, templates and certificates; **Go to or run…** (`Ctrl K`) to find any cluster, view or action by a few letters; and single keys for the rest ([clusters.md](clusters.md#finding-your-way)). It follows the system's dark or light mode, with Atkinson Hyperlegible Next for text and JetBrains Mono for names, versions and addresses.

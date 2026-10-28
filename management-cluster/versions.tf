@@ -164,24 +164,23 @@ locals {
   # capmox up to v0.9.1 refuses the changed machine template of a kubeadm cluster's upgrade (#735);
   # the fix (#832) is on its main branch but in no release yet. Until one carries it, capmox v0.9.1
   # runs as built from that commit, on v0.9.1's own manifests: main has changed no CRD, RBAC or
-  # webhook since. The build also carries scripts/capmox-patches: capmox starts a VM's disk resize
-  # without waiting for it, and a reconcile that read the machine before the resize's task reference
-  # was written clears that reference, so the bootstrap ISO's attach can time out on the VM's lock,
-  # which capmox takes as a VMProvisionFailed it never retries. One patch waits for the resize, the
-  # other for any task still running on the VM. A third reads the machine from the API server before
-  # cloning: the cached copy can predate the previous reconcile's clone, and cloning from it leaves a
-  # second VM behind. scripts/provider-image.sh builds it reproducibly,
+  # webhook since. The build also carries scripts/capmox-patches: a reconcile that read the machine
+  # before a task's reference was written clears that reference, so the next change to the VM can
+  # time out on the lock the task still holds, and one patch waits for any task still running on
+  # the VM. The other reads the machine from the API server before cloning: the cached copy can
+  # predate the previous reconcile's clone, and cloning from it leaves a second VM behind.
+  # scripts/provider-image.sh builds it reproducibly,
   # and a release publishes it only when it comes out with this digest. It applies only while capmox
   # is at `release`.
   capmox_build = {
     upstream = "ionos-cloud/cluster-api-provider-proxmox"
     package  = "./cmd"
     release  = "v0.9.1"
-    commit   = "edd7461c2a2f335cd4fc1839171671681f4216c6"
+    commit   = "69603d33fd4b2ce3847633c74aa6e208669ff7da"
     # capmox's own image is built with Go 1.26 on distroless static.
-    go         = "go1.26.9"
+    go         = "go1.26.10"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
-    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:c055349990da20734783e8da117a50224b2225071fd95528fd1fce4a97e7d863"
+    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:2ecbb2024744a3adfd4a4ef33630962ae95b27cd5bd80fcdb23efccd85b7dd58"
   }
 
   # The Add-on Provider for Helm creates a cluster's HelmReleaseProxy under a generated name and

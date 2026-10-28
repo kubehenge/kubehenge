@@ -1,11 +1,11 @@
 diff --git a/internal/service/vmservice/vm.go b/internal/service/vmservice/vm.go
-index ca906a7..45ca80b 100644
+index efb5e25..edb842b 100644
 --- a/internal/service/vmservice/vm.go
 +++ b/internal/service/vmservice/vm.go
 @@ -79,6 +79,10 @@ func ReconcileVM(ctx context.Context, scope *scope.MachineScope) (infrav1.Virtua
  		return vm, err
  	} // VirtualMachineProvisioned reason is Cloning
-
+ 
 +	if busy, err := hasActiveTask(ctx, scope); err != nil || busy {
 +		return vm, err
 +	}
@@ -13,18 +13,24 @@ index ca906a7..45ca80b 100644
  	// Recover IP/address status for already-running machines (e.g. restored from
  	// backup) whose status was lost. This is read-only and a no-op during normal
  	// provisioning; it does not advance the provisioning state machine below.
-@@ -267,6 +271,27 @@ func ensureVirtualMachine(ctx context.Context, machineScope *scope.MachineScope)
+@@ -267,6 +271,33 @@ func ensureVirtualMachine(ctx context.Context, machineScope *scope.MachineScope)
  	return false, nil
  }
-
+ 
 +// hasActiveTask checks whether a task is still running for the VM before it is started.
 +// Such a task holds the VM's config lock, and a change made meanwhile waits on the lock
 +// and can time out. TaskRef alone does not catch this: a reconcile that read the
 +// ProxmoxMachine before TaskRef was written clears it when its own task completes.
++// A clone runs as a task of the source template, so for the new VM only its clone lock shows it.
 +func hasActiveTask(ctx context.Context, machineScope *scope.MachineScope) (bool, error) {
 +	vm := machineScope.VirtualMachine
 +	if vm.IsRunning() || ptr.Deref(machineScope.ProxmoxMachine.Status.Initialization.Provisioned, false) {
 +		return false, nil
++	}
++
++	if vm.Lock == "clone" {
++		machineScope.V(4).Info("waiting for the clone of the vm to finish", "vm", vm.VMID)
++		return true, nil
 +	}
 +
 +	busy, err := machineScope.InfraCluster.ProxmoxClient.HasActiveTask(ctx, vm)
@@ -38,17 +44,25 @@ index ca906a7..45ca80b 100644
 +	return busy, nil
 +}
 +
- func reconcileDisks(ctx context.Context, machineScope *scope.MachineScope) error {
+ func reconcileDisks(ctx context.Context, machineScope *scope.MachineScope) (requeue bool, err error) {
  	if conditions.GetReason(machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition) != infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForDiskReconciliationReason {
  		// Machine is in the wrong state to reconcile, we only reconcile Cloning VMs
 diff --git a/internal/service/vmservice/vm_test.go b/internal/service/vmservice/vm_test.go
-index c0f4f6e..4f065d2 100644
+index 601a872..0f7c10d 100644
 --- a/internal/service/vmservice/vm_test.go
 +++ b/internal/service/vmservice/vm_test.go
-@@ -594,6 +594,36 @@ func TestReconcileDisks_ResizeDisk(t *testing.T) {
- 	require.NoError(t, reconcileDisks(context.Background(), machineScope))
+@@ -502,6 +502,7 @@ func TestReconcileVM_NoConfigChangeIsNotReady(t *testing.T) {
+ 	machineScope.SetVirtualMachineID(int64(vm.VMID))
+ 
+ 	proxmoxClient.EXPECT().GetVM(context.Background(), "node1", int64(123)).Return(vm, nil)
++	proxmoxClient.EXPECT().HasActiveTask(context.Background(), vm).Return(false, nil)
+ 
+ 	result, err := ReconcileVM(context.Background(), machineScope)
+ 	require.NoError(t, err)
+@@ -637,6 +638,53 @@ func TestReconcileDisks_ResizeDiskFailed(t *testing.T) {
+ 	require.Nil(t, machineScope.ProxmoxMachine.Status.TaskRef)
  }
-
+ 
 +func TestReconcileVM_WaitsForActiveTask(t *testing.T) {
 +	machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForDiskReconciliationReason)
 +	machineScope.ProxmoxMachine.Spec.Disks = &infrav1.Storage{
@@ -67,6 +81,23 @@ index c0f4f6e..4f065d2 100644
 +		conditions.GetReason(machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition))
 +}
 +
++func TestReconcileVM_WaitsForCloneLock(t *testing.T) {
++	machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedCloningReason)
++	machineScope.ProxmoxMachine.Status.TaskRef = nil
++	vm := newStoppedVM()
++	vm.Lock = "clone"
++	machineScope.SetVirtualMachineID(123)
++
++	proxmoxClient.EXPECT().GetVM(context.Background(), "node1", int64(123)).Return(vm, nil).Once()
++	proxmoxClient.EXPECT().HasActiveTask(context.Background(), vm).Return(false, nil).Maybe()
++
++	result, err := ReconcileVM(context.Background(), machineScope)
++	require.NoError(t, err)
++	require.Equal(t, infrav1.VirtualMachineStatePending, result.State)
++	require.Equal(t, infrav1.ProxmoxMachineVirtualMachineProvisionedCloningReason,
++		conditions.GetReason(machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition))
++}
++
 +func TestReconcileVM_ActiveTaskError(t *testing.T) {
 +	machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForDiskReconciliationReason)
 +	vm := newStoppedVM()
@@ -82,42 +113,50 @@ index c0f4f6e..4f065d2 100644
  func TestReconcileMachineAddresses_IPv4(t *testing.T) {
  	machineScope, _, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForClusterAPIMachineAddressesReason)
  	vm := newRunningVM()
-@@ -878,6 +908,7 @@ func TestReconcileVM_StateMachine(t *testing.T) {
+@@ -921,6 +969,7 @@ func TestReconcileVM_StateMachine(t *testing.T) {
  	// Round 1: clone task complete; ConfigureVM sets VM options and requeues.
  	proxmoxClient.EXPECT().GetTask(context.Background(), "result").Return(task, nil).Once()
  	proxmoxClient.EXPECT().GetVM(context.Background(), "node2", int64(123)).Return(vm, nil).Once()
 +	proxmoxClient.EXPECT().HasActiveTask(context.Background(), vm).Return(false, nil).Once()
-
+ 
  	expectedVMConfigureRequest := []any{
  		proxmox.VirtualMachineOption{Name: optionSockets, Value: *machineScope.ProxmoxMachine.Spec.NumSockets},
-@@ -905,6 +936,7 @@ func TestReconcileVM_StateMachine(t *testing.T) {
- 	// We're not mocking the entirety of a network setup.
+@@ -947,6 +996,7 @@ func TestReconcileVM_StateMachine(t *testing.T) {
+ 	// and requeues, so reconcileIPAddresses waits for the resize task.
  	proxmoxClient.EXPECT().GetTask(context.Background(), "result").Return(task, nil).Once()
  	proxmoxClient.EXPECT().GetVM(context.Background(), "node2", int64(123)).Return(vm, nil).Once()
 +	proxmoxClient.EXPECT().HasActiveTask(context.Background(), vm).Return(false, nil).Once()
- 	proxmoxClient.EXPECT().ResizeDisk(context.Background(), vm, "scsi0", "50G").Return(nil, nil).Once()
-
+ 	proxmoxClient.EXPECT().ResizeDisk(context.Background(), vm, "scsi0", "50G").Return(task, nil).Once()
+ 
  	result, err = ReconcileVM(context.Background(), machineScope)
-@@ -931,6 +963,7 @@ func TestReconcileVM_StateMachine(t *testing.T) {
+@@ -966,6 +1016,7 @@ func TestReconcileVM_StateMachine(t *testing.T) {
+ 	// WaitingForBootstrapData. We're not mocking the entirety of a network setup.
+ 	proxmoxClient.EXPECT().GetTask(context.Background(), "result").Return(task, nil).Once()
+ 	proxmoxClient.EXPECT().GetVM(context.Background(), "node2", int64(123)).Return(vm, nil).Once()
++	proxmoxClient.EXPECT().HasActiveTask(context.Background(), vm).Return(false, nil).Once()
+ 
+ 	result, err = ReconcileVM(context.Background(), machineScope)
+ 	require.NoError(t, err)
+@@ -991,6 +1042,7 @@ func TestReconcileVM_StateMachine(t *testing.T) {
  	)
-
+ 
  	proxmoxClient.EXPECT().GetVM(context.Background(), "node2", int64(123)).Return(vm, nil).Once()
 +	proxmoxClient.EXPECT().HasActiveTask(context.Background(), vm).Return(false, nil).Once()
  	proxmoxClient.EXPECT().StartVM(context.Background(), vm).Return(newTask(), nil).Once()
-
+ 
  	// Provide IPAddresses fields to fake network bootstrap.
 diff --git a/pkg/proxmox/client.go b/pkg/proxmox/client.go
 index 9b3a26c..dc1f21b 100644
 --- a/pkg/proxmox/client.go
 +++ b/pkg/proxmox/client.go
 @@ -40,6 +40,8 @@ type Client interface {
-
+ 
  	GetTask(ctx context.Context, upID string) (*proxmox.Task, error)
-
+ 
 +	HasActiveTask(ctx context.Context, vm *proxmox.VirtualMachine) (bool, error)
 +
  	GetReservableMemoryBytes(ctx context.Context, nodeName string, nodeMemoryAdjustment int64) (uint64, error)
-
+ 
  	ResizeDisk(ctx context.Context, vm *proxmox.VirtualMachine, disk, size string) (*proxmox.Task, error)
 diff --git a/pkg/proxmox/goproxmox/api_client.go b/pkg/proxmox/goproxmox/api_client.go
 index 9971b66..8d77c2e 100644
@@ -126,7 +165,7 @@ index 9971b66..8d77c2e 100644
 @@ -281,6 +281,18 @@ func (c *APIClient) GetTask(ctx context.Context, upID string) (*proxmox.Task, er
  	return task, nil
  }
-
+ 
 +// HasActiveTask checks whether any task is still running for the VM.
 +func (c *APIClient) HasActiveTask(ctx context.Context, vm *proxmox.VirtualMachine) (bool, error) {
 +	node := (&proxmox.Node{}).New(c.Client, vm.Node)
@@ -149,7 +188,7 @@ index 4e50228..563086a 100644
 @@ -641,6 +641,37 @@ func TestProxmoxAPIClient_GetTask(t *testing.T) {
  	}
  }
-
+ 
 +func TestProxmoxAPIClient_HasActiveTask(t *testing.T) {
 +	upid := "UPID:test:000D6BDA:041E0A54:654A5A1D:resize:101:root@pam:"
 +	tests := []struct {
@@ -191,7 +230,7 @@ index c0680a6..46ced2a 100644
 @@ -631,6 +631,63 @@ func (_c *MockClient_GetVM_Call) RunAndReturn(run func(context.Context, string,
  	return _c
  }
-
+ 
 +// HasActiveTask provides a mock function with given fields: ctx, vm
 +func (_m *MockClient) HasActiveTask(ctx context.Context, vm *go_proxmox.VirtualMachine) (bool, error) {
 +	ret := _m.Called(ctx, vm)
