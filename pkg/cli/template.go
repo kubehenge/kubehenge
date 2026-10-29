@@ -293,7 +293,7 @@ type builderFlags struct {
 
 func (b *builderFlags) add(cmd *cobra.Command) {
 	f := cmd.Flags()
-	f.StringVar(&b.builder.Node, "node", "", "Proxmox VE node to create the template on")
+	f.StringVar(&b.builder.Node, "node", "", "Proxmox VE node to create the template on (required)")
 	f.StringVar(&b.builder.ImportStorage, "import-storage", "local", "file storage with the import content type, for the downloaded image")
 	f.StringVar(&b.builder.Storage, "storage", "local-lvm", "storage for the template's disk; shared storage lets clones start on any node")
 	f.StringVar(&b.builder.ISOStorage, "iso-storage", "", "storage for the cloud-init ISO while preparing an image; default the node's first ISO storage")
@@ -310,6 +310,10 @@ func (b *builderFlags) add(cmd *cobra.Command) {
 
 // connect signs the builder in, with its log on the command's standard error.
 func (b *builderFlags) connect(cmd *cobra.Command, conn *pve.Config) (*templates.Builder, error) {
+	// Cobra's required check passes --node "", which would reach the API as /nodes//.
+	if strings.TrimSpace(b.builder.Node) == "" {
+		return nil, errors.New("--node needs the Proxmox VE node to build on, such as --node pve1")
+	}
 	var err error
 	switch {
 	case b.address != "":
@@ -390,7 +394,7 @@ The API token is read from KUBEHENGE_PROXMOX_TOKEN.`,
 	f := cmd.Flags()
 	f.StringVar(&req.TalosVersion, "talos-version", templates.DefaultTalosVersion, "Talos release (talos)")
 	nodeOSFlag(f, &req.NodeOS)
-	f.StringVar(&req.KubernetesVersion, "kubernetes-version", "", "Kubernetes release, such as v1.37.1 (kubeadm)")
+	f.StringVar(&req.KubernetesVersion, "kubernetes-version", "", "Kubernetes release, such as v1.36.5 (kubeadm)")
 	f.BoolVar(&newBuild, "new-build", false, "build a node OS template again even if a build of it exists")
 	flags.add(cmd)
 	cmd.PreRunE = func(_ *cobra.Command, args []string) error {
