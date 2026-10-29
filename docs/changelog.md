@@ -4,6 +4,7 @@ Every release's changes, newest first. Versions follow [Semantic Versioning](htt
 
 ## [Unreleased]
 
+- The management-cluster module needs the Proxmox VE provider 0.119, which downloads the Talos image without first asking the Image Factory for its size; that request held up one of Proxmox VE's API workers and dropped the module's other requests on it, so the download no longer waits for the module's other changes.
 - When the installer removes a container whose interface failed to start or to reach Proxmox VE's API, it prints the interface's log first, which went with the container before. Its check of the new appliance verifies the appliance's certificate instead of skipping it, and `install.sh --help` lists every option.
 - `kubehenge template create` and `template refresh` refuse an empty `--node` before calling Proxmox VE.
 - The documentation says HA group labels are on by default, as they are, and moves the setup's opt-in settings to a page of their own ([install-settings.md](install-settings.md)). Troubleshooting covers failed installs, template builds, a changed Proxmox VE CA, clusters refused when applied with kubectl, and each warning event the controller writes.
