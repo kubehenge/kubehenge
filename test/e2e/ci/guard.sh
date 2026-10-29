@@ -208,14 +208,15 @@ protect() {
         pid=$(awk '$1 == "PPid:" { print $2 }' "/proc/${pid}/status" 2> /dev/null || true)
     done
     pids="${pids} $(pgrep -x 'Runner\.(Listener|Worker)|systemd-(resolve|network)' | tr '\n' ' ')"
-    for pid in ${pids}; do
-        sudo choom -n -1000 -p "${pid}" > /dev/null || echo "the OOM killer may still choose ${pid}"
-    done
+    echo "protected from the OOM killer: PID, oom_score_adj, resident MiB, command"
     # shellcheck disable=SC2086 # one PID each.
-    list=$(printf '%s\n' ${pids} | sort -un | paste -sd, -)
-    ps -o pid=,oom_score_adj=,rss=,comm= -p "${list}" |
-        awk 'BEGIN { print "protected from the OOM killer: PID, oom_score_adj, resident MiB, command" }
-            { printf "  %s %s %d %s\n", $1, $2, $3 / 1024, $4 }'
+    list=$(printf '%s\n' ${pids} | sort -un)
+    for pid in ${list}; do
+        sudo choom -n -1000 -p "${pid}" > /dev/null || echo "the OOM killer may still choose ${pid}"
+        adj=$(cat "/proc/${pid}/oom_score_adj" 2> /dev/null || echo gone)
+        awk -v pid="${pid}" -v adj="${adj}" '$1 == "Name:" { name = $2 } $1 == "VmRSS:" { rss = $2 }
+            END { printf "  %s %s %d %s\n", pid, adj, rss / 1024, name }' "/proc/${pid}/status" 2> /dev/null || true
+    done
     # A cgroup's protection from reclaim holds only as far as each of its ancestors has as much.
     for agent in $(pgrep -x 'Runner\.(Listener|Worker)' || true); do
         sed -n 's/^0:://p' "/proc/${agent}/cgroup" 2> /dev/null || true
