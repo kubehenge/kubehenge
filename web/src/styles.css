@@ -1277,6 +1277,59 @@ button.go {
   color: var(--dim);
 }
 
+/* The wizard's add-ons side by side; one opened to its settings takes the whole row. */
+.addon-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+  align-items: start;
+  margin: 4px 0 14px;
+}
+
+.addon-card {
+  position: relative;
+  padding: 4px 12px 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.addon-card.chosen {
+  border-color: var(--accent-fill);
+}
+
+.addon-card:has(fieldset, select, input:not([type="checkbox"], [type="radio"])) {
+  grid-column: 1 / -1;
+}
+
+.addon-card > .check:first-of-type {
+  padding-right: calc(26px + 7ch);
+}
+
+.addon-cost {
+  position: absolute;
+  top: 13px;
+  right: 40px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.addon-card.corner {
+  padding-top: 24px;
+}
+
+.addon-card.corner .addon-cost {
+  top: 6px;
+  right: 12px;
+}
+
+.addon-card > fieldset.group {
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
 /* A switch reads as one: the track carries the state, the words beside it what that state is. */
 .switch {
   display: inline-flex;
@@ -1679,6 +1732,23 @@ button.go {
   padding-top: 5px;
 }
 
+/* A control as narrow as its column allows, never wider than the form around it. */
+.field-control {
+  min-width: 0;
+}
+
+/* On a phone the label goes above its control, which then takes the whole width. */
+@media (max-width: 600px) {
+  .field {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .field label {
+    padding-top: 0;
+  }
+}
+
 .field-label {
   display: flex;
   align-items: flex-start;
@@ -1901,6 +1971,12 @@ fieldset.choices .check + .info-toggle + .info-text + .hint {
    up the box's border and left padding. */
 .group > .field {
   grid-template-columns: calc(190px - 12px - 1px) 1fr;
+}
+
+@media (max-width: 600px) {
+  .group > .field {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Whatever opens a box, a note or a checkbox, starts where a field would, at the box's padding. */

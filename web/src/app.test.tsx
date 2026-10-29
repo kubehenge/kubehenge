@@ -7,6 +7,7 @@ import { App } from "./App";
 import { ClusterList } from "./ClusterList";
 import {
   addonCPU,
+  addonCostMiB,
   addonMemory,
   addonNeedMiB,
   fieldProblems,
@@ -878,6 +879,10 @@ describe("create", () => {
     expect(request(unmonitored, withLogs).variables).not.toHaveProperty("logs");
     expect(Object.fromEntries(summary(unmonitored, withLogs))).toMatchObject({ Logs: "Off" });
     expect(addonMemory(unmonitored, withLogs).mib).toBe(0);
+    // A card's cost is the add-on's own, whether it is chosen or not.
+    expect(addonCostMiB(withLogs, ["logs"])).toBe(512);
+    expect(addonCostMiB(withLogs, ["monitoring", "logs"])).toBe(2048);
+    expect(addonCostMiB(rke2, ["logs"])).toBe(0);
     expect(request(logged, rke2).variables).not.toHaveProperty("logs");
 
     expect(fieldProblems("Add-ons", { ...logged, logs: { ...logged.logs, sizeGiB: 0 } }, withLogs)).toStrictEqual({

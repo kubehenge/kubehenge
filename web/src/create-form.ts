@@ -277,6 +277,15 @@ export function addonMemory(
   return { names, mib: total, controlPlaneMiB: growth };
 }
 
+/** AddonKey names an add-on in a class's figures. */
+export type AddonKey = (typeof addonNames)[number][0];
+
+/** addonCostMiB is the memory, in MiB, a class's figures give the pods of the add-ons named. */
+export function addonCostMiB(c: ClusterClass | undefined, keys: AddonKey[]): number {
+  const figures = classFigures(c, "kubehenge.dev/addon-memory");
+  return keys.reduce((sum, key) => sum + (quantity(figures[key]) ?? 0), 0);
+}
+
 /**
  * addonCPU is the CPU, in millicores, the pods of the add-ons a form chooses request by its class's
  * figures, and which add-ons ask for any, counted as addonMemory counts them.
