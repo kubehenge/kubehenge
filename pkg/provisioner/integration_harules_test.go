@@ -72,7 +72,7 @@ func TestIntegrationHARulesOfferedThroughTheChart(t *testing.T) { //nolint:paral
 	if err := ui.Update(ctx, read); !apierrors.IsForbidden(err) {
 		t.Errorf("the interface changes the record: %v", err)
 	}
-	if err := ui.Get(ctx, client.ObjectKey{Namespace: classNamespace, Name: ReleaseChecksumsName}, &corev1.ConfigMap{}); !apierrors.IsForbidden(err) {
+	if err := ui.Get(ctx, client.ObjectKey{Namespace: classNamespace, Name: "kubehenge-other"}, &corev1.ConfigMap{}); !apierrors.IsForbidden(err) {
 		t.Errorf("the interface reads another ConfigMap: %v", err)
 	}
 	if err := controller.Delete(ctx, record); err != nil {

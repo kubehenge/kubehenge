@@ -34,6 +34,20 @@ repo=$(readlink -f "$(dirname "$0")/../../..")
 from=${KUBEHENGE_E2E_FROM:-v1.36.5}
 to=$(sed -n 's/^ *kubernetes *= *"\(v[^"]*\)".*/\1/p' "${repo}/management-cluster/versions.tf")
 [ -n "${to}" ]
+# pinned <rke2|k3s> <version>: the newest release of the version's minor that the controller pins;
+# its nodes install no other.
+pinned() {
+    awk -v minor="$(printf '%s' "$2" | cut -d. -f1,2)." -v build="+$1" \
+        'index($1, minor) == 1 && index($1, build) { print $1 }' "${repo}/pkg/provisioner/releasepins.txt" |
+        sort -V | tail -n 1 | grep . || {
+        echo "pkg/provisioner/releasepins.txt pins no $1 release of $2's minor version" >&2
+        return 1
+    }
+}
+rke2_from=$(pinned rke2 "${from}")
+rke2_to=$(pinned rke2 "${to}")
+k3s_from=$(pinned k3s "${from}")
+k3s_to=$(pinned k3s "${to}")
 if [ "${test}" = talos ]; then
     talos_to=$(sed -n 's/^\(const \)\{0,1\}[[:space:]]*DefaultTalosVersion = "\(v[^"]*\)".*/\2/p' "${repo}/pkg/templates/plan.go")
     [ -n "${talos_to}" ] || {
@@ -248,7 +262,7 @@ case "${test}" in
         # The one cluster that checks its nodes' HA group labels, which every cluster has by default,
         # and switches them off and on again.
         export KUBEHENGE_E2E_HA_GROUPS=1
-        e2e e2e-workload-cluster CLASS=kubehenge-rke2 VERSION="${from}+rke2r1" UPGRADE="${to}+rke2r1"
+        e2e e2e-workload-cluster CLASS=kubehenge-rke2 VERSION="${rke2_from}" UPGRADE="${rke2_to}"
         ;;
     k3s)
         # The one cluster on the storage of its own, which switches the CSI plugin's newest release
@@ -259,7 +273,7 @@ case "${test}" in
             kubectl -n kubehenge-system create secret generic kubehenge-root-pam --from-file=password=/dev/stdin > /dev/null
         # In one of main.tf's extra_cluster_namespaces, created with the interface's own account.
         export KUBEHENGE_E2E_NAMESPACE=e2e-team
-        e2e e2e-workload-cluster CLASS=kubehenge-k3s VERSION="${from}+k3s1" UPGRADE="${to}+k3s1"
+        e2e e2e-workload-cluster CLASS=kubehenge-k3s VERSION="${k3s_from}" UPGRADE="${k3s_to}"
         ;;
     kubeadm)
         export KUBEHENGE_E2E_CNI="${KUBEHENGE_E2E_CNI:-cilium}"
@@ -273,23 +287,23 @@ case "${test}" in
     rancher)
         export KUBEHENGE_E2E_RANCHER_ENDPOINT=172.20.99.20 KUBEHENGE_E2E_RANCHER_ADDRESSES=172.20.99.21-172.20.99.24
         export KUBEHENGE_E2E_DOWNSTREAM_ENDPOINT=172.20.99.25 KUBEHENGE_E2E_DOWNSTREAM_ADDRESSES=172.20.99.26-172.20.99.29
-        export KUBEHENGE_E2E_RANCHER_VERSION="${from}+k3s1" KUBEHENGE_E2E_DOWNSTREAM_VERSION="${from}+k3s1"
-        export KUBEHENGE_E2E_BLOCKED_VERSION="${to}+k3s1"
+        export KUBEHENGE_E2E_RANCHER_VERSION="${k3s_from}" KUBEHENGE_E2E_DOWNSTREAM_VERSION="${k3s_from}"
+        export KUBEHENGE_E2E_BLOCKED_VERSION="${k3s_to}"
         e2e e2e-rancher
         ;;
     cluster-mesh)
         export KUBEHENGE_E2E_EAST_ENDPOINT=172.20.99.20 KUBEHENGE_E2E_EAST_ADDRESSES=172.20.99.21-172.20.99.24
         export KUBEHENGE_E2E_WEST_ENDPOINT=172.20.99.25 KUBEHENGE_E2E_WEST_ADDRESSES=172.20.99.26-172.20.99.29
-        export KUBEHENGE_E2E_VERSION="${from}+k3s1"
+        export KUBEHENGE_E2E_VERSION="${k3s_from}"
         e2e e2e-cluster-mesh
         ;;
     node-image-refresh)
-        export KUBEHENGE_E2E_VERSION="${from}+k3s1"
+        export KUBEHENGE_E2E_VERSION="${k3s_from}"
         e2e e2e-node-image-refresh
         ;;
     autoscaler)
         export KUBEHENGE_E2E_ENDPOINT=172.20.99.20 KUBEHENGE_E2E_ADDRESSES=172.20.99.21-172.20.99.24
-        export KUBEHENGE_E2E_VERSION="${from}+k3s1"
+        export KUBEHENGE_E2E_VERSION="${k3s_from}"
         e2e e2e-autoscaler
         ;;
     # Checked before anything was built.

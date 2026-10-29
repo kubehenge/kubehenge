@@ -274,19 +274,27 @@ func TestUpdateRefuses(t *testing.T) {
 	for name, c := range map[string]struct {
 		current string
 		req     UpdateRequest
-		tamper  func(*releaseServer)
+		tamper  func(*testing.T, *releaseServer)
 	}{
-		"older":           {current: "0.2.0", req: UpdateRequest{Version: "0.1.0"}},
-		"same":            {current: "0.2.0", req: UpdateRequest{Version: "0.2.0"}},
-		"wrong checksum":  {current: "0.1.0", req: UpdateRequest{Version: "0.2.5"}},
-		"unsigned index":  {current: "0.1.0", req: UpdateRequest{Version: "0.2.0"}, tamper: func(rs *releaseServer) { rs.files["/index.json.sig"] = []byte("AAAA") }},
+		"older":          {current: "0.2.0", req: UpdateRequest{Version: "0.1.0"}},
+		"same":           {current: "0.2.0", req: UpdateRequest{Version: "0.2.0"}},
+		"wrong checksum": {current: "0.1.0", req: UpdateRequest{Version: "0.2.5"}},
+		"unsigned index": {current: "0.1.0", req: UpdateRequest{Version: "0.2.0"}, tamper: func(_ *testing.T, rs *releaseServer) {
+			rs.files["/index.json.sig"] = []byte("AAAA")
+		}},
 		"unknown version": {current: "0.1.0", req: UpdateRequest{Version: "0.9.0"}},
 		"dev build":       {current: "dev", req: UpdateRequest{Version: "0.2.0"}},
-		"expired index": {current: "0.1.0", req: UpdateRequest{Version: "0.2.0"}, tamper: func(rs *releaseServer) {
+		"expired index": {current: "0.1.0", req: UpdateRequest{Version: "0.2.0"}, tamper: func(t *testing.T, rs *releaseServer) {
+			t.Helper()
 			var ix release.Index
-			_ = json.Unmarshal(rs.files["/index.json"], &ix)
+			if err := json.Unmarshal(rs.files["/index.json"], &ix); err != nil {
+				t.Fatal(err)
+			}
 			ix.Expires = time.Now().Add(-time.Minute)
-			raw, _ := json.Marshal(ix)
+			raw, err := ix.Marshal()
+			if err != nil {
+				t.Fatal(err)
+			}
 			rs.files["/index.json"], rs.files["/index.json.sig"] = raw, []byte(release.Sign(raw, rs.priv))
 		}},
 	} {
@@ -294,7 +302,7 @@ func TestUpdateRefuses(t *testing.T) {
 			t.Parallel()
 			rs := newReleaseServer(t)
 			if c.tamper != nil {
-				c.tamper(rs)
+				c.tamper(t, rs)
 			}
 			u, restarts := newUpdater(t, rs)
 			u.Current = c.current

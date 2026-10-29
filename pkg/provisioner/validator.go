@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -66,6 +67,7 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 	var errs field.ErrorList
 	topology := field.NewPath("spec", "topology")
 	errs = append(errs, validateTopology(old, c)...)
+	errs = append(errs, v.validatePinned(old, c)...)
 	errs = append(errs, v.validateNodeOS(ctx, old, c)...)
 	if err := checkControlPlaneSize(old, c, class); err != nil {
 		errs = append(errs, field.Forbidden(topology, err.Error()))
@@ -107,6 +109,21 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 	// Invalid, not the plain denial a validator's error becomes, so that the interface shows the
 	// reason as it does the API server's own validation.
 	return apierrors.NewInvalid(clusterv1.GroupVersion.WithKind("Cluster").GroupKind(), c.Name, errs) //nolint:wrapcheck // made here, not passed on
+}
+
+// validatePinned holds an RKE2 or k3s cluster to a release this Kubehenge pins, when it is created
+// or its version changes; its nodes could install no other.
+func (v *ClusterValidator) validatePinned(old, c *clusterv1.Cluster) field.ErrorList {
+	version := c.Spec.Topology.Version
+	if v.Hooks.Releases == nil || (old != nil && old.Spec.Topology.Version == version) {
+		return nil
+	}
+	release := distributionReleaseOf(version)
+	if release == nil || v.Hooks.Releases.Pins.pinned(version) {
+		return nil
+	}
+	return field.ErrorList{field.Invalid(field.NewPath("spec", "topology", "version"), version,
+		fmt.Sprintf("%s; the newest it pins of each minor version: %s", unpinnedRelease(release, version), strings.Join(v.Hooks.Releases.Pins.offered(release), ", ")))}
 }
 
 // validateNodeOS checks the node OS when it changes, and when the nodes the cluster may use do, which
@@ -203,8 +220,8 @@ func validateGitOps(c *clusterv1.Cluster) field.ErrorList {
 		return field.ErrorList{field.Invalid(path, nil, err.Error())}
 	}
 	if g.Enabled && g.sshURL() && g.KnownHosts != "" {
-		if err := checkKnownHosts(g.KnownHosts, g.Repository.URL); err != nil {
-			return field.ErrorList{field.Invalid(path.Child("knownHosts"), nil, err.Error())}
+		if hostsErr := checkKnownHosts(g.KnownHosts, g.Repository.URL); hostsErr != nil {
+			return field.ErrorList{field.Invalid(path.Child("knownHosts"), nil, hostsErr.Error())}
 		}
 	}
 	if g.Enabled && g.knownHostsNeeded() && g.KnownHosts == "" {

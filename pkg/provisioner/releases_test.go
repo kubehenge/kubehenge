@@ -3,7 +3,9 @@ package provisioner
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -11,13 +13,10 @@ import (
 	"sync"
 	"testing"
 
-	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 // fakeReleases serves releases as GitHub does, its files' content changeable under a test.
@@ -43,6 +42,15 @@ func (f *fakeReleases) set(path, content string) {
 	f.files[path] = content
 }
 
+func (f *fakeReleases) pin(release *distributionRelease, version string) ReleasePin {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return ReleasePin{
+		File:   hexSHA256([]byte(f.files["/"+release.repository+"/releases/download/"+version+"/sha256sum-amd64.txt"])),
+		Script: hexSHA256([]byte(f.files["/"+release.repository+"/"+version+"/install.sh"])),
+	}
+}
+
 func listing(names ...string) string {
 	var b strings.Builder
 	for i, n := range names {
@@ -57,20 +65,32 @@ var (
 	k3sListing = listing("k3s", "k3s-airgap-images-amd64.tar.zst", "k3s-images.txt")
 )
 
-func newReleaseChecksums(t *testing.T) (*ReleaseChecksums, *fakeReleases, client.Client) {
+func releaseFiles(release *distributionRelease, version, listed string) map[string]string {
+	return map[string]string{
+		"/" + release.repository + "/releases/download/" + version + "/sha256sum-amd64.txt": listed,
+		"/" + release.repository + "/" + version + "/install.sh":                            "#!/bin/sh\n# " + version + "\n",
+	}
+}
+
+// newReleaseChecksums pins the releases its server publishes as they are when it starts.
+func newReleaseChecksums(t *testing.T) (*ReleaseChecksums, *fakeReleases) {
 	t.Helper()
-	f := &fakeReleases{files: map[string]string{
-		"/rancher/rke2/releases/download/v1.37.1+rke2r1/sha256sum-amd64.txt": rke2Listing,
-		"/rancher/rke2/v1.37.1+rke2r1/install.sh":                            "#!/bin/sh\n# rke2 1.37.1\n",
-		"/rancher/rke2/releases/download/v1.36.5+rke2r1/sha256sum-amd64.txt": rke2Listing,
-		"/rancher/rke2/v1.36.5+rke2r1/install.sh":                            "#!/bin/sh\n# rke2 1.36.5\n",
-		"/k3s-io/k3s/releases/download/v1.37.1+k3s1/sha256sum-amd64.txt":     k3sListing,
-		"/k3s-io/k3s/v1.37.1+k3s1/install.sh":                                "#!/bin/sh\n# k3s\n",
-	}}
+	f := &fakeReleases{files: map[string]string{}}
+	pinned := map[string]*distributionRelease{"v1.37.1+rke2r1": rke2Release, "v1.36.5+rke2r1": rke2Release, "v1.37.1+k3s1": k3sRelease}
+	for version, release := range pinned {
+		listed := rke2Listing
+		if release == k3sRelease {
+			listed = k3sListing
+		}
+		maps.Copy(f.files, releaseFiles(release, version, listed))
+	}
+	pins := ReleasePins{}
+	for version, release := range pinned {
+		pins[version] = f.pin(release, version)
+	}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
-	c := fake.NewClientBuilder().Build()
-	return &ReleaseChecksums{Reader: c, Client: c, Namespace: "kubehenge", HTTP: srv.Client(), GitHub: srv.URL, Raw: srv.URL}, f, c
+	return &ReleaseChecksums{Pins: pins, HTTP: srv.Client(), GitHub: srv.URL, Raw: srv.URL}, f
 }
 
 // releaseItem is a template of the kind given, with the control plane's and the workers' versions.
@@ -128,7 +148,7 @@ func releaseOps(t *testing.T, patch []byte) map[string]any {
 	return byPath
 }
 
-func TestReleasePatchesInstallTheRecordedFiles(t *testing.T) {
+func TestReleasePatchesInstallThePinnedFiles(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, kind, version, spec, commands string
@@ -150,20 +170,19 @@ func TestReleasePatchesInstallTheRecordedFiles(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			r, f, c := newReleaseChecksums(t)
+			r, f := newReleaseChecksums(t)
 			controlPlane, workers := tc.version, "v1.0.0"
 			if !strings.HasSuffix(tc.kind, "ControlPlaneTemplate") {
 				controlPlane, workers = "v1.0.0", tc.version
 			}
-			patch, err := r.patch(t.Context(), releaseItem(t, tc.kind, controlPlane, workers), cluster(tc.variables...))
+			patch, err := r.patch(releaseItem(t, tc.kind, controlPlane, workers), cluster(tc.variables...))
 			if err != nil {
 				t.Fatal(err)
 			}
 			ops := releaseOps(t, patch)
 			release := releaseTemplates[tc.kind].release
-			sums := hexSHA256([]byte(f.files["/"+release.repository+"/releases/download/"+tc.version+"/sha256sum-amd64.txt"]))
-			script := hexSHA256([]byte(f.files["/"+release.repository+"/"+tc.version+"/install.sh"]))
-			want := strings.Join(append([]string{releaseScriptPath, string(release.distribution), tc.version, sums, script}, tc.files...), " ")
+			pin := f.pin(release, tc.version)
+			want := strings.Join(append([]string{releaseScriptPath, string(release.distribution), tc.version, pin.File, pin.Script}, tc.files...), " ")
 			if got := ops[tc.spec+"/"+tc.commands+"/-"]; got != want {
 				t.Errorf("command %v, want %s", got, want)
 			}
@@ -183,40 +202,26 @@ func TestReleasePatchesInstallTheRecordedFiles(t *testing.T) {
 			if airGapped, ok := ops[tc.spec+"/agentConfig/airGapped"].(bool); !ok || !airGapped {
 				t.Errorf("airGapped %v, want true", ops[tc.spec+"/agentConfig/airGapped"])
 			}
-			cm := &corev1.ConfigMap{}
-			if err := c.Get(t.Context(), client.ObjectKey{Namespace: "kubehenge", Name: ReleaseChecksumsName}, cm); err != nil {
-				t.Fatal(err)
-			}
-			if got := cm.Data[strings.ReplaceAll(tc.version, "+", "_")]; got != sums+" "+script {
-				t.Errorf("recorded %q, want %q", got, sums+" "+script)
-			}
 		})
 	}
 }
 
-func TestReleaseRecordNeverChanges(t *testing.T) {
+func TestReleasePatchesKeepThePinWhenAReleaseIsReplaced(t *testing.T) {
 	t.Parallel()
-	r, f, _ := newReleaseChecksums(t)
+	r, f := newReleaseChecksums(t)
 	item := releaseItem(t, "RKE2ControlPlaneTemplate", "v1.37.1+rke2r1", "v1.36.5+rke2r1")
-	first, err := r.patch(t.Context(), item, cluster())
+	first, err := r.patch(item, cluster())
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.set("/rancher/rke2/v1.37.1+rke2r1/install.sh", "#!/bin/sh\n# replaced under the tag\n")
 	f.set("/rancher/rke2/releases/download/v1.37.1+rke2r1/sha256sum-amd64.txt", rke2Listing+"# replaced\n")
-	again, err := r.patch(t.Context(), item, cluster())
+	again, err := r.patch(item, cluster())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(again, first) {
 		t.Errorf("the patch followed the replaced release:\n%s\nwant\n%s", again, first)
-	}
-	// Recording a second release keeps the first.
-	if _, err = r.patch(t.Context(), releaseItem(t, "RKE2ConfigTemplate", "v1.37.1+rke2r1", "v1.36.5+rke2r1"), cluster()); err != nil {
-		t.Fatal(err)
-	}
-	if again, err = r.patch(t.Context(), item, cluster()); err != nil || !bytes.Equal(again, first) {
-		t.Errorf("after recording another release: %v\n%s\nwant\n%s", err, again, first)
 	}
 }
 
@@ -226,7 +231,6 @@ func TestReleasePatchesRefuse(t *testing.T) {
 		name      string
 		item      func(t *testing.T) *runtimehooksv1.GeneratePatchesRequestItem
 		variables []clusterv1.ClusterVariable
-		breakIt   func(f *fakeReleases)
 		want      string
 	}{
 		{
@@ -263,39 +267,20 @@ func TestReleasePatchesRefuse(t *testing.T) {
 			want: "no Kubernetes version",
 		},
 		{
-			name: "a release whose checksums miss a CNI's images",
+			name: "a release this Kubehenge does not pin",
 			item: func(t *testing.T) *runtimehooksv1.GeneratePatchesRequestItem {
 				t.Helper()
-				return releaseItem(t, "RKE2ControlPlaneTemplate", "v1.37.1+rke2r1", "")
+				return releaseItem(t, "KThreesControlPlaneTemplate", "v1.37.2+k3s1", "")
 			},
-			breakIt: func(f *fakeReleases) {
-				f.set("/rancher/rke2/releases/download/v1.37.1+rke2r1/sha256sum-amd64.txt", listing("rke2.linux-amd64.tar.gz", "rke2-images-core.linux-amd64.tar.zst", "rke2-images-canal.linux-amd64.tar.zst"))
-			},
-			want: "list no rke2-images-calico.linux-amd64.tar.zst",
-		},
-		{
-			name: "a release without its install script",
-			item: func(t *testing.T) *runtimehooksv1.GeneratePatchesRequestItem {
-				t.Helper()
-				return releaseItem(t, "KThreesControlPlaneTemplate", "v1.37.1+k3s1", "")
-			},
-			breakIt: func(f *fakeReleases) { delete(f.files, "/k3s-io/k3s/v1.37.1+k3s1/install.sh") },
-			want:    "404",
+			want: "pins no k3s release v1.37.2+k3s1",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			r, f, c := newReleaseChecksums(t)
-			if tc.breakIt != nil {
-				tc.breakIt(f)
-			}
-			_, err := r.patch(t.Context(), tc.item(t), cluster(tc.variables...))
+			r, _ := newReleaseChecksums(t)
+			_, err := r.patch(tc.item(t), cluster(tc.variables...))
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want an error with %q", err, tc.want)
-			}
-			cm := &corev1.ConfigMap{}
-			if err := c.Get(t.Context(), client.ObjectKey{Namespace: "kubehenge", Name: ReleaseChecksumsName}, cm); err == nil {
-				t.Errorf("recorded %v", cm.Data)
 			}
 		})
 	}
@@ -303,13 +288,13 @@ func TestReleasePatchesRefuse(t *testing.T) {
 
 func TestReleasePatchesLeaveOtherTemplates(t *testing.T) {
 	t.Parallel()
-	r, _, _ := newReleaseChecksums(t)
+	r, _ := newReleaseChecksums(t)
 	for _, kind := range []string{"KubeadmControlPlaneTemplate", "KubeadmConfigTemplate", "ProxmoxMachineTemplate", ""} {
 		item := releaseItem(t, kind, "v1.37.1", "v1.37.1")
 		if kind == "" {
 			item.Object.Raw = nil
 		}
-		if patch, err := r.patch(t.Context(), item, cluster()); patch != nil || err != nil {
+		if patch, err := r.patch(item, cluster()); patch != nil || err != nil {
 			t.Errorf("%q: %s, %v", kind, patch, err)
 		}
 	}
@@ -317,7 +302,7 @@ func TestReleasePatchesLeaveOtherTemplates(t *testing.T) {
 
 func TestGeneratePatchesFailOnARelease(t *testing.T) {
 	t.Parallel()
-	r, _, _ := newReleaseChecksums(t)
+	r, _ := newReleaseChecksums(t)
 	h, _ := hooksFor(t, cluster())
 	h.Releases = r
 	req := &runtimehooksv1.GeneratePatchesRequest{Variables: clusterBuiltins(t, "team-a", "web"), Items: []runtimehooksv1.GeneratePatchesRequestItem{
@@ -327,7 +312,7 @@ func TestGeneratePatchesFailOnARelease(t *testing.T) {
 	resp := &runtimehooksv1.GeneratePatchesResponse{}
 	h.GeneratePatches(t.Context(), req, resp)
 	if resp.Status != runtimehooksv1.ResponseStatusFailure || !strings.Contains(resp.Message, "v1.35.0+rke2r1") {
-		t.Errorf("status %s, message %q, want a failure naming the missing release", resp.Status, resp.Message)
+		t.Errorf("status %s, message %q, want a failure naming the unpinned release", resp.Status, resp.Message)
 	}
 	req.Items = req.Items[:1]
 	resp = &runtimehooksv1.GeneratePatchesResponse{}
@@ -336,5 +321,46 @@ func TestGeneratePatchesFailOnARelease(t *testing.T) {
 		return i.UID == "template" && i.PatchType == runtimehooksv1.JSONPatchType
 	}) {
 		t.Errorf("status %s, items %v", resp.Status, resp.Items)
+	}
+}
+
+func TestReadingAReleaseRefusesOneNoNodeCouldInstall(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		release *distributionRelease
+		version string
+		breakIt func(f *fakeReleases)
+		want    string
+	}{
+		{
+			"checksums missing a CNI's images", rke2Release, "v1.37.1+rke2r1",
+			func(f *fakeReleases) {
+				f.set("/rancher/rke2/releases/download/v1.37.1+rke2r1/sha256sum-amd64.txt",
+					listing("rke2.linux-amd64.tar.gz", "rke2-images-core.linux-amd64.tar.zst", "rke2-images-canal.linux-amd64.tar.zst"))
+			},
+			"list no rke2-images-calico.linux-amd64.tar.zst",
+		},
+		{
+			"no install script", k3sRelease, "v1.37.1+k3s1",
+			func(f *fakeReleases) { delete(f.files, "/k3s-io/k3s/v1.37.1+k3s1/install.sh") },
+			"404",
+		},
+		{"no files at all", k3sRelease, "v1.37.9+k3s1", func(*fakeReleases) {}, "404"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r, f := newReleaseChecksums(t)
+			tc.breakIt(f)
+			_, err := r.read(t.Context(), tc.release, tc.version)
+			if !errors.Is(err, errUnlisted) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want an unlisted release with %q", err, tc.want)
+			}
+		})
+	}
+	r, f := newReleaseChecksums(t)
+	sums, err := r.read(t.Context(), rke2Release, "v1.37.1+rke2r1")
+	if err != nil || ReleasePin(sums) != f.pin(rke2Release, "v1.37.1+rke2r1") {
+		t.Errorf("read %v, %v; want %v", sums, err, f.pin(rke2Release, "v1.37.1+rke2r1"))
 	}
 }

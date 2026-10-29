@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -15,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kubehenge/kubehenge/pkg/appliance"
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/release"
 )
 
@@ -69,8 +71,51 @@ func newReleaseCommand() *cobra.Command {
 		Short: "Sign release indexes, for the people who publish Kubehenge",
 	}
 	keys := release.PublicKeys()
-	cmd.AddCommand(newKeygenCommand(), newSignCommand(keys), newIndexCommand(keys), newRenewCommand(keys))
+	cmd.AddCommand(newKeygenCommand(), newSignCommand(keys), newIndexCommand(keys), newRenewCommand(keys), newPinsCommand())
 	return cmd
+}
+
+// pinsTimeout bounds pinning, a few hundred small downloads.
+const pinsTimeout = 30 * time.Minute
+
+func newPinsCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "pins <releasepins.txt>",
+		Short: "Pin the RKE2 and k3s releases published since",
+		Long: `Add to a pins file (pkg/provisioner/releasepins.txt) every RKE2 and k3s release it lacks of the
+minor versions a new cluster may start on, and the one before: the SHA-256 of the release's checksum
+file and of its install script, as they are now. A pin already there never changes. GH_TOKEN, when
+set, reads GitHub's API with a higher rate limit.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			raw, err := os.ReadFile(args[0])
+			if err != nil {
+				return fmt.Errorf("the pins: %w", err)
+			}
+			pins, err := provisioner.ParseReleasePins(string(raw))
+			if err != nil {
+				return err //nolint:wrapcheck // names the file's line
+			}
+			client := &http.Client{Timeout: time.Minute}
+			pinner := &provisioner.ReleasePinner{
+				HTTP: client, API: "https://api.github.com", Token: os.Getenv("GH_TOKEN"),
+				Checksums: &provisioner.ReleaseChecksums{HTTP: client, GitHub: "https://github.com", Raw: "https://raw.githubusercontent.com"},
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), pinsTimeout)
+			defer cancel()
+			added, err := pinner.Pin(ctx, pins)
+			// What was pinned before an error is kept: a pin never changes, so the next run goes on from it.
+			if writeErr := os.WriteFile(args[0], []byte(pins.Format(provisioner.PinsHeader(string(raw)))), signatureMode); writeErr != nil { //nolint:gosec // a public list
+				return fmt.Errorf("the pins: %w", writeErr)
+			}
+			for _, v := range added {
+				if _, printErr := fmt.Fprintln(cmd.OutOrStdout(), "pinned", v); printErr != nil {
+					return fmt.Errorf("printing: %w", printErr)
+				}
+			}
+			return err //nolint:wrapcheck // names the release and the address
+		},
+	}
 }
 
 func newKeygenCommand() *cobra.Command {
@@ -111,7 +156,7 @@ func newSignCommand(trusted []ed25519.PublicKey) *cobra.Command {
 	return &cobra.Command{
 		Use:   "sign <private key file>... <index.json>",
 		Short: "Check an index and write its signatures to <index.json>.sig",
-		Args:  cobra.MinimumNArgs(2), //nolint:mnd // a key and the index
+		Args:  cobra.MinimumNArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
 			keyFiles, indexFile := args[:len(args)-1], args[len(args)-1]
 			index, err := os.ReadFile(indexFile) //nolint:gosec // the file the person running the command named
@@ -121,11 +166,10 @@ func newSignCommand(trusted []ed25519.PublicKey) *cobra.Command {
 			var sigs strings.Builder
 			var signers []ed25519.PublicKey
 			for _, f := range keyFiles {
-				key, err := readReleaseKey(f, trusted)
-				if err != nil {
-					return err
+				key, pub, keyErr := readReleaseKey(f, trusted)
+				if keyErr != nil {
+					return keyErr
 				}
-				pub, _ := key.Public().(ed25519.PublicKey)
 				if slices.ContainsFunc(signers, func(k ed25519.PublicKey) bool { return k.Equal(pub) }) {
 					return fmt.Errorf("%s: the same key twice", f)
 				}
@@ -135,7 +179,7 @@ func newSignCommand(trusted []ed25519.PublicKey) *cobra.Command {
 			if _, err = release.Parse(index, sigs.String(), signers, time.Now()); err != nil {
 				return fmt.Errorf("the index: %w", err)
 			}
-			if err = os.WriteFile(indexFile+".sig", []byte(sigs.String()), signatureMode); err != nil { //nolint:gosec // a signature is public
+			if err = os.WriteFile(indexFile+".sig", []byte(sigs.String()), signatureMode); err != nil {
 				return fmt.Errorf("the signature: %w", err)
 			}
 			return nil
@@ -143,25 +187,26 @@ func newSignCommand(trusted []ed25519.PublicKey) *cobra.Command {
 	}
 }
 
-// readReleaseKey reads a private release key, one of trusted unless that is empty.
-func readReleaseKey(path string, trusted []ed25519.PublicKey) (ed25519.PrivateKey, error) {
+// readReleaseKey reads a private release key and its public half, one of trusted unless that is
+// empty.
+func readReleaseKey(path string, trusted []ed25519.PublicKey) (ed25519.PrivateKey, ed25519.PublicKey, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // the file the person running the command named
 	if err != nil {
-		return nil, fmt.Errorf("the private key file: %w", err)
+		return nil, nil, fmt.Errorf("the private key file: %w", err)
 	}
 	seed, err := base64.StdEncoding.DecodeString(string(trimNewline(raw)))
 	if err != nil || len(seed) != ed25519.SeedSize {
-		return nil, fmt.Errorf("%s: the private key file holds no Ed25519 seed", path)
+		return nil, nil, fmt.Errorf("%s: the private key file holds no Ed25519 seed", path)
 	}
 	key := ed25519.NewKeyFromSeed(seed)
 	pub, ok := key.Public().(ed25519.PublicKey)
 	if !ok {
-		return nil, errors.New("the private key has no Ed25519 public key")
+		return nil, nil, errors.New("the private key has no Ed25519 public key")
 	}
 	if len(trusted) > 0 && !slices.ContainsFunc(trusted, func(k ed25519.PublicKey) bool { return k.Equal(pub) }) {
-		return nil, fmt.Errorf("%s: the private key is not a release key this build trusts (pkg/release/release.pub)", path)
+		return nil, nil, fmt.Errorf("%s: the private key is not a release key this build trusts (pkg/release/release.pub)", path)
 	}
-	return key, nil
+	return key, pub, nil
 }
 
 // newRenewCommand writes the published index again with a new expiry, for signing: the releases

@@ -134,17 +134,11 @@ rules:
   - apiGroups: [""]
     resources: [configmaps]
     verbs: [get, list, watch]
-  # The checksums of each RKE2 and k3s release a cluster used, recorded once; a create cannot be
-  # held to a name.
+  # The HA rules offered to cluster creators, kept current while interface.offerHARules is on and
+  # removed when it is switched off; a create cannot be held to a name.
   - apiGroups: [""]
     resources: [configmaps]
     verbs: [create]
-  - apiGroups: [""]
-    resources: [configmaps]
-    resourceNames: [kubehenge-release-checksums]
-    verbs: [update]
-  # The HA rules offered to cluster creators, kept current while interface.offerHARules is on and
-  # removed when it is switched off.
   - apiGroups: [""]
     resources: [configmaps]
     resourceNames: [kubehenge-ha-rules]

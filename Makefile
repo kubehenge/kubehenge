@@ -8,7 +8,7 @@ CAPMOX_IMAGE ?= ghcr.io/kubehenge/cluster-api-provider-proxmox
 HELM_ADDON_IMAGE ?= ghcr.io/kubehenge/cluster-api-addon-provider-helm
 KO_FLAGS ?=
 
-.PHONY: build web gateway-api capi-operator-chart website dist index image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-templates e2e-volumes e2e-interface e2e-appliance
+.PHONY: build web gateway-api capi-operator-chart website dist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-templates e2e-volumes e2e-interface e2e-appliance
 .PHONY: fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker unit-go unit-web unit-tofu unit-shell tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
@@ -124,6 +124,11 @@ dist: web gateway-api capi-operator-chart
 		-e "s/^KUBEHENGE_SHA256=.*/KUBEHENGE_SHA256=$$(cut -d' ' -f1 dist/kubehenge_$(VERSION)_SHA256SUMS)/" \
 		appliance/install.sh > dist/install.sh
 	cd dist && sha256sum install.sh >> kubehenge_$(VERSION)_SHA256SUMS
+
+# Pins the RKE2 and k3s releases published since (pkg/provisioner/releasepins.txt), so that clusters
+# may run them. GH_TOKEN, when set, reads GitHub's API with a higher rate limit.
+release-pins: web gateway-api
+	go run ./cmd/kubehenge release pins pkg/provisioner/releasepins.txt
 
 # The release index to sign: the previous release's (PREVIOUS, its .sig beside it), checked against
 # the release keys, with this release added. Run after dist.

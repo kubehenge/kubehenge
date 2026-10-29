@@ -163,7 +163,7 @@ func TestReleaseKeysRotate(t *testing.T) {
 	if _, err = releaseCommand(t, newSignCommand(keys), oldFile, nextFile, indexFile); err != nil {
 		t.Fatal(err)
 	}
-	sigs, err := os.ReadFile(indexFile + ".sig")
+	sigs, err := fs.ReadFile(os.DirFS(filepath.Dir(indexFile)), filepath.Base(indexFile)+".sig")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestReleaseKeysRotate(t *testing.T) {
 
 func mustKey(t *testing.T, file string) ed25519.PrivateKey {
 	t.Helper()
-	key, err := readReleaseKey(file, nil)
+	key, _, err := readReleaseKey(file, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,8 +244,8 @@ func TestSignTakesOnlyTheTrustedKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	sign := func(trusted ...ed25519.PublicKey) error {
-		_, err := releaseCommand(t, newSignCommand(trusted), keyFile, indexFile)
-		return err
+		_, signErr := releaseCommand(t, newSignCommand(trusted), keyFile, indexFile)
+		return signErr
 	}
 	if err = sign(other); err == nil || !strings.Contains(err.Error(), "not a release key") {
 		t.Fatalf("signed with a key the build does not trust: %v", err)

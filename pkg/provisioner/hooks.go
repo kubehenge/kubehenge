@@ -70,7 +70,8 @@ type Hooks struct {
 	RancherKubernetes KubernetesMinors
 	// Nodes is asked which Proxmox VE nodes are online for a cluster the Placer has not marked yet.
 	Nodes Nodes
-	// Releases has RKE2 and k3s nodes install the files recorded for their release.
+	// Releases has RKE2 and k3s nodes install their release from files checked against its pins,
+	// and the validator refuses a release it does not pin.
 	Releases *ReleaseChecksums
 	// DatastoreAllocate is what lets a cluster hold Datastore.Allocate on its storage.
 	DatastoreAllocate DatastoreAllocate
