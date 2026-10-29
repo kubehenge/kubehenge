@@ -3,15 +3,19 @@
 # with Proxmox VE users, set the management cluster up from the interface, place by an HA rule
 # offered to a cluster creator, reach the shared Headlamp behind the interface's sign-in, with the
 # plugins it ships and its Helm routes' limits, and log out of a cluster in it, snapshot the
-# management cluster's etcd into an S3 store on the node and restore it from the appliance, switch
-# automatic upgrades of the management cluster on and off, upgrade the appliance under the running
-# management cluster and then the management cluster to what it carries, remove the management
-# cluster from the interface and then the appliance, and check that Proxmox VE is left as it was.
+# management cluster's etcd into an S3 store on the node and restore it from the appliance, look
+# after both from the appliance's shell, switch automatic upgrades of the management cluster on and
+# off, upgrade the appliance under the running management cluster through its own updater and
+# through install.sh, each rolling back a release whose interface does not start first, and then
+# the management cluster to what it carries, remove the management cluster from the interface and
+# then the appliance, and check that Proxmox VE is left as it was.
 #
-#   test/e2e/appliance.sh <release> <newer release> <settings>
+#   test/e2e/appliance.sh <release> <newer release> <newest release> <settings>
 #
-# Runs as root on the node, as appliance/install.sh does, and needs jq. <release> and <newer release>
-# are archives `make dist` built with two versions; <settings> is a JSON file of the management
+# Runs as root on the node, as appliance/install.sh does, and needs jq. The releases are archives
+# `make dist` built with three versions, in order, and with RELEASE_KEY the public half of the
+# Ed25519 key in KUBEHENGE_E2E_RELEASE_KEY, as `kubehenge release keygen` wrote it, which signs the
+# index the test serves the appliance's updater; <settings> is a JSON file of the management
 # cluster's settings as the interface's setup sends them (pkg/appliance/settings.go), with
 # offerHARules and headlampActions on and the default workload pool. The appliance
 # is container KUBEHENGE_E2E_APPLIANCE_ID at KUBEHENGE_E2E_APPLIANCE_ADDRESS (with its prefix length)
@@ -23,8 +27,9 @@
 # docs/uninstalling.md says before running it again.
 set -eu
 
-usage="usage: $0 <release> <newer release> <settings>"
-release=${1:?${usage}} newer=${2:?${usage}} settings=${3:?${usage}}
+usage="usage: $0 <release> <newer release> <newest release> <settings>"
+release=${1:?${usage}} newer=${2:?${usage}} newest=${3:?${usage}} settings=${4:?${usage}}
+release_key=${KUBEHENGE_E2E_RELEASE_KEY:?}
 here=$(dirname "$0")
 # shellcheck source=common.sh
 . "${here}/common.sh"
@@ -214,6 +219,69 @@ upgrade_refused() {
     fi
 }
 
+# upgrade_rolled_back <release> <version installed>: checks that install.sh --upgrade put the
+# release installed back, saying why.
+upgrade_rolled_back() {
+    upgrade "$1"
+    to=$(version_of "$1")
+    if [ "${upgraded}" -eq 0 ] || ! grep -q "release ${to} did not start: the interface did not answer within .*; rolled back to $2\$" "${work}/upgrade.log"; then
+        cat "${work}/upgrade.log" >&2
+        fail "install.sh --upgrade to ${to} did not roll back to $2"
+    fi
+    runs "$2"
+}
+
+# version_of <release>: the version of a release archive.
+version_of() { tar -xzOf "$1" ./share/kubehenge/VERSION; }
+
+# runs <version>: checks that the appliance runs that release, its interface answering.
+runs() {
+    installed=$(pct exec "${ctid}" -- cat /usr/local/share/kubehenge/VERSION)
+    [ "${installed}" = "$1" ] || fail "the appliance runs ${installed} instead of $1"
+    until_true 120 "the interface to answer" answers
+}
+
+# cli <user> <arguments...>: the kubehenge appliance command in the appliance, signed in as the user
+# with the test's password, the state passphrase at hand; its output in $work/cli and whether it
+# succeeded in $cli_ok.
+cli() {
+    who=$1
+    shift
+    cli_ok=true
+    pct exec "${ctid}" -- /usr/local/bin/kubehenge appliance --user "${who}" --password-file /root/e2e-password "$@" \
+        > "${work}/cli" 2>&1 < /dev/null || cli_ok=false
+}
+
+# cli_says <true|false> <text> <what>: checks how the last cli ended and that it said the text.
+cli_says() {
+    if [ "${cli_ok}" != "$1" ] || ! grep -qF -- "$2" "${work}/cli"; then
+        head -c 2000 "${work}/cli" >&2
+        fail "$3"
+    fi
+}
+
+# upgrade_status: the updater's last result as the interface shows it, in $work/body, signing in
+# again once a restart ended the session; fails while the interface does not answer.
+# shellcheck disable=SC2310 # a request the restarting interface does not answer is the poll's answer
+upgrade_status() {
+    request "${work}/admin.jar" "${ui}/api/appliance/upgrades" 2> /dev/null || return 1
+    got=$(cat "${work}/status")
+    if [ "${got}" = 401 ]; then
+        body=$(jq -n --arg u "${admin}" --arg p "${password}" '{username: $u, password: $p}')
+        request "${work}/admin.jar" -H 'Content-Type: application/json' -d "${body}" "${ui}/api/session" || return 1
+        admin_csrf=$(jq -r '.csrf // ""' "${work}/body")
+        request "${work}/admin.jar" "${ui}/api/appliance/upgrades" || return 1
+        got=$(cat "${work}/status")
+    fi
+    [ "${got}" = 200 ]
+}
+
+# updater_done <version>: whether the updater's upgrade to the version has ended.
+# shellcheck disable=SC2310 # as upgrade_status
+updater_done() {
+    upgrade_status && jq -e --arg to "$1" '.status.to == $to and .status.state != "updating"' "${work}/body" > /dev/null
+}
+
 # list <jq filter> <pvesh get arguments...>: an answer of Proxmox VE's API as lines. Through a file
 # rather than a pipe, so that a query that fails stops the test instead of leaving lines out.
 list() {
@@ -284,9 +352,10 @@ openssl x509 -req -in "${work}/s3/tls.csr" -CA "${work}/s3/ca.crt" -CAkey "${wor
 seaweedfs "${work}"
 s3_key=e2e$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
 s3_secret=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
-jq -n --arg k "${s3_key}" --arg s "${s3_secret}" \
-    '{identities: [{name: "e2e", credentials: [{accessKey: $k, secretKey: $s}], actions: ["Admin", "Read", "Write", "List", "Tagging"]}]}' \
-    > "${work}/s3/s3.json"
+# Anyone may read the releases bucket, as anyone may download a published release.
+jq -n --arg k "${s3_key}" --arg s "${s3_secret}" '{identities: [
+    {name: "e2e", credentials: [{accessKey: $k, secretKey: $s}], actions: ["Admin", "Read", "Write", "List", "Tagging"]},
+    {name: "anonymous", actions: ["Read:releases"]}]}' > "${work}/s3/s3.json"
 seaweedfs_server "${work}" 8333 "${work}/s3/s3.json" "${work}/s3/tls.crt" "${work}/s3/tls.key"
 s3_pid=$!
 until_true 120 "the S3 store takes a bucket" s3 -X PUT -o /dev/null "${s3_endpoint}/kubehenge-e2e"
@@ -294,6 +363,50 @@ until_true 120 "the S3 store takes a bucket" s3 -X PUT -o /dev/null "${s3_endpoi
 jq --arg e "${s3_endpoint}" --rawfile ca "${work}/s3/ca.crt" \
     '.backupTargets = [{name: "e2e", endpoint: $e, bucket: "kubehenge-e2e", prefix: "ci", caCertificate: $ca}]' \
     "${settings}" > "${work}/settings.json"
+
+step "releases for the appliance's updater, in an index signed with the test's release key"
+first_version=$(version_of "${release}")
+newer_version=$(version_of "${newer}")
+newest_version=$(version_of "${newest}")
+# A release whose interface does not start, newer than all three: the newest with its binary
+# behind a wrapper that fails to serve and does all else, the health check included.
+broken_version=$(printf '%s' "${newest_version}" | awk -F. '{ printf "%d.%d.%d", $1, $2, $3 + 1 }')
+mkdir "${work}/broken"
+tar -xzf "${newest}" -C "${work}/broken"
+mkdir "${work}/broken/share/kubehenge/broken"
+mv "${work}/broken/bin/kubehenge" "${work}/broken/share/kubehenge/broken/kubehenge"
+cat > "${work}/broken/bin/kubehenge" << 'EOF'
+#!/bin/sh
+if [ "${1:-}" = serve ]; then
+    echo "kubehenge: this release is broken on purpose" >&2
+    exit 1
+fi
+exec /usr/local/share/kubehenge/broken/kubehenge "$@"
+EOF
+chmod 0755 "${work}/broken/bin/kubehenge"
+echo "${broken_version}" > "${work}/broken/share/kubehenge/VERSION"
+broken=${work}/kubehenge_${broken_version}_linux_amd64.tar.gz
+tar -czf "${broken}" --owner=0 --group=0 -C "${work}/broken" .
+rm -rf "${work}/broken"
+# The updater is offered the newer release and the broken one; install.sh is given the others.
+releases=${s3_endpoint}/releases
+until_true 60 "the S3 store takes the releases bucket" s3 -X PUT -o /dev/null "${releases}"
+for archive in "${newer}" "${broken}"; do
+    s3 -T "${archive}" -o /dev/null "${releases}/${archive##*/}"
+done
+newer_sum=$(sha256sum "${newer}" | cut -d ' ' -f 1)
+broken_sum=$(sha256sum "${broken}" | cut -d ' ' -f 1)
+# shellcheck disable=SC2016 # jq's variables, not the shell's.
+jq -n --arg base "${releases}" --arg nv "${newer_version}" --arg na "${newer##*/}" --arg ns "${newer_sum}" \
+    --arg bv "${broken_version}" --arg ba "${broken##*/}" --arg bs "${broken_sum}" \
+    '{releases: [{version: $nv, url: "\($base)/\($na)", sha256: $ns}, {version: $bv, url: "\($base)/\($ba)", sha256: $bs}]}' \
+    > "${work}/index.json"
+# Signed by the first release's own binary, which checks the key against the one it trusts.
+tar -xzOf "${release}" ./bin/kubehenge > "${work}/kubehenge"
+chmod 0755 "${work}/kubehenge"
+"${work}/kubehenge" release sign "${release_key}" "${work}/index.json"
+s3 -T "${work}/index.json" -o /dev/null "${releases}/index.json"
+s3 -T "${work}/index.json.sig" -o /dev/null "${releases}/index.json.sig"
 
 step "install the appliance"
 sum=$(sha256sum "${release}" | cut -d ' ' -f 1)
@@ -311,6 +424,12 @@ nameservers=$(printf '%s' "${KUBEHENGE_E2E_DNS}" | tr , ' ')
 for want in 'tags: kubehenge' 'unprivileged: 1' "nameserver: ${nameservers}"; do
     grep -qxF "${want}" "${work}/config" || fail "the container's configuration has no '${want}'"
 done
+# For the kubehenge appliance commands run in it.
+for secret in "password:${password}" "passphrase:${passphrase}" "wrong-passphrase:not-${passphrase}"; do
+    printf '%s\n' "${secret#*:}" > "${work}/secret"
+    pct push "${ctid}" "${work}/secret" "/root/e2e-${secret%%:*}" --perms 0600
+done
+rm "${work}/secret"
 
 step "the interface and Headlamp's port, on a certificate the cluster's CA signed for the address"
 expect 401 "the session before signing in" request "${work}/none.jar" "${ui}/api/session"
@@ -438,13 +557,35 @@ until_true 30 "the DNS-01 credential stored" dns01_set true
 restore=${backups}/snapshots/${second}/restore
 body=$(jq -n --arg p "not-${passphrase}" '{passphrase: $p}')
 expect 403 "restoring with a wrong passphrase" post "${work}/admin.jar" "${admin_csrf}" "${restore}" "${body}"
-body=$(jq -n --arg p "${passphrase}" '{passphrase: $p}')
-expect 202 "restoring" post "${work}/admin.jar" "${admin_csrf}" "${restore}" "${body}"
-until_true 1800 "the restore to end" job_ended
+refusal=$(jq -r .error "${work}/body")
+# From the appliance's shell, refused in the interface's words, and then restored.
+cli "${admin}" etcd-backups restore "${second}" --passphrase-file /root/e2e-wrong-passphrase
+cli_says false "${refusal}" "the shell's restore with a wrong passphrase was not refused as the interface's"
+cli "${admin}" etcd-backups restore "${second}" --passphrase-file /root/e2e-passphrase
+cli_says true "Restored from ${second}" "the shell's restore did not end restored"
+setup_status
 job_was etcd-restore succeeded true
 until_true 600 "the management cluster's API as the snapshot left it" dns01_set false
 expect 200 "the ClusterClasses after the restore" request "${work}/admin.jar" "${ui}/api/classes"
 body_is '[.[].name] | contains(["kubehenge-kubeadm", "kubehenge-rke2", "kubehenge-k3s"])' "the restored management cluster lost its ClusterClasses"
+
+step "the management cluster's etcd backups and the appliance's upgrades from the appliance's shell"
+expect 403 "the etcd backups for a user without privileges" request "${work}/user.jar" "${backups}"
+refusal=$(jq -r .error "${work}/body")
+cli "${user}" etcd-backups
+cli_says false "${refusal}" "the shell showed the backups to a user without privileges, or not in the interface's words"
+cli "${admin}" --json etcd-backups
+cli_says true '"target":"e2e"' "the shell does not show the backups as set up"
+cli "${admin}" etcd-backups snapshots
+cli_says true "${second}" "the shell does not list ${second}"
+cli "${admin}" etcd-backups take
+cli_says true "Taken: " "the shell's snapshot was not taken"
+taken=$(sed -n 's/^Taken: //p' "${work}/cli")
+until_true 60 "the shell's snapshot in the backups" snapshot_taken "${second}"
+# shellcheck disable=SC2016 # jq's variables, not the shell's.
+body_has "the interface does not show the shell's snapshot" --arg n "${taken}" '.last.name == $n'
+cli "${admin}" upgrades
+cli_says true "${first_version}" "the shell does not show the installed release"
 
 step "automatic upgrades of the management cluster, switched on and off"
 # Their hour half a day away, so that none starts during the test.
@@ -465,23 +606,52 @@ upgrader_is absent "switching them off left ${upgrader}"
 # Left on, so that removing the management cluster has to take them away.
 expect 200 "switching them on again" put "${work}/admin.jar" "${admin_csrf}" "${ui}/api/appliance/upgrades/management" "${on}"
 
-step "upgrade the appliance with the management cluster up"
-upgrade "${newer}"
+step "the appliance's updater: a release that does not start rolled back, then one that does"
+# The appliance trusts the S3 store's CA and reads the test's index; the restart applies both.
+pct push "${ctid}" "${work}/s3/ca.crt" /usr/local/share/ca-certificates/kubehenge-e2e-s3.crt --perms 0644
+# shellcheck disable=SC2016 # expanded by the container's shell
+pct exec "${ctid}" -- sh -c 'update-ca-certificates > /dev/null && echo "KUBEHENGE_RELEASE_INDEX=$1" >> /etc/kubehenge/appliance.env &&
+    systemctl restart kubehenge.service' sh "${releases}/index.json"
+until_true 120 "the interface to answer again" answers
+until_true 60 "the upgrades as the interface shows them" upgrade_status
+# shellcheck disable=SC2016 # jq's variables, not the shell's.
+body_has "the interface does not offer the index's releases" --arg n "${newer_version}" --arg b "${broken_version}" \
+    '.available == [$n, $b] and (.error // "") == ""'
+expect 202 "the upgrade to the release that does not start" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/appliance/upgrades" \
+    "{\"version\":\"${broken_version}\"}"
+until_true 600 "the updater to end the upgrade to ${broken_version}" updater_done "${broken_version}"
+# shellcheck disable=SC2016 # jq's variables, not the shell's.
+body_has "the updater did not roll back to ${first_version}, saying why" --arg old "${first_version}" \
+    '.status.state == "failed" and .status.rolledBack and .version == $old and
+     (.status.error | test("did not start: the interface did not answer within .*; rolled back to \($old)$"))'
+runs "${first_version}"
+cli "${admin}" upgrades
+cli_says true "rolled back to ${first_version}" "the shell does not say the upgrade was rolled back"
+cli_says true "Reason" "the shell does not say why the upgrade was rolled back"
+cli "${admin}" upgrade "${newer_version}"
+cli_says true "Upgrading to ${newer_version}" "the shell did not ask for the upgrade to ${newer_version}"
+until_true 600 "the updater to end the upgrade to ${newer_version}" updater_done "${newer_version}"
+# shellcheck disable=SC2016 # jq's variables, not the shell's.
+body_has "the updater did not upgrade to ${newer_version}" --arg v "${newer_version}" \
+    '.status.state == "succeeded" and .version == $v and (.status.rolledBack | not)'
+runs "${newer_version}"
+
+step "install.sh --upgrade: a release that does not start rolled back, then one that does, with the management cluster up"
+upgrade_rolled_back "${broken}" "${newer_version}"
+upgrade "${newest}"
 if [ "${upgraded}" -ne 0 ]; then
     cat "${work}/upgrade.log" >&2
     fail "install.sh --upgrade failed"
 fi
-version=$(tar -xzOf "${newer}" ./share/kubehenge/VERSION)
-installed=$(pct exec "${ctid}" -- cat /usr/local/share/kubehenge/VERSION)
-[ "${installed}" = "${version}" ] || fail "the appliance runs ${installed} instead of ${version}"
-until_true 120 "the interface to answer again" answers
+version=${newest_version}
+runs "${version}"
 sign_in "${work}/admin.jar" "${admin}"
 admin_csrf=${csrf}
 until_true 120 "the interface to find the management cluster again" ready_again
 upgrade_refused "${release}" 'newer than'
 
-step "upgrade the management cluster to what the newer release carries"
-old=$(tar -xzOf "${release}" ./share/kubehenge/VERSION)
+step "upgrade the management cluster to what the newest release carries"
+old=${first_version}
 setup_status
 # shellcheck disable=SC2016 # jq's variables, not the shell's.
 body_has "the interface does not say the management cluster runs what ${old} applied" \
