@@ -1882,7 +1882,7 @@ wl -n e2e-logs wait --for=jsonpath='{.status.phase}'=Succeeded pod/short --timeo
 until_true 300 "the short-lived pod's line in Loki" logged '{namespace="e2e-logs", pod="short", container="log", job="pods"}' "${short_line}"
 if [ "${distribution}" = talos ]; then
     # Talos keeps no journal: it sends its services' and the kernel's logs to the collector on its
-    # node's loopback, and its API server's audit log lies in a directory of its own.
+    # node's own link-local address, and its API server's audit log lies in a directory of its own.
     collector=$(wl -n logging-node get daemonset/alloy-node -o json)
     audit_dir=$(printf '%s' "${collector}" | jq -r '.spec.template.spec.volumes[] | select(.name == "audit") | .hostPath.path')
     [ "${audit_dir}" = /var/log/audit/kube ] || fail "the collector reads the audit log from '${audit_dir}', not /var/log/audit/kube"

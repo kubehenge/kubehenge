@@ -452,7 +452,7 @@ loki.process "audit" {
 `
 
 // talosLogsPort is where the node's Alloy takes the logs of Talos's services and kernel, on the
-// node's loopback, which the Talos ClusterClass names as its log destination
+// node's own link-local address the Talos ClusterClass names as its log destination
 // (kubehenge.talosCommonPatches).
 const talosLogsPort = 5170
 
@@ -649,8 +649,8 @@ func alloyNodeValues(image Image, distribution templates.Distribution) map[strin
 	}
 	values, alloy := alloyCommon(image, config+"\n"+alloyWrite, logsNodeNamespace, objects...)
 	if !journal {
-		// Talos dials the port on the node's loopback, which the CNI's portmap plugin carries to
-		// the pod on that node. otelcol.receiver.tcplog is still experimental in Alloy.
+		// Talos dials the port on an address of its node's own, which the CNI's portmap plugin
+		// carries to the pod on that node. otelcol.receiver.tcplog is still experimental in Alloy.
 		alloy["stabilityLevel"] = "experimental"
 		alloy["extraPorts"] = []any{map[string]any{
 			"name": "talos-logs", "port": talosLogsPort, "targetPort": talosLogsPort, hostPortKey: talosLogsPort, protocolKey: "TCP",
