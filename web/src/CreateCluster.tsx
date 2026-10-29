@@ -35,7 +35,7 @@ import { GeneralStep, IdentityStep, MachinesStep, NetworkStep, useClassTalos } f
 import { offersHA, offersHAGroups, useHARules } from "./Placement";
 import { navigate } from "./router";
 import type { Bridge, Cluster, ClusterClass, PveNode, Storage, Versions } from "./types";
-import { Detail, Dialog, ErrorBox, errorMessage, filled, sole, usePrivilege } from "./ui";
+import { Detail, Dialog, ErrorBox, errorMessage, filled, sole } from "./ui";
 
 // versionsKey is where the versions offered are kept: a distribution's, kubeadm's per node OS.
 const versionsKey = (distribution: string, nodeOS: string | undefined): string =>
@@ -74,7 +74,6 @@ export function CreateCluster({
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [nodes, setNodes] = useState<PveNode[]>([]);
   const rules = useHARules();
-  const canModifyPermissions = usePrivilege("canModifyPermissions");
   const [step, setStep] = useState<Step>("General");
   const [error, setError] = useState<string>();
   // The server's own words for the credentials that were not stored, behind the error's Detail.
@@ -190,7 +189,7 @@ export function CreateCluster({
   );
   const haOffered = offersHA(cls, usableStorages, form.storage);
   const csi = csiOffer({ cls, storages: usableStorages, storage: form.storage, clusters });
-  const snapshots = snapshotsOffer(cls, form.storage, canModifyPermissions);
+  const snapshots = snapshotsOffer(cls, form.storage);
   const haGroups = offersHAGroups(cls);
 
   const chooseClass = (name: string): void => {

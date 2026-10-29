@@ -876,11 +876,10 @@ func TestCreateChecksProxmoxPrivileges(t *testing.T) {
 		"vlan":     {"dev@pve", strings.Replace(createBody, `"bridge":"vmbr0"`, `"bridge":"vmbr1","vlan":30`, 1)},
 		"untagged": {"dev@pve", strings.Replace(createBody, `"bridge":"vmbr0"`, `"bridge":"vmbr1"`, 1)},
 		// The grant on localnetwork does not cover a VNet of that name in another zone.
-		"vnet":      {"dev@pve", strings.Replace(createBody, `"bridge":"vmbr0"`, `"bridge":"tenants"`, 1)},
-		"rancher":   {"dev@pve", strings.Replace(createBody, `"storage":`, `"rancher":{"install":true,"hostname":"rancher.example"},"storage":`, 1)},
-		"csi":       {"dev@pve", strings.Replace(createBody, `"storage":`, `"csi":{"datastoreAllocate":true},"storage":`, 1)},
-		"snapshots": {"dev@pve", strings.Replace(createBody, `"storage":`, `"csi":{"volumeSnapshots":true},"storage":`, 1)},
-		"viewer":    {"viewer@pve", createBody},
+		"vnet":    {"dev@pve", strings.Replace(createBody, `"bridge":"vmbr0"`, `"bridge":"tenants"`, 1)},
+		"rancher": {"dev@pve", strings.Replace(createBody, `"storage":`, `"rancher":{"install":true,"hostname":"rancher.example"},"storage":`, 1)},
+		"csi":     {"dev@pve", strings.Replace(createBody, `"storage":`, `"csi":{"datastoreAllocate":true},"storage":`, 1)},
+		"viewer":  {"viewer@pve", createBody},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -1300,28 +1299,15 @@ func TestHAGroupLabelsTakeNoRightOfTheUsersOwn(t *testing.T) {
 	expect(t, b.do("POST", "/api/clusters", created), http.StatusCreated)
 }
 
-// A cluster's CSI plugin signed in as root@pam holds all of Proxmox VE, which a user can give it only
-// while able to give themselves the same: with Permissions.Modify on /.
-func TestVolumeSnapshotsNeedTheUsersOwnPermissionsModify(t *testing.T) {
+// Volume snapshots copy only the cluster's own volumes onto its own storage, so switching them on
+// takes no right of the user's beyond changing the cluster.
+func TestVolumeSnapshotsTakeNoRightOfTheUsersOwn(t *testing.T) {
 	t.Parallel()
 	c := cluster("default", "one")
 	h := newHarness(t, c)
 	b := h.browser()
 	b.signIn("dev@pve")
-	switchOn := func() *httptest.ResponseRecorder {
-		return b.do("PATCH", "/api/clusters/default/one", `{"variables":{"csi":{"volumeSnapshots":true}}}`)
-	}
-	expect(t, switchOn(), http.StatusForbidden)
-	if got := b.do("GET", "/api/session", "").Body.String(); !strings.Contains(got, `"canModifyPermissions":false`) {
-		t.Errorf("session = %s", got)
-	}
-	h.accounts.mu.Lock()
-	h.accounts.grants["dev@pve"]["/"] = []string{"Permissions.Modify"}
-	h.accounts.mu.Unlock()
-	if got := b.do("GET", "/api/session", "").Body.String(); !strings.Contains(got, `"canModifyPermissions":true`) {
-		t.Errorf("session = %s", got)
-	}
-	expect(t, switchOn(), http.StatusOK)
+	expect(t, b.do("PATCH", "/api/clusters/default/one", `{"variables":{"csi":{"volumeSnapshots":true}}}`), http.StatusOK)
 	got := &clusterv1.Cluster{}
 	if err := h.kube.Get(t.Context(), client.ObjectKeyFromObject(c), got); err != nil {
 		t.Fatal(err)
@@ -1329,12 +1315,9 @@ func TestVolumeSnapshotsNeedTheUsersOwnPermissionsModify(t *testing.T) {
 	if v := string(variableValue(got, "csi")); v != `{"volumeSnapshots":true}` {
 		t.Fatalf("csi = %s", v)
 	}
-
-	// Switching it off takes nothing, nor does a change that leaves it on.
-	h.accounts.mu.Lock()
-	delete(h.accounts.grants["dev@pve"], "/")
-	h.accounts.mu.Unlock()
-	expect(t, switchOn(), http.StatusOK)
+	if session := b.do("GET", "/api/session", "").Body.String(); strings.Contains(session, "Permissions") {
+		t.Errorf("session = %s", session)
+	}
 	expect(t, b.do("PATCH", "/api/clusters/default/one", `{"variables":{"csi":{"volumeSnapshots":false}}}`), http.StatusOK)
 }
 

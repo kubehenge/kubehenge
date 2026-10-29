@@ -96,9 +96,6 @@ export interface SetupForm {
   refreshDNS: string;
   creatorBuilds: boolean;
   clusterSysAudit: boolean;
-  clusterVolumeSnapshots: boolean;
-  // Sent beside the settings, never kept in them; empty keeps the one stored.
-  rootPassword: string;
   moreNamespaces: boolean;
   // Separated by commas or lines.
   extraNamespaces: string;
@@ -178,9 +175,6 @@ function formatMirrors(m: Record<string, string[]> | undefined): string {
     .join("\n");
 }
 
-/** rootPasswordOf is the root@pam password a run hands over: none while volume snapshots are off. */
-export const rootPasswordOf = (f: SetupForm): string => (f.clusterVolumeSnapshots ? f.rootPassword : "");
-
 export function settings(f: SetupForm): ManagementSettings {
   const s: ManagementSettings = {
     nodes: f.nodes,
@@ -232,9 +226,6 @@ export function settings(f: SetupForm): ManagementSettings {
   s.templateRefresh = refreshSettings(f);
   if (!f.clusterSysAudit) {
     s.clusterSysAudit = false;
-  }
-  if (f.clusterVolumeSnapshots) {
-    s.clusterVolumeSnapshots = true;
   }
   if (f.moreNamespaces && list(f.extraNamespaces).length > 0) {
     s.extraClusterNamespaces = list(f.extraNamespaces);
@@ -320,8 +311,6 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     etcdRestore: saved.etcdRestore === true,
     ...refreshFields(saved.templateRefresh),
     clusterSysAudit: saved.clusterSysAudit !== false,
-    clusterVolumeSnapshots: saved.clusterVolumeSnapshots === true,
-    rootPassword: "",
     moreNamespaces: (saved.extraClusterNamespaces ?? []).length > 0,
     extraNamespaces: (saved.extraClusterNamespaces ?? []).join(", "),
     headlampSignIn: saved.headlampSignIn === true,
@@ -352,7 +341,6 @@ export type SetupField =
   | "refreshGateway"
   | "refreshDNS"
   | "extraNamespaces"
-  | "rootPassword"
   | "passphrase"
   | "confirm";
 
@@ -409,10 +397,6 @@ export function setupFieldProblems(
     ...offerProblems(f),
     ...refreshProblems(f),
   };
-  // Switched on again, the password stored with the first switch-on stays unless another is given.
-  if (f.clusterVolumeSnapshots && was?.clusterVolumeSnapshots !== true && !filled(f.rootPassword)) {
-    p.rootPassword = "Enter root@pam's password.";
-  }
   if (passphraseShort(f.passphrase)) {
     p.passphrase = `Use at least ${minPassphrase} characters.`;
   } else if (firstRun && f.passphrase !== f.confirm) {
@@ -714,7 +698,6 @@ function optInRows(s: ManagementSettings): [string, string][] {
     ["HA rule placements", onOff(s.offerHARules === true)],
     ["Newest CSI release", onOff(s.clusterDatastoreAllocate === true)],
     ["HA group labels", onOff(s.clusterSysAudit !== false)],
-    ["Volume snapshots", onOff(s.clusterVolumeSnapshots === true, "On, as root@pam")],
   ];
 }
 
@@ -1322,53 +1305,6 @@ function SysAuditChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element 
   );
 }
 
-function VolumeSnapshotsChoice({
-  form,
-  set,
-  shown,
-  fixed,
-}: FieldsProps & { fixed: ManagementSettings | undefined }): JSX.Element {
-  const hint = useId();
-  const stored = fixed?.clusterVolumeSnapshots === true;
-  return (
-    <fieldset className="group">
-      <legend>Volume snapshots</legend>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={form.clusterVolumeSnapshots}
-          aria-describedby={hint}
-          onChange={(e) => set("clusterVolumeSnapshots", e.target.checked)}
-        />{" "}
-        Allow volume snapshots
-      </label>
-      <Info about="volume snapshots">
-        Only root@pam may make the copies they need. Switching it off removes the password from every cluster.
-      </Info>
-      <p className="hint" id={hint}>
-        Gives clusters root@pam&apos;s password, full control of Proxmox VE.
-      </p>
-      {form.clusterVolumeSnapshots && (
-        <Field
-          label="root@pam's password"
-          hint={stored ? "Leave empty to keep the stored one" : undefined}
-          error={shown("rootPassword")}
-        >
-          {(id) => (
-            <input
-              id={id}
-              type="password"
-              autoComplete="off"
-              value={form.rootPassword}
-              onChange={(e) => set("rootPassword", e.target.value)}
-            />
-          )}
-        </Field>
-      )}
-    </fieldset>
-  );
-}
-
 function NamespacesChoice({ form, set, shown }: FieldsProps): JSX.Element {
   return (
     <fieldset className="group">
@@ -1650,8 +1586,8 @@ function SetupWizard({
     setBusy(true);
     setError(undefined);
     try {
-      await api.setup(settings(effective), form.passphrase, rootPasswordOf(effective));
-      setForm((f) => ({ ...f, passphrase: "", confirm: "", rootPassword: "" }));
+      await api.setup(settings(effective), form.passphrase);
+      setForm((f) => ({ ...f, passphrase: "", confirm: "" }));
       onStarted();
     } catch (err) {
       setError(errorMessage(err));
@@ -1819,7 +1755,6 @@ function SetupWizard({
         <DatastoreAllocateChoice form={form} set={set} />
         <RefreshChoice form={effective} set={set} shown={shown} />
         <SysAuditChoice form={form} set={set} />
-        <VolumeSnapshotsChoice form={form} set={set} shown={shown} fixed={fixed} />
         <NamespacesChoice form={form} set={set} shown={shown} />
         <HeadlampChoice form={form} set={set} />
         <HeadlampActionsChoice form={form} set={set} />

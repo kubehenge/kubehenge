@@ -72,7 +72,7 @@ export const istioText = (on: boolean): string => (on ? "On, ambient mode" : "Of
 export const csiText = (on: boolean): string => (on ? "Newest, with Datastore.Allocate" : "Without Datastore.Allocate");
 
 /** snapshotsText describes whether a cluster takes volume snapshots. */
-export const snapshotsText = (on: boolean): string => (on ? "On, CSI plugin as root@pam" : "Off");
+export const snapshotsText = (on: boolean): string => (on ? "On, with the cluster's token" : "Off");
 
 /** haGroupsText describes whether a cluster's nodes are labelled with their Proxmox VE HA groups. */
 export const haGroupsText = (on: boolean): string => (on ? "On, Sys.Audit on / for the token" : "Off");
@@ -111,27 +111,6 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error?: 
       </section>
     );
   }
-}
-
-/** A privilege on / the session reports: Permissions.Modify. */
-export type RootPrivilege = "canModifyPermissions";
-
-/** usePrivilege reads whether the signed-in user holds a privilege on /; undefined until known. */
-export function usePrivilege(privilege: RootPrivilege): boolean | undefined {
-  const [held, setHeld] = useState<boolean>();
-  useEffect(() => {
-    async function load(): Promise<void> {
-      try {
-        const session = await api.session();
-        setHeld(session[privilege]);
-      } catch {
-        // The server refuses the change without the privilege in any case; this only says so sooner.
-        setHeld(undefined);
-      }
-    }
-    void load();
-  }, [privilege]);
-  return held;
 }
 
 // How often a page asks again about a job: often while it runs, to follow it, and seldom otherwise,

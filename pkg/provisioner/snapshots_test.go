@@ -3,16 +3,20 @@ package provisioner
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/luthermonson/go-proxmox"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -23,18 +27,12 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
-var testVolumeSnapshots = VolumeSnapshots{RootSecret: "kubehenge-root-pam", Namespace: "kubehenge-system"} //nolint:gosec // a Secret's name, not a credential
+const testCSIProxy = "ghcr.io/kubehenge/kubehenge@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+var testVolumeSnapshots = VolumeSnapshots{ProxyImage: testCSIProxy}
 
 // snapshotting asks for volume snapshots.
 var snapshotting = variableOf(csiVariable, `{"volumeSnapshots":true}`)
-
-// rootPasswordSecret holds root@pam's password as the appliance stores it.
-func rootPasswordSecret(password string) *corev1.Secret {
-	return &corev1.Secret{
-		Namespace: "kubehenge-system", Name: "kubehenge-root-pam",
-		Data: map[string][]byte{"password": []byte(password)},
-	}
-}
 
 // snapshotStoragesOf publishes the storages one of the kubehenge-system ClusterClasses takes
 // volume snapshots on.
@@ -66,7 +64,7 @@ func TestVolumeSnapshotsRefusal(t *testing.T) {
 		"on node-local storage": {testVolumeSnapshots, storedCluster("team-a", "web", "local-zfs", snapshotting), class, ""},
 		"not asking":            {VolumeSnapshots{}, storedCluster("team-a", "web", "ceph"), class, ""},
 		"asking for nothing":    {VolumeSnapshots{}, storedCluster("team-a", "web", "ceph", variableOf(csiVariable, `{"volumeSnapshots":false}`)), class, ""},
-		"no root password":      {VolumeSnapshots{}, storedCluster("team-a", "web", "local-zfs", snapshotting), class, "need the root@pam password"},
+		"no proxy image":        {VolumeSnapshots{}, storedCluster("team-a", "web", "local-zfs", snapshotting), class, "copy proxy's image"},
 		"shared storage":        {testVolumeSnapshots, storedCluster("team-a", "web", "ceph", snapshotting), class, "not ceph"},
 		"no storages published": {testVolumeSnapshots, storedCluster("team-a", "web", "local-zfs", snapshotting), &clusterv1.ClusterClass{}, "not local-zfs"},
 	} {
@@ -84,36 +82,26 @@ func TestVolumeSnapshotsRefusal(t *testing.T) {
 func TestVolumeSnapshotsRefusedAtAdmissionAndCreation(t *testing.T) {
 	t.Parallel()
 	h, reader := hooksFor(t)
-	h.VolumeSnapshots = testVolumeSnapshots
 	snapshotStoragesOf(t, reader, "kubehenge-rke2", "local-zfs")
 	validator := &ClusterValidator{Hooks: h}
 
+	local := storedCluster("team-a", "web", "local-zfs", snapshotting)
+	if _, err := validator.ValidateCreate(context.Background(), local); err == nil || !strings.Contains(err.Error(), "no image of the proxy") {
+		t.Errorf("the validator let volume snapshots in without the proxy: %v", err)
+	}
+	created := networkCluster("192.168.1.1", 24)
+	created.Spec.Topology.Variables = append(created.Spec.Topology.Variables, variableOf("storage", `"local-zfs"`), snapshotting)
+	if resp := callBeforeClusterCreate(t, h, created); !strings.Contains(resp.Message, "no image of the proxy") {
+		t.Errorf("BeforeClusterCreate let volume snapshots in without the proxy: %s %q", resp.Status, resp.Message)
+	}
+
+	h.VolumeSnapshots = testVolumeSnapshots
 	shared := storedCluster("team-a", "web", "ceph", snapshotting)
 	if _, err := validator.ValidateCreate(context.Background(), shared); err == nil || !strings.Contains(err.Error(), "not ceph") {
 		t.Errorf("the validator let volume snapshots onto shared storage: %v", err)
 	}
-	local := storedCluster("team-a", "web", "local-zfs", snapshotting)
-	if _, err := validator.ValidateCreate(context.Background(), local); err == nil || !strings.Contains(err.Error(), "no root@pam password is stored") {
-		t.Errorf("the validator let volume snapshots in without root@pam's password: %v", err)
-	}
-	created := networkCluster("192.168.1.1", 24)
-	created.Spec.Topology.Variables = append(created.Spec.Topology.Variables, variableOf("storage", `"local-zfs"`), snapshotting)
-	if resp := callBeforeClusterCreate(t, h, created); !strings.Contains(resp.Message, "no root@pam password is stored") {
-		t.Errorf("BeforeClusterCreate let volume snapshots in without root@pam's password: %s %q", resp.Status, resp.Message)
-	}
-
-	if err := reader.Create(context.Background(), rootPasswordSecret("")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := validator.ValidateCreate(context.Background(), local); err == nil || !strings.Contains(err.Error(), "holds no root@pam password") {
-		t.Errorf("the validator took an empty password: %v", err)
-	}
-	stored := rootPasswordSecret("s3cret\n")
-	if err := reader.Update(context.Background(), stored); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := validator.ValidateUpdate(context.Background(), storedCluster("team-a", "web", "local-zfs"), local); err != nil {
-		t.Errorf("volume snapshots refused on node-local storage with the password stored: %v", err)
+		t.Errorf("volume snapshots refused on node-local storage: %v", err)
 	}
 
 	// Switching volume snapshots off is never refused.
@@ -123,38 +111,68 @@ func TestVolumeSnapshotsRefusedAtAdmissionAndCreation(t *testing.T) {
 	}
 }
 
-func TestResourceSetSecretSignsTheCSIPluginInAsRoot(t *testing.T) {
+func TestResourceSetSecretProxiesTheCSIPlugin(t *testing.T) {
 	t.Parallel()
 	creds := Credentials{TokenID: "kubehenge.team-a.web@pve!cluster", TokenSecret: "s3cret", VolumeOwner: 4242, Region: "lab"} //nolint:gosec // test data
-	s, err := resourceSetSecret(cluster(), Endpoint{URL: "https://pve.example.org:8006", CA: "PEM"}, creds, "r00t")
+	s, err := resourceSetSecret(cluster(), Endpoint{URL: "https://pve.example.org:8006", CA: "PEM"}, creds, &Addons{VolumeSnapshots: true, copyProxy: copyProxy{on: true, copies: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var token, root corev1.Secret
-	if err := yaml.UnmarshalStrict(s.Data["kubehenge-proxmox.yaml"], &token); err != nil {
+	if keys := slices.Sorted(maps.Keys(s.Data)); !slices.Equal(keys, []string{"kubehenge-proxmox-proxied.yaml", "kubehenge-proxmox.yaml", "kubehenge-volume-copies.yaml"}) {
+		t.Fatalf("the resource set's manifests %v", keys)
+	}
+	var proxied corev1.Secret
+	if err := yaml.UnmarshalStrict(s.Data["kubehenge-proxmox-proxied.yaml"], &proxied); err != nil {
 		t.Fatal(err)
 	}
-	if err := yaml.UnmarshalStrict(s.Data["kubehenge-proxmox-root.yaml"], &root); err != nil {
-		t.Fatal(err)
-	}
-	if keys := slices.Sorted(maps.Keys(root.StringData)); root.Namespace != "kube-system" || root.Name != "kubehenge-proxmox-root" || !slices.Equal(keys, []string{"csi.yaml"}) {
-		t.Errorf("root secret %s/%s keys %v", root.Namespace, root.Name, keys)
+	if keys := slices.Sorted(maps.Keys(proxied.StringData)); proxied.Namespace != "kube-system" || proxied.Name != "kubehenge-proxmox-proxied" || !slices.Equal(keys, []string{"csi.yaml"}) {
+		t.Errorf("proxied secret %s/%s keys %v", proxied.Namespace, proxied.Name, keys)
 	}
 	var cfg proxmoxConfig
-	if err := yaml.UnmarshalStrict([]byte(root.StringData["csi.yaml"]), &cfg); err != nil {
+	if err := yaml.UnmarshalStrict([]byte(proxied.StringData["csi.yaml"]), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	want := proxmoxCluster{URL: "https://pve.example.org:8006/api2/json", Username: "root@pam", Password: "r00t", Region: "lab"}
+	want := proxmoxCluster{URL: "http://127.0.0.1:8006/api2/json", TokenID: creds.TokenID, TokenSecret: creds.TokenSecret, Region: "lab"}
 	if cfg.Features.ControllerVMID != 4242 || len(cfg.Clusters) != 1 || cfg.Clusters[0] != want {
-		t.Errorf("root configuration %+v", cfg)
+		t.Errorf("proxied configuration %+v", cfg)
 	}
-	// The plugin refuses a configuration with both a token and a password.
-	if strings.Contains(root.StringData["csi.yaml"], "token") {
-		t.Errorf("the root configuration names a token:\n%s", root.StringData["csi.yaml"])
+
+	docs := strings.Split(strings.TrimPrefix(string(s.Data["kubehenge-volume-copies.yaml"]), "---\n"), "---\n")
+	if len(docs) != 5 {
+		t.Fatalf("the proxy's manifests are %d objects, want the namespace and two Roles with their bindings:\n%s", len(docs), s.Data["kubehenge-volume-copies.yaml"])
 	}
-	for key, config := range token.StringData {
-		if strings.Contains(config, "r00t") || strings.Contains(config, "root@pam") {
-			t.Errorf("%s of the token's Secret holds root@pam's password", key)
+	var ns corev1.Namespace
+	var records, eventsRole rbacv1.Role
+	var recordsBinding, eventsBinding rbacv1.RoleBinding
+	for i, into := range []any{&ns, &records, &recordsBinding, &eventsRole, &eventsBinding} {
+		if err := yaml.UnmarshalStrict([]byte(docs[i]), into); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ns.Kind != "Namespace" || ns.Name != "kubehenge-volume-copies" {
+		t.Errorf("namespace %s %s", ns.Kind, ns.Name)
+	}
+	subject := rbacv1.Subject{Kind: "ServiceAccount", Namespace: "kube-system", Name: "proxmox-csi-plugin-controller"}
+	for _, tc := range []struct {
+		role    rbacv1.Role
+		binding rbacv1.RoleBinding
+		at      string
+		rule    rbacv1.PolicyRule
+	}{
+		{records, recordsBinding, "kubehenge-volume-copies", rbacv1.PolicyRule{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get", "list", "create", "update", "delete"}}},
+		{eventsRole, eventsBinding, "kube-system", rbacv1.PolicyRule{APIGroups: []string{""}, Resources: []string{"events"}, Verbs: []string{"create"}}},
+	} {
+		if tc.role.Kind != "Role" || tc.role.Namespace != tc.at || len(tc.role.Rules) != 1 || !reflect.DeepEqual(tc.role.Rules[0], tc.rule) {
+			t.Errorf("the proxy's Role in %s %+v", tc.at, tc.role)
+		}
+		if tc.binding.Kind != "RoleBinding" || tc.binding.Namespace != tc.at || tc.binding.RoleRef.Name != tc.role.Name ||
+			len(tc.binding.Subjects) != 1 || tc.binding.Subjects[0] != subject {
+			t.Errorf("the proxy's RoleBinding in %s %+v", tc.at, tc.binding)
+		}
+	}
+	for key, manifest := range s.Data {
+		if strings.Contains(string(manifest), "root@pam") || strings.Contains(string(manifest), "password") {
+			t.Errorf("%s names root@pam or a password:\n%s", key, manifest)
 		}
 	}
 }
@@ -214,7 +232,9 @@ func TestReconcileSwitchesVolumeSnapshotsOnAndOff(t *testing.T) {
 	t.Parallel()
 	web := storedCluster("team-a", "web", "local-zfs", snapshotting)
 	web.Spec.Topology.ClassRef.Name = "kubehenge-k3s"
-	r, kube := newReconciler(t, &fakeCloud{}, web, rootPasswordSecret("r00t\r\n"))
+	web.Annotations = map[string]string{OnlineNodesAnnotation: "pve1,pve2"}
+	cloud := &fakeCloud{}
+	r, kube := newReconciler(t, cloud, web)
 	r.VolumeSnapshots = testVolumeSnapshots
 	snapshotStoragesOf(t, kube, "kubehenge-k3s", "local,local-zfs")
 	workload := fake.NewClientBuilder().WithScheme(remoteScheme).Build()
@@ -224,21 +244,17 @@ func TestReconcileSwitchesVolumeSnapshotsOnAndOff(t *testing.T) {
 	if err := reconcile(t, r, web); err != nil {
 		t.Fatal(err)
 	}
+	if !slices.Equal(cloud.holderNodes, []string{"pve1", "pve2"}) {
+		t.Errorf("holder VMs asked on %v, want every node the cluster's volumes may be on", cloud.holderNodes)
+	}
 	wrapper := &corev1.Secret{}
 	if err := kube.Get(ctx, client.ObjectKey{Namespace: "team-a", Name: "web-proxmox"}, wrapper); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(wrapper.Data["kubehenge-proxmox-root.yaml"]), "password: r00t\n") {
-		t.Errorf("the resource set carries no root configuration, or the password with its line end:\n%s", wrapper.Data["kubehenge-proxmox-root.yaml"])
+	if _, ok := wrapper.Data["kubehenge-proxmox-proxied.yaml"]; !ok {
+		t.Errorf("the resource set carries no proxied configuration: %v", slices.Sorted(maps.Keys(wrapper.Data)))
 	}
-	version, csi, _ := proxyOf(t, kube, "web-proxmox-csi")
-	if !strings.HasPrefix(version, testCharts.CSINewest.Version+"@") {
-		t.Errorf("the CSI plugin's chart is %s, want the newest release", version)
-	}
-	if lookup[string](t, csi, "existingConfigSecret") != "kubehenge-proxmox-root" || lookup[string](t, csi, "timeout") != "5m" ||
-		!lookup[bool](t, csi, "controller", "snapshotter", "enabled") {
-		t.Errorf("the CSI plugin's values do not take snapshots as root@pam: %v", csi)
-	}
+	checkProxiedCSI(t, kube, true)
 	_, controller, ok := proxyOf(t, kube, "web-snapshot-controller")
 	if !ok || !lookup[bool](t, controller, "installCRDs") || !lookup[bool](t, controller, "keepCRDs") {
 		t.Errorf("no snapshot controller with its CRDs: %v", controller)
@@ -258,10 +274,18 @@ func TestReconcileSwitchesVolumeSnapshotsOnAndOff(t *testing.T) {
 		t.Errorf("the VolumeSnapshotClass: %v", class)
 	}
 
-	root := &corev1.Secret{}
-	root.Namespace, root.Name = "kube-system", "kubehenge-proxmox-root"
-	if err := workload.Create(ctx, root); err != nil {
-		t.Fatal(err)
+	// What the resource set applied, and a copy a restored volume still uses.
+	applied := []client.Object{
+		&corev1.Secret{Namespace: "kube-system", Name: "kubehenge-proxmox-proxied"},
+		&rbacv1.Role{Namespace: "kube-system", Name: "kubehenge-csi-proxy"},
+		&rbacv1.RoleBinding{Namespace: "kube-system", Name: "kubehenge-csi-proxy"},
+		&corev1.Namespace{Name: "kubehenge-volume-copies"},
+	}
+	record := &corev1.ConfigMap{Namespace: "kubehenge-volume-copies", Name: "copy-1", Labels: map[string]string{"kubehenge.dev/volume-copy": ""}}
+	for _, o := range append(slices.Clone(applied), record) {
+		if err := workload.Create(ctx, o); err != nil {
+			t.Fatal(err)
+		}
 	}
 	setVariable(t, kube, web, variableOf(csiVariable, `{}`))
 	if err := reconcile(t, r, web); err != nil {
@@ -270,20 +294,35 @@ func TestReconcileSwitchesVolumeSnapshotsOnAndOff(t *testing.T) {
 	if err := kube.Get(ctx, client.ObjectKeyFromObject(wrapper), wrapper); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := wrapper.Data["kubehenge-proxmox-root.yaml"]; ok {
-		t.Error("the resource set still carries the root configuration")
+	if _, ok := wrapper.Data["kubehenge-proxmox-proxied.yaml"]; !ok {
+		t.Errorf("the proxy went while a copy is left, whose name only it knows: %v", slices.Sorted(maps.Keys(wrapper.Data)))
 	}
-	if err := workload.Get(ctx, client.ObjectKeyFromObject(root), root); err == nil {
-		t.Error("the workload cluster still holds the root configuration")
+	checkProxiedCSI(t, kube, false)
+	if cloud.emptied != 0 {
+		t.Error("holder VMs removed while a copy is left")
 	}
-	version, csi, _ = proxyOf(t, kube, "web-proxmox-csi")
-	_, snapshots := lookup[map[string]any](t, csi, "controller", "snapshotter")["enabled"]
-	if !strings.HasPrefix(version, testCharts.CSI.Version+"@") || lookup[string](t, csi, "existingConfigSecret") != "kubehenge-proxmox" || snapshots {
-		t.Errorf("the CSI plugin did not go back to its token: %s %v", version, csi)
+
+	if err := workload.Delete(ctx, record); err != nil {
+		t.Fatal(err)
 	}
-	if _, has := csi["timeout"]; has {
-		t.Errorf("the CSI plugin keeps the longer timeout: %v", csi["timeout"])
+	if err := reconcile(t, r, web); err != nil {
+		t.Fatal(err)
 	}
+	if err := kube.Get(ctx, client.ObjectKeyFromObject(wrapper), wrapper); err != nil {
+		t.Fatal(err)
+	}
+	if keys := slices.Sorted(maps.Keys(wrapper.Data)); !slices.Equal(keys, []string{"kubehenge-proxmox.yaml"}) {
+		t.Errorf("the resource set still carries the proxy's manifests: %v", keys)
+	}
+	for _, o := range applied {
+		if err := workload.Get(ctx, client.ObjectKeyFromObject(o), o); err == nil {
+			t.Errorf("the workload cluster still holds %T %s", o, o.GetName())
+		}
+	}
+	if cloud.emptied != 1 {
+		t.Errorf("empty holder VMs removed %d times, want once", cloud.emptied)
+	}
+	checkDirectCSI(t, kube)
 	for _, name := range []string{"web-snapshot-class", "web-snapshot-controller"} {
 		if _, _, ok := proxyOf(t, kube, name); ok {
 			t.Errorf("%s is still there", name)
@@ -291,10 +330,65 @@ func TestReconcileSwitchesVolumeSnapshotsOnAndOff(t *testing.T) {
 	}
 }
 
+// checkProxiedCSI checks that web's CSI plugin is its newest release reaching Proxmox VE through
+// the proxy beside it, which makes copies, with the snapshot sidecar, or only finds those made
+// before, and that its values name no root@pam.
+func checkProxiedCSI(t *testing.T, kube client.Client, copies bool) { //nolint:revive // flag-parameter: copies is the state the check expects, not a mode
+	t.Helper()
+	version, csi, _ := proxyOf(t, kube, "web-proxmox-csi")
+	if !strings.HasPrefix(version, testCharts.CSINewest.Version+"@") {
+		t.Errorf("the CSI plugin's chart is %s, want the newest release", version)
+	}
+	_, snapshotter := lookup[map[string]any](t, csi, "controller", "snapshotter")["enabled"]
+	if lookup[string](t, csi, "existingConfigSecret") != "kubehenge-proxmox-proxied" || lookup[string](t, csi, "timeout") != "5m" ||
+		snapshotter != copies {
+		t.Errorf("the CSI plugin's values do not reach Proxmox VE through the proxy: %v", csi)
+	}
+	names, err := NamesFor("kubehenge", "team-a", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"csi-proxy", "--listen=127.0.0.1:8006", "--proxmox-url=https://pve.example.org:8006", "--proxmox-ca=/etc/kubehenge/proxmox/ca.crt",
+		"--proxmox-insecure=false", "--volume-owner=4242", "--pool=" + names.Pool, "--holders=" + names.VolumeHolders(),
+		"--copies=" + strconv.FormatBool(copies),
+	}
+	given := lookup[[]any](t, csi, "initContainers", 0, "args")
+	args := make([]string, 0, len(given))
+	for _, a := range given {
+		args = append(args, fmt.Sprint(a))
+	}
+	if lookup[string](t, csi, "initContainers", 0, "image") != testCSIProxy ||
+		lookup[string](t, csi, "initContainers", 0, "restartPolicy") != "Always" || !slices.Equal(args, want) ||
+		lookup[string](t, csi, "initContainers", 0, "env", 0, "valueFrom", "fieldRef", "fieldPath") != "metadata.name" ||
+		lookup[string](t, csi, "initContainers", 0, "env", 1, "valueFrom", "fieldRef", "fieldPath") != "metadata.namespace" {
+		t.Errorf("the proxy beside the CSI plugin: %v", csi["initContainers"])
+	}
+	if raw, err := json.Marshal(csi); err != nil || strings.Contains(string(raw), "root@pam") || strings.Contains(string(raw), "password") {
+		t.Errorf("the CSI plugin's values name root@pam or a password: %s %v", raw, err)
+	}
+}
+
+// checkDirectCSI checks that web's CSI plugin is its held release again, reaching Proxmox VE
+// directly with the cluster's token, without the snapshot sidecar, the proxy or the longer timeout.
+func checkDirectCSI(t *testing.T, kube client.Client) {
+	t.Helper()
+	version, csi, _ := proxyOf(t, kube, "web-proxmox-csi")
+	_, snapshots := lookup[map[string]any](t, csi, "controller", "snapshotter")["enabled"]
+	if !strings.HasPrefix(version, testCharts.CSI.Version+"@") || lookup[string](t, csi, "existingConfigSecret") != "kubehenge-proxmox" || snapshots {
+		t.Errorf("the CSI plugin did not go back to its token: %s %v", version, csi)
+	}
+	for _, key := range []string{"timeout", "initContainers"} {
+		if _, has := csi[key]; has {
+			t.Errorf("the CSI plugin keeps its %s: %v", key, csi[key])
+		}
+	}
+}
+
 func TestReconcileTakesSnapshotsWithRKE2sOwnController(t *testing.T) {
 	t.Parallel()
 	web := storedCluster("team-a", "web", "local-zfs", snapshotting)
-	r, kube := newReconciler(t, &fakeCloud{}, web, rootPasswordSecret("r00t"))
+	r, kube := newReconciler(t, &fakeCloud{}, web)
 	r.VolumeSnapshots = testVolumeSnapshots
 	snapshotStoragesOf(t, kube, "kubehenge-rke2", "local-zfs")
 	if err := reconcile(t, r, web); err != nil {
@@ -312,7 +406,6 @@ func TestReconcileKeepsTheTokenWhenSnapshotsAreRefused(t *testing.T) {
 	t.Parallel()
 	web := storedCluster("team-a", "web", "local-zfs", snapshotting)
 	r, kube := newReconciler(t, &fakeCloud{}, web)
-	r.VolumeSnapshots = testVolumeSnapshots
 	snapshotStoragesOf(t, kube, "kubehenge-rke2", "local-zfs")
 	recorder := events.NewFakeRecorder(10)
 	r.Events = recorder
@@ -331,7 +424,7 @@ func TestReconcileKeepsTheTokenWhenSnapshotsAreRefused(t *testing.T) {
 	}
 	select {
 	case e := <-recorder.Events:
-		if !strings.Contains(e, "VolumeSnapshotsRefused") || !strings.Contains(e, "no root@pam password is stored") {
+		if !strings.Contains(e, "VolumeSnapshotsRefused") || !strings.Contains(e, "no image of the proxy") {
 			t.Errorf("event %q", e)
 		}
 	default:

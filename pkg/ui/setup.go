@@ -248,8 +248,6 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 	var req struct {
 		Settings   appliance.Settings `json:"settings"`
 		Passphrase string             `json:"passphrase"`
-		// RootPassword is root@pam's, for volume snapshots; empty keeps the one stored.
-		RootPassword string `json:"rootPassword"`
 	}
 	if !readJSON(w, r, &req) {
 		return
@@ -264,12 +262,6 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	if !s.require(w, r, u, "/", privileges...) {
 		return
-	}
-	if req.Settings.ClusterVolumeSnapshots && req.RootPassword != "" {
-		if !s.checkRootPassword(w, r, u, req.RootPassword) {
-			return
-		}
-		req.Settings.RootPassword = req.RootPassword
 	}
 	// The run needs the whole of a ticket's life, so it gets a new one rather than the session's.
 	ticket, err := s.Accounts.Renew(r.Context(), u.ticket)
@@ -288,33 +280,6 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	s.Log.Info("management cluster apply started", "user", u.ticket.Username)
 	writeJSON(w, http.StatusAccepted, a.Current())
-}
-
-// checkRootPassword signs in as root@pam with the password, as the CSI plugin will: with the
-// password alone, which Proxmox VE accepts only while root@pam has no second factor. Wrong guesses
-// are limited as wrong passphrases are.
-func (s *Server) checkRootPassword(w http.ResponseWriter, r *http.Request, u user, password string) bool {
-	done, ok := s.limiter.reserve(count{key: "root-password:" + u.ticket.Username, allowed: failuresAllowed})
-	if !ok {
-		writeError(w, http.StatusTooManyRequests, "too many wrong root@pam passwords. Try again later")
-		return false
-	}
-	_, challenge, err := s.Accounts.SignIn(r.Context(), "root@pam", password)
-	done(errors.Is(err, pve.ErrAuthentication))
-	switch {
-	case errors.Is(err, pve.ErrAuthentication):
-		writeError(w, http.StatusUnprocessableEntity, "volume snapshots: wrong root@pam password")
-		return false
-	case err != nil:
-		s.proxmoxError(w, err)
-		return false
-	case challenge != nil:
-		writeError(w, http.StatusUnprocessableEntity,
-			"volume snapshots: root@pam has a second factor. Remove it in Proxmox VE first")
-		return false
-	}
-	s.Log.Warn("root@pam's password given for volume snapshots", "user", u.ticket.Username)
-	return true
 }
 
 // jobConflict tells whether a job could not start because another one, of any kind, holds the

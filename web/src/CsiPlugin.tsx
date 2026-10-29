@@ -3,7 +3,7 @@ import { useEffect, useId, useState, type JSX } from "react";
 import { api } from "./api";
 import { csiOffer, snapshotsOffer, type CSIOffer, type SnapshotsOffer } from "./create-form";
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, Info, useChange, usePrivilege } from "./ui";
+import { Dialog, ErrorBox, Info, useChange } from "./ui";
 import { flag, record, text } from "./values";
 
 /** csiOn reads whether the cluster runs the plugin's newest release. */
@@ -149,10 +149,11 @@ export function SnapshotsField({
         Take volume snapshots
       </label>
       <Info about="volume snapshots">
-        Only root@pam may copy volumes in Proxmox VE. Needs ZFS, LVM, LVM-thin, directory or btrfs storage.
+        A proxy copies only the cluster&apos;s own volumes, with its own token. Needs ZFS, LVM, LVM-thin, directory
+        or btrfs storage.
       </Info>
       <p className="hint" id={hint}>
-        The cluster holds root@pam credentials for Proxmox VE
+        Copies stay on their volume&apos;s node
       </p>
       {refused && (
         <p className={checked ? "field-error" : "hint"} id={reason} role={checked ? "alert" : undefined}>
@@ -166,7 +167,6 @@ export function SnapshotsField({
 /** useSnapshotsOffer reads whether an existing cluster may take volume snapshots, and what stands in the way. */
 export function useSnapshotsOffer(c: Cluster): SnapshotsOffer {
   const [offer, setOffer] = useState<SnapshotsOffer>({ offered: false, problem: undefined });
-  const can = usePrivilege("canModifyPermissions");
   const storage = text(c.variables["storage"]);
   const className = c.class;
   useEffect(() => {
@@ -177,7 +177,6 @@ export function useSnapshotsOffer(c: Cluster): SnapshotsOffer {
           snapshotsOffer(
             classes.find((x) => x.name === className),
             storage,
-            can,
           ),
         );
       } catch {
@@ -186,7 +185,7 @@ export function useSnapshotsOffer(c: Cluster): SnapshotsOffer {
       }
     }
     void load();
-  }, [className, storage, can]);
+  }, [className, storage]);
   return offer;
 }
 
