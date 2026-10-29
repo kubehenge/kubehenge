@@ -37,9 +37,7 @@ onBeforeUnmount(() => stop());
           <div class="hero-head">
             <h1 id="h-hero" class="display">Kubernetes<br />for <span>Proxmox VE</span></h1>
             <div class="lede">
-              <p class="prose">
-                Kubehenge raises production-ready Kubernetes clusters on Proxmox VE and keeps them standing.
-              </p>
+              <p class="prose">Kubehenge raises Kubernetes clusters on Proxmox VE and keeps them standing.</p>
               <div class="win cmdbox" data-copy-scope>
                 <div class="bar">
                   <span class="title">as root, in a Proxmox VE node's shell</span><span class="spacer"></span

@@ -23,11 +23,11 @@ Deleting the cluster that runs Rancher first removes every registered cluster fr
 
 ### In the appliance
 
-On the Administration page, **Remove Kubehenge** takes the state passphrase and the word `remove`. It refuses while any cluster exists, since their Proxmox VE objects are cleaned up by the management cluster, and waits while a run of the management cluster is going on. A wrong passphrase stops it before anything is deleted. It then:
+On the Administration page, **Remove Kubehenge** takes the state passphrase and the word `remove`. It refuses while any cluster exists, since their Proxmox VE objects are cleaned up by the management cluster. It also refuses while a run of the management cluster is going on; try again once that run has ended. A wrong passphrase stops it before anything is deleted. It then:
 
 - deletes the VM templates in the template pool, `kubehenge-templates`;
 - switches automatic upgrades of the management cluster off, deleting what the appliance kept for them and the user `kubehenge-upgrader@pve` with its token ([upgrading.md](upgrading.md#automatically-after-kubehenge));
-- destroys the management cluster with OpenTofu: its VMs, the Talos image, the three pools, the group for clusters' users, the roles, and the Cluster API and controller users with their API tokens.
+- destroys the management cluster with OpenTofu, with every Proxmox VE object its module made ([below](#what-the-module-made)).
 
 The page follows the log. The appliance stays, back at its first run with the last settings filled in, ready to set up again; the emptied state is deleted, so the next setup chooses a new passphrase. Removal needs the same [privileges](install.md#who-may-set-it-up) on `/` as the setup.
 
@@ -39,7 +39,17 @@ Delete the clusters first, and the templates in the template pool (`kubehenge te
 tofu destroy
 ```
 
-Destroy removes the management cluster's VMs, the Talos image, the pools, the group, the roles, and the Cluster API and controller users with their tokens. The `proxmox_objects` output lists what the module made, to check against afterwards.
+Destroy removes every Proxmox VE object the module made ([below](#what-the-module-made)). The `proxmox_objects` output lists them, to check against afterwards.
+
+### What the module made
+
+The names below are the defaults. The users, groups and roles start with the management cluster's name, `kubehenge` unless another was set.
+
+- the management cluster's VMs, and the Talos disk image on each node;
+- the pools: `kubehenge-management` for the management cluster, `kubehenge` for the workload clusters and `kubehenge-templates` for the VM templates;
+- the users, each with its API token: `kubehenge-cluster-api@pve` for Cluster API and `kubehenge-provisioner@pve` for Kubehenge's controller; `kubehenge-ha@pve` where Proxmox VE HA is on, `kubehenge-etcd-restore@pve` where etcd restores are on, and `kubehenge-template-builder@pve` where the weekly template build is on;
+- the groups: `kubehenge-clusters`, which every cluster's user joins, and `kubehenge-clusters-audit`, for the HA group labels, unless they were switched off for every cluster;
+- the roles, each named `kubehenge-…`, and the permissions that grant them.
 
 ## Remove the appliance
 

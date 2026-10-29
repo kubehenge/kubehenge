@@ -5,6 +5,11 @@ Every release's changes, newest first. Versions follow [Semantic Versioning](htt
 ## [Unreleased]
 
 - **Backups, all through the interface.** A backup can be deleted before it runs out, once its name is typed (a Velero `DeleteBackupRequest`). A restore can pick its namespaces, its kinds of resources and whether the volumes' data comes back, and a finished restore lists Velero's errors and warnings by namespace. A cluster can read the backups of others of its namespace on the same target (the `backups` variable's `readFrom`), to restore them into it; one created reading another's restores that cluster's volumes' data too. The health page and the fleet say when the last backup failed or backups are overdue. See [Back up and restore](clusters.md#back-up-and-restore).
+- When the installer removes a container whose interface failed to start or to reach Proxmox VE's API, it prints the interface's log first, which went with the container before. Its check of the new appliance verifies the appliance's certificate instead of skipping it, and `install.sh --help` lists every option.
+- `kubehenge template create` and `template refresh` refuse an empty `--node` before calling Proxmox VE.
+- The documentation says HA group labels are on by default, as they are, and moves the setup's opt-in settings to a page of their own ([install-settings.md](install-settings.md)). Troubleshooting covers failed installs, template builds, a changed Proxmox VE CA, clusters refused when applied with kubectl, and each warning event the controller writes.
+- A Cluster applied with kubectl or through GitOps is held to the interface's rules by the API server: a name of at most 40 characters, a version in the distribution's form, upgrades of one minor version at most and never back, 1, 3, 5 or 7 control-plane nodes, at most 100 workers in each pool, and node addresses and a control-plane endpoint on the gateway's network with the endpoint outside the node addresses ([clusters.md](clusters.md)). Fixed pools need node addresses for every machine plus one for a rollout, as autoscaled ones already did, since a rollout otherwise waits for ever.
+- Two clusters on the same bridge and VLAN can no longer be given the same node addresses or control-plane endpoint, from the interface or kubectl alike.
 
 ## [0.3.1] - 2026-10-28
 

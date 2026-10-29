@@ -15,7 +15,7 @@ import (
 
 // ClusterValidator answers the API server for Kubehenge's clusters as they are created and changed,
 // so that what BeforeClusterCreate would refuse later is refused at once, and a change made after
-// creation is held to the same: a node OS that cannot be built or whose CPU type no node it may
+// creation is held to the same: a name, version or size the interface would not offer, a node OS that cannot be built or whose CPU type no node it may
 // use offers, control planes too small for the cluster's workers, nodes without
 // the memory its add-ons use, logs without monitoring, backups to a target the class lacks or on
 // a schedule Velero cannot read or reading the backups of a cluster that has none in that target, Rancher switched on beside another, or on nodes too small for it,
@@ -65,6 +65,7 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 	}
 	var errs field.ErrorList
 	topology := field.NewPath("spec", "topology")
+	errs = append(errs, validateTopology(old, c)...)
 	errs = append(errs, v.validateNodeOS(ctx, old, c)...)
 	if err := checkControlPlaneSize(old, c, class); err != nil {
 		errs = append(errs, field.Forbidden(topology, err.Error()))
@@ -97,8 +98,8 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 		errs = append(errs, field.Forbidden(topology.Child("variables").Key(TalosVersionVariable), err.Error()))
 	}
 	if addressesChanged(old, c) {
-		if err := v.Hooks.checkLoadBalancer(ctx, c); err != nil {
-			errs = append(errs, field.Forbidden(topology.Child("variables").Key(loadBalancerVariable), err.Error()))
+		if err := v.Hooks.checkAddresses(ctx, c); err != nil {
+			errs = append(errs, field.Forbidden(topology.Child("variables").Key("network"), err.Error()))
 		}
 	}
 	errs = append(errs, v.validateGrants(ctx, old, c, class)...)
