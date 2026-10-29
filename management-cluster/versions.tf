@@ -167,8 +167,13 @@ locals {
   # webhook since. The build also carries scripts/capmox-patches: a reconcile that read the machine
   # before a task's reference was written clears that reference, so the next change to the VM can
   # time out on the lock the task still holds, and one patch waits for any task still running on
-  # the VM. The other reads the machine from the API server before cloning: the cached copy can
-  # predate the previous reconcile's clone, and cloning from it leaves a second VM behind.
+  # the VM. Another reads the machine from the API server before cloning: the cached copy can
+  # predate the previous reconcile's clone, and cloning from it leaves a second VM behind. A third
+  # forgets the VM ID of a clone that failed, which another VM may have taken while the clone
+  # started: kept, the machine would wait on that VM for ever and delete it with itself. A fourth
+  # destroys a deleted machine's VM only once the VM under its ID is confirmed as the machine's,
+  # by name and SMBIOS UUID: Proxmox VE hands a freed ID to the next clone, and the delete's next
+  # pass would otherwise destroy that clone.
   # scripts/provider-image.sh builds it reproducibly,
   # and a release publishes it only when it comes out with this digest. It applies only while capmox
   # is at `release`.
@@ -180,7 +185,7 @@ locals {
     # capmox's own image is built with Go 1.26 on distroless static.
     go         = "go1.26.10"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
-    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:2ecbb2024744a3adfd4a4ef33630962ae95b27cd5bd80fcdb23efccd85b7dd58"
+    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:c3478217d2469be42379966d327028be6213d88e443fe1c678a9e9ee883f4b5e"
   }
 
   # The Add-on Provider for Helm creates a cluster's HelmReleaseProxy under a generated name and
