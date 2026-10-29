@@ -61,7 +61,7 @@ for node in pve pve2; do
 done
 on pve2 sh -c 'ip addr del 172.20.99.1/24 dev vmbr0 && ip link set vmbr0 address 02:00:ac:14:63:02 &&
     systemctl stop dnsmasq.service &&
-    iptables -t nat -D POSTROUTING -s 172.20.99.0/24 -o eth0 -j MASQUERADE'
+    iptables-nft -t nat -D POSTROUTING -s 172.20.99.0/24 -o eth0 -j MASQUERADE'
 
 on pve pvecm create kubehenge-e2e --link0 172.21.99.2 > /dev/null
 fingerprint=$(on pve openssl x509 -in /etc/pve/nodes/pve/pve-ssl.pem -noout -fingerprint -sha256 | cut -d= -f2)
