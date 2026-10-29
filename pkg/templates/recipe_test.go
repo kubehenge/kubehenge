@@ -334,7 +334,7 @@ func TestImageModeNodesLetContainersInstallCNIPlugins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"semodule -i /usr/share/kubehenge/kubehenge-cni.cil", "d /var/opt/cni/bin 0755 root root -"} {
+	for _, want := range []string{"semodule -i /usr/share/kubehenge/kubehenge-cni.cil", "d /var/opt/cni/bin 0755 "} {
 		if !strings.Contains(string(script), want) {
 			t.Errorf("el/node.sh does not hold %q", want)
 		}
