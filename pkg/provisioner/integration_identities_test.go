@@ -20,7 +20,7 @@ import (
 // it never had, and keeps a mounted identity's token in the autoscalers' namespace: a fake client
 // allows every call, so only the API server shows a missing verb.
 func TestIntegrationIdentitiesGoUnderTheControllersRights(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
-	cfg, admin, _ := startAPIConfig(t)
+	cfg, admin := startAPIConfig(t)
 	ctx := context.Background()
 	as := rest.CopyConfig(cfg)
 	as.Impersonate = rest.ImpersonationConfig{
@@ -63,6 +63,47 @@ func TestIntegrationIdentitiesGoUnderTheControllersRights(t *testing.T) { //noli
 		}
 	}
 	checkMountedIdentityUnderTheControllersRights(ctx, t, w, admin)
+	checkControllerWritesNoServiceAccountTokens(ctx, t, controller, admin, cluster.Namespace)
+}
+
+// checkControllerWritesNoServiceAccountTokens has the controller, which may write Secrets in every
+// namespace, try to mint a token of the namespace's default account, and write a Secret of its own.
+func checkControllerWritesNoServiceAccountTokens(ctx context.Context, t *testing.T, controller, admin client.Client, namespace string) {
+	t.Helper()
+	token := func() *corev1.Secret {
+		return &corev1.Secret{
+			Namespace: namespace, Name: "minted", Type: corev1.SecretTypeServiceAccountToken,
+			Annotations: map[string]string{corev1.ServiceAccountNameKey: "default"},
+		}
+	}
+	// The API server takes up an admission policy a moment after it is created.
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		err := controller.Create(ctx, token())
+		if apierrors.IsInvalid(err) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("minting a token: %v, want refused by the policy", err)
+		}
+		if err := admin.Delete(ctx, token()); err != nil {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the controller wrote ServiceAccount tokens for 30 seconds")
+		}
+	}
+	own := &corev1.Secret{Namespace: namespace, Name: "own", Type: corev1.SecretTypeOpaque, Data: map[string][]byte{"key": []byte("value")}}
+	if err := controller.Create(ctx, own); err != nil {
+		t.Errorf("a Secret of its own: %v", err)
+	}
+	existing := token()
+	if err := admin.Create(ctx, existing); err != nil {
+		t.Fatal(err)
+	}
+	existing.Labels = map[string]string{"changed": "by the controller"}
+	if err := controller.Update(ctx, existing); !apierrors.IsInvalid(err) {
+		t.Errorf("changing a ServiceAccount token: %v, want refused", err)
+	}
 }
 
 // checkMountedIdentityUnderTheControllersRights has the controller write the autoscaler identity's

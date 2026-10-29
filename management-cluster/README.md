@@ -17,7 +17,7 @@ On Proxmox VE:
 - **With `etcd_restore`, a user and API token for etcd restores,** holding `VM.Audit` and `VM.GuestAgent.Unrestricted` on the workload pool, which amounts to a root shell in every cluster's VMs; the controller uses it only to run a restore an authorised user asked for on the cluster's control-plane VMs ([clusters](../docs/clusters.md#restore-etcd)).
 - **A group for the clusters' own users,** allowed to use space on the listed storages and to read the nodes. Each cluster's user, created by the controller, adds rights on its own pool only ([architecture](../docs/architecture.md#each-clusters-own-corner-of-proxmox-ve)).
 - **The Talos disk image,** built by the Talos Image Factory with the QEMU guest agent.
-- **One, three or five VMs,** each a Talos control-plane node, with static addresses and a virtual IP in front of the Kubernetes API.
+- **One, three or five VMs,** each a Talos control-plane node, with static addresses and a virtual IP in front of the Kubernetes API. Their VM IDs are picked at random between 10000 and 99999, away from the lowest free ID that Proxmox VE offers whatever else is created at the same moment.
 
 In the cluster:
 
@@ -49,6 +49,8 @@ tofu apply
 tofu output -raw kubeconfig > kubeconfig
 tofu output -raw talosconfig > talosconfig
 ```
+
+The module installs the Cluster API Operator from its chart's archive in `charts/`, which a release's archive carries; in a checkout of the repository, `make capi-operator-chart` downloads it there first. The apply refuses an archive whose SHA-256 is not the one `versions.tf` names.
 
 `-lockfile=readonly` holds the providers to the checksums in `.terraform.lock.hcl`. A root module of your own that calls this one needs a copy of that file beside it, since only the root module's is read. `terraform` works the same as `tofu`, from version 1.11.
 

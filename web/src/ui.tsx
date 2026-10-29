@@ -576,7 +576,7 @@ export function useChange(
     setBusy(true);
     setError(undefined);
     try {
-      await (staging === null ? api.change(c.namespace, c.name, req) : staging.stage(req));
+      await (staging === null ? api.change(c, req) : staging.stage(req));
       onClose();
     } catch (err) {
       setError(errorMessage(err));

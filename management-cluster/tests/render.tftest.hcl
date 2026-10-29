@@ -81,6 +81,14 @@ run "nodes" {
   }
 
   assert {
+    condition = (
+      helm_release.cluster_api_operator.chart == "./charts/cluster-api-operator-${trimprefix(local.capi_operator.chart, "v")}.tgz" &&
+      helm_release.cluster_api_operator.repository == null
+    )
+    error_message = "the Cluster API operator must come from the chart archive beside the module, which its SHA-256 checks, not a Helm repository"
+  }
+
+  assert {
     condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.pool_id == "kubehenge-management"])
     error_message = "management VMs must sit in the management pool, out of Cluster API's reach"
   }

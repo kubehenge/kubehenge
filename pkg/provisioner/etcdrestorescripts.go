@@ -400,8 +400,13 @@ func asRoot(s string) string {
 }
 
 // Restorable refuses a snapshot a cluster cannot be restored from: one of another distribution, or
-// of another Kubernetes minor, whose objects the cluster's API server may not read.
+// of another Kubernetes minor, whose objects the cluster's API server may not read, and one without
+// a SHA-256 in lower-case hex. The checksum comes from the store's metadata, which anyone holding
+// the store's keys can write, and goes into the commands a restore runs as root on the nodes.
 func Restorable(cluster *clusterv1.Cluster, s *EtcdSnapshot) error {
+	if !isDigest(s.SHA256) {
+		return fmt.Errorf("snapshot %s has no SHA-256 of 64 lower-case hexadecimal digits to check it by", s.Name)
+	}
 	if d := string(distributionOf(cluster)); s.Distribution != "" && s.Distribution != d {
 		return fmt.Errorf("snapshot %s is of a %s cluster, and this one is %s", s.Name, s.Distribution, d)
 	}

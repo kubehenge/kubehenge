@@ -543,6 +543,7 @@ function RestoreState({
   const at = r.finished ?? r.started;
   // By when it was taken, as the table lists it, while the target still holds it.
   const from = snapshots.find((x) => x.name === r.snapshot);
+  const before = snapshots.find((x) => x.name === r.before);
   return (
     <dl className="summary">
       <dt>Last restore</dt>
@@ -554,6 +555,17 @@ function RestoreState({
           {filled(r.by) && `, asked by ${r.by}`}, {when(at)}
         </span>
         {filled(r.message) && <div className="hint message">{sentence(r.message)}</div>}
+        {filled(r.before) && (
+          <div className="hint">
+            etcd as it was before is in {before === undefined ? r.before : `the snapshot of ${when(before.time)}`}, to
+            undo the restore by another.
+          </div>
+        )}
+        {filled(r.noBefore) && (
+          <div className="hint message">
+            {sentence(`no snapshot of etcd as it was could be taken first: ${r.noBefore}`)}
+          </div>
+        )}
       </dd>
     </dl>
   );
@@ -659,7 +671,7 @@ export function EtcdRestoreDialog({
     setBusy(true);
     setError(undefined);
     try {
-      await api.restoreEtcd(c.namespace, c.name, snapshot.name);
+      await api.restoreEtcd(c.namespace, c.name, { snapshot: snapshot.name, confirm: typed });
       onDone();
     } catch (err) {
       setError(errorMessage(err));
@@ -696,7 +708,8 @@ export function EtcdRestoreDialog({
       {automatic ? (
         <>
           <p>
-            Kubehenge pauses the cluster,{" "}
+            Kubehenge pauses the cluster, snapshots etcd as it is into the target, so that another restore can undo this
+            one,{" "}
             {c.distribution === "talos"
               ? "wipes etcd on every control-plane node through its Talos API, which reboots each, and restores etcd from the snapshot on one of them; the others join it again"
               : "stops the control plane on every control-plane VM through the Proxmox VE guest agent, restores etcd on one of them and replaces the others with new machines"}

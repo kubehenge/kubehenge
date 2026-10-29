@@ -374,6 +374,8 @@ export interface Cluster {
   class: string;
   distribution: string;
   version: string;
+  /** Counts the changes to the cluster's settings; a change is made against the one it was shown. */
+  generation: number;
   created: string;
   createdBy?: string;
   autoUpgraded?: string;
@@ -685,6 +687,10 @@ export interface EtcdRestoreStatus {
   node?: string;
   /** The other control-plane machines, replaced once etcd is back. */
   replaced?: string[];
+  /** The snapshot of etcd as it was, taken into the target before the restore stopped or wiped any of it. */
+  before?: string;
+  /** Why no snapshot of etcd as it was could be taken. */
+  noBefore?: string;
   message?: string;
   started: string;
   finished?: string;

@@ -154,6 +154,9 @@ const (
 	// back for the rest of it.
 	failuresAllowed = 5
 	failureWindow   = 15 * time.Minute
+	// addressFailuresAllowed failed sign-ins from one address, whichever users they name, hold it
+	// back: more than one user's, since several people may share an address behind NAT.
+	addressFailuresAllowed = 20
 )
 
 // Run prepares the server and prunes its sessions until ctx ends. Handler is usable once it has
@@ -259,7 +262,7 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 func (s *Server) init() {
 	if s.sessions == nil {
 		s.sessions = newSessions(s.Accounts, s.SessionMaxAge)
-		s.limiter = newLimiter(failuresAllowed, failureWindow)
+		s.limiter = newLimiter(failureWindow)
 		if s.Kube != nil {
 			s.setKube(s.Kube)
 		}
@@ -282,9 +285,16 @@ func (s *Server) currentKube() client.Client {
 	return nil
 }
 
+// hsts keeps browsers on HTTPS for a year once they have reached the interface or Headlamp, which
+// serve nothing else, so that a plain-HTTP address typed in or followed later never reaches whoever
+// sits on the network. Subdomains are left alone: the interface's host name may be the parent of
+// others it does not serve.
+const hsts = "max-age=31536000"
+
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
+		h.Set("Strict-Transport-Security", hsts)
 		h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "+
 			"connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")

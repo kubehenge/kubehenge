@@ -84,16 +84,16 @@ func (s *Server) signIn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "user name and password are required")
 		return
 	}
-	keys := []string{"user:" + strings.ToLower(username), "address:" + clientAddress(r)}
-	if !s.limiter.allow(keys...) {
+	done, ok := s.limiter.reserve(signInCounts(username, r)...)
+	if !ok {
 		writeError(w, http.StatusTooManyRequests, "too many failed sign-ins; try again later")
 		return
 	}
 	s.sessions.end(w, r)
 	ticket, challenge, err := s.Accounts.SignIn(r.Context(), username, req.Password)
+	done(errors.Is(err, pve.ErrAuthentication))
 	if err != nil {
 		if errors.Is(err, pve.ErrAuthentication) {
-			s.limiter.fail(keys...)
 			s.Log.InfoContext(r.Context(), "sign-in refused", "user", username, "address", clientAddress(r))
 			writeError(w, http.StatusUnauthorized, "sign-in failed: check the user name, password and realm")
 			return
@@ -148,15 +148,15 @@ func (s *Server) secondFactor(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "kind is totp, yubico or recovery")
 		return
 	}
-	keys := []string{"user:" + strings.ToLower(challenge.Username), "address:" + clientAddress(r)}
-	if !s.limiter.allow(keys...) {
+	done, ok := s.limiter.reserve(signInCounts(challenge.Username, r)...)
+	if !ok {
 		writeError(w, http.StatusTooManyRequests, "too many failed sign-ins; try again later")
 		return
 	}
 	ticket, err := s.Accounts.Answer(r.Context(), challenge, req.Kind, strings.TrimSpace(req.Code))
+	done(errors.Is(err, pve.ErrAuthentication))
 	if err != nil {
 		if errors.Is(err, pve.ErrAuthentication) {
-			s.limiter.fail(keys...)
 			s.Log.InfoContext(r.Context(), "second factor refused", "user", challenge.Username, "address", clientAddress(r))
 			writeError(w, http.StatusUnauthorized, "the code was not accepted")
 			return
@@ -199,42 +199,92 @@ func clientAddress(r *http.Request) string {
 	return host
 }
 
+// signInCounts are what a guess at a user's password or second factor counts against: the user at
+// the client's address, and the address whichever user it names. Nothing counts per user alone,
+// which would let anyone lock root@pam or any administrator out from anywhere; Proxmox VE's own
+// page has no such count either.
+func signInCounts(username string, r *http.Request) []count {
+	address := clientAddress(r)
+	return []count{
+		{key: "user:" + strings.ToLower(username) + "\x00" + address, allowed: failuresAllowed},
+		{key: "address:" + address, allowed: addressFailuresAllowed},
+	}
+}
+
+// passphraseCount is what a guess at the appliance's state passphrase counts against: the
+// signed-in user who makes it.
+func passphraseCount(u user) count {
+	return count{key: "passphrase:" + u.ticket.Username, allowed: failuresAllowed}
+}
+
 // maxLimiterKeys bounds the memory an attacker can make the limiter use with many keys.
 const maxLimiterKeys = 10000
 
-// limiter refuses a key after limit failures within window, so passwords and codes cannot be
-// guessed through the interface faster than an attacker could on Proxmox VE's own page.
+// count is one key a guess counts against, with the failures it allows within the window.
+type count struct {
+	key     string
+	allowed int
+}
+
+// limiter refuses a key once it has used up its failures within window, so passwords and codes
+// cannot be guessed through the interface faster than an attacker could on Proxmox VE's own page.
 type limiter struct {
-	limit  int
 	window time.Duration
 	now    func() time.Time
 
 	mu       sync.Mutex
 	failures map[string][]time.Time
+	// pending are the guesses still being checked, by key, which count as failures until they are
+	// known: parallel requests would otherwise all pass before the first of them failed.
+	pending map[string]int
 }
 
-func newLimiter(limit int, window time.Duration) *limiter {
-	return &limiter{limit: limit, window: window, now: time.Now, failures: map[string][]time.Time{}}
+func newLimiter(window time.Duration) *limiter {
+	return &limiter{window: window, now: time.Now, failures: map[string][]time.Time{}, pending: map[string]int{}}
 }
 
-func (l *limiter) allow(keys ...string) bool {
+// reserve takes a guess from every count and returns what to call once the guess is checked, with
+// whether it was wrong; false when one of the counts has none left, and none is taken.
+func (l *limiter) reserve(counts ...count) (func(failed bool), bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
-	for _, k := range keys {
-		if len(l.recent(k, now)) >= l.limit {
-			return false
+	for _, c := range counts {
+		if len(l.recent(c.key, now))+l.pending[c.key] >= c.allowed {
+			return nil, false
 		}
 	}
-	return true
+	for _, c := range counts {
+		l.pending[c.key]++
+	}
+	var once sync.Once
+	return func(failed bool) {
+		once.Do(func() {
+			l.mu.Lock()
+			defer l.mu.Unlock()
+			l.settle(counts)
+			if failed {
+				l.fail(counts)
+			}
+		})
+	}, true
 }
 
-func (l *limiter) fail(keys ...string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+// settle gives back the guesses counts took; l.mu is held.
+func (l *limiter) settle(counts []count) {
+	for _, c := range counts {
+		l.pending[c.key]--
+		if l.pending[c.key] <= 0 {
+			delete(l.pending, c.key)
+		}
+	}
+}
+
+// fail records a wrong guess against counts; l.mu is held.
+func (l *limiter) fail(counts []count) {
 	now := l.now()
-	for _, k := range keys {
-		l.failures[k] = append(l.recent(k, now), now)
+	for _, c := range counts {
+		l.failures[c.key] = append(l.recent(c.key, now), now)
 	}
 	if len(l.failures) > maxLimiterKeys {
 		for k := range l.failures {

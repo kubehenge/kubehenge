@@ -24,7 +24,7 @@ import (
 // workload cluster: the issuer makes the admin account's tokens and nothing else, a token made acts
 // as cluster-admin and carries the ID the audit log records, and removing the identities ends it.
 func TestIntegrationHeadlampIdentities(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
-	cfg, _, _ := startAPIConfig(t)
+	cfg, _ := startAPIConfig(t)
 	ctx := context.Background()
 	workload, err := client.New(cfg, client.Options{Scheme: remoteScheme})
 	if err != nil {

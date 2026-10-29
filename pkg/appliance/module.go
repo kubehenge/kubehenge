@@ -112,7 +112,7 @@ func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase str
 		return nil, err
 	}
 	j.Add("Fetching the interface's credentials")
-	kubeconfig, err := a.InterfaceKubeconfig(ctx, []byte(admin), endpoint)
+	kubeconfig, err := a.InterfaceKubeconfig(ctx, []byte(admin), endpoint, a.TokenPath())
 	if err != nil {
 		return nil, fmt.Errorf("the interface's kubeconfig: %w", err)
 	}

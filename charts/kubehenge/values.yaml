@@ -87,21 +87,21 @@ backupTargets: []
 # Namespaces whose pods neither Pod Security Admission nor Kyverno holds to a cluster's pod
 # security level: those of the components that need the host's network, file system or
 # privileges (the cloud controller manager, the CSI plugin, the CNIs, node-exporter, Alloy's node
-# collectors, Velero's node agents, Rancher's agents and controllers). A cluster's own workloads
-# that need it get their namespace labelled instead.
+# collectors, Velero's node agents, Rancher's agents and controllers), by what puts them there. A
+# cluster exempts always's and those of what it runs: calico's with Calico as its CNI, those of
+# the add-ons it switches on, metallb's with MetalLB as its load balancer, rancher's when it
+# installs Rancher and rancherAgent's when it registers with Rancher. A cluster's own workloads that
+# need it get their namespace labelled instead.
 podSecurityExempt:
-  - kube-system
-  - tigera-operator
-  - calico-system
-  - node-exporter
-  - logging-node
-  - velero
-  - istio-node
-  - metallb-system
-  - cattle-system
-  - cattle-fleet-system
-  - cattle-fleet-local-system
-  - cattle-turtles-system
+  always: [kube-system]
+  calico: [tigera-operator, calico-system]
+  monitoring: [node-exporter]
+  logs: [logging-node]
+  backups: [velero]
+  istio: [istio-node]
+  metallb: [metallb-system]
+  rancher: [cattle-system, cattle-fleet-system, cattle-fleet-local-system, cattle-turtles-system]
+  rancherAgent: [cattle-system, cattle-fleet-system]
 
 # Kubehenge's controller image by digest, repository@sha256:<digest>: a release's chart names the
 # one it was released with, and a checkout's needs one given.
