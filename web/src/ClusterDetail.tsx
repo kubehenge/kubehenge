@@ -6,7 +6,7 @@ import { BackupsDialog, BackupsView, backupsOf, backupsRows, useClassTargets } f
 import { issuesFromCA, saveCA } from "./Certificates";
 import { OptionDialog, Options, type OptionAction, type OptionRow } from "./ClusterOptions";
 import { EtcdSnapshotsDialog, EtcdSnapshotsView, etcdSnapshotsOf, etcdSnapshotsRows } from "./EtcdSnapshots";
-import { ClusterStatus } from "./fleet";
+import { ClusterStatus, fleetKey, useFleet } from "./fleet";
 import { HealthView } from "./Health";
 import { Machines, Placement } from "./Machines";
 import { nodeOSKey } from "./node-os";
@@ -14,7 +14,7 @@ import { Link, navigate } from "./router";
 import { StagedBar, StagingProvider } from "./Staging";
 import { useStaging } from "./staging-context";
 import { TalosFailure, TalosRows, runsKubernetes, useTalosReleases } from "./Talos";
-import type { Cluster, Versions } from "./types";
+import type { Cluster, FleetHealth, Versions } from "./types";
 import {
   Dialog,
   ErrorBox,
@@ -66,6 +66,60 @@ export const views = [
 ] as const;
 
 export type View = (typeof views)[number]["path"];
+
+interface TabBadge {
+  shown: string;
+  state: "error" | "warning";
+  /** What a screen reader says after the tab's name. */
+  text: string;
+}
+
+// tabBadges marks the views that hold something to look at, so it shows from any of them.
+function tabBadges(c: Cluster, found: FleetHealth | undefined): Partial<Record<View, TabBadge>> {
+  const badges: Partial<Record<View, TabBadge>> = {};
+  if (found?.verdict === "unreachable") {
+    badges.health = { shown: "!", state: "error", text: "Unreachable" };
+  } else if (found !== undefined) {
+    const wrong = found.attention.filter((a) => a.severity !== "progress");
+    const count = wrong.length + (found.more ?? 0);
+    if (count > 0) {
+      const state = wrong.some((a) => a.severity === "error") ? "error" : "warning";
+      badges.health = { shown: String(count), state, text: `${count} to look at` };
+    }
+  }
+  const failed = (c.machines ?? []).filter((m) => m.phase === "Failed").length;
+  if (failed > 0) {
+    badges.machines = { shown: String(failed), state: "error", text: `${failed} failed` };
+  }
+  return badges;
+}
+
+function ClusterViews({ cluster: c, view }: { cluster: Cluster; view: View }): JSX.Element {
+  const badges = tabBadges(c, useFleet()?.health?.get(fleetKey(c)));
+  return (
+    <Views label={`${c.name}'s views`} open={view}>
+      {views.map((v, i) => {
+        const badge = badges[v.path];
+        return (
+          <Link
+            key={v.path}
+            to={clusterPath(c.namespace, c.name, v.path)}
+            current={view === v.path}
+            description={badge?.text}
+          >
+            {v.label}
+            {badge && (
+              <span className={`tab-badge tab-badge-${badge.state}`} aria-hidden="true">
+                {badge.shown}
+              </span>
+            )}
+            <kbd aria-hidden="true">{i + 1}</kbd>
+          </Link>
+        );
+      })}
+    </Views>
+  );
+}
 
 /** clusterPath is the address of a cluster's page, or of one of its views. */
 export const clusterPath = (namespace: string, name: string, view: View = ""): string =>
@@ -275,14 +329,7 @@ export function ClusterDetail({
         <ErrorBox message={error} />
         <ErrorBox message={downloadError} />
 
-        <Views label={`${c.name}'s views`} open={view}>
-          {views.map((v, i) => (
-            <Link key={v.path} to={clusterPath(c.namespace, c.name, v.path)} current={view === v.path}>
-              {v.label}
-              <kbd aria-hidden="true">{i + 1}</kbd>
-            </Link>
-          ))}
-        </Views>
+        <ClusterViews cluster={c} view={view} />
         <StagedBar cluster={c} />
         <div className="object">
           <div className="object-view">

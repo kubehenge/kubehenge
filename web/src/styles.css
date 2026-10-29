@@ -771,6 +771,25 @@ button.go {
   opacity: 0.8;
 }
 
+.tab-badge {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  color: var(--surface);
+}
+
+.tab-badge-error {
+  background: var(--error);
+}
+
+.tab-badge-warning {
+  background: var(--warning);
+}
+
 /* Staged changes stay in view while the views scroll, as an editor's unsaved buffer does. */
 .staged {
   position: sticky;

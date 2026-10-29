@@ -304,6 +304,36 @@ describe("the console", () => {
     expect(window.location.search).toBe("?sort=name&order=desc");
   });
 
+  it("marks a cluster's tabs that hold something to look at, keeping the tabs' names", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
+    const routes = serve();
+    const failing = {
+      ...base,
+      machines: [{ name: "web-w-9", role: "worker" as const, phase: "Failed", ready: false, created: minutesAgo(9) }],
+    };
+    routes["GET /api/clusters/default/web"] = { body: failing };
+    routes["GET /api/fleet/health"] = {
+      body: [
+        {
+          namespace: "default",
+          name: "web",
+          read: minutesAgo(0),
+          verdict: "degraded",
+          attention: [
+            { severity: "warning", section: "addons", what: "Add-on ingress: pending-install" },
+            { severity: "progress", section: "addons", what: "Add-on x installing" },
+          ],
+          more: 1,
+        },
+      ],
+    };
+    render(<App />);
+    const tabs = within(await screen.findByRole("navigation", { name: "web's views" }));
+    await waitFor(() => expect(tabs.getByRole("link", { name: "Health" })).toHaveAccessibleDescription("2 to look at"));
+    expect(tabs.getByRole("link", { name: "Machines" })).toHaveAccessibleDescription("1 failed");
+    expect(tabs.getByRole("link", { name: "Summary" })).not.toHaveAttribute("aria-describedby");
+  });
+
   it("moves a cluster its health page finds trouble in to those needing you, linked to that page", async () => {
     window.history.replaceState(null, "", "/");
     const routes = serve();

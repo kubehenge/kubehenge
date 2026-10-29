@@ -1,4 +1,4 @@
-import { useSyncExternalStore, type JSX, type MouseEvent, type ReactNode } from "react";
+import { useId, useSyncExternalStore, type JSX, type MouseEvent, type ReactNode } from "react";
 
 // A few routes need no router library: the path lives in the history API and every change is
 // announced with one event.
@@ -59,6 +59,7 @@ export function Link({
   className,
   current,
   label,
+  description,
 }: {
   to: string;
   children: ReactNode;
@@ -66,7 +67,10 @@ export function Link({
   current?: boolean;
   /** The link's name, where its content alone does not say it. */
   label?: string;
+  /** Said after the name, such as a tab's badge, without becoming part of it. */
+  description?: string | undefined;
 }): JSX.Element {
+  const describedBy = useId();
   const onClick = (e: MouseEvent<HTMLAnchorElement>) => {
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
       return;
@@ -81,9 +85,15 @@ export function Link({
       className={className}
       aria-current={current === true ? "page" : undefined}
       aria-label={label}
+      aria-describedby={description === undefined ? undefined : describedBy}
       title={label}
     >
       {children}
+      {description !== undefined && (
+        <span id={describedBy} hidden>
+          {description}
+        </span>
+      )}
     </a>
   );
 }
