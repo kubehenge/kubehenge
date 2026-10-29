@@ -45,7 +45,7 @@ func (s *Server) openIDStart(w http.ResponseWriter, r *http.Request) {
 	}
 	authURL, err := s.Accounts.OpenIDAuthURL(r.Context(), realm, s.redirectURL(r))
 	if err != nil {
-		s.Log.Error("openid auth-url", "realm", realm, "error", err)
+		s.Log.ErrorContext(r.Context(), "openid auth-url", "realm", realm, "error", err)
 		openIDFailed(w, r, "Proxmox VE could not start the sign-in")
 		return
 	}
@@ -88,13 +88,13 @@ func (s *Server) openIDCallback(w http.ResponseWriter, r *http.Request) {
 	ticket, err := s.Accounts.OpenIDLogin(r.Context(), code, state, s.redirectURL(r))
 	if err != nil {
 		s.limiter.fail(addr)
-		s.Log.Info("openid sign-in refused", "address", clientAddress(r), "error", err)
+		s.Log.InfoContext(r.Context(), "openid sign-in refused", "address", clientAddress(r), "error", err)
 		openIDFailed(w, r, "the sign-in through the identity provider failed")
 		return
 	}
 	s.sessions.end(w, r)
 	s.sessions.start(w, ticket, nil)
-	s.Log.Info("signed in", "user", ticket.Username, "address", clientAddress(r), "via", "openid")
+	s.Log.InfoContext(r.Context(), "signed in", "user", ticket.Username, "address", clientAddress(r), "via", "openid")
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 

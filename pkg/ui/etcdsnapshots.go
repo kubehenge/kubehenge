@@ -77,7 +77,7 @@ func (s *Server) etcdSnapshots(w http.ResponseWriter, r *http.Request, u user) {
 	defer cancel()
 	automatic, err := s.automaticRestore(ctx, u, c)
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	view.Automatic = automatic
@@ -95,7 +95,7 @@ func (s *Server) etcdSnapshots(w http.ResponseWriter, r *http.Request, u user) {
 		view.Snapshots, err = provisioner.ListEtcdSnapshots(ctx, t.Store, t.Folder)
 	}
 	if err != nil {
-		s.Log.Info("reading a cluster's etcd snapshots", "cluster", c.Namespace+"/"+c.Name, "error", err)
+		s.Log.InfoContext(r.Context(), "reading a cluster's etcd snapshots", "cluster", c.Namespace+"/"+c.Name, "error", err)
 		view.Snapshots = []provisioner.EtcdSnapshot{}
 		view.Message = "The snapshots could not be read from target " + settings.Target + ": " + err.Error()
 	}
@@ -144,7 +144,7 @@ func (s *Server) takeEtcdSnapshot(w http.ResponseWriter, r *http.Request, u user
 	if !s.annotate(w, r, u, c, provisioner.EtcdSnapshotRequestAnnotation, req) {
 		return
 	}
-	s.Log.Info("asked for an etcd snapshot", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
+	s.Log.InfoContext(r.Context(), "asked for an etcd snapshot", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
 	writeJSON(w, http.StatusAccepted, req)
 }
 
@@ -168,16 +168,16 @@ func (s *Server) downloadEtcdSnapshot(w http.ResponseWriter, r *http.Request, u 
 	}
 	cancel()
 	if err != nil {
-		s.snapshotError(w, c, err)
+		s.snapshotError(w, r, c, err)
 		return
 	}
 	defer func() { _ = plain.Close() }()
-	s.Log.Info("downloading an etcd snapshot", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "snapshot", name)
+	s.Log.InfoContext(r.Context(), "downloading an etcd snapshot", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "snapshot", name)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+c.Name+"-"+strings.TrimSuffix(name, ".age")+`"`)
 	w.Header().Set("Cache-Control", "no-store")
 	if _, err := io.Copy(w, plain); err != nil {
-		s.Log.Info("an etcd snapshot download ended early", "cluster", c.Namespace+"/"+c.Name, "snapshot", name, "error", err)
+		s.Log.InfoContext(r.Context(), "an etcd snapshot download ended early", "cluster", c.Namespace+"/"+c.Name, "snapshot", name, "error", err)
 	}
 }
 
@@ -222,7 +222,7 @@ func (s *Server) restoreEtcd(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	automatic, err := s.automaticRestore(r.Context(), u, c)
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	if !automatic {
@@ -242,7 +242,7 @@ func (s *Server) restoreEtcd(w http.ResponseWriter, r *http.Request, u user) {
 	if !s.annotate(w, r, u, c, provisioner.EtcdRestoreAnnotation, restore) {
 		return
 	}
-	s.Log.Info("asked for an etcd restore", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "snapshot", snapshot.Name)
+	s.Log.InfoContext(r.Context(), "asked for an etcd restore", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "snapshot", snapshot.Name)
 	writeJSON(w, http.StatusAccepted, restore)
 }
 
@@ -261,7 +261,7 @@ func (s *Server) findSnapshot(w http.ResponseWriter, r *http.Request, u user, c 
 		all, err = provisioner.ListEtcdSnapshots(ctx, t.Store, t.Folder)
 	}
 	if err != nil {
-		s.snapshotError(w, c, err)
+		s.snapshotError(w, r, c, err)
 		return nil, false
 	}
 	for i := range all {
@@ -287,12 +287,12 @@ func snapshotTarget(w http.ResponseWriter, c *clusterv1.Cluster, name string) (s
 	return settings.Target, true
 }
 
-func (s *Server) snapshotError(w http.ResponseWriter, c *clusterv1.Cluster, err error) {
+func (s *Server) snapshotError(w http.ResponseWriter, r *http.Request, c *clusterv1.Cluster, err error) {
 	if errors.Is(err, provisioner.ErrNoObject) {
 		writeError(w, http.StatusNotFound, "no such snapshot")
 		return
 	}
-	s.Log.Info("reading a cluster's etcd snapshot", "cluster", c.Namespace+"/"+c.Name, "error", err)
+	s.Log.InfoContext(r.Context(), "reading a cluster's etcd snapshot", "cluster", c.Namespace+"/"+c.Name, "error", err)
 	writeError(w, http.StatusBadGateway, err.Error())
 }
 
@@ -309,7 +309,7 @@ func (s *Server) annotate(w http.ResponseWriter, r *http.Request, u user, c *clu
 	}
 	c.Annotations[key] = string(raw)
 	if err := u.kube.Patch(r.Context(), c, patch); err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return false
 	}
 	return true

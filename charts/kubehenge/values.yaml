@@ -107,6 +107,12 @@ podSecurityExempt:
 # one it was released with, and a checkout's needs one given.
 image: ""
 
+# How the controller logs, in JSON either way: the least severe lines it logs (debug, info, warn or
+# error), and development mode, which adds stack traces from warnings on.
+controllerLogs:
+  level: info
+  development: false
+
 proxmox:
   # The Proxmox VE API, such as https://pve.example.org:8006. Required.
   url: ""
@@ -153,6 +159,11 @@ proxmox:
   # workload pool: a root shell in every cluster's VMs. Without it, the interface shows the steps
   # to restore by hand. Talos clusters are restored through their nodes' Talos API either way.
   etcdRestore: false
+  # Whether the controller reads the boot logs of kubeadm, RKE2 and k3s nodes asked for, files the
+  # node keeps, through their guest agents with its own token, which then needs
+  # VM.GuestAgent.FileRead on the workload pool: no commands, and only the files the node's agent
+  # policy opens. Talos nodes' logs are read through their Talos API either way.
+  bootLogs: true
 
 # Building the node OS VM templates again every week, with the updates each node OS published
 # since, as a CronJob signed in with a token of its own. Clusters move their nodes to a new build

@@ -62,6 +62,7 @@ module "management" {
   cluster_datastore_allocate = var.settings.clusterDatastoreAllocate
   cluster_sys_audit          = var.settings.clusterSysAudit
   cluster_volume_snapshots   = var.settings.clusterVolumeSnapshots
+  node_boot_logs             = var.settings.nodeBootLogs
 
   extra_cluster_namespaces = var.settings.extraClusterNamespaces
 }
@@ -194,6 +195,7 @@ func (a *Appliance) writeConfig(s *Settings) error {
 		"clusterDatastoreAllocate": s.ClusterDatastoreAllocate,
 		"clusterSysAudit":          s.GivesClusterSysAudit(),
 		"clusterVolumeSnapshots":   s.ClusterVolumeSnapshots,
+		"nodeBootLogs":             s.ReadsNodeBootLogs(),
 		// The module takes no null for a list.
 		"extraClusterNamespaces": append([]string{}, s.ExtraClusterNamespaces...),
 	}}

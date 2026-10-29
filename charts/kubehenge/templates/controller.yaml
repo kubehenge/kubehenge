@@ -53,6 +53,11 @@ rules:
   - apiGroups: [""]
     resources: [secrets]
     verbs: [get, create, update, patch, delete]
+  # The boot logs of the machines a cluster asks for, <cluster>-boot-logs beside it, which the
+  # Cluster owns and takes with it.
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, create, update]
   - apiGroups: [addons.cluster.x-k8s.io]
     resources: [clusterresourcesets]
     verbs: [get, list, watch, create, update, patch]
@@ -69,6 +74,22 @@ rules:
     resources: [extensionconfigs]
     resourceNames: [kubehenge]
     verbs: [patch]
+  # The metrics endpoint asks the API server who calls it and whether they may get /metrics.
+  - apiGroups: [authentication.k8s.io]
+    resources: [tokenreviews]
+    verbs: [create]
+  - apiGroups: [authorization.k8s.io]
+    resources: [subjectaccessreviews]
+    verbs: [create]
+---
+# Bound to a scraper's account, it lets the scraper read the controller's metrics, and nothing else.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubehenge-metrics-reader
+rules:
+  - nonResourceURLs: [/metrics]
+    verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -238,6 +259,7 @@ spec:
             {{- with .Values.proxmox.sysAuditGroup }}
             - --sys-audit-group={{ . }}
             {{- end }}
+            - --boot-logs={{ .Values.proxmox.bootLogs }}
             {{- with .Values.proxmox.volumeSnapshots.rootSecret }}
             - --root-secret={{ . }}
             {{- end }}
@@ -279,6 +301,9 @@ spec:
             {{- range $class, $namespaces := .Values.providerNamespaces }}
             - --class-providers={{ $class }}={{ join "," $namespaces }}
             {{- end }}
+            - --metrics-address=:8443
+            - --log-level={{ .Values.controllerLogs.level }}
+            - --log-development={{ .Values.controllerLogs.development }}
           env:
             - name: POD_NAMESPACE
               valueFrom:
@@ -314,6 +339,8 @@ spec:
               containerPort: 9443
             - name: health
               containerPort: 8081
+            - name: metrics
+              containerPort: 8443
           readinessProbe:
             httpGet:
               path: /readyz
@@ -362,6 +389,23 @@ spec:
   ports:
     - port: 443
       targetPort: extension
+---
+# The controller's metrics, over HTTPS, for whoever the API server lets get /metrics
+# (kubehenge-metrics-reader).
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubehenge-controller-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+spec:
+  selector:
+    {{- toYaml $labels | nindent 4 }}
+  ports:
+    - name: metrics
+      port: 8443
+      targetPort: metrics
 ---
 apiVersion: cert-manager.io/v1
 kind: Issuer

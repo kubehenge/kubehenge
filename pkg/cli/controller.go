@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,8 +32,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
@@ -74,6 +75,9 @@ type controllerOptions struct {
 	port              int
 	certDir           string
 	healthAddr        string
+	metricsAddr       string
+	bootLogs          bool
+	logs              logOptions
 	leaderElect       bool
 	ccmChart          string
 	csiChart          string
@@ -140,7 +144,8 @@ The API token is read from KUBEHENGE_PROXMOX_TOKEN. With a second one in KUBEHEN
 holding Sys.Audit and Sys.Console on /, Proxmox VE HA keeps each cluster's control-plane VMs on
 separate nodes. With one in KUBEHENGE_PROXMOX_RESTORE_TOKEN, holding VM.Audit and
 VM.GuestAgent.Unrestricted on the workload pool, it restores clusters' etcd from their snapshots
-through the VMs' guest agents.`,
+through the VMs' guest agents. It reads the boot logs of the nodes asked for through the guest
+agents too, with its own token, which needs VM.GuestAgent.FileRead on the workload pool for that.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.run(cmd.Context(), conn)
@@ -166,6 +171,9 @@ through the VMs' guest agents.`,
 	f.StringVar(&o.extensionConfig, "extension-config", "kubehenge", "ExtensionConfig through which Cluster API calls this controller's hooks")
 	f.StringVar(&o.certDir, "extension-cert-dir", "/etc/kubehenge/tls", "directory with tls.crt and tls.key for the Runtime Extension server")
 	f.StringVar(&o.healthAddr, "health-address", ":8081", "address of the liveness and readiness probes")
+	f.StringVar(&o.metricsAddr, "metrics-address", ":8443", "address of the Prometheus metrics, over HTTPS for callers the API server authorises to get /metrics; 0 for none")
+	o.logs.addFlags(f, "log in development mode: stack traces from warnings on, and a panic on what should never happen; still in JSON")
+	f.BoolVar(&o.bootLogs, "boot-logs", true, "read the boot logs of kubeadm, RKE2 and k3s nodes through their guest agents with this controller's token, which then needs VM.GuestAgent.FileRead on the workload pool")
 	f.BoolVar(&o.leaderElect, "leader-elect", true, "elect one active controller among replicas")
 	return cmd
 }
@@ -264,7 +272,11 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	cloud := &provisioner.Proxmox{Client: c, Settings: o.settings}
 	o.completeReconciler(cloud, provisioner.Endpoint{URL: strings.TrimSuffix(conn.URL, "/"), CA: string(ca), Insecure: conn.Insecure}, rancherMinors)
 
-	ctrl.SetLogger(zap.New())
+	logger, err := o.logs.zapLogger()
+	if err != nil {
+		return err
+	}
+	ctrl.SetLogger(logger)
 	scheme, err := controllerScheme()
 	if err != nil {
 		return err
@@ -349,6 +361,9 @@ func (o *controllerOptions) newExtensionServer() (*server.Server, error) {
 // with each cluster's own token, and what snapshots and restores clusters' etcd.
 func (o *controllerOptions) addReclaimer(mgr manager.Manager, conn *pve.Config, cloud *provisioner.Proxmox, remotes *provisioner.Remotes) error {
 	if err := o.addEtcd(mgr, conn, remotes); err != nil {
+		return err
+	}
+	if err := o.addBootLogs(mgr, cloud.Client); err != nil {
 		return err
 	}
 	reclaimer := &provisioner.Reclaimer{
@@ -454,6 +469,18 @@ func controllerScheme() (*runtime.Scheme, error) {
 	return scheme, nil
 }
 
+// metricsOptions serve the metrics over HTTPS, to callers the API server authenticates and
+// authorises to get /metrics, as the chart's kubehenge-metrics-reader role allows. HTTP/2 is off:
+// its rapid reset and stream floods reach a server whatever the authorisation behind it.
+func (o *controllerOptions) metricsOptions() metricsserver.Options {
+	return metricsserver.Options{
+		BindAddress:    o.metricsAddr,
+		SecureServing:  true,
+		FilterProvider: filters.WithAuthenticationAndAuthorization,
+		TLSOpts:        []func(*tls.Config){func(c *tls.Config) { c.NextProtos = []string{"http/1.1"} }},
+	}
+}
+
 func (o *controllerOptions) newManager(scheme *runtime.Scheme, extensions *server.Server, distributions *provisioner.Distributions) (manager.Manager, error) {
 	lease, renew, retry := leaseDuration, renewDeadline, retryPeriod
 	ofClass, err := labels.NewRequirement(provisioner.ClassLabel, selection.Exists, nil)
@@ -488,7 +515,7 @@ func (o *controllerOptions) newManager(scheme *runtime.Scheme, extensions *serve
 		RenewDeadline:                 &renew,
 		RetryPeriod:                   &retry,
 		HealthProbeBindAddress:        o.healthAddr,
-		Metrics:                       metricsserver.Options{BindAddress: "0"},
+		Metrics:                       o.metricsOptions(),
 		WebhookServer:                 extensions,
 		Cache: cache.Options{
 			// Nothing here reads who last wrote which field.
@@ -509,10 +536,10 @@ func (o *controllerOptions) newManager(scheme *runtime.Scheme, extensions *serve
 	return mgr, nil
 }
 
-// setUpControllers adds the reconciler, the registrar, what taints control-plane nodes, what
-// approves kubeadm kubelets' serving certificates, what keeps the identities in the clusters, what
-// runs their autoscalers and, when some distribution's providers run only while used, the
-// controller that starts and stops them.
+// setUpControllers adds the reconciler, what marks clusters whose machines stalled, the
+// registrar, what taints control-plane nodes, what approves kubeadm kubelets' serving
+// certificates, what keeps the identities in the clusters, what runs their autoscalers and, when
+// some distribution's providers run only while used, the controller that starts and stops them.
 func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *provisioner.Registrar, distributions *provisioner.Distributions) error {
 	o.r.Client = mgr.GetClient()
 	o.r.Registrar = registrar
@@ -520,6 +547,10 @@ func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *pro
 	o.r.Events = mgr.GetEventRecorder("kubehenge")
 	if err := o.r.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the cluster reconciler: %w", err)
+	}
+	progress := &provisioner.ProgressReconciler{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Events: o.r.Events}
+	if err := progress.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("the machine progress: %w", err)
 	}
 	if err := registrar.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the Rancher registrar: %w", err)
@@ -668,7 +699,7 @@ func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, 
 
 // addEtcd adds what snapshots clusters' etcd into their backup targets, and what restores it from
 // a snapshot through the VMs' guest agents, signed in with KUBEHENGE_PROXMOX_RESTORE_TOKEN. Without
-// that token every restore is done by hand.
+// that token every restore of kubeadm, RKE2 and k3s is done by hand.
 func (o *controllerOptions) addEtcd(mgr manager.Manager, conn *pve.Config, remotes *provisioner.Remotes) error {
 	targets := &provisioner.ClusterTargets{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, OpenStore: provisioner.OpenTarget}
 	snapshotter := &provisioner.EtcdSnapshotter{
@@ -692,7 +723,7 @@ func (o *controllerOptions) addEtcd(mgr manager.Manager, conn *pve.Config, remot
 		Events:         mgr.GetEventRecorder("kubehenge"),
 	}
 	if token := os.Getenv("KUBEHENGE_PROXMOX_RESTORE_TOKEN"); token != "" {
-		c, err := pve.Connect(pve.Config{URL: conn.URL, Token: token, CAFile: conn.CAFile})
+		c, err := pve.Connect(pve.Config{URL: conn.URL, Token: token, CAFile: conn.CAFile, Insecure: conn.Insecure})
 		if err != nil {
 			return fmt.Errorf("connecting to Proxmox VE for restores: %w", err)
 		}
@@ -700,6 +731,24 @@ func (o *controllerOptions) addEtcd(mgr manager.Manager, conn *pve.Config, remot
 	}
 	if err := restorer.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the etcd restorer: %w", err)
+	}
+	return nil
+}
+
+// addBootLogs adds what reads nodes' boot logs: files through the guest agent, with the
+// controller's own token, or a Talos node's logs through its API.
+func (o *controllerOptions) addBootLogs(mgr manager.Manager, c *proxmox.Client) error {
+	r := &provisioner.BootLogReconciler{
+		Client:         mgr.GetClient(),
+		Reader:         mgr.GetAPIReader(),
+		ClassNamespace: o.r.ClassNamespace,
+		Talos:          provisioner.DialTalosLogs,
+	}
+	if o.bootLogs {
+		r.Files = &provisioner.ProxmoxGuestFiles{Client: c}
+	}
+	if err := r.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("the boot log reader: %w", err)
 	}
 	return nil
 }
@@ -730,10 +779,10 @@ func (o *controllerOptions) addHA(mgr manager.Manager, conn *pve.Config, c *prox
 // addHooks serves the Runtime Extension's hooks and the Cluster validation.
 func addHooks(extensions *server.Server, scheme *runtime.Scheme, hooks *provisioner.Hooks) error {
 	handlers := []server.ExtensionHandler{
-		{Hook: runtimehooksv1.BeforeClusterCreate, Name: "before-cluster-create", HandlerFunc: hooks.BeforeClusterCreate},
-		{Hook: runtimehooksv1.BeforeClusterUpgrade, Name: "before-cluster-upgrade", HandlerFunc: hooks.BeforeClusterUpgrade},
-		{Hook: runtimehooksv1.BeforeClusterDelete, Name: "before-cluster-delete", HandlerFunc: hooks.BeforeClusterDelete},
-		{Hook: runtimehooksv1.GeneratePatches, Name: "generate-patches", HandlerFunc: hooks.GeneratePatches},
+		{Hook: runtimehooksv1.BeforeClusterCreate, Name: "before-cluster-create", HandlerFunc: provisioner.Measured("before-cluster-create", hooks.BeforeClusterCreate)},
+		{Hook: runtimehooksv1.BeforeClusterUpgrade, Name: "before-cluster-upgrade", HandlerFunc: provisioner.Measured("before-cluster-upgrade", hooks.BeforeClusterUpgrade)},
+		{Hook: runtimehooksv1.BeforeClusterDelete, Name: "before-cluster-delete", HandlerFunc: provisioner.Measured("before-cluster-delete", hooks.BeforeClusterDelete)},
+		{Hook: runtimehooksv1.GeneratePatches, Name: "generate-patches", HandlerFunc: provisioner.Measured("generate-patches", hooks.GeneratePatches)},
 	}
 	for i := range handlers {
 		if err := extensions.AddExtensionHandler(handlers[i]); err != nil {

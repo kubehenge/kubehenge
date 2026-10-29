@@ -92,6 +92,7 @@ export interface SetupForm {
   refreshDNS: string;
   creatorBuilds: boolean;
   clusterSysAudit: boolean;
+  nodeBootLogs: boolean;
   clusterVolumeSnapshots: boolean;
   // Sent beside the settings, never kept in them; empty keeps the one stored.
   rootPassword: string;
@@ -229,6 +230,9 @@ export function settings(f: SetupForm): ManagementSettings {
   if (!f.clusterSysAudit) {
     s.clusterSysAudit = false;
   }
+  if (!f.nodeBootLogs) {
+    s.nodeBootLogs = false;
+  }
   if (f.clusterVolumeSnapshots) {
     s.clusterVolumeSnapshots = true;
   }
@@ -316,6 +320,7 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     etcdRestore: saved.etcdRestore === true,
     ...refreshFields(saved.templateRefresh),
     clusterSysAudit: saved.clusterSysAudit !== false,
+    nodeBootLogs: saved.nodeBootLogs !== false,
     clusterVolumeSnapshots: saved.clusterVolumeSnapshots === true,
     rootPassword: "",
     moreNamespaces: (saved.extraClusterNamespaces ?? []).length > 0,
@@ -720,6 +725,12 @@ function optInRows(s: ManagementSettings): [string, string][] {
       s.clusterSysAudit === false
         ? "Off for every cluster"
         : "On unless a cluster switches them off, with Sys.Audit on /",
+    ],
+    [
+      "Nodes' boot logs",
+      s.nodeBootLogs === false
+        ? "Talos nodes' alone"
+        : "Read through the guest agent, with VM.GuestAgent.FileRead on the clusters' pool",
     ],
     [
       "Volume snapshots",
@@ -1379,6 +1390,31 @@ function SysAuditChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element 
   );
 }
 
+function BootLogsChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element {
+  const hint = useId();
+  return (
+    <fieldset className="group">
+      <legend>Nodes&apos; boot logs</legend>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.nodeBootLogs}
+          aria-describedby={hint}
+          onChange={(e) => set("nodeBootLogs", e.target.checked)}
+        />{" "}
+        Read the boot logs of kubeadm, RKE2 and k3s nodes through the guest agent
+      </label>
+      <p className="muted" id={hint}>
+        Recommended. A node that does not join says why in its boot log, which a cluster&apos;s Machines tab and support
+        bundle then show. Kubehenge&apos;s controller reads it with VM.GuestAgent.FileRead on the clusters&apos; pool:
+        files only, no commands, and only those the node&apos;s agent may open, which Kubehenge&apos;s templates limit
+        to cloud-init&apos;s output and the node&apos;s copy of its boot&apos;s journals. Off, only Talos nodes&apos;
+        boot logs are read, through their Talos API.
+      </p>
+    </fieldset>
+  );
+}
+
 function VolumeSnapshotsChoice({
   form,
   set,
@@ -1902,6 +1938,7 @@ function SetupWizard({
         <DatastoreAllocateChoice form={form} set={set} />
         <RefreshChoice form={effective} set={set} shown={shown} />
         <SysAuditChoice form={form} set={set} />
+        <BootLogsChoice form={form} set={set} />
         <VolumeSnapshotsChoice form={form} set={set} shown={shown} fixed={fixed} />
         <NamespacesChoice form={form} set={set} shown={shown} />
         <HeadlampChoice form={form} set={set} />

@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/luthermonson/go-proxmox"
+
+	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
 // Settings are the Proxmox VE objects every cluster's share, created with the management cluster.
@@ -685,7 +687,7 @@ func (p *Proxmox) waitTask(ctx context.Context, node, upid string, timeout time.
 		}
 		if status.Status == "stopped" {
 			if status.ExitStatus != "OK" {
-				return fmt.Errorf("task %s: %s", upid, status.ExitStatus)
+				return fmt.Errorf("on node %s: %w", node, pve.TaskFailed(ctx, p.Client.Get, node, upid, status.ExitStatus))
 			}
 			return nil
 		}

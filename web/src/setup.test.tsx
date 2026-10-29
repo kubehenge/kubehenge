@@ -39,6 +39,7 @@ const form: SetupForm = {
   refreshDNS: "",
   creatorBuilds: false,
   clusterSysAudit: true,
+  nodeBootLogs: true,
   clusterVolumeSnapshots: false,
   rootPassword: "",
   moreNamespaces: false,
@@ -199,6 +200,13 @@ describe("setup", () => {
     expect(off).toHaveProperty("clusterSysAudit", false);
     expect(settings(form)).not.toHaveProperty("clusterSysAudit");
     expect([formOf(settings(form)).clusterSysAudit, formOf(off).clusterSysAudit]).toStrictEqual([true, false]);
+  });
+
+  it("reads nodes' boot logs through the guest agent unless it is switched off", () => {
+    const off = settings({ ...form, nodeBootLogs: false });
+    expect(off).toHaveProperty("nodeBootLogs", false);
+    expect(settings(form)).not.toHaveProperty("nodeBootLogs");
+    expect([formOf(settings(form)).nodeBootLogs, formOf(off).nodeBootLogs]).toStrictEqual([true, false]);
   });
 
   it("names more namespaces for clusters only when they are switched on", () => {

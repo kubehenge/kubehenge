@@ -142,10 +142,14 @@ resource "proxmox_acl" "clusters_audit" {
 # Kubehenge's controller creates each cluster's pool, user, token, ACL and volume owner VM, and
 # nothing outside the workload pool and the clusters' group. VM.Migrate and VM.Config.Disk move a
 # volume owner VM to the node of a volume on node-local storage and delete the volume through it;
-# VM.Allocate there already lets it destroy the VMs outright.
+# VM.Allocate there already lets it destroy the VMs outright. VM.GuestAgent.FileRead reads nodes'
+# boot logs, files only, through the guest agent.
 resource "proxmox_virtual_environment_role" "provisioner_pools" {
-  role_id    = "${var.cluster_name}-provisioner-pools"
-  privileges = ["Pool.Allocate", "Pool.Audit", "Permissions.Modify", "VM.Allocate", "VM.Audit", "VM.Config.Disk", "VM.Config.Options", "VM.Migrate"]
+  role_id = "${var.cluster_name}-provisioner-pools"
+  privileges = concat(
+    ["Pool.Allocate", "Pool.Audit", "Permissions.Modify", "VM.Allocate", "VM.Audit", "VM.Config.Disk", "VM.Config.Options", "VM.Migrate"],
+    var.node_boot_logs ? ["VM.GuestAgent.FileRead"] : [],
+  )
 }
 
 resource "proxmox_virtual_environment_role" "provisioner_users" {

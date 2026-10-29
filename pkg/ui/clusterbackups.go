@@ -151,7 +151,7 @@ func (s *Server) clusterBackups(w http.ResponseWriter, r *http.Request, u user) 
 	defer cancel()
 	v, why, err := s.velero(ctx, u, c, provisioner.IdentityBackups)
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	if v == nil {
@@ -160,7 +160,7 @@ func (s *Server) clusterBackups(w http.ResponseWriter, r *http.Request, u user) 
 		return
 	}
 	if err := readVelero(ctx, v, &view); err != nil {
-		s.Log.Info("reading a cluster's backups", "cluster", c.Namespace+"/"+c.Name, "error", err)
+		s.Log.InfoContext(r.Context(), "reading a cluster's backups", "cluster", c.Namespace+"/"+c.Name, "error", err)
 		view.Message = "The cluster's API did not answer, or Velero is not running in it yet."
 		writeJSON(w, http.StatusOK, view)
 		return
@@ -335,7 +335,7 @@ func (s *Server) backUp(w http.ResponseWriter, r *http.Request, u user) {
 	defer cancel()
 	v, why, err := s.velero(ctx, u, c, provisioner.IdentityBackups)
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	if v == nil {
@@ -344,7 +344,7 @@ func (s *Server) backUp(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	schedule, err := v.Resource(veleroSchedule).Namespace(provisioner.VeleroNamespace).Get(ctx, provisioner.VeleroSchedule, metav1.GetOptions{})
 	if err != nil {
-		s.veleroError(w, c, err)
+		s.veleroError(w, r, c, err)
 		return
 	}
 	template, _, _ := unstructured.NestedMap(schedule.Object, "spec", "template")
@@ -355,10 +355,10 @@ func (s *Server) backUp(w http.ResponseWriter, r *http.Request, u user) {
 	backup.SetAnnotations(map[string]string{requestedBy: u.ticket.Username})
 	made, err := v.Resource(veleroBackups).Namespace(provisioner.VeleroNamespace).Create(ctx, backup, metav1.CreateOptions{})
 	if err != nil {
-		s.veleroError(w, c, err)
+		s.veleroError(w, r, c, err)
 		return
 	}
-	s.Log.Info("started a backup", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "backup", made.GetName())
+	s.Log.InfoContext(r.Context(), "started a backup", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "backup", made.GetName())
 	writeJSON(w, http.StatusCreated, backupOf(made))
 }
 
@@ -393,7 +393,7 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request, u user) {
 	defer cancel()
 	v, why, err := s.velero(ctx, u, c, provisioner.IdentityRestores)
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	if v == nil {
@@ -402,7 +402,7 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	backup, err := v.Resource(veleroBackups).Namespace(provisioner.VeleroNamespace).Get(ctx, req.Backup, metav1.GetOptions{})
 	if err != nil {
-		s.veleroError(w, c, err)
+		s.veleroError(w, r, c, err)
 		return
 	}
 	if phase, _, _ := unstructured.NestedString(backup.Object, "status", "phase"); phase != veleroCompleted && phase != "PartiallyFailed" {
@@ -425,10 +425,10 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request, u user) {
 	restore.SetAnnotations(map[string]string{requestedBy: u.ticket.Username})
 	made, err := v.Resource(veleroRestores).Namespace(provisioner.VeleroNamespace).Create(ctx, restore, metav1.CreateOptions{})
 	if err != nil {
-		s.veleroError(w, c, err)
+		s.veleroError(w, r, c, err)
 		return
 	}
-	s.Log.Info("started a restore", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "backup", req.Backup, "restore", made.GetName())
+	s.Log.InfoContext(r.Context(), "started a restore", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "backup", req.Backup, "restore", made.GetName())
 	writeJSON(w, http.StatusCreated, restoreOf(made, nil))
 }
 
@@ -453,14 +453,14 @@ func (req *restoreRequest) valid() error {
 }
 
 // veleroError answers with what the workload cluster refused.
-func (s *Server) veleroError(w http.ResponseWriter, c *clusterv1.Cluster, err error) {
+func (s *Server) veleroError(w http.ResponseWriter, r *http.Request, c *clusterv1.Cluster, err error) {
 	switch {
 	case apierrors.IsNotFound(err):
 		writeError(w, http.StatusNotFound, "no such backup, or Velero is not running in the cluster yet")
 	case apierrors.IsInvalid(err) || apierrors.IsAlreadyExists(err):
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 	default:
-		s.Log.Info("a cluster's Velero request failed", "cluster", c.Namespace+"/"+c.Name, "error", err)
+		s.Log.InfoContext(r.Context(), "a cluster's Velero request failed", "cluster", c.Namespace+"/"+c.Name, "error", err)
 		writeError(w, http.StatusBadGateway, "the cluster's API did not answer")
 	}
 }

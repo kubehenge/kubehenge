@@ -178,6 +178,16 @@ func TestWaitOperatorNeedsANamespace(t *testing.T) {
 	}
 }
 
+func TestDiagnoseNeedsNamespaceAndCluster(t *testing.T) {
+	t.Parallel()
+	for _, arg := range []string{"web", "team-a/", "/web"} {
+		_, err := run(t, "diagnose", arg)
+		if err == nil || !strings.Contains(err.Error(), "<namespace>/<cluster>") {
+			t.Errorf("%s: err = %v", arg, err)
+		}
+	}
+}
+
 func TestChartValuesGoToTheirCharts(t *testing.T) {
 	t.Parallel()
 	const digest = "@sha256:0805a5273118c436c9772bb9566d87ec558d8b25cc2ce5dc32918ecdd36f2c7c"

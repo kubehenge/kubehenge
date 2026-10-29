@@ -348,6 +348,13 @@ variable "cluster_sys_audit" {
   nullable    = false
 }
 
+variable "node_boot_logs" {
+  description = "Let Kubehenge's controller read the boot logs of kubeadm, RKE2 and k3s nodes when asked, with its own token holding VM.GuestAgent.FileRead on the workload pool. Through the guest agent it can then read any file of a cluster's VMs that the agent's policy in the VM lets it open, which Kubehenge's node templates limit to cloud-init's output and the node's copy of its boot's journals; it runs no commands. Off, the token holds no guest agent privilege, and only Talos nodes' boot logs, read through their Talos API, are offered."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 variable "cluster_volume_snapshots" {
   description = "Let each cluster choose volume snapshots, restores and clones of its persistent volumes. The Proxmox VE CSI plugin copies volumes through a method only root@pam may call (no API token passes), so the CSI plugin of a cluster that chooses them signs in to Proxmox VE as root@pam, and whoever takes over that cluster or reads its Proxmox VE Secret holds the whole Proxmox VE cluster. The password is no variable: Kubehenge's controller reads it from the Secret kubehenge-root-pam (key password) in the kubehenge-system namespace, which Kubehenge's appliance writes; root@pam must have no second factor. Only on storage local to each node (ZFS, LVM, LVM-thin, directory or btrfs)."
   type        = bool

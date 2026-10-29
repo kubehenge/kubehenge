@@ -53,7 +53,7 @@ type storageView struct {
 func (s *Server) storages(w http.ResponseWriter, r *http.Request, u user) {
 	storages, err := s.Accounts.Storages(r.Context(), u.ticket)
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
 	held := map[string]pve.Privileges{}
@@ -63,7 +63,7 @@ func (s *Server) storages(w http.ResponseWriter, r *http.Request, u user) {
 		if !seen {
 			var err error
 			if privs, err = s.Accounts.Privileges(r.Context(), u.ticket, storagePath(st.Storage)); err != nil {
-				s.proxmoxError(w, err)
+				s.proxmoxError(w, r, err)
 				return
 			}
 			held[st.Storage] = privs
@@ -77,7 +77,7 @@ func (s *Server) storages(w http.ResponseWriter, r *http.Request, u user) {
 func (s *Server) nodes(w http.ResponseWriter, r *http.Request, u user) {
 	nodes, err := s.Accounts.Nodes(r.Context(), u.ticket)
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, nodes)
@@ -110,7 +110,7 @@ func (s *Server) haRules(w http.ResponseWriter, r *http.Request, u user) {
 		view.Readable = view.Offered
 	}
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
 	if !view.Readable {
@@ -119,7 +119,7 @@ func (s *Server) haRules(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	nodes, err := s.Accounts.Nodes(r.Context(), u.ticket)
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
 	names := make([]string, 0, len(nodes))
@@ -150,12 +150,12 @@ func (s *Server) offeredRules(ctx context.Context, u user) ([]pve.HARule, bool, 
 	case apierrors.IsNotFound(err) || apierrors.IsForbidden(err):
 		return nil, false, nil
 	case err != nil:
-		s.Log.Warn("reading the HA rules offered", "error", err)
+		s.Log.WarnContext(ctx, "reading the HA rules offered", "error", err)
 		return nil, false, nil
 	}
 	offered, err := provisioner.ParseOfferedRules(cm)
 	if err != nil {
-		s.Log.Warn("reading the HA rules offered", "error", err)
+		s.Log.WarnContext(ctx, "reading the HA rules offered", "error", err)
 		return nil, false, nil
 	}
 	if may, err := s.placesClusters(ctx, u); err != nil || !may {
@@ -199,7 +199,7 @@ type bridgeView struct {
 func (s *Server) bridges(w http.ResponseWriter, r *http.Request, u user) {
 	bridges, err := s.Accounts.Bridges(r.Context(), u.ticket, r.PathValue("node"))
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
 	views := make([]bridgeView, 0, len(bridges))
@@ -207,7 +207,7 @@ func (s *Server) bridges(w http.ResponseWriter, r *http.Request, u user) {
 		// A node's own bridges are all in the local network zone.
 		privs, err := s.Accounts.Privileges(r.Context(), u.ticket, bridgePath("localnetwork", b.Bridge, ""))
 		if err != nil {
-			s.proxmoxError(w, err)
+			s.proxmoxError(w, r, err)
 			return
 		}
 		views = append(views, bridgeView{Bridge: b, Usable: privs.Has(privBridge)})

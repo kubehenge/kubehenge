@@ -57,7 +57,7 @@ func (s *Server) ingressCA(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-pem-file")
@@ -76,7 +76,7 @@ func (s *Server) stampCredentialsStored(r *http.Request, u user, clusters ...*cl
 			err = u.kube.Patch(r.Context(), c, client.RawPatch(types.MergePatchType, patch))
 		}
 		if err != nil {
-			s.Log.Warn("could not mark a cluster as using a changed credential; it gets it at the controller's next resync",
+			s.Log.WarnContext(r.Context(), "could not mark a cluster as using a changed credential; it gets it at the controller's next resync",
 				"cluster", c.Namespace+"/"+c.Name, "error", err)
 		}
 	}
@@ -87,7 +87,7 @@ func (s *Server) stampCredentialsStored(r *http.Request, u user, clusters ...*cl
 func (s *Server) sharingDNS01(r *http.Request, u user) []*clusterv1.Cluster {
 	var list clusterv1.ClusterList
 	if err := u.kube.List(r.Context(), &list, client.InNamespace(s.Namespace)); err != nil {
-		s.Log.Warn("could not list the clusters using the DNS-01 credential for every cluster; they get it at the controller's next resync", "error", err)
+		s.Log.WarnContext(r.Context(), "could not list the clusters using the DNS-01 credential for every cluster; they get it at the controller's next resync", "error", err)
 		return nil
 	}
 	var sharing []*clusterv1.Cluster

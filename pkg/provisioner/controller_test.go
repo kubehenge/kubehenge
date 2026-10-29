@@ -81,7 +81,8 @@ func newReconciler(t *testing.T, cloud Cloud, objs ...client.Object) (*Reconcile
 			Annotations: map[string]string{CNIAnnotation: "cilium,calico", CNIForwardingAnnotation: "true", DefaultPodsAnnotation: "10.42.0.0/16"},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(slices.Concat(classes, objs)...).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(slices.Concat(classes, objs)...).
+		WithStatusSubresource(&clusterv1.Cluster{}).Build()
 	return &Reconciler{
 		Client:         c,
 		Cloud:          cloud,

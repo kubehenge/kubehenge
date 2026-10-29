@@ -149,7 +149,7 @@ func (s *Server) refreshNow(w http.ResponseWriter, r *http.Request, u user) {
 	kube := s.currentKube()
 	state, err := s.refreshState(r.Context(), kube)
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	if state.schedule == nil {
@@ -157,10 +157,10 @@ func (s *Server) refreshNow(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	if err := s.requestBuild(r.Context(), kube, provisioner.RefreshRequest, u.ticket.Username); err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
-	s.Log.Info("template refresh asked for", "user", u.ticket.Username)
+	s.Log.InfoContext(r.Context(), "template refresh asked for", "user", u.ticket.Username)
 	state.requested = append(state.requested, provisioner.RefreshRequest)
 	writeJSON(w, http.StatusAccepted, state.view(time.Now()))
 }
@@ -179,14 +179,14 @@ type templateBuildsView struct {
 func (s *Server) templateBuilds(w http.ResponseWriter, r *http.Request, u user) {
 	state, err := s.refreshState(r.Context(), u.kube)
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	v := templateBuildsView{Requested: state.requested, Building: []string{}}
 	if state.schedule != nil && state.schedule.CreatorBuilds {
 		held, err := s.Accounts.Privileges(r.Context(), u.ticket, s.workloadPoolPath())
 		if err != nil {
-			s.proxmoxError(w, err)
+			s.proxmoxError(w, r, err)
 			return
 		}
 		v.Allowed = held.Has(privChange)
@@ -255,7 +255,7 @@ func (s *Server) requestTemplateBuild(w http.ResponseWriter, r *http.Request, u 
 	key := provisioner.RequestLine(&plan)
 	state, err := s.refreshState(r.Context(), u.kube)
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	if state.schedule == nil || !state.schedule.CreatorBuilds {
@@ -266,10 +266,10 @@ func (s *Server) requestTemplateBuild(w http.ResponseWriter, r *http.Request, u 
 		return
 	}
 	if err := s.requestBuild(r.Context(), u.kube, key, u.ticket.Username); err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
-	s.Log.Info("template build asked for", "user", u.ticket.Username, "template", key)
+	s.Log.InfoContext(r.Context(), "template build asked for", "user", u.ticket.Username, "template", key)
 	w.WriteHeader(http.StatusAccepted)
 }
 

@@ -66,7 +66,7 @@ func (s *Server) applianceStatus(w http.ResponseWriter, r *http.Request, u user,
 	v.Appliance = true
 	privs, err := s.Accounts.Privileges(r.Context(), u.ticket, "/")
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return false
 	}
 	v.Allowed = privs.Has(setupPrivileges...)
@@ -88,7 +88,7 @@ func (s *Server) applianceStatus(w http.ResponseWriter, r *http.Request, u user,
 	}
 	covered, err := s.backupCovers(r.Context(), u)
 	if err != nil {
-		s.Log.Warn("checking the appliance's backup", "error", err)
+		s.Log.WarnContext(r.Context(), "checking the appliance's backup", "error", err)
 		return true
 	}
 	v.Backup = &covered
@@ -172,7 +172,7 @@ func (s *Server) credential(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	s.Log.Warn("handed out the management cluster's credential", "user", u.ticket.Username, "credential", req.Name)
+	s.Log.WarnContext(r.Context(), "handed out the management cluster's credential", "user", u.ticket.Username, "credential", req.Name)
 	w.Header().Set("Content-Type", "application/yaml")
 	w.Header().Set("Content-Disposition", `attachment; filename="management.`+req.Name+`"`)
 	_, _ = w.Write(data)
@@ -213,7 +213,7 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request, u user) {
 	if kube := s.currentKube(); kube != nil {
 		var list clusterv1.ClusterList
 		if err := kube.List(r.Context(), &list); err != nil {
-			s.kubeError(w, err)
+			s.kubeError(w, r, err)
 			return
 		}
 		if n := len(list.Items); n > 0 {
@@ -223,7 +223,7 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	ticket, err := s.Accounts.Renew(r.Context(), u.ticket)
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
 	err = a.Remove(req.Passphrase, ticket, s.beforeRemoval(ticket), func() { s.activeKube.Store(nil) }) //nolint:contextcheck // the job outlives the request on purpose
@@ -235,7 +235,7 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	s.Log.Warn("management cluster removal started", "user", u.ticket.Username)
+	s.Log.WarnContext(r.Context(), "management cluster removal started", "user", u.ticket.Username)
 	writeJSON(w, http.StatusAccepted, a.Current())
 }
 
@@ -274,7 +274,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 	// The run needs the whole of a ticket's life, so it gets a new one rather than the session's.
 	ticket, err := s.Accounts.Renew(r.Context(), u.ticket)
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
 	err = a.Apply(&req.Settings, req.Passphrase, ticket, s.applied(ticket)) //nolint:contextcheck // the job outlives the request on purpose
@@ -286,7 +286,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	s.Log.Info("management cluster apply started", "user", u.ticket.Username)
+	s.Log.InfoContext(r.Context(), "management cluster apply started", "user", u.ticket.Username)
 	writeJSON(w, http.StatusAccepted, a.Current())
 }
 
@@ -306,14 +306,14 @@ func (s *Server) checkRootPassword(w http.ResponseWriter, r *http.Request, u use
 		writeError(w, http.StatusUnprocessableEntity, "Volume snapshots: Proxmox VE refused root@pam's password")
 		return false
 	case err != nil:
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return false
 	case challenge != nil:
 		writeError(w, http.StatusUnprocessableEntity,
 			"Volume snapshots: root@pam has a second factor, and the CSI plugin signs in with the password alone; remove root@pam's second factor in Proxmox VE first")
 		return false
 	}
-	s.Log.Warn("root@pam's password given for volume snapshots", "user", u.ticket.Username)
+	s.Log.WarnContext(r.Context(), "root@pam's password given for volume snapshots", "user", u.ticket.Username)
 	return true
 }
 

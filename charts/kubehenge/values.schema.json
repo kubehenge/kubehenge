@@ -106,6 +106,21 @@
       "type": "string",
       "pattern": "^([^@]+@sha256:[0-9a-f]{64})?$"
     },
+    "controllerLogs": {
+      "description": "How the controller logs, in JSON either way.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "description": "The least severe lines the controller logs.",
+          "enum": ["debug", "info", "warn", "error"]
+        },
+        "development": {
+          "description": "Whether the controller logs stack traces from warnings on.",
+          "type": "boolean"
+        }
+      }
+    },
     "kubeVip": {
       "description": "kube-vip's image by registry, repository, tag and digest.",
       "$ref": "#/$defs/pinnedImage"
@@ -171,7 +186,7 @@
     "proxmox": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["url", "insecure", "secret", "clusterGroup", "clusterRole", "volumeOwnerNode", "region", "ha", "datastoreAllocate", "sysAuditGroup", "volumeSnapshots", "etcdRestore"],
+      "required": ["url", "insecure", "secret", "clusterGroup", "clusterRole", "volumeOwnerNode", "region", "ha", "datastoreAllocate", "sysAuditGroup", "volumeSnapshots", "etcdRestore", "bootLogs"],
       "properties": {
         "url": { "type": "string", "pattern": "^https://[^/]+" },
         "insecure": { "type": "boolean" },
@@ -204,7 +219,11 @@
             "rootSecret": { "anyOf": [{ "const": "" }, { "$ref": "#/$defs/name" }] }
           }
         },
-        "etcdRestore": { "type": "boolean" }
+        "etcdRestore": { "type": "boolean" },
+        "bootLogs": {
+          "description": "Whether the controller reads nodes' boot logs through their guest agents, with its token holding VM.GuestAgent.FileRead on the workload pool.",
+          "type": "boolean"
+        }
       }
     },
     "templateRefresh": {

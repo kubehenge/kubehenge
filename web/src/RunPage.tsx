@@ -8,8 +8,9 @@ import { runTitle, runView } from "./Runs";
 import type { Job, RunInfo, RunStep } from "./types";
 import { age, logLines, pollIdle, pollRunning, Status, usePoll } from "./ui";
 
-const states: Record<RunInfo["state"], { state: "progress" | "ok" | "error"; text: string }> = {
+const states: Record<RunInfo["state"], { state: "progress" | "warning" | "ok" | "error"; text: string }> = {
   running: { state: "progress", text: "Running" },
+  stalled: { state: "warning", text: "Stalled" },
   succeeded: { state: "ok", text: "Succeeded" },
   failed: { state: "error", text: "Failed" },
 };
@@ -89,12 +90,7 @@ export function RunPage({ id }: { id: string }): JSX.Element {
           </Link>
         </div>
       </div>
-      {run.error !== undefined && (
-        <div className="pinned-error" role="alert">
-          <strong>First error</strong>
-          <p>{run.error}</p>
-        </div>
-      )}
+      <PinnedError run={run} />
       {run.steps !== undefined && run.steps.length > 0 && (
         <ol className="steps" aria-label="Steps">
           {run.steps.map((s) => (
@@ -110,6 +106,20 @@ export function RunPage({ id }: { id: string }): JSX.Element {
       {run.steps === undefined && run.phase !== undefined && <p className="muted">{run.phase}</p>}
       {(run.kind === "management-cluster" || run.kind === "template") && <JobLog run={run} />}
     </section>
+  );
+}
+
+// PinnedError is what holds a stalled run up, or a run's first error, above its steps.
+function PinnedError({ run }: { run: RunInfo }): JSX.Element | null {
+  if (run.error === undefined) {
+    return null;
+  }
+  const stalled = run.state === "stalled";
+  return (
+    <div className={stalled ? "pinned-error stalled" : "pinned-error"} role="alert">
+      <strong>{stalled ? "Held up by" : "First error"}</strong>
+      <p>{run.error}</p>
+    </div>
   );
 }
 

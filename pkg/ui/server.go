@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/appliance"
@@ -128,7 +129,10 @@ type Server struct {
 	ConnectWorkload func(server string, ca []byte, token string) (*Workload, error)
 	// OpenStore reaches the backup targets clusters' etcd snapshots are in; unset, over HTTPS.
 	OpenStore provisioner.OpenStore
-	Log       *slog.Logger
+	// NewClientset reaches the management cluster for what its controller-runtime client cannot
+	// read, the providers' logs a support bundle carries; nil leaves bundles without them.
+	NewClientset func() (kubernetes.Interface, error)
+	Log          *slog.Logger
 
 	sessions   *sessions
 	limiter    *limiter
@@ -211,8 +215,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "no such API")
 	})
+	mux.HandleFunc("GET /healthz", healthz)
 	mux.HandleFunc("/", s.assets)
-	return securityHeaders(mux)
+	return withRequestID(securityHeaders(mux))
+}
+
+// healthz tells a monitor that the interface answers, unauthenticated; it says nothing more, so it
+// tells no one else anything about the appliance.
+func healthz(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = io.WriteString(w, "ok\n")
 }
 
 // clusterRoutes are the routes of one cluster.
@@ -223,6 +236,9 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}", s.managed(s.deleteCluster))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/kubeconfig", s.managed(s.kubeconfig))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/talosconfig", s.managed(s.talosconfig))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/support-bundle", s.managed(s.supportBundle))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/machines/{machine}/boot-log", s.managed(s.bootLog))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/machines/{machine}/boot-log", s.managed(s.askBootLog))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/talos-upgrade-failure", s.managed(s.retryTalosUpgrade))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/health", s.managed(s.clusterHealth))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/pods/{podNamespace}/{pod}/logs", s.managed(s.podLogs))
@@ -251,6 +267,7 @@ func (s *Server) init() {
 	if s.Log == nil {
 		s.Log = slog.New(slog.DiscardHandler)
 	}
+	s.Log = withRequestIDs(s.Log)
 }
 
 // setKube switches the interface to a management cluster.
@@ -437,7 +454,7 @@ func (s *Server) managed(next func(http.ResponseWriter, *http.Request, user)) ht
 		}
 		var err error
 		if u.namespaces, err = s.namespaces(r.Context(), u.kube); err != nil {
-			s.Log.Error("management cluster request failed", "error", err)
+			s.Log.ErrorContext(r.Context(), "management cluster request failed", "error", err)
 			writeError(w, http.StatusBadGateway, "the management cluster did not answer")
 			return
 		}
@@ -475,7 +492,7 @@ func (s *Server) signedIn(next func(http.ResponseWriter, *http.Request, user)) h
 func (s *Server) require(w http.ResponseWriter, r *http.Request, u user, aclPath string, privs ...string) bool {
 	held, err := s.Accounts.Privileges(r.Context(), u.ticket, aclPath)
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return false
 	}
 	for _, p := range privs {
@@ -487,14 +504,14 @@ func (s *Server) require(w http.ResponseWriter, r *http.Request, u user, aclPath
 	return true
 }
 
-func (s *Server) proxmoxError(w http.ResponseWriter, err error) {
+func (s *Server) proxmoxError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, pve.ErrAuthentication):
 		writeError(w, http.StatusUnauthorized, "Proxmox VE no longer accepts the session")
 	case errors.Is(err, pve.ErrForbidden):
 		writeError(w, http.StatusForbidden, "Proxmox VE refused: permission denied")
 	default:
-		s.Log.Error("proxmox VE request failed", "error", err)
+		s.Log.ErrorContext(r.Context(), "proxmox VE request failed", "error", err)
 		writeError(w, http.StatusBadGateway, "Proxmox VE did not answer")
 	}
 }
@@ -548,6 +565,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_, _ = w.Write(append(raw, '\n'))
 }
 
+// writeError answers with the API's own message, and the request's id for the user to quote.
 func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]string{"error": message})
+	answer := map[string]string{"error": message}
+	if id := w.Header().Get(requestIDHeader); id != "" {
+		answer["requestId"] = id
+	}
+	writeJSON(w, status, answer)
 }

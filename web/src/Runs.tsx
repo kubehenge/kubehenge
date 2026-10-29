@@ -5,10 +5,13 @@ import { ranked, useFleet, type Standing } from "./fleet";
 import { Link } from "./router";
 import { settingLabel } from "./Staging";
 import type { RunInfo } from "./types";
-import { age } from "./ui";
+import { age, filled } from "./ui";
 
-/** Where a run stands in the column: under way, failed and waiting for a look, or done lately. */
-export type RunGroup = "running" | "failed" | "done";
+/**
+ * Where a run stands in the column: under way, under way but stopped coming, failed and waiting for
+ * a look, or done lately.
+ */
+export type RunGroup = "running" | "stalled" | "failed" | "done";
 
 /** A piece of work somewhere in the fleet or the appliance. */
 export interface Run {
@@ -18,12 +21,13 @@ export interface Run {
   what: string;
   state: Standing["state"];
   to: string;
-  /** The first thing that went wrong, for a failed run. */
+  /** The first thing that went wrong, for a failed run, or what holds a stalled one up. */
   error?: string;
 }
 
 const runGroups: { group: RunGroup; label: string }[] = [
   { group: "running", label: "Running" },
+  { group: "stalled", label: "Stalled" },
   { group: "failed", label: "Failed" },
   { group: "done", label: "Done" },
 ];
@@ -77,15 +81,25 @@ const applianceTitles: Partial<Record<RunInfo["kind"], string>> = {
 
 function described(r: RunInfo): string {
   const what = runTitle(r);
-  if (r.state === "running") {
+  if (r.state === "running" || r.state === "stalled") {
     return r.phase === undefined ? what : `${what}: ${r.phase}`;
   }
   const when = r.finished === undefined ? "" : `, ${age(r.finished)} ago`;
   return `${what}${r.state === "failed" ? " failed" : ""}${when}`;
 }
 
-const groupOf: Record<RunInfo["state"], RunGroup> = { running: "running", failed: "failed", succeeded: "done" };
-const stateOf: Record<RunInfo["state"], Standing["state"]> = { running: "progress", failed: "error", succeeded: "ok" };
+const groupOf: Record<RunInfo["state"], RunGroup> = {
+  running: "running",
+  stalled: "stalled",
+  failed: "failed",
+  succeeded: "done",
+};
+const stateOf: Record<RunInfo["state"], Standing["state"]> = {
+  running: "progress",
+  stalled: "warning",
+  failed: "error",
+  succeeded: "ok",
+};
 
 const shownName = (namespace: string, name: string): string =>
   namespace === "default" ? name : `${namespace}/${name}`;
@@ -114,29 +128,45 @@ export function useRuns(): Run[] {
   const runs = fleet?.runs ?? [];
   // A change made here is followed by its own run; the fleet's standing says the same in less.
   const followed = new Set(
-    runs.filter((r) => r.kind === "change" && r.state === "running").map((r) => `${r.namespace}/${r.cluster}`),
+    runs
+      .filter((r) => r.kind === "change" && (r.state === "running" || r.state === "stalled"))
+      .map((r) => `${r.namespace}/${r.cluster}`),
   );
+  // A creation, or a change made with kubectl, whose machines stopped coming shows as stalled too.
   const changes: Run[] = ranked(fleet?.clusters ?? [], fleet?.health)
-    .filter(({ cluster: c, standing }) => standing.group === "running" && !followed.has(`${c.namespace}/${c.name}`))
-    .map(({ cluster: c, standing: s }) => ({
-      key: `${c.namespace}/${c.name}`,
-      group: "running",
-      title: shownName(c.namespace, c.name),
-      what: s.reason,
-      state: s.state,
-      to: clusterPath(c.namespace, c.name, s.view),
-    }));
+    .filter(
+      ({ cluster: c, standing }) =>
+        (standing.group === "running" || filled(c.stalled)) && !followed.has(`${c.namespace}/${c.name}`),
+    )
+    .map(({ cluster: c, standing: s }) => {
+      const run: Run = {
+        key: `${c.namespace}/${c.name}`,
+        group: filled(c.stalled) ? "stalled" : "running",
+        title: shownName(c.namespace, c.name),
+        what: s.reason,
+        state: s.state,
+        to: clusterPath(c.namespace, c.name, s.view),
+      };
+      if (filled(c.stalled)) {
+        run.error = c.stalled;
+      }
+      return run;
+    });
   return [...changes, ...runs.map((r) => fromServer(r))];
 }
 
 /** RunsPanel follows the work under way beside whatever page is open, and folds away. */
 export function RunsPanel({ runs, onFold }: { runs: Run[]; onFold: () => void }): JSX.Element {
   const running = runs.filter((r) => r.group === "running").length;
+  const stalled = runs.filter((r) => r.group === "stalled").length;
   return (
     <aside className="runs" aria-label="Runs">
       <div className="runs-head">
         <h2>
-          Runs <span className="count">{running} running</span>
+          Runs{" "}
+          <span className="count">
+            {running} running{stalled > 0 && `, ${stalled} stalled`}
+          </span>
         </h2>
         <button type="button" className="icon" aria-label="Fold the runs away" title="Fold away (R)" onClick={onFold}>
           ›

@@ -182,7 +182,7 @@ func viewOf(t *credentialTarget, secret *corev1.Secret) credentialView {
 func (s *Server) showCredential(w http.ResponseWriter, r *http.Request, u user, t *credentialTarget) {
 	secret, _, err := stored(r.Context(), u.kube, t)
 	if err != nil {
-		s.credentialError(w, err)
+		s.credentialError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, viewOf(t, secret))
@@ -239,7 +239,7 @@ func (s *Server) storeCredential(w http.ResponseWriter, r *http.Request, u user,
 	ctx := r.Context()
 	secret, set, err := stored(ctx, u.kube, t)
 	if err != nil {
-		s.credentialError(w, err)
+		s.credentialError(w, r, err)
 		return
 	}
 	if !set {
@@ -264,10 +264,10 @@ func (s *Server) storeCredential(w http.ResponseWriter, r *http.Request, u user,
 		err = u.kube.Create(ctx, secret)
 	}
 	if err != nil {
-		s.credentialError(w, err)
+		s.credentialError(w, r, err)
 		return
 	}
-	s.Log.Info("stored credential", "user", u.ticket.Username, "credential", t.describe())
+	s.Log.InfoContext(r.Context(), "stored credential", "user", u.ticket.Username, "credential", t.describe())
 	s.credentialChanged(r, u, t)
 	writeJSON(w, http.StatusOK, viewOf(t, secret))
 }
@@ -279,11 +279,11 @@ func (s *Server) removeCredential(w http.ResponseWriter, r *http.Request, u user
 		err = u.kube.Delete(ctx, secret, client.Preconditions{UID: &secret.UID, ResourceVersion: &secret.ResourceVersion})
 	}
 	if err != nil && !apierrors.IsNotFound(err) {
-		s.credentialError(w, err)
+		s.credentialError(w, r, err)
 		return
 	}
 	if set {
-		s.Log.Info("removed credential", "user", u.ticket.Username, "credential", t.describe())
+		s.Log.InfoContext(r.Context(), "removed credential", "user", u.ticket.Username, "credential", t.describe())
 		s.credentialChanged(r, u, t)
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -300,13 +300,13 @@ func (s *Server) credentialChanged(r *http.Request, u user, t *credentialTarget)
 	}
 }
 
-func (s *Server) credentialError(w http.ResponseWriter, err error) {
+func (s *Server) credentialError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, errNotCredential):
 		writeError(w, http.StatusConflict, err.Error())
 	case apierrors.IsAlreadyExists(err), apierrors.IsConflict(err):
 		writeError(w, http.StatusConflict, "the credential changed meanwhile; try again")
 	default:
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 	}
 }
