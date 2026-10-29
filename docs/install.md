@@ -226,6 +226,8 @@ Every user sees and changes only what their Proxmox VE privileges allow ([cluste
 
 On first sign-in, an administrator sees the setup page. It creates the management cluster with the `management-cluster/` module and OpenTofu, inside the appliance.
 
+The page goes through five steps: **Placement**, **Network**, **Clusters**, **Services** and **Passphrase**; **Next** moves on once the step is complete. It starts from what the first chosen node reports about itself: a shared storage for the VM disks, or else the one with the most free space; the bridge the node reaches its gateway through, with that gateway; the node's own DNS servers; and the network the node addresses go in. For clusters, it offers the same storage and bridge to start with. Everything it fills in can be changed. Reading the bridges and DNS servers takes `Sys.Audit` on the node, which the Administrator role holds. Administration shows the same settings on one page, with one section per step.
+
 ### Who may set it up
 
 The signed-in user needs these privileges on `/`, which the Administrator role holds:

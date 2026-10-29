@@ -274,6 +274,8 @@ export interface Api {
   storages: () => Promise<Storage[]>;
   nodes: () => Promise<PveNode[]>;
   bridges: (node: string) => Promise<Bridge[]>;
+  /** The DNS servers a node resolves with. */
+  dns: (node: string) => Promise<{ servers: string[] }>;
   haRules: () => Promise<HARules>;
 }
 
@@ -352,8 +354,19 @@ export const api: Api = {
   storages: () => request("GET", "/api/proxmox/storages"),
   nodes: () => request("GET", "/api/proxmox/nodes"),
   bridges: (node) => request("GET", `/api/proxmox/nodes/${encodeURIComponent(node)}/bridges`),
+  dns: (node) => request("GET", `/api/proxmox/nodes/${encodeURIComponent(node)}/dns`),
   haRules: () => request("GET", "/api/proxmox/ha-rules"),
 };
+
+/** dnsOf lists the DNS servers a node resolves with; a node whose servers cannot be read offers none. */
+export async function dnsOf(node: string): Promise<string[]> {
+  try {
+    const { servers } = await api.dns(node);
+    return servers;
+  } catch {
+    return [];
+  }
+}
 
 /** bridgesOf lists a node's bridges; a node whose bridges cannot be read offers none. */
 export async function bridgesOf(node: string): Promise<Bridge[]> {

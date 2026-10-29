@@ -55,6 +55,9 @@ type Bridge struct {
 	Node      string `json:"node"`
 	VLANAware bool   `json:"vlanAware"`
 	Comment   string `json:"comment,omitempty"`
+	// CIDR and Gateway are the node's own IPv4 address on the bridge and its gateway, where it has them.
+	CIDR    string `json:"cidr,omitempty"`
+	Gateway string `json:"gateway,omitempty"`
 }
 
 // HARule is an enabled node-affinity rule of Proxmox VE's HA: the nodes its resources keep to, or
@@ -182,15 +185,40 @@ func (a *Accounts) Bridges(ctx context.Context, t *Ticket, node string) ([]Bridg
 		Iface     string `json:"iface"`
 		VLANAware int    `json:"bridge_vlan_aware"`
 		Comments  string `json:"comments"`
+		CIDR      string `json:"cidr"`
+		Gateway   string `json:"gateway"`
 	}
 	if err := a.get(ctx, t, "/nodes/"+url.PathEscape(node)+"/network?type=any_bridge", &res); err != nil {
 		return nil, err
 	}
 	bridges := make([]Bridge, 0, len(res))
 	for _, r := range res {
-		bridges = append(bridges, Bridge{Bridge: r.Iface, Node: node, VLANAware: r.VLANAware != 0, Comment: strings.TrimSpace(r.Comments)})
+		bridges = append(bridges, Bridge{
+			Bridge: r.Iface, Node: node, VLANAware: r.VLANAware != 0, Comment: strings.TrimSpace(r.Comments),
+			CIDR: r.CIDR, Gateway: r.Gateway,
+		})
 	}
 	return bridges, nil
+}
+
+// DNS lists the DNS servers a node resolves with, in its order; Proxmox VE shows them to users with
+// Sys.Audit on the node.
+func (a *Accounts) DNS(ctx context.Context, t *Ticket, node string) ([]string, error) {
+	var res struct {
+		DNS1 string `json:"dns1"`
+		DNS2 string `json:"dns2"`
+		DNS3 string `json:"dns3"`
+	}
+	if err := a.get(ctx, t, "/nodes/"+url.PathEscape(node)+"/dns", &res); err != nil {
+		return nil, err
+	}
+	servers := []string{}
+	for _, s := range []string{res.DNS1, res.DNS2, res.DNS3} {
+		if s = strings.TrimSpace(s); s != "" {
+			servers = append(servers, s)
+		}
+	}
+	return servers, nil
 }
 
 // Allowed are those of the nodes given that the rule keeps its resources to: its own, or for a

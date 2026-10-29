@@ -1,21 +1,10 @@
-import {
-  Fragment,
-  useEffect,
-  useId,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type JSX,
-  type ReactNode,
-  type RefObject,
-} from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type JSX, type ReactNode } from "react";
 
-import { api, bridgesOf } from "./api";
+import { api, bridgesOf, dnsOf } from "./api";
 import { backupKeys } from "./Backups";
 import { BackupTargets, cleanTargets, targetProblems, targetSummary } from "./BackupTargets";
 import { CredentialField } from "./CredentialField";
-import { cidr, isIP, isVLAN, list, maskOf, pointToPoint, rangeProblem, sameNetwork, toInt } from "./network";
+import { cidr, isIP, isVLAN, list, maskOf, networkOf, pointToPoint, rangeProblem, sameNetwork, toInt } from "./network";
 import { OIDCProviders, cleanProviders, oidcProblems } from "./OIDCProviders";
 import type {
   BackupTarget,
@@ -343,6 +332,47 @@ export type SetupField =
   | "extraNamespaces"
   | "passphrase"
   | "confirm";
+
+// The first run's steps, in order; the Administration page shows them all at once, each a section.
+const setupSteps = ["Placement", "Network", "Clusters", "Services", "Passphrase"] as const;
+type SetupStep = (typeof setupSteps)[number];
+
+const stepFields: Record<SetupStep, SetupField[]> = {
+  Placement: ["nodes", "vmDatastore", "imageDatastore", "bootstrapDatastore"],
+  Network: [
+    "bridge",
+    "vlan",
+    "nodeAddresses",
+    "apiAddress",
+    "gateway",
+    "dnsServers",
+    "mirrors",
+    "podSubnets",
+    "serviceSubnets",
+  ],
+  Clusters: ["workload", "refreshAddress", "refreshGateway", "refreshDNS", "extraNamespaces"],
+  Services: ["clusterOIDC", "backupTargets"],
+  Passphrase: ["passphrase", "confirm"],
+};
+
+const stepOf = (k: SetupField): SetupStep => setupSteps.find((s) => stepFields[s].includes(k)) ?? "Placement";
+
+const advancedFields: SetupField[] = ["mirrors", "podSubnets", "serviceSubnets"];
+
+// preferredDisk is the storage for the management cluster's disks a first run starts from: a shared
+// one, which lets its VMs move between nodes, else the one with the most room.
+function preferredDisk(storages: Storage[], offered: string[]): string {
+  const [best] = storages
+    .filter((s) => offered.includes(s.storage) && s.content.includes("images"))
+    .toSorted((a, b) => Number(b.shared) - Number(a.shared) || b.avail - a.avail);
+  return best?.storage ?? "";
+}
+
+// uplink is the bridge a node reaches its gateway through, or else one it has an address on.
+const uplink = (bridges: Bridge[]): Bridge | undefined =>
+  bridges.find((b) => filled(b.gateway)) ?? bridges.find((b) => filled(b.cidr));
+
+const orElse = (value: string, otherwise: string): string => (value === "" ? otherwise : value);
 
 // nodeNetwork checks the node addresses against each other and the gateway, as the appliance
 // does: one network, the gateway in it, no address taken twice. It returns the network or the
@@ -1375,11 +1405,12 @@ function AdvancedFields({
   set,
   shown,
   fixed,
-  detailsRef,
-}: FieldsProps & { fixed: boolean; detailsRef: RefObject<HTMLDetailsElement | null> }): JSX.Element {
+  open,
+  onOpen,
+}: FieldsProps & { fixed: boolean; open: boolean; onOpen: (open: boolean) => void }): JSX.Element {
   const rangeHint = fixed ? fixedHint : "Empty picks a free range";
   return (
-    <details className="advanced" ref={detailsRef}>
+    <details className="advanced" open={open} onToggle={(e) => onOpen(e.currentTarget.open)}>
       <summary>Advanced</summary>
       <Field
         label="Registry mirrors"
@@ -1467,25 +1498,26 @@ function SetupWizard({
   const [nodes, setNodes] = useState<PveNode[]>([]);
   const [storages, setStorages] = useState<Storage[]>();
   const [bridgesByNode, setBridgesByNode] = useState<Record<string, Bridge[]>>({});
+  const [dnsByNode, setDNSByNode] = useState<Record<string, string[]>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [form, setForm] = useState<SetupForm>(() => formOf(status.settings));
-  // A field's problem shows once it has been changed, or after the run was asked for.
+  // The first run goes step by step; the Administration page shows every step at once.
+  const stepped = !manage;
+  const [step, setStep] = useState<SetupStep>("Placement");
+  // A field's problem shows once it has been changed, or after Next or the run was asked for on its
+  // step.
   const [touched, setTouched] = useState<ReadonlySet<string>>(new Set());
-  const [attempted, setAttempted] = useState(false);
+  const [attempted, setAttempted] = useState<ReadonlySet<SetupStep>>(new Set());
   const [askingRestore, setAskingRestore] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const touch = (k: string): void => setTouched((t) => (t.has(k) ? t : new Set([...t, k])));
   const set = <K extends keyof SetupForm>(k: K, v: SetupForm[K]): void => {
     setForm((f) => ({ ...f, [k]: v }));
     touch(k);
   };
-  const toggle: Toggle = (k, v, on) => {
-    setForm((f) => ({ ...f, [k]: on ? [...f[k], v] : f[k].filter((x) => x !== v) }));
-    touch(k === "nodes" ? "nodes" : "workload");
-  };
   const wizardRef = useRef<HTMLFormElement>(null);
   const headingId = useId();
-  const advancedRef = useRef<HTMLDetailsElement>(null);
 
   useEffect(() => {
     async function loadNodes(): Promise<void> {
@@ -1498,8 +1530,9 @@ function SetupWizard({
           n
             .filter((x) => x.online)
             .map(async ({ node }) => {
-              const b = await bridgesOf(node);
+              const [b, d] = await Promise.all([bridgesOf(node), dnsOf(node)]);
               setBridgesByNode((all) => ({ ...all, [node]: b }));
+              setDNSByNode((all) => ({ ...all, [node]: d }));
             }),
         );
       } catch (err) {
@@ -1518,69 +1551,30 @@ function SetupWizard({
     void loadStorages();
   }, []);
 
-  const all = storages ?? [];
-  // The management cluster's storages and bridge must be on every node it runs on; clusters may use
-  // what any node has.
-  const onEveryNode = (c: string): string[] =>
-    unique(all.filter((s) => s.content.includes(c)).map((s) => s.storage)).filter((name) =>
-      form.nodes.every((n) => all.some((s) => s.node === n && s.storage === name && s.content.includes(c))),
-    );
-  const bridges = useMemo(
-    () =>
-      unique(Object.values(bridgesByNode).flatMap((b) => b.map((x) => x.bridge))).filter((name) =>
-        form.nodes.every((n) => (bridgesByNode[n] ?? []).some((b) => b.bridge === name)),
-      ),
-    [bridgesByNode, form.nodes],
-  );
-  const bridgesKnown = form.nodes.every((n) => bridgesByNode[n] !== undefined);
-  // Once the choices are known, a preset that is not among them gives way: a default storage to the
-  // first that fits, a choice made for other nodes to none, so nothing is sent that the page does
-  // not show.
-  const known = storages !== undefined;
-  const fit = (value: string, choices: string[]): string =>
-    !known || choices.includes(value) ? value : (choices[0] ?? "");
-  // What the running management cluster was made with; its network and disks stay as they are.
   const fixed = manage && status.ready ? status.settings : undefined;
-  const effective: SetupForm = {
-    ...form,
-    vmDatastore: fixed ? fixed.vmDatastore : keepOffered(form.vmDatastore, onEveryNode("images"), known),
-    imageDatastore: fit(form.imageDatastore, onEveryNode("import")),
-    bootstrapDatastore: fit(form.bootstrapDatastore, onEveryNode("iso")),
-    bridge: keepOffered(form.bridge, bridges, bridgesKnown),
-    refreshStorage: offeredRefreshStorage(form),
+  const found: Found = { storages, bridgesByNode, dnsByNode, fixed };
+  const { effective, offers, nodeNetwork: network } = withDefaults(form, touched, found);
+  const toggle: Toggle = (k, v, on) => {
+    setForm((f) => {
+      const now = k === "nodes" ? f.nodes : effective[k];
+      return { ...f, [k]: on ? [...now, v] : now.filter((x) => x !== v) };
+    });
+    touch(k);
+    if (k !== "nodes") {
+      touch("workload");
+    }
   };
   // A new passphrase is chosen, and repeated, only when no earlier run left a state to open.
   const firstRun = !manage && status.resumes !== true;
   const byField = setupFieldProblems(effective, firstRun, fixed);
-  const problems = Object.values(byField);
-  const shown = (k: SetupField): string | undefined => (attempted || touched.has(k) ? byField[k] : undefined);
+  const problemsIn = (s: SetupStep): boolean => stepFields[s].some((k) => byField[k] !== undefined);
+  const shown = (k: SetupField): string | undefined =>
+    attempted.has(stepOf(k)) || touched.has(k) ? byField[k] : undefined;
+  const index = setupSteps.indexOf(step);
+  const following = setupSteps[index + 1];
+  const previous = setupSteps[index - 1];
 
-  const onlineNodes = nodes.filter((n) => n.online).length;
-  const clusterStorages = unique([
-    ...all.filter((s) => s.content.includes("images")).map((s) => s.storage),
-    ...(known ? form.workloadDatastores : []),
-  ]).map((name) => {
-    const here = all.filter((s) => s.storage === name && s.content.includes("images"));
-    return {
-      name,
-      note: choiceNote(
-        unique(here.map((s) => s.node)),
-        here.some((s) => s.shared),
-        onlineNodes,
-      ),
-    };
-  });
-  const bridgesLoaded = Object.keys(bridgesByNode).length >= onlineNodes && onlineNodes > 0;
-  const clusterBridges = unique([
-    ...Object.values(bridgesByNode).flatMap((b) => b.map((x) => x.bridge)),
-    ...(bridgesLoaded ? form.workloadBridges : []),
-  ]).map((name) => {
-    const on = Object.entries(bridgesByNode)
-      .filter(([, b]) => b.some((x) => x.bridge === name))
-      .map(([n]) => n)
-      .toSorted();
-    return { name, note: choiceNote(on, false, onlineNodes) };
-  });
+  const { clusterStorages, clusterBridges } = clusterChoices(form, found, nodes);
 
   const start = async (): Promise<void> => {
     setBusy(true);
@@ -1595,6 +1589,57 @@ function SetupWizard({
       setBusy(false);
     }
   };
+
+  // reveal shows every problem of the steps, opening Advanced where one is, and puts the cursor on the
+  // first once the step shown has been laid out.
+  const reveal = (steps: readonly SetupStep[]): void => {
+    setAttempted((a) => new Set([...a, ...steps]));
+    if (advancedFields.some((k) => byField[k] !== undefined)) {
+      setAdvancedOpen(true);
+    }
+    requestAnimationFrame(() => wizardRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus());
+  };
+  const submit = (): void => {
+    if (busy) {
+      return;
+    }
+    if (stepped && following !== undefined) {
+      if (problemsIn(step)) {
+        reveal([step]);
+      } else {
+        setStep(following);
+      }
+      return;
+    }
+    const wrong = setupSteps.find((s) => problemsIn(s));
+    if (wrong === undefined) {
+      void start();
+      return;
+    }
+    if (stepped) {
+      setStep(wrong);
+    }
+    reveal(setupSteps);
+  };
+  const fields = setupFields({
+    form,
+    effective,
+    set,
+    shown,
+    nodes,
+    toggle,
+    fixed,
+    offers,
+    nodeNetwork: network,
+    clusterStorages,
+    clusterBridges,
+    attempted: attempted.size > 0,
+    passphraseHint: passphraseHint(manage, status.resumes),
+    firstRun,
+    advancedOpen,
+    handleAdvanced: setAdvancedOpen,
+    handleAskRestore: () => setAskingRestore(true),
+  });
 
   return (
     <section className="panel" aria-labelledby={headingId}>
@@ -1611,24 +1656,224 @@ function SetupWizard({
         noValidate
         onSubmit={(e) => {
           e.preventDefault();
-          if (busy) {
-            return;
-          }
-          if (problems.length === 0) {
-            void start();
-            return;
-          }
-          // Every problem shows, and the cursor goes to the first.
-          setAttempted(true);
-          const inAdvanced = [byField.mirrors, byField.podSubnets, byField.serviceSubnets].some((x) => x !== undefined);
-          if (advancedRef.current && inAdvanced) {
-            advancedRef.current.open = true;
-          }
-          requestAnimationFrame(() => wizardRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus());
+          submit();
         }}
       >
         {manage && <h3 id={headingId}>Management cluster</h3>}
         <LastRun status={status} manage={manage} />
+        {stepped ? (
+          <>
+            <nav className="wizard-steps" aria-label="Steps">
+              {setupSteps.map((s, i) => (
+                <button
+                  key={s}
+                  type="button"
+                  className={s === step ? "tab active" : "tab"}
+                  aria-current={s === step ? "step" : undefined}
+                  disabled={i > index && setupSteps.slice(0, i).some((p) => problemsIn(p))}
+                  onClick={() => setStep(s)}
+                >
+                  {s}
+                </button>
+              ))}
+            </nav>
+            {fields[step]}
+          </>
+        ) : (
+          setupSteps.map((s) => (
+            <section key={s} className="setup-section" aria-label={s}>
+              <h4>{s}</h4>
+              {fields[s]}
+            </section>
+          ))
+        )}
+        <ErrorBox message={error} />
+        <div className="actions">
+          {onCancel && (
+            <button type="button" onClick={onCancel}>
+              Cancel
+            </button>
+          )}
+          {stepped && (
+            <button
+              type="button"
+              disabled={previous === undefined}
+              onClick={() => {
+                if (previous !== undefined) {
+                  setStep(previous);
+                }
+              }}
+            >
+              Back
+            </button>
+          )}
+          <button type="submit" className="primary" disabled={busy}>
+            {submitLabel(manage, following === undefined)}
+          </button>
+        </div>
+      </form>
+      <EtcdRestoreConfirm
+        open={askingRestore}
+        onClose={() => setAskingRestore(false)}
+        onConfirm={() => {
+          set("etcdRestore", true);
+          setAskingRestore(false);
+        }}
+      />
+    </section>
+  );
+}
+
+const submitLabel = (manage: boolean, last: boolean): string => {
+  if (manage) {
+    return "Apply";
+  }
+  return last ? "Create management cluster" : "Next";
+};
+
+// What the setup has read of Proxmox VE: storages are undefined until read, a node is missing from
+// the bridges and DNS servers until its own are. Fixed is what a running management cluster was made
+// with, whose network and disks stay as they are.
+interface Found {
+  storages: Storage[] | undefined;
+  bridgesByNode: Record<string, Bridge[]>;
+  dnsByNode: Record<string, string[]>;
+  fixed: ManagementSettings | undefined;
+}
+
+// Where the management cluster may go: the storages and bridges every chosen node has.
+interface Offers {
+  vmDisks: string[];
+  images: string[];
+  isos: string[];
+  bridges: string[];
+}
+
+/**
+ * withDefaults is the form as it is checked and sent. The management cluster's storages and bridge
+ * must be on every node it runs on; once the choices are known, a preset that is not among them
+ * gives way, a default storage to the first that fits and a choice made for other nodes to none, so
+ * nothing is sent that the page does not show. Where nothing is chosen yet, it starts from what the
+ * first chosen node says of itself: the bridge it reaches its gateway through, that gateway, its DNS
+ * servers, and the roomiest storage, which clusters are offered too. A field the user has emptied
+ * stays empty.
+ */
+function withDefaults(
+  form: SetupForm,
+  touched: ReadonlySet<string>,
+  found: Found,
+): { effective: SetupForm; offers: Offers; nodeNetwork: string | undefined } {
+  const { fixed } = found;
+  const all = found.storages ?? [];
+  const known = found.storages !== undefined;
+  const onEveryNode = (c: string): string[] =>
+    unique(all.filter((s) => s.content.includes(c)).map((s) => s.storage)).filter((name) =>
+      form.nodes.every((n) => all.some((s) => s.node === n && s.storage === name && s.content.includes(c))),
+    );
+  const bridges = unique(Object.values(found.bridgesByNode).flatMap((b) => b.map((x) => x.bridge))).filter((name) =>
+    form.nodes.every((n) => (found.bridgesByNode[n] ?? []).some((b) => b.bridge === name)),
+  );
+  const bridgesKnown = form.nodes.every((n) => found.bridgesByNode[n] !== undefined);
+  const fit = (value: string, choices: string[]): string =>
+    !known || choices.includes(value) ? value : (choices[0] ?? "");
+  const offers = { vmDisks: onEveryNode("images"), images: onEveryNode("import"), isos: onEveryNode("iso"), bridges };
+
+  const [first = ""] = form.nodes;
+  const home = (found.bridgesByNode[first] ?? []).filter((b) => bridges.includes(b.bridge));
+  const vmDatastore = fixed
+    ? fixed.vmDatastore
+    : keepOffered(orElse(form.vmDatastore, preferredDisk(all, offers.vmDisks)), offers.vmDisks, known);
+  const bridge = keepOffered(orElse(form.bridge, uplink(home)?.bridge ?? ""), bridges, bridgesKnown);
+  const onBridge = home.find((b) => b.bridge === bridge);
+  const detect = (k: "gateway" | "dnsServers", value: string): string =>
+    form[k] === "" && !touched.has(k) ? value : form[k];
+  const untouchedNone = (k: "workloadDatastores" | "workloadBridges", value: string): string[] =>
+    form[k].length === 0 && !touched.has(k) && value !== "" ? [value] : form[k];
+  return {
+    effective: {
+      ...form,
+      vmDatastore,
+      imageDatastore: fit(form.imageDatastore, offers.images),
+      bootstrapDatastore: fit(form.bootstrapDatastore, offers.isos),
+      bridge,
+      gateway: detect("gateway", onBridge?.gateway ?? ""),
+      dnsServers: detect("dnsServers", (found.dnsByNode[first] ?? []).join(", ")),
+      workloadDatastores: untouchedNone("workloadDatastores", vmDatastore),
+      workloadBridges: untouchedNone("workloadBridges", bridge),
+      refreshStorage: offeredRefreshStorage(form),
+    },
+    offers,
+    nodeNetwork: onBridge?.cidr === undefined ? undefined : networkOf(onBridge.cidr),
+  };
+}
+
+// clusterChoices are the storages and bridges clusters may be offered, any node's, each with where
+// it is; one chosen before that is no longer found stays, said to be gone.
+function clusterChoices(
+  form: SetupForm,
+  found: Found,
+  nodes: PveNode[],
+): { clusterStorages: Offered[]; clusterBridges: Offered[] } {
+  const all = found.storages ?? [];
+  const onlineNodes = nodes.filter((n) => n.online).length;
+  const clusterStorages = unique([
+    ...all.filter((s) => s.content.includes("images")).map((s) => s.storage),
+    ...(found.storages === undefined ? [] : form.workloadDatastores),
+  ]).map((name) => {
+    const here = all.filter((s) => s.storage === name && s.content.includes("images"));
+    return {
+      name,
+      note: choiceNote(
+        unique(here.map((s) => s.node)),
+        here.some((s) => s.shared),
+        onlineNodes,
+      ),
+    };
+  });
+  const bridgesLoaded = Object.keys(found.bridgesByNode).length >= onlineNodes && onlineNodes > 0;
+  const clusterBridges = unique([
+    ...Object.values(found.bridgesByNode).flatMap((b) => b.map((x) => x.bridge)),
+    ...(bridgesLoaded ? form.workloadBridges : []),
+  ]).map((name) => {
+    const on = Object.entries(found.bridgesByNode)
+      .filter(([, b]) => b.some((x) => x.bridge === name))
+      .map(([n]) => n)
+      .toSorted();
+    return { name, note: choiceNote(on, false, onlineNodes) };
+  });
+  return { clusterStorages, clusterBridges };
+}
+
+// setupFields lays out the setup's fields by step.
+function setupFields({
+  form,
+  effective,
+  set,
+  shown,
+  ...more
+}: {
+  form: SetupForm;
+  effective: SetupForm;
+  set: FieldsProps["set"];
+  shown: FieldsProps["shown"];
+  nodes: PveNode[];
+  toggle: Toggle;
+  fixed: ManagementSettings | undefined;
+  offers: Offers;
+  nodeNetwork: string | undefined;
+  clusterStorages: Offered[];
+  clusterBridges: Offered[];
+  attempted: boolean;
+  passphraseHint: string;
+  firstRun: boolean;
+  advancedOpen: boolean;
+  handleAdvanced: (open: boolean) => void;
+  handleAskRestore: () => void;
+}): Record<SetupStep, ReactNode> {
+  const { nodes, toggle, fixed } = more;
+  return {
+    Placement: (
+      <>
         <fieldset className="group">
           <legend>Proxmox VE nodes</legend>
           {nodes.map((n) => (
@@ -1653,7 +1898,7 @@ function SetupWizard({
               <Choice
                 id={id}
                 value={effective.vmDatastore}
-                options={onEveryNode("images")}
+                options={more.offers.vmDisks}
                 onChoose={(v) => set("vmDatastore", v)}
               />
             )
@@ -1664,7 +1909,7 @@ function SetupWizard({
             <Choice
               id={id}
               value={effective.imageDatastore}
-              options={onEveryNode("import")}
+              options={more.offers.images}
               onChoose={(v) => set("imageDatastore", v)}
             />
           )}
@@ -1678,18 +1923,22 @@ function SetupWizard({
             <Choice
               id={id}
               value={effective.bootstrapDatastore}
-              options={onEveryNode("iso")}
+              options={more.offers.isos}
               onChoose={(v) => set("bootstrapDatastore", v)}
             />
           )}
         </Field>
+      </>
+    ),
+    Network: (
+      <>
         <Field label="Bridge" error={shown("bridge")}>
           {(id) => (
             <select id={id} value={effective.bridge} onChange={(e) => set("bridge", e.target.value)}>
               <option value="" disabled>
                 Choose…
               </option>
-              {bridges.map((b) => (
+              {more.offers.bridges.map((b) => (
                 <option key={b} value={b}>
                   {b}
                 </option>
@@ -1704,7 +1953,7 @@ function SetupWizard({
         </Field>
         <Field
           label="Node addresses"
-          hint={fixed ? "Add 2 addresses after the first to grow to 3" : "1 or 3, like 192.0.2.11/24"}
+          hint={nodeAddressHint(fixed !== undefined, more.nodeNetwork)}
           error={shown("nodeAddresses")}
         >
           {(id) => (
@@ -1735,18 +1984,30 @@ function SetupWizard({
             <input
               id={id}
               readOnly={fixed !== undefined}
-              value={form.gateway}
+              value={effective.gateway}
               onChange={(e) => set("gateway", e.target.value.trim())}
             />
           )}
         </Field>
         <Field label="DNS servers" hint="Separated by commas" error={shown("dnsServers")}>
-          {(id) => <input id={id} value={form.dnsServers} onChange={(e) => set("dnsServers", e.target.value)} />}
+          {(id) => <input id={id} value={effective.dnsServers} onChange={(e) => set("dnsServers", e.target.value)} />}
         </Field>
-        <WorkloadChoices
+        <AdvancedFields
           form={form}
-          storages={clusterStorages}
-          bridges={clusterBridges}
+          set={set}
+          shown={shown}
+          fixed={fixed !== undefined}
+          open={more.advancedOpen}
+          onOpen={more.handleAdvanced}
+        />
+      </>
+    ),
+    Clusters: (
+      <>
+        <WorkloadChoices
+          form={effective}
+          storages={more.clusterStorages}
+          bridges={more.clusterBridges}
           problem={shown("workload")}
           onToggle={toggle}
         />
@@ -1756,45 +2017,38 @@ function SetupWizard({
         <RefreshChoice form={effective} set={set} shown={shown} />
         <SysAuditChoice form={form} set={set} />
         <NamespacesChoice form={form} set={set} shown={shown} />
+      </>
+    ),
+    Services: (
+      <>
         <HeadlampChoice form={form} set={set} />
         <HeadlampActionsChoice form={form} set={set} />
         <fieldset className="group">
           <legend>Identity providers</legend>
-          <OIDCProviders initial={form.clusterOIDC} showAll={attempted} onChange={(v) => set("clusterOIDC", v)} />
+          <OIDCProviders initial={form.clusterOIDC} showAll={more.attempted} onChange={(v) => set("clusterOIDC", v)} />
         </fieldset>
         <fieldset className="group">
           <legend>Backup targets</legend>
-          <BackupTargets initial={form.backupTargets} showAll={attempted} onChange={(v) => set("backupTargets", v)} />
+          <BackupTargets
+            initial={form.backupTargets}
+            showAll={more.attempted}
+            onChange={(v) => set("backupTargets", v)}
+          />
         </fieldset>
-        <EtcdRestoreChoice form={form} set={set} onAsk={() => setAskingRestore(true)} />
-        <AdvancedFields form={form} set={set} shown={shown} fixed={fixed !== undefined} detailsRef={advancedRef} />
-        <PassphraseFields
-          form={form}
-          set={set}
-          shown={shown}
-          hint={passphraseHint(manage, status.resumes)}
-          firstRun={firstRun}
-        />
-        <ErrorBox message={error} />
-        <div className="actions">
-          {onCancel && (
-            <button type="button" onClick={onCancel}>
-              Cancel
-            </button>
-          )}
-          <button type="submit" className="primary" disabled={busy}>
-            {manage ? "Apply" : "Create management cluster"}
-          </button>
-        </div>
-      </form>
-      <EtcdRestoreConfirm
-        open={askingRestore}
-        onClose={() => setAskingRestore(false)}
-        onConfirm={() => {
-          set("etcdRestore", true);
-          setAskingRestore(false);
-        }}
-      />
-    </section>
-  );
+        <EtcdRestoreChoice form={form} set={set} onAsk={more.handleAskRestore} />
+      </>
+    ),
+    Passphrase: (
+      <PassphraseFields form={form} set={set} shown={shown} hint={more.passphraseHint} firstRun={more.firstRun} />
+    ),
+  };
+}
+
+// nodeAddressHint says how many node addresses to give, and in which network where the bridge's is
+// known.
+function nodeAddressHint(fixed: boolean, network: string | undefined): string {
+  if (fixed) {
+    return "Add 2 addresses after the first to grow to 3";
+  }
+  return network === undefined ? "1 or 3, like 192.0.2.11/24" : `1 or 3 in ${network}`;
 }

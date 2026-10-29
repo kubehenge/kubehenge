@@ -2141,6 +2141,21 @@ details.advanced > summary {
   font-weight: 600;
 }
 
+/* The management cluster's settings, one section per step of the first run. */
+.setup-section {
+  margin-top: 18px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.setup-section > h4 {
+  margin: 10px 0 12px;
+  color: var(--dim);
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .section-head {
   display: flex;
   align-items: center;

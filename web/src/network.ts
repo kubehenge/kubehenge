@@ -6,6 +6,7 @@ export const cidr = /^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?
 
 export const addressBits = 32;
 const octetValues = 256;
+const octets = 4;
 const allOnes = 0xff_ff_ff_ff;
 // A /31 is a point-to-point link and a /32 one address: neither has a network or broadcast address.
 export const pointToPoint = 31;
@@ -32,6 +33,20 @@ export function toInt(address: string): number | undefined {
     return undefined;
   }
   return address.split(".").reduce((n, octet) => n * octetValues + Number(octet), 0);
+}
+
+/** fromInt writes a number as a dotted IPv4 address. */
+export const fromInt = (n: number): string =>
+  Array.from({ length: octets }, (_, i) => Math.floor(n / octetValues ** (octets - 1 - i)) % octetValues).join(".");
+
+/** networkOf is the network an address with its prefix length is in, like 192.0.2.0/24. */
+export function networkOf(address: string): string | undefined {
+  const [base = "", bits] = address.split("/");
+  const ip = toInt(base);
+  if (!cidr.test(address) || ip === undefined) {
+    return undefined;
+  }
+  return `${fromInt((ip & maskOf(Number(bits))) >>> 0)}/${bits}`;
 }
 
 /** maskOf is the network mask of a prefix length, as a number. */

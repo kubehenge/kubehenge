@@ -56,6 +56,7 @@ type Resources interface {
 	Storages(ctx context.Context, t *pve.Ticket) ([]pve.Storage, error)
 	Nodes(ctx context.Context, t *pve.Ticket) ([]pve.Node, error)
 	Bridges(ctx context.Context, t *pve.Ticket, node string) ([]pve.Bridge, error)
+	DNS(ctx context.Context, t *pve.Ticket, node string) ([]string, error)
 	NodeAffinityRules(ctx context.Context, t *pve.Ticket) ([]pve.HARule, error)
 	Zone(ctx context.Context, t *pve.Ticket, bridge string) (string, error)
 }
@@ -181,6 +182,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/proxmox/storages", s.signedIn(s.storages))
 	mux.HandleFunc("GET /api/proxmox/nodes", s.signedIn(s.nodes))
 	mux.HandleFunc("GET /api/proxmox/nodes/{node}/bridges", s.signedIn(s.bridges))
+	mux.HandleFunc("GET /api/proxmox/nodes/{node}/dns", s.signedIn(s.dns))
 	mux.HandleFunc("GET /api/proxmox/ha-rules", s.signedIn(s.haRules))
 
 	mux.HandleFunc("GET /api/setup", s.signedIn(s.setupStatus))

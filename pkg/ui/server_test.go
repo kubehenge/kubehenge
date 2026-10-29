@@ -196,6 +196,10 @@ func (*fakeAccounts) Bridges(_ context.Context, _ *pve.Ticket, node string) ([]p
 	return []pve.Bridge{{Bridge: "vmbr0", Node: node}, {Bridge: "vmbr1", Node: node}}, nil
 }
 
+func (*fakeAccounts) DNS(context.Context, *pve.Ticket, string) ([]string, error) {
+	return []string{"192.0.2.53"}, nil
+}
+
 // PoolMembers answers as Proxmox VE does, without the tags.
 func (f *fakeAccounts) PoolMembers(context.Context, *pve.Ticket, string) ([]pve.Member, error) {
 	f.mu.Lock()
@@ -1523,6 +1527,11 @@ func TestProxmoxResources(t *testing.T) {
 	var bridges []bridgeView
 	if err := json.Unmarshal(rec.Body.Bytes(), &bridges); err != nil || len(bridges) != 2 || !bridges[0].Usable || bridges[1].Usable {
 		t.Fatalf("bridges = %s", rec.Body)
+	}
+	rec = b.do("GET", "/api/proxmox/nodes/pve1/dns", "")
+	expect(t, rec, http.StatusOK)
+	if got := strings.TrimSpace(rec.Body.String()); got != `{"servers":["192.0.2.53"]}` {
+		t.Fatalf("dns = %s", got)
 	}
 }
 

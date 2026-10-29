@@ -497,6 +497,9 @@ export interface Bridge {
   node: string;
   vlanAware: boolean;
   comment?: string;
+  /** The node's own IPv4 address on the bridge, like 192.0.2.5/24, and its gateway, where it has them. */
+  cidr?: string;
+  gateway?: string;
   usable: boolean;
 }
 
