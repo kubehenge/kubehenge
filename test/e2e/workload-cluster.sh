@@ -124,18 +124,29 @@ recorder_pid=
 ha_rule=''
 ha_vmid=''
 ha_node=''
-# calico_state: what the Tigera operator says of the cluster's Calico, which no collected log keeps
-# while the operator runs without restarts.
-calico_state() {
-    [ "${KUBEHENGE_E2E_CNI:-}" = calico ] || return 0
+# cni_state: what the CNI Kubehenge installed says of a failed test's cluster, which no collected log
+# keeps while it runs without restarts: the Tigera operator's status and last lines for Calico, and
+# the packets each Cilium agent drops in ten seconds, with why.
+cni_state() {
+    case ${KUBEHENGE_E2E_CNI:-} in
+        calico | cilium) ;;
+        *) return 0 ;;
+    esac
     kubectl -n "${ns}" get secret "${name}-kubeconfig" -o jsonpath='{.data.value}' 2> /dev/null | base64 -d > "${work}/state" || return 0
-    printf '\nCalico:\n'
-    KUBECONFIG=${work}/state kubectl get tigerastatus -o wide 2>&1 || true
-    KUBECONFIG=${work}/state kubectl -n tigera-operator logs deployment/tigera-operator --tail=40 2>&1 || true
+    printf '\n%s:\n' "${KUBEHENGE_E2E_CNI}"
+    if [ "${KUBEHENGE_E2E_CNI}" = calico ]; then
+        KUBECONFIG=${work}/state kubectl get tigerastatus -o wide 2>&1 || true
+        KUBECONFIG=${work}/state kubectl -n tigera-operator logs deployment/tigera-operator --tail=40 2>&1 || true
+        return 0
+    fi
+    for agent in $(KUBECONFIG=${work}/state kubectl -n kube-system get pods -l k8s-app=cilium -o name 2> /dev/null); do
+        printf '%s drops:\n' "${agent}"
+        KUBECONFIG=${work}/state kubectl -n kube-system exec "${agent}" -c cilium-agent -- timeout 10 cilium-dbg monitor --type drop 2>&1 | tail -n 30 || true
+    done
 }
 cleanup() {
     status=$?
-    [ "${status}" -eq 0 ] || calico_state
+    [ "${status}" -eq 0 ] || cni_state
     [ -z "${issuer_pid}" ] || kill "${issuer_pid}" 2> /dev/null || true
     [ -z "${grafana_pid}" ] || kill "${grafana_pid}" 2> /dev/null || true
     [ -z "${s3_pid}" ] || kill "${s3_pid}" 2> /dev/null || true
