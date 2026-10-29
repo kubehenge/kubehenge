@@ -32,11 +32,22 @@ Each target is an S3 store and a bucket in it, which any S3-compatible store ser
 | Endpoint | The store's `https://` URL; empty for AWS S3 itself. |
 | Bucket | The bucket, which has to exist. |
 | Region | The bucket's region; `us-east-1` when empty. |
-| Prefix | A folder in the bucket. Each cluster writes under `<prefix>/<namespace>.<cluster>/velero`, and its etcd snapshots under `<prefix>/<namespace>.<cluster>/etcd`. |
+| Prefix | A folder in the bucket. Each cluster writes under `<prefix>/<namespace>.<cluster>/velero`, and its etcd snapshots under `<prefix>/<namespace>.<cluster>/etcd`; the management cluster's go under `<prefix>/management/etcd`. |
 | CA certificate | PEM, when the system's CAs do not cover the store's certificate. |
 | Send checksums | On by default; off for a store that refuses the checksums the AWS SDK sends with every upload. |
 
 Velero signs in to a target with an S3 access key. **Backup access key for every cluster**, below the targets once the management cluster runs, stores one that every cluster without a key of its own uses. It is the least work, but every cluster's Velero then holds a key that reaches the other clusters' folders too: their keys keep the contents unreadable, but one cluster could delete another's backups. A key per cluster, limited by the store to the cluster's folder, keeps them apart; whoever creates or looks after a cluster with `Sys.Modify` on its pool stores it on the cluster ([clusters.md](clusters.md#change-add-ons-and-sign-in)).
+
+## Management cluster etcd backups
+
+Backing up the management cluster's etcd ([install.md](install.md#back-up-the-management-clusters-etcd)) has the appliance keep, readable only by root in the container:
+
+- the target's S3 access key, which needs to write, list and delete under `<prefix>/management`;
+- a talosconfig with the `os:etcd:backup` role, valid for a year and made again on every apply. It takes etcd snapshots and nothing else: no node's configuration, logs, files or reboot.
+
+A snapshot holds every Secret of the management cluster, so the appliance encrypts it with [age](https://age-encryption.org) before uploading, as the clusters' own snapshots are. The key that opens the snapshots is kept in the target as `<prefix>/management/identity.age`, encrypted with the state passphrase, and never stored on the appliance: whoever can read the bucket learns nothing without the passphrase, and a restore needs it. An appliance set up later on the same target, whose state has another passphrase, cannot open the key and is refused; deleting `<prefix>/management` in the bucket starts afresh and leaves the snapshots taken so far unreadable.
+
+A restore uses the management cluster's admin talosconfig from the state, which the passphrase opens, so it reaches every node even with Kubernetes down. It needs the control-plane VMs to run: it does not create VMs.
 
 ## What the template builds may do
 

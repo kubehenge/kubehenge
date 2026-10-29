@@ -170,9 +170,9 @@ type EtcdSnapshotRequest struct {
 
 var unsafeInName = regexp.MustCompile(`[^A-Za-z0-9.-]`)
 
-// etcdSnapshotName names a snapshot by when it was taken, in UTC, and the Kubernetes version it
+// EtcdSnapshotName names a snapshot by when it was taken, in UTC, and the Kubernetes version it
 // holds the objects of, so that names sort by time.
-func etcdSnapshotName(at time.Time, version string) string {
+func EtcdSnapshotName(at time.Time, version string) string {
 	return at.UTC().Format(etcdSnapshotTimeLayout) + "-" + unsafeInName.ReplaceAllString(version, "-") + EtcdSnapshotSuffix
 }
 
@@ -220,8 +220,8 @@ func ListEtcdSnapshots(ctx context.Context, store ObjectStore, folder string) ([
 	return out, nil
 }
 
-// pruneEtcdSnapshots deletes all but the newest keep snapshots and tells how many went.
-func pruneEtcdSnapshots(ctx context.Context, store ObjectStore, folder string, keep int) (int, error) {
+// PruneEtcdSnapshots deletes all but the newest keep snapshots and tells how many went.
+func PruneEtcdSnapshots(ctx context.Context, store ObjectStore, folder string, keep int) (int, error) {
 	snapshots, err := ListEtcdSnapshots(ctx, store, folder)
 	if err != nil || len(snapshots) <= keep {
 		return 0, err
@@ -419,7 +419,7 @@ func (s *EtcdSnapshotter) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			Type: EtcdSnapshotCondition, Status: metav1.ConditionFalse, Reason: "Failed", Message: err.Error(),
 		})
 	}
-	_, pruneErr := pruneEtcdSnapshots(tctx, t.Store, t.Folder, settings.Keep)
+	_, pruneErr := PruneEtcdSnapshots(tctx, t.Store, t.Folder, settings.Keep)
 	return s.succeeded(ctx, cluster, &settings, &taken, pruneErr)
 }
 
@@ -513,41 +513,51 @@ func (s *EtcdSnapshotter) take(ctx context.Context, cluster *clusterv1.Cluster, 
 	}
 	defer func() { _ = stream.Close() }()
 	taken := EtcdSnapshot{
-		Name:              etcdSnapshotName(s.now(), cluster.Spec.Topology.Version),
+		Name:              EtcdSnapshotName(s.now(), cluster.Spec.Topology.Version),
 		KubernetesVersion: cluster.Spec.Topology.Version,
 		Distribution:      string(distributionOf(cluster)),
 		Revision:          stream.Revision,
 		EtcdVersion:       stream.Version,
 	}
+	if err := StoreEtcdSnapshot(ctx, t.Store, t.Folder, &taken, stream, identity.Recipient()); err != nil {
+		return EtcdSnapshot{}, err
+	}
+	return taken, nil
+}
+
+// StoreEtcdSnapshot encrypts what etcd sends to recipient into folder, under taken's name, with
+// taken's facts as the object's metadata, and fills in its checksum and sizes. A snapshot that
+// fails part way is removed again.
+func StoreEtcdSnapshot(ctx context.Context, store ObjectStore, folder string, taken *EtcdSnapshot, stream io.Reader, to age.Recipient) error {
 	taken.Time, _ = time.Parse(etcdSnapshotTimeLayout, taken.Name[:len(etcdSnapshotTimeLayout)])
-	key := t.Folder + "/" + taken.Name
+	key := folder + "/" + taken.Name
 	metadata := map[string]string{
 		SnapshotMetaKubernetes:   taken.KubernetesVersion,
 		SnapshotMetaDistribution: taken.Distribution,
 		SnapshotMetaRevision:     strconv.FormatInt(taken.Revision, 10),
 		SnapshotMetaEtcd:         taken.EtcdVersion,
 	}
-	body := seal(stream, identity.Recipient())
-	stored, err := t.Store.Put(ctx, key, body, metadata)
+	body := seal(stream, to)
+	stored, err := store.Put(ctx, key, body, metadata)
 	if err != nil {
 		body.abort()
-		return EtcdSnapshot{}, fmt.Errorf("taking the snapshot: %w", err)
+		return fmt.Errorf("taking the snapshot: %w", err)
 	}
 	sum, size, err := body.finish()
 	if err != nil {
 		// The store has what etcd sent before it failed, which is no snapshot.
-		_ = t.Store.Remove(context.WithoutCancel(ctx), key)
-		return EtcdSnapshot{}, err
+		_ = store.Remove(context.WithoutCancel(ctx), key)
+		return err
 	}
 	taken.SHA256, taken.Size, taken.StoredSize = sum, size, stored
 	// The checksum is known only once the snapshot has been read, after its upload began.
 	metadata[SnapshotMetaSHA256] = sum
 	metadata[SnapshotMetaSize] = strconv.FormatInt(size, 10)
-	if err := t.Store.SetMetadata(ctx, key, metadata); err != nil {
-		_ = t.Store.Remove(context.WithoutCancel(ctx), key)
-		return EtcdSnapshot{}, fmt.Errorf("recording the snapshot's checksum: %w", err)
+	if err := store.SetMetadata(ctx, key, metadata); err != nil {
+		_ = store.Remove(context.WithoutCancel(ctx), key)
+		return fmt.Errorf("recording the snapshot's checksum: %w", err)
 	}
-	return taken, nil
+	return nil
 }
 
 // ClusterTargets opens the targets clusters store their etcd snapshots in.

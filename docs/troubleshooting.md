@@ -344,6 +344,16 @@ kubectl -n <namespace> get events --field-selector reason=LeftBehind
 - **The interface does not come back** after an upgrade: see `journalctl -u kubehenge`, and upgrade or reinstall the release from the shell with `install.sh --upgrade` ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)).
 - **"distribution: its cluster class is missing from the management cluster"** or **"the cluster class … has no variable …"** when creating a cluster: the appliance was upgraded, and its interface offers a distribution or a setting whose ClusterClass the management cluster does not have yet. Apply the management cluster again (**Upgrade the management cluster** at the top of the Administration page), which installs the new release's ClusterClasses ([upgrading.md](upgrading.md#in-the-appliance)).
 
+### Management cluster etcd backups
+
+**Administration, Backups** shows the last snapshot's error, and the appliance tries again 15 minutes later. `journalctl -u kubehenge` inside the appliance logs each one.
+
+- **"reaching etcd: … etcd snapshot: …"**, or **"reaching the Talos API of …"**: no control-plane node answered on its Talos API (port 50000) from the appliance, or etcd did not answer on it.
+- **"the snapshots' talosconfig: …"** or a refusal by the Talos API: the talosconfig kept for snapshots expired or no longer matches the management cluster's CA. Apply the management cluster again, which makes a new one, or **Change…** the backups.
+- **"target …: …"** or **"deleting older snapshots: …"**: the target refused the access key, or the key may not delete there. The snapshot was kept in the second case; only the oldest ones were not removed.
+- **"the passphrase does not open the target's key for the management cluster's snapshots"**: the target holds a key stored under another state's passphrase ([details](install-settings.md#management-cluster-etcd-backups)).
+- **A restore fails**: its run's log on Administration says at which node and step. "Leaving … out" names a node whose Talos API did not answer. It keeps the etcd from before: once it runs, wipe that with `talosctl -n <address> reset --system-labels-to-wipe EPHEMERAL --reboot --graceful=false` and the admin talosconfig (**Appliance**, repair access), and it joins the restored one. "no control-plane node answers on its Talos API": start the management cluster's VMs in Proxmox VE first. "snapshot … does not match its checksum": the object in the target is damaged; restore another snapshot.
+
 ### The Proxmox VE certificate or CA changed
 
 The appliance, the management cluster and every cluster check the Proxmox VE API's certificate against the CA chosen when the appliance was installed ([install.md](install.md#the-proxmox-ve-api)). A new certificate from the same CA, such as one Proxmox VE renewed, needs nothing. One from another CA, such as your organisation's replacing Proxmox VE's own, fails those checks: sign-in fails, and the appliance's log (`journalctl -u kubehenge`) and the clusters' cloud controller managers report a certificate error.

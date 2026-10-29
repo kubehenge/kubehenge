@@ -4,6 +4,7 @@ import type { AdminView } from "./admin-views";
 import { ApplianceUpgrades } from "./ApplianceUpgrades";
 import { SharedDNS01 } from "./Certificates";
 import { Credentials } from "./Credentials";
+import { ManagementBackups } from "./ManagementBackups";
 import { RemoveManagement } from "./RemoveManagement";
 import { ManagementCluster } from "./Setup";
 import { Templates } from "./Templates";
@@ -44,6 +45,13 @@ export function AdminPage({
             </section>
           )}
         </>
+      );
+    }
+    case "backups": {
+      return (
+        <section className="panel">
+          <ManagementBackups running={running} />
+        </section>
       );
     }
     case "templates": {

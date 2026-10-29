@@ -15,7 +15,10 @@ import type {
   HARules,
   Job,
   ManagementAutomatic,
+  ManagementBackupRequest,
+  ManagementBackups,
   ManagementSettings,
+  ManagementSnapshots,
   PodLogs,
   Plan,
   PveNode,
@@ -221,6 +224,13 @@ export interface Api {
   removeCredential: (purpose: string, cluster?: ClusterRef) => Promise<void>;
   credential: (name: "kubeconfig" | "talosconfig", passphrase: string) => Promise<Blob>;
   removeManagement: (passphrase: string) => Promise<Job>;
+  managementBackups: () => Promise<ManagementBackups>;
+  configureManagementBackups: (req: ManagementBackupRequest) => Promise<ManagementBackups>;
+  stopManagementBackups: () => Promise<void>;
+  managementSnapshots: () => Promise<ManagementSnapshots>;
+  takeManagementSnapshot: () => Promise<ManagementBackups>;
+  /** restoreManagement restores the management cluster's etcd as a run of the appliance's. */
+  restoreManagement: (snapshot: string, passphrase: string) => Promise<Job>;
   upgrades: () => Promise<Upgrades>;
   upgrade: (version: string) => Promise<void>;
   /** nodeOS, such as almalinux-10, narrows kubeadm's versions to those with a template on it. */
@@ -304,6 +314,13 @@ export const api: Api = {
   removeCredential: (purpose, cluster) => act("DELETE", credentialPath(purpose, cluster)),
   credential: (name, passphrase) => download("POST", "/api/setup/credential", { name, passphrase }),
   removeManagement: (passphrase) => request("POST", "/api/setup/remove", { passphrase, confirm: "remove" }),
+  managementBackups: () => request("GET", "/api/appliance/etcd-backups"),
+  configureManagementBackups: (req) => request("PUT", "/api/appliance/etcd-backups", req),
+  stopManagementBackups: () => act("DELETE", "/api/appliance/etcd-backups"),
+  managementSnapshots: () => request("GET", "/api/appliance/etcd-backups/snapshots"),
+  takeManagementSnapshot: () => request("POST", "/api/appliance/etcd-backups/snapshots"),
+  restoreManagement: (snapshot, passphrase) =>
+    request("POST", `/api/appliance/etcd-backups/snapshots/${encodeURIComponent(snapshot)}/restore`, { passphrase }),
   upgrades: () => request("GET", "/api/appliance/upgrades"),
   upgrade: (version) => act("POST", "/api/appliance/upgrades", { version }),
   versions: (distribution, nodeOS) =>

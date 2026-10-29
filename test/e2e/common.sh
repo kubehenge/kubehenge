@@ -10,6 +10,10 @@ pause_image=registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde33
 # renovate: datasource=docker depName=docker.io/gitea/gitea
 gitea=docker.io/gitea/gitea:28.2.0-rootless@sha256:94807314454f6525994a3b76286ba12bc7e7f8cd14f61d9e67431767f8103306
 export agnhost pause_image gitea
+# The S3 store the backup tests write to.
+# renovate: datasource=github-release-attachments depName=seaweedfs/seaweedfs
+SEAWEEDFS_VERSION=4.51
+SEAWEEDFS_SHA256=c03be37416a8ee672c77766e20b22a4e1430744c3af2668599a4b6eeaec14cee
 
 # Each step shows the time since the test started, which is how a slow run shows where it lost it.
 e2e_started=$(date +%s)
@@ -143,4 +147,13 @@ absent() {
         *"(NotFound)"*) ;;
         *) return 1 ;;
     esac
+}
+
+# seaweedfs <directory>: downloads SeaweedFS's weed into the directory, checked by its SHA-256.
+seaweedfs() {
+    curl -sS --fail -L -o "$1/seaweedfs.tar.gz" \
+        "https://github.com/seaweedfs/seaweedfs/releases/download/${SEAWEEDFS_VERSION}/linux_amd64.tar.gz"
+    printf '%s  %s\n' "${SEAWEEDFS_SHA256}" "$1/seaweedfs.tar.gz" | sha256sum -c - > /dev/null ||
+        fail "SeaweedFS's download does not have its SHA-256"
+    tar -xzf "$1/seaweedfs.tar.gz" -C "$1" weed
 }

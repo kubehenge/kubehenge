@@ -186,6 +186,7 @@ func (o *serveOptions) setUpAppliance(conn *pve.Config) error {
 	s.ProxmoxInsecure = conn.Insecure
 	a.InterfaceKubeconfig = appliance.InterfaceKubeconfig
 	a.StoreRootPassword = appliance.StoreRootPassword
+	a.Talos = &provisioner.ManagementTalos{}
 	a.LoadLast()
 	if a.Ready() {
 		kubeconfig, readErr := os.ReadFile(a.KubeconfigPath())

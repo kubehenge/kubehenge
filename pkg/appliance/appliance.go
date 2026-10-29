@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
@@ -56,10 +57,16 @@ type Appliance struct {
 	// StoreRootPassword keeps root@pam's password in the management cluster for volume snapshots,
 	// or removes it, with the admin kubeconfig, once an apply has succeeded (StoreRootPassword).
 	StoreRootPassword func(ctx context.Context, admin []byte, on bool, password string) error
+	// Talos reaches the management cluster's nodes for its etcd backups; OpenStore opens their
+	// target, provisioner.OpenTarget when nil.
+	Talos     TalosAccess
+	OpenStore provisioner.OpenStore
+	Now       func() time.Time
 
 	mu          sync.Mutex
 	job         *Job
 	templateJob *Job
+	takingEtcd  bool
 }
 
 // ErrPassphrase is a state the passphrase does not open.
@@ -225,6 +232,10 @@ func (a *Appliance) Remove(passphrase string, ticket *pve.Ticket, before func(ct
 			if err := os.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return fmt.Errorf("clearing the removed cluster's state: %w", err)
 			}
+		}
+		// Its snapshots stay in the target; the keys and the talosconfig that took them go with it.
+		if err := a.StopEtcdBackups(); err != nil {
+			return err
 		}
 		gone()
 		return nil

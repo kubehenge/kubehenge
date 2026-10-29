@@ -653,6 +653,42 @@ export interface EtcdSnapshot {
   storedSize?: number;
 }
 
+/** How the management cluster's etcd is backed up. */
+export interface ManagementBackupSettings {
+  target: string;
+  everyHours: number;
+  keep: number;
+  by?: string;
+  since?: string;
+}
+
+/** The management cluster's etcd backups, and the targets they may go to. */
+export interface ManagementBackups {
+  settings?: ManagementBackupSettings;
+  last?: EtcdSnapshot;
+  next?: string;
+  error?: string;
+  failed?: string;
+  taking?: boolean;
+  targets: string[];
+  keysStored: boolean;
+}
+
+export interface ManagementSnapshots {
+  snapshots: EtcdSnapshot[];
+  error?: string;
+}
+
+export interface ManagementBackupRequest {
+  target: string;
+  everyHours: number;
+  keep: number;
+  /** Both empty keep the access key stored. */
+  accessKeyID: string;
+  secretAccessKey: string;
+  passphrase: string;
+}
+
 export type EtcdRestorePhase =
   | "Preparing"
   | "Fetching"
@@ -735,7 +771,7 @@ export interface Job {
   user: string;
   /** A run the appliance started on its own, as user, in an automatic upgrade. */
   automatic?: boolean;
-  kind?: "apply" | "remove" | "template";
+  kind?: "apply" | "remove" | "template" | "etcd-restore";
   started: string;
   finished?: string;
   state: "running" | "succeeded" | "failed";

@@ -532,7 +532,7 @@ func TestValidatorHoldsEtcdSnapshots(t *testing.T) {
 
 func TestSnapshotNames(t *testing.T) {
 	t.Parallel()
-	if got := etcdSnapshotName(time.Date(2026, 10, 21, 13, 4, 5, 0, time.FixedZone("CEST", 7200)), "v1.37.1+k3s1"); got != "20261021T110405Z-v1.37.1-k3s1.db.age" {
+	if got := EtcdSnapshotName(time.Date(2026, 10, 21, 13, 4, 5, 0, time.FixedZone("CEST", 7200)), "v1.37.1+k3s1"); got != "20261021T110405Z-v1.37.1-k3s1.db.age" {
 		t.Errorf("named %s", got)
 	}
 	for name, valid := range map[string]bool{

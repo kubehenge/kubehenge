@@ -171,8 +171,11 @@ func (s *Server) applianceRuns() []runView {
 	if a := s.Appliance; a != nil {
 		if j := a.Current(); j != nil {
 			what := "Apply the management cluster"
-			if j.Kind == "remove" {
+			switch j.Kind {
+			case "remove":
 				what = "Remove the management cluster"
+			case "etcd-restore":
+				what = "Restore the management cluster's etcd"
 			}
 			list = append(list, jobRun("management-cluster", runManagement, what, j))
 		}

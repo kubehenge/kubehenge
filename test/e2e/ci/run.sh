@@ -190,7 +190,8 @@ case "${test}" in
         docker cp "${work}/appliance-settings.json" "${pve}:/root/kubehenge/settings.json"
         exec docker exec -e KUBEHENGE_E2E_APPLIANCE_ID=900 -e KUBEHENGE_E2E_APPLIANCE_ADDRESS=172.20.99.40/24 \
             -e KUBEHENGE_E2E_GATEWAY="${KUBEHENGE_E2E_GATEWAY}" -e KUBEHENGE_E2E_DNS="${KUBEHENGE_E2E_DNS}" \
-            -e KUBEHENGE_E2E_STORAGE=local "${pve}" sh /root/kubehenge/test/e2e/appliance.sh \
+            -e KUBEHENGE_E2E_STORAGE=local -e KUBEHENGE_E2E_S3_ADDRESS=172.20.99.1 \
+            "${pve}" sh /root/kubehenge/test/e2e/appliance.sh \
             /root/kubehenge/kubehenge_0.0.1_linux_amd64.tar.gz /root/kubehenge/kubehenge_0.0.2_linux_amd64.tar.gz \
             /root/kubehenge/settings.json
         ;;

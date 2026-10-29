@@ -89,10 +89,6 @@ upgrade=${3:?usage: $0 <ClusterClass> <version> <upgrade version>}
 : "${KUBEHENGE_E2E_BACKUP_TARGET:?}" "${KUBEHENGE_E2E_BACKUP_CA:?}" "${KUBEHENGE_E2E_BACKUP_CERT:?}" "${KUBEHENGE_E2E_BACKUP_KEY:?}"
 load_balancer=${KUBEHENGE_E2E_LOAD_BALANCER:-metallb}
 
-# The S3 store the backups go to.
-# renovate: datasource=github-release-attachments depName=seaweedfs/seaweedfs
-SEAWEEDFS_VERSION=4.51
-SEAWEEDFS_SHA256=c03be37416a8ee672c77766e20b22a4e1430744c3af2668599a4b6eeaec14cee
 # etcdutl, which reads the etcd snapshots back.
 # renovate: datasource=github-release-attachments depName=etcd-io/etcd
 ETCD_VERSION=v3.7.3
@@ -1258,11 +1254,7 @@ region=$(printf '%s' "${target}" | jq -r '.region // "us-east-1"')
 # Where the cluster's backups go in the bucket, as Kubehenge names it.
 prefix=$(printf '%s' "${target}" | jq -r --arg own "${ns}.${name}/velero" 'if (.prefix // "") == "" then $own else .prefix + "/" + $own end')
 s3_port=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlsplit(sys.argv[1]).port or 443)' "${s3_endpoint}")
-curl -sS --fail -L -o "${work}/seaweedfs.tar.gz" \
-    "https://github.com/seaweedfs/seaweedfs/releases/download/${SEAWEEDFS_VERSION}/linux_amd64.tar.gz"
-printf '%s  %s\n' "${SEAWEEDFS_SHA256}" "${work}/seaweedfs.tar.gz" | sha256sum -c - > /dev/null ||
-    fail "SeaweedFS's download does not have its SHA-256"
-tar -xzf "${work}/seaweedfs.tar.gz" -C "${work}" weed
+seaweedfs "${work}"
 s3_key=e2e$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
 s3_secret=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
 jq -n --arg k "${s3_key}" --arg s "${s3_secret}" \

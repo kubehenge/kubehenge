@@ -2,10 +2,11 @@
 # End-to-end test of the appliance on a Proxmox VE node: install it from a release archive, sign in
 # with Proxmox VE users, set the management cluster up from the interface, place by an HA rule
 # offered to a cluster creator, reach the shared Headlamp behind the interface's sign-in, with the
-# plugins it ships and its Helm routes' limits, and log out of a cluster in it, switch automatic
-# upgrades of the management cluster on and off, upgrade the appliance under the running management
-# cluster and then the management cluster to what it carries, remove the management cluster from
-# the interface and then the appliance, and check that Proxmox VE is left as it was.
+# plugins it ships and its Helm routes' limits, and log out of a cluster in it, snapshot the
+# management cluster's etcd into an S3 store on the node and restore it from the appliance, switch
+# automatic upgrades of the management cluster on and off, upgrade the appliance under the running
+# management cluster and then the management cluster to what it carries, remove the management
+# cluster from the interface and then the appliance, and check that Proxmox VE is left as it was.
 #
 #   test/e2e/appliance.sh <release> <newer release> <settings>
 #
@@ -15,7 +16,8 @@
 # offerHARules and headlampActions on and the default workload pool. The appliance
 # is container KUBEHENGE_E2E_APPLIANCE_ID at KUBEHENGE_E2E_APPLIANCE_ADDRESS (with its prefix length)
 # on KUBEHENGE_E2E_BRIDGE (default vmbr0), with the gateway KUBEHENGE_E2E_GATEWAY and the name
-# servers KUBEHENGE_E2E_DNS; its disk goes on KUBEHENGE_E2E_STORAGE when that is set.
+# servers KUBEHENGE_E2E_DNS; its disk goes on KUBEHENGE_E2E_STORAGE when that is set. The S3 store
+# serves on the node at KUBEHENGE_E2E_S3_ADDRESS, an address of the node's the appliance reaches.
 #
 # A failed run leaves the appliance and whatever it set up, to look at; remove them as
 # docs/uninstalling.md says before running it again.
@@ -28,6 +30,7 @@ here=$(dirname "$0")
 . "${here}/common.sh"
 ctid=${KUBEHENGE_E2E_APPLIANCE_ID:?} address=${KUBEHENGE_E2E_APPLIANCE_ADDRESS:?}
 : "${KUBEHENGE_E2E_GATEWAY:?}" "${KUBEHENGE_E2E_DNS:?}"
+s3_endpoint=https://${KUBEHENGE_E2E_S3_ADDRESS:?}:8333 s3_pid=
 install=${here}/../../appliance/install.sh
 ip=${address%/*}
 ui=https://${ip} headlamp=https://${ip}:8443
@@ -55,6 +58,7 @@ finish() {
     for u in "${admin}" "${user}"; do
         pvesh delete "/access/users/${u}" > /dev/null 2>&1 || true
     done
+    [ -z "${s3_pid}" ] || kill "${s3_pid}" 2> /dev/null || true
     rm -rf "${work}"
 }
 trap finish EXIT
@@ -154,6 +158,29 @@ ready_again() {
     jq -e .ready "${work}/body" > /dev/null
 }
 
+# s3 <curl arguments...>: a request to the S3 store, signed with the test's key.
+s3() {
+    curl -sS --fail --cacert "${work}/s3/ca.crt" --aws-sigv4 aws:amz:us-east-1:s3 --user "${s3_key}:${s3_secret}" "$@"
+}
+
+# snapshot_taken <name>: whether the backups of the management cluster's etcd took a snapshot other
+# than the one named; one that failed fails the test with why.
+snapshot_taken() {
+    expect 200 "the etcd backups" request "${work}/admin.jar" "${ui}/api/appliance/etcd-backups"
+    if jq -e '(.error // "") != ""' "${work}/body" > /dev/null; then
+        fail_with_body "the snapshot failed"
+    fi
+    jq -e --arg not "$1" '(.taking | not) and .last.name != null and .last.name != $not' "${work}/body" > /dev/null
+}
+
+# dns01_set <true|false>: whether the DNS-01 credential for every cluster, a Secret in the management
+# cluster, is stored, as the interface reads it.
+dns01_set() {
+    request "${work}/admin.jar" "${ui}/api/credentials/dns01"
+    got=$(cat "${work}/status")
+    [ "${got}" = 200 ] && jq -e --argjson set "$1" '(.set // false) == $set' "${work}/body" > /dev/null
+}
+
 # headlamp_serves: whether Headlamp's own page comes through the interface's sign-in.
 headlamp_serves() {
     request "${work}/admin.jar" "${headlamp}/"
@@ -244,6 +271,31 @@ pveum acl modify / --users "${admin}" --roles Administrator
 pvesh create /access/users --userid "${user}" --password "${password}" > /dev/null
 inventory > "${work}/before"
 
+step "an S3 store on the node, offered as a backup target"
+mkdir -p "${work}/s3/data"
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 -subj /CN=kubehenge-e2e-s3-ca \
+    -keyout "${work}/s3/ca.key" -out "${work}/s3/ca.crt" 2> /dev/null
+openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=kubehenge-e2e-s3 \
+    -keyout "${work}/s3/tls.key" -out "${work}/s3/tls.csr" 2> /dev/null
+printf 'subjectAltName = IP:%s\nextendedKeyUsage = serverAuth\n' "${KUBEHENGE_E2E_S3_ADDRESS}" > "${work}/s3/san.cnf"
+openssl x509 -req -in "${work}/s3/tls.csr" -CA "${work}/s3/ca.crt" -CAkey "${work}/s3/ca.key" -CAcreateserial \
+    -CAserial "${work}/s3/ca.srl" -days 2 -extfile "${work}/s3/san.cnf" -out "${work}/s3/tls.crt" 2> /dev/null
+seaweedfs "${work}"
+s3_key=e2e$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
+s3_secret=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
+jq -n --arg k "${s3_key}" --arg s "${s3_secret}" \
+    '{identities: [{name: "e2e", credentials: [{accessKey: $k, secretKey: $s}], actions: ["Admin", "Read", "Write", "List", "Tagging"]}]}' \
+    > "${work}/s3/s3.json"
+"${work}/weed" server -dir="${work}/s3/data" -ip=127.0.0.1 -ip.bind=0.0.0.0 -master.port=19333 -master.volumeSizeLimitMB=64 \
+    -volume.port=18080 -filer.port=18888 -s3 -s3.port=8333 -s3.config="${work}/s3/s3.json" \
+    -s3.cert.file="${work}/s3/tls.crt" -s3.key.file="${work}/s3/tls.key" > "${work}/s3/weed.log" 2>&1 &
+s3_pid=$!
+until_true 120 "the S3 store takes a bucket" s3 -X PUT -o /dev/null "${s3_endpoint}/kubehenge-e2e"
+# shellcheck disable=SC2016 # jq's variables, not the shell's.
+jq --arg e "${s3_endpoint}" --rawfile ca "${work}/s3/ca.crt" \
+    '.backupTargets = [{name: "e2e", endpoint: $e, bucket: "kubehenge-e2e", prefix: "ci", caCertificate: $ca}]' \
+    "${settings}" > "${work}/settings.json"
+
 step "install the appliance"
 sum=$(sha256sum "${release}" | cut -d ' ' -f 1)
 set -- --ctid "${ctid}" --ip "${address}" --gateway "${KUBEHENGE_E2E_GATEWAY}" --dns "${KUBEHENGE_E2E_DNS}" \
@@ -274,7 +326,7 @@ sign_in "${work}/admin.jar" "${admin}"
 admin_csrf=${csrf}
 expect 200 "the setup's status for a user without privileges" request "${work}/user.jar" "${ui}/api/setup"
 body_is '.appliance and (.allowed | not) and .job == null' "a user without privileges sees the setup"
-setup=$(jq -c --arg p "${passphrase}" '{passphrase: $p, settings: .}' "${settings}")
+setup=$(jq -c --arg p "${passphrase}" '{passphrase: $p, settings: .}' "${work}/settings.json")
 expect 403 "a setup by a user without privileges" post "${work}/user.jar" "${user_csrf}" "${ui}/api/setup" "${setup}"
 expect 403 "a setup without the session's CSRF token" post "${work}/admin.jar" '' "${ui}/api/setup" "${setup}"
 setup_status
@@ -349,6 +401,52 @@ grep -qi '^location: /c/clusters\.e2e/pods' "${work}/headers" ||
     fail "opening the cluster did not lead on to its page in Headlamp"
 expect 404 "opening a cluster the user does not see" request "${work}/user.jar" "${headlamp}/kubehenge/open/clusters.e2e"
 
+step "the management cluster's etcd, snapshotted into the backup target"
+backups=${ui}/api/appliance/etcd-backups
+expect 403 "the etcd backups for a user without privileges" request "${work}/user.jar" "${backups}"
+# shellcheck disable=SC2016 # jq's variables, not the shell's.
+backup_settings='{target: "e2e", everyHours: 6, keep: 2, accessKeyID: $k, secretAccessKey: $s, passphrase: $p}'
+body=$(jq -n --arg k "${s3_key}" --arg s "${s3_secret}" --arg p "not-${passphrase}" "${backup_settings}")
+expect 403 "setting them up with a wrong passphrase" put "${work}/admin.jar" "${admin_csrf}" "${backups}" "${body}"
+body=$(jq -n --arg k "${s3_key}" --arg s "${s3_secret}" --arg p "${passphrase}" "${backup_settings}")
+expect 200 "setting them up" put "${work}/admin.jar" "${admin_csrf}" "${backups}" "${body}"
+body_is '.settings.target == "e2e" and .keysStored' "the backups are not set up"
+# shellcheck disable=SC2310 # its failure is the test's, with a message of its own.
+s3 -o /dev/null "${s3_endpoint}/kubehenge-e2e/ci/management/identity.age" ||
+    fail "the target holds no key for the snapshots"
+# The first is due at once, and the appliance looks every minute.
+until_true 300 "the first scheduled snapshot" snapshot_taken ''
+first=$(jq -r .last.name "${work}/body")
+# shellcheck disable=SC2310 # as above
+s3 -o "${work}/snapshot" "${s3_endpoint}/kubehenge-e2e/ci/management/etcd/${first}" ||
+    fail "the target does not hold ${first}"
+magic=$(head -c 21 "${work}/snapshot")
+[ "${magic}" = age-encryption.org/v1 ] || fail "${first} is not encrypted"
+expect 202 "a snapshot now" post "${work}/admin.jar" "${admin_csrf}" "${backups}/snapshots" ''
+body_is '.taking' "the snapshot asked for is not being taken"
+until_true 300 "the snapshot asked for" snapshot_taken "${first}"
+second=$(jq -r .last.name "${work}/body")
+expect 200 "the snapshots in the target" request "${work}/admin.jar" "${backups}/snapshots"
+# shellcheck disable=SC2016 # jq's variables, not the shell's.
+body_has "the target does not list both snapshots" --arg a "${first}" --arg b "${second}" \
+    '[.snapshots[].name] == [$b, $a] and (.error // "") == ""'
+
+step "the management cluster's etcd restored from the appliance"
+# A Secret in the management cluster made after the snapshot, which the restore takes back.
+expect 200 "storing the DNS-01 credential" put "${work}/admin.jar" "${admin_csrf}" "${ui}/api/credentials/dns01" \
+    '{"values":{"token":"e2e"}}'
+until_true 30 "the DNS-01 credential stored" dns01_set true
+restore=${backups}/snapshots/${second}/restore
+body=$(jq -n --arg p "not-${passphrase}" '{passphrase: $p}')
+expect 403 "restoring with a wrong passphrase" post "${work}/admin.jar" "${admin_csrf}" "${restore}" "${body}"
+body=$(jq -n --arg p "${passphrase}" '{passphrase: $p}')
+expect 202 "restoring" post "${work}/admin.jar" "${admin_csrf}" "${restore}" "${body}"
+until_true 1800 "the restore to end" job_ended
+job_was etcd-restore succeeded true
+until_true 600 "the management cluster's API as the snapshot left it" dns01_set false
+expect 200 "the ClusterClasses after the restore" request "${work}/admin.jar" "${ui}/api/classes"
+body_is '[.[].name] | contains(["kubehenge-kubeadm", "kubehenge-rke2", "kubehenge-k3s"])' "the restored management cluster lost its ClusterClasses"
+
 step "automatic upgrades of the management cluster, switched on and off"
 # Their hour half a day away, so that none starts during the test.
 hour=$((($(date -u +%H | sed 's/^0//') + 12) % 24))
@@ -396,6 +494,9 @@ job_was apply succeeded true
 # shellcheck disable=SC2016 # jq's variables, not the shell's.
 body_has "the management cluster is not recorded as applied by ${version}" \
     --arg new "${version}" '(.upgrade.behind | not) and .upgrade.applied == $new'
+# The apply made the snapshots' talosconfig again, which takes one still.
+expect 202 "a snapshot after the upgrade" post "${work}/admin.jar" "${admin_csrf}" "${backups}/snapshots" ''
+until_true 300 "the snapshot after the upgrade" snapshot_taken "${second}"
 
 step "remove the management cluster from the interface"
 body=$(jq -n --arg p "${passphrase}" '{passphrase: $p, confirm: "delete"}')
@@ -408,6 +509,8 @@ body=$(jq -n --arg p "${passphrase}" '{passphrase: $p, confirm: "remove"}')
 expect 202 "the removal" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup/remove" "${body}"
 until_true 3600 "the removal to end" job_ended
 job_was remove succeeded false
+expect 200 "the etcd backups after the removal" request "${work}/admin.jar" "${backups}"
+body_is '.settings == null and (.keysStored | not)' "the removed management cluster's etcd backups are still set up"
 
 step "remove the appliance"
 pct stop "${ctid}"

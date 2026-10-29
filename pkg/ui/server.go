@@ -157,6 +157,7 @@ const (
 func (s *Server) Run(ctx context.Context) {
 	s.init()
 	go s.autoUpgrade(ctx)
+	go s.backUpManagementEtcd(ctx)
 	if s.Headlamp != nil {
 		go s.syncHeadlamp(ctx, headlampSyncEvery)
 	}
@@ -189,6 +190,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/appliance/upgrades/settings", s.signedIn(s.upgradeSettings))
 	mux.HandleFunc("PUT /api/appliance/upgrades/management", s.signedIn(s.keepUnattended))
 	mux.HandleFunc("DELETE /api/appliance/upgrades/management", s.signedIn(s.forgetUnattended))
+	mux.HandleFunc("GET /api/appliance/etcd-backups", s.signedIn(s.managementBackups))
+	mux.HandleFunc("PUT /api/appliance/etcd-backups", s.signedIn(s.configureManagementBackups))
+	mux.HandleFunc("DELETE /api/appliance/etcd-backups", s.signedIn(s.stopManagementBackups))
+	mux.HandleFunc("GET /api/appliance/etcd-backups/snapshots", s.signedIn(s.managementSnapshots))
+	mux.HandleFunc("POST /api/appliance/etcd-backups/snapshots", s.signedIn(s.takeManagementSnapshot))
+	mux.HandleFunc("POST /api/appliance/etcd-backups/snapshots/{name}/restore", s.signedIn(s.restoreManagementEtcd))
 	mux.HandleFunc("GET /api/templates", s.signedIn(s.listTemplates))
 	mux.HandleFunc("POST /api/templates", s.signedIn(s.createTemplate))
 	mux.HandleFunc("DELETE /api/templates/{vmid}", s.signedIn(s.deleteTemplate))

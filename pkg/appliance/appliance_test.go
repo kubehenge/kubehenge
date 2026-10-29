@@ -460,6 +460,17 @@ func TestRemove(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Backups of the removed cluster's etcd stop with it.
+	if err := os.MkdirAll(filepath.Dir(a.etcdBackupFile("keys.json")), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONFile(a.etcdBackupFile("settings.json"), EtcdBackupSettings{Target: "minio", EveryHours: 6, Keep: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONFile(a.etcdBackupFile("keys.json"), etcdBackupKeys{AccessKeyID: "AKID", SecretAccessKey: "secret"}); err != nil {
+		t.Fatal(err)
+	}
+
 	before, gone := 0, 0
 	step := func(_ context.Context, j *Job) error { before++; j.Add("deleting templates"); return nil }
 	if err := a.Remove("the wrong passphrase entirely", ticket(), step, func() { gone++ }); err != nil {
@@ -486,6 +497,9 @@ func TestRemove(t *testing.T) {
 	// The emptied state goes, so the next setup may choose a passphrase of its own.
 	if a.HasState() {
 		t.Fatal("the removed management cluster's state is still there")
+	}
+	if a.EtcdBackups().Settings != nil || a.EtcdBackupKeysStored() {
+		t.Error("the removed management cluster's etcd backups are still set up")
 	}
 }
 
