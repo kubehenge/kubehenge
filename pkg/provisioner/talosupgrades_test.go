@@ -95,7 +95,10 @@ func (n *fakeTalosNode) Reboot(context.Context) error {
 	return nil
 }
 
-func (*fakeTalosNode) EtcdSnapshot(context.Context) (io.ReadCloser, string, error) {
+func (n *fakeTalosNode) EtcdSnapshot(context.Context) (io.ReadCloser, string, error) {
+	if err := n.f.call(n.address, "snapshot"); err != nil {
+		return nil, "", err
+	}
 	return io.NopCloser(strings.NewReader("snapshot")), "3.6.5", nil
 }
 

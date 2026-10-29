@@ -202,6 +202,8 @@ type clusterView struct {
 	GitOps *gitOpsView `json:"gitops,omitempty"`
 	// Talos is how a Talos cluster's nodes stand with its Talos release.
 	Talos *talosView `json:"talos,omitempty"`
+	// Recovery is the last recovery of the control plane from a stalled roll, or the one running.
+	Recovery *provisioner.EtcdRestoreStatus `json:"recovery,omitempty"`
 }
 
 // talosView is how a Talos cluster's nodes are upgraded in place to its Talos release.
@@ -343,6 +345,9 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 	}
 	if provisioner.RefreshesNodes(c) {
 		v.NodeOS = nodeOSInfo(c)
+	}
+	if st, ok := provisioner.EtcdRestoreStatusOf(c); ok && st.Reset {
+		v.Recovery = &st
 	}
 	return v
 }

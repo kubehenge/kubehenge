@@ -202,6 +202,13 @@ kubeVip: ghcr.io/kube-vip/kube-vip:v1.3.1@sha256:1962f9daf226503f7e6b107f595cb28
 # cluster (the autoscaler variable's placement workload).
 managementEndpoint: ""
 
+# What Kubehenge's controller watches for on its own, and how long it gives each before it says
+# so on the Cluster (a condition and an event) and on the interface's Health page.
+watch:
+  # The roll of a cluster's only control plane counts as stalled once its new machine has not been
+  # ready for this long.
+  rollStallMinutes: 20
+
 # The cluster autoscaler the controller runs for each cluster with an autoscaled pool.
 autoscaler:
   # Namespace of the autoscalers that run in the management cluster and their accounts.

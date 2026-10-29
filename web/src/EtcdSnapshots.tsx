@@ -353,11 +353,12 @@ export function restoreProblem(c: Cluster, s: EtcdSnapshot): string | undefined 
   return undefined;
 }
 
-// restoreState says how far a restore is, in the words of the step it is at.
-function restoreState(r: EtcdRestoreStatus): { state: Health; text: string } {
+/** restoreState says how far a restore or a reset is, in the words of the step it is at. */
+export function restoreState(r: EtcdRestoreStatus): { state: Health; text: string } {
+  const node = r.node ?? "the node";
   switch (r.phase) {
     case "Succeeded": {
-      return { state: "ok", text: "Restored" };
+      return { state: "ok", text: r.reset === true ? "Recovered" : "Restored" };
     }
     case "Failed": {
       return { state: "error", text: "Failed" };
@@ -366,13 +367,16 @@ function restoreState(r: EtcdRestoreStatus): { state: Health; text: string } {
       return { state: "progress", text: "Preparing" };
     }
     case "Fetching": {
-      return { state: "progress", text: `Copying the snapshot to ${r.node ?? "the node"}` };
+      return {
+        state: "progress",
+        text: r.reset === true ? `Copying etcd off ${node}` : `Copying the snapshot to ${node}`,
+      };
     }
     case "Stopping": {
       return { state: "progress", text: "Stopping the control plane" };
     }
     case "Restoring": {
-      return { state: "progress", text: `Restoring etcd on ${r.node ?? "the node"}` };
+      return { state: "progress", text: r.reset === true ? `Resetting etcd on ${node}` : `Restoring etcd on ${node}` };
     }
     case "Starting": {
       return { state: "progress", text: "Starting the control plane" };
@@ -543,6 +547,10 @@ function RestoreState({
   const at = r.finished ?? r.started;
   // By when it was taken, as the table lists it, while the target still holds it.
   const from = snapshots.find((x) => x.name === r.snapshot);
+  const source =
+    r.snapshot === undefined
+      ? `to ${r.machine ?? "a control plane"}'s own etcd`
+      : `from ${from === undefined ? r.snapshot : `the snapshot of ${when(from.time)}`}`;
   return (
     <dl className="summary">
       <dt>Last restore</dt>
@@ -550,7 +558,7 @@ function RestoreState({
         <Status state={s.state} text={s.text} />
         <span className="muted" title={r.snapshot}>
           {" "}
-          from {from === undefined ? r.snapshot : `the snapshot of ${when(from.time)}`}
+          {source}
           {filled(r.by) && `, asked by ${r.by}`}, {when(at)}
         </span>
         {filled(r.message) && <div className="hint message">{sentence(r.message)}</div>}
@@ -748,20 +756,25 @@ function RestoreSteps({ cluster: c, snapshot }: { cluster: Cluster; snapshot: Et
       </p>
       <ErrorBox message={error} />
       {plan === undefined && !filled(error) && <p className="muted">Loading…</p>}
-      {plan !== undefined && (
-        <ol className="steps">
-          {plan.steps.map((step) => (
-            <li key={step.title}>
-              <p>
-                {step.title}. <span className="muted">On {step.where}:</span>
-              </p>
-              <pre className="restore-command" aria-label={step.title}>
-                {step.command}
-              </pre>
-            </li>
-          ))}
-        </ol>
-      )}
+      {plan !== undefined && <PlanSteps plan={plan} />}
     </div>
+  );
+}
+
+/** PlanSteps lists the commands of a plan done by hand, each with where it runs. */
+export function PlanSteps({ plan }: { plan: EtcdRestorePlan }): JSX.Element {
+  return (
+    <ol className="steps">
+      {plan.steps.map((step) => (
+        <li key={step.title}>
+          <p>
+            {step.title}. <span className="muted">On {step.where}:</span>
+          </p>
+          <pre className="restore-command" aria-label={step.title}>
+            {step.command}
+          </pre>
+        </li>
+      ))}
+    </ol>
   );
 }

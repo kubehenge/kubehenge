@@ -8,6 +8,8 @@ import (
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
 // planPatches feed pod security to the control plane, logs to the workers and the load balancer
@@ -68,6 +70,19 @@ func TestPlanSaysWhatAChangeReplacesWithoutMakingIt(t *testing.T) {
 	}
 	if plan.Cluster.WorkerPools[0].Replicas != 3 || string(plan.Cluster.Variables["podSecurity"]) != `{"level":"restricted"}` {
 		t.Errorf("the planned cluster = %+v, want 3 workers and restricted pods", plan.Cluster)
+	}
+	// The cluster has one control plane, which pod security replaces.
+	if !slices.Equal(plan.Warnings, []string{provisioner.SingleControlPlaneRoll}) {
+		t.Errorf("warnings = %q, want the single control plane's", plan.Warnings)
+	}
+	rec = b.do("POST", "/api/clusters/default/one/plan", `{"workerPools":{"md-0":3},"variables":{"monitoring":{"enabled":true}}}`)
+	expect(t, rec, http.StatusOK)
+	var calm planView
+	if err := json.Unmarshal(rec.Body.Bytes(), &calm); err != nil {
+		t.Fatal(err)
+	}
+	if len(calm.Warnings) != 0 {
+		t.Errorf("warnings %q for a change that leaves the control plane", calm.Warnings)
 	}
 
 	kept := &clusterv1.Cluster{}

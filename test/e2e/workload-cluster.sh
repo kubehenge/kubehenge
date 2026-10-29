@@ -2890,7 +2890,16 @@ if [ "${distribution}" = talos ]; then
     talos_last=$(talos_annotation talos-upgraded)
 fi
 old_servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
-kubectl -n "${ns}" patch "cluster/${name}" --type=merge -p "{\"spec\":{\"topology\":{\"version\":\"${upgrade}\"}}}"
+# The cluster has one control plane, so kubectl hears from the admission webhook what the
+# interface's plan says before the same change.
+kubectl -n "${ns}" patch "cluster/${name}" --type=merge -p "{\"spec\":{\"topology\":{\"version\":\"${upgrade}\"}}}" 2> "${work}/upgrade-warnings"
+cat "${work}/upgrade-warnings" >&2
+grep -q "Replaces the only control plane" "${work}/upgrade-warnings" ||
+    fail "kubectl was not warned that the upgrade replaces the cluster's only control plane"
+roll_stalled() {
+    kubectl -n "${ns}" get "cluster/${name}" -o json |
+        jq -e --arg r "$1" '.status.conditions // [] | any(.type == "ControlPlaneRollStalled" and .status == "True" and .reason == $r)' > /dev/null
+}
 case ${class} in
     kubehenge-rke2 | kubehenge-k3s)
         # The first new server cannot reach the cluster's API at first, as when the old server is
@@ -2934,6 +2943,10 @@ case ${class} in
         # shellcheck disable=SC2310 # guest returns the command's status, which is the one tested.
         guest "${joining_node}" "${joining_vmid}" "journalctl -u ${service}.service --no-pager | grep -q 'Failed to start'" > /dev/null ||
             fail "${service} on ${joining} started although the cluster's API refused it"
+        # The old server still serves the API, so the controller says the new machine holds the
+        # roll up, rather than that the cluster is down.
+        until_true 300 "the roll reported stalled on the Cluster" roll_stalled SuccessorNotReady
+        kubectl -n "${ns}" get "cluster/${name}" -o json | jq -r '.status.conditions[] | select(.type == "ControlPlaneRollStalled") | .message'
         on_machines "${old_servers}" 'nft delete table inet e2e-join'
         printf '%s on %s failed to start and cloud-init ended %s; the old servers accept it again\n' "${service}" "${joining}" "${state}"
         ;;
@@ -2944,6 +2957,17 @@ kubelet=${upgrade%%+*}
 until_true 3600 "every node on ${kubelet}" sh -c "KUBECONFIG=${work}/workload kubectl get nodes -o json | jq -e --arg v '${kubelet}' '(.items | length == 2) and (.items | all(.status.nodeInfo.kubeletVersion | startswith(\$v))) and (.items | all(any(.status.conditions[]; .type == \"Ready\" and .status == \"True\")))' >/dev/null"
 kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
 wl get nodes -o wide
+case ${class} in
+    kubehenge-rke2 | kubehenge-k3s)
+        roll_resumed() {
+            # shellcheck disable=SC2310 # the condition's absence is what is waited for.
+            ! roll_stalled SuccessorNotReady && kubectl -n "${ns}" get events -o json |
+                jq -e --arg n "${name}" 'any(.items[]; .reason == "ControlPlaneRollResumed" and .involvedObject.name == $n)' > /dev/null
+        }
+        until_true 300 "the stalled roll cleared, with an event saying so" roll_resumed
+        ;;
+    *) ;;
+esac
 if [ "${distribution}" = talos ]; then
     # The upgrade replaced every machine, so its new ones were cloned from the release the nodes
     # run and need no upgrade in place.

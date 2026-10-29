@@ -115,6 +115,7 @@ type controllerOptions struct {
 	classProviders    []string
 	offerHARules      bool
 	nodeImageSoak     time.Duration
+	rollStallAfter    time.Duration
 	templateRefresh   bool
 	autoscaler        provisioner.AutoscalerReconciler
 	autoscalerImages  []string
@@ -161,6 +162,7 @@ through the VMs' guest agents.`,
 	f.StringSliceVar(&o.headlampSignIn, "headlamp-sign-in-namespaces", nil, "the interface's namespaces, whose clusters get identities through which the appliance's shared Headlamp signs those who may download a cluster's admin kubeconfig in as cluster-admin (comma-separated); none, nobody is signed in and the identities are removed")
 	f.DurationVar(&o.upgradeInterval, "upgrade-interval", defaultUpgradeInterval, "how often clusters are checked for an automatic upgrade due in their window")
 	f.DurationVar(&o.nodeImageSoak, "node-image-soak", provisioner.DefaultNodeImageSoak, "how old a template build is before clusters move to it; the template refresh's --soak")
+	f.DurationVar(&o.rollStallAfter, "roll-stall-after", provisioner.RollStallAfter, "how long the new control plane of a cluster with one may take to become ready before its roll counts as stalled")
 	f.BoolVar(&o.templateRefresh, "template-refresh", false, "start the template refresh CronJob's Job for the builds asked for in the interface")
 	f.IntVar(&o.port, "extension-port", defaultExtensionPort, "port of the Runtime Extension server")
 	f.StringVar(&o.extensionConfig, "extension-config", "kubehenge", "ExtensionConfig through which Cluster API calls this controller's hooks")
@@ -310,6 +312,9 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 		return err
 	}
 	if err = o.addUpgrader(mgr, c, rancherMinors, remotes); err != nil {
+		return err
+	}
+	if err = o.addWatches(mgr, remotes); err != nil {
 		return err
 	}
 	if err = o.addProbes(mgr); err != nil {
@@ -700,6 +705,19 @@ func (o *controllerOptions) addEtcd(mgr manager.Manager, conn *pve.Config, remot
 	}
 	if err := restorer.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the etcd restorer: %w", err)
+	}
+	return nil
+}
+
+// addWatches adds what looks at every cluster for what Cluster API does not see through: a roll of
+// a single control plane that stalled.
+func (o *controllerOptions) addWatches(mgr manager.Manager, remotes *provisioner.Remotes) error {
+	rolls := &provisioner.RollWatch{
+		Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, APIs: remotes, Events: mgr.GetEventRecorder("kubehenge"),
+		Interval: time.Minute, StallAfter: o.rollStallAfter,
+	}
+	if err := mgr.Add(rolls); err != nil {
+		return fmt.Errorf("the roll watch: %w", err)
 	}
 	return nil
 }

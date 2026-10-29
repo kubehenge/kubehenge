@@ -383,6 +383,8 @@ export interface Cluster {
   gitops?: GitOpsKeys;
   /** How a Talos cluster's nodes stand with its Talos release. */
   talos?: TalosStatus;
+  /** The last recovery of the control plane from a stalled roll: etcd reset to one machine's own. */
+  recovery?: EtcdRestoreStatus;
 }
 
 /** A Talos cluster's nodes, upgraded in place to its Talos release one at a time. */
@@ -650,10 +652,15 @@ export type EtcdRestorePhase =
 
 /** How a restore of a cluster's etcd went, or is going. */
 export interface EtcdRestoreStatus {
-  snapshot: string;
+  /** The snapshot restored; absent when etcd is reset to a control-plane machine's own. */
+  snapshot?: string;
   by?: string;
   requestedAt: string;
   phase: EtcdRestorePhase;
+  /** etcd is reset to the database of machine, the way out of a single control plane's stalled roll. */
+  reset?: boolean;
+  /** The cluster's API answered, so etcd had its quorum and the other machines were only replaced. */
+  answered?: boolean;
   /** The control-plane machine etcd is restored on, and its node. */
   machine?: string;
   node?: string;
@@ -697,12 +704,18 @@ export interface EtcdRestoreStep {
   command: string;
 }
 
-/** The steps that restore a cluster's etcd from a snapshot by hand. */
+/** The steps that restore a cluster's etcd by hand, from a snapshot or from a control-plane machine's own. */
 export interface EtcdRestorePlan {
-  snapshot: EtcdSnapshot;
+  snapshot?: EtcdSnapshot;
   distribution: string;
   steps: EtcdRestoreStep[];
   replaced?: string[];
+}
+
+/** How a cluster's control plane is recovered from a stalled roll: by the controller, or by hand with the plan's steps. */
+export interface ControlPlaneRecovery {
+  automatic: boolean;
+  plan?: EtcdRestorePlan;
 }
 
 export interface Job {
@@ -922,6 +935,8 @@ export interface PlannedChange {
 export interface Plan {
   cluster: Cluster;
   changes: PlannedChange[];
+  /** What to know before applying it, such as a roll of the only control plane; kubectl hears the same. */
+  warnings?: string[];
 }
 
 /** The autoscaler variable: where the cluster autoscaler runs and how it scales. */

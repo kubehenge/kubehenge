@@ -250,6 +250,11 @@ function PlanDialog({
         The API server checked these changes without making them. Apply makes them together.{" "}
         {effects[worstEffect(plan.changes)]}.
       </p>
+      {(plan.warnings ?? []).map((w) => (
+        <p key={w} className="warning">
+          {w}
+        </p>
+      ))}
       <div className="scroll">
         <table className="grid plan">
           <thead>

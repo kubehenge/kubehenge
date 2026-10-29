@@ -34,12 +34,12 @@ var _ admission.Validator[*clusterv1.Cluster] = &ClusterValidator{}
 
 // ValidateCreate implements admission.Validator.
 func (v *ClusterValidator) ValidateCreate(ctx context.Context, c *clusterv1.Cluster) (admission.Warnings, error) {
-	return nil, v.validate(ctx, nil, c)
+	return v.validate(ctx, nil, c)
 }
 
 // ValidateUpdate implements admission.Validator.
 func (v *ClusterValidator) ValidateUpdate(ctx context.Context, old, c *clusterv1.Cluster) (admission.Warnings, error) {
-	return nil, v.validate(ctx, old, c)
+	return v.validate(ctx, old, c)
 }
 
 // ValidateDelete implements admission.Validator.
@@ -47,22 +47,31 @@ func (*ClusterValidator) ValidateDelete(context.Context, *clusterv1.Cluster) (ad
 	return nil, nil
 }
 
-func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Cluster) error {
+func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Cluster) (admission.Warnings, error) {
 	if !Owns(c, v.Hooks.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
-		return nil
+		return nil, nil
 	}
 	r, err := rancherOf(c)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	class := &clusterv1.ClusterClass{}
 	if err := v.Hooks.Reader.Get(ctx, client.ObjectKey{Namespace: v.Hooks.ClassNamespace, Name: c.Spec.Topology.ClassRef.Name}, class); err != nil {
 		if apierrors.IsNotFound(err) {
 			// Cluster API refuses a cluster of a class that does not exist.
-			return nil
+			return nil, nil
 		}
-		return fmt.Errorf("reading the cluster's ClusterClass: %w", err)
+		return nil, fmt.Errorf("reading the cluster's ClusterClass: %w", err)
 	}
+	var warnings admission.Warnings
+	if rollsOnlyControlPlane(old, c, class) {
+		warnings = append(warnings, SingleControlPlaneRoll)
+	}
+	return warnings, v.check(ctx, old, c, class, r)
+}
+
+// check holds a cluster to every rule it can be checked against at admission.
+func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster, class *clusterv1.ClusterClass, r Rancher) error {
 	var errs field.ErrorList
 	topology := field.NewPath("spec", "topology")
 	errs = append(errs, validateTopology(old, c)...)

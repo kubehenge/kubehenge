@@ -76,7 +76,7 @@ echo "the control plane is stopped"
 	// the version of etcd that will open it. The revision moves on past any a client saw before
 	// and everything up to it reads as compacted, so every watch from before ends and its client
 	// lists again, rather than taking the older revisions for news it already had.
-	kubeadmRestore = `manifest="$work/manifests/etcd.yaml"
+	kubeadmEtcdSettings = `manifest="$work/manifests/etcd.yaml"
 if [ ! -f "$manifest" ]; then
   echo "etcd is not stopped here: $manifest is missing" >&2
   exit 1
@@ -90,12 +90,24 @@ if [ -z "$name" ] || [ -z "$peer" ] || [ -z "$data" ] || [ -z "$image" ]; then
   echo "cannot read etcd's settings from $manifest" >&2
   exit 1
 fi
-rm -rf "$work/data"
+`
+	// A member's own database is a snapshot without the checksum a snapshot ends with, which
+	// etcdutl is told to do without.
+	kubeadmOwnDatabase = `if [ ! -f "$data/member/snap/db" ]; then
+  echo "etcd has no database at $data/member/snap/db" >&2
+  exit 1
+fi
+cp "$data/member/snap/db" "$work/snapshot.db"
+skip=(--skip-hash-check)
+`
+	kubeadmFromSnapshot = `skip=()
+`
+	kubeadmRestoreDatabase = `rm -rf "$work/data"
 # A run cut short leaves its container behind, whose name the next run needs.
 ctr -n k8s.io container rm kubehenge-etcd-restore >/dev/null 2>&1 || true
 ctr -n k8s.io run --rm --mount "type=bind,src=$work,dst=$work,options=rbind:rw" "$image" kubehenge-etcd-restore \
   etcdutl snapshot restore "$work/snapshot.db" --name "$name" --initial-cluster "$name=$peer" \
-  --initial-advertise-peer-urls "$peer" --data-dir "$work/data" --bump-revision 1000000000 --mark-compacted
+  --initial-advertise-peer-urls "$peer" --data-dir "$work/data" --bump-revision 1000000000 --mark-compacted "${skip[@]}"
 old="$data.before-restore-$(date -u +%Y%m%dT%H%M%SZ)"
 mv "$data" "$old"
 mv "$work/data" "$data"
@@ -131,6 +143,18 @@ sed -i '/^server:/d' "$config"
 %[1]s server --cluster-reset --cluster-reset-restore-path="$work/snapshot.db" --etcd-s3=false
 touch "$work/restored"
 echo "restored etcd from the snapshot"
+`
+	// Without a restore path, the reset keeps the server's own etcd data and makes it a cluster of
+	// this one member.
+	rancherReset = `config=/etc/rancher/%[1]s/config.yaml
+if [ ! -f "$work/config.yaml" ]; then
+  cp -p "$config" "$work/config.yaml"
+fi
+trap 'cp -p "$work/config.yaml" "$config"' EXIT
+sed -i '/^server:/d' "$config"
+%[1]s server --cluster-reset --etcd-s3=false
+touch "$work/restored"
+echo "reset etcd to this server alone"
 `
 	// The service starts without waiting: on a node of several that are all stopped, it would wait
 	// for the others.
@@ -177,6 +201,8 @@ type RestoreScripts struct {
 	Stop string
 	// Restore restores etcd on one stopped node from RestoreSnapshotPath.
 	Restore string
+	// Reset makes etcd on one stopped node a cluster of that node alone, keeping what it holds.
+	Reset string
 	// Start starts the control plane again and waits for its API server.
 	Start string
 	// StartNoWait starts it without waiting, as on nodes whose etcd has no quorum alone.
@@ -189,17 +215,19 @@ type RestoreScripts struct {
 
 // restoreScriptsFor are a distribution's restore scripts.
 func restoreScriptsFor(d templates.Distribution) (RestoreScripts, error) {
-	var stop, restore, start string
+	var stop, restore, reset, start string
 	switch d {
 	case templates.Kubeadm:
-		stop, restore, start = kubeadmStop, kubeadmRestore, kubeadmStart
+		stop, start = kubeadmStop, kubeadmStart
+		restore = kubeadmEtcdSettings + kubeadmFromSnapshot + kubeadmRestoreDatabase
+		reset = kubeadmEtcdSettings + kubeadmOwnDatabase + kubeadmRestoreDatabase
 	case templates.RKE2:
 		stop = rke2Stop
-		restore = fmt.Sprintf(rancherRestore, "rke2")
+		restore, reset = fmt.Sprintf(rancherRestore, "rke2"), fmt.Sprintf(rancherReset, "rke2")
 		start = fmt.Sprintf(rancherStart, "rke2", "rke2-server", "kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml")
 	case templates.K3s:
 		stop = k3sStop
-		restore = fmt.Sprintf(rancherRestore, "k3s")
+		restore, reset = fmt.Sprintf(rancherRestore, "k3s"), fmt.Sprintf(rancherReset, "k3s")
 		start = fmt.Sprintf(rancherStart, "k3s", "k3s", "k3s kubectl")
 	case templates.Talos:
 	}
@@ -209,6 +237,7 @@ func restoreScriptsFor(d templates.Distribution) (RestoreScripts, error) {
 	return RestoreScripts{
 		Stop:        script(stop),
 		Restore:     script(restore),
+		Reset:       script(reset),
 		Start:       script(start + startWait),
 		StartNoWait: script(start + startNoWait),
 		Restored:    script(markerCheck),
@@ -283,7 +312,8 @@ func opensslStream(password string, salt []byte) (cipher.Stream, error) {
 // EtcdRestorePlan is how a cluster's etcd is restored from a snapshot by hand, step by step, for
 // a management cluster that does not restore through the guest agent.
 type EtcdRestorePlan struct {
-	Snapshot     EtcdSnapshot  `json:"snapshot"`
+	// Snapshot is nil for a reset to a control-plane machine's own etcd.
+	Snapshot     *EtcdSnapshot `json:"snapshot,omitempty"`
 	Distribution string        `json:"distribution"`
 	Steps        []RestoreStep `json:"steps"`
 	// Replaced are the control-plane machines Cluster API makes again, empty for a cluster of one.
@@ -368,29 +398,115 @@ func PlanEtcdRestore(ctx context.Context, c client.Reader, cluster *clusterv1.Cl
 		names[i] = cmp.Or(n.Node, n.Machine)
 	}
 	first := names[0]
-	plan := &EtcdRestorePlan{Snapshot: *snapshot, Distribution: string(distributionOf(cluster))}
+	plan := &EtcdRestorePlan{Snapshot: snapshot, Distribution: string(distributionOf(cluster))}
 	patch := fmt.Sprintf("kubectl --namespace %s patch cluster %s --type merge --patch ", cluster.Namespace, cluster.Name)
-	const mgmt = "the management cluster"
 	plan.Steps = append(plan.Steps,
-		RestoreStep{"Pause the cluster, so that Cluster API replaces no machine meanwhile", mgmt, patch + `'{"spec":{"paused":true}}'`},
+		pauseStep(patch),
 		RestoreStep{"Stop etcd and the API server", strings.Join(names, ", "), asRoot(scripts.Stop)},
 		RestoreStep{
-			"Copy the downloaded snapshot to " + RestoreSnapshotPath + " as root, and check it", first,
+			"Copy the snapshot to " + RestoreSnapshotPath + " as root and check it", first,
 			fmt.Sprintf("echo '%s  %s' | sudo sha256sum -c -", snapshot.SHA256, RestoreSnapshotPath),
 		},
 		RestoreStep{"Restore etcd from the snapshot", first, asRoot(scripts.Restore)},
-		RestoreStep{"Start the control plane again", first, asRoot(scripts.Start)},
+		RestoreStep{startControlPlane, first, asRoot(scripts.Start)},
 	)
 	if len(nodes) > 1 {
 		for _, n := range nodes[1:] {
 			plan.Replaced = append(plan.Replaced, n.Machine)
 		}
-		plan.Steps = append(plan.Steps, RestoreStep{
-			"Replace the other control-plane machines, whose etcd still holds the cluster from before", mgmt,
-			fmt.Sprintf("kubectl --namespace %s delete machine --wait=false %s", cluster.Namespace, strings.Join(plan.Replaced, " ")),
-		})
+		plan.Steps = append(plan.Steps, replaceStep(cluster, plan.Replaced))
 	}
-	plan.Steps = append(plan.Steps, RestoreStep{"Let Cluster API look after the cluster again", mgmt, patch + `'{"spec":{"paused":false}}'`})
+	plan.Steps = append(plan.Steps, resumeStep(patch))
+	return plan, nil
+}
+
+// onManagement is where a plan's kubectl steps run.
+const onManagement = "the management cluster"
+
+const (
+	startControlPlane = "Start the control plane"
+	waitForEtcd       = "Wait until etcd is Preparing"
+)
+
+// pauseStep keeps Cluster API from replacing machines while etcd is restored by hand, and
+// resumeStep hands the cluster back to it; patch is the kubectl command that patches the Cluster.
+func pauseStep(patch string) RestoreStep {
+	return RestoreStep{"Pause the cluster", onManagement, patch + `'{"spec":{"paused":true}}'`}
+}
+
+func resumeStep(patch string) RestoreStep {
+	return RestoreStep{"Resume the cluster", onManagement, patch + `'{"spec":{"paused":false}}'`}
+}
+
+// replaceStep deletes the control-plane machines whose etcd belongs to the cluster from before.
+func replaceStep(cluster *clusterv1.Cluster, machines []string) RestoreStep {
+	return RestoreStep{
+		"Replace the other control-plane machines", onManagement,
+		fmt.Sprintf("kubectl --namespace %s delete machine --wait=false %s", cluster.Namespace, strings.Join(machines, " ")),
+	}
+}
+
+// PlanControlPlaneReset writes out the steps that reset a cluster's etcd to one control-plane
+// machine's own by hand, and replace the others, for a management cluster that does not restore
+// through the guest agent: the way out of a roll that stalled with the only old control plane and
+// its successor each waiting for the other's etcd member.
+func PlanControlPlaneReset(ctx context.Context, c client.Reader, cluster *clusterv1.Cluster, keep string) (*EtcdRestorePlan, error) {
+	nodes, err := controlPlaneMachines(ctx, c, cluster)
+	if err != nil {
+		return nil, err
+	}
+	i := slices.IndexFunc(nodes, func(n RestoreNode) bool { return n.Machine == keep })
+	if i < 0 {
+		return nil, fmt.Errorf("%s is not one of the cluster's control-plane machines, or is being deleted", keep)
+	}
+	kept := nodes[i]
+	var others []string
+	for _, n := range nodes {
+		if n.Machine != keep {
+			others = append(others, n.Machine)
+		}
+	}
+	plan := &EtcdRestorePlan{Distribution: string(distributionOf(cluster)), Replaced: others}
+	patch := fmt.Sprintf("kubectl --namespace %s patch cluster %s --type merge --patch ", cluster.Namespace, cluster.Name)
+	plan.Steps = append(plan.Steps, pauseStep(patch))
+	if isTalos(cluster) {
+		address := machineAddress(kept.object)
+		if address == "" {
+			return nil, fmt.Errorf("control-plane machine %s has no address yet", keep)
+		}
+		const here = "a machine that reaches the node's Talos API"
+		talosctl := "talosctl --talosconfig talosconfig --nodes " + address
+		plan.Steps = append(plan.Steps,
+			RestoreStep{
+				"Write the cluster's talosconfig", onManagement,
+				fmt.Sprintf("kubectl --namespace %s get secret %s --output jsonpath='{.data.%s}' | base64 --decode > talosconfig",
+					cluster.Namespace, TalosconfigSecret(cluster.Name), TalosconfigKey),
+			},
+			RestoreStep{"Copy the node's etcd", here, talosctl + " etcd snapshot db.snapshot"},
+			RestoreStep{"Wipe etcd on the node (it reboots)", here, talosctl + " reset --graceful=false --reboot --system-labels-to-wipe=EPHEMERAL"},
+			RestoreStep{waitForEtcd, here, talosctl + " service etcd"},
+			RestoreStep{"Bootstrap etcd from the copy", here, talosctl + " bootstrap --recover-from=db.snapshot"},
+		)
+	} else {
+		scripts, err := restoreScriptsFor(distributionOf(cluster))
+		if err != nil {
+			return nil, err
+		}
+		names := make([]string, len(nodes))
+		for j, n := range nodes {
+			names[j] = cmp.Or(n.Node, n.Machine)
+		}
+		where := cmp.Or(kept.Node, kept.Machine)
+		plan.Steps = append(plan.Steps,
+			RestoreStep{"Stop etcd and the API server where they run", strings.Join(names, ", "), asRoot(scripts.Stop)},
+			RestoreStep{"Reset etcd to this node", where, asRoot(scripts.Reset)},
+			RestoreStep{startControlPlane, where, asRoot(scripts.Start)},
+		)
+	}
+	if len(others) > 0 {
+		plan.Steps = append(plan.Steps, replaceStep(cluster, others))
+	}
+	plan.Steps = append(plan.Steps, resumeStep(patch))
 	return plan, nil
 }
 

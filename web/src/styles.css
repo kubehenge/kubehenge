@@ -1260,6 +1260,62 @@ fieldset.choices .check + .hint {
   margin: 0 0 12px;
 }
 
+/* A stalled roll is the one thing to act on before the rest of the page: its own callout, in the
+   colour of how bad it is, with the way out inside it. */
+.roll-stalled {
+  --tone: var(--warning);
+  border: 1px solid color-mix(in srgb, var(--tone) 50%, transparent);
+  border-left-width: 3px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--tone) 8%, var(--surface));
+  padding: 10px 12px;
+  margin: 0 0 12px;
+}
+
+.roll-stalled.roll-down {
+  --tone: var(--error);
+}
+
+.roll-stalled p {
+  margin: 0;
+}
+
+.roll-title {
+  font-weight: 700;
+  color: var(--tone);
+}
+
+.roll-stalled .roll-said {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.roll-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-top: 10px;
+}
+
+.roll-actions details.advanced {
+  margin: 4px 0 0;
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.roll-actions details[open] {
+  flex-basis: 100%;
+  order: 2;
+}
+
+.roll-actions details .restore-command {
+  margin-top: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .group {
   border: 1px solid var(--line);
   border-radius: 6px;

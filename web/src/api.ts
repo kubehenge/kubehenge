@@ -8,6 +8,7 @@ import type {
   ClusterHealth,
   ClusterRef,
   ClusterEtcdSnapshots,
+  ControlPlaneRecovery,
   CreateRequest,
   EtcdRestorePlan,
   FleetHealth,
@@ -194,6 +195,10 @@ export interface Api {
   etcdRestorePlan: (ns: string, name: string, snapshot: string) => Promise<EtcdRestorePlan>;
   /** restoreEtcd asks the controller to take the cluster's etcd back to a snapshot. */
   restoreEtcd: (ns: string, name: string, snapshot: string) => Promise<void>;
+  /** controlPlaneRecovery says how the control plane is recovered keeping machine: by the controller, or by hand. */
+  controlPlaneRecovery: (ns: string, name: string, machine: string) => Promise<ControlPlaneRecovery>;
+  /** recoverControlPlane asks the controller to reset etcd to machine's own and replace the other control planes. */
+  recoverControlPlane: (cluster: ClusterRef, ask: { machine: string; confirm: string }) => Promise<void>;
 
   setupStatus: () => Promise<SetupStatus>;
   /** rootPassword is root@pam's for volume snapshots; empty keeps the one stored. */
@@ -265,6 +270,10 @@ export const api: Api = {
   takeEtcdSnapshot: (ns, name) => act("POST", `${clusterPath(ns, name)}/etcd-snapshots`),
   etcdRestorePlan: (ns, name, snapshot) => request("GET", `${etcdSnapshotURL(ns, name, snapshot)}/restore-plan`),
   restoreEtcd: (ns, name, snapshot) => act("POST", `${clusterPath(ns, name)}/etcd-restores`, { snapshot }),
+  controlPlaneRecovery: (ns, name, machine) =>
+    request("GET", `${clusterPath(ns, name)}/control-plane-recovery?machine=${encodeURIComponent(machine)}`),
+  recoverControlPlane: (cluster, ask) =>
+    act("POST", `${clusterPath(cluster.namespace, cluster.name)}/control-plane-recovery`, ask),
 
   setupStatus: () => request("GET", "/api/setup"),
   setup: (settings, passphrase, rootPassword) =>

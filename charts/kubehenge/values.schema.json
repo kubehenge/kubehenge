@@ -146,6 +146,14 @@
       "type": "string",
       "pattern": "^(https://[^\\s/]+)?$"
     },
+    "watch": {
+      "description": "What the controller watches for on its own, and how long it gives each before it reports it.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rollStallMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 }
+      }
+    },
     "autoscaler": {
       "type": "object",
       "additionalProperties": false,

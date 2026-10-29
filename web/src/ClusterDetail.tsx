@@ -9,6 +9,7 @@ import { EtcdSnapshotsDialog, EtcdSnapshotsView, etcdSnapshotsOf, etcdSnapshotsR
 import { HealthView } from "./Health";
 import { Machines, Placement } from "./Machines";
 import { nodeOSKey } from "./node-os";
+import { RecoveryState, RollStalled } from "./Recovery";
 import { Link, navigate } from "./router";
 import { StagedBar, StagingProvider } from "./Staging";
 import { useStaging } from "./staging-context";
@@ -271,6 +272,13 @@ export function ClusterDetail({
         {why !== undefined && <p className="muted page-note">{why}</p>}
         <ErrorBox message={error} />
         <ErrorBox message={downloadError} />
+        <RollStalled
+          cluster={c}
+          why={why}
+          onRecovered={() => {
+            void reload();
+          }}
+        />
 
         <nav className="views" aria-label={`${c.name}'s views`}>
           {views.map((v, i) => (
@@ -454,6 +462,7 @@ function Summary({
       {filled(c.talos?.failed) && (
         <TalosFailure cluster={c} failed={c.talos.failed} can={can} why={why} onRetried={onChanged} />
       )}
+      <RecoveryState cluster={c} />
     </div>
   );
 }

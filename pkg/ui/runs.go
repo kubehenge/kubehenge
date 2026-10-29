@@ -246,6 +246,9 @@ func etcdRuns(c *clusterv1.Cluster) []runView {
 	if st, ok := provisioner.EtcdRestoreStatusOf(c); ok {
 		v := base
 		v.ID, v.Kind, v.What, v.By = "etcd-restore/"+clusterKey(c.Namespace, c.Name), runEtcdRestore, "Restore etcd from "+st.Snapshot, st.By
+		if st.Reset {
+			v.What = "Recover the control plane on " + st.Machine
+		}
 		v.Started = &st.RequestedAt
 		if !st.Started.IsZero() {
 			v.Started = &st.Started
