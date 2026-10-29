@@ -37,6 +37,11 @@ variable "node_cores" {
   default = 4
 }
 
+variable "node_memory_mb" {
+  type    = number
+  default = 4096
+}
+
 variable "version_overrides" {
   type    = map(string)
   default = {}
@@ -88,6 +93,7 @@ module "management_cluster" {
 
   node_addresses = [for i in range(var.node_count) : "172.20.99.${11 + i}/24"]
   node_cores     = var.node_cores
+  node_memory_mb = var.node_memory_mb
   # As the templates', test/e2e/ci/run.sh.
   cpu_type = "host"
 
