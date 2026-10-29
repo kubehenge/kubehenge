@@ -10,7 +10,7 @@ import { ClusterStatus, fleetKey, useFleet } from "./fleet";
 import { HealthView } from "./Health";
 import { Machines, Placement } from "./Machines";
 import { nodeOSKey } from "./node-os";
-import { Link, navigate } from "./router";
+import { Link, navigate, useQuery } from "./router";
 import { StagedBar, StagingProvider } from "./Staging";
 import { useStaging } from "./staging-context";
 import { TalosFailure, TalosRows, runsKubernetes, useTalosReleases } from "./Talos";
@@ -31,6 +31,66 @@ import {
 } from "./ui";
 
 type Action = "scale" | "upgrade" | "delete" | "backups" | "autoscaler" | "etcdSnapshots" | OptionAction;
+
+/** Intent is what a cluster's address asks its page to start, in its do parameter. */
+export type Intent = "scale" | "upgrade" | "kubeconfig" | "talosconfig" | "delete";
+
+export interface ClusterAction {
+  intent: Intent;
+  label: string;
+}
+
+/** clusterActions are what the user may start on a cluster from anywhere, as its page offers them. */
+export function clusterActions(c: Cluster): ClusterAction[] {
+  const can = c.allowed.change && !c.deleting;
+  const actions: ClusterAction[] = [];
+  if (can) {
+    actions.push({ intent: "scale", label: "Scale" }, { intent: "upgrade", label: "Upgrade" });
+  }
+  if (c.allowed.kubeconfig && c.available) {
+    actions.push({ intent: "kubeconfig", label: "Download kubeconfig" });
+  }
+  if (c.allowed.kubeconfig && c.distribution === "talos") {
+    actions.push({ intent: "talosconfig", label: "Download talosconfig" });
+  }
+  if (can) {
+    actions.push({ intent: "delete", label: "Delete" });
+  }
+  return actions;
+}
+
+/** intentPath is a cluster's page asked to start an action. */
+export const intentPath = (c: Cluster, intent: Intent): string => `${clusterPath(c.namespace, c.name)}?do=${intent}`;
+
+const saveConfig = async (c: Cluster, kind: "kubeconfig" | "talosconfig"): Promise<void> => {
+  const file = kind === "kubeconfig" ? api.kubeconfig(c.namespace, c.name) : api.talosconfig(c.namespace, c.name);
+  saveFile(await file, `${c.name}.${kind}`);
+};
+
+/**
+ * useIntent starts what the address asks for once its cluster has loaded, and takes the ask out of
+ * the address, so going back or reloading does not start it again. An action the user may not
+ * start is dropped, and so is the cluster shown until the one the address names has loaded.
+ */
+function useIntent(
+  c: Cluster | undefined,
+  named: { namespace: string; name: string },
+  start: (c: Cluster, intent: Intent) => void,
+): void {
+  const intent = useQuery("do");
+  useEffect(() => {
+    if (c?.namespace !== named.namespace || c.name !== named.name || intent === null) {
+      return;
+    }
+    const rest = new URLSearchParams(window.location.search);
+    rest.delete("do");
+    navigate(rest.size > 0 ? `${window.location.pathname}?${rest.toString()}` : window.location.pathname, true);
+    const offered = clusterActions(c).find((a) => a.intent === intent);
+    if (offered !== undefined) {
+      start(c, offered.intent);
+    }
+  }, [c, named.namespace, named.name, intent, start]);
+}
 
 // A cluster on its way somewhere is looked at more often than a settled one.
 const pollChanging = 5000;
@@ -219,6 +279,22 @@ export function ClusterDetail({
   );
   const [action, setAction] = useState<Action>();
   const [downloadError, setDownloadError] = useState<string>();
+  // Fetched rather than linked, so that a refusal shows here instead of as a broken download.
+  const download = async (save: () => Promise<void>): Promise<void> => {
+    setDownloadError(undefined);
+    try {
+      await save();
+    } catch (err) {
+      setDownloadError(errorMessage(err));
+    }
+  };
+  useIntent(c, { namespace, name }, (asked, intent) => {
+    if (intent === "kubeconfig" || intent === "talosconfig") {
+      void download(async () => saveConfig(asked, intent));
+    } else {
+      setAction(intent);
+    }
+  });
 
   if (errorStatus === httpNotFound) {
     return (
@@ -246,15 +322,6 @@ export function ClusterDetail({
   const close = (): void => {
     setAction(undefined);
     void reload();
-  };
-  // Fetched rather than linked, so that a refusal shows here instead of as a broken download.
-  const download = async (save: () => Promise<void>): Promise<void> => {
-    setDownloadError(undefined);
-    try {
-      await save();
-    } catch (err) {
-      setDownloadError(errorMessage(err));
-    }
   };
 
   return (
@@ -284,9 +351,7 @@ export function ClusterDetail({
               <button
                 type="button"
                 onClick={() => {
-                  void download(async () => {
-                    saveFile(await api.kubeconfig(c.namespace, c.name), `${c.name}.kubeconfig`);
-                  });
+                  void download(async () => saveConfig(c, "kubeconfig"));
                 }}
               >
                 Kubeconfig
@@ -297,9 +362,7 @@ export function ClusterDetail({
                 type="button"
                 title="For talosctl"
                 onClick={() => {
-                  void download(async () => {
-                    saveFile(await api.talosconfig(c.namespace, c.name), `${c.name}.talosconfig`);
-                  });
+                  void download(async () => saveConfig(c, "talosconfig"));
                 }}
               >
                 Talosconfig

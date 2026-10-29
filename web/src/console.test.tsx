@@ -382,6 +382,35 @@ describe("the console", () => {
     expect(screen.queryByRole("dialog", { name: "Go to or run" })).not.toBeInTheDocument();
   });
 
+  it("starts a cluster's actions from the palette, only those the user may", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
+    serve();
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await screen.findAllByRole("link", { name: /^db/u });
+
+    await user.keyboard("{Control>}k{/Control}");
+    let palette = screen.getByRole("dialog", { name: "Go to or run" });
+    await user.type(within(palette).getByRole("combobox"), "db upgr");
+    expect(within(palette).getAllByRole("option")[0]).toHaveTextContent("db: Upgrade");
+    await user.keyboard("{Enter}");
+    const upgrade = await screen.findByRole("dialog", { name: "Upgrade db" });
+    expect(window.location.pathname).toBe("/clusters/default/db");
+    expect(window.location.search).toBe("");
+    await user.click(within(upgrade).getByRole("button", { name: "Cancel" }));
+
+    // Without the kubeconfig privilege there is no download to offer, nor to start from the address.
+    await user.keyboard("{Control>}k{/Control}");
+    palette = screen.getByRole("dialog", { name: "Go to or run" });
+    await user.type(within(palette).getByRole("combobox"), "kubeconfig");
+    expect(within(palette).queryByRole("option", { name: /Download kubeconfig/u })).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    window.history.replaceState(null, "", "/clusters/default/web?do=kubeconfig");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await waitFor(() => expect(window.location.search).toBe(""));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("opens each of Administration's pages from the palette, for those who may set Kubehenge up", async () => {
     window.history.replaceState(null, "", "/");
     const routes = serve();

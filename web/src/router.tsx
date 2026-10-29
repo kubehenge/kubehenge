@@ -29,6 +29,12 @@ export function usePath(): string {
   return useSyncExternalStore(subscribe, () => window.location.pathname);
 }
 
+/** useQuery is a parameter of the address's query, or null without it. */
+export function useQuery(name: string): string | null {
+  const search = useSyncExternalStore(subscribe, () => window.location.search);
+  return new URLSearchParams(search).get(name);
+}
+
 // match returns the decoded path segments a pattern's :names stand for, or null, also for a
 // segment that is no valid percent-encoding.
 export function match(pattern: string, path: string): Record<string, string> | null {

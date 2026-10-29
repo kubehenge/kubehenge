@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type JSX, type ReactNode, type RefObject } from "react";
 
 import { adminPath, adminViews } from "./admin-views";
-import { clusterPath, headlampURL, views, type View } from "./ClusterDetail";
+import { clusterActions, clusterPath, headlampURL, intentPath, views, type View } from "./ClusterDetail";
 import { FleetRail, ranked, useFleet } from "./fleet";
 import logo from "./logo.svg";
 import { Palette, ShortcutsDialog, useShortcuts, type Command, type Shortcut } from "./Palette";
@@ -106,8 +106,19 @@ function pageCommands(canCreate: boolean | undefined, canManage: boolean): Comma
   return commands;
 }
 
-// clusterCommands are the open cluster's views first, then every cluster, then every cluster's views.
+// actionCommands are what the user may start on a cluster, on its page.
+const actionCommands = (c: Cluster, id: string): Command[] =>
+  clusterActions(c).map((a) => ({
+    id: `${id}-${a.intent}`,
+    label: `${shown(c)}: ${a.label}`,
+    kind: "Action",
+    run: () => navigate(intentPath(c, a.intent)),
+  }));
+
+// clusterCommands are the open cluster's views and actions first, then every cluster, then every
+// cluster's views and actions.
 function clusterCommands(order: Cluster[], here: Here | undefined): Command[] {
+  const open = order.find((c) => c.namespace === here?.namespace && c.name === here.name);
   const hereViews: Command[] = here
     ? viewKeys.map(({ view, key }) => ({
         id: `here-${view.path}`,
@@ -134,7 +145,9 @@ function clusterCommands(order: Cluster[], here: Here | undefined): Command[] {
         run: () => navigate(clusterPath(c.namespace, c.name, v.path)),
       })),
   );
-  return [...hereViews, ...clusters, ...everyView];
+  const hereActions = open === undefined ? [] : actionCommands(open, "here-do");
+  const everyAction = order.flatMap((c) => actionCommands(c, `do-${c.namespace}/${c.name}`));
+  return [...hereViews, ...hereActions, ...clusters, ...everyView, ...everyAction];
 }
 
 /**
