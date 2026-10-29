@@ -386,6 +386,47 @@ describe("clusters", () => {
     );
   });
 
+  it("offers the newest version it may move to, and says what stands in the way before upgrading", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
+    const old: Cluster = {
+      ...web,
+      version: "v1.32.4+rke2r1",
+      controlPlane: { desired: 1, ready: 1, available: 1, upToDate: 1 },
+      workers: { desired: 2, ready: 2, available: 2, upToDate: 2 },
+      variables: { ...web.variables, network: { gateway: "10.0.0.1", prefix: 24, addresses: ["10.0.0.21-10.0.0.23"] } },
+    };
+    fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": () => ({ body: old }),
+      "GET /api/clusters/default/web/health": () => ({
+        body: {
+          verdict: "degraded",
+          attention: [
+            { severity: "error", section: "nodes", what: "Node web-md-0-a not ready" },
+            { severity: "warning", section: "pods", what: "Pod crash-looping" },
+          ],
+        },
+      }),
+      "POST /api/clusters/default/web/plan": () => ({
+        status: 422,
+        body: { error: "version v1.33.13+rke2r3 has no VM template" },
+      }),
+      "GET /api/versions/rke2": () => ({
+        body: { versions: ["v1.36.5+rke2r1"], older: ["v1.33.12+rke2r1", "v1.33.13+rke2r3", "v1.32.13+rke2r2"] },
+      }),
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Upgrade" }));
+    const dialog = within(screen.getByRole("dialog"));
+    await waitFor(() => expect(dialog.getByLabelText("Kubernetes version")).toHaveValue("v1.33.13+rke2r3"));
+    await waitFor(() => expect(dialog.getByText("version v1.33.13+rke2r3 has no VM template")).toBeInTheDocument());
+    expect(dialog.getByText("None spare. Add one under Options.")).toBeInTheDocument();
+    await waitFor(() => expect(dialog.getByText("2 problems")).toBeInTheDocument());
+    expect(dialog.getByRole("link", { name: "Health" })).toHaveAttribute("href", "/clusters/default/web/health");
+    expect(dialog.getByRole("button", { name: "Upgrade" })).toBeDisabled();
+  });
+
   it("upgrades a cluster on a minor version too old for new clusters to the next one", async () => {
     window.history.replaceState(null, "", "/clusters/default/web");
     const old = { ...web, version: "v1.32.4+rke2r1" };

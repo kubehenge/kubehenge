@@ -222,7 +222,7 @@ An autoscaled pool is sized by the [cluster autoscaler](https://github.com/kuber
 
 ## Upgrade
 
-**Upgrade** offers the newer releases of the cluster's minor version and of the next one: Kubernetes upgrades one minor version at a time and never back, and the interface refuses anything else. Cluster API replaces the control-plane nodes one by one first, then the workers. A kubeadm cluster needs the template of the new version first. Automatic upgrades inside a maintenance window are set under **Options**, **Edit** beside Automatic upgrades. Both are described in [upgrading.md](upgrading.md#workload-clusters).
+**Upgrade** offers the newer releases of the cluster's minor version and of the next one: Kubernetes upgrades one minor version at a time and never back, and the interface refuses anything else. Cluster API replaces the control-plane nodes one by one first, then the workers. A kubeadm cluster needs the template of the new version first. The newest version the cluster may move to is chosen already, and under it the dialog checks before you upgrade: the API server's dry run of the change and what it replaces (a refusal disables **Upgrade**), whether the node addresses leave one spare for the extra node a rollout adds, and how many problems the cluster's Health page lists. Automatic upgrades inside a maintenance window are set under **Options**, **Edit** beside Automatic upgrades. Both are described in [upgrading.md](upgrading.md#workload-clusters).
 
 ## Node image refresh
 

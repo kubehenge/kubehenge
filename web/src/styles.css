@@ -1611,6 +1611,27 @@ button.go {
   display: none;
 }
 
+.preflight {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 16px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.preflight > div {
+  display: contents;
+}
+
+.preflight dt {
+  color: var(--dim);
+}
+
+.preflight dd {
+  margin: 0;
+}
+
 .hint-warning {
   color: var(--warning);
   font-weight: 600;

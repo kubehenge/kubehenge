@@ -29,6 +29,7 @@ import {
   usePoll,
   Views,
 } from "./ui";
+import { UpgradeChecks, usePlan } from "./Upgrade";
 
 type Action = "scale" | "upgrade" | "delete" | "backups" | "autoscaler" | "etcdSnapshots" | OptionAction;
 
@@ -609,8 +610,25 @@ export function upgradeTargets(current: string, offered: string[]): string[] {
   });
 }
 
+function versionKey(v: string): number[] {
+  const p = parse(v);
+  return p ? [p.minor, p.patch, p.build] : [];
+}
+
+// preferredTarget is the newest version the cluster may move to, by minor, patch and build, or the
+// one it runs without any.
+function preferredTarget(targets: string[], held: string[], running: string): string {
+  const open = targets.filter((v) => !held.includes(v));
+  const sorted = open.toSorted((a, b) => {
+    const [x, y] = [versionKey(a), versionKey(b)];
+    return (y[0] ?? 0) - (x[0] ?? 0) || (y[1] ?? 0) - (x[1] ?? 0) || (y[2] ?? 0) - (x[2] ?? 0);
+  });
+  return sorted[0] ?? running;
+}
+
 function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
-  const [version, setVersion] = useState(c.version);
+  // Until one is chosen, the newest the cluster may move to.
+  const [chosen, setChosen] = useState<string>();
   const [offered, setOffered] = useState<Versions>();
   const { busy, error, send } = useChange(c, onClose);
   // A kubeadm cluster moves only to versions with a template on its node OS.
@@ -629,6 +647,8 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
   const talos = useTalosReleases(c.talos !== undefined);
   const running = c.talos?.version ?? "";
   const held = c.talos ? targets.filter((v) => !runsKubernetes(talos, running, v)) : [];
+  const version = chosen ?? preferredTarget(targets, held, c.version);
+  const read = usePlan(c, version);
   return (
     <Dialog
       title={`Upgrade ${c.name}`}
@@ -641,7 +661,11 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="primary" disabled={busy || version === c.version}>
+          <button
+            type="submit"
+            className="primary"
+            disabled={busy || version === c.version || read?.error !== undefined}
+          >
             Upgrade
           </button>
         </>
@@ -650,7 +674,7 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
       <Field label="Kubernetes version" hint="One minor version at a time">
         {(id) =>
           targets.length > 0 ? (
-            <select id={id} value={version} onChange={(e) => setVersion(e.target.value)}>
+            <select id={id} value={version} onChange={(e) => setChosen(e.target.value)}>
               <option value={c.version} disabled>
                 {c.version} (running)
               </option>
@@ -661,7 +685,7 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
               ))}
             </select>
           ) : (
-            <input id={id} value={version} onChange={(e) => setVersion(e.target.value.trim())} />
+            <input id={id} value={version} onChange={(e) => setChosen(e.target.value.trim())} />
           )
         }
       </Field>
@@ -674,6 +698,9 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
         </p>
       )}
       {c.talos && <TalosNote running={running} held={held} upgrading={filled(c.talos.upgrading)} />}
+      {version !== c.version && (
+        <UpgradeChecks cluster={c} read={read} healthPath={clusterPath(c.namespace, c.name, "health")} />
+      )}
       <ErrorBox message={error} />
     </Dialog>
   );
