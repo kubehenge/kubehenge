@@ -159,6 +159,9 @@ type EtcdRestorer struct {
 	Guests Guests
 	// Talos reaches the nodes of Talos clusters.
 	Talos TalosDialer
+	// ScratchDir holds the snapshot a Talos restore uploads, for as long as the restore runs; the
+	// system's temporary directory when empty.
+	ScratchDir string
 	// APIs asks the restored cluster's API server whether it answers on the cluster's address.
 	APIs ClusterAPIs
 	// poll is how often a restore looks at what it waits for; talosRestorePoll when 0.
@@ -198,6 +201,7 @@ func (r *EtcdRestorer) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Re
 		return ctrl.Result{}, nil
 	}
 	run := &restoreRun{r: r, key: client.ObjectKeyFromObject(cluster), cluster: cluster, request: request, talos: isTalos(cluster)}
+	defer run.dropTalosSnapshot()
 	run.status = EtcdRestoreStatus{
 		Snapshot: request.Snapshot, By: request.By, RequestedAt: request.At, Phase: RestorePreparing, Started: r.now(),
 	}
@@ -233,6 +237,8 @@ type restoreRun struct {
 	// talos restores through the Talos API, with the cluster's talosconfig.
 	talos       bool
 	talosconfig []byte
+	// talosSnapshot is the file of the snapshot to upload, its revision moved on.
+	talosSnapshot string
 	// retried is why a Talos restore's first attempt failed, when a second restored etcd.
 	retried error
 }
@@ -411,7 +417,7 @@ func (run *restoreRun) fetch(ctx context.Context) error {
 		return err
 	}
 	if run.talos {
-		return run.checkSnapshot(ctx)
+		return run.fetchTalosSnapshot(ctx)
 	}
 	password, err := newRestorePassword()
 	if err != nil {

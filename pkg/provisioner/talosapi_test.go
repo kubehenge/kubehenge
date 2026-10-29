@@ -676,8 +676,8 @@ func TestRestoreUploadsTheSnapshotThenBootstrapsFromIt(t *testing.T) {
 	if !bytes.Equal(recovered, snapshot) {
 		t.Errorf("the node received %d bytes of %d, or changed", len(recovered), len(snapshot))
 	}
-	if !sentTo[*machine.BootstrapRequest](t, api, "Bootstrap").GetRecoverEtcd() {
-		t.Error("the bootstrap did not recover etcd from the snapshot")
+	if req := sentTo[*machine.BootstrapRequest](t, api, "Bootstrap"); !req.GetRecoverEtcd() || !req.GetRecoverSkipHashCheck() {
+		t.Errorf("the bootstrap did not recover etcd from a snapshot without its checksum: %v", req)
 	}
 }
 

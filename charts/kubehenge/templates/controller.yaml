@@ -372,7 +372,13 @@ spec:
             - name: tls
               mountPath: /etc/kubehenge/tls
               readOnly: true
+            # A Talos etcd restore keeps the snapshot it uploads there, as large as etcd's quota.
+            - name: scratch
+              mountPath: /tmp
       volumes:
+        - name: scratch
+          emptyDir:
+            sizeLimit: 8Gi
         - name: proxmox
           secret:
             secretName: {{ .Values.proxmox.secret }}
