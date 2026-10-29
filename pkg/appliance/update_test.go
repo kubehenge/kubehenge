@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/kubehenge/kubehenge/pkg/release"
 )
@@ -86,6 +87,7 @@ type releaseServer struct {
 	url   string
 	http  *http.Client
 	key   ed25519.PublicKey
+	priv  ed25519.PrivateKey
 	files map[string][]byte
 }
 
@@ -111,7 +113,7 @@ func newReleaseServer(t *testing.T) *releaseServer {
 	tofu := tofuTarball(t, "tofu 1.14.0")
 	tofuSum := sha256.Sum256(tofu)
 	rs.files["/tofu.tar.gz"] = tofu
-	var ix release.Index
+	ix := release.Index{Expires: time.Now().Add(release.Validity)}
 	for _, v := range []string{"0.1.0", "0.2.0", "0.2.5", "0.3.0"} {
 		a := archive(t, v)
 		sum := sha256.Sum256(a)
@@ -126,13 +128,20 @@ func newReleaseServer(t *testing.T) *releaseServer {
 		}
 		ix.Releases = append(ix.Releases, r)
 	}
+	rs.priv = priv
+	rs.publish(t, &ix)
+	return rs
+}
+
+// publish signs ix and serves it as the index.
+func (rs *releaseServer) publish(t *testing.T, ix *release.Index) {
+	t.Helper()
 	raw, err := json.Marshal(ix)
 	if err != nil {
 		t.Fatal(err)
 	}
 	rs.files["/index.json"] = raw
-	rs.files["/index.json.sig"] = []byte(release.Sign(raw, priv))
-	return rs
+	rs.files["/index.json.sig"] = []byte(release.Sign(raw, rs.priv))
 }
 
 func newUpdater(t *testing.T, rs *releaseServer) (*Updater, *int) {
@@ -152,7 +161,7 @@ func newUpdater(t *testing.T, rs *releaseServer) (*Updater, *int) {
 	restarts := 0
 	return &Updater{
 		Spool: Spool(spool), Index: rs.url + "/index.json", Root: root, HTTP: rs.http,
-		Current: "0.1.0", Key: rs.key, ApplianceDir: t.TempDir(),
+		Current: "0.1.0", Keys: []ed25519.PublicKey{rs.key}, ApplianceDir: t.TempDir(),
 		Restart: func(context.Context) error { restarts++; return nil },
 	}, &restarts
 }
@@ -273,6 +282,13 @@ func TestUpdateRefuses(t *testing.T) {
 		"unsigned index":  {current: "0.1.0", req: UpdateRequest{Version: "0.2.0"}, tamper: func(rs *releaseServer) { rs.files["/index.json.sig"] = []byte("AAAA") }},
 		"unknown version": {current: "0.1.0", req: UpdateRequest{Version: "0.9.0"}},
 		"dev build":       {current: "dev", req: UpdateRequest{Version: "0.2.0"}},
+		"expired index": {current: "0.1.0", req: UpdateRequest{Version: "0.2.0"}, tamper: func(rs *releaseServer) {
+			var ix release.Index
+			_ = json.Unmarshal(rs.files["/index.json"], &ix)
+			ix.Expires = time.Now().Add(-time.Minute)
+			raw, _ := json.Marshal(ix)
+			rs.files["/index.json"], rs.files["/index.json.sig"] = raw, []byte(release.Sign(raw, rs.priv))
+		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

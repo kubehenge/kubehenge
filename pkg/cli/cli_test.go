@@ -88,13 +88,103 @@ func TestReleaseKeySignsAnIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ix, err := release.Parse([]byte(index), strings.TrimSpace(string(sig)), pub)
+	ix, err := release.Parse([]byte(index), string(sig), []ed25519.PublicKey{pub}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(ix.Releases) != 1 || ix.Releases[0].Version != "1.0.0" || ix.Releases[0].Tofu != nil {
 		t.Fatalf("index = %+v", ix)
 	}
+	if d := time.Until(ix.Expires); d <= release.Validity-time.Minute || d > release.Validity {
+		t.Fatalf("the index expires %s", ix.Expires)
+	}
+}
+
+// releaseKey makes a release key in dir and returns its file and public half.
+func releaseKey(t *testing.T, dir, name string) (string, ed25519.PublicKey) {
+	t.Helper()
+	file := filepath.Join(dir, name)
+	out, err := run(t, "release", "keygen", file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := base64.StdEncoding.DecodeString(strings.TrimSpace(out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return file, pub
+}
+
+// releaseCommand runs a release subcommand made for the keys a build trusts.
+func releaseCommand(t *testing.T, cmd *cobra.Command, args ...string) (string, error) {
+	t.Helper()
+	var out bytes.Buffer
+	cmd.SetArgs(args)
+	cmd.SetOut(&out)
+	cmd.SetErr(&bytes.Buffer{})
+	err := cmd.ExecuteContext(t.Context())
+	return out.String(), err
+}
+
+// A rotation: a build trusting the old key and the new one has the index signed by both, a line
+// each, and renews an expired index whichever of them signed it.
+func TestReleaseKeysRotate(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	oldFile, oldPub := releaseKey(t, dir, "old.key")
+	nextFile, nextPub := releaseKey(t, dir, "next.key")
+	_, strangerPub := releaseKey(t, dir, "stranger.key")
+	keys := []ed25519.PublicKey{oldPub, nextPub}
+
+	indexFile := filepath.Join(dir, "index.json")
+	expired := `{"expires":"2020-01-01T00:00:00Z","releases":[{"version":"1.0.0","url":"https://example.org/a.tar.gz","sha256":"` + archiveSHA + `"}]}`
+	if err := os.WriteFile(indexFile, []byte(expired), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := releaseCommand(t, newSignCommand(keys), oldFile, indexFile); err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("signed an expired index: %v", err)
+	}
+	if _, err := releaseCommand(t, newSignCommand(keys), oldFile, oldFile, indexFile); err == nil {
+		t.Fatal("signed with the same key twice")
+	}
+	if err := os.WriteFile(indexFile+".sig", []byte(release.Sign([]byte(expired), mustKey(t, oldFile))+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := releaseCommand(t, newRenewCommand([]ed25519.PublicKey{strangerPub}), indexFile); err == nil {
+		t.Fatal("renewed an index no trusted key signed")
+	}
+	renewed, err := releaseCommand(t, newRenewCommand(keys), indexFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(indexFile, []byte(renewed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = releaseCommand(t, newSignCommand(keys), oldFile, nextFile, indexFile); err != nil {
+		t.Fatal(err)
+	}
+	sigs, err := os.ReadFile(indexFile + ".sig")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Count(string(sigs), "\n"); lines != 2 {
+		t.Fatalf("%d signature lines", lines)
+	}
+	for _, trusted := range [][]ed25519.PublicKey{{oldPub}, {nextPub}} {
+		ix, err := release.Parse([]byte(renewed), string(sigs), trusted, time.Now())
+		if err != nil || len(ix.Releases) != 1 {
+			t.Fatalf("a build trusting one key: %+v, %v", ix, err)
+		}
+	}
+}
+
+func mustKey(t *testing.T, file string) ed25519.PrivateKey {
+	t.Helper()
+	key, err := readReleaseKey(file, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
 }
 
 func TestReleaseIndexRefusesWhatItCannotPublish(t *testing.T) {
@@ -145,28 +235,26 @@ func TestSignTakesOnlyTheTrustedKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(indexFile, []byte(`{"releases":[]}`), 0o600); err != nil {
+	index := `{"expires":"` + time.Now().Add(time.Hour).UTC().Format(time.RFC3339) + `","releases":[]}`
+	if err = os.WriteFile(indexFile, []byte(index), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	other, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sign := func(trusted ed25519.PublicKey) error {
-		cmd := newSignCommand(trusted)
-		cmd.SetArgs([]string{keyFile, indexFile})
-		cmd.SetOut(&bytes.Buffer{})
-		cmd.SetErr(&bytes.Buffer{})
-		return cmd.ExecuteContext(t.Context())
+	sign := func(trusted ...ed25519.PublicKey) error {
+		_, err := releaseCommand(t, newSignCommand(trusted), keyFile, indexFile)
+		return err
 	}
-	if err = sign(other); err == nil || !strings.Contains(err.Error(), "not the release key") {
+	if err = sign(other); err == nil || !strings.Contains(err.Error(), "not a release key") {
 		t.Fatalf("signed with a key the build does not trust: %v", err)
 	}
 	if _, statErr := os.Stat(indexFile + ".sig"); !os.IsNotExist(statErr) {
 		t.Fatalf("a signature was written: %v", statErr)
 	}
-	if err = sign(pub); err != nil {
-		t.Fatalf("refused the trusted key: %v", err)
+	if err = sign(other, pub); err != nil {
+		t.Fatalf("refused a trusted key: %v", err)
 	}
 }
 

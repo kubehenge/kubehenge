@@ -35,6 +35,9 @@ on:
       RELEASE_KEY:
         description: The release key's seed, as `kubehenge release keygen` writes it
         required: true
+      RELEASE_KEY_NEXT:
+        description: The seed of the key replacing it, while the release key is rotated (docs/releasing.md)
+        required: false
 
 permissions: {}
 
@@ -277,9 +280,10 @@ jobs:
           retention-days: 1
           overwrite: true
 
-  # The only job that holds the release key (the release environment's secret, deployable from
-  # version tags alone). It checks out nothing and runs no code but the kubehenge binary of the
-  # archive it has checked, which signs only with the release key that binary trusts.
+  # The only job of a release that holds the release key (the release environment's secret,
+  # deployable from version tags alone). It checks out nothing and runs no code but the kubehenge
+  # binary of the archive it has checked, which signs only with the release keys that binary trusts.
+  # While the key is rotated, the key replacing it signs a line of its own beside it.
   sign:
     name: sign
     needs: [gate, build]
@@ -297,16 +301,21 @@ jobs:
       - name: Sign the index
         env:
           RELEASE_KEY: ${{ secrets.RELEASE_KEY }}
+          RELEASE_KEY_NEXT: ${{ secrets.RELEASE_KEY_NEXT }}
         run: |
           set -eu
           fail() { echo "::error::$*"; exit 1; }
           [ -n "$RELEASE_KEY" ] || fail "the release environment has no RELEASE_KEY secret"
           (cd dist && sha256sum --check --strict "kubehenge_${VERSION}_SHA256SUMS")
           tar -xzf "dist/kubehenge_${VERSION}_linux_amd64.tar.gz" -C "$RUNNER_TEMP" ./bin/kubehenge
-          key=$RUNNER_TEMP/release.key
-          trap 'rm -f "$key"' EXIT
-          (umask 077 && printf '%s' "$RELEASE_KEY" > "$key")
-          "$RUNNER_TEMP/bin/kubehenge" release sign "$key" dist/index.json
+          trap 'rm -f "$RUNNER_TEMP"/release*.key' EXIT
+          (umask 077 && printf '%s' "$RELEASE_KEY" > "$RUNNER_TEMP/release.key")
+          set -- "$RUNNER_TEMP/release.key"
+          if [ -n "$RELEASE_KEY_NEXT" ]; then
+            (umask 077 && printf '%s' "$RELEASE_KEY_NEXT" > "$RUNNER_TEMP/release-next.key")
+            set -- "$@" "$RUNNER_TEMP/release-next.key"
+          fi
+          "$RUNNER_TEMP/bin/kubehenge" release sign "$@" dist/index.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-signature

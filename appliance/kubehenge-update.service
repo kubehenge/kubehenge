@@ -9,7 +9,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 # The interface's own settings, so that a KUBEHENGE_RELEASE_INDEX mirror applies to both; the index
-# is checked against the release key built into the binary wherever it comes from.
+# is checked against the release keys built into the binary wherever it comes from.
 EnvironmentFile=/etc/kubehenge/appliance.env
 ExecStart=/usr/local/bin/kubehenge update --spool /var/lib/kubehenge-update
 TimeoutStartSec=15min

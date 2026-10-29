@@ -76,11 +76,11 @@ website:
 # The appliance's release archive, which appliance/install.sh installs: the binary, the
 # management-cluster module with the charts it installs, the shared Headlamp (its server and
 # frontend, taken from its Linux release) and the service units.
-# The release key the appliance verifies upgrades with is pkg/release/release.pub unless RELEASE_KEY
-# names another (base64 Ed25519 public key).
+# The release keys the appliance verifies upgrades with are the lines of pkg/release/release.pub
+# unless RELEASE_PUBLIC_KEYS names others (base64 Ed25519 public keys, comma-separated).
 VERSION ?= 0.1.0
-RELEASE_KEY ?= $(shell cat pkg/release/release.pub 2>/dev/null)
-RELEASE_LDFLAGS = $(LDFLAGS) -X github.com/kubehenge/kubehenge/pkg/release.Version=$(VERSION) -X github.com/kubehenge/kubehenge/pkg/release.publicKey=$(RELEASE_KEY)
+RELEASE_PUBLIC_KEYS ?= $(shell tr -s '\r\n' ',' < pkg/release/release.pub 2>/dev/null)
+RELEASE_LDFLAGS = $(LDFLAGS) -X github.com/kubehenge/kubehenge/pkg/release.Version=$(VERSION) -X github.com/kubehenge/kubehenge/pkg/release.publicKeys=$(RELEASE_PUBLIC_KEYS)
 # The controller image the release's chart runs, by digest (repository@sha256:...); unset, the chart
 # names none, and the module needs controller_image.
 CONTROLLER_IMAGE ?=
@@ -126,7 +126,7 @@ dist: web gateway-api capi-operator-chart
 	cd dist && sha256sum install.sh >> kubehenge_$(VERSION)_SHA256SUMS
 
 # The release index to sign: the previous release's (PREVIOUS, its .sig beside it), checked against
-# the release key, with this release added. Run after dist.
+# the release keys, with this release added. Run after dist.
 TOFU_VERSION = $(patsubst v%,%,$(shell sed -n 's/^TOFU_TAG=//p' appliance/install.sh))
 TOFU_SHA256 = $(shell sed -n 's/^TOFU_SHA256=//p' appliance/install.sh)
 index: gateway-api

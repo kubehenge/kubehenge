@@ -24,9 +24,9 @@ type Upgrades struct {
 	// SettingsPath keeps the automatic upgrade policy.
 	SettingsPath string
 	Now          func() time.Time
-	// Current is the installed release and Key the release key, as the updater has them.
+	// Current is the installed release and Keys the release keys, as the updater has them.
 	Current string
-	Key     ed25519.PublicKey
+	Keys    []ed25519.PublicKey
 
 	mu      sync.Mutex
 	cached  *release.Index
@@ -84,9 +84,12 @@ func (u *Upgrades) index(ctx context.Context, maxAge time.Duration) (*release.In
 	if u.cached != nil && u.Now().Sub(u.fetched) < maxAge {
 		return u.cached, ""
 	}
-	ix, err := appliance.FetchIndex(ctx, u.HTTP, u.Index, u.Key)
+	ix, err := appliance.FetchIndex(ctx, u.HTTP, u.Index, u.Keys, u.Now())
 	if err != nil {
 		u.lastErr = err.Error()
+		if u.cached != nil && !u.Now().Before(u.cached.Expires) {
+			u.cached = nil
+		}
 		return u.cached, u.lastErr
 	}
 	u.cached, u.fetched, u.lastErr = ix, u.Now(), ""

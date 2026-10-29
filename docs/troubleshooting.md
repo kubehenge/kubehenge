@@ -299,7 +299,7 @@ Kubehenge's controller holds a cluster's backups back, neither installing nor re
 
 ### Appliance upgrades
 
-- **Newer releases shows "unknown":** the appliance could not fetch the release index from GitHub, or the index's signature did not check out. The reason follows.
+- **Newer releases shows "unknown":** the appliance could not fetch the release index from kubehenge.dev, the index's signature did not check out, or it has expired. The reason follows. "the release index has expired": the index it reached was not signed again within two weeks; with a mirror (`KUBEHENGE_RELEASE_INDEX`), copy the index and its signatures to it again; a clock far ahead of the time, which `timedatectl` in the container shows, makes a fresh index look expired too.
 - **The last upgrade failed:** the reason is on the Administration page, and in `journalctl -u kubehenge-update` inside the appliance. Unless the reason says the release was installed but restarting failed, the release installed before keeps running.
 - **The interface does not come back** after an upgrade: see `journalctl -u kubehenge`, and upgrade or reinstall the release from the shell with `install.sh --upgrade` ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)).
 - **"distribution: its cluster class is missing from the management cluster"** or **"the cluster class … has no variable …"** when creating a cluster: the appliance was upgraded, and its interface offers a distribution or a setting whose ClusterClass the management cluster does not have yet. Apply the management cluster again (**Upgrade the management cluster** at the top of the Administration page), which installs the new release's ClusterClasses ([upgrading.md](upgrading.md#in-the-appliance)).

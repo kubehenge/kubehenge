@@ -214,7 +214,7 @@ func (o *serveOptions) setUpAppliance(conn *pve.Config) error {
 		SettingsPath: filepath.Join(a.Dir, "upgrades.json"),
 		Now:          time.Now,
 		Current:      release.Version,
-		Key:          release.PublicKey(),
+		Keys:         release.PublicKeys(),
 	}
 	return nil
 }

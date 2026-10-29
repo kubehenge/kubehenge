@@ -106,10 +106,10 @@ type Updater struct {
 	// ApplianceDir is the interface's state directory; its job lock keeps a restart from cutting
 	// off a run of the management-cluster module.
 	ApplianceDir string
-	// Current is the installed release and Key the release key it trusts: release.Version and
-	// release.PublicKey() of this build.
+	// Current is the installed release and Keys the release keys it trusts: release.Version and
+	// release.PublicKeys() of this build.
 	Current string
-	Key     ed25519.PublicKey
+	Keys    []ed25519.PublicKey
 }
 
 // Run takes one request from the spool, if any, and carries it out.
@@ -181,8 +181,9 @@ func (u *Updater) write(st *UpdateStatus) {
 	}
 }
 
-// FetchIndex downloads the release index and verifies it with key.
-func FetchIndex(ctx context.Context, client *http.Client, url string, key ed25519.PublicKey) (*release.Index, error) {
+// FetchIndex downloads the release index and verifies it with keys, and that it has not expired at
+// now.
+func FetchIndex(ctx context.Context, client *http.Client, url string, keys []ed25519.PublicKey, now time.Time) (*release.Index, error) {
 	index, err := get(ctx, client, url, maxIndex)
 	if err != nil {
 		return nil, err
@@ -191,7 +192,7 @@ func FetchIndex(ctx context.Context, client *http.Client, url string, key ed2551
 	if err != nil {
 		return nil, err
 	}
-	ix, err := release.Parse(index, string(sig), key)
+	ix, err := release.Parse(index, string(sig), keys, now)
 	if err != nil {
 		return nil, fmt.Errorf("the release index at %s: %w", url, err)
 	}
@@ -199,7 +200,7 @@ func FetchIndex(ctx context.Context, client *http.Client, url string, key ed2551
 }
 
 func (u *Updater) update(ctx context.Context, req UpdateRequest) (string, error) {
-	ix, err := FetchIndex(ctx, u.HTTP, u.Index, u.Key)
+	ix, err := FetchIndex(ctx, u.HTTP, u.Index, u.Keys, time.Now())
 	if err != nil {
 		return "", err
 	}
