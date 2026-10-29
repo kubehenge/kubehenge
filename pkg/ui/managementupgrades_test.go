@@ -396,7 +396,7 @@ func TestRemovalSwitchesAutomaticUpgradesOff(t *testing.T) {
 	b := h.browser()
 	b.signIn("admin@pve")
 	expect(t, b.do("POST", "/api/setup/remove", `{"passphrase":"`+statePassphrase+`","confirm":"remove"}`), http.StatusAccepted)
-	if j := jobEnded(t, a); j.State != "succeeded" || !strings.Contains(strings.Join(j.Log, "\n"), "Switching automatic upgrades of the management cluster off") {
+	if j := jobEnded(t, a); j.State != "succeeded" || !strings.Contains(strings.Join(j.Log, "\n"), "Switching automatic upgrades off") {
 		t.Fatalf("removal = %+v", j)
 	}
 	if a.UnattendedOn() != nil {

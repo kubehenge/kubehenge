@@ -56,7 +56,7 @@ func TestOpenIDSignIn(t *testing.T) {
 		t.Fatalf("another state: %s", rec.Header().Get("Location"))
 	}
 	rec = get(t, h, "/api/openid/callback?code=bad&state="+st, state)
-	if !strings.Contains(rec.Header().Get("Location"), "signin-error=the+sign-in+through+the+identity+provider+failed") {
+	if !strings.Contains(rec.Header().Get("Location"), "signin-error=sign-in+through+the+identity+provider+failed") {
 		t.Fatalf("bad code: %s", rec.Header().Get("Location"))
 	}
 	rec = get(t, h, "/api/openid/callback?code=good&state="+st, state)

@@ -397,7 +397,7 @@ func (r *Reconciler) addons(ctx context.Context, cluster *clusterv1.Cluster) (Ad
 		case terr != nil:
 			return addons, "", terr
 		case !found:
-			r.holdBackups(ctx, cluster, "BackupTargetMissing", fmt.Sprintf("backup target %q is not one an administrator set", addons.Backups.Target))
+			r.holdBackups(ctx, cluster, "BackupTargetMissing", fmt.Sprintf("backup target %q does not exist", addons.Backups.Target))
 		case invalid != nil:
 			r.holdBackups(ctx, cluster, "BackupsInvalid", invalid.Error())
 		default:
@@ -687,7 +687,7 @@ func (r *Reconciler) refuseRancher(ctx context.Context, cluster *clusterv1.Clust
 		return "", fmt.Errorf("listing clusters: %w", err)
 	}
 	if rc := RancherCluster(clusters.Items, r.ClassNamespace); rc != nil && (rc.Namespace != cluster.Namespace || rc.Name != cluster.Name) {
-		return fmt.Sprintf("cluster %s/%s already runs Rancher, with which every cluster registers", rc.Namespace, rc.Name), nil
+		return fmt.Sprintf("cluster %s/%s already runs Rancher. Only one cluster may run it", rc.Namespace, rc.Name), nil
 	}
 	if r.RancherKubernetes == (KubernetesMinors{}) || r.RancherKubernetes.Allows(cluster.Spec.Topology.Version) {
 		return "", nil
@@ -701,7 +701,7 @@ func (r *Reconciler) refuseRancher(ctx context.Context, cluster *clusterv1.Clust
 	if !apierrors.IsNotFound(err) {
 		return "", fmt.Errorf("reading the Rancher proxy: %w", err)
 	}
-	return fmt.Sprintf("the Rancher release Kubehenge installs runs on Kubernetes 1.%d to 1.%d, not %s",
+	return fmt.Sprintf("for Rancher, choose Kubernetes 1.%d to 1.%d, not %s",
 		r.RancherKubernetes.Min, r.RancherKubernetes.Max, cluster.Spec.Topology.Version), nil
 }
 

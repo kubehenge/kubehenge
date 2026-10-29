@@ -459,7 +459,7 @@ func TestEtcdRestorerRefuses(t *testing.T) {
 		name, want string
 		change     func(*restoreFixture)
 	}{
-		{"without the guest agent", "does not restore through the guest agent", func(f *restoreFixture) { f.r.Guests = nil }},
+		{"without the guest agent", "automatic restore is off", func(f *restoreFixture) { f.r.Guests = nil }},
 		{"another minor", "Kubernetes v1.36", func(f *restoreFixture) {
 			keys, err := clusterKeys(context.Background(), f.kube, f.cluster(), false)
 			if err != nil {

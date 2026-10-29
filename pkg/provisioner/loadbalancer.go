@@ -463,7 +463,7 @@ func checkAddresses(cluster *clusterv1.Cluster, others []clusterv1.Cluster) erro
 		problems = append(problems, own.clashes(o.Namespace+"/"+o.Name, &theirs)...)
 	}
 	if len(problems) > 0 {
-		return fmt.Errorf("%s", strings.Join(problems, "; "))
+		return fmt.Errorf("%s", strings.Join(problems, ", "))
 	}
 	return nil
 }
@@ -473,26 +473,26 @@ func (a *clusterAddresses) problems() []string {
 	var problems []string
 	for _, m := range a.machines {
 		if !a.nodes.Contains(m.first) || !a.nodes.Contains(m.last) {
-			problems = append(problems, fmt.Sprintf("the nodes' addresses %s are not on their network %s", m, a.nodes))
+			problems = append(problems, fmt.Sprintf("node addresses %s are outside the network %s", m, a.nodes))
 		}
 		if m.overlaps(a.endpoint) {
-			problems = append(problems, fmt.Sprintf("the control-plane endpoint %s is among the nodes' addresses %s, which a node may take", a.endpoint, m))
+			problems = append(problems, fmt.Sprintf("control-plane endpoint %s is inside node addresses %s", a.endpoint, m))
 		}
 	}
 	if !a.nodes.Contains(a.endpoint.first) {
-		problems = append(problems, fmt.Sprintf("the control-plane endpoint %s is not on the nodes' network %s", a.endpoint, a.nodes))
+		problems = append(problems, fmt.Sprintf("control-plane endpoint %s is outside the network %s", a.endpoint, a.nodes))
 	}
 	if a.endpoint.first == a.gateway {
-		problems = append(problems, fmt.Sprintf("the control-plane endpoint %s is the gateway", a.endpoint))
+		problems = append(problems, fmt.Sprintf("control-plane endpoint %s is the gateway", a.endpoint))
 	}
 	for i, s := range a.services {
 		if !a.nodes.Contains(s.first) || !a.nodes.Contains(s.last) {
-			problems = append(problems, fmt.Sprintf("the load-balancer addresses %s are not on the nodes' network %s", s, a.nodes))
+			problems = append(problems, fmt.Sprintf("load-balancer addresses %s are outside the network %s", s, a.nodes))
 		}
 		problems = append(problems, a.taken(s)...)
 		for _, t := range a.services[i+1:] {
 			if s.overlaps(t) {
-				problems = append(problems, fmt.Sprintf("the load-balancer addresses %s and %s overlap", s, t))
+				problems = append(problems, fmt.Sprintf("load-balancer addresses %s and %s overlap", s, t))
 			}
 		}
 	}
@@ -503,23 +503,23 @@ func (a *clusterAddresses) problems() []string {
 func (a *clusterAddresses) taken(s addressSpan) []string {
 	var problems []string
 	if s.overlaps(addressSpan{a.gateway, a.gateway}) {
-		problems = append(problems, fmt.Sprintf("the load-balancer addresses %s hold the gateway %s", s, a.gateway))
+		problems = append(problems, fmt.Sprintf("load-balancer addresses %s include the gateway %s", s, a.gateway))
 	}
 	// Hosts on the network take its first and last address for the network and its broadcast,
 	// so a Service given one would never be answered; a /31 or /32 has neither.
 	if a.nodes.Bits() < pointToPointBits {
 		for _, reserved := range []netip.Addr{a.nodes.Masked().Addr(), lastAddress(a.nodes)} {
 			if s.overlaps(addressSpan{reserved, reserved}) {
-				problems = append(problems, fmt.Sprintf("the load-balancer addresses %s hold %s, the network's own or broadcast address", s, reserved))
+				problems = append(problems, fmt.Sprintf("load-balancer addresses %s include the network or broadcast address %s", s, reserved))
 			}
 		}
 	}
 	if s.overlaps(a.endpoint) {
-		problems = append(problems, fmt.Sprintf("the load-balancer addresses %s hold the control-plane endpoint %s", s, a.endpoint))
+		problems = append(problems, fmt.Sprintf("load-balancer addresses %s include the control-plane endpoint %s", s, a.endpoint))
 	}
 	for _, m := range a.machines {
 		if s.overlaps(m) {
-			problems = append(problems, fmt.Sprintf("the load-balancer addresses %s overlap the nodes' addresses %s", s, m))
+			problems = append(problems, fmt.Sprintf("load-balancer addresses %s overlap node addresses %s", s, m))
 		}
 	}
 	return problems
@@ -532,7 +532,7 @@ func (a *clusterAddresses) clashes(name string, theirs *clusterAddresses) []stri
 	for _, s := range a.services {
 		for _, t := range taken {
 			if s.overlaps(t) {
-				problems = append(problems, fmt.Sprintf("the load-balancer addresses %s overlap cluster %s's %s", s, name, t))
+				problems = append(problems, fmt.Sprintf("load-balancer addresses %s overlap %s of cluster %s", s, t, name))
 			}
 		}
 	}
@@ -540,14 +540,14 @@ func (a *clusterAddresses) clashes(name string, theirs *clusterAddresses) []stri
 	for _, m := range mine {
 		for _, t := range slices.Concat([]addressSpan{theirs.endpoint}, theirs.machines) {
 			if m.overlaps(t) {
-				problems = append(problems, fmt.Sprintf("this cluster's addresses %s overlap cluster %s's %s", m, name, t))
+				problems = append(problems, fmt.Sprintf("addresses %s overlap %s of cluster %s", m, t, name))
 			}
 		}
 	}
 	for _, s := range theirs.services {
 		for _, m := range mine {
 			if s.overlaps(m) {
-				problems = append(problems, fmt.Sprintf("cluster %s's load-balancer addresses %s overlap this cluster's %s", name, s, m))
+				problems = append(problems, fmt.Sprintf("addresses %s overlap load-balancer addresses %s of cluster %s", m, s, name))
 			}
 		}
 	}

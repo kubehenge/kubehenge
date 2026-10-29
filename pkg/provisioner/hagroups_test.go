@@ -29,7 +29,7 @@ func TestSysAudit(t *testing.T) {
 		"not asking":            {storedCluster("team-a", "web", "ceph"), testSysAuditGroup, false, ""},
 		"switched off":          {storedCluster("team-a", "web", "ceph", variableOf(ccmVariable, `{"haGroups":false}`)), "", false, ""},
 		"asking":                {storedCluster("team-a", "web", "ceph", auditing), testSysAuditGroup, true, ""},
-		"asking where none may": {storedCluster("team-a", "web", "ceph", auditing), "", false, "lets no cluster hold Sys.Audit on /"},
+		"asking where none may": {storedCluster("team-a", "web", "ceph", auditing), "", false, "clusters may not hold Sys.Audit on /"},
 	} {
 		got, refused, err := sysAudit(tc.cluster, tc.group)
 		if err != nil {
@@ -51,7 +51,7 @@ func TestSysAuditRefusedAtAdmissionAndCreation(t *testing.T) {
 	web.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{{Class: "worker", Name: "md-0", Replicas: new(int32(1))}}
 	h, _ := hooksFor(t, web)
 	v := &ClusterValidator{Hooks: h}
-	if _, err := v.ValidateCreate(context.Background(), web); err == nil || !strings.Contains(err.Error(), "lets no cluster hold Sys.Audit on /") {
+	if _, err := v.ValidateCreate(context.Background(), web); err == nil || !strings.Contains(err.Error(), "clusters may not hold Sys.Audit on /") {
 		t.Errorf("the validator let in a cluster asking for Sys.Audit on / where none may hold it: %v", err)
 	}
 	created := networkCluster("192.168.1.1", 24)

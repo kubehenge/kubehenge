@@ -180,14 +180,14 @@ func validateClusterMesh(old, c *clusterv1.Cluster) field.ErrorList {
 	case err != nil:
 		errs = append(errs, field.Invalid(variables, clusterMeshVariable, err.Error()))
 	case mesh.Enabled && cni != cniCilium:
-		errs = append(errs, field.Forbidden(variables, "Cluster Mesh links clusters that run Cilium; this one runs "+cmp.Or(cni, "its distribution's own CNI")))
+		errs = append(errs, field.Forbidden(variables, "Cluster Mesh needs Cilium, and this cluster runs "+cmp.Or(cni, "its distribution's own CNI")))
 	case slices.Contains(mesh.Peers, c.Name):
 		errs = append(errs, field.Invalid(variables.Child("peers"), c.Name, "a cluster cannot list itself"))
 	}
 	if old != nil {
 		if was, ok := old.Annotations[CiliumClusterIDAnnotation]; ok && c.Annotations[CiliumClusterIDAnnotation] != was {
 			errs = append(errs, field.Forbidden(field.NewPath("metadata", "annotations").Key(CiliumClusterIDAnnotation),
-				"the Cilium cluster id is fixed once given: changing it would restart every workload and could clash with a peer's"))
+				"the Cilium cluster id cannot change once set"))
 		}
 	}
 	return errs
@@ -212,7 +212,7 @@ func validateGitOps(c *clusterv1.Cluster) field.ErrorList {
 		return nil
 	}
 	if g.UI {
-		return field.ErrorList{field.Forbidden(path.Child("ui"), "Flux's web interface signs in through the cluster's first OIDC provider, and the cluster has none")}
+		return field.ErrorList{field.Forbidden(path.Child("ui"), "Flux's web interface needs an OIDC provider. Add one to the cluster")}
 	}
-	return field.ErrorList{field.Forbidden(path.Child("admins"), "Argo CD's administrators sign in through the cluster's first OIDC provider, and the cluster has none")}
+	return field.ErrorList{field.Forbidden(path.Child("admins"), "Argo CD administrators need an OIDC provider. Add one to the cluster")}
 }

@@ -55,8 +55,8 @@ func TestCheckTalosHoldsTheReleaseToTalosRules(t *testing.T) {
 		{"a Kubernetes the release does not run", nil, with("v1.14.4", "v1.20.0"), "does not run"},
 		{"no release", nil, settledCluster("web", "v1.36.5", nil), ""},
 		{"the next minor, on a Kubernetes both run", with("v1.13.5", both), with("v1.14.4", both), ""},
-		{"two minors at once", with("v1.12.6", templates.TalosDefaultKubernetes), with("v1.14.4", templates.TalosDefaultKubernetes), "one minor version at a time"},
-		{"back", with("v1.14.4", both), with("v1.13.5", both), "cannot go back"},
+		{"two minors at once", with("v1.12.6", templates.TalosDefaultKubernetes), with("v1.14.4", templates.TalosDefaultKubernetes), "to the newest 1.13 release first"},
+		{"back", with("v1.14.4", both), with("v1.13.5", both), "cannot downgrade"},
 		{"the same release, the Kubernetes changed", with("v1.14.4", both), with("v1.14.4", templates.TalosDefaultKubernetes), ""},
 	} {
 		if tc.name == "no release" {

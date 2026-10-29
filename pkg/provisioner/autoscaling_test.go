@@ -58,17 +58,17 @@ func TestValidateAutoscaling(t *testing.T) {
 		{"fixed", clusterv1.MachineDeploymentTopology{Name: "md-0", Replicas: new(int32(2))}, ""},
 		{"from none", autoscaledPoolOf("0", "2"), ""},
 		{"at the most", autoscaledPoolOf("100", "100"), ""},
-		{"only a least", clusterv1.MachineDeploymentTopology{Name: "md-0", Metadata: clusterv1.ObjectMeta{Annotations: map[string]string{AutoscalerMinAnnotation: "1"}}}, "sets both"},
+		{"only a least", clusterv1.MachineDeploymentTopology{Name: "md-0", Metadata: clusterv1.ObjectMeta{Annotations: map[string]string{AutoscalerMinAnnotation: "1"}}}, "set both"},
 		{"not numbers", autoscaledPoolOf("one", "2"), "whole numbers"},
-		{"least above most", autoscaledPoolOf("3", "2"), "never below its least"},
-		{"most of none", autoscaledPoolOf("0", "0"), "from 1 to 100"},
-		{"too many", autoscaledPoolOf("1", "101"), "from 1 to 100"},
+		{"least above most", autoscaledPoolOf("3", "2"), "not below the minimum"},
+		{"most of none", autoscaledPoolOf("0", "0"), "maximum 1 to 100"},
+		{"too many", autoscaledPoolOf("1", "101"), "maximum 1 to 100"},
 		{"below none", autoscaledPoolOf("-1", "2"), "0 or more"},
 		{"with replicas", func() clusterv1.MachineDeploymentTopology {
 			p := autoscaledPoolOf("1", "2")
 			p.Replicas = new(int32(1))
 			return p
-		}(), "leaves its number of workers to the cluster autoscaler"},
+		}(), "leave replicas unset on an autoscaled pool"},
 	} {
 		c := cluster()
 		c.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{tc.pool}
@@ -108,7 +108,7 @@ func TestAutoscaledPoolsNeedAddressesAtTheirMost(t *testing.T) {
 		t.Errorf("ten addresses for ten machines: %v", err)
 	}
 	err := checkNodeAddresses(nil, autoscaledOn(`["192.168.1.10-192.168.1.19"]`, "5"))
-	if err == nil || !strings.Contains(err.Error(), "give 10, and the cluster may run 11 machines at once") {
+	if err == nil || !strings.Contains(err.Error(), "may run 11 machines at once but has 10 node addresses") {
 		t.Errorf("ten addresses for eleven machines: %v", err)
 	}
 	// Pools of fixed size need the same room: a rollout waits for ever for an address otherwise.
@@ -122,7 +122,7 @@ func TestAutoscaledPoolsNeedAddressesAtTheirMost(t *testing.T) {
 		t.Errorf("six addresses for three control planes, two workers and a rollout: %v", err)
 	}
 	err = checkNodeAddresses(nil, fixed(`["192.168.1.10-192.168.1.14"]`))
-	if err == nil || !strings.Contains(err.Error(), "give 5, and the cluster may run 6 machines at once") {
+	if err == nil || !strings.Contains(err.Error(), "may run 6 machines at once but has 5 node addresses") {
 		t.Errorf("five addresses for six machines in fixed pools: %v", err)
 	}
 	short := autoscaledOn(`["192.168.1.10-192.168.1.15"]`, "5")
@@ -142,7 +142,7 @@ func TestAutoscaledPoolsCountTheirLeastForAddonsAndTheirMostForControlPlanes(t *
 	c := withAddons(sized(""), everyAddon)
 	c.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{autoscaledPoolOf("0", "3")}
 	err := checkAddonRoom(nil, c, class)
-	if err == nil || !strings.Contains(err.Error(), "may go down to no workers") {
+	if err == nil || !strings.Contains(err.Error(), "need a worker") {
 		t.Errorf("add-ons on a pool that may have no workers: %v", err)
 	}
 	c.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{autoscaledPoolOf("2", "3")}
@@ -207,7 +207,7 @@ func TestBeforeClusterCreateRefusesAutoscaledPoolsItCannotScale(t *testing.T) {
 	hooks, _ := hooksFor(t)
 	c := withAddresses(networkCluster("192.168.1.1", 24), `["192.168.1.10-192.168.1.20"]`)
 	c.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{autoscaledPoolOf("3", "2")}
-	if resp := callBeforeClusterCreate(hooks, c); !strings.Contains(resp.Message, "never below its least") {
+	if resp := callBeforeClusterCreate(hooks, c); !strings.Contains(resp.Message, "not below the minimum") {
 		t.Errorf("least above most: %+v", resp)
 	}
 	c.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{autoscaledPoolOf("1", "20")}

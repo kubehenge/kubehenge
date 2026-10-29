@@ -89,10 +89,10 @@ func TestKubeadmVersionsAreThoseWithATemplate(t *testing.T) {
 		t.Fatalf("Leap's versions = %+v", got)
 	}
 	none := "{}"
-	if got := kubeadmVersions(&none); len(got.Versions) != 0 || !strings.Contains(got.Error, "Administration page") {
+	if got := kubeadmVersions(&none); len(got.Versions) != 0 || !strings.Contains(got.Error, "builds it in Administration") {
 		t.Fatalf("without templates = %+v", got)
 	}
-	if got := kubeadmVersions(nil); len(got.Versions) != 0 || !strings.Contains(got.Error, "not looked at the templates yet") {
+	if got := kubeadmVersions(nil); len(got.Versions) != 0 || !strings.Contains(got.Error, "templates not checked yet") {
 		t.Fatalf("before the controller looked = %+v", got)
 	}
 }

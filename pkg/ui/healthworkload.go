@@ -24,7 +24,7 @@ import (
 )
 
 // notSetUp is why a cluster whose health identity is not there yet shows nothing from inside.
-const notSetUp = "Kubehenge's controller has not set up its read-only access to this cluster yet."
+const notSetUp = "Read access to this cluster is not set up yet."
 
 // healthWorkload reaches a cluster as one of its health identities, or says why it cannot.
 func (s *Server) healthWorkload(ctx context.Context, kube client.Client, c *clusterv1.Cluster, id provisioner.Identity) (*Workload, string, error) {
@@ -35,8 +35,7 @@ func (s *Server) healthWorkload(ctx context.Context, kube client.Client, c *clus
 	case ranOut.IsZero():
 		return nil, notSetUp, nil
 	}
-	return nil, fmt.Sprintf("Kubehenge's access to the cluster ran out at %s UTC: its controller has not reached the cluster to renew it since.",
-		ranOut.UTC().Format(time.DateTime)), nil
+	return nil, fmt.Sprintf("Access to the cluster expired at %s UTC.", ranOut.UTC().Format(time.DateTime)), nil
 }
 
 // workloadRead is what the health identity read inside a cluster.
@@ -67,7 +66,7 @@ func (wl *workloadRead) why() string {
 	case wl.skipped != "":
 		return wl.skipped
 	case wl.connectErr != nil:
-		return "Kubehenge could not reach the cluster: " + problem(wl.connectErr)
+		return "The cluster could not be reached: " + problem(wl.connectErr)
 	case wl.nodesErr != nil:
 		return "The cluster's API server did not answer: " + problem(wl.nodesErr)
 	default:
@@ -80,7 +79,7 @@ func (wl *workloadRead) why() string {
 // the interface reads no Secret, so it has no way in.
 func (s *Server) readWorkload(ctx context.Context, kube client.Client, c *clusterv1.Cluster, managed managedNamespaces) workloadRead {
 	if !managed.has(c.Namespace) {
-		return workloadRead{skipped: "Kubehenge reads inside the clusters of the " + namespacesPhrase(managed) + " only; this one is managed from elsewhere."}
+		return workloadRead{skipped: "Nodes and pods show only for clusters in " + namespacesPhrase(managed) + "."}
 	}
 	if !meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition) {
 		return workloadRead{skipped: "The cluster's API server is not up yet."}
@@ -191,7 +190,7 @@ func podsSection(wl *workloadRead, now time.Time, a *attention) section[podView]
 			continue
 		}
 		if listed == podsNeedingAttention {
-			a.add(v.Severity, sectionPods, "More pods not well", "", time.Time{})
+			a.add(v.Severity, sectionPods, "More pods with problems", "", time.Time{})
 			break
 		}
 		what := "Pod " + v.Namespace + "/" + v.Name + ": " + v.Reason
@@ -251,7 +250,7 @@ func containerProblem(cs *corev1.ContainerStatus, v *podView, now time.Time) boo
 			v.Since = last.FinishedAt.Time
 			stopped := fmt.Sprintf("It last stopped with exit code %d (%s).", last.ExitCode, last.Reason)
 			if last.Reason == oomKilled {
-				stopped = "It last stopped for running out of memory (OOMKilled)."
+				stopped = "It last ran out of memory (OOMKilled)."
 			}
 			v.Message = strings.TrimSpace(stopped + " " + w.Message)
 		}
@@ -260,7 +259,7 @@ func containerProblem(cs *corev1.ContainerStatus, v *podView, now time.Time) boo
 	for _, t := range []*corev1.ContainerStateTerminated{cs.State.Terminated, last} {
 		if t != nil && t.Reason == oomKilled && now.Sub(t.FinishedAt.Time) < eventWindow {
 			v.Severity, v.Reason, v.Since = severityWarning, oomKilled, t.FinishedAt.Time
-			v.Message = "Container " + cs.Name + " ran out of memory and was stopped."
+			v.Message = "Container " + cs.Name + " ran out of memory."
 			return true
 		}
 	}
@@ -300,7 +299,7 @@ func phaseProblem(p *corev1.Pod, statuses []corev1.ContainerStatus, v *podView, 
 		v.Message = cmp.Or(ready.Message, "Its containers are not ready.")
 		return true
 	case corev1.PodUnknown:
-		v.Severity, v.Reason, v.Message = severityWarning, "Unknown", "Its node does not report on it."
+		v.Severity, v.Reason, v.Message = severityWarning, "Unknown", "Its node does not report."
 		return true
 	case corev1.PodSucceeded:
 		return false
@@ -395,7 +394,7 @@ func (s *Server) servePodLogs(ctx context.Context, w http.ResponseWriter, r *htt
 	statuses := slices.Concat(pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses)
 	i := slices.IndexFunc(statuses, func(cs corev1.ContainerStatus) bool { return cs.Name == container })
 	if i < 0 {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("pod %s/%s has no container %q that has run", ns, name, container))
+		writeError(w, http.StatusNotFound, fmt.Sprintf("container %q of pod %s/%s has not run yet", container, ns, name))
 		return
 	}
 	cs := statuses[i]
@@ -408,13 +407,13 @@ func (s *Server) servePodLogs(ctx context.Context, w http.ResponseWriter, r *htt
 		Container: container, TailLines: new(int64(podLogLines)), LimitBytes: new(int64(podLogBytes)),
 	}).Stream(ctx)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "the cluster did not hand out the log: "+problem(err))
+		writeError(w, http.StatusBadGateway, "the log could not be read: "+problem(err))
 		return
 	}
 	defer func() { _ = stream.Close() }()
 	lines, err := readLines(io.LimitReader(stream, podLogBytes))
 	if err != nil && !errors.Is(err, context.Canceled) {
-		writeError(w, http.StatusBadGateway, "reading the log: "+problem(err))
+		writeError(w, http.StatusBadGateway, "the log could not be read: "+problem(err))
 		return
 	}
 	s.Log.Info("read pod logs", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "pod", ns+"/"+name, "container", container)

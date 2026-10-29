@@ -66,9 +66,9 @@ func TestVolumeSnapshotsRefusal(t *testing.T) {
 		"on node-local storage": {testVolumeSnapshots, storedCluster("team-a", "web", "local-zfs", snapshotting), class, ""},
 		"not asking":            {VolumeSnapshots{}, storedCluster("team-a", "web", "ceph"), class, ""},
 		"asking for nothing":    {VolumeSnapshots{}, storedCluster("team-a", "web", "ceph", variableOf(csiVariable, `{"volumeSnapshots":false}`)), class, ""},
-		"no root password":      {VolumeSnapshots{}, storedCluster("team-a", "web", "local-zfs", snapshotting), class, "stored no root@pam password"},
-		"shared storage":        {testVolumeSnapshots, storedCluster("team-a", "web", "ceph", snapshotting), class, "which storage ceph is not"},
-		"no storages published": {testVolumeSnapshots, storedCluster("team-a", "web", "local-zfs", snapshotting), &clusterv1.ClusterClass{}, "which storage local-zfs is not"},
+		"no root password":      {VolumeSnapshots{}, storedCluster("team-a", "web", "local-zfs", snapshotting), class, "need the root@pam password"},
+		"shared storage":        {testVolumeSnapshots, storedCluster("team-a", "web", "ceph", snapshotting), class, "not ceph"},
+		"no storages published": {testVolumeSnapshots, storedCluster("team-a", "web", "local-zfs", snapshotting), &clusterv1.ClusterClass{}, "not local-zfs"},
 	} {
 		got, err := tc.v.Refusal(tc.cluster, tc.class)
 		if err != nil {
@@ -89,7 +89,7 @@ func TestVolumeSnapshotsRefusedAtAdmissionAndCreation(t *testing.T) {
 	validator := &ClusterValidator{Hooks: h}
 
 	shared := storedCluster("team-a", "web", "ceph", snapshotting)
-	if _, err := validator.ValidateCreate(context.Background(), shared); err == nil || !strings.Contains(err.Error(), "which storage ceph is not") {
+	if _, err := validator.ValidateCreate(context.Background(), shared); err == nil || !strings.Contains(err.Error(), "not ceph") {
 		t.Errorf("the validator let volume snapshots onto shared storage: %v", err)
 	}
 	local := storedCluster("team-a", "web", "local-zfs", snapshotting)

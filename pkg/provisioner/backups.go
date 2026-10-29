@@ -143,7 +143,7 @@ func parseSchedule(what, schedule, timeZone string) (cron.Schedule, error) { //n
 		return nil, fmt.Errorf("%s: time zone %q is not an IANA time zone", what, timeZone)
 	}
 	if strings.HasPrefix(schedule, "TZ=") || strings.HasPrefix(schedule, "CRON_TZ=") {
-		return nil, fmt.Errorf("%s: the schedule names its time zone in timeZone, not itself", what)
+		return nil, fmt.Errorf("%s: set the time zone in timeZone, not in the schedule", what)
 	}
 	s, err := cron.ParseStandard(zonedCron(schedule, timeZone))
 	if err != nil {
@@ -225,9 +225,9 @@ func targetOffered(class *clusterv1.ClusterClass, name, what string) error {
 	}
 	if !slices.ContainsFunc(targets, func(t BackupTarget) bool { return t.Name == name }) {
 		if len(targets) == 0 {
-			return fmt.Errorf("%s need a target, and an administrator has set none: %q is not one", what, name)
+			return fmt.Errorf("%s: no backup target is set up. Ask an administrator to add one", what)
 		}
-		return fmt.Errorf("backup target %q is not one an administrator set", name)
+		return fmt.Errorf("backup target %q does not exist", name)
 	}
 	return nil
 }
@@ -241,7 +241,7 @@ func (b *Backups) valid() error {
 		return fmt.Errorf("backups: volumes is all or annotated, not %q", b.Volumes)
 	}
 	if slices.Contains([]string{veleroRepoSecret, veleroSSECSecret, veleroCredentialsSecret}, b.ExistingSecret) {
-		return fmt.Errorf("backups: Kubehenge writes Secret %s itself; existingSecret names another", b.ExistingSecret)
+		return fmt.Errorf("backups: existingSecret cannot be %s. Name a Secret of your own", b.ExistingSecret)
 	}
 	return nil
 }

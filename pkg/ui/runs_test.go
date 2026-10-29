@@ -91,7 +91,7 @@ func TestRunsListWhatRunsAndWhatFailedLately(t *testing.T) {
 	}) {
 		t.Errorf("restore steps %q", got)
 	}
-	if r := admin[1]; r.Error != failed.Error || r.What != "Upgrade the appliance to 0.1.1" {
+	if r := admin[1]; r.Error != failed.Error || r.What != "Upgrade appliance to 0.1.1" {
 		t.Errorf("upgrade %+v", r)
 	}
 	if r := admin[2]; r.Error != "the target refused the upload" {
@@ -121,7 +121,7 @@ func TestVeleroStates(t *testing.T) {
 		{"New", "", 0, runRunning, ""},
 		{"Completed", "", 0, runSucceeded, ""},
 		{"Failed", "the location is unavailable", 0, runFailed, "the location is unavailable"},
-		{"PartiallyFailed", "", 3, runFailed, "3 errors; Velero's log of it has them"},
+		{"PartiallyFailed", "", 3, runFailed, "3 errors, see Velero's log"},
 		{"FailedValidation", "", 0, runFailed, "FailedValidation"},
 		{"Deleting", "", 0, "", ""},
 	} {

@@ -236,9 +236,9 @@ func TestSetupChecksRootPassword(t *testing.T) {
 		// The passphrase is too short, so that a request past the checks ends there, before a run.
 		return a.do("POST", "/api/setup", `{"settings":`+settings+`,"passphrase":"short"`+extra+`}`)
 	}
-	for extra, want := range map[string]string{ //nolint:gosec // the fake Proxmox VE's passwords
+	for extra, want := range map[string]string{
 		``:                        appliance.ErrNoRootPassword.Error(),
-		`,"rootPassword":"wrong"`: "Proxmox VE refused root@pam's password",
+		`,"rootPassword":"wrong"`: "wrong root@pam password",
 		`,"rootPassword":"r00t"`:  "passphrase",
 	} {
 		rec := setUp(extra)

@@ -141,7 +141,7 @@ func (s *Server) backupCovers(ctx context.Context, u user) (bool, error) {
 func (s *Server) credential(w http.ResponseWriter, r *http.Request, u user) {
 	a := s.Appliance
 	if a == nil {
-		writeError(w, http.StatusNotFound, "this interface was given its management cluster")
+		writeError(w, http.StatusNotFound, "this interface does not manage its management cluster")
 		return
 	}
 	var req struct {
@@ -156,7 +156,7 @@ func (s *Server) credential(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	key := "passphrase:" + u.ticket.Username
 	if !s.limiter.allow(key) {
-		writeError(w, http.StatusTooManyRequests, "too many wrong passphrases; try again later")
+		writeError(w, http.StatusTooManyRequests, "too many wrong passphrases. Try again later")
 		return
 	}
 	data, err := a.Credential(r.Context(), req.Passphrase, req.Name)
@@ -188,7 +188,7 @@ const templatePool = "kubehenge-templates"
 func (s *Server) remove(w http.ResponseWriter, r *http.Request, u user) {
 	a := s.Appliance
 	if a == nil {
-		writeError(w, http.StatusNotFound, "this interface was given its management cluster")
+		writeError(w, http.StatusNotFound, "this interface does not manage its management cluster")
 		return
 	}
 	var req struct {
@@ -217,7 +217,7 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request, u user) {
 			return
 		}
 		if n := len(list.Items); n > 0 {
-			writeError(w, http.StatusConflict, fmt.Sprintf("delete the %d clusters first; their Proxmox VE objects are cleaned up by the management cluster", n))
+			writeError(w, http.StatusConflict, fmt.Sprintf("delete the %d clusters first", n))
 			return
 		}
 	}
@@ -242,7 +242,7 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request, u user) {
 func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 	a := s.Appliance
 	if a == nil {
-		writeError(w, http.StatusNotFound, "this interface was given its management cluster; it sets none up")
+		writeError(w, http.StatusNotFound, "this interface does not manage its management cluster")
 		return
 	}
 	var req struct {
@@ -296,21 +296,21 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 func (s *Server) checkRootPassword(w http.ResponseWriter, r *http.Request, u user, password string) bool {
 	key := "root-password:" + u.ticket.Username
 	if !s.limiter.allow(key) {
-		writeError(w, http.StatusTooManyRequests, "too many wrong root@pam passwords; try again later")
+		writeError(w, http.StatusTooManyRequests, "too many wrong root@pam passwords. Try again later")
 		return false
 	}
 	_, challenge, err := s.Accounts.SignIn(r.Context(), "root@pam", password)
 	switch {
 	case errors.Is(err, pve.ErrAuthentication):
 		s.limiter.fail(key)
-		writeError(w, http.StatusUnprocessableEntity, "Volume snapshots: Proxmox VE refused root@pam's password")
+		writeError(w, http.StatusUnprocessableEntity, "volume snapshots: wrong root@pam password")
 		return false
 	case err != nil:
 		s.proxmoxError(w, err)
 		return false
 	case challenge != nil:
 		writeError(w, http.StatusUnprocessableEntity,
-			"Volume snapshots: root@pam has a second factor, and the CSI plugin signs in with the password alone; remove root@pam's second factor in Proxmox VE first")
+			"volume snapshots: root@pam has a second factor. Remove it in Proxmox VE first")
 		return false
 	}
 	s.Log.Warn("root@pam's password given for volume snapshots", "user", u.ticket.Username)

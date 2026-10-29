@@ -143,6 +143,6 @@ func (h *Hooks) checkNodeOS(ctx context.Context, c *clusterv1.Cluster) error {
 	for i, n := range online {
 		names[i] = n.Name
 	}
-	return fmt.Errorf("%s %s needs a CPU of the %s level, and none of the Proxmox VE nodes the cluster may use (%s) has one: "+
-		"choose another node OS, or nodes with a newer CPU", f.Title(), r.Name, templates.CPUTypeOf(r), strings.Join(names, ", "))
+	return fmt.Errorf("%s %s needs CPU type %s, which no allowed node (%s) offers. Choose another node OS",
+		f.Title(), r.Name, templates.CPUTypeOf(r), strings.Join(names, ", "))
 }

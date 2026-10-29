@@ -71,11 +71,11 @@ func (d DatastoreAllocate) Refusal(cluster *clusterv1.Cluster, class *clusterv1.
 	if csi.DatastoreAllocate {
 		switch {
 		case d.Role == "":
-			return "Kubehenge's administrator lets no cluster hold Datastore.Allocate on its storage, which the CSI plugin's newest release needs", nil
+			return "clusters may not hold Datastore.Allocate. Ask an administrator to allow it", nil
 		case slices.Contains(d.Management, storage):
-			return fmt.Sprintf("the management cluster uses storage %s, so no cluster may hold Datastore.Allocate on it", storage), nil
+			return fmt.Sprintf("Datastore.Allocate is not allowed on storage %s, which the management cluster uses", storage), nil
 		case class != nil && slices.Contains(splitList(class.Annotations[TemplateStoragesAnnotation]), storage):
-			return fmt.Sprintf("VM templates have disks on storage %s, so no cluster may hold Datastore.Allocate on it", storage), nil
+			return fmt.Sprintf("Datastore.Allocate is not allowed on storage %s, which holds VM templates", storage), nil
 		}
 	}
 	for i := range clusters {
@@ -87,10 +87,10 @@ func (d DatastoreAllocate) Refusal(cluster *clusterv1.Cluster, class *clusterv1.
 			continue
 		}
 		if csi.DatastoreAllocate {
-			return fmt.Sprintf("cluster %s/%s uses storage %s too, so this cluster may not hold Datastore.Allocate on it", other.Namespace, other.Name, storage), nil
+			return fmt.Sprintf("Datastore.Allocate is not allowed on storage %s, which cluster %s/%s uses too", storage, other.Namespace, other.Name), nil
 		}
 		if theirs, err := csiOf(other); err == nil && theirs.DatastoreAllocate {
-			return fmt.Sprintf("cluster %s/%s holds Datastore.Allocate on storage %s, which no other cluster may use", other.Namespace, other.Name, storage), nil
+			return fmt.Sprintf("cluster %s/%s holds Datastore.Allocate on storage %s. Choose another storage", other.Namespace, other.Name, storage), nil
 		}
 	}
 	return "", nil

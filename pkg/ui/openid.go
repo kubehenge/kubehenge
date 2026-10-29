@@ -73,7 +73,7 @@ func (s *Server) openIDCallback(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie(openIDCookie)
 	http.SetCookie(w, &http.Cookie{Name: openIDCookie, Value: "", Path: "/", MaxAge: -1, Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 	if err != nil || state == "" || code == "" || subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(stateDigest(state))) != 1 {
-		openIDFailed(w, r, "this sign-in was not started here; start again")
+		openIDFailed(w, r, "this sign-in was started elsewhere. Sign in again")
 		return
 	}
 	if q.Get("error") != "" {
@@ -82,14 +82,14 @@ func (s *Server) openIDCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	addr := "address:" + clientAddress(r)
 	if !s.limiter.allow(addr) {
-		openIDFailed(w, r, "too many failed sign-ins; try again later")
+		openIDFailed(w, r, "too many failed sign-ins. Try again later")
 		return
 	}
 	ticket, err := s.Accounts.OpenIDLogin(r.Context(), code, state, s.redirectURL(r))
 	if err != nil {
 		s.limiter.fail(addr)
 		s.Log.Info("openid sign-in refused", "address", clientAddress(r), "error", err)
-		openIDFailed(w, r, "the sign-in through the identity provider failed")
+		openIDFailed(w, r, "sign-in through the identity provider failed")
 		return
 	}
 	s.sessions.end(w, r)

@@ -40,10 +40,10 @@ func TestDatastoreAllocateRefusal(t *testing.T) {
 	}{
 		"alone on its storage":         {testDatastoreAllocate, web, []clusterv1.Cluster{*web}, ""},
 		"not asking":                   {testDatastoreAllocate, storedCluster("team-a", "web", "local-lvm"), nil, ""},
-		"no role":                      {DatastoreAllocate{}, web, nil, "lets no cluster hold Datastore.Allocate"},
-		"the management cluster's":     {testDatastoreAllocate, storedCluster("team-a", "web", "local", allocating), nil, "the management cluster uses storage local"},
-		"the templates'":               {testDatastoreAllocate, storedCluster("team-a", "web", "ssd", allocating), nil, "VM templates have disks on storage ssd"},
-		"shared with another cluster":  {testDatastoreAllocate, web, []clusterv1.Cluster{*storedCluster("team-b", "api", "ceph")}, "cluster team-b/api uses storage ceph too"},
+		"no role":                      {DatastoreAllocate{}, web, nil, "clusters may not hold Datastore.Allocate"},
+		"the management cluster's":     {testDatastoreAllocate, storedCluster("team-a", "web", "local", allocating), nil, "storage local, which the management cluster uses"},
+		"the templates'":               {testDatastoreAllocate, storedCluster("team-a", "web", "ssd", allocating), nil, "storage ssd, which holds VM templates"},
+		"shared with another cluster":  {testDatastoreAllocate, web, []clusterv1.Cluster{*storedCluster("team-b", "api", "ceph")}, "storage ceph, which cluster team-b/api uses too"},
 		"another cluster on its own":   {testDatastoreAllocate, web, []clusterv1.Cluster{*storedCluster("team-b", "api", "nvme2")}, ""},
 		"onto a storage another holds": {testDatastoreAllocate, storedCluster("team-b", "api", "ceph"), []clusterv1.Cluster{*web}, "cluster team-a/web holds Datastore.Allocate on storage ceph"},
 		"beside another class's":       {testDatastoreAllocate, web, []clusterv1.Cluster{*foreign}, ""},
@@ -70,7 +70,7 @@ func TestDatastoreAllocateRefusedAtAdmissionAndCreation(t *testing.T) {
 	}
 	created := networkCluster("192.168.1.1", 24)
 	created.Spec.Topology.Variables = append(created.Spec.Topology.Variables, variableOf("storage", `"local"`), variableOf(csiVariable, `{"datastoreAllocate":true}`))
-	if resp := callBeforeClusterCreate(h, created); !strings.Contains(resp.Message, "the management cluster uses storage local") {
+	if resp := callBeforeClusterCreate(h, created); !strings.Contains(resp.Message, "storage local, which the management cluster uses") {
 		t.Errorf("BeforeClusterCreate let Datastore.Allocate onto the management cluster's storage: %s %q", resp.Status, resp.Message)
 	}
 
@@ -84,7 +84,7 @@ func TestDatastoreAllocateRefusedAtAdmissionAndCreation(t *testing.T) {
 		t.Errorf("an unrelated change was refused: %v", err)
 	}
 	switched := storedCluster("team-b", "api", "ceph", allocating)
-	if _, err := (&ClusterValidator{Hooks: h2}).ValidateUpdate(context.Background(), other, switched); err == nil || !strings.Contains(err.Error(), "uses storage ceph too") {
+	if _, err := (&ClusterValidator{Hooks: h2}).ValidateUpdate(context.Background(), other, switched); err == nil || !strings.Contains(err.Error(), "which cluster team-a/web uses too") {
 		t.Errorf("switching it on beside another cluster was let through: %v", err)
 	}
 }

@@ -81,12 +81,12 @@ func (s *Server) signIn(w http.ResponseWriter, r *http.Request) {
 		username += "@" + req.Realm
 	}
 	if username == "" || req.Password == "" {
-		writeError(w, http.StatusBadRequest, "user name and password are required")
+		writeError(w, http.StatusBadRequest, "enter a user name and password")
 		return
 	}
 	keys := []string{"user:" + strings.ToLower(username), "address:" + clientAddress(r)}
 	if !s.limiter.allow(keys...) {
-		writeError(w, http.StatusTooManyRequests, "too many failed sign-ins; try again later")
+		writeError(w, http.StatusTooManyRequests, "too many failed sign-ins. Try again later")
 		return
 	}
 	s.sessions.end(w, r)
@@ -108,8 +108,7 @@ func (s *Server) signIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !challenge.TOTP && !challenge.Yubico && len(challenge.Recovery) == 0 {
-		writeError(w, http.StatusUnauthorized, "this account's second factor is a security key, which answers only on Proxmox VE's own page; "+
-			"sign in with a TOTP code or recovery key, or through an OpenID realm")
+		writeError(w, http.StatusUnauthorized, "security keys work only in Proxmox VE. Use a TOTP code, recovery key or OpenID realm")
 		return
 	}
 	sess := s.sessions.start(w, nil, challenge)
@@ -150,7 +149,7 @@ func (s *Server) secondFactor(w http.ResponseWriter, r *http.Request) {
 	}
 	keys := []string{"user:" + strings.ToLower(challenge.Username), "address:" + clientAddress(r)}
 	if !s.limiter.allow(keys...) {
-		writeError(w, http.StatusTooManyRequests, "too many failed sign-ins; try again later")
+		writeError(w, http.StatusTooManyRequests, "too many failed sign-ins. Try again later")
 		return
 	}
 	ticket, err := s.Accounts.Answer(r.Context(), challenge, req.Kind, strings.TrimSpace(req.Code))
@@ -158,7 +157,7 @@ func (s *Server) secondFactor(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, pve.ErrAuthentication) {
 			s.limiter.fail(keys...)
 			s.Log.Info("second factor refused", "user", challenge.Username, "address", clientAddress(r))
-			writeError(w, http.StatusUnauthorized, "the code was not accepted")
+			writeError(w, http.StatusUnauthorized, "wrong code. Try again")
 			return
 		}
 		s.proxmoxError(w, err)

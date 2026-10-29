@@ -130,7 +130,7 @@ func TestCreateKeepsCiliumClustersApart(t *testing.T) {
 		`"storage":"local-lvm"`, `"storage":"local-lvm","cni":"cilium"`, 1)
 	rec := b.do("POST", "/api/clusters", long)
 	expect(t, rec, http.StatusUnprocessableEntity)
-	if !strings.Contains(rec.Body.String(), "at most 32 characters for a cluster that runs Cilium") {
+	if !strings.Contains(rec.Body.String(), "at most 32 characters with Cilium") {
 		t.Errorf("a long name for a Cilium cluster: %s", rec.Body)
 	}
 }

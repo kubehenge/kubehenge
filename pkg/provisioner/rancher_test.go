@@ -102,7 +102,7 @@ func TestRancherNeedsFourVCPUsOnEveryNode(t *testing.T) {
 		{"four on the control planes", func(*clusterv1.Cluster) {}, ""},
 		{"the class's default two", func(c *clusterv1.Cluster) { setCores(c, "controlPlaneMachine", "") }, "control planes have 2"},
 		{"cores left to the default", func(c *clusterv1.Cluster) { setCores(c, "controlPlaneMachine", `{"memoryMiB":8192}`) }, "control planes have 2"},
-		{"workers on the default", func(c *clusterv1.Cluster) { workers(c, 2, "") }, "workers md-0 have 2"},
+		{"workers on the default", func(c *clusterv1.Cluster) { workers(c, 2, "") }, "pool md-0 has 2"},
 		{"no workers running", func(c *clusterv1.Cluster) { workers(c, 0, "") }, ""},
 		{"workers made large", func(c *clusterv1.Cluster) { workers(c, 2, `{"cores":8}`) }, ""},
 		{"control plane override", func(c *clusterv1.Cluster) {

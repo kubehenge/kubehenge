@@ -692,7 +692,7 @@ func TestCreateNeedsTheTemplate(t *testing.T) {
 	}
 	rec := b.do("POST", "/api/clusters", createBody)
 	expect(t, rec, http.StatusConflict)
-	if !strings.Contains(rec.Body.String(), "Administration page") {
+	if !strings.Contains(rec.Body.String(), "builds it in Administration") {
 		t.Fatalf("refusal = %s", rec.Body)
 	}
 	onRocky := strings.Replace(createBody, `"storage":`, `"nodeOS":{"family":"rocky","release":"10"},"storage":`, 1)
@@ -720,7 +720,7 @@ func TestMissingKubeadmTemplate(t *testing.T) {
 		{"another node OS's only", "", "no kubeadm VM template on AlmaLinux 10 yet", class(map[string]string{versions: `{"rocky-10":["v1.37.1"]}`})},
 		{"the version's", "v1.36.5", "", class(map[string]string{versions: `{"almalinux-10":["v1.37.1","v1.36.5"]}`})},
 		{
-			"another version's", "v1.35.2", "no kubeadm VM template of v1.35.2 on AlmaLinux 10",
+			"another version's", "v1.35.2", "no kubeadm v1.35.2 VM template on AlmaLinux 10",
 			class(map[string]string{versions: `{"almalinux-10":["v1.37.1","v1.36.5"]}`}),
 		},
 		{"the class only", "", "", class(map[string]string{versions: `{"almalinux-10":["v1.37.1"]}`})},
@@ -887,9 +887,9 @@ func TestDecodeProblemsNameNoGoTypes(t *testing.T) {
 	t.Parallel()
 	var req createRequest
 	for body, want := range map[string]string{
-		`{"workerReplicas":1.5}`: "workerReplicas: the wrong kind of value (number 1.5)",
-		`{"name":`:               "the body is no valid JSON",
-		`[]`:                     "the body: the wrong kind of value (array)",
+		`{"workerReplicas":1.5}`: "workerReplicas: wrong type of value (number 1.5)",
+		`{"name":`:               "the body is not valid JSON",
+		`[]`:                     "the body: wrong type of value (array)",
 		`{"labels":"x"}`:         `unknown field "labels"`,
 	} {
 		dec := json.NewDecoder(strings.NewReader(body))
@@ -924,7 +924,7 @@ func TestCreateKeepsToWhatClustersMayUse(t *testing.T) {
 	b.signIn("admin@pve")
 	rec := b.do("POST", "/api/clusters", strings.Replace(createBody, `"local-lvm"`, `"tank"`, 1))
 	expect(t, rec, http.StatusUnprocessableEntity)
-	if !strings.Contains(rec.Body.String(), "clusters may use local-lvm") {
+	if !strings.Contains(rec.Body.String(), "storage: choose local-lvm") {
 		t.Fatalf("refusal = %s", rec.Body)
 	}
 	expect(t, b.do("POST", "/api/clusters", strings.Replace(createBody, `"vmbr0"`, `"vmbr1"`, 1)), http.StatusUnprocessableEntity)

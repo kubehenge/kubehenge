@@ -47,18 +47,18 @@ func TestControlPlanesFollowTheSizingGuide(t *testing.T) {
 		want string
 	}{
 		{"a few workers on the class's default", sized("", new(int32(3))), ""},
-		{"no workers on the default", sized(""), "without workers run its workloads too and need at least 4 vCPUs and 8192 MiB of memory, and have 2 vCPUs and 4096 MiB"},
+		{"no workers on the default", sized(""), "without workers, control planes need 4 vCPUs and 8192 MiB each, not 2 vCPUs and 4096 MiB"},
 		{"pools scaled to none", sized("", new(int32(0)), new(int32(0))), "without workers"},
 		{"no workers on a control plane and a worker's least", sized(`{"cores":4,"memoryMiB":8192}`), ""},
-		{"no workers, memory short", sized(`{"cores":4,"memoryMiB":6144}`), "have 4 vCPUs and 6144 MiB"},
-		{"226 workers on the default", sized("", pools(226)...), "with 226 workers need at least 4 vCPUs and 8192 MiB of memory, and have 2 vCPUs and 4096 MiB"},
+		{"no workers, memory short", sized(`{"cores":4,"memoryMiB":6144}`), "not 4 vCPUs and 6144 MiB"},
+		{"226 workers on the default", sized("", pools(226)...), "with 226 workers, control planes need 4 vCPUs and 8192 MiB each, not 2 vCPUs and 4096 MiB"},
 		{"226 workers across uneven pools", sized("", new(int32(100)), new(int32(26)), new(int32(100))), "with 226 workers"},
 		{"a pool without replicas starts with one", sized("", append(pools(225), nil)...), "with 226 workers"},
 		{"225 workers on the default", sized("", pools(225)...), ""},
 		{"control planes sized for their workers", sized(`{"cores":4,"memoryMiB":8192}`, pools(450)...), ""},
-		{"memory left to the default", sized(`{"cores":4}`, pools(300)...), "have 4 vCPUs and 4096 MiB"},
-		{"vCPUs short", sized(`{"cores":2,"memoryMiB":16384}`, pools(300)...), "have 2 vCPUs and 16384 MiB"},
-		{"past the guide's last step", sized(`{"cores":8,"memoryMiB":16384}`, pools(2000)...), "need at least 16 vCPUs and 32768 MiB"},
+		{"memory left to the default", sized(`{"cores":4}`, pools(300)...), "not 4 vCPUs and 4096 MiB"},
+		{"vCPUs short", sized(`{"cores":2,"memoryMiB":16384}`, pools(300)...), "not 2 vCPUs and 16384 MiB"},
+		{"past the guide's last step", sized(`{"cores":8,"memoryMiB":16384}`, pools(2000)...), "need 16 vCPUs and 32768 MiB"},
 	} {
 		created := callBeforeClusterCreate(h, tc.c)
 		switch {
@@ -78,7 +78,7 @@ func TestClusterValidatorHoldsControlPlanesToTheirWorkers(t *testing.T) {
 	few, many := sized("", new(int32(3))), sized("", pools(300)...)
 	larger := sized(`{"cores":4,"memoryMiB":6144}`, pools(300)...)
 	enough := sized(`{"cores":4,"memoryMiB":8192}`, pools(300)...)
-	if _, err := v.ValidateCreate(ctx, many); err == nil || !strings.Contains(err.Error(), "need at least 4 vCPUs") {
+	if _, err := v.ValidateCreate(ctx, many); err == nil || !strings.Contains(err.Error(), "need 4 vCPUs") {
 		t.Errorf("a new cluster of 300 workers on the default control planes: %v", err)
 	}
 	if _, err := v.ValidateUpdate(ctx, few, many); err == nil {

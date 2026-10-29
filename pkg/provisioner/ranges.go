@@ -58,12 +58,12 @@ func checkRanges(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) erro
 				return fmt.Errorf("%s range %q: %w", r.what, b, err)
 			}
 			if p.Overlaps(nodes) {
-				problems = append(problems, fmt.Sprintf("the %s range %s overlaps the nodes' network %s", r.what, p, nodes))
+				problems = append(problems, fmt.Sprintf("%s range %s overlaps the nodes' network %s", r.what, p, nodes))
 			}
 		}
 	}
 	if len(problems) > 0 {
-		return fmt.Errorf("%s; set spec.clusterNetwork to ranges the network does not use", strings.Join(problems, "; "))
+		return fmt.Errorf("%s. Set spec.clusterNetwork to other ranges", strings.Join(problems, ", "))
 	}
 	return nil
 }

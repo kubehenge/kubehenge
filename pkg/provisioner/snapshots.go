@@ -71,14 +71,14 @@ func (v VolumeSnapshots) Refusal(cluster *clusterv1.Cluster, class *clusterv1.Cl
 		return "", err
 	}
 	if v.RootSecret == "" {
-		return "Kubehenge's administrator has stored no root@pam password, which the CSI plugin's volume snapshots need", nil
+		return "volume snapshots need the root@pam password. Ask an administrator to store it", nil
 	}
 	storage, err := variable[string](cluster, "storage")
 	if err != nil {
 		return "", err
 	}
 	if class == nil || !slices.Contains(splitList(class.Annotations[SnapshotStoragesAnnotation]), storage) {
-		return fmt.Sprintf("the CSI plugin takes volume snapshots only on storage local to each node (ZFS, LVM, LVM-thin, directory or btrfs), which storage %s is not", storage), nil
+		return "volume snapshots need local storage (ZFS, LVM, LVM-thin, directory or btrfs), not " + storage, nil
 	}
 	return "", nil
 }
