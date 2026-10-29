@@ -20,6 +20,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubehenge/kubehenge/test/integration"
 )
 
 // interfaceAccount is the identity the interface acts with in the management cluster.
@@ -156,7 +158,7 @@ func TestIntegrationChartInterfaceNamespaces(t *testing.T) {
 		t.Helper()
 		bound, made := map[string]bool{}, map[string]bool{}
 		var listed []string
-		for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, append([]string{"testdata/integration-values.yaml"}, values...)...) {
+		for _, o := range integration.RenderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, append([]string{"testdata/integration-values.yaml"}, values...)...) {
 			switch {
 			case o.GetKind() == "RoleBinding" && o.GetName() == "kubehenge-interface":
 				bound[o.GetNamespace()] = true

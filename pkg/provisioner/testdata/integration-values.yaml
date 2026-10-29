@@ -7,7 +7,7 @@ providerNamespaces:
   kubehenge-k3s: [k3s-bootstrap-system, k3s-control-plane-system]
   kubehenge-talos: [talos-bootstrap-system, talos-control-plane-system]
 clusters:
-  storages: [local-lvm]
+  storages: [local-lvm, ceph]
   bridges: [vmbr0]
 proxmox:
   url: https://pve.example.org:8006

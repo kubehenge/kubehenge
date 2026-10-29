@@ -1,0 +1,6 @@
+---
+# A backup target the integration tier's clusters may name.
+backupTargets:
+  - name: store
+    endpoint: https://s3.example.org
+    bucket: kubehenge

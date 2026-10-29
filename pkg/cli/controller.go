@@ -756,7 +756,7 @@ func addHooks(extensions *server.Server, scheme *runtime.Scheme, hooks *provisio
 			return fmt.Errorf("hook %s: %w", handlers[i].Name, err)
 		}
 	}
-	extensions.Register("/validate-cluster", admission.WithValidator(scheme, &provisioner.ClusterValidator{Hooks: hooks}))
+	extensions.Register("/validate-cluster", admission.WithValidator(scheme, &provisioner.ClusterAdmission{Hooks: hooks}))
 	return nil
 }
 
