@@ -20,10 +20,11 @@
 #       the floors one line of the record crosses, as watch judges them
 #
 # The floors leave the machine room to stop the test, collect from the guests and upload the
-# artifacts, and lie well past what the tests take when they pass: the guests of the workload
-# clusters' tests outgrow the machine's 16 GiB of memory at their peaks, such as a rolling upgrade's
-# extra machine, and the swap takes the rest, at most 5 GiB of the guests' memory of its 11 GiB, so
-# that at least 5 GiB of memory and swap together stay free.
+# artifacts, and lie well past what the tests take when they pass: their guests fit the machine's
+# memory beside its own processes, but for the RKE2 test's control-plane replacements, whose third
+# 4 GiB machine the swap takes about 2 GiB of, so that most of the swap's 11 GiB stays free. A
+# record's swapped_in, the MiB read back from swap since the watch began, shows a test that leans on
+# swap where it should not.
 set -eu
 
 here=$(dirname "$0")
@@ -42,15 +43,16 @@ disk_floor=2048
 # few hundred MiB for the agent, the rest for the test's own tools.
 runner_memory=$((1024 * 1048576))
 
-oom_kills() {
-    awk '$1 == "oom_kill" { n = $2 } END { print n + 0 }' "${proc}/vmstat" 2> /dev/null || echo 0
+# counter <name>: the kernel's count of that event since boot, from vmstat.
+counter() {
+    awk -v name="$1" '$1 == name { n = $2 } END { print n + 0 }' "${proc}/vmstat" 2> /dev/null || echo 0
 }
 
-# sample <OOM kills before the watch> <path>...: one line of the record: the time, then each value as
-# name=value, in MiB and in percent of the last minute.
+# sample <OOM kills before the watch> <pages swapped in before it> <path>...: one line of the record:
+# the time, then each value as name=value, in MiB and in percent of the last minute.
 sample() {
-    kills_before=$1
-    shift
+    kills_before=$1 swapins_before=$2
+    shift 2
     now=$(date -u +%T)
     line="${now} $(awk '/^MemAvailable:/ { a = $2 } /^SwapFree:/ { s = $2 }
         END { printf "available=%d swap_free=%d", a / 1024, s / 1024 }' "${proc}/meminfo")"
@@ -60,7 +62,10 @@ sample() {
                 sub(/^avg60=/, "", $i); printf "%s%s_%s=%s", sep, kind, $1, $i; sep = " " } }' \
             "${proc}/pressure/${kind}")"
     done
-    line="${line} oom_kills=$(($(oom_kills) - kills_before))"
+    kills=$(counter oom_kill)
+    # Pages of 4 KiB, the size x86's kernel swaps.
+    swapins=$(counter pswpin)
+    line="${line} oom_kills=$((kills - kills_before)) swapped_in=$(((swapins - swapins_before) / 256))"
     for path in "$@"; do
         free=$(df -Pk "${path}" 2> /dev/null | awk 'NR == 2 { print int($4 / 1024) }')
         [ -z "${free}" ] || line="${line} free:${path}=${free}"
@@ -129,10 +134,11 @@ watch() {
     shift 2
     [ "$#" -eq 0 ] || shift
     [ "$#" -gt 0 ] || set -- /
-    kills=$(oom_kills)
+    kills_at_start=$(counter oom_kill)
+    swapins_at_start=$(counter pswpin)
     fired=''
     while :; do
-        line=$(sample "${kills}" "$@")
+        line=$(sample "${kills_at_start}" "${swapins_at_start}" "$@")
         printf '%s\n' "${line}" >> "${record}"
         group=$(cat "${pidfile}" 2> /dev/null || true)
         # Only while the test runs: before it there is nothing to end, and after it the floors are
@@ -181,16 +187,20 @@ peaks() {
             for (i = 2; i <= NF; i++) { eq = index($i, "="); v[substr($i, 1, eq - 1)] = substr($i, eq + 1) }
             left = v["available"] + v["swap_free"]
             if (n == 0 || left < least) { least = left; leastat = $1; available = v["available"]; swap = v["swap_free"] }
+            if (n == 0 || v["available"] + 0 < lowmem) { lowmem = v["available"] + 0; lowmemat = $1 }
             for (k in v) {
                 if (k ~ /_(some|full)$/ && (!(k in most) || v[k] + 0 > most[k])) { most[k] = v[k] + 0; mostat[k] = $1 }
                 if (k ~ /^free:/ && (!(k in low) || v[k] + 0 < low[k])) { low[k] = v[k] + 0; lowat[k] = $1 }
             }
             kills = v["oom_kills"] + 0
+            swapped = v["swapped_in"] + 0
             n++
         }
         END {
             printf "%d samples from %s to %s\n", n, first, $1
             printf "least memory and swap left: %d MiB (%d available, %d of swap) at %s; the floor is %d\n", least, available, swap, leastat, room
+            printf "least memory available: %d MiB at %s\n", lowmem, lowmemat
+            printf "read back from swap: %d MiB\n", swapped
             for (k in most) printf "most %s pressure: %.2f%% of a minute at %s%s\n", k, most[k], mostat[k], (k == "memory_full" ? sprintf("; the ceiling is %d%%", stall) : "")
             for (k in low) printf "least free on %s: %d MiB at %s; the floor is %d\n", substr(k, 6), low[k], lowat[k], disk
             printf "OOM kills: %d\n", kills
