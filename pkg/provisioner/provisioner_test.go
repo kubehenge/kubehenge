@@ -563,7 +563,7 @@ func TestCalicoResources(t *testing.T) {
 			t.Errorf("resource %v", d)
 		}
 	}
-	if strings.Join(kinds, ",") != "ImageSet,Installation,APIServer,Goldmane,Whisker" {
+	if strings.Join(kinds, ",") != "ImageSet,Installation,APIServer" {
 		t.Errorf("kinds %v", kinds)
 	}
 	if image := lookup[map[string]any](t, docs[0], "spec", "images", 1); image["image"] != "calico/node" ||

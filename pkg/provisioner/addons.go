@@ -546,12 +546,12 @@ func calicoResources(cluster *clusterv1.Cluster, cni CNI, images []Image) (*core
 		"flexVolumePath":  "None",
 		"typhaDeployment": calicoTypha(),
 	}
+	// No Goldmane or Whisker, Calico's flow-log aggregator and its viewer: nothing reads their flows,
+	// and on a small node they take CPU the cluster's own work needs.
 	resources := []map[string]any{
 		calicoImageSet(images),
 		{"kind": "Installation", "spec": installation},
 		{"kind": "APIServer", "spec": map[string]any{}},
-		{"kind": "Goldmane", "spec": map[string]any{}},
-		{"kind": "Whisker", "spec": map[string]any{}},
 	}
 	var manifest []byte
 	for _, r := range resources {
