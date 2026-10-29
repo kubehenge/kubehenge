@@ -308,6 +308,39 @@ func TestNodeChecks(t *testing.T) {
 	}
 }
 
+// RKE2's Cilium installs portmap into /opt/cni/bin from a confined container, which an image-mode
+// node keeps in /var/opt, outside the distributions' own label for /opt/cni.
+func TestImageModeNodesLetContainersInstallCNIPlugins(t *testing.T) {
+	t.Parallel()
+	if _, r, err := ReleaseOf(DefaultNodeOS); err != nil || r.Mode != ImageMode {
+		t.Fatalf("the default node OS is not image mode: %+v, %v", r, err)
+	}
+	for _, d := range []Distribution{RKE2, K3s} {
+		if all := fmt.Sprint(nodeChecks(Bake{NodeOS: DefaultNodeOS, Distribution: d})); !strings.Contains(all, "stat -L -c %C /opt/cni/bin | grep -q ':container_file_t:'") {
+			t.Errorf("%s: no check of /opt/cni/bin's label in %s", d, all)
+		}
+	}
+	if all := fmt.Sprint(nodeChecks(Bake{Distribution: RKE2})); strings.Contains(all, "/opt/cni/bin") {
+		t.Errorf("a node OS that is not image mode is checked for /var/opt: %s", all)
+	}
+	cil, err := recipeFiles.ReadFile("node/kubehenge-cni.cil")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(cil), `(filecon "/var/opt/cni(/.*)?" any (system_u object_r container_file_t`) {
+		t.Errorf("node/kubehenge-cni.cil does not label /var/opt/cni for containers:\n%s", cil)
+	}
+	script, err := recipeFiles.ReadFile("el/node.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"semodule -i /usr/share/kubehenge/kubehenge-cni.cil", "d /var/opt/cni/bin 0755 root root -"} {
+		if !strings.Contains(string(script), want) {
+			t.Errorf("el/node.sh does not hold %q", want)
+		}
+	}
+}
+
 // The patches the spc_t check reads are those node/kubeadm.sh writes, one per control-plane pod.
 func TestKubeadmPatchesRunTheControlPlaneAsSPC(t *testing.T) {
 	t.Parallel()

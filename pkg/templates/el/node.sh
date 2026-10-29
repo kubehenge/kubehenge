@@ -70,6 +70,15 @@ systemctl mask bootc-fetch-apply-updates.timer fwupd-refresh.timer
 mkdir -p /usr/lib/systemd/journald.conf.d
 printf '[Journal]\nStorage=persistent\n' > /usr/lib/systemd/journald.conf.d/50-kubehenge.conf
 
+if [ "${distribution}" = rke2 ] || [ "${distribution}" = k3s ]; then
+    # /opt is in /var on these images (elimage.go): the directory is made, labelled for the
+    # containers that install CNI plugins, at every boot before the distribution starts, and what
+    # they install there takes its label.
+    install -D -m 0644 "${files}/node/kubehenge-cni.cil" /usr/share/kubehenge/kubehenge-cni.cil
+    semodule -i /usr/share/kubehenge/kubehenge-cni.cil
+    printf 'd /var/opt/cni/bin 0755 root root -\n' > /usr/lib/tmpfiles.d/kubehenge-cni.conf
+fi
+
 if [ "${distribution}" = rke2 ]; then
     # The image keeps its system users in /usr/lib for nss-altfiles, an etcd user among them, while
     # RKE2 looks up the one its CIS profile runs etcd as in /etc alone.

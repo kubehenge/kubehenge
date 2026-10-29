@@ -212,6 +212,10 @@ func nodeChecks(b Bake) [][]string {
 			// The distribution installs itself there when a node boots.
 			[]string{"sh", "-c", "touch /usr/local/.kubehenge && rm /usr/local/.kubehenge"},
 		)
+		if _, r, err := ReleaseOf(b.NodeOS); err == nil && r.Mode == ImageMode {
+			// A confined container may install CNI plugins into an image-mode node's /opt, in /var.
+			checks = append(checks, []string{"sh", "-c", "stat -L -c %C /opt/cni/bin | grep -q ':container_file_t:'"})
+		}
 		if b.Distribution == RKE2 {
 			// RKE2 looks up the etcd user and group in /etc alone.
 			checks = append(checks, []string{"sh", "-c", "! getent passwd etcd > /dev/null || { grep -q '^etcd:' /etc/passwd && grep -q '^etcd:' /etc/group; }"})
