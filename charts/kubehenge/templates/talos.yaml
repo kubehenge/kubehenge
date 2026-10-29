@@ -55,11 +55,6 @@ metadata:
     # Sys.Audit on /.
     kubehenge.dev/sys-audit: "true"
     {{- end }}
-    {{- if .Values.proxmox.volumeSnapshots.rootSecret }}
-    # Tells the interface to offer the csi variable's volumeSnapshots: an administrator stored
-    # root@pam's password for it.
-    kubehenge.dev/volume-snapshots: "true"
-    {{- end }}
     # The controller restores etcd through the nodes' Talos API, with no guest agent to let in.
     kubehenge.dev/etcd-restore-automatic: "true"
 spec:
