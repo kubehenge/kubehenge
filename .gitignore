@@ -9,6 +9,7 @@
 
 # The frontend's dependencies and build, which `make web` produces; .keep lets Go compile without it.
 /web/node_modules/
+/web/*.tsbuildinfo
 /pkg/ui/dist/*
 !/pkg/ui/dist/.keep
 
