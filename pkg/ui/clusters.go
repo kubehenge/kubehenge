@@ -658,6 +658,10 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	c := s.newCluster(u, &req, pods, services)
+	if r.URL.Query().Get("dryRun") == metav1.DryRunAll {
+		s.checkCreate(w, r, u, c)
+		return
+	}
 	if err = u.kube.Create(r.Context(), c); err != nil {
 		s.kubeError(w, err)
 		return

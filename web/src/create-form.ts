@@ -57,6 +57,7 @@ import type {
   FreeAddresses,
   NodeOSChoice,
   OIDCProvider,
+  PveNode,
   Schema,
   Storage,
   TalosReleases,
@@ -275,6 +276,42 @@ export function addonMemory(
     growth: "kubehenge.dev/addon-control-plane-memory",
   });
   return { names, mib: total, controlPlaneMiB: growth };
+}
+
+const bytesPerMiB = 1_048_576;
+const bytesPerGiB = 1_073_741_824;
+
+/**
+ * Room is what a new cluster's VMs take of memory and disk at their most, in bytes, and what the
+ * nodes it may use and its storage have free; free is missing where Proxmox VE does not say.
+ */
+export interface Room {
+  memory: number;
+  freeMemory?: number | undefined;
+  disk: number;
+  freeDisk?: number | undefined;
+}
+
+/** createRoom weighs a form's VMs against the online nodes it may use and the storage it chose. */
+export function createRoom(form: Form, nodes: PveNode[], storages: Storage[]): Room {
+  const workers = mostWorkers(form);
+  const cp = form.controlPlaneReplicas;
+  const allowed = allowedNodes(form.place);
+  const usable = nodes.filter((n) => n.online && (allowed === undefined || allowed.includes(n.node)));
+  const known = usable.length > 0 && usable.every((n) => n.maxMemory !== undefined);
+  const chosen = storages.filter((s) => s.storage === form.storage && s.total > 0);
+  // A shared storage is listed once per node, holding the same space.
+  const disks = chosen.some((s) => s.shared)
+    ? chosen.slice(0, 1)
+    : chosen.filter((s) => usable.some((n) => n.node === s.node));
+  return {
+    memory: (cp * form.controlPlaneMachine.memoryMiB + workers * form.workerMachine.memoryMiB) * bytesPerMiB,
+    freeMemory: known
+      ? usable.reduce((sum, n) => sum + Math.max(0, (n.maxMemory ?? 0) - (n.memory ?? 0)), 0)
+      : undefined,
+    disk: (cp * form.controlPlaneMachine.diskGiB + workers * form.workerMachine.diskGiB) * bytesPerGiB,
+    freeDisk: disks.length > 0 ? disks.reduce((sum, s) => sum + s.avail, 0) : undefined,
+  };
 }
 
 /** AddonKey names an add-on in a class's figures. */

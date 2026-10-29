@@ -1331,7 +1331,7 @@ describe("create", () => {
       "GET /api/proxmox/nodes": () => ({
         body: [
           { node: "pve1", online: true },
-          { node: "pve2", online: true },
+          { node: "pve2", online: true, memory: 0, maxMemory: 2 ** 32 },
         ],
       }),
       "GET /api/proxmox/nodes/pve1/bridges": () => ({
@@ -1347,6 +1347,7 @@ describe("create", () => {
           rules: [{ rule: "fast", comment: "SSD", nodes: ["pve2"], strict: true, allowed: ["pve2"] }],
         },
       }),
+      "POST /api/clusters?dryRun=All": () => ({ body: { manifest: "kind: Cluster\nmetadata:\n  name: lab\n" } }),
       "POST /api/clusters": () => ({ status: 201, body: { ...web, name: "lab" } }),
       "GET /api/clusters/default/lab": () => ({ body: { ...web, name: "lab" } }),
     });
@@ -1439,11 +1440,17 @@ describe("create", () => {
     expect(screen.getByRole("button", { name: "Add identity provider" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Remove identity provider 2" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
+    // Confirm has the API server check the cluster, and weighs it against the nodes it may use.
+    const before = screen.getByLabelText("Before creating");
+    await waitFor(() => expect(before).toHaveTextContent("Accepts it"));
+    expect(before).toHaveTextContent(/MemoryNeeds [\d.]+ GiB, 4\.0 GiB free/u);
+    expect(screen.getByLabelText("YAML")).toHaveTextContent("name: lab");
     await user.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(window.location.pathname).toBe("/clusters/default/lab"));
     expect(calls.map((c) => c.key)).toContain("GET /api/clusters/default/lab");
     const created = calls.find((c) => c.key === "POST /api/clusters");
+    expect(calls.find((c) => c.key === "POST /api/clusters?dryRun=All")?.body).toStrictEqual(created?.body);
     expect(created?.headers.get("X-Kubehenge-CSRF")).toBe("c1");
     expect(created?.body).toMatchObject({
       name: "lab",

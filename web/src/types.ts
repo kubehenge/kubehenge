@@ -515,6 +515,11 @@ export interface FreeAddresses {
   answering: string[];
 }
 
+/** CreateCheck is a new cluster the API server checked without creating it, as YAML to apply. */
+export interface CreateCheck {
+  manifest: string;
+}
+
 export interface ManagementSettings {
   /** Proxmox VE nodes the management cluster's VMs are placed on in turn. */
   nodes: string[];

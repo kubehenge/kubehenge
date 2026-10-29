@@ -245,6 +245,7 @@ const wizard = (store: Route): ReturnType<typeof fakeServer> => {
       body: [{ bridge: "vmbr0", node: "pve1", vlanAware: false, usable: true }],
     }),
     "GET /api/proxmox/ha-rules": () => ({ body: { readable: true, rules: [] } }),
+    "POST /api/clusters?dryRun=All": () => ({ body: { manifest: "kind: Cluster\n" } }),
     "POST /api/clusters": () => ({ status: 201, body: web }),
     [`PUT ${credentialPath}`]: store,
     "GET /api/clusters/default/web": () => ({ body: web }),
@@ -277,7 +278,7 @@ const createWithToken = async (): Promise<void> => {
   await user.click(screen.getByRole("button", { name: "Next" }));
   await user.click(screen.getByRole("button", { name: "Next" }));
   expect(screen.getByText("Stored once created")).toBeInTheDocument();
-  expect(screen.getByLabelText("Request")).not.toHaveTextContent("zone-token");
+  await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
   await user.click(screen.getByRole("button", { name: "Create" }));
 };
 
@@ -294,6 +295,10 @@ describe("certificates of a new cluster", () => {
     expect(calls.find((c) => c.key === "POST /api/clusters")?.body).toMatchObject({
       variables: { certificates: { enabled: true, domain: "apps.example.com", dns01: { provider: "cloudflare" } } },
     });
+    // The token goes only to its own store, never into the cluster or its check.
+    for (const key of ["POST /api/clusters?dryRun=All", "POST /api/clusters"]) {
+      expect(JSON.stringify(calls.find((c) => c.key === key)?.body)).not.toContain("zone-token");
+    }
   });
 
   it("says when the cluster was created but its token was not stored, and never creates it twice", async () => {

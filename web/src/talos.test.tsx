@@ -144,6 +144,7 @@ describe("talos clusters", () => {
       },
       "GET /api/proxmox/nodes": { body: [] },
       "GET /api/clusters": { body: [] },
+      "POST /api/clusters?dryRun=All": { body: { manifest: "kind: Cluster\n" } },
       "POST /api/clusters": { status: 201, body: { ...web, name: "lab" } },
       "GET /api/clusters/clusters/lab": { body: { ...web, name: "lab" } },
     });
@@ -182,6 +183,7 @@ describe("talos clusters", () => {
 
     expect(term("Talos release")).toHaveTextContent("v1.14.4");
     expect(term("Kubernetes version")).toHaveTextContent("v1.36.5");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => expect(window.location.pathname).toBe("/clusters/clusters/lab"));
     expect(calls.find((c) => c.key === "POST /api/clusters")?.body).toMatchObject({

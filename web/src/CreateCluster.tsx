@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type JSX } from "react";
+import { useEffect, useRef, useState, type JSX } from "react";
 
 import { AddOnsStep } from "./AddOnsStep";
 import { api, bridgesOf, dnsOf } from "./api";
@@ -6,6 +6,7 @@ import { clusterPath } from "./ClusterDetail";
 import {
   classBridges,
   classStorages,
+  createRoom,
   csiOffer,
   csiProblems,
   fieldProblems,
@@ -37,6 +38,7 @@ import {
   type Form,
   type Step,
 } from "./create-form";
+import { ConfirmStep, useCreateCheck } from "./CreateCheck";
 import { GeneralStep, IdentityStep, MachinesStep, NetworkStep, useClassTalos, useFreeAddresses } from "./CreateSteps";
 import { offersHA, offersHAGroups, useHARules } from "./Placement";
 import { navigate } from "./router";
@@ -233,11 +235,20 @@ export function CreateCluster({
   const shown = (k: FieldKey): string | undefined => (attempted.has(step) || touched.has(k) ? byField[k] : undefined);
   const wizardRef = useRef<HTMLDivElement>(null);
 
+  // Confirm has the API server check the cluster each time it opens: nothing on it changes the form.
+  const checked = useCreateCheck();
+  const go = (s: Step): void => {
+    setStep(s);
+    if (s === "Confirm" && cls) {
+      checked.run(request(form, cls));
+    }
+  };
+
   // Next on an incomplete step shows every problem of it and puts the cursor on the first.
   const next = (): void => {
     if (open.length === 0) {
       if (following !== undefined) {
-        setStep(following);
+        go(following);
       }
       return;
     }
@@ -309,7 +320,7 @@ export function CreateCluster({
               className={s === step ? "tab active" : "tab"}
               aria-current={s === step ? "step" : undefined}
               disabled={i > index && steps.slice(0, i).some((p) => problems(p, form, cls).length > 0)}
-              onClick={() => setStep(s)}
+              onClick={() => go(s)}
             >
               {s}
             </button>
@@ -372,27 +383,16 @@ export function CreateCluster({
             <IdentityStep form={form} set={set} canTrust={canTrust} showAll={attempted.has("Identity providers")} />
           )}
           {step === "Confirm" && cls && (
-            <>
-              <dl className="summary" aria-label="Summary">
-                {summary(form, cls, {
-                  ha: haOffered,
-                  csi: csi.offered,
-                  snapshots: snapshots.offered,
-                  haGroups,
-                }).map(([k, v]) => (
-                  <Fragment key={k}>
-                    <dt>{k}</dt>
-                    <dd>{v}</dd>
-                  </Fragment>
-                ))}
-              </dl>
-              <details className="advanced">
-                <summary>Request</summary>
-                <pre className="confirm" aria-label="Request">
-                  {JSON.stringify(request(form, cls), null, 2)}
-                </pre>
-              </details>
-            </>
+            <ConfirmStep
+              read={checked.read}
+              room={createRoom(form, nodes, usableStorages)}
+              summary={summary(form, cls, {
+                ha: haOffered,
+                csi: csi.offered,
+                snapshots: snapshots.offered,
+                haGroups,
+              })}
+            />
           )}
 
           <ErrorBox message={error} />
@@ -418,7 +418,7 @@ export function CreateCluster({
                 <button
                   type="button"
                   className="primary"
-                  disabled={busy || !cls}
+                  disabled={busy || !checked.accepted}
                   onClick={() => {
                     void create();
                   }}

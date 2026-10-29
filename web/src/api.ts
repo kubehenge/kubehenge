@@ -8,6 +8,7 @@ import type {
   ClusterHealth,
   ClusterRef,
   ClusterEtcdSnapshots,
+  CreateCheck,
   CreateRequest,
   EtcdRestorePlan,
   FleetHealth,
@@ -211,6 +212,8 @@ export interface Api {
   clusters: () => Promise<Cluster[]>;
   cluster: (ns: string, name: string) => Promise<Cluster>;
   create: (req: CreateRequest) => Promise<Cluster>;
+  /** checkCreate has the API server check a cluster without creating it, and gives it as YAML to apply. */
+  checkCreate: (req: CreateRequest) => Promise<CreateCheck>;
   /** change is made against the cluster as its user was shown it; a newer generation refuses it. */
   change: (c: ClusterShown, req: ChangeRequest) => Promise<Cluster>;
   plan: (c: ClusterShown, req: ChangeRequest) => Promise<Plan>;
@@ -301,6 +304,7 @@ export const api: Api = {
   clusters: () => request("GET", "/api/clusters"),
   cluster: (ns, name) => request("GET", clusterPath(ns, name)),
   create: (req) => request("POST", "/api/clusters", req),
+  checkCreate: (req) => request("POST", "/api/clusters?dryRun=All", req),
   change: (c, req) =>
     requestAgainst("PATCH", clusterPath(c.namespace, c.name), { body: req, generation: c.generation }),
   plan: (c, req) =>

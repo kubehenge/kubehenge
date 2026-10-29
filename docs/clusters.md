@@ -149,7 +149,7 @@ The OpenID Connect providers whose ID tokens the cluster's API server accepts, b
 
 ### Confirm
 
-Sums up every setting by name; **Request** below it shows what the interface sends. **Create** creates the Cluster and opens its page.
+Checks the cluster before it exists: the API server runs every webhook and admission policy on it without creating it (`POST /api/clusters?dryRun=All`, as `kubectl create --dry-run=server` would), and the memory and disk its VMs take at their most are weighed against what the nodes it may use and its storage have free, as advice. Below, every setting by name, and the Cluster as the API server would store it, as YAML: **Copy as YAML** copies it for `kubectl apply` or a Git repository. Credentials typed into the wizard are not in it; they are stored once the cluster exists. **Create** is offered once the API server accepts the cluster, and creates it and opens its page.
 
 Kubehenge's controller first gives the cluster its Proxmox VE pool, user, token and the VM that will own its persistent volumes; only then does Cluster API clone the VMs. The cluster shows **Provisioning** until it is available.
 

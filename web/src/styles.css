@@ -1262,6 +1262,13 @@ button.go {
   font-size: 13.5px;
 }
 
+/* What the API server and the nodes make of a new cluster stands apart from what it will be. */
+.preflight + .summary {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
 .option-groups {
   display: grid;
   gap: 14px;
