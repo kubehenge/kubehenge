@@ -68,4 +68,4 @@ for distribution in kubeadm rke2 k3s talos; do
 done
 
 # shellcheck disable=SC2086 # one test per word
-"${here}/scope.sh" --all | jq -c '. + $ARGS.positional' --args management-cluster-upgrade rancher control-plane-ha ${variants}
+"${here}/scope.sh" --all | jq -c '. + $ARGS.positional' --args management-cluster-upgrade rancher control-plane-ha two-nodes ${variants}

@@ -29,8 +29,9 @@ jobs:
   # A merge group runs the tests its pull requests' changes need together (test/e2e/ci/scope.sh),
   # on the tree that would land on main; a pull request runs none, since the queue runs them on
   # exactly what lands and a second run on the pull request only doubles the wait. The nightly run
-  # (test/e2e/ci/nightly.sh) runs every test, adds the upgrade of the management cluster, Rancher
-  # and a control plane of three servers, and runs each workload distribution once more on a CNI
+  # (test/e2e/ci/nightly.sh) runs every test, adds the upgrade of the management cluster, Rancher,
+  # a control plane of three servers and a Proxmox VE cluster of two nodes, and runs each workload
+  # distribution once more on a CNI
   # and node OS other than its own and, every other night, without CIS hardening, in turn.
   scope:
     name: scope

@@ -7,8 +7,9 @@
 # <test> is management-cluster (applies the management cluster, runs the templates and volumes tests
 # while it is up, and destroys it), management-cluster-upgrade (applies and destroys it), appliance
 # (installs the appliance, which sets the management cluster up and removes it), or kubeadm, rke2,
-# k3s, talos, rancher, cluster-mesh, node-image-refresh, autoscaler or control-plane-ha, which first
-# apply the management cluster and create the templates they need, and leave it up. kubeadm, rke2,
+# k3s, talos, rancher, cluster-mesh, node-image-refresh, autoscaler, control-plane-ha or two-nodes
+# (which first joins a second Proxmox VE node, test/e2e/ci/second-node.sh), which first apply the
+# management cluster and create the templates they need, and leave it up. kubeadm, rke2,
 # k3s and talos take options after their name, each after a +: the cluster's CNI, its node OS, or
 # cis-off (test/e2e/ci/variant.sh), as in kubeadm+calico+rocky-10+cis-off.
 #
@@ -27,7 +28,7 @@ settings=$(variant "${test}") || exit 2
 eval "${settings}"
 test=${test%%+*}
 case "${test}" in
-    management-cluster | management-cluster-upgrade | appliance | kubeadm | rke2 | k3s | talos | rancher | cluster-mesh | node-image-refresh | autoscaler | control-plane-ha) ;;
+    management-cluster | management-cluster-upgrade | appliance | kubeadm | rke2 | k3s | talos | rancher | cluster-mesh | node-image-refresh | autoscaler | control-plane-ha | two-nodes) ;;
     *)
         echo "unknown test ${test}" >&2
         exit 2
@@ -36,6 +37,14 @@ esac
 repo=$(readlink -f "$(dirname "$0")/../../..")
 # shellcheck source=/dev/null
 . "${work}/env"
+if [ "${test}" = two-nodes ]; then
+    sh "${repo}/test/e2e/ci/second-node.sh" "${work}"
+    # shellcheck source=/dev/null
+    . "${work}/env"
+    : "${KUBEHENGE_E2E_NODES:?}" "${KUBEHENGE_E2E_SHARED_STORAGE:?}"
+    TF_VAR_proxmox_nodes=$(printf '%s' "${KUBEHENGE_E2E_NODES}" | jq -Rc 'split(",")')
+    export TF_VAR_proxmox_nodes TF_VAR_datastore="${KUBEHENGE_E2E_SHARED_STORAGE}"
+fi
 : "${KUBEHENGE_PROXMOX_TOKEN:?}" "${KUBEHENGE_PROXMOX_CA:?}" "${KUBEHENGE_E2E_NODE:?}" "${KUBEHENGE_E2E_ADDRESS:?}"
 : "${KUBEHENGE_E2E_GATEWAY:?}" "${KUBEHENGE_E2E_DNS:?}" "${KUBEHENGE_E2E_REGISTRY:?}"
 
@@ -82,7 +91,8 @@ export SSL_CERT_FILE="${work}/ca-bundle.pem"
 # The host's CPU: told of a generic one, the guests' kernels run Meltdown's and MDS's mitigations,
 # which under nested virtualisation slow them on Intel runners until a worker loses its API server.
 template() { # distribution [flags]
-    "${repo}/dist/kubehenge" template create "$@" --cpu-type host --node "${KUBEHENGE_E2E_NODE}" --storage local \
+    "${repo}/dist/kubehenge" template create "$@" --cpu-type host --node "${KUBEHENGE_E2E_NODE}" \
+        --storage "${KUBEHENGE_E2E_SHARED_STORAGE:-local}" \
         --build-address "${KUBEHENGE_E2E_ADDRESS}" --build-gateway "${KUBEHENGE_E2E_GATEWAY}" \
         --build-dns "${KUBEHENGE_E2E_DNS}"
 }
@@ -94,7 +104,7 @@ node_os=
 # the build address.
 templates=
 case "${test}" in
-    rke2 | k3s | kubeadm | talos | rancher | cluster-mesh | node-image-refresh | autoscaler | control-plane-ha)
+    rke2 | k3s | kubeadm | talos | rancher | cluster-mesh | node-image-refresh | autoscaler | control-plane-ha | two-nodes)
         make -s -C "${repo}" build
         {
             waited=0
@@ -110,7 +120,7 @@ case "${test}" in
             case "${test}" in
                 rke2) template rke2 ${node_os} ;;
                 k3s) template k3s ${node_os} ;;
-                rancher | cluster-mesh | autoscaler | control-plane-ha) template k3s ;;
+                rancher | cluster-mesh | autoscaler | control-plane-ha | two-nodes) template k3s ;;
                 # The test moves its cluster to another node OS than the default.
                 node-image-refresh)
                     template k3s
@@ -308,6 +318,14 @@ case "${test}" in
     control-plane-ha)
         export KUBEHENGE_E2E_VERSION="${from}+k3s1"
         e2e e2e-control-plane-ha
+        ;;
+    two-nodes)
+        export KUBEHENGE_E2E_VERSION="${from}+k3s1"
+        # pve2 leaves the cluster's membership with its services stopped, VMs and network kept, and
+        # pve alone keeps the quorum it would lose with one vote of two.
+        export KUBEHENGE_E2E_DOWN='docker exec kubehenge-e2e-pve2 systemctl stop pve-ha-lrm pve-ha-crm pvestatd pveproxy pvedaemon pve-cluster corosync && docker exec kubehenge-e2e-pve pvecm expected 1'
+        export KUBEHENGE_E2E_UP='docker exec kubehenge-e2e-pve2 systemctl start corosync pve-cluster pvedaemon pveproxy pvestatd'
+        e2e e2e-two-nodes
         ;;
     # Checked before anything was built.
     *) ;;

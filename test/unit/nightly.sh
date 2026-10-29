@@ -28,7 +28,7 @@ while [ "${night}" -lt "${nights}" ]; do
     list=$(sh "${ci}/nightly.sh" $((20000 + night)))
     if printf '%s' "${list}" | jq -e 'type == "array" and length == (unique | length)' > /dev/null; then ok; else bad "night ${night}: not a list of distinct tests: ${list}"; fi
     # jq on Windows ends its lines with CR LF.
-    for t in $(sh "${ci}/scope.sh" --all | jq -r '.[]' | tr -d '\r') management-cluster-upgrade rancher control-plane-ha; do
+    for t in $(sh "${ci}/scope.sh" --all | jq -r '.[]' | tr -d '\r') management-cluster-upgrade rancher control-plane-ha two-nodes; do
         if printf '%s' "${list}" | jq -e --arg t "${t}" 'index($t) != null' > /dev/null; then ok; else bad "night ${night} leaves ${t} out"; fi
     done
     for name in $(printf '%s' "${list}" | jq -r '.[] | select(contains("+"))' | tr -d '\r'); do
@@ -97,7 +97,9 @@ refused 'k3s+Cilium'
 # A test without options carries no settings.
 # shellcheck disable=SC2310 # a refusal is reported as the failure.
 if out=$(variant control-plane-ha 2>&1) && [ -z "${out}" ]; then ok; else bad "control-plane-ha carries settings: ${out}"; fi
-if grep -q 'control-plane-ha)' "${ci}/run.sh"; then ok; else bad "run.sh does not run control-plane-ha"; fi
+for t in control-plane-ha two-nodes; do
+    if grep -q "^    ${t})" "${ci}/run.sh"; then ok; else bad "run.sh does not run ${t}"; fi
+done
 
 printf 'nightly: %d passed, %d failed\n' "${passes}" "${failures}"
 [ "${failures}" -eq 0 ]

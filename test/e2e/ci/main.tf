@@ -1,5 +1,5 @@
-# The management cluster on the one-node Proxmox VE test/e2e/ci/up.sh starts. run.sh copies this
-# beside its state and sets the variables.
+# The management cluster on the Proxmox VE test/e2e/ci/up.sh starts, one node or two. run.sh copies
+# this beside its state and sets the variables.
 
 variable "proxmox_api_token" {
   type      = string
@@ -30,6 +30,17 @@ variable "refresh_weekday" {
 variable "node_count" {
   type    = number
   default = 1
+}
+
+# With a second node (test/e2e/ci/second-node.sh), the nodes and the storage both share.
+variable "proxmox_nodes" {
+  type    = list(string)
+  default = ["pve"]
+}
+
+variable "datastore" {
+  type    = string
+  default = "local"
 }
 
 variable "node_cores" {
@@ -73,14 +84,14 @@ module "management_cluster" {
   proxmox_endpoint       = "https://172.21.99.2:8006"
   proxmox_api_token      = var.proxmox_api_token
   proxmox_ca_certificate = var.proxmox_ca_certificate
-  proxmox_nodes          = ["pve"]
+  proxmox_nodes          = var.proxmox_nodes
 
   # The container's storage, a directory, and another the k3s test's cluster holds
   # Datastore.Allocate on.
-  image_datastore            = "local"
-  vm_datastore               = "local"
-  bootstrap_datastore        = "local"
-  workload_datastores        = ["local", "own"]
+  image_datastore            = var.datastore
+  vm_datastore               = var.datastore
+  bootstrap_datastore        = var.datastore
+  workload_datastores        = distinct([var.datastore, "local", "own"])
   cluster_datastore_allocate = true
   # The k3s test's cluster takes volume snapshots, with the root@pam password test/e2e/ci/run.sh
   # stores.
