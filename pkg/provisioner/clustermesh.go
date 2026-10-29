@@ -86,8 +86,13 @@ const (
 
 // runsCilium tells whether the cluster runs Cilium, Kubehenge's or its distribution's own.
 func runsCilium(c *clusterv1.Cluster) bool {
+	return runsCNI(c, cniCilium)
+}
+
+// runsCNI tells whether the cluster runs the CNI named, Kubehenge's or its distribution's own.
+func runsCNI(c *clusterv1.Cluster, name string) bool {
 	cni, _, _ := optionalVariable[string](c, "cni")
-	return cni == cniCilium
+	return cni == name
 }
 
 // ciliumIDs hands out Cilium cluster ids one at a time, and remembers those handed out until the

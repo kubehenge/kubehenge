@@ -514,10 +514,11 @@ func (r *Reconciler) applyAddons(ctx context.Context, cluster *clusterv1.Cluster
 
 // resourceSetSecrets are the Secrets of the cluster's ClusterResourceSet: its Proxmox VE Secret,
 // the values of RKE2's or k3s's own Traefik, Calico's resources when Kubehenge installs Calico, and
-// the configuration of the distribution's own Cilium when it runs that.
+// the configuration of the distribution's own Cilium or Calico when it runs that.
 func resourceSetSecrets(cluster *clusterv1.Cluster, resources *corev1.Secret, cni CNI, addons *Addons, calicoImages []Image) ([]*corev1.Secret, error) {
 	secrets := []*corev1.Secret{resources}
-	if d := distributionOf(cluster); d == templates.RKE2 || d == templates.K3s {
+	d := distributionOf(cluster)
+	if d == templates.RKE2 || d == templates.K3s {
 		traefik, err := traefikConfig(cluster, &addons.Certificates)
 		if err != nil {
 			return nil, err
@@ -537,6 +538,12 @@ func resourceSetSecrets(cluster *clusterv1.Cluster, resources *corev1.Secret, cn
 			return nil, err
 		}
 		secrets = append(secrets, cilium)
+	case cni.Name == "" && d == templates.RKE2 && runsCNI(cluster, cniCalico):
+		calico, err := rke2CalicoConfig(cluster)
+		if err != nil {
+			return nil, err
+		}
+		secrets = append(secrets, calico)
 	}
 	return secrets, nil
 }
