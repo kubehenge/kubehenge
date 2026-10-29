@@ -1303,8 +1303,6 @@ export function csiOffer(check: Omit<DatastoreAllocateCheck, "cls"> & { cls: Clu
   return { offered: csiOffered(cls), problem: cls && datastoreAllocateProblem({ ...check, cls }) };
 }
 
-/** volumeSnapshotsAnnotation marks the classes whose clusters may take volume snapshots. */
-export const volumeSnapshotsAnnotation = "kubehenge.dev/volume-snapshots";
 /** The storages, comma-separated, the CSI plugin takes volume snapshots on. */
 export const snapshotStoragesAnnotation = "kubehenge.dev/snapshot-storages";
 
@@ -1320,8 +1318,7 @@ export interface SnapshotsOffer {
  * storage the cluster already uses.
  */
 export function snapshotsOffer(cls: ClusterClass | undefined, storage: string | undefined): SnapshotsOffer {
-  const offered =
-    cls?.annotations?.[volumeSnapshotsAnnotation] === "true" && cls.variables.some((v) => v.name === "csi");
+  const offered = cls?.variables.some((v) => v.name === "csi") === true;
   if (!cls || !offered) {
     return { offered, problem: undefined };
   }

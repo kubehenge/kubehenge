@@ -77,7 +77,7 @@ export const csiText = (on: boolean): string =>
 
 /** snapshotsText describes whether a cluster takes volume snapshots. */
 export const snapshotsText = (on: boolean): string =>
-  on ? "On, with Kubehenge copying the cluster's own volumes as root@pam" : "Off";
+  on ? "On, with the cluster's own volumes copied with its own Proxmox VE token" : "Off";
 
 /** haGroupsText describes whether a cluster's nodes are labelled with their Proxmox VE HA groups. */
 export const haGroupsText = (on: boolean): string => (on ? "On, with Sys.Audit on / for the cluster's token" : "Off");

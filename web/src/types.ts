@@ -528,8 +528,6 @@ export interface ManagementSettings {
   templateRefresh?: TemplateRefreshSettings;
   /** Clusters have the cloud controller manager's HA group labels unless they switch them off, with Sys.Audit on / for their token; absent, they have them. */
   clusterSysAudit?: boolean;
-  /** Clusters may take volume snapshots, with Kubehenge copying their volumes as root@pam. */
-  clusterVolumeSnapshots?: boolean;
   /** More namespaces the interface creates and manages clusters in, beside its own. */
   extraClusterNamespaces?: string[];
   /** The shared Headlamp signs those who may download a cluster's kubeconfig in as cluster-admin. */

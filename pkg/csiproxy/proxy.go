@@ -1,291 +1,318 @@
 package csiproxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // apiPrefix is where the Proxmox VE API's JSON calls are.
 const apiPrefix = "/api2/json"
 
-// maxListBytes caps what is read of a list the proxy filters; a storage's content and the storage
-// configuration stay far below it.
-const maxListBytes = 16 << 20
+// holdersTTL is how long the list of holder VMs is taken as current for checking the records:
+// Kubehenge's controller adds a holder at most every few minutes.
+const holdersTTL = time.Minute
 
-// errRemoved is a copy request deleted before the controller finished it.
-var errRemoved = errors.New("the copy request was deleted before it finished")
+var (
+	// contentPath is a call on one volume of a storage, whose name the rest of the path is, slashes
+	// and all.
+	contentPath = regexp.MustCompile(`^/nodes/([^/]+)/storage/([^/]+)/content/(.+)$`)
+	// storagePath is one storage's configuration.
+	storagePath = regexp.MustCompile(`^/storage/([^/]+)$`)
+)
 
 // Proxy passes the CSI plugin's calls on to the Proxmox VE API with the cluster's own token, which
-// they carry. Three it answers itself:
+// they carry, and answers three itself:
 //
-//   - A volume copy, which Proxmox VE lets only root@pam make, becomes a request the controller in
-//     the management cluster carries out; the call returns once the copy has, as Proxmox VE's own
-//     task would have been waited for.
-//   - A storage's content leaves out the targets of copies still under way, so that the plugin,
-//     asking again after its call timed out, never takes a half-written copy for a finished one.
-//   - A storage's configuration, which Proxmox VE shows singly only to Datastore.Allocate, is read
+//   - A volume copy, which Proxmox VE lets only root@pam make, it makes with the token: it imports
+//     the volume into a new disk of a holder VM of the cluster, on the source's node, detaches it as
+//     an unused disk of the holder, and records it under the name the plugin asked for. The call
+//     returns once the copy is done, as the plugin would have waited for Proxmox VE's task.
+//   - Deleting a copy, which the token may not through the storage, it does through the holder.
+//   - A storage's configuration, which Proxmox VE shows singly only to Datastore.Allocate, it reads
 //     from the list of storages, which shows it to a token that may use the storage.
+//
+// Everything else goes on as it came, but for the copies' names: Proxmox VE chooses a copy's name
+// itself, vm-<holder>-disk-<n>, so the proxy turns the plugin's name of each copy into the real
+// one in the path, the query and the form, and back in every answer.
 type Proxy struct {
 	// Upstream is the Proxmox VE API's address, such as https://pve.example.org:8006.
 	Upstream *url.URL
 	// Transport reaches it, verifying its certificate.
 	Transport http.RoundTripper
-	// Client reads and writes the copy requests in the workload cluster.
+	// Client keeps the copies' records in the workload cluster, and its events.
 	Client client.Client
-	// Poll is how often a copy's request is read again while the call waits on it.
+	Log    *slog.Logger
+	// Owner is the VMID of the cluster's volume owner VM, which the plugin names volumes after.
+	Owner int
+	// Pool is the cluster's pool, and Holders the name of its holder VMs there.
+	Pool, Holders string
+	// Copies lets the proxy make copies; without it, it only finds those made before.
+	Copies bool
+	// Pod is the proxy's own, which its events are about; empty, it records none.
+	Pod types.NamespacedName
+	// Poll is how often a copy's task is looked at.
 	Poll time.Duration
-	Log  *slog.Logger
+
+	// copying holds one copy or deletion of the cluster's at a time.
+	copying sync.Mutex
+	jobsMu  sync.Mutex
+	jobs    map[string]*job
+
+	holdersMu   sync.Mutex
+	holderIDs   []int
+	holdersRead time.Time
 }
 
-// Handler routes the plugin's calls.
+// namesKey is the context key of the names a forwarded call is translated with.
+type namesKey struct{}
+
+// Handler serves the plugin's calls. It matches paths itself: a mux would answer a call on a
+// storage's content with a redirect to a path of one of its volumes.
 func (p *Proxy) Handler() http.Handler {
 	forward := &httputil.ReverseProxy{
-		Rewrite:   func(r *httputil.ProxyRequest) { r.SetURL(p.Upstream) },
-		Transport: p.Transport,
-		ErrorLog:  slog.NewLogLogger(p.Log.Handler(), slog.LevelWarn),
+		Rewrite:        p.rewrite,
+		ModifyResponse: modifyResponse,
+		Transport:      p.Transport,
+		ErrorLog:       slog.NewLogLogger(p.Log.Handler(), slog.LevelWarn),
 	}
-	mux := http.NewServeMux()
-	mux.Handle("/", forward)
-	mux.HandleFunc("GET "+apiPrefix+"/storage/{storage}", func(w http.ResponseWriter, r *http.Request) {
-		p.storageConfig(w, r, forward)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, ok := strings.CutPrefix(r.URL.Path, apiPrefix)
+		if !ok {
+			forward.ServeHTTP(w, r)
+			return
+		}
+		if m := storagePath.FindStringSubmatch(path); m != nil && r.Method == http.MethodGet {
+			p.storageConfig(w, r, m[1], forward)
+			return
+		}
+		c := p.pveFor(r)
+		copies, err := p.copies(r.Context(), c)
+		if err != nil {
+			p.Log.Error("reading the volume copies", "error", err.Error())
+			writeError(w, http.StatusServiceUnavailable, "the volume copies cannot be read")
+			return
+		}
+		n := newNames(copies)
+		if m := contentPath.FindStringSubmatch(path); m != nil {
+			switch r.Method {
+			case http.MethodPost:
+				p.copyVolume(w, r, n, m[1], m[2], m[3])
+				return
+			case http.MethodDelete:
+				if p.deleteVolume(w, r, copies, m[2], m[3]) {
+					return
+				}
+			}
+		}
+		forward.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), namesKey{}, n)))
 	})
-	mux.HandleFunc("GET "+apiPrefix+"/nodes/{node}/storage/{storage}/content", p.content)
-	mux.HandleFunc("POST "+apiPrefix+"/nodes/{node}/storage/{storage}/content/{volume...}", p.copyVolume)
-	return mux
+}
+
+// copies are the copies in place whose records hold: named after the volume owner as the plugin
+// names volumes, on a holder VM of the cluster. A record anyone else wrote turns no volume into
+// another.
+func (p *Proxy) copies(ctx context.Context, c *pve) (map[string]*Copy, error) {
+	all, err := Copies(ctx, p.Client)
+	if err != nil || len(all) == 0 {
+		return all, err
+	}
+	holders, err := p.holderVMIDs(ctx, c, all)
+	if err != nil {
+		return nil, err
+	}
+	for id, cp := range all {
+		storage, name, _ := splitVolID(cp.Real)
+		if storage != cp.Storage || volumeVMID(cp.Volume) != p.Owner || volumeVMID(name) != cp.Holder || !slices.Contains(holders, cp.Holder) {
+			p.Log.Warn("ignoring a volume copy's record that names no volume of the cluster's", "record", cp.Name, "volume", id, "copy", cp.Real)
+			delete(all, id)
+		}
+	}
+	return all, nil
+}
+
+// holderVMIDs are the VMIDs of the cluster's holder VMs, read again when older than holdersTTL or
+// when a record names one not among them.
+func (p *Proxy) holderVMIDs(ctx context.Context, c *pve, copies map[string]*Copy) ([]int, error) {
+	p.holdersMu.Lock()
+	defer p.holdersMu.Unlock()
+	known := time.Since(p.holdersRead) < holdersTTL
+	for _, cp := range copies {
+		if !slices.Contains(p.holderIDs, cp.Holder) {
+			known = false
+		}
+	}
+	if known {
+		return p.holderIDs, nil
+	}
+	holders, err := p.holders(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	p.holderIDs = p.holderIDs[:0]
+	for _, h := range holders {
+		p.holderIDs = append(p.holderIDs, h.VMID)
+	}
+	p.holdersRead = time.Now()
+	return p.holderIDs, nil
+}
+
+// copyVolume makes the copy the plugin asks for, or finds it made, and answers once it is done.
+func (p *Proxy) copyVolume(w http.ResponseWriter, r *http.Request, n names, node, storage, volume string) {
+	if err := r.ParseForm(); err != nil {
+		writeError(w, http.StatusBadRequest, "the copy's parameters cannot be read")
+		return
+	}
+	target := r.Form.Get("target")
+	if target == "" {
+		writeError(w, http.StatusBadRequest, "a copy needs a target")
+		return
+	}
+	source := volume
+	if !strings.HasPrefix(source, storage+":") {
+		source = storage + ":" + source
+	}
+	if realID, ok := n.toReal[source]; ok {
+		source = realID
+	}
+	ask := &copyAsk{Storage: storage, Source: source, Target: target, Node: node, TargetNode: r.Form.Get("target_node")}
+	j := p.startCopy(r.Context(), p.pveFor(r), ask)
+	select {
+	case <-j.done:
+	case <-r.Context().Done():
+		// The plugin gave up; the copy goes on, and its next call waits on it or finds it done.
+		return
+	}
+	switch {
+	case errors.Is(j.err, errRefused):
+		writeErrors(w, http.StatusForbidden, map[string]string{"copy": j.err.Error()})
+	case j.err != nil:
+		writeErrors(w, http.StatusInternalServerError, map[string]string{"copy": j.err.Error()})
+	default:
+		// No task: the plugin then waits for none, as the copy is done.
+		writeData(w, nil)
+	}
+}
+
+// deleteVolume deletes a copy through its holder; it reports false for a volume that is no copy,
+// whose call goes on to Proxmox VE. Only a copy among copies, whose records hold, is deleted.
+func (p *Proxy) deleteVolume(w http.ResponseWriter, r *http.Request, copies map[string]*Copy, storage, volume string) bool {
+	volume = strings.TrimPrefix(volume, storage+":")
+	rec, found, err := p.record(r.Context(), storage, volume)
+	switch {
+	case err != nil:
+		p.Log.Error("reading a volume copy's record", "volume", storage+":"+volume, "error", err.Error())
+		writeError(w, http.StatusServiceUnavailable, "the volume copies cannot be read")
+		return true
+	case !found:
+		return false
+	case rec.State != stateDone:
+		writeError(w, http.StatusConflict, "the volume is still being copied")
+		return true
+	}
+	if _, ok := copies[rec.PluginID()]; !ok {
+		writeError(w, http.StatusForbidden, "the record of "+rec.PluginID()+" names no copy of the cluster's")
+		return true
+	}
+	if err := p.deleteCopy(r.Context(), p.pveFor(r), &rec); err != nil {
+		p.Log.Error("deleting a volume copy", "volume", rec.PluginID(), "copy", rec.Real, "error", err.Error())
+		writeErrors(w, http.StatusInternalServerError, map[string]string{"delete": err.Error()})
+		return true
+	}
+	writeData(w, nil)
+	return true
+}
+
+// rewrite sends a call on to Proxmox VE with the copies' real names.
+func (p *Proxy) rewrite(r *httputil.ProxyRequest) {
+	r.SetURL(p.Upstream)
+	n, ok := r.In.Context().Value(namesKey{}).(names)
+	if !ok || n.empty() {
+		return
+	}
+	// Proxmox VE's own encoding, which the translation needs to see through.
+	r.Out.Header.Del("Accept-Encoding")
+	if path, ok := strings.CutPrefix(r.In.URL.Path, apiPrefix); ok {
+		if m := contentPath.FindStringSubmatch(path); m != nil {
+			path = "/nodes/" + m[1] + "/storage/" + m[2] + "/content/" + n.volumePath(m[2], m[3])
+		}
+		r.Out.URL.Path, r.Out.URL.RawPath = strings.TrimSuffix(p.Upstream.Path, "/")+apiPrefix+path, ""
+	}
+	r.Out.URL.RawQuery = values(r.In.URL.Query(), n.toReal).Encode()
+	if !isForm(r.In.Header) || r.In.Body == nil || r.In.Body == http.NoBody {
+		return
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.In.Body, maxAnswerBytes))
+	form, perr := url.ParseQuery(string(raw))
+	if err == nil && perr == nil {
+		raw = []byte(values(form, n.toReal).Encode())
+	}
+	r.Out.Body, r.Out.ContentLength = io.NopCloser(bytes.NewReader(raw)), int64(len(raw))
+	r.Out.Header.Set("Content-Length", strconv.Itoa(len(raw)))
+}
+
+// modifyResponse gives the plugin its own names of the copies back.
+func modifyResponse(resp *http.Response) error {
+	n, ok := resp.Request.Context().Value(namesKey{}).(names)
+	if !ok || n.empty() || !isJSON(resp.Header) {
+		return nil
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAnswerBytes))
+	_ = resp.Body.Close()
+	if err != nil {
+		return err //nolint:wrapcheck // the ReverseProxy logs it and answers 502
+	}
+	raw = translateJSON(raw, n.toPlugin)
+	resp.Body, resp.ContentLength = io.NopCloser(bytes.NewReader(raw)), int64(len(raw))
+	resp.Header.Set("Content-Length", strconv.Itoa(len(raw)))
+	return nil
+}
+
+func isForm(h http.Header) bool {
+	t, _, err := mime.ParseMediaType(h.Get("Content-Type"))
+	return err == nil && t == "application/x-www-form-urlencoded"
+}
+
+func isJSON(h http.Header) bool {
+	t, _, err := mime.ParseMediaType(h.Get("Content-Type"))
+	return err == nil && (t == "application/json" || strings.HasSuffix(t, "+json"))
 }
 
 // storageConfig answers with the storage's entry of the storage list, or passes the call on when
 // the list does not show it.
-func (p *Proxy) storageConfig(w http.ResponseWriter, r *http.Request, forward http.Handler) {
-	resp, err := p.upstream(r, apiPrefix+"/storage", "")
-	if err != nil {
-		p.Log.Warn("listing the storages", "error", err)
+func (p *Proxy) storageConfig(w http.ResponseWriter, r *http.Request, storage string, forward http.Handler) {
+	var list []json.RawMessage
+	if err := p.pveFor(r).call(r.Context(), http.MethodGet, "/storage", nil, &list); err != nil {
+		p.Log.Warn("listing the storages", "error", err.Error())
 		forward.ServeHTTP(w, r)
 		return
 	}
-	defer func() { _ = resp.Body.Close() }()
-	var list struct {
-		Data []json.RawMessage `json:"data"`
-	}
-	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, maxListBytes)).Decode(&list) != nil {
-		forward.ServeHTTP(w, r)
-		return
-	}
-	for _, entry := range list.Data {
+	for _, entry := range list {
 		var s struct {
 			Storage string `json:"storage"`
 		}
-		if json.Unmarshal(entry, &s) == nil && s.Storage == r.PathValue("storage") {
+		if json.Unmarshal(entry, &s) == nil && s.Storage == storage {
 			writeData(w, entry)
 			return
 		}
 	}
 	forward.ServeHTTP(w, r)
-}
-
-// content lists a storage's content on a node without the targets of copies still under way. It
-// answers nothing rather than risk showing one, when the requests cannot be read.
-func (p *Proxy) content(w http.ResponseWriter, r *http.Request) {
-	node, storage := r.PathValue("node"), r.PathValue("storage")
-	hidden, err := p.underWay(r.Context(), node, storage)
-	if err != nil {
-		p.Log.Error("reading the volume copies under way", "error", err)
-		writeError(w, http.StatusServiceUnavailable, "the volume copies under way cannot be read")
-		return
-	}
-	resp, err := p.upstream(r, r.URL.Path, r.URL.RawQuery)
-	if err != nil {
-		p.Log.Error("listing a storage's content", "node", node, "storage", storage, "error", err)
-		writeError(w, http.StatusBadGateway, "Proxmox VE cannot be reached")
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxListBytes))
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "reading Proxmox VE's answer failed")
-		return
-	}
-	var list struct {
-		Data []json.RawMessage `json:"data"`
-	}
-	if resp.StatusCode != http.StatusOK || len(hidden) == 0 || json.Unmarshal(body, &list) != nil {
-		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
-		w.WriteHeader(resp.StatusCode)
-		_, _ = w.Write(body)
-		return
-	}
-	list.Data = slices.DeleteFunc(list.Data, func(entry json.RawMessage) bool {
-		var v struct {
-			VolID string `json:"volid"`
-		}
-		return json.Unmarshal(entry, &v) == nil && hidden[v.VolID]
-	})
-	writeData(w, list.Data)
-}
-
-// underWay are the volume IDs of the copies onto the node's storage that have not finished.
-func (p *Proxy) underWay(ctx context.Context, node, storage string) (map[string]bool, error) {
-	requests, err := p.requests(ctx)
-	if err != nil {
-		return nil, err
-	}
-	hidden := map[string]bool{}
-	for i := range requests {
-		req := &requests[i]
-		if !req.Finished() && req.Storage == storage && req.Destination() == node {
-			hidden[req.TargetID()] = true
-		}
-	}
-	return hidden, nil
-}
-
-// copyVolume asks the controller for the copy and waits until it is done. A call for a copy already
-// asked for waits on that request, so that the plugin's retries never start a second copy.
-func (p *Proxy) copyVolume(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		writeError(w, http.StatusBadRequest, "the copy's parameters cannot be read")
-		return
-	}
-	c := Copy{
-		Node: r.PathValue("node"), Storage: r.PathValue("storage"), Volume: r.PathValue("volume"),
-		Target: r.Form.Get("target"), TargetNode: r.Form.Get("target_node"),
-	}
-	c.Volume = strings.TrimPrefix(c.Volume, c.Storage+":")
-	if c.Target == "" {
-		writeError(w, http.StatusBadRequest, "a copy needs a target")
-		return
-	}
-	name, done, err := p.ask(r.Context(), &c)
-	if err == nil && !done {
-		var req Request
-		if req, err = p.wait(r.Context(), name); err == nil && req.State == StateFailed {
-			p.Log.Warn("the volume copy was refused or failed", "request", name, "volume", c.Volume, "target", c.Target, "reason", req.Message)
-			writeErrors(w, http.StatusBadRequest, map[string]string{"copy": req.Message})
-			return
-		}
-	}
-	switch {
-	case r.Context().Err() != nil:
-		// The plugin gave up; the request stays, so that its next call waits on the same copy.
-		return
-	case err != nil:
-		p.Log.Error("asking for a volume copy", "volume", c.Volume, "target", c.Target, "error", err)
-		writeError(w, http.StatusConflict, err.Error())
-		return
-	}
-	p.Log.Info("copied a volume", "request", name, "node", c.Node, "storage", c.Storage, "volume", c.Volume, "target", c.Target, "targetNode", c.TargetNode)
-	// No task: the plugin then waits for none, as the copy is done.
-	writeData(w, nil)
-}
-
-// ask finds the request for the copy, or makes one; done says a request for it has finished
-// already. A finished request for it is deleted, so that a failed copy is asked for afresh.
-func (p *Proxy) ask(ctx context.Context, c *Copy) (string, bool, error) {
-	requests, err := p.requests(ctx)
-	if err != nil {
-		return "", false, err
-	}
-	for i := range requests {
-		req := &requests[i]
-		if req.Copy != *c {
-			continue
-		}
-		if !req.Finished() {
-			return req.Name, false, nil
-		}
-		if err := p.remove(ctx, req.Name); err != nil {
-			return "", false, err
-		}
-		if req.State == StateDone {
-			return req.Name, true, nil
-		}
-	}
-	cm := NewRequest(c)
-	if err := p.Client.Create(ctx, cm); err != nil {
-		return "", false, fmt.Errorf("asking for the copy: %w", err)
-	}
-	p.Log.Info("asked for a volume copy", "request", cm.Name, "node", c.Node, "storage", c.Storage, "volume", c.Volume, "target", c.Target, "targetNode", c.TargetNode)
-	return cm.Name, false, nil
-}
-
-// wait reads the request until the controller has finished it, and then deletes it.
-func (p *Proxy) wait(ctx context.Context, name string) (Request, error) {
-	t := time.NewTicker(p.Poll)
-	defer t.Stop()
-	for {
-		cm := &corev1.ConfigMap{}
-		err := p.Client.Get(ctx, client.ObjectKey{Namespace: Namespace, Name: name}, cm)
-		if apierrors.IsNotFound(err) {
-			return Request{}, errRemoved
-		}
-		if err != nil && ctx.Err() == nil {
-			p.Log.Warn("reading the copy request", "request", name, "error", err)
-		}
-		if err == nil {
-			if req := ParseRequest(cm); req.Finished() {
-				return req, p.remove(ctx, name)
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return Request{}, fmt.Errorf("waiting for the copy: %w", ctx.Err())
-		case <-t.C:
-		}
-	}
-}
-
-func (p *Proxy) requests(ctx context.Context) ([]Request, error) {
-	list := &corev1.ConfigMapList{}
-	if err := p.Client.List(ctx, list, client.InNamespace(Namespace), client.HasLabels{RequestLabel}); err != nil {
-		return nil, fmt.Errorf("listing the copy requests: %w", err)
-	}
-	requests := make([]Request, 0, len(list.Items))
-	for i := range list.Items {
-		requests = append(requests, ParseRequest(&list.Items[i]))
-	}
-	return requests, nil
-}
-
-func (p *Proxy) remove(ctx context.Context, name string) error {
-	cm := &corev1.ConfigMap{Namespace: Namespace, Name: name}
-	if err := client.IgnoreNotFound(p.Client.Delete(ctx, cm)); err != nil {
-		return fmt.Errorf("deleting the copy request %s: %w", name, err)
-	}
-	return nil
-}
-
-// upstream sends a GET to the API with the credentials the plugin's call carries.
-func (p *Proxy) upstream(r *http.Request, path, query string) (*http.Response, error) {
-	u := *p.Upstream
-	u.Path, u.RawPath, u.RawQuery = strings.TrimSuffix(u.Path, "/")+path, "", query
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, u.String(), http.NoBody)
-	if err != nil {
-		return nil, fmt.Errorf("the request to Proxmox VE: %w", err)
-	}
-	for _, h := range []string{"Authorization", "Cookie", "CSRFPreventionToken"} {
-		if v := r.Header.Get(h); v != "" {
-			req.Header.Set(h, v)
-		}
-	}
-	resp, err := p.Transport.RoundTrip(req)
-	if err != nil {
-		return nil, fmt.Errorf("asking Proxmox VE: %w", err)
-	}
-	return resp, nil
 }
 
 // writeData answers as Proxmox VE does, with the data in an envelope.

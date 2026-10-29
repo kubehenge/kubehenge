@@ -124,11 +124,8 @@ type Charts struct {
 	// SnapshotController installs the volume snapshot CRDs and controller, and the plugin's
 	// VolumeSnapshotClass, for clusters that take volume snapshots.
 	SnapshotController Chart
-	// CSIProxy is the image, <repository>@sha256:<digest>, of the proxy beside the CSI plugin's
-	// controller in clusters that take volume snapshots: Kubehenge's own.
-	CSIProxy string
-	Cilium   Chart
-	Calico   Chart
+	Cilium             Chart
+	Calico             Chart
 	// CalicoImages are the images the Tigera operator runs Calico from, all at one release.
 	CalicoImages []Image
 	Headlamp     Chart
@@ -194,12 +191,12 @@ type Addons struct {
 	// CSINewest runs the CSI plugin's newest release, once the cluster's user holds
 	// Datastore.Allocate on its storage, as its csi variable asks.
 	CSINewest bool
-	// VolumeSnapshots has the CSI plugin take volume snapshots, with its copies made by the
-	// controller through the proxy beside it, once nothing stands in the way of what the cluster's
-	// csi variable asks.
+	// VolumeSnapshots has the CSI plugin take volume snapshots, with its copies made by the proxy
+	// beside it, once nothing stands in the way of what the cluster's csi variable asks.
 	VolumeSnapshots bool
 
-	// copyProxy is the proxy the CSI plugin reaches Proxmox VE through with VolumeSnapshots.
+	// copyProxy is the proxy the CSI plugin reaches Proxmox VE through: with VolumeSnapshots, and
+	// after them while a copy made for them is left.
 	copyProxy copyProxy
 	// backupTarget is the target the backups name, found in the cluster's class; nil while it is
 	// not, when Velero is neither installed nor removed.
@@ -404,20 +401,19 @@ type proxmoxFeatures struct {
 	ControllerVMID int    `json:"controllerVmID,omitempty"`
 }
 
-// proxmoxCluster signs in with a token, or with a user's password; the plugins take exactly one.
+// proxmoxCluster is one Proxmox VE cluster in the plugins' configuration, signed in to with the
+// workload cluster's token.
 type proxmoxCluster struct {
 	URL         string `json:"url"`
 	Insecure    bool   `json:"insecure"`
 	TokenID     string `json:"token_id,omitempty"`
 	TokenSecret string `json:"token_secret,omitempty"`
-	Username    string `json:"username,omitempty"`
-	Password    string `json:"password,omitempty"`
 	Region      string `json:"region"`
 }
 
 // resourceSetSecret wraps the workload cluster's Secrets for a ClusterResourceSet, which applies
-// every key of its Secret as a manifest: workloadSecret, and with volume snapshots the proxied
-// configuration of the CSI plugin and the namespace of its copy requests (copyProxyManifests).
+// every key of its Secret as a manifest: workloadSecret, and with the copy proxy the proxied
+// configuration of the CSI plugin and the proxy's namespace and rights (copyProxyManifests).
 func resourceSetSecret(cluster *clusterv1.Cluster, endpoint Endpoint, c Credentials, addons *Addons) (*corev1.Secret, error) {
 	pve := proxmoxCluster{URL: endpoint.URL + "/api2/json", Insecure: endpoint.Insecure, TokenID: c.TokenID, TokenSecret: c.TokenSecret, Region: c.Region}
 	// capmox names machines proxmox://<SMBIOS UUID>, which only the capmox provider mode matches.
@@ -434,7 +430,7 @@ func resourceSetSecret(cluster *clusterv1.Cluster, endpoint Endpoint, c Credenti
 		return nil, err
 	}
 	data := map[string][]byte{workloadSecret + ".yaml": manifest}
-	if addons.VolumeSnapshots {
+	if addons.copyProxy.on {
 		proxied, err := copyProxyManifests(c)
 		if err != nil {
 			return nil, err
@@ -893,9 +889,11 @@ func proxmoxValues(storage string, addons *Addons) (map[string]any, map[string]a
 	}
 	if addons.VolumeSnapshots {
 		snapshotter["enabled"] = true
+	}
+	if addons.copyProxy.on {
 		config = proxiedWorkloadSecret
 		csi["timeout"] = csiCopyTimeout
-		csi["initContainers"] = []any{csiProxyContainer(addons.copyProxy.image, addons.copyProxy.endpoint)}
+		csi["initContainers"] = []any{csiProxyContainer(&addons.copyProxy)}
 	}
 	csi["existingConfigSecret"] = config
 	for k, v := range ca {
@@ -910,9 +908,10 @@ func proxmoxCharts(charts *Charts, distribution templates.Distribution, storage 
 	ccm, csi := proxmoxValues(storage, addons)
 	csiChart := charts.CSI
 	// The proxy answers the newest release's read of the storage's configuration from what the
-	// cluster's token may see, and the controller deletes volumes and snapshots through the owner VM
-	// as for the held release, so the token needs nothing more for it.
-	if addons.CSINewest || addons.VolumeSnapshots {
+	// cluster's token may see and deletes the copies through their holders, and the controller the
+	// plugin's other volumes through the owner VM as for the held release, so the token needs
+	// nothing more for it.
+	if addons.CSINewest || addons.copyProxy.on {
 		csiChart = charts.CSINewest
 	}
 	wanted := []chartProxy{

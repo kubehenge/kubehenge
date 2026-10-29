@@ -4,7 +4,7 @@ Every release's changes, newest first. Versions follow [Semantic Versioning](htt
 
 ## [Unreleased]
 
-- Volume snapshots no longer put `root@pam`'s password into the clusters that take them. The CSI plugin keeps the cluster's own token and asks for each volume copy through a proxy beside it; Kubehenge's controller makes the copy as `root@pam` from the management cluster, only for the cluster's own volumes on its own storage, one at a time and at most 60 an hour for each cluster, and logs each. A snapshot of a large volume now turns ready once its copy is whole instead of failing after 4 minutes, and switching volume snapshots on no longer takes `Permissions.Modify` on `/`.
+- Volume snapshots need no `root@pam` password any more. A proxy beside each cluster's CSI plugin makes the volume copies with the cluster's own token, importing each into a disk of a holder VM in the cluster's pool on the volume's node, and turns the plugin's names of the copies into their real ones and back; it copies only the cluster's own volumes, one at a time, and logs each. The setup's **Volume snapshots** setting and the module's `cluster_volume_snapshots` are gone: every cluster on storage local to each node may take snapshots, and each cluster's role on its pool holds `VM.Clone` for it. A snapshot of a large volume turns ready once its copy is whole, and switching volume snapshots on no longer takes `Permissions.Modify` on `/`. A copy stays on its volume's node.
 
 ## [0.3.1] - 2026-10-28
 

@@ -238,10 +238,7 @@ spec:
             {{- with .Values.proxmox.sysAuditGroup }}
             - --sys-audit-group={{ . }}
             {{- end }}
-            {{- with .Values.proxmox.volumeSnapshots.rootSecret }}
-            - --root-secret={{ . }}
-            - --csi-proxy-image={{ $.Values.image }}
-            {{- end }}
+            - --csi-proxy-image={{ .Values.image }}
             {{- range $flag, $chart := dict "ccm-chart" .Values.addons.cloudControllerManager "csi-chart" .Values.addons.csiPlugin "csi-newest-chart" .Values.addons.csiPluginNewest "snapshot-controller-chart" .Values.addons.snapshotController "cilium-chart" .Values.addons.cilium "calico-chart" .Values.addons.calico "headlamp-chart" .Values.addons.headlamp "rancher-chart" .Values.addons.rancher "cert-manager-chart" .Values.addons.certManager "monitoring-chart" .Values.addons.monitoring "loki-chart" .Values.addons.loki "alloy-chart" .Values.addons.alloy "velero-chart" .Values.addons.velero "kyverno-chart" .Values.addons.kyverno "kyverno-policies-chart" .Values.addons.kyvernoPolicies "istio-chart" .Values.addons.istio "istio-base-chart" .Values.addons.istioBase "istio-cni-chart" .Values.addons.istioCNI "istio-ztunnel-chart" .Values.addons.istioZtunnel "traefik-chart" .Values.addons.traefik "metallb-chart" .Values.addons.metallb "kube-vip-chart" .Values.addons.kubeVip "kube-vip-cloud-provider-chart" .Values.addons.kubeVipCloudProvider "argocd-chart" .Values.addons.argocd "flux-operator-chart" .Values.addons.fluxOperator }}
             - --{{ $flag }}={{ $chart.repository }}/{{ $chart.chart }}:{{ $chart.version }}
             {{- with $chart.values }}

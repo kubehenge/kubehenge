@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -14,12 +12,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubehenge/kubehenge/pkg/csiproxy"
 )
 
 // csiDriver is the Proxmox VE CSI plugin's driver name.
@@ -28,11 +25,10 @@ const csiDriver = "csi.proxmox.sinextra.dev"
 // Proxmox VE numbers a VM's unused disks unused0 to unused255.
 const maxUnused = 256
 
-// Reclaimer deletes the volumes of workload clusters' released persistent volumes and deleted
-// volume snapshots. The CSI plugin deletes a volume through the storage, which needs
-// Datastore.Allocate on all of it; a cluster's token has rights on its own volume owner VM only,
-// through which a volume can be deleted too. Once the volume is gone, the plugin's next attempt
-// finds nothing to delete and the volume or snapshot is released.
+// Reclaimer deletes the volumes of workload clusters' released persistent volumes. The CSI plugin
+// deletes a volume through the storage, which needs Datastore.Allocate on all of it; a cluster's
+// token has rights on its own volume owner VM only, through which a volume can be deleted too. Once
+// the volume is gone, the plugin's next attempt finds nothing to delete and the volume is released.
 type Reclaimer struct {
 	Client         client.Client
 	ClassNamespace string
@@ -108,27 +104,38 @@ func (r *Reclaimer) reclaim(ctx context.Context, cluster *clusterv1.Cluster) err
 	return nil
 }
 
-// reclaimIn deletes the volumes of the released persistent volumes, and of the volume snapshots
-// being deleted, in the workload cluster.
+// reclaimIn deletes the volumes of the released persistent volumes in the workload cluster.
 func (r *Reclaimer) reclaimIn(ctx context.Context, cluster *clusterv1.Cluster, creds Credentials, workload client.Client) error {
-	volumes, err := releasedVolumes(ctx, workload)
-	if err != nil {
-		return err
+	pvs := &corev1.PersistentVolumeList{}
+	if err := workload.List(ctx, pvs); err != nil {
+		return fmt.Errorf("listing persistent volumes: %w", err)
 	}
-	snapshots, err := deletedSnapshots(ctx, workload)
+	// Kubernetes' own CSI deletion waits until no VolumeAttachment names the volume: a node that
+	// went away may still have it attached, and deleting it then would break the VM it is on.
+	attachments := &storagev1.VolumeAttachmentList{}
+	if err := workload.List(ctx, attachments); err != nil {
+		return fmt.Errorf("listing volume attachments: %w", err)
+	}
+	attached := map[string]bool{}
+	for i := range attachments.Items {
+		if name := attachments.Items[i].Spec.Source.PersistentVolumeName; name != nil {
+			attached[*name] = true
+		}
+	}
+	released, errs := releasedVolumes(pvs.Items, attached, creds.VolumeOwner)
+	if len(released) == 0 {
+		return errors.Join(errs...)
+	}
+	copies, err := csiproxy.Copies(ctx, workload)
 	if err != nil {
-		return err
+		return fmt.Errorf("in the workload cluster: %w", err)
 	}
 	var owner *ownerVM
-	var errs []error
-	reclaim := func(what, name, handle string) error {
-		v, err := parseVolumeHandle(handle)
-		if err != nil {
-			return fmt.Errorf("%s %s: %w", what, name, err)
-		}
-		// Only the cluster's own volumes; the owner VM's ACL would refuse others anyway.
-		if v.owner != creds.VolumeOwner {
-			return nil
+	for _, rv := range released {
+		// A restored or cloned volume sits on a holder VM under another name, and the CSI proxy
+		// deletes it there when the plugin asks, without Datastore.Allocate.
+		if _, ok := copies[rv.volid]; ok {
+			continue
 		}
 		if owner == nil {
 			pve, err := r.Connect(creds.TokenID + "=" + creds.TokenSecret)
@@ -137,78 +144,42 @@ func (r *Reclaimer) reclaimIn(ctx context.Context, cluster *clusterv1.Cluster, c
 			}
 			owner = &ownerVM{pve: pve, mover: r.Mover, vmid: creds.VolumeOwner, created: creds.VolumeOwnerNode}
 		}
-		if err := owner.deleteVolume(ctx, v); err != nil {
-			return fmt.Errorf("%s %s: %w", what, name, err)
+		if err := owner.deleteVolume(ctx, rv.volume); err != nil {
+			errs = append(errs, fmt.Errorf("persistent volume %s: %w", rv.pv, err))
+			continue
 		}
-		ctrl.LoggerFrom(ctx).Info("deleted the volume of a released "+what, "cluster", client.ObjectKeyFromObject(cluster), "name", name, "volume", v.volid)
-		return nil
-	}
-	for _, name := range slices.Sorted(maps.Keys(volumes)) {
-		errs = append(errs, reclaim("persistent volume", name, volumes[name]))
-	}
-	for _, name := range slices.Sorted(maps.Keys(snapshots)) {
-		errs = append(errs, reclaim("volume snapshot", name, snapshots[name]))
+		ctrl.LoggerFrom(ctx).Info("deleted the volume of a released persistent volume", "cluster", client.ObjectKeyFromObject(cluster), "persistentVolume", rv.pv, "volume", rv.volid)
 	}
 	return errors.Join(errs...)
 }
 
-// releasedVolumes are the volume handles, by persistent volume, of the CSI plugin's released
-// persistent volumes that no node has attached.
-func releasedVolumes(ctx context.Context, workload client.Client) (map[string]string, error) {
-	pvs := &corev1.PersistentVolumeList{}
-	if err := workload.List(ctx, pvs); err != nil {
-		return nil, fmt.Errorf("listing persistent volumes: %w", err)
-	}
-	// Kubernetes' own CSI deletion waits until no VolumeAttachment names the volume: a node that
-	// went away may still have it attached, and deleting it then would break the VM it is on.
-	attachments := &storagev1.VolumeAttachmentList{}
-	if err := workload.List(ctx, attachments); err != nil {
-		return nil, fmt.Errorf("listing volume attachments: %w", err)
-	}
-	attached := map[string]bool{}
-	for i := range attachments.Items {
-		if name := attachments.Items[i].Spec.Source.PersistentVolumeName; name != nil {
-			attached[*name] = true
-		}
-	}
-	handles := map[string]string{}
-	for i := range pvs.Items {
-		pv := &pvs.Items[i]
-		if released(pv) && !attached[pv.Name] {
-			handles[pv.Name] = pv.Spec.CSI.VolumeHandle
-		}
-	}
-	return handles, nil
+// releasedVolume is the volume of a released persistent volume.
+type releasedVolume struct {
+	volume
+
+	pv string
 }
 
-// snapshotContentList is the external snapshotter's list of VolumeSnapshotContents.
-var snapshotContentList = schema.GroupVersionKind{Group: "snapshot.storage.k8s.io", Version: "v1", Kind: "VolumeSnapshotContentList"}
-
-// deletedSnapshots are the snapshot handles, by VolumeSnapshotContent, of the CSI plugin's snapshots
-// being deleted with their volume. The plugin deletes a snapshot's volume through the storage too,
-// and the snapshot is named after the owner VM as the cluster's volumes are, so it is deleted as
-// they are; the plugin's next attempt then finds nothing left to delete.
-func deletedSnapshots(ctx context.Context, workload client.Client) (map[string]string, error) {
-	list := &unstructured.UnstructuredList{}
-	list.SetGroupVersionKind(snapshotContentList)
-	if err := workload.List(ctx, list); err != nil {
-		// A cluster that never took a snapshot may have no such kind.
-		if meta.IsNoMatchError(err) || apierrors.IsNotFound(err) {
-			return map[string]string{}, nil
+// releasedVolumes are the volumes of the released persistent volumes no VolumeAttachment names,
+// of the cluster's own only: the owner VM's ACL would refuse others anyway.
+func releasedVolumes(pvs []corev1.PersistentVolume, attached map[string]bool, owner int) ([]releasedVolume, []error) {
+	var out []releasedVolume
+	var errs []error
+	for i := range pvs {
+		pv := &pvs[i]
+		if !released(pv) || attached[pv.Name] {
+			continue
 		}
-		return nil, fmt.Errorf("listing volume snapshot contents: %w", err)
-	}
-	handles := map[string]string{}
-	for i := range list.Items {
-		c := &list.Items[i]
-		driver, _, _ := unstructured.NestedString(c.Object, "spec", "driver")
-		policy, _, _ := unstructured.NestedString(c.Object, "spec", "deletionPolicy")
-		handle, _, _ := unstructured.NestedString(c.Object, "status", "snapshotHandle")
-		if c.GetDeletionTimestamp() != nil && driver == csiDriver && policy == "Delete" && handle != "" {
-			handles[c.GetName()] = handle
+		v, err := parseVolumeHandle(pv.Spec.CSI.VolumeHandle)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("persistent volume %s: %w", pv.Name, err))
+			continue
+		}
+		if v.owner == owner {
+			out = append(out, releasedVolume{volume: v, pv: pv.Name})
 		}
 	}
-	return handles, nil
+	return out, errs
 }
 
 // released reports whether a persistent volume of the Proxmox VE CSI plugin waits for its volume

@@ -196,8 +196,7 @@ export interface Api {
   restoreEtcd: (ns: string, name: string, snapshot: string) => Promise<void>;
 
   setupStatus: () => Promise<SetupStatus>;
-  /** rootPassword is root@pam's for volume snapshots; empty keeps the one stored. */
-  setup: (settings: ManagementSettings, passphrase: string, rootPassword?: string) => Promise<Job>;
+  setup: (settings: ManagementSettings, passphrase: string) => Promise<Job>;
 
   health: (ns: string, name: string) => Promise<ClusterHealth>;
   fleetHealth: () => Promise<FleetHealth[]>;
@@ -267,12 +266,7 @@ export const api: Api = {
   restoreEtcd: (ns, name, snapshot) => act("POST", `${clusterPath(ns, name)}/etcd-restores`, { snapshot }),
 
   setupStatus: () => request("GET", "/api/setup"),
-  setup: (settings, passphrase, rootPassword) =>
-    request("POST", "/api/setup", {
-      settings,
-      passphrase,
-      ...(rootPassword !== undefined && rootPassword !== "" && { rootPassword }),
-    }),
+  setup: (settings, passphrase) => request("POST", "/api/setup", { settings, passphrase }),
 
   health: (ns, name) => request("GET", `${clusterPath(ns, name)}/health`),
   fleetHealth: () => request("GET", "/api/fleet/health"),

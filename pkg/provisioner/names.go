@@ -38,6 +38,12 @@ type Names struct {
 	VolumeOwner string
 }
 
+// VolumeHolders names the VMs that hold the copies of the cluster's volumes, made for its volume
+// snapshots, restores and clones, as unused disks. It carries the owner's whole cluster identity.
+func (n Names) VolumeHolders() string {
+	return strings.TrimSuffix(n.VolumeOwner, volumeOwnerSuffix) + "-copies"
+}
+
 // Proxmox VE nests pools three deep; each cluster's pool takes the last level.
 const maxWorkloadPoolDepth = 2
 
@@ -105,18 +111,17 @@ func NamesFor(workloadPool, namespace, name string) (Names, error) {
 	// The owner is recognised by its name, so the name carries the whole cluster identity: two
 	// clusters of one name in different namespaces must never take each other's owner, whose
 	// removal deletes every volume it owns.
-	suffix := "-" + digest[:8] + "-volumes"
-	owner := name
-	if len(owner) > maxVMName-len(suffix) {
-		owner = owner[:maxVMName-len(suffix)]
-	}
+	suffix := "-" + digest[:8] + volumeOwnerSuffix
 	return Names{
 		Pool:        workloadPool + "/" + id,
 		User:        user + "@pve",
 		Token:       "cluster",
-		VolumeOwner: owner + suffix,
+		VolumeOwner: name[:min(len(name), maxVMName-len(suffix))] + suffix,
 	}, nil
 }
+
+// volumeOwnerSuffix ends the name of the VM that owns a cluster's volumes.
+const volumeOwnerSuffix = "-volumes"
 
 // Characters Proxmox VE allows in the user part of a user ID.
 var userName = regexp.MustCompile(`^[^\s:/]+$`)

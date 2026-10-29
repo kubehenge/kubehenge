@@ -68,9 +68,9 @@
 # the shared Headlamp's sign-in identities there. Unset, the cluster gets a namespace of its own,
 # created and deleted with it, and none of those identities.
 # KUBEHENGE_E2E_VOLUME_SNAPSHOTS=1 switches volume snapshots on, takes a snapshot of a volume with
-# data, restores it into a new one and checks the data, has a copy of a volume that is not the
-# cluster's refused, and switches them off again, with a management cluster that lets clusters
-# take them, root@pam's password stored, and a KUBEHENGE_E2E_STORAGE local to each node.
+# data, restores it into a new one and clones the volume, and checks the data in both; has the proxy
+# refuse a copy of a volume that is not the cluster's, checks that a deleted snapshot's copy goes
+# from its holder VM, and switches them off again, on a KUBEHENGE_E2E_STORAGE local to each node.
 # KUBEHENGE_E2E_REGISTRY, when set, is the plain-HTTP registry the controller's image under test was
 # pushed to by its ghcr.io path; the control-plane nodes pull ghcr.io's images from it first while
 # volume snapshots are on, for the copy proxy that runs from that image.
@@ -1047,8 +1047,6 @@ on_machines() {
 }
 
 if [ "${KUBEHENGE_E2E_VOLUME_SNAPSHOTS:-}" = 1 ]; then
-    kubectl -n kubehenge-system get secret kubehenge-root-pam > /dev/null ||
-        fail "no root@pam password is stored for volume snapshots"
     # csi_controller_is <Secret> <true|false>: the CSI plugin's controller is rolled out reading its
     # configuration from the Secret, with the snapshot sidecar and the copy proxy beside it, or
     # without either.
@@ -1077,29 +1075,63 @@ if [ "${KUBEHENGE_E2E_VOLUME_SNAPSHOTS:-}" = 1 ]; then
             printf '%s\n' "${decoded}" | grep -q '^  token_id: ' &&
             ! printf '%s\n' "${decoded}" | grep -qE 'root@pam|username|password'
     }
-    # holds_no_root_password: no Secret or ConfigMap in the workload cluster, and no chart values for
-    # it in the management cluster, hold root@pam's password; the password is never printed.
-    holds_no_root_password() {
-        root_b64=$(kubectl -n kubehenge-system get secret kubehenge-root-pam -o jsonpath='{.data.password}')
-        # shellcheck disable=SC2310 # a failed read fails the check.
-        secrets=$(wl get secrets -A -o json) || return 1
-        # shellcheck disable=SC2310 # a failed read fails the check.
-        others=$(kubectl -n "${ns}" get helmchartproxies,helmreleaseproxies -o json && wl get configmaps -A -o json) || return 1
-        printf '%s' "${secrets}" | ROOT_B64="${root_b64}" jq -e '
-            ($ENV.ROOT_B64 | @base64d | rtrimstr("\n") | rtrimstr("\r")) as $pw |
-            $pw != "" and ([.items[] | .data // {} | .[] | @base64d | contains($pw)] | any | not)' > /dev/null &&
-            printf '%s' "${others}" | ROOT_B64="${root_b64}" jq -se '
-                ($ENV.ROOT_B64 | @base64d | rtrimstr("\n") | rtrimstr("\r")) as $pw |
-                tostring | contains($pw) | not' > /dev/null
+    # csi_controller_pod: the name of the CSI plugin's controller's running pod, with the proxy.
+    csi_controller_pod() {
+        wl -n kube-system get pods -o json | jq -er '
+            [.items[] | select(.status.phase == "Running" and any(.spec.initContainers[]?; .name == "kubehenge-csi-proxy"))] |
+            first | .metadata.name'
     }
-    # copied <volume name part>: the controller logged a copy for this cluster as root@pam, of a volume
-    # whose name has the part.
+    # copied <volume name part> <count>: the proxy logged at least count copies whose name, as the
+    # plugin asked for it, has the part.
     copied() {
         # shellcheck disable=SC2310 # polled; a failed read is a no.
-        log=$(kubectl -n kubehenge-system logs deployment/kubehenge-controller --tail=-1 2> /dev/null) || return 1
-        printf '%s\n' "${log}" | jq -Rce --arg ns "${ns}" --arg n "${name}" --arg part "$1" '
-            fromjson? | select(.msg == "copied a volume as root@pam" and .cluster.namespace == $ns and .cluster.name == $n and
-                (.targetVolume | contains($part)))' > /dev/null
+        pod=$(csi_controller_pod) || return 1
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        log=$(wl -n kube-system logs "pod/${pod}" -c kubehenge-csi-proxy --tail=-1 2> /dev/null) || return 1
+        printf '%s\n' "${log}" | jq -Rsce --arg part "$1" --argjson n "$2" '
+            [split("\n")[] | fromjson? | select(.msg == "copied a volume" and (.volume | contains($part)))] | length >= $n' > /dev/null
+    }
+    # holder_vms: the cluster's holder VMs, as {vmid, node}, by the name beside the volume owner's.
+    holder_vms() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        all=$(pve_get "pools?poolid=${pool_uri}") || return 1
+        printf '%s' "${all}" | jq -ce --argjson o "${owner}" '
+            [.data[0].members[] | select(.type == "qemu")] as $vms |
+            ([$vms[] | select(.vmid == $o) | .name][0] | sub("-volumes$"; "-copies")) as $h |
+            [$vms[] | select(.name == $h and .vmid != $o) | {vmid, node, status}]'
+    }
+    # holders_ready: every holder VM is a stopped VM, and there is one at least.
+    holders_ready() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        vms=$(holder_vms) || return 1
+        printf '%s' "${vms}" | jq -e 'length > 0 and all(.status == "stopped")' > /dev/null
+    }
+    no_holders() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        vms=$(holder_vms) && [ "${vms}" = '[]' ]
+    }
+    # held: the volume IDs the holder VMs' disks are, one per line.
+    held() {
+        # shellcheck disable=SC2310 # a failed read fails the caller.
+        vms=$(holder_vms) || return 1
+        for vm in $(printf '%s' "${vms}" | jq -r '.[] | "\(.node)/\(.vmid)"'); do
+            # shellcheck disable=SC2310 # a failed read fails the caller.
+            pve_get "nodes/${vm%/*}/qemu/${vm#*/}/config" | jq -r '.data | to_entries[] | select(.key | test("^(unused|scsi)[0-9]+$")) | .value | split(",")[0]' ||
+                return 1
+        done
+    }
+    # holds <count>: the holder VMs hold that many volumes.
+    holds() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        volumes=$(held) || return 1
+        count=$(printf '%s' "${volumes}" | grep -c .) || true
+        [ "${count}" = "$1" ]
+    }
+    # holds_not <volume ID>: the holder VMs no longer hold the volume.
+    holds_not() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        volumes=$(held) || return 1
+        ! printf '%s\n' "${volumes}" | grep -qxF "$1"
     }
     # The clusters pull Kubehenge's own image from ghcr.io, where a build under test is not: on the
     # control-plane nodes, where the proxy runs beside the CSI plugin's controller, containerd asks
@@ -1180,13 +1212,15 @@ EOF
         fi
     }
 
-    step "volume snapshots, with the copies made as root@pam by the controller, never in the cluster"
+    step "volume snapshots, with the copies made with the cluster's own token"
     set_variable csi '{"volumeSnapshots":true}'
     until_true 300 "the CSI plugin's configuration through the proxy, with the cluster's token" proxied
     until_true 900 "the CSI plugin's controller with the snapshot sidecar and the copy proxy" csi_controller_is kubehenge-proxmox-proxied true
-    until_true 300 "the copy requests' namespace" wl get namespace kubehenge-volume-copies
-    # shellcheck disable=SC2310 # a failed check fails the test with the reason.
-    holds_no_root_password || fail "root@pam's password is in the workload cluster or its chart values"
+    until_true 300 "the copies' namespace" wl get namespace kubehenge-volume-copies
+    until_true 300 "the cluster's holder VMs, stopped" holders_ready
+    # shellcheck disable=SC2310 # a failed read fails the test with the reason.
+    cluster_get "access/permissions?path=/vms/${owner}" | jq -e '[.data[] | has("VM.Clone")] | any' > /dev/null ||
+        fail "the cluster's token cannot copy its own volumes"
     until_true 600 "the VolumeSnapshotClass" wl get volumesnapshotclass proxmox
     if [ "${distribution}" != rke2 ]; then
         wl -n kube-system rollout status deployment -l app.kubernetes.io/name=snapshot-controller --timeout=5m
@@ -1204,7 +1238,7 @@ spec:
       storage: 1Gi
 EOF
     # 64 MiB of random data and its checksum, written and flushed, and the volume detached again
-    # before its snapshot is taken.
+    # before its snapshot and its clone are taken.
     data_pod e2e-write e2e-source 'head -c 67108864 /dev/urandom > /data/blob; cd /data; sha256sum blob > sum; sync'
     wl -n default delete pod/e2e-write --wait --timeout=5m
     wl apply -f - << 'EOF'
@@ -1232,56 +1266,80 @@ spec:
   resources:
     requests:
       storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: e2e-clone
+  namespace: default
+spec:
+  accessModes: [ReadWriteOnce]
+  dataSource:
+    kind: PersistentVolumeClaim
+    name: e2e-source
+  resources:
+    requests:
+      storage: 1Gi
 EOF
     until_true 900 "the volume snapshot ready to use" snapshot_ready
     data_pod e2e-check e2e-restored 'cd /data; sha256sum -c sum'
-    until_true 120 "the controller's log of the snapshot's copy" copied -snapshot-
-    until_true 120 "the controller's log of the restore's copy" copied -pvc-
-    until_true 300 "the finished copy requests deleted" none_of -n kubehenge-volume-copies configmaps -l kubehenge.dev/volume-copy
+    data_pod e2e-clone-check e2e-clone 'cd /data; sha256sum -c sum'
+    until_true 120 "the proxy's log of the snapshot's copy" copied -snapshot- 1
+    until_true 120 "the proxy's log of the restore's and the clone's copies" copied -pvc- 2
+    until_true 120 "the three copies on the holder VMs" holds 3
+    # shellcheck disable=SC2310 # a failed read fails the test with the reason.
+    snapshot_copy=$(wl -n kubehenge-volume-copies get configmaps -l kubehenge.dev/volume-copy -o json |
+        jq -er '[.items[].data | select(.state == "done" and (.volume | contains("-snapshot-"))) | .copy] | if length == 1 then .[0] else error("not one snapshot copy") end') ||
+        fail "no record of the snapshot's copy"
 
     step "a copy of a volume that is not the cluster's refused"
     copy_node=$(kubectl -n "${ns}" get proxmoxmachines -o jsonpath='{.items[0].status.proxmoxNode}')
-    copy_owner=$(kubectl -n "${ns}" get secret "${name}-proxmox-token" -o jsonpath='{.data.volumeOwner}' | base64 -d)
-    wl apply -f - << EOF
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: e2e-foreign
-  namespace: kubehenge-volume-copies
-  labels:
-    kubehenge.dev/volume-copy: ""
-data:
-  node: ${copy_node}
-  storage: ${KUBEHENGE_E2E_STORAGE}
-  volume: vm-1-disk-0
-  target: vm-${copy_owner}-e2e-foreign
-EOF
-    # foreign_refused: the controller failed the request, saying the volume is not the cluster's.
-    foreign_refused() {
-        # shellcheck disable=SC2310 # polled; a failed read is a no.
-        request=$(wl -n kubehenge-volume-copies get configmap e2e-foreign -o json) || return 1
-        printf '%s' "${request}" | jq -e '.data.state == "failed" and (.data.message | contains("is not one of the cluster'"'"'s own"))' > /dev/null
-    }
-    # refusal_recorded: the Cluster has a VolumeCopyFailed event.
+    copy_vmid=$(kubectl -n "${ns}" get proxmoxmachines -o jsonpath='{.items[0].spec.virtualMachineID}')
+    # shellcheck disable=SC2310 # a failed read fails the test with the reason.
+    proxy_pod=$(csi_controller_pod) || fail "no CSI plugin controller with the proxy"
+    wl -n kube-system port-forward "pod/${proxy_pod}" 18006:8006 > /dev/null 2>&1 &
+    forward=$!
+    proxy_answers() { curl -s -o /dev/null "http://127.0.0.1:18006/api2/json/version"; }
+    until_true 60 "the proxy reached through a port-forward" proxy_answers
+    # A node VM's disk is in the cluster's pool, but not one the plugin's volumes are copied from.
+    refusal=$(curl -s -w '\n%{http_code}' -H "${token_auth}" -X POST \
+        --data-urlencode "target=vm-${owner}-e2e-foreign" \
+        "http://127.0.0.1:18006/api2/json/nodes/${copy_node}/storage/${KUBEHENGE_E2E_STORAGE}/content/vm-${copy_vmid}-disk-0") || true
+    kill "${forward}" 2> /dev/null || true
+    refusal_status=$(printf '%s\n' "${refusal}" | tail -n 1)
+    if [ "${refusal_status}" != 403 ] || ! printf '%s\n' "${refusal}" | grep -q "is not one of the cluster's own"; then
+        fail "the proxy did not refuse a copy of a node VM's disk: ${refusal}"
+    fi
+    # refusal_recorded: the proxy recorded a VolumeCopyFailed event.
     refusal_recorded() {
         # shellcheck disable=SC2310 # polled; a failed read is a no.
-        events=$(kubectl -n "${ns}" get events --field-selector "involvedObject.name=${name},reason=VolumeCopyFailed" -o name) &&
-            [ -n "${events}" ]
+        events=$(wl -n kube-system get events --field-selector reason=VolumeCopyFailed -o name) && [ -n "${events}" ]
     }
-    until_true 120 "the copy of another volume refused" foreign_refused
-    until_true 60 "the refusal recorded on the cluster" refusal_recorded
-    wl -n kubehenge-volume-copies delete configmap e2e-foreign
-    wl -n default delete pod/e2e-check pvc/e2e-restored pvc/e2e-source volumesnapshot/e2e --wait --timeout=5m
-    # The CSI plugin retries a failed deletion with a back-off of up to five minutes.
+    until_true 60 "the refusal recorded as an event" refusal_recorded
+    records=$(wl -n kubehenge-volume-copies get configmaps -l kubehenge.dev/volume-copy -o name | wc -l)
+    [ "${records}" = 3 ] || fail "the refused copy left a record: ${records} records, not the three copies'"
+    # shellcheck disable=SC2310 # a failed check fails the test with the reason.
+    holds 3 || fail "the refused copy left a volume on the holder VMs"
+
+    step "a deleted snapshot's copy deleted from its holder VM"
+    wl -n default delete volumesnapshot/e2e --wait --timeout=5m
     until_true 600 "the snapshot's content deleted" none_of volumesnapshotcontents
+    until_true 300 "the snapshot's copy ${snapshot_copy} gone from the holder VMs" holds_not "${snapshot_copy}"
+    # shellcheck disable=SC2310 # a failed check fails the test with the reason.
+    holds 2 || fail "deleting the snapshot took more than its copy from the holder VMs"
+    wl -n default delete pod/e2e-check pod/e2e-clone-check pvc/e2e-restored pvc/e2e-clone pvc/e2e-source --wait --timeout=5m
+    # The CSI plugin retries a failed deletion with a back-off of up to five minutes.
     until_true 600 "the volumes deleted" sh -c "[ \"\$(KUBECONFIG=${work}/workload kubectl get pv -o name | wc -l)\" = 0 ]"
     until_true 600 "no volume left on ${KUBEHENGE_E2E_STORAGE}" no_owned_volumes
+    until_true 300 "no copy left on the holder VMs" holds 0
+    until_true 300 "the copies' records deleted" none_of -n kubehenge-volume-copies configmaps -l kubehenge.dev/volume-copy
 
     step "the CSI plugin reaching Proxmox VE directly again, without volume snapshots"
     set_variable csi '{"volumeSnapshots":false}'
     until_true 900 "the CSI plugin's controller without the snapshot sidecar and the proxy, with the cluster's token" csi_controller_is kubehenge-proxmox false
     until_true 300 "the CSI plugin's configuration through the proxy deleted" not_found -n kube-system secret kubehenge-proxmox-proxied
-    until_true 300 "the copy requests' namespace deleted" not_found namespace kubehenge-volume-copies
+    until_true 300 "the copies' namespace deleted" not_found namespace kubehenge-volume-copies
+    until_true 300 "the empty holder VMs removed" no_holders
     until_true 600 "the VolumeSnapshotClass removed" not_found volumesnapshotclass proxmox
     until_true 600 "the snapshot controller removed" none_of -n kube-system deployments -l app.kubernetes.io/name=snapshot-controller
     persistent_volume

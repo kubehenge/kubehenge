@@ -148,10 +148,10 @@ export function SnapshotsField({
         Take volume snapshots
       </label>
       <div className="hint" id={hint}>
-        The CSI plugin takes VolumeSnapshots, restores them into new volumes and clones volumes. Proxmox VE lets only
-        root@pam copy a volume, so Kubehenge makes each copy as root@pam once it has checked that both volumes are the
-        cluster&apos;s own; root@pam&apos;s password never enters the cluster. Only on storage local to each node: ZFS,
-        LVM, LVM-thin, directory or btrfs.
+        The CSI plugin takes VolumeSnapshots, restores them into new volumes and clones volumes. A proxy beside it
+        copies each volume with the cluster&apos;s own Proxmox VE token, as a disk of a VM in the cluster&apos;s pool,
+        and only the cluster&apos;s own volumes. Only on storage local to each node: ZFS, LVM, LVM-thin, directory or
+        btrfs; a copy stays on its volume&apos;s node.
       </div>
       {refused && (
         <p className={checked ? "field-error" : "hint"} id={reason} role={checked ? "alert" : undefined}>

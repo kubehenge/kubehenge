@@ -53,9 +53,6 @@ type Appliance struct {
 	// InterfaceKubeconfig makes the interface's kubeconfig from the management cluster's admin
 	// kubeconfig and API endpoint, once an apply has succeeded.
 	InterfaceKubeconfig func(ctx context.Context, admin []byte, endpoint string) ([]byte, error)
-	// StoreRootPassword keeps root@pam's password in the management cluster for volume snapshots,
-	// or removes it, with the admin kubeconfig, once an apply has succeeded (StoreRootPassword).
-	StoreRootPassword func(ctx context.Context, admin []byte, on bool, password string) error
 
 	mu          sync.Mutex
 	job         *Job
@@ -117,13 +114,6 @@ func (a *Appliance) Apply(settings *Settings, passphrase string, ticket *pve.Tic
 		if err := s.KeepsFixed(was); err != nil {
 			return err
 		}
-	}
-	// A password is kept only while volume snapshots are on; one stored by an earlier run serves
-	// until it is changed.
-	if !s.ClusterVolumeSnapshots {
-		s.RootPassword = ""
-	} else if s.RootPassword == "" && (was == nil || !was.ClusterVolumeSnapshots) {
-		return ErrNoRootPassword
 	}
 	if err := ValidPassphrase(passphrase); err != nil {
 		return err

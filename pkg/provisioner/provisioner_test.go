@@ -38,9 +38,13 @@ func TestNamesFor(t *testing.T) {
 	if !regexp.MustCompile(`^web-[0-9a-f]{8}-volumes$`).MatchString(n.VolumeOwner) {
 		t.Errorf("volume owner %q", n.VolumeOwner)
 	}
-	// Removing a cluster deletes its owner's volumes; one of the same name elsewhere must never match.
-	if other, _ := NamesFor("kubehenge", "team-b", "web"); other.VolumeOwner == n.VolumeOwner {
-		t.Errorf("clusters in two namespaces share volume owner %q", n.VolumeOwner)
+	if n.VolumeHolders() != strings.TrimSuffix(n.VolumeOwner, "-volumes")+"-copies" {
+		t.Errorf("holder VMs %q beside volume owner %q", n.VolumeHolders(), n.VolumeOwner)
+	}
+	// Removing a cluster deletes its owner's and holders' volumes; ones of the same names elsewhere
+	// must never match.
+	if other, _ := NamesFor("kubehenge", "team-b", "web"); other.VolumeOwner == n.VolumeOwner || other.VolumeHolders() == n.VolumeHolders() {
+		t.Errorf("clusters in two namespaces share volume owner %q or holders %q", n.VolumeOwner, n.VolumeHolders())
 	}
 }
 
@@ -356,10 +360,7 @@ var testCharts = Charts{
 	},
 	FluxVersion:       "2.9.6",
 	PodSecurityExempt: []string{"kube-system", "node-exporter"},
-	CSIProxy:          testCSIProxy,
 }
-
-const testCSIProxy = "ghcr.io/kubehenge/kubehenge@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 func TestParseChart(t *testing.T) {
 	t.Parallel()

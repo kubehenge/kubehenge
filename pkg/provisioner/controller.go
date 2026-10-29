@@ -49,6 +49,10 @@ const (
 // Cloud creates and removes a cluster's Proxmox VE objects; *Proxmox is the real one.
 type Cloud interface {
 	Ensure(ctx context.Context, n Names, access Access, held Credentials, record func(Credentials) error) (Credentials, error)
+	// EnsureVolumeHolders gives the cluster a holder VM with room for volume copies on each node.
+	EnsureVolumeHolders(ctx context.Context, n Names, nodes []string) error
+	// RemoveEmptyVolumeHolders removes the cluster's holder VMs that hold no copy.
+	RemoveEmptyVolumeHolders(ctx context.Context, n Names) error
 	Remove(ctx context.Context, n Names, held Credentials) error
 }
 
@@ -164,7 +168,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if addons.VolumeSnapshots, err = r.volumeSnapshotsOn(ctx, cluster); err != nil {
 		return ctrl.Result{}, err
 	}
-	addons.copyProxy = copyProxy{image: r.Charts.CSIProxy, endpoint: r.Endpoint}
+	if addons.copyProxy, err = r.copyProxyFor(ctx, cluster, creds, &addons); err != nil {
+		return ctrl.Result{}, err
+	}
 	addonWaiting, err := r.applyAddons(ctx, cluster, creds, &addons)
 	if err != nil {
 		return ctrl.Result{}, err
