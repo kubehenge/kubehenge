@@ -54,10 +54,13 @@ COPY ssh-host-keys.service /etc/systemd/system/ssh-host-keys.service
 # No watchdog to arm, the clock is the host's, and no getty or first-boot prompt has a terminal; the
 # machine ID is made at each start. nftables.service would flush the rules the container runtime
 # keeps in the container for its DNS, so the NAT is added beside them through iptables-nft, Debian's
-# default; kernels built without the legacy tables have nothing else.
+# default; kernels built without the legacy tables have nothing else. sshd is enabled as a service,
+# not only through its socket, which gives it the name sshd.service: creating or joining a Proxmox
+# VE cluster reloads sshd by that name and fails without it.
 RUN systemctl mask watchdog-mux.service nftables.service systemd-timesyncd.service getty.target \
         console-getty.service systemd-firstboot.service systemd-networkd-wait-online.service \
-    && systemctl enable lxcfs.service dnsmasq.service ssh-host-keys.service \
+    && systemctl enable lxcfs.service dnsmasq.service ssh-host-keys.service ssh.service \
+    && test -L /etc/systemd/system/sshd.service \
     && rm -f /etc/network/interfaces.new
 
 STOPSIGNAL SIGRTMIN+3

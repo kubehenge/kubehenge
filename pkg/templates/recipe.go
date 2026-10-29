@@ -212,7 +212,7 @@ func nodeChecks(b Bake) [][]string {
 			// The distribution installs itself there when a node boots.
 			[]string{"sh", "-c", "touch /usr/local/.kubehenge && rm /usr/local/.kubehenge"},
 		)
-		if _, r, err := ReleaseOf(b.NodeOS); err == nil && r.Mode == ImageMode {
+		if _, r, err := ReleaseOf(b.NodeOS); err == nil && r.Mode == ImageMode && b.Distribution == RKE2 {
 			// A confined container may install CNI plugins into an image-mode node's /opt, in /var.
 			checks = append(checks, []string{"sh", "-c", "stat -L -c %C /opt/cni/bin | grep -q ':container_file_t:'"})
 		}

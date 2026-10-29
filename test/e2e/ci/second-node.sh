@@ -63,7 +63,12 @@ on pve2 sh -c 'ip addr del 172.20.99.1/24 dev vmbr0 && ip link set vmbr0 address
     systemctl stop dnsmasq.service &&
     iptables-nft -t nat -D POSTROUTING -s 172.20.99.0/24 -o eth0 -j MASQUERADE'
 
-on pve pvecm create kubehenge-e2e --link0 172.21.99.2 > /dev/null
+# pvecm reports a failed creation task and still exits 0.
+on pve pvecm create kubehenge-e2e --link0 172.21.99.2
+on pve test -f /etc/pve/corosync.conf || {
+    echo "pve made no cluster" >&2
+    exit 1
+}
 fingerprint=$(on pve openssl x509 -in /etc/pve/nodes/pve/pve-ssl.pem -noout -fingerprint -sha256 | cut -d= -f2)
 on pve2 pvesh create /cluster/config/join --hostname 172.21.99.2 --fingerprint "${fingerprint}" \
     --password "${KUBEHENGE_E2E_ROOT_PASSWORD}" --link0 172.21.99.4 > /dev/null
@@ -82,6 +87,7 @@ until both_online; do
     if [ "${now}" -ge "${deadline}" ]; then
         echo "pve2 did not join pve's cluster within 10 minutes" >&2
         on pve pvecm status >&2 || true
+        on pve journalctl -u pve-cluster -u corosync --no-pager -n 100 >&2 || true
         on pve2 journalctl -u pve-cluster -u corosync --no-pager -n 100 >&2 || true
         exit 1
     fi

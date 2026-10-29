@@ -309,19 +309,20 @@ func TestNodeChecks(t *testing.T) {
 }
 
 // RKE2's Cilium installs portmap into /opt/cni/bin from a confined container, which an image-mode
-// node keeps in /var/opt, outside the distributions' own label for /opt/cni.
-func TestImageModeNodesLetContainersInstallCNIPlugins(t *testing.T) {
+// node keeps in /var/opt, where RKE2 would make the directory with /var/opt's label.
+func TestImageModeRKE2NodesLetContainersInstallCNIPlugins(t *testing.T) {
 	t.Parallel()
 	if _, r, err := ReleaseOf(DefaultNodeOS); err != nil || r.Mode != ImageMode {
 		t.Fatalf("the default node OS is not image mode: %+v, %v", r, err)
 	}
-	for _, d := range []Distribution{RKE2, K3s} {
-		if all := fmt.Sprint(nodeChecks(Bake{NodeOS: DefaultNodeOS, Distribution: d})); !strings.Contains(all, "stat -L -c %C /opt/cni/bin | grep -q ':container_file_t:'") {
-			t.Errorf("%s: no check of /opt/cni/bin's label in %s", d, all)
-		}
+	const check = "stat -L -c %C /opt/cni/bin | grep -q ':container_file_t:'"
+	if all := fmt.Sprint(nodeChecks(Bake{NodeOS: DefaultNodeOS, Distribution: RKE2})); !strings.Contains(all, check) {
+		t.Errorf("no check of /opt/cni/bin's label in %s", all)
 	}
-	if all := fmt.Sprint(nodeChecks(Bake{Distribution: RKE2})); strings.Contains(all, "/opt/cni/bin") {
-		t.Errorf("a node OS that is not image mode is checked for /var/opt: %s", all)
+	for _, b := range []Bake{{Distribution: RKE2}, {NodeOS: DefaultNodeOS, Distribution: K3s}} {
+		if all := fmt.Sprint(nodeChecks(b)); strings.Contains(all, "/opt/cni/bin") {
+			t.Errorf("%s on %v is checked for the label of /opt/cni/bin, which nothing set: %s", b.Distribution, b.NodeOS, all)
+		}
 	}
 	cil, err := recipeFiles.ReadFile("node/kubehenge-cni.cil")
 	if err != nil {

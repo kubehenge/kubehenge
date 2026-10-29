@@ -1,4 +1,5 @@
-; The containers that install CNI plugins write into /opt/cni/bin, which RKE2's and k3s's policies
-; label as container files. An image-mode node keeps /opt in /var/opt, which that rule does not
-; reach, and RKE2's Cilium installs portmap from a confined container, refused anything else.
+; RKE2's policy labels /opt/cni for the containers that install CNI plugins there, among them RKE2's
+; Cilium's portmap installer, which runs confined and may write only into container files. An
+; image-mode node keeps /opt in /var/opt, which this labels alike wherever the policy does not
+; already take /var/opt for /opt.
 (filecon "/var/opt/cni(/.*)?" any (system_u object_r container_file_t ((s0) (s0))))
