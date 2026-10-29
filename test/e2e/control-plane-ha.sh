@@ -149,8 +149,9 @@ step "the dead server is replaced"
 until_true 1800 "machine ${machine} replaced" absent kubectl -n "${ns}" get machine "${machine}"
 until_true 2400 "three servers ready again" servers 3
 until_true 600 "three etcd members again" etcd_members 3
-gone() { pve_get "cluster/resources?type=vm" | jq -e --argjson v "${vmid}" '[.data[] | select(.vmid == $v)] | length == 0' > /dev/null; }
-until_true 600 "VM ${vmid} removed" gone
+# By its name: Proxmox VE hands the freed VM ID to the next clone, the replacement's often.
+gone() { pve_get "cluster/resources?type=vm" | jq -e --arg n "${infra}" '[.data[] | select(.name == $n)] | length == 0' > /dev/null; }
+until_true 600 "VM ${vmid} (${infra}) removed" gone
 # shellcheck disable=SC2310 # its failure is the one reported.
 workload -n default get configmap ha-quorum > /dev/null || fail "the write made with two etcd members is lost"
 
