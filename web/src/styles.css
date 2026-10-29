@@ -298,6 +298,37 @@ output.notice {
   font-size: 12px;
 }
 
+/* The account controls sit in the bar; only on narrow screens are they a popover. */
+.account {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  position: static;
+  inset: auto;
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  overflow: visible;
+}
+
+.account-toggle,
+.theme-label {
+  display: none;
+}
+
+.account:popover-open .theme-label {
+  display: inline;
+}
+
+.account-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
 .theme-toggle {
   padding: 5px;
   border-color: transparent;
@@ -540,12 +571,60 @@ button.go {
 
   .rail,
   .brand ~ .go,
-  .user {
+  .account:not(:popover-open) {
     display: none;
   }
 
   .brand {
     width: auto;
+  }
+
+  .account-toggle {
+    display: inline-flex;
+  }
+}
+
+/* A phone keeps the logo and the count; the words stay for screen readers. */
+@media (width < 600px) {
+  .topbar {
+    gap: 10px;
+  }
+
+  .brand-name,
+  .runs-word {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+@media (width < 400px) {
+  .topbar {
+    gap: 6px;
+    padding: 0 8px;
+  }
+
+  .nav a {
+    padding: 4px 6px;
+  }
+}
+
+@media (width < 900px) {
+  .account:popover-open {
+    position: fixed;
+    inset: calc(var(--top) + 4px) 8px auto auto;
+    display: grid;
+    justify-items: start;
+    gap: 10px;
+    min-width: 200px;
+    padding: 12px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
   }
 
   /* The bar's links and buttons outgrow a phone's width: they scroll sideways rather than widen the page. */
@@ -1242,17 +1321,19 @@ button.go {
     flex: 1;
   }
 
+  .segments {
+    flex: 1 1 100%;
+  }
+
   .segments button {
-    padding: 4px 9px;
+    flex: 1 0 auto;
+    padding: 4px 6px;
   }
 }
 
-/* One row that scrolls sideways on a phone rather than breaking into two. */
 .segments {
   display: inline-flex;
   max-width: 100%;
-  overflow-x: auto;
-  scrollbar-width: none;
   margin: 0;
   padding: 0;
   min-width: 0;
@@ -1277,6 +1358,21 @@ button.go {
   background: var(--selected);
   box-shadow: inset 0 -2px 0 var(--accent);
   font-weight: 600;
+}
+
+@media (width < 400px) {
+  .segments {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .segments button:nth-of-type(odd) {
+    border-left: none;
+  }
+
+  .segments button:nth-of-type(n + 3) {
+    border-top: 1px solid var(--line);
+  }
 }
 
 .fleet-none {
@@ -1366,11 +1462,11 @@ button.go {
   .fleet-table tr {
     display: grid;
     grid-template:
-      "name name name age" auto
-      "status status status status" auto
-      "version version version version" auto
-      "plane workers . ." auto
-      / max-content max-content minmax(0, 1fr) auto;
+      "name name age" auto
+      "status status status" auto
+      "version version version" auto
+      "plane workers workers" auto
+      / max-content minmax(0, 1fr) auto;
     gap: 6px 16px;
     padding: 12px 14px;
     border-bottom: 1px solid var(--line);

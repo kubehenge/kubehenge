@@ -1,4 +1,4 @@
-import { useState, type JSX, type ReactNode, type RefObject } from "react";
+import { useEffect, useRef, useState, type JSX, type ReactNode, type RefObject } from "react";
 
 import { adminPath, adminViews } from "./admin-views";
 import { clusterPath, headlampURL, views, type View } from "./ClusterDetail";
@@ -22,6 +22,8 @@ const viewKeys = views.map((v, i) => ({ view: v, key: String(i + 1) }));
 
 // From this window width on the running work shows beside the page, unless folded away.
 const wide = "(min-width: 1280px)";
+// Below this width the account controls move into a menu (styles.css, the 900px media query).
+const narrowBar = 900;
 
 const shown = (c: Cluster): string => (c.namespace === "default" ? c.name : `${c.namespace}/${c.name}`);
 
@@ -263,11 +265,25 @@ function TopBar({
   open: Opens;
   onSignOut: () => void;
 }): JSX.Element {
+  const account = useRef<HTMLDivElement>(null);
+  // An account menu left open while the window widens would float over the bar it now sits in.
+  useEffect(() => {
+    const close = (): void => {
+      const menu = account.current;
+      if (window.innerWidth >= narrowBar && menu !== null && "hidePopover" in menu) {
+        menu.hidePopover();
+      }
+    };
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("resize", close);
+    };
+  }, []);
   return (
     <header className="topbar">
       <Link to="/" className="brand">
         <img src={logo} alt="" />
-        Kubehenge
+        <span className="brand-name">Kubehenge</span>
       </Link>
       {!settingUp && (
         <>
@@ -290,19 +306,28 @@ function TopBar({
       <span className="spacer" />
       {!settingUp && anyRuns && (
         <button type="button" className="runs-toggle" aria-pressed={runsShown} onClick={() => open.runs()}>
-          <span className={`dot dot-${running > 0 ? "progress" : "idle"}`} aria-hidden="true" /> Running {running}
+          <span className={`dot dot-${running > 0 ? "progress" : "idle"}`} aria-hidden="true" />{" "}
+          <span className="runs-word">Running</span> {running}
         </button>
       )}
-      {headlamp !== undefined && (
-        <a href={headlampURL(headlamp)} target="_blank" rel="noopener noreferrer">
-          Headlamp
-        </a>
-      )}
-      <ThemeButton />
-      <span className="user">{user}</span>
-      <button type="button" onClick={onSignOut}>
-        Sign out
+      <button type="button" className="account-toggle icon" popoverTarget="account" aria-label="Account">
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
       </button>
+      {/* One set of controls: in the bar on wide screens, in a popover behind the button above on narrow ones. */}
+      <div id="account" ref={account} className="account" popover="auto">
+        {headlamp !== undefined && (
+          <a href={headlampURL(headlamp)} target="_blank" rel="noopener noreferrer">
+            Headlamp
+          </a>
+        )}
+        <ThemeButton />
+        <span className="user">{user}</span>
+        <button type="button" onClick={onSignOut}>
+          Sign out
+        </button>
+      </div>
     </header>
   );
 }
@@ -347,6 +372,9 @@ function ThemeButton(): JSX.Element {
       onClick={() => next && setTheme(next.theme)}
     >
       {themeIcons[theme]}
+      <span className="theme-label" aria-hidden="true">
+        {label}
+      </span>
     </button>
   );
 }
