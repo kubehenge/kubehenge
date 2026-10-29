@@ -44,6 +44,7 @@ export default defineConfig({
         text: "Using Kubehenge",
         items: [
           { text: "Installing", link: "/docs/install" },
+          { text: "Setup settings in depth", link: "/docs/install-settings" },
           { text: "Clusters", link: "/docs/clusters" },
           { text: "Upgrading", link: "/docs/upgrading" },
           { text: "Uninstalling", link: "/docs/uninstalling" },

@@ -3,6 +3,7 @@
 
 **Kubernetes for Proxmox VE.**
 
+[![Latest release](https://img.shields.io/github/v/release/kubehenge/kubehenge?label=alpha)](docs/changelog.md)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/kubehenge/kubehenge/badge)](https://scorecard.dev/viewer/?uri=github.com/kubehenge/kubehenge)
 
 > [!WARNING]
@@ -32,7 +33,7 @@ curl -fsSLO https://github.com/kubehenge/kubehenge/releases/latest/download/inst
 sh install.sh
 ```
 
-The script checks everything it downloads against checksums it carries, creates the appliance container and prints its address. Sign in there with your Proxmox VE account, set up the management cluster on the setup page it shows on first sign-in, then create clusters. Step by step: [docs/install.md](docs/install.md).
+The script checks everything it downloads against checksums it carries, creates the appliance container and prints its address. Sign in there with your Proxmox VE account, set up the management cluster on the setup page it shows on first sign-in, build the VM templates clusters are cloned from (**Administration**, **Templates**), then create clusters. Step by step: [docs/install.md](docs/install.md).
 
 ## Documentation
 

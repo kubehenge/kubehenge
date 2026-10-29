@@ -481,10 +481,47 @@ stage_api_ca() {
 # The tests source this file for its functions alone.
 [ -z "${KUBEHENGE_INSTALL_FUNCTIONS:-}" ] || return 0
 
+usage() {
+    cat << 'EOF'
+Installs Kubehenge's appliance on this Proxmox VE node, as root.
+
+  sh install.sh [options]
+  sh install.sh --upgrade --ctid <id> [--release <file> --sha256 <hex>] [--proxmox-ca <file> | --proxmox-insecure]
+  sh install.sh --certificate --ctid <id> [--name <DNS name> | --no-name] [--cert <file> --key <file>]
+
+Options:
+  --ctid <id>                 the container's ID; default the next free one
+  --storage <storage>         where the container's disk goes; default the first active storage that takes container disks
+  --bridge <bridge>           the bridge the container attaches to; default vmbr0
+  --ip dhcp|<address/prefix>  the container's address, such as 192.0.2.40/24; default dhcp
+  --gateway <address>         the default gateway, with a static --ip
+  --dns <address>,...         the name servers the container asks; default this node's
+  --hostname <name>           the container's host name, also in its certificate; default kubehenge
+  --name <DNS name>           a DNS name people reach the appliance by, put into its certificate
+  --no-name                   with --certificate, drop the name the certificate was given
+  --cert <file> --key <file>  serve this certificate and key instead of one signed by this cluster's CA
+  --proxmox-url <URL>         the Proxmox VE API, such as https://pve.example.org:8006; default the best name or address its certificate is valid for
+  --proxmox-ca <file>         the CA that signed the API's certificate, alone or in a bundle
+  --proxmox-insecure          reach the Proxmox VE API without verifying its certificate
+  --release <file>            install this release archive instead of downloading it
+  --sha256 <hex>              the archive's SHA-256, with --release
+  --pve-entry, --no-pve-entry add the Kubernetes entry to this node's Proxmox VE interface, or not; default ask
+  --upgrade                   upgrade the appliance in container --ctid
+  --certificate               replace the certificate of the appliance in container --ctid
+  -h, --help                  show this text
+
+More: https://kubehenge.dev/docs/install
+EOF
+}
+
 ctid='' storage='' bridge=vmbr0 ip=dhcp gateway='' dns='' proxmox_url='' proxmox_ca='' proxmox_insecure='' hostname=kubehenge
 release='' release_sha='' upgrade='' pve_entry='' certificate='' name='' no_name='' cert_file='' key_file=''
 while [ $# -gt 0 ]; do
     case "$1" in
+        -h | --help)
+            usage
+            exit 0
+            ;;
         --upgrade)
             upgrade=1
             shift
@@ -530,7 +567,7 @@ while [ $# -gt 0 ]; do
         --release) release=$2 ;;
         --sha256) release_sha=$2 ;;
         *)
-            echo "unknown option $1" >&2
+            echo "kubehenge: unknown option $1; sh install.sh --help lists them" >&2
             exit 2
             ;;
     esac
@@ -634,10 +671,16 @@ fi
 
 work=$(mktemp -d)
 created=''
+started=''
 # A failed install leaves no half-made container behind, so running it again starts clean.
 cleanup() {
     status=$?
     if [ "${status}" -ne 0 ] && [ -n "${created}" ]; then
+        # The service's log goes with the container, so it is shown before the container is removed.
+        if [ -n "${started}" ]; then
+            echo "kubehenge: the service's log:" >&2
+            pct exec "${ctid}" -- journalctl -u kubehenge --no-pager -n 60 >&2 2> /dev/null || true
+        fi
         echo "kubehenge: removing container ${ctid} after the failure" >&2
         pct stop "${ctid}" > /dev/null 2>&1 || true
         pct destroy "${ctid}" --purge > /dev/null 2>&1 || true
@@ -876,16 +919,19 @@ pct exec "${ctid}" -- sh -c '
     systemctl enable --now kubehenge-update.path >/dev/null 2>&1
     systemctl enable --now kubehenge.service >/dev/null 2>&1
 '
+started=1
 sleep 2
-pct exec "${ctid}" -- systemctl is-active --quiet kubehenge.service || fail "the service did not start; see: pct exec ${ctid} -- journalctl -u kubehenge"
+pct exec "${ctid}" -- systemctl is-active --quiet kubehenge.service || fail "the service did not start; its log follows"
 # The realms are what the interface asks Proxmox VE before anyone signs in: an answer shows that it
-# reaches the API and trusts its certificate. Its own certificate is not the question here.
+# reaches the API and trusts its certificate. The appliance's own certificate is checked as the one
+# just installed: curl takes any certificate in --cacert as a trust anchor, the leaf included, so
+# this holds for one Proxmox VE's CA signed, a self-signed one and the administrator's own alike.
 for _ in $(seq 1 10); do
-    realms=$(curl -sk -o /dev/null -w '%{http_code}' "https://${ctip}/api/realms" || true)
+    realms=$(curl -s --cacert "${work}/tls.crt" --resolve "${public}:443:${ctip}" -o /dev/null -w '%{http_code}' "https://${public}/api/realms" || true)
     [ "${realms}" != 200 ] || break
     sleep 2
 done
-[ "${realms}" = 200 ] || fail "the appliance cannot use Proxmox VE's API at ${proxmox_url}; give a URL it reaches, whose certificate names it, with --proxmox-url (see: pct exec ${ctid} -- journalctl -u kubehenge)"
+[ "${realms}" = 200 ] || fail "the appliance cannot use Proxmox VE's API at ${proxmox_url}; give a URL it reaches, whose certificate names it, with --proxmox-url (its log follows)"
 
 # The appliance works from here on; nothing after this removes it.
 created=''

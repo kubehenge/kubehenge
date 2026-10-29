@@ -178,6 +178,22 @@ func TestWaitOperatorNeedsANamespace(t *testing.T) {
 	}
 }
 
+func TestTemplateCreateNeedsANode(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"template", "create", "rke2"}, `"node" not set`},
+		{[]string{"template", "create", "rke2", "--node", ""}, "--node needs"},
+		{[]string{"template", "create", "talos", "--node", " "}, "--node needs"},
+	} {
+		if _, err := run(t, c.args...); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%q: err = %v, want %q", c.args, err, c.want)
+		}
+	}
+}
+
 func TestChartValuesGoToTheirCharts(t *testing.T) {
 	t.Parallel()
 	const digest = "@sha256:0805a5273118c436c9772bb9566d87ec558d8b25cc2ce5dc32918ecdd36f2c7c"

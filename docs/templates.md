@@ -32,7 +32,7 @@ export KUBEHENGE_PROXMOX_TOKEN='root@pam!kubehenge=...'
 kubehenge template create talos --node pve1
 kubehenge template create rke2 --node pve1 --storage shared-storage
 kubehenge template create k3s --node-os rocky-10 --node pve1 --storage shared-storage
-kubehenge template create kubeadm --kubernetes-version v1.37.1 --node pve1
+kubehenge template create kubeadm --kubernetes-version v1.36.5 --node pve1
 ```
 
 `--node-os` chooses the node OS, `almalinux-10` unless set; a Talos template takes none, Talos being its own OS. A node OS template is built by a VM of its own, which boots the family's cloud image: in image mode it composes the node image from the family's packages, checks it with `bootc container lint` and installs it onto the template's disk, then boots it once on its own; a transactional node OS installs what a node needs as a new snapshot and reboots into it. That VM needs to reach the package repositories: it uses DHCP on `--bridge`, or a static address given with `--build-address`, `--build-gateway` and `--build-dns`. Its cloud-init data comes on an ISO uploaded to `--iso-storage` (the node's first ISO storage by default) and removed afterwards.
@@ -41,7 +41,7 @@ Creating is idempotent: a template with the same tags in the template pool is fo
 
 ## How clusters find them
 
-Each template carries a unique set of Proxmox VE tags, such as `kubehenge;talos;talos-v1.14.4` or `kubehenge;os-almalinux-10;rke2`, and Cluster API's Proxmox VE provider selects it by that exact set. The template has no network card, one core and 512 MiB: each clone gets the network, size and disk its machine asks for.
+Each template carries a unique set of Proxmox VE tags, such as `kubehenge;talos;talos-v1.14.5` or `kubehenge;os-almalinux-10;rke2`, and Cluster API's Proxmox VE provider selects it by that exact set. The template has no network card, one core and 512 MiB: each clone gets the network, size and disk its machine asks for.
 
 A node OS template is a line of builds, each a template of its own named after the time it was made, such as `kubehenge-rke2-almalinux-10-build-202610180100`, and tagged with that time (`build-202610180100`) beside the line's tags. Each cluster has a node image time: its machines are clones of the newest build of their line made by then, so the same cluster always gets the same build until that time moves. It moves only when the nodes are refreshed ([clusters.md](clusters.md#node-image-refresh)), so scaling up or replacing a failed node clones the build the other nodes run. Talos templates have no builds; Talos nodes take their updates by upgrading Talos.
 
@@ -51,14 +51,14 @@ Clones keep the template's CPU type. A new build takes that of the newest build 
 
 While the management cluster's template refresh is on, which it is by default, a CronJob in it builds every node OS template again each week, Sunday at 01:00 UTC unless set otherwise, with the updates its node OS published since: RKE2's on the default node OS, every RKE2 and k3s template in the template pool, and the kubeadm template of each Kubernetes version and node OS a kubeadm cluster runs. Then it deletes the builds nothing needs: of each line it keeps the two newest, and any older one a cluster's machines still run or a machine about to be created will clone from. A kubeadm line no cluster runs or can upgrade to keeps only its newest build. A build that fails leaves the others to go on, and the next run starts over; the Administration page shows how the last run went with its log, and has Build now.
 
-The CronJob runs `kubehenge template refresh` with an API token of its own, made for it alone ([install.md](install.md#what-the-template-builds-may-do)). One run at a time holds a Lease, so the schedule, Build now and a cluster creator's request never build at once.
+The CronJob runs `kubehenge template refresh` with an API token of its own, made for it alone ([install-settings.md](install-settings.md#what-the-template-builds-may-do)). One run at a time holds a Lease, so the schedule, Build now and a cluster creator's request never build at once.
 
 ```sh
 kubehenge template refresh --node pve1 --storage shared-storage --import-storage local --pool kubehenge-templates
-kubehenge template refresh --missing kubeadm-v1.38.0-almalinux-10 --missing-only --node pve1
+kubehenge template refresh --missing kubeadm-v1.36.5-almalinux-10 --missing-only --node pve1
 ```
 
-It also makes the Talos template of each release a Talos cluster runs or boots that the pool lacks, but never builds a Talos template again: a release's image does not change. Each Talos release's template stands for a build of its minor version's line, so of each minor version the two newest releases' templates stay, with any older one a cluster boots or is upgraded to, a machine about to be created selects, or the run was asked to make; the others are deleted. A cluster creator's request names a Talos template as `talos-v1.14.4`.
+It also makes the Talos template of each release a Talos cluster runs or boots that the pool lacks, but never builds a Talos template again: a release's image does not change. Each Talos release's template stands for a build of its minor version's line, so of each minor version the two newest releases' templates stay, with any older one a cluster boots or is upgraded to, a machine about to be created selects, or the run was asked to make; the others are deleted. A cluster creator's request names a Talos template as `talos-v1.14.5`.
 
 It reads the clusters from the Kubernetes cluster its kubeconfig or service account names; `--keep` and `--soak` set how many builds stay and how old a build is before clusters move to it.
 
@@ -67,13 +67,21 @@ Templates should be on shared storage in a Proxmox VE cluster, so that clones ca
 ## Requirements
 
 - The storage given with `--import-storage` (`local` by default) must allow the `import` content type.
-- The API token needs to download to that storage, create VMs in the template pool (`--pool`, `kubehenge-templates` by default) and write to the ISO storage.
+- The API token needs what the weekly build's own token holds ([install-settings.md](install-settings.md#what-the-template-builds-may-do)):
+  - on the template pool (`--pool`, `kubehenge-templates` by default), propagated: `Pool.Audit`, `VM.Allocate`, `VM.Audit`, `VM.Config.CDROM`, `VM.Config.CPU`, `VM.Config.Disk`, `VM.Config.HWType`, `VM.Config.Memory`, `VM.Config.Network`, `VM.Config.Options`, `VM.GuestAgent.Unrestricted` and `VM.PowerMgmt`;
+  - on the storages of `--import-storage` and `--iso-storage`: `Datastore.Allocate`, `Datastore.AllocateTemplate` and `Datastore.Audit`;
+  - on the storage of `--storage`: `Datastore.AllocateSpace` and `Datastore.Audit`;
+  - on `/nodes/<node>` of `--node`: `Sys.AccessNetwork` and `Sys.Audit`;
+  - on `/sdn/zones/localnetwork/<bridge>` of `--bridge`: the role `PVESDNUser`;
+  - on `/`, and on `/nodes` propagated: `Sys.Audit`.
+
+  A token of a user with the Administrator role on `/`, such as `root@pam`'s in the examples, holds all of them.
 
 ## List and delete
 
 ```sh
 kubehenge template list
-kubehenge template delete kubeadm --kubernetes-version v1.37.1
+kubehenge template delete kubeadm --kubernetes-version v1.36.5
 kubehenge template delete rke2 --build build-202610110100
 ```
 
