@@ -410,9 +410,6 @@ resource "helm_release" "kubehenge" {
           managementStorages = local.management_storages
         }
         sysAuditGroup = var.cluster_sys_audit ? proxmox_virtual_environment_group.clusters_audit[0].group_id : ""
-        # Written by the appliance, never by this module, so that the password stays out of the
-        # state.
-        volumeSnapshots = { rootSecret = var.cluster_volume_snapshots ? "kubehenge-root-pam" : "" }
       }
       templateRefresh = {
         enabled       = local.template_builder.enabled

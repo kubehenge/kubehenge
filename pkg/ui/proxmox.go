@@ -24,9 +24,6 @@ const (
 	// privDatastoreAllocate is what a user gives a cluster's token on its storage when the cluster
 	// runs the CSI plugin's newest release, so it takes the user's own.
 	privDatastoreAllocate = "Datastore.Allocate"
-	// privPermissionsModify on / is what a user needs to give a cluster's CSI plugin root@pam for
-	// volume snapshots: a user who holds it can already give themselves anything root@pam can do.
-	privPermissionsModify = "Permissions.Modify"
 )
 
 func storagePath(storage string) string { return "/storage/" + storage }

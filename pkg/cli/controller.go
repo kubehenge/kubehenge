@@ -79,6 +79,7 @@ type controllerOptions struct {
 	csiChart          string
 	csiNewestChart    string
 	snapshotChart     string
+	csiProxyImage     string
 	ciliumChart       string
 	calicoChart       string
 	headlampChart     string
@@ -220,9 +221,9 @@ func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 
 // grantFlags are those that let clusters' tokens hold more than their pools: Datastore.Allocate
 // for the CSI plugin's newest release, Sys.Audit on / for the cloud controller manager's HA group
-// labels; and that let their CSI plugins sign in as root@pam for volume snapshots.
+// labels; and the proxy that copies the volumes of clusters taking volume snapshots.
 func (o *controllerOptions) grantFlags(f *pflag.FlagSet) {
-	f.StringVar(&o.r.VolumeSnapshots.RootSecret, "root-secret", "", "Secret in the class namespace holding root@pam's password under the key password, with which the CSI plugin of each cluster asking for volume snapshots signs in; empty to let no cluster take them")
+	f.StringVar(&o.csiProxyImage, "csi-proxy-image", "", "the image, as <repository>@sha256:<digest>, of the proxy beside the CSI plugin's controller in clusters that take volume snapshots, which runs kubehenge csi-proxy and copies their volumes with their own tokens; empty to let no cluster take them")
 	f.StringVar(&o.snapshotChart, "snapshot-controller-chart", "", "the volume snapshot controller's chart, with its CRDs and the VolumeSnapshotClass, for clusters that take volume snapshots, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.settings.SysAuditGroup, "sys-audit-group", "", "Proxmox VE group holding Sys.Audit on / that the user of each cluster asking for the cloud controller manager's HA group labels joins; empty to let no cluster join it")
 	f.StringVar(&o.csiNewestChart, "csi-newest-chart", "", "the CSI plugin's newest release, for clusters whose token holds Datastore.Allocate on their storage, as <repository>/<name>:<version>@sha256:<digest>")
@@ -330,7 +331,6 @@ func (o *controllerOptions) completeReconciler(cloud *provisioner.Proxmox, endpo
 	o.r.Cloud = cloud
 	o.r.DatastoreAllocate.Role = o.settings.DatastoreRole
 	o.r.SysAuditGroup = o.settings.SysAuditGroup
-	o.r.VolumeSnapshots.Namespace = o.r.ClassNamespace
 	o.r.Endpoint = endpoint
 	o.r.RancherKubernetes = rancherMinors
 }
@@ -449,6 +449,11 @@ func (o *controllerOptions) parseCharts() error {
 		}
 	}
 	var err error
+	if o.csiProxyImage != "" {
+		if o.r.VolumeSnapshots.ProxyImage, err = provisioner.ParseCSIProxyImage(o.csiProxyImage); err != nil {
+			return fmt.Errorf("--csi-proxy-image: %w", err)
+		}
+	}
 	if o.r.Charts.CalicoImages, err = provisioner.ParseCalicoImages(o.calicoImages); err != nil {
 		return fmt.Errorf("--calico-images: %w", err)
 	}

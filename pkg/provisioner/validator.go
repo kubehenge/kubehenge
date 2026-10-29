@@ -147,7 +147,7 @@ func (v *ClusterValidator) validateGrants(ctx context.Context, old, c *clusterv1
 		if err := v.Hooks.checkDatastoreAllocate(ctx, c, class); err != nil {
 			errs = append(errs, field.Forbidden(variables.Key(csiVariable), err.Error()))
 		}
-		if err := v.Hooks.checkVolumeSnapshots(ctx, c, class); err != nil {
+		if err := v.Hooks.checkVolumeSnapshots(c, class); err != nil {
 			errs = append(errs, field.Forbidden(variables.Key(csiVariable), err.Error()))
 		}
 	}
