@@ -337,14 +337,19 @@ spec:
               containerPort: 9443
             - name: health
               containerPort: 8081
+          # A node that stalls for half a minute, every controller on it busy at once, is no reason
+          # to restart the only replica: its webhooks refuse every Cluster while it starts again.
           readinessProbe:
             httpGet:
               path: /readyz
               port: health
+            timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /healthz
               port: health
+            timeoutSeconds: 5
+            failureThreshold: 6
           resources:
             requests:
               cpu: 10m
