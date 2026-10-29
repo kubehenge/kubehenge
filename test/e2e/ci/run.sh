@@ -7,8 +7,10 @@
 # <test> is management-cluster (applies the management cluster, runs the templates and volumes tests
 # while it is up, and destroys it), management-cluster-upgrade (applies and destroys it), appliance
 # (installs the appliance, which sets the management cluster up and removes it), or kubeadm, rke2,
-# k3s, talos, rancher, cluster-mesh, node-image-refresh or autoscaler, which first apply the
-# management cluster and create the templates they need, and leave it up.
+# k3s, talos, rancher, cluster-mesh, node-image-refresh, autoscaler or control-plane-ha, which first
+# apply the management cluster and create the templates they need, and leave it up. kubeadm, rke2,
+# k3s and talos take options after their name, each after a +: the cluster's CNI, its node OS, or
+# cis-off (test/e2e/ci/variant.sh), as in kubeadm+calico+rocky-10+cis-off.
 #
 # The workload clusters start one minor version behind the management cluster's Kubernetes and are
 # upgraded to it; KUBEHENGE_E2E_FROM names the release they start on. The Talos cluster starts on
@@ -18,8 +20,14 @@ set -eu
 
 work=$(readlink -f "${1:?usage: $0 <work directory> <test>}")
 test=${2:?usage: $0 <work directory> <test>}
+# shellcheck source=variant.sh
+. "$(dirname "$0")/variant.sh"
+# shellcheck disable=SC2310 # its refusal, which it explains, ends the run.
+settings=$(variant "${test}") || exit 2
+eval "${settings}"
+test=${test%%+*}
 case "${test}" in
-    management-cluster | management-cluster-upgrade | appliance | kubeadm | rke2 | k3s | talos | rancher | cluster-mesh | node-image-refresh | autoscaler) ;;
+    management-cluster | management-cluster-upgrade | appliance | kubeadm | rke2 | k3s | talos | rancher | cluster-mesh | node-image-refresh | autoscaler | control-plane-ha) ;;
     *)
         echo "unknown test ${test}" >&2
         exit 2
@@ -78,12 +86,15 @@ template() { # distribution [flags]
         --build-address "${KUBEHENGE_E2E_ADDRESS}" --build-gateway "${KUBEHENGE_E2E_GATEWAY}" \
         --build-dns "${KUBEHENGE_E2E_DNS}"
 }
+# The node OS a test's options chose, for the templates of its distribution.
+node_os=
+[ -z "${KUBEHENGE_E2E_NODE_OS:-}" ] || node_os="--node-os ${KUBEHENGE_E2E_NODE_OS}"
 # A template needs only Proxmox VE and the template pool, which the apply makes in its first seconds,
 # so the ones a test needs are made while the management cluster comes up. One at a time: they share
 # the build address.
 templates=
 case "${test}" in
-    rke2 | k3s | kubeadm | talos | rancher | cluster-mesh | node-image-refresh | autoscaler)
+    rke2 | k3s | kubeadm | talos | rancher | cluster-mesh | node-image-refresh | autoscaler | control-plane-ha)
         make -s -C "${repo}" build
         {
             waited=0
@@ -95,17 +106,19 @@ case "${test}" in
                 sleep 5
                 waited=$((waited + 5))
             done
+            # shellcheck disable=SC2086 # node_os is empty or one option and its argument.
             case "${test}" in
-                rke2) template rke2 ;;
-                k3s | rancher | cluster-mesh | autoscaler) template k3s ;;
+                rke2) template rke2 ${node_os} ;;
+                k3s) template k3s ${node_os} ;;
+                rancher | cluster-mesh | autoscaler | control-plane-ha) template k3s ;;
                 # The test moves its cluster to another node OS than the default.
                 node-image-refresh)
                     template k3s
                     template k3s --node-os rocky-10
                     ;;
                 kubeadm)
-                    template kubeadm --kubernetes-version "${from}"
-                    template kubeadm --kubernetes-version "${to}"
+                    template kubeadm --kubernetes-version "${from}" ${node_os}
+                    template kubeadm --kubernetes-version "${to}" ${node_os}
                     ;;
                 # The release the cluster starts on, and the one its machines boot once the
                 # Kubernetes upgrade replaces them.
@@ -266,7 +279,7 @@ case "${test}" in
         e2e e2e-workload-cluster CLASS=kubehenge-kubeadm VERSION="${from}" UPGRADE="${to}"
         ;;
     talos)
-        # Talos's own CNI, flannel: the kubeadm run covers Cilium.
+        # Talos's own CNI, flannel, unless an option chose another: the kubeadm run covers Cilium.
         export KUBEHENGE_E2E_TALOS_VERSION="${talos_from}" KUBEHENGE_E2E_TALOS_UPGRADE="${talos_to}"
         e2e e2e-workload-cluster CLASS=kubehenge-talos VERSION="${from}" UPGRADE="${to}"
         ;;
@@ -291,6 +304,10 @@ case "${test}" in
         export KUBEHENGE_E2E_ENDPOINT=172.20.99.20 KUBEHENGE_E2E_ADDRESSES=172.20.99.21-172.20.99.24
         export KUBEHENGE_E2E_VERSION="${from}+k3s1"
         e2e e2e-autoscaler
+        ;;
+    control-plane-ha)
+        export KUBEHENGE_E2E_VERSION="${from}+k3s1"
+        e2e e2e-control-plane-ha
         ;;
     # Checked before anything was built.
     *) ;;

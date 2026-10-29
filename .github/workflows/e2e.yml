@@ -10,6 +10,13 @@ on:
   schedule:
     - cron: '17 2 * * *'
   workflow_dispatch:
+    inputs:
+      tests:
+        description: >-
+          The tests to run, separated by spaces, as test/e2e/ci/run.sh names them, options
+          included; none runs tonight's nightly set.
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -22,7 +29,9 @@ jobs:
   # A merge group runs the tests its pull requests' changes need together (test/e2e/ci/scope.sh),
   # on the tree that would land on main; a pull request runs none, since the queue runs them on
   # exactly what lands and a second run on the pull request only doubles the wait. The nightly run
-  # runs every test and adds the upgrade of the management cluster and Rancher, the longest.
+  # (test/e2e/ci/nightly.sh) runs every test, adds the upgrade of the management cluster, Rancher
+  # and a control plane of three servers, and runs each workload distribution once more on a CNI
+  # and node OS other than its own and, every other night, without CIS hardening, in turn.
   scope:
     name: scope
     runs-on: ubuntu-26.04
@@ -38,6 +47,7 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+          ASKED: ${{ inputs.tests }}
         run: |
           case "$EVENT" in
             pull_request) tests='[]' ;;
@@ -47,9 +57,12 @@ jobs:
               git fetch --no-tags --depth=1 origin "$GROUP_BASE"
               tests=$(git diff --name-only "$GROUP_BASE" HEAD | test/e2e/ci/scope.sh)
               ;;
-            *) tests='["management-cluster", "management-cluster-upgrade", "appliance", "kubeadm",
-                 "rke2", "k3s", "talos", "rancher", "cluster-mesh", "node-image-refresh",
-                 "autoscaler"]' ;;
+            # run.sh refuses a name it cannot read before anything is built.
+            workflow_dispatch)
+              tests=$(jq -nc --arg t "$ASKED" '$t | split(" ") | map(select(. != ""))')
+              [ "$tests" != '[]' ] || tests=$(test/e2e/ci/nightly.sh)
+              ;;
+            *) tests=$(test/e2e/ci/nightly.sh) ;;
           esac
           echo "tests=$(printf '%s' "$tests" | jq -c .)" >> "$GITHUB_OUTPUT"
 

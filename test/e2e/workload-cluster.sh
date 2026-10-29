@@ -40,6 +40,8 @@
 # outnumber its CPUs starve each other, whatever their sizes.
 # KUBEHENGE_E2E_NODE_OS is the nodes' operating system as one word, such as rocky-10, whose
 # template has to exist; unset, the class's default applies. Talos nodes run Talos and take none.
+# KUBEHENGE_E2E_CIS=false creates the cluster without CIS hardening, the class's default, and leaves
+# the benchmark out; by default the cluster is hardened and its nodes checked against it.
 # KUBEHENGE_E2E_CNI chooses the CNI (required by kubeadm). KUBEHENGE_E2E_PODS and
 # KUBEHENGE_E2E_SERVICES set the cluster's pod and service ranges, which must not overlap the nodes'
 # network; unset, the distribution's defaults apply.
@@ -102,6 +104,12 @@ ETCD_SHA256=5dfa9cc3b3ce3b4b491fbcc2057d3daa166bcc6676f743fcd20f8e5760cb9775
 . "$(dirname "$0")/common.sh"
 # shellcheck source=cis-benchmark.sh
 . "$(dirname "$0")/cis-benchmark.sh"
+
+cis=${KUBEHENGE_E2E_CIS:-true}
+case ${cis} in
+    true | false) ;;
+    *) fail "KUBEHENGE_E2E_CIS is true or false, not ${cis}" ;;
+esac
 
 work=$(mktemp -d)
 distribution=$(echo "${class}" | sed 's/^kubehenge-//')
@@ -383,7 +391,7 @@ ${talos_variable}
       - name: podSecurity
         value: {admission: restricted}
       - name: cis
-        value: true
+        value: ${cis}
       # The test upgrades the cluster itself. Talos's automatic patch upgrades would start whenever a
       # run reaches the default window, 02:00 to 06:00 UTC, since its nodes start a patch behind.
       - name: upgrades
@@ -546,7 +554,7 @@ fi
 
 # kube-bench carries no benchmark for Talos, whose components keep their configuration where none
 # of its checks look.
-if [ "${distribution}" != talos ]; then
+if [ "${distribution}" != talos ] && [ "${cis}" = true ]; then
     step "the nodes pass the CIS Kubernetes Benchmark"
     cis_benchmark
 fi
