@@ -275,13 +275,13 @@ func distributionChecks(t *testing.T, d Distribution) []string {
 	t.Helper()
 	switch d {
 	case RKE2:
-		return []string{"rpm -q rke2-selinux", "grep -qx rke2", "touch /usr/local/"}
+		return []string{"rpm -q rke2-selinux", "grep -qx rke2", "touch /usr/local/", iptablesCheck}
 	case K3s:
 		return []string{"rpm -q k3s-selinux", "grep -qx k3s", "touch /usr/local/"}
 	case Kubeadm:
 		return []string{
 			"kubeadm version -o short)\" = v1.37.1", "enable_selinux = true", "/sys/module/br_netfilter",
-			"/sys/module/nf_conntrack", "type: spc_t", "crictl images", "enable kubelet.service",
+			"/sys/module/nf_conntrack", "type: spc_t", "crictl images", "enable kubelet.service", iptablesCheck,
 		}
 	case Talos:
 	}

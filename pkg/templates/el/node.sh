@@ -27,9 +27,11 @@ packages="cloud-init qemu-guest-agent NetworkManager container-selinux curl gawk
 case "${distribution}" in
     kubeadm)
         version=${kubernetes#v}
-        packages="${packages} containerd runc kubelet-${version} kubeadm-${version} kubectl-${version} cri-tools"
+        packages="${packages} containerd runc kubelet-${version} kubeadm-${version} kubectl-${version} cri-tools iptables-nft"
         ;;
-    rke2) packages="${packages} rke2-selinux" ;;
+    # The portmap plugin, which Calico's and Canal's host ports go through, runs iptables from the
+    # node's own PATH; k3s brings its own.
+    rke2) packages="${packages} rke2-selinux iptables-nft" ;;
     k3s) packages="${packages} k3s-selinux" ;;
     *)
         echo "node.sh: no such distribution: ${distribution}" >&2
