@@ -370,26 +370,6 @@ resource "proxmox_download_file" "talos" {
   file_name    = "talos-${local.versions.talos}-${substr(talos_image_factory_schematic.this.id, 0, 12)}-nocloud-amd64.qcow2"
   url          = data.talos_image_factory_urls.this.urls.disk_image
   overwrite    = false
-
-  # The provider first asks Proxmox VE for the image's size, and pveproxy fetches that from the
-  # Image Factory inside one of its workers, which serves nothing else meanwhile and then drops every
-  # connection it held, a request already sent on one included. The provider sends only reads again,
-  # so the module's other changes to Proxmox VE are made before.
-  depends_on = [
-    proxmox_acl.cluster_api,
-    proxmox_acl.clusters,
-    proxmox_acl.clusters_audit,
-    proxmox_acl.etcd_restore,
-    proxmox_acl.ha,
-    proxmox_acl.provisioner,
-    proxmox_acl.template_builder,
-    proxmox_user_token.cluster_api,
-    proxmox_user_token.etcd_restore,
-    proxmox_user_token.ha,
-    proxmox_user_token.provisioner,
-    proxmox_user_token.template_builder,
-    proxmox_virtual_environment_pool.management,
-  ]
 }
 
 resource "proxmox_virtual_environment_vm" "node" {
