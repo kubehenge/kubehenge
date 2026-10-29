@@ -7,6 +7,7 @@ import logo from "./logo.svg";
 import { Palette, ShortcutsDialog, useShortcuts, type Command, type Shortcut } from "./Palette";
 import { Link, navigate } from "./router";
 import { RunsPanel, useRuns } from "./Runs";
+import { setTheme, themes, useTheme, type Theme } from "./theme";
 import type { Cluster } from "./types";
 
 /** The cluster whose page is open, and which of its views. */
@@ -197,6 +198,12 @@ export function Console({
             run: () => window.open(headlampURL(port), "_blank", "noopener"),
           },
         ]),
+    ...themes.map((t): Command => ({
+      id: `theme-${t.theme}`,
+      label: `${t.label} theme`,
+      kind: "Action",
+      run: () => setTheme(t.theme),
+    })),
     { id: "keys", label: "Keyboard shortcuts", kind: "Help", keys: "?", run: open.keys },
     { id: "sign-out", label: "Sign out", kind: "Action", run: onSignOut },
   ];
@@ -291,10 +298,55 @@ function TopBar({
           Headlamp
         </a>
       )}
+      <ThemeButton />
       <span className="user">{user}</span>
       <button type="button" onClick={onSignOut}>
         Sign out
       </button>
     </header>
+  );
+}
+
+const themeIcons: Record<Theme, JSX.Element> = {
+  system: (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M8 2a6 6 0 0 1 0 12z" fill="currentColor" />
+    </svg>
+  ),
+  light: (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="3" fill="currentColor" />
+      <path
+        d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.4 1.4M11.6 11.6 13 13M3 13l1.4-1.4M11.6 4.4 13 3"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  ),
+  dark: (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M13.5 10.2A6 6 0 0 1 5.8 2.5a6 6 0 1 0 7.7 7.7z" fill="currentColor" />
+    </svg>
+  ),
+};
+
+// ThemeButton goes round the themes: the system's, light, dark.
+function ThemeButton(): JSX.Element {
+  const theme = useTheme();
+  const at = themes.findIndex((t) => t.theme === theme);
+  const next = themes[(at + 1) % themes.length] ?? themes[0];
+  const label = `Theme: ${themes[at]?.label ?? "System"}`;
+  return (
+    <button
+      type="button"
+      className="theme-toggle"
+      aria-label={label}
+      title={label}
+      onClick={() => next && setTheme(next.theme)}
+    >
+      {themeIcons[theme]}
+    </button>
   );
 }

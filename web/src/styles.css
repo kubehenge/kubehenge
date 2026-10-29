@@ -1,28 +1,29 @@
 /* Kubehenge's console: a tool read for long stretches by the people who run the clusters. Dense
    but calm, flat hairlines instead of boxes and shadows, names and versions in a monospace face,
-   colour kept for state. Dark and light follow the system. */
+   colour kept for state. Dark and light follow the system unless someone picks one: each colour
+   is light-dark(), so the choice only sets color-scheme. */
 
 :root {
-  --bg: #f3f4f3;
-  --surface: #ffffff;
-  --surface-2: #eef0ef;
-  --line: #dde1df;
-  --line-strong: #c3c9c6;
-  --text: #161a18;
+  --bg: light-dark(#f3f4f3, #101211);
+  --surface: light-dark(#ffffff, #161918);
+  --surface-2: light-dark(#eef0ef, #1c201e);
+  --line: light-dark(#dde1df, #262b29);
+  --line-strong: light-dark(#c3c9c6, #353c39);
+  --text: light-dark(#161a18, #e3e8e5);
   /* Text colours are at least 4.5:1 against what they sit on (WCAG AA for body text). */
-  --dim: #56605c;
-  --accent: #0d7468;
-  --accent-fill: #0d7468;
-  --accent-text: #ffffff;
-  --selected: #e1efec;
-  --hover: #edf3f1;
-  --ok: #1e7d4b;
-  --warning: #956200;
-  --error: #c0392b;
-  --run: #2c5fc2;
-  --danger: #c0392b;
-  --input-bg: #ffffff;
-  --shadow: 0 12px 32px rgb(16 24 20 / 18%);
+  --dim: light-dark(#56605c, #98a29d);
+  --accent: light-dark(#0d7468, #45c2b1);
+  --accent-fill: light-dark(#0d7468, #3fb5a5);
+  --accent-text: light-dark(#ffffff, #062019);
+  --selected: light-dark(#e1efec, #1d2a27);
+  --hover: light-dark(#edf3f1, #1a2220);
+  --ok: light-dark(#1e7d4b, #5cc08c);
+  --warning: light-dark(#956200, #e4b04c);
+  --error: light-dark(#c0392b, #f0725f);
+  --run: light-dark(#2c5fc2, #82acf4);
+  --danger: light-dark(#c0392b, #f0725f);
+  --input-bg: light-dark(#ffffff, #121514);
+  --shadow: 0 14px 36px light-dark(rgb(16 24 20 / 18%), rgb(0 0 0 / 55%));
   --sans: "Atkinson Hyperlegible Next", system-ui, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, monospace;
   --rail: 264px;
@@ -46,28 +47,12 @@
   font-variant-numeric: tabular-nums;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #101211;
-    --surface: #161918;
-    --surface-2: #1c201e;
-    --line: #262b29;
-    --line-strong: #353c39;
-    --text: #e3e8e5;
-    --dim: #98a29d;
-    --accent: #45c2b1;
-    --accent-fill: #3fb5a5;
-    --accent-text: #062019;
-    --selected: #1d2a27;
-    --hover: #1a2220;
-    --ok: #5cc08c;
-    --warning: #e4b04c;
-    --error: #f0725f;
-    --run: #82acf4;
-    --danger: #f0725f;
-    --input-bg: #121514;
-    --shadow: 0 16px 40px rgb(0 0 0 / 55%);
-  }
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 * {
@@ -311,6 +296,18 @@ output.notice {
   color: var(--dim);
   font-family: var(--mono);
   font-size: 12px;
+}
+
+.theme-toggle {
+  padding: 5px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--dim);
+}
+
+.theme-toggle svg {
+  width: 16px;
+  height: 16px;
 }
 
 .nav {
