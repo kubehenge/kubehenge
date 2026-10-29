@@ -2061,10 +2061,13 @@ host_of() { python3 -c 'import sys, urllib.parse; u = urllib.parse.urlsplit(sys.
 link_host=$(host_of "${results_link}")
 target_host=$(host_of "${s3_endpoint}")
 [ "${link_host}" = "${target_host}" ] || fail "Velero's link leads to ${link_host}, not to the target at ${target_host}"
-case ${results_link} in
-    *[Cc]ustomer-[Kk]ey*) fail "Velero's link carries the SSE-C key" ;;
-    *) ;;
-esac
+# The link names the SSE-C headers among those it signs, which the request then has to send; the
+# key itself is neither a parameter of it nor anywhere in it.
+SSE_KEY=${sse_key} python3 -c 'import os, sys, urllib.parse
+link = sys.argv[1]
+params = {k.lower() for k in urllib.parse.parse_qs(urllib.parse.urlsplit(link).query)}
+sys.exit(1 if "x-amz-server-side-encryption-customer-key" in params or os.environ["SSE_KEY"] in urllib.parse.unquote(link) else 0)' \
+    "${results_link}" || fail "Velero's link carries the SSE-C key"
 plain=$(curl -sS --cacert "${KUBEHENGE_E2E_BACKUP_CA}" -o /dev/null -w '%{http_code}' "${results_link}")
 case ${plain} in
     2??) fail "the restore's results were read without the SSE-C key: HTTP ${plain}" ;;
