@@ -2,7 +2,7 @@
 # End-to-end test of a cluster on a Proxmox VE cluster of two nodes, against a running management
 # cluster on the first: a k3s cluster kept to the second node is cloned there from a template on
 # shared storage and comes up across the nodes' common network; kept to the first, every machine
-# moves there; and with the second node down, Kubehenge leaves it out of the cluster's placement,
+# replaced moves there, since a placement holds for the VMs created after it; and with the second node down, Kubehenge leaves it out of the cluster's placement,
 # so that the cluster, let onto every node again, keeps to the one online and grows there. With the
 # second node back, nothing of the cluster is left once it is deleted.
 #
@@ -135,8 +135,16 @@ until_true 600 "every machine on ${second}" all_on "${second}"
 until_true 600 "both nodes ready" nodes_ready 2
 until_true 120 "both Proxmox VE nodes online for the cluster" online_are "${first},${second}"
 
-step "kept to ${first}, every machine moves there"
+step "kept to ${first}, every machine replaced moves there"
 allow "[\"${first}\"]"
+# The VMs running stay where they are; those that replace them go to the nodes allowed now. Each
+# control plane and pool is rolled out as clusterctl's rollout restart does.
+now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+control_plane=$(kubectl -n "${ns}" get cluster/nodes -o jsonpath='{.spec.controlPlaneRef.name}')
+kubectl -n "${ns}" patch kthreescontrolplane "${control_plane}" --type=merge -p "{\"spec\": {\"rolloutAfter\": \"${now}\"}}"
+for deployment in $(kubectl -n "${ns}" get machinedeployments -l cluster.x-k8s.io/cluster-name=nodes -o name); do
+    kubectl -n "${ns}" patch "${deployment}" --type=merge -p "{\"spec\": {\"rollout\": {\"after\": \"${now}\"}}}"
+done
 until_true 2400 "every machine on ${first}" all_on "${first}"
 until_true 600 "both nodes ready" nodes_ready 2
 
