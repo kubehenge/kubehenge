@@ -18,9 +18,11 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	coordinationv1client "k8s.io/client-go/kubernetes/typed/coordination/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
+	"k8s.io/client-go/util/retry"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -199,10 +201,13 @@ func withRefreshLease(ctx context.Context, cfg *rest.Config, namespace string, f
 			Client:     clients.CoordinationV1(),
 			LockConfig: resourcelock.ResourceLockConfig{Identity: identity},
 		},
-		LeaseDuration:   leaseDuration,
-		RenewDeadline:   renewDeadline,
-		RetryPeriod:     retryPeriod,
-		ReleaseOnCancel: true,
+		LeaseDuration: leaseDuration,
+		RenewDeadline: renewDeadline,
+		RetryPeriod:   retryPeriod,
+		// Not the elector's release: it writes over the Lease version it last saw, and a renewal
+		// cut off by fn's end may already have changed it, which leaves the Lease held until it
+		// runs out. releaseRefreshLease reads it again instead.
+		ReleaseOnCancel: false,
 		Name:            provisioner.TemplateRefreshName,
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(leading context.Context) {
@@ -232,7 +237,37 @@ func withRefreshLease(ctx context.Context, cfg *rest.Config, namespace string, f
 		return fmt.Errorf("another template refresh holds Lease %s/%s", namespace, provisioner.TemplateRefreshName)
 	}
 	<-done
+	leases := clients.CoordinationV1().Leases(namespace)
+	releasing, stop := context.WithTimeout(context.WithoutCancel(ctx), renewDeadline)
+	defer stop()
+	if err := releaseRefreshLease(releasing, leases, identity); err != nil {
+		// The next run waits for the Lease to run out instead.
+		ctrl.LoggerFrom(ctx).Error(err, "releasing the refresh's Lease")
+	}
 	return runErr
+}
+
+// releaseRefreshLease gives up the refresh's Lease as the elector would, if identity still holds
+// it, retrying on a version that moved on in between.
+func releaseRefreshLease(ctx context.Context, leases coordinationv1client.LeaseInterface, identity string) error {
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		lease, err := leases.Get(ctx, provisioner.TemplateRefreshName, metav1.GetOptions{})
+		if err != nil {
+			return err //nolint:wrapcheck // wrapped below
+		}
+		if lease.Spec.HolderIdentity == nil || *lease.Spec.HolderIdentity != identity {
+			return nil
+		}
+		now := metav1.NewMicroTime(time.Now())
+		lease.Spec.HolderIdentity, lease.Spec.LeaseDurationSeconds = new(""), new(int32(1))
+		lease.Spec.AcquireTime, lease.Spec.RenewTime = &now, &now
+		_, err = leases.Update(ctx, lease, metav1.UpdateOptions{})
+		return err //nolint:wrapcheck // wrapped below
+	})
+	if err != nil {
+		return fmt.Errorf("releasing Lease %s: %w", provisioner.TemplateRefreshName, err)
+	}
+	return nil
 }
 
 // refreshStatus writes a run's state and the end of its log to the refresh's ConfigMap. A failed

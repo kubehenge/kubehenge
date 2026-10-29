@@ -20,6 +20,8 @@ import (
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	coordinationv1client "k8s.io/client-go/kubernetes/typed/coordination/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
@@ -40,6 +42,8 @@ type leaseAPI struct {
 	lease *coordinationv1.Lease
 	// holders is every holder the Lease was written with, in turn.
 	holders []string
+	// renewAfterRead is how many reads have the Lease's version move on right after them.
+	renewAfterRead int
 	// read is closed once the Lease has been read while another holds it.
 	read     chan struct{}
 	readOnce sync.Once
@@ -60,20 +64,24 @@ func (a *leaseAPI) serve(w http.ResponseWriter, r *http.Request) {
 			a.readOnce.Do(func() { close(a.read) })
 		}
 		a.write(w, http.StatusOK)
+		if a.renewAfterRead > 0 {
+			// A renewal in flight lands after the read, as one cut off by the run's end can.
+			a.renewAfterRead--
+			n, _ := strconv.Atoi(a.lease.ResourceVersion)
+			a.lease.ResourceVersion = strconv.Itoa(n + 1)
+		}
 	case r.Method == http.MethodPost && r.URL.Path == leases:
 		if a.lease != nil {
 			a.status(w, http.StatusConflict, metav1.StatusReasonAlreadyExists)
 			return
 		}
-		a.store(r, "")
-		a.write(w, http.StatusCreated)
+		a.store(w, r, "", http.StatusCreated)
 	case r.Method == http.MethodPut && r.URL.Path == leases+"/"+name:
 		if a.lease == nil {
 			a.status(w, http.StatusNotFound, metav1.StatusReasonNotFound)
 			return
 		}
-		a.store(r, a.lease.ResourceVersion)
-		a.write(w, http.StatusOK)
+		a.store(w, r, a.lease.ResourceVersion, http.StatusOK)
 	default:
 		a.t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
 		http.NotFound(w, r)
@@ -95,20 +103,23 @@ func (a *leaseAPI) holder() string {
 	return *a.lease.Spec.HolderIdentity
 }
 
-// store keeps the Lease a request sends, refusing one written over a version it did not read.
-func (a *leaseAPI) store(r *http.Request, version string) {
+// store keeps the Lease a request sends and answers with it, or refuses one written over a version
+// other than the API server's with a conflict, as the API server does.
+func (a *leaseAPI) store(w http.ResponseWriter, r *http.Request, version string, code int) {
 	lease := &coordinationv1.Lease{}
 	if err := json.NewDecoder(r.Body).Decode(lease); err != nil {
 		a.t.Error(err)
 		return
 	}
 	if lease.ResourceVersion != version {
-		a.t.Errorf("Lease written over version %q, the API server's is %q", lease.ResourceVersion, version)
+		a.status(w, http.StatusConflict, metav1.StatusReasonConflict)
+		return
 	}
 	n, _ := strconv.Atoi(version)
 	lease.ResourceVersion = strconv.Itoa(n + 1)
 	a.lease = lease
 	a.holders = append(a.holders, a.holder())
+	a.write(w, code)
 }
 
 func (a *leaseAPI) write(w http.ResponseWriter, code int) {
@@ -165,6 +176,45 @@ func TestARefreshRunsHoldingTheLeaseAndReleasesIt(t *testing.T) {
 	}
 	if len(api.holders) == 0 || api.holder() != "" || api.lease.Spec.LeaseDurationSeconds == nil || *api.lease.Spec.LeaseDurationSeconds != 1 {
 		t.Errorf("the Lease went through holders %q and is left for %v s after the run; want it released", api.holders, api.lease.Spec.LeaseDurationSeconds)
+	}
+}
+
+// A renewal the run's end cut off may still have moved the Lease on; the release reads it again
+// rather than leave it held until it runs out, and never takes another run's.
+func TestARefreshReleasesTheLeaseAVersionLater(t *testing.T) {
+	t.Parallel()
+	held := func(holder string) *leaseAPI {
+		now := metav1.NewMicroTime(time.Now())
+		return &leaseAPI{t: t, renewAfterRead: 1, lease: &coordinationv1.Lease{
+			Namespace: refreshNamespace, Name: provisioner.TemplateRefreshName, ResourceVersion: "3",
+			Spec: coordinationv1.LeaseSpec{HolderIdentity: &holder, LeaseDurationSeconds: new(int32(60)), AcquireTime: &now, RenewTime: &now},
+		}}
+	}
+	leases := func(api *leaseAPI) coordinationv1client.LeaseInterface {
+		clients, err := kubernetes.NewForConfig(api.start(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return clients.CoordinationV1().Leases(refreshNamespace)
+	}
+	own := held((&leaseAPI{t: t}).self())
+	if err := releaseRefreshLease(t.Context(), leases(own), own.self()); err != nil {
+		t.Fatal(err)
+	}
+	own.mu.Lock()
+	if own.holder() != "" || *own.lease.Spec.LeaseDurationSeconds != 1 || own.lease.ResourceVersion != "5" {
+		t.Errorf("the Lease is held by %q for %d s at version %s; want it released over the renewal", own.holder(), *own.lease.Spec.LeaseDurationSeconds, own.lease.ResourceVersion)
+	}
+	own.mu.Unlock()
+
+	other := held("kubehenge-template-refresh-29384756-abcde")
+	if err := releaseRefreshLease(t.Context(), leases(other), other.self()); err != nil {
+		t.Fatal(err)
+	}
+	other.mu.Lock()
+	defer other.mu.Unlock()
+	if other.holder() != "kubehenge-template-refresh-29384756-abcde" || len(other.holders) != 0 {
+		t.Errorf("another run's Lease was written: held by %q after writes %v", other.holder(), other.holders)
 	}
 }
 
