@@ -168,7 +168,7 @@ describe("a cluster's volume snapshots", () => {
     });
     const user = userEvent.setup({ delay: null });
     const heading = await screen.findByRole("rowheader", { name: "Volume snapshots" });
-    expect(heading.closest("tr")).toHaveTextContent("own Proxmox VE token");
+    expect(heading.closest("tr")).toHaveTextContent("On, with the cluster's token");
     await user.click(screen.getByRole("button", { name: "Edit volume snapshots" }));
     const dialog = screen.getByRole("dialog", { name: "Edit volume snapshots" });
     await user.click(within(dialog).getByLabelText("Take volume snapshots"));

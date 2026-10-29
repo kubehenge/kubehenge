@@ -149,8 +149,8 @@ export function SnapshotsField({
         Take volume snapshots
       </label>
       <Info about="volume snapshots">
-        A proxy copies only the cluster&apos;s own volumes, with its own token. Needs ZFS, LVM, LVM-thin, directory
-        or btrfs storage.
+        A proxy copies only the cluster&apos;s own volumes, with its own token. Needs ZFS, LVM, LVM-thin, directory or
+        btrfs storage.
       </Info>
       <p className="hint" id={hint}>
         Copies stay on their volume&apos;s node
