@@ -24,13 +24,14 @@ fail() {
 
 # until_true <timeout seconds> <description> <command...>: retries the command until it succeeds,
 # 2 seconds after the first try, then 4 and 8, then every 10: most waits end within seconds, and
-# the long ones cost no more checks than a steady 10-second poll.
+# the long ones cost no more checks than a steady 10-second poll. A check that sets seen to what it
+# found has its last finding in the failure, which a pod's log may not otherwise keep.
 until_true() {
-    limit=$(($(date +%s) + $1)) what=$2 pause=2
+    limit=$(($(date +%s) + $1)) what=$2 pause=2 seen=
     shift 2
     until "$@"; do
         now=$(date +%s)
-        [ "${now}" -lt "${limit}" ] || fail "timed out: ${what}"
+        [ "${now}" -lt "${limit}" ] || fail "timed out: ${what}${seen:+; last seen: ${seen}}"
         sleep "${pause}"
         pause=$((pause < 8 ? pause * 2 : 10))
     done

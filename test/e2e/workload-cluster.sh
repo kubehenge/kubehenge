@@ -1561,8 +1561,10 @@ headlamp_lists_pods() { headlamp_pods | jq -e '.kind == "PodList"' > /dev/null 2
 headlamp_refuses() {
     # shellcheck disable=SC2310 # the request failing is the answer looked for.
     if answer=$(headlamp_pods); then
+        seen="listed: $(printf '%s' "${answer}" | tr '\n' ' ' | cut -c1-400)"
         return 1
     fi
+    seen="refused: $(printf '%s' "${answer}" | tr '\n' ' ' | cut -c1-400)"
     case ${answer} in
         *Unauthorized* | *Forbidden* | *forbidden*) ;;
         *) return 1 ;;
