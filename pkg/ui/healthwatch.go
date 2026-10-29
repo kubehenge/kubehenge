@@ -21,6 +21,13 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 	if cond := trueCondition(c, provisioner.DeletionStalledCondition); cond != nil && !provisioner.Abandoned(c) {
 		a.add(severityWarning, sectionClusterAPI, "Deletion stalled", provisioner.DeletionStallHead(cond.Message), cond.LastTransitionTime.Time)
 	}
+	if cond := trueCondition(c, provisioner.CertificatesCondition); cond != nil {
+		if cond.Reason == provisioner.CertificatesRenewing {
+			a.add(severityProgress, sectionNodes, "Renewing certificates", provisioner.CertificatesHead(cond.Message), cond.LastTransitionTime.Time)
+		} else {
+			a.add(severityWarning, sectionNodes, "Certificates expire", provisioner.CertificatesSummary(cond.Message), cond.LastTransitionTime.Time)
+		}
+	}
 }
 
 // trueCondition is the cluster's condition of that type while it is true, else nil.

@@ -96,6 +96,7 @@ function Shell({
   const path = usePath();
   const [setup, setSetup] = useState<SetupStatus>();
   const [certificate, setCertificate] = useState<{ expires: Date; expired: boolean }>();
+  const [credentials, setCredentials] = useState<{ expires: Date; expired: boolean }>();
   const [upgradedTo, setUpgradedTo] = useState<string>();
   const retry = useRef<number>(undefined);
   // Counts the reads, so only the newest one's answer shows, and none after sign-out.
@@ -127,6 +128,7 @@ function Shell({
     if (read === reading.current) {
       setSetup(s);
       setCertificate(certificateWarning(s.certificateExpires));
+      setCredentials(certificateWarning(s.credentialsExpire));
     }
   }, []);
   const reloadSetup = useCallback(() => {
@@ -199,6 +201,13 @@ function Shell({
           {certificate.expires.toLocaleDateString(undefined, { dateStyle: "long" })}. Renew it in the shell of the
           Proxmox VE node with Kubehenge's installer:{" "}
           <code>sh install.sh --certificate --ctid {setup?.applianceVMID ?? "<appliance ID>"}</code>.
+        </p>
+      )}
+      {credentials && (
+        <p className="warning" role="alert">
+          Management cluster credentials {credentials.expired ? "expired" : "expire"} on{" "}
+          {credentials.expires.toLocaleDateString(undefined, { dateStyle: "long" })}. Apply the settings in{" "}
+          <a href="/administration">Administration</a> to renew them.
         </p>
       )}
       {/* Keyed by path: a page that failed recovers by navigating away, the top bar stays. */}

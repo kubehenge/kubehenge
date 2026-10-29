@@ -60,6 +60,9 @@ const (
 	templateVersionsInterval = 30 * time.Second
 	// haRulesInterval is how soon an HA rule made in Proxmox VE is offered to cluster creators.
 	haRulesInterval = 30 * time.Second
+	// certificateWatchInterval is how often the clusters' certificates are looked at, a few reads
+	// each: they are renewed weeks before they run out, and RKE2 and k3s report theirs every half hour.
+	certificateWatchInterval = 5 * time.Minute
 	// templateRequestsInterval is how soon a build asked for in the interface starts.
 	templateRequestsInterval = 15 * time.Second
 	// talosUpgradeInterval is how soon a Talos node's upgrade starts after the one before, or after
@@ -717,6 +720,13 @@ func (o *controllerOptions) addWatches(mgr manager.Manager, remotes *provisioner
 	}
 	if err := mgr.Add(rolls); err != nil {
 		return fmt.Errorf("the roll watch: %w", err)
+	}
+	certificates := &provisioner.CertificateWatch{
+		Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Workload: remotes.Workload, Events: mgr.GetEventRecorder("kubehenge"),
+		Interval: certificateWatchInterval,
+	}
+	if err := mgr.Add(certificates); err != nil {
+		return fmt.Errorf("the certificate watch: %w", err)
 	}
 	return nil
 }

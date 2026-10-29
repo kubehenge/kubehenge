@@ -362,7 +362,8 @@ func TestApply(t *testing.T) {
 		t.Fatal(err)
 	}
 	runs := strings.Split(strings.TrimSpace(string(log)), "\n")
-	if len(runs) != 4 {
+	// init, apply, and the outputs kubeconfig, api_endpoint and talosconfig.
+	if len(runs) != 5 {
 		t.Fatalf("tofu ran %d times: %s", len(runs), log)
 	}
 	for _, run := range runs {

@@ -151,6 +151,10 @@ The CA the certificate is checked against is, without `--proxmox-ca`:
 
 Where none of them is the answer, the installer stops before it creates anything. `--proxmox-ca` gives the CA instead; `--proxmox-insecure` has nothing checked.
 
+### The management cluster's credentials
+
+The admin kubeconfig and talosconfig of the management cluster, kept in the encrypted state, hold client certificates that last a year. An apply in their last month renews them; since only the passphrase opens the state, nothing does so by itself. The interface warns administrators 30 days before they run out: apply the settings in **Administration** to renew them.
+
 ### The appliance's certificate
 
 The interface warns administrators 30 days before its certificate runs out. Renew it in the shell of the node the appliance runs on (every node of a Proxmox VE cluster can read the cluster's CA key), with the installer of the release the appliance runs or a newer one:

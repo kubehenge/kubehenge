@@ -2,10 +2,14 @@ package appliance
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"time"
 
+	talosconfig "github.com/siderolabs/talos/pkg/machinery/client/config"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -71,6 +75,35 @@ func StoreRootPassword(ctx context.Context, admin []byte, on bool, password stri
 		return fmt.Errorf("root@pam's password in %s/%s: %w", interfaceNamespace, RootSecret, err)
 	}
 	return nil
+}
+
+// CredentialsExpire is when the first client certificate in the management cluster's admin
+// kubeconfig and talosconfig runs out, zero when neither holds one.
+func CredentialsExpire(kubeconfig, talos []byte) time.Time {
+	var certs [][]byte
+	if cfg, err := clientcmd.Load(kubeconfig); err == nil {
+		for _, auth := range cfg.AuthInfos {
+			certs = append(certs, auth.ClientCertificateData)
+		}
+	}
+	if cfg, err := talosconfig.FromBytes(talos); err == nil {
+		for _, c := range cfg.Contexts {
+			if crt, err := base64.StdEncoding.DecodeString(c.Crt); err == nil {
+				certs = append(certs, crt)
+			}
+		}
+	}
+	var first time.Time
+	for _, data := range certs {
+		block, _ := pem.Decode(data)
+		if block == nil {
+			continue
+		}
+		if cert, err := x509.ParseCertificate(block.Bytes); err == nil && (first.IsZero() || cert.NotAfter.Before(first)) {
+			first = cert.NotAfter
+		}
+	}
+	return first
 }
 
 // How often, and how long, to wait for Kubernetes to fill in the interface's token.

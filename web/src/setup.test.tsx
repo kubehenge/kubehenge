@@ -506,6 +506,24 @@ describe("setup", () => {
     expect(screen.queryByText(/certificate expires on/u)).not.toBeInTheDocument();
   });
 
+  it("warns administrators that the management cluster's credentials run out", async () => {
+    fakeServer({
+      ...administrator,
+      "GET /api/setup": {
+        body: {
+          appliance: true,
+          ready: true,
+          allowed: true,
+          credentialsExpire: new Date(Date.now() - 86_400_000).toISOString(),
+        },
+      },
+      "GET /api/clusters": { body: [] },
+    });
+    render(<App />);
+    const warning = await screen.findByText(/Management cluster credentials expired on/u);
+    expect(warning).toHaveTextContent(/Apply the settings in Administration to renew them\.$/u);
+  });
+
   it("shows administrators that the Proxmox VE API's certificate goes unverified, and nothing when it is checked", async () => {
     window.history.replaceState(null, "", "/administration");
     const routes: Record<string, Route> = {

@@ -756,6 +756,8 @@ export interface SetupStatus {
   backup?: boolean;
   /** When the interface's certificate runs out; for administrators only. */
   certificateExpires?: string;
+  /** When the management cluster's admin credentials run out; an apply renews them. */
+  credentialsExpire?: string;
   /** The appliance's guest ID in Proxmox VE; for administrators only. */
   applianceVMID?: number;
   /** The Proxmox VE API's certificate goes unverified (--proxmox-insecure); for administrators only. */

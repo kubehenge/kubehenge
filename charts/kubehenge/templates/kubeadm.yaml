@@ -316,6 +316,11 @@ lookup sends nothing.
 {{- define "kubehenge.kubeadmControlPlaneSpec" -}}
 template:
   spec:
+    # kubeadm's certificates last a year and are renewed only on a new machine. Kubehenge's
+    # certificate watch counts on the same 60 days (CertificateRenewWithin).
+    rollout:
+      before:
+        certificatesExpiryDays: 60
     kubeadmConfigSpec:
       clusterConfiguration:
         apiServer:

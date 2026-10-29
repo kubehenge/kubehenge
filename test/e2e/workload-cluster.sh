@@ -3017,6 +3017,49 @@ if [ "${distribution}" != talos ]; then
     done
 fi
 
+case ${class} in
+    kubehenge-rke2 | kubehenge-k3s)
+        step "a worker whose certificates run out within 60 days is replaced"
+        # The report RKE2's and k3s's own certificate monitor records on a node from 120 days before,
+        # as it would 45 days before; the controller renews from 60.
+        worker=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name},!cluster.x-k8s.io/control-plane" -o jsonpath='{.items[0].metadata.name}')
+        worker_node=$(kubectl -n "${ns}" get machine "${worker}" -o jsonpath='{.status.nodeRef.name}')
+        [ -n "${worker_node}" ] || fail "no worker node to report certificates of"
+        reported=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        expires=$(date -u -d '+45 days' +%Y-%m-%dT%H:%M:%SZ)
+        wl create -f - << EOF
+apiVersion: v1
+kind: Event
+metadata: {generateName: e2e-certificates-, namespace: default}
+involvedObject: {kind: Node, name: ${worker_node}, uid: ${worker_node}}
+type: Warning
+reason: CertificateExpirationWarning
+message: "Node certificates require attention - restart ${distribution} on this node to trigger automatic rotation: agent/client-kubelet.crt: certificate system:node:${worker_node} will expire within 120 days at ${expires}"
+source: {component: e2e}
+firstTimestamp: ${reported}
+lastTimestamp: ${reported}
+count: 1
+EOF
+        certificates_condition() {
+            kubectl -n "${ns}" get "cluster/${name}" -o json |
+                jq -e --arg r "$1" '.status.conditions // [] | any(.type == "CertificatesExpiring" and .status == "True" and .reason == $r)' > /dev/null
+        }
+        until_true 600 "the Cluster says the worker's certificates are being renewed" certificates_condition Renewing
+        kubectl -n "${ns}" get events -o json |
+            jq -e --arg w "${worker}" 'any(.items[]; .reason == "RenewingCertificates" and (.message | contains($w)))' > /dev/null ||
+            fail "no RenewingCertificates event names ${worker}"
+        until_true 1800 "machine ${worker} replaced" absent kubectl -n "${ns}" get machine "${worker}"
+        workers 1
+        certificates_renewed() {
+            # shellcheck disable=SC2310 # the condition's absence is what is waited for.
+            ! certificates_condition Renewing && kubectl -n "${ns}" get events -o json |
+                jq -e --arg n "${name}" 'any(.items[]; .reason == "CertificatesRenewed" and .involvedObject.name == $n)' > /dev/null
+        }
+        until_true 600 "the condition cleared, with an event saying so" certificates_renewed
+        ;;
+    *) ;;
+esac
+
 step "a dead worker is replaced"
 # The class's 300 s before a not-ready node counts as dead only adds waiting here; the integration
 # tier pins the classes' own checks. The override has to repeat the class's remediation, or it would

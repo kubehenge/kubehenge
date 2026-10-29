@@ -128,7 +128,11 @@ func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase str
 	if err = a.StoreRootPassword(ctx, []byte(admin), s.ClusterVolumeSnapshots, s.RootPassword); err != nil {
 		return nil, err
 	}
-	if err = a.recordApplied(); err != nil {
+	talos, err := a.output(ctx, env, "talosconfig")
+	if err != nil {
+		return nil, err
+	}
+	if err = a.recordApplied(CredentialsExpire([]byte(admin), []byte(talos))); err != nil {
 		return nil, err
 	}
 	return kubeconfig, nil
