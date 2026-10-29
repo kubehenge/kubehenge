@@ -130,6 +130,9 @@ type Server struct {
 	OpenStore provisioner.OpenStore
 	Log       *slog.Logger
 
+	// prepared guards the set-up Run and the handlers each do on first use, in whichever order the
+	// caller starts them.
+	prepared   sync.Once
 	sessions   *sessions
 	limiter    *limiter
 	activeKube atomic.Pointer[client.Client]
@@ -155,8 +158,7 @@ const (
 	addressFailuresAllowed = 20
 )
 
-// Run prepares the server and prunes its sessions until ctx ends. Handler is usable once it has
-// been called.
+// Run prepares the server and prunes its sessions until ctx ends.
 func (s *Server) Run(ctx context.Context) {
 	s.init()
 	go s.autoUpgrade(ctx)
@@ -244,16 +246,16 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 }
 
 func (s *Server) init() {
-	if s.sessions == nil {
+	s.prepared.Do(func() {
 		s.sessions = newSessions(s.Accounts, s.SessionMaxAge)
 		s.limiter = newLimiter(failureWindow)
 		if s.Kube != nil {
 			s.setKube(s.Kube)
 		}
-	}
-	if s.Log == nil {
-		s.Log = slog.New(slog.DiscardHandler)
-	}
+		if s.Log == nil {
+			s.Log = slog.New(slog.DiscardHandler)
+		}
+	})
 }
 
 // setKube switches the interface to a management cluster.
