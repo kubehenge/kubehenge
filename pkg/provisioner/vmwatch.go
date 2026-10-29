@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -159,8 +158,7 @@ func (w *VMWatch) Start(ctx context.Context) error {
 	})
 }
 
-// read lists the VMs and storages the token sees, and asks the node of each running VM what QEMU
-// reports, which tells a paused VM from a running one.
+// read lists the VMs and storages the token sees.
 func (w *VMWatch) read(ctx context.Context) (*vmLook, error) {
 	ctx, cancel := context.WithTimeout(ctx, watchReadTimeout)
 	defer cancel()
@@ -172,41 +170,17 @@ func (w *VMWatch) read(ctx context.Context) (*vmLook, error) {
 	if err := w.Proxmox.Get(ctx, "/cluster/resources?type=storage", &look.storages); err != nil {
 		return nil, fmt.Errorf("listing the storages: %w", err)
 	}
-	var nodes []string
 	for _, g := range guests {
-		if g.Type != guestQEMU {
-			continue
-		}
-		look.guests[g.VMID] = g
-		if g.Status == guestRunning && !slices.Contains(nodes, g.Node) {
-			nodes = append(nodes, g.Node)
+		if g.Type == guestQEMU {
+			look.guests[g.VMID] = g
 		}
 	}
-	qmp := map[int64]string{}
-	var errs []error
-	for _, node := range nodes {
-		var states []struct {
-			VMID      int64  `json:"vmid"`
-			QMPStatus string `json:"qmpstatus"`
-		}
-		// A node that does not answer leaves its VMs as running: what the resource list says.
-		if err := w.Proxmox.Get(ctx, "/nodes/"+url.PathEscape(node)+"/qemu?full=1", &states); err != nil {
-			errs = append(errs, fmt.Errorf("reading the VMs on %s: %w", node, err))
-			continue
-		}
-		for _, s := range states {
-			qmp[s.VMID] = s.QMPStatus
-		}
-	}
-	w.settle(look, qmp)
-	if len(errs) > 0 {
-		ctrl.LoggerFrom(ctx).WithName("vm-watch").Error(errors.Join(errs...), "reading QEMU's state")
-	}
+	w.settle(look)
 	return look, nil
 }
 
 // settle keeps the states VMs have been in for vmStateGrace in look.down.
-func (w *VMWatch) settle(look *vmLook, qmp map[int64]string) {
+func (w *VMWatch) settle(look *vmLook) {
 	if w.seen == nil {
 		w.seen = map[int64]vmSeen{}
 	}
@@ -217,7 +191,7 @@ func (w *VMWatch) settle(look *vmLook, qmp map[int64]string) {
 		}
 	}
 	for vmid, g := range look.guests {
-		reason := vmStateOf(g, qmp[vmid])
+		reason := vmStateOf(g)
 		if reason == "" {
 			delete(w.seen, vmid)
 			continue
@@ -234,20 +208,16 @@ func (w *VMWatch) settle(look *vmLook, qmp map[int64]string) {
 }
 
 // vmStateOf is the reason a VM counts as not running, "" while it runs or is only passing
-// through a state on purpose.
-func vmStateOf(g pveGuest, qmp string) string {
+// through a state on purpose. The resource list gives a started VM's state as QEMU reports it,
+// "paused" or "io-error" rather than "running"; "unknown" is a VM whose node is offline, which
+// Cluster API sees from the node.
+func vmStateOf(g pveGuest) string {
 	if slices.Contains(transientLocks, g.Lock) {
 		return ""
 	}
 	switch g.Status {
 	case guestStopped:
 		return VMsStopped
-	case guestRunning:
-	default:
-		// "unknown": its node is offline, which Cluster API sees from the node.
-		return ""
-	}
-	switch qmp {
 	case "io-error":
 		return VMsIOError
 	case "guest-panicked", "internal-error":

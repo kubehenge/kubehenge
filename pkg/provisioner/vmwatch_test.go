@@ -69,27 +69,17 @@ func newVMFixture(t *testing.T) *vmFixture {
 	return f
 }
 
-// vms sets each VM's state: running, stopped, or QEMU's state of a running VM, with an optional
-// lock after a colon.
+// vms sets each VM's status in the resource list, which for a started VM is QEMU's state
+// ("running", "paused", "io-error"), with an optional lock after a colon.
 func (f *vmFixture) vms(states map[int64]string) {
 	nodes := map[int64]string{101: "pve1", 102: "pve2", 103: "pve3", 104: "pve1"}
 	guests := make([]string, 0, len(states)+1)
-	qemu := map[string][]string{}
 	for vmid, entry := range states {
-		state, lock, _ := strings.Cut(entry, ":")
-		status := "running"
-		if state == "stopped" {
-			status = "stopped"
-		} else {
-			qemu[nodes[vmid]] = append(qemu[nodes[vmid]], fmt.Sprintf(`{"vmid":%d,"qmpstatus":%q}`, vmid, state))
-		}
+		status, lock, _ := strings.Cut(entry, ":")
 		guests = append(guests, fmt.Sprintf(`{"vmid":%d,"node":%q,"type":"qemu","status":%q,"lock":%q}`, vmid, nodes[vmid], status, lock))
 	}
 	guests = append(guests, `{"vmid":200,"node":"pve1","type":"lxc","status":"stopped"}`)
 	f.pve["/cluster/resources?type=vm"] = "[" + strings.Join(guests, ",") + "]"
-	for _, n := range []string{"pve1", "pve2", "pve3"} {
-		f.pve["/nodes/"+n+"/qemu?full=1"] = "[" + strings.Join(qemu[n], ",") + "]"
-	}
 }
 
 func (f *vmFixture) storages(raw string) { f.pve["/cluster/resources?type=storage"] = raw }
@@ -178,9 +168,10 @@ func TestVMWatchLetsPassingStatesBe(t *testing.T) {
 	if cond := f.look(2*time.Minute, VMsCondition); cond != nil {
 		t.Fatalf("condition %+v", cond)
 	}
-	delete(f.pve, "/nodes/pve2/qemu?full=1")
+	f.vms(map[int64]string{101: "stopped:backup", 102: "unknown", 103: "running", 104: "running"})
+	f.look(0, VMsCondition)
 	if cond := f.look(vmStateGrace, VMsCondition); cond != nil {
-		t.Fatalf("a node that does not answer: %+v", cond)
+		t.Fatalf("a node that is offline: %+v", cond)
 	}
 }
 
