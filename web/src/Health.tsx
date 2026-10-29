@@ -153,7 +153,8 @@ function etcdNote(h: ClusterHealth): { detail: string; healthy: boolean } | unde
 function controlPlaneTile(h: ClusterHealth): Tile {
   const nodes = h.nodes.items.filter((n) => n.role === "control-plane");
   const etcd = etcdNote(h);
-  if (nodes.length === 0) {
+  // Unread, its nodes are only machines whose readiness nobody knows, not nodes known to be down.
+  if (nodes.length === 0 || filled(h.workload)) {
     return { section: "nodes", label: "Control plane", ...notRead, detail: etcd?.detail };
   }
   const ready = nodes.filter((n) => n.ready).length;
@@ -169,6 +170,9 @@ function controlPlaneTile(h: ClusterHealth): Tile {
 
 function workersTile(h: ClusterHealth): Tile {
   const nodes = h.nodes.items.filter((n) => n.role === "worker");
+  if (filled(h.workload)) {
+    return { section: "nodes", label: "Workers", ...notRead };
+  }
   if (nodes.length === 0) {
     return filled(h.nodes.error)
       ? { section: "nodes", label: "Workers", ...notRead }

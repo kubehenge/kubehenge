@@ -146,6 +146,15 @@ const healthPath = "GET /api/clusters/default/web/health";
 const logsPath = (container: string): string =>
   `GET /api/clusters/default/web/pods/shop/api-7d9f/logs?container=${container}`;
 
+// machineOnly is a node as the server sends it when the cluster did not answer: only its machine.
+const machineOnly = (name: string, role: "control-plane" | "worker") => ({
+  name,
+  machine: name,
+  role,
+  joined: false,
+  ready: false,
+});
+
 describe("health page", () => {
   it("says what is wrong first, and shows a crashing pod's last run to those who may read logs", async () => {
     const routes: Record<string, Route> = {
@@ -209,6 +218,27 @@ describe("health page", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Logs" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Headlamp" })).not.toBeInTheDocument();
+  });
+
+  it("reads no node's readiness off a cluster that does not answer", async () => {
+    fakeServer({
+      [healthPath]: {
+        body: {
+          ...degraded,
+          verdict: "unreachable",
+          workload: "Its API server does not answer: connection refused",
+          nodes: { items: [machineOnly("web-cp-a", "control-plane"), machineOnly("web-md-0-a", "worker")] },
+          pods: { items: [] },
+          attention: [],
+        },
+      },
+    });
+    render(<HealthView cluster={cluster} headlamp={undefined} />);
+
+    const glance = within(await screen.findByRole("list", { name: "At a glance" }));
+    for (const tile of ["Control plane", "Workers", "Node pressure", "Pods not well"]) {
+      expect(glance.getByRole("link", { name: new RegExp(`${tile}\\s*Not read`, "u") })).toBeInTheDocument();
+    }
   });
 
   it("says the autoscaler brings workers to a pool at none, which keeps the control plane to itself", async () => {
