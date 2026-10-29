@@ -72,14 +72,6 @@ A node that never joins its cluster says why in its boot log ([troubleshooting.m
 - **What it reaches:** only the files the node's guest agent may open. Kubehenge's node templates allow the agent to read cloud-init's output and the node's copy of its journals (`/var/log/kubehenge`, root's alone), and its SELinux policy keeps it from the rest of `/var/log` and from the node's keys and kubeconfigs. A VM cloned from a template of your own reaches what its agent allows.
 - **Switching it off,** by unticking **Nodes' boot logs** in the setup or setting `node_boot_logs = false`, takes the privilege away; the interface and `kubectl` then offer Talos nodes' boot logs alone.
 
-## Volume snapshots
-
-The CSI plugin copies a volume for a snapshot, a restore or a clone through a Proxmox VE method that only `root@pam` may call, signed in with its password and without a second factor; no API token can, whatever its privileges. With this setting, a cluster may take volume snapshots on storage local to each node ([clusters.md](clusters.md#volume-snapshots)), and its CSI plugin then signs in as `root@pam`.
-
-- **What it grants:** every cluster that chooses volume snapshots gets `root@pam`'s password in its CSI plugin's configuration, so whoever takes over such a cluster, or reads that Secret, holds the whole Proxmox VE cluster. Choosing it takes the cluster creator's own `Permissions.Modify` on `/`.
-- **Where the password lives:** you type it in the setup, which checks it by signing in as `root@pam` and refuses it when Proxmox VE asks for a second factor. It is kept in the management cluster only, as the Secret `kubehenge-root-pam` in `kubehenge-system`, never in the appliance's state, settings or logs, and the interface never shows it again. An apply that changes nothing else leaves the stored one as it is; give it again when `root@pam`'s password changes.
-- **Switching it off** deletes the Secret. Clusters that took snapshots keep their CSI plugin on the cluster's token, without snapshots, and show a `VolumeSnapshotsRefused` event until the option is switched off for them.
-
 ## Headlamp sign-in
 
 Without it, everyone signs in to each cluster in the shared Headlamp with a token or an identity provider of their own. With it, those who hold `Sys.Modify` on a cluster's pool, who may download its admin kubeconfig anyway, open it signed in as cluster-admin; nobody else gets more than before. It needs no Proxmox VE privilege beyond the setup's own.

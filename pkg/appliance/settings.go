@@ -76,13 +76,6 @@ type Settings struct {
 	// NodeBootLogs has the controller read nodes' boot logs through their guest agents, its token
 	// then holding VM.GuestAgent.FileRead on the workload pool; unset, it is on.
 	NodeBootLogs *bool `json:"nodeBootLogs,omitempty"`
-	// ClusterVolumeSnapshots lets a cluster take volume snapshots, whose CSI plugin then signs in as
-	// root@pam with the password the appliance keeps in the management cluster.
-	ClusterVolumeSnapshots bool `json:"clusterVolumeSnapshots,omitempty"`
-	// RootPassword is root@pam's password, for an apply that switches ClusterVolumeSnapshots on or
-	// changes the password; empty keeps the one stored. It goes into the management cluster alone:
-	// never into the saved settings, the module's variables or its state.
-	RootPassword string `json:"-"`
 	// ExtraClusterNamespaces are more namespaces the interface creates and manages clusters in,
 	// beside its own, such as one per team.
 	ExtraClusterNamespaces []string `json:"extraClusterNamespaces,omitempty"`

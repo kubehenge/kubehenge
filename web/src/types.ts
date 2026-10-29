@@ -23,8 +23,6 @@ export interface Session {
   canCreate?: boolean;
   /** Whether the user may install Rancher and trust identity providers of their own: Sys.Modify on the workload pool. */
   canTrust?: boolean;
-  /** Whether the user holds Permissions.Modify on /, which giving a cluster's CSI plugin root@pam needs. */
-  canModifyPermissions?: boolean;
   /** The namespace the interface creates clusters in unless the creator chooses another. */
   namespace?: string;
   /** Every namespace the interface creates and changes clusters in, namespace first. */
@@ -558,8 +556,6 @@ export interface ManagementSettings {
   clusterSysAudit?: boolean;
   /** Kubehenge's controller reads nodes' boot logs through their guest agents, with VM.GuestAgent.FileRead; absent, it does. */
   nodeBootLogs?: boolean;
-  /** Clusters may take volume snapshots, with their CSI plugin signed in as root@pam. */
-  clusterVolumeSnapshots?: boolean;
   /** More namespaces the interface creates and manages clusters in, beside its own. */
   extraClusterNamespaces?: string[];
   /** The shared Headlamp signs those who may download a cluster's kubeconfig in as cluster-admin. */

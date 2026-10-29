@@ -12,7 +12,6 @@ import (
 	"time"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -41,58 +40,6 @@ const (
 	// fails is tried again at the next look.
 	interfaceTokenCheckEvery = time.Hour
 )
-
-// RootSecret is where Kubehenge's controller reads root@pam's password, under rootPasswordKey, for
-// the CSI plugin of clusters that take volume snapshots (the module's cluster_volume_snapshots).
-const (
-	RootSecret      = "kubehenge-root-pam" //nolint:gosec // a Secret's name, not a credential
-	rootPasswordKey = "password"
-)
-
-// ErrNoRootPassword is an apply with volume snapshots on and no root@pam password, given or stored.
-var ErrNoRootPassword = errors.New("volume snapshots need root@pam's password, and none is stored")
-
-// StoreRootPassword keeps root@pam's password in the management cluster, with its admin
-// kubeconfig, and nowhere else: written when password is given, left as it is when it is empty,
-// and deleted with volume snapshots off.
-func StoreRootPassword(ctx context.Context, admin []byte, on bool, password string) error {
-	cfg, err := clientcmd.RESTConfigFromKubeConfig(admin)
-	if err != nil {
-		return fmt.Errorf("the admin kubeconfig: %w", err)
-	}
-	kube, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		return fmt.Errorf("a client for the management cluster: %w", err)
-	}
-	secrets := kube.CoreV1().Secrets(interfaceNamespace)
-	switch {
-	case !on:
-		err = secrets.Delete(ctx, RootSecret, metav1.DeleteOptions{})
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-	case password == "":
-		var s *corev1.Secret
-		s, err = secrets.Get(ctx, RootSecret, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) || err == nil && len(s.Data[rootPasswordKey]) == 0 {
-			return ErrNoRootPassword
-		}
-	default:
-		s := &corev1.Secret{
-			Name: RootSecret, Namespace: interfaceNamespace,
-			Type: corev1.SecretTypeOpaque,
-			Data: map[string][]byte{rootPasswordKey: []byte(password)},
-		}
-		_, err = secrets.Update(ctx, s, metav1.UpdateOptions{})
-		if apierrors.IsNotFound(err) {
-			_, err = secrets.Create(ctx, s, metav1.CreateOptions{})
-		}
-	}
-	if err != nil {
-		return fmt.Errorf("root@pam's password in %s/%s: %w", interfaceNamespace, RootSecret, err)
-	}
-	return nil
-}
 
 // How often, and how long, to ask for the interface's first token while the chart that makes its
 // ServiceAccount may still be settling.

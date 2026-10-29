@@ -27,6 +27,20 @@ type fakeCloud struct {
 	removed         []Names
 	removedHeld     []Credentials
 	access          Access
+	// holderNodes are the nodes the last call asked holder VMs on; emptied counts the calls that
+	// removed the empty ones.
+	holderNodes []string
+	emptied     int
+}
+
+func (f *fakeCloud) EnsureVolumeHolders(_ context.Context, _ Names, nodes []string) error {
+	f.holderNodes = nodes
+	return nil
+}
+
+func (f *fakeCloud) RemoveEmptyVolumeHolders(context.Context, Names) error {
+	f.emptied++
+	return nil
 }
 
 func (f *fakeCloud) Ensure(_ context.Context, n Names, access Access, held Credentials, record func(Credentials) error) (Credentials, error) {

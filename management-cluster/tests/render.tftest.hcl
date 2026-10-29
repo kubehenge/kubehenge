@@ -200,9 +200,9 @@ run "controller_and_clusters_are_least_privilege" {
         "/nodes kubehenge-audit",
       ]) &&
       !contains(proxmox_virtual_environment_role.cluster_storage.privileges, "Datastore.Allocate") &&
-      toset(proxmox_virtual_environment_role.cluster_vms.privileges) == toset(["VM.Audit", "VM.Config.Disk"])
+      toset(proxmox_virtual_environment_role.cluster_vms.privileges) == toset(["VM.Audit", "VM.Clone", "VM.Config.Disk"])
     )
-    error_message = "clusters may use space on the workload storages and configure their own VMs' disks, nothing more"
+    error_message = "clusters may use space on the workload storages and configure and copy their own VMs' disks, nothing more"
   }
 
   assert {
@@ -254,8 +254,7 @@ run "controller_and_clusters_are_least_privilege" {
           role               = ""
           managementStorages = ["local-lvm", "local"]
         }
-        sysAuditGroup   = "kubehenge-clusters-audit"
-        volumeSnapshots = { rootSecret = "" }
+        sysAuditGroup = "kubehenge-clusters-audit"
       }
       templateRefresh = {
         enabled       = true
@@ -450,35 +449,6 @@ run "node_boot_logs_off" {
       !yamldecode(helm_release.kubehenge.values[0]).proxmox.bootLogs
     )
     error_message = "switched off, the controller's token holds no guest agent privilege and the controller reads no boot logs through it"
-  }
-}
-
-run "cluster_volume_snapshots" {
-  command = plan
-
-  variables {
-    cluster_volume_snapshots = true
-  }
-
-  assert {
-    condition     = yamldecode(helm_release.kubehenge.values[0]).proxmox.volumeSnapshots == { rootSecret = "kubehenge-root-pam" }
-    error_message = "the controller learns the Secret root@pam's password is in"
-  }
-
-  assert {
-    condition = (
-      !strcontains(jsonencode([for s in helm_release.cluster_api_providers.set_sensitive : s.name]), "root") &&
-      !strcontains(helm_release.cluster_api_providers.values[0], "kubehenge-root-pam")
-    )
-    error_message = "the module never holds root@pam's password, so that it stays out of the state"
-  }
-
-  assert {
-    condition = (
-      length(proxmox_virtual_environment_role.cluster_datastore) == 0 &&
-      length([for k, a in proxmox_acl.provisioner : k if a.path == "/" && a.role_id != "kubehenge-audit"]) == 0
-    )
-    error_message = "volume snapshots grant no token anything more"
   }
 }
 

@@ -40,8 +40,6 @@ const form: SetupForm = {
   creatorBuilds: false,
   clusterSysAudit: true,
   nodeBootLogs: true,
-  clusterVolumeSnapshots: false,
-  rootPassword: "",
   moreNamespaces: false,
   extraNamespaces: "",
   headlampSignIn: false,
