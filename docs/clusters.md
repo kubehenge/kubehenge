@@ -37,7 +37,7 @@ Before the first cluster, the VM templates for its distribution have to exist ([
 
 | Field | What it is |
 | --- | --- |
-| Bridge | The bridge the cluster's VMs attach to: one of those chosen for clusters when the management cluster was set up. Bridges you may not use (no `SDN.Use`) are shown but disabled; when only one is left to choose, it is chosen. When the management cluster names none and Proxmox VE lists no bridges to you (no `Sys.Audit` on the nodes), you type the name in. |
+| Bridge | The bridge the cluster's VMs attach to: one of those chosen for clusters when the management cluster was set up. Bridges you may not use (no `SDN.Use`) are shown but disabled; when only one is left to choose, it is chosen, and otherwise the first a node reaches its gateway through. The prefix length, gateway and DNS servers start from that node's network on the bridge, and the examples for the API and node addresses come from it; all of them can be changed. When the management cluster names none and Proxmox VE lists no bridges to you (no `Sys.Audit` on the nodes), you type the name in. |
 | VLAN tag | Optional, 1 to 4094. |
 | API address | The control plane's virtual IP: an unused address in the nodes' network, outside the node addresses. |
 | Node addresses | Where the nodes take their addresses from: ranges (`192.0.2.21-192.0.2.29`), networks or single addresses inside the gateway's network, one per line or separated by commas. The wizard asks for at least one address more than there are nodes, for the extra node an upgrade or a replacement adds, counting an autoscaled pool at its most; leave more for scaling up. |

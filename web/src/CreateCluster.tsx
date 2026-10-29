@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState, type JSX } from "react";
 
 import { AddOnsStep } from "./AddOnsStep";
-import { api, bridgesOf } from "./api";
+import { api, bridgesOf, dnsOf } from "./api";
 import { clusterPath } from "./ClusterDetail";
 import {
   classBridges,
@@ -21,7 +21,10 @@ import {
   summary,
   variable,
   versionsNodeOS,
+  bridgeNetwork,
+  bridgeOf,
   withBackupChoices,
+  withBridgeNetwork,
   withClass,
   namespaceOf,
   withNamespace,
@@ -70,6 +73,7 @@ export function CreateCluster({
   const [classes, setClasses] = useState<ClusterClass[]>([]);
   const [discarding, setDiscarding] = useState(false);
   const [bridgesByNode, setBridgesByNode] = useState<Record<string, Bridge[]>>({});
+  const [dnsByNode, setDNSByNode] = useState<Record<string, string[]>>({});
   const [storages, setStorages] = useState<Storage[]>([]);
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [nodes, setNodes] = useState<PveNode[]>([]);
@@ -144,8 +148,9 @@ export function CreateCluster({
       }
     }
     async function loadBridges(node: string): Promise<void> {
-      const b = await bridgesOf(node);
+      const [b, d] = await Promise.all([bridgesOf(node), dnsOf(node)]);
       setBridgesByNode((all) => ({ ...all, [node]: b }));
+      setDNSByNode((all) => ({ ...all, [node]: d }));
     }
     async function loadNodes(): Promise<void> {
       try {
@@ -175,13 +180,13 @@ export function CreateCluster({
   const bridgeOptions = offeredBridges(bridgesByNode, classBridges(cls));
   const usableStorages = offeredStorages(storages, classStorages(cls));
   // Where there is only one bridge or storage to choose, it is chosen until another is.
+  const bridge = bridgeOf(entered.bridge, bridgeOptions, bridgesByNode);
+  const { net, network } = bridgeNetwork(bridge, bridgesByNode, dnsByNode);
   const form: Form = withBackupChoices(
     {
-      ...withTalosRelease(entered, talos, offered),
+      ...withBridgeNetwork(withTalosRelease(entered, talos, offered), net, (k) => touched.has(k)),
       namespace: namespaces.length > 1 ? namespaceOf(entered, namespaces) : "",
-      bridge: filled(entered.bridge)
-        ? entered.bridge
-        : (sole(bridgeOptions.filter((b) => b.usable).map((b) => b.bridge)) ?? ""),
+      bridge,
       storage: filled(entered.storage) ? entered.storage : (sole(usableStorages.map((s) => s.storage)) ?? ""),
     },
     cls,
@@ -316,7 +321,14 @@ export function CreateCluster({
             />
           )}
           {step === "Network" && (
-            <NetworkStep form={form} set={set} shown={shown} cls={cls} bridgeOptions={bridgeOptions} />
+            <NetworkStep
+              form={form}
+              set={set}
+              shown={shown}
+              cls={cls}
+              bridgeOptions={bridgeOptions}
+              network={network}
+            />
           )}
           {step === "Machines" && (
             <MachinesStep

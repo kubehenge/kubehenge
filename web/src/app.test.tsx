@@ -1281,8 +1281,11 @@ describe("create", () => {
         ],
       }),
       "GET /api/proxmox/nodes/pve1/bridges": () => ({
-        body: [{ bridge: "vmbr0", node: "pve1", vlanAware: false, usable: true }],
+        body: [
+          { bridge: "vmbr0", node: "pve1", vlanAware: false, usable: true, cidr: "10.0.0.5/16", gateway: "10.0.0.1" },
+        ],
       }),
+      "GET /api/proxmox/nodes/pve1/dns": () => ({ body: { servers: ["10.0.0.53"] } }),
       "GET /api/proxmox/ha-rules": () => ({
         body: {
           readable: true,
@@ -1306,10 +1309,16 @@ describe("create", () => {
 
     // The one bridge, like the one usable storage after, is chosen already.
     await waitFor(() => expect(screen.getByLabelText("Bridge")).toHaveValue("vmbr0"));
+    // The bridge's network gives the prefix length, gateway and DNS servers, and the examples.
+    await waitFor(() => expect(screen.getByLabelText("DNS servers")).toHaveValue("10.0.0.53"));
+    expect(screen.getByLabelText("Gateway")).toHaveValue("10.0.0.1");
+    expect(screen.getByLabelText("Prefix length")).toHaveValue(16);
+    expect(screen.getByLabelText("API address")).toHaveAttribute("placeholder", "10.0.0.20");
+    expect(screen.getByLabelText("Node addresses")).toHaveAccessibleDescription(
+      "Ranges like 10.0.0.21-10.0.0.29, networks or addresses",
+    );
     await user.type(screen.getByLabelText("API address"), "10.0.0.20");
     await user.type(screen.getByLabelText("Node addresses"), "10.0.0.21-10.0.0.29");
-    await user.type(screen.getByLabelText("Gateway"), "10.0.0.1");
-    await user.type(screen.getByLabelText("DNS servers"), "10.0.0.1");
     expect(screen.getByLabelText("Pod network")).toHaveValue("canal");
     await user.click(screen.getByRole("button", { name: "Next" }));
 
@@ -1376,6 +1385,7 @@ describe("create", () => {
         workerMachine: { cores: 4 },
         controlPlaneMachine: { cores: 4 },
         controlPlaneEndpoint: "10.0.0.20",
+        network: { bridge: "vmbr0", prefix: 16, gateway: "10.0.0.1", dnsServers: ["10.0.0.53"] },
         oidc: [{ issuerURL: "https://sso.example", clientID: "kubernetes", usernamePrefix: "oidc:" }],
       },
     });

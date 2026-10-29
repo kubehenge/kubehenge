@@ -17,7 +17,7 @@ import {
 } from "./create-form";
 import { CSIField, SnapshotsField } from "./CsiPlugin";
 import { LoadBalancerFields } from "./LoadBalancer";
-import { addressBits } from "./network";
+import { addressBits, addressIn } from "./network";
 import { choosable, cpuNote, findNodeOS, macName, nodeOSKey, nodeOSLabel } from "./node-os";
 import { OIDCProviders } from "./OIDCProviders";
 import { HAField, HAGroupsField, PlacementFields, type HARulesRead } from "./Placement";
@@ -499,14 +499,27 @@ export function GeneralStep({
 // Talos brings Flannel itself; Kubehenge installs the other pod networks its class offers.
 const ownNetworks: Record<string, string> = { talos: "flannel" };
 
+// Where in the bridge's network the examples of the API and node addresses lie.
+const exampleEndpoint = 20;
+const exampleFirst = 21;
+const exampleLast = 29;
+
 export function NetworkStep({
   form,
   set,
   shown,
   cls,
   bridgeOptions,
-}: StepProps & { cls: ClusterClass | undefined; bridgeOptions: Bridge[] }): JSX.Element {
+  network,
+}: StepProps & {
+  cls: ClusterClass | undefined;
+  bridgeOptions: Bridge[];
+  /** The bridge's network, like 192.0.2.0/24, where a node reports it; the examples are taken from it. */
+  network?: string | undefined;
+}): JSX.Element {
   const cni = variable(cls, "cni");
+  const example = (offset: number, otherwise: string): string =>
+    (network === undefined ? undefined : addressIn(network, offset)) ?? otherwise;
   // Cilium's ranges also keep clear of the other clusters', so the cluster can join a Cluster Mesh.
   const rangeHint =
     form.cni === "cilium" ? "Leave empty to choose one clear of other clusters" : "Leave empty to choose a free one";
@@ -548,13 +561,13 @@ export function NetworkStep({
             id={id}
             value={form.endpoint}
             onChange={(e) => set("endpoint", e.target.value.trim())}
-            placeholder="10.0.0.20"
+            placeholder={example(exampleEndpoint, "10.0.0.20")}
           />
         )}
       </Field>
       <Field
         label="Node addresses"
-        hint="Ranges like 10.0.0.21-10.0.0.29, networks or addresses"
+        hint={`Ranges like ${example(exampleFirst, "10.0.0.21")}-${example(exampleLast, "10.0.0.29")}, networks or addresses`}
         error={shown("addresses")}
       >
         {(id) => (

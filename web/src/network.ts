@@ -49,6 +49,14 @@ export function networkOf(address: string): string | undefined {
   return `${fromInt((ip & maskOf(Number(bits))) >>> 0)}/${bits}`;
 }
 
+/** addressIn is the address that many past a network's own, or undefined when the network is smaller. */
+export function addressIn(network: string, offset: number): string | undefined {
+  const [base = "", bits] = network.split("/");
+  const ip = toInt(base);
+  const size = octetValues ** octets / 2 ** Number(bits);
+  return ip === undefined || offset >= size - 1 ? undefined : fromInt(ip + offset);
+}
+
 /** maskOf is the network mask of a prefix length, as a number. */
 export const maskOf = (prefix: number): number =>
   prefix >= 1 && prefix <= addressBits ? (allOnes << (addressBits - prefix)) >>> 0 : 0;

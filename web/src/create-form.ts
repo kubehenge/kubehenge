@@ -36,7 +36,7 @@ import {
 } from "./GitOps";
 import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implementation } from "./LoadBalancer";
 import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
-import { addressBits, addressCount, inList, ipv4, isVLAN, list, rangeProblem, whole } from "./network";
+import { addressBits, addressCount, inList, ipv4, isVLAN, list, networkOf, rangeProblem, whole } from "./network";
 import { choosable, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
@@ -74,6 +74,7 @@ import {
   maxWorkers,
   registeredWithRancher,
   sentence,
+  sole,
 } from "./ui";
 import { quantity, record, text, texts } from "./values";
 
@@ -451,6 +452,63 @@ export function withTalosRelease(f: Form, talos: TalosReleases | undefined, offe
   const runs = forRelease(offered, talos, talosVersion)?.versions ?? [];
   const version = filled(f.version) && runs.length > 0 && !runs.includes(f.version) ? (runs[0] ?? "") : f.version;
   return { ...f, talosVersion, version };
+}
+
+/** BridgeNetwork is what a node says of the network on a bridge: its own address there, its gateway and its DNS servers. */
+export interface BridgeNetwork {
+  cidr?: string | undefined;
+  gateway?: string | undefined;
+  dns: string[];
+}
+
+/**
+ * bridgeNetwork is the network on a bridge, from a node that reaches its gateway through it, and
+ * that network written like 192.0.2.0/24.
+ */
+export function bridgeNetwork(
+  bridge: string,
+  bridgesByNode: Record<string, Bridge[]>,
+  dnsByNode: Record<string, string[]>,
+): { net?: BridgeNetwork; network?: string } {
+  const on = Object.values(bridgesByNode)
+    .flat()
+    .find((b) => b.bridge === bridge && filled(b.gateway));
+  if (on === undefined) {
+    return {};
+  }
+  const net = { cidr: on.cidr, gateway: on.gateway, dns: dnsByNode[on.node] ?? [] };
+  const network = on.cidr === undefined ? undefined : networkOf(on.cidr);
+  return network === undefined ? { net } : { net, network };
+}
+
+/**
+ * bridgeOf is the bridge the cluster attaches to: the one chosen, else the only one it may use, else
+ * the first it may use that a node reaches its gateway through.
+ */
+export function bridgeOf(chosen: string, options: Bridge[], bridgesByNode: Record<string, Bridge[]>): string {
+  if (filled(chosen)) {
+    return chosen;
+  }
+  const usable = options.filter((b) => b.usable).map((b) => b.bridge);
+  const uplink = usable.find((name) => bridgeNetwork(name, bridgesByNode, {}).net !== undefined);
+  return sole(usable) ?? uplink ?? "";
+}
+
+/**
+ * withBridgeNetwork fills the prefix length, gateway and DNS servers from the bridge's network,
+ * where the user has given none of their own.
+ */
+export function withBridgeNetwork(f: Form, net: BridgeNetwork | undefined, touched: (k: keyof Form) => boolean): Form {
+  if (net === undefined) {
+    return f;
+  }
+  const bits = Number(net.cidr?.split("/")[1]);
+  return {
+    ...f,
+    prefix: touched("prefix") || !whole(bits, 1, addressBits) ? f.prefix : bits,
+    gateway: f.gateway === "" && !touched("gateway") ? (net.gateway ?? "") : f.gateway,
+    dnsServers: f.dnsServers === "" && !touched("dnsServers") ? net.dns.join(", ") : f.dnsServers,
+  };
 }
 
 /** newForm is the wizard before anything is chosen. */
