@@ -140,14 +140,15 @@
   ],
   "customManagers": [
     {
-      "description": "A download from a GitHub release whose tag sits on the line above its SHA-256: the tools in scripts/tools.sh, the OpenTofu appliance/install.sh runs, the Headlamp the appliance serves, the Gateway API install file the controller carries, the cosign kubeadm templates check their images with, and the SeaweedFS the workload cluster test backs up to and the etcdutl it reads the etcd snapshots back with. The tag and the digest move together; the datasource finds the new digest in the release's checksum file, or hashes the download itself.",
+      "description": "A download from a GitHub release whose tag sits on the line above its SHA-256: the tools in scripts/tools.sh, the OpenTofu appliance/install.sh runs, the Headlamp the appliance serves, the Gateway API install file the controller carries, the cosign kubeadm templates check their images with, and the SeaweedFS the workload cluster and Cluster Mesh tests back up to and the etcdutl it reads the etcd snapshots back with. The tag and the digest move together; the datasource finds the new digest in the release's checksum file, or hashes the download itself.",
       "customType": "regex",
       "managerFilePatterns": [
         "/^scripts/tools\\.sh$/",
         "/^appliance/install\\.sh$/",
         "/^Makefile$/",
         "/^pkg/templates/node/images\\.sh$/",
-        "/^test/e2e/workload-cluster\\.sh$/"
+        "/^test/e2e/workload-cluster\\.sh$/",
+        "/^test/e2e/backups\\.sh$/"
       ],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>github-release-attachments) depName=(?<depName>\\S+)\\n[A-Z0-9_]+ *:?= *(?<currentValue>\\S+)\\n[A-Z0-9_]+_SHA256 *:?= *(?<currentDigest>[0-9a-f]{64})"

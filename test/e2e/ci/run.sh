@@ -200,12 +200,12 @@ case "${test}" in
     *) export TF_VAR_node_cores=2 ;;
 esac
 
-# The workload cluster tests back up to an S3 store they serve on this machine, at the address the
-# nodes reach it by, under a certificate of a CA made for the run; the management cluster offers it
-# as a backup target, and as a second one, which nothing backs up to, for the clusters' reads of
-# each other's backups.
+# The workload cluster and Cluster Mesh tests back up to an S3 store they serve on this machine, at
+# the address the nodes reach it by, under a certificate of a CA made for the run; the management
+# cluster offers it as a backup target, and as a second one, which nothing backs up to, for the
+# clusters' reads of each other's backups.
 case "${test}" in
-    rke2 | k3s | kubeadm | talos)
+    rke2 | k3s | kubeadm | talos | cluster-mesh)
         s3=${work}/s3
         mkdir -p "${s3}"
         openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 -subj /CN=kubehenge-e2e-s3-ca \

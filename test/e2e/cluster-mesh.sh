@@ -2,7 +2,9 @@
 # End-to-end test of Cilium Cluster Mesh on a Proxmox VE host, against a running management cluster:
 # two one-node k3s clusters that run Cilium, each listing the other, are linked through their
 # clustermesh-apiservers on NodePort 32379 of their virtual IPs; a pod of one reaches a pod of the
-# other by address and through a global service; once one stops listing the other the link goes,
+# other by address and through a global service; both back up with Velero to an S3 store the test
+# serves, west reading east's backups, and a namespace with a Secret and a volume backed up in east
+# is restored into west with the volume's data; once one stops listing the other the link goes,
 # and once one leaves the mesh its Cluster Mesh objects go with it; nothing of either is left
 # afterwards.
 #
@@ -15,7 +17,8 @@
 # has its own addresses and virtual IP: KUBEHENGE_E2E_EAST_ADDRESSES and _EAST_ENDPOINT,
 # KUBEHENGE_E2E_WEST_ADDRESSES and _WEST_ENDPOINT. KUBEHENGE_E2E_VERSION is the k3s version of both.
 # KUBEHENGE_E2E_CORES and _MEMORY (MiB) size each node, by default the least of a k3s control plane
-# without workers.
+# without workers. The backups' store, as for workload-cluster.sh: KUBEHENGE_E2E_BACKUP_TARGET,
+# KUBEHENGE_E2E_BACKUP_CA, KUBEHENGE_E2E_BACKUP_CERT and KUBEHENGE_E2E_BACKUP_KEY (backups.sh).
 set -eu
 
 : "${KUBECONFIG:?KUBECONFIG must point at the management cluster}"
@@ -24,14 +27,18 @@ set -eu
 : "${KUBEHENGE_E2E_EAST_ADDRESSES:?}" "${KUBEHENGE_E2E_EAST_ENDPOINT:?}"
 : "${KUBEHENGE_E2E_WEST_ADDRESSES:?}" "${KUBEHENGE_E2E_WEST_ENDPOINT:?}"
 : "${KUBEHENGE_E2E_VERSION:?}"
+: "${KUBEHENGE_E2E_BACKUP_TARGET:?}" "${KUBEHENGE_E2E_BACKUP_CA:?}" "${KUBEHENGE_E2E_BACKUP_CERT:?}" "${KUBEHENGE_E2E_BACKUP_KEY:?}"
 
 # shellcheck source=common.sh
 . "$(dirname "$0")/common.sh"
+# shellcheck source=backups.sh
+. "$(dirname "$0")/backups.sh"
 
 work=$(mktemp -d)
 ns=e2e-mesh-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')
 cleanup() {
     status=$?
+    [ -z "${s3_pid}" ] || kill "${s3_pid}" 2> /dev/null || true
     if [ "${status}" -ne 0 ]; then
         printf '\nleaving the clusters in %s for inspection; delete them with: kubectl delete namespace %s\n' "${ns}" "${ns}"
     fi
@@ -47,9 +54,10 @@ json_list() { printf '%s' "$1" | jq -R 'split(",")'; }
 east() { KUBECONFIG="${work}/east" kubectl "$@"; }
 west() { KUBECONFIG="${work}/west" kubectl "$@"; }
 
-# cluster <name> <addresses> <endpoint> <pod range> <peer>: a one-node k3s cluster that runs Cilium
-# in a Cluster Mesh with the peer. Applied with kubectl, which gives a cluster no range of its own as
-# the interface does, so each is given one apart from the other's.
+# cluster <name> <addresses> <endpoint> <pod range> <peer> <backups>: a one-node k3s cluster that
+# runs Cilium in a Cluster Mesh with the peer, backing up as the backups variable says. Applied with
+# kubectl, which gives a cluster no range of its own as the interface does, so each is given one
+# apart from the other's.
 cluster() {
     addresses=$(json_list "$2")
     dns_servers=$(json_list "${KUBEHENGE_E2E_DNS}")
@@ -95,6 +103,8 @@ spec:
         value: {admission: restricted}
       - name: clusterMesh
         value: {enabled: true, peers: [$5]}
+      - name: backups
+        value: $6
 EOF
 }
 kubeconfig() { kubectl -n "${ns}" get secret "$1-kubeconfig" -o jsonpath='{.data.value}' | base64 -d > "${work}/$1"; }
@@ -140,10 +150,21 @@ spec:
 EOF
 }
 
-step "two k3s clusters that run Cilium, each listing the other"
+step "an S3 store for the clusters' backups"
 kubectl create namespace "${ns}"
-cluster east "${KUBEHENGE_E2E_EAST_ADDRESSES}" "${KUBEHENGE_E2E_EAST_ENDPOINT}" 10.201.0.0/16 west
-cluster west "${KUBEHENGE_E2E_WEST_ADDRESSES}" "${KUBEHENGE_E2E_WEST_ENDPOINT}" 10.202.0.0/16 east
+class_json=$(kubectl -n kubehenge-system get clusterclass kubehenge-k3s -o json)
+s3_store "${class_json}"
+backup_credential east
+backup_credential west
+
+step "two k3s clusters that run Cilium, each listing the other, west reading east's backups"
+backups=$(jq -cn --arg t "${KUBEHENGE_E2E_BACKUP_TARGET}" '{enabled: true, target: $t}')
+cluster east "${KUBEHENGE_E2E_EAST_ADDRESSES}" "${KUBEHENGE_E2E_EAST_ENDPOINT}" 10.201.0.0/16 west "${backups}"
+# A cluster reading another's backups from the start takes that one's Kopia password with its own
+# keys, so that its Velero reads their volumes' data too; east's keys come first.
+until_true 600 "east's backup keys" sh -c "kubectl -n ${ns} get secret east-backup-keys > /dev/null 2>&1"
+reading_east=$(printf '%s' "${backups}" | jq -c '.readFrom = ["east"]')
+cluster west "${KUBEHENGE_E2E_WEST_ADDRESSES}" "${KUBEHENGE_E2E_WEST_ENDPOINT}" 10.202.0.0/16 east "${reading_east}"
 kubectl -n "${ns}" wait --for=condition=Available cluster/east cluster/west --timeout=40m
 kubeconfig east
 kubeconfig west
@@ -190,6 +211,38 @@ for node in $(east get nodes -o jsonpath='{.items[*].metadata.name}'); do
         jq -r '.pods[] | select(.podRef.name | startswith("clustermesh-apiserver")) | "  clustermesh-apiserver: \(.memory.workingSetBytes / 1048576 | floor) MiB"'
 done
 
+step "a backup of east's restored into west, with its volume's data"
+velero_ready "${work}/east"
+velero_ready "${work}/west"
+until_true 300 "west reaches east's backups" velero_location_available "${work}/west" cluster-east
+volume_data=$(west -n velero get backupstoragelocation cluster-east -o jsonpath='{.metadata.annotations.kubehenge\.dev/volume-data}')
+[ "${volume_data}" = true ] || fail "west's Velero cannot read the volumes' data of east's backups: ${volume_data}"
+until_true 300 "the interface's identities beside the clusters" sh -c \
+    "kubectl -n ${ns} get secret east-backups west-restores > /dev/null 2>&1"
+marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+new_namespace east e2e-backup
+east -n e2e-backup create secret generic e2e --from-literal=marker="${marker}"
+volume_claim "${work}/east" e2e-backup
+volume_pod "${work}/east" e2e-backup data
+east -n e2e-backup wait --for=condition=Ready pod/data --timeout=10m
+east -n e2e-backup exec data -- sh -c "printf '%s' '${marker}' > /data/marker"
+back_up_now "${work}/east" east e2e
+until_true 1200 "east's backup completed" velero_phase "${work}/east" backup e2e Completed
+# west's Velero lists the backups in east's folder of the store as it syncs its locations, once a
+# minute.
+# shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+listed() {
+    listed_backup=$(as_identity "${work}/west" west-restores -n velero get backup e2e -o json 2> /dev/null) &&
+        printf '%s' "${listed_backup}" | jq -e '.spec.storageLocation == "cluster-east" and .status.phase == "Completed"' > /dev/null
+}
+until_true 300 "west lists east's backup" listed
+restore_backup "${work}/west" west e2e '{"backupName":"e2e","includedNamespaces":["e2e-backup"],"restorePVs":true}'
+west -n e2e-backup wait --for=condition=Ready pod/data --timeout=10m
+restored=$(west -n e2e-backup exec data -- cat /data/marker)
+[ "${restored}" = "${marker}" ] || fail "the volume's data did not come to west: ${restored}"
+restored=$(west -n e2e-backup get secret e2e -o jsonpath='{.data.marker}' | base64 -d)
+[ "${restored}" = "${marker}" ] || fail "the Secret did not come to west"
+
 step "the link goes once west stops listing east"
 set_variable west clusterMesh '{"enabled":true,"peers":[]}'
 # shellcheck disable=SC2310 # the failure is the answer looked for.
@@ -225,5 +278,7 @@ pools=$(pve_get pools)
 printf '%s' "${pools}" | jq -e --arg p "/${ns}." '[.data[] | select(.poolid | contains($p))] | length == 0' > /dev/null ||
     fail "pools of the clusters are still there"
 kubectl delete namespace "${ns}" --wait --timeout=5m
+kill "${s3_pid}"
+s3_pid=
 
 printf '\nPASS\n'
