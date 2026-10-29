@@ -161,6 +161,8 @@ sh install.sh --certificate --ctid 105
 
 The same command makes a new certificate after the appliance's address changed, gives it a DNS name with `--name kubehenge.example.org`, or installs one of your own with `--cert <file> --key <file>`. It keeps a name given before unless `--name` gives another, or `--no-name` drops it for the appliance's address again; it restarts the interface and the shared Headlamp, and prints the new fingerprint. It does not restart while the management cluster is being applied or removed or a VM template is being built; run it again once that has finished. `--upgrade` renews a certificate the installer made once it has less than 60 days left; one of your own it only warns about.
 
+A name is kept only where this node vouches for it: the name in a certificate this cluster's CA signed, which only the installer asked for, or a name this node's DNS resolves to the appliance's address. Root inside the container can write any name into its settings, and this cluster's CA, which browsers that trust Proxmox VE trust, would otherwise vouch for it. The address is the one the container's configuration gives it; with DHCP, the one the container reports.
+
 A new name or address changes where identity providers send people back: update the redirect URLs registered for OpenID realms (`https://<name>/api/openid/callback`) and for the shared Headlamp (`https://<name>:8443/oidc-callback`).
 
 ### The Proxmox VE interface entry

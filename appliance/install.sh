@@ -66,8 +66,14 @@ older() {
     [ "${first}" = "$1" ]
 }
 
-# appliance_ip: the appliance container's IPv4 address.
+# appliance_ip: the appliance container's IPv4 address: the one its configuration on this node gives
+# it, else the one DHCP gave it, as the container reports it.
 appliance_ip() {
+    configured=$(pct config "${ctid}" | sed -n 's/^net0: \(.*,\)\{0,1\}ip=\([0-9.]*\)\/.*/\2/p')
+    if [ -n "${configured}" ]; then
+        printf '%s\n' "${configured}"
+        return
+    fi
     pct exec "${ctid}" -- sh -c "ip -4 -o addr show dev eth0 | sed -n 's/.* inet \([0-9.]*\).*/\1/p'" 2> /dev/null | head -n 1
 }
 
@@ -109,24 +115,49 @@ own_certificate() {
     cp "${key_file}" "${work}/tls.key"
 }
 
+# signed_here <certificate>: whether this cluster's CA signed it. openssl verify also trusts its
+# default store unless told not to, which would take a certificate from any public CA for one
+# made here.
+signed_here() {
+    openssl verify -no_check_time -no-CApath -no-CAstore -CAfile "${cluster_ca}" "$1" > /dev/null 2>&1
+}
+
 # made_here <certificate>: whether this script made it, signed by this cluster's CA or by itself.
 made_here() {
-    # openssl verify also trusts its default store unless told not to, which would take a
-    # certificate from any public CA for one made here.
-    openssl verify -no_check_time -no-CApath -no-CAstore -CAfile "${cluster_ca}" "$1" > /dev/null 2>&1 && return 0
+    # shellcheck disable=SC2310 # signed_here is a predicate; its status is the answer.
+    signed_here "$1" && return 0
     issuer=$(openssl x509 -in "$1" -noout -issuer)
     subject=$(openssl x509 -in "$1" -noout -subject | cut -d= -f2-)
     [ "${issuer}" = "issuer=${subject}" ]
 }
 
-# public_name: the DNS name an installed appliance is reached by, empty when it is its address.
+# public_name <current certificate> <address>: the DNS name an installed appliance is reached by,
+# empty when it is its address. A certificate this cluster's CA signed carries the name the
+# administrator gave on this node, beside the host name (make_certificate). A name from anywhere
+# else comes from inside the container, whose root can write any, so it is taken only where this
+# node's DNS resolves it to the appliance's address: else this cluster's CA would vouch for
+# whatever name the container chose.
 public_name() {
+    # shellcheck disable=SC2310 # signed_here is a predicate; its status is the answer.
+    if signed_here "$1"; then
+        certificate_names "$1" | sed -n 's/^dns //p' | sed -n 2p
+        return
+    fi
     host=$(pct exec "${ctid}" -- sed -n 's|^KUBEHENGE_PUBLIC_URL=https://||p' /etc/kubehenge/appliance.env 2> /dev/null | head -n 1)
     case "${host}" in
-        *[!0-9.]*) printf '%s' "${host}" ;;
+        *[!0-9.]*) ;;
         # An address, or nothing: no name.
+        *) return ;;
+    esac
+    case "${host}" in
+        *[!0-9A-Za-z.-]*) return ;;
         *) ;;
     esac
+    if getent ahostsv4 "${host}" 2> /dev/null | awk '{ print $1 }' | grep -qxF "$2"; then
+        printf '%s' "${host}"
+    else
+        echo "kubehenge: leaving ${host} out of the certificate: this node's DNS does not resolve it to $2; give it with --name to keep it" >&2
+    fi
 }
 
 # install_certificate <public host>: puts the certificate staged in $work into an installed
@@ -611,7 +642,10 @@ if [ -n "${certificate}" ]; then
     trap 'rm -rf "$work"' EXIT
     ctip=$(appliance_ip)
     [ -n "${ctip}" ] || fail "container ${ctid} has no IPv4 address"
-    [ -n "${name}${no_name}" ] || name=$(public_name)
+    if [ -z "${name}${no_name}" ]; then
+        pct exec "${ctid}" -- cat /etc/kubehenge/tls.crt > "${work}/current.crt" 2> /dev/null || true
+        name=$(public_name "${work}/current.crt" "${ctip}")
+    fi
     public=${name:-${ctip}}
     if [ -n "${cert_file}" ]; then
         own_certificate "${public}"
@@ -785,9 +819,9 @@ if [ -n "${upgrade}" ]; then
         # shellcheck disable=SC2310 # made_here is a predicate; its status is the answer.
         if made_here "${work}/current.crt"; then
             step "renewing the certificate, valid until ${valid_until}"
-            name=$(public_name)
             ctip=$(appliance_ip)
             [ -n "${ctip}" ] || fail "container ${ctid} has no IPv4 address"
+            name=$(public_name "${work}/current.crt" "${ctip}")
             ct_hostname=$(container_hostname)
             make_certificate "${ct_hostname}" "${ctip}" "${name}"
             install_certificate "${name:-${ctip}}"
