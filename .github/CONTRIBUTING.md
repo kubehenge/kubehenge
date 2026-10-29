@@ -14,7 +14,7 @@ Kubehenge creates, scales, upgrades and removes Kubernetes clusters on Proxmox V
 | `cmd/kubehenge`, `pkg/` | the `kubehenge` command and the Go code it shares with the interface (`pkg/ui`) |
 | `web/` | the interface's frontend, React and TypeScript, built by `make web` into `pkg/ui/dist` and embedded in the binary |
 | `appliance/` | the appliance's install script and service units; `appliance/pve-entry/`, the optional entry in Proxmox VE's own interface |
-| `test/integration/`, `test/e2e/` | the integration tier's assets; the end-to-end tests, run against a Proxmox VE host |
+| `test/integration/`, `test/e2e/` | the integration tier's assets and the API server it runs, with Cluster API's webhooks where a test asks; the end-to-end tests, run against a Proxmox VE host |
 | `scripts/` | the pinned tools `make test` needs, Go and Node among them (`tools.sh`), and the Python linters' lock file (`lint/`); the image builds of capmox and the Add-on Provider for Helm (`provider-image.sh`) and the fixes they carry (`capmox-patches/`, `helm-addon-patches/`); the check of the Talos providers from Kubehenge's forks (`verify-providers.sh`) |
 | `.github/` | CI on every pull request, fuzzing, the release workflows, issue templates, this guide and the security policy (`SECURITY.md`) |
 

@@ -14,7 +14,7 @@ The engineering rules are in `.github/CONTRIBUTING.md` and apply in full. Read i
 | `management-cluster/` | Terraform/OpenTofu module for the Talos management cluster |
 | `appliance/` | the LXC appliance's install script and units |
 | `appliance/pve-entry/` | the opt-in Proxmox VE interface entry |
-| `test/integration/`, `test/e2e/` | integration assets; end-to-end tests against a Proxmox VE host |
+| `test/integration/`, `test/e2e/` | the integration tier's assets and API server harness, with Cluster API's webhooks; end-to-end tests against a Proxmox VE host |
 | `scripts/` | the pinned tools (`tools.sh`), the image builds of capmox and the Add-on Provider for Helm (`provider-image.sh`) and the fixes they carry (`capmox-patches/`, `helm-addon-patches/`); the check of the Talos providers from Kubehenge's forks (`verify-providers.sh`) |
 | `docs/` | architecture, install, testing, releasing, roadmap, changelog |
 | `website/` | kubehenge.dev: `docs/` with a home page, built with VitePress and published from main |
