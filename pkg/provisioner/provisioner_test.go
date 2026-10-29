@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"reflect"
 	"regexp"
 	"slices"
@@ -751,11 +752,12 @@ func TestHeadlampIngressOnlyWithAHostname(t *testing.T) {
 	}
 }
 
-// networkCluster is a cluster on that network with one worker, so its control planes run no
-// workloads.
+// networkCluster is a cluster on that network, its nodes taking addresses from all of it, with one
+// worker, so its control planes run no workloads.
 func networkCluster(gateway string, prefix int) *clusterv1.Cluster {
+	network := netip.PrefixFrom(netip.MustParseAddr(gateway), prefix).Masked()
 	c := cluster(clusterv1.ClusterVariable{Name: "network", Value: apiextensionsv1.JSON{
-		Raw: fmt.Appendf(nil, `{"bridge":"vmbr0","addresses":["%s"],"prefix":%d,"gateway":"%s","dnsServers":["%s"]}`, gateway, prefix, gateway, gateway),
+		Raw: fmt.Appendf(nil, `{"bridge":"vmbr0","addresses":["%s"],"prefix":%d,"gateway":"%s","dnsServers":["%s"]}`, network, prefix, gateway, gateway),
 	}})
 	c.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{{Class: "worker", Name: "md-0", Replicas: new(int32(1))}}
 	return c

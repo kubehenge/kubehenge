@@ -201,7 +201,7 @@ func (h *Hooks) refusal(ctx context.Context, cluster *clusterv1.Cluster, class *
 	for _, check := range []func() error{
 		func() error { return h.checkNodeOS(ctx, cluster) },
 		func() error { return checkRanges(cluster, class) },
-		func() error { return h.checkLoadBalancer(ctx, cluster) },
+		func() error { return h.checkAddresses(ctx, cluster) },
 		func() error { return h.checkRancher(ctx, cluster, cluster.Spec.Topology.Version) },
 		func() error { return checkRancherNodes(cluster, class) },
 		func() error { return checkControlPlaneSize(nil, cluster, class) },
