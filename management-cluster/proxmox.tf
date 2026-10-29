@@ -76,8 +76,11 @@ resource "proxmox_acl" "cluster_api" {
 resource "proxmox_virtual_environment_role" "cluster_vms" {
   role_id = "${var.cluster_name}-cluster-vms"
   # VM.Audit for the cloud controller manager; VM.Config.Disk for the CSI plugin, on the cluster's
-  # own VMs and the VM that owns its volumes.
-  privileges = ["VM.Audit", "VM.Config.Disk"]
+  # own VMs and the VMs that own its volumes; VM.Clone for the proxy beside the plugin, which copies
+  # a volume for a snapshot, a restore or a clone by importing it into a disk of one of the
+  # cluster's holder VMs, and Proxmox VE asks VM.Clone on the VM the copied volume belongs to. Not
+  # VM.Allocate, without which no VM can be cloned.
+  privileges = ["VM.Audit", "VM.Clone", "VM.Config.Disk"]
 }
 
 resource "proxmox_virtual_environment_role" "cluster_storage" {

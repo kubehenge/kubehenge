@@ -26,8 +26,6 @@ In the cluster:
 
 `registry_mirrors` points the nodes at image registry mirrors, for networks without direct access to the public registries. The nodes pull the Image Factory's installer, Sidero's images and everything from registry.k8s.io only with their publishers' keyless signatures, so a mirror of those registries serves the signatures too. The Talos disk image the VMs boot from is downloaded from the Image Factory over TLS alone: the factory builds it again with different bytes, and publishes no checksum or signature for it. `cluster_oidc` lists OpenID Connect providers every new workload cluster's API server trusts unless the cluster names its own; tokens and certificates keep working beside them. `capmox` verifies the Proxmox VE API's certificate against the CA you give it; upstream's default is to skip that check. The nodes do not report to Sidero's public discovery service.
 
-`cluster_volume_snapshots` lets clusters take volume snapshots, with their CSI plugin signed in to Proxmox VE as `root@pam` ([clusters](../docs/clusters.md#volume-snapshots)). The module creates nothing on Proxmox VE for it and never holds the password, which would otherwise sit in the state. Kubehenge's appliance writes it into the management cluster; without the appliance, after the apply, run `kubectl -n kubehenge-system create secret generic kubehenge-root-pam --from-file=password=/dev/stdin`, type root@pam's password, Enter and Ctrl-D. Delete the Secret again when setting the variable back to false.
-
 ## Before you apply
 
 - **Proxmox VE 9.** The storage named in `image_datastore` must allow the `import` content type (Datacenter, Storage, Edit, Content).

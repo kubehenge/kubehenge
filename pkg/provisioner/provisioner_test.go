@@ -40,9 +40,13 @@ func TestNamesFor(t *testing.T) {
 	if !regexp.MustCompile(`^web-[0-9a-f]{8}-volumes$`).MatchString(n.VolumeOwner) {
 		t.Errorf("volume owner %q", n.VolumeOwner)
 	}
-	// Removing a cluster deletes its owner's volumes; one of the same name elsewhere must never match.
-	if other, _ := NamesFor("kubehenge", "team-b", "web"); other.VolumeOwner == n.VolumeOwner {
-		t.Errorf("clusters in two namespaces share volume owner %q", n.VolumeOwner)
+	if n.VolumeHolders() != strings.TrimSuffix(n.VolumeOwner, "-volumes")+"-copies" {
+		t.Errorf("holder VMs %q beside volume owner %q", n.VolumeHolders(), n.VolumeOwner)
+	}
+	// Removing a cluster deletes its owner's and holders' volumes; ones of the same names elsewhere
+	// must never match.
+	if other, _ := NamesFor("kubehenge", "team-b", "web"); other.VolumeOwner == n.VolumeOwner || other.VolumeHolders() == n.VolumeHolders() {
+		t.Errorf("clusters in two namespaces share volume owner %q or holders %q", n.VolumeOwner, n.VolumeHolders())
 	}
 }
 
@@ -175,7 +179,7 @@ func TestResourceSetSecret(t *testing.T) {
 	t.Parallel()
 	creds := Credentials{TokenID: "kubehenge.team-a.web@pve!cluster", TokenSecret: "s3cret", VolumeOwner: 4242, Region: "lab"} //nolint:gosec // test data
 	for _, insecure := range []bool{false, true} {
-		s, err := resourceSetSecret(cluster(), Endpoint{URL: "https://pve.example.org:8006", CA: "PEM", Insecure: insecure}, creds, "")
+		s, err := resourceSetSecret(cluster(), Endpoint{URL: "https://pve.example.org:8006", CA: "PEM", Insecure: insecure}, creds, &Addons{})
 		if err != nil {
 			t.Fatal(err)
 		}
