@@ -27,7 +27,8 @@ The interface logs in JSON, one line per event, and every change names the user 
 - **The last run of the management cluster** shows on the Administration page, with its error and log when it failed, and stays there after a restart; one cut off by a restart says so.
 - **The last template build** shows under VM templates on the same page, kept the same way.
 - **The last weekly template build** shows below it under Automatic builds, with its log, from the ConfigMap `kubehenge-template-refresh` in the management cluster's `kubehenge-system`; the run itself is a Job of the CronJob of that name, whose pod's log has the whole of it: `kubectl -n kubehenge-system logs job/<name>`. A run that reads "no API token" found no Secret `kubehenge-template-builder` with the builder's token: the module makes it, and a management cluster installed from the chart alone needs it made, or `templateRefresh.enabled` set to false.
-- **The last upgrade** shows on the Administration page; the updater keeps it in `/var/lib/kubehenge-update/status.json`.
+- **The last upgrade** shows on the Administration page, and with `kubehenge appliance upgrades` in the appliance's shell ([upgrading.md](upgrading.md#from-the-appliances-shell)); the updater keeps it in `/var/lib/kubehenge-update/status.json`.
+- **Whether the interface serves:** `pct exec <ctid> -- kubehenge appliance health` runs the check the upgrades use: an answer on the appliance's certificate within 2 minutes, then 20 seconds without a restart.
 
 ### The management cluster
 
@@ -341,13 +342,13 @@ kubectl -n <namespace> get events --field-selector reason=LeftBehind
 
 - **Newer releases shows "unknown":** the appliance could not fetch the release index from GitHub, or the index's signature did not check out. The reason follows.
 - **The last upgrade failed:** the reason is on the Administration page, and in `journalctl -u kubehenge-update` inside the appliance. The release installed before runs again in every case but one, below.
-- **"release … did not start: …; rolled back to …":** the new release was installed, but its interface did not answer within 2 minutes or stopped and was restarted soon after; the updater put the old release back. `journalctl -u kubehenge` shows why the new one did not start. Report it with that log ([below](#reporting-a-problem)).
-- **"…; rolling back to … failed too: …"**, or **the interface does not come back** after an upgrade: neither release serves. See `journalctl -u kubehenge`, and upgrade or reinstall the release from the shell with `install.sh --upgrade` ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)).
+- **"release … did not start: …; rolled back to …":** the new release was installed, but its interface did not answer within 2 minutes or stopped and was restarted soon after; the updater, or `install.sh --upgrade`, put the old release back. `journalctl -u kubehenge` shows why the new one did not start. Report it with that log ([below](#reporting-a-problem)).
+- **"…; rolling back to … failed too"**, or **the interface does not come back** after an upgrade: neither release serves. See `journalctl -u kubehenge`, and upgrade or reinstall the release from the shell with `install.sh --upgrade` ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)).
 - **"distribution: its cluster class is missing from the management cluster"** or **"the cluster class … has no variable …"** when creating a cluster: the appliance was upgraded, and its interface offers a distribution or a setting whose ClusterClass the management cluster does not have yet. Apply the management cluster again (**Upgrade the management cluster** at the top of the Administration page), which installs the new release's ClusterClasses ([upgrading.md](upgrading.md#in-the-appliance)).
 
 ### Management cluster etcd backups
 
-**Administration, Backups** shows the last snapshot's error, and the appliance tries again 15 minutes later. `journalctl -u kubehenge` inside the appliance logs each one.
+**Administration, Backups** shows the last snapshot's error, as does `kubehenge appliance etcd-backups` in the appliance's shell, and the appliance tries again 15 minutes later. `journalctl -u kubehenge` inside the appliance logs each one.
 
 - **"reaching etcd: … etcd snapshot: …"**, or **"reaching the Talos API of …"**: no control-plane node answered on its Talos API (port 50000) from the appliance, or etcd did not answer on it.
 - **"the snapshots' talosconfig: …"** or a refusal by the Talos API: the talosconfig kept for snapshots expired or no longer matches the management cluster's CA. Apply the management cluster again, which makes a new one, or **Change…** the backups.

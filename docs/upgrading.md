@@ -57,6 +57,18 @@ curl -fsSLO https://github.com/kubehenge/kubehenge/releases/latest/download/inst
 - `--proxmox-ca <file>` replaces the CA the appliance checks the Proxmox VE API against, after the API's certificate was replaced with one from another CA ([install.md](install.md#options)); it stops, changing nothing, unless the API's certificate is one that CA signed. A file holding several certificates is reduced to those the API's certificate rests on. It also turns certificate verification back on where `--proxmox-insecure` turned it off. Apply the management cluster again afterwards, so that it and the clusters check the API against the new CA as well.
 - `--proxmox-insecure` has the appliance stop verifying the Proxmox VE API's certificate; applying the management cluster again afterwards carries it to the management cluster and the clusters. Without either option the appliance keeps what it had.
 - It stops, changing nothing, while the management cluster is being applied or removed, a VM template is being built, or the appliance is being upgraded; run it again once that has finished.
+- It keeps the installed release aside until the new one serves, with the same check as the updater's: the interface has to answer on its own certificate within 2 minutes and keep running for 20 seconds more. Otherwise it puts the release before back, restarts it and stops with "release … did not start: …; rolled back to …".
+
+### From the appliance's shell
+
+`kubehenge appliance` inside the appliance does what the Administration page does, as a client of its interface: it signs in with a Proxmox VE user, so the same privileges and refusals apply. `--user` names the user (or `KUBEHENGE_USER`), and `--password-file` a file holding the password (or `KUBEHENGE_PASSWORD`); `--totp` gives a second factor's code.
+
+```sh
+pct exec <ctid> -- kubehenge appliance --user root@pam --password-file /root/password upgrades
+pct exec <ctid> -- kubehenge appliance --user root@pam --password-file /root/password upgrade 0.2.0
+```
+
+`upgrades` shows the installed release, the newer ones and the last upgrade, with the reason when it failed or was rolled back; `--json` prints the interface's answer as it is. `upgrade` asks the updater for a release, as **Upgrade to** does. `kubehenge appliance health` runs the check the updater and `install.sh` use, without signing in.
 
 ## The management cluster
 

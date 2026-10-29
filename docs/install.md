@@ -322,6 +322,17 @@ The appliance takes each snapshot itself through the nodes' Talos API, with a ta
 
 **Restore…** on a snapshot wipes etcd on every control-plane node of the management cluster and restores it from the snapshot, so every cluster's objects go back to then. It asks for the state passphrase, runs as a run of the management cluster's, and needs only the nodes' Talos API, so it works while the management cluster's own API does not answer. Clusters created or deleted after the snapshot no longer match what is in Proxmox VE: look at them in the fleet afterwards.
 
+The same is at hand in the appliance's shell, with the page's privileges and refusals ([upgrading.md](upgrading.md#from-the-appliances-shell) on signing in):
+
+| Command | Does |
+| --- | --- |
+| `kubehenge appliance etcd-backups` | shows the target, the schedule, the last snapshot and the next |
+| `kubehenge appliance etcd-backups set-up --target … --access-key-id … --secret-access-key-file … --passphrase-file …` | sets the backups up or changes them; `--every-hours` and `--keep` set the schedule |
+| `kubehenge appliance etcd-backups off` | switches them off; the snapshots stay in the target |
+| `kubehenge appliance etcd-backups snapshots` | lists the snapshots in the target, newest first |
+| `kubehenge appliance etcd-backups take` | takes a snapshot and waits until it is stored |
+| `kubehenge appliance etcd-backups restore … --passphrase-file …` | restores a snapshot by name, printing the run's log until it ends |
+
 ## Create the VM templates
 
 Every cluster's nodes are clones of a VM template that `kubehenge template create` makes through the Proxmox VE API ([templates.md](templates.md)):
