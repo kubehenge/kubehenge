@@ -708,7 +708,9 @@ metrics_status() {
     curl -sS --max-time 30 -o "${work}/metrics" -w '%{http_code}' --cacert "${work}/metrics-ca.crt" \
         --resolve "${metrics_host}:${metrics_port}:127.0.0.1" "$@" "https://${metrics_host}:${metrics_port}/metrics"
 }
-until_true 60 "the metrics endpoint reached" metrics_status
+# shellcheck disable=SC2310 # polled with set -e off, so a failed connection is only a retry.
+metrics_reached() { metrics_status > /dev/null 2>&1; }
+until_true 60 "the metrics endpoint reached" metrics_reached
 answer=$(metrics_status)
 [ "${answer}" = 401 ] || fail "the metrics endpoint answers ${answer} to a request without credentials, not 401"
 reader=e2e-metrics-${suffix}
