@@ -207,18 +207,46 @@ describe("sign-in", () => {
         ],
       }),
     });
-    const user = userEvent.setup({ delay: null });
     render(<App />);
     await expect(screen.findByRole("alert")).resolves.toHaveTextContent(
       "The sign-in through the identity provider failed.",
     );
-    await waitFor(() => expect(screen.getByLabelText("Realm")).toHaveValue("pve"));
-    await user.selectOptions(screen.getByLabelText("Realm"), "sso");
+    // One click away beside the password form, and not among the password realms.
+    const sso = await screen.findByRole("link", { name: "Continue with Company SSO" });
+    expect(sso).toHaveAttribute("href", "/api/openid/start?realm=sso");
+    expect(screen.getByLabelText("Realm")).toHaveValue("pve");
+    expect(screen.queryByRole("option", { name: /sso/u })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("User name")).toHaveFocus();
+  });
+
+  it("offers the identity provider last signed in with first", async () => {
+    localStorage.setItem("kubehenge-realm", "sso");
+    fakeServer({
+      "GET /api/session": () => ({ status: 401 }),
+      "GET /api/realms": () => ({
+        body: [
+          { realm: "pve", type: "pve", default: true },
+          { realm: "sso", type: "openid", comment: "Company SSO" },
+        ],
+      }),
+    });
+    render(<App />);
+    const sso = await screen.findByRole("link", { name: "Continue with Company SSO" });
+    await waitFor(() => expect(sso).toHaveFocus());
+    expect(sso).toHaveClass("primary");
+    expect(screen.getByRole("button", { name: "Sign in" })).not.toHaveClass("primary");
+    localStorage.removeItem("kubehenge-realm");
+  });
+
+  it("asks for no password where every realm is an identity provider", async () => {
+    fakeServer({
+      "GET /api/session": () => ({ status: 401 }),
+      "GET /api/realms": () => ({ body: [{ realm: "sso", type: "openid" }] }),
+    });
+    render(<App />);
+    await expect(screen.findByRole("link", { name: "Continue with sso" })).resolves.toBeInTheDocument();
     expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Continue with Company SSO" })).toHaveAttribute(
-      "href",
-      "/api/openid/start?realm=sso",
-    );
+    expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
   });
 
   it("shows Proxmox VE's refusal", async () => {

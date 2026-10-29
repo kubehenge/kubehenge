@@ -1826,6 +1826,31 @@ fieldset.choices .check + .info-toggle + .info-text + .hint {
   grid-template-columns: 100px 1fr;
 }
 
+.signin .sso {
+  display: grid;
+  gap: 8px;
+}
+
+.signin .sso .button {
+  justify-content: center;
+}
+
+.signin .or {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0;
+  color: var(--dim);
+  font-size: 12.5px;
+}
+
+.signin .or::before,
+.signin .or::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--line);
+}
+
 .tabs,
 .wizard-steps {
   display: flex;

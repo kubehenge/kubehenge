@@ -1,13 +1,4 @@
-import {
-  useEffect,
-  useEffectEvent,
-  useId,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type JSX,
-  type KeyboardEvent,
-} from "react";
+import { useEffectEvent, useId, useLayoutEffect, useRef, useState, type JSX, type KeyboardEvent } from "react";
 
 import { Dialog } from "./ui";
 
@@ -211,7 +202,8 @@ export function useShortcuts(openPalette: () => void, shortcuts: Shortcut[]): vo
       s.run();
     }
   });
-  useEffect(() => {
+  // Before the browser paints, so a key pressed as soon as the bar shows is not lost.
+  useLayoutEffect(() => {
     const listener = (e: globalThis.KeyboardEvent): void => onKey(e);
     window.addEventListener("keydown", listener);
     return () => window.removeEventListener("keydown", listener);
