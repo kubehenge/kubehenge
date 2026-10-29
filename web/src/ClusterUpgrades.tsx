@@ -1,7 +1,7 @@
-import { useId, useState, type JSX } from "react";
+import { useState, type JSX } from "react";
 
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, Field, browserZone, timeZones, useChange, weekdays } from "./ui";
+import { Dialog, ErrorBox, Field, Info, browserZone, timeZones, useChange, weekdays } from "./ui";
 import { oneOf, quantities, quantity, record, text, texts } from "./values";
 
 export const upgradeModes = ["off", "patch", "minor"] as const;
@@ -60,7 +60,7 @@ export const refreshesNodes = (p: UpgradePolicy): boolean => p.nodeImages !== fa
 // Talos nodes take their updates as Talos patch releases, upgraded in place, where the others are
 // replaced with clones of new template builds.
 const nodeUpdates = (distribution: string): string =>
-  distribution === "talos" ? "Talos patch releases" : "new node images";
+  distribution === "talos" ? "Talos patch releases" : "node images";
 
 /** ModeSelect chooses an automatic upgrade policy's mode, for the dialog and the create wizard. */
 export function ModeSelect({
@@ -99,15 +99,17 @@ export function describe(p: UpgradePolicy, nodeImages = false, distribution = ""
   }
   const w = p.window ?? {};
   const monthDays = w.monthDays ?? [];
-  const days = [...(w.weekdays ?? []), ...(monthDays.length > 0 ? [`day ${monthDays.join(", ")} of the month`] : [])];
+  const days = [
+    ...(w.weekdays && w.weekdays.length > 0 ? [w.weekdays.join(", ")] : []),
+    ...(monthDays.length > 0 ? [`day ${monthDays.join(", ")}`] : []),
+  ];
   const hours = (w.durationMinutes ?? defaultMinutes) / minutesPerHour;
   // Beside Talos's own releases, Kubernetes' are named as such.
   const kubernetes = `${distribution === "talos" ? "Kubernetes " : ""}${p.mode === "patch" ? "patch releases" : "patch and minor releases"}`;
   const phrase = [...(upgrades ? [kubernetes] : []), ...(nodeImages ? [nodeUpdates(distribution)] : [])].join(" and ");
   const what = phrase.charAt(0).toUpperCase() + phrase.slice(1);
-  return `${what}, ${days.length > 0 ? days.join(", ") : "every day"} from ${w.start ?? defaultStart} for ${hours} h (${
-    w.timeZone ?? "UTC"
-  })`;
+  const when = days.length > 0 ? days.join(" and ") : "daily";
+  return `${what}, ${when} ${w.start ?? defaultStart} for ${hours} h ${w.timeZone ?? "UTC"}`;
 }
 
 const splitDays = (monthDays: string): string[] => monthDays.split(/[\s,]+/u).filter(Boolean);
@@ -116,11 +118,11 @@ const splitDays = (monthDays: string): string[] => monthDays.split(/[\s,]+/u).fi
 export function windowProblems(monthDays: string, hours: string): { monthDays?: string; hours?: string } {
   const p: { monthDays?: string; hours?: string } = {};
   if (splitDays(monthDays).some((d) => !/^\d+$/u.test(d) || Number(d) < 1 || Number(d) > lastMonthDay)) {
-    p.monthDays = "Whole numbers from 1 to 31.";
+    p.monthDays = "Enter days from 1 to 31";
   }
   const h = Number(hours);
   if (hours.trim() === "" || !(h >= shortestHours && h <= hoursPerDay) || (h * minutesPerHour) % stepMinutes !== 0) {
-    p.hours = "0.5 to 24 hours, in half hours.";
+    p.hours = "Enter 0.5 to 24 hours, in half hours";
   }
   return p;
 }
@@ -187,7 +189,6 @@ export function UpgradesDialog({ cluster: c, onClose }: { cluster: Cluster; onCl
   const [hours, setHours] = useState(initial.hours);
   const [timeZone, setTimeZone] = useState(initial.timeZone);
   const { busy, error, send } = useChange(c, onClose);
-  const nodeImagesHint = useId();
   const withWindow = windowed({ mode, nodeImages });
   const problems = withWindow ? windowProblems(monthDays, hours) : {};
   const policy = (): UpgradePolicy => policyOf({ mode, nodeImages, days, monthDays, start, hours, timeZone });
@@ -197,7 +198,7 @@ export function UpgradesDialog({ cluster: c, onClose }: { cluster: Cluster; onCl
 
   return (
     <Dialog
-      title="Automatic upgrades"
+      title="Edit automatic upgrades"
       onClose={onClose}
       onSubmit={() => {
         void save();
@@ -213,26 +214,16 @@ export function UpgradesDialog({ cluster: c, onClose }: { cluster: Cluster; onCl
         </>
       }
     >
-      <p className="muted">
-        Kubehenge upgrades Kubernetes inside the window: one minor version at a time, never past the distribution's
-        stable release, only while the cluster is healthy and nothing else rolls out. A started upgrade finishes even if
-        the window closes first.
-      </p>
-      <Field label="Upgrade automatically">{(id) => <ModeSelect id={id} value={mode} onChange={setMode} />}</Field>
+      <Field label="Upgrade automatically" info="One minor version at a time, only while the cluster is healthy.">
+        {(id) => <ModeSelect id={id} value={mode} onChange={setMode} />}
+      </Field>
       <label className="check">
-        <input
-          type="checkbox"
-          checked={nodeImages}
-          aria-describedby={nodeImagesHint}
-          onChange={(e) => setNodeImages(e.target.checked)}
-        />{" "}
-        {talos ? "Move the nodes to new Talos patch releases" : "Move the nodes to new template builds"}
+        <input type="checkbox" checked={nodeImages} onChange={(e) => setNodeImages(e.target.checked)} />{" "}
+        {talos ? "Apply Talos patch releases" : "Update node images"}
       </label>
-      <p className="muted" id={nodeImagesHint}>
-        {talos
-          ? "When Talos publishes a newer patch release of the minor version the nodes run, they are upgraded to it in place inside the window, one at a time and control planes first, whatever the upgrade setting says."
-          : "When the VM templates are built again with the node OS's updates, the nodes are replaced one at a time with clones of the new build inside the window, once the build is a day old, whatever the upgrade setting says."}
-      </p>
+      <Info about={talos ? "Talos patch releases" : "node images"}>
+        {talos ? "Upgrades the nodes in place, one at a time." : "Replaces the nodes with each new template build."}
+      </Info>
       {withWindow && (
         <>
           <fieldset className="group">
@@ -247,11 +238,7 @@ export function UpgradesDialog({ cluster: c, onClose }: { cluster: Cluster; onCl
                 {d}
               </label>
             ))}
-            <Field
-              label="Days of the month"
-              hint="Such as 1, 15. A day listed here or above counts; every day when both are empty."
-              error={problems.monthDays}
-            >
+            <Field label="Days of the month" hint="Such as 1, 15" error={problems.monthDays}>
               {(id) => <input id={id} value={monthDays} onChange={(e) => setMonthDays(e.target.value)} />}
             </Field>
           </fieldset>
@@ -271,7 +258,7 @@ export function UpgradesDialog({ cluster: c, onClose }: { cluster: Cluster; onCl
               />
             )}
           </Field>
-          <Field label="Time zone" hint="The window's times are in this time zone.">
+          <Field label="Time zone">
             {(id) => (
               <select id={id} value={timeZone} onChange={(e) => setTimeZone(e.target.value)}>
                 {timeZones(timeZone).map((z) => (

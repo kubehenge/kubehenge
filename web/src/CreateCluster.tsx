@@ -35,7 +35,7 @@ import { GeneralStep, IdentityStep, MachinesStep, NetworkStep, useClassTalos } f
 import { offersHA, offersHAGroups, useHARules } from "./Placement";
 import { navigate } from "./router";
 import type { Bridge, Cluster, ClusterClass, PveNode, Storage, Versions } from "./types";
-import { Dialog, ErrorBox, errorMessage, filled, sole, usePrivilege } from "./ui";
+import { Detail, Dialog, ErrorBox, errorMessage, filled, sole, usePrivilege } from "./ui";
 
 // versionsKey is where the versions offered are kept: a distribution's, kubeadm's per node OS.
 const versionsKey = (distribution: string, nodeOS: string | undefined): string =>
@@ -77,6 +77,8 @@ export function CreateCluster({
   const canModifyPermissions = usePrivilege("canModifyPermissions");
   const [step, setStep] = useState<Step>("General");
   const [error, setError] = useState<string>();
+  // The server's own words for the credentials that were not stored, behind the error's Detail.
+  const [reasons, setReasons] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   // The cluster created, while the page stays to tell what of the rest failed.
   const [created, setCreated] = useState<Cluster>();
@@ -235,6 +237,7 @@ export function CreateCluster({
     }
     setBusy(true);
     setError(undefined);
+    setReasons([]);
     let c: Cluster;
     try {
       c = await api.create(request(form, cls));
@@ -253,7 +256,8 @@ export function CreateCluster({
         ? [
             {
               ...p,
-              message: `its ${p.label} was not stored: ${errorMessage(s.reason)}. Store it under the cluster's Options, ${p.section}.`,
+              message: `the ${p.label} was not stored. Add it in Options, ${p.section}.`,
+              reason: errorMessage(s.reason),
             },
           ]
         : [];
@@ -269,7 +273,8 @@ export function CreateCluster({
         }
         return kept;
       });
-      setError(`The cluster was created, but ${failures.map((p) => p.message).join(" Also, ")}`);
+      setError(`Cluster created, but ${failures.map((p) => p.message).join(" Also, ")}`);
+      setReasons(failures.map((p) => p.reason));
       setBusy(false);
       return;
     }
@@ -342,13 +347,7 @@ export function CreateCluster({
             />
           )}
           {step === "Identity providers" && (
-            <IdentityStep
-              form={form}
-              set={set}
-              cls={cls}
-              canTrust={canTrust}
-              showAll={attempted.has("Identity providers")}
-            />
+            <IdentityStep form={form} set={set} canTrust={canTrust} showAll={attempted.has("Identity providers")} />
           )}
           {step === "Confirm" && cls && (
             <>
@@ -375,6 +374,7 @@ export function CreateCluster({
           )}
 
           <ErrorBox message={error} />
+          {reasons.length > 0 && <Detail>{reasons.join(" ")}</Detail>}
           {created === undefined ? (
             <div className="actions">
               <button type="button" onClick={() => (touched.size > 0 ? setDiscarding(true) : navigate("/"))}>
@@ -416,7 +416,7 @@ export function CreateCluster({
                 className="primary"
                 onClick={() => navigate(clusterPath(created.namespace, created.name, "options"))}
               >
-                Open the cluster
+                Open cluster
               </button>
             </div>
           )}
@@ -424,7 +424,7 @@ export function CreateCluster({
       </div>
       {discarding && (
         <Dialog
-          title="Discard this cluster?"
+          title="Discard new cluster"
           onClose={() => setDiscarding(false)}
           onSubmit={() => navigate("/")}
           actions={
@@ -438,7 +438,7 @@ export function CreateCluster({
             </>
           }
         >
-          <p>What was entered here is lost; nothing has been created yet.</p>
+          <p>Everything entered so far is lost.</p>
         </Dialog>
       )}
     </section>

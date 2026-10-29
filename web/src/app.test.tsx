@@ -285,9 +285,9 @@ describe("sign-in", () => {
     await user.type(screen.getByLabelText("Password"), "secret");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
     await expect(screen.findByLabelText("TOTP code")).resolves.toHaveFocus();
-    expect(screen.queryByRole("radio", { name: "YubiKey (Yubico OTP)" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("radio", { name: "A recovery key" }));
-    const key = screen.getByLabelText("Recovery key");
+    expect(screen.queryByRole("radio", { name: "YubiKey" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Recovery key" }));
+    const key = screen.getByRole("textbox", { name: "Recovery key" });
     expect(screen.getByText("Unused keys: 3")).toBeInTheDocument();
     await user.type(key, "abcd-efgh");
     await user.click(screen.getByRole("button", { name: "Confirm" }));
@@ -313,8 +313,8 @@ describe("clusters", () => {
     const user = userEvent.setup({ delay: null });
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "Delete" }));
-    const dialog = screen.getByRole("dialog", { name: "Delete web" });
-    const confirm = within(dialog).getByRole("button", { name: "Delete" });
+    const dialog = screen.getByRole("dialog", { name: "Delete cluster web" });
+    const confirm = within(dialog).getByRole("button", { name: "Delete cluster" });
     expect(confirm).toBeDisabled();
     expect(within(dialog).getByLabelText("Confirm name")).toHaveAccessibleDescription("Type web.");
     await user.type(within(dialog).getByLabelText("Confirm name"), "web");
@@ -329,7 +329,7 @@ describe("clusters", () => {
     fakeServer({ ...signedIn, "GET /api/clusters/default/web": () => ({ body: alone }) });
     render(<App />);
     const term = await screen.findByText("Workers", { selector: "dt" });
-    expect(term.nextElementSibling).toHaveTextContent("None; the control planes run the workloads");
+    expect(term.nextElementSibling).toHaveTextContent(/^None$/u);
   });
 
   it("scales a worker pool", async () => {
@@ -399,9 +399,7 @@ describe("clusters", () => {
       "GET /api/clusters": () => ({ body: [web] }),
     });
     render(<App />);
-    await expect(screen.findByRole("alert")).resolves.toHaveTextContent(
-      "No Proxmox VE backup job includes this appliance",
-    );
+    await expect(screen.findByRole("alert")).resolves.toHaveTextContent("No backup job covers this appliance");
   });
 
   it("says a cluster waits for its ClusterClass while its distribution's controllers start", async () => {
@@ -422,10 +420,10 @@ describe("clusters", () => {
     });
     render(<App />);
     const main = await screen.findByRole("main");
-    await expect(within(main).findByText("Waiting for its ClusterClass")).resolves.toBeInTheDocument();
+    await expect(within(main).findByText("Waiting for ClusterClass")).resolves.toBeInTheDocument();
     const rail = screen.getByRole("navigation", { name: "Fleet" });
     expect(within(within(rail).getByRole("region", { name: "Running" })).getByRole("link")).toHaveTextContent(
-      "webWaiting for its ClusterClass",
+      "webWaiting for ClusterClass",
     );
   });
 
@@ -463,7 +461,7 @@ describe("clusters", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = userEvent.setup({ delay: null, advanceTimers: vi.advanceTimersByTime });
     render(<App />);
-    await expect(screen.findByText("No machines yet.")).resolves.toBeInTheDocument();
+    await expect(screen.findByText("No machines yet")).resolves.toBeInTheDocument();
     routes["GET /api/clusters/default/web"] = { status: 404, body: { error: "no such cluster" } };
     // The cluster's own conditions close its health page.
     await user.click(screen.getByRole("link", { name: "Health" }));
@@ -473,9 +471,9 @@ describe("clusters", () => {
     await user.click(screen.getByRole("link", { name: "Summary" }));
     // Nothing moves in it, so its page asks again only every 30 s.
     await act(() => vi.advanceTimersByTimeAsync(5000));
-    expect(screen.queryByText(/This cluster no longer exists/u)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Cluster not found/u)).not.toBeInTheDocument();
     await act(() => vi.advanceTimersByTimeAsync(25_000));
-    await expect(screen.findByText(/This cluster no longer exists/u)).resolves.toBeInTheDocument();
+    await expect(screen.findByText(/Cluster not found/u)).resolves.toBeInTheDocument();
   });
 
   it("shows where the VMs run, and warns when control-plane VMs share a node", async () => {
@@ -496,7 +494,7 @@ describe("clusters", () => {
     });
     render(<App />);
     await expect(
-      screen.findByText(/^pve1 runs 2 of the 3 control-plane VMs, so losing that node stops the control plane\./u),
+      screen.findByText(/^pve1 runs 2 of 3 control-plane VMs, so losing it stops the control plane\./u),
     ).resolves.toBeInTheDocument();
     expect(screen.getAllByRole("cell", { name: "pve1" })).toHaveLength(3);
   });
@@ -605,11 +603,11 @@ describe("create", () => {
     const noRule = { ...form, place: { placement: "rule" as const, haRule: "", nodes: [] } };
     const noNodes = { ...form, place: { placement: "nodes" as const, haRule: "", nodes: [] } };
     expect(request(byRule, rke2).variables["allowedNodes"]).toStrictEqual(["pve2", "pve3"]);
-    expect(Object.fromEntries(summary(byRule, rke2))["Placement"]).toBe("The nodes of HA rule fast: pve2, pve3");
+    expect(Object.fromEntries(summary(byRule, rke2))["Placement"]).toBe("HA rule fast: pve2, pve3");
     expect(Object.fromEntries(summary(chosen, rke2))["Placement"]).toBe("pve1");
     expect(Object.fromEntries(summary(form, rke2))["Placement"]).toBe("Any node");
-    expect(problems("Machines", noRule, rke2)).toStrictEqual(["Choose an HA rule."]);
-    expect(problems("Machines", noNodes, rke2)).toStrictEqual(["Choose at least one node."]);
+    expect(problems("Machines", noRule, rke2)).toStrictEqual(["Choose an HA rule"]);
+    expect(problems("Machines", noNodes, rke2)).toStrictEqual(["Choose at least one node"]);
     const unplaced = { ...rke2, variables: rke2.variables.filter((v) => v.name !== "allowedNodes") };
     expect(request(byRule, unplaced).variables).not.toHaveProperty("allowedNodes");
     expect(problems("Machines", noNodes, unplaced)).toStrictEqual([]);
@@ -671,20 +669,20 @@ describe("create", () => {
       Name: "web",
       Distribution: "RKE2",
       "Node addresses": "10.0.0.21-10.0.0.29, 10.0.0.32/28",
-      "Pod range": "Chosen clear of the nodes' network and the other clusters' ranges",
+      "Pod range": "Automatic",
       "Worker machines": "4 cores, 8 GiB memory, 40 GiB disk",
       Headlamp: "On",
       Monitoring: "On, Grafana at grafana.example",
       "CIS hardening": "Off",
-      "Pod security": "Restricted by Pod Security Admission",
+      "Pod security": "Restricted",
       Rancher: "Not registered",
     });
     expect(
       Object.fromEntries(summary({ ...form, podSecurity: { admission: "baseline", kyverno: "restricted" } }, rke2)),
-    ).toMatchObject({ "Pod security": "Baseline by Pod Security Admission, Restricted by Kyverno" });
+    ).toMatchObject({ "Pod security": "Baseline, Kyverno restricted" });
     const alone = Object.fromEntries(summary({ ...form, workerReplicas: 0, cni: "canal" }, rke2));
     expect(alone).not.toHaveProperty("Worker machines");
-    expect(alone["Pod range"]).toBe("Chosen clear of the nodes' network");
+    expect(alone["Pod range"]).toBe("Automatic");
     expect(alone["Pod network"]).toBe("Canal");
     expect(
       Object.fromEntries(
@@ -692,13 +690,13 @@ describe("create", () => {
       ),
     ).toMatchObject({
       "CIS hardening": "On",
-      "Pod security": "Restricted by Pod Security Admission, Restricted by Kyverno",
+      "Pod security": "Restricted, Kyverno restricted",
     });
     expect(
       Object.fromEntries(summary({ ...form, vlan: "30", rancherInstall: true, rancherHostname: "r.example" }, rke2)),
     ).toMatchObject({
       Bridge: "vmbr0, VLAN 30",
-      Rancher: "Installed here, at r.example",
+      Rancher: "Installed at r.example",
     });
     const withIstio = {
       ...rke2,
@@ -722,7 +720,7 @@ describe("create", () => {
     expect(Object.fromEntries(summary(form, withMesh))).toMatchObject({ "Cluster Mesh": "Off" });
     expect(Object.fromEntries(summary(meshed, withMesh))).toMatchObject({ "Cluster Mesh": "On, with api, db" });
     expect(Object.fromEntries(summary({ ...meshed, meshPeers: [] }, withMesh))).toMatchObject({
-      "Cluster Mesh": "On, with no peers yet",
+      "Cluster Mesh": "On, no peers",
     });
     expect(request(meshed, withMesh).variables["clusterMesh"]).toStrictEqual({ enabled: true, peers: ["api", "db"] });
     expect(addonMemory(meshed, withMesh)).toStrictEqual({ names: ["Cluster Mesh"], mib: 256, controlPlaneMiB: 0 });
@@ -735,7 +733,7 @@ describe("create", () => {
 
     const long = "a".repeat(33);
     expect(fieldProblems("Network", { ...form, name: long }, withMesh)).toStrictEqual({
-      cni: "Cilium takes cluster names of at most 32 characters; this one has 33.",
+      cni: "Cilium needs a cluster name of 32 characters or fewer",
     });
     expect(fieldProblems("Network", { ...form, name: long, cni: "canal" }, withMesh)).toStrictEqual({});
   });
@@ -754,7 +752,7 @@ describe("create", () => {
       sizeGiB: 20,
     });
     expect(Object.fromEntries(summary(logged, withLogs))).toMatchObject({
-      Logs: "On, collected through the API, 14 days in 20 GiB",
+      Logs: "On, Kubernetes API, 14 days, 20 GiB",
     });
     expect(addonMemory(logged, withLogs)).toStrictEqual({
       names: ["monitoring", "logs"],
@@ -769,7 +767,7 @@ describe("create", () => {
     expect(request(logged, rke2).variables).not.toHaveProperty("logs");
 
     expect(fieldProblems("Add-ons", { ...logged, logs: { ...logged.logs, sizeGiB: 0 } }, withLogs)).toStrictEqual({
-      logs: "A whole number of GiB from 1 to 1024.",
+      logs: "A whole number from 1 to 1024",
     });
     expect(fieldProblems("Add-ons", { ...unmonitored, logs: { ...logged.logs, sizeGiB: 0 } }, withLogs)).toStrictEqual(
       {},
@@ -784,7 +782,7 @@ describe("create", () => {
     };
     expect(Object.fromEntries(summary(form, withLB))).toMatchObject({ "Load balancer": "None" });
     expect(Object.fromEntries(summary(form, { ...withLB, distribution: "k3s" }))).toMatchObject({
-      "Load balancer": "k3s's own, on the nodes' addresses",
+      "Load balancer": "k3s's own",
     });
     expect(request(form, withLB).variables).not.toHaveProperty("loadBalancer");
     expect(addonMemory(form, withLB).mib).toBe(0);
@@ -810,15 +808,15 @@ describe("create", () => {
     expect(fieldProblems("Network", metallb, withLB)).toStrictEqual({});
 
     for (const [addresses, problem] of [
-      ["", "At least one range, network or address."],
-      ["10.0.1.100-10.0.1.120", "10.0.1.100-10.0.1.120 is no address, range or network inside the gateway's network."],
-      ["10.0.0.25-10.0.0.30", "10.0.0.25-10.0.0.30 overlaps the node addresses."],
-      ["10.0.0.40/28", "10.0.0.40/28 overlaps the node addresses."],
-      ["10.0.0.20", "10.0.0.20 overlaps the API address."],
-      ["10.0.0.1-10.0.0.3", "10.0.0.1-10.0.0.3 overlaps the gateway."],
-      ["10.0.0.0/30", "10.0.0.0/30 holds the network's own or broadcast address."],
-      ["10.0.0.240/28", "10.0.0.240/28 holds the network's own or broadcast address."],
-      ["10.0.0.100-10.0.0.120, 10.0.0.110", "10.0.0.100-10.0.0.120 overlaps another of these addresses."],
+      ["", "Enter at least one address, range or network"],
+      ["10.0.1.100-10.0.1.120", "10.0.1.100-10.0.1.120 is not an address, range or network on the gateway's network"],
+      ["10.0.0.25-10.0.0.30", "10.0.0.25-10.0.0.30 overlaps the node addresses"],
+      ["10.0.0.40/28", "10.0.0.40/28 overlaps the node addresses"],
+      ["10.0.0.20", "10.0.0.20 overlaps the API address"],
+      ["10.0.0.1-10.0.0.3", "10.0.0.1-10.0.0.3 overlaps the gateway"],
+      ["10.0.0.0/30", "10.0.0.0/30 includes the network or broadcast address"],
+      ["10.0.0.240/28", "10.0.0.240/28 includes the network or broadcast address"],
+      ["10.0.0.100-10.0.0.120, 10.0.0.110", "10.0.0.100-10.0.0.120 overlaps another entry"],
     ] as const) {
       expect(fieldProblems("Network", { ...metallb, loadBalancerAddresses: addresses }, withLB)).toStrictEqual({
         loadBalancerAddresses: problem,
@@ -843,7 +841,7 @@ describe("create", () => {
     });
     expect(request(form, rke2).variables).not.toHaveProperty("upgrades");
     expect(Object.fromEntries(summary({ ...form, upgradeMode: "minor" }, withUpgrades))["Automatic upgrades"]).toBe(
-      `Patch and minor releases and new node images, every day from 02:00 for 4 h (${zone})`,
+      `Patch and minor releases and node images, daily 02:00 for 4 h ${zone}`,
     );
     // Talos nodes take Talos patch releases in the same window.
     const talos = { ...withUpgrades, distribution: "talos" };
@@ -852,7 +850,7 @@ describe("create", () => {
       window: { start: "02:00", durationMinutes: 240, timeZone: zone },
     });
     expect(Object.fromEntries(summary(form, talos))["Automatic upgrades"]).toBe(
-      `Talos patch releases, every day from 02:00 for 4 h (${zone})`,
+      `Talos patch releases, daily 02:00 for 4 h ${zone}`,
     );
   });
 
@@ -868,14 +866,14 @@ describe("create", () => {
     expect(Object.fromEntries(summary(scaled, withAutoscaler))["Workers"]).toBe("1 to 4, autoscaled");
     expect(problems("General", scaled, withAutoscaler)).toStrictEqual([]);
     expect(fieldProblems("General", { ...scaled, workerMax: 0 }, withAutoscaler)).toStrictEqual({
-      workerMax: "A whole number from 1 to 100, no fewer than the fewest.",
+      workerMax: "A whole number from 1 to 100",
     });
     expect(fieldProblems("General", { ...scaled, workerReplicas: 5 }, withAutoscaler)).toStrictEqual({
-      workerMax: "A whole number from 5 to 100, no fewer than the fewest.",
+      workerMax: "A whole number from 5 to 100",
     });
     // The addresses count every worker the pool may have: three control planes, four workers and one for rollouts.
     expect(fieldProblems("Network", { ...scaled, addresses: "10.0.0.21-10.0.0.27" }, withAutoscaler).addresses).toMatch(
-      /7 given; the nodes need 8/u,
+      /^Enter at least 8 addresses/u,
     );
     // A pool that may grow keeps the control planes to the control plane's work, even from none.
     const fromNone = { ...scaled, workerReplicas: 0, headlamp: false, monitoring: false };
@@ -883,15 +881,14 @@ describe("create", () => {
     // Rancher's agent alone holds no worker up; the add-ons need a worker that stays.
     expect(fieldProblems("Add-ons", fromNone, withAutoscaler)).toStrictEqual({});
     expect(fieldProblems("Add-ons", { ...fromNone, headlamp: true }, withAutoscaler)).toStrictEqual({
-      addons:
-        "The add-ons chosen need a worker that stays: set the fewest workers to at least 1 on the General step, or choose none.",
+      addons: "The add-ons need a worker. On General, set the fewest workers to 1 or more.",
     });
     expect(fieldProblems("Add-ons", { ...scaled, headlamp: true }, withAutoscaler)).toStrictEqual({});
   });
 
   it("keeps an emptied number empty, for the check to name", () => {
     expect(problems("General", { ...form, workerReplicas: Number.NaN }, rke2)).toStrictEqual([
-      "A whole number from 0 to 100.",
+      "A whole number from 0 to 100",
     ]);
     expect(
       problems("Machines", { ...form, workerMachine: { cores: Number.NaN, memoryMiB: 4096, diskGiB: 40 } }, rke2),
@@ -927,7 +924,7 @@ describe("create", () => {
   it("finds what is missing on each step", () => {
     expect(problems("General", form, rke2)).toStrictEqual([]);
     expect(problems("General", { ...form, version: "v1.36.5" }, rke2)).toStrictEqual([
-      "RKE2 versions look like v1.36.5+rke2r1.",
+      "Enter a version like v1.36.5+rke2r1",
     ]);
     expect(problems("General", { ...form, name: "Web" }, rke2)).toHaveLength(1);
     // A cluster without its template would wait for ever for its first VM.
@@ -942,7 +939,7 @@ describe("create", () => {
     ]);
     expect(problems("Network", { ...form, endpoint: "10.0.0", vlan: "5000" }, rke2)).toHaveLength(2);
     expect(problems("Network", { ...form, pods: "10.244.0.0", services: "10.96.0.0/16" }, rke2)).toStrictEqual([
-      "An IPv4 network such as 10.244.0.0/16, without host bits.",
+      "Enter a network like 10.244.0.0/16, without host bits",
     ]);
     expect(request({ ...form, pods: "172.30.0.0/16" }, rke2)).toMatchObject({ pods: ["172.30.0.0/16"] });
     expect(request(form, rke2)).not.toHaveProperty("pods");
@@ -955,56 +952,54 @@ describe("create", () => {
     // The class's own minimums, which follow its distribution's sizing guide.
     expect(
       fieldProblems("Machines", { ...form, controlPlaneMachine: { cores: 1, memoryMiB: 4096, diskGiB: 30 } }, rke2),
-    ).toStrictEqual({ controlPlaneMachine: "A whole number of cores, at least 2." });
+    ).toStrictEqual({ controlPlaneMachine: "A whole number of cores, at least 2" });
     expect(
       fieldProblems("Machines", { ...form, workerMachine: { cores: 2, memoryMiB: 2048, diskGiB: 40 } }, rke2),
-    ).toStrictEqual({ workerMachine: "Memory of at least 4096 MiB, in steps of 8." });
+    ).toStrictEqual({ workerMachine: "At least 4096 MiB of memory, in steps of 8" });
     // Without workers the control planes run the workloads too, so they need a worker's least on top.
     const alone = { ...form, workerReplicas: 0 };
     expect(
       fieldProblems("Machines", { ...alone, controlPlaneMachine: { cores: 2, memoryMiB: 8192, diskGiB: 30 } }, rke2),
     ).toStrictEqual({
-      controlPlaneMachine: "A whole number of cores, at least 4. Without workers, they run the workloads too.",
+      controlPlaneMachine: "A whole number of cores, at least 4 without workers",
     });
     expect(
       fieldProblems("Machines", { ...alone, controlPlaneMachine: { cores: 4, memoryMiB: 4096, diskGiB: 30 } }, rke2),
     ).toStrictEqual({
-      controlPlaneMachine: "Memory of at least 8192 MiB, in steps of 8. Without workers, they run the workloads too.",
+      controlPlaneMachine: "At least 8192 MiB of memory without workers, in steps of 8",
     });
     expect(
       fieldProblems("Machines", { ...alone, controlPlaneMachine: { cores: 4, memoryMiB: 8192, diskGiB: 30 } }, rke2),
     ).toStrictEqual({});
-    expect(problems("General", { ...form, workerReplicas: 1.5 }, rke2)).toStrictEqual([
-      "A whole number from 0 to 100.",
-    ]);
+    expect(problems("General", { ...form, workerReplicas: 1.5 }, rke2)).toStrictEqual(["A whole number from 0 to 100"]);
     // Three control-plane nodes, two workers and one for rollouts need six addresses.
     expect(fieldProblems("Network", { ...form, addresses: "10.0.0.21-10.0.0.25" }, rke2).addresses).toMatch(
-      /5 given; the nodes need 6/u,
+      /^Enter at least 6 addresses/u,
     );
     expect(fieldProblems("Network", { ...form, addresses: "10.0.1.21-10.0.1.29" }, rke2).addresses).toMatch(
-      /inside the gateway's network/u,
+      /on the gateway's network$/u,
     );
     expect(fieldProblems("Network", { ...form, addresses: "10.0.0.29-10.0.0.21" }, rke2).addresses).toMatch(
-      /is no address/u,
+      /is not an address/u,
     );
     expect(fieldProblems("Network", { ...form, endpoint: "10.0.0.22" }, rke2).endpoint).toMatch(
-      /^Not one of the node addresses/u,
+      /^Use an address outside the node addresses/u,
     );
     expect(fieldProblems("Network", { ...form, endpoint: "10.9.0.2" }, rke2).endpoint).toMatch(
-      /^Inside the gateway's network/u,
+      /^Use an address on the gateway's network/u,
     );
     expect(fieldProblems("Network", { ...form, pods: "10.244.1.0/16" }, rke2).pods).toMatch(/without host bits/u);
     expect(fieldProblems("Network", form, rke2)).toStrictEqual({});
     expect(addressCount(["10.0.0.32/28", "10.0.0.21-10.0.0.29", "10.0.0.50"], "10.0.0.1", 24)).toStrictEqual({
       count: 24,
     });
-    expect(problems("Add-ons", { ...form, rancherInstall: true }, rke2)).toStrictEqual(["Rancher needs a host name."]);
+    expect(problems("Add-ons", { ...form, rancherInstall: true }, rke2)).toStrictEqual(["Enter a host name"]);
     const rancher = { ...form, rancherInstall: true, rancherHostname: "rancher.example.org" };
     const four = { cores: 4, memoryMiB: 8192, diskGiB: 40 };
     expect(
       fieldProblems("Machines", { ...rancher, controlPlaneMachine: { ...four, cores: 2 }, workerMachine: four }, rke2)
         .controlPlaneMachine,
-    ).toMatch(/^At least 4 cores, which Rancher needs/u);
+    ).toMatch(/^Rancher needs at least 4 cores on every node/u);
     expect(
       fieldProblems("Machines", { ...rancher, controlPlaneMachine: four, workerMachine: { ...four, cores: 2 } }, rke2)
         .workerMachine,
@@ -1049,15 +1044,14 @@ describe("create", () => {
     expect(fieldProblems("Machines", { ...form, workerMachine: least }, figured)).toStrictEqual({});
     const one = { ...form, workerReplicas: 1, workerMachine: least };
     expect(fieldProblems("Machines", one, figured)).toStrictEqual({
-      workerMachine:
-        "Memory of at least 6792 MiB, in steps of 8. The add-ons chosen need that much: 6150 MiB, shared by the workers.",
+      workerMachine: "At least 6792 MiB of memory for the add-ons chosen, in steps of 8",
     });
     expect(fieldProblems("Machines", one, plain)).toStrictEqual({});
     expect(withRoom(one, figured).workerMachine).toStrictEqual({ ...least, memoryMiB: 6792 });
     expect(withRoom(form, figured)).toStrictEqual(form);
     // A class that says nothing of its nodes' own use counts its least for it.
     const unmeasured: ClusterClass = { ...figured, annotations: { "kubehenge.dev/addon-memory": addons } };
-    expect(fieldProblems("Machines", one, unmeasured).workerMachine).toMatch(/^Memory of at least 10248 MiB/u);
+    expect(fieldProblems("Machines", one, unmeasured).workerMachine).toMatch(/^At least 10248 MiB of memory/u);
     // Without workers the control planes carry them.
     const alone = {
       ...form,
@@ -1066,8 +1060,7 @@ describe("create", () => {
       controlPlaneMachine: { cores: 4, memoryMiB: 8192, diskGiB: 30 },
     };
     expect(fieldProblems("Machines", alone, figured)).toStrictEqual({
-      controlPlaneMachine:
-        "Memory of at least 10248 MiB, in steps of 8. Without workers, they run the workloads too. The add-ons chosen need that much: 6150 MiB, shared by the control planes.",
+      controlPlaneMachine: "At least 10248 MiB of memory for the add-ons chosen, in steps of 8",
     });
     expect(
       withRoom({ ...alone, controlPlaneMachine: { cores: 2, memoryMiB: 4096, diskGiB: 30 } }, figured),
@@ -1094,7 +1087,7 @@ describe("create", () => {
       controlPlaneMiB: 1000,
     });
     expect(fieldProblems("Machines", withWorkers, grown).controlPlaneMachine).toBe(
-      "Memory of at least 4200 MiB, in steps of 8. The add-ons chosen need that much, as the API server holds their objects.",
+      "At least 4200 MiB of memory for the add-ons chosen, in steps of 8",
     );
     expect(withRoom(withWorkers, grown).controlPlaneMachine).toStrictEqual({ ...least, memoryMiB: 4200 });
     // Headlamp alone adds nothing to them.
@@ -1135,15 +1128,14 @@ describe("create", () => {
     // A worker needs the cores for what it requests itself and its share: one such worker does not
     // hold them on two cores, two do.
     expect(fieldProblems("Machines", heavy, figured)).toStrictEqual({
-      workerMachine:
-        "A whole number of cores, at least 3. The add-ons chosen need that many: their pods ask for 1455 millicores of CPU, shared by the workers.",
+      workerMachine: "A whole number of cores, at least 3 for the add-ons chosen",
     });
     expect(withRoom(heavy, figured).workerMachine).toStrictEqual({ ...least, cores: 3 });
     expect(fieldProblems("Machines", { ...heavy, workerReplicas: 2 }, figured)).toStrictEqual({});
     // A class that says nothing of its nodes' own CPU counts their least for it.
     const unmeasured: ClusterClass = { ...rke2, annotations: { "kubehenge.dev/addon-cpu": figures } };
     expect(fieldProblems("Machines", heavy, unmeasured).workerMachine).toMatch(
-      /^A whole number of cores, at least 4\./u,
+      /^A whole number of cores, at least 4 for the add-ons chosen$/u,
     );
     expect(fieldProblems("Machines", heavy, { ...rke2, annotations: {} })).toStrictEqual({});
   });
@@ -1171,7 +1163,7 @@ describe("create", () => {
 
     routes["GET /api/clusters"] = { status: 401, body: { error: "not signed in" } };
     render(<App />);
-    await expect(screen.findByText(/Your session has ended/u)).resolves.toBeInTheDocument();
+    await expect(screen.findByText(/Session ended/u)).resolves.toBeInTheDocument();
   });
 
   it("shows a field's problem under it once touched or after Next, and focuses the first", async () => {
@@ -1191,7 +1183,7 @@ describe("create", () => {
     await user.click(screen.getByRole("button", { name: "Next" }));
     await waitFor(() => expect(name).toHaveFocus());
     expect(name).toHaveAttribute("aria-invalid", "true");
-    expect(name).toHaveAccessibleDescription(/^Lowercase letters.*Also names its Proxmox VE pool/u);
+    expect(name).toHaveAccessibleDescription("Enter a name");
     expect(screen.getByLabelText("Distribution")).toHaveAttribute("aria-invalid", "true");
 
     await user.type(name, "lab");
@@ -1243,7 +1235,7 @@ describe("create", () => {
     await user.selectOptions(screen.getByLabelText("Distribution"), "kubehenge-rke2");
     expect(screen.getByLabelText("Node OS")).toHaveValue("almalinux-10");
     await user.selectOptions(screen.getByLabelText("Node OS"), "rocky-10");
-    expect(screen.getByLabelText("Node OS")).toHaveAccessibleDescription(/needs Proxmox VE nodes with x86-64-v3 CPUs/u);
+    expect(screen.getByLabelText("Node OS")).toHaveAccessibleDescription(/Needs Proxmox VE nodes with x86-64-v3 CPUs/u);
     await user.type(screen.getByLabelText("Kubernetes version"), "v1.36.5+rke2r1");
     await user.click(screen.getByRole("button", { name: "Next" }));
 
@@ -1258,9 +1250,9 @@ describe("create", () => {
 
     expect(screen.queryByRole("option", { name: /tank/u })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Storage")).toHaveValue("local-lvm");
-    await user.click(screen.getByRole("radio", { name: "Nodes I choose" }));
+    await user.click(screen.getByRole("radio", { name: "Chosen nodes" }));
     expect(within(screen.getByRole("group", { name: "Nodes" })).getAllByRole("checkbox")).toHaveLength(2);
-    await user.click(screen.getByRole("radio", { name: "The nodes of an HA rule" }));
+    await user.click(screen.getByRole("radio", { name: "HA rule nodes" }));
     await user.selectOptions(screen.getByLabelText("HA rule"), "fast");
     expect(screen.getByRole("option", { name: "fast (SSD): pve2, strict" })).toBeInTheDocument();
     // An emptied number stays empty and is refused, instead of turning into 0.
@@ -1271,20 +1263,15 @@ describe("create", () => {
     expect(cores).toHaveValue(4);
     await user.click(screen.getByRole("button", { name: "Next" }));
     // The add-ons' memory shows as they are chosen; Rancher's agent counts while the cluster registers.
-    expect(
-      screen.getByText(
-        /^The add-ons chosen use about 512 MiB of memory \(Rancher's agent\), so each worker has at least 4096/u,
-      ),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/^Each worker needs at least 4096 MiB/u)).toBeInTheDocument();
+    expect(screen.getByText("Add-ons use about 512 MiB of memory: Rancher's agent.")).toBeInTheDocument();
     // Rancher raises the machines to the cores it needs, and they stay raised once it is unticked.
+    expect(screen.getByText(/Needs 4 cores per node\.$/u)).toBeInTheDocument();
     await user.click(screen.getByRole("checkbox", { name: /Install Rancher/u }));
-    expect(screen.getByText(/Rancher needs at least 4 cores on every node/u)).toBeInTheDocument();
     expect(
-      screen.getByText(/^The add-ons chosen use about 2240 MiB of memory \(cert-manager, Rancher\)/u),
+      screen.getByText("Add-ons use about 2240 MiB of memory and 10 millicores of CPU: cert-manager, Rancher."),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(/Their pods ask for 10 millicores of CPU \(Rancher\), so each worker has at least 4 cores\.$/u),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/^Each worker needs at least \d+ MiB and 4 cores$/u)).toBeInTheDocument();
     await user.click(screen.getByRole("checkbox", { name: /Install Rancher/u }));
     await user.click(screen.getByRole("button", { name: "Machines" }));
     expect(within(screen.getByRole("group", { name: "Control plane" })).getByLabelText("Cores")).toHaveValue(4);
@@ -1298,12 +1285,12 @@ describe("create", () => {
     expect(added.getByLabelText("Issuer URL")).not.toHaveAttribute("aria-invalid");
     await user.type(added.getByLabelText("Issuer URL"), "http://mine.example");
     // A field says what is wrong with it once it was edited; the others wait for Next.
-    expect(added.getByLabelText("Issuer URL")).toHaveAccessibleDescription(/^The issuer is an https:\/\/ URL/u);
+    expect(added.getByLabelText("Issuer URL")).toHaveAccessibleDescription(/^Enter an https:\/\/ URL/u);
     expect(added.getByLabelText("Client ID")).not.toHaveAttribute("aria-invalid");
     await user.click(screen.getByRole("button", { name: "Next" }));
     // Next stays on the step, marks every problem and puts the cursor on the first.
     await waitFor(() => expect(added.getByLabelText("Issuer URL")).toHaveFocus());
-    expect(added.getByLabelText("Client ID")).toHaveAccessibleDescription(/^A client ID\./u);
+    expect(added.getByLabelText("Client ID")).toHaveAccessibleDescription(/^Enter a client ID /u);
     expect(screen.getByRole("button", { name: "Add identity provider" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Remove identity provider 2" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
@@ -1385,14 +1372,14 @@ describe("create", () => {
     await user.click(screen.getByRole("button", { name: "Next" }));
     expect(screen.getByRole("checkbox", { name: /Install Rancher/u })).toBeDisabled();
     expect(screen.getByRole("checkbox", { name: /Install Rancher/u })).toHaveAccessibleDescription(
-      /needs Sys\.Modify/u,
+      "Needs Sys.Modify on the workload pool",
     );
     await user.click(screen.getByRole("button", { name: "Next" }));
     expect(screen.getByRole("button", { name: "Add identity provider" })).toBeDisabled();
     expect(screen.getByLabelText("Issuer URL")).toBeDisabled();
 
     await user.click(screen.getByRole("button", { name: "Cancel" }));
-    const dialog = screen.getByRole("dialog", { name: "Discard this cluster?" });
+    const dialog = screen.getByRole("dialog", { name: "Discard new cluster" });
     await user.click(within(dialog).getByRole("button", { name: "Keep editing" }));
     expect(window.location.pathname).toBe("/clusters/new");
     await user.click(screen.getByRole("button", { name: "Cancel" }));

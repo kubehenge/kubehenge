@@ -67,7 +67,7 @@ describe("the fleet", () => {
       view: "",
     });
     expect(standing(upgrading)).toMatchObject({ group: "running", reason: "Upgrading to v1.36.5+rke2r1" });
-    expect(standing(creating)).toMatchObject({ group: "running", reason: "Creating: 1 of 3 control planes ready" });
+    expect(standing(creating)).toMatchObject({ group: "running", reason: "Creating: 1 of 3 control planes" });
     expect(standing({ ...creating, created: minutesAgo(120) })).toMatchObject({
       group: "needs",
       reason: "Not available",
@@ -75,7 +75,7 @@ describe("the fleet", () => {
     expect(standing({ ...base, deleting: true })).toMatchObject({ group: "running", state: "deleting" });
     expect(standing({ ...base, workers: { ...steady, upToDate: 1 } })).toMatchObject({
       group: "running",
-      reason: "Workers rolling out: 1 of 2 up to date",
+      reason: "Workers: 1 of 2 updated",
     });
     expect(
       standing({
@@ -101,12 +101,12 @@ describe("the fleet", () => {
     expect(standing(base, crashing)).toStrictEqual({
       group: "needs",
       state: "error",
-      reason: "Pod shop/api: CrashLoopBackOff, and 4 more",
+      reason: "Pod shop/api: CrashLoopBackOff and 4 more",
       view: "health",
     });
     expect(standing(base, { ...crashing, verdict: "unreachable", attention: [] })).toMatchObject({
       group: "needs",
-      reason: "Its API server does not answer",
+      reason: "API server unreachable",
     });
     expect(
       standing(base, {
@@ -161,10 +161,10 @@ describe("the console", () => {
       within(runs)
         .getAllByRole("link")
         .map((l) => l.textContent),
-    ).toStrictEqual(["ciCreating: 1 of 3 control planes ready", "dbUpgrading to v1.36.5+rke2r1"]);
+    ).toStrictEqual(["ciCreating: 1 of 3 control planes", "dbUpgrading to v1.36.5+rke2r1"]);
   });
 
-  it("follows the snapshots, backups and the appliance's work, a failure with its first error", async () => {
+  it("follows the snapshots, backups and the appliance's work, a failure's error on its own page", async () => {
     window.history.replaceState(null, "", "/");
     const routes = serve();
     routes["GET /api/runs"] = {
@@ -181,7 +181,7 @@ describe("the console", () => {
         {
           id: "appliance-upgrade",
           kind: "appliance-upgrade",
-          what: "Upgrade the appliance to 0.3.1",
+          what: "Upgrade appliance to 0.3.1",
           state: "failed",
           finished: minutesAgo(5),
           error: "the release's checksum does not match",
@@ -191,7 +191,7 @@ describe("the console", () => {
           kind: "etcd-snapshot",
           namespace: "default",
           cluster: "db",
-          what: "Take an etcd snapshot",
+          what: "Take etcd snapshot",
           state: "succeeded",
           finished: minutesAgo(12),
         },
@@ -201,22 +201,20 @@ describe("the console", () => {
     const runs = await screen.findByRole("complementary", { name: "Runs" });
     const running = await within(runs).findByRole("link", { name: /^web Scheduled backup/u });
     expect(running).toHaveAttribute("href", "/runs/backup/default/web/daily-1");
-    expect(running).toHaveTextContent("Scheduled backup: 120 of 300 items");
+    expect(running).toHaveTextContent("webScheduled backup120 of 300 items");
     const failed = within(within(runs).getByRole("region", { name: "Failed" })).getByRole("link");
     expect(failed).toHaveAttribute("href", "/runs/appliance-upgrade");
-    expect(failed).toHaveTextContent("Upgrade the appliance to 0.3.1 failed, 5m ago");
-    expect(failed).toHaveTextContent("the release's checksum does not match");
+    expect(failed).toHaveTextContent("Upgrade appliance to 0.3.1 failed, 5m ago");
+    expect(failed).not.toHaveTextContent("checksum");
     expect(within(within(runs).getByRole("region", { name: "Done" })).getByRole("link")).toHaveTextContent(
-      "dbTake an etcd snapshot, 12m ago",
+      "dbTake etcd snapshot, 12m ago",
     );
     expect(screen.getByRole("button", { name: "Running 3" })).toBeInTheDocument();
 
     const user = userEvent.setup({ delay: null });
     await user.click(failed);
-    await expect(
-      screen.findByRole("heading", { name: /^Upgrade the appliance to 0\.3\.1/u }),
-    ).resolves.toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent("First errorthe release's checksum does not match");
+    await expect(screen.findByRole("heading", { name: /^Upgrade appliance to 0\.3\.1/u })).resolves.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Errorthe release's checksum does not match");
     expect(screen.getByRole("link", { name: "Open Administration" })).toHaveAttribute("href", "/administration");
   });
 
@@ -230,15 +228,15 @@ describe("the console", () => {
           kind: "change",
           namespace: "default",
           cluster: "db",
-          what: "Change the cluster",
+          what: "Change cluster",
           state: "running",
           by: "dev@pve",
           started: minutesAgo(6),
-          phase: "Replace the control-plane machines: 1 of 3",
+          phase: "Replace control planes: 1 of 3 replaced",
           settings: ["version", "podSecurity"],
           steps: [
-            { name: "Accepted by the API server", state: "done" },
-            { name: "Replace the control-plane machines", state: "running", detail: "1 of 3" },
+            { name: "Accepted", state: "done" },
+            { name: "Replace control planes", state: "running", detail: "1 of 3 replaced" },
             { name: "Settle", state: "waiting" },
           ],
         },
@@ -249,7 +247,7 @@ describe("the console", () => {
     const runs = within(await screen.findByRole("complementary", { name: "Runs" }));
     const change = await runs.findByRole("link", { name: /^db Change/u });
     expect(change).toHaveTextContent(
-      "Change Kubernetes version, Pod security: Replace the control-plane machines: 1 of 3",
+      "dbChange Kubernetes version, Pod securityReplace control planes: 1 of 3 replaced",
     );
     expect(runs.queryByRole("link", { name: /Upgrading to/u })).not.toBeInTheDocument();
 
@@ -261,13 +259,9 @@ describe("the console", () => {
       within(screen.getByRole("list", { name: "Steps" }))
         .getAllByRole("listitem")
         .map((li) => li.textContent),
-    ).toStrictEqual([
-      "Accepted by the API serverDone",
-      "Replace the control-plane machinesUnder way1 of 3",
-      "SettleWaiting",
-    ]);
+    ).toStrictEqual(["AcceptedDone", "Replace control planesRunning1 of 3 replaced", "SettleWaiting"]);
     expect(screen.getByText("by dev@pve")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open the cluster" })).toHaveAttribute("href", "/clusters/default/db");
+    expect(screen.getByRole("link", { name: "Open cluster" })).toHaveAttribute("href", "/clusters/default/db");
   });
 
   it("moves a cluster its health page finds trouble in to those needing you, linked to that page", async () => {

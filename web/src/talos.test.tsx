@@ -84,14 +84,18 @@ describe("talos clusters", () => {
       `web-cp-abc to v1.15.1, since ${shown("2026-10-23T10:00:00Z")}`,
     );
     expect(upgradingText("web-cp-abc to v1.15.1 since 2026-10-23T10:00:00Z, rebooted at 2026-10-23T10:02:00Z")).toBe(
-      `web-cp-abc to v1.15.1, since ${shown("2026-10-23T10:00:00Z")}; rebooted at ${shown("2026-10-23T10:02:00Z")}`,
+      `web-cp-abc to v1.15.1, since ${shown("2026-10-23T10:00:00Z")}, rebooted ${shown("2026-10-23T10:02:00Z")}`,
     );
     expect(upgradedText("web-cp-abc to v1.15.1 at 2026-10-23T10:05:00Z")).toBe(
       `web-cp-abc to v1.15.1, ${shown("2026-10-23T10:05:00Z")}`,
     );
-    expect(failedText("web-md-1 to v1.15.1 at 2026-10-23T09:40:00Z: the node did not come back: timeout")).toBe(
-      `Upgrading web-md-1 to Talos v1.15.1 failed at ${shown("2026-10-23T09:40:00Z")}: The node did not come back: timeout.`,
-    );
+    expect(
+      failedText("web-md-1 to v1.15.1 at 2026-10-23T09:40:00Z: the node did not come back: timeout"),
+    ).toStrictEqual({
+      state: "Couldn't upgrade web-md-1 to Talos v1.15.1",
+      detail: `${shown("2026-10-23T09:40:00Z")}: the node did not come back: timeout`,
+    });
+    expect(failedText("something else")).toStrictEqual({ state: "Talos upgrade failed", detail: "something else" });
     expect(upgradedText("something else")).toBe("something else");
     expect(talosTargets("v1.14.2", ["v1.16.0", "v1.15.3", "v1.14.4", "v1.14.2", "v1.13.9"])).toStrictEqual([
       "v1.15.3",
@@ -209,13 +213,14 @@ describe("talos clusters", () => {
     render(<App />);
 
     await waitFor(() => expect(term("Talos release")).toHaveTextContent("v1.15.1"));
-    expect(term("New machines boot")).toHaveTextContent("v1.14.4, then are upgraded to v1.15.1");
+    expect(term("New nodes boot")).toHaveTextContent("v1.14.4, then v1.15.1");
     expect(term("Talos upgrade")).toHaveTextContent(`web-cp-abc to v1.15.1, since ${shown("2026-10-23T10:00:00Z")}`);
     expect(term("Last Talos upgrade")).toHaveTextContent(`web-cp-xyz to v1.15.1, ${shown("2026-10-23T09:50:00Z")}`);
     const failure = within(screen.getByRole("region", { name: "Failed Talos upgrade" }));
     expect(
-      failure.getByText(/^Upgrading web-md-1 to Talos v1\.15\.1 failed at .*: The node did not come back\./u),
+      failure.getByText(/^Couldn't upgrade web-md-1 to Talos v1\.15\.1\. The other nodes wait\./u),
     ).toBeInTheDocument();
+    expect(failure.getByText(/: the node did not come back$/u)).toBeInTheDocument();
     const before = reads(calls, "GET /api/clusters/clusters/web");
     await user.click(failure.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(reads(calls, "DELETE /api/clusters/clusters/web/talos-upgrade-failure")).toBe(1));
@@ -249,11 +254,9 @@ describe("talos clusters", () => {
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "Upgrade Talos" }));
     const dialog = within(screen.getByRole("dialog", { name: "Upgrade Talos on web" }));
-    await expect(
-      dialog.findByRole("option", { name: "v1.15.1 (does not run Kubernetes 1.36)" }),
-    ).resolves.toBeDisabled();
+    await expect(dialog.findByRole("option", { name: "v1.15.1 (upgrade Kubernetes first)" })).resolves.toBeDisabled();
     expect(dialog.getByRole("option", { name: "v1.14.6" })).toBeEnabled();
-    expect(dialog.getByText(/^v1\.15\.1 does not run Kubernetes 1\.36, which the cluster runs/u)).toBeInTheDocument();
+    expect(dialog.getByText("v1.15.1 doesn't run Kubernetes 1.36. Upgrade Kubernetes first.")).toBeInTheDocument();
   });
 
   it("holds a Kubernetes version back that the cluster's Talos release does not run", async () => {
@@ -268,7 +271,7 @@ describe("talos clusters", () => {
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "Upgrade" }));
     const dialog = within(screen.getByRole("dialog", { name: "Upgrade web" }));
-    await expect(dialog.findByRole("option", { name: "v1.37.1 (not run by Talos v1.14.4)" })).resolves.toBeDisabled();
+    await expect(dialog.findByRole("option", { name: "v1.37.1 (needs newer Talos)" })).resolves.toBeDisabled();
     expect(dialog.getByText(/^Talos v1\.14\.4 does not run v1\.37\.1: upgrade Talos first/u)).toBeInTheDocument();
   });
 
@@ -290,8 +293,8 @@ describe("talos clusters", () => {
     const field = await dialog.findByRole("textbox", { name: "Talos release" });
     await user.clear(field);
     await user.type(field, "v1.16");
-    expect(dialog.getByText("A release such as v1.14.4.")).toBeInTheDocument();
-    expect(dialog.queryByText("Such as v1.14.4.")).not.toBeInTheDocument();
+    expect(dialog.getByText("Enter a release such as v1.14.4")).toBeInTheDocument();
+    expect(dialog.queryByText("Such as v1.14.4")).not.toBeInTheDocument();
   });
 
   it("restores a Talos cluster's etcd through its Talos API", async () => {
@@ -321,15 +324,13 @@ describe("talos clusters", () => {
     });
     const user = userEvent.setup({ delay: null });
     render(<App />);
-    await expect(
-      screen.findByText(/the controller reads etcd through the control-plane nodes' Talos API\./u),
-    ).resolves.toBeInTheDocument();
+    await expect(screen.findByText("etcd snapshots are off")).resolves.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: `Restore from ${snapshot.name}` }));
     const dialog = screen.getByRole("dialog", { name: /^Restore etcd from/u });
-    expect(dialog).toHaveTextContent("wipes etcd on every control-plane node through its Talos API");
-    expect(dialog).toHaveTextContent("the others join it again. The cluster's API is down");
+    expect(dialog).toHaveTextContent("Wipes etcd and reboots every control-plane node.");
+    expect(dialog).toHaveTextContent("The API is down until the first one is back.");
     expect(dialog).not.toHaveTextContent("guest agent");
-    expect(dialog).not.toHaveTextContent("new machines");
+    expect(dialog).not.toHaveTextContent("Replaces all control-plane nodes");
   });
 
   it("holds Try again and the talosconfig to what the user may do", async () => {

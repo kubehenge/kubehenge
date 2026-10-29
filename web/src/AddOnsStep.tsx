@@ -1,8 +1,8 @@
 import type { JSX } from "react";
 
-import { BackupFieldset, backupCredentialHint, backupKeys, backupsHint, classTargets } from "./Backups";
+import { BackupFieldset, backupKeys, backupsHint, classTargets, noTargets } from "./Backups";
 import { CertificatesFields } from "./Certificates";
-import { MeshPeersField, meshHint } from "./ClusterMesh";
+import { MeshPeersField, meshInfo } from "./ClusterMesh";
 import { ModeSelect } from "./ClusterUpgrades";
 import {
   addonCPU,
@@ -10,7 +10,6 @@ import {
   addonsProblem,
   logsChosen,
   machineLeast,
-  mostWorkers,
   offersMesh,
   rancherMinimumCores,
   variable,
@@ -18,18 +17,22 @@ import {
 import type { StepProps } from "./CreateSteps";
 import { GitOpsFields, gitOpsFields, gitOpsTrustHint } from "./GitOps";
 import { LogsFields, logsHint, logsNeedMonitoring } from "./Logs";
-import { PodSecurityFields, cisHint } from "./PodSecurity";
+import { PodSecurityFields, cisHint, cisInfo } from "./PodSecurity";
 import type { ClusterClass } from "./types";
-import { Field, browserZone, headlampHint, headlampViewHint, headlampViewLabel, istioHint, registerHint } from "./ui";
+import {
+  Field,
+  Info,
+  browserZone,
+  headlampHint,
+  headlampViewHint,
+  headlampViewLabel,
+  istioHint,
+  registerHint,
+} from "./ui";
 
-// Talos nodes take their updates as Talos patch releases, upgraded in place, where the others move
-// to new builds of their VM template.
-function upgradesHint(cls: ClusterClass | undefined): string {
-  const window = `Every day from 02:00 for four hours, ${browserZone()} time; the cluster's Options change the window later.`;
-  return cls?.distribution === "talos"
-    ? `${window} The nodes are upgraded to new Talos patch releases of their minor version in the same window, whatever this says.`
-    : `${window} The nodes move to new builds of their VM template in the same window, whatever this says.`;
-}
+// Talos nodes take Talos patch releases in place and the others move to new builds of their VM
+// template, both in the window whatever the mode.
+const upgradesInfo = "Nodes also get OS updates in this window, whatever the mode.";
 
 // HeadlampAddOn installs Headlamp, at a host name of its own if one is given, and read-only for
 // everyone if asked.
@@ -37,24 +40,14 @@ function HeadlampAddOn({ form, set }: Pick<StepProps, "form" | "set">): JSX.Elem
   return (
     <>
       <label className="check">
-        <input
-          type="checkbox"
-          checked={form.headlamp}
-          aria-describedby="headlamp-hint"
-          onChange={(e) => set("headlamp", e.target.checked)}
-        />{" "}
-        Install Headlamp
+        <input type="checkbox" checked={form.headlamp} onChange={(e) => set("headlamp", e.target.checked)} /> Install
+        Headlamp
       </label>
-      <p className="hint" id="headlamp-hint">
-        {headlampHint}
-      </p>
+      <Info about="Headlamp">{headlampHint}</Info>
       {form.headlamp && (
         <fieldset className="group">
           <legend>Headlamp</legend>
-          <Field
-            label="Host name"
-            hint="Optional: also serve it at this name through the cluster's ingress controller."
-          >
+          <Field label="Host name" hint="Optional">
             {(id) => (
               <input
                 id={id}
@@ -90,15 +83,17 @@ function LogsAddOn({ form, set }: Pick<StepProps, "form" | "set">): JSX.Element 
           type="checkbox"
           checked={logsChosen(form)}
           disabled={!form.monitoring}
-          aria-describedby="logs-hint"
+          aria-describedby={form.monitoring ? undefined : "logs-hint"}
           onChange={(e) => set("logs", { ...form.logs, enabled: e.target.checked })}
         />{" "}
         Keep logs
       </label>
-      <p className="hint" id="logs-hint">
-        {logsHint}
-        {!form.monitoring && ` ${logsNeedMonitoring}`}
-      </p>
+      <Info about="logs">{logsHint}</Info>
+      {!form.monitoring && (
+        <p className="hint" id="logs-hint">
+          {logsNeedMonitoring}
+        </p>
+      )}
       {logsChosen(form) && (
         <fieldset className="group">
           <legend>Logs</legend>
@@ -128,16 +123,17 @@ function BackupsChoice({
           type="checkbox"
           checked={form.backups}
           disabled={none && !form.backups}
-          aria-describedby="backups-hint"
+          aria-describedby={none ? "backups-hint" : undefined}
           onChange={(e) => set("backups", e.target.checked)}
         />{" "}
         Back up with Velero
       </label>
-      <p className="hint" id="backups-hint">
-        {none
-          ? "An administrator has set no backup target yet; they add one in the appliance's settings."
-          : backupsHint}
-      </p>
+      <Info about="backups">{backupsHint}</Info>
+      {none && (
+        <p className="hint" id="backups-hint">
+          {noTargets}
+        </p>
+      )}
       {form.backups && (
         <>
           <BackupFieldset
@@ -152,7 +148,6 @@ function BackupsChoice({
           />
           <fieldset className="group">
             <legend>Access key</legend>
-            <p className="hint">{backupCredentialHint}</p>
             <label className="check">
               <input
                 type="radio"
@@ -161,18 +156,13 @@ function BackupsChoice({
                 disabled={canTrust === false}
                 onChange={() => set("backupOwnKey", true)}
               />{" "}
-              One of the cluster&apos;s own
+              Cluster&apos;s own key
             </label>
+            {canTrust === false && <p className="hint">Needs Sys.Modify on the workload pool</p>}
             <label className="check">
-              <input type="radio" name="backup-key" checked={!own} onChange={() => set("backupOwnKey", false)} /> The
-              one for every cluster
+              <input type="radio" name="backup-key" checked={!own} onChange={() => set("backupOwnKey", false)} /> Shared
+              key
             </label>
-            {canTrust === false && (
-              <p className="hint">
-                A cluster&apos;s own key reaches as far as its admin kubeconfig, so storing one needs Sys.Modify on the
-                workload pool.
-              </p>
-            )}
             {own &&
               backupKeys.map((k, i) => (
                 <Field key={k.key} label={k.label} error={i === backupKeys.length - 1 ? shown("backupKey") : undefined}>
@@ -197,8 +187,7 @@ function BackupsChoice({
 
 // A credential of the new cluster's reaches as far into what it runs as its admin kubeconfig,
 // which Sys.Modify on its pool grants.
-const tokenRefusal =
-  "Storing it needs Sys.Modify on the workload pool, which you do not hold; someone who does stores it under the cluster's Options once it is created.";
+const tokenRefusal = "Needs Sys.Modify on the workload pool";
 
 // CertificatesAddOn sets the certificates up, with the DNS provider's credential typed in here for
 // the new cluster.
@@ -216,18 +205,12 @@ function CertificatesAddOn({
         onChange={(f) => set("certificates", f)}
         showAll={showAll}
         mayShare={canTrust !== false}
-        shareRefusal="You do not hold it on the workload pool."
+        shareRefusal="You don't hold it"
         renderCredential={(label, hint) => (
           <Field
             label={label}
-            hint={
-              <>
-                {hint}{" "}
-                {canTrust === false
-                  ? tokenRefusal
-                  : "Empty: store it later under the cluster's Options; until then the cluster waits for it."}
-              </>
-            }
+            hint={canTrust === false ? tokenRefusal : hint}
+            info={canTrust === false ? undefined : "Add it later in Options. The cluster waits for it."}
           >
             {(id) => (
               <input
@@ -261,10 +244,9 @@ function GitOpsChoices({ form, set, shown, canTrust }: StepProps & { canTrust: b
       {canTrust === false && <p className="hint">{gitOpsTrustHint}</p>}
       {form.gitops.engine !== "" && form.gitops.clientSecret === "stored" && (
         <p className="hint">
-          Store the client secret in the cluster&apos;s GitOps options once it is created; until then{" "}
           {form.gitops.engine === "flux"
-            ? "Flux's web interface is not served."
-            : "Argo CD signs in without one, with PKCE."}
+            ? "Set the secret in Options to turn on Flux's interface"
+            : "Argo CD uses PKCE until the secret is in Options"}
         </p>
       )}
     </>
@@ -279,24 +261,22 @@ function RancherAddOn({ form, set, shown, canTrust }: StepProps & { canTrust: bo
           type="checkbox"
           checked={form.rancherInstall}
           disabled={canTrust === false && !form.rancherInstall}
-          aria-describedby="rancher-hint"
+          aria-describedby={canTrust === false ? "rancher-hint" : undefined}
           onChange={(e) => set("rancherInstall", e.target.checked)}
         />{" "}
         Install Rancher
       </label>
-      <p className="hint" id="rancher-hint">
-        Into this cluster; every other cluster then registers with it.
-        {form.rancherInstall &&
-          ` Rancher needs at least ${rancherMinimumCores} cores on every node, so the machines have at least that many.`}
-        {canTrust === false &&
-          " Rancher holds every registered cluster's admin credentials, so installing it needs Sys.Modify on the workload pool."}
-      </p>
+      <Info about="Rancher">
+        Other clusters register with it, and it holds their admin credentials. Needs {rancherMinimumCores} cores per
+        node.
+      </Info>
+      {canTrust === false && (
+        <p className="hint" id="rancher-hint">
+          Needs Sys.Modify on the workload pool
+        </p>
+      )}
       {form.rancherInstall ? (
-        <Field
-          label="Rancher host name"
-          hint="Resolves to this cluster's API address, where its ingress controller answers."
-          error={shown("rancherHostname")}
-        >
+        <Field label="Rancher host name" hint="Must resolve to the API address" error={shown("rancherHostname")}>
           {(id) => (
             <input
               id={id}
@@ -311,14 +291,11 @@ function RancherAddOn({ form, set, shown, canTrust }: StepProps & { canTrust: bo
             <input
               type="checkbox"
               checked={form.rancherRegister}
-              aria-describedby="register-hint"
               onChange={(e) => set("rancherRegister", e.target.checked)}
             />{" "}
             Register with Rancher
           </label>
-          <p className="hint" id="register-hint">
-            {registerHint}
-          </p>
+          <Info about="registering with Rancher">{registerHint}</Info>
         </>
       )}
     </>
@@ -345,25 +322,16 @@ function AddonRoom({ form, cls }: { form: StepProps["form"]; cls: ClusterClass |
   }
   const least = machineLeast(form, cls, form.workerReplicas > 0 ? "workerMachine" : "controlPlaneMachine");
   const node = form.workerReplicas > 0 ? "worker" : "control plane";
-  const sentences: string[] = [];
-  if (used.mib > 0) {
-    const controlPlanes =
-      mostWorkers(form) > 0
-        ? ` and each control plane, whose API server holds their objects, at least ${machineLeast(form, cls, "controlPlaneMachine").memoryMiB} MiB`
-        : "";
-    sentences.push(
-      `The add-ons chosen use about ${used.mib} MiB of memory (${used.names.join(", ")}), so each ${node} has at least ${least.memoryMiB} MiB${controlPlanes}.`,
-    );
-  }
-  if (requested.millicores > 0) {
-    const cores = form.rancherInstall ? Math.max(least.cores, rancherMinimumCores) : least.cores;
-    sentences.push(
-      `Their pods ask for ${requested.millicores} millicores of CPU (${requested.names.join(", ")}), so each ${node} has at least ${cores} cores.`,
-    );
-  }
+  const cores = form.rancherInstall ? Math.max(least.cores, rancherMinimumCores) : least.cores;
+  const amounts = [
+    ...(used.mib > 0 ? [`${used.mib} MiB of memory`] : []),
+    ...(requested.millicores > 0 ? [`${requested.millicores} millicores of CPU`] : []),
+  ];
+  const names = [...new Set([...used.names, ...requested.names])];
   return (
     <p className="hint" id="addon-room">
-      {sentences.join(" ")}
+      {`Each ${node} needs at least ${least.memoryMiB} MiB and ${cores} cores`}
+      <Info about="add-on resources">{`Add-ons use about ${amounts.join(" and ")}: ${names.join(", ")}.`}</Info>
     </p>
   );
 }
@@ -386,23 +354,15 @@ export function AddOnsStep({
     <>
       <HeadlampAddOn form={form} set={set} />
       <label className="check">
-        <input
-          type="checkbox"
-          checked={form.monitoring}
-          aria-describedby="monitoring-hint"
-          onChange={(e) => set("monitoring", e.target.checked)}
-        />{" "}
+        <input type="checkbox" checked={form.monitoring} onChange={(e) => set("monitoring", e.target.checked)} />{" "}
         Install monitoring
       </label>
-      <p className="hint" id="monitoring-hint">
-        Prometheus, Alertmanager and Grafana, with dashboards and alerts for every node and control-plane component.
-        Grafana&apos;s admin password is in the kube-prometheus-stack-grafana Secret in the monitoring namespace.
-      </p>
+      <Info about="monitoring">
+        Prometheus, Alertmanager and Grafana. Grafana&apos;s admin password is in Secret
+        monitoring/kube-prometheus-stack-grafana.
+      </Info>
       {form.monitoring && (
-        <Field
-          label="Grafana host name"
-          hint="Optional: serve Grafana at this name through the cluster's ingress controller."
-        >
+        <Field label="Grafana host name" hint="Optional">
           {(id) => (
             <input
               id={id}
@@ -422,8 +382,9 @@ export function AddOnsStep({
               aria-describedby="cis-hint"
               onChange={(e) => set("cis", e.target.checked)}
             />{" "}
-            Harden to the CIS Kubernetes Benchmark
+            CIS hardening
           </label>
+          <Info about="CIS hardening">{cisInfo}</Info>
           <p className="hint" id="cis-hint">
             {cisHint}
           </p>
@@ -442,33 +403,19 @@ export function AddOnsStep({
       {variable(cls, "istio") && (
         <>
           <label className="check">
-            <input
-              type="checkbox"
-              checked={form.istio}
-              aria-describedby="istio-hint"
-              onChange={(e) => set("istio", e.target.checked)}
-            />{" "}
-            Install Istio
+            <input type="checkbox" checked={form.istio} onChange={(e) => set("istio", e.target.checked)} /> Install
+            Istio
           </label>
-          <p className="hint" id="istio-hint">
-            {istioHint}
-          </p>
+          <Info about="Istio">{istioHint}</Info>
         </>
       )}
       {offersMesh(form, cls) && (
         <>
           <label className="check">
-            <input
-              type="checkbox"
-              checked={form.clusterMesh}
-              aria-describedby="mesh-hint"
-              onChange={(e) => set("clusterMesh", e.target.checked)}
-            />{" "}
+            <input type="checkbox" checked={form.clusterMesh} onChange={(e) => set("clusterMesh", e.target.checked)} />{" "}
             Join a Cluster Mesh
           </label>
-          <p className="hint" id="mesh-hint">
-            {meshHint}
-          </p>
+          <Info about="Cluster Mesh">{meshInfo}</Info>
           {form.clusterMesh && namespace !== undefined && (
             <MeshPeersField
               namespace={namespace}
@@ -488,7 +435,7 @@ export function AddOnsStep({
       <AddonRoom form={form} cls={cls} />
 
       {variable(cls, "upgrades") && (
-        <Field label="Upgrade automatically" hint={upgradesHint(cls)}>
+        <Field label="Upgrade automatically" hint={`Daily 02:00 to 06:00, ${browserZone()} time`} info={upgradesInfo}>
           {(id) => <ModeSelect id={id} value={form.upgradeMode} onChange={(m) => set("upgradeMode", m)} />}
         </Field>
       )}

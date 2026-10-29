@@ -90,7 +90,7 @@ describe("certificates", () => {
       domain: "apps.example.com",
     });
     expect(certificatesVariable({ ...f, enabled: false })).toBeUndefined();
-    // Another ACME server stands in for Let's Encrypt's staging one.
+    // Another ACME server stands in for Let's Encrypt staging.
     expect(
       certificatesVariable({ ...f, issuer: "acme-http01", staging: true, server: "https://acme.example/dir" }),
     ).toMatchObject({ acme: { server: "https://acme.example/dir" } });
@@ -106,7 +106,7 @@ describe("certificates", () => {
     });
     const akamai = { ...f, provider: "akamai" as const, settings: { akamai: { serviceConsumerDomain: "akab-1" } } };
     expect(certificatesProblems(akamai)).toStrictEqual({
-      existingSecret: "A Secret's name: lowercase letters, digits, dashes and dots.",
+      existingSecret: "Use lowercase letters, digits, dashes and dots",
     });
     expect(certificatesVariable({ ...akamai, existingSecret: "edgegrid" })).toMatchObject({
       dns01: { provider: "akamai", existingSecret: "edgegrid", akamai: { serviceConsumerDomain: "akab-1" } },
@@ -127,13 +127,13 @@ describe("certificates", () => {
         settings: { rfc2136: { nameserver: "ns1.example:99999" } },
       }),
     ).toStrictEqual({
-      domain: "A domain name, such as apps.example.com.",
-      email: "An email address.",
-      server: "An https:// URL.",
-      caBundle: "PEM: one or more -----BEGIN CERTIFICATE----- blocks.",
-      nameservers: "1.1.1.1 is no host:port, such as 192.0.2.53:53.",
-      "setting.nameserver": "ns1.example:99999 is no host:port, such as 192.0.2.53:53.",
-      "setting.tsigKeyName": "RFC 2136 (BIND, PowerDNS, Technitium, ...) needs this.",
+      domain: "Enter a domain name, such as apps.example.com",
+      email: "Enter an email address, such as ops@example.com",
+      server: "Enter an https:// URL",
+      caBundle: "Paste one or more PEM certificates",
+      nameservers: "Enter 1.1.1.1 as host:port, such as 192.0.2.53:53",
+      "setting.nameserver": "Enter ns1.example:99999 as host:port, such as 192.0.2.53:53",
+      "setting.tsigKeyName": "Enter the TSIG key name",
     });
     expect(certificatesProblems({ ...f, enabled: false, domain: "" })).toStrictEqual({});
     expect(certificatesProblems({ ...f, issuer: "acme-http01", domain: "" })).toStrictEqual({});
@@ -148,14 +148,14 @@ describe("certificates", () => {
     const user = userEvent.setup({ delay: null });
     const closed = vi.fn<() => void>();
     const { unmount } = render(<CertificatesDialog cluster={web} onClose={closed} />);
-    const dialog = within(screen.getByRole("dialog", { name: "Certificates" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Edit certificates" }));
     await user.click(dialog.getByRole("checkbox", { name: "Issue certificates" }));
     expect(dialog.getByLabelText("Issuer")).toHaveValue("acme-dns01");
     await user.type(dialog.getByLabelText("Domain"), "Apps.Example.com");
-    expect(dialog.getByRole("radio", { name: "Stored for this cluster (recommended)" })).toBeChecked();
-    expect(dialog.getByRole("radio", { name: "The one stored for every cluster" })).toBeEnabled();
+    expect(dialog.getByRole("radio", { name: "For this cluster (recommended)" })).toBeChecked();
+    expect(dialog.getByRole("radio", { name: "Shared by all clusters" })).toBeEnabled();
     const token = within(dialog.getByRole("group", { name: "API token" }));
-    await expect(token.findByText("Not set.")).resolves.toBeInTheDocument();
+    await expect(token.findByText("Not set")).resolves.toBeInTheDocument();
     expect(token.getByText(/Zone, DNS, Edit on this zone only/u)).toBeInTheDocument();
     await user.click(dialog.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(calls.at(-1)?.key).toBe("PATCH /api/clusters/default/web"));
@@ -194,18 +194,19 @@ describe("certificates", () => {
       />,
     );
     await user.click(screen.getByRole("checkbox", { name: "Issue certificates" }));
-    expect(screen.getByRole("radio", { name: "The one stored for every cluster" })).toBeDisabled();
-    expect(screen.getByText(/You do not hold it\./u)).toBeInTheDocument();
+    const shared = screen.getByRole("radio", { name: "Shared by all clusters" });
+    expect(shared).toBeDisabled();
+    expect(shared).toHaveAccessibleDescription("Needs Sys.Modify on the cluster's pool You don't hold it");
     await user.selectOptions(screen.getByLabelText("DNS provider"), "akamai");
     // Akamai takes a Secret of the cluster's only.
-    expect(screen.queryByRole("radio", { name: /Stored for this cluster/u })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /For this cluster/u })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Secret name")).toHaveAccessibleDescription(
-      /holding the keys clientToken, clientSecret and accessToken\./u,
+      "In cert-manager, with keys clientToken, clientSecret and accessToken",
     );
     await user.click(screen.getByRole("button", { name: "Save" }));
-    expect(screen.getByLabelText("Domain")).toHaveAccessibleDescription(/^A domain name/u);
+    expect(screen.getByLabelText("Domain")).toHaveAccessibleDescription(/^Enter a domain name/u);
     expect(screen.getByLabelText("Service consumer domain")).toHaveAccessibleDescription(
-      /^Akamai Edge DNS needs this/u,
+      /^Enter the service consumer domain/u,
     );
   });
 
@@ -269,12 +270,12 @@ const createWithToken = async (): Promise<void> => {
   await user.click(certificates.getByRole("checkbox", { name: "Issue certificates" }));
   // Next on an incomplete choice stays and says what is missing.
   await user.click(screen.getByRole("button", { name: "Next" }));
-  expect(certificates.getByLabelText("Domain")).toHaveAccessibleDescription(/^A domain name/u);
+  expect(certificates.getByLabelText("Domain")).toHaveAccessibleDescription(/^Enter a domain name/u);
   await user.type(certificates.getByLabelText("Domain"), "apps.example.com");
   await user.type(certificates.getByLabelText("API token"), "zone-token");
   await user.click(screen.getByRole("button", { name: "Next" }));
   await user.click(screen.getByRole("button", { name: "Next" }));
-  expect(screen.getByText("Stored for the cluster once it is created")).toBeInTheDocument();
+  expect(screen.getByText("Stored once created")).toBeInTheDocument();
   expect(screen.getByLabelText("Request")).not.toHaveTextContent("zone-token");
   await user.click(screen.getByRole("button", { name: "Create" }));
 };
@@ -298,12 +299,13 @@ describe("certificates of a new cluster", () => {
     const calls = wizard({ status: 403, body: { error: "alice@pve needs Sys.Modify on /pool/kubehenge/default.web" } });
     await createWithToken();
     await expect(screen.findByRole("alert")).resolves.toHaveTextContent(
-      /^The cluster was created, but its API token was not stored: alice@pve needs Sys\.Modify on \/pool\/kubehenge\/default\.web\. Store it under/u,
+      "Cluster created, but the API token was not stored. Add it in Options, Certificates.",
     );
+    expect(screen.getByText(/alice@pve needs Sys\.Modify on \/pool\/kubehenge\/default\.web/u)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create" })).not.toBeInTheDocument();
-    expect(screen.getByText("None yet: the cluster waits for one")).toBeInTheDocument();
+    expect(screen.getByText("None yet: the cluster waits")).toBeInTheDocument();
     const user = userEvent.setup({ delay: null });
-    await user.click(screen.getByRole("button", { name: "Open the cluster" }));
+    await user.click(screen.getByRole("button", { name: "Open cluster" }));
     await waitFor(() => expect(window.location.pathname).toBe("/clusters/default/web/options"));
     expect(calls.filter((c) => c.key === "POST /api/clusters")).toHaveLength(1);
   });

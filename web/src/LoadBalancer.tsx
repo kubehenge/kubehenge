@@ -10,8 +10,7 @@ export type Implementation = "" | "metallb" | "kube-vip";
 
 // k3s brings servicelb, which answers for each Service on every node's own address until the
 // cluster has a load balancer of its own.
-const noneText = (distribution: string | undefined): string =>
-  distribution === "k3s" ? "k3s's own, on the nodes' addresses" : "None";
+const noneText = (distribution: string | undefined): string => (distribution === "k3s" ? "k3s's own" : "None");
 
 const implementationOptions = (distribution: string | undefined): { value: Implementation; label: string }[] => [
   { value: "", label: noneText(distribution) },
@@ -46,11 +45,9 @@ export function loadBalancerText(lb: LoadBalancer, distribution: string | undefi
   return `${lb.implementation === "kube-vip" ? "kube-vip" : "MetalLB"}, on ${lb.addresses.join(", ")}`;
 }
 
-export const loadBalancerHint =
-  "Gives each Service of type LoadBalancer an address of its own from the load-balancer addresses, answered for by one of the nodes. MetalLB is recommended; kube-vip is the alternative.";
+const loadBalancerInfo = "Gives each LoadBalancer Service its own address.";
 
-const addressesHint =
-  "Ranges (10.0.0.100-10.0.0.120), networks or single addresses on the nodes' network, apart from the node addresses, the API address, the gateway and other clusters' addresses.";
+const addressesHint = "Free addresses on the nodes' network, like 10.0.0.100-10.0.0.120";
 
 /** The nodes' network a cluster's load-balancer addresses are held to. */
 export interface NodesNetwork {
@@ -92,15 +89,15 @@ function holdingReserved(entries: string[], network: NodesNetwork): string | und
  */
 export function addressesProblem(entries: string[], network: NodesNetwork): string | undefined {
   if (entries.length === 0) {
-    return "At least one range, network or address.";
+    return "Enter at least one address, range or network";
   }
   const { bad } = addressCount(entries, network.gateway, network.prefix);
   if (bad !== undefined) {
-    return `${bad} is no address, range or network inside the gateway's network.`;
+    return `${bad} is not an address, range or network on the gateway's network`;
   }
   const reserved = holdingReserved(entries, network);
   if (reserved !== undefined) {
-    return `${reserved} holds the network's own or broadcast address.`;
+    return `${reserved} includes the network or broadcast address`;
   }
   const taken: [string, string[]][] = [
     ["the node addresses", network.addresses],
@@ -110,12 +107,12 @@ export function addressesProblem(entries: string[], network: NodesNetwork): stri
   for (const [what, others] of taken) {
     const clash = overlapping(entries, others);
     if (clash !== undefined) {
-      return `${clash} overlaps ${what}.`;
+      return `${clash} overlaps ${what}`;
     }
   }
   for (const [i, e] of entries.entries()) {
     if (overlapping([e], entries.slice(i + 1)) !== undefined) {
-      return `${e} overlaps another of these addresses.`;
+      return `${e} overlaps another entry`;
     }
   }
   return undefined;
@@ -140,7 +137,7 @@ export function LoadBalancerFields({
   const options = implementationOptions(distribution);
   return (
     <>
-      <Field label="Load balancer" hint={loadBalancerHint}>
+      <Field label="Load balancer" info={loadBalancerInfo}>
         {(id) => (
           <select
             id={id}
@@ -179,7 +176,7 @@ export function LoadBalancerDialog({ cluster: c, onClose }: { cluster: Cluster; 
     (implementation !== "" && JSON.stringify(next.addresses) !== JSON.stringify(current.addresses));
   return (
     <Dialog
-      title="Load balancer"
+      title="Edit load balancer"
       onClose={onClose}
       onSubmit={() => {
         void send({ variables: { loadBalancer: loadBalancerVariable(next) ?? { ...held, enabled: false } } });

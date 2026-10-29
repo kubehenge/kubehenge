@@ -29,6 +29,7 @@ import {
   Dialog,
   ErrorBox,
   Field,
+  Info,
   cniName,
   errorMessage,
   filled,
@@ -180,7 +181,7 @@ function rancherValue(v: unknown): RancherValue {
 
 function rancherText(r: RancherValue): string {
   if (r.install === true) {
-    return `Installed here, at ${r.hostname ?? ""}`;
+    return filled(r.hostname) ? `Installed at ${r.hostname}` : "Installed";
   }
   return r.register === false ? "Not registered" : registeredWithRancher;
 }
@@ -231,7 +232,7 @@ export function optionRows<A extends string = never>(
   const rows: OptionRow<OptionAction | A>[] = [
     ...nodeOSRows(c),
     ...talos,
-    { label: "Pod network", value: cniName(text(c.variables["cni"]) ?? "") || "The distribution's own" },
+    { label: "Pod network", value: cniName(text(c.variables["cni"]) ?? "") || "Default" },
     {
       label: "Load balancer",
       value: loadBalancerText(loadBalancerOf(c.variables["loadBalancer"]), c.distribution),
@@ -315,7 +316,7 @@ export function optionRows<A extends string = never>(
       label: "Rancher",
       value: rancherText(rancher),
       action: "rancher",
-      button: rancher.install === true ? "Remove" : "Edit",
+      button: rancher.install === true ? "Uninstall" : "Edit",
       name: "Rancher",
     },
     {
@@ -335,7 +336,7 @@ export function optionRows<A extends string = never>(
     const hosts = providers(c).map((p) => (URL.canParse(p.issuerURL) ? new URL(p.issuerURL).host : p.issuerURL));
     rows.push({
       label: "Identity providers",
-      value: ["Tokens and certificates", ...hosts].join(", "),
+      value: hosts.length > 0 ? hosts.join(", ") : "None",
       action: "oidc",
       name: "identity providers",
     });
@@ -404,7 +405,7 @@ const movable = (o: NodeOSChoice): boolean => choosable(o) && !filled(o.noTempla
 // nodeOSNote says why a node OS cannot be moved to, or else what it asks of the nodes' CPUs.
 function nodeOSNote(o: NodeOSChoice, oses: NodeOSChoice[]): string | undefined {
   if (filled(o.unreleased)) {
-    return sentence(`It cannot be chosen yet: ${o.unreleased}`);
+    return sentence(o.unreleased);
   }
   return filled(o.noTemplate) ? sentence(o.noTemplate) : cpuNote(o, oses);
 }
@@ -438,7 +439,7 @@ function NodeOSDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
   const os = findNodeOS(oses, chosen);
   return (
     <Dialog
-      title="Node OS"
+      title="Edit node OS"
       onClose={onClose}
       onSubmit={() => {
         if (os !== undefined) {
@@ -460,10 +461,7 @@ function NodeOSDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
         </>
       }
     >
-      <p className="muted">
-        What the cluster&apos;s nodes run. Saving another replaces every node with a clone of its VM template, one at a
-        time as in an upgrade; that template has to be built first.
-      </p>
+      <p className="muted">Saving replaces every node, one at a time.</p>
       {oses === undefined && !filled(loadError) && <p className="muted">Loading…</p>}
       <ErrorBox message={loadError} />
       {oses !== undefined && (
@@ -512,7 +510,7 @@ function OIDCDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => 
   const changed = JSON.stringify(cleanProviders(value)) !== JSON.stringify(cleanProviders(providers(c)));
   return (
     <Dialog
-      title="Identity providers"
+      title="Edit identity providers"
       onClose={onClose}
       onSubmit={() => {
         void send({ variables: { oidc: cleanProviders(value) } });
@@ -528,11 +526,7 @@ function OIDCDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => 
         </>
       }
     >
-      <p className="muted">
-        OpenID Connect providers the cluster accepts sign-ins from, besides tokens and certificates. Saving replaces the
-        control-plane nodes one at a time. Adding a provider beyond those Kubehenge's administrators set needs
-        Sys.Modify on the cluster's pool.
-      </p>
+      <p className="muted">Saving replaces the control-plane nodes, one at a time.</p>
       <OIDCProviders initial={value} fixed={!c.allowed.kubeconfig} onChange={setValue} />
       <ErrorBox message={error} />
     </Dialog>
@@ -546,7 +540,7 @@ function PodSecurityDialog({ cluster: c, onClose }: { cluster: Cluster; onClose:
   const { busy, error, send } = useChange(c, onClose);
   return (
     <Dialog
-      title="Pod security"
+      title="Edit pod security"
       onClose={onClose}
       onSubmit={() => {
         void send({ variables: { podSecurity: { admission: value.admission, kyverno: value.kyverno } } });
@@ -566,6 +560,7 @@ function PodSecurityDialog({ cluster: c, onClose }: { cluster: Cluster; onClose:
         </>
       }
     >
+      {!cis && <p className="muted">Changing admission replaces the control-plane nodes, one at a time.</p>}
       <PodSecurityFields value={value} onChange={setValue} cis={cis} />
       <ErrorBox message={error} />
     </Dialog>
@@ -580,7 +575,7 @@ function IstioDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =>
   const hint = useId();
   return (
     <Dialog
-      title="Istio"
+      title="Edit Istio"
       onClose={onClose}
       onSubmit={() => {
         void send({ variables: { istio: { enabled: on } } });
@@ -611,18 +606,18 @@ function IstioDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =>
 /** The add-ons switched on and off by an enabled flag, and served at a host name when one is set. */
 const hostedAddons = {
   headlamp: {
-    title: "Headlamp",
+    title: "Edit Headlamp",
+    name: "Headlamp",
     install: "Install Headlamp",
-    hint: headlampHint,
+    info: headlampHint,
     hostLabel: "Host name",
-    hostHint: "Optional: also serve it at this name through the cluster's ingress controller.",
   },
   monitoring: {
-    title: "Monitoring",
+    title: "Edit monitoring",
+    name: "Monitoring",
     install: "Install monitoring",
-    hint: "Prometheus, Alertmanager and Grafana, with dashboards and alerts for every node and control-plane component. Grafana's admin password is in the kube-prometheus-stack-grafana Secret in the monitoring namespace.",
+    info: "Grafana's admin password: Secret kube-prometheus-stack-grafana in monitoring.",
     hostLabel: "Grafana host name",
-    hostHint: "Optional: serve Grafana at this name through the cluster's ingress controller.",
   },
 } as const;
 
@@ -656,7 +651,6 @@ function HostedAddonDialog({
   const changed =
     enabled !== (current.enabled === true) ||
     (enabled && (hostname !== (current.hostname ?? "") || view !== (current.access === "view")));
-  const hint = useId();
   const viewHint = useId();
   // Logs are read in monitoring's Grafana, so they go with it.
   const heldLogs = record(c.variables["logs"]);
@@ -682,19 +676,11 @@ function HostedAddonDialog({
       }
     >
       <label className="check">
-        <input
-          type="checkbox"
-          checked={enabled}
-          aria-describedby={hint}
-          onChange={(e) => setEnabled(e.target.checked)}
-        />{" "}
-        {words.install}
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> {words.install}
       </label>
-      <div className="hint" id={hint}>
-        {words.hint}
-      </div>
+      <Info about={words.name}>{words.info}</Info>
       {enabled && (
-        <Field label={words.hostLabel} hint={words.hostHint}>
+        <Field label={words.hostLabel} hint="Optional, through the cluster's ingress">
           {(id) => <input id={id} value={hostname} onChange={(e) => setHostname(e.target.value.trim())} />}
         </Field>
       )}
@@ -714,11 +700,7 @@ function HostedAddonDialog({
           </p>
         </>
       )}
-      {logsGo && (
-        <output className="warning notice">
-          Logs are switched off with monitoring: they are read in its Grafana. Loki&apos;s volume stays.
-        </output>
-      )}
+      {logsGo && <output className="warning notice">Logs switch off too. Loki&apos;s volume stays.</output>}
       <ErrorBox message={error} />
     </Dialog>
   );
@@ -735,7 +717,7 @@ function RancherDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
   if (current.install === true) {
     return (
       <Dialog
-        title="Remove Rancher"
+        title="Uninstall Rancher"
         onClose={onClose}
         onSubmit={() => {
           void send({ variables: { rancher: { ...held, install: false } } });
@@ -746,15 +728,13 @@ function RancherDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
               Cancel
             </button>
             <button type="submit" className="danger" disabled={busy || typed !== c.name}>
-              Remove Rancher
+              Uninstall Rancher
             </button>
           </>
         }
       >
         <p>
-          Rancher runs in this cluster{filled(current.hostname) ? `, at ${current.hostname}` : ""}. Removing it first
-          takes every cluster registered with it out of Rancher, which cleans up inside each, and then uninstalls it.
-          Rancher's own settings, users and projects are lost; the clusters themselves keep running.
+          Deletes Rancher&apos;s settings, users and projects, and unregisters every cluster. The clusters keep running.
         </p>
         <Field label="Confirm name" hint={`Type ${c.name}.`}>
           {(id) => <input id={id} value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" />}
@@ -765,7 +745,7 @@ function RancherDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
   }
   return (
     <Dialog
-      title="Rancher"
+      title="Edit Rancher"
       onClose={onClose}
       onSubmit={() => {
         void send({ variables: { rancher: { ...held, register } } });
@@ -791,7 +771,7 @@ function RancherDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
         Register with Rancher
       </label>
       <div className="hint" id={hint}>
-        {registerHint} Leaving Rancher removes Rancher&apos;s agent from the cluster.
+        {registerHint}
       </div>
       <ErrorBox message={error} />
     </Dialog>

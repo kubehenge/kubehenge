@@ -32,19 +32,17 @@ const built = (iso: string): string => new Date(iso).toLocaleString();
 describe("cluster upgrades", () => {
   it("describes a policy", () => {
     expect(describePolicy({})).toBe("Off");
-    expect(describePolicy({ mode: "patch" })).toBe("Patch releases, every day from 02:00 for 4 h (UTC)");
+    expect(describePolicy({ mode: "patch" })).toBe("Patch releases, daily 02:00 for 4 h UTC");
     expect(
       describePolicy({
         mode: "minor",
         window: { weekdays: ["Sat"], monthDays: [1], start: "22:00", durationMinutes: 90, timeZone: "Europe/Berlin" },
       }),
-    ).toBe("Patch and minor releases, Sat, day 1 of the month from 22:00 for 1.5 h (Europe/Berlin)");
-    expect(describePolicy({ mode: "off" }, true)).toBe("New node images, every day from 02:00 for 4 h (UTC)");
-    expect(describePolicy({ mode: "patch" }, true)).toBe(
-      "Patch releases and new node images, every day from 02:00 for 4 h (UTC)",
-    );
+    ).toBe("Patch and minor releases, Sat and day 1 22:00 for 1.5 h Europe/Berlin");
+    expect(describePolicy({ mode: "off" }, true)).toBe("Node images, daily 02:00 for 4 h UTC");
+    expect(describePolicy({ mode: "patch" }, true)).toBe("Patch releases and node images, daily 02:00 for 4 h UTC");
     expect(describePolicy({ mode: "patch" }, true, "talos")).toBe(
-      "Kubernetes patch releases and Talos patch releases, every day from 02:00 for 4 h (UTC)",
+      "Kubernetes patch releases and Talos patch releases, daily 02:00 for 4 h UTC",
     );
   });
 
@@ -58,12 +56,12 @@ describe("cluster upgrades", () => {
     const sent = (): unknown => calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body;
     const user = userEvent.setup({ delay: null });
     render(<App />);
-    await expect(screen.findByText("New node images, every day from 02:00 for 4 h (UTC)")).resolves.toBeInTheDocument();
+    await expect(screen.findByText("Node images, daily 02:00 for 4 h UTC")).resolves.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Edit automatic upgrades" }));
-    const dialog = screen.getByRole("dialog", { name: "Automatic upgrades" });
+    const dialog = screen.getByRole("dialog", { name: "Edit automatic upgrades" });
     // Upgrades are off, but the nodes still move in the window.
     expect(within(dialog).getByLabelText("From")).toHaveValue("02:00");
-    await user.click(within(dialog).getByLabelText("Move the nodes to new template builds"));
+    await user.click(within(dialog).getByLabelText("Update node images"));
     expect(within(dialog).queryByLabelText("From")).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await applyStaged(user);
@@ -79,16 +77,12 @@ describe("cluster upgrades", () => {
     });
     const user = userEvent.setup({ delay: null });
     render(<App />);
-    await expect(
-      screen.findByText("Talos patch releases, every day from 02:00 for 4 h (UTC)"),
-    ).resolves.toBeInTheDocument();
+    await expect(screen.findByText("Talos patch releases, daily 02:00 for 4 h UTC")).resolves.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Edit automatic upgrades" }));
-    const dialog = screen.getByRole("dialog", { name: "Automatic upgrades" });
-    expect(within(dialog).queryByLabelText("Move the nodes to new template builds")).not.toBeInTheDocument();
-    expect(within(dialog).getByLabelText("Move the nodes to new Talos patch releases")).toBeChecked();
-    expect(within(dialog).getByLabelText("Move the nodes to new Talos patch releases")).toHaveAccessibleDescription(
-      /upgraded to it in place inside the window/u,
-    );
+    const dialog = screen.getByRole("dialog", { name: "Edit automatic upgrades" });
+    expect(within(dialog).queryByLabelText("Update node images")).not.toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Apply Talos patch releases")).toBeChecked();
+    expect(within(dialog).getByText(/Upgrades the nodes in place/u)).toBeInTheDocument();
     expect(within(dialog).getByLabelText("From")).toHaveValue("02:00");
   });
 
@@ -121,8 +115,7 @@ describe("cluster upgrades", () => {
     const row = within(await screen.findByRole("row", { name: /^Talos release v1\.14\.2/u }));
     await user.click(row.getByRole("button", { name: "Upgrade Talos" }));
     const dialog = within(screen.getByRole("dialog", { name: "Upgrade Talos on web" }));
-    expect(dialog.getByText(/one minor version at a time/u)).toBeInTheDocument();
-    expect(dialog.getByText(/upgraded in place, one at a time/u)).toBeInTheDocument();
+    expect(dialog.getByText("Reboots the nodes one at a time, control planes first.")).toBeInTheDocument();
     // A newer patch of its minor version or the next minor's newest; not two minors on.
     await waitFor(() =>
       expect(
@@ -171,13 +164,13 @@ describe("cluster upgrades", () => {
     });
     render(<App />);
     await expect(
-      screen.findByText(`kubehenge-rke2-almalinux-10, the build of ${built("2026-10-08T00:00:00Z")}`),
+      screen.findByText(`kubehenge-rke2-almalinux-10, build ${built("2026-10-08T00:00:00Z")}`),
     ).resolves.toBeInTheDocument();
     expect(
-      screen.getByText(`${built("2026-10-17T02:00:00Z")}, to the build of ${built("2026-10-15T00:00:00Z")}`),
+      screen.getByText(`${built("2026-10-17T02:00:00Z")}, to build ${built("2026-10-15T00:00:00Z")}`),
     ).toBeInTheDocument();
     expect(
-      screen.getByText((text) => text.startsWith(`${built("2026-10-09T02:10:00Z")}, from the build`)),
+      screen.getByText((text) => text.startsWith(`${built("2026-10-09T02:10:00Z")}, from build`)),
     ).toBeInTheDocument();
   });
 
@@ -193,9 +186,9 @@ describe("cluster upgrades", () => {
     render(<App />);
     await expect(screen.findByText(/v1.36.2\+rke2r1 to v1.36.5\+rke2r1, /u)).resolves.toBeInTheDocument();
     await user.click(screen.getByRole("link", { name: "Options" }));
-    expect(document.title).toBe("web: Options - Kubehenge");
+    expect(document.title).toBe("web: Options · Kubehenge");
     await user.click(screen.getByRole("button", { name: "Edit automatic upgrades" }));
-    const dialog = screen.getByRole("dialog", { name: "Automatic upgrades" });
+    const dialog = screen.getByRole("dialog", { name: "Edit automatic upgrades" });
     expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
     await user.selectOptions(within(dialog).getByLabelText("Upgrade automatically"), "minor");
     await user.click(within(dialog).getByLabelText("Sat"));

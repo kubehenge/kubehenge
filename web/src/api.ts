@@ -80,7 +80,7 @@ function noteRelease(res: Response): void {
 }
 
 /** The message for a request that got no answer at all, such as while the appliance restarts. */
-export const noAnswer = "Kubehenge did not answer. Check the connection; the page tries again on its own.";
+export const noAnswer = "No answer from Kubehenge. Check the connection.";
 
 async function fetchAnswer(path: string, init: RequestInit): Promise<Response> {
   try {

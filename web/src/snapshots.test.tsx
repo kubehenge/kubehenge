@@ -66,9 +66,9 @@ describe("volume snapshots", () => {
       { offered: true, problem: undefined },
       { offered: false, problem: undefined },
       { offered: false, problem: undefined },
-      "Choose the cluster's storage first.",
-      "The CSI plugin takes volume snapshots only on storage local to each node (ZFS, LVM, LVM-thin, directory or btrfs), which storage ceph is not.",
-      "You do not hold Permissions.Modify on /, which giving the cluster's CSI plugin root@pam takes.",
+      "Choose a storage first",
+      "Unavailable on ceph. Snapshots need ZFS, LVM, LVM-thin, directory or btrfs storage.",
+      "Needs Permissions.Modify on /, which you do not hold",
     ]);
   });
 
@@ -82,7 +82,7 @@ describe("volume snapshots", () => {
     });
     expect(
       Object.fromEntries(summary({ ...form, volumeSnapshots: true }, k3s, { snapshots: true }))["Volume snapshots"],
-    ).toBe("On, with the CSI plugin signed in as root@pam");
+    ).toBe("On, CSI plugin as root@pam");
     expect(Object.fromEntries(summary(form, k3s))).not.toHaveProperty("Volume snapshots");
   });
 
@@ -116,7 +116,7 @@ describe("volume snapshots", () => {
       />,
     );
     const box = screen.getByLabelText("Take volume snapshots");
-    expect(box).toHaveAccessibleDescription(/holds the whole Proxmox VE cluster/u);
+    expect(box).toHaveAccessibleDescription("The cluster holds root@pam credentials for Proxmox VE");
     await userEvent.setup({ delay: null }).click(box);
     expect(set).toHaveBeenCalledWith("volumeSnapshots", true);
   });
@@ -143,7 +143,7 @@ describe("a cluster's volume snapshots", () => {
     const heading = await screen.findByRole("rowheader", { name: "Volume snapshots" });
     expect(heading.closest("tr")).toHaveTextContent("Off");
     await user.click(screen.getByRole("button", { name: "Edit volume snapshots" }));
-    const dialog = screen.getByRole("dialog", { name: "Volume snapshots" });
+    const dialog = screen.getByRole("dialog", { name: "Edit volume snapshots" });
     const save = within(dialog).getByRole("button", { name: "Save" });
     expect(save).toBeDisabled();
     await waitFor(() => expect(within(dialog).getByLabelText("Take volume snapshots")).toBeEnabled());
@@ -159,8 +159,10 @@ describe("a cluster's volume snapshots", () => {
     openOptions([k3s], false);
     const user = userEvent.setup({ delay: null });
     await user.click(await screen.findByRole("button", { name: "Edit volume snapshots" }));
-    const dialog = screen.getByRole("dialog", { name: "Volume snapshots" });
-    await expect(within(dialog).findByText(/You do not hold Permissions.Modify on \//u)).resolves.toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Edit volume snapshots" });
+    await expect(
+      within(dialog).findByText("Needs Permissions.Modify on /, which you do not hold"),
+    ).resolves.toBeInTheDocument();
     expect(within(dialog).getByLabelText("Take volume snapshots")).toBeDisabled();
   });
 
@@ -173,7 +175,7 @@ describe("a cluster's volume snapshots", () => {
     const heading = await screen.findByRole("rowheader", { name: "Volume snapshots" });
     expect(heading.closest("tr")).toHaveTextContent("root@pam");
     await user.click(screen.getByRole("button", { name: "Edit volume snapshots" }));
-    const dialog = screen.getByRole("dialog", { name: "Volume snapshots" });
+    const dialog = screen.getByRole("dialog", { name: "Edit volume snapshots" });
     await user.click(within(dialog).getByLabelText("Take volume snapshots"));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await applyStaged(user);

@@ -73,9 +73,9 @@ describe("a new cluster's Proxmox VE HA", () => {
       />
     );
     const { rerender } = render(step(false));
-    expect(screen.queryByLabelText(/Proxmox VE HA$/u)).toBeNull();
+    expect(screen.queryByLabelText("Use Proxmox VE HA")).toBeNull();
     rerender(step(true));
-    const box = screen.getByLabelText(/Proxmox VE HA$/u);
+    const box = screen.getByLabelText("Use Proxmox VE HA");
     expect(box).toBeChecked();
     await userEvent.setup({ delay: null }).click(box);
     expect(set).toHaveBeenCalledWith("proxmoxHA", false);
@@ -120,12 +120,12 @@ describe("a cluster's Proxmox VE HA", () => {
     const sent = openOptions([rke2]);
     const user = userEvent.setup({ delay: null });
     const heading = await screen.findByRole("rowheader", { name: "Proxmox VE HA" });
-    expect(heading.closest("tr")).toHaveTextContent("separate nodes");
+    expect(heading.closest("tr")).toHaveTextContent("On");
     await user.click(screen.getByRole("button", { name: "Edit Proxmox VE HA" }));
-    const dialog = screen.getByRole("dialog", { name: "Proxmox VE HA" });
+    const dialog = screen.getByRole("dialog", { name: "Edit Proxmox VE HA" });
     const save = within(dialog).getByRole("button", { name: "Save" });
     expect(save).toBeDisabled();
-    await user.click(within(dialog).getByLabelText(/Proxmox VE HA$/u));
+    await user.click(within(dialog).getByLabelText("Use Proxmox VE HA"));
     await user.click(save);
     await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { proxmoxHA: false } }));

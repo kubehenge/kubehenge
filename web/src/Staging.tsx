@@ -104,9 +104,9 @@ export const settingLabel = (setting: string): string => labelsOf(setting)[0] ??
 const effects: Record<Effect, string> = {
   none: "Replaces no machine",
   scales: "Adds or removes machines",
-  "control-plane": "Replaces the control-plane machines, one at a time",
-  workers: "Replaces the workers, one at a time",
-  all: "Replaces every machine, one at a time",
+  "control-plane": "Replaces control planes one by one",
+  workers: "Replaces workers one by one",
+  all: "Replaces every machine one by one",
 };
 
 // The effects from the least to the most a cluster goes through.
@@ -185,7 +185,7 @@ export function StagedBar({ cluster: c }: { cluster: Cluster }): JSX.Element | n
   return (
     <section className="staged" aria-label="Staged changes">
       <strong>
-        {changes.length} {changes.length === 1 ? "change" : "changes"} staged, not applied
+        {changes.length} {changes.length === 1 ? "change" : "changes"} not applied
       </strong>
       <span className="staged-effect">{effects[worstEffect(changes)]}</span>
       <span className="spacer" />
@@ -246,10 +246,7 @@ function PlanDialog({
         </>
       }
     >
-      <p className="muted">
-        The API server checked these changes without making them. Apply makes them together.{" "}
-        {effects[worstEffect(plan.changes)]}.
-      </p>
+      <p className="muted">{effects[worstEffect(plan.changes)]}.</p>
       <div className="scroll">
         <table className="grid plan">
           <thead>

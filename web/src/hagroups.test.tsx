@@ -62,7 +62,7 @@ describe("the HA group labels", () => {
       request({ ...form, haGroups: false }, { ...rke2, variables: rke2.variables.slice(0, 1) }).variables,
     ).not.toHaveProperty("ccm");
     expect(Object.fromEntries(summary(form, rke2, { haGroups: true }))["HA group labels"]).toBe(
-      "On, with Sys.Audit on / for the cluster's token",
+      "On, Sys.Audit on / for the token",
     );
     expect(Object.fromEntries(summary({ ...form, haGroups: false }, rke2, { haGroups: true }))["HA group labels"]).toBe(
       "Off",
@@ -89,9 +89,9 @@ describe("the HA group labels", () => {
       />
     );
     const { rerender } = render(step(false));
-    expect(screen.queryByLabelText(/HA groups/u)).toBeNull();
+    expect(screen.queryByLabelText("Add HA group labels")).toBeNull();
     rerender(step(true));
-    const box = screen.getByLabelText(/HA groups/u);
+    const box = screen.getByLabelText("Add HA group labels");
     expect(box).toBeChecked();
     expect(box).toBeEnabled();
     await userEvent.setup({ delay: null }).click(box);
@@ -118,12 +118,12 @@ describe("a cluster's HA group labels", () => {
     const sent = openOptions([rke2]);
     const user = userEvent.setup({ delay: null });
     const heading = await screen.findByRole("rowheader", { name: "HA group labels" });
-    expect(heading.closest("tr")).toHaveTextContent("On, with Sys.Audit on /");
+    expect(heading.closest("tr")).toHaveTextContent("On, Sys.Audit on / for the token");
     await user.click(screen.getByRole("button", { name: "Edit the HA group labels" }));
-    const dialog = screen.getByRole("dialog", { name: "HA group labels" });
+    const dialog = screen.getByRole("dialog", { name: "Edit HA group labels" });
     const save = within(dialog).getByRole("button", { name: "Save" });
     expect(save).toBeDisabled();
-    await user.click(within(dialog).getByLabelText(/HA groups/u));
+    await user.click(within(dialog).getByLabelText("Add HA group labels"));
     await user.click(save);
     await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { ccm: { haGroups: false } } }));
@@ -135,8 +135,8 @@ describe("a cluster's HA group labels", () => {
     const heading = await screen.findByRole("rowheader", { name: "HA group labels" });
     expect(heading.closest("tr")).toHaveTextContent("Off");
     await user.click(screen.getByRole("button", { name: "Edit the HA group labels" }));
-    const dialog = screen.getByRole("dialog", { name: "HA group labels" });
-    await user.click(within(dialog).getByLabelText(/HA groups/u));
+    const dialog = screen.getByRole("dialog", { name: "Edit HA group labels" });
+    await user.click(within(dialog).getByLabelText("Add HA group labels"));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { ccm: { haGroups: true } } }));
@@ -146,10 +146,10 @@ describe("a cluster's HA group labels", () => {
     const sent = openOptions([{ ...rke2, annotations: {} }]);
     const user = userEvent.setup({ delay: null });
     const heading = await screen.findByRole("rowheader", { name: "HA group labels" });
-    expect(heading.closest("tr")).toHaveTextContent("On, with Sys.Audit on /");
+    expect(heading.closest("tr")).toHaveTextContent("On, Sys.Audit on / for the token");
     await user.click(screen.getByRole("button", { name: "Edit the HA group labels" }));
-    const dialog = screen.getByRole("dialog", { name: "HA group labels" });
-    await user.click(within(dialog).getByLabelText(/HA groups/u));
+    const dialog = screen.getByRole("dialog", { name: "Edit HA group labels" });
+    await user.click(within(dialog).getByLabelText("Add HA group labels"));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { ccm: { haGroups: false } } }));

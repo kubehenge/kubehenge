@@ -92,11 +92,11 @@ describe("the CSI plugin's newest release", () => {
       problem("ceph", [cluster, other]),
     ]).toStrictEqual([
       undefined,
-      "Choose the cluster's storage first.",
-      "The management cluster uses storage local, so no cluster may hold Datastore.Allocate on it.",
-      "VM templates have disks on storage nvme, so no cluster may hold Datastore.Allocate on it.",
-      "You do not hold Datastore.Allocate on storage tank, which the cluster's token would get.",
-      "Cluster clusters/api uses storage ceph too; Datastore.Allocate needs a storage of the cluster's own.",
+      "Choose a storage first",
+      "Unavailable on local, which the management cluster uses",
+      "Unavailable on nvme, which holds the VM templates",
+      "You do not hold Datastore.Allocate on tank",
+      "Unavailable on ceph, which cluster clusters/api uses too",
     ]);
   });
 
@@ -107,7 +107,7 @@ describe("the CSI plugin's newest release", () => {
       datastoreAllocate: true,
     });
     expect(Object.fromEntries(summary({ ...form, datastoreAllocate: true }, k3s, { csi: true }))["CSI plugin"]).toBe(
-      "Newest release, with Datastore.Allocate on the cluster's storage",
+      "Newest, with Datastore.Allocate",
     );
     expect(Object.fromEntries(summary(form, k3s))).not.toHaveProperty("CSI plugin");
   });
@@ -142,12 +142,12 @@ describe("the CSI plugin's newest release", () => {
       />
     );
     const { rerender } = render(step(false));
-    expect(screen.queryByLabelText(/newest release/u)).toBeNull();
-    rerender(step(true, "The management cluster uses storage local."));
-    expect(screen.getByLabelText(/newest release/u)).toBeDisabled();
-    expect(screen.getByText("The management cluster uses storage local.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Newest CSI plugin release")).toBeNull();
+    rerender(step(true, "Unavailable on local, which the management cluster uses"));
+    expect(screen.getByLabelText("Newest CSI plugin release")).toBeDisabled();
+    expect(screen.getByText("Unavailable on local, which the management cluster uses")).toBeInTheDocument();
     rerender(step(true));
-    const box = screen.getByLabelText(/newest release/u);
+    const box = screen.getByLabelText("Newest CSI plugin release");
     expect(box).not.toBeChecked();
     await userEvent.setup({ delay: null }).click(box);
     expect(set).toHaveBeenCalledWith("datastoreAllocate", true);
@@ -173,13 +173,13 @@ describe("a cluster's CSI plugin", () => {
     const sent = openOptions([k3s]);
     const user = userEvent.setup({ delay: null });
     const heading = await screen.findByRole("rowheader", { name: "CSI plugin" });
-    expect(heading.closest("tr")).toHaveTextContent("needs no Datastore.Allocate");
+    expect(heading.closest("tr")).toHaveTextContent("Without Datastore.Allocate");
     await user.click(screen.getByRole("button", { name: "Edit the CSI plugin" }));
-    const dialog = screen.getByRole("dialog", { name: "CSI plugin" });
+    const dialog = screen.getByRole("dialog", { name: "Edit CSI plugin" });
     const save = within(dialog).getByRole("button", { name: "Save" });
     expect(save).toBeDisabled();
-    await waitFor(() => expect(within(dialog).getByLabelText(/newest release/u)).toBeEnabled());
-    await user.click(within(dialog).getByLabelText(/newest release/u));
+    await waitFor(() => expect(within(dialog).getByLabelText("Newest CSI plugin release")).toBeEnabled());
+    await user.click(within(dialog).getByLabelText("Newest CSI plugin release"));
     await user.click(save);
     await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { csi: { datastoreAllocate: true } } }));
@@ -189,9 +189,9 @@ describe("a cluster's CSI plugin", () => {
     openOptions([k3s], [cluster, { ...cluster, namespace: "team-b", name: "api" }]);
     const user = userEvent.setup({ delay: null });
     await user.click(await screen.findByRole("button", { name: "Edit the CSI plugin" }));
-    const dialog = screen.getByRole("dialog", { name: "CSI plugin" });
-    await expect(within(dialog).findByText(/Cluster team-b\/api uses storage ceph too/u)).resolves.toBeInTheDocument();
-    expect(within(dialog).getByLabelText(/newest release/u)).toBeDisabled();
+    const dialog = screen.getByRole("dialog", { name: "Edit CSI plugin" });
+    await expect(within(dialog).findByText(/which cluster team-b\/api uses too/u)).resolves.toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Newest CSI plugin release")).toBeDisabled();
   });
 
   it("is not shown where an administrator has not let clusters choose it", async () => {

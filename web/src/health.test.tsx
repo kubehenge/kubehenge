@@ -179,11 +179,9 @@ describe("health page", () => {
     await user.click(within(screen.getByRole("row", { name: /^api-7d9f/u })).getByRole("button", { name: "Logs" }));
     const dialog = within(await screen.findByRole("dialog", { name: "Logs of api-7d9f" }));
     await expect(dialog.findByLabelText("Log of api")).resolves.toHaveTextContent("panic: no database");
-    expect(dialog.getByText(/these lines are from that last run/u)).toBeInTheDocument();
+    expect(dialog.getByText("Previous run")).toBeInTheDocument();
     await user.selectOptions(dialog.getByLabelText("Container"), "sidecar");
-    await expect(dialog.findByLabelText("Log of sidecar")).resolves.toHaveTextContent(
-      "The container has written nothing.",
-    );
+    await expect(dialog.findByLabelText("Log of sidecar")).resolves.toHaveTextContent("No lines yet");
     expect(reads(calls, logsPath("sidecar"))).toBe(1);
   });
 
@@ -228,7 +226,7 @@ describe("health page", () => {
     const tiles = within(await screen.findByRole("list", { name: "At a glance" }));
     expect(
       tiles.getByRole("link", {
-        name: /Workers\s*None\s*The cluster autoscaler adds workers once pods wait for room/u,
+        name: /Workers\s*None\s*Autoscaled from 0/u,
       }),
     ).toBeInTheDocument();
   });

@@ -5,9 +5,11 @@ import type { OptionRow } from "./ClusterOptions";
 import { CredentialField, type CredentialKey } from "./CredentialField";
 import type { BackupRun, Cluster, ClusterBackups, ClusterClass, RestoreRun } from "./types";
 import {
+  Detail,
   Dialog,
   ErrorBox,
   Field,
+  Info,
   Status,
   age,
   browserZone,
@@ -44,11 +46,11 @@ export const backupKeys: CredentialKey[] = [
   { key: "secretAccessKey", label: "Secret access key" },
 ];
 
-export const backupsHint =
-  "Velero backs up every namespace but Kubernetes' own and the add-ons', with the data in its pods' volumes, to an S3 store an administrator set. Each cluster writes under a folder of its own, encrypted with keys of its own that Kubehenge keeps.";
+export const backupsHint = "Every namespace but system and add-on ones, with volume data";
 
-export const backupCredentialHint =
-  "The S3 access key Velero signs in to the target with. Without one of its own, the cluster takes the one an administrator stored for every cluster.";
+export const backupCredentialHint = "Without one, the key for every cluster applies";
+
+export const noTargets = "No backup targets. An administrator adds them in the appliance settings.";
 
 /** A cluster's backups variable. */
 export interface BackupsValue {
@@ -183,30 +185,36 @@ export function scheduleText(schedule: string): string {
   if (hours !== undefined && Number(hours["m"]) <= lastMinute && Number(hours["n"]) >= 1) {
     return `Every ${Number(hours["n"])} hours from 00:${twoDigits(Number(hours["m"]))}`;
   }
-  return `By the cron schedule ${s}`;
+  return `Cron ${s}`;
 }
 
 /** scheduleProblem says what Velero would refuse in a schedule; the server checks it in full. */
 export function scheduleProblem(schedule: string): string | undefined {
   const s = schedule.trim();
   if (!s) {
-    return "A schedule, such as 0 2 * * * for every day at 02:00.";
+    return "Enter a schedule, such as 0 2 * * *";
   }
   if (s.length > maxScheduleLength) {
-    return `At most ${maxScheduleLength} characters.`;
+    return `Schedule must be ${maxScheduleLength} characters or less`;
   }
   if (/^(?:CRON_)?TZ=/u.test(s)) {
-    return "The time zone is chosen on its own, not in the schedule.";
+    return "Set the time zone in its own field";
   }
   if (s.startsWith("@")) {
     return /^@(?:yearly|annually|monthly|weekly|daily|midnight|hourly|every \S+)$/u.test(s)
       ? undefined
-      : "One of @hourly, @daily, @weekly, @monthly or @yearly, or five cron fields.";
+      : "Use @hourly, @daily, @weekly, @monthly, @yearly or 5 fields";
   }
   if (!/^[\d*,/?A-Za-z-]+(?: +[\d*,/?A-Za-z-]+){4}$/u.test(s)) {
-    return "Five fields, as cron takes them: minute, hour, day of the month, month and day of the week.";
+    return "Enter 5 fields: minute hour day month weekday";
   }
   return undefined;
+}
+
+/** scheduleHint reads a valid schedule back in words, or names cron's fields. */
+export function scheduleHint(schedule: string): string {
+  const read = scheduleText(schedule);
+  return scheduleProblem(schedule) === undefined && !read.startsWith("Cron ") ? read : "minute hour day month weekday";
 }
 
 /** The backup settings as typed. */
@@ -265,7 +273,7 @@ export function backupProblems(
   }
   const days = Number(f.retention);
   if (!/^\d+$/u.test(f.retention) || days < 1 || days > maxRetentionDays) {
-    p.retention = `A whole number of days from 1 to ${maxRetentionDays}.`;
+    p.retention = `A whole number from 1 to ${maxRetentionDays}`;
   }
   return p;
 }
@@ -273,13 +281,13 @@ export function backupProblems(
 /** targetProblem says what Kubehenge would refuse in the target chosen; kept is the one set already. */
 export function targetProblem(target: string, targets: OfferedTarget[], kept?: string): string | undefined {
   if (targets.length === 0 && !filled(kept)) {
-    return "An administrator has set no backup target yet; they add one in the appliance's settings.";
+    return noTargets;
   }
   if (!filled(target)) {
-    return "Choose a target.";
+    return "Choose a target";
   }
   if (target !== kept && !targets.some((t) => t.name === target)) {
-    return "Not one of the targets an administrator set.";
+    return "Choose one of the offered targets";
   }
   return undefined;
 }
@@ -327,11 +335,7 @@ export function BackupFieldset({
   const listed = targets.some((t) => t.name === value.target);
   return (
     <>
-      <Field
-        label="Target"
-        hint="The cluster's backups go into a folder of its own there, named for its namespace and name."
-        error={problems.target}
-      >
+      <Field label="Target" error={problems.target}>
         {(id) => (
           <select id={id} value={value.target} onChange={(e) => update({ target: e.target.value })}>
             <option value="" disabled>
@@ -348,11 +352,7 @@ export function BackupFieldset({
           </select>
         )}
       </Field>
-      <Field
-        label="Schedule"
-        hint={`${scheduleProblem(value.schedule) === undefined ? `${scheduleText(value.schedule)}. ` : ""}In cron form: minute, hour, day of the month, month and day of the week.`}
-        error={problems.schedule}
-      >
+      <Field label="Schedule" hint={scheduleHint(value.schedule)} error={problems.schedule}>
         {(id) => (
           <input
             id={id}
@@ -362,7 +362,7 @@ export function BackupFieldset({
           />
         )}
       </Field>
-      <Field label="Time zone" hint="The schedule's times are in this time zone.">
+      <Field label="Time zone">
         {(id) => (
           <select id={id} value={value.timeZone} onChange={(e) => update({ timeZone: e.target.value })}>
             {timeZones(value.timeZone).map((z) => (
@@ -373,11 +373,7 @@ export function BackupFieldset({
           </select>
         )}
       </Field>
-      <Field
-        label="Keep each for"
-        hint="Days. Velero deletes a backup from the target this long after making it."
-        error={problems.retention}
-      >
+      <Field label="Days to keep" error={problems.retention}>
         {(id) => (
           <input
             id={id}
@@ -392,9 +388,7 @@ export function BackupFieldset({
       <Field
         label="Volumes"
         hint={
-          value.volumes === "all"
-            ? "The data in every pod volume but emptyDir ones."
-            : "Only the volumes a pod names in its backup.velero.io/backup-volumes annotation."
+          value.volumes === "annotated" ? "Listed in a pod's backup.velero.io/backup-volumes annotation" : undefined
         }
       >
         {(id) => (
@@ -408,8 +402,8 @@ export function BackupFieldset({
               }
             }}
           >
-            <option value="all">Every pod volume</option>
-            <option value="annotated">Those their pods name</option>
+            <option value="all">All but emptyDir</option>
+            <option value="annotated">Annotated only</option>
           </select>
         )}
       </Field>
@@ -446,7 +440,7 @@ export function BackupsDialog({ cluster: c, onClose }: { cluster: Cluster; onClo
   const none = offered !== undefined && targets.length === 0 && !current.enabled;
   return (
     <Dialog
-      title="Backups"
+      title="Edit backups"
       onClose={onClose}
       onSubmit={() => {
         void send({ variables: { backups: next } });
@@ -467,21 +461,20 @@ export function BackupsDialog({ cluster: c, onClose }: { cluster: Cluster; onClo
           type="checkbox"
           checked={enabled}
           disabled={none}
-          aria-describedby={hint}
+          aria-describedby={none ? hint : undefined}
           onChange={(e) => setEnabled(e.target.checked)}
         />{" "}
         Back up with Velero
       </label>
-      <p className="hint" id={hint}>
-        {none
-          ? "An administrator has set no backup target yet; they add one in the appliance's settings."
-          : backupsHint}
-      </p>
+      <Info about="backups">{backupsHint}</Info>
+      {none && (
+        <p className="hint" id={hint}>
+          {noTargets}
+        </p>
+      )}
       {enabled && <BackupFieldset value={fields} onChange={setTyped} targets={targets} problems={problems} />}
       {enabled && filled(current.existingSecret) && (
-        <p className="hint">
-          The access key comes from Secret {current.existingSecret} in the cluster&apos;s velero namespace.
-        </p>
+        <p className="hint">Access key: Secret {current.existingSecret} in velero</p>
       )}
       {enabled && !filled(current.existingSecret) && (
         <CredentialField
@@ -492,12 +485,7 @@ export function BackupsDialog({ cluster: c, onClose }: { cluster: Cluster; onClo
           hint={backupCredentialHint}
         />
       )}
-      {current.enabled && !enabled && (
-        <p className="warning">
-          Velero and its schedule leave the cluster. The backups stay in the target, and Kubehenge keeps the
-          cluster&apos;s keys, so switching backups on again with the same target brings them back into view.
-        </p>
-      )}
+      {current.enabled && !enabled && <p className="warning">Removes Velero. Backups stay in the target.</p>}
       <ErrorBox message={error} />
     </Dialog>
   );
@@ -536,17 +524,37 @@ const when = (iso: string | undefined): string => (iso === undefined ? "" : new 
 
 const poolName = (pool: string): string => pool.replace(/^\/pool\//u, "");
 
-// outcome sums up what a run did: its warnings and errors, and why it failed.
-function outcome(r: { warnings: number; errors: number; failure?: string }): string {
-  const parts: string[] = [];
-  if (r.errors > 0) {
-    parts.push(r.errors === 1 ? "1 error" : `${r.errors} errors`);
+const counted = (n: number, what: string): string => (n === 1 ? `1 ${what}` : `${n} ${what}s`);
+
+// Outcome puts a run's error and warning counts under its state, and why it failed and where Velero
+// lists the rest behind Detail.
+function Outcome({
+  run: r,
+  kind,
+}: {
+  run: { name: string; warnings: number; errors: number; failure?: string };
+  kind: "backup" | "restore";
+}): JSX.Element | undefined {
+  const counts = [
+    r.errors > 0 ? counted(r.errors, "error") : "",
+    r.warnings > 0 ? counted(r.warnings, "warning") : "",
+  ].filter(Boolean);
+  if (counts.length === 0 && !filled(r.failure)) {
+    return undefined;
   }
-  if (r.warnings > 0) {
-    parts.push(r.warnings === 1 ? "1 warning" : `${r.warnings} warnings`);
-  }
-  const counted = parts.length > 0 ? `${sentence(parts.join(", "))} Velero's describe command lists them.` : "";
-  return [filled(r.failure) ? sentence(r.failure) : "", counted].filter(Boolean).join(" ");
+  return (
+    <>
+      {counts.length > 0 && <div className="hint">{counts.join(", ")}</div>}
+      <Detail>
+        {filled(r.failure) && <p className="message">{sentence(r.failure)}</p>}
+        {counts.length > 0 && (
+          <p>
+            Full list: <code>{`velero ${kind} describe ${r.name} --details`}</code>
+          </p>
+        )}
+      </Detail>
+    </>
+  );
 }
 
 function restoreProgress(r: RestoreRun): string {
@@ -590,8 +598,7 @@ export function BackupsView({
   if (!v.enabled) {
     return (
       <div className="box">
-        <p>Backups are off for this cluster.</p>
-        <p className="hint">{backupsHint}</p>
+        <p>Backups are off</p>
         <div className="actions">
           <button type="button" disabled={!can} onClick={() => onEdit("backups")}>
             Set up backups…
@@ -603,9 +610,7 @@ export function BackupsView({
 
   const pool = poolName(c.pool);
   const noBackUp = v.canBackUp ? undefined : `Backing up needs VM.Allocate on pool ${pool}.`;
-  const noRestore = v.canRestore
-    ? undefined
-    : `Restoring needs Sys.Modify on pool ${pool}, as a restore writes whatever the backup holds, Secrets and roles among it.`;
+  const noRestore = v.canRestore ? undefined : `Restoring needs Sys.Modify on pool ${pool}.`;
   const backUp = async (): Promise<void> => {
     setBusy(true);
     setActionError(undefined);
@@ -635,7 +640,7 @@ export function BackupsView({
             ) : (
               <Status state="idle" text="Unknown" />
             )}
-            {filled(v.locationMessage) && <div className="hint message">{sentence(v.locationMessage)}</div>}
+            {filled(v.locationMessage) && <Detail>{sentence(v.locationMessage)}</Detail>}
           </dd>
           <dt>Last scheduled backup</dt>
           <dd>{v.lastBackup === undefined ? "None yet" : `${when(v.lastBackup)} (${age(v.lastBackup)} ago)`}</dd>
@@ -695,7 +700,7 @@ function BackupsTable({
         <thead>
           <tr>
             <th>Name</th>
-            <th>Made by</th>
+            <th>By</th>
             <th>Started</th>
             <th>Status</th>
             <th>Items</th>
@@ -709,21 +714,20 @@ function BackupsTable({
           {v.backups.length === 0 && (
             <tr>
               <td colSpan={7} className="muted">
-                {v.reachable ? "No backups yet." : "Shown once Velero answers."}
+                {v.reachable ? "No backups yet" : "Waiting for Velero"}
               </td>
             </tr>
           )}
           {v.backups.map((b) => {
             const s = phaseStatus(b.phase);
-            const said = outcome(b);
             return (
               <tr key={b.name}>
                 <td>{b.name}</td>
-                <td>{b.scheduled ? "The schedule" : (b.by ?? "")}</td>
+                <td>{b.scheduled ? "Schedule" : (b.by ?? "")}</td>
                 <td title={when(b.started)}>{ago(b.started)}</td>
                 <td>
                   <Status state={s.state} text={s.text} />
-                  {said && <div className="hint message">{said}</div>}
+                  <Outcome run={b} kind="backup" />
                 </td>
                 <td>{b.total > 0 ? `${b.items} of ${b.total}` : ""}</td>
                 <td>{b.expires === undefined ? "" : new Date(b.expires).toLocaleDateString()}</td>
@@ -731,7 +735,7 @@ function BackupsTable({
                   <button
                     type="button"
                     disabled={!v.canRestore || !restorable(b)}
-                    title={noRestore ?? (restorable(b) ? undefined : "Only a finished backup can be restored.")}
+                    title={noRestore ?? (restorable(b) ? undefined : "Backup not finished")}
                     aria-label={`Restore ${b.name}`}
                     onClick={() => onRestore(b.name)}
                   >
@@ -756,7 +760,7 @@ function RestoresTable({ restores }: { restores: RestoreRun[] }): JSX.Element {
           <tr>
             <th>Backup</th>
             <th>Namespaces</th>
-            <th>Asked by</th>
+            <th>By</th>
             <th>Started</th>
             <th>Status</th>
             <th>Progress</th>
@@ -765,17 +769,16 @@ function RestoresTable({ restores }: { restores: RestoreRun[] }): JSX.Element {
         <tbody>
           {restores.map((r) => {
             const s = phaseStatus(r.phase);
-            const said = outcome(r);
             const whole = r.namespaces === undefined || r.namespaces.includes("*");
             return (
               <tr key={r.name}>
                 <td>{r.backup}</td>
-                <td>{whole ? "Every one" : (r.namespaces ?? []).join(", ")}</td>
+                <td>{whole ? "All" : (r.namespaces ?? []).join(", ")}</td>
                 <td>{r.by ?? ""}</td>
                 <td title={when(r.started)}>{ago(r.started)}</td>
                 <td>
                   <Status state={s.state} text={s.text} />
-                  {said && <div className="hint message">{said}</div>}
+                  <Outcome run={r} kind="restore" />
                 </td>
                 <td>
                   {restoreProgress(r)}
@@ -799,17 +802,17 @@ const namespaceName = /^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/u;
 /** namespaceProblem says what the server would refuse in a list of namespaces to restore. */
 export function namespaceProblem(names: string[]): string | undefined {
   if (names.length === 0) {
-    return "Name at least one namespace.";
+    return "Enter at least one namespace";
   }
   if (names.length > maxRestoreNamespaces) {
-    return `At most ${maxRestoreNamespaces} namespaces.`;
+    return `Enter ${maxRestoreNamespaces} namespaces or fewer`;
   }
   const bad = names.find((n) => !namespaceName.test(n));
   if (bad !== undefined) {
-    return `${bad} is not a namespace's name.`;
+    return `${bad} is not a namespace name`;
   }
   const twice = names.find((n, i) => names.indexOf(n) !== i);
-  return twice === undefined ? undefined : `${twice} is named twice.`;
+  return twice === undefined ? undefined : `${twice} is listed twice`;
 }
 
 const splitNames = (typed: string): string[] => typed.split(/[\s,]+/u).filter(Boolean);
@@ -865,21 +868,18 @@ function RestoreDialog({
         </>
       }
     >
-      <p>
-        Velero brings back what the backup holds: its resources and the data in its pods&apos; volumes. What the cluster
-        still has is left as it is, so delete a namespace first to have it back as it was.
-      </p>
+      <p>Skips resources that exist. Delete a namespace first to restore it fully.</p>
       <fieldset className="group">
         <legend>What to restore</legend>
         <label className="check">
-          <input type="radio" name="restore-scope" checked={whole} onChange={() => setWhole(true)} /> The whole backup
+          <input type="radio" name="restore-scope" checked={whole} onChange={() => setWhole(true)} /> Whole backup
         </label>
         <label className="check">
           <input type="radio" name="restore-scope" checked={!whole} onChange={() => setWhole(false)} /> Chosen
           namespaces
         </label>
         {!whole && (
-          <Field label="Namespaces" hint="Separated by commas or spaces." error={edited ? problem : undefined}>
+          <Field label="Namespaces" hint="Separate with commas or spaces" error={edited ? problem : undefined}>
             {(id) => (
               <input
                 id={id}

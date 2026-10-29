@@ -16,8 +16,7 @@ describe("removing Kubehenge", () => {
     await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple{Enter}");
     expect(calls.filter((c) => c.key === "POST /api/setup/remove")).toHaveLength(0);
 
-    expect(screen.getByLabelText("Confirm")).toHaveAccessibleDescription("Type remove.");
-    await user.type(screen.getByLabelText("Confirm"), "remove{Enter}");
+    await user.type(screen.getByLabelText("Type remove to confirm"), "remove{Enter}");
     await waitFor(() => expect(started).toHaveBeenCalledWith());
     expect(calls.filter((c) => c.key === "POST /api/setup/remove").map((c) => c.body)).toStrictEqual([
       { passphrase: "correct horse battery staple", confirm: "remove" },
