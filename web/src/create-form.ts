@@ -54,6 +54,7 @@ import type {
   Cluster,
   ClusterClass,
   CreateRequest,
+  FreeAddresses,
   NodeOSChoice,
   OIDCProvider,
   Schema,
@@ -330,6 +331,9 @@ function addonTotal(
  */
 export const mostWorkers = (form: Form): number => (form.workerAutoscale ? form.workerMax : form.workerReplicas);
 
+/** nodesNeeded is how many node addresses a form's cluster takes: a rollout makes each new node before it removes an old one. */
+export const nodesNeeded = (form: Form): number => form.controlPlaneReplicas + mostWorkers(form) + 1;
+
 const plainLeast = (form: Form, c: ClusterClass | undefined, key: "controlPlaneMachine" | "workerMachine"): Machine =>
   key === "controlPlaneMachine" ? controlPlaneMinimums(c, mostWorkers(form)) : machineMinimums(c, key);
 
@@ -462,14 +466,14 @@ export interface BridgeNetwork {
 }
 
 /**
- * bridgeNetwork is the network on a bridge, from a node that reaches its gateway through it, and
- * that network written like 192.0.2.0/24.
+ * bridgeNetwork is the network on a bridge, from a node that reaches its gateway through it, that
+ * network written like 192.0.2.0/24, and the node.
  */
 export function bridgeNetwork(
   bridge: string,
   bridgesByNode: Record<string, Bridge[]>,
   dnsByNode: Record<string, string[]>,
-): { net?: BridgeNetwork; network?: string } {
+): { net?: BridgeNetwork; network?: string; node?: string } {
   const on = Object.values(bridgesByNode)
     .flat()
     .find((b) => b.bridge === bridge && filled(b.gateway));
@@ -478,7 +482,16 @@ export function bridgeNetwork(
   }
   const net = { cidr: on.cidr, gateway: on.gateway, dns: dnsByNode[on.node] ?? [] };
   const network = on.cidr === undefined ? undefined : networkOf(on.cidr);
-  return network === undefined ? { net } : { net, network };
+  return network === undefined ? { net, node: on.node } : { net, network, node: on.node };
+}
+
+/** addressesOf are a form's node addresses and API address, as entries to probe. */
+export const addressesOf = (f: Form): string[] => [...list(f.addresses), f.endpoint].filter((a) => filled(a));
+
+/** withFreeAddresses fills the API address and the node addresses with those found free, where the user has given none. */
+export function withFreeAddresses(f: Form, free: FreeAddresses | undefined, touched: (k: keyof Form) => boolean): Form {
+  const filledIn = (k: "endpoint" | "addresses"): string => (f[k] === "" && !touched(k) ? (free?.[k] ?? "") : f[k]);
+  return { ...f, endpoint: filledIn("endpoint"), addresses: filledIn("addresses") };
 }
 
 /**
@@ -1078,8 +1091,7 @@ function addressProblems(form: Form): Problems {
   const p: Problems = {};
   const entries = list(form.addresses);
   const { count, bad } = addressCount(entries, form.gateway, form.prefix);
-  // A rollout makes each new node before it removes an old one.
-  const needed = form.controlPlaneReplicas + mostWorkers(form) + 1;
+  const needed = nodesNeeded(form);
   if (entries.length === 0) {
     p.addresses = "Enter at least one address, range or network";
   } else if (bad !== undefined) {

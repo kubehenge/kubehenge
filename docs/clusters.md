@@ -38,9 +38,11 @@ Before the first cluster, the VM templates for its distribution have to exist ([
 | Field | What it is |
 | --- | --- |
 | Bridge | The bridge the cluster's VMs attach to: one of those chosen for clusters when the management cluster was set up. Bridges you may not use (no `SDN.Use`) are shown but disabled; when only one is left to choose, it is chosen, and otherwise the first a node reaches its gateway through. The prefix length, gateway and DNS servers start from that node's network on the bridge, and the examples for the API and node addresses come from it; all of them can be changed. When the management cluster names none and Proxmox VE lists no bridges to you (no `Sys.Audit` on the nodes), you type the name in. |
-| VLAN tag | Optional, 1 to 4094. |
+| VLAN tag | Optional, 1 to 4094. With a tag, nothing is taken from the node's network on the bridge, which is the untagged one. |
 | API address | The control plane's virtual IP: an unused address in the nodes' network, outside the node addresses. |
 | Node addresses | Where the nodes take their addresses from: ranges (`192.0.2.21-192.0.2.29`), networks or single addresses inside the gateway's network, one per line or separated by commas. The wizard asks for at least one address more than there are nodes, for the extra node an upgrade or a replacement adds, counting an autoscaled pool at its most; leave more for scaling up. |
+
+Where a node reports the bridge's network, the wizard fills in the API address and the node addresses with a free run from the network's 20th address on: clear of the gateway, the node, every other cluster's addresses on the bridge, and any address where a host answers ping or a connection on port 22, 80, 443, 6443, 8006 or 50000 from the management cluster. Addresses you type are probed the same way, and those a host answers on are marked In use. A host that ignores all of these looks free, so the probe is advice: the controller refuses only addresses another cluster holds. The interface's pod opens its ping socket without privileges through the `net.ipv4.ping_group_range` sysctl; without it, only the connections are tried.
 | Prefix length | Of the nodes' network. |
 | Gateway | The nodes' default gateway. |
 | DNS servers | IPv4 addresses, one per line or separated by commas. |

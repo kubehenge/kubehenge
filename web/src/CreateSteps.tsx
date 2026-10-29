@@ -33,6 +33,7 @@ import {
 import type {
   Bridge,
   ClusterClass,
+  FreeAddresses,
   NodeOSChoice,
   PveNode,
   Storage,
@@ -339,6 +340,73 @@ function NodeOSField({ form, set, shown, cls }: StepProps & { cls: ClusterClass 
 export const useClassTalos = (cls: ClusterClass | undefined): TalosReleases | undefined =>
   useTalosReleases(variable(cls, "talosVersion") !== undefined);
 
+// How long after the network settings last change the wizard probes them.
+const probeAfter = 500;
+
+/** ProbeOn is where addresses are probed: the bridge of a node that reports its network, and the VLAN tag typed. */
+export interface ProbeOn {
+  node: string | undefined;
+  bridge: string;
+  vlan: string;
+}
+
+/**
+ * useFreeAddresses asks, a moment after its inputs last change, for free addresses on a bridge's
+ * network: a run for the API and the nodes where nodes is above 0, and which of check a host
+ * answers on. It is advice, so where the question fails there is none.
+ */
+export function useFreeAddresses(on: ProbeOn, nodes: number, check: string[]): FreeAddresses | undefined {
+  const { node, bridge } = on;
+  const vlan = filled(on.vlan) ? Number(on.vlan) : 0;
+  const checked = check.join("\n");
+  const key = [node, bridge, vlan, nodes, checked].join(" ");
+  const [found, setFound] = useState<{ key: string; free: FreeAddresses }>();
+  useEffect(() => {
+    let current = true;
+    async function probe(n: string): Promise<void> {
+      try {
+        const free = await api.freeAddresses(n, bridge, {
+          vlan,
+          nodes,
+          check: checked === "" ? [] : checked.split("\n"),
+        });
+        if (current) {
+          setFound({ key, free });
+        }
+      } catch {
+        // The fields stay as they are.
+      }
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (node !== undefined && bridge !== "" && Number.isInteger(vlan) && (nodes > 0 || checked !== "")) {
+      timer = setTimeout(() => {
+        void probe(node);
+      }, probeAfter);
+    }
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [node, bridge, vlan, nodes, checked, key]);
+  return found?.key === key ? found.free : undefined;
+}
+
+// At most this many addresses a host answers on are named; the rest are counted.
+const inUseNamed = 3;
+
+function inUse(addresses: string[]): JSX.Element | undefined {
+  if (addresses.length === 0) {
+    return undefined;
+  }
+  const more = addresses.length > inUseNamed ? ` +${addresses.length - inUseNamed}` : "";
+  return (
+    <span className="hint-warning">
+      In use: {addresses.slice(0, inUseNamed).join(", ")}
+      {more}
+    </span>
+  );
+}
+
 // A version is typed in only when none could be listed: the hint gives its format, and why the list
 // is missing sits behind the field's info.
 const typedVersion = (cls: ClusterClass | undefined, offered: Versions | undefined): boolean =>
@@ -511,13 +579,19 @@ export function NetworkStep({
   cls,
   bridgeOptions,
   network,
+  checked,
 }: StepProps & {
   cls: ClusterClass | undefined;
   bridgeOptions: Bridge[];
   /** The bridge's network, like 192.0.2.0/24, where a node reports it; the examples are taken from it. */
   network?: string | undefined;
+  /** What probing the addresses typed found. */
+  checked?: FreeAddresses | undefined;
 }): JSX.Element {
   const cni = variable(cls, "cni");
+  const answering = checked?.answering ?? [];
+  const endpointInUse = inUse(answering.filter((a) => a === form.endpoint));
+  const nodesInUse = inUse(answering.filter((a) => a !== form.endpoint));
   const example = (offset: number, otherwise: string): string =>
     (network === undefined ? undefined : addressIn(network, offset)) ?? otherwise;
   // Cilium's ranges also keep clear of the other clusters', so the cluster can join a Cluster Mesh.
@@ -555,7 +629,11 @@ export function NetworkStep({
           <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
         )}
       </Field>
-      <Field label="API address" hint="A free address outside the node addresses" error={shown("endpoint")}>
+      <Field
+        label="API address"
+        hint={endpointInUse ?? "A free address outside the node addresses"}
+        error={shown("endpoint")}
+      >
         {(id) => (
           <input
             id={id}
@@ -567,7 +645,10 @@ export function NetworkStep({
       </Field>
       <Field
         label="Node addresses"
-        hint={`Ranges like ${example(exampleFirst, "10.0.0.21")}-${example(exampleLast, "10.0.0.29")}, networks or addresses`}
+        hint={
+          nodesInUse ??
+          `Ranges like ${example(exampleFirst, "10.0.0.21")}-${example(exampleLast, "10.0.0.29")}, networks or addresses`
+        }
         error={shown("addresses")}
       >
         {(id) => (

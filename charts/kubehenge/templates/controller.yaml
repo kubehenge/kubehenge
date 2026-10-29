@@ -249,6 +249,11 @@ spec:
         runAsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
+        # The interface pings the addresses it offers a new cluster, with an ICMP socket its group
+        # may open without privileges.
+        sysctls:
+          - name: net.ipv4.ping_group_range
+            value: "65532 65532"
       containers:
         - name: controller
           image: {{ required "image: Kubehenge's controller image by digest" .Values.image }}

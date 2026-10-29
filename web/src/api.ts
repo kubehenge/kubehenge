@@ -11,6 +11,7 @@ import type {
   CreateRequest,
   EtcdRestorePlan,
   FleetHealth,
+  FreeAddresses,
   HARules,
   Job,
   ManagementAutomatic,
@@ -276,6 +277,12 @@ export interface Api {
   bridges: (node: string) => Promise<Bridge[]>;
   /** The DNS servers a node resolves with. */
   dns: (node: string) => Promise<{ servers: string[] }>;
+  /** Free addresses on a bridge's network for a new cluster's API and nodes, where nodes is above 0, and which of check a host answers on. */
+  freeAddresses: (
+    node: string,
+    bridge: string,
+    req: { vlan: number; nodes: number; check: string[] },
+  ) => Promise<FreeAddresses>;
   haRules: () => Promise<HARules>;
 }
 
@@ -355,6 +362,8 @@ export const api: Api = {
   nodes: () => request("GET", "/api/proxmox/nodes"),
   bridges: (node) => request("GET", `/api/proxmox/nodes/${encodeURIComponent(node)}/bridges`),
   dns: (node) => request("GET", `/api/proxmox/nodes/${encodeURIComponent(node)}/dns`),
+  freeAddresses: (node, bridge, req) =>
+    request("POST", `/api/proxmox/nodes/${encodeURIComponent(node)}/bridges/${encodeURIComponent(bridge)}/free`, req),
   haRules: () => request("GET", "/api/proxmox/ha-rules"),
 };
 

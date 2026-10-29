@@ -21,10 +21,13 @@ import {
   summary,
   variable,
   versionsNodeOS,
+  addressesOf,
   bridgeNetwork,
   bridgeOf,
+  nodesNeeded,
   withBackupChoices,
   withBridgeNetwork,
+  withFreeAddresses,
   withClass,
   namespaceOf,
   withNamespace,
@@ -34,7 +37,7 @@ import {
   type Form,
   type Step,
 } from "./create-form";
-import { GeneralStep, IdentityStep, MachinesStep, NetworkStep, useClassTalos } from "./CreateSteps";
+import { GeneralStep, IdentityStep, MachinesStep, NetworkStep, useClassTalos, useFreeAddresses } from "./CreateSteps";
 import { offersHA, offersHAGroups, useHARules } from "./Placement";
 import { navigate } from "./router";
 import type { Bridge, Cluster, ClusterClass, PveNode, Storage, Versions } from "./types";
@@ -43,6 +46,8 @@ import { Detail, Dialog, ErrorBox, errorMessage, filled, sole } from "./ui";
 // versionsKey is where the versions offered are kept: a distribution's, kubeadm's per node OS.
 const versionsKey = (distribution: string, nodeOS: string | undefined): string =>
   nodeOS === undefined ? distribution : `${distribution} ${nodeOS}`;
+
+const noNetwork: ReturnType<typeof bridgeNetwork> = {};
 
 // The choices that can ask more of the machines, which then grow to it.
 const raising = new Set<keyof Form>([
@@ -181,8 +186,9 @@ export function CreateCluster({
   const usableStorages = offeredStorages(storages, classStorages(cls));
   // Where there is only one bridge or storage to choose, it is chosen until another is.
   const bridge = bridgeOf(entered.bridge, bridgeOptions, bridgesByNode);
-  const { net, network } = bridgeNetwork(bridge, bridgesByNode, dnsByNode);
-  const form: Form = withBackupChoices(
+  // A VLAN's network is not the one a node reports on the bridge.
+  const { net, network, node } = filled(entered.vlan) ? noNetwork : bridgeNetwork(bridge, bridgesByNode, dnsByNode);
+  const chosen: Form = withBackupChoices(
     {
       ...withBridgeNetwork(withTalosRelease(entered, talos, offered), net, (k) => touched.has(k)),
       namespace: namespaces.length > 1 ? namespaceOf(entered, namespaces) : "",
@@ -192,6 +198,10 @@ export function CreateCluster({
     cls,
     canTrust,
   );
+  const probeOn = { node, bridge, vlan: entered.vlan };
+  const free = useFreeAddresses(probeOn, nodesNeeded(chosen), []);
+  const typed = useFreeAddresses(probeOn, 0, addressesOf(entered));
+  const form = withFreeAddresses(chosen, free, (k) => touched.has(k));
   const haOffered = offersHA(cls, usableStorages, form.storage);
   const csi = csiOffer({ cls, storages: usableStorages, storage: form.storage, clusters });
   const snapshots = snapshotsOffer(cls, form.storage);
@@ -328,6 +338,7 @@ export function CreateCluster({
               cls={cls}
               bridgeOptions={bridgeOptions}
               network={network}
+              checked={typed}
             />
           )}
           {step === "Machines" && (

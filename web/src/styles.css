@@ -1611,6 +1611,11 @@ button.go {
   display: none;
 }
 
+.hint-warning {
+  color: var(--warning);
+  font-weight: 600;
+}
+
 /* A small round "?", level with the label's first line, quiet until wanted. */
 button.info-toggle {
   width: 18px;

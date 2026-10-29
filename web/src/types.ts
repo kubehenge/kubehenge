@@ -503,6 +503,18 @@ export interface Bridge {
   usable: boolean;
 }
 
+/**
+ * FreeAddresses are free addresses on a bridge's network for a new cluster, the endpoint's and a
+ * range for its nodes, and which of the addresses checked a host answers on. Network is missing
+ * where nothing was probed.
+ */
+export interface FreeAddresses {
+  network?: string;
+  endpoint?: string;
+  addresses?: string;
+  answering: string[];
+}
+
 export interface ManagementSettings {
   /** Proxmox VE nodes the management cluster's VMs are placed on in turn. */
   nodes: string[];

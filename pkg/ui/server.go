@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"net/netip"
 	"path"
 	"strconv"
 	"strings"
@@ -83,6 +84,9 @@ type Server struct {
 	// Proxmox VE privileges have been checked. Nil until the appliance has set the management
 	// cluster up.
 	Kube client.Client
+	// Probe tells which of the addresses a host answers on, for the addresses a new cluster is
+	// offered; nil probes them from where the interface runs.
+	Probe func(ctx context.Context, addrs []netip.Addr) map[netip.Addr]bool
 	// Appliance is set when the interface runs in Kubehenge's appliance, which creates and looks
 	// after the management cluster.
 	Appliance *appliance.Appliance
@@ -183,6 +187,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/proxmox/nodes", s.signedIn(s.nodes))
 	mux.HandleFunc("GET /api/proxmox/nodes/{node}/bridges", s.signedIn(s.bridges))
 	mux.HandleFunc("GET /api/proxmox/nodes/{node}/dns", s.signedIn(s.dns))
+	mux.HandleFunc("POST /api/proxmox/nodes/{node}/bridges/{bridge}/free", s.signedIn(s.freeAddresses))
 	mux.HandleFunc("GET /api/proxmox/ha-rules", s.signedIn(s.haRules))
 
 	mux.HandleFunc("GET /api/setup", s.signedIn(s.setupStatus))

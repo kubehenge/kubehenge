@@ -600,6 +600,15 @@ describe("clusters", () => {
   });
 });
 
+// The free addresses on vmbr0's network, where a host answers on 10.0.0.33.
+const freeOn: Route = (body) => {
+  const sent = JSON.stringify(body);
+  if (sent.includes('"nodes":0')) {
+    return { body: { network: "10.0.0.0/16", answering: sent.includes("10.0.0.33") ? ["10.0.0.33"] : [] } };
+  }
+  return { body: { network: "10.0.0.0/16", endpoint: "10.0.0.30", addresses: "10.0.0.31-10.0.0.33", answering: [] } };
+};
+
 describe("create", () => {
   const form: Form = {
     namespace: "",
@@ -1286,6 +1295,7 @@ describe("create", () => {
         ],
       }),
       "GET /api/proxmox/nodes/pve1/dns": () => ({ body: { servers: ["10.0.0.53"] } }),
+      "POST /api/proxmox/nodes/pve1/bridges/vmbr0/free": freeOn,
       "GET /api/proxmox/ha-rules": () => ({
         body: {
           readable: true,
@@ -1317,8 +1327,24 @@ describe("create", () => {
     expect(screen.getByLabelText("Node addresses")).toHaveAccessibleDescription(
       "Ranges like 10.0.0.21-10.0.0.29, networks or addresses",
     );
-    await user.type(screen.getByLabelText("API address"), "10.0.0.20");
-    await user.type(screen.getByLabelText("Node addresses"), "10.0.0.21-10.0.0.29");
+    // Free addresses are filled in; one typed that a host answers on is marked until it changes.
+    await waitFor(() => expect(screen.getByLabelText("API address")).toHaveValue("10.0.0.30"));
+    const addresses = screen.getByLabelText("Node addresses");
+    expect(addresses).toHaveValue("10.0.0.31-10.0.0.33");
+    await user.clear(addresses);
+    await user.type(addresses, "10.0.0.33-10.0.0.39");
+    expect(screen.getByLabelText("API address")).toHaveValue("10.0.0.30");
+    await waitFor(() => expect(addresses).toHaveAccessibleDescription("In use: 10.0.0.33"));
+    await user.clear(addresses);
+    await user.type(addresses, "10.0.0.40-10.0.0.46");
+    await waitFor(() => expect(addresses).toHaveAccessibleDescription(/^Ranges like/u));
+    // A VLAN's network is not the bridge's own.
+    await user.type(screen.getByLabelText("VLAN tag"), "10");
+    expect(screen.getByLabelText("Gateway")).toHaveValue("");
+    expect(screen.getByLabelText("API address")).toHaveValue("");
+    await user.clear(screen.getByLabelText("VLAN tag"));
+    expect(screen.getByLabelText("Gateway")).toHaveValue("10.0.0.1");
+    await waitFor(() => expect(screen.getByLabelText("API address")).toHaveValue("10.0.0.30"));
     expect(screen.getByLabelText("Pod network")).toHaveValue("canal");
     await user.click(screen.getByRole("button", { name: "Next" }));
 
@@ -1384,8 +1410,14 @@ describe("create", () => {
         cni: "canal",
         workerMachine: { cores: 4 },
         controlPlaneMachine: { cores: 4 },
-        controlPlaneEndpoint: "10.0.0.20",
-        network: { bridge: "vmbr0", prefix: 16, gateway: "10.0.0.1", dnsServers: ["10.0.0.53"] },
+        controlPlaneEndpoint: "10.0.0.30",
+        network: {
+          bridge: "vmbr0",
+          prefix: 16,
+          gateway: "10.0.0.1",
+          dnsServers: ["10.0.0.53"],
+          addresses: ["10.0.0.40-10.0.0.46"],
+        },
         oidc: [{ issuerURL: "https://sso.example", clientID: "kubernetes", usernamePrefix: "oidc:" }],
       },
     });

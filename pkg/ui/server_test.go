@@ -193,7 +193,7 @@ func (f *fakeAccounts) ReleaseHA(_ context.Context, t *pve.Ticket, prefix string
 }
 
 func (*fakeAccounts) Bridges(_ context.Context, _ *pve.Ticket, node string) ([]pve.Bridge, error) {
-	return []pve.Bridge{{Bridge: "vmbr0", Node: node}, {Bridge: "vmbr1", Node: node}}, nil
+	return []pve.Bridge{{Bridge: "vmbr0", Node: node, CIDR: "10.0.0.5/24", Gateway: "10.0.0.1"}, {Bridge: "vmbr1", Node: node}}, nil
 }
 
 func (*fakeAccounts) DNS(context.Context, *pve.Ticket, string) ([]string, error) {
