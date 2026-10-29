@@ -182,7 +182,7 @@
     "proxmox": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["url", "insecure", "secret", "clusterGroup", "clusterRole", "volumeOwnerNode", "region", "ha", "datastoreAllocate", "sysAuditGroup", "volumeSnapshots", "etcdRestore"],
+      "required": ["url", "insecure", "secret", "clusterGroup", "clusterRole", "volumeOwnerNode", "region", "ha", "datastoreAllocate", "sysAuditGroup", "etcdRestore"],
       "properties": {
         "url": { "type": "string", "pattern": "^https://[^/]+" },
         "insecure": { "type": "boolean" },
@@ -205,15 +205,6 @@
         "sysAuditGroup": {
           "description": "The group holding Sys.Audit on / that clusters asking for the cloud controller manager's HA group labels join, empty when no cluster may.",
           "type": "string"
-        },
-        "volumeSnapshots": {
-          "description": "The Secret holding root@pam's password for the CSI plugin of clusters that take volume snapshots, empty when no cluster may.",
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["rootSecret"],
-          "properties": {
-            "rootSecret": { "anyOf": [{ "const": "" }, { "$ref": "#/$defs/name" }] }
-          }
         },
         "etcdRestore": { "type": "boolean" }
       }

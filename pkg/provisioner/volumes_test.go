@@ -20,6 +20,8 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	"github.com/kubehenge/kubehenge/pkg/csiproxy"
 )
 
 func TestParseVolumeHandle(t *testing.T) {
@@ -642,8 +644,18 @@ func TestReclaimLeavesAnAttachedVolume(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// pvc-3 was restored from a snapshot: its volume is a copy on a holder VM, which the CSI proxy
+	// deletes when the plugin asks. The fake has no volume of that name, so deleting it through the
+	// owner VM would fail the reclaim.
+	restored := &corev1.ConfigMap{
+		Namespace: csiproxy.Namespace, Name: "copy-3", Labels: map[string]string{csiproxy.CopyLabel: ""},
+		Data: map[string]string{
+			"storage": "local", "volume": "4242/vm-4242-pvc-3.raw", "source": "local:4243/vm-4243-disk-0.raw",
+			"node": "a", "holder": "4243", "slot": "scsi0", "state": "done", "copy": "local:4243/vm-4243-disk-1.raw",
+		},
+	}
 	workload := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
-		released("pvc-1"), released("pvc-2"),
+		released("pvc-1"), released("pvc-2"), released("pvc-3"), restored,
 		&storagev1.VolumeAttachment{
 			Name: "csi-1",
 			Spec: storagev1.VolumeAttachmentSpec{Attacher: csiDriver, NodeName: "gone", Source: storagev1.VolumeAttachmentSource{PersistentVolumeName: &pv1}},

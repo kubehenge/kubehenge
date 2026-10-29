@@ -68,9 +68,12 @@
 # the shared Headlamp's sign-in identities there. Unset, the cluster gets a namespace of its own,
 # created and deleted with it, and none of those identities.
 # KUBEHENGE_E2E_VOLUME_SNAPSHOTS=1 switches volume snapshots on, takes a snapshot of a volume with
-# data, restores it into a new one and checks the data, and switches them off again, with a
-# management cluster that lets clusters take them, root@pam's password stored, and a
-# KUBEHENGE_E2E_STORAGE local to each node.
+# data, restores it into a new one and clones the volume, and checks the data in both; has the proxy
+# refuse a copy of a volume that is not the cluster's, checks that a deleted snapshot's copy goes
+# from its holder VM, and switches them off again, on a KUBEHENGE_E2E_STORAGE local to each node.
+# KUBEHENGE_E2E_REGISTRY, when set, is the plain-HTTP registry the controller's image under test was
+# pushed to by its ghcr.io path; the control-plane nodes pull ghcr.io's images from it first while
+# volume snapshots are on, for the copy proxy that runs from that image.
 # KUBEHENGE_E2E_TALOS_VERSION and KUBEHENGE_E2E_TALOS_UPGRADE are, for kubehenge-talos, the Talos
 # release the cluster starts on and a newer one its nodes are upgraded to in place, both with a
 # template in the template pool. Talos has no SSH, no systemd and no guest agent that runs commands:
@@ -1014,11 +1017,39 @@ if [ "${KUBEHENGE_E2E_DATASTORE_ALLOCATE:-}" = 1 ]; then
     persistent_volume
 fi
 
+# guest <node> <vmid> <command>: runs a shell command in a VM through its guest agent and prints its
+# output; fails when the command or the agent does. It is polled with set -e off, so each step
+# returns its own failure.
+guest() {
+    request=$(jq -cn --arg c "$3" '{command: ["sh", "-c", $c]}')
+    # shellcheck disable=SC2310 # guest is polled with set -e off, so a failed request is returned.
+    pid=$(pve -X POST -H 'Content-Type: application/json' -d "${request}" \
+        "${KUBEHENGE_PROXMOX_URL}/api2/json/nodes/$1/qemu/$2/agent/exec" | jq -r .data.pid) || return 1
+    tries=0
+    # shellcheck disable=SC2310 # polled until the command has exited; a failed request is tried again.
+    until result=$(pve_get "nodes/$1/qemu/$2/agent/exec-status?pid=${pid}") &&
+        printf '%s' "${result}" | jq -e '.data.exited == 1' > /dev/null; do
+        tries=$((tries + 1))
+        [ "${tries}" -lt 60 ] || return 1
+        sleep 1
+    done
+    printf '%s' "${result}" | jq -r '.data."out-data" // ""'
+    printf '%s' "${result}" | jq -e '.data.exitcode == 0' > /dev/null
+}
+# on_machines "<Machine names>" <command>: runs the command on those Machines' VMs.
+on_machines() {
+    for m in $1; do
+        pm=$(kubectl -n "${ns}" get machine "${m}" -o jsonpath='{.spec.infrastructureRef.name}')
+        pm_node=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.status.proxmoxNode}')
+        pm_vmid=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.spec.virtualMachineID}')
+        guest "${pm_node}" "${pm_vmid}" "$2"
+    done
+}
+
 if [ "${KUBEHENGE_E2E_VOLUME_SNAPSHOTS:-}" = 1 ]; then
-    kubectl -n kubehenge-system get secret kubehenge-root-pam > /dev/null ||
-        fail "no root@pam password is stored for volume snapshots"
     # csi_controller_is <Secret> <true|false>: the CSI plugin's controller is rolled out reading its
-    # configuration from the Secret, with the snapshot sidecar or without.
+    # configuration from the Secret, with the snapshot sidecar and the copy proxy beside it, or
+    # without either.
     csi_controller_is() {
         # shellcheck disable=SC2310 # polled; a failed read is a no.
         deployments=$(wl -n kube-system get deployments -o json) || return 1
@@ -1027,18 +1058,96 @@ if [ "${KUBEHENGE_E2E_VOLUME_SNAPSHOTS:-}" = 1 ]; then
             length == 1 and all(
                 ([.spec.template.spec.volumes[] | select(.name == "cloud-config") | .secret.secretName][0] == $s) and
                 (any(.spec.template.spec.containers[]; .name == "csi-snapshotter") == $snap) and
+                (any(.spec.template.spec.initContainers[]?; .name == "kubehenge-csi-proxy" and .restartPolicy == "Always" and
+                    (.image | test("@sha256:[0-9a-f]{64}$"))) == $snap) and
                 (.status.observedGeneration // 0) >= .metadata.generation and
                 (.status.updatedReplicas // 0) == .spec.replicas and (.status.readyReplicas // 0) == .spec.replicas and
                 (.status.replicas // 0) == .spec.replicas)' > /dev/null
     }
-    # signs_in_as_root: the plugin's root configuration names root@pam and no token; its password is
-    # never printed.
-    signs_in_as_root() {
+    # proxied: the plugin's configuration for the proxy names the cluster's own token and the proxy on
+    # the loopback, and neither root@pam nor any password.
+    proxied() {
         # shellcheck disable=SC2310 # polled; a failed read is a no.
-        config=$(wl -n kube-system get secret kubehenge-proxmox-root -o jsonpath='{.data.csi\.yaml}' 2> /dev/null) || return 1
+        config=$(wl -n kube-system get secret kubehenge-proxmox-proxied -o jsonpath='{.data.csi\.yaml}' 2> /dev/null) || return 1
         decoded=$(printf '%s' "${config}" | base64 -d)
-        printf '%s\n' "${decoded}" | grep -qx '  username: root@pam' && ! printf '%s\n' "${decoded}" | grep -q token_
+        printf '%s\n' "${decoded}" | grep -qx -- '- insecure: false' &&
+            printf '%s\n' "${decoded}" | grep -qx '  url: http://127.0.0.1:8006/api2/json' &&
+            printf '%s\n' "${decoded}" | grep -q '^  token_id: ' &&
+            ! printf '%s\n' "${decoded}" | grep -qE 'root@pam|username|password'
     }
+    # csi_controller_pod: the name of the CSI plugin's controller's running pod, with the proxy.
+    csi_controller_pod() {
+        wl -n kube-system get pods -o json | jq -er '
+            [.items[] | select(.status.phase == "Running" and any(.spec.initContainers[]?; .name == "kubehenge-csi-proxy"))] |
+            first | .metadata.name'
+    }
+    # copied <volume name part> <count>: the proxy logged at least count copies whose name, as the
+    # plugin asked for it, has the part.
+    copied() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        pod=$(csi_controller_pod) || return 1
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        log=$(wl -n kube-system logs "pod/${pod}" -c kubehenge-csi-proxy --tail=-1 2> /dev/null) || return 1
+        printf '%s\n' "${log}" | jq -Rsce --arg part "$1" --argjson n "$2" '
+            [split("\n")[] | fromjson? | select(.msg == "copied a volume" and (.volume | contains($part)))] | length >= $n' > /dev/null
+    }
+    # holder_vms: the cluster's holder VMs, as {vmid, node}, by the name beside the volume owner's.
+    holder_vms() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        all=$(pve_get "pools?poolid=${pool_uri}") || return 1
+        printf '%s' "${all}" | jq -ce --argjson o "${owner}" '
+            [.data[0].members[] | select(.type == "qemu")] as $vms |
+            ([$vms[] | select(.vmid == $o) | .name][0] | sub("-volumes$"; "-copies")) as $h |
+            [$vms[] | select(.name == $h and .vmid != $o) | {vmid, node, status}]'
+    }
+    # holders_ready: every holder VM is a stopped VM, and there is one at least.
+    holders_ready() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        vms=$(holder_vms) || return 1
+        printf '%s' "${vms}" | jq -e 'length > 0 and all(.status == "stopped")' > /dev/null
+    }
+    no_holders() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        vms=$(holder_vms) && [ "${vms}" = '[]' ]
+    }
+    # held: the volume IDs the holder VMs' disks are, one per line.
+    held() {
+        # shellcheck disable=SC2310 # a failed read fails the caller.
+        vms=$(holder_vms) || return 1
+        for vm in $(printf '%s' "${vms}" | jq -r '.[] | "\(.node)/\(.vmid)"'); do
+            # shellcheck disable=SC2310 # a failed read fails the caller.
+            pve_get "nodes/${vm%/*}/qemu/${vm#*/}/config" | jq -r '.data | to_entries[] | select(.key | test("^(unused|scsi)[0-9]+$")) | .value | split(",")[0]' ||
+                return 1
+        done
+    }
+    # holds <count>: the holder VMs hold that many volumes.
+    holds() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        volumes=$(held) || return 1
+        count=$(printf '%s' "${volumes}" | grep -c .) || true
+        [ "${count}" = "$1" ]
+    }
+    # holds_not <volume ID>: the holder VMs no longer hold the volume.
+    holds_not() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        volumes=$(held) || return 1
+        ! printf '%s\n' "${volumes}" | grep -qxF "$1"
+    }
+    # The clusters pull Kubehenge's own image from ghcr.io, where a build under test is not: on the
+    # control-plane nodes, where the proxy runs beside the CSI plugin's controller, containerd asks
+    # the registry the build was pushed to first and ghcr.io for anything that registry has not.
+    if [ -n "${KUBEHENGE_E2E_REGISTRY:-}" ]; then
+        case ${distribution} in
+            k3s | rke2) certs=/var/lib/rancher/${distribution}/agent/etc/containerd/certs.d ;;
+            kubeadm) certs=/etc/containerd/certs.d ;;
+            *) fail "the ${distribution} nodes take no registry from the guest agent for the copy proxy's image" ;;
+        esac
+        hosts=$(printf 'server = "https://ghcr.io"\n\n[host."http://%s"]\n  capabilities = ["pull", "resolve"]\n' "${KUBEHENGE_E2E_REGISTRY}")
+        snapshot_servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+        # shellcheck disable=SC2310 # a node that does not take it fails the test with the reason.
+        on_machines "${snapshot_servers}" "mkdir -p ${certs}/ghcr.io && printf '%s\n' '${hosts}' > ${certs}/ghcr.io/hosts.toml" > /dev/null ||
+            fail "the control-plane nodes did not take the registry of Kubehenge's image"
+    fi
     # not_found <kubectl get arguments>: the object is not found, rather than out of reach for a
     # moment.
     not_found() {
@@ -1103,10 +1212,15 @@ EOF
         fi
     }
 
-    step "volume snapshots, with the CSI plugin signed in as root@pam"
+    step "volume snapshots, with the copies made with the cluster's own token"
     set_variable csi '{"volumeSnapshots":true}'
-    until_true 300 "the CSI plugin's root@pam configuration" signs_in_as_root
-    until_true 900 "the CSI plugin's controller with the snapshot sidecar, signed in as root@pam" csi_controller_is kubehenge-proxmox-root true
+    until_true 300 "the CSI plugin's configuration through the proxy, with the cluster's token" proxied
+    until_true 900 "the CSI plugin's controller with the snapshot sidecar and the copy proxy" csi_controller_is kubehenge-proxmox-proxied true
+    until_true 300 "the copies' namespace" wl get namespace kubehenge-volume-copies
+    until_true 300 "the cluster's holder VMs, stopped" holders_ready
+    # shellcheck disable=SC2310 # a failed read fails the test with the reason.
+    cluster_get "access/permissions?path=/vms/${owner}" | jq -e '[.data[] | has("VM.Clone")] | any' > /dev/null ||
+        fail "the cluster's token cannot copy its own volumes"
     until_true 600 "the VolumeSnapshotClass" wl get volumesnapshotclass proxmox
     if [ "${distribution}" != rke2 ]; then
         wl -n kube-system rollout status deployment -l app.kubernetes.io/name=snapshot-controller --timeout=5m
@@ -1124,7 +1238,7 @@ spec:
       storage: 1Gi
 EOF
     # 64 MiB of random data and its checksum, written and flushed, and the volume detached again
-    # before its snapshot is taken.
+    # before its snapshot and its clone are taken.
     data_pod e2e-write e2e-source 'head -c 67108864 /dev/urandom > /data/blob; cd /data; sha256sum blob > sum; sync'
     wl -n default delete pod/e2e-write --wait --timeout=5m
     wl apply -f - << 'EOF'
@@ -1152,22 +1266,88 @@ spec:
   resources:
     requests:
       storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: e2e-clone
+  namespace: default
+spec:
+  accessModes: [ReadWriteOnce]
+  dataSource:
+    kind: PersistentVolumeClaim
+    name: e2e-source
+  resources:
+    requests:
+      storage: 1Gi
 EOF
     until_true 900 "the volume snapshot ready to use" snapshot_ready
     data_pod e2e-check e2e-restored 'cd /data; sha256sum -c sum'
-    wl -n default delete pod/e2e-check pvc/e2e-restored pvc/e2e-source volumesnapshot/e2e --wait --timeout=5m
-    # The CSI plugin retries a failed deletion with a back-off of up to five minutes.
+    data_pod e2e-clone-check e2e-clone 'cd /data; sha256sum -c sum'
+    until_true 120 "the proxy's log of the snapshot's copy" copied -snapshot- 1
+    until_true 120 "the proxy's log of the restore's and the clone's copies" copied -pvc- 2
+    until_true 120 "the three copies on the holder VMs" holds 3
+    # shellcheck disable=SC2310 # a failed read fails the test with the reason.
+    snapshot_copy=$(wl -n kubehenge-volume-copies get configmaps -l kubehenge.dev/volume-copy -o json |
+        jq -er '[.items[].data | select(.state == "done" and (.volume | contains("-snapshot-"))) | .copy] | if length == 1 then .[0] else error("not one snapshot copy") end') ||
+        fail "no record of the snapshot's copy"
+
+    step "a copy of a volume that is not the cluster's refused"
+    copy_node=$(kubectl -n "${ns}" get proxmoxmachines -o jsonpath='{.items[0].status.proxmoxNode}')
+    copy_vmid=$(kubectl -n "${ns}" get proxmoxmachines -o jsonpath='{.items[0].spec.virtualMachineID}')
+    # shellcheck disable=SC2310 # a failed read fails the test with the reason.
+    proxy_pod=$(csi_controller_pod) || fail "no CSI plugin controller with the proxy"
+    wl -n kube-system port-forward "pod/${proxy_pod}" 18006:8006 > /dev/null 2>&1 &
+    forward=$!
+    proxy_answers() { curl -s -o /dev/null "http://127.0.0.1:18006/api2/json/version"; }
+    until_true 60 "the proxy reached through a port-forward" proxy_answers
+    # A node VM's disk is in the cluster's pool, but not one the plugin's volumes are copied from.
+    refusal=$(curl -s -w '\n%{http_code}' -H "${token_auth}" -X POST \
+        --data-urlencode "target=vm-${owner}-e2e-foreign" \
+        "http://127.0.0.1:18006/api2/json/nodes/${copy_node}/storage/${KUBEHENGE_E2E_STORAGE}/content/vm-${copy_vmid}-disk-0") || true
+    kill "${forward}" 2> /dev/null || true
+    refusal_status=$(printf '%s\n' "${refusal}" | tail -n 1)
+    if [ "${refusal_status}" != 403 ] || ! printf '%s\n' "${refusal}" | grep -q "is not one of the cluster's own"; then
+        fail "the proxy did not refuse a copy of a node VM's disk: ${refusal}"
+    fi
+    # refusal_recorded: the proxy recorded a VolumeCopyFailed event.
+    refusal_recorded() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        events=$(wl -n kube-system get events --field-selector reason=VolumeCopyFailed -o name) && [ -n "${events}" ]
+    }
+    until_true 60 "the refusal recorded as an event" refusal_recorded
+    records=$(wl -n kubehenge-volume-copies get configmaps -l kubehenge.dev/volume-copy -o name | wc -l)
+    [ "${records}" = 3 ] || fail "the refused copy left a record: ${records} records, not the three copies'"
+    # shellcheck disable=SC2310 # a failed check fails the test with the reason.
+    holds 3 || fail "the refused copy left a volume on the holder VMs"
+
+    step "a deleted snapshot's copy deleted from its holder VM"
+    wl -n default delete volumesnapshot/e2e --wait --timeout=5m
     until_true 600 "the snapshot's content deleted" none_of volumesnapshotcontents
+    until_true 300 "the snapshot's copy ${snapshot_copy} gone from the holder VMs" holds_not "${snapshot_copy}"
+    # shellcheck disable=SC2310 # a failed check fails the test with the reason.
+    holds 2 || fail "deleting the snapshot took more than its copy from the holder VMs"
+    wl -n default delete pod/e2e-check pod/e2e-clone-check pvc/e2e-restored pvc/e2e-clone pvc/e2e-source --wait --timeout=5m
+    # The CSI plugin retries a failed deletion with a back-off of up to five minutes.
     until_true 600 "the volumes deleted" sh -c "[ \"\$(KUBECONFIG=${work}/workload kubectl get pv -o name | wc -l)\" = 0 ]"
     until_true 600 "no volume left on ${KUBEHENGE_E2E_STORAGE}" no_owned_volumes
+    until_true 300 "no copy left on the holder VMs" holds 0
+    until_true 300 "the copies' records deleted" none_of -n kubehenge-volume-copies configmaps -l kubehenge.dev/volume-copy
 
-    step "the CSI plugin with the cluster's token again, without volume snapshots"
+    step "the CSI plugin reaching Proxmox VE directly again, without volume snapshots"
     set_variable csi '{"volumeSnapshots":false}'
-    until_true 900 "the CSI plugin's controller without the snapshot sidecar, with the cluster's token" csi_controller_is kubehenge-proxmox false
-    until_true 300 "the CSI plugin's root@pam configuration deleted" not_found -n kube-system secret kubehenge-proxmox-root
+    until_true 900 "the CSI plugin's controller without the snapshot sidecar and the proxy, with the cluster's token" csi_controller_is kubehenge-proxmox false
+    until_true 300 "the CSI plugin's configuration through the proxy deleted" not_found -n kube-system secret kubehenge-proxmox-proxied
+    until_true 300 "the copies' namespace deleted" not_found namespace kubehenge-volume-copies
+    until_true 300 "the empty holder VMs removed" no_holders
     until_true 600 "the VolumeSnapshotClass removed" not_found volumesnapshotclass proxmox
     until_true 600 "the snapshot controller removed" none_of -n kube-system deployments -l app.kubernetes.io/name=snapshot-controller
     persistent_volume
+    if [ -n "${KUBEHENGE_E2E_REGISTRY:-}" ]; then
+        # shellcheck disable=SC2310 # a node that does not take it off fails the test with the reason.
+        on_machines "${snapshot_servers}" "rm -f ${certs}/ghcr.io/hosts.toml" > /dev/null ||
+            fail "the registry of Kubehenge's image was not taken off the control-plane nodes"
+    fi
 fi
 
 if [ "${KUBEHENGE_E2E_HA_GROUPS:-}" = 1 ]; then
@@ -1216,34 +1396,6 @@ if [ "${KUBEHENGE_E2E_HA_GROUPS:-}" = 1 ]; then
     until_true 300 "the cluster's token to hold Sys.Audit on / again" audit_is true
     remove_ha_rule
 fi
-# guest <node> <vmid> <command>: runs a shell command in a VM through its guest agent and prints its
-# output; fails when the command or the agent does. It is polled with set -e off, so each step
-# returns its own failure.
-guest() {
-    request=$(jq -cn --arg c "$3" '{command: ["sh", "-c", $c]}')
-    # shellcheck disable=SC2310 # guest is polled with set -e off, so a failed request is returned.
-    pid=$(pve -X POST -H 'Content-Type: application/json' -d "${request}" \
-        "${KUBEHENGE_PROXMOX_URL}/api2/json/nodes/$1/qemu/$2/agent/exec" | jq -r .data.pid) || return 1
-    tries=0
-    # shellcheck disable=SC2310 # polled until the command has exited; a failed request is tried again.
-    until result=$(pve_get "nodes/$1/qemu/$2/agent/exec-status?pid=${pid}") &&
-        printf '%s' "${result}" | jq -e '.data.exited == 1' > /dev/null; do
-        tries=$((tries + 1))
-        [ "${tries}" -lt 60 ] || return 1
-        sleep 1
-    done
-    printf '%s' "${result}" | jq -r '.data."out-data" // ""'
-    printf '%s' "${result}" | jq -e '.data.exitcode == 0' > /dev/null
-}
-# on_machines "<Machine names>" <command>: runs the command on those Machines' VMs.
-on_machines() {
-    for m in $1; do
-        pm=$(kubectl -n "${ns}" get machine "${m}" -o jsonpath='{.spec.infrastructureRef.name}')
-        pm_node=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.status.proxmoxNode}')
-        pm_vmid=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.spec.virtualMachineID}')
-        guest "${pm_node}" "${pm_vmid}" "$2"
-    done
-}
 
 # etcd is taken, restored and uploaded before any add-on runs: replacing a server holds two beside
 # the worker, which the runner has room for only while the cluster is this small, and every add-on
@@ -2562,10 +2714,18 @@ git_api POST user/repos -d '{"name":"clusters","private":true,"auto_init":true,"
 git_file=$(manifest one)
 git_request=$(jq -cn --arg c "${git_file}" '{content: $c, branch: "main", message: "one"}')
 git_api POST "${contents}" -d "${git_request}" > /dev/null
-# push <revision>: commits the manifest at a new revision.
-push() {
-    git_current=$(git_api GET "${contents}")
+# push <revision>: commits the manifest at a new revision. The Git server shares the worker with the
+# GitOps engine being installed, which can hold up its answers past curl's limit, so the commit is
+# tried until it is there.
+push() { until_true 120 "commit ${1} pushed to the Git server" pushed "$1"; }
+# pushed <revision>: whether the manifest is at that revision, committing it if not.
+pushed() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed call is only a retry.
+    git_current=$(git_api GET "${contents}") || return 1
     git_file=$(manifest "$1")
+    # A try whose answer was lost may have committed it already.
+    git_now=$(printf '%s' "${git_current}" | jq -r '.content // "" | gsub("\\s"; "")')
+    [ "${git_now}" != "${git_file}" ] || return 0
     git_request=$(printf '%s' "${git_current}" | jq -c --arg c "${git_file}" --arg m "$1" '{content: $c, sha: .sha, branch: "main", message: $m}')
     git_api PUT "${contents}" -d "${git_request}" > /dev/null
 }
