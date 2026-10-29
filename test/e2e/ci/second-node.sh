@@ -75,6 +75,24 @@ on pve test -f /etc/pve/corosync.conf || {
     on pve sshd -t >&2 || true
     exit 1
 }
+# Creating the cluster restarts corosync and the cluster file system, which take seconds to be
+# quorate again, and pve refuses a join until they are: "cluster not ready - no quorum?".
+# shellcheck disable=SC2310 # polled; each check that fails is a cluster not quorate yet.
+quorate() {
+    on pve pvesh get /cluster/status --output-format json 2> /dev/null |
+        jq -e 'any(.[]; .type == "cluster" and .quorate == 1)' > /dev/null
+}
+deadline=$(($(date +%s) + 120))
+# shellcheck disable=SC2310 # quorate is what the loop polls and reports.
+until quorate; do
+    now=$(date +%s)
+    if [ "${now}" -ge "${deadline}" ]; then
+        echo "pve's cluster was not quorate within 2 minutes of its creation" >&2
+        on pve journalctl -u pve-cluster -u corosync --no-pager -n 100 >&2 || true
+        exit 1
+    fi
+    sleep 2
+done
 fingerprint=$(on pve openssl x509 -in /etc/pve/nodes/pve/pve-ssl.pem -noout -fingerprint -sha256 | cut -d= -f2)
 # The join prints why it aborted, and exits 0 all the same.
 on pve2 pvesh create /cluster/config/join --hostname 172.21.99.2 --fingerprint "${fingerprint}" \
@@ -82,7 +100,6 @@ on pve2 pvesh create /cluster/config/join --hostname 172.21.99.2 --fingerprint "
 # shellcheck disable=SC2310 # the file missing is the failure reported.
 on pve2 test -f /etc/corosync/corosync.conf || {
     echo "pve2 did not join pve's cluster" >&2
-    on pve df -h /dev/shm >&2 || true
     on pve journalctl -u pve-cluster -u corosync -u pveproxy -u pvedaemon --no-pager -n 100 >&2 || true
     exit 1
 }
