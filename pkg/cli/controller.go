@@ -258,19 +258,9 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	if err != nil {
 		return fmt.Errorf("connecting to Proxmox VE: %w", err)
 	}
-	if err = o.parseCharts(); err != nil {
+	rancherMinors, providers, err := o.parseFlags()
+	if err != nil {
 		return err
-	}
-	if err = strictJSON(o.podSecurityExempt, &o.r.Charts.PodSecurityExempt); err != nil {
-		return fmt.Errorf("--pod-security-exempt: %w", err)
-	}
-	rancherMinors, err := provisioner.ParseKubernetesMinors(o.rancherKubernetes)
-	if err != nil {
-		return fmt.Errorf("--rancher-kubernetes: %w", err)
-	}
-	providers, err := provisioner.ParseClassProviders(o.classProviders)
-	if err != nil {
-		return fmt.Errorf("--class-providers: %w", err)
 	}
 	distributions := &provisioner.Distributions{ClassNamespace: o.r.ClassNamespace, Providers: providers}
 	cloud := &provisioner.Proxmox{Client: c, Settings: o.settings}
@@ -335,6 +325,27 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 		return fmt.Errorf("the controller manager: %w", err)
 	}
 	return nil
+}
+
+// parseFlags reads the flags that hold more than one value in a string: the charts, the Pod
+// Security exemptions, Rancher's Kubernetes versions and the classes' providers.
+func (o *controllerOptions) parseFlags() (provisioner.KubernetesMinors, map[string][]string, error) {
+	var none provisioner.KubernetesMinors
+	if err := o.parseCharts(); err != nil {
+		return none, nil, err
+	}
+	if err := strictJSON(o.podSecurityExempt, &o.r.Charts.PodSecurityExempt); err != nil {
+		return none, nil, fmt.Errorf("--pod-security-exempt: %w", err)
+	}
+	rancherMinors, err := provisioner.ParseKubernetesMinors(o.rancherKubernetes)
+	if err != nil {
+		return none, nil, fmt.Errorf("--rancher-kubernetes: %w", err)
+	}
+	providers, err := provisioner.ParseClassProviders(o.classProviders)
+	if err != nil {
+		return none, nil, fmt.Errorf("--class-providers: %w", err)
+	}
+	return rancherMinors, providers, nil
 }
 
 // completeReconciler gives the reconciler what only the parsed flags and the connection make: the
