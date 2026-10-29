@@ -24,8 +24,9 @@ on() {
 
 # The shared directory is in pve's own /var/lib/vz, which pve2 mounts again under the same path.
 mkdir -p "${work}/vz/shared" "${work}/vz2"
+# /dev/shm as large as up.sh gives pve's, for corosync.
 docker run -d --name kubehenge-e2e-pve2 --hostname pve2 --privileged --cgroupns=private \
-    --network kubehenge-e2e --ip 172.21.99.4 --tmpfs /run --tmpfs /run/lock \
+    --network kubehenge-e2e --ip 172.21.99.4 --tmpfs /run --tmpfs /run/lock --shm-size 1g \
     -v /sys/kernel/security:/sys/kernel/security -v "${work}/vz2:/var/lib/vz" \
     -v "${work}/vz/shared:/var/lib/vz/shared" kubehenge-e2e-pve > /dev/null
 
@@ -75,8 +76,16 @@ on pve test -f /etc/pve/corosync.conf || {
     exit 1
 }
 fingerprint=$(on pve openssl x509 -in /etc/pve/nodes/pve/pve-ssl.pem -noout -fingerprint -sha256 | cut -d= -f2)
+# The join prints why it aborted, and exits 0 all the same.
 on pve2 pvesh create /cluster/config/join --hostname 172.21.99.2 --fingerprint "${fingerprint}" \
-    --password "${KUBEHENGE_E2E_ROOT_PASSWORD}" --link0 172.21.99.4 > /dev/null
+    --password "${KUBEHENGE_E2E_ROOT_PASSWORD}" --link0 172.21.99.4
+# shellcheck disable=SC2310 # the file missing is the failure reported.
+on pve2 test -f /etc/corosync/corosync.conf || {
+    echo "pve2 did not join pve's cluster" >&2
+    on pve df -h /dev/shm >&2 || true
+    on pve journalctl -u pve-cluster -u corosync -u pveproxy -u pvedaemon --no-pager -n 100 >&2 || true
+    exit 1
+}
 # Both nodes in the cluster's view, quorate, and pve2's API on its new certificate.
 # shellcheck disable=SC2310 # polled; each check that fails is a cluster not there yet.
 both_online() {
