@@ -96,10 +96,21 @@
       }
     },
     "podSecurityExempt": {
-      "description": "Namespaces neither Pod Security Admission nor Kyverno holds to a cluster's pod security level.",
-      "type": "array",
-      "items": { "$ref": "#/$defs/name" },
-      "uniqueItems": true
+      "description": "Namespaces neither Pod Security Admission nor Kyverno holds to a cluster's pod security level, by what puts them there: a cluster exempts always's and those of what it runs.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["always", "calico", "monitoring", "logs", "backups", "istio", "metallb", "rancher", "rancherAgent"],
+      "properties": {
+        "always": { "$ref": "#/$defs/namespaces" },
+        "calico": { "$ref": "#/$defs/namespaces" },
+        "monitoring": { "$ref": "#/$defs/namespaces" },
+        "logs": { "$ref": "#/$defs/namespaces" },
+        "backups": { "$ref": "#/$defs/namespaces" },
+        "istio": { "$ref": "#/$defs/namespaces" },
+        "metallb": { "$ref": "#/$defs/namespaces" },
+        "rancher": { "$ref": "#/$defs/namespaces" },
+        "rancherAgent": { "$ref": "#/$defs/namespaces" }
+      }
     },
     "image": {
       "description": "Kubehenge's controller image by digest, which a release's chart names and a checkout's needs given.",
@@ -357,6 +368,11 @@
       "type": "string",
       "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
       "maxLength": 63
+    },
+    "namespaces": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/name" },
+      "uniqueItems": true
     },
     "oidcPrefix": {
       "type": "string",

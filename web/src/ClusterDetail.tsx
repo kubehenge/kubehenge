@@ -570,7 +570,7 @@ function DeleteDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
   const remove = async (): Promise<void> => {
     setBusy(true);
     try {
-      await api.remove(c.namespace, c.name);
+      await api.remove(c.namespace, c.name, typed);
       navigate("/");
     } catch (err) {
       setError(errorMessage(err));

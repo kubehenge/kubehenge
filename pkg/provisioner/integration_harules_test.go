@@ -17,7 +17,7 @@ import (
 // to cluster creators: the controller keeps the record, and the interface may read it, and nothing
 // else of it, only while interface.offerHARules is on.
 func TestIntegrationHARulesOfferedThroughTheChart(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
-	cfg, admin, _ := startAPIConfig(t)
+	cfg, admin := startAPIConfig(t)
 	ctx := context.Background()
 	as := func(account string) client.Client {
 		t.Helper()

@@ -263,7 +263,7 @@ if [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
         jq -e --arg n "${ns}" 'index($n) > 0' > /dev/null || fail "the interface is not given namespace ${ns}"
     kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d > "${work}/management-ca.crt"
     management_server=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
-    interface_token=$(kubectl -n kubehenge-system get secret kubehenge-interface-token -o jsonpath='{.data.token}' | base64 -d)
+    interface_token=$(kubectl -n kubehenge-system create token kubehenge-interface --duration=2h)
     creator_config="${work}/interface.kubeconfig"
     kubectl --kubeconfig "${creator_config}" config set-cluster management --server="${management_server}" \
         --certificate-authority="${work}/management-ca.crt" --embed-certs > /dev/null
@@ -1369,7 +1369,8 @@ else
 fi
 control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
 wl -n default delete configmap e2e-before-snapshot
-wl -n default create configmap e2e-after-snapshot --from-literal=marker=after
+after_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+wl -n default create configmap e2e-after-snapshot --from-literal=marker="${after_marker}"
 etcd_restore_requested
 # etcd_restored: whether the restore has ended and the controller let the cluster go; a failed one
 # fails the test with why.
@@ -1394,8 +1395,21 @@ until_true 300 "the ConfigMap made before the snapshot back" wl -n default get c
 # shellcheck disable=SC2310 # absent's answer is what is checked.
 absent wl -n default get configmap e2e-after-snapshot || fail "a ConfigMap made after the snapshot outlived the restore"
 wl -n default delete configmap e2e-before-snapshot
-keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
-[ "${keys}" = "${etcd_prefix}/${snapshot_name}" ] || fail "the restore left objects in the store: ${keys}"
+# The restore snapshots etcd as it was first, so that a restore from the wrong snapshot can be undone.
+before_name=$(printf '%s' "${restore}" | jq -r '.before // ""')
+[ -n "${before_name}" ] || fail "the restore took no snapshot of etcd as it was first: ${restore}"
+keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g' | sort)
+expected_keys=$(printf '%s/%s\n' "${etcd_prefix}" "${snapshot_name}" "${etcd_prefix}" "${before_name}" | sort)
+[ "${keys}" = "${expected_keys}" ] ||
+    fail "the store's etcd snapshots after the restore are not the one restored and the one of etcd as it was: ${keys}"
+s3 -o "${work}/before.db.age" "${s3_endpoint}/${bucket}/${etcd_prefix}/${before_name}"
+header=$(head -c 21 "${work}/before.db.age")
+[ "${header}" = age-encryption.org/v1 ] || fail "the snapshot of etcd as it was is not encrypted with age"
+grep -r -q -F "${after_marker}" "${work}/s3-data" && fail "the store keeps the snapshot of etcd as it was unencrypted"
+go -C "$(dirname "$0")/../.." run ./cmd/kubehenge etcd-snapshot decrypt --identity "${work}/etcd-identity" \
+    "${work}/before.db.age" "${work}/before.db"
+grep -a -q -F "${after_marker}" "${work}/before.db" ||
+    fail "the snapshot of etcd as it was does not hold the ConfigMap made before the restore"
 if [ "${distribution}" = talos ]; then
     # Talos's control planes join the restored etcd again rather than being made anew.
     restored_control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
