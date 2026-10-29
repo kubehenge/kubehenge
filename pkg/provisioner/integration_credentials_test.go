@@ -28,7 +28,7 @@ func credential(cluster, purpose string, data map[string][]byte) *corev1.Secret 
 // TestIntegrationInterfaceCredentials holds the interface's account to the credentials it stores:
 // it writes and deletes those, and no other Secret.
 func TestIntegrationInterfaceCredentials(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
-	cfg, admin, _ := startAPIConfig(t)
+	cfg, admin := startAPIConfig(t)
 	ctx := context.Background()
 	ui, err := client.New(interfaceAccount(cfg), client.Options{Scheme: admin.Scheme()})
 	if err != nil {

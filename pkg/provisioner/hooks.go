@@ -81,7 +81,7 @@ type Hooks struct {
 	Now  func() time.Time
 	// SysAuditGroup is the Proxmox VE group holding Sys.Audit on /; empty when no cluster may join it.
 	SysAuditGroup string
-	// VolumeSnapshots is what lets a cluster's CSI plugin take volume snapshots as root@pam.
+	// VolumeSnapshots is what lets a cluster's CSI plugin take volume snapshots.
 	VolumeSnapshots VolumeSnapshots
 }
 
@@ -93,19 +93,35 @@ func (h *Hooks) BeforeClusterUpgrade(ctx context.Context, req *runtimehooksv1.Be
 	if !Owns(&req.Cluster, h.ClassNamespace) {
 		return
 	}
-	if err := h.checkRancher(ctx, &req.Cluster, req.ToKubernetesVersion); err != nil {
+	cluster, err := h.storedCluster(ctx, &req.Cluster)
+	if err != nil {
+		resp.RetryAfterSeconds = 10
+		resp.Message = err.Error()
+		return
+	}
+	if !Owns(cluster, h.ClassNamespace) {
+		return
+	}
+	// Cluster API asks with the version the Cluster names; one it does not name is a request
+	// from someone else, or from before the version changed again, and moves nothing.
+	if cluster.Spec.Topology.Version != req.ToKubernetesVersion {
+		resp.RetryAfterSeconds = 10
+		resp.Message = fmt.Sprintf("the cluster is at %s, not %s", cluster.Spec.Topology.Version, req.ToKubernetesVersion)
+		return
+	}
+	if err = h.checkRancher(ctx, cluster, cluster.Spec.Topology.Version); err != nil {
 		// Retried rather than failed: a later Kubehenge release with a newer Rancher lets it through.
 		resp.RetryAfterSeconds = 300
 		resp.Message = err.Error()
 		return
 	}
 	// A node rebooting into another Talos release would leave the rollout one machine short.
-	if upgrading := req.Cluster.Annotations[TalosUpgradingAnnotation]; upgrading != "" {
+	if upgrading := cluster.Annotations[TalosUpgradingAnnotation]; upgrading != "" {
 		resp.RetryAfterSeconds = 30
 		resp.Message = "waiting for the Talos upgrade of " + upgrading
 		return
 	}
-	moved, err := h.newestNodeImages(ctx, &req.Cluster, req.ToKubernetesVersion)
+	moved, err := h.newestNodeImages(ctx, cluster, cluster.Spec.Topology.Version)
 	switch {
 	case err != nil:
 		resp.RetryAfterSeconds = 10
@@ -119,16 +135,29 @@ func (h *Hooks) BeforeClusterUpgrade(ctx context.Context, req *runtimehooksv1.Be
 }
 
 // BeforeClusterDelete removes the cluster from Rancher while its VMs still run, so that Rancher can
-// clean up inside it; for Rancher's own cluster, every cluster registered with it first.
+// clean up inside it; for Rancher's own cluster, every cluster registered with it first. It acts
+// only on a Cluster the API holds as being deleted, so that no request can deregister a cluster
+// that stays.
 func (h *Hooks) BeforeClusterDelete(ctx context.Context, req *runtimehooksv1.BeforeClusterDeleteRequest, resp *runtimehooksv1.BeforeClusterDeleteResponse) {
 	resp.Status = runtimehooksv1.ResponseStatusSuccess
 	if !Owns(&req.Cluster, h.ClassNamespace) || h.Registrar == nil {
 		return
 	}
-	done, err := h.Registrar.BeforeDelete(ctx, &req.Cluster)
+	cluster, err := h.storedCluster(ctx, &req.Cluster)
+	switch {
+	case apierrors.IsNotFound(err):
+		return
+	case err != nil:
+		resp.RetryAfterSeconds = 10
+		resp.Message = err.Error()
+		return
+	case cluster.DeletionTimestamp.IsZero() || !Owns(cluster, h.ClassNamespace):
+		return
+	}
+	done, err := h.Registrar.BeforeDelete(ctx, cluster)
 	switch {
 	case err != nil:
-		ctrl.LoggerFrom(ctx).Error(err, "removing the cluster from Rancher", "cluster", client.ObjectKeyFromObject(&req.Cluster))
+		ctrl.LoggerFrom(ctx).Error(err, "removing the cluster from Rancher", "cluster", client.ObjectKeyFromObject(cluster))
 		resp.RetryAfterSeconds = 10
 		resp.Message = "removing the cluster from Rancher: " + err.Error()
 	case !done:
@@ -146,16 +175,23 @@ func (h *Hooks) BeforeClusterDelete(ctx context.Context, req *runtimehooksv1.Bef
 // snapshots where they cannot be taken, and Sys.Audit on / where no cluster may hold it.
 func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.BeforeClusterCreateRequest, resp *runtimehooksv1.BeforeClusterCreateResponse) {
 	resp.Status = runtimehooksv1.ResponseStatusSuccess
-	cluster := &req.Cluster
+	if !Owns(&req.Cluster, h.ClassNamespace) {
+		return
+	}
+	cluster, err := h.storedCluster(ctx, &req.Cluster)
+	if err != nil {
+		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
+		return
+	}
 	if !Owns(cluster, h.ClassNamespace) {
 		return
 	}
 	class := &clusterv1.ClusterClass{}
-	if err := h.Reader.Get(ctx, client.ObjectKey{Namespace: h.ClassNamespace, Name: cluster.Spec.Topology.ClassRef.Name}, class); err != nil {
+	if err = h.Reader.Get(ctx, client.ObjectKey{Namespace: h.ClassNamespace, Name: cluster.Spec.Topology.ClassRef.Name}, class); err != nil {
 		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
 		return
 	}
-	if err := h.refusal(ctx, cluster, class); err != nil {
+	if err = h.refusal(ctx, cluster, class); err != nil {
 		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
 		return
 	}
@@ -163,16 +199,18 @@ func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.Bef
 		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, errs.ToAggregate().Error()
 		return
 	}
-	if err := checkNodeAddresses(nil, cluster); err != nil {
+	if err = checkNodeAddresses(nil, cluster); err != nil {
 		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
 		return
 	}
-	if err := checkEtcdSnapshots(nil, cluster, class); err != nil {
+	if err = checkEtcdSnapshots(nil, cluster, class); err != nil {
 		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
 		return
 	}
 	if isTalos(cluster) {
-		waiting, retry, err := h.talosImageReady(ctx, cluster, class)
+		var waiting string
+		var retry int32
+		waiting, retry, err = h.talosImageReady(ctx, cluster, class)
 		if err != nil {
 			resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
 			return
@@ -184,7 +222,7 @@ func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.Bef
 		}
 	}
 	s := &corev1.Secret{}
-	err := h.Reader.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: credentialsSecretName(cluster)}, s)
+	err = h.Reader.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: credentialsSecretName(cluster)}, s)
 	switch {
 	case apierrors.IsNotFound(err) || err == nil && !isReady(s):
 		resp.RetryAfterSeconds = 5
@@ -194,6 +232,17 @@ func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.Bef
 		resp.Status = runtimehooksv1.ResponseStatusFailure
 		resp.Message = err.Error()
 	}
+}
+
+// storedCluster is the Cluster a hook request names, as the API holds it. Cluster API does not
+// authenticate itself to the extension server, so a hook takes nothing from a request's Cluster
+// but its name.
+func (h *Hooks) storedCluster(ctx context.Context, sent *clusterv1.Cluster) (*clusterv1.Cluster, error) {
+	c := &clusterv1.Cluster{}
+	if err := h.Reader.Get(ctx, client.ObjectKeyFromObject(sent), c); err != nil {
+		return nil, fmt.Errorf("reading cluster %s/%s: %w", sent.Namespace, sent.Name, err)
+	}
+	return c, nil
 }
 
 // refusal is the first reason BeforeClusterCreate refuses the cluster for, or nil.
@@ -209,7 +258,7 @@ func (h *Hooks) refusal(ctx context.Context, cluster *clusterv1.Cluster, class *
 		func() error { return checkLogs(cluster) },
 		func() error { return checkBackups(nil, cluster, class) },
 		func() error { return h.checkDatastoreAllocate(ctx, cluster, class) },
-		func() error { return h.checkVolumeSnapshots(ctx, cluster, class) },
+		func() error { return h.checkVolumeSnapshots(cluster, class) },
 		func() error { return h.checkSysAudit(cluster) },
 		func() error { return checkTalos(nil, cluster) },
 	} {

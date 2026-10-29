@@ -207,11 +207,11 @@ func TestBeforeClusterCreateRefusesAutoscaledPoolsItCannotScale(t *testing.T) {
 	hooks, _ := hooksFor(t)
 	c := withAddresses(networkCluster("192.168.1.1", 24), `["192.168.1.10-192.168.1.20"]`)
 	c.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{autoscaledPoolOf("3", "2")}
-	if resp := callBeforeClusterCreate(hooks, c); !strings.Contains(resp.Message, "never below its least") {
+	if resp := callBeforeClusterCreate(t, hooks, c); !strings.Contains(resp.Message, "never below its least") {
 		t.Errorf("least above most: %+v", resp)
 	}
 	c.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{autoscaledPoolOf("1", "20")}
-	if resp := callBeforeClusterCreate(hooks, c); !strings.Contains(resp.Message, "the cluster may run 22 machines") {
+	if resp := callBeforeClusterCreate(t, hooks, c); !strings.Contains(resp.Message, "the cluster may run 22 machines") {
 		t.Errorf("more workers than addresses: %+v", resp)
 	}
 }

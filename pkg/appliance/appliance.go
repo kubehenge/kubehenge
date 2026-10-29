@@ -51,11 +51,8 @@ type Appliance struct {
 	Release string
 	Log     *slog.Logger
 	// InterfaceKubeconfig makes the interface's kubeconfig from the management cluster's admin
-	// kubeconfig and API endpoint, once an apply has succeeded.
-	InterfaceKubeconfig func(ctx context.Context, admin []byte, endpoint string) ([]byte, error)
-	// StoreRootPassword keeps root@pam's password in the management cluster for volume snapshots,
-	// or removes it, with the admin kubeconfig, once an apply has succeeded (StoreRootPassword).
-	StoreRootPassword func(ctx context.Context, admin []byte, on bool, password string) error
+	// kubeconfig and API endpoint, once an apply has succeeded, with its token in tokenFile.
+	InterfaceKubeconfig func(ctx context.Context, admin []byte, endpoint, tokenFile string) ([]byte, error)
 
 	mu          sync.Mutex
 	job         *Job
@@ -117,13 +114,6 @@ func (a *Appliance) Apply(settings *Settings, passphrase string, ticket *pve.Tic
 		if err := s.KeepsFixed(was); err != nil {
 			return err
 		}
-	}
-	// A password is kept only while volume snapshots are on; one stored by an earlier run serves
-	// until it is changed.
-	if !s.ClusterVolumeSnapshots {
-		s.RootPassword = ""
-	} else if s.RootPassword == "" && (was == nil || !was.ClusterVolumeSnapshots) {
-		return ErrNoRootPassword
 	}
 	if err := ValidPassphrase(passphrase); err != nil {
 		return err
@@ -221,7 +211,7 @@ func (a *Appliance) Remove(passphrase string, ticket *pve.Ticket, before func(ct
 		}
 		// The state now records nothing. It goes, so that the next setup starts with a passphrase of
 		// its own; the settings stay to fill that setup in.
-		for _, name := range []string{a.KubeconfigPath(), filepath.Join(a.workdir(), "terraform.tfstate"), filepath.Join(a.workdir(), "terraform.tfstate.backup"), a.appliedPath()} {
+		for _, name := range []string{a.KubeconfigPath(), a.TokenPath(), filepath.Join(a.workdir(), "terraform.tfstate"), filepath.Join(a.workdir(), "terraform.tfstate.backup"), a.appliedPath()} {
 			if err := os.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return fmt.Errorf("clearing the removed cluster's state: %w", err)
 			}

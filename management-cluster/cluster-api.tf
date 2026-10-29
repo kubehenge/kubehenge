@@ -18,6 +18,8 @@ locals {
       for f in sort(fileset(dir, "{Chart.yaml,values.yaml,values.schema.json,templates/**,files/**}")) : "${f} ${filesha256("${dir}/${f}")}"
   ])) }
 
+  capi_operator_chart = "${path.module}/charts/cluster-api-operator-${trimprefix(local.capi_operator.chart, "v")}.tgz"
+
   # The providers' release runs it too, for its hooks, before the controller's chart is installed.
   # A release's chart names the image it was released with, by digest; a checkout's names none.
   controller_image = var.controller_image != null ? var.controller_image : yamldecode(file("${path.module}/../charts/kubehenge/values.yaml")).image
@@ -263,13 +265,12 @@ resource "helm_release" "cert_manager" {
 }
 
 # The operator alone; the providers are a release of their own so that a destroy removes them first.
+# Its chart is the archive beside the module, checked against its SHA-256 before Helm reads it.
 resource "helm_release" "cluster_api_operator" {
   name             = "cluster-api-operator"
   namespace        = "capi-operator-system"
   create_namespace = true
-  repository       = "https://kubernetes-sigs.github.io/cluster-api-operator"
-  chart            = "cluster-api-operator"
-  version          = local.capi_operator.chart
+  chart            = local.capi_operator_chart
   wait             = true
 
   values = [yamlencode({
@@ -284,6 +285,13 @@ resource "helm_release" "cluster_api_operator" {
       retryPeriod   = local.patient_leases.leaderElection.retryPeriod
     }
   })]
+
+  lifecycle {
+    precondition {
+      condition     = try(filesha256(local.capi_operator_chart), "") == local.capi_operator.chart_sha256
+      error_message = "${local.capi_operator_chart} is missing or not the archive of the Cluster API operator's chart ${local.capi_operator.chart}: a release carries it, and a checkout fetches it with make capi-operator-chart."
+    }
+  }
 
   depends_on = [helm_release.cert_manager]
 }
@@ -397,9 +405,6 @@ resource "helm_release" "kubehenge" {
           managementStorages = local.management_storages
         }
         sysAuditGroup = var.cluster_sys_audit ? proxmox_virtual_environment_group.clusters_audit[0].group_id : ""
-        # Written by the appliance, never by this module, so that the password stays out of the
-        # state.
-        volumeSnapshots = { rootSecret = var.cluster_volume_snapshots ? "kubehenge-root-pam" : "" }
       }
       templateRefresh = {
         enabled       = local.template_builder.enabled

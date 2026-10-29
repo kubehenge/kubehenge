@@ -8,7 +8,7 @@ CAPMOX_IMAGE ?= ghcr.io/kubehenge/cluster-api-provider-proxmox
 HELM_ADDON_IMAGE ?= ghcr.io/kubehenge/cluster-api-addon-provider-helm
 KO_FLAGS ?=
 
-.PHONY: build web gateway-api website dist index image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-templates e2e-volumes e2e-interface e2e-appliance
+.PHONY: build web gateway-api capi-operator-chart website dist index image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-templates e2e-volumes e2e-interface e2e-appliance
 .PHONY: fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker unit-go unit-web unit-tofu unit-shell tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
@@ -37,6 +37,22 @@ $(GATEWAY_API):
 	mv $@.part $@
 
 gateway-api: $(GATEWAY_API)
+
+# The Cluster API operator's chart, which the management-cluster module installs from beside it and
+# so the appliance's archive carries: the archive of the release management-cluster/versions.tf
+# names, downloaded again only when that changes and refused unless it matches the SHA-256 named
+# there, which the module checks again before installing it.
+CAPI_OPERATOR_TAG := $(shell sed -n 's/^ *chart *= *"\(v[^"@]*\)"$$/\1/p' management-cluster/versions.tf)
+CAPI_OPERATOR_SHA256 := $(shell sed -n 's/^ *chart_sha256 *= *"\([0-9a-f]*\)"$$/\1/p' management-cluster/versions.tf)
+CAPI_OPERATOR_CHART := management-cluster/charts/cluster-api-operator-$(CAPI_OPERATOR_TAG:v%=%).tgz
+$(CAPI_OPERATOR_CHART):
+	curl -fsSL --proto '=https' --retry 5 --retry-all-errors -o $@.part \
+		https://github.com/kubernetes-sigs/cluster-api-operator/releases/download/$(CAPI_OPERATOR_TAG)/$(notdir $@)
+	echo '$(CAPI_OPERATOR_SHA256)  $@.part' | sha256sum -c --quiet - || { rm -f $@.part; exit 1; }
+	rm -f management-cluster/charts/cluster-api-operator-*.tgz
+	mv $@.part $@
+
+capi-operator-chart: $(CAPI_OPERATOR_CHART)
 
 # The frontend's packages, installed again only when the lockfile changes.
 web/node_modules/.package-lock.json: web/package-lock.json
@@ -74,7 +90,7 @@ HEADLAMP_SHA256 := 1747c5de63963be925ded64dc2a5308144d260e43452855169bc771f03846
 HEADLAMP_VERSION := $(HEADLAMP_TAG:v%=%)
 HEADLAMP_TARBALL := dist/cache/Headlamp-$(HEADLAMP_VERSION)-linux-x64.tar.gz
 UNITS := kubehenge.service kubehenge-update.service kubehenge-update.path kubehenge-headlamp.service kubehenge-headlamp.socket kubehenge-headlamp-proxy.service
-dist: web gateway-api
+dist: web gateway-api capi-operator-chart
 	rm -rf dist/stage && mkdir -p dist/stage/bin dist/stage/share/kubehenge/appliance dist/stage/share/kubehenge/headlamp/plugins dist/cache
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='$(RELEASE_LDFLAGS)' \
 		-o dist/stage/bin/kubehenge ./cmd/kubehenge
@@ -233,7 +249,7 @@ unit-go: web gateway-api
 unit-web: web/node_modules/.package-lock.json
 	cd web && npm test
 
-unit-tofu: tofu-init
+unit-tofu: tofu-init capi-operator-chart
 	set -e; for m in $(MODULES); do $(TOFU) -chdir=$$m test; done
 
 unit-shell:
@@ -251,10 +267,10 @@ integration: web gateway-api
 		go test -tags integration -count=1 -run '^TestIntegration' ./pkg/...
 
 # End-to-end tier: needs a Proxmox VE host. DIR is a root configuration applying management-cluster/.
-e2e-management-cluster:
+e2e-management-cluster: capi-operator-chart
 	TOFU=$(TOFU) test/e2e/management-cluster.sh $(DIR)
 
-e2e-management-cluster-upgrade:
+e2e-management-cluster-upgrade: capi-operator-chart
 	TOFU=$(TOFU) test/e2e/management-cluster-upgrade.sh $(DIR)
 
 # Against the management cluster in KUBECONFIG; settings in test/e2e/workload-cluster.sh.

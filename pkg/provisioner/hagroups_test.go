@@ -56,7 +56,7 @@ func TestSysAuditRefusedAtAdmissionAndCreation(t *testing.T) {
 	}
 	created := networkCluster("192.168.1.1", 24)
 	created.Spec.Topology.Variables = append(created.Spec.Topology.Variables, auditing)
-	if resp := callBeforeClusterCreate(h, created); resp.Status != runtimehooksv1.ResponseStatusFailure || !strings.Contains(resp.Message, "Sys.Audit on /") {
+	if resp := callBeforeClusterCreate(t, h, created); resp.Status != runtimehooksv1.ResponseStatusFailure || !strings.Contains(resp.Message, "Sys.Audit on /") {
 		t.Errorf("BeforeClusterCreate let Sys.Audit on / through where none may hold it: %s %q", resp.Status, resp.Message)
 	}
 
@@ -77,7 +77,7 @@ func TestSysAuditRefusedAtAdmissionAndCreation(t *testing.T) {
 	if _, err := v.ValidateCreate(context.Background(), web); err != nil {
 		t.Errorf("refused where clusters may hold it: %v", err)
 	}
-	if resp := callBeforeClusterCreate(h, created); strings.Contains(resp.Message, "Sys.Audit") {
+	if resp := callBeforeClusterCreate(t, h, created); strings.Contains(resp.Message, "Sys.Audit") {
 		t.Errorf("BeforeClusterCreate refused where clusters may hold it: %q", resp.Message)
 	}
 }

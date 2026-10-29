@@ -55,6 +55,8 @@ if [ "${test%-addons}" = talos ]; then
 fi
 
 mkdir -p "${work}/mgmt" "${work}/plugins"
+# The module installs the Cluster API operator from the chart archive beside it, which no checkout holds.
+make -s -C "${repo}" capi-operator-chart
 # OpenTofu reads only the root module's lock, so the module's own checks the providers.
 cp "${repo}/test/e2e/ci/main.tf" "${repo}/management-cluster/.terraform.lock.hcl" "${work}/mgmt/"
 export TF_PLUGIN_CACHE_DIR="${work}/plugins"
@@ -265,12 +267,11 @@ case "${test}" in
         ;;
     k3s | k3s-addons)
         # The one cluster on the storage of its own, which switches the CSI plugin's newest release
-        # on and off, and volume snapshots, with root@pam's password stored as the appliance stores it.
+        # on and off, and volume snapshots, with the copy proxy's image pulled from
+        # KUBEHENGE_E2E_REGISTRY, where this build was pushed.
         if [ "${test}" = k3s ]; then
             export KUBEHENGE_E2E_STORAGE=own KUBEHENGE_E2E_DATASTORE_ALLOCATE=1 KUBEHENGE_E2E_LOCAL_STORAGE=local
             export KUBEHENGE_E2E_VOLUME_SNAPSHOTS=1
-            printf '%s' "${KUBEHENGE_E2E_ROOT_PASSWORD:?}" |
-                kubectl -n kubehenge-system create secret generic kubehenge-root-pam --from-file=password=/dev/stdin > /dev/null
         fi
         # In one of main.tf's extra_cluster_namespaces, created with the interface's own account.
         export KUBEHENGE_E2E_NAMESPACE=e2e-team
