@@ -2734,10 +2734,18 @@ EOF
     git_file=$(manifest one)
     git_request=$(jq -cn --arg c "${git_file}" '{content: $c, branch: "main", message: "one"}')
     git_api POST "${contents}" -d "${git_request}" > /dev/null
-    # push <revision>: commits the manifest at a new revision.
-    push() {
-        git_current=$(git_api GET "${contents}")
+    # push <revision>: commits the manifest at a new revision. The Git server shares the worker with the
+    # GitOps engine being installed, which can hold up its answers past curl's limit, so the commit is
+    # tried until it is there.
+    push() { until_true 120 "commit ${1} pushed to the Git server" pushed "$1"; }
+    # pushed <revision>: whether the manifest is at that revision, committing it if not.
+    pushed() {
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed call is only a retry.
+        git_current=$(git_api GET "${contents}") || return 1
         git_file=$(manifest "$1")
+        # A try whose answer was lost may have committed it already.
+        git_now=$(printf '%s' "${git_current}" | jq -r '.content // "" | gsub("\\s"; "")')
+        [ "${git_now}" != "${git_file}" ] || return 0
         git_request=$(printf '%s' "${git_current}" | jq -c --arg c "${git_file}" --arg m "$1" '{content: $c, sha: .sha, branch: "main", message: $m}')
         git_api PUT "${contents}" -d "${git_request}" > /dev/null
     }

@@ -176,9 +176,12 @@ jobs:
         timeout-minutes: 140
         env:
           TEST: ${{ inputs.test }}
+        # The test's output goes into the artifacts too: a runner lost after the job's steps never
+        # uploads the job's log, while the artifacts are already up.
+        shell: bash
         run: >-
           test/e2e/ci/guard.sh run "$RUNNER_TEMP/test.pid" "$RUNNER_TEMP/guard.txt"
-          test/e2e/ci/run.sh "$RUNNER_TEMP/e2e" "$TEST"
+          test/e2e/ci/run.sh "$RUNNER_TEMP/e2e" "$TEST" 2>&1 | tee "$RUNNER_TEMP/test.log"
       # Each KVM counter's average per second over the job, to set one runner's CPU against
       # another's.
       - name: The guests' exits
@@ -223,6 +226,7 @@ jobs:
         if: failure()
         run: |
           out="$RUNNER_TEMP/artifacts" && mkdir -p "$out"
+          cp "$RUNNER_TEMP/test.log" "$out/test.log" || true
           free -m > "$out/memory.txt"; sudo dmesg | tee "$out/dmesg.txt" >/dev/null || true
           pve() { docker exec kubehenge-e2e-pve "$@"; }
           pve journalctl -b --no-pager > "$out/proxmox-journal.txt" || true
