@@ -1,10 +1,22 @@
-import type { JSX } from "react";
+import { useState, type JSX } from "react";
 
 import { api } from "./api";
 import { clusterPath } from "./ClusterDetail";
 import { Link } from "./router";
 import type { Cluster, Machine, PveNode } from "./types";
-import { Status, age, filled, pollIdle, usePoll, type Health } from "./ui";
+import {
+  Detail,
+  Dialog,
+  ErrorBox,
+  RowMenu,
+  Status,
+  age,
+  errorMessage,
+  filled,
+  pollIdle,
+  usePoll,
+  type Health,
+} from "./ui";
 
 // machineStatus says how far a machine is, as the cluster list says it of clusters. A machine on a
 // Proxmox VE node that is offline is down whatever Cluster API last read of it.
@@ -12,14 +24,17 @@ export function machineStatus(m: Machine, offline = false): { state: Health; tex
   if (offline) {
     return { state: "error", text: "Node offline" };
   }
+  if (m.phase === "Deleting") {
+    return { state: "deleting", text: "Deleting" };
+  }
+  if (m.replacing === true) {
+    return { state: "progress", text: filled(m.waiting) ? "Replacement waits" : "Replacing" };
+  }
   if (m.ready) {
     return { state: "ok", text: "Ready" };
   }
   if (m.phase === "Failed") {
     return { state: "error", text: "Failed" };
-  }
-  if (m.phase === "Deleting") {
-    return { state: "deleting", text: "Deleting" };
   }
   return { state: "progress", text: "Not ready" };
 }
@@ -45,19 +60,42 @@ export function crowding(machines: Machine[]): string | undefined {
   return `${node} runs ${count} of ${controlPlane.length} control-plane VMs, so losing it ${cost}. Migrate one to another node.`;
 }
 
-/** Machines is the Machines view: every machine of the cluster with where it runs and how it is. */
-export function Machines({ cluster: c }: { cluster: Cluster }): JSX.Element {
+/**
+ * Machines is the Machines view: every machine of the cluster with where it runs and how it is, and
+ * a machine's replacement for those who may change the cluster.
+ */
+export function Machines({
+  cluster: c,
+  can,
+  why,
+  onChanged,
+}: {
+  cluster: Cluster;
+  can: boolean;
+  why: string | undefined;
+  onChanged: () => void;
+}): JSX.Element {
   const { data: nodes } = usePoll(api.nodes, pollIdle);
+  const [replacing, setReplacing] = useState<Machine>();
+  const [keepError, setKeepError] = useState<string>();
   const offline = new Set((nodes ?? []).filter((n) => !n.online).map((n) => n.node));
   const machines = c.machines ?? [];
   const crowded = crowding(machines);
   const talos = c.distribution === "talos";
+  const keep = async (m: Machine): Promise<void> => {
+    setKeepError(undefined);
+    try {
+      await api.keepMachine(c.namespace, c.name, m.name);
+      onChanged();
+    } catch (err) {
+      setKeepError(errorMessage(err));
+    }
+  };
   const columns = [
     "Name",
     "Role",
     "Proxmox VE node",
     "Status",
-    "Phase",
     // Beside the Talos release, the version is named for what it is.
     talos ? "Kubernetes" : "Version",
     ...(talos ? ["Talos"] : []),
@@ -67,18 +105,22 @@ export function Machines({ cluster: c }: { cluster: Cluster }): JSX.Element {
   return (
     <div className="box scroll">
       {crowded !== undefined && <p className="warning">{crowded}</p>}
+      <ErrorBox message={keepError} />
       <table className="grid">
         <thead>
           <tr>
             {columns.map((h) => (
               <th key={h}>{h}</th>
             ))}
+            <th>
+              <span className="visually-hidden">Actions</span>
+            </th>
           </tr>
         </thead>
         <tbody>
           {machines.length === 0 && (
             <tr>
-              <td colSpan={columns.length} className="muted">
+              <td colSpan={columns.length + 1} className="muted">
                 No machines yet
               </td>
             </tr>
@@ -88,25 +130,116 @@ export function Machines({ cluster: c }: { cluster: Cluster }): JSX.Element {
             return (
               <tr key={m.name}>
                 <td>
-                  {m.node ?? m.name}
-                  {filled(m.waiting) && <div className="hint message">{m.waiting}</div>}
+                  <span className="nowrap">{m.node ?? m.name}</span>
+                  {m.replacing !== true && filled(m.waiting) && <div className="hint message">{m.waiting}</div>}
                 </td>
-                <td>{m.role === "control-plane" ? "Control plane" : "Worker"}</td>
+                <td className="nowrap">{m.role === "control-plane" ? "Control plane" : "Worker"}</td>
                 <td>{m.proxmoxNode ?? ""}</td>
                 <td>
                   <Status state={s.state} text={s.text} />
+                  {m.replacing === true && filled(m.waiting) && <Detail>{m.waiting}</Detail>}
                 </td>
-                <td>{m.phase}</td>
                 <td>{m.version ?? ""}</td>
                 {talos && <td>{m.talos ?? ""}</td>}
                 <td>{(m.addresses ?? []).join(", ")}</td>
                 <td title={new Date(m.created).toLocaleString()}>{age(m.created)}</td>
+                <td className="row-action">
+                  <RowMenu label={`Actions for ${m.node ?? m.name}`}>
+                    {m.replacing === true && m.phase !== "Deleting" ? (
+                      <button
+                        type="button"
+                        disabled={!can}
+                        title={why}
+                        aria-label={`Keep ${m.node ?? m.name}`}
+                        onClick={() => {
+                          void keep(m);
+                        }}
+                      >
+                        Keep
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="danger"
+                        disabled={!can || m.phase === "Deleting"}
+                        title={why}
+                        aria-label={`Replace ${m.node ?? m.name}`}
+                        onClick={() => setReplacing(m)}
+                      >
+                        Replace…
+                      </button>
+                    )}
+                  </RowMenu>
+                </td>
               </tr>
             );
           })}
         </tbody>
       </table>
+      {replacing !== undefined && (
+        <ReplaceDialog
+          cluster={c}
+          machine={replacing}
+          onClose={() => setReplacing(undefined)}
+          onDone={() => {
+            setReplacing(undefined);
+            onChanged();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function ReplaceDialog({
+  cluster: c,
+  machine: m,
+  onClose,
+  onDone,
+}: {
+  cluster: Cluster;
+  machine: Machine;
+  onClose: () => void;
+  onDone: () => void;
+}): JSX.Element {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const replace = async (): Promise<void> => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.replaceMachine(c.namespace, c.name, m.name);
+      onDone();
+    } catch (err) {
+      setError(errorMessage(err));
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog
+      title={`Replace ${m.node ?? m.name}`}
+      onClose={onClose}
+      onSubmit={() => {
+        void replace();
+      }}
+      actions={
+        <>
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="danger" disabled={busy}>
+            Replace
+          </button>
+        </>
+      }
+    >
+      <p>
+        {m.role === "control-plane"
+          ? "Deletes the VM and its disks, then adds a new control-plane node. Waits while etcd would lose its majority."
+          : "Drains the node, deletes the VM and its disks, then adds a new worker."}
+      </p>
+      <ErrorBox message={error} />
+    </Dialog>
   );
 }
 

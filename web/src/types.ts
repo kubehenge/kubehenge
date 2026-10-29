@@ -143,6 +143,8 @@ export interface Machine {
   ready: boolean;
   /** What keeps it from being ready, as Cluster API sums it up. */
   waiting?: string;
+  /** Marked for its health check to replace. */
+  replacing?: boolean;
   addresses?: string[];
   created: string;
   /** The Talos release its node runs, on a Talos cluster. */

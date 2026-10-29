@@ -518,6 +518,36 @@ describe("clusters", () => {
     );
   });
 
+  it("replaces a machine after asking, and keeps one marked for replacement", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/machines");
+    const routes: Record<string, Route> = {
+      ...signedIn,
+      "GET /api/clusters/default/web": {
+        body: { ...web, machines: [runningOn("cp-a", "pve1"), runningOn("md-a", "pve1", "worker")] },
+      },
+      "PUT /api/clusters/default/web/machines/md-a/replacement": { status: 204 },
+      "DELETE /api/clusters/default/web/machines/cp-a/replacement": { status: 204 },
+    };
+    const calls = fakeServer(routes);
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Replace md-a" }));
+    const dialog = screen.getByRole("dialog", { name: "Replace md-a" });
+    expect(dialog).toHaveTextContent("Drains the node, deletes the VM and its disks, then adds a new worker.");
+    routes["GET /api/clusters/default/web"] = {
+      body: {
+        ...web,
+        machines: [{ ...runningOn("cp-a", "pve1"), replacing: true }, runningOn("md-a", "pve1", "worker")],
+      },
+    };
+    await user.click(within(dialog).getByRole("button", { name: "Replace" }));
+    await waitFor(() => expect(reads(calls, "PUT /api/clusters/default/web/machines/md-a/replacement")).toBe(1));
+
+    const marked = await screen.findByRole("row", { name: /^cp-a .*Replacing/u });
+    await user.click(within(marked).getByRole("button", { name: "Keep cp-a" }));
+    await waitFor(() => expect(reads(calls, "DELETE /api/clusters/default/web/machines/cp-a/replacement")).toBe(1));
+  });
+
   it("reads the setup status no more once signed out, even when the last read fails after", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const setup = held();

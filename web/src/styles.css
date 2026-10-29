@@ -1279,6 +1279,48 @@ button.go {
   vertical-align: middle;
 }
 
+.row-menu-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
+.row-menu-toggle:not(:hover, :focus-visible) {
+  border-color: transparent;
+  background: transparent;
+}
+
+.row-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 4px;
+  min-width: 160px;
+  background: var(--surface);
+  color: inherit;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.row-menu:popover-open {
+  display: grid;
+}
+
+.row-menu button {
+  width: 100%;
+  justify-content: start;
+  border-color: transparent;
+  background: transparent;
+}
+
+.row-menu button:not(:disabled):hover {
+  background: var(--hover);
+}
+
+.row-menu button.danger {
+  color: var(--danger);
+}
+
 /* A shadow, not a border, so the row's text stays in line with the rows around it. */
 .grid tr.attention td:first-child {
   box-shadow: inset 3px 0 0 var(--warning);
@@ -2094,7 +2136,7 @@ details.advanced > summary {
 }
 
 /* A name breaks nowhere; its table scrolls instead in a narrow window. */
-.grid td.nowrap {
+.grid :is(td.nowrap, td > .nowrap) {
   white-space: nowrap;
 }
 

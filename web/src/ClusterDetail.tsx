@@ -345,7 +345,16 @@ export function ClusterDetail({
               />
             )}
             {view === "health" && <HealthView cluster={c} headlamp={inHeadlamp} />}
-            {view === "machines" && <Machines cluster={c} />}
+            {view === "machines" && (
+              <Machines
+                cluster={c}
+                can={can}
+                why={why}
+                onChanged={() => {
+                  void reload();
+                }}
+              />
+            )}
             {view === "backups" && (
               <>
                 <BackupsView cluster={c} can={can} onEdit={setAction} />

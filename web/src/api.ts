@@ -240,6 +240,10 @@ export interface Api {
   talosconfig: (ns: string, name: string) => Promise<Blob>;
   /** retryTalosUpgrade takes back the failed node upgrade that holds a Talos cluster's others. */
   retryTalosUpgrade: (ns: string, name: string) => Promise<void>;
+  /** replaceMachine marks a machine for its cluster's health check to replace. */
+  replaceMachine: (ns: string, name: string, machine: string) => Promise<void>;
+  /** keepMachine takes that mark back. */
+  keepMachine: (ns: string, name: string, machine: string) => Promise<void>;
   ingressCA: (ns: string, name: string) => Promise<Blob>;
   storedCredential: (purpose: string, cluster?: ClusterRef) => Promise<StoredCredential>;
   storeCredential: (purpose: string, values: Record<string, string>, cluster?: ClusterRef) => Promise<StoredCredential>;
@@ -315,6 +319,10 @@ export const api: Api = {
   kubeconfig: (ns, name) => download("GET", `${clusterPath(ns, name)}/kubeconfig`),
   talosconfig: (ns, name) => download("GET", `${clusterPath(ns, name)}/talosconfig`),
   retryTalosUpgrade: (ns, name) => act("DELETE", `${clusterPath(ns, name)}/talos-upgrade-failure`),
+  replaceMachine: (ns, name, machine) =>
+    act("PUT", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/replacement`),
+  keepMachine: (ns, name, machine) =>
+    act("DELETE", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/replacement`),
   ingressCA: (ns, name) => download("GET", `${clusterPath(ns, name)}/certificates/ca`),
   storedCredential: (purpose, cluster) => request("GET", credentialPath(purpose, cluster)),
   storeCredential: (purpose, values, cluster) => request("PUT", credentialPath(purpose, cluster), { values }),

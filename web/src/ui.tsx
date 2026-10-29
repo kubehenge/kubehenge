@@ -416,6 +416,68 @@ export function Detail({ children }: { children: ReactNode }): JSX.Element {
   );
 }
 
+const rowMenuGap = 4;
+
+/**
+ * RowMenu keeps a table row's actions behind one small button, so the row stays as wide as its data.
+ * Its items are buttons; choosing one closes the menu.
+ */
+export function RowMenu({ label, children }: { label: string; children: ReactNode }): JSX.Element {
+  const id = useId();
+  const toggle = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const m = menu.current;
+    const hide = (): void => {
+      if (m !== null && "hidePopover" in m && m.matches(":popover-open")) {
+        m.hidePopover();
+      }
+    };
+    // Under its button, right edges in line; it is fixed to the window, so scrolling would leave it behind.
+    const place = (e: Event): void => {
+      const r = toggle.current?.getBoundingClientRect();
+      if (m !== null && "newState" in e && e.newState === "open" && r !== undefined) {
+        m.style.top = `${r.bottom + rowMenuGap}px`;
+        m.style.right = `${window.innerWidth - r.right}px`;
+      }
+    };
+    const away = (e: Event): void => {
+      if (!(e.target instanceof Node && m?.contains(e.target) === true)) {
+        hide();
+      }
+    };
+    const chosen = (e: Event): void => {
+      if (e.target instanceof Element && e.target.closest("button") !== null) {
+        hide();
+      }
+    };
+    m?.addEventListener("beforetoggle", place);
+    m?.addEventListener("click", chosen);
+    window.addEventListener("scroll", away, true);
+    window.addEventListener("resize", hide);
+    return () => {
+      m?.removeEventListener("beforetoggle", place);
+      m?.removeEventListener("click", chosen);
+      window.removeEventListener("scroll", away, true);
+      window.removeEventListener("resize", hide);
+    };
+  }, []);
+  return (
+    <>
+      <button ref={toggle} type="button" className="icon row-menu-toggle" popoverTarget={id} aria-label={label}>
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="3" cy="8" r="1.4" fill="currentColor" />
+          <circle cx="8" cy="8" r="1.4" fill="currentColor" />
+          <circle cx="13" cy="8" r="1.4" fill="currentColor" />
+        </svg>
+      </button>
+      <div ref={menu} id={id} className="row-menu" popover="auto">
+        {children}
+      </div>
+    </>
+  );
+}
+
 /** Views is a page's row of view links. On a phone the row scrolls sideways, so the open view is scrolled into sight. */
 export function Views({ label, open, children }: { label: string; open: string; children: ReactNode }): JSX.Element {
   const row = useRef<HTMLElement>(null);

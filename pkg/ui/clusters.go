@@ -278,7 +278,9 @@ type machineView struct {
 	Phase string `json:"phase"`
 	Ready bool   `json:"ready"`
 	// Waiting is what keeps a machine that is not ready from it, as Cluster API sums it up.
-	Waiting   string    `json:"waiting,omitempty"`
+	Waiting string `json:"waiting,omitempty"`
+	// Replacing is set while the machine is marked for its health check to replace.
+	Replacing bool      `json:"replacing,omitempty"`
 	Addresses []string  `json:"addresses,omitempty"`
 	Created   time.Time `json:"created"`
 }
@@ -570,29 +572,9 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 	v.Machines = []machineView{}
 	for i := range machines.Items {
 		m := &machines.Items[i]
-		mv := machineView{
-			Name:        m.Name,
-			Node:        m.Status.NodeRef.Name,
-			ProxmoxNode: hosts[m.Spec.InfrastructureRef.Name],
-			Role:        workerRole,
-			Version:     m.Spec.Version,
-			Phase:       m.Status.Phase,
-			Ready:       meta.IsStatusConditionTrue(m.Status.Conditions, clusterv1.MachineReadyCondition),
-			Created:     m.CreationTimestamp.Time,
-		}
+		mv := machineOf(m, hosts[m.Spec.InfrastructureRef.Name])
 		if v.Talos != nil {
 			mv.Talos, _ = provisioner.MachineTalos(m)
-		}
-		if _, cp := m.Labels[clusterv1.MachineControlPlaneLabel]; cp {
-			mv.Role = controlPlaneRole
-		}
-		if ready := meta.FindStatusCondition(m.Status.Conditions, clusterv1.MachineReadyCondition); ready != nil && !mv.Ready {
-			mv.Waiting = ready.Message
-		}
-		for _, a := range m.Status.Addresses {
-			if a.Type == clusterv1.MachineInternalIP || a.Type == clusterv1.MachineExternalIP {
-				mv.Addresses = append(mv.Addresses, a.Address)
-			}
 		}
 		v.Machines = append(v.Machines, mv)
 	}
