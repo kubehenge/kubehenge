@@ -37,6 +37,16 @@ provider "proxmox" {
   endpoint  = var.proxmox_endpoint
   api_token = var.proxmox_api_token
   insecure  = var.proxmox_insecure
+
+  # Proxmox VE reserves no ID it offers as the next free one, so a template build, a cluster's
+  # machine or anything else created at the same moment can be offered the same ID. When its
+  # create is refused for that, the provider retries it and takes the second refusal for a create
+  # of its own that went through: it configures and starts the other VM and keeps it in its state,
+  # to be destroyed with the node. Random IDs from a range of their own keep the nodes away from
+  # the IDs every other creator is offered.
+  random_vm_ids      = true
+  random_vm_id_start = 10000
+  random_vm_id_end   = 99999
 }
 
 provider "helm" {
