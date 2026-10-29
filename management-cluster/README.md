@@ -20,9 +20,10 @@ On Proxmox VE:
 
 In the cluster:
 
+- Flannel as the pod network, with kube-network-policies, which enforces NetworkPolicies, beside it.
 - cert-manager.
 - The Cluster API Operator, and through it Cluster API core (with the ClusterClass and Runtime SDK features on), the Proxmox VE infrastructure provider (`capmox`), the bootstrap and control-plane providers for kubeadm, RKE2 and k3s (Talos's join with a Talos ClusterClass), the in-cluster IP address manager, and the Add-on Provider for Helm.
-- The `kubehenge` chart (`../charts/kubehenge`): Kubehenge's ClusterClasses and its controller.
+- The `kubehenge` chart (`../charts/kubehenge`): Kubehenge's ClusterClasses, its controller, and NetworkPolicies that let nothing reach Kubehenge's pods but the controller's webhook port.
 
 `registry_mirrors` points the nodes at image registry mirrors, for networks without direct access to the public registries. The nodes pull the Image Factory's installer, Sidero's images and everything from registry.k8s.io only with their publishers' keyless signatures, so a mirror of those registries serves the signatures too. The Talos disk image the VMs boot from is downloaded from the Image Factory over TLS alone: the factory builds it again with different bytes, and publishes no checksum or signature for it. `cluster_oidc` lists OpenID Connect providers every new workload cluster's API server trusts unless the cluster names its own; tokens and certificates keep working beside them. `capmox` verifies the Proxmox VE API's certificate against the CA you give it; upstream's default is to skip that check. The nodes do not report to Sidero's public discovery service.
 

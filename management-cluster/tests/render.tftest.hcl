@@ -328,6 +328,14 @@ run "controller_and_clusters_are_least_privilege" {
 
   assert {
     condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d).kubeNetworkPoliciesEnabled
+      if yamldecode(d).kind == "KubeFlannelCNIConfig"
+    ] == [true]
+    error_message = "the management cluster must enforce NetworkPolicies"
+  }
+
+  assert {
+    condition = [
       for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : [
         for r in yamldecode(d).rules : [r.image, r.keyless.issuer, try(r.keyless.subject, r.keyless.subjectRegex)]
       ] if yamldecode(d).kind == "ImageVerificationConfig"

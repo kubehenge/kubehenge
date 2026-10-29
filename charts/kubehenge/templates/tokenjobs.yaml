@@ -165,4 +165,35 @@ spec:
       matchLabels:
         {{ $template }}: "true"
     parameterNotFoundAction: Deny
+---
+{{- $pve := urlParse .Values.proxmox.url }}
+{{- $pvePort := regexFind "[0-9]+$" (regexFind ":[0-9]+$" $pve.host) | default (ternary "80" "443" (eq $pve.scheme "http")) }}
+# A token Job reaches nothing but Proxmox VE's API, by its port, and the cluster's DNS to find it:
+# the token in it goes nowhere else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $account }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $account }}
+  policyTypes: [Ingress, Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - ports:
+        - protocol: TCP
+          port: {{ $pvePort }}
 {{- end }}
