@@ -27,6 +27,7 @@ const cluster: Cluster = {
   class: "kubehenge-rke2",
   distribution: "rke2",
   version: "v1.36.5+rke2r1",
+  generation: 1,
   created: new Date().toISOString(),
   deleting: false,
   phase: "Provisioned",
@@ -315,6 +316,7 @@ describe("a cluster's etcd snapshots", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(calls.findLast((c) => c.key === "POST /api/clusters/clusters/web/etcd-restores")?.body).toStrictEqual({
       snapshot: snapshot.name,
+      confirm: "web",
     });
   });
 
@@ -356,6 +358,7 @@ describe("a cluster's etcd snapshots", () => {
             requestedAt: taken,
             phase: "Restoring",
             node: "web-cp-a",
+            before: "20261021T120000Z-v1.37.1-rke2r1.db.age",
             started: taken,
           },
         },
@@ -364,9 +367,34 @@ describe("a cluster's etcd snapshots", () => {
     render(<App />);
 
     await expect(screen.findByText("Restoring etcd on web-cp-a")).resolves.toBeInTheDocument();
+    expect(screen.getByText("Undo by restoring 20261021T120000Z-v1.37.1-rke2r1.db.age")).toBeInTheDocument();
     expect(screen.getByText(/Download and restore need Sys.Modify/u)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: `Download ${snapshot.name}` })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Take snapshot" })).toBeDisabled();
+  });
+
+  it("say why a restore took no snapshot of etcd as it was", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/backups");
+    fakeServer({
+      ...base,
+      "GET /api/clusters/clusters/web/etcd-snapshots": {
+        body: {
+          ...view,
+          restore: {
+            snapshot: snapshot.name,
+            requestedAt: taken,
+            phase: "Succeeded",
+            noBefore: "reaching etcd: etcdserver: no leader",
+            started: taken,
+            finished: taken,
+          },
+        },
+      },
+    });
+    render(<App />);
+
+    await expect(screen.findByText("No snapshot to undo it")).resolves.toBeInTheDocument();
+    expect(screen.getByText("Reaching etcd: etcdserver: no leader.")).toBeInTheDocument();
   });
 
   it("offer to be set up where they are off", async () => {

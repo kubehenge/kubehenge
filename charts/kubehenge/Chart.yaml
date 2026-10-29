@@ -5,7 +5,7 @@ description: >-
   Kubehenge's ClusterClasses and controller for Cluster API on Proxmox VE, installed into a
   Kubehenge management cluster
 type: application
-version: 0.17.1
+version: 0.18.0
 appVersion: 0.3.1
 home: https://github.com/kubehenge/kubehenge
 sources:

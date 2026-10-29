@@ -98,7 +98,7 @@ func TestVolumeSnapshotsRefusedAtAdmissionAndCreation(t *testing.T) {
 	}
 	created := networkCluster("192.168.1.1", 24)
 	created.Spec.Topology.Variables = append(created.Spec.Topology.Variables, variableOf("storage", `"local-zfs"`), snapshotting)
-	if resp := callBeforeClusterCreate(h, created); !strings.Contains(resp.Message, "no root@pam password is stored") {
+	if resp := callBeforeClusterCreate(t, h, created); !strings.Contains(resp.Message, "no root@pam password is stored") {
 		t.Errorf("BeforeClusterCreate let volume snapshots in without root@pam's password: %s %q", resp.Status, resp.Message)
 	}
 

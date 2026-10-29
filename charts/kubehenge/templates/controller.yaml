@@ -83,6 +83,38 @@ subjects:
     name: {{ $name }}
     namespace: {{ .Release.Namespace }}
 ---
+# The controller writes Secrets in every cluster's namespace, which RBAC cannot narrow to a name. A
+# ServiceAccount token Secret it wrote would be filled with a token of any account in that
+# namespace, and hand it that account's rights. The controller asks workload clusters for tokens
+# through the TokenRequest API and writes no such Secret, so this refuses it every one. It runs
+# inside the API server, so no webhook has to answer for it, and it fails closed.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}-secrets
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [secrets]
+  matchConditions:
+    - name: controller
+      expression: request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:{{ $name }}'
+  validations:
+    - expression: "!has(object.type) || object.type != 'kubernetes.io/service-account-token'"
+      message: the controller writes no ServiceAccount token Secrets
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}-secrets
+spec:
+  policyName: {{ $name }}-secrets
+  validationActions: [Deny]
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -263,7 +295,7 @@ spec:
             {{- with .Values.managementEndpoint }}
             - --management-endpoint={{ . }}
             {{- end }}
-            - --pod-security-exempt={{ join "," .Values.podSecurityExempt }}
+            - {{ printf "--pod-security-exempt=%s" (toJson .Values.podSecurityExempt) | quote }}
             - --proxmox-ca=/etc/kubehenge/proxmox/ca.crt
             {{- if .Values.interface.offerHARules }}
             - --offer-ha-rules
@@ -400,9 +432,10 @@ spec:
       port: 443
 ---
 # The controller checks Kubehenge's clusters as they are created and changed (pkg/provisioner's
-# ClusterValidator). Ignored while the controller is away: the check guards sizing and the one
-# Rancher, and BeforeClusterCreate still refuses at creation, so nothing else in the management
-# cluster waits on it.
+# ClusterValidator), among them the grants a cluster asks for, such as Datastore.Allocate on its
+# storage. While the controller is away no cluster is created or changed: one let through then
+# would keep what the check refuses. Nothing the management cluster needs to come up writes a
+# Cluster, and a cluster being deleted, which the check leaves alone, is never held up by it.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
@@ -413,7 +446,10 @@ webhooks:
   - name: clusters.kubehenge.dev
     admissionReviewVersions: [v1]
     sideEffects: None
-    failurePolicy: Ignore
+    failurePolicy: Fail
+    matchConditions:
+      - name: not-being-deleted
+        expression: "!has(object.metadata.deletionTimestamp)"
     timeoutSeconds: 5
     clientConfig:
       service:

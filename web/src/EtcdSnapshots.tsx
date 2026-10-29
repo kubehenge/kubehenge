@@ -519,6 +519,7 @@ function RestoreState({
   const at = r.finished ?? r.started;
   // By when it was taken, as the table lists it, while the target still holds it.
   const from = snapshots.find((x) => x.name === r.snapshot);
+  const before = snapshots.find((x) => x.name === r.before);
   return (
     <dl className="summary">
       <dt>Last restore</dt>
@@ -530,6 +531,16 @@ function RestoreState({
           {filled(r.by) && `, by ${r.by}`}, {when(at)}
         </span>
         {filled(r.message) && <Detail>{sentence(r.message)}</Detail>}
+        {filled(r.before) && (
+          <div className="hint">
+            Undo by restoring {before === undefined ? r.before : `the snapshot of ${when(before.time)}`}
+          </div>
+        )}
+        {filled(r.noBefore) && (
+          <div className="hint">
+            No snapshot to undo it <Detail>{sentence(r.noBefore)}</Detail>
+          </div>
+        )}
       </dd>
     </dl>
   );
@@ -635,7 +646,7 @@ export function EtcdRestoreDialog({
     setBusy(true);
     setError(undefined);
     try {
-      await api.restoreEtcd(c.namespace, c.name, snapshot.name);
+      await api.restoreEtcd(c.namespace, c.name, { snapshot: snapshot.name, confirm: typed });
       onDone();
     } catch (err) {
       setError(errorMessage(err));
@@ -674,6 +685,7 @@ export function EtcdRestoreDialog({
       </p>
       {automatic ? (
         <>
+          <p>Snapshots etcd first, so another restore undoes it.</p>
           <p>
             {c.distribution === "talos"
               ? "Wipes etcd and reboots every control-plane node."

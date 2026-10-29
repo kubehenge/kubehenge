@@ -260,7 +260,7 @@ func etcdRuns(c *clusterv1.Cluster) []runView {
 			provisioner.RestoreStarting, provisioner.RestoreReplacing:
 			v.State, v.Phase = runRunning, string(st.Phase)
 		}
-		v.Steps = restoreSteps(cmp.Or(st.FailedIn, st.Phase), v.State)
+		v.Steps = restoreSteps(&st, v.State)
 		list = append(list, v)
 	}
 	snapshot := base
@@ -290,9 +290,10 @@ var restoreOrder = []provisioner.RestorePhase{
 }
 
 // restoreSteps are an etcd restore's phases as steps: those before the one it is in done, and that
-// one under way, or failed.
-func restoreSteps(at provisioner.RestorePhase, state string) []runStep {
-	current := slices.Index(restoreOrder, at)
+// one under way, or failed. Preparing, in which the restore snapshots etcd as it is, names that
+// snapshot, or says why there is none.
+func restoreSteps(st *provisioner.EtcdRestoreStatus, state string) []runStep {
+	current := slices.Index(restoreOrder, cmp.Or(st.FailedIn, st.Phase))
 	steps := make([]runStep, len(restoreOrder))
 	for i, p := range restoreOrder {
 		steps[i] = runStep{Name: string(p), State: stepWaiting}
@@ -304,6 +305,12 @@ func restoreSteps(at provisioner.RestorePhase, state string) []runStep {
 		case i == current && state == runFailed:
 			steps[i].State = stepFailed
 		}
+	}
+	switch {
+	case st.Before != "":
+		steps[0].Detail = "undo snapshot " + st.Before
+	case st.NoBefore != "":
+		steps[0].Detail = "no undo snapshot: " + st.NoBefore
 	}
 	return steps
 }

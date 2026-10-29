@@ -112,7 +112,7 @@ func TestRancherNeedsFourVCPUsOnEveryNode(t *testing.T) {
 		c := clusterWithRancher("rancher", true)
 		c.Spec.Topology.Version = "v1.36.5+rke2r1"
 		tc.change(c)
-		created := callBeforeClusterCreate(h, c)
+		created := callBeforeClusterCreate(t, h, c)
 		switch {
 		case tc.want == "" && created.Status == runtimehooksv1.ResponseStatusFailure:
 			t.Errorf("%s: refused: %s", tc.name, created.Message)
@@ -121,7 +121,7 @@ func TestRancherNeedsFourVCPUsOnEveryNode(t *testing.T) {
 		}
 	}
 	plain := networkCluster("192.168.1.1", 16)
-	if created := callBeforeClusterCreate(h, plain); created.Status == runtimehooksv1.ResponseStatusFailure {
+	if created := callBeforeClusterCreate(t, h, plain); created.Status == runtimehooksv1.ResponseStatusFailure {
 		t.Errorf("a cluster without Rancher on two vCPUs: %s", created.Message)
 	}
 }
@@ -228,13 +228,15 @@ func TestRancherStaysWithinItsKubernetes(t *testing.T) {
 	r := clusterWithRancher("rancher", true)
 	h, _ := hooksFor(t, r)
 	h.RancherKubernetes = KubernetesMinors{Min: 34, Max: 36}
-	if created := callBeforeClusterCreate(h, r); created.Status != runtimehooksv1.ResponseStatusFailure || !strings.Contains(created.Message, "1.34 to 1.36") {
+	if created := callBeforeClusterCreate(t, h, r); created.Status != runtimehooksv1.ResponseStatusFailure || !strings.Contains(created.Message, "1.34 to 1.36") {
 		t.Errorf("Rancher at v1.37: %s %q", created.Status, created.Message)
 	}
 	r.Spec.Topology.Version = "v1.36.5+rke2r1"
-	if created := callBeforeClusterCreate(h, r); created.Status != runtimehooksv1.ResponseStatusSuccess {
+	if created := callBeforeClusterCreate(t, h, r); created.Status != runtimehooksv1.ResponseStatusSuccess {
 		t.Errorf("Rancher at v1.36: %s %q", created.Status, created.Message)
 	}
+	r.Spec.Topology.Version = "v1.37.1+rke2r1"
+	storeCluster(t, h.Reader, r)
 	resp := &runtimehooksv1.BeforeClusterUpgradeResponse{}
 	h.BeforeClusterUpgrade(context.Background(), &runtimehooksv1.BeforeClusterUpgradeRequest{Cluster: *r, ToKubernetesVersion: "v1.37.1+rke2r1"}, resp)
 	if resp.RetryAfterSeconds == 0 || !strings.Contains(resp.Message, "1.34 to 1.36") {
@@ -242,6 +244,7 @@ func TestRancherStaysWithinItsKubernetes(t *testing.T) {
 	}
 	resp = &runtimehooksv1.BeforeClusterUpgradeResponse{}
 	plain := cluster()
+	storeCluster(t, h.Reader, plain)
 	h.BeforeClusterUpgrade(context.Background(), &runtimehooksv1.BeforeClusterUpgradeRequest{Cluster: *plain, ToKubernetesVersion: "v1.37.1+rke2r1"}, resp)
 	if resp.RetryAfterSeconds != 0 {
 		t.Errorf("a cluster without Rancher held back: %+v", resp)

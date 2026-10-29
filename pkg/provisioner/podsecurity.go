@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -25,6 +26,69 @@ const (
 	// kyvernoOff is the Kyverno level that leaves Kyverno out of the cluster.
 	kyvernoOff = "off"
 )
+
+// PodSecurityExempt are the namespaces whose pods neither Pod Security Admission nor Kyverno holds
+// to a cluster's level, by what puts components that need the host there. Kyverno exempts only
+// those of what the cluster runs, so that nobody can create one of the others and run privileged
+// pods in it. Pod Security Admission exempts them all: its exemptions are a file on the
+// control-plane nodes, and following the add-ons would replace those nodes whenever one is switched.
+type PodSecurityExempt struct {
+	// Always holds what every cluster runs.
+	Always []string `json:"always"`
+	// Calico holds Calico's, for a cluster whose CNI it is.
+	Calico     []string `json:"calico"`
+	Monitoring []string `json:"monitoring"`
+	Logs       []string `json:"logs"`
+	Backups    []string `json:"backups"`
+	Istio      []string `json:"istio"`
+	// MetalLB holds MetalLB's, for a load balancer that is MetalLB.
+	MetalLB []string `json:"metallb"`
+	// Rancher holds those of Rancher and its agents in Rancher's own cluster, RancherAgent those of
+	// the agents in a cluster that registers with it.
+	Rancher      []string `json:"rancher"`
+	RancherAgent []string `json:"rancherAgent"`
+}
+
+// For is the namespaces a cluster with CNI cni and addons exempts.
+func (e *PodSecurityExempt) For(cni string, addons *Addons) []string {
+	out := slices.Clone(e.Always)
+	for _, by := range []struct {
+		on         bool
+		namespaces []string
+	}{
+		{cni == cniCalico, e.Calico},
+		{addons.Monitoring.Enabled, e.Monitoring},
+		{addons.logsOn(), e.Logs},
+		{addons.Backups.Enabled, e.Backups},
+		{addons.Istio.Enabled, e.Istio},
+		{addons.LoadBalancer.Enabled && addons.LoadBalancer.implementation() == metalLB, e.MetalLB},
+		{addons.Rancher.Install, e.Rancher},
+		{!addons.Rancher.Install && addons.Rancher.registers(), e.RancherAgent},
+	} {
+		if !by.on {
+			continue
+		}
+		for _, ns := range by.namespaces {
+			if !slices.Contains(out, ns) {
+				out = append(out, ns)
+			}
+		}
+	}
+	return out
+}
+
+// all is every namespace any cluster may exempt.
+func (e *PodSecurityExempt) all() []string {
+	var out []string
+	for _, namespaces := range [][]string{e.Always, e.Calico, e.Monitoring, e.Logs, e.Backups, e.Istio, e.MetalLB, e.Rancher, e.RancherAgent} {
+		for _, ns := range namespaces {
+			if !slices.Contains(out, ns) {
+				out = append(out, ns)
+			}
+		}
+	}
+	return out
+}
 
 // kyvernoOn reports whether the cluster has Kyverno enforce a level.
 func (p PodSecurity) kyvernoOn() bool {

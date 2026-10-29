@@ -75,7 +75,7 @@ func withManagementCluster(t *testing.T, h *harness) *appliance.Appliance {
 	a := &appliance.Appliance{
 		Dir: t.TempDir(), Module: module, Tofu: fakeTofu, Release: "0.1.0",
 		ProxmoxURL: "https://pve.example:8006", ProxmoxCA: "-----BEGIN CERTIFICATE-----\n", Log: slog.New(slog.DiscardHandler),
-		InterfaceKubeconfig: func(_ context.Context, admin []byte, _ string) ([]byte, error) { return admin, nil },
+		InterfaceKubeconfig: func(_ context.Context, admin []byte, _, _ string) ([]byte, error) { return admin, nil },
 		StoreRootPassword:   func(context.Context, []byte, bool, string) error { return nil },
 	}
 	s := &appliance.Settings{

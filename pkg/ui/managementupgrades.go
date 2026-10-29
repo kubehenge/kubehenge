@@ -146,14 +146,15 @@ func (s *Server) keepUnattended(w http.ResponseWriter, r *http.Request, u user) 
 		writeError(w, http.StatusConflict, "no management cluster to upgrade yet")
 		return
 	}
-	key := "passphrase:" + u.ticket.Username
-	if !s.limiter.allow(key) {
+	done, ok := s.limiter.reserve(passphraseCount(u))
+	if !ok {
 		writeError(w, http.StatusTooManyRequests, "too many wrong passphrases. Try again later")
 		return
 	}
-	switch err := a.CheckPassphrase(r.Context(), req.Passphrase); {
+	err := a.CheckPassphrase(r.Context(), req.Passphrase)
+	done(errors.Is(err, appliance.ErrPassphrase))
+	switch {
 	case errors.Is(err, appliance.ErrPassphrase):
-		s.limiter.fail(key)
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	case errors.Is(err, appliance.ErrBusy):

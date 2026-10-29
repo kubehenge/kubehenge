@@ -1,6 +1,6 @@
 import { useState, type JSX, type ReactNode } from "react";
 
-import { api } from "./api";
+import { api, ApiError, httpPreconditionFailed } from "./api";
 import { autoscalerText } from "./Autoscaling";
 import { backupsRows } from "./Backups";
 import { everything, optionRows, type OptionRow } from "./ClusterOptions";
@@ -32,6 +32,8 @@ export function merged(a: ChangeRequest, b: ChangeRequest): ChangeRequest {
   return out;
 }
 
+const changedMeanwhile = "Someone changed the cluster meanwhile, so the staged changes are gone.";
+
 /**
  * StagingProvider keeps a cluster page's changes until they are applied together. Each dialog's
  * change is planned with those staged before it, so that what the server refuses shows in the
@@ -47,19 +49,46 @@ export function StagingProvider({
   children: ReactNode;
 }): JSX.Element {
   const [staged, setStaged] = useState<Staging["staged"]>();
+  const [dropped, setDropped] = useState<string>();
+  // Changes staged against a cluster someone has changed since would undo theirs: they go, and the
+  // page shows the cluster as it is now.
+  const outdated = (err: unknown): boolean => {
+    if (!(err instanceof ApiError) || err.status !== httpPreconditionFailed) {
+      return false;
+    }
+    setStaged(undefined);
+    setDropped(changedMeanwhile);
+    onApplied();
+    return true;
+  };
   const staging: Staging = {
     staged,
+    dropped,
     stage: async (req) => {
+      const generation = staged?.generation ?? c.generation;
       const all = merged(staged?.req ?? {}, req);
-      const plan = await api.plan(c.namespace, c.name, all);
-      setStaged(plan.changes.length === 0 ? undefined : { req: all, plan });
+      setDropped(undefined);
+      try {
+        const plan = await api.plan({ ...c, generation }, all);
+        setStaged(plan.changes.length === 0 ? undefined : { req: all, plan, generation });
+      } catch (err) {
+        outdated(err);
+        throw err;
+      }
     },
     discard: () => setStaged(undefined),
     apply: async () => {
       if (staged === undefined) {
         return;
       }
-      await api.change(c.namespace, c.name, staged.req);
+      try {
+        await api.change({ ...c, generation: staged.generation }, staged.req);
+      } catch (err) {
+        if (outdated(err)) {
+          return;
+        }
+        throw err;
+      }
       setStaged(undefined);
       onApplied();
     },
@@ -179,7 +208,7 @@ export function StagedBar({ cluster: c }: { cluster: Cluster }): JSX.Element | n
   const staging = useStaging();
   const [reviewing, setReviewing] = useState(false);
   if (staging?.staged === undefined) {
-    return null;
+    return <ErrorBox message={staging?.dropped} />;
   }
   const { changes } = staging.staged.plan;
   return (

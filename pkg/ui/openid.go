@@ -17,18 +17,24 @@ const openIDCookie = "__Host-kubehenge-openid"
 // openIDStateLifetime is how long the browser has to come back from the identity provider.
 const openIDStateLifetime = 10 * time.Minute
 
-// redirectURL is where the identity provider sends users back: the configured public address, or
-// the address the browser used.
-func (s *Server) redirectURL(r *http.Request) string {
+// noPublicURL is why an OpenID sign-in cannot start or finish without the public address.
+const noPublicURL = "OpenID sign-in needs the public address. An administrator sets it with --public-url"
+
+// redirectURL is where the identity provider sends users back, under the configured public address;
+// ok is false while none is configured. The address the browser used is never taken instead: the
+// Host header is the client's to choose, and a sign-in code must go nowhere it names.
+func (s *Server) redirectURL() (string, bool) {
 	base := strings.TrimSuffix(s.PublicURL, "/")
-	if base == "" {
-		base = "https://" + r.Host
-	}
-	return base + "/api/openid/callback"
+	return base + "/api/openid/callback", base != ""
 }
 
 // openIDStart sends the browser to the identity provider of an OpenID realm.
 func (s *Server) openIDStart(w http.ResponseWriter, r *http.Request) {
+	redirect, ok := s.redirectURL()
+	if !ok {
+		openIDFailed(w, r, noPublicURL)
+		return
+	}
 	realm := r.URL.Query().Get("realm")
 	realms, err := s.Accounts.Realms(r.Context())
 	if err != nil {
@@ -43,7 +49,7 @@ func (s *Server) openIDStart(w http.ResponseWriter, r *http.Request) {
 		openIDFailed(w, r, "no OpenID realm "+realm)
 		return
 	}
-	authURL, err := s.Accounts.OpenIDAuthURL(r.Context(), realm, s.redirectURL(r))
+	authURL, err := s.Accounts.OpenIDAuthURL(r.Context(), realm, redirect)
 	if err != nil {
 		s.Log.Error("openid auth-url", "realm", realm, "error", err)
 		openIDFailed(w, r, "Proxmox VE could not start the sign-in")
@@ -80,14 +86,19 @@ func (s *Server) openIDCallback(w http.ResponseWriter, r *http.Request) {
 		openIDFailed(w, r, "the identity provider refused: "+q.Get("error"))
 		return
 	}
-	addr := "address:" + clientAddress(r)
-	if !s.limiter.allow(addr) {
+	redirect, ok := s.redirectURL()
+	if !ok {
+		openIDFailed(w, r, noPublicURL)
+		return
+	}
+	done, ok := s.limiter.reserve(count{key: "address:" + clientAddress(r), allowed: addressFailuresAllowed})
+	if !ok {
 		openIDFailed(w, r, "too many failed sign-ins. Try again later")
 		return
 	}
-	ticket, err := s.Accounts.OpenIDLogin(r.Context(), code, state, s.redirectURL(r))
+	ticket, err := s.Accounts.OpenIDLogin(r.Context(), code, state, redirect)
+	done(err != nil)
 	if err != nil {
-		s.limiter.fail(addr)
 		s.Log.Info("openid sign-in refused", "address", clientAddress(r), "error", err)
 		openIDFailed(w, r, "sign-in through the identity provider failed")
 		return

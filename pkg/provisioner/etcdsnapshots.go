@@ -503,17 +503,22 @@ func LastEtcdSnapshot(c *clusterv1.Cluster) (EtcdSnapshot, bool) {
 
 // take snapshots the cluster's etcd into its target.
 func (s *EtcdSnapshotter) take(ctx context.Context, cluster *clusterv1.Cluster, t *ClusterTarget) (EtcdSnapshot, error) {
+	return takeEtcdSnapshot(ctx, s.Etcd, s.now(), cluster, t)
+}
+
+// takeEtcdSnapshot snapshots the cluster's etcd from etcd into target t, named for at.
+func takeEtcdSnapshot(ctx context.Context, etcd EtcdSource, at time.Time, cluster *clusterv1.Cluster, t *ClusterTarget) (EtcdSnapshot, error) {
 	identity, err := t.EtcdIdentity()
 	if err != nil {
 		return EtcdSnapshot{}, err
 	}
-	stream, err := s.Etcd.Snapshot(ctx, cluster)
+	stream, err := etcd.Snapshot(ctx, cluster)
 	if err != nil {
 		return EtcdSnapshot{}, fmt.Errorf("reaching etcd: %w", err)
 	}
 	defer func() { _ = stream.Close() }()
 	taken := EtcdSnapshot{
-		Name:              etcdSnapshotName(s.now(), cluster.Spec.Topology.Version),
+		Name:              etcdSnapshotName(at, cluster.Spec.Topology.Version),
 		KubernetesVersion: cluster.Spec.Topology.Version,
 		Distribution:      string(distributionOf(cluster)),
 		Revision:          stream.Revision,

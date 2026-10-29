@@ -12,6 +12,7 @@ const cluster = {
   class: "kubehenge-rke2",
   distribution: "rke2",
   version: "v1.36.5+rke2r1",
+  generation: 1,
   created: new Date().toISOString(),
   autoUpgraded: "v1.36.2+rke2r1 to v1.36.5+rke2r1 at 2026-10-13T03:00:00Z",
   deleting: false,

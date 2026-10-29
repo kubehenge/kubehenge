@@ -3,7 +3,7 @@ import type { JSX } from "react";
 import { Field } from "./ui";
 import { oneOf, record, text } from "./values";
 
-/** The Pod Security Standard levels Pod Security Admission enforces; privileged is Kubernetes' own default. */
+/** The Pod Security Standard levels Pod Security Admission enforces; baseline is the classes' default. */
 export const admissionLevels = ["privileged", "baseline", "restricted"] as const;
 export type AdmissionLevel = (typeof admissionLevels)[number];
 
@@ -29,7 +29,7 @@ export function podSecurityOf(v: unknown): PodSecurity {
   const admission = text(r["admission"]);
   const kyverno = text(r["kyverno"]);
   return {
-    admission: oneOf(admissionLevels, admission) ? admission : "privileged",
+    admission: oneOf(admissionLevels, admission) ? admission : "baseline",
     kyverno: oneOf(kyvernoLevels, kyverno) ? kyverno : "off",
   };
 }
@@ -51,7 +51,7 @@ export function enforced(p: PodSecurity, cis: boolean): PodSecurity {
 /** podSecurityVariable is the variable for a choice, or undefined for the defaults, which need none. */
 export function podSecurityVariable(p: PodSecurity): Partial<PodSecurity> | undefined {
   const v: Partial<PodSecurity> = {};
-  if (p.admission !== "privileged") {
+  if (p.admission !== "baseline") {
     v.admission = p.admission;
   }
   if (p.kyverno !== "off") {
@@ -91,7 +91,7 @@ export function PodSecurityFields({
     <>
       <Field
         label="Pod Security Admission"
-        hint={cis ? "Restricted under CIS hardening" : undefined}
+        hint={cis ? "Restricted under CIS hardening" : "Changing it replaces the control-plane nodes"}
         info="Baseline blocks privileged pods and host access. Restricted also needs containers without root or capabilities."
       >
         {(id) => (

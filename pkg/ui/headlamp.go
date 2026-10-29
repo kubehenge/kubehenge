@@ -135,6 +135,11 @@ func (s *Server) HeadlampHandler() http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Strict-Transport-Security", hsts)
+		if !headlampSameOrigin(r) {
+			http.Error(w, "refused: not from Headlamp's pages", http.StatusForbidden)
+			return
+		}
 		if r.URL.Path == "/oidc-callback" {
 			if headlampCallbackBound(w, r) {
 				proxy.ServeHTTP(w, r)
@@ -155,6 +160,23 @@ func (s *Server) HeadlampHandler() http.Handler {
 			proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), headlampUserKey{}, u)))
 		}
 	})
+}
+
+// headlampSameOrigin tells whether a request that may change something comes from Headlamp's own
+// pages. The gate signs requests in as the user, so a forged one acts with the user's token.
+// SameSite=Strict keeps the session cookie from other sites' requests, but not from another origin
+// of the same site, such as a sibling host name or the interface's own port, and a WebSocket is not
+// held to CORS: a page there could open a pod's exec. Headlamp's frontend cannot send the
+// interface's CSRF token, so the origin the browser reports stands for it. Reads change nothing and
+// pass, links from the interface among them; a WebSocket opens with a GET and is checked.
+func headlampSameOrigin(r *http.Request) bool {
+	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && r.Header.Get("Upgrade") == "" {
+		return true
+	}
+	if origin := r.Header.Get("Origin"); origin != "" {
+		return strings.EqualFold(origin, "https://"+r.Host)
+	}
+	return r.Header.Get("Sec-Fetch-Site") == "same-origin"
 }
 
 func (h *Headlamp) rewrite(pr *httputil.ProxyRequest) {

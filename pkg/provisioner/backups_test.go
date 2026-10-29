@@ -96,7 +96,7 @@ func veleroProxyValues(t *testing.T, raw string, target *BackupTarget) map[strin
 	}
 	addons.backupTarget = target
 	charts := testCharts
-	charts.PodSecurityExempt = []string{"kube-system", "calico-system", VeleroNamespace}
+	charts.PodSecurityExempt = PodSecurityExempt{Always: []string{"kube-system"}, Calico: []string{"calico-system"}, Backups: []string{VeleroNamespace}}
 	proxies, err := helmChartProxies(c, &charts, "rke2", "local-lvm", CNI{}, &addons)
 	if err != nil {
 		t.Fatal(err)

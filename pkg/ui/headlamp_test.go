@@ -149,6 +149,7 @@ func (b *browser) headlamp(method, path string, cookies ...string) *httptest.Res
 	b.h.t.Helper()
 	req := httptest.NewRequestWithContext(b.h.t.Context(), method, "https://kubehenge.example:8444"+path, nil)
 	req.RemoteAddr = "192.0.2.10:50000"
+	headlampPage(req)
 	if b.cookie != "" {
 		cookies = append(cookies, sessionCookie+"="+b.cookie)
 	}
@@ -158,6 +159,78 @@ func (b *browser) headlamp(method, path string, cookies ...string) *httptest.Res
 	rec := httptest.NewRecorder()
 	b.h.server.HeadlampHandler().ServeHTTP(rec, req)
 	return rec
+}
+
+// headlampPage sends a request as Headlamp's own pages do: a browser names the origin of anything
+// but a read.
+func headlampPage(req *http.Request) {
+	if req.Method != http.MethodGet && req.Method != http.MethodHead {
+		req.Header.Set("Origin", "https://kubehenge.example:8444")
+	}
+}
+
+// A page of another origin of the same site gets the session cookie along, but may change nothing
+// through the gate, nor open a WebSocket: that would be exec in a pod with the user's token.
+func TestHeadlampRefusesOtherOrigins(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, cluster("default", "one"))
+	seen := withHeadlamp(t, h)
+	b := h.browser()
+	b.signIn("dev@pve")
+	send := func(method, path string, headers map[string]string) int {
+		t.Helper()
+		*seen = nil
+		req := httptest.NewRequestWithContext(t.Context(), method, "https://kubehenge.example:8444"+path, nil)
+		req.Header.Set("Cookie", sessionCookie+"="+b.cookie)
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		h.server.HeadlampHandler().ServeHTTP(rec, req)
+		if rec.Code == http.StatusForbidden && len(*seen) != 0 {
+			t.Errorf("%s %s %v: refused, but Headlamp got it", method, path, headers)
+		}
+		return rec.Code
+	}
+	exec := "/clusters/default.one/api/v1/namespaces/apps/pods/web/exec?command=sh"
+	websocket := func(origin string) map[string]string {
+		headers := map[string]string{"Connection": "Upgrade", "Upgrade": "websocket"}
+		if origin != "" {
+			headers["Origin"] = origin
+		}
+		return headers
+	}
+	for _, c := range []struct {
+		method, path string
+		headers      map[string]string
+	}{
+		{"GET", exec, websocket("https://apps.kubehenge.example")},
+		{"GET", exec, websocket("https://kubehenge.example")},
+		{"GET", exec, websocket("http://kubehenge.example:8444")},
+		{"GET", exec, websocket("null")},
+		{"GET", exec, websocket("")},
+		{"POST", "/clusters/default.one/api/v1/namespaces/apps/pods", map[string]string{"Origin": "https://apps.kubehenge.example"}},
+		{"DELETE", "/clusters/default.one/api/v1/namespaces/apps/pods/web", map[string]string{"Sec-Fetch-Site": "same-site"}},
+		{"PATCH", "/clusters/default.one/api/v1/namespaces/apps/pods/web", nil},
+	} {
+		if code := send(c.method, c.path, c.headers); code != http.StatusForbidden {
+			t.Errorf("%s %s %v: %d, want refused", c.method, c.path, c.headers, code)
+		}
+	}
+	for _, c := range []struct {
+		method, path string
+		headers      map[string]string
+	}{
+		{"GET", exec, websocket("https://kubehenge.example:8444")},
+		{"GET", exec, map[string]string{"Connection": "Upgrade", "Upgrade": "websocket", "Sec-Fetch-Site": "same-origin"}},
+		{"POST", "/clusters/default.one/api/v1/namespaces/apps/pods", map[string]string{"Origin": "https://KUBEHENGE.example:8444"}},
+		{"DELETE", "/clusters/default.one/api/v1/namespaces/apps/pods/web", map[string]string{"Sec-Fetch-Site": "same-origin"}},
+		{"GET", "/clusters/default.one/version", map[string]string{"Sec-Fetch-Site": "cross-site"}},
+	} {
+		if code := send(c.method, c.path, c.headers); code == http.StatusForbidden || len(*seen) != 1 {
+			t.Errorf("%s %s %v: %d, Headlamp got %d requests; want it passed on", c.method, c.path, c.headers, code, len(*seen))
+		}
+	}
 }
 
 // secretReads counts the Secrets read through it.

@@ -154,15 +154,15 @@ func (s *Server) credential(w http.ResponseWriter, r *http.Request, u user) {
 	if !s.require(w, r, u, "/", setupPrivileges...) {
 		return
 	}
-	key := "passphrase:" + u.ticket.Username
-	if !s.limiter.allow(key) {
+	done, ok := s.limiter.reserve(passphraseCount(u))
+	if !ok {
 		writeError(w, http.StatusTooManyRequests, "too many wrong passphrases. Try again later")
 		return
 	}
 	data, err := a.Credential(r.Context(), req.Passphrase, req.Name)
+	done(errors.Is(err, appliance.ErrPassphrase))
 	switch {
 	case errors.Is(err, appliance.ErrPassphrase):
-		s.limiter.fail(key)
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	case errors.Is(err, appliance.ErrBusy), errors.Is(err, appliance.ErrUpgrading):
@@ -294,15 +294,15 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 // password alone, which Proxmox VE accepts only while root@pam has no second factor. Wrong guesses
 // are limited as wrong passphrases are.
 func (s *Server) checkRootPassword(w http.ResponseWriter, r *http.Request, u user, password string) bool {
-	key := "root-password:" + u.ticket.Username
-	if !s.limiter.allow(key) {
+	done, ok := s.limiter.reserve(count{key: "root-password:" + u.ticket.Username, allowed: failuresAllowed})
+	if !ok {
 		writeError(w, http.StatusTooManyRequests, "too many wrong root@pam passwords. Try again later")
 		return false
 	}
 	_, challenge, err := s.Accounts.SignIn(r.Context(), "root@pam", password)
+	done(errors.Is(err, pve.ErrAuthentication))
 	switch {
 	case errors.Is(err, pve.ErrAuthentication):
-		s.limiter.fail(key)
 		writeError(w, http.StatusUnprocessableEntity, "volume snapshots: wrong root@pam password")
 		return false
 	case err != nil:

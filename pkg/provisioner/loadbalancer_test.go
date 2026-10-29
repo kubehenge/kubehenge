@@ -596,7 +596,7 @@ func TestBeforeClusterCreateRefusesClashingLoadBalancers(t *testing.T) {
 	hooks, _ := hooksFor(t, lbCluster("db", 0, "10.0.0.100-10.0.0.110", "10.0.0.6", ""))
 	c := lbCluster("web", 0, "10.0.0.10-10.0.0.20", "10.0.0.5", onAt(`"10.0.0.105"`))
 	c.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{{Class: "worker", Name: "md-0", Replicas: new(int32(1))}}
-	if resp := callBeforeClusterCreate(hooks, c); resp.Status != runtimehooksv1.ResponseStatusFailure || !strings.Contains(resp.Message, "team-a/db") {
+	if resp := callBeforeClusterCreate(t, hooks, c); resp.Status != runtimehooksv1.ResponseStatusFailure || !strings.Contains(resp.Message, "team-a/db") {
 		t.Errorf("a clash went through: %+v", resp)
 	}
 }

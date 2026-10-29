@@ -222,7 +222,7 @@ func newAppliance(t *testing.T) (*Appliance, chan []byte) {
 		ProxmoxURL: "https://pve.example:8006",
 		ProxmoxCA:  "-----BEGIN CERTIFICATE-----\n",
 		Log:        slog.New(slog.DiscardHandler),
-		InterfaceKubeconfig: func(_ context.Context, admin []byte, endpoint string) ([]byte, error) {
+		InterfaceKubeconfig: func(_ context.Context, admin []byte, endpoint, _ string) ([]byte, error) {
 			return []byte("interface for " + string(admin) + " at " + endpoint), nil
 		},
 		StoreRootPassword: func(context.Context, []byte, bool, string) error { return nil },
