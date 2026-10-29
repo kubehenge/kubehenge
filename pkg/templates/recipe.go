@@ -200,6 +200,8 @@ func nodeChecks(b Bake) [][]string {
 		{"grep", "-qx", "enable qemu-guest-agent.service", nodePreset},
 		{"sh", "-c", `test "$(getenforce)" = Enforcing`},
 		{"sh", "-c", "semodule -l | grep -qx kubehenge-qga"},
+		// The Tigera operator, confined, reads Calico's MTU there.
+		{"sh", "-c", "stat -c %C /var/lib/calico | grep -q ':container_ro_file_t:'"},
 		{"sh", "-c", "! touch /usr/kubehenge 2> /dev/null"},
 		// Every distribution's pod network bridges through it.
 		{"sh", "-c", "modinfo br_netfilter > /dev/null"},

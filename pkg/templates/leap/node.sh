@@ -46,6 +46,9 @@ if [ -f /etc/sysconfig/qemu-ga ]; then
 fi
 install -D -m 0644 "${files}/node/kubehenge-qga.cil" /usr/share/kubehenge/kubehenge-qga.cil
 semodule -i /usr/share/kubehenge/kubehenge-qga.cil
+install -D -m 0644 "${files}/node/kubehenge-calico.cil" /usr/share/kubehenge/kubehenge-calico.cil
+semodule -i /usr/share/kubehenge/kubehenge-calico.cil
+printf 'd /var/lib/calico 0755 root root -\n' > /usr/lib/tmpfiles.d/kubehenge-calico.conf
 
 # A clone's first boot, with its new machine ID, applies the presets again, which enable only the
 # services they name.

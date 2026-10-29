@@ -49,6 +49,9 @@ sed -i '/^FILTER_RPC_ARGS=/s/--allow-rpcs=/--allow-rpcs=guest-exec,guest-exec-st
 grep -q -- '--allow-rpcs=guest-exec,guest-exec-status,' /etc/sysconfig/qemu-ga
 install -D -m 0644 "${files}/node/kubehenge-qga.cil" /usr/share/kubehenge/kubehenge-qga.cil
 semodule -i /usr/share/kubehenge/kubehenge-qga.cil
+install -D -m 0644 "${files}/node/kubehenge-calico.cil" /usr/share/kubehenge/kubehenge-calico.cil
+semodule -i /usr/share/kubehenge/kubehenge-calico.cil
+printf 'd /var/lib/calico 0755 root root -\n' > /usr/lib/tmpfiles.d/kubehenge-calico.conf
 install -D -m 0644 "${files}/node/cloud.cfg" /etc/cloud/cloud.cfg.d/90-kubehenge.cfg
 
 mkdir -p /usr/lib/bootc/install /usr/lib/bootc/kargs.d

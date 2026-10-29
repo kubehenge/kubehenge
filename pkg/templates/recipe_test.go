@@ -182,7 +182,7 @@ func checkGuestExec(t *testing.T, bootcmd []string) {
 // and repositories that check their packages against those keys.
 func checkFiles(t *testing.T, files map[string]string, dir string, keys []RepositoryKey, names map[string]bool) {
 	t.Helper()
-	for _, name := range []string{dir + "/build.sh", dir + "/node.sh", "node/kubehenge-qga.cil", "node/images.sh", "node/kubeadm.sh"} {
+	for _, name := range []string{dir + "/build.sh", dir + "/node.sh", "node/kubehenge-qga.cil", "node/kubehenge-calico.cil", "node/images.sh", "node/kubeadm.sh"} {
 		if files[name] == "" {
 			t.Errorf("the bake does not carry %s", name)
 		}
@@ -338,6 +338,35 @@ func TestImageModeRKE2NodesLetContainersInstallCNIPlugins(t *testing.T) {
 	for _, want := range []string{"semodule -i /usr/share/kubehenge/kubehenge-cni.cil", "d /var/opt/cni/bin 0755 "} {
 		if !strings.Contains(string(script), want) {
 			t.Errorf("el/node.sh does not hold %q", want)
+		}
+	}
+}
+
+// The Tigera operator runs confined and reads the MTU calico-node writes into /var/lib/calico on
+// the host; every family's node labels it for containers to read before Calico writes there.
+func TestNodesLetTheTigeraOperatorReadCalicosMTU(t *testing.T) {
+	t.Parallel()
+	cil, err := recipeFiles.ReadFile("node/kubehenge-calico.cil")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(cil), `(filecon "/var/lib/calico(/.*)?" any (system_u object_r container_ro_file_t`) {
+		t.Errorf("node/kubehenge-calico.cil does not label /var/lib/calico read-only for containers:\n%s", cil)
+	}
+	for _, name := range []string{"el/node.sh", "leap/node.sh"} {
+		script, err := recipeFiles.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"semodule -i /usr/share/kubehenge/kubehenge-calico.cil", "d /var/lib/calico 0755 "} {
+			if !strings.Contains(string(script), want) {
+				t.Errorf("%s does not hold %q", name, want)
+			}
+		}
+	}
+	for _, d := range []Distribution{RKE2, K3s, Kubeadm} {
+		if all := fmt.Sprint(nodeChecks(Bake{Distribution: d, KubernetesVersion: "v1.37.1"})); !strings.Contains(all, "/var/lib/calico | grep -q ':container_ro_file_t:'") {
+			t.Errorf("%s: no check of /var/lib/calico's label in %s", d, all)
 		}
 	}
 }

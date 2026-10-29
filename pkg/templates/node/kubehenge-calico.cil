@@ -1,0 +1,6 @@
+; The Tigera operator reads the MTU Calico found from /var/lib/calico, which it mounts from the host,
+; and reports Calico degraded while it cannot. It runs confined, so the directory holds read-only
+; content for containers; calico-node and the CNI plugin, which write there, run privileged and as
+; the container runtime. Made at every boot, it is labelled before Calico writes into it, and what
+; Calico writes takes its label.
+(filecon "/var/lib/calico(/.*)?" any (system_u object_r container_ro_file_t ((s0) (s0))))
