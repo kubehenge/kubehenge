@@ -8,8 +8,11 @@
 # Headlamp (and its read-only access for everyone), Kyverno, Istio (a namespace's traffic over mutual TLS), monitoring (every
 # component scraped with its server verified) and logs (a pod's lines, and with the node collector
 # the journal and the audit log, read in Loki through Grafana) on and off, back a namespace with a
-# volume and a Secret up with Velero to an S3 store the test serves, delete it and restore it, check
-# the store holds the backup encrypted, switch certificates on (from the cluster's own CA, then from
+# volume and a Secret up with Velero to an S3 store the test serves, check the store holds the
+# backup encrypted, delete the namespace and restore it alone of the backup's, restore one kind and
+# read the restore's results as the interface does, delete a backup, restore without the volumes'
+# data, check which clusters' backups a cluster may read and read a deleted one's, switch
+# certificates on (from the cluster's own CA, then from
 # an ACME server over DNS-01 and over HTTP-01) and GitOps (Flux, then Argo CD, syncing a repository
 # on a Git server in the cluster through a deploy key), on Talos upgrade the nodes in place to a
 # newer Talos release with every add-on on, switch backups, certificates and GitOps off, take an
@@ -53,7 +56,9 @@
 # KUBEHENGE_E2E_BACKUP_TARGET names a backup target the management cluster was set up with whose
 # endpoint is on this machine, at an https:// address the cluster's nodes reach; the test serves
 # SeaweedFS's S3 gateway there with KUBEHENGE_E2E_BACKUP_CERT and KUBEHENGE_E2E_BACKUP_KEY, which
-# KUBEHENGE_E2E_BACKUP_CA, the target's CA, signed. The etcd snapshots go to the same target; the
+# KUBEHENGE_E2E_BACKUP_CA, the target's CA, signed. KUBEHENGE_E2E_BACKUP_OTHER_TARGET names
+# another target of the management cluster's, which nothing backs up to, to check that a cluster
+# backing up there may not read this cluster's backups. The etcd snapshots go to the same target; the
 # management cluster restores etcd through the guest agent (etcd_restore; Talos clusters through
 # their Talos API either way), and Go builds the
 # kubehenge command that decrypts a snapshot.
@@ -1875,21 +1880,32 @@ until_true 300 "Velero reaches the S3 store" location_available
 pod_security=$(wl label --dry-run=server --overwrite namespace velero pod-security.kubernetes.io/enforce=restricted 2>&1)
 server_violations=$(printf '%s\n' "${pod_security}" | grep '^Warning: velero-' || true)
 [ -z "${server_violations}" ] || fail "Velero's server does not meet Pod Security's restricted level: ${server_violations}"
-# The interface's two identities in the cluster: one that reads and starts backups, one that
-# restores, neither able to read the keys Velero holds.
-# can <Secret> <verb> <resource>: whether the identity whose token the Secret beside the Cluster
-# holds may do it in the velero namespace.
+# The interface's two identities in the cluster: one that reads, starts and deletes backups (the
+# last only through Velero, which removes what a backup holds in the store) and reads restores'
+# results, one that restores, neither able to read the keys Velero holds. What the interface does
+# in the cluster, the test does as these identities.
+workload_server=$(wl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+# as_identity <Secret> <kubectl arguments...>: kubectl in the workload cluster as the interface's
+# identity whose token the Secret beside the Cluster holds.
+as_identity() {
+    identity_token=$(kubectl -n "${ns}" get secret "$1" -o jsonpath='{.data.token}' | base64 -d)
+    shift
+    kubectl --kubeconfig=/dev/null --server="${workload_server}" --certificate-authority="${work}/workload-ca" \
+        --token="${identity_token}" "$@"
+}
+# can <Secret> <verb> <resource>: whether the identity may do it in the velero namespace.
 can() {
-    can_token=$(kubectl -n "${ns}" get secret "$1" -o jsonpath='{.data.token}' | base64 -d)
-    server=$(wl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
     # shellcheck disable=SC2310 # can-i exits non-zero for its answer no, which the caller reads.
-    kubectl --kubeconfig=/dev/null --server="${server}" --certificate-authority="${work}/workload-ca" \
-        --token="${can_token}" -n velero auth can-i "$2" "$3" 2> /dev/null || true
+    as_identity "$1" -n velero auth can-i "$2" "$3" 2> /dev/null || true
 }
 until_true 300 "the interface's identities in the cluster" sh -c \
     "kubectl -n ${ns} get secret ${name}-backups ${name}-restores > /dev/null 2>&1"
 for check in "${name}-backups create backups.velero.io yes" "${name}-backups create restores.velero.io no" \
-    "${name}-backups get secrets no" "${name}-restores create restores.velero.io yes" "${name}-restores get secrets no"; do
+    "${name}-backups create deletebackuprequests.velero.io yes" "${name}-backups delete backups.velero.io no" \
+    "${name}-backups create downloadrequests.velero.io yes" "${name}-backups get downloadrequests.velero.io yes" \
+    "${name}-backups get secrets no" "${name}-restores create restores.velero.io yes" \
+    "${name}-restores get backupstoragelocations.velero.io yes" "${name}-restores create deletebackuprequests.velero.io no" \
+    "${name}-restores get secrets no"; do
     # shellcheck disable=SC2086 # the check's words are the arguments.
     set -- ${check}
     answer=$(can "$1" "$2" "$3")
@@ -1897,7 +1913,11 @@ for check in "${name}-backups create backups.velero.io yes" "${name}-backups cre
 done
 new_namespace wl e2e-backup
 wl -n e2e-backup create secret generic e2e --from-literal=marker="${marker}"
-wl apply -f - << EOF
+wl -n e2e-backup create configmap e2e --from-literal=marker="${marker}"
+# A second namespace in the same backup, which a restore of the first leaves out.
+new_namespace wl e2e-backup-also
+wl -n e2e-backup-also create configmap e2e --from-literal=marker="${marker}"
+wl apply -f - << 'EOF'
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -1908,11 +1928,14 @@ spec:
   resources:
     requests:
       storage: 1Gi
----
+EOF
+# data_pod <name>: a pod in e2e-backup with the volume mounted at /data.
+data_pod() {
+    wl apply -f - << EOF
 apiVersion: v1
 kind: Pod
 metadata:
-  name: data
+  name: $1
   namespace: e2e-backup
 spec:
   securityContext:
@@ -1937,14 +1960,20 @@ spec:
       persistentVolumeClaim:
         claimName: data
 EOF
+}
+data_pod data
 wl -n e2e-backup wait --for=condition=Ready pod/data --timeout=10m
 wl -n e2e-backup exec data -- sh -c "printf '%s' '${marker}' > /data/marker"
 # Asked for as the interface's Back up now does: the schedule's own backup, made at once.
 template=$(wl -n velero get schedule velero-scheduled -o json | jq -c .spec.template)
 excluded=$(printf '%s' "${template}" | jq -r '.excludedNamespaces | index("kube-system")')
 [ "${excluded}" != null ] || fail "the schedule backs kube-system up"
-jq -n --argjson spec "${template}" '{apiVersion: "velero.io/v1", kind: "Backup", metadata: {name: "e2e", namespace: "velero"}, spec: $spec}' |
-    wl apply -f -
+# back_up_now <name>: a backup asked for as the interface's Back up now asks for one, by its identity.
+back_up_now() {
+    jq -n --arg n "$1" --argjson spec "${template}" '{apiVersion: "velero.io/v1", kind: "Backup", metadata: {name: $n, namespace: "velero"}, spec: $spec}' |
+        as_identity "${name}-backups" create -f -
+}
+back_up_now e2e
 # phase_is <kind> <name> <phase>: whether a Velero object has reached the phase; any phase it ends in
 # otherwise fails the test.
 phase_is() {
@@ -1986,30 +2015,184 @@ printf '%s\n' "${contents}" | grep -q '/namespaces/kube-system/' && fail "the ba
 secret_json=$(tar -xzOf "${work}/e2e.tar.gz" resources/secrets/namespaces/e2e-backup/e2e.json)
 backed_up=$(printf '%s' "${secret_json}" | jq -r .data.marker | base64 -d)
 [ "${backed_up}" = "${marker}" ] || fail "the backup does not hold the Secret"
+printf '%s\n' "${contents}" | grep -qx 'resources/configmaps/namespaces/e2e-backup-also/e2e.json' ||
+    fail "the backup does not hold e2e-backup-also"
 # What the store keeps on its disk: the volume's data encrypted by Kopia, the resources by SSE-C.
 grep -r -q -F "${marker}" "${work}/s3-data" && fail "the store keeps the volume's data unencrypted"
 
-step "the namespace deleted and restored"
-wl delete namespace e2e-backup --wait --timeout=5m
-# As the interface restores chosen namespaces.
-wl apply -f - << 'EOF'
-apiVersion: velero.io/v1
-kind: Restore
-metadata:
-  name: e2e
-  namespace: velero
-spec:
-  backupName: e2e
-  includedNamespaces: [e2e-backup]
-  restorePVs: true
-EOF
-until_true 1200 "the restore completed" phase_is restore e2e Completed
+step "the namespaces deleted, and one of them restored with its volume's data"
+wl delete namespace e2e-backup e2e-backup-also --wait --timeout=5m
+# restore_backup <name> <spec>: a restore of backup e2e as the interface asks for one, by its
+# identity, waited for until it has finished.
+restore_backup() {
+    jq -n --arg n "$1" --argjson spec "$2" \
+        '{apiVersion: "velero.io/v1", kind: "Restore", metadata: {name: $n, namespace: "velero"}, spec: ({backupName: "e2e"} + $spec)}' |
+        as_identity "${name}-restores" create -f -
+    until_true 1200 "restore $1 completed" phase_is restore "$1" Completed
+}
+restore_backup e2e '{"includedNamespaces":["e2e-backup"],"restorePVs":true}'
 wl -n e2e-backup wait --for=condition=Ready pod/data --timeout=10m
 restored=$(wl -n e2e-backup exec data -- cat /data/marker)
 [ "${restored}" = "${marker}" ] || fail "the volume's data did not come back: ${restored}"
 restored=$(wl -n e2e-backup get secret e2e -o jsonpath='{.data.marker}' | base64 -d)
 [ "${restored}" = "${marker}" ] || fail "the Secret did not come back"
+# shellcheck disable=SC2310 # absent's answer is what is checked.
+absent wl get namespace e2e-backup-also || fail "a restore of e2e-backup alone brought e2e-backup-also back"
+
+step "a restore of one kind, leaving what the cluster has, its results read as the interface reads them"
+wl -n e2e-backup patch secret e2e --type=merge -p '{"stringData":{"marker":"changed"}}'
+restore_backup e2e-secrets '{"includedNamespaces":["e2e-backup"],"includedResources":["secrets"],"restorePVs":true}'
+kept=$(wl -n e2e-backup get secret e2e -o jsonpath='{.data.marker}' | base64 -d)
+[ "${kept}" = changed ] || fail "the restore replaced the Secret the cluster had: ${kept}"
+# Velero keeps a restore's results in the store, encrypted with the cluster's SSE-C key, and signs a
+# link to them for a DownloadRequest; the interface follows it with the key.
+download=$(jq -n '{apiVersion: "velero.io/v1", kind: "DownloadRequest", metadata: {generateName: "e2e-secrets-", namespace: "velero"},
+    spec: {target: {kind: "RestoreResults", name: "e2e-secrets"}}}' |
+    as_identity "${name}-backups" create -f - -o jsonpath='{.metadata.name}')
+# results_signed: whether Velero has signed the link to the results, in results_link.
+results_signed() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    results_link=$(as_identity "${name}-backups" -n velero get downloadrequest "${download}" -o json |
+        jq -r 'select(.status.phase == "Processed") | .status.downloadURL // empty') && [ -n "${results_link}" ]
+}
+until_true 120 "Velero's link to the restore's results" results_signed
+# The interface sends the key along only to the target itself, and the link must not carry it.
+host_of() { python3 -c 'import sys, urllib.parse; u = urllib.parse.urlsplit(sys.argv[1]); print(u.scheme + "://" + u.netloc)' "$1"; }
+link_host=$(host_of "${results_link}")
+target_host=$(host_of "${s3_endpoint}")
+[ "${link_host}" = "${target_host}" ] || fail "Velero's link leads to ${link_host}, not to the target at ${target_host}"
+case ${results_link} in
+    *[Cc]ustomer-[Kk]ey*) fail "Velero's link carries the SSE-C key" ;;
+    *) ;;
+esac
+plain=$(curl -sS --cacert "${KUBEHENGE_E2E_BACKUP_CA}" -o /dev/null -w '%{http_code}' "${results_link}")
+case ${plain} in
+    2??) fail "the restore's results were read without the SSE-C key: HTTP ${plain}" ;;
+    *) ;;
+esac
+curl -sS --fail --cacert "${KUBEHENGE_E2E_BACKUP_CA}" -H 'x-amz-server-side-encryption-customer-algorithm: AES256' \
+    -H "x-amz-server-side-encryption-customer-key: ${sse_key}" -H "x-amz-server-side-encryption-customer-key-MD5: ${sse_md5}" \
+    -o "${work}/results.gz" "${results_link}"
+results=$(gzip -dc "${work}/results.gz")
+result_errors=$(printf '%s' "${results}" | jq -c '[.errors // {} | (.velero // [])[], (.cluster // [])[], ((.namespaces // {}) | .[][])]')
+[ "${result_errors}" = '[]' ] || fail "the restore's results hold errors: ${result_errors}"
+namespace_warnings=$(printf '%s' "${results}" | jq -c '.warnings.namespaces["e2e-backup"] // []')
+printf '%s' "${namespace_warnings}" | jq -e 'any(contains("Secret:e2e already exists"))' > /dev/null ||
+    fail "the restore's results do not tell, for e2e-backup, that its Secret was kept: ${namespace_warnings}"
+
+step "a backup deleted as the interface deletes one, gone from Velero and from the store"
+back_up_now e2e-deleted
+until_true 1200 "the backup to delete completed" phase_is backup e2e-deleted Completed
+# store_keys <folder>: the keys in the store under the folder of the cluster's prefix.
+store_keys() {
+    listing=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${prefix}/$1/")
+    printf '%s' "${listing}" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g'
+}
+in_store=$(store_keys backups/e2e-deleted)
+[ -n "${in_store}" ] || fail "backup e2e-deleted is not in the store"
+uid=$(wl -n velero get backup e2e-deleted -o jsonpath='{.metadata.uid}')
+# Labelled as Velero's CLI labels the request.
+jq -n --arg uid "${uid}" '{apiVersion: "velero.io/v1", kind: "DeleteBackupRequest",
+    metadata: {generateName: "e2e-deleted-", namespace: "velero", labels: {"velero.io/backup-name": "e2e-deleted", "velero.io/backup-uid": $uid}},
+    spec: {backupName: "e2e-deleted"}}' | as_identity "${name}-backups" create -f -
+# backup_deleted: whether Velero has deleted the backup; a deletion it gave up on fails the test.
+backup_deleted() {
+    # shellcheck disable=SC2310 # the absence is the answer looked for.
+    absent wl -n velero get backup e2e-deleted && return
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    deletion_errors=$(wl -n velero get deletebackuprequests -l velero.io/backup-name=e2e-deleted -o json |
+        jq -c '[.items[] | select(.status.phase == "Processed") | .status.errors // [] | .[]]') || return 1
+    [ "${deletion_errors}" = '[]' ] || fail "Velero did not delete backup e2e-deleted: ${deletion_errors}"
+    return 1
+}
+until_true 600 "Velero deleted the backup" backup_deleted
+left=$(store_keys backups/e2e-deleted)
+[ -z "${left}" ] || fail "the deleted backup is still in the store: ${left}"
+# shellcheck disable=SC2310 # a failed read fails the test with the reason.
+wl -n velero get backup e2e > /dev/null || fail "deleting one backup took another with it"
+
+step "a restore without the volumes' data: the objects back, on a new, empty volume"
 wl delete namespace e2e-backup --wait --timeout=5m
+# As the interface restores without the volumes' data, the pods left out for their controllers to
+# start again; ConfigMaps left out as a kind not chosen.
+restore_backup e2e-no-data '{"includedNamespaces":["e2e-backup"],"excludedResources":["configmaps","pods"],"restorePVs":false}'
+restored=$(wl -n e2e-backup get secret e2e -o jsonpath='{.data.marker}' | base64 -d)
+[ "${restored}" = "${marker}" ] || fail "the Secret did not come back"
+wl -n e2e-backup get persistentvolumeclaim data > /dev/null
+# shellcheck disable=SC2310 # absent's answer is what is checked.
+absent wl -n e2e-backup get configmap e2e || fail "a restore leaving ConfigMaps out brought one back"
+# shellcheck disable=SC2310 # absent's answer is what is checked.
+absent wl -n e2e-backup get pod data || fail "a restore without the volumes' data brought the pod back"
+volume_restores=$(wl -n velero get podvolumerestores -l velero.io/restore-name=e2e-no-data -o json | jq '.items | length')
+[ "${volume_restores}" = 0 ] || fail "a restore without the volumes' data restored ${volume_restores} volumes"
+data_pod fresh
+wl -n e2e-backup wait --for=condition=Ready pod/fresh --timeout=10m
+on_volume=$(wl -n e2e-backup exec fresh -- ls -A /data)
+printf '%s\n' "${on_volume}" | grep -qx marker && fail "the volume's data came back with a restore without it"
+wl delete namespace e2e-backup --wait --timeout=5m
+
+step "backups of another cluster read, where they may be"
+backups_on=$(jq -cn --arg t "${KUBEHENGE_E2E_BACKUP_TARGET}" '{enabled: true, target: $t}')
+# reading <cluster>: the backups variable reading that cluster's backups too.
+reading() { printf '%s' "${backups_on}" | jq -c --arg s "$1" '.readFrom = [$s]'; }
+# refused_backups <message> <backups value>: the cluster's backups set to the value through kubectl
+# are refused for the reason.
+refused_backups() {
+    vars=$(kubectl -n "${ns}" get "cluster/${name}" -o json |
+        jq -c --argjson v "$2" '[.spec.topology.variables[] | select(.name != "backups")] + [{name: "backups", value: $v}]')
+    if out=$(kubectl -n "${ns}" patch "cluster/${name}" --dry-run=server --type=merge \
+        -p "{\"spec\":{\"topology\":{\"variables\":${vars}}}}" 2>&1); then
+        fail "backups $2 were let in"
+    fi
+    printf '%s' "${out}" | grep -qF "$1" || fail "backups $2 were refused for another reason: ${out}"
+}
+reads=$(reading "${name}")
+refused_backups "readFrom names the cluster itself" "${reads}"
+reads=$(reading "e2e-none-${suffix}")
+refused_backups "cluster e2e-none-${suffix} has no backup keys beside it" "${reads}"
+if [ -n "${KUBEHENGE_E2E_BACKUP_OTHER_TARGET:-}" ]; then
+    # A second cluster beside this one, backing up to the other target, may not read this one's
+    # backups, which are in another.
+    reader=$(kubectl -n "${ns}" get "cluster/${name}" -o json |
+        jq -c --arg t "${KUBEHENGE_E2E_BACKUP_OTHER_TARGET}" --arg s "${name}" '
+            {apiVersion, kind, metadata: {name: "e2e-reader", namespace: .metadata.namespace},
+             spec: (.spec | del(.controlPlaneEndpoint) | .topology.variables = ([.topology.variables[] |
+                 select(.name != "backups")] + [{name: "backups", value: {enabled: true, target: $t, readFrom: [$s]}}]))}')
+    if out=$(printf '%s' "${reader}" | kubectl create --dry-run=server -f - 2>&1); then
+        fail "a cluster backing up to ${KUBEHENGE_E2E_BACKUP_OTHER_TARGET} was let read the backups of ${name}"
+    fi
+    printf '%s' "${out}" | grep -qF "cluster ${name} does not back up to target ${KUBEHENGE_E2E_BACKUP_OTHER_TARGET}" ||
+        fail "a cluster reading the backups of ${name} in another target was refused for another reason: ${out}"
+fi
+# A cluster deleted since keeps its backups in the target and its keys beside it, which another
+# may read: here one sharing this cluster's Kopia password, as a cluster made to read another's
+# backups shares it, so that Velero reads its volumes' data too.
+gone=e2e-gone-${suffix}
+gone_key=$(head -c 32 /dev/urandom | base64 -w0)
+kubectl -n "${ns}" get secret "${name}-backup-keys" -o json |
+    jq --arg n "${gone}-backup-keys" --arg k "${gone_key}" \
+        '{apiVersion, kind, type: (.type // "Opaque"), metadata: {name: $n, namespace: .metadata.namespace},
+          data: {"repository-password": .data["repository-password"], "sse-c-key": $k}}' |
+    kubectl create -f - > /dev/null
+gone_prefix=$(printf '%s' "${target}" | jq -r --arg own "${ns}.${gone}/velero" 'if (.prefix // "") == "" then $own else .prefix + "/" + $own end')
+reads=$(reading "${gone}")
+set_variable backups "${reads}"
+# source_location: whether the restores identity sees the read-only location of the deleted cluster's
+# backups as the interface reads it, available.
+source_location() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    location=$(as_identity "${name}-restores" -n velero get backupstoragelocation "cluster-${gone}" -o json 2> /dev/null) || return 1
+    printf '%s' "${location}" | jq -e --arg g "${gone}" --arg p "${gone_prefix}" '
+        .metadata.annotations["kubehenge.dev/backups-of"] == $g and .metadata.annotations["kubehenge.dev/volume-data"] == "true" and
+        .spec.accessMode == "ReadOnly" and .spec.objectStorage.prefix == $p and .status.phase == "Available"' > /dev/null
+}
+until_true 600 "a read-only location of ${gone}'s backups" source_location
+location_key=$(wl -n velero get secret "velero-sse-c-${gone}" -o jsonpath='{.data.key}')
+[ "${location_key}" = "${gone_key}" ] || fail "the location of ${gone}'s backups has not its SSE-C key"
+set_variable backups "${backups_on}"
+until_true 600 "the location of ${gone}'s backups removed" absent wl -n velero get backupstoragelocation "cluster-${gone}"
+until_true 120 "the SSE-C key of ${gone} removed" absent wl -n velero get secret "velero-sse-c-${gone}"
+kubectl -n "${ns}" delete secret "${gone}-backup-keys"
 
 step "certificates switched on, from the cluster's own CA"
 set_variable certificates '{"enabled":true,"issuer":"ca","domain":"e2e.test"}'
