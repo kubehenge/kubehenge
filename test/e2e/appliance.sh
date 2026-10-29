@@ -378,6 +378,13 @@ body_is '.on | not' "they are still on"
 upgrader_is absent "switching them off left ${upgrader}"
 # Left on, so that removing the management cluster has to take them away.
 expect 200 "switching them on again" put "${work}/admin.jar" "${admin_csrf}" "${ui}/api/appliance/upgrades/management" "${on}"
+# The passphrase sealed, with its key on a volume Proxmox VE's backups leave out.
+if pct exec "${ctid}" -- cat /var/lib/kubehenge/unattended.json | grep -qF "${passphrase}"; then
+    fail "the appliance keeps the passphrase in the open"
+fi
+pct exec "${ctid}" -- test -s /var/lib/kubehenge-keys/unattended.key || fail "the appliance keeps no key for what automatic upgrades keep"
+pct config "${ctid}" | grep -E '^mp[0-9]+: .*mp=/var/lib/kubehenge-keys(,|$)' | grep -Eq '(,|^)backup=0(,|$)' ||
+    fail "the key's volume is not left out of backups"
 
 step "upgrade the appliance with the management cluster up"
 upgrade "${newer}"

@@ -164,12 +164,24 @@ func TestUnattendedKeptAndForgotten(t *testing.T) {
 	if got := a.UnattendedOn(); got == nil || got.By != "root@pam" || !got.Since.Equal(since) || got.User != upgraderUser {
 		t.Fatalf("UnattendedOn = %+v", got)
 	}
+	raw, err := os.ReadFile(filepath.Join(a.Dir, "unattended.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "correct horse") || strings.Contains(string(raw), "0f1e2d3c") {
+		t.Fatalf("kept the passphrase or the token in the open: %s", raw)
+	}
+	if u, err := a.unattended(); err != nil || u.Passphrase != "correct horse battery staple" || u.Token != upgraderAPI {
+		t.Fatalf("opened %+v, %v", u, err)
+	}
 
 	if err := a.ForgetUnattended(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(a.Dir, "unattended.json")); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("kept after switching off: %v", err)
+	for _, p := range []string{filepath.Join(a.Dir, "unattended.json"), filepath.Join(a.KeyDir, "unattended.key")} {
+		if _, err := os.Stat(p); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("%s kept after switching off: %v", p, err)
+		}
 	}
 	if a.UnattendedOn() != nil {
 		t.Fatal("on after switching off")
@@ -179,6 +191,33 @@ func TestUnattendedKeptAndForgotten(t *testing.T) {
 	}
 	if err := a.ForgetUnattended(); err != nil {
 		t.Fatalf("switching off twice: %v", err)
+	}
+}
+
+// A backup holds the appliance's directory without the key volume: restored, what automatic
+// upgrades keep shows as on, and a run fails saying why instead of applying.
+func TestUnattendedWithoutItsKey(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	if err := a.KeepUnattended(Unattended{Passphrase: "correct horse battery staple", Token: upgraderAPI}); err != nil {
+		t.Fatal(err)
+	}
+	restored := &Appliance{Dir: a.Dir, KeyDir: t.TempDir(), Module: a.Module, Tofu: a.Tofu, Log: a.Log}
+	if restored.UnattendedOn() == nil {
+		t.Fatal("off once the key is gone")
+	}
+	if err := restored.ApplyUnattended(func(context.Context, []byte) error { return nil }); !errors.Is(err, ErrUnattendedKey) {
+		t.Fatalf("an automatic apply without the key: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(restored.KeyDir, "unattended.key"), make([]byte, sealKeySize), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restored.unattended(); !errors.Is(err, ErrUnattendedKey) {
+		t.Fatalf("opened with another key: %v", err)
+	}
+	restored.KeyDir = ""
+	if err := restored.KeepUnattended(Unattended{Passphrase: "correct horse battery staple", Token: upgraderAPI}); err == nil {
+		t.Fatal("kept with nowhere for the key")
 	}
 }
 

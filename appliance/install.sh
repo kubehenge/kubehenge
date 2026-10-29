@@ -53,6 +53,9 @@ TEMPLATE=debian-13-standard_13.6-1_amd64.tar.zst
 cluster_ca=/etc/pve/pve-root-ca.pem
 system_ca=/etc/ssl/certs/ca-certificates.crt
 tty=/dev/tty
+# The volume holding the key that seals what automatic upgrades keep, which Proxmox VE's backups
+# leave out, so that no backup holds both the sealed passphrase and token and what opens them.
+key_dir=/var/lib/kubehenge-keys
 
 fail() {
     echo "kubehenge: $*" >&2
@@ -809,6 +812,13 @@ if [ -n "${upgrade}" ]; then
         [ -n "${proxmox_url}" ] || proxmox_url=$(pct exec "${ctid}" -- sed -n 's/^KUBEHENGE_PROXMOX_URL=//p' /etc/kubehenge/appliance.env)
         choose_api_ca
     fi
+    if ! pct config "${ctid}" | grep -Eq "^mp[0-9]+: .*mp=${key_dir}(,|$)"; then
+        step "a volume for the key of automatic upgrades, left out of backups"
+        free=0
+        while pct config "${ctid}" | grep -q "^mp${free}: "; do free=$((free + 1)); done
+        rootfs_storage=$(pct config "${ctid}" | sed -n 's/^rootfs: \([^:]*\):.*/\1/p')
+        pct set "${ctid}" "--mp${free}" "${rootfs_storage}:1,mp=${key_dir},backup=0"
+    fi
     stage_software
     [ -z "${proxmox_ca}" ] || stage_api_ca "${api_ca}"
     # A certificate this script made is renewed once it has less than 60 days left; the restart
@@ -836,6 +846,7 @@ if [ -n "${upgrade}" ]; then
     pct exec "${ctid}" -- flock -n -E 75 /var/lib/kubehenge sh -c "${swap}"'
         install -d -o root -g root -m 0755 /var/lib/kubehenge-update
         install -d -o root -g kubehenge -m 0770 /var/lib/kubehenge-update/requests
+        install -d -o kubehenge -g kubehenge -m 0700 /var/lib/kubehenge-keys
         grep -q "^KUBEHENGE_APPLIANCE_VMID=" /etc/kubehenge/appliance.env ||
             echo "KUBEHENGE_APPLIANCE_VMID=$1" >> /etc/kubehenge/appliance.env
         ip=$(ip -4 -o addr show dev eth0 | sed -n "s/.* inet \([0-9.]*\).*/\1/p" | head -n 1)
@@ -899,7 +910,8 @@ step "creating container ${ctid} on ${node}"
 nameservers=$(printf '%s' "${dns}" | tr , ' ')
 pct create "${ctid}" "local:vztmpl/${TEMPLATE}" \
     --hostname "${hostname}" --cores 2 --memory 1024 --swap 512 \
-    --rootfs "${storage}:8" --net0 "${net}" ${dns:+--nameserver "${nameservers}"} \
+    --rootfs "${storage}:8" --mp0 "${storage}:1,mp=${key_dir},backup=0" \
+    --net0 "${net}" ${dns:+--nameserver "${nameservers}"} \
     --unprivileged 1 --features nesting=1 --onboot 1 \
     --tags kubehenge --description "Kubehenge's appliance: its web interface and the management cluster's state. Include it in backups."
 created=1
@@ -944,7 +956,7 @@ pct exec "${ctid}" -- sh -c '
         systemctl mask "$unit" >/dev/null 2>&1 || true
     done
     id kubehenge >/dev/null 2>&1 || useradd --system --home-dir /var/lib/kubehenge --shell /usr/sbin/nologin kubehenge
-    install -d -o kubehenge -g kubehenge -m 0700 /var/lib/kubehenge
+    install -d -o kubehenge -g kubehenge -m 0700 /var/lib/kubehenge /var/lib/kubehenge-keys
     # The updater (root) reads upgrade requests the interface drops into requests/.
     install -d -o root -g root -m 0755 /var/lib/kubehenge-update
     install -d -o root -g kubehenge -m 0770 /var/lib/kubehenge-update/requests

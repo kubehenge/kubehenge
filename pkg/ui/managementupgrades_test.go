@@ -73,7 +73,7 @@ func withManagementCluster(t *testing.T, h *harness) *appliance.Appliance {
 	}
 	moduleVersions(t, module, "v1.14.4")
 	a := &appliance.Appliance{
-		Dir: t.TempDir(), Module: module, Tofu: fakeTofu, Release: "0.1.0",
+		Dir: t.TempDir(), KeyDir: t.TempDir(), Module: module, Tofu: fakeTofu, Release: "0.1.0",
 		ProxmoxURL: "https://pve.example:8006", ProxmoxCA: "-----BEGIN CERTIFICATE-----\n", Log: slog.New(slog.DiscardHandler),
 		InterfaceKubeconfig: func(_ context.Context, admin []byte, _, _ string) ([]byte, error) { return admin, nil },
 		StoreRootPassword:   func(context.Context, []byte, bool, string) error { return nil },
@@ -245,8 +245,11 @@ func TestManagementAutomaticUpgradesOptIn(t *testing.T) {
 		t.Fatal("no Proxmox VE user made")
 	}
 	kept, err := os.ReadFile(filepath.Join(a.Dir, "unattended.json"))
-	if err != nil || !strings.Contains(string(kept), statePassphrase) || !strings.Contains(string(kept), upgraderUser+"!apply=5ec2e7") {
-		t.Fatalf("kept: %v", err)
+	if err != nil || strings.Contains(string(kept), statePassphrase) || strings.Contains(string(kept), "5ec2e7") {
+		t.Fatalf("kept in the open: %s, %v", kept, err)
+	}
+	if _, err := os.Stat(filepath.Join(a.KeyDir, "unattended.key")); err != nil {
+		t.Fatalf("no key kept: %v", err)
 	}
 	if rec := b.do("GET", "/api/appliance/upgrades", ""); strings.Contains(rec.Body.String(), "5ec2e7") || strings.Contains(rec.Body.String(), "horse") {
 		t.Fatalf("the view shows a secret: %s", rec.Body)

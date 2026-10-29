@@ -2,6 +2,9 @@ package appliance
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -92,42 +95,140 @@ var (
 // Unattended is what the appliance keeps, only when an administrator chose so, to apply the
 // management cluster with nobody signed in: the state passphrase, which no derived key can stand in
 // for (OpenTofu derives a new key for every state it writes), and an API token of a Proxmox VE user
-// of its own, as user@realm!name=secret.
+// of its own, as user@realm!name=secret. Both are kept sealed.
 type Unattended struct {
-	Passphrase string    `json:"passphrase"`
-	Token      string    `json:"token"`
-	By         string    `json:"by"`
-	Since      time.Time `json:"since"`
+	Passphrase string
+	Token      string
+	By         string
+	Since      time.Time
 }
 
 // ErrNotUnattended is an automatic apply asked for while the appliance keeps nothing to run it.
 var ErrNotUnattended = errors.New("automatic upgrades of the management cluster are off: the appliance keeps nothing to apply it with")
 
-// unattendedPath sits in the appliance's own directory, which only its user may read.
+// ErrUnattendedKey is what automatic upgrades keep without the key that opens it, as after the
+// appliance was restored from a backup, which leaves the key out.
+var ErrUnattendedKey = errors.New("the key that opens what automatic upgrades keep is gone, as after a restore from a backup: switch automatic upgrades of the management cluster off and on again")
+
+// unattendedPath sits in the appliance's own directory, which only its user may read. It holds the
+// passphrase and the token sealed with the key at unattendedKeyPath.
 func (a *Appliance) unattendedPath() string { return filepath.Join(a.Dir, "unattended.json") }
 
-// KeepUnattended keeps what an unattended apply needs. The caller has checked the passphrase
-// against the state (CheckPassphrase) and made the token.
+// unattendedKeyPath is on a volume of its own that Proxmox VE's backups of the container leave
+// out, so that a backup, which holds the state, never holds what opens it as well.
+func (a *Appliance) unattendedKeyPath() string { return filepath.Join(a.KeyDir, "unattended.key") }
+
+// unattendedFile is what the appliance keeps on disk: who switched automatic upgrades on, when, and
+// the Proxmox VE user the runs act as, in the open; the passphrase and token sealed.
+type unattendedFile struct {
+	By     string    `json:"by"`
+	Since  time.Time `json:"since"`
+	User   string    `json:"user"`
+	Sealed []byte    `json:"sealed"`
+}
+
+// unattendedSecrets is what is sealed.
+type unattendedSecrets struct {
+	Passphrase string `json:"passphrase"`
+	Token      string `json:"token"`
+}
+
+// unattendedSealing binds a sealed value to its use, so that no other sealed value opens as it.
+var unattendedSealing = []byte("kubehenge unattended upgrades")
+
+// sealKeySize is AES-256's key size.
+const sealKeySize = 32
+
+// KeepUnattended keeps what an unattended apply needs, sealed with a new key. The caller has
+// checked the passphrase against the state (CheckPassphrase) and made the token.
 func (a *Appliance) KeepUnattended(u Unattended) error {
 	if err := ValidPassphrase(u.Passphrase); err != nil {
 		return err
 	}
-	if id, secret, ok := strings.Cut(u.Token, "="); !ok || !strings.Contains(id, "!") || secret == "" {
+	id, secret, ok := strings.Cut(u.Token, "=")
+	if !ok || !strings.Contains(id, "!") || secret == "" {
 		return errors.New("the Proxmox VE API token must be user@realm!name=secret")
 	}
-	raw, err := json.Marshal(u)
+	if a.KeyDir == "" {
+		return errors.New("this appliance has no volume to keep the key of automatic upgrades on: upgrade it with install.sh --upgrade")
+	}
+	key := make([]byte, sealKeySize)
+	if _, err := rand.Read(key); err != nil {
+		return fmt.Errorf("making the key of automatic upgrades: %w", err)
+	}
+	plain, err := json.Marshal(unattendedSecrets{Passphrase: u.Passphrase, Token: u.Token})
 	if err != nil {
 		return fmt.Errorf("encoding what automatic upgrades keep: %w", err)
+	}
+	sealed, err := seal(key, plain)
+	if err != nil {
+		return err
+	}
+	user, _, _ := strings.Cut(id, "!")
+	raw, err := json.Marshal(unattendedFile{By: u.By, Since: u.Since, User: user, Sealed: sealed})
+	if err != nil {
+		return fmt.Errorf("encoding what automatic upgrades keep: %w", err)
+	}
+	if err := writeFileAtomic(a.unattendedKeyPath(), key); err != nil {
+		return fmt.Errorf("keeping the key of automatic upgrades: %w", err)
 	}
 	return writeFileAtomic(a.unattendedPath(), raw)
 }
 
-// ForgetUnattended deletes what KeepUnattended kept; nothing kept is no error.
+// ForgetUnattended deletes what KeepUnattended kept, and its key; nothing kept is no error.
 func (a *Appliance) ForgetUnattended() error {
-	if err := os.Remove(a.unattendedPath()); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("deleting what automatic upgrades kept: %w", err)
+	paths := []string{a.unattendedPath()}
+	if a.KeyDir != "" {
+		paths = append(paths, a.unattendedKeyPath())
+	}
+	for _, p := range paths {
+		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("deleting what automatic upgrades kept: %w", err)
+		}
 	}
 	return nil
+}
+
+func seal(key, plain []byte) ([]byte, error) {
+	gcm, err := sealCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("sealing what automatic upgrades keep: %w", err)
+	}
+	return gcm.Seal(nonce, nonce, plain, unattendedSealing), nil
+}
+
+func unseal(key, sealed []byte) ([]byte, error) {
+	gcm, err := sealCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	if len(sealed) < gcm.NonceSize() {
+		return nil, ErrUnattendedKey
+	}
+	plain, err := gcm.Open(nil, sealed[:gcm.NonceSize()], sealed[gcm.NonceSize():], unattendedSealing)
+	if err != nil {
+		return nil, ErrUnattendedKey
+	}
+	return plain, nil
+}
+
+func sealCipher(key []byte) (cipher.AEAD, error) {
+	if len(key) != sealKeySize {
+		return nil, ErrUnattendedKey
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("the key of automatic upgrades: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("the key of automatic upgrades: %w", err)
+	}
+	return gcm, nil
 }
 
 // UnattendedInfo is what may be shown of what KeepUnattended kept: who chose it and when, and the
@@ -141,15 +242,14 @@ type UnattendedInfo struct {
 // UnattendedOn returns what may be shown of what the appliance keeps for unattended applies, or
 // nil while it keeps nothing.
 func (a *Appliance) UnattendedOn() *UnattendedInfo {
-	u, err := a.unattended()
+	f, err := a.unattendedFile()
 	if err != nil {
 		return nil
 	}
-	user, _, _ := strings.Cut(u.Token, "!")
-	return &UnattendedInfo{By: u.By, Since: u.Since, User: user}
+	return &UnattendedInfo{By: f.By, Since: f.Since, User: f.User}
 }
 
-func (a *Appliance) unattended() (*Unattended, error) {
+func (a *Appliance) unattendedFile() (*unattendedFile, error) {
 	raw, err := os.ReadFile(a.unattendedPath())
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, ErrNotUnattended
@@ -157,11 +257,38 @@ func (a *Appliance) unattended() (*Unattended, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading what automatic upgrades keep: %w", err)
 	}
-	var u Unattended
-	if err := json.Unmarshal(raw, &u); err != nil {
+	var f unattendedFile
+	if err := json.Unmarshal(raw, &f); err != nil {
 		return nil, fmt.Errorf("reading what automatic upgrades keep: %w", err)
 	}
-	return &u, nil
+	return &f, nil
+}
+
+// unattended opens what KeepUnattended kept.
+func (a *Appliance) unattended() (*Unattended, error) {
+	f, err := a.unattendedFile()
+	if err != nil {
+		return nil, err
+	}
+	if a.KeyDir == "" {
+		return nil, ErrUnattendedKey
+	}
+	key, err := os.ReadFile(a.unattendedKeyPath())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, ErrUnattendedKey
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading the key of automatic upgrades: %w", err)
+	}
+	plain, err := unseal(key, f.Sealed)
+	if err != nil {
+		return nil, err
+	}
+	var s unattendedSecrets
+	if err := json.Unmarshal(plain, &s); err != nil {
+		return nil, fmt.Errorf("reading what automatic upgrades keep: %w", err)
+	}
+	return &Unattended{Passphrase: s.Passphrase, Token: s.Token, By: f.By, Since: f.Since}, nil
 }
 
 // ApplyUnattended starts applying the saved settings again with what KeepUnattended kept, as an

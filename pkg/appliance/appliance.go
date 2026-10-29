@@ -37,6 +37,9 @@ const (
 type Appliance struct {
 	// Dir holds everything the appliance keeps; only its user may read it.
 	Dir string
+	// KeyDir holds the key that seals what automatic upgrades of the management cluster keep, on a
+	// volume the container's backups leave out; empty where there is none.
+	KeyDir string
 	// Module is the management-cluster module, as released with this binary.
 	Module string
 	// Tofu is the OpenTofu binary.
