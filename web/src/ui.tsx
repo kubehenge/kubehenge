@@ -245,11 +245,6 @@ export function Status({ state, text }: { state: Health | "idle" | "warning"; te
   return <span className={`status status-${state}`}>{text}</span>;
 }
 
-export function StatusBadge({ cluster }: { cluster: Cluster }): JSX.Element {
-  const h = health(cluster);
-  return <Status state={h.state} text={h.text} />;
-}
-
 const msPerSecond = 1000;
 const secondsPerMinute = 60;
 const secondsPerHour = 3600;

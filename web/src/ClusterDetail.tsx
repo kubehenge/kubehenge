@@ -6,6 +6,7 @@ import { BackupsDialog, BackupsView, backupsOf, backupsRows, useClassTargets } f
 import { issuesFromCA, saveCA } from "./Certificates";
 import { OptionDialog, Options, type OptionAction, type OptionRow } from "./ClusterOptions";
 import { EtcdSnapshotsDialog, EtcdSnapshotsView, etcdSnapshotsOf, etcdSnapshotsRows } from "./EtcdSnapshots";
+import { ClusterStatus } from "./fleet";
 import { HealthView } from "./Health";
 import { Machines, Placement } from "./Machines";
 import { nodeOSKey } from "./node-os";
@@ -18,7 +19,6 @@ import {
   Dialog,
   ErrorBox,
   Field,
-  StatusBadge,
   distributionName,
   errorMessage,
   filled,
@@ -215,7 +215,7 @@ export function ClusterDetail({
         <div className="page-head">
           <div className="page-title">
             <h2>
-              <span className="id">{c.name}</span> <StatusBadge cluster={c} />
+              <span className="id">{c.name}</span> <ClusterStatus cluster={c} />
             </h2>
             <Facts cluster={c} />
           </div>
@@ -402,7 +402,7 @@ function Summary({
       <dl className="summary">
         <dt>Status</dt>
         <dd>
-          <StatusBadge cluster={c} />
+          <ClusterStatus cluster={c} />
         </dd>
         <dt>Distribution</dt>
         <dd>{distributionName(c.distribution)}</dd>

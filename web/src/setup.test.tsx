@@ -711,10 +711,9 @@ describe("setup", () => {
     });
     render(<App />);
     await expect(screen.findByRole("heading", { name: "Clusters" })).resolves.toBeInTheDocument();
-    expect(within(screen.getByRole("navigation", { name: "Pages" })).getByRole("link", { name: "Clusters" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
+    expect(
+      within(screen.getByRole("navigation", { name: "Pages" })).getByRole("link", { name: "Clusters" }),
+    ).toHaveAttribute("aria-current", "page");
   });
 
   it("asks for the earlier run's passphrase once when its state is still there", async () => {

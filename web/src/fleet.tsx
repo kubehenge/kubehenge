@@ -4,7 +4,7 @@ import { api } from "./api";
 import { clusterPath, type View } from "./ClusterDetail";
 import { Link } from "./router";
 import type { Cluster, FleetHealth, Replicas, RunInfo } from "./types";
-import { distributionName, filled, pollIdle, settled, usePoll } from "./ui";
+import { Status, distributionName, filled, health, pollIdle, settled, usePoll } from "./ui";
 
 // How often the fleet is read again while any cluster is changing.
 const pollChanging = 10_000;
@@ -79,6 +79,8 @@ export interface Standing {
   reason: string;
   /** The view of the cluster's page that shows more of why. */
   view: View;
+  /** What a badge says of a cluster that needs someone, in place of what Cluster API says of it. */
+  verdict?: string;
 }
 
 export const groups: { group: Group; label: string }[] = [
@@ -123,7 +125,7 @@ export function standing(c: Cluster, health?: FleetHealth, now = Date.now()): St
 // failure is what has failed in a cluster and waits for someone, if anything has.
 function failure(c: Cluster): Standing | undefined {
   if (c.phase === "Failed") {
-    return { group: "needs", state: "error", reason: "Failed", view: "health" };
+    return { group: "needs", state: "error", reason: "Failed", view: "health", verdict: "Failed" };
   }
   if (filled(c.talos?.failed)) {
     return {
@@ -131,12 +133,13 @@ function failure(c: Cluster): Standing | undefined {
       state: "error",
       reason: `Talos upgrade failed on ${firstWord(c.talos.failed)}`,
       view: "",
+      verdict: "Upgrade failed",
     };
   }
   const failed = (c.machines ?? []).filter((m) => m.phase === "Failed");
   if (failed.length > 0) {
     const reason = failed.length === 1 ? `Machine ${failed[0]?.name ?? ""} failed` : `${failed.length} machines failed`;
-    return { group: "needs", state: "error", reason, view: "machines" };
+    return { group: "needs", state: "error", reason, view: "machines", verdict: "Degraded" };
   }
   return undefined;
 }
@@ -161,6 +164,7 @@ function comingUp(c: Cluster, now: number): Standing {
     state: "error",
     reason: filled(why?.reason) ? `Not available: ${why.reason}` : "Not available",
     view: "health",
+    verdict: "Not available",
   };
 }
 
@@ -196,7 +200,7 @@ function finding(h: FleetHealth | undefined): Standing | undefined {
     return undefined;
   }
   if (h.verdict === "unreachable") {
-    return { group: "needs", state: "error", reason: "API server unreachable", view: "health" };
+    return { group: "needs", state: "error", reason: "API server unreachable", view: "health", verdict: "Unreachable" };
   }
   const [worst] = h.attention;
   if (worst === undefined) {
@@ -207,7 +211,19 @@ function finding(h: FleetHealth | undefined): Standing | undefined {
   if (worst.severity === "progress") {
     return { group: "running", state: "progress", reason, view: "health" };
   }
-  return { group: "needs", state: worst.severity, reason, view: "health" };
+  return { group: "needs", state: worst.severity, reason, view: "health", verdict: "Degraded" };
+}
+
+/** badge is what a cluster's status badge shows: the fleet's verdict where it needs someone. */
+export function badge(c: Cluster, s: Standing): { state: Standing["state"]; text: string } {
+  return s.verdict === undefined ? health(c) : { state: s.state, text: s.verdict };
+}
+
+/** ClusterStatus is a cluster's badge, with what its health page found where the fleet has read it. */
+export function ClusterStatus({ cluster }: { cluster: Cluster }): JSX.Element {
+  const found = useFleet()?.health?.get(fleetKey(cluster));
+  const b = badge(cluster, standing(cluster, found));
+  return <Status state={b.state} text={b.text} />;
 }
 
 const severity: Record<Standing["state"], number> = { error: 0, warning: 1, progress: 2, deleting: 3, ok: 4 };

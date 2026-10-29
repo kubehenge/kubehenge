@@ -66,12 +66,14 @@ describe("the fleet", () => {
       state: "error",
       reason: "Talos upgrade failed on edge-w-1",
       view: "",
+      verdict: "Upgrade failed",
     });
     expect(standing(upgrading)).toMatchObject({ group: "running", reason: "Upgrading to v1.36.5+rke2r1" });
     expect(standing(creating)).toMatchObject({ group: "running", reason: "Creating: 1 of 3 control planes" });
     expect(standing({ ...creating, created: minutesAgo(120) })).toMatchObject({
       group: "needs",
       reason: "Not available",
+      verdict: "Not available",
     });
     expect(standing({ ...base, deleting: true })).toMatchObject({ group: "running", state: "deleting" });
     expect(standing({ ...base, workers: { ...steady, upToDate: 1 } })).toMatchObject({
@@ -104,10 +106,12 @@ describe("the fleet", () => {
       state: "error",
       reason: "Pod shop/api: CrashLoopBackOff and 4 more",
       view: "health",
+      verdict: "Degraded",
     });
     expect(standing(base, { ...crashing, verdict: "unreachable", attention: [] })).toMatchObject({
       group: "needs",
       reason: "API server unreachable",
+      verdict: "Unreachable",
     });
     expect(
       standing(base, {
@@ -287,6 +291,10 @@ describe("the console", () => {
     const web = within(rail).getByRole("link", { name: /^web Pod shop/u });
     expect(web).toHaveAttribute("href", "/clusters/default/web/health");
     expect(within(screen.getByRole("main")).getByText("Pod shop/api: CrashLoopBackOff")).toBeInTheDocument();
+    // The list says what the rail says, not that Cluster API finds the cluster available.
+    const row = within(screen.getByRole("main")).getByRole("row", { name: /^web/u });
+    expect(within(row).getByText("Degraded")).toBeInTheDocument();
+    expect(within(row).queryByText("Available")).not.toBeInTheDocument();
   });
 
   it("goes anywhere from the palette, by a few letters typed", async () => {

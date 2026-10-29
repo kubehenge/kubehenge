@@ -1,10 +1,10 @@
 import { useEffect, useRef, type JSX } from "react";
 
 import { clusterPath } from "./ClusterDetail";
-import { FleetProvider, fleetKey, standing, useFleet } from "./fleet";
+import { FleetProvider, badge, fleetKey, standing, useFleet } from "./fleet";
 import { Link, navigate } from "./router";
 import type { Cluster, FleetHealth } from "./types";
-import { ErrorBox, StatusBadge, age, distributionName, filled, health } from "./ui";
+import { ErrorBox, Status, age, distributionName, filled } from "./ui";
 
 // The privilege creating a cluster needs, as Proxmox VE names it.
 const createNeeds = "Creating clusters needs VM.Allocate on the workload pool.";
@@ -93,6 +93,7 @@ function Clusters({
         <tbody>
           {clusters.map((c) => {
             const s = standing(c, found?.get(fleetKey(c)));
+            const b = badge(c, s);
             const id = `${c.namespace}/${c.name}`;
             return (
               <tr key={id}>
@@ -103,8 +104,8 @@ function Clusters({
                   </span>
                 </td>
                 <td className="state fleet-status">
-                  <StatusBadge cluster={c} />
-                  {s.group !== "healthy" && s.reason !== health(c).text && <div className="hint">{s.reason}</div>}
+                  <Status state={b.state} text={b.text} />
+                  {s.group !== "healthy" && s.reason !== b.text && <div className="hint">{s.reason}</div>}
                 </td>
                 <td className="nowrap fleet-version">
                   <span className="id">{c.version}</span>
