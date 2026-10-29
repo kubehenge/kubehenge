@@ -91,7 +91,7 @@ func TestVolumeSnapshotsRefusedAtAdmissionAndCreation(t *testing.T) {
 	}
 	created := networkCluster("192.168.1.1", 24)
 	created.Spec.Topology.Variables = append(created.Spec.Topology.Variables, variableOf("storage", `"local-zfs"`), snapshotting)
-	if resp := callBeforeClusterCreate(h, created); !strings.Contains(resp.Message, "no image of the proxy") {
+	if resp := callBeforeClusterCreate(t, h, created); !strings.Contains(resp.Message, "no image of the proxy") {
 		t.Errorf("BeforeClusterCreate let volume snapshots in without the proxy: %s %q", resp.Status, resp.Message)
 	}
 

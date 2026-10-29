@@ -33,6 +33,7 @@ const cluster: Cluster = {
   class: "kubehenge-k3s",
   distribution: "k3s",
   version: "v1.36.5+k3s1",
+  generation: 1,
   created: new Date().toISOString(),
   deleting: false,
   phase: "Provisioned",

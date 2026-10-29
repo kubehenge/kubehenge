@@ -154,15 +154,15 @@ func (s *Server) credential(w http.ResponseWriter, r *http.Request, u user) {
 	if !s.require(w, r, u, "/", setupPrivileges...) {
 		return
 	}
-	key := "passphrase:" + u.ticket.Username
-	if !s.limiter.allow(key) {
+	done, ok := s.limiter.reserve(passphraseCount(u))
+	if !ok {
 		writeError(w, http.StatusTooManyRequests, "too many wrong passphrases; try again later")
 		return
 	}
 	data, err := a.Credential(r.Context(), req.Passphrase, req.Name)
+	done(errors.Is(err, appliance.ErrPassphrase))
 	switch {
 	case errors.Is(err, appliance.ErrPassphrase):
-		s.limiter.fail(key)
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	case errors.Is(err, appliance.ErrBusy), errors.Is(err, appliance.ErrUpgrading):

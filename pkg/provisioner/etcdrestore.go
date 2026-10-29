@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -83,7 +84,11 @@ type EtcdRestoreStatus struct {
 	Machine string `json:"machine,omitempty"`
 	Node    string `json:"node,omitempty"`
 	// Replaced are the other control-plane machines, which Cluster API makes again.
-	Replaced []string   `json:"replaced,omitempty"`
+	Replaced []string `json:"replaced,omitempty"`
+	// Before is the snapshot of etcd as it was, taken into the restore's target before anything
+	// of it was stopped or wiped; NoBefore says why none could be taken.
+	Before   string     `json:"before,omitempty"`
+	NoBefore string     `json:"noBefore,omitempty"`
 	Message  string     `json:"message,omitempty"`
 	Started  time.Time  `json:"started"`
 	Finished *time.Time `json:"finished,omitempty"`
@@ -147,6 +152,8 @@ type EtcdRestorer struct {
 	Reader         client.Reader
 	ClassNamespace string
 	Targets        *ClusterTargets
+	// Etcd snapshots the cluster's etcd as it is before a restore stops or wipes any of it.
+	Etcd EtcdSource
 	// Guests runs the restore on the nodes; nil when the management cluster has no restore token,
 	// and every restore but a Talos cluster's fails, to be done by hand.
 	Guests Guests
@@ -238,7 +245,7 @@ func (run *restoreRun) do(ctx context.Context) error {
 	}
 	ctrl.LoggerFrom(ctx).Info("restoring etcd", "snapshot", run.request.Snapshot, "by", run.request.By)
 	err := run.prepare(ctx)
-	for _, step := range []func(context.Context) error{run.pause, run.fetch, run.stop, run.restore, run.start, run.answer} {
+	for _, step := range []func(context.Context) error{run.pause, run.saveBefore, run.fetch, run.stop, run.restore, run.start, run.answer} {
 		if err != nil {
 			break
 		}
@@ -342,6 +349,34 @@ func (run *restoreRun) pause(ctx context.Context) error {
 	}
 	run.status.Paused = true
 	return run.save(ctx)
+}
+
+// saveBefore snapshots etcd as it is into the restore's target, so that a restore from the wrong
+// snapshot can be undone by another. A cluster whose etcd does not answer, often the reason it is
+// restored, is restored without one, and its status says why.
+func (run *restoreRun) saveBefore(ctx context.Context) error {
+	sctx, cancel := context.WithTimeout(ctx, etcdSnapshotTimeout)
+	defer cancel()
+	taken, err := takeEtcdSnapshot(sctx, run.r.Etcd, run.r.now(), run.cluster, run.target)
+	if err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "snapshotting etcd as it is before the restore")
+		run.status.NoBefore = err.Error()
+	} else {
+		ctrl.LoggerFrom(ctx).Info("snapshotted etcd as it is before the restore", "snapshot", taken.Name)
+		run.status.Before = taken.Name
+	}
+	return run.save(ctx)
+}
+
+// beforeMessage says where etcd as it was before the restore is, or why it is nowhere.
+func (run *restoreRun) beforeMessage() string {
+	switch {
+	case run.status.Before != "":
+		return " etcd as it was before is in snapshot " + run.status.Before + "."
+	case run.status.NoBefore != "":
+		return " No snapshot of etcd as it was could be taken first: " + run.status.NoBefore + "."
+	}
+	return ""
 }
 
 // unpause gives the cluster back to Cluster API, if the restore paused it.
@@ -623,9 +658,14 @@ func (run *restoreRun) finish(ctx context.Context, err error) error {
 	} else {
 		run.status.Phase, run.status.Message = RestoreSucceeded, run.succeededMessage()
 	}
-	ctrl.LoggerFrom(ctx).Info("etcd restore ended", "phase", run.status.Phase, "message", run.status.Message)
+	ctrl.LoggerFrom(ctx).Info("etcd restore ended", "phase", run.status.Phase, "message", run.status.Message,
+		"before", run.status.Before, "noBefore", run.status.NoBefore)
 	if run.r.Events != nil {
-		run.r.Events.Eventf(run.cluster, nil, kind, reason, "RestoreEtcd", "restore from %s: %s", run.status.Snapshot, run.status.Message)
+		note := run.status.Message
+		if before := run.beforeMessage(); before != "" {
+			note = strings.TrimSuffix(note, ".") + "." + before
+		}
+		run.r.Events.Eventf(run.cluster, nil, kind, reason, "RestoreEtcd", "restore from %s: %s", run.status.Snapshot, note)
 	}
 	return run.saveFinal(ctx)
 }

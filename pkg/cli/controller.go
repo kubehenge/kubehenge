@@ -110,6 +110,7 @@ type controllerOptions struct {
 	argoCDChart       string
 	fluxOperatorChart string
 	chartValues       string
+	podSecurityExempt string
 	calicoImages      []string
 	extensionConfig   string
 	upgradeInterval   time.Duration
@@ -156,7 +157,7 @@ through the VMs' guest agents.`,
 	f.StringVar(&o.settings.Region, "region", "", "region the clusters see Proxmox VE as; default the Proxmox VE cluster's name")
 	o.addonFlags(f)
 	o.addAutoscalerFlags(f)
-	f.StringSliceVar(&o.r.Charts.PodSecurityExempt, "pod-security-exempt", nil, "namespaces Kyverno's pod security policies leave alone, those the ClusterClasses' Pod Security Admission exempts (comma-separated)")
+	f.StringVar(&o.podSecurityExempt, "pod-security-exempt", "{}", "namespaces Kyverno's pod security policies leave alone, those the ClusterClasses' Pod Security Admission exempts, as a JSON object of lists by what runs there: always, calico, monitoring, logs, backups, istio, metallb, rancher, rancherAgent")
 	f.StringArrayVar(&o.classProviders, "class-providers", nil, "namespaces of the Cluster API providers only one ClusterClass's clusters use, as <class>=<namespace>,<namespace>; they run only while a cluster does (repeatable)")
 	f.BoolVar(&o.offerHARules, "offer-ha-rules", false, "offer Proxmox VE's HA node-affinity rules, their names and nodes only, to those who may create a cluster but not read the rules, through the ConfigMap "+provisioner.HARulesName)
 	f.StringSliceVar(&o.headlampSignIn, "headlamp-sign-in-namespaces", nil, "the interface's namespaces, whose clusters get identities through which the appliance's shared Headlamp signs those who may download a cluster's admin kubeconfig in as cluster-admin (comma-separated); none, nobody is signed in and the identities are removed")
@@ -252,6 +253,9 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	}
 	if err = o.parseCharts(); err != nil {
 		return err
+	}
+	if err = strictJSON(o.podSecurityExempt, &o.r.Charts.PodSecurityExempt); err != nil {
+		return fmt.Errorf("--pod-security-exempt: %w", err)
 	}
 	rancherMinors, err := provisioner.ParseKubernetesMinors(o.rancherKubernetes)
 	if err != nil {
@@ -364,6 +368,17 @@ func (o *controllerOptions) addReclaimer(mgr manager.Manager, conn *pve.Config, 
 	}
 	if err := mgr.Add(reclaimer); err != nil {
 		return fmt.Errorf("the reclaimer: %w", err)
+	}
+	return nil
+}
+
+// strictJSON decodes s into v, refusing a key v has no field for: a misspelt key would otherwise
+// leave its namespaces held to the cluster's level without a word.
+func strictJSON(s string, v any) error {
+	d := json.NewDecoder(strings.NewReader(s))
+	d.DisallowUnknownFields()
+	if err := d.Decode(v); err != nil {
+		return fmt.Errorf("decoding: %w", err)
 	}
 	return nil
 }
@@ -692,6 +707,7 @@ func (o *controllerOptions) addEtcd(mgr manager.Manager, conn *pve.Config, remot
 		Reader:         mgr.GetAPIReader(),
 		ClassNamespace: o.r.ClassNamespace,
 		Targets:        targets,
+		Etcd:           snapshotter.Etcd,
 		Talos:          provisioner.DialTalos,
 		APIs:           remotes,
 		Events:         mgr.GetEventRecorder("kubehenge"),

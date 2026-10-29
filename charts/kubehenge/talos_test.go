@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os/exec"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -269,18 +270,23 @@ func asJSON(t *testing.T, v any) string {
 func TestTalosControlPlaneConfiguration(t *testing.T) {
 	t.Parallel()
 	class := renderTalosClass(t)
+	// Every add-on's namespaces, whatever the cluster runs, so that switching one rolls no node.
+	exempt := []any{
+		"kube-system", "velero", "tigera-operator", "calico-system", "istio-node", "logging-node", "metallb-system", "node-exporter",
+		"cattle-system", "cattle-fleet-system", "cattle-fleet-local-system", "cattle-turtles-system",
+	}
 	for _, c := range []struct {
 		name      string
 		variables map[string]any
 		flannel   bool
 		enforce   string
 	}{
-		{"flannel", map[string]any{"controlPlaneEndpoint": "192.0.2.10", "cni": "flannel"}, true, "privileged"},
+		{"flannel", map[string]any{"controlPlaneEndpoint": "192.0.2.10", "cni": "flannel"}, true, "baseline"},
 		{"cilium, CIS", map[string]any{"controlPlaneEndpoint": "192.0.2.10", "cni": "cilium", "cis": true}, false, "restricted"},
 		{"calico, OIDC", map[string]any{
-			"controlPlaneEndpoint": "192.0.2.10", "cni": "calico", "podSecurity": map[string]any{"admission": "baseline"},
+			"controlPlaneEndpoint": "192.0.2.10", "cni": "calico", "podSecurity": map[string]any{"admission": "privileged"},
 			"oidc": []any{map[string]any{"issuerURL": "https://idp.example", "clientID": "kubernetes"}},
-		}, false, "baseline"},
+		}, false, "privileged"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -293,6 +299,9 @@ func TestTalosControlPlaneConfiguration(t *testing.T) {
 			}
 			if got := field(t, docs["KubeAdmissionControlConfig/PodSecurity"], "configuration", "defaults", "enforce"); got != c.enforce {
 				t.Errorf("Pod Security Admission enforces %v", got)
+			}
+			if got := field(t, docs["KubeAdmissionControlConfig/PodSecurity"], "configuration", "exemptions", "namespaces"); !reflect.DeepEqual(got, exempt) {
+				t.Errorf("Pod Security Admission exempts %v, want %v", got, exempt)
 			}
 			if got := field(t, docs["KubeAdmissionControlConfig/EventRateLimit"], "configuration", "kind"); got != "Configuration" {
 				t.Errorf("EventRateLimit = %v", docs["KubeAdmissionControlConfig/EventRateLimit"])

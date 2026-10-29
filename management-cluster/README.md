@@ -47,6 +47,8 @@ tofu output -raw kubeconfig > kubeconfig
 tofu output -raw talosconfig > talosconfig
 ```
 
+The module installs the Cluster API Operator from its chart's archive in `charts/`, which a release's archive carries; in a checkout of the repository, `make capi-operator-chart` downloads it there first. The apply refuses an archive whose SHA-256 is not the one `versions.tf` names.
+
 `-lockfile=readonly` holds the providers to the checksums in `.terraform.lock.hcl`. A root module of your own that calls this one needs a copy of that file beside it, since only the root module's is read. `terraform` works the same as `tofu`, from version 1.11.
 
 The state holds the cluster's secrets and its administrator credentials. Keep it in an encrypted backend, or use OpenTofu's state encryption.

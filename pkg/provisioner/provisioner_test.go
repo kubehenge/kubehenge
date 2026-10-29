@@ -12,6 +12,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -359,8 +360,13 @@ var testCharts = Charts{
 		Repository: "oci://ghcr.io/controlplaneio-fluxcd/charts", Name: "flux-operator", Version: "0.61.0",
 		Digest: "8c039527c4a20599bc49bf69fa944e4ae08a0d7c1d585664261d9e78e51b0bde",
 	},
-	FluxVersion:       "2.9.6",
-	PodSecurityExempt: []string{"kube-system", "node-exporter"},
+	FluxVersion: "2.9.6",
+	PodSecurityExempt: PodSecurityExempt{
+		Always: []string{"kube-system"}, Calico: []string{"tigera-operator", "calico-system"},
+		Monitoring: []string{"node-exporter"}, Logs: []string{"logging-node"}, Backups: []string{"velero"},
+		Istio: []string{"istio-node"}, MetalLB: []string{"metallb-system"},
+		Rancher: []string{"cattle-system", "cattle-turtles-system"}, RancherAgent: []string{"cattle-system"},
+	},
 }
 
 func TestParseChart(t *testing.T) {
@@ -792,6 +798,30 @@ func lookup[T any](t *testing.T, doc any, path ...any) T {
 	return v
 }
 
+// storeCluster has the API hold c as it is, as Cluster API's hook requests find it.
+func storeCluster(t *testing.T, reader client.Reader, c *clusterv1.Cluster) {
+	t.Helper()
+	kube, ok := reader.(client.Client)
+	if !ok {
+		t.Fatalf("the hooks read through a %T, which cannot store", reader)
+	}
+	ctx := context.Background()
+	stored := &clusterv1.Cluster{}
+	err := kube.Get(ctx, client.ObjectKeyFromObject(c), stored)
+	want := c.DeepCopy()
+	switch {
+	case apierrors.IsNotFound(err):
+		want.ResourceVersion = ""
+		err = kube.Create(ctx, want)
+	case err == nil:
+		want.ResourceVersion = stored.ResourceVersion
+		err = kube.Update(ctx, want)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func hooksFor(t *testing.T, objs ...client.Object) (*Hooks, client.Client) {
 	t.Helper()
 	scheme := runtime.NewScheme()
@@ -828,7 +858,9 @@ func machineVariable(name string) clusterv1.ClusterClassVariable {
 	}}}
 }
 
-func callBeforeClusterCreate(h *Hooks, c *clusterv1.Cluster) *runtimehooksv1.BeforeClusterCreateResponse {
+func callBeforeClusterCreate(t *testing.T, h *Hooks, c *clusterv1.Cluster) *runtimehooksv1.BeforeClusterCreateResponse {
+	t.Helper()
+	storeCluster(t, h.Reader, c)
 	resp := &runtimehooksv1.BeforeClusterCreateResponse{}
 	h.BeforeClusterCreate(context.Background(), &runtimehooksv1.BeforeClusterCreateRequest{Cluster: *c}, resp)
 	return resp
@@ -838,18 +870,18 @@ func TestBeforeClusterCreateRefusesOverlappingRanges(t *testing.T) {
 	t.Parallel()
 	hooks, _ := hooksFor(t)
 	// The class's default service range, 10.43.0.0/16, holds these nodes.
-	resp := callBeforeClusterCreate(hooks, networkCluster("10.43.7.1", 24))
+	resp := callBeforeClusterCreate(t, hooks, networkCluster("10.43.7.1", 24))
 	if resp.Status != runtimehooksv1.ResponseStatusFailure || !strings.Contains(resp.Message, "service range 10.43.0.0/16") {
 		t.Errorf("default range: %+v", resp)
 	}
 	c := networkCluster("192.168.1.1", 24)
 	c.Spec.ClusterNetwork.Pods.CIDRBlocks = []string{"192.168.0.0/16"}
-	resp = callBeforeClusterCreate(hooks, c)
+	resp = callBeforeClusterCreate(t, hooks, c)
 	if resp.Status != runtimehooksv1.ResponseStatusFailure || !strings.Contains(resp.Message, "pod range 192.168.0.0/16") {
 		t.Errorf("own range: %+v", resp)
 	}
 	c.Spec.ClusterNetwork.Pods.CIDRBlocks = []string{"10.50.0.0/16"}
-	if resp := callBeforeClusterCreate(hooks, c); resp.Status != runtimehooksv1.ResponseStatusSuccess {
+	if resp := callBeforeClusterCreate(t, hooks, c); resp.Status != runtimehooksv1.ResponseStatusSuccess {
 		t.Errorf("ranges beside the network: %+v", resp)
 	}
 }
@@ -859,7 +891,7 @@ func TestBeforeClusterCreateWaitsForCredentials(t *testing.T) {
 	hooks, reader := hooksFor(t)
 	c := networkCluster("192.0.2.1", 24)
 	call := func(c *clusterv1.Cluster) *runtimehooksv1.BeforeClusterCreateResponse {
-		return callBeforeClusterCreate(hooks, c)
+		return callBeforeClusterCreate(t, hooks, c)
 	}
 	if resp := call(c); resp.Status != runtimehooksv1.ResponseStatusSuccess || resp.RetryAfterSeconds == 0 {
 		t.Errorf("without credentials: %+v", resp)

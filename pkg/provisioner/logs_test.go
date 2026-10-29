@@ -57,7 +57,7 @@ func TestValidatorAndHookRefuseLogsWithoutMonitoring(t *testing.T) {
 	}
 	created := networkCluster("192.168.1.1", 24)
 	created.Spec.Topology.Variables = append(created.Spec.Topology.Variables, variableOf("logs", `{"enabled":true}`))
-	if resp := callBeforeClusterCreate(h, created); !strings.Contains(resp.Message, "logs need monitoring") {
+	if resp := callBeforeClusterCreate(t, h, created); !strings.Contains(resp.Message, "logs need monitoring") {
 		t.Errorf("BeforeClusterCreate let logs in without monitoring: %s %q", resp.Status, resp.Message)
 	}
 }
