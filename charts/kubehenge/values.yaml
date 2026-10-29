@@ -125,9 +125,10 @@ proxmox:
   # Region the clusters see Proxmox VE as (topology.kubernetes.io/region); empty means the Proxmox
   # VE cluster's name, or the node's when it is not clustered.
   region: ""
-  # Whether the controller keeps clusters' control-plane VMs apart with Proxmox VE HA, signing in
-  # for it with the API token under the secret's key ha-token, which needs Sys.Audit and Sys.Console
-  # on /.
+  # Whether the controller keeps clusters' control-plane VMs apart with Proxmox VE HA. It reads HA
+  # with its own token, and writes it through short-lived Jobs that alone get the API token in the
+  # Secret <secret>-ha (key token), which needs Sys.Audit and Sys.Console on /: a root shell on
+  # every node.
   ha: false
   # Clusters that choose the CSI plugin's newest release (their csi variable) get this role on their
   # storage from the controller: Datastore.Allocate, Datastore.AllocateSpace and Datastore.Audit,
@@ -148,9 +149,10 @@ proxmox:
   volumeSnapshots:
     rootSecret: ""
   # Whether the controller restores clusters' etcd from their snapshots itself, running the restore
-  # on the control-plane VMs through their guest agents, signing in for it with the API token under
-  # the secret's key restore-token, which needs VM.Audit and VM.GuestAgent.Unrestricted on the
-  # workload pool: a root shell in every cluster's VMs. Without it, the interface shows the steps
+  # on the control-plane VMs through their guest agents, in short-lived Jobs that alone get the API
+  # token in the Secret <secret>-restore (key token), which needs VM.Audit and
+  # VM.GuestAgent.Unrestricted on the workload pool: a root shell in every cluster's VMs. Without
+  # it, the interface shows the steps
   # to restore by hand. Talos clusters are restored through their nodes' Talos API either way.
   etcdRestore: false
 

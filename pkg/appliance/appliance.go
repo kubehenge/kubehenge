@@ -144,7 +144,7 @@ func (a *Appliance) Apply(settings *Settings, passphrase string, ticket *pve.Tic
 }
 
 // ReleasesHA tells whether an apply of next switches Proxmox VE HA off, or finishes switching it
-// off after a run that did not get through. The controller's HA token goes with it, so what the
+// off after a run that did not get through. The HA token goes with it, so what the
 // controller left in HA has to be removed with the user's session once the run is through, and
 // HAReleased called then.
 func (a *Appliance) ReleasesHA(next *Settings) bool {

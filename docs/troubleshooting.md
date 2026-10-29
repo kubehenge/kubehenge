@@ -272,6 +272,14 @@ Kubehenge's controller holds a cluster's backups back, neither installing nor re
 - **`EtcdUploadHeld`:** the distribution's own upload ([clusters.md](clusters.md#the-distributions-own-upload)) has no target to upload to, for the reason the event gives, a missing target or credential as for backups above. The servers keep their snapshots on their nodes meanwhile.
 - **`EtcdRestoreFailed`**, "restore from …: …": the restore stopped, for the reason that follows, which the **Backups** view shows too. One that failed before etcd was restored started every control plane again as it was; one that failed after finished the restore ([clusters.md](clusters.md#restore-etcd)). "… the control-plane nodes are left as they are: restore by hand as the interface shows": follow the steps **Restore…** lists for the snapshot. "control-plane machine … has no VM yet: restore once every one runs": wait until every control-plane machine has its VM, then restore again.
 
+### HA writes and restore steps
+
+Each Proxmox VE HA write and each step of an etcd restore runs in a Job of its own in `kubehenge-system` ([architecture.md](architecture.md#tokens-kept-out-of-the-controller)), which the controller deletes once it has read the result; `kubectl -n kubehenge-system get jobs,pods -l kubehenge.dev/token-job` shows those running. The controller's log, or `EtcdRestoreFailed`, says what failed:
+
+- **"token Job … ended without a result: …":** the pod never ran its request, for the reason after the colon. `DeadlineExceeded` means it was not scheduled or did not start in time; `kubectl -n kubehenge-system get events` says why, often an image that could not be pulled.
+- **"starting Job …: … only a Job made exactly from PodTemplate …":** the Job did not match its template, which happens while an upgrade of the chart replaces it. The controller tries HA writes again with the new one; ask for a restore again.
+- **"not one of Kubehenge's HA objects":** a write was refused, as the HA resource or rule it was for, or a resource a rule names, no longer carries the comment `Kubehenge cluster …`. Someone changed it in Proxmox VE: put the comment back, or remove the object and let the controller make it again.
+
 ### Talos upgrades
 
 - **`TalosUpgradeFailed`**, "node … to Talos …: …": the node did not take the release, for the reason that follows: "the node came back on Talos …: Talos booted the release before, as the new one did not come up" means Talos rolled back, and "the node is not Ready … after it rebooted" that it did not come back within 15 minutes. The controller upgrades no other node until **Try again** on the cluster's Summary, or until the annotation `kubehenge.dev/talos-upgrade-failed` is removed ([clusters.md](clusters.md#talos-upgrades)). Correct what the reason names first.

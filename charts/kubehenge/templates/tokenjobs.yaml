@@ -1,0 +1,168 @@
+{{- /*
+The Jobs that hold the Proxmox VE tokens the controller does not: with proxmox.ha, the HA token,
+which writes HA resources and rules; with proxmox.etcdRestore, the restore token, which runs an etcd
+restore's commands through the VMs' guest agents. The controller starts one Job from the PodTemplate
+for each request, leaving the request in the Secret <template>-input, and reads the result from the
+pod's termination message. No long-running pod holds either token, and the policy below holds every
+Job that mounts one to its PodTemplate, so that no Job the controller makes can take the token
+anywhere else.
+*/}}
+{{- $jobs := list }}
+{{- if .Values.proxmox.ha }}
+{{- $jobs = append $jobs (dict "name" "kubehenge-proxmox-ha" "kind" "ha" "secret" (printf "%s-ha" .Values.proxmox.secret)) }}
+{{- end }}
+{{- if .Values.proxmox.etcdRestore }}
+{{- $jobs = append $jobs (dict "name" "kubehenge-guest-agent" "kind" "guest-agent" "secret" (printf "%s-restore" .Values.proxmox.secret)) }}
+{{- end }}
+{{- if $jobs }}
+{{- $account := "kubehenge-token-job" }}
+{{- $template := "kubehenge.dev/token-job-template" }}
+{{- $secretAnnotation := "kubehenge.dev/token-secret" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $account }}
+  namespace: {{ .Release.Namespace }}
+# The Jobs call only Proxmox VE: no Kubernetes API token.
+automountServiceAccountToken: false
+{{- range $jobs }}
+---
+apiVersion: v1
+kind: PodTemplate
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{ $template }}: "true"
+  annotations:
+    {{ $secretAnnotation }}: {{ .secret }}
+template:
+  metadata:
+    labels:
+      app.kubernetes.io/name: {{ $account }}
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+  spec:
+    serviceAccountName: {{ $account }}
+    automountServiceAccountToken: false
+    restartPolicy: Never
+    enableServiceLinks: false
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
+      seccompProfile:
+        type: RuntimeDefault
+    containers:
+      - name: job
+        image: {{ required "image: Kubehenge's controller image by digest" $.Values.image }}
+        args:
+          - token-job
+          - {{ .kind }}
+          - --proxmox-ca=/etc/kubehenge/proxmox/ca.crt
+          - --proxmox-insecure={{ $.Values.proxmox.insecure }}
+        env:
+          - name: KUBEHENGE_PROXMOX_URL
+            value: {{ required "proxmox.url is required" $.Values.proxmox.url | quote }}
+          - name: KUBEHENGE_PROXMOX_TOKEN
+            valueFrom:
+              # Optional, so that a missing Secret fails the request with a result the controller
+              # reports, instead of a pod that never starts.
+              secretKeyRef:
+                name: {{ .secret }}
+                key: token
+                optional: true
+          - name: KUBEHENGE_JOB
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.labels['batch.kubernetes.io/job-name']
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: [ALL]
+        volumeMounts:
+          - name: proxmox
+            mountPath: /etc/kubehenge/proxmox
+            readOnly: true
+          - name: input
+            mountPath: /etc/kubehenge/input
+            readOnly: true
+    volumes:
+      - name: proxmox
+        secret:
+          secretName: {{ $.Values.proxmox.secret }}
+          items:
+            - key: ca.crt
+              path: ca.crt
+      - name: input
+        secret:
+          secretName: {{ .name }}-input
+          optional: true
+{{- end }}
+---
+# Every Job in the release namespace that gets a token Job's Secret, through a volume or the
+# environment, is made exactly from that Job's PodTemplate, whoever creates it: the controller,
+# which starts them, can make no Job that takes the token anywhere else. Each PodTemplate is a
+# parameter, and a Job has to pass the check of every one.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kubehenge-token-jobs
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: v1
+    kind: PodTemplate
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace }}
+    resourceRules:
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE]
+        resources: [jobs]
+  variables:
+    - name: pod
+      expression: object.spec.template.spec
+    - name: token
+      expression: params.metadata.annotations[{{ $secretAnnotation | quote }}]
+    - name: containers
+      expression: "variables.pod.containers + (has(variables.pod.initContainers) ? variables.pod.initContainers : [])"
+    - name: mounted
+      expression: >-
+        has(variables.pod.volumes) && variables.pod.volumes.exists(v,
+        (has(v.secret) && has(v.secret.secretName) && v.secret.secretName == variables.token)
+        || (has(v.projected) && has(v.projected.sources) && v.projected.sources.exists(s,
+        has(s.secret) && has(s.secret.name) && s.secret.name == variables.token)))
+    - name: inEnvironment
+      expression: >-
+        variables.containers.exists(c,
+        (has(c.env) && c.env.exists(e, has(e.valueFrom) && has(e.valueFrom.secretKeyRef)
+        && has(e.valueFrom.secretKeyRef.name) && e.valueFrom.secretKeyRef.name == variables.token))
+        || (has(c.envFrom) && c.envFrom.exists(e, has(e.secretRef) && has(e.secretRef.name) && e.secretRef.name == variables.token)))
+  validations:
+    - expression: "!(variables.mounted || variables.inEnvironment) || variables.pod == params.template.spec"
+      messageExpression: "'only a Job made exactly from PodTemplate ' + params.metadata.name + ' gets the token in Secret ' + variables.token"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kubehenge-token-jobs
+spec:
+  policyName: kubehenge-token-jobs
+  validationActions: [Deny]
+  # Without the PodTemplates, no Job in the namespace is let through.
+  paramRef:
+    namespace: {{ .Release.Namespace }}
+    selector:
+      matchLabels:
+        {{ $template }}: "true"
+    parameterNotFoundAction: Deny
+{{- end }}

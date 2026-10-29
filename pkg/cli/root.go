@@ -34,6 +34,7 @@ func NewRoot() *cobra.Command {
 	conn.Token = os.Getenv("KUBEHENGE_PROXMOX_TOKEN")
 
 	root.AddCommand(newTemplateCommand(&conn), newControllerCommand(&conn), newServeCommand(&conn),
-		newUpdateCommand(), newReleaseCommand(), newWaitCommand(), newManifestsCommand(), newEtcdSnapshotCommand())
+		newUpdateCommand(), newReleaseCommand(), newWaitCommand(), newManifestsCommand(), newEtcdSnapshotCommand(),
+		newTokenJobCommand(&conn))
 	return root
 }

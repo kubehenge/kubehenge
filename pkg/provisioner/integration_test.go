@@ -874,8 +874,34 @@ func jsonPatches(t *testing.T, patches []any) []map[string]any {
 	return ops
 }
 
-// Only a management cluster with Proxmox VE HA hands the controller the HA token and offers the
-// classes' proxmoxHA variable in the interface.
+// tokenJobOf tells, of a rendered chart, whether the controller is told to use the token Job
+// template, whether a PodTemplate of that name gets the token's Secret, and whether a Deployment
+// does, which none may.
+func tokenJobOf(t *testing.T, objs []*unstructured.Unstructured, flag, template, secret string) (bool, bool, bool) {
+	t.Helper()
+	var told, job, deployment bool
+	for _, o := range objs {
+		switch {
+		case o.GetKind() == "Deployment":
+			raw, err := json.Marshal(o.Object["spec"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			deployment = deployment || strings.Contains(string(raw), `"`+secret+`"`)
+			told = told || o.GetName() == "kubehenge-controller" && strings.Contains(string(raw), `"`+flag+`"`)
+		case o.GetKind() == "PodTemplate" && o.GetName() == template:
+			raw, err := json.Marshal(o.Object["template"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			job = strings.Contains(string(raw), `"name":"`+secret+`"`)
+		}
+	}
+	return told, job, deployment
+}
+
+// Only a management cluster with Proxmox VE HA has the controller write HA, through Jobs that alone
+// get the HA token, and offers the classes' proxmoxHA variable in the interface.
 func TestIntegrationChartProxmoxHA(t *testing.T) {
 	t.Parallel()
 	for _, on := range []bool{false, true} {
@@ -883,25 +909,19 @@ func TestIntegrationChartProxmoxHA(t *testing.T) {
 		if on {
 			values = append(values, "testdata/proxmox-ha-values.yaml")
 		}
-		var token bool
 		classes := 0
-		for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, values...) {
-			switch o.GetKind() {
-			case "ClusterClass":
+		objs := renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, values...)
+		for _, o := range objs {
+			if o.GetKind() == "ClusterClass" {
 				if got := o.GetAnnotations()["kubehenge.dev/proxmox-ha"] == "true"; got != on {
 					t.Errorf("HA %t: %s offers proxmoxHA: %t", on, o.GetName(), got)
 				}
 				classes++
-			case "Deployment":
-				containers, _, err := unstructured.NestedSlice(o.Object, "spec", "template", "spec", "containers")
-				if err != nil {
-					t.Fatal(err)
-				}
-				token = token || strings.Contains(fmt.Sprint(containers), "KUBEHENGE_PROXMOX_HA_TOKEN")
 			}
 		}
-		if token != on || classes != len(classProviders) {
-			t.Errorf("HA %t: the controller gets the HA token: %t; %d classes", on, token, classes)
+		told, job, deployment := tokenJobOf(t, objs, "--proxmox-ha", HAJobTemplate, "kubehenge-proxmox-ha")
+		if told != on || job != on || deployment || classes != len(classProviders) {
+			t.Errorf("HA %t: the controller writes HA: %t; a Job gets the HA token: %t; a Deployment does: %t; %d classes", on, told, job, deployment, classes)
 		}
 	}
 }
@@ -1037,9 +1057,10 @@ func TestIntegrationChartVolumeSnapshots(t *testing.T) {
 	}
 }
 
-// Only a management cluster that restores through the guest agent hands the controller the restore
-// token, and its classes say so for the interface to offer the restore. A Talos cluster is restored
-// through its nodes' Talos API, so its class says so either way.
+// Only a management cluster that restores through the guest agent has the controller do so,
+// through Jobs that alone get the restore token, and its classes say so for the interface to offer
+// the restore. A Talos cluster is restored through its nodes' Talos API, so its class says so either
+// way.
 func TestIntegrationChartEtcdRestore(t *testing.T) {
 	t.Parallel()
 	for _, on := range []bool{false, true} {
@@ -1047,26 +1068,20 @@ func TestIntegrationChartEtcdRestore(t *testing.T) {
 		if on {
 			values = append(values, "testdata/etcd-restore-values.yaml")
 		}
-		var token bool
 		classes := 0
-		for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, values...) {
-			switch o.GetKind() {
-			case "ClusterClass":
+		objs := renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, values...)
+		for _, o := range objs {
+			if o.GetKind() == "ClusterClass" {
 				want := on || o.GetName() == "kubehenge-talos"
 				if got := o.GetAnnotations()[AutomaticRestoreAnnotation]; got != strconv.FormatBool(want) {
 					t.Errorf("restore %t: %s says %q", on, o.GetName(), got)
 				}
 				classes++
-			case "Deployment":
-				containers, _, err := unstructured.NestedSlice(o.Object, "spec", "template", "spec", "containers")
-				if err != nil {
-					t.Fatal(err)
-				}
-				token = token || strings.Contains(fmt.Sprint(containers), "KUBEHENGE_PROXMOX_RESTORE_TOKEN")
 			}
 		}
-		if token != on || classes != len(classProviders) {
-			t.Errorf("restore %t: the controller gets the restore token: %t; %d classes", on, token, classes)
+		told, job, deployment := tokenJobOf(t, objs, "--etcd-restore", GuestJobTemplate, "kubehenge-proxmox-restore")
+		if told != on || job != on || deployment || classes != len(classProviders) {
+			t.Errorf("restore %t: the controller restores: %t; a Job gets the restore token: %t; a Deployment does: %t; %d classes", on, told, job, deployment, classes)
 		}
 	}
 }

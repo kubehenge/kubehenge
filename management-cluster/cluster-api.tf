@@ -7,6 +7,9 @@ locals {
 
   controller_secret = { name = "kubehenge-proxmox", namespace = local.kubehenge_namespace }
   builder_secret    = { name = "kubehenge-template-builder", namespace = local.kubehenge_namespace }
+  # The chart's token Jobs, which alone get these, take them as <controller secret>-ha and -restore.
+  ha_secret      = { name = "${local.controller_secret.name}-ha", namespace = local.kubehenge_namespace }
+  restore_secret = { name = "${local.controller_secret.name}-restore", namespace = local.kubehenge_namespace }
 
   # The Helm provider upgrades a release only when its chart's version or its values change. Each
   # release gets the digest of the files Helm packages from its chart, so a changed chart is
@@ -323,6 +326,8 @@ resource "helm_release" "cluster_api_providers" {
         }
       },
       local.template_builder.enabled ? { (local.builder_secret.name) = { namespace = local.builder_secret.namespace, data = {} } } : {},
+      var.proxmox_ha ? { (local.ha_secret.name) = { namespace = local.ha_secret.namespace, data = {} } } : {},
+      var.etcd_restore ? { (local.restore_secret.name) = { namespace = local.restore_secret.namespace, data = {} } } : {},
     )
   })]
 
@@ -338,7 +343,7 @@ resource "helm_release" "cluster_api_providers" {
       type  = "string"
     },
     ], [for t in proxmox_user_token.ha : {
-      name  = "secrets.${local.controller_secret.name}.data.ha-token"
+      name  = "secrets.${local.ha_secret.name}.data.token"
       value = t.value
       type  = "string"
       }], [for t in proxmox_user_token.template_builder : {
@@ -346,7 +351,7 @@ resource "helm_release" "cluster_api_providers" {
       value = t.value
       type  = "string"
       }], [for t in proxmox_user_token.etcd_restore : {
-      name  = "secrets.${local.controller_secret.name}.data.restore-token"
+      name  = "secrets.${local.restore_secret.name}.data.token"
       value = t.value
       type  = "string"
   }])

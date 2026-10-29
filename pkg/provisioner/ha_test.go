@@ -1,16 +1,20 @@
 package provisioner
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/luthermonson/go-proxmox"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -26,6 +30,7 @@ import (
 type fakeRule struct {
 	Type      string
 	Affinity  string
+	Comment   string
 	Resources []string
 	Nodes     []string
 }
@@ -140,6 +145,16 @@ func (f *fakeHA) answerHA(method, path string, body map[string]any) (any, error)
 		}
 		f.resources[sid] = text(body, "comment")
 		return none, nil
+	case method == http.MethodGet && strings.HasPrefix(path, "/cluster/ha/resources/"):
+		sid := strings.TrimPrefix(path, "/cluster/ha/resources/")
+		comment, ok := f.resources[sid]
+		if ghost, isGhost := f.ghosts[sid]; isGhost {
+			comment, ok = ghost, true
+		}
+		if !ok {
+			return nil, fmt.Errorf("no such resource '%s'", sid)
+		}
+		return map[string]string{"sid": sid, "comment": comment}, nil
 	case method == http.MethodDelete && strings.HasPrefix(path, "/cluster/ha/resources/"):
 		return none, f.removeResource(strings.TrimPrefix(path, "/cluster/ha/resources/"))
 	}
@@ -162,8 +177,15 @@ func (f *fakeHA) answerRules(method, path string, body map[string]any) (any, err
 		if strict, ok := body["strict"].(float64); text(body, "type") == "node-affinity" && (!ok || strict != 1) {
 			return nil, fmt.Errorf("node rule %s is not strict", id)
 		}
-		rule := &fakeRule{Type: text(body, "type"), Affinity: text(body, "affinity"), Resources: splitList(text(body, "resources")), Nodes: splitList(text(body, "nodes"))}
+		rule := &fakeRule{Type: text(body, "type"), Affinity: text(body, "affinity"), Comment: text(body, "comment"), Resources: splitList(text(body, "resources")), Nodes: splitList(text(body, "nodes"))}
 		return none, f.write(id, rule)
+	case method == http.MethodGet && strings.HasPrefix(path, "/cluster/ha/rules/"):
+		id := strings.TrimPrefix(path, "/cluster/ha/rules/")
+		rule, ok := f.rules[id]
+		if !ok {
+			return nil, fmt.Errorf("no such rule '%s'", id)
+		}
+		return map[string]string{"rule": id, "type": rule.Type, "comment": rule.Comment, "resources": strings.Join(rule.Resources, ",")}, nil
 	case method == http.MethodPut && strings.HasPrefix(path, "/cluster/ha/rules/"):
 		id := strings.TrimPrefix(path, "/cluster/ha/rules/")
 		old, ok := f.rules[id]
@@ -337,9 +359,45 @@ func newHAFixture(t *testing.T, c *clusterv1.Cluster, nodes ...string) *haFixtur
 	r := &HAReconciler{
 		Client: kube, Machines: kube, ClassNamespace: "kubehenge-system", WorkloadPool: "kubehenge",
 		Proxmox: proxmox.NewClient(srv.URL + "/api2/json"),
-		HA:      proxmox.NewClient(srv.URL + "/api2/json"),
+		HA:      &HAJobs{Jobs: &inProcessJob{t: t, serve: ServeHARequest, token: proxmox.NewClient(srv.URL + "/api2/json")}},
 	}
 	return &haFixture{t: t, pve: pve, r: r, kube: kube}
+}
+
+// inProcessJob runs a token Job's request as the Job would, its request and result passed as the
+// Job and the controller pass them, without the Job.
+type inProcessJob struct {
+	t     *testing.T
+	serve func(context.Context, *proxmox.Client, []byte) (string, error)
+	token *proxmox.Client
+}
+
+func (j *inProcessJob) Run(ctx context.Context, request any, _ time.Duration) (string, error) {
+	j.t.Helper()
+	dir := j.t.TempDir()
+	raw, err := json.Marshal(request)
+	if err != nil {
+		j.t.Fatal(err)
+	}
+	for name, content := range map[string][]byte{TokenJobRequestKey: raw, TokenJobNameKey: []byte("job")} {
+		if err = os.WriteFile(filepath.Join(dir, name), content, 0o600); err != nil {
+			j.t.Fatal(err)
+		}
+	}
+	result := filepath.Join(dir, "termination-log")
+	serve := func(ctx context.Context, req []byte) (string, error) { return j.serve(ctx, j.token, req) }
+	if err = ServeTokenJob(ctx, dir, "job", result, serve); err != nil {
+		j.t.Fatal(err)
+	}
+	message, err := os.ReadFile(result) //nolint:gosec // the test's own file
+	if err != nil {
+		j.t.Fatal(err)
+	}
+	var r TokenJobResult
+	if err = json.Unmarshal(message, &r); err != nil {
+		j.t.Fatal(err)
+	}
+	return r.Outcome()
 }
 
 func (f *haFixture) reconcile() ctrl.Result {
@@ -597,7 +655,7 @@ func TestHALeavesOutClustersThatDoNotTakePart(t *testing.T) {
 			f.pve.resources["vm:101"] = HAComment("kubehenge/team-a.web")
 			f.pve.resources["vm:102"] = HAComment("kubehenge/team-a.web")
 			f.pve.resources["vm:900"] = "someone else's"
-			f.pve.rules[apart] = &fakeRule{Type: "resource-affinity", Affinity: "negative", Resources: []string{"vm:101", "vm:102"}}
+			f.pve.rules[apart] = &fakeRule{Type: "resource-affinity", Affinity: "negative", Comment: HAComment(webPool), Resources: []string{"vm:101", "vm:102"}}
 			m := f.machine("web-cp-0")
 			m.Annotations = map[string]string{HAHook: "kubehenge"}
 			if err := f.kube.Update(t.Context(), m); err != nil {
