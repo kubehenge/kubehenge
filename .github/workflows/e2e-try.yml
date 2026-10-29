@@ -135,10 +135,17 @@ jobs:
           nproc && grep -m1 'model name' /proc/cpuinfo && free -m && df -h / /mnt
       # The guests' vCPUs outnumber the runner's, so a failure may come from the runner itself: its
       # load, each VM's share of its CPUs and memory, and how often and why the guests leave for its
-      # KVM, which costs more on some CPUs.
+      # KVM, which costs more on some CPUs. The guests' memory outgrows the runner's at the workload
+      # tests' peaks, so the runner's agent is first kept out of the OOM killer's choice and out of
+      # reclaim, which the recorders inherit, and a guard ends the test once the runner nears the
+      # end of its memory, swap or disk, while it can still report: a runner starved or killed
+      # instead keeps neither log nor artifacts.
       - name: Record the runner's load
         if: env.E2E_RUN == 'true'
         run: |
+          test/e2e/ci/guard.sh protect
+          nohup test/e2e/ci/guard.sh watch "$RUNNER_TEMP/test.pid" "$RUNNER_TEMP/guard.txt" \
+            "$RUNNER_TEMP/vmstat.txt" / /mnt "$RUNNER_TEMP" > "$RUNNER_TEMP/guard.log" 2>&1 &
           grep -r . /sys/devices/system/cpu/vulnerabilities/ /sys/module/kvm*/parameters/ || true
           nohup vmstat -t -w 15 > "$RUNNER_TEMP/vmstat.txt" 2>&1 &
           sample='while sleep 15; do date -u +%T; grep -H . /sys/kernel/debug/kvm/*; done'
@@ -162,13 +169,16 @@ jobs:
           path: ${{ runner.temp }}/pve-image.tar.zst
           key: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-${{ github.run_id }}
       # Under the job's limit, so that a test past it fails and Collect still runs; a job stopped at
-      # its own limit keeps neither its log nor its artifacts.
+      # its own limit keeps neither its log nor its artifacts. In a session of its own, which the
+      # guard ends.
       - name: ${{ inputs.test }}
         if: env.E2E_RUN == 'true'
         timeout-minutes: 140
         env:
           TEST: ${{ inputs.test }}
-        run: test/e2e/ci/run.sh "$RUNNER_TEMP/e2e" "$TEST"
+        run: >-
+          test/e2e/ci/guard.sh run "$RUNNER_TEMP/test.pid" "$RUNNER_TEMP/guard.txt"
+          test/e2e/ci/run.sh "$RUNNER_TEMP/e2e" "$TEST"
       # Each KVM counter's average per second over the job, to set one runner's CPU against
       # another's.
       - name: The guests' exits
@@ -195,6 +205,10 @@ jobs:
       - name: The guests' load
         if: ${{ !cancelled() && env.E2E_RUN == 'true' }}
         run: test/e2e/ci/guests.sh summary "$RUNNER_TEMP/guests.txt"
+      # How near the guard's floors the test came, which is where to look before they are moved.
+      - name: The runner's room
+        if: ${{ !cancelled() && env.E2E_RUN == 'true' }}
+        run: test/e2e/ci/guard.sh peaks "$RUNNER_TEMP/guard.txt"
       - if: >-
           !cancelled() && env.E2E_RUN == 'true' && github.event_name == 'schedule'
           && inputs.test == 'management-cluster'
@@ -224,7 +238,8 @@ jobs:
                 jq -r '.[].t'
             done > "$out/proxmox-failed-tasks.txt" 2>&1 || true
           cp "$RUNNER_TEMP/e2e/apply.log" "$RUNNER_TEMP/vmstat.txt" "$RUNNER_TEMP/kvm.txt" \
-            "$RUNNER_TEMP/guests.txt" "$RUNNER_TEMP/guests-record.log" "$out/" 2>/dev/null || true
+            "$RUNNER_TEMP/guests.txt" "$RUNNER_TEMP/guests-record.log" "$RUNNER_TEMP/guard.txt" \
+            "$RUNNER_TEMP/guard.txt.fail" "$RUNNER_TEMP/guard.log" "$out/" 2>/dev/null || true
           # From inside the VMs, which answers even when a cluster's API does not.
           test/e2e/ci/guests.sh collect "$out/guests" || true
           # The management-cluster tests keep their kubeconfig only while they run, and leave the
