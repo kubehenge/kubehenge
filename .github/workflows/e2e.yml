@@ -10,6 +10,12 @@ on:
   schedule:
     - cron: '17 2 * * *'
   workflow_dispatch:
+    inputs:
+      tests:
+        description: >-
+          The tests to run, space-separated as test/e2e/ci/run.sh names them; every test when empty.
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -38,7 +44,10 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+          ASKED: ${{ inputs.tests }}
         run: |
+          all='["management-cluster", "management-cluster-upgrade", "appliance", "kubeadm", "rke2",
+            "k3s", "talos", "rancher", "cluster-mesh", "node-image-refresh", "autoscaler"]'
           case "$EVENT" in
             pull_request) tests='[]' ;;
             # A group holds one commit per pull request on top of main, so its changes are the
@@ -47,9 +56,13 @@ jobs:
               git fetch --no-tags --depth=1 origin "$GROUP_BASE"
               tests=$(git diff --name-only "$GROUP_BASE" HEAD | test/e2e/ci/scope.sh)
               ;;
-            *) tests='["management-cluster", "management-cluster-upgrade", "appliance", "kubeadm",
-                 "rke2", "k3s", "talos", "rancher", "cluster-mesh", "node-image-refresh",
-                 "autoscaler"]' ;;
+            # A run asked for by hand runs the tests it names, those of them all it knows, and every
+            # test when it names none.
+            workflow_dispatch)
+              tests=$(jq -cn --arg asked "$ASKED" --argjson all "$all" '$asked | split(" ")
+                | map(select(. != "")) | if length == 0 then $all else map(select(IN($all[]))) end')
+              ;;
+            *) tests=$all ;;
           esac
           echo "tests=$(printf '%s' "$tests" | jq -c .)" >> "$GITHUB_OUTPUT"
 

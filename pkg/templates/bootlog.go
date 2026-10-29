@@ -46,5 +46,6 @@ func (b *Builder) checkBootLog(ctx context.Context, vm *proxmox.VirtualMachine) 
 	if _, _, err := pve.GuestFileRead(ctx, b.Client, vm.Node, id, CloudInitOutput, 1); err != nil {
 		return fmt.Errorf("cloud-init's output: %w", err)
 	}
+	b.logf("VM %d hands out its boot log and cloud-init's output through the guest agent", vm.VMID)
 	return nil
 }

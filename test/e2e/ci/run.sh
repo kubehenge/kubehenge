@@ -80,6 +80,13 @@ template() { # distribution [flags]
 # so the ones a test needs are made while the management cluster comes up. One at a time: they share
 # the build address.
 templates=
+# How many of them are kubeadm's, RKE2's or k3s's, each of whose builds proves, through Proxmox VE,
+# that its guest agent hands out the node's boot log.
+case "${test}" in
+    talos) boot_log_builds=0 ;;
+    kubeadm | node-image-refresh) boot_log_builds=2 ;;
+    *) boot_log_builds=1 ;;
+esac
 case "${test}" in
     rke2 | k3s | kubeadm | talos | rancher | cluster-mesh | node-image-refresh | autoscaler)
         make -s -C "${repo}" build
@@ -127,6 +134,12 @@ templates_made() {
         exit 1
     fi
     cat "${work}/templates.log"
+    # grep -c exits non-zero when it counts none, which the comparison reports.
+    checked=$(grep -c 'hands out its boot log and cloud-init.s output through the guest agent$' "${work}/templates.log" || true)
+    if [ "${checked}" -lt "${boot_log_builds}" ]; then
+        echo "${checked} of the ${boot_log_builds} node templates were seen handing out their boot logs" >&2
+        exit 1
+    fi
 }
 
 TF_VAR_controller_image=ghcr.io/kubehenge/kubehenge@$(make -s -C "${repo}" image \

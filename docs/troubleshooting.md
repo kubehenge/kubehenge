@@ -64,13 +64,16 @@ Kubehenge's controller, `kubehenge-controller` in `kubehenge-system`, creates ea
 
 The controller logs at the chart's `controllerLogs.level` (`debug`, `info`, `warn` or `error`), and with `controllerLogs.development` adds stack traces from warnings on; in JSON either way.
 
-Its metrics are served over HTTPS by the Service `kubehenge-controller-metrics` in `kubehenge-system`, port 8443, to whoever the API server lets get `/metrics`: bind the ClusterRole `kubehenge-metrics-reader` to a scraper's account. Beside controller-runtime's own (reconciles, their errors and durations, work queues), `kubehenge_hook_waits_total`, `kubehenge_hook_refusals_total` and `kubehenge_hook_duration_seconds`, by hook, say how often Kubehenge's Cluster API hooks held a cluster back or refused it, and how long they took. The management cluster runs no scraper of its own. To read them once, with the admin kubeconfig, through an account that holds the role; the controller serves them with a certificate it makes itself at each start, which nothing can verify (`-k`):
+Its metrics are served over HTTPS by the Service `kubehenge-controller-metrics` in `kubehenge-system`, port 8443, to whoever the API server lets get `/metrics`: bind the ClusterRole `kubehenge-metrics-reader` to a scraper's account. Beside controller-runtime's own (reconciles, their errors and durations, work queues), `kubehenge_hook_waits_total`, `kubehenge_hook_refusals_total` and `kubehenge_hook_duration_seconds`, by hook, say how often Kubehenge's Cluster API hooks held a cluster back or refused it, and how long they took. The management cluster runs no scraper of its own. The controller serves them with its Runtime Extension certificate, made for `kubehenge-controller-metrics.kubehenge-system.svc` too, whose CA is `ca.crt` in the Secret `kubehenge-extension-tls`. To read them once, with the admin kubeconfig, through an account that holds the role:
 
 ```sh
 kubectl -n kubehenge-system create serviceaccount metrics-reader
 kubectl create clusterrolebinding metrics-reader --clusterrole kubehenge-metrics-reader --serviceaccount kubehenge-system:metrics-reader
+kubectl -n kubehenge-system get secret kubehenge-extension-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > metrics-ca.crt
 kubectl -n kubehenge-system port-forward service/kubehenge-controller-metrics 8443 &
-curl -sk -H "Authorization: Bearer $(kubectl -n kubehenge-system create token metrics-reader)" https://localhost:8443/metrics
+curl -sS --cacert metrics-ca.crt --resolve kubehenge-controller-metrics.kubehenge-system.svc:8443:127.0.0.1 \
+  -H "Authorization: Bearer $(kubectl -n kubehenge-system create token metrics-reader)" \
+  https://kubehenge-controller-metrics.kubehenge-system.svc:8443/metrics
 ```
 
 ### Cluster API objects
@@ -112,7 +115,7 @@ kubectl -n clusters get configmap prod-boot-logs -o jsonpath='{.data.prod-cp-abc
 ```
 
 - **kubeadm, RKE2 and k3s:** the end of `/var/log/cloud-init-output.log`, and of the journals of cloud-init, `containerd`, `kubelet`, `rke2-server`, `rke2-agent`, `k3s` and `k3s-agent`, whichever the node has, from the copy the node keeps of them in `/var/log/kubehenge/boot.log` from boot on, a few seconds old at most. The controller reads both files through the VM's QEMU guest agent with its own token, which holds `VM.GuestAgent.FileRead` on the workload pool for it: files only, no commands, and only those the node's agent policy opens. With `node_boot_logs` off ([install.md](install.md#settings)) the log says it is switched off. A VM that is off, or whose guest agent does not answer, is named as such; a node built from a template older than the copy has cloud-init's output alone.
-- **Talos:** the kernel messages and the logs of `machined`, `apid`, `trustd`, `kubelet` and, on control planes, `etcd`, read through the node's Talos API with the cluster's talosconfig. A node that has no address yet, or never took its configuration, cannot be reached that way; its VM's console in Proxmox VE shows its boot.
+- **Talos:** the kernel messages and the logs of `machined`, `apid`, `kubelet` and, on control planes, `trustd` and `etcd`, read through the node's Talos API with the cluster's talosconfig. A node that has no address yet, or never took its configuration, cannot be reached that way; its VM's console in Proxmox VE shows its boot.
 
 Tokens and passwords in the lines are replaced by `[REDACTED]`.
 

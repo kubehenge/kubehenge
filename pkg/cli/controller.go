@@ -470,12 +470,15 @@ func controllerScheme() (*runtime.Scheme, error) {
 }
 
 // metricsOptions serve the metrics over HTTPS, to callers the API server authenticates and
-// authorises to get /metrics, as the chart's kubehenge-metrics-reader role allows. HTTP/2 is off:
-// its rapid reset and stream floods reach a server whatever the authorisation behind it.
+// authorises to get /metrics, as the chart's kubehenge-metrics-reader role allows. They are served
+// with the Runtime Extension server's certificate, which names the metrics Service too, so that a
+// scraper verifies the controller against the CA in its Secret. HTTP/2 is off: its rapid reset and
+// stream floods reach a server whatever the authorisation behind it.
 func (o *controllerOptions) metricsOptions() metricsserver.Options {
 	return metricsserver.Options{
 		BindAddress:    o.metricsAddr,
 		SecureServing:  true,
+		CertDir:        o.certDir,
 		FilterProvider: filters.WithAuthenticationAndAuthorization,
 		TLSOpts:        []func(*tls.Config){func(c *tls.Config) { c.NextProtos = []string{"http/1.1"} }},
 	}

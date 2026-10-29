@@ -59,9 +59,12 @@ const (
 	cloudInitOutputName = "cloud-init-output.log"
 )
 
-// talosServices are the Talos services whose logs say why a node did not join; etcd's only on a
-// control-plane node.
-var talosServices = []string{"machined", "apid", "trustd", kubeletService}
+// talosServices are the Talos services whose logs say why a node did not join, and
+// talosControlPlaneServices those of them that only a control-plane node runs.
+var (
+	talosServices             = []string{"machined", "apid", kubeletService}
+	talosControlPlaneServices = []string{"trustd", "etcd"}
+)
 
 const kubeletService = "kubelet"
 
@@ -335,7 +338,7 @@ func (r *BootLogReconciler) readTalos(ctx context.Context, cluster *clusterv1.Cl
 	sections := []BootLogSection{section("kernel messages", dmesg, err)}
 	services := talosServices
 	if _, cp := m.Labels[clusterv1.MachineControlPlaneLabel]; cp {
-		services = append(slices.Clone(services), "etcd")
+		services = append(slices.Clone(services), talosControlPlaneServices...)
 	}
 	for _, s := range services {
 		lines, err := node.ServiceLog(ctx, s)

@@ -252,16 +252,19 @@ func TestBootLogsOfTalosNodes(t *testing.T) {
 	t.Parallel()
 	c := cluster()
 	c.Spec.Topology.ClassRef.Name = ClassPrefix + "talos"
-	c.Annotations = map[string]string{BootLogRequestAnnotation: "web-cp-a,web-w-1"}
+	c.Annotations = map[string]string{BootLogRequestAnnotation: "web-cp-a,web-w-1,web-w-2"}
 	cp, _ := controlPlane("web-cp-a", 101, "pve1")
 	cp.Status.Addresses = clusterv1.MachineAddresses{{Type: clusterv1.MachineInternalIP, Address: "192.0.2.21"}}
 	worker, _ := controlPlane("web-w-1", 102, "pve1")
 	delete(worker.Labels, clusterv1.MachineControlPlaneLabel)
+	joined, _ := controlPlane("web-w-2", 103, "pve1")
+	delete(joined.Labels, clusterv1.MachineControlPlaneLabel)
+	joined.Status.Addresses = clusterv1.MachineAddresses{{Type: clusterv1.MachineInternalIP, Address: "192.0.2.23"}}
 	secret := &corev1.Secret{
 		Namespace: "team-a", Name: TalosconfigSecret("web"),
 		Data: map[string][]byte{TalosconfigKey: []byte("context: web")},
 	}
-	kube := bootLogKube(t, c, cp, worker, secret)
+	kube := bootLogKube(t, c, cp, worker, joined, secret)
 	r := &BootLogReconciler{
 		Client: kube, Reader: kube, ClassNamespace: "kubehenge-system",
 		Talos: func(_ context.Context, raw []byte, address string) (TalosLogs, error) {
@@ -276,19 +279,27 @@ func TestBootLogsOfTalosNodes(t *testing.T) {
 	}
 	logs := readBootLogs(t, kube)
 	got := logs["web-cp-a"]
-	names := make([]string, 0, len(got.Sections))
-	for _, s := range got.Sections {
-		names = append(names, s.Name)
-	}
-	if strings.Join(names, ",") != "kernel messages,machined,apid,trustd,kubelet,etcd" {
+	if names := sectionNames(got); names != "kernel messages,machined,apid,kubelet,trustd,etcd" {
 		t.Errorf("sections = %v", names)
 	}
-	if got.Sections[0].Error == "" || len(got.Sections[4].Lines) != 1 || got.Sections[4].Lines[0] != "192.0.2.21 kubelet started" {
+	if got.Sections[0].Error == "" || len(got.Sections[3].Lines) != 1 || got.Sections[3].Lines[0] != "192.0.2.21 kubelet started" {
 		t.Errorf("web-cp-a = %+v", got)
 	}
 	if e := logs["web-w-1"].Error; e != "the machine has no address yet" {
 		t.Errorf("web-w-1: %q", e)
 	}
+	// A worker runs neither trustd nor etcd, whose logs it would only answer with an error.
+	if names := sectionNames(logs["web-w-2"]); names != "kernel messages,machined,apid,kubelet" {
+		t.Errorf("web-w-2's sections = %v", names)
+	}
+}
+
+func sectionNames(log BootLog) string {
+	names := make([]string, 0, len(log.Sections))
+	for _, s := range log.Sections {
+		names = append(names, s.Name)
+	}
+	return strings.Join(names, ",")
 }
 
 func TestTrimBootLogsDropsTheOldest(t *testing.T) {
