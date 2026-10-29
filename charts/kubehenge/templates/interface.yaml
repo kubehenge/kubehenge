@@ -56,16 +56,6 @@ metadata:
   namespace: {{ .Release.Namespace }}
 automountServiceAccountToken: false
 ---
-# Long-lived, since the interface runs outside the cluster; deleting the Secret revokes it.
-apiVersion: v1
-kind: Secret
-type: kubernetes.io/service-account-token
-metadata:
-  name: {{ $name }}-token
-  namespace: {{ .Release.Namespace }}
-  annotations:
-    kubernetes.io/service-account.name: {{ $name }}
----
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -113,6 +103,13 @@ rules:
     resources: [configmaps]
     resourceNames: [{{ $name }}]
     verbs: [get]
+  # The interface runs outside the cluster with expiring tokens of this account, the first made
+  # with the admin kubeconfig at apply, each next one by the interface with the one before. It may
+  # make tokens of its own account and no other.
+  - apiGroups: [""]
+    resources: [serviceaccounts/token]
+    resourceNames: [{{ $name }}]
+    verbs: [create]
   {{- if .Values.interface.offerHARules }}
   # The HA rules' names and nodes, which it offers to those who may create or change a cluster.
   - apiGroups: [""]

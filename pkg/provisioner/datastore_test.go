@@ -70,7 +70,7 @@ func TestDatastoreAllocateRefusedAtAdmissionAndCreation(t *testing.T) {
 	}
 	created := networkCluster("192.168.1.1", 24)
 	created.Spec.Topology.Variables = append(created.Spec.Topology.Variables, variableOf("storage", `"local"`), variableOf(csiVariable, `{"datastoreAllocate":true}`))
-	if resp := callBeforeClusterCreate(h, created); !strings.Contains(resp.Message, "the management cluster uses storage local") {
+	if resp := callBeforeClusterCreate(t, h, created); !strings.Contains(resp.Message, "the management cluster uses storage local") {
 		t.Errorf("BeforeClusterCreate let Datastore.Allocate onto the management cluster's storage: %s %q", resp.Status, resp.Message)
 	}
 

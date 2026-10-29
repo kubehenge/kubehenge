@@ -5,6 +5,7 @@ package appliance
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -31,7 +32,8 @@ func TestInterfaceKubeconfigEndToEnd(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	raw, err := InterfaceKubeconfig(ctx, admin, endpoint)
+	tokenFile := filepath.Join(t.TempDir(), "interface.token")
+	raw, err := InterfaceKubeconfig(ctx, admin, endpoint, tokenFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,8 +41,11 @@ func TestInterfaceKubeconfigEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.BearerToken == "" || cfg.CertFile != "" || len(cfg.CertData) != 0 {
-		t.Fatal("the interface's kubeconfig must hold its token and nothing else")
+	if cfg.BearerToken == "" || cfg.BearerTokenFile != tokenFile || cfg.CertFile != "" || len(cfg.CertData) != 0 {
+		t.Fatal("the interface's kubeconfig must read its token from the file and hold nothing else")
+	}
+	if issued, expires, ok := tokenTimes(cfg.BearerToken); !ok || expires.Sub(issued) > interfaceTokenLifetime {
+		t.Fatalf("the interface's token is not one that runs out within %v", interfaceTokenLifetime)
 	}
 	kube, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
@@ -100,5 +105,22 @@ func TestInterfaceKubeconfigEndToEnd(t *testing.T) {
 		if review.Status.Allowed != c.want {
 			t.Errorf("%s %s/%s in %q: allowed %v, want %v", c.verb, c.group, c.resource, c.namespace, review.Status.Allowed, c.want)
 		}
+	}
+	// The interface makes its next token with the one it has, and no other account's.
+	for account, want := range map[string]bool{interfaceAccount: true, "kubehenge-controller": false, "default": false} {
+		review, err := kube.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, &authorizationv1.SelfSubjectAccessReview{
+			Spec: authorizationv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &authorizationv1.ResourceAttributes{
+				Verb: "create", Resource: "serviceaccounts", Subresource: "token", Name: account, Namespace: interfaceNamespace,
+			}},
+		}, metav1.CreateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if review.Status.Allowed != want {
+			t.Errorf("a token of %s: allowed %v, want %v", account, review.Status.Allowed, want)
+		}
+	}
+	if _, err := requestInterfaceToken(ctx, kube); err != nil {
+		t.Fatalf("the interface renewing its own token: %v", err)
 	}
 }

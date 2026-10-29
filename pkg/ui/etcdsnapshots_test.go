@@ -340,7 +340,7 @@ func TestRestoreEtcd(t *testing.T) {
 	h := etcdSnapshotting(t)
 	b := h.browser()
 	b.signIn("dev@pve")
-	body := `{"snapshot":"` + h.name + `"}`
+	body := `{"snapshot":"` + h.name + `","confirm":"one"}`
 	// Without the opt-in, a restore is done by hand.
 	expect(t, b.do("POST", "/api/clusters/default/one/etcd-restores", body), http.StatusConflict)
 
@@ -349,8 +349,15 @@ func TestRestoreEtcd(t *testing.T) {
 	if v := etcdViewOf(t, rec.Body.Bytes()); !v.Automatic {
 		t.Error("the view does not say the controller restores")
 	}
-	expect(t, b.do("POST", "/api/clusters/default/one/etcd-restores", `{"snapshot":"20261011T060000Z-v1.35.2-rke2r1.db.age"}`), http.StatusConflict)
-	expect(t, b.do("POST", "/api/clusters/default/one/etcd-restores", `{"snapshot":"20260101T000000Z-v1.db.age"}`), http.StatusNotFound)
+	expect(t, b.do("POST", "/api/clusters/default/one/etcd-restores", `{"snapshot":"20261011T060000Z-v1.35.2-rke2r1.db.age","confirm":"one"}`), http.StatusConflict)
+	expect(t, b.do("POST", "/api/clusters/default/one/etcd-restores", `{"snapshot":"20260101T000000Z-v1.db.age","confirm":"one"}`), http.StatusNotFound)
+	// A restore names the cluster it is for, as the dialog has its user type it.
+	for _, unconfirmed := range []string{`{"snapshot":"` + h.name + `"}`, `{"snapshot":"` + h.name + `","confirm":"two"}`} {
+		expect(t, b.do("POST", "/api/clusters/default/one/etcd-restores", unconfirmed), http.StatusUnprocessableEntity)
+	}
+	if _, ok, _ := provisioner.EtcdRestoreRequestOf(h.cluster()); ok {
+		t.Fatal("an unconfirmed restore was asked for")
+	}
 	expect(t, b.do("POST", "/api/clusters/default/one/etcd-restores", body), http.StatusAccepted)
 	req, ok, err := provisioner.EtcdRestoreRequestOf(h.cluster())
 	if !ok || err != nil || req.Snapshot != h.name || req.Target != "store" || req.By != "dev@pve" {

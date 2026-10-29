@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
-import { fakeServer, type Route } from "./fake-server";
+import { applyStaged, fakeServer, type Route } from "./fake-server";
 import { merged } from "./Staging";
 import type { Cluster, Effect, Plan } from "./types";
 import { record } from "./values";
@@ -14,6 +14,7 @@ const cluster: Cluster = {
   class: "kubehenge-k3s",
   distribution: "k3s",
   version: "v1.36.5+k3s1",
+  generation: 1,
   created: new Date().toISOString(),
   deleting: false,
   phase: "Provisioned",
@@ -81,6 +82,50 @@ describe("staged changes", () => {
     expect(calls.filter((c) => c.key === `PATCH ${path}`).map((c) => c.body)).toStrictEqual([
       { variables: { headlamp: { enabled: true }, monitoring: { enabled: true } } },
     ]);
+    const against = (key: string): (string | null)[] =>
+      calls.filter((c) => c.key === key).map((c) => c.headers.get("X-Kubehenge-Generation"));
+    expect([...against(`POST ${path}/plan`), ...against(`PATCH ${path}`)]).toStrictEqual(["1", "1", "1"]);
+  });
+
+  it("are dropped, and the cluster read again, once someone else changed it meanwhile", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    let shown = cluster;
+    const routes: Record<string, Route> = {
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      [`GET ${path}`]: () => ({ body: shown }),
+      [`POST ${path}/plan`]: planned,
+      [`PATCH ${path}`]: {
+        status: 412,
+        body: { error: "the cluster changed meanwhile; reload and try again" },
+      },
+    };
+    const calls = fakeServer(routes);
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Edit Headlamp" }));
+    await user.click(within(screen.getByRole("dialog", { name: "Headlamp" })).getByLabelText("Install Headlamp"));
+    await user.click(within(screen.getByRole("dialog", { name: "Headlamp" })).getByRole("button", { name: "Save" }));
+    await screen.findByRole("region", { name: "Staged changes" });
+    shown = { ...cluster, generation: 2, variables: { headlamp: { enabled: true } } };
+    const reads = calls.filter((c) => c.key === `GET ${path}`).length;
+    await applyStaged(user);
+
+    await expect(screen.findByRole("alert")).resolves.toHaveTextContent(
+      "Someone changed the cluster meanwhile. The staged changes were dropped, and the page shows the cluster as it is now.",
+    );
+    expect(screen.queryByRole("region", { name: "Staged changes" })).not.toBeInTheDocument();
+    await waitFor(() => expect(calls.filter((c) => c.key === `GET ${path}`).length).toBeGreaterThan(reads));
+    await waitFor(() => expect(screen.getByRole("row", { name: /^Headlamp/u })).toHaveTextContent(/On/u));
+
+    // What is staged next is made against the cluster as it is now.
+    await user.click(screen.getByRole("button", { name: "Edit monitoring" }));
+    const monitoring = within(screen.getByRole("dialog", { name: "Monitoring" }));
+    await user.click(monitoring.getByLabelText("Install monitoring"));
+    await user.click(monitoring.getByRole("button", { name: "Save" }));
+    await screen.findByRole("region", { name: "Staged changes" });
+    expect(calls.findLast((c) => c.key === `POST ${path}/plan`)?.headers.get("X-Kubehenge-Generation")).toBe("2");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("are dropped by Discard without a change made", async () => {
