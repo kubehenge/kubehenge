@@ -39,10 +39,11 @@ type ServiceCheck struct {
 
 // Healthy is the check.
 func (c *ServiceCheck) Healthy(ctx context.Context) error {
-	client, url, err := c.client()
+	client, base, err := c.Client()
 	if err != nil {
 		return err
 	}
+	url := base + "/api/health"
 	err = c.untilAnswers(ctx, client, url)
 	if err != nil {
 		return err
@@ -70,9 +71,14 @@ func (c *ServiceCheck) Healthy(ctx context.Context) error {
 	return answers(ctx, client, url)
 }
 
-// client trusts the served certificate itself, so the check holds for one Proxmox VE's CA signed,
+// Client trusts the served certificate itself, so the check holds for one Proxmox VE's CA signed,
 // a self-signed one and an administrator's own alike, and asks for it by a name it is valid for.
-func (c *ServiceCheck) client() (*http.Client, string, error) {
+// It returns the client and the interface's URL.
+func (c *ServiceCheck) Client() (*http.Client, string, error) {
+	_, port, err := net.SplitHostPort(c.Address)
+	if err != nil {
+		return nil, "", fmt.Errorf("the interface's address: %w", err)
+	}
 	raw, err := os.ReadFile(c.CertFile)
 	if err != nil {
 		return nil, "", fmt.Errorf("the interface's certificate: %w", err)
@@ -103,7 +109,7 @@ func (c *ServiceCheck) client() (*http.Client, string, error) {
 			return dialer.DialContext(ctx, network, c.Address)
 		},
 	}
-	return &http.Client{Transport: transport, Timeout: healthRequest}, "https://" + net.JoinHostPort(name, "443") + "/api/health", nil
+	return &http.Client{Transport: transport, Timeout: healthRequest}, "https://" + net.JoinHostPort(name, port), nil
 }
 
 func (c *ServiceCheck) untilAnswers(ctx context.Context, client *http.Client, url string) error {

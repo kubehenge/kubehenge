@@ -35,8 +35,8 @@ const (
 
 // The updater's states besides succeeded and failed.
 const (
-	stateUpdating = "updating"
-	stateCurrent  = "current"
+	StateUpdating = "updating"
+	StateCurrent  = "current"
 )
 
 // UpdateRequest is what the interface asks of the updater: a named release, or the newest one a
@@ -122,17 +122,17 @@ func (u *Updater) Run(ctx context.Context) error {
 	if err != nil || !ok {
 		return err
 	}
-	st := UpdateStatus{State: stateUpdating, From: u.Current, Time: time.Now()}
+	st := UpdateStatus{State: StateUpdating, From: u.Current, Time: time.Now()}
 	u.write(&st)
 	to, err := u.update(ctx, req)
 	st.Time, st.To = time.Now(), to
 	switch {
 	case err != nil:
-		st.State, st.Error, st.RolledBack = stateFailed, err.Error(), errors.Is(err, ErrRolledBack)
+		st.State, st.Error, st.RolledBack = StateFailed, err.Error(), errors.Is(err, ErrRolledBack)
 	case to == "":
-		st.State = stateCurrent
+		st.State = StateCurrent
 	default:
-		st.State = stateSucceeded
+		st.State = StateSucceeded
 	}
 	u.write(&st)
 	return err
