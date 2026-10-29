@@ -265,7 +265,7 @@ export function FleetRail({
           type="button"
           className="icon"
           aria-label="New cluster"
-          title={canCreate === false ? "Needs VM.Allocate" : "New cluster (N)"}
+          title={canCreate === false ? "Needs VM.Allocate" : "New cluster (G N)"}
           disabled={canCreate === false}
           onClick={onCreate}
         >

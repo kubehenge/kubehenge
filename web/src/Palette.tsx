@@ -151,7 +151,11 @@ export function Palette({ commands, onClose }: { commands: Command[]; onClose: (
           >
             <span className="palette-label">{c.label}</span>
             <span className="palette-kind">{c.kind}</span>
-            {c.keys !== undefined && <kbd aria-hidden="true">{c.keys}</kbd>}
+            {c.keys !== undefined && (
+              <span className="palette-keys" aria-hidden="true">
+                <Keys keys={c.keys} />
+              </span>
+            )}
           </div>
         ))}
       </div>
@@ -160,7 +164,19 @@ export function Palette({ commands, onClose }: { commands: Command[]; onClose: (
   );
 }
 
-/** A key that does something anywhere on the page, outside fields and dialogs. */
+// Keys shows a key, or a sequence of keys pressed one after the other, as keycaps: a letter as its
+// key is labelled.
+function Keys({ keys }: { keys: string }): JSX.Element {
+  return (
+    <>
+      {keys.split(" ").map((k, i) => (
+        <kbd key={`${String(i)}-${k}`}>{k.toUpperCase()}</kbd>
+      ))}
+    </>
+  );
+}
+
+/** A key, or a sequence of two ("g c"), that does something anywhere on the page, outside fields and dialogs. */
 export interface Shortcut {
   keys: string;
   what: string;
@@ -177,11 +193,16 @@ function typing(target: EventTarget | null): boolean {
   return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
 }
 
+// The second key of a sequence such as "g c" counts only this soon after the first.
+const sequenceWait = 1500;
+
 /**
- * useShortcuts runs the page's keys: Ctrl K (or ⌘ K) opens the palette from anywhere, the other
- * single keys only where nothing else takes them, outside fields and with no dialog open.
+ * useShortcuts runs the page's keys: Ctrl K (or ⌘ K) opens the palette from anywhere, the others
+ * only where nothing else takes them, outside fields and with no dialog open. Keys that leave the
+ * page or change its layout are two-key sequences ("g c"), so a stray key does neither.
  */
 export function useShortcuts(openPalette: () => void, shortcuts: Shortcut[]): void {
+  const pending = useRef<{ key: string; at: number }>(undefined);
   const onKey = useEffectEvent((e: globalThis.KeyboardEvent) => {
     if (e.key.toLowerCase() === "k" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
       e.preventDefault();
@@ -196,10 +217,20 @@ export function useShortcuts(openPalette: () => void, shortcuts: Shortcut[]): vo
     if (document.querySelector("dialog[open]") !== null) {
       return;
     }
-    const s = shortcuts.find((x) => x.keys === e.key && x.on !== false);
+    const live = shortcuts.filter((x) => x.on !== false);
+    const first = pending.current;
+    pending.current = undefined;
+    const now = performance.now();
+    const sequence = first !== undefined && now - first.at < sequenceWait ? `${first.key} ${e.key}` : undefined;
+    const s = live.find((x) => x.keys === sequence) ?? live.find((x) => x.keys === e.key);
     if (s) {
       e.preventDefault();
       s.run();
+      return;
+    }
+    if (live.some((x) => x.keys.startsWith(`${e.key} `))) {
+      e.preventDefault();
+      pending.current = { key: e.key, at: now };
     }
   });
   // Before the browser paints, so a key pressed as soon as the bar shows is not lost.
@@ -233,7 +264,7 @@ export function ShortcutsDialog({ shortcuts, onClose }: { shortcuts: Shortcut[];
           {shortcuts.map((s) => (
             <tr key={s.keys}>
               <th scope="row">
-                <kbd>{s.keys}</kbd>
+                <Keys keys={s.keys} />
               </th>
               <td>{s.what}</td>
             </tr>

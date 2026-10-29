@@ -91,6 +91,10 @@ pre,
   font-size: 0.9em;
 }
 
+kbd + kbd {
+  margin-left: 3px;
+}
+
 kbd {
   display: inline-block;
   min-width: 1.6em;

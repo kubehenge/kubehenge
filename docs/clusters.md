@@ -163,17 +163,17 @@ Down the right side of a wide window, **Runs** follows the work that goes on by 
 
 Each run opens a page of its own: what it does and on which cluster, who started it and how long it has taken, the first error pinned at the top, and its steps, each done, under way or waiting. A change [applied here](#staged-changes) is a run too, kept for a day, in place of the cluster's line under **Running**: accepted by the API server, then the control-plane machines or the workers it replaces, counted as the new ones are ready and the old ones gone, or the machines it adds or removes, then the cluster settling once its topology has taken the change in and it is available. An etcd restore shows its phases; the management cluster's applies and the template builds show the end of their log.
 
-**Go to or run…** in the top bar, or `Ctrl K` (`⌘ K` on a Mac), finds any cluster, any of its views, a page or an action by a few letters of its name: `db opt` finds the options of `db`. Outside fields, single keys work too, and `?` lists them:
+**Go to or run…** in the top bar, or `Ctrl K` (`⌘ K` on a Mac), finds any cluster, any of its views, a page or an action by a few letters of its name: `db opt` finds the options of `db`. Outside fields, keys work too, and `?` lists them. Those that leave the page or change its layout are two keys pressed one after the other, so a stray key does neither:
 
-| Key | Does |
+| Keys | Does |
 | --- | --- |
 | `/` | the same as `Ctrl K` |
-| `C` | the clusters |
-| `N` | a new cluster |
-| `A` | Administration, for those who may open it |
+| `G` `C` | the clusters |
+| `G` `N` | a new cluster |
+| `G` `A` | Administration, for those who may open it |
 | `[`, `]` | the cluster before or after the open one, in the fleet's order, on the same view |
 | `1` to `5` | the open cluster's Summary, Health, Machines, Backups and Options |
-| `R` | shows or folds away the running work |
+| `T` `R` | shows or folds away the running work |
 
 ## The cluster page
 

@@ -51,9 +51,9 @@ function shortcutsFor(
   const { canCreate, canManage } = may;
   return [
     { keys: "/", what: "Go to or run", run: open.palette },
-    { keys: "c", what: "Clusters", run: () => navigate("/") },
-    { keys: "n", what: "New cluster", on: canCreate !== false, run: () => navigate("/clusters/new") },
-    { keys: "a", what: "Administration", on: canManage, run: () => navigate("/administration") },
+    { keys: "g c", what: "Clusters", run: () => navigate("/") },
+    { keys: "g n", what: "New cluster", on: canCreate !== false, run: () => navigate("/clusters/new") },
+    { keys: "g a", what: "Administration", on: canManage, run: () => navigate("/administration") },
     { keys: "[", what: "Previous cluster", run: () => open.step(-1) },
     { keys: "]", what: "Next cluster", run: () => open.step(1) },
     ...viewKeys.map(({ view, key }) => ({
@@ -66,21 +66,21 @@ function shortcutsFor(
         }
       },
     })),
-    { keys: "r", what: "Show or hide runs", run: open.runs },
+    { keys: "t r", what: "Show or hide runs", run: open.runs },
     { keys: "?", what: "Keyboard shortcuts", run: open.keys },
   ];
 }
 
 function pageCommands(canCreate: boolean | undefined, canManage: boolean): Command[] {
   const commands: Command[] = [
-    { id: "clusters", label: "Clusters", kind: "Page", keys: "C", run: () => navigate("/") },
+    { id: "clusters", label: "Clusters", kind: "Page", keys: "G C", run: () => navigate("/") },
   ];
   if (canCreate !== false) {
     commands.push({
       id: "new",
       label: "New cluster",
       kind: "Action",
-      keys: "N",
+      keys: "G N",
       words: "create",
       run: () => navigate("/clusters/new"),
     });
@@ -90,7 +90,7 @@ function pageCommands(canCreate: boolean | undefined, canManage: boolean): Comma
       id: "administration",
       label: "Administration",
       kind: "Page",
-      keys: "A",
+      keys: "G A",
       run: () => navigate("/administration"),
     });
     for (const v of adminViews) {

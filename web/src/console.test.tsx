@@ -417,9 +417,14 @@ describe("the console", () => {
     await user.keyboard("]");
     expect(window.location.pathname).toBe("/clusters/default/edge/machines");
 
+    // Leaving the page takes two keys, so a stray one does nothing.
+    await user.keyboard("c");
+    expect(window.location.pathname).toBe("/clusters/default/edge/machines");
+
     await user.keyboard("?");
     const keys = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
     expect(within(keys).getByRole("rowheader", { name: "]" })).toBeInTheDocument();
+    expect(within(keys).getByRole("rowheader", { name: "G C" })).toBeInTheDocument();
     // Keys pressed with a dialog open belong to the dialog.
     await user.keyboard("1");
     expect(window.location.pathname).toBe("/clusters/default/edge/machines");
@@ -428,5 +433,20 @@ describe("the console", () => {
     await user.keyboard("{Control>}k{/Control}");
     await user.type(screen.getByRole("combobox"), "c");
     expect(window.location.pathname).toBe("/clusters/default/edge/machines");
+  });
+
+  it("leaves the page only on two-key sequences", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
+    serve();
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await screen.findByRole("heading", { name: /web/u });
+    await user.keyboard("c");
+    expect(window.location.pathname).toBe("/clusters/default/web");
+    // A first key that starts no sequence leaves the next key to itself.
+    await user.keyboard("x3");
+    expect(window.location.pathname).toBe("/clusters/default/web/machines");
+    await user.keyboard("gc");
+    expect(window.location.pathname).toBe("/");
   });
 });
