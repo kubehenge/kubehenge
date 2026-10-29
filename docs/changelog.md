@@ -11,6 +11,7 @@ Every release's changes, newest first. Versions follow [Semantic Versioning](htt
 - Two clusters on the same bridge and VLAN can no longer be given the same node addresses or control-plane endpoint, from the interface or kubectl alike.
 - The management cluster's VMs get VM IDs picked at random between 10000 and 99999. Proxmox VE offers whatever is created at the same moment the same next free ID, and when another VM, such as a template being built, took it first, the Terraform/OpenTofu provider for Proxmox VE took that VM for the node it was creating: it changed and started it and kept it in its state, to be destroyed with the node.
 - A cluster's machine whose clone fails is cloned again under a new VM ID. capmox kept the ID of the failed clone, which a VM created at the same moment may have taken; the machine then waited on that VM for ever and, once deleted, deleted it with itself.
+- Deleting a cluster's machine destroys its VM only once the VM under the machine's VM ID is confirmed as the machine's, by its name and SMBIOS UUID; a free ID, or one held by another VM or a container, counts as the VM gone. Proxmox VE hands a freed ID to the next clone, and capmox's next pass over the deletion could destroy that clone, possibly a machine of another cluster.
 
 ## [0.3.1] - 2026-10-28
 
