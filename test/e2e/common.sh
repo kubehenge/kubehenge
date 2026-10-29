@@ -157,3 +157,24 @@ seaweedfs() {
         fail "SeaweedFS's download does not have its SHA-256"
     tar -xzf "$1/seaweedfs.tar.gz" -C "$1" weed
 }
+
+# seaweedfs_server <directory> <S3 port> <S3 identities> <certificate> <key>: runs the weed that
+# seaweedfs fetched into the directory in the background, as a server with an S3 gateway, its data
+# in <directory>/s3-data and its log in <directory>/s3.log.
+# SeaweedFS's default of 8 volume slots is too few: the filer's own log takes 7 of them once the
+# server has run a minute, leaving a bucket written after that a single volume, and a write that
+# would overfill it fails with InternalError. Slots cost no disk until a volume is written.
+seaweedfs_server() {
+    mkdir -p "$1/s3-data"
+    "$1/weed" server -dir="$1/s3-data" -ip=127.0.0.1 -ip.bind=0.0.0.0 -master.port=19333 \
+        -master.volumeSizeLimitMB=64 -volume.max=100 -volume.port=18080 -filer.port=18888 \
+        -s3 -s3.port="$2" -s3.config="$3" -s3.cert.file="$4" -s3.key.file="$5" > "$1/s3.log" 2>&1 &
+}
+
+# seaweedfs_errors <directory>: the last errors seaweedfs_server logged there, if it ran, since a
+# client sees only InternalError for most of them.
+seaweedfs_errors() {
+    [ -f "$1/s3.log" ] || return 0
+    echo "-- the S3 store's last errors" >&2
+    grep -E '^[EF][0-9]{4} ' "$1/s3.log" | tail -n 20 >&2 || true
+}

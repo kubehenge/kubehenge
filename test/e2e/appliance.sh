@@ -50,6 +50,7 @@ finish() {
         echo "-- the appliance's log" >&2
         pct exec "${ctid}" -- journalctl -u kubehenge.service -n 100 --no-pager >&2 || true
     fi
+    [ "${status}" -eq 0 ] || seaweedfs_errors "${work}"
     if [ -n "${ha_vmid}" ]; then
         pvesh delete "/cluster/ha/rules/${ha_rule}" > /dev/null 2>&1 || true
         pvesh delete "/cluster/ha/resources/vm:${ha_vmid}" > /dev/null 2>&1 || true
@@ -272,7 +273,7 @@ pvesh create /access/users --userid "${user}" --password "${password}" > /dev/nu
 inventory > "${work}/before"
 
 step "an S3 store on the node, offered as a backup target"
-mkdir -p "${work}/s3/data"
+mkdir -p "${work}/s3"
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 -subj /CN=kubehenge-e2e-s3-ca \
     -keyout "${work}/s3/ca.key" -out "${work}/s3/ca.crt" 2> /dev/null
 openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=kubehenge-e2e-s3 \
@@ -286,9 +287,7 @@ s3_secret=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
 jq -n --arg k "${s3_key}" --arg s "${s3_secret}" \
     '{identities: [{name: "e2e", credentials: [{accessKey: $k, secretKey: $s}], actions: ["Admin", "Read", "Write", "List", "Tagging"]}]}' \
     > "${work}/s3/s3.json"
-"${work}/weed" server -dir="${work}/s3/data" -ip=127.0.0.1 -ip.bind=0.0.0.0 -master.port=19333 -master.volumeSizeLimitMB=64 \
-    -volume.port=18080 -filer.port=18888 -s3 -s3.port=8333 -s3.config="${work}/s3/s3.json" \
-    -s3.cert.file="${work}/s3/tls.crt" -s3.key.file="${work}/s3/tls.key" > "${work}/s3/weed.log" 2>&1 &
+seaweedfs_server "${work}" 8333 "${work}/s3/s3.json" "${work}/s3/tls.crt" "${work}/s3/tls.key"
 s3_pid=$!
 until_true 120 "the S3 store takes a bucket" s3 -X PUT -o /dev/null "${s3_endpoint}/kubehenge-e2e"
 # shellcheck disable=SC2016 # jq's variables, not the shell's.

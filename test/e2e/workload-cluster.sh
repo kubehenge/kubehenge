@@ -120,6 +120,7 @@ cleanup() {
     [ -z "${recorder_pid}" ] || kill "${recorder_pid}" 2> /dev/null || true
     # shellcheck disable=SC2310 # each removal is tried, whatever happened to those before it
     remove_ha_rule || true
+    [ "${status}" -eq 0 ] || seaweedfs_errors "${work}"
     if [ "${status}" -ne 0 ] && [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
         printf '\nleaving cluster %s/%s for inspection; delete it with: kubectl -n %s delete cluster %s\n' "${ns}" "${name}" "${ns}" "${name}"
     elif [ "${status}" -ne 0 ]; then
@@ -1260,10 +1261,7 @@ s3_secret=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
 jq -n --arg k "${s3_key}" --arg s "${s3_secret}" \
     '{identities: [{name: "e2e", credentials: [{accessKey: $k, secretKey: $s}], actions: ["Admin", "Read", "Write", "List", "Tagging"]}]}' \
     > "${work}/s3.json"
-mkdir -p "${work}/s3-data"
-"${work}/weed" server -dir="${work}/s3-data" -ip=127.0.0.1 -ip.bind=0.0.0.0 -master.port=19333 -master.volumeSizeLimitMB=256 \
-    -volume.port=18080 -filer.port=18888 -s3 -s3.port="${s3_port}" -s3.config="${work}/s3.json" \
-    -s3.cert.file="${KUBEHENGE_E2E_BACKUP_CERT}" -s3.key.file="${KUBEHENGE_E2E_BACKUP_KEY}" > "${work}/s3.log" 2>&1 &
+seaweedfs_server "${work}" "${s3_port}" "${work}/s3.json" "${KUBEHENGE_E2E_BACKUP_CERT}" "${KUBEHENGE_E2E_BACKUP_KEY}"
 s3_pid=$!
 s3() { curl -sS --fail --cacert "${KUBEHENGE_E2E_BACKUP_CA}" --aws-sigv4 "aws:amz:${region}:s3" --user "${s3_key}:${s3_secret}" "$@"; }
 until_true 120 "the S3 store takes a bucket" s3 -X PUT -o /dev/null "${s3_endpoint}/${bucket}"
