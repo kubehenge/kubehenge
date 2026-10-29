@@ -16,6 +16,9 @@
 /pkg/provisioner/gatewayapi/*
 !/pkg/provisioner/gatewayapi/.keep
 
+# The Cluster API operator's chart archive, which `make capi-operator-chart` downloads.
+/management-cluster/charts/cluster-api-operator-*.tgz
+
 # Terraform/OpenTofu working files, state and inputs: state and variables hold credentials.
 .terraform/
 *.tfstate

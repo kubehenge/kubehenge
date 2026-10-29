@@ -14,6 +14,7 @@ const cluster: Cluster = {
   class: "kubehenge-kubeadm",
   distribution: "kubeadm",
   version: "v1.36.1",
+  generation: 1,
   created: minutesAgo(90),
   deleting: false,
   phase: "Provisioned",

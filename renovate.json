@@ -140,7 +140,7 @@
   ],
   "customManagers": [
     {
-      "description": "A download from a GitHub release whose tag sits on the line above its SHA-256: the tools in scripts/tools.sh, the OpenTofu appliance/install.sh runs, the Headlamp the appliance serves, the Gateway API install file the controller carries, the cosign kubeadm templates check their images with, and the SeaweedFS the workload cluster and Cluster Mesh tests back up to and the etcdutl it reads the etcd snapshots back with. The tag and the digest move together; the datasource finds the new digest in the release's checksum file, or hashes the download itself.",
+      "description": "A download from a GitHub release whose tag sits on the line above its SHA-256: the tools in scripts/tools.sh, the OpenTofu appliance/install.sh runs, the Headlamp the appliance serves, the Gateway API install file the controller carries, the cosign kubeadm templates check their images with, and the SeaweedFS the workload cluster and Cluster Mesh tests back up to and the etcdutl it reads the etcd snapshots back with, and the providers' components files the integration tier takes its CRDs from. The tag and the digest move together; the datasource finds the new digest in the release's checksum file, or hashes the download itself.",
       "customType": "regex",
       "managerFilePatterns": [
         "/^scripts/tools\\.sh$/",
@@ -148,7 +148,8 @@
         "/^Makefile$/",
         "/^pkg/templates/node/images\\.sh$/",
         "/^test/e2e/workload-cluster\\.sh$/",
-        "/^test/e2e/backups\\.sh$/"
+        "/^test/e2e/backups\\.sh$/",
+        "/^test/integration/assets\\.sh$/"
       ],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>github-release-attachments) depName=(?<depName>\\S+)\\n[A-Z0-9_]+ *:?= *(?<currentValue>\\S+)\\n[A-Z0-9_]+_SHA256 *:?= *(?<currentDigest>[0-9a-f]{64})"
@@ -160,6 +161,14 @@
       "managerFilePatterns": ["/^management-cluster/versions\\.tf$/"],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>github-release-attachments) depName=(?<depName>\\S+)\\n\\s*\"[^\"]*/releases/download/(?<currentValue>[^/\"]+)/[^/\"]+\" *= *\"(?<currentDigest>[0-9a-f]{64})\""
+      ]
+    },
+    {
+      "description": "The Cluster API operator's chart, which the management-cluster module names by its release's tag with the SHA-256 of the chart's archive there; the build downloads that archive beside the module. The tag and the digest move together; the datasource hashes the new release's archive.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^management-cluster/versions\\.tf$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>github-release-attachments) depName=(?<depName>\\S+)\\n\\s*chart *= *\"(?<currentValue>[^\"@]+)\"\\n\\s*chart_sha256 *= *\"(?<currentDigest>[0-9a-f]{64})\""
       ]
     },
     {

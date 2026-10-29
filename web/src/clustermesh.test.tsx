@@ -16,6 +16,7 @@ const cluster = (namespace: string, name: string, variables: Record<string, unkn
   class: "kubehenge-kubeadm",
   distribution: "kubeadm",
   version: "v1.36.5",
+  generation: 1,
   created: new Date().toISOString(),
   deleting: false,
   phase: "Provisioned",

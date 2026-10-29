@@ -212,7 +212,7 @@ cluster's variables into one strategic patch each. The API server's probes come 
 credentials, so its health checks stay open to them.
 */}}
 {{- define "kubehenge.talosAdmission" -}}
-{{ printf "{{- $exempt := list %s }}" (include "kubehenge.quotedList" .Values.podSecurityExempt) }}
+{{ include "kubehenge.exempt" .Values.podSecurityExempt }}
 {{ "{{- $talos := true }}" }}
 {{ .Files.Get "files/admission.tpl" }}
 {{- end -}}

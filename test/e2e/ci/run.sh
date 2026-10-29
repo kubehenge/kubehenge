@@ -53,6 +53,8 @@ if [ "${test}" = talos ]; then
 fi
 
 mkdir -p "${work}/mgmt" "${work}/plugins"
+# The module installs the Cluster API operator from the chart archive beside it, which no checkout holds.
+make -s -C "${repo}" capi-operator-chart
 # OpenTofu reads only the root module's lock, so the module's own checks the providers.
 cp "${repo}/test/e2e/ci/main.tf" "${repo}/management-cluster/.terraform.lock.hcl" "${work}/mgmt/"
 export TF_PLUGIN_CACHE_DIR="${work}/plugins"

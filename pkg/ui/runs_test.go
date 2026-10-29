@@ -133,9 +133,27 @@ func TestVeleroStates(t *testing.T) {
 
 func TestAFailedRestoreShowsThePhaseItFailedIn(t *testing.T) {
 	t.Parallel()
-	v := runView{Steps: restoreSteps(provisioner.RestoreRestoring, runFailed)}
+	st := provisioner.EtcdRestoreStatus{Phase: provisioner.RestoreFailed, FailedIn: provisioner.RestoreRestoring}
+	v := runView{Steps: restoreSteps(&st, runFailed)}
 	want := []string{"Preparing done ", "Fetching done ", "Stopping done ", "Restoring failed ", "Starting waiting ", "Replacing waiting "}
 	if got := stepStates(&v); !slices.Equal(got, want) {
 		t.Errorf("steps = %q, want %q", got, want)
+	}
+}
+
+func TestARestoreNamesTheSnapshotOfEtcdAsItWas(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		status provisioner.EtcdRestoreStatus
+		want   string
+	}{
+		{provisioner.EtcdRestoreStatus{Phase: provisioner.RestoreFetching, Before: "20261021T120000Z-v1.37.1-rke2r1.db.age"}, "Preparing done etcd as it was saved as 20261021T120000Z-v1.37.1-rke2r1.db.age"},
+		{provisioner.EtcdRestoreStatus{Phase: provisioner.RestoreFetching, NoBefore: "reaching etcd: no leader"}, "Preparing done no snapshot of etcd as it was: reaching etcd: no leader"},
+		{provisioner.EtcdRestoreStatus{Phase: provisioner.RestorePreparing}, "Preparing running "},
+	} {
+		v := runView{Steps: restoreSteps(&c.status, runRunning)}
+		if got := stepStates(&v)[0]; got != c.want {
+			t.Errorf("first step %q, want %q", got, c.want)
+		}
 	}
 }

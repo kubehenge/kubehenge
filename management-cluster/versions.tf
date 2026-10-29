@@ -68,8 +68,13 @@ locals {
     }
   }
   capi_operator = {
-    # renovate: datasource=github-releases depName=kubernetes-sigs/cluster-api-operator extractVersion=^v(?<version>.+)$
-    chart = "0.30.0"
+    # The chart's release and the SHA-256 of its archive there, which the build fetches beside the
+    # module (charts/, `make capi-operator-chart`) and the module checks again before installing:
+    # upstream publishes the chart only there and in a Helm repository, whose index Helm checks no
+    # archive against.
+    # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api-operator
+    chart        = "v0.30.0"
+    chart_sha256 = "d91da9022021a8c9d48830047314ac5cb73bb38a19f450d5a3186cc2c3b570d5"
     # renovate: datasource=docker depName=registry.k8s.io/capi-operator/cluster-api-operator
     image = "v0.30.0@sha256:2dd577d7bd9cf65deb45b8cd6444f5c89c3de3237ed8e150bd3d34df24fbce10"
   }

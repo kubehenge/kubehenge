@@ -115,24 +115,24 @@ func TestAuthenticationConfiguration(t *testing.T) {
 func TestAdmissionConfiguration(t *testing.T) {
 	t.Parallel()
 	exempt := []any{"kube-system", "node-exporter"}
-	restricted := map[string]any{
-		"enforce": "restricted", "enforce-version": "latest",
-		"audit": "restricted", "audit-version": "latest", "warn": "restricted", "warn-version": "latest",
+	level := func(enforce string) map[string]any {
+		return map[string]any{
+			"enforce": enforce, "enforce-version": "latest",
+			"audit": "restricted", "audit-version": "latest", "warn": "restricted", "warn-version": "latest",
+		}
 	}
 	for _, c := range []struct {
 		variables string
 		defaults  map[string]any
 	}{
-		// Kubernetes' own default, without a warning on every pod.
-		{`{}`, map[string]any{"enforce": "privileged", "enforce-version": "latest"}},
-		{`{"podSecurity": {"kyverno": "restricted"}}`, map[string]any{"enforce": "privileged", "enforce-version": "latest"}},
-		{`{"podSecurity": {"admission": "baseline"}}`, map[string]any{
-			"enforce": "baseline", "enforce-version": "latest",
-			"audit": "restricted", "audit-version": "latest", "warn": "restricted", "warn-version": "latest",
-		}},
-		{`{"podSecurity": {"admission": "restricted"}}`, restricted},
-		{`{"cis": true}`, restricted},
-		{`{"cis": true, "podSecurity": {"admission": "baseline"}}`, restricted},
+		{`{}`, level("baseline")},
+		{`{"podSecurity": {"kyverno": "restricted"}}`, level("baseline")},
+		{`{"podSecurity": {"admission": "privileged"}}`, level("privileged")},
+		{`{"podSecurity": {"admission": "restricted"}}`, level("restricted")},
+		{`{"cis": true}`, level("restricted")},
+		{`{"cis": true, "podSecurity": {"admission": "baseline"}}`, level("restricted")},
+		// The exemptions stay whatever the cluster runs, so that switching an add-on rolls no node.
+		{`{"monitoring": {"enabled": false}, "rancher": {"register": false}}`, level("baseline")},
 	} {
 		config := bootstrapFile(t, renderAfter(t, `{{- $exempt := list "kube-system" "node-exporter" }}`+"\n{{- $talos := false }}\n", "files/admission.tpl", c.variables))
 		want := map[string]any{

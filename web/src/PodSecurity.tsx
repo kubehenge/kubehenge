@@ -3,7 +3,7 @@ import type { JSX } from "react";
 import { Field } from "./ui";
 import { oneOf, record, text } from "./values";
 
-/** The Pod Security Standard levels Pod Security Admission enforces; privileged is Kubernetes' own default. */
+/** The Pod Security Standard levels Pod Security Admission enforces; baseline is the classes' default. */
 export const admissionLevels = ["privileged", "baseline", "restricted"] as const;
 export type AdmissionLevel = (typeof admissionLevels)[number];
 
@@ -29,7 +29,7 @@ export function podSecurityOf(v: unknown): PodSecurity {
   const admission = text(r["admission"]);
   const kyverno = text(r["kyverno"]);
   return {
-    admission: oneOf(admissionLevels, admission) ? admission : "privileged",
+    admission: oneOf(admissionLevels, admission) ? admission : "baseline",
     kyverno: oneOf(kyvernoLevels, kyverno) ? kyverno : "off",
   };
 }
@@ -48,7 +48,7 @@ export function enforced(p: PodSecurity, cis: boolean): PodSecurity {
 /** podSecurityVariable is the variable for a choice, or undefined for the defaults, which need none. */
 export function podSecurityVariable(p: PodSecurity): Partial<PodSecurity> | undefined {
   const v: Partial<PodSecurity> = {};
-  if (p.admission !== "privileged") {
+  if (p.admission !== "baseline") {
     v.admission = p.admission;
   }
   if (p.kyverno !== "off") {
@@ -88,14 +88,16 @@ export function PodSecurityFields({
         Baseline refuses privileged pods and the host&apos;s namespaces and paths; restricted also has containers run
         without root, privilege escalation or capabilities. The namespaces of the components that need the host
         (kube&#8209;system, the pod network&apos;s, node&#8209;exporter&apos;s, Alloy&apos;s node collectors&apos;,
-        Velero&apos;s, Istio&apos;s node agents&apos; and Rancher&apos;s) are exempt from both.
+        Velero&apos;s, Istio&apos;s node agents&apos;, MetalLB&apos;s and Rancher&apos;s) are exempt from Pod Security
+        Admission in every cluster, and from Kyverno where the cluster runs them. Whoever may create or label a
+        namespace may set its own level, as everywhere in Kubernetes.
       </p>
       <Field
         label="Pod Security Admission"
         hint={
           cis
             ? "Kubernetes' own check, for every namespace that labels no level of its own. Restricted, as CIS hardening has it."
-            : "Kubernetes' own check, for every namespace that labels no level of its own. Below restricted, pods short of restricted are warned about. Changing it replaces the control-plane nodes one at a time."
+            : "Kubernetes' own check, for every namespace that labels no level of its own. At every level, pods short of restricted are warned about. Changing it replaces the control-plane nodes one at a time."
         }
       >
         {(id) => (

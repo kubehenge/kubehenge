@@ -11,6 +11,7 @@ const cluster = {
   class: "kubehenge-k3s",
   distribution: "k3s",
   version: "v1.36.5+k3s1",
+  generation: 1,
   created: new Date().toISOString(),
   deleting: false,
   phase: "Provisioned",
@@ -61,19 +62,20 @@ describe("a cluster's options", () => {
       variables: { monitoring: { enabled: true, hostname: "grafana.example.org" } },
     });
 
-    expect(screen.getByRole("row", { name: /Pod security/u })).toHaveTextContent("Not enforced");
+    expect(screen.getByRole("row", { name: /Pod security/u })).toHaveTextContent("Baseline by Pod Security Admission");
     await user.click(screen.getByRole("button", { name: "Edit pod security" }));
     dialog = screen.getByRole("dialog", { name: "Pod security" });
     const admission = within(dialog).getByLabelText("Pod Security Admission");
     expect(admission).toHaveAccessibleDescription(/replaces the control-plane nodes/u);
     expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
-    await user.selectOptions(admission, "baseline");
+    expect(admission).toHaveValue("baseline");
+    await user.selectOptions(admission, "privileged");
     await user.selectOptions(within(dialog).getByLabelText("Kyverno"), "restricted");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
-      variables: { podSecurity: { admission: "baseline", kyverno: "restricted" } },
+      variables: { podSecurity: { admission: "privileged", kyverno: "restricted" } },
     });
 
     expect(screen.getByRole("row", { name: /Istio/u })).toHaveTextContent("Off");

@@ -37,7 +37,7 @@ func interfaceAccount(cfg *rest.Config) *rest.Config {
 // clusters, read their kubeconfigs and store credentials, held to them by the same policy, and in
 // no other.
 func TestIntegrationInterfaceMoreNamespaces(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
-	cfg, admin, _ := startAPIConfig(t, "testdata/more-namespaces-values.yaml")
+	cfg, admin := startAPIConfig(t, "testdata/more-namespaces-values.yaml")
 	ctx := context.Background()
 	as := interfaceAccount(cfg)
 	ui, err := client.New(as, client.Options{Scheme: admin.Scheme()})

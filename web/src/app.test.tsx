@@ -120,6 +120,7 @@ const web: Cluster = {
   class: "kubehenge-rke2",
   distribution: "rke2",
   version: "v1.36.5+rke2r1",
+  generation: 1,
   created: new Date().toISOString(),
   createdBy: "alice@pve",
   deleting: false,
@@ -320,7 +321,9 @@ describe("clusters", () => {
     await user.type(within(dialog).getByLabelText("Confirm name"), "web");
     await user.click(confirm);
     await waitFor(() => expect(window.location.pathname).toBe("/"));
-    expect(calls.find((c) => c.key === "DELETE /api/clusters/default/web")?.headers.get("X-Kubehenge-CSRF")).toBe("c1");
+    const deletion = calls.find((c) => c.key === "DELETE /api/clusters/default/web");
+    expect(deletion?.headers.get("X-Kubehenge-CSRF")).toBe("c1");
+    expect(deletion?.body).toStrictEqual({ confirm: "web" });
   });
 
   it("says what runs the workloads of a cluster without workers", async () => {
@@ -649,8 +652,12 @@ describe("create", () => {
         oidc: [],
       },
     });
-    const defaults = { ...form, podSecurity: { admission: "privileged" as const, kyverno: "off" as const } };
+    const defaults = { ...form, podSecurity: { admission: "baseline" as const, kyverno: "off" as const } };
     expect(request(defaults, rke2).variables).not.toHaveProperty("podSecurity");
+    // Privileged is below the classes' baseline, so it has to be asked for.
+    expect(
+      request({ ...defaults, podSecurity: { admission: "privileged", kyverno: "off" } }, rke2).variables,
+    ).toMatchObject({ podSecurity: { admission: "privileged" } });
     expect(request(defaults, rke2).variables).not.toHaveProperty("cis");
     // CIS hardening has admission enforce restricted, and the variable says so.
     expect(request({ ...defaults, cis: true }, rke2).variables).toMatchObject({
