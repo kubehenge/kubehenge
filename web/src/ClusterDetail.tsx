@@ -501,7 +501,13 @@ function OptionsView({
   const more = (shown: Cluster): OptionRow<"backups" | "etcdSnapshots" | "autoscaler">[] => [
     ...backupsRows(shown, offered),
     ...etcdSnapshotsRows(shown, offered),
-    { label: "Autoscaler", value: autoscalerText(shown), action: "autoscaler", name: "the autoscaler" },
+    {
+      label: "Autoscaler",
+      value: autoscalerText(shown),
+      group: "Nodes",
+      action: "autoscaler",
+      name: "the autoscaler",
+    },
   ];
   return <Options cluster={c} staged={staged} can={can} onEdit={onEdit} more={more} />;
 }

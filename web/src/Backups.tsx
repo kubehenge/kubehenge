@@ -417,7 +417,7 @@ export function backupsRows(c: Cluster, offered: boolean): OptionRow<"backups">[
   if (!b.enabled && !offered) {
     return [];
   }
-  return [{ label: "Backups", value: backupsText(b), action: "backups", name: "backups" }];
+  return [{ label: "Backups", value: backupsText(b), group: "Maintenance", action: "backups", name: "backups" }];
 }
 
 /** BackupsDialog switches a cluster's backups on or off and changes how they run. */

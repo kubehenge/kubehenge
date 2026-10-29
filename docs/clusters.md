@@ -191,7 +191,7 @@ The status reads **Provisioning**, **Available**, **Upgrading** or **Reconciling
 
 ### Staged changes
 
-A cluster's settings change in two steps. **Save** in a dialog stages the change: the API server checks it with those staged before it, as it would make them, so a change it refuses shows its reason in the dialog, and nothing changes in the cluster yet. A bar above the views then counts what is staged and says what applying it does to the machines, and **Options** shows each staged value under the one in force. A dialog opened again starts from what is staged. **Review plan** lists each setting as it is and as it would be, and whether it replaces no machine, adds or removes machines, or replaces the control-plane machines, the workers or every machine, one at a time; **Apply** makes the changes together, as one change of the cluster. **Discard** drops them. Scaling, upgrading, Talos upgrades and every setting under **Options** are staged this way; deleting the cluster, backups, restores and snapshots run at once.
+A cluster's settings change in two steps. **Save** in a dialog, or a switch under **Options**, stages the change: the API server checks it with those staged before it, as it would make them, so a change it refuses shows its reason in the dialog, and nothing changes in the cluster yet. A bar above the views then counts what is staged and says what applying it does to the machines, and **Options** shows each staged value under the one in force. A dialog opened again starts from what is staged. **Review plan** lists each setting as it is and as it would be, and whether it replaces no machine, adds or removes machines, or replaces the control-plane machines, the workers or every machine, one at a time; **Apply** makes the changes together, as one change of the cluster. **Discard** drops them. Scaling, upgrading, Talos upgrades and every setting under **Options** are staged this way; deleting the cluster, backups, restores and snapshots run at once.
 
 ## Scale
 
@@ -244,29 +244,27 @@ With **Apply Talos patch releases** on under Automatic upgrades (`upgrades.nodeI
 
 ## Change add-ons and sign-in
 
-**Options** lists every setting that can change once the cluster exists, in this order. Some show only where the cluster or the management cluster offers them.
+**Options** lists every setting that can change once the cluster exists, grouped into Nodes, Network, Storage, Add-ons, Security and Maintenance. Some show only where the cluster or the management cluster offers them. A setting that is only on or off (Proxmox VE HA, HA group labels, the CSI plugin's newest release, volume snapshots, Istio) has a switch in its row, which stages the change as a dialog's **Save** does and says what switching it on brings; one that cannot be switched on says why. The rest have **Edit**.
 
-| Setting | Shown | Changing it |
-| --- | --- | --- |
-| Node OS | kubeadm, RKE2 and k3s | Replaces every node with a clone of the new node OS's template, one at a time as in an upgrade. That template has to be built first ([templates.md](templates.md#node-oses)); a node OS not released yet, or without a template, cannot be chosen. |
-| Talos release | Talos | **Upgrade** upgrades the nodes in place ([Talos upgrades](#talos-upgrades)). |
-| Pod network | always | Fixed for the cluster's life ([Pod network](#pod-network)). |
-| Load balancer | always | See the list below. |
-| CIS hardening | always | Fixed for the cluster's life ([Add-ons](#add-ons)). |
-| Placement | always | Applies to the VMs created after it, by scaling up, an upgrade or a replacement; those running stay where they are. Nodes the cluster has that you cannot see are listed too, and may be kept ([Machines](#machines)). |
-| Proxmox VE HA | where the management cluster has Proxmox VE HA and the storage is shared | Takes the control-plane VMs into HA or out of it ([Machines](#machines)). |
-| CSI plugin | where the management cluster lets clusters choose its newest release, or while the cluster runs it | [Persistent volumes](#persistent-volumes). |
-| Volume snapshots | where the management cluster lets clusters take them, or while they are on | [Volume snapshots](#volume-snapshots). |
-| HA group labels | unless the management cluster switched them off for every cluster, or while they are on | [Machines](#machines). |
-| Headlamp, Monitoring, Logs | always | See the list below. |
-| Backups | where an administrator set a backup target, or while they are on | See the list below. |
-| etcd snapshots | where an administrator set a backup target, or while they are on | [etcd snapshots](#etcd-snapshots). |
-| Autoscaler | always | Its expander, its timing and where it runs ([Autoscaling](#autoscaling)). |
-| Certificates, Pod security, Istio | always | See the list below. |
-| Cluster Mesh | on a cluster that runs Cilium | See the list below. |
-| Rancher, GitOps | always | See the list below. |
-| Automatic upgrades | always | The Kubernetes upgrades, their window and the move to new node images ([upgrading.md](upgrading.md#automatically-inside-a-window), [Node image refresh](#node-image-refresh)). |
-| Identity providers | always | See the list below. |
+| Group | Setting | Shown | Changing it |
+| --- | --- | --- | --- |
+| Nodes | Node OS | kubeadm, RKE2 and k3s | Replaces every node with a clone of the new node OS's template, one at a time as in an upgrade. That template has to be built first ([templates.md](templates.md#node-oses)); a node OS not released yet, or without a template, cannot be chosen. |
+| Nodes | Talos release | Talos | **Upgrade** upgrades the nodes in place ([Talos upgrades](#talos-upgrades)). |
+| Nodes | Placement | always | Applies to the VMs created after it, by scaling up, an upgrade or a replacement; those running stay where they are. Nodes the cluster has that you cannot see are listed too, and may be kept ([Machines](#machines)). |
+| Nodes | Proxmox VE HA | where the management cluster has Proxmox VE HA and the storage is shared | Takes the control-plane VMs into HA or out of it ([Machines](#machines)). |
+| Nodes | HA group labels | unless the management cluster switched them off for every cluster, or while they are on | [Machines](#machines). |
+| Nodes | Autoscaler | always | Its expander, its timing and where it runs ([Autoscaling](#autoscaling)). |
+| Network | Pod network | always | Fixed for the cluster's life ([Pod network](#pod-network)). |
+| Network | Load balancer | always | See the list below. |
+| Network | Cluster Mesh | on a cluster that runs Cilium | See the list below. |
+| Storage | CSI plugin | where the management cluster lets clusters choose its newest release, or while the cluster runs it | [Persistent volumes](#persistent-volumes). |
+| Storage | Volume snapshots | where the management cluster lets clusters take them, or while they are on | [Volume snapshots](#volume-snapshots). |
+| Add-ons | Headlamp, Monitoring, Logs, Certificates, Istio, Rancher, GitOps | always | See the list below. |
+| Security | CIS hardening | always | Fixed for the cluster's life ([Add-ons](#add-ons)). |
+| Security | Pod security, Identity providers | always | See the list below. |
+| Maintenance | Backups | where an administrator set a backup target, or while they are on | See the list below. |
+| Maintenance | etcd snapshots | where an administrator set a backup target, or while they are on | [etcd snapshots](#etcd-snapshots). |
+| Maintenance | Automatic upgrades | always | The Kubernetes upgrades, their window and the move to new node images ([upgrading.md](upgrading.md#automatically-inside-a-window), [Node image refresh](#node-image-refresh)). |
 
 The add-ons and sign-in:
 

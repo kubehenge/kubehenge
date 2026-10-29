@@ -163,7 +163,7 @@ function autoscalingText(c: Cluster): string {
 }
 
 // settingRows are every setting of a cluster a change can set, as the page shows them.
-function settingRows(c: Cluster): OptionRow<string>[] {
+function settingRows(c: Cluster): Setting[] {
   return [
     { label: "Kubernetes version", value: c.version },
     { label: "Control plane", value: String(c.controlPlane.desired) },
@@ -172,10 +172,12 @@ function settingRows(c: Cluster): OptionRow<string>[] {
     ...optionRows<string>(c, everything, [
       ...backupsRows(c, true),
       ...etcdSnapshotsRows(c, true),
-      { label: "Autoscaler", value: autoscalerText(c) },
+      { label: "Autoscaler", value: autoscalerText(c), group: "Nodes" },
     ]),
   ];
 }
+
+type Setting = Pick<OptionRow<string>, "label" | "value">;
 
 /** A row of the plan: a setting as it is and as it would be, and what that does to the machines. */
 interface PlanRow {
@@ -185,7 +187,7 @@ interface PlanRow {
   effect: Effect;
 }
 
-const valueOf = (rows: OptionRow<string>[], label: string): string => rows.find((r) => r.label === label)?.value ?? "";
+const valueOf = (rows: Setting[], label: string): string => rows.find((r) => r.label === label)?.value ?? "";
 
 /** planRows are the rows of a plan: one per row of the page whose value a change sets anew. */
 export function planRows(before: Cluster, after: Cluster, changes: PlannedChange[]): PlanRow[] {

@@ -1262,6 +1262,93 @@ button.go {
   font-size: 13.5px;
 }
 
+.option-groups {
+  display: grid;
+  gap: 14px;
+}
+
+.grid.options caption {
+  padding: 0 0 6px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+/* A switch reads as one: the track carries the state, the words beside it what that state is. */
+.switch {
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+  cursor: pointer;
+}
+
+.switch input[role="switch"] {
+  appearance: none;
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--line-strong);
+  cursor: inherit;
+  transition: background 120ms ease;
+}
+
+.switch input[role="switch"]::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--surface);
+  transition: transform 120ms ease;
+}
+
+.switch input[role="switch"]:checked {
+  background: var(--accent-fill);
+}
+
+.switch input[role="switch"]:checked::before {
+  transform: translateX(14px);
+}
+
+.switch input[role="switch"]:focus-visible {
+  outline: 2px solid var(--accent-fill);
+  outline-offset: 2px;
+}
+
+/* Staged, not applied: in the colour the staged values of the other rows take. */
+.switch.switch-staged > span {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.switch:has(> input:disabled) {
+  color: var(--dim);
+  cursor: default;
+}
+
+.switch input[role="switch"]:disabled {
+  opacity: 0.5;
+}
+
+.switch ~ .hint,
+.switch ~ .field-error {
+  display: block;
+  margin: 2px 0 0 calc(34px + 10px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switch input[role="switch"],
+  .switch input[role="switch"]::before {
+    transition: none;
+  }
+}
+
 /* Every row as tall as one with its button, its label and value centred beside it. */
 .grid.options th,
 .grid.options td {

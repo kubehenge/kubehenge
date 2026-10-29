@@ -159,6 +159,7 @@ export function etcdSnapshotsRows(c: Cluster, offered: boolean): OptionRow<"etcd
     {
       label: "etcd snapshots",
       value: etcdSnapshotsText(v, c.distribution),
+      group: "Maintenance",
       action: "etcdSnapshots",
       name: "etcd snapshots",
     },
