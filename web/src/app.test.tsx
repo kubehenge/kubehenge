@@ -380,7 +380,6 @@ describe("clusters", () => {
     await applyStaged(user);
     await waitFor(() =>
       expect(calls.find((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
-        controlPlaneReplicas: 1,
         workerPools: { "md-0": 4 },
       }),
     );

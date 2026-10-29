@@ -534,7 +534,7 @@ export function ScaleDialog({ cluster: c, onClose }: { cluster: Cluster; onClose
       title={`Scale ${c.name}`}
       onClose={onClose}
       onSubmit={() => {
-        void send({ controlPlaneReplicas: controlPlane, ...change });
+        void send({ ...(controlPlane !== current && { controlPlaneReplicas: controlPlane }), ...change });
       }}
       actions={
         <>
