@@ -944,6 +944,8 @@ export interface Upgrades {
     to?: string;
     time: string;
     error?: string;
+    /** A failed upgrade put the release before back. */
+    rolledBack?: boolean;
   };
   /** Absent outside the appliance. */
   management?: ManagementAutomatic;

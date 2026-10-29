@@ -3,7 +3,18 @@ import { useState, type JSX } from "react";
 import { api } from "./api";
 import { AutomaticManagement } from "./ManagementUpgrade";
 import type { UpgradePolicy, Upgrades } from "./types";
-import { Dialog, ErrorBox, Field, browserZone, errorMessage, filled, pollRunning, timeZones, usePoll } from "./ui";
+import {
+  Dialog,
+  ErrorBox,
+  Field,
+  browserZone,
+  errorMessage,
+  filled,
+  pollRunning,
+  sentence,
+  timeZones,
+  usePoll,
+} from "./ui";
 import { oneOf } from "./values";
 
 const policies: readonly UpgradePolicy[] = ["off", "patch", "minor"];
@@ -150,8 +161,12 @@ function Releases({ upgrades: u }: { upgrades: Upgrades }): JSX.Element {
             {u.status.state === "succeeded" && `${u.status.from} to ${u.status.to}`}
             {u.status.state === "current" && "Already the newest allowed"}
             {u.status.state === "updating" && "In progress"}
-            {u.status.state === "failed" && `Failed: ${u.status.error ?? ""}`} (
-            {new Date(u.status.time).toLocaleString()})
+            {u.status.state === "failed" &&
+              (u.status.rolledBack === true ? `Rolled back to ${u.status.from ?? ""}` : "Failed")}{" "}
+            ({new Date(u.status.time).toLocaleString()})
+            {u.status.state === "failed" && u.status.error !== undefined && (
+              <div className="hint message">{sentence(u.status.error.replace(/; rolled back to [^;]*$/u, ""))}</div>
+            )}
           </dd>
         </>
       )}

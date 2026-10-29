@@ -58,4 +58,32 @@ describe("appliance upgrades", () => {
     await expect(screen.findByText("None")).resolves.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Upgrade to/u })).not.toBeInTheDocument();
   });
+
+  it("says an upgrade was rolled back, and why", async () => {
+    const error = "release 0.2.0 did not start: the interface did not answer within 2m0s; rolled back to 0.1.0";
+    const status = { state: "failed", from: "0.1.0", to: "0.2.0", time: "2027-03-01T12:00:00Z", error };
+    const routes: Record<string, Route> = {
+      "GET /api/appliance/upgrades": {
+        body: {
+          version: "0.1.0",
+          available: ["0.2.0"],
+          settings: { policy: "off", hour: 3, timeZone: "UTC" },
+          status: { ...status, rolledBack: true },
+        },
+      },
+    };
+    fakeServer(routes);
+    const { unmount } = render(<ApplianceUpgrades />);
+    await expect(screen.findByText(/^Rolled back to 0\.1\.0/u)).resolves.toBeInTheDocument();
+    expect(
+      screen.getByText("Release 0.2.0 did not start: the interface did not answer within 2m0s."),
+    ).toBeInTheDocument();
+    unmount();
+
+    routes["GET /api/appliance/upgrades"] = {
+      body: { version: "0.1.0", available: [], settings: { policy: "off", hour: 3, timeZone: "UTC" }, status },
+    };
+    render(<ApplianceUpgrades />);
+    await expect(screen.findByText(/^Failed \(/u)).resolves.toBeInTheDocument();
+  });
 });

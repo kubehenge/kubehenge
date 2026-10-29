@@ -168,6 +168,8 @@ func (s *Server) Run(ctx context.Context) {
 func (s *Server) Handler() http.Handler {
 	s.init()
 	mux := http.NewServeMux()
+	// The appliance's updater asks it whether the interface serves on the software it installed.
+	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc("GET /api/realms", s.realms)
 	mux.HandleFunc("POST /api/session", s.signIn)
 	mux.HandleFunc("POST /api/session/second-factor", s.secondFactor)

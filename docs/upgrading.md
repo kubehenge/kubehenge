@@ -39,6 +39,7 @@ The interface never replaces software itself. It drops a request into a spool, a
 - It fetches the release index, `https://github.com/kubehenge/kubehenge/releases/latest/download/index.json`, and its signature, and accepts the index only if it is signed with Kubehenge's release key. The public key is built into each release and cannot be configured. A mirror of the index and its signature can be named with `KUBEHENGE_RELEASE_INDEX=<URL>` in the appliance's `/etc/kubehenge/appliance.env`, which both the interface and the updater read; the signature check is the same.
 - It installs only a release named in that index, newer than the installed one, and only an archive matching the checksum in the index. It also installs the OpenTofu release that Kubehenge release names, checked the same way.
 - It swaps the files by rename and restarts the interface. It holds the lock the management cluster's runs take, so an upgrade never cuts a run off and no run starts during an upgrade.
+- It keeps the installed release aside until the new one serves: the interface has to answer on its own certificate within 2 minutes and keep running for 20 seconds more. If it does not, or the restart fails, the updater puts the release before back, restarts it, and says so in the upgrade's error: "release … did not start: …; rolled back to …".
 
 A release published without its signed index upgrades no appliance.
 
