@@ -541,10 +541,9 @@ func calicoResources(cluster *clusterv1.Cluster, cni CNI, images []Image) (*core
 		"calicoNetwork": network,
 		// Calico's CSI driver, for its own volume types, which Kubehenge does not use.
 		"kubeletVolumePluginPath": "None",
-	}
-	if isTalos(cluster) {
-		// Talos's /usr is read-only, so the FlexVolume driver Calico would install there cannot be.
-		installation["flexVolumePath"] = "None"
+		// Nor its FlexVolume driver, which it would install into /usr, read-only on every node OS:
+		// Talos's and the image-mode templates' alike.
+		"flexVolumePath": "None",
 	}
 	resources := []map[string]any{
 		calicoImageSet(images),
