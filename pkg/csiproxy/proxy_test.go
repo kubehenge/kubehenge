@@ -64,10 +64,11 @@ func newFakePVE() *fakePVE {
 			owner: {"name": "web-e148d768-volumes"},
 			300:   {"name": holders},
 			301:   {"name": holders},
+			302:   {"name": holders},
 			101:   {"name": "web-cp-1", "scsi0": "local-zfs:vm-101-disk-0,size=10G"},
 			500:   {"name": "other", "scsi0": "local-zfs:vm-500-disk-0,size=10G"},
 		},
-		nodes: map[int]string{owner: "pve1", 300: "pve1", 301: "pve2", 101: "pve1", 500: "pve1"},
+		nodes: map[int]string{owner: "pve1", 300: "pve1", 301: "pve2", 302: "pve1", 101: "pve1", 500: "pve1"},
 		tasks: map[string]bool{},
 	}
 }
@@ -91,13 +92,15 @@ func (f *fakePVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/storage":
 		writeData(w, []map[string]any{{"storage": "local", "type": "dir"}, {"storage": "local-zfs", "type": "zfspool", "sparse": 1}})
 	case path == "/cluster/resources":
-		var list []map[string]any
+		// Proxmox VE names a VM's pool only to Pool.Audit on it, which the cluster's token lacks;
+		// 302 is in a pool whose Pool.Audit it holds.
+		list := make([]map[string]any, 0, len(f.nodes))
 		for vmid, node := range f.nodes {
-			p := pool
-			if vmid == 500 {
-				p = "other"
+			vm := map[string]any{"vmid": vmid, "node": node, "name": f.configs[vmid]["name"], "type": "qemu"}
+			if vmid == 302 {
+				vm["pool"] = "other"
 			}
-			list = append(list, map[string]any{"vmid": vmid, "node": node, "pool": p, "name": f.configs[vmid]["name"], "type": "qemu"})
+			list = append(list, vm)
 		}
 		writeData(w, list)
 	case path == "/cluster/nextid":
@@ -470,13 +473,14 @@ func TestCopiesOfOtherVolumesAreRefused(t *testing.T) {
 		copiesOff                     bool
 		want                          string
 	}{
-		"another pool's volume": {"pve1", "local-zfs", "vm-500-disk-0", "vm-4242-snap-1", nil, false, "is not one of the cluster's own"},
-		"a node VM's disk":      {"pve1", "local-zfs", "vm-101-disk-0", "vm-4242-snap-1", nil, false, "is not one of the cluster's own"},
-		"a target of another":   {"pve1", "local-zfs", "vm-4242-pvc-1", "vm-500-disk-9", nil, false, "is not named after the cluster's volume owner VM 4242"},
-		"a holder's name":       {"pve1", "local-zfs", "vm-4242-pvc-1", "vm-300-disk-9", nil, false, "is not named after"},
-		"another node":          {"pve1", "local-zfs", "vm-4242-pvc-1", "vm-4242-snap-1", []string{"target_node", "pve2"}, false, "stays on its source's node"},
-		"a target there":        {"pve1", "local-zfs", "vm-4242-pvc-1", "vm-101-disk-0", nil, false, "is not named after"},
-		"copies switched off":   {"pve1", "local-zfs", "vm-4242-pvc-1", "vm-4242-snap-1", nil, true, "switched off"},
+		"another VM's volume":        {"pve1", "local-zfs", "vm-500-disk-0", "vm-4242-snap-1", nil, false, "is not one of the cluster's own"},
+		"a namesake in another pool": {"pve1", "local-zfs", "vm-302-disk-0", "vm-4242-snap-1", nil, false, "is not one of the cluster's own"},
+		"a node VM's disk":           {"pve1", "local-zfs", "vm-101-disk-0", "vm-4242-snap-1", nil, false, "is not one of the cluster's own"},
+		"a target of another":        {"pve1", "local-zfs", "vm-4242-pvc-1", "vm-500-disk-9", nil, false, "is not named after the cluster's volume owner VM 4242"},
+		"a holder's name":            {"pve1", "local-zfs", "vm-4242-pvc-1", "vm-300-disk-9", nil, false, "is not named after"},
+		"another node":               {"pve1", "local-zfs", "vm-4242-pvc-1", "vm-4242-snap-1", []string{"target_node", "pve2"}, false, "stays on its source's node"},
+		"a target there":             {"pve1", "local-zfs", "vm-4242-pvc-1", "vm-101-disk-0", nil, false, "is not named after"},
+		"copies switched off":        {"pve1", "local-zfs", "vm-4242-pvc-1", "vm-4242-snap-1", nil, true, "switched off"},
 	} {
 		h := newHarness(t, newFakePVE())
 		h.p.Copies = !tc.copiesOff

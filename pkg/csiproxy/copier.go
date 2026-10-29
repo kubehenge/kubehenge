@@ -343,7 +343,10 @@ func (p *Proxy) record(ctx context.Context, storage, volume string) (Copy, bool,
 	return rec, true, nil
 }
 
-// holders are the cluster's holder VMs: those of its pool by the holders' name.
+// holders are the cluster's holder VMs: those the token sees by the holders' name, which carries
+// the cluster's identity. Proxmox VE names a VM's pool only to Pool.Audit on it, which the
+// cluster's token lacks, so the token seeing the VM at all, through its role on its own pool,
+// stands for it; a pool named is checked.
 func (p *Proxy) holders(ctx context.Context, c *pve) ([]vm, error) {
 	all, err := c.vms(ctx)
 	if err != nil {
@@ -351,7 +354,7 @@ func (p *Proxy) holders(ctx context.Context, c *pve) ([]vm, error) {
 	}
 	var holders []vm
 	for _, v := range all {
-		if v.Name == p.Holders && v.Pool == p.Pool && v.VMID != p.Owner {
+		if v.Name == p.Holders && (v.Pool == "" || v.Pool == p.Pool) && v.VMID != p.Owner {
 			holders = append(holders, v)
 		}
 	}
