@@ -76,6 +76,13 @@ rules:
   - apiGroups: [""]
     resources: [events]
     verbs: [list]
+  # The management cluster's own health on the Administration page.
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [list]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

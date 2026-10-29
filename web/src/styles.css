@@ -943,6 +943,45 @@ button.go {
   margin-bottom: 10px;
 }
 
+.management-health h3 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.management-health .mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.health-short {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
+.object-view > .danger-zone {
+  border-color: var(--danger);
+}
+
+.danger-zone h3 {
+  color: var(--danger);
+}
+
+.danger-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.danger-row p {
+  margin: 2px 0 0;
+}
+
 /* Values start where a form's controls do, so a summary lines up with the fields beside it. */
 .summary {
   display: grid;
@@ -962,6 +1001,13 @@ button.go {
 
 .summary + .summary {
   margin-top: 6px;
+}
+
+/* On a phone the fixed label column would leave values a third of the width. */
+@media (width < 600px) {
+  .summary {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  }
 }
 
 /* Where a cluster's machines run: a tile per Proxmox VE node. */

@@ -14,6 +14,7 @@ import type {
   HARules,
   Job,
   ManagementAutomatic,
+  ManagementHealth,
   ManagementSettings,
   PodLogs,
   Plan,
@@ -245,6 +246,7 @@ export interface Api {
   removeCredential: (purpose: string, cluster?: ClusterRef) => Promise<void>;
   credential: (name: "kubeconfig" | "talosconfig", passphrase: string) => Promise<Blob>;
   removeManagement: (passphrase: string) => Promise<Job>;
+  managementHealth: () => Promise<ManagementHealth>;
   upgrades: () => Promise<Upgrades>;
   upgrade: (version: string) => Promise<void>;
   /** nodeOS, such as almalinux-10, narrows kubeadm's versions to those with a template on it. */
@@ -319,6 +321,7 @@ export const api: Api = {
   removeCredential: (purpose, cluster) => act("DELETE", credentialPath(purpose, cluster)),
   credential: (name, passphrase) => download("POST", "/api/setup/credential", { name, passphrase }),
   removeManagement: (passphrase) => request("POST", "/api/setup/remove", { passphrase, confirm: "remove" }),
+  managementHealth: () => request("GET", "/api/setup/health"),
   upgrades: () => request("GET", "/api/appliance/upgrades"),
   upgrade: (version) => act("POST", "/api/appliance/upgrades", { version }),
   versions: (distribution, nodeOS) =>

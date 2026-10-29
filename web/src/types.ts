@@ -742,6 +742,16 @@ export interface SetupStatus {
   upgrade?: ManagementUpgrade;
 }
 
+/** How the management cluster itself is doing; for administrators only. */
+export interface ManagementHealth {
+  /** Whether its API answered; error says why not. */
+  answers: boolean;
+  error?: string;
+  nodes?: { name: string; ready: boolean; message?: string; kubelet?: string }[];
+  /** Its deployments: Cluster API's providers, Kubehenge's controller and the cluster's own. */
+  controllers?: { namespace: string; name: string; ready: number; wanted: number }[];
+}
+
 /** A component of the management cluster whose version applying the appliance's release changes. */
 export interface VersionChange {
   /** The module's name for it, such as talos or cluster_api. */
