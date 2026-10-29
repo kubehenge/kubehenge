@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/kubehenge/kubehenge/pkg/redact"
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
@@ -291,6 +292,21 @@ func TestBootLogsOfTalosNodes(t *testing.T) {
 	// A worker runs neither trustd nor etcd, whose logs it would only answer with an error.
 	if names := sectionNames(logs["web-w-2"]); names != "kernel messages,machined,apid,kubelet" {
 		t.Errorf("web-w-2's sections = %v", names)
+	}
+}
+
+func TestBootLogLinesHoldNoTerminalEscapesOrControls(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ in, want string }{
+		{"\x1b[0;32m  OK  \x1b[0m] Started k3s.service", "  OK  ] Started k3s.service"},
+		{"\x1b]8;;file://node\x07link\x1b]8;;\x07", "link"},
+		{"progress\r 50%\x7f\u0085\u009b", "progress 50%"},
+		{"a\ttab and ✓ stay", "a\ttab and ✓ stay"},
+		{"--token abc", "--token " + redact.Mark},
+	} {
+		if got := logLine(tc.in); got != tc.want {
+			t.Errorf("logLine(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
 

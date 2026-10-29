@@ -729,7 +729,9 @@ if ! grep -qE '^controller_runtime_reconcile_total\{controller="boot-logs",resul
     grep '^controller_runtime_reconcile_total' "${work}/metrics" >&2 || true
     fail "the controller's metrics count no reconcile of boot logs"
 fi
-echo "$(grep -c '^kubehenge_' "${work}/metrics" || true) series of Kubehenge's own"
+# Kubehenge's own, of the hook Cluster API calls on every change of a cluster's topology.
+grep -E '^kubehenge_hook_duration_seconds_count\{hook="generate-patches"\} [1-9]' "${work}/metrics" ||
+    fail "the controller's metrics time no call of its generate-patches hook"
 kill "${metrics_pid}"
 metrics_pid=
 kubectl delete clusterrolebinding "${reader}" > /dev/null

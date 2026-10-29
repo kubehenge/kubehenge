@@ -7,8 +7,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/luthermonson/go-proxmox"
+	"golang.org/x/text/encoding/charmap"
 )
 
 // Most tasks and commands, such as a configuration change, end within a fraction of a second; a
@@ -96,5 +98,19 @@ func GuestFileRead(ctx context.Context, c *proxmox.Client, node string, vmid int
 	case string:
 		truncated = t == "1" || t == "true"
 	}
-	return f.Content, truncated, nil
+	return fileBytes(f.Content), truncated, nil
+}
+
+// fileBytes turns the content Proxmox VE sends back into the file's text. Proxmox VE decodes the
+// agent's base64 into bytes and encodes them into its JSON one character per byte, so that a UTF-8
+// file arrives encoded twice, its multi-byte characters as runs of U+0080 to U+00FF, among them C1
+// control characters. Taken back to one byte per character, the content is the file's own bytes;
+// a character cut in half where the read stopped, or a file that is not UTF-8, is then replaced by
+// U+FFFD. Content with a character beyond U+00FF was not sent that way, and is left as it is.
+func fileBytes(content string) string {
+	raw, err := charmap.ISO8859_1.NewEncoder().String(content)
+	if err != nil {
+		return content
+	}
+	return strings.ToValidUTF8(raw, string(utf8.RuneError))
 }

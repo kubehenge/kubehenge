@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/luthermonson/go-proxmox"
 	"github.com/siderolabs/talos/pkg/machinery/api/common"
@@ -136,12 +138,30 @@ func streamTail(r io.Reader) ([]string, error) {
 	scan := bufio.NewScanner(r)
 	scan.Buffer(make([]byte, 0, bufio.MaxScanTokenSize), bootLogSectionBytes)
 	for scan.Scan() {
-		lines = append(lines, redact.Line(scan.Text()))
+		lines = append(lines, logLine(scan.Text()))
 		if len(lines) > bootLogLines {
 			lines = lines[1:]
 		}
 	}
 	return fitLines(lines), scan.Err()
+}
+
+// terminalEscape is an escape sequence that colours or moves the cursor on a terminal, such as
+// systemd and the distributions' installers write.
+var terminalEscape = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[\x40-\x5a\x5c-\x5f])`)
+
+// logLine is a line of a boot log as the interface and a support bundle show it: its secrets taken
+// out, and without terminal escapes and control characters, which mean nothing outside a terminal
+// and which YAML refuses.
+func logLine(line string) string {
+	line = terminalEscape.ReplaceAllString(line, "")
+	line = strings.Map(func(r rune) rune {
+		if r != '\t' && unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, line)
+	return redact.Line(line)
 }
 
 // fitLines keeps the last of the lines that fit in bootLogSectionBytes.
@@ -309,7 +329,7 @@ func parseBootLogs(out string) []BootLogSection {
 			continue
 		}
 		if len(sections) > 0 {
-			lines = append(lines, redact.Line(l))
+			lines = append(lines, logLine(l))
 		}
 	}
 	flush()
