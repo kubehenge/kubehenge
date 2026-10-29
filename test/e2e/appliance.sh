@@ -78,6 +78,14 @@ delete() {
     request "$1" -X DELETE -H "X-Kubehenge-CSRF: $2" "$3"
 }
 
+# headlamp_post <cookie jar> <URL> <JSON> [curl arguments...]: a request that changes something, as
+# Headlamp's own pages post it, from their origin.
+headlamp_post() {
+    jar=$1 url=$2 json=$3
+    shift 3
+    request "${jar}" -H "Origin: ${headlamp}" -H 'Content-Type: application/json' -d "${json}" "$@" "${url}"
+}
+
 # upgrader_is <present|absent> <message>: checks whether Proxmox VE has the user automatic upgrades
 # of the management cluster act as.
 upgrader_is() {
@@ -324,25 +332,28 @@ step "the shared Headlamp's actions"
 until_true 120 "the plugins Headlamp ships in its plugin list" headlamp_offers_actions
 expect 200 "the app catalog" request "${work}/admin.jar" "${headlamp}/static-plugins/app-catalog/main.js"
 expect 200 "the Prometheus charts" request "${work}/admin.jar" "${headlamp}/static-plugins/prometheus/main.js"
-expect 403 "a chart from a path on the appliance" request "${work}/admin.jar" -H 'Content-Type: application/json' \
-    -d '{"name":"x","namespace":"default","chart":"/etc","version":"1","description":"x"}' \
-    "${headlamp}/clusters/clusters.e2e/helm/release/install?namespace=default"
-expect 403 "a Helm repository over HTTP" request "${work}/admin.jar" -H 'Content-Type: application/json' \
-    -d '{"name":"x","url":"http://charts.example"}' "${headlamp}/clusters/clusters.e2e/helm/repositories"
-expect 403 "a port forward" request "${work}/admin.jar" -H 'Content-Type: application/json' \
-    -d '{"namespace":"default","pod":"x","targetPort":"80"}' "${headlamp}/clusters/clusters.e2e/portforward"
+expect 403 "a chart from a path on the appliance" headlamp_post "${work}/admin.jar" \
+    "${headlamp}/clusters/clusters.e2e/helm/release/install?namespace=default" \
+    '{"name":"x","namespace":"default","chart":"/etc","version":"1","description":"x"}'
+expect 403 "a Helm repository over HTTP" headlamp_post "${work}/admin.jar" \
+    "${headlamp}/clusters/clusters.e2e/helm/repositories" '{"name":"x","url":"http://charts.example"}'
+expect 403 "a port forward" headlamp_post "${work}/admin.jar" \
+    "${headlamp}/clusters/clusters.e2e/portforward" '{"namespace":"default","pod":"x","targetPort":"80"}'
 
 step "Headlamp's log out of a cluster through the gate, and opening the cluster again"
 # Headlamp's frontend names the cluster in unpadded URL-safe base64 and posts JSON. The gate judges
 # a cluster by its pool, which the administrator holds on / whether or not the cluster exists.
 logout=${headlamp}/encoded-clusters/$(printf clusters.e2e | base64 -w0 | tr '+/' '-_' | tr -d '=')/clear-token
-expect 200 "Headlamp's log out" request "${work}/admin.jar" -D "${work}/headers" \
+# The interface's own port is another origin of the same site, which the session cookie reaches.
+expect 403 "Headlamp's log out from the interface's origin" request "${work}/admin.jar" \
+    -H "Origin: ${ui}" -H 'Content-Type: application/json' -d '{"token":null}' "${logout}"
+expect 403 "Headlamp's log out without an origin" request "${work}/admin.jar" \
     -H 'Content-Type: application/json' -d '{"token":null}' "${logout}"
+expect 200 "Headlamp's log out" headlamp_post "${work}/admin.jar" "${logout}" '{"token":null}' -D "${work}/headers"
 grep -qi '^set-cookie: headlamp-auth-clusterse2e\.0=;' "${work}/headers" ||
     fail "Headlamp's log out did not clear the cluster's token cookie"
 expect 403 "Headlamp's log out by GET" request "${work}/admin.jar" "${logout}"
-expect 404 "Headlamp's log out of a cluster the user does not see" request "${work}/user.jar" \
-    -H 'Content-Type: application/json' -d '{"token":null}' "${logout}"
+expect 404 "Headlamp's log out of a cluster the user does not see" headlamp_post "${work}/user.jar" "${logout}" '{"token":null}'
 expect 303 "opening the cluster from the interface" request "${work}/admin.jar" -D "${work}/headers" \
     "${headlamp}/kubehenge/open/clusters.e2e/pods"
 grep -qi '^location: /c/clusters\.e2e/pods' "${work}/headers" ||
