@@ -116,6 +116,14 @@ describe("the fleet", () => {
       }),
     ).toMatchObject({ group: "running", reason: "Add-on x installing" });
     expect(standing(base, { ...crashing, verdict: "healthy", attention: [] })).toMatchObject({ group: "healthy" });
+    // The backups view, not the health page, says why backups need a look.
+    expect(
+      standing(base, {
+        ...crashing,
+        attention: [{ severity: "error", section: "backups", what: "Last backup failed" }],
+        more: 0,
+      }),
+    ).toStrictEqual({ group: "needs", state: "error", reason: "Last backup failed", view: "backups" });
     // What is under way says more than the errors a rollout passes through.
     expect(standing(upgrading, { ...crashing, name: "db" })).toMatchObject({ group: "running" });
   });

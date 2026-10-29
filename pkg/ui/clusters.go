@@ -835,7 +835,8 @@ func (s *Server) mayCreate(w http.ResponseWriter, r *http.Request, u user, class
 	if takesSnapshots(req.Variables[csiVariable]) && !s.require(w, r, u, "/", privPermissionsModify) {
 		return false
 	}
-	if !s.allowGitOps(w, r, u, s.workloadPoolPath(), req.Variables[gitopsVariable], nil) {
+	if !s.allowGitOps(w, r, u, s.workloadPoolPath(), req.Variables[gitopsVariable], nil) ||
+		!s.allowBackupSources(w, r, u, cmp.Or(req.Namespace, s.Namespace), req.Variables["backups"], nil) {
 		return false
 	}
 	raw, ok := req.Variables[oidcVariable]
@@ -1205,6 +1206,8 @@ func (s *Server) allowVariable(w http.ResponseWriter, r *http.Request, u user, c
 		return !installsRancher(value) || installsRancher(old) || s.allowRancher(w, r, u, client.ObjectKeyFromObject(c))
 	case csiVariable:
 		return s.allowCSI(w, r, u, c, value, old)
+	case "backups":
+		return s.allowBackupSources(w, r, u, c.Namespace, value, old)
 	case oidcVariable:
 		return sameJSON(old, value) || s.allowOIDC(w, r, u, c, access, value, old)
 	case gitopsVariable:

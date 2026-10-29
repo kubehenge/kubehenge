@@ -204,10 +204,12 @@ function finding(h: FleetHealth | undefined): Standing | undefined {
   }
   const others = h.attention.length - 1 + (h.more ?? 0);
   const reason = others > 0 ? `${worst.what}, and ${others} more` : worst.what;
+  // The backups view, not the health page, has the details of the cluster's backups.
+  const view: View = worst.section === "backups" ? "backups" : "health";
   if (worst.severity === "progress") {
-    return { group: "running", state: "progress", reason, view: "health" };
+    return { group: "running", state: "progress", reason, view };
   }
-  return { group: "needs", state: worst.severity, reason, view: "health" };
+  return { group: "needs", state: worst.severity, reason, view };
 }
 
 const severity: Record<Standing["state"], number> = { error: 0, warning: 1, progress: 2, deleting: 3, ok: 4 };

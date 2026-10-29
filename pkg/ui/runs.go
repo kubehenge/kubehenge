@@ -325,6 +325,10 @@ func (s *Server) readVeleroRuns(ctx context.Context, u user, c *clusterv1.Cluste
 	var list []runView
 	for i := range view.Backups {
 		b := &view.Backups[i]
+		// Another cluster's backup is a run of that cluster's.
+		if b.From != "" {
+			continue
+		}
 		r := base
 		r.ID, r.Kind, r.What, r.By = "backup/"+clusterKey(c.Namespace, c.Name)+"/"+b.Name, runBackup, "Back up", b.By
 		if b.Scheduled {

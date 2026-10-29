@@ -18,7 +18,7 @@ import (
 // creation is held to the same: a node OS that cannot be built or whose CPU type no node it may
 // use offers, control planes too small for the cluster's workers, nodes without
 // the memory its add-ons use, logs without monitoring, backups to a target the class lacks or on
-// a schedule Velero cannot read, Rancher switched on beside another, or on nodes too small for it,
+// a schedule Velero cannot read or reading the backups of a cluster that has none in that target, Rancher switched on beside another, or on nodes too small for it,
 // a Rancher cluster's nodes made smaller than it needs, load-balancer addresses that clash with the
 // nodes' network or another cluster's, Datastore.Allocate on a storage that is not the cluster's
 // alone, volume snapshots where they cannot be taken, Sys.Audit on / where no cluster may hold it,
@@ -80,6 +80,8 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 		errs = append(errs, field.Forbidden(topology.Child("variables").Key(logsAddon), err.Error()))
 	}
 	if err := checkBackups(old, c, class); err != nil {
+		errs = append(errs, field.Invalid(topology.Child("variables").Key(backupsVariable), backupsVariable, err.Error()))
+	} else if err := checkBackupSources(ctx, v.Hooks.Reader, old, c); err != nil {
 		errs = append(errs, field.Invalid(topology.Child("variables").Key(backupsVariable), backupsVariable, err.Error()))
 	}
 	errs = append(errs, validateCertificates(c)...)

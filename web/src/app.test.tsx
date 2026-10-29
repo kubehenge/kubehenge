@@ -593,7 +593,14 @@ describe("create", () => {
     oidc: [],
     upgradeMode: "off",
     backups: false,
-    backupFields: { target: "", schedule: "0 2 * * *", timeZone: "UTC", retention: "7", volumes: "all" },
+    backupFields: {
+      target: "",
+      schedule: "0 2 * * *",
+      timeZone: "UTC",
+      retention: "7",
+      volumes: "all",
+      readFrom: [],
+    },
     backupOwnKey: true,
     backupKey: {},
   };

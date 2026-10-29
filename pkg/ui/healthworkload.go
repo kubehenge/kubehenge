@@ -17,6 +17,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -54,6 +55,11 @@ type workloadRead struct {
 	events        []corev1.Event
 	eventsErr     error
 	readyz        string
+	// velero is set once the cluster's backups were read; a cluster whose Velero cannot be read has
+	// its backups view say why.
+	velero         bool
+	veleroSchedule *unstructured.Unstructured
+	veleroBackups  []backupView
 }
 
 // unreachable tells whether the cluster was to be read and did not answer.
@@ -133,6 +139,18 @@ func (s *Server) readWorkload(ctx context.Context, kube client.Client, c *cluste
 		}
 		return err //nolint:wrapcheck // as above
 	})
+	if backupsOf(c).Enabled {
+		var veleroErr error
+		read(&veleroErr, func(ctx context.Context) error {
+			bw, _, err := s.reach(ctx, kube, c, provisioner.IdentityBackups)
+			if err != nil || bw == nil {
+				return err
+			}
+			wl.veleroSchedule, wl.veleroBackups, err = readBackupRuns(ctx, bw.Dynamic)
+			wl.velero = err == nil
+			return err
+		})
+	}
 	if w.Readyz != nil {
 		var readyzErr error
 		read(&readyzErr, func(ctx context.Context) error {

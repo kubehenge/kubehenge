@@ -284,8 +284,8 @@ func TestBackupIdentitiesGoWithBackups(t *testing.T) {
 		}
 		return made
 	}
-	if got := creates("kubehenge-backups"); !slices.Equal(got, []string{"backups"}) {
-		t.Errorf("the backups identity may create %v, want backups alone", got)
+	if got := creates("kubehenge-backups"); !slices.Equal(got, []string{"backups", "deletebackuprequests", "downloadrequests"}) {
+		t.Errorf("the backups identity may create %v, want backups and Velero's requests to delete one or download a file alone", got)
 	}
 	if got := creates("kubehenge-restores"); !slices.Equal(got, []string{"restores"}) {
 		t.Errorf("the restores identity may create %v, want restores alone", got)

@@ -402,6 +402,9 @@ func (r *Reconciler) addons(ctx context.Context, cluster *clusterv1.Cluster) (Ad
 			r.holdBackups(ctx, cluster, "BackupsInvalid", invalid.Error())
 		default:
 			addons.backupTarget = &target
+			if addons.backupSources, err = r.backupSources(ctx, cluster, &addons.Backups); err != nil {
+				return addons, "", err
+			}
 		}
 	}
 	refused, err := r.refuseRancher(ctx, cluster, addons.Rancher)
@@ -556,7 +559,7 @@ func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluste
 			wait = gatewayAPIWaits
 		case veleroProxy(cluster):
 			wait = func(ctx context.Context, c *clusterv1.Cluster) (bool, error) {
-				return r.backupsWait(ctx, c, &addons.Backups)
+				return r.backupsWait(ctx, c, &addons.Backups, addons.backupSources)
 			}
 		case snapshotClassProxy(cluster):
 			wait = r.snapshotClassWaits

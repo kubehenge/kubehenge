@@ -196,6 +196,8 @@ type Addons struct {
 	// backupTarget is the target the backups name, found in the cluster's class; nil while it is
 	// not, when Velero is neither installed nor removed.
 	backupTarget *BackupTarget
+	// backupSources are the clusters whose backups the cluster reads, of those it names, that it may.
+	backupSources []backupSource
 	// gitOpsFound is what the controller found for GitOps before writing the charts' values.
 	gitOpsFound gitOpsState
 	// talosServing is set when every controller manager and scheduler of a Talos cluster serves a
@@ -986,7 +988,7 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 		wanted = append(wanted, logsCharts(charts, distribution, addons.Logs)...)
 	}
 	if addons.Backups.Enabled && addons.backupTarget != nil {
-		wanted = append(wanted, chartProxy{veleroRelease, veleroRelease, VeleroNamespace, charts.Velero, veleroValues(charts, &addons.Backups, addons.backupTarget, cluster)})
+		wanted = append(wanted, chartProxy{veleroRelease, veleroRelease, VeleroNamespace, charts.Velero, veleroValues(charts, &addons.Backups, addons.backupTarget, cluster, addons.backupSources)})
 	}
 	if addons.PodSecurity.kyvernoOn() {
 		wanted = append(wanted,

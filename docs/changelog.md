@@ -4,6 +4,8 @@ Every release's changes, newest first. Versions follow [Semantic Versioning](htt
 
 ## [Unreleased]
 
+- **Backups, all through the interface.** A backup can be deleted before it runs out, once its name is typed (a Velero `DeleteBackupRequest`). A restore can pick its namespaces, its kinds of resources and whether the volumes' data comes back, and a finished restore lists Velero's errors and warnings by namespace. A cluster can read the backups of others of its namespace on the same target (the `backups` variable's `readFrom`), to restore them into it; one created reading another's restores that cluster's volumes' data too. The health page and the fleet say when the last backup failed or backups are overdue. See [Back up and restore](clusters.md#back-up-and-restore).
+
 ## [0.3.1] - 2026-10-28
 
 - capmox, which creates the clusters' VMs, is built from a later commit of its main branch. A machine whose VM needs no configuration change is started instead of being reported ready while its VM stays off, and a transient error while attaching the bootstrap ISO is retried instead of failing the machine for good.
