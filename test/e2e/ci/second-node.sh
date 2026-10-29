@@ -65,6 +65,7 @@ on pve2 sh -c 'ip addr del 172.20.99.1/24 dev vmbr0 && ip link set vmbr0 address
 
 # pvecm reports a failed creation task and still exits 0.
 on pve pvecm create kubehenge-e2e --link0 172.21.99.2
+# shellcheck disable=SC2310 # the file missing is the failure reported.
 on pve test -f /etc/pve/corosync.conf || {
     echo "pve made no cluster" >&2
     exit 1
