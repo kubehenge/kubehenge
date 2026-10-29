@@ -28,6 +28,28 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 			a.add(severityWarning, sectionNodes, "Certificates expire", provisioner.CertificatesSummary(cond.Message), cond.LastTransitionTime.Time)
 		}
 	}
+	if cond := trueCondition(c, provisioner.VMsCondition); cond != nil {
+		severity := severityWarning
+		if cond.Reason == provisioner.VMsIOError || cond.Reason == provisioner.VMsPanicked {
+			severity = severityError
+		}
+		a.add(severity, sectionNodes, vmTitles[cond.Reason], cond.Message, cond.LastTransitionTime.Time)
+	}
+	if cond := trueCondition(c, provisioner.StorageCondition); cond != nil {
+		severity, what := severityWarning, "Storage nearly full"
+		if cond.Reason == provisioner.StorageFull {
+			severity, what = severityError, "Storage full"
+		}
+		a.add(severity, sectionVolumes, what, provisioner.StorageSummary(cond.Message), cond.LastTransitionTime.Time)
+	}
+}
+
+// vmTitles name the worst state a cluster's VMs are in.
+var vmTitles = map[string]string{
+	provisioner.VMsIOError:  "VM disk error",
+	provisioner.VMsPanicked: "VM crashed",
+	provisioner.VMsStopped:  "VM stopped",
+	provisioner.VMsPaused:   "VM paused",
 }
 
 // trueCondition is the cluster's condition of that type while it is true, else nil.

@@ -157,7 +157,7 @@ func (p *Proxmox) ensureAccess(ctx context.Context, n Names, access Access) ([]p
 func (p *Proxmox) volumeOwners(ctx context.Context, n Names, held Credentials, members []poolMember) (map[int]string, error) {
 	owners := map[int]string{}
 	for _, m := range members {
-		if m.Type == "qemu" && m.Name == n.VolumeOwner {
+		if m.Type == guestQEMU && m.Name == n.VolumeOwner {
 			owners[m.VMID] = m.Node
 		}
 	}
@@ -549,7 +549,7 @@ type ownerConfig struct {
 // given, which spares listing every VM of the Proxmox VE cluster.
 func (p *Proxmox) isVolumeOwner(ctx context.Context, n Names, vmid int, created string, members []poolMember) (ownerFound, error) {
 	for _, m := range members {
-		if m.Type != "qemu" || m.VMID != vmid {
+		if m.Type != guestQEMU || m.VMID != vmid {
 			continue
 		}
 		found := ownerFound{node: m.Node}
@@ -683,7 +683,7 @@ func (p *Proxmox) waitTask(ctx context.Context, node, upid string, timeout time.
 		if err := p.Client.Get(ctx, path, &status); err != nil {
 			return fmt.Errorf("reading task %s: %w", upid, err)
 		}
-		if status.Status == "stopped" {
+		if status.Status == guestStopped {
 			if status.ExitStatus != "OK" {
 				return fmt.Errorf("task %s: %s", upid, status.ExitStatus)
 			}

@@ -316,7 +316,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	if err = o.addUpgrader(mgr, c, rancherMinors, remotes); err != nil {
 		return err
 	}
-	if err = o.addWatches(mgr, remotes); err != nil {
+	if err = o.addWatches(mgr, remotes, cloud.Client); err != nil {
 		return err
 	}
 	if err = o.addProbes(mgr); err != nil {
@@ -712,8 +712,9 @@ func (o *controllerOptions) addEtcd(mgr manager.Manager, conn *pve.Config, remot
 }
 
 // addWatches adds what looks at every cluster for what Cluster API does not see through: a roll of
-// a single control plane that stalled.
-func (o *controllerOptions) addWatches(mgr manager.Manager, remotes *provisioner.Remotes) error {
+// a single control plane that stalled, certificates about to run out, VMs that do not run and
+// storage nearly full.
+func (o *controllerOptions) addWatches(mgr manager.Manager, remotes *provisioner.Remotes, c *proxmox.Client) error {
 	rolls := &provisioner.RollWatch{
 		Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, APIs: remotes, Events: mgr.GetEventRecorder("kubehenge"),
 		Interval: time.Minute, StallAfter: o.r.StallAfter,
@@ -727,6 +728,13 @@ func (o *controllerOptions) addWatches(mgr manager.Manager, remotes *provisioner
 	}
 	if err := mgr.Add(certificates); err != nil {
 		return fmt.Errorf("the certificate watch: %w", err)
+	}
+	vms := &provisioner.VMWatch{
+		Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Proxmox: c, Events: mgr.GetEventRecorder("kubehenge"),
+		Interval: time.Minute,
+	}
+	if err := mgr.Add(vms); err != nil {
+		return fmt.Errorf("the VM watch: %w", err)
 	}
 	return nil
 }

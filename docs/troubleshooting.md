@@ -292,6 +292,19 @@ Kubehenge's controller holds a cluster's backups back, neither installing nor re
   - Reason `NotRenewed`: they run out within 30 days and nothing renewed them. The message says how for each: replace a machine whose replacement stalled once the rest of the cluster is healthy, look at the control-plane provider's log for a kubeconfig or talosconfig it did not renew, or rotate the cluster's CAs as the distribution documents.
 - **`NoDNS01Credential`**, "no DNS-01 credential is stored for the cluster (…): store one, or name an existing Secret": the `acme-dns01` issuer has no credential for the DNS provider, and the cluster's certificates wait. Type it in under the cluster's **Options**, take the one an administrator stored for every cluster (`dns01.sharedCredential`), or name a Secret of your own in `dns01.existingSecret` ([clusters.md](clusters.md#dns-providers)).
 
+### VMs that do not run, storage nearly full
+
+Kubehenge's controller looks every minute, with its own token, at the VMs of every cluster's machines whose node has joined, and at the storage in the cluster's `storage` variable. Both show on the cluster's Health page, and the fleet lists the cluster under what needs you.
+
+- **`VMsNotRunning`** on the Cluster, with **VM disk error**, **VM crashed**, **VM stopped** or **VM paused**: a VM has been out of the running state for 3 minutes, so a backup in suspend mode, a migration or a reboot does not count; neither does a VM Proxmox VE holds locked for a backup, migration, snapshot or clone. The message names each machine, its VM and node. The reason is the worst found:
+  - `IOError`: QEMU paused the VM because a disk write failed, most often on a full storage. Free space, or fix the disk, then resume the VM in Proxmox VE (`qm resume <vmid>`).
+  - `Panicked`: the guest's kernel crashed. Reset the VM (`qm reset <vmid>`), or delete its Machine to have it replaced.
+  - `Stopped`: someone or something stopped the VM. Start it (`qm start <vmid>`), or delete its Machine.
+  - `Paused`: the VM was paused or suspended by hand. Resume it.
+- **`StorageNearlyFull`**, with **Storage nearly full** (reason `NearlyFull`, 85% and more) or **Storage full** (reason `Full`, 95% and more): the cluster's storage, on a node its VMs run on, has that little space left. A thin storage can run out while every disk on it still has room, and QEMU then pauses each VM whose write finds none. Free space, or add capacity.
+
+A warning event of the condition's name records each start and change; `VMsRunning` and `StorageFreed` record the end.
+
 ### Autoscaling
 
 - **`AutoscalerNoRoom`**, "Proxmox VE has no node with the memory for a new worker of pool …: …": the new worker waits for room, and after 30 minutes the autoscaler gives the machine up and tries again. Free memory on the Proxmox VE nodes the cluster may use, or let it use more nodes ([clusters.md](clusters.md#autoscaling)).

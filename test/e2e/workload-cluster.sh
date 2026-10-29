@@ -3017,6 +3017,31 @@ if [ "${distribution}" != talos ]; then
     done
 fi
 
+step "a paused worker VM is reported, and the report cleared once it runs"
+# The health check would replace the worker once its node is not ready; skipping remediation keeps
+# the VM paused for as long as the report takes.
+worker=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name},!cluster.x-k8s.io/control-plane" -o jsonpath='{.items[0].metadata.name}')
+[ -n "${worker}" ] || fail "no worker machine to pause"
+infra=$(kubectl -n "${ns}" get machine "${worker}" -o jsonpath='{.spec.infrastructureRef.name}')
+vmid=$(kubectl -n "${ns}" get proxmoxmachine "${infra}" -o jsonpath='{.spec.virtualMachineID}')
+node=$(kubectl -n "${ns}" get proxmoxmachine "${infra}" -o jsonpath='{.status.proxmoxNode}')
+kubectl -n "${ns}" annotate "machine/${worker}" cluster.x-k8s.io/skip-remediation= > /dev/null
+pve_post "nodes/${node}/qemu/${vmid}/status/suspend"
+vms_paused() {
+    kubectl -n "${ns}" get "cluster/${name}" -o json | jq -e --arg m "${worker} (VM ${vmid} on ${node}) paused" \
+        '.status.conditions // [] | any(.type == "VMsNotRunning" and .status == "True" and .reason == "Paused" and (.message | startswith($m)))' > /dev/null &&
+        kubectl -n "${ns}" get events -o json | jq -e --arg n "${name}" 'any(.items[]; .reason == "VMsNotRunning" and .involvedObject.name == $n)' > /dev/null
+}
+until_true 600 "the Cluster saying VM ${vmid} of ${worker} is paused, with an event" vms_paused
+pve_post "nodes/${node}/qemu/${vmid}/status/resume"
+vms_running() {
+    kubectl -n "${ns}" get "cluster/${name}" -o json | jq -e '.status.conditions // [] | all(.type != "VMsNotRunning")' > /dev/null &&
+        kubectl -n "${ns}" get events -o json | jq -e --arg n "${name}" 'any(.items[]; .reason == "VMsRunning" and .involvedObject.name == $n)' > /dev/null
+}
+until_true 300 "the report cleared, with an event saying so" vms_running
+kubectl -n "${ns}" annotate "machine/${worker}" cluster.x-k8s.io/skip-remediation- > /dev/null
+until_true 600 "worker ${worker} ready again" sh -c "kubectl -n ${ns} get machine ${worker} -o json | jq -e '.status.conditions // [] | any(.type == \"Ready\" and .status == \"True\")' >/dev/null"
+
 case ${class} in
     kubehenge-rke2 | kubehenge-k3s)
         step "a worker whose certificates run out within 60 days is replaced"

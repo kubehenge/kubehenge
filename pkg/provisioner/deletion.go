@@ -124,12 +124,12 @@ func validateAbandon(old, c *clusterv1.Cluster) error {
 var deletionKinds = func() []schema.GroupKind {
 	var kinds []schema.GroupKind
 	for group, names := range map[string][]string{
-		clusterv1.GroupVersion.Group:      {"MachineDeployment", "MachineSet", "Machine"},
-		"controlplane.cluster.x-k8s.io":   {"KubeadmControlPlane", "RKE2ControlPlane", "KThreesControlPlane", "TalosControlPlane"},
-		"bootstrap.cluster.x-k8s.io":      {"KubeadmConfig", "RKE2Config", "KThreesConfig", "TalosConfig"},
-		"infrastructure.cluster.x-k8s.io": {"ProxmoxMachine", "ProxmoxCluster"},
-		"ipam.cluster.x-k8s.io":           {"IPAddressClaim", "IPAddress"},
-		"addons.cluster.x-k8s.io":         {"HelmReleaseProxy"},
+		clusterv1.GroupVersion.Group:    {"MachineDeployment", "MachineSet", "Machine"},
+		"controlplane.cluster.x-k8s.io": {"KubeadmControlPlane", "RKE2ControlPlane", "KThreesControlPlane", "TalosControlPlane"},
+		"bootstrap.cluster.x-k8s.io":    {"KubeadmConfig", "RKE2Config", "KThreesConfig", "TalosConfig"},
+		infrastructureGroup:             {"ProxmoxMachine", "ProxmoxCluster"},
+		"ipam.cluster.x-k8s.io":         {"IPAddressClaim", "IPAddress"},
+		"addons.cluster.x-k8s.io":       {"HelmReleaseProxy"},
 	} {
 		for _, kind := range names {
 			kinds = append(kinds, schema.GroupKind{Group: group, Kind: kind})

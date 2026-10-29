@@ -41,6 +41,16 @@ const haFieldOwner = client.FieldOwner("kubehenge-ha")
 // proxmoxMachineVersion is the capmox API the ClusterClasses create ProxmoxMachines with.
 const proxmoxMachineVersion = "v1alpha2"
 
+// infrastructureGroup is the API group of capmox's objects.
+const infrastructureGroup = "infrastructure.cluster.x-k8s.io"
+
+// What Proxmox VE's resource list says of a VM: its type, and whether it runs.
+const (
+	guestQEMU    = "qemu"
+	guestRunning = "running"
+	guestStopped = "stopped"
+)
+
 // HAComment marks the HA resources and rules of the cluster whose pool is given, and nothing else:
 // the controller changes no HA object without it.
 func HAComment(pool string) string { return haCommentPrefix + pool }

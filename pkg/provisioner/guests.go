@@ -69,7 +69,7 @@ func (g *ProxmoxGuests) locate(ctx context.Context, vmid int64) (string, bool, e
 	}
 	for _, vm := range vms {
 		if vm.VMID == vmid {
-			return vm.Node, vm.Status == "running", nil
+			return vm.Node, vm.Status == guestRunning, nil
 		}
 	}
 	return "", false, fmt.Errorf("VM %d is not there, or not one the restore token may see", vmid)
