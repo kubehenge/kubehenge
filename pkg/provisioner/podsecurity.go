@@ -49,7 +49,8 @@ type PodSecurityExempt struct {
 	RancherAgent []string `json:"rancherAgent"`
 }
 
-// For is the namespaces a cluster with CNI cni and addons exempts.
+// For is the namespaces a cluster running CNI cni, whether Kubehenge or its distribution installs
+// it, and addons exempts.
 func (e *PodSecurityExempt) For(cni string, addons *Addons) []string {
 	out := slices.Clone(e.Always)
 	for _, by := range []struct {

@@ -2016,7 +2016,13 @@ phase_is() {
         "$3") ;;
         Failed | FailedValidation | PartiallyFailed)
             wl -n velero get "$1" "$2" -o yaml >&2
-            wl -n velero logs deployment/velero --tail=100 >&2
+            # The Deployment's selector takes in the node agents' pods too, so by the server's own
+            # label; its CLI fetches what went wrong from the store.
+            velero_server=$(wl -n velero get pods -l name=velero -o name | head -n 1)
+            # shellcheck disable=SC2310 # what it prints is only for the reader; the test fails below.
+            wl -n velero exec "${velero_server}" -c velero -- /velero "$1" describe "$2" --details >&2 || true
+            # shellcheck disable=SC2310 # as above.
+            wl -n velero logs "${velero_server}" -c velero --tail=100 >&2 || true
             fail "$1 $2 ended ${phase}"
             ;;
         *) return 1 ;;
@@ -2723,12 +2729,25 @@ pod_memory "${work}/workload"
 echo "CPU requested with every add-on on:"
 pod_cpu "${work}/workload"
 
+if [ "${cni}" = calico ]; then
+    step "Calico's operator still reconciles, with every add-on's policies on"
+    calico_healthy() {
+        wl get tigerastatus calico -o json | jq -e '[.status.conditions[] | {(.type): .status}] | add | .Available == "True" and .Degraded == "False"' > /dev/null
+    }
+    until_true 300 "Calico available and not degraded" calico_healthy
+fi
+
 step "every add-on's image named by digest"
 # Every pod outside kube-system, which only the add-ons, their operators and these tests create,
-# and in kube-system the workloads of the releases Kubehenge installs.
+# and in kube-system the workloads of the releases Kubehenge installs. RKE2's own Calico runs outside
+# kube-system from images of RKE2's release, checked against its checksums as kube-system's are.
 releases=$(kubectl -n "${ns}" get helmreleaseproxies -l "cluster.x-k8s.io/cluster-name=${name}" -o json | jq -c '[.items[].spec.releaseName]')
-images=$(wl get pods -A -o json | jq -r '.items[] | select(.metadata.namespace != "kube-system") | .metadata as $m |
-    (.spec.initContainers // [])[], .spec.containers[] | "\($m.namespace)/\($m.name) \(.image)"')
+rke2_calico=false
+[ "${distribution}" = rke2 ] && [ "${cni}" = calico ] && rke2_calico=true
+images=$(wl get pods -A -o json | jq -r --argjson rke2_calico "${rke2_calico}" '.items[] | select(.metadata.namespace != "kube-system") | .metadata as $m |
+    (.spec.initContainers // [])[], .spec.containers[] |
+    select(($rke2_calico and ($m.namespace == "tigera-operator" or $m.namespace == "calico-system") and (.image | startswith("docker.io/rancher/mirrored-calico-"))) | not) |
+    "\($m.namespace)/\($m.name) \(.image)"')
 system_images=$(wl -n kube-system get deployments,daemonsets,statefulsets -o json | jq -r --argjson r "${releases}" '.items[] |
     select(.metadata.annotations["meta.helm.sh/release-name"] as $n | $r | index($n)) | .metadata as $m |
     (.spec.template.spec.initContainers // [])[], .spec.template.spec.containers[] | "kube-system/\($m.name) \(.image)"')

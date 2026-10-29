@@ -61,6 +61,30 @@ func TestKyvernoEnforcesTheChosenLevel(t *testing.T) {
 	}
 }
 
+func TestKyvernoLeavesTheDistributionsCalicoAlone(t *testing.T) {
+	t.Parallel()
+	calico := cluster(clusterv1.ClusterVariable{Name: "cni", Value: apiextensionsv1.JSON{Raw: []byte(`"calico"`)}})
+	proxies, err := helmChartProxies(calico, &testCharts, "rke2", "local-lvm", CNI{}, &Addons{PodSecurity: PodSecurity{Kyverno: "restricted"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range proxies {
+		if p.GetName() != "web-kyverno-policies" {
+			continue
+		}
+		values := map[string]any{}
+		if err := yaml.Unmarshal([]byte(lookup[string](t, p.Object, "spec", "valuesTemplate")), &values); err != nil {
+			t.Fatal(err)
+		}
+		exempt := lookup[[]any](t, values, "vpolExclude", "excludeNamespaces")
+		if !slices.Contains(exempt, any("tigera-operator")) || !slices.Contains(exempt, any("calico-system")) {
+			t.Errorf("policies leave alone %v, not RKE2's Calico", exempt)
+		}
+		return
+	}
+	t.Fatal("no Kyverno policies")
+}
+
 func TestPodSecurityExemptsOnlyWhatTheClusterRuns(t *testing.T) {
 	t.Parallel()
 	exempt := &testCharts.PodSecurityExempt

@@ -1033,9 +1033,15 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 		wanted = append(wanted, chartProxy{veleroRelease, veleroRelease, VeleroNamespace, charts.Velero, veleroValues(charts, &addons.Backups, addons.backupTarget, cluster)})
 	}
 	if addons.PodSecurity.kyvernoOn() {
+		// The CNI the cluster runs, not only one Kubehenge installs: RKE2's own Calico has its
+		// operator update calico-node in calico-system as Kubehenge's does.
+		runs, _, cniErr := optionalVariable[string](cluster, "cni")
+		if cniErr != nil {
+			return nil, cniErr
+		}
 		wanted = append(wanted,
 			chartProxy{kyvernoAddon, kyvernoAddon, kyvernoAddon, charts.Kyverno, kyvernoValues()},
-			chartProxy{kyvernoPolicies, kyvernoPolicies, kyvernoAddon, charts.KyvernoPolicies, kyvernoPolicyValues(addons.PodSecurity.Kyverno, charts.PodSecurityExempt.For(cni.Name, addons))},
+			chartProxy{kyvernoPolicies, kyvernoPolicies, kyvernoAddon, charts.KyvernoPolicies, kyvernoPolicyValues(addons.PodSecurity.Kyverno, charts.PodSecurityExempt.For(runs, addons))},
 		)
 	}
 	if addons.Istio.Enabled {
