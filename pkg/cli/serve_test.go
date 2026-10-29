@@ -125,7 +125,9 @@ func TestServeStopsCleanlyWhenItsContextEnds(t *testing.T) {
 	}
 }
 
-// A port the interface cannot have stops Headlamp's too, and the command with the reason.
+// A port the interface cannot have stops Headlamp's too, and the command with the reason, once
+// what serve started has stopped: Headlamp's first sync has written its kubeconfig, and nothing
+// writes after the process would have ended.
 func TestServeStopsWithTheFirstServerThatFails(t *testing.T) {
 	t.Parallel()
 	taken, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
@@ -141,6 +143,9 @@ func TestServeStopsWithTheFirstServerThatFails(t *testing.T) {
 	}
 	if err = o.serve(t.Context()); err == nil || !strings.Contains(err.Error(), "serving:") || !strings.Contains(err.Error(), taken.Addr().String()) {
 		t.Errorf("serve gave %v; want the taken address named", err)
+	}
+	if _, err = os.Stat(o.headlampKubeconfig); err != nil {
+		t.Errorf("serve returned before Headlamp's sync finished: %v", err)
 	}
 }
 

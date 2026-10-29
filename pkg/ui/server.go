@@ -158,14 +158,17 @@ const (
 	addressFailuresAllowed = 20
 )
 
-// Run prepares the server and prunes its sessions until ctx ends.
+// Run prepares the server and keeps its sessions, upgrades and Headlamp up to date until ctx ends,
+// returning once each of them has stopped.
 func (s *Server) Run(ctx context.Context) {
 	s.init()
-	go s.autoUpgrade(ctx)
+	var wg sync.WaitGroup
+	wg.Go(func() { s.autoUpgrade(ctx) })
 	if s.Headlamp != nil {
-		go s.syncHeadlamp(ctx, headlampSyncEvery)
+		wg.Go(func() { s.syncHeadlamp(ctx, headlampSyncEvery) })
 	}
 	s.sessions.pruneEvery(ctx, time.Minute)
+	wg.Wait()
 }
 
 // Handler returns the interface's routes.

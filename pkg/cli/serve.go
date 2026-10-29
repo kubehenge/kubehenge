@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -247,30 +248,34 @@ func (o *serveOptions) serve(ctx context.Context) error {
 	s := &o.s
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	go s.Run(ctx)
+	var wg sync.WaitGroup
+	wg.Go(func() { s.Run(ctx) })
 	if o.a.Dir != "" {
-		go o.a.RenewInterfaceToken(ctx)
+		wg.Go(func() { o.a.RenewInterfaceToken(ctx) })
 	}
 	servers := []*http.Server{newServer(o.listen, s.Handler(), interfaceRequestTimeout)}
 	if s.Headlamp != nil {
 		servers = append(servers, newServer(o.headlampListen, s.HeadlampHandler(), 0))
 	}
-	go func() {
+	wg.Go(func() {
 		<-ctx.Done()
 		shutdown, done := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 		defer done()
 		for _, srv := range servers {
 			_ = srv.Shutdown(shutdown)
 		}
-	}()
+	})
 	errs := make(chan error, len(servers))
 	for _, srv := range servers {
 		s.Log.Info("serving", "address", srv.Addr)
 		go func() { errs <- srv.ListenAndServeTLS(o.certFile, o.keyFile) }()
 	}
-	// The first to stop takes the others down with it.
+	// The first to stop takes the others down with it. The process ends when serve returns, so it
+	// waits for the servers' shutdown, which lets the requests under way finish, and for the loops
+	// that write the appliance's files.
 	err := <-errs
 	cancel()
+	wg.Wait()
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
