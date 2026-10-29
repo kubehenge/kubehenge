@@ -202,10 +202,10 @@ case "${test}" in
         ;;
     # The other tests run against a management cluster applied here first. The runner has 4 vCPUs,
     # and a workload cluster with every add-on starting starves when the management node holds 4 of
-    # its own beside it; with no provider upgrade to ride out, 2 do. Its memory likewise: the
-    # runner's 16 GiB hold every guest of a test in memory, at most 13 GiB beside the runner's own
-    # 2 GiB or so, only with a management node of 3 GiB, of which it uses about 2.2.
-    *) export TF_VAR_node_cores=2 TF_VAR_node_memory_mb=3072 ;;
+    # its own beside it; with no provider upgrade to ride out, 2 do. Its memory stays the module's
+    # default: with 3 GiB the node stalled for half a minute while the add-on provider
+    # reconciled every release at once, its probes failing, and the webhooks with them.
+    *) export TF_VAR_node_cores=2 ;;
 esac
 
 # The workload cluster tests back up to an S3 store they serve on this machine, at the address the
