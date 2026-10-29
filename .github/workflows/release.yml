@@ -123,7 +123,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write # Creates the release, uploads its files and publishes it.
-      actions: write # Starts the website's workflow, which publishes the new index where appliances read it.
+      actions: write # Starts the website's workflow, which publishes the index appliances read.
     env:
       VERSION: ${{ needs.build.outputs.version }}
       GH_TOKEN: ${{ github.token }}

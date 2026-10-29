@@ -36,7 +36,7 @@ on:
         description: The release key's seed, as `kubehenge release keygen` writes it
         required: true
       RELEASE_KEY_NEXT:
-        description: The seed of the key replacing it, while the release key is rotated (docs/releasing.md)
+        description: The seed of the key replacing it during a rotation (docs/releasing.md)
         required: false
 
 permissions: {}

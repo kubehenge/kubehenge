@@ -59,7 +59,8 @@ jobs:
           latest=$RUNNER_TEMP/latest
           archive=$latest/kubehenge_${version}_linux_amd64.tar.gz
           gh release download "$tag" --dir "$latest" --pattern index.json --pattern index.json.sig \
-            --pattern "kubehenge_${version}_linux_amd64.tar.gz" --pattern "kubehenge_${version}.intoto.jsonl"
+            --pattern "kubehenge_${version}_linux_amd64.tar.gz" \
+            --pattern "kubehenge_${version}.intoto.jsonl"
           gh attestation verify "$archive" --bundle "$latest/kubehenge_${version}.intoto.jsonl" \
             --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER" --source-ref "refs/tags/$tag" \
             --deny-self-hosted-runners
@@ -125,7 +126,8 @@ jobs:
   deploy:
     name: Deploy
     needs: build
-    if: ${{ !cancelled() && needs.build.result == 'success' && github.event_name != 'pull_request' }}
+    if: >-
+      ${{ !cancelled() && needs.build.result == 'success' && github.event_name != 'pull_request' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:

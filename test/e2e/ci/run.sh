@@ -37,7 +37,7 @@ to=$(sed -n 's/^ *kubernetes *= *"\(v[^"]*\)".*/\1/p' "${repo}/management-cluste
 # pinned <rke2|k3s> <version>: the newest release of the version's minor that the controller pins;
 # its nodes install no other.
 pinned() {
-    awk -v minor="$(printf '%s' "$2" | cut -d. -f1,2)." -v build="+$1" \
+    awk -v minor="${2%.*}." -v build="+$1" \
         'index($1, minor) == 1 && index($1, build) { print $1 }' "${repo}/pkg/provisioner/releasepins.txt" |
         sort -V | tail -n 1 | grep . || {
         echo "pkg/provisioner/releasepins.txt pins no $1 release of $2's minor version" >&2
