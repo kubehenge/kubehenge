@@ -51,6 +51,8 @@ type TemplateRefresh struct {
 	MissingOnly bool
 	// Planned, if set, is told the lines the run builds before it starts on them.
 	Planned func(lines []templates.Template)
+	// Retry builds a line again after it fails; its Log is the run's.
+	Retry templates.Retry
 }
 
 // Run builds, then collects the builds no longer needed. A line that fails to build leaves the
@@ -281,9 +283,11 @@ func refreshedRequests(clusters []refreshedCluster, builds map[string][]template
 // build makes a new build of a line, first removing what an earlier run that did not finish left.
 func (r *TemplateRefresh) build(ctx context.Context, line *templates.Template) error {
 	now := r.Now()
+	retry := r.Retry
+	retry.Log = r.logf
 	if !line.Refreshed() {
 		r.logf("making %s", line.Name)
-		vmid, err := r.Pool.Create(ctx, line)
+		vmid, err := retry.Do(ctx, line.Name, func(ctx context.Context) (int, error) { return r.Pool.Create(ctx, line) })
 		if err != nil {
 			return fmt.Errorf("making %s: %w", line.Name, err)
 		}
@@ -298,7 +302,7 @@ func (r *TemplateRefresh) build(ctx context.Context, line *templates.Template) e
 		return fmt.Errorf("naming the build of %s: %w", line.LineName, err)
 	}
 	r.logf("building %s", build.Name)
-	vmid, err := r.Pool.Create(ctx, &build)
+	vmid, err := retry.Do(ctx, build.Name, func(ctx context.Context) (int, error) { return r.Pool.Create(ctx, &build) })
 	if err != nil {
 		return fmt.Errorf("building %s: %w", build.Name, err)
 	}

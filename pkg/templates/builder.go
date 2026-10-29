@@ -498,7 +498,7 @@ func (b *Builder) checkNotInProgress(ctx context.Context, t *Template) error {
 			return err
 		}
 		if building(c, t) {
-			return fmt.Errorf("VM %d on %s is already named %s: another run is building it, or a failed run left it; wait, or remove it", r.VMID, r.Node, c.Name)
+			return lasting(fmt.Errorf("VM %d on %s is already named %s: another run is building it, or a failed run left it; wait, or remove it", r.VMID, r.Node, c.Name))
 		}
 	}
 	return nil
@@ -666,7 +666,7 @@ func (b *Builder) checkCPU(ctx context.Context, o NodeOS) error {
 		return fmt.Errorf("reading node %s's CPU: %w", b.Node, err)
 	}
 	if have := CPULevelOf(status.CPUInfo.Flags); have < need {
-		return fmt.Errorf("node %s's CPU reaches x86-64-v%d, and %s needs x86-64-v%d: build its templates on another node", b.Node, have, o, need)
+		return lasting(fmt.Errorf("node %s's CPU reaches x86-64-v%d, and %s needs x86-64-v%d: build its templates on another node", b.Node, have, o, need))
 	}
 	return nil
 }

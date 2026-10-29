@@ -151,6 +151,8 @@ The interface refuses a cluster whose template the controller does not find in t
 
 The error and the run's log are under VM templates on the Administration page, those of the weekly build under Automatic builds; `kubehenge template create` prints them. A failed run removes the VM it made, unless `--keep-on-failure` kept it for inspection.
 
+A build from the interface or the weekly build is tried three times, 2 and then 8 minutes apart, each failure in the log, unless another try would meet the same failure: a VM already of that name, a CPU too old, or a key other than the known one. A weekly build that still fails records a `TemplateBuildFailed` warning event on the ConfigMap `kubehenge-template-refresh`, with the error: `kubectl -n kubehenge-system get events --field-selector reason=TemplateBuildFailed`.
+
 - **"VM … on … is already named …: another run is building it, or a failed run left it; wait, or remove it":** a build of that template is under way, or a VM was left by one kept with `--keep-on-failure` or cut off before it could clean up. Once no build runs, delete that VM, which is not a template yet, and build again. The weekly build deletes such a VM itself once it is three hours old.
 - **"node …'s CPU reaches x86-64-v…, and … needs x86-64-v…: build its templates on another node":** the node OS needs a newer CPU level than that node's ([templates.md](templates.md#node-oses)). Build on a node whose CPU reaches it.
 - **"no storage on … takes ISO images":** the build VM's cloud-init data comes on an ISO. Allow the `iso` content type on a storage of that node, or choose one (**Cloud-init image** in the dialog, `--iso-storage` on the command line).
