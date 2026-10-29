@@ -1,0 +1,71 @@
+diff --git a/internal/service/taskservice/task.go b/internal/service/taskservice/task.go
+index 4fea307..375d3c9 100644
+--- a/internal/service/taskservice/task.go
++++ b/internal/service/taskservice/task.go
+@@ -123,6 +123,14 @@ func checkAndRetryTask(scope *scope.MachineScope, task *proxmox.Task) (bool, err
+ 			conditionReason = infrav1.ProxmoxMachineVirtualMachineProvisionedTaskFailedReason
+ 		}
+
++		// A failed clone leaves no VM under the ID it was given: Proxmox VE removes the clone's
++		// configuration when the clone fails, and writes none when another VM took the ID after
++		// the clone was accepted. Keeping the ID would make that other VM this machine's, to be
++		// deleted with it, so the next attempt clones again under an ID of its own.
++		if task.Type == "qmclone" {
++			scope.ProxmoxMachine.Spec.VirtualMachineID = nil
++		}
++
+ 		errorMessage := fmt.Sprintf("%s: %s", task.Type, task.ExitStatus)
+ 		if task.ExitStatus == "OK" {
+ 			// If you end up here, file a bug with go-proxmox.
+diff --git a/internal/service/taskservice/task_test.go b/internal/service/taskservice/task_test.go
+index 5eecae7..5f0743e 100644
+--- a/internal/service/taskservice/task_test.go
++++ b/internal/service/taskservice/task_test.go
+@@ -209,6 +209,7 @@ func TestReconcileInFlightTask_TaskSuccessful(t *testing.T) {
+ func TestReconcileInFlightTask_CloneTaskFailed(t *testing.T) {
+ 	machineScope, mockClient := setupTaskTest(t)
+ 	machineScope.ProxmoxMachine.Status.TaskRef = new("UPID:node1:001")
++	machineScope.SetVirtualMachineID(123)
+
+ 	// Set an initial condition to verify it gets overwritten.
+ 	conditions.Set(machineScope.ProxmoxMachine, metav1.Condition{
+@@ -233,12 +234,31 @@ func TestReconcileInFlightTask_CloneTaskFailed(t *testing.T) {
+ 	require.NotNil(t, cond)
+ 	require.Equal(t, infrav1.ProxmoxMachineVirtualMachineProvisionedTaskFailedReason, cond.Reason)
+ 	require.Contains(t, cond.Message, "ERROR: clone failed")
++
++	// The clone left no VM under its ID, which another VM may hold now.
++	require.Nil(t, machineScope.ProxmoxMachine.Spec.VirtualMachineID)
++}
++
++// A failed task other than a clone keeps the VM ID: its VM exists.
++func TestReconcileInFlightTask_TaskFailed_KeepsVMID(t *testing.T) {
++	machineScope, mockClient := setupTaskTest(t)
++	machineScope.ProxmoxMachine.Status.TaskRef = new("UPID:node1:001")
++	machineScope.SetVirtualMachineID(123)
++
++	task := &proxmox.Task{UPID: "UPID:node1:001", IsFailed: true, IsCompleted: true, Status: "stopped", ExitStatus: "ERROR: resize failed", Type: "resize"}
++	mockClient.EXPECT().GetTask(context.Background(), "UPID:node1:001").Return(task, nil).Once()
++
++	requeue, err := ReconcileInFlightTask(context.Background(), machineScope)
++	require.NoError(t, err)
++	require.True(t, requeue)
++	require.Equal(t, int64(123), machineScope.ProxmoxMachine.GetVirtualMachineID())
+ }
+
+ // Test ReconcileInflightTask on task failure switch case if qmstart (special case failure).
+ func TestReconcileInFlightTask_TaskFailed_QMStart(t *testing.T) {
+ 	machineScope, mockClient := setupTaskTest(t)
+ 	machineScope.ProxmoxMachine.Status.TaskRef = new("UPID:node1:001")
++	machineScope.SetVirtualMachineID(123)
+
+ 	// Set a pre-existing condition that should be preserved for qmstart.
+ 	conditions.Set(machineScope.ProxmoxMachine, metav1.Condition{
+@@ -258,6 +278,7 @@ func TestReconcileInFlightTask_TaskFailed_QMStart(t *testing.T) {
+ 	cond := conditions.Get(machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition)
+ 	require.NotNil(t, cond)
+ 	require.Equal(t, "WaitingForVMPowerUp", cond.Reason)
++	require.Equal(t, int64(123), machineScope.ProxmoxMachine.GetVirtualMachineID())
+ }
+
+ // Test ReconcileInflightTask on task failure switch case clears timed out task.
