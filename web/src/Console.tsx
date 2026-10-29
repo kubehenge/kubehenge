@@ -265,7 +265,7 @@ function TopBar({
       {!settingUp && (
         <>
           <nav className="nav" aria-label="Pages">
-            <Link to="/" current={path === "/" || path.startsWith("/clusters/")}>
+            <Link to="/" current={path === "/" || path === "/clusters" || path.startsWith("/clusters/")}>
               Clusters
             </Link>
             {canManage && (

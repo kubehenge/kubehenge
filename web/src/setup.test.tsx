@@ -702,6 +702,21 @@ describe("setup", () => {
     expect(screen.getByRole("main")).toHaveFocus();
   });
 
+  it("shows the cluster list at /clusters too", async () => {
+    window.history.replaceState(null, "", "/clusters");
+    fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c1" } },
+      "GET /api/setup": { body: { appliance: true, ready: true, allowed: false } },
+      "GET /api/clusters": { body: [] },
+    });
+    render(<App />);
+    await expect(screen.findByRole("heading", { name: "Clusters" })).resolves.toBeInTheDocument();
+    expect(within(screen.getByRole("navigation", { name: "Pages" })).getByRole("link", { name: "Clusters" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+  });
+
   it("asks for the earlier run's passphrase once when its state is still there", async () => {
     fakeServer({
       ...administrator,

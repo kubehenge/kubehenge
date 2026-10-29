@@ -67,8 +67,9 @@ export function routeAt(path: string, needsSetup: boolean | undefined, canManage
       key: clusterPath(namespace, name),
     };
   }
-  if (path === "/") {
-    return { route: { page: "list" }, title: "Clusters", key: path };
+  // Every cluster's address starts /clusters/, so the bare /clusters is where people look for the list.
+  if (path === "/" || path === "/clusters") {
+    return { route: { page: "list" }, title: "Clusters", key: "/" };
   }
   if (path.startsWith("/runs/") && path.length > "/runs/".length) {
     return { route: { page: "run", id: path.slice("/runs/".length) }, title: "Run", key: path };

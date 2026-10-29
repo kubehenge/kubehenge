@@ -1153,6 +1153,129 @@ button.go {
   width: 120px;
 }
 
+/* The fleet table fits the room the rails leave it: a long name is cut, then the endpoint (on
+   every cluster's own page) goes, and on a phone each cluster becomes a card. */
+.fleet-table {
+  container: fleet / inline-size;
+  overflow-x: auto;
+}
+
+.fleet-name > span {
+  display: block;
+  max-width: 30ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The whole row or card opens its cluster, not just the name. */
+.fleet-table tr {
+  position: relative;
+}
+
+.fleet-name a::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+/* Above the row's link, so its title still tells when and by whom. */
+.fleet-age {
+  position: relative;
+  z-index: 1;
+}
+
+@container fleet (width < 1000px) {
+  .fleet-table .fleet-endpoint {
+    display: none;
+  }
+}
+
+@container fleet (width < 640px) {
+  .fleet-table :is(table, tbody) {
+    display: block;
+  }
+
+  .fleet-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .fleet-table tr {
+    display: grid;
+    grid-template:
+      "name name name age" auto
+      "status status status status" auto
+      "version version version version" auto
+      "plane workers . ." auto
+      / max-content max-content minmax(0, 1fr) auto;
+    gap: 6px 16px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .fleet-table tbody tr:last-child {
+    border-bottom: none;
+  }
+
+  .fleet-table td {
+    display: block;
+    padding: 0;
+    border: none;
+    min-width: 0;
+  }
+
+  .fleet-table td.state {
+    min-width: 0;
+  }
+
+  .fleet-name {
+    grid-area: name;
+  }
+
+  .fleet-name > span {
+    max-width: none;
+  }
+
+  .fleet-age {
+    grid-area: age;
+    color: var(--dim);
+  }
+
+  .fleet-status {
+    grid-area: status;
+  }
+
+  .fleet-version {
+    grid-area: version;
+  }
+
+  .fleet-version .hint {
+    display: inline;
+    margin-left: 8px;
+  }
+
+  .fleet-table td[data-label] {
+    text-align: left;
+  }
+
+  .fleet-table td[data-label="Control plane"] {
+    grid-area: plane;
+  }
+
+  .fleet-table td[data-label="Workers"] {
+    grid-area: workers;
+  }
+
+  .fleet-table td[data-label]::before {
+    content: attr(data-label) " ";
+    color: var(--dim);
+  }
+}
+
 /* Forms */
 
 .field {

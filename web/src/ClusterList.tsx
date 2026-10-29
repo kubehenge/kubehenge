@@ -77,7 +77,7 @@ function Clusters({
     return <p className="muted pad">No clusters yet. Seeing one needs VM.Audit on its pool.</p>;
   }
   return (
-    <div className="scroll">
+    <div className="fleet-table">
       <table className="grid">
         <thead>
           <tr>
@@ -86,39 +86,42 @@ function Clusters({
             <th>Kubernetes</th>
             <th className="number">Control plane</th>
             <th className="number">Workers</th>
-            <th>Endpoint</th>
-            <th>Age</th>
+            <th className="fleet-endpoint">Endpoint</th>
+            <th className="fleet-age">Age</th>
           </tr>
         </thead>
         <tbody>
           {clusters.map((c) => {
             const s = standing(c, found?.get(fleetKey(c)));
+            const id = `${c.namespace}/${c.name}`;
             return (
-              <tr key={`${c.namespace}/${c.name}`}>
-                <td className="id nowrap">
-                  {c.namespace !== "default" && <span className="muted">{c.namespace}/</span>}
-                  <Link to={clusterPath(c.namespace, c.name)}>{c.name}</Link>
+              <tr key={id}>
+                <td className="id fleet-name">
+                  <span title={id}>
+                    {c.namespace !== "default" && <span className="muted">{c.namespace}/</span>}
+                    <Link to={clusterPath(c.namespace, c.name)}>{c.name}</Link>
+                  </span>
                 </td>
-                <td className="state">
+                <td className="state fleet-status">
                   <StatusBadge cluster={c} />
                   {s.group !== "healthy" && s.reason !== health(c).text && <div className="hint">{s.reason}</div>}
                 </td>
-                <td className="nowrap">
+                <td className="nowrap fleet-version">
                   <span className="id">{c.version}</span>
                   <div className="hint">
                     {distributionName(c.distribution)}
                     {c.talos && ` ${c.talos.version}`}
                   </div>
                 </td>
-                <td className="number">
+                <td className="number" data-label="Control plane">
                   {c.controlPlane.ready}/{c.controlPlane.desired}
                 </td>
-                <td className="number">
+                <td className="number" data-label="Workers">
                   {c.workers.ready}/{c.workers.desired}
                 </td>
-                <td className="id nowrap">{c.endpoint ?? ""}</td>
+                <td className="id nowrap fleet-endpoint">{c.endpoint ?? ""}</td>
                 <td
-                  className="nowrap"
+                  className="nowrap fleet-age"
                   title={`${new Date(c.created).toLocaleString()}${filled(c.createdBy) ? ` by ${c.createdBy}` : ""}`}
                 >
                   {age(c.created)}
