@@ -57,7 +57,7 @@ describe("management cluster backups", () => {
 
     await user.click(await screen.findByRole("button", { name: "Set up…" }));
     const dialog = screen.getByRole("dialog", {
-      name: "Back up the management cluster",
+      name: "Set up etcd backups",
     });
     const save = within(dialog).getByRole("button", { name: "Save" });
     await user.selectOptions(within(dialog).getByLabelText("Target"), "minio");
@@ -159,7 +159,7 @@ describe("management cluster backups", () => {
       }),
     );
     const dialog = screen.getByRole("dialog", {
-      name: "Restore the management cluster's etcd",
+      name: "Restore etcd snapshot",
     });
     expect(within(dialog).getByText(/Wipes etcd on every control-plane node/u)).toBeInTheDocument();
     const restore = within(dialog).getByRole("button", { name: "Restore" });

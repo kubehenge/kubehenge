@@ -202,7 +202,7 @@ function Snapshots({ running }: { running: boolean }): JSX.Element {
                 <button
                   type="button"
                   disabled={running}
-                  title={running ? "A run of the management cluster is going on." : undefined}
+                  title={running ? "Run under way" : undefined}
                   aria-label={`Restore from ${s.name}`}
                   onClick={() => setRestoring(s)}
                 >
@@ -266,7 +266,7 @@ function SetUpDialog({
   };
   return (
     <Dialog
-      title={s === undefined ? "Back up the management cluster" : "Change the management cluster's backups"}
+      title={s === undefined ? "Set up etcd backups" : "Change etcd backups"}
       onClose={onClose}
       onSubmit={() => {
         void submit();
@@ -390,7 +390,7 @@ function RestoreDialog({ snapshot: s, onClose }: { snapshot: EtcdSnapshot; onClo
   }
   return (
     <Dialog
-      title="Restore the management cluster's etcd"
+      title="Restore etcd snapshot"
       onClose={onClose}
       onSubmit={() => {
         void submit();
