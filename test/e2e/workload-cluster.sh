@@ -124,8 +124,18 @@ recorder_pid=
 ha_rule=''
 ha_vmid=''
 ha_node=''
+# calico_state: what the Tigera operator says of the cluster's Calico, which no collected log keeps
+# while the operator runs without restarts.
+calico_state() {
+    [ "${KUBEHENGE_E2E_CNI:-}" = calico ] || return 0
+    kubectl -n "${ns}" get secret "${name}-kubeconfig" -o jsonpath='{.data.value}' 2> /dev/null | base64 -d > "${work}/state" || return 0
+    printf '\nCalico:\n'
+    KUBECONFIG=${work}/state kubectl get tigerastatus -o wide 2>&1 || true
+    KUBECONFIG=${work}/state kubectl -n tigera-operator logs deployment/tigera-operator --tail=40 2>&1 || true
+}
 cleanup() {
     status=$?
+    [ "${status}" -eq 0 ] || calico_state
     [ -z "${issuer_pid}" ] || kill "${issuer_pid}" 2> /dev/null || true
     [ -z "${grafana_pid}" ] || kill "${grafana_pid}" 2> /dev/null || true
     [ -z "${s3_pid}" ] || kill "${s3_pid}" 2> /dev/null || true
