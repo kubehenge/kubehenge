@@ -64,6 +64,28 @@ rules:
   - apiGroups: [events.k8s.io]
     resources: [events]
     verbs: [create, patch]
+  # A cluster being deleted is listed for what of it holds the deletion up. Abandoning a deletion,
+  # which an administrator asks for on the Cluster, deletes what of the cluster is left and takes
+  # the finalizers off what does not finish; the controller already deletes a cluster's machines,
+  # and patching its Cluster reaches everything else of it through the topology.
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [machinedeployments, machinesets, machines]
+    verbs: [list, patch, delete]
+  - apiGroups: [controlplane.cluster.x-k8s.io]
+    resources: [kubeadmcontrolplanes, rke2controlplanes, kthreescontrolplanes, taloscontrolplanes]
+    verbs: [list, patch, delete]
+  - apiGroups: [bootstrap.cluster.x-k8s.io]
+    resources: [kubeadmconfigs, rke2configs, kthreesconfigs, talosconfigs]
+    verbs: [list, patch, delete]
+  - apiGroups: [infrastructure.cluster.x-k8s.io]
+    resources: [proxmoxmachines, proxmoxclusters]
+    verbs: [list, patch, delete]
+  - apiGroups: [ipam.cluster.x-k8s.io]
+    resources: [ipaddressclaims, ipaddresses]
+    verbs: [list, patch, delete]
+  - apiGroups: [addons.cluster.x-k8s.io]
+    resources: [helmreleaseproxies]
+    verbs: [list, patch, delete]
   # Marking its own ExtensionConfig has Cluster API rediscover the hooks a new version serves.
   - apiGroups: [runtime.cluster.x-k8s.io]
     resources: [extensionconfigs]
@@ -269,7 +291,7 @@ spec:
             - --offer-ha-rules
             {{- end }}
             - --node-image-soak={{ .Values.templateRefresh.soakHours }}h
-            - --roll-stall-after={{ .Values.watch.rollStallMinutes }}m
+            - --stall-after={{ .Values.watch.stallMinutes }}m
             {{- if .Values.templateRefresh.enabled }}
             - --template-refresh
             {{- end }}

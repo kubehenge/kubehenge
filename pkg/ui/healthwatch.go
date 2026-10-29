@@ -18,6 +18,9 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 		}
 		a.add(severity, sectionControlPlane, "Control-plane roll stalled", provisioner.RollStallHead(cond.Message), cond.LastTransitionTime.Time)
 	}
+	if cond := trueCondition(c, provisioner.DeletionStalledCondition); cond != nil && !provisioner.Abandoned(c) {
+		a.add(severityWarning, sectionClusterAPI, "Deletion stalled", provisioner.DeletionStallHead(cond.Message), cond.LastTransitionTime.Time)
+	}
 }
 
 // trueCondition is the cluster's condition of that type while it is true, else nil.

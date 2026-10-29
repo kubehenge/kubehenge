@@ -5,6 +5,7 @@ import { AutoscalerDialog, ScaleDialog, autoscalerText, poolText } from "./Autos
 import { BackupsDialog, BackupsView, backupsOf, backupsRows, useClassTargets } from "./Backups";
 import { issuesFromCA, saveCA } from "./Certificates";
 import { OptionDialog, Options, type OptionAction, type OptionRow } from "./ClusterOptions";
+import { Deleting } from "./Deletion";
 import { EtcdSnapshotsDialog, EtcdSnapshotsView, etcdSnapshotsOf, etcdSnapshotsRows } from "./EtcdSnapshots";
 import { HealthView } from "./Health";
 import { Machines, Placement } from "./Machines";
@@ -140,6 +141,14 @@ function whyNot(c: Cluster): string | undefined {
   return c.allowed.change ? undefined : `Changing it needs VM.Allocate on pool ${poolName(c.pool)}.`;
 }
 
+// PageNote says why the actions are off, except while deleting, where the deletion's own section does.
+function PageNote({ cluster, why }: { cluster: Cluster; why: string | undefined }) {
+  if (why === undefined || cluster.deleting) {
+    return null;
+  }
+  return <p className="muted page-note">{why}</p>;
+}
+
 export function ClusterDetail({
   namespace,
   name,
@@ -269,9 +278,15 @@ export function ClusterDetail({
             </button>
           </div>
         </div>
-        {why !== undefined && <p className="muted page-note">{why}</p>}
+        <PageNote cluster={c} why={why} />
         <ErrorBox message={error} />
         <ErrorBox message={downloadError} />
+        <Deleting
+          cluster={c}
+          onAbandoned={() => {
+            void reload();
+          }}
+        />
         <RollStalled
           cluster={c}
           why={why}

@@ -3037,8 +3037,38 @@ pve -X POST "${KUBEHENGE_PROXMOX_URL}/api2/json/nodes/${node}/qemu/${vmid}/statu
 until_true 1800 "machine ${machine} replaced" absent kubectl -n "${ns}" get machine "${machine}"
 workers 1
 
-step "delete"
-creator -n "${ns}" delete "cluster/${name}" --wait --timeout=30m
+step "delete, held up by a worker, reported stalled and abandoned"
+# A finalizer of the test's own holds a worker Machine, as a drain that never ends would. Cluster
+# API deletes its VM, and then waits for the Machine before it deletes the control plane.
+hold=e2e.kubehenge.dev/hold
+worker=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name},!cluster.x-k8s.io/control-plane" -o jsonpath='{.items[0].metadata.name}')
+[ -n "${worker}" ] || fail "no worker machine to hold the deletion up with"
+kubectl -n "${ns}" patch "machine/${worker}" --type json -p "[{\"op\":\"add\",\"path\":\"/metadata/finalizers/-\",\"value\":\"${hold}\"}]" > /dev/null
+creator -n "${ns}" delete "cluster/${name}" --wait=false
+# deletion_holds: the deletion's status names the held Machine and the test's finalizer.
+deletion_holds() {
+    kubectl -n "${ns}" get "cluster/${name}" -o json | jq -e --arg m "${worker}" --arg h "${hold}" \
+        '.metadata.annotations["kubehenge.dev/deletion-status"] // "{}" | fromjson | .waiting // [] | any(.kind == "Machine" and .name == $m and ((.finalizers // []) | index($h)))' > /dev/null
+}
+until_true 600 "the deletion's status naming ${worker}" deletion_holds
+deletion_stalled() {
+    kubectl -n "${ns}" get "cluster/${name}" -o json | jq -e '.status.conditions // [] | any(.type == "DeletionStalled" and .status == "True")' > /dev/null &&
+        kubectl -n "${ns}" get events -o json | jq -e --arg n "${name}" 'any(.items[]; .reason == "DeletionStalled" and .involvedObject.name == $n)' > /dev/null
+}
+until_true 600 "the deletion reported stalled, with an event" deletion_stalled
+kubectl -n "${ns}" get "cluster/${name}" -o json | jq -r '.status.conditions[] | select(.type == "DeletionStalled") | .message'
+if kubectl -n "${ns}" annotate "cluster/${name}" "kubehenge.dev/abandon-deletion=not-${name}" > /dev/null 2>&1; then
+    fail "the abandonment was taken with another cluster's name"
+fi
+kubectl -n "${ns}" annotate "cluster/${name}" "kubehenge.dev/abandon-deletion=${name}" > /dev/null
+kubectl -n "${ns}" wait --for=delete "cluster/${name}" --timeout=15m
+# Every VM could still be deleted within the grace, so nothing is left behind; the checks below
+# hold the abandoned deletion to that.
+abandoned=$(kubectl -n "${ns}" get events -o json)
+printf '%s' "${abandoned}" | jq -e --arg n "${name}" 'any(.items[]; .reason == "AbandoningDeletion" and .involvedObject.name == $n)' > /dev/null ||
+    fail "no AbandoningDeletion event"
+left=$(printf '%s' "${abandoned}" | jq -r --arg n "${name}" '.items[] | select(.reason == "LeftBehind" and .involvedObject.name == $n) | .note // .message')
+[ -z "${left}" ] || fail "the abandoned deletion left behind: ${left}"
 # A failed request is not an empty list.
 # shellcheck disable=SC2310 # polled; a failed request leaves the pool counted as there.
 pool_removed() { pools=$(pve_get pools) && ! printf '%s' "${pools}" | jq -e --arg p "${pool}" '.data[] | select(.poolid == $p)' > /dev/null; }

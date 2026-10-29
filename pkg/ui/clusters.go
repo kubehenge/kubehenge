@@ -204,6 +204,9 @@ type clusterView struct {
 	Talos *talosView `json:"talos,omitempty"`
 	// Recovery is the last recovery of the control plane from a stalled roll, or the one running.
 	Recovery *provisioner.EtcdRestoreStatus `json:"recovery,omitempty"`
+	// Deletion is what the cluster's deletion waits on, while it is being deleted, since DeletedAt.
+	Deletion  *provisioner.DeletionStatus `json:"deletion,omitempty"`
+	DeletedAt *metav1.Time                `json:"deletedAt,omitempty"`
 }
 
 // talosView is how a Talos cluster's nodes are upgraded in place to its Talos release.
@@ -348,6 +351,10 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 	}
 	if st, ok := provisioner.EtcdRestoreStatusOf(c); ok && st.Reset {
 		v.Recovery = &st
+	}
+	if !c.DeletionTimestamp.IsZero() {
+		st := provisioner.DeletionStatusOf(c)
+		v.Deletion, v.DeletedAt = &st, c.DeletionTimestamp
 	}
 	return v
 }

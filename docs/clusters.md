@@ -491,6 +491,8 @@ Otherwise **Restore…** lists the steps for the chosen snapshot, with the comma
 
 Deleting the cluster that runs Rancher first removes every registered cluster from Rancher.
 
+While the cluster is being deleted, its page lists what the deletion waits on: each object whose finalizer holds it, with what that object reports, such as a node drain a disruption budget refuses, or a VM on a node that is offline. A deletion that waits longer than it should is reported stalled, and one that can never finish can be abandoned ([troubleshooting.md](troubleshooting.md#a-cluster-does-not-finish-deleting)).
+
 ## Who may do what
 
 The interface checks the signed-in user's Proxmox VE privileges on each cluster's pool, then acts with its own account in the management cluster. Clusters are shared with the same ACLs as VMs.

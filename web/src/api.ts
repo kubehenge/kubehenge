@@ -199,6 +199,8 @@ export interface Api {
   controlPlaneRecovery: (ns: string, name: string, machine: string) => Promise<ControlPlaneRecovery>;
   /** recoverControlPlane asks the controller to reset etcd to machine's own and replace the other control planes. */
   recoverControlPlane: (cluster: ClusterRef, ask: { machine: string; confirm: string }) => Promise<void>;
+  /** abandonDeletion has the controller give up on what the cluster's deletion waits for. */
+  abandonDeletion: (cluster: ClusterRef, confirm: string) => Promise<void>;
 
   setupStatus: () => Promise<SetupStatus>;
   /** rootPassword is root@pam's for volume snapshots; empty keeps the one stored. */
@@ -274,6 +276,8 @@ export const api: Api = {
     request("GET", `${clusterPath(ns, name)}/control-plane-recovery?machine=${encodeURIComponent(machine)}`),
   recoverControlPlane: (cluster, ask) =>
     act("POST", `${clusterPath(cluster.namespace, cluster.name)}/control-plane-recovery`, ask),
+  abandonDeletion: (cluster, confirm) =>
+    act("POST", `${clusterPath(cluster.namespace, cluster.name)}/abandon-deletion`, { confirm }),
 
   setupStatus: () => request("GET", "/api/setup"),
   setup: (settings, passphrase, rootPassword) =>

@@ -385,6 +385,19 @@ export interface Cluster {
   talos?: TalosStatus;
   /** The last recovery of the control plane from a stalled roll: etcd reset to one machine's own. */
   recovery?: EtcdRestoreStatus;
+  /** What the cluster's deletion waits on, while it is being deleted, since deletedAt. */
+  deletion?: DeletionStatus;
+  deletedAt?: string;
+}
+
+/** DeletionStatus is what a cluster's deletion waits on, and what abandoning it leaves behind. */
+export interface DeletionStatus {
+  waiting?: { kind: string; name: string; finalizers?: string[]; reason?: string }[];
+  /** What abandoning the deletion would leave behind, should it not finish. */
+  mayLeave?: string[];
+  /** When the controller took up the abandonment. */
+  abandoned?: string;
+  leftBehind?: string[];
 }
 
 /** A Talos cluster's nodes, upgraded in place to its Talos release one at a time. */

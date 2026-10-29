@@ -237,6 +237,7 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/etcd-restores", s.managed(s.restoreEtcd))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/control-plane-recovery", s.managed(s.controlPlaneRecovery))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/control-plane-recovery", s.managed(s.recoverControlPlane))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/abandon-deletion", s.managed(s.abandonDeletion))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.clusterCredential))
 	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.storeClusterCredential))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.removeClusterCredential))

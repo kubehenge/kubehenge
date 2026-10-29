@@ -48,8 +48,11 @@ func (*ClusterValidator) ValidateDelete(context.Context, *clusterv1.Cluster) (ad
 }
 
 func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Cluster) (admission.Warnings, error) {
-	if !Owns(c, v.Hooks.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
+	if !Owns(c, v.Hooks.ClassNamespace) {
 		return nil, nil
+	}
+	if err := validateAbandon(old, c); err != nil || !c.DeletionTimestamp.IsZero() {
+		return nil, err
 	}
 	r, err := rancherOf(c)
 	if err != nil {

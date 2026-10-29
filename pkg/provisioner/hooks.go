@@ -122,7 +122,8 @@ func (h *Hooks) BeforeClusterUpgrade(ctx context.Context, req *runtimehooksv1.Be
 // clean up inside it; for Rancher's own cluster, every cluster registered with it first.
 func (h *Hooks) BeforeClusterDelete(ctx context.Context, req *runtimehooksv1.BeforeClusterDeleteRequest, resp *runtimehooksv1.BeforeClusterDeleteResponse) {
 	resp.Status = runtimehooksv1.ResponseStatusSuccess
-	if !Owns(&req.Cluster, h.ClassNamespace) || h.Registrar == nil {
+	// An abandoned deletion waits for Rancher no longer, and leaves the registration behind.
+	if !Owns(&req.Cluster, h.ClassNamespace) || h.Registrar == nil || Abandoned(&req.Cluster) {
 		return
 	}
 	done, err := h.Registrar.BeforeDelete(ctx, &req.Cluster)

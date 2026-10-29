@@ -106,6 +106,12 @@ function rollout(what: string, r: Replicas): string {
  */
 export function standing(c: Cluster, health?: FleetHealth, now = Date.now()): Standing {
   if (c.deleting) {
+    if (
+      c.deletion?.abandoned === undefined &&
+      c.conditions.some((x) => x.type === "DeletionStalled" && x.status === "True")
+    ) {
+      return { group: "needs", state: "warning", reason: "Deletion stalled", view: "" };
+    }
     return { group: "running", state: "deleting", reason: "Being deleted", view: "" };
   }
   return (

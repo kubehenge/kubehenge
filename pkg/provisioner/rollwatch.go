@@ -43,10 +43,10 @@ func RollStallHead(message string) string {
 	return head
 }
 
-// RollStallAfter is how long a successor may take to become ready before its roll counts as
-// stalled: the health checks' own startup timeout, after which they would have replaced it if they
-// could.
-const RollStallAfter = 20 * time.Minute
+// DefaultStallAfter is how long a successor may take to become ready before its roll counts as
+// stalled, the health checks' own startup timeout, after which they would have replaced it if they
+// could; and how long a cluster's deletion may wait, several times what one takes.
+const DefaultStallAfter = 20 * time.Minute
 
 // RollWatch looks at every cluster with one control plane for a roll that stalled, and says so on
 // the Cluster: RollStalledCondition, and a Warning event when it starts. The way out is a reset of
@@ -60,7 +60,7 @@ type RollWatch struct {
 	Events events.EventRecorder
 	// Interval is how often the clusters are looked at.
 	Interval time.Duration
-	// StallAfter is how long a successor may take; RollStallAfter when 0.
+	// StallAfter is how long a successor may take; DefaultStallAfter when 0.
 	StallAfter time.Duration
 	Now        func() time.Time
 }
@@ -152,7 +152,7 @@ func (w *RollWatch) stalledRoll(ctx context.Context, c *clusterv1.Cluster) (roll
 		return roll{}, false, fmt.Errorf("listing the control-plane machines: %w", err)
 	}
 	r, ok := rollPair(machines.Items)
-	if !ok || machineReady(r.successor) || w.now().Sub(r.successor.CreationTimestamp.Time) < cmp.Or(w.StallAfter, RollStallAfter) {
+	if !ok || machineReady(r.successor) || w.now().Sub(r.successor.CreationTimestamp.Time) < cmp.Or(w.StallAfter, DefaultStallAfter) {
 		return roll{}, false, nil
 	}
 	return r, true, nil

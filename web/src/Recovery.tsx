@@ -55,17 +55,17 @@ export function RollStalled({
   // Recover takes what an etcd restore takes: Sys.Modify on the pool, which the kubeconfig needs too.
   const allowed = c.allowed.kubeconfig && !c.deleting;
   return (
-    <section aria-label="Stalled control-plane roll" className={`roll-stalled ${down ? "roll-down" : "roll-held"}`}>
-      <p className="roll-title">{down ? "Control-plane roll stalled, API down" : "Control-plane roll stalled"}</p>
+    <section aria-label="Stalled control-plane roll" className={down ? "callout callout-error" : "callout"}>
+      <p className="callout-title">{down ? "Control-plane roll stalled, API down" : "Control-plane roll stalled"}</p>
       {successor !== undefined && (
-        <p className="roll-said">
+        <p className="callout-said">
           <span className="id">{successor.name}</span> not ready for {age(successor.created)}.
         </p>
       )}
-      <div className="roll-actions">
+      <div className="callout-actions">
         <details className="advanced">
           <summary>Details</summary>
-          <p className="roll-said">{said}</p>
+          <p className="callout-said">{said}</p>
           {command !== undefined && (
             <pre className="restore-command" aria-label="Recover with kubectl">
               {command}

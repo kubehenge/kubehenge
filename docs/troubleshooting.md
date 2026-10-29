@@ -211,7 +211,7 @@ A message saying "the control planes of a cluster with … workers need at least
 
 ### One control plane, its roll stalled
 
-A cluster with one control plane runs on two etcd members while that node is replaced, by an upgrade or any change to the control planes, and each member then needs the other ([architecture.md](architecture.md#clusterclasses)). The plan before such a change, and kubectl through the admission webhook, warn of it. Nothing in Cluster API recovers a roll that stalls, so Kubehenge's controller watches for it: once the new machine has not been ready for 20 minutes (the module's `watch.roll_stall_minutes`), the Cluster gets the condition `ControlPlaneRollStalled` and a warning event of the same name, the cluster's page shows it with **Recover…**, and its Health page lists it. The reason `APIUnreachable` means the API has stopped answering, `SuccessorNotReady` that it still answers. The message names both machines, why the new one is not ready, as Cluster API says it, and the kubectl command that recovers.
+A cluster with one control plane runs on two etcd members while that node is replaced, by an upgrade or any change to the control planes, and each member then needs the other ([architecture.md](architecture.md#clusterclasses)). The plan before such a change, and kubectl through the admission webhook, warn of it. Nothing in Cluster API recovers a roll that stalls, so Kubehenge's controller watches for it: once the new machine has not been ready for 20 minutes (the module's `watch.stall_minutes`), the Cluster gets the condition `ControlPlaneRollStalled` and a warning event of the same name, the cluster's page shows it with **Recover…**, and its Health page lists it. The reason `APIUnreachable` means the API has stopped answering, `SuccessorNotReady` that it still answers. The message names both machines, why the new one is not ready, as Cluster API says it, and the kubectl command that recovers.
 
 - Find what holds the new machine up: on both control-plane VMs (the old node and its successor), look at the distribution's service (`systemctl status k3s` or `rke2-server`, `journalctl -u k3s`; kubeadm's etcd and API server are static pods, `crictl ps -a`; Talos through `talosctl service etcd`), and at the kernel's log for a process killed for memory (`dmesg`). Start whatever stopped, or the VM. Once both members run again, the roll goes on, the condition goes and an event `ControlPlaneRollResumed` says so.
 - If one of them cannot come back: **Recover…** keeps one control-plane machine, by default the one the roll replaces, and replaces the others. It takes the cluster's name typed and Sys.Modify on the cluster's pool. When the API still answers, etcd has its majority and the other machines are only deleted, which removes their members. When it does not, the controller pauses the cluster, stops the control plane on every machine through the guest agent, resets etcd on the one kept to a cluster of one from its own database (`--cluster-reset` on RKE2 and k3s, `etcdutl snapshot restore` of its own database on kubeadm, and on Talos a copy taken through the Talos API before the node's etcd is wiped and bootstrapped from it), starts it, deletes the others and unpauses the cluster. Whatever only the others held is gone. The same through kubectl: `kubectl annotate cluster <name> kubehenge.dev/etcd-restore='{"machine":"<machine to keep>","at":"<now, RFC 3339>"}'`; the status follows in `kubehenge.dev/etcd-restore-status` and the cluster's events (`ControlPlaneRecovered`, `ControlPlaneRecoveryFailed`). A management cluster that does not restore through the guest agent (`etcd_restore`) shows the steps to do it by hand instead.
@@ -293,9 +293,30 @@ Kubehenge's controller holds a cluster's backups back, neither installing nor re
 
 ### A cluster does not finish deleting
 
-- Kubehenge's controller waits while a Proxmox VE node that may hold some of the cluster's volumes on local storage is offline. Bring the node back.
-- A cluster registered with Rancher leaves it first, while its VMs still run; the conditions say so while that is going on.
-- The controller's log says what it is waiting for, such as machines not yet deleted.
+The cluster's page lists what the deletion waits on: every object of the cluster whose finalizer holds it, with what that object reports. kubectl reads the same from the Cluster's annotation `kubehenge.dev/deletion-status`:
+
+```sh
+kubectl -n <namespace> get cluster <name> -o jsonpath='{.metadata.annotations.kubehenge\.dev/deletion-status}' | jq
+```
+
+- **Hook BeforeClusterDelete:** a cluster registered with Rancher leaves it first, while its VMs still run. The reason is Rancher's.
+- **Machine … Drain not completed:** a node's pods are being evicted, and a PodDisruptionBudget, or a pod that does not stop, holds that up. Delete the pod in the cluster, or abandon the deletion.
+- **ProxmoxMachine … (a VM on an offline node):** capmox cannot delete the VM. Bring the node back.
+- **Cluster … removing the Proxmox VE objects:** Kubehenge's controller waits while a Proxmox VE node that may hold some of the cluster's volumes on local storage is offline, or Proxmox VE refuses to delete the pool, user or volume owner VM. The reason is Proxmox VE's.
+
+Once the deletion has waited 20 minutes (the module's `watch.stall_minutes`), the Cluster gets the condition `DeletionStalled` and a warning event of the same name, and the fleet and the cluster's Health page list it.
+
+A deletion that can never finish, such as one of a cluster whose nodes are gone for good, is abandoned with **Abandon…** on the cluster's page, which takes VM.Allocate on its pool as deleting does, or from kubectl, with the cluster's name as the value:
+
+```sh
+kubectl -n <namespace> annotate cluster <name> kubehenge.dev/abandon-deletion=<name>
+```
+
+Kubehenge's controller then has the machines deleted without draining their nodes or waiting for their volumes, deletes everything of the cluster that is not being deleted yet, and lets Cluster API go on without the BeforeClusterDelete hook. What has not finished five minutes later loses its finalizers, the Cluster's own last. What that leaves behind in Proxmox VE, such as a VM on a node that never came back, or the cluster's pool and user, is named in a `LeftBehind` event for each and a `DeletionAbandoned` event, and listed on the cluster's page while it is still there; a registration in Rancher stays as well. Delete those by hand once their node is back. The events stay as long as the management cluster keeps events, an hour by default:
+
+```sh
+kubectl -n <namespace> get events --field-selector reason=LeftBehind
+```
 
 ### Appliance upgrades
 

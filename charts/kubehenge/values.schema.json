@@ -151,7 +151,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "rollStallMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 }
+        "stallMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 }
       }
     },
     "autoscaler": {

@@ -206,8 +206,8 @@ managementEndpoint: ""
 # so on the Cluster (a condition and an event) and on the interface's Health page.
 watch:
   # The roll of a cluster's only control plane counts as stalled once its new machine has not been
-  # ready for this long.
-  rollStallMinutes: 20
+  # ready for this long, and a cluster's deletion once it has waited this long.
+  stallMinutes: 20
 
 # The cluster autoscaler the controller runs for each cluster with an autoscaled pool.
 autoscaler:

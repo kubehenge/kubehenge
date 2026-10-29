@@ -282,16 +282,16 @@ variable "proxmox_ha" {
 }
 
 variable "watch" {
-  description = "How long Kubehenge's controller gives what it watches for before it reports it on the Cluster and the interface's Health page: roll_stall_minutes, for the new machine in the roll of a cluster's only control plane to become ready."
+  description = "How long Kubehenge's controller gives what it watches for before it reports it on the Cluster and the interface's Health page: stall_minutes, for the new machine in the roll of a cluster's only control plane to become ready, and for a cluster's deletion to finish."
   type = object({
-    roll_stall_minutes = optional(number, 20)
+    stall_minutes = optional(number, 20)
   })
   default  = {}
   nullable = false
 
   validation {
-    condition     = var.watch.roll_stall_minutes >= 1 && var.watch.roll_stall_minutes <= 1440 && floor(var.watch.roll_stall_minutes) == var.watch.roll_stall_minutes
-    error_message = "watch.roll_stall_minutes is a whole number of minutes from 1 to 1440."
+    condition     = var.watch.stall_minutes >= 1 && var.watch.stall_minutes <= 1440 && floor(var.watch.stall_minutes) == var.watch.stall_minutes
+    error_message = "watch.stall_minutes is a whole number of minutes from 1 to 1440."
   }
 }
 
