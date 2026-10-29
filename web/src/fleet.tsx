@@ -106,14 +106,14 @@ function rollout(what: string, r: Replicas): string {
  * standing sums up a cluster for the fleet: from what its own answer says first, then, for one
  * that says nothing is wrong or under way, from what its health page found.
  */
-export function standing(c: Cluster, health?: FleetHealth, now = Date.now()): Standing {
+export function standing(c: Cluster, found?: FleetHealth, now = Date.now()): Standing {
   if (c.deleting) {
     return { group: "running", state: "deleting", reason: "Deleting", view: "" };
   }
   return (
     failure(c) ??
     (c.available ? underWay(c) : comingUp(c, now)) ??
-    finding(health) ?? {
+    finding(found) ?? {
       group: "healthy",
       state: "ok",
       reason: c.talos ? `Talos ${c.talos.version}, ${c.version}` : `${distributionName(c.distribution)} ${c.version}`,
@@ -231,11 +231,11 @@ const severity: Record<Standing["state"], number> = { error: 0, warning: 1, prog
 /** ranked is the fleet in the rail's order: by group, the worst first within it, then by name. */
 export function ranked(
   clusters: Cluster[],
-  health?: Map<string, FleetHealth>,
+  found?: Map<string, FleetHealth>,
 ): { cluster: Cluster; standing: Standing }[] {
   const order = new Map(groups.map((g, i) => [g.group, i]));
   return clusters
-    .map((cluster) => ({ cluster, standing: standing(cluster, health?.get(fleetKey(cluster))) }))
+    .map((cluster) => ({ cluster, standing: standing(cluster, found?.get(fleetKey(cluster))) }))
     .toSorted(
       (a, b) =>
         (order.get(a.standing.group) ?? 0) - (order.get(b.standing.group) ?? 0) ||

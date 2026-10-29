@@ -6,8 +6,12 @@ import { Link } from "./router";
 import type { Cluster, Machine, PveNode } from "./types";
 import { Status, age, filled, pollIdle, usePoll, type Health } from "./ui";
 
-// machineStatus says how far a machine is, as the cluster list says it of clusters.
-export function machineStatus(m: Machine): { state: Health; text: string } {
+// machineStatus says how far a machine is, as the cluster list says it of clusters. A machine on a
+// Proxmox VE node that is offline is down whatever Cluster API last read of it.
+export function machineStatus(m: Machine, offline = false): { state: Health; text: string } {
+  if (offline) {
+    return { state: "error", text: "Node offline" };
+  }
   if (m.ready) {
     return { state: "ok", text: "Ready" };
   }
@@ -43,6 +47,8 @@ export function crowding(machines: Machine[]): string | undefined {
 
 /** Machines is the Machines view: every machine of the cluster with where it runs and how it is. */
 export function Machines({ cluster: c }: { cluster: Cluster }): JSX.Element {
+  const { data: nodes } = usePoll(api.nodes, pollIdle);
+  const offline = new Set((nodes ?? []).filter((n) => !n.online).map((n) => n.node));
   const machines = c.machines ?? [];
   const crowded = crowding(machines);
   const talos = c.distribution === "talos";
@@ -78,7 +84,7 @@ export function Machines({ cluster: c }: { cluster: Cluster }): JSX.Element {
             </tr>
           )}
           {machines.map((m) => {
-            const s = machineStatus(m);
+            const s = machineStatus(m, offline.has(m.proxmoxNode ?? ""));
             return (
               <tr key={m.name}>
                 <td>
@@ -186,7 +192,7 @@ export function Placement({ cluster: c }: { cluster: Cluster }): JSX.Element {
             {h.machines.length > 0 && (
               <ul className="host-machines">
                 {h.machines.map((m) => {
-                  const s = machineStatus(m);
+                  const s = machineStatus(m, h.online === false);
                   return (
                     <li key={m.name}>
                       <Link
