@@ -126,7 +126,7 @@ ha_vmid=''
 ha_node=''
 # cni_state: what the CNI Kubehenge installed says of a failed test's cluster, which no collected log
 # keeps while it runs without restarts: the Tigera operator's status and last lines for Calico, and
-# the packets each Cilium agent drops in ten seconds, with why.
+# the packets each Cilium agent drops in twenty seconds, with why, and Headlamp's last lines.
 cni_state() {
     case ${KUBEHENGE_E2E_CNI:-} in
         calico | cilium) ;;
@@ -139,10 +139,27 @@ cni_state() {
         KUBECONFIG=${work}/state kubectl -n tigera-operator logs deployment/tigera-operator --tail=40 2>&1 || true
         return 0
     fi
-    for agent in $(KUBECONFIG=${work}/state kubectl -n kube-system get pods -l k8s-app=cilium -o name 2> /dev/null); do
-        printf '%s drops:\n' "${agent}"
-        KUBECONFIG=${work}/state kubectl -n kube-system exec "${agent}" -c cilium-agent -- timeout 10 cilium-dbg monitor --type drop 2>&1 | tail -n 30 || true
+    agents=$(KUBECONFIG=${work}/state kubectl -n kube-system get pods -l k8s-app=cilium -o name 2> /dev/null) || true
+    monitors=
+    for agent in ${agents}; do
+        KUBECONFIG=${work}/state kubectl -n kube-system exec "${agent}" -c cilium-agent -- timeout 20 cilium-dbg monitor --type drop > "${work}/drops-${agent##*/}" 2>&1 &
+        monitors="${monitors} $!"
     done
+    # Traffic for the monitors to see while they listen: the request Headlamp's checks send, which
+    # crosses from the API server's host network to a pod and from the pod back to the API server.
+    # Talos's machined retries its log stream to the node collector on its own.
+    sleep 3
+    for _ in 1 2 3; do
+        KUBECONFIG=${work}/state kubectl get --raw '/api/v1/namespaces/headlamp/services/http:headlamp:80/proxy/clusters/main/api/v1/pods?limit=1' > /dev/null 2>&1 || true
+        sleep 2
+    done
+    # shellcheck disable=SC2086 # one process ID per word
+    [ -z "${monitors}" ] || wait ${monitors} || true
+    for agent in ${agents}; do
+        printf '%s drops:\n' "${agent}"
+        tail -n 40 "${work}/drops-${agent##*/}" || true
+    done
+    KUBECONFIG=${work}/state kubectl -n headlamp logs deployment/headlamp --tail=30 2>&1 || true
 }
 cleanup() {
     status=$?

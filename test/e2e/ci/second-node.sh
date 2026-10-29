@@ -68,6 +68,10 @@ on pve pvecm create kubehenge-e2e --link0 172.21.99.2
 # shellcheck disable=SC2310 # the file missing is the failure reported.
 on pve test -f /etc/pve/corosync.conf || {
     echo "pve made no cluster" >&2
+    # Creating a cluster reloads sshd, the step that has failed in the container before.
+    on pve systemctl status --no-pager ssh.service ssh.socket >&2 || true
+    on pve journalctl -u ssh.service -u ssh.socket --no-pager -n 50 >&2 || true
+    on pve sshd -t >&2 || true
     exit 1
 }
 fingerprint=$(on pve openssl x509 -in /etc/pve/nodes/pve/pve-ssl.pem -noout -fingerprint -sha256 | cut -d= -f2)
