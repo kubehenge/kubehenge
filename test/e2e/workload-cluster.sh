@@ -77,8 +77,8 @@
 # the steps that read a node from inside read it through Talos's API, with talosctl and the
 # cluster's talosconfig, or are left out.
 # KUBEHENGE_E2E_PART runs half of the test, for a machine whose memory holds the guests of only one:
-# lifecycle sizes the nodes at the least the class lets them have and leaves the add-ons out; addons
-# sizes them for every add-on and leaves out every step that replaces machines (the distribution's
+# lifecycle sizes the nodes at the least the class lets them have with the add-ons a cluster starts
+# with, and switches on no other; addons sizes them for every add-on and leaves out every step that replaces machines (the distribution's
 # own etcd upload, the load balancer switched off on k3s, scaling, the upgrade and the dead worker).
 # Unset, the test runs whole.
 set -eu
@@ -321,10 +321,10 @@ else
 fi
 oidc=$(jq -cn --arg i "${issuer}" --rawfile ca "${work}/ca.crt" '[{issuerURL: $i, clientID: "kubehenge-e2e", certificateAuthority: $ca}]')
 class_json=$(kubectl -n kubehenge-system get clusterclass "${class}" -o json)
-# The add-ons the nodes are sized for: every one but Rancher, or with the add-ons left out only the
-# load balancer, which is on from the start.
+# The add-ons the nodes are sized for: every one but Rancher, or with the add-ons left out only those
+# on from the start, the load balancer and Rancher's agent, which registers a cluster by default.
 case ${part} in
-    lifecycle) sized_for='["loadBalancer"]' ;;
+    lifecycle) sized_for='["loadBalancer", "rancherAgent"]' ;;
     *) sized_for='["headlamp", "monitoring", "logs", "backups", "kyverno", "istio", "loadBalancer", "certManager", "argocd", "rancherAgent"]' ;;
 esac
 # Unless set, the worker gets the least Kubehenge lets it have with those add-ons on, so that they

@@ -247,7 +247,7 @@ templates_made
 export KUBEHENGE_E2E_CONTROL_PLANE_CORES=4
 # Each class's workload test runs in two halves, on a machine each, as the whole outgrows one
 # machine's memory: kubeadm, rke2, k3s and talos take a cluster of the least size the class allows
-# through everything but the add-ons, and their -addons halves one sized for every add-on through
+# with the add-ons it starts with through everything but the other add-ons, and their -addons halves one sized for every add-on through
 # the add-ons, replacing no machine.
 case "${test}" in
     *-addons) export KUBEHENGE_E2E_PART=addons ;;
