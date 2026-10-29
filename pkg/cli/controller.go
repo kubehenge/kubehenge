@@ -35,7 +35,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
@@ -764,7 +763,9 @@ func addHooks(extensions *server.Server, scheme *runtime.Scheme, hooks *provisio
 			return fmt.Errorf("hook %s: %w", handlers[i].Name, err)
 		}
 	}
-	extensions.Register("/validate-cluster", admission.WithValidator(scheme, &provisioner.ClusterAdmission{Hooks: hooks}))
+	for path, h := range provisioner.AdmissionWebhooks(scheme, hooks) {
+		extensions.Register(path, h)
+	}
 	return nil
 }
 

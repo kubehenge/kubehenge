@@ -13,7 +13,6 @@ import (
 	"k8s.io/client-go/rest"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/test/integration"
@@ -37,7 +36,7 @@ func startInterface(t *testing.T) (*harness, client.Client) {
 		Namespaces: []string{integration.ClassNamespace, interfaceNamespace},
 		Serve: func(c client.Client) map[string]http.Handler {
 			hooks := &provisioner.Hooks{Reader: c, ClassNamespace: integration.ClassNamespace, RancherKubernetes: provisioner.KubernetesMinors{Min: 34, Max: 37}}
-			return map[string]http.Handler{"/validate-cluster": admission.WithValidator[*clusterv1.Cluster](c.Scheme(), &provisioner.ClusterAdmission{Hooks: hooks})}
+			return provisioner.AdmissionWebhooks(c.Scheme(), hooks)
 		},
 	})
 	as := rest.CopyConfig(api.Config)
@@ -66,6 +65,10 @@ func createRequestBody(name, class, version string, net int, variables string) s
 		vars += "," + variables
 	}
 	return fmt.Sprintf(`{"name":%q,"class":%q,"version":%q,"controlPlaneReplicas":1,"workerReplicas":1,"variables":{%s}}`, name, class, version, vars)
+}
+
+func rangesOf(c *clusterv1.Cluster) string {
+	return strings.Join(c.Spec.ClusterNetwork.Pods.CIDRBlocks, ",") + " " + strings.Join(c.Spec.ClusterNetwork.Services.CIDRBlocks, ",")
 }
 
 // expectRefused checks that the interface answers a request with the management cluster's own
@@ -99,11 +102,12 @@ func TestIntegrationInterfaceRequests(t *testing.T) { //nolint:paralleltest // s
 		integration.WaitReconciled(t, admin, integration.ClassNamespace, class)
 	}
 
-	for i, tc := range []struct{ class, version, vars string }{
-		{"kubehenge-kubeadm", "v1.36.5", `"cni":"cilium"`},
-		{"kubehenge-rke2", "v1.36.5+rke2r1", ""},
-		{"kubehenge-k3s", "v1.36.5+k3s1", `"nodeOS":{"family":"rocky","release":"10"}`},
-		{"kubehenge-talos", "v1.36.5", `"talosVersion":"v1.14.5"`},
+	// The controller's admission gives each its distribution's own ranges, as it does kubectl's.
+	for i, tc := range []struct{ class, version, vars, ranges string }{
+		{"kubehenge-kubeadm", "v1.36.5", `"cni":"cilium"`, "10.244.0.0/16 10.96.0.0/12"},
+		{"kubehenge-rke2", "v1.36.5+rke2r1", "", "10.42.0.0/16 10.43.0.0/16"},
+		{"kubehenge-k3s", "v1.36.5+k3s1", `"nodeOS":{"family":"rocky","release":"10"}`, "10.42.0.0/16 10.43.0.0/16"},
+		{"kubehenge-talos", "v1.36.5", `"talosVersion":"v1.14.5"`, "10.244.0.0/16 10.96.0.0/12"},
 	} {
 		name := strings.TrimPrefix(tc.class, "kubehenge-")
 		rec := b.do("POST", "/api/clusters", createRequestBody(name, tc.class, tc.version, 10+i, tc.vars))
@@ -121,6 +125,9 @@ func TestIntegrationInterfaceRequests(t *testing.T) { //nolint:paralleltest // s
 		if !defaulted["cni"] || !defaulted["cis"] || !defaulted["controlPlaneMachine"] || (tc.class != "kubehenge-talos" && !defaulted["nodeOS"]) {
 			t.Errorf("%s was stored without Cluster API's defaults: %v", tc.class, defaulted)
 		}
+		if got := rangesOf(got); got != tc.ranges {
+			t.Errorf("%s got ranges %s, want %s", tc.class, got, tc.ranges)
+		}
 	}
 
 	addons := `"workerMachine":{"cores":8,"memoryMiB":32768},"controlPlaneMachine":{"cores":8,"memoryMiB":16384},` +
@@ -133,6 +140,14 @@ func TestIntegrationInterfaceRequests(t *testing.T) { //nolint:paralleltest // s
 	if rec := b.do("POST", "/api/clusters", createRequestBody("everything", "kubehenge-k3s", "v1.36.5+k3s1", 20, addons)); rec.Code != http.StatusCreated {
 		t.Fatalf("every add-on: %d %s", rec.Code, rec.Body)
 	}
+	everything := &clusterv1.Cluster{}
+	if err := admin.Get(ctx, client.ObjectKey{Namespace: interfaceNamespace, Name: "everything"}, everything); err != nil {
+		t.Fatal(err)
+	}
+	// A Cilium cluster keeps its pods clear of the four before's pods and services.
+	if got := rangesOf(everything); got != "172.21.0.0/16 10.43.0.0/16" {
+		t.Errorf("a Cilium cluster beside the others got ranges %s", got)
+	}
 
 	for _, tc := range []struct{ name, vars, want string }{
 		{"rule", `"backups":{"enabled":true}`, "Backups need a target."},
@@ -142,6 +157,9 @@ func TestIntegrationInterfaceRequests(t *testing.T) { //nolint:paralleltest // s
 	} {
 		expectRefused(t, b.do("POST", "/api/clusters", createRequestBody("refused-"+tc.name, "kubehenge-k3s", "v1.36.5+k3s1", 30, tc.vars)), tc.want)
 	}
+	overlapping := strings.Replace(createRequestBody("refused-ranges", "kubehenge-k3s", "v1.36.5+k3s1", 30, ""),
+		`"controlPlaneReplicas"`, `"pods":["172.30.0.0/16"],"services":["172.30.128.0/17"],"controlPlaneReplicas"`, 1)
+	expectRefused(t, b.do("POST", "/api/clusters", overlapping), "the service range 172.30.128.0/17 overlaps the pod range 172.30.0.0/16")
 
 	for _, tc := range []struct{ body, want string }{
 		{`{"variables":{"cni":"flannel"}}`, "the variable cni is fixed when the cluster is created"},

@@ -80,12 +80,9 @@ func TestClustersTellHowTheirMeshPeersStand(t *testing.T) {
 	}
 }
 
-func TestCreateKeepsCiliumClustersApart(t *testing.T) {
+func TestCreateHoldsCiliumClustersToNamesCiliumTakes(t *testing.T) {
 	t.Parallel()
-	two := cluster("team-a", "two")
-	two.Spec.ClusterNetwork.Pods.CIDRBlocks = []string{"10.244.0.0/16"}
-	two.Spec.ClusterNetwork.Services.CIDRBlocks = []string{"10.96.0.0/16"}
-	h := newHarness(t, cluster("default", "one"), two)
+	h := newHarness(t)
 	class := &clusterv1.ClusterClass{}
 	if err := h.kube.Get(t.Context(), client.ObjectKey{Namespace: "kubehenge-system", Name: "kubehenge-rke2"}, class); err != nil {
 		t.Fatal(err)
@@ -98,34 +95,6 @@ func TestCreateKeepsCiliumClustersApart(t *testing.T) {
 	}
 	b := h.browser()
 	b.signIn("admin@pve")
-	create := func(name, cni string) *clusterv1.Cluster {
-		t.Helper()
-		body := strings.Replace(createBody, `"web"`, `"`+name+`"`, 1)
-		if cni != "" {
-			body = strings.Replace(body, `"storage":"local-lvm"`, `"storage":"local-lvm","cni":"`+cni+`"`, 1)
-		}
-		expect(t, b.do("POST", "/api/clusters", body), http.StatusCreated)
-		c := &clusterv1.Cluster{}
-		if err := h.kube.Get(t.Context(), client.ObjectKey{Namespace: "default", Name: name}, c); err != nil {
-			t.Fatal(err)
-		}
-		return c
-	}
-	ranges := func(c *clusterv1.Cluster) string {
-		return strings.Join(c.Spec.ClusterNetwork.Pods.CIDRBlocks, ",") + " " + strings.Join(c.Spec.ClusterNetwork.Services.CIDRBlocks, ",")
-	}
-	// one has RKE2's own ranges, two Kubernetes' usual ones; neither runs Cilium.
-	if got := ranges(create("canal", "")); got != "10.42.0.0/16 10.43.0.0/16" {
-		t.Errorf("a cluster without Cilium got %s, want RKE2's own ranges", got)
-	}
-	first := create("first", "cilium")
-	if got := ranges(first); got != "172.21.0.0/16 10.43.0.0/16" {
-		t.Errorf("the first Cilium cluster got %s, want pods clear of every cluster's pods and services", got)
-	}
-	if got := ranges(create("second", "cilium")); got != "10.201.0.0/16 10.43.0.0/16" {
-		t.Errorf("the second Cilium cluster got %s, want pods clear of the first's too", got)
-	}
-
 	long := strings.Replace(strings.Replace(createBody, `"web"`, `"`+strings.Repeat("a", provisioner.MaxCiliumClusterName+1)+`"`, 1),
 		`"storage":"local-lvm"`, `"storage":"local-lvm","cni":"cilium"`, 1)
 	rec := b.do("POST", "/api/clusters", long)

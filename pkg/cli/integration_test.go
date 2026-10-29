@@ -68,16 +68,8 @@ func TestMain(m *testing.M) {
 func startManagementCluster(t *testing.T) (*integration.API, []string) {
 	t.Helper()
 	objects, webhooks := integration.Charts(t, "../..")
-	var paths []string
-	for _, w := range webhooks {
-		for i := range w.Webhooks {
-			h := &w.Webhooks[i]
-			if h.ClientConfig.Service == nil || h.ClientConfig.Service.Path == nil {
-				t.Fatalf("webhook %s calls no path of the controller's", h.Name)
-			}
-			paths = append(paths, *h.ClientConfig.Service.Path)
-		}
-	}
+	// Before Start, which points the configurations at the local server by URL.
+	paths := webhooks.Paths(t)
 	namespaces := append([]string{integration.ClassNamespace, "team-a", "kubehenge-autoscaler"}, k3sProviders...)
 	api := integration.Start(t, &integration.Options{Objects: objects, Webhooks: webhooks, Namespaces: namespaces})
 	return api, paths
@@ -241,10 +233,12 @@ func TestIntegrationControllerServesWhatTheChartNames(t *testing.T) {
 	eventually(t, stopped, "the liveness probe", probe("/healthz"))
 	eventually(t, stopped, "the readiness probe", probe("/readyz"))
 
+	refused := func() error { return refusedByKubehenge(ctx, c, rancherOnTwoCores()) }
 	admitted := map[string]func() error{
-		"/validate-cluster": func() error {
-			return refusedByKubehenge(ctx, c, rancherOnTwoCores())
-		},
+		// The API server calls the validating webhooks only once the mutating ones have answered,
+		// and fails closed while one does not.
+		provisioner.DefaultClusterPath:  refused,
+		provisioner.ValidateClusterPath: refused,
 	}
 	for _, path := range paths {
 		check, ok := admitted[path]

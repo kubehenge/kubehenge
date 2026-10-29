@@ -638,8 +638,8 @@ type createRequest struct {
 	// WorkerAutoscaling has the cluster autoscaler size the worker pool in place of WorkerReplicas.
 	WorkerAutoscaling *poolAutoscaling           `json:"workerAutoscaling,omitempty"`
 	Variables         map[string]json.RawMessage `json:"variables"`
-	// Pods and Services are the cluster's own ranges; unset, ones clear of the nodes' network are
-	// chosen.
+	// Pods and Services are the cluster's own ranges; unset, the controller's admission chooses ones
+	// clear of the nodes' network (provisioner.ClusterDefaulter).
 	Pods     []string `json:"pods,omitempty"`
 	Services []string `json:"services,omitempty"`
 }
@@ -663,8 +663,7 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
 	if !ok {
 		return
 	}
-	pods, services, ok := s.newRanges(w, r, u, &req, class)
-	if !ok {
+	if !ciliumNameFits(w, &req, class) {
 		return
 	}
 	pool, err := s.poolPath(req.Namespace, req.Name)
@@ -675,7 +674,7 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
 	if !s.mayCreate(w, r, u, class, &req) {
 		return
 	}
-	c := s.newCluster(u, &req, pods, services)
+	c := s.newCluster(u, &req)
 	if err = u.kube.Create(r.Context(), c); err != nil {
 		s.kubeError(w, err)
 		return
@@ -878,14 +877,14 @@ func (s *Server) mayPlace(w http.ResponseWriter, r *http.Request, u user, raw, k
 	return true
 }
 
-func (s *Server) newCluster(u user, req *createRequest, pods, services []string) *clusterv1.Cluster {
+func (s *Server) newCluster(u user, req *createRequest) *clusterv1.Cluster {
 	c := &clusterv1.Cluster{
 		Namespace:   req.Namespace,
 		Name:        req.Name,
 		Annotations: map[string]string{createdBy: u.ticket.Username},
 		Spec: clusterv1.ClusterSpec{ClusterNetwork: clusterv1.ClusterNetwork{
-			Pods:     clusterv1.NetworkRanges{CIDRBlocks: pods},
-			Services: clusterv1.NetworkRanges{CIDRBlocks: services},
+			Pods:     clusterv1.NetworkRanges{CIDRBlocks: req.Pods},
+			Services: clusterv1.NetworkRanges{CIDRBlocks: req.Services},
 		}, Topology: clusterv1.Topology{
 			ClassRef:     clusterv1.ClusterClassRef{Name: req.Class, Namespace: s.ClassNamespace},
 			Version:      req.Version,

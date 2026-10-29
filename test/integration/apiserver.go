@@ -56,10 +56,10 @@ type Options struct {
 	// Objects are applied once the webhooks answer, after the namespaces they name and Namespaces.
 	Objects    []*unstructured.Unstructured
 	Namespaces []string
-	// Webhooks are validating webhook configurations whose services point at a local server. With
-	// ClusterAPI or Serve, Start serves it; without, nothing does until the test serves it at the
-	// address and with the certificates API.Webhooks holds.
-	Webhooks []*admissionregistrationv1.ValidatingWebhookConfiguration
+	// Webhooks are webhook configurations whose services point at a local server. With ClusterAPI
+	// or Serve, Start serves it; without, nothing does until the test serves it at the address and
+	// with the certificates API.Webhooks holds.
+	Webhooks Webhooks
 	// ClusterAPI serves Cluster API's Cluster and ClusterClass webhooks, from the configurations its
 	// release ships, and runs its ClusterClass controller, with the feature gates the management
 	// cluster sets: its defaulting and its checks of the classes and of the clusters' variables
@@ -112,7 +112,7 @@ func Start(t *testing.T, o *Options) *API {
 	if crds == "" || os.Getenv("KUBEBUILDER_ASSETS") == "" {
 		t.Fatal("KUBEBUILDER_ASSETS and KUBEHENGE_INTEGRATION_CRDS are unset: run the tier with `make integration`")
 	}
-	install := envtest.WebhookInstallOptions{ValidatingWebhooks: o.Webhooks}
+	install := envtest.WebhookInstallOptions{MutatingWebhooks: o.Webhooks.Mutating, ValidatingWebhooks: o.Webhooks.Validating}
 	if o.ClusterAPI {
 		mutating, validating := clusterAPIWebhooks(t, filepath.Join(crds, "cluster-api.yaml"))
 		install.MutatingWebhooks = append(install.MutatingWebhooks, mutating...)
@@ -264,26 +264,62 @@ const ClassNamespace = "kubehenge-system"
 // them, from the repository at root, with the tier's values (pkg/provisioner/testdata) and
 // Kubehenge's then with those of values, and parts out Kubehenge's webhook configurations, which
 // fail closed while nothing answers them.
-func Charts(t *testing.T, root string, values ...string) ([]*unstructured.Unstructured, []*admissionregistrationv1.ValidatingWebhookConfiguration) {
+func Charts(t *testing.T, root string, values ...string) ([]*unstructured.Unstructured, Webhooks) {
 	t.Helper()
 	testdata := filepath.Join(root, "pkg", "provisioner", "testdata")
 	// The providers' release comes first, as in the module, and carries no webhooks of its own.
 	objects := RenderChart(t, "cluster-api-providers", filepath.Join(root, "management-cluster", "charts", "cluster-api-providers"), "capi-operator-system",
 		filepath.Join(testdata, "cluster-api-providers-values.yaml"))
-	var webhooks []*admissionregistrationv1.ValidatingWebhookConfiguration
+	var webhooks Webhooks
 	for _, o := range RenderChart(t, "kubehenge", filepath.Join(root, "charts", "kubehenge"), ClassNamespace,
 		append([]string{filepath.Join(testdata, "integration-values.yaml")}, values...)...) {
-		if o.GetKind() != "ValidatingWebhookConfiguration" {
+		var into any
+		switch o.GetKind() {
+		case "MutatingWebhookConfiguration":
+			w := &admissionregistrationv1.MutatingWebhookConfiguration{}
+			webhooks.Mutating, into = append(webhooks.Mutating, w), w
+		case "ValidatingWebhookConfiguration":
+			w := &admissionregistrationv1.ValidatingWebhookConfiguration{}
+			webhooks.Validating, into = append(webhooks.Validating, w), w
+		default:
 			objects = append(objects, o)
 			continue
 		}
-		w := &admissionregistrationv1.ValidatingWebhookConfiguration{}
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(o.Object, w); err != nil {
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(o.Object, into); err != nil {
 			t.Fatal(err)
 		}
-		webhooks = append(webhooks, w)
 	}
 	return objects, webhooks
+}
+
+// Webhooks are mutating and validating webhook configurations.
+type Webhooks struct {
+	Mutating   []*admissionregistrationv1.MutatingWebhookConfiguration
+	Validating []*admissionregistrationv1.ValidatingWebhookConfiguration
+}
+
+// Paths are the paths of the local server the webhooks call, failing the test for one that calls
+// none.
+func (w Webhooks) Paths(t *testing.T) []string {
+	t.Helper()
+	var paths []string
+	add := func(name string, c admissionregistrationv1.WebhookClientConfig) {
+		if c.Service == nil || c.Service.Path == nil {
+			t.Fatalf("webhook %s calls no path of the controller's", name)
+		}
+		paths = append(paths, *c.Service.Path)
+	}
+	for _, m := range w.Mutating {
+		for i := range m.Webhooks {
+			add(m.Webhooks[i].Name, m.Webhooks[i].ClientConfig)
+		}
+	}
+	for _, v := range w.Validating {
+		for i := range v.Webhooks {
+			add(v.Webhooks[i].Name, v.Webhooks[i].ClientConfig)
+		}
+	}
+	return paths
 }
 
 // RenderChart is what `helm template` makes of a chart with the values files given, hooks included.

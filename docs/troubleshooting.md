@@ -203,7 +203,7 @@ Kubehenge checks a Cluster made with kubectl or GitOps by the same rules as the 
 
 ### Ranges refused
 
-A message saying "the pod range … overlaps the nodes' network …" (or the service range): pod and service ranges must stay clear of the nodes' network (the gateway with the prefix length) and of each other. Choose other ranges under **Pod and service ranges**, or in `spec.clusterNetwork`.
+A message saying "the pod range … overlaps the nodes' network …" (or the service range): pod and service ranges must stay clear of the nodes' network (the gateway with the prefix length) and of each other. Choose other ranges under **Pod and service ranges**, or in `spec.clusterNetwork`. A cluster that names none gets them from Kubehenge's mutating webhook, `cluster-defaults.kubehenge.dev`; "every pod range Kubehenge tries overlaps …" means none of the ranges it tries is clear of the nodes' network (or, for a Cilium cluster, of the other clusters' ranges), so choose them yourself.
 
 ### Control planes too small
 

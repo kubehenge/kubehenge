@@ -3,14 +3,31 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	capiadmission "sigs.k8s.io/cluster-api/core/webhooks/admission"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
+
+// Paths of the controller's admission webhooks, which the chart's webhook configurations call.
+const (
+	DefaultClusterPath  = "/default-cluster"
+	ValidateClusterPath = "/validate-cluster"
+)
+
+// AdmissionWebhooks are the controller's admission webhooks by path: ClusterDefaulter, then
+// ClusterAdmission, as the API server calls them for every Cluster.
+func AdmissionWebhooks(scheme *runtime.Scheme, hooks *Hooks) map[string]http.Handler {
+	return map[string]http.Handler{
+		DefaultClusterPath:  admission.WithDefaulter[*clusterv1.Cluster](scheme, &ClusterDefaulter{Hooks: hooks}),
+		ValidateClusterPath: admission.WithValidator[*clusterv1.Cluster](scheme, &ClusterAdmission{Hooks: hooks}),
+	}
+}
 
 // ClusterAdmission is what the API server asks about Kubehenge's clusters as they are created and
 // changed: their variables against their class's schemas and CEL rules, then ClusterValidator's

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"maps"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"regexp"
@@ -24,7 +25,6 @@ import (
 	"time"
 
 	"github.com/luthermonson/go-proxmox"
-	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -40,7 +40,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
-	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/kubehenge/kubehenge/test/integration"
 )
@@ -69,7 +68,7 @@ func TestMain(m *testing.M) {
 func startAPI(t *testing.T) client.Client {
 	t.Helper()
 	objects, _ := apiObjects(t)
-	_, c, _ := startAPIWith(t, objects, nil)
+	_, c, _ := startAPIWith(t, objects, integration.Webhooks{})
 	return c
 }
 
@@ -87,20 +86,20 @@ func startValidatingAPI(t *testing.T) (client.Client, *envtest.WebhookInstallOpt
 func startAPIConfig(t *testing.T, values ...string) (*rest.Config, client.Client) {
 	t.Helper()
 	objects, _ := apiObjects(t, values...)
-	cfg, c, _ := startAPIWith(t, objects, nil)
+	cfg, c, _ := startAPIWith(t, objects, integration.Webhooks{})
 	return cfg, c
 }
 
 // apiObjects renders the providers' chart and Kubehenge's with the module's values and then those
 // of values, and parts out Kubehenge's webhook configurations.
-func apiObjects(t *testing.T, values ...string) ([]*unstructured.Unstructured, []*admissionregistrationv1.ValidatingWebhookConfiguration) {
+func apiObjects(t *testing.T, values ...string) ([]*unstructured.Unstructured, integration.Webhooks) {
 	t.Helper()
 	return integration.Charts(t, "../..", values...)
 }
 
 // startAPIWith starts an API server with the CRDs and installs objects in it, the namespaces the
 // tests use made first, with webhooks pointing at a local server the test serves.
-func startAPIWith(t *testing.T, objects []*unstructured.Unstructured, webhooks []*admissionregistrationv1.ValidatingWebhookConfiguration) (*rest.Config, client.Client, *envtest.WebhookInstallOptions) {
+func startAPIWith(t *testing.T, objects []*unstructured.Unstructured, webhooks integration.Webhooks) (*rest.Config, client.Client, *envtest.WebhookInstallOptions) {
 	t.Helper()
 	api := integration.Start(t, &integration.Options{Objects: objects, Namespaces: apiNamespaces(), Webhooks: webhooks})
 	return api.Config, api.Client, api.Webhooks
@@ -342,27 +341,36 @@ func TestIntegrationClusterLifecycle(t *testing.T) { //nolint:paralleltest // st
 	}
 }
 
-// The API server asks the controller about Kubehenge's clusters through the chart's webhook
-// configuration, and the class's own schema supplies the vCPUs a cluster leaves to its default.
-func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
-	c, w := startValidatingAPI(t)
+// serveAdmission serves the handlers where the chart's webhook configurations call them until the
+// test ends, and returns once the server answers: the chart refuses every cluster until it does.
+func serveAdmission(t *testing.T, w *envtest.WebhookInstallOptions, handlers map[string]http.Handler) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	srv := webhook.NewServer(webhook.Options{Host: w.LocalServingHost, Port: w.LocalServingPort, CertDir: w.LocalServingCertDir})
-	hooks := &Hooks{Reader: c, ClassNamespace: classNamespace, RancherKubernetes: KubernetesMinors{Min: 34, Max: 37}}
-	srv.Register("/validate-cluster", admission.WithValidator[*clusterv1.Cluster](c.Scheme(), &ClusterAdmission{Hooks: hooks}))
+	for path, h := range handlers {
+		srv.Register(path, h)
+	}
 	go func() {
 		if err := srv.Start(ctx); err != nil {
 			t.Error(err)
 		}
 	}()
-	// The chart refuses every cluster while nothing answers the webhook, so the test waits until it does.
 	started := srv.StartedChecker()
 	for deadline := time.Now().Add(30 * time.Second); started(nil) != nil; time.Sleep(100 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("the webhook server did not start")
 		}
 	}
+}
+
+// The API server asks the controller about Kubehenge's clusters through the chart's webhook
+// configuration, and the class's own schema supplies the vCPUs a cluster leaves to its default.
+func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
+	c, w := startValidatingAPI(t)
+	ctx := context.Background()
+	hooks := &Hooks{Reader: c, ClassNamespace: classNamespace, RancherKubernetes: KubernetesMinors{Min: 34, Max: 37}}
+	serveAdmission(t, w, AdmissionWebhooks(c.Scheme(), hooks))
 
 	rancherCluster := func(name, controlPlane string) *clusterv1.Cluster {
 		vars := []clusterv1.ClusterVariable{{Name: "rancher", Value: apiextensionsv1.JSON{Raw: []byte(`{"install":true,"hostname":"rancher.example.org"}`)}}}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -13,7 +14,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/kubehenge/kubehenge/test/integration"
 )
@@ -42,7 +42,7 @@ func startClusterAPI(t *testing.T, values ...string) (*integration.API, *Hooks) 
 		Objects: objects, Namespaces: apiNamespaces(), Webhooks: webhooks, ClusterAPI: true,
 		Serve: func(c client.Client) map[string]http.Handler {
 			hooks = &Hooks{Reader: c, ClassNamespace: classNamespace, RancherKubernetes: KubernetesMinors{Min: 34, Max: 37}}
-			return map[string]http.Handler{"/validate-cluster": admission.WithValidator[*clusterv1.Cluster](c.Scheme(), &ClusterAdmission{Hooks: hooks})}
+			return AdmissionWebhooks(c.Scheme(), hooks)
 		},
 	})
 	return api, hooks
@@ -157,11 +157,16 @@ func TestIntegrationClusterAPIChecksTheClasses(t *testing.T) { //nolint:parallel
 			if class != "kubehenge-talos" && storedVariable(got, NodeOSVariable) != `{"family":"almalinux","release":"10"}` {
 				t.Errorf("node OS %s, want the class's default", storedVariable(got, NodeOSVariable))
 			}
+			if want := classRanges[class]; rangesOf(got) != want {
+				t.Errorf("ranges %s, want the distribution's own %s", rangesOf(got), want)
+			}
 			if err := c.Delete(ctx, got); err != nil {
 				t.Fatal(err)
 			}
 		})
 	}
+
+	checkKubectlRanges(ctx, t, c)
 
 	for _, rule := range celRules {
 		t.Run(rule.message, func(t *testing.T) {
@@ -184,6 +189,69 @@ func TestIntegrationClusterAPIChecksTheClasses(t *testing.T) { //nolint:parallel
 	}
 
 	checkRulesOnChanges(ctx, t, c)
+}
+
+// classRanges are the pod and service ranges each class's distribution uses by default.
+var classRanges = map[string]string{
+	"kubehenge-kubeadm": "10.244.0.0/16 10.96.0.0/12",
+	"kubehenge-rke2":    "10.42.0.0/16 10.43.0.0/16",
+	"kubehenge-k3s":     "10.42.0.0/16 10.43.0.0/16",
+	"kubehenge-talos":   "10.244.0.0/16 10.96.0.0/12",
+}
+
+func rangesOf(c *clusterv1.Cluster) string {
+	return strings.Join(c.Spec.ClusterNetwork.Pods.CIDRBlocks, ",") + " " + strings.Join(c.Spec.ClusterNetwork.Services.CIDRBlocks, ",")
+}
+
+// withVariable sets a variable of the cluster, in place of one it has.
+func withVariable(c *clusterv1.Cluster, name, raw string) *clusterv1.Cluster {
+	c.Spec.Topology.Variables = slices.DeleteFunc(c.Spec.Topology.Variables, func(v clusterv1.ClusterVariable) bool { return v.Name == name })
+	return withAddons(c, map[string]string{name: raw})
+}
+
+// checkKubectlRanges holds a cluster created without the interface, with kubectl or GitOps, to the
+// ranges the interface's get: the distribution's own where they are clear of the nodes, other ones
+// where not, and for a Cilium cluster ranges clear of the other clusters'; and to the same refusals
+// of the ranges asked for.
+func checkKubectlRanges(ctx context.Context, t *testing.T, c client.Client) {
+	t.Helper()
+	crowded := func(name string) *clusterv1.Cluster {
+		cluster := clusterOf("kubehenge-rke2", name, 3, nil)
+		withVariable(cluster, "network", `{"bridge":"vmbr0","addresses":["10.42.0.10-10.42.0.20"],"prefix":15,"gateway":"10.42.0.1","dnsServers":["10.42.0.1"]}`)
+		return withVariable(cluster, "controlPlaneEndpoint", `"10.42.0.5"`)
+	}
+	cluster := crowded("crowded")
+	if err := c.Create(ctx, cluster, client.DryRunAll); err != nil {
+		t.Fatalf("a cluster whose nodes take the distribution's ranges: %v", err)
+	}
+	if got := rangesOf(cluster); got != "10.244.0.0/16 10.96.0.0/16" {
+		t.Errorf("nodes in 10.42.0.0/15: ranges %s, want ones clear of them", got)
+	}
+
+	// early, of the k3s class, holds 10.42.0.0/16 and 10.43.0.0/16.
+	cilium := clusterOf("kubehenge-rke2", "cilium", 4, map[string]string{"cni": `"cilium"`})
+	if err := c.Create(ctx, cilium, client.DryRunAll); err != nil {
+		t.Fatalf("a Cilium cluster: %v", err)
+	}
+	if got := rangesOf(cilium); got != "10.244.0.0/16 10.43.0.0/16" {
+		t.Errorf("a Cilium cluster beside another of the same ranges: %s, want pods clear of the other's pods and services", got)
+	}
+
+	for name, asked := range map[string]struct {
+		pods, services []string
+		refusal        string
+	}{
+		"over the nodes":  {[]string{"10.42.0.0/16"}, nil, "overlaps the nodes' network 10.42.0.0/15"},
+		"over each other": {[]string{"172.30.0.0/16"}, []string{"172.30.128.0/17"}, "overlaps the pod range 172.30.0.0/16"},
+		"not a network":   {nil, []string{"172.31.0.1/16"}, "no IPv4 network"},
+		"not IPv4":        {[]string{"fd00::/64"}, []string{"fd01::/108"}, "no IPv4 network"},
+	} {
+		refused := crowded("refused")
+		refused.Spec.ClusterNetwork.Pods.CIDRBlocks, refused.Spec.ClusterNetwork.Services.CIDRBlocks = asked.pods, asked.services
+		if err := c.Create(ctx, refused, client.DryRunAll); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), asked.refusal) {
+			t.Errorf("ranges %s: %v", name, err)
+		}
+	}
 }
 
 // celRule is one of the classes' CEL rules: variables that break it, which Cluster API refuses with
