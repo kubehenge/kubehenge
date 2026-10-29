@@ -136,6 +136,12 @@ describe("the fleet", () => {
   });
 });
 
+// names are the clusters the fleet table lists, in its order.
+const names = (): (string | null)[] =>
+  within(screen.getByRole("table"))
+    .getAllByRole("link")
+    .map((l) => l.textContent);
+
 function serve(): Record<string, Route> {
   const routes: Record<string, Route> = {
     "GET /api/session": { body: { user: "alice@pve", csrf: "c1" } },
@@ -267,6 +273,35 @@ describe("the console", () => {
     ).toStrictEqual(["AcceptedDone", "Replace control planesRunning1 of 3 replaced", "SettleWaiting"]);
     expect(screen.getByText("by dev@pve")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open cluster" })).toHaveAttribute("href", "/clusters/default/db");
+  });
+
+  it("filters, groups and sorts the fleet list, and keeps the view in the address", async () => {
+    window.history.replaceState(null, "", "/");
+    serve();
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await waitFor(() => expect(names()).toStrictEqual(["edge", "ci", "db", "web"]));
+
+    await user.click(screen.getByRole("button", { name: "Cluster" }));
+    expect(names()).toStrictEqual(["ci", "db", "edge", "web"]);
+    expect(screen.getByRole("columnheader", { name: /Cluster/u })).toHaveAttribute("aria-sort", "ascending");
+    await user.click(screen.getByRole("button", { name: /Cluster/u }));
+    expect(names()).toStrictEqual(["web", "edge", "db", "ci"]);
+    expect(window.location.search).toBe("?sort=name&order=desc");
+
+    const show = within(screen.getByRole("group", { name: "Show" }));
+    await user.click(show.getByRole("button", { name: "Running 2" }));
+    expect(names()).toStrictEqual(["db", "ci"]);
+
+    await user.click(show.getByRole("button", { name: "All 4" }));
+    await user.type(screen.getByLabelText("Filter"), "dge");
+    expect(names()).toStrictEqual(["edge"]);
+    expect(screen.getByText("1 of 4")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Filter"), "zz");
+    expect(screen.getByText("No clusters match")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Clear filter" }));
+    expect(names()).toHaveLength(4);
+    expect(window.location.search).toBe("?sort=name&order=desc");
   });
 
   it("moves a cluster its health page finds trouble in to those needing you, linked to that page", async () => {
