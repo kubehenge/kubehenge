@@ -193,13 +193,23 @@ func validateClusterMesh(old, c *clusterv1.Cluster) field.ErrorList {
 	return errs
 }
 
-// validateGitOps holds a cluster's GitOps to the identity provider its web interface signs in
-// with: Flux's, and Argo CD's administrators, need the cluster's first OIDC provider.
+// validateGitOps holds a cluster's GitOps to the host keys of its repository, which a repository
+// reached over SSH has to give, and to the identity provider its web interface signs in with:
+// Flux's, and Argo CD's administrators, need the cluster's first OIDC provider.
 func validateGitOps(c *clusterv1.Cluster) field.ErrorList {
 	path := field.NewPath("spec", "topology", "variables").Key(gitopsVariable)
 	g, _, err := optionalVariable[GitOps](c, gitopsVariable)
 	if err != nil {
 		return field.ErrorList{field.Invalid(path, nil, err.Error())}
+	}
+	if g.Enabled && g.sshURL() && g.KnownHosts != "" {
+		if err := checkKnownHosts(g.KnownHosts, g.Repository.URL); err != nil {
+			return field.ErrorList{field.Invalid(path.Child("knownHosts"), nil, err.Error())}
+		}
+	}
+	if g.Enabled && g.knownHostsNeeded() && g.KnownHosts == "" {
+		return field.ErrorList{field.Required(path.Child("knownHosts"),
+			"a repository reached over SSH needs its host's keys as known_hosts lines; Kubehenge does not read them from the network")}
 	}
 	if !g.Enabled || (!g.UI && len(g.Admins) == 0) {
 		return nil

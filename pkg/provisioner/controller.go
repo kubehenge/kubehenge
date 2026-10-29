@@ -78,8 +78,6 @@ type Reconciler struct {
 	SysAuditGroup string
 	// VolumeSnapshots is what lets a cluster's CSI plugin take volume snapshots as root@pam.
 	VolumeSnapshots VolumeSnapshots
-	// HostKeys reads an SSH server's host keys as known_hosts lines; unset, from the server itself.
-	HostKeys func(ctx context.Context, address string) (string, error)
 
 	ids ciliumIDs
 }

@@ -621,6 +621,12 @@ func checkInterfaceRulesAdmission(ctx context.Context, t *testing.T, c client.Cl
 	if err := c.Create(ctx, offered("taker", 1, "10.0.0.20-10.0.0.30", "10.0.0.6")); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "overlap cluster team-a/first's 10.0.0.10-10.0.0.20") {
 		t.Fatalf("a cluster on another's node addresses: %v", err)
 	}
+	unpinned := withAddons(offered("unpinned", 1, "10.0.0.40-10.0.0.50", "10.0.0.7"), map[string]string{
+		gitopsVariable: `{"enabled":true,"auth":"deployKey","repository":{"url":"ssh://git@git.example.org/a/b.git"}}`,
+	})
+	if err := c.Create(ctx, unpinned); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "knownHosts") {
+		t.Fatalf("a repository over SSH without its host's keys: %v", err)
+	}
 }
 
 // checkSysAuditAdmission has the API server ask the validator about clusters whose token is to hold

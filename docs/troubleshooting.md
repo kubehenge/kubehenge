@@ -279,8 +279,8 @@ Kubehenge's controller holds a cluster's backups back, neither installing nor re
 
 ### GitOps
 
-- **`GitOpsWaiting`**, "GitOps waits for …": the engine syncs nothing until it has what follows. "the deploy key": Kubehenge makes it once the cluster exists. "the repository host's SSH keys": Kubehenge could not read them, and a `GitOpsHostKeys` event says why. "the repository's token, stored as the cluster's gitops credential": store the user name and token under the cluster's **Options**. For Flux's web interface, "a client secret, which Flux's web interface signs in with" and the like: store the client secret under **Options**, or create the Secret the message names; syncing goes on meanwhile.
-- **`GitOpsHostKeys`**, "could not read the SSH keys of …, to trust them, nor can GitOps reach the repository until they are read or set as gitops.knownHosts: …": Kubehenge's controller, in the management cluster, did not reach the repository's host over SSH. Let it through, or give the host's keys yourself in `gitops.knownHosts`, as an SSH `known_hosts` file holds them.
+- **`GitOpsWaiting`**, "GitOps waits for …": the engine syncs nothing until it has what follows. "the deploy key": Kubehenge makes it once the cluster exists. "the repository's token, stored as the cluster's gitops credential": store the user name and token under the cluster's **Options**. For Flux's web interface, "a client secret, which Flux's web interface signs in with" and the like: store the client secret under **Options**, or create the Secret the message names; syncing goes on meanwhile.
+- **"knownHosts: Required value"** or **"no host key is for …, the repository's host"**, when saving a cluster: a repository reached over `ssh://` needs its host's keys in `gitops.knownHosts`, as an SSH `known_hosts` file holds them, with a line for the host and port of the URL (`[host]:port` for a port other than 22). Take them from the forge's published keys, or from `ssh-keygen -F <host>` on a machine that already trusts it; `ssh-keyscan` reads them over the network unchecked, so compare its fingerprints with the forge's before using them.
 
 ### Certificates
 
