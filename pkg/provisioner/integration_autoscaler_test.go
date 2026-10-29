@@ -61,7 +61,7 @@ func poolMachine(cluster, name string) *clusterv1.Machine {
 // autoscaler of prod reaches neither the pool of prod-md, whose MachineDeployment's name starts like
 // its own, nor that cluster's machines.
 func TestIntegrationAutoscalerPolicy(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
-	cfg, _, _ := startAPIConfig(t)
+	cfg, _ := startAPIConfig(t)
 	ctx := context.Background()
 	scheme := runtime.NewScheme()
 	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, appsv1.AddToScheme, rbacv1.AddToScheme, autoscalingv1.AddToScheme, clusterv1.AddToScheme} {

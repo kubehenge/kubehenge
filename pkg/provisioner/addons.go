@@ -168,7 +168,7 @@ type Charts struct {
 	FluxVersion  string
 	// PodSecurityExempt are the namespaces Kyverno's policies leave alone, those the ClusterClasses'
 	// Pod Security Admission exempts.
-	PodSecurityExempt []string
+	PodSecurityExempt PodSecurityExempt
 }
 
 // Addons are the add-ons a cluster switches on through its variables.
@@ -991,7 +991,7 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 	if addons.PodSecurity.kyvernoOn() {
 		wanted = append(wanted,
 			chartProxy{kyvernoAddon, kyvernoAddon, kyvernoAddon, charts.Kyverno, kyvernoValues()},
-			chartProxy{kyvernoPolicies, kyvernoPolicies, kyvernoAddon, charts.KyvernoPolicies, kyvernoPolicyValues(addons.PodSecurity.Kyverno, charts.PodSecurityExempt)},
+			chartProxy{kyvernoPolicies, kyvernoPolicies, kyvernoAddon, charts.KyvernoPolicies, kyvernoPolicyValues(addons.PodSecurity.Kyverno, charts.PodSecurityExempt.For(cni.Name, addons))},
 		)
 	}
 	if addons.Istio.Enabled {

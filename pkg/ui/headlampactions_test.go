@@ -16,6 +16,7 @@ func (b *browser) headlampBody(method, path, body string) *httptest.ResponseReco
 	req := httptest.NewRequestWithContext(b.h.t.Context(), method, "https://kubehenge.example:8444"+path, strings.NewReader(body))
 	req.RemoteAddr = "192.0.2.10:50000"
 	req.Header.Set("Content-Type", "application/json")
+	headlampPage(req)
 	if b.cookie != "" {
 		req.Header.Set("Cookie", sessionCookie+"="+b.cookie)
 	}
