@@ -86,13 +86,13 @@ export function Machines({ cluster: c }: { cluster: Cluster }): JSX.Element {
             const s = machineStatus(m);
             return (
               <tr key={m.name}>
-                <td>
+                <td className="nowrap">
                   {m.node ?? m.name}
                   {filled(m.waiting) && <div className="hint message">{m.waiting}</div>}
                 </td>
                 <td>{m.role === "control-plane" ? "Control plane" : "Worker"}</td>
                 <td>{m.proxmoxNode ?? ""}</td>
-                <td>
+                <td className="nowrap">
                   <Status state={s.state} text={s.text} />
                 </td>
                 <td>{m.phase}</td>

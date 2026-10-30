@@ -64,7 +64,7 @@ export function BootLogDialog({
       <ErrorBox message={error} />
       <ErrorBox message={askError} />
       {data?.asked === true && <p className="muted">Reading…</p>}
-      {log !== undefined && <p className="muted">Read {new Date(log.read).toLocaleString()}.</p>}
+      {log !== undefined && <p className="muted">Read {new Date(log.read).toLocaleString()}</p>}
       <ErrorBox message={log?.error} />
       {(log?.sections ?? []).map((s) => (
         <section key={s.name} className="boot-log-part" aria-label={s.name}>
