@@ -8,6 +8,7 @@ import (
 	"io"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
@@ -38,8 +42,17 @@ const (
 	// budget holds past it is stopped by the reboot, as it would be by a power cut: one node is down
 	// at a time, for a minute or two.
 	talosDrainTimeout = 5 * time.Minute
-	// talosInstallTimeout bounds pulling the installer and writing it to disk.
+	// talosInstallTimeout bounds pulling the installer and writing it to disk, however steadily
+	// the node reports progress.
 	talosInstallTimeout = 15 * time.Minute
+	// talosInstallTries is how often a node's install is tried before its upgrade fails, when it
+	// fails as a network or a busy node may: before the reboot nothing on the node has changed.
+	talosInstallTries = 4
+	// talosRetryAfter is the wait before an install's second try, doubled for each try after.
+	talosRetryAfter = time.Minute
+	// talosMachineCheck is how often the machine of a node being installed is checked for still
+	// being there.
+	talosMachineCheck = 5 * time.Second
 	// talosBootTimeout is how long a rebooted node has to come up Ready on the new release. Talos
 	// boots the release before when the new one fails to, so one Ready on the old release past
 	// this has been rolled back.
@@ -76,6 +89,9 @@ type TalosUpgrader struct {
 	Events   events.EventRecorder
 	Interval time.Duration
 	Now      func() time.Time
+	// MachineCheck is how often a node's machine is checked while the node installs; zero is
+	// talosMachineCheck.
+	MachineCheck time.Duration
 
 	mu   sync.Mutex
 	busy map[types.NamespacedName]bool
@@ -156,12 +172,15 @@ func (u *TalosUpgrader) markDone(c *clusterv1.Cluster) {
 // talosProgress is a node upgrade under way, as TalosUpgradingAnnotation records it.
 type talosProgress struct {
 	node, release string
-	since         time.Time
+	// since is when the upgrade, or its last try, started.
+	since time.Time
+	// tries counts the installs that failed as a network or a busy node may, to be tried again.
+	tries int
 	// rebooted is when the node was told to reboot into the release; zero before.
 	rebooted time.Time
 }
 
-var talosProgressFormat = regexp.MustCompile(`^(\S+) to (v\d+\.\d+\.\d+) since (\S+?)(?:, rebooted at (\S+))?$`)
+var talosProgressFormat = regexp.MustCompile(`^(\S+) to (v\d+\.\d+\.\d+) since (\S+?)(?:, try (\d+))?(?:, rebooted at (\S+))?$`)
 
 func parseTalosProgress(s string) (talosProgress, bool) {
 	m := talosProgressFormat.FindStringSubmatch(s)
@@ -174,7 +193,14 @@ func parseTalosProgress(s string) (talosProgress, bool) {
 		return talosProgress{}, false
 	}
 	if m[4] != "" {
-		if p.rebooted, err = time.Parse(time.RFC3339, m[4]); err != nil {
+		try, convErr := strconv.Atoi(m[4])
+		if convErr != nil || try < 2 {
+			return talosProgress{}, false
+		}
+		p.tries = try - 1
+	}
+	if m[5] != "" {
+		if p.rebooted, err = time.Parse(time.RFC3339, m[5]); err != nil {
 			return talosProgress{}, false
 		}
 	}
@@ -183,10 +209,22 @@ func parseTalosProgress(s string) (talosProgress, bool) {
 
 func (p *talosProgress) String() string {
 	s := fmt.Sprintf("%s to %s since %s", p.node, p.release, p.since.UTC().Format(time.RFC3339))
+	if p.tries > 0 {
+		s += fmt.Sprintf(", try %d", p.tries+1)
+	}
 	if !p.rebooted.IsZero() {
 		s += ", rebooted at " + p.rebooted.UTC().Format(time.RFC3339)
 	}
 	return s
+}
+
+// retryAt is when an install that failed is tried again: at once the first time, as after a
+// restart of the controller, then a minute after, two, four.
+func (p *talosProgress) retryAt() time.Time {
+	if p.tries == 0 {
+		return p.since
+	}
+	return p.since.Add(talosRetryAfter << (p.tries - 1))
 }
 
 // talosStep is a node's upgrade to start or carry on with.
@@ -194,6 +232,8 @@ type talosStep struct {
 	talosProgress
 
 	address string
+	// machine is the name of the node's Machine.
+	machine string
 }
 
 var talosOSImage = regexp.MustCompile(`^Talos \((v\d+\.\d+\.\d+)\)$`)
@@ -238,8 +278,9 @@ func (u *TalosUpgrader) look(ctx context.Context, c *clusterv1.Cluster) (*talosS
 	for i := range machines {
 		m := &machines[i]
 		running, ok := MachineTalos(m)
-		if !ok || m.Status.NodeRef.Name == "" {
-			// Not up yet: a settled cluster has none such for long.
+		if !ok || m.Status.NodeRef.Name == "" || !m.DeletionTimestamp.IsZero() {
+			// Not up yet, or going as the cluster scales down or replaces it: a settled cluster
+			// has none such for long.
 			return nil, nil //nolint:nilnil // as above
 		}
 		if running == target {
@@ -254,7 +295,7 @@ func (u *TalosUpgrader) look(ctx context.Context, c *clusterv1.Cluster) (*talosS
 			return nil, u.fail(ctx, c, &p, err)
 		}
 		p.release = release
-		return &talosStep{talosProgress: p, address: machineAddress(m)}, nil
+		return &talosStep{talosProgress: p, address: machineAddress(m), machine: m.Name}, nil
 	}
 	return nil, nil //nolint:nilnil // every node runs the release
 }
@@ -292,17 +333,18 @@ func (u *TalosUpgrader) machines(ctx context.Context, c *clusterv1.Cluster) ([]c
 }
 
 // follow carries a node upgrade under way on: one not rebooted yet is started again, after a
-// restart of the controller, as each of its steps can be taken twice; one rebooted is done once
-// the node is Ready on the release, and failed when it is not by talosBootTimeout.
+// restart of the controller or a failed try, as each of its steps can be taken twice; one rebooted
+// is done once the node is Ready on the release, and failed when it is not by talosBootTimeout.
 func (u *TalosUpgrader) follow(ctx context.Context, c *clusterv1.Cluster, machines []clusterv1.Machine, p *talosProgress) (*talosStep, error) {
-	i := slices.IndexFunc(machines, func(m clusterv1.Machine) bool { return m.Status.NodeRef.Name == p.node })
-	if i < 0 {
-		// Cluster API replaced the machine; its successor is looked at as any other.
-		return nil, u.annotate(ctx, c, map[string]any{TalosUpgradingAnnotation: nil})
+	m := nodeMachine(machines, p.node)
+	if m == nil {
+		return nil, u.abandon(ctx, c, p)
 	}
-	m := &machines[i]
 	if p.rebooted.IsZero() {
-		return &talosStep{talosProgress: *p, address: machineAddress(m)}, nil
+		if u.Now().Before(p.retryAt()) {
+			return nil, nil //nolint:nilnil // the next try waits
+		}
+		return &talosStep{talosProgress: *p, address: machineAddress(m), machine: m.Name}, nil
 	}
 	running, _ := MachineTalos(m)
 	ready := meta.IsStatusConditionTrue(m.Status.Conditions, clusterv1.MachineNodeReadyCondition)
@@ -347,11 +389,18 @@ func (u *TalosUpgrader) upgrade(ctx context.Context, c *clusterv1.Cluster, s *ta
 		return err
 	}
 	defer func() { _ = node.Close() }()
-	ictx, cancel := context.WithTimeout(ctx, talosInstallTimeout)
+	ctrl.LoggerFrom(ctx).WithName("talos-upgrader").Info("installing Talos", "cluster", client.ObjectKeyFromObject(c),
+		"node", s.node, "release", s.release, "image", image, "try", s.tries+1)
+	wctx, stop := u.whileMachine(ctx, c.Namespace, s.machine)
+	ictx, cancel := context.WithTimeout(wctx, talosInstallTimeout)
 	err = node.Install(ictx, image)
 	cancel()
-	if err != nil {
-		return u.fail(ctx, c, &s.talosProgress, err)
+	stop()
+	switch {
+	case errors.Is(context.Cause(wctx), errMachineGone):
+		return u.abandon(ctx, c, &s.talosProgress)
+	case err != nil:
+		return u.retryOrFail(ctx, c, s, err)
 	}
 	u.eventf(c, corev1.EventTypeNormal, "TalosUpgrading", "node %s installed Talos %s and reboots into it", s.node, s.release)
 	if err := u.Nodes.Drain(ctx, c, s.node); err != nil {
@@ -368,8 +417,95 @@ func (u *TalosUpgrader) upgrade(ctx context.Context, c *clusterv1.Cluster, s *ta
 	return nil
 }
 
-// fail records why a node's upgrade failed, which stops the cluster's upgrades.
+// errMachineGone ends a node's install whose machine Cluster API deletes.
+var errMachineGone = errors.New("the node's machine is being deleted")
+
+// whileMachine is ctx ended with errMachineGone once the named Machine is deleted or being deleted,
+// as when the cluster scales down onto the node being upgraded: its VM goes, and nothing it was
+// told answers again. stop ends the watch.
+func (u *TalosUpgrader) whileMachine(ctx context.Context, namespace, name string) (context.Context, func()) {
+	wctx, cancel := context.WithCancelCause(ctx)
+	if name == "" {
+		return wctx, func() { cancel(nil) }
+	}
+	t := time.NewTicker(cmpDuration(u.MachineCheck, talosMachineCheck))
+	done := make(chan struct{})
+	go func() {
+		defer t.Stop()
+		for {
+			select {
+			case <-wctx.Done():
+				return
+			case <-done:
+				return
+			case <-t.C:
+				m := &clusterv1.Machine{}
+				err := u.Client.Get(wctx, client.ObjectKey{Namespace: namespace, Name: name}, m)
+				if apierrors.IsNotFound(err) || (err == nil && !m.DeletionTimestamp.IsZero()) {
+					cancel(errMachineGone)
+					return
+				}
+			}
+		}
+	}()
+	return wctx, func() {
+		close(done)
+		cancel(nil)
+	}
+}
+
+// nodeMachine is the machine of a node, unless Cluster API is deleting it or has.
+func nodeMachine(machines []clusterv1.Machine, node string) *clusterv1.Machine {
+	i := slices.IndexFunc(machines, func(m clusterv1.Machine) bool {
+		return m.Status.NodeRef.Name == node && m.DeletionTimestamp.IsZero()
+	})
+	if i < 0 {
+		return nil
+	}
+	return &machines[i]
+}
+
+// abandon drops the upgrade of a node whose machine Cluster API deletes, or has replaced: the node
+// goes with it, and the rest of the cluster's nodes are looked at as before.
+func (u *TalosUpgrader) abandon(ctx context.Context, c *clusterv1.Cluster, p *talosProgress) error {
+	ctrl.LoggerFrom(ctx).WithName("talos-upgrader").Info("Talos upgrade abandoned, its machine is going",
+		"cluster", client.ObjectKeyFromObject(c), "node", p.node, "release", p.release)
+	u.eventf(c, corev1.EventTypeNormal, "TalosUpgradeAbandoned", "node %s to Talos %s: its machine is being deleted", p.node, p.release)
+	return u.annotate(ctx, c, map[string]any{TalosUpgradingAnnotation: nil})
+}
+
+// retryOrFail tries a failed install again later when it failed as a network or a busy node may,
+// up to talosInstallTries times, and fails the upgrade otherwise.
+func (u *TalosUpgrader) retryOrFail(ctx context.Context, c *clusterv1.Cluster, s *talosStep, err error) error {
+	if !transientInstall(err) || s.tries+1 >= talosInstallTries {
+		return u.fail(ctx, c, &s.talosProgress, err)
+	}
+	s.tries++
+	s.since = u.Now()
+	u.eventf(c, corev1.EventTypeWarning, "TalosInstallRetry", "node %s to Talos %s, try %d of %d at %s: %v",
+		s.node, s.release, s.tries+1, talosInstallTries, s.retryAt().UTC().Format(time.RFC3339), err)
+	return u.annotate(ctx, c, map[string]any{TalosUpgradingAnnotation: s.String()})
+}
+
+// transientInstall tells an install that a later try may get through, the node or the network
+// having been slow or away, from one that would fail again the same way.
+func transientInstall(err error) bool {
+	if errors.Is(err, errTalosStalled) || errors.Is(err, errTalosNotReady) {
+		return true
+	}
+	switch status.Code(err) { //nolint:exhaustive // every other code is the node's or the image's verdict
+	case codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted, codes.Aborted:
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded)
+}
+
+// fail records why a node's upgrade failed, which stops the cluster's upgrades; the upgrade of a
+// node whose machine is going is abandoned instead.
 func (u *TalosUpgrader) fail(ctx context.Context, c *clusterv1.Cluster, p *talosProgress, why error) error {
+	if machines, err := u.machines(ctx, c); err == nil && nodeMachine(machines, p.node) == nil {
+		return u.abandon(ctx, c, p)
+	}
 	u.eventf(c, corev1.EventTypeWarning, "TalosUpgradeFailed", "node %s to Talos %s: %v", p.node, p.release, why)
 	return u.annotate(ctx, c, map[string]any{
 		TalosUpgradingAnnotation:     nil,
