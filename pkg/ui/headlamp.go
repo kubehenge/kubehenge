@@ -126,8 +126,8 @@ func (s *Server) HeadlampHandler() http.Handler {
 	proxy := &httputil.ReverseProxy{
 		Rewrite:        s.Headlamp.rewrite,
 		ModifyResponse: s.modifyHeadlampResponse,
-		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
-			s.Log.Error("headlamp", "error", err)
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			s.Log.ErrorContext(r.Context(), "headlamp", "error", err)
 			http.Error(w, "Headlamp is not running", http.StatusBadGateway)
 		},
 	}
@@ -303,7 +303,7 @@ func (s *Server) headlampOffers(w http.ResponseWriter, r *http.Request, u user) 
 func (s *Server) headlampSees(w http.ResponseWriter, r *http.Request, u user, cluster string) bool {
 	visible, err := s.headlampVisible(r.Context(), u, cluster)
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return false
 	}
 	if !visible {
@@ -452,10 +452,10 @@ func (s *Server) syncHeadlamp(ctx context.Context, every time.Duration) {
 	for {
 		kube := s.currentKube()
 		if err := s.writeHeadlampKubeconfig(ctx, kube); err != nil {
-			s.Log.Error("headlamp's kubeconfig", "error", err)
+			s.Log.ErrorContext(ctx, "headlamp's kubeconfig", "error", err)
 		}
 		if err := s.readHeadlampActions(ctx, kube); err != nil {
-			s.Log.Error("headlamp's actions", "error", err)
+			s.Log.ErrorContext(ctx, "headlamp's actions", "error", err)
 		}
 		s.pruneHeadlampSeen()
 		s.Headlamp.pruneHeadlampSignIns(s.now())
@@ -655,7 +655,7 @@ func (s *Server) headlampEndpoint(ctx context.Context, kube client.Client, c *cl
 	}
 	admin, err := clientcmd.Load(secret.Data["value"])
 	if err != nil {
-		s.Log.Warn("unreadable kubeconfig", "cluster", c.Namespace+"/"+c.Name, "error", err)
+		s.Log.WarnContext(ctx, "unreadable kubeconfig", "cluster", c.Namespace+"/"+c.Name, "error", err)
 		return headlampEndpoint{}, false, nil
 	}
 	current := admin.Contexts[admin.CurrentContext]

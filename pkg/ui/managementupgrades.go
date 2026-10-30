@@ -166,19 +166,19 @@ func (s *Server) keepUnattended(w http.ResponseWriter, r *http.Request, u user) 
 	}
 	token, err := s.Accounts.CreateAdministratorToken(r.Context(), u.ticket, upgraderUser, upgraderTokenName, upgraderComment)
 	if err != nil {
-		s.proxmoxChangeError(w, err)
+		s.proxmoxChangeError(w, r, err)
 		return
 	}
 	err = a.KeepUnattended(appliance.Unattended{Passphrase: req.Passphrase, Token: token, By: u.ticket.Username, Since: up.Now()})
 	if err != nil {
-		s.Log.Error("keeping what automatic upgrades need", "error", err)
+		s.Log.ErrorContext(r.Context(), "keeping what automatic upgrades need", "error", err)
 		if delErr := s.Accounts.DeleteUser(r.Context(), u.ticket, upgraderUser); delErr != nil {
-			s.Log.Error("deleting the automatic upgrades' Proxmox VE user again", "error", delErr)
+			s.Log.ErrorContext(r.Context(), "deleting the automatic upgrades' Proxmox VE user again", "error", delErr)
 		}
 		writeError(w, http.StatusInternalServerError, "automatic upgrades could not be switched on")
 		return
 	}
-	s.Log.Warn("automatic upgrades of the management cluster switched on: the appliance keeps the state passphrase and an administrator's API token",
+	s.Log.WarnContext(r.Context(), "automatic upgrades of the management cluster switched on: the appliance keeps the state passphrase and an administrator's API token",
 		"user", u.ticket.Username, "proxmoxUser", upgraderUser)
 	up.wake()
 	writeJSON(w, http.StatusOK, s.managementAutomatic())
@@ -197,14 +197,14 @@ func (s *Server) forgetUnattended(w http.ResponseWriter, r *http.Request, u user
 		return
 	}
 	if err := a.ForgetUnattended(); err != nil {
-		s.Log.Error("switching automatic upgrades of the management cluster off", "error", err)
+		s.Log.ErrorContext(r.Context(), "switching automatic upgrades of the management cluster off", "error", err)
 		writeError(w, http.StatusInternalServerError, "automatic upgrades could not be switched off")
 		return
 	}
-	s.Log.Warn("automatic upgrades of the management cluster switched off", "user", u.ticket.Username)
+	s.Log.WarnContext(r.Context(), "automatic upgrades of the management cluster switched off", "user", u.ticket.Username)
 	up.wake()
 	if err := s.Accounts.DeleteUser(r.Context(), u.ticket, upgraderUser); err != nil {
-		s.Log.Error("deleting the automatic upgrades' Proxmox VE user", "error", err)
+		s.Log.ErrorContext(r.Context(), "deleting the automatic upgrades' Proxmox VE user", "error", err)
 		writeError(w, http.StatusBadGateway, "automatic upgrades are off, but user "+upgraderUser+" is left. Delete it in Proxmox VE: "+err.Error())
 		return
 	}
@@ -212,12 +212,12 @@ func (s *Server) forgetUnattended(w http.ResponseWriter, r *http.Request, u user
 }
 
 // proxmoxChangeError answers a change Proxmox VE refused with what it said.
-func (s *Server) proxmoxChangeError(w http.ResponseWriter, err error) {
+func (s *Server) proxmoxChangeError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, pve.ErrAuthentication) || errors.Is(err, pve.ErrForbidden) {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
-	s.Log.Error("proxmox VE refused a change", "error", err)
+	s.Log.ErrorContext(r.Context(), "proxmox VE refused a change", "error", err)
 	writeError(w, http.StatusBadGateway, "Proxmox VE: "+err.Error())
 }
 
