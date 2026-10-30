@@ -326,11 +326,7 @@ export function GitOpsFields({
             </Field>
           )}
           {g.url.startsWith("ssh://") && (
-            <Field
-              label="SSH host keys"
-              hint="known_hosts lines, from ssh-keygen -F host"
-              error={problems.knownHosts}
-            >
+            <Field label="SSH host keys" hint="known_hosts lines, from ssh-keygen -F host" error={problems.knownHosts}>
               {(id) => (
                 <textarea
                   id={id}
