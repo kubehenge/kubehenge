@@ -488,6 +488,11 @@ button.go {
   font-size: 13px;
 }
 
+.rail-stale .rail-group {
+  opacity: 0.55;
+  filter: grayscale(1);
+}
+
 /* The running work: beside the page on a wide screen, over it on a narrower one when asked for,
    and folded away when nothing runs or the user folds it. */
 
@@ -2323,6 +2328,11 @@ details.advanced > summary {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+.tiles-stale .tile {
+  opacity: 0.55;
+  filter: grayscale(1);
 }
 
 .tile {

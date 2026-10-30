@@ -190,7 +190,7 @@ The buttons beside the cluster's name act on the whole cluster: **Scale**, **Upg
 - **Backups:** the cluster's backups and restores, with **Back up now** and **Restore…** ([Back up and restore](#back-up-and-restore)).
 - **Options:** every setting that can change once the cluster exists, each listed with what changing it does [below](#change-add-ons-and-sign-in). Each has **Edit** (**Upgrade** for the Talos release, **Uninstall** for Rancher on the cluster that runs it), disabled for those who may not change the cluster. The pod network and CIS hardening are fixed, so they have none.
 
-The status reads **Provisioning**, **Available**, **Upgrading** or **Reconciling** while a change rolls out, **Deleting**, or **Failed**. A cluster deleted while its page is open says so. While Health finds something, every other view shows the most serious of it under the tabs, with how many more there are and the way to Health, as it does when the cluster does not answer.
+The status reads **Provisioning**, **Available**, **Upgrading** or **Reconciling** while a change rolls out, **Deleting**, or **Failed**. A cluster deleted while its page is open says so. While Health finds something, every other view shows the most serious of it under the tabs, with how many more there are and the way to Health, as it does when the cluster does not answer. When the interface cannot read the cluster's health or the fleet again, it keeps the last reading greyed out and marked **Stale** until a read succeeds.
 
 ### Staged changes
 

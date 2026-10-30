@@ -1,6 +1,6 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 import { fakeServer, type Route } from "./fake-server";
@@ -156,6 +156,27 @@ function serve(): Record<string, Route> {
 }
 
 describe("the console", () => {
+  it("greys the fleet out while reading it again fails, until a read succeeds", async () => {
+    window.history.replaceState(null, "", "/");
+    const routes = serve();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<App />);
+    const rail = await screen.findByRole("navigation", { name: "Fleet" });
+    await waitFor(() => expect(within(rail).getAllByRole("link")).toHaveLength(4));
+    expect(rail).not.toHaveClass("rail-stale");
+
+    routes["GET /api/clusters"] = { status: 502, body: { error: "the management cluster does not answer" } };
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    await waitFor(() => expect(rail).toHaveClass("rail-stale"));
+    expect(within(rail).getByText("Stale")).toHaveAttribute("title", "the management cluster does not answer");
+    expect(within(rail).getAllByRole("link")).toHaveLength(4);
+
+    routes["GET /api/clusters"] = { body: fleet };
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    await waitFor(() => expect(rail).not.toHaveClass("rail-stale"));
+    vi.useRealTimers();
+  });
+
   it("lists the fleet by where each cluster stands, with why, and follows the running work", async () => {
     window.history.replaceState(null, "", "/clusters/default/web");
     serve();

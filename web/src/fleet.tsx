@@ -257,8 +257,10 @@ export function FleetRail({
 }): JSX.Element {
   const fleet = useFleet();
   const list = fleet?.clusters === undefined ? undefined : ranked(fleet.clusters, fleet.health);
+  // A failed read leaves the last list shown, greyed, as it may no longer hold.
+  const stale = fleet?.error !== undefined && list !== undefined;
   return (
-    <nav className="rail" aria-label="Fleet">
+    <nav className={stale ? "rail rail-stale" : "rail"} aria-label="Fleet">
       <div className="rail-head">
         <h2>Fleet {list !== undefined && <span className="count">{list.length}</span>}</h2>
         <button
@@ -273,6 +275,11 @@ export function FleetRail({
         </button>
       </div>
       {fleet?.error !== undefined && list === undefined && <p className="rail-note">{fleet.error}</p>}
+      {stale && (
+        <p className="rail-note hint-warning" title={fleet.error}>
+          Stale
+        </p>
+      )}
       {list?.length === 0 && <p className="rail-note">No clusters yet</p>}
       {list !== undefined &&
         groups.map(({ group, label }) => {

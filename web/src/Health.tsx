@@ -107,14 +107,15 @@ function verdictState(h: ClusterHealth): State {
 }
 
 // Verdict carries, behind its state, why nothing from inside the cluster shows when nothing does.
-function Verdict({ health: h }: { health: ClusterHealth }): JSX.Element {
+function Verdict({ health: h, stale }: { health: ClusterHealth; stale: boolean }): JSX.Element {
+  const at = new Date(h.read).toLocaleTimeString();
   return (
     <div className="verdict">
       <Status state={verdictState(h)} text={verdicts[h.verdict]} />
       {filled(h.workload) && <Detail>{h.workload}</Detail>}
       <span className="spacer" />
-      <span className="muted" title={new Date(h.read).toLocaleString()}>
-        Read at {new Date(h.read).toLocaleTimeString()}
+      <span className={stale ? "hint-warning" : "muted"} title={new Date(h.read).toLocaleString()}>
+        {stale ? `Stale, read at ${at}` : `Read at ${at}`}
       </span>
     </div>
   );
@@ -266,10 +267,11 @@ function healthChecksTile(h: ClusterHealth): Tile {
   return { section: "cluster-api", label: "Health checks", value: `${healthy} of ${expected} healthy`, state };
 }
 
-function Tiles({ health: h }: { health: ClusterHealth }): JSX.Element {
+// A stale reading is the last one shown after a later read failed: it may no longer hold.
+function Tiles({ health: h, stale }: { health: ClusterHealth; stale: boolean }): JSX.Element {
   const tiles = [controlPlaneTile(h), workersTile(h), pressureTile(h), podsTile(h), addonsTile(h), healthChecksTile(h)];
   return (
-    <ul className="tiles" aria-label="At a glance">
+    <ul className={stale ? "tiles tiles-stale" : "tiles"} aria-label={stale ? "At a glance, stale" : "At a glance"}>
       {tiles.map((t) => (
         <li key={t.label}>
           <a className={`tile tile-${t.state}`} href={`#${anchor(t.section)}`}>
@@ -999,9 +1001,9 @@ export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlam
   return (
     <>
       <div className="box">
-        <Verdict health={h} />
+        <Verdict health={h} stale={filled(error)} />
         <ErrorBox message={error} />
-        <Tiles health={h} />
+        <Tiles health={h} stale={filled(error)} />
       </div>
       <NeedsAttention health={h} actions={actions} />
       <Nodes health={h} />
