@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type JSX } from "react";
 
 import { AddOnsStep } from "./AddOnsStep";
 import { api, bridgesOf, dnsOf } from "./api";
-import { clusterPath } from "./ClusterDetail";
+import { clusterPath } from "./cluster-paths";
 import {
   classBridges,
   classStorages,

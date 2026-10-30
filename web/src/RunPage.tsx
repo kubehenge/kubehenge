@@ -1,7 +1,7 @@
 import { useState, type JSX } from "react";
 
 import { api } from "./api";
-import { clusterPath } from "./ClusterDetail";
+import { clusterPath } from "./cluster-paths";
 import { useFleet } from "./fleet";
 import { Link, navigate } from "./router";
 import { runTitle, runView } from "./Runs";

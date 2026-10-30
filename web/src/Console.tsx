@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type JSX, type ReactNode, type RefObject } from "react";
 
 import { adminPath, adminViews } from "./admin-views";
-import { clusterActions, clusterPath, headlampURL, intentPath, views, type View } from "./ClusterDetail";
+import { clusterActions, clusterPath, headlampURL, intentPath, views, type View } from "./cluster-paths";
 import { FleetRail, ranked, useFleet } from "./fleet";
 import logo from "./logo.svg";
 import { Palette, ShortcutsDialog, useShortcuts, type Command, type Shortcut } from "./Palette";

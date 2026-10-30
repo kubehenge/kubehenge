@@ -1,7 +1,7 @@
 import { useState, type JSX } from "react";
 
 import { api } from "./api";
-import { clusterPath } from "./ClusterDetail";
+import { clusterPath } from "./cluster-paths";
 import { Link } from "./router";
 import type { Cluster, Machine, PveNode } from "./types";
 import {

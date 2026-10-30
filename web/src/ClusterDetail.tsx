@@ -1,13 +1,13 @@
-import { useEffect, useState, type JSX } from "react";
+import { Suspense, lazy, useEffect, useState, type JSX } from "react";
 
 import { api } from "./api";
 import { AutoscalerDialog, ScaleDialog, autoscalerText, poolText } from "./Autoscaling";
 import { BackupsDialog, BackupsView, backupsOf, backupsRows, useClassTargets } from "./Backups";
 import { issuesFromCA, saveCA } from "./Certificates";
+import { clusterActions, clusterPath, headlampURL, views, type Intent, type View } from "./cluster-paths";
 import { OptionDialog, Options, type OptionAction, type OptionRow } from "./ClusterOptions";
 import { EtcdSnapshotsDialog, EtcdSnapshotsView, etcdSnapshotsOf, etcdSnapshotsRows } from "./EtcdSnapshots";
 import { ClusterStatus, fleetKey, useFleet } from "./fleet";
-import { HealthView } from "./Health";
 import { Machines, Placement } from "./Machines";
 import { nodeOSKey } from "./node-os";
 import { Link, navigate, useQuery } from "./router";
@@ -35,36 +35,6 @@ import {
 import { UpgradeChecks, usePlan } from "./Upgrade";
 
 type Action = "scale" | "upgrade" | "delete" | "backups" | "autoscaler" | "etcdSnapshots" | OptionAction;
-
-/** Intent is what a cluster's address asks its page to start, in its do parameter. */
-export type Intent = "scale" | "upgrade" | "kubeconfig" | "talosconfig" | "delete";
-
-export interface ClusterAction {
-  intent: Intent;
-  label: string;
-}
-
-/** clusterActions are what the user may start on a cluster from anywhere, as its page offers them. */
-export function clusterActions(c: Cluster): ClusterAction[] {
-  const can = c.allowed.change && !c.deleting;
-  const actions: ClusterAction[] = [];
-  if (can) {
-    actions.push({ intent: "scale", label: "Scale" }, { intent: "upgrade", label: "Upgrade" });
-  }
-  if (c.allowed.kubeconfig && c.available) {
-    actions.push({ intent: "kubeconfig", label: "Download kubeconfig" });
-  }
-  if (c.allowed.kubeconfig && c.distribution === "talos") {
-    actions.push({ intent: "talosconfig", label: "Download talosconfig" });
-  }
-  if (can) {
-    actions.push({ intent: "delete", label: "Delete" });
-  }
-  return actions;
-}
-
-/** intentPath is a cluster's page asked to start an action. */
-export const intentPath = (c: Cluster, intent: Intent): string => `${clusterPath(c.namespace, c.name)}?do=${intent}`;
 
 const saveConfig = async (c: Cluster, kind: "kubeconfig" | "talosconfig"): Promise<void> => {
   const file = kind === "kubeconfig" ? api.kubeconfig(c.namespace, c.name) : api.talosconfig(c.namespace, c.name);
@@ -103,15 +73,13 @@ const httpNotFound = 404;
 
 const clusterCache = pollCache<Cluster>();
 
-/**
- * headlampURL is a cluster's page in the shared Headlamp, served on its own port of this host.
- * A cluster's goes through the gate's opening of it, which signs in again a session that signed
- * out of the cluster in Headlamp, and leads on to the cluster's page there.
- */
-export function headlampURL(port: number, cluster?: string): string {
-  const host = location.hostname.includes(":") ? `[${location.hostname}]` : location.hostname;
-  return `https://${host}:${port}/${filled(cluster) ? `kubehenge/open/${encodeURIComponent(cluster)}` : ""}`;
-}
+// The health view is the largest, and fetched once the cluster's page has drawn, so the page does
+// not wait for it and it is there when its tab or a warning is clicked.
+const loadHealth = async (): Promise<unknown> => import("./Health");
+const HealthView = lazy(async () => {
+  const m = await import("./Health");
+  return { default: m.HealthView };
+});
 
 // headlampOf is the cluster's page in the shared Headlamp, when one runs and can reach the cluster.
 function headlampOf(port: number | undefined, c: Cluster): string | undefined {
@@ -121,17 +89,6 @@ function headlampOf(port: number | undefined, c: Cluster): string | undefined {
 }
 
 const poolName = (pool: string): string => pool.replace(/^\/pool\//u, "");
-
-/** The views of a cluster's page, as the last part of its address; the summary has none. */
-export const views = [
-  { path: "", label: "Summary" },
-  { path: "health", label: "Health" },
-  { path: "machines", label: "Machines" },
-  { path: "backups", label: "Backups" },
-  { path: "options", label: "Options" },
-] as const;
-
-export type View = (typeof views)[number]["path"];
 
 interface TabBadge {
   shown: string;
@@ -224,10 +181,6 @@ function AttentionStrip({ cluster: c, view }: { cluster: Cluster; view: View }):
     </section>
   );
 }
-
-/** clusterPath is the address of a cluster's page, or of one of its views. */
-export const clusterPath = (namespace: string, name: string, view: View = ""): string =>
-  `/clusters/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}${view ? `/${view}` : ""}`;
 
 // autoUpgradeText reads the controller's record of the last automatic upgrade, "from to to at
 // time", with the time in the reader's own terms.
@@ -329,6 +282,9 @@ export function ClusterDetail({
   );
   const [action, setAction] = useState<Action>();
   const [downloadError, setDownloadError] = useState<string>();
+  useEffect(() => {
+    void loadHealth();
+  }, []);
   // Fetched rather than linked, so that a refusal shows here instead of as a broken download.
   const download = async (save: () => Promise<void>): Promise<void> => {
     setDownloadError(undefined);
@@ -458,7 +414,11 @@ export function ClusterDetail({
                 }}
               />
             )}
-            {view === "health" && <HealthView cluster={c} headlamp={inHeadlamp} />}
+            {view === "health" && (
+              <Suspense fallback={<p className="muted pad">Loading…</p>}>
+                <HealthView cluster={c} headlamp={inHeadlamp} />
+              </Suspense>
+            )}
             {view === "machines" && (
               <Machines
                 cluster={c}

@@ -1,7 +1,7 @@
 import { createContext, use, useEffect, useMemo, useRef, type JSX, type ReactNode } from "react";
 
 import { api } from "./api";
-import { clusterPath, type View } from "./ClusterDetail";
+import { clusterPath, type View } from "./cluster-paths";
 import { Link } from "./router";
 import type { Cluster, FleetHealth, Replicas, RunInfo } from "./types";
 import { Status, distributionName, filled, health, pollIdle, settled, usePoll } from "./ui";

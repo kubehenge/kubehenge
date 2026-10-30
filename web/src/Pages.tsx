@@ -1,7 +1,7 @@
-import { lazy, type JSX } from "react";
+import { lazy, useEffect, type JSX } from "react";
 
 import { adminPath, adminViews, type AdminView } from "./admin-views";
-import { ClusterDetail, clusterPath, views, type View } from "./ClusterDetail";
+import { clusterPath, views, type View } from "./cluster-paths";
 import { ClusterList } from "./ClusterList";
 import { Link, match } from "./router";
 
@@ -18,6 +18,13 @@ const Administration = lazy(async () => {
 const Setup = lazy(async () => {
   const m = await import("./Setup");
   return { default: m.Setup };
+});
+// A cluster's page is what nearly everyone opens next, so its code is fetched as soon as the first
+// page has drawn, and is there by the time a cluster is clicked.
+const loadClusterDetail = async (): Promise<unknown> => import("./ClusterDetail");
+const ClusterDetail = lazy(async () => {
+  const m = await import("./ClusterDetail");
+  return { default: m.ClusterDetail };
 });
 const CreateCluster = lazy(async () => {
   const m = await import("./CreateCluster");
@@ -95,6 +102,9 @@ export function RoutePage({
   headlamp: number | undefined;
   onSetupChanged: () => void;
 }): JSX.Element {
+  useEffect(() => {
+    void loadClusterDetail();
+  }, []);
   switch (route.page) {
     case "loading": {
       return <p className="loading">Loading…</p>;

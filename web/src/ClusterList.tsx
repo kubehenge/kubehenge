@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 
 import { adminPath } from "./admin-views";
-import { clusterPath } from "./ClusterDetail";
+import { clusterPath } from "./cluster-paths";
 import { FirstCluster } from "./FirstCluster";
 import { FleetProvider, badge, fleetKey, groups, ranked, useFleet, type Group, type Standing } from "./fleet";
 import { score } from "./Palette";
