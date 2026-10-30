@@ -2139,9 +2139,9 @@ EOF
     # The link names the SSE-C headers among those it signs, which the request then has to send; the
     # key itself is neither a parameter of it nor anywhere in it.
     SSE_KEY=${sse_key} python3 -c 'import os, sys, urllib.parse
-    link = sys.argv[1]
-    params = {k.lower() for k in urllib.parse.parse_qs(urllib.parse.urlsplit(link).query)}
-    sys.exit(1 if "x-amz-server-side-encryption-customer-key" in params or os.environ["SSE_KEY"] in urllib.parse.unquote(link) else 0)' \
+link = sys.argv[1]
+params = {k.lower() for k in urllib.parse.parse_qs(urllib.parse.urlsplit(link).query)}
+sys.exit(1 if "x-amz-server-side-encryption-customer-key" in params or os.environ["SSE_KEY"] in urllib.parse.unquote(link) else 0)' \
         "${results_link}" || fail "Velero's link carries the SSE-C key"
     plain=$(curl -sS --cacert "${KUBEHENGE_E2E_BACKUP_CA}" -o /dev/null -w '%{http_code}' "${results_link}")
     case ${plain} in
