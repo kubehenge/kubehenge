@@ -21,6 +21,7 @@ import { addressBits, addressIn } from "./network";
 import { choosable, cpuNote, findNodeOS, macName, nodeOSKey, nodeOSLabel } from "./node-os";
 import { OIDCProviders } from "./OIDCProviders";
 import { HAField, HAGroupsField, PlacementFields, type HARulesRead } from "./Placement";
+import { clusterKey } from "./start-from";
 import {
   TalosReleaseSelect,
   forRelease,
@@ -32,6 +33,7 @@ import {
 } from "./Talos";
 import type {
   Bridge,
+  Cluster,
   ClusterClass,
   FreeAddresses,
   NodeOSChoice,
@@ -458,6 +460,37 @@ export interface StepProps {
   shown: (k: FieldKey) => string | undefined;
 }
 
+// StartFromField chooses the cluster a new one starts as, or none for the class's defaults.
+function StartFromField({
+  from,
+  starts,
+  onChoose,
+  namespaced,
+}: {
+  from: string;
+  starts: Cluster[];
+  onChoose: (key: string) => void;
+  namespaced: boolean;
+}): JSX.Element | null {
+  if (starts.length === 0) {
+    return null;
+  }
+  return (
+    <Field label="Start from">
+      {(id) => (
+        <select id={id} value={from} onChange={(e) => onChoose(e.target.value)}>
+          <option value="">Defaults</option>
+          {starts.map((c) => (
+            <option key={clusterKey(c)} value={clusterKey(c)}>
+              {namespaced ? clusterKey(c) : c.name}
+            </option>
+          ))}
+        </select>
+      )}
+    </Field>
+  );
+}
+
 export function GeneralStep({
   form,
   set,
@@ -469,6 +502,8 @@ export function GeneralStep({
   onChooseClass,
   namespaces,
   onChooseNamespace,
+  starts,
+  onChooseFrom,
 }: StepProps & {
   classes: ClusterClass[];
   cls: ClusterClass | undefined;
@@ -478,12 +513,16 @@ export function GeneralStep({
   onChooseClass: (name: string) => void;
   namespaces: string[];
   onChooseNamespace: (namespace: string) => void;
+  /** The clusters a new one may start from, the newest first. */
+  starts: Cluster[];
+  onChooseFrom: (key: string) => void;
 }): JSX.Element {
   const runs = forRelease(offered, talos, form.talosVersion);
   const typed = typedVersion(cls, runs);
   const unlisted = runs?.error;
   return (
     <>
+      <StartFromField from={form.from} starts={starts} onChoose={onChooseFrom} namespaced={namespaces.length > 1} />
       {namespaces.length > 1 && (
         <Field label="Namespace">
           {(id) => (
@@ -583,7 +622,7 @@ export function NetworkStep({
 }: StepProps & {
   cls: ClusterClass | undefined;
   bridgeOptions: Bridge[];
-  /** The bridge's network, like 192.0.2.0/24, where a node reports it; the examples are taken from it. */
+  /** The bridge's network, like 192.0.2.0/24, where a node reports it, else the gateway's; the examples are taken from it. */
   network?: string | undefined;
   /** What probing the addresses typed found. */
   checked?: FreeAddresses | undefined;

@@ -652,6 +652,7 @@ const freeOn: Route = (body) => {
 
 describe("create", () => {
   const form: Form = {
+    from: "",
     namespace: "",
     name: "web",
     className: "kubehenge-rke2",

@@ -104,6 +104,8 @@ const mibPerGiB = 1024;
 export const controlPlaneSizes = [1, 3, 5, 7];
 
 export interface Form {
+  /** The cluster the form started from, as namespace/name; empty for none. */
+  from: string;
   /** Empty while the interface creates clusters in one namespace only. */
   namespace: string;
   name: string;
@@ -572,6 +574,7 @@ export function withBridgeNetwork(f: Form, net: BridgeNetwork | undefined, touch
 
 /** newForm is the wizard before anything is chosen. */
 export const newForm = (): Form => ({
+  from: "",
   namespace: "",
   name: "",
   className: "",
