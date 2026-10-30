@@ -524,14 +524,14 @@ func Restorable(cluster *clusterv1.Cluster, s *EtcdSnapshot) error {
 		return fmt.Errorf("snapshot %s has no SHA-256 of 64 lower-case hexadecimal digits to check it by", s.Name)
 	}
 	if d := string(distributionOf(cluster)); s.Distribution != "" && s.Distribution != d {
-		return fmt.Errorf("snapshot %s is of a %s cluster, and this one is %s", s.Name, s.Distribution, d)
+		return fmt.Errorf("snapshot %s is from a %s cluster, not %s", s.Name, s.Distribution, d)
 	}
 	want, known := kubernetesMinor(s.KubernetesVersion)
 	if !known {
 		return nil
 	}
 	if have, ok := kubernetesMinor(cluster.Spec.Topology.Version); !ok || have != want {
-		return fmt.Errorf("snapshot %s holds the objects of Kubernetes v1.%d and the cluster runs %s: restore one taken on its minor",
+		return fmt.Errorf("snapshot %s is from Kubernetes v1.%d, not %s. Choose one from the same minor version",
 			s.Name, want, cluster.Spec.Topology.Version)
 	}
 	return nil

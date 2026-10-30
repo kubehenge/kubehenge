@@ -103,7 +103,7 @@ func (s *EtcdSnapshots) valid() error {
 		return err
 	}
 	if s.Keep < 1 || s.Keep > maxEtcdSnapshotKeep {
-		return fmt.Errorf("etcdSnapshots: keep is from 1 to %d, not %d", maxEtcdSnapshotKeep, s.Keep)
+		return fmt.Errorf("etcdSnapshots: keep 1 to %d, not %d", maxEtcdSnapshotKeep, s.Keep)
 	}
 	return nil
 }
@@ -127,7 +127,7 @@ func checkEtcdSnapshots(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass
 		return err
 	}
 	if s.Target == "" {
-		return errors.New("etcdSnapshots need a target")
+		return errors.New("etcdSnapshots: choose a target")
 	}
 	if err := s.valid(); err != nil {
 		return err
@@ -641,7 +641,7 @@ func (ts *ClusterTargets) Open(ctx context.Context, cluster *clusterv1.Cluster, 
 		return nil, err
 	}
 	if !found {
-		return nil, fmt.Errorf("backup target %q is not one an administrator set", name)
+		return nil, fmt.Errorf("backup target %q does not exist", name)
 	}
 	credential, missing, err := backupCredential(ctx, ts.Client, cluster)
 	if err != nil {

@@ -122,7 +122,7 @@ func checkOIDC(w http.ResponseWriter, u user, class *clusterv1.ClusterClass, pat
 		}
 	}
 	if !alreadyTrusted(class, raw, current) && !held[privKubeconfig] {
-		writeError(w, http.StatusForbidden, fmt.Sprintf("%s needs %s on %s to let other identity providers sign in to the cluster", u.ticket.Username, privKubeconfig, path))
+		writeError(w, http.StatusForbidden, fmt.Sprintf("%s needs %s on %s to add identity providers", u.ticket.Username, privKubeconfig, path))
 		return false
 	}
 	return true

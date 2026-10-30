@@ -407,7 +407,7 @@ func (run *restoreRun) keepFirst() error {
 // stopped. A VM that is off runs no etcd to stop, and Cluster API makes its machine again.
 func (run *restoreRun) reach(ctx context.Context, n *RestoreNode) error {
 	if n.VMID == 0 {
-		return fmt.Errorf("control-plane machine %s has no VM yet: restore once every one runs", n.Machine)
+		return fmt.Errorf("control-plane machine %s has no VM yet. Restore once all are running", n.Machine)
 	}
 	running, err := run.r.Guests.Running(ctx, n.VMID)
 	if err != nil {
@@ -659,7 +659,7 @@ func (run *restoreRun) recover(ctx context.Context, cause error) error {
 		return errors.Join(append(errs, run.unpause(ctx))...)
 	}
 	if err := run.knowNodes(ctx); err != nil {
-		return errors.Join(append(errs, err, errors.New("the control-plane nodes are left as they are: restore by hand as the interface shows"))...)
+		return errors.Join(append(errs, err, errors.New("control-plane nodes left unchanged. Restore by hand as the steps say"))...)
 	}
 	restored := false
 	switch run.status.Phase {

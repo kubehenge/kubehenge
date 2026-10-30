@@ -137,7 +137,7 @@ func (s *Server) HeadlampHandler() http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Strict-Transport-Security", hsts)
 		if !headlampSameOrigin(r) {
-			http.Error(w, "refused: the request did not come from Headlamp's own pages", http.StatusForbidden)
+			http.Error(w, "refused: not from Headlamp's pages", http.StatusForbidden)
 			return
 		}
 		if r.URL.Path == "/oidc-callback" {
@@ -245,7 +245,7 @@ func headlampCallbackBound(w http.ResponseWriter, r *http.Request) bool {
 	http.SetCookie(w, &http.Cookie{Name: headlampOIDCCookie, Value: "", Path: "/", MaxAge: -1, Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 	read := r.Method == http.MethodGet || r.Method == http.MethodHead
 	if !read || err != nil || state == "" || subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(stateDigest(state))) != 1 {
-		http.Error(w, "this sign-in was not started in this browser; start it again", http.StatusForbidden)
+		http.Error(w, "this sign-in was started in another browser. Start it again", http.StatusForbidden)
 		return false
 	}
 	return true

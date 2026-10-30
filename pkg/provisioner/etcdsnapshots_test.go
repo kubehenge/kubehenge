@@ -495,7 +495,7 @@ func TestCheckEtcdSnapshots(t *testing.T) {
 		{"off", `{"enabled":false,"target":"gone"}`, ""},
 		{"defaults", `{"enabled":true,"target":"store"}`, ""},
 		{"own schedule", `{"enabled":true,"target":"aws","schedule":"0 */6 * * *","timeZone":"Europe/Zurich","keep":30}`, ""},
-		{"no target", `{"enabled":true}`, "need a target"},
+		{"no target", `{"enabled":true}`, "choose a target"},
 		{"unknown target", `{"enabled":true,"target":"other"}`, `"other"`},
 		{"bad schedule", `{"enabled":true,"target":"store","schedule":"61 * * * *"}`, "schedule"},
 		{"bad zone", `{"enabled":true,"target":"store","timeZone":"Mars/Olympus"}`, "time zone"},

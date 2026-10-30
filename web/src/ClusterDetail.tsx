@@ -29,6 +29,7 @@ import {
   settled,
   useChange,
   usePoll,
+  Views,
 } from "./ui";
 
 type Action = "scale" | "upgrade" | "delete" | "backups" | "autoscaler" | "etcdSnapshots" | OptionAction;
@@ -90,7 +91,7 @@ export function buildText(build: string): string {
     return build;
   }
   const at = Date.UTC(Number(m["y"]), Number(m["mo"]) - 1, Number(m["d"]), Number(m["h"]), Number(m["mi"]));
-  return `the build of ${new Date(at).toLocaleString()}`;
+  return `build ${new Date(at).toLocaleString()}`;
 }
 
 // nodeRefreshText reads the controller's record of the last node refresh, "from to to at time".
@@ -105,21 +106,21 @@ function nodeRefreshText(refreshed: string): string {
 // NodeImageRows say which template builds a cluster's nodes are clones of, and when they move to a
 // newer one.
 function NodeImageRows({ image }: { image: NonNullable<Cluster["nodeImage"]> }): JSX.Element {
-  let next = "None due: the nodes run the newest builds";
+  let next = "None due";
   if (!image.refreshes) {
-    next = "Off: switched off in the cluster's automatic upgrades";
+    next = "Off";
   } else if (image.next?.build !== undefined) {
     next = `${new Date(image.next.due).toLocaleString()}, to ${buildText(image.next.build)}`;
   } else if (image.next !== undefined) {
-    next = `Not before ${new Date(image.next.due).toLocaleString()}, with the next template build`;
+    next = `With the next build, from ${new Date(image.next.due).toLocaleString()}`;
   }
   return (
     <>
       <dt>Node image</dt>
       <dd>
         {image.builds.length === 0
-          ? "Not known yet"
-          : image.builds.map((b) => `${b.template}, ${buildText(b.build)}`).join("; ")}
+          ? "Unknown"
+          : image.builds.map((b) => <div key={b.template}>{`${b.template}, ${buildText(b.build)}`}</div>)}
       </dd>
       <dt>Next node refresh</dt>
       <dd>{next}</dd>
@@ -136,18 +137,13 @@ function NodeImageRows({ image }: { image: NonNullable<Cluster["nodeImage"]> }):
 // whyNot says why a cluster's actions are off, for the disabled buttons to say.
 function whyNot(c: Cluster): string | undefined {
   if (c.deleting) {
-    return "The cluster is being deleted.";
+    return "Being deleted";
   }
-  return c.allowed.change ? undefined : `Changing it needs VM.Allocate on pool ${poolName(c.pool)}.`;
+  return c.allowed.change ? undefined : `Changes need VM.Allocate on pool ${poolName(c.pool)}`;
 }
 
-// PageNote says why the actions are off, except while deleting, where the deletion's own section does.
-function PageNote({ cluster, why }: { cluster: Cluster; why: string | undefined }) {
-  if (why === undefined || cluster.deleting) {
-    return null;
-  }
-  return <p className="muted page-note">{why}</p>;
-}
+// pageNote is why the actions are off, under them; a cluster being deleted says so in its status.
+const pageNote = (c: Cluster): string | undefined => (c.deleting ? undefined : whyNot(c));
 
 export function ClusterDetail({
   namespace,
@@ -179,7 +175,7 @@ export function ClusterDetail({
           <h2>{name}</h2>
         </div>
         <p className="pad">
-          This cluster no longer exists, or you may no longer see it. <Link to="/">Go to the clusters</Link>.
+          Cluster not found. <Link to="/">All clusters</Link>
         </p>
       </section>
     );
@@ -247,7 +243,7 @@ export function ClusterDetail({
             {c.allowed.kubeconfig && c.distribution === "talos" && (
               <button
                 type="button"
-                title="Signs in to the nodes' Talos API, for talosctl"
+                title="For talosctl"
                 onClick={() => {
                   void download(async () => {
                     saveFile(await api.talosconfig(c.namespace, c.name), `${c.name}.talosconfig`);
@@ -260,7 +256,6 @@ export function ClusterDetail({
             {issuesFromCA(c) && (
               <button
                 type="button"
-                title="The certificate of the CA the cluster's certificates come from, for browsers and clients to trust"
                 onClick={() => {
                   void download(async () => saveCA(c));
                 }}
@@ -278,7 +273,7 @@ export function ClusterDetail({
             </button>
           </div>
         </div>
-        <PageNote cluster={c} why={why} />
+        {pageNote(c) !== undefined && <p className="muted page-note">{pageNote(c)}</p>}
         <ErrorBox message={error} />
         <ErrorBox message={downloadError} />
         <Deleting
@@ -295,14 +290,14 @@ export function ClusterDetail({
           }}
         />
 
-        <nav className="views" aria-label={`${c.name}'s views`}>
+        <Views label={`${c.name}'s views`} open={view}>
           {views.map((v, i) => (
             <Link key={v.path} to={clusterPath(c.namespace, c.name, v.path)} current={view === v.path}>
               {v.label}
               <kbd aria-hidden="true">{i + 1}</kbd>
             </Link>
           ))}
-        </nav>
+        </Views>
         <StagedBar cluster={c} />
         <div className="object">
           <div className="object-view">
@@ -438,9 +433,9 @@ function Summary({
         <dt>API endpoint</dt>
         <dd>{c.endpoint ?? "Not assigned yet"}</dd>
         <dt>Pod range</dt>
-        <dd>{(c.pods ?? []).join(", ") || "The distribution's own"}</dd>
+        <dd>{(c.pods ?? []).join(", ") || "Default"}</dd>
         <dt>Service range</dt>
-        <dd>{(c.services ?? []).join(", ") || "The distribution's own"}</dd>
+        <dd>{(c.services ?? []).join(", ") || "Default"}</dd>
         <dt>Control plane</dt>
         <dd>
           {c.controlPlane.ready} of {c.controlPlane.desired} ready
@@ -448,13 +443,17 @@ function Summary({
         <dt>Workers</dt>
         <dd>
           {c.workers.desired === 0 && c.workers.ready === 0
-            ? "None; the control planes run the workloads"
+            ? "None"
             : `${c.workers.ready} of ${c.workers.desired} ready`}
         </dd>
         {c.workerPools.some((p) => p.autoscaling) && (
           <>
             <dt>Worker pools</dt>
-            <dd>{c.workerPools.map((p) => `${p.name}: ${poolText(p)}`).join("; ")}</dd>
+            <dd>
+              {c.workerPools.map((p) => (
+                <div key={p.name}>{`${p.name}: ${poolText(p)}`}</div>
+              ))}
+            </dd>
           </>
         )}
         <dt>Proxmox VE pool</dt>
@@ -545,10 +544,7 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
         </>
       }
     >
-      <Field
-        label="Kubernetes version"
-        hint="One minor version at a time. The control plane is replaced node by node first, then the workers."
-      >
+      <Field label="Kubernetes version" hint="One minor version at a time">
         {(id) =>
           targets.length > 0 ? (
             <select id={id} value={version} onChange={(e) => setVersion(e.target.value)}>
@@ -557,7 +553,7 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
               </option>
               {targets.map((v) => (
                 <option key={v} value={v} disabled={held.includes(v)}>
-                  {held.includes(v) ? `${v} (not run by Talos ${running})` : v}
+                  {held.includes(v) ? `${v} (needs newer Talos)` : v}
                 </option>
               ))}
             </select>
@@ -570,27 +566,45 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
         <p className="muted">
           {offered.error ??
             (c.distribution === "kubeadm"
-              ? "No VM template of a newer version: build one on the Administration page first."
-              : "This is the newest release of its minor version and the next.")}
+              ? "No newer VM template. Build one under Administration."
+              : "No newer version")}
         </p>
       )}
-      {c.talos && (
-        <p className="muted">
-          {held.length > 0
-            ? `Talos ${running} does not run ${held.join(" or ")}: upgrade Talos first, under Options.`
-            : `The version has to be one Talos ${running} runs; a newer one may need a newer Talos release first, under Options.`}
-          {filled(c.talos.upgrading) && " The upgrade waits until the Talos upgrade under way is done."}
-        </p>
-      )}
+      {c.talos && <TalosNote running={running} held={held} upgrading={filled(c.talos.upgrading)} />}
       <ErrorBox message={error} />
     </Dialog>
   );
+}
+
+// TalosNote says what the Talos release in the way holds back: versions it does not run, or the
+// whole upgrade while Talos itself upgrades.
+function TalosNote({
+  running,
+  held,
+  upgrading,
+}: {
+  running: string;
+  held: string[];
+  upgrading: boolean;
+}): JSX.Element | null {
+  const notes = [
+    ...(held.length > 0
+      ? [`Talos ${running} does not run ${held.join(" or ")}: upgrade Talos first, under Options.`]
+      : []),
+    ...(upgrading ? ["Waits for the Talos upgrade."] : []),
+  ];
+  return notes.length > 0 ? <p className="muted">{notes.join(" ")}</p> : null;
 }
 
 function DeleteDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  // A new cluster of the same name and target restores what stays behind.
+  const kept = [
+    ...(backupsOf(c.variables["backups"]).enabled ? ["Backups"] : []),
+    ...(etcdSnapshotsOf(c.variables["etcdSnapshots"]).enabled ? ["etcd snapshots"] : []),
+  ];
   const remove = async (): Promise<void> => {
     setBusy(true);
     try {
@@ -603,7 +617,7 @@ function DeleteDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
   };
   return (
     <Dialog
-      title={`Delete ${c.name}`}
+      title={`Delete cluster ${c.name}`}
       onClose={onClose}
       onSubmit={() => {
         void remove();
@@ -614,17 +628,13 @@ function DeleteDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
             Cancel
           </button>
           <button type="submit" className="danger" disabled={busy || typed !== c.name}>
-            Delete
+            Delete cluster
           </button>
         </>
       }
     >
-      <p>
-        This deletes the cluster's VMs and its persistent volumes, and removes it from Rancher. It cannot be undone.
-        {backupsOf(c.variables["backups"]).enabled &&
-          " Its backups stay in the target, and a cluster created again under the same name and target can restore them."}
-        {etcdSnapshotsOf(c.variables["etcdSnapshots"]).enabled && " Its etcd snapshots stay in the target too."}
-      </p>
+      <p>Deletes its VMs and persistent volumes, and removes it from Rancher. This can&apos;t be undone.</p>
+      {kept.length > 0 && <p>{`${kept.join(" and ")} stay in the target.`}</p>}
       <Field label="Confirm name" hint={`Type ${c.name}.`}>
         {(id) => <input id={id} value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" />}
       </Field>

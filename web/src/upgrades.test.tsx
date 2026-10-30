@@ -41,8 +41,8 @@ describe("appliance upgrades", () => {
 
     await user.selectOptions(screen.getByLabelText("Automatic upgrades"), "minor");
     await waitFor(() => expect(saved()).toStrictEqual({ policy: "minor", hour: 3, timeZone: browser }));
-    await expect(screen.findByText("Saved.")).resolves.toBeInTheDocument();
-    await user.selectOptions(await screen.findByLabelText("At hour"), "4");
+    await expect(screen.findByText("Saved")).resolves.toBeInTheDocument();
+    await user.selectOptions(await screen.findByLabelText("Hour"), "4");
     await waitFor(() => expect(saved()).toStrictEqual({ policy: "minor", hour: 4, timeZone: browser }));
     await user.selectOptions(screen.getByLabelText("Time zone"), "Asia/Tokyo");
     await waitFor(() => expect(saved()).toStrictEqual({ policy: "minor", hour: 4, timeZone: "Asia/Tokyo" }));

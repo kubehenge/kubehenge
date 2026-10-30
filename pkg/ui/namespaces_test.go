@@ -70,7 +70,7 @@ func TestMoreNamespaces(t *testing.T) {
 	}
 	rec = b.do("POST", "/api/clusters", strings.Replace(createBody, `"name"`, `"namespace":"team-b","name"`, 1))
 	expect(t, rec, http.StatusUnprocessableEntity)
-	if !strings.Contains(rec.Body.String(), "the interface creates clusters in namespaces default, team-a only") {
+	if !strings.Contains(rec.Body.String(), "clusters can be created in namespaces default, team-a only") {
 		t.Fatalf("refusal = %s", rec.Body)
 	}
 	// Unnamed, a cluster goes to the first.
@@ -86,7 +86,7 @@ func TestMoreNamespaces(t *testing.T) {
 	} {
 		rec = b.do(req[0], "/api/clusters/team-b/three", req[1])
 		expect(t, rec, http.StatusForbidden)
-		if !strings.Contains(rec.Body.String(), "manages the clusters in namespaces default, team-a; this one is managed from elsewhere") {
+		if !strings.Contains(rec.Body.String(), "managed elsewhere. The interface manages namespaces default, team-a") {
 			t.Fatalf("%s: %s", req[0], rec.Body)
 		}
 	}
@@ -104,7 +104,7 @@ func TestNamespacesWithoutTheChartsList(t *testing.T) {
 	expect(t, b.do("PATCH", "/api/clusters/team-a/two", `{"workerPools":{"md-0":3}}`), http.StatusForbidden)
 	rec := b.do("POST", "/api/clusters", strings.Replace(createBody, `"name"`, `"namespace":"team-a","name"`, 1))
 	expect(t, rec, http.StatusUnprocessableEntity)
-	if !strings.Contains(rec.Body.String(), "the interface creates clusters in namespace default only") {
+	if !strings.Contains(rec.Body.String(), "clusters can be created in namespace default only") {
 		t.Fatalf("refusal = %s", rec.Body)
 	}
 }

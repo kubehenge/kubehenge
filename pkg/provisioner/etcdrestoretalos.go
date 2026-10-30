@@ -88,7 +88,7 @@ func (run *restoreRun) prepareTalos(ctx context.Context) error {
 			continue
 		}
 		if n.Address == "" {
-			return fmt.Errorf("control-plane machine %s has no address yet: restore once every one runs", n.Machine)
+			return fmt.Errorf("control-plane machine %s has no address yet. Restore once all are running", n.Machine)
 		}
 		// A node whose API does not answer is left out and made again: its etcd, should it run, is
 		// of the cluster before the restore, whose members the restored one does not let in.
@@ -285,7 +285,7 @@ func (run *restoreRun) recoverTalos(ctx context.Context, cause error) error {
 		return errors.Join(append(errs, run.unpause(ctx))...)
 	}
 	if err := run.knowTalosNodes(ctx); err != nil {
-		errs = append(errs, err, errors.New("the control-plane nodes are left as they are: restore by hand as the interface shows"))
+		errs = append(errs, err, errors.New("control-plane nodes left unchanged. Restore by hand as the steps say"))
 		return errors.Join(append(errs, run.unpause(ctx))...)
 	}
 	switch run.status.Phase {
@@ -300,7 +300,7 @@ func (run *restoreRun) recoverTalos(ctx context.Context, cause error) error {
 			}
 		}
 		if err != nil {
-			errs = append(errs, err, errors.New("etcd may be left wiped on the control-plane nodes: restore again, or by hand as the interface shows"))
+			errs = append(errs, err, errors.New("etcd may be wiped. Restore again, or by hand as the steps say"))
 			return errors.Join(append(errs, run.unpause(ctx))...)
 		}
 		run.retried = cause

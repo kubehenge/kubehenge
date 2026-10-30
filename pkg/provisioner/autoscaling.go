@@ -47,12 +47,12 @@ func poolScale(md *clusterv1.MachineDeploymentTopology) (workerBounds, bool, err
 		return workerBounds{}, false, nil
 	}
 	if !hasMin || !hasMax {
-		return workerBounds{}, true, fmt.Errorf("pool %s: an autoscaled pool sets both %s and %s", md.Name, AutoscalerMinAnnotation, AutoscalerMaxAnnotation)
+		return workerBounds{}, true, fmt.Errorf("pool %s: set both %s and %s", md.Name, AutoscalerMinAnnotation, AutoscalerMaxAnnotation)
 	}
 	lo, err1 := strconv.ParseInt(minValue, 10, 32)
 	hi, err2 := strconv.ParseInt(maxValue, 10, 32)
 	if err1 != nil || err2 != nil {
-		return workerBounds{}, true, fmt.Errorf("pool %s: the autoscaler's least and most workers are whole numbers", md.Name)
+		return workerBounds{}, true, fmt.Errorf("pool %s: minimum and maximum workers are whole numbers", md.Name)
 	}
 	return workerBounds{least: int32(lo), most: int32(hi)}, true, nil
 }
@@ -97,10 +97,10 @@ func validateAutoscaling(c *clusterv1.Cluster) field.ErrorList {
 			continue
 		case lo < 0 || hi < 1 || lo > hi || hi > MaxAutoscaledWorkers:
 			errs = append(errs, field.Invalid(path.Child("metadata", "annotations"), fmt.Sprintf("%d to %d", lo, hi),
-				fmt.Sprintf("an autoscaled pool's least is 0 or more, and its most from 1 to %d and never below its least", MaxAutoscaledWorkers)))
+				fmt.Sprintf("minimum 0 or more, maximum 1 to %d and not below the minimum", MaxAutoscaledWorkers)))
 		}
 		if md.Replicas != nil {
-			errs = append(errs, field.Forbidden(path.Child("replicas"), "an autoscaled pool leaves its number of workers to the cluster autoscaler"))
+			errs = append(errs, field.Forbidden(path.Child("replicas"), "leave replicas unset on an autoscaled pool"))
 		}
 	}
 	return errs
@@ -121,7 +121,7 @@ func checkNodeAddresses(old, c *clusterv1.Cluster) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("the nodes' addresses give %d, and the cluster may run %d machines at once: its control planes, every pool at its most and one more for a rollout", now.have, now.need)
+	return fmt.Errorf("the cluster may run %d machines at once but has %d node addresses. Add addresses", now.need, now.have)
 }
 
 // addresses are the most machines a cluster runs at once and the addresses its nodes' network gives

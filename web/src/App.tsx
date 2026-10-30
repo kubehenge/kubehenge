@@ -30,7 +30,7 @@ export function App(): JSX.Element {
     setSignedOutHandler(() => {
       setSession((was) => {
         if (was) {
-          setNotice("Your session has ended. Sign in again to continue where you were.");
+          setNotice("Session ended. Sign in again.");
         }
         return null;
       });
@@ -48,7 +48,7 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     if (session === null) {
-      document.title = "Sign in - Kubehenge";
+      document.title = "Sign in · Kubehenge";
     }
   }, [session]);
 
@@ -162,7 +162,7 @@ function Shell({
   const { route, title, key: pageKey } = routeAt(path, needsSetup, canManage);
 
   useEffect(() => {
-    document.title = title === "Kubehenge" ? title : `${title} - Kubehenge`;
+    document.title = title === "Kubehenge" ? title : `${title} · Kubehenge`;
   }, [title]);
 
   // After moving to another page the focus moves to its content, so a screen reader starts there
@@ -181,7 +181,7 @@ function Shell({
     <>
       {upgradedTo !== undefined && (
         <output className="warning notice">
-          Kubehenge was upgraded to {upgradedTo}. Reload the page to use the new version.{" "}
+          Kubehenge upgraded to {upgradedTo}.{" "}
           <button type="button" onClick={() => window.location.reload()}>
             Reload
           </button>
@@ -189,18 +189,15 @@ function Shell({
       )}
       {setup?.backup === false && !settingUp && (
         <p className="warning" role="alert">
-          No Proxmox VE backup job includes this appliance, and it holds the only copy of the management cluster's
-          encrypted state. Add it to a backup job under Datacenter → Backup.
+          No backup job covers this appliance, and it holds the management cluster's only state. Add it under Datacenter
+          → Backup.
         </p>
       )}
       {certificate && (
         <p className="warning" role="alert">
-          {certificate.expired
-            ? "This appliance's certificate expired on "
-            : "This appliance's certificate expires on "}
-          {certificate.expires.toLocaleDateString(undefined, { dateStyle: "long" })}. Renew it in the shell of the
-          Proxmox VE node with Kubehenge's installer:{" "}
-          <code>sh install.sh --certificate --ctid {setup?.applianceVMID ?? "<appliance ID>"}</code>.
+          {certificate.expired ? "Appliance certificate expired on " : "Appliance certificate expires on "}
+          {certificate.expires.toLocaleDateString(undefined, { dateStyle: "long" })}. Renew it on the Proxmox VE node:{" "}
+          <code>sh install.sh --certificate --ctid {setup?.applianceVMID ?? "<appliance ID>"}</code>
         </p>
       )}
       {credentials && (

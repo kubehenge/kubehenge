@@ -514,7 +514,7 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 			}},
 		}},
 	}
-	if err := c.Create(ctx, many); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "with 300 workers need at least 4 vCPUs and 8192 MiB") {
+	if err := c.Create(ctx, many); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "with 300 workers, control planes need 4 vCPUs and 8192 MiB") {
 		t.Fatalf("300 workers on the class's default control planes: %v", err)
 	}
 
@@ -527,7 +527,7 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 			Version:  "v1.36.5+k3s1",
 		}},
 	}
-	if err := c.Create(ctx, workerless); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "without workers run its workloads too and need at least 3 vCPUs and 5120 MiB") {
+	if err := c.Create(ctx, workerless); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "without workers, control planes need 3 vCPUs and 5120 MiB") {
 		t.Fatalf("a k3s cluster without workers on the class's default control planes: %v", err)
 	}
 
@@ -579,7 +579,7 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 		}},
 	}
 	withAddons(small, map[string]string{"workerMachine": `{"memoryMiB":1024}`, "monitoring": `{"enabled":true}`})
-	if err := c.Create(ctx, small); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "the cluster's add-ons (monitoring, cert-manager, Rancher's agent) need 2240 MiB of memory on its workers") {
+	if err := c.Create(ctx, small); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "add-ons (monitoring, cert-manager, Rancher's agent) need 2240 MiB of memory on workers") {
 		t.Fatalf("monitoring on a k3s worker at its least: %v", err)
 	}
 
@@ -609,16 +609,16 @@ func checkInterfaceRulesAdmission(ctx context.Context, t *testing.T, c client.Cl
 			"controlPlaneEndpoint": `"` + endpoint + `"`,
 		})
 	}
-	if err := c.Create(ctx, offered(strings.Repeat("a", MaxClusterName+1), 1, "10.0.0.10-10.0.0.20", "10.0.0.5")); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "at most 40 characters") {
+	if err := c.Create(ctx, offered(strings.Repeat("a", MaxClusterName+1), 1, "10.0.0.10-10.0.0.20", "10.0.0.5")); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "up to 40") {
 		t.Fatalf("a name too long for the machines' host names: %v", err)
 	}
-	if err := c.Create(ctx, offered("even", 2, "10.0.0.10-10.0.0.20", "10.0.0.5")); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "an odd number") {
+	if err := c.Create(ctx, offered("even", 2, "10.0.0.10-10.0.0.20", "10.0.0.5")); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "1, 3, 5 or 7") {
 		t.Fatalf("two control planes: %v", err)
 	}
 	if err := c.Create(ctx, offered("first", 1, "10.0.0.10-10.0.0.20", "10.0.0.5")); err != nil {
 		t.Fatalf("a cluster on its own addresses: %v", err)
 	}
-	if err := c.Create(ctx, offered("taker", 1, "10.0.0.20-10.0.0.30", "10.0.0.6")); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "overlap cluster team-a/first's 10.0.0.10-10.0.0.20") {
+	if err := c.Create(ctx, offered("taker", 1, "10.0.0.20-10.0.0.30", "10.0.0.6")); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "overlap 10.0.0.10-10.0.0.20 of cluster team-a/first") {
 		t.Fatalf("a cluster on another's node addresses: %v", err)
 	}
 }
@@ -641,7 +641,7 @@ func checkSysAuditAdmission(ctx context.Context, t *testing.T, c client.Client, 
 		return withAddons(cluster, map[string]string{"storage": `"local-lvm"`, ccmVariable: `{"haGroups":true}`})
 	}
 	hooks.SysAuditGroup = ""
-	if err := c.Create(ctx, asking("unaudited")); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "lets no cluster hold Sys.Audit on /") {
+	if err := c.Create(ctx, asking("unaudited")); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "clusters may not hold Sys.Audit on /") {
 		t.Fatalf("Sys.Audit on / where no cluster may hold it: %v", err)
 	}
 	hooks.SysAuditGroup = "kubehenge-clusters-audit"
@@ -677,7 +677,7 @@ func checkDatastoreAllocateAdmission(ctx context.Context, t *testing.T, c client
 	if err := c.Create(ctx, onStorage("sharing", "ceph", "")); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "holds Datastore.Allocate on storage ceph") {
 		t.Fatalf("a second cluster on the storage another holds Datastore.Allocate on: %v", err)
 	}
-	if err := c.Create(ctx, onStorage("management", "local-lvm", `{"datastoreAllocate":true}`)); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "the management cluster uses storage local-lvm") {
+	if err := c.Create(ctx, onStorage("management", "local-lvm", `{"datastoreAllocate":true}`)); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "storage local-lvm, which the management cluster uses") {
 		t.Fatalf("Datastore.Allocate on the management cluster's storage: %v", err)
 	}
 }

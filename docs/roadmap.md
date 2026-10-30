@@ -25,4 +25,4 @@ What Kubehenge does now, what comes next, and what may come later. What each rel
 
 ## Later
 
-Driven by what users ask for. Candidates: clusters across several Proxmox VE clusters, restoring a backup into another cluster from the interface, more add-ons, and OKD clusters once Cluster API's OpenShift Assisted providers support ClusterClass and work with the Proxmox VE provider.
+Driven by what users ask for. Candidates: clusters across several Proxmox VE clusters, more add-ons, and OKD clusters once Cluster API's OpenShift Assisted providers support ClusterClass and work with the Proxmox VE provider.

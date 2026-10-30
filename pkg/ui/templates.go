@@ -57,11 +57,11 @@ type templatesView struct {
 // template pool, exists, and that the user may look after it.
 func (s *Server) templatesReady(w http.ResponseWriter, r *http.Request, u user) bool {
 	if s.Appliance == nil || s.MakeTemplate == nil {
-		writeError(w, http.StatusNotFound, "this interface was given its management cluster; make templates with kubehenge template create")
+		writeError(w, http.StatusNotFound, "this interface does not build templates. Use kubehenge template create")
 		return false
 	}
 	if s.currentKube() == nil {
-		writeError(w, http.StatusConflict, "set up the management cluster first; it makes the templates' pool")
+		writeError(w, http.StatusConflict, "set up the management cluster first")
 		return false
 	}
 	return s.require(w, r, u, "/", setupPrivileges...)
@@ -250,7 +250,7 @@ func (req *templateRequest) builder() (templates.Builder, templates.Template, er
 		}
 	}
 	if req.ISOStorage != "" && !proxmoxName.MatchString(req.ISOStorage) {
-		problems = append(problems, "Cloud-init image: a storage name")
+		problems = append(problems, "Cloud-init image: choose a storage")
 	}
 	if req.VLAN < 0 || req.VLAN > 4094 {
 		problems = append(problems, "VLAN tag: 1 to 4094")
@@ -285,7 +285,7 @@ func (req *templateRequest) builder() (templates.Builder, templates.Template, er
 	}
 	if len(problems) > 0 {
 		slices.Sort(problems)
-		return templates.Builder{}, templates.Template{}, errors.New(strings.Join(problems, "; "))
+		return templates.Builder{}, templates.Template{}, errors.New(strings.Join(problems, ". "))
 	}
 	t, err := templates.Plan(&plan)
 	if err != nil {
@@ -310,20 +310,20 @@ func buildNetwork(address, gateway string, dns []string) (*templates.Network, st
 	n := &templates.Network{}
 	var err error
 	if n.Address, err = netip.ParsePrefix(address); err != nil || !n.Address.Addr().Is4() {
-		return nil, "Address: an IPv4 address with its prefix length, such as 192.0.2.50/24"
+		return nil, "Address: an IPv4 address with prefix length, like 192.0.2.50/24"
 	}
 	if n.Gateway, err = netip.ParseAddr(gateway); err != nil || !n.Address.Contains(n.Gateway) {
-		return nil, "Gateway: an address inside the address's network"
+		return nil, "Gateway: an address in the same network"
 	}
 	for _, d := range dns {
 		a, err := netip.ParseAddr(d)
 		if err != nil {
-			return nil, "DNS servers: " + d + " is no IP address"
+			return nil, "DNS servers: " + d + " is not an IP address"
 		}
 		n.DNS = append(n.DNS, a)
 	}
 	if len(n.DNS) == 0 {
-		return nil, "DNS servers: at least one, with an address"
+		return nil, "DNS servers: enter at least one"
 	}
 	return n, ""
 }
@@ -394,7 +394,7 @@ func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request, u user) 
 	}
 	i := slices.IndexFunc(list, func(t templateView) bool { return t.VMID == vmid })
 	if i < 0 {
-		writeError(w, http.StatusNotFound, "no template of Kubehenge's has that ID")
+		writeError(w, http.StatusNotFound, "no such template")
 		return
 	}
 	state, err := s.refreshState(r.Context(), s.currentKube())
@@ -408,7 +408,7 @@ func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request, u user) 
 		return
 	}
 	if c := needs.of(list[i].Tags); c != "" {
-		writeError(w, http.StatusConflict, fmt.Sprintf("cluster %s clones its machines from %s", c, list[i].Name))
+		writeError(w, http.StatusConflict, fmt.Sprintf("cluster %s still uses %s", c, list[i].Name))
 		return
 	}
 	if err := s.Accounts.DeleteVM(r.Context(), u.ticket, list[i].Node, vmid); err != nil {

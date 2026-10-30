@@ -49,7 +49,7 @@ func TestCheckBackups(t *testing.T) {
 		{"template in the zone", `{"enabled":true,"target":"store","timeZone":"{{ .Cluster }}"}`, "time zone"},
 		{"bad volumes", `{"enabled":true,"target":"store","volumes":"some"}`, "volumes"},
 		{"own Secret", `{"enabled":true,"target":"store","existingSecret":"store-keys"}`, ""},
-		{"Kubehenge's Secret", `{"enabled":true,"target":"store","existingSecret":"velero-sse-c"}`, "writes Secret velero-sse-c"},
+		{"Kubehenge's Secret", `{"enabled":true,"target":"store","existingSecret":"velero-sse-c"}`, "existingSecret cannot be velero-sse-c"},
 	} {
 		err := checkBackups(nil, backupsCluster(tc.raw), targetClass())
 		switch {
@@ -72,7 +72,7 @@ func TestCheckBackupsKeepsATargetThatWent(t *testing.T) {
 	if err := checkBackups(backupsCluster(`{"enabled":false,"target":"old"}`), was, targetClass()); err == nil {
 		t.Error("switched on to a target that is gone")
 	}
-	if err := checkBackups(nil, was, &clusterv1.ClusterClass{}); err == nil || !strings.Contains(err.Error(), "set none") {
+	if err := checkBackups(nil, was, &clusterv1.ClusterClass{}); err == nil || !strings.Contains(err.Error(), "no backup target is set up") {
 		t.Errorf("a class without targets: %v", err)
 	}
 }
@@ -303,13 +303,14 @@ func TestBackupsWaitWithTheOwnersSecret(t *testing.T) {
 	t.Parallel()
 	c := backupsCluster(`{"enabled":true,"target":"store","existingSecret":"store-keys"}`)
 	r, _ := newReconciler(t, &fakeCloud{}, c)
-	workload := fake.NewClientBuilder().WithScheme(remoteScheme).WithObjects(
+	// The fake adds Velero's kinds, which it lists, to its scheme: a shared one races other tests.
+	workload := fake.NewClientBuilder().WithScheme(newRemoteScheme()).WithObjects(
 		&corev1.Secret{Namespace: VeleroNamespace, Name: veleroCredentialsSecret},
 		&corev1.Secret{Namespace: VeleroNamespace, Name: "store-keys"},
 	).Build()
 	r.Remotes = &Remotes{byCluster: map[string]remote{remoteKey(c): {client: workload, until: time.Now().Add(time.Hour)}}}
 	b, _, _ := optionalVariable[Backups](c, backupsVariable)
-	wait, err := r.backupsWait(context.Background(), c, &b)
+	wait, err := r.backupsWait(context.Background(), c, &b, nil)
 	if err != nil || wait {
 		t.Fatalf("waits %v: %v", wait, err)
 	}

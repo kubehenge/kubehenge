@@ -30,7 +30,7 @@ describe("credential field", () => {
       />,
     );
 
-    await expect(screen.findByText("Not set.")).resolves.toBeInTheDocument();
+    await expect(screen.findByText("Not set")).resolves.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Set…" }));
     const store = screen.getByRole("button", { name: "Store" });
     expect(store).toBeDisabled();
@@ -71,12 +71,12 @@ describe("credential field", () => {
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Remove…" }));
+    await user.click(screen.getByRole("button", { name: "Delete…" }));
     await user.click(screen.getByRole("button", { name: "Keep" }));
     expect(calls.filter((c) => c.key === "DELETE /api/credentials/backup")).toHaveLength(0);
-    await user.click(screen.getByRole("button", { name: "Remove…" }));
-    await user.click(screen.getByRole("button", { name: "Remove" }));
-    await expect(screen.findByText("Not set.")).resolves.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Delete…" }));
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    await expect(screen.findByText("Not set")).resolves.toBeInTheDocument();
     expect(calls.at(-1)?.key).toBe("DELETE /api/credentials/backup");
   });
 
@@ -93,14 +93,14 @@ describe("credential field", () => {
       />,
     );
 
-    await expect(screen.findByText(/^Set on .* by dev@pve\.$/u)).resolves.toBeInTheDocument();
+    await expect(screen.findByText(/^Set on .* by dev@pve$/u)).resolves.toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("tells what is known of a stored credential", () => {
-    expect(setText({ purpose: "dns01", set: false, canChange: true })).toBe("Not set.");
-    expect(setText({ purpose: "dns01", set: true, canChange: true })).toBe("Set.");
-    expect(setText({ purpose: "dns01", set: true, setBy: "admin@pve", canChange: true })).toBe("Set by admin@pve.");
-    expect(setText({ purpose: "dns01", set: true, setAt, canChange: true })).toMatch(/^Set on .*2026\.$/u);
+    expect(setText({ purpose: "dns01", set: false, canChange: true })).toBe("Not set");
+    expect(setText({ purpose: "dns01", set: true, canChange: true })).toBe("Set");
+    expect(setText({ purpose: "dns01", set: true, setBy: "admin@pve", canChange: true })).toBe("Set by admin@pve");
+    expect(setText({ purpose: "dns01", set: true, setAt, canChange: true })).toMatch(/^Set on .*2026$/u);
   });
 });

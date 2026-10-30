@@ -58,12 +58,12 @@ describe("the Scale dialog", () => {
     await user.selectOptions(within(dialog).getByLabelText("Scaling (md-0)"), "autoscaled");
     const most = within(dialog).getByLabelText("Most workers (md-0)");
     expect(most).toHaveValue(4);
-    expect(most).toHaveAccessibleDescription("The node addresses leave room for 6 here.");
+    expect(most).toHaveAccessibleDescription("Node addresses leave room for 6");
     // Two more workers of 8 GiB, and the node has 4 GiB free.
-    await within(dialog).findByText(/^The 2 more workers it may add need 16\.0 GiB of memory/u);
+    await within(dialog).findByText(/^2 more workers need 16\.0 GiB, the nodes have/u);
     await user.clear(most);
     await user.type(most, "7");
-    expect(most).toHaveAccessibleDescription(/The node addresses give 8; .* runs 9 machines at once/u);
+    expect(most).toHaveAccessibleDescription(/Needs 9 node addresses, but there are 8/u);
     expect(within(dialog).getByRole("button", { name: "Scale" })).toBeDisabled();
     await user.clear(most);
     await user.type(most, "4");
@@ -96,7 +96,7 @@ describe("the Scale dialog", () => {
     await user.selectOptions(within(dialog).getByLabelText("Scaling (md-0)"), "fixed");
     const workers = within(dialog).getByLabelText("Workers (md-0)");
     expect(workers).toHaveValue(3);
-    expect(workers).toHaveAccessibleDescription(/keeps the workers it runs now/u);
+    expect(workers).toHaveAccessibleDescription("Keeps its current workers unless changed");
     await user.click(within(dialog).getByRole("button", { name: "Scale" }));
     await applyStaged(user);
     await waitFor(() =>
@@ -115,7 +115,7 @@ describe("the pools' checks", () => {
     expect(poolProblems({ c: withAddons, controlPlane: 1, entries: kept })).toStrictEqual({});
     const none = { "md-0": { ...poolEntry(scaledPool), min: "0" } };
     expect(poolProblems({ c: withAddons, controlPlane: 1, entries: none })).toStrictEqual({
-      "md-0": { least: "The cluster's add-ons need a worker that stays: at least 1." },
+      "md-0": { least: "Keep at least 1 for the add-ons" },
     });
     expect(poolProblems({ c: autoscaled, controlPlane: 1, entries: none })).toStrictEqual({});
     for (const variables of [
@@ -125,7 +125,7 @@ describe("the pools' checks", () => {
     ]) {
       const c: Cluster = { ...autoscaled, variables: { ...autoscaled.variables, ...variables } };
       expect(poolProblems({ c, controlPlane: 1, entries: none })).toStrictEqual({
-        "md-0": { least: "The cluster's add-ons need a worker that stays: at least 1." },
+        "md-0": { least: "Keep at least 1 for the add-ons" },
       });
     }
   });
@@ -172,7 +172,7 @@ describe("the pools' checks", () => {
     expect(roomWarning(autoscaled, { p: scaledPool, e }, roomy)).toBeUndefined();
     expect(roomWarning(autoscaled, { p: scaledPool, e }, tight)).toBeUndefined();
     const kept: Cluster = { ...autoscaled, variables: { ...autoscaled.variables, allowedNodes: ["pve1"] } };
-    expect(roomWarning(kept, { p: scaledPool, e }, tight)).toMatch(/^The 2 more workers it may add need 16\.0 GiB/u);
+    expect(roomWarning(kept, { p: scaledPool, e }, tight)).toMatch(/^2 more workers need 16\.0 GiB/u);
     expect(roomWarning(kept, { p: scaledPool, e }, [])).toBeUndefined();
   });
 });
@@ -188,14 +188,14 @@ describe("the autoscaler's options", () => {
     const user = userEvent.setup({ delay: null });
     render(<App />);
     await expect(screen.findByRole("row", { name: /Autoscaler/u })).resolves.toHaveTextContent(
-      "In the management cluster, 1 pool autoscaled; removes a node unneeded for 10 min",
+      "In the management cluster, 1 pool, scales down after 10 min",
     );
     await user.click(screen.getByRole("button", { name: "Edit the autoscaler" }));
-    const dialog = screen.getByRole("dialog", { name: "Autoscaler" });
+    const dialog = screen.getByRole("dialog", { name: "Edit autoscaler" });
     expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
     const runs = within(dialog).getByLabelText("Runs");
     await user.selectOptions(runs, "workload");
-    expect(runs).toHaveAccessibleDescription(/needs the management cluster's API reachable/u);
+    expect(runs).toHaveAccessibleDescription("Its token reads the machines of the namespace's clusters");
     const unneeded = within(dialog).getByLabelText("Unneeded for (minutes)");
     await user.clear(unneeded);
     expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();

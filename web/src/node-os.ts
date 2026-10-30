@@ -34,7 +34,7 @@ export function cpuNote(o: NodeOS | undefined, oses: NodeOS[] | undefined): stri
   if (o === undefined || usual === undefined || o.cpuType === usual) {
     return undefined;
   }
-  return `${o.title} needs Proxmox VE nodes with ${o.cpuType} CPUs.`;
+  return `Needs Proxmox VE nodes with ${o.cpuType} CPUs`;
 }
 
 /** nodeOSLabel names a node OS among the choices, with why it cannot be chosen or built on yet. */

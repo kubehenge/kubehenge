@@ -147,7 +147,7 @@ func (s *Server) backupCovers(ctx context.Context, u user) (bool, error) {
 func (s *Server) credential(w http.ResponseWriter, r *http.Request, u user) {
 	a := s.Appliance
 	if a == nil {
-		writeError(w, http.StatusNotFound, "this interface was given its management cluster")
+		writeError(w, http.StatusNotFound, "this interface does not manage its management cluster")
 		return
 	}
 	var req struct {
@@ -162,7 +162,7 @@ func (s *Server) credential(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	done, ok := s.limiter.reserve(passphraseCount(u))
 	if !ok {
-		writeError(w, http.StatusTooManyRequests, "too many wrong passphrases; try again later")
+		writeError(w, http.StatusTooManyRequests, "too many wrong passphrases. Try again later")
 		return
 	}
 	data, err := a.Credential(r.Context(), req.Passphrase, req.Name)
@@ -194,7 +194,7 @@ const templatePool = "kubehenge-templates"
 func (s *Server) remove(w http.ResponseWriter, r *http.Request, u user) {
 	a := s.Appliance
 	if a == nil {
-		writeError(w, http.StatusNotFound, "this interface was given its management cluster")
+		writeError(w, http.StatusNotFound, "this interface does not manage its management cluster")
 		return
 	}
 	var req struct {
@@ -223,7 +223,7 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request, u user) {
 			return
 		}
 		if n := len(list.Items); n > 0 {
-			writeError(w, http.StatusConflict, fmt.Sprintf("delete the %d clusters first; their Proxmox VE objects are cleaned up by the management cluster", n))
+			writeError(w, http.StatusConflict, fmt.Sprintf("delete the %d clusters first", n))
 			return
 		}
 	}
@@ -248,7 +248,7 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request, u user) {
 func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 	a := s.Appliance
 	if a == nil {
-		writeError(w, http.StatusNotFound, "this interface was given its management cluster; it sets none up")
+		writeError(w, http.StatusNotFound, "this interface does not manage its management cluster")
 		return
 	}
 	var req struct {

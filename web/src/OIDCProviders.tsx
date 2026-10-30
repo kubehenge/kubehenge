@@ -1,7 +1,7 @@
 import { useId, useState, type JSX } from "react";
 
 import type { OIDCProvider } from "./types";
-import { Field, filled, sentence } from "./ui";
+import { Field, filled } from "./ui";
 import { records, text, texts } from "./values";
 
 export const maxProviders = 8;
@@ -33,21 +33,21 @@ function providerProblems(providers: OIDCProvider[]): ProviderProblems[] {
     }
     const issuer = x.issuerURL.trim();
     if (!url || url.protocol !== "https:" || url.search || url.hash || url.username) {
-      p.issuerURL = "the issuer is an https:// URL without query or fragment.";
+      p.issuerURL = "Enter an https:// URL without query or fragment";
     } else if (seen.has(issuer)) {
-      p.issuerURL = "that issuer is listed already.";
+      p.issuerURL = "Issuer already listed";
     }
     seen.add(issuer);
     if (!x.clientID.trim()) {
-      p.clientID = "a client ID.";
+      p.clientID = "Enter a client ID";
     }
     for (const k of ["usernamePrefix", "groupsPrefix"] as const) {
       if (x[k]?.startsWith("system:") === true) {
-        p[k] = "the prefix may not start with system:.";
+        p[k] = "Prefix can't start with system:";
       }
     }
     if (filled(x.certificateAuthority) && !x.certificateAuthority.includes("-----BEGIN CERTIFICATE-----")) {
-      p.certificateAuthority = "the CA is a PEM certificate.";
+      p.certificateAuthority = "Paste a PEM certificate";
     }
     return p;
   });
@@ -59,7 +59,7 @@ export function oidcProblems(providers: OIDCProvider[]): string[] {
   providerProblems(providers).forEach((found, i) => {
     for (const k of fieldOrder) {
       if (found[k] !== undefined) {
-        p.push(`Identity provider ${i + 1}: ${found[k]}`);
+        p.push(`Identity provider ${i + 1}: ${found[k].charAt(0).toLowerCase()}${found[k].slice(1)}.`);
       }
     }
   });
@@ -181,25 +181,24 @@ export function OIDCProviders({
   const problems = providerProblems(value);
   return (
     <div className="providers">
-      {value.length === 0 && <p className="muted">None: people sign in with tokens and certificates only.</p>}
+      {value.length === 0 && <p className="muted">No identity providers</p>}
       {entries.map(({ key, provider: x, scopesText }, i) => {
         const error = (k: ProviderField): string | undefined => {
           const found = problems[i]?.[k];
-          return found !== undefined && (showAll || edited.has(`${key}.${k}`)) ? sentence(found) : undefined;
+          return found !== undefined && (showAll || edited.has(`${key}.${k}`)) ? found : undefined;
         };
         return (
           <fieldset key={key} className="group">
             <legend>
               Identity provider {i + 1}
-              {i === 0 && value.length > 1 ? " (Headlamp and kubectl sign in with this one)" : ""}
+              {i === 0 && value.length > 1 ? ", for Headlamp and kubectl" : ""}
             </legend>
             <fieldset className="bare" disabled={fixed}>
-              <Field label="Issuer URL" hint="Exactly as the provider's tokens name it." error={error("issuerURL")}>
+              <Field label="Issuer URL" hint="Exactly as in the tokens' iss claim" error={error("issuerURL")}>
                 {(id) => (
                   <input
                     id={id}
                     value={x.issuerURL}
-                    placeholder="https://"
                     ref={(el) => {
                       if (el && key === added) {
                         el.focus();
@@ -210,14 +209,10 @@ export function OIDCProviders({
                   />
                 )}
               </Field>
-              <Field
-                label="Client ID"
-                hint="Tokens must be issued to this client. Register it as a public client with PKCE."
-                error={error("clientID")}
-              >
+              <Field label="Client ID" hint="A public client with PKCE" error={error("clientID")}>
                 {(id) => <input id={id} value={x.clientID} onChange={(e) => update(i, { clientID: e.target.value })} />}
               </Field>
-              <Field label="User name claim" hint="Empty: the one shown.">
+              <Field label="User name claim">
                 {(id) => (
                   <input
                     id={id}
@@ -227,11 +222,7 @@ export function OIDCProviders({
                   />
                 )}
               </Field>
-              <Field
-                label="User name prefix"
-                hint="Put before every user name, so none passes for a user of another kind. Empty: no prefix."
-                error={error("usernamePrefix")}
-              >
+              <Field label="User name prefix" hint="Empty: no prefix" error={error("usernamePrefix")}>
                 {(id) => (
                   <input
                     id={id}
@@ -240,7 +231,7 @@ export function OIDCProviders({
                   />
                 )}
               </Field>
-              <Field label="Groups claim" hint="Empty: the one shown.">
+              <Field label="Groups claim">
                 {(id) => (
                   <input
                     id={id}
@@ -250,7 +241,7 @@ export function OIDCProviders({
                   />
                 )}
               </Field>
-              <Field label="Groups prefix" hint="Empty: no prefix." error={error("groupsPrefix")}>
+              <Field label="Groups prefix" hint="Empty: no prefix" error={error("groupsPrefix")}>
                 {(id) => (
                   <input
                     id={id}
@@ -259,10 +250,7 @@ export function OIDCProviders({
                   />
                 )}
               </Field>
-              <Field
-                label="Scopes"
-                hint="Asked for besides openid when signing in, separated by commas or spaces. Empty: the ones shown."
-              >
+              <Field label="Scopes" hint="Besides openid">
                 {(id) => (
                   <input
                     id={id}
@@ -272,11 +260,7 @@ export function OIDCProviders({
                   />
                 )}
               </Field>
-              <Field
-                label="CA certificate"
-                hint="PEM, when the provider's certificate is not signed by a public CA."
-                error={error("certificateAuthority")}
-              >
+              <Field label="CA certificate" hint="PEM, only for a private CA" error={error("certificateAuthority")}>
                 {(id) => (
                   <textarea
                     id={id}
@@ -287,16 +271,15 @@ export function OIDCProviders({
                 )}
               </Field>
             </fieldset>
-            <button type="button" onClick={() => remove(i)}>
-              Remove identity provider {i + 1}
+            <button type="button" aria-label={`Remove identity provider ${i + 1}`} onClick={() => remove(i)}>
+              Remove
             </button>
           </fieldset>
         );
       })}
       {fixed && (
         <p className="hint" id={fixedHint}>
-          These can be kept or removed. Adding or changing one needs Sys.Modify on the pool, as whoever runs a provider
-          can sign in as anyone.
+          Adding or changing one needs Sys.Modify on the pool.
         </p>
       )}
       {value.length < maxProviders && (
