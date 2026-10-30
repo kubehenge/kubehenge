@@ -89,7 +89,7 @@ kubeconfig. The interface then acts in the management cluster with the kubeconfi
 		"namespace clusters are created in, the chart's interface.namespace, unless the chart's ConfigMap kubehenge-interface in --class-namespace lists the namespaces (with interface.extraNamespaces); the interface changes only the clusters there")
 	f.DurationVar(&s.SessionMaxAge, "session-max-age", defaultSessionMaxAge, "how long a sign-in lasts, however active the user")
 	f.StringVar(&s.PublicURL, "public-url", os.Getenv("KUBEHENGE_PUBLIC_URL"),
-		"address users reach the interface at, where OpenID identity providers send them back; default the address the browser used (env KUBEHENGE_PUBLIC_URL)")
+		"address users reach the interface at, such as https://kubehenge.example, where OpenID identity providers send them back; OpenID sign-in needs it (env KUBEHENGE_PUBLIC_URL)")
 	f.StringVar(&a.Dir, "appliance-dir", "", "run as Kubehenge's appliance, keeping the management cluster's state here and setting it up from the interface; "+
 		"without it the management cluster is the one in KUBECONFIG")
 	f.StringVar(&o.headlampListen, "headlamp-listen", "", "address to serve the shared Headlamp on, behind the interface's sign-in; empty for none")
@@ -185,7 +185,6 @@ func (o *serveOptions) setUpAppliance(conn *pve.Config) error {
 	a.ProxmoxURL, a.ProxmoxCA, a.ProxmoxInsecure, a.Log, a.Release = conn.URL, string(ca), conn.Insecure, s.Log, release.Version
 	s.ProxmoxInsecure = conn.Insecure
 	a.InterfaceKubeconfig = appliance.InterfaceKubeconfig
-	a.StoreRootPassword = appliance.StoreRootPassword
 	a.Talos = &provisioner.ManagementTalos{}
 	a.LoadLast()
 	if a.Ready() {
@@ -249,6 +248,9 @@ func (o *serveOptions) serve(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go s.Run(ctx)
+	if o.a.Dir != "" {
+		go o.a.RenewInterfaceToken(ctx)
+	}
 	servers := []*http.Server{newServer(o.listen, s.Handler(), interfaceRequestTimeout)}
 	if s.Headlamp != nil {
 		servers = append(servers, newServer(o.headlampListen, s.HeadlampHandler(), 0))

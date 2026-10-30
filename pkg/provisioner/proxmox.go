@@ -61,6 +61,8 @@ type Proxmox struct {
 	region string
 	// cpuLevels are the online nodes' x86-64 levels as read.
 	cpuLevels map[string]int
+	// newHolders are the holder VMs created lately, by pool, which Proxmox VE may not list yet.
+	newHolders map[string][]holderVM
 }
 
 // Access is what a cluster's user holds beyond its own pool and its group's rights.
@@ -93,9 +95,12 @@ func (p *Proxmox) Ensure(ctx context.Context, n Names, access Access, held Crede
 }
 
 // Remove deletes the cluster's objects. The cluster's own VMs must be gone first: the pool is
-// removed only when empty, and the volume owner takes every volume it owns with it. held is what
-// was recorded for the cluster, as far as it still exists.
+// removed only when empty, and the volume owner and the holder VMs take every volume they own with
+// them. held is what was recorded for the cluster, as far as it still exists.
 func (p *Proxmox) Remove(ctx context.Context, n Names, held Credentials) error {
+	if err := p.removeVolumeHolders(ctx, n); err != nil {
+		return err
+	}
 	members, found, err := p.poolMembers(ctx, n.Pool)
 	if err != nil {
 		return err
@@ -157,7 +162,7 @@ func (p *Proxmox) ensureAccess(ctx context.Context, n Names, access Access) ([]p
 func (p *Proxmox) volumeOwners(ctx context.Context, n Names, held Credentials, members []poolMember) (map[int]string, error) {
 	owners := map[int]string{}
 	for _, m := range members {
-		if m.Type == guestQEMU && m.Name == n.VolumeOwner {
+		if m.Type == qemuType && m.Name == n.VolumeOwner {
 			owners[m.VMID] = m.Node
 		}
 	}
@@ -196,6 +201,13 @@ func (p *Proxmox) removeVolumeOwner(ctx context.Context, vmid int, created strin
 
 // nodeOnline is the status /nodes gives a node that is up.
 const nodeOnline = "online"
+
+const (
+	// qemuType is the type Proxmox VE lists a VM by, in a pool or the cluster's resources.
+	qemuType = "qemu"
+	// vmidParam names a VM's VMID in Proxmox VE's API.
+	vmidParam = "vmid"
+)
 
 // pveNode is a node as /nodes lists it.
 type pveNode struct {
@@ -247,7 +259,7 @@ func (p *Proxmox) removeVolumesOn(ctx context.Context, owner *ownerVM, node pveN
 	var content []struct {
 		VolID string `json:"volid"`
 	}
-	query := url.Values{"content": {"images"}, "vmid": {strconv.Itoa(owner.vmid)}}
+	query := url.Values{"content": {"images"}, vmidParam: {strconv.Itoa(owner.vmid)}}
 	path := fmt.Sprintf("/nodes/%s/storage/%s/content?%s", node.Node, storage, query.Encode())
 	if err := p.Client.Get(ctx, path, &content); err != nil {
 		return fmt.Errorf("listing volumes of owner VM %d on node %s storage %s: %w", owner.vmid, node.Node, storage, err)
@@ -526,7 +538,7 @@ func (p *Proxmox) createVolumeOwner(ctx context.Context, n Names, c Credentials,
 	// Never started and without disks; it exists so that the cluster's volumes have an owner
 	// only this cluster's token may configure. Proxmox VE checks every other setting against the
 	// VM's own path while creating it, before its pool's rights reach it, so the rest comes after.
-	vm := map[string]any{"vmid": vmid, "name": n.VolumeOwner, "pool": n.Pool}
+	vm := map[string]any{vmidParam: vmid, "name": n.VolumeOwner, "pool": n.Pool}
 	var upid string
 	if err := p.Client.Post(ctx, fmt.Sprintf("/nodes/%s/qemu", node), vm, &upid); err != nil {
 		return c, "", fmt.Errorf("creating volume owner VM %d: %w", vmid, err)
@@ -549,7 +561,7 @@ type ownerConfig struct {
 // given, which spares listing every VM of the Proxmox VE cluster.
 func (p *Proxmox) isVolumeOwner(ctx context.Context, n Names, vmid int, created string, members []poolMember) (ownerFound, error) {
 	for _, m := range members {
-		if m.Type != guestQEMU || m.VMID != vmid {
+		if m.Type != qemuType || m.VMID != vmid {
 			continue
 		}
 		found := ownerFound{node: m.Node}

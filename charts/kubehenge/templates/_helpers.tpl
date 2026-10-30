@@ -194,12 +194,11 @@ never below its distribution's documented minimum for a node.
           default: false
           description: >-
             Take VolumeSnapshots of the cluster's persistent volumes, restore them and clone
-            volumes. The plugin copies volumes through a Proxmox VE method that only root@pam may
-            call, so the cluster's CSI plugin signs in to Proxmox VE as root@pam: whoever takes over
-            the cluster or reads its Proxmox VE Secret holds the whole Proxmox VE cluster. Only
-            where Kubehenge's administrator has stored root@pam's password, and on storage local to
-            each node (ZFS, LVM, LVM-thin, directory or btrfs). Off, the plugin uses the cluster's
-            own token again and the snapshot components go.
+            volumes. A proxy beside the plugin makes each copy with the cluster's own Proxmox VE
+            token, as an unused disk of one of the cluster's holder VMs, and only of the cluster's
+            own volumes. Only on storage local to each node (ZFS, LVM, LVM-thin, directory or
+            btrfs), and a copy stays on its volume's node. Off, the snapshot components go, and
+            the plugin reaches Proxmox VE directly again once no copy is left.
 - name: ccm
   required: false
   schema:
@@ -522,17 +521,18 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
       description: >-
         The Pod Security Standard the cluster's pods are held to, by Kubernetes' Pod Security
         Admission, by Kyverno, or by both. The namespaces of the components that need the host
-        (kube-system, the CNI's, node-exporter's, Alloy's node collectors', Velero's, Istio's node
-        agents', Rancher's) are exempt from both.
+        (kube-system, Calico's, node-exporter's, Alloy's node collectors', Velero's, Istio's node
+        agents', MetalLB's, Rancher's and its agents') are exempt from Pod Security Admission in
+        every cluster, and from Kyverno where the cluster runs them.
       properties:
         admission:
           type: string
           enum: [privileged, baseline, restricted]
-          default: privileged
+          default: baseline
           description: >-
             The level Pod Security Admission enforces in every namespace that labels none of its
-            own. Below restricted, pods short of restricted are warned about and audited. Changing
-            it replaces the control-plane machines.
+            own. Pods short of restricted are warned about and audited at every level. Changing it
+            replaces the control-plane machines.
         kyverno:
           type: string
           enum: ["off", baseline, restricted]
@@ -1068,9 +1068,20 @@ renders with the cluster's variables, the chart's exempt namespaces written into
 */}}
 {{- define "kubehenge.admissionFile" -}}
 path: {{ .path }}
-{{ printf "{{- $exempt := list %s }}" (include "kubehenge.quotedList" .root.Values.podSecurityExempt) }}
+{{ include "kubehenge.exempt" .root.Values.podSecurityExempt }}
 {{ "{{- $talos := false }}" }}
 {{ .root.Files.Get "files/admission.tpl" }}
+{{- end -}}
+
+{{/*
+The line in front of files/admission.tpl that hands it every namespace of podSecurityExempt as
+$exempt, whatever the cluster runs: the exemptions are part of a file on the control-plane nodes,
+and ones that followed the add-ons would replace those nodes whenever an add-on is switched.
+*/}}
+{{- define "kubehenge.exempt" -}}
+{{- $all := list }}
+{{- range $by, $namespaces := . }}{{ $all = concat $all $namespaces }}{{ end }}
+{{- printf "{{- $exempt := list %s }}" (include "kubehenge.quotedList" (uniq $all)) }}
 {{- end -}}
 
 {{/*

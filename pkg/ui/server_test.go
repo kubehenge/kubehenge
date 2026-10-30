@@ -386,6 +386,11 @@ type browser struct {
 	h      *harness
 	cookie string
 	csrf   string
+	// address is where the browser connects from; unset, 192.0.2.10.
+	address string
+	// generation, when set, is sent with each request as the cluster's generation a change was
+	// made against.
+	generation string
 }
 
 func (h *harness) browser() *browser { return &browser{h: h} }
@@ -394,6 +399,12 @@ func (b *browser) do(method, path, body string) *httptest.ResponseRecorder {
 	b.h.t.Helper()
 	req := httptest.NewRequestWithContext(b.h.t.Context(), method, "https://kubehenge.example"+path, strings.NewReader(body))
 	req.RemoteAddr = "192.0.2.10:50000"
+	if b.address != "" {
+		req.RemoteAddr = b.address + ":50000"
+	}
+	if b.generation != "" {
+		req.Header.Set(generationHeader, b.generation)
+	}
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -475,6 +486,132 @@ func TestFailedSignInsAreLimited(t *testing.T) {
 	expect(t, b.do("POST", "/api/session", `{"username":"admin@pve","password":"secret"}`), http.StatusTooManyRequests)
 	h.clock = h.clock.Add(16 * time.Minute)
 	expect(t, b.do("POST", "/api/session", `{"username":"admin@pve","password":"secret"}`), http.StatusOK)
+}
+
+// Failed sign-ins hold back their address, not the user everywhere: nobody can lock an
+// administrator out from elsewhere.
+func TestFailedSignInsHoldBackTheirAddress(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	attacker := h.browser()
+	attacker.address = "198.51.100.7"
+	for range failuresAllowed {
+		expect(t, attacker.do("POST", "/api/session", `{"username":"admin@pve","password":"wrong"}`), http.StatusUnauthorized)
+	}
+	expect(t, attacker.do("POST", "/api/session", `{"username":"admin@pve","password":"secret"}`), http.StatusTooManyRequests)
+	h.browser().signIn("admin@pve")
+
+	// Other users from the same address are held back only once the address has used up its own.
+	for i := failuresAllowed; i < addressFailuresAllowed; i++ {
+		expect(t, attacker.do("POST", "/api/session", fmt.Sprintf(`{"username":"user%d@pve","password":"wrong"}`, i)), http.StatusUnauthorized)
+	}
+	expect(t, attacker.do("POST", "/api/session", `{"username":"dev@pve","password":"secret"}`), http.StatusTooManyRequests)
+	h.browser().signIn("dev@pve")
+}
+
+// Guesses still being checked count as failures, so parallel requests get no more than the limit.
+func TestLimiterCountsGuessesInFlight(t *testing.T) {
+	t.Parallel()
+	l := newLimiter(time.Minute)
+	c := count{key: "user", allowed: 3}
+	pending := make([]func(bool), 0, c.allowed)
+	for range c.allowed {
+		done, ok := l.reserve(c)
+		if !ok {
+			t.Fatal("a guess within the limit was refused")
+		}
+		pending = append(pending, done)
+	}
+	if _, ok := l.reserve(c); ok {
+		t.Fatal("a guess beyond those in flight was let through")
+	}
+	pending[0](false)
+	pending[0](true)
+	done, ok := l.reserve(c)
+	if !ok {
+		t.Fatal("a right guess did not give its count back")
+	}
+	pending[1](true)
+	pending[2](true)
+	done(true)
+	if _, ok := l.reserve(c); ok {
+		t.Fatal("three failures did not hold the key back")
+	}
+	if len(l.pending) != 0 {
+		t.Fatalf("pending left behind: %v", l.pending)
+	}
+}
+
+// slowRenewals holds every ticket renewal until released, as a Proxmox VE that is slow to answer.
+type slowRenewals struct {
+	*fakeAccounts
+
+	started chan struct{}
+	release chan struct{}
+}
+
+func (f *slowRenewals) Renew(ctx context.Context, t *pve.Ticket) (*pve.Ticket, error) {
+	f.started <- struct{}{}
+	<-f.release
+	return f.fakeAccounts.Renew(ctx, t)
+}
+
+// A renewal waits for Proxmox VE without a lock: other users' requests, the same session's and the
+// pruning go on meanwhile, and the session's ticket is renewed once.
+func TestSlowRenewalHoldsUpNobodyElse(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	slow := &slowRenewals{fakeAccounts: h.accounts, started: make(chan struct{}, 1), release: make(chan struct{})}
+	h.server.sessions.accounts = slow
+	a := h.browser()
+	a.signIn("admin@pve")
+	h.clock = h.clock.Add(renewAfter + time.Minute)
+	b := h.browser()
+	b.signIn("dev@pve")
+
+	session := func(cookie string) *http.Request {
+		req := httptest.NewRequestWithContext(t.Context(), "GET", "https://kubehenge.example/api/session", nil)
+		req.Header.Set("Cookie", sessionCookie+"="+cookie)
+		return req
+	}
+	renewing := make(chan int)
+	go func() {
+		rec := httptest.NewRecorder()
+		h.handler.ServeHTTP(rec, session(a.cookie))
+		renewing <- rec.Code
+	}()
+	<-slow.started
+
+	beside := make(chan error)
+	go func() {
+		for _, cookie := range []string{b.cookie, a.cookie} {
+			rec := httptest.NewRecorder()
+			h.handler.ServeHTTP(rec, session(cookie))
+			if rec.Code != http.StatusOK {
+				beside <- fmt.Errorf("a request beside the renewal: %d %s", rec.Code, rec.Body)
+				return
+			}
+		}
+		h.server.sessions.prune()
+		beside <- nil
+	}()
+	select {
+	case err := <-beside:
+		if err != nil {
+			t.Error(err)
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("requests and pruning waited for another session's renewal")
+	}
+	close(slow.release)
+	if code := <-renewing; code != http.StatusOK {
+		t.Fatalf("the renewing request: %d", code)
+	}
+	h.accounts.mu.Lock()
+	defer h.accounts.mu.Unlock()
+	if h.accounts.renewals != 1 {
+		t.Fatalf("%d renewals, want 1", h.accounts.renewals)
+	}
 }
 
 func TestSignInNeedsJSON(t *testing.T) {
@@ -739,11 +876,10 @@ func TestCreateChecksProxmoxPrivileges(t *testing.T) {
 		"vlan":     {"dev@pve", strings.Replace(createBody, `"bridge":"vmbr0"`, `"bridge":"vmbr1","vlan":30`, 1)},
 		"untagged": {"dev@pve", strings.Replace(createBody, `"bridge":"vmbr0"`, `"bridge":"vmbr1"`, 1)},
 		// The grant on localnetwork does not cover a VNet of that name in another zone.
-		"vnet":      {"dev@pve", strings.Replace(createBody, `"bridge":"vmbr0"`, `"bridge":"tenants"`, 1)},
-		"rancher":   {"dev@pve", strings.Replace(createBody, `"storage":`, `"rancher":{"install":true,"hostname":"rancher.example"},"storage":`, 1)},
-		"csi":       {"dev@pve", strings.Replace(createBody, `"storage":`, `"csi":{"datastoreAllocate":true},"storage":`, 1)},
-		"snapshots": {"dev@pve", strings.Replace(createBody, `"storage":`, `"csi":{"volumeSnapshots":true},"storage":`, 1)},
-		"viewer":    {"viewer@pve", createBody},
+		"vnet":    {"dev@pve", strings.Replace(createBody, `"bridge":"vmbr0"`, `"bridge":"tenants"`, 1)},
+		"rancher": {"dev@pve", strings.Replace(createBody, `"storage":`, `"rancher":{"install":true,"hostname":"rancher.example"},"storage":`, 1)},
+		"csi":     {"dev@pve", strings.Replace(createBody, `"storage":`, `"csi":{"datastoreAllocate":true},"storage":`, 1)},
+		"viewer":  {"viewer@pve", createBody},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -1163,28 +1299,15 @@ func TestHAGroupLabelsTakeNoRightOfTheUsersOwn(t *testing.T) {
 	expect(t, b.do("POST", "/api/clusters", created), http.StatusCreated)
 }
 
-// A cluster's CSI plugin signed in as root@pam holds all of Proxmox VE, which a user can give it only
-// while able to give themselves the same: with Permissions.Modify on /.
-func TestVolumeSnapshotsNeedTheUsersOwnPermissionsModify(t *testing.T) {
+// Volume snapshots copy only the cluster's own volumes onto its own storage, so switching them on
+// takes no right of the user's beyond changing the cluster.
+func TestVolumeSnapshotsTakeNoRightOfTheUsersOwn(t *testing.T) {
 	t.Parallel()
 	c := cluster("default", "one")
 	h := newHarness(t, c)
 	b := h.browser()
 	b.signIn("dev@pve")
-	switchOn := func() *httptest.ResponseRecorder {
-		return b.do("PATCH", "/api/clusters/default/one", `{"variables":{"csi":{"volumeSnapshots":true}}}`)
-	}
-	expect(t, switchOn(), http.StatusForbidden)
-	if got := b.do("GET", "/api/session", "").Body.String(); !strings.Contains(got, `"canModifyPermissions":false`) {
-		t.Errorf("session = %s", got)
-	}
-	h.accounts.mu.Lock()
-	h.accounts.grants["dev@pve"]["/"] = []string{"Permissions.Modify"}
-	h.accounts.mu.Unlock()
-	if got := b.do("GET", "/api/session", "").Body.String(); !strings.Contains(got, `"canModifyPermissions":true`) {
-		t.Errorf("session = %s", got)
-	}
-	expect(t, switchOn(), http.StatusOK)
+	expect(t, b.do("PATCH", "/api/clusters/default/one", `{"variables":{"csi":{"volumeSnapshots":true}}}`), http.StatusOK)
 	got := &clusterv1.Cluster{}
 	if err := h.kube.Get(t.Context(), client.ObjectKeyFromObject(c), got); err != nil {
 		t.Fatal(err)
@@ -1192,12 +1315,9 @@ func TestVolumeSnapshotsNeedTheUsersOwnPermissionsModify(t *testing.T) {
 	if v := string(variableValue(got, "csi")); v != `{"volumeSnapshots":true}` {
 		t.Fatalf("csi = %s", v)
 	}
-
-	// Switching it off takes nothing, nor does a change that leaves it on.
-	h.accounts.mu.Lock()
-	delete(h.accounts.grants["dev@pve"], "/")
-	h.accounts.mu.Unlock()
-	expect(t, switchOn(), http.StatusOK)
+	if session := b.do("GET", "/api/session", "").Body.String(); strings.Contains(session, "Permissions") {
+		t.Errorf("session = %s", session)
+	}
 	expect(t, b.do("PATCH", "/api/clusters/default/one", `{"variables":{"csi":{"volumeSnapshots":false}}}`), http.StatusOK)
 }
 
@@ -1264,6 +1384,59 @@ func TestChange(t *testing.T) {
 	}
 }
 
+// A change made against a cluster someone has changed since is refused, its plan too, rather than
+// undoing the other change unseen; a change status alone made since goes through.
+func TestChangeAgainstAnOlderGeneration(t *testing.T) {
+	t.Parallel()
+	one := cluster("default", "one")
+	one.Generation = 3
+	h := newHarness(t, one)
+	b := h.browser()
+	b.signIn("dev@pve")
+	rec := b.do("GET", "/api/clusters/default/one", "")
+	if !strings.Contains(rec.Body.String(), `"generation":3`) {
+		t.Fatalf("view = %s", rec.Body)
+	}
+
+	read := func() *clusterv1.Cluster {
+		t.Helper()
+		c := &clusterv1.Cluster{}
+		if err := h.kube.Get(t.Context(), client.ObjectKey{Namespace: "default", Name: "one"}, c); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	// The fake client leaves the generation to its writers; the API server counts it.
+	c := read()
+	c.Generation = 4
+	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: "headlamp", Value: apiextensionsv1.JSON{Raw: []byte(`{"enabled":true}`)}})
+	if err := h.kube.Update(t.Context(), c); err != nil {
+		t.Fatal(err)
+	}
+	b.generation = "3"
+	for _, req := range [][2]string{{"POST", "/api/clusters/default/one/plan"}, {"PATCH", "/api/clusters/default/one"}} {
+		rec = b.do(req[0], req[1], `{"variables":{"headlamp":{"enabled":false}}}`)
+		expect(t, rec, http.StatusPreconditionFailed)
+		if !strings.Contains(rec.Body.String(), "the cluster changed meanwhile") {
+			t.Fatalf("%s: %s", req[0], rec.Body)
+		}
+	}
+	if raw := variableValue(read(), "headlamp"); string(raw) != `{"enabled":true}` {
+		t.Fatalf("the other change was undone: headlamp = %s", raw)
+	}
+	b.generation = "three"
+	expect(t, b.do("PATCH", "/api/clusters/default/one", `{"variables":{"headlamp":{"enabled":false}}}`), http.StatusBadRequest)
+
+	// Metadata and status leave the generation as it is.
+	c = read()
+	c.Annotations = map[string]string{"example.org/touched": "yes"}
+	if err := h.kube.Update(t.Context(), c); err != nil {
+		t.Fatal(err)
+	}
+	b.generation = "4"
+	expect(t, b.do("PATCH", "/api/clusters/default/one", `{"variables":{"headlamp":{"enabled":false}}}`), http.StatusOK)
+}
+
 func TestSessionTellsWhoMayCreate(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -1318,7 +1491,14 @@ func TestDeleteAndKubeconfig(t *testing.T) {
 		t.Fatalf("kubeconfig: %v %s", rec.Header(), rec.Body)
 	}
 	expect(t, b.do("GET", "/api/clusters/default/two/kubeconfig", ""), http.StatusForbidden)
-	expect(t, b.do("DELETE", "/api/clusters/default/one", ""), http.StatusAccepted)
+	// A deletion names the cluster it is for, as the dialog has its user type it.
+	expect(t, b.do("DELETE", "/api/clusters/default/one", ""), http.StatusUnsupportedMediaType)
+	expect(t, b.do("DELETE", "/api/clusters/default/one", `{}`), http.StatusUnprocessableEntity)
+	expect(t, b.do("DELETE", "/api/clusters/default/one", `{"confirm":"two"}`), http.StatusUnprocessableEntity)
+	if err := h.kube.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "one"}, &clusterv1.Cluster{}); err != nil {
+		t.Fatalf("an unconfirmed deletion: %v", err)
+	}
+	expect(t, b.do("DELETE", "/api/clusters/default/one", `{"confirm":"one"}`), http.StatusAccepted)
 	err := h.kube.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "one"}, &clusterv1.Cluster{})
 	if err == nil {
 		t.Fatal("the cluster is still there")
@@ -1381,6 +1561,9 @@ func TestAssets(t *testing.T) {
 		}
 		if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") || !strings.Contains(csp, "script-src 'self'") {
 			t.Fatalf("%s: CSP %q", path, csp)
+		}
+		if got := rec.Header().Get("Strict-Transport-Security"); got != "max-age=31536000" {
+			t.Fatalf("%s: Strict-Transport-Security %q", path, got)
 		}
 	}
 	if cc := b.do("GET", "/assets/app-1.js", "").Header().Get("Cache-Control"); !strings.Contains(cc, "immutable") {

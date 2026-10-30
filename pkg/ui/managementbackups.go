@@ -73,12 +73,12 @@ func (s *Server) managementSnapshots(w http.ResponseWriter, r *http.Request, u u
 	writeJSON(w, http.StatusOK, v)
 }
 
-// checkPassphrase limits wrong passphrases per user and answers for one that is wrong.
-func (s *Server) checkPassphrase(w http.ResponseWriter, u user, err error) bool {
-	key := "passphrase:" + u.ticket.Username
+// checkPassphrase settles the try reservePassphrase held, counting it only when the passphrase was
+// wrong, and answers for a failure.
+func checkPassphrase(w http.ResponseWriter, done func(failed bool), err error) bool {
+	done(errors.Is(err, appliance.ErrPassphrase))
 	switch {
 	case errors.Is(err, appliance.ErrPassphrase):
-		s.limiter.fail(key)
 		writeError(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, appliance.ErrBusy):
 		writeError(w, http.StatusConflict, err.Error())
@@ -90,12 +90,13 @@ func (s *Server) checkPassphrase(w http.ResponseWriter, u user, err error) bool 
 	return false
 }
 
-func (s *Server) passphraseAllowed(w http.ResponseWriter, u user) bool {
-	if !s.limiter.allow("passphrase:" + u.ticket.Username) {
+// reservePassphrase holds one of the user's passphrase tries, refused once too many were wrong.
+func (s *Server) reservePassphrase(w http.ResponseWriter, u user) (func(failed bool), bool) {
+	done, ok := s.limiter.reserve(passphraseCount(u))
+	if !ok {
 		writeError(w, http.StatusTooManyRequests, "too many wrong passphrases; try again later")
-		return false
 	}
-	return true
+	return done, ok
 }
 
 func (s *Server) configureManagementBackups(w http.ResponseWriter, r *http.Request, u user) {
@@ -107,7 +108,7 @@ func (s *Server) configureManagementBackups(w http.ResponseWriter, r *http.Reque
 		SecretAccessKey string `json:"secretAccessKey"`
 		Passphrase      string `json:"passphrase"`
 	}
-	if !readJSON(w, r, &req) || !s.mayBackUpManagement(w, r, u) || !s.passphraseAllowed(w, u) {
+	if !readJSON(w, r, &req) || !s.mayBackUpManagement(w, r, u) {
 		return
 	}
 	a := s.Appliance
@@ -118,8 +119,12 @@ func (s *Server) configureManagementBackups(w http.ResponseWriter, r *http.Reque
 	settings := appliance.EtcdBackupSettings{
 		Target: req.Target, EveryHours: req.EveryHours, Keep: req.Keep, By: u.ticket.Username, Since: time.Now(),
 	}
+	done, ok := s.reservePassphrase(w, u)
+	if !ok {
+		return
+	}
 	err := a.ConfigureEtcdBackups(r.Context(), settings, req.AccessKeyID, req.SecretAccessKey, req.Passphrase)
-	if !s.checkPassphrase(w, u, err) {
+	if !checkPassphrase(w, done, err) {
 		return
 	}
 	s.Log.Info("management cluster backups set up", "user", u.ticket.Username, "target", req.Target)
@@ -166,16 +171,21 @@ func (s *Server) restoreManagementEtcd(w http.ResponseWriter, r *http.Request, u
 	var req struct {
 		Passphrase string `json:"passphrase"`
 	}
-	if !readJSON(w, r, &req) || !s.mayBackUpManagement(w, r, u) || !s.passphraseAllowed(w, u) {
+	if !readJSON(w, r, &req) || !s.mayBackUpManagement(w, r, u) {
+		return
+	}
+	done, ok := s.reservePassphrase(w, u)
+	if !ok {
 		return
 	}
 	name := r.PathValue("name")
 	err := s.Appliance.RestoreEtcd(r.Context(), name, req.Passphrase, u.ticket)
 	if jobConflict(err) {
+		done(false)
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	if !s.checkPassphrase(w, u, err) {
+	if !checkPassphrase(w, done, err) {
 		return
 	}
 	s.Log.Warn("management cluster etcd restore started", "user", u.ticket.Username, "snapshot", name)

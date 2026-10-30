@@ -23,8 +23,6 @@ export interface Session {
   canCreate?: boolean;
   /** Whether the user may install Rancher and trust identity providers of their own: Sys.Modify on the workload pool. */
   canTrust?: boolean;
-  /** Whether the user holds Permissions.Modify on /, which giving a cluster's CSI plugin root@pam needs. */
-  canModifyPermissions?: boolean;
   /** The namespace the interface creates clusters in unless the creator chooses another. */
   namespace?: string;
   /** Every namespace the interface creates and changes clusters in, namespace first. */
@@ -354,6 +352,8 @@ export interface Cluster {
   class: string;
   distribution: string;
   version: string;
+  /** Counts the changes to the cluster's settings; a change is made against the one it was shown. */
+  generation: number;
   created: string;
   createdBy?: string;
   autoUpgraded?: string;
@@ -545,8 +545,6 @@ export interface ManagementSettings {
   templateRefresh?: TemplateRefreshSettings;
   /** Clusters have the cloud controller manager's HA group labels unless they switch them off, with Sys.Audit on / for their token; absent, they have them. */
   clusterSysAudit?: boolean;
-  /** Clusters may take volume snapshots, with their CSI plugin signed in as root@pam. */
-  clusterVolumeSnapshots?: boolean;
   /** More namespaces the interface creates and manages clusters in, beside its own. */
   extraClusterNamespaces?: string[];
   /** The shared Headlamp signs those who may download a cluster's kubeconfig in as cluster-admin. */
@@ -715,6 +713,10 @@ export interface EtcdRestoreStatus {
   node?: string;
   /** The other control-plane machines, replaced once etcd is back. */
   replaced?: string[];
+  /** The snapshot of etcd as it was, taken into the target before the restore stopped or wiped any of it. */
+  before?: string;
+  /** Why no snapshot of etcd as it was could be taken. */
+  noBefore?: string;
   message?: string;
   started: string;
   finished?: string;

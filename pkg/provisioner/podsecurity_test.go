@@ -44,8 +44,8 @@ func TestKyvernoEnforcesTheChosenLevel(t *testing.T) {
 			t.Errorf("%s: policies %v", level, values)
 		}
 		exempt := lookup[[]any](t, values, "vpolExclude", "excludeNamespaces")
-		if !slices.Equal(exempt, []any{"kube-system", "node-exporter"}) {
-			t.Errorf("%s: policies leave alone %v, not the namespaces Pod Security Admission exempts", level, exempt)
+		if !slices.Equal(exempt, []any{"kube-system", "cattle-system"}) {
+			t.Errorf("%s: policies leave alone %v, not kube-system and the namespaces of what the cluster runs", level, exempt)
 		}
 	}
 	for _, p := range []PodSecurity{{}, {Kyverno: "off"}, {Admission: "restricted"}} {
@@ -57,6 +57,33 @@ func TestKyvernoEnforcesTheChosenLevel(t *testing.T) {
 			if proxy.GetName() == "web-kyverno" || proxy.GetName() == "web-kyverno-policies" {
 				t.Errorf("%+v installs %s", p, proxy.GetName())
 			}
+		}
+	}
+}
+
+func TestPodSecurityExemptsOnlyWhatTheClusterRuns(t *testing.T) {
+	t.Parallel()
+	exempt := &testCharts.PodSecurityExempt
+	optOut := false
+	for _, tc := range []struct {
+		name   string
+		cni    string
+		addons Addons
+		want   []string
+	}{
+		{"nothing switched on, registering with Rancher", "", Addons{}, []string{"kube-system", "cattle-system"}},
+		{"kept out of Rancher", "cilium", Addons{Rancher: Rancher{Register: &optOut}}, []string{"kube-system"}},
+		{"Calico", cniCalico, Addons{Rancher: Rancher{Register: &optOut}}, []string{"kube-system", "tigera-operator", "calico-system"}},
+		{"Rancher's own cluster", "", Addons{Rancher: Rancher{Install: true}}, []string{"kube-system", "cattle-system", "cattle-turtles-system"}},
+		{"logs without monitoring run nowhere", "", Addons{Logs: Logs{Enabled: true}, Rancher: Rancher{Register: &optOut}}, []string{"kube-system"}},
+		{"kube-vip runs in kube-system", "", Addons{LoadBalancer: LoadBalancer{Enabled: true, Implementation: "kube-vip"}, Rancher: Rancher{Register: &optOut}}, []string{"kube-system"}},
+		{"every add-on", "", Addons{
+			Monitoring: Monitoring{Enabled: true}, Logs: Logs{Enabled: true}, Backups: Backups{Enabled: true},
+			Istio: Istio{Enabled: true}, LoadBalancer: LoadBalancer{Enabled: true},
+		}, []string{"kube-system", "node-exporter", "logging-node", "velero", "istio-node", "metallb-system", "cattle-system"}},
+	} {
+		if got := exempt.For(tc.cni, &tc.addons); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: exempts %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

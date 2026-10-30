@@ -160,15 +160,15 @@ func (s *Server) credential(w http.ResponseWriter, r *http.Request, u user) {
 	if !s.require(w, r, u, "/", setupPrivileges...) {
 		return
 	}
-	key := "passphrase:" + u.ticket.Username
-	if !s.limiter.allow(key) {
+	done, ok := s.limiter.reserve(passphraseCount(u))
+	if !ok {
 		writeError(w, http.StatusTooManyRequests, "too many wrong passphrases; try again later")
 		return
 	}
 	data, err := a.Credential(r.Context(), req.Passphrase, req.Name)
+	done(errors.Is(err, appliance.ErrPassphrase))
 	switch {
 	case errors.Is(err, appliance.ErrPassphrase):
-		s.limiter.fail(key)
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	case errors.Is(err, appliance.ErrBusy), errors.Is(err, appliance.ErrUpgrading):
@@ -254,8 +254,6 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 	var req struct {
 		Settings   appliance.Settings `json:"settings"`
 		Passphrase string             `json:"passphrase"`
-		// RootPassword is root@pam's, for volume snapshots; empty keeps the one stored.
-		RootPassword string `json:"rootPassword"`
 	}
 	if !readJSON(w, r, &req) {
 		return
@@ -270,12 +268,6 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	if !s.require(w, r, u, "/", privileges...) {
 		return
-	}
-	if req.Settings.ClusterVolumeSnapshots && req.RootPassword != "" {
-		if !s.checkRootPassword(w, r, u, req.RootPassword) {
-			return
-		}
-		req.Settings.RootPassword = req.RootPassword
 	}
 	// The run needs the whole of a ticket's life, so it gets a new one rather than the session's.
 	ticket, err := s.Accounts.Renew(r.Context(), u.ticket)
@@ -294,33 +286,6 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	s.Log.Info("management cluster apply started", "user", u.ticket.Username)
 	writeJSON(w, http.StatusAccepted, a.Current())
-}
-
-// checkRootPassword signs in as root@pam with the password, as the CSI plugin will: with the
-// password alone, which Proxmox VE accepts only while root@pam has no second factor. Wrong guesses
-// are limited as wrong passphrases are.
-func (s *Server) checkRootPassword(w http.ResponseWriter, r *http.Request, u user, password string) bool {
-	key := "root-password:" + u.ticket.Username
-	if !s.limiter.allow(key) {
-		writeError(w, http.StatusTooManyRequests, "too many wrong root@pam passwords; try again later")
-		return false
-	}
-	_, challenge, err := s.Accounts.SignIn(r.Context(), "root@pam", password)
-	switch {
-	case errors.Is(err, pve.ErrAuthentication):
-		s.limiter.fail(key)
-		writeError(w, http.StatusUnprocessableEntity, "Volume snapshots: Proxmox VE refused root@pam's password")
-		return false
-	case err != nil:
-		s.proxmoxError(w, err)
-		return false
-	case challenge != nil:
-		writeError(w, http.StatusUnprocessableEntity,
-			"Volume snapshots: root@pam has a second factor, and the CSI plugin signs in with the password alone; remove root@pam's second factor in Proxmox VE first")
-		return false
-	}
-	s.Log.Warn("root@pam's password given for volume snapshots", "user", u.ticket.Username)
-	return true
 }
 
 // jobConflict tells whether a job could not start because another one, of any kind, holds the

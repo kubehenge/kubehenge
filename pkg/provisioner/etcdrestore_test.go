@@ -22,6 +22,7 @@ import (
 	"filippo.io/age"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -135,8 +136,21 @@ type restoreFixture struct {
 
 	guests *fakeGuests
 	apis   *fakeAPIs
+	// etcd is the cluster's etcd as it is, which the restore snapshots first.
+	etcd   *fakeEtcd
 	data   []byte
 	r      *EtcdRestorer
+	events *events.FakeRecorder
+}
+
+// event is the one event the restore reported, or empty.
+func (f *restoreFixture) event() string {
+	select {
+	case e := <-f.events.Events:
+		return e
+	default:
+		return ""
+	}
 }
 
 // newRestoreFixture is web with three control-plane VMs, 101 to 103, a snapshot of its own in the
@@ -165,9 +179,11 @@ func newRestoreFixture(t *testing.T, change func(*clusterv1.Cluster)) *restoreFi
 	}
 	f.data = etcdData(64 << 10)
 	f.putSnapshot(restoreSnapshot, string(keys.Data[BackupKeysKeyEtcd]), "v1.37.1+rke2r1")
+	f.etcd = &fakeEtcd{data: etcdData(32 << 10)}
+	f.events = events.NewFakeRecorder(10)
 	f.r = &EtcdRestorer{
-		Client: f.kube, Reader: f.kube, ClassNamespace: "kubehenge-system", Targets: f.targets, Guests: f.guests,
-		APIs: f.apis, Now: func() time.Time { return etcdNow },
+		Client: f.kube, Reader: f.kube, ClassNamespace: "kubehenge-system", Targets: f.targets, Etcd: f.etcd, Guests: f.guests,
+		APIs: f.apis, Now: func() time.Time { return etcdNow }, Events: f.events,
 	}
 	return f
 }
@@ -258,6 +274,9 @@ func TestEtcdRestorerRestores(t *testing.T) {
 		if step != stepPing && (c.Spec.Paused == nil || !*c.Spec.Paused) {
 			t.Errorf("%s ran on %d with the cluster not paused", step, vmid)
 		}
+		if step != stepPing && f.etcd.calls.Load() != 1 {
+			t.Errorf("%s ran on %d with etcd snapshotted %d times before", step, vmid, f.etcd.calls.Load())
+		}
 		if step != stepFetch {
 			return
 		}
@@ -291,6 +310,20 @@ func TestEtcdRestorerRestores(t *testing.T) {
 	st := f.status()
 	if st.Phase != RestoreSucceeded || st.Machine != "web-cp-0" || !slices.Equal(st.Replaced, []string{"web-cp-1", "web-cp-2"}) || !st.Paused {
 		t.Errorf("status %+v", st)
+	}
+	before := EtcdSnapshotName(etcdNow, "v1.37.1+rke2r1")
+	if st.Before != before || st.NoBefore != "" {
+		t.Errorf("etcd as it was is not named as %s: %+v", before, st)
+	}
+	if e := f.event(); !strings.Contains(e, "etcd as it was before is in snapshot "+before) {
+		t.Errorf("the restore's event %q names no snapshot of etcd as it was", e)
+	}
+	stored, err := ListEtcdSnapshots(context.Background(), f.store, snapshotFolder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(stored, func(s EtcdSnapshot) bool { return s.Name == before && isDigest(s.SHA256) }) {
+		t.Errorf("etcd as it was is not in the target: %+v", stored)
 	}
 	if got := f.deleting(); !slices.Equal(got, []string{"web-cp-1", "web-cp-2"}) {
 		t.Errorf("deleting %v", got)
@@ -334,6 +367,29 @@ func TestEtcdRestorerWaitsForTheClusterToAnswer(t *testing.T) {
 	}
 	if got := f.deleting(); !slices.Equal(got, []string{"web-cp-1", "web-cp-2"}) {
 		t.Errorf("deleting %v", got)
+	}
+}
+
+// A cluster whose etcd does not answer is restored all the same, its status saying that etcd as it
+// was could not be snapshotted first, and why.
+func TestEtcdRestorerRestoresWhatCannotBeSnapshottedFirst(t *testing.T) {
+	t.Parallel()
+	f := newRestoreFixture(t, nil)
+	f.etcd.err = errors.New("etcdserver: no leader")
+	f.reconcile()
+	st := f.status()
+	if st.Phase != RestoreSucceeded || st.Before != "" || !strings.Contains(st.NoBefore, "no leader") {
+		t.Errorf("status %+v", st)
+	}
+	if e := f.event(); !strings.Contains(e, "No snapshot of etcd as it was could be taken first: reaching etcd: etcdserver: no leader.") {
+		t.Errorf("the restore's event %q does not say why etcd as it was is in no snapshot", e)
+	}
+	stored, err := ListEtcdSnapshots(context.Background(), f.store, snapshotFolder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 1 || stored[0].Name != restoreSnapshot {
+		t.Errorf("the target holds %+v", stored)
 	}
 }
 
@@ -532,19 +588,32 @@ func TestPlanEtcdRestore(t *testing.T) {
 	if _, err := PlanEtcdRestore(context.Background(), f.kube, f.cluster(), &other); err == nil {
 		t.Error("planned a restore across a Kubernetes minor")
 	}
+	forged := *snapshot
+	forged.SHA256 = strings.Repeat("a", 60) + "' x; touch /pwned; echo '"
+	if plan, err := PlanEtcdRestore(context.Background(), f.kube, f.cluster(), &forged); err == nil {
+		t.Errorf("planned a restore whose checksum is a command: %+v", plan)
+	}
 }
 
 func TestRestorable(t *testing.T) {
 	t.Parallel()
 	c := etcdCluster(`{}`)
+	sum := strings.Repeat("0123456789abcdef", 4)
 	for _, tc := range []struct {
 		s  EtcdSnapshot
 		ok bool
 	}{
-		{EtcdSnapshot{Name: "s", Distribution: "rke2", KubernetesVersion: "v1.37.4+rke2r2"}, true},
-		{EtcdSnapshot{Name: "s"}, true},
-		{EtcdSnapshot{Name: "s", Distribution: "k3s", KubernetesVersion: "v1.37.1+k3s1"}, false},
-		{EtcdSnapshot{Name: "s", Distribution: "rke2", KubernetesVersion: "v1.38.0+rke2r1"}, false},
+		{EtcdSnapshot{Name: "s", Distribution: "rke2", KubernetesVersion: "v1.37.4+rke2r2", SHA256: sum}, true},
+		{EtcdSnapshot{Name: "s", SHA256: sum}, true},
+		{EtcdSnapshot{Name: "s", Distribution: "k3s", KubernetesVersion: "v1.37.1+k3s1", SHA256: sum}, false},
+		{EtcdSnapshot{Name: "s", Distribution: "rke2", KubernetesVersion: "v1.38.0+rke2r1", SHA256: sum}, false},
+		// The checksum goes into a command run as root.
+		{EtcdSnapshot{Name: "s"}, false},
+		{EtcdSnapshot{Name: "s", SHA256: strings.ToUpper(sum)}, false},
+		{EtcdSnapshot{Name: "s", SHA256: sum[1:]}, false},
+		{EtcdSnapshot{Name: "s", SHA256: sum + "0"}, false},
+		{EtcdSnapshot{Name: "s", SHA256: sum[:60] + "';id'"}, false},
+		{EtcdSnapshot{Name: "s", SHA256: sum[:63] + "\n"}, false},
 	} {
 		if err := Restorable(c, &tc.s); (err == nil) != tc.ok {
 			t.Errorf("%+v: %v", tc.s, err)

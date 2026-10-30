@@ -109,10 +109,22 @@ async function errorOf(res: Response): Promise<string> {
   return "";
 }
 
+/** httpPreconditionFailed answers a change made against a cluster someone has changed since. */
+export const httpPreconditionFailed = 412;
+
+/** A cluster as the user was shown it, which a change to it is made against. */
+export type ClusterShown = Pick<Cluster, "namespace" | "name" | "generation">;
+
+// What a call sends: its JSON body, and headers besides those every call has.
+interface Sent {
+  body?: unknown;
+  headers?: Record<string, string>;
+}
+
 // send makes one call of the API and returns its answer when it is a success; otherwise it throws
 // the API's own message, and a lost session returns the interface to sign-in.
-async function send(method: string, path: string, body?: unknown): Promise<Response> {
-  const headers: Record<string, string> = {};
+async function send(method: string, path: string, { body, headers: extra = {} }: Sent = {}): Promise<Response> {
+  const headers: Record<string, string> = { ...extra };
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
   }
@@ -138,19 +150,34 @@ async function send(method: string, path: string, body?: unknown): Promise<Respo
 // request makes a call whose answer is JSON of type T. The server is the release this frontend came
 // with (noteRelease tells when it no longer is), so its answers have the types it declares.
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await send(method, path, body);
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the server's declared answer, as above
+  return answerOf<T>(await send(method, path, { body }));
+}
+
+// requestAgainst is request for a change to a cluster, made against the generation of the cluster
+// its user was shown: the server refuses it once someone else has changed the cluster since.
+async function requestAgainst<T>(
+  method: string,
+  path: string,
+  change: { body: ChangeRequest; generation: number },
+): Promise<T> {
+  return answerOf<T>(
+    await send(method, path, { body: change.body, headers: { "X-Kubehenge-Generation": String(change.generation) } }),
+  );
+}
+
+async function answerOf<T>(res: Response): Promise<T> {
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the server's declared answer, as request says
   return (await res.json()) as T;
 }
 
 // act makes a call whose answer has no body.
 async function act(method: string, path: string, body?: unknown): Promise<void> {
-  await send(method, path, body);
+  await send(method, path, { body });
 }
 
 // download fetches a file the API hands out, such as a kubeconfig.
 async function download(method: string, path: string, body?: unknown): Promise<Blob> {
-  const res = await send(method, path, body);
+  const res = await send(method, path, { body });
   return res.blob();
 }
 
@@ -186,9 +213,11 @@ export interface Api {
   clusters: () => Promise<Cluster[]>;
   cluster: (ns: string, name: string) => Promise<Cluster>;
   create: (req: CreateRequest) => Promise<Cluster>;
-  change: (ns: string, name: string, req: ChangeRequest) => Promise<Cluster>;
-  plan: (ns: string, name: string, req: ChangeRequest) => Promise<Plan>;
-  remove: (ns: string, name: string) => Promise<void>;
+  /** change is made against the cluster as its user was shown it; a newer generation refuses it. */
+  change: (c: ClusterShown, req: ChangeRequest) => Promise<Cluster>;
+  plan: (c: ClusterShown, req: ChangeRequest) => Promise<Plan>;
+  /** remove deletes the cluster; confirm is its name as the user typed it. */
+  remove: (ns: string, name: string, confirm: string) => Promise<void>;
   backups: (ns: string, name: string) => Promise<ClusterBackups>;
   backUp: (ns: string, name: string) => Promise<BackupRun>;
   /** restore brings back a backup: of the namespaces named, or of every one when none is. */
@@ -196,8 +225,11 @@ export interface Api {
   etcdSnapshots: (ns: string, name: string) => Promise<ClusterEtcdSnapshots>;
   takeEtcdSnapshot: (ns: string, name: string) => Promise<void>;
   etcdRestorePlan: (ns: string, name: string, snapshot: string) => Promise<EtcdRestorePlan>;
-  /** restoreEtcd asks the controller to take the cluster's etcd back to a snapshot. */
-  restoreEtcd: (ns: string, name: string, snapshot: string) => Promise<void>;
+  /**
+   * restoreEtcd asks the controller to take the cluster's etcd back to a snapshot; confirm is the
+   * cluster's name as the user typed it.
+   */
+  restoreEtcd: (ns: string, name: string, req: { snapshot: string; confirm: string }) => Promise<void>;
   /** controlPlaneRecovery says how the control plane is recovered keeping machine: by the controller, or by hand. */
   controlPlaneRecovery: (ns: string, name: string, machine: string) => Promise<ControlPlaneRecovery>;
   /** recoverControlPlane asks the controller to reset etcd to machine's own and replace the other control planes. */
@@ -206,8 +238,7 @@ export interface Api {
   abandonDeletion: (cluster: ClusterRef, confirm: string) => Promise<void>;
 
   setupStatus: () => Promise<SetupStatus>;
-  /** rootPassword is root@pam's for volume snapshots; empty keeps the one stored. */
-  setup: (settings: ManagementSettings, passphrase: string, rootPassword?: string) => Promise<Job>;
+  setup: (settings: ManagementSettings, passphrase: string) => Promise<Job>;
 
   health: (ns: string, name: string) => Promise<ClusterHealth>;
   fleetHealth: () => Promise<FleetHealth[]>;
@@ -272,16 +303,18 @@ export const api: Api = {
   clusters: () => request("GET", "/api/clusters"),
   cluster: (ns, name) => request("GET", clusterPath(ns, name)),
   create: (req) => request("POST", "/api/clusters", req),
-  change: (ns, name, req) => request("PATCH", clusterPath(ns, name), req),
-  plan: (ns, name, req) => request("POST", `${clusterPath(ns, name)}/plan`, req),
-  remove: (ns, name) => act("DELETE", clusterPath(ns, name)),
+  change: (c, req) =>
+    requestAgainst("PATCH", clusterPath(c.namespace, c.name), { body: req, generation: c.generation }),
+  plan: (c, req) =>
+    requestAgainst("POST", `${clusterPath(c.namespace, c.name)}/plan`, { body: req, generation: c.generation }),
+  remove: (ns, name, confirm) => act("DELETE", clusterPath(ns, name), { confirm }),
   backups: (ns, name) => request("GET", `${clusterPath(ns, name)}/backups`),
   backUp: (ns, name) => request("POST", `${clusterPath(ns, name)}/backups`),
   restore: (ns, name, req) => request("POST", `${clusterPath(ns, name)}/restores`, req),
   etcdSnapshots: (ns, name) => request("GET", `${clusterPath(ns, name)}/etcd-snapshots`),
   takeEtcdSnapshot: (ns, name) => act("POST", `${clusterPath(ns, name)}/etcd-snapshots`),
   etcdRestorePlan: (ns, name, snapshot) => request("GET", `${etcdSnapshotURL(ns, name, snapshot)}/restore-plan`),
-  restoreEtcd: (ns, name, snapshot) => act("POST", `${clusterPath(ns, name)}/etcd-restores`, { snapshot }),
+  restoreEtcd: (ns, name, req) => act("POST", `${clusterPath(ns, name)}/etcd-restores`, req),
   controlPlaneRecovery: (ns, name, machine) =>
     request("GET", `${clusterPath(ns, name)}/control-plane-recovery?machine=${encodeURIComponent(machine)}`),
   recoverControlPlane: (cluster, ask) =>
@@ -290,12 +323,7 @@ export const api: Api = {
     act("POST", `${clusterPath(cluster.namespace, cluster.name)}/abandon-deletion`, { confirm }),
 
   setupStatus: () => request("GET", "/api/setup"),
-  setup: (settings, passphrase, rootPassword) =>
-    request("POST", "/api/setup", {
-      settings,
-      passphrase,
-      ...(rootPassword !== undefined && rootPassword !== "" && { rootPassword }),
-    }),
+  setup: (settings, passphrase) => request("POST", "/api/setup", { settings, passphrase }),
 
   health: (ns, name) => request("GET", `${clusterPath(ns, name)}/health`),
   fleetHealth: () => request("GET", "/api/fleet/health"),

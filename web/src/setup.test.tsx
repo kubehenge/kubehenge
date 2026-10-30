@@ -39,8 +39,6 @@ const form: SetupForm = {
   refreshDNS: "",
   creatorBuilds: false,
   clusterSysAudit: true,
-  clusterVolumeSnapshots: false,
-  rootPassword: "",
   moreNamespaces: false,
   extraNamespaces: "",
   headlampSignIn: false,

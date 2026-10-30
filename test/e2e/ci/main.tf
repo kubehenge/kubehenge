@@ -37,6 +37,11 @@ variable "node_cores" {
   default = 4
 }
 
+variable "node_memory_mb" {
+  type    = number
+  default = 4096
+}
+
 variable "version_overrides" {
   type    = map(string)
   default = {}
@@ -82,12 +87,10 @@ module "management_cluster" {
   bootstrap_datastore        = "local"
   workload_datastores        = ["local", "own"]
   cluster_datastore_allocate = true
-  # The k3s test's cluster takes volume snapshots, with the root@pam password test/e2e/ci/run.sh
-  # stores.
-  cluster_volume_snapshots = true
 
   node_addresses = [for i in range(var.node_count) : "172.20.99.${11 + i}/24"]
   node_cores     = var.node_cores
+  node_memory_mb = var.node_memory_mb
   # As the templates', test/e2e/ci/run.sh.
   cpu_type = "host"
 

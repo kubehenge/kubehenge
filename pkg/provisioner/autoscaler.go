@@ -726,7 +726,7 @@ func workloadAutoscaler(cluster *clusterv1.Cluster, s AutoscalerSettings, image 
 // scheduler over, evict the pods of a node it removes and taint that node first, and report.
 var autoscalerWorkloadRules = []rbacv1.PolicyRule{
 	{APIGroups: []string{""}, Resources: []string{"namespaces", "persistentvolumeclaims", "persistentvolumes", "pods", "replicationcontrollers", "services"}, Verbs: []string{"get", "list", "watch"}},
-	{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"get", "list", "watch", "update"}},
+	{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"get", "list", "watch", verbUpdate}},
 	{APIGroups: []string{""}, Resources: []string{"pods/eviction"}, Verbs: []string{"create"}},
 	{APIGroups: []string{""}, Resources: []string{"events"}, Verbs: []string{"create", "patch"}},
 	{APIGroups: []string{"policy"}, Resources: []string{"poddisruptionbudgets"}, Verbs: []string{"list", "watch"}},
@@ -740,7 +740,7 @@ var autoscalerWorkloadRules = []rbacv1.PolicyRule{
 // cannot be held to a name.
 var autoscalerStatusRules = []rbacv1.PolicyRule{
 	{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"create"}},
-	{APIGroups: []string{""}, Resources: []string{"configmaps"}, ResourceNames: []string{autoscalerStatus}, Verbs: []string{"get", "update", "delete"}},
+	{APIGroups: []string{""}, Resources: []string{"configmaps"}, ResourceNames: []string{autoscalerStatus}, Verbs: []string{"get", verbUpdate, "delete"}},
 }
 
 // removePlaced removes the autoscaler from where it ran before its placement changed, and inside

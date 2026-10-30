@@ -75,14 +75,6 @@ The cloud controller manager labels each node with the Proxmox VE HA groups, or 
 
 To keep every cluster's token from reading the Proxmox VE cluster's configuration, untick **HA group labels** in the setup, or set `cluster_sys_audit = false`. That removes the group, and with it every cluster's `Sys.Audit` on `/`; new clusters go without the labels, and the cloud controller manager logs a permission error for each node every few minutes ([troubleshooting.md](troubleshooting.md)).
 
-## Volume snapshots
-
-The CSI plugin copies a volume for a snapshot, a restore or a clone through a Proxmox VE method that only `root@pam` may call, signed in with its password and without a second factor; no API token can, whatever its privileges. With this setting, a cluster may take volume snapshots on storage local to each node ([clusters.md](clusters.md#volume-snapshots)), and its CSI plugin then signs in as `root@pam`.
-
-- **What it grants:** every cluster that chooses volume snapshots gets `root@pam`'s password in its CSI plugin's configuration, so whoever takes over such a cluster, or reads that Secret, holds the whole Proxmox VE cluster. Choosing it takes the cluster creator's own `Permissions.Modify` on `/`.
-- **Where the password lives:** you type it in the setup, which checks it by signing in as `root@pam` and refuses it when Proxmox VE asks for a second factor. It is kept in the management cluster only, as the Secret `kubehenge-root-pam` in `kubehenge-system`, never in the appliance's state, settings or logs, and the interface never shows it again. An apply that changes nothing else leaves the stored one as it is; give it again when `root@pam`'s password changes.
-- **Switching it off** deletes the Secret. Clusters that took snapshots keep their CSI plugin on the cluster's token, without snapshots, and show a `VolumeSnapshotsRefused` event until the option is switched off for them.
-
 ## Headlamp sign-in
 
 Without it, everyone signs in to each cluster in the shared Headlamp with a token or an identity provider of their own. With it, those who hold `Sys.Modify` on a cluster's pool, who may download its admin kubeconfig anyway, open it signed in as cluster-admin; nobody else gets more than before. It needs no Proxmox VE privilege beyond the setup's own.

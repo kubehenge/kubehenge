@@ -222,10 +222,9 @@ func newAppliance(t *testing.T) (*Appliance, chan []byte) {
 		ProxmoxURL: "https://pve.example:8006",
 		ProxmoxCA:  "-----BEGIN CERTIFICATE-----\n",
 		Log:        slog.New(slog.DiscardHandler),
-		InterfaceKubeconfig: func(_ context.Context, admin []byte, endpoint string) ([]byte, error) {
+		InterfaceKubeconfig: func(_ context.Context, admin []byte, endpoint, _ string) ([]byte, error) {
 			return []byte("interface for " + string(admin) + " at " + endpoint), nil
 		},
-		StoreRootPassword: func(context.Context, []byte, bool, string) error { return nil },
 	}
 	return a, ready
 }
@@ -698,67 +697,6 @@ func TestClusterSysAuditReachesTheModule(t *testing.T) {
 		if saved := a.SavedSettings(); saved.GivesClusterSysAudit() != on || (set == nil) != (saved.ClusterSysAudit == nil) {
 			t.Errorf("the setting %t was not kept", on)
 		}
-	}
-}
-
-// The password reaches the management cluster alone; the module, its variables and the saved
-// settings learn only that volume snapshots are on, and a later run keeps the password stored.
-func TestRootPasswordGoesOnlyIntoTheManagementCluster(t *testing.T) {
-	t.Parallel()
-	a, _ := newAppliance(t)
-	type stored struct {
-		admin, password string
-		on              bool
-	}
-	var calls []stored
-	a.StoreRootPassword = func(_ context.Context, admin []byte, on bool, password string) error {
-		calls = append(calls, stored{string(admin), password, on})
-		return nil
-	}
-	apply := func(s *Settings) error {
-		return a.Apply(s, "correct horse battery staple", ticket(), func(context.Context, []byte) error { return nil })
-	}
-	s := settings("pve1")
-	s.ClusterVolumeSnapshots = true
-	if err := apply(s); !errors.Is(err, ErrNoRootPassword) {
-		t.Fatalf("switched on without a password: %v", err)
-	}
-	const password = "root's own secret" //nolint:gosec // the test's own, looked for where it must not be
-	s.RootPassword = password
-	if err := apply(s); err != nil {
-		t.Fatal(err)
-	}
-	if j := waitFor(t, a); j.State != "succeeded" || strings.Contains(strings.Join(j.Log, "\n"), password) {
-		t.Fatalf("job = %+v", j)
-	}
-	for _, name := range []string{"main.tf", "terraform.tfvars.json", "settings.json"} {
-		raw, err := os.ReadFile(filepath.Join(a.Dir, "management", name)) //nolint:gosec // the test's own files
-		if err != nil || strings.Contains(string(raw), password) {
-			t.Fatalf("%s holds the password: %v\n%s", name, err, raw)
-		}
-	}
-	vars, err := os.ReadFile(filepath.Join(a.Dir, "management", "terraform.tfvars.json"))
-	if err != nil || !strings.Contains(string(vars), `"clusterVolumeSnapshots": true`) {
-		t.Fatalf("tfvars: %v\n%s", err, vars)
-	}
-
-	// Kept as it is by a run that names none, and removed with volume snapshots off.
-	again := settings("pve1")
-	again.ClusterVolumeSnapshots = true
-	if err := apply(again); err != nil {
-		t.Fatal(err)
-	}
-	waitFor(t, a)
-	off := settings("pve1")
-	off.RootPassword = password
-	if err := apply(off); err != nil {
-		t.Fatal(err)
-	}
-	waitFor(t, a)
-	const admin = "admin-kubeconfig"
-	want := []stored{{admin, password, true}, {admin, "", true}, {admin, "", false}}
-	if !slices.Equal(calls, want) {
-		t.Errorf("stored %+v, want %+v", calls, want)
 	}
 }
 

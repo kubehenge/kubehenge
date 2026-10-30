@@ -202,6 +202,9 @@ type clusterView struct {
 	GitOps *gitOpsView `json:"gitops,omitempty"`
 	// Talos is how a Talos cluster's nodes stand with its Talos release.
 	Talos *talosView `json:"talos,omitempty"`
+	// Generation counts the changes to the cluster's spec; a change made against it carries it back
+	// (generationHeader).
+	Generation int64 `json:"generation"`
 	// Recovery is the last recovery of the control plane from a stalled roll, or the one running.
 	Recovery *provisioner.EtcdRestoreStatus `json:"recovery,omitempty"`
 	// Deletion is what the cluster's deletion waits on, while it is being deleted, since DeletedAt.
@@ -296,6 +299,7 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 		Class:        c.Spec.Topology.ClassRef.Name,
 		Distribution: dist,
 		Version:      c.Spec.Topology.Version,
+		Generation:   c.Generation,
 		Created:      c.CreationTimestamp.Time,
 		CreatedBy:    c.Annotations[createdBy],
 		AutoUpgraded: c.Annotations[autoUpgraded],
@@ -800,9 +804,6 @@ func (s *Server) mayCreate(w http.ResponseWriter, r *http.Request, u user, class
 	if allocatesDatastore(req.Variables[csiVariable]) && !s.allowDatastoreAllocate(w, r, u, req.Variables["storage"]) {
 		return false
 	}
-	if takesSnapshots(req.Variables[csiVariable]) && !s.require(w, r, u, "/", privPermissionsModify) {
-		return false
-	}
 	if !s.allowGitOps(w, r, u, s.workloadPoolPath(), req.Variables[gitopsVariable], nil) {
 		return false
 	}
@@ -958,8 +959,9 @@ func networkVariable(raw json.RawMessage) (string, string, bool) {
 }
 
 // csiVariable configures a cluster's CSI plugin; its datastoreAllocate gives the cluster's token
-// Datastore.Allocate on the cluster's storage, and its volumeSnapshots signs the plugin in as
-// root@pam.
+// Datastore.Allocate on the cluster's storage. Its volumeSnapshots takes no right of the user's
+// own: the controller copies only the cluster's own volumes onto its storage, where the cluster's
+// token may take the room anyway.
 const csiVariable = "csi"
 
 // ccmVariable configures a cluster's cloud controller manager; its haGroups gives the cluster's
@@ -971,7 +973,6 @@ const ccmVariable = "ccm"
 // csiOptions are the csi variable's switches; a value that is not one reads as all off.
 type csiOptions struct {
 	DatastoreAllocate bool `json:"datastoreAllocate"`
-	VolumeSnapshots   bool `json:"volumeSnapshots"`
 }
 
 func csiOf(raw json.RawMessage) csiOptions {
@@ -983,8 +984,6 @@ func csiOf(raw json.RawMessage) csiOptions {
 }
 
 func allocatesDatastore(raw json.RawMessage) bool { return csiOf(raw).DatastoreAllocate }
-
-func takesSnapshots(raw json.RawMessage) bool { return csiOf(raw).VolumeSnapshots }
 
 // allowDatastoreAllocate checks the right to give a cluster's token Datastore.Allocate on its
 // storage: the user's own Datastore.Allocate there. Whether the storage is the cluster's alone is
@@ -1038,6 +1037,9 @@ func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user) (
 		writeError(w, http.StatusConflict, "the cluster is being deleted")
 		return nil, false
 	}
+	if !unchangedSince(w, r, c) {
+		return nil, false
+	}
 	before := c.DeepCopy()
 	// Autoscaling goes first, so that a change switching a pool's off may also fix its workers.
 	msg, err := applyAutoscaling(r.Context(), u.kube, c, req.Autoscaling)
@@ -1056,6 +1058,36 @@ func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user) (
 		return nil, false
 	}
 	return &changed{req: req, before: before, c: c, access: access}, true
+}
+
+// generationHeader carries the generation of the cluster a change was made against, in the
+// canonical form Go reads header names in.
+const generationHeader = "X-Kubehenge-Generation"
+
+// clusterChanged answers a change made against a cluster someone has changed since.
+const clusterChanged = "the cluster changed meanwhile; reload and try again"
+
+// unchangedSince tells whether the cluster's spec is still the one the change was made against, as
+// the request's generation says, and answers it when not. A change sets whole values, of a
+// variable say, from what its user was shown, so without this the second of two users editing
+// at once would undo the first's change unseen. The generation stands for the spec alone, which
+// Cluster API's status updates leave as it is; the update itself is then made against the version
+// just read, so nothing slips in between. A request without the header is checked against nothing.
+func unchangedSince(w http.ResponseWriter, r *http.Request, c *clusterv1.Cluster) bool {
+	raw := r.Header.Get(generationHeader)
+	if raw == "" {
+		return true
+	}
+	generation, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, generationHeader+" is a number")
+		return false
+	}
+	if generation != c.Generation {
+		writeError(w, http.StatusPreconditionFailed, clusterChanged)
+		return false
+	}
+	return true
 }
 
 func (s *Server) changeCluster(w http.ResponseWriter, r *http.Request, u user) {
@@ -1198,10 +1230,7 @@ func (s *Server) allowNodeOS(w http.ResponseWriter, r *http.Request, u user, c *
 // allowCSI checks the rights a change of the cluster's csi variable from old to value needs: those
 // of what it switches on, never of what it keeps or switches off.
 func (s *Server) allowCSI(w http.ResponseWriter, r *http.Request, u user, c *clusterv1.Cluster, value, old json.RawMessage) bool {
-	if allocatesDatastore(value) && !allocatesDatastore(old) && !s.allowDatastoreAllocate(w, r, u, variableValue(c, "storage")) {
-		return false
-	}
-	return !takesSnapshots(value) || takesSnapshots(old) || s.require(w, r, u, "/", privPermissionsModify)
+	return !allocatesDatastore(value) || allocatesDatastore(old) || s.allowDatastoreAllocate(w, r, u, variableValue(c, "storage"))
 }
 
 func variableValue(c *clusterv1.Cluster, name string) json.RawMessage {
@@ -1241,9 +1270,29 @@ func setVariable(c *clusterv1.Cluster, name string, value json.RawMessage) {
 	c.Spec.Topology.Variables = vars
 }
 
+// confirmRequest names the cluster a request that cannot be undone is for, as its user typed it.
+type confirmRequest struct {
+	Confirm string `json:"confirm"`
+}
+
+// confirmed tells whether a request that cannot be undone names the cluster it is for, and answers
+// it when not. The interface has its user type the name; asking for it here as well holds a script,
+// or a page that reached the session's CSRF token, to the same step.
+func confirmed(w http.ResponseWriter, c *clusterv1.Cluster, typed string) bool {
+	if typed != c.Name {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("confirm with the cluster's name, %q", c.Name))
+		return false
+	}
+	return true
+}
+
 func (s *Server) deleteCluster(w http.ResponseWriter, r *http.Request, u user) {
 	c, _, ok := s.cluster(w, r, u, privChange)
 	if !ok {
+		return
+	}
+	var req confirmRequest
+	if !readJSON(w, r, &req) || !confirmed(w, c, req.Confirm) {
 		return
 	}
 	if err := u.kube.Delete(r.Context(), c, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil && !apierrors.IsNotFound(err) {
@@ -1326,7 +1375,7 @@ func (s *Server) kubeError(w http.ResponseWriter, err error) {
 	case apierrors.IsAlreadyExists(err):
 		writeError(w, http.StatusConflict, "a cluster of that name exists")
 	case apierrors.IsConflict(err):
-		writeError(w, http.StatusConflict, "the cluster changed meanwhile; reload and try again")
+		writeError(w, http.StatusConflict, clusterChanged)
 	case apierrors.IsInvalid(err) || apierrors.IsBadRequest(err):
 		if errors.As(err, &status) {
 			writeError(w, http.StatusUnprocessableEntity, status.Status().Message)

@@ -68,14 +68,22 @@
 # the shared Headlamp's sign-in identities there. Unset, the cluster gets a namespace of its own,
 # created and deleted with it, and none of those identities.
 # KUBEHENGE_E2E_VOLUME_SNAPSHOTS=1 switches volume snapshots on, takes a snapshot of a volume with
-# data, restores it into a new one and checks the data, and switches them off again, with a
-# management cluster that lets clusters take them, root@pam's password stored, and a
-# KUBEHENGE_E2E_STORAGE local to each node.
+# data, restores it into a new one and clones the volume, and checks the data in both; has the proxy
+# refuse a copy of a volume that is not the cluster's, checks that a deleted snapshot's copy goes
+# from its holder VM, and switches them off again, on a KUBEHENGE_E2E_STORAGE local to each node.
+# KUBEHENGE_E2E_REGISTRY, when set, is the plain-HTTP registry the controller's image under test was
+# pushed to by its ghcr.io path; the control-plane nodes pull ghcr.io's images from it first while
+# volume snapshots are on, for the copy proxy that runs from that image.
 # KUBEHENGE_E2E_TALOS_VERSION and KUBEHENGE_E2E_TALOS_UPGRADE are, for kubehenge-talos, the Talos
 # release the cluster starts on and a newer one its nodes are upgraded to in place, both with a
 # template in the template pool. Talos has no SSH, no systemd and no guest agent that runs commands:
 # the steps that read a node from inside read it through Talos's API, with talosctl and the
 # cluster's talosconfig, or are left out.
+# KUBEHENGE_E2E_PART runs half of the test, for a machine whose memory holds the guests of only one:
+# lifecycle sizes the nodes at the least the class lets them have with the add-ons a cluster starts
+# with, and switches on no other; addons sizes them for every add-on and leaves out every step that replaces machines (the distribution's
+# own etcd upload, the load balancer switched off on k3s, scaling, the upgrade and the dead worker).
+# Unset, the test runs whole.
 set -eu
 
 class=${1:?usage: $0 <ClusterClass> <version> <upgrade version>}
@@ -88,6 +96,14 @@ upgrade=${3:?usage: $0 <ClusterClass> <version> <upgrade version>}
 : "${KUBEHENGE_E2E_LOAD_BALANCER_ADDRESSES:?}"
 : "${KUBEHENGE_E2E_BACKUP_TARGET:?}" "${KUBEHENGE_E2E_BACKUP_CA:?}" "${KUBEHENGE_E2E_BACKUP_CERT:?}" "${KUBEHENGE_E2E_BACKUP_KEY:?}"
 load_balancer=${KUBEHENGE_E2E_LOAD_BALANCER:-metallb}
+part=${KUBEHENGE_E2E_PART:-all}
+case ${part} in
+    all | lifecycle | addons) ;;
+    *)
+        echo "KUBEHENGE_E2E_PART is lifecycle or addons, not ${part}" >&2
+        exit 2
+        ;;
+esac
 
 # etcdutl, which reads the etcd snapshots back.
 # renovate: datasource=github-release-attachments depName=etcd-io/etcd
@@ -260,7 +276,7 @@ if [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
         jq -e --arg n "${ns}" 'index($n) > 0' > /dev/null || fail "the interface is not given namespace ${ns}"
     kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d > "${work}/management-ca.crt"
     management_server=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
-    interface_token=$(kubectl -n kubehenge-system get secret kubehenge-interface-token -o jsonpath='{.data.token}' | base64 -d)
+    interface_token=$(kubectl -n kubehenge-system create token kubehenge-interface --duration=2h)
     creator_config="${work}/interface.kubeconfig"
     kubectl --kubeconfig "${creator_config}" config set-cluster management --server="${management_server}" \
         --certificate-authority="${work}/management-ca.crt" --embed-certs > /dev/null
@@ -305,31 +321,37 @@ else
 fi
 oidc=$(jq -cn --arg i "${issuer}" --rawfile ca "${work}/ca.crt" '[{issuerURL: $i, clientID: "kubehenge-e2e", certificateAuthority: $ca}]')
 class_json=$(kubectl -n kubehenge-system get clusterclass "${class}" -o json)
-# Unless set, the worker gets the least Kubehenge lets it have with every add-on but Rancher on, so
-# that the add-ons are seen to fit in it: its distribution's least, or what a worker uses itself
-# and every add-on's figure, whichever is more.
-worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq -r '
+# The add-ons the nodes are sized for: every one but Rancher, or with the add-ons left out only those
+# on from the start, the load balancer and Rancher's agent, which registers a cluster by default.
+case ${part} in
+    lifecycle) sized_for='["loadBalancer", "rancherAgent"]' ;;
+    *) sized_for='["headlamp", "monitoring", "logs", "backups", "kyverno", "istio", "loadBalancer", "certManager", "argocd", "rancherAgent"]' ;;
+esac
+# Unless set, the worker gets the least Kubehenge lets it have with those add-ons on, so that they
+# are seen to fit in it: its distribution's least, or what a worker uses itself and each add-on's
+# figure, whichever is more.
+worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" '
     (.metadata.annotations["kubehenge.dev/addon-memory"] | fromjson) as $addon
     | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
     | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
-        $node.worker + $addon.headlamp + $addon.monitoring + $addon.logs + $addon.backups + $addon.kyverno + $addon.istio + $addon.loadBalancer + $addon.certManager + $addon.argocd + $addon.rancherAgent]
+        $node.worker + ([$on[] | $addon[.]] | add)]
     | max')}
-# Its cores likewise, for the CPU a worker's own pods and every add-on's request, the GitOps engine
+# Its cores likewise, for the CPU a worker's own pods and each add-on's request, the GitOps engine
 # that asks for more of the two.
-worker_cores=${KUBEHENGE_E2E_WORKER_CORES:-$(printf '%s' "${class_json}" | jq -r '
+worker_cores=${KUBEHENGE_E2E_WORKER_CORES:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" '
     (.metadata.annotations["kubehenge.dev/addon-cpu"] | fromjson) as $addon
     | (.metadata.annotations["kubehenge.dev/node-cpu"] | fromjson) as $node
     | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.cores.minimum),
-        (($node.worker + $addon.headlamp + $addon.monitoring + $addon.logs + $addon.backups + $addon.kyverno + $addon.istio + $addon.loadBalancer + $addon.certManager + ([$addon.argocd, $addon.flux] | max) + $addon.rancherAgent) / 1000 | ceil)]
+        (($node.worker + ([$on[] | if . == "argocd" then ([$addon.argocd, $addon.flux] | max) else $addon[.] end] | add)) / 1000 | ceil)]
     | max')}
 # The control plane's memory likewise: the least the class's sizing guide gives it beside one worker, or what
-# it uses itself with every add-on but Rancher, whichever is more.
-control_plane_memory=${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-$(printf '%s' "${class_json}" | jq -r '
+# it uses itself with those add-ons, whichever is more.
+control_plane_memory=${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" '
     (.metadata.annotations["kubehenge.dev/addon-control-plane-memory"] // "{}" | fromjson) as $grows
     | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
     | [(.metadata.annotations["kubehenge.dev/control-plane-sizes"] | fromjson | map(select(.workers <= 1)) | last | .memoryMiB),
         (.spec.variables[] | select(.name == "controlPlaneMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
-        $node.controlPlane + ([$grows.headlamp, $grows.monitoring, $grows.logs, $grows.backups, $grows.kyverno, $grows.istio, $grows.loadBalancer, $grows.certManager, $grows.argocd, $grows.rancherAgent] | map(. // 0) | add)]
+        $node.controlPlane + ([$on[] | $grows[.] // 0] | add)]
     | max')}
 echo "workers with ${worker_memory} MiB of memory and ${worker_cores} cores, the control plane with ${control_plane_memory} MiB"
 cat > "${work}/cluster.yaml" << EOF
@@ -1011,11 +1033,39 @@ if [ "${KUBEHENGE_E2E_DATASTORE_ALLOCATE:-}" = 1 ]; then
     persistent_volume
 fi
 
+# guest <node> <vmid> <command>: runs a shell command in a VM through its guest agent and prints its
+# output; fails when the command or the agent does. It is polled with set -e off, so each step
+# returns its own failure.
+guest() {
+    request=$(jq -cn --arg c "$3" '{command: ["sh", "-c", $c]}')
+    # shellcheck disable=SC2310 # guest is polled with set -e off, so a failed request is returned.
+    pid=$(pve -X POST -H 'Content-Type: application/json' -d "${request}" \
+        "${KUBEHENGE_PROXMOX_URL}/api2/json/nodes/$1/qemu/$2/agent/exec" | jq -r .data.pid) || return 1
+    tries=0
+    # shellcheck disable=SC2310 # polled until the command has exited; a failed request is tried again.
+    until result=$(pve_get "nodes/$1/qemu/$2/agent/exec-status?pid=${pid}") &&
+        printf '%s' "${result}" | jq -e '.data.exited == 1' > /dev/null; do
+        tries=$((tries + 1))
+        [ "${tries}" -lt 60 ] || return 1
+        sleep 1
+    done
+    printf '%s' "${result}" | jq -r '.data."out-data" // ""'
+    printf '%s' "${result}" | jq -e '.data.exitcode == 0' > /dev/null
+}
+# on_machines "<Machine names>" <command>: runs the command on those Machines' VMs.
+on_machines() {
+    for m in $1; do
+        pm=$(kubectl -n "${ns}" get machine "${m}" -o jsonpath='{.spec.infrastructureRef.name}')
+        pm_node=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.status.proxmoxNode}')
+        pm_vmid=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.spec.virtualMachineID}')
+        guest "${pm_node}" "${pm_vmid}" "$2"
+    done
+}
+
 if [ "${KUBEHENGE_E2E_VOLUME_SNAPSHOTS:-}" = 1 ]; then
-    kubectl -n kubehenge-system get secret kubehenge-root-pam > /dev/null ||
-        fail "no root@pam password is stored for volume snapshots"
     # csi_controller_is <Secret> <true|false>: the CSI plugin's controller is rolled out reading its
-    # configuration from the Secret, with the snapshot sidecar or without.
+    # configuration from the Secret, with the snapshot sidecar and the copy proxy beside it, or
+    # without either.
     csi_controller_is() {
         # shellcheck disable=SC2310 # polled; a failed read is a no.
         deployments=$(wl -n kube-system get deployments -o json) || return 1
@@ -1024,18 +1074,96 @@ if [ "${KUBEHENGE_E2E_VOLUME_SNAPSHOTS:-}" = 1 ]; then
             length == 1 and all(
                 ([.spec.template.spec.volumes[] | select(.name == "cloud-config") | .secret.secretName][0] == $s) and
                 (any(.spec.template.spec.containers[]; .name == "csi-snapshotter") == $snap) and
+                (any(.spec.template.spec.initContainers[]?; .name == "kubehenge-csi-proxy" and .restartPolicy == "Always" and
+                    (.image | test("@sha256:[0-9a-f]{64}$"))) == $snap) and
                 (.status.observedGeneration // 0) >= .metadata.generation and
                 (.status.updatedReplicas // 0) == .spec.replicas and (.status.readyReplicas // 0) == .spec.replicas and
                 (.status.replicas // 0) == .spec.replicas)' > /dev/null
     }
-    # signs_in_as_root: the plugin's root configuration names root@pam and no token; its password is
-    # never printed.
-    signs_in_as_root() {
+    # proxied: the plugin's configuration for the proxy names the cluster's own token and the proxy on
+    # the loopback, and neither root@pam nor any password.
+    proxied() {
         # shellcheck disable=SC2310 # polled; a failed read is a no.
-        config=$(wl -n kube-system get secret kubehenge-proxmox-root -o jsonpath='{.data.csi\.yaml}' 2> /dev/null) || return 1
+        config=$(wl -n kube-system get secret kubehenge-proxmox-proxied -o jsonpath='{.data.csi\.yaml}' 2> /dev/null) || return 1
         decoded=$(printf '%s' "${config}" | base64 -d)
-        printf '%s\n' "${decoded}" | grep -qx '  username: root@pam' && ! printf '%s\n' "${decoded}" | grep -q token_
+        printf '%s\n' "${decoded}" | grep -qx -- '- insecure: false' &&
+            printf '%s\n' "${decoded}" | grep -qx '  url: http://127.0.0.1:8006/api2/json' &&
+            printf '%s\n' "${decoded}" | grep -q '^  token_id: ' &&
+            ! printf '%s\n' "${decoded}" | grep -qE 'root@pam|username|password'
     }
+    # csi_controller_pod: the name of the CSI plugin's controller's running pod, with the proxy.
+    csi_controller_pod() {
+        wl -n kube-system get pods -o json | jq -er '
+            [.items[] | select(.status.phase == "Running" and any(.spec.initContainers[]?; .name == "kubehenge-csi-proxy"))] |
+            first | .metadata.name'
+    }
+    # copied <volume name part> <count>: the proxy logged at least count copies whose name, as the
+    # plugin asked for it, has the part.
+    copied() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        pod=$(csi_controller_pod) || return 1
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        log=$(wl -n kube-system logs "pod/${pod}" -c kubehenge-csi-proxy --tail=-1 2> /dev/null) || return 1
+        printf '%s\n' "${log}" | jq -Rsce --arg part "$1" --argjson n "$2" '
+            [split("\n")[] | fromjson? | select(.msg == "copied a volume" and (.volume | contains($part)))] | length >= $n' > /dev/null
+    }
+    # holder_vms: the cluster's holder VMs, as {vmid, node}, by the name beside the volume owner's.
+    holder_vms() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        all=$(pve_get "pools?poolid=${pool_uri}") || return 1
+        printf '%s' "${all}" | jq -ce --argjson o "${owner}" '
+            [.data[0].members[] | select(.type == "qemu")] as $vms |
+            ([$vms[] | select(.vmid == $o) | .name][0] | sub("-volumes$"; "-copies")) as $h |
+            [$vms[] | select(.name == $h and .vmid != $o) | {vmid, node, status}]'
+    }
+    # holders_ready: every holder VM is a stopped VM, and there is one at least.
+    holders_ready() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        vms=$(holder_vms) || return 1
+        printf '%s' "${vms}" | jq -e 'length > 0 and all(.status == "stopped")' > /dev/null
+    }
+    no_holders() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        vms=$(holder_vms) && [ "${vms}" = '[]' ]
+    }
+    # held: the volume IDs the holder VMs' disks are, one per line.
+    held() {
+        # shellcheck disable=SC2310 # a failed read fails the caller.
+        vms=$(holder_vms) || return 1
+        for vm in $(printf '%s' "${vms}" | jq -r '.[] | "\(.node)/\(.vmid)"'); do
+            # shellcheck disable=SC2310 # a failed read fails the caller.
+            pve_get "nodes/${vm%/*}/qemu/${vm#*/}/config" | jq -r '.data | to_entries[] | select(.key | test("^(unused|scsi)[0-9]+$")) | .value | split(",")[0]' ||
+                return 1
+        done
+    }
+    # holds <count>: the holder VMs hold that many volumes.
+    holds() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        volumes=$(held) || return 1
+        count=$(printf '%s' "${volumes}" | grep -c .) || true
+        [ "${count}" = "$1" ]
+    }
+    # holds_not <volume ID>: the holder VMs no longer hold the volume.
+    holds_not() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        volumes=$(held) || return 1
+        ! printf '%s\n' "${volumes}" | grep -qxF "$1"
+    }
+    # The clusters pull Kubehenge's own image from ghcr.io, where a build under test is not: on the
+    # control-plane nodes, where the proxy runs beside the CSI plugin's controller, containerd asks
+    # the registry the build was pushed to first and ghcr.io for anything that registry has not.
+    if [ -n "${KUBEHENGE_E2E_REGISTRY:-}" ]; then
+        case ${distribution} in
+            k3s | rke2) certs=/var/lib/rancher/${distribution}/agent/etc/containerd/certs.d ;;
+            kubeadm) certs=/etc/containerd/certs.d ;;
+            *) fail "the ${distribution} nodes take no registry from the guest agent for the copy proxy's image" ;;
+        esac
+        hosts=$(printf 'server = "https://ghcr.io"\n\n[host."http://%s"]\n  capabilities = ["pull", "resolve"]\n' "${KUBEHENGE_E2E_REGISTRY}")
+        snapshot_servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+        # shellcheck disable=SC2310 # a node that does not take it fails the test with the reason.
+        on_machines "${snapshot_servers}" "mkdir -p ${certs}/ghcr.io && printf '%s\n' '${hosts}' > ${certs}/ghcr.io/hosts.toml" > /dev/null ||
+            fail "the control-plane nodes did not take the registry of Kubehenge's image"
+    fi
     # not_found <kubectl get arguments>: the object is not found, rather than out of reach for a
     # moment.
     not_found() {
@@ -1100,10 +1228,15 @@ EOF
         fi
     }
 
-    step "volume snapshots, with the CSI plugin signed in as root@pam"
+    step "volume snapshots, with the copies made with the cluster's own token"
     set_variable csi '{"volumeSnapshots":true}'
-    until_true 300 "the CSI plugin's root@pam configuration" signs_in_as_root
-    until_true 900 "the CSI plugin's controller with the snapshot sidecar, signed in as root@pam" csi_controller_is kubehenge-proxmox-root true
+    until_true 300 "the CSI plugin's configuration through the proxy, with the cluster's token" proxied
+    until_true 900 "the CSI plugin's controller with the snapshot sidecar and the copy proxy" csi_controller_is kubehenge-proxmox-proxied true
+    until_true 300 "the copies' namespace" wl get namespace kubehenge-volume-copies
+    until_true 300 "the cluster's holder VMs, stopped" holders_ready
+    # shellcheck disable=SC2310 # a failed read fails the test with the reason.
+    cluster_get "access/permissions?path=/vms/${owner}" | jq -e '[.data[] | has("VM.Clone")] | any' > /dev/null ||
+        fail "the cluster's token cannot copy its own volumes"
     until_true 600 "the VolumeSnapshotClass" wl get volumesnapshotclass proxmox
     if [ "${distribution}" != rke2 ]; then
         wl -n kube-system rollout status deployment -l app.kubernetes.io/name=snapshot-controller --timeout=5m
@@ -1121,7 +1254,7 @@ spec:
       storage: 1Gi
 EOF
     # 64 MiB of random data and its checksum, written and flushed, and the volume detached again
-    # before its snapshot is taken.
+    # before its snapshot and its clone are taken.
     data_pod e2e-write e2e-source 'head -c 67108864 /dev/urandom > /data/blob; cd /data; sha256sum blob > sum; sync'
     wl -n default delete pod/e2e-write --wait --timeout=5m
     wl apply -f - << 'EOF'
@@ -1149,22 +1282,88 @@ spec:
   resources:
     requests:
       storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: e2e-clone
+  namespace: default
+spec:
+  accessModes: [ReadWriteOnce]
+  dataSource:
+    kind: PersistentVolumeClaim
+    name: e2e-source
+  resources:
+    requests:
+      storage: 1Gi
 EOF
     until_true 900 "the volume snapshot ready to use" snapshot_ready
     data_pod e2e-check e2e-restored 'cd /data; sha256sum -c sum'
-    wl -n default delete pod/e2e-check pvc/e2e-restored pvc/e2e-source volumesnapshot/e2e --wait --timeout=5m
-    # The CSI plugin retries a failed deletion with a back-off of up to five minutes.
+    data_pod e2e-clone-check e2e-clone 'cd /data; sha256sum -c sum'
+    until_true 120 "the proxy's log of the snapshot's copy" copied -snapshot- 1
+    until_true 120 "the proxy's log of the restore's and the clone's copies" copied -pvc- 2
+    until_true 120 "the three copies on the holder VMs" holds 3
+    # shellcheck disable=SC2310 # a failed read fails the test with the reason.
+    snapshot_copy=$(wl -n kubehenge-volume-copies get configmaps -l kubehenge.dev/volume-copy -o json |
+        jq -er '[.items[].data | select(.state == "done" and (.volume | contains("-snapshot-"))) | .copy] | if length == 1 then .[0] else error("not one snapshot copy") end') ||
+        fail "no record of the snapshot's copy"
+
+    step "a copy of a volume that is not the cluster's refused"
+    copy_node=$(kubectl -n "${ns}" get proxmoxmachines -o jsonpath='{.items[0].status.proxmoxNode}')
+    copy_vmid=$(kubectl -n "${ns}" get proxmoxmachines -o jsonpath='{.items[0].spec.virtualMachineID}')
+    # shellcheck disable=SC2310 # a failed read fails the test with the reason.
+    proxy_pod=$(csi_controller_pod) || fail "no CSI plugin controller with the proxy"
+    wl -n kube-system port-forward "pod/${proxy_pod}" 18006:8006 > /dev/null 2>&1 &
+    forward=$!
+    proxy_answers() { curl -s -o /dev/null "http://127.0.0.1:18006/api2/json/version"; }
+    until_true 60 "the proxy reached through a port-forward" proxy_answers
+    # A node VM's disk is in the cluster's pool, but not one the plugin's volumes are copied from.
+    refusal=$(curl -s -w '\n%{http_code}' -H "${token_auth}" -X POST \
+        --data-urlencode "target=vm-${owner}-e2e-foreign" \
+        "http://127.0.0.1:18006/api2/json/nodes/${copy_node}/storage/${KUBEHENGE_E2E_STORAGE}/content/vm-${copy_vmid}-disk-0") || true
+    kill "${forward}" 2> /dev/null || true
+    refusal_status=$(printf '%s\n' "${refusal}" | tail -n 1)
+    if [ "${refusal_status}" != 403 ] || ! printf '%s\n' "${refusal}" | grep -q "is not one of the cluster's own"; then
+        fail "the proxy did not refuse a copy of a node VM's disk: ${refusal}"
+    fi
+    # refusal_recorded: the proxy recorded a VolumeCopyFailed event.
+    refusal_recorded() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
+        events=$(wl -n kube-system get events --field-selector reason=VolumeCopyFailed -o name) && [ -n "${events}" ]
+    }
+    until_true 60 "the refusal recorded as an event" refusal_recorded
+    records=$(wl -n kubehenge-volume-copies get configmaps -l kubehenge.dev/volume-copy -o name | wc -l)
+    [ "${records}" = 3 ] || fail "the refused copy left a record: ${records} records, not the three copies'"
+    # shellcheck disable=SC2310 # a failed check fails the test with the reason.
+    holds 3 || fail "the refused copy left a volume on the holder VMs"
+
+    step "a deleted snapshot's copy deleted from its holder VM"
+    wl -n default delete volumesnapshot/e2e --wait --timeout=5m
     until_true 600 "the snapshot's content deleted" none_of volumesnapshotcontents
+    until_true 300 "the snapshot's copy ${snapshot_copy} gone from the holder VMs" holds_not "${snapshot_copy}"
+    # shellcheck disable=SC2310 # a failed check fails the test with the reason.
+    holds 2 || fail "deleting the snapshot took more than its copy from the holder VMs"
+    wl -n default delete pod/e2e-check pod/e2e-clone-check pvc/e2e-restored pvc/e2e-clone pvc/e2e-source --wait --timeout=5m
+    # The CSI plugin retries a failed deletion with a back-off of up to five minutes.
     until_true 600 "the volumes deleted" sh -c "[ \"\$(KUBECONFIG=${work}/workload kubectl get pv -o name | wc -l)\" = 0 ]"
     until_true 600 "no volume left on ${KUBEHENGE_E2E_STORAGE}" no_owned_volumes
+    until_true 300 "no copy left on the holder VMs" holds 0
+    until_true 300 "the copies' records deleted" none_of -n kubehenge-volume-copies configmaps -l kubehenge.dev/volume-copy
 
-    step "the CSI plugin with the cluster's token again, without volume snapshots"
+    step "the CSI plugin reaching Proxmox VE directly again, without volume snapshots"
     set_variable csi '{"volumeSnapshots":false}'
-    until_true 900 "the CSI plugin's controller without the snapshot sidecar, with the cluster's token" csi_controller_is kubehenge-proxmox false
-    until_true 300 "the CSI plugin's root@pam configuration deleted" not_found -n kube-system secret kubehenge-proxmox-root
+    until_true 900 "the CSI plugin's controller without the snapshot sidecar and the proxy, with the cluster's token" csi_controller_is kubehenge-proxmox false
+    until_true 300 "the CSI plugin's configuration through the proxy deleted" not_found -n kube-system secret kubehenge-proxmox-proxied
+    until_true 300 "the copies' namespace deleted" not_found namespace kubehenge-volume-copies
+    until_true 300 "the empty holder VMs removed" no_holders
     until_true 600 "the VolumeSnapshotClass removed" not_found volumesnapshotclass proxmox
     until_true 600 "the snapshot controller removed" none_of -n kube-system deployments -l app.kubernetes.io/name=snapshot-controller
     persistent_volume
+    if [ -n "${KUBEHENGE_E2E_REGISTRY:-}" ]; then
+        # shellcheck disable=SC2310 # a node that does not take it off fails the test with the reason.
+        on_machines "${snapshot_servers}" "rm -f ${certs}/ghcr.io/hosts.toml" > /dev/null ||
+            fail "the registry of Kubehenge's image was not taken off the control-plane nodes"
+    fi
 fi
 
 if [ "${KUBEHENGE_E2E_HA_GROUPS:-}" = 1 ]; then
@@ -1213,34 +1412,6 @@ if [ "${KUBEHENGE_E2E_HA_GROUPS:-}" = 1 ]; then
     until_true 300 "the cluster's token to hold Sys.Audit on / again" audit_is true
     remove_ha_rule
 fi
-# guest <node> <vmid> <command>: runs a shell command in a VM through its guest agent and prints its
-# output; fails when the command or the agent does. It is polled with set -e off, so each step
-# returns its own failure.
-guest() {
-    request=$(jq -cn --arg c "$3" '{command: ["sh", "-c", $c]}')
-    # shellcheck disable=SC2310 # guest is polled with set -e off, so a failed request is returned.
-    pid=$(pve -X POST -H 'Content-Type: application/json' -d "${request}" \
-        "${KUBEHENGE_PROXMOX_URL}/api2/json/nodes/$1/qemu/$2/agent/exec" | jq -r .data.pid) || return 1
-    tries=0
-    # shellcheck disable=SC2310 # polled until the command has exited; a failed request is tried again.
-    until result=$(pve_get "nodes/$1/qemu/$2/agent/exec-status?pid=${pid}") &&
-        printf '%s' "${result}" | jq -e '.data.exited == 1' > /dev/null; do
-        tries=$((tries + 1))
-        [ "${tries}" -lt 60 ] || return 1
-        sleep 1
-    done
-    printf '%s' "${result}" | jq -r '.data."out-data" // ""'
-    printf '%s' "${result}" | jq -e '.data.exitcode == 0' > /dev/null
-}
-# on_machines "<Machine names>" <command>: runs the command on those Machines' VMs.
-on_machines() {
-    for m in $1; do
-        pm=$(kubectl -n "${ns}" get machine "${m}" -o jsonpath='{.spec.infrastructureRef.name}')
-        pm_node=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.status.proxmoxNode}')
-        pm_vmid=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.spec.virtualMachineID}')
-        guest "${pm_node}" "${pm_vmid}" "$2"
-    done
-}
 
 # etcd is taken, restored and uploaded before any add-on runs: replacing a server holds two beside
 # the worker, which the runner has room for only while the cluster is this small, and every add-on
@@ -1359,7 +1530,8 @@ else
 fi
 control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
 wl -n default delete configmap e2e-before-snapshot
-wl -n default create configmap e2e-after-snapshot --from-literal=marker=after
+after_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+wl -n default create configmap e2e-after-snapshot --from-literal=marker="${after_marker}"
 etcd_restore_requested
 # etcd_restored: whether the restore has ended and the controller let the cluster go; a failed one
 # fails the test with why.
@@ -1384,8 +1556,21 @@ until_true 300 "the ConfigMap made before the snapshot back" wl -n default get c
 # shellcheck disable=SC2310 # absent's answer is what is checked.
 absent wl -n default get configmap e2e-after-snapshot || fail "a ConfigMap made after the snapshot outlived the restore"
 wl -n default delete configmap e2e-before-snapshot
-keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
-[ "${keys}" = "${etcd_prefix}/${snapshot_name}" ] || fail "the restore left objects in the store: ${keys}"
+# The restore snapshots etcd as it was first, so that a restore from the wrong snapshot can be undone.
+before_name=$(printf '%s' "${restore}" | jq -r '.before // ""')
+[ -n "${before_name}" ] || fail "the restore took no snapshot of etcd as it was first: ${restore}"
+keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g' | sort)
+expected_keys=$(printf '%s/%s\n' "${etcd_prefix}" "${snapshot_name}" "${etcd_prefix}" "${before_name}" | sort)
+[ "${keys}" = "${expected_keys}" ] ||
+    fail "the store's etcd snapshots after the restore are not the one restored and the one of etcd as it was: ${keys}"
+s3 -o "${work}/before.db.age" "${s3_endpoint}/${bucket}/${etcd_prefix}/${before_name}"
+header=$(head -c 21 "${work}/before.db.age")
+[ "${header}" = age-encryption.org/v1 ] || fail "the snapshot of etcd as it was is not encrypted with age"
+grep -r -q -F "${after_marker}" "${work}/s3-data" && fail "the store keeps the snapshot of etcd as it was unencrypted"
+go -C "$(dirname "$0")/../.." run ./cmd/kubehenge etcd-snapshot decrypt --identity "${work}/etcd-identity" \
+    "${work}/before.db.age" "${work}/before.db"
+grep -a -q -F "${after_marker}" "${work}/before.db" ||
+    fail "the snapshot of etcd as it was does not hold the ConfigMap made before the restore"
 if [ "${distribution}" = talos ]; then
     # Talos's control planes join the restored etcd again rather than being made anew.
     restored_control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
@@ -1403,8 +1588,8 @@ if [ "${distribution}" = talos ]; then
     until_true 900 "every control plane a member of the restored etcd" etcd_rejoined
 fi
 
-case ${distribution} in
-    rke2 | k3s)
+case ${part}-${distribution} in
+    all-rke2 | all-k3s | lifecycle-rke2 | lifecycle-k3s)
         step "${distribution}'s own etcd snapshots uploaded to the same store, and switched off"
         # The drop-in is part of the servers' bootstrap, so switching the upload replaces them.
         servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
@@ -1445,201 +1630,202 @@ case ${distribution} in
     *) set_variable etcdSnapshots "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}" ;;
 esac
 
-# restarts: each pod's container restarts, by namespace/name.
-restarts() {
-    wl get pods -A -o json |
-        jq -c '[.items[] | {key: "\(.metadata.namespace)/\(.metadata.name)", value: ([.status.containerStatuses[]?.restartCount] | add // 0)}] | from_entries'
-}
-# server_restarts: how often systemd has restarted the control planes' distribution service. k3s runs
-# every control-plane component in it, so it is the one place k3s's restarts show. Talos has no
-# systemd: its control planes' components are the kubelet's static pods, counted with the others.
-case ${class} in
-    kubehenge-rke2) server_unit=rke2-server ;;
-    kubehenge-k3s) server_unit=k3s ;;
-    kubehenge-talos) server_unit= ;;
-    *) server_unit=kubelet ;;
-esac
-servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
-server_restarts() {
-    # shellcheck disable=SC2310 # its failure is returned.
-    counts=$(on_machines "${servers}" "systemctl show -p NRestarts --value ${server_unit}") || return 1
-    printf '%s\n' "${counts}" | awk '{ n += $1 } END { print n + 0 }'
-}
-# A component that could not renew its Lease while the API was away, through the restore or a
-# control plane's replacement, exits only once its renew deadline has passed, which may be after the
-# API is back. Once each Lease renewed before the restore is renewed again after this point, every
-# such restart has happened and is in the baseline.
-leases_at=$(lease_times)
-leases_renewed() {
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-    times=$(lease_times) || return 1
-    printf '%s' "${times}" | jq -e --argjson held "${held_leases}" --argjson at "${leases_at}" \
-        '. as $now | all($held[]; ($now[.] // "") > ($at[.] // ""))' > /dev/null
-}
-until_true 300 "the components' Leases renewed after the restore" leases_renewed
-pods_before=$(restarts)
-if [ -n "${server_unit}" ]; then
-    # shellcheck disable=SC2310 # a failed count fails the step.
-    servers_before=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
-fi
-echo "memory before the add-ons:"
-pod_memory "${work}/workload"
-echo "CPU requested before the add-ons:"
-pod_cpu "${work}/workload"
-# What the guests are told of the CPU decides which mitigations their kernels run, and those cost
-# the most under nested virtualisation: the figure to read beside a slow run.
-echo "the CPU a control plane sees:"
-if [ "${distribution}" = talos ]; then
-    cpu_address=$(machine_address "${servers%% *}")
-    # shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
-    talos_cpu "${cpu_address}" || echo "  cannot read it"
-else
-    # shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
-    on_machines "${servers%% *}" "grep -m1 'model name' /proc/cpuinfo; grep -qw pcid /proc/cpuinfo && echo 'pcid: yes' || echo 'pcid: no'; grep -H . /sys/devices/system/cpu/vulnerabilities/*" ||
-        echo "  cannot read it"
-fi
-
-step "Headlamp switched on"
-set_variable headlamp '{"enabled":true}'
-until_true 600 "Headlamp installed" sh -c "KUBECONFIG=${work}/workload kubectl -n headlamp get deployment/headlamp >/dev/null 2>&1"
-wl -n headlamp rollout status deployment/headlamp --timeout=10m
-# Through the API server's service proxy, as Kubehenge's interface reaches it. A rollout counts the
-# pod available before the endpoints controller has published it, and until then the proxy answers
-# that the Service has no endpoints.
-headlamp_page() {
-    wl get --raw /api/v1/namespaces/headlamp/services/http:headlamp:80/proxy/ 2> /dev/null | grep -q -i '<html'
-}
-until_true 60 "Headlamp answers through the API server" headlamp_page
-# shellcheck disable=SC2310 # can-i exits non-zero for its answer no, which the comparison reads.
-can_list=$(wl auth can-i list pods --all-namespaces --as=system:serviceaccount:headlamp:headlamp || true)
-[ "${can_list}" = no ] || fail "Headlamp's service account has rights in the cluster"
-pod_security=$(wl label --dry-run=server --overwrite namespace headlamp pod-security.kubernetes.io/enforce=restricted 2>&1)
-case ${pod_security} in
-    *violate*) fail "Headlamp's pod does not meet Pod Security's restricted level" ;;
-    # Only a pod that falls short of the level gets a warning.
-    *) ;;
-esac
-# headlamp_pods: Headlamp's answer to a list of pods in its in-cluster context, asked through the
-# API server's service proxy. The admin kubeconfig signs in with a client certificate, which ends
-# at the API server, so Headlamp is sent no credentials of anyone's.
-headlamp_pods() { wl get --raw '/api/v1/namespaces/headlamp/services/http:headlamp:80/proxy/clusters/main/api/v1/pods?limit=1' 2>&1; }
-headlamp_lists_pods() { headlamp_pods | jq -e '.kind == "PodList"' > /dev/null 2>&1; }
-# headlamp_refuses: whether the API server refused Headlamp's request, rather than Headlamp being
-# out of reach for a moment.
-headlamp_refuses() {
-    # shellcheck disable=SC2310 # the request failing is the answer looked for.
-    if answer=$(headlamp_pods); then
-        return 1
+if [ "${part}" != lifecycle ]; then
+    # restarts: each pod's container restarts, by namespace/name.
+    restarts() {
+        wl get pods -A -o json |
+            jq -c '[.items[] | {key: "\(.metadata.namespace)/\(.metadata.name)", value: ([.status.containerStatuses[]?.restartCount] | add // 0)}] | from_entries'
+    }
+    # server_restarts: how often systemd has restarted the control planes' distribution service. k3s runs
+    # every control-plane component in it, so it is the one place k3s's restarts show. Talos has no
+    # systemd: its control planes' components are the kubelet's static pods, counted with the others.
+    case ${class} in
+        kubehenge-rke2) server_unit=rke2-server ;;
+        kubehenge-k3s) server_unit=k3s ;;
+        kubehenge-talos) server_unit= ;;
+        *) server_unit=kubelet ;;
+    esac
+    servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+    server_restarts() {
+        # shellcheck disable=SC2310 # its failure is returned.
+        counts=$(on_machines "${servers}" "systemctl show -p NRestarts --value ${server_unit}") || return 1
+        printf '%s\n' "${counts}" | awk '{ n += $1 } END { print n + 0 }'
+    }
+    # A component that could not renew its Lease while the API was away, through the restore or a
+    # control plane's replacement, exits only once its renew deadline has passed, which may be after the
+    # API is back. Once each Lease renewed before the restore is renewed again after this point, every
+    # such restart has happened and is in the baseline.
+    leases_at=$(lease_times)
+    leases_renewed() {
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+        times=$(lease_times) || return 1
+        printf '%s' "${times}" | jq -e --argjson held "${held_leases}" --argjson at "${leases_at}" \
+            '. as $now | all($held[]; ($now[.] // "") > ($at[.] // ""))' > /dev/null
+    }
+    until_true 300 "the components' Leases renewed after the restore" leases_renewed
+    pods_before=$(restarts)
+    if [ -n "${server_unit}" ]; then
+        # shellcheck disable=SC2310 # a failed count fails the step.
+        servers_before=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
     fi
-    case ${answer} in
-        *Unauthorized* | *Forbidden* | *forbidden*) ;;
-        *) return 1 ;;
+    echo "memory before the add-ons:"
+    pod_memory "${work}/workload"
+    echo "CPU requested before the add-ons:"
+    pod_cpu "${work}/workload"
+    # What the guests are told of the CPU decides which mitigations their kernels run, and those cost
+    # the most under nested virtualisation: the figure to read beside a slow run.
+    echo "the CPU a control plane sees:"
+    if [ "${distribution}" = talos ]; then
+        cpu_address=$(machine_address "${servers%% *}")
+        # shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
+        talos_cpu "${cpu_address}" || echo "  cannot read it"
+    else
+        # shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
+        on_machines "${servers%% *}" "grep -m1 'model name' /proc/cpuinfo; grep -qw pcid /proc/cpuinfo && echo 'pcid: yes' || echo 'pcid: no'; grep -H . /sys/devices/system/cpu/vulnerabilities/*" ||
+            echo "  cannot read it"
+    fi
+
+    step "Headlamp switched on"
+    set_variable headlamp '{"enabled":true}'
+    until_true 600 "Headlamp installed" sh -c "KUBECONFIG=${work}/workload kubectl -n headlamp get deployment/headlamp >/dev/null 2>&1"
+    wl -n headlamp rollout status deployment/headlamp --timeout=10m
+    # Through the API server's service proxy, as Kubehenge's interface reaches it. A rollout counts the
+    # pod available before the endpoints controller has published it, and until then the proxy answers
+    # that the Service has no endpoints.
+    headlamp_page() {
+        wl get --raw /api/v1/namespaces/headlamp/services/http:headlamp:80/proxy/ 2> /dev/null | grep -q -i '<html'
+    }
+    until_true 60 "Headlamp answers through the API server" headlamp_page
+    # shellcheck disable=SC2310 # can-i exits non-zero for its answer no, which the comparison reads.
+    can_list=$(wl auth can-i list pods --all-namespaces --as=system:serviceaccount:headlamp:headlamp || true)
+    [ "${can_list}" = no ] || fail "Headlamp's service account has rights in the cluster"
+    pod_security=$(wl label --dry-run=server --overwrite namespace headlamp pod-security.kubernetes.io/enforce=restricted 2>&1)
+    case ${pod_security} in
+        *violate*) fail "Headlamp's pod does not meet Pod Security's restricted level" ;;
+        # Only a pod that falls short of the level gets a warning.
+        *) ;;
     esac
-}
-# headlamp_flag <present|absent>: whether Headlamp's running Deployment uses its own account.
-headlamp_flag() {
-    # shellcheck disable=SC2310 # a Deployment not read yet is no answer, polled again.
-    args=$(wl -n headlamp get deployment/headlamp -o jsonpath='{.spec.template.spec.containers[0].args}') || return 1
-    case ${args} in
-        *-unsafe-use-service-account-token*) [ "$1" = present ] ;;
-        *) [ "$1" = absent ] ;;
+    # headlamp_pods: Headlamp's answer to a list of pods in its in-cluster context, asked through the
+    # API server's service proxy. The admin kubeconfig signs in with a client certificate, which ends
+    # at the API server, so Headlamp is sent no credentials of anyone's.
+    headlamp_pods() { wl get --raw '/api/v1/namespaces/headlamp/services/http:headlamp:80/proxy/clusters/main/api/v1/pods?limit=1' 2>&1; }
+    headlamp_lists_pods() { headlamp_pods | jq -e '.kind == "PodList"' > /dev/null 2>&1; }
+    # headlamp_refuses: whether the API server refused Headlamp's request, rather than Headlamp being
+    # out of reach for a moment.
+    headlamp_refuses() {
+        # shellcheck disable=SC2310 # the request failing is the answer looked for.
+        if answer=$(headlamp_pods); then
+            return 1
+        fi
+        case ${answer} in
+            *Unauthorized* | *Forbidden* | *forbidden*) ;;
+            *) return 1 ;;
+        esac
+    }
+    # headlamp_flag <present|absent>: whether Headlamp's running Deployment uses its own account.
+    headlamp_flag() {
+        # shellcheck disable=SC2310 # a Deployment not read yet is no answer, polled again.
+        args=$(wl -n headlamp get deployment/headlamp -o jsonpath='{.spec.template.spec.containers[0].args}') || return 1
+        case ${args} in
+            *-unsafe-use-service-account-token*) [ "$1" = present ] ;;
+            *) [ "$1" = absent ] ;;
+        esac
+    }
+    # headlamp_can <verb> <resource>: what Headlamp's service account may do across the cluster.
+    headlamp_can() {
+        # shellcheck disable=SC2310 # can-i exits non-zero for its answer no, which the caller reads.
+        wl auth can-i "$1" "$2" --all-namespaces --as=system:serviceaccount:headlamp:headlamp 2> /dev/null || true
+    }
+    until_true 120 "Headlamp refuses to list pods without a token" headlamp_refuses
+    control_plane_use "${work}/workload" headlamp
+
+    step "Headlamp read-only for everyone"
+    set_variable headlamp '{"enabled":true,"access":"view"}'
+    until_true 600 "Headlamp started with its own account" headlamp_flag present
+    wl -n headlamp rollout status deployment/headlamp --timeout=10m
+    until_true 120 "Headlamp lists pods without a token" headlamp_lists_pods
+    can_list=$(headlamp_can list pods)
+    [ "${can_list}" = yes ] || fail "Headlamp's service account cannot list pods"
+    for denied in "get secrets" "list secrets" "create pods" "delete deployments" "list nodes"; do
+        # shellcheck disable=SC2086 # the verb and the resource, split on purpose.
+        allowed=$(headlamp_can ${denied})
+        [ "${allowed}" = no ] || fail "Headlamp's service account may ${denied}"
+    done
+
+    step "Headlamp back to everyone's own token"
+    set_variable headlamp '{"enabled":true}'
+    until_true 600 "Headlamp started without its own account" headlamp_flag absent
+    wl -n headlamp rollout status deployment/headlamp --timeout=10m
+    can_list=$(headlamp_can list pods)
+    [ "${can_list}" = no ] || fail "Headlamp's service account keeps its view binding"
+    until_true 120 "Headlamp refuses to list pods without a token again" headlamp_refuses
+
+    step "pod security enforced, with Kyverno switched on"
+    # privileged_pod <namespace>: asks the API server to admit a privileged pod, without creating it.
+    privileged_pod() {
+        wl -n "$1" run e2e-privileged --image="${pause_image}" --restart=Never --dry-run=server \
+            --overrides="{\"apiVersion\":\"v1\",\"spec\":{\"containers\":[{\"name\":\"e2e-privileged\",\"image\":\"${pause_image}\",\"securityContext\":{\"privileged\":true}}]}}" 2>&1
+    }
+    # shellcheck disable=SC2310 # the refusal is the answer looked for.
+    refused=$(privileged_pod default) && fail "a privileged pod is admitted under Pod Security's restricted level"
+    case ${refused} in
+        *'violates PodSecurity "restricted'*) ;;
+        *) fail "a privileged pod is refused for another reason: ${refused}" ;;
     esac
-}
-# headlamp_can <verb> <resource>: what Headlamp's service account may do across the cluster.
-headlamp_can() {
-    # shellcheck disable=SC2310 # can-i exits non-zero for its answer no, which the caller reads.
-    wl auth can-i "$1" "$2" --all-namespaces --as=system:serviceaccount:headlamp:headlamp 2> /dev/null || true
-}
-until_true 120 "Headlamp refuses to list pods without a token" headlamp_refuses
-control_plane_use "${work}/workload" headlamp
-
-step "Headlamp read-only for everyone"
-set_variable headlamp '{"enabled":true,"access":"view"}'
-until_true 600 "Headlamp started with its own account" headlamp_flag present
-wl -n headlamp rollout status deployment/headlamp --timeout=10m
-until_true 120 "Headlamp lists pods without a token" headlamp_lists_pods
-can_list=$(headlamp_can list pods)
-[ "${can_list}" = yes ] || fail "Headlamp's service account cannot list pods"
-for denied in "get secrets" "list secrets" "create pods" "delete deployments" "list nodes"; do
-    # shellcheck disable=SC2086 # the verb and the resource, split on purpose.
-    allowed=$(headlamp_can ${denied})
-    [ "${allowed}" = no ] || fail "Headlamp's service account may ${denied}"
-done
-
-step "Headlamp back to everyone's own token"
-set_variable headlamp '{"enabled":true}'
-until_true 600 "Headlamp started without its own account" headlamp_flag absent
-wl -n headlamp rollout status deployment/headlamp --timeout=10m
-can_list=$(headlamp_can list pods)
-[ "${can_list}" = no ] || fail "Headlamp's service account keeps its view binding"
-until_true 120 "Headlamp refuses to list pods without a token again" headlamp_refuses
-
-step "pod security enforced, with Kyverno switched on"
-# privileged_pod <namespace>: asks the API server to admit a privileged pod, without creating it.
-privileged_pod() {
-    wl -n "$1" run e2e-privileged --image="${pause_image}" --restart=Never --dry-run=server \
-        --overrides="{\"apiVersion\":\"v1\",\"spec\":{\"containers\":[{\"name\":\"e2e-privileged\",\"image\":\"${pause_image}\",\"securityContext\":{\"privileged\":true}}]}}" 2>&1
-}
-# shellcheck disable=SC2310 # the refusal is the answer looked for.
-refused=$(privileged_pod default) && fail "a privileged pod is admitted under Pod Security's restricted level"
-case ${refused} in
-    *'violates PodSecurity "restricted'*) ;;
-    *) fail "a privileged pod is refused for another reason: ${refused}" ;;
-esac
-# A namespace labelled privileged is past Pod Security Admission, but not past Kyverno.
-new_namespace wl e2e-privileged
-wl label namespace e2e-privileged pod-security.kubernetes.io/enforce=privileged
-set_variable podSecurity '{"admission":"restricted","kyverno":"restricted"}'
-kyverno_refuses() {
-    # shellcheck disable=SC2310 # admitted is a retry until the policies are in place.
-    out=$(privileged_pod e2e-privileged) && return 1
-    case ${out} in
-        *disallow-privileged-containers*) ;;
-        *) return 1 ;;
+    # A namespace labelled privileged is past Pod Security Admission, but not past Kyverno.
+    new_namespace wl e2e-privileged
+    wl label namespace e2e-privileged pod-security.kubernetes.io/enforce=privileged
+    set_variable podSecurity '{"admission":"restricted","kyverno":"restricted"}'
+    kyverno_refuses() {
+        # shellcheck disable=SC2310 # admitted is a retry until the policies are in place.
+        out=$(privileged_pod e2e-privileged) && return 1
+        case ${out} in
+            *disallow-privileged-containers*) ;;
+            *) return 1 ;;
+        esac
+    }
+    until_true 900 "Kyverno refuses a privileged pod" kyverno_refuses
+    pod_security=$(wl label --dry-run=server --overwrite namespace kyverno pod-security.kubernetes.io/enforce=restricted 2>&1)
+    case ${pod_security} in
+        *violate*) fail "Kyverno's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
+        *) ;;
     esac
-}
-until_true 900 "Kyverno refuses a privileged pod" kyverno_refuses
-pod_security=$(wl label --dry-run=server --overwrite namespace kyverno pod-security.kubernetes.io/enforce=restricted 2>&1)
-case ${pod_security} in
-    *violate*) fail "Kyverno's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
-    *) ;;
-esac
-control_plane_use "${work}/workload" kyverno
+    control_plane_use "${work}/workload" kyverno
 
-# Before monitoring: on Cilium, switching Istio on restarts Cilium's agents and operator, and with
-# monitoring's pods busy beside them a worker of the least size runs short of CPU.
-step "Istio switched on, the mesh's traffic over mutual TLS"
-set_variable istio '{"enabled":true}'
-until_true 900 "istiod available" wl -n istio-system wait --for=condition=Available deployment/istiod --timeout=10s
-until_true 600 "ztunnel on every node" wl -n istio-node rollout status daemonset/ztunnel --timeout=10s
-until_true 600 "istio-cni on every node" wl -n istio-node rollout status daemonset/istio-cni-node --timeout=10s
-new_namespace wl e2e-mesh
-wl label namespace e2e-mesh istio.io/dataplane-mode=ambient
-new_namespace wl e2e-plain
-# Kept by Deployments: they are used again once every add-on is switched off, and on Talos the
-# upgrade before that drains every node, which deletes pods of their own.
-agnhost_deployment e2e-mesh server netexec --http-port=8080
-agnhost_deployment e2e-mesh client pause
-agnhost_deployment e2e-plain client pause
-wl -n e2e-mesh wait --for=condition=Available deployment/server deployment/client --timeout=5m
-wl -n e2e-plain wait --for=condition=Available deployment/client --timeout=5m
-redirected() {
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-    marks=$(wl -n e2e-mesh get pods -l 'app in (server,client)' -o jsonpath='{.items[*].metadata.annotations.ambient\.istio\.io/redirection}') &&
-        [ "${marks}" = "enabled enabled" ]
-}
-until_true 120 "the mesh's pods redirected through ztunnel" redirected
-# fetch <namespace>: the server's host name, fetched over HTTP by the namespace's client at the
-# address of the server's running pod, which a drain moves.
-fetch() {
-    mesh_ip=$(KUBECONFIG=${work}/workload kubectl -n e2e-mesh get pods -l app=server --field-selector=status.phase=Running \
-        -o jsonpath='{.items[0].status.podIP}' 2>&1) &&
-        KUBECONFIG=${work}/workload kubectl -n "$1" exec deployment/client -- curl -sS --max-time 5 "http://${mesh_ip}:8080/hostname" 2>&1
-}
-# shellcheck disable=SC2310 # polled with set -e off, so a failed fetch is only a retry.
-fetches() { fetched=$(fetch "$1") && [ "${fetched}" = server ]; }
-until_true 60 "a client outside the mesh reaches the server while mutual TLS is optional" fetches e2e-plain
-wl -n e2e-mesh apply -f - << 'EOF'
+    # Before monitoring: on Cilium, switching Istio on restarts Cilium's agents and operator, and with
+    # monitoring's pods busy beside them a worker of the least size runs short of CPU.
+    step "Istio switched on, the mesh's traffic over mutual TLS"
+    set_variable istio '{"enabled":true}'
+    until_true 900 "istiod available" wl -n istio-system wait --for=condition=Available deployment/istiod --timeout=10s
+    until_true 600 "ztunnel on every node" wl -n istio-node rollout status daemonset/ztunnel --timeout=10s
+    until_true 600 "istio-cni on every node" wl -n istio-node rollout status daemonset/istio-cni-node --timeout=10s
+    new_namespace wl e2e-mesh
+    wl label namespace e2e-mesh istio.io/dataplane-mode=ambient
+    new_namespace wl e2e-plain
+    # Kept by Deployments: they are used again once every add-on is switched off, and on Talos the
+    # upgrade before that drains every node, which deletes pods of their own.
+    agnhost_deployment e2e-mesh server netexec --http-port=8080
+    agnhost_deployment e2e-mesh client pause
+    agnhost_deployment e2e-plain client pause
+    wl -n e2e-mesh wait --for=condition=Available deployment/server deployment/client --timeout=5m
+    wl -n e2e-plain wait --for=condition=Available deployment/client --timeout=5m
+    redirected() {
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+        marks=$(wl -n e2e-mesh get pods -l 'app in (server,client)' -o jsonpath='{.items[*].metadata.annotations.ambient\.istio\.io/redirection}') &&
+            [ "${marks}" = "enabled enabled" ]
+    }
+    until_true 120 "the mesh's pods redirected through ztunnel" redirected
+    # fetch <namespace>: the server's host name, fetched over HTTP by the namespace's client at the
+    # address of the server's running pod, which a drain moves.
+    fetch() {
+        mesh_ip=$(KUBECONFIG=${work}/workload kubectl -n e2e-mesh get pods -l app=server --field-selector=status.phase=Running \
+            -o jsonpath='{.items[0].status.podIP}' 2>&1) &&
+            KUBECONFIG=${work}/workload kubectl -n "$1" exec deployment/client -- curl -sS --max-time 5 "http://${mesh_ip}:8080/hostname" 2>&1
+    }
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed fetch is only a retry.
+    fetches() { fetched=$(fetch "$1") && [ "${fetched}" = server ]; }
+    until_true 60 "a client outside the mesh reaches the server while mutual TLS is optional" fetches e2e-plain
+    wl -n e2e-mesh apply -f - << 'EOF'
 apiVersion: security.istio.io/v1
 kind: PeerAuthentication
 metadata:
@@ -1648,139 +1834,139 @@ spec:
   mtls:
     mode: STRICT
 EOF
-# ztunnel closes a plain-text connection the policy refuses, so curl gets no reply; any other
-# failure, a failing exec among them, does not count as refused.
-plain_refused() { fetch e2e-plain | grep -qE '^curl: \((52|56)\)'; }
-until_true 120 "a client outside the mesh refused once mutual TLS is required" plain_refused
-until_true 60 "a client in the mesh reaches the server" fetches e2e-mesh
-# What ztunnel let through carries the client's workload identity.
-mesh_identity() { wl -n istio-node logs -l app=ztunnel --tail=-1 --prefix=false | grep -q 'spiffe://cluster.local/ns/e2e-mesh/sa/default'; }
-until_true 60 "ztunnel names the client's workload identity" mesh_identity
-control_plane_use "${work}/workload" istio
+    # ztunnel closes a plain-text connection the policy refuses, so curl gets no reply; any other
+    # failure, a failing exec among them, does not count as refused.
+    plain_refused() { fetch e2e-plain | grep -qE '^curl: \((52|56)\)'; }
+    until_true 120 "a client outside the mesh refused once mutual TLS is required" plain_refused
+    until_true 60 "a client in the mesh reaches the server" fetches e2e-mesh
+    # What ztunnel let through carries the client's workload identity.
+    mesh_identity() { wl -n istio-node logs -l app=ztunnel --tail=-1 --prefix=false | grep -q 'spiffe://cluster.local/ns/e2e-mesh/sa/default'; }
+    until_true 60 "ztunnel names the client's workload identity" mesh_identity
+    control_plane_use "${work}/workload" istio
 
-step "monitoring switched on"
-set_variable monitoring '{"enabled":true}'
-prometheus=statefulset/prometheus-kube-prometheus-stack-prometheus
-until_true 1200 "Prometheus installed" sh -c "KUBECONFIG=${work}/workload kubectl -n monitoring get ${prometheus} >/dev/null 2>&1"
-wl -n monitoring rollout status "${prometheus}" --timeout=15m
-# Every component's job, each scraped with its server verified; k3s's components are in its
-# kubelet's metrics. Talos's controller manager and scheduler are scraped only on releases that pass
-# them a serving certificate of the cluster CA; before those they sign their own, which nothing
-# could verify.
-jobs="apiserver kubelet coredns kube-state-metrics node-exporter kube-etcd"
-case ${distribution} in
-    k3s) ;;
-    talos)
-        jobs="${jobs} kube-proxy"
-        control_plane_pods=$(wl -n kube-system get pods -l 'component in (kube-controller-manager,kube-scheduler)' -o json)
-        if printf '%s' "${control_plane_pods}" |
-            jq -e '(.items | length > 0) and all(.items[]; any(.spec.containers[].command[]?; startswith("--tls-cert-file=")))' > /dev/null; then
-            jobs="${jobs} kube-controller-manager kube-scheduler"
-        fi
-        ;;
-    *) jobs="${jobs} kube-controller-manager kube-scheduler kube-proxy" ;;
-esac
-targets='/api/v1/namespaces/monitoring/services/http:kube-prometheus-stack-prometheus:9090/proxy/api/v1/targets?state=active'
-all_up() {
-    # shellcheck disable=SC2310 # wl wraps one kubectl call; a failed request is only a retry.
-    active=$(wl get --raw "${targets}") || return 1
-    for job in ${jobs}; do
-        printf '%s' "${active}" | jq -e --arg j "${job}" 'any(.data.activeTargets[]; .labels.job == $j)' > /dev/null || return 1
-    done
-    printf '%s' "${active}" | jq -e 'all(.data.activeTargets[]; .health == "up")' > /dev/null
-}
-deadline=$(($(date +%s) + 900))
-# shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-until all_up; do
-    now=$(date +%s)
-    if [ "${now}" -ge "${deadline}" ]; then
-        # A Service without ready endpoints leaves its job out of the targets altogether, so the
-        # missing jobs are named beside the ones down, with the pods that would serve them.
-        active=$(wl get --raw "${targets}")
-        for job in ${jobs}; do
-            printf '%s' "${active}" | jq -e --arg j "${job}" 'any(.data.activeTargets[]; .labels.job == $j)' > /dev/null ||
-                echo "no target for ${job}" >&2
-        done
-        printf '%s' "${active}" | jq -r '.data.activeTargets[] | select(.health != "up") | "\(.labels.job) \(.scrapeUrl): \(.lastError)"' >&2
-        wl -n kube-system get daemonsets -o wide >&2
-        wl get pods -A -o wide | awk 'NR == 1 || $3 !~ /^([0-9]+)\/\1$/ || $4 != "Running"' >&2
-        wl -n kube-system get events --field-selector type=Warning >&2
-        fail "monitoring does not reach every component"
-    fi
-    sleep 10
-done
-if [ "${distribution}" = k3s ]; then
-    # The chart's rules and dashboards find k3s's controller manager, scheduler and kube-proxy in
-    # the kubelet's job, so their own series have to arrive there.
-    has_series() {
-        query=$(printf '%s' "$1" | jq -sRr @uri)
+    step "monitoring switched on"
+    set_variable monitoring '{"enabled":true}'
+    prometheus=statefulset/prometheus-kube-prometheus-stack-prometheus
+    until_true 1200 "Prometheus installed" sh -c "KUBECONFIG=${work}/workload kubectl -n monitoring get ${prometheus} >/dev/null 2>&1"
+    wl -n monitoring rollout status "${prometheus}" --timeout=15m
+    # Every component's job, each scraped with its server verified; k3s's components are in its
+    # kubelet's metrics. Talos's controller manager and scheduler are scraped only on releases that pass
+    # them a serving certificate of the cluster CA; before those they sign their own, which nothing
+    # could verify.
+    jobs="apiserver kubelet coredns kube-state-metrics node-exporter kube-etcd"
+    case ${distribution} in
+        k3s) ;;
+        talos)
+            jobs="${jobs} kube-proxy"
+            control_plane_pods=$(wl -n kube-system get pods -l 'component in (kube-controller-manager,kube-scheduler)' -o json)
+            if printf '%s' "${control_plane_pods}" |
+                jq -e '(.items | length > 0) and all(.items[]; any(.spec.containers[].command[]?; startswith("--tls-cert-file=")))' > /dev/null; then
+                jobs="${jobs} kube-controller-manager kube-scheduler"
+            fi
+            ;;
+        *) jobs="${jobs} kube-controller-manager kube-scheduler kube-proxy" ;;
+    esac
+    targets='/api/v1/namespaces/monitoring/services/http:kube-prometheus-stack-prometheus:9090/proxy/api/v1/targets?state=active'
+    all_up() {
         # shellcheck disable=SC2310 # wl wraps one kubectl call; a failed request is only a retry.
-        found=$(wl get --raw "/api/v1/namespaces/monitoring/services/http:kube-prometheus-stack-prometheus:9090/proxy/api/v1/query?query=${query}") || return 1
-        printf '%s' "${found}" | jq -e '.data.result | length > 0' > /dev/null
+        active=$(wl get --raw "${targets}") || return 1
+        for job in ${jobs}; do
+            printf '%s' "${active}" | jq -e --arg j "${job}" 'any(.data.activeTargets[]; .labels.job == $j)' > /dev/null || return 1
+        done
+        printf '%s' "${active}" | jq -e 'all(.data.activeTargets[]; .health == "up")' > /dev/null
     }
-    for series in 'workqueue_adds_total{job="kubelet",name="deployment"}' \
-        'scheduler_schedule_attempts_total{job="kubelet"}' \
-        'kubeproxy_sync_proxy_rules_duration_seconds_count{job="kubelet"}'; do
-        until_true 300 "${series} in Prometheus" has_series "${series}"
+    deadline=$(($(date +%s) + 900))
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    until all_up; do
+        now=$(date +%s)
+        if [ "${now}" -ge "${deadline}" ]; then
+            # A Service without ready endpoints leaves its job out of the targets altogether, so the
+            # missing jobs are named beside the ones down, with the pods that would serve them.
+            active=$(wl get --raw "${targets}")
+            for job in ${jobs}; do
+                printf '%s' "${active}" | jq -e --arg j "${job}" 'any(.data.activeTargets[]; .labels.job == $j)' > /dev/null ||
+                    echo "no target for ${job}" >&2
+            done
+            printf '%s' "${active}" | jq -r '.data.activeTargets[] | select(.health != "up") | "\(.labels.job) \(.scrapeUrl): \(.lastError)"' >&2
+            wl -n kube-system get daemonsets -o wide >&2
+            wl get pods -A -o wide | awk 'NR == 1 || $3 !~ /^([0-9]+)\/\1$/ || $4 != "Running"' >&2
+            wl -n kube-system get events --field-selector type=Warning >&2
+            fail "monitoring does not reach every component"
+        fi
+        sleep 10
     done
-fi
-pod_security=$(wl label --dry-run=server --overwrite namespace monitoring pod-security.kubernetes.io/enforce=restricted 2>&1)
-case ${pod_security} in
-    *violate*) fail "monitoring's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
-    *) ;;
-esac
-control_plane_use "${work}/workload" monitoring
+    if [ "${distribution}" = k3s ]; then
+        # The chart's rules and dashboards find k3s's controller manager, scheduler and kube-proxy in
+        # the kubelet's job, so their own series have to arrive there.
+        has_series() {
+            query=$(printf '%s' "$1" | jq -sRr @uri)
+            # shellcheck disable=SC2310 # wl wraps one kubectl call; a failed request is only a retry.
+            found=$(wl get --raw "/api/v1/namespaces/monitoring/services/http:kube-prometheus-stack-prometheus:9090/proxy/api/v1/query?query=${query}") || return 1
+            printf '%s' "${found}" | jq -e '.data.result | length > 0' > /dev/null
+        }
+        for series in 'workqueue_adds_total{job="kubelet",name="deployment"}' \
+            'scheduler_schedule_attempts_total{job="kubelet"}' \
+            'kubeproxy_sync_proxy_rules_duration_seconds_count{job="kubelet"}'; do
+            until_true 300 "${series} in Prometheus" has_series "${series}"
+        done
+    fi
+    pod_security=$(wl label --dry-run=server --overwrite namespace monitoring pod-security.kubernetes.io/enforce=restricted 2>&1)
+    case ${pod_security} in
+        *violate*) fail "monitoring's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
+        *) ;;
+    esac
+    control_plane_use "${work}/workload" monitoring
 
-step "logs switched on, collected on every node"
-set_variable logs '{"enabled":true,"collector":"node","retentionDays":7,"sizeGiB":10}'
-until_true 900 "Loki installed" sh -c "KUBECONFIG=${work}/workload kubectl -n logging get statefulset/loki >/dev/null 2>&1"
-wl -n logging rollout status statefulset/loki --timeout=10m
-until_true 600 "Alloy installed on the nodes" sh -c "KUBECONFIG=${work}/workload kubectl -n logging-node get daemonset/alloy-node >/dev/null 2>&1"
-wl -n logging-node rollout status daemonset/alloy-node --timeout=10m
-wl -n logging rollout status deployment/alloy --timeout=10m
-# Grafana reads Loki with its client certificate once its Deployment mounts it, which replaces its pod.
-grafana_deployment=deployment/kube-prometheus-stack-grafana
-grafana_mounts() {
-    wl -n monitoring get "${grafana_deployment}" -o json |
-        jq -e 'any(.spec.template.spec.volumes[]; .secret.secretName == "kubehenge-loki-client")' > /dev/null
-}
-until_true 600 "Grafana mounts its Loki client certificate" grafana_mounts
-wl -n monitoring rollout status "${grafana_deployment}" --timeout=10m
-grafana_user=$(wl -n monitoring get secret kube-prometheus-stack-grafana -o jsonpath='{.data.admin-user}' | base64 -d)
-grafana_password=$(wl -n monitoring get secret kube-prometheus-stack-grafana -o jsonpath='{.data.admin-password}' | base64 -d)
-grafana_port=$((20000 + $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % 10000))
-KUBECONFIG="${work}/workload" kubectl -n monitoring port-forward "${grafana_deployment}" "${grafana_port}:3000" > "${work}/grafana-forward.log" 2>&1 &
-grafana_pid=$!
-# grafana <path> [curl options...]: Grafana's API, as its admin.
-grafana() {
-    grafana_path=$1
-    shift
-    curl -sS --fail --max-time 30 -u "${grafana_user}:${grafana_password}" "$@" "http://127.0.0.1:${grafana_port}${grafana_path}"
-}
-until_true 60 "Grafana reached" grafana /api/health
-# shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-loki_healthy() { health=$(grafana /api/datasources/uid/loki/health) && printf '%s' "${health}" | jq -e '.status == "OK"' > /dev/null; }
-until_true 300 "Grafana reaches Loki with its client certificate" loki_healthy
-# lines <LogQL query> <text>: how many of the last hour's lines the query finds in Loki through
-# Grafana's Loki data source hold the text.
-lines() {
-    query=$(jq -cn --arg e "$1" '{from: "now-1h", to: "now", queries: [{refId: "A", datasource: {uid: "loki", type: "loki"}, expr: $e, queryType: "range", maxLines: 1000}]}')
-    # shellcheck disable=SC2310 # its failure is returned.
-    found=$(grafana /api/ds/query -X POST -H 'Content-Type: application/json' -d "${query}") || return 1
-    printf '%s' "${found}" | jq --arg t "$2" '[.results.A.frames[]?.data.values[]? | arrays | .[] | strings | select(contains($t))] | length'
-}
-# shellcheck disable=SC2310 # polled with set -e off, so a failed query is only a retry.
-logged() { count=$(lines "$1" "$2") && [ "${count}" -ge 1 ]; }
-# Without a client certificate or a token Loki's proxy lets nobody read, through the API server's
-# service proxy no more than from anywhere else.
-# shellcheck disable=SC2310 # the refusal is the answer looked for.
-wl get --request-timeout=20s --raw /api/v1/namespaces/logging/services/https:loki:3100/proxy/loki/api/v1/labels > /dev/null 2>&1 &&
-    fail "Loki answers a client it does not know"
-new_namespace wl e2e-logs
-# log_pod <name> <line> <ports JSON> <then>: a pod at Pod Security's restricted level that writes the
-# line, declares the ports and then runs the command.
-log_pod() {
-    wl -n e2e-logs apply -f - << EOF
+    step "logs switched on, collected on every node"
+    set_variable logs '{"enabled":true,"collector":"node","retentionDays":7,"sizeGiB":10}'
+    until_true 900 "Loki installed" sh -c "KUBECONFIG=${work}/workload kubectl -n logging get statefulset/loki >/dev/null 2>&1"
+    wl -n logging rollout status statefulset/loki --timeout=10m
+    until_true 600 "Alloy installed on the nodes" sh -c "KUBECONFIG=${work}/workload kubectl -n logging-node get daemonset/alloy-node >/dev/null 2>&1"
+    wl -n logging-node rollout status daemonset/alloy-node --timeout=10m
+    wl -n logging rollout status deployment/alloy --timeout=10m
+    # Grafana reads Loki with its client certificate once its Deployment mounts it, which replaces its pod.
+    grafana_deployment=deployment/kube-prometheus-stack-grafana
+    grafana_mounts() {
+        wl -n monitoring get "${grafana_deployment}" -o json |
+            jq -e 'any(.spec.template.spec.volumes[]; .secret.secretName == "kubehenge-loki-client")' > /dev/null
+    }
+    until_true 600 "Grafana mounts its Loki client certificate" grafana_mounts
+    wl -n monitoring rollout status "${grafana_deployment}" --timeout=10m
+    grafana_user=$(wl -n monitoring get secret kube-prometheus-stack-grafana -o jsonpath='{.data.admin-user}' | base64 -d)
+    grafana_password=$(wl -n monitoring get secret kube-prometheus-stack-grafana -o jsonpath='{.data.admin-password}' | base64 -d)
+    grafana_port=$((20000 + $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % 10000))
+    KUBECONFIG="${work}/workload" kubectl -n monitoring port-forward "${grafana_deployment}" "${grafana_port}:3000" > "${work}/grafana-forward.log" 2>&1 &
+    grafana_pid=$!
+    # grafana <path> [curl options...]: Grafana's API, as its admin.
+    grafana() {
+        grafana_path=$1
+        shift
+        curl -sS --fail --max-time 30 -u "${grafana_user}:${grafana_password}" "$@" "http://127.0.0.1:${grafana_port}${grafana_path}"
+    }
+    until_true 60 "Grafana reached" grafana /api/health
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    loki_healthy() { health=$(grafana /api/datasources/uid/loki/health) && printf '%s' "${health}" | jq -e '.status == "OK"' > /dev/null; }
+    until_true 300 "Grafana reaches Loki with its client certificate" loki_healthy
+    # lines <LogQL query> <text>: how many of the last hour's lines the query finds in Loki through
+    # Grafana's Loki data source hold the text.
+    lines() {
+        query=$(jq -cn --arg e "$1" '{from: "now-1h", to: "now", queries: [{refId: "A", datasource: {uid: "loki", type: "loki"}, expr: $e, queryType: "range", maxLines: 1000}]}')
+        # shellcheck disable=SC2310 # its failure is returned.
+        found=$(grafana /api/ds/query -X POST -H 'Content-Type: application/json' -d "${query}") || return 1
+        printf '%s' "${found}" | jq --arg t "$2" '[.results.A.frames[]?.data.values[]? | arrays | .[] | strings | select(contains($t))] | length'
+    }
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed query is only a retry.
+    logged() { count=$(lines "$1" "$2") && [ "${count}" -ge 1 ]; }
+    # Without a client certificate or a token Loki's proxy lets nobody read, through the API server's
+    # service proxy no more than from anywhere else.
+    # shellcheck disable=SC2310 # the refusal is the answer looked for.
+    wl get --request-timeout=20s --raw /api/v1/namespaces/logging/services/https:loki:3100/proxy/loki/api/v1/labels > /dev/null 2>&1 &&
+        fail "Loki answers a client it does not know"
+    new_namespace wl e2e-logs
+    # log_pod <name> <line> <ports JSON> <then>: a pod at Pod Security's restricted level that writes the
+    # line, declares the ports and then runs the command.
+    log_pod() {
+        wl -n e2e-logs apply -f - << EOF
 apiVersion: v1
 kind: Pod
 metadata:
@@ -1802,92 +1988,92 @@ spec:
         capabilities:
           drop: [ALL]
 EOF
-}
-# A pod gone again within a second: the node collector reads its log from the node.
-short_line=e2e-short-lived-${suffix}
-log_pod short "${short_line}" '[]' 'true'
-wl -n e2e-logs wait --for=jsonpath='{.status.phase}'=Succeeded pod/short --timeout=5m
-until_true 300 "the short-lived pod's line in Loki" logged '{namespace="e2e-logs", pod="short", container="log", job="pods"}' "${short_line}"
-if [ "${distribution}" = talos ]; then
-    # Talos keeps no journal: it sends its services' and the kernel's logs to the collector on its
-    # node's loopback, and its API server's audit log lies in a directory of its own.
-    collector=$(wl -n logging-node get daemonset/alloy-node -o json)
-    audit_dir=$(printf '%s' "${collector}" | jq -r '.spec.template.spec.volumes[] | select(.name == "audit") | .hostPath.path')
-    [ "${audit_dir}" = /var/log/audit/kube ] || fail "the collector reads the audit log from '${audit_dir}', not /var/log/audit/kube"
-    printf '%s' "${collector}" | jq -e 'any(.spec.template.spec.volumes[]; .name == "journal") | not' > /dev/null ||
-        fail "the collector mounts a journal Talos does not keep"
-    until_true 300 "Talos's service logs in Loki" logged '{job="talos", unit="kubelet"}' ""
-    until_true 300 "the nodes' kernel logs in Loki" logged '{job="talos", unit="kernel"}' ""
-else
-    until_true 300 "the nodes' journals in Loki" logged '{job="journal"}' ""
-fi
-# The API server audited the pod's creation, after the collector started reading the log.
-until_true 300 "the API server's audit log in Loki" logged '{job="audit"} |= "e2e-logs"' '"name":"short"'
-wl -n e2e-logs delete pod/short --wait --timeout=2m
-pod_security=$(wl label --dry-run=server --overwrite namespace logging pod-security.kubernetes.io/enforce=restricted 2>&1)
-case ${pod_security} in
-    *violate*) fail "Loki's and the events collector's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
-    *) ;;
-esac
-control_plane_use "${work}/workload" logs
+    }
+    # A pod gone again within a second: the node collector reads its log from the node.
+    short_line=e2e-short-lived-${suffix}
+    log_pod short "${short_line}" '[]' 'true'
+    wl -n e2e-logs wait --for=jsonpath='{.status.phase}'=Succeeded pod/short --timeout=5m
+    until_true 300 "the short-lived pod's line in Loki" logged '{namespace="e2e-logs", pod="short", container="log", job="pods"}' "${short_line}"
+    if [ "${distribution}" = talos ]; then
+        # Talos keeps no journal: it sends its services' and the kernel's logs to the collector on its
+        # node's loopback, and its API server's audit log lies in a directory of its own.
+        collector=$(wl -n logging-node get daemonset/alloy-node -o json)
+        audit_dir=$(printf '%s' "${collector}" | jq -r '.spec.template.spec.volumes[] | select(.name == "audit") | .hostPath.path')
+        [ "${audit_dir}" = /var/log/audit/kube ] || fail "the collector reads the audit log from '${audit_dir}', not /var/log/audit/kube"
+        printf '%s' "${collector}" | jq -e 'any(.spec.template.spec.volumes[]; .name == "journal") | not' > /dev/null ||
+            fail "the collector mounts a journal Talos does not keep"
+        until_true 300 "Talos's service logs in Loki" logged '{job="talos", unit="kubelet"}' ""
+        until_true 300 "the nodes' kernel logs in Loki" logged '{job="talos", unit="kernel"}' ""
+    else
+        until_true 300 "the nodes' journals in Loki" logged '{job="journal"}' ""
+    fi
+    # The API server audited the pod's creation, after the collector started reading the log.
+    until_true 300 "the API server's audit log in Loki" logged '{job="audit"} |= "e2e-logs"' '"name":"short"'
+    wl -n e2e-logs delete pod/short --wait --timeout=2m
+    pod_security=$(wl label --dry-run=server --overwrite namespace logging pod-security.kubernetes.io/enforce=restricted 2>&1)
+    case ${pod_security} in
+        *violate*) fail "Loki's and the events collector's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
+        *) ;;
+    esac
+    control_plane_use "${work}/workload" logs
 
-step "logs collected through the Kubernetes API instead"
-set_variable logs '{"enabled":true,"collector":"api","retentionDays":7,"sizeGiB":10}'
-until_true 600 "Alloy removed from the nodes" absent wl -n logging-node get daemonset/alloy-node
-wl -n logging rollout status deployment/alloy --timeout=10m
-# Two ports, which discovery gives the container once each: its line still arrives once.
-api_line=e2e-through-the-api-${suffix}
-log_pod ported "${api_line}" '[{"containerPort": 8080}, {"containerPort": 8081}]' 'exec /agnhost pause'
-wl -n e2e-logs wait --for=condition=Ready pod/ported --timeout=5m
-until_true 300 "the pod's line in Loki through the API" logged '{namespace="e2e-logs", pod="ported", job="pods"}' "${api_line}"
-# shellcheck disable=SC2310 # a failed query fails the step.
-count=$(lines '{namespace="e2e-logs", pod="ported", job="pods"}' "${api_line}") || fail "cannot query Loki"
-[ "${count}" = 1 ] || fail "the pod's line arrived ${count} times"
-wl delete namespace e2e-logs --wait --timeout=5m
+    step "logs collected through the Kubernetes API instead"
+    set_variable logs '{"enabled":true,"collector":"api","retentionDays":7,"sizeGiB":10}'
+    until_true 600 "Alloy removed from the nodes" absent wl -n logging-node get daemonset/alloy-node
+    wl -n logging rollout status deployment/alloy --timeout=10m
+    # Two ports, which discovery gives the container once each: its line still arrives once.
+    api_line=e2e-through-the-api-${suffix}
+    log_pod ported "${api_line}" '[{"containerPort": 8080}, {"containerPort": 8081}]' 'exec /agnhost pause'
+    wl -n e2e-logs wait --for=condition=Ready pod/ported --timeout=5m
+    until_true 300 "the pod's line in Loki through the API" logged '{namespace="e2e-logs", pod="ported", job="pods"}' "${api_line}"
+    # shellcheck disable=SC2310 # a failed query fails the step.
+    count=$(lines '{namespace="e2e-logs", pod="ported", job="pods"}' "${api_line}") || fail "cannot query Loki"
+    [ "${count}" = 1 ] || fail "the pod's line arrived ${count} times"
+    wl delete namespace e2e-logs --wait --timeout=5m
 
-step "logs collected on every node again"
-set_variable logs '{"enabled":true,"collector":"node","retentionDays":7,"sizeGiB":10}'
-until_true 600 "Alloy installed on the nodes" sh -c "KUBECONFIG=${work}/workload kubectl -n logging-node get daemonset/alloy-node >/dev/null 2>&1"
-wl -n logging-node rollout status daemonset/alloy-node --timeout=10m
+    step "logs collected on every node again"
+    set_variable logs '{"enabled":true,"collector":"node","retentionDays":7,"sizeGiB":10}'
+    until_true 600 "Alloy installed on the nodes" sh -c "KUBECONFIG=${work}/workload kubectl -n logging-node get daemonset/alloy-node >/dev/null 2>&1"
+    wl -n logging-node rollout status daemonset/alloy-node --timeout=10m
 
-step "backups with Velero: a volume and a Secret backed up, deleted and restored"
-marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-set_variable backups "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
-until_true 900 "Velero installed" wl -n velero rollout status deployment/velero --timeout=10s
-until_true 600 "Velero's node agent on every node" wl -n velero rollout status daemonset/node-agent --timeout=10s
-location_available() {
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-    phase=$(wl -n velero get backupstoragelocation default -o jsonpath='{.status.phase}') && [ "${phase}" = Available ]
-}
-until_true 300 "Velero reaches the S3 store" location_available
-# The node agent reads every pod's volumes from the node, which takes a privileged pod; Velero's
-# server needs nothing of the kind.
-pod_security=$(wl label --dry-run=server --overwrite namespace velero pod-security.kubernetes.io/enforce=restricted 2>&1)
-server_violations=$(printf '%s\n' "${pod_security}" | grep '^Warning: velero-' || true)
-[ -z "${server_violations}" ] || fail "Velero's server does not meet Pod Security's restricted level: ${server_violations}"
-# The interface's two identities in the cluster: one that reads and starts backups, one that
-# restores, neither able to read the keys Velero holds.
-# can <Secret> <verb> <resource>: whether the identity whose token the Secret beside the Cluster
-# holds may do it in the velero namespace.
-can() {
-    can_token=$(kubectl -n "${ns}" get secret "$1" -o jsonpath='{.data.token}' | base64 -d)
-    server=$(wl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
-    # shellcheck disable=SC2310 # can-i exits non-zero for its answer no, which the caller reads.
-    kubectl --kubeconfig=/dev/null --server="${server}" --certificate-authority="${work}/workload-ca" \
-        --token="${can_token}" -n velero auth can-i "$2" "$3" 2> /dev/null || true
-}
-until_true 300 "the interface's identities in the cluster" sh -c \
-    "kubectl -n ${ns} get secret ${name}-backups ${name}-restores > /dev/null 2>&1"
-for check in "${name}-backups create backups.velero.io yes" "${name}-backups create restores.velero.io no" \
-    "${name}-backups get secrets no" "${name}-restores create restores.velero.io yes" "${name}-restores get secrets no"; do
-    # shellcheck disable=SC2086 # the check's words are the arguments.
-    set -- ${check}
-    answer=$(can "$1" "$2" "$3")
-    [ "${answer}" = "$4" ] || fail "$1 may $2 $3: ${answer}, not $4"
-done
-new_namespace wl e2e-backup
-wl -n e2e-backup create secret generic e2e --from-literal=marker="${marker}"
-wl apply -f - << EOF
+    step "backups with Velero: a volume and a Secret backed up, deleted and restored"
+    marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    set_variable backups "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
+    until_true 900 "Velero installed" wl -n velero rollout status deployment/velero --timeout=10s
+    until_true 600 "Velero's node agent on every node" wl -n velero rollout status daemonset/node-agent --timeout=10s
+    location_available() {
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+        phase=$(wl -n velero get backupstoragelocation default -o jsonpath='{.status.phase}') && [ "${phase}" = Available ]
+    }
+    until_true 300 "Velero reaches the S3 store" location_available
+    # The node agent reads every pod's volumes from the node, which takes a privileged pod; Velero's
+    # server needs nothing of the kind.
+    pod_security=$(wl label --dry-run=server --overwrite namespace velero pod-security.kubernetes.io/enforce=restricted 2>&1)
+    server_violations=$(printf '%s\n' "${pod_security}" | grep '^Warning: velero-' || true)
+    [ -z "${server_violations}" ] || fail "Velero's server does not meet Pod Security's restricted level: ${server_violations}"
+    # The interface's two identities in the cluster: one that reads and starts backups, one that
+    # restores, neither able to read the keys Velero holds.
+    # can <Secret> <verb> <resource>: whether the identity whose token the Secret beside the Cluster
+    # holds may do it in the velero namespace.
+    can() {
+        can_token=$(kubectl -n "${ns}" get secret "$1" -o jsonpath='{.data.token}' | base64 -d)
+        server=$(wl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+        # shellcheck disable=SC2310 # can-i exits non-zero for its answer no, which the caller reads.
+        kubectl --kubeconfig=/dev/null --server="${server}" --certificate-authority="${work}/workload-ca" \
+            --token="${can_token}" -n velero auth can-i "$2" "$3" 2> /dev/null || true
+    }
+    until_true 300 "the interface's identities in the cluster" sh -c \
+        "kubectl -n ${ns} get secret ${name}-backups ${name}-restores > /dev/null 2>&1"
+    for check in "${name}-backups create backups.velero.io yes" "${name}-backups create restores.velero.io no" \
+        "${name}-backups get secrets no" "${name}-restores create restores.velero.io yes" "${name}-restores get secrets no"; do
+        # shellcheck disable=SC2086 # the check's words are the arguments.
+        set -- ${check}
+        answer=$(can "$1" "$2" "$3")
+        [ "${answer}" = "$4" ] || fail "$1 may $2 $3: ${answer}, not $4"
+    done
+    new_namespace wl e2e-backup
+    wl -n e2e-backup create secret generic e2e --from-literal=marker="${marker}"
+    wl apply -f - << EOF
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -1927,62 +2113,62 @@ spec:
       persistentVolumeClaim:
         claimName: data
 EOF
-wl -n e2e-backup wait --for=condition=Ready pod/data --timeout=10m
-wl -n e2e-backup exec data -- sh -c "printf '%s' '${marker}' > /data/marker"
-# Asked for as the interface's Back up now does: the schedule's own backup, made at once.
-template=$(wl -n velero get schedule velero-scheduled -o json | jq -c .spec.template)
-excluded=$(printf '%s' "${template}" | jq -r '.excludedNamespaces | index("kube-system")')
-[ "${excluded}" != null ] || fail "the schedule backs kube-system up"
-jq -n --argjson spec "${template}" '{apiVersion: "velero.io/v1", kind: "Backup", metadata: {name: "e2e", namespace: "velero"}, spec: $spec}' |
-    wl apply -f -
-# phase_is <kind> <name> <phase>: whether a Velero object has reached the phase; any phase it ends in
-# otherwise fails the test.
-phase_is() {
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-    phase=$(wl -n velero get "$1" "$2" -o jsonpath='{.status.phase}') || return 1
-    case ${phase} in
-        "$3") ;;
-        Failed | FailedValidation | PartiallyFailed)
-            wl -n velero get "$1" "$2" -o yaml >&2
-            wl -n velero logs deployment/velero --tail=100 >&2
-            fail "$1 $2 ended ${phase}"
-            ;;
-        *) return 1 ;;
-    esac
-}
-until_true 1200 "the backup completed" phase_is backup e2e Completed
-volume_backups=$(wl -n velero get podvolumebackups -l velero.io/backup-name=e2e -o json |
-    jq '[.items[] | select(.spec.pod.namespace == "e2e-backup" and .status.phase == "Completed")] | length')
-[ "${volume_backups}" = 1 ] || fail "the pod's volume was not backed up: ${volume_backups} volume backups"
-control_plane_use "${work}/workload" backups
+    wl -n e2e-backup wait --for=condition=Ready pod/data --timeout=10m
+    wl -n e2e-backup exec data -- sh -c "printf '%s' '${marker}' > /data/marker"
+    # Asked for as the interface's Back up now does: the schedule's own backup, made at once.
+    template=$(wl -n velero get schedule velero-scheduled -o json | jq -c .spec.template)
+    excluded=$(printf '%s' "${template}" | jq -r '.excludedNamespaces | index("kube-system")')
+    [ "${excluded}" != null ] || fail "the schedule backs kube-system up"
+    jq -n --argjson spec "${template}" '{apiVersion: "velero.io/v1", kind: "Backup", metadata: {name: "e2e", namespace: "velero"}, spec: $spec}' |
+        wl apply -f -
+    # phase_is <kind> <name> <phase>: whether a Velero object has reached the phase; any phase it ends in
+    # otherwise fails the test.
+    phase_is() {
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+        phase=$(wl -n velero get "$1" "$2" -o jsonpath='{.status.phase}') || return 1
+        case ${phase} in
+            "$3") ;;
+            Failed | FailedValidation | PartiallyFailed)
+                wl -n velero get "$1" "$2" -o yaml >&2
+                wl -n velero logs deployment/velero --tail=100 >&2
+                fail "$1 $2 ended ${phase}"
+                ;;
+            *) return 1 ;;
+        esac
+    }
+    until_true 1200 "the backup completed" phase_is backup e2e Completed
+    volume_backups=$(wl -n velero get podvolumebackups -l velero.io/backup-name=e2e -o json |
+        jq '[.items[] | select(.spec.pod.namespace == "e2e-backup" and .status.phase == "Completed")] | length')
+    [ "${volume_backups}" = 1 ] || fail "the pod's volume was not backed up: ${volume_backups} volume backups"
+    control_plane_use "${work}/workload" backups
 
-step "the backup in the S3 store: under the cluster's own prefix, encrypted"
-keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
-# The etcd snapshots taken before stay in the store under the cluster's etcd prefixes.
-stray=$(printf '%s\n' "${keys}" | grep -v -e "^${prefix}/" -e "^${etcd_prefix}/" -e "^${upload_prefix:-${etcd_prefix}}/" -e '^$' || true)
-[ -z "${stray}" ] || fail "objects outside the cluster's prefix ${prefix}: ${stray}"
-printf '%s\n' "${keys}" | grep -q "^${prefix}/kopia/e2e-backup/" || fail "no Kopia repository for e2e-backup under ${prefix}"
-tarball="${s3_endpoint}/${bucket}/${prefix}/backups/e2e/e2e.tar.gz"
-# Without the cluster's SSE-C key the store gives nothing out; with it, the backup.
-plain=$(curl -sS --cacert "${KUBEHENGE_E2E_BACKUP_CA}" --aws-sigv4 "aws:amz:${region}:s3" --user "${s3_key}:${s3_secret}" \
-    -o /dev/null -w '%{http_code}' "${tarball}")
-[ "${plain}" = 400 ] || fail "the backup was read without its SSE-C key: HTTP ${plain}"
-sse_key=$(kubectl -n "${ns}" get secret "${name}-backup-keys" -o jsonpath='{.data.sse-c-key}')
-sse_md5=$(printf '%s' "${sse_key}" | base64 -d | openssl dgst -md5 -binary | base64)
-s3 -H 'x-amz-server-side-encryption-customer-algorithm: AES256' -H "x-amz-server-side-encryption-customer-key: ${sse_key}" \
-    -H "x-amz-server-side-encryption-customer-key-MD5: ${sse_md5}" -o "${work}/e2e.tar.gz" "${tarball}"
-contents=$(tar -tzf "${work}/e2e.tar.gz")
-printf '%s\n' "${contents}" | grep -q '/namespaces/kube-system/' && fail "the backup holds kube-system"
-secret_json=$(tar -xzOf "${work}/e2e.tar.gz" resources/secrets/namespaces/e2e-backup/e2e.json)
-backed_up=$(printf '%s' "${secret_json}" | jq -r .data.marker | base64 -d)
-[ "${backed_up}" = "${marker}" ] || fail "the backup does not hold the Secret"
-# What the store keeps on its disk: the volume's data encrypted by Kopia, the resources by SSE-C.
-grep -r -q -F "${marker}" "${work}/s3-data" && fail "the store keeps the volume's data unencrypted"
+    step "the backup in the S3 store: under the cluster's own prefix, encrypted"
+    keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
+    # The etcd snapshots taken before stay in the store under the cluster's etcd prefixes.
+    stray=$(printf '%s\n' "${keys}" | grep -v -e "^${prefix}/" -e "^${etcd_prefix}/" -e "^${upload_prefix:-${etcd_prefix}}/" -e '^$' || true)
+    [ -z "${stray}" ] || fail "objects outside the cluster's prefix ${prefix}: ${stray}"
+    printf '%s\n' "${keys}" | grep -q "^${prefix}/kopia/e2e-backup/" || fail "no Kopia repository for e2e-backup under ${prefix}"
+    tarball="${s3_endpoint}/${bucket}/${prefix}/backups/e2e/e2e.tar.gz"
+    # Without the cluster's SSE-C key the store gives nothing out; with it, the backup.
+    plain=$(curl -sS --cacert "${KUBEHENGE_E2E_BACKUP_CA}" --aws-sigv4 "aws:amz:${region}:s3" --user "${s3_key}:${s3_secret}" \
+        -o /dev/null -w '%{http_code}' "${tarball}")
+    [ "${plain}" = 400 ] || fail "the backup was read without its SSE-C key: HTTP ${plain}"
+    sse_key=$(kubectl -n "${ns}" get secret "${name}-backup-keys" -o jsonpath='{.data.sse-c-key}')
+    sse_md5=$(printf '%s' "${sse_key}" | base64 -d | openssl dgst -md5 -binary | base64)
+    s3 -H 'x-amz-server-side-encryption-customer-algorithm: AES256' -H "x-amz-server-side-encryption-customer-key: ${sse_key}" \
+        -H "x-amz-server-side-encryption-customer-key-MD5: ${sse_md5}" -o "${work}/e2e.tar.gz" "${tarball}"
+    contents=$(tar -tzf "${work}/e2e.tar.gz")
+    printf '%s\n' "${contents}" | grep -q '/namespaces/kube-system/' && fail "the backup holds kube-system"
+    secret_json=$(tar -xzOf "${work}/e2e.tar.gz" resources/secrets/namespaces/e2e-backup/e2e.json)
+    backed_up=$(printf '%s' "${secret_json}" | jq -r .data.marker | base64 -d)
+    [ "${backed_up}" = "${marker}" ] || fail "the backup does not hold the Secret"
+    # What the store keeps on its disk: the volume's data encrypted by Kopia, the resources by SSE-C.
+    grep -r -q -F "${marker}" "${work}/s3-data" && fail "the store keeps the volume's data unencrypted"
 
-step "the namespace deleted and restored"
-wl delete namespace e2e-backup --wait --timeout=5m
-# As the interface restores chosen namespaces.
-wl apply -f - << 'EOF'
+    step "the namespace deleted and restored"
+    wl delete namespace e2e-backup --wait --timeout=5m
+    # As the interface restores chosen namespaces.
+    wl apply -f - << 'EOF'
 apiVersion: velero.io/v1
 kind: Restore
 metadata:
@@ -1993,61 +2179,61 @@ spec:
   includedNamespaces: [e2e-backup]
   restorePVs: true
 EOF
-until_true 1200 "the restore completed" phase_is restore e2e Completed
-wl -n e2e-backup wait --for=condition=Ready pod/data --timeout=10m
-restored=$(wl -n e2e-backup exec data -- cat /data/marker)
-[ "${restored}" = "${marker}" ] || fail "the volume's data did not come back: ${restored}"
-restored=$(wl -n e2e-backup get secret e2e -o jsonpath='{.data.marker}' | base64 -d)
-[ "${restored}" = "${marker}" ] || fail "the Secret did not come back"
-wl delete namespace e2e-backup --wait --timeout=5m
+    until_true 1200 "the restore completed" phase_is restore e2e Completed
+    wl -n e2e-backup wait --for=condition=Ready pod/data --timeout=10m
+    restored=$(wl -n e2e-backup exec data -- cat /data/marker)
+    [ "${restored}" = "${marker}" ] || fail "the volume's data did not come back: ${restored}"
+    restored=$(wl -n e2e-backup get secret e2e -o jsonpath='{.data.marker}' | base64 -d)
+    [ "${restored}" = "${marker}" ] || fail "the Secret did not come back"
+    wl delete namespace e2e-backup --wait --timeout=5m
 
-step "certificates switched on, from the cluster's own CA"
-set_variable certificates '{"enabled":true,"issuer":"ca","domain":"e2e.test"}'
-ingress_ca=${name}-ingress-ca
-until_true 300 "the cluster's CA beside it" sh -c "kubectl -n ${ns} get secret ${ingress_ca} >/dev/null 2>&1"
-ca_domain=$(kubectl -n "${ns}" get secret "${ingress_ca}" -o jsonpath='{.metadata.annotations.kubehenge\.dev/ingress-ca-domain}')
-[ "${ca_domain}" = e2e.test ] || fail "the cluster's CA records the domain '${ca_domain}', not e2e.test"
-ca_data=$(kubectl -n "${ns}" get secret "${ingress_ca}" -o jsonpath='{.data.tls\.crt}')
-printf '%s' "${ca_data}" | base64 -d > "${work}/ingress-ca.crt"
-ca_text=$(openssl x509 -in "${work}/ingress-ca.crt" -noout -text)
-# A CA that vouches only for names in the domain and for no address cannot stand in for any other
-# server its users reach, however far it is trusted.
-printf '%s\n' "${ca_text}" | grep -A1 'Permitted:' | grep -qx ' *DNS:e2e.test' || fail "the cluster's CA is not constrained to e2e.test"
-printf '%s\n' "${ca_text}" | grep -q 'IP:0.0.0.0/0.0.0.0' || fail "the cluster's CA may vouch for IP addresses"
-printf '%s\n' "${ca_text}" | grep -q 'ASN1 OID: prime256v1' || fail "the cluster's CA's key is not ECDSA P-256"
-openssl x509 -in "${work}/ingress-ca.crt" -noout -checkend $((9 * 365 * 86400)) > /dev/null || fail "the cluster's CA runs out within nine years"
-marked=$(kubectl -n "${ns}" get cluster "${name}" -o json | jq '.metadata.annotations // {} | has("kubehenge.dev/certificates")')
-[ "${marked}" = true ] || fail "the Cluster is not marked as having certificates"
-# shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
-ca_copied() { ca_copy=$(wl -n cert-manager get secret kubehenge-ingress-ca -o jsonpath='{.data.tls\.crt}' 2> /dev/null) && [ "${ca_copy}" = "${ca_data}" ]; }
-until_true 300 "the cluster's CA in the workload cluster" ca_copied
-until_true 600 "the default certificate issued" wl -n kube-system wait --for=condition=Ready certificate.cert-manager.io/kubehenge-ingress --timeout=10s
-# default_certificate: whether the default certificate covers the domain and every name one level
-# below it, with an ECDSA P-256 key.
-default_certificate() {
-    leaf=$(wl -n kube-system get secret kubehenge-ingress-tls -o jsonpath='{.data.tls\.crt}')
-    leaf=$(printf '%s' "${leaf}" | base64 -d | openssl x509 -noout -text)
-    sans=$(printf '%s\n' "${leaf}" | grep -A1 'Subject Alternative Name' | tail -n 1 | tr -d ' ' | tr ',' '\n' | LC_ALL=C sort | tr '\n' ' ')
-    [ "${sans}" = 'DNS:*.e2e.test DNS:e2e.test ' ] || fail "the default certificate names ${sans}, not e2e.test and *.e2e.test"
-    printf '%s\n' "${leaf}" | grep -q 'ASN1 OID: prime256v1' || fail "the default certificate's key is not ECDSA P-256"
-}
-default_certificate
-# websecure_programmed: whether Traefik's Gateway has its HTTPS listener, terminating TLS with the
-# default certificate for routes from every namespace, and has programmed it.
-websecure_programmed() {
-    wl -n kube-system get gateway traefik-gateway -o json 2> /dev/null | jq -e '
+    step "certificates switched on, from the cluster's own CA"
+    set_variable certificates '{"enabled":true,"issuer":"ca","domain":"e2e.test"}'
+    ingress_ca=${name}-ingress-ca
+    until_true 300 "the cluster's CA beside it" sh -c "kubectl -n ${ns} get secret ${ingress_ca} >/dev/null 2>&1"
+    ca_domain=$(kubectl -n "${ns}" get secret "${ingress_ca}" -o jsonpath='{.metadata.annotations.kubehenge\.dev/ingress-ca-domain}')
+    [ "${ca_domain}" = e2e.test ] || fail "the cluster's CA records the domain '${ca_domain}', not e2e.test"
+    ca_data=$(kubectl -n "${ns}" get secret "${ingress_ca}" -o jsonpath='{.data.tls\.crt}')
+    printf '%s' "${ca_data}" | base64 -d > "${work}/ingress-ca.crt"
+    ca_text=$(openssl x509 -in "${work}/ingress-ca.crt" -noout -text)
+    # A CA that vouches only for names in the domain and for no address cannot stand in for any other
+    # server its users reach, however far it is trusted.
+    printf '%s\n' "${ca_text}" | grep -A1 'Permitted:' | grep -qx ' *DNS:e2e.test' || fail "the cluster's CA is not constrained to e2e.test"
+    printf '%s\n' "${ca_text}" | grep -q 'IP:0.0.0.0/0.0.0.0' || fail "the cluster's CA may vouch for IP addresses"
+    printf '%s\n' "${ca_text}" | grep -q 'ASN1 OID: prime256v1' || fail "the cluster's CA's key is not ECDSA P-256"
+    openssl x509 -in "${work}/ingress-ca.crt" -noout -checkend $((9 * 365 * 86400)) > /dev/null || fail "the cluster's CA runs out within nine years"
+    marked=$(kubectl -n "${ns}" get cluster "${name}" -o json | jq '.metadata.annotations // {} | has("kubehenge.dev/certificates")')
+    [ "${marked}" = true ] || fail "the Cluster is not marked as having certificates"
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+    ca_copied() { ca_copy=$(wl -n cert-manager get secret kubehenge-ingress-ca -o jsonpath='{.data.tls\.crt}' 2> /dev/null) && [ "${ca_copy}" = "${ca_data}" ]; }
+    until_true 300 "the cluster's CA in the workload cluster" ca_copied
+    until_true 600 "the default certificate issued" wl -n kube-system wait --for=condition=Ready certificate.cert-manager.io/kubehenge-ingress --timeout=10s
+    # default_certificate: whether the default certificate covers the domain and every name one level
+    # below it, with an ECDSA P-256 key.
+    default_certificate() {
+        leaf=$(wl -n kube-system get secret kubehenge-ingress-tls -o jsonpath='{.data.tls\.crt}')
+        leaf=$(printf '%s' "${leaf}" | base64 -d | openssl x509 -noout -text)
+        sans=$(printf '%s\n' "${leaf}" | grep -A1 'Subject Alternative Name' | tail -n 1 | tr -d ' ' | tr ',' '\n' | LC_ALL=C sort | tr '\n' ' ')
+        [ "${sans}" = 'DNS:*.e2e.test DNS:e2e.test ' ] || fail "the default certificate names ${sans}, not e2e.test and *.e2e.test"
+        printf '%s\n' "${leaf}" | grep -q 'ASN1 OID: prime256v1' || fail "the default certificate's key is not ECDSA P-256"
+    }
+    default_certificate
+    # websecure_programmed: whether Traefik's Gateway has its HTTPS listener, terminating TLS with the
+    # default certificate for routes from every namespace, and has programmed it.
+    websecure_programmed() {
+        wl -n kube-system get gateway traefik-gateway -o json 2> /dev/null | jq -e '
         any(.spec.listeners[]; .name == "websecure" and .port == 8443 and .protocol == "HTTPS" and .tls.mode == "Terminate" and
             any(.tls.certificateRefs[]; .name == "kubehenge-ingress-tls") and .allowedRoutes.namespaces.from == "All") and
         any(.status.listeners[]?; .name == "websecure" and
             any(.conditions[]; .type == "Programmed" and .status == "True") and any(.conditions[]; .type == "ResolvedRefs" and .status == "True"))' > /dev/null
-}
-until_true 300 "Traefik's Gateway serves HTTPS with the default certificate" websecure_programmed
-new_namespace wl e2e-certs
-agnhost_pod e2e-certs web netexec --http-port=8080
-wl -n e2e-certs expose pod web --port=80 --target-port=8080
-# Neither names a certificate: the default one serves both.
-wl -n e2e-certs create ingress web --rule='web.e2e.test/*=web:80'
-wl -n e2e-certs apply -f - << 'EOF'
+    }
+    until_true 300 "Traefik's Gateway serves HTTPS with the default certificate" websecure_programmed
+    new_namespace wl e2e-certs
+    agnhost_pod e2e-certs web netexec --http-port=8080
+    wl -n e2e-certs expose pod web --port=80 --target-port=8080
+    # Neither names a certificate: the default one serves both.
+    wl -n e2e-certs create ingress web --rule='web.e2e.test/*=web:80'
+    wl -n e2e-certs apply -f - << 'EOF'
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -2063,32 +2249,32 @@ spec:
         - name: web
           port: 80
 EOF
-wl -n e2e-certs wait --for=condition=Ready pod/web --timeout=5m
-# https_answers <CA file> <host name> <path> <pattern>: whether the API address answers the path at
-# the host name over HTTPS, with a certificate the CA vouches for, matching the pattern.
-https_answers() {
-    https_answer=$(curl -sS --fail --max-time 5 --cacert "$1" --resolve "$2:443:${KUBEHENGE_E2E_ENDPOINT}" "https://$2$3" 2> /dev/null) || return 1
-    printf '%s' "${https_answer}" | grep -qiE "$4"
-}
-until_true 300 "an Ingress served over HTTPS with the default certificate" https_answers "${work}/ingress-ca.crt" web.e2e.test /hostname '^web$'
-until_true 300 "an HTTPRoute served over HTTPS with the default certificate" https_answers "${work}/ingress-ca.crt" gateway.e2e.test /hostname '^web$'
-control_plane_use "${work}/workload" certificates
+    wl -n e2e-certs wait --for=condition=Ready pod/web --timeout=5m
+    # https_answers <CA file> <host name> <path> <pattern>: whether the API address answers the path at
+    # the host name over HTTPS, with a certificate the CA vouches for, matching the pattern.
+    https_answers() {
+        https_answer=$(curl -sS --fail --max-time 5 --cacert "$1" --resolve "$2:443:${KUBEHENGE_E2E_ENDPOINT}" "https://$2$3" 2> /dev/null) || return 1
+        printf '%s' "${https_answer}" | grep -qiE "$4"
+    }
+    until_true 300 "an Ingress served over HTTPS with the default certificate" https_answers "${work}/ingress-ca.crt" web.e2e.test /hostname '^web$'
+    until_true 300 "an HTTPRoute served over HTTPS with the default certificate" https_answers "${work}/ingress-ca.crt" gateway.e2e.test /hostname '^web$'
+    control_plane_use "${work}/workload" certificates
 
-# Pebble, an ACME server made for tests, validates challenges against the DNS server it is given:
-# BIND, which takes the DNS-01 records over RFC 2136 and answers for the HTTP-01 name.
-step "an ACME server, and a DNS server for its challenges"
-# renovate: datasource=docker depName=docker.io/internetsystemsconsortium/bind9
-bind_image=docker.io/internetsystemsconsortium/bind9:9.20@sha256:66092edb53c081fa11b1fa8219e99065b0f497cb38f568ba789702a4c10e2590
-# renovate: datasource=docker depName=ghcr.io/letsencrypt/pebble
-pebble_image=ghcr.io/letsencrypt/pebble:2.10.1@sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199
-# The HTTP-01 names live in the cluster's own DNS, as Services in e2e-certs whose endpoint is the API
-# address, where Traefik answers on port 80; cert-manager's self-check finds them there, and Pebble
-# in BIND's copy of the same records, so that nothing outside the cluster need resolve them.
-http01_zone=e2e-certs.svc.cluster.local
-http01_host=http01.${http01_zone}
-http01_headlamp=headlamp.${http01_zone}
-new_namespace wl e2e-acme
-wl -n e2e-acme apply -f - << 'EOF'
+    # Pebble, an ACME server made for tests, validates challenges against the DNS server it is given:
+    # BIND, which takes the DNS-01 records over RFC 2136 and answers for the HTTP-01 name.
+    step "an ACME server, and a DNS server for its challenges"
+    # renovate: datasource=docker depName=docker.io/internetsystemsconsortium/bind9
+    bind_image=docker.io/internetsystemsconsortium/bind9:9.20@sha256:66092edb53c081fa11b1fa8219e99065b0f497cb38f568ba789702a4c10e2590
+    # renovate: datasource=docker depName=ghcr.io/letsencrypt/pebble
+    pebble_image=ghcr.io/letsencrypt/pebble:2.10.1@sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199
+    # The HTTP-01 names live in the cluster's own DNS, as Services in e2e-certs whose endpoint is the API
+    # address, where Traefik answers on port 80; cert-manager's self-check finds them there, and Pebble
+    # in BIND's copy of the same records, so that nothing outside the cluster need resolve them.
+    http01_zone=e2e-certs.svc.cluster.local
+    http01_host=http01.${http01_zone}
+    http01_headlamp=headlamp.${http01_zone}
+    new_namespace wl e2e-acme
+    wl -n e2e-acme apply -f - << 'EOF'
 apiVersion: v1
 kind: Service
 metadata:
@@ -2119,10 +2305,10 @@ spec:
     - name: management
       port: 15000
 EOF
-dns_ip=$(wl -n e2e-acme get service dns -o jsonpath='{.spec.clusterIP}')
-tsig=$(head -c 32 /dev/urandom | base64 -w0)
-mkdir -p "${work}/dns"
-cat > "${work}/dns/named.conf" << EOF
+    dns_ip=$(wl -n e2e-acme get service dns -o jsonpath='{.spec.clusterIP}')
+    tsig=$(head -c 32 /dev/urandom | base64 -w0)
+    mkdir -p "${work}/dns"
+    cat > "${work}/dns/named.conf" << EOF
 options {
     directory "/var/cache/bind";
     pid-file none;
@@ -2147,13 +2333,13 @@ zone "${http01_zone}" {
     file "/var/lib/bind/http01.zone";
 };
 EOF
-cat > "${work}/dns/e2e.test.zone" << EOF
+    cat > "${work}/dns/e2e.test.zone" << EOF
 \$TTL 60
 @ IN SOA ns hostmaster 1 60 60 600 60
 @ IN NS ns
 ns IN A ${dns_ip}
 EOF
-cat > "${work}/dns/http01.zone" << EOF
+    cat > "${work}/dns/http01.zone" << EOF
 \$TTL 60
 @ IN SOA ns hostmaster 1 60 60 600 60
 @ IN NS ns
@@ -2161,16 +2347,16 @@ ns IN A ${dns_ip}
 ${http01_host}. IN A ${KUBEHENGE_E2E_ENDPOINT}
 ${http01_headlamp}. IN A ${KUBEHENGE_E2E_ENDPOINT}
 EOF
-wl -n e2e-acme create secret generic dns --from-file="${work}/dns"
-openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=pebble \
-    -keyout "${work}/pebble.key" -out "${work}/pebble.csr" 2> /dev/null
-printf 'subjectAltName = DNS:pebble.e2e-acme.svc, DNS:pebble.e2e-acme.svc.cluster.local\nextendedKeyUsage = serverAuth\n' > "${work}/pebble.cnf"
-openssl x509 -req -in "${work}/pebble.csr" -CA "${work}/ca.crt" -CAkey "${work}/ca.key" -CAserial "${work}/ca.srl" \
-    -days 1 -extfile "${work}/pebble.cnf" -out "${work}/pebble.crt" 2> /dev/null
-wl -n e2e-acme create secret tls pebble-tls --cert="${work}/pebble.crt" --key="${work}/pebble.key"
-# Both run as Pod Security's restricted level and Kyverno require: BIND as an unprivileged user on
-# an unprivileged port, with its zones copied where it may write their journals.
-wl -n e2e-acme apply -f - << EOF
+    wl -n e2e-acme create secret generic dns --from-file="${work}/dns"
+    openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=pebble \
+        -keyout "${work}/pebble.key" -out "${work}/pebble.csr" 2> /dev/null
+    printf 'subjectAltName = DNS:pebble.e2e-acme.svc, DNS:pebble.e2e-acme.svc.cluster.local\nextendedKeyUsage = serverAuth\n' > "${work}/pebble.cnf"
+    openssl x509 -req -in "${work}/pebble.csr" -CA "${work}/ca.crt" -CAkey "${work}/ca.key" -CAserial "${work}/ca.srl" \
+        -days 1 -extfile "${work}/pebble.cnf" -out "${work}/pebble.crt" 2> /dev/null
+    wl -n e2e-acme create secret tls pebble-tls --cert="${work}/pebble.crt" --key="${work}/pebble.key"
+    # Both run as Pod Security's restricted level and Kyverno require: BIND as an unprivileged user on
+    # an unprivileged port, with its zones copied where it may write their journals.
+    wl -n e2e-acme apply -f - << EOF
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -2280,37 +2466,37 @@ spec:
       secret:
         secretName: pebble-tls
 EOF
-agnhost_pod e2e-acme client pause
-wl -n e2e-acme wait --for=condition=Ready pod/dns pod/pebble pod/client --timeout=5m
-# shellcheck disable=SC2310 # polled with set -e off, so a failed query is only a retry.
-dns_answers() {
-    soa=$(wl -n e2e-acme exec client -- dig +short "@${dns_ip}" e2e.test SOA 2>&1) && [ -n "${soa}" ] && return
-    # A dig that dies says so only here: a timeout alone cannot tell a crashed client from a silent server.
-    printf 'dig: %s\n' "${soa:-no answer}" >&2
-    return 1
-}
-until_true 60 "BIND answers for e2e.test" dns_answers
-# Pebble makes a new root each time it starts, which only its management interface hands out. The
-# client fetches it there, verifying Pebble's own certificate.
-acme_root() {
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed fetch is only a retry.
-    wl -n e2e-acme exec -i client -- sh -c 'cat > /tmp/ca.crt && curl -sS --fail --max-time 5 --cacert /tmp/ca.crt https://pebble.e2e-acme.svc:15000/roots/0' \
-        < "${work}/ca.crt" > "${work}/acme-root.crt" 2> /dev/null && grep -q 'BEGIN CERTIFICATE' "${work}/acme-root.crt"
-}
-until_true 120 "Pebble's root" acme_root
-acme_server=https://pebble.e2e-acme.svc:14000/dir
-# ingress_tls <namespace> <host name>: the cluster issuer the Ingress for the host name asks
-# cert-manager for, and the Secrets it names, as JSON.
-ingress_tls() {
-    wl -n "$1" get ingress -o json | jq -c --arg h "$2" '[.items[] | select(any(.spec.rules[]; .host == $h)) |
+    agnhost_pod e2e-acme client pause
+    wl -n e2e-acme wait --for=condition=Ready pod/dns pod/pebble pod/client --timeout=5m
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed query is only a retry.
+    dns_answers() {
+        soa=$(wl -n e2e-acme exec client -- dig +short "@${dns_ip}" e2e.test SOA 2>&1) && [ -n "${soa}" ] && return
+        # A dig that dies says so only here: a timeout alone cannot tell a crashed client from a silent server.
+        printf 'dig: %s\n' "${soa:-no answer}" >&2
+        return 1
+    }
+    until_true 60 "BIND answers for e2e.test" dns_answers
+    # Pebble makes a new root each time it starts, which only its management interface hands out. The
+    # client fetches it there, verifying Pebble's own certificate.
+    acme_root() {
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed fetch is only a retry.
+        wl -n e2e-acme exec -i client -- sh -c 'cat > /tmp/ca.crt && curl -sS --fail --max-time 5 --cacert /tmp/ca.crt https://pebble.e2e-acme.svc:15000/roots/0' \
+            < "${work}/ca.crt" > "${work}/acme-root.crt" 2> /dev/null && grep -q 'BEGIN CERTIFICATE' "${work}/acme-root.crt"
+    }
+    until_true 120 "Pebble's root" acme_root
+    acme_server=https://pebble.e2e-acme.svc:14000/dir
+    # ingress_tls <namespace> <host name>: the cluster issuer the Ingress for the host name asks
+    # cert-manager for, and the Secrets it names, as JSON.
+    ingress_tls() {
+        wl -n "$1" get ingress -o json | jq -c --arg h "$2" '[.items[] | select(any(.spec.rules[]; .host == $h)) |
         {issuer: .metadata.annotations["cert-manager.io/cluster-issuer"], secrets: [.spec.tls[]?.secretName]}]'
-}
+    }
 
-step "certificates over ACME's DNS-01 challenge, with the cluster's own DNS credential"
-# The credential as the interface stores it, and the mark it leaves on the Cluster.
-cluster_uid=$(kubectl -n "${ns}" get cluster "${name}" -o jsonpath='{.metadata.uid}')
-stored_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-kubectl -n "${ns}" apply -f - << EOF
+    step "certificates over ACME's DNS-01 challenge, with the cluster's own DNS credential"
+    # The credential as the interface stores it, and the mark it leaves on the Cluster.
+    cluster_uid=$(kubectl -n "${ns}" get cluster "${name}" -o jsonpath='{.metadata.uid}')
+    stored_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    kubectl -n "${ns}" apply -f - << EOF
 apiVersion: v1
 kind: Secret
 metadata:
@@ -2330,46 +2516,46 @@ type: kubehenge.dev/user-credential
 stringData:
   token: "${tsig}"
 EOF
-kubectl -n "${ns}" annotate cluster "${name}" --overwrite "kubehenge.dev/credentials-stored-at=${stored_at}"
-dns01=$(jq -cn --arg s "${acme_server}" --rawfile ca "${work}/ca.crt" --arg d "${dns_ip}:53" '{enabled: true, issuer: "acme-dns01", domain: "e2e.test",
+    kubectl -n "${ns}" annotate cluster "${name}" --overwrite "kubehenge.dev/credentials-stored-at=${stored_at}"
+    dns01=$(jq -cn --arg s "${acme_server}" --rawfile ca "${work}/ca.crt" --arg d "${dns_ip}:53" '{enabled: true, issuer: "acme-dns01", domain: "e2e.test",
     acme: {server: $s, caBundle: $ca}, dns01: {provider: "rfc2136", nameservers: [$d], rfc2136: {nameserver: $d, tsigKeyName: "e2e", tsigAlgorithm: "HMACSHA256"}}}')
-set_variable certificates "${dns01}"
-# One name one level too deep for the default certificate, and one it covers.
-set_variable headlamp '{"enabled":true,"hostname":"headlamp.apps.e2e.test"}'
-set_variable monitoring '{"enabled":true,"hostname":"grafana.e2e.test"}'
-# shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
-dns01_copied() {
-    dns01_token=$(wl -n cert-manager get secret kubehenge-dns01 -o jsonpath='{.data.token}' 2> /dev/null) &&
-        dns01_token=$(printf '%s' "${dns01_token}" | base64 -d) && [ "${dns01_token}" = "${tsig}" ]
-}
-until_true 300 "the cluster's DNS credential in the workload cluster" dns01_copied
-# cert-manager looks for its records only at BIND, which alone knows e2e.test.
-recursive() {
-    wl -n cert-manager get deployment cert-manager -o json 2> /dev/null |
-        jq -e --arg a "--dns01-recursive-nameservers=${dns_ip}:53" '.spec.template.spec.containers[0].args | index($a) and index("--dns01-recursive-nameservers-only=true")' > /dev/null
-}
-until_true 300 "cert-manager checks its records at BIND" recursive
-wl -n cert-manager rollout status deployment/cert-manager --timeout=5m
-# Issued by Pebble, the default certificate is one its root vouches for; the CA's never is.
-until_true 900 "an Ingress served over HTTPS with the default certificate from the ACME server" \
-    https_answers "${work}/acme-root.crt" web.e2e.test /hostname '^web$'
-until_true 120 "an HTTPRoute served over HTTPS with the default certificate from the ACME server" \
-    https_answers "${work}/acme-root.crt" gateway.e2e.test /hostname '^web$'
-default_certificate
-wl -n cert-manager get secret kubehenge-ingress-acme > /dev/null
-until_true 900 "Headlamp served at a name of its own, with a certificate of its own" https_answers "${work}/acme-root.crt" headlamp.apps.e2e.test / '<html'
-headlamp_tls=$(ingress_tls headlamp headlamp.apps.e2e.test)
-[ "${headlamp_tls}" = '[{"issuer":"kubehenge-ingress","secrets":["headlamp-tls"]}]' ] ||
-    fail "Headlamp's Ingress asks for ${headlamp_tls}, not its own certificate from kubehenge-ingress"
-until_true 600 "Grafana served with the default certificate" https_answers "${work}/acme-root.crt" grafana.e2e.test /api/health '"database"'
-grafana_tls=$(ingress_tls monitoring grafana.e2e.test)
-printf '%s' "${grafana_tls}" | jq -e 'length == 1 and .[0].issuer == null' > /dev/null ||
-    fail "Grafana's Ingress asks for a certificate of its own, which the default one makes needless: ${grafana_tls}"
+    set_variable certificates "${dns01}"
+    # One name one level too deep for the default certificate, and one it covers.
+    set_variable headlamp '{"enabled":true,"hostname":"headlamp.apps.e2e.test"}'
+    set_variable monitoring '{"enabled":true,"hostname":"grafana.e2e.test"}'
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+    dns01_copied() {
+        dns01_token=$(wl -n cert-manager get secret kubehenge-dns01 -o jsonpath='{.data.token}' 2> /dev/null) &&
+            dns01_token=$(printf '%s' "${dns01_token}" | base64 -d) && [ "${dns01_token}" = "${tsig}" ]
+    }
+    until_true 300 "the cluster's DNS credential in the workload cluster" dns01_copied
+    # cert-manager looks for its records only at BIND, which alone knows e2e.test.
+    recursive() {
+        wl -n cert-manager get deployment cert-manager -o json 2> /dev/null |
+            jq -e --arg a "--dns01-recursive-nameservers=${dns_ip}:53" '.spec.template.spec.containers[0].args | index($a) and index("--dns01-recursive-nameservers-only=true")' > /dev/null
+    }
+    until_true 300 "cert-manager checks its records at BIND" recursive
+    wl -n cert-manager rollout status deployment/cert-manager --timeout=5m
+    # Issued by Pebble, the default certificate is one its root vouches for; the CA's never is.
+    until_true 900 "an Ingress served over HTTPS with the default certificate from the ACME server" \
+        https_answers "${work}/acme-root.crt" web.e2e.test /hostname '^web$'
+    until_true 120 "an HTTPRoute served over HTTPS with the default certificate from the ACME server" \
+        https_answers "${work}/acme-root.crt" gateway.e2e.test /hostname '^web$'
+    default_certificate
+    wl -n cert-manager get secret kubehenge-ingress-acme > /dev/null
+    until_true 900 "Headlamp served at a name of its own, with a certificate of its own" https_answers "${work}/acme-root.crt" headlamp.apps.e2e.test / '<html'
+    headlamp_tls=$(ingress_tls headlamp headlamp.apps.e2e.test)
+    [ "${headlamp_tls}" = '[{"issuer":"kubehenge-ingress","secrets":["headlamp-tls"]}]' ] ||
+        fail "Headlamp's Ingress asks for ${headlamp_tls}, not its own certificate from kubehenge-ingress"
+    until_true 600 "Grafana served with the default certificate" https_answers "${work}/acme-root.crt" grafana.e2e.test /api/health '"database"'
+    grafana_tls=$(ingress_tls monitoring grafana.e2e.test)
+    printf '%s' "${grafana_tls}" | jq -e 'length == 1 and .[0].issuer == null' > /dev/null ||
+        fail "Grafana's Ingress asks for a certificate of its own, which the default one makes needless: ${grafana_tls}"
 
-step "certificates over ACME's HTTP-01 challenge, through the Gateway"
-# Headless and without a selector, a Service resolves to the endpoints written for it.
-for http01_service in http01 headlamp; do
-    wl -n e2e-certs apply -f - << EOF
+    step "certificates over ACME's HTTP-01 challenge, through the Gateway"
+    # Headless and without a selector, a Service resolves to the endpoints written for it.
+    for http01_service in http01 headlamp; do
+        wl -n e2e-certs apply -f - << EOF
 apiVersion: v1
 kind: Service
 metadata:
@@ -2395,36 +2581,36 @@ ports:
 endpoints:
   - addresses: [${KUBEHENGE_E2E_ENDPOINT}]
 EOF
-done
-# http01_resolved <name>: whether the cluster's DNS and BIND both give the name the API address.
-# shellcheck disable=SC2310 # polled with set -e off, so a failed query is only a retry.
-http01_resolved() {
-    http01_cluster=$(wl -n e2e-acme exec client -- dig +short "$1" A 2>&1) &&
-        http01_bind=$(wl -n e2e-acme exec client -- dig +short "@${dns_ip}" "$1" A 2>&1) &&
-        [ "${http01_cluster}" = "${KUBEHENGE_E2E_ENDPOINT}" ] && [ "${http01_bind}" = "${KUBEHENGE_E2E_ENDPOINT}" ]
-}
-until_true 60 "${http01_host} resolved to the API address" http01_resolved "${http01_host}"
-until_true 60 "${http01_headlamp} resolved to the API address" http01_resolved "${http01_headlamp}"
-# Pebble and cert-manager's self-check fetch the challenge from a pod; any answer at all is Traefik's,
-# a 404 while nothing routes the name.
-# shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-http01_reached() {
-    http01_status=$(wl -n e2e-acme exec client -- curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "http://${http01_host}/" 2> /dev/null) &&
-        [ "${http01_status}" != 000 ]
-}
-until_true 60 "Traefik reached from a pod at ${http01_host} on port 80" http01_reached
-http01=$(jq -cn --arg s "${acme_server}" --rawfile ca "${work}/ca.crt" '{enabled: true, issuer: "acme-http01", acme: {server: $s, caBundle: $ca}}')
-set_variable certificates "${http01}"
-set_variable headlamp "{\"enabled\":true,\"hostname\":\"${http01_headlamp}\"}"
-set_variable monitoring '{"enabled":true}'
-until_true 300 "the default certificate removed" absent wl -n kube-system get certificate.cert-manager.io/kubehenge-ingress
-until_true 300 "its Secret removed with it" absent wl -n kube-system get secret/kubehenge-ingress-tls
-until_true 300 "the DNS credential removed from the workload cluster" absent wl -n cert-manager get secret/kubehenge-dns01
-websecure_gone() { wl -n kube-system get gateway traefik-gateway -o json | jq -e 'all(.spec.listeners[]; .name != "websecure")' > /dev/null; }
-until_true 300 "the Gateway's HTTPS listener removed with the default certificate" websecure_gone
-# On the HTTPS entry point alone, so that the challenge's route is the only one for the name over
-# HTTP. ingress-shim gives it a certificate from the cluster's default issuer.
-wl -n e2e-certs apply -f - << EOF
+    done
+    # http01_resolved <name>: whether the cluster's DNS and BIND both give the name the API address.
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed query is only a retry.
+    http01_resolved() {
+        http01_cluster=$(wl -n e2e-acme exec client -- dig +short "$1" A 2>&1) &&
+            http01_bind=$(wl -n e2e-acme exec client -- dig +short "@${dns_ip}" "$1" A 2>&1) &&
+            [ "${http01_cluster}" = "${KUBEHENGE_E2E_ENDPOINT}" ] && [ "${http01_bind}" = "${KUBEHENGE_E2E_ENDPOINT}" ]
+    }
+    until_true 60 "${http01_host} resolved to the API address" http01_resolved "${http01_host}"
+    until_true 60 "${http01_headlamp} resolved to the API address" http01_resolved "${http01_headlamp}"
+    # Pebble and cert-manager's self-check fetch the challenge from a pod; any answer at all is Traefik's,
+    # a 404 while nothing routes the name.
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    http01_reached() {
+        http01_status=$(wl -n e2e-acme exec client -- curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "http://${http01_host}/" 2> /dev/null) &&
+            [ "${http01_status}" != 000 ]
+    }
+    until_true 60 "Traefik reached from a pod at ${http01_host} on port 80" http01_reached
+    http01=$(jq -cn --arg s "${acme_server}" --rawfile ca "${work}/ca.crt" '{enabled: true, issuer: "acme-http01", acme: {server: $s, caBundle: $ca}}')
+    set_variable certificates "${http01}"
+    set_variable headlamp "{\"enabled\":true,\"hostname\":\"${http01_headlamp}\"}"
+    set_variable monitoring '{"enabled":true}'
+    until_true 300 "the default certificate removed" absent wl -n kube-system get certificate.cert-manager.io/kubehenge-ingress
+    until_true 300 "its Secret removed with it" absent wl -n kube-system get secret/kubehenge-ingress-tls
+    until_true 300 "the DNS credential removed from the workload cluster" absent wl -n cert-manager get secret/kubehenge-dns01
+    websecure_gone() { wl -n kube-system get gateway traefik-gateway -o json | jq -e 'all(.spec.listeners[]; .name != "websecure")' > /dev/null; }
+    until_true 300 "the Gateway's HTTPS listener removed with the default certificate" websecure_gone
+    # On the HTTPS entry point alone, so that the challenge's route is the only one for the name over
+    # HTTP. ingress-shim gives it a certificate from the cluster's default issuer.
+    wl -n e2e-certs apply -f - << EOF
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -2448,23 +2634,23 @@ spec:
                 port:
                   number: 80
 EOF
-until_true 900 "an Ingress served with its own certificate over HTTP-01" https_answers "${work}/acme-root.crt" "${http01_host}" /hostname '^web$'
-until_true 900 "Headlamp served with its own certificate over HTTP-01" https_answers "${work}/acme-root.crt" "${http01_headlamp}" / '<html'
-headlamp_tls=$(ingress_tls headlamp "${http01_headlamp}")
-[ "${headlamp_tls}" = '[{"issuer":"kubehenge-ingress","secrets":["headlamp-tls"]}]' ] ||
-    fail "Headlamp's Ingress asks for ${headlamp_tls}, not its own certificate from kubehenge-ingress"
+    until_true 900 "an Ingress served with its own certificate over HTTP-01" https_answers "${work}/acme-root.crt" "${http01_host}" /hostname '^web$'
+    until_true 900 "Headlamp served with its own certificate over HTTP-01" https_answers "${work}/acme-root.crt" "${http01_headlamp}" / '<html'
+    headlamp_tls=$(ingress_tls headlamp "${http01_headlamp}")
+    [ "${headlamp_tls}" = '[{"issuer":"kubehenge-ingress","secrets":["headlamp-tls"]}]' ] ||
+        fail "Headlamp's Ingress asks for ${headlamp_tls}, not its own certificate from kubehenge-ingress"
 
-step "GitOps with Flux, then Argo CD, from a Git server in the cluster through a deploy key"
-# The repository lives in the cluster itself, so that no outside service is needed. The engine
-# reads it over SSH with the deploy key the controller makes; its host key is given, since the
-# controller, outside the cluster, cannot reach the server to read it.
-ssh-keygen -q -t ed25519 -N '' -C '' -f "${work}/git-host"
-git_host=gitea.e2e-git.svc.cluster.local
-known_hosts="[${git_host}]:2222 $(cut -d' ' -f1,2 "${work}/git-host.pub")"
-git_password=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-new_namespace wl e2e-git
-wl -n e2e-git create secret generic gitea-host-key --from-file=host="${work}/git-host"
-wl -n e2e-git apply -f - << EOF
+    step "GitOps with Flux, then Argo CD, from a Git server in the cluster through a deploy key"
+    # The repository lives in the cluster itself, so that no outside service is needed. The engine
+    # reads it over SSH with the deploy key the controller makes; its host key is given, since the
+    # controller, outside the cluster, cannot reach the server to read it.
+    ssh-keygen -q -t ed25519 -N '' -C '' -f "${work}/git-host"
+    git_host=gitea.e2e-git.svc.cluster.local
+    known_hosts="[${git_host}]:2222 $(cut -d' ' -f1,2 "${work}/git-host.pub")"
+    git_password=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    new_namespace wl e2e-git
+    wl -n e2e-git create secret generic gitea-host-key --from-file=host="${work}/git-host"
+    wl -n e2e-git apply -f - << EOF
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -2517,156 +2703,168 @@ spec:
     - {name: http, port: 3000, targetPort: http}
     - {name: ssh, port: 2222, targetPort: ssh}
 EOF
-wl -n e2e-git rollout status deployment/gitea --timeout=5m
-wl -n e2e-git exec deployment/gitea -- gitea admin user create --username e2e --password "${git_password}" \
-    --email e2e@example.org --admin --must-change-password=false
-agnhost_pod e2e-git client pause
-wl -n e2e-git wait --for=condition=Ready pod/client --timeout=5m
-# git_api <method> <path> [<curl options>]: a call to the Git server's API, as its admin.
-git_api() {
-    git_method=$1 git_path=$2
-    shift 2
-    KUBECONFIG=${work}/workload kubectl -n e2e-git exec client -- curl -sS --fail --max-time 10 -u "e2e:${git_password}" \
-        -H 'Content-Type: application/json' -X "${git_method}" "$@" "http://gitea:3000/api/v1/${git_path}"
-}
-# manifest <revision>: what the repository asks for, base64-encoded as the API takes a file.
-manifest() {
-    printf 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: e2e-gitops\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: synced\n  namespace: e2e-gitops\ndata:\n  revision: "%s"\n' "$1" | base64 -w0
-}
-contents=repos/e2e/clusters/contents/apps/cluster.yaml
-git_api POST user/repos -d '{"name":"clusters","private":true,"auto_init":true,"default_branch":"main"}' > /dev/null
-git_file=$(manifest one)
-git_request=$(jq -cn --arg c "${git_file}" '{content: $c, branch: "main", message: "one"}')
-git_api POST "${contents}" -d "${git_request}" > /dev/null
-# push <revision>: commits the manifest at a new revision.
-push() {
-    git_current=$(git_api GET "${contents}")
-    git_file=$(manifest "$1")
-    git_request=$(printf '%s' "${git_current}" | jq -c --arg c "${git_file}" --arg m "$1" '{content: $c, sha: .sha, branch: "main", message: $m}')
-    git_api PUT "${contents}" -d "${git_request}" > /dev/null
-}
-# synced <revision>: whether the cluster runs the manifest at that revision.
-synced() {
-    # shellcheck disable=SC2310 # wl wraps one kubectl call; a missing ConfigMap is only a retry.
-    synced_revision=$(wl -n e2e-gitops get configmap synced -o jsonpath='{.data.revision}' 2> /dev/null) || return 1
-    [ "${synced_revision}" = "$1" ]
-}
-gitops_value() {
-    jq -cn --arg url "ssh://git@${git_host}:2222/e2e/clusters.git" --arg hosts "${known_hosts}" --arg engine "$1" --argjson on "$2" \
-        '{enabled: $on, engine: $engine, auth: "deployKey", repository: {url: $url, revision: "main", path: "apps"}, knownHosts: $hosts, signIn: {clientSecret: "none"}}'
-}
-gitops=$(gitops_value flux true)
-set_variable gitops "${gitops}"
-# deploy_key: the public half of the deploy key the controller made, once it has made it.
-deploy_key() {
-    encoded_key=$(kubectl -n "${ns}" get secret "${name}-gitops" -o jsonpath='{.data.identity\.pub}' 2> /dev/null) || return 1
-    [ -n "${encoded_key}" ] && printf '%s' "${encoded_key}" | base64 -d
-}
-has_deploy_key() { deploy_key > /dev/null; }
-until_true 300 "the cluster's deploy key made" has_deploy_key
-public_key=$(deploy_key)
-# Read only, as the interface tells its users to add it.
-git_request=$(jq -cn --arg k "${public_key}" '{title: "kubehenge", key: $k, read_only: true}')
-git_api POST repos/e2e/clusters/keys -d "${git_request}" > /dev/null
-until_true 600 "Flux installed by its operator" wl -n flux-system wait --for=condition=Ready fluxinstance/flux --timeout=10s
-until_true 600 "Flux syncs the repository" synced one
-push two
-until_true 300 "Flux syncs a new commit" synced two
-control_plane_use "${work}/workload" flux
-pod_security=$(wl label --dry-run=server --overwrite namespace flux-system pod-security.kubernetes.io/enforce=restricted 2>&1)
-case ${pod_security} in
-    *violate*) fail "Flux's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
-    *) ;;
-esac
+    wl -n e2e-git rollout status deployment/gitea --timeout=5m
+    wl -n e2e-git exec deployment/gitea -- gitea admin user create --username e2e --password "${git_password}" \
+        --email e2e@example.org --admin --must-change-password=false
+    agnhost_pod e2e-git client pause
+    wl -n e2e-git wait --for=condition=Ready pod/client --timeout=5m
+    # git_api <method> <path> [<curl options>]: a call to the Git server's API, as its admin.
+    git_api() {
+        git_method=$1 git_path=$2
+        shift 2
+        KUBECONFIG=${work}/workload kubectl -n e2e-git exec client -- curl -sS --fail --max-time 10 -u "e2e:${git_password}" \
+            -H 'Content-Type: application/json' -X "${git_method}" "$@" "http://gitea:3000/api/v1/${git_path}"
+    }
+    # manifest <revision>: what the repository asks for, base64-encoded as the API takes a file.
+    manifest() {
+        printf 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: e2e-gitops\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: synced\n  namespace: e2e-gitops\ndata:\n  revision: "%s"\n' "$1" | base64 -w0
+    }
+    contents=repos/e2e/clusters/contents/apps/cluster.yaml
+    git_api POST user/repos -d '{"name":"clusters","private":true,"auto_init":true,"default_branch":"main"}' > /dev/null
+    git_file=$(manifest one)
+    git_request=$(jq -cn --arg c "${git_file}" '{content: $c, branch: "main", message: "one"}')
+    git_api POST "${contents}" -d "${git_request}" > /dev/null
+    # push <revision>: commits the manifest at a new revision. The Git server shares the worker with the
+    # GitOps engine being installed, which can hold up its answers past curl's limit, so the commit is
+    # tried until it is there.
+    push() { until_true 120 "commit ${1} pushed to the Git server" pushed "$1"; }
+    # pushed <revision>: whether the manifest is at that revision, committing it if not.
+    pushed() {
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed call is only a retry.
+        git_current=$(git_api GET "${contents}") || return 1
+        git_file=$(manifest "$1")
+        # A try whose answer was lost may have committed it already.
+        git_now=$(printf '%s' "${git_current}" | jq -r '.content // "" | gsub("\\s"; "")')
+        [ "${git_now}" != "${git_file}" ] || return 0
+        git_request=$(printf '%s' "${git_current}" | jq -c --arg c "${git_file}" --arg m "$1" '{content: $c, sha: .sha, branch: "main", message: $m}')
+        git_api PUT "${contents}" -d "${git_request}" > /dev/null
+    }
+    # synced <revision>: whether the cluster runs the manifest at that revision.
+    synced() {
+        # shellcheck disable=SC2310 # wl wraps one kubectl call; a missing ConfigMap is only a retry.
+        synced_revision=$(wl -n e2e-gitops get configmap synced -o jsonpath='{.data.revision}' 2> /dev/null) || return 1
+        [ "${synced_revision}" = "$1" ]
+    }
+    gitops_value() {
+        jq -cn --arg url "ssh://git@${git_host}:2222/e2e/clusters.git" --arg hosts "${known_hosts}" --arg engine "$1" --argjson on "$2" \
+            '{enabled: $on, engine: $engine, auth: "deployKey", repository: {url: $url, revision: "main", path: "apps"}, knownHosts: $hosts, signIn: {clientSecret: "none"}}'
+    }
+    gitops=$(gitops_value flux true)
+    set_variable gitops "${gitops}"
+    # deploy_key: the public half of the deploy key the controller made, once it has made it.
+    deploy_key() {
+        encoded_key=$(kubectl -n "${ns}" get secret "${name}-gitops" -o jsonpath='{.data.identity\.pub}' 2> /dev/null) || return 1
+        [ -n "${encoded_key}" ] && printf '%s' "${encoded_key}" | base64 -d
+    }
+    has_deploy_key() { deploy_key > /dev/null; }
+    until_true 300 "the cluster's deploy key made" has_deploy_key
+    public_key=$(deploy_key)
+    # Read only, as the interface tells its users to add it.
+    git_request=$(jq -cn --arg k "${public_key}" '{title: "kubehenge", key: $k, read_only: true}')
+    git_api POST repos/e2e/clusters/keys -d "${git_request}" > /dev/null
+    until_true 600 "Flux installed by its operator" wl -n flux-system wait --for=condition=Ready fluxinstance/flux --timeout=10s
+    until_true 600 "Flux syncs the repository" synced one
+    push two
+    until_true 300 "Flux syncs a new commit" synced two
+    control_plane_use "${work}/workload" flux
+    pod_security=$(wl label --dry-run=server --overwrite namespace flux-system pod-security.kubernetes.io/enforce=restricted 2>&1)
+    case ${pod_security} in
+        *violate*) fail "Flux's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
+        *) ;;
+    esac
 
-gitops=$(gitops_value argocd true)
-set_variable gitops "${gitops}"
-# Flux goes first and leaves what it synced running, so that the two never fight over it.
-until_true 600 "Flux uninstalled" absent wl get crd kustomizations.kustomize.toolkit.fluxcd.io
-until_true 600 "the Flux Operator removed" absent wl -n flux-system get deployment/flux-operator
-# shellcheck disable=SC2310 # each answers the check.
-absent wl -n flux-system get secret/kubehenge-gitops || fail "Flux's copy of the deploy key outlives Flux"
-# shellcheck disable=SC2310 # each answers the check.
-synced two || fail "what Flux synced went with it"
-until_true 900 "Argo CD available" wl -n argocd wait --for=condition=Available deployment/argocd-server deployment/argocd-repo-server --timeout=10s
-until_true 300 "Argo CD's application controller ready" wl -n argocd rollout status statefulset/argocd-application-controller --timeout=10s
-push three
-until_true 600 "Argo CD syncs a new commit" synced three
-# The sync applies the ConfigMap before Argo CD records the sync's outcome on the application.
-app_settled() {
-    # shellcheck disable=SC2310 # wl wraps one kubectl call; a failed read is only a retry.
-    app_status=$(wl -n argocd get application kubehenge -o jsonpath='{.status.sync.status} {.status.health.status}') || return 1
-    [ "${app_status}" = "Synced Healthy" ]
-}
-until_true 120 "Argo CD's application synced and healthy" app_settled
-admin=$(wl -n argocd get configmap argocd-cm -o jsonpath='{.data.admin\.enabled}')
-[ "${admin}" = false ] || fail "Argo CD's built-in admin is enabled"
-pod_security=$(wl label --dry-run=server --overwrite namespace argocd pod-security.kubernetes.io/enforce=restricted 2>&1)
-case ${pod_security} in
-    *violate*) fail "Argo CD's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
-    *) ;;
-esac
-control_plane_use "${work}/workload" argocd
+    gitops=$(gitops_value argocd true)
+    set_variable gitops "${gitops}"
+    # Flux goes first and leaves what it synced running, so that the two never fight over it.
+    until_true 600 "Flux uninstalled" absent wl get crd kustomizations.kustomize.toolkit.fluxcd.io
+    until_true 600 "the Flux Operator removed" absent wl -n flux-system get deployment/flux-operator
+    # shellcheck disable=SC2310 # each answers the check.
+    absent wl -n flux-system get secret/kubehenge-gitops || fail "Flux's copy of the deploy key outlives Flux"
+    # shellcheck disable=SC2310 # each answers the check.
+    synced two || fail "what Flux synced went with it"
+    until_true 900 "Argo CD available" wl -n argocd wait --for=condition=Available deployment/argocd-server deployment/argocd-repo-server --timeout=10s
+    until_true 300 "Argo CD's application controller ready" wl -n argocd rollout status statefulset/argocd-application-controller --timeout=10s
+    push three
+    until_true 600 "Argo CD syncs a new commit" synced three
+    # The sync applies the ConfigMap before Argo CD records the sync's outcome on the application.
+    app_settled() {
+        # shellcheck disable=SC2310 # wl wraps one kubectl call; a failed read is only a retry.
+        app_status=$(wl -n argocd get application kubehenge -o jsonpath='{.status.sync.status} {.status.health.status}') || return 1
+        [ "${app_status}" = "Synced Healthy" ]
+    }
+    until_true 120 "Argo CD's application synced and healthy" app_settled
+    admin=$(wl -n argocd get configmap argocd-cm -o jsonpath='{.data.admin\.enabled}')
+    [ "${admin}" = false ] || fail "Argo CD's built-in admin is enabled"
+    pod_security=$(wl label --dry-run=server --overwrite namespace argocd pod-security.kubernetes.io/enforce=restricted 2>&1)
+    case ${pod_security} in
+        *violate*) fail "Argo CD's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
+        *) ;;
+    esac
+    control_plane_use "${work}/workload" argocd
 
-# The class's minimum sizes have to carry every add-on at once.
-step "every add-on at once, with nothing restarted"
-found_restarts() {
-    if [ "${KUBEHENGE_E2E_RESTARTS:-fail}" = report ]; then
-        echo "not failing, on a host that starves its guests: $*"
-    else
-        fail "$*"
+    # The class's minimum sizes have to carry every add-on at once.
+    step "every add-on at once, with nothing restarted"
+    found_restarts() {
+        if [ "${KUBEHENGE_E2E_RESTARTS:-fail}" = report ]; then
+            echo "not failing, on a host that starves its guests: $*"
+        else
+            fail "$*"
+        fi
+    }
+    if [ -n "${server_unit}" ]; then
+        # shellcheck disable=SC2310 # a failed count fails the step.
+        servers_after=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
+        [ "${servers_after}" = "${servers_before}" ] ||
+            found_restarts "${server_unit} restarted $((servers_after - servers_before)) times on the control planes while the add-ons were installed"
     fi
-}
-if [ -n "${server_unit}" ]; then
-    # shellcheck disable=SC2310 # a failed count fails the step.
-    servers_after=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
-    [ "${servers_after}" = "${servers_before}" ] ||
-        found_restarts "${server_unit} restarted $((servers_after - servers_before)) times on the control planes while the add-ons were installed"
-fi
-pods_after=$(restarts)
-restarted=$(jq -rn --argjson b "${pods_before}" --argjson a "${pods_after}" '$a | to_entries[] | select(.value > ($b[.key] // 0)) | "\(.key) \(.value - ($b[.key] // 0))"')
-if [ -n "${restarted}" ]; then
-    # Why each container ended, and how starved each node has been of CPU, memory and IO over the
-    # last minutes, tell an add-on's fault from nodes too small for them all.
-    echo "the restarted containers' last ends:"
-    wl get pods -A -o json | jq -r '.items[] | .metadata as $m | .status.containerStatuses[]? |
+    pods_after=$(restarts)
+    restarted=$(jq -rn --argjson b "${pods_before}" --argjson a "${pods_after}" '$a | to_entries[] | select(.value > ($b[.key] // 0)) | "\(.key) \(.value - ($b[.key] // 0))"')
+    if [ -n "${restarted}" ]; then
+        # Why each container ended, and how starved each node has been of CPU, memory and IO over the
+        # last minutes, tell an add-on's fault from nodes too small for them all.
+        echo "the restarted containers' last ends:"
+        wl get pods -A -o json | jq -r '.items[] | .metadata as $m | .status.containerStatuses[]? |
         select(.restartCount > 0) | .lastState.terminated // {} |
         "\($m.namespace)/\($m.name): \(.reason // "?") exit \(.exitCode // "?") at \(.finishedAt // "?")"'
-    for m in $(kubectl -n "${ns}" get machines -o jsonpath='{.items[*].metadata.name}'); do
-        echo "pressure on ${m}:"
-        if [ "${distribution}" = talos ]; then
-            pressure_address=$(machine_address "${m}")
-            # shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
-            talos_read "${pressure_address}" /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io ||
-                echo "  cannot read it"
-        else
-            # shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
-            on_machines "${m}" "grep -H . /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io" ||
-                echo "  cannot read it"
-        fi
-    done
-    found_restarts "containers restarted while the add-ons were installed (pod, restarts): ${restarted}"
-fi
-pod_memory "${work}/workload"
-echo "CPU requested with every add-on on:"
-pod_cpu "${work}/workload"
+        for m in $(kubectl -n "${ns}" get machines -o jsonpath='{.items[*].metadata.name}'); do
+            echo "pressure on ${m}:"
+            if [ "${distribution}" = talos ]; then
+                pressure_address=$(machine_address "${m}")
+                # shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
+                talos_read "${pressure_address}" /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io ||
+                    echo "  cannot read it"
+            else
+                # shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
+                on_machines "${m}" "grep -H . /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io" ||
+                    echo "  cannot read it"
+            fi
+        done
+        found_restarts "containers restarted while the add-ons were installed (pod, restarts): ${restarted}"
+    fi
+    pod_memory "${work}/workload"
+    echo "CPU requested with every add-on on:"
+    pod_cpu "${work}/workload"
 
-step "every add-on's image named by digest"
-# Every pod outside kube-system, which only the add-ons, their operators and these tests create,
-# and in kube-system the workloads of the releases Kubehenge installs.
-releases=$(kubectl -n "${ns}" get helmreleaseproxies -l "cluster.x-k8s.io/cluster-name=${name}" -o json | jq -c '[.items[].spec.releaseName]')
-images=$(wl get pods -A -o json | jq -r '.items[] | select(.metadata.namespace != "kube-system") | .metadata as $m |
+    step "every add-on's image named by digest"
+    # Every pod outside kube-system, which only the add-ons, their operators and these tests create,
+    # and in kube-system the workloads of the releases Kubehenge installs.
+    releases=$(kubectl -n "${ns}" get helmreleaseproxies -l "cluster.x-k8s.io/cluster-name=${name}" -o json | jq -c '[.items[].spec.releaseName]')
+    images=$(wl get pods -A -o json | jq -r '.items[] | select(.metadata.namespace != "kube-system") | .metadata as $m |
     (.spec.initContainers // [])[], .spec.containers[] | "\($m.namespace)/\($m.name) \(.image)"')
-system_images=$(wl -n kube-system get deployments,daemonsets,statefulsets -o json | jq -r --argjson r "${releases}" '.items[] |
+    system_images=$(wl -n kube-system get deployments,daemonsets,statefulsets -o json | jq -r --argjson r "${releases}" '.items[] |
     select(.metadata.annotations["meta.helm.sh/release-name"] as $n | $r | index($n)) | .metadata as $m |
     (.spec.template.spec.initContainers // [])[], .spec.template.spec.containers[] | "kube-system/\($m.name) \(.image)"')
-unpinned=$(printf '%s\n%s\n' "${images}" "${system_images}" | grep -v -e '@sha256:[0-9a-f]\{64\}$' -e '^$' | sort -u)
-[ -z "${unpinned}" ] || fail "images named without a digest (pod, image): ${unpinned}"
+    unpinned=$(printf '%s\n%s\n' "${images}" "${system_images}" | grep -v -e '@sha256:[0-9a-f]\{64\}$' -e '^$' | sort -u)
+    [ -z "${unpinned}" ] || fail "images named without a digest (pod, image): ${unpinned}"
+fi
 
 if [ "${distribution}" = talos ]; then
-    # With every add-on on, as a cluster in use is upgraded: the controller drains each node, has it
-    # reboot into the new release and lets it back, the control plane first, on the same machines.
-    step "Talos upgraded in place to ${talos_to}, node by node, with every add-on on"
+    # With every add-on on, unless they are left out, as a cluster in use is upgraded: the controller
+    # drains each node, has it reboot into the new release and lets it back, the control plane first,
+    # on the same machines.
+    with_addons=', with every add-on on'
+    [ "${part}" != lifecycle ] || with_addons=
+    step "Talos upgraded in place to ${talos_to}, node by node${with_addons}"
     machine_names() { kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name}" -o json | jq -c '[.items[].metadata.name] | sort'; }
     talos_machines_before=$(machine_names)
     talos_since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -2739,249 +2937,255 @@ if [ "${distribution}" = talos ]; then
     }
     until_true 900 "every add-on's release deployed after the upgrade" releases_deployed
     until_true 900 "every workload ready after the upgrade" workloads_ready
-    until_true 600 "monitoring reaches every component after the upgrade" all_up
+    if [ "${part}" != lifecycle ]; then
+        until_true 600 "monitoring reaches every component after the upgrade" all_up
+    fi
     wl get nodes -o wide
 fi
 
-step "every add-on switched off at once"
-# Removing them all at once is the control planes' heaviest moment.
-control_plane_record "${work}/workload" &
-recorder_pid=$!
-set_variable headlamp '{"enabled":false}'
-# Logs go first: they need monitoring, which is refused off while they are on.
-# shellcheck disable=SC2310 # the refusal is the answer looked for.
-set_variable monitoring '{"enabled":false}' > /dev/null 2>&1 && fail "monitoring was switched off under logs"
-kill "${grafana_pid}" 2> /dev/null || true
-grafana_pid=
-set_variable logs '{"enabled":false,"collector":"node","retentionDays":7,"sizeGiB":10}'
-set_variable monitoring '{"enabled":false}'
-set_variable podSecurity '{"admission":"restricted","kyverno":"off"}'
-set_variable istio '{"enabled":false}'
-set_variable backups "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
-set_variable certificates '{"enabled":false}'
-gitops=$(gitops_value argocd false)
-set_variable gitops "${gitops}"
-until_true 600 "Headlamp removed" absent wl -n headlamp get deployment/headlamp
-until_true 600 "Loki removed" absent wl -n logging get statefulset/loki
-until_true 300 "Alloy removed" absent wl -n logging get deployment/alloy
-until_true 300 "Alloy removed from the nodes" absent wl -n logging-node get daemonset/alloy-node
-# shellcheck disable=SC2310 # a volume that cannot be read fails the step.
-wl -n logging get pvc/loki-storage > /dev/null || fail "Loki's volume went with logs"
-until_true 900 "monitoring removed" absent wl -n monitoring get "${prometheus}"
-until_true 300 "metrics proxies removed" absent wl -n kube-system get daemonset/kubehenge-etcd-metrics
-until_true 900 "Kyverno removed" absent wl -n kyverno get deployment/kyverno-admission-controller
-# shellcheck disable=SC2310 # the admission is the answer looked for.
-privileged_pod e2e-privileged > /dev/null || fail "Kyverno's policies outlive Kyverno"
-wl delete namespace e2e-privileged --wait --timeout=5m
-until_true 900 "Istio removed" absent wl -n istio-node get daemonset/ztunnel
-until_true 300 "istiod removed" absent wl -n istio-system get deployment/istiod
-enrolled=$(wl get namespace e2e-mesh -o jsonpath='{.metadata.labels.istio\.io/dataplane-mode}')
-[ -z "${enrolled}" ] || fail "e2e-mesh is still enrolled in a mesh that has gone"
-# Taken out of the mesh first, its pods reach each other and the rest without ztunnel.
-until_true 120 "a client outside the old mesh reaches the server" fetches e2e-plain
-until_true 60 "a client in the old mesh reaches the server" fetches e2e-mesh
-wl delete namespace e2e-mesh e2e-plain --wait --timeout=5m
-until_true 900 "Velero removed" absent wl get namespace velero
-crds=$(wl get customresourcedefinitions -o name)
-velero_crds=$(printf '%s\n' "${crds}" | grep '\.velero\.io$' || true)
-[ -z "${velero_crds}" ] || fail "Velero's resource definitions outlive it: ${velero_crds}"
-until_true 300 "the interface's identities in the cluster removed" absent kubectl -n "${ns}" get secret "${name}-backups"
-# shellcheck disable=SC2310 # absent's answer is what is checked.
-absent kubectl -n "${ns}" get secret "${name}-restores" || fail "the restores identity outlives backups"
-# The keys stay, so that the backups, which stay in the store, can be read again.
-kubectl -n "${ns}" get secret "${name}-backup-keys" > /dev/null || fail "the backup keys went with Velero"
-# shellcheck disable=SC2310 # a failed read fails the test with the reason.
-s3 -o /dev/null "${tarball}" -H 'x-amz-server-side-encryption-customer-algorithm: AES256' \
-    -H "x-amz-server-side-encryption-customer-key: ${sse_key}" -H "x-amz-server-side-encryption-customer-key-MD5: ${sse_md5}" ||
-    fail "the backup went from the store with Velero"
-kill "${recorder_pid}" 2> /dev/null || true
-recorder_pid=
-kill "${s3_pid}"
-s3_pid=
-# removed <kubectl get...>: whether the object is gone, or its kind with it, as cert-manager's own
-# kinds go once nothing needs cert-manager.
-removed() {
-    # shellcheck disable=SC2310 # the absence is the answer looked for.
-    absent "$@" && return
-    removed_out=$("$@" -o name 2>&1) && return 1
-    case ${removed_out} in
-        *"the server doesn't have a resource type"*) ;;
-        *) return 1 ;;
-    esac
-}
-until_true 300 "the certificates' issuer removed" removed wl get clusterissuers.cert-manager.io/kubehenge-ingress
-until_true 300 "the default certificate removed" removed wl -n kube-system get certificates.cert-manager.io/kubehenge-ingress
-until_true 300 "the DNS credential removed from the workload cluster" absent wl -n cert-manager get secret/kubehenge-dns01
-# shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
-unmarked() {
-    marked=$(kubectl -n "${ns}" get cluster "${name}" -o json | jq '.metadata.annotations // {} | has("kubehenge.dev/certificates")') &&
-        [ "${marked}" = false ]
-}
-until_true 300 "the Cluster no longer marked as having certificates" unmarked
-until_true 900 "cert-manager removed, with nothing left that needs it" absent wl -n cert-manager get deployment/cert-manager
-# The CA stays while the cluster lives, so that certificates switched on again keep it.
-kubectl -n "${ns}" get secret "${ingress_ca}" > /dev/null || fail "the cluster's CA went with its certificates"
-wl delete namespace e2e-certs e2e-acme --wait --timeout=5m
-until_true 600 "Argo CD removed" absent wl -n argocd get deployment/argocd-server
-until_true 300 "Argo CD's CRDs removed" absent wl get crd applications.argoproj.io
-# shellcheck disable=SC2310 # each answers the check.
-absent wl -n argocd get secret/kubehenge-repository || fail "Argo CD's copy of the deploy key outlives Argo CD"
-# shellcheck disable=SC2310 # each answers the check.
-synced three || fail "what Argo CD synced went with it"
-wl delete namespace e2e-gitops e2e-git --wait --timeout=5m
-
-step "the load balancer switched off"
-servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
-set_variable loadBalancer "{\"enabled\":false,\"implementation\":\"${load_balancer}\",\"addresses\":${load_balancer_addresses}}"
-case ${load_balancer} in
-    kube-vip)
-        until_true 600 "kube-vip's Service announcer removed" absent wl -n kube-system get daemonset/kube-vip
-        until_true 300 "kube-vip's cloud provider removed" absent wl -n kube-system get deployment/kube-vip-cloud-provider
-        ;;
-    *) until_true 600 "MetalLB removed" absent wl -n metallb-system get daemonset/metallb-speaker ;;
-esac
-if [ "${distribution}" = k3s ]; then
-    # Switching servicelb back on replaces the control planes, whose servicelb then answers for the
-    # Service on every node's own address.
-    replaced() {
-        kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o json |
-            jq -e --arg old " ${servers} " '(.items | length > 0) and all(.items[]; .metadata.name as $name |
-                .status.phase == "Running" and (($old | contains(" " + $name + " ")) | not))' > /dev/null
-    }
-    until_true 1800 "the control planes replaced" replaced
-    kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
-    on_node() {
-        # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-        lb_ips || return 1
-        node_addresses=$(wl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}')
-        case " ${node_addresses} " in
-            *" ${lb_ip%% *} "*) answers "${lb_ip%% *}" ;;
+if [ "${part}" != lifecycle ]; then
+    step "every add-on switched off at once"
+    # Removing them all at once is the control planes' heaviest moment.
+    control_plane_record "${work}/workload" &
+    recorder_pid=$!
+    set_variable headlamp '{"enabled":false}'
+    # Logs go first: they need monitoring, which is refused off while they are on.
+    # shellcheck disable=SC2310 # the refusal is the answer looked for.
+    set_variable monitoring '{"enabled":false}' > /dev/null 2>&1 && fail "monitoring was switched off under logs"
+    kill "${grafana_pid}" 2> /dev/null || true
+    grafana_pid=
+    set_variable logs '{"enabled":false,"collector":"node","retentionDays":7,"sizeGiB":10}'
+    set_variable monitoring '{"enabled":false}'
+    set_variable podSecurity '{"admission":"restricted","kyverno":"off"}'
+    set_variable istio '{"enabled":false}'
+    set_variable backups "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
+    set_variable certificates '{"enabled":false}'
+    gitops=$(gitops_value argocd false)
+    set_variable gitops "${gitops}"
+    until_true 600 "Headlamp removed" absent wl -n headlamp get deployment/headlamp
+    until_true 600 "Loki removed" absent wl -n logging get statefulset/loki
+    until_true 300 "Alloy removed" absent wl -n logging get deployment/alloy
+    until_true 300 "Alloy removed from the nodes" absent wl -n logging-node get daemonset/alloy-node
+    # shellcheck disable=SC2310 # a volume that cannot be read fails the step.
+    wl -n logging get pvc/loki-storage > /dev/null || fail "Loki's volume went with logs"
+    until_true 900 "monitoring removed" absent wl -n monitoring get "${prometheus}"
+    until_true 300 "metrics proxies removed" absent wl -n kube-system get daemonset/kubehenge-etcd-metrics
+    until_true 900 "Kyverno removed" absent wl -n kyverno get deployment/kyverno-admission-controller
+    # shellcheck disable=SC2310 # the admission is the answer looked for.
+    privileged_pod e2e-privileged > /dev/null || fail "Kyverno's policies outlive Kyverno"
+    wl delete namespace e2e-privileged --wait --timeout=5m
+    until_true 900 "Istio removed" absent wl -n istio-node get daemonset/ztunnel
+    until_true 300 "istiod removed" absent wl -n istio-system get deployment/istiod
+    enrolled=$(wl get namespace e2e-mesh -o jsonpath='{.metadata.labels.istio\.io/dataplane-mode}')
+    [ -z "${enrolled}" ] || fail "e2e-mesh is still enrolled in a mesh that has gone"
+    # Taken out of the mesh first, its pods reach each other and the rest without ztunnel.
+    until_true 120 "a client outside the old mesh reaches the server" fetches e2e-plain
+    until_true 60 "a client in the old mesh reaches the server" fetches e2e-mesh
+    wl delete namespace e2e-mesh e2e-plain --wait --timeout=5m
+    until_true 900 "Velero removed" absent wl get namespace velero
+    crds=$(wl get customresourcedefinitions -o name)
+    velero_crds=$(printf '%s\n' "${crds}" | grep '\.velero\.io$' || true)
+    [ -z "${velero_crds}" ] || fail "Velero's resource definitions outlive it: ${velero_crds}"
+    until_true 300 "the interface's identities in the cluster removed" absent kubectl -n "${ns}" get secret "${name}-backups"
+    # shellcheck disable=SC2310 # absent's answer is what is checked.
+    absent kubectl -n "${ns}" get secret "${name}-restores" || fail "the restores identity outlives backups"
+    # The keys stay, so that the backups, which stay in the store, can be read again.
+    kubectl -n "${ns}" get secret "${name}-backup-keys" > /dev/null || fail "the backup keys went with Velero"
+    # shellcheck disable=SC2310 # a failed read fails the test with the reason.
+    s3 -o /dev/null "${tarball}" -H 'x-amz-server-side-encryption-customer-algorithm: AES256' \
+        -H "x-amz-server-side-encryption-customer-key: ${sse_key}" -H "x-amz-server-side-encryption-customer-key-MD5: ${sse_md5}" ||
+        fail "the backup went from the store with Velero"
+    kill "${recorder_pid}" 2> /dev/null || true
+    recorder_pid=
+    kill "${s3_pid}"
+    s3_pid=
+    # removed <kubectl get...>: whether the object is gone, or its kind with it, as cert-manager's own
+    # kinds go once nothing needs cert-manager.
+    removed() {
+        # shellcheck disable=SC2310 # the absence is the answer looked for.
+        absent "$@" && return
+        removed_out=$("$@" -o name 2>&1) && return 1
+        case ${removed_out} in
+            *"the server doesn't have a resource type"*) ;;
             *) return 1 ;;
         esac
     }
-    until_true 600 "servicelb answers for the Service on a node's address" on_node
+    until_true 300 "the certificates' issuer removed" removed wl get clusterissuers.cert-manager.io/kubehenge-ingress
+    until_true 300 "the default certificate removed" removed wl -n kube-system get certificates.cert-manager.io/kubehenge-ingress
+    until_true 300 "the DNS credential removed from the workload cluster" absent wl -n cert-manager get secret/kubehenge-dns01
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+    unmarked() {
+        marked=$(kubectl -n "${ns}" get cluster "${name}" -o json | jq '.metadata.annotations // {} | has("kubehenge.dev/certificates")') &&
+            [ "${marked}" = false ]
+    }
+    until_true 300 "the Cluster no longer marked as having certificates" unmarked
+    until_true 900 "cert-manager removed, with nothing left that needs it" absent wl -n cert-manager get deployment/cert-manager
+    # The CA stays while the cluster lives, so that certificates switched on again keep it.
+    kubectl -n "${ns}" get secret "${ingress_ca}" > /dev/null || fail "the cluster's CA went with its certificates"
+    wl delete namespace e2e-certs e2e-acme --wait --timeout=5m
+    until_true 600 "Argo CD removed" absent wl -n argocd get deployment/argocd-server
+    until_true 300 "Argo CD's CRDs removed" absent wl get crd applications.argoproj.io
+    # shellcheck disable=SC2310 # each answers the check.
+    absent wl -n argocd get secret/kubehenge-repository || fail "Argo CD's copy of the deploy key outlives Argo CD"
+    # shellcheck disable=SC2310 # each answers the check.
+    synced three || fail "what Argo CD synced went with it"
+    wl delete namespace e2e-gitops e2e-git --wait --timeout=5m
 fi
-wl delete namespace e2e-lb --wait --timeout=5m
 
-workers() {
-    kubectl -n "${ns}" patch "cluster/${name}" --type=json \
-        -p "[{\"op\":\"replace\",\"path\":\"/spec/topology/workers/machineDeployments/0/replicas\",\"value\":$1}]"
-    until_true 1800 "$1 worker nodes ready" sh -c "[ \"\$(KUBECONFIG=${work}/workload kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o json | jq '[.items[] | select(any(.status.conditions[]; .type == \"Ready\" and .status == \"True\"))] | length')\" = $1 ] && [ \"\$(kubectl -n ${ns} get machines -l cluster.x-k8s.io/deployment-name -o name | wc -l)\" = $1 ]"
-}
-step "scale workers to 2"
-workers 2
-step "scale workers back to 1"
-workers 1
+if [ "${part}" != addons ]; then
+    step "the load balancer switched off"
+    servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+    set_variable loadBalancer "{\"enabled\":false,\"implementation\":\"${load_balancer}\",\"addresses\":${load_balancer_addresses}}"
+    case ${load_balancer} in
+        kube-vip)
+            until_true 600 "kube-vip's Service announcer removed" absent wl -n kube-system get daemonset/kube-vip
+            until_true 300 "kube-vip's cloud provider removed" absent wl -n kube-system get deployment/kube-vip-cloud-provider
+            ;;
+        *) until_true 600 "MetalLB removed" absent wl -n metallb-system get daemonset/metallb-speaker ;;
+    esac
+    if [ "${distribution}" = k3s ]; then
+        # Switching servicelb back on replaces the control planes, whose servicelb then answers for the
+        # Service on every node's own address.
+        replaced() {
+            kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o json |
+                jq -e --arg old " ${servers} " '(.items | length > 0) and all(.items[]; .metadata.name as $name |
+                .status.phase == "Running" and (($old | contains(" " + $name + " ")) | not))' > /dev/null
+        }
+        until_true 1800 "the control planes replaced" replaced
+        kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
+        on_node() {
+            # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+            lb_ips || return 1
+            node_addresses=$(wl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}')
+            case " ${node_addresses} " in
+                *" ${lb_ip%% *} "*) answers "${lb_ip%% *}" ;;
+                *) return 1 ;;
+            esac
+        }
+        until_true 600 "servicelb answers for the Service on a node's address" on_node
+    fi
+    wl delete namespace e2e-lb --wait --timeout=5m
 
-step "upgrade to ${upgrade}"
-if [ "${distribution}" = talos ]; then
-    # A worker the scaling made booted the release before, and is upgraded in place first.
-    until_true 2700 "every node on Talos ${talos_to} before the upgrade" talos_upgraded
-    talos_last=$(talos_annotation talos-upgraded)
+    workers() {
+        kubectl -n "${ns}" patch "cluster/${name}" --type=json \
+            -p "[{\"op\":\"replace\",\"path\":\"/spec/topology/workers/machineDeployments/0/replicas\",\"value\":$1}]"
+        until_true 1800 "$1 worker nodes ready" sh -c "[ \"\$(KUBECONFIG=${work}/workload kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o json | jq '[.items[] | select(any(.status.conditions[]; .type == \"Ready\" and .status == \"True\"))] | length')\" = $1 ] && [ \"\$(kubectl -n ${ns} get machines -l cluster.x-k8s.io/deployment-name -o name | wc -l)\" = $1 ]"
+    }
+    step "scale workers to 2"
+    workers 2
+    step "scale workers back to 1"
+    workers 1
+
+    step "upgrade to ${upgrade}"
+    if [ "${distribution}" = talos ]; then
+        # A worker the scaling made booted the release before, and is upgraded in place first.
+        until_true 2700 "every node on Talos ${talos_to} before the upgrade" talos_upgraded
+        talos_last=$(talos_annotation talos-upgraded)
+    fi
+    old_servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+    # The cluster has one control plane, so kubectl hears from the admission webhook what the
+    # interface's plan says before the same change.
+    kubectl -n "${ns}" patch "cluster/${name}" --type=merge -p "{\"spec\":{\"topology\":{\"version\":\"${upgrade}\"}}}" 2> "${work}/upgrade-warnings"
+    cat "${work}/upgrade-warnings" >&2
+    grep -q "Replaces the only control plane" "${work}/upgrade-warnings" ||
+        fail "kubectl was not warned that the upgrade replaces the cluster's only control plane"
+    roll_stalled() {
+        kubectl -n "${ns}" get "cluster/${name}" -o json |
+            jq -e --arg r "$1" '.status.conditions // [] | any(.type == "ControlPlaneRollStalled" and .status == "True" and .reason == $r)' > /dev/null
+    }
+    case ${class} in
+        kubehenge-rke2 | kubehenge-k3s)
+            # The first new server cannot reach the cluster's API at first, as when the old server is
+            # down while it joins, so its service's first start fails. The service keeps retrying and the
+            # roll still finishes. k3s's bootstrap then leaves cloud-init in error, which the class does
+            # not fail the machine on; RKE2's carries on past the failed start and ends cloud-init done.
+            # Kept from the old servers' side, the block is in place before the new one boots; RKE2's
+            # servers join through 9345, k3s's through 6443.
+            case ${class} in
+                kubehenge-rke2) service=rke2-server expected='done' ;;
+                *) service=k3s expected=error ;;
+            esac
+            joining='' joining_address='' joining_vmid='' joining_node='' state=''
+            found_joining() {
+                joining=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o json |
+                    jq -r --arg old " ${old_servers} " '[.items[] | .metadata.name as $n | select($old | contains(" " + $n + " ") | not)][0].spec.infrastructureRef.name // empty')
+                [ -n "${joining}" ]
+            }
+            found_address() {
+                joining_address=$(kubectl -n "${ns}" get ipaddresses.ipam.cluster.x-k8s.io -o json |
+                    jq -r --arg m "${joining}" '[.items[] | select(.spec.claimRef.name | startswith($m))][0].spec.address // empty')
+                [ -n "${joining_address}" ]
+            }
+            found_vm() {
+                joining_vmid=$(kubectl -n "${ns}" get proxmoxmachine "${joining}" -o jsonpath='{.spec.virtualMachineID}')
+                joining_node=$(kubectl -n "${ns}" get proxmoxmachine "${joining}" -o jsonpath='{.status.proxmoxNode}')
+                [ -n "${joining_vmid}" ] && [ -n "${joining_node}" ]
+            }
+            cloud_init_ended() {
+                # shellcheck disable=SC2310 # polled until cloud-init has ended; a failed attempt is tried again.
+                state=$(guest "${joining_node}" "${joining_vmid}" 'cloud-init status 2>&1 || true' 2> /dev/null | sed -n 's/^status: //p') || return 1
+                [ -n "${state}" ] && [ "${state}" != running ]
+            }
+            until_true 900 "a new control-plane machine" found_joining
+            until_true 900 "${joining}'s address" found_address
+            on_machines "${old_servers}" "nft add table inet e2e-join && nft add chain inet e2e-join in '{ type filter hook input priority 0; }' && nft add rule inet e2e-join in ip saddr ${joining_address} tcp dport '{ 6443, 9345 }' reject with tcp reset"
+            printf 'the old servers refuse %s (%s)\n' "${joining_address}" "${joining}"
+            until_true 900 "${joining}'s VM" found_vm
+            until_true 1200 "cloud-init finished on ${joining}" cloud_init_ended
+            [ "${state}" = "${expected}" ] || fail "cloud-init on ${joining} ended ${state}, not ${expected}, with the cluster's API refusing it"
+            # shellcheck disable=SC2310 # guest returns the command's status, which is the one tested.
+            guest "${joining_node}" "${joining_vmid}" "journalctl -u ${service}.service --no-pager | grep -q 'Failed to start'" > /dev/null ||
+                fail "${service} on ${joining} started although the cluster's API refused it"
+            # The old server still serves the API, so the controller says the new machine holds the
+            # roll up, rather than that the cluster is down.
+            until_true 300 "the roll reported stalled on the Cluster" roll_stalled SuccessorNotReady
+            kubectl -n "${ns}" get "cluster/${name}" -o json | jq -r '.status.conditions[] | select(.type == "ControlPlaneRollStalled") | .message'
+            on_machines "${old_servers}" 'nft delete table inet e2e-join'
+            printf '%s on %s failed to start and cloud-init ended %s; the old servers accept it again\n' "${service}" "${joining}" "${state}"
+            ;;
+        # A failed kubeadm join is not retried, so kubeadm's upgrade runs without the refused join.
+        *) ;;
+    esac
+    kubelet=${upgrade%%+*}
+    until_true 3600 "every node on ${kubelet}" sh -c "KUBECONFIG=${work}/workload kubectl get nodes -o json | jq -e --arg v '${kubelet}' '(.items | length == 2) and (.items | all(.status.nodeInfo.kubeletVersion | startswith(\$v))) and (.items | all(any(.status.conditions[]; .type == \"Ready\" and .status == \"True\")))' >/dev/null"
+    kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
+    wl get nodes -o wide
+    case ${class} in
+        kubehenge-rke2 | kubehenge-k3s)
+            roll_resumed() {
+                # shellcheck disable=SC2310 # the condition's absence is what is waited for.
+                ! roll_stalled SuccessorNotReady && kubectl -n "${ns}" get events -o json |
+                    jq -e --arg n "${name}" 'any(.items[]; .reason == "ControlPlaneRollResumed" and .involvedObject.name == $n)' > /dev/null
+            }
+            until_true 300 "the stalled roll cleared, with an event saying so" roll_resumed
+            ;;
+        *) ;;
+    esac
+    if [ "${distribution}" = talos ]; then
+        # The upgrade replaced every machine, so its new ones were cloned from the release the nodes
+        # run and need no upgrade in place.
+        talos_image=$(talos_annotation talos-image)
+        [ "${talos_image}" = "${talos_to}" ] || fail "the upgrade's machines boot Talos '${talos_image}', not ${talos_to}"
+        until_true 600 "every machine on Talos ${talos_to} after the upgrade" machines_on_talos "${talos_to}"
+        talos_now=$(talos_annotation talos-upgraded)
+        [ "${talos_now}" = "${talos_last}" ] || fail "a machine the upgrade made was upgraded in place: ${talos_now}"
+    fi
+    # The new control-plane nodes have to carry the authentication configuration too.
+    check_sign_in
+    # The distribution's own Gateway API chart takes over what its Traefik CRD chart shipped before,
+    # and Kubehenge's policy, without Kubehenge applying anything beside it.
+    if [ -n "${gateway_api_chart}" ]; then
+        until_true 300 "${gateway_api_chart} holds the Gateway API after the upgrade" gateway_api_chart_holds
+    fi
+    until_true 300 "the Gateway API's objects after the upgrade, each held once" gateway_api_held
+    until_true 300 "Traefik's Gateway is programmed after the upgrade" gateway_programmed
 fi
-old_servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
-# The cluster has one control plane, so kubectl hears from the admission webhook what the
-# interface's plan says before the same change.
-kubectl -n "${ns}" patch "cluster/${name}" --type=merge -p "{\"spec\":{\"topology\":{\"version\":\"${upgrade}\"}}}" 2> "${work}/upgrade-warnings"
-cat "${work}/upgrade-warnings" >&2
-grep -q "Replaces the only control plane" "${work}/upgrade-warnings" ||
-    fail "kubectl was not warned that the upgrade replaces the cluster's only control plane"
-roll_stalled() {
-    kubectl -n "${ns}" get "cluster/${name}" -o json |
-        jq -e --arg r "$1" '.status.conditions // [] | any(.type == "ControlPlaneRollStalled" and .status == "True" and .reason == $r)' > /dev/null
-}
-case ${class} in
-    kubehenge-rke2 | kubehenge-k3s)
-        # The first new server cannot reach the cluster's API at first, as when the old server is
-        # down while it joins, so its service's first start fails. The service keeps retrying and the
-        # roll still finishes. k3s's bootstrap then leaves cloud-init in error, which the class does
-        # not fail the machine on; RKE2's carries on past the failed start and ends cloud-init done.
-        # Kept from the old servers' side, the block is in place before the new one boots; RKE2's
-        # servers join through 9345, k3s's through 6443.
-        case ${class} in
-            kubehenge-rke2) service=rke2-server expected='done' ;;
-            *) service=k3s expected=error ;;
-        esac
-        joining='' joining_address='' joining_vmid='' joining_node='' state=''
-        found_joining() {
-            joining=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o json |
-                jq -r --arg old " ${old_servers} " '[.items[] | .metadata.name as $n | select($old | contains(" " + $n + " ") | not)][0].spec.infrastructureRef.name // empty')
-            [ -n "${joining}" ]
-        }
-        found_address() {
-            joining_address=$(kubectl -n "${ns}" get ipaddresses.ipam.cluster.x-k8s.io -o json |
-                jq -r --arg m "${joining}" '[.items[] | select(.spec.claimRef.name | startswith($m))][0].spec.address // empty')
-            [ -n "${joining_address}" ]
-        }
-        found_vm() {
-            joining_vmid=$(kubectl -n "${ns}" get proxmoxmachine "${joining}" -o jsonpath='{.spec.virtualMachineID}')
-            joining_node=$(kubectl -n "${ns}" get proxmoxmachine "${joining}" -o jsonpath='{.status.proxmoxNode}')
-            [ -n "${joining_vmid}" ] && [ -n "${joining_node}" ]
-        }
-        cloud_init_ended() {
-            # shellcheck disable=SC2310 # polled until cloud-init has ended; a failed attempt is tried again.
-            state=$(guest "${joining_node}" "${joining_vmid}" 'cloud-init status 2>&1 || true' 2> /dev/null | sed -n 's/^status: //p') || return 1
-            [ -n "${state}" ] && [ "${state}" != running ]
-        }
-        until_true 900 "a new control-plane machine" found_joining
-        until_true 900 "${joining}'s address" found_address
-        on_machines "${old_servers}" "nft add table inet e2e-join && nft add chain inet e2e-join in '{ type filter hook input priority 0; }' && nft add rule inet e2e-join in ip saddr ${joining_address} tcp dport '{ 6443, 9345 }' reject with tcp reset"
-        printf 'the old servers refuse %s (%s)\n' "${joining_address}" "${joining}"
-        until_true 900 "${joining}'s VM" found_vm
-        until_true 1200 "cloud-init finished on ${joining}" cloud_init_ended
-        [ "${state}" = "${expected}" ] || fail "cloud-init on ${joining} ended ${state}, not ${expected}, with the cluster's API refusing it"
-        # shellcheck disable=SC2310 # guest returns the command's status, which is the one tested.
-        guest "${joining_node}" "${joining_vmid}" "journalctl -u ${service}.service --no-pager | grep -q 'Failed to start'" > /dev/null ||
-            fail "${service} on ${joining} started although the cluster's API refused it"
-        # The old server still serves the API, so the controller says the new machine holds the
-        # roll up, rather than that the cluster is down.
-        until_true 300 "the roll reported stalled on the Cluster" roll_stalled SuccessorNotReady
-        kubectl -n "${ns}" get "cluster/${name}" -o json | jq -r '.status.conditions[] | select(.type == "ControlPlaneRollStalled") | .message'
-        on_machines "${old_servers}" 'nft delete table inet e2e-join'
-        printf '%s on %s failed to start and cloud-init ended %s; the old servers accept it again\n' "${service}" "${joining}" "${state}"
-        ;;
-    # A failed kubeadm join is not retried, so kubeadm's upgrade runs without the refused join.
-    *) ;;
-esac
-kubelet=${upgrade%%+*}
-until_true 3600 "every node on ${kubelet}" sh -c "KUBECONFIG=${work}/workload kubectl get nodes -o json | jq -e --arg v '${kubelet}' '(.items | length == 2) and (.items | all(.status.nodeInfo.kubeletVersion | startswith(\$v))) and (.items | all(any(.status.conditions[]; .type == \"Ready\" and .status == \"True\")))' >/dev/null"
-kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
-wl get nodes -o wide
-case ${class} in
-    kubehenge-rke2 | kubehenge-k3s)
-        roll_resumed() {
-            # shellcheck disable=SC2310 # the condition's absence is what is waited for.
-            ! roll_stalled SuccessorNotReady && kubectl -n "${ns}" get events -o json |
-                jq -e --arg n "${name}" 'any(.items[]; .reason == "ControlPlaneRollResumed" and .involvedObject.name == $n)' > /dev/null
-        }
-        until_true 300 "the stalled roll cleared, with an event saying so" roll_resumed
-        ;;
-    *) ;;
-esac
-if [ "${distribution}" = talos ]; then
-    # The upgrade replaced every machine, so its new ones were cloned from the release the nodes
-    # run and need no upgrade in place.
-    talos_image=$(talos_annotation talos-image)
-    [ "${talos_image}" = "${talos_to}" ] || fail "the upgrade's machines boot Talos '${talos_image}', not ${talos_to}"
-    until_true 600 "every machine on Talos ${talos_to} after the upgrade" machines_on_talos "${talos_to}"
-    talos_now=$(talos_annotation talos-upgraded)
-    [ "${talos_now}" = "${talos_last}" ] || fail "a machine the upgrade made was upgraded in place: ${talos_now}"
-fi
-# The new control-plane nodes have to carry the authentication configuration too.
-check_sign_in
-# The distribution's own Gateway API chart takes over what its Traefik CRD chart shipped before,
-# and Kubehenge's policy, without Kubehenge applying anything beside it.
-if [ -n "${gateway_api_chart}" ]; then
-    until_true 300 "${gateway_api_chart} holds the Gateway API after the upgrade" gateway_api_chart_holds
-fi
-until_true 300 "the Gateway API's objects after the upgrade, each held once" gateway_api_held
-until_true 300 "Traefik's Gateway is programmed after the upgrade" gateway_programmed
 
 # Talos is its own OS, with no shell for the guest agent to run the check in; its nodes' release is
 # checked through the Talos API above.
 if [ "${distribution}" != talos ]; then
     step "every node runs ${node_os} with SELinux enforcing, and nothing it ran was denied"
-    # After every add-on, the upgrade and the restore, so that a denial any of them met shows here.
+    # After the restore and the add-ons or the upgrade, so that a denial any of them met shows here.
     case ${node_os} in
         almalinux-*) os_id=almalinux ;;
         rocky-*) os_id=rocky ;;
@@ -3007,42 +3211,43 @@ if [ "${distribution}" != talos ]; then
     done
 fi
 
-step "a paused worker VM is reported, and the report cleared once it runs"
-# The health check would replace the worker once its node is not ready; skipping remediation keeps
-# the VM paused for as long as the report takes.
-worker=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name},!cluster.x-k8s.io/control-plane" -o jsonpath='{.items[0].metadata.name}')
-[ -n "${worker}" ] || fail "no worker machine to pause"
-infra=$(kubectl -n "${ns}" get machine "${worker}" -o jsonpath='{.spec.infrastructureRef.name}')
-vmid=$(kubectl -n "${ns}" get proxmoxmachine "${infra}" -o jsonpath='{.spec.virtualMachineID}')
-node=$(kubectl -n "${ns}" get proxmoxmachine "${infra}" -o jsonpath='{.status.proxmoxNode}')
-kubectl -n "${ns}" annotate "machine/${worker}" cluster.x-k8s.io/skip-remediation= > /dev/null
-pve_post "nodes/${node}/qemu/${vmid}/status/suspend"
-vms_paused() {
-    kubectl -n "${ns}" get "cluster/${name}" -o json | jq -e --arg m "${worker} (VM ${vmid} on ${node}) paused" \
-        '.status.conditions // [] | any(.type == "VMsNotRunning" and .status == "True" and .reason == "Paused" and (.message | startswith($m)))' > /dev/null &&
-        kubectl -n "${ns}" get events -o json | jq -e --arg n "${name}" 'any(.items[]; .reason == "VMsNotRunning" and .involvedObject.name == $n)' > /dev/null
-}
-until_true 600 "the Cluster saying VM ${vmid} of ${worker} is paused, with an event" vms_paused
-pve_post "nodes/${node}/qemu/${vmid}/status/resume"
-vms_running() {
-    kubectl -n "${ns}" get "cluster/${name}" -o json | jq -e '.status.conditions // [] | all(.type != "VMsNotRunning")' > /dev/null &&
-        kubectl -n "${ns}" get events -o json | jq -e --arg n "${name}" 'any(.items[]; .reason == "VMsRunning" and .involvedObject.name == $n)' > /dev/null
-}
-until_true 300 "the report cleared, with an event saying so" vms_running
-kubectl -n "${ns}" annotate "machine/${worker}" cluster.x-k8s.io/skip-remediation- > /dev/null
-until_true 600 "worker ${worker} ready again" sh -c "kubectl -n ${ns} get machine ${worker} -o json | jq -e '.status.conditions // [] | any(.type == \"Ready\" and .status == \"True\")' >/dev/null"
+if [ "${part}" != addons ]; then
+    step "a paused worker VM is reported, and the report cleared once it runs"
+    # The health check would replace the worker once its node is not ready; skipping remediation keeps
+    # the VM paused for as long as the report takes.
+    worker=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name},!cluster.x-k8s.io/control-plane" -o jsonpath='{.items[0].metadata.name}')
+    [ -n "${worker}" ] || fail "no worker machine to pause"
+    infra=$(kubectl -n "${ns}" get machine "${worker}" -o jsonpath='{.spec.infrastructureRef.name}')
+    vmid=$(kubectl -n "${ns}" get proxmoxmachine "${infra}" -o jsonpath='{.spec.virtualMachineID}')
+    node=$(kubectl -n "${ns}" get proxmoxmachine "${infra}" -o jsonpath='{.status.proxmoxNode}')
+    kubectl -n "${ns}" annotate "machine/${worker}" cluster.x-k8s.io/skip-remediation= > /dev/null
+    pve_post "nodes/${node}/qemu/${vmid}/status/suspend"
+    vms_paused() {
+        kubectl -n "${ns}" get "cluster/${name}" -o json | jq -e --arg m "${worker} (VM ${vmid} on ${node}) paused" \
+            '.status.conditions // [] | any(.type == "VMsNotRunning" and .status == "True" and .reason == "Paused" and (.message | startswith($m)))' > /dev/null &&
+            kubectl -n "${ns}" get events -o json | jq -e --arg n "${name}" 'any(.items[]; .reason == "VMsNotRunning" and .involvedObject.name == $n)' > /dev/null
+    }
+    until_true 600 "the Cluster saying VM ${vmid} of ${worker} is paused, with an event" vms_paused
+    pve_post "nodes/${node}/qemu/${vmid}/status/resume"
+    vms_running() {
+        kubectl -n "${ns}" get "cluster/${name}" -o json | jq -e '.status.conditions // [] | all(.type != "VMsNotRunning")' > /dev/null &&
+            kubectl -n "${ns}" get events -o json | jq -e --arg n "${name}" 'any(.items[]; .reason == "VMsRunning" and .involvedObject.name == $n)' > /dev/null
+    }
+    until_true 300 "the report cleared, with an event saying so" vms_running
+    kubectl -n "${ns}" annotate "machine/${worker}" cluster.x-k8s.io/skip-remediation- > /dev/null
+    until_true 600 "worker ${worker} ready again" sh -c "kubectl -n ${ns} get machine ${worker} -o json | jq -e '.status.conditions // [] | any(.type == \"Ready\" and .status == \"True\")' >/dev/null"
 
-case ${class} in
-    kubehenge-rke2 | kubehenge-k3s)
-        step "a worker whose certificates run out within 60 days is replaced"
-        # The report RKE2's and k3s's own certificate monitor records on a node from 120 days before,
-        # as it would 45 days before; the controller renews from 60.
-        worker=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name},!cluster.x-k8s.io/control-plane" -o jsonpath='{.items[0].metadata.name}')
-        worker_node=$(kubectl -n "${ns}" get machine "${worker}" -o jsonpath='{.status.nodeRef.name}')
-        [ -n "${worker_node}" ] || fail "no worker node to report certificates of"
-        reported=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-        expires=$(date -u -d '+45 days' +%Y-%m-%dT%H:%M:%SZ)
-        wl create -f - << EOF
+    case ${class} in
+        kubehenge-rke2 | kubehenge-k3s)
+            step "a worker whose certificates run out within 60 days is replaced"
+            # The report RKE2's and k3s's own certificate monitor records on a node from 120 days before,
+            # as it would 45 days before; the controller renews from 60.
+            worker=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name},!cluster.x-k8s.io/control-plane" -o jsonpath='{.items[0].metadata.name}')
+            worker_node=$(kubectl -n "${ns}" get machine "${worker}" -o jsonpath='{.status.nodeRef.name}')
+            [ -n "${worker_node}" ] || fail "no worker node to report certificates of"
+            reported=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            expires=$(date -u -d '+45 days' +%Y-%m-%dT%H:%M:%SZ)
+            wl create -f - << EOF
 apiVersion: v1
 kind: Event
 metadata: {generateName: e2e-certificates-, namespace: default}
@@ -3055,45 +3260,46 @@ firstTimestamp: ${reported}
 lastTimestamp: ${reported}
 count: 1
 EOF
-        certificates_condition() {
-            kubectl -n "${ns}" get "cluster/${name}" -o json |
-                jq -e --arg r "$1" '.status.conditions // [] | any(.type == "CertificatesExpiring" and .status == "True" and .reason == $r)' > /dev/null
-        }
-        until_true 600 "the Cluster says the worker's certificates are being renewed" certificates_condition Renewing
-        kubectl -n "${ns}" get events -o json |
-            jq -e --arg w "${worker}" 'any(.items[]; .reason == "RenewingCertificates" and (.message | contains($w)))' > /dev/null ||
-            fail "no RenewingCertificates event names ${worker}"
-        until_true 1800 "machine ${worker} replaced" absent kubectl -n "${ns}" get machine "${worker}"
-        workers 1
-        certificates_renewed() {
-            # shellcheck disable=SC2310 # the condition's absence is what is waited for.
-            ! certificates_condition Renewing && kubectl -n "${ns}" get events -o json |
-                jq -e --arg n "${name}" 'any(.items[]; .reason == "CertificatesRenewed" and .involvedObject.name == $n)' > /dev/null
-        }
-        until_true 600 "the condition cleared, with an event saying so" certificates_renewed
-        ;;
-    *) ;;
-esac
+            certificates_condition() {
+                kubectl -n "${ns}" get "cluster/${name}" -o json |
+                    jq -e --arg r "$1" '.status.conditions // [] | any(.type == "CertificatesExpiring" and .status == "True" and .reason == $r)' > /dev/null
+            }
+            until_true 600 "the Cluster says the worker's certificates are being renewed" certificates_condition Renewing
+            kubectl -n "${ns}" get events -o json |
+                jq -e --arg w "${worker}" 'any(.items[]; .reason == "RenewingCertificates" and (.message | contains($w)))' > /dev/null ||
+                fail "no RenewingCertificates event names ${worker}"
+            until_true 1800 "machine ${worker} replaced" absent kubectl -n "${ns}" get machine "${worker}"
+            workers 1
+            certificates_renewed() {
+                # shellcheck disable=SC2310 # the condition's absence is what is waited for.
+                ! certificates_condition Renewing && kubectl -n "${ns}" get events -o json |
+                    jq -e --arg n "${name}" 'any(.items[]; .reason == "CertificatesRenewed" and .involvedObject.name == $n)' > /dev/null
+            }
+            until_true 600 "the condition cleared, with an event saying so" certificates_renewed
+            ;;
+        *) ;;
+    esac
 
-step "a dead worker is replaced"
-# The class's 300 s before a not-ready node counts as dead only adds waiting here; the integration
-# tier pins the classes' own checks. The override has to repeat the class's remediation, or it would
-# drop it.
-kubectl -n "${ns}" patch "cluster/${name}" --type=json -p '[{"op": "add", "path": "/spec/topology/workers/machineDeployments/0/healthCheck", "value": {
+    step "a dead worker is replaced"
+    # The class's 300 s before a not-ready node counts as dead only adds waiting here; the integration
+    # tier pins the classes' own checks. The override has to repeat the class's remediation, or it would
+    # drop it.
+    kubectl -n "${ns}" patch "cluster/${name}" --type=json -p '[{"op": "add", "path": "/spec/topology/workers/machineDeployments/0/healthCheck", "value": {
   "checks": {"nodeStartupTimeoutSeconds": 1200, "unhealthyNodeConditions": [
     {"type": "Ready", "status": "Unknown", "timeoutSeconds": 60}, {"type": "Ready", "status": "False", "timeoutSeconds": 60}]},
   "remediation": {"maxInFlight": 1}}}]'
-until_true 120 "the workers' health check at 60 s" sh -c "kubectl -n ${ns} get machinehealthchecks -o json |
+    until_true 120 "the workers' health check at 60 s" sh -c "kubectl -n ${ns} get machinehealthchecks -o json |
     jq -e '[.items[] | select(.spec.selector.matchLabels[\"topology.cluster.x-k8s.io/deployment-name\"] == \"md-0\")
     | .spec.checks.unhealthyNodeConditions[].timeoutSeconds] | length > 0 and all(. == 60)' >/dev/null"
-machine=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/deployment-name -o jsonpath='{.items[0].metadata.name}')
-infra=$(kubectl -n "${ns}" get machine "${machine}" -o jsonpath='{.spec.infrastructureRef.name}')
-vmid=$(kubectl -n "${ns}" get proxmoxmachine "${infra}" -o jsonpath='{.spec.virtualMachineID}')
-node=$(kubectl -n "${ns}" get proxmoxmachine "${infra}" -o jsonpath='{.status.proxmoxNode}')
-printf 'stopping VM %s (%s) on %s\n' "${vmid}" "${machine}" "${node}"
-pve -X POST "${KUBEHENGE_PROXMOX_URL}/api2/json/nodes/${node}/qemu/${vmid}/status/stop" > /dev/null
-until_true 1800 "machine ${machine} replaced" absent kubectl -n "${ns}" get machine "${machine}"
-workers 1
+    machine=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/deployment-name -o jsonpath='{.items[0].metadata.name}')
+    infra=$(kubectl -n "${ns}" get machine "${machine}" -o jsonpath='{.spec.infrastructureRef.name}')
+    vmid=$(kubectl -n "${ns}" get proxmoxmachine "${infra}" -o jsonpath='{.spec.virtualMachineID}')
+    node=$(kubectl -n "${ns}" get proxmoxmachine "${infra}" -o jsonpath='{.status.proxmoxNode}')
+    printf 'stopping VM %s (%s) on %s\n' "${vmid}" "${machine}" "${node}"
+    pve -X POST "${KUBEHENGE_PROXMOX_URL}/api2/json/nodes/${node}/qemu/${vmid}/status/stop" > /dev/null
+    until_true 1800 "machine ${machine} replaced" absent kubectl -n "${ns}" get machine "${machine}"
+    workers 1
+fi
 
 step "delete, held up by a worker, reported stalled and abandoned"
 # A finalizer of the test's own holds a worker Machine, as a drain that never ends would. Cluster

@@ -16,7 +16,7 @@ On Proxmox VE:
 - **With `etcd_restore`, a user and API token for etcd restores,** holding `VM.Audit` and `VM.GuestAgent.Unrestricted` on the workload pool, which amounts to a root shell in every cluster's VMs; the controller uses it only to run a restore an authorised user asked for on the cluster's control-plane VMs ([clusters](../docs/clusters.md#restore-etcd)).
 - **A group for the clusters' own users,** allowed to use space on the listed storages and to read the nodes. Each cluster's user, created by the controller, adds rights on its own pool only ([architecture](../docs/architecture.md#each-clusters-own-corner-of-proxmox-ve)).
 - **The Talos disk image,** built by the Talos Image Factory with the QEMU guest agent.
-- **One, three or five VMs,** each a Talos control-plane node, with static addresses and a virtual IP in front of the Kubernetes API.
+- **One, three or five VMs,** each a Talos control-plane node, with static addresses and a virtual IP in front of the Kubernetes API. Their VM IDs are picked at random between 10000 and 99999, away from the lowest free ID that Proxmox VE offers whatever else is created at the same moment.
 
 In the cluster:
 
@@ -25,8 +25,6 @@ In the cluster:
 - The `kubehenge` chart (`../charts/kubehenge`): Kubehenge's ClusterClasses and its controller.
 
 `registry_mirrors` points the nodes at image registry mirrors, for networks without direct access to the public registries. The nodes pull the Image Factory's installer, Sidero's images and everything from registry.k8s.io only with their publishers' keyless signatures, so a mirror of those registries serves the signatures too. The Talos disk image the VMs boot from is downloaded from the Image Factory over TLS alone: the factory builds it again with different bytes, and publishes no checksum or signature for it. `cluster_oidc` lists OpenID Connect providers every new workload cluster's API server trusts unless the cluster names its own; tokens and certificates keep working beside them. `capmox` verifies the Proxmox VE API's certificate against the CA you give it; upstream's default is to skip that check. The nodes do not report to Sidero's public discovery service.
-
-`cluster_volume_snapshots` lets clusters take volume snapshots, with their CSI plugin signed in to Proxmox VE as `root@pam` ([clusters](../docs/clusters.md#volume-snapshots)). The module creates nothing on Proxmox VE for it and never holds the password, which would otherwise sit in the state. Kubehenge's appliance writes it into the management cluster; without the appliance, after the apply, run `kubectl -n kubehenge-system create secret generic kubehenge-root-pam --from-file=password=/dev/stdin`, type root@pam's password, Enter and Ctrl-D. Delete the Secret again when setting the variable back to false.
 
 ## Before you apply
 
@@ -48,6 +46,8 @@ tofu apply
 tofu output -raw kubeconfig > kubeconfig
 tofu output -raw talosconfig > talosconfig
 ```
+
+The module installs the Cluster API Operator from its chart's archive in `charts/`, which a release's archive carries; in a checkout of the repository, `make capi-operator-chart` downloads it there first. The apply refuses an archive whose SHA-256 is not the one `versions.tf` names.
 
 `-lockfile=readonly` holds the providers to the checksums in `.terraform.lock.hcl`. A root module of your own that calls this one needs a copy of that file beside it, since only the root module's is read. `terraform` works the same as `tofu`, from version 1.11.
 

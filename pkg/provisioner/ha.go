@@ -44,9 +44,8 @@ const proxmoxMachineVersion = "v1alpha2"
 // infrastructureGroup is the API group of capmox's objects.
 const infrastructureGroup = "infrastructure.cluster.x-k8s.io"
 
-// What Proxmox VE's resource list says of a VM: its type, and whether it runs.
+// What Proxmox VE's resource list says of whether a VM runs.
 const (
-	guestQEMU    = "qemu"
 	guestRunning = "running"
 	guestStopped = "stopped"
 )

@@ -171,7 +171,7 @@ func (w *VMWatch) read(ctx context.Context) (*vmLook, error) {
 		return nil, fmt.Errorf("listing the storages: %w", err)
 	}
 	for _, g := range guests {
-		if g.Type == guestQEMU {
+		if g.Type == qemuType {
 			look.guests[g.VMID] = g
 		}
 	}

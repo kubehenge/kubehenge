@@ -178,6 +178,8 @@ func TestUpgraderRefreshesNodeImagesInTheWindow(t *testing.T) {
 func TestUpgradeTakesTheNewestNodeImages(t *testing.T) {
 	t.Parallel()
 	c, class := refreshCluster(t, "web", nil)
+	// Cluster API asks once the Cluster names the version it goes to.
+	c.Spec.Topology.Version = "v1.37.1+rke2r1"
 	scheme := runtime.NewScheme()
 	if err := clusterv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
