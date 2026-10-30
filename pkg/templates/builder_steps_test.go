@@ -126,7 +126,7 @@ func (h *bakeHost) answer(r *http.Request) (any, string) {
 	case task != nil:
 		return h.taskStatus(task[1]), ""
 	case log != nil:
-		return []any{map[string]any{"n": 1, "t": "TASK ERROR: " + h.taskStatus(log[1])["exitstatus"].(string)}}, ""
+		return []any{map[string]any{"n": 1, "t": fmt.Sprint("TASK ERROR: ", h.taskStatus(log[1])["exitstatus"])}}, ""
 	case m != nil:
 		vmid, err := strconv.Atoi(m[1])
 		if err != nil {
