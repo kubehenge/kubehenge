@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -29,6 +31,8 @@ type fakeTalos struct {
 	installed  map[string]string
 	rebooted   []string
 	installErr error
+	// installing, when set, runs in place of each install, as a node that is slow or goes away.
+	installing func(ctx context.Context) error
 
 	// calls are the restore's calls, "<address> <call>".
 	calls    []string
@@ -75,7 +79,13 @@ type fakeTalosNode struct {
 	address string
 }
 
-func (n *fakeTalosNode) Install(_ context.Context, image string) error {
+func (n *fakeTalosNode) Install(ctx context.Context, image string) error {
+	n.f.mu.Lock()
+	installing := n.f.installing
+	n.f.mu.Unlock()
+	if installing != nil {
+		return installing(ctx)
+	}
 	n.f.mu.Lock()
 	defer n.f.mu.Unlock()
 	if n.f.installErr != nil {
@@ -247,7 +257,7 @@ func newTalosRig(t *testing.T, objects ...client.Object) *talosRig {
 	r.u = &TalosUpgrader{
 		Client: kube, Reader: kube, ClassNamespace: "kubehenge-system",
 		Images: fakeTalosImages{"v1.13.9", "v1.13.12", "v1.14.4"}, Dial: r.talos.dial, Nodes: r.drainer,
-		Now: func() time.Time { return r.now },
+		Now: func() time.Time { return r.now }, MachineCheck: 10 * time.Millisecond,
 	}
 	return r
 }
@@ -371,11 +381,94 @@ func TestTalosUpgraderLeavesOtherClustersAlone(t *testing.T) {
 	}
 }
 
+// A node whose machine the cluster deletes while it installs, as when it scales down onto the
+// node, takes its upgrade with it rather than failing it after the install's whole deadline.
+func TestTalosUpgraderAbandonsANodeWhoseMachineGoes(t *testing.T) {
+	t.Parallel()
+	for name, held := range map[string]bool{"deleted": false, "being deleted": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			m := talosMachine("web-md-0", "192.0.2.20", "v1.14.3")
+			if held {
+				m.Finalizers = []string{"machine.cluster.x-k8s.io"}
+			}
+			r := newTalosRig(t, talosCluster("web", "v1.14.4"), talosMachine("web-cp-0", "192.0.2.10", "v1.14.4"), m)
+			r.talos.installing = func(ctx context.Context) error {
+				if err := r.kube.Delete(ctx, m.DeepCopy()); err != nil {
+					return err
+				}
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			c := r.run(t)
+			if _, upgrading := c.Annotations[TalosUpgradingAnnotation]; upgrading || c.Annotations[TalosUpgradeFailedAnnotation] != "" || len(r.talos.rebooted) != 0 {
+				t.Fatalf("annotations %v, rebooted %v", c.Annotations, r.talos.rebooted)
+			}
+			// The machine still being deleted is passed over.
+			r.talos.installing = nil
+			if c = r.run(t); c.Annotations[TalosUpgradingAnnotation] != "" || len(r.talos.installed) != 0 {
+				t.Fatalf("started on a machine being deleted: %v, installed %v", c.Annotations, r.talos.installed)
+			}
+		})
+	}
+}
+
+func TestTalosUpgraderTriesATransientInstallAgain(t *testing.T) {
+	t.Parallel()
+	r := newTalosRig(t, talosCluster("web", "v1.14.4"), talosMachine("web-cp-0", "192.0.2.10", "v1.14.3"))
+	r.talos.installErr = fmt.Errorf("192.0.2.10: pulling: %w", errTalosStalled)
+	c := r.run(t)
+	p, _ := parseTalosProgress(c.Annotations[TalosUpgradingAnnotation])
+	if p.tries != 1 || c.Annotations[TalosUpgradeFailedAnnotation] != "" {
+		t.Fatalf("after one stalled install: %v", c.Annotations)
+	}
+	// Not before its wait.
+	r.talos.installErr = nil
+	r.run(t)
+	if len(r.talos.installed) != 0 {
+		t.Fatalf("tried again at once: %v", r.talos.installed)
+	}
+	r.now = r.now.Add(talosRetryAfter)
+	r.run(t)
+	if len(r.talos.installed) != 1 || !slices.Equal(r.talos.rebooted, []string{"192.0.2.10"}) {
+		t.Fatalf("installed %v, rebooted %v", r.talos.installed, r.talos.rebooted)
+	}
+}
+
+func TestTalosUpgraderFailsAfterTheLastTry(t *testing.T) {
+	t.Parallel()
+	r := newTalosRig(t, talosCluster("web", "v1.14.4"), talosMachine("web-cp-0", "192.0.2.10", "v1.14.3"))
+	r.talos.installErr = status.Error(codes.Unavailable, "connection refused")
+	var c *clusterv1.Cluster
+	for range talosInstallTries {
+		c = r.run(t)
+		r.now = r.now.Add(talosRetryAfter << talosInstallTries)
+	}
+	if !strings.Contains(c.Annotations[TalosUpgradeFailedAnnotation], "connection refused") || c.Annotations[TalosUpgradingAnnotation] != "" {
+		t.Fatalf("after %d tries: %v", talosInstallTries, c.Annotations)
+	}
+}
+
+func TestStallGuardEndsAStalledInstall(t *testing.T) {
+	t.Parallel()
+	silent, _, stopSilent := stallGuard(context.Background(), time.Millisecond)
+	defer stopSilent()
+	<-silent.Done()
+	if !errors.Is(context.Cause(silent), errTalosStalled) {
+		t.Fatalf("a silent node ended with %v", context.Cause(silent))
+	}
+	done, _, stop := stallGuard(context.Background(), time.Hour)
+	stop()
+	if errors.Is(context.Cause(done), errTalosStalled) {
+		t.Fatal("an install that ended reads as stalled")
+	}
+}
+
 func TestTalosProgressReadsAsWritten(t *testing.T) {
 	t.Parallel()
-	p := talosProgress{node: "web-cp-0", release: "v1.14.4", since: day(1), rebooted: day(2)}
+	p := talosProgress{node: "web-cp-0", release: "v1.14.4", since: day(1), tries: 2, rebooted: day(2)}
 	got, ok := parseTalosProgress(p.String())
-	if !ok || got.node != p.node || got.release != p.release || !got.since.Equal(p.since) || !got.rebooted.Equal(p.rebooted) {
+	if !ok || got.node != p.node || got.release != p.release || !got.since.Equal(p.since) || got.tries != p.tries || !got.rebooted.Equal(p.rebooted) {
 		t.Fatalf("%q read as %+v", p.String(), got)
 	}
 	if _, ok := parseTalosProgress("web-cp-0 to 1.14 since yesterday"); ok {
