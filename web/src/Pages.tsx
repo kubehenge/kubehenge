@@ -81,6 +81,7 @@ export function routeAt(path: string, needsSetup: boolean | undefined, canManage
 export function RoutePage({
   route,
   canCreate,
+  canManage,
   canTrust,
   namespaces,
   headlamp,
@@ -88,6 +89,7 @@ export function RoutePage({
 }: {
   route: Route;
   canCreate: boolean | undefined;
+  canManage: boolean;
   canTrust: boolean | undefined;
   namespaces: string[];
   headlamp: number | undefined;
@@ -113,7 +115,7 @@ export function RoutePage({
       return <ClusterDetail namespace={route.namespace} name={route.name} view={route.view} headlamp={headlamp} />;
     }
     case "list": {
-      return <ClusterList canCreate={canCreate} />;
+      return <ClusterList canCreate={canCreate} canManage={canManage} />;
     }
     case "run": {
       return <RunPage id={route.id} />;

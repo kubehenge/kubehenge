@@ -18,7 +18,7 @@ Before the first cluster, the VM templates for its distribution have to exist ([
 
 ## Create a cluster in the interface
 
-**Create cluster** on the cluster list opens a wizard of six steps: General, Network, Machines, Add-ons, Identity providers and Confirm, which sums up every setting. A field says what is wrong with it once it has been changed, or when **Next** is pressed with something missing, which then moves to the first such field. Choosing another distribution brings its defaults only into what you have not set yet. **Cancel** asks before it discards what was entered. A step in the bar above opens only once the steps before it are complete. Without `VM.Allocate` on the workload pool, **Create cluster** is off and says so.
+**Create cluster** on the cluster list opens a wizard of six steps: General, Network, Machines, Add-ons, Identity providers and Confirm, which sums up every setting. A field says what is wrong with it once it has been changed, or when **Next** is pressed with something missing, which then moves to the first such field. Choosing another distribution brings its defaults only into what you have not set yet. **Cancel** asks before it discards what was entered. A step in the bar above opens only once the steps before it are complete. Without `VM.Allocate` on the workload pool, **Create cluster** is off and says so. Before the first cluster, the list shows which distributions have a VM template, with **Build one** for administrators where none has, and whether you may create clusters.
 
 ### General
 

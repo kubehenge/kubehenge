@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 
 import { clusterPath } from "./ClusterDetail";
+import { FirstCluster } from "./FirstCluster";
 import { FleetProvider, badge, fleetKey, groups, ranked, useFleet, type Group, type Standing } from "./fleet";
 import { score } from "./Palette";
 import { Link, navigate } from "./router";
@@ -10,7 +11,13 @@ import { ErrorBox, Status, age, distributionName, filled } from "./ui";
 // The privilege creating a cluster needs, as Proxmox VE names it.
 const createNeeds = "Creating clusters needs VM.Allocate on the workload pool.";
 
-export function ClusterList({ canCreate }: { canCreate?: boolean | undefined }): JSX.Element {
+export function ClusterList({
+  canCreate,
+  canManage = false,
+}: {
+  canCreate?: boolean | undefined;
+  canManage?: boolean;
+}): JSX.Element {
   const fleet = useFleet();
   // Opening the list shows the fleet as it is now, not as the console last read it.
   const readBefore = useRef(fleet?.clusters !== undefined);
@@ -23,19 +30,26 @@ export function ClusterList({ canCreate }: { canCreate?: boolean | undefined }):
   // The console reads the fleet for the rail beside the list; on its own the list reads it itself.
   return fleet === null ? (
     <FleetProvider>
-      <FleetList canCreate={canCreate} />
+      <FleetList canCreate={canCreate} canManage={canManage} />
     </FleetProvider>
   ) : (
-    <FleetList canCreate={canCreate} />
+    <FleetList canCreate={canCreate} canManage={canManage} />
   );
 }
 
-function FleetList({ canCreate }: { canCreate: boolean | undefined }): JSX.Element {
+function FleetList({ canCreate, canManage }: { canCreate: boolean | undefined; canManage: boolean }): JSX.Element {
   const fleet = useFleet();
   const clusters = fleet?.clusters;
   const error = fleet?.error;
   const refused = canCreate === false;
+  const first = clusters?.length === 0;
 
+  const listed = (shown: Cluster[]): JSX.Element =>
+    shown.length === 0 ? (
+      <FirstCluster canCreate={canCreate} canManage={canManage} />
+    ) : (
+      <Clusters clusters={shown} found={fleet?.health} />
+    );
   return (
     <section className="panel">
       <div className="toolbar">
@@ -46,23 +60,19 @@ function FleetList({ canCreate }: { canCreate: boolean | undefined }): JSX.Eleme
           className="primary"
           disabled={refused}
           title={refused ? createNeeds : undefined}
-          aria-describedby={refused ? "create-needs" : undefined}
+          aria-describedby={refused && !first ? "create-needs" : undefined}
           onClick={() => navigate("/clusters/new")}
         >
           Create cluster
         </button>
       </div>
-      {refused && (
+      {refused && !first && (
         <p className="muted pad" id="create-needs">
           {createNeeds}
         </p>
       )}
       <ErrorBox message={error} />
-      {clusters === undefined ? (
-        error === undefined && <p className="muted pad">Loading…</p>
-      ) : (
-        <Clusters clusters={clusters} found={fleet?.health} />
-      )}
+      {clusters === undefined ? error === undefined && <p className="muted pad">Loading…</p> : listed(clusters)}
     </section>
   );
 }
@@ -168,9 +178,6 @@ function Clusters({
     };
   }, [clusters, found, query, show, sort]);
 
-  if (clusters.length === 0) {
-    return <p className="muted pad">No clusters yet. Seeing one needs VM.Audit on its pool.</p>;
-  }
   // The group's own button counts what it shows; a typed filter needs the count said.
   const narrowed = query !== "";
   return (

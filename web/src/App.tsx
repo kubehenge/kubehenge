@@ -204,6 +204,7 @@ function Shell({
           <RoutePage
             route={route}
             canCreate={canCreate}
+            canManage={canManage}
             canTrust={canTrust}
             namespaces={namespaces}
             headlamp={headlamp}

@@ -1796,6 +1796,20 @@ button.go {
   margin: 0;
 }
 
+.first-cluster .preflight {
+  align-items: center;
+  margin: 0 0 14px;
+  padding: 0;
+  border: 0;
+}
+
+.first-cluster dd {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
 .hint-warning {
   color: var(--warning);
   font-weight: 600;
