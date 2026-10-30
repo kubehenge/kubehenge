@@ -267,6 +267,39 @@ describe("the console", () => {
     await expect(screen.findByRole("heading", { name: /^Upgrade appliance to 0\.3\.1/u })).resolves.toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("Errorthe release's checksum does not match");
     expect(screen.getByRole("link", { name: "Open Administration" })).toHaveAttribute("href", "/administration");
+    // An appliance upgrade takes a release to choose, so it is not started again from here.
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+  });
+
+  it("starts a failed backup again from its run page, then shows the cluster's backups", async () => {
+    window.history.replaceState(null, "", "/runs/backup/default/web/manual-1");
+    const routes = serve();
+    routes["GET /api/runs"] = {
+      body: [
+        {
+          id: "backup/default/web/manual-1",
+          kind: "backup",
+          namespace: "default",
+          cluster: "web",
+          what: "Back up",
+          state: "failed",
+          started: minutesAgo(9),
+          finished: minutesAgo(8),
+          error: "the bucket refused the upload: access denied",
+        },
+      ],
+    };
+    routes["POST /api/clusters/default/web/backups"] = { status: 403, body: { error: "backing up needs VM.Allocate" } };
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const again = await screen.findByRole("button", { name: "Try again" });
+    await user.click(again);
+    await expect(screen.findByText("Backing up needs VM.Allocate.")).resolves.toBeInTheDocument();
+    expect(window.location.pathname).toBe("/runs/backup/default/web/manual-1");
+
+    routes["POST /api/clusters/default/web/backups"] = { status: 202, body: { name: "manual-2" } };
+    await user.click(again);
+    await waitFor(() => expect(window.location.pathname).toBe("/clusters/default/web/backups"));
   });
 
   it("follows a change made here by its steps, in place of the cluster's standing", async () => {
