@@ -727,7 +727,7 @@ kubectl -n kubehenge-system get secret kubehenge-extension-tls -o jsonpath='{.da
 metrics_port=$((20000 + $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % 10000))
 kubectl -n kubehenge-system port-forward service/kubehenge-controller-metrics "${metrics_port}:8443" > "${work}/metrics-forward.log" 2>&1 &
 metrics_pid=$!
-metrics_host=kubehenge-controller-metrics.kubehenge-system.svc
+metrics_host='kubehenge-controller-metrics.kubehenge-system.svc'
 # metrics_status [curl options...]: the HTTP status the metrics endpoint answers with, verified
 # against the controller's CA under the Service's name; its body in ${work}/metrics.
 metrics_status() {

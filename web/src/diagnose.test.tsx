@@ -83,7 +83,7 @@ describe("diagnosing a cluster", () => {
     const calls = fakeServer(routes);
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = userEvent.setup({ delay: null, advanceTimers: vi.advanceTimersByTime });
-    render(<Machines cluster={web} can why={undefined} onChanged={vi.fn()} />);
+    render(<Machines cluster={web} can why={undefined} onChanged={vi.fn<() => void>()} />);
     await user.click(screen.getByRole("button", { name: "Boot log of web-cp-abc" }));
     const dialog = within(await screen.findByRole("dialog", { name: "Boot log of web-cp-abc" }));
     await expect(dialog.findByText("Reading…")).resolves.toBeInTheDocument();
