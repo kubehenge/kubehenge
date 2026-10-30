@@ -39,6 +39,7 @@ func validControllerOptions(url, caFile string) (*controllerOptions, *pve.Config
 		chartValues:       "{}",
 		podSecurityExempt: "{}",
 		rancherKubernetes: "34-37",
+		logs:              logOptions{level: "info"},
 	}
 	for _, f := range []*string{
 		&o.ccmChart, &o.csiChart, &o.csiNewestChart, &o.snapshotChart, &o.ciliumChart, &o.calicoChart, &o.headlampChart, &o.certManagerChart, &o.rancherChart,

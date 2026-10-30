@@ -74,6 +74,7 @@ var (
 	vmPath      = regexp.MustCompile(`^/nodes/pve1/qemu/(\d+)(/.*)?$`)
 	storagePath = regexp.MustCompile(`^/nodes/pve1/storage/([^/]+)(/.*)?$`)
 	taskStatus  = regexp.MustCompile(`^/nodes/pve1/tasks/([^/]+)/status$`)
+	taskLog     = regexp.MustCompile(`^/nodes/pve1/tasks/([^/]+)/log$`)
 )
 
 // client reaches the host without a network, so that the tests can run in a synctest bubble.
@@ -103,7 +104,7 @@ func (h *bakeHost) roundTrip(r *http.Request) (*http.Response, error) {
 
 func (h *bakeHost) answer(r *http.Request) (any, string) {
 	path := strings.TrimPrefix(r.URL.Path, "/api2/json")
-	switch m, s, task := vmPath.FindStringSubmatch(path), storagePath.FindStringSubmatch(path), taskStatus.FindStringSubmatch(path); {
+	switch m, s, task, log := vmPath.FindStringSubmatch(path), storagePath.FindStringSubmatch(path), taskStatus.FindStringSubmatch(path), taskLog.FindStringSubmatch(path); {
 	case path == "/cluster/status":
 		return []any{}, ""
 	case path == "/cluster/nextid":
@@ -124,6 +125,8 @@ func (h *bakeHost) answer(r *http.Request) (any, string) {
 		return h.create(r), ""
 	case task != nil:
 		return h.taskStatus(task[1]), ""
+	case log != nil:
+		return []any{map[string]any{"n": 1, "t": "TASK ERROR: " + h.taskStatus(log[1])["exitstatus"].(string)}}, ""
 	case m != nil:
 		vmid, err := strconv.Atoi(m[1])
 		if err != nil {

@@ -592,7 +592,7 @@ func TestRegistrarLeavesClustersAloneUntilBothSidesAreReady(t *testing.T) {
 		t.Fatal(err)
 	}
 	rancher.Status.Conditions = nil
-	if err := f.kube.Update(ctx, rancher); err != nil {
+	if err := f.kube.Status().Update(ctx, rancher); err != nil {
 		t.Fatal(err)
 	}
 	check(t, f, f.web)

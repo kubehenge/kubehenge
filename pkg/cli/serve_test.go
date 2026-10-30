@@ -84,6 +84,7 @@ func serveOptionsIn(t *testing.T, dir string) (*serveOptions, *pve.Config) {
 	o := &serveOptions{certFile: certFile, keyFile: keyFile, listen: "127.0.0.1:0", updateSpool: filepath.Join(dir, "spool")}
 	o.s.WorkloadPool = "kubehenge"
 	o.a.Dir = dir
+	o.logs.level = "info"
 	return o, &pve.Config{URL: "https://127.0.0.1:8006", CAFile: certFile}
 }
 

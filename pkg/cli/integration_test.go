@@ -141,8 +141,8 @@ func freeAddress(t *testing.T) string {
 }
 
 // eventually waits until check passes, failing the test with its last error once startWait is up
-// or the controller has stopped.
-func eventually(t *testing.T, stopped <-chan error, what string, check func() error) {
+// or the controller has stopped, which closes stopped after setting runErr.
+func eventually(t *testing.T, stopped <-chan struct{}, runErr *error, what string, check func() error) {
 	t.Helper()
 	var err error
 	for deadline := time.Now().Add(startWait); ; time.Sleep(poll) {
@@ -150,8 +150,8 @@ func eventually(t *testing.T, stopped <-chan error, what string, check func() er
 			return
 		}
 		select {
-		case runErr := <-stopped:
-			t.Fatalf("%s: the controller stopped: %v", what, runErr)
+		case <-stopped:
+			t.Fatalf("%s: the controller stopped: %v", what, *runErr)
 		default:
 		}
 		if time.Now().After(deadline) {
@@ -204,12 +204,17 @@ func TestIntegrationControllerServesWhatTheChartNames(t *testing.T) {
 	o.upgradeInterval = time.Hour
 	o.autoscaler.Management.Server = "https://192.0.2.10:6443"
 	runCtx, cancel := context.WithCancel(ctx)
-	stopped := make(chan error, 1)
-	go func() { stopped <- o.run(runCtx, conn) }()
+	var runErr error
+	stopped := make(chan struct{})
+	go func() {
+		runErr = o.run(runCtx, conn)
+		close(stopped)
+	}()
 	t.Cleanup(func() {
 		cancel()
-		if err := <-stopped; err != nil {
-			t.Errorf("the controller stopped with %v", err)
+		<-stopped
+		if runErr != nil {
+			t.Errorf("the controller stopped with %v", runErr)
 		}
 	})
 
@@ -230,8 +235,8 @@ func TestIntegrationControllerServesWhatTheChartNames(t *testing.T) {
 			return nil
 		}
 	}
-	eventually(t, stopped, "the liveness probe", probe("/healthz"))
-	eventually(t, stopped, "the readiness probe", probe("/readyz"))
+	eventually(t, stopped, &runErr, "the liveness probe", probe("/healthz"))
+	eventually(t, stopped, &runErr, "the readiness probe", probe("/readyz"))
 
 	refused := func() error { return refusedByKubehenge(ctx, c, rancherOnTwoCores()) }
 	admitted := map[string]func() error{
@@ -246,7 +251,7 @@ func TestIntegrationControllerServesWhatTheChartNames(t *testing.T) {
 			t.Errorf("the chart's webhooks call %s, which this test does not send a request to", path)
 			continue
 		}
-		eventually(t, stopped, "the webhook at "+path, check)
+		eventually(t, stopped, &runErr, "the webhook at "+path, check)
 	}
 
 	hooks := discover(t, api)
@@ -254,7 +259,7 @@ func TestIntegrationControllerServesWhatTheChartNames(t *testing.T) {
 		t.Errorf("Cluster API discovers the hooks %v, want %v", hooks, want)
 	}
 
-	eventually(t, stopped, "the announcement on the ExtensionConfig", func() error {
+	eventually(t, stopped, &runErr, "the announcement on the ExtensionConfig", func() error {
 		ec := &unstructured.Unstructured{}
 		ec.SetAPIVersion("runtime.cluster.x-k8s.io/v1beta2")
 		ec.SetKind("ExtensionConfig")
@@ -266,7 +271,7 @@ func TestIntegrationControllerServesWhatTheChartNames(t *testing.T) {
 		}
 		return nil
 	})
-	eventually(t, stopped, "the unused k3s providers scaled to none", func() error {
+	eventually(t, stopped, &runErr, "the unused k3s providers scaled to none", func() error {
 		dep := &appsv1.Deployment{}
 		if err := c.Get(ctx, client.ObjectKeyFromObject(provider), dep); err != nil {
 			return err
@@ -276,7 +281,7 @@ func TestIntegrationControllerServesWhatTheChartNames(t *testing.T) {
 		}
 		return nil
 	})
-	eventually(t, stopped, "the HA rules offered to cluster creators", func() error {
+	eventually(t, stopped, &runErr, "the HA rules offered to cluster creators", func() error {
 		cm := &corev1.ConfigMap{}
 		if err := c.Get(ctx, client.ObjectKey{Namespace: integration.ClassNamespace, Name: provisioner.HARulesName}, cm); err != nil {
 			return err
