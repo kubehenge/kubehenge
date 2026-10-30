@@ -27,7 +27,7 @@ func checkRancherNodes(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass
 		return err
 	}
 	if cores < RancherMinimumCores {
-		small = append(small, fmt.Sprintf("its control planes have %d", cores))
+		small = append(small, fmt.Sprintf("control planes have %d", cores))
 	}
 	for i := range topology.Workers.MachineDeployments {
 		md := &topology.Workers.MachineDeployments[i]
@@ -39,11 +39,11 @@ func checkRancherNodes(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass
 			return err
 		}
 		if cores < RancherMinimumCores {
-			small = append(small, fmt.Sprintf("workers %s have %d", md.Name, cores))
+			small = append(small, fmt.Sprintf("pool %s has %d", md.Name, cores))
 		}
 	}
 	if len(small) > 0 {
-		return fmt.Errorf("every node of the cluster Rancher runs on needs at least %d vCPUs, and %s",
+		return fmt.Errorf("every node needs at least %d vCPUs for Rancher: %s",
 			RancherMinimumCores, strings.Join(small, ", "))
 	}
 	return nil

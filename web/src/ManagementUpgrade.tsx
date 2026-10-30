@@ -3,23 +3,23 @@ import { useState, type JSX } from "react";
 import { api } from "./api";
 import { ApplyDialog } from "./Setup";
 import type { ManagementAutomatic, ManagementUpgrade, SetupStatus } from "./types";
-import { Dialog, ErrorBox, Field, errorMessage, minPassphrase, passphraseShort } from "./ui";
+import { Dialog, ErrorBox, Field, errorMessage, passphraseShort } from "./ui";
 
 // The module's names for the management cluster's components, in words.
 const componentNames: Record<string, string> = {
   talos: "Talos",
   kubernetes: "Kubernetes",
   cluster_api: "Cluster API",
-  capmox: "Cluster API's Proxmox VE provider",
-  rke2: "RKE2's Cluster API providers",
-  k3s: "k3s's Cluster API providers",
+  capmox: "Proxmox VE provider",
+  rke2: "RKE2 providers",
+  k3s: "k3s providers",
   ipam_in_cluster: "IP address management",
   helm_addon: "Add-on Provider for Helm",
-  talos_bootstrap: "Talos's Cluster API bootstrap provider",
-  talos_control_plane: "Talos's Cluster API control-plane provider",
+  talos_bootstrap: "Talos bootstrap provider",
+  talos_control_plane: "Talos control-plane provider",
   cert_manager: "cert-manager",
   capi_operator: "Cluster API Operator",
-  kubehenge: "Kubehenge's ClusterClasses and controller",
+  kubehenge: "Kubehenge",
 };
 
 export const componentName = (c: string): string => componentNames[c] ?? c;
@@ -27,37 +27,27 @@ export const componentName = (c: string): string => componentNames[c] ?? c;
 function Changes({ upgrade: u }: { upgrade: ManagementUpgrade }): JSX.Element {
   const changes = u.changes ?? [];
   if (changes.length === 0) {
-    return (
-      <p>
-        From what Kubehenge {u.applied} applied to what {u.carried} carries. No component of the management cluster
-        changes its version; the release may still change how they are set up.
-      </p>
-    );
+    return <p>No component changes version</p>;
   }
   return (
-    <>
-      <p>
-        From what Kubehenge {u.applied} applied to what {u.carried} carries:
-      </p>
-      <table className="grid">
-        <thead>
-          <tr>
-            <th scope="col">Component</th>
-            <th scope="col">Now</th>
-            <th scope="col">After the upgrade</th>
+    <table className="grid">
+      <thead>
+        <tr>
+          <th scope="col">Component</th>
+          <th scope="col">{u.applied}</th>
+          <th scope="col">{u.carried}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {changes.map((c) => (
+          <tr key={c.component}>
+            <td>{componentName(c.component)}</td>
+            <td>{c.from ?? "Unknown"}</td>
+            <td>{c.to ?? "Not installed"}</td>
           </tr>
-        </thead>
-        <tbody>
-          {changes.map((c) => (
-            <tr key={c.component}>
-              <td>{componentName(c.component)}</td>
-              <td>{c.from ?? "not recorded"}</td>
-              <td>{c.to ?? "no longer installed"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -80,16 +70,15 @@ export function ManagementBehind({
   return (
     <>
       <output className="warning notice">
-        The management cluster runs what Kubehenge {u.applied} applied; this appliance carries {u.carried}.{" "}
-        {failed &&
-          "Upgrading it automatically failed (the log is on the Management cluster page); the next day's upgrade hour tries again. "}
+        Management cluster upgrade: {u.applied} to {u.carried}
+        {failed ? ". Automatic upgrade failed. " : " "}
         <button type="button" className="primary" onClick={() => setOpen(true)}>
-          Upgrade the management cluster
+          Upgrade…
         </button>
       </output>
       {open && (
         <ApplyDialog
-          title="Upgrade the management cluster"
+          title="Upgrade management cluster"
           action="Upgrade"
           settings={settings}
           onClose={() => setOpen(false)}
@@ -99,10 +88,7 @@ export function ManagementBehind({
           }}
         >
           <Changes upgrade={u} />
-          <p>
-            It applies the management cluster's settings as they are: Talos node by node, then Kubernetes, the Cluster
-            API providers and Kubehenge's own chart. Clusters keep running.
-          </p>
+          <p>Upgrades the nodes one at a time. Clusters keep running.</p>
         </ApplyDialog>
       )}
     </>
@@ -145,11 +131,8 @@ export function AutomaticManagement({
     <>
       <Field
         label="Management cluster"
-        hint={
-          m.on
-            ? `Applied again on its own, as ${m.user}, at the hour above once Kubehenge runs a newer release than the one that last applied it. Switched on ${since} by ${m.by ?? ""}.`
-            : "Stays as it is when Kubehenge upgrades, until it is upgraded on the Management cluster page."
-        }
+        hint={m.on ? `Switched on ${since} by ${m.by ?? ""}` : undefined}
+        info={m.on ? `Upgrades at the hour above, as ${m.user}, after each Kubehenge upgrade.` : undefined}
       >
         {(id) => (
           <select
@@ -164,8 +147,8 @@ export function AutomaticManagement({
               }
             }}
           >
-            <option value="off">Upgraded by hand</option>
-            <option value="on">Upgraded automatically too</option>
+            <option value="off">Upgrade by hand</option>
+            <option value="on">Upgrade automatically</option>
           </select>
         )}
       </Field>
@@ -216,7 +199,7 @@ function SwitchOn({
   };
   return (
     <Dialog
-      title="Upgrade the management cluster automatically"
+      title="Upgrade management cluster automatically"
       onClose={onClose}
       onSubmit={() => {
         void submit();
@@ -227,33 +210,19 @@ function SwitchOn({
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || short}>
-            Keep them and switch on
+            Switch on
           </button>
         </>
       }
     >
-      <p>
-        Once Kubehenge runs a newer release than the one that last applied the management cluster, the appliance applies
-        it again on its own, at {when}, at most once a day. A run that fails is shown on this page and tried again the
-        next day.
-      </p>
-      <p>Nobody is signed in then, so the appliance has to keep what an apply needs, which it otherwise never does:</p>
-      <ul>
-        <li>the state passphrase, which opens the management cluster's state;</li>
-        <li>
-          an API token of a Proxmox VE user of its own, <code>{user}</code>, with the Administrator role on{" "}
-          <code>/</code>, which switching this on creates with your session.
-        </li>
-      </ul>
+      <p>Upgrades after each Kubehenge upgrade, at {when}.</p>
       <p className="warning">
-        Anyone who gets root on the appliance, or takes over its interface, can then read the management cluster's
-        state, which holds its admin kubeconfig and talosconfig, and act as an administrator of the whole Proxmox VE
-        cluster with the token. Switching this off deletes both, and the user.
+        Stores the state passphrase and creates the Proxmox VE user <code>{user}</code> with Administrator on{" "}
+        <code>/</code>.
       </p>
-      <Field
-        label="State passphrase"
-        hint={`The passphrase given when the management cluster was created; at least ${minPassphrase} characters.`}
-      >
+      <p className="warning">Whoever takes over the appliance then controls the management cluster and Proxmox VE.</p>
+      <p>Switching off deletes the passphrase, the user and its token.</p>
+      <Field label="State passphrase">
         {(id) => (
           <input
             id={id}

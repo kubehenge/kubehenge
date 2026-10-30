@@ -20,7 +20,7 @@ type poolAutoscaling struct {
 	Max int32 `json:"max"`
 }
 
-const autoscalingCounts = "autoscaling: from 0 or more workers up to at most 100, the most at least 1 and never below the least"
+const autoscalingCounts = "autoscaling: minimum 0 or more, maximum 1 to 100 and not below the minimum"
 
 func (a *poolAutoscaling) valid() bool {
 	return a.Min >= 0 && a.Max >= 1 && a.Min <= a.Max && a.Max <= provisioner.MaxAutoscaledWorkers

@@ -85,15 +85,16 @@ describe("a missing template", () => {
     });
     const user = userEvent.setup({ delay: null });
     step(kubeadm, "rocky-10");
-    const button = await screen.findByRole("button", { name: "Have the template built" });
+    const button = await screen.findByRole("button", { name: "Build template" });
     expect(button).toBeDisabled();
-    expect(screen.getByText(/versions that have a VM template on Rocky Linux 10\./u)).toBeInTheDocument();
+    expect(screen.getByText("A version not listed on Rocky Linux 10 takes about 20 minutes")).toBeInTheDocument();
     await user.type(screen.getByLabelText("Kubernetes version to build"), "1.37");
     expect(screen.getByLabelText("Kubernetes version to build")).toHaveAttribute("aria-invalid", "true");
     await user.clear(screen.getByLabelText("Kubernetes version to build"));
     await user.type(screen.getByLabelText("Kubernetes version to build"), "v1.37.1");
     await user.click(button);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Asked for" })).toBeDisabled());
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(screen.getByText("Requested: kubeadm v1.37.1 on Rocky Linux 10")).toBeInTheDocument();
     expect(calls.find((c) => c.key === "POST /api/template-builds")?.body).toStrictEqual({
       distribution: "kubeadm",
       kubernetesVersion: "v1.37.1",
@@ -117,7 +118,7 @@ describe("a missing template", () => {
       default: "v1.14.4",
       kubernetes: {},
     });
-    const button = await screen.findByRole("button", { name: "Have the template built" });
+    const button = await screen.findByRole("button", { name: "Build template" });
     expect(screen.queryByLabelText("Node OS")).not.toBeInTheDocument();
     // The releases without a template, newest first, the default marked.
     expect(
@@ -127,12 +128,12 @@ describe("a missing template", () => {
     ).toStrictEqual(["v1.16.0", "v1.14.4 (default)"]);
     expect(screen.getByLabelText("Talos release to build")).toHaveValue("v1.16.0");
     await user.click(button);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Asked for" })).toBeDisabled());
+    await waitFor(() => expect(button).toBeDisabled());
     expect(calls.find((c) => c.key === "POST /api/template-builds")?.body).toStrictEqual({
       distribution: "talos",
       talosVersion: "v1.16.0",
     });
-    expect(screen.getByText(/Asked for: Talos v1\.16\.0\./u)).toBeInTheDocument();
+    expect(screen.getByText("Requested: Talos v1.16.0")).toBeInTheDocument();
   });
 
   it("says which templates are asked for in words, and holds one the run under way builds", async () => {
@@ -162,10 +163,9 @@ describe("a missing template", () => {
       },
     });
     step(talos, "", { templates: ["v1.15.1"], releases: ["v1.16.0", "v1.15.1"], default: "v1.15.1", kubernetes: {} });
-    await expect(screen.findByRole("button", { name: "Asked for" })).resolves.toBeDisabled();
-    expect(
-      screen.getByText(/Building now: kubehenge-talos-v1\.16\.0\. Asked for: Talos v1\.14\.9\./u),
-    ).toBeInTheDocument();
+    await expect(screen.findByRole("button", { name: "Build template" })).resolves.toBeDisabled();
+    expect(screen.getByText("Building: kubehenge-talos-v1.16.0")).toBeInTheDocument();
+    expect(screen.getByText("Requested: Talos v1.14.9")).toBeInTheDocument();
   });
 
   it("takes a typed Talos release when the Image Factory's cannot be read", async () => {
@@ -181,7 +181,7 @@ describe("a missing template", () => {
       kubernetes: {},
       error: "the Talos releases could not be read",
     });
-    const button = await screen.findByRole("button", { name: "Have the template built" });
+    const button = await screen.findByRole("button", { name: "Build template" });
     expect(screen.getByText(/The Talos releases could not be read\./u)).toBeInTheDocument();
     await user.type(screen.getByLabelText("Talos release to build"), "v1.16");
     expect(screen.getByLabelText("Talos release to build")).toHaveAttribute("aria-invalid", "true");
@@ -200,7 +200,7 @@ describe("a missing template", () => {
     const calls = fakeServer({ "GET /api/template-builds": { body: { allowed: true, requested: [], building: [] } } });
     step(talos, "", { templates: ["v1.15.1"], releases: ["v1.15.1"], default: "v1.15.1", kubernetes: {} });
     await waitFor(() => expect(calls.map((c) => c.key)).toContain("GET /api/template-builds"));
-    expect(screen.queryByRole("button", { name: "Have the template built" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Build template" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Talos release")).toBeInTheDocument();
   });
 
@@ -211,7 +211,7 @@ describe("a missing template", () => {
     });
     const user = userEvent.setup({ delay: null });
     step(rke2, "rocky-10");
-    await user.click(await screen.findByRole("button", { name: "Have the template built" }));
+    await user.click(await screen.findByRole("button", { name: "Build template" }));
     expect(screen.queryByLabelText("Kubernetes version to build")).not.toBeInTheDocument();
     await waitFor(() =>
       expect(calls.find((c) => c.key === "POST /api/template-builds")?.body).toStrictEqual({
@@ -226,8 +226,8 @@ describe("a missing template", () => {
       "GET /api/template-builds": { body: { allowed: true, requested: ["rke2-rocky-10"], building: [] } },
     });
     step(rke2, "rocky-10");
-    await expect(screen.findByRole("button", { name: "Asked for" })).resolves.toBeDisabled();
-    expect(screen.getByText(/Asked for: RKE2 on Rocky Linux 10\./u)).toBeInTheDocument();
+    await expect(screen.findByRole("button", { name: "Build template" })).resolves.toBeDisabled();
+    expect(screen.getByText("Requested: RKE2 on Rocky Linux 10")).toBeInTheDocument();
   });
 
   it("is not offered while the node OS chosen has its template", async () => {
@@ -236,7 +236,7 @@ describe("a missing template", () => {
     });
     step(rke2);
     await waitFor(() => expect(calls.map((c) => c.key)).toContain("GET /api/template-builds"));
-    expect(screen.queryByRole("button", { name: "Have the template built" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Build template" })).not.toBeInTheDocument();
   });
 
   it("is not offered when the administrators do not allow it", async () => {
@@ -245,6 +245,6 @@ describe("a missing template", () => {
     });
     step(rke2, "rocky-10");
     await waitFor(() => expect(calls.map((c) => c.key)).toContain("GET /api/template-builds"));
-    expect(screen.queryByRole("button", { name: "Have the template built" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Build template" })).not.toBeInTheDocument();
   });
 });

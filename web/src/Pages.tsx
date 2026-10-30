@@ -103,9 +103,7 @@ export function RoutePage({
       return <Administration view={route.view} onGone={onSetupChanged} />;
     }
     case "forbidden": {
-      return (
-        <NoPage text="This page is for those who may set Kubehenge up: the Administrator role on / in Proxmox VE." />
-      );
+      return <NoPage title="Administrators only">Needs the Administrator role on / in Proxmox VE.</NoPage>;
     }
     case "create": {
       return <CreateCluster canTrust={canTrust} namespaces={namespaces} />;
@@ -123,17 +121,18 @@ export function RoutePage({
       break;
     }
   }
-  return <NoPage text="There is no page at this address." />;
+  return <NoPage />;
 }
 
-function NoPage({ text }: { text: string }): JSX.Element {
+function NoPage({ title = "No such page", children }: { title?: string; children?: string }): JSX.Element {
   return (
     <section className="panel">
       <div className="toolbar">
-        <h2>No such page</h2>
+        <h2>{title}</h2>
       </div>
       <p className="pad">
-        {text} <Link to="/">Go to the clusters</Link>.
+        {children !== undefined && `${children} `}
+        <Link to="/">Go to clusters</Link>
       </p>
     </section>
   );

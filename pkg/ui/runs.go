@@ -170,14 +170,14 @@ func (s *Server) applianceRuns() []runView {
 	var list []runView
 	if a := s.Appliance; a != nil {
 		if j := a.Current(); j != nil {
-			what := "Apply the management cluster"
+			what := "Apply management cluster"
 			if j.Kind == "remove" {
-				what = "Remove the management cluster"
+				what = "Delete management cluster"
 			}
 			list = append(list, jobRun("management-cluster", runManagement, what, j))
 		}
 		if j := a.TemplateJob(); j != nil {
-			list = append(list, jobRun("template", runTemplate, "Build a template", j))
+			list = append(list, jobRun("template", runTemplate, "Build template", j))
 		}
 	}
 	if up := s.Upgrades; up != nil {
@@ -210,7 +210,7 @@ func jobRun(id, kind, what string, j *appliance.JobView) runView {
 // updateRun is the updater's last upgrade of the appliance; finding nothing newer is no run.
 func updateRun(st *appliance.UpdateStatus) (runView, bool) {
 	at := st.Time
-	v := runView{ID: "appliance-upgrade", Kind: runApplianceUpdate, What: "Upgrade the appliance to " + st.To, Error: st.Error}
+	v := runView{ID: "appliance-upgrade", Kind: runApplianceUpdate, What: "Upgrade appliance to " + st.To, Error: st.Error}
 	switch st.State {
 	case "updating":
 		v.State, v.Started = runRunning, &at
@@ -229,7 +229,7 @@ func refreshRuns(state *refreshState) []runView {
 		return nil
 	}
 	v := runView{
-		ID: "template-refresh", Kind: runTemplateRefresh, What: "Refresh the templates", State: st,
+		ID: "template-refresh", Kind: runTemplateRefresh, What: "Refresh templates", State: st,
 		Started: parseStamp(state.status[provisioner.RefreshStarted]), Finished: parseStamp(state.status[provisioner.RefreshFinished]),
 		Error: state.status[provisioner.RefreshError],
 	}
@@ -264,7 +264,7 @@ func etcdRuns(c *clusterv1.Cluster) []runView {
 		list = append(list, v)
 	}
 	snapshot := base
-	snapshot.ID, snapshot.Kind, snapshot.What = "etcd-snapshot/"+clusterKey(c.Namespace, c.Name), runEtcdSnapshot, "Take an etcd snapshot"
+	snapshot.ID, snapshot.Kind, snapshot.What = "etcd-snapshot/"+clusterKey(c.Namespace, c.Name), runEtcdSnapshot, "Take etcd snapshot"
 	cond := meta.FindStatusCondition(c.Status.Conditions, provisioner.EtcdSnapshotCondition)
 	_, requested := c.Annotations[provisioner.EtcdSnapshotRequestAnnotation]
 	switch {
@@ -308,9 +308,9 @@ func restoreSteps(st *provisioner.EtcdRestoreStatus, state string) []runStep {
 	}
 	switch {
 	case st.Before != "":
-		steps[0].Detail = "etcd as it was saved as " + st.Before
+		steps[0].Detail = "undo snapshot " + st.Before
 	case st.NoBefore != "":
-		steps[0].Detail = "no snapshot of etcd as it was: " + st.NoBefore
+		steps[0].Detail = "no undo snapshot: " + st.NoBefore
 	}
 	return steps
 }
@@ -332,6 +332,10 @@ func (s *Server) readVeleroRuns(ctx context.Context, u user, c *clusterv1.Cluste
 	var list []runView
 	for i := range view.Backups {
 		b := &view.Backups[i]
+		// Another cluster's backup is a run of that cluster's.
+		if b.From != "" {
+			continue
+		}
 		r := base
 		r.ID, r.Kind, r.What, r.By = "backup/"+clusterKey(c.Namespace, c.Name)+"/"+b.Name, runBackup, "Back up", b.By
 		if b.Scheduled {
@@ -369,7 +373,7 @@ func veleroState(phase, failure string, errs int64) (string, string) {
 		return runSucceeded, ""
 	case "Failed", "FailedValidation", "PartiallyFailed":
 		if errs > 0 && failure == "" {
-			failure = fmt.Sprintf("%d errors; Velero's log of it has them", errs)
+			failure = fmt.Sprintf("%d errors, see Velero's log", errs)
 		}
 		return runFailed, cmp.Or(failure, phase)
 	case veleroDeleting:

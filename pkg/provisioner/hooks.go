@@ -258,6 +258,7 @@ func (h *Hooks) refusal(ctx context.Context, cluster *clusterv1.Cluster, class *
 		func() error { return checkAddonRoom(nil, cluster, class) },
 		func() error { return checkLogs(cluster) },
 		func() error { return checkBackups(nil, cluster, class) },
+		func() error { return checkBackupSources(ctx, h.Reader, nil, cluster) },
 		func() error { return h.checkDatastoreAllocate(ctx, cluster, class) },
 		func() error { return h.checkVolumeSnapshots(cluster, class) },
 		func() error { return h.checkSysAudit(cluster) },
@@ -323,7 +324,7 @@ func (h *Hooks) checkRancher(ctx context.Context, cluster *clusterv1.Cluster, ve
 		return err
 	}
 	if !h.RancherKubernetes.Allows(version) {
-		return fmt.Errorf("the Rancher release Kubehenge installs runs on Kubernetes 1.%d to 1.%d, not %s",
+		return fmt.Errorf("for Rancher, choose Kubernetes 1.%d to 1.%d, not %s",
 			h.RancherKubernetes.Min, h.RancherKubernetes.Max, version)
 	}
 	clusters := &clusterv1.ClusterList{}
@@ -336,7 +337,7 @@ func (h *Hooks) checkRancher(ctx context.Context, cluster *clusterv1.Cluster, ve
 			continue
 		}
 		if other, err := rancherOf(c); err == nil && other.Install {
-			return fmt.Errorf("cluster %s/%s already runs Rancher, with which every cluster registers", c.Namespace, c.Name)
+			return fmt.Errorf("cluster %s/%s already runs Rancher. Only one cluster may run it", c.Namespace, c.Name)
 		}
 	}
 	return nil

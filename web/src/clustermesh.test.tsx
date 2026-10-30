@@ -60,13 +60,15 @@ describe("a Cluster Mesh", () => {
     render(<App />);
 
     const row = await screen.findByRole("row", { name: /Cluster Mesh/u });
-    expect(row).toHaveTextContent("On, not yet linked with db");
+    expect(row).toHaveTextContent("On, waiting for db");
     await user.click(screen.getByRole("button", { name: "Edit Cluster Mesh" }));
-    const dialog = screen.getByRole("dialog", { name: "Cluster Mesh" });
-    expect(within(dialog).getByLabelText("Join a Cluster Mesh")).toHaveAccessibleDescription(/list each other/u);
+    const dialog = screen.getByRole("dialog", { name: "Edit Cluster Mesh" });
+    await user.click(within(dialog).getByRole("button", { name: "About Cluster Mesh" }));
+    expect(within(dialog).getByText(/list each other/u)).toBeVisible();
     const db = await within(dialog).findByRole("checkbox", { name: /^db/u });
     expect(db).toBeChecked();
-    expect(within(dialog).getByText("(not linked: it does not list this cluster)")).toBeInTheDocument();
+    expect(within(dialog).getByText("(Not linked)")).toBeInTheDocument();
+    expect(within(dialog).getByText("it does not list this cluster")).toBeInTheDocument();
     expect(within(dialog).queryByRole("checkbox", { name: /legacy|far|web/u })).not.toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
     await user.click(within(dialog).getByRole("checkbox", { name: "api" }));
@@ -79,8 +81,8 @@ describe("a Cluster Mesh", () => {
   });
 
   it.each([
-    [[], "On, no peers chosen"],
-    [[{ name: "db" }, { name: "api", refused: "it is off" }], "On, linked with db; not yet with api"],
+    [[], "On, no peers"],
+    [[{ name: "db" }, { name: "api", refused: "it is off" }], "On, linked with db, waiting for api"],
   ])("says in a line what a cluster is linked with", async (mesh, line) => {
     const on: Cluster = { ...cluster("clusters", "web", { cni: "cilium", clusterMesh: { enabled: true } }), mesh };
     window.history.replaceState(null, "", "/clusters/clusters/web/options");
@@ -153,9 +155,9 @@ describe("a Cluster Mesh", () => {
     const { rerender } = render(step({ ...newForm(), cni: "cilium" }));
     expect(screen.getByLabelText("Pod range")).toHaveAttribute("placeholder", "10.42.0.0/16");
     expect(screen.getByLabelText("Service range")).toHaveAttribute("placeholder", "10.43.0.0/16");
-    expect(screen.getByLabelText("Pod range")).toHaveAccessibleDescription(/another cluster's ranges/u);
+    expect(screen.getByLabelText("Pod range")).toHaveAccessibleDescription(/clear of other clusters/u);
 
     rerender(step({ ...newForm(), cni: "calico" }));
-    expect(screen.getByLabelText("Pod range")).not.toHaveAccessibleDescription(/another cluster's ranges/u);
+    expect(screen.getByLabelText("Pod range")).not.toHaveAccessibleDescription(/clear of other clusters/u);
   });
 });

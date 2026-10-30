@@ -7,7 +7,7 @@ import type { Cluster, FleetHealth } from "./types";
 import { ErrorBox, StatusBadge, age, distributionName, filled, health } from "./ui";
 
 // The privilege creating a cluster needs, as Proxmox VE names it.
-const createNeeds = "Creating a cluster needs VM.Allocate on Kubehenge's workload pool.";
+const createNeeds = "Creating clusters needs VM.Allocate on the workload pool.";
 
 export function ClusterList({ canCreate }: { canCreate?: boolean | undefined }): JSX.Element {
   const fleet = useFleet();
@@ -60,7 +60,7 @@ function FleetList({ canCreate }: { canCreate: boolean | undefined }): JSX.Eleme
       {clusters === undefined ? (
         error === undefined && <p className="muted pad">Loading…</p>
       ) : (
-        <Clusters clusters={clusters} found={fleet?.health} refused={refused} />
+        <Clusters clusters={clusters} found={fleet?.health} />
       )}
     </section>
   );
@@ -69,19 +69,12 @@ function FleetList({ canCreate }: { canCreate: boolean | undefined }): JSX.Eleme
 function Clusters({
   clusters,
   found,
-  refused,
 }: {
   clusters: Cluster[];
   found: Map<string, FleetHealth> | undefined;
-  refused: boolean;
 }): JSX.Element {
   if (clusters.length === 0) {
-    return (
-      <p className="muted pad">
-        No clusters yet. {refused ? "" : "Create one, or "}
-        {refused ? "To see one, ask" : "ask"} an administrator for VM.Audit on its pool.
-      </p>
-    );
+    return <p className="muted pad">No clusters yet. Seeing one needs VM.Audit on its pool.</p>;
   }
   return (
     <div className="scroll">

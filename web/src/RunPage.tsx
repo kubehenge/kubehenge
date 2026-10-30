@@ -16,7 +16,7 @@ const states: Record<RunInfo["state"], { state: "progress" | "ok" | "error"; tex
 
 const stepStates: Record<RunStep["state"], string> = {
   done: "Done",
-  running: "Under way",
+  running: "Running",
   waiting: "Waiting",
   failed: "Failed",
 };
@@ -36,7 +36,7 @@ function took(r: RunInfo): string | undefined {
   }
   const end = r.finished === undefined ? Date.now() : new Date(r.finished).getTime();
   const minutes = Math.max(0, Math.round((end - new Date(r.started).getTime()) / msPerMinute));
-  return minutes < 1 ? "under a minute" : `${minutes} min`;
+  return minutes < 1 ? "<1 min" : `${minutes} min`;
 }
 
 /**
@@ -53,9 +53,7 @@ export function RunPage({ id }: { id: string }): JSX.Element {
           <h2>Run</h2>
         </div>
         <p className="muted">
-          {fleet?.runs === undefined
-            ? "Loading…"
-            : "This run is no longer listed: runs that went well are kept for an hour, failed ones for a day."}
+          {fleet?.runs === undefined ? "Loading…" : "Run no longer kept. Runs stay 1 h, failed ones 1 day."}
         </p>
       </section>
     );
@@ -91,7 +89,7 @@ export function RunPage({ id }: { id: string }): JSX.Element {
       </div>
       {run.error !== undefined && (
         <div className="pinned-error" role="alert">
-          <strong>First error</strong>
+          <strong>Error</strong>
           <p>{run.error}</p>
         </div>
       )}

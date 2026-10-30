@@ -53,14 +53,12 @@ describe("the management cluster behind the appliance", () => {
     render(<App />);
 
     await expect(
-      screen.findByText("The management cluster runs what Kubehenge 0.1.0 applied; this appliance carries 0.2.0.", {
-        exact: false,
-      }),
+      screen.findByText("Management cluster upgrade: 0.1.0 to 0.2.0", { exact: false }),
     ).resolves.toBeInTheDocument();
     expect(screen.getByText("Kubehenge 0.1.0")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Upgrade the management cluster" }));
-    const dialog = within(screen.getByRole("dialog", { name: "Upgrade the management cluster" }));
-    expect(dialog.getByText("From what Kubehenge 0.1.0 applied to what 0.2.0 carries:")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Upgrade…" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Upgrade management cluster" }));
+    expect(dialog.getByRole("row", { name: "Component 0.1.0 0.2.0" })).toBeInTheDocument();
     const talos = dialog.getByRole("row", { name: "Talos v1.14.4 v1.15.0" });
     expect(talos).toBeInTheDocument();
     expect(dialog.getByRole("row", { name: "Cluster API v1.14.3 v1.15.0" })).toBeInTheDocument();
@@ -90,7 +88,7 @@ describe("the management cluster behind the appliance", () => {
     );
     render(<App />);
     await expect(screen.findByRole("heading", { name: "Management cluster" })).resolves.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Upgrade the management cluster" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Upgrade…" })).not.toBeInTheDocument();
   });
 
   it("tells of a failed automatic upgrade, and that it is tried again", async () => {
@@ -109,12 +107,15 @@ describe("the management cluster behind the appliance", () => {
       administrationPage({ appliance: true, ready: true, allowed: true, settings: saved, upgrade: behind, job }),
     );
     render(<App />);
-    const alert = await screen.findByText(/The automatic upgrade of .* failed, and is tried again/u);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/Automatic upgrade of .* failed\. It retries at the next upgrade hour\./u);
     expect(alert).toHaveTextContent("tofu apply: exit status 1");
     // The notice at the top of the page says so too.
-    expect(screen.getByText(/Upgrading it automatically failed/u)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Management cluster upgrade: 0\.1\.0 to 0\.2\.0\. Automatic upgrade failed\./u),
+    ).toBeInTheDocument();
     // Upgrading by hand stays open meanwhile.
-    expect(screen.getByRole("button", { name: "Upgrade the management cluster" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Upgrade…" })).toBeInTheDocument();
   });
 });
 
@@ -145,12 +146,12 @@ describe("automatic upgrades of the management cluster", () => {
 
     const select = await screen.findByLabelText("Management cluster");
     expect(select).toHaveValue("off");
-    expect(screen.queryByLabelText("At hour")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Hour")).not.toBeInTheDocument();
 
     // Cancelled, nothing is kept.
     await user.selectOptions(select, "on");
     await user.click(
-      within(screen.getByRole("dialog", { name: "Upgrade the management cluster automatically" })).getByRole("button", {
+      within(screen.getByRole("dialog", { name: "Upgrade management cluster automatically" })).getByRole("button", {
         name: "Cancel",
       }),
     );
@@ -158,15 +159,15 @@ describe("automatic upgrades of the management cluster", () => {
     expect(select).toHaveValue("off");
 
     await user.selectOptions(select, "on");
-    const dialog = within(screen.getByRole("dialog", { name: "Upgrade the management cluster automatically" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Upgrade management cluster automatically" }));
     expect(dialog.getByText("kubehenge-upgrader@pve")).toBeInTheDocument();
-    expect(dialog.getByText(/Administrator role/u)).toBeInTheDocument();
-    expect(dialog.getByText(/Anyone who gets root on the appliance/u)).toHaveTextContent(
-      "admin kubeconfig and talosconfig",
-    );
-    expect(dialog.getByRole("button", { name: "Keep them and switch on" })).toBeDisabled();
+    expect(dialog.getByText(/Stores the state passphrase/u)).toHaveTextContent("with Administrator on /");
+    expect(
+      dialog.getByText("Whoever takes over the appliance then controls the management cluster and Proxmox VE."),
+    ).toBeInTheDocument();
+    expect(dialog.getByRole("button", { name: "Switch on" })).toBeDisabled();
     await user.type(dialog.getByLabelText("State passphrase"), "correct horse battery staple");
-    await user.click(dialog.getByRole("button", { name: "Keep them and switch on" }));
+    await user.click(dialog.getByRole("button", { name: "Switch on" }));
     await waitFor(() =>
       expect(calls.find((c) => c.key === "PUT /api/appliance/upgrades/management")?.body).toStrictEqual({
         passphrase: "correct horse battery staple",
@@ -182,7 +183,7 @@ describe("automatic upgrades of the management cluster", () => {
     );
     await waitFor(() => expect(screen.getByLabelText("Management cluster")).toHaveValue("on"));
     expect(screen.getByText(/Switched on .* by root@pam/u)).toBeInTheDocument();
-    expect(screen.getByLabelText("At hour")).toBeInTheDocument();
+    expect(screen.getByLabelText("Hour")).toBeInTheDocument();
 
     await user.selectOptions(screen.getByLabelText("Management cluster"), "off");
     await waitFor(() => expect(calls.map((c) => c.key)).toContain("DELETE /api/appliance/upgrades/management"));
@@ -200,9 +201,9 @@ describe("automatic upgrades of the management cluster", () => {
     const user = userEvent.setup({ delay: null });
     render(<ApplianceUpgrades />);
     await user.selectOptions(await screen.findByLabelText("Management cluster"), "on");
-    const dialog = within(screen.getByRole("dialog", { name: "Upgrade the management cluster automatically" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Upgrade management cluster automatically" }));
     await user.type(dialog.getByLabelText("State passphrase"), "the wrong passphrase entirely");
-    await user.click(dialog.getByRole("button", { name: "Keep them and switch on" }));
+    await user.click(dialog.getByRole("button", { name: "Switch on" }));
     await expect(
       dialog.findByText("the passphrase does not open the management cluster's state", { exact: false }),
     ).resolves.toBeInTheDocument();

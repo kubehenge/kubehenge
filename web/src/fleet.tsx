@@ -95,7 +95,7 @@ const firstWord = (s: string): string => s.split(" ")[0] ?? s;
 // rollout says how far a set of machines is on its way to its desired state.
 function rollout(what: string, r: Replicas): string {
   if (r.upToDate < r.desired) {
-    return `${what} rolling out: ${r.upToDate} of ${r.desired} up to date`;
+    return `${what}: ${r.upToDate} of ${r.desired} updated`;
   }
   return `${what}: ${r.ready} of ${r.desired} ready`;
 }
@@ -106,7 +106,7 @@ function rollout(what: string, r: Replicas): string {
  */
 export function standing(c: Cluster, health?: FleetHealth, now = Date.now()): Standing {
   if (c.deleting) {
-    return { group: "running", state: "deleting", reason: "Being deleted", view: "" };
+    return { group: "running", state: "deleting", reason: "Deleting", view: "" };
   }
   return (
     failure(c) ??
@@ -123,7 +123,7 @@ export function standing(c: Cluster, health?: FleetHealth, now = Date.now()): St
 // failure is what has failed in a cluster and waits for someone, if anything has.
 function failure(c: Cluster): Standing | undefined {
   if (c.phase === "Failed") {
-    return { group: "needs", state: "error", reason: "Cluster API reports it failed", view: "health" };
+    return { group: "needs", state: "error", reason: "Failed", view: "health" };
   }
   if (filled(c.talos?.failed)) {
     return {
@@ -144,14 +144,14 @@ function failure(c: Cluster): Standing | undefined {
 // comingUp is how far a cluster that is not available yet is, or why it stopped coming up.
 function comingUp(c: Cluster, now: number): Standing {
   if (c.conditions.some((x) => x.type === "TopologyReconciled" && x.reason === "ClusterClassNotReconciled")) {
-    return { group: "running", state: "progress", reason: "Waiting for its ClusterClass", view: "" };
+    return { group: "running", state: "progress", reason: "Waiting for ClusterClass", view: "" };
   }
   if (now - Date.parse(c.created) < provisioningGrace) {
     const cp = c.controlPlane;
     return {
       group: "running",
       state: "progress",
-      reason: `Creating: ${cp.ready} of ${cp.desired} control planes ready`,
+      reason: `Creating: ${cp.ready} of ${cp.desired} control planes`,
       view: "machines",
     };
   }
@@ -169,7 +169,7 @@ const moving = (reason: string): Standing => ({ group: "running", state: "progre
 // underWay is the change going on in an available cluster, if one is.
 function underWay(c: Cluster): Standing | undefined {
   if (filled(c.talos?.upgrading)) {
-    return moving(`Talos upgrade on ${firstWord(c.talos.upgrading)}`);
+    return moving(`Upgrading Talos on ${firstWord(c.talos.upgrading)}`);
   }
   const reconciling = c.conditions.find((x) => x.type === "TopologyReconciled" && x.status !== "True");
   if (reconciling) {
@@ -184,7 +184,7 @@ function underWay(c: Cluster): Standing | undefined {
   const waiting = (c.machines ?? []).filter((m) => !m.ready);
   if (waiting.length > 0) {
     return moving(
-      waiting.length === 1 ? `${waiting[0]?.name ?? ""} not ready yet` : `${waiting.length} machines not ready yet`,
+      waiting.length === 1 ? `${waiting[0]?.name ?? ""} not ready` : `${waiting.length} machines not ready`,
     );
   }
   return undefined;
@@ -196,18 +196,20 @@ function finding(h: FleetHealth | undefined): Standing | undefined {
     return undefined;
   }
   if (h.verdict === "unreachable") {
-    return { group: "needs", state: "error", reason: "Its API server does not answer", view: "health" };
+    return { group: "needs", state: "error", reason: "API server unreachable", view: "health" };
   }
   const [worst] = h.attention;
   if (worst === undefined) {
     return undefined;
   }
   const others = h.attention.length - 1 + (h.more ?? 0);
-  const reason = others > 0 ? `${worst.what}, and ${others} more` : worst.what;
+  const reason = others > 0 ? `${worst.what} and ${others} more` : worst.what;
+  // The backups view, not the health page, has the details of the cluster's backups.
+  const view: View = worst.section === "backups" ? "backups" : "health";
   if (worst.severity === "progress") {
-    return { group: "running", state: "progress", reason, view: "health" };
+    return { group: "running", state: "progress", reason, view };
   }
-  return { group: "needs", state: worst.severity, reason, view: "health" };
+  return { group: "needs", state: worst.severity, reason, view };
 }
 
 const severity: Record<Standing["state"], number> = { error: 0, warning: 1, progress: 2, deleting: 3, ok: 4 };
@@ -249,11 +251,7 @@ export function FleetRail({
           type="button"
           className="icon"
           aria-label="New cluster"
-          title={
-            canCreate === false
-              ? "Creating a cluster needs VM.Allocate on Kubehenge's workload pool."
-              : "New cluster (N)"
-          }
+          title={canCreate === false ? "Needs VM.Allocate" : "New cluster (N)"}
           disabled={canCreate === false}
           onClick={onCreate}
         >
@@ -261,7 +259,7 @@ export function FleetRail({
         </button>
       </div>
       {fleet?.error !== undefined && list === undefined && <p className="rail-note">{fleet.error}</p>}
-      {list?.length === 0 && <p className="rail-note">No clusters yet.</p>}
+      {list?.length === 0 && <p className="rail-note">No clusters yet</p>}
       {list !== undefined &&
         groups.map(({ group, label }) => {
           const members = list.filter((m) => m.standing.group === group);

@@ -15,12 +15,12 @@ export interface CredentialKey {
 /** setText tells when and by whom a credential was stored, or that none is. */
 export function setText(c: StoredCredential): string {
   if (!c.set) {
-    return "Not set.";
+    return "Not set";
   }
   const on =
     c.setAt === undefined ? "" : ` on ${new Date(c.setAt).toLocaleDateString(undefined, { dateStyle: "long" })}`;
   const by = filled(c.setBy) ? ` by ${c.setBy}` : "";
-  return `Set${on}${by}.`;
+  return `Set${on}${by}`;
 }
 
 const refOf = (namespace?: string, name?: string): ClusterRef | undefined =>
@@ -104,7 +104,8 @@ export function CredentialField({
     });
   };
 
-  // Enter stores what was typed rather than submitting the form around the field.
+  // Enter stores what was typed rather than submitting the form around the field, whose own Save is
+  // a different action.
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>): void => {
     if (e.key === "Enter") {
       e.preventDefault();
@@ -153,13 +154,13 @@ export function CredentialField({
       )}
       {values === undefined && confirming && (
         <>
-          <p>Remove it? Whatever uses it stops working until one is stored again.</p>
+          <p>Delete this credential? What uses it stops working.</p>
           <div className="actions">
             <button type="button" onClick={() => setConfirming(false)}>
               Keep
             </button>
             <button type="button" className="danger" disabled={busy} onClick={remove}>
-              Remove
+              Delete
             </button>
           </div>
         </>
@@ -168,7 +169,7 @@ export function CredentialField({
         <div className="actions">
           {stored.set && (
             <button type="button" onClick={() => setConfirming(true)}>
-              Remove…
+              Delete…
             </button>
           )}
           <button type="button" onClick={() => setValues({})}>

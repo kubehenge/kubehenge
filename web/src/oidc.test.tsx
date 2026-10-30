@@ -28,6 +28,6 @@ describe("identity providers", () => {
         { issuerURL: "https://sso.example", clientID: "a" },
         { issuerURL: "https://sso.example ", clientID: "b" },
       ]),
-    ).toStrictEqual(["Identity provider 2: that issuer is listed already."]);
+    ).toStrictEqual(["Identity provider 2: issuer already listed."]);
   });
 });

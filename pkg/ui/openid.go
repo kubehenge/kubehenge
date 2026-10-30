@@ -18,7 +18,7 @@ const openIDCookie = "__Host-kubehenge-openid"
 const openIDStateLifetime = 10 * time.Minute
 
 // noPublicURL is why an OpenID sign-in cannot start or finish without the public address.
-const noPublicURL = "OpenID sign-in needs the interface's public address, which an administrator sets with --public-url"
+const noPublicURL = "OpenID sign-in needs the public address. An administrator sets it with --public-url"
 
 // redirectURL is where the identity provider sends users back, under the configured public address;
 // ok is false while none is configured. The address the browser used is never taken instead: the
@@ -79,7 +79,7 @@ func (s *Server) openIDCallback(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie(openIDCookie)
 	http.SetCookie(w, &http.Cookie{Name: openIDCookie, Value: "", Path: "/", MaxAge: -1, Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 	if err != nil || state == "" || code == "" || subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(stateDigest(state))) != 1 {
-		openIDFailed(w, r, "this sign-in was not started here; start again")
+		openIDFailed(w, r, "this sign-in was started elsewhere. Sign in again")
 		return
 	}
 	if q.Get("error") != "" {
@@ -93,14 +93,14 @@ func (s *Server) openIDCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	done, ok := s.limiter.reserve(count{key: "address:" + clientAddress(r), allowed: addressFailuresAllowed})
 	if !ok {
-		openIDFailed(w, r, "too many failed sign-ins; try again later")
+		openIDFailed(w, r, "too many failed sign-ins. Try again later")
 		return
 	}
 	ticket, err := s.Accounts.OpenIDLogin(r.Context(), code, state, redirect)
 	done(err != nil)
 	if err != nil {
 		s.Log.Info("openid sign-in refused", "address", clientAddress(r), "error", err)
-		openIDFailed(w, r, "the sign-in through the identity provider failed")
+		openIDFailed(w, r, "sign-in through the identity provider failed")
 		return
 	}
 	s.sessions.end(w, r)

@@ -231,7 +231,9 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/pods/{podNamespace}/{pod}/logs", s.managed(s.podLogs))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/backups", s.managed(s.clusterBackups))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/backups", s.managed(s.backUp))
+	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/backups/{backup}", s.managed(s.deleteBackup))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/restores", s.managed(s.restore))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/restores/{restore}/results", s.managed(s.showRestoreResults))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/certificates/ca", s.managed(s.ingressCA))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/etcd-snapshots", s.managed(s.etcdSnapshots))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/etcd-snapshots", s.managed(s.takeEtcdSnapshot))
@@ -500,9 +502,9 @@ func (s *Server) require(w http.ResponseWriter, r *http.Request, u user, aclPath
 func (s *Server) proxmoxError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, pve.ErrAuthentication):
-		writeError(w, http.StatusUnauthorized, "Proxmox VE no longer accepts the session")
+		writeError(w, http.StatusUnauthorized, "session expired. Sign in again")
 	case errors.Is(err, pve.ErrForbidden):
-		writeError(w, http.StatusForbidden, "Proxmox VE refused: permission denied")
+		writeError(w, http.StatusForbidden, "Proxmox VE denied permission")
 	default:
 		s.Log.Error("proxmox VE request failed", "error", err)
 		writeError(w, http.StatusBadGateway, "Proxmox VE did not answer")
@@ -534,11 +536,11 @@ func decodeProblem(err error) string {
 	var tooLarge *http.MaxBytesError
 	switch {
 	case errors.As(err, &typed) && typed.Field != "":
-		return fmt.Sprintf("%s: the wrong kind of value (%s)", typed.Field, typed.Value)
+		return fmt.Sprintf("%s: wrong type of value (%s)", typed.Field, typed.Value)
 	case errors.As(err, &typed):
-		return fmt.Sprintf("the body: the wrong kind of value (%s)", typed.Value)
+		return fmt.Sprintf("the body: wrong type of value (%s)", typed.Value)
 	case errors.As(err, &syntax), errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, io.EOF):
-		return "the body is no valid JSON"
+		return "the body is not valid JSON"
 	case errors.As(err, &tooLarge):
 		return fmt.Sprintf("the body is larger than %d bytes", tooLarge.Limit)
 	}

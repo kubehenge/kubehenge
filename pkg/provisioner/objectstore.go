@@ -75,20 +75,9 @@ func OpenTarget(t *BackupTarget, credential map[string][]byte) (ObjectStore, err
 		// S3-compatible stores take the bucket in the path, as Velero is told to send it.
 		endpoint, lookup = u.Host, minio.BucketLookupPath
 	}
-	roots, err := x509.SystemCertPool()
+	transport, err := targetTransport(t)
 	if err != nil {
-		roots = x509.NewCertPool()
-	}
-	if t.CACertificate != "" && !roots.AppendCertsFromPEM([]byte(t.CACertificate)) {
-		return nil, fmt.Errorf("target %s: its CA certificate is not PEM", t.Name)
-	}
-	transport := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: storeDialTimeout}).DialContext,
-		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots},
-		TLSHandshakeTimeout:   storeDialTimeout,
-		ResponseHeaderTimeout: storeResponseTimeout,
-		ForceAttemptHTTP2:     true,
+		return nil, err
 	}
 	id := strings.TrimSpace(string(credential[backupAccessKeyID]))
 	secret := strings.TrimSpace(string(credential[backupSecretAccessKey]))
@@ -103,6 +92,40 @@ func OpenTarget(t *BackupTarget, credential map[string][]byte) (ObjectStore, err
 		return nil, fmt.Errorf("target %s: %w", t.Name, err)
 	}
 	return &s3Store{client: c, bucket: t.Bucket}, nil
+}
+
+// targetTransport reaches a target over HTTPS, verifying its certificate against the system's CAs
+// and the target's own.
+func targetTransport(t *BackupTarget) (*http.Transport, error) {
+	roots, err := x509.SystemCertPool()
+	if err != nil {
+		roots = x509.NewCertPool()
+	}
+	if t.CACertificate != "" && !roots.AppendCertsFromPEM([]byte(t.CACertificate)) {
+		return nil, fmt.Errorf("target %s: its CA certificate is not PEM", t.Name)
+	}
+	return &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: storeDialTimeout}).DialContext,
+		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots},
+		TLSHandshakeTimeout:   storeDialTimeout,
+		ResponseHeaderTimeout: storeResponseTimeout,
+		ForceAttemptHTTP2:     true,
+	}, nil
+}
+
+// serves tells whether a link Velero signed leads to the target itself, the one place the SSE-C
+// key sent with it may go.
+func (t *BackupTarget) serves(link string) bool {
+	u, err := url.Parse(link)
+	if err != nil || u.Scheme != "https" || u.User != nil {
+		return false
+	}
+	if t.Endpoint == "" {
+		return u.Hostname() == awsEndpoint || strings.HasSuffix(u.Hostname(), ".amazonaws.com")
+	}
+	e, err := url.Parse(t.Endpoint)
+	return err == nil && strings.EqualFold(e.Host, u.Host)
 }
 
 type s3Store struct {

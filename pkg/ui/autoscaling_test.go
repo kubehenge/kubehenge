@@ -71,7 +71,7 @@ func TestChangeAutoscaling(t *testing.T) {
 		t.Fatalf("pool view = %+v", p)
 	}
 
-	if rec := b.do("PATCH", "/api/clusters/default/one", `{"workerPools":{"md-0":2}}`); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "autoscaler sizes it") {
+	if rec := b.do("PATCH", "/api/clusters/default/one", `{"workerPools":{"md-0":2}}`); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "pool md-0 is autoscaled") {
 		t.Fatalf("fixing an autoscaled pool: %d %s", rec.Code, rec.Body.String())
 	}
 	expect(t, b.do("PATCH", "/api/clusters/default/one", `{"autoscaling":{"md-0":{"min":5,"max":4}}}`), http.StatusUnprocessableEntity)
