@@ -10,11 +10,20 @@ files=$(dirname "$(dirname "$0")")
 distribution=$1
 kubernetes=${2:-}
 
-# Each repository file names its key under /etc/pki/rpm-gpg; neither stays in the image, whose
-# packages only a new build changes.
+# dnf reads copies of the family's repository files, changed as build.sh changes the builder's so
+# that each reads its mirror list as the last failed attempt left it (mirrors.sh), with the bake's
+# repositories beside them, in a directory of their own: the image keeps the family's files as they
+# are. The bake's repository files name their keys under /etc/pki/rpm-gpg; neither stays in the
+# image, whose packages only a new build changes.
+repos=$(mktemp -d)
+cp /etc/yum.repos.d/*.repo "${repos}/"
 for repo in "${files}"/repos/*.repo; do
-    install -m 0644 "${repo}" "/etc/yum.repos.d/kubehenge-$(basename "${repo}")"
+    install -m 0644 "${repo}" "${repos}/kubehenge-$(basename "${repo}")"
 done
+# shellcheck source=pkg/templates/el/mirrors.sh
+. "${files}/el/mirrors.sh"
+use_metalinks "${repos}"
+point_at_mirrors "${repos}" "${files}/mirrors"
 for key in "${files}"/keys/*.asc; do
     install -m 0644 "${key}" "/etc/pki/rpm-gpg/kubehenge-$(basename "${key}")"
 done
@@ -38,9 +47,10 @@ case "${distribution}" in
 esac
 # A slow mirror is left for the next, as in build.sh.
 # shellcheck disable=SC2086 # one word per package
-dnf -y install --setopt=install_weak_deps=False --setopt=minrate=100k ${packages}
+dnf -y install --setopt=reposdir="${repos}" --setopt=install_weak_deps=False --setopt=minrate=100k ${packages}
 dnf clean all
-rm -f /etc/yum.repos.d/kubehenge-*.repo /etc/pki/rpm-gpg/kubehenge-*.asc
+rm -rf "${repos}"
+rm -f /etc/pki/rpm-gpg/kubehenge-*.asc
 rm -rf /var/cache/* /var/log/* /var/lib/dnf
 
 # guest-exec and the reading of files, which the family's agent refuses by default, and the policy
