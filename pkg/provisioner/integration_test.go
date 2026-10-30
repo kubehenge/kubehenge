@@ -606,9 +606,10 @@ func checkDatastoreAllocateAdmission(ctx context.Context, t *testing.T, c client
 }
 
 // checkClassAddonRoom holds a class's memory and CPU figures: one for every add-on and every node
-// kind, a cluster at the class's defaults holding every add-on but Rancher, logs and backups, the
-// default worker's CPU holding every add-on but Rancher, as the end-to-end tests have it, and the
-// least cluster Rancher runs on, without workers, holding Rancher.
+// kind; a worker and control plane sized as the end-to-end tests size them from the figures holding
+// every add-on but Rancher, logs and backups, and a MiB less refused; the default worker's CPU
+// holding every add-on but Rancher; and the least control plane Rancher runs on without workers,
+// at the memory its figures ask, holding Rancher.
 func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker *clusterv1.Cluster, alone controlPlaneSize) {
 	t.Helper()
 	addons, _, err := classFigures(class, AddonMemoryAnnotation)
@@ -629,24 +630,55 @@ func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker 
 		}
 	}
 	for _, annotation := range []string{NodeMemoryAnnotation, NodeCPUAnnotation} {
-		if nodes, _, err := classFigures(class, annotation); err != nil || nodes["controlPlane"] <= 0 || nodes["worker"] <= 0 {
-			t.Errorf("%s: %s %v, %v", class.Name, annotation, nodes, err)
+		if nodes, _, figuresErr := classFigures(class, annotation); figuresErr != nil || nodes["controlPlane"] <= 0 || nodes["worker"] <= 0 {
+			t.Errorf("%s: %s %v, %v", class.Name, annotation, nodes, figuresErr)
 		}
 	}
-	if err := checkAddonRoom(nil, withAddons(oneWorker.DeepCopy(), everyAddon), class); err != nil {
-		t.Errorf("%s: every add-on on the default worker: %v", class.Name, err)
+	defaults := withAddons(oneWorker.DeepCopy(), everyAddon)
+	room, err := addonRoomOf(addonMemory, defaults, class)
+	if err != nil {
+		t.Fatal(err)
+	}
+	least := classMinimumSize(class, "workerMachine").MemoryMiB
+	_, worker, err := nodeSize(defaults, class, "workerMachine", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, controlPlane, err := nodeSize(defaults, class, "controlPlaneMachine", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sized := func(workerMiB, controlPlaneMiB int) *clusterv1.Cluster {
+		return withAddons(defaults.DeepCopy(), map[string]string{
+			"workerMachine":       fmt.Sprintf(`{"memoryMiB":%d}`, workerMiB),
+			"controlPlaneMachine": fmt.Sprintf(`{"memoryMiB":%d}`, controlPlaneMiB),
+		})
+	}
+	workerMiB, controlPlaneMiB := max(least, room.Base+room.Need, worker), max(room.ControlPlaneNeed, controlPlane)
+	if err = checkRoomFor(addonMemory, nil, sized(workerMiB, controlPlaneMiB), class); err != nil {
+		t.Errorf("%s: every add-on on a worker of %d MiB and control plane of %d MiB: %v", class.Name, workerMiB, controlPlaneMiB, err)
+	}
+	if workerMiB > max(least, worker) && checkRoomFor(addonMemory, nil, sized(workerMiB-1, controlPlaneMiB), class) == nil {
+		t.Errorf("%s: every add-on on a worker of %d MiB, a MiB short, admitted", class.Name, workerMiB-1)
+	}
+	if controlPlaneMiB > controlPlane && checkRoomFor(addonMemory, nil, sized(workerMiB, controlPlaneMiB-1), class) == nil {
+		t.Errorf("%s: every add-on with a control plane of %d MiB, a MiB short, admitted", class.Name, controlPlaneMiB-1)
 	}
 	all := withAddons(withAddons(oneWorker.DeepCopy(), everyAddon), map[string]string{
 		"logs": `{"enabled":true}`, "backups": `{"enabled":true,"target":"store"}`, "gitops": `{"enabled":true,"engine":"flux"}`,
 		"loadBalancer": `{"enabled":true,"implementation":"kube-vip","addresses":["192.0.2.100-192.0.2.110"]}`,
 	})
-	if err := checkRoomFor(addonCPU, nil, all, class); err != nil {
+	if err = checkRoomFor(addonCPU, nil, all, class); err != nil {
 		t.Errorf("%s: every add-on but Rancher on the default worker's CPU: %v", class.Name, err)
 	}
-	rancher := withAddons(&clusterv1.Cluster{}, map[string]string{
-		"rancher":             `{"install":true,"hostname":"rancher.example.org"}`,
-		"controlPlaneMachine": fmt.Sprintf(`{"cores":%d,"memoryMiB":%d}`, max(alone.Cores, RancherMinimumCores), alone.MemoryMiB),
-	})
+	rancherOn := map[string]string{"rancher": `{"install":true,"hostname":"rancher.example.org"}`}
+	room, err = addonRoomOf(addonMemory, withAddons(&clusterv1.Cluster{}, rancherOn), class)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rancherOn["controlPlaneMachine"] = fmt.Sprintf(`{"cores":%d,"memoryMiB":%d}`,
+		max(alone.Cores, RancherMinimumCores), max(alone.MemoryMiB, room.Base+room.Need))
+	rancher := withAddons(&clusterv1.Cluster{}, rancherOn)
 	if err := checkAddonRoom(nil, rancher, class); err != nil {
 		t.Errorf("%s: Rancher on the least control plane without workers: %v", class.Name, err)
 	}
