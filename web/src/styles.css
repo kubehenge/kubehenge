@@ -488,6 +488,14 @@ button.go {
   font-size: 13px;
 }
 
+.retry-in,
+.unread {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
 .rail-stale .rail-group {
   opacity: 0.55;
   filter: grayscale(1);

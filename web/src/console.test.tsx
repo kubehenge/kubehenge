@@ -177,6 +177,25 @@ describe("the console", () => {
     vi.useRealTimers();
   });
 
+  it("says when it reads the clusters again while the management cluster does not answer", async () => {
+    window.history.replaceState(null, "", "/clusters");
+    const routes = serve();
+    routes["GET /api/clusters"] = { status: 502, body: { error: "the management cluster did not answer" } };
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const main = within(await screen.findByRole("main"));
+    await expect(main.findByText("The management cluster did not answer.")).resolves.toBeInTheDocument();
+    expect(main.getByText(/^Trying again in \d+ s$/u)).toBeInTheDocument();
+    expect(main.queryByRole("link", { name: "Management cluster" })).not.toBeInTheDocument();
+    const rail = within(screen.getByRole("navigation", { name: "Fleet" }));
+    expect(rail.getByText("Not read")).toHaveAttribute("title", "the management cluster did not answer");
+
+    routes["GET /api/clusters"] = { body: fleet };
+    await user.click(main.getByRole("button", { name: "Try now" }));
+    await expect(main.findByRole("row", { name: /^web/u })).resolves.toBeInTheDocument();
+    expect(main.queryByText(/^Trying again/u)).not.toBeInTheDocument();
+  });
+
   it("lists the fleet by where each cluster stands, with why, and follows the running work", async () => {
     window.history.replaceState(null, "", "/clusters/default/web");
     serve();

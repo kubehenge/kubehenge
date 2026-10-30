@@ -65,6 +65,19 @@ describe("the fleet list before the first cluster", () => {
     );
   });
 
+  it("sends administrators to the management cluster while the clusters cannot be read", async () => {
+    fakeServer({
+      "GET /api/clusters": () => ({ status: 502, body: { error: "the management cluster did not answer" } }),
+      "GET /api/fleet/health": () => ({ body: [] }),
+    });
+    render(<ClusterList canManage />);
+    await expect(screen.findByRole("link", { name: "Management cluster" })).resolves.toHaveAttribute(
+      "href",
+      "/administration",
+    );
+    expect(screen.getByRole("button", { name: "Try now" })).toBeInTheDocument();
+  });
+
   it("names the privilege a creator lacks", async () => {
     list([k3s], { canCreate: false });
     const checks = await screen.findByLabelText("First cluster");

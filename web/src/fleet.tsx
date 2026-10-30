@@ -22,6 +22,8 @@ export interface Fleet {
   runs: RunInfo[] | undefined;
   error: string | undefined;
   reload: () => Promise<void>;
+  /** When the clusters are next read. */
+  next: () => number;
 }
 
 const FleetContext = createContext<Fleet | null>(null);
@@ -36,7 +38,7 @@ const noFleet = (): Promise<undefined> => Promise.resolve(undefined);
  * while it is off, so the page round it is not built again when reading starts.
  */
 export function FleetProvider({ reads = true, children }: { reads?: boolean; children: ReactNode }): JSX.Element {
-  const { data, error, reload } = usePoll<Cluster[] | undefined>(reads ? api.clusters : noFleet, (list) =>
+  const { data, error, reload, next } = usePoll<Cluster[] | undefined>(reads ? api.clusters : noFleet, (list) =>
     list?.every((c) => settled(c)) === true ? pollIdle : pollChanging,
   );
   // The clusters show without their health, which only adds why some need someone.
@@ -58,8 +60,8 @@ export function FleetProvider({ reads = true, children }: { reads?: boolean; chi
     }
   }, [reads, reload, reloadHealth, reloadRuns]);
   const fleet = useMemo(
-    () => ({ clusters: data, health: read && new Map(read.map((h) => [fleetKey(h), h])), runs, error, reload }),
-    [data, read, runs, error, reload],
+    () => ({ clusters: data, health: read && new Map(read.map((h) => [fleetKey(h), h])), runs, error, reload, next }),
+    [data, read, runs, error, reload, next],
   );
   return <FleetContext value={fleet}>{children}</FleetContext>;
 }
@@ -274,7 +276,11 @@ export function FleetRail({
           +
         </button>
       </div>
-      {fleet?.error !== undefined && list === undefined && <p className="rail-note">{fleet.error}</p>}
+      {fleet?.error !== undefined && list === undefined && (
+        <p className="rail-note hint-warning" title={fleet.error}>
+          Not read
+        </p>
+      )}
       {stale && (
         <p className="rail-note hint-warning" title={fleet.error}>
           Stale

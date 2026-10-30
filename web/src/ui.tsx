@@ -128,6 +128,8 @@ export interface Poll<T> {
   error: string | undefined;
   errorStatus: number | undefined;
   reload: () => Promise<void>;
+  /** When the next read is due, in milliseconds since the epoch; read without drawing the page again. */
+  next: () => number;
 }
 
 export function usePoll<T>(load: () => Promise<T>, every: number | ((data: T | undefined) => number)): Poll<T> {
@@ -183,16 +185,22 @@ export function usePoll<T>(load: () => Promise<T>, every: number | ((data: T | u
   }, [reload]);
 
   const intervalMs = typeof every === "function" ? every(data) : every;
+  const ticked = useRef(0);
+  const interval = useRef(intervalMs);
   useEffect(() => {
+    ticked.current = Date.now();
+    interval.current = intervalMs;
     const t = window.setInterval(() => {
+      ticked.current = Date.now();
       if (!document.hidden && pending.current === 0) {
         void reload();
       }
     }, intervalMs);
     return () => window.clearInterval(t);
   }, [reload, intervalMs]);
+  const next = useCallback(() => ticked.current + interval.current, []);
 
-  return { data, error, errorStatus, reload };
+  return { data, error, errorStatus, reload, next };
 }
 
 export type Health = "ok" | "progress" | "error" | "deleting";
@@ -249,6 +257,24 @@ const msPerSecond = 1000;
 const secondsPerMinute = 60;
 const secondsPerHour = 3600;
 const secondsPerDay = 86_400;
+
+/** RetryIn counts down to the next read of something that failed to answer, and reads it now on request. */
+export function RetryIn({ next, onRetry }: { next: () => number; onRetry: () => void }): JSX.Element {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), msPerSecond);
+    return () => window.clearInterval(t);
+  }, []);
+  const seconds = Math.ceil((next() - now) / msPerSecond);
+  return (
+    <span className="retry-in">
+      <span className="muted">{seconds > 0 ? `Trying again in ${seconds} s` : "Trying again"}</span>
+      <button type="button" onClick={onRetry}>
+        Try now
+      </button>
+    </span>
+  );
+}
 
 export function age(iso: string, now = Date.now()): string {
   const s = Math.max(0, Math.floor((now - new Date(iso).getTime()) / msPerSecond));

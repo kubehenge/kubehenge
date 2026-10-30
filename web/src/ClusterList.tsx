@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 
+import { adminPath } from "./admin-views";
 import { clusterPath } from "./ClusterDetail";
 import { FirstCluster } from "./FirstCluster";
 import { FleetProvider, badge, fleetKey, groups, ranked, useFleet, type Group, type Standing } from "./fleet";
 import { score } from "./Palette";
 import { Link, navigate } from "./router";
 import type { Cluster, FleetHealth } from "./types";
-import { ErrorBox, Status, age, distributionName, filled } from "./ui";
+import { ErrorBox, RetryIn, Status, age, distributionName, filled } from "./ui";
 
 // The privilege creating a cluster needs, as Proxmox VE names it.
 const createNeeds = "Creating clusters needs VM.Allocate on the workload pool.";
@@ -50,6 +51,28 @@ function FleetList({ canCreate, canManage }: { canCreate: boolean | undefined; c
     ) : (
       <Clusters clusters={shown} found={fleet?.health} />
     );
+  // Without the clusters, the list says when it reads them again, and administrators get the
+  // management cluster's page, which works without them.
+  const unread = (f: NonNullable<typeof fleet>): JSX.Element => (
+    <div className="pad unread">
+      <RetryIn
+        next={f.next}
+        onRetry={() => {
+          void f.reload();
+        }}
+      />
+      {canManage && <Link to={adminPath("")}>Management cluster</Link>}
+    </div>
+  );
+  const body = (): JSX.Element | null => {
+    if (clusters !== undefined) {
+      return listed(clusters);
+    }
+    if (error !== undefined && fleet !== null) {
+      return unread(fleet);
+    }
+    return <p className="muted pad">Loading…</p>;
+  };
   return (
     <section className="panel">
       <div className="toolbar">
@@ -72,7 +95,7 @@ function FleetList({ canCreate, canManage }: { canCreate: boolean | undefined; c
         </p>
       )}
       <ErrorBox message={error} />
-      {clusters === undefined ? error === undefined && <p className="muted pad">Loading…</p> : listed(clusters)}
+      {body()}
     </section>
   );
 }
