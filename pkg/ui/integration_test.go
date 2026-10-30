@@ -152,7 +152,7 @@ func TestIntegrationInterfaceRequests(t *testing.T) { //nolint:paralleltest // s
 	for _, tc := range []struct{ name, vars, want string }{
 		{"rule", `"backups":{"enabled":true}`, "Backups need a target."},
 		{"schema", `"cni":"weave"`, `spec.topology.variables[cni].value: Unsupported value`},
-		{"kubehenge", `"clusterMesh":{"enabled":true}`, "Cluster Mesh links clusters that run Cilium"},
+		{"kubehenge", `"clusterMesh":{"enabled":true}`, "Cluster Mesh needs Cilium"},
 		{"nodeos", `"nodeOS":{"family":"rocky","release":"9"}`, "node OS"},
 	} {
 		expectRefused(t, b.do("POST", "/api/clusters", createRequestBody("refused-"+tc.name, "kubehenge-k3s", "v1.36.5+k3s1", 30, tc.vars)), tc.want)
@@ -162,7 +162,7 @@ func TestIntegrationInterfaceRequests(t *testing.T) { //nolint:paralleltest // s
 	expectRefused(t, b.do("POST", "/api/clusters", overlapping), "the service range 172.30.128.0/17 overlaps the pod range 172.30.0.0/16")
 
 	for _, tc := range []struct{ body, want string }{
-		{`{"variables":{"cni":"flannel"}}`, "the variable cni is fixed when the cluster is created"},
+		{`{"variables":{"cni":"flannel"}}`, "cni cannot change after the cluster is created"},
 		{`{"variables":{"logs":{"enabled":true,"sizeGiB":5}}}`, "Loki's volume only grows."},
 		{`{"variables":{"gitops":{"enabled":true,"engine":"flux","auth":"deployKey","repository":{"url":"https://git.example.org/team/cluster.git"}}}}`, "A deploy key reads the repository over ssh://."},
 	} {

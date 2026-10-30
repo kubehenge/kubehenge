@@ -155,7 +155,7 @@ func TestCheckRangesRefusesRangesThatAreNoNetworksOrOverlap(t *testing.T) {
 		pods, services []string
 		refusal        string
 	}{
-		"over the nodes":  {[]string{"10.0.0.0/16"}, nil, "the pod range 10.0.0.0/16 overlaps the nodes' network 10.0.0.0/24"},
+		"over the nodes":  {[]string{"10.0.0.0/16"}, nil, "pod range 10.0.0.0/16 overlaps the nodes' network 10.0.0.0/24"},
 		"over each other": {[]string{"172.30.0.0/16"}, []string{"172.30.128.0/17"}, "the service range 172.30.128.0/17 overlaps the pod range 172.30.0.0/16"},
 		"default over":    {[]string{"10.43.0.0/17"}, nil, "the service range 10.43.0.0/16 overlaps the pod range 10.43.0.0/17"},
 		"not a network":   {nil, []string{"172.31.0.1/16"}, "service range: 172.31.0.1/16 is no IPv4 network"},
