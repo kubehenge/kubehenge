@@ -281,6 +281,8 @@ Kubehenge's controller holds a cluster's backups back, neither installing nor re
 ### Talos upgrades
 
 - **`TalosUpgradeFailed`**, "node … to Talos …: …": the node did not take the release, for the reason that follows: "the node came back on Talos …: Talos booted the release before, as the new one did not come up" means Talos rolled back, and "the node is not Ready … after it rebooted" that it did not come back within 15 minutes. The controller upgrades no other node until **Try again** on the cluster's Summary, or until the annotation `kubehenge.dev/talos-upgrade-failed` is removed ([clusters.md](clusters.md#talos-upgrades)). Correct what the reason names first.
+- **`TalosInstallRetry`**, "node … to Talos …, try … of 4 at …: …": the installer's pull or install stalled, or the node did not answer; the controller tries again at the time named. After the fourth try it fails as above. Check that the node reaches factory.talos.dev.
+- **`TalosUpgradeAbandoned`**, "node … to Talos …: its machine is being deleted": the cluster scaled down or replaced the node while it was upgraded. Nothing to do; its successor is upgraded as any other node.
 - **`TalosDrain`**, "node … reboots without all its pods moved: …": the node's pods did not all leave within five minutes, often held by a PodDisruptionBudget, and the node rebooted anyway. Check the budgets of the workloads named.
 
 ### GitOps
