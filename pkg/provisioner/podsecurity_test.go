@@ -36,6 +36,9 @@ func TestKyvernoEnforcesTheChosenLevel(t *testing.T) {
 		if !lookup[bool](t, own, "features", "policyExceptions", "enabled") || lookup[string](t, own, "features", "policyExceptions", "namespace") != "kyverno" {
 			t.Errorf("%s: Kyverno takes exceptions from anywhere, or none: %v", level, own)
 		}
+		if lookup[float64](t, own, "admissionController", "replicas") != kyvernoAdmissionReplicas {
+			t.Errorf("%s: one lost lease leaves no admission controller answering: %v", level, own)
+		}
 		values := map[string]any{}
 		if err := yaml.Unmarshal([]byte(lookup[string](t, policies, "valuesTemplate")), &values); err != nil {
 			t.Fatal(err)

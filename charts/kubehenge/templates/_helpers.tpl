@@ -248,7 +248,7 @@ node's agent, which grow while a backup reads a volume. Argo CD is its applicati
 and repository controllers, its server and Redis; Flux is the operator and Flux's four controllers.
 */}}
 {{- define "kubehenge.addonMemory" -}}
-kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"logs":512,"backups":384,"kyverno":384,"istio":384,"clusterMesh":128,"loadBalancer":128,"certManager":192,"rancher":2048,"rancherAgent":512,"argocd":512,"flux":384}'
+kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"logs":512,"backups":384,"kyverno":512,"istio":384,"clusterMesh":128,"loadBalancer":128,"certManager":192,"rancher":2048,"rancherAgent":512,"argocd":512,"flux":384}'
 {{- end -}}
 
 {{/*
@@ -270,8 +270,8 @@ kubehenge.dev/addon-control-plane-memory: '{"headlamp":8,"monitoring":32,"logs":
 The CPU, in millicores, each add-on's pods request in a cluster, the same for every distribution:
 what its charts ask for at their pinned versions with the values Kubehenge gives them, counting the
 pods that run once and one node's share of those on every node. The scheduler places a pod only on
-a node with that much CPU not yet requested, however idle the node is. Kyverno's four controllers
-ask for 100m each. Istio is istiod's 100m, and a node's CNI agent's 100m and ztunnel's 200m. Logs
+a node with that much CPU not yet requested, however idle the node is. Kyverno's controllers ask
+for 100m each, the admission controller twice. Istio is istiod's 100m, and a node's CNI agent's 100m and ztunnel's 200m. Logs
 are Loki's 55m with its proxy, and 10m for each Alloy; backups are Velero's server's 50m and a
 node's agent's 20m. Monitoring is its metrics proxies at 5m each, a node's and a control plane's;
 its other pods ask for none. The load balancer is kube-vip's cloud provider at 50m, MetalLB asking
@@ -280,7 +280,7 @@ controller. cert-manager, Argo CD, the clustermesh-apiserver, Rancher's own pods
 for none.
 */}}
 {{- define "kubehenge.addonCPU" -}}
-kubehenge.dev/addon-cpu: '{"headlamp":10,"monitoring":20,"logs":75,"backups":70,"kyverno":400,"istio":400,"clusterMesh":0,"loadBalancer":50,"certManager":0,"rancher":10,"rancherAgent":0,"argocd":0,"flux":50}'
+kubehenge.dev/addon-cpu: '{"headlamp":10,"monitoring":20,"logs":75,"backups":70,"kyverno":500,"istio":400,"clusterMesh":0,"loadBalancer":50,"certManager":0,"rancher":10,"rancherAgent":0,"argocd":0,"flux":50}'
 {{- end -}}
 
 {{/*

@@ -103,7 +103,7 @@ The add-ons need memory and CPU too. Their pods run on the workers, or on the co
 | Monitoring | 1536 MiB | 32 MiB | 616 MiB | 20 millicores |
 | Logs | 512 MiB | 56 MiB | | 75 millicores |
 | Backups | 384 MiB | 184 MiB | 24 MiB | 70 millicores |
-| Kyverno | 384 MiB | 552 MiB | 520 MiB | 400 millicores |
+| Kyverno | 512 MiB | 552 MiB | 520 MiB | 500 millicores |
 | Istio | 384 MiB | 288 MiB | 504 MiB | 400 millicores |
 | Cilium Cluster Mesh | 128 MiB | | | none |
 | Load balancer | 128 MiB | | | 50 millicores |
