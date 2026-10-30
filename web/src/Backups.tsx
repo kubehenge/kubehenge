@@ -375,12 +375,14 @@ export function BackupSourcesField({
   return (
     <fieldset className="group">
       <legend>Restore from other clusters</legend>
-      <Info about="restoring from other clusters">
-        {creating
-          ? "Lets this cluster read their backups. Volume data comes back for the first one picked."
-          : "Lets this cluster read their backups. Volume data comes back only with a shared repository key."}
-      </Info>
-      <p className="hint">Needs Sys.Modify on each one&apos;s pool</p>
+      <p className="hint">
+        Needs Sys.Modify on each one&apos;s pool{" "}
+        <Info about="restoring from other clusters">
+          {creating
+            ? "Lets this cluster read their backups. Volume data comes back for the first one picked."
+            : "Lets this cluster read their backups. Volume data comes back only with a shared repository key."}
+        </Info>
+      </p>
       {clusters === undefined && !filled(error) && <p className="muted">Loading…</p>}
       {clusters !== undefined && names.length === 0 && (
         <p className="muted">No other cluster here backs up to {filled(target) ? target : "this target"}</p>
