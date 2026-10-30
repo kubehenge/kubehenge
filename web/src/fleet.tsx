@@ -1,4 +1,4 @@
-import { createContext, use, useEffect, useMemo, useRef, type JSX, type ReactNode } from "react";
+import { createContext, use, useCallback, useEffect, useMemo, useRef, type JSX, type ReactNode } from "react";
 
 import { api } from "./api";
 import { clusterPath, type View } from "./cluster-paths";
@@ -24,7 +24,12 @@ export interface Fleet {
   reload: () => Promise<void>;
   /** When the clusters are next read. */
   next: () => number;
+  /** show puts a cluster as a request just returned it into the list, before the list is read again. */
+  show: (c: Cluster) => void;
 }
+
+const withCluster = (list: Cluster[] | undefined, c: Cluster): Cluster[] | undefined =>
+  list && [...list.filter((x) => fleetKey(x) !== fleetKey(c)), c];
 
 const FleetContext = createContext<Fleet | null>(null);
 
@@ -38,7 +43,7 @@ const noFleet = (): Promise<undefined> => Promise.resolve(undefined);
  * while it is off, so the page round it is not built again when reading starts.
  */
 export function FleetProvider({ reads = true, children }: { reads?: boolean; children: ReactNode }): JSX.Element {
-  const { data, error, reload, next } = usePoll<Cluster[] | undefined>(reads ? api.clusters : noFleet, (list) =>
+  const { data, error, reload, next, put } = usePoll<Cluster[] | undefined>(reads ? api.clusters : noFleet, (list) =>
     list?.every((c) => settled(c)) === true ? pollIdle : pollChanging,
   );
   // The clusters show without their health, which only adds why some need someone.
@@ -59,9 +64,26 @@ export function FleetProvider({ reads = true, children }: { reads?: boolean; chi
       void reloadRuns();
     }
   }, [reads, reload, reloadHealth, reloadRuns]);
+  // Not read again at once: the server's view of the clusters may not have the change yet, and the
+  // list polls often while a cluster is not settled anyway.
+  const show = useCallback(
+    (c: Cluster) => {
+      put((list) => withCluster(list, c));
+      void reloadRuns();
+    },
+    [put, reloadRuns],
+  );
   const fleet = useMemo(
-    () => ({ clusters: data, health: read && new Map(read.map((h) => [fleetKey(h), h])), runs, error, reload, next }),
-    [data, read, runs, error, reload, next],
+    () => ({
+      clusters: data,
+      health: read && new Map(read.map((h) => [fleetKey(h), h])),
+      runs,
+      error,
+      reload,
+      next,
+      show,
+    }),
+    [data, read, runs, error, reload, next, show],
   );
   return <FleetContext value={fleet}>{children}</FleetContext>;
 }

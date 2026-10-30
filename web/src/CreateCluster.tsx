@@ -40,6 +40,7 @@ import {
 } from "./create-form";
 import { ConfirmStep, useCreateCheck } from "./CreateCheck";
 import { GeneralStep, IdentityStep, MachinesStep, NetworkStep, useClassTalos, useFreeAddresses } from "./CreateSteps";
+import { useFleet } from "./fleet";
 import { networkOf } from "./network";
 import { offersHA, offersHAGroups, useHARules } from "./Placement";
 import { navigate } from "./router";
@@ -79,6 +80,7 @@ export function CreateCluster({
   canTrust?: boolean | undefined;
   namespaces: string[];
 }): JSX.Element {
+  const fleet = useFleet();
   const [classes, setClasses] = useState<ClusterClass[]>([]);
   const [discarding, setDiscarding] = useState(false);
   const [bridgesByNode, setBridgesByNode] = useState<Record<string, Bridge[]>>({});
@@ -282,6 +284,7 @@ export function CreateCluster({
       setBusy(false);
       return;
     }
+    fleet?.show(c);
     const pending = pendingCredentials(form, cls);
     const stored = await Promise.allSettled(
       pending.map(async (p) => api.storeCredential(p.purpose, p.values, { namespace: c.namespace, name: c.name })),

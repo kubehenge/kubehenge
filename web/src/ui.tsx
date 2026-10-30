@@ -131,6 +131,11 @@ export interface Poll<T> {
   reload: () => Promise<void>;
   /** When the next read is due, in milliseconds since the epoch; read without drawing the page again. */
   next: () => number;
+  /**
+   * put shows what is known without reading, such as the cluster a request just created, made from
+   * what is shown; a read asked before it is older and dropped, so it cannot take the change back.
+   */
+  put: (change: (shown: T | undefined) => T | undefined) => void;
 }
 
 /**
@@ -167,6 +172,33 @@ export function usePoll<T>(
   const pending = useRef(0);
   // No answer's JSON is empty, so the first one is always shown.
   const shownText = useRef(data === undefined ? "" : JSON.stringify(data));
+  const latest = useRef(data);
+
+  // take takes an answer as the one shown and keeps it, and tells whether it differs from before.
+  const take = useCallback((d: T | undefined): boolean => {
+    const into = keptRef.current;
+    if (d !== undefined) {
+      into?.cache.set(into.key, d);
+    }
+    const text = d === undefined ? "" : JSON.stringify(d);
+    if (text === shownText.current) {
+      return false;
+    }
+    shownText.current = text;
+    latest.current = d;
+    return true;
+  }, []);
+
+  const put = useCallback(
+    (change: (shown: T | undefined) => T | undefined) => {
+      shown.current = asked.current;
+      const d = change(latest.current);
+      if (take(d)) {
+        setData(d);
+      }
+    },
+    [take],
+  );
 
   const reload = useCallback(async () => {
     const n = ++asked.current;
@@ -175,11 +207,7 @@ export function usePoll<T>(
       const d = await loadRef.current();
       if (n > shown.current) {
         shown.current = n;
-        const into = keptRef.current;
-        into?.cache.set(into.key, d);
-        const text = JSON.stringify(d);
-        if (text !== shownText.current) {
-          shownText.current = text;
+        if (take(d)) {
           setData(d);
         }
         setError(undefined);
@@ -194,7 +222,7 @@ export function usePoll<T>(
     } finally {
       pending.current--;
     }
-  }, []);
+  }, [take]);
 
   useEffect(() => {
     void reload();
@@ -223,7 +251,7 @@ export function usePoll<T>(
   }, [reload, intervalMs]);
   const next = useCallback(() => ticked.current + interval.current, []);
 
-  return { data, error, errorStatus, reload, next };
+  return { data, error, errorStatus, reload, next, put };
 }
 
 export type Health = "ok" | "progress" | "error" | "deleting";
