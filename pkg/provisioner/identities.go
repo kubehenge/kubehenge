@@ -156,17 +156,22 @@ var workloadIdentities = []workloadIdentity{
 	{
 		// The provisioner makes the velero namespace before Velero's chart, and removes it with
 		// Velero.
+		// Deleting a backup goes through Velero's DeleteBackupRequest, and a restore's results through
+		// a DownloadRequest, whose link only a holder of the backup's SSE-C key can follow.
 		id: IdentityBackups, namespace: VeleroNamespace, wanted: backsUp,
 		rules: []rbacv1.PolicyRule{
-			{APIGroups: []string{veleroAPIGroup}, Resources: []string{"backups", "restores", "schedules", "backupstoragelocations", "podvolumebackups", "podvolumerestores"}, Verbs: []string{"get", "list"}},
-			{APIGroups: []string{veleroAPIGroup}, Resources: []string{"backups"}, Verbs: []string{"create"}},
+			{APIGroups: []string{veleroAPIGroup}, Resources: []string{
+				"backups", "restores", "schedules", "backupstoragelocations", "podvolumebackups", "podvolumerestores",
+				"deletebackuprequests", "downloadrequests",
+			}, Verbs: []string{"get", "list"}},
+			{APIGroups: []string{veleroAPIGroup}, Resources: []string{"backups", "deletebackuprequests", "downloadrequests"}, Verbs: []string{"create"}},
 		},
 	},
 	{
-		// A restore of a backup it can read.
+		// A restore of a backup it can read, from a location it can tell the source of.
 		id: IdentityRestores, namespace: VeleroNamespace, wanted: backsUp,
 		rules: []rbacv1.PolicyRule{
-			{APIGroups: []string{veleroAPIGroup}, Resources: []string{"backups", "restores"}, Verbs: []string{"get", "list"}},
+			{APIGroups: []string{veleroAPIGroup}, Resources: []string{"backups", "restores", "backupstoragelocations"}, Verbs: []string{"get", "list"}},
 			{APIGroups: []string{veleroAPIGroup}, Resources: []string{"restores"}, Verbs: []string{"create"}},
 		},
 	},

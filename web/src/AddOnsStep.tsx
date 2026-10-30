@@ -1,6 +1,6 @@
 import type { JSX, ReactNode } from "react";
 
-import { BackupFieldset, backupKeys, backupsHint, classTargets, noTargets } from "./Backups";
+import { BackupFieldset, BackupSourcesField, backupKeys, backupsHint, classTargets, noTargets } from "./Backups";
 import { CertificatesFields } from "./Certificates";
 import { MeshPeersField, meshInfo } from "./ClusterMesh";
 import { ModeSelect } from "./ClusterUpgrades";
@@ -25,6 +25,7 @@ import {
   Field,
   Info,
   browserZone,
+  filled,
   headlampHint,
   headlampViewHint,
   headlampViewLabel,
@@ -114,7 +115,12 @@ function BackupsChoice({
   shown,
   cls,
   canTrust,
-}: StepProps & { cls: ClusterClass | undefined; canTrust: boolean | undefined }): JSX.Element {
+  namespace,
+}: StepProps & {
+  cls: ClusterClass | undefined;
+  canTrust: boolean | undefined;
+  namespace: string | undefined;
+}): JSX.Element {
   const targets = classTargets(cls);
   const none = targets.length === 0;
   const own = form.backupOwnKey && canTrust !== false;
@@ -148,6 +154,16 @@ function BackupsChoice({
               retention: shown("backupRetention"),
             }}
           />
+          {namespace !== undefined && filled(form.backupFields.target) && (
+            <BackupSourcesField
+              namespace={namespace}
+              self={form.name}
+              target={form.backupFields.target}
+              value={form.backupFields.readFrom}
+              creating
+              onChange={(readFrom) => set("backupFields", { ...form.backupFields, readFrom })}
+            />
+          )}
           <fieldset className="group">
             <legend>Access key</legend>
             <label className="check">
@@ -463,7 +479,7 @@ function AddonCards({
       </AddonCard>
       {variable(cls, "backups") && (
         <AddonCard mib={cost("backups")} on={form.backups}>
-          <BackupsChoice form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} />
+          <BackupsChoice form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} namespace={namespace} />
         </AddonCard>
       )}
       {variable(cls, "certificates") && (

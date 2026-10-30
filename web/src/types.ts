@@ -623,6 +623,12 @@ export interface BackupRun {
   warnings: number;
   errors: number;
   failure?: string;
+  /** The cluster whose backup it is, when it is not this cluster's own. */
+  from?: string;
+  /** Set from the moment its deletion is asked for until Velero has deleted it. */
+  deleting?: boolean;
+  /** Why Velero did not delete it when last asked to. */
+  deleteErrors?: string[];
 }
 
 /** A restore of one of a cluster's backups, with how far its volumes have come. */
@@ -631,8 +637,16 @@ export interface RestoreRun {
   backup: string;
   phase: string;
   by?: string;
-  /** The namespaces it brings back; "*" for every one. */
+  /** The namespaces it brings back; none for every one. */
   namespaces?: string[];
+  excludedNamespaces?: string[];
+  /** The kinds it brings back; none for every one. */
+  resources?: string[];
+  excludedResources?: string[];
+  /** Whether the volumes' data comes back too. */
+  volumeData: boolean;
+  /** The cluster whose backup it restores, when it is not this cluster's own. */
+  from?: string;
   started?: string;
   completed?: string;
   items: number;
@@ -640,10 +654,22 @@ export interface RestoreRun {
   warnings: number;
   errors: number;
   failure?: string;
+  /** Why Velero refused it before it began. */
+  refused?: string[];
   volumes: number;
   volumesDone: number;
   bytesDone: number;
   bytesTotal: number;
+}
+
+/** A cluster whose backups this one reads, as its Velero's location for them stands. */
+export interface BackupSource {
+  cluster: string;
+  /** Available once Velero reaches the location. */
+  phase?: string;
+  message?: string;
+  /** Whether the volumes' data of its backups can be restored here. */
+  volumeData: boolean;
 }
 
 /** What the backups view shows of a cluster. */
@@ -659,10 +685,40 @@ export interface ClusterBackups {
   lastBackup?: string;
   backups: BackupRun[];
   restores: RestoreRun[];
+  sources: BackupSource[];
+  /** What the health page says of the backups: overdue, or the last one failing. */
+  attention: Attention[];
   /** VM.Allocate on the cluster's pool. */
   canBackUp: boolean;
+  canDelete: boolean;
   /** Sys.Modify on the cluster's pool. */
   canRestore: boolean;
+}
+
+/** A restore's warnings, or its errors, by where they arose. */
+export interface RestoreMessages {
+  velero: string[];
+  cluster: string[];
+  namespaces: { namespace: string; messages: string[] }[];
+  /** How many more there are than are carried. */
+  more?: number;
+}
+
+/** What a restore is asked for; the lists left empty bring back every namespace and kind. */
+export interface RestoreRequest {
+  backup: string;
+  namespaces?: string[];
+  excludedNamespaces?: string[];
+  resources?: string[];
+  excludedResources?: string[];
+  /** Unset brings the volumes' data back. */
+  volumeData?: boolean;
+}
+
+/** What a finished restore left in its results. */
+export interface RestoreResults {
+  warnings: RestoreMessages;
+  errors: RestoreMessages;
 }
 
 /** An etcd snapshot of a cluster, as it is stored in the target. */
