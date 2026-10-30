@@ -106,7 +106,7 @@ export function Pools({
   const [action, setAction] = useState<PoolAction>();
   const close = (): void => setAction(undefined);
   return (
-    <section className="box" aria-label="Pools">
+    <section className="box scroll" aria-label="Pools">
       <div className="section-head">
         <h3>Pools</h3>
         <button type="button" disabled={!can} title={why} onClick={() => setAction({ kind: "add" })}>

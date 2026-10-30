@@ -230,8 +230,10 @@ output.notice {
   display: block;
 }
 
-/* A wide table scrolls on its own in a narrow window. */
+/* A wide table scrolls on its own in a narrow window. Positioned, so that what is placed absolutely
+   inside, such as a hidden column heading, scrolls with the table rather than widening the page. */
 .scroll {
+  position: relative;
   overflow-x: auto;
 }
 

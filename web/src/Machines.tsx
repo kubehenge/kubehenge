@@ -118,8 +118,6 @@ export function Machines({
     ...(talos ? ["Talos"] : []),
     "Addresses",
     "Age",
-    // Boot logs carry secrets often enough, so they go to those the admin kubeconfig goes to.
-    ...(c.allowed.kubeconfig ? ["Logs"] : []),
   ];
   return (
     <div className="box scroll">
@@ -177,6 +175,7 @@ export function Machines({
                     onReplace={() => setReplacing(m)}
                     onDelete={() => setDeleting(m)}
                     onReboot={() => setRebooting(m)}
+                    // Boot logs carry secrets often enough, so they go to those the admin kubeconfig goes to.
                     onBootLog={c.allowed.kubeconfig ? () => setBootLog(m) : undefined}
                   />
                 </td>
