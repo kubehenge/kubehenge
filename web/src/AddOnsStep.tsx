@@ -1,6 +1,13 @@
 import type { JSX } from "react";
 
-import { BackupFieldset, backupCredentialHint, backupKeys, backupsHint, classTargets } from "./Backups";
+import {
+  BackupFieldset,
+  BackupSourcesField,
+  backupCredentialHint,
+  backupKeys,
+  backupsHint,
+  classTargets,
+} from "./Backups";
 import { CertificatesFields } from "./Certificates";
 import { MeshPeersField, meshHint } from "./ClusterMesh";
 import { ModeSelect } from "./ClusterUpgrades";
@@ -20,7 +27,16 @@ import { GitOpsFields, gitOpsFields, gitOpsTrustHint } from "./GitOps";
 import { LogsFields, logsHint, logsNeedMonitoring } from "./Logs";
 import { PodSecurityFields, cisHint } from "./PodSecurity";
 import type { ClusterClass } from "./types";
-import { Field, browserZone, headlampHint, headlampViewHint, headlampViewLabel, istioHint, registerHint } from "./ui";
+import {
+  Field,
+  browserZone,
+  filled,
+  headlampHint,
+  headlampViewHint,
+  headlampViewLabel,
+  istioHint,
+  registerHint,
+} from "./ui";
 
 // Talos nodes take their updates as Talos patch releases, upgraded in place, where the others move
 // to new builds of their VM template.
@@ -117,7 +133,12 @@ function BackupsChoice({
   shown,
   cls,
   canTrust,
-}: StepProps & { cls: ClusterClass | undefined; canTrust: boolean | undefined }): JSX.Element {
+  namespace,
+}: StepProps & {
+  cls: ClusterClass | undefined;
+  canTrust: boolean | undefined;
+  namespace: string | undefined;
+}): JSX.Element {
   const targets = classTargets(cls);
   const none = targets.length === 0;
   const own = form.backupOwnKey && canTrust !== false;
@@ -150,6 +171,16 @@ function BackupsChoice({
               retention: shown("backupRetention"),
             }}
           />
+          {namespace !== undefined && filled(form.backupFields.target) && (
+            <BackupSourcesField
+              namespace={namespace}
+              self={form.name}
+              target={form.backupFields.target}
+              value={form.backupFields.readFrom}
+              creating
+              onChange={(readFrom) => set("backupFields", { ...form.backupFields, readFrom })}
+            />
+          )}
           <fieldset className="group">
             <legend>Access key</legend>
             <p className="hint">{backupCredentialHint}</p>
@@ -480,7 +511,9 @@ export function AddOnsStep({
         </>
       )}
       <RancherAddOn form={form} set={set} shown={shown} canTrust={canTrust} />
-      {variable(cls, "backups") && <BackupsChoice form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} />}
+      {variable(cls, "backups") && (
+        <BackupsChoice form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} namespace={namespace} />
+      )}
       {variable(cls, "certificates") && (
         <CertificatesAddOn form={form} set={set} canTrust={canTrust} showAll={showAll} />
       )}
