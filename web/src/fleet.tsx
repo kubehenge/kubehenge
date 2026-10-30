@@ -2,6 +2,7 @@ import { createContext, use, useCallback, useEffect, useMemo, useRef, type JSX, 
 
 import { api } from "./api";
 import { clusterPath, type View } from "./cluster-paths";
+import { useClusterChanges } from "./live";
 import { Link } from "./router";
 import type { Cluster, FleetHealth, Replicas, RunInfo } from "./types";
 import { Status, distributionName, filled, health, pollIdle, settled, usePoll } from "./ui";
@@ -54,6 +55,10 @@ export function FleetProvider({ reads = true, children }: { reads?: boolean; chi
   const { data: runs, reload: reloadRuns } = usePoll<RunInfo[] | undefined>(reads ? api.runs : noFleet, (list) =>
     list?.some((r) => r.state === "running") === true ? pollChanging : pollIdle,
   );
+  useClusterChanges(() => {
+    void reload();
+    void reloadRuns();
+  }, reads);
   const first = useRef(true);
   useEffect(() => {
     if (first.current) {

@@ -8,6 +8,7 @@ import { clusterActions, clusterPath, headlampURL, views, type Intent, type View
 import { OptionDialog, Options, type OptionAction, type OptionRow } from "./ClusterOptions";
 import { EtcdSnapshotsDialog, EtcdSnapshotsView, etcdSnapshotsOf, etcdSnapshotsRows } from "./EtcdSnapshots";
 import { ClusterStatus, fleetKey, useFleet } from "./fleet";
+import { useClusterChanges } from "./live";
 import { Machines, Placement } from "./Machines";
 import { nodeOSKey } from "./node-os";
 import { Link, navigate, useQuery } from "./router";
@@ -289,6 +290,9 @@ export function ClusterDetail({
     (shown) => (shown && settled(shown) ? pollIdle : pollChanging),
     { cache: clusterCache, key: `${namespace}/${name}`, seed: listed },
   );
+  useClusterChanges(() => {
+    void reload();
+  });
   const [action, setAction] = useState<Action>();
   const [downloadError, setDownloadError] = useState<string>();
   useEffect(() => {

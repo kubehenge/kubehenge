@@ -144,6 +144,7 @@ type Server struct {
 	veleroRuns readCache[[]runView]
 	vmLoads    vmLoadCache
 	workloads  workloadConns
+	changes    changes
 	// clock is the health page's time; unset, the system's.
 	clock func() time.Time
 }
@@ -165,6 +166,7 @@ const (
 func (s *Server) Run(ctx context.Context) {
 	s.init()
 	go s.autoUpgrade(ctx)
+	go s.watchChanges(ctx)
 	if s.Headlamp != nil {
 		go s.syncHeadlamp(ctx, headlampSyncEvery)
 	}
@@ -213,6 +215,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/clusters", s.managed(s.listClusters))
 	mux.HandleFunc("GET /api/fleet/health", s.managed(s.fleetHealth))
 	mux.HandleFunc("GET /api/runs", s.managed(s.runs))
+	mux.HandleFunc("GET /api/events", s.managed(s.changeStream))
 	mux.HandleFunc("POST /api/clusters", s.managed(s.createCluster))
 	s.clusterRoutes(mux)
 	mux.HandleFunc("GET /api/credentials/{purpose}", s.managed(s.applianceCredential))

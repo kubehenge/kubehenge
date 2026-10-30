@@ -22,6 +22,7 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   window.history.replaceState(null, "", "/");
   localStorage.clear();
   clearPollCaches();
