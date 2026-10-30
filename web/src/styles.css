@@ -822,6 +822,30 @@ button.go {
   margin: -6px 0 12px;
 }
 
+.attention-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+  margin: -6px 0 14px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+}
+
+.attention-strip-error {
+  border-left-color: var(--error);
+}
+
+.attention-strip-warning {
+  border-left-color: var(--warning);
+}
+
+.attention-strip > a {
+  margin-left: auto;
+}
+
 .views {
   display: flex;
   gap: 2px;

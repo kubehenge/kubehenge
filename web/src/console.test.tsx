@@ -332,6 +332,36 @@ describe("the console", () => {
     await waitFor(() => expect(tabs.getByRole("link", { name: "Health" })).toHaveAccessibleDescription("2 to look at"));
     expect(tabs.getByRole("link", { name: "Machines" })).toHaveAccessibleDescription("1 failed");
     expect(tabs.getByRole("link", { name: "Summary" })).not.toHaveAttribute("aria-describedby");
+
+    // The worst of it shows on every view but Health, which lists it all.
+    const strip = within(screen.getByRole("region", { name: "Needs attention" }));
+    expect(strip.getByText("Add-on ingress: pending-install")).toHaveClass("status-warning");
+    expect(strip.getByText("2 more")).toBeInTheDocument();
+    expect(strip.getByRole("link", { name: "Health" })).toHaveAttribute("href", "/clusters/default/web/health");
+    const user = userEvent.setup({ delay: null });
+    await user.click(tabs.getByRole("link", { name: "Health" }));
+    expect(screen.queryByRole("region", { name: "Needs attention" })).not.toBeInTheDocument();
+  });
+
+  it("says on a cluster's page that it does not answer", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/options");
+    const routes = serve();
+    routes["GET /api/fleet/health"] = {
+      body: [
+        {
+          namespace: "default",
+          name: "web",
+          read: minutesAgo(0),
+          verdict: "unreachable",
+          workload: "The API server does not answer.",
+          attention: [],
+        },
+      ],
+    };
+    render(<App />);
+    const strip = within(await screen.findByRole("region", { name: "Needs attention" }));
+    expect(strip.getByText("Unreachable")).toHaveClass("status-error");
+    expect(strip.getByText("The API server does not answer.")).toBeInTheDocument();
   });
 
   it("moves a cluster its health page finds trouble in to those needing you, linked to that page", async () => {

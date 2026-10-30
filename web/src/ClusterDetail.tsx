@@ -14,10 +14,12 @@ import { Link, navigate, useQuery } from "./router";
 import { StagedBar, StagingProvider } from "./Staging";
 import { useStaging } from "./staging-context";
 import { TalosFailure, TalosRows, runsKubernetes, useTalosReleases } from "./Talos";
-import type { Cluster, FleetHealth, Versions } from "./types";
+import type { Cluster, FleetHealth, Severity, Versions } from "./types";
 import {
+  Detail,
   Dialog,
   ErrorBox,
+  Status,
   Field,
   distributionName,
   errorMessage,
@@ -179,6 +181,44 @@ function ClusterViews({ cluster: c, view }: { cluster: Cluster; view: View }): J
         );
       })}
     </Views>
+  );
+}
+
+const severityState: Record<Severity, "error" | "warning" | "progress"> = {
+  error: "error",
+  warning: "warning",
+  progress: "progress",
+};
+
+// AttentionStrip carries the worst thing the cluster's health found onto its other views, with the
+// way to the details, so nobody has to open Health to learn something is wrong. Health lists it all.
+function AttentionStrip({ cluster: c, view }: { cluster: Cluster; view: View }): JSX.Element | null {
+  const found = useFleet()?.health?.get(fleetKey(c));
+  if (found === undefined || view === "health") {
+    return null;
+  }
+  const health = clusterPath(c.namespace, c.name, "health");
+  if (found.verdict === "unreachable") {
+    return (
+      <section className="attention-strip attention-strip-error" aria-label="Needs attention">
+        <Status state="error" text="Unreachable" />
+        {filled(found.workload) && <Detail>{found.workload}</Detail>}
+        <Link to={health}>Health</Link>
+      </section>
+    );
+  }
+  const [first] = found.attention;
+  if (first === undefined) {
+    return null;
+  }
+  const more = found.attention.length - 1 + (found.more ?? 0);
+  return (
+    <section className={`attention-strip attention-strip-${first.severity}`} aria-label="Needs attention">
+      <Status state={severityState[first.severity]} text={first.what} />
+      {filled(first.message) && <Detail>{first.message}</Detail>}
+      {more > 0 && <span className="muted">{more} more</span>}
+      <Link to={health}>Health</Link>
+    </section>
   );
 }
 
@@ -394,6 +434,7 @@ export function ClusterDetail({
         <ErrorBox message={downloadError} />
 
         <ClusterViews cluster={c} view={view} />
+        <AttentionStrip cluster={c} view={view} />
         <StagedBar cluster={c} />
         <div className="object">
           <div className="object-view">
