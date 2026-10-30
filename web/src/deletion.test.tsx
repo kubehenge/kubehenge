@@ -13,6 +13,7 @@ const deleting: Cluster = {
   class: "kubehenge-rke2",
   distribution: "rke2",
   version: "v1.36.5+rke2r1",
+  generation: 1,
   created: "2026-10-20T08:00:00Z",
   deleting: true,
   deletedAt: "2026-10-21T10:00:00Z",

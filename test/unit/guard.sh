@@ -111,10 +111,20 @@ memory 102400 409600 75.00 3
 record=${root}/guard.txt
 sh "${guard}" watch "${root}/test.pid" "${record}" "${root}/vmstat.txt" / "${root}/full" > "${root}/watch.log" 2>&1 &
 watcher=$!
-sleep 2
+# sampled <text>: waits up to 20 seconds for a sample holding the text. A watch that starts slowly
+# would otherwise take its first sample after the swap-in below.
+sampled() {
+    for _ in $(seq 100); do
+        if grep -q -F -- "$1" "${record}" 2> /dev/null; then return 0; fi
+        sleep 0.2
+    done
+    printf 'FAIL: no sample holds %s\n' "$1"
+    failures=$((failures + 1))
+}
+sampled "swapped_in=0"
 # 10 MiB read back from swap.
 memory 102400 409600 75.00 3 3560
-sleep 2
+sampled "swapped_in=10"
 kill "${watcher}"
 watcher=''
 line=$(head -n 1 "${record}")

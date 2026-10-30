@@ -294,7 +294,28 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	if err = o.addReclaimer(mgr, conn, cloud, remotes); err != nil {
 		return err
 	}
-	hooks := &provisioner.Hooks{
+	if err = o.addPlacement(mgr, extensions, scheme, o.newHooks(mgr, registrar, cloud, rancherMinors), conn, cloud); err != nil {
+		return err
+	}
+	if err = o.addUpgrader(mgr, c, rancherMinors, remotes); err != nil {
+		return err
+	}
+	if err = o.addWatches(mgr, remotes, cloud.Client); err != nil {
+		return err
+	}
+	if err = o.addProbes(mgr); err != nil {
+		return err
+	}
+	if err = mgr.Start(ctx); err != nil {
+		return fmt.Errorf("the controller manager: %w", err)
+	}
+	return nil
+}
+
+// newHooks makes the Runtime SDK hooks, which check a cluster against the same grants and pins as
+// the reconciler.
+func (o *controllerOptions) newHooks(mgr ctrl.Manager, registrar *provisioner.Registrar, cloud *provisioner.Proxmox, rancherMinors provisioner.KubernetesMinors) *provisioner.Hooks {
+	return &provisioner.Hooks{
 		Reader:            mgr.GetAPIReader(),
 		ClassNamespace:    o.r.ClassNamespace,
 		Registrar:         registrar,
@@ -315,22 +336,6 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 		Soak:   o.nodeImageSoak,
 		Now:    time.Now,
 	}
-	if err = o.addPlacement(mgr, extensions, scheme, hooks, conn, cloud); err != nil {
-		return err
-	}
-	if err = o.addUpgrader(mgr, c, rancherMinors, remotes); err != nil {
-		return err
-	}
-	if err = o.addWatches(mgr, remotes, cloud.Client); err != nil {
-		return err
-	}
-	if err = o.addProbes(mgr); err != nil {
-		return err
-	}
-	if err = mgr.Start(ctx); err != nil {
-		return fmt.Errorf("the controller manager: %w", err)
-	}
-	return nil
 }
 
 // completeReconciler gives the reconciler what only the parsed flags and the connection make: the

@@ -459,8 +459,12 @@ func (run *restoreRun) pause(ctx context.Context) error {
 
 // saveBefore snapshots etcd as it is into the restore's target, so that a restore from the wrong
 // snapshot can be undone by another. A cluster whose etcd does not answer, often the reason it is
-// restored, is restored without one, and its status says why.
+// restored, is restored without one, and its status says why. A reset keeps the machine's own etcd,
+// so there is nothing for one to undo, and it reads no target.
 func (run *restoreRun) saveBefore(ctx context.Context) error {
+	if run.reset() {
+		return nil
+	}
 	sctx, cancel := context.WithTimeout(ctx, etcdSnapshotTimeout)
 	defer cancel()
 	taken, err := takeEtcdSnapshot(sctx, run.r.Etcd, run.r.now(), run.cluster, run.target)
