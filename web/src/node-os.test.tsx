@@ -87,12 +87,13 @@ describe("the node OS", () => {
 
     const nodeOS = screen.getByLabelText("Node OS");
     expect(nodeOS).toHaveValue("almalinux-10");
-    expect(nodeOS).toHaveAccessibleDescription(/AlmaLinux 10's own signed packages.*SELinux enforcing\.$/u);
+    await user.click(screen.getByRole("button", { name: "About Node OS" }));
+    expect(screen.getByText("Minimal, from AlmaLinux 10's signed packages, with SELinux enforcing.")).toBeVisible();
     expect(within(nodeOS).getByRole("option", { name: "openSUSE Leap 16.1: not released yet" })).toBeDisabled();
     await waitFor(() => expect(screen.getByLabelText("Kubernetes version")).toHaveValue("v1.37.1"));
 
     await user.selectOptions(nodeOS, "rocky-10");
-    expect(nodeOS).toHaveAccessibleDescription(/Rocky Linux 10 needs Proxmox VE nodes with x86-64-v3 CPUs\.$/u);
+    expect(nodeOS).toHaveAccessibleDescription(/^Needs Proxmox VE nodes with x86-64-v3 CPUs/u);
     // v1.37.1 has no template on Rocky Linux 10, so the version moves to one that has.
     await waitFor(() => expect(screen.getByLabelText("Kubernetes version")).toHaveValue("v1.36.5"));
     const version = within(screen.getByLabelText("Kubernetes version"));
@@ -144,8 +145,8 @@ describe("the node OS", () => {
     render(<App />);
     await expect(screen.findByRole("row", { name: /Node OS/u })).resolves.toHaveTextContent("AlmaLinux 10");
     await user.click(screen.getByRole("button", { name: "Edit the node OS" }));
-    const dialog = screen.getByRole("dialog", { name: "Node OS" });
-    expect(within(dialog).getByText(/replaces every node .* one at a time/u)).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Edit node OS" });
+    expect(within(dialog).getByText(/replaces every node, one at a time/u)).toBeInTheDocument();
     const choice = (name: RegExp): HTMLElement => within(dialog).getByRole("radio", { name });
     await waitFor(() => expect(choice(/^AlmaLinux 10/u)).toBeChecked());
     expect(choice(/^AlmaLinux 10/u)).toHaveAccessibleName("AlmaLinux 10 (running)");
@@ -154,13 +155,11 @@ describe("the node OS", () => {
       "There is no kubeadm VM template on AlmaLinux 11 yet.",
     );
     expect(choice(/^openSUSE Leap/u)).toBeDisabled();
-    expect(choice(/^openSUSE Leap/u)).toHaveAccessibleDescription("It cannot be chosen yet: not released yet.");
+    expect(choice(/^openSUSE Leap/u)).toHaveAccessibleDescription("Not released yet.");
     expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
 
     await user.click(choice(/^Rocky Linux 10/u));
-    expect(choice(/^Rocky Linux 10/u)).toHaveAccessibleDescription(
-      "Rocky Linux 10 needs Proxmox VE nodes with x86-64-v3 CPUs.",
-    );
+    expect(choice(/^Rocky Linux 10/u)).toHaveAccessibleDescription("Needs Proxmox VE nodes with x86-64-v3 CPUs");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await expect(within(dialog).findByRole("alert")).resolves.toHaveTextContent(
       /^There is no kubeadm VM template of v1\.36\.5 on Rocky Linux 10 yet; .*Administration page\.$/u,

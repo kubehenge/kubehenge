@@ -118,7 +118,7 @@ func aboutRelease(st *appliance.UpdateStatus, current string) *appliance.UpdateS
 func (s *Server) upgradesStatus(w http.ResponseWriter, r *http.Request, u user) {
 	up := s.Upgrades
 	if up == nil {
-		writeError(w, http.StatusNotFound, "upgrades are the appliance's")
+		writeError(w, http.StatusNotFound, "upgrades need the appliance")
 		return
 	}
 	if !s.require(w, r, u, "/", setupPrivileges...) {
@@ -157,7 +157,7 @@ func (s *Server) upgradesStatus(w http.ResponseWriter, r *http.Request, u user) 
 func (s *Server) upgrade(w http.ResponseWriter, r *http.Request, u user) {
 	up := s.Upgrades
 	if up == nil {
-		writeError(w, http.StatusNotFound, "upgrades are the appliance's")
+		writeError(w, http.StatusNotFound, "upgrades need the appliance")
 		return
 	}
 	var req struct {
@@ -170,7 +170,7 @@ func (s *Server) upgrade(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	if s.applying() {
-		writeError(w, http.StatusConflict, "the management cluster is being applied; upgrade once that has finished")
+		writeError(w, http.StatusConflict, "the management cluster is being applied. Upgrade once it finishes")
 		return
 	}
 	ix, errText := up.index(r.Context(), 0)
@@ -184,7 +184,7 @@ func (s *Server) upgrade(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	if err := up.Spool.Request(appliance.UpdateRequest{Version: req.Version}); err != nil {
 		s.Log.ErrorContext(r.Context(), "upgrade request", "error", err)
-		writeError(w, http.StatusInternalServerError, "could not hand the request to the updater")
+		writeError(w, http.StatusInternalServerError, "the upgrade could not start")
 		return
 	}
 	s.Log.InfoContext(r.Context(), "appliance upgrade requested", "user", u.ticket.Username, "from", up.Current, "to", req.Version)
@@ -194,7 +194,7 @@ func (s *Server) upgrade(w http.ResponseWriter, r *http.Request, u user) {
 func (s *Server) upgradeSettings(w http.ResponseWriter, r *http.Request, u user) {
 	up := s.Upgrades
 	if up == nil {
-		writeError(w, http.StatusNotFound, "upgrades are the appliance's")
+		writeError(w, http.StatusNotFound, "upgrades need the appliance")
 		return
 	}
 	var req UpgradeSettings

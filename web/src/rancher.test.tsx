@@ -55,11 +55,11 @@ describe("rancher", () => {
     const sent = (): unknown => calls.find((c) => c.key === "PATCH /api/clusters/clusters/rancher")?.body;
     const user = userEvent.setup({ delay: null });
     render(<App />);
-    await expect(screen.findByText("Installed here, at rancher.example.org")).resolves.toBeInTheDocument();
+    await expect(screen.findByText("Installed at rancher.example.org")).resolves.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Options" })).toHaveAttribute("aria-current", "page");
-    await user.click(screen.getByRole("button", { name: "Remove Rancher" }));
-    const dialog = screen.getByRole("dialog", { name: "Remove Rancher" });
-    const confirm = within(dialog).getByRole("button", { name: "Remove Rancher" });
+    await user.click(screen.getByRole("button", { name: "Uninstall Rancher" }));
+    const dialog = screen.getByRole("dialog", { name: "Uninstall Rancher" });
+    const confirm = within(dialog).getByRole("button", { name: "Uninstall Rancher" });
     expect(confirm).toBeDisabled();
     await user.type(within(dialog).getByLabelText("Confirm name"), "rancher");
     await user.click(confirm);

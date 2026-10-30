@@ -130,7 +130,7 @@ func (s *Server) managementAutomatic() *managementAutomatic {
 func (s *Server) keepUnattended(w http.ResponseWriter, r *http.Request, u user) {
 	a, up := s.Appliance, s.Upgrades
 	if a == nil || up == nil {
-		writeError(w, http.StatusNotFound, "automatic upgrades are the appliance's")
+		writeError(w, http.StatusNotFound, "automatic upgrades need the appliance")
 		return
 	}
 	var req struct {
@@ -143,12 +143,12 @@ func (s *Server) keepUnattended(w http.ResponseWriter, r *http.Request, u user) 
 		return
 	}
 	if !a.Ready() {
-		writeError(w, http.StatusConflict, "there is no management cluster to upgrade yet")
+		writeError(w, http.StatusConflict, "no management cluster to upgrade yet")
 		return
 	}
 	done, ok := s.limiter.reserve(passphraseCount(u))
 	if !ok {
-		writeError(w, http.StatusTooManyRequests, "too many wrong passphrases; try again later")
+		writeError(w, http.StatusTooManyRequests, "too many wrong passphrases. Try again later")
 		return
 	}
 	err := a.CheckPassphrase(r.Context(), req.Passphrase)
@@ -175,7 +175,7 @@ func (s *Server) keepUnattended(w http.ResponseWriter, r *http.Request, u user) 
 		if delErr := s.Accounts.DeleteUser(r.Context(), u.ticket, upgraderUser); delErr != nil {
 			s.Log.ErrorContext(r.Context(), "deleting the automatic upgrades' Proxmox VE user again", "error", delErr)
 		}
-		writeError(w, http.StatusInternalServerError, "could not keep what automatic upgrades need")
+		writeError(w, http.StatusInternalServerError, "automatic upgrades could not be switched on")
 		return
 	}
 	s.Log.WarnContext(r.Context(), "automatic upgrades of the management cluster switched on: the appliance keeps the state passphrase and an administrator's API token",
@@ -190,7 +190,7 @@ func (s *Server) keepUnattended(w http.ResponseWriter, r *http.Request, u user) 
 func (s *Server) forgetUnattended(w http.ResponseWriter, r *http.Request, u user) {
 	a, up := s.Appliance, s.Upgrades
 	if a == nil || up == nil {
-		writeError(w, http.StatusNotFound, "automatic upgrades are the appliance's")
+		writeError(w, http.StatusNotFound, "automatic upgrades need the appliance")
 		return
 	}
 	if !s.require(w, r, u, "/", setupPrivileges...) {
@@ -198,14 +198,14 @@ func (s *Server) forgetUnattended(w http.ResponseWriter, r *http.Request, u user
 	}
 	if err := a.ForgetUnattended(); err != nil {
 		s.Log.ErrorContext(r.Context(), "switching automatic upgrades of the management cluster off", "error", err)
-		writeError(w, http.StatusInternalServerError, "could not delete what automatic upgrades kept")
+		writeError(w, http.StatusInternalServerError, "automatic upgrades could not be switched off")
 		return
 	}
 	s.Log.WarnContext(r.Context(), "automatic upgrades of the management cluster switched off", "user", u.ticket.Username)
 	up.wake()
 	if err := s.Accounts.DeleteUser(r.Context(), u.ticket, upgraderUser); err != nil {
 		s.Log.ErrorContext(r.Context(), "deleting the automatic upgrades' Proxmox VE user", "error", err)
-		writeError(w, http.StatusBadGateway, "the appliance keeps nothing any more, but Proxmox VE did not delete the user "+upgraderUser+": "+err.Error()+"; delete it in Proxmox VE")
+		writeError(w, http.StatusBadGateway, "automatic upgrades are off, but user "+upgraderUser+" is left. Delete it in Proxmox VE: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, s.managementAutomatic())
@@ -226,7 +226,7 @@ func (s *Server) proxmoxChangeError(w http.ResponseWriter, r *http.Request, err 
 func (s *Server) dropUpgrader(ctx context.Context, t *pve.Ticket, j *appliance.Job) error {
 	a := s.Appliance
 	if a.UnattendedOn() != nil {
-		j.Add("Switching automatic upgrades of the management cluster off")
+		j.Add("Switching automatic upgrades off")
 	}
 	if err := a.ForgetUnattended(); err != nil {
 		return fmt.Errorf("switching automatic upgrades off: %w", err)

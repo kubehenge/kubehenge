@@ -53,22 +53,22 @@ func TestAChangeRunsUntilTheMachinesItReplacesAreNewAndTheClusterSettles(t *test
 	settled(c, at.Add(-time.Hour))
 	c.Status.ObservedGeneration = 3
 	v := changeRun(c, append([]clusterv1.Machine{old}, workers...), rec)
-	want := []string{"Accepted by the API server done ", "Replace the control-plane machines running 0 of 1", "Settle waiting "}
-	if got := stepStates(&v); v.State != runRunning || v.Phase != "Replace the control-plane machines: 0 of 1" || !slices.Equal(got, want) {
+	want := []string{"Accepted done ", "Replace control planes running 0 of 1 replaced", "Settle waiting "}
+	if got := stepStates(&v); v.State != runRunning || v.Phase != "Replace control planes: 0 of 1 replaced" || !slices.Equal(got, want) {
 		t.Fatalf("before the rollout: %s %q %q", v.State, v.Phase, got)
 	}
 
 	// A new machine counts once it is ready.
 	booting := machineAt("one-cp-new", controlPlaneRole, metav1.ConditionFalse, at.Add(4*time.Minute))
 	v = changeRun(c, append([]clusterv1.Machine{old, booting}, workers...), rec)
-	if got := stepStates(&v); got[1] != "Replace the control-plane machines running 0 of 1" {
+	if got := stepStates(&v); got[1] != "Replace control planes running 0 of 1 replaced" {
 		t.Fatalf("with the new machine booting: %q", got)
 	}
 
 	// The new machine is ready, the old one still there: still running.
 	fresh := machineAt("one-cp-new", controlPlaneRole, metav1.ConditionTrue, at.Add(4*time.Minute))
 	v = changeRun(c, append([]clusterv1.Machine{old, fresh}, workers...), rec)
-	if got := stepStates(&v); v.State != runRunning || got[1] != "Replace the control-plane machines running 1 of 1" {
+	if got := stepStates(&v); v.State != runRunning || got[1] != "Replace control planes running 1 of 1 replaced" {
 		t.Fatalf("with the old machine left: %s %q", v.State, got)
 	}
 
@@ -169,7 +169,7 @@ func TestAChangeIsRecordedAndListedAsARun(t *testing.T) {
 	if i < 0 {
 		t.Fatalf("no change in the runs: %+v", runs)
 	}
-	steps := []string{"Accepted by the API server done ", "Replace the workers running 0 of 3", "Add or remove machines running 0 of 4 ready", "Settle waiting "}
+	steps := []string{"Accepted done ", "Replace workers running 0 of 3 replaced", "Resize running 0 of 4 ready", "Settle waiting "}
 	if r := runs[i]; r.State != runRunning || !slices.Equal(stepStates(&r), steps) {
 		t.Errorf("the change's run = %s %q", r.State, stepStates(&r))
 	}

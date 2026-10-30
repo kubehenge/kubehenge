@@ -203,6 +203,7 @@ func (s *Server) publishedVersions(ctx context.Context, distribution string) ver
 // any), can be built yet: its machines are cloned from a template the controller did not find in
 // the template pool, and would wait for ever. Until the controller has looked, it says nothing.
 func missingTemplate(class *clusterv1.ClusterClass, distribution, version string, nodeOS templates.NodeOS) string {
+	const buildsIt = ". An administrator builds it in Administration"
 	title := nodeOSTitle(nodeOS)
 	switch distribution {
 	case string(templates.Kubeadm):
@@ -217,23 +218,23 @@ func missingTemplate(class *clusterv1.ClusterClass, distribution, version string
 		versions := recorded[nodeOS.String()]
 		switch {
 		case len(versions) == 0:
-			return "there is no kubeadm VM template on " + title + " yet; an administrator builds one on the Administration page"
+			return "no kubeadm VM template on " + title + " yet" + buildsIt
 		case version != "" && !slices.Contains(versions, version):
-			return "there is no kubeadm VM template of " + version + " on " + title + " yet; an administrator builds it on the Administration page"
+			return "no kubeadm " + version + " VM template on " + title + " yet" + buildsIt
 		}
 	case string(templates.RKE2), string(templates.K3s):
 		recorded, ok := class.Annotations[provisioner.NodeOSTemplatesAnnotation]
 		if ok && !slices.Contains(strings.Split(recorded, ","), nodeOS.String()) {
-			return "there is no " + distributionTitle(distribution) + " VM template on " + title + " yet; an administrator builds it on the Administration page"
+			return "no " + distributionTitle(distribution) + " VM template on " + title + " yet" + buildsIt
 		}
 	case string(templates.Talos):
 		recorded, ok := class.Annotations[provisioner.TalosTemplatesAnnotation]
 		switch {
 		case !ok:
 		case recorded == "":
-			return "there is no Talos VM template yet; an administrator builds one on the Administration page"
+			return "no Talos VM template yet" + buildsIt
 		case version != "" && !slices.Contains(strings.Split(recorded, ","), version):
-			return "there is no Talos " + version + " VM template yet; an administrator builds it on the Administration page"
+			return "no Talos " + version + " VM template yet" + buildsIt
 		}
 	}
 	return ""
@@ -272,16 +273,16 @@ func (s *Server) kubeadmVersions(ctx context.Context, nodeOS templates.NodeOS) v
 	class := &clusterv1.ClusterClass{}
 	if err := kube.Get(ctx, client.ObjectKey{Namespace: s.ClassNamespace, Name: provisioner.ClassPrefix + string(templates.Kubeadm)}, class); err != nil {
 		s.Log.WarnContext(ctx, "reading the kubeadm ClusterClass", "error", err)
-		return versionsView{Versions: []string{}, Error: "the kubeadm ClusterClass could not be read"}
+		return versionsView{Versions: []string{}, Error: "the kubeadm cluster class could not be read"}
 	}
 	raw, ok := class.Annotations[provisioner.KubeadmVersionsAnnotation]
 	if !ok {
-		return versionsView{Versions: []string{}, Error: "Kubehenge's controller has not looked at the templates yet; try again in a minute"}
+		return versionsView{Versions: []string{}, Error: "templates not checked yet. Try again in a minute"}
 	}
 	recorded, err := provisioner.ParseKubeadmVersions(raw)
 	if err != nil {
 		s.Log.WarnContext(ctx, "reading the kubeadm ClusterClass", "error", err)
-		return versionsView{Versions: []string{}, Error: "the kubeadm ClusterClass could not be read"}
+		return versionsView{Versions: []string{}, Error: "the kubeadm cluster class could not be read"}
 	}
 	type version struct{ minor, patch int }
 	newest := map[int]version{}
@@ -304,7 +305,7 @@ func (s *Server) kubeadmVersions(ctx context.Context, nodeOS templates.NodeOS) v
 		view.Versions = append(view.Versions, "v1."+strconv.Itoa(v.minor)+"."+strconv.Itoa(v.patch))
 	}
 	if len(view.Versions) == 0 {
-		view.Error = "no kubeadm template on " + nodeOSTitle(nodeOS) + " yet; an administrator builds one on the Administration page"
+		view.Error = "no kubeadm VM template on " + nodeOSTitle(nodeOS) + " yet. An administrator builds it in Administration"
 	}
 	return view
 }

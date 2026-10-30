@@ -3,7 +3,7 @@ import { useState, type JSX } from "react";
 import { CredentialField } from "./CredentialField";
 import { list } from "./network";
 import type { Cluster, GitOpsKeys } from "./types";
-import { Dialog, ErrorBox, Field, filled, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, Info, filled, useChange } from "./ui";
 import { flag, oneOf, record, text, texts } from "./values";
 
 /** The engines a cluster chooses from, by their names in its gitops variable; "" is none. */
@@ -117,8 +117,8 @@ export function gitOpsText(g: GitOpsChoice): string {
     return "Off";
   }
   const at = g.path === "." || g.path === "" ? "" : `, ${g.path}`;
-  const web = filled(g.hostname) && (g.engine === "argocd" || g.ui) ? `; web interface at ${g.hostname}` : "";
-  return `${engineName(g.engine)}, syncing ${g.url} (${g.revision}${at})${web}`;
+  const web = filled(g.hostname) && (g.engine === "argocd" || g.ui) ? `, served at ${g.hostname}` : "";
+  return `${engineName(g.engine)} from ${g.url} (${g.revision}${at})${web}`;
 }
 
 /** The fields of a GitOps choice a problem belongs to. */
@@ -131,16 +131,16 @@ const refPattern = /^[A-Za-z0-9._/-]+$/u;
 function urlProblem(g: GitOpsChoice): string | undefined {
   const url = g.url.trim();
   if (!/^(?:https|ssh):\/\/\S+$/u.test(url)) {
-    return "An https:// or ssh:// URL.";
+    return "Enter an https:// or ssh:// URL";
   }
   if (/^https:\/\/[^/]*@/u.test(url)) {
-    return "No token in the URL: choose Token and store it in the cluster's credentials.";
+    return "Take the token out of the URL and choose Token access";
   }
   if (g.auth === "deployKey" && !url.startsWith("ssh://")) {
-    return "A deploy key reads the repository over ssh://.";
+    return "A deploy key needs an ssh:// URL";
   }
   if ((g.auth === "none" || g.auth === "token") && !url.startsWith("https://")) {
-    return "Without a key, the repository is read over https://.";
+    return "This access needs an https:// URL";
   }
   return undefined;
 }
@@ -156,25 +156,25 @@ export function gitOpsProblems(g: GitOpsChoice): Partial<Record<GitOpsField, str
     p.url = url;
   }
   if (!refPattern.test(g.revision.trim() || "main")) {
-    p.revision = "A branch or a ref, such as main or refs/tags/v1.";
+    p.revision = "Enter a branch or ref, such as main";
   }
   const path = g.path.trim() || ".";
   if (!refPattern.test(path) || /(?:^|\/)\.\.(?:\/|$)/u.test(path)) {
-    p.path = "A directory inside the repository, such as clusters/web.";
+    p.path = "Enter a directory in the repository, such as clusters/web";
   }
   if (g.auth === "existingSecret" && !filled(g.existingSecret.trim())) {
-    p.existingSecret = "The Secret's name.";
+    p.existingSecret = "Enter the Secret's name";
   }
   if (g.clientSecret === "existingSecret" && !filled(g.clientSecretName.trim())) {
-    p.clientSecretName = "The Secret's name.";
+    p.clientSecretName = "Enter the Secret's name";
   }
   if (g.engine === "flux" && g.ui) {
     const missing = [
       ...(filled(g.hostname) ? [] : ["a host name"]),
-      ...(g.clientSecret === "none" ? ["a client secret to sign in with"] : []),
+      ...(g.clientSecret === "none" ? ["a client secret"] : []),
     ];
     if (missing.length > 0) {
-      p.ui = `Flux's web interface needs ${missing.join(" and ")}.`;
+      p.ui = `Flux's web interface needs ${missing.join(" and ")}`;
     }
   }
   return p;
@@ -187,52 +187,33 @@ const engineOptions: { value: Engine; label: string }[] = [
 ];
 
 const authOptions: { value: RepoAuth; label: string }[] = [
-  { value: "none", label: "Public, over HTTPS" },
-  { value: "deployKey", label: "Deploy key, over SSH (recommended for a private repository)" },
-  { value: "token", label: "Token, over HTTPS" },
-  { value: "existingSecret", label: "A Secret of your own" },
+  { value: "none", label: "Public over HTTPS" },
+  { value: "deployKey", label: "Deploy key over SSH" },
+  { value: "token", label: "Token over HTTPS" },
+  { value: "existingSecret", label: "Existing Secret" },
 ];
 
 const clientSecretOptions: { value: ClientSecret; label: string }[] = [
-  { value: "none", label: "None: a public client, with PKCE (recommended)" },
+  { value: "none", label: "None, PKCE (recommended)" },
   { value: "stored", label: "Stored in Kubehenge" },
-  { value: "existingSecret", label: "A Secret of your own" },
+  { value: "existingSecret", label: "Existing Secret" },
 ];
 
-export const gitOpsHint =
-  "Keeps the cluster in step with a directory of a Git repository: what it holds is applied, and what goes from it is removed. Switching it off, or to the other engine, leaves what it deployed running.";
+const gitOpsInfo =
+  "Syncs the cluster with a directory of a Git repository. Switching off leaves deployed workloads running.";
 
-/** gitOpsTrustHint says why switching GitOps on needs more than creating a cluster. */
-export const gitOpsTrustHint =
-  "The engine applies whatever the repository holds with cluster-wide rights, so choosing the repository needs Sys.Modify, as taking the admin kubeconfig does.";
+/** gitOpsTrustHint names the privilege that choosing a repository needs, and why. */
+export const gitOpsTrustHint = "Choosing a repository needs Sys.Modify: its contents run cluster-wide";
 
-const engineHint = (e: Engine): string =>
-  e === "flux"
-    ? "Flux, installed by the Flux Operator. Its web interface is optional."
-    : "Argo CD, with a web interface that signs in through the cluster's first identity provider; its local admin stays disabled.";
-
-const authHint = (a: RepoAuth, engine: Engine): string => {
-  switch (a) {
-    case "deployKey": {
-      return "Kubehenge makes a key pair for this cluster and shows its public half in the cluster's options, to add to the repository as a read-only deploy key.";
-    }
-    case "token": {
-      return "A user name and a read-only token, stored in the cluster's options once it exists; until then the engine waits for it.";
-    }
-    case "existingSecret": {
-      return engine === "flux"
-        ? "A Secret in flux-system that Flux reads the repository with: identity and known_hosts, or username and password."
-        : "A repository Secret of your own in argocd, labelled argocd.argoproj.io/secret-type=repository, for this URL.";
-    }
-    case "none": {
-      break;
-    }
-  }
-  return "Anyone may read the repository.";
+const authInfo: Partial<Record<RepoAuth, string>> = {
+  deployKey: "The cluster's options show the key to add to the repository, read-only.",
+  token: "A read-only token, entered in the cluster's options. The engine waits for it.",
 };
 
-const uiHint =
-  "Shows every Flux object and the workloads they deployed, and lets those signed in reconcile, suspend and resume them, with the rights the cluster's RBAC gives them. Off by default; it signs in through the cluster's first identity provider with a client secret.";
+const secretInfo = (engine: Engine): string =>
+  engine === "flux"
+    ? "A Secret in flux-system with identity and known_hosts, or username and password."
+    : "A Secret in argocd labelled argocd.argoproj.io/secret-type=repository, for this URL.";
 
 const noProblems: Partial<Record<GitOpsField, string>> = {};
 
@@ -253,7 +234,7 @@ export function GitOpsFields({
   const on = g.engine !== "";
   return (
     <>
-      <Field label="GitOps" hint={on ? engineHint(g.engine) : gitOpsHint}>
+      <Field label="GitOps" info={gitOpsInfo}>
         {(id) => (
           <select
             id={id}
@@ -276,12 +257,12 @@ export function GitOpsFields({
       {on && (
         <fieldset className="group" disabled={locked}>
           <legend>Repository</legend>
-          <Field label="URL" hint="https://host/path, or ssh://user@host/path for a deploy key." error={problems.url}>
+          <Field label="URL" hint="https://host/path or ssh://user@host/path" error={problems.url}>
             {(id) => (
               <input id={id} spellCheck={false} value={g.url} onChange={(e) => set("url", e.target.value.trim())} />
             )}
           </Field>
-          <Field label="Branch or ref" hint="A branch, or a full ref such as refs/tags/v1." error={problems.revision}>
+          <Field label="Branch or ref" hint="Such as main or refs/tags/v1" error={problems.revision}>
             {(id) => (
               <input
                 id={id}
@@ -291,16 +272,12 @@ export function GitOpsFields({
               />
             )}
           </Field>
-          <Field
-            label="Path"
-            hint="The directory synced, with plain manifests or a kustomization; . is the repository's root."
-            error={problems.path}
-          >
+          <Field label="Path" hint="Such as clusters/web" error={problems.path}>
             {(id) => (
               <input id={id} spellCheck={false} value={g.path} onChange={(e) => set("path", e.target.value.trim())} />
             )}
           </Field>
-          <Field label="Access" hint={authHint(g.auth, g.engine)}>
+          <Field label="Access" info={authInfo[g.auth]}>
             {(id) => (
               <select
                 id={id}
@@ -321,7 +298,7 @@ export function GitOpsFields({
             )}
           </Field>
           {g.auth === "existingSecret" && (
-            <Field label="Secret" error={problems.existingSecret}>
+            <Field label="Secret" info={secretInfo(g.engine)} error={problems.existingSecret}>
               {(id) => (
                 <input
                   id={id}
@@ -335,7 +312,8 @@ export function GitOpsFields({
           {g.url.startsWith("ssh://") && (
             <Field
               label="SSH host keys"
-              hint="Optional: the server's keys as known_hosts lines. Left empty, Kubehenge reads them from the server once and trusts them from then on; their fingerprints show in the cluster's options to compare."
+              hint="Optional, as known_hosts lines"
+              info="Left empty, the keys are read from the server once and trusted. The cluster's options show their fingerprints."
             >
               {(id) => (
                 <textarea
@@ -359,7 +337,6 @@ export function GitOpsFields({
                 <input
                   type="checkbox"
                   checked={g.ui}
-                  aria-describedby="flux-ui-hint"
                   onChange={(e) => {
                     // Flux's web interface signs in only with a client secret, so a public client
                     // gives way to the stored one.
@@ -369,9 +346,10 @@ export function GitOpsFields({
                 />{" "}
                 Serve Flux&apos;s web interface
               </label>
-              <p className="hint" id="flux-ui-hint">
-                {uiHint}
-              </p>
+              <Info about="Flux's web interface">
+                Signed-in users can see, reconcile, suspend and resume Flux objects, within their RBAC rights. Needs a
+                client secret.
+              </Info>
               {filled(problems.ui) && <p className="field-error">{problems.ui}</p>}
             </>
           )}
@@ -379,10 +357,8 @@ export function GitOpsFields({
             <>
               <Field
                 label="Host name"
-                hint={
-                  g.engine === "argocd"
-                    ? "Optional: serve Argo CD at this name through the cluster's ingress controller; without one, reach it with kubectl port-forward."
-                    : "The name it is served at through the cluster's ingress controller."
+                info={
+                  g.engine === "argocd" ? "Optional. Without one, reach Argo CD with kubectl port-forward." : undefined
                 }
               >
                 {(id) => <input id={id} value={g.hostname} onChange={(e) => set("hostname", e.target.value.trim())} />}
@@ -390,16 +366,14 @@ export function GitOpsFields({
               {g.engine === "argocd" && (
                 <Field
                   label="Admin groups"
-                  hint="Groups of the cluster's first identity provider that administer Argo CD; nobody else has any rights in it."
+                  hint="Separated by commas"
+                  info="Groups from the cluster's first identity provider. Nobody else has rights in Argo CD."
                   error={problems.admins}
                 >
                   {(id) => <input id={id} value={g.admins} onChange={(e) => set("admins", e.target.value)} />}
                 </Field>
               )}
-              <Field
-                label="Client secret"
-                hint="What the web interface signs in to the identity provider with, as the provider's client."
-              >
+              <Field label="Client secret">
                 {(id) => (
                   <select
                     id={id}
@@ -422,7 +396,7 @@ export function GitOpsFields({
               {g.clientSecret === "existingSecret" && (
                 <Field
                   label="Client secret Secret"
-                  hint={`A Secret in ${g.engine === "flux" ? "flux-system" : "argocd"} with the key clientSecret${g.engine === "argocd" ? ", labelled app.kubernetes.io/part-of=argocd" : ""}.`}
+                  info={`A Secret in ${g.engine === "flux" ? "flux-system" : "argocd"} with the key clientSecret${g.engine === "argocd" ? ", labelled app.kubernetes.io/part-of=argocd" : ""}.`}
                   error={problems.clientSecretName}
                 >
                   {(id) => (
@@ -474,14 +448,12 @@ function DeployKey({ keys, auth, url }: { keys: GitOpsKeys | undefined; auth: Re
             </div>
           </>
         ) : (
-          <p className="muted">Kubehenge makes the deploy key once this is saved; it shows here then.</p>
+          <p className="muted">Deploy key shown here once saved</p>
         ))}
       {url.startsWith("ssh://") &&
         ((keys?.hostKeys ?? []).length > 0 ? (
           <>
-            <p className="hint">
-              The repository host&apos;s keys Kubehenge trusts, to compare with the host&apos;s own:
-            </p>
+            <p className="hint">Trusted host keys</p>
             <ul className="key">
               {keys?.hostKeys?.map((k) => (
                 <li key={k}>{k}</li>
@@ -489,7 +461,7 @@ function DeployKey({ keys, auth, url }: { keys: GitOpsKeys | undefined; auth: Re
             </ul>
           </>
         ) : (
-          <p className="muted">The host&apos;s keys are read once this is saved; their fingerprints show here then.</p>
+          <p className="muted">Host keys shown here once saved</p>
         ))}
     </fieldset>
   );
@@ -508,7 +480,7 @@ export function GitOpsDialog({ cluster: c, onClose }: { cluster: Cluster; onClos
   const ref = { namespace: c.namespace, name: c.name };
   return (
     <Dialog
-      title="GitOps"
+      title="Edit GitOps"
       onClose={onClose}
       onSubmit={() => {
         if (next !== undefined) {
@@ -531,7 +503,7 @@ export function GitOpsDialog({ cluster: c, onClose }: { cluster: Cluster; onClos
       }
     >
       <GitOpsFields value={value} onChange={setValue} problems={problems} locked={locked} />
-      {locked && <p className="hint">{gitOpsTrustHint} You may switch it off.</p>}
+      {locked && <p className="hint">{gitOpsTrustHint}</p>}
       {value.engine !== "" && (value.auth === "deployKey" || value.url.startsWith("ssh://")) && (
         <DeployKey keys={c.gitops} auth={value.auth} url={value.url} />
       )}
@@ -544,7 +516,6 @@ export function GitOpsDialog({ cluster: c, onClose }: { cluster: Cluster; onClos
             { key: "username", label: "User name", plain: true },
             { key: "password", label: "Token" },
           ]}
-          hint="A read-only token for the repository, with the user name it goes with."
         />
       )}
       {value.engine !== "" && value.clientSecret === "stored" && (
@@ -553,7 +524,6 @@ export function GitOpsDialog({ cluster: c, onClose }: { cluster: Cluster; onClos
           purpose="oidc-client"
           cluster={ref}
           keys={[{ key: "clientSecret", label: "Client secret" }]}
-          hint="The identity provider's secret for the web interface's client."
         />
       )}
       <ErrorBox message={error} />

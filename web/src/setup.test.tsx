@@ -145,8 +145,8 @@ describe("setup", () => {
       refreshDNS: "dns",
     });
     expect([outside.refreshGateway, outside.refreshDNS]).toStrictEqual([
-      "An IPv4 address in the address's network.",
-      "IP addresses.",
+      "Enter a gateway in the build address's network.",
+      "Enter IP addresses only.",
     ]);
     expect(setupFieldProblems({ ...form, refresh: false, refreshGateway: "x" })).not.toHaveProperty("refreshAddress");
   });
@@ -225,11 +225,11 @@ describe("setup", () => {
       setupFieldProblems({ ...form, moreNamespaces: true, extraNamespaces }).extraNamespaces;
     expect(problem("team-a, team-b")).toBeUndefined();
     expect(problem("")).toMatch(/at least one namespace/u);
-    expect(problem("team-a, kubehenge-system")).toMatch(/kubehenge-system holds/u);
-    expect(problem("kube-public")).toMatch(/kube-public holds/u);
-    expect(problem("clusters")).toMatch(/interface's own namespace/u);
-    expect(problem("Team_A")).toMatch(/no namespace name/u);
-    expect(problem("team-a, team-a")).toMatch(/named twice/u);
+    expect(problem("team-a, kubehenge-system")).toMatch(/kubehenge-system is reserved/u);
+    expect(problem("kube-public")).toMatch(/kube-public is reserved/u);
+    expect(problem("clusters")).toMatch(/clusters is always offered/u);
+    expect(problem("Team_A")).toMatch(/at most 63 lowercase letters/u);
+    expect(problem("team-a, team-a")).toMatch(/listed twice/u);
     expect(setupFieldProblems({ ...form, extraNamespaces: "kube-system" }).extraNamespaces).toBeUndefined();
   });
 
@@ -290,13 +290,11 @@ describe("setup", () => {
     expect(setupProblems({ ...form, nodeAddresses: "192.0.2.11/24\n192.0.2.12/24" })).toHaveLength(1);
     expect(setupProblems({ ...form, nodeAddresses: "192.0.2.11" })).toHaveLength(1);
     expect(setupProblems({ ...form, passphrase: "short", confirm: "short" })).toStrictEqual([
-      "The passphrase needs at least 16 characters.",
+      "Use at least 16 characters.",
     ]);
-    expect(setupProblems({ ...form, confirm: "something else entirely" })).toStrictEqual(["The passphrases differ."]);
+    expect(setupProblems({ ...form, confirm: "something else entirely" })).toStrictEqual(["Passphrases do not match."]);
     expect(setupProblems({ ...form, nodes: [] })).toStrictEqual(["Choose at least one Proxmox VE node."]);
-    expect(setupProblems({ ...form, nodes: ["pve1", "pve2"] })).toStrictEqual([
-      "Choose no more Proxmox VE nodes than there are node addresses.",
-    ]);
+    expect(setupProblems({ ...form, nodes: ["pve1", "pve2"] })).toStrictEqual(["Choose no more nodes than addresses."]);
   });
 
   it("tells users without the rights that an administrator has to set it up", async () => {
@@ -305,13 +303,13 @@ describe("setup", () => {
       "GET /api/setup": { body: { appliance: true, ready: false, allowed: false } },
     });
     render(<App />);
-    await expect(screen.findByText("Kubehenge is not set up yet")).resolves.toBeInTheDocument();
+    await expect(screen.findByText("Not set up yet")).resolves.toBeInTheDocument();
   });
 
   // Enter in the passphrase submits as the button does: the wizard is a form, which is also what
   // lets password managers keep the new passphrase.
   it.each<[string, (user: UserEvent) => Promise<void>]>([
-    ["the button", (user) => user.click(screen.getByRole("button", { name: "Create the management cluster" }))],
+    ["the button", (user) => user.click(screen.getByRole("button", { name: "Create management cluster" }))],
     ["Enter", (user) => user.keyboard("{Enter}")],
   ])("starts the run from %s and follows it", async (_how, submit) => {
     const job = {
@@ -364,13 +362,13 @@ describe("setup", () => {
     await user.type(screen.getByLabelText("DNS servers"), "192.0.2.1");
     await user.click(forClusters("Storages").getByRole("checkbox", { name: "local-lvm" }));
     await user.click(forClusters("Bridges").getByRole("checkbox", { name: "vmbr0" }));
-    const signIn = screen.getByLabelText(/^Sign those who may download a cluster's kubeconfig in/u);
+    const signIn = screen.getByLabelText("Sign in as cluster-admin");
     expect(signIn).not.toBeChecked();
-    expect(signIn).toHaveAccessibleDescription(/Grants: .* cluster-admin.* Risks: /u);
+    expect(signIn).toHaveAccessibleDescription(/Headlamp as cluster-admin/u);
     await user.click(signIn);
-    const actions = screen.getByLabelText("Offer Helm and Prometheus charts in the appliance's Headlamp");
+    const actions = screen.getByLabelText("Helm and Prometheus charts");
     expect(actions).not.toBeChecked();
-    expect(actions).toHaveAccessibleDescription(/Grants: .* own credentials.* Risks: /u);
+    expect(actions).toHaveAccessibleDescription(/own cluster credentials/u);
     await user.click(actions);
     await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple");
     await user.type(screen.getByLabelText("Repeat passphrase"), "correct horse battery staple");
@@ -449,28 +447,28 @@ describe("setup", () => {
   it("checks addresses as the appliance does", () => {
     const problemsOf = (f: Partial<SetupForm>): ReturnType<typeof setupFieldProblems> =>
       setupFieldProblems({ ...form, ...f });
-    expect(problemsOf({ gateway: "gw" }).gateway).toBe("An IPv4 address.");
-    expect(problemsOf({ nodeAddresses: "192.0.2.0/24" }).nodeAddresses).toMatch(/network's own or broadcast/u);
+    expect(problemsOf({ gateway: "gw" }).gateway).toBe("Enter an IPv4 address.");
+    expect(problemsOf({ nodeAddresses: "192.0.2.0/24" }).nodeAddresses).toMatch(/a network or broadcast address/u);
     expect(problemsOf({ nodeAddresses: "198.51.100.11/24" }).nodeAddresses).toMatch(/outside the gateway's network/u);
     expect(
       problemsOf({ nodeAddresses: "192.0.2.11/24 192.0.2.11/24 192.0.2.12/24", nodes: ["pve1"] }).nodeAddresses,
     ).toMatch(/listed twice/u);
     expect(problemsOf({ apiAddress: "192.0.2.11" }).apiAddress).toMatch(/unused/u);
-    expect(problemsOf({ apiAddress: "198.51.100.10" }).apiAddress).toBe("Inside the nodes' network.");
-    expect(problemsOf({ dnsServers: "dns.example" }).dnsServers).toBe("IP addresses.");
+    expect(problemsOf({ apiAddress: "198.51.100.10" }).apiAddress).toBe("Use an address in the nodes' network.");
+    expect(problemsOf({ dnsServers: "dns.example" }).dnsServers).toBe("Enter IP addresses only.");
     expect(problemsOf({ dnsServers: "2001:db8::53" }).dnsServers).toBeUndefined();
-    expect(problemsOf({ vlan: "4095" }).vlan).toBe("1 to 4094.");
+    expect(problemsOf({ vlan: "4095" }).vlan).toBe("A whole number from 1 to 4094.");
     expect(problemsOf({ podSubnets: "10.244.0.0/16, 10.245.0.1/16" }).podSubnets).toMatch(
-      /^10.245.0.1\/16 is no IPv4/u,
+      /^10.245.0.1\/16 is not a network address/u,
     );
-    expect(problemsOf({ mirrors: "ghcr.io=mirror:5000" }).mirrors).toMatch(/^ghcr.io=mirror:5000 is no/u);
+    expect(problemsOf({ mirrors: "ghcr.io=mirror:5000" }).mirrors).toMatch(/^ghcr.io=mirror:5000 is not in the form/u);
     expect(problemsOf({ mirrors: "ghcr.io=https://mirror.example:5000/v2" }).mirrors).toBeUndefined();
     // Applying again opens the state with the passphrase given at the start: nothing to repeat.
     expect(setupFieldProblems({ ...form, confirm: "" }, false).confirm).toBeUndefined();
     // A running management cluster keeps its nodes' addresses, and grows only after them.
     const was = settings(form);
     expect(setupFieldProblems({ ...form, nodeAddresses: "192.0.2.12/24" }, false, was).nodeAddresses).toMatch(
-      /keep their addresses \(192.0.2.11\/24\)/u,
+      /^Keep 192.0.2.11\/24 first/u,
     );
     expect(
       setupFieldProblems({ ...form, nodeAddresses: "192.0.2.11/24 192.0.2.12/24 192.0.2.13/24" }, false, was)
@@ -496,7 +494,8 @@ describe("setup", () => {
       log: null,
     });
     render(<App />);
-    await expect(screen.findByText(/The last run failed: wrong passphrase/u)).resolves.toBeInTheDocument();
+    const alert = await screen.findByText("Last run failed");
+    expect(alert).toHaveTextContent("wrong passphrase");
   });
 
   it("warns administrators of a certificate about to run out, and no one long before", async () => {
@@ -524,11 +523,11 @@ describe("setup", () => {
     fakeServer(routes);
     const user = userEvent.setup({ delay: null });
     const { unmount } = render(<App />);
-    const pages = await screen.findByRole("navigation", { name: "Administration's pages" });
+    const pages = await screen.findByRole("navigation", { name: "Administration pages" });
     await user.click(within(pages).getByRole("link", { name: "Appliance" }));
     await expect(screen.findByRole("heading", { name: "Proxmox VE API" })).resolves.toBeInTheDocument();
     expect(window.location.pathname).toBe("/administration/appliance");
-    expect(screen.getByText(/Certificate verification is off/u)).toBeInTheDocument();
+    expect(screen.getByText("Certificate check").nextElementSibling).toHaveTextContent("Off");
     expect(screen.getByText("sh install.sh --upgrade --ctid 105 --proxmox-ca <file>")).toBeInTheDocument();
     unmount();
 
@@ -594,11 +593,11 @@ describe("setup", () => {
     render(<App />);
     await expect(screen.findByRole("heading", { name: "Management cluster" })).resolves.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Administration" })).toHaveAttribute("aria-current", "page");
-    expect(document.title).toBe("Administration - Kubehenge");
+    expect(document.title).toBe("Administration · Kubehenge");
     expect(screen.getByText("192.0.2.11/24")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Apply again…" }));
-    const dialog = screen.getByRole("dialog", { name: "Apply the management cluster again" });
+    const dialog = screen.getByRole("dialog", { name: "Apply management cluster" });
     await user.type(within(dialog).getByLabelText("State passphrase"), "correct horse battery staple");
     await user.click(within(dialog).getByRole("button", { name: "Apply" }));
     await waitFor(() =>
@@ -608,7 +607,7 @@ describe("setup", () => {
       }),
     );
 
-    await user.click(screen.getByRole("button", { name: "Edit…" }));
+    await user.click(screen.getByRole("button", { name: "Edit settings" }));
     const wizard = within(screen.getByRole("region", { name: "Management cluster" }));
     expect(wizard.getByLabelText("State passphrase")).toHaveAttribute("autocomplete", "current-password");
     expect(wizard.queryByLabelText("Repeat passphrase")).not.toBeInTheDocument();
@@ -662,21 +661,21 @@ describe("setup", () => {
     });
     const user = userEvent.setup({ delay: null });
     render(<App />);
-    await expect(screen.findByText("By hand, with the steps shown")).resolves.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Edit…" }));
+    await expect(screen.findByText("By hand")).resolves.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Edit settings" }));
     const wizard = within(screen.getByRole("region", { name: "Management cluster" }));
-    const choice = wizard.getByLabelText("Restore clusters' etcd through the Proxmox VE guest agent");
+    const choice = wizard.getByLabelText("Restore through guest agent");
 
     await user.click(choice);
-    let dialog = screen.getByRole("dialog", { name: "Restore etcd through the guest agent?" });
+    let dialog = screen.getByRole("dialog", { name: "Allow guest agent restores" });
     expect(dialog).toHaveTextContent("VM.GuestAgent.Unrestricted");
     expect(dialog).toHaveTextContent("root shell");
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(choice).not.toBeChecked();
 
     await user.click(choice);
-    dialog = screen.getByRole("dialog", { name: "Restore etcd through the guest agent?" });
-    await user.click(within(dialog).getByRole("button", { name: "Switch on" }));
+    dialog = screen.getByRole("dialog", { name: "Allow guest agent restores" });
+    await user.click(within(dialog).getByRole("button", { name: "Allow" }));
     expect(choice).toBeChecked();
     expect(calls.map((c) => c.key)).not.toContain("POST /api/setup");
 
@@ -706,8 +705,8 @@ describe("setup", () => {
     await expect(screen.findByRole("heading", { name: "No such page" })).resolves.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Administration" })).not.toBeInTheDocument();
     headers["X-Kubehenge-Version"] = "0.2.0";
-    await user.click(screen.getByRole("link", { name: "Go to the clusters" }));
-    await expect(screen.findByText(/Kubehenge was upgraded to 0.2.0/u)).resolves.toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: "Go to clusters" }));
+    await expect(screen.findByText(/Kubehenge upgraded to 0.2.0/u)).resolves.toBeInTheDocument();
     expect(screen.getByRole("main")).toHaveFocus();
   });
 
@@ -752,7 +751,7 @@ describe("setup", () => {
     });
     render(<App />);
     await expect(screen.findByRole("heading", { name: "Set up Kubehenge" })).resolves.toBeInTheDocument();
-    expect(screen.getByText(/The management cluster was removed .* by root@pam\./u)).toBeInTheDocument();
+    expect(screen.getByText(/^Management cluster removed .* by root@pam$/u)).toBeInTheDocument();
   });
 });
 
@@ -767,11 +766,11 @@ describe("backup targets", () => {
         { name: "aws", bucket: "aws-backups", region: "EU" },
       ]),
     ).toStrictEqual([
-      "Backup target 1: a name of lower-case letters, digits and dashes.",
-      "Backup target 1: the endpoint is an https:// URL without query, fragment or user.",
-      "Backup target 1: an S3 bucket name: 3 to 63 lower-case letters, digits, dots and dashes.",
-      "Backup target 1: folders of letters, digits and !_.*'()- apart by /, without one at either end.",
-      "Backup target 2: a region such as eu-central-2.",
+      "Backup target 1: use lowercase letters, digits and dashes.",
+      "Backup target 1: enter an https:// URL without query, fragment or user.",
+      "Backup target 1: use 3 to 63 lowercase letters, digits, dots and dashes.",
+      "Backup target 1: use letters, digits and !_.*'()-, with / only between folders, at most 256.",
+      "Backup target 2: enter a region like eu-central-2.",
     ]);
     expect(
       cleanTargets([{ name: "aws", bucket: "aws-backups", endpoint: "", region: " ", noChecksums: false }]),
@@ -785,7 +784,7 @@ describe("backup targets", () => {
     expect(formOf(saved).backupTargets).toStrictEqual([store]);
     expect(settings(formOf())).not.toHaveProperty("backupTargets");
     expect(setupFieldProblems({ ...formOf(), backupTargets: [{ name: "", bucket: "backups" }] }).backupTargets).toBe(
-      "Backup target 1: a name of lower-case letters, digits and dashes.",
+      "Backup target 1: use lowercase letters, digits and dashes.",
     );
   });
 });

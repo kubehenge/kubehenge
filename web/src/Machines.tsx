@@ -38,11 +38,8 @@ export function crowding(machines: Machine[]): string | undefined {
     return undefined;
   }
   // etcd needs a majority of the control-plane nodes.
-  const cost =
-    count * 2 > controlPlane.length
-      ? "losing that node stops the control plane"
-      : `losing that node takes ${count} of them`;
-  return `${node} runs ${count} of the ${controlPlane.length} control-plane VMs, so ${cost}. A new control-plane VM goes to the allowed node with the fewest of them; Proxmox VE can migrate one there now.`;
+  const cost = count * 2 > controlPlane.length ? "stops the control plane" : `takes ${count} down`;
+  return `${node} runs ${count} of ${controlPlane.length} control-plane VMs, so losing it ${cost}. Migrate one to another node.`;
 }
 
 /** Machines is the Machines view: every machine of the cluster with where it runs and how it is. */
@@ -81,7 +78,7 @@ export function Machines({ cluster: c }: { cluster: Cluster }): JSX.Element {
           {machines.length === 0 && (
             <tr>
               <td colSpan={columns.length} className="muted">
-                No machines yet.
+                No machines yet
               </td>
             </tr>
           )}
@@ -166,8 +163,17 @@ const countedRoles = (machines: Machine[]): string => {
     ...(cp > 0 ? [`${cp} control plane${cp === 1 ? "" : "s"}`] : []),
     ...(workers > 0 ? [`${workers} worker${workers === 1 ? "" : "s"}`] : []),
   ];
-  return parts.length === 0 ? "none of this cluster's" : parts.join(", ");
+  return parts.join(", ");
 };
+
+// hostState is a node tile's line: whether it is offline, and which of the cluster's machines it runs.
+function hostState(h: Host): string {
+  const roles = countedRoles(h.machines);
+  if (h.online === false) {
+    return roles === "" ? "Offline" : `Offline, ${roles}`;
+  }
+  return roles === "" ? "Empty" : roles;
+}
 
 /**
  * Placement shows where a cluster's machines run: one tile per Proxmox VE node, each machine with
@@ -180,10 +186,10 @@ export function Placement({ cluster: c }: { cluster: Cluster }): JSX.Element {
   const crowded = crowding(machines);
   const list = hosts(machines, nodes);
   return (
-    <section className="box placement" aria-label="Machines by Proxmox VE node">
-      <h3>Machines by Proxmox VE node</h3>
+    <section className="box placement" aria-label="Placement">
+      <h3>Placement</h3>
       {crowded !== undefined && <p className="warning">{crowded}</p>}
-      {machines.length === 0 && <p className="muted">No machines yet.</p>}
+      {machines.length === 0 && <p className="muted">No machines yet</p>}
       <ul className="hosts" aria-label="Proxmox VE nodes">
         {list.map((h) => (
           <li
@@ -191,11 +197,8 @@ export function Placement({ cluster: c }: { cluster: Cluster }): JSX.Element {
             className={`host${h.machines.length === 0 ? " host-empty" : ""}${h.online === false ? " host-offline" : ""}`}
           >
             <div className="host-head">
-              <span className="host-name">{h.name === unplaced ? "Node not visible to you" : h.name}</span>
-              <span className="host-count">
-                {h.online === false ? "offline, " : ""}
-                {countedRoles(h.machines)}
-              </span>
+              <span className="host-name">{h.name === unplaced ? "Hidden node" : h.name}</span>
+              <span className="host-count">{hostState(h)}</span>
             </div>
             {h.machines.length > 0 && (
               <ul className="host-machines">

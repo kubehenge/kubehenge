@@ -153,7 +153,7 @@ func (s *Server) refreshNow(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	if state.schedule == nil {
-		writeError(w, http.StatusConflict, "the template refresh is off; switch it on in the management cluster's settings")
+		writeError(w, http.StatusConflict, "template refresh is off. Switch it on in the management cluster settings")
 		return
 	}
 	if err := s.requestBuild(r.Context(), kube, provisioner.RefreshRequest, u.ticket.Username); err != nil {
@@ -218,15 +218,15 @@ func (s *Server) requestTemplateBuild(w http.ResponseWriter, r *http.Request, u 
 	}
 	talos := req.Distribution == string(templates.Talos)
 	if !slices.Contains([]string{string(templates.RKE2), string(templates.K3s), string(templates.Kubeadm), string(templates.Talos)}, req.Distribution) {
-		writeError(w, http.StatusUnprocessableEntity, "distribution: RKE2, k3s, kubeadm or Talos")
+		writeError(w, http.StatusUnprocessableEntity, "distribution: choose RKE2, k3s, kubeadm or Talos")
 		return
 	}
 	switch {
 	case req.Distribution != string(templates.Kubeadm) && req.KubernetesVersion != "":
-		writeError(w, http.StatusUnprocessableEntity, "Kubernetes version: only kubeadm templates are built per version")
+		writeError(w, http.StatusUnprocessableEntity, "Kubernetes version: set only for kubeadm templates")
 		return
 	case !talos && req.TalosVersion != "":
-		writeError(w, http.StatusUnprocessableEntity, "Talos version: only Talos templates are built per Talos release")
+		writeError(w, http.StatusUnprocessableEntity, "Talos version: set only for Talos templates")
 		return
 	case talos && req.NodeOS != "":
 		writeError(w, http.StatusUnprocessableEntity, "node OS: Talos is its own OS")
@@ -246,7 +246,7 @@ func (s *Server) requestTemplateBuild(w http.ResponseWriter, r *http.Request, u 
 	}
 	if _, err := templates.Plan(&plan); err != nil {
 		if talos {
-			writeError(w, http.StatusUnprocessableEntity, "Talos version: Talos releases look like "+templates.DefaultTalosVersion)
+			writeError(w, http.StatusUnprocessableEntity, "Talos version: use the form "+templates.DefaultTalosVersion)
 			return
 		}
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
@@ -259,7 +259,7 @@ func (s *Server) requestTemplateBuild(w http.ResponseWriter, r *http.Request, u 
 		return
 	}
 	if state.schedule == nil || !state.schedule.CreatorBuilds {
-		writeError(w, http.StatusForbidden, "an administrator builds the VM templates here; ask for this one on the Administration page")
+		writeError(w, http.StatusForbidden, "only an administrator builds VM templates here. Ask one to build it")
 		return
 	}
 	if !s.require(w, r, u, s.workloadPoolPath(), privChange) {

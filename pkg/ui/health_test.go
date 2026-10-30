@@ -12,11 +12,14 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -33,6 +36,7 @@ var rke2ControlPlane = schema.GroupVersionKind{Group: "controlplane.cluster.x-k8
 type fakeWorkloads struct {
 	mu     sync.Mutex
 	kube   *fake.Clientset
+	velero dynamic.Interface
 	readyz string
 	tokens []string
 }
@@ -44,7 +48,7 @@ func (f *fakeWorkloads) connect(server string, ca []byte, token string) (*Worklo
 		return nil, errors.New("connected to the wrong cluster")
 	}
 	f.tokens = append(f.tokens, token)
-	return &Workload{Kube: f.kube, Readyz: func(context.Context) (string, error) { return f.readyz, nil }}, nil
+	return &Workload{Kube: f.kube, Dynamic: f.velero, Readyz: func(context.Context) (string, error) { return f.readyz, nil }}, nil
 }
 
 func (f *fakeWorkloads) connected() []string {
@@ -247,7 +251,7 @@ func TestHealthSaysWhatIsWrong(t *testing.T) {
 	for _, want := range []string{
 		"error: Pod web/api-7d9: CrashLoopBackOff, 14 restarts",
 		"error: Worker one-md-0-a not ready",
-		"error: Worker one-md-0-a failed its health check",
+		"error: Worker one-md-0-a failed health check",
 		"error: Add-on monitoring failed",
 		"error: Health check md-0 stopped replacing machines",
 		"error: API server check etcd failing",
@@ -321,6 +325,50 @@ func checkHealthSections(t *testing.T, v *healthView) {
 	}
 	if len(v.Events.Items) != 2 || events["workload Pod web/api-7d9"] != 7 || events["management Machine one-md-0-a"] != 1 {
 		t.Errorf("events = %+v", v.Events.Items)
+	}
+}
+
+// A cluster that backs up needs attention once its last backup failed, here and in the fleet's rail,
+// read as the backups identity.
+func TestHealthSaysWhenBackupsFail(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)
+	identity := &corev1.Secret{
+		Namespace: "default", Name: provisioner.IdentitySecretName("one", provisioner.IdentityBackups),
+		Annotations: map[string]string{provisioner.IdentityExpiresAnnotation: now.Add(time.Hour).Format(time.RFC3339)},
+		Data: map[string][]byte{
+			provisioner.IdentityServerKey: []byte("https://10.0.0.20:6443"), provisioner.IdentityCAKey: []byte("the cluster CA"),
+			provisioner.IdentityTokenKey: []byte("backups-token"),
+		},
+	}
+	h, workloads := healthHarness(t, identity)
+	c := &clusterv1.Cluster{}
+	if err := h.kube.Get(t.Context(), client.ObjectKey{Namespace: "default", Name: "one"}, c); err != nil {
+		t.Fatal(err)
+	}
+	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{
+		Name: "backups", Value: apiextensionsv1.JSON{Raw: []byte(`{"enabled":true,"target":"store"}`)},
+	})
+	if err := h.kube.Update(t.Context(), c); err != nil {
+		t.Fatal(err)
+	}
+	workloads.velero = dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), veleroKinds,
+		velero("Schedule", provisioner.VeleroSchedule, nil, map[string]any{
+			"metadata": map[string]any{"creationTimestamp": "2026-10-01T00:00:00Z"},
+			"spec":     map[string]any{"schedule": "CRON_TZ=UTC 0 2 * * *"},
+		}),
+		backupAt("velero-scheduled-20261013020000", "default", "Failed", "2026-10-13T02:00:00Z"),
+		backupAt("velero-scheduled-20261012020000", "default", "Completed", "2026-10-12T02:00:00Z"),
+	)
+	b := h.browser()
+	b.signIn("viewer@pve")
+	v, _ := readHealthView(t, b)
+	i := slices.IndexFunc(v.Attention, func(a attentionView) bool { return a.What == "Last backup failed" })
+	if i < 0 || v.Attention[i].Section != sectionBackups || v.Attention[i].Severity != severityError {
+		t.Errorf("needs attention %+v", v.Attention)
+	}
+	if !slices.Contains(workloads.connected(), "backups-token") {
+		t.Errorf("read with %v, not the backups identity", workloads.connected())
 	}
 }
 
@@ -433,18 +481,18 @@ func TestHealthWithoutAWayIn(t *testing.T) {
 		change func(h *harness)
 		want   string
 	}{
-		{"its token ran out", func(h *harness) { h.clock = h.clock.Add(2 * time.Hour) }, "Kubehenge's access to the cluster ran out at 2026-10-13 10:00:00 UTC"},
+		{"its token ran out", func(h *harness) { h.clock = h.clock.Add(2 * time.Hour) }, "Access to the cluster expired at 2026-10-13 10:00:00 UTC"},
 		{"no token yet", func(h *harness) {
 			if err := h.kube.Delete(context.Background(), &corev1.Secret{Namespace: "default", Name: provisioner.IdentitySecretName("one", provisioner.IdentityHealth)}); err != nil {
 				t.Fatal(err)
 			}
 		}, notSetUp},
-		{"outside the interface's namespace", func(h *harness) { h.server.Namespace = "clusters" }, "Kubehenge reads inside the clusters of the namespace clusters only"},
+		{"outside the interface's namespace", func(h *harness) { h.server.Namespace = "clusters" }, "Nodes and pods show only for clusters in namespace clusters"},
 		{"outside the interface's namespaces", func(h *harness) {
 			if err := h.kube.Create(context.Background(), managedConfigMap(`["clusters","team-a"]`)); err != nil {
 				t.Fatal(err)
 			}
-		}, "Kubehenge reads inside the clusters of the namespaces clusters, team-a only"},
+		}, "Nodes and pods show only for clusters in namespaces clusters, team-a"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

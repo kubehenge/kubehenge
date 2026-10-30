@@ -20,6 +20,8 @@ import type {
   Plan,
   PveNode,
   Realm,
+  RestoreRequest,
+  RestoreResults,
   RestoreRun,
   RunInfo,
   Session,
@@ -87,7 +89,7 @@ function noteRelease(res: Response): void {
 }
 
 /** The message for a request that got no answer at all, such as while the appliance restarts. */
-export const noAnswer = "Kubehenge did not answer. Check the connection; the page tries again on its own.";
+export const noAnswer = "No answer from Kubehenge. Check the connection.";
 
 async function fetchAnswer(path: string, init: RequestInit): Promise<Response> {
   try {
@@ -227,8 +229,11 @@ export interface Api {
   remove: (ns: string, name: string, confirm: string) => Promise<void>;
   backups: (ns: string, name: string) => Promise<ClusterBackups>;
   backUp: (ns: string, name: string) => Promise<BackupRun>;
-  /** restore brings back a backup: of the namespaces named, or of every one when none is. */
-  restore: (ns: string, name: string, req: { backup: string; namespaces: string[] }) => Promise<RestoreRun>;
+  /** deleteBackup has Velero delete a backup before it runs out, once its name is typed to confirm. */
+  deleteBackup: (ns: string, name: string, typed: { backup: string; confirm: string }) => Promise<BackupRun>;
+  /** restore brings back a backup into the cluster, whole or what the request picks of it. */
+  restore: (ns: string, name: string, req: RestoreRequest) => Promise<RestoreRun>;
+  restoreResults: (ns: string, name: string, restore: string) => Promise<RestoreResults>;
   etcdSnapshots: (ns: string, name: string) => Promise<ClusterEtcdSnapshots>;
   takeEtcdSnapshot: (ns: string, name: string) => Promise<void>;
   etcdRestorePlan: (ns: string, name: string, snapshot: string) => Promise<EtcdRestorePlan>;
@@ -309,7 +314,11 @@ export const api: Api = {
   remove: (ns, name, confirm) => act("DELETE", clusterPath(ns, name), { confirm }),
   backups: (ns, name) => request("GET", `${clusterPath(ns, name)}/backups`),
   backUp: (ns, name) => request("POST", `${clusterPath(ns, name)}/backups`),
+  deleteBackup: (ns, name, { backup, confirm }) =>
+    request("DELETE", `${clusterPath(ns, name)}/backups/${encodeURIComponent(backup)}`, { confirm }),
   restore: (ns, name, req) => request("POST", `${clusterPath(ns, name)}/restores`, req),
+  restoreResults: (ns, name, restore) =>
+    request("GET", `${clusterPath(ns, name)}/restores/${encodeURIComponent(restore)}/results`),
   etcdSnapshots: (ns, name) => request("GET", `${clusterPath(ns, name)}/etcd-snapshots`),
   takeEtcdSnapshot: (ns, name) => act("POST", `${clusterPath(ns, name)}/etcd-snapshots`),
   etcdRestorePlan: (ns, name, snapshot) => request("GET", `${etcdSnapshotURL(ns, name, snapshot)}/restore-plan`),

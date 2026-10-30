@@ -547,7 +547,7 @@ func (s *Server) cluster(w http.ResponseWriter, r *http.Request, u user, privs .
 		}
 	}
 	if len(privs) > 0 && !u.namespaces.has(c.Namespace) {
-		writeError(w, http.StatusForbidden, fmt.Sprintf("the interface manages the clusters in %s; this one is managed from elsewhere", namespacesPhrase(u.namespaces)))
+		writeError(w, http.StatusForbidden, "this cluster is managed elsewhere. The interface manages "+namespacesPhrase(u.namespaces))
 		return nil, poolAccess{}, false
 	}
 	return c, poolAccess{path: pool, held: held}, true
@@ -679,7 +679,7 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
 	if req.Namespace == "" {
 		req.Namespace = u.namespaces[0]
 	} else if !u.namespaces.has(req.Namespace) {
-		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("namespace: the interface creates clusters in %s only", namespacesPhrase(u.namespaces)))
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("namespace: clusters can be created in %s only", namespacesPhrase(u.namespaces)))
 		return
 	}
 	class, ok := s.createClass(w, r, u, &req)
@@ -719,7 +719,7 @@ func (req *createRequest) invalid() string {
 	}
 	dist, ok := distribution(req.Class)
 	if !ok {
-		return "distribution: not one of Kubehenge's cluster classes"
+		return "distribution: choose RKE2, k3s, kubeadm or Talos"
 	}
 	if msg := provisioner.VersionRule(templates.Distribution(dist), req.Version); msg != "" {
 		return msg
@@ -742,7 +742,7 @@ func (s *Server) createClass(w http.ResponseWriter, r *http.Request, u user, req
 	class := &clusterv1.ClusterClass{}
 	if err := u.kube.Get(r.Context(), client.ObjectKey{Namespace: s.ClassNamespace, Name: req.Class}, class); err != nil {
 		if apierrors.IsNotFound(err) {
-			writeError(w, http.StatusUnprocessableEntity, "distribution: its cluster class is missing from the management cluster")
+			writeError(w, http.StatusUnprocessableEntity, "distribution: not installed on the management cluster")
 			return nil, false
 		}
 		s.kubeError(w, r, err)
@@ -754,7 +754,7 @@ func (s *Server) createClass(w http.ResponseWriter, r *http.Request, u user, req
 	}
 	for name := range req.Variables {
 		if !defined[name] {
-			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("the cluster class %s has no variable %s", req.Class, name))
+			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("cluster class %s has no setting %s", req.Class, name))
 			return nil, false
 		}
 	}
@@ -815,7 +815,8 @@ func (s *Server) mayCreate(w http.ResponseWriter, r *http.Request, u user, class
 	if allocatesDatastore(req.Variables[csiVariable]) && !s.allowDatastoreAllocate(w, r, u, req.Variables["storage"]) {
 		return false
 	}
-	if !s.allowGitOps(w, r, u, s.workloadPoolPath(), req.Variables[gitopsVariable], nil) {
+	if !s.allowGitOps(w, r, u, s.workloadPoolPath(), req.Variables[gitopsVariable], nil) ||
+		!s.allowBackupSources(w, r, u, cmp.Or(req.Namespace, s.Namespace), req.Variables["backups"], nil) {
 		return false
 	}
 	raw, ok := req.Variables[oidcVariable]
@@ -840,7 +841,7 @@ func (s *Server) mayUseStorage(w http.ResponseWriter, r *http.Request, u user, c
 		return true
 	}
 	if allowed := classChoices(class, "storage"); allowed != nil && !slices.Contains(allowed, storage) {
-		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("storage: clusters may use %s only", strings.Join(allowed, ", ")))
+		writeError(w, http.StatusUnprocessableEntity, "storage: choose "+strings.Join(allowed, ", "))
 		return false
 	}
 	return s.require(w, r, u, storagePath(storage), privStorage)
@@ -852,7 +853,7 @@ func (s *Server) mayUseNetwork(w http.ResponseWriter, r *http.Request, u user, c
 		return true
 	}
 	if allowed := classChoices(class, "network", "bridge"); allowed != nil && !slices.Contains(allowed, bridge) {
-		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("bridge: clusters may attach to %s only", strings.Join(allowed, ", ")))
+		writeError(w, http.StatusUnprocessableEntity, "bridge: choose "+strings.Join(allowed, ", "))
 		return false
 	}
 	zone, err := s.Accounts.Zone(r.Context(), u.ticket, bridge)
@@ -877,7 +878,7 @@ func (s *Server) mayPlace(w http.ResponseWriter, r *http.Request, u user, raw, k
 	_ = json.Unmarshal(kept, &old)
 	var nodes []string
 	if err := json.Unmarshal(raw, &nodes); err != nil || len(nodes) == 0 {
-		writeError(w, http.StatusUnprocessableEntity, "allowed nodes: at least one Proxmox VE node, or none set for every node")
+		writeError(w, http.StatusUnprocessableEntity, "allowed nodes: choose at least one Proxmox VE node")
 		return false
 	}
 	visible, err := s.Accounts.Nodes(r.Context(), u.ticket)
@@ -891,7 +892,7 @@ func (s *Server) mayPlace(w http.ResponseWriter, r *http.Request, u user, raw, k
 			return false
 		}
 		if !slices.Contains(old, node) && !slices.ContainsFunc(visible, func(n pve.Node) bool { return n.Node == node }) {
-			writeError(w, http.StatusUnprocessableEntity, "allowed nodes: Proxmox VE shows you no node "+node)
+			writeError(w, http.StatusUnprocessableEntity, "allowed nodes: no Proxmox VE node "+node)
 			return false
 		}
 	}
@@ -939,7 +940,7 @@ func (s *Server) allowRancher(w http.ResponseWriter, r *http.Request, u user, ke
 		return false
 	}
 	if rc := provisioner.RancherCluster(list.Items, s.ClassNamespace); rc != nil && client.ObjectKeyFromObject(rc) != key {
-		writeError(w, http.StatusConflict, fmt.Sprintf("Rancher: cluster %s/%s already runs it, and every cluster registers with that one", rc.Namespace, rc.Name))
+		writeError(w, http.StatusConflict, fmt.Sprintf("Rancher: cluster %s/%s already runs it. Only one cluster may", rc.Namespace, rc.Name))
 		return false
 	}
 	return true
@@ -1002,7 +1003,7 @@ func allocatesDatastore(raw json.RawMessage) bool { return csiOf(raw).DatastoreA
 func (s *Server) allowDatastoreAllocate(w http.ResponseWriter, r *http.Request, u user, storage json.RawMessage) bool {
 	name, ok := stringVariable(storage)
 	if !ok {
-		writeError(w, http.StatusUnprocessableEntity, "CSI plugin: Datastore.Allocate needs the cluster's storage chosen")
+		writeError(w, http.StatusUnprocessableEntity, "CSI plugin: choose a storage for Datastore.Allocate")
 		return false
 	}
 	return s.require(w, r, u, storagePath(name), privDatastoreAllocate)
@@ -1076,7 +1077,7 @@ func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user) (
 const generationHeader = "X-Kubehenge-Generation"
 
 // clusterChanged answers a change made against a cluster someone has changed since.
-const clusterChanged = "the cluster changed meanwhile; reload and try again"
+const clusterChanged = "the cluster changed meanwhile. Reload and try again"
 
 // unchangedSince tells whether the cluster's spec is still the one the change was made against, as
 // the request's generation says, and answers it when not. A change sets whole values, of a
@@ -1143,7 +1144,7 @@ func applyTopology(c *clusterv1.Cluster, req *changeRequest) string {
 			return provisioner.WorkersRule + " in each pool"
 		}
 		if isAutoscaled(c, name) {
-			return "pool " + name + ": the cluster autoscaler sizes it; switch autoscaling off to fix its workers"
+			return "pool " + name + " is autoscaled. Switch autoscaling off to set its workers"
 		}
 		if !setWorkerReplicas(c, name, n) {
 			return "the cluster has no worker pool " + name
@@ -1177,7 +1178,7 @@ func setWorkerReplicas(c *clusterv1.Cluster, name string, n int32) bool {
 func (s *Server) applyVariables(w http.ResponseWriter, r *http.Request, u user, c *clusterv1.Cluster, access poolAccess, vars map[string]json.RawMessage) bool {
 	for name, value := range vars {
 		if !changeableVariables[name] {
-			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("the variable %s is fixed when the cluster is created", name))
+			writeError(w, http.StatusUnprocessableEntity, name+" cannot change after the cluster is created")
 			return false
 		}
 		if !s.allowVariable(w, r, u, c, access, name, value) {
@@ -1197,6 +1198,8 @@ func (s *Server) allowVariable(w http.ResponseWriter, r *http.Request, u user, c
 		return !installsRancher(value) || installsRancher(old) || s.allowRancher(w, r, u, client.ObjectKeyFromObject(c))
 	case csiVariable:
 		return s.allowCSI(w, r, u, c, value, old)
+	case "backups":
+		return s.allowBackupSources(w, r, u, c.Namespace, value, old)
 	case oidcVariable:
 		return sameJSON(old, value) || s.allowOIDC(w, r, u, c, access, value, old)
 	case gitopsVariable:

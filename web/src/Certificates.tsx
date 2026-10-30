@@ -4,7 +4,7 @@ import { api } from "./api";
 import { CredentialField } from "./CredentialField";
 import { list } from "./network";
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, Field, errorMessage, filled, saveFile, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, Info, errorMessage, filled, saveFile, useChange } from "./ui";
 import { flag, oneOf, record, text, texts } from "./values";
 
 export const issuers = ["acme-dns01", "acme-http01", "ca"] as const;
@@ -13,15 +13,13 @@ export type Issuer = (typeof issuers)[number];
 const issuerOptions: { value: Issuer; label: string }[] = [
   { value: "acme-dns01", label: "Let's Encrypt, DNS-01 (recommended)" },
   { value: "acme-http01", label: "Let's Encrypt, HTTP-01" },
-  { value: "ca", label: "The cluster's own CA" },
+  { value: "ca", label: "Cluster's own CA" },
 ];
 
-const issuerHints: Record<Issuer, string> = {
-  "acme-dns01":
-    "Proves the domain through a TXT record cert-manager writes with the DNS provider's API. Works for clusters the internet cannot reach and gives a wildcard certificate, so every host under the domain serves HTTPS at once.",
-  "acme-http01":
-    "Proves each host name over HTTP: Let's Encrypt must reach the cluster's ingress controller on port 80 from the internet. No wildcards, so every Ingress host gets a certificate of its own.",
-  ca: "The cluster makes a CA of its own, constrained to the domain so it can sign for nothing else, and its certificates come from it. Browsers and clients trust them once they trust its certificate, which the cluster's page hands out.",
+const issuerInfo: Record<Issuer, string> = {
+  "acme-dns01": "Gives a wildcard certificate, even for clusters the internet can't reach.",
+  "acme-http01": "One certificate per Ingress host, no wildcard.",
+  ca: "Clients must trust the CA certificate from the cluster page.",
 };
 
 export const providers = [
@@ -42,7 +40,6 @@ interface Setting {
   label: string;
   required: boolean;
   hint?: string;
-  placeholder?: string;
   choices?: string[];
   check?: (v: string) => string | undefined;
 }
@@ -53,20 +50,22 @@ const maxPort = 65_535;
 function hostPort(v: string): string | undefined {
   const m = /^(?:\[[0-9a-f:.]+\]|[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?):(?<port>\d{1,5})$/iu.exec(v);
   const port = Number(m?.groups?.["port"] ?? 0);
-  return m && port >= 1 && port <= maxPort ? undefined : `${v} is no host:port, such as 192.0.2.53:53.`;
+  return m && port >= 1 && port <= maxPort ? undefined : `Enter ${v} as host:port, such as 192.0.2.53:53`;
 }
 
 const httpsURL = (v: string): string | undefined =>
-  URL.canParse(v) && new URL(v).protocol === "https:" ? undefined : "An https:// URL.";
+  URL.canParse(v) && new URL(v).protocol === "https:" ? undefined : "Enter an https:// URL";
+
+const optional = "Optional, looked up from the domain";
 
 interface ProviderInfo {
   label: string;
   // The variable's object for the provider's settings, if it takes any.
   group?: string;
   settings: Setting[];
-  // What the credential stored through the interface holds; none for a provider that takes only a
-  // Secret of the cluster's.
-  token?: { label: string; hint: string };
+  // What the credential stored through the interface holds, the least it needs, and rarely a caution
+  // too long for the hint; no token for a provider that takes only a Secret of the cluster's.
+  token?: { label: string; hint: string; info?: string };
   secretKeys: string[];
 }
 
@@ -74,32 +73,28 @@ const providerInfo: Record<Provider, ProviderInfo> = {
   cloudflare: {
     label: "Cloudflare",
     settings: [],
-    token: { label: "API token", hint: "A Cloudflare API token with Zone, DNS, Edit on this zone only." },
+    token: { label: "API token", hint: "Needs Zone, DNS, Edit on this zone only" },
     secretKeys: ["token"],
   },
   route53: {
     label: "Amazon Route 53",
     group: "route53",
     settings: [
-      { key: "region", label: "Region", required: true, placeholder: "us-east-1" },
+      { key: "region", label: "Region", required: true },
       { key: "accessKeyID", label: "Access key ID", required: true },
-      {
-        key: "hostedZoneID",
-        label: "Hosted zone ID",
-        required: false,
-        hint: "Optional: found from the domain when empty.",
-      },
+      { key: "hostedZoneID", label: "Hosted zone ID", required: false, hint: optional },
     ],
     token: {
       label: "Secret access key",
-      hint: "Of an IAM user allowed route53:ChangeResourceRecordSets and route53:GetChange on this hosted zone only, and route53:ListHostedZonesByName.",
+      hint: "Needs route53:ChangeResourceRecordSets, GetChange and ListHostedZonesByName",
+      info: "Limit the first two to this hosted zone.",
     },
     secretKeys: ["token"],
   },
   digitalocean: {
     label: "DigitalOcean",
     settings: [],
-    token: { label: "API token", hint: "A custom-scoped DigitalOcean token with domain read and update only." },
+    token: { label: "API token", hint: "Custom scopes: domain read and update" },
     secretKeys: ["token"],
   },
   azuredns: {
@@ -109,13 +104,8 @@ const providerInfo: Record<Provider, ProviderInfo> = {
       { key: "subscriptionID", label: "Subscription ID", required: true },
       { key: "resourceGroupName", label: "Resource group", required: true },
       { key: "tenantID", label: "Tenant ID", required: true },
-      { key: "clientID", label: "Client ID", required: true, hint: "Of the service principal." },
-      {
-        key: "hostedZoneName",
-        label: "DNS zone",
-        required: false,
-        hint: "Optional: found from the domain when empty.",
-      },
+      { key: "clientID", label: "Client ID", required: true },
+      { key: "hostedZoneName", label: "DNS zone", required: false, hint: optional },
       {
         key: "environment",
         label: "Cloud",
@@ -123,10 +113,7 @@ const providerInfo: Record<Provider, ProviderInfo> = {
         choices: ["AzurePublicCloud", "AzureChinaCloud", "AzureUSGovernmentCloud"],
       },
     ],
-    token: {
-      label: "Client secret",
-      hint: "Of the service principal, holding DNS Zone Contributor on this zone only.",
-    },
+    token: { label: "Client secret", hint: "Needs DNS Zone Contributor on this zone only" },
     secretKeys: ["token"],
   },
   clouddns: {
@@ -134,29 +121,24 @@ const providerInfo: Record<Provider, ProviderInfo> = {
     group: "cloudDNS",
     settings: [
       { key: "project", label: "Project ID", required: true },
-      {
-        key: "hostedZoneName",
-        label: "Managed zone",
-        required: false,
-        hint: "Optional: found from the domain when empty.",
-      },
+      { key: "hostedZoneName", label: "Managed zone", required: false, hint: optional },
     ],
     token: {
       label: "Service account key",
-      hint: "The JSON key of a service account holding DNS Administrator; Cloud DNS grants no less than a whole project, so keep the zone in a project of its own.",
+      hint: "JSON key of a service account with DNS Administrator",
+      info: "Cloud DNS grants it per project, so give the zone its own project.",
     },
     secretKeys: ["token"],
   },
   rfc2136: {
-    label: "RFC 2136 (BIND, PowerDNS, Technitium, ...)",
+    label: "RFC 2136 (BIND, PowerDNS)",
     group: "rfc2136",
     settings: [
       {
         key: "nameserver",
         label: "DNS server",
         required: true,
-        placeholder: "192.0.2.53:53",
-        hint: "host:port of the primary server, which takes the updates.",
+        hint: "The primary, as host:port, such as 192.0.2.53:53",
         check: hostPort,
       },
       { key: "tsigKeyName", label: "TSIG key name", required: true },
@@ -167,27 +149,17 @@ const providerInfo: Record<Provider, ProviderInfo> = {
         choices: ["HMACSHA256", "HMACSHA512", "HMACSHA1", "HMACMD5"],
       },
     ],
-    token: {
-      label: "TSIG secret",
-      hint: "Base64, of a key the server lets update only the _acme-challenge records.",
-    },
+    token: { label: "TSIG secret", hint: "Base64, of a key limited to _acme-challenge records" },
     secretKeys: ["token"],
   },
   acmedns: {
     label: "ACME-DNS",
     group: "acmeDNS",
-    settings: [
-      {
-        key: "host",
-        label: "ACME-DNS server",
-        required: true,
-        placeholder: "https://",
-        check: httpsURL,
-      },
-    ],
+    settings: [{ key: "host", label: "ACME-DNS server", required: true, check: httpsURL }],
     token: {
       label: "Account JSON",
-      hint: "What acme-dns register printed, keyed by the domain; _acme-challenge under the domain points at its fulldomain by CNAME.",
+      hint: "The output of acme-dns register, keyed by the domain",
+      info: "Point _acme-challenge under the domain at its fulldomain by CNAME.",
     },
     secretKeys: ["token"],
   },
@@ -279,20 +251,26 @@ export const sharesCredential = (f: CertificatesForm): boolean =>
 export const tokenLabel = (p: Provider): string => providerInfo[p].token?.label ?? "Credential";
 
 /** tokenHint says what a provider's credential has to be, as little as it can reach. */
-export const tokenHint = (p: Provider): string => providerInfo[p].token?.hint ?? "";
+export function tokenHint(p: Provider): ReactNode {
+  const { token } = providerInfo[p];
+  if (token?.info === undefined) {
+    return token?.hint;
+  }
+  return (
+    <>
+      {token.hint} <Info about={token.label}>{token.info}</Info>
+    </>
+  );
+}
 
 // secretHint says what a Secret of the cluster's holds for a provider.
 function secretHint(p: Provider): string {
-  const { label, token, secretKeys } = providerInfo[p];
+  const { token, secretKeys } = providerInfo[p];
   if (token === undefined) {
-    const keys = `${secretKeys.slice(0, -1).join(", ")} and ${secretKeys.at(-1) ?? ""}`;
-    return `In the cluster's cert-manager namespace, holding the keys ${keys}. ${label} needs three secrets, so it takes only a Secret of the cluster's.`;
+    return `In cert-manager, with keys ${secretKeys.slice(0, -1).join(", ")} and ${secretKeys.at(-1) ?? ""}`;
   }
-  return `In the cluster's cert-manager namespace, holding the ${token.label} under the key token. ${token.hint}`;
+  return `In cert-manager, with the ${token.label} under key token`;
 }
-
-const scopeHint =
-  "A credential that can write only this zone limits what a leak costs. Where the provider cannot scope one that far, point _acme-challenge under the domain by CNAME into a zone of its own, served by ACME-DNS or an RFC 2136 server, and give the cluster that one.";
 
 // settingsOf is the chosen provider's settings as the variable holds them: the filled ones only.
 function settingsOf(f: CertificatesForm): Record<string, string> {
@@ -360,13 +338,13 @@ export function certificatesText(f: CertificatesForm): string {
   }
   const names = `for ${f.domain} and *.${f.domain}`;
   if (f.issuer === "ca") {
-    return `The cluster's own CA, ${names}`;
+    return `Cluster's own CA, ${names}`;
   }
   let acme = "Let's Encrypt";
   if (filled(f.server)) {
     acme = URL.canParse(f.server) ? new URL(f.server).host : f.server;
   } else if (f.staging) {
-    acme = "Let's Encrypt's staging server";
+    acme = "Let's Encrypt staging";
   }
   if (f.issuer === "acme-http01") {
     return `${acme} by HTTP-01, for each Ingress host`;
@@ -384,22 +362,25 @@ const emailAddress = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
 function acmeProblems(f: CertificatesForm): CertificatesProblems {
   const p: CertificatesProblems = {};
   if (filled(f.email.trim()) && !emailAddress.test(f.email.trim())) {
-    p["email"] = "An email address.";
+    p["email"] = "Enter an email address, such as ops@example.com";
   }
   const server = f.server.trim();
   if (filled(server)) {
     p["server"] = httpsURL(server);
   }
   if (filled(f.caBundle.trim()) && !f.caBundle.includes("-----BEGIN CERTIFICATE-----")) {
-    p["caBundle"] = "PEM: one or more -----BEGIN CERTIFICATE----- blocks.";
+    p["caBundle"] = "Paste one or more PEM certificates";
   }
   return p;
 }
 
+// lowerFirst lowers a label's first letter for a sentence, unless it starts an acronym.
+const lowerFirst = (s: string): string => (/^[A-Z][a-z]/u.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s);
+
 function dns01Problems(f: CertificatesForm): CertificatesProblems {
   const p: CertificatesProblems = {};
   if (sourceOf(f) === "secret" && !secretName.test(f.existingSecret.trim())) {
-    p["existingSecret"] = "A Secret's name: lowercase letters, digits, dashes and dots.";
+    p["existingSecret"] = "Use lowercase letters, digits, dashes and dots";
   }
   p["nameservers"] = list(f.nameservers)
     .map((n) => hostPort(n))
@@ -409,7 +390,7 @@ function dns01Problems(f: CertificatesForm): CertificatesProblems {
     const v = typed[s.key]?.trim() ?? "";
     if (v === "") {
       if (s.required) {
-        p[`setting.${s.key}`] = `${providerInfo[f.provider].label} needs this.`;
+        p[`setting.${s.key}`] = `Enter the ${lowerFirst(s.label)}`;
       }
     } else if (s.check !== undefined) {
       p[`setting.${s.key}`] = s.check(v);
@@ -428,7 +409,7 @@ export function certificatesProblems(f: CertificatesForm): CertificatesProblems 
     ...(f.issuer === "acme-dns01" ? dns01Problems(f) : {}),
   };
   if (f.issuer !== "acme-http01" && !dnsName.test(f.domain)) {
-    p["domain"] = "A domain name, such as apps.example.com.";
+    p["domain"] = "Enter a domain name, such as apps.example.com";
   }
   return Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined));
 }
@@ -456,10 +437,10 @@ export function CertificatesFields({
   renderCredential: (label: string, hint: ReactNode) => ReactNode;
 }): JSX.Element {
   const [edited, setEdited] = useState<ReadonlySet<string>>(new Set());
-  const enabledHint = useId();
   const stagingHint = useId();
   const sourceName = useId();
   const sharedHint = useId();
+  const refusalHint = useId();
   const problems = certificatesProblems(f);
   const error = (k: string): string | undefined => (showAll || edited.has(k) ? problems[k] : undefined);
   const update = (k: string, patch: Partial<CertificatesForm>): void => {
@@ -469,24 +450,20 @@ export function CertificatesFields({
   const info = providerInfo[f.provider];
   const typed = f.settings[f.provider] ?? {};
   const source = sourceOf(f);
+  const refused = !mayShare && source !== "shared";
   return (
     <>
       <label className="check">
-        <input
-          type="checkbox"
-          checked={f.enabled}
-          aria-describedby={enabledHint}
-          onChange={(e) => onChange({ ...f, enabled: e.target.checked })}
-        />{" "}
+        <input type="checkbox" checked={f.enabled} onChange={(e) => onChange({ ...f, enabled: e.target.checked })} />{" "}
         Issue certificates
       </label>
-      <p className="hint" id={enabledHint}>
-        cert-manager issues certificates for the cluster&apos;s Ingresses and Gateways, so they serve HTTPS without
-        bringing certificates of their own.
-      </p>
       {f.enabled && (
         <>
-          <Field label="Issuer" hint={issuerHints[f.issuer]}>
+          <Field
+            label="Issuer"
+            hint={f.issuer === "acme-http01" ? "Needs port 80 reachable from the internet" : undefined}
+            info={issuerInfo[f.issuer]}
+          >
             {(id) => (
               <select
                 id={id}
@@ -507,16 +484,11 @@ export function CertificatesFields({
             )}
           </Field>
           {f.issuer !== "acme-http01" && (
-            <Field
-              label="Domain"
-              hint="The default certificate covers it and every name directly under it; point those names at the cluster's ingress controller."
-              error={error("domain")}
-            >
+            <Field label="Domain" hint="Such as apps.example.com, with its subdomains" error={error("domain")}>
               {(id) => (
                 <input
                   id={id}
                   value={f.domain}
-                  placeholder="apps.example.com"
                   onChange={(e) => update("domain", { domain: e.target.value.trim().toLowerCase() })}
                 />
               )}
@@ -526,7 +498,7 @@ export function CertificatesFields({
             <>
               <Field
                 label="DNS provider"
-                hint="The one serving the domain's zone, or the zone its challenge records are delegated to."
+                info="A CNAME from _acme-challenge to an ACME-DNS or RFC 2136 zone limits what a leaked key reaches."
               >
                 {(id) => (
                   <select
@@ -554,7 +526,6 @@ export function CertificatesFields({
                       <input
                         id={id}
                         value={typed[s.key] ?? ""}
-                        placeholder={s.placeholder}
                         spellCheck={false}
                         onChange={(e) =>
                           update(`setting.${s.key}`, {
@@ -573,7 +544,7 @@ export function CertificatesFields({
                           })
                         }
                       >
-                        <option value="">{`${s.choices[0] ?? ""} (the default)`}</option>
+                        <option value="">{`${s.choices[0] ?? ""} (default)`}</option>
                         {s.choices.slice(1).map((c) => (
                           <option key={c} value={c}>
                             {c}
@@ -585,7 +556,7 @@ export function CertificatesFields({
                 </Field>
               ))}
               <fieldset className="choices">
-                <legend>The DNS provider&apos;s credential</legend>
+                <legend>DNS credential</legend>
                 {info.token !== undefined && (
                   <>
                     <label className="check">
@@ -595,24 +566,30 @@ export function CertificatesFields({
                         checked={source === "cluster"}
                         onChange={() => onChange({ ...f, source: "cluster" })}
                       />{" "}
-                      Stored for this cluster (recommended)
+                      For this cluster (recommended)
                     </label>
                     <label className="check">
                       <input
                         type="radio"
                         name={sourceName}
                         checked={source === "shared"}
-                        disabled={!mayShare && source !== "shared"}
-                        aria-describedby={sharedHint}
+                        disabled={refused}
+                        aria-describedby={refused ? `${sharedHint} ${refusalHint}` : sharedHint}
                         onChange={() => onChange({ ...f, source: "shared" })}
                       />{" "}
-                      The one stored for every cluster
+                      Shared by all clusters
                     </label>
+                    <Info about="the shared credential">
+                      Set under Administration. It writes records for every cluster using it.
+                    </Info>
                     <p className="hint" id={sharedHint}>
-                      An administrator stores it on the Administration page. It can write the records of every cluster
-                      that takes it, so choosing it needs Sys.Modify on the cluster&apos;s pool.
-                      {!mayShare && source !== "shared" && ` ${shareRefusal}`}
+                      Needs Sys.Modify on the cluster&apos;s pool
                     </p>
+                    {refused && (
+                      <p className="hint" id={refusalHint}>
+                        {shareRefusal}
+                      </p>
+                    )}
                   </>
                 )}
                 <label className="check">
@@ -622,11 +599,10 @@ export function CertificatesFields({
                     checked={source === "secret"}
                     onChange={() => onChange({ ...f, source: "secret" })}
                   />{" "}
-                  A Secret in the cluster
+                  Secret in the cluster
                 </label>
               </fieldset>
-              {source === "cluster" &&
-                renderCredential(tokenLabel(f.provider), `${tokenHint(f.provider)} ${scopeHint}`)}
+              {source === "cluster" && renderCredential(tokenLabel(f.provider), tokenHint(f.provider))}
               {source === "secret" && (
                 <Field label="Secret name" hint={secretHint(f.provider)} error={error("existingSecret")}>
                   {(id) => (
@@ -640,17 +616,17 @@ export function CertificatesFields({
                 </Field>
               )}
               <details className="advanced" open={filled(f.nameservers) || undefined}>
-                <summary>DNS servers to check the record with</summary>
+                <summary>Record check servers</summary>
                 <Field
                   label="DNS servers"
-                  hint="host:port of servers that answer for the zone as the internet sees it, when the cluster's own resolvers answer differently, as with split-horizon DNS. Empty: the cluster's resolvers."
+                  hint="host:port list, such as 1.1.1.1:53, 8.8.8.8:53"
+                  info="For split-horizon DNS. Empty uses the cluster's resolvers."
                   error={error("nameservers")}
                 >
                   {(id) => (
                     <input
                       id={id}
                       value={f.nameservers}
-                      placeholder="1.1.1.1:53, 8.8.8.8:53"
                       onChange={(e) => update("nameservers", { nameservers: e.target.value })}
                     />
                   )}
@@ -660,11 +636,7 @@ export function CertificatesFields({
           )}
           {f.issuer !== "ca" && (
             <>
-              <Field
-                label="Contact email"
-                hint="Optional: the ACME server writes here about the account."
-                error={error("email")}
-              >
+              <Field label="Contact email" hint="Optional, for account notices" error={error("email")}>
                 {(id) => (
                   <input
                     id={id}
@@ -682,32 +654,23 @@ export function CertificatesFields({
                   aria-describedby={stagingHint}
                   onChange={(e) => onChange({ ...f, staging: e.target.checked })}
                 />{" "}
-                Use Let&apos;s Encrypt&apos;s staging server
+                Let&apos;s Encrypt staging
               </label>
               <p className="hint" id={stagingHint}>
-                For trying it out: far higher rate limits, but certificates no browser trusts.
+                Higher rate limits, but browsers don&apos;t trust its certificates
               </p>
               <details className="advanced" open={filled(f.server) || filled(f.caBundle) || undefined}>
                 <summary>Another ACME server</summary>
-                <Field
-                  label="ACME server"
-                  hint="The directory URL of another ACME server, such as one of your own, in place of Let's Encrypt."
-                  error={error("server")}
-                >
+                <Field label="ACME server" hint="Directory URL, used instead of Let's Encrypt" error={error("server")}>
                   {(id) => (
                     <input
                       id={id}
                       value={f.server}
-                      placeholder="https://"
                       onChange={(e) => update("server", { server: e.target.value.trim() })}
                     />
                   )}
                 </Field>
-                <Field
-                  label="Its CA certificate"
-                  hint="PEM, when the server's own certificate is not signed by a public CA."
-                  error={error("caBundle")}
-                >
+                <Field label="CA certificate" hint="PEM, for a server with a private CA" error={error("caBundle")}>
                   {(id) => (
                     <textarea
                       id={id}
@@ -759,7 +722,7 @@ export function CertificatesDialog({ cluster: c, onClose }: { cluster: Cluster; 
   const changed = JSON.stringify(next) !== JSON.stringify(certificatesVariable(current));
   return (
     <Dialog
-      title="Certificates"
+      title="Edit certificates"
       onClose={onClose}
       onSubmit={() => {
         if (open) {
@@ -784,7 +747,7 @@ export function CertificatesDialog({ cluster: c, onClose }: { cluster: Cluster; 
         onChange={setValue}
         showAll={attempted}
         mayShare={c.allowed.kubeconfig || sharesCredential(current)}
-        shareRefusal="You do not hold it."
+        shareRefusal="You don't hold it"
         renderCredential={(label, hint) => (
           <CredentialField
             label={label}
@@ -819,10 +782,17 @@ export function SharedDNS01(): JSX.Element {
     <div className="box">
       <h3>Certificates</h3>
       <CredentialField
-        label="DNS-01 credential for every cluster"
+        label="Shared DNS-01 credential"
         purpose="dns01"
         keys={[{ key: "token", label: "Credential" }]}
-        hint="For the clusters whose certificates choose it, each naming the DNS provider it is for: an API token, a secret access key, a client secret, a key file or a TSIG secret. It can write the records of every zone it reaches, for every cluster that takes it, so only someone holding Sys.Modify on a cluster's pool can give it to that cluster. A credential stored for one cluster alone reaches less."
+        hint={
+          <>
+            Writes records for every cluster that chooses it{" "}
+            <Info about="the shared credential">
+              Only someone with Sys.Modify on a cluster&apos;s pool can give it to that cluster.
+            </Info>
+          </>
+        }
       />
     </div>
   );

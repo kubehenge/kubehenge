@@ -60,9 +60,9 @@ func TestCheckEtcdUpload(t *testing.T) {
 	}{
 		{"RKE2", "kubehenge-rke2", `{"enabled":true,"target":"store","distributionUpload":true}`, ""},
 		{"k3s", "kubehenge-k3s", `{"enabled":true,"target":"store","distributionUpload":true}`, ""},
-		{"kubeadm", "kubehenge-kubeadm", `{"enabled":true,"target":"store","distributionUpload":true}`, "kubeadm has not"},
+		{"kubeadm", "kubehenge-kubeadm", `{"enabled":true,"target":"store","distributionUpload":true}`, "not kubeadm"},
 		{"kubeadm without", "kubehenge-kubeadm", `{"enabled":true,"target":"store"}`, ""},
-		{"snapshots off", "kubehenge-rke2", `{"enabled":false,"target":"store","distributionUpload":true}`, "which are off"},
+		{"snapshots off", "kubehenge-rke2", `{"enabled":false,"target":"store","distributionUpload":true}`, "switched on"},
 	} {
 		c := etcdCluster(tc.raw)
 		c.Spec.Topology.ClassRef.Name = tc.class

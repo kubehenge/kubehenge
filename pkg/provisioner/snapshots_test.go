@@ -64,9 +64,9 @@ func TestVolumeSnapshotsRefusal(t *testing.T) {
 		"on node-local storage": {testVolumeSnapshots, storedCluster("team-a", "web", "local-zfs", snapshotting), class, ""},
 		"not asking":            {VolumeSnapshots{}, storedCluster("team-a", "web", "ceph"), class, ""},
 		"asking for nothing":    {VolumeSnapshots{}, storedCluster("team-a", "web", "ceph", variableOf(csiVariable, `{"volumeSnapshots":false}`)), class, ""},
-		"no proxy image":        {VolumeSnapshots{}, storedCluster("team-a", "web", "local-zfs", snapshotting), class, "no image of the proxy"},
-		"shared storage":        {testVolumeSnapshots, storedCluster("team-a", "web", "ceph", snapshotting), class, "which storage ceph is not"},
-		"no storages published": {testVolumeSnapshots, storedCluster("team-a", "web", "local-zfs", snapshotting), &clusterv1.ClusterClass{}, "which storage local-zfs is not"},
+		"no proxy image":        {VolumeSnapshots{}, storedCluster("team-a", "web", "local-zfs", snapshotting), class, "copy proxy's image"},
+		"shared storage":        {testVolumeSnapshots, storedCluster("team-a", "web", "ceph", snapshotting), class, "not ceph"},
+		"no storages published": {testVolumeSnapshots, storedCluster("team-a", "web", "local-zfs", snapshotting), &clusterv1.ClusterClass{}, "not local-zfs"},
 	} {
 		got, err := tc.v.Refusal(tc.cluster, tc.class)
 		if err != nil {
@@ -86,18 +86,18 @@ func TestVolumeSnapshotsRefusedAtAdmissionAndCreation(t *testing.T) {
 	validator := &ClusterValidator{Hooks: h}
 
 	local := storedCluster("team-a", "web", "local-zfs", snapshotting)
-	if _, err := validator.ValidateCreate(context.Background(), local); err == nil || !strings.Contains(err.Error(), "no image of the proxy") {
+	if _, err := validator.ValidateCreate(context.Background(), local); err == nil || !strings.Contains(err.Error(), "copy proxy's image") {
 		t.Errorf("the validator let volume snapshots in without the proxy: %v", err)
 	}
 	created := networkCluster("192.168.1.1", 24)
 	created.Spec.Topology.Variables = append(created.Spec.Topology.Variables, variableOf("storage", `"local-zfs"`), snapshotting)
-	if resp := callBeforeClusterCreate(t, h, created); !strings.Contains(resp.Message, "no image of the proxy") {
+	if resp := callBeforeClusterCreate(t, h, created); !strings.Contains(resp.Message, "copy proxy's image") {
 		t.Errorf("BeforeClusterCreate let volume snapshots in without the proxy: %s %q", resp.Status, resp.Message)
 	}
 
 	h.VolumeSnapshots = testVolumeSnapshots
 	shared := storedCluster("team-a", "web", "ceph", snapshotting)
-	if _, err := validator.ValidateCreate(context.Background(), shared); err == nil || !strings.Contains(err.Error(), "which storage ceph is not") {
+	if _, err := validator.ValidateCreate(context.Background(), shared); err == nil || !strings.Contains(err.Error(), "not ceph") {
 		t.Errorf("the validator let volume snapshots onto shared storage: %v", err)
 	}
 	if _, err := validator.ValidateUpdate(context.Background(), storedCluster("team-a", "web", "local-zfs"), local); err != nil {
@@ -424,7 +424,7 @@ func TestReconcileKeepsTheTokenWhenSnapshotsAreRefused(t *testing.T) {
 	}
 	select {
 	case e := <-recorder.Events:
-		if !strings.Contains(e, "VolumeSnapshotsRefused") || !strings.Contains(e, "no image of the proxy") {
+		if !strings.Contains(e, "VolumeSnapshotsRefused") || !strings.Contains(e, "copy proxy's image") {
 			t.Errorf("event %q", e)
 		}
 	default:

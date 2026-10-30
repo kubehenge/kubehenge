@@ -69,7 +69,7 @@ func (s *Server) clusterCredentialTarget(w http.ResponseWriter, r *http.Request,
 	}
 	// The cluster's name is the credential's label, which holds at most 63 characters.
 	if len(validation.IsValidLabelValue(c.Name)) > 0 {
-		writeError(w, http.StatusUnprocessableEntity, "the interface stores credentials only for clusters whose names have at most 63 characters")
+		writeError(w, http.StatusUnprocessableEntity, "credentials need a cluster name of at most 63 characters")
 		return nil
 	}
 	return &credentialTarget{
@@ -147,7 +147,7 @@ func (s *Server) removeApplianceCredential(w http.ResponseWriter, r *http.Reques
 	}
 }
 
-var errNotCredential = errors.New("a Secret of the credential's name exists that the interface did not store; an administrator of the management cluster has to remove it")
+var errNotCredential = errors.New("another Secret has the credential's name. An administrator has to delete it")
 
 // stored reads a credential's Secret, telling whether there is one. A Secret of its name that is no
 // credential is an error, as the interface may not touch it.
@@ -200,11 +200,11 @@ func credentialValues(purpose provisioner.CredentialPurpose, values map[string]s
 		v := values[k]
 		switch {
 		case v == "":
-			return nil, "a value for " + k + " is required"
+			return nil, "enter " + k
 		case len(v) > maxCredentialValue:
-			return nil, fmt.Sprintf("the value for %s is longer than %d bytes", k, maxCredentialValue)
+			return nil, fmt.Sprintf("%s: at most %d bytes", k, maxCredentialValue)
 		case !utf8.ValidString(v):
-			return nil, "the value for " + k + " is no valid text"
+			return nil, k + ": not valid text"
 		}
 		data[k] = []byte(v)
 	}
@@ -305,7 +305,7 @@ func (s *Server) credentialError(w http.ResponseWriter, r *http.Request, err err
 	case errors.Is(err, errNotCredential):
 		writeError(w, http.StatusConflict, err.Error())
 	case apierrors.IsAlreadyExists(err), apierrors.IsConflict(err):
-		writeError(w, http.StatusConflict, "the credential changed meanwhile; try again")
+		writeError(w, http.StatusConflict, "the credential changed meanwhile. Try again")
 	default:
 		s.kubeError(w, r, err)
 	}

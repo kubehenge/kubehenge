@@ -25,10 +25,10 @@ describe("vM templates", () => {
   it("checks and builds the request", () => {
     expect(buildProblems(form)).toStrictEqual({});
     expect(buildProblems({ ...form, kubernetesVersion: "1.37" })).toStrictEqual({
-      kubernetesVersion: "A version such as v1.36.5.",
+      kubernetesVersion: "Enter a version such as v1.36.5",
     });
     expect(buildProblems({ ...form, buildAddress: "192.0.2.50/24" })).toStrictEqual({
-      buildAddress: "A static address needs its prefix length, a gateway and a DNS server.",
+      buildAddress: "Enter the prefix length, a gateway and a DNS server",
     });
     expect(buildRequest({ ...form, distribution: "k3s", nodeOS: "rocky-10", vlan: "30" })).toStrictEqual({
       distribution: "k3s",
@@ -55,7 +55,7 @@ describe("vM templates", () => {
     // A Talos image is not booted to be built, so it takes none of what that VM needs, and Talos is
     // its own OS.
     const talos = { ...form, distribution: "talos" as const, nodeOS: "almalinux-10", talosVersion: "v1.14" };
-    expect(buildProblems(talos)).toStrictEqual({ talosVersion: "A release such as v1.14.4." });
+    expect(buildProblems(talos)).toStrictEqual({ talosVersion: "Enter a release such as v1.14.4" });
     expect(
       buildRequest({
         ...talos,
@@ -110,9 +110,9 @@ describe("vM templates", () => {
     expect(
       within(await screen.findByRole("row", { name: /kubehenge-talos-v1\.14\.4/u })).getByText("Made once"),
     ).toBeInTheDocument();
-    await user.click(await screen.findByRole("button", { name: "Build a template" }));
-    const dialog = within(screen.getByRole("dialog", { name: "Build a template" }));
-    await user.selectOptions(dialog.getByLabelText("For"), "talos");
+    await user.click(await screen.findByRole("button", { name: "Build template" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Build template" }));
+    await user.selectOptions(dialog.getByLabelText("Distribution"), "talos");
     // The default release has its template already, so the newest without one is chosen.
     await waitFor(() => expect(dialog.getByLabelText("Talos release")).toHaveValue("v1.15.1"));
     expect(
@@ -227,13 +227,14 @@ describe("vM templates", () => {
     expect(kubeadm.getByRole("cell", { name: "Rocky Linux 10" })).toBeInTheDocument();
     const talos = within(screen.getByRole("row", { name: /kubehenge-talos-v1.12.0 \(9003\)/u }));
     expect(talos.getByRole("cell", { name: "Talos Linux" })).toBeInTheDocument();
-    expect(screen.getByText(/failed: no import storage/u)).toBeInTheDocument();
+    expect(screen.getByText("Build by root@pam failed")).toBeInTheDocument();
+    expect(screen.getByText("no import storage")).toBeInTheDocument();
     // The weekly build is off on this appliance.
     expect(within(screen.getByRole("region", { name: "Automatic builds" })).getByText(/^Off\./u)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Build a template" }));
-    const dialog = screen.getByRole("dialog", { name: "Build a template" });
-    const distributions = within(within(dialog).getByLabelText("For"))
+    await user.click(screen.getByRole("button", { name: "Build template" }));
+    const dialog = screen.getByRole("dialog", { name: "Build template" });
+    const distributions = within(within(dialog).getByLabelText("Distribution"))
       .getAllByRole("option")
       .map((o) => o.textContent);
     expect(distributions).toStrictEqual(["RKE2", "k3s", "kubeadm", "Talos"]);
@@ -242,11 +243,11 @@ describe("vM templates", () => {
     expect(nodeOS).toHaveValue("almalinux-10");
     expect(within(nodeOS).getByRole("option", { name: "openSUSE Leap 16.1: not released yet" })).toBeDisabled();
     await user.selectOptions(nodeOS, "rocky-10");
-    expect(nodeOS).toHaveAccessibleDescription("Rocky Linux 10 needs Proxmox VE nodes with x86-64-v3 CPUs.");
+    expect(nodeOS).toHaveAccessibleDescription("Needs Proxmox VE nodes with x86-64-v3 CPUs");
     // Talos is its own OS, so it offers none; the choice stays for the others.
-    await user.selectOptions(within(dialog).getByLabelText("For"), "talos");
+    await user.selectOptions(within(dialog).getByLabelText("Distribution"), "talos");
     expect(within(dialog).queryByLabelText("Node OS")).not.toBeInTheDocument();
-    await user.selectOptions(within(dialog).getByLabelText("For"), "kubeadm");
+    await user.selectOptions(within(dialog).getByLabelText("Distribution"), "kubeadm");
     expect(within(dialog).getByLabelText("Node OS")).toHaveValue("rocky-10");
     await user.type(within(dialog).getByLabelText("Kubernetes version"), "v1.37.1");
     await waitFor(() => expect(within(dialog).getByRole("option", { name: "ceph" })).toBeInTheDocument());
@@ -303,12 +304,13 @@ describe("vM templates", () => {
     const user = userEvent.setup({ delay: null });
     render(<Templates />);
     const builds = within(await screen.findByRole("region", { name: "Automatic builds" }));
-    expect(builds.getByText(/Every Sunday at 01:00 \(Europe\/Zurich\)/u)).toBeInTheDocument();
-    expect(builds.getByText(/24 hours old/u)).toBeInTheDocument();
-    expect(builds.getByText(/failed, .*: the mirror is down/u)).toBeInTheDocument();
+    expect(builds.getByText("Every Sunday, 01:00 Europe/Zurich")).toBeInTheDocument();
+    expect(builds.getByText("After 24 h, in maintenance windows")).toBeInTheDocument();
+    expect(builds.getByText(/^Last run failed, /u)).toBeInTheDocument();
+    expect(builds.getByText("the mirror is down")).toBeInTheDocument();
     await user.click(builds.getByRole("button", { name: "Build now" }));
     await waitFor(() => expect(builds.getByRole("button", { name: "Build now" })).toBeDisabled());
-    expect(builds.getByText(/Build now was asked for/u)).toBeInTheDocument();
+    expect(builds.getByText("Starting within a minute")).toBeInTheDocument();
     expect(calls.filter((c) => c.key === "POST /api/templates/refresh")).toHaveLength(1);
   });
 });

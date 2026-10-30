@@ -2,7 +2,7 @@ import { useEffect, useState, type JSX } from "react";
 
 import { api } from "./api";
 import type { Cluster, TalosReleases, TalosStatus, Versions } from "./types";
-import { Dialog, ErrorBox, Field, Status, errorMessage, filled, sentence, useChange } from "./ui";
+import { Detail, Dialog, ErrorBox, Field, Status, errorMessage, filled, sentence, useChange } from "./ui";
 import { text } from "./values";
 
 /** talosRelease is what a Talos release looks like, such as v1.14.4. */
@@ -112,12 +112,10 @@ export function useTalosReleases(wanted: boolean): TalosReleases | undefined {
   return releases;
 }
 
-/** talosReleaseHint says what the wizard's Talos release is, and why the list may be short. */
-export function talosReleaseHint(releases: TalosReleases | undefined): string {
+/** talosReleaseHint says why the wizard's list of Talos releases may be short. */
+export function talosReleaseHint(releases: TalosReleases | undefined): string | undefined {
   const reason = releases?.error;
-  return `The release of Talos the nodes run, Kubernetes on top of it. A release without a VM template needs one built first.${
-    filled(reason) ? ` ${sentence(reason)}` : ""
-  }`;
+  return filled(reason) ? sentence(reason) : undefined;
 }
 
 /** TalosReleaseSelect chooses a new cluster's Talos release: one the template pool has a template of. */
@@ -138,7 +136,7 @@ export function TalosReleaseSelect({
   return (
     <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
       <option value="" disabled>
-        {releases.templates.length > 0 ? "Choose…" : "None has a template yet"}
+        {releases.templates.length > 0 ? "Choose…" : "No templates yet"}
       </option>
       {offeredReleases(releases).map((v) => {
         const built = releases.templates.includes(v);
@@ -161,7 +159,7 @@ export function upgradingText(s: string): string {
   if (node === undefined || to === undefined || since === undefined) {
     return s;
   }
-  return `${node} to ${to}, since ${shownTime(since)}${rebooted === undefined ? "" : `; rebooted at ${shownTime(rebooted)}`}`;
+  return `${node} to ${to}, since ${shownTime(since)}${rebooted === undefined ? "" : `, rebooted ${shownTime(rebooted)}`}`;
 }
 
 /** upgradedText reads "<node> to <release> at <time>" in the reader's own terms. */
@@ -173,13 +171,13 @@ export function upgradedText(s: string): string {
   return `${node} to ${to}, ${shownTime(at)}`;
 }
 
-/** failedText reads "<node> to <release> at <time>: <why>" as a sentence. */
-export function failedText(s: string): string {
+/** failedText reads "<node> to <release> at <time>: <why>" as a short state and the detail behind it. */
+export function failedText(s: string): { state: string; detail: string } {
   const { node, to, at, why } = /^(?<node>\S+) to (?<to>\S+) at (?<at>\S+): (?<why>.+)$/su.exec(s)?.groups ?? {};
   if (node === undefined || to === undefined || at === undefined || why === undefined) {
-    return sentence(`upgrading Talos failed: ${s}`);
+    return { state: "Talos upgrade failed", detail: s };
   }
-  return `Upgrading ${node} to Talos ${to} failed at ${shownTime(at)}: ${sentence(why)}`;
+  return { state: `Couldn't upgrade ${node} to Talos ${to}`, detail: `${shownTime(at)}: ${why}` };
 }
 
 /** TalosRows say, among a cluster's summary, which Talos release its nodes run and how its upgrades stand. */
@@ -190,9 +188,9 @@ export function TalosRows({ talos }: { talos: TalosStatus }): JSX.Element {
       <dd>{talos.version}</dd>
       {filled(talos.image) && talos.image !== talos.version && (
         <>
-          <dt>New machines boot</dt>
+          <dt>New nodes boot</dt>
           <dd>
-            {talos.image}, then are upgraded to {talos.version}
+            {talos.image}, then {talos.version}
           </dd>
         </>
       )}
@@ -242,9 +240,12 @@ export function TalosFailure({
       setBusy(false);
     }
   };
+  const f = failedText(failed);
   return (
     <section aria-label="Failed Talos upgrade">
-      <div className="error">{failedText(failed)} The other nodes wait until it is tried again.</div>
+      <div className="error">
+        {f.state}. The other nodes wait. <Detail>{f.detail}</Detail>
+      </div>
       <ErrorBox message={error} />
       <div className="actions">
         <button
@@ -301,7 +302,7 @@ export function TalosDialog({ cluster: c, onClose }: { cluster: Cluster; onClose
         </option>
         {targets.map((v) => (
           <option key={v} value={v} disabled={held.includes(v)}>
-            {held.includes(v) ? `${v} (does not run Kubernetes ${kubernetes})` : v}
+            {held.includes(v) ? `${v} (upgrade Kubernetes first)` : v}
           </option>
         ))}
       </select>
@@ -329,33 +330,23 @@ export function TalosDialog({ cluster: c, onClose }: { cluster: Cluster; onClose
         </>
       }
     >
-      <p className="muted">
-        The nodes are upgraded in place, one at a time and control planes first, each rebooting into the new release.
-        Talos moves one minor version at a time, to a release that runs the cluster&apos;s Kubernetes version,{" "}
-        {c.version}. Kubernetes upgrades wait until every node is done.
-      </p>
-      {filled(c.talos?.upgrading) && (
-        <p className="warning">A node upgrade is under way: {upgradingText(c.talos.upgrading)}.</p>
-      )}
+      <p className="muted">Reboots the nodes one at a time, control planes first.</p>
+      {filled(c.talos?.upgrading) && <p className="warning">Upgrading {upgradingText(c.talos.upgrading)}</p>}
       <Field
         label="Talos release"
-        hint={releases && targets.length === 0 && !typed ? `Such as ${talosExample}.` : undefined}
-        error={typed ? `A release such as ${talosExample}.` : undefined}
+        hint={releases && targets.length === 0 && !typed ? `Such as ${talosExample}` : undefined}
+        error={typed ? `Enter a release such as ${talosExample}` : undefined}
       >
         {field}
       </Field>
       {held.length > 0 && (
         <p className="muted">
-          {held.join(", ")} {held.length === 1 ? "does" : "do"} not run Kubernetes {kubernetes}, which the cluster runs:
-          upgrade Kubernetes first.
+          {held.join(", ")} {held.length === 1 ? "doesn't" : "don't"} run Kubernetes {kubernetes}. Upgrade Kubernetes
+          first.
         </p>
       )}
       {releases && targets.length === 0 && (
-        <p className="muted">
-          {filled(releases.error)
-            ? sentence(releases.error)
-            : "This is the newest release of its minor version, and the next has none yet."}
-        </p>
+        <p className="muted">{filled(releases.error) ? sentence(releases.error) : "No newer release"}</p>
       )}
       <ErrorBox message={error} />
     </Dialog>

@@ -20,37 +20,25 @@ const bytesPerMiB = 1_048_576;
 
 const fixedOrAutoscaled = (
   <>
-    <option value="fixed">A fixed number</option>
+    <option value="fixed">Fixed</option>
     <option value="autoscaled">Autoscaled</option>
   </>
 );
 
-const autoscaledHint =
-  "The cluster autoscaler adds workers while pods wait for room and removes those left unneeded, between the fewest and the most.";
-
-const emptiesHint =
-  "With 0 the pool empties while nothing waits; the control planes still run only the control plane, and add-ons need a worker that stays.";
-
 /** WorkerFields are the create wizard's workers: a fixed number, or the fewest and the most the cluster autoscaler keeps. */
-export function WorkerFields({
-  form,
-  set,
-  shown,
-  cls,
-  alone,
-}: StepProps & { cls: ClusterClass | undefined; alone: string }): JSX.Element {
+export function WorkerFields({ form, set, shown, cls }: StepProps & { cls: ClusterClass | undefined }): JSX.Element {
   const offered = variable(cls, "autoscaler") !== undefined;
   const auto = autoscales(form, cls);
   let leastHint: string | undefined;
   if (auto && form.workerReplicas === 0) {
-    leastHint = emptiesHint;
+    leastHint = "With 0, the pool empties when idle";
   } else if (mostWorkers(form) === 0) {
-    leastHint = alone;
+    leastHint = "With 0, the control planes run the workloads";
   }
   return (
     <>
       {offered && (
-        <Field label="Worker count" hint={auto ? autoscaledHint : undefined}>
+        <Field label="Worker count">
           {(id) => (
             <select
               id={id}
@@ -75,11 +63,7 @@ export function WorkerFields({
         )}
       </Field>
       {auto && (
-        <Field
-          label="Most workers"
-          error={shown("workerMax")}
-          hint="Each needs a node address of its own; the Network step counts the most."
-        >
+        <Field label="Most workers" error={shown("workerMax")} hint="Each needs its own node address">
           {(id) => (
             <input
               id={id}
@@ -173,16 +157,16 @@ interface Scaling {
 function entryProblem(s: Scaling, e: PoolEntry, kept: boolean): PoolProblem | undefined {
   const least = entryLeast(e);
   if (!whole(least, 0, maxWorkers)) {
-    return { least: `A whole number from 0 to ${maxWorkers}.` };
+    return { least: `A whole number from 0 to ${maxWorkers}` };
   }
   if (!e.autoscale) {
     return undefined;
   }
   if (!whole(number(e.max), Math.max(least, 1), maxWorkers)) {
-    return { most: `A whole number from ${Math.max(least, 1)} to ${maxWorkers}, no fewer than the fewest.` };
+    return { most: `A whole number from ${Math.max(least, 1)} to ${maxWorkers}` };
   }
   if (!kept && runsAddons(s.c)) {
-    return { least: "The cluster's add-ons need a worker that stays: at least 1." };
+    return { least: "Keep at least 1 for the add-ons" };
   }
   const need = s.controlPlane + 1 + Object.values(s.entries).reduce((n, x) => n + entryMost(x), 0);
   const wasNeed = (s.c.controlPlane.desired || 1) + 1 + s.c.workerPools.reduce((n, p) => n + poolMost(p), 0);
@@ -190,7 +174,7 @@ function entryProblem(s: Scaling, e: PoolEntry, kept: boolean): PoolProblem | un
   // As the server: a change may keep a shortage the cluster has, but not make it worse.
   if (have !== undefined && need > have && need > wasNeed) {
     return {
-      most: `The node addresses give ${have}; with every pool at its most the cluster runs ${need} machines at once, one for a rollout.`,
+      most: `Needs ${need} node addresses, but there are ${have}. Enter a lower number.`,
     };
   }
   return undefined;
@@ -281,9 +265,7 @@ export function roomWarning(c: Cluster, pool: { p: WorkerPool; e: PoolEntry }, n
     return undefined;
   }
   const wanted = added * workerMiB * bytesPerMiB;
-  return wanted > free
-    ? `The ${added} more workers it may add need ${bytes(wanted)} of memory; the Proxmox VE nodes the cluster may use have ${bytes(free)} free now. Past that, a new VM finds no room and the cluster's health says so.`
-    : undefined;
+  return wanted > free ? `${added} more workers need ${bytes(wanted)}, the nodes have ${bytes(free)} free` : undefined;
 }
 
 /** PoolFields edit one worker pool in the Scale dialog: a fixed number of workers, or autoscaled between two. */
@@ -304,7 +286,7 @@ export function PoolFields({
 }): JSX.Element {
   return (
     <>
-      <Field label={`Scaling (${p.name})`} hint={e.autoscale ? autoscaledHint : undefined}>
+      <Field label={`Scaling (${p.name})`}>
         {(id) => (
           <select
             id={id}
@@ -317,11 +299,7 @@ export function PoolFields({
       </Field>
       {e.autoscale ? (
         <>
-          <Field
-            label={`Fewest workers (${p.name})`}
-            error={problem?.least}
-            hint="With add-ons, at least one autoscaled pool keeps 1 or more."
-          >
+          <Field label={`Fewest workers (${p.name})`} error={problem?.least}>
             {(id) => (
               <input
                 id={id}
@@ -336,7 +314,7 @@ export function PoolFields({
           <Field
             label={`Most workers (${p.name})`}
             error={problem?.most}
-            hint={room === undefined ? undefined : `The node addresses leave room for ${room} here.`}
+            hint={room === undefined ? undefined : `Node addresses leave room for ${room}`}
           >
             {(id) => (
               <input
@@ -355,11 +333,7 @@ export function PoolFields({
         <Field
           label={`Workers (${p.name})`}
           error={problem?.least}
-          hint={
-            p.autoscaling
-              ? "Switched off, the pool keeps the workers it runs now unless you change the number."
-              : undefined
-          }
+          hint={p.autoscaling ? "Keeps its current workers unless changed" : undefined}
         >
           {(id) => (
             <input
@@ -395,9 +369,9 @@ export function usePveNodes(): PveNode[] {
 }
 
 const expanders = [
-  ["least-waste", "The pool left with the least unused room"],
-  ["most-pods", "The pool that takes the most waiting pods"],
-  ["random", "Any pool that fits"],
+  ["least-waste", "Least unused room"],
+  ["most-pods", "Most waiting pods"],
+  ["random", "Random"],
 ] as const;
 
 const defaultMinutes = 10;
@@ -420,15 +394,9 @@ export function autoscalerText(c: Cluster): string {
   const s = settingsOf(c.variables["autoscaler"]);
   const where = s.placement === "workload" ? "On the control planes" : "In the management cluster";
   const pools = c.workerPools.filter((p) => p.autoscaling).length;
-  const scaled = pools === 0 ? "no pool autoscaled" : `${pools} ${pools === 1 ? "pool" : "pools"} autoscaled`;
-  return `${where}, ${scaled}; removes a node unneeded for ${s.scaleDownUnneededMinutes} min`;
+  const scaled = pools === 0 ? "no pools" : `${pools} ${pools === 1 ? "pool" : "pools"}`;
+  return `${where}, ${scaled}, scales down after ${s.scaleDownUnneededMinutes} min`;
 }
-
-const placementHints = {
-  management: "In the management cluster. The cluster holds no credential of the management cluster.",
-  workload:
-    "On the cluster's control planes, sparing the management cluster its memory. It needs the management cluster's API reachable from the cluster, and puts a token inside the cluster that reads the machines of every cluster in its namespace; an admission policy still lets it scale only this cluster's pools. Choosing it needs VM.Audit on the workload pool.",
-} as const;
 
 function MinutesField({
   label,
@@ -441,9 +409,7 @@ function MinutesField({
   value: string;
   onChange: (v: string) => void;
 }): JSX.Element {
-  const problem = whole(number(value), 1, maxMinutes)
-    ? undefined
-    : `A whole number of minutes from 1 to ${maxMinutes}.`;
+  const problem = whole(number(value), 1, maxMinutes) ? undefined : `A whole number from 1 to ${maxMinutes}`;
   return (
     <Field label={label} error={problem} hint={hint}>
       {(id) => (
@@ -476,7 +442,7 @@ export function AutoscalerDialog({ cluster: c, onClose }: { cluster: Cluster; on
   const changed = JSON.stringify(next) !== JSON.stringify(current);
   return (
     <Dialog
-      title="Autoscaler"
+      title="Edit autoscaler"
       onClose={onClose}
       onSubmit={() => {
         void send({ variables: { autoscaler: next } });
@@ -492,10 +458,15 @@ export function AutoscalerDialog({ cluster: c, onClose }: { cluster: Cluster; on
         </>
       }
     >
-      <p className="muted">
-        Kubehenge runs the cluster autoscaler while a worker pool is autoscaled; the Scale dialog switches pools to it.
-      </p>
-      <Field label="Runs" hint={placementHints[value.placement]}>
+      <Field
+        label="Runs"
+        hint={value.placement === "workload" ? "Its token reads the machines of the namespace's clusters" : undefined}
+        info={
+          value.placement === "workload"
+            ? "Needs VM.Audit on the workload pool and the management cluster's API reachable."
+            : undefined
+        }
+      >
         {(id) => (
           <select
             id={id}
@@ -504,12 +475,12 @@ export function AutoscalerDialog({ cluster: c, onClose }: { cluster: Cluster; on
               setValue({ ...value, placement: e.target.value === "workload" ? "workload" : "management" })
             }
           >
-            <option value="management">In the management cluster (recommended)</option>
-            <option value="workload">On the cluster's own control planes</option>
+            <option value="management">Management cluster (recommended)</option>
+            <option value="workload">Cluster&apos;s control planes</option>
           </select>
         )}
       </Field>
-      <Field label="Pool that grows" hint="When several pools could take the waiting pods.">
+      <Field label="Pool that grows">
         {(id) => (
           <select
             id={id}
@@ -528,13 +499,13 @@ export function AutoscalerDialog({ cluster: c, onClose }: { cluster: Cluster; on
       </Field>
       <MinutesField
         label="Wait after adding (minutes)"
-        hint="Before it removes any node after a scale-up."
+        hint="Before removing nodes after a scale-up"
         value={delay}
         onChange={setDelay}
       />
       <MinutesField
         label="Unneeded for (minutes)"
-        hint="How long a node stays unneeded before it goes."
+        hint="Before an unneeded node is removed"
         value={unneeded}
         onChange={setUnneeded}
       />
@@ -576,7 +547,7 @@ export function ScaleDialog({ cluster: c, onClose }: { cluster: Cluster; onClose
         </>
       }
     >
-      <Field label="Control-plane nodes" hint="Three or more keep the cluster running when one node fails.">
+      <Field label="Control-plane nodes">
         {(id) => (
           <select id={id} value={controlPlane} onChange={(e) => setControlPlane(Number(e.target.value))}>
             {[...new Set([...controlPlaneSizes, current])]

@@ -18,7 +18,7 @@ import (
 // creation is held to the same: a name, version or size the interface would not offer, a node OS that cannot be built or whose CPU type no node it may
 // use offers, control planes too small for the cluster's workers, nodes without
 // the memory its add-ons use, logs without monitoring, backups to a target the class lacks or on
-// a schedule Velero cannot read, Rancher switched on beside another, or on nodes too small for it,
+// a schedule Velero cannot read or reading the backups of a cluster that has none in that target, Rancher switched on beside another, or on nodes too small for it,
 // a Rancher cluster's nodes made smaller than it needs, load-balancer addresses that clash with the
 // nodes' network or another cluster's, Datastore.Allocate on a storage that is not the cluster's
 // alone, volume snapshots where they cannot be taken, Sys.Audit on / where no cluster may hold it,
@@ -81,6 +81,8 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 		errs = append(errs, field.Forbidden(topology.Child("variables").Key(logsAddon), err.Error()))
 	}
 	if err := checkBackups(old, c, class); err != nil {
+		errs = append(errs, field.Invalid(topology.Child("variables").Key(backupsVariable), backupsVariable, err.Error()))
+	} else if err := checkBackupSources(ctx, v.Hooks.Reader, old, c); err != nil {
 		errs = append(errs, field.Invalid(topology.Child("variables").Key(backupsVariable), backupsVariable, err.Error()))
 	}
 	errs = append(errs, validateCertificates(c)...)
@@ -180,14 +182,14 @@ func validateClusterMesh(old, c *clusterv1.Cluster) field.ErrorList {
 	case err != nil:
 		errs = append(errs, field.Invalid(variables, clusterMeshVariable, err.Error()))
 	case mesh.Enabled && cni != cniCilium:
-		errs = append(errs, field.Forbidden(variables, "Cluster Mesh links clusters that run Cilium; this one runs "+cmp.Or(cni, "its distribution's own CNI")))
+		errs = append(errs, field.Forbidden(variables, "Cluster Mesh needs Cilium, and this cluster runs "+cmp.Or(cni, "its distribution's own CNI")))
 	case slices.Contains(mesh.Peers, c.Name):
 		errs = append(errs, field.Invalid(variables.Child("peers"), c.Name, "a cluster cannot list itself"))
 	}
 	if old != nil {
 		if was, ok := old.Annotations[CiliumClusterIDAnnotation]; ok && c.Annotations[CiliumClusterIDAnnotation] != was {
 			errs = append(errs, field.Forbidden(field.NewPath("metadata", "annotations").Key(CiliumClusterIDAnnotation),
-				"the Cilium cluster id is fixed once given: changing it would restart every workload and could clash with a peer's"))
+				"the Cilium cluster id cannot change once set"))
 		}
 	}
 	return errs
@@ -212,7 +214,7 @@ func validateGitOps(c *clusterv1.Cluster) field.ErrorList {
 		return nil
 	}
 	if g.UI {
-		return field.ErrorList{field.Forbidden(path.Child("ui"), "Flux's web interface signs in through the cluster's first OIDC provider, and the cluster has none")}
+		return field.ErrorList{field.Forbidden(path.Child("ui"), "Flux's web interface needs an OIDC provider. Add one to the cluster")}
 	}
-	return field.ErrorList{field.Forbidden(path.Child("admins"), "Argo CD's administrators sign in through the cluster's first OIDC provider, and the cluster has none")}
+	return field.ErrorList{field.Forbidden(path.Child("admins"), "Argo CD administrators need an OIDC provider. Add one to the cluster")}
 }

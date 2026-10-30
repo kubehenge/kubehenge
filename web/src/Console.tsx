@@ -47,15 +47,15 @@ function shortcutsFor(
 ): Shortcut[] {
   const { canCreate, canManage } = may;
   return [
-    { keys: "/", what: "Go to or run, as Ctrl K does", run: open.palette },
-    { keys: "c", what: "The clusters", run: () => navigate("/") },
+    { keys: "/", what: "Go to or run", run: open.palette },
+    { keys: "c", what: "Clusters", run: () => navigate("/") },
     { keys: "n", what: "New cluster", on: canCreate !== false, run: () => navigate("/clusters/new") },
     { keys: "a", what: "Administration", on: canManage, run: () => navigate("/administration") },
-    { keys: "[", what: "The cluster before in the fleet", run: () => open.step(-1) },
-    { keys: "]", what: "The next cluster in the fleet", run: () => open.step(1) },
+    { keys: "[", what: "Previous cluster", run: () => open.step(-1) },
+    { keys: "]", what: "Next cluster", run: () => open.step(1) },
     ...viewKeys.map(({ view, key }) => ({
       keys: key,
-      what: `The cluster's ${view.label}`,
+      what: view.label,
       on: here !== undefined,
       run: () => {
         if (here) {
@@ -63,8 +63,8 @@ function shortcutsFor(
         }
       },
     })),
-    { keys: "r", what: "Show or fold away the running work", run: open.runs },
-    { keys: "?", what: "These keys", run: open.keys },
+    { keys: "r", what: "Show or hide runs", run: open.runs },
+    { keys: "?", what: "Keyboard shortcuts", run: open.keys },
   ];
 }
 

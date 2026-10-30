@@ -50,17 +50,23 @@ const cniNames: Record<string, string> = { cilium: "Cilium", calico: "Calico", c
 /** cniName is how a pod network is written for people: Cilium, Calico, Canal, Flannel. */
 export const cniName = (n: string): string => cniNames[n] ?? n;
 
+// The classes' own default pod network, for a Cluster that leaves its cni variable to the class;
+// kubeadm has none, so its clusters always name one.
+const classCNI: Record<string, string> = { rke2: "canal", k3s: "flannel", talos: "flannel" };
+
+/** clusterCNI names the pod network a cluster runs, its own choice or its class's default. */
+export const clusterCNI = (chosen: string | undefined, distribution: string): string =>
+  cniName(chosen ?? classCNI[distribution] ?? "");
+
 // The controller registers a cluster with the Rancher another of its clusters runs, as soon as
 // one does.
-export const registerHint = "With the Rancher one of Kubehenge's other clusters runs, now or once one does.";
-export const registeredWithRancher = "Registered with Rancher, once one of Kubehenge's clusters runs it";
+export const registerHint = "Joins the Rancher another Kubehenge cluster runs";
+export const registeredWithRancher = "Registered with Rancher";
 
-export const headlampHint =
-  "A web interface inside the cluster. People sign in to it with their own token, and it has no rights of its own, unless it is read-only for everyone.";
-export const headlampViewLabel = "Read-only for everyone, without signing in";
+export const headlampHint = "In-cluster web interface, signed in with each user's token";
+export const headlampViewLabel = "Read-only without sign-in";
 /** headlampViewHint says what Headlamp's view access shows, and to whom. */
-export const headlampViewHint =
-  "Headlamp's own account gets Kubernetes' view role, and Headlamp uses it for everyone who reaches it: the workloads, ConfigMaps, events and logs of every namespace, without Secrets, and no changes. Tokens given to it are not used.";
+export const headlampViewHint = "Anyone who reaches it reads every namespace, Secrets excepted";
 
 /** headlampText sums up the in-cluster Headlamp: off, or on with its host name and access. */
 export function headlampText(enabled: boolean, hostname: string | undefined, view: boolean): string {
@@ -71,20 +77,17 @@ export function headlampText(enabled: boolean, hostname: string | undefined, vie
 }
 
 /** istioHint says what Istio does in a cluster and how workloads join it. */
-export const istioHint =
-  "Istio in ambient mode, without sidecars: pods in a namespace labelled istio.io/dataplane-mode=ambient talk to each other over mutual TLS, with their workload identities. Switching it off first takes every namespace and pod out of the mesh.";
+export const istioHint = "Ambient mode: label namespaces istio.io/dataplane-mode=ambient";
 export const istioText = (on: boolean): string => (on ? "On, ambient mode" : "Off");
 
 /** csiText describes the CSI plugin's release a cluster runs. */
-export const csiText = (on: boolean): string =>
-  on ? "Newest release, with Datastore.Allocate on the cluster's storage" : "Release that needs no Datastore.Allocate";
+export const csiText = (on: boolean): string => (on ? "Newest, with Datastore.Allocate" : "Without Datastore.Allocate");
 
 /** snapshotsText describes whether a cluster takes volume snapshots. */
-export const snapshotsText = (on: boolean): string =>
-  on ? "On, with the cluster's own volumes copied with its own Proxmox VE token" : "Off";
+export const snapshotsText = (on: boolean): string => (on ? "On, with the cluster's token" : "Off");
 
 /** haGroupsText describes whether a cluster's nodes are labelled with their Proxmox VE HA groups. */
-export const haGroupsText = (on: boolean): string => (on ? "On, with Sys.Audit on / for the cluster's token" : "Off");
+export const haGroupsText = (on: boolean): string => (on ? "On, Sys.Audit on / for the token" : "Off");
 
 /** maxWorkers is the most workers a cluster is given, at creation and when scaled. */
 export const maxWorkers = 100;
@@ -108,11 +111,11 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error?: 
     return (
       <section className="panel">
         <div className="toolbar">
-          <h2>Something went wrong on this page</h2>
+          <h2>Page failed</h2>
         </div>
         <div className="pad">
           <ErrorBox message={this.state.error.message} />
-          <p className="muted">Reloading usually helps. If it does not, the appliance's log has the details.</p>
+          <p className="muted">Reload it. If it fails again, the appliance log has the cause.</p>
           <button type="button" className="primary" onClick={() => window.location.reload()}>
             Reload
           </button>
@@ -235,7 +238,7 @@ export function health(c: Cluster): { state: Health; text: string } {
   // A distribution's controllers start with its first cluster, which Cluster API holds until they
   // serve and the class is ready again.
   if (c.conditions.some((x) => x.type === "TopologyReconciled" && x.reason === "ClusterClassNotReconciled")) {
-    return { state: "progress", text: "Waiting for its ClusterClass" };
+    return { state: "progress", text: "Waiting for ClusterClass" };
   }
   // Cluster API's phase reads Provisioned once the infrastructure is up, long before the cluster is.
   return { state: "progress", text: "Provisioning" };
@@ -397,23 +400,112 @@ function shows(node: ReactNode): boolean {
   return node !== undefined && node !== null && typeof node !== "boolean" && node !== "";
 }
 
+// InfoToggle is the small "?" that shows or hides an explanation kept out of the way. It stays
+// outside any label, so the control's accessible name is the label alone.
+function InfoToggle({
+  about,
+  open,
+  target,
+  onToggle,
+}: {
+  about: string;
+  open: boolean;
+  target: string;
+  onToggle: () => void;
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      className="info-toggle"
+      aria-label={`About ${about}`}
+      aria-expanded={open}
+      aria-controls={target}
+      onClick={onToggle}
+    >
+      ?
+    </button>
+  );
+}
+
+/**
+ * Info holds the rare explanation a choice needs, shown only on request. Fields take theirs as
+ * Field's info; Info serves a checkbox, a radio or a heading.
+ */
+export function Info({ about, children }: { about: string; children: ReactNode }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  return (
+    <>
+      <InfoToggle about={about} open={open} target={id} onToggle={() => setOpen(!open)} />
+      <span id={id} className="info-text" hidden={!open}>
+        {children}
+      </span>
+    </>
+  );
+}
+
+/** Detail keeps a long text, such as a failure's full message, one click behind a short state. */
+export function Detail({ children }: { children: ReactNode }): JSX.Element {
+  return (
+    <details className="detail">
+      <summary>Details</summary>
+      <div className="detail-text">{children}</div>
+    </details>
+  );
+}
+
+/** Views is a page's row of view links. On a phone the row scrolls sideways, so the open view is scrolled into sight. */
+export function Views({ label, open, children }: { label: string; open: string; children: ReactNode }): JSX.Element {
+  const row = useRef<HTMLElement>(null);
+  // Once per view opened, so a polled re-render never undoes the reader's own scrolling.
+  const shownFor = useRef<string>(undefined);
+  useEffect(() => {
+    const nav = row.current;
+    const shown = nav?.querySelector('[aria-current="page"]');
+    if (shownFor.current === open || !nav || !shown) {
+      return;
+    }
+    shownFor.current = open;
+    const past = shown.getBoundingClientRect().right - nav.getBoundingClientRect().right;
+    if (past > 0) {
+      nav.scrollLeft += past;
+    }
+  });
+  return (
+    <nav ref={row} className="views" aria-label={label}>
+      {children}
+    </nav>
+  );
+}
+
 // Field labels one control; the control is the single child and gets the generated id, and with an
-// error the attributes that tie it to the message shown under it.
+// error the attributes that tie it to the message shown under it. A hint is a few words that stay
+// in view; info is the rare longer explanation, shown on request.
 export function Field({
   label,
   hint,
+  info,
   error,
   children,
 }: {
   label: string;
   hint?: ReactNode;
+  info?: ReactNode;
   error?: string | undefined;
   children: (id: string, aria: FieldAria) => ReactNode;
 }): JSX.Element {
   const id = useId();
+  const [open, setOpen] = useState(false);
   const message = error ?? "";
   const hinted = shows(hint);
-  const describedBy = [message === "" ? "" : `${id}-error`, hinted ? `${id}-hint` : ""].filter(Boolean).join(" ");
+  const informed = shows(info);
+  const describedBy = [
+    message === "" ? "" : `${id}-error`,
+    hinted ? `${id}-hint` : "",
+    informed && open ? `${id}-info` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   const aria: FieldAria = {};
   if (message !== "") {
     aria["aria-invalid"] = true;
@@ -423,7 +515,10 @@ export function Field({
   }
   return (
     <div className={message === "" ? "field" : "field invalid"}>
-      <label htmlFor={id}>{label}</label>
+      <div className="field-label">
+        <label htmlFor={id}>{label}</label>
+        {informed && <InfoToggle about={label} open={open} target={`${id}-info`} onToggle={() => setOpen(!open)} />}
+      </div>
       <div className="field-control">
         {withAria(children(id, aria), aria)}
         {message !== "" && (
@@ -434,6 +529,11 @@ export function Field({
         {hinted && (
           <div className="hint" id={`${id}-hint`}>
             {hint}
+          </div>
+        )}
+        {informed && (
+          <div className="info-text" id={`${id}-info`} hidden={!open}>
+            {info}
           </div>
         )}
       </div>

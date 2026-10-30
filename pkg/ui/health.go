@@ -355,6 +355,9 @@ func assemble(c *clusterv1.Cluster, m *managementRead, wl *workloadRead, now tim
 		Events:       eventsSection(c, m, wl, now),
 	}
 	readinessAttention(wl, &a)
+	if wl.velero {
+		a = append(a, backupsAttention(wl.veleroSchedule, wl.veleroBackups, now)...)
+	}
 	v.Attention = a.sorted()
 	v.Verdict = verdict(c, wl.unreachable(), v.Attention)
 	return v

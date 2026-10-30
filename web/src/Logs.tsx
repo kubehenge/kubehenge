@@ -1,7 +1,7 @@
 import { useId, useState, type JSX } from "react";
 
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, Field, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, Info, useChange } from "./ui";
 import { flag, quantity, record, text } from "./values";
 
 /** How a cluster's logs are collected, by its logs variable's collector. */
@@ -44,39 +44,40 @@ export function logsText(l: Logs): string {
     return "Off";
   }
   const days = l.retentionDays === 1 ? "1 day" : `${l.retentionDays} days`;
-  return `On, ${l.collector === "node" ? "collected on every node" : "collected through the API"}, ${days} in ${l.sizeGiB} GiB`;
+  return `On, ${l.collector === "node" ? "every node" : "Kubernetes API"}, ${days}, ${l.sizeGiB} GiB`;
 }
 
-export const logsHint =
-  "Loki keeps the cluster's logs and events on a volume of its own, Grafana Alloy collects them, and monitoring's Grafana reads them. Only Alloy may send to Loki and only Grafana read it, each with a client certificate. Switched off, the volume stays.";
+/** What keeping logs gives, short enough for a hint. */
+export const logsHint = "Logs and events, searchable in Grafana.";
 
-export const logsNeedMonitoring = "Logs need monitoring on.";
+export const logsNeedMonitoring = "Needs monitoring on.";
 
-const collectors: { value: Collector; label: string; hint: string }[] = [
+// The node collector's privileges are named because choosing it grants them.
+const collectors: { value: Collector; label: string; info: string }[] = [
   {
     value: "node",
     label: "On every node (recommended)",
-    hint: "Alloy runs on every node and reads the container logs the kubelet writes, so it catches pods gone again within seconds, and also the node's journal and, on the control planes, the API server's audit log. It is granted read access to those host paths, as root without capabilities, in the privileged logging-node namespace.",
+    info: "Also collects node journals and the audit log. Reads host log files as root, in a privileged namespace.",
   },
   {
     value: "api",
     label: "Through the Kubernetes API",
-    hint: "One Alloy reads the pods' logs through the API, with no access to the hosts and no privileged namespace, and uses less memory. It collects no journals and no audit log, and can miss pods that live only seconds.",
+    info: "No host access and less memory. Misses journals, the audit log and pods that live only seconds.",
   },
 ];
 
 // sizeProblem and daysProblem say what is wrong with a typed figure, if anything; the volume only grows.
 function sizeProblem(size: number, least: number): string | undefined {
   if (!Number.isInteger(size) || size < 1 || size > maxSizeGiB) {
-    return `A whole number of GiB from 1 to ${maxSizeGiB}.`;
+    return `A whole number from 1 to ${maxSizeGiB}`;
   }
-  return size < least ? `Loki's volume only grows: at least ${least} GiB.` : undefined;
+  return size < least ? `The volume can't shrink. Enter ${least} or more.` : undefined;
 }
 
 function daysProblem(days: number): string | undefined {
   return Number.isInteger(days) && days >= 1 && days <= maxRetentionDays
     ? undefined
-    : `A whole number of days from 1 to ${maxRetentionDays}.`;
+    : `A whole number from 1 to ${maxRetentionDays}`;
 }
 
 /** logsProblem says what is wrong with a logs choice, if anything; least is the volume it had. */
@@ -106,18 +107,15 @@ export function LogsFields({
                 name={name}
                 value={c.value}
                 checked={value.collector === c.value}
-                aria-describedby={`${name}-${c.value}`}
                 onChange={() => onChange({ ...value, collector: c.value })}
               />{" "}
               {c.label}
             </label>
-            <p className="hint" id={`${name}-${c.value}`}>
-              {c.hint}
-            </p>
+            <Info about={c.label}>{c.info}</Info>
           </div>
         ))}
       </fieldset>
-      <Field label="Keep logs for (days)" error={daysProblem(value.retentionDays)}>
+      <Field label="Keep for (days)" error={daysProblem(value.retentionDays)}>
         {(id) => (
           <input
             id={id}
@@ -130,8 +128,8 @@ export function LogsFields({
         )}
       </Field>
       <Field
-        label="Loki's volume (GiB)"
-        hint="It has to hold the days kept: Loki takes no lines while it is full. It only grows."
+        label="Volume (GiB)"
+        hint="Must fit every kept day, and can only grow"
         error={sizeProblem(value.sizeGiB, least)}
       >
         {(id) => (
@@ -168,7 +166,7 @@ export function LogsDialog({ cluster: c, onClose }: { cluster: Cluster; onClose:
   const changed = JSON.stringify(logsVariable(next)) !== JSON.stringify(logsVariable(current));
   return (
     <Dialog
-      title="Logs"
+      title="Edit logs"
       onClose={onClose}
       onSubmit={() => {
         void send({ variables: { logs: logsVariable(next, held) } });
@@ -189,15 +187,17 @@ export function LogsDialog({ cluster: c, onClose }: { cluster: Cluster; onClose:
           type="checkbox"
           checked={next.enabled}
           disabled={!monitoring && !next.enabled}
-          aria-describedby={hint}
+          aria-describedby={monitoring ? undefined : hint}
           onChange={(e) => setNext({ ...next, enabled: e.target.checked })}
         />{" "}
         Keep logs
       </label>
-      <p className="hint" id={hint}>
-        {logsHint}
-        {!monitoring && ` ${logsNeedMonitoring} Switch it on first.`}
-      </p>
+      <Info about="Keep logs">{logsHint} Switching off keeps the volume.</Info>
+      {!monitoring && (
+        <p className="hint" id={hint}>
+          {logsNeedMonitoring}
+        </p>
+      )}
       {next.enabled && <LogsFields value={next} least={least} onChange={setNext} />}
       <ErrorBox message={error} />
     </Dialog>

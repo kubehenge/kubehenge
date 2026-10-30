@@ -18,7 +18,7 @@ const meshVariable = "clusterMesh"
 
 // hiddenPeer is why a peer the user cannot see is not linked: whether a cluster of that name exists,
 // and how it is set up, is not theirs to know. That it linked back is: its owner agreed to.
-const hiddenPeer = "not linked, or no cluster of that name you can see"
+const hiddenPeer = "not linked, or not visible to you"
 
 func meshOn(raw json.RawMessage) bool {
 	var m struct {
@@ -109,7 +109,7 @@ func (s *Server) newRanges(w http.ResponseWriter, r *http.Request, u user, req *
 	var others *otherRanges
 	if runsCilium(req, class) {
 		if len(req.Name) > provisioner.MaxCiliumClusterName {
-			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("name: at most %d characters for a cluster that runs Cilium", provisioner.MaxCiliumClusterName))
+			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("name: at most %d characters with Cilium", provisioner.MaxCiliumClusterName))
 			return nil, nil, false
 		}
 		if others, err = s.otherClusterRanges(r.Context(), u); err != nil {

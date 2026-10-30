@@ -1,6 +1,8 @@
 import { useState, type JSX } from "react";
 
 import { api } from "./api";
+import { clusterPath, type View } from "./ClusterDetail";
+import { Link } from "./router";
 import type {
   AddonRelease,
   Attention,
@@ -19,7 +21,20 @@ import type {
   Severity,
   UnwellPod,
 } from "./types";
-import { Dialog, ErrorBox, Field, Status, abnormal, age, bytes, filled, pollIdle, sentence, usePoll } from "./ui";
+import {
+  Detail,
+  Dialog,
+  ErrorBox,
+  Field,
+  Status,
+  abnormal,
+  age,
+  bytes,
+  filled,
+  pollIdle,
+  sentence,
+  usePoll,
+} from "./ui";
 
 // A cluster that is not healthy is looked at more often, to follow it getting better.
 const pollUnwell = 10_000;
@@ -60,21 +75,24 @@ function Since({ at }: { at?: string | undefined }): JSX.Element {
 // SectionNote says why a section shows less than it should: it could not be read, or only in part.
 function SectionNote<T>({ section, what }: { section: HealthSection<T>; what: string }): JSX.Element | null {
   if (filled(section.error)) {
-    return <p className="warning">{sentence(`${what} could not be read: ${section.error}`)}</p>;
+    return (
+      <div className="warning">
+        Couldn&apos;t read {what}
+        <Detail>{section.error}</Detail>
+      </div>
+    );
   }
   if (section.truncated === true) {
-    return (
-      <p className="muted">There are more {what.toLowerCase()} than the page reads; it shows the first of them.</p>
-    );
+    return <p className="muted">First {section.items.length} shown</p>;
   }
   return null;
 }
 
-const verdicts: Record<ClusterHealth["verdict"], { text: string; note: string }> = {
-  healthy: { text: "Healthy", note: "Nothing needs attention." },
-  changing: { text: "Changing", note: "Something is on its way; nothing has failed." },
-  degraded: { text: "Degraded", note: "Something needs attention." },
-  unreachable: { text: "Unreachable", note: "Kubehenge cannot reach the cluster." },
+const verdicts: Record<ClusterHealth["verdict"], string> = {
+  healthy: "Healthy",
+  changing: "Changing",
+  degraded: "Degraded",
+  unreachable: "Unreachable",
 };
 
 function verdictState(h: ClusterHealth): State {
@@ -90,17 +108,17 @@ function verdictState(h: ClusterHealth): State {
   return worst(h.attention.map((a) => a.severity));
 }
 
+// Verdict carries, behind its state, why nothing from inside the cluster shows when nothing does.
 function Verdict({ health: h }: { health: ClusterHealth }): JSX.Element {
-  const v = verdicts[h.verdict];
   return (
-    <p className="verdict">
-      <Status state={verdictState(h)} text={v.text} />
-      <span>{v.note}</span>
+    <div className="verdict">
+      <Status state={verdictState(h)} text={verdicts[h.verdict]} />
+      {filled(h.workload) && <Detail>{h.workload}</Detail>}
       <span className="spacer" />
       <span className="muted" title={new Date(h.read).toLocaleString()}>
         Read at {new Date(h.read).toLocaleTimeString()}
       </span>
-    </p>
+    </div>
   );
 }
 
@@ -131,13 +149,14 @@ function etcdNote(h: ClusterHealth): { detail: string; healthy: boolean } | unde
   if (etcd.status === "True") {
     return { detail: "etcd healthy", healthy: true };
   }
-  return { detail: `etcd: ${etcd.message ?? etcd.reason ?? "not healthy"}`, healthy: false };
+  return { detail: "etcd unhealthy", healthy: false };
 }
 
 function controlPlaneTile(h: ClusterHealth): Tile {
   const nodes = h.nodes.items.filter((n) => n.role === "control-plane");
   const etcd = etcdNote(h);
-  if (nodes.length === 0) {
+  // Unread, its nodes are only machines whose readiness nobody knows, not nodes known to be down.
+  if (nodes.length === 0 || filled(h.workload)) {
     return { section: "nodes", label: "Control plane", ...notRead, detail: etcd?.detail };
   }
   const ready = nodes.filter((n) => n.ready).length;
@@ -153,6 +172,9 @@ function controlPlaneTile(h: ClusterHealth): Tile {
 
 function workersTile(h: ClusterHealth): Tile {
   const nodes = h.nodes.items.filter((n) => n.role === "worker");
+  if (filled(h.workload)) {
+    return { section: "nodes", label: "Workers", ...notRead };
+  }
   if (nodes.length === 0) {
     return filled(h.nodes.error)
       ? { section: "nodes", label: "Workers", ...notRead }
@@ -163,8 +185,8 @@ function workersTile(h: ClusterHealth): Tile {
           state: "ok",
           // The control planes stay tainted while a pool may grow, so pods wait for a worker instead.
           detail: h.pools.items.some((p) => p.autoscaling !== undefined)
-            ? "The cluster autoscaler adds workers once pods wait for room"
-            : "The control plane runs the workloads",
+            ? "Autoscaled from 0"
+            : "Workloads on the control plane",
         };
   }
   const ready = nodes.filter((n) => n.ready).length;
@@ -212,7 +234,7 @@ function addonsTile(h: ClusterHealth): Tile {
     return { section: "addons", label: "Add-ons", ...notRead };
   }
   if (releases.length === 0) {
-    return { section: "addons", label: "Add-ons", value: "None installed", state: "ok" };
+    return { section: "addons", label: "Add-ons", value: "None", state: "ok" };
   }
   const deployed = releases.filter((r) => r.ready).length;
   return {
@@ -288,7 +310,18 @@ function PodButtons({ pod, actions }: { pod: UnwellPod | undefined; actions: Pod
   );
 }
 
-function NeedsAttention({ health: h, actions }: { health: ClusterHealth; actions: PodActions }): JSX.Element | null {
+// sectionViews are the sections whose details are another view of the cluster's page.
+const sectionViews: Partial<Record<string, View>> = { backups: "backups" };
+
+function NeedsAttention({
+  health: h,
+  actions,
+  cluster,
+}: {
+  health: ClusterHealth;
+  actions: PodActions;
+  cluster: { namespace: string; name: string };
+}): JSX.Element | null {
   if (h.attention.length === 0) {
     return null;
   }
@@ -308,19 +341,26 @@ function NeedsAttention({ health: h, actions }: { health: ClusterHealth; actions
           </tr>
         </thead>
         <tbody>
-          {h.attention.map((a) => (
-            <tr key={`${a.section}/${a.what}/${a.message ?? ""}`}>
-              <td>
-                <Status state={severityState[a.severity]} text={severityText[a.severity]} />
-              </td>
-              <td>
-                <a href={`#${anchor(a.section)}`}>{a.what}</a>
-                {filled(a.message) && <div className="hint message">{a.message}</div>}
-              </td>
-              <Since at={a.since} />
-              <PodButtons pod={a.pod === undefined ? undefined : pods.get(podKey(a.pod))} actions={actions} />
-            </tr>
-          ))}
+          {h.attention.map((a) => {
+            const view = sectionViews[a.section];
+            return (
+              <tr key={`${a.section}/${a.what}/${a.message ?? ""}`}>
+                <td>
+                  <Status state={severityState[a.severity]} text={severityText[a.severity]} />
+                </td>
+                <td>
+                  {view === undefined ? (
+                    <a href={`#${anchor(a.section)}`}>{a.what}</a>
+                  ) : (
+                    <Link to={clusterPath(cluster.namespace, cluster.name, view)}>{a.what}</Link>
+                  )}
+                  {filled(a.message) && <div className="hint message">{a.message}</div>}
+                </td>
+                <Since at={a.since} />
+                <PodButtons pod={a.pod === undefined ? undefined : pods.get(podKey(a.pod))} actions={actions} />
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -370,9 +410,7 @@ function uptime(seconds: number): string {
   return age(new Date(now - seconds * msPerSecond).toISOString(), now);
 }
 
-function cores(millicores: number): string {
-  return `${(millicores / millicoresPerCore).toFixed(1)} cores`;
-}
+const cores = (millicores: number): string => (millicores / millicoresPerCore).toFixed(1);
 
 function CPUCell({ node: n, vm }: { node: HealthNode; vm: HealthVM | undefined }): JSX.Element {
   return (
@@ -380,14 +418,14 @@ function CPUCell({ node: n, vm }: { node: HealthNode; vm: HealthVM | undefined }
       {vm !== undefined && vm.status === "running" && (
         <div className="use">
           <Sparkline load={vm.load ?? []} />
-          <span title="The VM's CPU use now, of its cores; the line is the last hour's">
+          <span>
             {share(vm.cpu, 1)} of {vm.cores}
           </span>
         </div>
       )}
       {n.cpu !== undefined && n.cpu.allocatable > 0 && (
         <div className="hint">
-          Pods ask {cores(n.cpu.requested)} of {cores(n.cpu.allocatable)}
+          Requested {cores(n.cpu.requested)} of {cores(n.cpu.allocatable)} cores
         </div>
       )}
     </td>
@@ -400,15 +438,14 @@ function MemoryCell({ node: n, vm }: { node: HealthNode; vm: HealthVM | undefine
       {vm !== undefined && vm.status === "running" && vm.maxMemory > 0 && (
         <div className="use">
           <meter className="bar" min={0} max={vm.maxMemory} value={vm.memory} aria-label={`${n.name}'s memory use`} />
-          <span title="The VM's memory use as Proxmox VE sees it">
+          <span>
             {bytes(vm.memory)} of {bytes(vm.maxMemory)}
           </span>
         </div>
       )}
       {n.memory !== undefined && n.memory.allocatable > 0 && (
         <div className="hint">
-          Pods ask {bytes(n.memory.requested)} of {bytes(n.memory.allocatable)} (
-          {share(n.memory.requested, n.memory.allocatable)})
+          Requested {bytes(n.memory.requested)} of {bytes(n.memory.allocatable)}
         </div>
       )}
     </td>
@@ -422,7 +459,7 @@ function nodeStatus(n: HealthNode, inside: boolean): { state: State; text: strin
     if (n.ready) {
       return { state: "ok", text: "Ready" };
     }
-    return inside ? { state: "progress", text: "Not joined yet" } : { state: "idle", text: "Not known" };
+    return inside ? { state: "progress", text: "Joining" } : { state: "idle", text: "Unknown" };
   }
   if (!n.ready) {
     return { state: "error", text: "Not ready" };
@@ -445,7 +482,7 @@ const pressureText: Record<string, string> = {
 function nodeNotes(n: HealthNode): string[] {
   return [
     ...(n.pressure ?? []).map((p) => pressureText[p] ?? p),
-    ...(n.unschedulable === true ? ["Cordoned: no new pods"] : []),
+    ...(n.unschedulable === true ? ["Cordoned"] : []),
     ...(n.taints ?? []).map((t) => `Taint ${t}`),
   ];
 }
@@ -463,7 +500,7 @@ function NodeRow({ node: n, inside }: { node: HealthNode; inside: boolean }): JS
       </td>
       <td>
         <Status state={s.state} text={s.text} />
-        {filled(n.message) && <div className="hint message">{n.message}</div>}
+        {filled(n.message) && <Detail>{n.message}</Detail>}
         {nodeNotes(n).map((x) => (
           <div key={x} className="hint">
             {x}
@@ -483,8 +520,13 @@ function Nodes({ health: h }: { health: ClusterHealth }): JSX.Element {
   return (
     <div className="box scroll" id={anchor("nodes")}>
       <h3>Nodes</h3>
-      <SectionNote section={h.nodes} what="The nodes" />
-      {filled(h.vms) && <p className="muted">{h.vms}</p>}
+      <SectionNote section={h.nodes} what="nodes" />
+      {filled(h.vms) && (
+        <div className="muted">
+          No figures from Proxmox VE
+          <Detail>{h.vms}</Detail>
+        </div>
+      )}
       <table className="grid">
         <thead>
           <tr>
@@ -501,7 +543,7 @@ function Nodes({ health: h }: { health: ClusterHealth }): JSX.Element {
           {h.nodes.items.length === 0 && (
             <tr>
               <td colSpan={7} className="muted">
-                No nodes yet.
+                No nodes yet
               </td>
             </tr>
           )}
@@ -521,7 +563,7 @@ function Pods({ health: h, actions }: { health: ClusterHealth; actions: PodActio
   return (
     <div className="box scroll" id={anchor("pods")}>
       <h3>Pods not well</h3>
-      <SectionNote section={h.pods} what="The pods" />
+      <SectionNote section={h.pods} what="pods" />
       <table className="grid">
         <thead>
           <tr>
@@ -539,7 +581,7 @@ function Pods({ health: h, actions }: { health: ClusterHealth; actions: PodActio
           {h.pods.items.length === 0 && (
             <tr>
               <td colSpan={6} className="muted">
-                Every pod runs or has finished well.
+                None
               </td>
             </tr>
           )}
@@ -552,7 +594,7 @@ function Pods({ health: h, actions }: { health: ClusterHealth; actions: PodActio
               <td>{p.node ?? ""}</td>
               <td>
                 <Status state={severityState[p.severity]} text={p.reason} />
-                {filled(p.message) && <div className="hint message">{p.message}</div>}
+                {filled(p.message) && <Detail>{p.message}</Detail>}
               </td>
               <td>{p.restarts}</td>
               <Since at={p.since} />
@@ -572,14 +614,14 @@ function Volumes({ health: h }: { health: ClusterHealth }): JSX.Element | null {
   return (
     <div className="box scroll" id={anchor("volumes")}>
       <h3>Volume claims waiting</h3>
-      <SectionNote section={h.volumes} what="The volume claims" />
+      <SectionNote section={h.volumes} what="volume claims" />
       {h.volumes.items.length > 0 && (
         <table className="grid">
           <thead>
             <tr>
               <th>Claim</th>
               <th>Storage class</th>
-              <th>Waiting for</th>
+              <th>Waiting</th>
             </tr>
           </thead>
           <tbody>
@@ -589,7 +631,7 @@ function Volumes({ health: h }: { health: ClusterHealth }): JSX.Element | null {
                   {v.name}
                   <div className="hint">{v.namespace}</div>
                 </td>
-                <td>{v.storageClass ?? "The default"}</td>
+                <td>{v.storageClass ?? "Default"}</td>
                 <Since at={v.since} />
               </tr>
             ))}
@@ -614,7 +656,7 @@ function Addons({ health: h }: { health: ClusterHealth }): JSX.Element {
   return (
     <div className="box scroll" id={anchor("addons")}>
       <h3>Add-ons</h3>
-      <SectionNote section={h.addons} what="The add-ons" />
+      <SectionNote section={h.addons} what="add-ons" />
       <table className="grid">
         <thead>
           <tr>
@@ -629,7 +671,7 @@ function Addons({ health: h }: { health: ClusterHealth }): JSX.Element {
           {h.addons.items.length === 0 && (
             <tr>
               <td colSpan={5} className="muted">
-                No add-ons installed.
+                No add-ons
               </td>
             </tr>
           )}
@@ -647,7 +689,7 @@ function Addons({ health: h }: { health: ClusterHealth }): JSX.Element {
                 </td>
                 <td>
                   <Status state={s.state} text={s.text} />
-                  {filled(r.message) && <div className="hint message">{r.message}</div>}
+                  {filled(r.message) && <Detail>{r.message}</Detail>}
                 </td>
                 <td>{r.revision ?? ""}</td>
                 <Since at={r.since} />
@@ -677,7 +719,7 @@ function Pools({ pools }: { pools: HealthSection<PoolState> }): JSX.Element | nu
   return (
     <>
       <h4>Worker pools</h4>
-      <SectionNote section={pools} what="The worker pools" />
+      <SectionNote section={pools} what="worker pools" />
       <table className="grid">
         <thead>
           <tr>
@@ -697,13 +739,13 @@ function Pools({ pools }: { pools: HealthSection<PoolState> }): JSX.Element | nu
                 <td>{p.name}</td>
                 <td>
                   <Status state={s.state} text={s.text} />
-                  {filled(p.message) && <div className="hint message">{p.message}</div>}
+                  {filled(p.message) && <Detail>{p.message}</Detail>}
                 </td>
                 <td>
                   {p.desired}
                   {p.autoscaling && (
                     <div className="hint">
-                      autoscaled, {p.autoscaling.min} to {p.autoscaling.max}
+                      Autoscaled, {p.autoscaling.min} to {p.autoscaling.max}
                     </div>
                   )}
                 </td>
@@ -721,7 +763,7 @@ function Pools({ pools }: { pools: HealthSection<PoolState> }): JSX.Element | nu
 
 function checkStatus(x: HealthCheck): { state: State; text: string } {
   if (!x.allowed) {
-    return { state: "error", text: "Holding back" };
+    return { state: "error", text: "Replacing paused" };
   }
   if ((x.remediating ?? []).length > 0) {
     return { state: "progress", text: "Replacing machines" };
@@ -733,7 +775,7 @@ function HealthChecks({ checks }: { checks: HealthSection<HealthCheck> }): JSX.E
   return (
     <>
       <h4>Machine health checks</h4>
-      <SectionNote section={checks} what="The machine health checks" />
+      <SectionNote section={checks} what="health checks" />
       <table className="grid">
         <thead>
           <tr>
@@ -746,7 +788,7 @@ function HealthChecks({ checks }: { checks: HealthSection<HealthCheck> }): JSX.E
           {checks.items.length === 0 && (
             <tr>
               <td colSpan={3} className="muted">
-                No machine health checks; Cluster API replaces no failed machine on its own.
+                None: failed machines stay
               </td>
             </tr>
           )}
@@ -757,7 +799,7 @@ function HealthChecks({ checks }: { checks: HealthSection<HealthCheck> }): JSX.E
                 <td>{x.name}</td>
                 <td>
                   <Status state={s.state} text={s.text} />
-                  {filled(x.message) && <div className="hint message">{x.message}</div>}
+                  {filled(x.message) && <Detail>{x.message}</Detail>}
                 </td>
                 <td>{(x.remediating ?? []).join(", ")}</td>
               </tr>
@@ -816,8 +858,13 @@ function ClusterAPI({ health: h }: { health: ClusterHealth }): JSX.Element {
       <h3>Cluster API</h3>
       <Pools pools={h.pools} />
       <h4 id={anchor("control-plane")}>Control plane{filled(cp.kind) && ` (${cp.kind})`}</h4>
-      {filled(cp.error) && <p className="warning">{sentence(`The control plane could not be read: ${cp.error}`)}</p>}
-      <ConditionTable conditions={cp.conditions} empty="The control plane reports no conditions yet." />
+      {filled(cp.error) && (
+        <div className="warning">
+          Couldn&apos;t read the control plane
+          <Detail>{cp.error}</Detail>
+        </div>
+      )}
+      <ConditionTable conditions={cp.conditions} empty="No conditions yet" />
       <HealthChecks checks={h.healthChecks} />
     </div>
   );
@@ -826,8 +873,8 @@ function ClusterAPI({ health: h }: { health: ClusterHealth }): JSX.Element {
 type Source = "" | HealthEvent["source"];
 
 const sources: { value: Source; label: string }[] = [
-  { value: "", label: "Everywhere" },
-  { value: "workload", label: "Inside the cluster" },
+  { value: "", label: "All" },
+  { value: "workload", label: "In the cluster" },
   { value: "management", label: "Cluster API" },
 ];
 
@@ -837,7 +884,7 @@ function Events({ events }: { events: HealthSection<HealthEvent> }): JSX.Element
   return (
     <div className="box scroll" id={anchor("events")}>
       <div className="section-head">
-        <h3>Events of the last hour</h3>
+        <h3>Last hour&apos;s events</h3>
         <label className="filter">
           From{" "}
           <select
@@ -852,7 +899,7 @@ function Events({ events }: { events: HealthSection<HealthEvent> }): JSX.Element
           </select>
         </label>
       </div>
-      <SectionNote section={events} what="The events" />
+      <SectionNote section={events} what="events" />
       <table className="grid">
         <thead>
           <tr>
@@ -867,7 +914,7 @@ function Events({ events }: { events: HealthSection<HealthEvent> }): JSX.Element
           {shown.length === 0 && (
             <tr>
               <td colSpan={5} className="muted">
-                No warnings or events in the last hour.
+                No events
               </td>
             </tr>
           )}
@@ -879,7 +926,7 @@ function Events({ events }: { events: HealthSection<HealthEvent> }): JSX.Element
               <Since at={e.last} />
               <td>
                 {e.reason}
-                <div className="hint">{e.source === "workload" ? "Inside the cluster" : "Cluster API"}</div>
+                <div className="hint">{e.source === "workload" ? "In the cluster" : "Cluster API"}</div>
               </td>
               <td>{e.object}</td>
               <td className="message">{e.message}</td>
@@ -938,13 +985,11 @@ function PodLog({ cluster, pod, container }: { cluster: ClusterRef; pod: UnwellP
   return (
     <>
       <ErrorBox message={error} />
-      {logs === undefined && !filled(error) && <p className="muted">Reading the log…</p>}
-      {logs?.previous === true && (
-        <p className="muted">The container has not run since it last stopped; these lines are from that last run.</p>
-      )}
+      {logs === undefined && !filled(error) && <p className="muted">Loading…</p>}
+      {logs?.previous === true && <p className="muted">Previous run</p>}
       {logs !== undefined && (
         <pre className="log pod-log" aria-label={`Log of ${container}`}>
-          {logs.lines.length === 0 ? "The container has written nothing." : logs.lines.join("\n")}
+          {logs.lines.length === 0 ? "No lines yet" : logs.lines.join("\n")}
         </pre>
       )}
     </>
@@ -966,7 +1011,7 @@ export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlam
     return (
       <div className="box">
         <ErrorBox message={error} />
-        {!filled(error) && <p className="muted">Reading the cluster's health…</p>}
+        {!filled(error) && <p className="muted">Loading…</p>}
       </div>
     );
   }
@@ -976,10 +1021,9 @@ export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlam
       <div className="box">
         <Verdict health={h} />
         <ErrorBox message={error} />
-        {filled(h.workload) && <p className="warning">{h.workload}</p>}
         <Tiles health={h} />
       </div>
-      <NeedsAttention health={h} actions={actions} />
+      <NeedsAttention health={h} actions={actions} cluster={ref} />
       <Nodes health={h} />
       <Pods health={h} actions={actions} />
       <Volumes health={h} />
@@ -988,7 +1032,7 @@ export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlam
       <Events events={h.events} />
       <div className="box scroll" id={anchor("conditions")}>
         <h3>Conditions</h3>
-        <ConditionTable conditions={c.conditions} empty="No conditions reported yet." />
+        <ConditionTable conditions={c.conditions} empty="No conditions yet" />
       </div>
       {logsOf !== undefined && <LogsDialog cluster={ref} pod={logsOf} onClose={() => setLogsOf(undefined)} />}
     </>

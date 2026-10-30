@@ -17,7 +17,7 @@ const states: Record<RunInfo["state"], { state: "progress" | "warning" | "ok" | 
 
 const stepStates: Record<RunStep["state"], string> = {
   done: "Done",
-  running: "Under way",
+  running: "Running",
   waiting: "Waiting",
   failed: "Failed",
 };
@@ -37,7 +37,7 @@ function took(r: RunInfo): string | undefined {
   }
   const end = r.finished === undefined ? Date.now() : new Date(r.finished).getTime();
   const minutes = Math.max(0, Math.round((end - new Date(r.started).getTime()) / msPerMinute));
-  return minutes < 1 ? "under a minute" : `${minutes} min`;
+  return minutes < 1 ? "<1 min" : `${minutes} min`;
 }
 
 /**
@@ -54,9 +54,7 @@ export function RunPage({ id }: { id: string }): JSX.Element {
           <h2>Run</h2>
         </div>
         <p className="muted">
-          {fleet?.runs === undefined
-            ? "Loading…"
-            : "This run is no longer listed: runs that went well are kept for an hour, failed ones for a day."}
+          {fleet?.runs === undefined ? "Loading…" : "Run no longer kept. Runs stay 1 h, failed ones 1 day."}
         </p>
       </section>
     );
@@ -117,7 +115,7 @@ function PinnedError({ run }: { run: RunInfo }): JSX.Element | null {
   const stalled = run.state === "stalled";
   return (
     <div className={stalled ? "pinned-error stalled" : "pinned-error"} role="alert">
-      <strong>{stalled ? "Held up by" : "First error"}</strong>
+      <strong>{stalled ? "Held up by" : "Error"}</strong>
       <p>{run.error}</p>
     </div>
   );
