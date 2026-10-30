@@ -266,6 +266,8 @@ jobs:
             # The conditions and failure reasons that say why a machine never came up.
             kubectl get machines,proxmoxmachines,proxmoxclusters -A -o yaml \
               > "$out/machines.yaml" 2>&1 || true
+            # The clusters' conditions, and the annotations a Talos upgrade keeps its progress in.
+            kubectl get clusters.cluster.x-k8s.io -A -o yaml > "$out/clusters.yaml" 2>&1 || true
             # What a deleted cluster left behind and who holds it: the Secrets' and ConfigMaps'
             # metadata, never their data.
             kubectl get secrets,configmaps -A -l cluster.x-k8s.io/cluster-name -o json |
