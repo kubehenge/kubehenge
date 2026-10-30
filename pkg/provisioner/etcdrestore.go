@@ -306,7 +306,7 @@ func (run *restoreRun) prepare(ctx context.Context) error {
 		}
 	}
 	if run.r.Guests == nil && !run.talos {
-		return errors.New("this management cluster does not restore through the guest agent: an administrator turns that on, or restores by hand as the interface shows")
+		return errors.New("automatic restore is off. Restore by hand as the steps say")
 	}
 	if run.talos {
 		return run.prepareTalos(ctx)

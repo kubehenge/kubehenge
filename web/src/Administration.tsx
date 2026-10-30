@@ -5,9 +5,8 @@ import { AdminPage } from "./AdminPages";
 import { api } from "./api";
 import { ManagementBehind } from "./ManagementUpgrade";
 import { Link } from "./router";
-import { ErrorBox, pollIdle, pollRunning, usePoll, Views } from "./ui";
 import type { Job } from "./types";
-import { ErrorBox, pollIdle, pollRunning, usePoll } from "./ui";
+import { ErrorBox, pollIdle, pollRunning, usePoll, Views } from "./ui";
 
 // What a run of the management cluster does, other than applying it.
 const runningWhat: Partial<Record<NonNullable<Job["kind"]>, string>> = {

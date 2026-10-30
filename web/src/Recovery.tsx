@@ -76,7 +76,7 @@ export function RollStalled({
           type="button"
           className="danger"
           disabled={!allowed}
-          title={allowed ? undefined : (why ?? "Needs Sys.Modify on the pool")}
+          title={allowed ? undefined : (why ?? "Needs Sys.Modify")}
           onClick={() => setRecovering(true)}
         >
           Recover…
@@ -201,8 +201,7 @@ function RecoverDialog({
       }
     >
       <p className="warning">
-        Replaces the other control planes. If the API is down, etcd is reset to the kept machine. Data only the others
-        held is lost.
+        Replaces the other control planes. With the API down, etcd resets to the kept one and loses what it lacks.
       </p>
       <Field label="Keep">
         {(id) => (

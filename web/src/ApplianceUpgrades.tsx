@@ -167,7 +167,9 @@ function Releases({ upgrades: u }: { upgrades: Upgrades }): JSX.Element {
           <dt>Last upgrade</dt>
           <dd>
             {lastUpgrade(s)} <span className="muted">{new Date(s.time).toLocaleString()}</span>
-            {s.state === "failed" && filled(s.error) && <Detail>{s.error.replace(/; rolled back to [^;]*$/u, "")}</Detail>}
+            {s.state === "failed" && filled(s.error) && (
+              <Detail>{s.error.replace(/; rolled back to [^;]*$/u, "")}</Detail>
+            )}
           </dd>
         </>
       )}

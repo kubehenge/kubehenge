@@ -76,7 +76,7 @@ describe("appliance upgrades", () => {
     const { unmount } = render(<ApplianceUpgrades />);
     await expect(screen.findByText(/^Rolled back to 0\.1\.0/u)).resolves.toBeInTheDocument();
     expect(
-      screen.getByText("Release 0.2.0 did not start: the interface did not answer within 2m0s."),
+      screen.getByText("release 0.2.0 did not start: the interface did not answer within 2m0s"),
     ).toBeInTheDocument();
     unmount();
 
@@ -84,6 +84,6 @@ describe("appliance upgrades", () => {
       body: { version: "0.1.0", available: [], settings: { policy: "off", hour: 3, timeZone: "UTC" }, status },
     };
     render(<ApplianceUpgrades />);
-    await expect(screen.findByText(/^Failed \(/u)).resolves.toBeInTheDocument();
+    await expect(screen.findByText(/^Failed\s*$/u)).resolves.toBeInTheDocument();
   });
 });

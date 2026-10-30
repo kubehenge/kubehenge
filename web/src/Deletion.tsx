@@ -58,7 +58,7 @@ export function Deleting({
             type="button"
             className="danger"
             disabled={!c.allowed.change}
-            title={c.allowed.change ? undefined : "Needs VM.Allocate on the pool"}
+            title={c.allowed.change ? undefined : "Needs VM.Allocate"}
             onClick={() => setAbandoning(true)}
           >
             Abandon…

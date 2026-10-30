@@ -92,7 +92,7 @@ describe("a cluster being deleted", () => {
 
   it("needs someone in the fleet once its deletion stalled, until it is abandoned", () => {
     expect(standing(deleting)).toMatchObject({ group: "needs", reason: "Deletion stalled" });
-    expect(standing({ ...deleting, conditions: [] })).toMatchObject({ group: "running", reason: "Being deleted" });
+    expect(standing({ ...deleting, conditions: [] })).toMatchObject({ group: "running", reason: "Deleting" });
     expect(standing({ ...deleting, deletion: { abandoned: "2026-10-21T10:30:00Z" } })).toMatchObject({
       group: "running",
     });
