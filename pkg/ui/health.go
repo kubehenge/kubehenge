@@ -334,7 +334,7 @@ func (s *Server) readHealth(ctx context.Context, kube client.Client, c *clusterv
 	wg.Go(func() { wl = s.readWorkload(ctx, kube, c, managed) })
 	wg.Wait()
 	for what, err := range m.failures() {
-		s.Log.Error("reading a cluster's health", "cluster", c.Namespace+"/"+c.Name, "what", what, "error", err)
+		s.Log.ErrorContext(ctx, "reading a cluster's health", "cluster", c.Namespace+"/"+c.Name, "what", what, "error", err)
 	}
 	return assemble(c, &m, &wl, s.now())
 }
@@ -387,7 +387,7 @@ func (s *Server) addVMs(ctx context.Context, u user, c *clusterv1.Cluster, poolP
 		return "Proxmox VE does not show you this cluster's VMs."
 	}
 	if err != nil {
-		s.Log.Error("listing a cluster's VMs", "cluster", c.Namespace+"/"+c.Name, "error", err)
+		s.Log.ErrorContext(ctx, "listing a cluster's VMs", "cluster", c.Namespace+"/"+c.Name, "error", err)
 		return "Proxmox VE did not answer."
 	}
 	byName := make(map[string]*pve.Member, len(members))
@@ -432,7 +432,7 @@ func (s *Server) vmLoad(ctx context.Context, u user, m *pve.Member) []*float64 {
 	points, err := s.Accounts.VMLoad(rctx, u.ticket, m.Node, m.VMID)
 	if err != nil {
 		if !errors.Is(err, pve.ErrForbidden) {
-			s.Log.Warn("reading a VM's load", "vm", m.VMID, "error", err)
+			s.Log.WarnContext(ctx, "reading a VM's load", "vm", m.VMID, "error", err)
 		}
 		return nil
 	}

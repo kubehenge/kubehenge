@@ -68,7 +68,7 @@ func (s *Server) signInToHeadlamp(r *http.Request, u user) {
 	}
 	token, err := s.headlampToken(r.Context(), u, cluster)
 	if err != nil {
-		s.Log.Warn("headlamp sign-in", "user", u.ticket.Username, "cluster", cluster, "error", err)
+		s.Log.WarnContext(r.Context(), "headlamp sign-in", "user", u.ticket.Username, "cluster", cluster, "error", err)
 	}
 	if token != "" {
 		r.Header.Set("Authorization", "Bearer "+token)
@@ -168,7 +168,7 @@ func (s *Server) mintHeadlampToken(ctx context.Context, u user, c *clusterv1.Clu
 	expires := made.Status.ExpirationTimestamp.Time
 	// The workload cluster's audit log records the account, with the token's ID beside it; this is
 	// where the ID is tied to the Proxmox VE user.
-	s.Log.Info("headlamp sign-in", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name,
+	s.Log.InfoContext(ctx, "headlamp sign-in", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name,
 		"credentialID", credentialID(made.Status.Token), "expires", expires.UTC().Format(time.RFC3339))
 	return made.Status.Token, expires, nil
 }
@@ -218,14 +218,14 @@ func (s *Server) headlampEncoded(w http.ResponseWriter, r *http.Request, u user,
 		return false
 	}
 	if route == "clear-token" {
-		s.signOutOfHeadlamp(u, cluster)
+		s.signOutOfHeadlamp(r.Context(), u, cluster)
 	}
 	return true
 }
 
 // signOutOfHeadlamp forgets the session's token for the cluster, which reached nobody else, and
 // signs the session in to the cluster no more until it opens the cluster from the interface again.
-func (s *Server) signOutOfHeadlamp(u user, cluster string) {
+func (s *Server) signOutOfHeadlamp(ctx context.Context, u user, cluster string) {
 	h := s.Headlamp
 	key := signedOutKey(u, cluster)
 	h.mu.Lock()
@@ -239,7 +239,7 @@ func (s *Server) signOutOfHeadlamp(u user, cluster string) {
 			delete(h.signIns, k)
 		}
 	}
-	s.Log.Info("headlamp sign-out", "user", u.ticket.Username, "cluster", cluster)
+	s.Log.InfoContext(ctx, "headlamp sign-out", "user", u.ticket.Username, "cluster", cluster)
 }
 
 // openInHeadlamp answers the interface's link to a cluster in Headlamp: it lets the gate sign the

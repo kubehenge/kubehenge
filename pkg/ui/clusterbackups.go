@@ -177,10 +177,10 @@ func (s *Server) velero(ctx context.Context, u user, c *clusterv1.Cluster, id pr
 
 // openVelero reaches the cluster's Velero for a request that cannot do without it, answering the
 // request when it cannot.
-func (s *Server) openVelero(ctx context.Context, w http.ResponseWriter, u user, c *clusterv1.Cluster, id provisioner.Identity) (dynamic.Interface, bool) {
+func (s *Server) openVelero(ctx context.Context, w http.ResponseWriter, r *http.Request, u user, c *clusterv1.Cluster, id provisioner.Identity) (dynamic.Interface, bool) {
 	v, why, err := s.velero(ctx, u, c, id)
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return nil, false
 	}
 	if v == nil {
@@ -217,7 +217,7 @@ func (s *Server) clusterBackups(w http.ResponseWriter, r *http.Request, u user) 
 	defer cancel()
 	v, why, err := s.velero(ctx, u, c, provisioner.IdentityBackups)
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	if v == nil {
@@ -226,7 +226,7 @@ func (s *Server) clusterBackups(w http.ResponseWriter, r *http.Request, u user) 
 		return
 	}
 	if err := readVelero(ctx, v, &view); err != nil {
-		s.Log.Info("reading a cluster's backups", "cluster", c.Namespace+"/"+c.Name, "error", err)
+		s.Log.InfoContext(r.Context(), "reading a cluster's backups", "cluster", c.Namespace+"/"+c.Name, "error", err)
 		view.Message = "The cluster did not answer, or Velero is not running yet."
 		writeJSON(w, http.StatusOK, view)
 		return
@@ -490,13 +490,13 @@ func (s *Server) backUp(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), veleroTimeout)
 	defer cancel()
-	v, ok := s.openVelero(ctx, w, u, c, provisioner.IdentityBackups)
+	v, ok := s.openVelero(ctx, w, r, u, c, provisioner.IdentityBackups)
 	if !ok {
 		return
 	}
 	schedule, err := v.Resource(veleroSchedule).Namespace(provisioner.VeleroNamespace).Get(ctx, provisioner.VeleroSchedule, metav1.GetOptions{})
 	if err != nil {
-		s.veleroError(w, c, err)
+		s.veleroError(w, r, c, err)
 		return
 	}
 	template, _, _ := unstructured.NestedMap(schedule.Object, "spec", "template")
@@ -507,10 +507,10 @@ func (s *Server) backUp(w http.ResponseWriter, r *http.Request, u user) {
 	backup.SetAnnotations(map[string]string{requestedBy: u.ticket.Username})
 	made, err := v.Resource(veleroBackups).Namespace(provisioner.VeleroNamespace).Create(ctx, backup, metav1.CreateOptions{})
 	if err != nil {
-		s.veleroError(w, c, err)
+		s.veleroError(w, r, c, err)
 		return
 	}
-	s.Log.Info("started a backup", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "backup", made.GetName())
+	s.Log.InfoContext(r.Context(), "started a backup", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "backup", made.GetName())
 	writeJSON(w, http.StatusCreated, backupOf(made))
 }
 
@@ -546,37 +546,37 @@ func (s *Server) deleteBackup(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), veleroTimeout)
 	defer cancel()
-	v, ok := s.openVelero(ctx, w, u, c, provisioner.IdentityBackups)
+	v, ok := s.openVelero(ctx, w, r, u, c, provisioner.IdentityBackups)
 	if !ok {
 		return
 	}
-	backup, view, ok := s.deletableBackup(ctx, w, v, c, name)
+	backup, view, ok := s.deletableBackup(ctx, w, r, v, c, name)
 	if !ok {
 		return
 	}
 	deletion := deleteBackupRequest(backup, u.ticket.Username)
 	if _, err := v.Resource(veleroDeletions).Namespace(provisioner.VeleroNamespace).Create(ctx, deletion, metav1.CreateOptions{}); err != nil {
-		s.veleroError(w, c, err)
+		s.veleroError(w, r, c, err)
 		return
 	}
-	s.Log.Info("asked to delete a backup", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "backup", name)
+	s.Log.InfoContext(r.Context(), "asked to delete a backup", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "backup", name)
 	view.Deleting, view.DeleteErrors = true, nil
 	writeJSON(w, http.StatusAccepted, view)
 }
 
 // deletableBackup reads one of the cluster's own backups that has finished and is not being deleted
 // yet, with its view. It answers the request when there is no such backup.
-func (s *Server) deletableBackup(ctx context.Context, w http.ResponseWriter, v dynamic.Interface, c *clusterv1.Cluster, name string) (*unstructured.Unstructured, backupView, bool) {
+func (s *Server) deletableBackup(ctx context.Context, w http.ResponseWriter, r *http.Request, v dynamic.Interface, c *clusterv1.Cluster, name string) (*unstructured.Unstructured, backupView, bool) {
 	ns := provisioner.VeleroNamespace
 	backup, err := v.Resource(veleroBackups).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		s.veleroError(w, c, err)
+		s.veleroError(w, r, c, err)
 		return nil, backupView{}, false
 	}
 	view := backupOf(backup)
 	deletions, err := v.Resource(veleroDeletions).Namespace(ns).List(ctx, metav1.ListOptions{Limit: veleroListLimit})
 	if err != nil {
-		s.veleroError(w, c, err)
+		s.veleroError(w, r, c, err)
 		return nil, backupView{}, false
 	}
 	deletionOf(&view, deletions.Items)
@@ -642,7 +642,7 @@ func (s *Server) allowBackupSources(w http.ResponseWriter, r *http.Request, u us
 }
 
 // veleroError answers with what the workload cluster refused.
-func (s *Server) veleroError(w http.ResponseWriter, c *clusterv1.Cluster, err error) {
+func (s *Server) veleroError(w http.ResponseWriter, r *http.Request, c *clusterv1.Cluster, err error) {
 	switch {
 	case apierrors.IsNotFound(err):
 		writeError(w, http.StatusNotFound, "no such backup, or Velero is not running yet")
@@ -651,7 +651,7 @@ func (s *Server) veleroError(w http.ResponseWriter, c *clusterv1.Cluster, err er
 	case errors.Is(err, context.DeadlineExceeded):
 		writeError(w, http.StatusGatewayTimeout, "Velero did not answer in time")
 	default:
-		s.Log.Info("a cluster's Velero request failed", "cluster", c.Namespace+"/"+c.Name, "error", err)
+		s.Log.InfoContext(r.Context(), "a cluster's Velero request failed", "cluster", c.Namespace+"/"+c.Name, "error", err)
 		writeError(w, http.StatusBadGateway, "the cluster did not answer")
 	}
 }

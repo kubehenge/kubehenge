@@ -73,6 +73,9 @@ type Settings struct {
 	// ClusterSysAudit gives each cluster the cloud controller manager's HA group labels unless the
 	// cluster switches them off, its token then holding Sys.Audit on /; unset, it is on.
 	ClusterSysAudit *bool `json:"clusterSysAudit,omitempty"`
+	// NodeBootLogs has the controller read nodes' boot logs through their guest agents, its token
+	// then holding VM.GuestAgent.FileRead on the workload pool; unset, it is on.
+	NodeBootLogs *bool `json:"nodeBootLogs,omitempty"`
 	// ExtraClusterNamespaces are more namespaces the interface creates and manages clusters in,
 	// beside its own, such as one per team.
 	ExtraClusterNamespaces []string `json:"extraClusterNamespaces,omitempty"`
@@ -103,6 +106,12 @@ var RefreshWeekdays = []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
 // labels.
 func (s *Settings) GivesClusterSysAudit() bool {
 	return s.ClusterSysAudit == nil || *s.ClusterSysAudit
+}
+
+// ReadsNodeBootLogs tells whether the settings let the controller read nodes' boot logs through
+// their guest agents.
+func (s *Settings) ReadsNodeBootLogs() bool {
+	return s.NodeBootLogs == nil || *s.NodeBootLogs
 }
 
 // RefreshesTemplates tells whether the settings have the templates built again every week.

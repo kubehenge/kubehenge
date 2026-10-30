@@ -394,7 +394,7 @@ func (s *Server) podLogs(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusConflict, why)
 		return
 	}
-	s.Log.Error("reaching a cluster for pod logs", "cluster", c.Namespace+"/"+c.Name, "error", err)
+	s.Log.ErrorContext(r.Context(), "reaching a cluster for pod logs", "cluster", c.Namespace+"/"+c.Name, "error", err)
 	writeError(w, http.StatusBadGateway, "the cluster did not answer")
 }
 
@@ -434,7 +434,7 @@ func (s *Server) servePodLogs(ctx context.Context, w http.ResponseWriter, r *htt
 		writeError(w, http.StatusBadGateway, "the log could not be read: "+problem(err))
 		return
 	}
-	s.Log.Info("read pod logs", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "pod", ns+"/"+name, "container", container)
+	s.Log.InfoContext(ctx, "read pod logs", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "pod", ns+"/"+name, "container", container)
 	writeJSON(w, http.StatusOK, podLogView{Container: container, Previous: previous, Lines: lines})
 }
 
