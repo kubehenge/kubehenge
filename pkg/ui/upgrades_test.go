@@ -218,44 +218,6 @@ func TestSetupWithProxmoxHANeedsSysConsole(t *testing.T) {
 	}
 }
 
-// root@pam's password is checked by signing in with it alone, as the CSI plugin will, before any
-// run starts; a stored one serves while volume snapshots stay on.
-func TestSetupChecksRootPassword(t *testing.T) {
-	t.Parallel()
-	h := newHarness(t)
-	h.server.Appliance = &appliance.Appliance{Dir: t.TempDir()}
-	h.accounts.mu.Lock()
-	h.accounts.passwords["root@pam"] = "r00t"
-	h.accounts.mu.Unlock()
-	a := h.browser()
-	a.signIn("admin@pve")
-	settings := `{"nodes":["pve1"],"imageDatastore":"local","vmDatastore":"local-lvm","bridge":"vmbr0","nodeAddresses":["10.0.0.11/24"],` +
-		`"apiAddress":"10.0.0.10","gateway":"10.0.0.1","dnsServers":["10.0.0.1"],"workloadDatastores":["local-lvm"],"workloadBridges":["vmbr0"],` +
-		`"bootstrapDatastore":"local","clusterVolumeSnapshots":true}`
-	setUp := func(extra string) *httptest.ResponseRecorder {
-		// The passphrase is too short, so that a request past the checks ends there, before a run.
-		return a.do("POST", "/api/setup", `{"settings":`+settings+`,"passphrase":"short"`+extra+`}`)
-	}
-	for extra, want := range map[string]string{ //nolint:gosec // the fake Proxmox VE's passwords
-		``:                        appliance.ErrNoRootPassword.Error(),
-		`,"rootPassword":"wrong"`: "Proxmox VE refused root@pam's password",
-		`,"rootPassword":"r00t"`:  "passphrase",
-	} {
-		rec := setUp(extra)
-		expect(t, rec, http.StatusUnprocessableEntity)
-		if !strings.Contains(rec.Body.String(), want) {
-			t.Errorf("%q: %s, want %q", extra, rec.Body, want)
-		}
-	}
-
-	h.accounts.mu.Lock()
-	h.accounts.totp["root@pam"] = "123456"
-	h.accounts.mu.Unlock()
-	if rec := setUp(`,"rootPassword":"r00t"`); !strings.Contains(rec.Body.String(), "second factor") {
-		t.Errorf("a root@pam with a second factor: %s", rec.Body)
-	}
-}
-
 func TestSetupTellsAdministratorsAboutBackups(t *testing.T) {
 	t.Parallel()
 	for vmid, want := range map[int]string{0: "", 150: `"backup":true`, 151: `"backup":false`} {

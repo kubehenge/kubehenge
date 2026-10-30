@@ -15,6 +15,8 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubehenge/kubehenge/pkg/csiproxy"
 )
 
 // csiDriver is the Proxmox VE CSI plugin's driver name.
@@ -120,20 +122,19 @@ func (r *Reclaimer) reclaimIn(ctx context.Context, cluster *clusterv1.Cluster, c
 			attached[*name] = true
 		}
 	}
+	released, errs := releasedVolumes(pvs.Items, attached, creds.VolumeOwner)
+	if len(released) == 0 {
+		return errors.Join(errs...)
+	}
+	copies, err := csiproxy.Copies(ctx, workload)
+	if err != nil {
+		return fmt.Errorf("in the workload cluster: %w", err)
+	}
 	var owner *ownerVM
-	var errs []error
-	for i := range pvs.Items {
-		pv := &pvs.Items[i]
-		if !released(pv) || attached[pv.Name] {
-			continue
-		}
-		v, err := parseVolumeHandle(pv.Spec.CSI.VolumeHandle)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("persistent volume %s: %w", pv.Name, err))
-			continue
-		}
-		// Only the cluster's own volumes; the owner VM's ACL would refuse others anyway.
-		if v.owner != creds.VolumeOwner {
+	for _, rv := range released {
+		// A restored or cloned volume sits on a holder VM under another name, and the CSI proxy
+		// deletes it there when the plugin asks, without Datastore.Allocate.
+		if _, ok := copies[rv.volid]; ok {
 			continue
 		}
 		if owner == nil {
@@ -143,13 +144,42 @@ func (r *Reclaimer) reclaimIn(ctx context.Context, cluster *clusterv1.Cluster, c
 			}
 			owner = &ownerVM{pve: pve, mover: r.Mover, vmid: creds.VolumeOwner, created: creds.VolumeOwnerNode}
 		}
-		if err := owner.deleteVolume(ctx, v); err != nil {
+		if err := owner.deleteVolume(ctx, rv.volume); err != nil {
+			errs = append(errs, fmt.Errorf("persistent volume %s: %w", rv.pv, err))
+			continue
+		}
+		ctrl.LoggerFrom(ctx).Info("deleted the volume of a released persistent volume", "cluster", client.ObjectKeyFromObject(cluster), "persistentVolume", rv.pv, "volume", rv.volid)
+	}
+	return errors.Join(errs...)
+}
+
+// releasedVolume is the volume of a released persistent volume.
+type releasedVolume struct {
+	volume
+
+	pv string
+}
+
+// releasedVolumes are the volumes of the released persistent volumes no VolumeAttachment names,
+// of the cluster's own only: the owner VM's ACL would refuse others anyway.
+func releasedVolumes(pvs []corev1.PersistentVolume, attached map[string]bool, owner int) ([]releasedVolume, []error) {
+	var out []releasedVolume
+	var errs []error
+	for i := range pvs {
+		pv := &pvs[i]
+		if !released(pv) || attached[pv.Name] {
+			continue
+		}
+		v, err := parseVolumeHandle(pv.Spec.CSI.VolumeHandle)
+		if err != nil {
 			errs = append(errs, fmt.Errorf("persistent volume %s: %w", pv.Name, err))
 			continue
 		}
-		ctrl.LoggerFrom(ctx).Info("deleted the volume of a released persistent volume", "cluster", client.ObjectKeyFromObject(cluster), "persistentVolume", pv.Name, "volume", v.volid)
+		if v.owner == owner {
+			out = append(out, releasedVolume{volume: v, pv: pv.Name})
+		}
 	}
-	return errors.Join(errs...)
+	return out, errs
 }
 
 // released reports whether a persistent volume of the Proxmox VE CSI plugin waits for its volume

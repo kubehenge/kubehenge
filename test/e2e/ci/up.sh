@@ -77,10 +77,6 @@ pve cat /etc/pve/pve-root-ca.pem > "${work}/pve-root-ca.pem"
 secret=$(pve pveum user token add root@pam e2e --privsep 0 --output-format json |
     sed -n 's/.*"value" *: *"\([^"]*\)".*/\1/p')
 [ -n "${secret}" ]
-# root@pam's password, which the CSI plugin of a cluster taking volume snapshots signs in with: a
-# fresh one, as the image comes with none.
-root_password=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
-printf 'root:%s\n' "${root_password}" | docker exec -i kubehenge-e2e-pve chpasswd
 sudo ip route replace 172.20.99.0/24 via 172.21.99.2
 
 umask 077
@@ -88,7 +84,6 @@ cat > "${work}/env" << EOF
 export KUBEHENGE_PROXMOX_URL=https://172.21.99.2:8006
 export KUBEHENGE_PROXMOX_TOKEN='root@pam!e2e=${secret}'
 export KUBEHENGE_PROXMOX_CA=${work}/pve-root-ca.pem
-export KUBEHENGE_E2E_ROOT_PASSWORD=${root_password}
 export KUBEHENGE_E2E_NODE=pve KUBEHENGE_E2E_STORAGE=local KUBEHENGE_E2E_BRIDGE=vmbr0
 export KUBEHENGE_E2E_PREFIX=24 KUBEHENGE_E2E_GATEWAY=172.20.99.1 KUBEHENGE_E2E_DNS=172.20.99.1
 export KUBEHENGE_E2E_ENDPOINT=172.20.99.20 KUBEHENGE_E2E_ADDRESSES=172.20.99.21-172.20.99.29

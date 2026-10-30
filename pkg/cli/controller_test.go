@@ -112,9 +112,8 @@ func TestCompleteReconcilerGrantsWhatTheProxmoxSettingsDo(t *testing.T) {
 	if r.Cloud != cloud || r.Endpoint != endpoint || r.RancherKubernetes != minors {
 		t.Errorf("the reconciler has cloud %p, endpoint %+v, Rancher %+v", r.Cloud, r.Endpoint, r.RancherKubernetes)
 	}
-	if r.DatastoreAllocate.Role != "KubehengeDatastore" || r.SysAuditGroup != "kubehenge-audit" || r.VolumeSnapshots.Namespace != "kubehenge-system" {
-		t.Errorf("the reconciler grants Datastore.Allocate as %q, Sys.Audit through %q, and reads root's Secret in %q",
-			r.DatastoreAllocate.Role, r.SysAuditGroup, r.VolumeSnapshots.Namespace)
+	if r.DatastoreAllocate.Role != "KubehengeDatastore" || r.SysAuditGroup != "kubehenge-audit" {
+		t.Errorf("the reconciler grants Datastore.Allocate as %q and Sys.Audit through %q", r.DatastoreAllocate.Role, r.SysAuditGroup)
 	}
 }
 

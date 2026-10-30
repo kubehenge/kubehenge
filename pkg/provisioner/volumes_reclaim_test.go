@@ -31,7 +31,7 @@ type reclaimRig struct {
 	tokens []string
 }
 
-func releasedVolume(name string) *corev1.PersistentVolume {
+func releasedPV(name string) *corev1.PersistentVolume {
 	return &corev1.PersistentVolume{
 		Name: name,
 		Spec: corev1.PersistentVolumeSpec{
@@ -70,7 +70,7 @@ func newReclaimRig(t *testing.T, clusters map[*clusterv1.Cluster]bool, failing .
 	for c, ready := range clusters {
 		objects = append(objects, c, credentialsSecret(c, tokenOf(c), ready))
 		volumes = append(volumes, "local:4242/vm-4242-pvc-"+c.Name+".raw")
-		built := fake.NewClientBuilder().WithScheme(scheme).WithObjects(releasedVolume("pvc-" + c.Name)).Build()
+		built := fake.NewClientBuilder().WithScheme(scheme).WithObjects(releasedPV("pvc-" + c.Name)).Build()
 		var workload client.Client = built
 		if slices.Contains(failing, c.Name) {
 			workload = interceptor.NewClient(built, interceptor.Funcs{

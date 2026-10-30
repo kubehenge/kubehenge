@@ -916,41 +916,31 @@ func TestIntegrationChartSysAudit(t *testing.T) {
 	}
 }
 
-// Only a management cluster that lets clusters take volume snapshots names the controller the
-// Secret with root@pam's password, and offers them in the interface; the snapshot controller's
-// chart is the controller's in any case, pinned with its image.
+// The controller is given the snapshot controller's chart, pinned with its image, and the image of
+// the proxy beside the clusters' CSI plugins, its own, so that any cluster may take volume snapshots.
 func TestIntegrationChartVolumeSnapshots(t *testing.T) {
 	t.Parallel()
-	for _, on := range []bool{false, true} {
-		values := []string{"testdata/integration-values.yaml"}
-		if on {
-			values = append(values, "testdata/volume-snapshots-values.yaml")
+	var given strings.Builder
+	for _, o := range integration.RenderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
+		if o.GetKind() != "Deployment" {
+			continue
 		}
-		var args string
-		classes := 0
-		for _, o := range integration.RenderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, values...) {
-			switch o.GetKind() {
-			case "ClusterClass":
-				if got := o.GetAnnotations()["kubehenge.dev/volume-snapshots"] == "true"; got != on {
-					t.Errorf("volume snapshots %t: %s offers them: %t", on, o.GetName(), got)
-				}
-				classes++
-			case "Deployment":
-				containers, _, err := unstructured.NestedSlice(o.Object, "spec", "template", "spec", "containers")
-				if err != nil {
-					t.Fatal(err)
-				}
-				args += fmt.Sprint(containers)
-			}
+		containers, _, err := unstructured.NestedSlice(o.Object, "spec", "template", "spec", "containers")
+		if err != nil {
+			t.Fatal(err)
 		}
-		if !strings.Contains(args, "--snapshot-controller-chart=oci://ghcr.io/piraeusdatastore/helm-charts/snapshot-controller:") ||
-			!regexp.MustCompile(`"snapshot-controller":\{"controller":\{"image":\{"tag":"v[0-9.]+@sha256:[0-9a-f]{64}"`).MatchString(args) {
-			t.Errorf("volume snapshots %t: the controller is not given the snapshot controller's chart and image", on)
-		}
-		secret := strings.Contains(args, "--root-secret=kubehenge-root-pam")
-		if secret != on || strings.Contains(args, "--root-secret") != on || classes != len(classProviders) {
-			t.Errorf("volume snapshots %t: the controller gets the Secret: %t; %d classes", on, secret, classes)
-		}
+		fmt.Fprint(&given, containers)
+	}
+	args := given.String()
+	if !strings.Contains(args, "--snapshot-controller-chart=oci://ghcr.io/piraeusdatastore/helm-charts/snapshot-controller:") ||
+		!regexp.MustCompile(`"snapshot-controller":\{"controller":\{"image":\{"tag":"v[0-9.]+@sha256:[0-9a-f]{64}"`).MatchString(args) {
+		t.Error("the controller is not given the snapshot controller's chart and image")
+	}
+	if !regexp.MustCompile(`--csi-proxy-image=ghcr\.io/kubehenge/kubehenge@sha256:[0-9a-f]{64}`).MatchString(args) {
+		t.Error("the controller is not given its own image for the proxy beside the CSI plugins")
+	}
+	if strings.Contains(args, "root@pam") || strings.Contains(args, "root-secret") {
+		t.Errorf("the controller is given something of root@pam's: %s", args)
 	}
 }
 

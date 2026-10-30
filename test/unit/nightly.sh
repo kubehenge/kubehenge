@@ -41,6 +41,7 @@ while [ "${night}" -lt "${nights}" ]; do
         KUBEHENGE_E2E_CNI='' KUBEHENGE_E2E_NODE_OS='' KUBEHENGE_E2E_CIS=''
         eval "${settings}"
         test=${name%%+*}
+        test=${test%-addons}
         enum=$(awk '/- name: cni$/ { f = 1 } f && /enum:/ { gsub(/.*\[|\].*/, ""); gsub(/,/, " "); print; exit }' "${chart}/templates/${test}.yaml")
         case " ${enum} " in
             *" ${KUBEHENGE_E2E_CNI} "*) ok ;;
@@ -56,6 +57,12 @@ while [ "${night}" -lt "${nights}" ]; do
             bad "${name}: no node OS ${KUBEHENGE_E2E_NODE_OS}"
         fi
         printf '%s %s %s %s\n' "${test}" "${KUBEHENGE_E2E_CNI}" "${KUBEHENGE_E2E_NODE_OS:--}" "${KUBEHENGE_E2E_CIS:-true}" >> "${seen}"
+        # Each variant runs as both halves of its distribution's test.
+        case ${name} in
+            *-addons+*) twin=${test}+${name#*+} ;;
+            *) twin=${test}-addons+${name#*+} ;;
+        esac
+        if printf '%s' "${list}" | jq -e --arg t "${twin}" 'index($t) != null' > /dev/null; then ok; else bad "night ${night} runs ${name} without ${twin}"; fi
     done
     night=$((night + 1))
 done
@@ -86,6 +93,8 @@ refused() {
     fi
 }
 refused talos+rocky-10
+refused talos-addons+rocky-10
+refused appliance-addons+calico
 refused appliance+calico
 refused control-plane-ha+calico
 refused k3s+weave

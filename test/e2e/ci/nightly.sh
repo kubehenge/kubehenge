@@ -5,8 +5,9 @@
 #   test/e2e/ci/nightly.sh [day]
 #
 # Every test the merge queue may run (scope.sh --all) and those only the nightly run runs, then each
-# workload distribution once more with options (variant.sh): a CNI of its class other than the one
-# its own test runs, a node OS other than the default, and every other night no CIS hardening. The
+# workload distribution's test and its add-on half once more with options (variant.sh): a CNI of its
+# class other than the one its own test runs, a node OS other than the default, and every other
+# night no CIS hardening. The
 # choice moves on each night, and from one distribution to the next, so that a few nights cover
 # every CNI and node OS of every class, each with hardening and without.
 set -eu
@@ -63,7 +64,7 @@ for distribution in kubeadm rke2 k3s talos; do
     # shellcheck disable=SC2086 # one node OS per word
     [ "${distribution}" = talos ] || name=${name}+$(pick $((n / (count * 2))) ${oses})
     [ $((n / count % 2)) = 1 ] || name=${name}+cis-off
-    variants="${variants} ${name}"
+    variants="${variants} ${name} ${distribution}-addons${name#"${distribution}"}"
     i=$((i + 1))
 done
 

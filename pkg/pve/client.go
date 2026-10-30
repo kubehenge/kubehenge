@@ -57,6 +57,20 @@ func ConnectSession(cfg Config, t *Ticket) (*proxmox.Client, error) {
 	return proxmox.NewClient(base, proxmox.WithHTTPClient(httpClient), proxmox.WithSession(t.Ticket, t.CSRF)), nil
 }
 
+// Upstream returns the API's address and a transport that verifies its certificate, for passing on
+// calls that carry credentials of their own; cfg.Token is not used. It makes no request.
+func (cfg Config) Upstream() (*url.URL, http.RoundTripper, error) {
+	_, httpClient, err := cfg.transport()
+	if err != nil {
+		return nil, nil, err
+	}
+	u, err := url.Parse(strings.TrimSuffix(cfg.URL, "/"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("the Proxmox VE URL %q: %w", cfg.URL, err)
+	}
+	return u, httpClient.Transport, nil
+}
+
 // statusChecked turns into an error every answer go-proxmox would take as success without
 // looking. go-proxmox fails only on 400, 500 and 501 and maps 401 and 403 to ErrNotAuthorized, so a
 // 502 to 504 from a proxy in front of the API, or a 595 or 596 when pveproxy cannot reach the node
