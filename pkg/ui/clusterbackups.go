@@ -190,6 +190,21 @@ func (s *Server) openVelero(ctx context.Context, w http.ResponseWriter, u user, 
 	return v, true
 }
 
+// openVelero reaches the cluster's Velero for a request that cannot do without it, answering the
+// request when it cannot.
+func (s *Server) openVelero(ctx context.Context, w http.ResponseWriter, u user, c *clusterv1.Cluster, id provisioner.Identity) (dynamic.Interface, bool) {
+	v, why, err := s.velero(ctx, u, c, id)
+	if err != nil {
+		s.kubeError(w, err)
+		return nil, false
+	}
+	if v == nil {
+		writeError(w, http.StatusConflict, why)
+		return nil, false
+	}
+	return v, true
+}
+
 func (s *Server) clusterBackups(w http.ResponseWriter, r *http.Request, u user) {
 	c, access, ok := s.cluster(w, r, u)
 	if !ok {
