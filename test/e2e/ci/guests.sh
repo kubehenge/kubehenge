@@ -3,6 +3,7 @@
 # what their guests hold when a test fails:
 #
 #   test/e2e/ci/guests.sh record <file>    every 15 s until stopped: each VM's CPU time, memory and swap
+#   test/e2e/ci/guests.sh now              the same once, to standard output
 #   test/e2e/ci/guests.sh summary <file>   from that record, each minute's CPUs and memory by VM, and
 #                                          each VM's peaks: what a test's steps ask of the machine
 #   test/e2e/ci/guests.sh collect <dir> [<work dir>]
@@ -32,21 +33,27 @@ qemu_arg() { # pid option
     tr '\0' '\n' < "/proc/$1/cmdline" | sed -n "/^$2\$/{n;s/,.*//;p;q;}"
 }
 
+# sample: one line per running VM: the time, its QEMU process, VM ID and name, CPU ticks, and resident
+# and swapped KiB.
+sample() {
+    now=$(date -u +%T)
+    for pid in $(pgrep -x kvm || true); do
+        # A VM that stops between the list and the read is left out of this sample.
+        vmid=$(qemu_arg "${pid}" -id 2> /dev/null)
+        name=$(qemu_arg "${pid}" -name 2> /dev/null)
+        if [ -z "${vmid}" ] || [ -z "${name}" ]; then
+            continue
+        fi
+        ticks=$(awk '{ print $14 + $15 }' "/proc/${pid}/stat" 2> /dev/null) || continue
+        memory=$(awk '/^VmRSS:/ { r = $2 } /^VmSwap:/ { s = $2 } END { print r + 0, s + 0 }' \
+            "/proc/${pid}/status" 2> /dev/null) || continue
+        printf '%s %s %s %s %s %s\n' "${now}" "${pid}" "${vmid}" "${name}" "${ticks}" "${memory}"
+    done
+}
+
 record() {
     while :; do
-        now=$(date -u +%T)
-        for pid in $(pgrep -x kvm || true); do
-            # A VM that stops between the list and the read is left out of this sample.
-            vmid=$(qemu_arg "${pid}" -id 2> /dev/null)
-            name=$(qemu_arg "${pid}" -name 2> /dev/null)
-            if [ -z "${vmid}" ] || [ -z "${name}" ]; then
-                continue
-            fi
-            ticks=$(awk '{ print $14 + $15 }' "/proc/${pid}/stat" 2> /dev/null) || continue
-            memory=$(awk '/^VmRSS:/ { r = $2 } /^VmSwap:/ { s = $2 } END { print r + 0, s + 0 }' \
-                "/proc/${pid}/status" 2> /dev/null) || continue
-            printf '%s %s %s %s %s %s\n' "${now}" "${pid}" "${vmid}" "${name}" "${ticks}" "${memory}"
-        done
+        sample
         sleep 15
     done
 }
@@ -478,10 +485,11 @@ collect() {
 
 case ${1:-} in
     record) record > "${2:?usage: $0 record <file>}" ;;
+    now) sample ;;
     summary) summary "${2:?usage: $0 summary <file>}" ;;
     collect) collect "${2:?usage: $0 collect <directory> [<work directory>]}" "${3:-${RUNNER_TEMP:+${RUNNER_TEMP}/e2e}}" ;;
     *)
-        echo "usage: $0 record <file> | summary <file> | collect <directory> [<work directory>]" >&2
+        echo "usage: $0 record <file> | now | summary <file> | collect <directory> [<work directory>]" >&2
         exit 2
         ;;
 esac
