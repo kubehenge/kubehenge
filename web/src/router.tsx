@@ -1,4 +1,5 @@
 import { useId, useSyncExternalStore, type JSX, type MouseEvent, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 
 // A few routes need no router library: the path lives in the history API and every change is
 // announced with one event.
@@ -14,14 +15,28 @@ function subscribe(listener: () => void) {
   };
 }
 
+function announce(): void {
+  for (const l of listeners) {
+    l();
+  }
+}
+
+// Going to another page crossfades it in where the browser can; the page is drawn inside the
+// transition, so the old one is what fades out. Only the address's query changing in place
+// (replace) stays a plain update.
 export function navigate(path: string, replace = false): void {
   if (replace) {
     window.history.replaceState(null, "", path);
-  } else {
-    window.history.pushState(null, "", path);
+    announce();
+    return;
   }
-  for (const l of listeners) {
-    l();
+  window.history.pushState(null, "", path);
+  if (typeof document.startViewTransition === "function") {
+    document.startViewTransition(() => {
+      flushSync(announce);
+    });
+  } else {
+    announce();
   }
 }
 

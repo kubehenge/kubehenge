@@ -241,6 +241,33 @@ output.notice {
   padding: 48px 12px;
 }
 
+/* Only the page changes between pages: the top bar, the fleet and the runs stay put. */
+.content {
+  view-transition-name: page;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+}
+
+::view-transition-old(page),
+::view-transition-new(page) {
+  animation-duration: 0.14s;
+}
+
+::view-transition-group(page) {
+  animation-duration: 0.14s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none;
+  }
+}
+
 /* Held back a moment, so a read that answers at once never flashes it. */
 .skeleton {
   display: grid;
