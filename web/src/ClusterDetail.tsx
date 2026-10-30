@@ -11,6 +11,7 @@ import { ClusterStatus, fleetKey, useFleet } from "./fleet";
 import { useClusterChanges } from "./live";
 import { Machines, Placement } from "./Machines";
 import { nodeOSKey } from "./node-os";
+import { Pools } from "./Pools";
 import { Link, navigate, useQuery } from "./router";
 import { StagedBar, StagingProvider } from "./Staging";
 import { useStaging } from "./staging-context";
@@ -434,14 +435,17 @@ export function ClusterDetail({
               </Suspense>
             )}
             {view === "machines" && (
-              <Machines
-                cluster={c}
-                can={can}
-                why={why}
-                onChanged={() => {
-                  void reload();
-                }}
-              />
+              <>
+                <Pools cluster={c} can={can} why={why} />
+                <Machines
+                  cluster={c}
+                  can={can}
+                  why={why}
+                  onChanged={() => {
+                    void reload();
+                  }}
+                />
+              </>
             )}
             {view === "backups" && (
               <>

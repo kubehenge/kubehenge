@@ -45,7 +45,7 @@ function settingsOf(req: unknown): string[] {
   if (!isRecord(req)) {
     return [];
   }
-  const topology = ["version", "controlPlaneReplicas", "workerPools", "autoscaling"].filter((k) => k in req);
+  const topology = ["version", "controlPlaneReplicas", "workerPools", "pools", "autoscaling"].filter((k) => k in req);
   return [...topology, ...Object.keys(isRecord(req["variables"]) ? req["variables"] : {})];
 }
 

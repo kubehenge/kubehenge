@@ -9,6 +9,20 @@ import { StagingContext, useStaging, type Staging } from "./staging-context";
 import type { ChangeRequest, Cluster, Effect, PlannedChange } from "./types";
 import { Dialog, ErrorBox, errorMessage } from "./ui";
 
+// mergedPools is two changes of pools as one: a pool's later change adds to its earlier one, and a
+// deletion ends both.
+function mergedPools(
+  a: NonNullable<ChangeRequest["pools"]>,
+  b: NonNullable<ChangeRequest["pools"]>,
+): NonNullable<ChangeRequest["pools"]> {
+  const out = { ...a };
+  for (const [name, change] of Object.entries(b)) {
+    const was = out[name];
+    out[name] = change === null || was === null || was === undefined ? change : { ...was, ...change };
+  }
+  return out;
+}
+
 // merged is two changes as one, the later one's settings winning.
 export function merged(a: ChangeRequest, b: ChangeRequest): ChangeRequest {
   const out: ChangeRequest = {};
@@ -25,6 +39,9 @@ export function merged(a: ChangeRequest, b: ChangeRequest): ChangeRequest {
   }
   if (a.autoscaling !== undefined || b.autoscaling !== undefined) {
     out.autoscaling = { ...a.autoscaling, ...b.autoscaling };
+  }
+  if (a.pools !== undefined || b.pools !== undefined) {
+    out.pools = mergedPools(a.pools ?? {}, b.pools ?? {});
   }
   if (a.variables !== undefined || b.variables !== undefined) {
     out.variables = { ...a.variables, ...b.variables };
@@ -101,6 +118,9 @@ const settingLabels: Record<string, string[]> = {
   version: ["Kubernetes version"],
   controlPlaneReplicas: ["Control plane"],
   workerPools: ["Workers"],
+  pools: ["Worker pools"],
+  controlPlaneMachine: ["Control-plane size"],
+  workerMachine: ["Worker size"],
   autoscaling: ["Autoscaling"],
   allowedNodes: ["Placement"],
   autoscaler: ["Autoscaler"],

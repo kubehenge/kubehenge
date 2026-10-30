@@ -27,7 +27,8 @@ const (
 
 // plannedChange is one setting a change sets anew, and what that does to the machines.
 type plannedChange struct {
-	// Setting is a variable's name, or version, controlPlaneReplicas, workerPools or autoscaling.
+	// Setting is a variable's name, or version, controlPlaneReplicas, workerPools, pools or
+	// autoscaling.
 	Setting string `json:"setting"`
 	Effect  string `json:"effect"`
 }
@@ -87,6 +88,9 @@ func planned(ch *changed, reach map[string]machineReach) []plannedChange {
 	}
 	if len(ch.req.WorkerPools) > 0 {
 		out = append(out, plannedChange{Setting: "workerPools", Effect: effectScales})
+	}
+	if len(ch.req.Pools) > 0 {
+		out = append(out, plannedChange{Setting: "pools", Effect: poolsEffect(ch.before, ch.req.Pools)})
 	}
 	if len(ch.req.Autoscaling) > 0 {
 		out = append(out, plannedChange{Setting: "autoscaling", Effect: effectNone})

@@ -130,6 +130,21 @@ export interface WorkerPool {
   /** For an autoscaled pool, the workers it asks for at the moment. */
   replicas: number;
   autoscaling?: Autoscaling;
+  /** The pool's own size; unset, it takes the cluster's workerMachine. */
+  machine?: MachineSize;
+}
+
+/** A machine's size, as the controlPlaneMachine and workerMachine variables give it. */
+export interface MachineSize {
+  cores: number;
+  memoryMiB: number;
+  diskGiB: number;
+}
+
+/** A worker pool to add or change: its workers, and its own size, or the cluster's with null. */
+export interface PoolChange {
+  replicas?: number;
+  machine?: MachineSize | null;
 }
 
 export interface Machine {
@@ -940,13 +955,15 @@ export interface ChangeRequest {
   workerPools?: Record<string, number>;
   /** Switches autoscaling on for pools by name, or off with null. */
   autoscaling?: Record<string, Autoscaling | null>;
+  /** Adds and changes worker pools by name, or deletes one with null. */
+  pools?: Record<string, PoolChange | null>;
   variables?: Record<string, unknown>;
 }
 
 /** What a change does to a cluster's machines. */
 export type Effect = "none" | "scales" | "control-plane" | "workers" | "all";
 
-/** A setting a change sets anew: a variable's name, or version, controlPlaneReplicas, workerPools or autoscaling. */
+/** A setting a change sets anew: a variable's name, or version, controlPlaneReplicas, workerPools, pools or autoscaling. */
 export interface PlannedChange {
   setting: string;
   effect: Effect;

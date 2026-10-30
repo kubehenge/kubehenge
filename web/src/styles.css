@@ -2506,6 +2506,11 @@ details.advanced > summary {
   margin: 0;
 }
 
+/* A section's own action sits at its far end, as a page's actions do. */
+.section-head > button {
+  margin-left: auto;
+}
+
 .filter {
   display: flex;
   align-items: center;

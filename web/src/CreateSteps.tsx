@@ -6,17 +6,16 @@ import {
   chosenNodeOS,
   controlPlaneSizes,
   machineLeast,
-  memoryStepMiB,
   templateMissing,
   variable,
   versionExamples,
   versionLabel,
   type FieldKey,
   type Form,
-  type Machine,
 } from "./create-form";
 import { CSIField, SnapshotsField } from "./CsiPlugin";
 import { LoadBalancerFields } from "./LoadBalancer";
+import { MachineFields } from "./MachineFields";
 import { addressBits, addressIn } from "./network";
 import { choosable, cpuNote, findNodeOS, macName, nodeOSKey, nodeOSLabel } from "./node-os";
 import { OIDCProviders } from "./OIDCProviders";
@@ -867,61 +866,5 @@ export function IdentityStep({
 }): JSX.Element {
   return (
     <OIDCProviders initial={form.oidc} fixed={canTrust === false} showAll={showAll} onChange={(v) => set("oidc", v)} />
-  );
-}
-
-function MachineFields({
-  label,
-  value,
-  min,
-  error,
-  onChange,
-}: {
-  label: string;
-  value: Machine;
-  min: Machine;
-  error?: string | undefined;
-  onChange: (m: Machine) => void;
-}): JSX.Element {
-  // fieldProblems names the first of cores, memory and disk that is wrong.
-  const on = (part: string): string | undefined => (error?.toLowerCase().includes(part) === true ? error : undefined);
-  return (
-    <fieldset className="group">
-      <legend>{label}</legend>
-      <Field label="Cores" error={on("cores")}>
-        {(id) => (
-          <input
-            id={id}
-            type="number"
-            min={min.cores}
-            value={shownNumber(value.cores)}
-            onChange={(e) => onChange({ ...value, cores: typedNumber(e.target.value) })}
-          />
-        )}
-      </Field>
-      <Field label="Memory (MiB)" error={on("memory")}>
-        {(id) => (
-          <input
-            id={id}
-            type="number"
-            min={min.memoryMiB}
-            step={memoryStepMiB}
-            value={shownNumber(value.memoryMiB)}
-            onChange={(e) => onChange({ ...value, memoryMiB: typedNumber(e.target.value) })}
-          />
-        )}
-      </Field>
-      <Field label="Disk (GiB)" error={on("disk")}>
-        {(id) => (
-          <input
-            id={id}
-            type="number"
-            min={min.diskGiB}
-            value={shownNumber(value.diskGiB)}
-            onChange={(e) => onChange({ ...value, diskGiB: typedNumber(e.target.value) })}
-          />
-        )}
-      </Field>
-    </fieldset>
   );
 }

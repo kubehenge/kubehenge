@@ -200,6 +200,12 @@ A cluster's settings change in two steps. **Save** in a dialog, or a switch unde
 
 **Scale** sets the control-plane nodes (1, 3, 5 or 7: an odd number, so etcd keeps a majority when one fails) and, for each worker pool, either its workers (0 to 100) or, under **Scaling**, **Autoscaled** between its fewest and most workers ([below](#autoscaling)).
 
+## Pools
+
+**Machines** lists the control plane and each worker pool with its nodes, cores, memory and disk. **Add pool** adds a worker pool with its own name, workers and size; a new cluster starts with one, `md-0`. **Resize** gives the control plane, or one pool, another size, and replaces those nodes one at a time; a pool resized keeps its own size from then on, and the others keep the cluster's. **Delete** drains and deletes a pool's workers and their disks. Each is staged with the cluster's other changes, and the API server holds it to the class's least size and to the room the add-ons need.
+
+A pool's name takes lowercase letters, digits and dashes and starts with a letter; with the cluster's name it takes at most 44 characters, so that its nodes' host names stay within one DNS label.
+
 ## Autoscaling
 
 An autoscaled pool is sized by the [cluster autoscaler](https://github.com/kubernetes/autoscaler/tree/master/cluster-autoscaler) through Cluster API: it adds a worker while pods wait for room it would give them, up to the pool's most, and removes a worker that has stayed unneeded for 10 minutes, down to its fewest. Kubehenge's controller runs one autoscaler per cluster while any of its pools is autoscaled, and removes it with everything it was given once none is.
@@ -610,7 +616,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 - **The ClusterClasses** are `kubehenge-kubeadm`, `kubehenge-rke2`, `kubehenge-k3s` and `kubehenge-talos`, in `kubehenge-system`.
 - **The interface's rules hold here too**, checked by the API server as the Cluster is applied: a name of at most 40 characters, a version in the distribution's form, an upgrade of one minor version at most and never back, 1, 3, 5 or 7 control-plane nodes, 0 to 100 workers in each pool, enough node addresses for every machine at once plus one for a rollout, node addresses and a control-plane endpoint on the gateway's network with the endpoint outside the node addresses, and none of another cluster's addresses on the same bridge and VLAN.
 - **The namespace** decides the pool: `<workload pool>/<namespace>.<name>`. Clusters in the interface's namespaces (`clusters`, and any [added for clusters](#more-namespaces-for-clusters)) are also looked after from the interface; any other namespace works, and the interface shows those clusters read-only. The ClusterClasses stay in `kubehenge-system`, which `topology.classRef.namespace` names, so every namespace uses the same ones. Names are held to 40 characters so that the nodes' host names stay within one DNS label.
-- **Worker pools** are machine deployments of the class `worker`; a Cluster may have several. An autoscaled pool has no `replicas` and carries Cluster API's annotations `cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size` and `-max-size` under `metadata.annotations` (at most 100), with the pool's node labels under `metadata.labels`.
+- **Worker pools** are machine deployments of the class `worker`; a Cluster may have several, each named once, and a pool added later is held to the [pool name rule](#pools). A pool's own size is an override of `workerMachine` under `variables.overrides`. An autoscaled pool has no `replicas` and carries Cluster API's annotations `cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size` and `-max-size` under `metadata.annotations` (at most 100), with the pool's node labels under `metadata.labels`.
 - **Ranges** come from `spec.clusterNetwork`; without it, the distribution's own apply (`10.244.0.0/16` and `10.96.0.0/12` for kubeadm and Talos, `10.42.0.0/16` and `10.43.0.0/16` for RKE2 and k3s). Kubehenge refuses to create a cluster whose ranges overlap its nodes' network.
 
 ### Variables

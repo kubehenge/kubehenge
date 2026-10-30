@@ -39,18 +39,27 @@ const (
 // createdBy records which Proxmox VE user created a cluster through the interface.
 const createdBy = "kubehenge.dev/created-by"
 
-// workerClass and workerPool name the one worker pool clusters created here get.
+// workerClass is the class of every worker pool, and workerPool names the one clusters created
+// here start with.
 const (
 	workerClass = "worker"
 	workerPool  = "md-0"
+)
+
+// The variables that size machines: the control planes', and the workers' of every pool that does
+// not set its own.
+const (
+	controlPlaneMachineVariable = "controlPlaneMachine"
+	workerMachineVariable       = "workerMachine"
 )
 
 // Variables a cluster may change after creation; the others describe where its VMs live.
 var changeableVariables = map[string]bool{
 	"headlamp": true, "monitoring": true, "logs": true, "backups": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, csiVariable: true, ccmVariable: true,
 	certificatesVariable: true, gitopsVariable: true, autoscalerVariable: true,
-	// A new node OS rolls every node onto its template, as a node image refresh does.
-	provisioner.NodeOSVariable: true,
+	// A new node OS rolls every node onto its template, as a node image refresh does; a new size
+	// rolls the machines it sizes.
+	provisioner.NodeOSVariable: true, controlPlaneMachineVariable: true, workerMachineVariable: true,
 }
 
 // autoUpgraded is where Kubehenge's controller records the last automatic upgrade.
@@ -253,6 +262,8 @@ type workerPoolView struct {
 	// Autoscaling is set for a pool the cluster autoscaler sizes, whose replicas are then the
 	// workers its MachineDeployment asks for at the moment.
 	Autoscaling *poolAutoscaling `json:"autoscaling,omitempty"`
+	// Machine is the pool's own size, where it does not take the cluster's workerMachine.
+	Machine json.RawMessage `json:"machine,omitempty"`
 }
 
 type allowedView struct {
@@ -341,6 +352,9 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 		wp := workerPoolView{Name: md.Name, Class: md.Class, Autoscaling: autoscalingOf(md.Metadata.Annotations)}
 		if md.Replicas != nil {
 			wp.Replicas = *md.Replicas
+		}
+		if i := poolOverride(md, workerMachineVariable); i >= 0 {
+			wp.Machine = json.RawMessage(md.Variables.Overrides[i].Value.Raw)
 		}
 		v.WorkerPools = append(v.WorkerPools, wp)
 	}
@@ -985,7 +999,9 @@ type changeRequest struct {
 	WorkerPools map[string]int32 `json:"workerPools"`
 	// Autoscaling switches the cluster autoscaler on for worker pools by name, or off with null.
 	Autoscaling map[string]*poolAutoscaling `json:"autoscaling"`
-	Variables   map[string]json.RawMessage  `json:"variables"`
+	// Pools adds, changes and removes worker pools by name.
+	Pools     map[string]*poolChange     `json:"pools"`
+	Variables map[string]json.RawMessage `json:"variables"`
 }
 
 // changed is a change read and checked, applied to the cluster in memory, with the cluster as it was.
@@ -1023,6 +1039,9 @@ func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user) (
 	}
 	if msg == "" {
 		msg = applyTopology(c, &req)
+	}
+	if msg == "" {
+		msg = applyPools(c, req.Pools)
 	}
 	if msg != "" {
 		writeError(w, http.StatusUnprocessableEntity, msg)
