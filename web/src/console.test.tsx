@@ -128,7 +128,13 @@ describe("the fleet", () => {
         attention: [{ severity: "error", section: "backups", what: "Last backup failed" }],
         more: 0,
       }),
-    ).toStrictEqual({ group: "needs", state: "error", reason: "Last backup failed", view: "backups" });
+    ).toStrictEqual({
+      group: "needs",
+      state: "error",
+      reason: "Last backup failed",
+      view: "backups",
+      verdict: "Degraded",
+    });
     // What is under way says more than the errors a rollout passes through.
     expect(standing(upgrading, { ...crashing, name: "db" })).toMatchObject({ group: "running" });
   });

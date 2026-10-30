@@ -1,7 +1,7 @@
 import { useState, type JSX } from "react";
 
 import { api } from "./api";
-import { clusterPath, type View } from "./ClusterDetail";
+import { clusterPath, type View } from "./cluster-paths";
 import { Link } from "./router";
 import type {
   AddonRelease,
