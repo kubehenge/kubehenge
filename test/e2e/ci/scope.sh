@@ -30,6 +30,7 @@ need=
         test/e2e/management-cluster-upgrade.sh | test/e2e/rancher.sh | test/e2e/control-plane-ha.sh | test/e2e/ci/nightly.sh) ;;
         test/e2e/two-nodes.sh | test/e2e/ci/second-node.sh) ;;
         test/e2e/workload-cluster.sh) need="${need} ${workload}" ;;
+        test/e2e/backups.sh) need="${need} ${workload} cluster-mesh" ;;
         test/e2e/cluster-mesh.sh) need="${need} cluster-mesh" ;;
         test/e2e/node-image-refresh.sh) need="${need} node-image-refresh" ;;
         test/e2e/autoscaler.sh) need="${need} autoscaler" ;;

@@ -107,6 +107,9 @@ type Backups struct {
 	// ExistingSecret is a Secret the cluster's owner keeps in its velero namespace, with the store's
 	// keys as Velero's own credentials file, which never passes through the management cluster.
 	ExistingSecret string `json:"existingSecret,omitempty"`
+	// ReadFrom names clusters of the same namespace whose backups in the same target this one may
+	// restore.
+	ReadFrom []string `json:"readFrom,omitempty"`
 }
 
 // withDefaults fills in what the cluster left to the chart's schema; the controller reads only what
@@ -207,6 +210,9 @@ func checkBackups(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) erro
 	if err = b.valid(); err != nil {
 		return err
 	}
+	if err = b.checkReadFrom(c.Name); err != nil {
+		return err
+	}
 	if old != nil {
 		was, _, werr := optionalVariable[Backups](old, backupsVariable)
 		if werr == nil && was.Enabled && was.Target == b.Target {
@@ -240,7 +246,8 @@ func (b *Backups) valid() error {
 	if b.Volumes != backupVolumesAll && b.Volumes != backupVolumesAnnotated {
 		return fmt.Errorf("backups: volumes is all or annotated, not %q", b.Volumes)
 	}
-	if slices.Contains([]string{veleroRepoSecret, veleroSSECSecret, veleroCredentialsSecret}, b.ExistingSecret) {
+	if slices.Contains([]string{veleroRepoSecret, veleroSSECSecret, veleroCredentialsSecret}, b.ExistingSecret) ||
+		strings.HasPrefix(b.ExistingSecret, sourceSSECPrefix) {
 		return fmt.Errorf("backups: Kubehenge writes Secret %s itself; existingSecret names another", b.ExistingSecret)
 	}
 	return nil
@@ -301,28 +308,18 @@ volumePolicies:
 // every object with the cluster's SSE-C key, which the plugin reads from the velero-sse-c Secret.
 // The Secrets themselves are put into the cluster beforehand (backupsWait), never into values. The
 // server runs without root or capabilities; the node agents read every pod's volumes as root. The
-// schedule's backups outlive it, so that switching backups off leaves them in the target.
-func veleroValues(charts *Charts, b *Backups, t *BackupTarget, cluster *clusterv1.Cluster) map[string]any {
-	config := map[string]any{
-		regionKey:                     t.Region,
-		"customerKeyEncryptionSecret": veleroSSECSecret + "/" + veleroSSECKey,
-	}
-	if t.Region == "" {
-		config[regionKey] = defaultBackupRegion
-	}
-	if t.Endpoint != "" {
-		config["s3Url"] = t.Endpoint
-		config["s3ForcePathStyle"] = strconv.FormatBool(true)
-	}
-	if t.Checksums != nil && !*t.Checksums {
-		config["checksumAlgorithm"] = ""
-	}
-	location := map[string]any{
-		"name": veleroLocation, "provider": "aws", "bucket": t.Bucket, defaultKey: true,
-		"prefix": BackupPrefix(t.Prefix, cluster.Namespace, cluster.Name), configKey: config,
-	}
-	if t.CACertificate != "" {
-		location["caCert"] = base64.StdEncoding.EncodeToString([]byte(t.CACertificate))
+// schedule's backups outlive it, so that switching backups off leaves them in the target. Each
+// cluster it reads the backups of gets a read-only location of its own beside it.
+func veleroValues(charts *Charts, b *Backups, t *BackupTarget, cluster *clusterv1.Cluster, sources []backupSource) map[string]any {
+	location := veleroLocationValues(t, BackupPrefix(t.Prefix, cluster.Namespace, cluster.Name), veleroSSECSecret)
+	location["name"], location[defaultKey] = veleroLocation, true
+	locations := make([]any, 0, 1+len(sources))
+	locations = append(locations, location)
+	for _, s := range sources {
+		l := veleroLocationValues(t, BackupPrefix(t.Prefix, cluster.Namespace, s.name), sourceSSECPrefix+s.name)
+		l["name"], l["accessMode"] = SourceLocation(s.name), "ReadOnly"
+		l["annotations"] = map[string]any{BackupSourceAnnotation: s.name, VolumeDataAnnotation: strconv.FormatBool(s.volumeData)}
+		locations = append(locations, l)
 	}
 	all := b.Volumes == backupVolumesAll
 	policyName := veleroRelease + "-resource-policy"
@@ -362,7 +359,7 @@ func veleroValues(charts *Charts, b *Backups, t *BackupTarget, cluster *clusterv
 		"configuration": map[string]any{
 			"uploaderType":             "kopia",
 			"defaultVolumesToFsBackup": all,
-			"backupStorageLocation":    []any{location},
+			"backupStorageLocation":    locations,
 		},
 		"schedules": map[string]any{
 			strings.TrimPrefix(VeleroSchedule, veleroRelease+"-"): map[string]any{
@@ -395,6 +392,30 @@ func veleroValues(charts *Charts, b *Backups, t *BackupTarget, cluster *clusterv
 			},
 		},
 	}
+}
+
+// veleroLocationValues are a backup location of the chart's under prefix in the target, the store
+// encrypting every object with the SSE-C key in Secret sseC, which the plugin reads.
+func veleroLocationValues(t *BackupTarget, prefix, sseC string) map[string]any {
+	config := map[string]any{
+		regionKey:                     t.Region,
+		"customerKeyEncryptionSecret": sseC + "/" + veleroSSECKey,
+	}
+	if t.Region == "" {
+		config[regionKey] = defaultBackupRegion
+	}
+	if t.Endpoint != "" {
+		config["s3Url"] = t.Endpoint
+		config["s3ForcePathStyle"] = strconv.FormatBool(true)
+	}
+	if t.Checksums != nil && !*t.Checksums {
+		config["checksumAlgorithm"] = ""
+	}
+	location := map[string]any{"provider": "aws", "bucket": t.Bucket, "prefix": prefix, configKey: config}
+	if t.CACertificate != "" {
+		location["caCert"] = base64.StdEncoding.EncodeToString([]byte(t.CACertificate))
+	}
+	return location
 }
 
 // backupTarget finds the target a cluster's backups name in its class, or false when the class has
@@ -438,7 +459,8 @@ func (r *Reconciler) backupKeys(ctx context.Context, cluster *clusterv1.Cluster,
 // clusterKeys reads the cluster's backup keys, making them first when create is set and there are
 // none: a random Kopia password and SSE-C key for Velero, and the age identity etcd snapshots are
 // encrypted to, made once and never changed, since what was stored with them can be read with
-// nothing else.
+// nothing else. A cluster that reads another's backups from the start takes that one's Kopia
+// password instead, since Velero reads every repository with the one password it has.
 func clusterKeys(ctx context.Context, c client.Client, cluster *clusterv1.Cluster, create bool) (*corev1.Secret, error) {
 	s := &corev1.Secret{}
 	err := c.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: BackupKeysSecretName(cluster.Name)}, s)
@@ -465,12 +487,20 @@ func clusterKeys(ctx context.Context, c client.Client, cluster *clusterv1.Cluste
 	if err != nil {
 		return nil, fmt.Errorf("making an etcd snapshot key: %w", err)
 	}
+	repository := []byte(base64.RawURLEncoding.EncodeToString(password))
+	shared, err := sourceRepository(ctx, c, cluster)
+	if err != nil {
+		return nil, err
+	}
+	if shared != nil {
+		repository = shared
+	}
 	s = &corev1.Secret{
 		Namespace: cluster.Namespace, Name: BackupKeysSecretName(cluster.Name),
 		Labels: map[string]string{clusterv1.ClusterNameLabel: cluster.Name},
 		Type:   corev1.SecretTypeOpaque,
 		Data: map[string][]byte{
-			BackupKeysKeyRepository: []byte(base64.RawURLEncoding.EncodeToString(password)),
+			BackupKeysKeyRepository: repository,
 			BackupKeysKeySSEC:       key,
 			BackupKeysKeyEtcd:       []byte(identity.String()),
 		},
@@ -521,39 +551,70 @@ const noBackupCredential = "no credential for the backup target: type one in for
 // repository password, the SSE-C key and, unless the cluster's owner keeps them in a Secret of
 // their own there, the store's keys. Velero would make a repository password of its own, the same
 // for every installation, were it to start without one. It reports whether the chart has to wait,
-// for the cluster's API or for a credential.
-func (r *Reconciler) backupsWait(ctx context.Context, cluster *clusterv1.Cluster, b *Backups) (bool, error) {
+// for the cluster's API or for a credential. The SSE-C keys of the clusters it reads the backups of
+// go beside its own, and what is left of those it no longer reads is taken away.
+func (r *Reconciler) backupsWait(ctx context.Context, cluster *clusterv1.Cluster, b *Backups, sources []backupSource) (bool, error) {
 	keys, err := r.backupKeys(ctx, cluster, true)
 	if err != nil {
 		return false, err
 	}
-	var creds map[string][]byte
-	if b.ExistingSecret == "" {
-		var missing string
-		creds, missing, err = r.backupCredential(ctx, cluster)
-		if err != nil {
-			return false, err
-		}
-		if missing == noBackupCredential {
-			// Velero alone can also take a Secret of the owner's own in the workload cluster.
-			missing += ", or name a Secret of the cluster's velero namespace in existingSecret"
-		}
-		if missing != "" {
-			r.holdBackups(ctx, cluster, "BackupCredentialMissing", missing)
-			return true, nil
-		}
+	creds, held, err := r.veleroCredential(ctx, cluster, b)
+	if err != nil || held {
+		return held, err
 	}
 	workload, found, err := r.Remotes.get(ctx, cluster)
 	if err != nil || !found {
 		return true, err
 	}
-	if keys.Annotations[backupsInstalledAnnotation] != strconv.FormatBool(true) {
-		patch := client.MergeFrom(keys.DeepCopy())
-		metav1.SetMetaDataAnnotation(&keys.ObjectMeta, backupsInstalledAnnotation, strconv.FormatBool(true))
-		if err := r.Client.Patch(ctx, keys, patch); err != nil {
-			return false, fmt.Errorf("marking the backup keys: %w", err)
-		}
+	if err = r.markBackupsInstalled(ctx, keys); err != nil {
+		return false, err
 	}
+	if err = fillVeleroNamespace(ctx, workload.client, veleroSecrets(keys, creds, sources), sources); err != nil {
+		r.Remotes.forget(cluster)
+		return false, err
+	}
+	return false, nil
+}
+
+// veleroCredential finds the store's keys Kubehenge puts into the cluster for Velero, or none when
+// the cluster's owner keeps them in a Secret of their own there. It reports, with an event, whether
+// Velero has to wait for one.
+func (r *Reconciler) veleroCredential(ctx context.Context, cluster *clusterv1.Cluster, b *Backups) (map[string][]byte, bool, error) {
+	if b.ExistingSecret != "" {
+		return nil, false, nil
+	}
+	creds, missing, err := r.backupCredential(ctx, cluster)
+	if err != nil {
+		return nil, false, err
+	}
+	if missing == noBackupCredential {
+		// Velero alone can also take a Secret of the owner's own in the workload cluster.
+		missing += ", or name a Secret of the cluster's velero namespace in existingSecret"
+	}
+	if missing != "" {
+		r.holdBackups(ctx, cluster, "BackupCredentialMissing", missing)
+		return nil, true, nil
+	}
+	return creds, false, nil
+}
+
+// markBackupsInstalled marks the cluster's backup keys as handed to its Velero.
+func (r *Reconciler) markBackupsInstalled(ctx context.Context, keys *corev1.Secret) error {
+	if keys.Annotations[backupsInstalledAnnotation] == strconv.FormatBool(true) {
+		return nil
+	}
+	patch := client.MergeFrom(keys.DeepCopy())
+	metav1.SetMetaDataAnnotation(&keys.ObjectMeta, backupsInstalledAnnotation, strconv.FormatBool(true))
+	if err := r.Client.Patch(ctx, keys, patch); err != nil {
+		return fmt.Errorf("marking the backup keys: %w", err)
+	}
+	return nil
+}
+
+// veleroSecrets are the Secrets Velero's namespace holds, by name: the repository password, the
+// SSE-C keys of the cluster and of those it reads the backups of, and the store's keys when
+// Kubehenge hands them over.
+func veleroSecrets(keys *corev1.Secret, creds map[string][]byte, sources []backupSource) map[string]map[string][]byte {
 	secrets := map[string]map[string][]byte{
 		veleroRepoSecret: {veleroRepoKey: keys.Data[BackupKeysKeyRepository]},
 		veleroSSECSecret: {veleroSSECKey: keys.Data[BackupKeysKeySSEC]},
@@ -563,19 +624,30 @@ func (r *Reconciler) backupsWait(ctx context.Context, cluster *clusterv1.Cluster
 			"[default]\naws_access_key_id=%s\naws_secret_access_key=%s\n",
 			strings.TrimSpace(string(creds[backupAccessKeyID])), strings.TrimSpace(string(creds[backupSecretAccessKey])))}
 	}
-	if err := putVeleroSecrets(ctx, workload.client, secrets); err != nil {
-		r.Remotes.forget(cluster)
-		return false, err
+	for _, s := range sources {
+		secrets[sourceSSECPrefix+s.name] = map[string][]byte{veleroSSECKey: s.sseC}
 	}
-	if creds == nil {
-		// Keys put there before the owner named a Secret of their own would outlive their use.
-		stale := &corev1.Secret{Namespace: VeleroNamespace, Name: veleroCredentialsSecret}
-		if err := workload.client.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
-			r.Remotes.forget(cluster)
-			return false, fmt.Errorf("deleting Secret %s/%s: %w", VeleroNamespace, veleroCredentialsSecret, err)
-		}
+	return secrets
+}
+
+// fillVeleroNamespace puts the Secrets into Velero's namespace and takes out what no longer belongs
+// there: what is left of clusters no longer read, and store's keys put there before the owner named
+// a Secret of their own, which would outlive their use.
+func fillVeleroNamespace(ctx context.Context, workload client.Client, secrets map[string]map[string][]byte, sources []backupSource) error {
+	if err := putVeleroSecrets(ctx, workload, secrets); err != nil {
+		return err
 	}
-	return false, nil
+	if err := removeOldSources(ctx, workload, sources); err != nil {
+		return err
+	}
+	if _, handed := secrets[veleroCredentialsSecret]; handed {
+		return nil
+	}
+	stale := &corev1.Secret{Namespace: VeleroNamespace, Name: veleroCredentialsSecret}
+	if err := workload.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("deleting Secret %s/%s: %w", VeleroNamespace, veleroCredentialsSecret, err)
+	}
+	return nil
 }
 
 // putVeleroSecrets creates the velero namespace and puts the Secrets into it as given.
