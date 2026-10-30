@@ -86,7 +86,7 @@ describe("diagnosing a cluster", () => {
     render(<Machines cluster={web} />);
     await user.click(screen.getByRole("button", { name: "Boot log of web-cp-abc" }));
     const dialog = within(await screen.findByRole("dialog", { name: "Boot log of web-cp-abc" }));
-    await expect(dialog.findByText("The controller is reading the log…")).resolves.toBeInTheDocument();
+    await expect(dialog.findByText("Reading…")).resolves.toBeInTheDocument();
     expect(reads(calls, `POST ${bootLogPath}`)).toBe(1);
     expect(dialog.getByRole("button", { name: "Read again" })).toBeDisabled();
 
@@ -109,7 +109,7 @@ describe("diagnosing a cluster", () => {
     expect(within(dialog.getByRole("region", { name: "journal of rke2-server" })).getByRole("alert")).toHaveTextContent(
       "The unit is not there.",
     );
-    expect(dialog.queryByText("The controller is reading the log…")).not.toBeInTheDocument();
+    expect(dialog.queryByText("Reading…")).not.toBeInTheDocument();
     await user.click(dialog.getByRole("button", { name: "Read again" }));
     await waitFor(() => expect(reads(calls, `POST ${bootLogPath}`)).toBe(2));
   });

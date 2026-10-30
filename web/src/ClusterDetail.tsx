@@ -327,13 +327,13 @@ function HeldUp({ cluster: c }: { cluster: Cluster }): JSX.Element | null {
     <>
       {filled(c.controllerError) && (
         <div className="error held-up" role="alert">
-          <strong>Kubehenge&apos;s controller fails on this cluster</strong>
+          <strong>Controller error</strong>
           <pre>{c.controllerError}</pre>
         </div>
       )}
       {filled(c.stalled) && (
         <div className="warning held-up">
-          <strong>Machines stuck: none has become ready for 20 minutes</strong>
+          <strong>Machines stuck for 20 minutes</strong>
           <pre>{c.stalled}</pre>
         </div>
       )}
@@ -375,7 +375,7 @@ function SupportBundleButton({
     <button
       type="button"
       disabled={bundling}
-      title="The cluster's objects, events, boot logs and the controller's and providers' log lines naming it, for finding why it is stuck; with no Secret"
+      title="Objects, events and logs, without Secrets"
       onClick={() => {
         void save();
       }}

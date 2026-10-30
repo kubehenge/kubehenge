@@ -105,7 +105,6 @@ export function Machines({ cluster: c }: { cluster: Cluster }): JSX.Element {
                     <button
                       type="button"
                       aria-label={`Boot log of ${m.node ?? m.name}`}
-                      title="What the node logged as it booted: cloud-init and the kubelet, RKE2 or k3s, or on Talos its kernel and services"
                       onClick={() => setBootLog(m)}
                     >
                       Boot log

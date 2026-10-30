@@ -139,7 +139,7 @@ function failure(c: Cluster): Standing | undefined {
     return { group: "needs", state: "error", reason, view: "machines" };
   }
   if (filled(c.controllerError)) {
-    return { group: "needs", state: "error", reason: "Kubehenge's controller fails on it", view: "" };
+    return { group: "needs", state: "error", reason: "Controller error", view: "" };
   }
   if (filled(c.stalled)) {
     return { group: "needs", state: "warning", reason: "Machines stuck for 20 minutes", view: "machines" };

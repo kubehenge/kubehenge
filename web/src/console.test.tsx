@@ -87,7 +87,7 @@ describe("the fleet", () => {
     expect(standing({ ...upgrading, controllerError: "Proxmox VE task UPID:pve1 failed: no space" })).toStrictEqual({
       group: "needs",
       state: "error",
-      reason: "Kubehenge's controller fails on it",
+      reason: "Controller error",
       view: "",
     });
     expect(standing({ ...creating, stalled: "ci-cp-1: VM template not found" })).toStrictEqual({
@@ -334,9 +334,9 @@ describe("the console", () => {
       },
     };
     render(<App />);
-    const failing = await screen.findByText("Kubehenge's controller fails on this cluster");
+    const failing = await screen.findByText("Controller error");
     expect(failing.closest(".error")).toHaveTextContent("creating the cluster's Proxmox VE objects: no space");
-    const stuck = screen.getByText("Machines stuck: none has become ready for 20 minutes").closest(".warning");
+    const stuck = screen.getByText("Machines stuck for 20 minutes").closest(".warning");
     expect(stuck).toHaveTextContent("web-w-3: no IP address");
   });
 

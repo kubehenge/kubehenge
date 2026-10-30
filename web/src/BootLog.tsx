@@ -63,7 +63,7 @@ export function BootLogDialog({
     >
       <ErrorBox message={error} />
       <ErrorBox message={askError} />
-      {data?.asked === true && <p className="muted">The controller is reading the log…</p>}
+      {data?.asked === true && <p className="muted">Reading…</p>}
       {log !== undefined && <p className="muted">Read {new Date(log.read).toLocaleString()}.</p>}
       <ErrorBox message={log?.error} />
       {(log?.sections ?? []).map((s) => (
@@ -72,7 +72,7 @@ export function BootLogDialog({
           <ErrorBox message={s.error} />
           {(!filled(s.error) || (s.lines ?? []).length > 0) && (
             <pre className="log pod-log" aria-label={`Log of ${s.name}`}>
-              {(s.lines ?? []).length === 0 ? "Nothing logged." : (s.lines ?? []).join("\n")}
+              {(s.lines ?? []).length === 0 ? "Nothing logged" : (s.lines ?? []).join("\n")}
             </pre>
           )}
         </section>

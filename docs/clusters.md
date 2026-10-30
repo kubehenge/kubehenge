@@ -189,8 +189,8 @@ The status reads **Provisioning**, **Available**, **Upgrading** or **Reconciling
 
 Above the views, the page shows what Kubehenge's controller reports on the Cluster, as kubectl shows it too ([troubleshooting.md](troubleshooting.md#cluster-api-objects)):
 
-- **Kubehenge's controller fails on this cluster**, with the error it last met, such as a Proxmox VE task that failed with the end of its log, until a reconcile succeeds (the condition `KubehengeReady`).
-- **Machines stuck**, when a machine is not ready and none has become ready for 20 minutes, the time the machine health check gives a node to join: the worst its Machines and ProxmoxMachines report, such as `VM template not found` (the condition `MachinesStalled`). Cluster API keeps trying meanwhile; the line goes once a machine is ready.
+- **Controller error**, the error Kubehenge's controller last met there, such as a Proxmox VE task that failed with the end of its log, until a reconcile succeeds (the condition `KubehengeReady`).
+- **Machines stuck for 20 minutes**, when a machine is not ready and none has become ready for 20 minutes, the time the machine health check gives a node to join: the worst its Machines and ProxmoxMachines report, such as `VM template not found` (the condition `MachinesStalled`). Cluster API keeps trying meanwhile; the line goes once a machine is ready.
 
 ### Staged changes
 

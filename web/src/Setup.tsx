@@ -1323,14 +1323,13 @@ function BootLogsChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element 
           aria-describedby={hint}
           onChange={(e) => set("nodeBootLogs", e.target.checked)}
         />{" "}
-        Read the boot logs of kubeadm, RKE2 and k3s nodes through the guest agent
+        Read boot logs
       </label>
-      <p className="muted" id={hint}>
-        Recommended. A node that does not join says why in its boot log, which a cluster&apos;s Machines tab and support
-        bundle then show. Kubehenge&apos;s controller reads it with VM.GuestAgent.FileRead on the clusters&apos; pool:
-        files only, no commands, and only those the node&apos;s agent may open, which Kubehenge&apos;s templates limit
-        to cloud-init&apos;s output and the node&apos;s copy of its boot&apos;s journals. Off, only Talos nodes&apos;
-        boot logs are read, through their Talos API.
+      <Info about="Nodes' boot logs">
+        Shows why a kubeadm, RKE2 or k3s node does not join. Talos nodes&apos; logs come through Talos either way.
+      </Info>
+      <p className="hint" id={hint}>
+        Grants VM.GuestAgent.FileRead on the clusters&apos; pool.
       </p>
     </fieldset>
   );
