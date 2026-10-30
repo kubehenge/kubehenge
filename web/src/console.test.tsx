@@ -314,9 +314,10 @@ describe("the console", () => {
     const runs = within(await screen.findByRole("complementary", { name: "Runs" }));
     const stalledRuns = within(await runs.findByRole("region", { name: "Stalled" }));
     await waitFor(() => expect(stalledRuns.getAllByRole("link")).toHaveLength(2));
-    expect(stalledRuns.getByRole("link", { name: /^ci/u })).toHaveTextContent("ci-cp-1: no IP address");
+    // What holds a run up stays on its page, out of the narrow column.
+    expect(stalledRuns.getByRole("link", { name: /^ci/u })).toHaveTextContent("Machines stuck for 20 minutes");
     const change = stalledRuns.getByRole("link", { name: /^db Change/u });
-    expect(change).toHaveTextContent("db-cp-4: VM template not found");
+    expect(change).not.toHaveTextContent("VM template not found");
 
     await user.click(change);
     await expect(screen.findByText("Stalled", { selector: ".status" })).resolves.toBeInTheDocument();

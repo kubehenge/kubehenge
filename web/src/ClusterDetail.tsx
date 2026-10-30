@@ -375,7 +375,6 @@ function SupportBundleButton({
     <button
       type="button"
       disabled={bundling}
-      title="Objects, events and logs, without Secrets"
       onClick={() => {
         void save();
       }}

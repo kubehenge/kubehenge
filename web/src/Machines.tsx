@@ -102,11 +102,7 @@ export function Machines({ cluster: c }: { cluster: Cluster }): JSX.Element {
                 <td title={new Date(m.created).toLocaleString()}>{age(m.created)}</td>
                 {c.allowed.kubeconfig && (
                   <td>
-                    <button
-                      type="button"
-                      aria-label={`Boot log of ${m.node ?? m.name}`}
-                      onClick={() => setBootLog(m)}
-                    >
+                    <button type="button" aria-label={`Boot log of ${m.node ?? m.name}`} onClick={() => setBootLog(m)}>
                       Boot log
                     </button>
                   </td>
