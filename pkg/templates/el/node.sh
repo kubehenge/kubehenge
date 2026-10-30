@@ -55,16 +55,20 @@ rm -rf "${repos}"
 rm -f /etc/pki/rpm-gpg/kubehenge-*.asc
 rm -rf /var/cache/* /var/log/* /var/lib/dnf
 
-# guest-exec, which the family's agent refuses by default, and the policy that has what it starts
-# run as from a root shell rather than confined to the agent's own domain.
-sed -i '/^FILTER_RPC_ARGS=/s/--allow-rpcs=/--allow-rpcs=guest-exec,guest-exec-status,/' /etc/sysconfig/qemu-ga
-grep -q -- '--allow-rpcs=guest-exec,guest-exec-status,' /etc/sysconfig/qemu-ga
+# guest-exec and the reading of files, which the family's agent refuses by default, and the policy
+# that has what guest-exec starts run as from a root shell rather than confined to the agent's own
+# domain, and lets the agent read the boot log (node/boot-log.sh) and cloud-init's output.
+agent_rpcs=guest-exec,guest-exec-status,guest-file-open,guest-file-read,guest-file-close
+sed -i "/^FILTER_RPC_ARGS=/s/--allow-rpcs=/--allow-rpcs=${agent_rpcs},/" /etc/sysconfig/qemu-ga
+grep -q -- "--allow-rpcs=${agent_rpcs}," /etc/sysconfig/qemu-ga
 install -D -m 0644 "${files}/node/kubehenge-qga.cil" /usr/share/kubehenge/kubehenge-qga.cil
 semodule -i /usr/share/kubehenge/kubehenge-qga.cil
 install -D -m 0644 "${files}/node/kubehenge-calico.cil" /usr/share/kubehenge/kubehenge-calico.cil
 semodule -i /usr/share/kubehenge/kubehenge-calico.cil
 printf 'd /var/lib/calico 0755 root root -\n' > /usr/lib/tmpfiles.d/kubehenge-calico.conf
 install -D -m 0644 "${files}/node/cloud.cfg" /etc/cloud/cloud.cfg.d/90-kubehenge.cfg
+install -D -m 0755 "${files}/node/boot-log.sh" /usr/libexec/kubehenge/boot-log
+install -m 0644 "${files}/node/kubehenge-boot-log.service" "${files}/node/kubehenge-boot-log.timer" /usr/lib/systemd/system/
 
 mkdir -p /usr/lib/bootc/install /usr/lib/bootc/kargs.d
 printf '[install]\nroot-fs-type = "xfs"\n' > /usr/lib/bootc/install/20-kubehenge.toml
@@ -76,8 +80,8 @@ printf 'kargs = ["console=tty0", "console=ttyS0,115200n8", "psi=1"]\n' > /usr/li
 # A clone's first boot, with its new machine ID, applies the presets again, and the family's end in
 # disabling every service they do not name.
 mkdir -p /usr/lib/systemd/system-preset
-printf 'enable qemu-guest-agent.service\n' > /usr/lib/systemd/system-preset/80-kubehenge.preset
-systemctl preset qemu-guest-agent
+printf 'enable qemu-guest-agent.service\nenable kubehenge-boot-log.timer\n' > /usr/lib/systemd/system-preset/80-kubehenge.preset
+systemctl preset qemu-guest-agent kubehenge-boot-log.timer
 # A node takes its updates as a new build of its template, which its cluster rolls out; fwupd
 # cannot go, since shim needs it.
 systemctl mask bootc-fetch-apply-updates.timer fwupd-refresh.timer

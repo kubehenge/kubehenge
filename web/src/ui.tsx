@@ -12,7 +12,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { ApiError, api } from "./api";
+import { ApiError, api, referenceMark } from "./api";
 import { useStaging } from "./staging-context";
 import type { ChangeRequest, Cluster } from "./types";
 
@@ -26,8 +26,12 @@ export function passphraseShort(passphrase: string): boolean {
   return [...passphrase].length < minPassphrase;
 }
 
-// errorMessage is what a caught value says, for showing it.
+// errorMessage is what a caught value says, for showing it, with the id of the request that failed,
+// which ErrorBox shows as its reference.
 export function errorMessage(err: unknown): string {
+  if (err instanceof ApiError && err.requestId !== "") {
+    return `${err.message}${referenceMark}${err.requestId}`;
+  }
   return err instanceof Error ? err.message : String(err);
 }
 
@@ -305,14 +309,35 @@ export function sentence(message: string): string {
   return /[.!?…:]$/u.test(capital) ? capital : `${capital}.`;
 }
 
+/**
+ * ErrorBox shows an error, with the reference errorMessage adds under it, which a user quotes to
+ * find the request in the appliance's journal.
+ */
 export function ErrorBox({ message }: { message?: string | undefined }): JSX.Element | null {
   if (message === undefined || message === "") {
     return null;
   }
   return (
     <div className="error" role="alert">
-      {sentence(message)}
+      <ErrorText message={message} />
     </div>
+  );
+}
+
+/** ErrorText is an error's message as a sentence, with its reference set apart under it. */
+export function ErrorText({ message }: { message: string }): JSX.Element {
+  const at = message.lastIndexOf(referenceMark);
+  const text = at === -1 ? message : message.slice(0, at);
+  const reference = at === -1 ? "" : message.slice(at + referenceMark.length);
+  return (
+    <>
+      {sentence(text)}
+      {reference !== "" && (
+        <small className="reference">
+          Reference: <span className="id">{reference}</span>
+        </small>
+      )}
+    </>
   );
 }
 

@@ -65,5 +65,6 @@ func leapRecipe(b Bake, keys map[string]string) (Recipe, error) {
 		Cleanup: append([][]string{{"sh", "-c", "rm -f /etc/ssh/ssh_host_*"}}, nodeCleanup...),
 		DiskGiB: transactionalDiskGiB,
 		Log:     buildLog,
+		BootLog: true,
 	}, nil
 }

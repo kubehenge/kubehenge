@@ -41,22 +41,25 @@ zypper --non-interactive install --no-recommends ${packages}
 rm -f /etc/zypp/repos.d/kubehenge-*.repo /etc/pki/rpm-gpg/kubehenge-*.asc
 zypper --non-interactive clean --all
 
-# guest-exec, should the agent refuse it, and the policy that has what it starts run as from a root
-# shell rather than confined to the agent's own domain.
+# guest-exec and the reading of files, should the agent refuse them, and the policy that has what
+# guest-exec starts run as from a root shell rather than confined to the agent's own domain, and
+# lets the agent read the boot log (node/boot-log.sh) and cloud-init's output.
 if [ -f /etc/sysconfig/qemu-ga ]; then
-    sed -i '/^FILTER_RPC_ARGS=/s/--allow-rpcs=/--allow-rpcs=guest-exec,guest-exec-status,/' /etc/sysconfig/qemu-ga
+    sed -i '/^FILTER_RPC_ARGS=/s/--allow-rpcs=/--allow-rpcs=guest-exec,guest-exec-status,guest-file-open,guest-file-read,guest-file-close,/' /etc/sysconfig/qemu-ga
 fi
 install -D -m 0644 "${files}/node/kubehenge-qga.cil" /usr/share/kubehenge/kubehenge-qga.cil
 semodule -i /usr/share/kubehenge/kubehenge-qga.cil
 install -D -m 0644 "${files}/node/kubehenge-calico.cil" /usr/share/kubehenge/kubehenge-calico.cil
 semodule -i /usr/share/kubehenge/kubehenge-calico.cil
 printf 'd /var/lib/calico 0755 root root -\n' > /usr/lib/tmpfiles.d/kubehenge-calico.conf
+install -D -m 0755 "${files}/node/boot-log.sh" /usr/libexec/kubehenge/boot-log
+install -m 0644 "${files}/node/kubehenge-boot-log.service" "${files}/node/kubehenge-boot-log.timer" /usr/lib/systemd/system/
 
 # A clone's first boot, with its new machine ID, applies the presets again, which enable only the
 # services they name.
 mkdir -p /usr/lib/systemd/system-preset
-printf 'enable qemu-guest-agent.service\n' > /usr/lib/systemd/system-preset/80-kubehenge.preset
-systemctl preset qemu-guest-agent
+printf 'enable qemu-guest-agent.service\nenable kubehenge-boot-log.timer\n' > /usr/lib/systemd/system-preset/80-kubehenge.preset
+systemctl preset qemu-guest-agent kubehenge-boot-log.timer
 
 # A node takes its updates as a new build of its template, which its cluster rolls out, and never
 # reboots on its own.

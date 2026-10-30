@@ -131,7 +131,7 @@ func (s *Server) cachedTalosReleases(ctx context.Context) ([]string, error) {
 	}
 	all, err := s.TalosReleases(ctx)
 	if err != nil {
-		s.Log.Warn("reading the Talos releases", "error", err)
+		s.Log.WarnContext(ctx, "reading the Talos releases", "error", err)
 		return []string{}, fmt.Errorf("the Talos releases could not be read: %w", err)
 	}
 	newest := map[int]string{}
@@ -185,7 +185,7 @@ func (s *Server) publishedVersions(ctx context.Context, distribution string) ver
 	}
 	ch, err := s.Releases.Channels(ctx, distribution, templates.DefaultNodeOS)
 	if err != nil {
-		s.Log.Warn("reading release channels", "distribution", distribution, "error", err)
+		s.Log.WarnContext(ctx, "reading release channels", "distribution", distribution, "error", err)
 		return versionsView{Versions: []string{}, Error: "the release channels could not be read: " + err.Error()}
 	}
 	o := ch.Versions()
@@ -272,7 +272,7 @@ func (s *Server) kubeadmVersions(ctx context.Context, nodeOS templates.NodeOS) v
 	}
 	class := &clusterv1.ClusterClass{}
 	if err := kube.Get(ctx, client.ObjectKey{Namespace: s.ClassNamespace, Name: provisioner.ClassPrefix + string(templates.Kubeadm)}, class); err != nil {
-		s.Log.Warn("reading the kubeadm ClusterClass", "error", err)
+		s.Log.WarnContext(ctx, "reading the kubeadm ClusterClass", "error", err)
 		return versionsView{Versions: []string{}, Error: "the kubeadm cluster class could not be read"}
 	}
 	raw, ok := class.Annotations[provisioner.KubeadmVersionsAnnotation]
@@ -281,7 +281,7 @@ func (s *Server) kubeadmVersions(ctx context.Context, nodeOS templates.NodeOS) v
 	}
 	recorded, err := provisioner.ParseKubeadmVersions(raw)
 	if err != nil {
-		s.Log.Warn("reading the kubeadm ClusterClass", "error", err)
+		s.Log.WarnContext(ctx, "reading the kubeadm ClusterClass", "error", err)
 		return versionsView{Versions: []string{}, Error: "the kubeadm cluster class could not be read"}
 	}
 	type version struct{ minor, patch int }

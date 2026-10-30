@@ -145,3 +145,35 @@ absent() {
         *) return 1 ;;
     esac
 }
+
+# boot_logs <namespace> <Cluster> <Machine...>: asks Kubehenge's controller for the machines' boot
+# logs as the interface and kubectl alike ask, by naming them in the Cluster's
+# kubehenge.dev/boot-log-request annotation, waits until it has taken every name off, and prints
+# what it read, the entries of the ConfigMap <Cluster>-boot-logs as one JSON object by machine.
+boot_logs() {
+    logs_ns=$1 logs_cluster=$2
+    shift 2
+    logs_asked=$(printf '%s,' "$@")
+    kubectl -n "${logs_ns}" annotate --overwrite "cluster/${logs_cluster}" "kubehenge.dev/boot-log-request=${logs_asked%,}" > /dev/null
+    until_true 600 "the controller reads the boot logs of $*" boot_logs_answered
+    kubectl -n "${logs_ns}" get configmap "${logs_cluster}-boot-logs" -o json | jq -c '.data | map_values(fromjson)'
+}
+boot_logs_answered() {
+    kubectl -n "${logs_ns}" get "cluster/${logs_cluster}" -o json |
+        jq -e '.metadata.annotations["kubehenge.dev/boot-log-request"] // "" | . == ""' > /dev/null
+}
+
+# boot_log_shows <logs> <Machine> <log> <pattern>: whether the machine's boot log, as boot_logs
+# printed it, holds the log of that name read without an error, with a line matching the pattern (a
+# jq regular expression).
+boot_log_shows() {
+    printf '%s' "$1" | jq -e --arg m "$2" --arg s "$3" --arg re "$4" '.[$m] | (.error // "") == "" and
+        any(.sections[]?; .name == $s and (.error // "") == "" and any(.lines[]?; test($re)))' > /dev/null
+}
+
+# boot_log_summary <logs> <Machine>: what was read of the machine's boot log, each log's name, error
+# and last lines, on standard error.
+boot_log_summary() {
+    printf '%s' "$1" | jq -r --arg m "$2" '.[$m] // {error: "not read"} | "boot log of \($m): \(.error // "read")",
+        (.sections[]? | "--- \(.name): \(.error // "read"), \(.lines // [] | length) lines", (.lines // [] | .[-5:][] | "    " + .))' >&2
+}

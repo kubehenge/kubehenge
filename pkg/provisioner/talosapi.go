@@ -88,6 +88,14 @@ func readTalosconfig(ctx context.Context, r client.Reader, namespace, cluster st
 // advises against reaching nodes through the control plane's virtual address, which moves while
 // the node holding it reboots.
 func DialTalos(ctx context.Context, raw []byte, address string) (TalosNode, error) { //nolint:ireturn // a TalosDialer, which tests stand in for with nodes of their own
+	n, err := connectTalos(ctx, raw, address)
+	if err != nil {
+		return nil, err
+	}
+	return n, nil
+}
+
+func connectTalos(ctx context.Context, raw []byte, address string) (*talosNode, error) {
 	cfg, err := talosconfig.FromBytes(raw)
 	if err != nil {
 		return nil, fmt.Errorf("reading the talosconfig: %w", err)

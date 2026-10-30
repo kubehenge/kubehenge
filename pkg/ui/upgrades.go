@@ -183,11 +183,11 @@ func (s *Server) upgrade(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	if err := up.Spool.Request(appliance.UpdateRequest{Version: req.Version}); err != nil {
-		s.Log.Error("upgrade request", "error", err)
+		s.Log.ErrorContext(r.Context(), "upgrade request", "error", err)
 		writeError(w, http.StatusInternalServerError, "the upgrade could not start")
 		return
 	}
-	s.Log.Info("appliance upgrade requested", "user", u.ticket.Username, "from", up.Current, "to", req.Version)
+	s.Log.InfoContext(r.Context(), "appliance upgrade requested", "user", u.ticket.Username, "from", up.Current, "to", req.Version)
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -227,11 +227,11 @@ func (s *Server) upgradeSettings(w http.ResponseWriter, r *http.Request, u user)
 		err = os.WriteFile(up.SettingsPath, raw, privateFile)
 	}
 	if err != nil {
-		s.Log.Error("upgrade settings", "error", err)
+		s.Log.ErrorContext(r.Context(), "upgrade settings", "error", err)
 		writeError(w, http.StatusInternalServerError, "could not save the settings")
 		return
 	}
-	s.Log.Info("appliance upgrade policy set", "user", u.ticket.Username, "policy", req.Policy, "hour", req.Hour, "timeZone", req.TimeZone)
+	s.Log.InfoContext(r.Context(), "appliance upgrade policy set", "user", u.ticket.Username, "policy", req.Policy, "hour", req.Hour, "timeZone", req.TimeZone)
 	up.wake()
 	writeJSON(w, http.StatusOK, req)
 }

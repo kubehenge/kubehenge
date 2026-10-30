@@ -138,6 +138,9 @@ type Recipe struct {
 	MemoryMiB int
 	// Log is the bake's own log in the guest, whose end a failed check reports.
 	Log string
+	// BootLog has the bake prove, once the node's checks pass, that the guest agent hands out its
+	// boot log (BootLogFile) through Proxmox VE.
+	BootLog bool
 }
 
 // NodeImageBoot is the boot of a node image the bake installed, with cloud-init as a node's first

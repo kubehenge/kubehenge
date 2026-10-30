@@ -1,7 +1,9 @@
 #!/bin/sh
 # End-to-end test of one Kubehenge ClusterClass on a Proxmox VE host, against a running management
 # cluster: create a cluster trusting an OpenID issuer, hardened to the CIS benchmark and enforcing
-# Pod Security's restricted level, check sign-in through it, its nodes against the benchmark, its
+# Pod Security's restricted level, check sign-in through it, Kubehenge's conditions on it, its
+# machines' boot logs, its support bundle, the controller's health and metrics, its nodes against
+# the benchmark, its
 # cloud controller manager, ingress controller, Gateway API, load balancer and persistent volumes,
 # what the health page's read-only identities may see in it, that the shared Headlamp's sign-in
 # identities are there for the interface's namespaces alone and do no more than they should, switch
@@ -138,6 +140,7 @@ ns=${KUBEHENGE_E2E_NAMESPACE:-${name}}
 issuer_pid=
 grafana_pid=
 recorder_pid=
+metrics_pid=
 # The HA rule the nodes are labelled with, and the guest it needs.
 ha_rule=''
 ha_vmid=''
@@ -186,6 +189,7 @@ cleanup() {
     [ -z "${grafana_pid}" ] || kill "${grafana_pid}" 2> /dev/null || true
     [ -z "${s3_pid}" ] || kill "${s3_pid}" 2> /dev/null || true
     [ -z "${recorder_pid}" ] || kill "${recorder_pid}" 2> /dev/null || true
+    [ -z "${metrics_pid}" ] || kill "${metrics_pid}" 2> /dev/null || true
     # shellcheck disable=SC2310 # each removal is tried, whatever happened to those before it
     remove_ha_rule || true
     if [ "${status}" -ne 0 ] && [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
@@ -220,6 +224,34 @@ remove_ha_rule() {
 }
 wl() { KUBECONFIG="${work}/workload" kubectl "$@"; }
 json_list() { printf '%s' "$1" | jq -R 'split(",")'; }
+# guest <node> <vmid> <command>: runs a shell command in a VM through its guest agent and prints its
+# output; fails when the command or the agent does. It is polled with set -e off, so each step
+# returns its own failure.
+guest() {
+    request=$(jq -cn --arg c "$3" '{command: ["sh", "-c", $c]}')
+    # shellcheck disable=SC2310 # guest is polled with set -e off, so a failed request is returned.
+    pid=$(pve -X POST -H 'Content-Type: application/json' -d "${request}" \
+        "${KUBEHENGE_PROXMOX_URL}/api2/json/nodes/$1/qemu/$2/agent/exec" | jq -r .data.pid) || return 1
+    tries=0
+    # shellcheck disable=SC2310 # polled until the command has exited; a failed request is tried again.
+    until result=$(pve_get "nodes/$1/qemu/$2/agent/exec-status?pid=${pid}") &&
+        printf '%s' "${result}" | jq -e '.data.exited == 1' > /dev/null; do
+        tries=$((tries + 1))
+        [ "${tries}" -lt 60 ] || return 1
+        sleep 1
+    done
+    printf '%s' "${result}" | jq -r '.data."out-data" // ""'
+    printf '%s' "${result}" | jq -e '.data.exitcode == 0' > /dev/null
+}
+# on_machines "<Machine names>" <command>: runs the command on those Machines' VMs.
+on_machines() {
+    for m in $1; do
+        pm=$(kubectl -n "${ns}" get machine "${m}" -o jsonpath='{.spec.infrastructureRef.name}')
+        pm_node=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.status.proxmoxNode}')
+        pm_vmid=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.spec.virtualMachineID}')
+        guest "${pm_node}" "${pm_vmid}" "$2"
+    done
+}
 b64url() { base64 -w0 | tr '+/' '-_' | tr -d '='; }
 
 step "an OpenID issuer for the cluster to trust"
@@ -613,6 +645,169 @@ if [ "${distribution}" = talos ]; then
         [ "${release}" = "${talos_from}" ] || fail "the Talos API of ${address} reports '${release}', not ${talos_from}"
     done
 fi
+
+step "Kubehenge reports the cluster reconciled and its machines settled"
+# cluster_condition <type> <status> <reason>: whether the Cluster has the condition so.
+cluster_condition() {
+    kubectl -n "${ns}" get "cluster/${name}" -o json |
+        jq -e --arg t "$1" --arg s "$2" --arg r "$3" 'any(.status.conditions[]?; .type == $t and .status == $s and .reason == $r)' > /dev/null
+}
+until_true 300 "KubehengeReady True" cluster_condition KubehengeReady True Reconciled
+until_true 600 "MachinesStalled False, settled" cluster_condition MachinesStalled False Settled
+kubectl -n "${ns}" get "cluster/${name}" -o json |
+    jq -r '.status.conditions[] | select(.type == "KubehengeReady" or .type == "MachinesStalled") | "\(.type) \(.status) \(.reason)"'
+
+step "every machine's boot log, read by the controller as the interface asks for it"
+control_planes=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name},cluster.x-k8s.io/control-plane" -o jsonpath='{.items[*].metadata.name}')
+workers=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name},!cluster.x-k8s.io/control-plane" -o jsonpath='{.items[*].metadata.name}')
+if [ -z "${control_planes}" ] || [ -z "${workers}" ]; then
+    fail "the cluster has control planes '${control_planes}' and workers '${workers}'"
+fi
+# shellcheck disable=SC2086 # one Machine per word
+boot_log=$(boot_logs "${ns}" "${name}" ${control_planes} ${workers})
+# expect_boot_log <Machine> <log> <pattern>: the machine's boot log holds the log with a line
+# matching the pattern; when not, what was read, and on a node with a guest agent that runs commands
+# what SELinux denied there, the likeliest reason its agent could not read a file.
+expect_boot_log() {
+    # shellcheck disable=SC2310 # its failure is reported below.
+    if boot_log_shows "${boot_log}" "$@"; then
+        echo "$1: $2"
+        return
+    fi
+    boot_log_summary "${boot_log}" "$1"
+    if [ "${distribution}" != talos ]; then
+        echo "SELinux's denials on $1:" >&2
+        # shellcheck disable=SC2310 # what the node says is printed whether or not anything was denied.
+        on_machines "$1" "journalctl -b -k -o cat --no-pager | grep -F 'avc:  denied'; ausearch -m AVC -ts boot 2> /dev/null" >&2 || true
+    fi
+    fail "the boot log of $1 holds no $2 with a line matching '$3'"
+}
+journal_line='\[[0-9]+\]: '
+if [ "${distribution}" = talos ]; then
+    for m in ${control_planes} ${workers}; do
+        expect_boot_log "${m}" "kernel messages" .
+        for service in machined apid kubelet; do
+            expect_boot_log "${m}" "${service}" .
+        done
+    done
+    for m in ${control_planes}; do
+        expect_boot_log "${m}" trustd .
+        expect_boot_log "${m}" etcd .
+    done
+else
+    for m in ${control_planes} ${workers}; do
+        expect_boot_log "${m}" cloud-init-output.log '^Cloud-init v[.] '
+        expect_boot_log "${m}" "journal of cloud-init" "${journal_line}"
+    done
+    case "${distribution}" in
+        kubeadm) server_unit=kubelet agent_unit=kubelet ;;
+        rke2) server_unit=rke2-server agent_unit=rke2-agent ;;
+        *) server_unit=k3s agent_unit=k3s-agent ;;
+    esac
+    for m in ${control_planes}; do
+        expect_boot_log "${m}" "journal of ${server_unit}" "${journal_line}"
+    done
+    for m in ${workers}; do
+        expect_boot_log "${m}" "journal of ${agent_unit}" "${journal_line}"
+    done
+    if [ "${distribution}" = kubeadm ]; then
+        for m in ${control_planes} ${workers}; do
+            expect_boot_log "${m}" "journal of containerd" "${journal_line}"
+        done
+    fi
+fi
+
+step "the cluster's support bundle: the Cluster, its boot logs, no Secret and no secret"
+bundle=${work}/bundle.tar.gz
+go -C "$(dirname "$0")/../.." run ./cmd/kubehenge diagnose "${ns}/${name}" --output "${bundle}"
+mkdir "${work}/bundle"
+tar -xzf "${bundle}" -C "${work}/bundle"
+bundled=${work}/bundle/${ns}-${name}
+cat "${bundled}/manifest.txt"
+grep -qx 'kind: Cluster' "${bundled}/objects/cluster.x-k8s.io/Cluster/${name}.yaml" ||
+    fail "the bundle holds no Cluster ${name}"
+for m in ${control_planes} ${workers}; do
+    grep -qF "${m}" "${bundled}/boot-logs.yaml" || fail "the bundle holds no boot log of ${m}"
+done
+[ ! -e "${bundled}/objects/core/Secret" ] || fail "the bundle holds Secrets in objects/core/Secret"
+secret_objects=$(grep -rlx 'kind: Secret' "${bundled}" || true)
+[ -z "${secret_objects}" ] || fail "the bundle holds Secrets in ${secret_objects}"
+# The secrets the test knows of the cluster, one per line, which no file of the bundle may hold:
+# its Proxmox VE token, its admin kubeconfig's key, RKE2's and k3s's join token, kubeadm's bootstrap
+# tokens and the talosconfig's key.
+(
+    umask 077
+    {
+        printf '%s\n' "${creds}" | jq -r .tokenSecret
+        kubectl -n "${ns}" get secret "${name}-kubeconfig" -o jsonpath='{.data.value}' | base64 -d |
+            sed -n 's/^ *\(client-key-data\|token\): *//p'
+        # shellcheck disable=SC2310 # absent only reads, and its answer decides.
+        if ! absent kubectl -n "${ns}" get secret "${name}-token"; then
+            kubectl -n "${ns}" get secret "${name}-token" -o jsonpath='{.data.value}' | base64 -d
+            echo
+        fi
+        if [ "${distribution}" = kubeadm ]; then
+            kubectl -n "${ns}" get kubeadmconfigs -l "cluster.x-k8s.io/cluster-name=${name}" -o json |
+                jq -r '.items[].spec.joinConfiguration.discovery.bootstrapToken.token // empty'
+        fi
+        if [ "${distribution}" = talos ]; then
+            sed -n 's/^ *key: *//p' "${work}/talosconfig"
+        fi
+    } | grep -v '^$' > "${work}/known-secrets"
+)
+known=$(wc -l < "${work}/known-secrets")
+[ "${known}" -ge 2 ] || fail "the test found only ${known} of the cluster's secrets to look for"
+leaked=$(grep -rlF -f "${work}/known-secrets" "${bundled}" || true)
+[ -z "${leaked}" ] || fail "the bundle holds one of the cluster's secrets in ${leaked}"
+leaked=$(grep -rlE 'PRIVATE KEY-----|PVEAPIToken=[^[]' "${bundled}" || true)
+[ -z "${leaked}" ] || fail "the bundle holds a private key or a Proxmox VE token in ${leaked}"
+echo "none of the cluster's ${known} secrets the test knows is in the bundle"
+
+step "Kubehenge's controller: its health check, and its metrics for those allowed them alone"
+controller_pod=$(kubectl -n kubehenge-system get pods -l app.kubernetes.io/name=kubehenge-controller -o jsonpath='{.items[0].metadata.name}')
+healthz=$(kubectl get --raw "/api/v1/namespaces/kubehenge-system/pods/${controller_pod}:8081/proxy/healthz")
+[ "${healthz}" = ok ] || fail "the controller's /healthz answers '${healthz}'"
+kubectl -n kubehenge-system get secret kubehenge-extension-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > "${work}/metrics-ca.crt"
+metrics_port=$((20000 + $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % 10000))
+kubectl -n kubehenge-system port-forward service/kubehenge-controller-metrics "${metrics_port}:8443" > "${work}/metrics-forward.log" 2>&1 &
+metrics_pid=$!
+metrics_host=kubehenge-controller-metrics.kubehenge-system.svc
+# metrics_status [curl options...]: the HTTP status the metrics endpoint answers with, verified
+# against the controller's CA under the Service's name; its body in ${work}/metrics.
+metrics_status() {
+    curl -sS --max-time 30 -o "${work}/metrics" -w '%{http_code}' --cacert "${work}/metrics-ca.crt" \
+        --resolve "${metrics_host}:${metrics_port}:127.0.0.1" "$@" "https://${metrics_host}:${metrics_port}/metrics"
+}
+# shellcheck disable=SC2310 # polled with set -e off, so a failed connection is only a retry.
+metrics_reached() { metrics_status > /dev/null 2>&1; }
+until_true 60 "the metrics endpoint reached" metrics_reached
+answer=$(metrics_status)
+[ "${answer}" = 401 ] || fail "the metrics endpoint answers ${answer} to a request without credentials, not 401"
+reader=e2e-metrics-${suffix}
+kubectl -n kubehenge-system create serviceaccount "${reader}" > /dev/null
+reader_token=$(kubectl -n kubehenge-system create token "${reader}" --duration=10m)
+answer=$(metrics_status -H "Authorization: Bearer ${reader_token}")
+[ "${answer}" = 403 ] || fail "the metrics endpoint answers ${answer} to an account without kubehenge-metrics-reader, not 403"
+kubectl create clusterrolebinding "${reader}" --clusterrole kubehenge-metrics-reader --serviceaccount "kubehenge-system:${reader}" > /dev/null
+# The binding reaches the API server's authoriser within moments.
+read_metrics() {
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    answer=$(metrics_status -H "Authorization: Bearer ${reader_token}") || return 1
+    [ "${answer}" = 200 ]
+}
+until_true 60 "the metrics endpoint answers kubehenge-metrics-reader" read_metrics
+# The boot logs read above were counted.
+if ! grep -qE '^controller_runtime_reconcile_total\{controller="boot-logs",result="success"\} [1-9]' "${work}/metrics"; then
+    grep '^controller_runtime_reconcile_total' "${work}/metrics" >&2 || true
+    fail "the controller's metrics count no reconcile of boot logs"
+fi
+# Kubehenge's own, of the hook Cluster API calls on every change of a cluster's topology.
+grep -E '^kubehenge_hook_duration_seconds_count\{hook="generate-patches"\} [1-9]' "${work}/metrics" ||
+    fail "the controller's metrics time no call of its generate-patches hook"
+kill "${metrics_pid}"
+metrics_pid=
+kubectl delete clusterrolebinding "${reader}" > /dev/null
+kubectl -n kubehenge-system delete serviceaccount "${reader}" > /dev/null
 
 # kube-bench carries no benchmark for Talos, whose components keep their configuration where none
 # of its checks look.
@@ -1083,35 +1278,6 @@ if [ "${KUBEHENGE_E2E_DATASTORE_ALLOCATE:-}" = 1 ]; then
     until_true 900 "the CSI plugin at ${held}" csi_at "${held}"
     persistent_volume
 fi
-
-# guest <node> <vmid> <command>: runs a shell command in a VM through its guest agent and prints its
-# output; fails when the command or the agent does. It is polled with set -e off, so each step
-# returns its own failure.
-guest() {
-    request=$(jq -cn --arg c "$3" '{command: ["sh", "-c", $c]}')
-    # shellcheck disable=SC2310 # guest is polled with set -e off, so a failed request is returned.
-    pid=$(pve -X POST -H 'Content-Type: application/json' -d "${request}" \
-        "${KUBEHENGE_PROXMOX_URL}/api2/json/nodes/$1/qemu/$2/agent/exec" | jq -r .data.pid) || return 1
-    tries=0
-    # shellcheck disable=SC2310 # polled until the command has exited; a failed request is tried again.
-    until result=$(pve_get "nodes/$1/qemu/$2/agent/exec-status?pid=${pid}") &&
-        printf '%s' "${result}" | jq -e '.data.exited == 1' > /dev/null; do
-        tries=$((tries + 1))
-        [ "${tries}" -lt 60 ] || return 1
-        sleep 1
-    done
-    printf '%s' "${result}" | jq -r '.data."out-data" // ""'
-    printf '%s' "${result}" | jq -e '.data.exitcode == 0' > /dev/null
-}
-# on_machines "<Machine names>" <command>: runs the command on those Machines' VMs.
-on_machines() {
-    for m in $1; do
-        pm=$(kubectl -n "${ns}" get machine "${m}" -o jsonpath='{.spec.infrastructureRef.name}')
-        pm_node=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.status.proxmoxNode}')
-        pm_vmid=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.spec.virtualMachineID}')
-        guest "${pm_node}" "${pm_vmid}" "$2"
-    done
-}
 
 if [ "${KUBEHENGE_E2E_VOLUME_SNAPSHOTS:-}" = 1 ]; then
     # csi_controller_is <Secret> <true|false>: the CSI plugin's controller is rolled out reading its

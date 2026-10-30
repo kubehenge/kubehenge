@@ -127,7 +127,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return nil
 }
 
-// Reconcile implements reconcile.Reconciler.
+// Reconcile implements reconcile.Reconciler, and records on the Cluster how each reconcile ended.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	cluster := &clusterv1.Cluster{}
 	if err := r.Client.Get(ctx, req.NamespacedName, cluster); err != nil {
@@ -139,6 +139,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if !Owns(cluster, r.ClassNamespace) {
 		return ctrl.Result{}, nil
 	}
+	result, err := r.reconcileCluster(ctx, cluster)
+	r.report(ctx, cluster, err)
+	return result, err
+}
+
+func (r *Reconciler) reconcileCluster(ctx context.Context, cluster *clusterv1.Cluster) (ctrl.Result, error) {
 	if !cluster.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, cluster)
 	}
