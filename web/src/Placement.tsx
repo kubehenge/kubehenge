@@ -2,7 +2,7 @@ import { useEffect, useId, useState, type JSX } from "react";
 
 import { api } from "./api";
 import type { Cluster, ClusterClass, HARule, HARules, PveNode, Storage } from "./types";
-import { Dialog, ErrorBox, Field, errorMessage, filled, useChange } from "./ui";
+import { Detail, Dialog, ErrorBox, Field, Info, errorMessage, filled, useChange } from "./ui";
 import { flag, record, texts } from "./values";
 
 /** Where a cluster's VMs may run: any node, the nodes of an HA rule, or nodes chosen one by one. */
@@ -29,7 +29,7 @@ export const allowedNodes = (p: Place): string[] | undefined => (p.placement ===
 export function placeText(p: Place): string {
   const byPlacement: Record<Placement, string> = {
     any: "Any node",
-    rule: `The nodes of HA rule ${p.haRule}: ${p.nodes.join(", ")}`,
+    rule: `HA rule ${p.haRule}: ${p.nodes.join(", ")}`,
     nodes: p.nodes.join(", "),
   };
   return byPlacement[p.placement];
@@ -37,10 +37,10 @@ export function placeText(p: Place): string {
 
 export function placeProblem(p: Place): string | undefined {
   if (p.placement === "rule" && !p.haRule) {
-    return "Choose an HA rule.";
+    return "Choose an HA rule";
   }
   if (p.placement === "nodes" && p.nodes.length === 0) {
-    return "Choose at least one node.";
+    return "Choose at least one node";
   }
   return undefined;
 }
@@ -74,15 +74,21 @@ export function useHARules(): HARulesRead {
 const ruleLabel = (r: HARule): string =>
   `${r.rule}${filled(r.comment) ? ` (${r.comment})` : ""}: ${r.allowed.join(", ")}${r.strict === true ? ", strict" : ""}`;
 
-function rulesHint({ haRules, haRulesError }: HARulesRead): string | undefined {
+// rulesHint says why no HA rule can be chosen; a read failure's message sits behind Detail.
+function rulesHint({ haRules, haRulesError }: HARulesRead): JSX.Element | undefined {
   if (filled(haRulesError)) {
-    return `Proxmox VE's HA rules could not be read: ${haRulesError}.`;
+    return (
+      <>
+        Couldn&apos;t read the HA rules
+        <Detail>{haRulesError}</Detail>
+      </>
+    );
   }
   if (haRules && !haRules.readable) {
-    return "Reading Proxmox VE's HA rules takes Sys.Audit on /, unless an administrator offers them.";
+    return <>Reading HA rules needs Sys.Audit on /</>;
   }
   if (haRules?.rules.length === 0) {
-    return "Proxmox VE has no enabled HA node-affinity rule with a node you can see.";
+    return <>No enabled HA node-affinity rules</>;
   }
   return undefined;
 }
@@ -112,7 +118,7 @@ export function PlacementFields({
   value: Place;
   onChange: (p: Place) => void;
   problem: string | undefined;
-  hint: string;
+  hint?: string;
   nodes: PveNode[];
   /** The nodes the cluster already has, offered even where the user cannot see them. */
   kept?: string[] | undefined;
@@ -131,12 +137,14 @@ export function PlacementFields({
     <fieldset
       className={framed ? "group" : "bare"}
       aria-label={framed ? undefined : "Placement"}
-      aria-describedby="placement-hint"
+      aria-describedby={hint === undefined ? undefined : "placement-hint"}
     >
       {framed && <legend>Placement</legend>}
-      <p className="hint" id="placement-hint">
-        {hint}
-      </p>
+      {hint !== undefined && (
+        <p className="hint" id="placement-hint">
+          {hint}
+        </p>
+      )}
       <label className="check">
         <input type="radio" name="placement" checked={value.placement === "any"} onChange={() => choose("any")} /> Any
         node
@@ -149,7 +157,7 @@ export function PlacementFields({
           disabled={rules.length === 0}
           onChange={() => choose("rule")}
         />{" "}
-        The nodes of an HA rule
+        HA rule nodes
       </label>
       {value.placement === "rule" && (
         <Field label="HA rule" error={problem}>
@@ -171,10 +179,10 @@ export function PlacementFields({
           )}
         </Field>
       )}
-      {rulesNote !== undefined && <p className="hint">{rulesNote}</p>}
+      {rulesNote !== undefined && <div className="hint">{rulesNote}</div>}
       <label className="check">
         <input type="radio" name="placement" checked={value.placement === "nodes"} onChange={() => choose("nodes")} />{" "}
-        Nodes I choose
+        Chosen nodes
       </label>
       {value.placement === "nodes" && (
         <fieldset className="group">
@@ -247,22 +255,26 @@ export function useHAOffered(className: string, storage: string | undefined): bo
 }
 
 /** haText describes a cluster's Proxmox VE HA setting; unset means it takes part. */
-export const haText = (on: boolean): string =>
-  on ? "Control-plane VMs kept on separate nodes, restarted elsewhere when a node fails" : "Off";
+export const haText = (on: boolean): string => (on ? "On" : "Off");
 
-/** HAField switches Proxmox VE HA for a cluster's control-plane VMs. */
+/**
+ * HAField switches Proxmox VE HA for a cluster's control-plane VMs. The watchdog an HA VM arms on its
+ * node stays in view: it restarts the node itself on a loss of quorum.
+ */
 export function HAField({ checked, onChange }: { checked: boolean; onChange: (on: boolean) => void }): JSX.Element {
   const hint = useId();
   return (
     <>
       <label className="check">
         <input type="checkbox" checked={checked} aria-describedby={hint} onChange={(e) => onChange(e.target.checked)} />{" "}
-        Keep the control-plane VMs on separate nodes with Proxmox VE HA
+        Use Proxmox VE HA
       </label>
-      <div className="hint" id={hint}>
-        Proxmox VE HA moves the control-plane VMs apart while they run and restarts one on another node when its node
-        fails. A node that runs an HA VM arms Proxmox VE&apos;s watchdog, so it restarts itself if it loses quorum.
-      </div>
+      <Info about="Proxmox VE HA">
+        Keeps control-plane VMs on separate nodes and restarts them elsewhere when a node fails.
+      </Info>
+      <p className="hint" id={hint}>
+        Nodes running HA VMs reboot if they lose quorum
+      </p>
     </>
   );
 }
@@ -275,7 +287,7 @@ export function HADialog({ cluster: c, onClose }: { cluster: Cluster; onClose: (
   const { busy, error, send } = useChange(c, onClose);
   return (
     <Dialog
-      title="Proxmox VE HA"
+      title="Edit Proxmox VE HA"
       onClose={onClose}
       onSubmit={() => {
         void send({ variables: { proxmoxHA: on } });
@@ -320,7 +332,7 @@ export function PlacementDialog({ cluster: c, onClose }: { cluster: Cluster; onC
   const changed = JSON.stringify(next) !== JSON.stringify(allowedNodes(initial) ?? null);
   return (
     <Dialog
-      title="Placement"
+      title="Edit placement"
       onClose={onClose}
       onSubmit={() => {
         void send({ variables: { allowedNodes: next } });
@@ -340,7 +352,7 @@ export function PlacementDialog({ cluster: c, onClose }: { cluster: Cluster; onC
         value={value}
         onChange={setValue}
         problem={problem}
-        hint="The Proxmox VE nodes the cluster's VMs may run on. A change applies to the VMs created after it, by scaling up, an upgrade or a replacement; those running stay where they are."
+        hint="New VMs follow it, running VMs stay where they are"
         nodes={nodes}
         kept={kept}
         rules={rules}
@@ -378,15 +390,15 @@ export function HAGroupsField({
     <>
       <label className="check">
         <input type="checkbox" checked={checked} aria-describedby={hint} onChange={(e) => onChange(e.target.checked)} />{" "}
-        Label the nodes with their Proxmox VE HA groups
+        Add HA group labels
       </label>
-      <div className="hint" id={hint}>
-        The cloud controller manager labels each node group.topology.proxmox.sinextra.dev/&lt;group&gt; for the HA
-        groups or node-affinity rules its Proxmox VE node is in. Reading them takes Sys.Audit on /, which the
-        cluster&apos;s Proxmox VE token holds while they are on, unpropagated: it can read the Proxmox VE cluster&apos;s
-        own configuration (firewall rules, backup jobs, HA, the corosync configuration), but nothing of its guests,
-        storages or nodes.
-      </div>
+      <Info about="HA group labels">
+        Labels nodes group.topology.proxmox.sinextra.dev/&lt;group&gt; by HA group and node-affinity rule. Sys.Audit
+        cannot read guests or storages.
+      </Info>
+      <p className="hint" id={hint}>
+        The token gets Sys.Audit on /: reads the cluster configuration
+      </p>
     </>
   );
 }
@@ -415,7 +427,7 @@ export function HAGroupsDialog({ cluster: c, onClose }: { cluster: Cluster; onCl
   const { busy, error, send } = useChange(c, onClose);
   return (
     <Dialog
-      title="HA group labels"
+      title="Edit HA group labels"
       onClose={onClose}
       onSubmit={() => {
         void send({ variables: { ccm: { haGroups: on } } });

@@ -36,7 +36,7 @@ Each target is an S3 store and a bucket in it, which any S3-compatible store ser
 | CA certificate | PEM, when the system's CAs do not cover the store's certificate. |
 | Send checksums | On by default; off for a store that refuses the checksums the AWS SDK sends with every upload. |
 
-Velero signs in to a target with an S3 access key. **Backup access key for every cluster**, below the targets once the management cluster runs, stores one that every cluster without a key of its own uses. It is the least work, but every cluster's Velero then holds a key that reaches the other clusters' folders too: their keys keep the contents unreadable, but one cluster could delete another's backups. A key per cluster, limited by the store to the cluster's folder, keeps them apart; whoever creates or looks after a cluster with `Sys.Modify` on its pool stores it on the cluster ([clusters.md](clusters.md#change-add-ons-and-sign-in)).
+Velero signs in to a target with an S3 access key. **Shared backup key**, below the targets once the management cluster runs, stores one that every cluster without a key of its own uses. It is the least work, but every cluster's Velero then holds a key that reaches the other clusters' folders too: their keys keep the contents unreadable, but one cluster could delete another's backups. A key per cluster, limited by the store to the cluster's folder, keeps them apart; whoever creates or looks after a cluster with `Sys.Modify` on its pool stores it on the cluster ([clusters.md](clusters.md#change-add-ons-and-sign-in)).
 
 ## What the template builds may do
 

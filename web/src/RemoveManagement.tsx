@@ -1,7 +1,7 @@
 import { useState, type JSX } from "react";
 
 import { api } from "./api";
-import { ErrorBox, Field, errorMessage, minPassphrase, passphraseShort } from "./ui";
+import { ErrorBox, Field, errorMessage, passphraseShort } from "./ui";
 
 // RemoveManagement takes Kubehenge off Proxmox VE: the management cluster, its templates, pools,
 // users and roles. Every cluster has to be deleted first.
@@ -38,10 +38,10 @@ export function RemoveManagement({ running, onStarted }: { running: boolean; onS
     >
       <h3>Remove Kubehenge</h3>
       <p className="muted">
-        Deletes the management cluster, the VM templates and the pools, users and roles Kubehenge made on Proxmox VE.
-        Delete every cluster first. The appliance stays, ready to set up again.
+        Deletes the management cluster, templates, pools, users and roles, and keeps the appliance. Delete every cluster
+        first.
       </p>
-      <Field label="State passphrase" hint={`At least ${minPassphrase} characters.`}>
+      <Field label="State passphrase">
         {(id) => (
           <input
             id={id}
@@ -52,19 +52,17 @@ export function RemoveManagement({ running, onStarted }: { running: boolean; onS
           />
         )}
       </Field>
-      <Field label="Confirm" hint="Type remove.">
+      <Field label="Type remove to confirm">
         {(id) => <input id={id} autoComplete="off" value={typed} onChange={(e) => setTyped(e.target.value)} />}
       </Field>
-      {running && (
-        <p className="muted">A run of the management cluster is going on; removing waits until it is over.</p>
-      )}
+      {running && <p className="muted">Wait for the current run to finish.</p>}
       <div className="actions">
         <button
           type="submit"
           className="danger"
           disabled={busy || running || typed !== "remove" || passphraseShort(passphrase)}
         >
-          Remove
+          Remove Kubehenge
         </button>
       </div>
       <ErrorBox message={error} />

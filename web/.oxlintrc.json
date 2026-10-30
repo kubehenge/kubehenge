@@ -131,9 +131,10 @@
       }
     },
     {
-      "files": ["vite.config.ts"],
+      // The build's own configuration and the check of the interface's words, which reads the
+      // sources, run in Node.
+      "files": ["vite.config.ts", "src/writing.ts"],
       "rules": {
-        // The build's own configuration runs in Node.
         "import/no-nodejs-modules": "off"
       }
     }

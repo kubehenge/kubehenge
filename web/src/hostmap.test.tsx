@@ -62,15 +62,15 @@ describe("the cluster's summary", () => {
       },
     });
     render(<App />);
-    const map = await screen.findByRole("region", { name: "Machines by Proxmox VE node" });
+    const map = await screen.findByRole("region", { name: "Placement" });
     await within(map).findByText("pve3");
     const tiles = [...within(map).getByRole("list", { name: "Proxmox VE nodes" }).children];
     expect(tiles.map((t) => t.textContent)).toStrictEqual([
       expect.stringMatching(/^pve12 control planes/u),
       expect.stringMatching(/^pve21 control plane, 1 worker/u),
-      "pve3none of this cluster's",
-      "pve4offline, none of this cluster's",
-      expect.stringMatching(/^Node not visible to you1 worker/u),
+      "pve3Empty",
+      "pve4Offline",
+      expect.stringMatching(/^Hidden node1 worker/u),
     ]);
     // Control planes first on each node, each machine named with its role and state.
     expect(
@@ -84,6 +84,6 @@ describe("the cluster's summary", () => {
       "web-w-1, worker, Ready",
       "web-w-2, worker, Not ready",
     ]);
-    expect(within(map).getByText(/pve1 runs 2 of the 3 control-plane VMs/u)).toBeInTheDocument();
+    expect(within(map).getByText(/pve1 runs 2 of 3 control-plane VMs/u)).toBeInTheDocument();
   });
 });

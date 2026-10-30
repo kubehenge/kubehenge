@@ -1075,7 +1075,7 @@ if [ "${KUBEHENGE_E2E_DATASTORE_ALLOCATE:-}" = 1 ]; then
     until_true 900 "the CSI plugin at ${newest}" csi_at "${newest}"
     persistent_volume
     refused_with "holds Datastore.Allocate on storage ${KUBEHENGE_E2E_STORAGE}" "${KUBEHENGE_E2E_STORAGE}" '{"datastoreAllocate":false}'
-    refused_with "the management cluster uses storage ${KUBEHENGE_E2E_LOCAL_STORAGE}" "${KUBEHENGE_E2E_LOCAL_STORAGE}" '{"datastoreAllocate":true}'
+    refused_with "Datastore.Allocate is not allowed on storage ${KUBEHENGE_E2E_LOCAL_STORAGE}" "${KUBEHENGE_E2E_LOCAL_STORAGE}" '{"datastoreAllocate":true}'
 
     step "the CSI plugin's held release again, without Datastore.Allocate"
     set_variable csi '{"datastoreAllocate":false}'

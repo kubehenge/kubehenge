@@ -60,14 +60,14 @@ func TestWorkersHaveRoomForTheAddons(t *testing.T) {
 		{"not registering, nothing on", withAddons(sized("", new(int32(1))), map[string]string{"rancher": `{"register":false}`}), ""},
 		{
 			"every add-on on the least worker", withAddons(sized("", new(int32(1))), everyAddon),
-			"the cluster's add-ons (Headlamp, monitoring, Kyverno, Istio, Cluster Mesh, cert-manager, Rancher's agent) need 4000 MiB of memory on its workers, beyond the 640 MiB a worker uses itself, and the workers have 3456 MiB for them",
+			"add-ons (Headlamp, monitoring, Kyverno, Istio, Cluster Mesh, cert-manager, Rancher's agent) need 4000 MiB of memory on workers, which have 3456 MiB for them",
 		},
 		{"Kyverno off", withAddons(sized("", new(int32(1))), map[string]string{
 			"headlamp": `{"enabled":true}`, "monitoring": `{"enabled":true}`, "podSecurity": `{"admission":"restricted","kyverno":"off"}`,
 		}), ""},
 		{"room on one worker", workerMemory(withAddons(sized("", new(int32(1))), everyAddon), `{"memoryMiB":4644}`), ""},
 		{"room shared over workers", withAddons(sized("", new(int32(2))), everyAddon), ""},
-		{"a pool scaled to none", withAddons(sized("", new(int32(1)), new(int32(0))), everyAddon), "and the workers have 3456 MiB"},
+		{"a pool scaled to none", withAddons(sized("", new(int32(1)), new(int32(0))), everyAddon), "which have 3456 MiB"},
 		{
 			"Rancher in place of its agent",
 			withAddons(sized(`{"cores":4,"memoryMiB":8192}`, new(int32(1))), map[string]string{"monitoring": `{"enabled":true}`, "rancher": `{"install":true,"hostname":"r.example.org"}`}),
@@ -76,7 +76,7 @@ func TestWorkersHaveRoomForTheAddons(t *testing.T) {
 		{"without workers, the agent", sized(`{"cores":4,"memoryMiB":8192}`), ""},
 		{
 			"without workers, every add-on", withAddons(sized(`{"cores":4,"memoryMiB":7680}`), everyAddon),
-			"need 4000 MiB of memory on its control planes, which run them without workers, beyond the 3840 MiB a control plane uses itself with them, and the control planes have 3840 MiB for them",
+			"need 4000 MiB of memory on control planes without workers, which have 3840 MiB",
 		},
 		{"without workers, room on the control planes", withAddons(sized(`{"cores":4,"memoryMiB":7840}`), everyAddon), ""},
 	} {
@@ -105,14 +105,14 @@ func TestControlPlanesHaveRoomForTheAddons(t *testing.T) {
 		{"nothing on", withAddons(sized("", new(int32(1))), map[string]string{"rancher": `{"register":false}`}), ""},
 		{
 			"the agent on the least control plane", sized("", new(int32(1))),
-			"with the cluster's add-ons (Rancher's agent), whose objects grow the API server, each control plane needs 4352 MiB of memory, and has 4096 MiB",
+			"each control plane needs 4352 MiB of memory with add-ons (Rancher's agent), and has 4096 MiB",
 		},
 		{"the agent on a control plane with room", sized(`{"memoryMiB":4352}`, new(int32(1))), ""},
-		{"every add-on, the room the agent leaves", every(`{"memoryMiB":4352}`), "each control plane needs 5376 MiB of memory, and has 4352 MiB"},
+		{"every add-on, the room the agent leaves", every(`{"memoryMiB":4352}`), "each control plane needs 5376 MiB of memory with add-ons (Headlamp, monitoring, Kyverno, Istio, Cluster Mesh, cert-manager, Rancher's agent), and has 4352 MiB"},
 		{"every add-on on a control plane with room", every(`{"memoryMiB":5376}`), ""},
 		{
 			"without workers, every add-on", withAddons(sized(`{"cores":4,"memoryMiB":9375}`), everyAddon),
-			"beyond the 5376 MiB a control plane uses itself with them, and the control planes have 3999 MiB for them",
+			"on control planes without workers, which have 3999 MiB",
 		},
 		{"without workers, room on the control planes", withAddons(sized(`{"cores":4,"memoryMiB":9376}`), everyAddon), ""},
 	} {
@@ -161,13 +161,13 @@ func TestWorkersHaveCPUForTheAddons(t *testing.T) {
 		{"every add-on but Rancher on the least worker", class, workerMemory(everyAddonButRancher(sized("", new(int32(1)))), `{"memoryMiB":8192}`), ""},
 		{
 			"Flux's former requests on the least worker", before, workerMemory(everyAddonButRancher(sized("", new(int32(1)))), `{"memoryMiB":8192}`),
-			"the cluster's add-ons (Headlamp, monitoring, logs, backups, Kyverno, Istio, the load balancer, Flux) need 1625 millicores of CPU on its workers, beyond the 745 millicores a worker uses itself, and the workers have 1255 millicores for them",
+			"add-ons (Headlamp, monitoring, logs, backups, Kyverno, Istio, the load balancer, Flux) need 1625 millicores of CPU on workers, which have 1255 millicores for them",
 		},
 		{"Flux's former requests with a core more", before, workerMemory(everyAddonButRancher(sized("", new(int32(1)))), `{"cores":3,"memoryMiB":8192}`), ""},
 		{"Flux's former requests shared over workers", before, workerMemory(everyAddonButRancher(sized("", new(int32(2)))), `{"memoryMiB":8192}`), ""},
 		{
 			"without workers, on two cores", class, withAddons(sized(`{"cores":2,"memoryMiB":16384}`), everyAddon),
-			"need 930 millicores of CPU on its control planes, which run them without workers, beyond the 1555 millicores a control plane uses itself, and the control planes have 445 millicores for them",
+			"need 930 millicores of CPU on control planes without workers, which have 445 millicores",
 		},
 		{"without workers, on the least they need", class, withAddons(sized(`{"cores":4,"memoryMiB":16384}`), everyAddon), ""},
 	} {
@@ -188,7 +188,7 @@ func TestWorkersHaveCPUForTheAddons(t *testing.T) {
 	// A class that says nothing of its nodes' own CPU counts their least for it.
 	delete(bare.Annotations, NodeCPUAnnotation)
 	if err := checkRoomFor(addonCPU, nil, withAddons(sized("", new(int32(1))), map[string]string{"headlamp": `{"enabled":true}`}), bare); err == nil ||
-		!strings.Contains(err.Error(), "need 10 millicores of CPU on its workers, beyond the 2000 millicores a worker uses itself, and the workers have 0 millicores") {
+		!strings.Contains(err.Error(), "need 10 millicores of CPU on workers, which have 0 millicores") {
 		t.Errorf("Headlamp on the least worker, without node figures: %v", err)
 	}
 	delete(bare.Annotations, AddonCPUAnnotation)
@@ -218,7 +218,7 @@ func TestAddonRoomWithoutNodeFigures(t *testing.T) {
 	class := addonClass()
 	delete(class.Annotations, NodeMemoryAnnotation)
 	// A worker then uses its least itself, and a control plane without workers the least it needs.
-	if err := checkAddonRoom(nil, sized("", new(int32(1))), class); err == nil || !strings.Contains(err.Error(), "beyond the 4096 MiB a worker uses itself, and the workers have 0 MiB") {
+	if err := checkAddonRoom(nil, sized("", new(int32(1))), class); err == nil || !strings.Contains(err.Error(), "on workers, which have 0 MiB") {
 		t.Errorf("the agent on the least worker: %v", err)
 	}
 	if err := checkAddonRoom(nil, sized(`{"cores":4,"memoryMiB":8448}`), class); err != nil {

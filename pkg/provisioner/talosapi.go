@@ -8,6 +8,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/siderolabs/talos/pkg/machinery/api/common"
 	"github.com/siderolabs/talos/pkg/machinery/api/machine"
@@ -107,52 +108,32 @@ type talosNode struct {
 // systemContainerd is the containerd Talos pulls its own images into, the installer's among them.
 var systemContainerd = &common.ContainerdInstance{Driver: common.ContainerDriver_CRI, Namespace: common.ContainerdNamespace_NS_SYSTEM}
 
+// talosStallTimeout is how long an install goes without a word from the node before it is given
+// up as stalled. A node whose VM is gone cannot end the stream, and while data is unacknowledged
+// TCP's keepalive does not notice either; the kernel gives up only after about 15 minutes.
+const talosStallTimeout = 3 * time.Minute
+
+// errTalosStalled ends an install the node stopped reporting on.
+var errTalosStalled = fmt.Errorf("no word from the node for %s", talosStallTimeout)
+
+// stallGuard is ctx ended with errTalosStalled once heard has not been called for d; stop ends it.
+func stallGuard(ctx context.Context, d time.Duration) (context.Context, func(), func()) {
+	sctx, cancel := context.WithCancelCause(ctx)
+	t := time.AfterFunc(d, func() { cancel(errTalosStalled) })
+	return sctx, func() { t.Reset(d) }, func() {
+		t.Stop()
+		cancel(nil)
+	}
+}
+
 func (n *talosNode) Install(ctx context.Context, image string) error {
-	pull, err := n.c.ImageClient.Pull(ctx, &machine.ImageServicePullRequest{Containerd: systemContainerd, ImageRef: image})
-	if err != nil {
-		return fmt.Errorf("%s: pulling %s: %w", n.address, image, err)
+	sctx, heard, stop := stallGuard(ctx, talosStallTimeout)
+	defer stop()
+	err := n.pullAndInstall(sctx, image, heard)
+	if cause := context.Cause(sctx); err != nil && errors.Is(cause, errTalosStalled) {
+		return fmt.Errorf("%s: installing %s: %w", n.address, image, cause)
 	}
-	name := ""
-	for {
-		resp, recvErr := pull.Recv()
-		if errors.Is(recvErr, io.EOF) {
-			break
-		}
-		if recvErr != nil {
-			return fmt.Errorf("%s: pulling %s: %w", n.address, image, recvErr)
-		}
-		if got := resp.GetName(); got != "" {
-			name = got
-		}
-	}
-	if name == "" {
-		return fmt.Errorf("%s: pulling %s named no image", n.address, image)
-	}
-	upgrade, err := n.c.LifecycleClient.Upgrade(ctx, &machine.LifecycleServiceUpgradeRequest{
-		Containerd: systemContainerd, Source: &machine.InstallArtifactsSource{ImageName: name},
-	})
-	if err != nil {
-		return fmt.Errorf("%s: installing %s: %w", n.address, image, err)
-	}
-	var said []string
-	for {
-		resp, err := upgrade.Recv()
-		if errors.Is(err, io.EOF) {
-			return fmt.Errorf("%s: installing %s ended without an exit code: %s", n.address, image, lastMessages(said))
-		}
-		if err != nil {
-			return fmt.Errorf("%s: installing %s: %w", n.address, image, err)
-		}
-		switch p := resp.GetProgress().GetResponse().(type) {
-		case *machine.LifecycleServiceInstallProgress_Message:
-			said = append(said, p.Message)
-		case *machine.LifecycleServiceInstallProgress_ExitCode:
-			if p.ExitCode != 0 {
-				return fmt.Errorf("%s: installing %s exited with %d: %s", n.address, image, p.ExitCode, lastMessages(said))
-			}
-			return nil
-		}
-	}
+	return err
 }
 
 // lastMessages are the installer's last few messages, which say why it failed.
@@ -295,4 +276,54 @@ func (n *talosNode) Close() error {
 		return fmt.Errorf("closing the Talos API connection to %s: %w", n.address, err)
 	}
 	return nil
+}
+
+func (n *talosNode) pullAndInstall(ctx context.Context, image string, heard func()) error {
+	pull, err := n.c.ImageClient.Pull(ctx, &machine.ImageServicePullRequest{Containerd: systemContainerd, ImageRef: image})
+	if err != nil {
+		return fmt.Errorf("%s: pulling %s: %w", n.address, image, err)
+	}
+	name := ""
+	for {
+		resp, recvErr := pull.Recv()
+		if errors.Is(recvErr, io.EOF) {
+			break
+		}
+		if recvErr != nil {
+			return fmt.Errorf("%s: pulling %s: %w", n.address, image, recvErr)
+		}
+		heard()
+		if got := resp.GetName(); got != "" {
+			name = got
+		}
+	}
+	if name == "" {
+		return fmt.Errorf("%s: pulling %s named no image", n.address, image)
+	}
+	upgrade, err := n.c.LifecycleClient.Upgrade(ctx, &machine.LifecycleServiceUpgradeRequest{
+		Containerd: systemContainerd, Source: &machine.InstallArtifactsSource{ImageName: name},
+	})
+	if err != nil {
+		return fmt.Errorf("%s: installing %s: %w", n.address, image, err)
+	}
+	var said []string
+	for {
+		resp, err := upgrade.Recv()
+		if errors.Is(err, io.EOF) {
+			return fmt.Errorf("%s: installing %s ended without an exit code: %s", n.address, image, lastMessages(said))
+		}
+		if err != nil {
+			return fmt.Errorf("%s: installing %s: %w", n.address, image, err)
+		}
+		heard()
+		switch p := resp.GetProgress().GetResponse().(type) {
+		case *machine.LifecycleServiceInstallProgress_Message:
+			said = append(said, p.Message)
+		case *machine.LifecycleServiceInstallProgress_ExitCode:
+			if p.ExitCode != 0 {
+				return fmt.Errorf("%s: installing %s exited with %d: %s", n.address, image, p.ExitCode, lastMessages(said))
+			}
+			return nil
+		}
+	}
 }

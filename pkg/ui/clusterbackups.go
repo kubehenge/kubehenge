@@ -163,16 +163,16 @@ func (s *Server) velero(ctx context.Context, u user, c *clusterv1.Cluster, id pr
 	case w != nil:
 		return w.Dynamic, "", nil
 	case !ranOut.IsZero():
-		return nil, "Kubehenge has not reached the cluster for a while; its access to Velero has run out.", nil
+		return nil, "Access to Velero expired. Waiting for the cluster to answer.", nil
 	}
 	found, err := backupCredentialStored(ctx, u.kube, c)
 	if err != nil {
 		return nil, "", err
 	}
 	if !found {
-		return nil, "Velero waits for the target's access key: store one in the cluster's Options, or have an administrator store one for every cluster.", nil
+		return nil, "Velero needs the target's access key. Store one in Options.", nil
 	}
-	return nil, "Velero is being set up in the cluster.", nil
+	return nil, "Setting up Velero.", nil
 }
 
 // openVelero reaches the cluster's Velero for a request that cannot do without it, answering the
@@ -206,7 +206,7 @@ func (s *Server) clusterBackups(w http.ResponseWriter, r *http.Request, u user) 
 	}
 	// The interface reads Secrets only in its own namespace, where it makes its clusters.
 	if c.Namespace != s.Namespace {
-		view.Message = "The interface shows the backups only of the clusters in its own namespace."
+		view.Message = "Backups show only for clusters in namespace " + s.Namespace + "."
 		writeJSON(w, http.StatusOK, view)
 		return
 	}
@@ -227,7 +227,7 @@ func (s *Server) clusterBackups(w http.ResponseWriter, r *http.Request, u user) 
 	}
 	if err := readVelero(ctx, v, &view); err != nil {
 		s.Log.Info("reading a cluster's backups", "cluster", c.Namespace+"/"+c.Name, "error", err)
-		view.Message = "The cluster's API did not answer, or Velero is not running in it yet."
+		view.Message = "The cluster did not answer, or Velero is not running yet."
 		writeJSON(w, http.StatusOK, view)
 		return
 	}
@@ -486,7 +486,7 @@ func (s *Server) backUp(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	if !backupsOf(c).Enabled {
-		writeError(w, http.StatusConflict, "the cluster does not back up")
+		writeError(w, http.StatusConflict, "backups are off for this cluster")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), veleroTimeout)
@@ -542,7 +542,7 @@ func (s *Server) deleteBackup(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	if !backupsOf(c).Enabled {
-		writeError(w, http.StatusConflict, "the cluster does not back up")
+		writeError(w, http.StatusConflict, "backups are off for this cluster")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), veleroTimeout)
@@ -646,13 +646,13 @@ func (s *Server) allowBackupSources(w http.ResponseWriter, r *http.Request, u us
 func (s *Server) veleroError(w http.ResponseWriter, c *clusterv1.Cluster, err error) {
 	switch {
 	case apierrors.IsNotFound(err):
-		writeError(w, http.StatusNotFound, "no such backup, or Velero is not running in the cluster yet")
+		writeError(w, http.StatusNotFound, "no such backup, or Velero is not running yet")
 	case apierrors.IsInvalid(err) || apierrors.IsAlreadyExists(err):
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, context.DeadlineExceeded):
 		writeError(w, http.StatusGatewayTimeout, "Velero did not answer in time")
 	default:
 		s.Log.Info("a cluster's Velero request failed", "cluster", c.Namespace+"/"+c.Name, "error", err)
-		writeError(w, http.StatusBadGateway, "the cluster's API did not answer")
+		writeError(w, http.StatusBadGateway, "the cluster did not answer")
 	}
 }

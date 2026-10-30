@@ -18,7 +18,7 @@ export interface PodSecurity {
 
 const levelNames: Record<AdmissionLevel | KyvernoLevel, string> = {
   off: "Off",
-  privileged: "Privileged: nothing enforced",
+  privileged: "Privileged",
   baseline: "Baseline",
   restricted: "Restricted",
 };
@@ -36,9 +36,12 @@ export function podSecurityOf(v: unknown): PodSecurity {
 
 export const cisText = (on: boolean): string => (on ? "On" : "Off");
 
-/** cisHint says what CIS hardening costs workloads, beyond the baseline every cluster gets. */
-export const cisHint =
-  "Beyond what every cluster gets: restricted pods outside the exempt namespaces, the runtime's seccomp profile for every container that asks for no other, and exec, attach and port-forward sessions that end after five idle minutes. RKE2 also runs its own CIS profile, under which pods in kube-system, kube-public and default take connections only from their own namespace. Fixed once the cluster exists.";
+/** cisHint is what a user must know before choosing CIS hardening: it cannot be undone. */
+export const cisHint = "Fixed once the cluster exists";
+
+/** cisInfo says what CIS hardening costs workloads, beyond the baseline every cluster gets. */
+export const cisInfo =
+  "Restricted pods, default seccomp, idle exec sessions end after 5 minutes. RKE2 isolates kube-system, kube-public and default.";
 
 /** enforced is what holds a cluster's pods: CIS hardening has Pod Security Admission enforce restricted, whatever was chosen. */
 export function enforced(p: PodSecurity, cis: boolean): PodSecurity {
@@ -59,14 +62,17 @@ export function podSecurityVariable(p: PodSecurity): Partial<PodSecurity> | unde
 
 const capitalised = (l: string): string => l.charAt(0).toUpperCase() + l.slice(1);
 
-/** podSecurityText says in a line what holds a cluster's pods to which level. */
+/**
+ * podSecurityText says in a line what holds a cluster's pods to which level; a bare level is Pod
+ * Security Admission's.
+ */
 export function podSecurityText(p: PodSecurity): string {
   const parts: string[] = [];
   if (p.admission !== "privileged") {
-    parts.push(`${capitalised(p.admission)} by Pod Security Admission`);
+    parts.push(capitalised(p.admission));
   }
   if (p.kyverno !== "off") {
-    parts.push(`${capitalised(p.kyverno)} by Kyverno`);
+    parts.push(`Kyverno ${p.kyverno}`);
   }
   return parts.length > 0 ? parts.join(", ") : "Not enforced";
 }
@@ -81,24 +87,12 @@ export function PodSecurityFields({
   onChange: (p: PodSecurity) => void;
   cis?: boolean;
 }): JSX.Element {
-  // Non-breaking hyphens keep the namespace names whole where the text wraps.
   return (
     <>
-      <p className="muted">
-        Baseline refuses privileged pods and the host&apos;s namespaces and paths; restricted also has containers run
-        without root, privilege escalation or capabilities. The namespaces of the components that need the host
-        (kube&#8209;system, the pod network&apos;s, node&#8209;exporter&apos;s, Alloy&apos;s node collectors&apos;,
-        Velero&apos;s, Istio&apos;s node agents&apos;, MetalLB&apos;s and Rancher&apos;s) are exempt from Pod Security
-        Admission in every cluster, and from Kyverno where the cluster runs them. Whoever may create or label a
-        namespace may set its own level, as everywhere in Kubernetes.
-      </p>
       <Field
         label="Pod Security Admission"
-        hint={
-          cis
-            ? "Kubernetes' own check, for every namespace that labels no level of its own. Restricted, as CIS hardening has it."
-            : "Kubernetes' own check, for every namespace that labels no level of its own. At every level, pods short of restricted are warned about. Changing it replaces the control-plane nodes one at a time."
-        }
+        hint={cis ? "Restricted under CIS hardening" : "Changing it replaces the control-plane nodes"}
+        info="Baseline blocks privileged pods and host access. Restricted also needs containers without root or capabilities."
       >
         {(id) => (
           <select
@@ -119,10 +113,7 @@ export function PodSecurityFields({
           </select>
         )}
       </Field>
-      <Field
-        label="Kyverno"
-        hint="Installs Kyverno, whose policies hold every namespace to the level whatever its labels say, and report what falls short."
-      >
+      <Field label="Kyverno" info="Ignores namespace labels and reports what falls short.">
         {(id) => (
           <select
             id={id}

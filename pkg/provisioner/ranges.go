@@ -92,7 +92,7 @@ func checkRanges(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) erro
 				return fmt.Errorf("%s range: %s is no IPv4 network such as 10.244.0.0/16, without host bits", r.what, b)
 			}
 			if p.Overlaps(nodes) {
-				problems = append(problems, fmt.Sprintf("the %s range %s overlaps the nodes' network %s", r.what, p, nodes))
+				problems = append(problems, fmt.Sprintf("%s range %s overlaps the nodes' network %s", r.what, p, nodes))
 			}
 			if i := slices.IndexFunc(taken, p.Overlaps); i >= 0 {
 				problems = append(problems, fmt.Sprintf("the %s range %s overlaps the pod range %s", r.what, p, taken[i]))
@@ -103,7 +103,7 @@ func checkRanges(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) erro
 		}
 	}
 	if len(problems) > 0 {
-		return fmt.Errorf("%s; set spec.clusterNetwork to ranges the network does not use", strings.Join(problems, "; "))
+		return fmt.Errorf("%s. Set spec.clusterNetwork to other ranges", strings.Join(problems, ", "))
 	}
 	return nil
 }

@@ -37,7 +37,7 @@ func checkSharedDNS01(w http.ResponseWriter, u user, path string, held map[strin
 		return true
 	}
 	writeError(w, http.StatusForbidden, fmt.Sprintf(
-		"%s needs %s on %s to give the cluster the DNS-01 credential stored for every cluster, which can write the zone's records for every cluster that uses it",
+		"%s needs %s on %s to use the shared DNS-01 credential",
 		u.ticket.Username, privKubeconfig, path))
 	return false
 }

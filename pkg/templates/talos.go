@@ -66,7 +66,7 @@ func TalosRunsKubernetes(talos, kubernetes string) error {
 		return fmt.Errorf("kubernetes version %q: %w", kubernetes, err)
 	}
 	if err := k.SupportedWith(t); err != nil {
-		return fmt.Errorf("talos %s does not run kubernetes %s: %w", talos, kubernetes, err)
+		return fmt.Errorf("this Talos release %s does not run Kubernetes %s: %w", talos, kubernetes, err)
 	}
 	return nil
 }
@@ -133,9 +133,9 @@ func TalosUpgrade(from, to string) error {
 	}
 	switch {
 	case now < was:
-		return fmt.Errorf("talos cannot go back from %s to %s", from, to)
+		return fmt.Errorf("cannot downgrade Talos from %s to %s", from, to)
 	case now > was+1:
-		return fmt.Errorf("talos upgrades one minor version at a time: from %s to the newest 1.%d release first", from, was+1)
+		return fmt.Errorf("upgrade Talos from %s to the newest 1.%d release first", from, was+1)
 	}
 	host, err := talosRelease(from)
 	if err != nil {
@@ -146,7 +146,7 @@ func TalosUpgrade(from, to string) error {
 		return err
 	}
 	if err := target.UpgradeableFrom(host); err != nil {
-		return fmt.Errorf("talos %s cannot upgrade to %s: %w", from, to, err)
+		return fmt.Errorf("cannot upgrade Talos %s to %s: %w", from, to, err)
 	}
 	return nil
 }

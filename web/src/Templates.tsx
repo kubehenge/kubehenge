@@ -17,6 +17,7 @@ import type {
 } from "./types";
 import {
   Choice,
+  Detail,
   Dialog,
   ErrorBox,
   Field,
@@ -48,15 +49,8 @@ export function Templates(): JSX.Element {
   return (
     <div className="box">
       <h3>VM templates</h3>
-      <p className="muted">
-        Every cluster's machines are clones of one of these. RKE2 and k3s need a template each for every node OS their
-        clusters run; kubeadm needs one for each node OS and Kubernetes version its clusters run or upgrade to; Talos,
-        which is its own OS, one for each Talos release its clusters start on. Each build of a node OS template is a
-        template of its own; clusters move to a newer build inside their maintenance windows. A Talos template is made
-        once: its nodes take updates by upgrading Talos in place.
-      </p>
       <ErrorBox message={error} />
-      {data && data.templates.length === 0 && <p>No templates yet: clusters cannot be created until there is one.</p>}
+      {data && data.templates.length === 0 && <p>No templates yet</p>}
       {data && data.templates.length > 0 && (
         <table className="grid">
           <thead>
@@ -95,7 +89,7 @@ export function Templates(): JSX.Element {
                     type="button"
                     disabled={filled(t.inUse) || building}
                     aria-label={`Delete ${t.name}`}
-                    title={filled(t.inUse) ? `${t.inUse} clones its machines from it` : undefined}
+                    title={filled(t.inUse) ? `In use by ${t.inUse}` : undefined}
                     onClick={() => setDeleting(t)}
                   >
                     Delete
@@ -109,7 +103,7 @@ export function Templates(): JSX.Element {
       {job && <BuildJob job={job} />}
       <div className="actions">
         <button type="button" className="primary" disabled={!data || building} onClick={() => setCreating(true)}>
-          Build a template
+          Build template
         </button>
       </div>
       {data && (
@@ -149,11 +143,12 @@ function BuildJob({ job }: { job: Job }): JSX.Element {
   const log = job.log ?? [];
   return (
     <div aria-live="polite">
-      <p className={job.state === "failed" ? "error" : "muted"}>
+      <div className={job.state === "failed" ? "error" : "muted"}>
         {job.state === "running" && `Building, started by ${job.user}…`}
-        {job.state === "succeeded" && `The last build, by ${job.user}, succeeded.`}
-        {job.state === "failed" && `The last build, by ${job.user}, failed: ${job.error ?? ""}`}
-      </p>
+        {job.state === "succeeded" && `Built by ${job.user}`}
+        {job.state === "failed" && `Build by ${job.user} failed`}
+        {job.state === "failed" && filled(job.error) && <Detail>{job.error}</Detail>}
+      </div>
       {log.length > 0 && (
         <details open={job.state === "running"}>
           <summary>Log</summary>
@@ -178,10 +173,7 @@ function lastRun(last: NonNullable<TemplateRefresh["last"]>): string {
   if (last.state === "running") {
     return `Building ${last.lines.length > 0 ? last.lines.join(", ") : "the templates"}${by}…`;
   }
-  if (last.state === "succeeded") {
-    return `The last run${by} succeeded${at}.`;
-  }
-  return `The last run${by} failed${at}: ${last.error ?? ""}`;
+  return `Last run${by} ${last.state}${at}`;
 }
 
 // AutomaticBuilds is the weekly build of the node OS templates: when it runs, how its last run went,
@@ -199,10 +191,7 @@ function AutomaticBuilds({
     return (
       <section aria-label="Automatic builds">
         <h4>Automatic builds</h4>
-        <p className="muted">
-          Off. With them on, Kubehenge builds the node OS templates again every week with each node OS's updates, and
-          clusters move to them in their maintenance windows; switch them on in the management cluster's settings.
-        </p>
+        <p className="muted">Off. Switch them on in the management cluster settings.</p>
       </section>
     );
   }
@@ -223,21 +212,33 @@ function AutomaticBuilds({
   return (
     <section aria-label="Automatic builds">
       <h4>Automatic builds</h4>
-      <p>
-        Every {weekdayName(refresh.weekday)} at {refresh.time} ({refresh.timeZone}), Kubehenge builds the node OS
-        templates clusters run again, with each node OS's updates. A cluster's nodes move to a new build in its
-        maintenance window once the build is {refresh.soakHours} hours old, unless the cluster switches that off. The
-        two newest builds of each template stay, and any older one a cluster still runs.
-      </p>
-      {refresh.next !== undefined && <p className="muted">Next build: {new Date(refresh.next).toLocaleString()}.</p>}
+      <dl className="summary">
+        <dt>Schedule</dt>
+        <dd>
+          Every {weekdayName(refresh.weekday)}, {refresh.time} {refresh.timeZone}
+        </dd>
+        {refresh.next !== undefined && (
+          <>
+            <dt>Next build</dt>
+            <dd>{new Date(refresh.next).toLocaleString()}</dd>
+          </>
+        )}
+        <dt>Rollout</dt>
+        <dd>After {refresh.soakHours} h, in maintenance windows</dd>
+        <dt>Kept</dt>
+        <dd>2 newest builds, and any in use</dd>
+      </dl>
       <div aria-live="polite">
-        {asked && !running && <p className="muted">Build now was asked for; it starts within a minute.</p>}
+        {asked && !running && <p className="muted">Starting within a minute</p>}
         {refresh.last && (
           <>
-            <p className={refresh.last.state === "failed" ? "error" : "muted"}>{lastRun(refresh.last)}</p>
+            <div className={refresh.last.state === "failed" ? "error" : "muted"}>
+              {lastRun(refresh.last)}
+              {refresh.last.state === "failed" && filled(refresh.last.error) && <Detail>{refresh.last.error}</Detail>}
+            </div>
             {refresh.last.log.length > 0 && (
               <details open={running}>
-                <summary>Log of the last run</summary>
+                <summary>Log</summary>
                 <pre className="log" aria-label="Automatic build log">
                   {refresh.last.log.slice(-logLines).join("\n")}
                 </pre>
@@ -264,11 +265,10 @@ function AutomaticBuilds({
 
 const distributions = ["rke2", "k3s", "kubeadm", "talos"] as const;
 
-function talosHint(releases: TalosReleases | undefined): string {
+// talosHint says why the release is typed rather than chosen, when the releases could not be read.
+function talosHint(releases: TalosReleases | undefined): string | undefined {
   const reason = releases?.error;
-  return `A Talos cluster can start on the releases with a template, and is upgraded from there.${
-    filled(reason) ? ` ${sentence(reason)} Type the release, such as ${talosExample}.` : ""
-  }`;
+  return filled(reason) ? `${sentence(reason)} Such as ${talosExample}` : undefined;
 }
 
 // releaseLabel names a release as the build dialog offers it: v1.14.4 (default, has a template).
@@ -332,32 +332,32 @@ export function buildRequest(f: BuildForm): TemplateRequest {
 export function buildProblems(f: BuildForm): Partial<Record<keyof BuildForm, string>> {
   const p: Partial<Record<keyof BuildForm, string>> = {};
   if (f.distribution === "kubeadm" && !kubernetesVersion.test(f.kubernetesVersion.trim())) {
-    p.kubernetesVersion = "A version such as v1.36.5.";
+    p.kubernetesVersion = "Enter a version such as v1.36.5";
   }
   if (f.distribution === "talos" && !talosRelease.test(f.talosVersion.trim())) {
-    p.talosVersion = `A release such as ${talosExample}.`;
+    p.talosVersion = `Enter a release such as ${talosExample}`;
   }
   if (!f.node) {
-    p.node = "Choose a node.";
+    p.node = "Choose a Proxmox VE node";
   }
   if (!f.storage) {
-    p.storage = "Choose a storage.";
+    p.storage = "Choose a storage";
   }
   if (!f.importStorage) {
-    p.importStorage = "Choose a storage.";
+    p.importStorage = "Choose a storage";
   }
   if (!f.bridge) {
-    p.bridge = "Choose a bridge.";
+    p.bridge = "Choose a bridge";
   }
   if (f.distribution !== "talos" && f.vlan && !isVLAN(f.vlan)) {
-    p.vlan = "1 to 4094.";
+    p.vlan = "A whole number from 1 to 4094";
   }
   if (
     f.distribution !== "talos" &&
     f.buildAddress.trim() &&
     (!f.buildAddress.includes("/") || !f.buildGateway.trim() || !f.buildDNS.trim())
   ) {
-    p.buildAddress = "A static address needs its prefix length, a gateway and a DNS server.";
+    p.buildAddress = "Enter the prefix length, a gateway and a DNS server";
   }
   return p;
 }
@@ -517,7 +517,7 @@ function BuildDialog({
 
   return (
     <Dialog
-      title="Build a template"
+      title="Build template"
       onClose={onClose}
       onSubmit={() => {
         void start();
@@ -533,12 +533,7 @@ function BuildDialog({
         </>
       }
     >
-      <p className="muted">
-        {talos
-          ? "Makes the template with your Proxmox VE session, in a few minutes. The Talos Image Factory's image of the release, with the QEMU guest agent, is turned into a template as it is: Talos is its own OS, so no node OS is chosen. A release's template is made once; nodes cloned from it move on by upgrading Talos in place."
-          : "Builds with your Proxmox VE session, in a few minutes. The node OS's image is checked against its publisher's signed checksums and booted once to compose the node from the node OS's own signed packages, only what a node needs and what the distribution needs, then turned into a template. A template that exists already gets a new build beside it, which clusters move to in their maintenance windows."}
-      </p>
-      <Field label="For">
+      <Field label="Distribution">
         {(id) => (
           <select
             id={id}
@@ -564,17 +559,13 @@ function BuildDialog({
         </Field>
       )}
       {form.distribution === "kubeadm" && (
-        <Field
-          label="Kubernetes version"
-          hint="Such as v1.36.5: a kubeadm cluster can be created at, or upgraded to, versions with a template on its node OS."
-          error={shown("kubernetesVersion")}
-        >
+        <Field label="Kubernetes version" hint="Such as v1.36.5" error={shown("kubernetesVersion")}>
           {(id) => (
             <input id={id} value={form.kubernetesVersion} onChange={(e) => set("kubernetesVersion", e.target.value)} />
           )}
         </Field>
       )}
-      <Field label="Node" hint="Where the image is prepared." error={shown("node")}>
+      <Field label="Proxmox VE node" error={shown("node")}>
         {(id) => (
           <Choice
             id={id}
@@ -587,10 +578,10 @@ function BuildDialog({
           />
         )}
       </Field>
-      <Field label="Template disk" hint="Shared storage lets clones start on any node." error={shown("storage")}>
+      <Field label="Template disk" hint="Shared storage lets clones start on any node" error={shown("storage")}>
         {(id) => <Choice id={id} value={form.storage} options={diskStorages} onChoose={(v) => set("storage", v)} />}
       </Field>
-      <Field label="Downloaded image" hint="A storage with the import content type." error={shown("importStorage")}>
+      <Field label="Downloaded image" error={shown("importStorage")}>
         {(id) => (
           <Choice
             id={id}
@@ -601,7 +592,7 @@ function BuildDialog({
         )}
       </Field>
       {!talos && (
-        <Field label="Cloud-init image" hint="A storage with the ISO content type, while the image is prepared.">
+        <Field label="Cloud-init image">
           {(id) => (
             <Choice
               id={id}
@@ -615,17 +606,13 @@ function BuildDialog({
       )}
       <Field
         label="Bridge"
-        hint={
-          talos
-            ? "The template's network device; clones are attached to their cluster's own bridge."
-            : "The VM that prepares the image needs to reach the node OS's and Kubernetes' package repositories."
-        }
+        hint={talos ? undefined : "Needs to reach the package repositories"}
         error={shown("bridge")}
       >
         {(id) => <Choice id={id} value={form.bridge} options={bridgeNames} onChoose={(v) => set("bridge", v)} />}
       </Field>
       {!talos && (
-        <Field label="VLAN tag" hint="Optional." error={shown("vlan")}>
+        <Field label="VLAN tag" error={shown("vlan")}>
           {(id) => (
             <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
           )}
@@ -634,14 +621,13 @@ function BuildDialog({
       {!talos && (
         <details className="advanced">
           <summary>Static address</summary>
-          <p className="muted">Without one, the VM that prepares the image asks DHCP.</p>
-          <Field label="Address" hint="With prefix length, such as 192.0.2.50/24." error={shown("buildAddress")}>
+          <Field label="Address" hint="Such as 192.0.2.50/24" error={shown("buildAddress")}>
             {(id) => <input id={id} value={form.buildAddress} onChange={(e) => set("buildAddress", e.target.value)} />}
           </Field>
           <Field label="Gateway">
             {(id) => <input id={id} value={form.buildGateway} onChange={(e) => set("buildGateway", e.target.value)} />}
           </Field>
-          <Field label="DNS servers" hint="Separated by commas.">
+          <Field label="DNS servers" hint="Separated by commas">
             {(id) => <input id={id} value={form.buildDNS} onChange={(e) => set("buildDNS", e.target.value)} />}
           </Field>
         </details>
@@ -675,7 +661,7 @@ function DeleteDialog({
   };
   return (
     <Dialog
-      title={`Delete ${t.name}`}
+      title={`Delete template ${t.name}`}
       onClose={onClose}
       onSubmit={() => {
         void remove();
@@ -692,8 +678,7 @@ function DeleteDialog({
       }
     >
       <p>
-        Deletes template {t.name} (VM {t.vmid}) on node {t.node}. No cluster clones from it now; a cluster created later
-        takes another build of {t.line}, or needs it built again when this is the last.
+        Deletes VM {t.vmid} on {t.node}. This can&apos;t be undone.
       </p>
       <ErrorBox message={error} />
     </Dialog>
