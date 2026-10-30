@@ -477,9 +477,7 @@ func reachable(key string, running map[templates.NodeOS][]kubeVersion) bool {
 // pendingSelections are the tag sets the ProxmoxMachines still waiting for their VM select, which
 // they clone from any moment.
 func (r *TemplateRefresh) pendingSelections(ctx context.Context) (map[string]bool, error) {
-	list := &unstructured.UnstructuredList{}
-	list.SetAPIVersion("infrastructure.cluster.x-k8s.io/" + proxmoxMachineVersion)
-	list.SetKind("ProxmoxMachineList")
+	list := proxmoxMachineList()
 	if err := r.Kube.List(ctx, list); err != nil {
 		return nil, fmt.Errorf("listing the ProxmoxMachines: %w", err)
 	}

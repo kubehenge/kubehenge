@@ -44,7 +44,7 @@ func (s *Server) abandonDeletion(w http.ResponseWriter, r *http.Request, u user)
 		return
 	}
 	if err := u.kube.Patch(r.Context(), c, client.RawPatch("application/merge-patch+json", patch)); err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	s.Log.Info("abandoned a cluster's deletion", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)

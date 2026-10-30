@@ -12,7 +12,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -258,8 +257,7 @@ func (w *VMWatch) clusterVMs(ctx context.Context, c *clusterv1.Cluster) ([]clust
 	if err != nil {
 		return nil, err
 	}
-	pms := &unstructured.UnstructuredList{}
-	pms.SetGroupVersionKind(schema.GroupVersionKind{Group: infrastructureGroup, Version: proxmoxMachineVersion, Kind: "ProxmoxMachineList"})
+	pms := proxmoxMachineList()
 	if err := w.Client.List(ctx, pms, client.InNamespace(c.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: c.Name}); err != nil {
 		return nil, fmt.Errorf("listing the cluster's ProxmoxMachines: %w", err)
 	}

@@ -39,7 +39,7 @@ func (s *Server) controlPlaneRecovery(w http.ResponseWriter, r *http.Request, u 
 	}
 	automatic, err := s.automaticRestore(r.Context(), u, c)
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	view := recoveryView{Automatic: automatic}
@@ -84,7 +84,7 @@ func (s *Server) recoverControlPlane(w http.ResponseWriter, r *http.Request, u u
 	}
 	automatic, err := s.automaticRestore(r.Context(), u, c)
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	if !automatic {
@@ -106,7 +106,7 @@ func (s *Server) isControlPlaneMachine(w http.ResponseWriter, r *http.Request, u
 	err := u.kube.List(r.Context(), &machines, client.InNamespace(c.Namespace),
 		client.MatchingLabels{clusterv1.ClusterNameLabel: c.Name}, client.HasLabels{clusterv1.MachineControlPlaneLabel})
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return false
 	}
 	if !slices.ContainsFunc(machines.Items, func(m clusterv1.Machine) bool { return m.Name == name && m.DeletionTimestamp.IsZero() }) {

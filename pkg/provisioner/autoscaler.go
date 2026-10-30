@@ -873,8 +873,7 @@ func (a *AutoscalerReconciler) release(ctx context.Context, cluster *clusterv1.C
 // Proxmox VE node with the memory for. The autoscaler knows nothing of Proxmox VE: it waits for the
 // machine, gives up after maxNodeProvisionTime and backs off, and the event says why.
 func (a *AutoscalerReconciler) reportNoRoom(ctx context.Context, cluster *clusterv1.Cluster) error {
-	machines := &unstructured.UnstructuredList{}
-	machines.SetGroupVersionKind(schema.GroupVersionKind{Group: infrastructureGroup, Version: proxmoxMachineVersion, Kind: "ProxmoxMachineList"})
+	machines := proxmoxMachineList()
 	if err := a.Client.List(ctx, machines, client.InNamespace(cluster.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: cluster.Name}); err != nil {
 		return fmt.Errorf("listing the ProxmoxMachines of cluster %s/%s: %w", cluster.Namespace, cluster.Name, err)
 	}
