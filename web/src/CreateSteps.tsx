@@ -174,8 +174,8 @@ function VersionField({
   return (
     <Field
       label={field.label}
-      hint={`Such as ${field.example}.`}
-      error={version !== "" && !field.pattern.test(version) ? `A version such as ${field.example}.` : undefined}
+      hint={`Like ${field.example}`}
+      error={version !== "" && !field.pattern.test(version) ? `Enter a version like ${field.example}` : undefined}
     >
       {(id) => <input id={id} value={version} onChange={(e) => onChange(e.target.value.trim())} />}
     </Field>
@@ -185,10 +185,9 @@ function VersionField({
 function askText(kind: TemplateKind, os: NodeOSChoice | undefined): string {
   const on = os === undefined ? "" : ` on ${os.title}`;
   const words: Record<TemplateKind, string> = {
-    kubeadm: `Kubeadm offers the versions that have a VM template${on}. Another one gets its template built on request, which takes about twenty minutes.`,
-    talos:
-      "Talos offers the releases that have a VM template. Another one gets its template made on request, which takes a few minutes.",
-    distribution: `Kubehenge builds the missing template${on} on request, which takes about twenty minutes.`,
+    kubeadm: `A version not listed${on} takes about 20 minutes`,
+    talos: "A release not listed takes a few minutes",
+    distribution: `Building the VM template${on} takes about 20 minutes`,
   };
   return words[kind];
 }
@@ -286,12 +285,12 @@ function TemplateAsk({
   };
   return (
     <fieldset className="group">
-      <legend>Missing template</legend>
-      <p className="muted">
-        {askText(kind, os)}
-        {builds.building.length > 0 && ` Building now: ${builds.building.join(", ")}.`}
-        {builds.requested.length > 0 && ` Asked for: ${builds.requested.map((k) => requestName(k, oses)).join(", ")}.`}
-      </p>
+      <legend>Build a VM template</legend>
+      <p className="muted">{askText(kind, os)}</p>
+      {builds.building.length > 0 && <p className="muted">{`Building: ${builds.building.join(", ")}`}</p>}
+      {builds.requested.length > 0 && (
+        <p className="muted">{`Requested: ${builds.requested.map((k) => requestName(k, oses)).join(", ")}`}</p>
+      )}
       {field && <VersionField field={field} version={version} chosen={chosen} onChange={setVersion} />}
       <ErrorBox message={error} />
       <div className="actions">
@@ -302,7 +301,7 @@ function TemplateAsk({
             void ask();
           }}
         >
-          {asked ? "Asked for" : "Have the template built"}
+          Build template
         </button>
       </div>
     </fieldset>
@@ -316,12 +315,12 @@ function NodeOSField({ form, set, shown, cls }: StepProps & { cls: ClusterClass 
   if (os === undefined) {
     return null;
   }
-  const note = cpuNote(os, oses);
   return (
     <Field
       label="Node OS"
       error={shown("nodeOS")}
-      hint={`Kubehenge builds its templates from ${os.title}'s own signed packages, only what a node needs, with ${macName(os.mac)} enforcing.${note === undefined ? "" : ` ${note}`}`}
+      hint={cpuNote(os, oses)}
+      info={`Minimal, from ${os.title}'s signed packages, with ${macName(os.mac)} enforcing.`}
     >
       {(id) => (
         <select id={id} value={nodeOSKey(os)} onChange={(e) => set("nodeOS", e.target.value)}>
@@ -340,23 +339,10 @@ function NodeOSField({ form, set, shown, cls }: StepProps & { cls: ClusterClass 
 export const useClassTalos = (cls: ClusterClass | undefined): TalosReleases | undefined =>
   useTalosReleases(variable(cls, "talosVersion") !== undefined);
 
-const versionHints: Record<string, string> = {
-  kubeadm: "The versions with a VM template.",
-  talos: "The newest release of each minor version Kubernetes still patches that the Talos release runs.",
-};
-
-function versionHint(cls: ClusterClass | undefined, offered: Versions | undefined): string | undefined {
-  if (offered && offered.versions.length > 0) {
-    return (
-      versionHints[cls?.distribution ?? ""] ?? "The newest release of each minor version Kubernetes still patches."
-    );
-  }
-  if (!cls) {
-    return undefined;
-  }
-  const reason = offered?.error;
-  return `For example ${versionExamples[cls.distribution] ?? ""}.${filled(reason) ? ` ${sentence(reason)}` : ""}`;
-}
+// A version is typed in only when none could be listed: the hint gives its format, and why the list
+// is missing sits behind the field's info.
+const typedVersion = (cls: ClusterClass | undefined, offered: Versions | undefined): boolean =>
+  cls !== undefined && (offered === undefined || offered.versions.length === 0);
 
 // The version is chosen from those offered, typed in when none can be, and waits for the distribution.
 function VersionInput({
@@ -425,15 +411,13 @@ export function GeneralStep({
   namespaces: string[];
   onChooseNamespace: (namespace: string) => void;
 }): JSX.Element {
-  const alone = machineLeast({ ...form, workerReplicas: 0, workerAutoscale: false }, cls, "controlPlaneMachine");
   const runs = forRelease(offered, talos, form.talosVersion);
+  const typed = typedVersion(cls, runs);
+  const unlisted = runs?.error;
   return (
     <>
       {namespaces.length > 1 && (
-        <Field
-          label="Namespace"
-          hint="Where the cluster's objects live in the management cluster; Cluster Mesh links clusters of one namespace."
-        >
+        <Field label="Namespace">
           {(id) => (
             <select id={id} value={form.namespace} onChange={(e) => onChooseNamespace(e.target.value)}>
               {namespaces.map((ns) => (
@@ -445,7 +429,7 @@ export function GeneralStep({
           )}
         </Field>
       )}
-      <Field label="Name" hint="Also names its Proxmox VE pool and VMs." error={shown("name")}>
+      <Field label="Name" error={shown("name")}>
         {(id) => <input id={id} value={form.name} onChange={(e) => set("name", e.target.value.trim())} />}
       </Field>
       <Field label="Distribution" error={shown("class")}>
@@ -475,7 +459,12 @@ export function GeneralStep({
           )}
         </Field>
       )}
-      <Field label="Kubernetes version" error={shown("version")} hint={versionHint(cls, runs)}>
+      <Field
+        label="Kubernetes version"
+        error={shown("version")}
+        hint={typed ? `Like ${versionExamples[cls?.distribution ?? ""] ?? "v1.36.5"}` : undefined}
+        info={typed && filled(unlisted) ? sentence(unlisted) : undefined}
+      >
         {(id) => (
           <VersionInput id={id} value={form.version} onChange={(v) => set("version", v)} cls={cls} offered={runs} />
         )}
@@ -487,7 +476,7 @@ export function GeneralStep({
         missing={templateMissing(form, cls)}
         oses={classes.flatMap((c) => c.nodeOSes ?? [])}
       />
-      <Field label="Control-plane nodes" hint="Three or more keep the cluster running when one node fails.">
+      <Field label="Control-plane nodes">
         {(id) => (
           <select
             id={id}
@@ -502,13 +491,7 @@ export function GeneralStep({
           </select>
         )}
       </Field>
-      <WorkerFields
-        form={form}
-        set={set}
-        shown={shown}
-        cls={cls}
-        alone={`With none, the control planes run the workloads too, so they have at least ${alone.cores} cores and ${alone.memoryMiB} MiB.`}
-      />
+      <WorkerFields form={form} set={set} shown={shown} cls={cls} />
     </>
   );
 }
@@ -524,13 +507,12 @@ export function NetworkStep({
   bridgeOptions,
 }: StepProps & { cls: ClusterClass | undefined; bridgeOptions: Bridge[] }): JSX.Element {
   const cni = variable(cls, "cni");
+  // Cilium's ranges also keep clear of the other clusters', so the cluster can join a Cluster Mesh.
   const rangeHint =
-    form.cni === "cilium"
-      ? "Leave empty for the distribution's default, or the first free range if that overlaps the nodes' network or another cluster's ranges, so the cluster can join a Cluster Mesh."
-      : "Leave empty for the distribution's default, or the first free range if that overlaps the nodes' network.";
+    form.cni === "cilium" ? "Leave empty to choose one clear of other clusters" : "Leave empty to choose a free one";
   return (
     <>
-      <Field label="Bridge" hint="Only the bridges allowed for clusters are listed." error={shown("bridge")}>
+      <Field label="Bridge" error={shown("bridge")}>
         {(id) =>
           bridgeOptions.length > 0 ? (
             <select id={id} value={form.bridge} onChange={(e) => set("bridge", e.target.value)}>
@@ -555,16 +537,12 @@ export function NetworkStep({
           )
         }
       </Field>
-      <Field label="VLAN tag" hint="Optional." error={shown("vlan")}>
+      <Field label="VLAN tag" hint="Optional" error={shown("vlan")}>
         {(id) => (
           <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
         )}
       </Field>
-      <Field
-        label="API address"
-        hint="An unused address the control plane holds, outside the node addresses."
-        error={shown("endpoint")}
-      >
+      <Field label="API address" hint="A free address outside the node addresses" error={shown("endpoint")}>
         {(id) => (
           <input
             id={id}
@@ -576,7 +554,7 @@ export function NetworkStep({
       </Field>
       <Field
         label="Node addresses"
-        hint="Ranges (10.0.0.21-10.0.0.29), networks or single addresses, one per line or separated by commas. One more than there are nodes, for rollouts."
+        hint="Ranges like 10.0.0.21-10.0.0.29, networks or addresses"
         error={shown("addresses")}
       >
         {(id) => (
@@ -598,7 +576,7 @@ export function NetworkStep({
       <Field label="Gateway" error={shown("gateway")}>
         {(id) => <input id={id} value={form.gateway} onChange={(e) => set("gateway", e.target.value.trim())} />}
       </Field>
-      <Field label="DNS servers" hint="One per line or separated by commas." error={shown("dnsServers")}>
+      <Field label="DNS servers" error={shown("dnsServers")}>
         {(id) => <input id={id} value={form.dnsServers} onChange={(e) => set("dnsServers", e.target.value)} />}
       </Field>
       {variable(cls, "loadBalancer") && (
@@ -612,7 +590,7 @@ export function NetworkStep({
         />
       )}
       {cni && (
-        <Field label="Pod network" hint={cni.description ?? "Fixed once the cluster exists."} error={shown("cni")}>
+        <Field label="Pod network" hint="Fixed once the cluster exists" error={shown("cni")}>
           {(id) => (
             <select id={id} value={form.cni} onChange={(e) => set("cni", e.target.value)}>
               <option value="" disabled>
@@ -686,7 +664,7 @@ export function MachinesStep({
 }): JSX.Element {
   return (
     <>
-      <Field label="Storage" hint="For the nodes' disks and the cluster's persistent volumes." error={shown("storage")}>
+      <Field label="Storage" error={shown("storage")}>
         {(id) => (
           <select id={id} value={form.storage} onChange={(e) => set("storage", e.target.value)}>
             <option value="" disabled>
@@ -706,7 +684,6 @@ export function MachinesStep({
           value={form.place}
           onChange={(p) => set("place", p)}
           problem={shown("placement")}
-          hint="The Proxmox VE nodes the cluster's VMs may run on. Its control-plane VMs go one to a node, as far as the nodes and their memory allow."
           nodes={nodes}
           rules={rules}
         />
@@ -749,30 +726,14 @@ export function MachinesStep({
 export function IdentityStep({
   form,
   set,
-  cls,
   canTrust,
   showAll,
 }: Omit<StepProps, "shown"> & {
-  cls: ClusterClass | undefined;
   canTrust: boolean | undefined;
   showAll: boolean;
 }): JSX.Element {
   return (
-    <>
-      <p className="muted">
-        Besides tokens and certificates, which always work, the cluster can accept sign-ins from OpenID Connect
-        providers.
-        {variable(cls, "oidc")?.default !== undefined &&
-          " The list starts with the providers Kubehenge's administrators set for every cluster."}{" "}
-        Adding a provider of your own needs Sys.Modify on the workload pool, as whoever runs it can sign in as anyone.
-      </p>
-      <OIDCProviders
-        initial={form.oidc}
-        fixed={canTrust === false}
-        showAll={showAll}
-        onChange={(v) => set("oidc", v)}
-      />
-    </>
+    <OIDCProviders initial={form.oidc} fixed={canTrust === false} showAll={showAll} onChange={(v) => set("oidc", v)} />
   );
 }
 

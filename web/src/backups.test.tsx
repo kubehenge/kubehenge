@@ -146,7 +146,7 @@ describe("backup schedules", () => {
     expect(scheduleText("30 1 * * 1,4")).toBe("Every Monday, Thursday at 01:30");
     expect(scheduleText("15 * * * *")).toBe("Every hour at minute 15");
     expect(scheduleText("@weekly")).toBe("Every Sunday at 00:00");
-    expect(scheduleText("0 2 1 * *")).toBe("By the cron schedule 0 2 1 * *");
+    expect(scheduleText("0 2 1 * *")).toBe("Cron 0 2 1 * *");
     expect(backupsText({ enabled: true, target: "store", timeZone: "Europe/Zurich" })).toBe(
       "Every day at 02:00 (Europe/Zurich), kept 7 days, to store",
     );
@@ -156,10 +156,10 @@ describe("backup schedules", () => {
   it("refuse what cron would", () => {
     expect(scheduleProblem("0 2 * * *")).toBeUndefined();
     expect(scheduleProblem("@daily")).toBeUndefined();
-    expect(scheduleProblem("")).toMatch(/A schedule/u);
-    expect(scheduleProblem("0 2 * *")).toMatch(/Five fields/u);
+    expect(scheduleProblem("")).toMatch(/Enter a schedule/u);
+    expect(scheduleProblem("0 2 * *")).toMatch(/Enter 5 fields/u);
     expect(scheduleProblem("CRON_TZ=UTC 0 2 * * *")).toMatch(/time zone/u);
-    expect(scheduleProblem("{{ .Values }} * * * *")).toMatch(/Five fields/u);
+    expect(scheduleProblem("{{ .Values }} * * * *")).toMatch(/Enter 5 fields/u);
     expect(namespaceProblem([])).toMatch(/at least one/u);
     expect(namespaceProblem(["Shop"])).toMatch(/not a namespace/u);
     expect(namespaceProblem(["shop", "shop"])).toMatch(/twice/u);
@@ -171,8 +171,8 @@ describe("a new cluster's backups", () => {
   it("go into the request with the target its class offers", () => {
     const form = withBackupChoices({ ...newForm(), name: "web", backups: true }, k3s, true);
     expect(fieldProblems("Add-ons", form, k3s)).toStrictEqual({
-      backupTarget: "Choose a target.",
-      backupKey: "Both parts of the access key.",
+      backupTarget: "Choose a target",
+      backupKey: "Enter both parts of the access key",
     });
     const chosen = withBackupChoices(
       {
@@ -193,9 +193,7 @@ describe("a new cluster's backups", () => {
       volumes: "all",
     });
     expect(JSON.stringify(request(chosen, k3s))).not.toContain("secret");
-    expect(Object.fromEntries(summary(chosen, k3s))["Backups"]).toMatch(
-      /kept 30 days, to aws, with an access key of its own/u,
-    );
+    expect(Object.fromEntries(summary(chosen, k3s))["Backups"]).toMatch(/kept 30 days, to aws, own access key/u);
     // Without Sys.Modify the cluster takes the key for every cluster.
     const shared = withBackupChoices({ ...chosen, backupKey: {} }, k3s, false);
     expect(shared).toMatchObject({ backupOwnKey: false });
@@ -217,9 +215,9 @@ describe("a cluster's backups", () => {
     render(<App />);
 
     await user.click(await screen.findByRole("button", { name: "Edit backups" }));
-    const dialog = screen.getByRole("dialog", { name: "Backups" });
+    const dialog = screen.getByRole("dialog", { name: "Edit backups" });
     await user.click(within(dialog).getByLabelText("Back up with Velero"));
-    expect(within(dialog).getByText("Choose a target.")).toBeInTheDocument();
+    expect(within(dialog).getByText("Choose a target")).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
     await user.selectOptions(within(dialog).getByLabelText("Target"), "store");
     const schedule = within(dialog).getByLabelText("Schedule");
@@ -228,7 +226,7 @@ describe("a cluster's backups", () => {
     await user.type(schedule, "0 3 * * 0");
     expect(schedule).toHaveAccessibleDescription(/Every Sunday at 03:00/u);
     await user.selectOptions(within(dialog).getByLabelText("Time zone"), "UTC");
-    expect(within(dialog).getByText("Not set.")).toBeInTheDocument();
+    expect(within(dialog).getByText("Not set")).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
@@ -275,7 +273,7 @@ describe("a cluster's backups", () => {
     const dialog = screen.getByRole("dialog", { name: "Restore velero-scheduled-20261021013000" });
     await user.click(within(dialog).getByLabelText("Chosen namespaces"));
     await user.click(within(dialog).getByRole("button", { name: "Restore" }));
-    expect(within(dialog).getByText("Name at least one namespace.")).toBeInTheDocument();
+    expect(within(dialog).getByText("Enter at least one namespace")).toBeInTheDocument();
     await user.type(within(dialog).getByLabelText("Namespaces"), "shop, web");
     await user.click(within(dialog).getByRole("button", { name: "Restore" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -291,14 +289,14 @@ describe("a cluster's backups", () => {
       ...signedIn,
       "GET /api/clusters/clusters/web": { body: backingUp },
       "GET /api/clusters/clusters/web/backups": {
-        body: { ...view, canRestore: false, reachable: false, message: "Velero is being set up in the cluster." },
+        body: { ...view, canRestore: false, reachable: false, message: "Setting up Velero." },
       },
     });
     render(<App />);
     await expect(
       screen.findByText(/Restoring needs Sys.Modify on pool kubehenge\/clusters.web/u),
     ).resolves.toBeInTheDocument();
-    expect(screen.getByText("Velero is being set up in the cluster.")).toBeInTheDocument();
+    expect(screen.getByText("Setting up Velero.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Back up now" })).toBeDisabled();
   });
 
@@ -384,8 +382,8 @@ describe("a cluster's backups", () => {
     expect(within(deleting).getByRole("button", { name: `Delete ${scheduledBackup}` })).toBeDisabled();
 
     const restore = screen.getByRole("row", { name: /^velero-scheduled-20261021013000 shop/u });
-    expect(restore).toHaveTextContent("shop; without the volumes' data");
-    expect(restore).toHaveTextContent("2 errors, 1 warning. Results lists them.");
+    expect(restore).toHaveTextContent("shop; without volume data");
+    expect(restore).toHaveTextContent("2 errors, 1 warning.");
     await user.click(within(restore).getByRole("button", { name: "Results of shop-restore" }));
     const dialog = screen.getByRole("dialog", { name: "Results of shop-restore" });
     await expect(within(dialog).findByText("no kind Widget in the cluster")).resolves.toBeInTheDocument();
@@ -425,7 +423,7 @@ describe("a cluster's backups", () => {
     await user.selectOptions(within(dialog).getByLabelText("Into"), "dr");
     await waitFor(() => expect(data).toBeDisabled());
     expect(data).not.toBeChecked();
-    expect(data).toHaveAccessibleDescription(/cannot read the volumes' data/u);
+    expect(data).toHaveAccessibleDescription(/cannot read this backup's volume data/u);
 
     // Without the data the pods stay out, which the server would refuse to restore.
     await user.click(within(dialog).getByText("Kinds of resources"));
@@ -450,12 +448,12 @@ describe("a restore's choices", () => {
     const f = newRestoreFields();
     expect(restoreProblems(f)).toStrictEqual({});
     expect(restoreRequest("b", f)).toStrictEqual({ backup: "b" });
-    expect(restoreProblems({ ...f, whole: false })).toStrictEqual({ namespaces: "Name at least one namespace." });
+    expect(restoreProblems({ ...f, whole: false })).toStrictEqual({ namespaces: "Enter at least one namespace" });
     expect(restoreProblems({ ...f, resources: "Deployments" })).toStrictEqual({
-      resources: "Deployments is not a kind's name.",
+      resources: "Deployments is not a kind name",
     });
     expect(restoreProblems({ ...f, resources: "deployments, secrets", excludedResources: "secrets" })).toStrictEqual({
-      excludedResources: "A kind both restored and left out.",
+      excludedResources: "A kind is both restored and left out",
     });
     expect(
       restoreRequest("b", {
@@ -477,7 +475,7 @@ describe("a restore's choices", () => {
       backup: "b",
       namespaces: ["shop"],
     });
-    expect(restoreScope(finishedRestore)).toBe("shop; without the volumes' data");
+    expect(restoreScope(finishedRestore)).toBe("shop; without volume data");
     expect(
       restoreScope({
         ...finishedRestore,

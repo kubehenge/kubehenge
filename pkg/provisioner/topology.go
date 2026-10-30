@@ -41,8 +41,8 @@ func VersionExample(d templates.Distribution) string {
 
 // Messages for what the topology rules refuse, shared with the interface so that both say the same.
 var (
-	ClusterNameRule  = fmt.Sprintf("lowercase letters, digits and dashes, starting with a letter and ending with a letter or digit, at most %d characters", MaxClusterName)
-	ControlPlaneRule = "control-plane nodes: 1, 3, 5 or 7, an odd number so etcd keeps a majority"
+	ClusterNameRule  = fmt.Sprintf("up to %d lowercase letters, digits and dashes, starting with a letter, not ending with a dash", MaxClusterName)
+	ControlPlaneRule = "control planes: 1, 3, 5 or 7"
 	WorkersRule      = fmt.Sprintf("workers: 0 to %d", MaxWorkers)
 )
 
@@ -61,7 +61,7 @@ func ValidWorkers(n int32) bool { return n >= 0 && n <= MaxWorkers }
 // VersionRule says what is wrong with version as a version of distribution d, or returns "".
 func VersionRule(d templates.Distribution, version string) string {
 	if f := VersionFormats[d]; f != nil && !f.MatchString(version) {
-		return fmt.Sprintf("Kubernetes version: %s versions look like %s", d, VersionExample(d))
+		return "Kubernetes version: use the form " + VersionExample(d)
 	}
 	return ""
 }
@@ -78,7 +78,7 @@ func UpgradeRule(from, to string) string {
 		return ""
 	}
 	if now.Minor > was.Minor+1 || now.less(was) {
-		return fmt.Sprintf("Kubernetes version: from %s, one minor version up at most, and never back", from)
+		return fmt.Sprintf("Kubernetes version: from %s, go up one minor version at most, never down", from)
 	}
 	return ""
 }

@@ -162,23 +162,18 @@ func checkRoomFor(r *addonResource, old, cluster *clusterv1.Cluster, class *clus
 	addons := strings.Join(names, ", ")
 	if room.short() > 0 && !excused(addonRoom.short) {
 		if room.WithoutWorkers {
-			own := ""
-			if r.growth != "" {
-				own = " with them"
-			}
-			return fmt.Errorf("the cluster's add-ons (%s) need %d %s of %s on its control planes, which run them without workers, beyond the %d %s a control plane uses itself%s, and the control planes have %d %s for them",
-				addons, room.Need, r.unit, r.name, room.Base, r.unit, own, room.Have, r.unit)
+			return fmt.Errorf("add-ons (%s) need %d %s of %s on control planes without workers, which have %d %s",
+				addons, room.Need, r.unit, r.name, room.Have, r.unit)
 		}
 		if room.Autoscaled {
-			return fmt.Errorf("the cluster's add-ons (%s) need %d %s of %s on its workers, beyond the %d %s a worker uses itself, and its autoscaled pools may go down to no workers; at least one of them has to keep one",
-				addons, room.Need, r.unit, r.name, room.Base, r.unit)
+			return fmt.Errorf("add-ons (%s) need a worker. Set an autoscaled pool's minimum to 1 or more", addons)
 		}
-		return fmt.Errorf("the cluster's add-ons (%s) need %d %s of %s on its workers, beyond the %d %s a worker uses itself, and the workers have %d %s for them",
-			addons, room.Need, r.unit, r.name, room.Base, r.unit, room.Have, r.unit)
+		return fmt.Errorf("add-ons (%s) need %d %s of %s on workers, which have %d %s for them",
+			addons, room.Need, r.unit, r.name, room.Have, r.unit)
 	}
 	if room.controlPlaneShort() > 0 && !excused(addonRoom.controlPlaneShort) {
-		return fmt.Errorf("with the cluster's add-ons (%s), whose objects grow the API server, each control plane needs %d %s of %s, and has %d %s",
-			addons, room.ControlPlaneNeed, r.unit, r.name, room.ControlPlaneHave, r.unit)
+		return fmt.Errorf("each control plane needs %d %s of %s with add-ons (%s), and has %d %s",
+			room.ControlPlaneNeed, r.unit, r.name, addons, room.ControlPlaneHave, r.unit)
 	}
 	return nil
 }

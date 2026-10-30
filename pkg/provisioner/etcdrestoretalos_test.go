@@ -103,7 +103,7 @@ func TestTalosEtcdRestoreTriesAgain(t *testing.T) {
 	}{
 		{"a node still booting", 2, errTalosNotReady, nil, RestoreSucceeded, "join it again"},
 		{"once", 1, errNotEmpty, retried, RestoreSucceeded, "The first attempt failed"},
-		{"for good", 100, errNotEmpty, nil, RestoreFailed, "may be left wiped"},
+		{"for good", 100, errNotEmpty, nil, RestoreFailed, "may be wiped"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

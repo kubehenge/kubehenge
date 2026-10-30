@@ -80,7 +80,7 @@ type replaced struct {
 }
 
 func (r replaced) step(name string) runStep {
-	st := runStep{Name: name, State: stepRunning, Detail: fmt.Sprintf("%d of %d", min(r.fresh, r.want), r.want)}
+	st := runStep{Name: name, State: stepRunning, Detail: fmt.Sprintf("%d of %d replaced", min(r.fresh, r.want), r.want)}
 	if r.fresh >= r.want && r.old == 0 {
 		st.State = stepDone
 	}
@@ -92,19 +92,19 @@ func (r replaced) step(name string) runStep {
 func changeRun(c *clusterv1.Cluster, machines []clusterv1.Machine, rec changeRecord) runView {
 	v := runView{
 		ID: "change/" + clusterKey(c.Namespace, c.Name), Kind: runChange, Namespace: c.Namespace, Cluster: c.Name,
-		What: "Change the cluster", By: rec.By, Started: &rec.At,
+		What: "Change cluster", By: rec.By, Started: &rec.At,
 	}
 	for _, p := range rec.Settings {
 		v.Settings = append(v.Settings, p.Setting)
 	}
 	controlPlane, workers := rolesSince(c, machines, rec.At)
 	last := rec.At
-	steps := []runStep{{Name: "Accepted by the API server", State: stepDone}}
+	steps := []runStep{{Name: "Accepted", State: stepDone}}
 	if rec.does(effectControlPlane, effectAll) {
-		steps = append(steps, controlPlane.step("Replace the control-plane machines"))
+		steps = append(steps, controlPlane.step("Replace control planes"))
 	}
 	if rec.does(effectWorkers, effectAll) {
-		steps = append(steps, workers.step("Replace the workers"))
+		steps = append(steps, workers.step("Replace workers"))
 	}
 	if rec.does(effectScales) {
 		steps = append(steps, scaled(c, machines))
@@ -234,7 +234,7 @@ func scaled(c *clusterv1.Cluster, machines []clusterv1.Machine) runStep {
 		}
 	}
 	want := controlPlane + workers
-	st := runStep{Name: "Add or remove machines", State: stepRunning, Detail: fmt.Sprintf("%d of %d ready", min(ready, want), want)}
+	st := runStep{Name: "Resize", State: stepRunning, Detail: fmt.Sprintf("%d of %d ready", min(ready, want), want)}
 	if ready == want && all == want {
 		st.State = stepDone
 	}

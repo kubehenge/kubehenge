@@ -251,7 +251,7 @@ func TestHealthSaysWhatIsWrong(t *testing.T) {
 	for _, want := range []string{
 		"error: Pod web/api-7d9: CrashLoopBackOff, 14 restarts",
 		"error: Worker one-md-0-a not ready",
-		"error: Worker one-md-0-a failed its health check",
+		"error: Worker one-md-0-a failed health check",
 		"error: Add-on monitoring failed",
 		"error: Health check md-0 stopped replacing machines",
 		"error: API server check etcd failing",
@@ -481,18 +481,18 @@ func TestHealthWithoutAWayIn(t *testing.T) {
 		change func(h *harness)
 		want   string
 	}{
-		{"its token ran out", func(h *harness) { h.clock = h.clock.Add(2 * time.Hour) }, "Kubehenge's access to the cluster ran out at 2026-10-13 10:00:00 UTC"},
+		{"its token ran out", func(h *harness) { h.clock = h.clock.Add(2 * time.Hour) }, "Access to the cluster expired at 2026-10-13 10:00:00 UTC"},
 		{"no token yet", func(h *harness) {
 			if err := h.kube.Delete(context.Background(), &corev1.Secret{Namespace: "default", Name: provisioner.IdentitySecretName("one", provisioner.IdentityHealth)}); err != nil {
 				t.Fatal(err)
 			}
 		}, notSetUp},
-		{"outside the interface's namespace", func(h *harness) { h.server.Namespace = "clusters" }, "Kubehenge reads inside the clusters of the namespace clusters only"},
+		{"outside the interface's namespace", func(h *harness) { h.server.Namespace = "clusters" }, "Nodes and pods show only for clusters in namespace clusters"},
 		{"outside the interface's namespaces", func(h *harness) {
 			if err := h.kube.Create(context.Background(), managedConfigMap(`["clusters","team-a"]`)); err != nil {
 				t.Fatal(err)
 			}
-		}, "Kubehenge reads inside the clusters of the namespaces clusters, team-a only"},
+		}, "Nodes and pods show only for clusters in namespaces clusters, team-a"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

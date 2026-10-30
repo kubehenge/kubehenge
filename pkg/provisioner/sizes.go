@@ -45,10 +45,10 @@ func checkControlPlaneSize(old, cluster *clusterv1.Cluster, class *clusterv1.Clu
 		}
 	}
 	if have.Workers == 0 {
-		return fmt.Errorf("the control planes of a cluster without workers run its workloads too and need at least %d vCPUs and %d MiB of memory, and have %d vCPUs and %d MiB",
+		return fmt.Errorf("without workers, control planes need %d vCPUs and %d MiB each, not %d vCPUs and %d MiB",
 			need.Cores, need.MemoryMiB, have.Cores, have.MemoryMiB)
 	}
-	return fmt.Errorf("the control planes of a cluster with %d workers need at least %d vCPUs and %d MiB of memory, and have %d vCPUs and %d MiB",
+	return fmt.Errorf("with %d workers, control planes need %d vCPUs and %d MiB each, not %d vCPUs and %d MiB",
 		have.Workers, need.Cores, need.MemoryMiB, have.Cores, have.MemoryMiB)
 }
 

@@ -112,19 +112,19 @@ func (r *rangePicker) pick(what string, asked []string, def string, candidates [
 		return []string{c}, nil
 	}
 	if len(avoid) > 0 {
-		return nil, fmt.Errorf("every %s range Kubehenge tries overlaps the nodes' network %s or another cluster's ranges; choose one", what, r.nodes)
+		return nil, fmt.Errorf("no free %s range beside the nodes' network %s and other clusters. Choose one", what, r.nodes)
 	}
-	return nil, fmt.Errorf("every %s range Kubehenge tries overlaps the nodes' network %s; choose one", what, r.nodes)
+	return nil, fmt.Errorf("no free %s range beside the nodes' network %s. Choose one", what, r.nodes)
 }
 
 func (r *rangePicker) takeAsked(what string, asked []string) ([]string, error) {
 	for _, a := range asked {
 		p, err := netip.ParsePrefix(a)
 		if err != nil || !p.Addr().Is4() || p != p.Masked() {
-			return nil, fmt.Errorf("%s range: %s is no IPv4 network such as 10.244.0.0/16, without host bits", what, a)
+			return nil, fmt.Errorf("%s range: %s is not an IPv4 network like 10.244.0.0/16", what, a)
 		}
 		if slices.ContainsFunc(r.taken, p.Overlaps) {
-			return nil, fmt.Errorf("the %s range %s overlaps the nodes' network %s or the other range", what, p, r.nodes)
+			return nil, fmt.Errorf("%s range %s overlaps the nodes' network %s or the other range", what, p, r.nodes)
 		}
 		r.taken = append(r.taken, p)
 	}

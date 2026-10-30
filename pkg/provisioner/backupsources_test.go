@@ -75,7 +75,7 @@ func TestCheckReadFrom(t *testing.T) {
 		{"twice", `{"enabled":true,"target":"store","readFrom":["shop","shop"]}`, "twice"},
 		{"not a name", `{"enabled":true,"target":"store","readFrom":["Shop"]}`, "not a cluster's name"},
 		{"too many", `{"enabled":true,"target":"store","readFrom":["a","b","c","d","e","f","g","h","i","j","k"]}`, "at most 10"},
-		{"a source's Secret", `{"enabled":true,"target":"store","existingSecret":"velero-sse-c-shop"}`, "writes Secret"},
+		{"a source's Secret", `{"enabled":true,"target":"store","existingSecret":"velero-sse-c-shop"}`, "existingSecret cannot be"},
 	} {
 		err := checkBackups(nil, backupsCluster(tc.raw), targetClass())
 		switch {

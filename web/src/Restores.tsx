@@ -57,7 +57,7 @@ export function RestoresTable({
         <tbody>
           {restores.map((r) => {
             const s = phaseStatus(r.phase);
-            const said = outcome(r, "Results lists them.");
+            const said = outcome(r);
             const refused = r.refused ?? [];
             const progress = restoreProgress(r);
             const hasResults = finished(r.phase) && r.phase !== "FailedValidation";
@@ -95,7 +95,7 @@ export function RestoresTable({
                   <button
                     type="button"
                     disabled={!hasResults}
-                    title={hasResults ? undefined : "Velero writes the results once the restore has finished."}
+                    title={hasResults ? undefined : "Restore not finished"}
                     aria-label={`Results of ${r.name}`}
                     onClick={() => onResults(r)}
                   >
@@ -253,11 +253,11 @@ function useReader(c: Cluster, backup: string, into: string): RestoreTarget | un
 
 // dataText says what restoring, or not restoring, the volumes' data does.
 function dataText(target: RestoreTarget | undefined, data: boolean): string {
-  const empty = "The pods stay out, and their controllers start them again on new, empty volumes.";
+  const empty = "Pods restart on empty volumes.";
   if (target !== undefined && target.volumeData !== true) {
-    return `Velero in ${target.name} cannot read the volumes' data of this backup: it reads another cluster's only where the two share a repository key. ${empty}`;
+    return `${target.name} cannot read this backup's volume data. ${empty}`;
   }
-  return data ? "Each pod waits until its volumes hold their data again." : empty;
+  return data ? "Pods wait for their volume data." : empty;
 }
 
 // NamesField is a field of names typed with commas or spaces between them.
@@ -350,15 +350,11 @@ export function RestoreDialog({
       }
     >
       <p>
-        {filled(backup.from) && `A backup of ${backup.from}. `}
-        Velero brings back what the backup holds: its resources and the data in its pods&apos; volumes. What the cluster
-        still has is left as it is, so delete a namespace first to have it back as it was.
+        {filled(backup.from) && `Backup of ${backup.from}. `}
+        Skips resources that exist. Delete a namespace first to restore it fully.
       </p>
       {readers.length > 0 && (
-        <Field
-          label="Into"
-          hint="This cluster, or one that reads its backups. A restore writes whatever the backup holds, Secrets among it."
-        >
+        <Field label="Into" hint="Writes everything the backup holds, Secrets included">
           {(id) => (
             <select id={id} value={into} onChange={(e) => setInto(e.target.value)}>
               <option value={c.name}>{c.name}, this cluster</option>
@@ -382,7 +378,7 @@ export function RestoreDialog({
             checked={fields.whole}
             onChange={() => setTyped({ ...typed, whole: true })}
           />{" "}
-          Every namespace in the backup
+          All namespaces
         </label>
         <label className="check">
           <input
@@ -396,7 +392,7 @@ export function RestoreDialog({
         {fields.whole ? (
           <NamesField
             label="Leave out"
-            hint="Optional. Separated by commas or spaces."
+            hint="Optional, separate with commas or spaces"
             error={shown("excludedNamespaces")}
             value={fields.excludedNamespaces}
             onChange={(excludedNamespaces) => update({ excludedNamespaces })}
@@ -404,7 +400,7 @@ export function RestoreDialog({
         ) : (
           <NamesField
             label="Namespaces"
-            hint="Separated by commas or spaces."
+            hint="Separate with commas or spaces"
             error={shown("namespaces")}
             value={fields.namespaces}
             onChange={(namespaces) => update({ namespaces })}
@@ -415,7 +411,7 @@ export function RestoreDialog({
         <summary>Kinds of resources</summary>
         <NamesField
           label="Only these kinds"
-          hint="Plural names as kubectl lists them, such as deployments or certificates.cert-manager.io. Empty restores every kind."
+          hint="Plural names like deployments, empty for every kind"
           error={shown("resources")}
           value={fields.resources}
           onChange={(resources) => update({ resources })}

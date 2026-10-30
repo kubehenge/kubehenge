@@ -3,7 +3,7 @@ import { useEffect, useId, useState, type JSX } from "react";
 import { api } from "./api";
 import { csiOffer, snapshotsOffer, type CSIOffer, type SnapshotsOffer } from "./create-form";
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, useChange } from "./ui";
+import { Dialog, ErrorBox, Info, useChange } from "./ui";
 import { flag, record, text } from "./values";
 
 /** csiOn reads whether the cluster runs the plugin's newest release. */
@@ -44,13 +44,14 @@ export function CSIField({
           aria-describedby={refused ? `${hint} ${reason}` : hint}
           onChange={(e) => onChange(e.target.checked)}
         />{" "}
-        Run the newest release of the Proxmox VE CSI plugin
+        Newest CSI plugin release
       </label>
-      <div className="hint" id={hint}>
-        The cluster&apos;s Proxmox VE token gets Datastore.Allocate on storage {storage ?? "of the cluster"}, which the
-        newest release needs: it may then delete any volume on that storage and change the storage&apos;s settings.
-        Without it the cluster runs the plugin&apos;s last release that needs no more than Datastore.AllocateSpace.
-      </div>
+      <Info about="the CSI plugin release">
+        Without it, the cluster runs the last release that needs only Datastore.AllocateSpace.
+      </Info>
+      <p className="hint" id={hint}>
+        Grants Datastore.Allocate on {storage ?? "its storage"}: delete volumes, change settings
+      </p>
       {refused && (
         <p className={checked ? "field-error" : "hint"} id={reason} role={checked ? "alert" : undefined}>
           {problem}
@@ -94,7 +95,7 @@ export function CSIDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: 
   const blocked = on && !csiOn(c) && problem !== undefined;
   return (
     <Dialog
-      title="CSI plugin"
+      title="Edit CSI plugin"
       onClose={onClose}
       onSubmit={() => {
         void send({ variables: { csi: csiWith(c, "datastoreAllocate", on) } });
@@ -147,12 +148,13 @@ export function SnapshotsField({
         />{" "}
         Take volume snapshots
       </label>
-      <div className="hint" id={hint}>
-        The CSI plugin takes VolumeSnapshots, restores them into new volumes and clones volumes. A proxy beside it
-        copies each volume with the cluster&apos;s own Proxmox VE token, as a disk of a VM in the cluster&apos;s pool,
-        and only the cluster&apos;s own volumes. Only on storage local to each node: ZFS, LVM, LVM-thin, directory or
-        btrfs; a copy stays on its volume&apos;s node.
-      </div>
+      <Info about="volume snapshots">
+        A proxy copies only the cluster&apos;s own volumes, with its own token. Needs ZFS, LVM, LVM-thin, directory or
+        btrfs storage.
+      </Info>
+      <p className="hint" id={hint}>
+        Copies stay on their volume&apos;s node
+      </p>
       {refused && (
         <p className={checked ? "field-error" : "hint"} id={reason} role={checked ? "alert" : undefined}>
           {problem}
@@ -195,7 +197,7 @@ export function SnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster; onC
   const blocked = on && !snapshotsOn(c) && problem !== undefined;
   return (
     <Dialog
-      title="Volume snapshots"
+      title="Edit volume snapshots"
       onClose={onClose}
       onSubmit={() => {
         void send({ variables: { csi: csiWith(c, "volumeSnapshots", on) } });

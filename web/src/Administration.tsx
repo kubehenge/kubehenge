@@ -5,7 +5,7 @@ import { AdminPage } from "./AdminPages";
 import { api } from "./api";
 import { ManagementBehind } from "./ManagementUpgrade";
 import { Link } from "./router";
-import { ErrorBox, pollIdle, pollRunning, usePoll } from "./ui";
+import { ErrorBox, pollIdle, pollRunning, usePoll, Views } from "./ui";
 
 // Administration is the appliance's own pages for those who may set it up: the management cluster's
 // settings and removal, Kubehenge's upgrades and repair access, VM templates, and the DNS-01
@@ -41,13 +41,13 @@ export function Administration({ view, onGone }: { view: AdminView; onGone: () =
           <h2>Administration</h2>
         </div>
       </div>
-      <nav className="views" aria-label="Administration's pages">
+      <Views label="Administration pages" open={view}>
         {adminViews.map((v) => (
           <Link key={v.path} to={adminPath(v.path)} current={view === v.path}>
             {v.label}
           </Link>
         ))}
-      </nav>
+      </Views>
       <ErrorBox message={error} />
       <ManagementBehind
         status={status}
@@ -57,10 +57,8 @@ export function Administration({ view, onGone }: { view: AdminView; onGone: () =
       />
       {running && view !== "" && (
         <p className="page-note">
-          {status.job?.kind === "remove"
-            ? "The management cluster is being removed"
-            : "The management cluster is being applied"}
-          : <Link to="/runs/management-cluster">follow the run</Link>.
+          {status.job?.kind === "remove" ? "Removing the management cluster" : "Applying the management cluster"}{" "}
+          <Link to="/runs/management-cluster">View run</Link>
         </p>
       )}
       <div className="object-view">

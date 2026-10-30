@@ -5,6 +5,8 @@ import {
   backupCredentialHint,
   backupKeys,
   backupsOf,
+  noTargets,
+  scheduleHint,
   scheduleProblem,
   scheduleText,
   targetProblem,
@@ -16,9 +18,11 @@ import type { OptionRow } from "./ClusterOptions";
 import { CredentialField } from "./CredentialField";
 import type { Cluster, ClusterEtcdSnapshots, EtcdRestorePlan, EtcdRestoreStatus, EtcdSnapshot } from "./types";
 import {
+  Detail,
   Dialog,
   ErrorBox,
   Field,
+  Info,
   Status,
   age,
   bytes,
@@ -41,14 +45,9 @@ export const defaultEtcdSchedule = "0 */12 * * *";
 export const defaultEtcdKeep = 14;
 const maxEtcdKeep = 1000;
 
-/** etcdSnapshotsHint says what the snapshots are and, as Talos runs etcd outside any pod, how they are read. */
-export const etcdSnapshotsHint = (distribution: string): string =>
-  `Kubehenge copies the cluster's etcd, every object its API holds, to an S3 target an administrator set, encrypted with a key of the cluster's own that Kubehenge keeps. Nothing runs in the cluster for it: the controller reads etcd through ${
-    distribution === "talos" ? "the control-plane nodes' Talos API" : "the cluster's API server"
-  }.`;
+const etcdSnapshotsInfo = "Encrypted copies of every API object, without volume data.";
 
-export const etcdRestoreHint =
-  "Restoring etcd takes every object of the cluster back to the snapshot: Deployments, Secrets, roles and the rest of what its API holds. The data in volumes stays as it is now. It is for a cluster that lost its etcd quorum, or whose state is corrupted or was deleted in bulk; to bring back applications with their data, restore a Velero backup.";
+const etcdRestoreUse = "For lost quorum or corrupted state. Restore a backup to bring back applications.";
 
 /** A cluster's etcdSnapshots variable. */
 export interface EtcdSnapshotsValue {
@@ -63,11 +62,8 @@ export interface EtcdSnapshotsValue {
 /** uploadsItself says whether a distribution can upload etcd snapshots of its own. */
 export const uploadsItself = (distribution: string): boolean => distribution === "rke2" || distribution === "k3s";
 
-/** uploadHint says what the distribution's own upload does, grants and risks. */
-export function uploadHint(distribution: string): string {
-  const d = distributionName(distribution);
-  return `${d}'s servers then also take snapshots themselves on this schedule, read in UTC, and upload them to the ${distribution}-etcd folder beside these, keeping as many in all; they go on while the management cluster is down. What it grants: the target's access key goes into the Secret kubehenge-etcd-s3 in the cluster's kube-system, where whoever may read Secrets there, every cluster admin among them, reads it, and with it everything the key reaches in the target: the other clusters' backups too, when it is the key for every cluster. What it risks: ${d}'s snapshots are stored as etcd holds them, not encrypted by Kubehenge, and Kubehenge neither lists nor restores them; they are restored by hand with ${d}'s own steps. The store's certificate is verified. Switching it on or off, or changing the schedule or keep while it is on, replaces the control-plane machines one at a time.`;
-}
+/** uploadHint names what the distribution's own upload grants: the target's key, readable in the cluster. */
+export const uploadHint = "Cluster admins can read the target's access key";
 
 /** etcdSnapshotsOf reads a cluster's etcdSnapshots variable; unset, snapshots are off. */
 export function etcdSnapshotsOf(v: unknown): EtcdSnapshotsValue {
@@ -128,7 +124,7 @@ export function etcdProblems(
   }
   const keep = Number(f.keep);
   if (!/^\d+$/u.test(f.keep) || keep < 1 || keep > maxEtcdKeep) {
-    p.keep = `A whole number from 1 to ${maxEtcdKeep}.`;
+    p.keep = `A whole number from 1 to ${maxEtcdKeep}`;
   }
   return p;
 }
@@ -149,8 +145,8 @@ export function etcdSnapshotsText(v: EtcdSnapshotsValue, distribution = ""): str
     return "Off";
   }
   const f = etcdFieldsOf(v);
-  const upload = f.upload ? `; ${distributionName(distribution)} uploads its own too` : "";
-  return `${scheduleText(f.schedule)} (${f.timeZone}), keeps the last ${f.keep}, to ${f.target}${upload}`;
+  const upload = f.upload ? `, plus ${distributionName(distribution)}'s own` : "";
+  return `${scheduleText(f.schedule)} (${f.timeZone}), keeps ${f.keep}, to ${f.target}${upload}`;
 }
 
 /** etcdSnapshotsRows is the Options view's row of a cluster's etcd snapshots, where its class offers a target. */
@@ -203,7 +199,7 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
   const listed = targets.some((t) => t.name === fields.target);
   return (
     <Dialog
-      title="etcd snapshots"
+      title="Edit etcd snapshots"
       onClose={onClose}
       onSubmit={() => {
         void send({ variables: { etcdSnapshots: next } });
@@ -224,23 +220,20 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
           type="checkbox"
           checked={enabled}
           disabled={none}
-          aria-describedby={hint}
+          aria-describedby={none ? hint : undefined}
           onChange={(e) => setEnabled(e.target.checked)}
         />{" "}
         Take etcd snapshots
       </label>
-      <p className="hint" id={hint}>
-        {none
-          ? "An administrator has set no backup target yet; they add one in the appliance's settings."
-          : etcdSnapshotsHint(c.distribution)}
-      </p>
+      <Info about="etcd snapshots">{etcdSnapshotsInfo}</Info>
+      {none && (
+        <p className="hint" id={hint}>
+          {noTargets}
+        </p>
+      )}
       {enabled && (
         <>
-          <Field
-            label="Target"
-            hint="The snapshots go into the etcd folder of the cluster's own folder there."
-            error={problems.target}
-          >
+          <Field label="Target" error={problems.target}>
             {(id) => (
               <select id={id} value={fields.target} onChange={(e) => update({ target: e.target.value })}>
                 <option value="" disabled>
@@ -257,11 +250,7 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
               </select>
             )}
           </Field>
-          <Field
-            label="Schedule"
-            hint={`${scheduleProblem(fields.schedule) === undefined ? `${scheduleText(fields.schedule)}. ` : ""}In cron form: minute, hour, day of the month, month and day of the week.`}
-            error={problems.schedule}
-          >
+          <Field label="Schedule" hint={scheduleHint(fields.schedule)} error={problems.schedule}>
             {(id) => (
               <input
                 id={id}
@@ -271,7 +260,7 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
               />
             )}
           </Field>
-          <Field label="Time zone" hint="The schedule's times are in this time zone.">
+          <Field label="Time zone">
             {(id) => (
               <select id={id} value={fields.timeZone} onChange={(e) => update({ timeZone: e.target.value })}>
                 {timeZones(fields.timeZone).map((z) => (
@@ -282,11 +271,7 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
               </select>
             )}
           </Field>
-          <Field
-            label="Keep"
-            hint="Snapshots. Once there are more, Kubehenge deletes the oldest from the target."
-            error={problems.keep}
-          >
+          <Field label="Snapshots to keep" error={problems.keep}>
             {(id) => (
               <input
                 id={id}
@@ -307,10 +292,14 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
                   aria-describedby={uploadHintId}
                   onChange={(e) => update({ upload: e.target.checked })}
                 />{" "}
-                Also have {distributionName(c.distribution)} upload snapshots of its own
+                Also take {distributionName(c.distribution)} snapshots
               </label>
+              <Info about={`${distributionName(c.distribution)} snapshots`}>
+                A shared key also reaches other clusters&apos; backups. {distributionName(c.distribution)} snapshots are
+                unencrypted, restored by hand, and changing this replaces control-plane nodes.
+              </Info>
               <p className="hint" id={uploadHintId}>
-                {uploadHint(c.distribution)}
+                {uploadHint}
               </p>
             </>
           )}
@@ -319,15 +308,12 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
             purpose="backup"
             cluster={c}
             keys={backupKeys}
-            hint={`${backupCredentialHint} Kubehenge writes the snapshots with the same key.`}
+            hint={backupCredentialHint}
           />
         </>
       )}
       {current.enabled && !enabled && (
-        <p className="warning">
-          Kubehenge takes no more snapshots. Those taken stay in the target, and the cluster can still be restored from
-          them.
-        </p>
+        <p className="warning">Stops snapshots. Existing ones stay and can be restored.</p>
       )}
       <ErrorBox message={error} />
     </Dialog>
@@ -343,12 +329,12 @@ const minorOf = (v: string | undefined): string | undefined => /^v?(?<m>\d+\.\d+
 /** restoreProblem says why a cluster cannot be restored from a snapshot, as the controller would say it. */
 export function restoreProblem(c: Cluster, s: EtcdSnapshot): string | undefined {
   if (filled(s.distribution) && s.distribution !== c.distribution) {
-    return `The snapshot is of a ${distributionName(s.distribution)} cluster, and this one is ${distributionName(c.distribution)}.`;
+    return `Snapshot is of ${distributionName(s.distribution)}, not ${distributionName(c.distribution)}`;
   }
   const want = minorOf(s.kubernetesVersion);
   const have = minorOf(c.version);
   if (want !== undefined && have !== undefined && want !== have) {
-    return `The snapshot holds the objects of Kubernetes ${want} and the cluster runs ${have}: restore one taken on ${have}.`;
+    return `Snapshot is of Kubernetes ${want}, not ${have}`;
   }
   return undefined;
 }
@@ -366,27 +352,27 @@ function restoreState(r: EtcdRestoreStatus): { state: Health; text: string } {
       return { state: "progress", text: "Preparing" };
     }
     case "Fetching": {
-      return { state: "progress", text: `Copying the snapshot to ${r.node ?? "the node"}` };
+      return { state: "progress", text: `Copying snapshot to ${r.node ?? "node"}` };
     }
     case "Stopping": {
-      return { state: "progress", text: "Stopping the control plane" };
+      return { state: "progress", text: "Stopping control plane" };
     }
     case "Restoring": {
-      return { state: "progress", text: `Restoring etcd on ${r.node ?? "the node"}` };
+      return { state: "progress", text: `Restoring etcd on ${r.node ?? "node"}` };
     }
     case "Starting": {
-      return { state: "progress", text: "Starting the control plane" };
+      return { state: "progress", text: "Starting control plane" };
     }
     case "Replacing": {
       break;
     }
   }
-  return { state: "progress", text: "Replacing the other control-plane machines" };
+  return { state: "progress", text: "Replacing control-plane nodes" };
 }
 
 function snapshotState(v: ClusterEtcdSnapshots): { state: Health | "idle"; text: string } {
   if (v.condition === undefined) {
-    return { state: "idle", text: v.enabled ? "None taken yet" : "Off" };
+    return { state: "idle", text: v.enabled ? "None yet" : "Off" };
   }
   return v.condition.status === "True" ? { state: "ok", text: "Taken" } : { state: "error", text: "Failed" };
 }
@@ -424,10 +410,8 @@ export function EtcdSnapshotsView({
   }
 
   const pool = poolName(c.pool);
-  const noSnapshot = v.canSnapshot ? undefined : `Taking a snapshot needs VM.Allocate on pool ${pool}.`;
-  const noRestore = v.canRestore
-    ? undefined
-    : `Downloading a snapshot and restoring from one need Sys.Modify on pool ${pool}, as a snapshot holds every Secret of the cluster.`;
+  const noSnapshot = v.canSnapshot ? undefined : `Taking snapshots needs VM.Allocate on pool ${pool}.`;
+  const noRestore = v.canRestore ? undefined : `Download and restore need Sys.Modify on pool ${pool}.`;
   const take = async (): Promise<void> => {
     setBusy(true);
     setActionError(undefined);
@@ -457,11 +441,11 @@ export function EtcdSnapshotsView({
                 void take();
               }}
             >
-              {v.requested ? "Taking a snapshot…" : "Take a snapshot now"}
+              {v.requested ? "Taking snapshot…" : "Take snapshot"}
             </button>
           ) : (
             <button type="button" disabled={!can} onClick={() => onEdit("etcdSnapshots")}>
-              Set up etcd snapshots…
+              Set up snapshots…
             </button>
           )}
         </div>
@@ -492,12 +476,7 @@ export function EtcdSnapshotsView({
 
 function SnapshotsSummary({ cluster: c, view: v }: { cluster: Cluster; view: ClusterEtcdSnapshots }): JSX.Element {
   if (!v.enabled) {
-    return (
-      <>
-        <p>Kubehenge takes no etcd snapshots of this cluster.</p>
-        <p className="hint">{etcdSnapshotsHint(c.distribution)}</p>
-      </>
-    );
+    return <p>etcd snapshots are off</p>;
   }
   const s = snapshotState(v);
   return (
@@ -508,11 +487,8 @@ function SnapshotsSummary({ cluster: c, view: v }: { cluster: Cluster; view: Clu
       <dd>{etcdSnapshotsText({ ...etcdSnapshotsOf(c.variables["etcdSnapshots"]), distributionUpload: false })}</dd>
       {v.distributionUpload === true && (
         <>
-          <dt>{distributionName(c.distribution)}&apos;s own</dt>
-          <dd>
-            Uploaded by the servers to the {c.distribution}-etcd folder beside these, on the schedule in UTC; restored
-            by hand with {distributionName(c.distribution)}&apos;s own steps.
-          </dd>
+          <dt>{distributionName(c.distribution)} snapshots</dt>
+          <dd>In {c.distribution}-etcd, same schedule in UTC, restored by hand</dd>
         </>
       )}
       <dt>Last snapshot</dt>
@@ -525,7 +501,7 @@ function SnapshotsSummary({ cluster: c, view: v }: { cluster: Cluster; view: Clu
           </span>
         )}
         {v.condition?.status === "False" && filled(v.condition.message) && (
-          <div className="hint message">{sentence(v.condition.message)}</div>
+          <Detail>{sentence(v.condition.message)}</Detail>
         )}
       </dd>
     </dl>
@@ -552,18 +528,17 @@ function RestoreState({
         <span className="muted" title={r.snapshot}>
           {" "}
           from {from === undefined ? r.snapshot : `the snapshot of ${when(from.time)}`}
-          {filled(r.by) && `, asked by ${r.by}`}, {when(at)}
+          {filled(r.by) && `, by ${r.by}`}, {when(at)}
         </span>
-        {filled(r.message) && <div className="hint message">{sentence(r.message)}</div>}
+        {filled(r.message) && <Detail>{sentence(r.message)}</Detail>}
         {filled(r.before) && (
           <div className="hint">
-            etcd as it was before is in {before === undefined ? r.before : `the snapshot of ${when(before.time)}`}, to
-            undo the restore by another.
+            Undo by restoring {before === undefined ? r.before : `the snapshot of ${when(before.time)}`}
           </div>
         )}
         {filled(r.noBefore) && (
-          <div className="hint message">
-            {sentence(`no snapshot of etcd as it was could be taken first: ${r.noBefore}`)}
+          <div className="hint">
+            No snapshot to undo it <Detail>{sentence(r.noBefore)}</Detail>
           </div>
         )}
       </dd>
@@ -584,7 +559,7 @@ function SnapshotsTable({
 }): JSX.Element {
   return (
     <div className="box scroll">
-      <h3>Snapshots in the target</h3>
+      <h3>Snapshots</h3>
       <table className="grid">
         <thead>
           <tr>
@@ -601,7 +576,7 @@ function SnapshotsTable({
           {v.snapshots.length === 0 && (
             <tr>
               <td colSpan={5} className="muted">
-                {filled(v.message) ? "Shown once the target can be read." : "No snapshots yet."}
+                {filled(v.message) ? "Target not readable" : "No snapshots yet"}
               </td>
             </tr>
           )}
@@ -633,7 +608,7 @@ function SnapshotsTable({
                   <button
                     type="button"
                     disabled={!v.canRestore || v.restoring || problem !== undefined}
-                    title={noRestore ?? problem ?? (v.restoring ? "A restore is running." : undefined)}
+                    title={noRestore ?? problem ?? (v.restoring ? "Restore running" : undefined)}
                     aria-label={`Restore from ${s.name}`}
                     onClick={() => onRestore(s)}
                   >
@@ -704,17 +679,18 @@ export function EtcdRestoreDialog({
         )
       }
     >
-      <p className="warning">{etcdRestoreHint}</p>
+      <p className="warning">
+        Resets every object to the snapshot, losing later changes. Volume data stays.{" "}
+        <Info about="restoring etcd">{etcdRestoreUse}</Info>
+      </p>
       {automatic ? (
         <>
+          <p>Snapshots etcd first, so another restore undoes it.</p>
           <p>
-            Kubehenge pauses the cluster, snapshots etcd as it is into the target, so that another restore can undo this
-            one,{" "}
             {c.distribution === "talos"
-              ? "wipes etcd on every control-plane node through its Talos API, which reboots each, and restores etcd from the snapshot on one of them; the others join it again"
-              : "stops the control plane on every control-plane VM through the Proxmox VE guest agent, restores etcd on one of them and replaces the others with new machines"}
-            . The cluster&apos;s API is down until the first is back, and whatever was created since{" "}
-            {when(snapshot.time)} is gone.
+              ? "Wipes etcd and reboots every control-plane node."
+              : "Replaces all control-plane nodes but one."}{" "}
+            The API is down until the first one is back.
           </p>
           <Field label="Confirm name" hint={`Type ${c.name}.`}>
             {(id) => <input id={id} value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" />}
@@ -746,17 +722,16 @@ function RestoreSteps({ cluster: c, snapshot }: { cluster: Cluster; snapshot: Et
   return (
     <div className="restore-steps">
       <p>
-        This management cluster does not restore through the Proxmox VE guest agent; an administrator can let it in the
-        appliance&apos;s settings. Until then, these are the steps, run as they come: the commands on a node over SSH or
-        its console, and the kubectl ones with the management cluster&apos;s kubeconfig.
+        Run in order. kubectl steps use the management cluster&apos;s kubeconfig.{" "}
+        <Info about="restoring by hand">Automatic restore needs the guest agent option in the appliance settings.</Info>
       </p>
       <p>
         <a className="button" href={etcdSnapshotURL(c.namespace, c.name, snapshot.name)} download>
-          Download the snapshot
+          Download snapshot
         </a>{" "}
         <span className="muted">
-          Decrypted{snapshot.size === undefined ? "" : `, ${bytes(snapshot.size)}`}. It holds every Secret of the
-          cluster, so keep it as safe as an admin kubeconfig.
+          Decrypted{snapshot.size === undefined ? "" : `, ${bytes(snapshot.size)}`}. Holds every Secret, so guard it
+          like an admin kubeconfig.
         </span>
       </p>
       <ErrorBox message={error} />

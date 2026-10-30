@@ -297,7 +297,7 @@ func validateCertificates(cluster *clusterv1.Cluster) field.ErrorList {
 	} {
 		if h.hostname != "" && h.secret == "" && !inDomain(h.hostname, c.Domain) {
 			errs = append(errs, field.Invalid(variables.Key(h.variable).Child("hostname"), h.hostname,
-				"the cluster's CA signs only names in "+c.Domain+"; choose a name there or a tlsSecret"))
+				"the cluster's CA signs only names in "+c.Domain+". Choose one there or set tlsSecret"))
 		}
 	}
 	return errs

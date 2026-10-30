@@ -43,14 +43,16 @@ describe("the GitOps settings", () => {
   it("hold the repository's URL to the way it is read", () => {
     expect(gitOpsProblems(choice({}))).toStrictEqual({});
     expect(gitOpsProblems(choice({ url: "git@git.example.org:a/b.git" })).url).toMatch(/https:\/\/ or ssh:\/\//u);
-    expect(gitOpsProblems(choice({ url: "https://me:t0ken@git.example.org/a.git" })).url).toMatch(/No token/u);
+    expect(gitOpsProblems(choice({ url: "https://me:t0ken@git.example.org/a.git" })).url).toMatch(
+      /token out of the URL/u,
+    );
     expect(gitOpsProblems(choice({ auth: "deployKey" })).url).toMatch(/deploy key/u);
     expect(gitOpsProblems(choice({ url: "ssh://git@git.example.org/a.git" })).url).toMatch(/https:\/\//u);
     expect(gitOpsProblems(choice({ path: "../other" })).path).toBeDefined();
     expect(gitOpsProblems(choice({ auth: "existingSecret" })).existingSecret).toBeDefined();
     expect(gitOpsProblems(choice({ engine: "flux", ui: true })).ui).toMatch(/host name and a client secret/u);
     expect(gitOpsProblems(choice({ engine: "flux", ui: true, clientSecret: "stored" })).ui).toBe(
-      "Flux's web interface needs a host name.",
+      "Flux's web interface needs a host name",
     );
     expect(
       gitOpsProblems(choice({ engine: "flux", ui: true, hostname: "flux.example.org", clientSecret: "stored" })),
@@ -86,7 +88,7 @@ describe("the GitOps settings", () => {
     const form = { ...newForm(), rancherRegister: false, gitops: choice({ engine: "flux" }) };
     expect(request(form, cls).variables["gitops"]).toMatchObject({ enabled: true, engine: "flux" });
     expect(request({ ...form, gitops: newGitOps() }, cls).variables).not.toHaveProperty("gitops");
-    expect(Object.fromEntries(summary(form, cls))).toMatchObject({ GitOps: `Flux, syncing ${repo} (main)` });
+    expect(Object.fromEntries(summary(form, cls))).toMatchObject({ GitOps: `Flux from ${repo} (main)` });
     expect(addonMemory(form, cls)).toStrictEqual({ names: ["Flux"], mib: 384, controlPlaneMiB: 0 });
     expect(fieldProblems("Add-ons", { ...form, gitops: choice({ url: "" }) }, cls)).toHaveProperty("gitops.url");
     expect(fieldProblems("Add-ons", { ...form, gitops: choice({ url: "" }) }, { ...cls, variables: [] })).toStrictEqual(
@@ -141,10 +143,10 @@ describe("a cluster's GitOps options", () => {
     render(<App />);
 
     await expect(
-      screen.findByRole("cell", { name: "Flux, syncing ssh://git@git.example.org/platform/clusters.git (main)" }),
+      screen.findByRole("cell", { name: "Flux from ssh://git@git.example.org/platform/clusters.git (main)" }),
     ).resolves.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Edit GitOps" }));
-    const dialog = screen.getByRole("dialog", { name: "GitOps" });
+    const dialog = screen.getByRole("dialog", { name: "Edit GitOps" });
     expect(within(dialog).getByLabelText("Deploy key")).toHaveTextContent(
       "ssh-ed25519 AAAAC3Nza kubehenge clusters/web",
     );
@@ -192,7 +194,7 @@ describe("a cluster's GitOps options", () => {
     render(<App />);
 
     await user.click(await screen.findByRole("button", { name: "Edit GitOps" }));
-    const dialog = screen.getByRole("dialog", { name: "GitOps" });
+    const dialog = screen.getByRole("dialog", { name: "Edit GitOps" });
     expect(within(dialog).getByLabelText("URL")).toBeDisabled();
     expect(within(dialog).getByRole("option", { name: "Argo CD (recommended)" })).toBeDisabled();
     expect(within(dialog).getByText(/needs Sys.Modify/u)).toBeInTheDocument();

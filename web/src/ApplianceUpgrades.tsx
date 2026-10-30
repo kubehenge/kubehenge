@@ -3,7 +3,18 @@ import { useState, type JSX } from "react";
 import { api } from "./api";
 import { AutomaticManagement } from "./ManagementUpgrade";
 import type { UpgradePolicy, Upgrades } from "./types";
-import { Dialog, ErrorBox, Field, browserZone, errorMessage, filled, pollRunning, timeZones, usePoll } from "./ui";
+import {
+  Detail,
+  Dialog,
+  ErrorBox,
+  Field,
+  browserZone,
+  errorMessage,
+  filled,
+  pollRunning,
+  timeZones,
+  usePoll,
+} from "./ui";
 import { oneOf } from "./values";
 
 const policies: readonly UpgradePolicy[] = ["off", "patch", "minor"];
@@ -98,7 +109,7 @@ export function ApplianceUpgrades(): JSX.Element {
         }}
         onManagementChanged={reload}
       />
-      <output className="muted notice">{saved ? "Saved." : ""}</output>
+      <output className="muted notice">{saved ? "Saved" : ""}</output>
       <ErrorBox message={actionError} />
       {confirming !== undefined && (
         <Dialog
@@ -119,39 +130,40 @@ export function ApplianceUpgrades(): JSX.Element {
             </>
           }
         >
-          <p>
-            The appliance installs {confirming} and restarts the interface, which is away for about a minute. Clusters
-            keep running. Reload the page afterwards.
-          </p>
+          <p>The interface is away for about a minute, then needs a reload. Clusters keep running.</p>
         </Dialog>
       )}
     </div>
   );
 }
 
-function newerReleases(u: Upgrades): string {
-  if (filled(u.error)) {
-    return `Could not be checked: ${u.error}`;
-  }
-  return u.available.length > 0 ? u.available.join(", ") : "None";
-}
+const upgradeStates = { current: "Up to date", updating: "Upgrading", failed: "Failed" } as const;
+
+const lastUpgrade = (s: NonNullable<Upgrades["status"]>): string =>
+  s.state === "succeeded" ? `${s.from} to ${s.to}` : upgradeStates[s.state];
 
 function Releases({ upgrades: u }: { upgrades: Upgrades }): JSX.Element {
+  const s = u.status;
   return (
     <dl className="summary">
       <dt>Installed</dt>
       <dd>{u.version}</dd>
       <dt>Newer releases</dt>
-      <dd>{newerReleases(u)}</dd>
-      {u.status && (
+      <dd>
+        {filled(u.error) ? (
+          <>
+            Couldn&apos;t check <Detail>{u.error}</Detail>
+          </>
+        ) : (
+          (u.available.length > 0 && u.available.join(", ")) || "None"
+        )}
+      </dd>
+      {s && (
         <>
           <dt>Last upgrade</dt>
           <dd>
-            {u.status.state === "succeeded" && `${u.status.from} to ${u.status.to}`}
-            {u.status.state === "current" && "Already the newest allowed"}
-            {u.status.state === "updating" && "In progress"}
-            {u.status.state === "failed" && `Failed: ${u.status.error ?? ""}`} (
-            {new Date(u.status.time).toLocaleString()})
+            {lastUpgrade(s)} <span className="muted">{new Date(s.time).toLocaleString()}</span>
+            {s.state === "failed" && filled(s.error) && <Detail>{s.error}</Detail>}
           </dd>
         </>
       )}
@@ -180,10 +192,7 @@ function AutomaticUpgrades({
   const timeZone = (): string => (timed ? settings.timeZone : browserZone());
   return (
     <>
-      <Field
-        label="Automatic upgrades"
-        hint="Kubehenge's own releases only, once a day at the hour chosen. The interface restarts briefly."
-      >
+      <Field label="Automatic upgrades" info="Installs once a day at the chosen hour. The interface restarts briefly.">
         {(id) => (
           <select
             id={id}
@@ -204,7 +213,7 @@ function AutomaticUpgrades({
         )}
       </Field>
       {timed && (
-        <Field label="At hour">
+        <Field label="Hour">
           {(id) => (
             <select
               id={id}
@@ -222,7 +231,7 @@ function AutomaticUpgrades({
         </Field>
       )}
       {timed && (
-        <Field label="Time zone" hint="The hour is in this time zone.">
+        <Field label="Time zone">
           {(id) => (
             <select
               id={id}

@@ -124,4 +124,4 @@ export const isIP = (v: string): boolean => ipv4.test(v) || (/^[0-9a-f:.]+$/iu.t
 
 /** rangeProblem says what is wrong with a pod or service range, if anything. */
 export const rangeProblem = (v: string): string | undefined =>
-  cidr.test(v) && isNetwork(v) ? undefined : "An IPv4 network such as 10.244.0.0/16, without host bits.";
+  cidr.test(v) && isNetwork(v) ? undefined : "Enter a network like 10.244.0.0/16, without host bits";

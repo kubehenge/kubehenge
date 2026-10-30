@@ -30,7 +30,7 @@ Before 1.0.0, a minor release may change behaviour: read its release notes ([cha
 | patch releases | the newest release of the installed minor version, such as 0.1.x |
 | minor releases | the newest release of the installed major version, such as 0.x |
 
-**At hour** picks the hour of the day (03:00 by default), in the **Time zone** below it, which starts out as the browser's when automatic upgrades are switched on. The interface checks once a day in that hour, never during a run of the management cluster or a template build, and only Kubehenge's own software is upgraded: the workload clusters are not touched, and the management cluster follows only where its own automatic upgrades are on ([below](#automatically-after-kubehenge)).
+**Hour** picks the hour of the day (03:00 by default), in the **Time zone** below it, which starts out as the browser's when automatic upgrades are switched on. The interface checks once a day in that hour, never during a run of the management cluster or a template build, and only Kubehenge's own software is upgraded: the workload clusters are not touched, and the management cluster follows only where its own automatic upgrades are on ([below](#automatically-after-kubehenge)).
 
 ### What is installed
 
@@ -63,14 +63,14 @@ Each Kubehenge release pins the versions of Talos, Kubernetes, Cluster API, ever
 
 ### In the appliance
 
-On the Administration page, the **Management cluster** section shows the settings of the last run. **Apply again…** asks for the state passphrase given when the management cluster was created and applies them as they are; **Edit…** opens them for changes first, applied with the same passphrase. Applying again:
+On the Administration page, the **Management cluster** section shows the settings of the last run. **Apply again…** asks for the state passphrase given when the management cluster was created and applies them as they are; **Edit settings** opens them for changes first, applied with the same passphrase. Applying again:
 
 - upgrades Talos node by node, each drained first when there are several;
 - upgrades Kubernetes component by component;
 - upgrades each Cluster API provider through the Cluster API Operator, and Kubehenge's ClusterClasses and controller;
 - puts back anything that drifted from the settings.
 
-**When it is behind.** Every apply records the Kubehenge release that ran it, which the section shows as **Applied with**. Once Kubehenge has been upgraded past that release, the top of the Administration page says so: "The management cluster runs what Kubehenge 0.1.0 applied; this appliance carries 0.2.0." **Upgrade the management cluster** beside it lists the components whose versions change, from the old to the new (Talos, Kubernetes, Cluster API and its providers, cert-manager, the Cluster API Operator, and Kubehenge's ClusterClasses and controller by its chart's version), asks for the state passphrase, and applies the settings as they are, as **Apply again…** does.
+**When it is behind.** Every apply records the Kubehenge release that ran it, which the section shows as **Version**. Once Kubehenge has been upgraded past that release, the top of the Administration page says so: "Management cluster upgrade: 0.1.0 to 0.2.0". **Upgrade…** beside it lists the components whose versions change, from the old to the new (Talos, Kubernetes, Cluster API and its providers, cert-manager, the Cluster API Operator, and Kubehenge's ClusterClasses and controller by its chart's version), asks for the state passphrase, and applies the settings as they are, as **Apply again…** does.
 
 **What a running management cluster keeps.** Its nodes keep their addresses, and nodes are only added after them: a single node grows to three by adding two addresses after its own, but none is taken away, since a node given another address is cut off from Talos and etcd, and a node removed leaves its etcd member behind. The API address, gateway, pod and service ranges and the VM disks' storage stay as they were. The appliance refuses such changes. The page shows the API address, gateway, pod and service ranges and VM disks read-only, and keeps Node addresses editable only for adding addresses after the existing ones. Anything else, such as the nodes the VMs run on, the bridge, DNS servers, registry mirrors, identity providers and what clusters may use, can change. With Terraform/OpenTofu the same holds, but nothing refuses it: do not change `node_addresses`, `api_address`, `gateway`, `pod_subnets`, `service_subnets` or `vm_datastore` of a running management cluster, and only append to `node_addresses`.
 
@@ -82,13 +82,13 @@ It runs with your Proxmox VE session, like the first run, and takes about as lon
 
 ### Automatically after Kubehenge
 
-**Management cluster**, under the automatic upgrades in the Kubehenge box, is **Upgraded by hand** by default. Set to **Upgraded automatically too**, the appliance applies the management cluster again on its own once it runs a newer Kubehenge release than the one that last applied it:
+**Management cluster**, under the automatic upgrades in the Kubehenge box, is **Upgrade by hand** by default. Set to **Upgrade automatically**, the appliance applies the management cluster again on its own once it runs a newer Kubehenge release than the one that last applied it:
 
-- in the hour Kubehenge's own upgrades use (**At hour**, **Time zone**), whether or not those are on;
+- in the hour Kubehenge's own upgrades use (**Hour**, **Time zone**), whether or not those are on;
 - at most once a day, never during another run or a template build, and only after an upgrade of Kubehenge asked for in the same hour, which brings what it moves to;
 - as a run like any other, which the page follows, shown as started automatically.
 
-A run that fails stays on the page with its error and log, and is tried again in the next day's hour, not before; **Upgrade the management cluster** runs it at once.
+A run that fails stays on the page with its error and log, and is tried again in the next day's hour, not before; **Upgrade…** runs it at once.
 
 Nobody is signed in then, so switching it on has the appliance keep what an apply needs, which it otherwise never does:
 
@@ -125,7 +125,7 @@ tofu apply
 | Field | Variable | What it is |
 | --- | --- | --- |
 | Upgrade automatically | `mode` | `off` (the default); `patch` releases: the newest release of the cluster's minor version; `minor`, patch and minor releases: also the next minor version. |
-| Move the nodes to new template builds | `nodeImages` | On by default, for kubeadm, RKE2 and k3s: replace the nodes with clones of each new build of their VM template once it is a day old, whatever `mode` says ([below](#the-nodes-operating-system)). On Talos, **Move the nodes to new Talos patch releases**: upgrade the nodes in place to the newest patch release of their Talos minor version ([clusters.md](clusters.md#talos-upgrades)). |
+| Update node images | `nodeImages` | On by default, for kubeadm, RKE2 and k3s: replace the nodes with clones of each new build of their VM template once it is a day old, whatever `mode` says ([below](#the-nodes-operating-system)). On Talos, **Apply Talos patch releases**: upgrade the nodes in place to the newest patch release of their Talos minor version ([clusters.md](clusters.md#talos-upgrades)). |
 | Days | `window.weekdays` | Days of the week the window opens on. |
 | Days of the month | `window.monthDays` | Such as `1, 15`. A day listed here or in Days counts; every day when both are empty. |
 | From | `window.start` | When the window opens, `HH:MM`; `02:00` by default. |
