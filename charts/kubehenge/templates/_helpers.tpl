@@ -245,9 +245,10 @@ controller and a node's speaker, or kube-vip and its cloud provider. Logs are Lo
 256 MiB, the Alloy that reads the events and a node's Alloy. Backups are Velero's server and a
 node's agent, which grow while a backup reads a volume. Argo CD is its application, ApplicationSet
 and repository controllers, its server and Redis; Flux is the operator and Flux's four controllers.
+Kyverno's four controllers, the admission controller twice, hold about 520 MiB.
 */}}
 {{- define "kubehenge.addonMemory" -}}
-kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"logs":512,"backups":384,"kyverno":512,"istio":384,"clusterMesh":128,"loadBalancer":128,"certManager":192,"rancher":2048,"rancherAgent":512,"argocd":512,"flux":384}'
+kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"logs":512,"backups":384,"kyverno":640,"istio":384,"clusterMesh":128,"loadBalancer":128,"certManager":192,"rancher":2048,"rancherAgent":512,"argocd":512,"flux":384}'
 {{- end -}}
 
 {{/*
