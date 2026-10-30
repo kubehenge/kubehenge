@@ -521,7 +521,7 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 	checkInterfaceRulesAdmission(ctx, t, c)
 	checkAbandonAdmission(ctx, t, c)
 
-	workerless :=&clusterv1.Cluster{
+	workerless := &clusterv1.Cluster{
 		Namespace: "team-a", Name: "workerless",
 		Spec: clusterv1.ClusterSpec{Topology: clusterv1.Topology{
 			ClassRef: clusterv1.ClusterClassRef{Name: "kubehenge-k3s", Namespace: classNamespace},
