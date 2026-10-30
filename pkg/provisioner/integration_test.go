@@ -582,9 +582,19 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 	if err := c.Create(ctx, small); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "add-ons (monitoring, cert-manager, Rancher's agent) need 2240 MiB of memory on workers") {
 		t.Fatalf("monitoring on a k3s worker at its least: %v", err)
 	}
-	// A pool's own size is what its workers have, either way.
+	checkPoolSizeAdmission(ctx, t, c, small)
+
+	hooks.DatastoreAllocate = testDatastoreAllocate
+	checkDatastoreAllocateAdmission(ctx, t, c)
+	checkSysAuditAdmission(ctx, t, c, hooks)
+}
+
+// checkPoolSizeAdmission holds a pool of its own size to the add-ons' room as its workers have it,
+// either way: larger, it makes room the cluster's size lacks; smaller, it lacks room that size has.
+func checkPoolSizeAdmission(ctx context.Context, t *testing.T, c client.Client, base *clusterv1.Cluster) {
+	t.Helper()
 	poolSized := func(name, cluster, pool string) *clusterv1.Cluster {
-		p := small.DeepCopy()
+		p := base.DeepCopy()
 		p.Name, p.ResourceVersion = name, ""
 		p.Spec.Topology.Variables = nil
 		withAddons(p, map[string]string{"workerMachine": cluster, "monitoring": `{"enabled":true}`})
@@ -599,10 +609,6 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 	if err := c.Create(ctx, poolSized("pool-short", `{"memoryMiB":4096}`, `{"memoryMiB":1024}`)); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "need 2240 MiB of memory on workers") {
 		t.Fatalf("monitoring on a pool of its own least workers: %v", err)
 	}
-
-	hooks.DatastoreAllocate = testDatastoreAllocate
-	checkDatastoreAllocateAdmission(ctx, t, c)
-	checkSysAuditAdmission(ctx, t, c, hooks)
 }
 
 // checkInterfaceRulesAdmission has the API server refuse what the interface refuses, for a cluster
