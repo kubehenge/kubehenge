@@ -34,12 +34,22 @@ import {
   sentence,
   usePoll,
   Skeleton,
+  type Poll,
 } from "./ui";
 
 // A cluster that is not healthy is looked at more often, to follow it getting better.
 const pollUnwell = 10_000;
 
 const healthCache = pollCache<ClusterHealth>();
+
+/** useClusterHealth reads a cluster's health page, shared by every view that shows part of it. */
+export function useClusterHealth(c: { namespace: string; name: string }): Poll<ClusterHealth> {
+  return usePoll(
+    () => api.health(c.namespace, c.name),
+    (shown) => (shown?.verdict === "healthy" ? pollIdle : pollUnwell),
+    { cache: healthCache, key: `${c.namespace}/${c.name}` },
+  );
+}
 
 const msPerSecond = 1000;
 const percent = 100;
@@ -988,11 +998,7 @@ function PodLog({ cluster, pod, container }: { cluster: ClusterRef; pod: UnwellP
  */
 export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlamp?: string | undefined }): JSX.Element {
   const ref = { namespace: c.namespace, name: c.name };
-  const { data: h, error } = usePoll(
-    () => api.health(ref.namespace, ref.name),
-    (shown) => (shown?.verdict === "healthy" ? pollIdle : pollUnwell),
-    { cache: healthCache, key: `${c.namespace}/${c.name}` },
-  );
+  const { data: h, error } = useClusterHealth(ref);
   const [logsOf, setLogsOf] = useState<UnwellPod>();
   if (!h) {
     return (

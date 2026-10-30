@@ -31,12 +31,13 @@ import (
 
 // The privileges on a cluster's pool, as Proxmox VE uses them for VMs: seeing it, changing it
 // (create, scale, upgrade, add-ons, delete), taking its admin kubeconfig, and opening its VMs'
-// consoles.
+// consoles and rebooting them.
 const (
 	privSee        = "VM.Audit"
 	privChange     = "VM.Allocate"
 	privKubeconfig = "Sys.Modify"
 	privConsole    = "VM.Console"
+	privPower      = "VM.PowerMgmt"
 )
 
 // createdBy records which Proxmox VE user created a cluster through the interface.
@@ -301,6 +302,8 @@ type machineView struct {
 	Created   time.Time `json:"created"`
 	// Console opens the VM's console in Proxmox VE's web interface, for a user who may use it.
 	Console string `json:"console,omitempty"`
+	// Reboot tells whether the user may reboot the machine's VM.
+	Reboot bool `json:"reboot,omitempty"`
 }
 
 // view describes a cluster to a user with privs on its pool. The interface changes clusters only in
@@ -591,6 +594,7 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	vms := s.clusterVMs(r, u, c, access.path)
 	console := access.held.Has(privConsole)
+	reboot := access.held.Has(privPower) && u.namespaces.has(c.Namespace)
 	v.Machines = []machineView{}
 	for i := range machines.Items {
 		m := &machines.Items[i]
@@ -599,6 +603,7 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 		if console {
 			mv.Console = consoleURL(s.ProxmoxURL, &vm)
 		}
+		mv.Reboot = reboot && vm.VMID != 0
 		if v.Talos != nil {
 			mv.Talos, _ = provisioner.MachineTalos(m)
 		}

@@ -647,6 +647,40 @@ describe("clusters", () => {
     await waitFor(() => expect(reads(calls, "DELETE /api/clusters/default/web/machines/md-a")).toBe(1));
   });
 
+  it("cordons and uncordons a node as the health read shows it, and reboots after asking", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/machines");
+    const calls = fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": {
+        body: {
+          ...web,
+          machines: [
+            { ...runningOn("cp-a", "pve1"), node: "cp-a", reboot: true },
+            { ...runningOn("md-a", "pve1", "worker"), node: "md-a", pool: "md-0" },
+          ],
+        },
+      },
+      "GET /api/clusters/default/web/health": {
+        body: { verdict: "healthy", nodes: { items: [{ name: "md-a", machine: "md-a", unschedulable: true }] } },
+      },
+      "PUT /api/clusters/default/web/machines/cp-a/cordon": { status: 204 },
+      "DELETE /api/clusters/default/web/machines/md-a/cordon": { status: 204 },
+      "POST /api/clusters/default/web/machines/cp-a/reboot": { status: 202 },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Uncordon md-a" }));
+    await waitFor(() => expect(reads(calls, "DELETE /api/clusters/default/web/machines/md-a/cordon")).toBe(1));
+    expect(screen.getByText("Cordoned")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cordon cp-a" }));
+    await waitFor(() => expect(reads(calls, "PUT /api/clusters/default/web/machines/cp-a/cordon")).toBe(1));
+    expect(screen.queryByRole("button", { name: "Reboot md-a" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Reboot cp-a" }));
+    const dialog = screen.getByRole("dialog", { name: "Reboot cp-a" });
+    await user.click(within(dialog).getByRole("button", { name: "Reboot" }));
+    await waitFor(() => expect(reads(calls, "POST /api/clusters/default/web/machines/cp-a/reboot")).toBe(1));
+  });
+
   it("reads the setup status no more once signed out, even when the last read fails after", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const setup = held();

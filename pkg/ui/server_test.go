@@ -58,6 +58,7 @@ type fakeAccounts struct {
 	// users are the users made with an administrator token, by ID; usersDeleted counts deletions.
 	users        map[string]string
 	usersDeleted int
+	rebooted     []int
 }
 
 func (f *fakeAccounts) CreateAdministratorToken(_ context.Context, t *pve.Ticket, userid, name, _ string) (string, error) {
@@ -257,6 +258,18 @@ func (f *fakeAccounts) DeleteVM(_ context.Context, _ *pve.Ticket, _ string, vmid
 	return nil
 }
 
+// RebootVM reboots for those with VM.PowerMgmt on the cluster pools, as Proxmox VE checks it on
+// the VM.
+func (f *fakeAccounts) RebootVM(_ context.Context, t *pve.Ticket, _ string, vmid int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.effective(t.Username, "/pool/kubehenge").Has("VM.PowerMgmt") {
+		return pve.ErrForbidden
+	}
+	f.rebooted = append(f.rebooted, vmid)
+	return nil
+}
+
 // BackupCovers knows guest 150 as backed up.
 func (f *fakeAccounts) BackupCovers(_ context.Context, _ *pve.Ticket, vmid int) (bool, error) {
 	f.mu.Lock()
@@ -317,7 +330,7 @@ func newHarness(t *testing.T, objects ...client.Object) *harness {
 		totp:      map[string]string{"otp@pve": "123456"},
 		grants: map[string]map[string][]string{
 			"admin@pve": {"/": {
-				"VM.Audit", "VM.Allocate", "VM.Console", "Sys.Modify", "Datastore.AllocateSpace", "SDN.Use",
+				"VM.Audit", "VM.Allocate", "VM.Console", "VM.PowerMgmt", "Sys.Modify", "Datastore.AllocateSpace", "SDN.Use",
 				"Permissions.Modify", "User.Modify", "Group.Allocate", "Realm.AllocateUser", "Pool.Allocate", "Datastore.AllocateTemplate", "Sys.Audit",
 			}},
 			"viewer@pve": {"/pool/kubehenge/default.one": {"VM.Audit"}},

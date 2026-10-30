@@ -2,6 +2,7 @@ import { useState, type JSX } from "react";
 
 import { api } from "./api";
 import { clusterPath } from "./cluster-paths";
+import { useClusterHealth } from "./Health";
 import { Link } from "./router";
 import type { Cluster, Machine, PveNode } from "./types";
 import {
@@ -82,21 +83,27 @@ export function Machines({
   onChanged: () => void;
 }): JSX.Element {
   const { data: nodes } = usePoll(api.nodes, pollIdle, nodesKept);
+  const health = useClusterHealth(c);
   const [replacing, setReplacing] = useState<Machine>();
   const [deleting, setDeleting] = useState<Machine>();
-  const [keepError, setKeepError] = useState<string>();
+  const [rebooting, setRebooting] = useState<Machine>();
+  const [rowError, setRowError] = useState<string>();
+  const cordoned = new Set(
+    (health.data?.nodes.items ?? []).filter((n) => n.unschedulable === true).map((n) => n.machine ?? n.name),
+  );
   const offline = new Set((nodes ?? []).filter((n) => !n.online).map((n) => n.node));
   const machines = c.machines ?? [];
   const autoscaled = new Set(c.workerPools.filter((p) => p.autoscaling !== undefined).map((p) => p.name));
   const crowded = crowding(machines);
   const talos = c.distribution === "talos";
-  const keep = async (m: Machine): Promise<void> => {
-    setKeepError(undefined);
+  const act = async (m: Machine, call: (ns: string, name: string, machine: string) => Promise<void>): Promise<void> => {
+    setRowError(undefined);
     try {
-      await api.keepMachine(c.namespace, c.name, m.name);
+      await call(c.namespace, c.name, m.name);
       onChanged();
+      await health.reload();
     } catch (err) {
-      setKeepError(errorMessage(err));
+      setRowError(errorMessage(err));
     }
   };
   const columns = [
@@ -113,7 +120,7 @@ export function Machines({
   return (
     <div className="box scroll">
       {crowded !== undefined && <p className="warning">{crowded}</p>}
-      <ErrorBox message={keepError} />
+      <ErrorBox message={rowError} />
       <table className="grid">
         <thead>
           <tr>
@@ -145,6 +152,7 @@ export function Machines({
                 <td>{m.proxmoxNode ?? ""}</td>
                 <td>
                   <Status state={s.state} text={s.text} />
+                  {cordoned.has(m.name) && <div className="hint">Cordoned</div>}
                   {m.replacing === true && filled(m.waiting) && <Detail>{m.waiting}</Detail>}
                 </td>
                 <td>{m.version ?? ""}</td>
@@ -157,11 +165,13 @@ export function Machines({
                     can={can}
                     why={why}
                     autoscaled={autoscaled.has(m.pool ?? "")}
-                    onKeep={() => {
-                      void keep(m);
+                    cordoned={cordoned.has(m.name)}
+                    onAct={(call) => {
+                      void act(m, call);
                     }}
                     onReplace={() => setReplacing(m)}
                     onDelete={() => setDeleting(m)}
+                    onReboot={() => setRebooting(m)}
                   />
                 </td>
               </tr>
@@ -201,6 +211,21 @@ export function Machines({
           {`Drains the node and deletes the VM and its disks. Pool ${deleting.pool ?? ""} shrinks by one.`}
         </MachineDialog>
       )}
+      {rebooting !== undefined && (
+        <MachineDialog
+          cluster={c}
+          machine={rebooting}
+          verb="Reboot"
+          act={api.rebootMachine}
+          onClose={() => setRebooting(undefined)}
+          onDone={() => {
+            setRebooting(undefined);
+            onChanged();
+          }}
+        >
+          Shuts the VM down and starts it again. Its pods stop until the node is back.
+        </MachineDialog>
+      )}
     </div>
   );
 }
@@ -210,17 +235,21 @@ function MachineActions({
   can,
   why,
   autoscaled,
-  onKeep,
+  cordoned,
+  onAct,
   onReplace,
   onDelete,
+  onReboot,
 }: {
   machine: Machine;
   can: boolean;
   why: string | undefined;
   autoscaled: boolean;
-  onKeep: () => void;
+  cordoned: boolean;
+  onAct: (call: (ns: string, name: string, machine: string) => Promise<void>) => void;
   onReplace: () => void;
   onDelete: () => void;
+  onReboot: () => void;
 }): JSX.Element {
   const name = m.node ?? m.name;
   const going = m.phase === "Deleting";
@@ -231,8 +260,30 @@ function MachineActions({
           Console
         </a>
       )}
+      {m.node !== undefined && (
+        <button
+          type="button"
+          disabled={!can || going}
+          title={why}
+          aria-label={`${cordoned ? "Uncordon" : "Cordon"} ${name}`}
+          onClick={() => onAct(cordoned ? api.uncordonMachine : api.cordonMachine)}
+        >
+          {cordoned ? "Uncordon" : "Cordon"}
+        </button>
+      )}
+      {m.reboot === true && (
+        <button type="button" disabled={going} aria-label={`Reboot ${name}`} onClick={onReboot}>
+          Reboot…
+        </button>
+      )}
       {m.replacing === true && !going ? (
-        <button type="button" disabled={!can} title={why} aria-label={`Keep ${name}`} onClick={onKeep}>
+        <button
+          type="button"
+          disabled={!can}
+          title={why}
+          aria-label={`Keep ${name}`}
+          onClick={() => onAct(api.keepMachine)}
+        >
           Keep
         </button>
       ) : (

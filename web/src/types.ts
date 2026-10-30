@@ -168,6 +168,8 @@ export interface Machine {
   talos?: string;
   /** Opens its VM's console in Proxmox VE, for a user who may use it. */
   console?: string;
+  /** Set when the user may reboot its VM. */
+  reboot?: boolean;
 }
 
 /** A section of the health page from one source: what was read, or why it was not. */

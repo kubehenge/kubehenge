@@ -415,6 +415,12 @@ func (a *Accounts) DeleteVM(ctx context.Context, t *Ticket, node string, vmid in
 	return a.waitTask(ctx, t, node, upid)
 }
 
+// RebootVM shuts a VM down and starts it again, as Proxmox VE's Reboot does, without waiting: the
+// shutdown waits on the guest. Proxmox VE lets VM.PowerMgmt do it.
+func (a *Accounts) RebootVM(ctx context.Context, t *Ticket, node string, vmid int) error {
+	return a.send(ctx, t, http.MethodPost, fmt.Sprintf("/nodes/%s/qemu/%d/status/reboot", url.PathEscape(node), vmid), nil, nil)
+}
+
 // ReleaseHA removes the HA rules and resources whose comment starts with prefix, the rules first,
 // so that none is left naming a resource that is gone. Proxmox VE lets only Sys.Console on / do it.
 func (a *Accounts) ReleaseHA(ctx context.Context, t *Ticket, prefix string) error {

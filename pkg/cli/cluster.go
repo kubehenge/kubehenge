@@ -126,7 +126,54 @@ workerReplicas and variables. The API server checks it as it checks one from the
 	}
 	deleteCmd.Flags().BoolVar(&yes, "yes", false, "delete without asking")
 
-	cmd.AddCommand(list, get, kubeconfig, create, scale, deleteCmd)
+	cmd.AddCommand(list, get, kubeconfig, create, scale, deleteCmd, o.machineCommand())
+	return cmd
+}
+
+// machineAction is one of what a machine's row offers in the interface.
+type machineAction struct {
+	use, short, method, tail, done string
+	// undoable is false for an action that takes the machine's VM and disks, which asks for --yes.
+	undoable bool
+}
+
+var machineActions = []machineAction{
+	{"replace", "Delete the machine's VM and disks and have a new one made in its place", http.MethodPut, "/replacement", "replacing", false},
+	{"keep", "Take back a replacement that has not begun", http.MethodDelete, "/replacement", "kept", true},
+	{"delete", "Drain and delete a worker, its pool shrinking by one", http.MethodDelete, "", "deleting", false},
+	{"cordon", "Keep new pods off the machine's node", http.MethodPut, "/cordon", "cordoned", true},
+	{"uncordon", "Let pods onto the machine's node again", http.MethodDelete, "/cordon", "uncordoned", true},
+	{"reboot", "Shut the machine's VM down and start it again, which needs VM.PowerMgmt", http.MethodPost, "/reboot", "rebooting", true},
+}
+
+func (o *clusterOptions) machineCommand() *cobra.Command {
+	cmd := &cobra.Command{Use: "machine", Short: "Act on one of a cluster's machines, by the name get lists it under"}
+	for _, a := range machineActions {
+		var yes bool
+		sub := &cobra.Command{
+			Use:   a.use + " CLUSTER MACHINE",
+			Short: a.short,
+			Args:  cobra.ExactArgs(2),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				if !a.undoable && !yes {
+					return fmt.Errorf("%s takes the machine's VM and disks: add --yes", a.use)
+				}
+				path, err := o.clusterPath(cmd.Context(), args[0])
+				if err != nil {
+					return err
+				}
+				if _, err := o.call(cmd.Context(), a.method, path+"/machines/"+url.PathEscape(args[1])+a.tail, nil); err != nil {
+					return err
+				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "machine %s %s\n", args[1], a.done)
+				return nil
+			},
+		}
+		if !a.undoable {
+			sub.Flags().BoolVar(&yes, "yes", false, a.use+" without asking")
+		}
+		cmd.AddCommand(sub)
+	}
 	return cmd
 }
 

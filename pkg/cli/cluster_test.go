@@ -34,6 +34,13 @@ func (f *fakeInterface) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.sent = append(f.sent, r.Method+" "+r.URL.Path+" "+string(body))
 		f.mu.Unlock()
 	}
+	if strings.HasPrefix(r.URL.Path, "/api/clusters/clusters/web/machines/") {
+		f.mu.Lock()
+		f.sent = append(f.sent, r.Method+" "+r.URL.Path)
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	switch r.Method + " " + r.URL.Path {
 	case "GET /api/clusters":
 		_, _ = io.WriteString(w, `[
@@ -98,6 +105,21 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 	if _, err = runCluster(t, srv.URL, token, "delete", "web", "--yes"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = runCluster(t, srv.URL, token, "machine", "delete", "web", "web-md-0-a"); err == nil {
+		t.Error("a machine was deleted without --yes")
+	}
+	for _, args := range [][]string{
+		{"replace", "web", "web-cp-1", "--yes"},
+		{"keep", "web", "web-cp-1"},
+		{"delete", "web", "web-md-0-a", "--yes"},
+		{"cordon", "web", "web-md-0-b"},
+		{"uncordon", "web", "web-md-0-b"},
+		{"reboot", "web", "web-md-0-b"},
+	} {
+		if out, err = runCluster(t, srv.URL, token, append([]string{"machine"}, args...)...); err != nil || !strings.HasPrefix(out, "machine "+args[2]+" ") {
+			t.Errorf("machine %v = %q, %v", args, out, err)
+		}
+	}
 	file := filepath.Join(t.TempDir(), "new.yaml")
 	if err = os.WriteFile(file, []byte("name: new\nclass: talos\ncontrolPlaneReplicas: 1\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -112,6 +134,12 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 	want := []string{
 		`PATCH /api/clusters/clusters/web {"controlPlaneReplicas":5,"workerPools":{"md-0":4}}`,
 		`DELETE /api/clusters/clusters/web {"confirm":"web"}`,
+		"PUT /api/clusters/clusters/web/machines/web-cp-1/replacement",
+		"DELETE /api/clusters/clusters/web/machines/web-cp-1/replacement",
+		"DELETE /api/clusters/clusters/web/machines/web-md-0-a",
+		"PUT /api/clusters/clusters/web/machines/web-md-0-b/cordon",
+		"DELETE /api/clusters/clusters/web/machines/web-md-0-b/cordon",
+		"POST /api/clusters/clusters/web/machines/web-md-0-b/reboot",
 		`POST /api/clusters {"class":"talos","controlPlaneReplicas":1,"name":"new"}`,
 	}
 	if strings.Join(sent, "\n") != strings.Join(want, "\n") {

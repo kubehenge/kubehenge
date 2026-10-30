@@ -9,10 +9,13 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
 // machineOf describes one of a cluster's machines, on the Proxmox VE node its VM runs on.
@@ -63,11 +66,86 @@ func (s *Server) keepMachine(w http.ResponseWriter, r *http.Request, u user) {
 	s.patchMachine(w, r, u, fmt.Appendf(nil, `{"metadata":{"annotations":{%q:null}}}`, clusterv1.RemediateMachineAnnotation))
 }
 
+// cordonMachine keeps new pods off a machine's node, as `kubectl cordon` does.
+func (s *Server) cordonMachine(w http.ResponseWriter, r *http.Request, u user) {
+	s.cordon(w, r, u, true)
+}
+
+// uncordonMachine lets pods onto a machine's node again, as `kubectl uncordon` does.
+func (s *Server) uncordonMachine(w http.ResponseWriter, r *http.Request, u user) {
+	s.cordon(w, r, u, false)
+}
+
+// cordon sets whether pods may be scheduled on a machine's node, as the cluster's nodes identity,
+// which may change nothing else of a node.
+func (s *Server) cordon(w http.ResponseWriter, r *http.Request, u user, cordoned bool) {
+	c, m, ok := s.clusterMachine(w, r, u, privChange)
+	if !ok {
+		return
+	}
+	node := m.Status.NodeRef.Name
+	if node == "" {
+		writeError(w, http.StatusConflict, "The machine has no node yet.")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), healthDeadline)
+	defer cancel()
+	wl, ranOut, err := s.reach(ctx, u.kube, c, provisioner.IdentityNodes)
+	switch {
+	case err != nil:
+		s.kubeError(w, err)
+		return
+	case wl == nil && ranOut.IsZero():
+		writeError(w, http.StatusConflict, "Node access to this cluster is not set up yet.")
+		return
+	case wl == nil:
+		writeError(w, http.StatusConflict, "Access to the cluster expired. Waiting for it to answer.")
+		return
+	}
+	patch := fmt.Appendf(nil, `{"spec":{"unschedulable":%t}}`, cordoned)
+	if _, err := wl.Kube.CoreV1().Nodes().Patch(ctx, node, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		if apierrors.IsNotFound(err) {
+			writeError(w, http.StatusConflict, "Node "+node+" is not in the cluster.")
+			return
+		}
+		s.Log.Info("a cluster's node request failed", "cluster", c.Namespace+"/"+c.Name, "node", node, "error", err)
+		writeError(w, http.StatusBadGateway, "the cluster did not answer")
+		return
+	}
+	s.Log.Info("node cordon set", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "node", node, "cordoned", cordoned)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// rebootMachine reboots a machine's VM in Proxmox VE as the user, who needs VM.PowerMgmt on it.
+// Proxmox VE shuts the guest down and starts it again; the request does not wait for that.
+func (s *Server) rebootMachine(w http.ResponseWriter, r *http.Request, u user) {
+	c, m, ok := s.clusterMachine(w, r, u, privPower)
+	if !ok {
+		return
+	}
+	pool, err := s.poolPath(c.Namespace, c.Name)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "no such cluster")
+		return
+	}
+	vm, found := s.clusterVMs(r, u, c, pool)[m.Spec.InfrastructureRef.Name]
+	if !found || vm.VMID == 0 || vm.Node == "" {
+		writeError(w, http.StatusConflict, "The machine has no VM in the cluster's pool.")
+		return
+	}
+	if err := s.Accounts.RebootVM(r.Context(), u.ticket, vm.Node, vm.VMID); err != nil {
+		s.proxmoxError(w, err)
+		return
+	}
+	s.Log.Info("machine rebooted", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "machine", m.Name, "vmid", vm.VMID)
+	w.WriteHeader(http.StatusAccepted)
+}
+
 // deleteMachine deletes one of a cluster's workers and shrinks its pool by one, as
 // `kubectl annotate machine <name> cluster.x-k8s.io/delete-machine=` and lowering the pool's
 // replicas in the Cluster do: Cluster API then drains and deletes that machine before any other.
 func (s *Server) deleteMachine(w http.ResponseWriter, r *http.Request, u user) {
-	c, m, ok := s.clusterMachine(w, r, u)
+	c, m, ok := s.clusterMachine(w, r, u, privChange)
 	if !ok {
 		return
 	}
@@ -111,10 +189,10 @@ func (s *Server) deleteMachine(w http.ResponseWriter, r *http.Request, u user) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// clusterMachine reads the cluster the request names, for a user who may change it, and the
+// clusterMachine reads the cluster the request names, for a user who holds privs on it, and the
 // machine it names, which must be one of the cluster's.
-func (s *Server) clusterMachine(w http.ResponseWriter, r *http.Request, u user) (*clusterv1.Cluster, *clusterv1.Machine, bool) {
-	c, _, ok := s.cluster(w, r, u, privChange)
+func (s *Server) clusterMachine(w http.ResponseWriter, r *http.Request, u user, privs ...string) (*clusterv1.Cluster, *clusterv1.Machine, bool) {
+	c, _, ok := s.cluster(w, r, u, privs...)
 	if !ok {
 		return nil, nil, false
 	}
@@ -133,7 +211,7 @@ func (s *Server) clusterMachine(w http.ResponseWriter, r *http.Request, u user) 
 
 // patchMachine applies patch to the machine the request names, which must be one of its cluster's.
 func (s *Server) patchMachine(w http.ResponseWriter, r *http.Request, u user, patch []byte) {
-	c, m, ok := s.clusterMachine(w, r, u)
+	c, m, ok := s.clusterMachine(w, r, u, privChange)
 	if !ok {
 		return
 	}

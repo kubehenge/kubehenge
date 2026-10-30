@@ -75,6 +75,7 @@ type Guests interface {
 // module does not.
 type Removals interface {
 	DeleteVM(ctx context.Context, t *pve.Ticket, node string, vmid int) error
+	RebootVM(ctx context.Context, t *pve.Ticket, node string, vmid int) error
 	ReleaseHA(ctx context.Context, t *pve.Ticket, prefix string) error
 }
 
@@ -246,6 +247,9 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/machines/{machine}/replacement", s.managed(s.replaceMachine))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/machines/{machine}/replacement", s.managed(s.keepMachine))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/machines/{machine}", s.managed(s.deleteMachine))
+	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/machines/{machine}/cordon", s.managed(s.cordonMachine))
+	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/machines/{machine}/cordon", s.managed(s.uncordonMachine))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/machines/{machine}/reboot", s.managed(s.rebootMachine))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/health", s.managed(s.clusterHealth))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/pods/{podNamespace}/{pod}/logs", s.managed(s.podLogs))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/backups", s.managed(s.clusterBackups))

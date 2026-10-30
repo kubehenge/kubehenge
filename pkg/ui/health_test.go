@@ -135,6 +135,7 @@ func healthCluster(now time.Time) []client.Object {
 		c, machine("one-cp-a", "one-cp-a", true, true), worker,
 		token(provisioner.IdentitySecretName("one", provisioner.IdentityHealth), "health-token"),
 		token(provisioner.IdentitySecretName("one", provisioner.IdentityLogs), "logs-token"),
+		token(provisioner.IdentitySecretName("one", provisioner.IdentityNodes), "nodes-token"),
 		controlPlane, release("one-monitoring-r1", "monitoring", "failed", false, "upgrade failed: timed out waiting for the condition"),
 		release("one-headlamp-r1", "headlamp", "deployed", true, ""), pool, check,
 		event("e1", "one-md-0-a", "Node one-md-0-a is not ready"), event("e2", "two-md-0-a", "Node two-md-0-a is not ready"),

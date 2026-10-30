@@ -287,6 +287,12 @@ export interface Api {
   keepMachine: (ns: string, name: string, machine: string) => Promise<void>;
   /** deleteMachine deletes a worker, its pool shrinking by one. */
   deleteMachine: (ns: string, name: string, machine: string) => Promise<void>;
+  /** cordonMachine keeps new pods off a machine's node. */
+  cordonMachine: (ns: string, name: string, machine: string) => Promise<void>;
+  /** uncordonMachine lets pods onto a machine's node again. */
+  uncordonMachine: (ns: string, name: string, machine: string) => Promise<void>;
+  /** rebootMachine has Proxmox VE shut a machine's VM down and start it again. */
+  rebootMachine: (ns: string, name: string, machine: string) => Promise<void>;
   ingressCA: (ns: string, name: string) => Promise<Blob>;
   storedCredential: (purpose: string, cluster?: ClusterRef) => Promise<StoredCredential>;
   storeCredential: (purpose: string, values: Record<string, string>, cluster?: ClusterRef) => Promise<StoredCredential>;
@@ -380,6 +386,12 @@ export const api: Api = {
     act("DELETE", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/replacement`),
   deleteMachine: (ns, name, machine) =>
     act("DELETE", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}`),
+  cordonMachine: (ns, name, machine) =>
+    act("PUT", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/cordon`),
+  uncordonMachine: (ns, name, machine) =>
+    act("DELETE", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/cordon`),
+  rebootMachine: (ns, name, machine) =>
+    act("POST", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/reboot`),
   ingressCA: (ns, name) => download("GET", `${clusterPath(ns, name)}/certificates/ca`),
   storedCredential: (purpose, cluster) => request("GET", credentialPath(purpose, cluster)),
   storeCredential: (purpose, values, cluster) => request("PUT", credentialPath(purpose, cluster), { values }),
