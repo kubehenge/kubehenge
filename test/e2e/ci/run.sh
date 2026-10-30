@@ -7,8 +7,9 @@
 # <test> is management-cluster (applies the management cluster, runs the templates and volumes tests
 # while it is up, and destroys it), management-cluster-upgrade (applies and destroys it), appliance
 # (installs the appliance, which sets the management cluster up and removes it), or kubeadm, rke2,
-# k3s, talos, rancher, cluster-mesh, node-image-refresh or autoscaler, which first apply the
-# management cluster and create the templates they need, and leave it up.
+# k3s, talos, their add-on halves kubeadm-addons, rke2-addons, k3s-addons and talos-addons, rancher,
+# cluster-mesh, node-image-refresh or autoscaler, which first apply the management cluster and
+# create the templates they need, and leave it up.
 #
 # The workload clusters start one minor version behind the management cluster's Kubernetes and are
 # upgraded to it; KUBEHENGE_E2E_FROM names the release they start on. The Talos cluster starts on
@@ -19,7 +20,8 @@ set -eu
 work=$(readlink -f "${1:?usage: $0 <work directory> <test>}")
 test=${2:?usage: $0 <work directory> <test>}
 case "${test}" in
-    management-cluster | management-cluster-upgrade | appliance | kubeadm | rke2 | k3s | talos | rancher | cluster-mesh | node-image-refresh | autoscaler) ;;
+    management-cluster | management-cluster-upgrade | appliance | kubeadm | rke2 | k3s | talos) ;;
+    kubeadm-addons | rke2-addons | k3s-addons | talos-addons | rancher | cluster-mesh | node-image-refresh | autoscaler) ;;
     *)
         echo "unknown test ${test}" >&2
         exit 2
@@ -34,7 +36,7 @@ repo=$(readlink -f "$(dirname "$0")/../../..")
 from=${KUBEHENGE_E2E_FROM:-v1.36.5}
 to=$(sed -n 's/^ *kubernetes *= *"\(v[^"]*\)".*/\1/p' "${repo}/management-cluster/versions.tf")
 [ -n "${to}" ]
-if [ "${test}" = talos ]; then
+if [ "${test%-addons}" = talos ]; then
     talos_to=$(sed -n 's/^\(const \)\{0,1\}[[:space:]]*DefaultTalosVersion = "\(v[^"]*\)".*/\2/p' "${repo}/pkg/templates/plan.go")
     [ -n "${talos_to}" ] || {
         echo "pkg/templates/plan.go names no DefaultTalosVersion" >&2
@@ -83,7 +85,7 @@ template() { # distribution [flags]
 # the build address.
 templates=
 case "${test}" in
-    rke2 | k3s | kubeadm | talos | rancher | cluster-mesh | node-image-refresh | autoscaler)
+    rke2* | k3s* | kubeadm* | talos* | rancher | cluster-mesh | node-image-refresh | autoscaler)
         make -s -C "${repo}" build
         {
             waited=0
@@ -96,8 +98,8 @@ case "${test}" in
                 waited=$((waited + 5))
             done
             case "${test}" in
-                rke2) template rke2 ;;
-                k3s | rancher | cluster-mesh | autoscaler) template k3s ;;
+                rke2*) template rke2 ;;
+                k3s* | rancher | cluster-mesh | autoscaler) template k3s ;;
                 # The test moves its cluster to another node OS than the default.
                 node-image-refresh)
                     template k3s
@@ -107,9 +109,11 @@ case "${test}" in
                     template kubeadm --kubernetes-version "${from}"
                     template kubeadm --kubernetes-version "${to}"
                     ;;
+                # Its add-on half replaces no machine, so it needs only the one it starts from.
+                kubeadm-addons) template kubeadm --kubernetes-version "${from}" ;;
                 # The release the cluster starts on, and the one its machines boot once the
                 # Kubernetes upgrade replaces them.
-                talos)
+                talos*)
                     template talos --talos-version "${talos_from}"
                     template talos --talos-version "${talos_to}"
                     ;;
@@ -198,7 +202,9 @@ case "${test}" in
         ;;
     # The other tests run against a management cluster applied here first. The runner has 4 vCPUs,
     # and a workload cluster with every add-on starting starves when the management node holds 4 of
-    # its own beside it; with no provider upgrade to ride out, 2 do.
+    # its own beside it; with no provider upgrade to ride out, 2 do. Its memory stays the module's
+    # default: with 3 GiB the node stalled for half a minute while the add-on provider
+    # reconciled every release at once, its probes failing, and the webhooks with them.
     *) export TF_VAR_node_cores=2 ;;
 esac
 
@@ -207,7 +213,7 @@ esac
 # cluster offers it as a backup target, and as a second one, which nothing backs up to, for the
 # clusters' reads of each other's backups.
 case "${test}" in
-    rke2 | k3s | kubeadm | talos | cluster-mesh)
+    rke2* | k3s* | kubeadm* | talos* | cluster-mesh)
         s3=${work}/s3
         mkdir -p "${s3}"
         openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 -subj /CN=kubehenge-e2e-s3-ca \
@@ -244,30 +250,41 @@ templates_made
 # Nested vCPUs cost no memory, and with two an RKE2 control plane stopped answering its own lease
 # renewals while everything started.
 export KUBEHENGE_E2E_CONTROL_PLANE_CORES=4
+# Each class's workload test runs in two halves, on a machine each, as the whole outgrows one
+# machine's memory: kubeadm, rke2, k3s and talos take a cluster of the least size the class allows
+# with the add-ons it starts with through everything but the other add-ons, and their -addons halves one sized for every add-on through
+# the add-ons, replacing no machine.
 case "${test}" in
-    rke2)
+    *-addons) export KUBEHENGE_E2E_PART=addons ;;
+    rke2 | k3s | kubeadm | talos) export KUBEHENGE_E2E_PART=lifecycle ;;
+    *) ;;
+esac
+case "${test}" in
+    rke2 | rke2-addons)
         # MetalLB is the default the other distributions run; kube-vip gets a cluster of its own.
         export KUBEHENGE_E2E_LOAD_BALANCER=kube-vip
         # The one cluster that checks its nodes' HA group labels, which every cluster has by default,
         # and switches them off and on again.
-        export KUBEHENGE_E2E_HA_GROUPS=1
+        [ "${test}" != rke2 ] || export KUBEHENGE_E2E_HA_GROUPS=1
         e2e e2e-workload-cluster CLASS=kubehenge-rke2 VERSION="${from}+rke2r1" UPGRADE="${to}+rke2r1"
         ;;
-    k3s)
+    k3s | k3s-addons)
         # The one cluster on the storage of its own, which switches the CSI plugin's newest release
         # on and off, and volume snapshots, with the copy proxy's image pulled from
         # KUBEHENGE_E2E_REGISTRY, where this build was pushed.
-        export KUBEHENGE_E2E_STORAGE=own KUBEHENGE_E2E_DATASTORE_ALLOCATE=1 KUBEHENGE_E2E_LOCAL_STORAGE=local
-        export KUBEHENGE_E2E_VOLUME_SNAPSHOTS=1
+        if [ "${test}" = k3s ]; then
+            export KUBEHENGE_E2E_STORAGE=own KUBEHENGE_E2E_DATASTORE_ALLOCATE=1 KUBEHENGE_E2E_LOCAL_STORAGE=local
+            export KUBEHENGE_E2E_VOLUME_SNAPSHOTS=1
+        fi
         # In one of main.tf's extra_cluster_namespaces, created with the interface's own account.
         export KUBEHENGE_E2E_NAMESPACE=e2e-team
         e2e e2e-workload-cluster CLASS=kubehenge-k3s VERSION="${from}+k3s1" UPGRADE="${to}+k3s1"
         ;;
-    kubeadm)
+    kubeadm | kubeadm-addons)
         export KUBEHENGE_E2E_CNI="${KUBEHENGE_E2E_CNI:-cilium}"
         e2e e2e-workload-cluster CLASS=kubehenge-kubeadm VERSION="${from}" UPGRADE="${to}"
         ;;
-    talos)
+    talos | talos-addons)
         # Talos's own CNI, flannel: the kubeadm run covers Cilium.
         export KUBEHENGE_E2E_TALOS_VERSION="${talos_from}" KUBEHENGE_E2E_TALOS_UPGRADE="${talos_to}"
         e2e e2e-workload-cluster CLASS=kubehenge-talos VERSION="${from}" UPGRADE="${to}"
