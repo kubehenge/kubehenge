@@ -1,6 +1,7 @@
-import type { JSX } from "react";
+import { useState, type JSX } from "react";
 
 import { api } from "./api";
+import { BootLogDialog } from "./BootLog";
 import { clusterPath } from "./ClusterDetail";
 import { Link } from "./router";
 import type { Cluster, Machine, PveNode } from "./types";
@@ -46,6 +47,7 @@ export function Machines({ cluster: c }: { cluster: Cluster }): JSX.Element {
   const machines = c.machines ?? [];
   const crowded = crowding(machines);
   const talos = c.distribution === "talos";
+  const [bootLog, setBootLog] = useState<Machine>();
   const columns = [
     "Name",
     "Role",
@@ -57,9 +59,12 @@ export function Machines({ cluster: c }: { cluster: Cluster }): JSX.Element {
     ...(talos ? ["Talos"] : []),
     "Addresses",
     "Age",
+    // Boot logs carry secrets often enough, so they go to those the admin kubeconfig goes to.
+    ...(c.allowed.kubeconfig ? ["Logs"] : []),
   ];
   return (
     <div className="box scroll">
+      {bootLog !== undefined && <BootLogDialog cluster={c} machine={bootLog} onClose={() => setBootLog(undefined)} />}
       {crowded !== undefined && <p className="warning">{crowded}</p>}
       <table className="grid">
         <thead>
@@ -81,13 +86,13 @@ export function Machines({ cluster: c }: { cluster: Cluster }): JSX.Element {
             const s = machineStatus(m);
             return (
               <tr key={m.name}>
-                <td>
+                <td className="nowrap">
                   {m.node ?? m.name}
                   {filled(m.waiting) && <div className="hint message">{m.waiting}</div>}
                 </td>
                 <td>{m.role === "control-plane" ? "Control plane" : "Worker"}</td>
                 <td>{m.proxmoxNode ?? ""}</td>
-                <td>
+                <td className="nowrap">
                   <Status state={s.state} text={s.text} />
                 </td>
                 <td>{m.phase}</td>
@@ -95,6 +100,13 @@ export function Machines({ cluster: c }: { cluster: Cluster }): JSX.Element {
                 {talos && <td>{m.talos ?? ""}</td>}
                 <td>{(m.addresses ?? []).join(", ")}</td>
                 <td title={new Date(m.created).toLocaleString()}>{age(m.created)}</td>
+                {c.allowed.kubeconfig && (
+                  <td>
+                    <button type="button" aria-label={`Boot log of ${m.node ?? m.name}`} onClick={() => setBootLog(m)}>
+                      Boot log
+                    </button>
+                  </td>
+                )}
               </tr>
             );
           })}

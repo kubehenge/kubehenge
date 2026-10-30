@@ -251,6 +251,7 @@ export function ClusterDetail({
                 Talosconfig
               </button>
             )}
+            <SupportBundleButton cluster={c} download={download} />
             {issuesFromCA(c) && (
               <button
                 type="button"
@@ -272,6 +273,7 @@ export function ClusterDetail({
           </div>
         </div>
         {pageNote(c) !== undefined && <p className="muted page-note">{pageNote(c)}</p>}
+        <HeldUp cluster={c} />
         <ErrorBox message={error} />
         <ErrorBox message={downloadError} />
 
@@ -312,6 +314,73 @@ export function ClusterDetail({
         {action !== undefined && <ActionDialog action={action} cluster={c} onClose={close} />}
       </section>
     </StagingProvider>
+  );
+}
+
+// HeldUp is what holds a cluster up as the controller reports it on the Cluster, above every view:
+// the error it last met there, and machines that are stuck.
+function HeldUp({ cluster: c }: { cluster: Cluster }): JSX.Element | null {
+  if (!filled(c.controllerError) && !filled(c.stalled)) {
+    return null;
+  }
+  return (
+    <>
+      {filled(c.controllerError) && (
+        <div className="error held-up" role="alert">
+          <strong>Controller error</strong>
+          <pre>{c.controllerError}</pre>
+        </div>
+      )}
+      {filled(c.stalled) && (
+        <div className="warning held-up">
+          <strong>Machines stuck for 20 minutes</strong>
+          <pre>{c.stalled}</pre>
+        </div>
+      )}
+    </>
+  );
+}
+
+/** bundleName is what a cluster's support bundle is saved as, the time in UTC as the command line names it. */
+export const bundleName = (ns: string, name: string, at = new Date()): string =>
+  `${ns}-${name}-${at
+    .toISOString()
+    .replaceAll(/[-:]/gu, "")
+    .replace(/\.\d+Z$/u, "Z")}.tar.gz`;
+
+// SupportBundleButton goes to those the admin kubeconfig goes to: a bundle's logs may hold what the
+// redaction misses.
+function SupportBundleButton({
+  cluster: c,
+  download,
+}: {
+  cluster: Cluster;
+  download: (save: () => Promise<void>) => Promise<void>;
+}): JSX.Element | null {
+  const [bundling, setBundling] = useState(false);
+  if (!c.allowed.kubeconfig) {
+    return null;
+  }
+  const save = async (): Promise<void> => {
+    setBundling(true);
+    try {
+      await download(async () => {
+        saveFile(await api.supportBundle(c.namespace, c.name), bundleName(c.namespace, c.name));
+      });
+    } finally {
+      setBundling(false);
+    }
+  };
+  return (
+    <button
+      type="button"
+      disabled={bundling}
+      onClick={() => {
+        void save();
+      }}
+    >
+      {bundling ? "Writing bundle…" : "Support bundle"}
+    </button>
   );
 }
 

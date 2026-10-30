@@ -1,0 +1,18 @@
+[Unit]
+Description=Copy of the boot's journals for Kubehenge to read through the guest agent
+After=systemd-journald.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/kubehenge/boot-log
+# /var/log/kubehenge, root's alone, labelled for the guest agent to read (kubehenge-qga.cil).
+LogsDirectory=kubehenge
+LogsDirectoryMode=0700
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+# No NoNewPrivileges: under it SELinux refuses the script's move out of systemd's own domain.

@@ -10,6 +10,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
 // machineAt is a machine of cluster one: a control-plane machine or a worker of md-0, ready or not.
@@ -83,6 +85,52 @@ func TestAChangeRunsUntilTheMachinesItReplacesAreNewAndTheClusterSettles(t *test
 	}
 	if v.By != "dev@pve" || !slices.Equal(v.Settings, []string{"podSecurity"}) || v.ID != "change/default/one" {
 		t.Errorf("run %+v", v)
+	}
+}
+
+func TestAChangeWhoseMachinesStalledSaysWhyAndIsKept(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)
+	c := cluster("default", "one")
+	rec := changeRecord{By: "dev@pve", At: at, Settings: []plannedChange{{Setting: "version", Effect: effectAll}}}
+	machines := []clusterv1.Machine{
+		machineAt("one-cp-old", controlPlaneRole, metav1.ConditionTrue, at.Add(-time.Hour)),
+		machineAt("one-cp-new", controlPlaneRole, metav1.ConditionFalse, at.Add(time.Minute)),
+	}
+	why := "no machine has become ready since 2026-10-13 09:01 UTC; one-cp-new: VirtualMachineProvisioned: VM template not found"
+	c.Status.Conditions = []metav1.Condition{{Type: provisioner.MachinesStalledCondition, Status: metav1.ConditionTrue, Reason: provisioner.StalledReason, Message: why}}
+
+	v := changeRun(c, machines, rec)
+	if v.State != runStalled || v.Error != why || v.Finished != nil {
+		t.Fatalf("stalled change: %s %q %v", v.State, v.Error, v.Finished)
+	}
+	kept := recentRuns([]runView{v}, at.Add(2*time.Hour))
+	if len(kept) != 1 || kept[0].State != runStalled {
+		t.Errorf("a stalled run left the list: %+v", kept)
+	}
+
+	c.Status.Conditions[0].Status = metav1.ConditionFalse
+	if v = changeRun(c, machines, rec); v.State != runRunning || v.Error != "" {
+		t.Errorf("once moving again: %s %q", v.State, v.Error)
+	}
+}
+
+func TestAClusterShowsWhatHoldsItUp(t *testing.T) {
+	t.Parallel()
+	c := cluster("default", "one")
+	c.Status.Conditions = []metav1.Condition{
+		{Type: provisioner.KubehengeReadyCondition, Status: metav1.ConditionFalse, Reason: provisioner.ReconcileFailedReason, Message: "Proxmox VE task UPID:pve1 failed: no space"},
+		{Type: provisioner.MachinesStalledCondition, Status: metav1.ConditionTrue, Reason: provisioner.StalledReason, Message: "one-cp-1: VM template not found"},
+	}
+	if got := controllerError(c); got != "Proxmox VE task UPID:pve1 failed: no space" {
+		t.Errorf("controllerError = %q", got)
+	}
+	if got := stalled(c); got != "one-cp-1: VM template not found" {
+		t.Errorf("stalled = %q", got)
+	}
+	c.Status.Conditions[0].Status, c.Status.Conditions[1].Status = metav1.ConditionTrue, metav1.ConditionFalse
+	if controllerError(c) != "" || stalled(c) != "" {
+		t.Error("a cluster that is well still shows an error")
 	}
 }
 

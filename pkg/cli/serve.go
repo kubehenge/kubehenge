@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -56,6 +56,7 @@ type serveOptions struct {
 	listen       string
 	certFile     string
 	keyFile      string
+	logs         logOptions
 
 	headlampListen     string
 	headlampUpstream   string
@@ -101,6 +102,7 @@ kubeconfig. The interface then acts in the management cluster with the kubeconfi
 	f.StringVar(&a.Tofu, "tofu", "/usr/local/bin/tofu", "the OpenTofu binary the appliance runs")
 	f.StringVar(&o.updateSpool, "update-spool", "/var/lib/kubehenge-update", "the appliance updater's spool, where upgrades are requested")
 	f.StringVar(&o.releaseIndex, "release-index", releaseIndexDefault(), "URL of the signed index of Kubehenge's releases (env KUBEHENGE_RELEASE_INDEX)")
+	o.logs.addFlags(f, "log in development mode: each line names where in the code it was logged; still in JSON")
 	return cmd
 }
 
@@ -137,7 +139,9 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 		HTTP: &http.Client{Timeout: releaseChannelTimeout}, URLs: provisioner.DefaultChannelURLs, Pins: provisioner.DefaultReleasePins(),
 	}
 	s.TalosReleases = templates.DefaultSources().TalosReleases
-	s.Log = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	if s.Log, err = o.logs.slogLogger(os.Stderr); err != nil {
+		return err
+	}
 
 	if o.a.Dir == "" {
 		cfg, cfgErr := ctrl.GetConfig()
@@ -147,6 +151,7 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 		if s.Kube, err = newClient(cfg, scheme); err != nil {
 			return err
 		}
+		s.NewClientset = func() (kubernetes.Interface, error) { return newClientset(cfg) }
 	} else if err = o.setUpAppliance(conn); err != nil {
 		return err
 	}
@@ -199,6 +204,18 @@ func (o *serveOptions) setUpAppliance(conn *pve.Config) error {
 		}
 	}
 	s.Appliance = a
+	// Read when asked: the appliance writes the kubeconfig once it has set the management cluster up.
+	s.NewClientset = func() (kubernetes.Interface, error) {
+		kubeconfig, readErr := os.ReadFile(a.KubeconfigPath())
+		if readErr != nil {
+			return nil, fmt.Errorf("the management cluster's kubeconfig: %w", readErr)
+		}
+		cfg, cfgErr := clientcmd.RESTConfigFromKubeConfig(kubeconfig)
+		if cfgErr != nil {
+			return nil, fmt.Errorf("parsing the kubeconfig: %w", cfgErr)
+		}
+		return newClientset(cfg)
+	}
 	pveConfig := *conn
 	s.MakeTemplate = func(ctx context.Context, t *pve.Ticket, b templates.Builder, tpl *templates.Template) (int, error) {
 		session, connErr := pve.ConnectSession(pveConfig, t)

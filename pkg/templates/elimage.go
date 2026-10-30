@@ -108,5 +108,6 @@ func (f *elFamily) recipe(b Bake, keys map[string]string) (Recipe, error) {
 		BuilderDiskGiB: imageBuilderGiB,
 		MemoryMiB:      imageBuilderMiB,
 		Log:            buildLog,
+		BootLog:        true,
 	}, nil
 }

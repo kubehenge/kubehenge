@@ -5,7 +5,8 @@
 # Build now asks, makes a new one; the cluster's node stays on its build while the maintenance window
 # is closed and moves to the new one once it opens; a second run makes a third build and deletes the
 # first, which nothing runs any more, while the two newest stay; the cluster's node OS changed to
-# Rocky Linux replaces its node with a clone of that template, SELinux enforcing on it; nothing of
+# Rocky Linux replaces its node with a clone of that template, SELinux enforcing on it and its boot
+# log read through its guest agent; nothing of
 # the cluster is left afterwards.
 #
 #   test/e2e/node-image-refresh.sh
@@ -85,9 +86,14 @@ refresh() {
     system patch configmap kubehenge-template-requests --type=merge -p "${request}"
     until_true 300 "the controller starts the refresh" started_since "${asked}"
     until_true 5400 "the refresh finishes" finished
-    system logs "job/${job}" | tail -n 20
+    run_log=$(system logs "job/${job}")
+    printf '%s\n' "${run_log}" | tail -n 20
     state=$(system get configmap kubehenge-template-refresh -o jsonpath='{.data.state}')
     [ "${state}" = succeeded ] || fail "the refresh recorded its run as ${state}"
+    # Each new build of k3s's template was seen, through Proxmox VE with the refresh's own token, to
+    # hand out its boot log through its guest agent.
+    printf '%s\n' "${run_log}" | grep -q "hands out its boot log and cloud-init's output through the guest agent$" ||
+        fail 'the refresh built no template that hands out its boot log'
 }
 started_since() {
     job=$(system get jobs -l kubehenge.dev/template-refresh=true -o json |
@@ -236,6 +242,18 @@ case "${cpu}" in
     x86-64-v3* | host*) echo "CPU type ${cpu}" ;;
     *) fail "the Rocky Linux node runs on CPU type ${cpu}, below its x86-64-v3" ;;
 esac
+# Its boot log, read through its guest agent, whose SELinux policy the check below then sees as
+# having denied nothing.
+machine=$(machine_name)
+boot_log=$(boot_logs "${ns}" node-image "${machine}")
+for expected in "cloud-init-output.log|^Cloud-init v[.] " "journal of cloud-init|\[[0-9]+\]: " "journal of k3s|\[[0-9]+\]: "; do
+    # shellcheck disable=SC2310 # its failure is reported below.
+    if ! boot_log_shows "${boot_log}" "${machine}" "${expected%%|*}" "${expected#*|}"; then
+        boot_log_summary "${boot_log}" "${machine}"
+        fail "the boot log of the Rocky Linux node holds no ${expected%%|*}"
+    fi
+    echo "${expected%%|*}"
+done
 request=$(jq -cn '{command: ["sh", "-c", ". /etc/os-release; echo \"${ID} ${VERSION_ID} $(getenforce)\"; ! { journalctl -k -b --no-pager -q; cat /var/log/audit/audit.log 2>/dev/null; } | grep \"avc: *denied\""]}')
 # shellcheck disable=SC2086 # curl_ca is empty or one option and its argument.
 pid=$(curl -sS --fail ${curl_ca} -H "Authorization: PVEAPIToken=${KUBEHENGE_PROXMOX_TOKEN}" -H 'Content-Type: application/json' \

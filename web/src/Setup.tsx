@@ -96,6 +96,7 @@ export interface SetupForm {
   refreshDNS: string;
   creatorBuilds: boolean;
   clusterSysAudit: boolean;
+  nodeBootLogs: boolean;
   moreNamespaces: boolean;
   // Separated by commas or lines.
   extraNamespaces: string;
@@ -227,6 +228,9 @@ export function settings(f: SetupForm): ManagementSettings {
   if (!f.clusterSysAudit) {
     s.clusterSysAudit = false;
   }
+  if (!f.nodeBootLogs) {
+    s.nodeBootLogs = false;
+  }
   if (f.moreNamespaces && list(f.extraNamespaces).length > 0) {
     s.extraClusterNamespaces = list(f.extraNamespaces);
   }
@@ -311,6 +315,7 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     etcdRestore: saved.etcdRestore === true,
     ...refreshFields(saved.templateRefresh),
     clusterSysAudit: saved.clusterSysAudit !== false,
+    nodeBootLogs: saved.nodeBootLogs !== false,
     moreNamespaces: (saved.extraClusterNamespaces ?? []).length > 0,
     extraNamespaces: (saved.extraClusterNamespaces ?? []).join(", "),
     headlampSignIn: saved.headlampSignIn === true,
@@ -698,6 +703,7 @@ function optInRows(s: ManagementSettings): [string, string][] {
     ["HA rule placements", onOff(s.offerHARules === true)],
     ["Newest CSI release", onOff(s.clusterDatastoreAllocate === true)],
     ["HA group labels", onOff(s.clusterSysAudit !== false)],
+    ["Nodes' boot logs", onOff(s.nodeBootLogs !== false)],
   ];
 }
 
@@ -1305,6 +1311,30 @@ function SysAuditChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element 
   );
 }
 
+function BootLogsChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element {
+  const hint = useId();
+  return (
+    <fieldset className="group">
+      <legend>Nodes&apos; boot logs</legend>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.nodeBootLogs}
+          aria-describedby={hint}
+          onChange={(e) => set("nodeBootLogs", e.target.checked)}
+        />{" "}
+        Read boot logs
+      </label>
+      <Info about="Nodes' boot logs">
+        Shows why a kubeadm, RKE2 or k3s node does not join. Talos nodes&apos; logs come through Talos either way.
+      </Info>
+      <p className="hint" id={hint}>
+        Grants VM.GuestAgent.FileRead on the clusters&apos; pool.
+      </p>
+    </fieldset>
+  );
+}
+
 function NamespacesChoice({ form, set, shown }: FieldsProps): JSX.Element {
   return (
     <fieldset className="group">
@@ -1755,6 +1785,7 @@ function SetupWizard({
         <DatastoreAllocateChoice form={form} set={set} />
         <RefreshChoice form={effective} set={set} shown={shown} />
         <SysAuditChoice form={form} set={set} />
+        <BootLogsChoice form={form} set={set} />
         <NamespacesChoice form={form} set={set} shown={shown} />
         <HeadlampChoice form={form} set={set} />
         <HeadlampActionsChoice form={form} set={set} />

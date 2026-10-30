@@ -96,14 +96,55 @@ func ServeGuestRequest(ctx context.Context, restore *proxmox.Client, raw []byte)
 	return (&ProxmoxGuests{Client: restore}).Run(ctx, req.VMID, req.Script, req.Timeout)
 }
 
-// locate finds the node a VM is on, and whether it runs.
 func (g *ProxmoxGuests) locate(ctx context.Context, vmid int64) (string, bool, error) {
+	return locateVM(ctx, g.Client, vmid)
+}
+
+// GuestFiles reads files inside clusters' VMs.
+type GuestFiles interface {
+	// ReadFile reads up to limit bytes from the start of a file in a VM, and tells whether the
+	// file goes on past them.
+	ReadFile(ctx context.Context, vmid int64, file string, limit int) (string, bool, error)
+	// Running tells whether a VM is running.
+	Running(ctx context.Context, vmid int64) (bool, error)
+}
+
+// ProxmoxGuestFiles reads files through the VMs' QEMU guest agents, with the controller's own
+// token, which holds VM.GuestAgent.FileRead on the workload pool: no commands, and only the files
+// the node's agent policy lets it open.
+type ProxmoxGuestFiles struct {
+	Client *proxmox.Client
+}
+
+var _ GuestFiles = &ProxmoxGuestFiles{}
+
+// Running implements GuestFiles.
+func (g *ProxmoxGuestFiles) Running(ctx context.Context, vmid int64) (bool, error) {
+	_, running, err := locateVM(ctx, g.Client, vmid)
+	return running, err
+}
+
+// ReadFile implements GuestFiles.
+func (g *ProxmoxGuestFiles) ReadFile(ctx context.Context, vmid int64, file string, limit int) (string, bool, error) {
+	node, _, err := locateVM(ctx, g.Client, vmid)
+	if err != nil {
+		return "", false, err
+	}
+	content, truncated, err := pve.GuestFileRead(ctx, g.Client, node, vmid, file, limit)
+	if err != nil {
+		return "", false, fmt.Errorf("VM %d: %w", vmid, err)
+	}
+	return content, truncated, nil
+}
+
+// locateVM finds the node a VM is on, and whether it runs.
+func locateVM(ctx context.Context, c *proxmox.Client, vmid int64) (string, bool, error) {
 	var vms []struct {
 		VMID   int64  `json:"vmid"`
 		Node   string `json:"node"`
 		Status string `json:"status"`
 	}
-	if err := g.Client.Get(ctx, "/cluster/resources?type=vm", &vms); err != nil {
+	if err := c.Get(ctx, "/cluster/resources?type=vm", &vms); err != nil {
 		return "", false, fmt.Errorf("listing the VMs: %w", err)
 	}
 	for _, vm := range vms {
@@ -111,7 +152,7 @@ func (g *ProxmoxGuests) locate(ctx context.Context, vmid int64) (string, bool, e
 			return vm.Node, vm.Status == "running", nil
 		}
 	}
-	return "", false, fmt.Errorf("VM %d is not there, or not one the token may see", vmid)
+	return "", false, fmt.Errorf("VM %d is not there, or not one this token may see", vmid)
 }
 
 // tail is the end of s, at most n bytes of it.

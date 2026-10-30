@@ -686,6 +686,34 @@ func TestClusterSysAuditReachesTheModule(t *testing.T) {
 	}
 }
 
+// The controller reads nodes' boot logs through the guest agent unless the settings switch it off.
+func TestNodeBootLogsReachTheModule(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	for _, set := range []*bool{nil, new(false), new(true)} {
+		on := set == nil || *set
+		s := settings("pve1")
+		s.NodeBootLogs = set
+		if err := a.Apply(s, "correct horse battery staple", ticket(), func(context.Context, []byte) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+		if j := waitFor(t, a); j.State != "succeeded" {
+			t.Fatalf("job = %+v", j)
+		}
+		main, err := os.ReadFile(filepath.Join(a.Dir, "management", "main.tf"))
+		if err != nil || !strings.Contains(string(main), "node_boot_logs             = var.settings.nodeBootLogs") {
+			t.Fatalf("main.tf: %v\n%s", err, main)
+		}
+		vars, err := os.ReadFile(filepath.Join(a.Dir, "management", "terraform.tfvars.json"))
+		if want := fmt.Sprintf(`"nodeBootLogs": %t`, on); err != nil || !strings.Contains(string(vars), want) {
+			t.Fatalf("tfvars want %s: %v\n%s", want, err, vars)
+		}
+		if saved := a.SavedSettings(); saved.ReadsNodeBootLogs() != on || (set == nil) != (saved.NodeBootLogs == nil) {
+			t.Errorf("the setting %t was not kept", on)
+		}
+	}
+}
+
 // Restores through the guest agent reach the module as its etcd_restore variable.
 func TestEtcdRestoreReachesTheModule(t *testing.T) {
 	t.Parallel()
