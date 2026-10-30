@@ -1,4 +1,4 @@
-import { clearPollCaches } from "./poll-cache";
+import { clearPollCaches, keepCache } from "./poll-cache";
 import type {
   BackupRun,
   Bridge,
@@ -95,6 +95,42 @@ async function fetchAnswer(path: string, init: RequestInit): Promise<Response> {
   }
 }
 
+// The reads a signed-in page starts with. Each waits on the one before (the session, the setup
+// status, then the fleet), so they are made together as the page loads, and the first read of each
+// takes its answer.
+const firstReads = ["/api/session", "/api/setup", "/api/clusters", "/api/fleet/health", "/api/runs"];
+
+// An answer made before it was asked for is taken only this soon after, when it is still current.
+const primedFor = 10_000;
+
+const primed = keepCache(new Map<string, { at: number; answer: Promise<Response> }>());
+
+/** primeFirstReads makes the first reads of a signed-in page at once, before the page asks. */
+export function primeFirstReads(): void {
+  const at = Date.now();
+  for (const path of firstReads) {
+    const answer = fetchAnswer(path, { method: "GET", credentials: "same-origin" });
+    void unheard(answer);
+    primed.set(path, { at, answer });
+  }
+}
+
+// unheard waits on an answer the page may never ask for, signed out or still setting up, so that
+// its failure goes unreported unless the page takes it.
+async function unheard(answer: Promise<unknown>): Promise<void> {
+  try {
+    await answer;
+  } catch {
+    // The read that takes it reports it.
+  }
+}
+
+function takePrimed(path: string): Promise<Response> | undefined {
+  const p = primed.get(path);
+  primed.delete(path);
+  return p && Date.now() - p.at < primedFor ? p.answer : undefined;
+}
+
 // errorOf is the API's own message in a failed answer's body, or "" when the body is not its JSON
 // error.
 async function errorOf(res: Response): Promise<string> {
@@ -135,7 +171,7 @@ async function send(method: string, path: string, { body, headers: extra = {} }:
   if (body !== undefined) {
     init.body = JSON.stringify(body);
   }
-  const res = await fetchAnswer(path, init);
+  const res = await ((method === "GET" ? takePrimed(path) : undefined) ?? fetchAnswer(path, init));
   noteRelease(res);
   if (!res.ok) {
     const message = (await errorOf(res)) || res.statusText;
