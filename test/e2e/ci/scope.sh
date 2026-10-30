@@ -29,6 +29,7 @@ need=
         *_test.go | */testdata/* | test/integration/*) ;;
         test/e2e/management-cluster-upgrade.sh | test/e2e/rancher.sh) ;;
         test/e2e/workload-cluster.sh) need="${need} ${workload}" ;;
+        test/e2e/backups.sh) need="${need} ${workload} cluster-mesh" ;;
         test/e2e/cluster-mesh.sh) need="${need} cluster-mesh" ;;
         test/e2e/node-image-refresh.sh) need="${need} node-image-refresh" ;;
         test/e2e/autoscaler.sh) need="${need} autoscaler" ;;
