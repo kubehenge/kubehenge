@@ -582,6 +582,23 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 	if err := c.Create(ctx, small); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "add-ons (monitoring, cert-manager, Rancher's agent) need 2240 MiB of memory on workers") {
 		t.Fatalf("monitoring on a k3s worker at its least: %v", err)
 	}
+	// A pool's own size is what its workers have, either way.
+	poolSized := func(name, cluster, pool string) *clusterv1.Cluster {
+		p := small.DeepCopy()
+		p.Name, p.ResourceVersion = name, ""
+		p.Spec.Topology.Variables = nil
+		withAddons(p, map[string]string{"workerMachine": cluster, "monitoring": `{"enabled":true}`})
+		p.Spec.Topology.Workers.MachineDeployments[0].Variables.Overrides = []clusterv1.ClusterVariable{
+			{Name: "workerMachine", Value: apiextensionsv1.JSON{Raw: []byte(pool)}},
+		}
+		return p
+	}
+	if err := c.Create(ctx, poolSized("pool-room", `{"memoryMiB":1024}`, `{"memoryMiB":4096}`)); err != nil {
+		t.Fatalf("monitoring on a pool of its own larger workers: %v", err)
+	}
+	if err := c.Create(ctx, poolSized("pool-short", `{"memoryMiB":4096}`, `{"memoryMiB":1024}`)); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "need 2240 MiB of memory on workers") {
+		t.Fatalf("monitoring on a pool of its own least workers: %v", err)
+	}
 
 	hooks.DatastoreAllocate = testDatastoreAllocate
 	checkDatastoreAllocateAdmission(ctx, t, c)
