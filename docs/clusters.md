@@ -559,6 +559,27 @@ An administrator can let cluster creators choose among more namespaces than `clu
 - Cluster Mesh links clusters of one namespace only.
 - Names Kubernetes, the providers and Kubehenge use themselves are refused: `default`, `cert-manager`, `kube-*` and `*-system`.
 
+## From the command line
+
+`kubehenge cluster` lists, creates, scales and deletes clusters through the interface, signed in with a Proxmox VE API token instead of a password. The token is held to the privileges above as a user is: one with privilege separation holds only what both it and its user are given, one without holds its user's. Proxmox VE is asked about a token at most once a minute, so one revoked there stops working within that minute.
+
+```sh
+export KUBEHENGE_URL=https://kubehenge.example.org
+export KUBEHENGE_PROXMOX_TOKEN='ci@pve!kubehenge=<secret>'
+kubehenge cluster list
+kubehenge cluster create -f web.yaml
+kubehenge cluster scale web --control-planes 3 --workers md-0=5
+kubehenge cluster kubeconfig web > web.kubeconfig
+kubehenge cluster get web
+kubehenge cluster delete web --yes
+```
+
+- The token is read only from `KUBEHENGE_PROXMOX_TOKEN`, so it never shows in a process list. `--ca` (or `KUBEHENGE_CA`) names the CA of the interface's certificate where the system does not trust it.
+- A cluster is found by its name; `-n` names its namespace where more than one has a cluster of that name.
+- `create` takes what the wizard sends, in YAML or JSON: `name`, `class`, `version`, `controlPlaneReplicas`, `workerReplicas` and `variables`, and `namespace` where there are [more namespaces](#more-namespaces-for-clusters). The interface checks it as it checks the wizard's.
+- `get` and `list -o json` print the interface's own description of a cluster for scripts to read.
+- Any HTTP client can do the same: send `Authorization: PVEAPIToken=<user>@<realm>!<name>=<secret>` to the interface's `/api/clusters`.
+
 ## With kubectl
 
 Clusters are Kubernetes objects in the management cluster, so they can be created and changed with kubectl, or kept in Git with any GitOps tool.

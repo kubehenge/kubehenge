@@ -369,6 +369,59 @@ func TestReleaseHARemovesOnlyThePrefixed(t *testing.T) {
 	}
 }
 
+func TestAnAPITokenActsInPlaceOfATicket(t *testing.T) {
+	t.Parallel()
+	const token = "alice@pve!ci=0b6f3c1e" //nolint:gosec // the fake Proxmox VE's own
+	var removed int
+	mux := http.NewServeMux()
+	authorized := func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Header.Get("Authorization") != "PVEAPIToken="+token || r.Header.Get("Cookie") != "" || r.Header.Get("Csrfpreventiontoken") != "" {
+			http.Error(w, "authentication failure", http.StatusUnauthorized)
+			return false
+		}
+		return true
+	}
+	mux.HandleFunc("GET /api2/json/version", func(w http.ResponseWriter, r *http.Request) {
+		if authorized(w, r) {
+			_, _ = w.Write([]byte(`{"data":{"version":"9.1"}}`))
+		}
+	})
+	mux.HandleFunc("DELETE /api2/json/", func(w http.ResponseWriter, r *http.Request) {
+		if authorized(w, r) {
+			removed++
+			_, _ = w.Write([]byte(`{"data":null}`))
+		}
+	})
+	srv := httptest.NewTLSServer(mux)
+	t.Cleanup(srv.Close)
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := NewAccounts(Config{URL: srv.URL, CAFile: ca})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket, err := a.TokenUser(t.Context(), token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ticket.Username != "alice@pve!ci" {
+		t.Errorf("username = %q", ticket.Username)
+	}
+	if err := a.remove(t.Context(), ticket, "/cluster/ha/rules/x"); err != nil || removed != 1 {
+		t.Fatalf("remove: %v, %d removed", err, removed)
+	}
+	if renewed, err := a.Renew(t.Context(), ticket); err != nil || renewed != ticket {
+		t.Errorf("renewing a token = %v, %v", renewed, err)
+	}
+	for _, bad := range []string{"alice@pve!ci=wrong", "alice@pve=0b6f3c1e", "nonsense"} {
+		if _, err := a.TokenUser(t.Context(), bad); !errors.Is(err, ErrAuthentication) {
+			t.Errorf("TokenUser(%q) = %v", bad, err)
+		}
+	}
+}
+
 func TestRealms(t *testing.T) {
 	t.Parallel()
 	a := fakeTicketAPI(t)

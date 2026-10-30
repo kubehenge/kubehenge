@@ -43,6 +43,7 @@ type Accounts interface {
 // SignIns are the Proxmox VE sign-ins the interface's sessions rest on.
 type SignIns interface {
 	SignIn(ctx context.Context, username, password string) (*pve.Ticket, *pve.Challenge, error)
+	TokenUser(ctx context.Context, token string) (*pve.Ticket, error)
 	Answer(ctx context.Context, c *pve.Challenge, kind, code string) (*pve.Ticket, error)
 	Renew(ctx context.Context, t *pve.Ticket) (*pve.Ticket, error)
 	Realms(ctx context.Context) ([]pve.Realm, error)
@@ -140,6 +141,7 @@ type Server struct {
 
 	sessions   *sessions
 	limiter    *limiter
+	tokens     tokenUsers
 	activeKube atomic.Pointer[client.Client]
 	backups    backupCache
 	etags      etagCache
@@ -476,6 +478,13 @@ func (s *Server) managed(next func(http.ResponseWriter, *http.Request, user)) ht
 // but a read.
 func (s *Server) signedIn(next func(http.ResponseWriter, *http.Request, user)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if token, ok := strings.CutPrefix(r.Header.Get("Authorization"), tokenPrefix); ok {
+			if ticket := s.tokenUser(w, r, token); ticket != nil {
+				w.Header().Set(versionHeader, release.Version)
+				next(w, r, user{ticket: ticket})
+			}
+			return
+		}
 		sess := s.sessions.lookup(r)
 		if sess == nil {
 			writeError(w, http.StatusUnauthorized, "not signed in")

@@ -44,6 +44,7 @@ type fakeAccounts struct {
 	privilegeCalls int
 	backupChecks   int
 	renewals       int
+	tokenChecks    int
 	now            func() time.Time
 	// members are every pool's guests; deleted records the VMs deleted.
 	members []pve.Member
@@ -78,6 +79,20 @@ func (f *fakeAccounts) DeleteUser(_ context.Context, _ *pve.Ticket, userid strin
 	delete(f.users, userid)
 	f.usersDeleted++
 	return nil
+}
+
+// TokenUser takes a token whose secret is "secret" for any user with a password, as acting with
+// that user's privileges, a token without privilege separation.
+func (f *fakeAccounts) TokenUser(_ context.Context, token string) (*pve.Ticket, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tokenChecks++
+	id, secret, _ := strings.Cut(token, "=")
+	username, _, _ := strings.Cut(id, "!")
+	if secret != "secret" || f.passwords[username] == "" {
+		return nil, pve.ErrAuthentication
+	}
+	return &pve.Ticket{Username: id, Token: token, Issued: f.now()}, nil
 }
 
 func (f *fakeAccounts) SignIn(_ context.Context, username, password string) (*pve.Ticket, *pve.Challenge, error) {
@@ -259,6 +274,7 @@ func (*fakeAccounts) Zone(_ context.Context, _ *pve.Ticket, bridge string) (stri
 }
 
 func (f *fakeAccounts) effective(username, aclPath string) pve.Privileges {
+	username, _, _ = strings.Cut(username, "!")
 	privs := pve.Privileges{}
 	for p, granted := range f.grants[username] {
 		if aclPath == p || strings.HasPrefix(aclPath, p+"/") || p == "/" {
@@ -395,6 +411,8 @@ type browser struct {
 	// generation, when set, is sent with each request as the cluster's generation a change was
 	// made against.
 	generation string
+	// token, when set, is sent with each request as a Proxmox VE API token, as a script would.
+	token string
 }
 
 func (h *harness) browser() *browser { return &browser{h: h} }
@@ -417,6 +435,9 @@ func (b *browser) do(method, path, body string) *httptest.ResponseRecorder {
 	}
 	if b.csrf != "" {
 		req.Header.Set(csrfHeader, b.csrf)
+	}
+	if b.token != "" {
+		req.Header.Set("Authorization", tokenPrefix+b.token)
 	}
 	rec := httptest.NewRecorder()
 	b.h.handler.ServeHTTP(rec, req)

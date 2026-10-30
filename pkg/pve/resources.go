@@ -407,9 +407,7 @@ func (a *Accounts) DeleteVM(ctx context.Context, t *Ticket, node string, vmid in
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Cookie", "PVEAuthCookie="+t.Ticket)
-	// Go sends every header name in this canonical form; Proxmox VE reads them regardless of case.
-	req.Header.Set("Csrfpreventiontoken", t.CSRF)
+	t.authorize(req)
 	var upid string
 	if err := a.do(req, &upid); err != nil {
 		return err
@@ -457,8 +455,7 @@ func (a *Accounts) remove(ctx context.Context, t *Ticket, path string) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Cookie", "PVEAuthCookie="+t.Ticket)
-	req.Header.Set("Csrfpreventiontoken", t.CSRF)
+	t.authorize(req)
 	var ignored any
 	return a.do(req, &ignored)
 }
