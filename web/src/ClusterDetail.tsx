@@ -24,6 +24,7 @@ import {
   distributionName,
   errorMessage,
   filled,
+  pollCache,
   pollIdle,
   saveFile,
   settled,
@@ -99,6 +100,8 @@ function useIntent(
 const pollChanging = 5000;
 
 const httpNotFound = 404;
+
+const clusterCache = pollCache<Cluster>();
 
 /**
  * headlampURL is a cluster's page in the shared Headlamp, served on its own port of this host.
@@ -298,6 +301,10 @@ function whyNot(c: Cluster): string | undefined {
 // pageNote is why the actions are off, under them; a cluster being deleted says so in its status.
 const pageNote = (c: Cluster): string | undefined => (c.deleting ? undefined : whyNot(c));
 
+// The page opens on the cluster as last read, or as the fleet list has it, while it reads it again.
+const useListed = (namespace: string, name: string): Cluster | undefined =>
+  useFleet()?.clusters?.find((x) => x.namespace === namespace && x.name === name);
+
 export function ClusterDetail({
   namespace,
   name,
@@ -309,6 +316,7 @@ export function ClusterDetail({
   view?: View;
   headlamp?: number | undefined;
 }): JSX.Element {
+  const listed = useListed(namespace, name);
   const {
     data: c,
     error,
@@ -317,6 +325,7 @@ export function ClusterDetail({
   } = usePoll(
     () => api.cluster(namespace, name),
     (shown) => (shown && settled(shown) ? pollIdle : pollChanging),
+    { cache: clusterCache, key: `${namespace}/${name}`, seed: listed },
   );
   const [action, setAction] = useState<Action>();
   const [downloadError, setDownloadError] = useState<string>();

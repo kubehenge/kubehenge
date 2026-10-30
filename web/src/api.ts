@@ -1,3 +1,4 @@
+import { clearPollCaches } from "./poll-cache";
 import type {
   BackupRun,
   Bridge,
@@ -292,10 +293,13 @@ export interface Api {
 export const api: Api = {
   realms: () => request("GET", "/api/realms"),
   session: async () => remember(await request("GET", "/api/session")),
-  signIn: async (username, realm, password) =>
-    remember(await request("POST", "/api/session", { username, realm, password })),
+  signIn: async (username, realm, password) => {
+    clearPollCaches();
+    return remember(await request("POST", "/api/session", { username, realm, password }));
+  },
   secondFactor: async (kind, code) => remember(await request("POST", "/api/session/second-factor", { kind, code })),
   signOut: async () => {
+    clearPollCaches();
     await act("DELETE", "/api/session");
     csrf = "";
   },

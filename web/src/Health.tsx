@@ -29,6 +29,7 @@ import {
   age,
   bytes,
   filled,
+  pollCache,
   pollIdle,
   sentence,
   usePoll,
@@ -36,6 +37,8 @@ import {
 
 // A cluster that is not healthy is looked at more often, to follow it getting better.
 const pollUnwell = 10_000;
+
+const healthCache = pollCache<ClusterHealth>();
 
 const msPerSecond = 1000;
 const percent = 100;
@@ -987,6 +990,7 @@ export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlam
   const { data: h, error } = usePoll(
     () => api.health(ref.namespace, ref.name),
     (shown) => (shown?.verdict === "healthy" ? pollIdle : pollUnwell),
+    { cache: healthCache, key: `${c.namespace}/${c.name}` },
   );
   const [logsOf, setLogsOf] = useState<UnwellPod>();
   if (!h) {

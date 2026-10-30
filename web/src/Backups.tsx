@@ -16,6 +16,7 @@ import {
   bytes,
   errorMessage,
   filled,
+  pollCache,
   pollIdle,
   pollRunning,
   sentence,
@@ -26,6 +27,8 @@ import {
   type Health,
 } from "./ui";
 import { oneOf, quantity, record, records, text } from "./values";
+
+const backupsCache = pollCache<ClusterBackups>();
 
 /** The chart's defaults for a cluster's backups. */
 export const defaultSchedule = "0 2 * * *";
@@ -581,6 +584,7 @@ export function BackupsView({
   } = usePoll(
     () => api.backups(c.namespace, c.name),
     (d) => (running(d) ? pollRunning : pollIdle),
+    { cache: backupsCache, key: `${c.namespace}/${c.name}` },
   );
   const [restoring, setRestoring] = useState<string>();
   const [busy, setBusy] = useState(false);

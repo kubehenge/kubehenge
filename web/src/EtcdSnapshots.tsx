@@ -29,6 +29,7 @@ import {
   distributionName,
   errorMessage,
   filled,
+  pollCache,
   pollIdle,
   pollRunning,
   sentence,
@@ -39,6 +40,8 @@ import {
   type Health,
 } from "./ui";
 import { quantity, record, text } from "./values";
+
+const snapshotsCache = pollCache<ClusterEtcdSnapshots>();
 
 /** The chart's defaults for a cluster's etcd snapshots. */
 export const defaultEtcdSchedule = "0 */12 * * *";
@@ -395,6 +398,7 @@ export function EtcdSnapshotsView({
   } = usePoll(
     () => api.etcdSnapshots(c.namespace, c.name),
     (d) => (d !== undefined && (d.requested || d.restoring) ? pollRunning : pollIdle),
+    { cache: snapshotsCache, key: `${c.namespace}/${c.name}` },
   );
   const [restoring, setRestoring] = useState<EtcdSnapshot>();
   const [busy, setBusy] = useState(false);

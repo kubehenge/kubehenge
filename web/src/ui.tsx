@@ -13,6 +13,7 @@ import {
 } from "react";
 
 import { ApiError, api } from "./api";
+import { keepCache } from "./poll-cache";
 import { useStaging } from "./staging-context";
 import type { ChangeRequest, Cluster } from "./types";
 
@@ -132,20 +133,40 @@ export interface Poll<T> {
   next: () => number;
 }
 
-export function usePoll<T>(load: () => Promise<T>, every: number | ((data: T | undefined) => number)): Poll<T> {
-  const [data, setData] = useState<T>();
+/**
+ * Kept is where a poll keeps its last answer for the next view that reads the same thing, which
+ * shows it at once while asking again: the cache of one kind of answer, the key of this one, and
+ * what to show before anything is kept, such as the cluster as the fleet list read it.
+ */
+export interface Kept<T> {
+  cache: Map<string, T>;
+  key: string;
+  seed?: T | undefined;
+}
+
+/** pollCache is a cache of one kind of answer, for usePoll's kept. */
+export const pollCache = <T,>(): Map<string, T> => keepCache(new Map<string, T>());
+
+export function usePoll<T>(
+  load: () => Promise<T>,
+  every: number | ((data: T | undefined) => number),
+  kept?: Kept<T>,
+): Poll<T> {
+  const [data, setData] = useState<T | undefined>(() => (kept ? (kept.cache.get(kept.key) ?? kept.seed) : undefined));
   const [error, setError] = useState<string>();
   // The HTTP status of the last failure; 0 when the server did not answer.
   const [errorStatus, setErrorStatus] = useState<number>();
   const loadRef = useRef(load);
+  const keptRef = useRef(kept);
   useLayoutEffect(() => {
     loadRef.current = load;
+    keptRef.current = kept;
   });
   const asked = useRef(0);
   const shown = useRef(0);
   const pending = useRef(0);
   // No answer's JSON is empty, so the first one is always shown.
-  const shownText = useRef("");
+  const shownText = useRef(data === undefined ? "" : JSON.stringify(data));
 
   const reload = useCallback(async () => {
     const n = ++asked.current;
@@ -154,6 +175,8 @@ export function usePoll<T>(load: () => Promise<T>, every: number | ((data: T | u
       const d = await loadRef.current();
       if (n > shown.current) {
         shown.current = n;
+        const into = keptRef.current;
+        into?.cache.set(into.key, d);
         const text = JSON.stringify(d);
         if (text !== shownText.current) {
           shownText.current = text;

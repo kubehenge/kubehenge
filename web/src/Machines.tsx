@@ -13,10 +13,15 @@ import {
   age,
   errorMessage,
   filled,
+  pollCache,
   pollIdle,
   usePoll,
   type Health,
 } from "./ui";
+
+// The Proxmox VE nodes, kept for every view of every cluster that places machines on them.
+const nodesCache = pollCache<PveNode[]>();
+const nodesKept = { cache: nodesCache, key: "nodes" };
 
 // machineStatus says how far a machine is, as the cluster list says it of clusters. A machine on a
 // Proxmox VE node that is offline is down whatever Cluster API last read of it.
@@ -75,7 +80,7 @@ export function Machines({
   why: string | undefined;
   onChanged: () => void;
 }): JSX.Element {
-  const { data: nodes } = usePoll(api.nodes, pollIdle);
+  const { data: nodes } = usePoll(api.nodes, pollIdle, nodesKept);
   const [replacing, setReplacing] = useState<Machine>();
   const [keepError, setKeepError] = useState<string>();
   const offline = new Set((nodes ?? []).filter((n) => !n.online).map((n) => n.node));
@@ -121,7 +126,7 @@ export function Machines({
           {machines.length === 0 && (
             <tr>
               <td colSpan={columns.length + 1} className="muted">
-                No machines yet
+                {c.machines === undefined ? "Loading…" : "No machines yet"}
               </td>
             </tr>
           )}
@@ -303,7 +308,7 @@ function hostState(h: Host): string {
  */
 export function Placement({ cluster: c }: { cluster: Cluster }): JSX.Element {
   // Only those who see the nodes get them; the others see the nodes of their machines alone.
-  const { data: nodes } = usePoll(api.nodes, pollIdle);
+  const { data: nodes } = usePoll(api.nodes, pollIdle, nodesKept);
   const machines = c.machines ?? [];
   const crowded = crowding(machines);
   const list = hosts(machines, nodes);
@@ -311,7 +316,7 @@ export function Placement({ cluster: c }: { cluster: Cluster }): JSX.Element {
     <section className="box placement" aria-label="Placement">
       <h3>Placement</h3>
       {crowded !== undefined && <p className="warning">{crowded}</p>}
-      {machines.length === 0 && <p className="muted">No machines yet</p>}
+      {machines.length === 0 && <p className="muted">{c.machines === undefined ? "Loading…" : "No machines yet"}</p>}
       <ul className="hosts" aria-label="Proxmox VE nodes">
         {list.map((h) => (
           <li

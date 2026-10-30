@@ -2,7 +2,10 @@ import type { JSX } from "react";
 
 import { api } from "./api";
 import type { ManagementHealth } from "./types";
-import { Detail, ErrorBox, Status, pollIdle, usePoll } from "./ui";
+import { Detail, ErrorBox, Status, pollCache, pollIdle, usePoll } from "./ui";
+
+const managementCache = pollCache<ManagementHealth>();
+const managementKept = { cache: managementCache, key: "" };
 
 export function healthVerdict(h: ManagementHealth): { state: "ok" | "warning" | "error"; text: string } {
   if (!h.answers) {
@@ -19,7 +22,7 @@ export function healthVerdict(h: ManagementHealth): { state: "ok" | "warning" | 
 // ManagementHealthCard is the management cluster's own health, read on its own so that it answers
 // while the cluster does not, when the Administration page is what repairs it.
 export function ManagementHealthCard(): JSX.Element {
-  const { data: h, error } = usePoll(api.managementHealth, pollIdle);
+  const { data: h, error } = usePoll(api.managementHealth, pollIdle, managementKept);
   if (!h) {
     return (
       <div className="box">
