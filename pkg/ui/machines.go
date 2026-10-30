@@ -93,7 +93,7 @@ func (s *Server) cordon(w http.ResponseWriter, r *http.Request, u user, cordoned
 	wl, ranOut, err := s.reach(ctx, u.kube, c, provisioner.IdentityNodes)
 	switch {
 	case err != nil:
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	case wl == nil && ranOut.IsZero():
 		writeError(w, http.StatusConflict, "Node access to this cluster is not set up yet.")
@@ -134,7 +134,7 @@ func (s *Server) rebootMachine(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	if err := s.Accounts.RebootVM(r.Context(), u.ticket, vm.Node, vm.VMID); err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
 	s.Log.Info("machine rebooted", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "machine", m.Name, "vmid", vm.VMID)
@@ -172,7 +172,7 @@ func (s *Server) deleteMachine(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	// Marked first: a pool that shrank before would delete whichever machine it picks.
 	if err := mark(ctx, ""); err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	before := c.DeepCopy()
@@ -182,7 +182,7 @@ func (s *Server) deleteMachine(w http.ResponseWriter, r *http.Request, u user) {
 		if undoErr := mark(ctx, nil); undoErr != nil {
 			s.Log.Error("unmarking a machine whose pool did not shrink", "machine", m.Namespace+"/"+m.Name, "error", undoErr)
 		}
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	s.Log.Info("machine deleted", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "machine", m.Name, "pool", pool)
@@ -199,7 +199,7 @@ func (s *Server) clusterMachine(w http.ResponseWriter, r *http.Request, u user, 
 	m := &clusterv1.Machine{}
 	err := u.kube.Get(r.Context(), client.ObjectKey{Namespace: c.Namespace, Name: r.PathValue("machine")}, m)
 	if err != nil && !apierrors.IsNotFound(err) {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return nil, nil, false
 	}
 	if err != nil || m.Labels[clusterv1.ClusterNameLabel] != c.Name {
@@ -216,7 +216,7 @@ func (s *Server) patchMachine(w http.ResponseWriter, r *http.Request, u user, pa
 		return
 	}
 	if err := u.kube.Patch(r.Context(), m, client.RawPatch(types.MergePatchType, patch)); err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	s.Log.Info("machine changed", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "machine", m.Name, "patch", string(patch))

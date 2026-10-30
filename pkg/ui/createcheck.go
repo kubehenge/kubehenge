@@ -20,7 +20,7 @@ type createCheck struct {
 // checkCreate has the API server run every check of creating a cluster without creating it.
 func (s *Server) checkCreate(w http.ResponseWriter, r *http.Request, u user, c *clusterv1.Cluster) {
 	if err := u.kube.Create(r.Context(), c, client.DryRunAll); err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	manifest, err := clusterManifest(c)

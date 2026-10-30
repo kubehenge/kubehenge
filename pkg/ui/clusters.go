@@ -128,21 +128,21 @@ type regexpDescription struct {
 func (s *Server) classes(w http.ResponseWriter, r *http.Request, u user) {
 	var list clusterv1.ClusterClassList
 	if err := u.kube.List(r.Context(), &list, client.InNamespace(s.ClassNamespace)); err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	views := []classView{}
 	for i := range list.Items {
 		c := &list.Items[i]
 		if dist, ok := distribution(c.Name); ok {
-			views = append(views, s.classView(c, dist))
+			views = append(views, s.classView(r.Context(), c, dist))
 		}
 	}
 	slices.SortFunc(views, func(a, b classView) int { return strings.Compare(a.Name, b.Name) })
 	writeJSON(w, http.StatusOK, views)
 }
 
-func (s *Server) classView(c *clusterv1.ClusterClass, dist string) classView {
+func (s *Server) classView(ctx context.Context, c *clusterv1.ClusterClass, dist string) classView {
 	v := classView{
 		Name: c.Name, Distribution: dist, Variables: []classVariable{}, Versions: &regexpDescription{Pattern: provisioner.VersionFormats[templates.Distribution(dist)].String()},
 		NoTemplate: missingTemplate(c, dist, "", templates.DefaultNodeOS), NodeOSes: nodeOSChoices(c, dist),
@@ -155,7 +155,7 @@ func (s *Server) classView(c *clusterv1.ClusterClass, dist string) classView {
 			err = json.Unmarshal(raw, &schema)
 		}
 		if err != nil {
-			s.Log.Error("class variable schema", "class", c.Name, "variable", cv.Name, "error", err)
+			s.Log.ErrorContext(ctx, "class variable schema", "class", c.Name, "variable", cv.Name, "error", err)
 			continue
 		}
 		v.Variables = append(v.Variables, classVariable{Name: cv.Name, Required: cv.Required != nil && *cv.Required, Schema: schema})
@@ -203,6 +203,12 @@ type clusterView struct {
 	Pool         string                     `json:"pool"`
 	Allowed      allowedView                `json:"allowed"`
 	Machines     []machineView              `json:"machines,omitempty"`
+	// ControllerError is the error Kubehenge's controller last met reconciling the cluster, until
+	// a reconcile succeeds, from the Cluster's own condition, which kubectl shows the same.
+	ControllerError string `json:"controllerError,omitempty"`
+	// Stalled is the worst the cluster's machines report while they have stopped coming, from
+	// the Cluster's own condition.
+	Stalled string `json:"stalled,omitempty"`
 	// Headlamp names the cluster in the shared Headlamp, which offers the interface's namespace.
 	Headlamp string `json:"headlamp,omitempty"`
 	// Mesh is how each peer stands that the cluster lists for Cluster Mesh, while it is on.
@@ -242,6 +248,22 @@ func talosViewOf(c *clusterv1.Cluster) *talosView {
 		Upgraded:  c.Annotations[provisioner.TalosUpgradedAnnotation],
 		Failed:    c.Annotations[provisioner.TalosUpgradeFailedAnnotation],
 	}
+}
+
+// controllerError is the error Kubehenge's controller reports on a cluster, or "".
+func controllerError(c *clusterv1.Cluster) string {
+	if cond := meta.FindStatusCondition(c.Status.Conditions, provisioner.KubehengeReadyCondition); cond != nil && cond.Status == metav1.ConditionFalse {
+		return cond.Message
+	}
+	return ""
+}
+
+// stalled is what the controller reports of a cluster whose machines stopped coming, or "".
+func stalled(c *clusterv1.Cluster) string {
+	if cond := meta.FindStatusCondition(c.Status.Conditions, provisioner.MachinesStalledCondition); cond != nil && cond.Status == metav1.ConditionTrue {
+		return cond.Message
+	}
+	return ""
 }
 
 type conditionView struct {
@@ -349,6 +371,7 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 			Type: cond.Type, Status: string(cond.Status), Reason: cond.Reason, Message: cond.Message, Since: cond.LastTransitionTime.Time,
 		})
 	}
+	v.ControllerError, v.Stalled = controllerError(c), stalled(c)
 	if cp := c.Status.ControlPlane; cp != nil {
 		v.ControlPlane = replicas(cp.DesiredReplicas, cp.ReadyReplicas, cp.AvailableReplicas, cp.UpToDateReplicas)
 	} else if r := c.Spec.Topology.ControlPlane.Replicas; r != nil {
@@ -404,24 +427,24 @@ func replicas(desired, ready, available, upToDate *int32) replicasView {
 func (s *Server) listClusters(w http.ResponseWriter, r *http.Request, u user) {
 	var list clusterv1.ClusterList
 	if err := u.kube.List(r.Context(), &list); err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	// One question for every cluster at once; a cluster's pool is asked about on its own only where
 	// the answer cannot tell (inheritedHere).
 	all, err := s.Accounts.AllPrivileges(r.Context(), u.ticket)
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
 	views, err := s.visibleClusters(r.Context(), u, list.Items, all)
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
 	// The peers' standing is an addition to the clusters, which show without it.
 	if err := s.addMesh(r.Context(), u, list.Items, views, visibleKeys(views)); err != nil {
-		s.Log.Error("reading the clusters' Cluster Mesh peers", "error", err)
+		s.Log.ErrorContext(r.Context(), "reading the clusters' Cluster Mesh peers", "error", err)
 	}
 	slices.SortFunc(views, func(a, b clusterView) int {
 		return cmp.Or(strings.Compare(a.Namespace, b.Namespace), strings.Compare(a.Name, b.Name))
@@ -527,7 +550,7 @@ func (s *Server) cluster(w http.ResponseWriter, r *http.Request, u user, privs .
 	}
 	held, err := s.Accounts.Privileges(r.Context(), u.ticket, pool)
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return nil, poolAccess{}, false
 	}
 	c := &clusterv1.Cluster{}
@@ -537,7 +560,7 @@ func (s *Server) cluster(w http.ResponseWriter, r *http.Request, u user, privs .
 	}
 	if err := u.kube.Get(r.Context(), client.ObjectKey{Namespace: ns, Name: name}, c); err != nil || !provisioner.Owns(c, s.ClassNamespace) {
 		if err != nil && !apierrors.IsNotFound(err) {
-			s.kubeError(w, err)
+			s.kubeError(w, r, err)
 			return nil, poolAccess{}, false
 		}
 		writeError(w, http.StatusNotFound, "no such cluster")
@@ -561,18 +584,18 @@ func (s *Server) cluster(w http.ResponseWriter, r *http.Request, u user, privs .
 // that cannot be read.
 func (s *Server) addExtras(r *http.Request, u user, c *clusterv1.Cluster, v *clusterView) {
 	if err := s.addClusterMesh(r.Context(), u, v); err != nil {
-		s.Log.Error("reading a cluster's Cluster Mesh peers", "cluster", c.Namespace+"/"+c.Name, "error", err)
+		s.Log.ErrorContext(r.Context(), "reading a cluster's Cluster Mesh peers", "cluster", c.Namespace+"/"+c.Name, "error", err)
 	}
 	// Talos clusters have no node images, their template being their release's image.
 	if provisioner.RefreshesNodes(c) {
 		image, err := s.nodeImage(r.Context(), u.kube, c, s.now())
 		if err != nil {
-			s.Log.Warn("reading a cluster's node images", "cluster", c.Namespace+"/"+c.Name, "error", err)
+			s.Log.WarnContext(r.Context(), "reading a cluster's node images", "cluster", c.Namespace+"/"+c.Name, "error", err)
 		}
 		v.NodeImage = image
 	}
 	if err := addGitOps(r.Context(), u, v); err != nil {
-		s.Log.Error("reading a cluster's GitOps keys", "cluster", c.Namespace+"/"+c.Name, "error", err)
+		s.Log.ErrorContext(r.Context(), "reading a cluster's GitOps keys", "cluster", c.Namespace+"/"+c.Name, "error", err)
 	}
 }
 
@@ -584,12 +607,12 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 	v := s.view(c, access.path, access.held, u.namespaces)
 	s.addExtras(r, u, c, &v)
 	if err := countAutoscaled(r.Context(), u.kube, c, &v); err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	var machines clusterv1.MachineList
 	if err := u.kube.List(r.Context(), &machines, client.InNamespace(c.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: c.Name}); err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	vms := s.clusterVMs(r, u, c, access.path)
@@ -629,7 +652,7 @@ func (s *Server) clusterVMs(r *http.Request, u user, c *clusterv1.Cluster, poolP
 	members, err := s.Accounts.PoolMembers(r.Context(), u.ticket, strings.TrimPrefix(poolPath, "/pool/"))
 	if err != nil {
 		if !errors.Is(err, pve.ErrForbidden) {
-			s.Log.Error("listing a cluster's VMs", "cluster", c.Namespace+"/"+c.Name, "error", err)
+			s.Log.ErrorContext(r.Context(), "listing a cluster's VMs", "cluster", c.Namespace+"/"+c.Name, "error", err)
 		}
 		return nil
 	}
@@ -707,10 +730,10 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	if err = u.kube.Create(r.Context(), c); err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
-	s.Log.Info("created cluster", "user", u.ticket.Username, "cluster", req.Namespace+"/"+req.Name, "class", req.Class, "version", req.Version)
+	s.Log.InfoContext(r.Context(), "created cluster", "user", u.ticket.Username, "cluster", req.Namespace+"/"+req.Name, "class", req.Class, "version", req.Version)
 	privs, err := s.Accounts.Privileges(r.Context(), u.ticket, pool)
 	if err != nil {
 		privs = pve.Privileges{}
@@ -752,7 +775,7 @@ func (s *Server) createClass(w http.ResponseWriter, r *http.Request, u user, req
 			writeError(w, http.StatusUnprocessableEntity, "distribution: not installed on the management cluster")
 			return nil, false
 		}
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return nil, false
 	}
 	defined := map[string]bool{}
@@ -833,7 +856,7 @@ func (s *Server) mayCreate(w http.ResponseWriter, r *http.Request, u user, class
 	}
 	held, err := s.Accounts.Privileges(r.Context(), u.ticket, s.workloadPoolPath())
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return false
 	}
 	if !checkSharedDNS01(w, u, s.workloadPoolPath(), held, certs, nil) {
@@ -865,7 +888,7 @@ func (s *Server) mayUseNetwork(w http.ResponseWriter, r *http.Request, u user, c
 	}
 	zone, err := s.Accounts.Zone(r.Context(), u.ticket, bridge)
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return false
 	}
 	return s.require(w, r, u, bridgePath(zone, bridge, vlan), privBridge)
@@ -890,7 +913,7 @@ func (s *Server) mayPlace(w http.ResponseWriter, r *http.Request, u user, raw, k
 	}
 	visible, err := s.Accounts.Nodes(r.Context(), u.ticket)
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return false
 	}
 	for i, node := range nodes {
@@ -943,7 +966,7 @@ func (s *Server) allowRancher(w http.ResponseWriter, r *http.Request, u user, ke
 	}
 	var list clusterv1.ClusterList
 	if err := u.kube.List(r.Context(), &list); err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return false
 	}
 	if rc := provisioner.RancherCluster(list.Items, s.ClassNamespace); rc != nil && client.ObjectKeyFromObject(rc) != key {
@@ -1065,7 +1088,7 @@ func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user) (
 	// Autoscaling goes first, so that a change switching a pool's off may also fix its workers.
 	msg, err := applyAutoscaling(r.Context(), u.kube, c, req.Autoscaling)
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return nil, false
 	}
 	if msg == "" {
@@ -1122,17 +1145,17 @@ func (s *Server) changeCluster(w http.ResponseWriter, r *http.Request, u user) {
 	c, access := ch.c, ch.access
 	changes, err := plannedOf(r.Context(), u, ch)
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	if len(changes) > 0 {
 		recordChange(c, u.ticket.Username, s.now(), changes)
 	}
 	if err := u.kube.Update(r.Context(), c); err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
-	s.Log.Info("changed cluster", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
+	s.Log.InfoContext(r.Context(), "changed cluster", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
 	writeJSON(w, http.StatusOK, s.view(c, access.path, access.held, u.namespaces))
 }
 
@@ -1243,7 +1266,7 @@ func (s *Server) allowNodeOS(w http.ResponseWriter, r *http.Request, u user, c *
 	}
 	class := &clusterv1.ClusterClass{}
 	if err := u.kube.Get(r.Context(), client.ObjectKey{Namespace: s.ClassNamespace, Name: c.Spec.Topology.ClassRef.Name}, class); err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return false
 	}
 	if missing := missingTemplate(class, dist, c.Spec.Topology.Version, nodeOS); missing != "" {
@@ -1276,7 +1299,7 @@ func (s *Server) allowOIDC(w http.ResponseWriter, r *http.Request, u user, c *cl
 		ref.Namespace = c.Namespace
 	}
 	if err := u.kube.Get(r.Context(), client.ObjectKey{Namespace: ref.Namespace, Name: ref.Name}, class); err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return false
 	}
 	return checkOIDC(w, u, class, access.path, access.held, value, old)
@@ -1322,10 +1345,10 @@ func (s *Server) deleteCluster(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	if err := u.kube.Delete(r.Context(), c, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil && !apierrors.IsNotFound(err) {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
-	s.Log.Info("deleted cluster", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
+	s.Log.InfoContext(r.Context(), "deleted cluster", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -1340,10 +1363,10 @@ func (s *Server) kubeconfig(w http.ResponseWriter, r *http.Request, u user) {
 			writeError(w, http.StatusConflict, "the cluster has no kubeconfig yet")
 			return
 		}
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
-	s.Log.Info("handed out kubeconfig", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
+	s.Log.InfoContext(r.Context(), "handed out kubeconfig", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
 	w.Header().Set("Content-Type", "application/yaml")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", c.Name+".kubeconfig"))
 	_, _ = w.Write(secret.Data["value"])
@@ -1366,10 +1389,10 @@ func (s *Server) talosconfig(w http.ResponseWriter, r *http.Request, u user) {
 			writeError(w, http.StatusConflict, "the cluster has no talosconfig yet")
 			return
 		}
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
-	s.Log.Info("handed out talosconfig", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
+	s.Log.InfoContext(r.Context(), "handed out talosconfig", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
 	w.Header().Set("Content-Type", "application/yaml")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", c.Name+".talosconfig"))
 	_, _ = w.Write(secret.Data[provisioner.TalosconfigKey])
@@ -1384,16 +1407,16 @@ func (s *Server) retryTalosUpgrade(w http.ResponseWriter, r *http.Request, u use
 	}
 	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:null}}}`, provisioner.TalosUpgradeFailedAnnotation)
 	if err := u.kube.Patch(r.Context(), c, client.RawPatch(types.MergePatchType, patch)); err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
-	s.Log.Info("Talos upgrade tried again", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
+	s.Log.InfoContext(r.Context(), "Talos upgrade tried again", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // kubeError answers with what the management cluster refused. Validation messages are the user's
 // to read; anything else is logged and kept vague.
-func (s *Server) kubeError(w http.ResponseWriter, err error) {
+func (s *Server) kubeError(w http.ResponseWriter, r *http.Request, err error) {
 	var status apierrors.APIStatus
 	switch {
 	case apierrors.IsNotFound(err):
@@ -1409,7 +1432,7 @@ func (s *Server) kubeError(w http.ResponseWriter, err error) {
 		}
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 	default:
-		s.Log.Error("management cluster request failed", "error", err)
+		s.Log.ErrorContext(r.Context(), "management cluster request failed", "error", err)
 		writeError(w, http.StatusBadGateway, "the management cluster did not answer")
 	}
 }

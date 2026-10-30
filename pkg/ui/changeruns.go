@@ -120,8 +120,12 @@ func changeRun(c *clusterv1.Cluster, machines []clusterv1.Machine, rec changeRec
 	}
 	steps = append(steps, settle)
 	v.Steps, v.State, v.Phase = steps, runRunning, phaseOf(steps)
-	if settle.State == stepDone {
+	switch {
+	case settle.State == stepDone:
 		v.State, v.Phase, v.Finished = runSucceeded, "", &last
+	case stalled(c) != "":
+		// Still under way, as Cluster API keeps at it, but waiting for someone to look.
+		v.State, v.Error = runStalled, stalled(c)
 	}
 	return v
 }

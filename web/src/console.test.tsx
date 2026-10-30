@@ -86,6 +86,18 @@ describe("the fleet", () => {
         machines: [{ name: "web-w-9", role: "worker", phase: "Failed", ready: false, created: "" }],
       }),
     ).toMatchObject({ group: "needs", reason: "Machine web-w-9 failed" });
+    expect(standing({ ...upgrading, controllerError: "Proxmox VE task UPID:pve1 failed: no space" })).toStrictEqual({
+      group: "needs",
+      state: "error",
+      reason: "Controller error",
+      view: "",
+    });
+    expect(standing({ ...creating, stalled: "ci-cp-1: VM template not found" })).toStrictEqual({
+      group: "needs",
+      state: "warning",
+      reason: "Machines stuck for 20 minutes",
+      view: "machines",
+    });
   });
 
   it("takes why a cluster needs someone from its health page, when the cluster itself says nothing", () => {
@@ -449,6 +461,73 @@ describe("the console", () => {
     const strip = within(await screen.findByRole("region", { name: "Needs attention" }));
     expect(strip.getByText("Unreachable")).toHaveClass("status-error");
     expect(strip.getByText("The API server does not answer.")).toBeInTheDocument();
+  });
+
+  it("shows a stalled change with what holds it up, and a stalled creation beside it", async () => {
+    window.history.replaceState(null, "", "/");
+    const routes = serve();
+    const why = "no machine has become ready since 2026-10-28T09:01:00Z; db-cp-4: VM template not found";
+    routes["GET /api/clusters"] = {
+      body: [base, { ...upgrading, stalled: why }, failedTalos, { ...creating, stalled: "ci-cp-1: no IP address" }],
+    };
+    routes["GET /api/runs"] = {
+      body: [
+        {
+          id: "change/default/db",
+          kind: "change",
+          namespace: "default",
+          cluster: "db",
+          what: "Change the cluster",
+          state: "stalled",
+          started: minutesAgo(40),
+          phase: "Replace the control-plane machines: 0 of 3",
+          settings: ["version"],
+          error: why,
+          steps: [{ name: "Replace the control-plane machines", state: "running", detail: "0 of 3" }],
+        },
+      ],
+    };
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const runs = within(await screen.findByRole("complementary", { name: "Runs" }));
+    const stalledRuns = within(await runs.findByRole("region", { name: "Stalled" }));
+    await waitFor(() => expect(stalledRuns.getAllByRole("link")).toHaveLength(2));
+    // What holds a run up stays on its page, out of the narrow column.
+    expect(stalledRuns.getByRole("link", { name: /^ci/u })).toHaveTextContent("Machines stuck for 20 minutes");
+    const change = stalledRuns.getByRole("link", { name: /^db Change/u });
+    expect(change).not.toHaveTextContent("VM template not found");
+
+    await user.click(change);
+    await expect(screen.findByText("Stalled", { selector: ".status" })).resolves.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(`Held up by${why}`);
+  });
+
+  it("shows on the cluster's page the error the controller met and machines that are stuck", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
+    const routes = serve();
+    routes["GET /api/clusters/default/web"] = {
+      body: {
+        ...base,
+        controllerError: "creating the cluster's Proxmox VE objects: no space",
+        stalled: "web-w-3: no IP address",
+      },
+    };
+    render(<App />);
+    const failing = await screen.findByText("Controller error");
+    expect(failing.closest(".error")).toHaveTextContent("creating the cluster's Proxmox VE objects: no space");
+    const stuck = screen.getByText("Machines stuck for 20 minutes").closest(".warning");
+    expect(stuck).toHaveTextContent("web-w-3: no IP address");
+  });
+
+  it("counts stalled runs beside running ones above the runs", async () => {
+    window.history.replaceState(null, "", "/");
+    const routes = serve();
+    routes["GET /api/clusters"] = { body: [base, { ...creating, stalled: "ci-cp-1: no IP address" }] };
+    render(<App />);
+    const runs = await screen.findByRole("complementary", { name: "Runs" });
+    await waitFor(() =>
+      expect(within(runs).getByRole("heading", { level: 2 })).toHaveTextContent("Runs 0 running, 1 stalled"),
+    );
   });
 
   it("moves a cluster its health page finds trouble in to those needing you, linked to that page", async () => {

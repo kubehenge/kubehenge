@@ -430,7 +430,7 @@ func TestGatewayAPIReconcileRecordsTheRelease(t *testing.T) {
 
 	patch := client.MergeFrom(c.DeepCopy())
 	c.Status.Initialization.ControlPlaneInitialized = new(true)
-	if err := kube.Patch(ctx, c, patch); err != nil {
+	if err := kube.Status().Patch(ctx, c, patch); err != nil {
 		t.Fatal(err)
 	}
 	if result := run(); result.RequeueAfter != waitInterval || recorded() != "" {

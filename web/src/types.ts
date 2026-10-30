@@ -322,12 +322,13 @@ export interface RunInfo {
   namespace?: string;
   cluster?: string;
   what: string;
-  state: "running" | "succeeded" | "failed";
+  /** A stalled change is still under way, but its machines have stopped coming. */
+  state: "running" | "stalled" | "succeeded" | "failed";
   phase?: string;
   by?: string;
   started?: string;
   finished?: string;
-  /** The first thing that went wrong. */
+  /** The first thing that went wrong, or what holds a stalled run up. */
   error?: string;
   /** The steps the run takes, where it reports them. */
   steps?: RunStep[];
@@ -369,6 +370,25 @@ export interface PodLogs {
   lines: string[];
 }
 
+/** The end of one log a node wrote as it booted: cloud-init's, a unit's journal, the kernel's or a Talos service's. */
+export interface BootLogSection {
+  name: string;
+  lines?: string[];
+  /** Why this log could not be read. */
+  error?: string;
+}
+
+/** A machine's boot log, as the controller last read it, and whether it is asked to read it again. */
+export interface BootLog {
+  asked: boolean;
+  log?: {
+    read: string;
+    /** Why none of its logs could be read. */
+    error?: string;
+    sections?: BootLogSection[];
+  };
+}
+
 export interface Cluster {
   namespace: string;
   name: string;
@@ -383,6 +403,10 @@ export interface Cluster {
   deleting: boolean;
   phase: string;
   available: boolean;
+  /** The error Kubehenge's controller last met on the cluster, until a reconcile succeeds. */
+  controllerError?: string;
+  /** The worst its machines report while they have stopped coming. */
+  stalled?: string;
   conditions: Condition[];
   endpoint?: string;
   pods?: string[];
@@ -573,6 +597,8 @@ export interface ManagementSettings {
   templateRefresh?: TemplateRefreshSettings;
   /** Clusters have the cloud controller manager's HA group labels unless they switch them off, with Sys.Audit on / for their token; absent, they have them. */
   clusterSysAudit?: boolean;
+  /** Kubehenge's controller reads nodes' boot logs through their guest agents, with VM.GuestAgent.FileRead; absent, it does. */
+  nodeBootLogs?: boolean;
   /** More namespaces the interface creates and manages clusters in, beside its own. */
   extraClusterNamespaces?: string[];
   /** The shared Headlamp signs those who may download a cluster's kubeconfig in as cluster-admin. */

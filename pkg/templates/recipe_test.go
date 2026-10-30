@@ -145,6 +145,9 @@ func checkRecipe(t *testing.T, f Family, r Release, b Bake) {
 		!slices.Equal(recipe.Cleanup[len(recipe.Cleanup)-1], []string{"sync"}) {
 		t.Errorf("cleanup %q leaves no fresh first boot", recipe.Cleanup)
 	}
+	if !recipe.BootLog || !slices.ContainsFunc(recipe.Cleanup, func(s []string) bool { return slices.Equal(s, []string{"rm", "-rf", path.Dir(BootLogFile)}) }) {
+		t.Errorf("the bake proves no boot log (%v), or leaves the bake's in the template: %q", recipe.BootLog, recipe.Cleanup)
+	}
 }
 
 // checkKeys finds every key named once, fetched over https and pinned by its fingerprints.
@@ -182,7 +185,7 @@ func checkGuestExec(t *testing.T, bootcmd []string) {
 // and repositories that check their packages against those keys.
 func checkFiles(t *testing.T, files map[string]string, dir string, keys []RepositoryKey, names map[string]bool) {
 	t.Helper()
-	for _, name := range []string{dir + "/build.sh", dir + "/node.sh", "node/kubehenge-qga.cil", "node/images.sh", "node/kubeadm.sh"} {
+	for _, name := range []string{dir + "/build.sh", dir + "/node.sh", "node/kubehenge-qga.cil", "node/images.sh", "node/kubeadm.sh", "node/boot-log.sh", "node/kubehenge-boot-log.service", "node/kubehenge-boot-log.timer"} {
 		if files[name] == "" {
 			t.Errorf("the bake does not carry %s", name)
 		}

@@ -1,6 +1,7 @@
 import { useState, type JSX } from "react";
 
 import { api } from "./api";
+import { BootLogDialog } from "./BootLog";
 import { clusterPath } from "./cluster-paths";
 import { useClusterHealth } from "./Health";
 import { Link } from "./router";
@@ -106,6 +107,7 @@ export function Machines({
       setRowError(errorMessage(err));
     }
   };
+  const [bootLog, setBootLog] = useState<Machine>();
   const columns = [
     "Name",
     "Role",
@@ -116,9 +118,12 @@ export function Machines({
     ...(talos ? ["Talos"] : []),
     "Addresses",
     "Age",
+    // Boot logs carry secrets often enough, so they go to those the admin kubeconfig goes to.
+    ...(c.allowed.kubeconfig ? ["Logs"] : []),
   ];
   return (
     <div className="box scroll">
+      {bootLog !== undefined && <BootLogDialog cluster={c} machine={bootLog} onClose={() => setBootLog(undefined)} />}
       {crowded !== undefined && <p className="warning">{crowded}</p>}
       <ErrorBox message={rowError} />
       <table className="grid">
@@ -144,13 +149,13 @@ export function Machines({
             const s = machineStatus(m, offline.has(m.proxmoxNode ?? ""));
             return (
               <tr key={m.name}>
-                <td>
+                <td className="nowrap">
                   <span className="nowrap">{m.node ?? m.name}</span>
                   {m.replacing !== true && filled(m.waiting) && <div className="hint message">{m.waiting}</div>}
                 </td>
                 <td className="nowrap">{m.role === "control-plane" ? "Control plane" : "Worker"}</td>
                 <td>{m.proxmoxNode ?? ""}</td>
-                <td>
+                <td className="nowrap">
                   <Status state={s.state} text={s.text} />
                   {cordoned.has(m.name) && <div className="hint">Cordoned</div>}
                   {m.replacing === true && filled(m.waiting) && <Detail>{m.waiting}</Detail>}
@@ -172,6 +177,7 @@ export function Machines({
                     onReplace={() => setReplacing(m)}
                     onDelete={() => setDeleting(m)}
                     onReboot={() => setRebooting(m)}
+                    onBootLog={c.allowed.kubeconfig ? () => setBootLog(m) : undefined}
                   />
                 </td>
               </tr>
@@ -240,6 +246,7 @@ function MachineActions({
   onReplace,
   onDelete,
   onReboot,
+  onBootLog,
 }: {
   machine: Machine;
   can: boolean;
@@ -250,6 +257,7 @@ function MachineActions({
   onReplace: () => void;
   onDelete: () => void;
   onReboot: () => void;
+  onBootLog: (() => void) | undefined;
 }): JSX.Element {
   const name = m.node ?? m.name;
   const going = m.phase === "Deleting";
@@ -269,6 +277,11 @@ function MachineActions({
           onClick={() => onAct(cordoned ? api.uncordonMachine : api.cordonMachine)}
         >
           {cordoned ? "Uncordon" : "Cordon"}
+        </button>
+      )}
+      {onBootLog !== undefined && (
+        <button type="button" aria-label={`Boot log of ${name}`} onClick={onBootLog}>
+          Boot log
         </button>
       )}
       {m.reboot === true && (

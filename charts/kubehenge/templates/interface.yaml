@@ -4,7 +4,9 @@ kubeconfig: it sees every cluster, but creates, changes and deletes them, reads 
 kubeconfigs and stores the credentials users type in for them, only in its own namespace and the
 extra ones it is given. What it reads of a cluster beyond the cluster itself (its machines, pools,
 control plane, health checks, add-on releases and events) is what the health page shows anyone who
-sees the cluster.
+sees the cluster. A cluster's support bundle and its nodes' boot logs, for those who may download
+its admin kubeconfig, read every Cluster API object of the cluster and the lines of the
+controller's and providers' logs that name them.
 */}}
 {{- $name := "kubehenge-interface" }}
 {{- $ns := .Values.interface.namespace }}
@@ -110,6 +112,14 @@ rules:
     resources: [configmaps]
     resourceNames: [{{ $name }}]
     verbs: [get]
+  # The controller's log, of which a cluster's support bundle carries the lines naming the
+  # cluster's objects, for those who may download its admin kubeconfig.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
   # The interface runs outside the cluster with expiring tokens of this account, the first made
   # with the admin kubeconfig at apply, each next one by the interface with the one before. It may
   # make tokens of its own account and no other.
@@ -172,6 +182,20 @@ rules:
   - apiGroups: [""]
     resources: [secrets]
     verbs: [get, create, update, delete]
+  # What a cluster's support bundle holds: every object of Cluster API and its providers here,
+  # never a Secret, and the boot logs the controller reads into <cluster>-boot-logs.
+  - apiGroups:
+      - cluster.x-k8s.io
+      - infrastructure.cluster.x-k8s.io
+      - bootstrap.cluster.x-k8s.io
+      - controlplane.cluster.x-k8s.io
+      - addons.cluster.x-k8s.io
+      - ipam.cluster.x-k8s.io
+    resources: ["*"]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -182,6 +206,39 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- /*
+The logs of capmox and the Add-on Provider for Helm, of which a cluster's support bundle carries the
+lines naming the cluster's objects.
+*/}}
+{{- range list "proxmox-infrastructure-system" "helm-addon-system" }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-logs
+  namespace: {{ . }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-logs
+  namespace: {{ . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}-logs
 subjects:
   - kind: ServiceAccount
     name: {{ $name }}

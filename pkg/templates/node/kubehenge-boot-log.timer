@@ -1,0 +1,12 @@
+[Unit]
+Description=Copy the boot's journals for Kubehenge from boot on
+
+# Often enough that a node which never joins has its last lines in the copy by the time anyone
+# asks; each run reads at most a few hundred lines of the journal.
+[Timer]
+OnBootSec=5s
+OnUnitActiveSec=15s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

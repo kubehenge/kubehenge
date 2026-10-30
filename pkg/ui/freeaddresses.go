@@ -65,7 +65,7 @@ func (s *Server) freeAddresses(w http.ResponseWriter, r *http.Request, u user) {
 	ctx := r.Context()
 	may, err := s.placesClusters(ctx, u)
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
 	if !may {
@@ -76,7 +76,7 @@ func (s *Server) freeAddresses(w http.ResponseWriter, r *http.Request, u user) {
 	view := freeView{Answering: []string{}}
 	network, reserved, err := s.bridgeNetwork(ctx, u, r.PathValue("node"), bridge)
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
 	if !network.IsValid() || req.VLAN != 0 {

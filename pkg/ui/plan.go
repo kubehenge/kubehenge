@@ -47,12 +47,12 @@ func (s *Server) planCluster(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	if err := u.kube.Update(r.Context(), ch.c, client.DryRunAll); err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	changes, err := plannedOf(r.Context(), u, ch)
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, planView{Cluster: s.view(ch.c, ch.access.path, ch.access.held, u.namespaces), Changes: changes})

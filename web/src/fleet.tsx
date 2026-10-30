@@ -53,7 +53,7 @@ export function FleetProvider({ reads = true, children }: { reads?: boolean; chi
     pollIdle,
   );
   const { data: runs, reload: reloadRuns } = usePoll<RunInfo[] | undefined>(reads ? api.runs : noFleet, (list) =>
-    list?.some((r) => r.state === "running") === true ? pollChanging : pollIdle,
+    list?.some((r) => r.state === "running" || r.state === "stalled") === true ? pollChanging : pollIdle,
   );
   useClusterChanges(() => {
     void reload();
@@ -169,6 +169,12 @@ function failure(c: Cluster): Standing | undefined {
   if (failed.length > 0) {
     const reason = failed.length === 1 ? `Machine ${failed[0]?.name ?? ""} failed` : `${failed.length} machines failed`;
     return { group: "needs", state: "error", reason, view: "machines", verdict: "Degraded" };
+  }
+  if (filled(c.controllerError)) {
+    return { group: "needs", state: "error", reason: "Controller error", view: "" };
+  }
+  if (filled(c.stalled)) {
+    return { group: "needs", state: "warning", reason: "Machines stuck for 20 minutes", view: "machines" };
   }
   return undefined;
 }

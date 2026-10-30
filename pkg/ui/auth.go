@@ -15,7 +15,7 @@ import (
 func (s *Server) realms(w http.ResponseWriter, r *http.Request) {
 	realms, err := s.Accounts.Realms(r.Context())
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, realms)
@@ -54,7 +54,7 @@ func (s *Server) signedInView(ctx context.Context, username string, sess *sessio
 	if namespaces, err := s.namespaces(ctx, s.currentKube()); err == nil {
 		v.Namespace, v.Namespaces = namespaces[0], namespaces
 	} else {
-		s.Log.Error("reading the namespaces the interface manages", "error", err)
+		s.Log.ErrorContext(ctx, "reading the namespaces the interface manages", "error", err)
 	}
 	if s.Headlamp != nil {
 		v.Headlamp = s.Headlamp.Port
@@ -95,16 +95,16 @@ func (s *Server) signIn(w http.ResponseWriter, r *http.Request) {
 	done(errors.Is(err, pve.ErrAuthentication))
 	if err != nil {
 		if errors.Is(err, pve.ErrAuthentication) {
-			s.Log.Info("sign-in refused", "user", username, "address", clientAddress(r))
+			s.Log.InfoContext(r.Context(), "sign-in refused", "user", username, "address", clientAddress(r))
 			writeError(w, http.StatusUnauthorized, "sign-in failed: check the user name, password and realm")
 			return
 		}
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
 	if ticket != nil {
 		sess := s.sessions.start(w, ticket, nil)
-		s.Log.Info("signed in", "user", ticket.Username, "address", clientAddress(r))
+		s.Log.InfoContext(r.Context(), "signed in", "user", ticket.Username, "address", clientAddress(r))
 		writeJSON(w, http.StatusOK, s.signedInView(r.Context(), ticket.Username, sess))
 		return
 	}
@@ -157,16 +157,16 @@ func (s *Server) secondFactor(w http.ResponseWriter, r *http.Request) {
 	done(errors.Is(err, pve.ErrAuthentication))
 	if err != nil {
 		if errors.Is(err, pve.ErrAuthentication) {
-			s.Log.Info("second factor refused", "user", challenge.Username, "address", clientAddress(r))
+			s.Log.InfoContext(r.Context(), "second factor refused", "user", challenge.Username, "address", clientAddress(r))
 			writeError(w, http.StatusUnauthorized, "wrong code. Try again")
 			return
 		}
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
 	s.sessions.end(w, r)
 	next := s.sessions.start(w, ticket, nil)
-	s.Log.Info("signed in", "user", ticket.Username, "address", clientAddress(r), "secondFactor", req.Kind)
+	s.Log.InfoContext(r.Context(), "signed in", "user", ticket.Username, "address", clientAddress(r), "secondFactor", req.Kind)
 	writeJSON(w, http.StatusOK, s.signedInView(r.Context(), ticket.Username, next))
 }
 
@@ -181,7 +181,7 @@ func (s *Server) whoAmI(w http.ResponseWriter, r *http.Request, u user) {
 
 func (s *Server) signOut(w http.ResponseWriter, r *http.Request, u user) {
 	s.sessions.end(w, r)
-	s.Log.Info("signed out", "user", u.ticket.Username)
+	s.Log.InfoContext(r.Context(), "signed out", "user", u.ticket.Username)
 	w.WriteHeader(http.StatusNoContent)
 }
 

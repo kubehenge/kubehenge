@@ -635,6 +635,11 @@ button.go {
   color: var(--error);
 }
 
+.runs-stalled h3,
+.runs-stalled .run-error {
+  color: var(--warning);
+}
+
 .runs-done .run-title,
 .runs-done .run-what {
   color: var(--dim);
@@ -1038,6 +1043,17 @@ button.go {
 
 .pinned-error strong {
   color: var(--error);
+}
+
+/* A stalled run may still move on by itself, so it is held up in the warning colour, not failed. */
+.pinned-error.stalled {
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface));
+  border-color: color-mix(in srgb, var(--warning) 50%, transparent);
+  border-left-color: var(--warning);
+}
+
+.pinned-error.stalled strong {
+  color: var(--warning);
 }
 
 .pinned-error p {
@@ -2102,6 +2118,18 @@ fieldset.choices .check + .info-toggle + .info-text + .hint {
   white-space: pre-wrap;
 }
 
+.reference {
+  display: block;
+  margin-top: 4px;
+  color: var(--dim);
+  font-size: 0.85em;
+}
+
+.reference .id {
+  font-family: var(--mono);
+  user-select: all;
+}
+
 .page > .error,
 .content > .error {
   margin: 0 0 12px;
@@ -2120,6 +2148,23 @@ fieldset.choices .check + .info-toggle + .info-text + .hint {
   background: color-mix(in srgb, var(--warning) 8%, var(--surface));
   padding: 8px 10px;
   margin: 0 0 12px;
+}
+
+/* What the controller reports on a cluster keeps its lines, such as a Proxmox VE task's log, in a
+   quieter block under the line that says what is wrong. */
+.held-up pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 14em;
+  overflow: auto;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.85em;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .group {
@@ -2622,6 +2667,17 @@ details.advanced > summary {
   border-radius: 6px;
   white-space: pre;
   font-size: 12px;
+}
+
+/* A boot log is several logs one under another, each needing its own clear start. */
+.boot-log-part + .boot-log-part {
+  margin-top: 20px;
+}
+
+.boot-log-part h3 {
+  margin: 0;
+  font-size: 13px;
+  font-family: var(--mono);
 }
 
 /* Commands to paste keep their own lines, so their dialog takes more of a wide screen too. */
