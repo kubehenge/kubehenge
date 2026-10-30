@@ -514,7 +514,8 @@ spec:
 # ClusterValidator), among them the grants a cluster asks for, such as Datastore.Allocate on its
 # storage. While the controller is away no cluster is created or changed: one let through then
 # would keep what the check refuses. Nothing the management cluster needs to come up writes a
-# Cluster, and a cluster being deleted, which the check leaves alone, is never held up by it.
+# Cluster, and a cluster being deleted is never held up by it: the check leaves such a cluster
+# alone but for the name that abandons its deletion, which only the controller carries out anyway.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
@@ -527,8 +528,12 @@ webhooks:
     sideEffects: None
     failurePolicy: Fail
     matchConditions:
-      - name: not-being-deleted
-        expression: "!has(object.metadata.deletionTimestamp)"
+      - name: not-being-deleted-or-abandoned
+        expression: >-
+          !has(object.metadata.deletionTimestamp) ||
+          (has(object.metadata.annotations) && 'kubehenge.dev/abandon-deletion' in object.metadata.annotations &&
+          !(has(oldObject.metadata.annotations) && 'kubehenge.dev/abandon-deletion' in oldObject.metadata.annotations &&
+          oldObject.metadata.annotations['kubehenge.dev/abandon-deletion'] == object.metadata.annotations['kubehenge.dev/abandon-deletion']))
     timeoutSeconds: 5
     clientConfig:
       service:

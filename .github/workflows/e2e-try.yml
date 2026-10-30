@@ -132,6 +132,12 @@ jobs:
           # than drop the cache, and a stalled guest stalls its etcd. Reclaim starts earlier too, in
           # the background, so that a guest faulting in memory waits less on it.
           sudo sysctl -q vm.swappiness=10 vm.watermark_scale_factor=200
+          # A Proxmox VE host merges its guests' identical pages (KSM, which its ksmtuned switches
+          # on), and the guests here run the same few systems: what is merged is memory a busy guest
+          # is not swapped out for, which stalls it until its probes fail. A pass over the guests'
+          # memory takes about a minute.
+          echo 1000 | sudo tee /sys/kernel/mm/ksm/pages_to_scan >/dev/null
+          echo 1 | sudo tee /sys/kernel/mm/ksm/run >/dev/null
           nproc && grep -m1 'model name' /proc/cpuinfo && free -m && df -h / /mnt
       # The guests' vCPUs outnumber the runner's, so a failure may come from the runner itself: its
       # load, each VM's share of its CPUs and memory, and how often and why the guests leave for its

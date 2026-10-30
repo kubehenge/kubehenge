@@ -10,8 +10,8 @@ set -eu
 here=$(dirname "$0")
 guard=${here}/../e2e/ci/guard.sh
 root=$(mktemp -d)
-bin=${root}/bin proc=${root}/proc
-mkdir "${bin}" "${proc}" "${proc}/pressure"
+bin=${root}/bin proc=${root}/proc ksm=${root}/ksm
+mkdir "${bin}" "${proc}" "${proc}/pressure" "${ksm}"
 watcher=''
 finish() {
     [ -z "${watcher}" ] || kill "${watcher}" 2> /dev/null || true
@@ -75,7 +75,9 @@ cat > "${bin}/sudo" << 'EOF'
 [ "$*" = '-n dmesg' ] && echo '[3600.1] Out of memory: Killed process 77 (kvm)'
 EOF
 chmod +x "${bin}"/*
-export PATH="${bin}:${PATH}" KUBEHENGE_E2E_GUARD_PROC="${proc}" KUBEHENGE_E2E_GUARD_INTERVAL=1
+export PATH="${bin}:${PATH}" KUBEHENGE_E2E_GUARD_PROC="${proc}" KUBEHENGE_E2E_GUARD_KSM="${ksm}" KUBEHENGE_E2E_GUARD_INTERVAL=1
+# 30 MiB merged.
+echo 7680 > "${ksm}/pages_sharing"
 
 # memory <available kB> <swap free kB> <memory full avg60> <OOM kills> [<pages swapped in>]: the
 # kernel's files as the guard reads them.
@@ -131,6 +133,7 @@ line=$(head -n 1 "${record}")
 holds "a sample reads the memory in MiB" "available=100 swap_free=400" "${line}"
 holds "and the pressure over the last minute" "memory_some=8.25 memory_full=75.00 io_some=20.75 io_full=6.50" "${line}"
 holds "and the OOM kills and swap-ins since the watch began" "oom_kills=0 swapped_in=0" "${line}"
+holds "and what KSM merged, in MiB" "merged=30" "${line}"
 holds "and each path's free space" "free:/=77824 free:${root}/full=1" "${line}"
 last=$(tail -n 1 "${record}")
 holds "swap-ins counted from the watch's start, in MiB" "swapped_in=10" "${last}"
@@ -140,6 +143,7 @@ peaks=$(sh "${guard}" peaks "${record}")
 holds "the peaks give the least room" "least memory and swap left: 500 MiB (100 available, 400 of swap)" "${peaks}"
 holds "and the least memory alone" "least memory available: 100 MiB at " "${peaks}"
 holds "and what was read back from swap" "read back from swap: 10 MiB" "${peaks}"
+holds "and the most KSM merged" "most merged by KSM: 30 MiB at " "${peaks}"
 holds "and the most stall, beside its ceiling" "most memory_full pressure: 75.00% of a minute" "${peaks}"
 holds "and the least free space" "least free on ${root}/full: 1 MiB" "${peaks}"
 expect "nothing recorded" "the guard recorded nothing" sh "${guard}" peaks "${root}/none.txt"

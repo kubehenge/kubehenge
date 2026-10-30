@@ -8,7 +8,8 @@
 #       guest, which the test reports, and never the runner
 #   test/e2e/ci/guard.sh watch <pid file> <record> [<vmstat record>] [<path>...]
 #       every KUBEHENGE_E2E_GUARD_INTERVAL seconds (5) until stopped: the machine's memory, swap and
-#       pressure and the free space of each path's file system (/ by default) into <record>; once a
+#       pressure, what KSM merged of the guests' memory and the free space of each path's file
+#       system (/ by default) into <record>; once a
 #       sample crosses a floor while the test that <pid file> names runs, its report into
 #       <record>.fail, and the test ended
 #   test/e2e/ci/guard.sh run <pid file> <record> <command>...
@@ -29,6 +30,7 @@ set -eu
 
 here=$(dirname "$0")
 proc=${KUBEHENGE_E2E_GUARD_PROC:-/proc}
+ksm=${KUBEHENGE_E2E_GUARD_KSM:-/sys/kernel/mm/ksm}
 interval=${KUBEHENGE_E2E_GUARD_INTERVAL:-5}
 
 # MiB of memory and swap together. Below it the kernel is about to choose a process to end, and
@@ -66,6 +68,7 @@ sample() {
     # Pages of 4 KiB, the size x86's kernel swaps.
     swapins=$(counter pswpin)
     line="${line} oom_kills=$((kills - kills_before)) swapped_in=$(((swapins - swapins_before) / 256))"
+    [ ! -r "${ksm}/pages_sharing" ] || line="${line} merged=$(($(cat "${ksm}/pages_sharing") / 256))"
     for path in "$@"; do
         free=$(df -Pk "${path}" 2> /dev/null | awk 'NR == 2 { print int($4 / 1024) }')
         [ -z "${free}" ] || line="${line} free:${path}=${free}"
@@ -194,6 +197,7 @@ peaks() {
             }
             kills = v["oom_kills"] + 0
             swapped = v["swapped_in"] + 0
+            if (("merged" in v) && (mergedat == "" || v["merged"] + 0 > merged)) { merged = v["merged"] + 0; mergedat = $1 }
             n++
         }
         END {
@@ -201,6 +205,7 @@ peaks() {
             printf "least memory and swap left: %d MiB (%d available, %d of swap) at %s; the floor is %d\n", least, available, swap, leastat, room
             printf "least memory available: %d MiB at %s\n", lowmem, lowmemat
             printf "read back from swap: %d MiB\n", swapped
+            if (mergedat != "") printf "most merged by KSM: %d MiB at %s\n", merged, mergedat
             for (k in most) printf "most %s pressure: %.2f%% of a minute at %s%s\n", k, most[k], mostat[k], (k == "memory_full" ? sprintf("; the ceiling is %d%%", stall) : "")
             for (k in low) printf "least free on %s: %d MiB at %s; the floor is %d\n", substr(k, 6), low[k], lowat[k], disk
             printf "OOM kills: %d\n", kills
