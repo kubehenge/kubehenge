@@ -268,7 +268,7 @@ func TestClusterBackupsWhileSettingUp(t *testing.T) {
 	rec = b.do("GET", "/api/clusters/default/one/backups", "")
 	expect(t, rec, http.StatusOK)
 	if view := backupsViewOf(t, rec.Body.Bytes()); view.Reachable || !strings.Contains(view.Message, "own access key") {
-		t.Errorf("view with only the credential for every cluster %+v", view)
+		t.Errorf("view with only the shared credential %+v", view)
 	}
 	own := &corev1.Secret{Namespace: "default", Name: provisioner.ClusterBackupCredentialName("one")}
 	if err := h.kube.Create(t.Context(), own); err != nil {
@@ -276,7 +276,7 @@ func TestClusterBackupsWhileSettingUp(t *testing.T) {
 	}
 	rec = b.do("GET", "/api/clusters/default/one/backups", "")
 	expect(t, rec, http.StatusOK)
-	if view := backupsViewOf(t, rec.Body.Bytes()); view.Reachable || !strings.Contains(view.Message, "being set up") {
+	if view := backupsViewOf(t, rec.Body.Bytes()); view.Reachable || !strings.Contains(view.Message, "Setting up Velero") {
 		t.Errorf("view with the cluster's own credential %+v", view)
 	}
 
@@ -298,7 +298,7 @@ func TestClusterBackupsOnceTheTokenRanOut(t *testing.T) {
 	b.signIn("dev@pve")
 	rec := b.do("GET", "/api/clusters/default/one/backups", "")
 	expect(t, rec, http.StatusOK)
-	if view := backupsViewOf(t, rec.Body.Bytes()); view.Reachable || !strings.Contains(view.Message, "run out") || len(v.tokens) != 0 {
+	if view := backupsViewOf(t, rec.Body.Bytes()); view.Reachable || !strings.Contains(view.Message, "expired") || len(v.tokens) != 0 {
 		t.Errorf("view %+v, reached with %v", view, v.tokens)
 	}
 	expect(t, b.do("POST", "/api/clusters/default/one/backups", ""), http.StatusConflict)

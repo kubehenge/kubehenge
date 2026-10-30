@@ -25,7 +25,7 @@ function endpointProblem(endpoint: string): string | undefined {
     url = undefined;
   }
   return !url || url.protocol !== "https:" || url.search || url.hash || url.username || url.password
-    ? "the endpoint is an https:// URL without query, fragment or user."
+    ? "enter an https:// URL without query, fragment or user."
     : undefined;
 }
 
@@ -35,9 +35,9 @@ function fieldProblemsOf(targets: BackupTarget[]): TargetFieldProblems[] {
   return targets.map((t) => {
     const p: TargetFieldProblems = {};
     if (!targetName.test(t.name)) {
-      p.name = "a name of lower-case letters, digits and dashes.";
+      p.name = "use lowercase letters, digits and dashes.";
     } else if (seen.has(t.name)) {
-      p.name = "that name is listed already.";
+      p.name = "this name is already used.";
     }
     seen.add(t.name);
     const endpoint = filled(t.endpoint) ? endpointProblem(t.endpoint) : undefined;
@@ -45,16 +45,16 @@ function fieldProblemsOf(targets: BackupTarget[]): TargetFieldProblems[] {
       p.endpoint = endpoint;
     }
     if (!targetBucket.test(t.bucket)) {
-      p.bucket = "an S3 bucket name: 3 to 63 lower-case letters, digits, dots and dashes.";
+      p.bucket = "use 3 to 63 lowercase letters, digits, dots and dashes.";
     }
     if (filled(t.region) && !targetRegion.test(t.region)) {
-      p.region = "a region such as eu-central-2.";
+      p.region = "enter a region like eu-central-2.";
     }
     if (filled(t.prefix) && (t.prefix.length > maxPrefix || !targetPrefix.test(t.prefix))) {
-      p.prefix = "folders of letters, digits and !_.*'()- apart by /, without one at either end.";
+      p.prefix = `use letters, digits and !_.*'()-, with / only between folders, at most ${maxPrefix}.`;
     }
     if (filled(t.caCertificate) && !t.caCertificate.includes("-----BEGIN CERTIFICATE-----")) {
-      p.caCertificate = "the CA is a PEM certificate.";
+      p.caCertificate = "paste a PEM certificate.";
     }
     return p;
   });
@@ -142,7 +142,7 @@ export function BackupTargets({
   const problems = fieldProblemsOf(value);
   return (
     <div className="providers">
-      {value.length === 0 && <p className="muted">None: clusters cannot back up.</p>}
+      {value.length === 0 && <p className="muted">No backup targets</p>}
       {entries.map(({ key, target: t }, i) => {
         const error = (k: TargetField): string | undefined => {
           const found = problems[i]?.[k];
@@ -151,7 +151,7 @@ export function BackupTargets({
         return (
           <fieldset key={key} className="group">
             <legend>Backup target {i + 1}</legend>
-            <Field label="Name" hint="What clusters choose it by." error={error("name")}>
+            <Field label="Name" error={error("name")}>
               {(id) => (
                 <input
                   id={id}
@@ -166,12 +166,11 @@ export function BackupTargets({
                 />
               )}
             </Field>
-            <Field label="Endpoint" hint="The store's https:// URL. Empty: AWS S3 itself." error={error("endpoint")}>
+            <Field label="Endpoint" hint="An https:// URL, or empty for AWS S3" error={error("endpoint")}>
               {(id) => (
                 <input
                   id={id}
                   value={t.endpoint ?? ""}
-                  placeholder="https://"
                   onChange={(e) => update(i, { endpoint: e.target.value.trim() })}
                 />
               )}
@@ -181,25 +180,17 @@ export function BackupTargets({
                 <input id={id} value={t.bucket} onChange={(e) => update(i, { bucket: e.target.value.trim() })} />
               )}
             </Field>
-            <Field label="Region" hint="Empty: us-east-1, which most other stores ignore." error={error("region")}>
+            <Field label="Region" hint="Empty for us-east-1" error={error("region")}>
               {(id) => (
                 <input id={id} value={t.region ?? ""} onChange={(e) => update(i, { region: e.target.value.trim() })} />
               )}
             </Field>
-            <Field
-              label="Prefix"
-              hint="A folder in the bucket the clusters' own folders go beneath. Empty: the bucket's top."
-              error={error("prefix")}
-            >
+            <Field label="Prefix" error={error("prefix")}>
               {(id) => (
                 <input id={id} value={t.prefix ?? ""} onChange={(e) => update(i, { prefix: e.target.value.trim() })} />
               )}
             </Field>
-            <Field
-              label="CA certificate"
-              hint="PEM, when the store's certificate is not signed by a public CA."
-              error={error("caCertificate")}
-            >
+            <Field label="CA certificate" hint="PEM, for a private CA only" error={error("caCertificate")}>
               {(id) => (
                 <textarea
                   id={id}
@@ -217,11 +208,9 @@ export function BackupTargets({
               />{" "}
               Send checksums
             </label>
-            <p className="hint">
-              Some S3-compatible stores refuse the checksums the AWS SDK sends; switch them off there.
-            </p>
+            <p className="hint">Switch off if the store refuses checksums.</p>
             <button type="button" onClick={() => remove(i)}>
-              Remove backup target {i + 1}
+              Remove target {i + 1}
             </button>
           </fieldset>
         );

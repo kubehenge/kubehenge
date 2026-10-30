@@ -103,7 +103,7 @@ func checkLogs(cluster *clusterv1.Cluster) error {
 	if err != nil || !a.Logs.Enabled || a.Monitoring.Enabled {
 		return err
 	}
-	return errors.New("logs need monitoring: Loki is read through monitoring's Grafana; switch monitoring on with them, or logs off before monitoring")
+	return errors.New("logs need monitoring. Switch monitoring on, or logs off")
 }
 
 // lokiProxy, alloyProxy and alloyNodeProxy name the cluster's logs proxies, which go again when

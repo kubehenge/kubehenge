@@ -86,7 +86,7 @@ func (s *Server) etcdSnapshots(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	if c.Namespace != s.Namespace {
-		view.Message = "The interface shows the etcd snapshots only of the clusters in its own namespace."
+		view.Message = "etcd snapshots show only for clusters in namespace " + s.Namespace + "."
 		writeJSON(w, http.StatusOK, view)
 		return
 	}
@@ -97,7 +97,7 @@ func (s *Server) etcdSnapshots(w http.ResponseWriter, r *http.Request, u user) {
 	if err != nil {
 		s.Log.Info("reading a cluster's etcd snapshots", "cluster", c.Namespace+"/"+c.Name, "error", err)
 		view.Snapshots = []provisioner.EtcdSnapshot{}
-		view.Message = "The snapshots could not be read from target " + settings.Target + ": " + err.Error()
+		view.Message = "Target " + settings.Target + " could not be read: " + err.Error()
 	}
 	writeJSON(w, http.StatusOK, view)
 }
@@ -133,11 +133,11 @@ func (s *Server) takeEtcdSnapshot(w http.ResponseWriter, r *http.Request, u user
 		return
 	}
 	if settings, _ := provisioner.EtcdSnapshotsOf(c); !settings.Enabled {
-		writeError(w, http.StatusConflict, "the cluster takes no etcd snapshots")
+		writeError(w, http.StatusConflict, "etcd snapshots are off for this cluster")
 		return
 	}
 	if provisioner.RestoreInProgress(c) {
-		writeError(w, http.StatusConflict, "the cluster's etcd is being restored")
+		writeError(w, http.StatusConflict, "an etcd restore is running")
 		return
 	}
 	req := provisioner.EtcdSnapshotRequest{By: u.ticket.Username, At: time.Now().UTC()}
@@ -218,7 +218,7 @@ func (s *Server) restoreEtcd(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	if provisioner.RestoreInProgress(c) {
-		writeError(w, http.StatusConflict, "the cluster's etcd is being restored already")
+		writeError(w, http.StatusConflict, "an etcd restore is already running")
 		return
 	}
 	automatic, err := s.automaticRestore(r.Context(), u, c)
@@ -227,7 +227,7 @@ func (s *Server) restoreEtcd(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	if !automatic {
-		writeError(w, http.StatusConflict, "this management cluster does not restore through the guest agent: restore by hand as the steps say")
+		writeError(w, http.StatusConflict, "automatic restore is off. Restore by hand as the steps say")
 		return
 	}
 	snapshot, ok := s.findSnapshot(w, r, u, c, req.Snapshot)
@@ -282,7 +282,7 @@ func snapshotTarget(w http.ResponseWriter, c *clusterv1.Cluster, name string) (s
 	}
 	settings, _ := provisioner.EtcdSnapshotsOf(c)
 	if settings.Target == "" {
-		writeError(w, http.StatusConflict, "the cluster names no target for etcd snapshots")
+		writeError(w, http.StatusConflict, "etcd snapshots have no target")
 		return "", false
 	}
 	return settings.Target, true

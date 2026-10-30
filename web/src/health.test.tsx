@@ -147,6 +147,15 @@ const healthPath = "GET /api/clusters/default/web/health";
 const logsPath = (container: string): string =>
   `GET /api/clusters/default/web/pods/shop/api-7d9f/logs?container=${container}`;
 
+// machineOnly is a node as the server sends it when the cluster did not answer: only its machine.
+const machineOnly = (name: string, role: "control-plane" | "worker") => ({
+  name,
+  machine: name,
+  role,
+  joined: false,
+  ready: false,
+});
+
 describe("health page", () => {
   it("says what is wrong first, and shows a crashing pod's last run to those who may read logs", async () => {
     const routes: Record<string, Route> = {
@@ -186,11 +195,9 @@ describe("health page", () => {
     await user.click(within(screen.getByRole("row", { name: /^api-7d9f/u })).getByRole("button", { name: "Logs" }));
     const dialog = within(await screen.findByRole("dialog", { name: "Logs of api-7d9f" }));
     await expect(dialog.findByLabelText("Log of api")).resolves.toHaveTextContent("panic: no database");
-    expect(dialog.getByText(/these lines are from that last run/u)).toBeInTheDocument();
+    expect(dialog.getByText("Previous run")).toBeInTheDocument();
     await user.selectOptions(dialog.getByLabelText("Container"), "sidecar");
-    await expect(dialog.findByLabelText("Log of sidecar")).resolves.toHaveTextContent(
-      "The container has written nothing.",
-    );
+    await expect(dialog.findByLabelText("Log of sidecar")).resolves.toHaveTextContent("No lines yet");
     expect(reads(calls, logsPath("sidecar"))).toBe(1);
   });
 
@@ -219,6 +226,27 @@ describe("health page", () => {
     expect(screen.queryByRole("link", { name: "Headlamp" })).not.toBeInTheDocument();
   });
 
+  it("reads no node's readiness off a cluster that does not answer", async () => {
+    fakeServer({
+      [healthPath]: {
+        body: {
+          ...degraded,
+          verdict: "unreachable",
+          workload: "Its API server does not answer: connection refused",
+          nodes: { items: [machineOnly("web-cp-a", "control-plane"), machineOnly("web-md-0-a", "worker")] },
+          pods: { items: [] },
+          attention: [],
+        },
+      },
+    });
+    render(<HealthView cluster={cluster} headlamp={undefined} />);
+
+    const glance = within(await screen.findByRole("list", { name: "At a glance" }));
+    for (const tile of ["Control plane", "Workers", "Node pressure", "Pods not well"]) {
+      expect(glance.getByRole("link", { name: new RegExp(`${tile}\\s*Not read`, "u") })).toBeInTheDocument();
+    }
+  });
+
   it("says the autoscaler brings workers to a pool at none, which keeps the control plane to itself", async () => {
     const atNone = { name: "md-0", desired: 0, ready: 0, available: 0, upToDate: 0, rollingOut: false };
     fakeServer({
@@ -235,7 +263,7 @@ describe("health page", () => {
     const tiles = within(await screen.findByRole("list", { name: "At a glance" }));
     expect(
       tiles.getByRole("link", {
-        name: /Workers\s*None\s*The cluster autoscaler adds workers once pods wait for room/u,
+        name: /Workers\s*None\s*Autoscaled from 0/u,
       }),
     ).toBeInTheDocument();
   });

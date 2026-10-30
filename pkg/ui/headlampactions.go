@@ -148,7 +148,7 @@ func checkHelmChart(raw []byte) error {
 		return errors.New("malformed request")
 	}
 	if !helmChartName.MatchString(req.Chart) {
-		return errors.New("only a chart of a repository, repository/chart, is installed here")
+		return errors.New("install a chart as repository/chart")
 	}
 	if req.DependencyUpdate {
 		return errors.New("dependencies are not fetched here")
@@ -168,13 +168,13 @@ func checkHelmRepository(raw []byte) error {
 		return errors.New("malformed request")
 	}
 	if u, err := url.Parse(req.URL); err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
-		return errors.New("a repository is reached over HTTPS, its address without credentials")
+		return errors.New("use an HTTPS repository address without credentials")
 	}
 	if req.Insecure != nil && *req.Insecure {
-		return errors.New("a repository's certificate is checked")
+		return errors.New("repository certificates are always checked")
 	}
 	if req.PassCredentialsAll != nil && *req.PassCredentialsAll {
-		return errors.New("a repository's credentials go to its own host alone")
+		return errors.New("repository credentials go to the repository's own host only")
 	}
 	return nil
 }

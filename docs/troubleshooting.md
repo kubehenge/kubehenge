@@ -106,14 +106,14 @@ The task log shows what each Kubehenge account did. In an appliance's management
 
 ### Sign-in and permissions
 
-- **"Kubehenge is not set up yet"** for an administrator: the user lacks one of the [setup privileges](install.md#who-may-set-it-up) on `/`.
+- **"Not set up yet"** for an administrator: the user lacks one of the [setup privileges](install.md#who-may-set-it-up) on `/`.
 - **A cluster is missing from the list:** the user lacks `VM.Audit` on its pool. A role given on the cluster's own pool replaces, for that pool, what the user inherits from the workload pool, so it has to hold `VM.Audit` too.
 - **"`<user>` needs `<privilege>` on `<path>`"** names exactly what to grant ([clusters.md](clusters.md#who-may-do-what)).
 - **Buttons are disabled or missing:** Scale, Upgrade, Delete and the **Edit** buttons under Options need `VM.Allocate` on the cluster's pool, and the page says so when it is missing; installing Rancher, offered when a cluster is created, needs `Sys.Modify` on the workload pool, and adding or changing identity providers needs it on the workload pool when creating and on the cluster's pool when changing; **Kubeconfig** needs `Sys.Modify` there and shows once the cluster is available. Clusters outside the interface's namespaces are read-only there.
 - **No bridges to choose from:** Proxmox VE lists a node's bridges only with `Sys.Audit` on the node; type the bridge's name instead. A bridge marked "no SDN.Use" needs that privilege on `/sdn/zones/localnetwork/<bridge>`.
-- **"Proxmox VE no longer accepts the session":** the session ended; sign in again. Sessions last eight hours.
+- **"Session ended. Sign in again.":** Proxmox VE no longer accepts the session; sign in again. Sessions last eight hours.
 - **Sign-in refused after several tries:** five failures within 15 minutes, for a user or from an address, lock further attempts for a while.
-- **"This account's second factor is a security key":** a WebAuthn key answers only on Proxmox VE's own page. Sign in with a TOTP code or recovery key, or through an OpenID realm.
+- **"Security keys work only in Proxmox VE":** a WebAuthn key answers only on Proxmox VE's own page. Sign in with a TOTP code or recovery key, or through an OpenID realm.
 - **An OpenID sign-in does not come back:** register `https://<appliance>/api/openid/callback` with the identity provider, and `https://<appliance>:8443/oidc-callback` for the shared Headlamp. A Headlamp sign-in can only be finished in the browser that started it.
 
 ### Setting up the management cluster fails
@@ -137,9 +137,9 @@ The Administration page (or the setup page) shows the error and the run's log. F
 
 The interface refuses a cluster whose template the controller does not find in the template pool. A cluster made with kubectl, or whose template went after it was made, has machines that stay provisioning; the cluster's **Machines** view shows under each what it waits for, such as `VM template not found`. Cluster API's Proxmox VE provider selects a template by its exact set of tags and needs exactly one match:
 
-- RKE2 and k3s need a build of their distribution's template on the cluster's node OS. There is one template per distribution and node OS, so every node OS the clusters' `nodeOS` names needs its own (**Build a template** on the Administration page, For: RKE2 or k3s, with that Node OS, or `kubehenge template create rke2 --node-os <node OS>`, `almalinux-10` unless set).
+- RKE2 and k3s need a build of their distribution's template on the cluster's node OS. There is one template per distribution and node OS, so every node OS the clusters' `nodeOS` names needs its own (**Build template** on the Administration page, Distribution: RKE2 or k3s, with that Node OS, or `kubehenge template create rke2 --node-os <node OS>`, `almalinux-10` unless set).
 - kubeadm needs a build of the template of the cluster's exact Kubernetes version on its node OS, for creating a cluster and for upgrading one (`kubehenge template create kubeadm --kubernetes-version <version> --node-os <node OS>`).
-- Talos needs the template of the release in the cluster's `kubehenge.dev/talos-image` annotation (**Build a template**, For: Talos, or `kubehenge template create talos --talos-version <release>`); the weekly build keeps the template of every release a cluster boots or is upgraded to, so one missing there was deleted by hand or never made.
+- Talos needs the template of the release in the cluster's `kubehenge.dev/talos-image` annotation (**Build template**, Distribution: Talos, or `kubehenge template create talos --talos-version <release>`); the weekly build keeps the template of every release a cluster boots or is upgraded to, so one missing there was deleted by hand or never made.
 - A cluster's machines clone the build its node image time picks ([templates.md](templates.md#how-clusters-find-them)); with that build deleted they take the one before it, or the oldest left, and with none left of the line, none.
 - The template has to be in the template pool, `kubehenge-templates`, the only one Cluster API may clone from.
 - Two templates with the same tags are no match either.
@@ -186,7 +186,7 @@ Nodes keep the taint `node.cloudprovider.kubernetes.io/uninitialized`, and pods 
 
 Persistent volumes that stay pending point the same way: the CSI plugin's controller uses the same address and token.
 
-The cloud controller manager logs `failed to get HA group for the node` with `403 Permission check failed (/, Sys.Audit)` for every node now and then. That is harmless: reading Proxmox VE's HA groups needs `Sys.Audit` on `/`, which a cluster's token holds only with **Label the nodes with their Proxmox VE HA groups** on (the `ccm` variable's `haGroups`, on by default, [clusters.md](clusters.md#machines)), and without it the nodes only go without the HA group labels. The cluster switched it off, or the administrator switched off **HA group labels** in the setup for every cluster ([install.md](install-settings.md#ha-group-labels)). With it on again, the messages stop within a few minutes; if they do not, `kubectl describe cluster` shows a `SysAuditRefused` event saying why.
+The cloud controller manager logs `failed to get HA group for the node` with `403 Permission check failed (/, Sys.Audit)` for every node now and then. That is harmless: reading Proxmox VE's HA groups needs `Sys.Audit` on `/`, which a cluster's token holds only with **Add HA group labels** on (the `ccm` variable's `haGroups`, on by default, [clusters.md](clusters.md#machines)), and without it the nodes only go without the HA group labels. The cluster switched it off, or the administrator switched off **HA group labels** in the setup for every cluster ([install.md](install-settings.md#ha-group-labels)). With it on again, the messages stop within a few minutes; if they do not, `kubectl describe cluster` shows a `SysAuditRefused` event saying why.
 
 ### A cluster waits before any VM exists
 
@@ -203,11 +203,11 @@ Kubehenge checks a Cluster made with kubectl or GitOps by the same rules as the 
 
 ### Ranges refused
 
-A message saying "the pod range … overlaps the nodes' network …" (or the service range): pod and service ranges must stay clear of the nodes' network (the gateway with the prefix length) and of each other. Choose other ranges under **Pod and service ranges**, or in `spec.clusterNetwork`.
+A message saying "pod range … overlaps the nodes' network …" (or the service range): pod and service ranges must stay clear of the nodes' network (the gateway with the prefix length) and of each other. Choose other ranges under **Pod and service ranges**, or in `spec.clusterNetwork`.
 
 ### Control planes too small
 
-A message saying "the control planes of a cluster with … workers need at least …": the cluster has more workers than its control planes' size carries, by its distribution's sizing guide ([clusters.md](clusters.md#machines)). Give the control planes the cores and memory the message names (`controlPlaneMachine`, or the control plane's override), or keep fewer workers. "The control planes of a cluster without workers run its workloads too and need at least …": with no workers, or every worker pool scaled to 0, the control planes need a worker's least on top of their own; give them that, or keep a worker. A cluster that already fell short, after an upgrade of Kubehenge asked for more, can still be changed in other ways; only more workers or smaller control planes are refused.
+A message saying "with … workers, control planes need … vCPUs and … MiB each, not …": the cluster has more workers than its control planes' size carries, by its distribution's sizing guide ([clusters.md](clusters.md#machines)). Give the control planes the cores and memory the message names (`controlPlaneMachine`, or the control plane's override), or keep fewer workers. "Without workers, control planes need …": with no workers, or every worker pool scaled to 0, the control planes need a worker's least on top of their own; give them that, or keep a worker. A cluster that already fell short, after an upgrade of Kubehenge asked for more, can still be changed in other ways; only more workers or smaller control planes are refused.
 
 ### One control plane, unreachable after a roll
 
@@ -219,11 +219,11 @@ A cluster with one control plane runs on two etcd members while that node is rep
 
 ### Not enough memory for the add-ons
 
-A message saying "the cluster's add-ons (…) need … MiB of memory on its workers, beyond the … MiB a worker uses itself": the workers together lack the memory the add-ons named take ([clusters.md](clusters.md#machines)). Give the workers more memory (`workerMachine`, or a worker pool's override), add workers, or leave an add-on off. Rancher's agent counts in every cluster that registers with Rancher; set `rancher` to `{register: false}` for a cluster that never will. "… on its control planes, which run them without workers …": the same for the control planes of a cluster without workers. A cluster that already fell short, after an upgrade of Kubehenge asked for more, can still be changed in other ways; only changes that leave it shorter are refused.
+A message saying "add-ons (…) need … MiB of memory on workers, which have … MiB for them": the workers together lack the memory the add-ons named take ([clusters.md](clusters.md#machines)). Give the workers more memory (`workerMachine`, or a worker pool's override), add workers, or leave an add-on off. Rancher's agent counts in every cluster that registers with Rancher; set `rancher` to `{register: false}` for a cluster that never will. "… on control planes without workers …": the same for the control planes of a cluster without workers. A cluster that already fell short, after an upgrade of Kubehenge asked for more, can still be changed in other ways; only changes that leave it shorter are refused.
 
 ### Not enough CPU for the add-ons
 
-A message saying "the cluster's add-ons (…) need … millicores of CPU on its workers, beyond the … millicores a worker uses itself": the CPU the add-ons' pods request does not fit in what the workers' cores leave beside their own pods' ([clusters.md](clusters.md#machines)). Kubernetes would leave the pods it finds no room for pending, with `Insufficient cpu` in their events, however idle the nodes are. Give the workers more cores (`workerMachine`, or a worker pool's override), add workers, or leave an add-on off; Kyverno and Istio ask for the most. The control-plane form of the message, and a cluster that already fell short, are as for memory above.
+A message saying "add-ons (…) need … millicores of CPU on workers, which have … millicores for them": the CPU the add-ons' pods request does not fit in what the workers' cores leave beside their own pods' ([clusters.md](clusters.md#machines)). Kubernetes would leave the pods it finds no room for pending, with `Insufficient cpu` in their events, however idle the nodes are. Give the workers more cores (`workerMachine`, or a worker pool's override), add workers, or leave an add-on off; Kyverno and Istio ask for the most. The control-plane form of the message, and a cluster that already fell short, are as for memory above.
 
 ### Istio
 
@@ -233,14 +233,14 @@ A message saying "the cluster's add-ons (…) need … millicores of CPU on its 
 
 ### Cluster Mesh
 
-- **A peer shows "not linked":** the reason beside it, and the cluster's `ClusterMeshNotLinked` events, say what is missing: the peer must run Cilium, have the mesh on, list this cluster, have a Cilium cluster id and an API address, and its pod range must overlap neither this cluster's pods nor its services. Two clusters given overlapping ranges by hand cannot be linked, since a range is fixed once a cluster exists.
+- **A peer shows "Not linked":** the reason beside it, and the cluster's `ClusterMeshNotLinked` events, say what is missing: the peer must run Cilium, have the mesh on, list this cluster, have a Cilium cluster id and an API address, and its pod range must overlap neither this cluster's pods nor its services. Two clusters given overlapping ranges by hand cannot be linked, since a range is fixed once a cluster exists.
 - **Linked, but pods do not reach the peer's:** `cilium clustermesh status` in either cluster names the peer it cannot reach. The peers' KVStoreMesh connects to port 32379/TCP of the other's API address; a firewall between the clusters has to let it through. Cilium's network policies apply across the mesh: a policy that denies by default has to allow the peer's pods.
 
 ### Rancher
 
 - **"cluster … already runs Rancher, with which every cluster registers":** only one cluster may install it; the others register with it. The interface refuses a second one when it is created, with "Rancher: cluster … already runs it, and every cluster registers with that one". A second cluster set to install it with kubectl gets no Rancher and a `RancherRefused` event (`kubectl describe cluster <name>`).
-- **"the Rancher release Kubehenge installs runs on Kubernetes 1.x to 1.y, not …":** a new Rancher cluster at another version is created but gets no VMs; delete it and create it again at a version within the range. An existing cluster outside the range gets no Rancher, with a `RancherRefused` event. The Rancher cluster's upgrades beyond the range wait for a Kubehenge release with a newer Rancher.
-- **"every node of the cluster Rancher runs on needs at least 4 vCPUs":** the cluster's control planes or a worker pool with nodes have fewer cores than Rancher needs; give them 4 or more (`controlPlaneMachine` and `workerMachine`, or a worker pool's override). A worker pool scaled to 0 is not counted.
+- **"for Rancher, choose Kubernetes 1.x to 1.y, not …":** the Rancher release Kubehenge installs runs only on those versions; a new Rancher cluster at another version is created but gets no VMs; delete it and create it again at a version within the range. An existing cluster outside the range gets no Rancher, with a `RancherRefused` event. The Rancher cluster's upgrades beyond the range wait for a Kubehenge release with a newer Rancher.
+- **"every node needs at least 4 vCPUs for Rancher: …":** the cluster's control planes or a worker pool with nodes have fewer cores than Rancher needs; give them 4 or more (`controlPlaneMachine` and `workerMachine`, or a worker pool's override). A worker pool scaled to 0 is not counted.
 - **Removing Rancher takes long:** it waits until Rancher has let go of every registered cluster, which needs each of them reachable; the Rancher cluster shows `RemovingRancher` events meanwhile, and everything else about it is still applied.
 - **Clusters do not register:** Rancher's host name must resolve, for people and for every registered cluster, to the Rancher cluster's ingress controller, which answers on the cluster's API address and on every node.
 - **Rancher's agent stays after a cluster leaves Rancher:** Rancher removes it with a `cattle-cleanup-…` job in the `default` namespace, whose pod does not meet `restricted` ([rancher/rancher#58081](https://github.com/rancher/rancher/issues/58081)). In a cluster that holds `default` to `restricted`, the job shows `FailedCreate` events naming the settings it lacks, and keeps trying. Let it run by holding `default` to `baseline` until the job has finished: with Pod Security Admission, `kubectl label namespace default pod-security.kubernetes.io/enforce=baseline`, and afterwards `kubectl label namespace default pod-security.kubernetes.io/enforce-`; with Kyverno, set its level to `baseline` under **Pod security** and back afterwards. A cluster being deleted needs none of this, since its VMs go with the agent.
@@ -267,7 +267,7 @@ A message saying "the cluster's add-ons (…) need … millicores of CPU on its 
 
 Kubehenge's controller holds a cluster's backups back, neither installing nor removing Velero, and says why in an event on the Cluster:
 
-- **`BackupTargetMissing`:** the cluster's target is "not one an administrator set", as an administrator removed or renamed it. Choose another under the cluster's **Options**, or have an administrator add it again ([install.md](install-settings.md#backup-targets)). What the cluster already runs stays meanwhile.
+- **`BackupTargetMissing`:** "backup target … does not exist": an administrator removed or renamed it. Choose another under the cluster's **Options**, or have an administrator add it again ([install.md](install-settings.md#backup-targets)). What the cluster already runs stays meanwhile.
 - **`BackupsInvalid`:** the backup settings are ones Velero would not take, such as a schedule it cannot read; the event says which. Correct them under **Options**, or in the `backups` variable.
 - **`BackupCredentialMissing`:** "no credential of the cluster's own for the backup target, for which the one for every cluster never stands in: type one in for it in the interface, or name a Secret of the cluster's velero namespace in existingSecret". Store the cluster's own key, or name such a Secret. "Secret … holds no accessKeyID and secretAccessKey": the credential named lacks one or both of its keys; store it again. Backups wait until then.
 
@@ -305,10 +305,10 @@ Kubehenge's controller holds a cluster's backups back, neither installing nor re
 
 ### Appliance upgrades
 
-- **Newer releases shows "unknown":** the appliance could not fetch the release index from GitHub, or the index's signature did not check out. The reason follows.
+- **Newer releases shows "Couldn't check":** the appliance could not fetch the release index from GitHub, or the index's signature did not check out. The reason follows.
 - **The last upgrade failed:** the reason is on the Administration page, and in `journalctl -u kubehenge-update` inside the appliance. Unless the reason says the release was installed but restarting failed, the release installed before keeps running.
 - **The interface does not come back** after an upgrade: see `journalctl -u kubehenge`, and upgrade or reinstall the release from the shell with `install.sh --upgrade` ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)).
-- **"distribution: its cluster class is missing from the management cluster"** or **"the cluster class … has no variable …"** when creating a cluster: the appliance was upgraded, and its interface offers a distribution or a setting whose ClusterClass the management cluster does not have yet. Apply the management cluster again (**Upgrade the management cluster** at the top of the Administration page), which installs the new release's ClusterClasses ([upgrading.md](upgrading.md#in-the-appliance)).
+- **"Distribution: not installed on the management cluster"** or **"Cluster class … has no setting …"** when creating a cluster: the appliance was upgraded, and its interface offers a distribution or a setting whose ClusterClass the management cluster does not have yet. Apply the management cluster again (**Upgrade…** at the top of the Administration page), which installs the new release's ClusterClasses ([upgrading.md](upgrading.md#in-the-appliance)).
 
 ### The Proxmox VE certificate or CA changed
 

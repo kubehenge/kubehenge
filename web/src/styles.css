@@ -499,28 +499,13 @@ button.go {
   color: var(--dim);
 }
 
-.runs-failed h3,
-.run-error {
+.runs-failed h3 {
   color: var(--error);
 }
 
 .runs-done .run-title,
 .runs-done .run-what {
   color: var(--dim);
-}
-
-/* The first error stays readable in the column; the page the run links to has the rest. */
-.run-error {
-  grid-column: 2;
-  margin-top: 2px;
-  font-family: var(--mono);
-  font-size: 11.5px;
-  overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
-  overflow: hidden;
 }
 
 .shell.runs-folded .runs {
@@ -564,6 +549,31 @@ button.go {
 
   .brand {
     width: auto;
+  }
+
+  /* The bar's links and buttons outgrow a phone's width: they scroll sideways rather than widen the page. */
+  .topbar {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .topbar > *,
+  .views a {
+    flex-shrink: 0;
+  }
+
+  .views {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  /* Scrolling clips the underline's overlap with the border, so it sits just above it instead. */
+  .views a {
+    margin-bottom: 0;
+  }
+
+  .views kbd {
+    display: none;
   }
 }
 
@@ -1181,10 +1191,82 @@ button.go {
   padding-top: 5px;
 }
 
-.hint {
+.field-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.hint,
+.info-text {
+  display: block;
+  max-width: 60ch;
   color: var(--dim);
   font-size: 12.5px;
   margin-top: 3px;
+}
+
+.info-text[hidden] {
+  display: none;
+}
+
+/* A small round "?", level with the label's first line, quiet until wanted. */
+button.info-toggle {
+  width: 18px;
+  height: 18px;
+  margin-top: 6px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 50%;
+  border-color: var(--line-strong);
+  background: transparent;
+  color: var(--dim);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  flex: none;
+}
+
+button.info-toggle[aria-expanded="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* After a checkbox's or radio's words, the "?" sits on their line and its text under them. */
+.check + .info-toggle {
+  margin: -30px 0 0 auto;
+  float: right;
+}
+
+.check:has(+ .info-toggle) {
+  padding-right: 26px;
+}
+
+.check + .info-toggle + .info-text {
+  margin: -4px 0 8px calc(13px + 8px);
+}
+
+details.detail {
+  display: inline;
+}
+
+details.detail > summary {
+  display: inline;
+  cursor: pointer;
+  color: var(--dim);
+  font-size: 12.5px;
+  margin-left: 8px;
+  text-decoration: underline dotted;
+}
+
+details.detail[open] > .detail-text {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--dim);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .field.invalid input,
@@ -1211,7 +1293,8 @@ button.go {
 }
 
 /* A note on one choice sits under its words, not under the box or button before them. */
-.check + .hint {
+.check + .hint,
+.check + .info-toggle + .info-text + .hint {
   margin: -6px 0 8px calc(13px + 8px);
 }
 
@@ -1231,7 +1314,8 @@ fieldset.choices .check {
 }
 
 /* The choices sit closer together, so their notes need no pulling up. */
-fieldset.choices .check + .hint {
+fieldset.choices .check + .hint,
+fieldset.choices .check + .info-toggle + .info-text + .hint {
   margin-top: 0;
 }
 

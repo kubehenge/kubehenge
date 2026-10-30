@@ -253,7 +253,7 @@ func machineAttention(a *attention, m *clusterv1.Machine, nodeRead bool, now tim
 		message, since = ready.Message, ready.LastTransitionTime.Time
 	}
 	if check, failed := isFalse(m.Status.Conditions, clusterv1.MachineHealthCheckSucceededCondition); failed {
-		a.add(severityError, sectionNodes, who+" failed its health check", check.Message, check.LastTransitionTime.Time)
+		a.add(severityError, sectionNodes, who+" failed health check", check.Message, check.LastTransitionTime.Time)
 		return
 	}
 	switch {
@@ -340,7 +340,7 @@ func nodeAttention(a *attention, v *nodeView, now time.Time) {
 		a.add(severityWarning, sectionNodes, who+": "+strings.Join(words, ", "), "", time.Time{})
 	}
 	if v.Unschedulable && !v.leaving {
-		a.add(severityWarning, sectionNodes, who+" cordoned", "No new pods are scheduled on it.", time.Time{})
+		a.add(severityWarning, sectionNodes, who+" cordoned", "", time.Time{})
 	}
 }
 
@@ -594,9 +594,9 @@ func eventsSection(c *clusterv1.Cluster, m *managementRead, wl *workloadRead, no
 		problems = append(problems, "management cluster: "+problem(m.eventsErr))
 	}
 	if wl.eventsErr != nil && !wl.unreachable() {
-		problems = append(problems, "the cluster: "+problem(wl.eventsErr))
+		problems = append(problems, "cluster: "+problem(wl.eventsErr))
 	}
-	s.Error = strings.Join(problems, "; ")
+	s.Error = strings.Join(problems, ", ")
 	names, prefixes := clusterObjects(c, m)
 	ours := func(o corev1.ObjectReference) bool {
 		return names[o.Name] || slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(o.Name, p) })

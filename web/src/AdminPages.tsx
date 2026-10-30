@@ -32,14 +32,15 @@ export function AdminPage({
           {status.proxmoxInsecure === true && (
             <section className="panel">
               <h3>Proxmox VE API</h3>
+              <dl className="summary">
+                <dt>Certificate check</dt>
+                <dd>Off</dd>
+              </dl>
+              <p>To switch it on, run this on the Proxmox VE node, then apply the management cluster again.</p>
               <p>
-                Certificate verification is off: the appliance and the clusters reach the Proxmox VE API without
-                checking its certificate, as the appliance was installed with <code>--proxmox-insecure</code>. To check
-                it against a CA, run{" "}
                 <code>
                   sh install.sh --upgrade --ctid {status.applianceVMID ?? "<appliance ID>"} --proxmox-ca &lt;file&gt;
-                </code>{" "}
-                in the shell of the Proxmox VE node, then apply the management cluster again.
+                </code>
               </p>
             </section>
           )}

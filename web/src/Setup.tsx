@@ -29,9 +29,11 @@ import type {
 } from "./types";
 import {
   Choice,
+  Detail,
   Dialog,
   ErrorBox,
   Field,
+  Info,
   errorMessage,
   filled,
   logLines,
@@ -51,6 +53,8 @@ const unique = (xs: string[]): string[] => [...new Set(xs)].toSorted();
 const highAvailability = 3;
 
 const msPerMinute = 60_000;
+
+const setWhenCreated = "Set when the management cluster was created";
 
 // Within this many pixels of its end, the log counts as read to the end.
 const scrollSlack = 4;
@@ -137,13 +141,13 @@ export const ownNamespace = "clusters";
 // checks it, or returns undefined.
 function namespaceProblem(ns: string): string | undefined {
   if (!/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/u.test(ns)) {
-    return `${ns} is no namespace name: lowercase letters, digits and dashes, at most 63.`;
+    return `${ns} must be at most 63 lowercase letters, digits and dashes.`;
   }
   if (ns === ownNamespace) {
-    return `${ns} is the interface's own namespace already.`;
+    return `${ns} is always offered.`;
   }
   if (ns === "default" || ns === "cert-manager" || ns.startsWith("kube-") || ns.endsWith("-system")) {
-    return `${ns} holds Kubernetes', the providers' or Kubehenge's own objects.`;
+    return `${ns} is reserved for the system.`;
   }
   return undefined;
 }
@@ -347,7 +351,7 @@ function nodeNetwork(
   addresses: string[],
   gateway: number | undefined,
 ): { ip: number; bits: number; taken: number[] } | string {
-  const wrongCount = "One, or three for high availability.";
+  const wrongCount = "Enter 1 or 3 addresses.";
   if (addresses.length !== 1 && addresses.length !== highAvailability) {
     return wrongCount;
   }
@@ -358,11 +362,11 @@ function nodeNetwork(
     const n = Number(bits);
     const ip = toInt(base ?? "");
     if (!cidr.test(a) || ip === undefined || n === 0) {
-      return `${a} is no IPv4 address with its prefix length, such as 192.0.2.11/24.`;
+      return `${a} is not in the form 192.0.2.11/24.`;
     }
     const net = (ip & maskOf(n)) >>> 0;
     if (n < pointToPoint && (ip === net || ip === (net | ~maskOf(n)) >>> 0)) {
-      return `${a} is its network's own or broadcast address.`;
+      return `${a} is a network or broadcast address.`;
     }
     if (taken.includes(ip)) {
       return `${a} is listed twice.`;
@@ -371,7 +375,7 @@ function nodeNetwork(
       return `${a} is outside the gateway's network.`;
     }
     if (first && (first.bits !== n || !sameNetwork(ip, first.ip, n))) {
-      return `${a} is in another network than ${addresses[0]}.`;
+      return `Put ${a} in the same network as ${addresses[0]}.`;
     }
     first ??= { ip, bits: n };
     taken.push(ip);
@@ -394,9 +398,9 @@ export function setupFieldProblems(
     ...refreshProblems(f),
   };
   if (passphraseShort(f.passphrase)) {
-    p.passphrase = `The passphrase needs at least ${minPassphrase} characters.`;
+    p.passphrase = `Use at least ${minPassphrase} characters.`;
   } else if (firstRun && f.passphrase !== f.confirm) {
-    p.confirm = "The passphrases differ.";
+    p.confirm = "Passphrases do not match.";
   }
   return p;
 }
@@ -410,22 +414,22 @@ function placementProblems(f: SetupForm): SetupProblems {
   if (f.nodes.length === 0) {
     p.nodes = "Choose at least one Proxmox VE node.";
   } else if (addresses.length > 0 && f.nodes.length > addresses.length) {
-    p.nodes = "Choose no more Proxmox VE nodes than there are node addresses.";
+    p.nodes = "Choose no more nodes than addresses.";
   }
   if (!f.vmDatastore) {
-    p.vmDatastore = "Choose a storage for the VMs' disks.";
+    p.vmDatastore = "Choose a storage.";
   }
   if (!f.imageDatastore) {
-    p.imageDatastore = "Choose a storage for the Talos image.";
+    p.imageDatastore = "Choose a storage.";
   }
   if (!f.bootstrapDatastore) {
-    p.bootstrapDatastore = "Choose a storage for cloud-init images.";
+    p.bootstrapDatastore = "Choose a storage.";
   }
   if (!f.bridge) {
     p.bridge = "Choose a bridge.";
   }
   if (f.vlan && !isVLAN(f.vlan)) {
-    p.vlan = "1 to 4094.";
+    p.vlan = "A whole number from 1 to 4094.";
   }
   return p;
 }
@@ -436,28 +440,28 @@ function networkProblems(f: SetupForm, was: ManagementSettings | undefined): Set
   const addresses = list(f.nodeAddresses);
   const gateway = toInt(f.gateway);
   if (gateway === undefined) {
-    p.gateway = "An IPv4 address.";
+    p.gateway = "Enter an IPv4 address.";
   }
   const network = nodeNetwork(addresses, gateway);
   if (typeof network === "string") {
     p.nodeAddresses = network;
   }
   if (was && was.nodeAddresses.some((a, i) => addresses[i] !== a)) {
-    p.nodeAddresses = `The nodes there are keep their addresses (${was.nodeAddresses.join(", ")}); more can only be added after them.`;
+    p.nodeAddresses = `Keep ${was.nodeAddresses.join(", ")} first and add new addresses after.`;
   }
   const apiIP = toInt(f.apiAddress);
   if (apiIP === undefined) {
-    p.apiAddress = "An IPv4 address.";
+    p.apiAddress = "Enter an IPv4 address.";
   } else if (apiIP === gateway || (typeof network !== "string" && network.taken.includes(apiIP))) {
-    p.apiAddress = "An unused address: neither a node address nor the gateway.";
+    p.apiAddress = "Use an unused address, not a node's or the gateway's.";
   } else if (typeof network !== "string" && !sameNetwork(apiIP, network.ip, network.bits)) {
-    p.apiAddress = "Inside the nodes' network.";
+    p.apiAddress = "Use an address in the nodes' network.";
   }
   const dns = list(f.dnsServers);
   if (dns.length === 0) {
-    p.dnsServers = "At least one.";
+    p.dnsServers = "Enter at least one DNS server.";
   } else if (dns.some((d) => !isIP(d))) {
-    p.dnsServers = "IP addresses.";
+    p.dnsServers = "Enter IP addresses only.";
   }
   return p;
 }
@@ -479,9 +483,9 @@ function badMirror(mirrors: string): string | undefined {
 function offerProblems(f: SetupForm): SetupProblems {
   const p: SetupProblems = {};
   if (f.workloadDatastores.length === 0) {
-    p.workload = "At least one storage for clusters.";
+    p.workload = "Choose at least one storage.";
   } else if (f.workloadBridges.length === 0) {
-    p.workload = "At least one bridge for clusters.";
+    p.workload = "Choose at least one bridge.";
   }
   const oidc = oidcProblems(f.clusterOIDC);
   if (oidc.length > 0) {
@@ -493,12 +497,12 @@ function offerProblems(f: SetupForm): SetupProblems {
   }
   const bad = badMirror(f.mirrors);
   if (bad !== undefined) {
-    p.mirrors = `${bad} is no registry=endpoint line, such as ghcr.io=https://mirror.example:5000.`;
+    p.mirrors = `${bad} is not in the form ghcr.io=https://mirror.example:5000.`;
   }
   for (const key of ["podSubnets", "serviceSubnets"] as const) {
     const wrong = list(f[key]).find((r) => rangeProblem(r) !== undefined);
     if (wrong !== undefined) {
-      p[key] = `${wrong} is no IPv4 network such as 10.244.0.0/16, without host bits.`;
+      p[key] = `${wrong} is not a network address like 10.244.0.0/16.`;
     }
   }
   if (f.moreNamespaces) {
@@ -506,11 +510,11 @@ function offerProblems(f: SetupForm): SetupProblems {
     const twice = names.find((n, i) => names.indexOf(n) !== i);
     const wrong = names.map((n) => namespaceProblem(n)).find((x) => x !== undefined);
     if (names.length === 0) {
-      p.extraNamespaces = "Name at least one namespace, or leave clusters in their own.";
+      p.extraNamespaces = "Enter at least one namespace.";
     } else if (wrong !== undefined) {
       p.extraNamespaces = wrong;
     } else if (twice !== undefined) {
-      p.extraNamespaces = `${twice} is named twice.`;
+      p.extraNamespaces = `${twice} is listed twice.`;
     }
   }
   return p;
@@ -525,22 +529,22 @@ function refreshProblems(f: SetupForm): SetupProblems {
   const dns = list(f.refreshDNS);
   if (!f.refreshAddress) {
     if (f.refreshGateway || dns.length > 0) {
-      p.refreshAddress = "Needed for a gateway and DNS servers; leave all three empty for DHCP.";
+      p.refreshAddress = "Enter an address, or clear gateway and DNS for DHCP.";
     }
     return p;
   }
   const [base = "", bits] = f.refreshAddress.split("/");
   const ip = toInt(base);
   if (!cidr.test(f.refreshAddress) || ip === undefined) {
-    p.refreshAddress = "An IPv4 address with its prefix length, such as 192.0.2.50/24.";
+    p.refreshAddress = "Enter an address like 192.0.2.50/24.";
     return p;
   }
   const gateway = toInt(f.refreshGateway);
   if (gateway === undefined || !sameNetwork(ip, gateway, Number(bits))) {
-    p.refreshGateway = "An IPv4 address in the address's network.";
+    p.refreshGateway = "Enter a gateway in the build address's network.";
   }
   if (dns.some((d) => !isIP(d))) {
-    p.refreshDNS = "IP addresses.";
+    p.refreshDNS = "Enter IP addresses only.";
   }
   return p;
 }
@@ -577,11 +581,10 @@ export function Setup({ onReady }: { onReady?: () => void }): JSX.Element {
     return (
       <section className="panel">
         <div className="toolbar">
-          <h2>Kubehenge is not set up yet</h2>
+          <h2>Not set up yet</h2>
         </div>
         <p className="pad">
-          An administrator of this Proxmox VE has to create Kubehenge's management cluster first. It needs a user with
-          the Administrator role on <code>/</code>.
+          Ask a user with the Administrator role on <code>/</code> to set it up.
         </p>
       </section>
     );
@@ -637,30 +640,29 @@ function LastRun({ status, manage }: { status: SetupStatus; manage: boolean }) {
     return null;
   }
   const when = new Date(job.finished ?? job.started).toLocaleString();
+  const log = job.log ?? [];
   return (
     <>
       {manage && job.state === "succeeded" && job.kind !== "remove" && (
         <p className="muted">
-          {job.automatic === true
-            ? `Last applied ${when} by an automatic upgrade, as ${job.user}.`
-            : `Last applied ${when} by ${job.user}.`}
+          {job.automatic === true ? `Last applied ${when} by automatic upgrade` : `Last applied ${when} by ${job.user}`}
         </p>
       )}
       {job.state === "succeeded" && job.kind === "remove" && (
         <p className="muted">
-          The management cluster was removed {when} by {job.user}.
+          Management cluster removed {when} by {job.user}
         </p>
       )}
       {job.state === "failed" && (
         <div className="error" role="alert">
           {job.automatic === true
-            ? `The automatic upgrade of ${when} failed, and is tried again in the next day's upgrade hour: ${job.error ?? ""}`
-            : `The last run failed: ${job.error ?? ""}`}
-          {(job.log ?? []).length > 0 && (
-            <details>
-              <summary>Log</summary>
-              <pre className="log">{(job.log ?? []).slice(-logLines).join("\n")}</pre>
-            </details>
+            ? `Automatic upgrade of ${when} failed. It retries at the next upgrade hour.`
+            : "Last run failed"}
+          {(filled(job.error) || log.length > 0) && (
+            <Detail>
+              {filled(job.error) && <p>{job.error}</p>}
+              {log.length > 0 && <pre className="log">{log.slice(-logLines).join("\n")}</pre>}
+            </Detail>
           )}
         </div>
       )}
@@ -668,52 +670,41 @@ function LastRun({ status, manage }: { status: SetupStatus; manage: boolean }) {
   );
 }
 
-// refreshSummary says in words when and where the templates are built again.
+// refreshSummary says when and where the templates are built again.
 function refreshSummary(s: ManagementSettings): string {
   const f = refreshFields(s.templateRefresh);
   if (!f.refresh) {
     return "Off";
   }
-  const disks = filled(f.refreshStorage)
-    ? f.refreshStorage
-    : (s.workloadDatastores[0] ?? "the first storage for clusters");
+  const disks = filled(f.refreshStorage) ? f.refreshStorage : (s.workloadDatastores[0] ?? "first cluster storage");
   const parts = [
-    `Every ${weekdayName(f.refreshWeekday)} at ${f.refreshTime} (${f.refreshTimeZone})`,
-    `disks on ${disks}`,
-    filled(f.refreshAddress) ? `built at ${f.refreshAddress}` : "built with DHCP",
+    `${weekdayName(f.refreshWeekday)} ${f.refreshTime} ${f.refreshTimeZone}`,
+    `on ${disks}`,
+    filled(f.refreshAddress) ? f.refreshAddress : "DHCP",
   ];
   if (f.creatorBuilds) {
-    parts.push("cluster creators may have missing templates built");
+    parts.push("creators may request builds");
   }
   return parts.join(", ");
 }
+
+const onOff = (on: boolean, detail = "On"): string => (on ? detail : "Off");
 
 // optInRows summarise the choices, each off by default, that let Kubehenge or the clusters do more
 // in Proxmox VE than their pools allow.
 function optInRows(s: ManagementSettings): [string, string][] {
   return [
-    ["Proxmox VE HA", s.proxmoxHA === true ? "Keeps clusters' control-plane VMs on separate nodes" : "Off"],
-    ["HA rules for cluster creators", s.offerHARules === true ? "Offered by name and nodes" : "Off"],
-    [
-      "CSI plugin's newest release",
-      s.clusterDatastoreAllocate === true ? "Clusters may choose it, on a storage of their own" : "Off",
-    ],
-    [
-      "HA group labels",
-      s.clusterSysAudit === false
-        ? "Off for every cluster"
-        : "On unless a cluster switches them off, with Sys.Audit on /",
-    ],
+    ["Proxmox VE HA", onOff(s.proxmoxHA === true)],
+    ["HA rule placements", onOff(s.offerHARules === true)],
+    ["Newest CSI release", onOff(s.clusterDatastoreAllocate === true)],
+    ["HA group labels", onOff(s.clusterSysAudit !== false)],
   ];
 }
 
 function headlampRows(s: ManagementSettings): [string, string][] {
   return [
-    [
-      "Headlamp sign-in",
-      s.headlampSignIn === true ? "Signs those who may download a cluster's kubeconfig in as cluster-admin" : "Off",
-    ],
-    ["Headlamp actions", s.headlampActions === true ? "Helm app catalog and Prometheus charts" : "Off"],
+    ["Headlamp sign-in", onOff(s.headlampSignIn === true, "On, as cluster-admin")],
+    ["Headlamp actions", onOff(s.headlampActions === true)],
   ];
 }
 
@@ -739,11 +730,11 @@ function ManagedSummary({
     ["API address", s.apiAddress],
     ["Gateway", s.gateway],
     ["DNS servers", s.dnsServers.join(", ")],
-    ["Storages for clusters", s.workloadDatastores.join(", ")],
-    ["Bridges for clusters", s.workloadBridges.join(", ")],
+    ["Cluster storages", s.workloadDatastores.join(", ")],
+    ["Cluster bridges", s.workloadBridges.join(", ")],
     ...optInRows(s),
     ["Template refresh", refreshSummary(s)],
-    ["Namespaces for clusters", [ownNamespace, ...(s.extraClusterNamespaces ?? [])].join(", ")],
+    ["Cluster namespaces", [ownNamespace, ...(s.extraClusterNamespaces ?? [])].join(", ")],
     ...headlampRows(s),
     [
       "Identity providers",
@@ -753,22 +744,18 @@ function ManagedSummary({
       "Backup targets",
       s.backupTargets && s.backupTargets.length > 0 ? s.backupTargets.map((t) => targetSummary(t)).join(", ") : "None",
     ],
-    ["etcd restores", s.etcdRestore === true ? "Through the Proxmox VE guest agent" : "By hand, with the steps shown"],
+    ["etcd restores", s.etcdRestore === true ? "Guest agent" : "By hand"],
     ["Registry mirrors", s.registryMirrors ? formatMirrors(s.registryMirrors).split("\n").join(", ") : "None"],
-    ["Pod ranges", s.podSubnets?.join(", ") ?? "Chosen clear of the nodes' network"],
-    ["Service ranges", s.serviceSubnets?.join(", ") ?? "Chosen clear of the nodes' network"],
+    ["Pod ranges", s.podSubnets?.join(", ") ?? "Automatic"],
+    ["Service ranges", s.serviceSubnets?.join(", ") ?? "Automatic"],
   ];
   if (status.upgrade) {
-    rows.unshift(["Applied with", `Kubehenge ${status.upgrade.applied}`]);
+    rows.unshift(["Version", `Kubehenge ${status.upgrade.applied}`]);
   }
   return (
     <section className="panel">
       <div className="box">
         <h3>Management cluster</h3>
-        <p className="muted">
-          Applying again brings the management cluster to the versions this appliance carries, and puts back anything
-          that drifted.
-        </p>
         <LastRun status={status} manage />
         <dl className="summary">
           {rows.map(([k, v]) => (
@@ -780,7 +767,7 @@ function ManagedSummary({
         </dl>
         <div className="actions">
           <button type="button" onClick={onEdit}>
-            Edit…
+            Edit settings
           </button>
           <button type="button" className="primary" onClick={() => setApplying(true)}>
             Apply again…
@@ -790,16 +777,16 @@ function ManagedSummary({
       {status.ready && (s.backupTargets ?? []).length > 0 && (
         <div className="box">
           <CredentialField
-            label="Backup access key for every cluster"
+            label="Shared backup key"
             purpose="backup"
             keys={backupKeys}
-            hint="Kubehenge's etcd snapshots take it for every cluster without a key of its own. It stays in the management cluster: Velero and the distributions' own uploads need each cluster's own key, limited to its folder."
+            hint="For etcd snapshots only, never put into a cluster"
           />
         </div>
       )}
       {applying && (
         <ApplyDialog
-          title="Apply the management cluster again"
+          title="Apply management cluster"
           action="Apply"
           settings={s}
           onClose={() => setApplying(false)}
@@ -864,11 +851,8 @@ export function ApplyDialog({
       }
     >
       {children}
-      <p className="muted">Runs with your Proxmox VE session, which is not stored, and takes ten to twenty minutes.</p>
-      <Field
-        label="State passphrase"
-        hint={`The passphrase given when the management cluster was created; at least ${minPassphrase} characters.`}
-      >
+      <p className="muted">Takes 10 to 20 minutes.</p>
+      <Field label="State passphrase" hint={setWhenCreated}>
         {(id) => (
           <input
             id={id}
@@ -888,7 +872,7 @@ export function ApplyDialog({
 function elapsed(started: string, now = Date.now()): string {
   const minutes = Math.max(0, Math.floor((now - new Date(started).getTime()) / msPerMinute));
   if (minutes < 1) {
-    return "less than a minute";
+    return "under a minute";
   }
   return minutes === 1 ? "1 minute" : `${minutes} minutes`;
 }
@@ -910,19 +894,16 @@ function Progress({ job }: { job: Job }): JSX.Element {
         <h2>{job.kind === "remove" ? "Removing the management cluster" : "Applying the management cluster"}</h2>
         <span className="spacer" />
         <span className="muted">
-          {job.automatic === true ? `started automatically as ${job.user}` : `started by ${job.user}`},{" "}
-          {elapsed(job.started)} ago
+          {job.automatic === true ? "Started automatically" : `Started by ${job.user}`} {elapsed(job.started)} ago
         </span>
       </div>
-      <p className="pad muted">
-        This takes ten to twenty minutes. The page follows along; closing it does not stop the run.
-      </p>
+      <p className="pad muted">Takes 10 to 20 minutes and keeps running if you close the page.</p>
       <p className="pad" aria-live="polite">
         {log.length > 0 ? `Now: ${log.at(-1)}` : "Starting…"}
       </p>
       {job.lines !== undefined && (
         <p className="pad muted">
-          The last {log.length} of {job.lines} lines.
+          Last {log.length} of {job.lines} lines
         </p>
       )}
       <pre
@@ -952,7 +933,7 @@ function choiceNote(nodes: string[], shared: boolean, allNodes: number): string 
   return allNodes > 1 ? `on ${nodes.join(", ")}` : "";
 }
 
-const fixedHint = "Fixed once the management cluster exists.";
+const fixedHint = "Fixed after creation";
 
 // keepOffered keeps a choice once the choices are known only if it is among them.
 const keepOffered = (value: string, choices: string[], ready: boolean): string =>
@@ -960,11 +941,11 @@ const keepOffered = (value: string, choices: string[], ready: boolean): string =
 
 function passphraseHint(manage: boolean, resumes: boolean | undefined): string {
   if (manage) {
-    return "The passphrase given when the management cluster was created.";
+    return setWhenCreated;
   }
   return resumes === true
-    ? "The passphrase of the earlier run: its encrypted state is still on the appliance and only that passphrase opens it."
-    : `At least ${minPassphrase} characters. Encrypts the management cluster's state on the appliance. It is not stored: every later upgrade or repair asks for it, and without it the state cannot be read. Keep it in a password manager.`;
+    ? "The passphrase of the earlier run"
+    : `At least ${minPassphrase} characters, and it cannot be recovered`;
 }
 
 type Toggle = (k: "nodes" | "workloadDatastores" | "workloadBridges", v: string, on: boolean) => void;
@@ -1000,10 +981,7 @@ function WorkloadChoices({
   const ids = useId();
   return (
     <fieldset className="group">
-      <legend>What clusters may use</legend>
-      <p className="muted">
-        Clusters run on any node, so this lists what every node has. Clusters may choose only what is ticked.
-      </p>
+      <legend>Available to clusters</legend>
       <fieldset className="choices">
         <legend>Storages</legend>
         {storages.map(({ name, note }, i) => (
@@ -1059,13 +1037,13 @@ function HAChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element {
           aria-describedby={hint}
           onChange={(e) => set("proxmoxHA", e.target.checked)}
         />{" "}
-        Keep clusters&apos; control-plane VMs on separate nodes with Proxmox VE HA
+        Spread control-plane VMs
       </label>
-      <p className="muted" id={hint}>
-        For clusters on shared storage, unless a cluster opts out. Proxmox VE HA also restarts a VM on another node when
-        its node fails, and a node that runs one restarts itself if it loses quorum. Kubehenge&apos;s controller gets a
-        second API token with Sys.Console on /, which amounts to a root shell on every node; switching this on or off
-        takes Sys.Console on / of you too.
+      <Info about="Proxmox VE HA">
+        For clusters on shared storage. It restarts a failed node&apos;s VMs, and a node that loses quorum reboots.
+      </Info>
+      <p className="hint" id={hint}>
+        Grants Sys.Console on /, a root shell on every node.
       </p>
     </fieldset>
   );
@@ -1075,7 +1053,7 @@ function HARulesChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element {
   const hint = useId();
   return (
     <fieldset className="group">
-      <legend>HA rules for cluster creators</legend>
+      <legend>HA rule placements</legend>
       <label className="check">
         <input
           type="checkbox"
@@ -1083,14 +1061,10 @@ function HARulesChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element {
           aria-describedby={hint}
           onChange={(e) => set("offerHARules", e.target.checked)}
         />{" "}
-        Offer Proxmox VE&apos;s HA node-affinity rules as placements to everyone who may create or change a cluster
+        Offer HA node-affinity rules
       </label>
-      <p className="muted" id={hint}>
-        Grants: those without Sys.Audit on / of their own can place a cluster on the nodes of an HA rule, seeing each
-        rule&apos;s name and the nodes it allows, never its comment or resources. Kubehenge&apos;s controller reads the
-        rules with its own token, which holds Sys.Audit on / already, so Proxmox VE grants nothing new. Risks: everyone
-        with VM.Allocate on the clusters&apos; pool or a cluster&apos;s own pool learns the rules&apos; names and which
-        nodes they cover.
+      <p className="hint" id={hint}>
+        Cluster creators see each rule&apos;s name and nodes.
       </p>
     </fieldset>
   );
@@ -1108,16 +1082,14 @@ function HeadlampChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element 
           aria-describedby={hint}
           onChange={(e) => set("headlampSignIn", e.target.checked)}
         />{" "}
-        Sign those who may download a cluster&apos;s kubeconfig in to it in Headlamp (recommended)
+        Sign in as cluster-admin
       </label>
-      <p className="muted" id={hint}>
-        Grants: whoever holds Sys.Modify on a cluster&apos;s pool opens it in the appliance&apos;s Headlamp as
-        cluster-admin, without pasting a token, with one made for their session that never reaches the browser. No one
-        else gets more than today. Risks: each cluster in the interface&apos;s namespaces gets an account bound to
-        cluster-admin and one that may make its tokens, whose token waits beside the cluster in the management cluster,
-        where the admin kubeconfigs already are; Headlamp acts as that account, not as the Proxmox VE user, whom the
-        interface&apos;s log names beside the token&apos;s ID. Switching it off removes both accounts, which ends every
-        token made.
+      <Info about="Headlamp sign-in">
+        Each cluster gets a cluster-admin account that Headlamp acts as. Switching it off deletes the accounts and ends
+        their tokens.
+      </Info>
+      <p className="hint" id={hint}>
+        Kubeconfig holders open clusters in Headlamp as cluster-admin.
       </p>
     </fieldset>
   );
@@ -1135,23 +1107,17 @@ function HeadlampActionsChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.E
           aria-describedby={hint}
           onChange={(e) => set("headlampActions", e.target.checked)}
         />{" "}
-        Offer Helm and Prometheus charts in the appliance&apos;s Headlamp
+        Helm and Prometheus charts
       </label>
-      <p className="muted" id={hint}>
-        Grants: Headlamp&apos;s Helm app catalog and Prometheus charts, with which everyone who sees a cluster lists,
-        installs, upgrades, rolls back and uninstalls its Helm releases. Each acts in the cluster with their own
-        credentials there, or the sign-in above, so the cluster lets them do no more than it already does. Only those
-        who may set the appliance up add or remove a Helm repository, since one list serves every user and cluster.
-        Risks: the appliance fetches the charts, from those repositories alone and over HTTPS. Node drain is offered
-        either way, with the user&apos;s own credentials; port forwards work in Headlamp&apos;s desktop app alone and
-        stay off here.
+      <Info about="Headlamp actions">
+        Only setup administrators add Helm repositories. The appliance fetches charts from them over HTTPS.
+      </Info>
+      <p className="hint" id={hint}>
+        Users manage Helm releases with their own cluster credentials.
       </p>
     </fieldset>
   );
 }
-
-const etcdRestoreGrant =
-  "Kubehenge's controller gets an API token of its own with VM.GuestAgent.Unrestricted and VM.Audit on the clusters' pool. It runs commands as root in every cluster VM through the guest agent, so whoever takes the management cluster has a root shell in all of them; switching this on takes VM.GuestAgent.Unrestricted on / of you too.";
 
 function EtcdRestoreChoice({ form, set, onAsk }: Omit<FieldsProps, "shown"> & { onAsk: () => void }): JSX.Element {
   const hint = useId();
@@ -1171,13 +1137,14 @@ function EtcdRestoreChoice({ form, set, onAsk }: Omit<FieldsProps, "shown"> & { 
             }
           }}
         />{" "}
-        Restore clusters&apos; etcd through the Proxmox VE guest agent
+        Restore through guest agent
       </label>
-      <p className="muted" id={hint}>
-        Restoring a cluster&apos;s etcd from a snapshot stops the control plane on its VMs and restores on one of them.
-        Switched on, Kubehenge does that itself when someone with Sys.Modify on the cluster&apos;s pool asks; switched
-        off, the interface lists the commands to run on the VMs by hand. Talos clusters are restored through their
-        nodes&apos; Talos API either way. {etcdRestoreGrant}
+      <Info about="etcd restores">
+        Off, the interface shows the restore steps to run by hand. Talos clusters restore through the Talos API either
+        way.
+      </Info>
+      <p className="hint" id={hint}>
+        Grants a root shell in every cluster VM.
       </p>
     </fieldset>
   );
@@ -1195,13 +1162,10 @@ function DatastoreAllocateChoice({ form, set }: Omit<FieldsProps, "shown">): JSX
           aria-describedby={hint}
           onChange={(e) => set("clusterDatastoreAllocate", e.target.checked)}
         />{" "}
-        Let clusters choose the CSI plugin&apos;s newest release
+        Offer newest CSI release
       </label>
-      <p className="muted" id={hint}>
-        The newest release needs Datastore.Allocate on a cluster&apos;s storage. A cluster that chooses it gets that on
-        its storage, which must be one of the storages for clusters that no other cluster, the management cluster or the
-        VM templates use. Kubehenge&apos;s controller gets Datastore.Allocate on the storages for clusters the
-        management cluster does not use, to grant it.
+      <p className="hint" id={hint}>
+        Grants Datastore.Allocate on a storage only that cluster uses.
       </p>
     </fieldset>
   );
@@ -1213,26 +1177,16 @@ const offeredRefreshStorage = (f: SetupForm): string =>
   f.workloadDatastores.includes(f.refreshStorage) ? f.refreshStorage : "";
 
 function RefreshChoice({ form, set, shown }: FieldsProps): JSX.Element {
-  const hint = useId();
-  const creatorsHint = useId();
   return (
     <fieldset className="group">
       <legend>Template refresh</legend>
       <label className="check">
-        <input
-          type="checkbox"
-          checked={form.refresh}
-          aria-describedby={hint}
-          onChange={(e) => set("refresh", e.target.checked)}
-        />{" "}
-        Build the node OS VM templates again every week
+        <input type="checkbox" checked={form.refresh} onChange={(e) => set("refresh", e.target.checked)} /> Rebuild VM
+        templates weekly
       </label>
-      <p className="muted" id={hint}>
-        Each build takes its node OS&apos;s updates. A cluster&apos;s nodes move to a build in the cluster&apos;s
-        maintenance window once it is a day old, unless the cluster switches that off; the two newest builds of each
-        template stay. The builds run with an API token of their own, which may create and delete VMs in the template
-        pool and upload and delete images on the storages they use.
-      </p>
+      <Info about="template refresh">
+        Clusters move to a build once it is a day old, in their maintenance window. The two newest builds stay.
+      </Info>
       {form.refresh && (
         <>
           <Field label="Day">
@@ -1267,13 +1221,13 @@ function RefreshChoice({ form, set, shown }: FieldsProps): JSX.Element {
               </select>
             )}
           </Field>
-          <Field label="Template disks" hint="One of the storages for clusters.">
+          <Field label="Template disks">
             {(id) => (
               <select id={id} value={form.refreshStorage} onChange={(e) => set("refreshStorage", e.target.value)}>
                 <option value="">
                   {form.workloadDatastores[0] === undefined
-                    ? "The first storage for clusters"
-                    : `${form.workloadDatastores[0]} (the first storage for clusters)`}
+                    ? "First cluster storage"
+                    : `${form.workloadDatastores[0]} (default)`}
                 </option>
                 {form.workloadDatastores.slice(1).map((d) => (
                   <option key={d} value={d}>
@@ -1283,11 +1237,7 @@ function RefreshChoice({ form, set, shown }: FieldsProps): JSX.Element {
               </select>
             )}
           </Field>
-          <Field
-            label="Build address"
-            hint="The VM that prepares an image gets its address by DHCP when this is empty. Otherwise an unused address with its prefix length, such as 192.0.2.50/24."
-            error={shown("refreshAddress")}
-          >
+          <Field label="Build address" hint="Empty for DHCP, or like 192.0.2.50/24" error={shown("refreshAddress")}>
             {(id) => (
               <input
                 id={id}
@@ -1307,7 +1257,7 @@ function RefreshChoice({ form, set, shown }: FieldsProps): JSX.Element {
                   />
                 )}
               </Field>
-              <Field label="Build DNS servers" hint="Separated by commas." error={shown("refreshDNS")}>
+              <Field label="Build DNS servers" error={shown("refreshDNS")}>
                 {(id) => <input id={id} value={form.refreshDNS} onChange={(e) => set("refreshDNS", e.target.value)} />}
               </Field>
             </>
@@ -1316,17 +1266,14 @@ function RefreshChoice({ form, set, shown }: FieldsProps): JSX.Element {
             <input
               type="checkbox"
               checked={form.creatorBuilds}
-              aria-describedby={creatorsHint}
               onChange={(e) => set("creatorBuilds", e.target.checked)}
             />{" "}
-            Let those who may create clusters have a missing template built
+            Let creators request builds
           </label>
-          <p className="muted" id={creatorsHint}>
-            Recommended. A cluster creator who finds no template of the distribution on the node OS chosen, none of the
-            Kubernetes version for kubeadm, or none of the Talos release for Talos, can ask for it from the create
-            wizard; the build runs with the refresh&apos;s token, not theirs. Without it, only an administrator can
-            build templates.
-          </p>
+          <Info about="build requests">
+            Cluster creators missing a template can have it built from the create wizard. Off, only administrators build
+            templates.
+          </Info>
         </>
       )}
     </fieldset>
@@ -1345,40 +1292,36 @@ function SysAuditChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element 
           aria-describedby={hint}
           onChange={(e) => set("clusterSysAudit", e.target.checked)}
         />{" "}
-        Label clusters&apos; nodes with Proxmox VE&apos;s HA groups
+        Add HA group labels
       </label>
-      <p className="muted" id={hint}>
-        The cloud controller manager reads Proxmox VE&apos;s HA groups and node-affinity rules, which takes Sys.Audit on
-        /. Each cluster gets that, unpropagated, through a group Kubehenge&apos;s controller adds its user to, unless
-        the cluster switches the labels off; its token can then read the Proxmox VE cluster&apos;s own configuration
-        (firewall rules, backup jobs, HA, the corosync configuration), but nothing of its guests, storages or nodes.
-        Off, no cluster gets Sys.Audit on / and nodes go without the labels.
+      <Info about="HA group labels">
+        Clusters can read firewall rules, backup jobs and HA and corosync settings, not guests or storage. Each cluster
+        can switch it off.
+      </Info>
+      <p className="hint" id={hint}>
+        Grants each cluster Sys.Audit on /.
       </p>
     </fieldset>
   );
 }
 
 function NamespacesChoice({ form, set, shown }: FieldsProps): JSX.Element {
-  const hint = useId();
   return (
     <fieldset className="group">
-      <legend>Namespaces for clusters</legend>
+      <legend>Cluster namespaces</legend>
       <label className="check">
         <input
           type="checkbox"
           checked={form.moreNamespaces}
-          aria-describedby={hint}
           onChange={(e) => set("moreNamespaces", e.target.checked)}
         />{" "}
-        Let cluster creators choose among more namespaces than {ownNamespace}
+        Offer more than {ownNamespace}
       </label>
-      <p className="muted" id={hint}>
-        Such as one per team. Each cluster still has its own pool, and seeing or changing it still takes the privileges
-        on that pool. A namespace is created if it is missing; one taken off the list keeps its clusters, which are then
-        changed with kubectl.
-      </p>
+      <Info about="cluster namespaces">
+        Missing namespaces are created. One taken off the list keeps its clusters, which kubectl then manages.
+      </Info>
       {form.moreNamespaces && (
-        <Field label="Namespaces" hint="Separated by commas, such as team-a, team-b." error={shown("extraNamespaces")}>
+        <Field label="Namespaces" hint="Separated by commas, like team-a, team-b" error={shown("extraNamespaces")}>
           {(id) => (
             <input id={id} value={form.extraNamespaces} onChange={(e) => set("extraNamespaces", e.target.value)} />
           )}
@@ -1404,7 +1347,7 @@ function EtcdRestoreConfirm({
   }
   return (
     <Dialog
-      title="Restore etcd through the guest agent?"
+      title="Allow guest agent restores"
       onClose={onClose}
       onSubmit={onConfirm}
       actions={
@@ -1413,25 +1356,16 @@ function EtcdRestoreConfirm({
             Cancel
           </button>
           <button type="submit" className="danger">
-            Switch on
+            Allow
           </button>
         </>
       }
     >
       <p>
-        <strong>What it grants.</strong> {etcdRestoreGrant}
+        Kubehenge gets VM.GuestAgent.Unrestricted on the clusters&apos; pool. Whoever holds that token has a root shell
+        in every cluster VM.
       </p>
-      <p>
-        <strong>What it risks.</strong> The token sits in the management cluster beside Kubehenge&apos;s other
-        credentials. Anyone who reads it, or who controls Kubehenge&apos;s controller, can run anything as root in any
-        cluster VM: read every Secret, change any workload, or stop a cluster. A restore itself takes every object of a
-        cluster back to the snapshot.
-      </p>
-      <p>
-        <strong>Left off</strong>, there is no such token: a restore takes the same steps, run by hand by someone with a
-        shell on the VMs.
-      </p>
-      <p className="hint">The change takes effect when the settings are applied.</p>
+      <p className="hint">Takes effect when you apply the settings.</p>
     </Dialog>
   );
 }
@@ -1443,13 +1377,13 @@ function AdvancedFields({
   fixed,
   detailsRef,
 }: FieldsProps & { fixed: boolean; detailsRef: RefObject<HTMLDetailsElement | null> }): JSX.Element {
-  const rangeHint = fixed ? fixedHint : "Chosen clear of the nodes' network when empty.";
+  const rangeHint = fixed ? fixedHint : "Empty picks a free range";
   return (
     <details className="advanced" ref={detailsRef}>
       <summary>Advanced</summary>
       <Field
         label="Registry mirrors"
-        hint="registry=endpoint, one per line, such as ghcr.io=https://mirror.example:5000. Tried before the registry itself."
+        hint="One per line, like ghcr.io=https://mirror.example:5000"
         error={shown("mirrors")}
       >
         {(id) => <textarea id={id} rows={2} value={form.mirrors} onChange={(e) => set("mirrors", e.target.value)} />}
@@ -1482,7 +1416,16 @@ function PassphraseFields({
 }: FieldsProps & { hint: string; firstRun: boolean }): JSX.Element {
   return (
     <>
-      <Field label="State passphrase" hint={hint} error={shown("passphrase")}>
+      <Field
+        label="State passphrase"
+        hint={hint}
+        info={
+          firstRun
+            ? "Encrypts the management cluster's state on the appliance. Every upgrade and repair asks for it."
+            : undefined
+        }
+        error={shown("passphrase")}
+      >
         {(id) => (
           <input
             id={id}
@@ -1685,18 +1628,9 @@ function SetupWizard({
         }}
       >
         {manage && <h3 id={headingId}>Management cluster</h3>}
-        <p className="muted">
-          {manage
-            ? "Applying brings the management cluster to these settings and the versions this appliance carries. It runs with your Proxmox VE session, which is not stored."
-            : "Kubehenge's management cluster runs Cluster API and creates every other cluster. It is created with your Proxmox VE session, which is not stored."}
-        </p>
         <LastRun status={status} manage={manage} />
         <fieldset className="group">
           <legend>Proxmox VE nodes</legend>
-          <p className="muted">
-            The management cluster's VMs are placed on these in turn. Three nodes for three VMs keep it running when one
-            node fails.
-          </p>
           {nodes.map((n) => (
             <label key={n.node} className="check">
               <input
@@ -1711,11 +1645,7 @@ function SetupWizard({
           ))}
           <FieldError message={shown("nodes")} />
         </fieldset>
-        <Field
-          label="VM disks"
-          hint={fixed ? fixedHint : "Storage for the management cluster's disks."}
-          error={shown("vmDatastore")}
-        >
+        <Field label="VM disks" hint={fixed ? fixedHint : undefined} error={shown("vmDatastore")}>
           {(id) =>
             fixed ? (
               <input id={id} readOnly value={fixed.vmDatastore} />
@@ -1729,11 +1659,7 @@ function SetupWizard({
             )
           }
         </Field>
-        <Field
-          label="Talos image"
-          hint="Storage the Talos disk image is downloaded to (content type import)."
-          error={shown("imageDatastore")}
-        >
+        <Field label="Talos image" hint="Storages with the import content type" error={shown("imageDatastore")}>
           {(id) => (
             <Choice
               id={id}
@@ -1745,7 +1671,7 @@ function SetupWizard({
         </Field>
         <Field
           label="Cloud-init images"
-          hint="Cluster API keeps each new VM's cloud-init ISO here and gets full control of it."
+          hint="ISO storage that Kubehenge gets full control of"
           error={shown("bootstrapDatastore")}
         >
           {(id) => (
@@ -1771,18 +1697,14 @@ function SetupWizard({
             </select>
           )}
         </Field>
-        <Field label="VLAN tag" hint="Optional." error={shown("vlan")}>
+        <Field label="VLAN tag" hint="Optional" error={shown("vlan")}>
           {(id) => (
             <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
           )}
         </Field>
         <Field
           label="Node addresses"
-          hint={
-            fixed
-              ? "The nodes there are keep their addresses. A single node grows to three by adding two addresses after its own."
-              : "One, or three for high availability, with prefix length: 192.0.2.11/24."
-          }
+          hint={fixed ? "Add 2 addresses after the first to grow to 3" : "1 or 3, like 192.0.2.11/24"}
           error={shown("nodeAddresses")}
         >
           {(id) => (
@@ -1796,7 +1718,7 @@ function SetupWizard({
         </Field>
         <Field
           label="API address"
-          hint={fixed ? fixedHint : "An unused address in the same network; it moves to a healthy node."}
+          hint={fixed ? fixedHint : "A free address in the nodes' network"}
           error={shown("apiAddress")}
         >
           {(id) => (
@@ -1818,7 +1740,7 @@ function SetupWizard({
             />
           )}
         </Field>
-        <Field label="DNS servers" hint="One per line or separated by commas." error={shown("dnsServers")}>
+        <Field label="DNS servers" hint="Separated by commas" error={shown("dnsServers")}>
           {(id) => <input id={id} value={form.dnsServers} onChange={(e) => set("dnsServers", e.target.value)} />}
         </Field>
         <WorkloadChoices
@@ -1838,19 +1760,10 @@ function SetupWizard({
         <HeadlampActionsChoice form={form} set={set} />
         <fieldset className="group">
           <legend>Identity providers</legend>
-          <p className="muted">
-            OpenID Connect providers every new cluster accepts sign-ins from, besides tokens and certificates. A cluster
-            can drop them or, with Sys.Modify on its pool, add its own. Clusters made before a change keep what they
-            had.
-          </p>
           <OIDCProviders initial={form.clusterOIDC} showAll={attempted} onChange={(v) => set("clusterOIDC", v)} />
         </fieldset>
         <fieldset className="group">
           <legend>Backup targets</legend>
-          <p className="muted">
-            S3 stores clusters back up to, with Velero and as etcd snapshots. Each cluster writes into a folder of its
-            own beneath the prefix, with an access key of its own, and encrypts what it writes with keys of its own.
-          </p>
           <BackupTargets initial={form.backupTargets} showAll={attempted} onChange={(v) => set("backupTargets", v)} />
         </fieldset>
         <EtcdRestoreChoice form={form} set={set} onAsk={() => setAskingRestore(true)} />
@@ -1870,7 +1783,7 @@ function SetupWizard({
             </button>
           )}
           <button type="submit" className="primary" disabled={busy}>
-            {manage ? "Apply" : "Create the management cluster"}
+            {manage ? "Apply" : "Create management cluster"}
           </button>
         </div>
       </form>

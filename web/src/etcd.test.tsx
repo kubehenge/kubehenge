@@ -128,14 +128,14 @@ describe("etcd snapshot settings", () => {
   it("say in words how they run, and refuse what the controller would", () => {
     expect(scheduleText("0 */12 * * *")).toBe("Every 12 hours from 00:00");
     expect(etcdSnapshotsText({ enabled: true, target: "store" })).toBe(
-      "Every 12 hours from 00:00 (UTC), keeps the last 14, to store",
+      "Every 12 hours from 00:00 (UTC), keeps 14, to store",
     );
     expect(etcdSnapshotsText({ enabled: false })).toBe("Off");
     const offered = [{ name: "store", bucket: "backups" }];
     expect(etcdProblems({ ...etcdFieldsOf({ enabled: true }), target: "store" }, offered)).toStrictEqual({});
     expect(etcdProblems({ ...etcdFieldsOf({ enabled: true }), keep: "0" }, offered)).toStrictEqual({
-      target: "Choose a target.",
-      keep: "A whole number from 1 to 1000.",
+      target: "Choose a target",
+      keep: "A whole number from 1 to 1000",
     });
   });
 
@@ -143,9 +143,9 @@ describe("etcd snapshot settings", () => {
     const c: Cluster = snapshotting;
     expect(restoreProblem(c, snapshot)).toBeUndefined();
     expect(restoreProblem(c, { ...snapshot, kubernetesVersion: "v1.35.2+rke2r1" })).toBe(
-      "The snapshot holds the objects of Kubernetes 1.35 and the cluster runs 1.36: restore one taken on 1.36.",
+      "Snapshot is of Kubernetes 1.35, not 1.36",
     );
-    expect(restoreProblem(c, { ...snapshot, distribution: "k3s" })).toMatch(/of a k3s cluster, and this one is RKE2/u);
+    expect(restoreProblem(c, { ...snapshot, distribution: "k3s" })).toBe("Snapshot is of k3s, not RKE2");
   });
 
   it("are switched on in a cluster's options", async () => {
@@ -161,9 +161,9 @@ describe("etcd snapshot settings", () => {
     render(<App />);
 
     await user.click(await screen.findByRole("button", { name: "Edit etcd snapshots" }));
-    const dialog = screen.getByRole("dialog", { name: "etcd snapshots" });
+    const dialog = screen.getByRole("dialog", { name: "Edit etcd snapshots" });
     await user.click(within(dialog).getByLabelText("Take etcd snapshots"));
-    expect(within(dialog).getByText("Choose a target.")).toBeInTheDocument();
+    expect(within(dialog).getByText("Choose a target")).toBeInTheDocument();
     await user.selectOptions(within(dialog).getByLabelText("Target"), "store");
     expect(within(dialog).getByLabelText("Schedule")).toHaveAccessibleDescription(/Every 12 hours from 00:00/u);
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
@@ -178,7 +178,7 @@ describe("etcd snapshot settings", () => {
 
   it("offer RKE2's and k3s's own upload, saying what it grants, and drop it with the snapshots", async () => {
     expect(etcdSnapshotsText({ enabled: true, target: "store", distributionUpload: true }, "k3s")).toBe(
-      "Every 12 hours from 00:00 (UTC), keeps the last 14, to store; k3s uploads its own too",
+      "Every 12 hours from 00:00 (UTC), keeps 14, to store, plus k3s's own",
     );
     window.history.replaceState(null, "", "/clusters/clusters/web/options");
     let now = snapshotting;
@@ -196,12 +196,12 @@ describe("etcd snapshot settings", () => {
     render(<App />);
 
     await user.click(await screen.findByRole("button", { name: "Edit etcd snapshots" }));
-    let dialog = screen.getByRole("dialog", { name: "etcd snapshots" });
-    const upload = within(dialog).getByLabelText("Also have RKE2 upload snapshots of its own");
+    let dialog = screen.getByRole("dialog", { name: "Edit etcd snapshots" });
+    const upload = within(dialog).getByLabelText("Also take RKE2 snapshots");
     expect(upload).not.toBeChecked();
-    expect(upload).toHaveAccessibleDescription(/own access key to the target goes into the Secret kubehenge-etcd-s3/u);
-    expect(upload).toHaveAccessibleDescription(/The key for every cluster never goes there/u);
-    expect(upload).toHaveAccessibleDescription(/not encrypted by Kubehenge/u);
+    expect(upload).toHaveAccessibleDescription("Cluster admins can read the cluster's own access key");
+    await user.click(within(dialog).getByRole("button", { name: "About RKE2 snapshots" }));
+    expect(within(dialog).getByText(/RKE2 snapshots are unencrypted, restored by hand/u)).toBeVisible();
     await user.click(upload);
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -219,10 +219,10 @@ describe("etcd snapshot settings", () => {
       },
     });
 
-    await expect(screen.findByText(/; RKE2 uploads its own too$/u)).resolves.toBeInTheDocument();
+    await expect(screen.findByText(/, plus RKE2's own$/u)).resolves.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Edit etcd snapshots" }));
-    dialog = screen.getByRole("dialog", { name: "etcd snapshots" });
-    expect(within(dialog).getByLabelText("Also have RKE2 upload snapshots of its own")).toBeChecked();
+    dialog = screen.getByRole("dialog", { name: "Edit etcd snapshots" });
+    expect(within(dialog).getByLabelText("Also take RKE2 snapshots")).toBeChecked();
     await user.click(within(dialog).getByLabelText("Take etcd snapshots"));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -249,9 +249,9 @@ describe("etcd snapshot settings", () => {
     render(<App />);
 
     await user.click(await screen.findByRole("button", { name: "Edit etcd snapshots" }));
-    const dialog = screen.getByRole("dialog", { name: "etcd snapshots" });
-    expect(within(dialog).getByLabelText("Keep")).toBeInTheDocument();
-    expect(within(dialog).queryByLabelText(/upload snapshots of its own/u)).not.toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Edit etcd snapshots" });
+    expect(within(dialog).getByLabelText("Snapshots to keep")).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText(/^Also take/u)).not.toBeInTheDocument();
   });
 });
 
@@ -266,9 +266,7 @@ describe("a cluster's etcd snapshots", () => {
     const user = userEvent.setup({ delay: null });
     render(<App />);
 
-    await expect(
-      screen.findByText("Every 6 hours from 00:00 (UTC), keeps the last 10, to store"),
-    ).resolves.toBeInTheDocument();
+    await expect(screen.findByText("Every 6 hours from 00:00 (UTC), keeps 10, to store")).resolves.toBeInTheDocument();
     expect(screen.getByText("Last snapshot").nextElementSibling).toHaveTextContent(/^Taken/u);
     expect(screen.getByRole("link", { name: `Download ${snapshot.name}` })).toHaveAttribute(
       "href",
@@ -277,7 +275,7 @@ describe("a cluster's etcd snapshots", () => {
     // The older snapshot is of another Kubernetes minor, which the cluster's API server may not read.
     expect(screen.getByRole("button", { name: "Restore from 20261021T000000Z-v1.35.2+rke2r1.db.age" })).toBeDisabled();
 
-    await user.click(screen.getByRole("button", { name: "Take a snapshot now" }));
+    await user.click(screen.getByRole("button", { name: "Take snapshot" }));
     await waitFor(() => expect(calls.map((c) => c.key)).toContain("POST /api/clusters/clusters/web/etcd-snapshots"));
   });
 
@@ -290,11 +288,11 @@ describe("a cluster's etcd snapshots", () => {
     });
     render(<App />);
 
-    await expect(screen.findByText("RKE2's own")).resolves.toBeInTheDocument();
-    expect(screen.getByText("RKE2's own").nextElementSibling).toHaveTextContent(
-      /to the rke2-etcd folder beside these, on the schedule in UTC; restored by hand with RKE2's own steps/u,
+    await expect(screen.findByText("RKE2 snapshots")).resolves.toBeInTheDocument();
+    expect(screen.getByText("RKE2 snapshots").nextElementSibling).toHaveTextContent(
+      "In rke2-etcd, same schedule in UTC, restored by hand",
     );
-    expect(screen.getByText("Every 6 hours from 00:00 (UTC), keeps the last 10, to store")).toBeInTheDocument();
+    expect(screen.getByText("Every 6 hours from 00:00 (UTC), keeps 10, to store")).toBeInTheDocument();
   });
 
   it("restore through the guest agent once the cluster's name is typed", async () => {
@@ -309,8 +307,8 @@ describe("a cluster's etcd snapshots", () => {
 
     await user.click(await screen.findByRole("button", { name: `Restore from ${snapshot.name}` }));
     const dialog = screen.getByRole("dialog", { name: /^Restore etcd from/u });
-    expect(dialog).toHaveTextContent("The data in volumes stays as it is now.");
-    expect(dialog).toHaveTextContent("lost its etcd quorum");
+    expect(dialog).toHaveTextContent("losing later changes. Volume data stays.");
+    expect(dialog).toHaveTextContent("Replaces all control-plane nodes but one. The API is down");
     const restore = within(dialog).getByRole("button", { name: "Restore" });
     expect(restore).toBeDisabled();
     await user.type(within(dialog).getByLabelText("Confirm name"), "web");
@@ -340,7 +338,7 @@ describe("a cluster's etcd snapshots", () => {
       "systemctl stop rke2-server",
     );
     expect(within(dialog).getByText(/On web-cp-a, web-cp-b, web-cp-c/u)).toBeInTheDocument();
-    expect(within(dialog).getByRole("link", { name: "Download the snapshot" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("link", { name: "Download snapshot" })).toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: "Restore" })).not.toBeInTheDocument();
     expect(calls.map((c) => c.key)).not.toContain("POST /api/clusters/clusters/web/etcd-restores");
   });
@@ -369,14 +367,10 @@ describe("a cluster's etcd snapshots", () => {
     render(<App />);
 
     await expect(screen.findByText("Restoring etcd on web-cp-a")).resolves.toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "etcd as it was before is in 20261021T120000Z-v1.37.1-rke2r1.db.age, to undo the restore by another.",
-      ),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/Downloading a snapshot and restoring from one need Sys.Modify/u)).toBeInTheDocument();
+    expect(screen.getByText("Undo by restoring 20261021T120000Z-v1.37.1-rke2r1.db.age")).toBeInTheDocument();
+    expect(screen.getByText(/Download and restore need Sys.Modify/u)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: `Download ${snapshot.name}` })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Take a snapshot now" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Take snapshot" })).toBeDisabled();
   });
 
   it("say why a restore took no snapshot of etcd as it was", async () => {
@@ -399,9 +393,8 @@ describe("a cluster's etcd snapshots", () => {
     });
     render(<App />);
 
-    await expect(
-      screen.findByText("No snapshot of etcd as it was could be taken first: reaching etcd: etcdserver: no leader."),
-    ).resolves.toBeInTheDocument();
+    await expect(screen.findByText("No snapshot to undo it")).resolves.toBeInTheDocument();
+    expect(screen.getByText("Reaching etcd: etcdserver: no leader.")).toBeInTheDocument();
   });
 
   it("offer to be set up where they are off", async () => {
@@ -422,7 +415,7 @@ describe("a cluster's etcd snapshots", () => {
       },
     });
     render(<App />);
-    await expect(screen.findByText("Kubehenge takes no etcd snapshots of this cluster.")).resolves.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Set up etcd snapshots…" })).toBeEnabled();
+    await expect(screen.findByText("etcd snapshots are off")).resolves.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Set up snapshots…" })).toBeEnabled();
   });
 });

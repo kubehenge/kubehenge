@@ -87,10 +87,10 @@ func checkEtcdUpload(c *clusterv1.Cluster, s *EtcdSnapshots) error {
 		return nil
 	}
 	if !uploads(distributionOf(c)) {
-		return fmt.Errorf("etcdSnapshots: distributionUpload is RKE2's and k3s's own upload, which %s has not", distributionOf(c))
+		return fmt.Errorf("etcdSnapshots: distributionUpload works on RKE2 and k3s only, not %s", distributionOf(c))
 	}
 	if !s.Enabled {
-		return errors.New("etcdSnapshots: distributionUpload takes the target, schedule and keep of etcd snapshots, which are off")
+		return errors.New("etcdSnapshots: distributionUpload needs etcd snapshots switched on")
 	}
 	return nil
 }
@@ -123,7 +123,7 @@ func (r *Reconciler) reconcileEtcdUpload(ctx context.Context, cluster *clusterv1
 		return false, err
 	}
 	if !found {
-		r.holdEtcdUpload(ctx, cluster, fmt.Sprintf("backup target %q is not one an administrator set", s.Target))
+		r.holdEtcdUpload(ctx, cluster, fmt.Sprintf("backup target %q does not exist", s.Target))
 		return false, nil
 	}
 	creds, missing, err := r.clusterBackupCredential(ctx, cluster)

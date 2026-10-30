@@ -33,7 +33,7 @@ func sysAudit(cluster *clusterv1.Cluster, group string) (bool, string, error) {
 	case err != nil || !ccm.HAGroups:
 		return false, "", err
 	case group == "":
-		return false, "Kubehenge's administrator lets no cluster hold Sys.Audit on /, which the cloud controller manager's HA group labels need", nil
+		return false, "clusters may not hold Sys.Audit on /. Ask an administrator to allow it", nil
 	}
 	return true, "", nil
 }

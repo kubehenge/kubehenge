@@ -435,9 +435,9 @@ func TestValidateClusterMesh(t *testing.T) {
 	}{
 		{"a new Cilium cluster with a long name", nil, long, "may not be more than 32"},
 		{"an existing one", long, long, ""},
-		{"Cluster Mesh beside Calico", nil, calico, "links clusters that run Cilium; this one runs calico"},
+		{"Cluster Mesh beside Calico", nil, calico, "Cluster Mesh needs Cilium, and this cluster runs calico"},
 		{"listing itself", nil, meshCluster("a", 0, "", "", `{"enabled":true,"peers":["a"]}`), "cannot list itself"},
-		{"a Cilium cluster id changed", withID, moved, "fixed once given"},
+		{"a Cilium cluster id changed", withID, moved, "cannot change once set"},
 		{"a Cilium cluster id given", meshCluster("a", 0, "", "", ""), withID, ""},
 		{"meshed", nil, meshCluster("a", 0, "", "", `{"enabled":true,"peers":["b"]}`), ""},
 	} {

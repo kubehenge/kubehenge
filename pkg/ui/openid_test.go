@@ -57,7 +57,7 @@ func TestOpenIDSignIn(t *testing.T) {
 		t.Fatalf("another state: %s", rec.Header().Get("Location"))
 	}
 	rec = get(t, h, "/api/openid/callback?code=bad&state="+st, state)
-	if !strings.Contains(rec.Header().Get("Location"), "signin-error=the+sign-in+through+the+identity+provider+failed") {
+	if !strings.Contains(rec.Header().Get("Location"), "signin-error=sign-in+through+the+identity+provider+failed") {
 		t.Fatalf("bad code: %s", rec.Header().Get("Location"))
 	}
 	rec = get(t, h, "/api/openid/callback?code=good&state="+st, state)
@@ -90,7 +90,7 @@ func TestOpenIDNeedsThePublicURL(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	rec := get(t, h, "/api/openid/start?realm=sso")
-	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "signin-error=OpenID+sign-in+needs+the+interface") || cookie(rec, openIDCookie) != nil {
+	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "signin-error=OpenID+sign-in+needs+the+public+address") || cookie(rec, openIDCookie) != nil {
 		t.Fatalf("start without a public address: %s", loc)
 	}
 	h.server.PublicURL = "https://kubehenge.example"

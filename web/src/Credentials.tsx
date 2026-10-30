@@ -1,7 +1,7 @@
 import { useState, type JSX } from "react";
 
 import { api } from "./api";
-import { ErrorBox, Field, errorMessage, minPassphrase, passphraseShort, saveFile } from "./ui";
+import { ErrorBox, Field, errorMessage, passphraseShort, saveFile } from "./ui";
 
 // Credentials hands an administrator the management cluster's own credentials, for repairs beyond
 // the interface; they come out of the encrypted state, so the passphrase is needed.
@@ -28,11 +28,7 @@ export function Credentials({ running }: { running: boolean }): JSX.Element {
   return (
     <form className="box" onSubmit={(e) => e.preventDefault()}>
       <h3>Repair access</h3>
-      <p className="muted">
-        The management cluster's administrator credentials, for repairs the interface cannot make. Every download is
-        logged.
-      </p>
-      <Field label="State passphrase" hint={`At least ${minPassphrase} characters.`}>
+      <Field label="State passphrase">
         {(id) => (
           <input
             id={id}
@@ -43,11 +39,7 @@ export function Credentials({ running }: { running: boolean }): JSX.Element {
           />
         )}
       </Field>
-      {running && (
-        <p className="muted">
-          A run of the management cluster is going on; its credentials can be taken once it is over.
-        </p>
-      )}
+      {running && <p className="muted">Available once the management cluster run ends</p>}
       <div className="actions">
         <button
           type="button"

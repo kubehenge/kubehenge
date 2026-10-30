@@ -66,7 +66,7 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	if !backupsOf(c).Enabled {
-		writeError(w, http.StatusConflict, "the cluster does not back up")
+		writeError(w, http.StatusConflict, "backups are off for this cluster")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), veleroTimeout)
@@ -81,7 +81,7 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	if phase, _, _ := unstructured.NestedString(backup.Object, "status", "phase"); phase != veleroCompleted && phase != veleroPartiallyFailed {
-		writeError(w, http.StatusConflict, fmt.Sprintf("backup %s is %s; only a finished backup can be restored", req.Backup, cmp.Or(phase, "new")))
+		writeError(w, http.StatusConflict, fmt.Sprintf("backup %s is %s. Restore a finished backup", req.Backup, cmp.Or(phase, "new")))
 		return
 	}
 	from, ok := s.restoreSource(ctx, w, r, u, c, v, backup, &req)
@@ -176,7 +176,7 @@ func listOr(names []string, fallback ...string) []any {
 
 func (req *restoreRequest) valid() error {
 	if len(validation.IsDNS1123Subdomain(req.Backup)) > 0 {
-		return errors.New("name a backup")
+		return errors.New("choose a backup")
 	}
 	if err := names("namespace", req.Namespaces, validation.IsDNS1123Label); err != nil {
 		return err
@@ -197,7 +197,7 @@ func (req *restoreRequest) valid() error {
 		return fmt.Errorf("kind %s is both restored and left out", both)
 	}
 	if !req.volumeData() && slices.Contains(req.Resources, "pods") {
-		return errors.New("without the volumes' data the pods are left for their controllers to start again: take pods out of the kinds")
+		return errors.New("pods need the volumes' data. Leave pods out of the kinds")
 	}
 	return nil
 }
@@ -205,15 +205,15 @@ func (req *restoreRequest) valid() error {
 // names checks a list of a restore's names: each valid, each once, a bounded number.
 func names(what string, list []string, check func(string) []string) error {
 	if len(list) > maxRestoreNames {
-		return fmt.Errorf("at most %d of each list of %ss", maxRestoreNames, what)
+		return fmt.Errorf("choose at most %d %ss per list", maxRestoreNames, what)
 	}
 	seen := map[string]bool{}
 	for _, n := range list {
 		if len(check(n)) > 0 {
-			return fmt.Errorf("%q is not a %s's name", n, what)
+			return fmt.Errorf("%q is not a %s name", n, what)
 		}
 		if seen[n] {
-			return fmt.Errorf("%s %s is named twice", what, n)
+			return fmt.Errorf("%s %s is listed twice", what, n)
 		}
 		seen[n] = true
 	}

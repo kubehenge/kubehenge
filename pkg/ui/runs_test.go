@@ -91,7 +91,7 @@ func TestRunsListWhatRunsAndWhatFailedLately(t *testing.T) {
 	}) {
 		t.Errorf("restore steps %q", got)
 	}
-	if r := admin[1]; r.Error != failed.Error || r.What != "Upgrade the appliance to 0.1.1" {
+	if r := admin[1]; r.Error != failed.Error || r.What != "Upgrade appliance to 0.1.1" {
 		t.Errorf("upgrade %+v", r)
 	}
 	if r := admin[2]; r.Error != "the target refused the upload" {
@@ -121,7 +121,7 @@ func TestVeleroStates(t *testing.T) {
 		{"New", "", 0, runRunning, ""},
 		{"Completed", "", 0, runSucceeded, ""},
 		{"Failed", "the location is unavailable", 0, runFailed, "the location is unavailable"},
-		{"PartiallyFailed", "", 3, runFailed, "3 errors; Velero's log of it has them"},
+		{"PartiallyFailed", "", 3, runFailed, "3 errors, see Velero's log"},
 		{"FailedValidation", "", 0, runFailed, "FailedValidation"},
 		{"Deleting", "", 0, "", ""},
 	} {
@@ -147,8 +147,8 @@ func TestARestoreNamesTheSnapshotOfEtcdAsItWas(t *testing.T) {
 		status provisioner.EtcdRestoreStatus
 		want   string
 	}{
-		{provisioner.EtcdRestoreStatus{Phase: provisioner.RestoreFetching, Before: "20261021T120000Z-v1.37.1-rke2r1.db.age"}, "Preparing done etcd as it was saved as 20261021T120000Z-v1.37.1-rke2r1.db.age"},
-		{provisioner.EtcdRestoreStatus{Phase: provisioner.RestoreFetching, NoBefore: "reaching etcd: no leader"}, "Preparing done no snapshot of etcd as it was: reaching etcd: no leader"},
+		{provisioner.EtcdRestoreStatus{Phase: provisioner.RestoreFetching, Before: "20261021T120000Z-v1.37.1-rke2r1.db.age"}, "Preparing done undo snapshot 20261021T120000Z-v1.37.1-rke2r1.db.age"},
+		{provisioner.EtcdRestoreStatus{Phase: provisioner.RestoreFetching, NoBefore: "reaching etcd: no leader"}, "Preparing done no undo snapshot: reaching etcd: no leader"},
 		{provisioner.EtcdRestoreStatus{Phase: provisioner.RestorePreparing}, "Preparing running "},
 	} {
 		v := runView{Steps: restoreSteps(&c.status, runRunning)}

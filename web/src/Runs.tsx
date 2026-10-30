@@ -16,10 +16,10 @@ export interface Run {
   group: RunGroup;
   title: string;
   what: string;
+  /** How far a running run is, when it says. */
+  phase?: string;
   state: Standing["state"];
   to: string;
-  /** The first thing that went wrong, for a failed run. */
-  error?: string;
 }
 
 const runGroups: { group: RunGroup; label: string }[] = [
@@ -38,11 +38,11 @@ const runViews: Partial<Record<RunInfo["kind"], View>> = {
 
 // Where the page of each kind of run sends its reader for more.
 const places: Partial<Record<RunInfo["kind"], string>> = {
-  "etcd-snapshot": "Open the backups",
-  "etcd-restore": "Open the backups",
-  backup: "Open the backups",
-  restore: "Open the backups",
-  change: "Open the cluster",
+  "etcd-snapshot": "Open backups",
+  "etcd-restore": "Open backups",
+  backup: "Open backups",
+  restore: "Open backups",
+  change: "Open cluster",
 };
 
 /** runPath is the address of a run's page. */
@@ -63,7 +63,7 @@ export function runView(r: RunInfo): { to: string; place: string } {
   }
   return {
     to: clusterPath(r.namespace ?? "", r.cluster, runViews[r.kind] ?? ""),
-    place: places[r.kind] ?? "Open the cluster",
+    place: places[r.kind] ?? "Open cluster",
   };
 }
 
@@ -75,10 +75,12 @@ const applianceTitles: Partial<Record<RunInfo["kind"], string>> = {
   "appliance-upgrade": "Appliance",
 };
 
+// described is what a run does and, once it ended, how and when; a failure's message stays on the
+// run's page, out of the narrow column.
 function described(r: RunInfo): string {
   const what = runTitle(r);
   if (r.state === "running") {
-    return r.phase === undefined ? what : `${what}: ${r.phase}`;
+    return what;
   }
   const when = r.finished === undefined ? "" : `, ${age(r.finished)} ago`;
   return `${what}${r.state === "failed" ? " failed" : ""}${when}`;
@@ -99,9 +101,9 @@ function fromServer(r: RunInfo): Run {
     group: groupOf[r.state],
     title: onCluster ? shownName(ns, cluster) : (applianceTitles[r.kind] ?? "Appliance"),
     what: described(r),
+    ...(r.state === "running" && r.phase !== undefined && { phase: r.phase }),
     state: stateOf[r.state],
     to: runPath(r.id),
-    ...(r.error !== undefined && { error: r.error }),
   };
 }
 
@@ -138,7 +140,7 @@ export function RunsPanel({ runs, onFold }: { runs: Run[]; onFold: () => void })
         <h2>
           Runs <span className="count">{running} running</span>
         </h2>
-        <button type="button" className="icon" aria-label="Fold the runs away" title="Fold away (R)" onClick={onFold}>
+        <button type="button" className="icon" aria-label="Hide runs" title="Hide runs (R)" onClick={onFold}>
           ›
         </button>
       </div>
@@ -157,7 +159,7 @@ export function RunsPanel({ runs, onFold }: { runs: Run[]; onFold: () => void })
                     <span className={`dot dot-${r.state}`} aria-hidden="true" />
                     <span className="run-title">{r.title}</span>
                     <span className="run-what">{r.what}</span>
-                    {r.error !== undefined && <span className="run-error">{r.error}</span>}
+                    {r.phase !== undefined && <span className="run-what">{r.phase}</span>}
                   </Link>
                 </li>
               ))}

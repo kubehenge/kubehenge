@@ -28,10 +28,10 @@ func TestClusterValidatorHoldsTopologyToWhatTheInterfaceOffers(t *testing.T) {
 		change func(c *clusterv1.Cluster)
 		want   string
 	}{
-		{"a name over 40 characters", func(c *clusterv1.Cluster) { c.Name = strings.Repeat("a", MaxClusterName+1) }, "at most 40 characters"},
+		{"a name over 40 characters", func(c *clusterv1.Cluster) { c.Name = strings.Repeat("a", MaxClusterName+1) }, "up to 40"},
 		{"a name with a capital", func(c *clusterv1.Cluster) { c.Name = "Web" }, "lowercase letters"},
-		{"a version without RKE2's build", func(c *clusterv1.Cluster) { c.Spec.Topology.Version = "v1.37.1" }, "rke2 versions look like v1.36.5+rke2r1"},
-		{"two control planes", func(c *clusterv1.Cluster) { c.Spec.Topology.ControlPlane.Replicas = new(int32(2)) }, "an odd number"},
+		{"a version without RKE2's build", func(c *clusterv1.Cluster) { c.Spec.Topology.Version = "v1.37.1" }, "use the form v1.36.5+rke2r1"},
+		{"two control planes", func(c *clusterv1.Cluster) { c.Spec.Topology.ControlPlane.Replicas = new(int32(2)) }, "1, 3, 5 or 7"},
 		{"nine control planes", func(c *clusterv1.Cluster) { c.Spec.Topology.ControlPlane.Replicas = new(int32(9)) }, "1, 3, 5 or 7"},
 		{"a pool of 101", func(c *clusterv1.Cluster) { c.Spec.Topology.Workers.MachineDeployments[0].Replicas = new(int32(101)) }, "workers: 0 to 100 in each pool"},
 	} {
@@ -51,9 +51,9 @@ func TestClusterValidatorHoldsUpgradesToOneMinorUp(t *testing.T) {
 	for version, want := range map[string]string{
 		"v1.37.2+rke2r1": "",
 		"v1.38.0+rke2r1": "",
-		"v1.39.0+rke2r1": "one minor version up at most",
-		"v1.36.9+rke2r1": "never back",
-		"v1.38.0+k3s1":   "rke2 versions look like",
+		"v1.39.0+rke2r1": "one minor version at most",
+		"v1.36.9+rke2r1": "never down",
+		"v1.38.0+k3s1":   "use the form v1.36.5+rke2r1",
 	} {
 		c := old.DeepCopy()
 		c.Spec.Topology.Version = version

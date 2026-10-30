@@ -107,7 +107,7 @@ export function SignIn({
               void submit();
             }}
           >
-            <p className="muted">Sign in with your Proxmox VE account.</p>
+            <p className="muted">Sign in with Proxmox VE</p>
             {!openID && (
               <>
                 <Field label="User name" hint="or user@realm">
@@ -136,7 +136,7 @@ export function SignIn({
                 </Field>
               </>
             )}
-            <Field label="Realm" hint={username.includes("@") ? "Taken from the user name." : undefined}>
+            <Field label="Realm" hint={username.includes("@") ? "Set by the user name" : undefined}>
               {(id) => (
                 <select
                   id={id}
@@ -176,9 +176,9 @@ export function SignIn({
 }
 
 const factorKinds = [
-  { kind: "totp", choice: "Authenticator app (TOTP)", label: "TOTP code" },
-  { kind: "yubico", choice: "YubiKey (Yubico OTP)", label: "Yubico OTP" },
-  { kind: "recovery", choice: "A recovery key", label: "Recovery key" },
+  { kind: "totp", choice: "Authenticator app", label: "TOTP code" },
+  { kind: "yubico", choice: "YubiKey", label: "Yubico OTP" },
+  { kind: "recovery", choice: "Recovery key", label: "Recovery key" },
 ] as const;
 
 function SecondFactorForm({
@@ -227,10 +227,10 @@ function SecondFactorForm({
         void submit();
       }}
     >
-      <p className="muted">Your account has a second factor.</p>
+      <p className="muted">Second factor</p>
       {kinds.length > 1 && (
         <fieldset className="choices">
-          <legend>Answer with</legend>
+          <legend>Method</legend>
           {kinds.map((k) => (
             <label key={k.kind} className="check">
               <input

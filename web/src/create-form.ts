@@ -751,7 +751,7 @@ const machine = (m: Machine): string =>
 
 function rancherChoice(form: Form): string {
   if (form.rancherInstall) {
-    return `Installed here, at ${form.rancherHostname}`;
+    return `Installed at ${form.rancherHostname}`;
   }
   return form.rancherRegister ? registeredWithRancher : "Not registered";
 }
@@ -760,7 +760,7 @@ function meshChoice(form: Form): string {
   if (!meshChosen(form)) {
     return "Off";
   }
-  return form.meshPeers.length > 0 ? `On, with ${form.meshPeers.toSorted().join(", ")}` : "On, with no peers yet";
+  return form.meshPeers.length > 0 ? `On, with ${form.meshPeers.toSorted().join(", ")}` : "On, no peers";
 }
 
 // releaseRows say what the cluster runs: its distribution, the node OS or on Talos, which is its own
@@ -786,10 +786,6 @@ export function summary(
   offered: { ha?: boolean; csi?: boolean; snapshots?: boolean; haGroups?: boolean } = {},
 ): [string, string][] {
   const defined = new Set(c.variables.map((v) => v.name));
-  const chosenRange =
-    form.cni === "cilium"
-      ? "Chosen clear of the nodes' network and the other clusters' ranges"
-      : "Chosen clear of the nodes' network";
   const rows: [string, string][] = [
     ...(form.namespace ? [["Namespace", form.namespace] as [string, string]] : []),
     ["Name", form.name],
@@ -815,8 +811,8 @@ export function summary(
     ]);
   }
   rows.push(
-    ["Pod range", form.pods || chosenRange],
-    ["Service range", form.services || chosenRange],
+    ["Pod range", form.pods || "Automatic"],
+    ["Service range", form.services || "Automatic"],
     ["Storage", form.storage],
   );
   if (defined.has("allowedNodes")) {
@@ -839,7 +835,7 @@ export function summary(
     rows.push(["Worker machines", machine(form.workerMachine)]);
   }
   if (defined.has("cni")) {
-    rows.push(["Pod network", cniName(form.cni) || "The distribution's own"]);
+    rows.push(["Pod network", cniName(form.cni) || "Not chosen"]);
   }
   rows.push(...addOnRows(form, defined));
   if (defined.has("upgrades")) {
@@ -848,10 +844,7 @@ export function summary(
   }
   if (defined.has("oidc")) {
     const providers = cleanProviders(form.oidc);
-    rows.push([
-      "Identity providers",
-      providers.length > 0 ? providers.map((p) => p.issuerURL).join(", ") : "None: tokens and certificates only",
-    ]);
+    rows.push(["Identity providers", providers.length > 0 ? providers.map((p) => p.issuerURL).join(", ") : "None"]);
   }
   return rows;
 }
@@ -888,7 +881,7 @@ function addOnRows(form: Form, defined: Set<string>): [string, string][] {
     rows.push(["Rancher", rancherChoice(form)]);
   }
   if (defined.has("backups")) {
-    const key = form.storeBackupKey ? "with an access key of its own" : "waiting for an access key of its own";
+    const key = form.storeBackupKey ? "own access key" : "access key to store later";
     rows.push(["Backups", form.backups ? `${backupsText(backupsVariable(form.backupFields))}, ${key}` : "Off"]);
   }
   if (defined.has("certificates")) {
@@ -896,7 +889,7 @@ function addOnRows(form: Form, defined: Set<string>): [string, string][] {
     if (needsClusterToken(form.certificates)) {
       rows.push([
         tokenLabel(form.certificates.provider),
-        filled(form.dns01Token) ? "Stored for the cluster once it is created" : "None yet: the cluster waits for one",
+        filled(form.dns01Token) ? "Stored once created" : "None yet: the cluster waits",
       ]);
     }
   }
@@ -951,35 +944,54 @@ export type FieldKey =
 
 type Problems = Partial<Record<FieldKey, string>>;
 
+const maxName = 40;
+
+// nameProblem names the first rule a cluster name breaks, so the message says what to change.
+function nameProblem(name: string): string | undefined {
+  if (name === "") {
+    return "Enter a name";
+  }
+  if (name.length > maxName) {
+    return `Name must be ${maxName} characters or fewer`;
+  }
+  if (!/^[-a-z0-9]+$/u.test(name)) {
+    return "Use only lowercase letters, digits and dashes";
+  }
+  if (!/^[a-z]/u.test(name)) {
+    return "Start the name with a letter";
+  }
+  return name.endsWith("-") ? "End the name with a letter or digit" : undefined;
+}
+
 function generalProblems(form: Form, c: ClusterClass | undefined): Problems {
   const p: Problems = {};
-  if (!/^[a-z](?:[-a-z0-9]{0,38}[a-z0-9])?$/u.test(form.name)) {
-    p.name =
-      "Lowercase letters, digits and dashes, starting with a letter and ending with a letter or digit, at most 40 characters.";
+  const name = nameProblem(form.name);
+  if (name !== undefined) {
+    p.name = name;
   }
   const os = chosenNodeOS(form, c);
   const missing = templateMissing(form, c);
   if (!c) {
-    p.class = "Choose a distribution.";
+    p.class = "Choose a distribution";
   } else if (os !== undefined && !choosable(os)) {
-    p.nodeOS = sentence(`${os.title} cannot be chosen yet: ${os.unreleased ?? ""}`);
+    p.nodeOS = `${os.title} is not released yet`;
   } else if (filled(missing)) {
     p[os === undefined ? "class" : "nodeOS"] = sentence(missing);
   } else {
     if (variable(c, "talosVersion") !== undefined && !talosRelease.test(form.talosVersion)) {
-      p.talosVersion = "Choose a Talos release with a VM template.";
+      p.talosVersion = "Choose a Talos release with a VM template";
     }
     if (!new RegExp(c.versionFormat.pattern, "u").test(form.version)) {
-      p.version = `${distributionName(c.distribution)} versions look like ${versionExamples[c.distribution] ?? "v1.36.5"}.`;
+      p.version = `Enter a version like ${versionExamples[c.distribution] ?? "v1.36.5"}`;
     }
   }
   if (!whole(form.workerReplicas, 0, maxWorkers)) {
-    p.workerReplicas = `A whole number from 0 to ${maxWorkers}.`;
+    p.workerReplicas = `A whole number from 0 to ${maxWorkers}`;
   }
   if (autoscales(form, c)) {
     const least = Number.isNaN(form.workerReplicas) ? 0 : Math.max(form.workerReplicas, 1);
     if (!whole(form.workerMax, least, maxWorkers)) {
-      p.workerMax = `A whole number from ${least} to ${maxWorkers}, no fewer than the fewest.`;
+      p.workerMax = `A whole number from ${least} to ${maxWorkers}`;
     }
   }
   return p;
@@ -1001,7 +1013,7 @@ export function addonsProblem(form: Form, c: ClusterClass | undefined): string |
       ? 0
       : (quantity(classFigures(c, "kubehenge.dev/addon-memory")["rancherAgent"]) ?? 0);
   return autoscales(form, c) && form.workerReplicas === 0 && addonMemory(form, c).mib - agent > 0
-    ? "The add-ons chosen need a worker that stays: set the fewest workers to at least 1 on the General step, or choose none."
+    ? "The add-ons need a worker. On General, set the fewest workers to 1 or more."
     : undefined;
 }
 
@@ -1012,18 +1024,18 @@ function addressProblems(form: Form): Problems {
   // A rollout makes each new node before it removes an old one.
   const needed = form.controlPlaneReplicas + mostWorkers(form) + 1;
   if (entries.length === 0) {
-    p.addresses = "At least one range, network or address.";
+    p.addresses = "Enter at least one address, range or network";
   } else if (bad !== undefined) {
-    p.addresses = `${bad} is no address, range or network inside the gateway's network.`;
+    p.addresses = `${bad} is not an address, range or network on the gateway's network`;
   } else if (count < needed) {
-    p.addresses = `${count} given; the nodes need ${needed}, one more than there are for rollouts.`;
+    p.addresses = `Enter at least ${needed} addresses, one per node plus one spare`;
   }
   if (!ipv4.test(form.endpoint)) {
-    p.endpoint = "An IPv4 address.";
+    p.endpoint = "Enter an IPv4 address";
   } else if (inList(form.endpoint, entries)) {
-    p.endpoint = "Not one of the node addresses, which the nodes take.";
+    p.endpoint = "Use an address outside the node addresses";
   } else if (addressCount([form.endpoint], form.gateway, form.prefix).bad !== undefined) {
-    p.endpoint = "Inside the gateway's network.";
+    p.endpoint = "Use an address on the gateway's network";
   }
   return p;
 }
@@ -1031,22 +1043,22 @@ function addressProblems(form: Form): Problems {
 function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
   const p: Problems = {};
   if (!form.bridge) {
-    p.bridge = "Choose a bridge.";
+    p.bridge = "Choose a bridge";
   }
   if (form.vlan && !isVLAN(form.vlan)) {
-    p.vlan = "1 to 4094.";
+    p.vlan = "A whole number from 1 to 4094";
   }
   if (!whole(form.prefix, 1, addressBits)) {
-    p.prefix = "1 to 32.";
+    p.prefix = `A whole number from 1 to ${addressBits}`;
   }
   if (!ipv4.test(form.gateway)) {
-    p.gateway = "An IPv4 address.";
+    p.gateway = "Enter an IPv4 address";
   }
   Object.assign(p, addressProblems(form));
   if (list(form.dnsServers).length === 0) {
-    p.dnsServers = "At least one.";
+    p.dnsServers = "Enter at least one DNS server";
   } else if (list(form.dnsServers).some((d) => !ipv4.test(d))) {
-    p.dnsServers = "IPv4 addresses.";
+    p.dnsServers = "DNS servers must be IPv4 addresses";
   }
   const lb =
     form.loadBalancer === ""
@@ -1070,9 +1082,9 @@ function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
     }
   }
   if (c?.variables.find((v) => v.name === "cni")?.required === true && !form.cni) {
-    p.cni = "Choose a pod network.";
+    p.cni = "Choose a pod network";
   } else if (form.cni === "cilium" && form.name.length > maxCiliumName) {
-    p.cni = `Cilium takes cluster names of at most ${maxCiliumName} characters; this one has ${form.name.length}.`;
+    p.cni = `Cilium needs a cluster name of ${maxCiliumName} characters or fewer`;
   }
   return p;
 }
@@ -1080,7 +1092,7 @@ function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
 function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
   const p: Problems = {};
   if (!form.storage) {
-    p.storage = "Choose a storage.";
+    p.storage = "Choose a storage";
   }
   const placement = variable(c, "allowedNodes") ? placeProblem(form.place) : undefined;
   if (placement !== undefined) {
@@ -1091,32 +1103,28 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
     ["workerMachine", form.workerMachine],
   ] as const) {
     const min = machineLeast(form, c, key);
-    const alone =
-      key === "controlPlaneMachine" && mostWorkers(form) === 0 ? " Without workers, they run the workloads too." : "";
     const plain = plainLeast(form, c, key);
-    const sharers = key === "workerMachine" ? "workers" : "control planes";
-    let addons = "";
-    if (min.memoryMiB > plain.memoryMiB) {
-      addons = carries(form, key)
-        ? ` The add-ons chosen need that much: ${addonMemory(form, c).mib} MiB, shared by the ${sharers}.`
-        : " The add-ons chosen need that much, as the API server holds their objects.";
-    }
-    const addonCores =
-      min.cores > plain.cores
-        ? ` The add-ons chosen need that many: their pods ask for ${addonCPU(form, c).millicores} millicores of CPU, shared by the ${sharers}.`
-        : "";
+    // The reason a minimum is higher than usual: the add-ons, or control planes that run the
+    // workloads without workers. MachineFields places the message by its cores, memory or disk.
+    const why = (raised: boolean): string => {
+      if (raised) {
+        return " for the add-ons chosen";
+      }
+      return key === "controlPlaneMachine" && mostWorkers(form) === 0 ? " without workers" : "";
+    };
     if (!whole(m.cores, min.cores)) {
-      p[key] = `A whole number of cores, at least ${min.cores}.${alone}${addonCores}`;
+      p[key] = `A whole number of cores, at least ${min.cores}${why(min.cores > plain.cores)}`;
     } else if (
       form.rancherInstall &&
       m.cores < rancherMinimumCores &&
       (key === "controlPlaneMachine" || form.workerReplicas > 0)
     ) {
-      p[key] = `At least ${rancherMinimumCores} cores, which Rancher needs on every node.`;
+      p[key] = `Rancher needs at least ${rancherMinimumCores} cores on every node`;
     } else if (!whole(m.memoryMiB, min.memoryMiB) || m.memoryMiB % memoryStepMiB !== 0) {
-      p[key] = `Memory of at least ${min.memoryMiB} MiB, in steps of ${memoryStepMiB}.${alone}${addons}`;
+      p[key] =
+        `At least ${min.memoryMiB} MiB of memory${why(min.memoryMiB > plain.memoryMiB)}, in steps of ${memoryStepMiB}`;
     } else if (!whole(m.diskGiB, min.diskGiB)) {
-      p[key] = `A whole number of GiB of disk, at least ${min.diskGiB}.`;
+      p[key] = `A whole number of GiB of disk, at least ${min.diskGiB}`;
     }
   }
   return p;
@@ -1127,7 +1135,7 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
 function addOnProblems(form: Form, c: ClusterClass | undefined): Problems {
   const p: Problems = {};
   if (form.rancherInstall && !form.rancherHostname) {
-    p.rancherHostname = "Rancher needs a host name.";
+    p.rancherHostname = "Enter a host name";
   }
   const logs = logsChosen(form) ? logsProblem(form.logs) : undefined;
   if (logs !== undefined) {
@@ -1170,7 +1178,7 @@ function backupsProblems(form: Form, c: ClusterClass | undefined): Problems {
     }
   }
   if (form.storeBackupKey && !backupKeys.every((k) => filled(form.backupKey[k.key]))) {
-    p.backupKey = "Both parts of the access key.";
+    p.backupKey = "Enter both parts of the access key";
   }
   return p;
 }
@@ -1272,22 +1280,22 @@ export function datastoreAllocateProblem({
   self,
 }: DatastoreAllocateCheck): string | undefined {
   if (storage === undefined || storage === "") {
-    return "Choose the cluster's storage first.";
+    return "Choose a storage first";
   }
   if (listed(cls, managementStoragesAnnotation).includes(storage)) {
-    return `The management cluster uses storage ${storage}, so no cluster may hold Datastore.Allocate on it.`;
+    return `Unavailable on ${storage}, which the management cluster uses`;
   }
   if (listed(cls, templateStoragesAnnotation).includes(storage)) {
-    return `VM templates have disks on storage ${storage}, so no cluster may hold Datastore.Allocate on it.`;
+    return `Unavailable on ${storage}, which holds the VM templates`;
   }
   if (!storages.some((s) => s.storage === storage && s.allocatable)) {
-    return `You do not hold Datastore.Allocate on storage ${storage}, which the cluster's token would get.`;
+    return `You do not hold Datastore.Allocate on ${storage}`;
   }
   const other = clusters.find(
     (o) => text(o.variables["storage"]) === storage && !(o.namespace === self?.namespace && o.name === self.name),
   );
   if (other !== undefined) {
-    return `Cluster ${other.namespace}/${other.name} uses storage ${storage} too; Datastore.Allocate needs a storage of the cluster's own.`;
+    return `Unavailable on ${storage}, which cluster ${other.namespace}/${other.name} uses too`;
   }
   return undefined;
 }
@@ -1324,12 +1332,12 @@ export function snapshotsOffer(cls: ClusterClass | undefined, storage: string | 
     return { offered, problem: undefined };
   }
   if (storage === undefined || storage === "") {
-    return { offered, problem: "Choose the cluster's storage first." };
+    return { offered, problem: "Choose a storage first" };
   }
   if (!listed(cls, snapshotStoragesAnnotation).includes(storage)) {
     return {
       offered,
-      problem: `The CSI plugin takes volume snapshots only on storage local to each node (ZFS, LVM, LVM-thin, directory or btrfs), which storage ${storage} is not.`,
+      problem: `Unavailable on ${storage}. Snapshots need ZFS, LVM, LVM-thin, directory or btrfs storage.`,
     };
   }
   return { offered, problem: undefined };

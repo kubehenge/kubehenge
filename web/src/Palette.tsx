@@ -129,7 +129,7 @@ export function Palette({ commands, onClose }: { commands: Command[]; onClose: (
         aria-expanded="true"
         aria-controls={listId}
         aria-activedescendant={chosen ? `${listId}-${chosen.id}` : undefined}
-        placeholder="A cluster, a view, an action…"
+        placeholder="Go to or run…"
         autoComplete="off"
         spellCheck={false}
         value={query}
@@ -164,7 +164,7 @@ export function Palette({ commands, onClose }: { commands: Command[]; onClose: (
           </div>
         ))}
       </div>
-      {shown.length === 0 && <p className="palette-none">Nothing matches.</p>}
+      {shown.length === 0 && <p className="palette-none">No matches</p>}
     </dialog>
   );
 }
@@ -236,7 +236,7 @@ export function ShortcutsDialog({ shortcuts, onClose }: { shortcuts: Shortcut[];
             <th scope="row">
               <kbd>Ctrl</kbd> <kbd>K</kbd>
             </th>
-            <td>Go to any cluster, view or page, or run an action</td>
+            <td>Go to or run</td>
           </tr>
           {shortcuts.map((s) => (
             <tr key={s.keys}>

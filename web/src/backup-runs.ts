@@ -66,10 +66,9 @@ export function counted(r: { warnings: number; errors: number }): string {
   return parts.length > 0 ? sentence(parts.join(", ")) : "";
 }
 
-/** outcome sums up what a run did: why it failed, and its warnings and errors, with where they are listed. */
-export function outcome(r: { warnings: number; errors: number; failure?: string }, listed: string): string {
-  const n = counted(r);
-  return [filled(r.failure) ? sentence(r.failure) : "", n === "" ? "" : `${n} ${listed}`].filter(Boolean).join(" ");
+/** outcome sums up what a run did: why it failed, and its warnings and errors. */
+export function outcome(r: { warnings: number; errors: number; failure?: string }): string {
+  return [filled(r.failure) ? sentence(r.failure) : "", counted(r)].filter(Boolean).join(" ");
 }
 
 /** restoreProgress says how far a restore has come: its items, and its volumes' data. */
@@ -101,7 +100,7 @@ export function restoreScope(r: RestoreRun): string {
     parts.push(`without ${list(left)}`);
   }
   if (!r.volumeData) {
-    parts.push("without the volumes' data");
+    parts.push("without volume data");
   }
   return parts.join("; ");
 }
@@ -116,20 +115,20 @@ export const splitNames = (typed: string): string[] => typed.split(/[\s,]+/u).fi
 /** namesProblem says what the server would refuse in a list of a restore's namespaces or kinds. */
 export function namesProblem(names: string[], what: "namespace" | "kind"): string | undefined {
   if (names.length > maxRestoreNames) {
-    return `At most ${maxRestoreNames}.`;
+    return `Enter ${maxRestoreNames} or fewer`;
   }
   const valid = what === "namespace" ? dnsLabel : dnsSubdomain;
   const bad = names.find((n) => !valid.test(n));
   if (bad !== undefined) {
-    return `${bad} is not a ${what}'s name.`;
+    return `${bad} is not a ${what} name`;
   }
   const twice = names.find((n, i) => names.indexOf(n) !== i);
-  return twice === undefined ? undefined : `${twice} is named twice.`;
+  return twice === undefined ? undefined : `${twice} is listed twice`;
 }
 
 /** namespaceProblem says what the server would refuse in the namespaces chosen to restore. */
 export function namespaceProblem(names: string[]): string | undefined {
-  return names.length === 0 ? "Name at least one namespace." : namesProblem(names, "namespace");
+  return names.length === 0 ? "Enter at least one namespace" : namesProblem(names, "namespace");
 }
 
 /** What a restore is to bring back, as typed: lists of names with commas or spaces between them. */
@@ -173,7 +172,7 @@ export function restoreProblems(f: RestoreFields): Partial<Record<RestoreField, 
   }
   const excluded =
     namesProblem(without, "kind") ??
-    (only.some((k) => without.includes(k)) ? "A kind both restored and left out." : undefined);
+    (only.some((k) => without.includes(k)) ? "A kind is both restored and left out" : undefined);
   if (excluded !== undefined) {
     p.excludedResources = excluded;
   }

@@ -52,7 +52,7 @@ async function openPlacement(haRules: HARules = readRules): Promise<{
   const heading = await screen.findByRole("rowheader", { name: "Placement" });
   expect(heading.closest("tr")).toHaveTextContent("pve9");
   await user.click(screen.getByRole("button", { name: "Edit placement" }));
-  const dialog = screen.getByRole("dialog", { name: "Placement" });
+  const dialog = screen.getByRole("dialog", { name: "Edit placement" });
   await expect(within(dialog).findByLabelText(/^pve1/u)).resolves.toBeInTheDocument();
   return { dialog, sent: () => calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body, user };
 }
@@ -61,16 +61,16 @@ describe("a cluster's placement", () => {
   it("keeps the nodes it has, those the user cannot see too, and saves only a change", async () => {
     const { dialog, sent, user } = await openPlacement();
     const save = within(dialog).getByRole("button", { name: "Save" });
-    expect(within(dialog).getByLabelText("Nodes I choose")).toBeChecked();
-    expect(within(dialog).getByLabelText("Nodes I choose")).toHaveFocus();
+    expect(within(dialog).getByLabelText("Chosen nodes")).toBeChecked();
+    expect(within(dialog).getByLabelText("Chosen nodes")).toHaveFocus();
     expect(within(dialog).getByRole("group", { name: "Placement" })).toBeInTheDocument();
-    expect(within(dialog).getAllByText("Placement")).toHaveLength(1);
+    expect(within(dialog).queryByText("Placement")).toBeNull();
     expect(within(dialog).getByLabelText(/^pve9 \(not shown to you\)$/u)).toBeChecked();
     expect(within(dialog).getByLabelText(/^pve2 \(offline\)$/u)).not.toBeChecked();
     expect(save).toBeDisabled();
     await user.click(within(dialog).getByLabelText(/^pve9/u));
     expect(save).toBeDisabled();
-    expect(within(dialog).getByRole("alert")).toHaveTextContent("Choose at least one node.");
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Choose at least one node");
     await user.click(within(dialog).getByLabelText(/^pve1/u));
     await user.click(within(dialog).getByLabelText(/^pve9/u));
     await user.click(save);
@@ -80,10 +80,10 @@ describe("a cluster's placement", () => {
 
   it("moves new VMs to the nodes of an HA rule, chosen again after another choice", async () => {
     const { dialog, sent, user } = await openPlacement();
-    await user.click(within(dialog).getByLabelText("The nodes of an HA rule"));
+    await user.click(within(dialog).getByLabelText("HA rule nodes"));
     await user.selectOptions(within(dialog).getByLabelText("HA rule"), "fast");
     await user.click(within(dialog).getByLabelText("Any node"));
-    await user.click(within(dialog).getByLabelText("The nodes of an HA rule"));
+    await user.click(within(dialog).getByLabelText("HA rule nodes"));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { allowedNodes: ["pve2"] } }));
@@ -95,7 +95,7 @@ describe("a cluster's placement", () => {
       offered: true,
       rules: [{ rule: "racks-a", nodes: ["pve1", "pve2"], allowed: ["pve1", "pve2"] }],
     });
-    await user.click(within(dialog).getByLabelText("The nodes of an HA rule"));
+    await user.click(within(dialog).getByLabelText("HA rule nodes"));
     const picker = within(dialog).getByLabelText("HA rule");
     expect(within(picker).getByRole("option", { name: "racks-a: pve1, pve2" })).toBeInTheDocument();
     await user.selectOptions(picker, "racks-a");
@@ -106,8 +106,8 @@ describe("a cluster's placement", () => {
 
   it("says how the HA rules are read where the user may not", async () => {
     const { dialog } = await openPlacement({ readable: false, rules: [] });
-    expect(within(dialog).getByLabelText("The nodes of an HA rule")).toBeDisabled();
-    expect(dialog).toHaveTextContent("takes Sys.Audit on /, unless an administrator offers them.");
+    expect(within(dialog).getByLabelText("HA rule nodes")).toBeDisabled();
+    expect(dialog).toHaveTextContent("Reading HA rules needs Sys.Audit on /");
   });
 
   it("lets new VMs go to any node", async () => {
