@@ -53,6 +53,7 @@ const degraded: ClusterHealth = {
       pod: { namespace: "shop", name: "api-7d9f" },
     },
     { severity: "warning", section: "addons", what: "Add-on ingress: pending-install", since: minutesAgo(3) },
+    { severity: "warning", section: "backups", what: "Backups overdue", message: "No backup has completed yet." },
   ],
   nodes: {
     items: [
@@ -178,6 +179,11 @@ describe("health page", () => {
     expect(screen.getByRole("link", { name: "Pod shop/api-7d9f: CrashLoopBackOff" })).toHaveAttribute(
       "href",
       "#health-pods",
+    );
+    // The backups view, not this page, has the details of the cluster's backups.
+    expect(screen.getByRole("link", { name: "Backups overdue" })).toHaveAttribute(
+      "href",
+      "/clusters/default/web/backups",
     );
     expect(screen.getByText("Memory pressure")).toBeInTheDocument();
     expect(screen.getByLabelText("web-cp-a's memory use")).toHaveAttribute("value", "2147483648");

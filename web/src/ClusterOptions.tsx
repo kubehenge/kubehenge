@@ -30,7 +30,7 @@ import {
   ErrorBox,
   Field,
   Info,
-  cniName,
+  clusterCNI,
   errorMessage,
   filled,
   sentence,
@@ -232,7 +232,7 @@ export function optionRows<A extends string = never>(
   const rows: OptionRow<OptionAction | A>[] = [
     ...nodeOSRows(c),
     ...talos,
-    { label: "Pod network", value: cniName(text(c.variables["cni"]) ?? "") || "Default" },
+    { label: "Pod network", value: clusterCNI(text(c.variables["cni"]), c.distribution) },
     {
       label: "Load balancer",
       value: loadBalancerText(loadBalancerOf(c.variables["loadBalancer"]), c.distribution),

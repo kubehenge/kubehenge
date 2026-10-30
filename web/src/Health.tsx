@@ -1,6 +1,8 @@
 import { useState, type JSX } from "react";
 
 import { api } from "./api";
+import { clusterPath, type View } from "./ClusterDetail";
+import { Link } from "./router";
 import type {
   AddonRelease,
   Attention,
@@ -308,7 +310,18 @@ function PodButtons({ pod, actions }: { pod: UnwellPod | undefined; actions: Pod
   );
 }
 
-function NeedsAttention({ health: h, actions }: { health: ClusterHealth; actions: PodActions }): JSX.Element | null {
+// sectionViews are the sections whose details are another view of the cluster's page.
+const sectionViews: Partial<Record<string, View>> = { backups: "backups" };
+
+function NeedsAttention({
+  health: h,
+  actions,
+  cluster,
+}: {
+  health: ClusterHealth;
+  actions: PodActions;
+  cluster: { namespace: string; name: string };
+}): JSX.Element | null {
   if (h.attention.length === 0) {
     return null;
   }
@@ -328,19 +341,26 @@ function NeedsAttention({ health: h, actions }: { health: ClusterHealth; actions
           </tr>
         </thead>
         <tbody>
-          {h.attention.map((a) => (
-            <tr key={`${a.section}/${a.what}/${a.message ?? ""}`}>
-              <td>
-                <Status state={severityState[a.severity]} text={severityText[a.severity]} />
-              </td>
-              <td>
-                <a href={`#${anchor(a.section)}`}>{a.what}</a>
-                {filled(a.message) && <Detail>{a.message}</Detail>}
-              </td>
-              <Since at={a.since} />
-              <PodButtons pod={a.pod === undefined ? undefined : pods.get(podKey(a.pod))} actions={actions} />
-            </tr>
-          ))}
+          {h.attention.map((a) => {
+            const view = sectionViews[a.section];
+            return (
+              <tr key={`${a.section}/${a.what}/${a.message ?? ""}`}>
+                <td>
+                  <Status state={severityState[a.severity]} text={severityText[a.severity]} />
+                </td>
+                <td>
+                  {view === undefined ? (
+                    <a href={`#${anchor(a.section)}`}>{a.what}</a>
+                  ) : (
+                    <Link to={clusterPath(cluster.namespace, cluster.name, view)}>{a.what}</Link>
+                  )}
+                  {filled(a.message) && <div className="hint message">{a.message}</div>}
+                </td>
+                <Since at={a.since} />
+                <PodButtons pod={a.pod === undefined ? undefined : pods.get(podKey(a.pod))} actions={actions} />
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -1003,7 +1023,7 @@ export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlam
         <ErrorBox message={error} />
         <Tiles health={h} />
       </div>
-      <NeedsAttention health={h} actions={actions} />
+      <NeedsAttention health={h} actions={actions} cluster={ref} />
       <Nodes health={h} />
       <Pods health={h} actions={actions} />
       <Volumes health={h} />

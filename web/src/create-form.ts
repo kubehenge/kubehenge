@@ -834,7 +834,7 @@ export function summary(
     rows.push(["Worker machines", machine(form.workerMachine)]);
   }
   if (defined.has("cni")) {
-    rows.push(["Pod network", cniName(form.cni) || "Distribution's own"]);
+    rows.push(["Pod network", cniName(form.cni) || "Not chosen"]);
   }
   rows.push(...addOnRows(form, defined));
   if (defined.has("upgrades")) {

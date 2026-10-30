@@ -257,6 +257,7 @@ func (h *Hooks) refusal(ctx context.Context, cluster *clusterv1.Cluster, class *
 		func() error { return checkAddonRoom(nil, cluster, class) },
 		func() error { return checkLogs(cluster) },
 		func() error { return checkBackups(nil, cluster, class) },
+		func() error { return checkBackupSources(ctx, h.Reader, nil, cluster) },
 		func() error { return h.checkDatastoreAllocate(ctx, cluster, class) },
 		func() error { return h.checkVolumeSnapshots(cluster, class) },
 		func() error { return h.checkSysAudit(cluster) },

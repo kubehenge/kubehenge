@@ -1107,6 +1107,12 @@ button.go {
   min-width: 180px;
 }
 
+/* When something started, and who started it beneath: a usual user name keeps to one line, and
+   only a longer one breaks, rather than widening the table. */
+.grid td.started {
+  min-width: 120px;
+}
+
 .grid td.id .muted {
   font-weight: 400;
 }
@@ -1151,6 +1157,23 @@ button.go {
 
 .grid.keys th {
   width: 120px;
+}
+
+/* A restore's errors and its warnings line up, each place in a column of the same width. */
+.results .grid {
+  table-layout: fixed;
+}
+
+.results .grid thead th:first-child {
+  width: 28%;
+}
+
+.results h3 {
+  margin-bottom: 6px;
+}
+
+.results + .results {
+  margin-top: 20px;
 }
 
 /* Forms */
@@ -1380,6 +1403,31 @@ fieldset.choices .check + .info-toggle + .info-text + .hint {
 .group legend {
   padding: 0 4px;
   font-weight: 600;
+}
+
+/* In a narrow window a label goes above its control or value, which then has the full width. */
+@media (width < 600px) {
+  .field,
+  .group > .field,
+  .summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .field {
+    gap: 4px;
+  }
+
+  .field label {
+    padding-top: 0;
+  }
+
+  .summary {
+    row-gap: 2px;
+  }
+
+  .summary dd + dt {
+    margin-top: 8px;
+  }
 }
 
 /* Sign-in */

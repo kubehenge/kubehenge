@@ -46,6 +46,14 @@ const cniNames: Record<string, string> = { cilium: "Cilium", calico: "Calico", c
 /** cniName is how a pod network is written for people: Cilium, Calico, Canal, Flannel. */
 export const cniName = (n: string): string => cniNames[n] ?? n;
 
+// The classes' own default pod network, for a Cluster that leaves its cni variable to the class;
+// kubeadm has none, so its clusters always name one.
+const classCNI: Record<string, string> = { rke2: "canal", k3s: "flannel", talos: "flannel" };
+
+/** clusterCNI names the pod network a cluster runs, its own choice or its class's default. */
+export const clusterCNI = (chosen: string | undefined, distribution: string): string =>
+  cniName(chosen ?? classCNI[distribution] ?? "");
+
 // The controller registers a cluster with the Rancher another of its clusters runs, as soon as
 // one does.
 export const registerHint = "Joins the Rancher another Kubehenge cluster runs";

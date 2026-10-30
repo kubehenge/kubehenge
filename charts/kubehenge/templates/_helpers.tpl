@@ -454,6 +454,19 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
             credentials file, under the key cloud, which never passes through the management
             cluster; unset, the credential typed into the interface for the cluster, or else the
             one for every cluster.
+        readFrom:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+            minLength: 1
+            maxLength: 63
+          description: >-
+            Clusters of the same namespace, backing up to the same target, whose backups this one
+            may restore. Velero gets a read-only location named cluster-<name> for each, with that
+            cluster's SSE-C key, so whoever is cluster-admin here can read what those backups hold.
+            The volumes' data comes back only when this cluster's keys were made while it read
+            that cluster's backups, as it then shares that cluster's Kopia password.
       x-kubernetes-validations:
         - rule: "!self.enabled || has(self.target)"
           message: Backups need a target.
