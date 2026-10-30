@@ -47,8 +47,8 @@ jobs:
           ASKED: ${{ inputs.tests }}
         run: |
           all='["management-cluster", "management-cluster-upgrade", "appliance", "kubeadm", "rke2",
-            "k3s", "talos", "kubeadm-addons", "rke2-addons", "k3s-addons", "talos-addons", "rancher",
-            "cluster-mesh", "node-image-refresh", "autoscaler"]'
+            "k3s", "talos", "kubeadm-addons", "rke2-addons", "k3s-addons", "talos-addons",
+            "rancher", "cluster-mesh", "node-image-refresh", "autoscaler"]'
           case "$EVENT" in
             pull_request) tests='[]' ;;
             # A group holds one commit per pull request on top of main, so its changes are the
