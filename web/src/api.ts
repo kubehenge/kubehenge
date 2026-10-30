@@ -285,6 +285,8 @@ export interface Api {
   replaceMachine: (ns: string, name: string, machine: string) => Promise<void>;
   /** keepMachine takes that mark back. */
   keepMachine: (ns: string, name: string, machine: string) => Promise<void>;
+  /** deleteMachine deletes a worker, its pool shrinking by one. */
+  deleteMachine: (ns: string, name: string, machine: string) => Promise<void>;
   ingressCA: (ns: string, name: string) => Promise<Blob>;
   storedCredential: (purpose: string, cluster?: ClusterRef) => Promise<StoredCredential>;
   storeCredential: (purpose: string, values: Record<string, string>, cluster?: ClusterRef) => Promise<StoredCredential>;
@@ -376,6 +378,8 @@ export const api: Api = {
     act("PUT", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/replacement`),
   keepMachine: (ns, name, machine) =>
     act("DELETE", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/replacement`),
+  deleteMachine: (ns, name, machine) =>
+    act("DELETE", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}`),
   ingressCA: (ns, name) => download("GET", `${clusterPath(ns, name)}/certificates/ca`),
   storedCredential: (purpose, cluster) => request("GET", credentialPath(purpose, cluster)),
   storeCredential: (purpose, values, cluster) => request("PUT", credentialPath(purpose, cluster), { values }),

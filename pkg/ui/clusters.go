@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -29,11 +30,13 @@ import (
 )
 
 // The privileges on a cluster's pool, as Proxmox VE uses them for VMs: seeing it, changing it
-// (create, scale, upgrade, add-ons, delete), and taking its admin kubeconfig.
+// (create, scale, upgrade, add-ons, delete), taking its admin kubeconfig, and opening its VMs'
+// consoles.
 const (
 	privSee        = "VM.Audit"
 	privChange     = "VM.Allocate"
 	privKubeconfig = "Sys.Modify"
+	privConsole    = "VM.Console"
 )
 
 // createdBy records which Proxmox VE user created a cluster through the interface.
@@ -283,7 +286,9 @@ type machineView struct {
 	// ProxmoxNode is the Proxmox VE node its VM runs on, where the user may see the VM.
 	ProxmoxNode string `json:"proxmoxNode,omitempty"`
 	Role        string `json:"role"`
-	Version     string `json:"version,omitempty"`
+	// Pool is the worker pool a worker belongs to.
+	Pool    string `json:"pool,omitempty"`
+	Version string `json:"version,omitempty"`
 	// Talos is the Talos release a Talos cluster's node runs, as its kubelet reports it.
 	Talos string `json:"talos,omitempty"`
 	Phase string `json:"phase"`
@@ -294,6 +299,8 @@ type machineView struct {
 	Replacing bool      `json:"replacing,omitempty"`
 	Addresses []string  `json:"addresses,omitempty"`
 	Created   time.Time `json:"created"`
+	// Console opens the VM's console in Proxmox VE's web interface, for a user who may use it.
+	Console string `json:"console,omitempty"`
 }
 
 // view describes a cluster to a user with privs on its pool. The interface changes clusters only in
@@ -582,11 +589,16 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 		s.kubeError(w, err)
 		return
 	}
-	hosts := s.vmNodes(r, u, c, access.path)
+	vms := s.clusterVMs(r, u, c, access.path)
+	console := access.held.Has(privConsole)
 	v.Machines = []machineView{}
 	for i := range machines.Items {
 		m := &machines.Items[i]
-		mv := machineOf(m, hosts[m.Spec.InfrastructureRef.Name])
+		vm := vms[m.Spec.InfrastructureRef.Name]
+		mv := machineOf(m, vm.Node)
+		if console {
+			mv.Console = consoleURL(s.ProxmoxURL, &vm)
+		}
 		if v.Talos != nil {
 			mv.Talos, _ = provisioner.MachineTalos(m)
 		}
@@ -605,10 +617,10 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 	writeJSON(w, http.StatusOK, v)
 }
 
-// vmNodes maps the names of the cluster's VMs, which the Proxmox VE provider names after their
-// machines' infrastructure, to the nodes they run on now. The machines show without their nodes
-// when Proxmox VE does not tell: they are the page's subject, the nodes an addition.
-func (s *Server) vmNodes(r *http.Request, u user, c *clusterv1.Cluster, poolPath string) map[string]string {
+// clusterVMs maps the names of the cluster's VMs, which the Proxmox VE provider names after their
+// machines' infrastructure, to the VMs, on the nodes they run on now. The machines show without
+// their nodes when Proxmox VE does not tell: they are the page's subject, the nodes an addition.
+func (s *Server) clusterVMs(r *http.Request, u user, c *clusterv1.Cluster, poolPath string) map[string]pve.Member {
 	members, err := s.Accounts.PoolMembers(r.Context(), u.ticket, strings.TrimPrefix(poolPath, "/pool/"))
 	if err != nil {
 		if !errors.Is(err, pve.ErrForbidden) {
@@ -616,11 +628,24 @@ func (s *Server) vmNodes(r *http.Request, u user, c *clusterv1.Cluster, poolPath
 		}
 		return nil
 	}
-	nodes := make(map[string]string, len(members))
+	vms := make(map[string]pve.Member, len(members))
 	for i := range members {
-		nodes[members[i].Name] = members[i].Node
+		vms[members[i].Name] = members[i]
 	}
-	return nodes
+	return vms
+}
+
+// consoleURL is where Proxmox VE's web interface at base opens the VM's console, as its own
+// Console button does; empty without a base or a VM.
+func consoleURL(base string, vm *pve.Member) string {
+	u, err := url.Parse(base)
+	if base == "" || err != nil || vm.VMID == 0 || vm.Node == "" {
+		return ""
+	}
+	u.Path, u.RawQuery = "/", url.Values{
+		"console": {"kvm"}, "novnc": {"1"}, "vmid": {strconv.Itoa(vm.VMID)}, "vmname": {vm.Name}, "node": {vm.Node}, "resize": {"off"}, "cmd": {""},
+	}.Encode()
+	return u.String()
 }
 
 type createRequest struct {

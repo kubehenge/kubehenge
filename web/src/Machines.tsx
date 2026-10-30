@@ -83,9 +83,11 @@ export function Machines({
 }): JSX.Element {
   const { data: nodes } = usePoll(api.nodes, pollIdle, nodesKept);
   const [replacing, setReplacing] = useState<Machine>();
+  const [deleting, setDeleting] = useState<Machine>();
   const [keepError, setKeepError] = useState<string>();
   const offline = new Set((nodes ?? []).filter((n) => !n.online).map((n) => n.node));
   const machines = c.machines ?? [];
+  const autoscaled = new Set(c.workerPools.filter((p) => p.autoscaling !== undefined).map((p) => p.name));
   const crowded = crowding(machines);
   const talos = c.distribution === "talos";
   const keep = async (m: Machine): Promise<void> => {
@@ -150,32 +152,17 @@ export function Machines({
                 <td>{(m.addresses ?? []).join(", ")}</td>
                 <td title={new Date(m.created).toLocaleString()}>{age(m.created)}</td>
                 <td className="row-action">
-                  <RowMenu label={`Actions for ${m.node ?? m.name}`}>
-                    {m.replacing === true && m.phase !== "Deleting" ? (
-                      <button
-                        type="button"
-                        disabled={!can}
-                        title={why}
-                        aria-label={`Keep ${m.node ?? m.name}`}
-                        onClick={() => {
-                          void keep(m);
-                        }}
-                      >
-                        Keep
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="danger"
-                        disabled={!can || m.phase === "Deleting"}
-                        title={why}
-                        aria-label={`Replace ${m.node ?? m.name}`}
-                        onClick={() => setReplacing(m)}
-                      >
-                        Replace…
-                      </button>
-                    )}
-                  </RowMenu>
+                  <MachineActions
+                    machine={m}
+                    can={can}
+                    why={why}
+                    autoscaled={autoscaled.has(m.pool ?? "")}
+                    onKeep={() => {
+                      void keep(m);
+                    }}
+                    onReplace={() => setReplacing(m)}
+                    onDelete={() => setDeleting(m)}
+                  />
                 </td>
               </tr>
             );
@@ -183,38 +170,124 @@ export function Machines({
         </tbody>
       </table>
       {replacing !== undefined && (
-        <ReplaceDialog
+        <MachineDialog
           cluster={c}
           machine={replacing}
+          verb="Replace"
+          act={api.replaceMachine}
           onClose={() => setReplacing(undefined)}
           onDone={() => {
             setReplacing(undefined);
             onChanged();
           }}
-        />
+        >
+          {replacing.role === "control-plane"
+            ? "Deletes the VM and its disks, then adds a new control-plane node. Waits while etcd would lose its majority."
+            : "Drains the node, deletes the VM and its disks, then adds a new worker."}
+        </MachineDialog>
+      )}
+      {deleting !== undefined && (
+        <MachineDialog
+          cluster={c}
+          machine={deleting}
+          verb="Delete"
+          act={api.deleteMachine}
+          onClose={() => setDeleting(undefined)}
+          onDone={() => {
+            setDeleting(undefined);
+            onChanged();
+          }}
+        >
+          {`Drains the node and deletes the VM and its disks. Pool ${deleting.pool ?? ""} shrinks by one.`}
+        </MachineDialog>
       )}
     </div>
   );
 }
 
-function ReplaceDialog({
+function MachineActions({
+  machine: m,
+  can,
+  why,
+  autoscaled,
+  onKeep,
+  onReplace,
+  onDelete,
+}: {
+  machine: Machine;
+  can: boolean;
+  why: string | undefined;
+  autoscaled: boolean;
+  onKeep: () => void;
+  onReplace: () => void;
+  onDelete: () => void;
+}): JSX.Element {
+  const name = m.node ?? m.name;
+  const going = m.phase === "Deleting";
+  return (
+    <RowMenu label={`Actions for ${name}`}>
+      {m.console !== undefined && (
+        <a className="button" href={m.console} target="_blank" rel="noreferrer" aria-label={`Console of ${name}`}>
+          Console
+        </a>
+      )}
+      {m.replacing === true && !going ? (
+        <button type="button" disabled={!can} title={why} aria-label={`Keep ${name}`} onClick={onKeep}>
+          Keep
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="danger"
+          disabled={!can || going}
+          title={why}
+          aria-label={`Replace ${name}`}
+          onClick={onReplace}
+        >
+          Replace…
+        </button>
+      )}
+      {m.role === "worker" && (
+        <button
+          type="button"
+          className="danger"
+          disabled={!can || going || autoscaled}
+          title={autoscaled ? "Autoscaled pool" : why}
+          aria-label={`Delete ${name}`}
+          onClick={onDelete}
+        >
+          Delete…
+        </button>
+      )}
+    </RowMenu>
+  );
+}
+
+// MachineDialog asks before a machine is replaced or deleted, which takes its VM and disks.
+function MachineDialog({
   cluster: c,
   machine: m,
+  verb,
+  act,
   onClose,
   onDone,
+  children,
 }: {
   cluster: Cluster;
   machine: Machine;
+  verb: string;
+  act: (ns: string, name: string, machine: string) => Promise<void>;
   onClose: () => void;
   onDone: () => void;
+  children: string;
 }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const replace = async (): Promise<void> => {
+  const run = async (): Promise<void> => {
     setBusy(true);
     setError(undefined);
     try {
-      await api.replaceMachine(c.namespace, c.name, m.name);
+      await act(c.namespace, c.name, m.name);
       onDone();
     } catch (err) {
       setError(errorMessage(err));
@@ -223,10 +296,10 @@ function ReplaceDialog({
   };
   return (
     <Dialog
-      title={`Replace ${m.node ?? m.name}`}
+      title={`${verb} ${m.node ?? m.name}`}
       onClose={onClose}
       onSubmit={() => {
-        void replace();
+        void run();
       }}
       actions={
         <>
@@ -234,16 +307,12 @@ function ReplaceDialog({
             Cancel
           </button>
           <button type="submit" className="danger" disabled={busy}>
-            Replace
+            {verb}
           </button>
         </>
       }
     >
-      <p>
-        {m.role === "control-plane"
-          ? "Deletes the VM and its disks, then adds a new control-plane node. Waits while etcd would lose its majority."
-          : "Drains the node, deletes the VM and its disks, then adds a new worker."}
-      </p>
+      <p>{children}</p>
       <ErrorBox message={error} />
     </Dialog>
   );

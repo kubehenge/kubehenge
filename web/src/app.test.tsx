@@ -617,6 +617,36 @@ describe("clusters", () => {
     await waitFor(() => expect(reads(calls, "DELETE /api/clusters/default/web/machines/cp-a/replacement")).toBe(1));
   });
 
+  it("deletes a worker after asking, and opens a machine's console", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/machines");
+    const console = "https://pve.example.org:8006/?console=kvm&novnc=1&vmid=201&node=pve1";
+    const calls = fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": {
+        body: {
+          ...web,
+          machines: [
+            { ...runningOn("cp-a", "pve1"), console },
+            { ...runningOn("md-a", "pve1", "worker"), pool: "md-0" },
+          ],
+        },
+      },
+      "DELETE /api/clusters/default/web/machines/md-a": { status: 204 },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    const link = await screen.findByRole("link", { name: "Console of cp-a" });
+    expect(link).toHaveAttribute("href", console);
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(screen.queryByRole("link", { name: "Console of md-a" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete cp-a" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Delete md-a" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete md-a" });
+    expect(dialog).toHaveTextContent("Pool md-0 shrinks by one.");
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(reads(calls, "DELETE /api/clusters/default/web/machines/md-a")).toBe(1));
+  });
+
   it("reads the setup status no more once signed out, even when the last read fails after", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const setup = held();

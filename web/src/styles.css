@@ -1581,15 +1581,18 @@ button.go {
   display: grid;
 }
 
-.row-menu button {
+.row-menu button,
+.row-menu .button {
   width: 100%;
   justify-content: start;
   border-color: transparent;
   background: transparent;
 }
 
-.row-menu button:not(:disabled):hover {
+.row-menu button:not(:disabled):hover,
+.row-menu .button:hover {
   background: var(--hover);
+  border-color: transparent;
 }
 
 .row-menu button.danger {

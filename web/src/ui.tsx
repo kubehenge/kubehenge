@@ -542,7 +542,7 @@ export function RowMenu({ label, children }: { label: string; children: ReactNod
       }
     };
     const chosen = (e: Event): void => {
-      if (e.target instanceof Element && e.target.closest("button") !== null) {
+      if (e.target instanceof Element && e.target.closest("button, a") !== null) {
         hide();
       }
     };

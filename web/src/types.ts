@@ -153,6 +153,8 @@ export interface Machine {
   /** The Proxmox VE node its VM runs on, where the user may see the VM. */
   proxmoxNode?: string;
   role: "control-plane" | "worker";
+  /** The worker pool a worker belongs to. */
+  pool?: string;
   version?: string;
   phase: string;
   ready: boolean;
@@ -164,6 +166,8 @@ export interface Machine {
   created: string;
   /** The Talos release its node runs, on a Talos cluster. */
   talos?: string;
+  /** Opens its VM's console in Proxmox VE, for a user who may use it. */
+  console?: string;
 }
 
 /** A section of the health page from one source: what was read, or why it was not. */

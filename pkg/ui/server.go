@@ -99,6 +99,9 @@ type Server struct {
 	// ProxmoxInsecure tells administrators that the appliance and the clusters do not verify the
 	// Proxmox VE API's certificate, as it was installed.
 	ProxmoxInsecure bool
+	// ProxmoxURL is the Proxmox VE API's address, whose web interface opens a machine's console;
+	// empty offers no console.
+	ProxmoxURL string
 	// NewKube makes the client for the management cluster from the kubeconfig the appliance wrote.
 	NewKube func(kubeconfig []byte) (client.Client, error)
 	// Upgrades are set in the appliance, which upgrades its own software.
@@ -240,6 +243,7 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/talos-upgrade-failure", s.managed(s.retryTalosUpgrade))
 	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/machines/{machine}/replacement", s.managed(s.replaceMachine))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/machines/{machine}/replacement", s.managed(s.keepMachine))
+	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/machines/{machine}", s.managed(s.deleteMachine))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/health", s.managed(s.clusterHealth))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/pods/{podNamespace}/{pod}/logs", s.managed(s.podLogs))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/backups", s.managed(s.clusterBackups))

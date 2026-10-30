@@ -301,7 +301,7 @@ func newHarness(t *testing.T, objects ...client.Object) *harness {
 		totp:      map[string]string{"otp@pve": "123456"},
 		grants: map[string]map[string][]string{
 			"admin@pve": {"/": {
-				"VM.Audit", "VM.Allocate", "Sys.Modify", "Datastore.AllocateSpace", "SDN.Use",
+				"VM.Audit", "VM.Allocate", "VM.Console", "Sys.Modify", "Datastore.AllocateSpace", "SDN.Use",
 				"Permissions.Modify", "User.Modify", "Group.Allocate", "Realm.AllocateUser", "Pool.Allocate", "Datastore.AllocateTemplate", "Sys.Audit",
 			}},
 			"viewer@pve": {"/pool/kubehenge/default.one": {"VM.Audit"}},
@@ -1345,20 +1345,34 @@ func TestClusterShowsWhereItsVMsRun(t *testing.T) {
 	h := newHarness(t, cluster("default", "one"), cp, worker)
 	// The provider names a VM after its infrastructure machine, not after the Machine.
 	h.accounts.members = []pve.Member{{VMID: 201, Node: "pve2", Type: "qemu", Name: "one-cp-a-x1"}, {VMID: 202, Node: "pve1", Type: "qemu", Name: "one-cp-a"}}
-	b := h.browser()
-	b.signIn("admin@pve")
-	rec := b.do("GET", "/api/clusters/default/one", "")
-	expect(t, rec, http.StatusOK)
-	var view clusterView
-	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
-		t.Fatal(err)
+	h.server.ProxmoxURL = "https://pve.example.org:8006"
+	view := func(username string) clusterView {
+		b := h.browser()
+		b.signIn(username)
+		rec := b.do("GET", "/api/clusters/default/one", "")
+		expect(t, rec, http.StatusOK)
+		var v clusterView
+		if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+			t.Fatal(err)
+		}
+		return v
 	}
-	if len(view.Machines) != 2 || view.Machines[0].ProxmoxNode != "pve2" || view.Machines[1].ProxmoxNode != "" {
-		t.Fatalf("machines = %+v", view.Machines)
+	admin := view("admin@pve")
+	if len(admin.Machines) != 2 || admin.Machines[0].ProxmoxNode != "pve2" || admin.Machines[1].ProxmoxNode != "" {
+		t.Fatalf("machines = %+v", admin.Machines)
 	}
+	// The console opens in Proxmox VE's own web interface, for a VM it named.
+	if c := admin.Machines[0].Console; c != "https://pve.example.org:8006/?cmd=&console=kvm&node=pve2&novnc=1&resize=off&vmid=201&vmname=one-cp-a-x1" || admin.Machines[1].Console != "" {
+		t.Fatalf("consoles = %q, %q", c, admin.Machines[1].Console)
+	}
+	// Without VM.Console there is no console to offer.
+	if viewer := view("viewer@pve"); len(viewer.Machines) != 2 || viewer.Machines[0].Console != "" {
+		t.Fatalf("viewer's machines = %+v", viewer.Machines)
+	}
+	machines := admin.Machines
 	// What keeps a machine waiting is shown, and only while it waits.
-	if !view.Machines[0].Ready || view.Machines[0].Waiting != "" || view.Machines[1].Waiting != waiting {
-		t.Fatalf("waiting = %q, %q", view.Machines[0].Waiting, view.Machines[1].Waiting)
+	if !machines[0].Ready || machines[0].Waiting != "" || machines[1].Waiting != waiting {
+		t.Fatalf("waiting = %q, %q", machines[0].Waiting, machines[1].Waiting)
 	}
 }
 

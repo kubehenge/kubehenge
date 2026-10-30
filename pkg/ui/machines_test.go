@@ -9,6 +9,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
 func clusterMachine(cluster, name string) *clusterv1.Machine {
@@ -65,6 +67,57 @@ func TestMachinesAreMarkedForReplacementAndKept(t *testing.T) {
 	expect(t, dev.do("PUT", "/api/clusters/default/one/machines/one-cp-9/replacement", ""), http.StatusNotFound)
 	if marked(theirs) {
 		t.Error("another cluster's machine is marked")
+	}
+}
+
+func TestAWorkerIsDeletedAndItsPoolShrinks(t *testing.T) {
+	t.Parallel()
+	worker := clusterMachine("one", "one-md-0-a")
+	delete(worker.Labels, clusterv1.MachineControlPlaneLabel)
+	worker.Labels[clusterv1.ClusterTopologyMachineDeploymentNameLabel] = "md-0"
+	controlPlane := clusterMachine("one", "one-cp-1")
+	scaled := cluster("default", "two")
+	scaled.Spec.Topology.Workers.MachineDeployments[0].Metadata.Annotations = map[string]string{
+		provisioner.AutoscalerMinAnnotation: "1", provisioner.AutoscalerMaxAnnotation: "3",
+	}
+	scaledWorker := clusterMachine("two", "two-md-0-a")
+	delete(scaledWorker.Labels, clusterv1.MachineControlPlaneLabel)
+	scaledWorker.Labels[clusterv1.ClusterTopologyMachineDeploymentNameLabel] = "md-0"
+	h := newHarness(t, cluster("default", "one"), scaled, worker, controlPlane, scaledWorker)
+	const path = "/api/clusters/default/one/machines/one-md-0-a"
+
+	viewer := h.browser()
+	viewer.signIn("viewer@pve")
+	expect(t, viewer.do("DELETE", path, ""), http.StatusForbidden)
+
+	dev := h.browser()
+	dev.signIn("dev@pve")
+	expect(t, dev.do("DELETE", path, ""), http.StatusNoContent)
+	got := &clusterv1.Machine{}
+	if err := h.kube.Get(t.Context(), client.ObjectKeyFromObject(worker), got); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got.Annotations[clusterv1.DeleteMachineAnnotation]; !ok {
+		t.Error("the worker is not marked to go first")
+	}
+	c := &clusterv1.Cluster{}
+	if err := h.kube.Get(t.Context(), client.ObjectKey{Namespace: "default", Name: "one"}, c); err != nil {
+		t.Fatal(err)
+	}
+	before := *cluster("default", "one").Spec.Topology.Workers.MachineDeployments[0].Replicas
+	if n := *c.Spec.Topology.Workers.MachineDeployments[0].Replicas; n != before-1 {
+		t.Errorf("md-0 has %d workers, want %d", n, before-1)
+	}
+
+	// A control plane is replaced, not deleted, and an autoscaled pool's workers are the autoscaler's.
+	expect(t, dev.do("DELETE", "/api/clusters/default/one/machines/one-cp-1", ""), http.StatusConflict)
+	expect(t, dev.do("DELETE", "/api/clusters/default/two/machines/two-md-0-a", ""), http.StatusConflict)
+	expect(t, dev.do("DELETE", "/api/clusters/default/one/machines/two-md-0-a", ""), http.StatusNotFound)
+	if err := h.kube.Get(t.Context(), client.ObjectKeyFromObject(scaledWorker), got); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got.Annotations[clusterv1.DeleteMachineAnnotation]; ok {
+		t.Error("an autoscaled pool's worker is marked")
 	}
 }
 

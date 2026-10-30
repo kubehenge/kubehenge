@@ -131,7 +131,7 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 		}
 		return newClient(cfg, scheme)
 	}
-	s.Accounts, s.Assets = accounts, ui.Frontend()
+	s.Accounts, s.Assets, s.ProxmoxURL = accounts, ui.Frontend(), conn.URL
 	s.Releases = &provisioner.ChannelServer{HTTP: &http.Client{Timeout: releaseChannelTimeout}, URLs: provisioner.DefaultChannelURLs}
 	s.TalosReleases = templates.DefaultSources().TalosReleases
 	s.Log = slog.New(slog.NewJSONHandler(os.Stderr, nil))
