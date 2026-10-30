@@ -151,6 +151,10 @@ The CA the certificate is checked against is, without `--proxmox-ca`:
 
 Where none of them is the answer, the installer stops before it creates anything. `--proxmox-ca` gives the CA instead; `--proxmox-insecure` has nothing checked.
 
+### The management cluster's credentials
+
+The admin kubeconfig and talosconfig of the management cluster, kept in the encrypted state, hold client certificates that last a year. An apply in their last month renews them; since only the passphrase opens the state, nothing does so by itself. The interface warns administrators 30 days before they run out: apply the settings in **Administration** to renew them.
+
 ### The appliance's certificate
 
 The interface warns administrators 30 days before its certificate runs out. Renew it in the shell of the node the appliance runs on (every node of a Proxmox VE cluster can read the cluster's CA key), with the installer of the release the appliance runs or a newer one:
@@ -232,7 +236,7 @@ The signed-in user needs these privileges on `/`, which the Administrator role h
 
 `Sys.Modify`, `Permissions.Modify`, `User.Modify`, `Group.Allocate`, `Realm.AllocateUser`, `Pool.Allocate`, `VM.Allocate`, `Datastore.AllocateSpace`, `Datastore.AllocateTemplate`
 
-Proxmox VE checks every call of the run again on its own. Anyone without them sees that Kubehenge is not set up yet. The same privileges open Administration later, in four pages: **Management cluster**, its settings (applying them again or changing them) and its removal; **Appliance**, Kubehenge's upgrades and repair access; **Templates**, the VM templates and their weekly build; and **Certificates**, the DNS-01 credential for every cluster. They also bring the warnings about the [backup](#back-up-the-appliance) and the [certificate](#the-appliances-certificate).
+Proxmox VE checks every call of the run again on its own. Anyone without them sees that Kubehenge is not set up yet. The same privileges open Administration later, in five pages: **Management cluster**, its settings (applying them again or changing them) and its removal; **Appliance**, Kubehenge's upgrades and repair access; **Backups**, the [management cluster's etcd snapshots](#back-up-the-management-clusters-etcd); **Templates**, the VM templates and their weekly build; and **Certificates**, the DNS-01 credential for every cluster. They also bring the warnings about the [backup](#back-up-the-appliance) and the [certificate](#the-appliances-certificate).
 
 The run acts with your own Proxmox VE session: the interface renews your ticket and hands it to OpenTofu through its environment only; it is never stored, and no administrator token is created. A ticket lasts two hours, so the run has to finish within that. The one exception is opt-in: automatic upgrades of the management cluster, off unless an administrator switches them on, have the appliance keep the state passphrase and an Administrator token of a user of its own ([upgrading.md](upgrading.md#automatically-after-kubehenge)).
 
@@ -309,6 +313,25 @@ In the management cluster it installs cert-manager, the Cluster API Operator wit
 ### Back up the appliance
 
 The appliance holds the only copy of the management cluster's state. Add it to a Proxmox VE backup job (Datacenter, Backup), by its ID, by a pool it is in, or with all guests on its node. Once the management cluster exists, and until a backup job includes the appliance, administrators with `Sys.Audit` on `/` see a warning.
+
+### Back up the management cluster's etcd
+
+The management cluster's etcd holds every cluster's objects. **Administration, Backups** snapshots it into one of the [backup targets](install-settings.md#backup-targets), every 6 hours unless set otherwise, keeping the newest 28. **Set up…** takes the target, the schedule, an S3 access key for the target and the state passphrase; the first snapshot follows within a minute, and **Take snapshot** takes one at once.
+
+The appliance takes each snapshot itself through the nodes' Talos API, with a talosconfig that may take etcd snapshots and nothing else, and encrypts it before it leaves the appliance. The key that opens the snapshots is kept in the target, encrypted with the state passphrase ([details](install-settings.md#management-cluster-etcd-backups)).
+
+**Restore…** on a snapshot wipes etcd on every control-plane node of the management cluster and restores it from the snapshot, so every cluster's objects go back to then. It asks for the state passphrase, runs as a run of the management cluster's, and needs only the nodes' Talos API, so it works while the management cluster's own API does not answer. Clusters created or deleted after the snapshot no longer match what is in Proxmox VE: look at them in the fleet afterwards.
+
+The same is at hand in the appliance's shell, with the page's privileges and refusals ([upgrading.md](upgrading.md#from-the-appliances-shell) on signing in):
+
+| Command | Does |
+| --- | --- |
+| `kubehenge appliance etcd-backups` | shows the target, the schedule, the last snapshot and the next |
+| `kubehenge appliance etcd-backups set-up --target … --access-key-id … --secret-access-key-file … --passphrase-file …` | sets the backups up or changes them; `--every-hours` and `--keep` set the schedule |
+| `kubehenge appliance etcd-backups off` | switches them off; the snapshots stay in the target |
+| `kubehenge appliance etcd-backups snapshots` | lists the snapshots in the target, newest first |
+| `kubehenge appliance etcd-backups take` | takes a snapshot and waits until it is stored |
+| `kubehenge appliance etcd-backups restore … --passphrase-file …` | restores a snapshot by name, printing the run's log until it ends |
 
 ## Create the VM templates
 
@@ -406,6 +429,7 @@ tofu output -raw talosconfig > talosconfig
 | `cluster_datastore_allocate` | `false` | Let clusters choose the CSI plugin's newest release, with `Datastore.Allocate` for the cluster's token on a storage of its own, granted by the controller ([details](install-settings.md#the-csi-plugins-newest-release)). |
 | `template_refresh` | on, `Sun` `01:00` `UTC`, 24 h soak | The weekly build of the node OS VM templates ([templates.md](templates.md#the-weekly-build)) and its own API token ([details](install-settings.md#what-the-template-builds-may-do)): `enabled`; `weekday`, `time` (`HH:MM`) and `time_zone`; `soak_hours`, how old a build is before clusters move to it (0 to 720); `node` (the first of `proxmox_nodes`), `storage` (the first of `workload_datastores`), `import_datastore` (`image_datastore`), `iso_datastore` (`bootstrap_datastore`), `bridge` (the first of `workload_bridges`) and `vlan`; `address` with prefix, `gateway` and `dns` for the VM that prepares an image, DHCP when unset; `creator_builds` (`false`), letting those who may create clusters have a missing template built. |
 | `cluster_sys_audit` | `true` | Give each cluster the cloud controller manager's HA group labels unless it switches them off, with `Sys.Audit` on `/`, unpropagated, for the cluster's token through a group the controller adds its user to; it reads the Proxmox VE cluster's configuration and changes nothing ([details](install-settings.md#ha-group-labels)). `false` gives no cluster `Sys.Audit` on `/`. |
+| `watch` | 20 min | How long Kubehenge's controller gives what it watches for before it reports it on the Cluster and the Health page: `stall_minutes` (1 to 1440), for the new machine in the roll of a cluster's only control plane to become ready ([troubleshooting.md](troubleshooting.md#one-control-plane-its-roll-stalled)), and for a cluster's deletion to finish ([troubleshooting.md](troubleshooting.md#a-cluster-does-not-finish-deleting)). |
 | `node_boot_logs` | `true` | Let the controller read kubeadm, RKE2 and k3s nodes' boot logs, files only, through their guest agents, with `VM.GuestAgent.FileRead` on the workload pool for its token ([details](install-settings.md#nodes-boot-logs)). `false` takes the privilege away; Talos nodes' boot logs are read through their Talos API either way. |
 | `extra_cluster_namespaces` | `[]` | Namespaces the interface creates and manages clusters in beside `clusters` ([clusters.md](clusters.md#more-namespaces-for-clusters)). Each is created if missing and kept when taken off the list; `default`, `cert-manager`, `kube-*` and `*-system` are refused. |
 | `etcd_restore` | `false` | Have the controller restore clusters' etcd itself through the VMs' guest agents, giving it a token with `VM.Audit` and `VM.GuestAgent.Unrestricted` on the workload pool ([details](install-settings.md#etcd-restores)). Without it, the interface shows the steps to restore by hand. |

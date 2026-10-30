@@ -94,6 +94,15 @@ func (rs *Remotes) Ready(ctx context.Context, cluster *clusterv1.Cluster) error 
 	return nil
 }
 
+// Workload reads a workload cluster; found is false until Cluster API has made its kubeconfig.
+func (rs *Remotes) Workload(ctx context.Context, cluster *clusterv1.Cluster) (client.Reader, bool, error) { //nolint:ireturn // a CertificateWatch's Workload, which tests stand in for with fake clients
+	r, found, err := rs.get(ctx, cluster)
+	if err != nil || !found {
+		return nil, found, err
+	}
+	return r.client, true, nil
+}
+
 // get returns the cluster's client and its configuration, and false until Cluster API has made its
 // kubeconfig.
 func (rs *Remotes) get(ctx context.Context, cluster *clusterv1.Cluster) (remote, bool, error) {

@@ -35,8 +35,8 @@ const (
 
 // The updater's states besides succeeded and failed.
 const (
-	stateUpdating = "updating"
-	stateCurrent  = "current"
+	StateUpdating = "updating"
+	StateCurrent  = "current"
 )
 
 // UpdateRequest is what the interface asks of the updater: a named release, or the newest one a
@@ -54,6 +54,8 @@ type UpdateStatus struct {
 	To    string    `json:"to,omitempty"`
 	Time  time.Time `json:"time"`
 	Error string    `json:"error,omitempty"`
+	// RolledBack tells that a failed upgrade had replaced the software and put the old back.
+	RolledBack bool `json:"rolledBack,omitempty"`
 }
 
 // Spool is the updater's directory: requests/ (group-writable by the interface) and status.json.
@@ -110,6 +112,8 @@ type Updater struct {
 	// release.PublicKey() of this build.
 	Current string
 	Key     ed25519.PublicKey
+	// Healthy tells whether the restarted interface serves; an upgrade it refuses is rolled back.
+	Healthy func(ctx context.Context) error
 }
 
 // Run takes one request from the spool, if any, and carries it out.
@@ -118,17 +122,17 @@ func (u *Updater) Run(ctx context.Context) error {
 	if err != nil || !ok {
 		return err
 	}
-	st := UpdateStatus{State: stateUpdating, From: u.Current, Time: time.Now()}
+	st := UpdateStatus{State: StateUpdating, From: u.Current, Time: time.Now()}
 	u.write(&st)
 	to, err := u.update(ctx, req)
-	st.Time = time.Now()
+	st.Time, st.To = time.Now(), to
 	switch {
 	case err != nil:
-		st.State, st.Error = stateFailed, err.Error()
+		st.State, st.Error, st.RolledBack = StateFailed, err.Error(), errors.Is(err, ErrRolledBack)
 	case to == "":
-		st.State = stateCurrent
+		st.State = StateCurrent
 	default:
-		st.State, st.To = stateSucceeded, to
+		st.State = StateSucceeded
 	}
 	u.write(&st)
 	return err
@@ -237,32 +241,149 @@ func (u *Updater) update(ctx context.Context, req UpdateRequest) (string, error)
 			return "", err
 		}
 	}
-	// Held until the restart: the old interface could otherwise start a run in between.
+	// Held until the new software serves or the old one is back: the old interface could otherwise
+	// start a run in between.
 	unlock, err := LockJobs(u.ApplianceDir)
 	if err != nil {
 		return "", err
 	}
 	defer unlock()
-	err = u.install(archive)
-	if err != nil {
-		return "", err
-	}
-	if tofu != "" {
-		err = copyAtomic(tofu, filepath.Join(u.Root, "usr", "local", "bin", "tofu"), publicExecutable)
-		if err != nil {
-			return "", err
-		}
-	}
-	err = u.Restart(ctx)
-	if err != nil {
-		return "", fmt.Errorf("installed %s, but restarting failed: %w", r.Version, err)
-	}
-	return r.Version, nil
+	return r.Version, u.replace(ctx, r.Version, archive, tofu)
 }
 
-// install unpacks the archive beside the installed software and swaps it in: the binary renamed
-// over the old one, the share directory exchanged whole, the unit replaced.
-func (u *Updater) install(archive string) error {
+func (u *Updater) binary(name string) string {
+	return filepath.Join(u.Root, "usr", "local", "bin", name)
+}
+
+func (u *Updater) share() string { return filepath.Join(u.Root, "usr", "local", "share", "kubehenge") }
+
+// replace installs the archive and OpenTofu's binary at tofu, when not empty, restarts the
+// interface on them and checks that it serves; failing anywhere, it puts the old software back.
+func (u *Updater) replace(ctx context.Context, version, archive, tofu string) error {
+	sw, err := u.setAside(tofu)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(sw.aside) }()
+	err = u.install(archive, sw.aside)
+	if err == nil && tofu != "" {
+		err = copyAtomic(tofu, u.binary("tofu"), publicExecutable)
+	}
+	if err == nil {
+		sw.restarted = true
+		err = u.Restart(ctx)
+	}
+	if err == nil && u.Healthy != nil {
+		err = u.Healthy(ctx)
+	}
+	if err == nil {
+		return nil
+	}
+	if sw.restarted {
+		err = fmt.Errorf("release %s did not start: %w", version, err)
+	}
+	return sw.rollBack(ctx, err)
+}
+
+// swap is an upgrade's replacement of the installed software, kept in aside until the new one
+// serves: a copy of the binary and, where the upgrade replaces it, of OpenTofu, and the share
+// directory install moves there, which holds the units too.
+type swap struct {
+	u     *Updater
+	aside string
+	// tofu tells that the upgrade replaces OpenTofu, and restarted that it restarted the interface.
+	tofu, restarted bool
+}
+
+// setAside makes the swap of the software for one whose OpenTofu is at tofu, or keeps it when tofu
+// is empty.
+func (u *Updater) setAside(tofu string) (*swap, error) {
+	sw := &swap{u: u, aside: filepath.Join(u.Root, "usr", "local", "share", ".kubehenge-rollback"), tofu: tofu != ""}
+	err := os.RemoveAll(sw.aside)
+	if err == nil {
+		err = os.MkdirAll(sw.aside, privateDir)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("setting the installed software aside: %w", err)
+	}
+	names := []string{"kubehenge"}
+	if sw.tofu {
+		names = append(names, "tofu")
+	}
+	for _, name := range names {
+		err := copyAtomic(u.binary(name), filepath.Join(sw.aside, name), publicExecutable)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("setting the installed software aside: %w", err)
+		}
+	}
+	return sw, nil
+}
+
+// rollBack puts the software set aside in place again after an upgrade failed with cause, and
+// restarts the interface on it when the upgrade had restarted it. The job lock stays held
+// throughout, so the interface starts no run on either release meanwhile.
+func (sw *swap) rollBack(ctx context.Context, cause error) error {
+	u := sw.u
+	err := sw.restore()
+	if err == nil && sw.restarted {
+		err = u.Restart(ctx)
+		if err == nil && u.Healthy != nil {
+			err = u.Healthy(ctx)
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("%w; rolling back to %s failed too: %w", cause, u.Current, err)
+	}
+	return fmt.Errorf("%w; %w to %s", cause, ErrRolledBack, u.Current)
+}
+
+// ErrRolledBack is an upgrade undone: the release installed before serves again.
+var ErrRolledBack = errors.New("rolled back")
+
+// restore puts the software set aside back. OpenTofu the upgrade brought where there was none
+// before goes, as does a unit the old software does not have.
+func (sw *swap) restore() error {
+	u := sw.u
+	if err := copyAtomic(filepath.Join(sw.aside, "kubehenge"), u.binary("kubehenge"), publicExecutable); err != nil {
+		return err
+	}
+	if sw.tofu {
+		if err := putBack(filepath.Join(sw.aside, "tofu"), u.binary("tofu"), publicExecutable); err != nil {
+			return err
+		}
+	}
+	old := filepath.Join(sw.aside, "share")
+	if _, err := os.Stat(old); err == nil {
+		if err := os.RemoveAll(u.share()); err != nil {
+			return fmt.Errorf("removing the new software: %w", err)
+		}
+		if err := os.Rename(old, u.share()); err != nil {
+			return fmt.Errorf("putting the software back: %w", err)
+		}
+	}
+	for _, name := range Units {
+		if err := putBack(filepath.Join(u.share(), "appliance", name), filepath.Join(u.Root, "etc", "systemd", "system", name), publicFile); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// putBack replaces dest with a copy of src, or removes it when there is no src.
+func putBack(src, dest string, mode os.FileMode) error {
+	err := copyAtomic(src, dest, mode)
+	if errors.Is(err, fs.ErrNotExist) {
+		err = os.Remove(dest)
+	}
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("putting %s back: %w", filepath.Base(dest), err)
+	}
+	return nil
+}
+
+// install unpacks the archive beside the installed software and swaps it in: the share directory
+// exchanged whole, the old one moved aside, the binary and the units replaced.
+func (u *Updater) install(archive, aside string) error {
 	// Staged beside its destination: renames cannot cross file systems, and the service's sandbox
 	// mounts each writable directory on its own.
 	staging := filepath.Join(u.Root, "usr", "local", "share", ".kubehenge-staging")
@@ -278,29 +399,27 @@ func (u *Updater) install(archive string) error {
 	if err != nil {
 		return err
 	}
-	share := filepath.Join(u.Root, "usr", "local", "share", "kubehenge")
-	old := share + ".old"
-	err = os.RemoveAll(old)
-	if err == nil {
-		err = os.Rename(share, old)
-	}
+	err = os.Rename(u.share(), filepath.Join(aside, "share"))
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("setting the installed software aside: %w", err)
 	}
-	err = os.Rename(filepath.Join(staging, "share", "kubehenge"), share)
+	err = os.Rename(filepath.Join(staging, "share", "kubehenge"), u.share())
 	if err != nil {
-		_ = os.Rename(old, share)
 		return fmt.Errorf("putting the new software in place: %w", err)
 	}
-	_ = os.RemoveAll(old)
 	// Copied, not renamed: the service's sandbox mounts /usr/local/bin apart from the staging
 	// directory, and a rename cannot cross mounts.
-	err = copyAtomic(filepath.Join(staging, "bin", "kubehenge"), filepath.Join(u.Root, "usr", "local", "bin", "kubehenge"), publicExecutable)
+	err = copyAtomic(filepath.Join(staging, "bin", "kubehenge"), u.binary("kubehenge"), publicExecutable)
 	if err != nil {
 		return err
 	}
+	return u.installUnits()
+}
+
+// installUnits copies the units of the software in place to systemd.
+func (u *Updater) installUnits() error {
 	for _, name := range Units {
-		err = copyAtomic(filepath.Join(share, "appliance", name), filepath.Join(u.Root, "etc", "systemd", "system", name), publicFile)
+		err := copyAtomic(filepath.Join(u.share(), "appliance", name), filepath.Join(u.Root, "etc", "systemd", "system", name), publicFile)
 		if err != nil {
 			return err
 		}

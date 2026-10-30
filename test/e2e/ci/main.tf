@@ -100,6 +100,9 @@ module "management_cluster" {
   backup_targets     = var.backup_targets
   # test/e2e/workload-cluster.sh restores each cluster's etcd through the guest agent.
   etcd_restore = true
+  # The RKE2 and k3s tests hold their upgrade's first new server out long enough to see the roll
+  # reported as stalled, and test/e2e/workload-cluster.sh holds a deletion up as long.
+  watch = { stall_minutes = 2 }
 
   api_address = "172.20.99.10"
   gateway     = "172.20.99.1"

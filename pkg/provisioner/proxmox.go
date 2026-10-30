@@ -697,7 +697,7 @@ func (p *Proxmox) waitTask(ctx context.Context, node, upid string, timeout time.
 		if err := p.Client.Get(ctx, path, &status); err != nil {
 			return fmt.Errorf("reading task %s: %w", upid, err)
 		}
-		if status.Status == "stopped" {
+		if status.Status == guestStopped {
 			if status.ExitStatus != "OK" {
 				return fmt.Errorf("on node %s: %w", node, pve.TaskFailed(ctx, p.Client.Get, node, upid, status.ExitStatus))
 			}

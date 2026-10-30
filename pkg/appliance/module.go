@@ -119,8 +119,17 @@ func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase str
 	if err != nil {
 		return nil, err
 	}
-	if err = a.recordApplied(); err != nil {
+	talos, err := a.output(ctx, env, "talosconfig")
+	if err != nil {
 		return nil, err
+	}
+	if err = a.recordApplied(CredentialsExpire([]byte(admin), []byte(talos))); err != nil {
+		return nil, err
+	}
+	// The cluster runs as applied either way; the backups' status says why their snapshots fail.
+	if err = a.renewEtcdBackupCredential(ctx, []byte(talos)); err != nil {
+		j.Add("Renewing the credential of the etcd backups failed: " + err.Error())
+		a.etcdBackupFailed(err)
 	}
 	return kubeconfig, nil
 }

@@ -110,7 +110,7 @@ func locateVM(ctx context.Context, c *proxmox.Client, vmid int64) (string, bool,
 	}
 	for _, vm := range vms {
 		if vm.VMID == vmid {
-			return vm.Node, vm.Status == "running", nil
+			return vm.Node, vm.Status == guestRunning, nil
 		}
 	}
 	return "", false, fmt.Errorf("VM %d is not there, or not one this token may see", vmid)

@@ -276,6 +276,11 @@ function PlanDialog({
       }
     >
       <p className="muted">{effects[worstEffect(plan.changes)]}.</p>
+      {(plan.warnings ?? []).map((w) => (
+        <p key={w} className="warning">
+          {w}
+        </p>
+      ))}
       <div className="scroll">
         <table className="grid plan">
           <thead>

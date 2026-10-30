@@ -173,8 +173,11 @@ func (s *Server) applianceRuns() []runView {
 	if a := s.Appliance; a != nil {
 		if j := a.Current(); j != nil {
 			what := "Apply management cluster"
-			if j.Kind == "remove" {
+			switch j.Kind {
+			case "remove":
 				what = "Delete management cluster"
+			case "etcd-restore":
+				what = "Restore management cluster etcd"
 			}
 			list = append(list, jobRun("management-cluster", runManagement, what, j))
 		}
@@ -248,6 +251,9 @@ func etcdRuns(c *clusterv1.Cluster) []runView {
 	if st, ok := provisioner.EtcdRestoreStatusOf(c); ok {
 		v := base
 		v.ID, v.Kind, v.What, v.By = "etcd-restore/"+clusterKey(c.Namespace, c.Name), runEtcdRestore, "Restore etcd from "+st.Snapshot, st.By
+		if st.Reset {
+			v.What = "Recover the control plane on " + st.Machine
+		}
 		v.Started = &st.RequestedAt
 		if !st.Started.IsZero() {
 			v.Started = &st.Started

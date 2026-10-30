@@ -61,6 +61,9 @@ const (
 	templateVersionsInterval = 30 * time.Second
 	// haRulesInterval is how soon an HA rule made in Proxmox VE is offered to cluster creators.
 	haRulesInterval = 30 * time.Second
+	// certificateWatchInterval is how often the clusters' certificates are looked at, a few reads
+	// each: they are renewed weeks before they run out, and RKE2 and k3s report theirs every half hour.
+	certificateWatchInterval = 5 * time.Minute
 	// templateRequestsInterval is how soon a build asked for in the interface starts.
 	templateRequestsInterval = 15 * time.Second
 	// talosUpgradeInterval is how soon a Talos node's upgrade starts after the one before, or after
@@ -168,6 +171,7 @@ agents too, with its own token, which needs VM.GuestAgent.FileRead on the worklo
 	f.StringSliceVar(&o.headlampSignIn, "headlamp-sign-in-namespaces", nil, "the interface's namespaces, whose clusters get identities through which the appliance's shared Headlamp signs those who may download a cluster's admin kubeconfig in as cluster-admin (comma-separated); none, nobody is signed in and the identities are removed")
 	f.DurationVar(&o.upgradeInterval, "upgrade-interval", defaultUpgradeInterval, "how often clusters are checked for an automatic upgrade due in their window")
 	f.DurationVar(&o.nodeImageSoak, "node-image-soak", provisioner.DefaultNodeImageSoak, "how old a template build is before clusters move to it; the template refresh's --soak")
+	f.DurationVar(&o.r.StallAfter, "stall-after", provisioner.DefaultStallAfter, "how long the new control plane of a cluster with one may take to become ready, and a cluster's deletion may wait, before either counts as stalled")
 	f.BoolVar(&o.templateRefresh, "template-refresh", false, "start the template refresh CronJob's Job for the builds asked for in the interface")
 	f.IntVar(&o.port, "extension-port", defaultExtensionPort, "port of the Runtime Extension server")
 	f.StringVar(&o.extensionConfig, "extension-config", "kubehenge", "ExtensionConfig through which Cluster API calls this controller's hooks")
@@ -292,7 +296,28 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	if err = o.addReclaimer(mgr, conn, cloud, remotes); err != nil {
 		return err
 	}
-	hooks := &provisioner.Hooks{
+	if err = o.addPlacement(mgr, extensions, scheme, o.newHooks(mgr, registrar, cloud, rancherMinors), conn, cloud); err != nil {
+		return err
+	}
+	if err = o.addUpgrader(mgr, c, rancherMinors, remotes); err != nil {
+		return err
+	}
+	if err = o.addWatches(mgr, remotes, cloud.Client); err != nil {
+		return err
+	}
+	if err = o.addProbes(mgr); err != nil {
+		return err
+	}
+	if err = mgr.Start(ctx); err != nil {
+		return fmt.Errorf("the controller manager: %w", err)
+	}
+	return nil
+}
+
+// newHooks makes the Runtime SDK hooks, which check a cluster against the same grants and pins as
+// the reconciler.
+func (o *controllerOptions) newHooks(mgr ctrl.Manager, registrar *provisioner.Registrar, cloud *provisioner.Proxmox, rancherMinors provisioner.KubernetesMinors) *provisioner.Hooks {
+	return &provisioner.Hooks{
 		Reader:            mgr.GetAPIReader(),
 		ClassNamespace:    o.r.ClassNamespace,
 		Registrar:         registrar,
@@ -313,19 +338,6 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 		Soak:   o.nodeImageSoak,
 		Now:    time.Now,
 	}
-	if err = o.addPlacement(mgr, extensions, scheme, hooks, conn, cloud); err != nil {
-		return err
-	}
-	if err = o.addUpgrader(mgr, c, rancherMinors, remotes); err != nil {
-		return err
-	}
-	if err = o.addProbes(mgr); err != nil {
-		return err
-	}
-	if err = mgr.Start(ctx); err != nil {
-		return fmt.Errorf("the controller manager: %w", err)
-	}
-	return nil
 }
 
 // parseFlags reads the flags that hold more than one value in a string: the charts, the Pod
@@ -766,6 +778,34 @@ func (o *controllerOptions) addEtcd(mgr manager.Manager, conn *pve.Config, remot
 	}
 	if err := restorer.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the etcd restorer: %w", err)
+	}
+	return nil
+}
+
+// addWatches adds what looks at every cluster for what Cluster API does not see through: a roll of
+// a single control plane that stalled, certificates about to run out, VMs that do not run and
+// storage nearly full.
+func (o *controllerOptions) addWatches(mgr manager.Manager, remotes *provisioner.Remotes, c *proxmox.Client) error {
+	rolls := &provisioner.RollWatch{
+		Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, APIs: remotes, Events: mgr.GetEventRecorder("kubehenge"),
+		Interval: time.Minute, StallAfter: o.r.StallAfter,
+	}
+	if err := mgr.Add(rolls); err != nil {
+		return fmt.Errorf("the roll watch: %w", err)
+	}
+	certificates := &provisioner.CertificateWatch{
+		Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Workload: remotes.Workload, Events: mgr.GetEventRecorder("kubehenge"),
+		Interval: certificateWatchInterval,
+	}
+	if err := mgr.Add(certificates); err != nil {
+		return fmt.Errorf("the certificate watch: %w", err)
+	}
+	vms := &provisioner.VMWatch{
+		Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Proxmox: c, Events: mgr.GetEventRecorder("kubehenge"),
+		Interval: time.Minute,
+	}
+	if err := mgr.Add(vms); err != nil {
+		return fmt.Errorf("the VM watch: %w", err)
 	}
 	return nil
 }

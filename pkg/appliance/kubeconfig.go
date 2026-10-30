@@ -2,8 +2,10 @@ package appliance
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	talosconfig "github.com/siderolabs/talos/pkg/machinery/client/config"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,6 +43,35 @@ const (
 	// fails is tried again at the next look.
 	interfaceTokenCheckEvery = time.Hour
 )
+
+// CredentialsExpire is when the first client certificate in the management cluster's admin
+// kubeconfig and talosconfig runs out, zero when neither holds one.
+func CredentialsExpire(kubeconfig, talos []byte) time.Time {
+	var certs [][]byte
+	if cfg, err := clientcmd.Load(kubeconfig); err == nil {
+		for _, auth := range cfg.AuthInfos {
+			certs = append(certs, auth.ClientCertificateData)
+		}
+	}
+	if cfg, err := talosconfig.FromBytes(talos); err == nil {
+		for _, c := range cfg.Contexts {
+			if crt, err := base64.StdEncoding.DecodeString(c.Crt); err == nil {
+				certs = append(certs, crt)
+			}
+		}
+	}
+	var first time.Time
+	for _, data := range certs {
+		block, _ := pem.Decode(data)
+		if block == nil {
+			continue
+		}
+		if cert, err := x509.ParseCertificate(block.Bytes); err == nil && (first.IsZero() || cert.NotAfter.Before(first)) {
+			first = cert.NotAfter
+		}
+	}
+	return first
+}
 
 // How often, and how long, to ask for the interface's first token while the chart that makes its
 // ServiceAccount may still be settling.

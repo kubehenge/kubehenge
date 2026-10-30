@@ -37,6 +37,7 @@ const (
 	stepFetch    = "fetch"
 	stepStop     = "stop"
 	stepRestore  = "restore"
+	stepReset    = "reset"
 	stepStart    = "start"
 	stepStartAs  = "start as it was"
 	stepRestored = "restored?"
@@ -51,6 +52,8 @@ func stepOf(script string) string {
 		return stepFetch
 	case strings.Contains(script, "systemctl stop"):
 		return stepStop
+	case strings.Contains(script, "reset etcd to this server alone") || strings.Contains(script, `cp "$data/member/snap/db"`):
+		return stepReset
 	case strings.Contains(script, "--cluster-reset"):
 		return stepRestore
 	case strings.Contains(script, "wait_for 600 ready"):
@@ -308,7 +311,7 @@ func TestEtcdRestorerRestores(t *testing.T) {
 	if st.Phase != RestoreSucceeded || st.Machine != "web-cp-0" || !slices.Equal(st.Replaced, []string{"web-cp-1", "web-cp-2"}) || !st.Paused {
 		t.Errorf("status %+v", st)
 	}
-	before := etcdSnapshotName(etcdNow, "v1.37.1+rke2r1")
+	before := EtcdSnapshotName(etcdNow, "v1.37.1+rke2r1")
 	if st.Before != before || st.NoBefore != "" {
 		t.Errorf("etcd as it was is not named as %s: %+v", before, st)
 	}
@@ -634,8 +637,15 @@ func TestRestoreScripts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(s.Restore, want) {
-			t.Errorf("%s restores without %q", d, want)
+		if !strings.Contains(s.Restore, want) || !strings.Contains(s.Reset, want) {
+			t.Errorf("%s restores or resets without %q", d, want)
+		}
+		// A reset keeps the node's own database rather than reading a snapshot it was handed.
+		if strings.Contains(s.Reset, "--cluster-reset-restore-path") || d == templates.Kubeadm && !strings.Contains(s.Reset, `cp "$data/member/snap/db"`) {
+			t.Errorf("%s resets from a snapshot:\n%s", d, s.Reset)
+		}
+		if d == templates.Kubeadm && (!strings.Contains(s.Reset, "--skip-hash-check") || strings.Contains(s.Restore, "skip=(--skip-hash-check)")) {
+			t.Error("kubeadm checks the snapshot's hash on a reset, or skips it on a restore")
 		}
 		if d == templates.Kubeadm {
 			// A client's cache from before the restore holds revisions the restored etcd reuses.
@@ -650,7 +660,7 @@ func TestRestoreScripts(t *testing.T) {
 			}
 		}
 		for name, body := range map[string]string{
-			"stop": s.Stop, "restore": s.Restore, "start": s.Start, "start without waiting": s.StartNoWait,
+			"stop": s.Stop, "restore": s.Restore, "reset": s.Reset, "start": s.Start, "start without waiting": s.StartNoWait,
 			"restored": s.Restored, "clean": s.Clean,
 			"fetch":            fetchScriptFor("https://s3.example.org/x?a=1&b='2'", "pass'word", "abc", "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n"),
 			"fetch without CA": fetchScriptFor("https://s3.example.org/x", "password", "abc", ""),
