@@ -512,24 +512,37 @@ func clusterKeys(ctx context.Context, c client.Client, cluster *clusterv1.Cluste
 }
 
 // BackupCredentialNames are the credentials beside a cluster that may hold its store's keys, in the
-// order they are looked for: the one typed into the interface for it, then the one for every
-// cluster.
+// order the controller looks for them: the one typed into the interface for it, then the one for
+// every cluster.
 func BackupCredentialNames(cluster string) []string {
-	return []string{CredentialName(cluster, backupCredentialPurpose), CredentialName("", backupCredentialPurpose)}
+	return []string{ClusterBackupCredentialName(cluster), CredentialName("", backupCredentialPurpose)}
 }
 
-// backupCredential finds the store's keys for the cluster among its credentials. The message says
-// what is missing, or is empty.
-func (r *Reconciler) backupCredential(ctx context.Context, cluster *clusterv1.Cluster) (map[string][]byte, string, error) {
-	return backupCredential(ctx, r.Client, cluster)
+// ClusterBackupCredentialName is the credential typed into the interface for a cluster, the only one
+// whose keys go into the cluster. The one for every cluster reaches every cluster's backups in the
+// target, so it never leaves the management cluster.
+func ClusterBackupCredentialName(cluster string) string {
+	return CredentialName(cluster, backupCredentialPurpose)
 }
 
-// backupCredential finds the store's keys for the cluster among its credentials in the management
-// cluster. The message says what is missing, or is empty.
+// backupCredential finds the store's keys the controller itself uses for the cluster among its
+// credentials in the management cluster. The message says what is missing, or is empty.
 func backupCredential(ctx context.Context, c client.Reader, cluster *clusterv1.Cluster) (map[string][]byte, string, error) {
-	for _, name := range BackupCredentialNames(cluster.Name) {
+	return readBackupCredential(ctx, c, cluster.Namespace, BackupCredentialNames(cluster.Name), noBackupCredential)
+}
+
+// clusterBackupCredential finds the store's keys that go into the cluster: only its own. The message
+// says what is missing, or is empty.
+func (r *Reconciler) clusterBackupCredential(ctx context.Context, cluster *clusterv1.Cluster) (map[string][]byte, string, error) {
+	return readBackupCredential(ctx, r.Client, cluster.Namespace, []string{ClusterBackupCredentialName(cluster.Name)}, noClusterBackupCredential)
+}
+
+// readBackupCredential reads the first of the credentials named that exists. The message says what
+// is missing, none when no credential exists at all, or is empty.
+func readBackupCredential(ctx context.Context, c client.Reader, namespace string, names []string, none string) (map[string][]byte, string, error) {
+	for _, name := range names {
 		s := &corev1.Secret{}
-		err := c.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: name}, s)
+		err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, s)
 		if apierrors.IsNotFound(err) {
 			continue
 		}
@@ -541,11 +554,17 @@ func backupCredential(ctx context.Context, c client.Reader, cluster *clusterv1.C
 		}
 		return s.Data, "", nil
 	}
-	return nil, noBackupCredential, nil
+	return nil, none, nil
 }
 
-// noBackupCredential is what backupCredential says when the cluster has no credential at all.
-const noBackupCredential = "no credential for the backup target: type one in for the cluster in the interface, or have an administrator store one for every cluster" //nolint:gosec // a message, not a credential
+//nolint:gosec // messages, not credentials
+const (
+	// noBackupCredential is what backupCredential says when the cluster has no credential at all.
+	noBackupCredential = "no credential for the backup target: type one in for the cluster in the interface, or have an administrator store one for every cluster"
+	// noClusterBackupCredential is what clusterBackupCredential says when the cluster has none of
+	// its own.
+	noClusterBackupCredential = "no credential of the cluster's own for the backup target, for which the one for every cluster never stands in: type one in for it in the interface"
+)
 
 // backupsWait puts what Velero needs into the workload cluster before its chart: the namespace, the
 // repository password, the SSE-C key and, unless the cluster's owner keeps them in a Secret of
@@ -583,11 +602,11 @@ func (r *Reconciler) veleroCredential(ctx context.Context, cluster *clusterv1.Cl
 	if b.ExistingSecret != "" {
 		return nil, false, nil
 	}
-	creds, missing, err := r.backupCredential(ctx, cluster)
+	creds, missing, err := r.clusterBackupCredential(ctx, cluster)
 	if err != nil {
 		return nil, false, err
 	}
-	if missing == noBackupCredential {
+	if missing == noClusterBackupCredential {
 		// Velero alone can also take a Secret of the owner's own in the workload cluster.
 		missing += ", or name a Secret of the cluster's velero namespace in existingSecret"
 	}

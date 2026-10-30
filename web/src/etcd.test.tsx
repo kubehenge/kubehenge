@@ -199,7 +199,8 @@ describe("etcd snapshot settings", () => {
     let dialog = screen.getByRole("dialog", { name: "etcd snapshots" });
     const upload = within(dialog).getByLabelText("Also have RKE2 upload snapshots of its own");
     expect(upload).not.toBeChecked();
-    expect(upload).toHaveAccessibleDescription(/access key goes into the Secret kubehenge-etcd-s3/u);
+    expect(upload).toHaveAccessibleDescription(/own access key to the target goes into the Secret kubehenge-etcd-s3/u);
+    expect(upload).toHaveAccessibleDescription(/The key for every cluster never goes there/u);
     expect(upload).toHaveAccessibleDescription(/not encrypted by Kubehenge/u);
     await user.click(upload);
     await user.click(within(dialog).getByRole("button", { name: "Save" }));

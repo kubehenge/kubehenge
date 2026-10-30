@@ -83,14 +83,14 @@ type uploadSetup struct {
 }
 
 // uploadFixture is an RKE2 cluster with etcd snapshots to the store and the distribution's own
-// upload, the credential for every cluster, and a workload cluster in memory.
+// upload, the cluster's own credential, and a workload cluster in memory.
 func uploadFixture(t *testing.T) uploadSetup {
 	t.Helper()
 	c := withAddons(storageCluster(), map[string]string{
 		etcdSnapshotsVariable: `{"enabled":true,"target":"store","distributionUpload":true}`,
 	})
 	credential := &corev1.Secret{
-		Namespace: c.Namespace, Name: CredentialName("", backupCredentialPurpose),
+		Namespace: c.Namespace, Name: ClusterBackupCredentialName(c.Name),
 		Data: map[string][]byte{backupAccessKeyID: []byte("AKID"), backupSecretAccessKey: []byte("secret")},
 	}
 	r, mgmt := newReconciler(t, &fakeCloud{}, c, credential)
@@ -251,14 +251,21 @@ func TestEtcdUploadDropInIsTheClasses(t *testing.T) {
 	}
 }
 
-// Without the store's keys, or on a distribution without an upload of its own, nothing goes into
-// the cluster.
+// Without the cluster's own keys for the store, even with the one for every cluster there, or on a
+// distribution without an upload of its own, nothing goes into the cluster.
 func TestReconcileEtcdUploadHolds(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	f := uploadFixture(t)
 	r, workload, c := f.r, f.workload, f.c
-	if err := r.Client.Delete(ctx, &corev1.Secret{Namespace: c.Namespace, Name: CredentialName("", backupCredentialPurpose)}); err != nil {
+	if err := r.Client.Delete(ctx, &corev1.Secret{Namespace: c.Namespace, Name: ClusterBackupCredentialName(c.Name)}); err != nil {
+		t.Fatal(err)
+	}
+	shared := &corev1.Secret{
+		Namespace: c.Namespace, Name: CredentialName("", backupCredentialPurpose),
+		Data: map[string][]byte{backupAccessKeyID: []byte("AKID"), backupSecretAccessKey: []byte("secret")},
+	}
+	if err := r.Client.Create(ctx, shared); err != nil {
 		t.Fatal(err)
 	}
 	if wait, err := r.reconcileEtcdUpload(ctx, c); err != nil || wait {

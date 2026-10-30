@@ -126,7 +126,7 @@ func (r *Reconciler) reconcileEtcdUpload(ctx context.Context, cluster *clusterv1
 		r.holdEtcdUpload(ctx, cluster, fmt.Sprintf("backup target %q is not one an administrator set", s.Target))
 		return false, nil
 	}
-	creds, missing, err := r.backupCredential(ctx, cluster)
+	creds, missing, err := r.clusterBackupCredential(ctx, cluster)
 	if err != nil {
 		return false, err
 	}

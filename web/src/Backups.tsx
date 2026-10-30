@@ -49,7 +49,7 @@ export const backupsHint =
   "Velero backs up every namespace but Kubernetes' own and the add-ons', with the data in its pods' volumes, to an S3 store an administrator set. Each cluster writes under a folder of its own, encrypted with keys of its own that Kubehenge keeps.";
 
 export const backupCredentialHint =
-  "The S3 access key Velero signs in to the target with. Without one of its own, the cluster takes the one an administrator stored for every cluster.";
+  "The S3 access key Velero signs in to the target with, the cluster's own. The key for every cluster never goes into a cluster, since it reaches every cluster's backups.";
 
 /** A cluster's backups variable. */
 export interface BackupsValue {

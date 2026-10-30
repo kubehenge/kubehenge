@@ -269,7 +269,7 @@ Kubehenge's controller holds a cluster's backups back, neither installing nor re
 
 - **`BackupTargetMissing`:** the cluster's target is "not one an administrator set", as an administrator removed or renamed it. Choose another under the cluster's **Options**, or have an administrator add it again ([install.md](install-settings.md#backup-targets)). What the cluster already runs stays meanwhile.
 - **`BackupsInvalid`:** the backup settings are ones Velero would not take, such as a schedule it cannot read; the event says which. Correct them under **Options**, or in the `backups` variable.
-- **`BackupCredentialMissing`:** "no credential for the backup target: type one in for the cluster in the interface, or have an administrator store one for every cluster, or name a Secret of the cluster's velero namespace in existingSecret". Do one of those. "Secret … holds no accessKeyID and secretAccessKey": the credential named lacks one or both of its keys; store it again. Backups wait until then.
+- **`BackupCredentialMissing`:** "no credential of the cluster's own for the backup target, for which the one for every cluster never stands in: type one in for it in the interface, or name a Secret of the cluster's velero namespace in existingSecret". Store the cluster's own key, or name such a Secret. "Secret … holds no accessKeyID and secretAccessKey": the credential named lacks one or both of its keys; store it again. Backups wait until then.
 
 ### etcd snapshots and restores
 

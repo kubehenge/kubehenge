@@ -2,7 +2,6 @@ import { useEffect, useId, useState, type JSX } from "react";
 
 import { api, etcdSnapshotURL } from "./api";
 import {
-  backupCredentialHint,
   backupKeys,
   backupsOf,
   scheduleProblem,
@@ -66,7 +65,7 @@ export const uploadsItself = (distribution: string): boolean => distribution ===
 /** uploadHint says what the distribution's own upload does, grants and risks. */
 export function uploadHint(distribution: string): string {
   const d = distributionName(distribution);
-  return `${d}'s servers then also take snapshots themselves on this schedule, read in UTC, and upload them to the ${distribution}-etcd folder beside these, keeping as many in all; they go on while the management cluster is down. What it grants: the target's access key goes into the Secret kubehenge-etcd-s3 in the cluster's kube-system, where whoever may read Secrets there, every cluster admin among them, reads it, and with it everything the key reaches in the target: the other clusters' backups too, when it is the key for every cluster. What it risks: ${d}'s snapshots are stored as etcd holds them, not encrypted by Kubehenge, and Kubehenge neither lists nor restores them; they are restored by hand with ${d}'s own steps. The store's certificate is verified. Switching it on or off, or changing the schedule or keep while it is on, replaces the control-plane machines one at a time.`;
+  return `${d}'s servers then also take snapshots themselves on this schedule, read in UTC, and upload them to the ${distribution}-etcd folder beside these, keeping as many in all; they go on while the management cluster is down. What it grants: the cluster's own access key to the target goes into the Secret kubehenge-etcd-s3 in the cluster's kube-system, where whoever may read Secrets there, every cluster admin among them, reads it, and with it everything the key reaches in the target. The key for every cluster never goes there. What it risks: ${d}'s snapshots are stored as etcd holds them, not encrypted by Kubehenge, and Kubehenge neither lists nor restores them; they are restored by hand with ${d}'s own steps. The store's certificate is verified. Switching it on or off, or changing the schedule or keep while it is on, replaces the control-plane machines one at a time.`;
 }
 
 /** etcdSnapshotsOf reads a cluster's etcdSnapshots variable; unset, snapshots are off. */
@@ -319,7 +318,7 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
             purpose="backup"
             cluster={c}
             keys={backupKeys}
-            hint={`${backupCredentialHint} Kubehenge writes the snapshots with the same key.`}
+            hint="The S3 access key Kubehenge writes the snapshots with, and the distribution's own upload too. Without one of its own, Kubehenge takes the one for every cluster; the upload waits for the cluster's own."
           />
         </>
       )}

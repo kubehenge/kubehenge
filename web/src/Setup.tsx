@@ -793,7 +793,7 @@ function ManagedSummary({
             label="Backup access key for every cluster"
             purpose="backup"
             keys={backupKeys}
-            hint="Taken by every cluster that backs up without a key of its own. One key for all lets each cluster's Velero reach the others' folders in the target, though not read them: each cluster's backups are encrypted with keys of its own. A key per cluster, limited to its folder, keeps them apart."
+            hint="Kubehenge's etcd snapshots take it for every cluster without a key of its own. It stays in the management cluster: Velero and the distributions' own uploads need each cluster's own key, limited to its folder."
           />
         </div>
       )}
@@ -1849,8 +1849,7 @@ function SetupWizard({
           <legend>Backup targets</legend>
           <p className="muted">
             S3 stores clusters back up to, with Velero and as etcd snapshots. Each cluster writes into a folder of its
-            own beneath the prefix, with an access key of its own or the one for every cluster, and encrypts what it
-            writes with keys of its own.
+            own beneath the prefix, with an access key of its own, and encrypts what it writes with keys of its own.
           </p>
           <BackupTargets initial={form.backupTargets} showAll={attempted} onChange={(v) => set("backupTargets", v)} />
         </fieldset>

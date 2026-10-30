@@ -244,7 +244,35 @@ func TestBackupCredential(t *testing.T) {
 	} {
 		r, _ := newReconciler(t, &fakeCloud{}, tc.objs...)
 		c := backupsCluster(tc.raw)
-		data, missing, err := r.backupCredential(context.Background(), c)
+		data, missing, err := backupCredential(context.Background(), r.Client, c)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if string(data[backupAccessKeyID]) != tc.key || (tc.missing == "") != (missing == "") || !strings.Contains(missing, tc.missing) {
+			t.Errorf("%s: key %q, missing %q", tc.name, data[backupAccessKeyID], missing)
+		}
+	}
+}
+
+// The keys that go into the cluster are only its own: the appliance's reach every cluster's backups.
+func TestClusterBackupCredentialIsOnlyTheClusters(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		objs    []client.Object
+		key     string
+		missing string
+	}{
+		{"the cluster's own", []client.Object{
+			storeKeys("web.backup", "web", map[string]string{"accessKeyID": "OWN", "secretAccessKey": "s"}),
+			storeKeys("kubehenge-backup", "", backupKeysData),
+		}, "OWN", ""},
+		{"the appliance's alone", []client.Object{storeKeys("kubehenge-backup", "", backupKeysData)}, "", "never stands in"},
+		{"another cluster's", []client.Object{storeKeys("db.backup", "db", backupKeysData)}, "", "of the cluster's own"},
+		{"without keys", []client.Object{storeKeys("web.backup", "web", map[string]string{"token": "x"})}, "", "holds no"},
+	} {
+		r, _ := newReconciler(t, &fakeCloud{}, tc.objs...)
+		data, missing, err := r.clusterBackupCredential(context.Background(), backupsCluster(`{"enabled":true}`))
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
