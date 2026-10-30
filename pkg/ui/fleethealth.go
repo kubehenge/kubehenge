@@ -86,17 +86,17 @@ func summed(c *clusterv1.Cluster, v *healthView) *fleetHealthView {
 func (s *Server) shownClusters(w http.ResponseWriter, r *http.Request, u user) ([]*clusterv1.Cluster, bool) {
 	var list clusterv1.ClusterList
 	if err := u.kube.List(r.Context(), &list); err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return nil, false
 	}
 	all, err := s.Accounts.AllPrivileges(r.Context(), u.ticket)
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return nil, false
 	}
 	views, err := s.visibleClusters(r.Context(), u, list.Items, all)
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return nil, false
 	}
 	seen := visibleKeys(views)

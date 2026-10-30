@@ -829,6 +829,11 @@ func (b *Builder) bake(ctx context.Context, node *proxmox.Node, vm *proxmox.Virt
 			return err
 		}
 	}
+	if recipe.BootLog {
+		if err = b.checkBootLog(ctx, vm); err != nil {
+			return err
+		}
+	}
 	for _, step := range recipe.Cleanup {
 		if err := b.exec(ctx, vm, step, longTaskTimeout); err != nil {
 			return err
@@ -1063,7 +1068,11 @@ func waitTask(ctx context.Context, task *proxmox.Task, err error, timeout time.D
 		}
 		if task.IsCompleted {
 			if task.IsFailed {
-				return fmt.Errorf("task %s failed: %s", task.UPID, task.ExitStatus)
+				failed := &pve.TaskError{UPID: string(task.UPID), ExitStatus: task.ExitStatus}
+				if log, logErr := task.Log(ctx, 0, pve.TaskLogRead); logErr == nil {
+					failed.Log = pve.TaskLogEnd(log)
+				}
+				return failed
 			}
 			return nil
 		}

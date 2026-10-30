@@ -71,13 +71,13 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), veleroTimeout)
 	defer cancel()
-	v, ok := s.openVelero(ctx, w, u, c, provisioner.IdentityRestores)
+	v, ok := s.openVelero(ctx, w, r, u, c, provisioner.IdentityRestores)
 	if !ok {
 		return
 	}
 	backup, err := v.Resource(veleroBackups).Namespace(provisioner.VeleroNamespace).Get(ctx, req.Backup, metav1.GetOptions{})
 	if err != nil {
-		s.veleroError(w, c, err)
+		s.veleroError(w, r, c, err)
 		return
 	}
 	if phase, _, _ := unstructured.NestedString(backup.Object, "status", "phase"); phase != veleroCompleted && phase != veleroPartiallyFailed {
@@ -90,10 +90,10 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	made, err := v.Resource(veleroRestores).Namespace(provisioner.VeleroNamespace).Create(ctx, req.restore(u.ticket.Username), metav1.CreateOptions{})
 	if err != nil {
-		s.veleroError(w, c, err)
+		s.veleroError(w, r, c, err)
 		return
 	}
-	s.Log.Info("started a restore", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "backup", req.Backup, "from", from, "restore", made.GetName())
+	s.Log.InfoContext(r.Context(), "started a restore", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "backup", req.Backup, "from", from, "restore", made.GetName())
 	view := restoreOf(made, nil)
 	view.From = from
 	writeJSON(w, http.StatusCreated, view)
@@ -111,7 +111,7 @@ func (s *Server) restoreSource(ctx context.Context, w http.ResponseWriter, r *ht
 	}
 	l, err := v.Resource(veleroLocation).Namespace(provisioner.VeleroNamespace).Get(ctx, location, metav1.GetOptions{})
 	if err != nil {
-		s.veleroError(w, c, err)
+		s.veleroError(w, r, c, err)
 		return "", false
 	}
 	from := l.GetAnnotations()[provisioner.BackupSourceAnnotation]
@@ -310,11 +310,11 @@ func (s *Server) showRestoreResults(w http.ResponseWriter, r *http.Request, u us
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), veleroTimeout)
 	defer cancel()
-	v, ok := s.openVelero(ctx, w, u, c, provisioner.IdentityBackups)
+	v, ok := s.openVelero(ctx, w, r, u, c, provisioner.IdentityBackups)
 	if !ok {
 		return
 	}
-	of, link, ok := s.restoreResultsLink(ctx, w, v, c, name)
+	of, link, ok := s.restoreResultsLink(ctx, w, r, v, c, name)
 	if !ok {
 		return
 	}
@@ -323,11 +323,11 @@ func (s *Server) showRestoreResults(w http.ResponseWriter, r *http.Request, u us
 
 // restoreResultsLink finds a finished restore's results: the cluster in whose folder of the target
 // they are, and the link Velero signed to them. It answers the request when it cannot.
-func (s *Server) restoreResultsLink(ctx context.Context, w http.ResponseWriter, v dynamic.Interface, c *clusterv1.Cluster, name string) (string, string, bool) {
+func (s *Server) restoreResultsLink(ctx context.Context, w http.ResponseWriter, r *http.Request, v dynamic.Interface, c *clusterv1.Cluster, name string) (string, string, bool) {
 	var of, link string
 	restore, err := v.Resource(veleroRestores).Namespace(provisioner.VeleroNamespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		s.veleroError(w, c, err)
+		s.veleroError(w, r, c, err)
 		return "", "", false
 	}
 	x := restoreOf(restore, nil)
@@ -340,11 +340,11 @@ func (s *Server) restoreResultsLink(ctx context.Context, w http.ResponseWriter, 
 		return "", "", false
 	}
 	if of, err = restoredFrom(ctx, v, c, x.Backup); err != nil {
-		s.veleroError(w, c, err)
+		s.veleroError(w, r, c, err)
 		return "", "", false
 	}
 	if link, err = veleroDownloadLink(ctx, v, "RestoreResults", name); err != nil {
-		s.veleroError(w, c, err)
+		s.veleroError(w, r, c, err)
 		return "", "", false
 	}
 	return of, link, true
@@ -356,7 +356,7 @@ func (s *Server) writeRestoreResults(ctx context.Context, w http.ResponseWriter,
 	targets := &provisioner.ClusterTargets{Client: u.kube, ClassNamespace: s.ClassNamespace}
 	body, err := targets.VeleroDownload(ctx, c, of, link)
 	if err != nil {
-		s.Log.Info("reading a restore's results", "cluster", c.Namespace+"/"+c.Name, "restore", name, "error", err)
+		s.Log.InfoContext(ctx, "reading a restore's results", "cluster", c.Namespace+"/"+c.Name, "restore", name, "error", err)
 		if errors.Is(err, provisioner.ErrNoObject) {
 			writeError(w, http.StatusNotFound, "Velero left no results of the restore in the target")
 			return
@@ -367,7 +367,7 @@ func (s *Server) writeRestoreResults(ctx context.Context, w http.ResponseWriter,
 	defer func() { _ = body.Close() }()
 	results, err := restoreResultsOf(body)
 	if err != nil {
-		s.Log.Info("reading a restore's results", "cluster", c.Namespace+"/"+c.Name, "restore", name, "error", err)
+		s.Log.InfoContext(ctx, "reading a restore's results", "cluster", c.Namespace+"/"+c.Name, "restore", name, "error", err)
 		writeError(w, http.StatusBadGateway, "the results in the target could not be read")
 		return
 	}

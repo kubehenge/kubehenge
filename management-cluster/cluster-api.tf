@@ -401,6 +401,7 @@ resource "helm_release" "kubehenge" {
         clusterRole  = proxmox_virtual_environment_role.cluster_vms.role_id
         ha           = var.proxmox_ha
         etcdRestore  = var.etcd_restore
+        bootLogs     = var.node_boot_logs
         datastoreAllocate = {
           role               = var.cluster_datastore_allocate ? proxmox_virtual_environment_role.cluster_datastore[0].role_id : ""
           managementStorages = local.management_storages

@@ -250,6 +250,7 @@ run "controller_and_clusters_are_least_privilege" {
         clusterRole  = "kubehenge-cluster-vms"
         ha           = false
         etcdRestore  = false
+        bootLogs     = true
         datastoreAllocate = {
           role               = ""
           managementStorages = ["local-lvm", "local"]
@@ -419,6 +420,36 @@ run "cluster_sys_audit_off" {
       !contains(output.proxmox_objects.groups, "kubehenge-clusters-audit")
     )
     error_message = "switched off, no cluster may hold Sys.Audit on / and the controller may add no one to a group for it"
+  }
+}
+
+run "node_boot_logs" {
+  command = plan
+
+  assert {
+    condition = (
+      contains(proxmox_virtual_environment_role.provisioner_pools.privileges, "VM.GuestAgent.FileRead") &&
+      length([for p in proxmox_virtual_environment_role.provisioner_pools.privileges : p if startswith(p, "VM.GuestAgent.") && p != "VM.GuestAgent.FileRead"]) == 0 &&
+      proxmox_acl.provisioner["/pool/${var.workload_pool} kubehenge-provisioner-pools"].propagate &&
+      yamldecode(helm_release.kubehenge.values[0]).proxmox.bootLogs
+    )
+    error_message = "by default the controller's token reads files through the guest agent in the workload pool, and nothing more of the agent's"
+  }
+}
+
+run "node_boot_logs_off" {
+  command = plan
+
+  variables {
+    node_boot_logs = false
+  }
+
+  assert {
+    condition = (
+      length([for p in proxmox_virtual_environment_role.provisioner_pools.privileges : p if startswith(p, "VM.GuestAgent.")]) == 0 &&
+      !yamldecode(helm_release.kubehenge.values[0]).proxmox.bootLogs
+    )
+    error_message = "switched off, the controller's token holds no guest agent privilege and the controller reads no boot logs through it"
   }
 }
 

@@ -1,5 +1,6 @@
 import type {
   BackupRun,
+  BootLog,
   Bridge,
   ChangeRequest,
   Cluster,
@@ -43,13 +44,19 @@ import type {
 
 export class ApiError extends Error {
   readonly status: number;
+  /** The id the interface gave the request, which its journal lines carry; "" when none came. */
+  readonly requestId: string;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, requestId = "") {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.requestId = requestId;
   }
 }
+
+/** referenceMark sets a request's id apart from the message an error shows it under. */
+export const referenceMark = "\nReference: ";
 
 const httpUnauthorized = 401;
 
@@ -98,17 +105,21 @@ async function fetchAnswer(path: string, init: RequestInit): Promise<Response> {
 }
 
 // errorOf is the API's own message in a failed answer's body, or "" when the body is not its JSON
-// error.
-async function errorOf(res: Response): Promise<string> {
+// error, and the request's id, from the body or else the header.
+async function errorOf(res: Response): Promise<{ message: string; requestId: string }> {
+  const found = { message: "", requestId: res.headers.get("X-Request-Id") ?? "" };
   try {
     const data: unknown = await res.json();
     if (typeof data === "object" && data !== null && "error" in data && typeof data.error === "string") {
-      return data.error;
+      found.message = data.error;
+      if ("requestId" in data && typeof data.requestId === "string" && data.requestId !== "") {
+        found.requestId = data.requestId;
+      }
     }
   } catch {
     // The body was not JSON.
   }
-  return "";
+  return found;
 }
 
 /** httpPreconditionFailed answers a change made against a cluster someone has changed since. */
@@ -140,11 +151,11 @@ async function send(method: string, path: string, { body, headers: extra = {} }:
   const res = await fetchAnswer(path, init);
   noteRelease(res);
   if (!res.ok) {
-    const message = (await errorOf(res)) || res.statusText;
+    const { message, requestId } = await errorOf(res);
     if (res.status === httpUnauthorized && !path.startsWith("/api/session")) {
       onSignedOut?.();
     }
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message || res.statusText, requestId);
   }
   return res;
 }
@@ -254,6 +265,11 @@ export interface Api {
   talosconfig: (ns: string, name: string) => Promise<Blob>;
   /** retryTalosUpgrade takes back the failed node upgrade that holds a Talos cluster's others. */
   retryTalosUpgrade: (ns: string, name: string) => Promise<void>;
+  /** supportBundle is a cluster's .tar.gz of its objects, events and the logs naming them. */
+  supportBundle: (ns: string, name: string) => Promise<Blob>;
+  bootLog: (ns: string, name: string, machine: string) => Promise<BootLog>;
+  /** askBootLog has the controller read a machine's boot log again. */
+  askBootLog: (ns: string, name: string, machine: string) => Promise<BootLog>;
   ingressCA: (ns: string, name: string) => Promise<Blob>;
   storedCredential: (purpose: string, cluster?: ClusterRef) => Promise<StoredCredential>;
   storeCredential: (purpose: string, values: Record<string, string>, cluster?: ClusterRef) => Promise<StoredCredential>;
@@ -345,6 +361,11 @@ export const api: Api = {
   kubeconfig: (ns, name) => download("GET", `${clusterPath(ns, name)}/kubeconfig`),
   talosconfig: (ns, name) => download("GET", `${clusterPath(ns, name)}/talosconfig`),
   retryTalosUpgrade: (ns, name) => act("DELETE", `${clusterPath(ns, name)}/talos-upgrade-failure`),
+  supportBundle: (ns, name) => download("GET", `${clusterPath(ns, name)}/support-bundle`),
+  bootLog: (ns, name, machine) =>
+    request("GET", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/boot-log`),
+  askBootLog: (ns, name, machine) =>
+    request("POST", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/boot-log`),
   ingressCA: (ns, name) => download("GET", `${clusterPath(ns, name)}/certificates/ca`),
   storedCredential: (purpose, cluster) => request("GET", credentialPath(purpose, cluster)),
   storeCredential: (purpose, values, cluster) => request("PUT", credentialPath(purpose, cluster), { values }),

@@ -178,6 +178,16 @@ func TestWaitOperatorNeedsANamespace(t *testing.T) {
 	}
 }
 
+func TestDiagnoseNeedsNamespaceAndCluster(t *testing.T) {
+	t.Parallel()
+	for _, arg := range []string{"web", "team-a/", "/web"} {
+		_, err := run(t, "diagnose", arg)
+		if err == nil || !strings.Contains(err.Error(), "<namespace>/<cluster>") {
+			t.Errorf("%s: err = %v", arg, err)
+		}
+	}
+}
+
 func TestTemplateCreateNeedsANode(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {

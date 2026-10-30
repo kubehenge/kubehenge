@@ -362,6 +362,13 @@ variable "cluster_sys_audit" {
   nullable    = false
 }
 
+variable "node_boot_logs" {
+  description = "Let Kubehenge's controller read the boot logs of kubeadm, RKE2 and k3s nodes when asked, with its own token holding VM.GuestAgent.FileRead on the workload pool. Through the guest agent it can then read any file of a cluster's VMs that the agent's policy in the VM lets it open, which Kubehenge's node templates limit to cloud-init's output and the node's copy of its boot's journals; it runs no commands. Off, the token holds no guest agent privilege, and only Talos nodes' boot logs, read through their Talos API, are offered."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 variable "extra_cluster_namespaces" {
   description = "More namespaces of the management cluster for workload clusters, beside clusters: the web interface creates, changes and hands out kubeconfigs of clusters in each, with the same rights it has in clusters, and lets whoever creates a cluster choose among them. The namespaces are created when missing and kept with their clusters when taken out of the list; the interface's rights there go. None may be one of Kubernetes', the providers' or Kubehenge's own: default, kube-*, *-system or cert-manager."
   type        = list(string)

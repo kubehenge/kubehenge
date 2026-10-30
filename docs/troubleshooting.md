@@ -24,6 +24,10 @@ pct exec <ctid> -- journalctl -u kubehenge-headlamp
 
 The interface logs in JSON, one line per event, and every change names the user who made it: clusters created, changed and deleted, kubeconfigs and management cluster credentials handed out, applies and removals of the management cluster, upgrades requested.
 
+- **An error's reference:** every answer of the interface carries a request id in its `X-Request-Id` header, and an error shows it under its message as "Reference: …". Every line the interface logs for that request carries it as `requestId`: `pct exec <ctid> -- journalctl -u kubehenge --grep <reference>`.
+- **More in the journal:** add `KUBEHENGE_LOG_LEVEL=debug` to `/etc/kubehenge/appliance.env` and restart `kubehenge`; `warn` or `error` log less. `KUBEHENGE_LOG_DEVELOPMENT=true` adds to each line where in the code it was logged. Upgrades keep both. The same are the `--log-level` and `--log-development` flags of `kubehenge serve`.
+- **Whether it answers:** `https://<appliance>/healthz` answers `ok` to anyone, signed in or not, and says nothing more; a monitor can watch it.
+
 - **The last run of the management cluster** shows on the Administration page, with its error and log when it failed, and stays there after a restart; one cut off by a restart says so.
 - **The last template build** shows under VM templates on the same page, kept the same way.
 - **The last weekly template build** shows below it under Automatic builds, with its log, from the ConfigMap `kubehenge-template-refresh` in the management cluster's `kubehenge-system`; the run itself is a Job of the CronJob of that name, whose pod's log has the whole of it: `kubectl -n kubehenge-system logs job/<name>`. A run that reads "no API token" found no Secret `kubehenge-template-builder` with the builder's token: the module makes it, and a management cluster installed from the chart alone needs it made, or `templateRefresh.enabled` set to false.
@@ -59,6 +63,20 @@ Kubehenge's controller, `kubehenge-controller` in `kubehenge-system`, creates ea
 | `helm-addon-system` | the Add-on Provider for Helm, which installs add-ons into clusters |
 | `capi-operator-system` | the Cluster API Operator, which installs and upgrades the providers |
 
+The controller logs at the chart's `controllerLogs.level` (`debug`, `info`, `warn` or `error`), and with `controllerLogs.development` adds stack traces from warnings on; in JSON either way.
+
+Its metrics are served over HTTPS by the Service `kubehenge-controller-metrics` in `kubehenge-system`, port 8443, to whoever the API server lets get `/metrics`: bind the ClusterRole `kubehenge-metrics-reader` to a scraper's account. Beside controller-runtime's own (reconciles, their errors and durations, work queues), `kubehenge_hook_waits_total`, `kubehenge_hook_refusals_total` and `kubehenge_hook_duration_seconds`, by hook, say how often Kubehenge's Cluster API hooks held a cluster back or refused it, and how long they took. The management cluster runs no scraper of its own. The controller serves them with its Runtime Extension certificate, made for `kubehenge-controller-metrics.kubehenge-system.svc` too, whose CA is `ca.crt` in the Secret `kubehenge-extension-tls`. To read them once, with the admin kubeconfig, through an account that holds the role:
+
+```sh
+kubectl -n kubehenge-system create serviceaccount metrics-reader
+kubectl create clusterrolebinding metrics-reader --clusterrole kubehenge-metrics-reader --serviceaccount kubehenge-system:metrics-reader
+kubectl -n kubehenge-system get secret kubehenge-extension-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > metrics-ca.crt
+kubectl -n kubehenge-system port-forward service/kubehenge-controller-metrics 8443 &
+curl -sS --cacert metrics-ca.crt --resolve kubehenge-controller-metrics.kubehenge-system.svc:8443:127.0.0.1 \
+  -H "Authorization: Bearer $(kubectl -n kubehenge-system create token metrics-reader)" \
+  https://kubehenge-controller-metrics.kubehenge-system.svc:8443/metrics
+```
+
 ### Cluster API objects
 
 A cluster's objects are in its namespace, `clusters` for those created in the interface unless another of its namespaces was chosen:
@@ -69,7 +87,9 @@ kubectl -n clusters describe cluster prod
 kubectl -n clusters get helmchartproxies,helmreleaseproxies
 ```
 
-- **The Cluster's conditions**, also on the cluster's page, say what holds it up, including what Kubehenge's hooks are waiting for.
+- **The Cluster's conditions**, also on the cluster's page, say what holds it up, including what Kubehenge's hooks are waiting for. Two are Kubehenge's own, shown above the views of the cluster's page and counted among those that need you:
+  - `KubehengeReady` is `False` with the error the controller last met on the cluster, until a reconcile succeeds; each error is also a Warning event `ReconcileFailed` on the Cluster, repeats counted in one. A Proxmox VE task that failed is named by its UPID, as the node's task log lists it, with the last lines of its log.
+  - `MachinesStalled` is `True` when a machine is not ready and none has become ready for 20 minutes, with the worst its Machines and ProxmoxMachines report, such as `VM template not found`; it comes with a Warning event `MachinesStalled`. A change or creation in the interface then shows as stalled under **Runs**.
 - **The Cluster's events** (`kubectl -n clusters describe cluster prod`) record what Kubehenge's controller did, held back or could not do, and why; the cluster's **Health** view lists the warnings among them. Each feature's events are under its problem below.
 - **Machines and ProxmoxMachines** say, per node, whether the VM was cloned, started and joined.
 - **HelmChartProxies and HelmReleaseProxies** are the add-ons: the cloud controller manager, the CSI plugin, a CNI that Kubehenge installs, Headlamp and Rancher.
@@ -85,6 +105,36 @@ With the cluster's admin kubeconfig ([clusters.md](clusters.md#download-a-kubeco
 kubectl --kubeconfig prod.kubeconfig -n kube-system get pods -o wide
 kubectl --kubeconfig prod.kubeconfig get nodes -o wide
 ```
+
+### A node's boot log
+
+When a machine's VM was cloned and started but its node never joined, its boot log says why: **Boot log** on the machine in the cluster's **Machines** view, for those with `Sys.Modify` on the cluster's pool. The controller reads it and keeps it in the ConfigMap `<cluster>-boot-logs` beside the Cluster, one key per machine, so it is there for kubectl too; asking adds the machine to the Cluster's `kubehenge.dev/boot-log-request` annotation, which the controller takes the name off once the log is written:
+
+```sh
+kubectl -n clusters annotate cluster prod kubehenge.dev/boot-log-request=prod-cp-abcde --overwrite
+kubectl -n clusters get configmap prod-boot-logs -o jsonpath='{.data.prod-cp-abcde}'
+```
+
+- **kubeadm, RKE2 and k3s:** the end of `/var/log/cloud-init-output.log`, and of the journals of cloud-init, `containerd`, `kubelet`, `rke2-server`, `rke2-agent`, `k3s` and `k3s-agent`, whichever the node has, from the copy the node keeps of them in `/var/log/kubehenge/boot.log` from boot on, a few seconds old at most. The controller reads both files through the VM's QEMU guest agent with its own token, which holds `VM.GuestAgent.FileRead` on the workload pool for it: files only, no commands, and only those the node's agent policy opens. With `node_boot_logs` off ([install.md](install.md#settings)) the log says it is switched off. A VM that is off, or whose guest agent does not answer, is named as such; a node built from a template older than the copy has cloud-init's output alone.
+- **Talos:** the kernel messages and the logs of `machined`, `apid`, `kubelet` and, on control planes, `trustd` and `etcd`, read through the node's Talos API with the cluster's talosconfig. A node that has no address yet, or never took its configuration, cannot be reached that way; its VM's console in Proxmox VE shows its boot.
+
+Tokens and passwords in the lines are replaced by `[REDACTED]`.
+
+### A cluster's support bundle
+
+A support bundle is one `.tar.gz` with what helps find why a cluster is stuck, to look through or to attach to an issue. **Support bundle** on the cluster's page downloads it, for those with `Sys.Modify` on the cluster's pool; with the management cluster's kubeconfig ([Repair access](#the-management-cluster)), `kubehenge diagnose` writes the same one:
+
+```sh
+KUBECONFIG=management.kubeconfig kubehenge diagnose clusters/prod
+```
+
+- `objects/`: the Cluster and every object of Cluster API and its providers that belongs to it (machines, their VMs, bootstrap configurations and control plane, IP addresses, add-on releases), never a Secret.
+- `events.yaml`: their events, oldest first.
+- `boot-logs.yaml`: the boot logs read for its machines, if any were asked for.
+- `logs/`: the lines of the recent logs of Kubehenge's controller, capmox and the Add-on Provider for Helm that name one of its objects, and, when written on the appliance (from the interface, or `pct exec <ctid> -- env KUBECONFIG=/var/lib/kubehenge/interface.kubeconfig kubehenge diagnose clusters/prod -o /root/prod.tar.gz`), those of the interface's journal.
+- `manifest.txt`: what it holds, and what could not be read and why.
+
+Fields and lines that hold tokens, passwords, keys or a talosconfig are replaced by `[REDACTED]`. A line of a log is kept only when it names one of the cluster's objects exactly, so the bundle tells nothing of other clusters; still read it through before you share it.
 
 ### Proxmox VE
 

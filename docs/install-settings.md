@@ -75,6 +75,14 @@ The cloud controller manager labels each node with the Proxmox VE HA groups, or 
 
 To keep every cluster's token from reading the Proxmox VE cluster's configuration, untick **HA group labels** in the setup, or set `cluster_sys_audit = false`. That removes the group, and with it every cluster's `Sys.Audit` on `/`; new clusters go without the labels, and the cloud controller manager logs a permission error for each node every few minutes ([troubleshooting.md](troubleshooting.md)).
 
+## Nodes' boot logs
+
+A node that never joins its cluster says why in its boot log ([troubleshooting.md](troubleshooting.md#a-nodes-boot-log)). Talos nodes' logs are read through their Talos API. Every kubeadm, RKE2 and k3s node keeps the end of its boot's journals in a file of its own, beside cloud-init's output, and the controller reads both through the VM's QEMU guest agent, so this setting is on by default:
+
+- **What it grants:** Kubehenge's controller's token holds `VM.GuestAgent.FileRead` on the workload pool, propagated. Proxmox VE lets it read files in every cluster VM through the guest agent with that, and nothing else of the agent's: no commands, no writes.
+- **What it reaches:** only the files the node's guest agent may open. Kubehenge's node templates allow the agent to read cloud-init's output and the node's copy of its journals (`/var/log/kubehenge`, root's alone), and its SELinux policy keeps it from the rest of `/var/log` and from the node's keys and kubeconfigs. A VM cloned from a template of your own reaches what its agent allows.
+- **Switching it off,** by unticking **Nodes' boot logs** in the setup or setting `node_boot_logs = false`, takes the privilege away; the interface and `kubectl` then offer Talos nodes' boot logs alone.
+
 ## Headlamp sign-in
 
 Without it, everyone signs in to each cluster in the shared Headlamp with a token or an identity provider of their own. With it, those who hold `Sys.Modify` on a cluster's pool, who may download its admin kubeconfig anyway, open it signed in as cluster-admin; nobody else gets more than before. It needs no Proxmox VE privilege beyond the setup's own.

@@ -13,3 +13,12 @@
 (allow unconfined_service_t virt_qemu_ga_t (fd (use)))
 (allow unconfined_service_t virt_qemu_ga_t (fifo_file (getattr read write append ioctl lock)))
 (allow unconfined_service_t virt_qemu_ga_t (process (sigchld)))
+; Through guest-file-read, which Proxmox VE grants holders of VM.GuestAgent.FileRead, the agent reads
+; cloud-init's output and the copy of the boot's journals that kubehenge-boot-log.service writes, and
+; nothing else of /var/log. The copy takes the type of the agent's own logs rather than a new type,
+; which would need the attributes every other domain's rules on files go by.
+(filecon "/var/log/kubehenge(/.*)?" any (system_u object_r virt_qemu_ga_log_t ((s0) (s0))))
+(allow virt_qemu_ga_t var_log_t (dir (getattr search)))
+(allow virt_qemu_ga_t virt_qemu_ga_log_t (dir (getattr search open read)))
+(allow virt_qemu_ga_t virt_qemu_ga_log_t (file (getattr open read)))
+(allow virt_qemu_ga_t cloud_log_t (file (getattr open read)))

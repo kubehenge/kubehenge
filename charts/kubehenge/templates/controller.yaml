@@ -53,6 +53,11 @@ rules:
   - apiGroups: [""]
     resources: [secrets]
     verbs: [get, create, update, patch, delete]
+  # The boot logs of the machines a cluster asks for, <cluster>-boot-logs beside it, which the
+  # Cluster owns and takes with it.
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, create, update]
   - apiGroups: [addons.cluster.x-k8s.io]
     resources: [clusterresourcesets]
     verbs: [get, list, watch, create, update, patch]
@@ -91,6 +96,22 @@ rules:
     resources: [extensionconfigs]
     resourceNames: [kubehenge]
     verbs: [patch]
+  # The metrics endpoint asks the API server who calls it and whether they may get /metrics.
+  - apiGroups: [authentication.k8s.io]
+    resources: [tokenreviews]
+    verbs: [create]
+  - apiGroups: [authorization.k8s.io]
+    resources: [subjectaccessreviews]
+    verbs: [create]
+---
+# Bound to a scraper's account, it lets the scraper read the controller's metrics, and nothing else.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubehenge-metrics-reader
+rules:
+  - nonResourceURLs: [/metrics]
+    verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -292,6 +313,7 @@ spec:
             {{- with .Values.proxmox.sysAuditGroup }}
             - --sys-audit-group={{ . }}
             {{- end }}
+            - --boot-logs={{ .Values.proxmox.bootLogs }}
             - --csi-proxy-image={{ .Values.image }}
             {{- range $flag, $chart := dict "ccm-chart" .Values.addons.cloudControllerManager "csi-chart" .Values.addons.csiPlugin "csi-newest-chart" .Values.addons.csiPluginNewest "snapshot-controller-chart" .Values.addons.snapshotController "cilium-chart" .Values.addons.cilium "calico-chart" .Values.addons.calico "headlamp-chart" .Values.addons.headlamp "rancher-chart" .Values.addons.rancher "cert-manager-chart" .Values.addons.certManager "monitoring-chart" .Values.addons.monitoring "loki-chart" .Values.addons.loki "alloy-chart" .Values.addons.alloy "velero-chart" .Values.addons.velero "kyverno-chart" .Values.addons.kyverno "kyverno-policies-chart" .Values.addons.kyvernoPolicies "istio-chart" .Values.addons.istio "istio-base-chart" .Values.addons.istioBase "istio-cni-chart" .Values.addons.istioCNI "istio-ztunnel-chart" .Values.addons.istioZtunnel "traefik-chart" .Values.addons.traefik "metallb-chart" .Values.addons.metallb "kube-vip-chart" .Values.addons.kubeVip "kube-vip-cloud-provider-chart" .Values.addons.kubeVipCloudProvider "argocd-chart" .Values.addons.argocd "flux-operator-chart" .Values.addons.fluxOperator }}
             - --{{ $flag }}={{ $chart.repository }}/{{ $chart.chart }}:{{ $chart.version }}
@@ -332,6 +354,9 @@ spec:
             {{- range $class, $namespaces := .Values.providerNamespaces }}
             - --class-providers={{ $class }}={{ join "," $namespaces }}
             {{- end }}
+            - --metrics-address=:8443
+            - --log-level={{ .Values.controllerLogs.level }}
+            - --log-development={{ .Values.controllerLogs.development }}
           env:
             - name: POD_NAMESPACE
               valueFrom:
@@ -367,6 +392,8 @@ spec:
               containerPort: 9443
             - name: health
               containerPort: 8081
+            - name: metrics
+              containerPort: 8443
           # A node that stalls for half a minute, every controller on it busy at once, is no reason
           # to restart the only replica: its webhooks refuse every Cluster while it starts again.
           readinessProbe:
@@ -428,6 +455,23 @@ spec:
     - port: 443
       targetPort: extension
 ---
+# The controller's metrics, over HTTPS, for whoever the API server lets get /metrics
+# (kubehenge-metrics-reader).
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubehenge-controller-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+spec:
+  selector:
+    {{- toYaml $labels | nindent 4 }}
+  ports:
+    - name: metrics
+      port: 8443
+      targetPort: metrics
+---
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
@@ -443,8 +487,10 @@ metadata:
   namespace: {{ .Release.Namespace }}
 spec:
   secretName: {{ $tls }}
+  # The controller serves its metrics with it too, which a scraper verifies against its ca.crt.
   dnsNames:
     - {{ $extension }}.{{ .Release.Namespace }}.svc
+    - kubehenge-controller-metrics.{{ .Release.Namespace }}.svc
   issuerRef:
     kind: Issuer
     name: {{ $extension }}

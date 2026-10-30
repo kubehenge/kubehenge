@@ -25,7 +25,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
-	"k8s.io/client-go/util/retry"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -706,32 +705,10 @@ func (s *EtcdSnapshotter) record(ctx context.Context, cluster *clusterv1.Cluster
 	return nil
 }
 
-// condition sets the snapshot condition on the cluster, or takes it away when cond is nil, beside
-// the conditions Cluster API sets, which a conflict has it read again for.
+// condition sets the snapshot condition on the cluster, or takes it away when cond is nil.
 func (s *EtcdSnapshotter) condition(ctx context.Context, cluster *clusterv1.Cluster, cond *metav1.Condition) error {
-	key := client.ObjectKeyFromObject(cluster)
-	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		c := &clusterv1.Cluster{}
-		if err := s.Client.Get(ctx, key, c); err != nil {
-			return fmt.Errorf("reading the cluster: %w", err)
-		}
-		before := c.DeepCopy()
-		var changed bool
-		if cond == nil {
-			changed = meta.RemoveStatusCondition(&c.Status.Conditions, EtcdSnapshotCondition)
-		} else {
-			cond.ObservedGeneration = c.Generation
-			changed = meta.SetStatusCondition(&c.Status.Conditions, *cond)
-		}
-		if !changed {
-			return nil
-		}
-		return s.Client.Status().Patch(ctx, c, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))
-	})
-	if err != nil {
-		return fmt.Errorf("setting the cluster's %s condition: %w", EtcdSnapshotCondition, err)
-	}
-	return nil
+	_, err := setClusterCondition(ctx, s.Client, client.ObjectKeyFromObject(cluster), EtcdSnapshotCondition, cond)
+	return err
 }
 
 func (s *EtcdSnapshotter) now() time.Time {

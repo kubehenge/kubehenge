@@ -448,7 +448,8 @@ func (a *Accounts) waitTask(ctx context.Context, t *Ticket, node, upid string) e
 		}
 		if st.Status == "stopped" {
 			if st.ExitStatus != "OK" {
-				return fmt.Errorf("proxmox VE task %s: %s", upid, st.ExitStatus)
+				get := func(ctx context.Context, path string, out any) error { return a.get(ctx, t, path, out) }
+				return TaskFailed(ctx, get, node, upid, st.ExitStatus)
 			}
 			return nil
 		}

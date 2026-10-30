@@ -113,7 +113,7 @@ func (s *Server) newRanges(w http.ResponseWriter, r *http.Request, u user, req *
 			return nil, nil, false
 		}
 		if others, err = s.otherClusterRanges(r.Context(), u); err != nil {
-			s.kubeError(w, err)
+			s.kubeError(w, r, err)
 			return nil, nil, false
 		}
 	}

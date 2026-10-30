@@ -153,13 +153,13 @@ Kubehenge's controller first gives the cluster its Proxmox VE pool, user, token 
 
 Every page shows the fleet down its left side, grouped by where each cluster stands, each with why in a few words:
 
-- **Needs you:** something failed and waits for someone: a failed Talos upgrade, a failed machine, a cluster Cluster API reports failed, or one still not available an hour after it was created. So does a cluster whose [health page](#the-cluster-page) finds trouble, such as an API server that does not answer, a node that is not ready or a pod that keeps crashing; the line names the worst of it.
+- **Needs you:** something failed and waits for someone: a failed Talos upgrade, a failed machine, a cluster Cluster API reports failed, one still not available an hour after it was created, one Kubehenge's controller fails on, or one whose machines are stuck ([below](#the-cluster-page)). So does a cluster whose [health page](#the-cluster-page) finds trouble, such as an API server that does not answer, a node that is not ready or a pod that keeps crashing; the line names the worst of it.
 - **Running:** a change is under way: a cluster being created, upgraded, rolled out, scaled or deleted, or an add-on still being installed.
 - **Healthy:** nothing is going on and its health page finds nothing; the line under the name says what it runs.
 
 Each entry opens the view that says more: the health page for what it found, the machines for a rollout. The health pages are read for the whole fleet at most every 30 seconds.
 
-Down the right side of a wide window, **Runs** follows the work that goes on by itself once started: the same changes to clusters, and each cluster's etcd snapshots and restores and its backups and restores, each with how far it has come. Those who may set up the management cluster also see its applies, the template builds and refreshes, and the appliance's upgrades. A run that failed stays there for a day with the first error it reported; one that went well, for an hour. It folds away with **›** or `R`; in a narrower window **Running** in the top bar shows it.
+Down the right side of a wide window, **Runs** follows the work that goes on by itself once started: the same changes to clusters, and each cluster's etcd snapshots and restores and its backups and restores, each with how far it has come. Those who may set up the management cluster also see its applies, the template builds and refreshes, and the appliance's upgrades. A run that failed stays there for a day with the first error it reported; one that went well, for an hour. A change or a creation whose machines are stuck moves under **Stalled**, with the worst its machines report, and back under **Running** once one of them is ready. It folds away with **›** or `R`; in a narrower window **Running** in the top bar shows it.
 
 Each run opens a page of its own: what it does and on which cluster, who started it and how long it has taken, the first error pinned at the top, and its steps, each done, under way or waiting. A change [applied here](#staged-changes) is a run too, kept for a day, in place of the cluster's line under **Running**: accepted by the API server, then the control-plane machines or the workers it replaces, counted as the new ones are ready and the old ones gone, or the machines it adds or removes, then the cluster settling once its topology has taken the change in and it is available. An etcd restore shows its phases; the management cluster's applies and the template builds show the end of their log.
 
@@ -177,15 +177,20 @@ Each run opens a page of its own: what it does and on which cluster, who started
 
 ## The cluster page
 
-The buttons beside the cluster's name act on the whole cluster: **Scale**, **Upgrade**, **Kubeconfig**, **Headlamp** and **Delete**. **Kubeconfig** and **Headlamp** appear once the cluster is available (Kubeconfig for those with `Sys.Modify` on its pool, Headlamp for clusters in the interface's namespaces); without `VM.Allocate` on its pool, or while it is being deleted, the others are disabled and the page says why. The tabs under the name switch between its views:
+The buttons beside the cluster's name act on the whole cluster: **Scale**, **Upgrade**, **Kubeconfig**, **Support bundle**, **Headlamp** and **Delete**. **Kubeconfig** and **Headlamp** appear once the cluster is available (Kubeconfig for those with `Sys.Modify` on its pool, Headlamp for clusters in the interface's namespaces); **Support bundle** appears for those with `Sys.Modify` on its pool and downloads the same bundle as `kubehenge diagnose` ([troubleshooting.md](troubleshooting.md#a-clusters-support-bundle)); without `VM.Allocate` on its pool, or while it is being deleted, the others are disabled and the page says why. The tabs under the name switch between its views:
 
 - **Summary:** first the cluster's machines laid out by the Proxmox VE node their VMs run on, control planes first, each with its state; the other nodes you may see follow empty, as places new machines may go, and the machines whose node you may not see come last. It carries the Machines view's warning when one node runs more than one control-plane VM. Then its status, distribution, Kubernetes version, API endpoint, pod and service ranges, ready control-plane nodes and workers, with autoscaled pools as `md-0: 2 of 0 to 5, autoscaled`, Proxmox VE pool, namespace, who created it when, the last automatic upgrade, and for kubeadm, RKE2 and k3s which build of their VM template the nodes run, when they next move to a newer one and when they last did ([Node image refresh](#node-image-refresh)), and for Talos the release the nodes run, the one new machines boot first when it differs, the node being upgraded and the last upgrade ([Talos upgrades](#talos-upgrades)).
 - **Health:** whether the cluster is healthy, changing, degraded or unreachable, with tiles for the control plane (and etcd, on kubeadm), workers, node pressure, unwell pods, add-ons and machine health checks; then what needs attention, most serious first, each linking to its details. Below come the nodes (ready, pressure, cordons and taints, what their pods ask for, and the VM's CPU over the last hour and its memory, as far as you may see the VMs), the pods that are not well (crash loops, images that do not pull, pods that cannot be scheduled, containers killed for memory), volume claims still waiting, the add-ons' Helm releases, the worker pools, the control plane's and the health checks' conditions, the last hour's warnings from inside the cluster and from Cluster API, and last the cluster's own conditions. Those with `Sys.Modify` on the cluster's pool also get **Logs** on each unwell pod: the last 60 lines of a container, from its last run when it has not run since. With the shared Headlamp running, each pod also links to its page there. The page reads inside clusters of the interface's namespaces only; for others it shows what Cluster API knows.
-- **Machines:** each node's role, status, phase, version, addresses, age, and the Proxmox VE node its VM runs on, as far as you may see the cluster's VMs. When one Proxmox VE node runs more than one of the control-plane VMs, the page warns and says what losing that node would cost; migrating one of them in Proxmox VE to a node of its own fixes it.
+- **Machines:** each node's role, status, phase, version, addresses, age, and the Proxmox VE node its VM runs on, as far as you may see the cluster's VMs. When one Proxmox VE node runs more than one of the control-plane VMs, the page warns and says what losing that node would cost; migrating one of them in Proxmox VE to a node of its own fixes it. Those with `Sys.Modify` on the cluster's pool also get **Boot log** on each machine: what its node logged as it booted, read by the controller, for a node that never joined ([troubleshooting.md](troubleshooting.md#a-nodes-boot-log)).
 - **Backups:** the cluster's backups and restores, with **Back up now** and **Restore…** ([Back up and restore](#back-up-and-restore)).
 - **Options:** every setting that can change once the cluster exists, each listed with what changing it does [below](#change-add-ons-and-sign-in). Each has **Edit** (**Upgrade** for the Talos release, **Uninstall** for Rancher on the cluster that runs it), disabled for those who may not change the cluster. The pod network and CIS hardening are fixed, so they have none.
 
 The status reads **Provisioning**, **Available**, **Upgrading** or **Reconciling** while a change rolls out, **Deleting**, or **Failed**. A cluster deleted while its page is open says so.
+
+Above the views, the page shows what Kubehenge's controller reports on the Cluster, as kubectl shows it too ([troubleshooting.md](troubleshooting.md#cluster-api-objects)):
+
+- **Controller error**, the error Kubehenge's controller last met there, such as a Proxmox VE task that failed with the end of its log, until a reconcile succeeds (the condition `KubehengeReady`).
+- **Machines stuck for 20 minutes**, when a machine is not ready and none has become ready for 20 minutes, the time the machine health check gives a node to join: the worst its Machines and ProxmoxMachines report, such as `VM template not found` (the condition `MachinesStalled`). Cluster API keeps trying meanwhile; the line goes once a machine is ready.
 
 ### Staged changes
 
@@ -676,4 +681,12 @@ A control plane whose roll stalled is recovered keeping one of its machines, as 
 ```sh
 kubectl -n clusters annotate cluster prod \
   kubehenge.dev/etcd-restore="{\"machine\":\"prod-cp-abcde\",\"at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+```
+
+What Kubehenge's controller reports on a cluster is on the Cluster itself, as in the interface:
+
+```sh
+kubectl -n clusters get cluster prod -o jsonpath='{range .status.conditions[?(@.type=="KubehengeReady")]}{.status} {.message}{"\n"}{end}'
+kubectl -n clusters get cluster prod -o jsonpath='{range .status.conditions[?(@.type=="MachinesStalled")]}{.status} {.message}{"\n"}{end}'
+kubectl -n clusters get events --field-selector involvedObject.name=prod,type=Warning
 ```

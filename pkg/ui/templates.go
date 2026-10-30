@@ -76,17 +76,17 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request, u user) {
 	job := s.Appliance.TemplateJob()
 	list, err := s.templates(r.Context(), u.ticket)
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
 	state, err := s.refreshState(r.Context(), s.currentKube())
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	needs, err := s.templateNeeds(r.Context(), list, state.soak())
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	for i := range list {
@@ -352,7 +352,7 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request, u user) 
 	// A build takes minutes, so it gets the whole of a fresh ticket's life.
 	ticket, err := s.Accounts.Renew(r.Context(), u.ticket)
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
 	err = s.Appliance.BuildTemplate(ticket, func(ctx context.Context, j *appliance.Job) error { //nolint:contextcheck // the build outlives the request on purpose
@@ -374,7 +374,7 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request, u user) 
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.Log.Info("template build started", "user", u.ticket.Username, "template", t.Name, "node", b.Node)
+	s.Log.InfoContext(r.Context(), "template build started", "user", u.ticket.Username, "template", t.Name, "node", b.Node)
 	writeJSON(w, http.StatusAccepted, s.Appliance.TemplateJob())
 }
 
@@ -389,7 +389,7 @@ func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request, u user) 
 	}
 	list, err := s.templates(r.Context(), u.ticket)
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
 	i := slices.IndexFunc(list, func(t templateView) bool { return t.VMID == vmid })
@@ -399,12 +399,12 @@ func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request, u user) 
 	}
 	state, err := s.refreshState(r.Context(), s.currentKube())
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	needs, err := s.templateNeeds(r.Context(), list, state.soak())
 	if err != nil {
-		s.kubeError(w, err)
+		s.kubeError(w, r, err)
 		return
 	}
 	if c := needs.of(list[i].Tags); c != "" {
@@ -412,9 +412,9 @@ func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request, u user) 
 		return
 	}
 	if err := s.Accounts.DeleteVM(r.Context(), u.ticket, list[i].Node, vmid); err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
-	s.Log.Info("deleted template", "user", u.ticket.Username, "template", list[i].Name, "vmid", vmid)
+	s.Log.InfoContext(r.Context(), "deleted template", "user", u.ticket.Username, "template", list[i].Name, "vmid", vmid)
 	w.WriteHeader(http.StatusNoContent)
 }

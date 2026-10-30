@@ -194,10 +194,15 @@ const avcDenied = `! journalctl -b -k -o cat --no-pager | grep -qF 'avc:  denied
 func nodeChecks(b Bake) [][]string {
 	checks := [][]string{
 		{cloudInit, "status", "--wait"},
-		{systemctl, "is-active", "qemu-guest-agent"},
+		active("qemu-guest-agent"),
 		// A template's own boot keeps what the bake enabled; a clone's first boot applies the
 		// presets again, and keeps only what they name.
-		{"grep", "-qx", "enable qemu-guest-agent.service", nodePreset},
+		preset("enable qemu-guest-agent.service"),
+		preset("enable " + bootLogUnit),
+		active(bootLogUnit),
+		// The copy as of now, rather than up to a quarter of a minute old, for the bake to read
+		// through the guest agent (checkBootLog).
+		{systemctl, "start", "kubehenge-boot-log.service"},
 		{"sh", "-c", `test "$(getenforce)" = Enforcing`},
 		{"sh", "-c", "semodule -l | grep -qx kubehenge-qga"},
 		{"sh", "-c", "! touch /usr/kubehenge 2> /dev/null"},
@@ -226,7 +231,7 @@ func nodeChecks(b Bake) [][]string {
 			[]string{"sh", "-c", "grep -qx 'enable containerd.service' " + nodePreset + " && grep -qx 'enable kubelet.service' " + nodePreset},
 			// The CNI installs its plugins there, beside the image's.
 			[]string{"sh", "-c", "touch /opt/cni/bin/.kubehenge && rm /opt/cni/bin/.kubehenge && test -x /opt/cni/bin/loopback"},
-			[]string{systemctl, "is-active", "containerd"},
+			active("containerd"),
 			// The control-plane images are in containerd, so nodes do not wait on the registry,
 			// and containerd starts pods on kubeadm's pause image among them.
 			[]string{"sh", "-c", "crictl images | grep -q kube-apiserver"},
@@ -234,11 +239,20 @@ func nodeChecks(b Bake) [][]string {
 		)
 		if _, r, err := ReleaseOf(b.NodeOS); err == nil && r.Mode == ImageMode {
 			// An image-mode clone's /opt is writable only while the presets keep its overlay.
-			checks = append(checks, []string{"grep", "-qx", "enable ostree-state-overlay@.service opt", nodePreset})
+			checks = append(checks, preset("enable ostree-state-overlay@.service opt"))
 		}
 	case Talos:
 	}
 	return append(checks, []string{"sh", "-c", avcDenied})
+}
+
+func active(unit string) []string {
+	return []string{systemctl, "is-active", unit}
+}
+
+// preset finds a whole line among the node's presets.
+func preset(line string) []string {
+	return []string{"grep", "-qx", line, nodePreset}
 }
 
 // nodeCleanup leaves the template as a fresh first boot: clones get their own machine ID, network
@@ -246,6 +260,9 @@ func nodeChecks(b Bake) [][]string {
 var nodeCleanup = [][]string{
 	{cloudInit, "clean", "--logs", "--seed", "--machine-id", "--configs", "all"},
 	{"sh", "-c", "journalctl --rotate > /dev/null && journalctl --vacuum-time=1s > /dev/null"},
+	// The timer stays enabled for clones; stopped, it copies none of the bake's journal again.
+	{systemctl, "stop", bootLogUnit},
+	{"rm", "-rf", "/var/log/kubehenge"},
 	{"fstrim", "--all"},
 	{"sync"},
 }

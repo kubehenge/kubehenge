@@ -30,7 +30,9 @@ const (
 
 // The states of a run.
 const (
-	runRunning   = "running"
+	runRunning = "running"
+	// runStalled is a change of a cluster whose machines stopped coming (MachinesStalled).
+	runStalled   = "stalled"
 	runSucceeded = "succeeded"
 	runFailed    = "failed"
 )
@@ -79,7 +81,7 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	held, err := s.Accounts.Privileges(r.Context(), u.ticket, "/")
 	if err != nil {
-		s.proxmoxError(w, err)
+		s.proxmoxError(w, r, err)
 		return
 	}
 	now := s.now()
@@ -120,12 +122,12 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request, u user) {
 	writeJSON(w, http.StatusOK, recentRuns(list, now))
 }
 
-// recentRuns keeps what runs and what finished lately, the running first, then the failed, each
-// newest first.
+// recentRuns keeps what runs and what finished lately, the running first, then the stalled, then
+// the failed, each newest first.
 func recentRuns(list []runView, now time.Time) []runView {
 	kept := slices.DeleteFunc(list, func(v runView) bool {
 		switch {
-		case v.State == runRunning:
+		case v.State == runRunning, v.State == runStalled:
 			return false
 		case v.State == "":
 			return true
@@ -137,7 +139,7 @@ func recentRuns(list []runView, now time.Time) []runView {
 			return now.Sub(*v.Finished) > runsSucceededShown
 		}
 	})
-	order := []string{runRunning, runFailed, runSucceeded}
+	order := []string{runRunning, runStalled, runFailed, runSucceeded}
 	slices.SortStableFunc(kept, func(a, b runView) int {
 		if n := slices.Index(order, a.State) - slices.Index(order, b.State); n != 0 {
 			return n
@@ -331,7 +333,7 @@ func (s *Server) readVeleroRuns(ctx context.Context, u user, c *clusterv1.Cluste
 	}
 	view := backupsView{}
 	if err := readVelero(ctx, v, &view); err != nil {
-		s.Log.Info("reading a cluster's backups for its runs", "cluster", clusterKey(c.Namespace, c.Name), "error", err)
+		s.Log.InfoContext(ctx, "reading a cluster's backups for its runs", "cluster", clusterKey(c.Namespace, c.Name), "error", err)
 		return nil
 	}
 	base := runView{Namespace: c.Namespace, Cluster: c.Name}
