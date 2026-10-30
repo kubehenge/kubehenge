@@ -58,8 +58,10 @@ install -D -m 0644 "${files}/node/cloud.cfg" /etc/cloud/cloud.cfg.d/90-kubehenge
 
 mkdir -p /usr/lib/bootc/install /usr/lib/bootc/kargs.d
 printf '[install]\nroot-fs-type = "xfs"\n' > /usr/lib/bootc/install/20-kubehenge.toml
-# Proxmox VE's console for Kubehenge's VMs is their serial port.
-printf 'kargs = ["console=tty0", "console=ttyS0,115200n8"]\n' > /usr/lib/bootc/kargs.d/10-kubehenge.toml
+# Proxmox VE's console for Kubehenge's VMs is their serial port. The family's kernels keep pressure
+# stall information off unless asked, which the kubelet's pressure metrics read, and which tells a
+# node short of memory, CPU or IO from a slow one.
+printf 'kargs = ["console=tty0", "console=ttyS0,115200n8", "psi=1"]\n' > /usr/lib/bootc/kargs.d/10-kubehenge.toml
 
 # A clone's first boot, with its new machine ID, applies the presets again, and the family's end in
 # disabling every service they do not name.
