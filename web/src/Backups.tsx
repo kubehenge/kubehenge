@@ -24,6 +24,7 @@ import {
   timeZones,
   useChange,
   usePoll,
+  Skeleton,
   type Health,
 } from "./ui";
 import { oneOf, quantity, record, records, text } from "./values";
@@ -595,7 +596,7 @@ export function BackupsView({
     return (
       <div className="box">
         <ErrorBox message={error} />
-        {!filled(error) && <p className="muted">Loading…</p>}
+        {!filled(error) && <Skeleton />}
       </div>
     );
   }

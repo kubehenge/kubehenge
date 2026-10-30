@@ -33,6 +33,7 @@ import {
   pollIdle,
   sentence,
   usePoll,
+  Skeleton,
 } from "./ui";
 
 // A cluster that is not healthy is looked at more often, to follow it getting better.
@@ -970,7 +971,7 @@ function PodLog({ cluster, pod, container }: { cluster: ClusterRef; pod: UnwellP
   return (
     <>
       <ErrorBox message={error} />
-      {logs === undefined && !filled(error) && <p className="muted">Loading…</p>}
+      {logs === undefined && !filled(error) && <Skeleton rows={8} />}
       {logs?.previous === true && <p className="muted">Previous run</p>}
       {logs !== undefined && (
         <pre className="log pod-log" aria-label={`Log of ${container}`}>
@@ -997,7 +998,7 @@ export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlam
     return (
       <div className="box">
         <ErrorBox message={error} />
-        {!filled(error) && <p className="muted">Loading…</p>}
+        {!filled(error) && <Skeleton rows={6} shape="tiles" />}
       </div>
     );
   }

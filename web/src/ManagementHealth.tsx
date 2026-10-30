@@ -2,7 +2,7 @@ import type { JSX } from "react";
 
 import { api } from "./api";
 import type { ManagementHealth } from "./types";
-import { Detail, ErrorBox, Status, pollCache, pollIdle, usePoll } from "./ui";
+import { Detail, ErrorBox, Skeleton, Status, pollCache, pollIdle, usePoll } from "./ui";
 
 const managementCache = pollCache<ManagementHealth>();
 const managementKept = { cache: managementCache, key: "" };
@@ -27,7 +27,7 @@ export function ManagementHealthCard(): JSX.Element {
     return (
       <div className="box">
         <h3>Health</h3>
-        {error === undefined ? <p className="loading">Loading…</p> : <ErrorBox message={error} />}
+        {error === undefined ? <Skeleton rows={3} /> : <ErrorBox message={error} />}
       </div>
     );
   }

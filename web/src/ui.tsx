@@ -341,6 +341,24 @@ export function sentence(message: string): string {
   return /[.!?…:]$/u.test(capital) ? capital : `${capital}.`;
 }
 
+const skeletonBars = ["a", "b", "c", "d", "e", "f", "g", "h"];
+
+/**
+ * Skeleton stands where something is being read, in about its shape: rows of a table or list, or
+ * the tiles of a glance. It shows only once a read takes long enough to notice, so a quick one
+ * never flashes.
+ */
+export function Skeleton({ rows = 3, shape = "rows" }: { rows?: number; shape?: "rows" | "tiles" }): JSX.Element {
+  return (
+    <output className={`skeleton skeleton-${shape}`}>
+      <span className="visually-hidden">Loading…</span>
+      {skeletonBars.slice(0, rows).map((k) => (
+        <span key={k} className="skeleton-bar" aria-hidden="true" />
+      ))}
+    </output>
+  );
+}
+
 export function ErrorBox({ message }: { message?: string | undefined }): JSX.Element | null {
   if (message === undefined || message === "") {
     return null;

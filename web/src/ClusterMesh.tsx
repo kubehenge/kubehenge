@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState, type JSX } from "react";
 
 import { api } from "./api";
 import type { Cluster, MeshPeer } from "./types";
-import { Detail, Dialog, ErrorBox, Info, errorMessage, filled, useChange } from "./ui";
+import { Detail, Dialog, ErrorBox, Info, Skeleton, errorMessage, filled, useChange } from "./ui";
 import { flag, record, text, texts } from "./values";
 
 /** A cluster's clusterMesh variable. */
@@ -75,7 +75,7 @@ export function MeshPeersField({
   return (
     <fieldset className="group">
       <legend>Peers</legend>
-      {clusters === undefined && !filled(error) && <p className="muted">Loading…</p>}
+      {clusters === undefined && !filled(error) && <Skeleton rows={2} />}
       {clusters !== undefined && names.length === 0 && (
         <p className="muted">No other Cilium clusters in this namespace</p>
       )}

@@ -4,6 +4,7 @@ import { adminPath, adminViews, type AdminView } from "./admin-views";
 import { clusterPath, views, type View } from "./cluster-paths";
 import { ClusterList } from "./ClusterList";
 import { Link, match } from "./router";
+import { Skeleton } from "./ui";
 
 // Pages only some people open, now and then, load when first opened: whoever only looks at clusters
 // never fetches them.
@@ -107,7 +108,7 @@ export function RoutePage({
   }, []);
   switch (route.page) {
     case "loading": {
-      return <p className="loading">Loading…</p>;
+      return <Skeleton rows={6} />;
     }
     case "setup": {
       return <Setup onReady={onSetupChanged} />;

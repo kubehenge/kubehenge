@@ -241,6 +241,66 @@ output.notice {
   padding: 48px 12px;
 }
 
+/* Held back a moment, so a read that answers at once never flashes it. */
+.skeleton {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  opacity: 0;
+  animation: skeleton-in 0.2s ease-out 0.25s forwards;
+}
+
+.skeleton-tiles {
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+}
+
+.skeleton-bar {
+  display: block;
+  height: 14px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--line) 30%, var(--line-strong) 50%, var(--line) 70%);
+  background-size: 300% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+
+.skeleton-rows .skeleton-bar:nth-child(3n + 2) {
+  width: 92%;
+}
+
+.skeleton-rows .skeleton-bar:nth-child(3n + 3) {
+  width: 78%;
+}
+
+.skeleton-rows .skeleton-bar:nth-child(3n + 4) {
+  width: 86%;
+}
+
+.skeleton-tiles .skeleton-bar {
+  height: 72px;
+  border-radius: 6px;
+}
+
+@keyframes skeleton-in {
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-bar {
+    animation: none;
+  }
+}
+
 .spacer {
   flex: 1;
 }

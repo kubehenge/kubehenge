@@ -14,6 +14,7 @@ import {
   pollRunning,
   timeZones,
   usePoll,
+  Skeleton,
 } from "./ui";
 import { oneOf } from "./values";
 
@@ -51,7 +52,7 @@ export function ApplianceUpgrades(): JSX.Element {
     return (
       <div className="box">
         <h3>Kubehenge</h3>
-        {filled(error) ? <ErrorBox message={error} /> : <p className="muted">Loading…</p>}
+        {filled(error) ? <ErrorBox message={error} /> : <Skeleton rows={2} />}
       </div>
     );
   }

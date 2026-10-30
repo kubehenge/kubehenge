@@ -5,7 +5,7 @@ import { AdminPage } from "./AdminPages";
 import { api } from "./api";
 import { ManagementBehind } from "./ManagementUpgrade";
 import { Link } from "./router";
-import { ErrorBox, pollIdle, pollRunning, usePoll, Views } from "./ui";
+import { ErrorBox, Skeleton, pollIdle, pollRunning, usePoll, Views } from "./ui";
 
 // Administration is the appliance's own pages for those who may set it up: the management cluster's
 // settings and removal, Kubehenge's upgrades and repair access, VM templates, and the DNS-01
@@ -28,9 +28,7 @@ export function Administration({ view, onGone }: { view: AdminView; onGone: () =
 
   if (!status) {
     return (
-      <section className="panel">
-        {error === undefined ? <p className="loading">Loading…</p> : <ErrorBox message={error} />}
-      </section>
+      <section className="panel">{error === undefined ? <Skeleton rows={6} /> : <ErrorBox message={error} />}</section>
     );
   }
   const running = status.job?.state === "running";

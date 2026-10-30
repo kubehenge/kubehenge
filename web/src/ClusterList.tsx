@@ -7,7 +7,7 @@ import { FleetProvider, badge, fleetKey, groups, ranked, useFleet, type Group, t
 import { score } from "./Palette";
 import { Link, navigate } from "./router";
 import type { Cluster, FleetHealth } from "./types";
-import { ErrorBox, RetryIn, Status, age, distributionName, filled } from "./ui";
+import { ErrorBox, RetryIn, Skeleton, Status, age, distributionName, filled } from "./ui";
 
 // The privilege creating a cluster needs, as Proxmox VE names it.
 const createNeeds = "Creating clusters needs VM.Allocate on the workload pool.";
@@ -71,7 +71,7 @@ function FleetList({ canCreate, canManage }: { canCreate: boolean | undefined; c
     if (error !== undefined && fleet !== null) {
       return unread(fleet);
     }
-    return <p className="muted pad">Loading…</p>;
+    return <Skeleton rows={6} />;
   };
   return (
     <section className="panel">

@@ -30,6 +30,7 @@ import {
   settled,
   useChange,
   usePoll,
+  Skeleton,
   Views,
 } from "./ui";
 import { UpgradeChecks, usePlan } from "./Upgrade";
@@ -318,7 +319,7 @@ export function ClusterDetail({
     return (
       <section className="panel">
         <ErrorBox message={error} />
-        {!filled(error) && <p className="muted pad">Loading…</p>}
+        {!filled(error) && <Skeleton rows={6} />}
       </section>
     );
   }
@@ -415,7 +416,7 @@ export function ClusterDetail({
               />
             )}
             {view === "health" && (
-              <Suspense fallback={<p className="muted pad">Loading…</p>}>
+              <Suspense fallback={<Skeleton rows={6} shape="tiles" />}>
                 <HealthView cluster={c} headlamp={inHeadlamp} />
               </Suspense>
             )}

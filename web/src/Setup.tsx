@@ -34,6 +34,7 @@ import {
   usePoll,
   weekdayName,
   weekdays,
+  Skeleton,
 } from "./ui";
 
 const unique = (xs: string[]): string[] => [...new Set(xs)].toSorted();
@@ -601,11 +602,7 @@ export function Setup({ onReady }: { onReady?: () => void }): JSX.Element {
   }, [ready, onReady]);
 
   if (!status) {
-    return (
-      <section className="panel">
-        {filled(error) ? <ErrorBox message={error} /> : <p className="loading">Loading…</p>}
-      </section>
-    );
+    return <section className="panel">{filled(error) ? <ErrorBox message={error} /> : <Skeleton rows={6} />}</section>;
   }
   if (!status.allowed) {
     return (

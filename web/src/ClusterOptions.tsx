@@ -44,6 +44,7 @@ import {
   haGroupsText,
   snapshotsText,
   useChange,
+  Skeleton,
 } from "./ui";
 import { flag, record, text, texts } from "./values";
 
@@ -627,7 +628,7 @@ function NodeOSDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
       }
     >
       <p className="muted">Saving replaces every node, one at a time.</p>
-      {oses === undefined && !filled(loadError) && <p className="muted">Loading…</p>}
+      {oses === undefined && !filled(loadError) && <Skeleton rows={2} />}
       <ErrorBox message={loadError} />
       {oses !== undefined && (
         <div role="radiogroup" aria-label="Node OS">

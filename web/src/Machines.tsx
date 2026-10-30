@@ -9,6 +9,7 @@ import {
   Dialog,
   ErrorBox,
   RowMenu,
+  Skeleton,
   Status,
   age,
   errorMessage,
@@ -126,7 +127,7 @@ export function Machines({
           {machines.length === 0 && (
             <tr>
               <td colSpan={columns.length + 1} className="muted">
-                {c.machines === undefined ? "Loading…" : "No machines yet"}
+                {c.machines === undefined ? <Skeleton /> : "No machines yet"}
               </td>
             </tr>
           )}
@@ -316,7 +317,8 @@ export function Placement({ cluster: c }: { cluster: Cluster }): JSX.Element {
     <section className="box placement" aria-label="Placement">
       <h3>Placement</h3>
       {crowded !== undefined && <p className="warning">{crowded}</p>}
-      {machines.length === 0 && <p className="muted">{c.machines === undefined ? "Loading…" : "No machines yet"}</p>}
+      {c.machines === undefined && <Skeleton rows={3} shape="tiles" />}
+      {c.machines?.length === 0 && <p className="muted">No machines yet</p>}
       <ul className="hosts" aria-label="Proxmox VE nodes">
         {list.map((h) => (
           <li
