@@ -1767,6 +1767,12 @@ button.go {
   overflow-x: auto;
 }
 
+.fleet-more {
+  display: flex;
+  justify-content: center;
+  padding: 12px;
+}
+
 .fleet-name > span {
   display: block;
   max-width: 30ch;

@@ -496,6 +496,23 @@ describe("the console", () => {
     expect(window.location.search).toBe("?sort=name&order=desc");
   });
 
+  it("draws a long fleet a page at a time", async () => {
+    window.history.replaceState(null, "", "/clusters");
+    const routes = serve();
+    const many = Array.from({ length: 250 }, (_, i) => ({ ...base, name: `c${String(i).padStart(3, "0")}` }));
+    routes["GET /api/clusters"] = { body: many };
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const table = await screen.findByRole("table");
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(101));
+    await user.click(screen.getByRole("button", { name: "Show 100 more" }));
+    expect(within(table).getAllByRole("row")).toHaveLength(201);
+    await user.click(screen.getByRole("button", { name: "Show 50 more" }));
+    expect(within(table).getAllByRole("row")).toHaveLength(251);
+    expect(within(table).getAllByRole("row").at(-1)).toHaveTextContent("c249");
+    expect(screen.queryByRole("button", { name: /^Show \d+ more$/u })).not.toBeInTheDocument();
+  });
+
   it("marks a cluster's tabs that hold something to look at, keeping the tabs' names", async () => {
     window.history.replaceState(null, "", "/clusters/default/web");
     const routes = serve();
