@@ -407,7 +407,7 @@ broken_sum=$(sha256sum "${broken}" | cut -d ' ' -f 1)
 # shellcheck disable=SC2016 # jq's variables, not the shell's.
 jq -n --arg base "${releases}" --arg nv "${newer_version}" --arg na "${newer##*/}" --arg ns "${newer_sum}" \
     --arg bv "${broken_version}" --arg ba "${broken##*/}" --arg bs "${broken_sum}" \
-    '{releases: [{version: $nv, url: "\($base)/\($na)", sha256: $ns}, {version: $bv, url: "\($base)/\($ba)", sha256: $bs}]}' \
+    '{expires: (now + 14 * 86400 | floor | todate), releases: [{version: $nv, url: "\($base)/\($na)", sha256: $ns}, {version: $bv, url: "\($base)/\($ba)", sha256: $bs}]}' \
     > "${work}/index.json"
 # Signed by the first release's own binary, which checks the key against the one it trusts.
 tar -xzOf "${release}" ./bin/kubehenge > "${work}/kubehenge"

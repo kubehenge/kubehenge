@@ -120,8 +120,10 @@ func monitoringValues(distribution templates.Distribution, proxy Image, addons *
 			// It reads the host's processes and file systems; Helm merges this into the chart's own
 			// pod settings.
 			securityKey: map[string]any{seLinuxKey: hostSELinux()},
+			"resources": reserved(cpu10m, "32Mi"),
 			// node-exporter itself listens on loopback only, behind the proxy.
 			"kubeRBACProxy": map[string]any{
+				"resources":                reserved(cpu10m, "16Mi"),
 				"enabled":                  true,
 				"image":                    map[string]any{"registry": proxy.Registry, "repository": proxy.Repository, "tag": proxy.Tag, "sha": proxy.Digest},
 				"tls":                      map[string]any{"enabled": true, "tlsClientAuth": true},
@@ -134,13 +136,22 @@ func monitoringValues(distribution templates.Distribution, proxy Image, addons *
 		},
 		// cert-manager is there for the proxies already; it renews the webhook's certificate
 		// instead of the chart's one-off Jobs.
-		"prometheusOperator": map[string]any{"admissionWebhooks": map[string]any{"certManager": map[string]any{"enabled": true}}},
+		"prometheusOperator": map[string]any{
+			"admissionWebhooks":        map[string]any{"certManager": map[string]any{"enabled": true}},
+			"resources":                reserved("50m", memory64Mi),
+			"prometheusConfigReloader": map[string]any{"resources": reserved(cpu10m, "16Mi")},
+		},
 		prometheus: map[string]any{"prometheusSpec": map[string]any{
 			"storageSpec":   claim(prometheusStorage),
 			"retentionSize": prometheusRetention,
+			"resources":     reserved("100m", "256Mi"),
 		}},
-		"alertmanager":   map[string]any{"alertmanagerSpec": map[string]any{"storage": claim(alertmanagerStorage)}},
-		"extraManifests": metricsManifests(distribution, proxy, addons),
+		"alertmanager": map[string]any{"alertmanagerSpec": map[string]any{
+			"storage":   claim(alertmanagerStorage),
+			"resources": reserved(cpu10m, "32Mi"),
+		}},
+		"kube-state-metrics": map[string]any{"resources": reserved(cpu10m, memory64Mi)},
+		"extraManifests":     metricsManifests(distribution, proxy, addons),
 	}
 	switch distribution {
 	case templates.K3s:
@@ -158,7 +169,10 @@ func monitoringValues(distribution templates.Distribution, proxy Image, addons *
 		}
 	case templates.Kubeadm, templates.RKE2:
 	}
-	grafana := map[string]any{}
+	grafana := map[string]any{
+		"resources": reserved("50m", "128Mi"),
+		"sidecar":   map[string]any{"resources": reserved(cpu10m, "32Mi")},
+	}
 	if m.Hostname != "" {
 		tls, annotations := addonIngress(&addons.Certificates, "grafana", m.Hostname, m.TLSSecret)
 		ingress := map[string]any{"enabled": true, "hosts": []any{m.Hostname}, "tls": []any{tls}}
@@ -172,10 +186,15 @@ func monitoringValues(distribution templates.Distribution, proxy Image, addons *
 		grafana["additionalDataSources"] = []any{lokiDataSource()}
 		grafana["extraSecretMounts"] = []any{grafanaLokiMount()}
 	}
-	if len(grafana) > 0 {
-		values["grafana"] = grafana
-	}
+	values["grafana"] = grafana
 	return values
+}
+
+// reserved requests a container its share of a node. The chart requests nothing, and its pods then
+// share the least CPU weight a node gives: on a node every add-on starting at once kept busy, the
+// operator went unscheduled for over a minute, and its liveness probe restarted it.
+func reserved(cpu, memory string) map[string]any {
+	return map[string]any{requestsKey: map[string]any{cpuKey: cpu, memoryKey: memory}}
 }
 
 // proxied scrapes a component through its metrics proxy, with the chart's own way of saying
