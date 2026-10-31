@@ -1,5 +1,6 @@
 import type { JSX } from "react";
 
+import { adminPath, type AdminView } from "./admin-views";
 import { clusterPath, type View } from "./cluster-paths";
 import { ranked, useFleet, type Standing } from "./fleet";
 import { Link } from "./router";
@@ -49,6 +50,13 @@ const places: Partial<Record<RunInfo["kind"], string>> = {
   change: "Open cluster",
 };
 
+// The page of Administration with the appliance's own work of each kind, where it is started again.
+const adminPlaces: Partial<Record<RunInfo["kind"], { view: AdminView; place: string }>> = {
+  template: { view: "templates", place: "Open templates" },
+  "template-refresh": { view: "templates", place: "Open templates" },
+  "appliance-upgrade": { view: "appliance", place: "Open upgrades" },
+};
+
 /** runPath is the address of a run's page. */
 export const runPath = (id: string): string => `/runs/${id}`;
 
@@ -63,7 +71,10 @@ export function runTitle(r: RunInfo): string {
 /** runView is where a run's work shows in the rest of the interface, and how a link there reads. */
 export function runView(r: RunInfo): { to: string; place: string } {
   if (r.cluster === undefined) {
-    return { to: "/administration", place: "Open Administration" };
+    const admin = adminPlaces[r.kind];
+    return admin === undefined
+      ? { to: adminPath(""), place: "Open Administration" }
+      : { to: adminPath(admin.view), place: admin.place };
   }
   return {
     to: clusterPath(r.namespace ?? "", r.cluster, runViews[r.kind] ?? ""),
@@ -167,7 +178,7 @@ export function RunsPanel({ runs, onFold }: { runs: Run[]; onFold: () => void })
             {running} running{stalled > 0 && `, ${stalled} stalled`}
           </span>
         </h2>
-        <button type="button" className="icon" aria-label="Hide runs" title="Hide runs (R)" onClick={onFold}>
+        <button type="button" className="icon" aria-label="Hide runs" title="Hide runs (T R)" onClick={onFold}>
           ›
         </button>
       </div>

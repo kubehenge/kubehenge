@@ -6,7 +6,8 @@ import { App } from "./App";
 import { fakeServer, held, type Route } from "./fake-server";
 import { ranked, standing } from "./fleet";
 import { score } from "./Palette";
-import type { Cluster, FleetHealth } from "./types";
+import { runView } from "./Runs";
+import type { Cluster, FleetHealth, RunInfo } from "./types";
 
 const minutesAgo = (n: number): string => new Date(Date.now() - n * 60_000).toISOString();
 
@@ -174,6 +175,19 @@ describe("the fleet", () => {
     expect(standing(upgrading, { ...crashing, name: "db" })).toMatchObject({ group: "running" });
   });
 
+  it("sends a run's reader to the page where its kind of work is started", () => {
+    expect(runView(run("template"))).toStrictEqual({ to: "/administration/templates", place: "Open templates" });
+    expect(runView(run("template-refresh"))).toStrictEqual({
+      to: "/administration/templates",
+      place: "Open templates",
+    });
+    expect(runView(run("management-cluster"))).toStrictEqual({ to: "/administration", place: "Open Administration" });
+    expect(runView({ ...run("restore"), namespace: "default", cluster: "web" })).toStrictEqual({
+      to: "/clusters/default/web/backups",
+      place: "Open backups",
+    });
+  });
+
   it("ranks those that need someone first, then the running, then the healthy", () => {
     expect(ranked(fleet).map((r) => r.cluster.name)).toStrictEqual(["edge", "ci", "db", "web"]);
   });
@@ -184,6 +198,8 @@ describe("the fleet", () => {
     expect(score("", "anything")).toBe(0);
   });
 });
+
+const run = (kind: RunInfo["kind"]): RunInfo => ({ id: kind, kind, what: kind, state: "failed" });
 
 // names are the clusters the fleet table lists, in its order.
 const names = (): (string | null)[] =>
@@ -329,12 +345,13 @@ describe("the console", () => {
       "dbTake etcd snapshot, 12m ago",
     );
     expect(screen.getByRole("button", { name: "Running 3" })).toBeInTheDocument();
+    expect(within(runs).getByRole("button", { name: "Hide runs" })).toHaveAttribute("title", "Hide runs (T R)");
 
     const user = userEvent.setup({ delay: null });
     await user.click(failed);
     await expect(screen.findByRole("heading", { name: /^Upgrade appliance to 0\.3\.1/u })).resolves.toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("Errorthe release's checksum does not match");
-    expect(screen.getByRole("link", { name: "Open Administration" })).toHaveAttribute("href", "/administration");
+    expect(screen.getByRole("link", { name: "Open upgrades" })).toHaveAttribute("href", "/administration/appliance");
     // An appliance upgrade takes a release to choose, so it is not started again from here.
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
   });
