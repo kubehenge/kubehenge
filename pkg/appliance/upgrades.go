@@ -21,6 +21,10 @@ type Applied struct {
 	Release  string            `json:"release"`
 	Versions map[string]string `json:"versions,omitempty"`
 	Time     time.Time         `json:"time"`
+	// CredentialsExpire is when the first of the admin kubeconfig's and talosconfig's client
+	// certificates the apply left in the state runs out. Talos's provider renews them on an apply in
+	// their last month, and nothing else does: the state opens only with the passphrase.
+	CredentialsExpire time.Time `json:"credentialsExpire,omitzero"`
 }
 
 func (a *Appliance) appliedPath() string { return filepath.Join(a.workdir(), "applied.json") }
@@ -38,8 +42,8 @@ func (a *Appliance) LastApplied() *Applied {
 	return &ap
 }
 
-func (a *Appliance) recordApplied() error {
-	raw, err := json.MarshalIndent(Applied{Release: a.Release, Versions: a.ModuleVersions(), Time: time.Now()}, "", "  ")
+func (a *Appliance) recordApplied(credentialsExpire time.Time) error {
+	raw, err := json.MarshalIndent(Applied{Release: a.Release, Versions: a.ModuleVersions(), Time: time.Now(), CredentialsExpire: credentialsExpire}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding what the apply ran: %w", err)
 	}

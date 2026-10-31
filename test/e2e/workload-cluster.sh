@@ -192,6 +192,7 @@ cleanup() {
     [ -z "${metrics_pid}" ] || kill "${metrics_pid}" 2> /dev/null || true
     # shellcheck disable=SC2310 # each removal is tried, whatever happened to those before it
     remove_ha_rule || true
+    [ "${status}" -eq 0 ] || seaweedfs_errors "${work}"
     if [ "${status}" -ne 0 ] && [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
         printf '\nleaving cluster %s/%s for inspection; delete it with: kubectl -n %s delete cluster %s\n' "${ns}" "${name}" "${ns}" "${name}"
     elif [ "${status}" -ne 0 ]; then
@@ -3395,7 +3396,16 @@ if [ "${part}" != addons ]; then
         talos_last=$(talos_annotation talos-upgraded)
     fi
     old_servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
-    kubectl -n "${ns}" patch "cluster/${name}" --type=merge -p "{\"spec\":{\"topology\":{\"version\":\"${upgrade}\"}}}"
+    # The cluster has one control plane, so kubectl hears from the admission webhook what the
+    # interface's plan says before the same change.
+    kubectl -n "${ns}" patch "cluster/${name}" --type=merge -p "{\"spec\":{\"topology\":{\"version\":\"${upgrade}\"}}}" 2> "${work}/upgrade-warnings"
+    cat "${work}/upgrade-warnings" >&2
+    grep -q "Replaces the only control plane" "${work}/upgrade-warnings" ||
+        fail "kubectl was not warned that the upgrade replaces the cluster's only control plane"
+    roll_stalled() {
+        kubectl -n "${ns}" get "cluster/${name}" -o json |
+            jq -e --arg r "$1" '.status.conditions // [] | any(.type == "ControlPlaneRollStalled" and .status == "True" and .reason == $r)' > /dev/null
+    }
     case ${class} in
         kubehenge-rke2 | kubehenge-k3s)
             # The first new server cannot reach the cluster's API at first, as when the old server is
@@ -3439,6 +3449,10 @@ if [ "${part}" != addons ]; then
             # shellcheck disable=SC2310 # guest returns the command's status, which is the one tested.
             guest "${joining_node}" "${joining_vmid}" "journalctl -u ${service}.service --no-pager | grep -q 'Failed to start'" > /dev/null ||
                 fail "${service} on ${joining} started although the cluster's API refused it"
+            # The old server still serves the API, so the controller says the new machine holds the
+            # roll up, rather than that the cluster is down.
+            until_true 300 "the roll reported stalled on the Cluster" roll_stalled SuccessorNotReady
+            kubectl -n "${ns}" get "cluster/${name}" -o json | jq -r '.status.conditions[] | select(.type == "ControlPlaneRollStalled") | .message'
             on_machines "${old_servers}" 'nft delete table inet e2e-join'
             printf '%s on %s failed to start and cloud-init ended %s; the old servers accept it again\n' "${service}" "${joining}" "${state}"
             ;;
@@ -3449,6 +3463,17 @@ if [ "${part}" != addons ]; then
     until_true 3600 "every node on ${kubelet}" sh -c "KUBECONFIG=${work}/workload kubectl get nodes -o json | jq -e --arg v '${kubelet}' '(.items | length == 2) and (.items | all(.status.nodeInfo.kubeletVersion | startswith(\$v))) and (.items | all(any(.status.conditions[]; .type == \"Ready\" and .status == \"True\")))' >/dev/null"
     kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
     wl get nodes -o wide
+    case ${class} in
+        kubehenge-rke2 | kubehenge-k3s)
+            roll_resumed() {
+                # shellcheck disable=SC2310 # the condition's absence is what is waited for.
+                ! roll_stalled SuccessorNotReady && kubectl -n "${ns}" get events -o json |
+                    jq -e --arg n "${name}" 'any(.items[]; .reason == "ControlPlaneRollResumed" and .involvedObject.name == $n)' > /dev/null
+            }
+            until_true 300 "the stalled roll cleared, with an event saying so" roll_resumed
+            ;;
+        *) ;;
+    esac
     if [ "${distribution}" = talos ]; then
         # The upgrade replaced every machine, so its new ones were cloned from the release the nodes
         # run and need no upgrade in place.
@@ -3500,6 +3525,74 @@ if [ "${distribution}" != talos ]; then
 fi
 
 if [ "${part}" != addons ]; then
+    step "a paused worker VM is reported, and the report cleared once it runs"
+    # The health check would replace the worker once its node is not ready; skipping remediation keeps
+    # the VM paused for as long as the report takes.
+    worker=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name},!cluster.x-k8s.io/control-plane" -o jsonpath='{.items[0].metadata.name}')
+    [ -n "${worker}" ] || fail "no worker machine to pause"
+    infra=$(kubectl -n "${ns}" get machine "${worker}" -o jsonpath='{.spec.infrastructureRef.name}')
+    vmid=$(kubectl -n "${ns}" get proxmoxmachine "${infra}" -o jsonpath='{.spec.virtualMachineID}')
+    node=$(kubectl -n "${ns}" get proxmoxmachine "${infra}" -o jsonpath='{.status.proxmoxNode}')
+    kubectl -n "${ns}" annotate "machine/${worker}" cluster.x-k8s.io/skip-remediation= > /dev/null
+    pve_post "nodes/${node}/qemu/${vmid}/status/suspend"
+    vms_paused() {
+        kubectl -n "${ns}" get "cluster/${name}" -o json | jq -e --arg m "${worker} (VM ${vmid} on ${node}) paused" \
+            '.status.conditions // [] | any(.type == "VMsNotRunning" and .status == "True" and .reason == "Paused" and (.message | startswith($m)))' > /dev/null &&
+            kubectl -n "${ns}" get events -o json | jq -e --arg n "${name}" 'any(.items[]; .reason == "VMsNotRunning" and .involvedObject.name == $n)' > /dev/null
+    }
+    until_true 600 "the Cluster saying VM ${vmid} of ${worker} is paused, with an event" vms_paused
+    pve_post "nodes/${node}/qemu/${vmid}/status/resume"
+    vms_running() {
+        kubectl -n "${ns}" get "cluster/${name}" -o json | jq -e '.status.conditions // [] | all(.type != "VMsNotRunning")' > /dev/null &&
+            kubectl -n "${ns}" get events -o json | jq -e --arg n "${name}" 'any(.items[]; .reason == "VMsRunning" and .involvedObject.name == $n)' > /dev/null
+    }
+    until_true 300 "the report cleared, with an event saying so" vms_running
+    kubectl -n "${ns}" annotate "machine/${worker}" cluster.x-k8s.io/skip-remediation- > /dev/null
+    until_true 600 "worker ${worker} ready again" sh -c "kubectl -n ${ns} get machine ${worker} -o json | jq -e '.status.conditions // [] | any(.type == \"Ready\" and .status == \"True\")' >/dev/null"
+
+    case ${class} in
+        kubehenge-rke2 | kubehenge-k3s)
+            step "a worker whose certificates run out within 60 days is replaced"
+            # The report RKE2's and k3s's own certificate monitor records on a node from 120 days before,
+            # as it would 45 days before; the controller renews from 60.
+            worker=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name},!cluster.x-k8s.io/control-plane" -o jsonpath='{.items[0].metadata.name}')
+            worker_node=$(kubectl -n "${ns}" get machine "${worker}" -o jsonpath='{.status.nodeRef.name}')
+            [ -n "${worker_node}" ] || fail "no worker node to report certificates of"
+            reported=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            expires=$(date -u -d '+45 days' +%Y-%m-%dT%H:%M:%SZ)
+            wl create -f - << EOF
+apiVersion: v1
+kind: Event
+metadata: {generateName: e2e-certificates-, namespace: default}
+involvedObject: {kind: Node, name: ${worker_node}, uid: ${worker_node}}
+type: Warning
+reason: CertificateExpirationWarning
+message: "Node certificates require attention - restart ${distribution} on this node to trigger automatic rotation: agent/client-kubelet.crt: certificate system:node:${worker_node} will expire within 120 days at ${expires}"
+source: {component: e2e}
+firstTimestamp: ${reported}
+lastTimestamp: ${reported}
+count: 1
+EOF
+            certificates_condition() {
+                kubectl -n "${ns}" get "cluster/${name}" -o json |
+                    jq -e --arg r "$1" '.status.conditions // [] | any(.type == "CertificatesExpiring" and .status == "True" and .reason == $r)' > /dev/null
+            }
+            until_true 600 "the Cluster says the worker's certificates are being renewed" certificates_condition Renewing
+            kubectl -n "${ns}" get events -o json |
+                jq -e --arg w "${worker}" 'any(.items[]; .reason == "RenewingCertificates" and (.message | contains($w)))' > /dev/null ||
+                fail "no RenewingCertificates event names ${worker}"
+            until_true 1800 "machine ${worker} replaced" absent kubectl -n "${ns}" get machine "${worker}"
+            workers 1
+            certificates_renewed() {
+                # shellcheck disable=SC2310 # the condition's absence is what is waited for.
+                ! certificates_condition Renewing && kubectl -n "${ns}" get events -o json |
+                    jq -e --arg n "${name}" 'any(.items[]; .reason == "CertificatesRenewed" and .involvedObject.name == $n)' > /dev/null
+            }
+            until_true 600 "the condition cleared, with an event saying so" certificates_renewed
+            ;;
+        *) ;;
+    esac
+
     step "a dead worker is replaced"
     # The class's 300 s before a not-ready node counts as dead only adds waiting here; the integration
     # tier pins the classes' own checks. The override has to repeat the class's remediation, or it would
@@ -3521,8 +3614,38 @@ if [ "${part}" != addons ]; then
     workers 1
 fi
 
-step "delete"
-creator -n "${ns}" delete "cluster/${name}" --wait --timeout=30m
+step "delete, held up by a worker, reported stalled and abandoned"
+# A finalizer of the test's own holds a worker Machine, as a drain that never ends would. Cluster
+# API deletes its VM, and then waits for the Machine before it deletes the control plane.
+hold=e2e.kubehenge.dev/hold
+worker=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name},!cluster.x-k8s.io/control-plane" -o jsonpath='{.items[0].metadata.name}')
+[ -n "${worker}" ] || fail "no worker machine to hold the deletion up with"
+kubectl -n "${ns}" patch "machine/${worker}" --type json -p "[{\"op\":\"add\",\"path\":\"/metadata/finalizers/-\",\"value\":\"${hold}\"}]" > /dev/null
+creator -n "${ns}" delete "cluster/${name}" --wait=false
+# deletion_holds: the deletion's status names the held Machine and the test's finalizer.
+deletion_holds() {
+    kubectl -n "${ns}" get "cluster/${name}" -o json | jq -e --arg m "${worker}" --arg h "${hold}" \
+        '.metadata.annotations["kubehenge.dev/deletion-status"] // "{}" | fromjson | .waiting // [] | any(.kind == "Machine" and .name == $m and ((.finalizers // []) | index($h)))' > /dev/null
+}
+until_true 600 "the deletion's status naming ${worker}" deletion_holds
+deletion_stalled() {
+    kubectl -n "${ns}" get "cluster/${name}" -o json | jq -e '.status.conditions // [] | any(.type == "DeletionStalled" and .status == "True")' > /dev/null &&
+        kubectl -n "${ns}" get events -o json | jq -e --arg n "${name}" 'any(.items[]; .reason == "DeletionStalled" and .involvedObject.name == $n)' > /dev/null
+}
+until_true 600 "the deletion reported stalled, with an event" deletion_stalled
+kubectl -n "${ns}" get "cluster/${name}" -o json | jq -r '.status.conditions[] | select(.type == "DeletionStalled") | .message'
+if kubectl -n "${ns}" annotate "cluster/${name}" "kubehenge.dev/abandon-deletion=not-${name}" > /dev/null 2>&1; then
+    fail "the abandonment was taken with another cluster's name"
+fi
+kubectl -n "${ns}" annotate "cluster/${name}" "kubehenge.dev/abandon-deletion=${name}" > /dev/null
+kubectl -n "${ns}" wait --for=delete "cluster/${name}" --timeout=15m
+# Every VM could still be deleted within the grace, so nothing is left behind; the checks below
+# hold the abandoned deletion to that.
+abandoned=$(kubectl -n "${ns}" get events -o json)
+printf '%s' "${abandoned}" | jq -e --arg n "${name}" 'any(.items[]; .reason == "AbandoningDeletion" and .involvedObject.name == $n)' > /dev/null ||
+    fail "no AbandoningDeletion event"
+left=$(printf '%s' "${abandoned}" | jq -r --arg n "${name}" '.items[] | select(.reason == "LeftBehind" and .involvedObject.name == $n) | .note // .message')
+[ -z "${left}" ] || fail "the abandoned deletion left behind: ${left}"
 # A failed request is not an empty list.
 # shellcheck disable=SC2310 # polled; a failed request leaves the pool counted as there.
 pool_removed() { pools=$(pve_get pools) && ! printf '%s' "${pools}" | jq -e --arg p "${pool}" '.data[] | select(.poolid == $p)' > /dev/null; }

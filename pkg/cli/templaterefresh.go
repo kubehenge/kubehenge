@@ -160,16 +160,8 @@ func (o *templateRefreshOptions) run(cmd *cobra.Command, conn *pve.Config) error
 			provisioner.RefreshLog:      "",
 		})
 		runErr := refresh.Run(ctx)
-		end := map[string]string{
-			provisioner.RefreshState:    "succeeded",
-			provisioner.RefreshFinished: time.Now().UTC().Format(time.RFC3339),
-		}
-		if runErr != nil {
-			end[provisioner.RefreshState] = "failed"
-			end[provisioner.RefreshError] = runErr.Error()
-		}
 		// Written past the run's context, which ends with a lost lease: the outcome must be recorded.
-		status.set(context.WithoutCancel(ctx), end)
+		status.finished(context.WithoutCancel(ctx), o.trigger, runErr)
 		if runErr != nil {
 			return fmt.Errorf("refreshing the templates: %w", runErr)
 		}
@@ -305,6 +297,45 @@ func (s *refreshStatus) set(ctx context.Context, data map[string]string) {
 	}
 }
 
+// finished records how a run ended, and a failure as an event too.
+func (s *refreshStatus) finished(ctx context.Context, trigger string, runErr error) {
+	end := map[string]string{
+		provisioner.RefreshState:    "succeeded",
+		provisioner.RefreshFinished: time.Now().UTC().Format(time.RFC3339),
+	}
+	if runErr != nil {
+		end[provisioner.RefreshState] = "failed"
+		end[provisioner.RefreshError] = runErr.Error()
+	}
+	s.set(ctx, end)
+	if runErr != nil {
+		s.failed(ctx, trigger, runErr)
+	}
+}
+
+// eventNoteMax is the events API's limit on a message.
+const eventNoteMax = 1024
+
+// failed records a Warning event on the refresh's ConfigMap, where kubectl get events shows that a
+// run failed and why; the ConfigMap holds the whole error and the end of the log.
+func (s *refreshStatus) failed(ctx context.Context, trigger string, why error) {
+	now := metav1.Now()
+	note := fmt.Sprintf("template build (%s) failed: %v", trigger, why)
+	if len(note) > eventNoteMax {
+		note = strings.ToValidUTF8(note[:eventNoteMax-3], "") + "..."
+	}
+	e := &corev1.Event{
+		GenerateName: provisioner.TemplateRefreshName + "-", Namespace: s.namespace,
+		InvolvedObject: corev1.ObjectReference{APIVersion: "v1", Kind: "ConfigMap", Namespace: s.namespace, Name: provisioner.TemplateRefreshName},
+		Type:           corev1.EventTypeWarning, Reason: "TemplateBuildFailed", Message: note,
+		Source:         corev1.EventSource{Component: provisioner.TemplateRefreshName},
+		FirstTimestamp: now, LastTimestamp: now, Count: 1,
+	}
+	if err := s.kube.Create(ctx, e); err != nil {
+		_, _ = fmt.Fprintf(s.out, "recording the failure as an event: %v\n", err)
+	}
+}
+
 // refused records a run that could not start, so that the interface shows why, and returns why.
 func (s *refreshStatus) refused(ctx context.Context, trigger string, why error) error {
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -317,5 +348,6 @@ func (s *refreshStatus) refused(ctx context.Context, trigger string, why error) 
 		provisioner.RefreshError:    why.Error(),
 		provisioner.RefreshLog:      "",
 	})
+	s.failed(ctx, trigger, why)
 	return fmt.Errorf("the template refresh cannot start: %w", why)
 }

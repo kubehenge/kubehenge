@@ -139,8 +139,12 @@ export function ApplianceUpgrades(): JSX.Element {
 
 const upgradeStates = { current: "Up to date", updating: "Upgrading", failed: "Failed" } as const;
 
-const lastUpgrade = (s: NonNullable<Upgrades["status"]>): string =>
-  s.state === "succeeded" ? `${s.from} to ${s.to}` : upgradeStates[s.state];
+function lastUpgrade(s: NonNullable<Upgrades["status"]>): string {
+  if (s.state === "succeeded") {
+    return `${s.from} to ${s.to}`;
+  }
+  return s.state === "failed" && s.rolledBack === true ? `Rolled back to ${s.from ?? ""}` : upgradeStates[s.state];
+}
 
 function Releases({ upgrades: u }: { upgrades: Upgrades }): JSX.Element {
   const s = u.status;
@@ -163,7 +167,9 @@ function Releases({ upgrades: u }: { upgrades: Upgrades }): JSX.Element {
           <dt>Last upgrade</dt>
           <dd>
             {lastUpgrade(s)} <span className="muted">{new Date(s.time).toLocaleString()}</span>
-            {s.state === "failed" && filled(s.error) && <Detail>{s.error}</Detail>}
+            {s.state === "failed" && filled(s.error) && (
+              <Detail>{s.error.replace(/; rolled back to [^;]*$/u, "")}</Detail>
+            )}
           </dd>
         </>
       )}

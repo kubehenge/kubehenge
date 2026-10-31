@@ -281,6 +281,20 @@ variable "proxmox_ha" {
   nullable    = false
 }
 
+variable "watch" {
+  description = "How long Kubehenge's controller gives what it watches for before it reports it on the Cluster and the interface's Health page: stall_minutes, for the new machine in the roll of a cluster's only control plane to become ready, and for a cluster's deletion to finish."
+  type = object({
+    stall_minutes = optional(number, 20)
+  })
+  default  = {}
+  nullable = false
+
+  validation {
+    condition     = var.watch.stall_minutes >= 1 && var.watch.stall_minutes <= 1440 && floor(var.watch.stall_minutes) == var.watch.stall_minutes
+    error_message = "watch.stall_minutes is a whole number of minutes from 1 to 1440."
+  }
+}
+
 variable "offer_ha_rules" {
   description = "Offer Proxmox VE's HA node-affinity rules as places for a cluster's VMs to those who may create or change a cluster but do not hold Sys.Audit on / themselves. Kubehenge's controller reads the rules with its own token, which holds Sys.Audit on / already, so nothing new is granted in Proxmox VE; the interface hands out each rule's name and the nodes it allows, never its comment or resources, and only to those with VM.Allocate on the workload pool or a cluster's pool. Every such user then learns the rules' names and which nodes they cover."
   type        = bool

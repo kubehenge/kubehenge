@@ -10,6 +10,10 @@ pause_image=registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde33
 # renovate: datasource=docker depName=docker.io/gitea/gitea
 gitea=docker.io/gitea/gitea:28.2.0-rootless@sha256:94807314454f6525994a3b76286ba12bc7e7f8cd14f61d9e67431767f8103306
 export agnhost pause_image gitea
+# The S3 store the backup tests write to.
+# renovate: datasource=github-release-attachments depName=seaweedfs/seaweedfs
+SEAWEEDFS_VERSION=4.51
+SEAWEEDFS_SHA256=c03be37416a8ee672c77766e20b22a4e1430744c3af2668599a4b6eeaec14cee
 
 # Each step shows the time since the test started, which is how a slow run shows where it lost it.
 e2e_started=$(date +%s)
@@ -144,6 +148,38 @@ absent() {
         *"(NotFound)"*) ;;
         *) return 1 ;;
     esac
+}
+
+# seaweedfs <directory>: downloads SeaweedFS's weed into the directory, checked by its SHA-256.
+seaweedfs() {
+    curl -sS --fail -L -o "$1/seaweedfs.tar.gz" \
+        "https://github.com/seaweedfs/seaweedfs/releases/download/${SEAWEEDFS_VERSION}/linux_amd64.tar.gz"
+    printf '%s  %s\n' "${SEAWEEDFS_SHA256}" "$1/seaweedfs.tar.gz" | sha256sum -c - > /dev/null ||
+        fail "SeaweedFS's download does not have its SHA-256"
+    tar -xzf "$1/seaweedfs.tar.gz" -C "$1" weed
+}
+
+# seaweedfs_server <directory> <S3 port> <S3 identities> <certificate> <key>: runs the weed that
+# seaweedfs fetched into the directory in the background, as a server with an S3 gateway, its data
+# in <directory>/s3-data and its log in <directory>/s3.log.
+# SeaweedFS's default of 8 volume slots is too few: the filer's own log takes 7 of them once the
+# server has run a minute, leaving a bucket written after that a single volume, and a write that
+# would overfill it fails with InternalError. Slots cost no disk until a volume is written.
+# The embedded IAM API, which the tests do not use, fails to start without an STS signing key and
+# says so as an error; the identities hold either way.
+seaweedfs_server() {
+    mkdir -p "$1/s3-data"
+    "$1/weed" server -dir="$1/s3-data" -ip=127.0.0.1 -ip.bind=0.0.0.0 -master.port=19333 \
+        -master.volumeSizeLimitMB=64 -volume.max=100 -volume.port=18080 -filer.port=18888 \
+        -s3 -s3.port="$2" -s3.config="$3" -s3.iam=false -s3.cert.file="$4" -s3.key.file="$5" > "$1/s3.log" 2>&1 &
+}
+
+# seaweedfs_errors <directory>: the last errors seaweedfs_server logged there, if it ran, since a
+# client sees only InternalError for most of them.
+seaweedfs_errors() {
+    [ -f "$1/s3.log" ] || return 0
+    echo "-- the S3 store's last errors" >&2
+    grep -E '^[EF][0-9]{4} ' "$1/s3.log" | tail -n 20 >&2 || true
 }
 
 # boot_logs <namespace> <Cluster> <Machine...>: asks Kubehenge's controller for the machines' boot

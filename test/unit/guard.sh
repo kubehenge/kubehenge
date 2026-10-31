@@ -78,9 +78,9 @@ chmod +x "${bin}"/*
 export PATH="${bin}:${PATH}" KUBEHENGE_E2E_GUARD_PROC="${proc}" KUBEHENGE_E2E_GUARD_INTERVAL=1
 
 # memory <available kB> <swap free kB> <memory full avg60> <OOM kills> [<pages swapped in>]: the
-# kernel's files as the guard reads them.
+# kernel's files as the guard reads them, with 30 MiB of swap that zswap holds in 10 MiB.
 memory() {
-    printf 'MemTotal: 16366592 kB\nMemFree: 300000 kB\nMemAvailable: %s kB\nSwapTotal: 11533312 kB\nSwapFree: %s kB\n' \
+    printf 'MemTotal: 16366592 kB\nMemFree: 300000 kB\nMemAvailable: %s kB\nSwapTotal: 11533312 kB\nSwapFree: %s kB\nZswap: 10240 kB\nZswapped: 30720 kB\n' \
         "$1" "$2" > "${proc}/meminfo"
     printf 'some avg10=12.50 avg60=8.25 avg300=2.00 total=1\nfull avg10=4.00 avg60=%s avg300=1.00 total=1\n' \
         "$3" > "${proc}/pressure/memory"
@@ -131,6 +131,7 @@ line=$(head -n 1 "${record}")
 holds "a sample reads the memory in MiB" "available=100 swap_free=400" "${line}"
 holds "and the pressure over the last minute" "memory_some=8.25 memory_full=75.00 io_some=20.75 io_full=6.50" "${line}"
 holds "and the OOM kills and swap-ins since the watch began" "oom_kills=0 swapped_in=0" "${line}"
+holds "and what zswap holds, in MiB" "zswapped=30 zswap_pool=10" "${line}"
 holds "and each path's free space" "free:/=77824 free:${root}/full=1" "${line}"
 last=$(tail -n 1 "${record}")
 holds "swap-ins counted from the watch's start, in MiB" "swapped_in=10" "${last}"
@@ -140,6 +141,7 @@ peaks=$(sh "${guard}" peaks "${record}")
 holds "the peaks give the least room" "least memory and swap left: 500 MiB (100 available, 400 of swap)" "${peaks}"
 holds "and the least memory alone" "least memory available: 100 MiB at " "${peaks}"
 holds "and what was read back from swap" "read back from swap: 10 MiB" "${peaks}"
+holds "and the most zswap held" "most swap held in memory by zswap: 30 MiB, compressed to 10 MiB, at " "${peaks}"
 holds "and the most stall, beside its ceiling" "most memory_full pressure: 75.00% of a minute" "${peaks}"
 holds "and the least free space" "least free on ${root}/full: 1 MiB" "${peaks}"
 expect "nothing recorded" "the guard recorded nothing" sh "${guard}" peaks "${root}/none.txt"

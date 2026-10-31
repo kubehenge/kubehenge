@@ -316,6 +316,27 @@ func TestARefusedRefreshSaysWhy(t *testing.T) {
 	}
 }
 
+// A run that could not start says why in a Warning event too, for kubectl.
+func TestARefusedRefreshRecordsAnEvent(t *testing.T) {
+	t.Parallel()
+	status, kube, _ := refreshStatusIn(t, &corev1.ConfigMap{Namespace: refreshNamespace, Name: provisioner.TemplateRefreshName})
+	if err := status.refused(t.Context(), "schedule", errors.New("no API token")); err == nil {
+		t.Fatal("no error")
+	}
+	var events corev1.EventList
+	if err := kube.List(t.Context(), &events, client.InNamespace(refreshNamespace)); err != nil {
+		t.Fatal(err)
+	}
+	if len(events.Items) != 1 {
+		t.Fatalf("events %+v", events.Items)
+	}
+	e := events.Items[0]
+	if e.Type != corev1.EventTypeWarning || e.Reason != "TemplateBuildFailed" || e.InvolvedObject.Name != provisioner.TemplateRefreshName ||
+		!strings.Contains(e.Message, "template build (schedule) failed: no API token") {
+		t.Errorf("event %+v", e)
+	}
+}
+
 // The status is for showing: a run whose status cannot be written goes on, saying so in its log.
 func TestAStatusThatCannotBeWrittenIsLogged(t *testing.T) {
 	t.Parallel()

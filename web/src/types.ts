@@ -407,6 +407,21 @@ export interface Cluster {
   gitops?: GitOpsKeys;
   /** How a Talos cluster's nodes stand with its Talos release. */
   talos?: TalosStatus;
+  /** The last recovery of the control plane from a stalled roll: etcd reset to one machine's own. */
+  recovery?: EtcdRestoreStatus;
+  /** What the cluster's deletion waits on, while it is being deleted, since deletedAt. */
+  deletion?: DeletionStatus;
+  deletedAt?: string;
+}
+
+/** DeletionStatus is what a cluster's deletion waits on, and what abandoning it leaves behind. */
+export interface DeletionStatus {
+  waiting?: { kind: string; name: string; finalizers?: string[]; reason?: string }[];
+  /** What abandoning the deletion would leave behind, should it not finish. */
+  mayLeave?: string[];
+  /** When the controller took up the abandonment. */
+  abandoned?: string;
+  leftBehind?: string[];
 }
 
 /** A Talos cluster's nodes, upgraded in place to its Talos release one at a time. */
@@ -718,6 +733,42 @@ export interface EtcdSnapshot {
   storedSize?: number;
 }
 
+/** How the management cluster's etcd is backed up. */
+export interface ManagementBackupSettings {
+  target: string;
+  everyHours: number;
+  keep: number;
+  by?: string;
+  since?: string;
+}
+
+/** The management cluster's etcd backups, and the targets they may go to. */
+export interface ManagementBackups {
+  settings?: ManagementBackupSettings;
+  last?: EtcdSnapshot;
+  next?: string;
+  error?: string;
+  failed?: string;
+  taking?: boolean;
+  targets: string[];
+  keysStored: boolean;
+}
+
+export interface ManagementSnapshots {
+  snapshots: EtcdSnapshot[];
+  error?: string;
+}
+
+export interface ManagementBackupRequest {
+  target: string;
+  everyHours: number;
+  keep: number;
+  /** Both empty keep the access key stored. */
+  accessKeyID: string;
+  secretAccessKey: string;
+  passphrase: string;
+}
+
 export type EtcdRestorePhase =
   | "Preparing"
   | "Fetching"
@@ -730,10 +781,15 @@ export type EtcdRestorePhase =
 
 /** How a restore of a cluster's etcd went, or is going. */
 export interface EtcdRestoreStatus {
-  snapshot: string;
+  /** The snapshot restored; absent when etcd is reset to a control-plane machine's own. */
+  snapshot?: string;
   by?: string;
   requestedAt: string;
   phase: EtcdRestorePhase;
+  /** etcd is reset to the database of machine, the way out of a single control plane's stalled roll. */
+  reset?: boolean;
+  /** The cluster's API answered, so etcd had its quorum and the other machines were only replaced. */
+  answered?: boolean;
   /** The control-plane machine etcd is restored on, and its node. */
   machine?: string;
   node?: string;
@@ -781,19 +837,25 @@ export interface EtcdRestoreStep {
   command: string;
 }
 
-/** The steps that restore a cluster's etcd from a snapshot by hand. */
+/** The steps that restore a cluster's etcd by hand, from a snapshot or from a control-plane machine's own. */
 export interface EtcdRestorePlan {
-  snapshot: EtcdSnapshot;
+  snapshot?: EtcdSnapshot;
   distribution: string;
   steps: EtcdRestoreStep[];
   replaced?: string[];
+}
+
+/** How a cluster's control plane is recovered from a stalled roll: by the controller, or by hand with the plan's steps. */
+export interface ControlPlaneRecovery {
+  automatic: boolean;
+  plan?: EtcdRestorePlan;
 }
 
 export interface Job {
   user: string;
   /** A run the appliance started on its own, as user, in an automatic upgrade. */
   automatic?: boolean;
-  kind?: "apply" | "remove" | "template";
+  kind?: "apply" | "remove" | "template" | "etcd-restore";
   started: string;
   finished?: string;
   state: "running" | "succeeded" | "failed";
@@ -814,6 +876,8 @@ export interface SetupStatus {
   backup?: boolean;
   /** When the interface's certificate runs out; for administrators only. */
   certificateExpires?: string;
+  /** When the management cluster's admin credentials run out; an apply renews them. */
+  credentialsExpire?: string;
   /** The appliance's guest ID in Proxmox VE; for administrators only. */
   applianceVMID?: number;
   /** The Proxmox VE API's certificate goes unverified (--proxmox-insecure); for administrators only. */
@@ -964,6 +1028,8 @@ export interface Upgrades {
     to?: string;
     time: string;
     error?: string;
+    /** A failed upgrade put the release before back. */
+    rolledBack?: boolean;
   };
   /** Absent outside the appliance. */
   management?: ManagementAutomatic;
@@ -1006,6 +1072,8 @@ export interface PlannedChange {
 export interface Plan {
   cluster: Cluster;
   changes: PlannedChange[];
+  /** What to know before applying it, such as a roll of the only control plane; kubectl hears the same. */
+  warnings?: string[];
 }
 
 /** The autoscaler variable: where the cluster autoscaler runs and how it scales. */

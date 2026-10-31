@@ -62,6 +62,8 @@ func run(dir string, args []string) int {
 			fmt.Print("admin-kubeconfig")
 		case "api_endpoint":
 			fmt.Print("https://10.0.0.20:6443")
+		case "talosconfig":
+			fmt.Print("context: management\ncontexts:\n  management:\n    endpoints: [10.0.0.11, 10.0.0.12]\n")
 		}
 	}
 	return 0

@@ -36,8 +36,9 @@
 # comes through pveam, which checks it against Proxmox's signed index. --release installs a local
 # release archive instead of the published one, with its checksum given. --upgrade replaces the
 # software of an installed appliance with a release no older, keeps its state, and waits for no
-# run of the management cluster: it stops if one is going on. The management cluster itself is
-# then upgraded from the interface.
+# run of the management cluster: it stops if one is going on. Should the new release's interface
+# not serve, it puts the old release back and says why. The management cluster itself is then
+# upgraded from the interface.
 set -eu
 
 # The release this script installs, and the OpenTofu it runs the management-cluster module with.
@@ -478,6 +479,104 @@ stage_api_ca() {
     pct push "${ctid}" "$1" /usr/local/share/ca-certificates/proxmox-ca.crt.new --perms 0644
 }
 
+units='kubehenge.service kubehenge-update.service kubehenge-update.path kubehenge-headlamp.service kubehenge-headlamp.socket kubehenge-headlamp-proxy.service'
+
+# An upgrade as it runs in the container, under the interface's job lock, once stage_software
+# pushed the new release beside the old: it sets the installed software aside, puts the new in
+# place and restarts the interface on it. Should the interface not serve and keep running, the
+# check the appliance's own updater makes, it puts the old software back and restarts that.
+#   sh -c "${upgrade_script}" sh <root> <container ID> <true|false|""> <units>
+# <root> is "" but in the tests; the third argument stops (true) or starts (false) the checks of
+# the API's certificate, or leaves them. Exits 76 rolled back, with the reason on standard output,
+# and 77 when putting the old software back failed too.
+# shellcheck disable=SC2016 # expanded by the container's shell
+upgrade_script='
+set -eu
+R=$1 ctid=$2 insecure=$3 units=$4
+aside=$R/usr/local/share/.kubehenge-rollback bin=$R/usr/local/bin share=$R/usr/local/share
+env=$R/etc/kubehenge/appliance.env ca=$R/etc/kubehenge/proxmox-ca.pem trusted=$R/usr/local/share/ca-certificates/proxmox-ca.crt
+rm -rf "$aside" "$share/kubehenge.new"
+mkdir -p "$aside/units" "$share/kubehenge.new"
+cp -p "$bin/kubehenge" "$env" "$aside/"
+[ ! -e "$bin/tofu.new" ] || cp -p "$bin/tofu" "$aside/"
+for unit in $units; do
+    [ ! -e "$R/etc/systemd/system/$unit" ] || cp -p "$R/etc/systemd/system/$unit" "$aside/units/"
+done
+ca_changed=
+if [ -e "$ca.new" ]; then
+    ca_changed=1
+    cp -p "$ca" "$aside/proxmox-ca.pem"
+    [ ! -e "$trusted" ] || cp -p "$trusted" "$aside/proxmox-ca.crt"
+fi
+
+tar -xf "$R/tmp/share.tar" -C "$share/kubehenge.new" && rm "$R/tmp/share.tar"
+mv "$share/kubehenge" "$aside/share"
+mv "$share/kubehenge.new" "$share/kubehenge"
+mv "$bin/kubehenge.new" "$bin/kubehenge"
+[ ! -e "$bin/tofu.new" ] || mv "$bin/tofu.new" "$bin/tofu"
+for unit in $units; do mv "$R/etc/systemd/system/$unit.new" "$R/etc/systemd/system/$unit"; done
+if [ -n "$ca_changed" ]; then
+    mv "$ca.new" "$ca"
+    mv "$trusted.new" "$trusted"
+    update-ca-certificates > /dev/null
+fi
+install -d -o root -g root -m 0755 "$R/var/lib/kubehenge-update"
+install -d -o root -g kubehenge -m 0770 "$R/var/lib/kubehenge-update/requests"
+grep -q "^KUBEHENGE_APPLIANCE_VMID=" "$env" || echo "KUBEHENGE_APPLIANCE_VMID=$ctid" >> "$env"
+ip=$(ip -4 -o addr show dev eth0 | sed -n "s/.* inet \([0-9.]*\).*/\1/p" | head -n 1)
+grep -q "^KUBEHENGE_PUBLIC_URL=" "$env" || echo "KUBEHENGE_PUBLIC_URL=https://$ip" >> "$env"
+if [ -n "$insecure" ]; then
+    { grep -v "^KUBEHENGE_PROXMOX_INSECURE=" "$env" || true; [ "$insecure" = false ] || echo "KUBEHENGE_PROXMOX_INSECURE=true"; } > "$env.new"
+    chmod 0644 "$env.new" && mv "$env.new" "$env"
+fi
+[ -f "$R/etc/kubehenge/headlamp.env" ] ||
+    echo "HEADLAMP_CONFIG_OIDC_CALLBACK_URL=https://$ip:8443/oidc-callback" > "$R/etc/kubehenge/headlamp.env"
+systemctl daemon-reload
+systemctl enable --now kubehenge-update.path > /dev/null 2>&1
+systemctl restart kubehenge.service
+# The next visit starts the new Headlamp.
+systemctl stop kubehenge-headlamp.service
+
+if reason=$("$bin/kubehenge" appliance health --cert "$R/etc/kubehenge/tls.crt" 2>&1); then
+    rm -rf "$aside"
+    exit 0
+fi
+printf "%s\n" "${reason#kubehenge: }"
+
+# Each step is checked by hand: set -e does not hold inside a function called as a condition.
+roll_back() {
+    cp -p "$aside/kubehenge" "$bin/kubehenge.old" && mv -f "$bin/kubehenge.old" "$bin/kubehenge" || return 1
+    if [ -e "$aside/tofu" ]; then
+        cp -p "$aside/tofu" "$bin/tofu.old" && mv -f "$bin/tofu.old" "$bin/tofu" || return 1
+    fi
+    rm -rf "$share/kubehenge" && mv "$aside/share" "$share/kubehenge" || return 1
+    for unit in $units; do
+        if [ -e "$aside/units/$unit" ]; then
+            cp -p "$aside/units/$unit" "$R/etc/systemd/system/$unit" || return 1
+        else
+            rm -f "$R/etc/systemd/system/$unit" || return 1
+        fi
+    done
+    cp -p "$aside/appliance.env" "$env" || return 1
+    if [ -n "$ca_changed" ]; then
+        cp -p "$aside/proxmox-ca.pem" "$ca" || return 1
+        if [ -e "$aside/proxmox-ca.crt" ]; then
+            cp -p "$aside/proxmox-ca.crt" "$trusted" || return 1
+        else
+            rm -f "$trusted" || return 1
+        fi
+        update-ca-certificates > /dev/null || return 1
+    fi
+    systemctl daemon-reload && systemctl restart kubehenge.service || return 1
+    systemctl stop kubehenge-headlamp.service || return 1
+    rm -rf "$aside"
+}
+if roll_back && sleep 5 && systemctl is-active --quiet kubehenge.service; then
+    exit 76
+fi
+exit 77
+'
+
 # The tests source this file for its functions alone.
 [ -z "${KUBEHENGE_INSTALL_FUNCTIONS:-}" ] || return 0
 
@@ -716,8 +815,8 @@ if [ -f "${work}/kubehenge/share/kubehenge/VERSION" ]; then
 fi
 
 # stage_software pushes the binaries, the module and the service units into the container beside
-# their places; swap, run inside it, renames them over the old ones (a running binary cannot be
-# overwritten) and exchanges the module directory whole.
+# their places; swap or, upgrading, upgrade_script, run inside it, renames them over the old ones
+# (a running binary cannot be overwritten) and exchanges the module directory whole.
 stage_software() {
     pct exec "${ctid}" -- sh -c 'mkdir -p /etc/kubehenge /usr/local/share/kubehenge /usr/local/share/ca-certificates'
     pct push "${ctid}" "${work}/kubehenge/bin/kubehenge" /usr/local/bin/kubehenge.new --perms 0755
@@ -728,7 +827,6 @@ stage_software() {
         pct push "${ctid}" "${work}/kubehenge/share/kubehenge/appliance/${unit}" "/etc/systemd/system/${unit}.new" --perms 0644
     done
 }
-units='kubehenge.service kubehenge-update.service kubehenge-update.path kubehenge-headlamp.service kubehenge-headlamp.socket kubehenge-headlamp-proxy.service'
 push_tofu=1
 swap="
     set -e
@@ -797,36 +895,21 @@ if [ -n "${upgrade}" ]; then
     fi
     # Under the interface's job lock, which its own updater takes too: restarting the service
     # during a run of the management-cluster module would cut the run off.
+    step "starting Kubehenge ${KUBEHENGE_VERSION}, and checking that it serves"
     rc=0
-    # shellcheck disable=SC2016 # expanded by the container's shell
-    pct exec "${ctid}" -- flock -n -E 75 /var/lib/kubehenge sh -c "${swap}"'
-        install -d -o root -g root -m 0755 /var/lib/kubehenge-update
-        install -d -o root -g kubehenge -m 0770 /var/lib/kubehenge-update/requests
-        grep -q "^KUBEHENGE_APPLIANCE_VMID=" /etc/kubehenge/appliance.env ||
-            echo "KUBEHENGE_APPLIANCE_VMID=$1" >> /etc/kubehenge/appliance.env
-        ip=$(ip -4 -o addr show dev eth0 | sed -n "s/.* inet \([0-9.]*\).*/\1/p" | head -n 1)
-        grep -q "^KUBEHENGE_PUBLIC_URL=" /etc/kubehenge/appliance.env ||
-            echo "KUBEHENGE_PUBLIC_URL=https://$ip" >> /etc/kubehenge/appliance.env
-        if [ -n "$2" ]; then
-            env=/etc/kubehenge/appliance.env
-            { grep -v "^KUBEHENGE_PROXMOX_INSECURE=" "$env" || true; [ "$2" = false ] || echo "KUBEHENGE_PROXMOX_INSECURE=true"; } > "$env.new"
-            chmod 0644 "$env.new" && mv "$env.new" "$env"
-        fi
-        [ -f /etc/kubehenge/headlamp.env ] ||
-            echo "HEADLAMP_CONFIG_OIDC_CALLBACK_URL=https://$ip:8443/oidc-callback" > /etc/kubehenge/headlamp.env
-        systemctl enable --now kubehenge-update.path >/dev/null 2>&1
-        systemctl restart kubehenge.service
-        # The next visit starts the new Headlamp.
-        systemctl stop kubehenge-headlamp.service
-    ' sh "${ctid}" "${insecure}" || rc=$?
-    if [ "${rc}" -eq 75 ]; then
-        pct exec "${ctid}" -- sh -c 'rm -rf /usr/local/bin/kubehenge.new /usr/local/bin/tofu.new /tmp/share.tar /etc/systemd/system/*.new \
-            /etc/kubehenge/proxmox-ca.pem.new /usr/local/share/ca-certificates/proxmox-ca.crt.new'
-        fail "the management cluster is being applied or removed, or the appliance upgraded, in container ${ctid}; run this again once that has finished"
-    fi
-    [ "${rc}" -eq 0 ] || fail "upgrading container ${ctid} failed"
-    sleep 2
-    pct exec "${ctid}" -- systemctl is-active --quiet kubehenge.service || fail "the service did not start; see: pct exec ${ctid} -- journalctl -u kubehenge"
+    reason=$(pct exec "${ctid}" -- flock -n -E 75 /var/lib/kubehenge sh -c "${upgrade_script}" sh '' "${ctid}" "${insecure}" "${units}") || rc=$?
+    before=${installed:-the release installed before}
+    case "${rc}" in
+        0) ;;
+        75)
+            pct exec "${ctid}" -- sh -c 'rm -rf /usr/local/bin/kubehenge.new /usr/local/bin/tofu.new /tmp/share.tar /etc/systemd/system/*.new \
+                /etc/kubehenge/proxmox-ca.pem.new /usr/local/share/ca-certificates/proxmox-ca.crt.new'
+            fail "the management cluster is being applied or removed, or the appliance upgraded, in container ${ctid}; run this again once that has finished"
+            ;;
+        76) fail "release ${KUBEHENGE_VERSION} did not start: ${reason}; rolled back to ${before}" ;;
+        77) fail "release ${KUBEHENGE_VERSION} did not start: ${reason}; rolling back to ${before} failed too; see: pct exec ${ctid} -- journalctl -u kubehenge" ;;
+        *) fail "upgrading container ${ctid} failed${reason:+: ${reason}}" ;;
+    esac
     printf '\nKubehenge %s is running in container %s. Apply the management cluster again from the interface to upgrade it too.\n' "${KUBEHENGE_VERSION}" "${ctid}"
     exit 0
 fi

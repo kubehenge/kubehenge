@@ -358,9 +358,10 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request, u user) 
 	err = s.Appliance.BuildTemplate(ticket, func(ctx context.Context, j *appliance.Job) error { //nolint:contextcheck // the build outlives the request on purpose
 		j.Add(fmt.Sprintf("Building template %s on node %s", t.Name, b.Node))
 		b.Log = func(format string, a ...any) { j.Add(fmt.Sprintf(format, a...)) }
-		vmid, buildErr := s.MakeTemplate(ctx, ticket, b, &t)
+		retry := templates.Retry{Log: b.Log}
+		vmid, buildErr := retry.Do(ctx, t.Name, func(ctx context.Context) (int, error) { return s.MakeTemplate(ctx, ticket, b, &t) })
 		if buildErr != nil {
-			return buildErr
+			return fmt.Errorf("building template %s: %w", t.Name, buildErr)
 		}
 		j.Add(fmt.Sprintf("Template %s is VM %d", t.Name, vmid))
 		return nil
