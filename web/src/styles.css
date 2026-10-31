@@ -2605,7 +2605,9 @@ details.advanced > summary {
   list-style: none;
 }
 
-.tiles-stale .tile {
+.tiles-stale .tile,
+.management-health-stale .summary,
+.management-health-stale .health-short {
   opacity: 0.55;
   filter: grayscale(1);
 }

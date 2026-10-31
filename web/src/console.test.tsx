@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
-import { fakeServer, type Route } from "./fake-server";
+import { fakeServer, held, type Route } from "./fake-server";
 import { ranked, standing } from "./fleet";
 import { score } from "./Palette";
 import type { Cluster, FleetHealth } from "./types";
@@ -218,6 +218,25 @@ describe("the console", () => {
     await act(() => vi.advanceTimersByTimeAsync(30_000));
     await waitFor(() => expect(rail).toHaveClass("rail-stale"));
     expect(within(rail).getByText("Stale")).toHaveAttribute("title", "the management cluster does not answer");
+    expect(within(rail).getAllByRole("link")).toHaveLength(4);
+
+    routes["GET /api/clusters"] = { body: fleet };
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    await waitFor(() => expect(rail).not.toHaveClass("rail-stale"));
+    vi.useRealTimers();
+  });
+
+  it("greys the fleet out once reading it again hangs, until a read answers", async () => {
+    window.history.replaceState(null, "", "/");
+    const routes = serve();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<App />);
+    const rail = await screen.findByRole("navigation", { name: "Fleet" });
+    await waitFor(() => expect(within(rail).getAllByRole("link")).toHaveLength(4));
+
+    routes["GET /api/clusters"] = held().route;
+    await act(() => vi.advanceTimersByTimeAsync(90_000));
+    expect(rail).toHaveClass("rail-stale");
     expect(within(rail).getAllByRole("link")).toHaveLength(4);
 
     routes["GET /api/clusters"] = { body: fleet };

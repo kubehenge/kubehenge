@@ -2,7 +2,7 @@ import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { fakeServer, reads, type Route } from "./fake-server";
+import { fakeServer, held, reads, type Route } from "./fake-server";
 import { HealthView } from "./Health";
 import type { Cluster, ClusterHealth, UnwellPod } from "./types";
 
@@ -310,6 +310,28 @@ describe("health page", () => {
 
     routes[healthPath] = { body: degraded };
     await act(() => vi.advanceTimersByTimeAsync(10_000));
+    await expect(screen.findByRole("list", { name: "At a glance" })).resolves.not.toHaveClass("tiles-stale");
+    vi.useRealTimers();
+  });
+
+  it("greys the tiles out once a read hangs, and reads again once it is given up", async () => {
+    const routes: Record<string, Route> = { [healthPath]: { body: degraded } };
+    const calls = fakeServer(routes);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<HealthView cluster={cluster} />);
+    await expect(screen.findByRole("list", { name: "At a glance" })).resolves.not.toHaveClass("tiles-stale");
+
+    routes[healthPath] = held().route;
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(screen.getByRole("list", { name: "At a glance" })).not.toHaveClass("tiles-stale");
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(screen.getByRole("list", { name: "At a glance, stale" })).toHaveClass("tiles-stale");
+    expect(screen.getByText(/^Stale, read at/u)).toBeInTheDocument();
+    expect(reads(calls, healthPath)).toBe(2);
+
+    routes[healthPath] = { body: degraded };
+    await act(() => vi.advanceTimersByTimeAsync(20_000));
     await expect(screen.findByRole("list", { name: "At a glance" })).resolves.not.toHaveClass("tiles-stale");
     vi.useRealTimers();
   });

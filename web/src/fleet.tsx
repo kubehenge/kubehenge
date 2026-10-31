@@ -22,6 +22,8 @@ export interface Fleet {
   /** The work running or lately finished that the user may see; undefined until read. */
   runs: RunInfo[] | undefined;
   error: string | undefined;
+  /** Whether the clusters shown may no longer hold, as usePoll tells. */
+  stale: boolean;
   reload: () => Promise<void>;
   /** When the clusters are next read. */
   next: () => number;
@@ -44,8 +46,9 @@ const noFleet = (): Promise<undefined> => Promise.resolve(undefined);
  * while it is off, so the page round it is not built again when reading starts.
  */
 export function FleetProvider({ reads = true, children }: { reads?: boolean; children: ReactNode }): JSX.Element {
-  const { data, error, reload, next, put } = usePoll<Cluster[] | undefined>(reads ? api.clusters : noFleet, (list) =>
-    list?.every((c) => settled(c)) === true ? pollIdle : pollChanging,
+  const { data, error, stale, reload, next, put } = usePoll<Cluster[] | undefined>(
+    reads ? api.clusters : noFleet,
+    (list) => (list?.every((c) => settled(c)) === true ? pollIdle : pollChanging),
   );
   // The clusters show without their health, which only adds why some need someone.
   const { data: read, reload: reloadHealth } = usePoll<FleetHealth[] | undefined>(
@@ -84,11 +87,12 @@ export function FleetProvider({ reads = true, children }: { reads?: boolean; chi
       health: read && new Map(read.map((h) => [fleetKey(h), h])),
       runs,
       error,
+      stale,
       reload,
       next,
       show,
     }),
-    [data, read, runs, error, reload, next, show],
+    [data, read, runs, error, stale, reload, next, show],
   );
   return <FleetContext value={fleet}>{children}</FleetContext>;
 }
@@ -312,8 +316,8 @@ export function FleetRail({
 }): JSX.Element {
   const fleet = useFleet();
   const list = fleet?.clusters === undefined ? undefined : ranked(fleet.clusters, fleet.health);
-  // A failed read leaves the last list shown, greyed, as it may no longer hold.
-  const stale = fleet?.error !== undefined && list !== undefined;
+  // The last list read stays shown, greyed, once it may no longer hold.
+  const stale = fleet?.stale === true && list !== undefined;
   return (
     <nav className={stale ? "rail rail-stale" : "rail"} aria-label="Fleet">
       <div className="rail-head">

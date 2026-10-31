@@ -38,6 +38,16 @@ function pathOf(input: RequestInfo | URL): string {
 const answerOf = async (route: Route, body: unknown): Promise<Answer> =>
   typeof route === "function" ? route(body) : route;
 
+// abortOf fails once a request's signal aborts, as a browser's fetch does however long the server takes.
+function abortOf(signal: AbortSignal | null | undefined): Promise<never> {
+  // oxlint-disable-next-line promise/avoid-new -- settled by the signal's event
+  return new Promise((_resolve, reject) => {
+    signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")), {
+      once: true,
+    });
+  });
+}
+
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 
 // The settings a change names, as the server lists those it plans.
@@ -85,7 +95,7 @@ export function fakeServer(routes: Record<string, Route>, headers: Record<string
     const plan = planPath.exec(key)?.groups?.["path"];
     const planned = routes[key] === undefined && plan !== undefined ? await planOf(routes, plan, body) : undefined;
     const route = routes[key] ?? planned ?? { status: httpNotFound, body: { error: `no route ${key}` } };
-    const answer = await answerOf(route, body);
+    const answer = await Promise.race([answerOf(route, body), abortOf(init.signal)]);
     const status = answer.status ?? httpOK;
     const text =
       answer.text ?? (answer.body === undefined && bodiless.has(status) ? null : JSON.stringify(answer.body ?? {}));

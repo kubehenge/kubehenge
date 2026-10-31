@@ -274,7 +274,7 @@ function healthChecksTile(h: ClusterHealth): Tile {
   return { section: "cluster-api", label: "Health checks", value: `${healthy} of ${expected} healthy`, state };
 }
 
-// A stale reading is the last one shown after a later read failed: it may no longer hold.
+// A stale reading is the last one shown once a later read failed or none answered in time.
 function Tiles({ health: h, stale }: { health: ClusterHealth; stale: boolean }): JSX.Element {
   const tiles = [controlPlaneTile(h), workersTile(h), pressureTile(h), podsTile(h), addonsTile(h), healthChecksTile(h)];
   return (
@@ -1009,7 +1009,7 @@ function PodLog({ cluster, pod, container }: { cluster: ClusterRef; pod: UnwellP
  */
 export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlamp?: string | undefined }): JSX.Element {
   const ref = { namespace: c.namespace, name: c.name };
-  const { data: h, error } = useClusterHealth(ref);
+  const { data: h, error, stale } = useClusterHealth(ref);
   const [logsOf, setLogsOf] = useState<UnwellPod>();
   if (!h) {
     return (
@@ -1023,9 +1023,9 @@ export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlam
   return (
     <>
       <div className="box">
-        <Verdict cluster={c} health={h} stale={filled(error)} />
+        <Verdict cluster={c} health={h} stale={stale} />
         <ErrorBox message={error} />
-        <Tiles health={h} stale={filled(error)} />
+        <Tiles health={h} stale={stale} />
       </div>
       <NeedsAttention health={h} actions={actions} cluster={ref} />
       <Nodes health={h} />
