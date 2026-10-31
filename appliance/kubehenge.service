@@ -17,6 +17,7 @@ SupplementaryGroups=systemd-journal
 EnvironmentFile=/etc/kubehenge/appliance.env
 ExecStart=/usr/local/bin/kubehenge serve \
     --appliance-dir /var/lib/kubehenge \
+    --key-dir /var/lib/kubehenge-keys \
     --module /usr/local/share/kubehenge/management-cluster \
     --tofu /usr/local/bin/tofu \
     --proxmox-ca /etc/kubehenge/proxmox-ca.pem \
@@ -38,8 +39,9 @@ CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=yes
 UMask=0077
 ProtectSystem=strict
-# Its own state, and the one directory where it may ask the updater for an upgrade.
-ReadWritePaths=/var/lib/kubehenge /var/lib/kubehenge-update/requests
+# Its own state, the key volume beside it, and the one directory where it may ask the updater for
+# an upgrade.
+ReadWritePaths=/var/lib/kubehenge /var/lib/kubehenge-keys /var/lib/kubehenge-update/requests
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
@@ -55,6 +57,9 @@ RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
 
 [Install]
 WantedBy=multi-user.target

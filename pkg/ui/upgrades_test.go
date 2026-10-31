@@ -26,7 +26,7 @@ func withUpgrades(t *testing.T, h *harness) *Upgrades {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ix release.Index
+	ix := release.Index{Expires: h.clock.Add(release.Validity)}
 	for _, v := range []string{"0.3.0", "0.1.0", "0.2.0", "0.1.4"} {
 		ix.Releases = append(ix.Releases, release.Release{Version: v, URL: "https://example.org/" + v, SHA256: strings.Repeat("0", 64)})
 	}
@@ -50,7 +50,7 @@ func withUpgrades(t *testing.T, h *harness) *Upgrades {
 	up := &Upgrades{
 		Spool: appliance.Spool(spool), Index: srv.URL + "/index.json", HTTP: srv.Client(),
 		SettingsPath: filepath.Join(t.TempDir(), "upgrades.json"), Now: func() time.Time { return h.clock },
-		Current: "0.1.0", Key: pub,
+		Current: "0.1.0", Keys: []ed25519.PublicKey{pub},
 	}
 	h.server.Upgrades = up
 	return up
@@ -113,6 +113,26 @@ func TestApplianceUpgrades(t *testing.T) {
 	expect(t, d.do("GET", "/api/appliance/upgrades", ""), http.StatusForbidden)
 	expect(t, d.do("POST", "/api/appliance/upgrades", `{"version":"0.3.0"}`), http.StatusForbidden)
 	expect(t, d.do("PUT", "/api/appliance/upgrades/settings", `{"policy":"off","hour":4}`), http.StatusForbidden)
+}
+
+// An index past its expiry offers nothing, not even the copy fetched while it was good.
+func TestApplianceUpgradesRefuseAnExpiredIndex(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	withUpgrades(t, h)
+	a := h.browser()
+	a.signIn("admin@pve")
+	expect(t, a.do("GET", "/api/appliance/upgrades", ""), http.StatusOK)
+	h.clock = h.clock.Add(release.Validity)
+	a = h.browser()
+	a.signIn("admin@pve")
+	rec := a.do("GET", "/api/appliance/upgrades", "")
+	expect(t, rec, http.StatusOK)
+	var v upgradesView
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil || len(v.Available) != 0 || !strings.Contains(v.Error, "expired") {
+		t.Fatalf("view = %s", rec.Body)
+	}
+	expect(t, a.do("POST", "/api/appliance/upgrades", `{"version":"0.3.0"}`), http.StatusBadGateway)
 }
 
 func TestSetupOutsideTheAppliance(t *testing.T) {

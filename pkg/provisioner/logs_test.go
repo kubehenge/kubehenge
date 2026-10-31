@@ -165,8 +165,8 @@ func TestGrafanaReadsLokiWithItsCertificate(t *testing.T) {
 	}
 
 	without, _ := monitoringProxies(t, templates.Kubeadm, Monitoring{})
-	if _, ok := without["web-monitoring"]["grafana"]; ok {
-		t.Error("Grafana has Loki without logs")
+	if g := lookup[map[string]any](t, without["web-monitoring"], "grafana"); g["additionalDataSources"] != nil || g["extraSecretMounts"] != nil {
+		t.Errorf("Grafana has Loki without logs: %v", g)
 	}
 }
 

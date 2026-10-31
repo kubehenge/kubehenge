@@ -329,6 +329,14 @@ run "controller_and_clusters_are_least_privilege" {
 
   assert {
     condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d).kubeNetworkPoliciesEnabled
+      if yamldecode(d).kind == "KubeFlannelCNIConfig"
+    ] == [true]
+    error_message = "the management cluster must enforce NetworkPolicies"
+  }
+
+  assert {
+    condition = [
       for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : [
         for r in yamldecode(d).rules : [r.image, r.keyless.issuer, try(r.keyless.subject, r.keyless.subjectRegex)]
       ] if yamldecode(d).kind == "ImageVerificationConfig"
@@ -345,7 +353,8 @@ run "controller_and_clusters_are_least_privilege" {
   assert {
     condition = (
       length(proxmox_acl.ha) == 0 && length(proxmox_user_token.ha) == 0 &&
-      !contains([for s in helm_release.cluster_api_providers.set_sensitive : s.name], "secrets.kubehenge-proxmox.data.ha-token")
+      !contains([for s in helm_release.cluster_api_providers.set_sensitive : s.name], "secrets.kubehenge-proxmox-ha.data.token") &&
+      !contains(keys(yamldecode(helm_release.cluster_api_providers.values[0]).secrets), "kubehenge-proxmox-ha")
     )
     error_message = "no HA token unless Proxmox VE HA is asked for"
   }
@@ -358,7 +367,8 @@ run "controller_and_clusters_are_least_privilege" {
   assert {
     condition = (
       length(proxmox_acl.etcd_restore) == 0 && length(proxmox_user_token.etcd_restore) == 0 &&
-      !contains([for s in helm_release.cluster_api_providers.set_sensitive : s.name], "secrets.kubehenge-proxmox.data.restore-token") &&
+      !contains([for s in helm_release.cluster_api_providers.set_sensitive : s.name], "secrets.kubehenge-proxmox-restore.data.token") &&
+      !contains(keys(yamldecode(helm_release.cluster_api_providers.values[0]).secrets), "kubehenge-proxmox-restore") &&
       !yamldecode(helm_release.kubehenge.values[0]).proxmox.etcdRestore
     )
     error_message = "no restore token unless restores through the guest agent are asked for"
@@ -473,10 +483,11 @@ run "etcd_restore" {
 
   assert {
     condition = (
-      contains([for s in helm_release.cluster_api_providers.set_sensitive : s.name], "secrets.kubehenge-proxmox.data.restore-token") &&
+      contains([for s in helm_release.cluster_api_providers.set_sensitive : s.name], "secrets.kubehenge-proxmox-restore.data.token") &&
+      !contains([for s in helm_release.cluster_api_providers.set_sensitive : s.name], "secrets.kubehenge-proxmox.data.restore-token") &&
       yamldecode(helm_release.kubehenge.values[0]).proxmox.etcdRestore
     )
-    error_message = "the controller gets the restore token, kept out of the plain values"
+    error_message = "the restore token goes into a Secret of its own for the chart's token Jobs, not the controller's, kept out of the plain values"
   }
 
   assert {
@@ -505,10 +516,11 @@ run "proxmox_ha" {
 
   assert {
     condition = (
-      contains([for s in helm_release.cluster_api_providers.set_sensitive : s.name], "secrets.kubehenge-proxmox.data.ha-token") &&
+      contains([for s in helm_release.cluster_api_providers.set_sensitive : s.name], "secrets.kubehenge-proxmox-ha.data.token") &&
+      !contains([for s in helm_release.cluster_api_providers.set_sensitive : s.name], "secrets.kubehenge-proxmox.data.ha-token") &&
       yamldecode(helm_release.kubehenge.values[0]).proxmox.ha
     )
-    error_message = "the controller gets the HA token, kept out of the plain values"
+    error_message = "the HA token goes into a Secret of its own for the chart's token Jobs, not the controller's, kept out of the plain values"
   }
 
   assert {

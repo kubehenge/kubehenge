@@ -126,6 +126,8 @@ linters:
         # OpenPGP's ASCII armor, as go-crypto's package and its Serialize methods name it.
         - armor
         - serialize
+        # x/crypto's knownhosts.Normalize.
+        - normalize
     mnd:
       # A command's argument count reads plainly where it is declared.
       ignored-functions:

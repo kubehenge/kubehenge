@@ -122,7 +122,16 @@ export function gitOpsText(g: GitOpsChoice): string {
 }
 
 /** The fields of a GitOps choice a problem belongs to. */
-export const gitOpsFields = ["url", "revision", "path", "existingSecret", "admins", "clientSecretName", "ui"] as const;
+export const gitOpsFields = [
+  "url",
+  "revision",
+  "path",
+  "existingSecret",
+  "knownHosts",
+  "admins",
+  "clientSecretName",
+  "ui",
+] as const;
 export type GitOpsField = (typeof gitOpsFields)[number];
 
 const refPattern = /^[A-Za-z0-9._/-]+$/u;
@@ -145,6 +154,10 @@ function urlProblem(g: GitOpsChoice): string | undefined {
   return undefined;
 }
 
+// Flux reading with the owner's own Secret takes the host's keys from that Secret.
+const knownHostsNeeded = (g: GitOpsChoice): boolean =>
+  g.url.trim().startsWith("ssh://") && !(g.engine === "flux" && g.auth === "existingSecret");
+
 /** gitOpsProblems says, by field, what is wrong with a choice; the server checks the same. */
 export function gitOpsProblems(g: GitOpsChoice): Partial<Record<GitOpsField, string>> {
   const p: Partial<Record<GitOpsField, string>> = {};
@@ -164,6 +177,9 @@ export function gitOpsProblems(g: GitOpsChoice): Partial<Record<GitOpsField, str
   }
   if (g.auth === "existingSecret" && !filled(g.existingSecret.trim())) {
     p.existingSecret = "Enter the Secret's name";
+  }
+  if (knownHostsNeeded(g) && !filled(g.knownHosts.trim())) {
+    p.knownHosts = "The host's keys.";
   }
   if (g.clientSecret === "existingSecret" && !filled(g.clientSecretName.trim())) {
     p.clientSecretName = "Enter the Secret's name";
@@ -310,11 +326,7 @@ export function GitOpsFields({
             </Field>
           )}
           {g.url.startsWith("ssh://") && (
-            <Field
-              label="SSH host keys"
-              hint="Optional, as known_hosts lines"
-              info="Left empty, the keys are read from the server once and trusted. The cluster's options show their fingerprints."
-            >
+            <Field label="SSH host keys" hint="known_hosts lines, from ssh-keygen -F host" error={problems.knownHosts}>
               {(id) => (
                 <textarea
                   id={id}

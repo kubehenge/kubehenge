@@ -83,8 +83,6 @@ type Reconciler struct {
 	SysAuditGroup string
 	// VolumeSnapshots is what lets a cluster's CSI plugin take volume snapshots.
 	VolumeSnapshots VolumeSnapshots
-	// HostKeys reads an SSH server's host keys as known_hosts lines; unset, from the server itself.
-	HostKeys func(ctx context.Context, address string) (string, error)
 	// StallAfter is how long a deletion may wait before it counts as stalled; DefaultStallAfter when 0.
 	StallAfter time.Duration
 	Now        func() time.Time

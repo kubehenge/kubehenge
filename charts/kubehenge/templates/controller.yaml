@@ -177,17 +177,11 @@ rules:
   - apiGroups: [""]
     resources: [configmaps]
     verbs: [get, list, watch]
-  # The checksums of each RKE2 and k3s release a cluster used, recorded once; a create cannot be
-  # held to a name.
+  # The HA rules offered to cluster creators, kept current while interface.offerHARules is on and
+  # removed when it is switched off; a create cannot be held to a name.
   - apiGroups: [""]
     resources: [configmaps]
     verbs: [create]
-  - apiGroups: [""]
-    resources: [configmaps]
-    resourceNames: [kubehenge-release-checksums]
-    verbs: [update]
-  # The HA rules offered to cluster creators, kept current while interface.offerHARules is on and
-  # removed when it is switched off.
   - apiGroups: [""]
     resources: [configmaps]
     resourceNames: [kubehenge-ha-rules]
@@ -216,6 +210,24 @@ rules:
   - apiGroups: [batch]
     resources: [jobs]
     verbs: [list, create]
+  {{- end }}
+  {{- $tokenJobs := list }}
+  {{- if .Values.proxmox.ha }}{{ $tokenJobs = append $tokenJobs "kubehenge-proxmox-ha" }}{{ end }}
+  {{- if .Values.proxmox.etcdRestore }}{{ $tokenJobs = append $tokenJobs "kubehenge-guest-agent" }}{{ end }}
+  {{- with $tokenJobs }}
+  # HA writes and restores' guest agent commands run as Jobs of the token Jobs' PodTemplates
+  # (tokenjobs.yaml), to which the API server holds every Job that mounts their tokens. The
+  # controller leaves each its request, reads its result from its pod and removes it.
+  - apiGroups: [""]
+    resources: [podtemplates]
+    resourceNames: {{ toJson . }}
+    verbs: [get]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, create, delete]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
   {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -352,6 +364,12 @@ spec:
             {{- if .Values.templateRefresh.enabled }}
             - --template-refresh
             {{- end }}
+            {{- if .Values.proxmox.ha }}
+            - --proxmox-ha
+            {{- end }}
+            {{- if .Values.proxmox.etcdRestore }}
+            - --etcd-restore
+            {{- end }}
             - --proxmox-insecure={{ .Values.proxmox.insecure }}
             {{- if .Values.interface.headlampSignIn }}
             - --headlamp-sign-in-namespaces={{ prepend (.Values.interface.extraNamespaces | default list) .Values.interface.namespace | join "," }}
@@ -378,20 +396,6 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.proxmox.secret }}
                   key: token
-            {{- if .Values.proxmox.ha }}
-            - name: KUBEHENGE_PROXMOX_HA_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.proxmox.secret }}
-                  key: ha-token
-            {{- end }}
-            {{- if .Values.proxmox.etcdRestore }}
-            - name: KUBEHENGE_PROXMOX_RESTORE_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.proxmox.secret }}
-                  key: restore-token
-            {{- end }}
           ports:
             - name: extension
               containerPort: 9443

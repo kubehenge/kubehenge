@@ -35,6 +35,6 @@ func NewRoot() *cobra.Command {
 
 	root.AddCommand(newTemplateCommand(&conn), newControllerCommand(&conn), newServeCommand(&conn),
 		newUpdateCommand(), newReleaseCommand(), newWaitCommand(), newManifestsCommand(), newEtcdSnapshotCommand(),
-		newApplianceCommand(), newDiagnoseCommand(), newCSIProxyCommand(&conn), newClusterCommand(&conn))
+		newApplianceCommand(), newDiagnoseCommand(), newTokenJobCommand(&conn), newCSIProxyCommand(&conn), newClusterCommand(&conn))
 	return root
 }

@@ -31,6 +31,7 @@ jobs:
     uses: ./.github/workflows/release-build.yml # zizmor: ignore[self-repository]
     secrets:
       RELEASE_KEY: ${{ secrets.RELEASE_KEY }}
+      RELEASE_KEY_NEXT: ${{ secrets.RELEASE_KEY_NEXT }}
 
   # What will ship has to verify the way a user verifies it, from the files alone, naming
   # release-build.yml at this tag as the builder; otherwise it only looks like proof. A job of its
@@ -122,6 +123,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write # Creates the release, uploads its files and publishes it.
+      actions: write # Starts the website's workflow, which publishes the index appliances read.
     env:
       VERSION: ${{ needs.build.outputs.version }}
       GH_TOKEN: ${{ github.token }}
@@ -171,3 +173,8 @@ jobs:
             dist/install.sh dist/index.json dist/index.json.sig \
             "sbom/kubehenge_${VERSION}_linux_amd64.spdx.json" \
             "dist/kubehenge_${VERSION}.intoto.jsonl"
+
+      # Appliances read the index from kubehenge.dev, which the website's workflow signs again from
+      # the latest release; it runs now so that they see this release at once.
+      - name: Index
+        run: gh workflow run website.yml --ref main

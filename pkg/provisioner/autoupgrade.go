@@ -200,6 +200,9 @@ type ChannelServer struct {
 	HTTP    *http.Client
 	URLs    map[string]string
 	Proxmox *proxmox.Client
+	// Pins, when set, have RKE2's and k3s's channels name the newest release of each minor version
+	// that they pin, and leave out a minor version of which they pin none: a node installs no other.
+	Pins ReleasePins
 }
 
 // DefaultChannelURLs are the publishers' own. Talos's is where Kubernetes names the newest release
@@ -261,6 +264,16 @@ func (s *ChannelServer) Channels(ctx context.Context, distribution string, os te
 	}
 	if ch.StableMinor == 0 {
 		return Channels{}, fmt.Errorf("%s names no stable channel", url)
+	}
+	if s.Pins != nil {
+		release := map[string]*distributionRelease{string(templates.RKE2): rke2Release, string(templates.K3s): k3sRelease}[distribution]
+		for m := range ch.Latest {
+			if v, ok := s.Pins.newest(release, m); ok {
+				ch.Latest[m] = v
+			} else {
+				delete(ch.Latest, m)
+			}
+		}
 	}
 	return ch, nil
 }
