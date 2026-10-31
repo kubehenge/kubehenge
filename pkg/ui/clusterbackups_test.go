@@ -1,10 +1,12 @@
 package ui
 
 import (
+	"bytes"
 	"compress/gzip"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -569,6 +571,56 @@ func TestRestoreResults(t *testing.T) {
 	}
 	expect(t, b.do("GET", "/api/clusters/default/one/restores/velero-scheduled-20261012020000-a/results", ""), http.StatusConflict)
 	expect(t, b.do("GET", "/api/clusters/default/one/restores/nothing/results", ""), http.StatusNotFound)
+}
+
+func TestVeleroLogs(t *testing.T) {
+	t.Parallel()
+	h, v := backupsHarness(t)
+	finished := velero("Restore", "shop-20261011-a", nil, map[string]any{
+		"spec":   map[string]any{"backupName": "shop-20261011"},
+		"status": map[string]any{"phase": "Failed", "startTimestamp": "2026-10-13T08:00:00Z"},
+	})
+	if _, err := v.client.Resource(veleroRestores).Namespace(provisioner.VeleroNamespace).Create(t.Context(), finished, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	lines := make([]string, veleroLogLines+5)
+	for i := range lines {
+		lines[i] = fmt.Sprintf(`time="2026-10-13T08:00:%02dZ" level=info msg="line %d"`, i%60, i)
+	}
+	// shop's backups are in its folder, encrypted with its key: their logs are too.
+	resultsStore(t, h, strings.Repeat("s", 32), strings.Join(lines, "\n")+"\n")
+	b := h.browser()
+	b.signIn("dev@pve")
+	for _, path := range []string{"backups/shop-20261011/log", "restores/shop-20261011-a/log"} {
+		rec := b.do("GET", "/api/clusters/default/one/"+path, "")
+		expect(t, rec, http.StatusOK)
+		var got veleroLogView
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if !got.More || len(got.Lines) != veleroLogLines || got.Lines[0] != lines[5] || got.Lines[veleroLogLines-1] != lines[len(lines)-1] {
+			t.Errorf("%s: more %v, %d lines from %q", path, got.More, len(got.Lines), got.Lines[0])
+		}
+	}
+	// Under way, a backup has no log yet; nor has one that is gone.
+	expect(t, b.do("GET", "/api/clusters/default/one/backups/velero-scheduled-20261013020000/log", ""), http.StatusConflict)
+	expect(t, b.do("GET", "/api/clusters/default/one/restores/nothing/log", ""), http.StatusNotFound)
+	// A log may carry what the cluster holds: it goes to those who may read its pods' logs.
+	viewer := h.browser()
+	viewer.signIn("viewer@pve")
+	expect(t, viewer.do("GET", "/api/clusters/default/one/backups/shop-20261011/log", ""), http.StatusForbidden)
+}
+
+func TestVeleroLogOfAShortLog(t *testing.T) {
+	t.Parallel()
+	var packed bytes.Buffer
+	zw := gzip.NewWriter(&packed)
+	_, _ = zw.Write([]byte("one\ntwo"))
+	_ = zw.Close()
+	got, err := veleroLogOf(&packed, 3)
+	if err != nil || got.More || !slices.Equal(got.Lines, []string{"one", "two"}) {
+		t.Errorf("log %+v, %v", got, err)
+	}
 }
 
 func TestResultsAreBounded(t *testing.T) {

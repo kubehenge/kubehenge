@@ -387,6 +387,40 @@ describe("the console", () => {
     await waitFor(() => expect(window.location.pathname).toBe("/clusters/default/web/backups"));
   });
 
+  it("shows the end of a finished restore's log to those who may read the cluster's logs", async () => {
+    window.history.replaceState(null, "", "/runs/restore/default/web/daily-1-a");
+    const routes = serve();
+    routes["GET /api/runs"] = {
+      body: [
+        {
+          id: "restore/default/web/daily-1-a",
+          kind: "restore",
+          namespace: "default",
+          cluster: "web",
+          what: "Restore from daily-1",
+          state: "failed",
+          finished: minutesAgo(8),
+          error: "Velero could not restore 2 items",
+        },
+      ],
+    };
+    routes["GET /api/clusters/default/web/restores/daily-1-a/log"] = {
+      body: { lines: ['level=info msg="restoring shop"', 'level=error msg="widgets.example.org: no such kind"'] },
+    };
+    const { unmount } = render(<App />);
+    await expect(screen.findByRole("heading", { name: /^Restore from daily-1/u })).resolves.toBeInTheDocument();
+    expect(screen.queryByLabelText("Log")).not.toBeInTheDocument();
+    unmount();
+
+    routes["GET /api/clusters"] = {
+      body: [{ ...base, allowed: { change: true, kubeconfig: true } }, ...fleet.slice(1)],
+    };
+    render(<App />);
+    await expect(screen.findByLabelText("Log")).resolves.toHaveTextContent(
+      'level=info msg="restoring shop" level=error msg="widgets.example.org: no such kind"',
+    );
+  });
+
   it("follows a change made here by its steps, in place of the cluster's standing", async () => {
     window.history.replaceState(null, "", "/");
     const routes = serve();

@@ -369,6 +369,13 @@ export interface ClusterHealth {
   logs: boolean;
 }
 
+/** The end of a finished backup's or restore's log, as Velero keeps it in the target. */
+export interface VeleroLog {
+  lines: string[];
+  /** The log has lines before these. */
+  more?: boolean;
+}
+
 export interface PodLogs {
   container: string;
   /** The lines are from the container's last run, as a crash-looping one has none of its own yet. */

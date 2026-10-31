@@ -30,6 +30,7 @@ import type {
   Realm,
   RestoreRequest,
   RestoreResults,
+  VeleroLog,
   RestoreRun,
   RunInfo,
   Session,
@@ -305,6 +306,9 @@ export interface Api {
   /** restore brings back a backup into the cluster, whole or what the request picks of it. */
   restore: (ns: string, name: string, req: RestoreRequest) => Promise<RestoreRun>;
   restoreResults: (ns: string, name: string, restore: string) => Promise<RestoreResults>;
+  /** backupLog and restoreLog are the end of a finished backup's or restore's log. */
+  backupLog: (ns: string, name: string, backup: string) => Promise<VeleroLog>;
+  restoreLog: (ns: string, name: string, restore: string) => Promise<VeleroLog>;
   etcdSnapshots: (ns: string, name: string) => Promise<ClusterEtcdSnapshots>;
   takeEtcdSnapshot: (ns: string, name: string) => Promise<void>;
   etcdRestorePlan: (ns: string, name: string, snapshot: string) => Promise<EtcdRestorePlan>;
@@ -428,6 +432,9 @@ export const api: Api = {
   restore: (ns, name, req) => request("POST", `${clusterPath(ns, name)}/restores`, req),
   restoreResults: (ns, name, restore) =>
     request("GET", `${clusterPath(ns, name)}/restores/${encodeURIComponent(restore)}/results`),
+  backupLog: (ns, name, backup) => request("GET", `${clusterPath(ns, name)}/backups/${encodeURIComponent(backup)}/log`),
+  restoreLog: (ns, name, restore) =>
+    request("GET", `${clusterPath(ns, name)}/restores/${encodeURIComponent(restore)}/log`),
   etcdSnapshots: (ns, name) => request("GET", `${clusterPath(ns, name)}/etcd-snapshots`),
   takeEtcdSnapshot: (ns, name) => act("POST", `${clusterPath(ns, name)}/etcd-snapshots`),
   etcdRestorePlan: (ns, name, snapshot) => request("GET", `${etcdSnapshotURL(ns, name, snapshot)}/restore-plan`),
