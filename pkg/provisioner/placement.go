@@ -102,7 +102,7 @@ func placement(chosen, online []string) []string {
 
 // GeneratePatches gives capmox the nodes it may put the cluster's new VMs on and the template
 // build each machine is cloned from (nodeImages), and has RKE2 and k3s nodes install their release
-// from checked files (ReleaseChecksums). capmox clones every VM onto its template's node when the
+// from files checked against its pins (ReleaseChecksums). capmox clones every VM onto its template's node when the
 // cluster names none, and fails to place any VM while one of the nodes it names does not answer,
 // so the cluster always names the nodes that are online.
 func (h *Hooks) GeneratePatches(ctx context.Context, req *runtimehooksv1.GeneratePatchesRequest, resp *runtimehooksv1.GeneratePatchesResponse) {
@@ -129,7 +129,7 @@ func (h *Hooks) GeneratePatches(ctx context.Context, req *runtimehooksv1.Generat
 		case talosContractPaths[kindOf(item)] != "":
 			patch, err = images.contract(ctx, item)
 		case h.Releases != nil:
-			patch, err = h.Releases.patch(ctx, item, cluster)
+			patch, err = h.Releases.patch(item, cluster)
 		}
 		if err != nil {
 			resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()

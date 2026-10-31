@@ -331,6 +331,14 @@ Kubehenge's controller holds a cluster's backups back, neither installing nor re
 - **`EtcdUploadHeld`:** the distribution's own upload ([clusters.md](clusters.md#the-distributions-own-upload)) has no target to upload to, for the reason the event gives, a missing target or credential as for backups above. The servers keep their snapshots on their nodes meanwhile.
 - **`EtcdRestoreFailed`**, "restore from …: …": the restore stopped, for the reason that follows, which the **Backups** view shows too. One that failed before etcd was restored started every control plane again as it was; one that failed after finished the restore ([clusters.md](clusters.md#restore-etcd)). "… the control-plane nodes are left as they are: restore by hand as the interface shows": follow the steps **Restore…** lists for the snapshot. "control-plane machine … has no VM yet: restore once every one runs": wait until every control-plane machine has its VM, then restore again.
 
+### HA writes and restore steps
+
+Each Proxmox VE HA write and each step of an etcd restore runs in a Job of its own in `kubehenge-system` ([architecture.md](architecture.md#tokens-kept-out-of-the-controller)), which the controller deletes once it has read the result; `kubectl -n kubehenge-system get jobs,pods -l kubehenge.dev/token-job` shows those running. The controller's log, or `EtcdRestoreFailed`, says what failed:
+
+- **"token Job … ended without a result: …":** the pod never ran its request, for the reason after the colon. `DeadlineExceeded` means it was not scheduled or did not start in time; `kubectl -n kubehenge-system get events` says why, often an image that could not be pulled.
+- **"starting Job …: … only a Job made exactly from PodTemplate …":** the Job did not match its template, which happens while an upgrade of the chart replaces it. The controller tries HA writes again with the new one; ask for a restore again.
+- **"not one of Kubehenge's HA objects":** a write was refused, as the HA resource or rule it was for, or a resource a rule names, no longer carries the comment `Kubehenge cluster …`. Someone changed it in Proxmox VE: put the comment back, or remove the object and let the controller make it again.
+
 ### Talos upgrades
 
 - **`TalosUpgradeFailed`**, "node … to Talos …: …": the node did not take the release, for the reason that follows: "the node came back on Talos …: Talos booted the release before, as the new one did not come up" means Talos rolled back, and "the node is not Ready … after it rebooted" that it did not come back within 15 minutes. The controller upgrades no other node until **Try again** on the cluster's Summary, or until the annotation `kubehenge.dev/talos-upgrade-failed` is removed ([clusters.md](clusters.md#talos-upgrades)). Correct what the reason names first.
@@ -340,8 +348,8 @@ Kubehenge's controller holds a cluster's backups back, neither installing nor re
 
 ### GitOps
 
-- **`GitOpsWaiting`**, "GitOps waits for …": the engine syncs nothing until it has what follows. "the deploy key": Kubehenge makes it once the cluster exists. "the repository host's SSH keys": Kubehenge could not read them, and a `GitOpsHostKeys` event says why. "the repository's token, stored as the cluster's gitops credential": store the user name and token under the cluster's **Options**. For Flux's web interface, "a client secret, which Flux's web interface signs in with" and the like: store the client secret under **Options**, or create the Secret the message names; syncing goes on meanwhile.
-- **`GitOpsHostKeys`**, "could not read the SSH keys of …, to trust them, nor can GitOps reach the repository until they are read or set as gitops.knownHosts: …": Kubehenge's controller, in the management cluster, did not reach the repository's host over SSH. Let it through, or give the host's keys yourself in `gitops.knownHosts`, as an SSH `known_hosts` file holds them.
+- **`GitOpsWaiting`**, "GitOps waits for …": the engine syncs nothing until it has what follows. "the deploy key": Kubehenge makes it once the cluster exists. "the repository's token, stored as the cluster's gitops credential": store the user name and token under the cluster's **Options**. For Flux's web interface, "a client secret, which Flux's web interface signs in with" and the like: store the client secret under **Options**, or create the Secret the message names; syncing goes on meanwhile.
+- **"knownHosts: Required value"** or **"no host key is for …, the repository's host"**, when saving a cluster: a repository reached over `ssh://` needs its host's keys in `gitops.knownHosts`, as an SSH `known_hosts` file holds them, with a line for the host and port of the URL (`[host]:port` for a port other than 22). Take them from the forge's published keys, or from `ssh-keygen -F <host>` on a machine that already trusts it; `ssh-keyscan` reads them over the network unchecked, so compare its fingerprints with the forge's before using them.
 
 ### Certificates
 
@@ -398,7 +406,7 @@ kubectl -n <namespace> get events --field-selector reason=LeftBehind
 
 ### Appliance upgrades
 
-- **Newer releases shows "Couldn't check":** the appliance could not fetch the release index from GitHub, or the index's signature did not check out. The reason follows.
+- **Newer releases shows "Couldn't check":** the appliance could not fetch the release index from kubehenge.dev, the index's signature did not check out, or it has expired. The reason follows. "the release index has expired": the index it reached was not signed again within two weeks; with a mirror (`KUBEHENGE_RELEASE_INDEX`), copy the index and its signatures to it again; a clock far ahead of the time, which `timedatectl` in the container shows, makes a fresh index look expired too.
 - **The last upgrade failed:** the reason is on the Administration page, and in `journalctl -u kubehenge-update` inside the appliance. The release installed before runs again in every case but one, below.
 - **"release … did not start: …; rolled back to …":** the new release was installed, but its interface did not answer within 2 minutes or stopped and was restarted soon after; the updater, or `install.sh --upgrade`, put the old release back. `journalctl -u kubehenge` shows why the new one did not start. Report it with that log ([below](#reporting-a-problem)).
 - **"…; rolling back to … failed too"**, or **the interface does not come back** after an upgrade: neither release serves. See `journalctl -u kubehenge`, and upgrade or reinstall the release from the shell with `install.sh --upgrade` ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)).

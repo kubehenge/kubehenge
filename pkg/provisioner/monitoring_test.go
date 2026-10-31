@@ -136,10 +136,33 @@ func TestMonitoringVerifiesEveryScrape(t *testing.T) {
 				t.Errorf("etcd's proxy runs beyond the control planes or as root: %v", proxy)
 			}
 			checkControlPlaneScrapes(t, distribution, v, objects)
-			if _, ok := v["grafana"]; ok {
+			if _, ok := lookup[map[string]any](t, v, "grafana")["ingress"]; ok {
 				t.Error("an Ingress without a hostname")
 			}
 		})
+	}
+}
+
+// Every container the chart runs requests CPU: without, a node every add-on keeps busy starves it
+// past its probes.
+func TestMonitoringRequestsWhatItRuns(t *testing.T) {
+	t.Parallel()
+	values, _ := monitoringProxies(t, templates.RKE2, Monitoring{})
+	v := values["web-monitoring"]
+	for _, path := range [][]any{
+		{"prometheusOperator"},
+		{"prometheusOperator", "prometheusConfigReloader"},
+		{prometheus, "prometheusSpec"},
+		{"alertmanager", "alertmanagerSpec"},
+		{"grafana"},
+		{"grafana", "sidecar"},
+		{"kube-state-metrics"},
+		{"prometheus-node-exporter"},
+		{"prometheus-node-exporter", "kubeRBACProxy"},
+	} {
+		if lookup[string](t, v, append(path, "resources", "requests", "cpu")...) == "" {
+			t.Errorf("%v requests no CPU", path)
+		}
 	}
 }
 

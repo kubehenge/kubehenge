@@ -92,6 +92,57 @@ check_kubehenge() {
     done
 }
 
+# netpol_probe <namespace> <name> [labels]: an agnhost pod that only waits, at Pod Security's
+# restricted level. The overrides merge into the container by its name, which kubectl run gives
+# the pod's.
+netpol_probe() {
+    netpol_overrides=$(printf '{"apiVersion":"v1","spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"%s","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' "$2")
+    kubectl -n "$1" run "$2" --image="${agnhost}" --restart=Never --labels="${3:-app=$2}" \
+        --override-type=strategic --overrides="${netpol_overrides}" -- pause
+    kubectl -n "$1" wait --for=condition=Ready "pod/$2" --timeout=5m
+}
+# netpol_connect <namespace/pod> <host:port>: agnhost's verdict, empty when it connected.
+netpol_connect() { kubectl -n "${1%/*}" exec "${1#*/}" -- /agnhost connect "$2" --timeout=3s 2>&1; }
+netpol_reaches() { netpol_connect "$1" "$2" > /dev/null; }
+# A dropped packet times out; any other failure, a failing exec among them, is not the policy's.
+netpol_blocked() { netpol_connect "$1" "$2" | grep -qx TIMEOUT; }
+
+# check_network_policies: the management cluster enforces the chart's NetworkPolicies. A pod
+# elsewhere reaches the controller's webhook and metrics ports and not its health port, and a pod
+# labelled as a token Job reaches Proxmox VE's API and nothing else.
+check_network_policies() {
+    new_namespace kubectl e2e-netpol
+    netpol_probe e2e-netpol probe
+    controller_ip=$(kubectl -n kubehenge-system get pod -l app.kubernetes.io/name=kubehenge-controller -o jsonpath='{.items[0].status.podIP}')
+    [ -n "${controller_ip}" ] || fail "the controller has no pod address"
+    token_jobs=false
+    if kubectl -n kubehenge-system get networkpolicy kubehenge-token-job > /dev/null 2>&1; then
+        token_jobs=true
+        netpol_probe kubehenge-system e2e-token-job app.kubernetes.io/name=kubehenge-token-job
+    fi
+    until_true 120 "a pod elsewhere reaches the controller's webhook port" netpol_reaches e2e-netpol/probe "${controller_ip}:9443"
+    until_true 120 "a pod elsewhere reaches the controller's metrics port" netpol_reaches e2e-netpol/probe "${controller_ip}:8443"
+    until_true 120 "the policy keeps a pod elsewhere from the controller's health port" netpol_blocked e2e-netpol/probe "${controller_ip}:8081"
+    if [ "${token_jobs}" = true ]; then
+        pve_url=$(kubectl -n kubehenge-system get deployment/kubehenge-controller -o json |
+            jq -r '.spec.template.spec.containers[0].env[] | select(.name == "KUBEHENGE_PROXMOX_URL") | .value')
+        pve=${pve_url#*://}
+        pve=${pve%%/*}
+        case ${pve} in
+            \[*\]:*) ;;
+            \[*) pve="${pve}:443" ;;
+            *:*) ;;
+            *) pve="${pve}:443" ;;
+        esac
+        until_true 120 "a token Job reaches Proxmox VE's API at ${pve}" netpol_reaches kubehenge-system/e2e-token-job "${pve}"
+        until_true 120 "the policy keeps a token Job from the controller" netpol_blocked kubehenge-system/e2e-token-job "${controller_ip}:9443"
+        kubectl -n kubehenge-system delete pod e2e-token-job --wait=false
+    fi
+    kubectl -n kubehenge-system rollout status deployment/kubehenge-controller --timeout=10s > /dev/null ||
+        fail "the controller stopped; the timeout was not the policy's"
+    kubectl delete namespace e2e-netpol --wait=false
+}
+
 check_capmox_privileges() {
     creds=$(kubectl get secret --all-namespaces -l cluster.x-k8s.io/provider=infrastructure-proxmox -o json |
         jq -c '.items[] | select(.metadata.name == "capmox-manager-credentials") | .data | map_values(@base64d)')

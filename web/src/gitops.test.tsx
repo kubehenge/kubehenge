@@ -59,6 +59,18 @@ describe("the GitOps settings", () => {
     ).toStrictEqual({});
   });
 
+  it("ask for the host keys of a repository read over SSH", () => {
+    const ssh = "ssh://git@git.example.org/a.git";
+    expect(gitOpsProblems(choice({ url: ssh, auth: "deployKey" })).knownHosts).toBeDefined();
+    expect(gitOpsProblems(choice({ url: ssh, auth: "existingSecret", existingSecret: "s" })).knownHosts).toBeDefined();
+    expect(
+      gitOpsProblems(choice({ engine: "flux", url: ssh, auth: "existingSecret", existingSecret: "s" })),
+    ).toStrictEqual({});
+    expect(
+      gitOpsProblems(choice({ url: ssh, auth: "deployKey", knownHosts: "git.example.org ssh-ed25519 AAAA" })),
+    ).toStrictEqual({});
+  });
+
   it("give Flux's web interface the stored client secret in place of a public client", async () => {
     const changes: GitOpsChoice[] = [];
     const user = userEvent.setup({ delay: null });
@@ -118,6 +130,7 @@ const cluster: Cluster = {
       engine: "flux",
       auth: "deployKey",
       repository: { url: "ssh://git@git.example.org/platform/clusters.git", revision: "main", path: "." },
+      knownHosts: "git.example.org ssh-ed25519 AAAAC3Nza\n",
     },
   },
   pool: "/pool/kubehenge/clusters.web",
@@ -177,6 +190,7 @@ describe("a cluster's GitOps options", () => {
             revision: "main",
             path: "clusters/web",
           },
+          knownHosts: "git.example.org ssh-ed25519 AAAAC3Nza\n",
           signIn: { clientSecret: "none" },
         },
       },

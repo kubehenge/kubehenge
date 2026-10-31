@@ -16,12 +16,9 @@ import (
 	"slices"
 	"strings"
 
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
@@ -31,22 +28,15 @@ var releaseScript string
 
 const releaseScriptPath = "/usr/local/sbin/kubehenge-release"
 
-// ReleaseChecksumsName is the ConfigMap the checksums are kept in, one key per release.
-const ReleaseChecksumsName = "kubehenge-release-checksums"
-
-// ReleaseChecksums records, for each RKE2 and k3s release a cluster uses, the SHA-256 of the
-// release's checksum file and of its install script as first read, and has every node of that
-// release check its files against them. Neither project signs its releases or images, and a tag or
-// an asset can be replaced; without this a node would run whatever its tag names on the day it
-// boots.
+// ReleaseChecksums has every node of an RKE2 or k3s release check its files against the release's
+// pins, the SHA-256 of its checksum file and of its install script. Without them a node would run
+// whatever its tag names on the day it boots.
 type ReleaseChecksums struct {
-	// Reader should read past any cache, so that a release recorded a moment ago is found.
-	Reader    client.Reader
-	Client    client.Client
-	Namespace string
-	HTTP      *http.Client
-	// GitHub and Raw are https://github.com and https://raw.githubusercontent.com, unless a test
-	// serves its own.
+	// Pins are the releases a node may install; DefaultReleasePins in the controller.
+	Pins ReleasePins
+	// HTTP, GitHub and Raw read a release's checksum file and install script when it is pinned:
+	// https://github.com and https://raw.githubusercontent.com, unless a test serves its own.
+	HTTP        *http.Client
 	GitHub, Raw string
 }
 
@@ -92,13 +82,11 @@ func rke2CNIImages(cni string) string { return "rke2-images-" + cni + ".linux-am
 const (
 	maxChecksumFile  = 1 << 16
 	maxInstallScript = 1 << 20
-	// recordAttempts bounds the rereads while other hooks record releases at the same moment.
-	recordAttempts = 5
 )
 
 // patch has an RKE2 or k3s node install its release from checked files, through its bootstrap
 // provider's air-gapped install; it is nil for any other template.
-func (r *ReleaseChecksums) patch(ctx context.Context, item *runtimehooksv1.GeneratePatchesRequestItem, cluster *clusterv1.Cluster) ([]byte, error) {
+func (r *ReleaseChecksums) patch(item *runtimehooksv1.GeneratePatchesRequestItem, cluster *clusterv1.Cluster) ([]byte, error) {
 	var object metav1.TypeMeta
 	if len(item.Object.Raw) > 0 {
 		if err := json.Unmarshal(item.Object.Raw, &object); err != nil {
@@ -131,9 +119,9 @@ func (r *ReleaseChecksums) patch(ctx context.Context, item *runtimehooksv1.Gener
 		}
 		files = append(slices.Clone(files), rke2CNIImages(cni))
 	}
-	sums, err := r.checksums(ctx, release, version)
-	if err != nil {
-		return nil, err
+	sums, ok := r.Pins[version]
+	if !ok {
+		return nil, unpinnedRelease(release, version)
 	}
 	nodeOS, err := ClusterNodeOS(cluster)
 	if err != nil {
@@ -143,7 +131,7 @@ func (r *ReleaseChecksums) patch(ctx context.Context, item *runtimehooksv1.Gener
 	if err != nil {
 		return nil, err //nolint:wrapcheck // names the node OS
 	}
-	command := strings.Join(append([]string{releaseScriptPath, string(release.distribution), version, sums.file, sums.script}, files...), " ")
+	command := strings.Join(append([]string{releaseScriptPath, string(release.distribution), version, sums.File, sums.Script}, files...), " ")
 	ops := []map[string]any{
 		addOp(tmpl.spec+"/files/-", map[string]any{
 			"path": releaseScriptPath, "owner": "root:root", "permissions": "0700", "content": releaseScript,
@@ -187,75 +175,17 @@ func builtinVersion(variables []runtimehooksv1.Variable, controlPlane bool) (str
 	return "", errors.New("the template's variables carry no Kubernetes version")
 }
 
-type releaseSums struct{ file, script string }
-
-// checksums are the release's recorded SHA-256s, read from the release and recorded the first
-// time; a record never changes after, and the first of several hooks recording at once wins.
-func (r *ReleaseChecksums) checksums(ctx context.Context, release *distributionRelease, version string) (releaseSums, error) {
-	// A ConfigMap key takes no "+".
-	key := strings.ReplaceAll(version, "+", "_")
-	cm, err := r.record(ctx)
-	if err != nil {
-		return releaseSums{}, err
-	}
-	if v, ok := cm.Data[key]; ok {
-		return parseReleaseSums(key, v)
-	}
-	sums, err := r.read(ctx, release, version)
-	if err != nil {
-		return releaseSums{}, err
-	}
-	for range recordAttempts {
-		if v, ok := cm.Data[key]; ok {
-			return parseReleaseSums(key, v)
-		}
-		if cm.Data == nil {
-			cm.Data = map[string]string{}
-		}
-		cm.Data[key] = sums.file + " " + sums.script
-		if cm.ResourceVersion == "" {
-			err = r.Client.Create(ctx, cm)
-		} else {
-			err = r.Client.Update(ctx, cm)
-		}
-		if err == nil {
-			return sums, nil
-		}
-		if !apierrors.IsConflict(err) && !apierrors.IsAlreadyExists(err) {
-			return releaseSums{}, fmt.Errorf("recording %s: %w", version, err)
-		}
-		if cm, err = r.record(ctx); err != nil {
-			return releaseSums{}, err
-		}
-	}
-	return releaseSums{}, fmt.Errorf("recording %s: the record kept changing", version)
-}
-
-// record is the ConfigMap the checksums are kept in, empty and not yet created before the first.
-func (r *ReleaseChecksums) record(ctx context.Context) (*corev1.ConfigMap, error) {
-	cm := &corev1.ConfigMap{}
-	err := r.Reader.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: ReleaseChecksumsName}, cm)
-	if apierrors.IsNotFound(err) {
-		return &corev1.ConfigMap{Namespace: r.Namespace, Name: ReleaseChecksumsName}, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("reading the release checksums: %w", err)
-	}
-	return cm, nil
+// unpinnedRelease is the error for a release this Kubehenge does not pin.
+func unpinnedRelease(release *distributionRelease, version string) error {
+	return fmt.Errorf("this Kubehenge release pins no %s release %s: its nodes install only the releases it carries the checksums of", release.distribution, version)
 }
 
 var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-func parseReleaseSums(key, v string) (releaseSums, error) {
-	file, script, ok := strings.Cut(v, " ")
-	if !ok || !sha256Hex.MatchString(file) || !sha256Hex.MatchString(script) {
-		return releaseSums{}, fmt.Errorf("the release checksums' %s is not two SHA-256s: %q", key, v)
-	}
-	return releaseSums{file: file, script: script}, nil
-}
+type releaseSums struct{ File, Script string }
 
-// read hashes the release's checksum file and install script as they are now, and checks the
-// file lists everything a node of the release may install.
+// read hashes the release's checksum file and install script as they are now, for pinning them,
+// and checks the file lists everything a node of the release may install.
 func (r *ReleaseChecksums) read(ctx context.Context, release *distributionRelease, version string) (releaseSums, error) {
 	file, err := r.fetch(ctx, r.GitHub+"/"+release.repository+"/releases/download/"+version+"/sha256sum-amd64.txt", maxChecksumFile)
 	if err != nil {
@@ -277,14 +207,14 @@ func (r *ReleaseChecksums) read(ctx context.Context, release *distributionReleas
 	}
 	for _, f := range want {
 		if !listed[f] {
-			return releaseSums{}, fmt.Errorf("the checksums of %s list no %s", version, f)
+			return releaseSums{}, fmt.Errorf("%w: the checksums of %s list no %s", errUnlisted, version, f)
 		}
 	}
 	script, err := r.fetch(ctx, r.Raw+"/"+release.repository+"/"+version+"/install.sh", maxInstallScript)
 	if err != nil {
 		return releaseSums{}, err
 	}
-	return releaseSums{file: hexSHA256(file), script: hexSHA256(script)}, nil
+	return releaseSums{File: hexSHA256(file), Script: hexSHA256(script)}, nil
 }
 
 func (r *ReleaseChecksums) fetch(ctx context.Context, url string, limit int64) ([]byte, error) {
@@ -297,7 +227,12 @@ func (r *ReleaseChecksums) fetch(ctx context.Context, url string, limit int64) (
 		return nil, fmt.Errorf("reading %s: %w", url, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusNotFound:
+		// GitHub publishes a release before its files, and keeps some that never got any.
+		return nil, fmt.Errorf("%w: %s: %s", errUnlisted, url, resp.Status)
+	default:
 		return nil, fmt.Errorf("%s: %s", url, resp.Status)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))

@@ -38,6 +38,9 @@ const (
 type Appliance struct {
 	// Dir holds everything the appliance keeps; only its user may read it.
 	Dir string
+	// KeyDir holds the key that seals what automatic upgrades of the management cluster keep, on a
+	// volume the container's backups leave out; empty where there is none.
+	KeyDir string
 	// Module is the management-cluster module, as released with this binary.
 	Module string
 	// Tofu is the OpenTofu binary.
@@ -138,7 +141,7 @@ func (a *Appliance) Apply(settings *Settings, passphrase string, ticket *pve.Tic
 }
 
 // ReleasesHA tells whether an apply of next switches Proxmox VE HA off, or finishes switching it
-// off after a run that did not get through. The controller's HA token goes with it, so what the
+// off after a run that did not get through. The HA token goes with it, so what the
 // controller left in HA has to be removed with the user's session once the run is through, and
 // HAReleased called then.
 func (a *Appliance) ReleasesHA(next *Settings) bool {

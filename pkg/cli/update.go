@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -8,16 +9,20 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/kubehenge/kubehenge/pkg/appliance"
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/release"
 )
 
-// DefaultIndex is where the appliance finds published releases.
-const DefaultIndex = "https://github.com/kubehenge/kubehenge/releases/latest/download/index.json"
+// DefaultIndex is where the appliance finds published releases: on the website, which signs the
+// latest release's index again every week, so that it has not expired.
+const DefaultIndex = "https://kubehenge.dev/releases/index.json"
 
 const (
 	// updateTimeout bounds the download of a release, the largest file the updater fetches.
@@ -46,7 +51,7 @@ func newUpdateCommand() *cobra.Command {
 		CertFile: "/etc/kubehenge/tls.crt", Address: "127.0.0.1:443", Wait: healthWait, Settle: healthSettle,
 	}
 	u := appliance.Updater{
-		Root: "/", Restart: appliance.RestartService, Healthy: check.Healthy, Current: release.Version, Key: release.PublicKey(),
+		Root: "/", Restart: appliance.RestartService, Healthy: check.Healthy, Current: release.Version, Keys: release.PublicKeys(),
 	}
 	var spool string
 	cmd := &cobra.Command{
@@ -74,14 +79,58 @@ func newReleaseCommand() *cobra.Command {
 		Use:   "release",
 		Short: "Sign release indexes, for the people who publish Kubehenge",
 	}
-	cmd.AddCommand(newKeygenCommand(), newSignCommand(release.PublicKey()), newIndexCommand())
+	keys := release.PublicKeys()
+	cmd.AddCommand(newKeygenCommand(), newSignCommand(keys), newIndexCommand(keys), newRenewCommand(keys), newPinsCommand())
 	return cmd
+}
+
+// pinsTimeout bounds pinning, a few hundred small downloads.
+const pinsTimeout = 30 * time.Minute
+
+func newPinsCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "pins <releasepins.txt>",
+		Short: "Pin the RKE2 and k3s releases published since",
+		Long: `Add to a pins file (pkg/provisioner/releasepins.txt) every RKE2 and k3s release it lacks of the
+minor versions a new cluster may start on, and the one before: the SHA-256 of the release's checksum
+file and of its install script, as they are now. A pin already there never changes. GH_TOKEN, when
+set, reads GitHub's API with a higher rate limit.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			raw, err := os.ReadFile(args[0])
+			if err != nil {
+				return fmt.Errorf("the pins: %w", err)
+			}
+			pins, err := provisioner.ParseReleasePins(string(raw))
+			if err != nil {
+				return err //nolint:wrapcheck // names the file's line
+			}
+			client := &http.Client{Timeout: time.Minute}
+			pinner := &provisioner.ReleasePinner{
+				HTTP: client, API: "https://api.github.com", Token: os.Getenv("GH_TOKEN"),
+				Checksums: &provisioner.ReleaseChecksums{HTTP: client, GitHub: "https://github.com", Raw: "https://raw.githubusercontent.com"},
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), pinsTimeout)
+			defer cancel()
+			added, err := pinner.Pin(ctx, pins)
+			// What was pinned before an error is kept: a pin never changes, so the next run goes on from it.
+			if writeErr := os.WriteFile(args[0], []byte(pins.Format(provisioner.PinsHeader(string(raw)))), signatureMode); writeErr != nil { //nolint:gosec // a public list
+				return fmt.Errorf("the pins: %w", writeErr)
+			}
+			for _, v := range added {
+				if _, printErr := fmt.Fprintln(cmd.OutOrStdout(), "pinned", v); printErr != nil {
+					return fmt.Errorf("printing: %w", printErr)
+				}
+			}
+			return err //nolint:wrapcheck // names the release and the address
+		},
+	}
 }
 
 func newKeygenCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "keygen <private key file>",
-		Short: "Make a release key pair; prints the public key for pkg/release/release.pub",
+		Short: "Make a release key pair; prints the public key, a line for pkg/release/release.pub",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pub, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -107,41 +156,39 @@ func newKeygenCommand() *cobra.Command {
 	}
 }
 
-// newSignCommand signs with a key whose public half is trusted, the release key built into this
+// newSignCommand signs with keys whose public halves are trusted, the release keys built into this
 // binary; a signature from any other key would be refused by every appliance, and by the next
-// release's index build, which checks the previous index against it. A build without a release key
-// (nil) signs with any key.
-func newSignCommand(trusted ed25519.PublicKey) *cobra.Command {
+// release's index build, which checks the previous index against them. Each key signs a line of
+// its own: during a rotation the old key and the new one both sign, so that appliances trusting
+// either take the index. A build without release keys signs with any key.
+func newSignCommand(trusted []ed25519.PublicKey) *cobra.Command {
 	return &cobra.Command{
-		Use:   "sign <private key file> <index.json>",
-		Short: "Check an index and write its signature to <index.json>.sig",
-		Args:  cobra.ExactArgs(2),
+		Use:   "sign <private key file>... <index.json>",
+		Short: "Check an index and write its signatures to <index.json>.sig",
+		Args:  cobra.MinimumNArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
-			raw, err := os.ReadFile(args[0])
-			if err != nil {
-				return fmt.Errorf("the private key file: %w", err)
-			}
-			seed, err := base64.StdEncoding.DecodeString(string(trimNewline(raw)))
-			if err != nil || len(seed) != ed25519.SeedSize {
-				return errors.New("the private key file holds no Ed25519 seed")
-			}
-			key := ed25519.NewKeyFromSeed(seed)
-			pub, ok := key.Public().(ed25519.PublicKey)
-			if !ok {
-				return errors.New("the private key has no Ed25519 public key")
-			}
-			if trusted != nil && !pub.Equal(trusted) {
-				return errors.New("the private key is not the release key this build trusts (pkg/release/release.pub)")
-			}
-			index, err := os.ReadFile(args[1])
+			keyFiles, indexFile := args[:len(args)-1], args[len(args)-1]
+			index, err := os.ReadFile(indexFile) //nolint:gosec // the file the person running the command named
 			if err != nil {
 				return fmt.Errorf("the index: %w", err)
 			}
-			sig := release.Sign(index, key)
-			if _, err = release.Parse(index, sig, pub); err != nil {
+			var sigs strings.Builder
+			var signers []ed25519.PublicKey
+			for _, f := range keyFiles {
+				key, pub, keyErr := readReleaseKey(f, trusted)
+				if keyErr != nil {
+					return keyErr
+				}
+				if slices.ContainsFunc(signers, func(k ed25519.PublicKey) bool { return k.Equal(pub) }) {
+					return fmt.Errorf("%s: the same key twice", f)
+				}
+				signers = append(signers, pub)
+				sigs.WriteString(release.Sign(index, key) + "\n")
+			}
+			if _, err = release.Parse(index, sigs.String(), signers, time.Now()); err != nil {
 				return fmt.Errorf("the index: %w", err)
 			}
-			if err = os.WriteFile(args[1]+".sig", []byte(sig+"\n"), signatureMode); err != nil { //nolint:gosec // a signature is public
+			if err = os.WriteFile(indexFile+".sig", []byte(sigs.String()), signatureMode); err != nil {
 				return fmt.Errorf("the signature: %w", err)
 			}
 			return nil
@@ -149,36 +196,91 @@ func newSignCommand(trusted ed25519.PublicKey) *cobra.Command {
 	}
 }
 
-func newIndexCommand() *cobra.Command {
+// readReleaseKey reads a private release key and its public half, one of trusted unless that is
+// empty.
+func readReleaseKey(path string, trusted []ed25519.PublicKey) (ed25519.PrivateKey, ed25519.PublicKey, error) {
+	raw, err := os.ReadFile(path) //nolint:gosec // the file the person running the command named
+	if err != nil {
+		return nil, nil, fmt.Errorf("the private key file: %w", err)
+	}
+	seed, err := base64.StdEncoding.DecodeString(string(trimNewline(raw)))
+	if err != nil || len(seed) != ed25519.SeedSize {
+		return nil, nil, fmt.Errorf("%s: the private key file holds no Ed25519 seed", path)
+	}
+	key := ed25519.NewKeyFromSeed(seed)
+	pub, ok := key.Public().(ed25519.PublicKey)
+	if !ok {
+		return nil, nil, errors.New("the private key has no Ed25519 public key")
+	}
+	if len(trusted) > 0 && !slices.ContainsFunc(trusted, func(k ed25519.PublicKey) bool { return k.Equal(pub) }) {
+		return nil, nil, fmt.Errorf("%s: the private key is not a release key this build trusts (pkg/release/release.pub)", path)
+	}
+	return key, pub, nil
+}
+
+// newRenewCommand writes the published index again with a new expiry, for signing: the releases
+// it lists stay as they are, checked against this build's release keys.
+func newRenewCommand(keys []ed25519.PublicKey) *cobra.Command {
+	return &cobra.Command{
+		Use:   "renew <index.json>",
+		Short: "Write a published index again, expiring two weeks from now",
+		Long: `Write a published index again to standard output, expiring two weeks from now: the index
+at <index.json>, checked against this build's release keys with its signatures beside it as
+<index.json>.sig, whatever its own expiry. The result still has to be signed with
+"kubehenge release sign".`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(keys) == 0 {
+				return errors.New("this build carries no release key to check the index with")
+			}
+			ix, err := previousIndex(args[0], keys)
+			if err != nil {
+				return err
+			}
+			return writeIndex(cmd, ix)
+		},
+	}
+}
+
+// writeIndex writes ix to standard output, expiring release.Validity from now.
+func writeIndex(cmd *cobra.Command, ix *release.Index) error {
+	ix.Renew(time.Now())
+	out, err := ix.Marshal()
+	if err != nil {
+		return fmt.Errorf("the index: %w", err)
+	}
+	if _, err = cmd.OutOrStdout().Write(out); err != nil {
+		return fmt.Errorf("writing the index: %w", err)
+	}
+	return nil
+}
+
+func newIndexCommand(keys []ed25519.PublicKey) *cobra.Command {
 	var previous string
 	var add release.Release
 	var tofu release.Artefact
 	cmd := &cobra.Command{
 		Use:   "index",
 		Short: "Write the next release index: the previous one, verified, with one release added",
-		Long: `Write the next release index to standard output: the previous published index, checked
-against this build's release key, with one newer release added. The result still has to be signed
-with "kubehenge release sign".`,
+		Long: `Write the next release index to standard output, expiring two weeks from now: the previous
+published index, checked against this build's release keys, with one newer release added. The
+result still has to be signed with "kubehenge release sign".`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ix, err := previousIndex(previous)
-			if err != nil {
-				return err
+			ix := &release.Index{Releases: []release.Release{}}
+			if previous != "" {
+				var err error
+				if ix, err = previousIndex(previous, keys); err != nil {
+					return err
+				}
 			}
 			if tofu != (release.Artefact{}) {
 				add.Tofu = &tofu
 			}
-			if err = ix.Add(add); err != nil {
+			if err := ix.Add(add); err != nil {
 				return fmt.Errorf("release %s: %w", add.Version, err)
 			}
-			out, err := ix.Marshal()
-			if err != nil {
-				return fmt.Errorf("the index: %w", err)
-			}
-			if _, err = cmd.OutOrStdout().Write(out); err != nil {
-				return fmt.Errorf("writing the index: %w", err)
-			}
-			return nil
+			return writeIndex(cmd, ix)
 		},
 	}
 	f := cmd.Flags()
@@ -195,12 +297,9 @@ with "kubehenge release sign".`,
 	return cmd
 }
 
-// previousIndex is the published index at path, checked against this build's release key, or an
-// empty one for the first release.
-func previousIndex(path string) (*release.Index, error) {
-	if path == "" {
-		return &release.Index{Releases: []release.Release{}}, nil
-	}
+// previousIndex is the published index at path, checked against keys whatever its expiry, since
+// it is being signed again.
+func previousIndex(path string, keys []ed25519.PublicKey) (*release.Index, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // the file the person running the command named
 	if err != nil {
 		return nil, fmt.Errorf("the previous index: %w", err)
@@ -209,7 +308,7 @@ func previousIndex(path string) (*release.Index, error) {
 	if err != nil {
 		return nil, fmt.Errorf("the previous index's signature: %w", err)
 	}
-	ix, err := release.Parse(raw, string(sig), release.PublicKey())
+	ix, err := release.Verify(raw, string(sig), keys)
 	if err != nil {
 		return nil, fmt.Errorf("the previous index: %w", err)
 	}

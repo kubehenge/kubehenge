@@ -13,7 +13,7 @@
 #   test/e2e/appliance.sh <release> <newer release> <newest release> <settings>
 #
 # Runs as root on the node, as appliance/install.sh does, and needs jq. The releases are archives
-# `make dist` built with three versions, in order, and with RELEASE_KEY the public half of the
+# `make dist` built with three versions, in order, and with RELEASE_PUBLIC_KEYS the public half of the
 # Ed25519 key in KUBEHENGE_E2E_RELEASE_KEY, as `kubehenge release keygen` wrote it, which signs the
 # index the test serves the appliance's updater; <settings> is a JSON file of the management
 # cluster's settings as the interface's setup sends them (pkg/appliance/settings.go), with
@@ -407,7 +407,7 @@ broken_sum=$(sha256sum "${broken}" | cut -d ' ' -f 1)
 # shellcheck disable=SC2016 # jq's variables, not the shell's.
 jq -n --arg base "${releases}" --arg nv "${newer_version}" --arg na "${newer##*/}" --arg ns "${newer_sum}" \
     --arg bv "${broken_version}" --arg ba "${broken##*/}" --arg bs "${broken_sum}" \
-    '{releases: [{version: $nv, url: "\($base)/\($na)", sha256: $ns}, {version: $bv, url: "\($base)/\($ba)", sha256: $bs}]}' \
+    '{expires: (now + 14 * 86400 | floor | todate), releases: [{version: $nv, url: "\($base)/\($na)", sha256: $ns}, {version: $bv, url: "\($base)/\($ba)", sha256: $bs}]}' \
     > "${work}/index.json"
 # Signed by the first release's own binary, which checks the key against the one it trusts.
 tar -xzOf "${release}" ./bin/kubehenge > "${work}/kubehenge"
@@ -616,6 +616,13 @@ body_is '.on | not' "they are still on"
 upgrader_is absent "switching them off left ${upgrader}"
 # Left on, so that removing the management cluster has to take them away.
 expect 200 "switching them on again" put "${work}/admin.jar" "${admin_csrf}" "${ui}/api/appliance/upgrades/management" "${on}"
+# The passphrase sealed, with its key on a volume Proxmox VE's backups leave out.
+if pct exec "${ctid}" -- cat /var/lib/kubehenge/unattended.json | grep -qF "${passphrase}"; then
+    fail "the appliance keeps the passphrase in the open"
+fi
+pct exec "${ctid}" -- test -s /var/lib/kubehenge-keys/unattended.key || fail "the appliance keeps no key for what automatic upgrades keep"
+pct config "${ctid}" | grep -E '^mp[0-9]+: .*mp=/var/lib/kubehenge-keys(,|$)' | grep -Eq '(,|^)backup=0(,|$)' ||
+    fail "the key's volume is not left out of backups"
 
 step "the appliance's updater: a release that does not start rolled back, then one that does"
 # The appliance trusts the S3 store's CA and reads the test's index; the restart applies both.

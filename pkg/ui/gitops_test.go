@@ -43,13 +43,14 @@ func TestGitOpsNeedsTheKubeconfigRight(t *testing.T) {
 func TestClusterShowsItsDeployKey(t *testing.T) {
 	t.Parallel()
 	c := cluster("default", "one")
-	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: gitopsVariable, Value: apiextensionsv1.JSON{Raw: []byte(`{"enabled":true}`)}})
+	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: gitopsVariable, Value: apiextensionsv1.JSON{
+		Raw: []byte(`{"enabled":true,"knownHosts":"git.example.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n"}`),
+	}})
 	keys := &corev1.Secret{
 		Namespace: "default", Name: "one-gitops",
 		Data: map[string][]byte{
 			"identity":     []byte("PRIVATE"),
 			"identity.pub": []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl kubehenge default/one\n"),
-			"known_hosts":  []byte("git.example.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n"),
 		},
 	}
 	h := newHarness(t, c, keys)

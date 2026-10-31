@@ -2,41 +2,37 @@ package provisioner
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"crypto/ed25519"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha1" //nolint:gosec // OpenSSH hashes known_hosts names with HMAC-SHA1; no other hash matches them
+	"encoding/base64"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"maps"
-	"net"
+	"regexp"
 	"strings"
-	"time"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // The keys of a cluster's GitOps Secret beside it, which Flux's pull Secret shares: the deploy key's
-// two halves, the repository host's SSH keys, the URL the deploy key was made for and the address
-// the host's keys were read from.
+// two halves and the URL it was made for; and of Flux's pull Secret, the repository host's SSH keys.
 const (
 	identityKey      = "identity"
 	identityPubKey   = "identity.pub"
 	knownHostsKey    = "known_hosts"
 	urlKey           = "url"
-	hostKeysFromKey  = "known_hosts.from"
 	usernameKey      = "username"
 	passwordKey      = "password"
 	gitOpsPurpose    = "gitops"
 	clientPurpose    = "oidc-client"
-	hostKeysTimeout  = 10 * time.Second
 	deployKeyComment = "kubehenge"
 )
 
@@ -45,8 +41,8 @@ const (
 func GitOpsSecretName(cluster string) string { return cluster + "-gitops" }
 
 // gitOpsState reads what the cluster's GitOps needs before its chart's values are written, and
-// makes what is missing of it: a deploy key for the repository, and the keys of its host, read
-// from the host the first time and trusted from then on, unless the cluster names them itself.
+// makes what is missing of it: a deploy key for the repository. The keys of its host are the ones
+// the cluster gives.
 func (r *Reconciler) gitOpsState(ctx context.Context, cluster *clusterv1.Cluster, g *GitOps) (gitOpsState, error) {
 	var state gitOpsState
 	if !g.Enabled {
@@ -69,14 +65,14 @@ func (r *Reconciler) gitOpsState(ctx context.Context, cluster *clusterv1.Cluster
 	if err != nil {
 		return state, err
 	}
-	state.keys, state.knownHosts = keys, cmp.Or(g.KnownHosts, string(keys[knownHostsKey]))
+	state.keys, state.knownHosts = keys, g.KnownHosts
 	return state, nil
 }
 
 // ensureGitOpsKeys keeps the cluster's GitOps Secret: a deploy key while the cluster reads its
 // repository with one, made again for a new repository, since a forge takes a deploy key for one
-// repository only, and the host's keys while the repository is reached over SSH. Both stay when
-// GitOps is switched off, so that switching it on again needs no new deploy key.
+// repository only. It stays when GitOps is switched off, so that switching it on again needs no
+// new deploy key.
 func (r *Reconciler) ensureGitOpsKeys(ctx context.Context, cluster *clusterv1.Cluster, g *GitOps) (map[string][]byte, error) {
 	s := &corev1.Secret{Namespace: cluster.Namespace, Name: GitOpsSecretName(cluster.Name)}
 	err := r.Client.Get(ctx, client.ObjectKeyFromObject(s), s)
@@ -94,15 +90,6 @@ func (r *Reconciler) ensureGitOpsKeys(ctx context.Context, cluster *clusterv1.Cl
 		}
 		data[identityKey], data[identityPubKey], data[urlKey] = private, public, []byte(g.Repository.URL)
 	}
-	if g.sshURL() && g.KnownHosts == "" {
-		address, err := sshAddress(g.Repository.URL)
-		if err != nil {
-			return nil, err
-		}
-		if len(data[knownHostsKey]) == 0 || string(data[hostKeysFromKey]) != address {
-			r.readHostKeys(ctx, cluster, address, data)
-		}
-	}
 	if maps.EqualFunc(data, s.Data, bytes.Equal) {
 		return data, nil
 	}
@@ -110,25 +97,6 @@ func (r *Reconciler) ensureGitOpsKeys(ctx context.Context, cluster *clusterv1.Cl
 	return data, applyOwned(ctx, r.Client, cluster, s, func(got *corev1.Secret) {
 		got.Type, got.Data = corev1.SecretTypeOpaque, desired
 	})
-}
-
-// readHostKeys reads the keys of the repository's host into data, or reports on the cluster that it
-// could not; the engine then reaches no repository over SSH until it can.
-func (r *Reconciler) readHostKeys(ctx context.Context, cluster *clusterv1.Cluster, address string, data map[string][]byte) {
-	read := scanHostKeys
-	if r.HostKeys != nil {
-		read = r.HostKeys
-	}
-	hosts, err := read(ctx, address)
-	if err != nil {
-		ctrl.LoggerFrom(ctx).Info("could not read the repository host's SSH keys", "address", address, "error", err.Error())
-		if r.Events != nil {
-			r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, "GitOpsHostKeys", "ReadHostKeys",
-				"could not read the SSH keys of %s, to trust them, nor can GitOps reach the repository until they are read or set as gitops.knownHosts: %v", address, err)
-		}
-		return
-	}
-	data[knownHostsKey], data[hostKeysFromKey] = []byte(hosts), []byte(address)
 }
 
 // newDeployKey makes an Ed25519 key pair: the private half in OpenSSH's format, as Flux and Argo
@@ -150,69 +118,74 @@ func newDeployKey(comment string) ([]byte, []byte, error) {
 	return pem.EncodeToMemory(block), []byte(authorized), nil
 }
 
-// hostKeyAlgorithms are asked for one by one, as a server shows one key per connection: every key
-// it has lands in known_hosts, so that the engine trusts whichever it is shown.
-var hostKeyAlgorithms = []string{
-	ssh.KeyAlgoED25519, ssh.KeyAlgoECDSA256, ssh.KeyAlgoECDSA384, ssh.KeyAlgoECDSA521, ssh.KeyAlgoRSASHA512,
+// checkKnownHosts holds the host keys a cluster gives for its repository to known_hosts lines
+// that parse, at least one of them for the repository's host, hashed or not, as the engines look
+// it up. Kubehenge never reads a host's keys from the network: whoever could answer for the
+// host on that first connection would be trusted from then on.
+func checkKnownHosts(knownHosts, repositoryURL string) error {
+	address, err := sshAddress(repositoryURL)
+	if err != nil {
+		return err
+	}
+	host := knownhosts.Normalize(address)
+	matched := false
+	rest := []byte(knownHosts)
+	for len(bytes.TrimSpace(rest)) > 0 {
+		marker, hosts, _, _, next, err := ssh.ParseKnownHosts(rest)
+		if err != nil {
+			return fmt.Errorf("the host keys are not known_hosts lines: %w", err)
+		}
+		if marker != "revoked" && knownHostsLineMatches(hosts, host) {
+			matched = true
+		}
+		rest = next
+	}
+	if !matched {
+		return fmt.Errorf("no host key is for %s, the repository's host", host)
+	}
+	return nil
 }
 
-var errHostKeyRead = errors.New("host key read")
-
-// scanHostKeys reads an SSH server's host keys as known_hosts lines.
-func scanHostKeys(ctx context.Context, address string) (string, error) {
-	var lines []string
-	var last error
-	for _, algorithm := range hostKeyAlgorithms {
-		line, err := hostKey(ctx, address, algorithm)
-		var dial *net.OpError
-		if errors.As(err, &dial) && dial.Op == "dial" {
-			return "", fmt.Errorf("reaching %s: %w", address, err)
-		}
-		if err != nil {
-			last = err
+// knownHostsLineMatches tells whether a known_hosts line's patterns name host, as OpenSSH reads
+// them: one of them does, and none of those negated with ! does.
+func knownHostsLineMatches(patterns []string, host string) bool {
+	matched := false
+	for _, p := range patterns {
+		if negated, ok := strings.CutPrefix(p, "!"); ok {
+			if knownHostMatches(negated, host) {
+				return false
+			}
 			continue
 		}
-		lines = append(lines, line)
+		matched = matched || knownHostMatches(p, host)
 	}
-	if len(lines) == 0 {
-		return "", fmt.Errorf("reading the SSH host keys of %s: %w", address, last)
-	}
-	return strings.Join(lines, "\n") + "\n", nil
+	return matched
 }
 
-// hostKey reads the server's key of one algorithm, as a known_hosts line, and hangs up before
-// signing in.
-func hostKey(ctx context.Context, address, algorithm string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, hostKeysTimeout)
-	defer cancel()
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", address)
-	if err != nil {
-		return "", fmt.Errorf("dialling: %w", err)
-	}
-	defer func() { _ = conn.Close() }()
-	if deadline, ok := ctx.Deadline(); ok {
-		if err = conn.SetDeadline(deadline); err != nil {
-			return "", fmt.Errorf("setting the connection's deadline: %w", err)
+// knownHostMatches tells whether a known_hosts host pattern names host, which is in the form
+// knownhosts.Normalize gives: plainly, with OpenSSH's wildcards, or hashed as its HashKnownHosts
+// writes it.
+func knownHostMatches(pattern, host string) bool {
+	salt, sum, ok := strings.Cut(strings.TrimPrefix(pattern, "|1|"), "|")
+	if !ok || !strings.HasPrefix(pattern, "|1|") {
+		if !strings.ContainsAny(pattern, "*?") {
+			return pattern == host
 		}
+		wild := strings.NewReplacer(`\*`, ".*", `\?`, ".").Replace(regexp.QuoteMeta(pattern))
+		matched, err := regexp.MatchString("^"+wild+"$", host)
+		return err == nil && matched
 	}
-	var key ssh.PublicKey
-	config := &ssh.ClientConfig{
-		User:              "git",
-		HostKeyAlgorithms: []string{algorithm},
-		HostKeyCallback: func(_ string, _ net.Addr, k ssh.PublicKey) error {
-			key = k
-			return errHostKeyRead
-		},
+	rawSalt, err := base64.StdEncoding.DecodeString(salt)
+	if err != nil {
+		return false
 	}
-	signedIn, _, _, err := ssh.NewClientConn(conn, address, config)
-	if signedIn != nil {
-		_ = signedIn.Close()
+	rawSum, err := base64.StdEncoding.DecodeString(sum)
+	if err != nil {
+		return false
 	}
-	if key == nil {
-		return "", fmt.Errorf("the SSH handshake: %w", err)
-	}
-	return knownhosts.Line([]string{address}, key), nil
+	mac := hmac.New(sha1.New, rawSalt)
+	_, _ = mac.Write([]byte(host))
+	return hmac.Equal(mac.Sum(nil), rawSum)
 }
 
 // HostKeyFingerprints are the SHA256 fingerprints of the keys in known_hosts lines, as ssh-keygen

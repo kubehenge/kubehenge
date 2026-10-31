@@ -1,0 +1,39 @@
+{{- /*
+Nothing reaches Kubehenge's pods but what calls them: the API server and Cluster API the
+controller's webhook and lifecycle hooks, and Prometheus its metrics. The kubelet's probes come
+from the node itself, which NetworkPolicy implementations let through. What a pod reaches is left
+open but for the token Jobs (tokenjobs.yaml): the controller and the autoscalers call Proxmox VE,
+the clusters' API servers, S3 stores and Git servers wherever they are.
+*/}}
+{{- range uniq (list .Release.Namespace .Values.autoscaler.namespace) }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kubehenge-default-deny
+  namespace: {{ . }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+{{- end }}
+# The webhook and the lifecycle hooks, from Cluster API's controller and from the API server, which
+# runs in the nodes' network and reaches a pod on another node from an address of the pod network's
+# own: no source narrower than any would cover both. Beside them the metrics, for a Prometheus
+# wherever it runs, which answer only accounts the API server allows them.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kubehenge-controller
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kubehenge-controller
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 9443
+        - protocol: TCP
+          port: 8443

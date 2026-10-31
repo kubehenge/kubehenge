@@ -94,6 +94,9 @@ data "talos_machine_configuration" "node" {
         podSubnets     = var.pod_subnets
         serviceSubnets = var.service_subnets
       }),
+      # Flannel enforces no NetworkPolicy by itself; Talos runs kube-network-policies beside it,
+      # which does, with kube-proxy left as it is.
+      yamlencode({ apiVersion = "v1alpha1", kind = "KubeFlannelCNIConfig", kubeNetworkPoliciesEnabled = true }),
       # The management cluster has no workers: its controllers run on the control plane.
       yamlencode({
         apiVersion = "v1alpha1"
