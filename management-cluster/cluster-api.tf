@@ -387,6 +387,7 @@ resource "helm_release" "kubehenge" {
       providerNamespaces = local.class_provider_namespaces
       managementEndpoint = local.api_endpoint
       talos              = { imageSignatures = local.image_signatures }
+      watch              = { stallMinutes = var.watch.stall_minutes }
       interface = {
         extraNamespaces = var.extra_cluster_namespaces
         offerHARules    = var.offer_ha_rules

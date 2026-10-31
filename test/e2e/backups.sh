@@ -10,11 +10,6 @@
 # gateway there with KUBEHENGE_E2E_BACKUP_CERT and KUBEHENGE_E2E_BACKUP_KEY, which
 # KUBEHENGE_E2E_BACKUP_CA, the target's CA, signed.
 
-# The S3 store the backups go to.
-# renovate: datasource=github-release-attachments depName=seaweedfs/seaweedfs
-SEAWEEDFS_VERSION=4.51
-SEAWEEDFS_SHA256=c03be37416a8ee672c77766e20b22a4e1430744c3af2668599a4b6eeaec14cee
-
 s3_pid=
 
 # s3_store <ClusterClass JSON>: serves the target the class offers as KUBEHENGE_E2E_BACKUP_TARGET
@@ -28,20 +23,13 @@ s3_store() {
     bucket=$(printf '%s' "${target}" | jq -r .bucket)
     region=$(printf '%s' "${target}" | jq -r '.region // "us-east-1"')
     s3_port=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlsplit(sys.argv[1]).port or 443)' "${s3_endpoint}")
-    curl -sS --fail -L -o "${work}/seaweedfs.tar.gz" \
-        "https://github.com/seaweedfs/seaweedfs/releases/download/${SEAWEEDFS_VERSION}/linux_amd64.tar.gz"
-    printf '%s  %s\n' "${SEAWEEDFS_SHA256}" "${work}/seaweedfs.tar.gz" | sha256sum -c - > /dev/null ||
-        fail "SeaweedFS's download does not have its SHA-256"
-    tar -xzf "${work}/seaweedfs.tar.gz" -C "${work}" weed
+    seaweedfs "${work}"
     s3_key=e2e$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
     s3_secret=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
     jq -n --arg k "${s3_key}" --arg s "${s3_secret}" \
         '{identities: [{name: "e2e", credentials: [{accessKey: $k, secretKey: $s}], actions: ["Admin", "Read", "Write", "List", "Tagging"]}]}' \
         > "${work}/s3.json"
-    mkdir -p "${work}/s3-data"
-    "${work}/weed" server -dir="${work}/s3-data" -ip=127.0.0.1 -ip.bind=0.0.0.0 -master.port=19333 -master.volumeSizeLimitMB=256 \
-        -volume.port=18080 -filer.port=18888 -s3 -s3.port="${s3_port}" -s3.config="${work}/s3.json" \
-        -s3.cert.file="${KUBEHENGE_E2E_BACKUP_CERT}" -s3.key.file="${KUBEHENGE_E2E_BACKUP_KEY}" > "${work}/s3.log" 2>&1 &
+    seaweedfs_server "${work}" "${s3_port}" "${work}/s3.json" "${KUBEHENGE_E2E_BACKUP_CERT}" "${KUBEHENGE_E2E_BACKUP_KEY}"
     # shellcheck disable=SC2034 # the sourcing test stops the store with it.
     s3_pid=$!
     until_true 120 "the S3 store takes a bucket" s3 -X PUT -o /dev/null "${s3_endpoint}/${bucket}"

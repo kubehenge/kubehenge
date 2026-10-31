@@ -9,13 +9,17 @@ import type {
   ClusterHealth,
   ClusterRef,
   ClusterEtcdSnapshots,
+  ControlPlaneRecovery,
   CreateRequest,
   EtcdRestorePlan,
   FleetHealth,
   HARules,
   Job,
   ManagementAutomatic,
+  ManagementBackupRequest,
+  ManagementBackups,
   ManagementSettings,
+  ManagementSnapshots,
   PodLogs,
   Plan,
   PveNode,
@@ -242,6 +246,12 @@ export interface Api {
    * cluster's name as the user typed it.
    */
   restoreEtcd: (ns: string, name: string, req: { snapshot: string; confirm: string }) => Promise<void>;
+  /** controlPlaneRecovery says how the control plane is recovered keeping machine: by the controller, or by hand. */
+  controlPlaneRecovery: (ns: string, name: string, machine: string) => Promise<ControlPlaneRecovery>;
+  /** recoverControlPlane asks the controller to reset etcd to machine's own and replace the other control planes. */
+  recoverControlPlane: (cluster: ClusterRef, ask: { machine: string; confirm: string }) => Promise<void>;
+  /** abandonDeletion has the controller give up on what the cluster's deletion waits for. */
+  abandonDeletion: (cluster: ClusterRef, confirm: string) => Promise<void>;
 
   setupStatus: () => Promise<SetupStatus>;
   setup: (settings: ManagementSettings, passphrase: string) => Promise<Job>;
@@ -266,6 +276,13 @@ export interface Api {
   removeCredential: (purpose: string, cluster?: ClusterRef) => Promise<void>;
   credential: (name: "kubeconfig" | "talosconfig", passphrase: string) => Promise<Blob>;
   removeManagement: (passphrase: string) => Promise<Job>;
+  managementBackups: () => Promise<ManagementBackups>;
+  configureManagementBackups: (req: ManagementBackupRequest) => Promise<ManagementBackups>;
+  stopManagementBackups: () => Promise<void>;
+  managementSnapshots: () => Promise<ManagementSnapshots>;
+  takeManagementSnapshot: () => Promise<ManagementBackups>;
+  /** restoreManagement restores the management cluster's etcd as a run of the appliance's. */
+  restoreManagement: (snapshot: string, passphrase: string) => Promise<Job>;
   upgrades: () => Promise<Upgrades>;
   upgrade: (version: string) => Promise<void>;
   /** nodeOS, such as almalinux-10, narrows kubeadm's versions to those with a template on it. */
@@ -323,6 +340,12 @@ export const api: Api = {
   takeEtcdSnapshot: (ns, name) => act("POST", `${clusterPath(ns, name)}/etcd-snapshots`),
   etcdRestorePlan: (ns, name, snapshot) => request("GET", `${etcdSnapshotURL(ns, name, snapshot)}/restore-plan`),
   restoreEtcd: (ns, name, req) => act("POST", `${clusterPath(ns, name)}/etcd-restores`, req),
+  controlPlaneRecovery: (ns, name, machine) =>
+    request("GET", `${clusterPath(ns, name)}/control-plane-recovery?machine=${encodeURIComponent(machine)}`),
+  recoverControlPlane: (cluster, ask) =>
+    act("POST", `${clusterPath(cluster.namespace, cluster.name)}/control-plane-recovery`, ask),
+  abandonDeletion: (cluster, confirm) =>
+    act("POST", `${clusterPath(cluster.namespace, cluster.name)}/abandon-deletion`, { confirm }),
 
   setupStatus: () => request("GET", "/api/setup"),
   setup: (settings, passphrase) => request("POST", "/api/setup", { settings, passphrase }),
@@ -349,6 +372,13 @@ export const api: Api = {
   removeCredential: (purpose, cluster) => act("DELETE", credentialPath(purpose, cluster)),
   credential: (name, passphrase) => download("POST", "/api/setup/credential", { name, passphrase }),
   removeManagement: (passphrase) => request("POST", "/api/setup/remove", { passphrase, confirm: "remove" }),
+  managementBackups: () => request("GET", "/api/appliance/etcd-backups"),
+  configureManagementBackups: (req) => request("PUT", "/api/appliance/etcd-backups", req),
+  stopManagementBackups: () => act("DELETE", "/api/appliance/etcd-backups"),
+  managementSnapshots: () => request("GET", "/api/appliance/etcd-backups/snapshots"),
+  takeManagementSnapshot: () => request("POST", "/api/appliance/etcd-backups/snapshots"),
+  restoreManagement: (snapshot, passphrase) =>
+    request("POST", `/api/appliance/etcd-backups/snapshots/${encodeURIComponent(snapshot)}/restore`, { passphrase }),
   upgrades: () => request("GET", "/api/appliance/upgrades"),
   upgrade: (version) => act("POST", "/api/appliance/upgrades", { version }),
   versions: (distribution, nodeOS) =>

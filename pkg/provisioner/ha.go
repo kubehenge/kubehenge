@@ -13,6 +13,7 @@ import (
 	"github.com/luthermonson/go-proxmox"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -40,6 +41,22 @@ const haFieldOwner = client.FieldOwner("kubehenge-ha")
 
 // proxmoxMachineVersion is the capmox API the ClusterClasses create ProxmoxMachines with.
 const proxmoxMachineVersion = "v1alpha2"
+
+// infrastructureGroup is the API group of capmox's objects.
+const infrastructureGroup = "infrastructure.cluster.x-k8s.io"
+
+// proxmoxMachineList is an empty list of capmox's ProxmoxMachines to read into.
+func proxmoxMachineList() *unstructured.UnstructuredList {
+	l := &unstructured.UnstructuredList{}
+	l.SetGroupVersionKind(schema.GroupVersionKind{Group: infrastructureGroup, Version: proxmoxMachineVersion, Kind: "ProxmoxMachineList"})
+	return l
+}
+
+// What Proxmox VE's resource list says of whether a VM runs.
+const (
+	guestRunning = "running"
+	guestStopped = "stopped"
+)
 
 // HAComment marks the HA resources and rules of the cluster whose pool is given, and nothing else:
 // the controller changes no HA object without it.

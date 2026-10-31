@@ -217,7 +217,7 @@ func TestFailedTemplateBuildReported(t *testing.T) {
 	for h.server.Appliance.TemplateJob().State == "running" && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if job := h.server.Appliance.TemplateJob(); job.State != "failed" || job.Error != "no storage local on node pve1" {
+	if job := h.server.Appliance.TemplateJob(); job.State != "failed" || !strings.HasSuffix(job.Error, ": no storage local on node pve1") {
 		t.Fatalf("job = %+v", job)
 	}
 }

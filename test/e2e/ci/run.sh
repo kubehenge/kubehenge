@@ -199,11 +199,16 @@ case "${test}" in
         exec sh "${repo}/test/e2e/${test}.sh" "${work}/mgmt"
         ;;
     appliance)
-        # Two releases of the tree under test, to install the one and upgrade to the other. The
-        # test runs on the node, where the installer does; the appliance sets up the management
-        # cluster as main.tf does.
-        make -s -C "${repo}" dist VERSION=0.0.1 > /dev/null
-        make -s -C "${repo}" dist VERSION=0.0.2 > /dev/null
+        # Three releases of the tree under test, to install the first and upgrade to the others,
+        # through the appliance's own updater and through install.sh. They trust a release key
+        # made for the run, never the published one, which signs the index the test serves the
+        # updater. The test runs on the node, where the installer does; the appliance sets up the
+        # management cluster as main.tf does.
+        make -s -C "${repo}" build > /dev/null
+        release_key=$("${repo}/dist/kubehenge" release keygen "${work}/release.key")
+        for version in 0.0.1 0.0.2 0.0.3; do
+            make -s -C "${repo}" dist VERSION="${version}" RELEASE_KEY="${release_key}" > /dev/null
+        done
         jq -n --arg image "${TF_VAR_controller_image}" '{
             nodes: ["pve"], imageDatastore: "local", vmDatastore: "local", bootstrapDatastore: "local",
             bridge: "vmbr0", nodeAddresses: ["172.20.99.11/24"], apiAddress: "172.20.99.10",
@@ -217,15 +222,18 @@ case "${test}" in
         docker exec "${pve}" sh -c 'rm -rf /root/kubehenge && mkdir -p /root/kubehenge/test'
         docker cp "${repo}/test/e2e" "${pve}:/root/kubehenge/test/e2e"
         docker cp "${repo}/appliance" "${pve}:/root/kubehenge/appliance"
-        for version in 0.0.1 0.0.2; do
+        for version in 0.0.1 0.0.2 0.0.3; do
             docker cp "${repo}/dist/kubehenge_${version}_linux_amd64.tar.gz" "${pve}:/root/kubehenge/"
         done
         docker cp "${work}/appliance-settings.json" "${pve}:/root/kubehenge/settings.json"
+        docker cp "${work}/release.key" "${pve}:/root/kubehenge/release.key"
         exec docker exec -e KUBEHENGE_E2E_APPLIANCE_ID=900 -e KUBEHENGE_E2E_APPLIANCE_ADDRESS=172.20.99.40/24 \
             -e KUBEHENGE_E2E_GATEWAY="${KUBEHENGE_E2E_GATEWAY}" -e KUBEHENGE_E2E_DNS="${KUBEHENGE_E2E_DNS}" \
-            -e KUBEHENGE_E2E_STORAGE=local "${pve}" sh /root/kubehenge/test/e2e/appliance.sh \
+            -e KUBEHENGE_E2E_STORAGE=local -e KUBEHENGE_E2E_S3_ADDRESS=172.20.99.1 \
+            -e KUBEHENGE_E2E_RELEASE_KEY=/root/kubehenge/release.key \
+            "${pve}" sh /root/kubehenge/test/e2e/appliance.sh \
             /root/kubehenge/kubehenge_0.0.1_linux_amd64.tar.gz /root/kubehenge/kubehenge_0.0.2_linux_amd64.tar.gz \
-            /root/kubehenge/settings.json
+            /root/kubehenge/kubehenge_0.0.3_linux_amd64.tar.gz /root/kubehenge/settings.json
         ;;
     # The other tests run against a management cluster applied here first. The runner has 4 vCPUs,
     # and a workload cluster with every add-on starting starves when the management node holds 4 of

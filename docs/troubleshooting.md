@@ -31,7 +31,8 @@ The interface logs in JSON, one line per event, and every change names the user 
 - **The last run of the management cluster** shows on the Administration page, with its error and log when it failed, and stays there after a restart; one cut off by a restart says so.
 - **The last template build** shows under VM templates on the same page, kept the same way.
 - **The last weekly template build** shows below it under Automatic builds, with its log, from the ConfigMap `kubehenge-template-refresh` in the management cluster's `kubehenge-system`; the run itself is a Job of the CronJob of that name, whose pod's log has the whole of it: `kubectl -n kubehenge-system logs job/<name>`. A run that reads "no API token" found no Secret `kubehenge-template-builder` with the builder's token: the module makes it, and a management cluster installed from the chart alone needs it made, or `templateRefresh.enabled` set to false.
-- **The last upgrade** shows on the Administration page; the updater keeps it in `/var/lib/kubehenge-update/status.json`.
+- **The last upgrade** shows on the Administration page, and with `kubehenge appliance upgrades` in the appliance's shell ([upgrading.md](upgrading.md#from-the-appliances-shell)); the updater keeps it in `/var/lib/kubehenge-update/status.json`.
+- **Whether the interface serves:** `pct exec <ctid> -- kubehenge appliance health` runs the check the upgrades use: an answer on the appliance's certificate within 2 minutes, then 20 seconds without a restart.
 
 ### The management cluster
 
@@ -201,6 +202,8 @@ The interface refuses a cluster whose template the controller does not find in t
 
 The error and the run's log are under VM templates on the Administration page, those of the weekly build under Automatic builds; `kubehenge template create` prints them. A failed run removes the VM it made, unless `--keep-on-failure` kept it for inspection.
 
+A build from the interface or the weekly build is tried three times, 2 and then 8 minutes apart, each failure in the log, unless another try would meet the same failure: a VM already of that name, a CPU too old, or a key other than the known one. A weekly build that still fails records a `TemplateBuildFailed` warning event on the ConfigMap `kubehenge-template-refresh`, with the error: `kubectl -n kubehenge-system get events --field-selector reason=TemplateBuildFailed`.
+
 - **"VM … on … is already named …: another run is building it, or a failed run left it; wait, or remove it":** a build of that template is under way, or a VM was left by one kept with `--keep-on-failure` or cut off before it could clean up. Once no build runs, delete that VM, which is not a template yet, and build again. The weekly build deletes such a VM itself once it is three hours old.
 - **"node …'s CPU reaches x86-64-v…, and … needs x86-64-v…: build its templates on another node":** the node OS needs a newer CPU level than that node's ([templates.md](templates.md#node-oses)). Build on a node whose CPU reaches it.
 - **"no storage on … takes ISO images":** the build VM's cloud-init data comes on an ISO. Allow the `iso` content type on a storage of that node, or choose one (**Cloud-init image** in the dialog, `--iso-storage` on the command line).
@@ -259,12 +262,12 @@ A message saying "pod range … overlaps the nodes' network …" (or the service
 
 A message saying "with … workers, control planes need … vCPUs and … MiB each, not …": the cluster has more workers than its control planes' size carries, by its distribution's sizing guide ([clusters.md](clusters.md#machines)). Give the control planes the cores and memory the message names (`controlPlaneMachine`, or the control plane's override), or keep fewer workers. "Without workers, control planes need …": with no workers, or every worker pool scaled to 0, the control planes need a worker's least on top of their own; give them that, or keep a worker. A cluster that already fell short, after an upgrade of Kubehenge asked for more, can still be changed in other ways; only more workers or smaller control planes are refused.
 
-### One control plane, unreachable after a roll
+### One control plane, its roll stalled
 
-A cluster with one control plane runs on two etcd members while that node is replaced, by an upgrade or any change to the control planes, and each member then needs the other ([architecture.md](architecture.md#clusterclasses)). If the API stops answering during the roll and does not come back, one of the two is not running, and nothing in Cluster API recovers that by itself.
+A cluster with one control plane runs on two etcd members while that node is replaced, by an upgrade or any change to the control planes, and each member then needs the other ([architecture.md](architecture.md#clusterclasses)). The plan before such a change, and kubectl through the admission webhook, warn of it. Nothing in Cluster API recovers a roll that stalls, so Kubehenge's controller watches for it: once the new machine has not been ready for 20 minutes (the module's `watch.stall_minutes`), the Cluster gets the condition `ControlPlaneRollStalled` and a warning event of the same name, the cluster's page shows it with **Recover…**, and its Health page lists it. The reason `APIUnreachable` means the API has stopped answering, `SuccessorNotReady` that it still answers. The message names both machines, why the new one is not ready, as Cluster API says it, and the kubectl command that recovers.
 
-- Find which: on both control-plane VMs (the old node and its successor), look at the distribution's service (`systemctl status k3s` or `rke2-server`, `journalctl -u k3s`; kubeadm's etcd and API server are static pods, `crictl ps -a`), and at the kernel's log for a process killed for memory (`dmesg`). Start whatever stopped, or the VM. Once both members run again, the cluster recovers and the roll goes on.
-- If one of them cannot come back, its VM or disk lost: stop the service on the other, reset its etcd to itself alone (`k3s server --cluster-reset` or `rke2 server --cluster-reset`, as the distribution's documentation describes), and start the service again. Then delete the Machine of the lost node in the management cluster, and Cluster API replaces it.
+- Find what holds the new machine up: on both control-plane VMs (the old node and its successor), look at the distribution's service (`systemctl status k3s` or `rke2-server`, `journalctl -u k3s`; kubeadm's etcd and API server are static pods, `crictl ps -a`; Talos through `talosctl service etcd`), and at the kernel's log for a process killed for memory (`dmesg`). Start whatever stopped, or the VM. Once both members run again, the roll goes on, the condition goes and an event `ControlPlaneRollResumed` says so.
+- If one of them cannot come back: **Recover…** keeps one control-plane machine, by default the one the roll replaces, and replaces the others. It takes the cluster's name typed and Sys.Modify on the cluster's pool. When the API still answers, etcd has its majority and the other machines are only deleted, which removes their members. When it does not, the controller pauses the cluster, stops the control plane on every machine through the guest agent, resets etcd on the one kept to a cluster of one from its own database (`--cluster-reset` on RKE2 and k3s, `etcdutl snapshot restore` of its own database on kubeadm, and on Talos a copy taken through the Talos API before the node's etcd is wiped and bootstrapped from it), starts it, deletes the others and unpauses the cluster. Whatever only the others held is gone. The same through kubectl: `kubectl annotate cluster <name> kubehenge.dev/etcd-restore='{"machine":"<machine to keep>","at":"<now, RFC 3339>"}'`; the status follows in `kubehenge.dev/etcd-restore-status` and the cluster's events (`ControlPlaneRecovered`, `ControlPlaneRecoveryFailed`). A management cluster that does not restore through the guest agent (`etcd_restore`) shows the steps to do it by hand instead.
 - Three control planes keep a majority through the loss of one, rolls included.
 
 ### Not enough memory for the add-ons
@@ -350,7 +353,24 @@ Each Proxmox VE HA write and each step of an etcd restore runs in a Job of its o
 
 ### Certificates
 
+- **`CertificatesExpiring`** on the Cluster, with **Renewing certificates** or **Certificates expire** on its Health page: certificates of the cluster run out within 60 days. The controller looks every 5 minutes at what each distribution reports: the date Cluster API records on kubeadm's control-plane machines, the warnings RKE2's and k3s's own certificate monitor records on each node (`kubectl get events --field-selector reason=CertificateExpirationWarning` in the cluster's `default` namespace), and the client certificates of the kubeconfig and, on Talos, the talosconfig kept beside the Cluster. Talos renews its nodes' certificates itself, and the kubelets of kubeadm and Talos theirs.
+  - Reason `Renewing`: the machines holding them are being replaced, which renews them. kubeadm's control plane does so itself; for RKE2 and k3s the controller rolls the workers' pool, rolls k3s's control plane through its `rolloutAfter`, and has an RKE2 control plane of three or more replaced one machine at a time through its health check. An event `RenewingCertificates` names the machines; `CertificatesRenewed` says when nothing runs out within 60 days any more.
+  - Reason `RestartNeeded`: an RKE2 control plane of fewer than three machines cannot be replaced one at a time without stopping the cluster. Restart `rke2-server` on the node the message names (`systemctl restart rke2-server`), which renews its certificates, as RKE2 does from 120 days before they run out.
+  - Reason `NotRenewed`: they run out within 30 days and nothing renewed them. The message says how for each: replace a machine whose replacement stalled once the rest of the cluster is healthy, look at the control-plane provider's log for a kubeconfig or talosconfig it did not renew, or rotate the cluster's CAs as the distribution documents.
 - **`NoDNS01Credential`**, "no DNS-01 credential is stored for the cluster (…): store one, or name an existing Secret": the `acme-dns01` issuer has no credential for the DNS provider, and the cluster's certificates wait. Type it in under the cluster's **Options**, take the one an administrator stored for every cluster (`dns01.sharedCredential`), or name a Secret of your own in `dns01.existingSecret` ([clusters.md](clusters.md#dns-providers)).
+
+### VMs that do not run, storage nearly full
+
+Kubehenge's controller looks every minute, with its own token, at the VMs of every cluster's machines whose node has joined, and at the storage in the cluster's `storage` variable. Both show on the cluster's Health page, and the fleet lists the cluster under what needs you.
+
+- **`VMsNotRunning`** on the Cluster, with **VM disk error**, **VM crashed**, **VM stopped** or **VM paused**: a VM has been out of the running state for 3 minutes, so a backup in suspend mode, a migration or a reboot does not count; neither does a VM Proxmox VE holds locked for a backup, migration, snapshot or clone. The message names each machine, its VM and node. The reason is the worst found:
+  - `IOError`: QEMU paused the VM because a disk write failed, most often on a full storage. Free space, or fix the disk, then resume the VM in Proxmox VE (`qm resume <vmid>`).
+  - `Panicked`: the guest's kernel crashed. Reset the VM (`qm reset <vmid>`), or delete its Machine to have it replaced.
+  - `Stopped`: someone or something stopped the VM. Start it (`qm start <vmid>`), or delete its Machine.
+  - `Paused`: the VM was paused or suspended by hand. Resume it.
+- **`StorageNearlyFull`**, with **Storage nearly full** (reason `NearlyFull`, 85% and more) or **Storage full** (reason `Full`, 95% and more): the cluster's storage, on a node its VMs run on, has that little space left. A thin storage can run out while every disk on it still has room, and QEMU then pauses each VM whose write finds none. Free space, or add capacity.
+
+A warning event of the condition's name records each start and change; `VMsRunning` and `StorageFreed` record the end.
 
 ### Autoscaling
 
@@ -359,16 +379,48 @@ Each Proxmox VE HA write and each step of an etcd restore runs in a Job of its o
 
 ### A cluster does not finish deleting
 
-- Kubehenge's controller waits while a Proxmox VE node that may hold some of the cluster's volumes on local storage is offline. Bring the node back.
-- A cluster registered with Rancher leaves it first, while its VMs still run; the conditions say so while that is going on.
-- The controller's log says what it is waiting for, such as machines not yet deleted.
+The cluster's page lists what the deletion waits on: every object of the cluster whose finalizer holds it, with what that object reports. kubectl reads the same from the Cluster's annotation `kubehenge.dev/deletion-status`:
+
+```sh
+kubectl -n <namespace> get cluster <name> -o jsonpath='{.metadata.annotations.kubehenge\.dev/deletion-status}' | jq
+```
+
+- **Hook BeforeClusterDelete:** a cluster registered with Rancher leaves it first, while its VMs still run. The reason is Rancher's.
+- **Machine … Drain not completed:** a node's pods are being evicted, and a PodDisruptionBudget, or a pod that does not stop, holds that up. Delete the pod in the cluster, or abandon the deletion.
+- **ProxmoxMachine … (a VM on an offline node):** capmox cannot delete the VM. Bring the node back.
+- **Cluster … removing the Proxmox VE objects:** Kubehenge's controller waits while a Proxmox VE node that may hold some of the cluster's volumes on local storage is offline, or Proxmox VE refuses to delete the pool, user or volume owner VM. The reason is Proxmox VE's.
+
+Once the deletion has waited 20 minutes (the module's `watch.stall_minutes`), the Cluster gets the condition `DeletionStalled` and a warning event of the same name, and the fleet and the cluster's Health page list it.
+
+A deletion that can never finish, such as one of a cluster whose nodes are gone for good, is abandoned with **Abandon…** on the cluster's page, which takes VM.Allocate on its pool as deleting does, or from kubectl, with the cluster's name as the value:
+
+```sh
+kubectl -n <namespace> annotate cluster <name> kubehenge.dev/abandon-deletion=<name>
+```
+
+Kubehenge's controller then has the machines deleted without draining their nodes or waiting for their volumes, deletes everything of the cluster that is not being deleted yet, and lets Cluster API go on without the BeforeClusterDelete hook. What has not finished five minutes later loses its finalizers, the Cluster's own last. What that leaves behind in Proxmox VE, such as a VM on a node that never came back, or the cluster's pool and user, is named in a `LeftBehind` event for each and a `DeletionAbandoned` event, and listed on the cluster's page while it is still there; a registration in Rancher stays as well. Delete those by hand once their node is back. The events stay as long as the management cluster keeps events, an hour by default:
+
+```sh
+kubectl -n <namespace> get events --field-selector reason=LeftBehind
+```
 
 ### Appliance upgrades
 
 - **Newer releases shows "Couldn't check":** the appliance could not fetch the release index from kubehenge.dev, the index's signature did not check out, or it has expired. The reason follows. "the release index has expired": the index it reached was not signed again within two weeks; with a mirror (`KUBEHENGE_RELEASE_INDEX`), copy the index and its signatures to it again; a clock far ahead of the time, which `timedatectl` in the container shows, makes a fresh index look expired too.
-- **The last upgrade failed:** the reason is on the Administration page, and in `journalctl -u kubehenge-update` inside the appliance. Unless the reason says the release was installed but restarting failed, the release installed before keeps running.
-- **The interface does not come back** after an upgrade: see `journalctl -u kubehenge`, and upgrade or reinstall the release from the shell with `install.sh --upgrade` ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)).
+- **The last upgrade failed:** the reason is on the Administration page, and in `journalctl -u kubehenge-update` inside the appliance. The release installed before runs again in every case but one, below.
+- **"release … did not start: …; rolled back to …":** the new release was installed, but its interface did not answer within 2 minutes or stopped and was restarted soon after; the updater, or `install.sh --upgrade`, put the old release back. `journalctl -u kubehenge` shows why the new one did not start. Report it with that log ([below](#reporting-a-problem)).
+- **"…; rolling back to … failed too"**, or **the interface does not come back** after an upgrade: neither release serves. See `journalctl -u kubehenge`, and upgrade or reinstall the release from the shell with `install.sh --upgrade` ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)).
 - **"Distribution: not installed on the management cluster"** or **"Cluster class … has no setting …"** when creating a cluster: the appliance was upgraded, and its interface offers a distribution or a setting whose ClusterClass the management cluster does not have yet. Apply the management cluster again (**Upgrade…** at the top of the Administration page), which installs the new release's ClusterClasses ([upgrading.md](upgrading.md#in-the-appliance)).
+
+### Management cluster etcd backups
+
+**Administration, Backups** shows the last snapshot's error, as does `kubehenge appliance etcd-backups` in the appliance's shell, and the appliance tries again 15 minutes later. `journalctl -u kubehenge` inside the appliance logs each one.
+
+- **"reaching etcd: … etcd snapshot: …"**, or **"reaching the Talos API of …"**: no control-plane node answered on its Talos API (port 50000) from the appliance, or etcd did not answer on it.
+- **"the snapshots' talosconfig: …"** or a refusal by the Talos API: the talosconfig kept for snapshots expired or no longer matches the management cluster's CA. Apply the management cluster again, which makes a new one, or **Change…** the backups.
+- **"target …: …"** or **"deleting older snapshots: …"**: the target refused the access key, or the key may not delete there. The snapshot was kept in the second case; only the oldest ones were not removed.
+- **"the passphrase does not open the target's key for the management cluster's snapshots"**: the target holds a key stored under another state's passphrase ([details](install-settings.md#management-cluster-etcd-backups)).
+- **A restore fails**: its run's log on Administration says at which node and step. "Leaving … out" names a node whose Talos API did not answer. It keeps the etcd from before: once it runs, wipe that with `talosctl -n <address> reset --system-labels-to-wipe EPHEMERAL --reboot --graceful=false` and the admin talosconfig (**Appliance**, repair access), and it joins the restored one. "no control-plane node answers on its Talos API": start the management cluster's VMs in Proxmox VE first. "snapshot … does not match its checksum": the object in the target is damaged; restore another snapshot.
 
 ### The Proxmox VE certificate or CA changed
 

@@ -96,7 +96,7 @@ func (s *Sources) RepositoryKey(ctx context.Context, k RepositoryKey) (string, e
 		return "", fmt.Errorf("reading the key of %s: %w", k.Name, err)
 	}
 	if !slices.Contains(k.Fingerprints, fingerprint(e)) {
-		return "", fmt.Errorf("%s serves a key other than %s", k.URL, strings.Join(k.Fingerprints, " or "))
+		return "", lasting(fmt.Errorf("%s serves a key other than %s", k.URL, strings.Join(k.Fingerprints, " or ")))
 	}
 	// Written out again from what was checked, so that nothing else the file held reaches the
 	// node's package manager.

@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -82,6 +83,9 @@ type Reconciler struct {
 	SysAuditGroup string
 	// VolumeSnapshots is what lets a cluster's CSI plugin take volume snapshots.
 	VolumeSnapshots VolumeSnapshots
+	// StallAfter is how long a deletion may wait before it counts as stalled; DefaultStallAfter when 0.
+	StallAfter time.Duration
+	Now        func() time.Time
 
 	ids ciliumIDs
 }
@@ -359,35 +363,62 @@ func (r *Reconciler) ensureCloud(ctx context.Context, cluster *clusterv1.Cluster
 }
 
 // reconcileDelete removes a deleted cluster's Proxmox VE objects once its machines are gone, then
-// lets the Cluster go.
+// lets the Cluster go. While the Cluster is there, it records what the deletion waits on, reports a
+// deletion that stalls, and carries out one that was abandoned.
 func (r *Reconciler) reconcileDelete(ctx context.Context, cluster *clusterv1.Cluster) (ctrl.Result, error) {
+	objects, err := clusterObjects(ctx, r.Client, cluster)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if Abandoned(cluster) {
+		return r.abandon(ctx, cluster, objects)
+	}
+	waiting, removeErr := r.removeProxmox(ctx, cluster)
+	st := r.deletionStatus(cluster, objects, removeErr)
+	if err := errors.Join(r.recordDeletion(ctx, cluster, &st), r.reportStall(ctx, cluster, &st)); err != nil {
+		return ctrl.Result{}, errors.Join(removeErr, err)
+	}
+	if removeErr != nil {
+		return ctrl.Result{}, removeErr
+	}
+	if waiting {
+		return ctrl.Result{RequeueAfter: waitInterval}, nil
+	}
+	// The Cluster may still wait for Cluster API or another controller; once it is gone, the next
+	// look finds nothing.
+	return ctrl.Result{RequeueAfter: deletionLook}, nil
+}
+
+// removeProxmox removes a deleted cluster's Proxmox VE objects once its machines are gone, and takes
+// Finalizer off it. It reports whether it waits for the machines.
+func (r *Reconciler) removeProxmox(ctx context.Context, cluster *clusterv1.Cluster) (bool, error) {
 	if !controllerutil.ContainsFinalizer(cluster, Finalizer) {
-		return ctrl.Result{}, nil
+		return false, nil
 	}
 	log := ctrl.LoggerFrom(ctx)
 	machines := &clusterv1.MachineList{}
 	err := r.Client.List(ctx, machines, client.InNamespace(cluster.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: cluster.Name})
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("listing the cluster's machines: %w", err)
+		return false, fmt.Errorf("listing the cluster's machines: %w", err)
 	}
 	if len(machines.Items) > 0 {
 		log.Info("waiting for the cluster's machines to be deleted", "machines", len(machines.Items))
-		return ctrl.Result{RequeueAfter: waitInterval}, nil
+		return true, nil
 	}
 	names, held, err := r.cloudObjects(ctx, cluster)
 	if err != nil {
-		return ctrl.Result{}, err
+		return false, err
 	}
 	if err := r.Cloud.Remove(ctx, names, held); err != nil {
-		return ctrl.Result{}, fmt.Errorf("removing the cluster's Proxmox VE objects: %w", err)
+		return false, fmt.Errorf("removing the cluster's Proxmox VE objects: %w", err)
 	}
 	log.Info("removed the cluster's Proxmox VE objects", "pool", names.Pool)
 	patch := client.MergeFrom(cluster.DeepCopy())
 	controllerutil.RemoveFinalizer(cluster, Finalizer)
 	if err := r.Client.Patch(ctx, cluster, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("removing the finalizer: %w", err)
+		return false, fmt.Errorf("removing the finalizer: %w", err)
 	}
-	return ctrl.Result{}, nil
+	return false, nil
 }
 
 // addons reads the add-ons the cluster switches on, with Rancher switched off when it is refused,

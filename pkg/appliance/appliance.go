@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
@@ -56,10 +57,16 @@ type Appliance struct {
 	// InterfaceKubeconfig makes the interface's kubeconfig from the management cluster's admin
 	// kubeconfig and API endpoint, once an apply has succeeded, with its token in tokenFile.
 	InterfaceKubeconfig func(ctx context.Context, admin []byte, endpoint, tokenFile string) ([]byte, error)
+	// Talos reaches the management cluster's nodes for its etcd backups; OpenStore opens their
+	// target, provisioner.OpenTarget when nil.
+	Talos     TalosAccess
+	OpenStore provisioner.OpenStore
+	Now       func() time.Time
 
 	mu          sync.Mutex
 	job         *Job
 	templateJob *Job
+	takingEtcd  bool
 }
 
 // ErrPassphrase is a state the passphrase does not open.
@@ -219,6 +226,10 @@ func (a *Appliance) Remove(passphrase string, ticket *pve.Ticket, before func(ct
 				return fmt.Errorf("clearing the removed cluster's state: %w", err)
 			}
 		}
+		// Its snapshots stay in the target; the keys and the talosconfig that took them go with it.
+		if err := a.StopEtcdBackups(); err != nil {
+			return err
+		}
 		gone()
 		return nil
 	})
@@ -258,8 +269,8 @@ func (a *Appliance) LoadLast() {
 		if json.Unmarshal(raw, &v) != nil {
 			continue
 		}
-		if v.State == stateRunning {
-			v.State, v.Error = stateFailed, "the appliance stopped during the run"
+		if v.State == StateRunning {
+			v.State, v.Error = StateFailed, "the appliance stopped during the run"
 		}
 		*slot = &Job{User: v.User, Automatic: v.Automatic, Kind: v.Kind, Started: v.Started, Finished: v.Finished, State: v.State, Error: v.Error, log: v.Log}
 	}
@@ -336,16 +347,16 @@ func (a *Appliance) startIn(slot **Job, by runner, what string, run func(ctx con
 	case err != nil:
 		return err
 	}
-	j := &Job{User: by.user, Automatic: by.automatic, Kind: what, Started: time.Now(), State: stateRunning}
+	j := &Job{User: by.user, Automatic: by.automatic, Kind: what, Started: time.Now(), State: StateRunning}
 	*slot = j
-	a.saveLog(slot, &JobView{User: j.User, Automatic: j.Automatic, Kind: what, Started: j.Started, State: stateRunning, Log: []string{}})
+	a.saveLog(slot, &JobView{User: j.User, Automatic: j.Automatic, Kind: what, Started: j.Started, State: StateRunning, Log: []string{}})
 	ctx, cancel := context.WithDeadline(context.Background(), by.until)
 	go func() {
 		defer cancel()
 		err := run(ctx, j)
-		state, errText := stateSucceeded, ""
+		state, errText := StateSucceeded, ""
 		if err != nil {
-			state, errText = stateFailed, err.Error()
+			state, errText = StateFailed, err.Error()
 		}
 		// The record is on disk before the outcome shows, so a restart right after still has it;
 		// from then on an upgrade may restart the service, and a new job may start once the

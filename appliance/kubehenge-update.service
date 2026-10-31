@@ -12,7 +12,9 @@ Type=oneshot
 # is checked against the release keys built into the binary wherever it comes from.
 EnvironmentFile=/etc/kubehenge/appliance.env
 ExecStart=/usr/local/bin/kubehenge update --spool /var/lib/kubehenge-update
-TimeoutStartSec=15min
+# The download, then up to twice the wait for the interface to serve: once on the new release and,
+# should it not, once more on the old one put back.
+TimeoutStartSec=20min
 # Root writes only files root owns. The one capability it keeps reads what the interface's user
 # owns and nobody else may: the request it takes, and the state directory whose lock it shares.
 CapabilityBoundingSet=CAP_DAC_READ_SEARCH

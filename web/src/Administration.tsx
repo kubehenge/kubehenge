@@ -5,12 +5,19 @@ import { AdminPage } from "./AdminPages";
 import { api } from "./api";
 import { ManagementBehind } from "./ManagementUpgrade";
 import { Link } from "./router";
+import type { Job } from "./types";
 import { ErrorBox, pollIdle, pollRunning, usePoll, Views } from "./ui";
 
+// What a run of the management cluster does, other than applying it.
+const runningWhat: Partial<Record<NonNullable<Job["kind"]>, string>> = {
+  remove: "Removing the management cluster",
+  "etcd-restore": "Restoring the management cluster's etcd",
+};
+
 // Administration is the appliance's own pages for those who may set it up: the management cluster's
-// settings and removal, Kubehenge's upgrades and repair access, VM templates, and the DNS-01
-// credential for every cluster. One poll of the setup status serves them all, so they agree on
-// whether a run is going on.
+// settings and removal, Kubehenge's upgrades and repair access, the management cluster's etcd
+// backups, VM templates, and the DNS-01 credential for every cluster. One poll of the setup status
+// serves them all, so they agree on whether a run is going on.
 export function Administration({ view, onGone }: { view: AdminView; onGone: () => void }): JSX.Element {
   const {
     data: status,
@@ -57,7 +64,7 @@ export function Administration({ view, onGone }: { view: AdminView; onGone: () =
       />
       {running && view !== "" && (
         <p className="page-note">
-          {status.job?.kind === "remove" ? "Removing the management cluster" : "Applying the management cluster"}{" "}
+          {runningWhat[status.job?.kind ?? "apply"] ?? "Applying the management cluster"}{" "}
           <Link to="/runs/management-cluster">View run</Link>
         </p>
       )}

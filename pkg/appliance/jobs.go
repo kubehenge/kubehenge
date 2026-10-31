@@ -6,11 +6,11 @@ import (
 	"time"
 )
 
-// The states a job, or the updater, ends in.
+// The states a job, or the updater, ends in, as the interface reports them.
 const (
-	stateRunning   = "running"
-	stateSucceeded = "succeeded"
-	stateFailed    = "failed"
+	StateRunning   = "running"
+	StateSucceeded = "succeeded"
+	StateFailed    = "failed"
 )
 
 // Job is one run of the module.
@@ -53,7 +53,7 @@ func (j *Job) running() bool {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	return j.State == stateRunning
+	return j.State == StateRunning
 }
 
 // view is the job as the interface shows it; nil for none.
