@@ -46,7 +46,7 @@ func (s *Server) tokenUser(w http.ResponseWriter, r *http.Request, token string)
 	if ok && now.Before(seen.until) {
 		return seen.ticket
 	}
-	id, _, _ := strings.Cut(token, "=")
+	id, _, named := strings.Cut(token, "=")
 	done, allowed := s.limiter.reserve(signInCounts(id, r)...)
 	if !allowed {
 		writeError(w, http.StatusTooManyRequests, "too many failed sign-ins. Try again later")
@@ -56,6 +56,10 @@ func (s *Server) tokenUser(w http.ResponseWriter, r *http.Request, token string)
 	done(errors.Is(err, pve.ErrAuthentication))
 	if err != nil {
 		if errors.Is(err, pve.ErrAuthentication) {
+			// Without the separator the header may be all secret, and names no token.
+			if !named {
+				id = ""
+			}
 			s.Log.Info("API token refused", "token", id, "address", clientAddress(r))
 			writeError(w, http.StatusUnauthorized, "Proxmox VE refused the API token")
 			return nil

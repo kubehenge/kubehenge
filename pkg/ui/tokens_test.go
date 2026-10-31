@@ -1,8 +1,11 @@
 package ui
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -49,5 +52,20 @@ func TestAnAPITokenActsAsItsUser(t *testing.T) {
 	// A token Proxmox VE does not take, or a user's name with a made-up secret, gets nothing.
 	for _, token := range []string{"dev@pve!ci=guess", "dev@pve", "nobody@pve!ci=secret"} {
 		expect(t, (&browser{h: h, token: token}).do("GET", "/api/clusters", ""), http.StatusUnauthorized)
+	}
+}
+
+// A refused token is logged by its ID, never with its secret, also when the header has no
+// separator between the two.
+func TestARefusedTokenLogsNoSecret(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	var logged bytes.Buffer
+	h.server.Log = slog.New(slog.NewJSONHandler(&logged, nil))
+	for _, token := range []string{"dev@pve!ci=guess", "dev@pve!ci:guess"} {
+		expect(t, (&browser{h: h, token: token}).do("GET", "/api/clusters", ""), http.StatusUnauthorized)
+	}
+	if strings.Contains(logged.String(), "guess") || strings.Count(logged.String(), `"token":"dev@pve!ci"`) != 1 {
+		t.Errorf("the refusals were logged as %s", &logged)
 	}
 }
