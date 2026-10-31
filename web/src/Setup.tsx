@@ -786,7 +786,7 @@ function ManagedSummary({
             label="Shared backup key"
             purpose="backup"
             keys={backupKeys}
-            hint="Clusters sharing it can reach, not read, each other's backups"
+            hint="For etcd snapshots only, never put into a cluster"
           />
         </div>
       )}

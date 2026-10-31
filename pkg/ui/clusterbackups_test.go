@@ -267,8 +267,17 @@ func TestClusterBackupsWhileSettingUp(t *testing.T) {
 	}
 	rec = b.do("GET", "/api/clusters/default/one/backups", "")
 	expect(t, rec, http.StatusOK)
+	if view := backupsViewOf(t, rec.Body.Bytes()); view.Reachable || !strings.Contains(view.Message, "own access key") {
+		t.Errorf("view with only the shared credential %+v", view)
+	}
+	own := &corev1.Secret{Namespace: "default", Name: provisioner.ClusterBackupCredentialName("one")}
+	if err := h.kube.Create(t.Context(), own); err != nil {
+		t.Fatal(err)
+	}
+	rec = b.do("GET", "/api/clusters/default/one/backups", "")
+	expect(t, rec, http.StatusOK)
 	if view := backupsViewOf(t, rec.Body.Bytes()); view.Reachable || !strings.Contains(view.Message, "Setting up Velero") {
-		t.Errorf("view with the shared credential %+v", view)
+		t.Errorf("view with the cluster's own credential %+v", view)
 	}
 
 	off := newHarness(t, cluster("default", "one"))

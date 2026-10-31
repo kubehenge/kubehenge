@@ -199,7 +199,7 @@ describe("etcd snapshot settings", () => {
     let dialog = screen.getByRole("dialog", { name: "Edit etcd snapshots" });
     const upload = within(dialog).getByLabelText("Also take RKE2 snapshots");
     expect(upload).not.toBeChecked();
-    expect(upload).toHaveAccessibleDescription("Cluster admins can read the target's access key");
+    expect(upload).toHaveAccessibleDescription("Cluster admins can read the cluster's own access key");
     await user.click(within(dialog).getByRole("button", { name: "About RKE2 snapshots" }));
     expect(within(dialog).getByText(/RKE2 snapshots are unencrypted, restored by hand/u)).toBeVisible();
     await user.click(upload);

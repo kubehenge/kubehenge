@@ -602,7 +602,7 @@ describe("create", () => {
       volumes: "all",
       readFrom: [],
     },
-    backupOwnKey: true,
+    storeBackupKey: true,
     backupKey: {},
   };
 

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { App } from "./App";
 import { namespaceProblem, newRestoreFields, restoreProblems, restoreRequest, restoreScope } from "./backup-runs";
 import { backupsText, scheduleProblem, scheduleText } from "./Backups";
-import { fieldProblems, newForm, request, summary, withBackupChoices } from "./create-form";
+import { fieldProblems, newForm, pendingCredentials, request, summary, withBackupChoices } from "./create-form";
 import { applyStaged, fakeServer } from "./fake-server";
 import type { ClusterBackups, ClusterClass, RestoreRun } from "./types";
 import { browserZone } from "./ui";
@@ -194,10 +194,12 @@ describe("a new cluster's backups", () => {
     });
     expect(JSON.stringify(request(chosen, k3s))).not.toContain("secret");
     expect(Object.fromEntries(summary(chosen, k3s))["Backups"]).toMatch(/kept 30 days, to aws, own access key/u);
-    // Without Sys.Modify the cluster takes the key for every cluster.
-    const shared = withBackupChoices({ ...chosen, backupKey: {} }, k3s, false);
-    expect(shared).toMatchObject({ backupOwnKey: false });
-    expect(fieldProblems("Add-ons", shared, k3s)).toStrictEqual({});
+    // Without Sys.Modify nobody types the cluster's key in now, and backups wait for it.
+    const waiting = withBackupChoices({ ...chosen, backupKey: {} }, k3s, false);
+    expect(waiting).toMatchObject({ storeBackupKey: false });
+    expect(fieldProblems("Add-ons", waiting, k3s)).toStrictEqual({});
+    expect(pendingCredentials(waiting, k3s)).toStrictEqual([]);
+    expect(Object.fromEntries(summary(waiting, k3s))["Backups"]).toMatch(/access key to store later/u);
   });
 });
 
