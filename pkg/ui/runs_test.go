@@ -103,6 +103,24 @@ func TestRunsListWhatRunsAndWhatFailedLately(t *testing.T) {
 	if r := admin[2]; r.Error != "the target refused the upload" {
 		t.Errorf("snapshot %+v", r)
 	}
+	// Runs that keep no log of their own show the cluster's events from where they could have begun.
+	since := func(r *runView) string {
+		if r.EventsSince == nil {
+			return "none"
+		}
+		return r.EventsSince.UTC().Format(time.RFC3339)
+	}
+	for i, want := range map[int]time.Time{
+		0: now.Add(-2 * time.Minute),
+		2: now.Add(-2*time.Hour - provisioner.EtcdSnapshotTimeout),
+	} {
+		if got := since(&admin[i]); got != want.Format(time.RFC3339) {
+			t.Errorf("%s: events since %s, want %s", admin[i].ID, got, want.Format(time.RFC3339))
+		}
+	}
+	if got := since(&admin[1]); got != "none" {
+		t.Errorf("the upgrade, which keeps its own steps, reads events since %s", got)
+	}
 
 	// The appliance's work is for those who may set it up, and other clusters' for those who see them.
 	if got := ids(runsOf("viewer@pve")); !slices.Equal(got, []string{"etcd-restore/default/one running", "etcd-snapshot/default/one failed"}) {

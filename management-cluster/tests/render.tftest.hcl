@@ -778,6 +778,14 @@ run "providers" {
   }
 
   assert {
+    condition = anytrue([
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) :
+      try(yamldecode(d).kind == "KubeAPIServerConfig" && yamldecode(d).extraArgs == { event-ttl = "24h" }, false)
+    ])
+    error_message = "the API server keeps events a day, as long as a failed run is listed"
+  }
+
+  assert {
     condition = alltrue([
       for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers :
       can(p.spec.deployment.containers[0].resources.requests.memory) && !can(p.spec.deployment.containers[0].resources.limits)

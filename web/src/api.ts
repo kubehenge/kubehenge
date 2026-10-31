@@ -15,6 +15,7 @@ import type {
   CreateRequest,
   EtcdRestorePlan,
   FleetHealth,
+  HealthEvent,
   FreeAddresses,
   HARules,
   Job,
@@ -328,6 +329,8 @@ export interface Api {
   setup: (settings: ManagementSettings, passphrase: string) => Promise<Job>;
 
   health: (ns: string, name: string) => Promise<ClusterHealth>;
+  /** runEvents are the management cluster's events about a cluster's objects since a time, oldest first. */
+  runEvents: (ns: string, name: string, since: string) => Promise<HealthEvent[]>;
   fleetHealth: () => Promise<FleetHealth[]>;
   runs: () => Promise<RunInfo[]>;
   podLogs: (cluster: ClusterRef, pod: { namespace: string; name: string }, container: string) => Promise<PodLogs>;
@@ -450,6 +453,7 @@ export const api: Api = {
   setup: (settings, passphrase) => request("POST", "/api/setup", { settings, passphrase }),
 
   health: (ns, name) => request("GET", `${clusterPath(ns, name)}/health`),
+  runEvents: (ns, name, since) => request("GET", `${clusterPath(ns, name)}/events?since=${encodeURIComponent(since)}`),
   fleetHealth: () => request("GET", "/api/fleet/health"),
   runs: () => request("GET", "/api/runs"),
   podLogs: (cluster, pod, container) =>

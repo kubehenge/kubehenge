@@ -351,6 +351,8 @@ export interface RunInfo {
   snapshot?: string;
   /** The release an upgrade of the appliance upgrades to. */
   release?: string;
+  /** Where the events of a run that keeps no log of its own begin. */
+  eventsSince?: string;
 }
 
 /** A step of a run, and how far it has come. */

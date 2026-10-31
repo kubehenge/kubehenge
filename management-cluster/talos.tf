@@ -106,6 +106,9 @@ data "talos_machine_configuration" "node" {
       # The leases of the Cluster API providers (local.patient_leases), for the same API stalls.
       yamlencode({ apiVersion = "v1alpha1", kind = "KubeControllerManagerConfig", extraArgs = local.patient_lease_args }),
       yamlencode({ apiVersion = "v1alpha1", kind = "KubeSchedulerConfig", extraArgs = local.patient_lease_args }),
+      # Events kept a day rather than an hour: a failed run stays listed that long, and its events
+      # are its log.
+      yamlencode({ apiVersion = "v1alpha1", kind = "KubeAPIServerConfig", extraArgs = { event-ttl = "24h" } }),
       yamlencode({
         apiVersion = "v1alpha1"
         kind       = "LinkAliasConfig"

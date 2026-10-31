@@ -558,13 +558,22 @@ func clusterObjects(c *clusterv1.Cluster, m *managementRead) (map[string]bool, [
 	return names, prefixes
 }
 
+// clusterObject tells whether an event is about one of the cluster's objects in the management
+// cluster.
+func clusterObject(c *clusterv1.Cluster, m *managementRead) func(corev1.ObjectReference) bool {
+	names, prefixes := clusterObjects(c, m)
+	return func(o corev1.ObjectReference) bool {
+		return names[o.Name] || slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(o.Name, p) })
+	}
+}
+
 // eventMerge counts an event repeated, by its source, type, object, reason and message, once.
 type eventMerge map[string]*eventView
 
-// add counts in an event of the last hour.
-func (em eventMerge) add(source string, e *corev1.Event, now time.Time) {
+// add counts in an event that last happened at from or later.
+func (em eventMerge) add(source string, e *corev1.Event, from time.Time) {
 	last := eventTime(e)
-	if now.Sub(last) > eventWindow {
+	if last.Before(from) {
 		return
 	}
 	o := e.InvolvedObject
@@ -599,19 +608,17 @@ func eventsSection(c *clusterv1.Cluster, m *managementRead, wl *workloadRead, no
 		problems = append(problems, "cluster: "+problem(wl.eventsErr))
 	}
 	s.Error = strings.Join(problems, ", ")
-	names, prefixes := clusterObjects(c, m)
-	ours := func(o corev1.ObjectReference) bool {
-		return names[o.Name] || slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(o.Name, p) })
-	}
+	ours := clusterObject(c, m)
+	from := now.Add(-eventWindow)
 	merged := eventMerge{}
 	for i := range m.events {
 		if ours(m.events[i].InvolvedObject) {
-			merged.add(sourceManagement, &m.events[i], now)
+			merged.add(sourceManagement, &m.events[i], from)
 		}
 	}
 	for i := range wl.events {
 		if wl.events[i].Type == corev1.EventTypeWarning {
-			merged.add(sourceWorkload, &wl.events[i], now)
+			merged.add(sourceWorkload, &wl.events[i], from)
 		}
 	}
 	for _, e := range merged {

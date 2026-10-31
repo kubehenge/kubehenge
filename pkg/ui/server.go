@@ -286,6 +286,7 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/machines/{machine}/cordon", s.managed(s.uncordonMachine))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/machines/{machine}/reboot", s.managed(s.rebootMachine))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/health", s.managed(s.clusterHealth))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/events", s.managed(s.runEvents))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/pods/{podNamespace}/{pod}/logs", s.managed(s.podLogs))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/backups", s.managed(s.clusterBackups))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/backups", s.managed(s.backUp))

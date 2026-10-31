@@ -471,7 +471,7 @@ func (run *restoreRun) saveBefore(ctx context.Context) error {
 	if run.reset() {
 		return nil
 	}
-	sctx, cancel := context.WithTimeout(ctx, etcdSnapshotTimeout)
+	sctx, cancel := context.WithTimeout(ctx, EtcdSnapshotTimeout)
 	defer cancel()
 	taken, err := takeEtcdSnapshot(sctx, run.r.Etcd, run.r.now(), run.cluster, run.target)
 	if err != nil {
