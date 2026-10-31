@@ -13,7 +13,7 @@
 #   test/e2e/appliance.sh <release> <newer release> <newest release> <settings>
 #
 # Runs as root on the node, as appliance/install.sh does, and needs jq. The releases are archives
-# `make dist` built with three versions, in order, and with RELEASE_KEY the public half of the
+# `make dist` built with three versions, in order, and with RELEASE_PUBLIC_KEYS the public half of the
 # Ed25519 key in KUBEHENGE_E2E_RELEASE_KEY, as `kubehenge release keygen` wrote it, which signs the
 # index the test serves the appliance's updater; <settings> is a JSON file of the management
 # cluster's settings as the interface's setup sends them (pkg/appliance/settings.go), with

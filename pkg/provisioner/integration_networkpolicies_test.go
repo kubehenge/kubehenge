@@ -48,8 +48,8 @@ func TestIntegrationChartNetworkPolicies(t *testing.T) {
 			ingress, egress, restricted := podRules(t, policies[classNamespace], l)
 			switch l["app.kubernetes.io/name"] {
 			case "kubehenge-controller":
-				if len(ingress) != 1 || len(ingress[0].From) != 0 || !onlyPorts(ingress[0].Ports, corev1.ProtocolTCP, 9443) {
-					t.Errorf("%s: the controller may be reached by %+v, want only its webhook port", url, ingress)
+				if len(ingress) != 1 || len(ingress[0].From) != 0 || !onlyPorts(ingress[0].Ports, corev1.ProtocolTCP, 9443, 8443) {
+					t.Errorf("%s: the controller may be reached by %+v, want only its webhook and metrics ports", url, ingress)
 				}
 			case "kubehenge-token-job":
 				dns := len(egress) == 2 && len(egress[0].To) == 1 && egress[0].To[0].PodSelector != nil &&
@@ -121,9 +121,17 @@ func podRules(t *testing.T, policies []networkingv1.NetworkPolicy, l map[string]
 	return ingress, egress, restricted
 }
 
-func onlyPorts(ports []networkingv1.NetworkPolicyPort, protocol corev1.Protocol, port int) bool {
-	return len(ports) == 1 && ports[0].Protocol != nil && *ports[0].Protocol == protocol &&
-		ports[0].Port != nil && *ports[0].Port == intstr.FromInt32(int32(port)) && ports[0].EndPort == nil //nolint:gosec // a port number
+func onlyPorts(ports []networkingv1.NetworkPolicyPort, protocol corev1.Protocol, want ...int) bool {
+	if len(ports) != len(want) {
+		return false
+	}
+	for i, p := range ports {
+		if p.Protocol == nil || *p.Protocol != protocol || p.Port == nil || p.EndPort != nil ||
+			*p.Port != intstr.FromInt32(int32(want[i])) { //nolint:gosec // a port number
+			return false
+		}
+	}
+	return true
 }
 
 // mapAt is the string map at path in an object, or nil.

@@ -108,8 +108,8 @@ netpol_reaches() { netpol_connect "$1" "$2" > /dev/null; }
 netpol_blocked() { netpol_connect "$1" "$2" | grep -qx TIMEOUT; }
 
 # check_network_policies: the management cluster enforces the chart's NetworkPolicies. A pod
-# elsewhere reaches the controller's webhook port and not its health port, and a pod labelled as a
-# token Job reaches Proxmox VE's API and nothing else.
+# elsewhere reaches the controller's webhook and metrics ports and not its health port, and a pod
+# labelled as a token Job reaches Proxmox VE's API and nothing else.
 check_network_policies() {
     new_namespace kubectl e2e-netpol
     netpol_probe e2e-netpol probe
@@ -121,6 +121,7 @@ check_network_policies() {
         netpol_probe kubehenge-system e2e-token-job app.kubernetes.io/name=kubehenge-token-job
     fi
     until_true 120 "a pod elsewhere reaches the controller's webhook port" netpol_reaches e2e-netpol/probe "${controller_ip}:9443"
+    until_true 120 "a pod elsewhere reaches the controller's metrics port" netpol_reaches e2e-netpol/probe "${controller_ip}:8443"
     until_true 120 "the policy keeps a pod elsewhere from the controller's health port" netpol_blocked e2e-netpol/probe "${controller_ip}:8081"
     if [ "${token_jobs}" = true ]; then
         pve_url=$(kubectl -n kubehenge-system get deployment/kubehenge-controller -o json |

@@ -207,7 +207,7 @@ case "${test}" in
         make -s -C "${repo}" build > /dev/null
         release_key=$("${repo}/dist/kubehenge" release keygen "${work}/release.key")
         for version in 0.0.1 0.0.2 0.0.3; do
-            make -s -C "${repo}" dist VERSION="${version}" RELEASE_KEY="${release_key}" > /dev/null
+            make -s -C "${repo}" dist VERSION="${version}" RELEASE_PUBLIC_KEYS="${release_key}" > /dev/null
         done
         jq -n --arg image "${TF_VAR_controller_image}" '{
             nodes: ["pve"], imageDatastore: "local", vmDatastore: "local", bootstrapDatastore: "local",
