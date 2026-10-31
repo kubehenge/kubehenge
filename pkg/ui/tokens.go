@@ -46,7 +46,7 @@ func (s *Server) tokenUser(w http.ResponseWriter, r *http.Request, token string)
 	if ok && now.Before(seen.until) {
 		return seen.ticket
 	}
-	id, _, named := strings.Cut(token, "=")
+	id := redactToken(token)
 	done, allowed := s.limiter.reserve(signInCounts(id, r)...)
 	if !allowed {
 		writeError(w, http.StatusTooManyRequests, "too many failed sign-ins. Try again later")
@@ -56,10 +56,6 @@ func (s *Server) tokenUser(w http.ResponseWriter, r *http.Request, token string)
 	done(errors.Is(err, pve.ErrAuthentication))
 	if err != nil {
 		if errors.Is(err, pve.ErrAuthentication) {
-			// Without the separator the header may be all secret, and names no token.
-			if !named {
-				id = ""
-			}
 			s.Log.Info("API token refused", "token", id, "address", clientAddress(r))
 			writeError(w, http.StatusUnauthorized, "Proxmox VE refused the API token")
 			return nil
@@ -74,4 +70,14 @@ func (s *Server) tokenUser(w http.ResponseWriter, r *http.Request, token string)
 	}
 	s.tokens.seen[key] = tokenSeen{ticket: ticket, until: now.Add(tokenRecheck)}
 	return ticket
+}
+
+// redactToken is the part of an API token that may be logged: its ID, without the secret after
+// the separator. A header without the separator may be all secret, and names no token.
+func redactToken(token string) string {
+	id, _, named := strings.Cut(token, "=")
+	if !named {
+		return ""
+	}
+	return id
 }
