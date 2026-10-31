@@ -46,7 +46,7 @@ const DefaultTalosVersion = "v1.14.5"
 type Request struct {
 	Distribution Distribution
 	TalosVersion string // Talos only
-	// NodeOS is what the nodes of RKE2, k3s and kubeadm run; empty means DefaultNodeOS.
+	// NodeOS is what the nodes of RKE2, k3s and kubeadm run. Empty means DefaultNodeOS.
 	NodeOS            NodeOS
 	KubernetesVersion string // kubeadm only
 }
@@ -105,7 +105,7 @@ func Plan(req *Request) (Template, error) {
 			v = DefaultTalosVersion
 		}
 		if !versionRE.MatchString(v) {
-			return Template{}, fmt.Errorf("talos version %q is not of the form v1.2.3", v)
+			return Template{}, fmt.Errorf("the Talos version %q is not of the form v1.2.3", v)
 		}
 		return newTemplate("kubehenge-talos-"+v, []string{kubehengeTag, "talos", "talos-" + v},
 			ImageRef{Kind: TalosFactory, Version: v}, nil)
@@ -127,12 +127,16 @@ func Plan(req *Request) (Template, error) {
 		}
 		v := req.KubernetesVersion
 		if !versionRE.MatchString(v) {
-			return Template{}, fmt.Errorf("kubernetes version %q is not of the form v1.2.3", v)
+			return Template{}, fmt.Errorf("the Kubernetes version %q is not of the form v1.2.3", v)
 		}
 		return newTemplate(fmt.Sprintf("kubehenge-kubeadm-%s-%s", v, os), []string{kubehengeTag, "kubeadm", os.Tag(), kubernetesTagPrefix + v},
 			ImageRef{Kind: NodeOSImage, NodeOS: os}, &Bake{NodeOS: os, Distribution: Kubeadm, KubernetesVersion: v})
 	}
-	return Template{}, fmt.Errorf("unknown distribution %q, expected one of %v", req.Distribution, Distributions)
+	names := make([]string, len(Distributions))
+	for i, d := range Distributions {
+		names[i] = string(d)
+	}
+	return Template{}, fmt.Errorf("unknown distribution %q: %s", req.Distribution, orList(names))
 }
 
 // checkNodeOS is the node OS a request asks for, DefaultNodeOS when it names none, once it is one
@@ -157,7 +161,7 @@ func newTemplate(name string, tags []string, image ImageRef, bake *Bake) (Templa
 	return Template{Name: name, LineName: name, Tags: tags, Image: image, Bake: bake}, nil
 }
 
-// buildTagPrefix and buildLayout make a build's tag. Minutes in UTC sort as they read; a second
+// buildTagPrefix and buildLayout make a build's tag. Minutes in UTC sort as they read. A second
 // build started in the same minute finds the first and keeps it.
 const (
 	buildTagPrefix = "build-"

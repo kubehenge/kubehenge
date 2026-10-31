@@ -625,7 +625,7 @@ export function start(root) {
       await wait(300);
       link(slots[2], slots[3], "mesh");
       quake(2);
-      said.textContent = "ci and dev share one pod network";
+      said.textContent = "ci and edge share one pod network";
       await wait(400);
       empty(slots[MAX - 1], true);
       anim(slots[MAX - 1].aw, [{ opacity: 0 }, { opacity: 1 }], { duration: 700 });

@@ -201,7 +201,7 @@ type templateBuildRequest struct {
 	// Distribution is rke2, k3s, kubeadm or talos.
 	Distribution      string `json:"distribution"`
 	KubernetesVersion string `json:"kubernetesVersion,omitempty"`
-	// NodeOS is the node OS as one word, such as almalinux-10; empty means the default. Talos is
+	// NodeOS is the node OS as one word, such as almalinux-10. Empty means the default. Talos is
 	// its own OS and takes none.
 	NodeOS       string `json:"nodeOS,omitempty"`
 	TalosVersion string `json:"talosVersion,omitempty"`
@@ -209,7 +209,7 @@ type templateBuildRequest struct {
 
 // requestTemplateBuild has a missing template built for one who may create clusters. The build
 // runs in the management cluster with the builder's token, from images whose addresses and
-// checksums Kubehenge fixes; the request names only the distribution, version and node OS, or for
+// checksums Kubehenge fixes. The request names only the distribution, version and node OS, or for
 // Talos the release.
 func (s *Server) requestTemplateBuild(w http.ResponseWriter, r *http.Request, u user) {
 	var req templateBuildRequest
@@ -410,7 +410,7 @@ func maxTime(a, b time.Time) time.Time {
 	return b
 }
 
-// clusterUpgradePolicy reads the cluster's upgrades variable; unset, it takes the class's defaults.
+// clusterUpgradePolicy reads the cluster's upgrades variable. Unset, it takes the class's defaults.
 func clusterUpgradePolicy(c *clusterv1.Cluster) (provisioner.UpgradePolicy, bool, error) {
 	var p provisioner.UpgradePolicy
 	for _, cv := range c.Spec.Topology.Variables {

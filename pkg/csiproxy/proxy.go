@@ -54,7 +54,7 @@ var (
 type Proxy struct {
 	// Upstream is the Proxmox VE API's address, such as https://pve.example.org:8006.
 	Upstream *url.URL
-	// Transport reaches it, verifying its certificate.
+	// Transport reaches it. It verifies its certificate.
 	Transport http.RoundTripper
 	// Client keeps the copies' records in the workload cluster, and its events.
 	Client client.Client
@@ -63,9 +63,9 @@ type Proxy struct {
 	Owner int
 	// Pool is the cluster's pool, and Holders the name of its holder VMs there.
 	Pool, Holders string
-	// Copies lets the proxy make copies; without it, it only finds those made before.
+	// Copies lets the proxy make copies. Without it, it only finds those made before.
 	Copies bool
-	// Pod is the proxy's own, which its events are about; empty, it records none.
+	// Pod is the proxy's own, which its events are about. When empty, it records none.
 	Pod types.NamespacedName
 	// Poll is how often a copy's task is looked at.
 	Poll time.Duration
@@ -196,7 +196,7 @@ func (p *Proxy) copyVolume(w http.ResponseWriter, r *http.Request, n names, node
 	select {
 	case <-j.done:
 	case <-r.Context().Done():
-		// The plugin gave up; the copy goes on, and its next call waits on it or finds it done.
+		// The plugin gave up. The copy goes on, and its next call waits on it or finds it done.
 		return
 	}
 	switch {
@@ -210,7 +210,7 @@ func (p *Proxy) copyVolume(w http.ResponseWriter, r *http.Request, n names, node
 	}
 }
 
-// deleteVolume deletes a copy through its holder; it reports false for a volume that is no copy,
+// deleteVolume deletes a copy through its holder. It reports false for a volume that is no copy,
 // whose call goes on to Proxmox VE. Only a copy among copies, whose records hold, is deleted.
 func (p *Proxy) deleteVolume(w http.ResponseWriter, r *http.Request, copies map[string]*Copy, storage, volume string) bool {
 	volume = strings.TrimPrefix(volume, storage+":")

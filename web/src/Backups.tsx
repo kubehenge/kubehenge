@@ -70,7 +70,7 @@ export interface BackupsValue {
   readFrom?: string[];
 }
 
-/** backupsOf reads a cluster's backups variable; unset, backups are off. */
+/** backupsOf reads a cluster's backups variable. Unset, backups are off. */
 export function backupsOf(v: unknown): BackupsValue {
   const r = record(v);
   const out: BackupsValue = { enabled: r["enabled"] === true };
@@ -133,7 +133,7 @@ export function targetText(t: OfferedTarget): string {
   return `bucket ${t.bucket} at ${URL.canParse(t.endpoint) ? new URL(t.endpoint).host : t.endpoint}`;
 }
 
-/** useClassTargets reads the targets an existing cluster's class offers; undefined until known. */
+/** useClassTargets reads the targets an existing cluster's class offers. Undefined until known. */
 export function useClassTargets(className: string): OfferedTarget[] | undefined {
   const [targets, setTargets] = useState<OfferedTarget[]>();
   useEffect(() => {
@@ -199,7 +199,7 @@ export function scheduleText(schedule: string): string {
   return `Cron ${s}`;
 }
 
-/** scheduleProblem says what Velero would refuse in a schedule; the server checks it in full. */
+/** scheduleProblem says what Velero would refuse in a schedule. The server checks it in full. */
 export function scheduleProblem(schedule: string): string | undefined {
   const s = schedule.trim();
   if (!s) {
@@ -248,12 +248,12 @@ export const newBackupFields = (): BackupFields => ({
   readFrom: [],
 });
 
-/** backupFieldsOf are the fields of a cluster's settings; what it leaves unset is the chart's default. */
+/** backupFieldsOf are the fields of a cluster's settings. What it leaves unset is the chart's default. */
 export function backupFieldsOf(b: BackupsValue): BackupFields {
   return {
     target: b.target ?? "",
     schedule: b.schedule ?? defaultSchedule,
-    // What is in effect: UTC when backups name none; backups switched on start in the browser's zone.
+    // What is in effect: UTC when backups name none. Backups switched on start in the browser's zone.
     timeZone: b.timeZone ?? (b.enabled ? "UTC" : browserZone()),
     retention: String(b.retentionDays ?? defaultRetentionDays),
     volumes: b.volumes ?? "all",
@@ -292,7 +292,7 @@ export function backupProblems(
   return p;
 }
 
-/** targetProblem says what Kubehenge would refuse in the target chosen; kept is the one set already. */
+/** targetProblem says what Kubehenge would refuse in the target chosen. kept is the one set already. */
 export function targetProblem(target: string, targets: OfferedTarget[], kept?: string): string | undefined {
   if (targets.length === 0 && !filled(kept)) {
     return noTargets;
@@ -306,7 +306,7 @@ export function targetProblem(target: string, targets: OfferedTarget[], kept?: s
   return undefined;
 }
 
-/** backupsVariable is the variable the fields set, keeping a Secret the cluster names for the keys. */
+/** backupsVariable is the variable the fields set. It keeps a Secret the cluster names for the keys. */
 export function backupsVariable(f: BackupFields, existingSecret?: string): BackupsValue {
   const v: BackupsValue = {
     enabled: true,
@@ -414,7 +414,7 @@ export function BackupSourcesField({
   );
 }
 
-/** BackupFieldset edits a cluster's backup settings; problems are those to show. */
+/** BackupFieldset edits a cluster's backup settings. problems are those to show. */
 export function BackupFieldset({
   value,
   onChange,

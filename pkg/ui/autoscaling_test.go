@@ -41,7 +41,7 @@ func TestCreateAutoscaled(t *testing.T) {
 }
 
 // TestChangeAutoscaling switches a pool's autoscaling on and off again: switched on, its replicas
-// are the autoscaler's and refused to anyone else; switched off, the pool keeps the workers it runs.
+// are the autoscaler's and refused to anyone else. Switched off, the pool keeps the workers it runs.
 func TestChangeAutoscaling(t *testing.T) {
 	t.Parallel()
 	running := &clusterv1.MachineDeployment{

@@ -16,7 +16,7 @@ const hasTemplate = (c: ClusterClass): boolean =>
 export const withTemplate = (classes: ClusterClass[]): string[] =>
   classes.filter((c) => hasTemplate(c)).map((c) => distributionName(c.distribution));
 
-// The checks read the classes once; undefined until then, and on failure, where the row stays out.
+// The checks read the classes once. Undefined until then, and on failure, where the row stays out.
 function useClasses(): ClusterClass[] | undefined {
   const [classes, setClasses] = useState<ClusterClass[]>();
   useEffect(() => {

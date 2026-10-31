@@ -59,19 +59,19 @@ func newTemplateRefreshCommand(conn *pve.Config) *cobra.Command {
 		Short: "Build the templates clusters run again, and delete the builds nothing needs",
 		Long: `Build the templates clusters run again, and delete the builds nothing needs.
 
-It runs in the management cluster, as the template refresh CronJob's Job. Each node OS template
-the clusters' machines are cloned from, RKE2's and k3s's per node OS and kubeadm's per Kubernetes
-version and node OS, is built again with the updates its node OS published since, as a new template
-tagged with when it was made; so are RKE2's on the default node OS and every RKE2 and k3s template
-the pool holds. Clusters move to a build inside their maintenance windows once it is --soak old. Of
-each template, the --keep newest builds stay, and any older one a cluster or a machine being
-created still clones from.
+It runs in the management cluster, as the Job of the template refresh CronJob. It builds again
+every node OS template the clusters' machines are cloned from, with the updates its node OS
+published since. That is RKE2's and k3s's per node OS and kubeadm's per Kubernetes version and node
+OS, plus RKE2's on the default node OS and every RKE2 and k3s template the pool holds. Each build is
+a new template, tagged with when it was made. Clusters move to a build inside their maintenance
+windows once it is --soak old. Of each template, the --keep newest builds stay, and so does any
+older one that a cluster, or a machine being created, still clones from.
 
 One run goes at a time, held by a Lease in --namespace. How the run went is written to the
 ConfigMap kubehenge-template-refresh there, which the interface shows.
 
 The API token is read from KUBEHENGE_PROXMOX_TOKEN.`,
-		Args: cobra.NoArgs,
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.run(cmd, conn)
 		},
@@ -81,7 +81,7 @@ The API token is read from KUBEHENGE_PROXMOX_TOKEN.`,
 	f.StringVar(&o.namespace, "namespace", os.Getenv("POD_NAMESPACE"), "namespace of the refresh's Lease and status (env POD_NAMESPACE)")
 	f.StringVar(&o.classNamespace, "class-namespace", os.Getenv("POD_NAMESPACE"), "namespace of Kubehenge's ClusterClasses (env POD_NAMESPACE)")
 	f.IntVar(&o.keep, "keep", provisioner.DefaultBuildsKept, "builds of each template kept beside those in use")
-	f.DurationVar(&o.soak, "soak", provisioner.DefaultNodeImageSoak, "how old a build is before clusters move to it; the controller's --node-image-soak")
+	f.DurationVar(&o.soak, "soak", provisioner.DefaultNodeImageSoak, "how old a build must be before clusters move to it, as the controller's --node-image-soak")
 	f.StringArrayVar(&o.missing, "missing", nil, "a template to build if it has no build yet, such as rke2-almalinux-10 or kubeadm-v1.37.1-almalinux-10 (repeatable)")
 	f.BoolVar(&o.missingOnly, "missing-only", false, "build only the --missing templates, and only those without a build")
 	f.StringVar(&o.trigger, "trigger", "", "what started the run, shown with its status")
@@ -120,11 +120,11 @@ func (o *templateRefreshOptions) run(cmd *cobra.Command, conn *pve.Config) error
 	}
 	status := &refreshStatus{kube: kube, namespace: o.namespace, out: cmd.ErrOrStderr()}
 	if conn.Token == "" && o.tokenSecret != "" {
-		// The chart refreshes by default; without its Secret the run says so where the interface
+		// The chart refreshes by default. Without its Secret the run says so where the interface
 		// shows it, rather than the Job's pod never starting.
 		return status.refused(cmd.Context(), o.trigger, fmt.Errorf(
-			"no API token: Secret %s with key token is missing in namespace %s; the module makes it, or make it as the install guide describes, or switch the refresh off",
-			o.tokenSecret, o.namespace))
+			"no API token: namespace %s has no Secret %s with the key token. The management-cluster module makes it. Otherwise make it as the install guide describes, or switch the refresh off",
+			o.namespace, o.tokenSecret))
 	}
 	builder, err := o.flags.connect(cmd, conn)
 	if err != nil {
@@ -240,7 +240,7 @@ func withRefreshLease(ctx context.Context, cfg *rest.Config, namespace string, f
 }
 
 // releaseRefreshLease gives up the refresh's Lease as the elector would, if identity still holds
-// it, retrying on a version that moved on in between.
+// it. It retries on a version that moved on in between.
 func releaseRefreshLease(ctx context.Context, leases coordinationv1client.LeaseInterface, identity string) error {
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		lease, err := leases.Get(ctx, provisioner.TemplateRefreshName, metav1.GetOptions{})
@@ -317,7 +317,7 @@ func (s *refreshStatus) finished(ctx context.Context, trigger string, runErr err
 const eventNoteMax = 1024
 
 // failed records a Warning event on the refresh's ConfigMap, where kubectl get events shows that a
-// run failed and why; the ConfigMap holds the whole error and the end of the log.
+// run failed and why. The ConfigMap holds the whole error and the end of the log.
 func (s *refreshStatus) failed(ctx context.Context, trigger string, why error) {
 	now := metav1.Now()
 	note := fmt.Sprintf("template build (%s) failed: %v", trigger, why)

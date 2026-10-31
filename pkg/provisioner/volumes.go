@@ -26,7 +26,7 @@ const csiDriver = "csi.proxmox.sinextra.dev"
 const maxUnused = 256
 
 // Reclaimer deletes the volumes of workload clusters' released persistent volumes. The CSI plugin
-// deletes a volume through the storage, which needs Datastore.Allocate on all of it; a cluster's
+// deletes a volume through the storage, which needs Datastore.Allocate on all of it. A cluster's
 // token has rights on its own volume owner VM only, through which a volume can be deleted too. Once
 // the volume is gone, the plugin's next attempt finds nothing to delete and the volume is released.
 type Reclaimer struct {
@@ -326,12 +326,12 @@ func listedVM(ctx context.Context, pve *proxmox.Client, vmid int) (resourceVM, b
 type storageConfig struct {
 	Storage string `json:"storage"`
 	Content string `json:"content"`
-	// Nodes limits the storage to some nodes; empty means all.
+	// Nodes limits the storage to some nodes. Empty means all.
 	Nodes  string `json:"nodes"`
 	Shared int    `json:"shared"`
 }
 
-// storages lists the storages the token may use; Proxmox VE marks network storages shared.
+// storages lists the storages the token may use. Proxmox VE marks network storages shared.
 func storages(ctx context.Context, pve *proxmox.Client) ([]storageConfig, error) {
 	var list []storageConfig
 	if err := pve.Get(ctx, "/storage", &list); err != nil {

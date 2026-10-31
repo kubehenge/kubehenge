@@ -72,18 +72,18 @@ type Reconciler struct {
 	// Remotes reaches the workload clusters, to take their workloads out of the mesh before Istio
 	// is switched off and to do what their load balancers need there.
 	Remotes *Remotes
-	// Events reports on a Cluster what the controller refuses to do for it; may be nil.
+	// Events reports on a Cluster what the controller refuses to do for it. It may be nil.
 	Events events.EventRecorder
-	// RancherKubernetes is what the Rancher release Kubehenge installs runs on; unset allows any.
+	// RancherKubernetes is what the Rancher release Kubehenge installs runs on. Unset allows any.
 	RancherKubernetes KubernetesMinors
 	// DatastoreAllocate is what lets a cluster hold Datastore.Allocate on its storage.
 	DatastoreAllocate DatastoreAllocate
 	// SysAuditGroup is the Proxmox VE group holding Sys.Audit on / that a cluster's user joins for
-	// the cloud controller manager's HA group labels; empty when no cluster may.
+	// the cloud controller manager's HA group labels. It is empty when no cluster may.
 	SysAuditGroup string
 	// VolumeSnapshots is what lets a cluster's CSI plugin take volume snapshots.
 	VolumeSnapshots VolumeSnapshots
-	// StallAfter is how long a deletion may wait before it counts as stalled; DefaultStallAfter when 0.
+	// StallAfter is how long a deletion may wait before it counts as stalled. It is DefaultStallAfter when 0.
 	StallAfter time.Duration
 	Now        func() time.Time
 
@@ -108,7 +108,7 @@ func Owns(c *clusterv1.Cluster, classNamespace string) bool {
 // SetupWithManager registers the reconciler. Status updates do not trigger it: only a new
 // generation, deletion, or the requeue every resync. Several clusters reconcile at once and each
 // reconcile is bounded, so one cluster whose Proxmox VE calls hang holds up no other.
-// Concurrent reconciles may race for the same VMID; the loser's creation fails and is retried,
+// Concurrent reconciles may race for the same VMID. The loser's creation fails and is retried,
 // and an owner is only ever taken by its name and pool.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	err := ctrl.NewControllerManagedBy(mgr).
@@ -150,7 +150,7 @@ func (r *Reconciler) reconcileCluster(ctx context.Context, cluster *clusterv1.Cl
 	if !cluster.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, cluster)
 	}
-	// A restore stops the cluster's API server and pauses it; the cluster is looked at again after.
+	// A restore stops the cluster's API server and pauses it. The cluster is looked at again after.
 	if RestoreInProgress(cluster) {
 		return ctrl.Result{RequeueAfter: etcdSnapshotWait}, nil
 	}
@@ -348,7 +348,7 @@ func (r *Reconciler) refuse(ctx context.Context, cluster *clusterv1.Cluster, pri
 	}
 }
 
-// ensureCloud creates the cluster's Proxmox VE objects, keeping what it creates as it goes.
+// ensureCloud creates the cluster's Proxmox VE objects. It keeps what it creates as it goes.
 func (r *Reconciler) ensureCloud(ctx context.Context, cluster *clusterv1.Cluster, access Access) (Credentials, error) {
 	names, held, err := r.cloudObjects(ctx, cluster)
 	if err != nil {
@@ -384,7 +384,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cluster *clusterv1.Clu
 	if waiting {
 		return ctrl.Result{RequeueAfter: waitInterval}, nil
 	}
-	// The Cluster may still wait for Cluster API or another controller; once it is gone, the next
+	// The Cluster may still wait for Cluster API or another controller. Once it is gone, the next
 	// look finds nothing.
 	return ctrl.Result{RequeueAfter: deletionLook}, nil
 }
@@ -423,7 +423,7 @@ func (r *Reconciler) removeProxmox(ctx context.Context, cluster *clusterv1.Clust
 
 // addons reads the add-ons the cluster switches on, with Rancher switched off when it is refused,
 // and why it is refused, or "". A Rancher refused here is neither installed nor removed: what the
-// cluster already runs stays; so do backups whose target is not one of the class's, or whose
+// cluster already runs stays. So do backups whose target is not one of the class's, or whose
 // schedule Velero would not take.
 func (r *Reconciler) addons(ctx context.Context, cluster *clusterv1.Cluster) (Addons, string, error) {
 	addons, err := addonsOf(cluster)
@@ -466,7 +466,7 @@ func (r *Reconciler) addons(ctx context.Context, cluster *clusterv1.Cluster) (Ad
 
 // removeSwitchedOff removes the proxies of Headlamp, monitoring, logs, the load balancer and Kyverno
 // when the cluster switches them off, the nodes' Alloy when the API collects the logs, kube-vip's
-// cloud provider when the load balancer is MetalLB, and Velero with what it leaves; Rancher's and
+// cloud provider when the load balancer is MetalLB, and Velero with what it leaves. Rancher's and
 // Istio's removals wait on other clusters, apart from these. It reports whether a removal waits on
 // another.
 func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons) (bool, error) {
@@ -629,7 +629,7 @@ func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluste
 	return waiting, nil
 }
 
-// held reads what was recorded for the cluster; nothing yet, or no longer once a foreground
+// held reads what was recorded for the cluster. It reads nothing yet, or no longer once a foreground
 // deletion has removed the cluster's dependents.
 func (r *Reconciler) held(ctx context.Context, cluster *clusterv1.Cluster) (Credentials, error) {
 	stored := &corev1.Secret{}
@@ -663,7 +663,7 @@ func applyOwned[T client.Object](ctx context.Context, c client.Client, cluster *
 	return nil
 }
 
-// removeProxies deletes HelmChartProxies of add-ons switched off; the Add-on Provider for Helm
+// removeProxies deletes HelmChartProxies of add-ons switched off. The Add-on Provider for Helm
 // uninstalls a proxy's releases when the proxy goes.
 func (r *Reconciler) removeProxies(ctx context.Context, cluster *clusterv1.Cluster, names ...string) error {
 	for _, name := range names {
@@ -726,7 +726,7 @@ func (r *Reconciler) anyProxy(ctx context.Context, cluster *clusterv1.Cluster, n
 
 // refuseRancher says why Rancher may not be installed into the cluster, or "": another cluster runs
 // it, or the cluster's Kubernetes is one Rancher does not run on. The hooks and the interface refuse
-// both up front; this holds for any client that set the variable past them. One already installed
+// both up front. This holds for any client that set the variable past them. One already installed
 // stays where it is.
 func (r *Reconciler) refuseRancher(ctx context.Context, cluster *clusterv1.Cluster, rancher Rancher) (string, error) {
 	if !rancher.Install {

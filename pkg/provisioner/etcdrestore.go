@@ -28,7 +28,7 @@ import (
 const (
 	// EtcdRestoreAnnotation asks for a cluster's etcd to be restored, as an EtcdRestoreRequest in
 	// JSON. While it is there the cluster is being restored, and nothing else of Kubehenge's changes
-	// it; the controller takes it away once the restore has ended.
+	// it. The controller takes it away once the restore has ended.
 	EtcdRestoreAnnotation = "kubehenge.dev/etcd-restore"
 	// EtcdRestoreStatusAnnotation records where the cluster's last restore is, or how it ended, as an
 	// EtcdRestoreStatus in JSON.
@@ -37,7 +37,7 @@ const (
 	// through the guest agent, "true" or "false"; else restores are done by hand.
 	AutomaticRestoreAnnotation = "kubehenge.dev/etcd-restore-automatic"
 
-	// etcdRestoreTimeout bounds a whole restore; each step on a node has guestStepTimeout.
+	// etcdRestoreTimeout bounds a whole restore. Each step on a node has guestStepTimeout.
 	etcdRestoreTimeout = time.Hour
 	guestStepTimeout   = 20 * time.Minute
 	guestCheckTimeout  = time.Minute
@@ -100,7 +100,7 @@ type EtcdRestoreStatus struct {
 	// Replaced are the other control-plane machines, which Cluster API makes again.
 	Replaced []string `json:"replaced,omitempty"`
 	// Before is the snapshot of etcd as it was, taken into the restore's target before anything
-	// of it was stopped or wiped; NoBefore says why none could be taken.
+	// of it was stopped or wiped. NoBefore says why none could be taken.
 	Before   string     `json:"before,omitempty"`
 	NoBefore string     `json:"noBefore,omitempty"`
 	Message  string     `json:"message,omitempty"`
@@ -151,11 +151,11 @@ func EtcdRestoreStatusOf(c *clusterv1.Cluster) (EtcdRestoreStatus, bool) {
 }
 
 // EtcdRestorer restores clusters' etcd from their snapshots when asked through
-// EtcdRestoreAnnotation, running the restore on the control-plane nodes through the guest agent.
+// EtcdRestoreAnnotation. It runs the restore on the control-plane nodes through the guest agent.
 //
-// It pauses the cluster, so that Cluster API replaces no machine meanwhile; has the first
-// control-plane node fetch the snapshot; stops etcd and the API server on every control-plane node;
-// restores etcd on the first as a cluster of one; starts its control plane again; and deletes the
+// It pauses the cluster, so that Cluster API replaces no machine meanwhile. It has the first
+// control-plane node fetch the snapshot. It stops etcd and the API server on every control-plane node.
+// It restores etcd on the first as a cluster of one. It starts its control plane again. It deletes the
 // other control-plane machines, whose etcd still holds the cluster from before, for Cluster API to
 // make again once the cluster is unpaused. A restore that fails before etcd was restored starts the
 // control plane again as it was.
@@ -167,25 +167,25 @@ type EtcdRestorer struct {
 	Client client.Client
 	// Reader reads the cluster past any cache: a reconcile queued while a restore ran can start
 	// before the cache has the restore's end, and would take it for one the controller was stopped
-	// in, running its recovery again and overwriting how it ended.
+	// in. It would then run its recovery again and overwrite how it ended.
 	Reader         client.Reader
 	ClassNamespace string
 	Targets        *ClusterTargets
 	// Etcd snapshots the cluster's etcd as it is before a restore stops or wipes any of it.
 	Etcd EtcdSource
-	// Guests runs the restore on the nodes; nil when the management cluster has no restore token,
+	// Guests runs the restore on the nodes. It is nil when the management cluster has no restore token,
 	// and every restore but a Talos cluster's fails, to be done by hand.
 	Guests Guests
 	// Talos reaches the nodes of Talos clusters.
 	Talos TalosDialer
-	// ScratchDir holds the snapshot a Talos restore uploads, for as long as the restore runs; the
-	// system's temporary directory when empty.
+	// ScratchDir holds the snapshot a Talos restore uploads, for as long as the restore runs.
+	// It is the system's temporary directory when empty.
 	ScratchDir string
 	// APIs asks the restored cluster's API server whether it answers on the cluster's address.
 	APIs ClusterAPIs
-	// poll is how often a restore looks at what it waits for; talosRestorePoll when 0.
+	// poll is how often a restore looks at what it waits for. It is talosRestorePoll when 0.
 	poll time.Duration
-	// Events reports on a Cluster how its restore went; may be nil.
+	// Events reports on a Cluster how its restore went. It may be nil.
 	Events events.EventRecorder
 	Now    func() time.Time
 }
@@ -657,7 +657,7 @@ func (run *restoreRun) replace(ctx context.Context) error {
 }
 
 // recover finishes or undoes what a restore that failed did, by the phase it got to: before etcd
-// was restored, it starts every control-plane node again as it was; after, it finishes the
+// was restored, it starts every control-plane node again as it was. After, it finishes the
 // restore, since the other nodes' etcd would take back the cluster from before.
 func (run *restoreRun) recover(ctx context.Context, cause error) error {
 	if run.talos {
@@ -762,7 +762,7 @@ func (run *restoreRun) knowNodes(ctx context.Context) error {
 	return nil
 }
 
-// on runs a script on a node, logging what it printed.
+// on runs a script on a node and logs what it printed.
 func (run *restoreRun) on(ctx context.Context, n RestoreNode, what, s string) error {
 	out, err := run.r.Guests.Run(ctx, n.VMID, s, guestStepTimeout)
 	ctrl.LoggerFrom(ctx).Info(what, "machine", n.Machine, "output", tail(out, outputTail), "failed", err != nil)

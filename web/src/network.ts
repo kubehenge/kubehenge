@@ -27,7 +27,7 @@ export const maxVLAN = 4094;
 /** isVLAN tells whether text is a VLAN tag. */
 export const isVLAN = (v: string): boolean => whole(Number(v), 1, maxVLAN);
 
-/** toInt reads a dotted IPv4 address as a number; undefined when it is none. */
+/** toInt reads a dotted IPv4 address as a number. Undefined when it is none. */
 export function toInt(address: string): number | undefined {
   if (!ipv4.test(address)) {
     return undefined;
@@ -66,7 +66,7 @@ export const sameNetwork = (a: number, b: number, prefix: number): boolean =>
   (a & maskOf(prefix)) >>> 0 === (b & maskOf(prefix)) >>> 0;
 
 // addressCount counts the node addresses a list gives: ranges a-b, networks a/n (without their
-// network and broadcast addresses) and single addresses; undefined when an entry is none of these.
+// network and broadcast addresses) and single addresses. Undefined when an entry is none of these.
 // Those outside the network of gateway/prefix make it undefined too.
 export function addressCount(entries: string[], gateway: string, prefix: number): { count: number; bad?: string } {
   const g = toInt(gateway);
@@ -108,7 +108,7 @@ export const isNetwork = (v: string): boolean => {
   return a !== undefined && (n === addressBits || a % 2 ** (addressBits - n) === 0);
 };
 
-/** spanOf is the first and last address an address entry holds, as numbers; undefined when it is none. */
+/** spanOf is the first and last address an address entry holds, as numbers. Undefined when it is none. */
 export function spanOf(entry: string): [number, number] | undefined {
   const [from = "", to] = entry.split("-");
   if (to !== undefined) {

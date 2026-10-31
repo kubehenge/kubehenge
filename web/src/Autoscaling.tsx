@@ -110,7 +110,7 @@ const entryLeast = (e: PoolEntry): number => number(e.autoscale ? e.min : e.repl
 
 const poolMost = (p: WorkerPool): number => p.autoscaling?.max ?? p.replicas;
 
-// The add-ons that use memory on the nodes by the classes' figures, read from the variables; the
+// The add-ons that use memory on the nodes by the classes' figures, read from the variables. The
 // server counts them exactly and refuses what they leave no room for. Logs need monitoring, and
 // Rancher's agent holds no worker up.
 function runsAddons(c: Cluster): boolean {
@@ -220,7 +220,7 @@ function poolDiff(p: WorkerPool, e: PoolEntry): { replicas?: number; autoscaling
   return p.autoscaling ? { autoscaling: null, ...typed } : typed;
 }
 
-/** poolChange is the change the Scale dialog's entries ask for, pool by pool, of what differs; empty for none. */
+/** poolChange is the change the Scale dialog's entries ask for, pool by pool, of what differs. Empty for none. */
 export function poolChange(
   pools: WorkerPool[],
   entries: Record<string, PoolEntry>,
@@ -359,7 +359,7 @@ export function usePveNodes(): PveNode[] {
       try {
         setNodes(await api.nodes());
       } catch {
-        // The warning is advice; without the nodes the dialog gives none, and the cluster still
+        // The warning is advice. Without the nodes the dialog gives none, and the cluster still
         // shows a VM that found no room.
       }
     }

@@ -55,7 +55,7 @@ const controllerLog = `{"msg":"reconciling","Cluster":{"name":"web","namespace":
 
 // newSource is a management cluster holding cluster web in team-a, its machine and its VM, its
 // TalosConfig with the talosconfig CABPT writes into its status, a Secret of it, and cluster web-2
-// beside it; and the controller's pod, whose log is controllerLog.
+// beside it, and the controller's pod, whose log is controllerLog.
 func newSource(t *testing.T) *Source {
 	t.Helper()
 	scheme := runtime.NewScheme()

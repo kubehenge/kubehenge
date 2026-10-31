@@ -324,7 +324,7 @@ func checkHealthSections(t *testing.T, v *healthView) {
 	if v.ControlPlane.Kind != "RKE2ControlPlane" || len(v.ControlPlane.Conditions) != 2 {
 		t.Errorf("control plane = %+v", v.ControlPlane)
 	}
-	// Repeats counted once; the other cluster's, the normal and the old events left out.
+	// Repeats counted once. The other cluster's, the normal and the old events left out.
 	events := map[string]int32{}
 	for i := range v.Events.Items {
 		e := &v.Events.Items[i]
@@ -565,7 +565,7 @@ func TestPodLogsForThoseWhoMayTakeTheKubeconfig(t *testing.T) {
 		t.Fatalf("no log read: %v", workloads.kube.Actions())
 	}
 	opts, ok := read.Value.(*corev1.PodLogOptions)
-	// The kubelet's newest run is the last one to stop; Previous would name the one before it.
+	// The kubelet's newest run is the last one to stop. Previous would name the one before it.
 	if !ok || opts.TailLines == nil || *opts.TailLines != podLogLines || opts.Previous || opts.Container != "api" {
 		t.Errorf("log read with %+v", read.Value)
 	}

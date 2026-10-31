@@ -139,7 +139,7 @@ export const parseScopes = (scopes: string): string[] =>
     .filter(Boolean);
 
 /**
- * OIDCProviders edits a list of identity providers, starting from initial. Each entry keeps its
+ * OIDCProviders edits a list of identity providers. It starts from initial. Each entry keeps its
  * key while those before it are removed, so its inputs keep their contents and focus. Fixed, the
  * providers can only be removed: a changed or added one would be one of the user's own, which
  * needs Sys.Modify on the pool. A field shows its problem once it was edited, or every field once

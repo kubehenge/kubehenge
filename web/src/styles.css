@@ -391,7 +391,7 @@ output.notice {
   font-size: 12px;
 }
 
-/* The account controls sit in the bar; only on narrow screens are they a popover. */
+/* The account controls sit in the bar. Only on narrow screens are they a popover. */
 .account {
   display: flex;
   align-items: center;
@@ -482,7 +482,7 @@ button.go {
   padding: 18px 22px 40px;
 }
 
-/* The page's content takes the focus after navigation; it is no control, so it shows no ring. */
+/* The page's content takes the focus after navigation. It is no control, so it shows no ring. */
 .content:focus {
   outline: none;
 }
@@ -695,7 +695,7 @@ button.go {
   }
 }
 
-/* A phone keeps the logo and the count; the words stay for screen readers. */
+/* A phone keeps the logo and the count. The words stay for screen readers. */
 @media (width < 600px) {
   .topbar {
     gap: 10px;
@@ -1384,7 +1384,7 @@ button.go {
   white-space: nowrap;
 }
 
-/* A counted column is as wide as its figures; its heading wraps to fit them. */
+/* A counted column is as wide as its figures. Its heading wraps to fit them. */
 .grid thead th.number {
   white-space: normal;
   width: 1%;
@@ -1433,7 +1433,7 @@ button.go {
   color: var(--dim);
 }
 
-/* The wizard's add-ons side by side; one opened to its settings takes the whole row. */
+/* The wizard's add-ons side by side. One opened to its settings takes the whole row. */
 .addon-cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -1573,7 +1573,7 @@ button.go {
   text-align: right;
 }
 
-/* A row with a button centres its text beside it; rows of text alone keep to the top, where a
+/* A row with a button centres its text beside it. Rows of text alone keep to the top, where a
    cell of several lines starts. */
 .grid tr:has(> .row-action) > :is(td, th) {
   vertical-align: middle;
@@ -2299,7 +2299,7 @@ fieldset.choices .check + .info-toggle + .info-text + .hint {
   margin-top: 0;
 }
 
-/* Fields keep their own gap below; a closing button needs one from the box's border. */
+/* Fields keep their own gap below. A closing button needs one from the box's border. */
 .group > button:last-child,
 .group > .actions:last-child {
   margin-bottom: 10px;
@@ -2609,7 +2609,7 @@ details.advanced > summary {
   font-weight: 600;
 }
 
-/* Tiles sum up the page, each linking to its part; a coloured edge says how it stands, beside the
+/* Tiles sum up the page, each linking to its part. A coloured edge says how it stands, beside the
    icon that says it without colour. */
 .tiles {
   display: grid;
@@ -2720,7 +2720,7 @@ details.advanced > summary {
   width: auto;
 }
 
-/* A name breaks nowhere; its table scrolls instead in a narrow window. */
+/* A name breaks nowhere. Its table scrolls instead in a narrow window. */
 .grid :is(td.nowrap, td > .nowrap) {
   white-space: nowrap;
 }

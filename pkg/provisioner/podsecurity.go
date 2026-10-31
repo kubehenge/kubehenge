@@ -113,7 +113,7 @@ func kyvernoPoliciesProxy(cluster *clusterv1.Cluster) string {
 // The admission controller runs two replicas, which the chart then keeps one of through a
 // disruption budget. Its leader shuts down when it cannot renew its lease within 10 s, as when
 // etcd stalls on a compaction, and with the policies failing closed a lone replica would refuse
-// every pod until it is back; the other goes on answering. A third would not fit the least worker
+// every pod until it is back. The other goes on answering. A third would not fit the least worker
 // beside every other add-on.
 func kyvernoValues() map[string]any {
 	return map[string]any{

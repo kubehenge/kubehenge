@@ -96,7 +96,7 @@ func TestTalosEtcdRestoreReplacesANodeThatDoesNotAnswer(t *testing.T) {
 	}
 }
 
-// A node that is not ready yet is asked again; any other failure once etcd may be wiped tries the
+// A node that is not ready yet is asked again. Any other failure once etcd may be wiped tries the
 // whole restore once more.
 func TestTalosEtcdRestoreTriesAgain(t *testing.T) {
 	t.Parallel()

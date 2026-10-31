@@ -17,7 +17,7 @@ import (
 const (
 	// Proxmox VE's limit on the part of a user ID before the realm.
 	maxUserName = 64
-	// A VM name is a DNS name; one label keeps it valid.
+	// A VM name is a DNS name. One label keeps it valid.
 	maxVMName = 63
 )
 
@@ -44,7 +44,7 @@ func (n Names) VolumeHolders() string {
 	return strings.TrimSuffix(n.VolumeOwner, volumeOwnerSuffix) + "-copies"
 }
 
-// Proxmox VE nests pools three deep; each cluster's pool takes the last level.
+// Proxmox VE nests pools three deep. Each cluster's pool takes the last level.
 const maxWorkloadPoolDepth = 2
 
 // ValidWorkloadPool tells whether pool can hold the clusters' pools: a pool name, nested at most

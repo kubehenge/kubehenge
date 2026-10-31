@@ -86,7 +86,7 @@ func parseV3(sig []byte) (*v3Signature, bool, error) {
 }
 
 // OpenPGP's packet headers (RFC 4880, section 4.2): a tag octet, then the length of the body in
-// one, two or four octets. The old format keeps the length's size in the tag octet; the new one
+// one, two or four octets. The old format keeps the length's size in the tag octet. The new one
 // tells it by the length's first octet, which below newTwoOctets is the whole length, below
 // newPartial the first of two, and at newFourOctets is followed by four.
 const (

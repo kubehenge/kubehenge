@@ -42,7 +42,7 @@ type copyAsk struct {
 	TargetNode string
 }
 
-// job is a copy under way, which the calls asking for it wait on; the copy goes on when they give
+// job is a copy under way, which the calls asking for it wait on. The copy goes on when they give
 // up, so that the plugin's next call finds it done or still going.
 type job struct {
 	done chan struct{}
@@ -346,7 +346,7 @@ func (p *Proxy) record(ctx context.Context, storage, volume string) (Copy, bool,
 // holders are the cluster's holder VMs: those the token sees by the holders' name, which carries
 // the cluster's identity. Proxmox VE names a VM's pool only to Pool.Audit on it, which the
 // cluster's token lacks, so the token seeing the VM at all, through its role on its own pool,
-// stands for it; a pool named is checked.
+// stands for it. A pool named is checked.
 func (p *Proxy) holders(ctx context.Context, c *pve) ([]vm, error) {
 	all, err := c.vms(ctx)
 	if err != nil {
@@ -394,7 +394,7 @@ func volumeExists(ctx context.Context, c *pve, node, storage, volid string) (boo
 	return slices.Contains(content, contentEntry{VolID: volid}), nil
 }
 
-// refused logs a copy refused and records it as an event; failed one that went wrong.
+// refused logs a copy refused and records it as an event. Failed does the same for one that went wrong.
 func (p *Proxy) refused(ctx context.Context, ask *copyAsk, err error) {
 	p.Log.Warn("refused a volume copy", "volume", ask.Storage+":"+ask.Target, "source", ask.Source, "node", ask.Node, "reason", err.Error())
 	p.event(ctx, "VolumeCopyFailed", fmt.Sprintf("Copying %s into %s:%s: %v", ask.Source, ask.Storage, ask.Target, err))
@@ -405,7 +405,7 @@ func (p *Proxy) failed(ctx context.Context, ask *copyAsk, err error) {
 	p.event(ctx, "VolumeCopyFailed", fmt.Sprintf("Copying %s into %s:%s failed: %v", ask.Source, ask.Storage, ask.Target, err))
 }
 
-// event records a warning on the proxy's pod; failing that, the log has it already.
+// event records a warning on the proxy's pod. If that fails, the log has it already.
 func (p *Proxy) event(ctx context.Context, reason, message string) {
 	if p.Pod.Name == "" {
 		return

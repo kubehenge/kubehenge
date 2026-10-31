@@ -20,13 +20,13 @@ func newManifestsCommand() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "manifests",
-		Short: "Store the management cluster's provider manifests for the Cluster API operator, checked against their digests",
-		Long: `Store the management cluster's provider manifests for the Cluster API operator, checked against their digests.
+		Short: "Store the Cluster API operator's provider manifests, checked against their digests",
+		Long: `Store the Cluster API operator's provider manifests, checked against their digests.
 
 Each provider's metadata and components are downloaded, checked against the SHA-256 they are
 named with and stored in the ConfigMap the provider's fetchConfig selects. The management cluster's
 providers chart runs this as a Helm hook, in the cluster, with the credentials of its service account.`,
-		Args: cobra.NoArgs,
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var list []provisioner.ProviderManifests
 			if err := json.Unmarshal([]byte(providers), &list); err != nil {

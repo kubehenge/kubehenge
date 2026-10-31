@@ -103,7 +103,7 @@ func (h *Hooks) BeforeClusterUpgrade(ctx context.Context, req *runtimehooksv1.Be
 	if !Owns(cluster, h.ClassNamespace) {
 		return
 	}
-	// Cluster API asks with the version the Cluster names; one it does not name is a request
+	// Cluster API asks with the version the Cluster names. One it does not name is a request
 	// from someone else, or from before the version changed again, and moves nothing.
 	if cluster.Spec.Topology.Version != req.ToKubernetesVersion {
 		resp.RetryAfterSeconds = 10
@@ -136,7 +136,7 @@ func (h *Hooks) BeforeClusterUpgrade(ctx context.Context, req *runtimehooksv1.Be
 }
 
 // BeforeClusterDelete removes the cluster from Rancher while its VMs still run, so that Rancher can
-// clean up inside it; for Rancher's own cluster, every cluster registered with it first. It acts
+// clean up inside it. For Rancher's own cluster, it removes every cluster registered with it first. It acts
 // only on a Cluster the API holds as being deleted, so that no request can deregister a cluster
 // that stays.
 func (h *Hooks) BeforeClusterDelete(ctx context.Context, req *runtimehooksv1.BeforeClusterDeleteRequest, resp *runtimehooksv1.BeforeClusterDeleteResponse) {
@@ -169,7 +169,7 @@ func (h *Hooks) BeforeClusterDelete(ctx context.Context, req *runtimehooksv1.Bef
 }
 
 // BeforeClusterCreate holds a new cluster back until the Reconciler has created its Proxmox VE
-// objects; capmox would otherwise clone its first VMs into a pool that does not exist yet. It
+// objects, because capmox would otherwise clone its first VMs into a pool that does not exist yet. It
 // refuses a cluster on a node OS Kubehenge builds no templates of, or one no Proxmox VE node it may
 // use has the CPU for, a cluster whose pod or service range overlaps its nodes' network, load-balancer
 // addresses that clash with that network or another cluster's, logs without monitoring, backups

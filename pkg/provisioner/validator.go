@@ -139,7 +139,7 @@ func validateRanges(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) fi
 }
 
 // validatePinned holds an RKE2 or k3s cluster to a release this Kubehenge pins, when it is created
-// or its version changes; its nodes could install no other.
+// or its version changes. Its nodes could install no other.
 func (v *ClusterValidator) validatePinned(old, c *clusterv1.Cluster) field.ErrorList {
 	version := c.Spec.Topology.Version
 	if v.Hooks.Releases == nil || (old != nil && old.Spec.Topology.Version == version) {

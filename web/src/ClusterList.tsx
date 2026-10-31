@@ -28,7 +28,7 @@ export function ClusterList({
       void reload?.();
     }
   }, [reload]);
-  // The console reads the fleet for the rail beside the list; on its own the list reads it itself.
+  // The console reads the fleet for the rail beside the list. On its own the list reads it itself.
   return fleet === null ? (
     <FleetProvider>
       <FleetList canCreate={canCreate} canManage={canManage} />
@@ -201,7 +201,7 @@ function Clusters({
     };
   }, [clusters, found, query, show, sort]);
 
-  // The group's own button counts what it shows; a typed filter needs the count said.
+  // The group's own button counts what it shows. A typed filter needs the count said.
   const narrowed = query !== "";
   return (
     <>

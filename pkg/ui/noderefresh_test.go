@@ -215,7 +215,7 @@ func TestClusterShowsItsNodeImages(t *testing.T) {
 		t.Fatal(err)
 	}
 	n := got.NodeImage
-	// The harness's clock is Tuesday the 13th; the build of the 12th is offered on the 13th, and
+	// The harness's clock is Tuesday the 13th. The build of the 12th is offered on the 13th, and
 	// the window next opens on Saturday the 17th.
 	if n == nil || !n.Refreshes || len(n.Builds) != 1 || n.Builds[0].Build != "build-202610080000" || n.Builds[0].Template != "kubehenge-rke2-almalinux-10" ||
 		n.Next == nil || n.Next.Build != "build-202610120000" || !n.Next.Due.Equal(time.Date(2026, 10, 17, 2, 0, 0, 0, time.UTC)) || n.Last == "" {

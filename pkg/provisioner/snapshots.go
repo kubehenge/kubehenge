@@ -83,7 +83,7 @@ type copyProxy struct {
 	on, copies bool
 	image      string
 	endpoint   Endpoint
-	// owner is the cluster's volume owner VM; pool and holders its pool and holder VMs' name.
+	// owner is the cluster's volume owner VM. pool and holders are its pool and holder VMs' name.
 	owner         int
 	pool, holders string
 }
@@ -154,7 +154,7 @@ func (h *Hooks) checkVolumeSnapshots(cluster *clusterv1.Cluster, class *clusterv
 }
 
 // copyProxyFor is the proxy the cluster's CSI plugin reaches Proxmox VE through. It runs while the
-// cluster takes volume snapshots, and gets holder VMs on the nodes its volumes may be on; and once
+// cluster takes volume snapshots, and gets holder VMs on the nodes its volumes may be on. Once
 // they are switched off, it stays, making no more copies, while any copy made before is left, whose
 // name only it turns into the real one. When it is no longer needed, it is taken out of the
 // workload cluster before the ClusterResourceSet drops it, so that a failure is tried again.
@@ -332,8 +332,8 @@ func (r *Reconciler) removeCopyProxy(ctx context.Context, cluster *clusterv1.Clu
 }
 
 // copyProxyManifests are, for the ClusterResourceSet, the CSI plugin's configuration that reaches
-// Proxmox VE through the proxy; the namespace of the copies' records, which only the plugin's
-// controller, and with it the proxy, may write; and its right to record events in kube-system.
+// Proxmox VE through the proxy, the namespace of the copies' records (which only the plugin's
+// controller, and with it the proxy, may write), and its right to record events in kube-system.
 func copyProxyManifests(c Credentials) (map[string][]byte, error) {
 	csi, err := csiConfig(c, &proxmoxCluster{URL: "http://" + csiProxyAddress + "/api2/json", TokenID: c.TokenID, TokenSecret: c.TokenSecret, Region: c.Region})
 	if err != nil {

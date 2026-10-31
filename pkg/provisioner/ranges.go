@@ -110,7 +110,7 @@ func checkRanges(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) erro
 
 // ClusterDefaulter gives a new Kubehenge cluster the pod and service ranges it names none of: its
 // distribution's own where they are clear of the nodes' network, or else the first clear
-// candidates; and for a cluster that runs Cilium, which may join a Cluster Mesh later, ranges clear
+// candidates, and for a cluster that runs Cilium, which may join a Cluster Mesh later, ranges clear
 // of every other cluster's too, since a peer's pod addresses must not be taken for its own pods' or
 // services'. The distributions read the ranges from the Cluster, kubeadm's podSubnet among them,
 // which the Tigera operator does not install Calico without.
@@ -136,7 +136,7 @@ func (d *ClusterDefaulter) Default(ctx context.Context, c *clusterv1.Cluster) er
 	}
 	nodes, err := nodesPrefix(c)
 	if err != nil {
-		// Without a network there is nothing to keep clear of; the class's schema refuses it.
+		// Without a network there is nothing to keep clear of. The class's schema refuses it.
 		return nil //nolint:nilerr // refused by the checks of the variables
 	}
 	var others *otherRanges

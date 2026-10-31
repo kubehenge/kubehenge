@@ -68,7 +68,7 @@ func stepOf(script string) string {
 	return "unknown"
 }
 
-// fakeGuests runs nothing, recording what it was asked to run where; fail decides which runs fail.
+// fakeGuests runs nothing and records what it was asked to run where. fail decides which runs fail.
 type fakeGuests struct {
 	mu   sync.Mutex
 	off  map[int64]bool
@@ -622,7 +622,7 @@ func TestRestorable(t *testing.T) {
 }
 
 // Every distribution's scripts are bash that parses, keep their input to themselves, and do what
-// their distribution restores with; Talos has none.
+// their distribution restores with. Talos has none.
 func TestRestoreScripts(t *testing.T) {
 	t.Parallel()
 	bash, err := exec.LookPath("bash")

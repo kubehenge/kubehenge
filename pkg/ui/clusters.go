@@ -57,11 +57,11 @@ const (
 	workerMachineVariable       = "workerMachine"
 )
 
-// Variables a cluster may change after creation; the others describe where its VMs live.
+// Variables a cluster may change after creation. The others describe where its VMs live.
 var changeableVariables = map[string]bool{
 	"headlamp": true, "monitoring": true, "logs": true, "backups": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, csiVariable: true, ccmVariable: true,
 	certificatesVariable: true, gitopsVariable: true, autoscalerVariable: true,
-	// A new node OS rolls every node onto its template, as a node image refresh does; a new size
+	// A new node OS rolls every node onto its template, as a node image refresh does. A new size
 	// rolls the machines it sizes.
 	provisioner.NodeOSVariable: true, controlPlaneMachineVariable: true, workerMachineVariable: true,
 }
@@ -221,7 +221,7 @@ type clusterView struct {
 	GitOps *gitOpsView `json:"gitops,omitempty"`
 	// Talos is how a Talos cluster's nodes stand with its Talos release.
 	Talos *talosView `json:"talos,omitempty"`
-	// Generation counts the changes to the cluster's spec; a change made against it carries it back
+	// Generation counts the changes to the cluster's spec. A change made against it carries it back
 	// (generationHeader).
 	Generation int64 `json:"generation"`
 	// Recovery is the last recovery of the control plane from a stalled roll, or the one running.
@@ -448,7 +448,7 @@ func (s *Server) listClusters(w http.ResponseWriter, r *http.Request, u user) {
 		s.kubeError(w, r, err)
 		return
 	}
-	// One question for every cluster at once; a cluster's pool is asked about on its own only where
+	// One question for every cluster at once. A cluster's pool is asked about on its own only where
 	// the answer cannot tell (inheritedHere).
 	all, err := s.Accounts.AllPrivileges(r.Context(), u.ticket)
 	if err != nil {
@@ -480,7 +480,7 @@ type clusterResult struct {
 }
 
 // visibleClusters describes the clusters the user may see, by the privileges in all or, where
-// those cannot tell, asking about each pool.
+// those cannot tell. It asks about each pool.
 func (s *Server) visibleClusters(ctx context.Context, u user, clusters []clusterv1.Cluster, all map[string]pve.Privileges) ([]clusterView, error) {
 	results := make([]clusterResult, len(clusters))
 	sem := make(chan struct{}, privilegeAsks)
@@ -682,7 +682,7 @@ func (s *Server) clusterVMs(r *http.Request, u user, c *clusterv1.Cluster, poolP
 }
 
 // consoleURL is where Proxmox VE's web interface at base opens the VM's console, as its own
-// Console button does; empty without a base or a VM.
+// Console button does. Empty without a base or a VM.
 func consoleURL(base string, vm *pve.Member) string {
 	u, err := url.Parse(base)
 	if base == "" || err != nil || vm.VMID == 0 || vm.Node == "" {
@@ -695,7 +695,7 @@ func consoleURL(base string, vm *pve.Member) string {
 }
 
 type createRequest struct {
-	// Namespace is one of those the interface manages; unset, its first.
+	// Namespace is one of those the interface manages. Unset, its first.
 	Namespace            string `json:"namespace,omitempty"`
 	Name                 string `json:"name"`
 	Class                string `json:"class"`
@@ -705,7 +705,7 @@ type createRequest struct {
 	// WorkerAutoscaling has the cluster autoscaler size the worker pool in place of WorkerReplicas.
 	WorkerAutoscaling *poolAutoscaling           `json:"workerAutoscaling,omitempty"`
 	Variables         map[string]json.RawMessage `json:"variables"`
-	// Pods and Services are the cluster's own ranges; unset, the controller's admission chooses ones
+	// Pods and Services are the cluster's own ranges. Unset, the controller's admission chooses ones
 	// clear of the nodes' network (provisioner.ClusterDefaulter).
 	Pods     []string `json:"pods,omitempty"`
 	Services []string `json:"services,omitempty"`
@@ -847,7 +847,7 @@ func requestNodeOS(raw json.RawMessage) (templates.NodeOS, error) {
 
 // mayCreate makes the checks Proxmox VE makes of a user creating a VM in the workload pool, on that
 // storage and that bridge, since the interface creates the VMs with its own account, and those of
-// the add-ons that need more; it answers the request when one fails.
+// the add-ons that need more. It answers the request when one fails.
 func (s *Server) mayCreate(w http.ResponseWriter, r *http.Request, u user, class *clusterv1.ClusterClass, req *createRequest) bool {
 	if !s.require(w, r, u, s.workloadPoolPath(), privChange) ||
 		!s.mayUseStorage(w, r, u, class, req.Variables["storage"]) ||
@@ -1017,19 +1017,19 @@ func networkVariable(raw json.RawMessage) (string, string, bool) {
 	return v.Bridge, vlan, true
 }
 
-// csiVariable configures a cluster's CSI plugin; its datastoreAllocate gives the cluster's token
+// csiVariable configures a cluster's CSI plugin. Its datastoreAllocate gives the cluster's token
 // Datastore.Allocate on the cluster's storage. Its volumeSnapshots takes no right of the user's
 // own: the controller copies only the cluster's own volumes onto its storage, where the cluster's
 // token may take the room anyway.
 const csiVariable = "csi"
 
-// ccmVariable configures a cluster's cloud controller manager; its haGroups gives the cluster's
+// ccmVariable configures a cluster's cloud controller manager. Its haGroups gives the cluster's
 // token Sys.Audit on / for the HA group labels. That reads the Proxmox VE cluster's configuration
 // and nothing of its guests, so it takes no right of the user's own: Kubehenge's administrator
 // decides whether clusters may hold it.
 const ccmVariable = "ccm"
 
-// csiOptions are the csi variable's switches; a value that is not one reads as all off.
+// csiOptions are the csi variable's switches. A value that is not one reads as all off.
 type csiOptions struct {
 	DatastoreAllocate bool `json:"datastoreAllocate"`
 }
@@ -1135,7 +1135,7 @@ const clusterChanged = "the cluster changed meanwhile. Reload and try again"
 // the request's generation says, and answers it when not. A change sets whole values, of a
 // variable say, from what its user was shown, so without this the second of two users editing
 // at once would undo the first's change unseen. The generation stands for the spec alone, which
-// Cluster API's status updates leave as it is; the update itself is then made against the version
+// Cluster API's status updates leave as it is. The update itself is then made against the version
 // just read, so nothing slips in between. A request without the header is checked against nothing.
 func unchangedSince(w http.ResponseWriter, r *http.Request, c *clusterv1.Cluster) bool {
 	raw := r.Header.Get(generationHeader)
@@ -1214,7 +1214,7 @@ func checkUpgrade(c *clusterv1.Cluster, version string) string {
 	return provisioner.UpgradeRule(c.Spec.Topology.Version, version)
 }
 
-// setWorkerReplicas sets the replicas of the worker pool name, telling whether the cluster has it.
+// setWorkerReplicas sets the replicas of the worker pool name. It tells whether the cluster has it.
 func setWorkerReplicas(c *clusterv1.Cluster, name string, n int32) bool {
 	found := false
 	for i := range c.Spec.Topology.Workers.MachineDeployments {
@@ -1225,7 +1225,7 @@ func setWorkerReplicas(c *clusterv1.Cluster, name string, n int32) bool {
 	return found
 }
 
-// applyVariables sets the variables a change asks for, checking the rights each needs; it answers
+// applyVariables sets the variables a change asks for. It checks the rights each needs. It answers
 // the request when one fails.
 func (s *Server) applyVariables(w http.ResponseWriter, r *http.Request, u user, c *clusterv1.Cluster, access poolAccess, vars map[string]json.RawMessage) bool {
 	for name, value := range vars {
@@ -1342,7 +1342,7 @@ type confirmRequest struct {
 }
 
 // confirmed tells whether a request that cannot be undone names the cluster it is for, and answers
-// it when not. The interface has its user type the name; asking for it here as well holds a script,
+// it when not. The interface has its user type the name. Asking for it here as well holds a script,
 // or a page that reached the session's CSRF token, to the same step.
 func confirmed(w http.ResponseWriter, c *clusterv1.Cluster, typed string) bool {
 	if typed != c.Name {
@@ -1432,7 +1432,7 @@ func (s *Server) retryTalosUpgrade(w http.ResponseWriter, r *http.Request, u use
 }
 
 // kubeError answers with what the management cluster refused. Validation messages are the user's
-// to read; anything else is logged and kept vague.
+// to read. Anything else is logged and kept vague.
 func (s *Server) kubeError(w http.ResponseWriter, r *http.Request, err error) {
 	var status apierrors.APIStatus
 	switch {

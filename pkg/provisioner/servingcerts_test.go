@@ -63,7 +63,7 @@ func servingMachines() []clusterv1.Machine {
 				},
 			},
 		},
-		// Its node has yet to be seen; its kubelet asks as soon as it registers.
+		// Its node has yet to be seen. Its kubelet asks as soon as it registers.
 		{
 			Name:   "web-md-0-def",
 			Status: clusterv1.MachineStatus{Addresses: []clusterv1.MachineAddress{{Type: clusterv1.MachineInternalIP, Address: "10.0.0.12"}}},

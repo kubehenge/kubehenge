@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/kubehenge/kubehenge/pkg/pve"
@@ -173,5 +174,39 @@ func TestClusterCommandsSayWhatWentWrong(t *testing.T) {
 	}
 	if out, err := runCluster(t, srv.URL, "dev@pve!ci=secret", "list", "-o", "json"); err != nil || !json.Valid([]byte(out)) {
 		t.Errorf("list -o json = %q, %v", out, err)
+	}
+}
+
+func TestClusterListChecksItsFormatBeforeAsking(t *testing.T) {
+	t.Parallel()
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	for _, token := range []string{"dev@pve!ci=secret", ""} {
+		_, err := runCluster(t, srv.URL, token, "list", "-o", "yaml")
+		if err == nil || err.Error() != `--output is json or nothing, not "yaml"` {
+			t.Errorf("token %q: err = %v", token, err)
+		}
+	}
+	if n := requests.Load(); n != 0 {
+		t.Errorf("%d requests went out before --output was checked", n)
+	}
+}
+
+func TestOnlyTheCommandsFindingAClusterTakeANamespace(t *testing.T) {
+	t.Parallel()
+	cmd := newClusterCommand(&pve.Config{})
+	for _, path := range [][]string{{"get"}, {"kubeconfig"}, {"scale"}, {"delete"}, {"machine", "reboot"}} {
+		if sub, _, err := cmd.Find(path); err != nil || sub.Flag("namespace") == nil {
+			t.Errorf("%q has no --namespace: %v", path, err)
+		}
+	}
+	for _, path := range [][]string{{"list"}, {"create"}} {
+		if sub, _, err := cmd.Find(path); err != nil || sub.Flag("namespace") != nil {
+			t.Errorf("%q takes --namespace: %v", path, err)
+		}
 	}
 }

@@ -13,7 +13,7 @@ import (
 	"golang.org/x/text/encoding/charmap"
 )
 
-// Most tasks and commands, such as a configuration change, end within a fraction of a second; a
+// Most tasks and commands, such as a configuration change, end within a fraction of a second. A
 // download or a disk import takes minutes. So polling asks again soon at first and less often the
 // longer one runs.
 const (
@@ -104,8 +104,8 @@ func GuestFileRead(ctx context.Context, c *proxmox.Client, node string, vmid int
 // fileBytes turns the content Proxmox VE sends back into the file's text. Proxmox VE decodes the
 // agent's base64 into bytes and encodes them into its JSON one character per byte, so that a UTF-8
 // file arrives encoded twice, its multi-byte characters as runs of U+0080 to U+00FF, among them C1
-// control characters. Taken back to one byte per character, the content is the file's own bytes;
-// a character cut in half where the read stopped, or a file that is not UTF-8, is then replaced by
+// control characters. Taken back to one byte per character, the content is the file's own bytes.
+// A character cut in half where the read stopped, or a file that is not UTF-8, is then replaced by
 // U+FFFD. Content with a character beyond U+00FF was not sent that way, and is left as it is.
 func fileBytes(content string) string {
 	raw, err := charmap.ISO8859_1.NewEncoder().String(content)

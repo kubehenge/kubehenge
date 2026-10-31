@@ -27,7 +27,7 @@ const narrowBar = 900;
 
 const shown = (c: Cluster): string => (c.namespace === "default" ? c.name : `${c.namespace}/${c.name}`);
 
-// nextCluster is the cluster `by` places on from the open one in the rail's order, going round.
+// nextCluster is the cluster `by` places on from the open one in the rail's order. It goes round.
 function nextCluster(order: Cluster[], here: Here | undefined, by: number): Cluster | undefined {
   const at = order.findIndex((c) => c.namespace === here?.namespace && c.name === here.name);
   if (at === -1) {
@@ -181,7 +181,7 @@ export function Console({
   const runs = useRuns();
   const [palette, setPalette] = useState(false);
   const [keys, setKeys] = useState(false);
-  // undefined follows the window's width; true or false is the user's own choice.
+  // undefined follows the window's width. true or false is the user's own choice.
   const [runsShown, setRunsShown] = useState<boolean>();
   const order = fleet?.clusters === undefined ? [] : ranked(fleet.clusters, fleet.health).map((r) => r.cluster);
   const port = headlamp !== undefined && headlamp > 0 && !settingUp ? headlamp : undefined;

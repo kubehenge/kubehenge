@@ -52,7 +52,7 @@ func (r *Reconciler) ensureEncryption(ctx context.Context, cluster *clusterv1.Cl
 }
 
 // encryptionConfig is an EncryptionConfiguration with a new secretbox key, which the CIS benchmark
-// accepts, as it does aescbc; secretbox authenticates what it encrypts.
+// accepts, as it does aescbc, and secretbox authenticates what it encrypts.
 func encryptionConfig() ([]byte, error) {
 	key := make([]byte, secretboxKeyBytes)
 	_, _ = rand.Read(key) // crypto/rand.Read never fails

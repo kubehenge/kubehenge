@@ -24,7 +24,7 @@ import (
 // read the target from a Secret in the workload cluster's kube-system on every snapshot
 // (etcd-s3-config-secret), which keeps the store's keys out of the bootstrap data that would
 // otherwise carry them onto every server's cloud-init ISO, as the RKE2 provider's backupConfig
-// does; the k3s provider has no setting for it at all, so both get the same drop-in.
+// does. The k3s provider has no setting for it at all, so both get the same drop-in.
 const (
 	// EtcdUploadSecret is the Secret in the workload cluster's kube-system the servers read the
 	// target from, as the classes' drop-in names it.

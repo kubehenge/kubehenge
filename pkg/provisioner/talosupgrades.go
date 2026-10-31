@@ -32,7 +32,7 @@ import (
 )
 
 // TalosUpgradeFailedAnnotation records why the last node upgrade failed: "<node> to <release> at
-// <time>: <why>". While it is there no node of the cluster is upgraded; removing it tries again.
+// <time>: <why>". While it is there no node of the cluster is upgraded. Removing it tries again.
 const TalosUpgradeFailedAnnotation = "kubehenge.dev/talos-upgrade-failed"
 
 const kindDaemonSet = "DaemonSet"
@@ -85,11 +85,11 @@ type TalosUpgrader struct {
 	Images         TalosImages
 	Dial           TalosDialer
 	Nodes          NodeDrainer
-	// Events reports each node's upgrade on its Cluster; may be nil.
+	// Events reports each node's upgrade on its Cluster. It may be nil.
 	Events   events.EventRecorder
 	Interval time.Duration
 	Now      func() time.Time
-	// MachineCheck is how often a node's machine is checked while the node installs; zero is
+	// MachineCheck is how often a node's machine is checked while the node installs. Zero is
 	// talosMachineCheck.
 	MachineCheck time.Duration
 
@@ -117,7 +117,7 @@ func (u *TalosUpgrader) Start(ctx context.Context) error {
 }
 
 // RunOnce looks at every Talos cluster once. A node's upgrade runs on beside the next looks, which
-// pass over its cluster until it is done; running counts the upgrades started.
+// pass over its cluster until it is done, and running counts the upgrades started.
 func (u *TalosUpgrader) RunOnce(ctx context.Context, running *sync.WaitGroup) {
 	log := ctrl.LoggerFrom(ctx).WithName("talos-upgrader")
 	var list clusterv1.ClusterList
@@ -176,7 +176,7 @@ type talosProgress struct {
 	since time.Time
 	// tries counts the installs that failed as a network or a busy node may, to be tried again.
 	tries int
-	// rebooted is when the node was told to reboot into the release; zero before.
+	// rebooted is when the node was told to reboot into the release. It is zero before.
 	rebooted time.Time
 }
 
@@ -333,7 +333,7 @@ func (u *TalosUpgrader) machines(ctx context.Context, c *clusterv1.Cluster) ([]c
 }
 
 // follow carries a node upgrade under way on: one not rebooted yet is started again, after a
-// restart of the controller or a failed try, as each of its steps can be taken twice; one rebooted
+// restart of the controller or a failed try, as each of its steps can be taken twice. One rebooted
 // is done once the node is Ready on the release, and failed when it is not by talosBootTimeout.
 func (u *TalosUpgrader) follow(ctx context.Context, c *clusterv1.Cluster, machines []clusterv1.Machine, p *talosProgress) (*talosStep, error) {
 	m := nodeMachine(machines, p.node)
@@ -500,7 +500,7 @@ func transientInstall(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded)
 }
 
-// fail records why a node's upgrade failed, which stops the cluster's upgrades; the upgrade of a
+// fail records why a node's upgrade failed, which stops the cluster's upgrades. The upgrade of a
 // node whose machine is going is abandoned instead.
 func (u *TalosUpgrader) fail(ctx context.Context, c *clusterv1.Cluster, p *talosProgress, why error) error {
 	if machines, err := u.machines(ctx, c); err == nil && nodeMachine(machines, p.node) == nil {

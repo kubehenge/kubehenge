@@ -18,8 +18,8 @@ type poolChange struct {
 	Machine  json.RawMessage `json:"machine"`
 }
 
-// applyPools adds, changes and removes worker pools as a change asks, by name, a null removing one;
-// it says what is wrong with the change, or returns "". The API server checks the names and sizes
+// applyPools adds, changes and removes worker pools as a change asks, by name, a null removing one.
+// It says what is wrong with the change, or returns "". The API server checks the names and sizes
 // as it checks a cluster applied with kubectl.
 func applyPools(c *clusterv1.Cluster, pools map[string]*poolChange) string {
 	workers := &c.Spec.Topology.Workers
@@ -80,7 +80,7 @@ func setPoolOverride(md *clusterv1.MachineDeploymentTopology, name string, value
 }
 
 // poolsEffect is what a change of pools does to the machines: a new size replaces the pool's
-// workers; adding or removing a pool, or setting its workers, only adds or removes some.
+// workers. Adding or removing a pool, or setting its workers, only adds or removes some.
 func poolsEffect(before *clusterv1.Cluster, pools map[string]*poolChange) string {
 	for name, change := range pools {
 		if change == nil || change.Machine == nil {

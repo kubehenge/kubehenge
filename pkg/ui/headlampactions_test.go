@@ -55,7 +55,7 @@ func checkGate(t *testing.T, b *browser, seen *[]upstreamRequest, cases []gateCa
 const helm = "/clusters/default.one/helm/"
 
 // With the actions off, the gate offers none of Headlamp's Helm routes, nor the plugins Headlamp
-// ships, and leaves those out of its plugin list; a cluster's node drain is offered either way.
+// ships, and leaves those out of its plugin list. A cluster's node drain is offered either way.
 func TestHeadlampActionsOff(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, cluster("default", "one"))
@@ -84,7 +84,7 @@ func TestHeadlampActionsOff(t *testing.T) {
 }
 
 // With the actions on, a cluster's Helm routes are offered to whoever sees the cluster, exactly
-// those the app catalog takes, with each method it takes them with; Headlamp acts there with the
+// those the app catalog takes, with each method it takes them with. Headlamp acts there with the
 // user's own credentials.
 func TestHeadlampActionsHelm(t *testing.T) {
 	t.Parallel()
@@ -210,7 +210,7 @@ func TestHeadlampActionsRepositories(t *testing.T) {
 	})
 }
 
-// The actions bring the plugins Headlamp ships, to be read alone; port forwards, which Headlamp
+// The actions bring the plugins Headlamp ships, to be read alone. Port forwards, which Headlamp
 // offers in its desktop app alone, the routes that name a cluster themselves and the server's own
 // metrics stay refused.
 func TestHeadlampActionsOn(t *testing.T) {

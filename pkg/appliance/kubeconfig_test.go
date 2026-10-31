@@ -28,7 +28,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-// serviceAccountToken stands for a token the API server issued at issued, lasting life.
+// serviceAccountToken stands for a token the API server issued at issued. It lasts life.
 func serviceAccountToken(issued time.Time, life time.Duration) string {
 	claims := fmt.Sprintf(`{"iat":%d,"exp":%d,"sub":"system:serviceaccount:%s:%s"}`,
 		issued.Unix(), issued.Add(life).Unix(), interfaceNamespace, interfaceAccount)

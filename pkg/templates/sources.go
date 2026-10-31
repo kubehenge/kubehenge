@@ -24,7 +24,7 @@ type Resolved struct {
 	URL string
 	// FileName is the name in the import storage. Proxmox VE checks the format from its extension.
 	FileName string
-	// Checksum is empty when the publisher offers none; the download then relies on TLS alone.
+	// Checksum is empty when the publisher offers none. The download then relies on TLS alone.
 	Checksum          string
 	ChecksumAlgorithm string
 }
@@ -38,11 +38,11 @@ const TalosSchematic = `customization:
 `
 
 // KubernetesPackagesKeyFingerprint signs pkgs.k8s.io. The key is fetched at build time because
-// its expiry is extended in place; only this fingerprint is trusted.
+// its expiry is extended in place. Only this fingerprint is trusted.
 const KubernetesPackagesKeyFingerprint = "DE15B14486CD377B9E876E1A234654DA9A296436"
 
 const (
-	// sourcesTimeout bounds each request for metadata; the images themselves Proxmox VE downloads.
+	// sourcesTimeout bounds each request for metadata. The images themselves Proxmox VE downloads.
 	sourcesTimeout = 2 * time.Minute
 	// maxResponseBytes is far above any checksum list, key or schematic answer.
 	maxResponseBytes = 16 << 20
@@ -151,7 +151,7 @@ func (s *Sources) TalosSchematicID(ctx context.Context) (string, error) {
 // from the Image Factory's registry, which signs it.
 func (s *Sources) TalosInstaller(ctx context.Context, version string) (string, error) {
 	if !versionRE.MatchString(version) {
-		return "", fmt.Errorf("talos version %q is not of the form v1.2.3", version)
+		return "", fmt.Errorf("the Talos version %q is not of the form v1.2.3", version)
 	}
 	id, err := s.TalosSchematicID(ctx)
 	if err != nil {

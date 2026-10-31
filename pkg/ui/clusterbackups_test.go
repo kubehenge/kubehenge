@@ -75,7 +75,7 @@ var veleroKinds = map[schema.GroupVersionResource]string{
 	veleroDeletions: "DeleteBackupRequestList", veleroDownloads: "DownloadRequestList",
 }
 
-// location is a backup location; source names the cluster whose backups it holds, for one of
+// location is a backup location. Source names the cluster whose backups it holds, for one of
 // another cluster's.
 func location(name, source string, volumeData bool) *unstructured.Unstructured {
 	l := velero("BackupStorageLocation", name, nil, map[string]any{"status": map[string]any{"phase": "Available"}})
@@ -634,7 +634,7 @@ func TestVeleroLogs(t *testing.T) {
 			t.Errorf("%s: more %v, %d lines from %q", path, got.More, len(got.Lines), got.Lines[0])
 		}
 	}
-	// Under way, a backup has no log yet; nor has one that is gone.
+	// Under way, a backup has no log yet. Nor has one that is gone.
 	expect(t, b.do("GET", "/api/clusters/default/one/backups/velero-scheduled-20261013020000/log", ""), http.StatusConflict)
 	expect(t, b.do("GET", "/api/clusters/default/one/restores/nothing/log", ""), http.StatusNotFound)
 	// A log may carry what the cluster holds: it goes to those who may read its pods' logs.
@@ -662,7 +662,7 @@ func TestResultsAreBounded(t *testing.T) {
 		many[i] = "already exists"
 	}
 	v := resultsOf(veleroResult{Velero: []string{"x"}, Namespaces: map[string][]string{"a": many, "b": {"y"}}})
-	// One from Velero and 499 of a's carried; 21 of a's and b's one left over.
+	// One from Velero and 499 of a's carried. 21 of a's and b's one left over.
 	if v.More != 22 || len(v.Velero) != 1 || len(v.Namespaces) != 1 || len(v.Namespaces[0].Messages) != maxResultMessages-1 {
 		t.Errorf("results %d velero, %d namespaces, %d more", len(v.Velero), len(v.Namespaces), v.More)
 	}

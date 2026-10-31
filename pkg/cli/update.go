@@ -37,7 +37,7 @@ const (
 	signatureMode os.FileMode = 0o644
 )
 
-// releaseIndexDefault lets a mirror serve the index; whatever the source, only an index signed by
+// releaseIndexDefault lets a mirror serve the index. Whatever the source, only an index signed by
 // the release key is used.
 func releaseIndexDefault() string {
 	if v := os.Getenv("KUBEHENGE_RELEASE_INDEX"); v != "" {
@@ -61,7 +61,7 @@ func newUpdateCommand() *cobra.Command {
 
 Run as root by kubehenge-update.service when a request appears in the spool. It installs only a
 release named in the index signed by Kubehenge's release key, and only one newer than itself.`,
-		Args: cobra.NoArgs,
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			u.Spool = appliance.Spool(spool)
 			u.HTTP = &http.Client{Timeout: updateTimeout}
@@ -69,7 +69,7 @@ release named in the index signed by Kubehenge's release key, and only one newer
 		},
 	}
 	cmd.Flags().StringVar(&spool, "spool", "/var/lib/kubehenge-update", "the updater's spool directory")
-	cmd.Flags().StringVar(&u.ApplianceDir, "appliance-dir", "/var/lib/kubehenge", "the interface's state directory; no upgrade starts while a management cluster run holds its lock")
+	cmd.Flags().StringVar(&u.ApplianceDir, "appliance-dir", "/var/lib/kubehenge", "the interface's state directory. No upgrade starts while a management cluster run holds its lock")
 	cmd.Flags().StringVar(&u.Index, "index", releaseIndexDefault(), "URL of the signed release index (env KUBEHENGE_RELEASE_INDEX)")
 	return cmd
 }
@@ -77,7 +77,7 @@ release named in the index signed by Kubehenge's release key, and only one newer
 func newReleaseCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "release",
-		Short: "Sign release indexes, for the people who publish Kubehenge",
+		Short: "Make release keys, indexes and pins, for Kubehenge's maintainers",
 	}
 	keys := release.PublicKeys()
 	cmd.AddCommand(newKeygenCommand(), newSignCommand(keys), newIndexCommand(keys), newRenewCommand(keys), newPinsCommand())
@@ -90,12 +90,12 @@ const pinsTimeout = 30 * time.Minute
 func newPinsCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "pins <releasepins.txt>",
-		Short: "Pin the RKE2 and k3s releases published since",
-		Long: `Add to a pins file (pkg/provisioner/releasepins.txt) every RKE2 and k3s release it lacks of the
-minor versions a new cluster may start on, and the one before: the SHA-256 of the release's checksum
-file and of its install script, as they are now. A pin already there never changes. GH_TOKEN, when
-set, reads GitHub's API with a higher rate limit.`,
-		Args: cobra.ExactArgs(1),
+		Short: "Pin the RKE2 and k3s releases a pins file lacks",
+		Long: `Add to a pins file (pkg/provisioner/releasepins.txt) every RKE2 and k3s release it lacks, for each
+minor version a new cluster may start on and the one before. A pin is the SHA-256 of the release's
+checksum file and of its install script, as they are now. A pin already there never changes. With
+GH_TOKEN set, it reads GitHub's API at a higher rate limit.`,
+		Args: argsSay(cobra.ExactArgs(1), "give the pins file"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			raw, err := os.ReadFile(args[0])
 			if err != nil {
@@ -130,8 +130,8 @@ set, reads GitHub's API with a higher rate limit.`,
 func newKeygenCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "keygen <private key file>",
-		Short: "Make a release key pair; prints the public key, a line for pkg/release/release.pub",
-		Args:  cobra.ExactArgs(1),
+		Short: "Make a release key pair and print the public key, as a line for pkg/release/release.pub",
+		Args:  argsSay(cobra.ExactArgs(1), "give the file to write the private key to"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pub, priv, err := ed25519.GenerateKey(rand.Reader)
 			if err != nil {
@@ -157,7 +157,7 @@ func newKeygenCommand() *cobra.Command {
 }
 
 // newSignCommand signs with keys whose public halves are trusted, the release keys built into this
-// binary; a signature from any other key would be refused by every appliance, and by the next
+// binary. A signature from any other key would be refused by every appliance, and by the next
 // release's index build, which checks the previous index against them. Each key signs a line of
 // its own: during a rotation the old key and the new one both sign, so that appliances trusting
 // either take the index. A build without release keys signs with any key.
@@ -165,7 +165,7 @@ func newSignCommand(trusted []ed25519.PublicKey) *cobra.Command {
 	return &cobra.Command{
 		Use:   "sign <private key file>... <index.json>",
 		Short: "Check an index and write its signatures to <index.json>.sig",
-		Args:  cobra.MinimumNArgs(2),
+		Args:  argsSay(cobra.MinimumNArgs(2), "give one or more private key files, then the index"),
 		RunE: func(_ *cobra.Command, args []string) error {
 			keyFiles, indexFile := args[:len(args)-1], args[len(args)-1]
 			index, err := os.ReadFile(indexFile) //nolint:gosec // the file the person running the command named
@@ -186,7 +186,7 @@ func newSignCommand(trusted []ed25519.PublicKey) *cobra.Command {
 				sigs.WriteString(release.Sign(index, key) + "\n")
 			}
 			if _, err = release.Parse(index, sigs.String(), signers, time.Now()); err != nil {
-				return fmt.Errorf("the index: %w", err)
+				return err //nolint:wrapcheck // release.Parse names the index
 			}
 			if err = os.WriteFile(indexFile+".sig", []byte(sigs.String()), signatureMode); err != nil {
 				return fmt.Errorf("the signature: %w", err)
@@ -224,11 +224,10 @@ func newRenewCommand(keys []ed25519.PublicKey) *cobra.Command {
 	return &cobra.Command{
 		Use:   "renew <index.json>",
 		Short: "Write a published index again, expiring two weeks from now",
-		Long: `Write a published index again to standard output, expiring two weeks from now: the index
-at <index.json>, checked against this build's release keys with its signatures beside it as
-<index.json>.sig, whatever its own expiry. The result still has to be signed with
-"kubehenge release sign".`,
-		Args: cobra.ExactArgs(1),
+		Long: `Write the published index at <index.json> again to standard output, expiring two weeks from now.
+It is checked against this build's release keys, with its signatures beside it as <index.json>.sig,
+whatever its own expiry. Sign the result with "kubehenge release sign".`,
+		Args: argsSay(cobra.ExactArgs(1), "give the published index.json"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(keys) == 0 {
 				return errors.New("this build carries no release key to check the index with")
@@ -261,11 +260,11 @@ func newIndexCommand(keys []ed25519.PublicKey) *cobra.Command {
 	var tofu release.Artefact
 	cmd := &cobra.Command{
 		Use:   "index",
-		Short: "Write the next release index: the previous one, verified, with one release added",
-		Long: `Write the next release index to standard output, expiring two weeks from now: the previous
-published index, checked against this build's release keys, with one newer release added. The
-result still has to be signed with "kubehenge release sign".`,
-		Args: cobra.NoArgs,
+		Short: "Write the next release index, adding one release to the verified previous one",
+		Long: `Write the next release index to standard output, expiring two weeks from now. It is the previous
+published index, checked against this build's release keys, with one newer release added. Sign the
+result with "kubehenge release sign".`,
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ix := &release.Index{Releases: []release.Release{}}
 			if previous != "" {
@@ -284,11 +283,11 @@ result still has to be signed with "kubehenge release sign".`,
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&previous, "previous", "", "the previous release's index.json, its signature beside it as index.json.sig; none for the first release")
+	f.StringVar(&previous, "previous", "", "the previous release's index.json, with its signature beside it as index.json.sig. Empty for the first release")
 	f.StringVar(&add.Version, "version", "", "the new release's version")
 	f.StringVar(&add.URL, "url", "", "https URL of the new release's archive")
 	f.StringVar(&add.SHA256, "sha256", "", "SHA-256 of the archive, in hex")
-	f.StringVar(&tofu.Version, "tofu-version", "", "the OpenTofu release the appliance runs it with")
+	f.StringVar(&tofu.Version, "tofu-version", "", "the OpenTofu release the new release's appliance runs")
 	f.StringVar(&tofu.URL, "tofu-url", "", "https URL of that OpenTofu archive")
 	f.StringVar(&tofu.SHA256, "tofu-sha256", "", "SHA-256 of the OpenTofu archive, in hex")
 	for _, name := range []string{"version", "url", "sha256"} {

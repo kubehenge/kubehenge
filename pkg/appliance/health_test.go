@@ -20,8 +20,8 @@ import (
 	"time"
 )
 
-// healthServer serves the health route as the interface does, on a certificate the check is given;
-// answer is the status of each request, where 0 holds the request until the check gives it up.
+// healthServer serves the health route as the interface does, on a certificate the check is given.
+// Answer is the status of each request, where 0 holds the request until the check gives it up.
 func healthServer(t *testing.T, answer func() int) *ServiceCheck {
 	t.Helper()
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

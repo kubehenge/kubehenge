@@ -24,7 +24,7 @@ var Version = "dev"
 // configurable at run time: whoever could change them could sign upgrades.
 var publicKeys = ""
 
-// PublicKeys returns the keys one of which the index has to be signed with; a malformed one is left
+// PublicKeys returns the keys one of which the index has to be signed with. A malformed one is left
 // out.
 func PublicKeys() []ed25519.PublicKey { return parseKeys(publicKeys) }
 
@@ -112,7 +112,7 @@ func Verify(index []byte, signatures string, keys []ed25519.PublicKey) (*Index, 
 	}
 	for _, r := range ix.Releases {
 		if err := r.validate(); err != nil {
-			return nil, fmt.Errorf("release index: %w", err)
+			return nil, fmt.Errorf("release index: release %s: %w", r.Version, err)
 		}
 	}
 	return &ix, nil
@@ -143,10 +143,10 @@ func (r Release) validate() error {
 		return err
 	}
 	if !strings.HasPrefix(r.URL, "https://") || !isSHA256(r.SHA256) {
-		return fmt.Errorf("%s needs an https URL and a SHA-256", r.Version)
+		return fmt.Errorf("needs an https URL and a SHA-256 in hex, not %q and %q", r.URL, r.SHA256)
 	}
 	if t := r.Tofu; t != nil && (!strings.HasPrefix(t.URL, "https://") || !isSHA256(t.SHA256) || t.Version == "") {
-		return fmt.Errorf("%s names OpenTofu without a version, an https URL and a SHA-256", r.Version)
+		return errors.New("names OpenTofu without a version, an https URL and a SHA-256")
 	}
 	return nil
 }
@@ -258,7 +258,7 @@ func (ix *Index) Newest(current string, policy Policy) *Release {
 	return best
 }
 
-// Find returns the release version names if it is newer than current; an upgrade never goes
+// Find returns the release version names if it is newer than current. An upgrade never goes
 // back, so an old signed release cannot be replayed onto the appliance.
 func (ix *Index) Find(current, version string) (*Release, error) {
 	cur, err := ParseVersion(current)

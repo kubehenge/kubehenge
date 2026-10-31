@@ -66,7 +66,7 @@ export interface SetupForm {
   mirrors: string;
   podSubnets: string;
   serviceSubnets: string;
-  // Kept from the last run; not edited here.
+  // Kept from the last run. Not edited here.
   controllerImage?: string | undefined;
   clusterOIDC: OIDCProvider[];
   proxmoxHA: boolean;
@@ -262,7 +262,7 @@ type RefreshFields = Pick<
   | "creatorBuilds"
 >;
 
-// refreshFields fills the refresh's fields; settings that name no refresh have it on, with every
+// refreshFields fills the refresh's fields. Settings that name no refresh have it on, with every
 // default.
 function refreshFields(r: ManagementSettings["templateRefresh"]): RefreshFields {
   return {
@@ -339,7 +339,7 @@ export type SetupField =
   | "passphrase"
   | "confirm";
 
-// The first run's steps, in order; the Administration page shows them all at once, each a section.
+// The first run's steps, in order. The Administration page shows them all at once, each a section.
 const setupSteps = ["Placement", "Network", "Clusters", "Services", "Passphrase"] as const;
 type SetupStep = (typeof setupSteps)[number];
 
@@ -420,7 +420,7 @@ function nodeNetwork(
 }
 
 // setupFieldProblems says, by field, what keeps the settings from being applied. The first run
-// asks for the passphrase twice; later runs open the state with the one given then. A management
+// asks for the passphrase twice. Later runs open the state with the one given then. A management
 // cluster that exists (was) keeps its nodes' addresses, as the appliance insists.
 export function setupFieldProblems(
   f: SetupForm,
@@ -830,7 +830,7 @@ function ManagedSummary({
   );
 }
 
-// ApplyDialog applies the saved settings again as they are, once given the state passphrase; what
+// ApplyDialog applies the saved settings again as they are, once given the state passphrase. What
 // it brings goes above the passphrase.
 export function ApplyDialog({
   title,
@@ -1529,7 +1529,7 @@ function SetupWizard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [form, setForm] = useState<SetupForm>(() => formOf(status.settings));
-  // The first run goes step by step; the Administration page shows every step at once.
+  // The first run goes step by step. The Administration page shows every step at once.
   const stepped = !manage;
   const [step, setStep] = useState<SetupStep>("Placement");
   // A field's problem shows once it has been changed, or after Next or the run was asked for on its
@@ -1778,7 +1778,7 @@ interface Offers {
 
 /**
  * withDefaults is the form as it is checked and sent. The management cluster's storages and bridge
- * must be on every node it runs on; once the choices are known, a preset that is not among them
+ * must be on every node it runs on. Once the choices are known, a preset that is not among them
  * gives way, a default storage to the first that fits and a choice made for other nodes to none, so
  * nothing is sent that the page does not show. Where nothing is chosen yet, it starts from what the
  * first chosen node says of itself: the bridge it reaches its gateway through, that gateway, its DNS
@@ -1835,7 +1835,7 @@ function withDefaults(
 }
 
 // clusterChoices are the storages and bridges clusters may be offered, any node's, each with where
-// it is; one chosen before that is no longer found stays, said to be gone.
+// it is. One chosen before that is no longer found stays, said to be gone.
 function clusterChoices(
   form: SetupForm,
   found: Found,

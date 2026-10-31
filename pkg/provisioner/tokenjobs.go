@@ -39,10 +39,10 @@ const (
 const tokenJobResultMode = 0o600
 
 const (
-	// tokenJobStart is what a token Job may take beyond its request's own time: being scheduled,
-	// starting its container and finishing.
+	// tokenJobStart is what a token Job may take beyond its request's own time: to be scheduled,
+	// to start its container and to finish.
 	tokenJobStart = 5 * time.Minute
-	// tokenJobTTL keeps a finished Job only until the controller has read it; it deletes the Job
+	// tokenJobTTL keeps a finished Job only until the controller has read it. The controller deletes the Job
 	// itself, and this removes one a restart of the controller left.
 	tokenJobTTL = 10 * time.Minute
 	// tokenJobPoll is how often a running Job is looked at.
@@ -62,7 +62,7 @@ type TokenJob struct {
 	Reader    client.Reader
 	Namespace string
 	Template  string
-	// Poll is how often a running Job is looked at; tokenJobPoll unless set.
+	// Poll is how often a running Job is looked at. It is tokenJobPoll unless set.
 	Poll time.Duration
 }
 
@@ -77,7 +77,7 @@ type TokenJobResult struct {
 func InputSecret(template string) string { return template + "-input" }
 
 // Run runs request in a Job and returns what it printed. A request that failed returns its error,
-// one Proxmox VE did not find wrapping proxmox.ErrNotFound; timeout bounds the request itself.
+// one Proxmox VE did not find wrapping proxmox.ErrNotFound. timeout bounds the request itself.
 func (j *TokenJob) Run(ctx context.Context, request any, timeout time.Duration) (string, error) {
 	raw, err := json.Marshal(request)
 	if err != nil {
@@ -159,7 +159,7 @@ func TokenJobFrom(tmpl *corev1.PodTemplate, name string, timeout time.Duration) 
 	return job
 }
 
-// putInput leaves the request for the Job, replacing what an earlier one left.
+// putInput leaves the request for the Job. It replaces what an earlier one left.
 func (j *TokenJob) putInput(ctx context.Context, job string, request []byte) error {
 	data := map[string][]byte{TokenJobRequestKey: request, TokenJobNameKey: []byte(job)}
 	s := &corev1.Secret{Namespace: j.Namespace, Name: InputSecret(j.Template), Type: corev1.SecretTypeOpaque, Data: data}

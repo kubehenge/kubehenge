@@ -179,7 +179,7 @@ export function restoreProblems(f: RestoreFields): Partial<Record<RestoreField, 
   return p;
 }
 
-/** restoreRequest asks for what the fields pick, leaving out what is the server's default. */
+/** restoreRequest asks for what the fields pick. It leaves out what is the server's default. */
 export function restoreRequest(backup: string, f: RestoreFields): RestoreRequest {
   const req: RestoreRequest = { backup };
   const left = splitNames(f.excludedNamespaces);

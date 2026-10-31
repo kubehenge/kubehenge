@@ -90,7 +90,7 @@ func Abandoned(c *clusterv1.Cluster) bool {
 	return !c.DeletionTimestamp.IsZero() && c.Annotations[AbandonAnnotation] == c.Name
 }
 
-// DeletionStatusOf reads a cluster's DeletionStatusAnnotation; an unreadable one reads as empty.
+// DeletionStatusOf reads a cluster's DeletionStatusAnnotation. An unreadable one reads as empty.
 func DeletionStatusOf(c *clusterv1.Cluster) DeletionStatus {
 	var st DeletionStatus
 	if raw := c.Annotations[DeletionStatusAnnotation]; raw != "" {
@@ -328,7 +328,7 @@ func DeletionStallHead(message string) string {
 
 // abandon carries out an abandoned deletion: it deletes what of the cluster is not being deleted
 // yet, lets machines go without draining their nodes, and once AbandonGrace has passed, takes the
-// finalizers off whatever has not finished, the Cluster's last, recording what each leaves behind.
+// finalizers off whatever has not finished, the Cluster's last. It records what each leaves behind.
 func (r *Reconciler) abandon(ctx context.Context, cluster *clusterv1.Cluster, objects []*unstructured.Unstructured) (ctrl.Result, error) {
 	st := r.deletionStatus(cluster, objects, nil)
 	now := r.now()
@@ -358,7 +358,7 @@ func (r *Reconciler) abandon(ctx context.Context, cluster *clusterv1.Cluster, ob
 	if len(objects) > 0 || !due {
 		errs = append(errs, r.recordDeletion(ctx, cluster, &st))
 		if len(objects) == 0 {
-			// Kubehenge's own part ends as it would have, now that nothing of the cluster is left; what
+			// Kubehenge's own part ends as it would have, now that nothing of the cluster is left. What
 			// it cannot remove is tried once more when the grace is up.
 			if _, err := r.removeProxmox(ctx, cluster); err != nil {
 				ctrl.LoggerFrom(ctx).Info("removing the abandoned cluster's Proxmox VE objects", "error", err.Error())

@@ -17,9 +17,9 @@ const provisioningGrace = 3_600_000;
 /** The clusters the user may see, read once for the whole page: the rail, the list and the runs. */
 export interface Fleet {
   clusters: Cluster[] | undefined;
-  /** How each cluster's health page sums it up, by cluster key; undefined until read. */
+  /** How each cluster's health page sums it up, by cluster key. Undefined until read. */
   health: Map<string, FleetHealth> | undefined;
-  /** The work running or lately finished that the user may see; undefined until read. */
+  /** The work running or lately finished that the user may see. Undefined until read. */
   runs: RunInfo[] | undefined;
   error: string | undefined;
   /** Whether the clusters shown may no longer hold, as usePoll tells. */
@@ -42,7 +42,7 @@ export const fleetKey = (c: { namespace: string; name: string }): string => `${c
 const noFleet = (): Promise<undefined> => Promise.resolve(undefined);
 
 /**
- * FleetProvider reads the fleet for everything inside it, once `reads` is on; it stays in place
+ * FleetProvider reads the fleet for everything inside it, once `reads` is on. It stays in place
  * while it is off, so the page round it is not built again when reading starts.
  */
 export function FleetProvider({ reads = true, children }: { reads?: boolean; children: ReactNode }): JSX.Element {

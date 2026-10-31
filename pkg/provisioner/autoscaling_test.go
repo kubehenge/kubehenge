@@ -39,7 +39,7 @@ func TestWorkerRange(t *testing.T) {
 		{"replicas unset", clusterv1.MachineDeploymentTopology{}, 1, 1},
 		{"three replicas", clusterv1.MachineDeploymentTopology{Replicas: new(int32(3))}, 3, 3},
 		{"autoscaled", autoscaledPoolOf("0", "5"), 0, 5},
-		// The validator refuses it; until then it counts as Cluster API runs it.
+		// The validator refuses it. Until then it counts as Cluster API runs it.
 		{"bounds that do not read", autoscaledPoolOf("none", "5"), 1, 1},
 	} {
 		if got := workerRange(&tc.pool); got.least != tc.least || got.most != tc.top {

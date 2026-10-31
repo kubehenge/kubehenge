@@ -19,7 +19,7 @@ const (
 	effectNone = "none"
 	// effectScales adds or removes machines and leaves the others as they are.
 	effectScales = "scales"
-	// effectControlPlane and effectWorkers replace those machines one at a time; effectAll both.
+	// effectControlPlane and effectWorkers replace those machines one at a time. effectAll both.
 	effectControlPlane = "control-plane"
 	effectWorkers      = "workers"
 	effectAll          = "all"
@@ -38,7 +38,7 @@ type planView struct {
 	Cluster clusterView     `json:"cluster"`
 	Changes []plannedChange `json:"changes"`
 	// Warnings are what to know before applying the change, such as a roll of the only control
-	// plane; kubectl gets the same from the admission webhook.
+	// plane. kubectl gets the same from the admission webhook.
 	Warnings []string `json:"warnings,omitempty"`
 }
 

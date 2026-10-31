@@ -118,7 +118,7 @@ describe("talos clusters", () => {
       error: "Talos v1.14.4 runs none of the Kubernetes versions offered",
     });
 
-    // The newest release with a template comes first; a version the release does not run moves to
+    // The newest release with a template comes first. A version the release does not run moves to
     // the newest it does, and one it runs stays.
     const form = { ...newForm(), version: "v1.37.1" };
     expect(withTalosRelease(form, releases, offered)).toMatchObject({ talosVersion: "v1.15.1", version: "v1.37.1" });

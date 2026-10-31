@@ -32,7 +32,7 @@ const (
 	// The load balancers a cluster chooses from, as its loadBalancer variable names them.
 	metalLB = "metallb"
 	kubeVip = "kube-vip"
-	// metalLBNamespace is where MetalLB runs; its speakers need the host's network.
+	// metalLBNamespace is where MetalLB runs. Its speakers need the host's network.
 	metalLBNamespace = "metallb-system"
 	// kubeVipMetrics is where the load balancer's kube-vip serves its metrics: on loopback, as the
 	// control planes' does on 2112 beside it.
@@ -388,7 +388,7 @@ func lastAddress(p netip.Prefix) netip.Addr {
 
 // clusterAddresses are the addresses a cluster takes on its nodes' network.
 type clusterAddresses struct {
-	// segment is the network's bridge and VLAN; clusters on different ones share no addresses.
+	// segment is the network's bridge and VLAN. Clusters on different ones share no addresses.
 	segment  string
 	nodes    netip.Prefix
 	gateway  netip.Addr
@@ -447,7 +447,7 @@ func checkAddresses(cluster *clusterv1.Cluster, others []clusterv1.Cluster) erro
 		if lbErr != nil || lb.Enabled || errors.As(err, new(unreadable)) {
 			return err
 		}
-		// Cluster API refuses missing variables itself; until the cluster has them, it holds no
+		// Cluster API refuses missing variables itself. Until the cluster has them, it holds no
 		// addresses to compare with other clusters.
 		return nil
 	}
@@ -459,7 +459,7 @@ func checkAddresses(cluster *clusterv1.Cluster, others []clusterv1.Cluster) erro
 		}
 		theirs, err := addressesOf(o)
 		if err != nil || theirs.segment != own.segment {
-			// A cluster whose variables don't read was refused or is being fixed; it holds no addresses yet.
+			// A cluster whose variables don't read was refused or is being fixed. It holds no addresses yet.
 			continue
 		}
 		problems = append(problems, own.clashes(o.Namespace+"/"+o.Name, &theirs)...)
@@ -508,7 +508,7 @@ func (a *clusterAddresses) taken(s addressSpan) []string {
 		problems = append(problems, fmt.Sprintf("load-balancer addresses %s include the gateway %s", s, a.gateway))
 	}
 	// Hosts on the network take its first and last address for the network and its broadcast,
-	// so a Service given one would never be answered; a /31 or /32 has neither.
+	// so a Service given one would never be answered. A /31 or /32 has neither.
 	if a.nodes.Bits() < pointToPointBits {
 		for _, reserved := range []netip.Addr{a.nodes.Masked().Addr(), lastAddress(a.nodes)} {
 			if s.overlaps(addressSpan{reserved, reserved}) {

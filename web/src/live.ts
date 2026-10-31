@@ -1,7 +1,7 @@
 import { useEffect, useEffectEvent } from "react";
 
 // The server tells the page when the clusters or their machines change, so that what shows them is
-// read again at once rather than at its next poll; the polls go on meanwhile, for when the stream
+// read again at once rather than at its next poll. The polls go on meanwhile, for when the stream
 // is down. One stream serves every view, open while any view listens.
 
 type Listener = () => void;

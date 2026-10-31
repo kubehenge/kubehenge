@@ -210,14 +210,14 @@ export function ResultsDialog({
 /** A cluster a backup can be restored into: the cluster itself, or one that reads its backups. */
 export interface RestoreTarget {
   name: string;
-  /** Whether the volumes' data can be restored there; undefined until known. */
+  /** Whether the volumes' data can be restored there. Undefined until known. */
   volumeData?: boolean;
   /** Why it cannot take the backup yet, if it cannot. */
   waiting?: string;
 }
 
 // useReader reads whether another cluster that reads this one's backups has listed the backup yet,
-// and whether its Velero reads their volumes' data; undefined until read.
+// and whether its Velero reads their volumes' data. Undefined until read.
 function useReader(c: Cluster, backup: string, into: string): RestoreTarget | undefined {
   const [read, setRead] = useState<RestoreTarget>();
   useEffect(() => {

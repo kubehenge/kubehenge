@@ -226,7 +226,7 @@ func TestEtcdBackups(t *testing.T) {
 		t.Fatalf("kept %+v, %v; took %v", list, err, names)
 	}
 
-	// A wrong passphrase starts nothing; the right one restores the checked snapshot.
+	// A wrong passphrase starts nothing. The right one restores the checked snapshot.
 	if err := a.RestoreEtcd(ctx, list[1].Name, "wrong passphrase, long enough", ticket()); !errors.Is(err, ErrPassphrase) {
 		t.Fatalf("wrong passphrase: %v", err)
 	}

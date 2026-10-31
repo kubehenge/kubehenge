@@ -489,7 +489,7 @@ func TestOpenTargetRefusesAnEndpointThatIsNotAnHTTPSAddressWithoutAPath(t *testi
 	if _, err := OpenTarget(&BackupTarget{Name: "offsite", Endpoint: "https://s3.example.org:9000/", Bucket: fakeS3Bucket}, nil); err != nil {
 		t.Errorf("endpoint with a trailing slash: %v", err)
 	}
-	// Without an endpoint the target is Amazon S3; opening it sends nothing.
+	// Without an endpoint the target is Amazon S3. Opening it sends nothing.
 	if _, err := OpenTarget(&BackupTarget{Name: "aws", Bucket: fakeS3Bucket}, nil); err != nil {
 		t.Errorf("Amazon S3 target: %v", err)
 	}
@@ -542,7 +542,7 @@ func TestStoreKeepsAnObjectWithItsMetadataUnderLowerCaseNames(t *testing.T) {
 	if len(objects) != 1 || objects[0].Key != key || !maps.Equal(objects[0].Metadata, want) {
 		t.Errorf("listed %+v", objects)
 	}
-	// Snapshots are sealed before they leave; the store is never asked to encrypt, which a
+	// Snapshots are sealed before they leave. The store is never asked to encrypt, which a
 	// presigned link could not then read.
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -572,7 +572,7 @@ func TestStoreStreamsAnObjectLongerThanOnePart(t *testing.T) {
 	for i := range data {
 		data[i] = byte(i * 7)
 	}
-	// A snapshot's length is not known while it streams; the reader hides it.
+	// A snapshot's length is not known while it streams. The reader hides it.
 	stored, err := store.Put(context.Background(), "big", iotest.HalfReader(bytes.NewReader(data)), nil)
 	if err != nil {
 		t.Fatal(err)

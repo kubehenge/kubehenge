@@ -29,16 +29,16 @@ type sessionView struct {
 	// Headlamp is the port of the shared Headlamp server on the interface's host name, if one runs.
 	Headlamp int `json:"headlamp,omitempty"`
 	// CanCreate tells whether the user may create clusters, so the interface need not offer what
-	// the server will refuse; unset when not known.
+	// the server will refuse. Unset when not known.
 	CanCreate *bool `json:"canCreate,omitempty"`
 	// CanTrust tells whether the user holds Sys.Modify on the workload pool, which installing
-	// Rancher and trusting identity providers of one's own need; unset when not known.
+	// Rancher and trusting identity providers of one's own need. Unset when not known.
 	CanTrust *bool `json:"canTrust,omitempty"`
 	// Namespace is where the interface creates clusters unless the creator chooses another of
 	// Namespaces, so it can offer the ones a new cluster can be linked with.
 	Namespace string `json:"namespace,omitempty"`
 	// Namespaces are every namespace the interface creates and changes clusters in, Namespace
-	// first; unset when not known.
+	// first. Unset when not known.
 	Namespaces []string `json:"namespaces,omitempty"`
 }
 
@@ -197,7 +197,7 @@ func clientAddress(r *http.Request) string {
 
 // signInCounts are what a guess at a user's password or second factor counts against: the user at
 // the client's address, and the address whichever user it names. Nothing counts per user alone,
-// which would let anyone lock root@pam or any administrator out from anywhere; Proxmox VE's own
+// which would let anyone lock root@pam or any administrator out from anywhere. Proxmox VE's own
 // page has no such count either.
 func signInCounts(username string, r *http.Request) []count {
 	address := clientAddress(r)
@@ -240,7 +240,7 @@ func newLimiter(window time.Duration) *limiter {
 }
 
 // reserve takes a guess from every count and returns what to call once the guess is checked, with
-// whether it was wrong; false when one of the counts has none left, and none is taken.
+// whether it was wrong. False when one of the counts has none left, and none is taken.
 func (l *limiter) reserve(counts ...count) (func(failed bool), bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -266,7 +266,7 @@ func (l *limiter) reserve(counts ...count) (func(failed bool), bool) {
 	}, true
 }
 
-// settle gives back the guesses counts took; l.mu is held.
+// settle gives back the guesses counts took. l.mu is held.
 func (l *limiter) settle(counts []count) {
 	for _, c := range counts {
 		l.pending[c.key]--
@@ -276,7 +276,7 @@ func (l *limiter) settle(counts []count) {
 	}
 }
 
-// fail records a wrong guess against counts; l.mu is held.
+// fail records a wrong guess against counts. l.mu is held.
 func (l *limiter) fail(counts []count) {
 	now := l.now()
 	for _, c := range counts {

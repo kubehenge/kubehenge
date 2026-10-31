@@ -39,7 +39,7 @@ const (
 	// CertificatesRenewing: the machines holding them are being replaced.
 	CertificatesRenewing = "Renewing"
 	// CertificatesRestartNeeded: an RKE2 control plane of fewer than three machines, which cannot
-	// be replaced one by one without stopping the cluster; a restart of rke2-server renews them.
+	// be replaced one by one without stopping the cluster. A restart of rke2-server renews them.
 	CertificatesRestartNeeded = "RestartNeeded"
 	// CertificatesNotRenewed: they run out within certificateWarnWithin and nothing renewed them.
 	CertificatesNotRenewed = "NotRenewed"
@@ -103,7 +103,7 @@ type expiry struct {
 type CertificateWatch struct {
 	Client         client.Client
 	ClassNamespace string
-	// Workload reads a workload cluster; found is false until it has a kubeconfig.
+	// Workload reads a workload cluster. found is false until it has a kubeconfig.
 	Workload func(ctx context.Context, c *clusterv1.Cluster) (r client.Reader, found bool, err error)
 	Events   events.EventRecorder
 	// Interval is how often the clusters are looked at.
@@ -286,7 +286,7 @@ func machineOfNode(machines []clusterv1.Machine, node string) *clusterv1.Machine
 }
 
 // kubeconfigExpiry is when the client certificate of the kubeconfig Cluster API keeps for the
-// cluster runs out; ok is false for one without a certificate, as before Cluster API made it.
+// cluster runs out. ok is false for one without a certificate, as before Cluster API made it.
 func kubeconfigExpiry(ctx context.Context, r client.Reader, c *clusterv1.Cluster) (expiry, bool, error) {
 	config, found, err := remoteConfig(ctx, r, client.ObjectKeyFromObject(c))
 	if err != nil || !found {
@@ -373,7 +373,7 @@ const (
 	replaceUnderWay = iota
 	// replaceStarted: its replacement was asked for now.
 	replaceStarted
-	// replaceRestart: it cannot be replaced; a restart renews its certificates.
+	// replaceRestart: it cannot be replaced. A restart renews its certificates.
 	replaceRestart
 )
 
@@ -447,7 +447,7 @@ func (w *CertificateWatch) rollK3s(ctx context.Context, c *clusterv1.Cluster, m 
 }
 
 // remediate has Cluster API's health check replace one RKE2 control-plane machine at a time, which
-// keeps etcd's quorum with three or more; RKE2's control plane has no roll of its own to ask for.
+// keeps etcd's quorum with three or more. RKE2's control plane has no roll of its own to ask for.
 func (w *CertificateWatch) remediate(ctx context.Context, c *clusterv1.Cluster, m *clusterv1.Machine) (int, error) {
 	if ptr.Deref(c.Spec.Topology.ControlPlane.Replicas, 1) < quorumSafeReplicas {
 		return replaceRestart, nil

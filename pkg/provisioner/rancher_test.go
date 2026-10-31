@@ -300,7 +300,7 @@ func TestSecondRancherIsNeverInstalled(t *testing.T) {
 	}
 }
 
-// Rancher set on a cluster whose Kubernetes it does not run on is not installed; one installed
+// Rancher set on a cluster whose Kubernetes it does not run on is not installed. One installed
 // before stays.
 func TestRancherOutsideItsKubernetesIsNotInstalled(t *testing.T) {
 	t.Parallel()
@@ -404,7 +404,7 @@ func TestDeregister(t *testing.T) {
 	if done, err := rs.deregister(ctx, cluster()); err != nil || done {
 		t.Fatalf("first pass: done %v, %v", done, err)
 	}
-	// The fake deletes at once; Rancher keeps the object until its clean-up in the cluster ran.
+	// The fake deletes at once. Rancher keeps the object until its clean-up in the cluster ran.
 	if done, err := rs.deregister(ctx, cluster()); err != nil || !done {
 		t.Fatalf("second pass: done %v, %v", done, err)
 	}

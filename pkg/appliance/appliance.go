@@ -36,28 +36,28 @@ const (
 
 // Appliance is the appliance's state directory and the tools it runs.
 type Appliance struct {
-	// Dir holds everything the appliance keeps; only its user may read it.
+	// Dir holds everything the appliance keeps. Only its user may read it.
 	Dir string
 	// KeyDir holds the key that seals what automatic upgrades of the management cluster keep, on a
-	// volume the container's backups leave out; empty where there is none.
+	// volume the container's backups leave out. It is empty where there is none.
 	KeyDir string
 	// Module is the management-cluster module, as released with this binary.
 	Module string
 	// Tofu is the OpenTofu binary.
 	Tofu string
-	// ProxmoxURL and ProxmoxCA (PEM) are the Proxmox VE API the module signs in to;
+	// ProxmoxURL and ProxmoxCA (PEM) are the Proxmox VE API the module signs in to.
 	// ProxmoxInsecure has the module and the management cluster skip verifying its certificate.
 	ProxmoxURL      string
 	ProxmoxCA       string
 	ProxmoxInsecure bool
-	// Release is the appliance's own release, which carries the module; every apply records it, so
+	// Release is the appliance's own release, which carries the module. Every apply records it, so
 	// that the interface can tell when the management cluster runs what an older one applied.
 	Release string
 	Log     *slog.Logger
 	// InterfaceKubeconfig makes the interface's kubeconfig from the management cluster's admin
 	// kubeconfig and API endpoint, once an apply has succeeded, with its token in tokenFile.
 	InterfaceKubeconfig func(ctx context.Context, admin []byte, endpoint, tokenFile string) ([]byte, error)
-	// Talos reaches the management cluster's nodes for its etcd backups; OpenStore opens their
+	// Talos reaches the management cluster's nodes for its etcd backups. OpenStore opens their
 	// target, provisioner.OpenTarget when nil.
 	Talos     TalosAccess
 	OpenStore provisioner.OpenStore
@@ -82,7 +82,7 @@ func (a *Appliance) Ready() bool {
 }
 
 // HasState tells whether OpenTofu's state from an earlier run is on the appliance, such as after a
-// first run that failed part of the way; only that run's passphrase opens it.
+// first run that failed part of the way. Only that run's passphrase opens it.
 func (a *Appliance) HasState() bool {
 	_, err := os.Stat(filepath.Join(a.workdir(), "terraform.tfstate"))
 	return err == nil
@@ -221,13 +221,13 @@ func (a *Appliance) Remove(passphrase string, ticket *pve.Ticket, before func(ct
 			return err
 		}
 		// The state now records nothing. It goes, so that the next setup starts with a passphrase of
-		// its own; the settings stay to fill that setup in.
+		// its own. The settings stay to fill that setup in.
 		for _, name := range []string{a.KubeconfigPath(), a.TokenPath(), filepath.Join(a.workdir(), "terraform.tfstate"), filepath.Join(a.workdir(), "terraform.tfstate.backup"), a.appliedPath()} {
 			if err := os.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return fmt.Errorf("clearing the removed cluster's state: %w", err)
 			}
 		}
-		// Its snapshots stay in the target; the keys and the talosconfig that took them go with it.
+		// Its snapshots stay in the target. The keys and the talosconfig that took them go with it.
 		if err := a.StopEtcdBackups(); err != nil {
 			return err
 		}
@@ -332,7 +332,7 @@ func sessionRunner(t *pve.Ticket) runner {
 	return runner{user: t.Username, until: t.Issued.Add(pve.TicketLifetime)}
 }
 
-// startIn runs one job in the background and keeps it in slot; only one job of any kind runs at a
+// startIn runs one job in the background and keeps it in slot. Only one job of any kind runs at a
 // time. The job outlives the request that started it, but not the time its runner allows. It is
 // recorded on disk when it starts and when it ends, so a restart in between shows it as cut off.
 // request, which may be nil, is kept with it.
@@ -368,8 +368,8 @@ func (a *Appliance) startIn(slot **Job, by runner, what string, request any, run
 		if err != nil {
 			state, errText = StateFailed, err.Error()
 		}
-		// The record is on disk before the outcome shows, so a restart right after still has it;
-		// from then on an upgrade may restart the service, and a new job may start once the
+		// The record is on disk before the outcome shows, so a restart right after still has it.
+		// From then on an upgrade may restart the service, and a new job may start once the
 		// outcome shows.
 		a.saveLog(slot, &JobView{User: j.User, Automatic: j.Automatic, Kind: what, Started: j.Started, Finished: time.Now(), State: state, Error: errText, Request: j.Request, Log: j.Log()})
 		unlock()

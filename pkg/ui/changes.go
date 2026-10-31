@@ -95,7 +95,7 @@ func (s *Server) watchChanges(ctx context.Context) {
 	for {
 		if kube, ok := s.currentKube().(client.WithWatch); ok {
 			err := s.watchRound(ctx, kube)
-			// A watch refused once is refused every round; it is logged when it starts failing.
+			// A watch refused once is refused every round. It is logged when it starts failing.
 			if text := fmt.Sprint(err); err != nil && text != failed {
 				s.Log.Warn("watching the clusters for the interface's pages failed; they poll meanwhile", "error", err)
 				failed = text

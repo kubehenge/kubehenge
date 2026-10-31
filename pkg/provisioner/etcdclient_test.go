@@ -92,7 +92,7 @@ type fakeMember struct {
 	data   []byte
 	mu     sync.Mutex
 	client string
-	// revision is the store's; held is the one the last snapshot holds.
+	// revision is the store's, and held is the one the last snapshot holds.
 	revision, held int64
 }
 
@@ -134,7 +134,7 @@ func (kv *fakeKV) Range(context.Context, *etcdserverpb.RangeRequest) (*etcdserve
 	return &etcdserverpb.RangeResponse{Header: &etcdserverpb.ResponseHeader{Revision: kv.member.revision}}, nil
 }
 
-// startMember serves a member over a connection in memory, trusting clients by ca's certificate.
+// startMember serves a member over a connection in memory. It trusts clients by ca's certificate.
 func startMember(t *testing.T, ca *testCA, serving *tls.Certificate, data []byte) (*fakeMember, func(context.Context) (net.Conn, error)) {
 	t.Helper()
 	clients := x509.NewCertPool()

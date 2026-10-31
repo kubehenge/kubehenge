@@ -125,7 +125,7 @@ func validateTopology(old, c *clusterv1.Cluster) field.ErrorList {
 	return append(errs, validatePools(old, c, topology.Child("workers", "machineDeployments"))...)
 }
 
-// validatePools holds each worker pool's workers and name to the rules; names are held to them as
+// validatePools holds each worker pool's workers and name to the rules. Names are held to them as
 // pools are added, as a cluster's is as it is created.
 func validatePools(old, c *clusterv1.Cluster, pools *field.Path) field.ErrorList {
 	var errs field.ErrorList

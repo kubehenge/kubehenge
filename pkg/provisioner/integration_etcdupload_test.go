@@ -31,7 +31,7 @@ func capiTemplate(t *testing.T, text string, variables map[string]any) string {
 }
 
 // RKE2's and k3s's classes give their servers the drop-in that uploads their own snapshots only
-// while a cluster asks for it, naming the Secret with the target and no key of the store; kubeadm's
+// while a cluster asks for it. It names the Secret with the target and no key of the store. kubeadm's
 // has no such patch.
 func TestIntegrationChartEtcdUpload(t *testing.T) {
 	t.Parallel()

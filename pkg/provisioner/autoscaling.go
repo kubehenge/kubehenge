@@ -29,7 +29,7 @@ const capacityPrefix = "capacity.cluster-autoscaler.kubernetes.io/"
 
 // capacityShare is the part of a VM's memory and disk the capacity annotations give its node: the
 // kernel, the kubelet's eviction threshold and the disk's own partitions take the rest. Saying less
-// than a node holds costs a pod that would just have fitted a scale-up; saying more has the
+// than a node holds costs a pod that would just have fitted a scale-up. Saying more has the
 // autoscaler add nodes the pod then does not fit on, again and again.
 const capacityShare = 0.9
 
@@ -59,7 +59,7 @@ func poolScale(md *clusterv1.MachineDeploymentTopology) (workerBounds, bool, err
 
 // workerRange is the least and the most workers a pool runs: its replicas, Cluster API's default of
 // one when unset, or the autoscaler's bounds. A pool whose bounds do not read counts by its
-// replicas; the validator refuses it.
+// replicas. The validator refuses it.
 func workerRange(md *clusterv1.MachineDeploymentTopology) workerBounds {
 	if bounds, ok, err := poolScale(md); ok && err == nil {
 		return bounds
@@ -80,7 +80,7 @@ func autoscaled(cluster *clusterv1.Cluster) bool {
 
 // validateAutoscaling holds each autoscaled pool to bounds the autoscaler can work with, and to
 // leaving its replicas unset: Cluster API would otherwise set them back on every change of the
-// cluster, undoing what the autoscaler did.
+// cluster. That undoes what the autoscaler did.
 func validateAutoscaling(c *clusterv1.Cluster) field.ErrorList {
 	var errs field.ErrorList
 	pools := field.NewPath("spec", "topology", "workers", "machineDeployments")
@@ -130,7 +130,7 @@ type addresses struct{ need, have int }
 
 func (a addresses) short() int { return a.need - a.have }
 
-// addressNeed is what the cluster needs of its nodes' addresses; false where the variables do not
+// addressNeed is what the cluster needs of its nodes' addresses. It is false where the variables do not
 // read, which Cluster API refuses itself.
 func addressNeed(c *clusterv1.Cluster) (addresses, bool) {
 	network, err := variable[nodeNetwork](c, "network")

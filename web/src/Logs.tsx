@@ -66,7 +66,7 @@ const collectors: { value: Collector; label: string; info: string }[] = [
   },
 ];
 
-// sizeProblem and daysProblem say what is wrong with a typed figure, if anything; the volume only grows.
+// sizeProblem and daysProblem say what is wrong with a typed figure, if anything. The volume only grows.
 function sizeProblem(size: number, least: number): string | undefined {
   if (!Number.isInteger(size) || size < 1 || size > maxSizeGiB) {
     return `A whole number from 1 to ${maxSizeGiB}`;
@@ -80,7 +80,7 @@ function daysProblem(days: number): string | undefined {
     : `A whole number from 1 to ${maxRetentionDays}`;
 }
 
-/** logsProblem says what is wrong with a logs choice, if anything; least is the volume it had. */
+/** logsProblem says what is wrong with a logs choice, if anything. least is the volume it had. */
 export const logsProblem = (l: Logs, least = 1): string | undefined =>
   l.enabled ? (daysProblem(l.retentionDays) ?? sizeProblem(l.sizeGiB, least)) : undefined;
 
@@ -157,7 +157,7 @@ export function LogsDialog({ cluster: c, onClose }: { cluster: Cluster; onClose:
   const held = record(c.variables["logs"]);
   const current = logsOf(held);
   const monitoring = flag(record(c.variables["monitoring"])["enabled"]) === true;
-  // The volume only grows once there is one; a cluster that never had logs starts from nothing.
+  // The volume only grows once there is one. A cluster that never had logs starts from nothing.
   const least = "sizeGiB" in held ? current.sizeGiB : 1;
   const [next, setNext] = useState(current);
   const { busy, error, send } = useChange(c, onClose);

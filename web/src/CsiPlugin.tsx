@@ -22,7 +22,7 @@ export const csiWith = (
   [key]: on,
 });
 
-/** CSIField chooses the plugin's newest release; one with a problem can be switched off, not on. */
+/** CSIField chooses the plugin's newest release. One with a problem can be switched off, not on. */
 export function CSIField({
   checked,
   onChange,
@@ -76,13 +76,13 @@ export function useCSIOffer(c: Cluster): CSIOffer {
         const [classes, storages, clusters] = await Promise.all([
           api.classes(),
           api.storages(),
-          // The controller refuses a shared storage in any case; the list only says so sooner.
+          // The controller refuses a shared storage in any case. The list only says so sooner.
           api.clusters().catch((): Cluster[] => []),
         ]);
         const cls = classes.find((x) => x.name === className);
         setOffer(csiOffer({ cls, storages, storage, clusters, self: { namespace, name } }));
       } catch {
-        // Without the classes or storages the option is not shown; the cluster keeps its setting.
+        // Without the classes or storages the option is not shown. The cluster keeps its setting.
         setOffer({ offered: false, problem: undefined });
       }
     }
@@ -91,7 +91,7 @@ export function useCSIOffer(c: Cluster): CSIOffer {
   return offer;
 }
 
-/** SnapshotsField chooses volume snapshots; one with a problem can be switched off, not on. */
+/** SnapshotsField chooses volume snapshots. One with a problem can be switched off, not on. */
 export function SnapshotsField({
   checked,
   onChange,
@@ -149,7 +149,7 @@ export function useSnapshotsOffer(c: Cluster): SnapshotsOffer {
           ),
         );
       } catch {
-        // Without the classes the option is not shown; the cluster keeps its setting.
+        // Without the classes the option is not shown. The cluster keeps its setting.
         setOffer({ offered: false, problem: undefined });
       }
     }

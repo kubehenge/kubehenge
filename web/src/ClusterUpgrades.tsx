@@ -11,7 +11,7 @@ export interface UpgradePolicy {
   mode?: UpgradeMode | undefined;
   /**
    * The nodes move to new builds of their VM template inside the window, or on Talos to the newest
-   * patch release of their Talos minor version; unset means on.
+   * patch release of their Talos minor version. Unset means on.
    */
   nodeImages?: boolean | undefined;
   window?:
@@ -149,7 +149,7 @@ function fieldsOf(current: UpgradePolicy): PolicyFields {
     monthDays: (w.monthDays ?? []).join(", "),
     start: w.start ?? defaultStart,
     hours: String((w.durationMinutes ?? defaultMinutes) / minutesPerHour),
-    // What is in effect: UTC when a policy names none; a new policy starts in the browser's zone.
+    // What is in effect: UTC when a policy names none. A new policy starts in the browser's zone.
     timeZone: w.timeZone ?? (active ? "UTC" : browserZone()),
   };
 }
@@ -157,7 +157,7 @@ function fieldsOf(current: UpgradePolicy): PolicyFields {
 // windowed tells whether the fields need a window: something happens in it.
 const windowed = (f: Pick<PolicyFields, "mode" | "nodeImages">): boolean => f.mode !== "off" || f.nodeImages;
 
-// policyOf is the policy the fields save; nodeImages is written only when off, as on is the default.
+// policyOf is the policy the fields save. nodeImages is written only when off, as on is the default.
 function policyOf(f: PolicyFields): UpgradePolicy {
   const off = f.nodeImages ? {} : { nodeImages: false };
   if (!windowed(f)) {

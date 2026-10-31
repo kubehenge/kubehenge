@@ -64,7 +64,7 @@ interface ProviderInfo {
   group?: string;
   settings: Setting[];
   // What the credential stored through the interface holds, the least it needs, and rarely a caution
-  // too long for the hint; no token for a provider that takes only a Secret of the cluster's.
+  // too long for the hint. No token for a provider that takes only a Secret of the cluster's.
   token?: { label: string; hint: string; info?: string };
   secretKeys: string[];
 }
@@ -283,7 +283,7 @@ function settingsOf(f: CertificatesForm): Record<string, string> {
   );
 }
 
-/** certificatesVariable is the variable a choice sets; undefined while it is off. */
+/** certificatesVariable is the variable a choice sets. Undefined while it is off. */
 export function certificatesVariable(f: CertificatesForm): Record<string, unknown> | undefined {
   if (!f.enabled) {
     return undefined;
@@ -352,7 +352,7 @@ export function certificatesText(f: CertificatesForm): string {
   return `${acme} by DNS-01 through ${providerInfo[f.provider].label}, ${names}`;
 }
 
-/** The fields of the certificates choice a problem belongs to; a provider's settings by "setting.<key>". */
+/** The fields of the certificates choice a problem belongs to. A provider's settings by "setting.<key>". */
 export type CertificatesProblems = Partial<Record<string, string>>;
 
 const dnsName = /^(?=.{1,253}$)(?:[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?\.)+[a-z](?:[-a-z0-9]{0,61}[a-z0-9])?$/u;
@@ -399,7 +399,7 @@ function dns01Problems(f: CertificatesForm): CertificatesProblems {
   return p;
 }
 
-/** certificatesProblems says, by field, what is wrong with a choice; nothing while it is off. */
+/** certificatesProblems says, by field, what is wrong with a choice. Nothing while it is off. */
 export function certificatesProblems(f: CertificatesForm): CertificatesProblems {
   if (!f.enabled) {
     return {};

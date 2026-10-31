@@ -51,7 +51,7 @@ func (req *restoreRequest) volumeData() bool { return req.VolumeData == nil || *
 // restore brings back a backup into the cluster, of the cluster's own or of one whose backups it
 // reads, whole or in part. What the cluster still has is left as it is. It needs Sys.Modify on the
 // cluster's pool, as the admin kubeconfig does: a restore writes whatever the backup holds, Secrets
-// and RBAC among it; and VM.Audit on the pool of the cluster whose backup it is.
+// and RBAC among it, and VM.Audit on the pool of the cluster whose backup it is.
 func (s *Server) restore(w http.ResponseWriter, r *http.Request, u user) {
 	c, _, ok := s.cluster(w, r, u, privKubeconfig)
 	if !ok {
@@ -135,7 +135,7 @@ func (s *Server) restoreSource(ctx context.Context, w http.ResponseWriter, r *ht
 }
 
 // restore is the Velero restore the request asks for. Without the volumes' data the pods stay out,
-// as Velero would otherwise hold each restored pod until its volumes' data is back; their
+// as Velero would otherwise hold each restored pod until its volumes' data is back. Their
 // controllers start them again on new, empty volumes.
 func (req *restoreRequest) restore(by string) *unstructured.Unstructured {
 	spec := map[string]any{

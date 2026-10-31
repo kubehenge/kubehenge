@@ -250,7 +250,7 @@ func TestSetupTellsAdministratorsAboutBackups(t *testing.T) {
 		if got := rec.Body.String(); want == "" && strings.Contains(got, "backup") || !strings.Contains(got, want) {
 			t.Errorf("guest %d: setup = %s", vmid, got)
 		}
-		// The page asks every few seconds during a run; the backup jobs are read once a while.
+		// The page asks every few seconds during a run. The backup jobs are read once a while.
 		if got := a.do("GET", "/api/setup", "").Body.String(); !strings.Contains(got, want) || vmid != 0 && h.accounts.backupChecks != 1 {
 			t.Errorf("guest %d: asked again: setup = %s after %d checks", vmid, got, h.accounts.backupChecks)
 		}
@@ -374,7 +374,7 @@ func TestAutomaticUpgradeIsDueOnceADayAtItsHour(t *testing.T) {
 	if _, ok := up.due(false); ok {
 		t.Fatal("due twice in one day")
 	}
-	// An upgrade restarts the interface; the new one remembers the check.
+	// An upgrade restarts the interface. The new one remembers the check.
 	restarted := &Upgrades{SettingsPath: up.SettingsPath, Now: up.Now}
 	if _, ok := restarted.due(false); ok {
 		t.Fatal("due again after a restart")

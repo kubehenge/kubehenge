@@ -45,7 +45,7 @@ func RollStallHead(message string) string {
 
 // DefaultStallAfter is how long a successor may take to become ready before its roll counts as
 // stalled, the health checks' own startup timeout, after which they would have replaced it if they
-// could; and how long a cluster's deletion may wait, several times what one takes.
+// could, and how long a cluster's deletion may wait, several times what one takes.
 const DefaultStallAfter = 20 * time.Minute
 
 // RollWatch looks at every cluster with one control plane for a roll that stalled, and says so on
@@ -60,7 +60,7 @@ type RollWatch struct {
 	Events events.EventRecorder
 	// Interval is how often the clusters are looked at.
 	Interval time.Duration
-	// StallAfter is how long a successor may take; DefaultStallAfter when 0.
+	// StallAfter is how long a successor may take. It is DefaultStallAfter when 0.
 	StallAfter time.Duration
 	Now        func() time.Time
 }
@@ -137,7 +137,7 @@ func (w *RollWatch) stalled(ctx context.Context, c *clusterv1.Cluster) (*metav1.
 }
 
 // stalledRoll finds the roll of a cluster's only control plane whose successor has not become
-// ready in StallAfter; ok is false when there is none.
+// ready in StallAfter, and ok is false when there is none.
 func (w *RollWatch) stalledRoll(ctx context.Context, c *clusterv1.Cluster) (roll, bool, error) {
 	if !c.DeletionTimestamp.IsZero() || ptr.Deref(c.Spec.Paused, false) || RestoreInProgress(c) {
 		return roll{}, false, nil

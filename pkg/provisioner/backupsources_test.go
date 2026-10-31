@@ -154,7 +154,7 @@ func TestVeleroValuesReadOtherClusters(t *testing.T) {
 }
 
 // A cluster whose keys are made while it reads another's backups takes that one's Kopia password,
-// so that its Velero reads the volumes' data too; one it may not read is left out, with an event.
+// so that its Velero reads the volumes' data too. One it may not read is left out, with an event.
 func TestBackupSourcesShareTheRepositoryFromTheStart(t *testing.T) {
 	t.Parallel()
 	c := backupsCluster(`{"enabled":true,"target":"store","readFrom":["gone","shop","db"]}`)

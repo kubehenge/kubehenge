@@ -2,16 +2,16 @@
 
 // End-to-end test of the templates on a Proxmox VE host: each is created, found again instead of
 // being built twice, cloned and booted the way Cluster API's Proxmox VE provider does it (a full
-// clone with a NoCloud ISO), checked from inside, and deleted, leaving nothing behind.
+// clone with a NoCloud ISO), checked from inside, and deleted. Nothing is left behind.
 //
 //	go test -tags e2e -timeout 2h ./pkg/templates/
 //
 // Settings come from the environment: KUBEHENGE_PROXMOX_URL, KUBEHENGE_PROXMOX_TOKEN and optionally
-// KUBEHENGE_PROXMOX_CA; KUBEHENGE_E2E_NODE, _STORAGE, _IMPORT_STORAGE, _POOL, _BRIDGE; and, where the
-// bridge has no DHCP, KUBEHENGE_E2E_ADDRESS (with prefix), _GATEWAY and _DNS (comma-separated) for the
+// KUBEHENGE_PROXMOX_CA. It also reads KUBEHENGE_E2E_NODE, _STORAGE, _IMPORT_STORAGE, _POOL and _BRIDGE. Where the
+// bridge has no DHCP, it reads KUBEHENGE_E2E_ADDRESS (with prefix), _GATEWAY and _DNS (comma-separated) for the
 // VMs that bake and boot images. KUBEHENGE_E2E_KUBERNETES_VERSION picks the kubeadm templates' version.
-// Talos is made, and kubeadm, whose template carries the most, on every node OS available; one whose
-// CPU level no node of the host reaches is skipped, saying so. RKE2's and k3s's templates are made
+// Talos is made, and kubeadm, whose template carries the most, on every node OS available. One whose
+// CPU level no node of the host reaches is skipped, and the test says so. RKE2's and k3s's templates are made
 // and booted by the workload cluster tests.
 
 package templates

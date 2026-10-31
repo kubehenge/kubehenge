@@ -12,7 +12,7 @@ export interface CheckRead {
 }
 
 /**
- * useCreateCheck has the API server check a new cluster when run is called; an answer to an earlier
+ * useCreateCheck has the API server check a new cluster when run is called. An answer to an earlier
  * run that arrives late is dropped. A cluster is created only once the API server accepts it.
  */
 export function useCreateCheck(): {

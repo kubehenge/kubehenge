@@ -8,7 +8,7 @@ import { ErrorBox, Field, Skeleton, errorMessage, filled } from "./ui";
 export interface CredentialKey {
   key: string;
   label: string;
-  /** Shown as typed, as a user name is; the others are masked. */
+  /** Shown as typed, as a user name is. The others are masked. */
   plain?: boolean;
 }
 
@@ -28,7 +28,7 @@ const refOf = (namespace?: string, name?: string): ClusterRef | undefined =>
 
 /**
  * CredentialField stores, replaces or removes one credential: a cluster's, or with no cluster, the
- * one for every cluster. What is typed goes to the server and never comes back; the field shows
+ * one for every cluster. What is typed goes to the server and never comes back. The field shows
  * only whether one is set, when and by whom, and offers changes only to those who may make them.
  * It is no form of its own, so it sits in a dialog's form without submitting it.
  */
@@ -48,7 +48,7 @@ export function CredentialField({
   const namespace = cluster?.namespace;
   const name = cluster?.name;
   const [stored, setStored] = useState<StoredCredential>();
-  // The values being typed; none while the field only shows what is stored.
+  // The values being typed. None while the field only shows what is stored.
   const [values, setValues] = useState<Record<string, string>>();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);

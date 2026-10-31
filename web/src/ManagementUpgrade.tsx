@@ -96,7 +96,7 @@ export function ManagementBehind({
 }
 
 // AutomaticManagement lets the management cluster follow Kubehenge's own upgrades, which needs
-// the appliance to keep what an apply needs; off by default, and saying what switching it on grants.
+// the appliance to keep what an apply needs. It is off by default and says what switching it on grants.
 export function AutomaticManagement({
   management: m,
   hour,

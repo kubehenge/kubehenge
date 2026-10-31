@@ -219,7 +219,7 @@ func checkBinding(t *testing.T, workload client.Client, namespace, name string, 
 	}
 }
 
-// The health identity reads states and nothing they hold; the logs identity reads logs and nothing
+// The health identity reads states and nothing they hold. The logs identity reads logs and nothing
 // else. Neither writes.
 func TestHealthIdentitiesReadOnly(t *testing.T) {
 	t.Parallel()
@@ -343,7 +343,7 @@ func TestBackupIdentitiesGoWithBackups(t *testing.T) {
 }
 
 // The Headlamp issuer comes with the sign-in, for the interface's clusters alone, with the admin
-// account whose tokens it makes; its own token goes beside the cluster, the admin account's never
+// account whose tokens it makes. Its own token goes beside the cluster, the admin account's never
 // does, and switched off both go, the admin account first, once the cluster can be reached.
 func TestHeadlampIdentities(t *testing.T) {
 	t.Parallel()

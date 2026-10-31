@@ -168,7 +168,7 @@ func TestProgressStalledClusterCarriesTheWorstReport(t *testing.T) {
 	}
 }
 
-// A node that never joins is replaced by the health check every nodeStartupTimeout; the new
+// A node that never joins is replaced by the health check every nodeStartupTimeout. The new
 // machines are no progress.
 func TestProgressReplacementsAreNoProgress(t *testing.T) {
 	t.Parallel()

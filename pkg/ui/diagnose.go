@@ -26,7 +26,7 @@ const supportBundleDeadline = 3 * time.Minute
 
 // supportBundle hands out a cluster's support bundle. It carries the lines of the controller's and
 // the providers' logs that name the cluster, which can hold secrets the redaction misses, so it
-// needs what the admin kubeconfig does, Sys.Modify on the cluster's pool; every download is logged
+// needs what the admin kubeconfig does, Sys.Modify on the cluster's pool. Every download is logged
 // with who made it.
 func (s *Server) supportBundle(w http.ResponseWriter, r *http.Request, u user) {
 	c, _, ok := s.cluster(w, r, u, privKubeconfig)

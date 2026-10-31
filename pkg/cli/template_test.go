@@ -37,7 +37,7 @@ func TestDeletingABuildAClusterRunsIsRefused(t *testing.T) {
 		want   string
 	}{
 		{"a build nothing runs", builds[:1], false, ""},
-		{"a build clusters run", builds[1:], false, "clusters/web, clusters/api clone from it; --roll-clusters"},
+		{"a build clusters run", builds[1:], false, "clusters/web, clusters/api clone from it. --roll-clusters"},
 		{"a build clusters run, rolled", builds[1:], true, ""},
 		{"every build, rolled", builds, true, "no build of the template would be left"},
 	} {

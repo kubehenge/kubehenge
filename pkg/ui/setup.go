@@ -18,7 +18,7 @@ import (
 
 // setupPrivileges are what the management-cluster module needs of the user it runs as: it creates
 // pools, users, groups, roles, ACLs, tokens and VMs, and downloads the Talos image. Proxmox VE
-// checks each call again; asking first saves a half-done run.
+// checks each call again. Asking first saves a half-done run.
 var setupPrivileges = []string{
 	"Sys.Modify", "Permissions.Modify", "User.Modify", "Group.Allocate", "Realm.AllocateUser", "Pool.Allocate",
 	"VM.Allocate", "Datastore.AllocateSpace", "Datastore.AllocateTemplate",
@@ -26,7 +26,7 @@ var setupPrivileges = []string{
 
 type setupView struct {
 	// Appliance tells whether the interface runs in the appliance, which sets up the management
-	// cluster; otherwise it was given one.
+	// cluster. Otherwise it was given one.
 	Appliance bool `json:"appliance"`
 	// Ready tells whether the management cluster is there.
 	Ready bool `json:"ready"`
@@ -38,7 +38,7 @@ type setupView struct {
 	// copy of the management cluster's state. Unset when that is not known.
 	Backup *bool `json:"backup,omitempty"`
 	// CertificateExpires is when the interface's certificate runs out, for the administrators who
-	// renew it on the node with the installer, naming the appliance by its guest ID.
+	// renew it on the node with the installer. They name the appliance by its guest ID.
 	CertificateExpires *time.Time `json:"certificateExpires,omitempty"`
 	ApplianceVMID      int        `json:"applianceVMID,omitempty"`
 	// CredentialsExpire is when the management cluster's admin credentials in the state run out,
@@ -73,7 +73,7 @@ func (s *Server) applianceStatus(w http.ResponseWriter, r *http.Request, u user,
 		return false
 	}
 	v.Allowed = privs.Has(setupPrivileges...)
-	// Only those who may run it see how it went; the log names nodes, storages and addresses.
+	// Only those who may run it see how it went. The log names nodes, storages and addresses.
 	if !v.Allowed {
 		return true
 	}
@@ -184,7 +184,7 @@ func (s *Server) credential(w http.ResponseWriter, r *http.Request, u user) {
 	_, _ = w.Write(data)
 }
 
-// templatePool is where the management-cluster module keeps the clusters' templates; the
+// templatePool is where the management-cluster module keeps the clusters' templates. The
 // appliance leaves its template_pool at the default.
 const templatePool = "kubehenge-templates"
 

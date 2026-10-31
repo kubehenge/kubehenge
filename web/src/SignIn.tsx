@@ -45,7 +45,7 @@ export function SignIn({
     () => new URLSearchParams(window.location.search).get("signin-error") ?? undefined,
   );
   const last = useMemo(() => rememberedRealm(), []);
-  // An identity provider signs in with one click; the others take a user name and password.
+  // An identity provider signs in with one click. The others take a user name and password.
   const sso = realms.filter((r) => r.type === "openid");
   const withPassword = realms.filter((r) => r.type !== "openid");
   // Shown while the realms load too, so the user name has its focus from the first paint.

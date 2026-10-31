@@ -113,7 +113,7 @@ export function StagingProvider({
   return <StagingContext value={staging}>{children}</StagingContext>;
 }
 
-// The rows of the page a setting shows in; most show in one.
+// The rows of the page a setting shows in. Most show in one.
 const settingLabels: Record<string, string[]> = {
   version: ["Kubernetes version"],
   controlPlaneReplicas: ["Control plane"],

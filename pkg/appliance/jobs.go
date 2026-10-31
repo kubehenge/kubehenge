@@ -59,7 +59,7 @@ func (j *Job) running() bool {
 	return j.State == StateRunning
 }
 
-// view is the job as the interface shows it; nil for none.
+// view is the job as the interface shows it. It is nil for none.
 func (j *Job) view() *JobView {
 	if j == nil {
 		return nil
@@ -107,8 +107,8 @@ var ErrTemplateBusy = errors.New("a VM template is being built; try again once t
 var errLocked = errors.New("locked")
 
 // LockJobs keeps jobs from starting until the returned unlock is called, and fails with ErrBusy
-// while one runs. The updater holds it across replacing the software and restarting the service;
-// the installer takes the same lock on Dir with flock(1). The kernel drops it when its holder ends,
+// while one runs. The updater holds it across replacing the software and restarting the service.
+// The installer takes the same lock on Dir with flock(1). The kernel drops it when its holder ends,
 // so a crash leaves none behind.
 func LockJobs(dir string) (func(), error) {
 	unlock, err := tryLock(dir)

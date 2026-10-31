@@ -80,18 +80,20 @@ func exists(t *testing.T, admin *proxmox.Client, node, storage, volid string) bo
 }
 
 // TestVolumesEndToEnd tests a cluster's own Proxmox VE objects on a Proxmox VE host, signed in as
-// Kubehenge's controller: the cluster's pool, user, token and volume owner VM are created; volumes
-// are made under the owner on every node's local storage, as the CSI plugin makes them; one is
-// deleted through the owner with the cluster's own token, the owner moving to its node; removing
-// the cluster deletes the rest on every node and leaves nothing behind. With one node, nothing moves.
+// Kubehenge's controller: the cluster's pool, user, token and volume owner VM are created.
+// Volumes are made under the owner on every node's local storage, as the CSI plugin makes them.
+// One is deleted through the owner with the cluster's own token, and the owner moves to its node.
+// Removing the cluster deletes the rest on every node and leaves nothing behind. With one node,
+// nothing moves.
 //
 //	go test -tags e2e -count=1 -v -run TestVolumesEndToEnd ./pkg/provisioner/
 //
-// Settings come from the environment: KUBEHENGE_PROXMOX_URL and optionally KUBEHENGE_PROXMOX_CA;
-// KUBEHENGE_PROXMOX_TOKEN, an administrator's, only to check what is left;
-// KUBEHENGE_E2E_CONTROLLER_TOKEN, the controller's token as management-cluster/ creates it; and as
-// the management cluster names them, KUBEHENGE_E2E_WORKLOAD_POOL, _CLUSTER_GROUP, _CLUSTER_ROLE and
-// _LOCAL_STORAGE, one of the workload storages that is local to each node.
+// Settings come from the environment: KUBEHENGE_PROXMOX_URL and optionally KUBEHENGE_PROXMOX_CA.
+// KUBEHENGE_PROXMOX_TOKEN, an administrator's, is only to check what is left.
+// KUBEHENGE_E2E_CONTROLLER_TOKEN is the controller's token as management-cluster/ creates it.
+// KUBEHENGE_E2E_WORKLOAD_POOL, _CLUSTER_GROUP, _CLUSTER_ROLE and _LOCAL_STORAGE are named as the
+// management cluster names them, with _LOCAL_STORAGE one of the workload storages that is local to
+// each node.
 func TestVolumesEndToEnd(t *testing.T) { //nolint:paralleltest // owns the Proxmox VE host for its run
 	ctx := context.Background()
 	admin := signIn(t, env(t, "KUBEHENGE_PROXMOX_TOKEN", ""))

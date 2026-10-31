@@ -225,7 +225,7 @@ func TestCertificatesRollK3s(t *testing.T) {
 	}
 }
 
-// kubeadm's control plane renews its own; still due within 30 days, it failed, and the cluster
+// kubeadm's control plane renews its own. If still due within 30 days, it failed, and the cluster
 // says what to do. Once renewed, the condition goes.
 func TestCertificatesNotRenewed(t *testing.T) {
 	t.Parallel()

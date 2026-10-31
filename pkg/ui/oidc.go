@@ -46,7 +46,7 @@ func classDefault(class *clusterv1.ClusterClass, name string) *apiextensionsv1.J
 	return nil
 }
 
-// classChoices is the list of strings a class variable, or a property of it, is limited to; nil
+// classChoices is the list of strings a class variable, or a property of it, is limited to. Nil
 // when it is not limited.
 func classChoices(class *clusterv1.ClusterClass, name string, property ...string) []string {
 	for i := range class.Spec.Variables {

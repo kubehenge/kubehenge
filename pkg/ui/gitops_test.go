@@ -30,7 +30,7 @@ func TestGitOpsNeedsTheKubeconfigRight(t *testing.T) {
 	admin.signIn("admin@pve")
 	expect(t, admin.do("POST", "/api/clusters", withGitOps("b")), http.StatusCreated)
 
-	// dev holds Sys.Modify on one's pool, not on two's; switching off needs no more than a change.
+	// dev holds Sys.Modify on one's pool, not on two's. Switching off needs no more than a change.
 	change := `{"variables":{"gitops":` + on + `}}`
 	expect(t, dev.do("PATCH", "/api/clusters/default/one", change), http.StatusOK)
 	expect(t, dev.do("PATCH", "/api/clusters/default/two", change), http.StatusForbidden)

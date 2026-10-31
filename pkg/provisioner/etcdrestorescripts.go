@@ -197,11 +197,11 @@ echo "fetched the snapshot: $(stat -c %%s "$work/snapshot.db") bytes"
 
 // RestoreScripts are the bash scripts a restore runs as root on control-plane nodes.
 type RestoreScripts struct {
-	// Stop stops etcd and the API server; it runs on every control-plane node.
+	// Stop stops etcd and the API server. It runs on every control-plane node.
 	Stop string
 	// Restore restores etcd on one stopped node from RestoreSnapshotPath.
 	Restore string
-	// Reset makes etcd on one stopped node a cluster of that node alone, keeping what it holds.
+	// Reset makes etcd on one stopped node a cluster of that node alone. It keeps what it holds.
 	Reset string
 	// Start starts the control plane again and waits for its API server.
 	Start string
@@ -429,7 +429,7 @@ const (
 )
 
 // pauseStep keeps Cluster API from replacing machines while etcd is restored by hand, and
-// resumeStep hands the cluster back to it; patch is the kubectl command that patches the Cluster.
+// resumeStep hands the cluster back to it. The argument patch is the kubectl command that patches the Cluster.
 func pauseStep(patch string) RestoreStep {
 	return RestoreStep{"Pause the cluster", onManagement, patch + `'{"spec":{"paused":true}}'`}
 }

@@ -47,7 +47,7 @@ const (
 	bootLogLines = 200
 	// bootLogSectionBytes bounds one log's lines, however long each is.
 	bootLogSectionBytes = 64 << 10
-	// bootLogsBytes keeps the ConfigMap well below the 1 MiB an object may take; the logs read
+	// bootLogsBytes keeps the ConfigMap well below the 1 MiB an object may take. The logs read
 	// longest ago go first.
 	bootLogsBytes = 768 << 10
 	// bootLogTimeout bounds the reading of one machine's logs, through its guest agent or its Talos
@@ -183,7 +183,7 @@ type BootLogReconciler struct {
 	// Reader reads the ConfigMap past the cache, which holds the class namespace's alone.
 	Reader         client.Reader
 	ClassNamespace string
-	// Files reads the files nodes keep their boot logs in; nil when the management cluster's
+	// Files reads the files nodes keep their boot logs in. It is nil when the management cluster's
 	// setup switched that off.
 	Files GuestFiles
 	// Talos reaches Talos nodes' APIs.
@@ -439,7 +439,7 @@ func trimBootLogs(data map[string]string) {
 	}
 }
 
-// answered takes the machines read off the cluster's request, leaving any asked for meanwhile.
+// answered takes the machines read off the cluster's request. It leaves any asked for meanwhile.
 func (r *BootLogReconciler) answered(ctx context.Context, cluster *clusterv1.Cluster, read []string) error {
 	key := client.ObjectKeyFromObject(cluster)
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {

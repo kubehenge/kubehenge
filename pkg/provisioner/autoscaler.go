@@ -209,10 +209,10 @@ type AutoscalerReconciler struct {
 	// Remotes reaches the workload clusters.
 	Remotes *Remotes
 	Images  AutoscalerImages
-	// Management is how an autoscaler inside its cluster reaches the management cluster; with no
+	// Management is how an autoscaler inside its cluster reaches the management cluster. With no
 	// server, no cluster can have one there.
 	Management ManagementAPI
-	// Events reports on a Cluster what keeps its autoscaler from working; may be nil.
+	// Events reports on a Cluster what keeps its autoscaler from working. It may be nil.
 	Events events.EventRecorder
 
 	now func() time.Time
@@ -268,7 +268,7 @@ func (a *AutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if !Owns(cluster, a.ClassNamespace) {
 		return ctrl.Result{}, nil
 	}
-	// The autoscaler goes as soon as the cluster does; what it has inside the cluster goes with it.
+	// The autoscaler goes as soon as the cluster does. What it has inside the cluster goes with it.
 	if !cluster.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, a.removeDeleted(ctx, cluster)
 	}
@@ -736,7 +736,7 @@ var autoscalerWorkloadRules = []rbacv1.PolicyRule{
 	{APIGroups: []string{"resource.k8s.io"}, Resources: []string{"resourceslices", "deviceclasses", "resourceclaims"}, Verbs: []string{"get", "list", "watch"}},
 }
 
-// autoscalerStatusRules let it keep its status ConfigMap in kube-system, and no other; a create
+// autoscalerStatusRules let it keep its status ConfigMap in kube-system, and no other. A create
 // cannot be held to a name.
 var autoscalerStatusRules = []rbacv1.PolicyRule{
 	{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"create"}},
@@ -745,7 +745,7 @@ var autoscalerStatusRules = []rbacv1.PolicyRule{
 
 // removePlaced removes the autoscaler from where it ran before its placement changed, and inside
 // the cluster its way into the management cluster. The autoscaler identity stays in the cluster for
-// the new placement; its token beside the cluster goes with WorkloadIdentities once unwanted.
+// the new placement. Its token beside the cluster goes with WorkloadIdentities once unwanted.
 func (a *AutoscalerReconciler) removePlaced(ctx context.Context, key client.ObjectKey, placement string, workload client.Client) error {
 	if placement == PlacementWorkload {
 		return deleteAll(ctx, workload,

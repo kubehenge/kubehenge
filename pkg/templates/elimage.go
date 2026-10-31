@@ -26,7 +26,7 @@ type elFamily struct {
 	repos        []string
 	reposPackage string
 	// containerd is where a kubeadm node's containerd and runc come from, built for the family's
-	// CPU level; the family itself has neither.
+	// CPU level. The family itself has neither.
 	containerd *repository
 }
 
@@ -35,7 +35,7 @@ var (
 		id: "rke2-selinux", name: "RKE2's SELinux policy", baseURL: "https://rpm.rancher.io/rke2/stable/common/centos/10/noarch",
 		key: rancherKey, signedMetadata: true,
 	}
-	// k3s publishes its policy for EL 10 in its testing channel alone; its stable channel has
+	// k3s publishes its policy for EL 10 in its testing channel alone. Its stable channel has
 	// only EL 9's, in a repository whose metadata is not signed.
 	k3sSELinux = &repository{
 		id: "k3s-selinux", name: "k3s's SELinux policy", baseURL: "https://rpm-testing.rancher.io/k3s/testing/common/centos/10/noarch",
@@ -68,7 +68,7 @@ func (f *elFamily) manifest(d Distribution) string {
 	fmt.Fprintf(&sb, "variables:\n  distro: %q\npackages:\n  - %s\n  - cloud-utils-growpart\n", f.distro, f.reposPackage)
 	if d == RKE2 || d == K3s {
 		// They install themselves into /usr/local when a node boots, which the minimal manifest
-		// keeps in the read-only /usr; in /var the policy labels it as it would /usr/local. kubeadm's
+		// keeps in the read-only /usr. In /var the policy labels it as it would /usr/local. kubeadm's
 		// nodes keep it in /usr, where the image's packages, the CNI plugins in /opt among them, can
 		// install into it.
 		sb.WriteString("opt-usrlocal: \"var\"\n")

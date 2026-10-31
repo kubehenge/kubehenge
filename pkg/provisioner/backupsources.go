@@ -102,7 +102,7 @@ func sourceKeys(ctx context.Context, c client.Reader, cluster *clusterv1.Cluster
 	return keys, "", nil
 }
 
-// checkBackupSources refuses the clusters a cluster's backups newly read that it may not read; those
+// checkBackupSources refuses the clusters a cluster's backups newly read that it may not read. Those
 // it read before stay allowed, so that a source changed since holds no unrelated edit back.
 func checkBackupSources(ctx context.Context, c client.Reader, old, cluster *clusterv1.Cluster) error {
 	b, _, err := optionalVariable[Backups](cluster, backupsVariable)
@@ -151,7 +151,7 @@ func sourceRepository(ctx context.Context, c client.Reader, cluster *clusterv1.C
 }
 
 // backupSources are the clusters whose backups the cluster reads, of those it names, with their
-// SSE-C keys; one it may not read is left out, with an event saying why.
+// SSE-C keys. One it may not read is left out, with an event saying why.
 func (r *Reconciler) backupSources(ctx context.Context, cluster *clusterv1.Cluster, b *Backups) ([]backupSource, error) {
 	if len(b.ReadFrom) == 0 {
 		return nil, nil

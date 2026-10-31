@@ -27,7 +27,7 @@ var (
 )
 
 // etcdRevisionLen is the length of a revision as etcd keys its database by: the main revision, an
-// underscore, and the sub revision, both big-endian; a deletion adds a marker after it.
+// underscore, and the sub revision, both big-endian. A deletion adds a marker after it.
 const etcdRevisionLen = 8 + 1 + 8
 
 // snapshotFileMode keeps the decrypted snapshot to the controller.

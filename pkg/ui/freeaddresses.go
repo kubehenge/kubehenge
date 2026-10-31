@@ -16,7 +16,7 @@ import (
 
 const (
 	// The search for a new cluster's addresses starts this far into the bridge's network, past the
-	// addresses networks often keep for routers, switches and servers; on a network of no more than
+	// addresses networks often keep for routers, switches and servers. On a network of no more than
 	// smallNetwork addresses it starts at the first.
 	freeStart    = 20
 	smallNetwork = 64
@@ -33,9 +33,9 @@ const (
 
 type freeRequest struct {
 	VLAN int `json:"vlan"`
-	// Nodes is how many node addresses the cluster needs; with none, only Check is probed.
+	// Nodes is how many node addresses the cluster needs. With none, only Check is probed.
 	Nodes int `json:"nodes"`
-	// Check are addresses, ranges or networks typed; those on the bridge's network are probed.
+	// Check are addresses, ranges or networks typed. Those on the bridge's network are probed.
 	Check []string `json:"check"`
 }
 
@@ -151,7 +151,7 @@ func (s *Server) takenAddresses(ctx context.Context, bridge string, vlan int) ([
 }
 
 // freeRun is the first run of n consecutive addresses on the network, from freeStart on, that is
-// none of taken and on which no host answers; nil when the first probeMost addresses hold none.
+// none of taken and on which no host answers. Nil when the first probeMost addresses hold none.
 func (s *Server) freeRun(ctx context.Context, network netip.Prefix, taken [][2]netip.Addr, n int) []netip.Addr {
 	first, last := hosts(network)
 	start := first

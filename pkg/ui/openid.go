@@ -20,7 +20,7 @@ const openIDStateLifetime = 10 * time.Minute
 // noPublicURL is why an OpenID sign-in cannot start or finish without the public address.
 const noPublicURL = "OpenID sign-in needs the public address. An administrator sets it with --public-url"
 
-// redirectURL is where the identity provider sends users back, under the configured public address;
+// redirectURL is where the identity provider sends users back, under the configured public address.
 // ok is false while none is configured. The address the browser used is never taken instead: the
 // Host header is the client's to choose, and a sign-in code must go nowhere it names.
 func (s *Server) redirectURL() (string, bool) {

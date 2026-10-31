@@ -10,7 +10,7 @@ import (
 // The keys for it come with each cluster, never with the target.
 type BackupTarget struct {
 	Name string `json:"name"`
-	// Endpoint is the store's https:// URL; unset for AWS S3 itself.
+	// Endpoint is the store's https:// URL. It is unset for AWS S3 itself.
 	Endpoint string `json:"endpoint,omitempty"`
 	Bucket   string `json:"bucket"`
 	Region   string `json:"region,omitempty"`
@@ -79,7 +79,7 @@ func ValidBackupTargets(targets []BackupTarget) error {
 	return nil
 }
 
-// moduleBackupTargets names the targets as the module's backup_targets does; null takes its default.
+// moduleBackupTargets names the targets as the module's backup_targets does. Null takes its default.
 func moduleBackupTargets(targets []BackupTarget) []map[string]any {
 	out := make([]map[string]any, 0, len(targets))
 	for _, t := range targets {

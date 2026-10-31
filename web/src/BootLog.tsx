@@ -17,7 +17,7 @@ export function BootLogDialog({
   machine: Machine;
   onClose: () => void;
 }): JSX.Element {
-  // Opening the dialog asks for a fresh read; the polls after it wait for the controller's answer.
+  // Opening the dialog asks for a fresh read. The polls after it wait for the controller's answer.
   const asking = useRef(true);
   const [askError, setAskError] = useState<string>();
   const { data, error, reload } = usePoll(

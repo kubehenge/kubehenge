@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"sigs.k8s.io/yaml"
 
 	"github.com/kubehenge/kubehenge/pkg/pve"
@@ -39,41 +40,43 @@ func newClusterCommand(conn *pve.Config) *cobra.Command {
 		Short: "List, create, scale and delete clusters through Kubehenge's interface",
 		Long: `List, create, scale and delete clusters through Kubehenge's interface.
 
-They act as the user of the Proxmox VE API token in KUBEHENGE_PROXMOX_TOKEN (user@realm!name=secret),
-with that token's privileges on the clusters' pools, as the interface does for a signed-in user.`,
+Every command calls the interface at --url as the user of the Proxmox VE API token in
+KUBEHENGE_PROXMOX_TOKEN (user@realm!name=secret). The token's privileges on each cluster's pool
+decide what it may do, as they do for a user signed in to the interface.`,
 	}
 	flags := cmd.PersistentFlags()
 	flags.StringVar(&o.url, "url", os.Getenv("KUBEHENGE_URL"), "Kubehenge's interface, such as https://kubehenge.example.org (env KUBEHENGE_URL)")
 	flags.StringVar(&o.caFile, "ca", os.Getenv("KUBEHENGE_CA"),
-		"PEM file with the CA of the interface's certificate; default the system trust store (env KUBEHENGE_CA)")
-	flags.StringVarP(&o.namespace, "namespace", "n", "", "the cluster's namespace; default the only cluster of that name")
+		"PEM file with the CA of the interface's certificate, else the system trust store (env KUBEHENGE_CA)")
 
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "List the clusters the token's user may see",
-		Args:  cobra.NoArgs,
+		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.list(cmd.Context(), cmd.OutOrStdout())
 		},
 	}
-	list.Flags().StringVarP(&o.output, "output", "o", "", "json for the interface's whole answer")
+	list.Flags().StringVarP(&o.output, "output", "o", "", "json for the interface's whole answer, or empty for a table")
 
 	get := &cobra.Command{
 		Use:   "get NAME",
 		Short: "Print a cluster as the interface describes it, in JSON",
-		Args:  cobra.ExactArgs(1),
+		Args:  argsSay(cobra.ExactArgs(1), clusterNameArg),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return o.raw(cmd.Context(), cmd.OutOrStdout(), http.MethodGet, args[0], "")
 		},
 	}
+	o.namespaceFlag(get.Flags())
 	kubeconfig := &cobra.Command{
 		Use:   "kubeconfig NAME",
 		Short: "Print a cluster's admin kubeconfig, which needs Sys.Modify on its pool",
-		Args:  cobra.ExactArgs(1),
+		Args:  argsSay(cobra.ExactArgs(1), clusterNameArg),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return o.raw(cmd.Context(), cmd.OutOrStdout(), http.MethodGet, args[0], "/kubeconfig")
 		},
 	}
+	o.namespaceFlag(kubeconfig.Flags())
 
 	var file string
 	create := &cobra.Command{
@@ -82,13 +85,14 @@ with that token's privileges on the clusters' pools, as the interface does for a
 		Long: `Create a cluster from the interface's create request, in JSON or YAML.
 
 The request is what the interface's wizard sends: name, class, version, controlPlaneReplicas,
-workerReplicas and variables. The API server checks it as it checks one from the interface.`,
-		Args: cobra.NoArgs,
+workerReplicas, variables, and namespace where the interface has more than one. It is checked as
+the wizard's request is.`,
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.create(cmd.Context(), cmd.OutOrStdout(), file)
 		},
 	}
-	create.Flags().StringVarP(&file, "filename", "f", "", "the create request; - reads standard input")
+	create.Flags().StringVarP(&file, "filename", "f", "", "the create request, or - for standard input")
 	_ = create.MarkFlagRequired("filename")
 
 	var controlPlanes int32
@@ -96,7 +100,7 @@ workerReplicas and variables. The API server checks it as it checks one from the
 	scale := &cobra.Command{
 		Use:   "scale NAME",
 		Short: "Set a cluster's control-plane nodes or its pools' workers",
-		Args:  cobra.ExactArgs(1),
+		Args:  argsSay(cobra.ExactArgs(1), clusterNameArg),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var planes *int32
 			if cmd.Flags().Changed("control-planes") {
@@ -110,13 +114,14 @@ workerReplicas and variables. The API server checks it as it checks one from the
 		},
 	}
 	scale.Flags().Int32Var(&controlPlanes, "control-planes", 0, "control-plane nodes: 1, 3, 5 or 7")
-	scale.Flags().StringArrayVar(&workers, "workers", nil, "a pool's workers as POOL=N, such as md-0=3; repeat for more pools")
+	scale.Flags().StringArrayVar(&workers, "workers", nil, "a pool's workers as POOL=N, such as md-0=3, repeated for more pools")
+	o.namespaceFlag(scale.Flags())
 
 	var yes bool
 	deleteCmd := &cobra.Command{
 		Use:   "delete NAME --yes",
 		Short: "Delete a cluster, its VMs and its persistent volumes",
-		Args:  cobra.ExactArgs(1),
+		Args:  argsSay(cobra.ExactArgs(1), clusterNameArg),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !yes {
 				return errors.New("deleting a cluster cannot be undone: add --yes")
@@ -124,10 +129,19 @@ workerReplicas and variables. The API server checks it as it checks one from the
 			return o.delete(cmd.Context(), cmd.OutOrStdout(), args[0])
 		},
 	}
-	deleteCmd.Flags().BoolVar(&yes, "yes", false, "delete without asking")
+	deleteCmd.Flags().BoolVar(&yes, "yes", false, "confirm the deletion, which cannot be undone")
+	o.namespaceFlag(deleteCmd.Flags())
 
 	cmd.AddCommand(list, get, kubeconfig, create, scale, deleteCmd, o.machineCommand())
 	return cmd
+}
+
+const clusterNameArg = "give the cluster's name"
+
+// namespaceFlag adds -n to a command that finds a cluster by its name. The others either list
+// every namespace or, as create, take the namespace in the request.
+func (o *clusterOptions) namespaceFlag(f *pflag.FlagSet) {
+	f.StringVarP(&o.namespace, "namespace", "n", "", "the cluster's namespace, needed only when clusters in two namespaces share the name")
 }
 
 // machineAction is one of what a machine's row offers in the interface.
@@ -139,7 +153,7 @@ type machineAction struct {
 
 var machineActions = []machineAction{
 	{"replace", "Delete the machine's VM and disks and have a new one made in its place", http.MethodPut, "/replacement", "replacing", false},
-	{"keep", "Take back a replacement that has not begun", http.MethodDelete, "/replacement", "kept", true},
+	{"keep", "Cancel a replacement that has not started", http.MethodDelete, "/replacement", "kept", true},
 	{"delete", "Drain and delete a worker, its pool shrinking by one", http.MethodDelete, "", "deleting", false},
 	{"cordon", "Keep new pods off the machine's node", http.MethodPut, "/cordon", "cordoned", true},
 	{"uncordon", "Let pods onto the machine's node again", http.MethodDelete, "/cordon", "uncordoned", true},
@@ -147,16 +161,17 @@ var machineActions = []machineAction{
 }
 
 func (o *clusterOptions) machineCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "machine", Short: "Act on one of a cluster's machines, by the name get lists it under"}
+	cmd := &cobra.Command{Use: "machine", Short: `Act on one of a cluster's machines, by its name in "kubehenge cluster get"`}
+	o.namespaceFlag(cmd.PersistentFlags())
 	for _, a := range machineActions {
 		var yes bool
 		sub := &cobra.Command{
 			Use:   a.use + " CLUSTER MACHINE",
 			Short: a.short,
-			Args:  cobra.ExactArgs(2),
+			Args:  argsSay(cobra.ExactArgs(2), "give the cluster's name and the machine's"),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				if !a.undoable && !yes {
-					return fmt.Errorf("%s takes the machine's VM and disks: add --yes", a.use)
+					return fmt.Errorf("%s deletes the machine's VM and disks: add --yes", a.use)
 				}
 				path, err := o.clusterPath(cmd.Context(), args[0])
 				if err != nil {
@@ -170,7 +185,7 @@ func (o *clusterOptions) machineCommand() *cobra.Command {
 			},
 		}
 		if !a.undoable {
-			sub.Flags().BoolVar(&yes, "yes", false, a.use+" without asking")
+			sub.Flags().BoolVar(&yes, "yes", false, "confirm that "+a.use+" may take the machine's VM and disks")
 		}
 		cmd.AddCommand(sub)
 	}
@@ -194,15 +209,15 @@ type replicas struct {
 }
 
 func (o *clusterOptions) list(ctx context.Context, out io.Writer) error {
+	if o.output != "" && o.output != "json" {
+		return fmt.Errorf("--output is json or nothing, not %q", o.output)
+	}
 	body, err := o.call(ctx, http.MethodGet, "/api/clusters", nil)
 	if err != nil {
 		return err
 	}
 	if o.output == "json" {
 		return writeIndented(out, body)
-	}
-	if o.output != "" {
-		return fmt.Errorf("--output is json or nothing, not %q", o.output)
 	}
 	var clusters []listedCluster
 	if err := json.Unmarshal(body, &clusters); err != nil {

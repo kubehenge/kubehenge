@@ -73,7 +73,7 @@ type fakePVE struct {
 	at      string
 	offline map[string]bool
 	config  map[string]string
-	// volumes maps node/storage to the volumes there; shared storage is under */ceph.
+	// volumes maps node/storage to the volumes there. Shared storage is under */ceph.
 	volumes   map[string][]string
 	moves     []string
 	writes    int
@@ -83,7 +83,7 @@ type fakePVE struct {
 	// unlisted leaves the VM out of pool and resource listings, as for seconds after creating it.
 	unlisted bool
 	pool     string
-	// token is whether the cluster user's token exists; tokens counts those created.
+	// token is whether the cluster user's token exists. tokens counts those created.
 	token  bool
 	tokens int
 	// hang keeps every task running.
@@ -92,11 +92,11 @@ type fakePVE struct {
 	requests []string
 	// clusterName, when set, is what /cluster/status names the Proxmox VE cluster.
 	clusterName string
-	// nextIDs are what /cluster/nextid offers, in turn; taken are VMIDs other VMs hold. Creating
+	// nextIDs are what /cluster/nextid offers, in turn. taken are VMIDs other VMs hold. Creating
 	// VM 4242 makes it the volume owner.
 	nextIDs []int
 	taken   map[int]bool
-	// userMissing has the cluster's user not exist yet; groups are those it is in, and userWrites
+	// userMissing has the cluster's user not exist yet. groups are those it is in, and userWrites
 	// the bodies of its creation and changes.
 	userMissing bool
 	groups      []string
@@ -683,7 +683,7 @@ func TestHangingTaskIsGivenUpOn(t *testing.T) {
 	}
 }
 
-// Every cluster is reconciled again every few minutes; once its objects are there, that reads only
+// Every cluster is reconciled again every few minutes. Once its objects are there, that reads only
 // what is the cluster's own: no listing of every VM or user, and the region once.
 func TestSteadyReconcileReadsOnlyTheClustersOwn(t *testing.T) {
 	t.Parallel()
@@ -718,7 +718,7 @@ func TestSteadyReconcileReadsOnlyTheClustersOwn(t *testing.T) {
 func TestVolumeOwnerTakesAnotherVMIDWhenTheOfferedOneIsTaken(t *testing.T) {
 	t.Parallel()
 	f := newFakePVE("a", nil)
-	// No owner yet; VM 100 is created by something else between nextid and the create.
+	// No owner yet. VM 100 is created by something else between nextid and the create.
 	f.destroyed, f.token, f.clusterName = true, true, "lab"
 	f.nextIDs, f.taken = []int{100, 4242}, map[int]bool{100: true}
 	p := &Proxmox{Client: serve(t, f), Settings: Settings{Role: "kubehenge-cluster"}}

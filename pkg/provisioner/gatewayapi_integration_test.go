@@ -184,7 +184,7 @@ func TestIntegrationGatewayAPIFindsTheDistributionsChart(t *testing.T) { //nolin
 	}
 }
 
-// until polls cond until it holds, failing the test after limit.
+// until polls cond until it holds and fails the test after limit.
 func until(t *testing.T, limit time.Duration, what string, cond func() bool) {
 	t.Helper()
 	for deadline := time.Now().Add(limit); !cond(); {

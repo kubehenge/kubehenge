@@ -282,7 +282,7 @@ func (n *nodeImages) load(ctx context.Context) error {
 }
 
 // patch has a machine template select the build of its line that the cluster's node image time
-// picks, which stays the same until that time moves; a Talos one, its first release's template.
+// picks, which stays the same until that time moves. A Talos one selects its first release's template.
 func (n *nodeImages) patch(ctx context.Context, item *runtimehooksv1.GeneratePatchesRequestItem) ([]byte, error) {
 	if err := n.load(ctx); err != nil {
 		return nil, err
@@ -322,7 +322,7 @@ var talosContractPaths = map[string]string{
 
 // contract has a Talos template generate its machines' configuration in the schema of the release
 // they boot first. It moves with that release, which moves only when Cluster API replaces the
-// machines anyway, so it rolls none of them by itself; in-place upgrades keep the schema a node
+// machines anyway, so it rolls none of them by itself. In-place upgrades keep the schema a node
 // was generated in, as Talos does.
 func (n *nodeImages) contract(ctx context.Context, item *runtimehooksv1.GeneratePatchesRequestItem) ([]byte, error) {
 	if err := n.load(ctx); err != nil {

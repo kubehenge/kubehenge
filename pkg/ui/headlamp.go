@@ -43,7 +43,7 @@ import (
 // Headlamp keeps in cookies scoped to that cluster's path, or, where an administrator lets it and
 // they may download the cluster's admin kubeconfig, are signed in by the gate (signInToHeadlamp).
 type Headlamp struct {
-	// Upstream is the Headlamp server, listening on the loopback interface only.
+	// Upstream is the Headlamp server. It listens on the loopback interface only.
 	Upstream *url.URL
 	// Kubeconfig is the file the Headlamp server reads its clusters from and watches.
 	Kubeconfig string
@@ -99,7 +99,7 @@ type seenEntry struct {
 	until time.Time
 }
 
-// Headlamp asks Proxmox VE again after this long whether a user still sees a cluster; it fires
+// Headlamp asks Proxmox VE again after this long whether a user still sees a cluster. It fires
 // many requests per page, and each would otherwise be a call to Proxmox VE.
 const headlampPrivilegeTTL = 30 * time.Second
 
@@ -168,7 +168,7 @@ func (s *Server) HeadlampHandler() http.Handler {
 // of the same site, such as a sibling host name or the interface's own port, and a WebSocket is not
 // held to CORS: a page there could open a pod's exec. Headlamp's frontend cannot send the
 // interface's CSRF token, so the origin the browser reports stands for it. Reads change nothing and
-// pass, links from the interface among them; a WebSocket opens with a GET and is checked.
+// pass, links from the interface among them. A WebSocket opens with a GET and is checked.
 func headlampSameOrigin(r *http.Request) bool {
 	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && r.Header.Get("Upgrade") == "" {
 		return true
@@ -181,7 +181,7 @@ func headlampSameOrigin(r *http.Request) bool {
 
 func (h *Headlamp) rewrite(pr *httputil.ProxyRequest) {
 	// Headlamp answers only to a loopback Host with its own port or none, and the upstream is the
-	// socket that starts it, on another port; so the Host goes without one. It sets its cookies
+	// socket that starts it, on another port, so the Host goes without one. It sets its cookies
 	// Secure only when told the browser came over HTTPS. Its OIDC callback URL is configured, not
 	// taken from here.
 	pr.SetURL(h.Upstream)
@@ -191,7 +191,7 @@ func (h *Headlamp) rewrite(pr *httputil.ProxyRequest) {
 	}
 	pr.SetXForwarded()
 	// With dynamic clusters, which the appliance leaves off, Headlamp would connect to the clusters a
-	// KUBECONFIG header names, kept under the user an X-HEADLAMP-USER-ID header claims; the browser
+	// KUBECONFIG header names, kept under the user an X-HEADLAMP-USER-ID header claims. The browser
 	// chooses neither, whatever Headlamp's flags.
 	pr.Out.Header.Del("Kubeconfig")
 	pr.Out.Header.Del("X-Headlamp-User-Id")
@@ -237,7 +237,7 @@ func (s *Server) modifyHeadlampResponse(resp *http.Response) error {
 }
 
 // headlampCallbackBound tells whether the return from the identity provider comes to the browser
-// that started the sign-in, and answers it when not. The return carries no session cookie; the
+// that started the sign-in, and answers it when not. The return carries no session cookie. The
 // binding cookie set when a signed-in user started the sign-in stands for it.
 func headlampCallbackBound(w http.ResponseWriter, r *http.Request) bool {
 	state := r.URL.Query().Get("state")
@@ -256,7 +256,7 @@ func headlampCallbackBound(w http.ResponseWriter, r *http.Request) bool {
 func (s *Server) headlampOffers(w http.ResponseWriter, r *http.Request, u user) bool {
 	p := r.URL.Path
 	read := r.Method == http.MethodGet || r.Method == http.MethodHead
-	// Headlamp's router cleans paths itself; anything it would read differently from this check is
+	// Headlamp's router cleans paths itself. Anything it would read differently from this check is
 	// refused rather than interpreted.
 	if p != path.Clean(p) && p != path.Clean(p)+"/" || strings.Contains(strings.ToLower(r.URL.RawPath), "%2f") {
 		http.Error(w, "malformed path", http.StatusBadRequest)
@@ -377,7 +377,7 @@ func (s *Server) headlampAccess(ctx context.Context, u user, cluster string) (se
 	return e, nil
 }
 
-// headlampPool is the pool of the cluster Headlamp names; not ok for a name no cluster of the
+// headlampPool is the pool of the cluster Headlamp names. Not ok for a name no cluster of the
 // interface can have, which no user sees.
 func (s *Server) headlampPool(cluster string) (string, bool) {
 	namespace, name, ok := strings.Cut(cluster, ".")
@@ -637,7 +637,7 @@ func (h *Headlamp) write(raw []byte, now time.Time) error {
 }
 
 // headlampEndpoint is a cluster's API address and CA from the admin kubeconfig Cluster API keeps
-// for it; not ok until that exists.
+// for it. Not ok until that exists.
 func (s *Server) headlampEndpoint(ctx context.Context, kube client.Client, c *clusterv1.Cluster, now time.Time) (headlampEndpoint, bool, error) {
 	h := s.Headlamp
 	h.mu.Lock()
@@ -688,7 +688,7 @@ func firstOIDC(c *clusterv1.Cluster, class *clusterv1.ClusterClass) *appliance.O
 			raw = d.Raw
 		}
 	}
-	// The value was checked when it was set; here it is only read.
+	// The value was checked when it was set. Here it is only read.
 	var providers []appliance.OIDCProvider
 	if raw == nil || json.Unmarshal(raw, &providers) != nil || len(providers) == 0 {
 		return nil

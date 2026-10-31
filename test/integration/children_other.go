@@ -2,7 +2,7 @@
 
 package integration
 
-// EndsChildrenItself tells whether the package ends the API server and etcd itself; here envtest
+// EndsChildrenItself tells whether the package ends the API server and etcd itself. Here envtest
 // does, with a signal to their process group.
 const EndsChildrenItself = false
 

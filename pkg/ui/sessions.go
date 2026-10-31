@@ -37,7 +37,7 @@ type session struct {
 	mu        sync.Mutex
 	ticket    *pve.Ticket
 	challenge *pve.Challenge
-	// renewing is set while one request renews the ticket; the session's other requests go on with
+	// renewing is set while one request renews the ticket. The session's other requests go on with
 	// the ticket they have, which still holds for as long again.
 	renewing bool
 }
@@ -115,7 +115,7 @@ func (s *sessions) lookup(r *http.Request) *session {
 	return sess
 }
 
-// prune forgets ended sessions; lookup does it for the ones still asked for. Every user's requests
+// prune forgets ended sessions. lookup does it for the ones still asked for. Every user's requests
 // look their session up under s.mu, so no session's lock is waited for while holding it.
 func (s *sessions) prune() {
 	now := s.now()

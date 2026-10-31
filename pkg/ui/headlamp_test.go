@@ -400,7 +400,7 @@ func TestHeadlampOIDCSignIn(t *testing.T) {
 		binding.Value != stateDigest("st-default.one") || binding.SameSite != http.SameSiteLaxMode || !binding.HttpOnly || !binding.Secure {
 		t.Fatalf("start: %d %s, binding %+v", rec.Code, rec.Header().Get("Location"), binding)
 	}
-	// Headlamp refuses any Host but its loopback address, with its own port or none; the upstream is
+	// Headlamp refuses any Host but its loopback address, with its own port or none. The upstream is
 	// the socket in front of it, whose port is another.
 	if got := (*seen)[len(*seen)-1].host; got != h.server.Headlamp.Upstream.Hostname() {
 		t.Fatalf("Headlamp saw Host %q", got)

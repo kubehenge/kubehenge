@@ -62,7 +62,7 @@ function settingsOf(req: unknown): string[] {
 /**
  * planOf answers a cluster's plan as the server would, from the routes a test gives the cluster:
  * refused as its change route refuses, else with the cluster as that route answers it, or as its
- * read does, and every setting the change names, replacing no machine.
+ * read does, and every setting the change names. It replaces no machine.
  */
 async function planOf(routes: Record<string, Route>, path: string, body: unknown): Promise<Answer | undefined> {
   const change = routes[`PATCH ${path}`];

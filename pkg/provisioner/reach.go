@@ -14,7 +14,7 @@ type MachineReach struct {
 }
 
 // templateName finds the names a patch's Go template reads, as .name at the start of a pipeline's
-// term; a field of a value it ranges over or takes with "with" reads the same, which errs on the
+// term. A field of a value it ranges over or takes with "with" reads the same, which errs on the
 // side of saying a change replaces machines.
 var templateName = regexp.MustCompile(`(?:^|[\s({|$=,])\.([A-Za-z_][A-Za-z0-9_]*)`)
 

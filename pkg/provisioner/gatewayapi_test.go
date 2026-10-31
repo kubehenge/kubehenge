@@ -259,7 +259,7 @@ func TestGatewayAPINeverDowngrades(t *testing.T) {
 	}
 }
 
-// helmRevision is the Secret Helm keeps a release's revision in, holding a manifest.
+// helmRevision is the Secret Helm keeps a release's revision in. It holds a manifest.
 func helmRevision(t *testing.T, release string, revision int, status, manifest string) *corev1.Secret {
 	t.Helper()
 	var compressed bytes.Buffer

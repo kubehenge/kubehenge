@@ -24,7 +24,7 @@ import (
 
 const (
 	// ManifestsLabel names the provider a ConfigMap of manifests is for, as its kind and name in
-	// lower case; with the operator's version label, it is what the provider's fetchConfig selects.
+	// lower case. With the operator's version label, it is what the provider's fetchConfig selects.
 	ManifestsLabel = "kubehenge.dev/provider-manifests"
 	// manifestsVersionLabel is the operator's: it reads the provider version a ConfigMap holds from it.
 	manifestsVersionLabel = "provider.cluster.x-k8s.io/version"
@@ -56,7 +56,7 @@ func ManifestsSelector(kind, name string) string {
 // stores them in the ConfigMap the provider's fetchConfig selects, then removes the ConfigMaps of
 // the provider's other versions. The operator would otherwise fetch them itself, from a release
 // address it checks nothing against. A download that fails is tried again every interval until ctx
-// ends; a file that does not match its digest fails at once.
+// ends. A file that does not match its digest fails at once.
 func StoreProviderManifests(ctx context.Context, c client.Client, hc *http.Client, providers []ProviderManifests, interval time.Duration) error {
 	for i := range providers {
 		p := &providers[i]

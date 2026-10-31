@@ -23,7 +23,7 @@ const (
 
 // attachSeed uploads a NoCloud seed holding files (user-data, meta-data, network-config) to the
 // storage and attaches it to vm as device, a CD-ROM. go-proxmox's VirtualMachine.CloudInit does the
-// same but gives the upload 5 seconds and the change 2, which a busy node overruns; here both wait
+// same but gives the upload 5 seconds and the change 2, which a busy node overruns. Here both wait
 // as long as the builder's other tasks.
 func attachSeed(ctx context.Context, node *proxmox.Node, storageName string, vm *proxmox.VirtualMachine, device string, files map[string]string) error {
 	storage, err := node.Storage(ctx, storageName)

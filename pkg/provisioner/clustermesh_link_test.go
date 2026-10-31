@@ -19,7 +19,7 @@ import (
 )
 
 // meshRig is cluster a of team-a with Cluster Mesh on, listing b, which lists it back, and c,
-// which lists only b; a's workload cluster is reached through Remotes.
+// which lists only b. The workload cluster of a is reached through Remotes.
 type meshRig struct {
 	r        *Reconciler
 	kube     client.WithWatch
@@ -93,7 +93,7 @@ func (m *meshRig) caSecret(t *testing.T) *corev1.Secret {
 }
 
 // A cluster switching Cluster Mesh on is marked before anything is written into it, gets the
-// namespace's CA, made once and kept, and links only with the peers that list it back; each it
+// namespace's CA, made once and kept, and links only with the peers that list it back. Each it
 // lists that does not is reported on it.
 func TestMeshClusterLinksWhatBothSidesListWithTheNamespacesCA(t *testing.T) {
 	t.Parallel()
@@ -141,7 +141,7 @@ func TestMeshClusterLinksWhatBothSidesListWithTheNamespacesCA(t *testing.T) {
 	}
 }
 
-// Switched off, the mesh's objects come out of the cluster and the mark goes; with nothing marked,
+// Switched off, the mesh's objects come out of the cluster and the mark goes. With nothing marked,
 // the workload cluster is not even reached.
 func TestMeshClusterSwitchedOffTakesOutWhatItWrote(t *testing.T) {
 	t.Parallel()
@@ -164,7 +164,7 @@ func TestMeshClusterSwitchedOffTakesOutWhatItWrote(t *testing.T) {
 	}
 }
 
-// A cluster whose kubeconfig Cluster API has not written yet waits, unmarked and without a CA; one
+// A cluster whose kubeconfig Cluster API has not written yet waits, unmarked and without a CA. One
 // switched off before its kubeconfig came back loses the mark all the same.
 func TestMeshClusterWaitsForTheKubeconfig(t *testing.T) {
 	t.Parallel()
@@ -190,7 +190,7 @@ func TestMeshClusterWaitsForTheKubeconfig(t *testing.T) {
 	}
 }
 
-// RKE2's CIS profile lets only kube-system's own pods reach kube-system; the mesh's peers are let
+// RKE2's CIS profile lets only kube-system's own pods reach kube-system. The mesh's peers are let
 // through to the clustermesh-apiserver, and only while the profile is on.
 func TestMeshClusterOpensTheAPIServerUnderRKE2sCISProfile(t *testing.T) {
 	t.Parallel()

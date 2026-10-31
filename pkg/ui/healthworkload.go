@@ -54,7 +54,7 @@ type workloadRead struct {
 	events        []corev1.Event
 	eventsErr     error
 	readyz        string
-	// velero is set once the cluster's backups were read; a cluster whose Velero cannot be read has
+	// velero is set once the cluster's backups were read. A cluster whose Velero cannot be read has
 	// its backups view say why.
 	velero         bool
 	veleroSchedule *unstructured.Unstructured
@@ -374,7 +374,7 @@ type podLogView struct {
 
 // podLogs hands out the last lines of a pod's container's log. Logs carry secrets often enough,
 // so this needs what the admin kubeconfig does, Sys.Modify on the cluster's pool, and is read with
-// an identity that reads logs and nothing else; every read is logged with who made it.
+// an identity that reads logs and nothing else. Every read is logged with who made it.
 func (s *Server) podLogs(w http.ResponseWriter, r *http.Request, u user) {
 	c, _, ok := s.cluster(w, r, u, privKubeconfig)
 	if !ok {

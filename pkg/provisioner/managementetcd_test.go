@@ -35,7 +35,7 @@ func TestTalosEndpoints(t *testing.T) {
 }
 
 // The management cluster's etcd is restored as a Talos cluster's: every node that answers is
-// wiped, the first gets the snapshot and is bootstrapped from it; a node that does not answer is
+// wiped, the first gets the snapshot and is bootstrapped from it. A node that does not answer is
 // left out.
 func TestManagementTalosRestore(t *testing.T) {
 	t.Parallel()

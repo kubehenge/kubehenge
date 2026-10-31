@@ -19,7 +19,7 @@ const (
 	// TalosVersionVariable is the Talos release a Talos cluster's nodes run.
 	TalosVersionVariable = "talosVersion"
 	// TalosImageAnnotation is the Talos release a Talos cluster's new machines boot first, whose
-	// template they are cloned from; the controller then upgrades them in place to the cluster's
+	// template they are cloned from. The controller then upgrades them in place to the cluster's
 	// talosVersion. It moves to talosVersion only when Cluster API replaces every machine anyway, at
 	// a Kubernetes upgrade, since a machine template that selects another template rolls them all.
 	TalosImageAnnotation = "kubehenge.dev/talos-image"
@@ -110,7 +110,7 @@ func checkTalos(old, c *clusterv1.Cluster) error {
 // cluster is passed a serving certificate, which Talos then issues from the cluster CA as it does
 // the API server's, so that the metrics proxies on every control plane can verify them. Talos
 // releases before that pass none, and the components sign their own. A cluster that cannot be read
-// yet counts as one without; the next reconcile looks again.
+// yet counts as one without. The next reconcile looks again.
 func (r *Reconciler) talosServesControlPlaneMetrics(ctx context.Context, c *clusterv1.Cluster) bool {
 	workload, found, err := r.Remotes.get(ctx, c)
 	if err != nil || !found {

@@ -25,8 +25,8 @@ func newWaitCommand() *cobra.Command {
 	var timeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "wait",
-		Short: "Wait for the Cluster API operator while the management cluster's providers are installed",
-		Long: `Wait for the Cluster API operator while the management cluster's providers are installed.
+		Short: "Wait for the Cluster API operator and its providers",
+		Long: `Wait for the Cluster API operator and its providers.
 
 The management cluster's providers chart runs these as Helm hooks, in the cluster, with the
 credentials of their service account.`,
@@ -39,9 +39,9 @@ credentials of their service account.`,
 		Short: "Wait until the operator's webhooks admit a provider",
 		Long: `Wait until the operator's webhooks admit a provider.
 
-It creates an AddonProvider named webhook-probe in --namespace as a dry run, so nothing is kept,
-until the webhooks admit it.`,
-		Args: cobra.NoArgs,
+It tries a dry-run create of an AddonProvider named webhook-probe in --namespace until the webhooks
+admit it. A dry run keeps nothing.`,
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return inCluster(cmd.Context(), timeout, func(ctx context.Context, c client.Client) error {
 				return provisioner.WaitForOperator(ctx, c, namespace, waitPoll)
@@ -54,7 +54,7 @@ until the webhooks admit it.`,
 	providers := &cobra.Command{
 		Use:   "providers",
 		Short: "Wait until the operator has applied every provider and their Deployments have rolled out",
-		Args:  cobra.NoArgs,
+		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return inCluster(cmd.Context(), timeout, func(ctx context.Context, c client.Client) error {
 				return provisioner.WaitForProviders(ctx, c, waitPoll, cmd.ErrOrStderr())

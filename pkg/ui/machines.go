@@ -117,7 +117,7 @@ func (s *Server) cordon(w http.ResponseWriter, r *http.Request, u user, cordoned
 }
 
 // rebootMachine reboots a machine's VM in Proxmox VE as the user, who needs VM.PowerMgmt on it.
-// Proxmox VE shuts the guest down and starts it again; the request does not wait for that.
+// Proxmox VE shuts the guest down and starts it again. The request does not wait for that.
 func (s *Server) rebootMachine(w http.ResponseWriter, r *http.Request, u user) {
 	c, m, ok := s.clusterMachine(w, r, u, privPower)
 	if !ok {

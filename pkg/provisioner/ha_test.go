@@ -35,7 +35,7 @@ type fakeRule struct {
 	Nodes     []string
 }
 
-// fakeHA answers Proxmox VE's HA API, refusing a rule set Proxmox VE would refuse.
+// fakeHA answers Proxmox VE's HA API. It refuses a rule set Proxmox VE would refuse.
 type fakeHA struct {
 	mu        sync.Mutex
 	nodes     []string
@@ -335,7 +335,7 @@ type haFixture struct {
 	kube client.Client
 }
 
-// newHAFixture has HA know the nodes given; the reconciler holds the HA token.
+// newHAFixture has HA know the nodes given. The reconciler holds the HA token.
 func newHAFixture(t *testing.T, c *clusterv1.Cluster, nodes ...string) *haFixture {
 	t.Helper()
 	scheme := runtime.NewScheme()
@@ -679,7 +679,7 @@ func TestHAWaitsForCapmoxToFindAMovedVM(t *testing.T) {
 	t.Parallel()
 	f := newHAFixture(t, shared(), "pve1", "pve2", "pve3")
 	f.reconcile()
-	// HA moved web-cp-0's VM; capmox still records pve1 and would look for it there.
+	// HA moved web-cp-0's VM. capmox still records pve1 and would look for it there.
 	f.pve.mu.Lock()
 	f.pve.vms[101] = "pve3"
 	f.pve.mu.Unlock()

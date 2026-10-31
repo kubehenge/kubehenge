@@ -24,7 +24,7 @@ const (
 type TaskError struct {
 	UPID       string
 	ExitStatus string
-	// Log is the end of the task's log; empty when it could not be read.
+	// Log is the end of the task's log. It is empty when it could not be read.
 	Log []string
 }
 

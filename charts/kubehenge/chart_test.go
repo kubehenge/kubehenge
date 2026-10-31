@@ -97,7 +97,7 @@ func TestAuthenticationConfiguration(t *testing.T) {
 		variables string
 		want      map[string]any
 	}{
-		// The API server's --anonymous-auth=false says it; it refuses the flag beside a section.
+		// The API server's --anonymous-auth=false says it. It refuses the flag beside a section.
 		{"false", oidc, map[string]any{"jwt": jwt}},
 		{"true", oidc, map[string]any{"jwt": jwt, "anonymous": kubeadm}},
 		// kubeadm's API server reads the file whether or not the cluster trusts a provider.

@@ -33,7 +33,7 @@ func withTemplates(t *testing.T, h *harness) {
 
 func TestTemplatesListedWithTheClustersThatNeedThem(t *testing.T) {
 	t.Parallel()
-	// Its nodes went to the build of 1 October; the newer one is not offered by its node image time.
+	// Its nodes went to the build of 1 October. The newer one is not offered by its node image time.
 	one := cluster("default", "one")
 	one.Annotations = map[string]string{"kubehenge.dev/node-image": "2026-10-10T00:00:00Z"}
 	h := newHarness(t, one)

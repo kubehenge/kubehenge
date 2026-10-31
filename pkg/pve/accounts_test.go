@@ -95,7 +95,7 @@ func fakeTicketAPI(t *testing.T) *Accounts {
 			{"id": "pool", "pool": "infra"},
 		})
 	})
-	// As Proxmox VE 9 answers, for alice only; bob lacks Sys.Audit on /.
+	// As Proxmox VE 9 answers, for alice only. bob lacks Sys.Audit on /.
 	mux.HandleFunc("GET /api2/json/cluster/ha/rules", func(w http.ResponseWriter, r *http.Request) {
 		if c, err := r.Cookie("PVEAuthCookie"); err != nil || c.Value != "PVE:alice@pve:1" {
 			http.Error(w, "Permission check failed (/, Sys.Audit)", http.StatusForbidden)

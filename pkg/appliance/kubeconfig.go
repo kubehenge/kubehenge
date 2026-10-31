@@ -39,7 +39,7 @@ const (
 	interfaceTokenLifetime = 30 * 24 * time.Hour
 	// interfaceTokenRenewAfter is how old a token gets before the interface asks for the next.
 	interfaceTokenRenewAfter = 24 * time.Hour
-	// interfaceTokenCheckEvery is how often the interface looks at its token's age; a renewal that
+	// interfaceTokenCheckEvery is how often the interface looks at its token's age. A renewal that
 	// fails is tried again at the next look.
 	interfaceTokenCheckEvery = time.Hour
 )
@@ -85,7 +85,7 @@ func (a *Appliance) TokenPath() string { return filepath.Join(a.Dir, "interface.
 
 // InterfaceKubeconfig asks, with the management cluster's admin kubeconfig, for a token of the
 // interface's ServiceAccount, writes it to tokenFile and returns a kubeconfig that reads it from
-// there. The admin kubeconfig itself is never written down; it stays in the encrypted state.
+// there. The admin kubeconfig itself is never written down. It stays in the encrypted state.
 func InterfaceKubeconfig(ctx context.Context, admin []byte, endpoint, tokenFile string) ([]byte, error) {
 	cfg, err := clientcmd.RESTConfigFromKubeConfig(admin)
 	if err != nil {
@@ -211,7 +211,7 @@ const halves = 2
 const jwtParts = 3
 
 // tokenTimes reads when a ServiceAccount token was issued and when it runs out from its claims.
-// The signature is the API server's to check; these only schedule the renewal.
+// The signature is the API server's to check. These only schedule the renewal.
 func tokenTimes(token string) (time.Time, time.Time, bool) {
 	parts := strings.Split(strings.TrimSpace(token), ".")
 	if len(parts) != jwtParts {

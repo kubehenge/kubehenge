@@ -29,13 +29,14 @@ func newTemplateCommand(conn *pve.Config) *cobra.Command {
 		Use:   "template",
 		Short: "Manage the VM templates clusters are cloned from",
 	}
+	proxmoxFlags(cmd.PersistentFlags(), conn)
 	cmd.AddCommand(newTemplateCreateCommand(conn), newTemplateListCommand(conn), newTemplateDeleteCommand(conn), newTemplateRefreshCommand(conn))
 	return cmd
 }
 
 func connect(conn *pve.Config) (*templates.Builder, error) {
 	if conn.Token == "" {
-		return nil, errors.New("set KUBEHENGE_PROXMOX_TOKEN to a Proxmox VE API token")
+		return nil, errors.New("set KUBEHENGE_PROXMOX_TOKEN to a Proxmox VE API token, user@realm!name=secret")
 	}
 	api, err := pve.Connect(*conn)
 	if err != nil {
@@ -44,7 +45,7 @@ func connect(conn *pve.Config) (*templates.Builder, error) {
 	return &templates.Builder{Client: api, Sources: templates.DefaultSources()}, nil
 }
 
-// poolFlag is the pool a template command works in; clusters clone only from the templates in their
+// poolFlag is the pool a template command works in. Clusters clone only from the templates in their
 // management cluster's template pool.
 func poolFlag(cmd *cobra.Command, pool *string, usage string) {
 	cmd.Flags().StringVar(pool, "pool", "kubehenge-templates", usage)
@@ -55,7 +56,7 @@ func newTemplateListCommand(conn *pve.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List Kubehenge's templates in the template pool",
-		Args:  cobra.NoArgs,
+		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			b, err := connect(conn)
 			if err != nil {
@@ -74,7 +75,7 @@ func newTemplateListCommand(conn *pve.Config) *cobra.Command {
 			return nil
 		},
 	}
-	poolFlag(cmd, &pool, "pool to list the templates of; empty lists every pool's")
+	poolFlag(cmd, &pool, "pool to list the templates of, or empty for every pool")
 	return cmd
 }
 
@@ -111,15 +112,15 @@ func newTemplateDeleteCommand(conn *pve.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete {talos|rke2|k3s|kubeadm}",
 		Short: "Delete the template for a distribution, if it exists",
-		Long: `Delete the template for a distribution, if it exists: every build of a node OS template, or
-with --build the one build with that tag, as kubehenge template list shows it.
+		Long: `Delete the template for a distribution, if it exists. For a node OS template that is every
+build, or with --build the one build with that tag, as kubehenge template list shows it.
 
-A build a cluster's machines are cloned from is refused, as in the interface, naming the clusters:
-deleting it would replace their nodes at once, outside their maintenance windows. Which clusters
-those are is read from the management cluster that KUBECONFIG points at. For a build found broken,
---roll-clusters deletes it anyway, and those clusters' nodes are replaced now with clones of the
-build before it; the last build of a template is never deleted while a cluster runs it.`,
-		Args:      cobra.ExactArgs(1),
+A build that a cluster's machines are cloned from is refused, as in the interface, naming the
+clusters. Deleting it would replace their nodes at once, outside their maintenance windows. Those
+clusters are read from the management cluster KUBECONFIG points at. For a broken build,
+--roll-clusters deletes it anyway and replaces those clusters' nodes now with clones of the build
+before it. The last build of a template is never deleted while a cluster runs it.`,
+		Args:      argsSay(cobra.ExactArgs(1), distributionArg),
 		ValidArgs: []string{"talos", "rke2", "k3s", "kubeadm"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req.Distribution = templates.Distribution(args[0])
@@ -151,12 +152,14 @@ build before it; the last build of a template is never deleted while a cluster r
 	f.StringVar(&req.TalosVersion, "talos-version", templates.DefaultTalosVersion, "Talos release (talos)")
 	nodeOSFlag(f, &req.NodeOS)
 	f.StringVar(&req.KubernetesVersion, "kubernetes-version", "", "Kubernetes release (kubeadm)")
-	f.StringVar(&build, "build", "", "the build to delete, such as build-202610181200; default every build")
+	f.StringVar(&build, "build", "", "the build to delete, such as build-202610181200, else every build")
 	f.StringVar(&classNamespace, "class-namespace", "kubehenge-system", "namespace of Kubehenge's ClusterClasses in the management cluster")
-	f.BoolVar(&roll, "roll-clusters", false, "delete builds clusters run too: their nodes are replaced now, outside their maintenance windows, with clones of the build before")
-	poolFlag(cmd, &pool, "pool the template is in; empty looks in every pool")
+	f.BoolVar(&roll, "roll-clusters", false, "delete builds that clusters run too, replacing their nodes now with clones of the build before, outside their maintenance windows")
+	poolFlag(cmd, &pool, "pool the template is in, or empty to look in every pool")
 	return cmd
 }
+
+const distributionArg = "give the distribution: talos, rke2, k3s or kubeadm"
 
 // deleteChecks are what deleteTemplate checks a build against before it deletes it: who clones
 // from each build of the pool (provisioner.BuildUsers), and whether builds in use may go.
@@ -221,7 +224,7 @@ func refusedBuilds(builds, doomed []templates.Built, checks deleteChecks) ([]str
 		case len(doomed) == len(builds):
 			refused = append(refused, fmt.Sprintf("%s: %s clone from it, and no build of the template would be left for them", b.Resource.Name, strings.Join(who, ", ")))
 		case !checks.roll:
-			refused = append(refused, fmt.Sprintf("%s: %s clone from it; --roll-clusters deletes it and replaces their nodes now, outside their maintenance windows", b.Resource.Name, strings.Join(who, ", ")))
+			refused = append(refused, fmt.Sprintf("%s: %s clone from it. --roll-clusters deletes it and replaces their nodes now, outside their maintenance windows", b.Resource.Name, strings.Join(who, ", ")))
 		}
 	}
 	return refused, nil
@@ -295,16 +298,16 @@ func (b *builderFlags) add(cmd *cobra.Command) {
 	f := cmd.Flags()
 	f.StringVar(&b.builder.Node, "node", "", "Proxmox VE node to create the template on (required)")
 	f.StringVar(&b.builder.ImportStorage, "import-storage", "local", "file storage with the import content type, for the downloaded image")
-	f.StringVar(&b.builder.Storage, "storage", "local-lvm", "storage for the template's disk; shared storage lets clones start on any node")
-	f.StringVar(&b.builder.ISOStorage, "iso-storage", "", "storage for the cloud-init ISO while preparing an image; default the node's first ISO storage")
-	poolFlag(cmd, &b.builder.Pool, "pool the template is put in and looked for in; empty looks in every pool")
+	f.StringVar(&b.builder.Storage, "storage", "local-lvm", "storage for the template's disk. Shared storage lets clones start on any node")
+	f.StringVar(&b.builder.ISOStorage, "iso-storage", "", "storage for the cloud-init ISO while preparing an image, else the node's first ISO storage")
+	poolFlag(cmd, &b.builder.Pool, "pool the template is put in and looked for in, or empty to look in every pool")
 	f.StringVar(&b.builder.Bridge, "bridge", "vmbr0", "bridge for the VM that prepares an image")
 	f.IntVar(&b.builder.VLAN, "vlan", 0, "VLAN tag for the VM that prepares an image")
-	f.StringVar(&b.address, "build-address", "", "static address with prefix for the VM that prepares an image, such as 192.0.2.50/24; default DHCP")
+	f.StringVar(&b.address, "build-address", "", "static address with prefix for the VM that prepares an image, such as 192.0.2.50/24, else DHCP")
 	f.StringVar(&b.gateway, "build-gateway", "", "gateway for --build-address")
 	f.StringSliceVar(&b.dns, "build-dns", nil, "DNS servers for --build-address")
 	f.BoolVar(&b.builder.KeepOnFailure, "keep-on-failure", false, "leave the VM in place when preparing an image fails")
-	f.StringVar(&b.builder.CPUType, "cpu-type", "", "QEMU CPU type of the template, which its clones keep; host shows them the node's own CPU (default: that of the newest build of the template, else the least its node OS runs on, "+templates.DefaultCPUType+" for most)")
+	f.StringVar(&b.builder.CPUType, "cpu-type", "", "QEMU CPU type of the template, which its clones keep. host gives them the node's own CPU (default: the newest build's, else the least its node OS runs on, "+templates.DefaultCPUType+" for most)")
 	_ = cmd.MarkFlagRequired("node")
 }
 
@@ -328,7 +331,7 @@ func (b *builderFlags) connect(cmd *cobra.Command, conn *pve.Config) (*templates
 		return nil, err
 	}
 	b.builder.Client, b.builder.Sources = c.Client, c.Sources
-	// Progress is best effort; a closed stderr must not fail the build.
+	// Progress is best effort. A closed stderr must not fail the build.
 	b.builder.Log = func(format string, a ...any) { _, _ = fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", a...) }
 	return &b.builder, nil
 }
@@ -345,20 +348,21 @@ func newTemplateCreateCommand(conn *pve.Config) *cobra.Command {
 		Long: `Create the template for a distribution on a Proxmox VE node, unless it exists.
 
 Talos templates are the Talos Image Factory's image with the QEMU guest agent. RKE2, k3s and kubeadm
-templates are of a node OS (--node-os): its packages alone, with cloud-init, the QEMU guest agent,
-SELinux enforcing with the distribution's policy, and for kubeadm containerd, the kubelet and kubeadm
-at one Kubernetes version. Every image and package is checked against its publisher's signature.
+templates are built from a node OS (--node-os) and its packages alone. They carry cloud-init, the
+QEMU guest agent and SELinux enforcing with the distribution's policy. kubeadm templates add
+containerd, the kubelet and kubeadm at one Kubernetes version. Every image and package is checked
+against its publisher's signature.
 
-Node OS templates are built again for their updates, each build a template of its own tagged with
-when it was made; clusters move to a new build inside their maintenance windows. Without --new-build
-the newest build is kept when there is one.
+Node OS templates are built again for their updates. Each build is a template of its own, tagged
+with when it was made. Clusters move to a new build inside their maintenance windows. Without
+--new-build the newest build is kept when there is one.
 
-A node OS template is made by a VM that boots the family's cloud image and builds the node from the
-family's packages; that VM needs to reach the package repositories, through DHCP or the
---build-address network.
+A node OS template is made by a VM that boots the node OS's cloud image and builds the node from
+its packages. That VM must reach the package repositories, through DHCP or the --build-address
+network.
 
 The API token is read from KUBEHENGE_PROXMOX_TOKEN.`,
-		Args:      cobra.ExactArgs(1),
+		Args:      argsSay(cobra.ExactArgs(1), distributionArg),
 		ValidArgs: []string{"talos", "rke2", "k3s", "kubeadm"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req.Distribution = templates.Distribution(args[0])
@@ -411,10 +415,10 @@ func parseNetwork(address, gateway string, dns []string) (*templates.Network, er
 	n := &templates.Network{}
 	var err error
 	if n.Address, err = netip.ParsePrefix(address); err != nil {
-		return nil, fmt.Errorf("--build-address: %w", err)
+		return nil, fmt.Errorf("--build-address %q: give the address with its prefix, such as 192.0.2.50/24", address)
 	}
 	if n.Gateway, err = netip.ParseAddr(gateway); err != nil {
-		return nil, fmt.Errorf("--build-gateway: %w", err)
+		return nil, fmt.Errorf("--build-gateway %q is not an IP address", gateway)
 	}
 	if !n.Address.Contains(n.Gateway) {
 		return nil, fmt.Errorf("gateway %s is outside %s", n.Gateway, n.Address)
@@ -422,7 +426,7 @@ func parseNetwork(address, gateway string, dns []string) (*templates.Network, er
 	for _, d := range dns {
 		a, parseErr := netip.ParseAddr(d)
 		if parseErr != nil {
-			return nil, fmt.Errorf("--build-dns: %w", parseErr)
+			return nil, fmt.Errorf("--build-dns %q is not an IP address", d)
 		}
 		n.DNS = append(n.DNS, a)
 	}

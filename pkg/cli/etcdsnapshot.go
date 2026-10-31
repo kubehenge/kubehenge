@@ -16,7 +16,7 @@ const snapshotMode = 0o600
 func newEtcdSnapshotCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "etcd-snapshot",
-		Short: "Work with the etcd snapshots Kubehenge stores in clusters' backup targets",
+		Short: "Decrypt the etcd snapshots Kubehenge stores in clusters' backup targets",
 	}
 	cmd.AddCommand(newEtcdSnapshotDecryptCommand())
 	return cmd
@@ -30,10 +30,10 @@ func newEtcdSnapshotDecryptCommand() *cobra.Command {
 		Long: `Decrypt an etcd snapshot downloaded from a cluster's backup target, and check etcd's own checksum
 at its end. The identity file holds the etcd-snapshot-identity key of the cluster's
 <cluster>-backup-keys Secret in the management cluster. Any age client decrypts the snapshots too.`,
-		Args: cobra.ExactArgs(2),
+		Args: argsSay(cobra.ExactArgs(2), "give the encrypted snapshot and the file to write"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if identityFile == "" {
-				return errors.New("--identity names the file with the cluster's etcd snapshot key")
+				return errors.New("--identity is required: the file with the cluster's etcd snapshot key")
 			}
 			identity, err := os.ReadFile(identityFile) //nolint:gosec // the file the user names
 			if err != nil {

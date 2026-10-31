@@ -1,28 +1,59 @@
 <!-- markdownlint-disable-next-line MD033 -- Markdown can neither size an image nor mark it decorative. -->
 # <img src="web/src/logo.svg" alt="" width="40" align="top"> Kubehenge
 
-**Kubernetes for Proxmox VE.**
+Kubernetes for Proxmox VE.
 
 [![Latest release](https://img.shields.io/github/v/release/kubehenge/kubehenge?label=alpha)](docs/changelog.md)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/kubehenge/kubehenge/badge)](https://scorecard.dev/viewer/?uri=github.com/kubehenge/kubehenge)
 
 > [!WARNING]
-> **Alpha: do not use it in production.** Any release may change Kubehenge completely, its settings, interface and ClusterClasses included, and nothing is guaranteed yet to keep working from one release to the next.
+> **Alpha. Do not use it in production.** Any release may change Kubehenge completely, its settings, interface and ClusterClasses included. Nothing is guaranteed yet to keep working from one release to the next.
 
-Kubehenge creates and runs Kubernetes clusters on Proxmox VE. Pick a distribution per cluster (kubeadm, RKE2, k3s or Talos), add Rancher or Headlamp where you want them, and manage it all from a web interface that signs in with your Proxmox VE users, LDAP, Active Directory and OpenID Connect realms included.
+## Overview
 
-VMware ships Kubernetes inside vSphere as the vSphere Kubernetes Service, and OpenStack ships it as Magnum. Both are built on Cluster API. Proxmox VE has no equivalent; Kubehenge is one, built the same way.
+Kubehenge creates and runs Kubernetes clusters on Proxmox VE. Pick a distribution per cluster (kubeadm, RKE2, k3s or Talos) and add Rancher or Headlamp where you want them. Manage it all from a web interface that signs in with your Proxmox VE users, LDAP, Active Directory and OpenID Connect realms included.
+
+VMware ships Kubernetes in vSphere as the vSphere Kubernetes Service. OpenStack ships it as Magnum. Both are built on Cluster API. Proxmox VE has no equivalent. Kubehenge is one, built the same way.
 
 ## What it does
 
-- **Create, scale, upgrade and delete clusters** on Proxmox VE VMs, declaratively, with nodes replaced one at a time on upgrades and dead nodes replaced automatically.
-- **Your choice of distribution,** none locked in: kubeadm (upstream Kubernetes), RKE2, k3s and Talos Linux, each with its own CNI or Cilium or Calico chosen per cluster; Talos nodes are upgraded in place through Talos's own API.
-- **Proxmox VE wired in:** persistent volumes through the Proxmox CSI plugin, node lifecycle through the Proxmox cloud controller manager, a virtual IP for the control plane.
-- **Clusters kept apart:** each cluster gets its own Proxmox VE pool, user and API token with rights on its own VMs and volumes only, held on its control-plane nodes only.
-- **Add-ons per cluster:** Rancher, with every Kubehenge cluster registered in it, and Headlamp; CIS hardening, pod security with Kyverno, Istio, a Cilium Cluster Mesh and a load balancer; monitoring and logs; certificates from an ACME server or the cluster's own CA; GitOps with Argo CD or Flux; and backups with Velero to an S3 store, restored from the interface.
-- **Sign in to clusters your way:** each cluster can trust your OpenID Connect providers, set once for every cluster or per cluster, with tokens and certificates working beside them; one shared Headlamp in the appliance opens every cluster you may see, and, where the administrator lets it, signs those who may download a cluster's kubeconfig in to it.
-- **Upgrades without a shell:** clusters can upgrade Kubernetes on their own inside a maintenance window you set, and Kubehenge upgrades itself from a button, or automatically, installing only signed releases.
-- **One appliance:** one line in the Proxmox VE shell installs Kubehenge as a small LXC container; its interface creates the management cluster and looks after it from then on. Infrastructure-as-code users can apply the same module with Terraform/OpenTofu instead.
+- **Create, scale, upgrade and delete clusters** on Proxmox VE VMs, from the interface or with `kubectl apply`. Upgrades replace nodes one at a time.
+  - A node that stays not ready for five minutes is replaced.
+- **A distribution per cluster:** kubeadm (upstream Kubernetes), RKE2, k3s or Talos Linux.
+  - The pod network is the distribution's own CNI, Cilium or Calico, chosen per cluster.
+  - Talos nodes are upgraded in place through Talos's own API.
+- **In every cluster:**
+  - Persistent volumes through the Proxmox CSI plugin.
+  - Node lifecycle through the Proxmox cloud controller manager.
+  - A virtual IP for the control plane.
+
+### Isolation
+
+- **Clusters kept apart.**
+  - Each cluster gets its own Proxmox VE pool, user and API token.
+  - The token has rights on its own VMs and volumes only. It is held on its control-plane nodes only.
+
+### Add-ons and sign-in
+
+- **Add-ons per cluster.**
+  - Rancher, with every Kubehenge cluster registered in it, and Headlamp.
+  - CIS hardening, pod security with Kyverno, Istio, a Cilium Cluster Mesh and a load balancer.
+  - Monitoring and logs.
+  - Certificates from an ACME server or the cluster's own CA.
+  - GitOps with Argo CD or Flux.
+  - Backups with Velero to an S3 store, restored from the interface.
+- **Cluster sign-in.**
+  - Each cluster can trust your OpenID Connect providers, set once for every cluster or per cluster. Tokens and certificates keep working beside them.
+  - One shared Headlamp in the appliance opens every cluster you may see. Where the administrator switches it on, it opens a cluster signed in as cluster-admin for anyone who may download its admin kubeconfig.
+
+### Upgrades and install
+
+- **Upgrades without a shell.**
+  - Clusters can upgrade Kubernetes on their own inside a maintenance window you set.
+  - Kubehenge upgrades itself from a button, or automatically. It installs only signed releases.
+- **One appliance.**
+  - A script run in the Proxmox VE shell installs Kubehenge as a small LXC container. Its interface creates the management cluster and looks after it from then on.
+  - Infrastructure-as-code users can apply the same module with Terraform/OpenTofu instead.
 
 ## Getting started
 
@@ -33,7 +64,7 @@ curl -fsSLO https://github.com/kubehenge/kubehenge/releases/latest/download/inst
 sh install.sh
 ```
 
-The script checks everything it downloads against checksums it carries, creates the appliance container and prints its address. Sign in there with your Proxmox VE account, set up the management cluster on the setup page it shows on first sign-in, build the VM templates clusters are cloned from (**Administration**, **Templates**), then create clusters. Step by step: [docs/install.md](docs/install.md).
+The script checks everything it downloads against checksums it carries, creates the appliance container and prints its address. Sign in there with your Proxmox VE account. Set up the management cluster on the setup page it shows on first sign-in. Build the VM templates clusters are cloned from (**Administration**, **Templates**), then create clusters. Step by step: [docs/install.md](docs/install.md).
 
 ## Documentation
 

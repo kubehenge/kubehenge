@@ -21,7 +21,7 @@ const (
 )
 
 // turtlesValues name Turtles' image and the Cluster API controller it runs by digest. Turtles'
-// chart names its image by digest alone when its tag is one; the Cluster API operator inside it
+// chart names its image by digest alone when its tag is one. The Cluster API operator inside it
 // runs the core provider's imageUrl as given.
 func turtlesValues(turtles, clusterAPI Image) (string, error) {
 	values, err := yaml.Marshal(map[string]any{
@@ -39,7 +39,7 @@ func turtlesValues(turtles, clusterAPI Image) (string, error) {
 // rancherConfigWaits gives Rancher the values it installs Turtles with before Rancher's chart
 // installs, and reports whether Rancher's chart has to wait, as it does while the cluster cannot
 // be reached. Rancher reads them only from its rancher-config ConfigMap, which its chart makes
-// without them; installed first, it would pull Turtles by tag. The ConfigMap carries the marks
+// without them. Installed first, it would pull Turtles by tag. The ConfigMap carries the marks
 // of Rancher's release, so Helm takes it over as it installs, and keeps the key it does not
 // manage there.
 func (r *Reconciler) rancherConfigWaits(ctx context.Context, cluster *clusterv1.Cluster) (bool, error) {

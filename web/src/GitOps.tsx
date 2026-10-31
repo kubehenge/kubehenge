@@ -158,7 +158,7 @@ function urlProblem(g: GitOpsChoice): string | undefined {
 const knownHostsNeeded = (g: GitOpsChoice): boolean =>
   g.url.trim().startsWith("ssh://") && !(g.engine === "flux" && g.auth === "existingSecret");
 
-/** gitOpsProblems says, by field, what is wrong with a choice; the server checks the same. */
+/** gitOpsProblems says, by field, what is wrong with a choice. The server checks the same. */
 export function gitOpsProblems(g: GitOpsChoice): Partial<Record<GitOpsField, string>> {
   const p: Partial<Record<GitOpsField, string>> = {};
   if (g.engine === "") {

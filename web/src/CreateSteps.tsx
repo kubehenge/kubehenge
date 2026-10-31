@@ -112,7 +112,7 @@ const requestKey = (req: TemplateBuildRequest): string =>
 
 // askFor is what a class's missing template is asked for with, or undefined when there is nothing
 // to ask for: on a node OS that can be chosen, the distribution's template while it is missing or
-// any kubeadm version; or a Talos release without a template.
+// any kubeadm version, or a Talos release without a template.
 function askFor(
   cls: ClusterClass | undefined,
   talos: TalosReleases | undefined,
@@ -252,7 +252,7 @@ function TemplateAsk({
           setBuilds(b);
         }
       } catch {
-        // Without the answer there is nothing to offer; the class's own message stays.
+        // Without the answer there is nothing to offer. The class's own message stays.
       }
     }
     void load();
@@ -392,7 +392,7 @@ export function useFreeAddresses(on: ProbeOn, nodes: number, check: string[]): F
   return found?.key === key ? found.free : undefined;
 }
 
-// At most this many addresses a host answers on are named; the rest are counted.
+// At most this many addresses a host answers on are named. The rest are counted.
 const inUseNamed = 3;
 
 function inUse(addresses: string[]): JSX.Element | undefined {
@@ -507,7 +507,7 @@ export function GeneralStep({
   classes: ClusterClass[];
   cls: ClusterClass | undefined;
   offered: Versions | undefined;
-  /** The Talos releases, for a Talos class; undefined while they load. */
+  /** The Talos releases, for a Talos class. Undefined while they load. */
   talos?: TalosReleases | undefined;
   onChooseClass: (name: string) => void;
   namespaces: string[];
@@ -602,7 +602,7 @@ export function GeneralStep({
   );
 }
 
-// Talos brings Flannel itself; Kubehenge installs the other pod networks its class offers.
+// Talos brings Flannel itself. Kubehenge installs the other pod networks its class offers.
 const ownNetworks: Record<string, string> = { talos: "flannel" };
 
 // Where in the bridge's network the examples of the API and node addresses lie.
@@ -621,7 +621,7 @@ export function NetworkStep({
 }: StepProps & {
   cls: ClusterClass | undefined;
   bridgeOptions: Bridge[];
-  /** The bridge's network, like 192.0.2.0/24, where a node reports it, else the gateway's; the examples are taken from it. */
+  /** The bridge's network, like 192.0.2.0/24, where a node reports it, else the gateway's. The examples are taken from it. */
   network?: string | undefined;
   /** What probing the addresses typed found. */
   checked?: FreeAddresses | undefined;

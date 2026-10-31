@@ -25,10 +25,10 @@ type Builder struct {
 	Node    string
 	// ImportStorage is a file storage with the `import` content type, where images are downloaded.
 	ImportStorage string
-	// Storage holds the templates' disks; on a Proxmox VE cluster it should be shared, so clones can
+	// Storage holds the templates' disks. On a Proxmox VE cluster it should be shared, so clones can
 	// start on any node.
 	Storage string
-	// ISOStorage receives the cloud-init ISO of a bake; empty means the node's first ISO storage.
+	// ISOStorage receives the cloud-init ISO of a bake. Empty means the node's first ISO storage.
 	ISOStorage string
 	Pool       string
 	// Bridge, VLAN and Network connect a VM being baked, which needs to reach package mirrors.
@@ -43,15 +43,15 @@ type Builder struct {
 	// DefaultCPUType for a line without one.
 	CPUType string
 
-	// selectableSettle and selectablePoll pace waitSelectable; zero means selectableSettle and
+	// selectableSettle and selectablePoll pace waitSelectable. Zero means selectableSettle and
 	// pve.PollLongest.
 	selectableSettle time.Duration
 	selectablePoll   time.Duration
-	// execRetry paces waitForExec; zero means defaultExecRetry.
+	// execRetry paces waitForExec. Zero means defaultExecRetry.
 	execRetry time.Duration
 }
 
-// Network is a static address for a VM being baked; without it the VM asks DHCP.
+// Network is a static address for a VM being baked. Without it the VM asks DHCP.
 type Network struct {
 	Address netip.Prefix
 	Gateway netip.Addr
@@ -92,7 +92,7 @@ const (
 // already shows it.
 const selectableSettle = 5 * time.Second
 
-// defaultExecRetry is how often waitForExec tries the guest agent; enabling guest-exec takes a family's
+// defaultExecRetry is how often waitForExec tries the guest agent. Enabling guest-exec takes a family's
 // cloud image a quarter of a minute.
 const defaultExecRetry = 5 * time.Second
 
@@ -527,7 +527,7 @@ func createdAt(meta string) (time.Time, bool) {
 // waitSelectable waits until the cluster's resource view, which Cluster API's Proxmox VE provider
 // selects templates from, shows the new template as the only one with its tags, and has gone on
 // showing it for the settle window without a break. Unlike Find it trusts the view's template
-// flag, as the provider does; the window is what makes that flag hold in every pveproxy worker
+// flag, as the provider does. The window is what makes that flag hold in every pveproxy worker
 // before Create returns.
 func (b *Builder) waitSelectable(ctx context.Context, t *Template, vmid int) error {
 	settle := cmp.Or(b.selectableSettle, selectableSettle)
@@ -606,8 +606,8 @@ func (b *Builder) download(ctx context.Context, storage *proxmox.Storage, image 
 	return waitTask(ctx, task, err, transferTimeout)
 }
 
-// prepare works out, before anything is made, the new template's CPU type and the bake's recipe,
-// refusing a template already being made and a node OS this node's CPU cannot run.
+// prepare works out, before anything is made, the new template's CPU type and the bake's recipe.
+// It refuses a template already being made and a node OS this node's CPU cannot run.
 func (b *Builder) prepare(ctx context.Context, t *Template) (string, *Recipe, error) {
 	if err := b.checkNotInProgress(ctx, t); err != nil {
 		return "", nil, err
@@ -671,7 +671,7 @@ func (b *Builder) checkCPU(ctx context.Context, o NodeOS) error {
 	return nil
 }
 
-// cpuType is the CPU type a new template gets, as CPUType says; a line's first build gets the least
+// cpuType is the CPU type a new template gets, as CPUType says. A line's first build gets the least
 // its node OS runs on.
 func (b *Builder) cpuType(ctx context.Context, t *Template) (string, error) {
 	if b.CPUType != "" {
@@ -780,14 +780,14 @@ func markBuilding(ctx context.Context, vm *proxmox.VirtualMachine) error {
 	return waitTask(ctx, task, err, configTimeout)
 }
 
-// templateDisk is the template's own disk, which capmox clones boot from; builderDisk is where the
+// templateDisk is the template's own disk, which capmox clones boot from. builderDisk is where the
 // family's image boots in image mode, beside it.
 const (
 	templateDisk = "scsi0"
 	builderDisk  = "scsi1"
 )
 
-// bootFrom has the VM boot from the disk alone; capmox appends its cloud-init ISO to it.
+// bootFrom has the VM boot from the disk alone. capmox appends its cloud-init ISO to it.
 func bootFrom(disk string) proxmox.VirtualMachineOption {
 	return proxmox.VirtualMachineOption{Name: "boot", Value: "order=" + disk}
 }
@@ -1052,7 +1052,7 @@ func (b *Builder) logf(format string, args ...any) {
 }
 
 // waitTask waits for a Proxmox VE task started by a call that returned (task, err), and fails if
-// the task did; go-proxmox's own Wait reports only that the task ended.
+// the task did. go-proxmox's own Wait reports only that the task ended.
 func waitTask(ctx context.Context, task *proxmox.Task, err error, timeout time.Duration) error {
 	if err != nil {
 		return fmt.Errorf("starting a Proxmox VE task: %w", err)

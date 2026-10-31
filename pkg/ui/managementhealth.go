@@ -14,7 +14,7 @@ import (
 )
 
 // managementHealthTimeout keeps the Administration page from waiting on a management cluster
-// that does not answer; its card then says so.
+// that does not answer. Its card then says so.
 const managementHealthTimeout = 10 * time.Second
 
 // managementHealthView is how the management cluster itself is doing: its nodes and the

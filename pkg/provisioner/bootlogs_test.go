@@ -25,7 +25,7 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
-// bootFiles holds each VM's files, of those that run; a file it lacks is read as the guest agent
+// bootFiles holds each VM's files, of those that run. A file it lacks is read as the guest agent
 // fails to open one, and every read fails with refused.
 type bootFiles struct {
 	files   map[int64]map[string]string

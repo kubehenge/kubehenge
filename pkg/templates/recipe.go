@@ -34,7 +34,7 @@ const (
 )
 
 // builtCheck is the first check of a bake: its build left its marker. The build failing is only a
-// cloud-init error, which says nothing of why; the end of buildLog does.
+// cloud-init error, which says nothing of why. The end of buildLog does.
 var builtCheck = []string{"sh", "-c", "cloud-init status --wait > /dev/null; test -e " + buildDir + "/built"}
 
 // repository is a package repository a bake adds while it makes the node, in the INI form dnf and
@@ -110,7 +110,7 @@ func minorSeries(v string) string {
 // their keys, and the command that runs the family's build.sh on them.
 func recipeBuild(b Bake, repos []*repository, keys map[string]string, dir string) (map[string]string, []string, error) {
 	if b.Distribution == Kubeadm && !versionRE.MatchString(b.KubernetesVersion) {
-		return nil, nil, fmt.Errorf("kubernetes version %q is not of the form v1.2.3", b.KubernetesVersion)
+		return nil, nil, fmt.Errorf("the Kubernetes version %q is not of the form v1.2.3", b.KubernetesVersion)
 	}
 	files := map[string]string{}
 	for _, r := range repos {
@@ -199,7 +199,7 @@ func nodeChecks(b Bake) [][]string {
 	checks := [][]string{
 		{cloudInit, "status", "--wait"},
 		active("qemu-guest-agent"),
-		// A template's own boot keeps what the bake enabled; a clone's first boot applies the
+		// A template's own boot keeps what the bake enabled. A clone's first boot applies the
 		// presets again, and keeps only what they name.
 		preset("enable qemu-guest-agent.service"),
 		preset("enable " + bootLogUnit),
@@ -274,7 +274,7 @@ func preset(line string) []string {
 var nodeCleanup = [][]string{
 	{cloudInit, "clean", "--logs", "--seed", "--machine-id", "--configs", "all"},
 	{"sh", "-c", "journalctl --rotate > /dev/null && journalctl --vacuum-time=1s > /dev/null"},
-	// The timer stays enabled for clones; stopped, it copies none of the bake's journal again.
+	// The timer stays enabled for clones. Stopped, it copies none of the bake's journal again.
 	{systemctl, "stop", bootLogUnit},
 	{"rm", "-rf", "/var/log/kubehenge"},
 	{"fstrim", "--all"},

@@ -111,7 +111,7 @@ let nextKey = 0;
 const entry = (target: BackupTarget): Entry => ({ key: nextKey++, target });
 
 /**
- * BackupTargets edits the list of S3 stores clusters back up to, starting from initial. Each entry
+ * BackupTargets edits the list of S3 stores clusters back up to. It starts from initial. Each entry
  * keeps its key while those before it are removed, so its inputs keep their contents and focus. A
  * field shows its problem once it was edited, or every field once the user tried to go on.
  */

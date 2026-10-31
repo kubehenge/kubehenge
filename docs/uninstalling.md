@@ -1,6 +1,6 @@
 # Uninstalling
 
-Remove Kubehenge's clusters, then its management cluster, then the appliance, in that order. Each step needs the one before it: the management cluster cleans up after the clusters it created, and the appliance holds the only copy of the management cluster's state.
+Work through these steps in order. The management cluster cleans up the Proxmox VE objects of the clusters it created. The appliance holds the only copy of the management cluster's state.
 
 1. [Delete the clusters](#delete-the-clusters).
 2. [Remove the management cluster](#remove-the-management-cluster).
@@ -15,22 +15,26 @@ Delete every cluster from its page (**Delete**, then type its name), or with kub
 kubectl delete clusters.cluster.x-k8s.io --all --all-namespaces
 ```
 
-Deleting a cluster deletes its VMs and persistent volumes, and removes it from Rancher first. Once its VMs are gone, Kubehenge's controller removes the cluster's pool, its Proxmox VE user and API token, and the VM that owned its volumes, deleting the volumes on other nodes' local storage first. It waits while a node that may hold some of them is offline. A cluster is gone when it no longer shows in the list.
+Deleting a cluster deletes its VMs and persistent volumes, and takes it out of Rancher where it was registered. Kubehenge's controller then removes its Proxmox VE pool, user, token and volume owner VM ([details](clusters.md#delete)). A cluster is gone when it no longer shows in the list.
 
-Deleting the cluster that runs Rancher first removes every registered cluster from Rancher.
+Deleting the cluster that runs Rancher takes every cluster registered there out of Rancher first.
 
 ## Remove the management cluster
 
 ### In the appliance
 
-On the Administration page, **Remove Kubehenge** takes the state passphrase and the word `remove`. It refuses while any cluster exists, since their Proxmox VE objects are cleaned up by the management cluster. It also refuses while a run of the management cluster is going on; try again once that run has ended. A wrong passphrase stops it before anything is deleted. It then:
+On the Administration page, **Remove Kubehenge** takes the state passphrase and the word `remove`. It refuses while any cluster exists. It also refuses while a run of the management cluster is going on. Try again once that run has ended. A wrong passphrase stops it before anything is deleted.
 
-- deletes the VM templates in the template pool, `kubehenge-templates`;
-- switches automatic upgrades of the management cluster off, deleting what the appliance kept for them and the user `kubehenge-upgrader@pve` with its token ([upgrading.md](upgrading.md#automatically-after-kubehenge));
-- destroys the management cluster with OpenTofu, with every Proxmox VE object its module made ([below](#what-the-module-made));
-- switches the [backups of its etcd](install.md#back-up-the-management-clusters-etcd) off, deleting the access key and talosconfig the appliance kept for them. The snapshots stay in the target.
+#### What it does
 
-The page follows the log. The appliance stays, back at its first run with the last settings filled in, ready to set up again; the emptied state is deleted, so the next setup chooses a new passphrase. Removal needs the same [privileges](install.md#who-may-set-it-up) on `/` as the setup.
+It then:
+
+- deletes the VM templates in the template pool, `kubehenge-templates`.
+- switches automatic upgrades of the management cluster off ([upgrading.md](upgrading.md#automatically-after-kubehenge)). It deletes what the appliance kept for them and the user `kubehenge-upgrader@pve` with its token.
+- destroys the management cluster with OpenTofu, with every Proxmox VE object its module made ([below](#what-the-module-made)).
+- switches the [backups of its etcd](install.md#back-up-the-management-clusters-etcd) off and deletes the access key and talosconfig the appliance kept for them. The snapshots stay in the target.
+
+The page follows the log. The appliance stays, back at its first run with the last settings filled in, ready to set up again. The emptied state is deleted. The next setup chooses a new passphrase. Removal needs the same [privileges](install.md#who-may-set-it-up) on `/` as the setup.
 
 ### With Terraform/OpenTofu
 
@@ -46,15 +50,20 @@ Destroy removes every Proxmox VE object the module made ([below](#what-the-modul
 
 The names below are the defaults. The users, groups and roles start with the management cluster's name, `kubehenge` unless another was set.
 
-- the management cluster's VMs, and the Talos disk image on each node;
-- the pools: `kubehenge-management` for the management cluster, `kubehenge` for the workload clusters and `kubehenge-templates` for the VM templates;
-- the users, each with its API token: `kubehenge-cluster-api@pve` for Cluster API and `kubehenge-provisioner@pve` for Kubehenge's controller; `kubehenge-ha@pve` where Proxmox VE HA is on, `kubehenge-etcd-restore@pve` where etcd restores are on, and `kubehenge-template-builder@pve` where the weekly template build is on;
-- the groups: `kubehenge-clusters`, which every cluster's user joins, and `kubehenge-clusters-audit`, for the HA group labels, unless they were switched off for every cluster;
+- the management cluster's VMs, and the Talos disk image on each node.
+- the pools: `kubehenge-management` for the management cluster, `kubehenge` for the workload clusters and `kubehenge-templates` for the VM templates.
+- the users, each with its API token:
+  - `kubehenge-cluster-api@pve` for Cluster API
+  - `kubehenge-provisioner@pve` for Kubehenge's controller
+  - `kubehenge-ha@pve` where Proxmox VE HA is on
+  - `kubehenge-etcd-restore@pve` where etcd restores are on
+  - `kubehenge-template-builder@pve` where the weekly template build is on
+- the groups: `kubehenge-clusters`, which every cluster's user joins, and `kubehenge-clusters-audit`, for the HA group labels, unless they were switched off for every cluster.
 - the roles, each named `kubehenge-…`, and the permissions that grant them.
 
 ## Remove the appliance
 
-Remove the management cluster first. Without the appliance its state is gone, and whatever the management cluster made would have to be found and deleted by hand.
+Remove the management cluster first. Without the appliance, the management cluster's state is gone. Everything the setup made then has to be found and deleted by hand ([the list](install.md#losing-the-passphrase)).
 
 In the shell of the node the appliance runs on, as root:
 
@@ -73,15 +82,15 @@ On every node where the Kubernetes entry was added (when installing the applianc
 sh /usr/local/sbin/kubehenge-pve-entry --remove
 ```
 
-This takes the line out of Proxmox VE's page template, and removes the entry's script, its setting, the apt hook and the installed copy itself, returning the node's interface to its packaged state. Reload Proxmox VE's interface in the browser afterwards.
+This takes the line out of Proxmox VE's page template. It removes the entry's script, its setting, the apt hook and the installed copy itself. The node's interface returns to its packaged state. Reload Proxmox VE's interface in the browser afterwards.
 
 ## What stays on Proxmox VE
 
 After these steps, Kubehenge leaves behind only what it did not create for itself:
 
-- **The Debian container template** the installer downloaded to the `local` storage; `pveam list local` shows it, and `pveam remove` deletes it.
+- **The Debian container template** the installer downloaded to the `local` storage. `pveam list local` shows it, `pveam remove` deletes it.
 - **Backups of the appliance** in your backup storages. They hold the management cluster's state, encrypted with the state passphrase.
-- **API tokens you made** for Terraform/OpenTofu or for `kubehenge template create`: remove them with `pveum user token remove`.
+- **API tokens you made** for Terraform/OpenTofu or for `kubehenge template create`. Remove them with `pveum user token remove`.
 - **ACLs and roles you added** to share clusters, on the workload pool, storages and bridges.
 - **Templates outside the template pool**, if you created any with another `--pool`.
 - **Redirect URLs registered with identity providers** for the interface's OpenID sign-in and the shared Headlamp.

@@ -320,7 +320,7 @@ func TestRevisionsAndPaths(t *testing.T) {
 }
 
 // gitOpsWorkload is a workload cluster that keeps what is applied to it and the objects of the
-// engines' CRDs, which exist once installed; FluxInstances wait for the operator to finish deleting.
+// engines' CRDs, which exist once installed. FluxInstances wait for the operator to finish deleting.
 type gitOpsWorkload struct {
 	client.WithWatch
 

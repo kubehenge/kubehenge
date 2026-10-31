@@ -1,6 +1,6 @@
-# The RKE2 and k3s releases a cluster may run: each with the SHA-256 of its checksum file and of its
+# The RKE2 and k3s releases a cluster may run. Each has the SHA-256 of its checksum file and of its
 # install script, which its nodes check before installing anything. `make release-pins` adds the
-# releases published since; a pin never changes. The newest release of each, which Renovate raises,
+# releases published since. A pin never changes. The newest release of each, which Renovate raises,
 # has to be pinned.
 # renovate: datasource=github-releases depName=rancher/rke2
 # rke2 = v1.37.1+rke2r1

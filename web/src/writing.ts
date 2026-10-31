@@ -151,7 +151,7 @@ export const banned = [
 const bannedAlternatives = banned.map((w) => (w === "let's" ? "let's(?! encrypt)" : w)).join("|");
 const bannedPattern = new RegExp(String.raw`(?<![\p{L}'-])(${bannedAlternatives})(?![\p{L}'-])`, "iu");
 
-// Patterns of padding: "not only … but", "not just … but", Latin abbreviations, "&" for "and".
+// Patterns of padding: `"not only … but"`, `"not just … but"`, Latin abbreviations, "&" for "and".
 const padding: readonly [RegExp, string][] = [
   [/\bnot (?:just|only|merely)\b.*\bbut\b/iu, "not only … but"],
   [/\b(?:e\.g|i\.e|etc)\./iu, "Latin abbreviation"],
@@ -274,7 +274,7 @@ const attributeKinds: Record<string, Seen> = {
   submitLabel: "button",
 };
 
-// Attributes no one reads: names, values, references, styling and the like.
+// Attributes no one reads: styling, names, values, references and the like.
 const unread =
   /^(?:accept|aria-(?:controls|current|describedby|haspopup|labelledby|live|orientation|sort)|autoComplete|className|colSpan|d|data-.*|dir|download|enterKeyHint|fill|form|height|href|htmlFor|id|inputMode|key|kind|lang|list|max|method|min|mode|name|path|pattern|rel|role|rowSpan|scope|size|src|state|step|stroke|style|target|to|tone|type|value|variant|view|viewBox|width|wrap|xmlns)$/u;
 
@@ -386,7 +386,7 @@ class Gatherer {
     }
     const text = decode(raw).replaceAll(/\s+/gu, " ").trim();
     const bare = text.replaceAll(slot, "");
-    // Single tokens are identifiers, paths, units and values; text has words.
+    // Single tokens are identifiers, paths, units and values. Text has words.
     if (!/\p{L}{2}/u.test(bare) || /^[\w.@/:+#=-]*$/u.test(bare.trim())) {
       return;
     }
@@ -491,7 +491,7 @@ class Gatherer {
   }
 
   private children(node: AstNode, kind: Seen): void {
-    // Types say nothing to users; the expressions inside an assertion do.
+    // Types say nothing to users. The expressions inside an assertion do.
     if (node.type.startsWith("TS")) {
       if (/^TS(?:As|Satisfies|NonNull|Instantiation)Expression$/u.test(node.type)) {
         this.visit(field(node, "expression"), kind);
@@ -529,7 +529,7 @@ class Gatherer {
     for (const attr of attrs.filter((a) => a.type === "JSXAttribute")) {
       const name = nameOf(field(attr, "name"));
       let kind: Seen = attributeKinds[name] ?? (unread.test(name) ? "skip" : "text");
-      // A select's options hold their text as children; their value is data.
+      // A select's options hold their text as children. Their value is data.
       if (element === "option" && name === "value") {
         kind = "skip";
       }
@@ -591,7 +591,7 @@ class Gatherer {
     if (expr.type === "TemplateLiteral") {
       return this.template(expr, kind);
     }
-    // An element or a list of them stands on its own; anything else is a value in the text.
+    // An element or a list of them stands on its own. Anything else is a value in the text.
     if (expr.type === "JSXElement" || expr.type === "JSXFragment") {
       this.visit(expr, kind);
       return "\n";

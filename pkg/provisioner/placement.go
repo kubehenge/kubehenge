@@ -170,7 +170,7 @@ func (h *Hooks) requestCluster(ctx context.Context, variables []runtimehooksv1.V
 	return c, nil
 }
 
-// placementPatch names the nodes on the cluster's ProxmoxClusterTemplate; it is nil while there
+// placementPatch names the nodes on the cluster's ProxmoxClusterTemplate. It is nil while there
 // are none to name.
 func (h *Hooks) placementPatch(ctx context.Context, cluster *clusterv1.Cluster, chosen []string) ([]byte, error) {
 	online, err := h.onlineNodes(ctx, cluster)

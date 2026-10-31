@@ -5,8 +5,9 @@
 
 ## How it was tested
 
-<!-- Unit tests added or changed; for ClusterClasses, images or add-ons, the end-to-end run. -->
+<!-- Unit tests added or changed. For ClusterClasses, images or add-ons, the end-to-end run. -->
 
 - [ ] `make test` passes
 - [ ] Documentation updated where behaviour changed
-- [ ] The rules in CONTRIBUTING.md hold (British English, comments say why, no secrets)
+- [ ] The rules in CONTRIBUTING.md hold
+- [ ] Comments say why, and no secrets are committed

@@ -65,7 +65,7 @@ func TestHARulesOfferedByNameAndNodes(t *testing.T) {
 		return cm.Data[HARulesKey]
 	}
 
-	// Names and the nodes each allows only; neither disabled rules, nor those allowing no node, nor
+	// Names and the nodes each allows only. Neither disabled rules, nor those allowing no node, nor
 	// those the controller keeps for clusters.
 	if err := h.publish(ctx); err != nil {
 		t.Fatal(err)

@@ -30,7 +30,7 @@ type versionsView struct {
 	Older []string `json:"older,omitempty"`
 	// Stable is the one its publisher calls stable, when it names one.
 	Stable string `json:"stable,omitempty"`
-	// Error says why there are none to offer; the version is then typed in.
+	// Error says why there are none to offer. The version is then typed in.
 	Error string `json:"error,omitempty"`
 }
 

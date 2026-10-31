@@ -61,7 +61,7 @@ func ConnectSession(cfg Config, t *Ticket) (*proxmox.Client, error) {
 }
 
 // Upstream returns the API's address and a transport that verifies its certificate, for passing on
-// calls that carry credentials of their own; cfg.Token is not used. It makes no request.
+// calls that carry credentials of their own. cfg.Token is not used. It makes no request.
 func (cfg Config) Upstream() (*url.URL, http.RoundTripper, error) {
 	_, httpClient, err := cfg.transport()
 	if err != nil {
@@ -125,7 +125,7 @@ const (
 
 // connections sends reads over kept connections and every other request over a connection of its
 // own. pveproxy answers some calls, query-url-metadata among them, inside the worker that took
-// them; while one waits, that worker serves nothing, and afterwards it drops every connection it
+// them. While one waits, that worker serves nothing, and afterwards it drops every connection it
 // held, requests already sent on them included. Go sends a dropped read again on a new connection,
 // which only a worker that is serving accepts, but never a write.
 type connections struct{ reads, writes *http.Transport }

@@ -37,7 +37,7 @@ onBeforeUnmount(() => stop());
           <div class="hero-head">
             <h1 id="h-hero" class="display">Kubernetes<br />for <span>Proxmox VE</span></h1>
             <div class="lede">
-              <p class="prose">Kubehenge raises Kubernetes clusters on Proxmox VE and keeps them standing.</p>
+              <p class="prose">Kubehenge creates Kubernetes clusters on Proxmox VE and keeps them running.</p>
               <div class="win cmdbox" data-copy-scope>
                 <div class="bar">
                   <span class="title">as root, in a Proxmox VE node's shell</span><span class="spacer"></span
@@ -59,13 +59,13 @@ onBeforeUnmount(() => stop());
                   <span class="lb">raise another</span><code>kubectl apply -f web.yaml</code>
                 </button>
                 <button class="btn act" type="button" data-act="decorate" disabled>
-                  <span class="lb">decorate one</span><code>headlamp: on, in dev</code>
+                  <span class="lb">decorate one</span><code>headlamp: on, in edge</code>
                 </button>
                 <button class="btn act" type="button" data-act="connect" disabled>
-                  <span class="lb">connect two</span><code>cluster mesh: ci ↔ dev</code>
+                  <span class="lb">connect two</span><code>cluster mesh: prod ↔ staging</code>
                 </button>
                 <button class="btn act" type="button" data-act="topple" disabled>
-                  <span class="lb">topple one</span><code>kubectl -n clusters delete cluster dev</code>
+                  <span class="lb">topple one</span><code>kubectl -n clusters delete cluster edge</code>
                 </button>
               </div>
               <output class="said" data-said aria-live="polite"></output>
@@ -80,28 +80,27 @@ onBeforeUnmount(() => stop());
             <h2 id="h-does" class="display">What it does</h2>
             <ul>
               <li>
-                <b>Raises clusters.</b> kubeadm, RKE2, k3s or Talos, built by Cluster API from VM templates, from
-                <b>Create cluster</b> in the interface or with <code>kubectl apply</code>. The nodes of kubeadm, RKE2
-                and k3s run AlmaLinux or Rocky Linux as an image-mode system: read-only, SELinux enforcing, nothing on
-                it a node does not need, and built again every week with its updates; Talos nodes run Talos, upgraded in
-                place. Each cluster gets a Proxmox VE pool, user and API token of its own, an ingress controller on
-                every node, and, if you like, addresses for its load-balanced Services from MetalLB or kube-vip.
+                <b>Creates clusters.</b> kubeadm, RKE2, k3s or Talos, built by Cluster API from VM templates. Create one
+                with <b>Create cluster</b> in the interface or with <code>kubectl apply</code>. kubeadm, RKE2 and k3s
+                nodes run AlmaLinux or Rocky Linux as an image-mode system. It is read-only, runs SELinux enforcing,
+                holds only what a node needs and is built again every week with its updates. Talos nodes run Talos,
+                upgraded in place. Each cluster gets its own Proxmox VE pool, user and API token, and an ingress
+                controller on every node. MetalLB or kube-vip can give its load-balanced Services addresses.
               </li>
               <li>
-                <b>Decorates them.</b> Add-ons per cluster, when it is created or later: Headlamp, a web interface
-                inside the cluster; Rancher, with every other cluster registered in it; monitoring, pod security and
-                Istio; backups with Velero to your S3 store, encrypted with the cluster's own keys; GitOps with Argo CD
-                or Flux, syncing it from a Git repository; and Cilium Cluster Mesh, which joins clusters into one pod
-                network.
+                <b>Add-ons.</b> Add them when a cluster is created or later. Headlamp is a web interface inside the
+                cluster. Rancher registers every other cluster. Velero backs up to your S3 store, encrypted with the
+                cluster's own keys. Argo CD or Flux sync the cluster from a Git repository. Cilium Cluster Mesh joins
+                clusters into one pod network. Monitoring, pod security and Istio are add-ons too.
               </li>
               <li>
-                <b>Signs in with your Proxmox VE users.</b> Any realm Proxmox VE has, second factor included; Proxmox
-                VE's own permissions on each cluster's pool decide who may change it.
+                <b>Signs in with your Proxmox VE users.</b> Any Proxmox VE realm, second factor included. Proxmox VE's
+                own permissions on each cluster's pool decide who may change it.
               </li>
               <li>
-                <b>Keeps them standing.</b> A node that stays not ready for five minutes is replaced. Kubernetes is
-                upgraded one node at a time, by hand or inside a maintenance window, and Kubehenge upgrades itself,
-                installing only signed releases.
+                <b>Keeps them running.</b> A node that stays not ready for five minutes is replaced. Kubernetes is
+                upgraded one node at a time, by hand or inside a maintenance window. Kubehenge upgrades itself and
+                installs only signed releases.
               </li>
             </ul>
           </div>
@@ -137,16 +136,16 @@ onBeforeUnmount(() => stop());
             <h2 id="h-inst" class="display">One line, one container</h2>
             <ul class="lines">
               <li>
-                One unprivileged Debian container on a Proxmox VE 9 node, and nothing else on the node unless you say
-                yes to a Kubernetes button in its interface.
+                One unprivileged Debian container on a Proxmox VE 9 node. Nothing else changes on the node unless you
+                add the Kubernetes button to Proxmox VE's interface.
               </li>
               <li>
-                Every download is checked against the checksums the script carries; the appliance's certificate is
+                Every download is checked against the checksums the script carries. The appliance's certificate is
                 signed by the Proxmox VE cluster's own CA.
               </li>
               <li>
-                Then, from the interface, an administrator sets up the management cluster: a few Talos Linux VMs running
-                Cluster API and Kubehenge's controller.
+                Then, from the interface, an administrator sets up the management cluster: one, three or five Talos
+                Linux VMs running Cluster API and Kubehenge's controller.
               </li>
             </ul>
             <p class="readit">
@@ -165,9 +164,9 @@ onBeforeUnmount(() => stop());
         </div>
         <div class="wrap">
           <p class="alpha">
-            <b>Kubehenge is alpha.</b> Not everything on this page is built yet (the <a href="/docs/roadmap">roadmap</a>
-            says what is), and any release may still change it completely, its settings, interface and ClusterClasses
-            included. Do not run your production on it yet.
+            <b>Kubehenge is alpha.</b> Not everything on this page is built yet. The <a href="/docs/roadmap">roadmap</a>
+            says what is. Any release may change it completely, its settings, interface and ClusterClasses included. Do
+            not run production on it yet.
           </p>
         </div>
       </section>

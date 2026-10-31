@@ -88,22 +88,22 @@ type Server struct {
 	// cluster up.
 	Kube client.Client
 	// Probe tells which of the addresses a host answers on, for the addresses a new cluster is
-	// offered; nil probes them from where the interface runs.
+	// offered. Nil probes them from where the interface runs.
 	Probe func(ctx context.Context, addrs []netip.Addr) map[netip.Addr]bool
 	// Appliance is set when the interface runs in Kubehenge's appliance, which creates and looks
 	// after the management cluster.
 	Appliance *appliance.Appliance
 	// ApplianceVMID is the appliance's own guest ID in Proxmox VE, for telling administrators
-	// whether it is backed up; 0 when not known.
+	// whether it is backed up. 0 when not known.
 	ApplianceVMID int
-	// CertificateExpires is when the certificate the interface serves runs out; zero when not
+	// CertificateExpires is when the certificate the interface serves runs out. Zero when not
 	// known. It is read at start, as the certificate is.
 	CertificateExpires time.Time
 	// ProxmoxInsecure tells administrators that the appliance and the clusters do not verify the
 	// Proxmox VE API's certificate, as it was installed.
 	ProxmoxInsecure bool
-	// ProxmoxURL is the Proxmox VE API's address, whose web interface opens a machine's console;
-	// empty offers no console.
+	// ProxmoxURL is the Proxmox VE API's address, whose web interface opens a machine's console.
+	// Empty offers no console.
 	ProxmoxURL string
 	// NewKube makes the client for the management cluster from the kubeconfig the appliance wrote.
 	NewKube func(kubeconfig []byte) (client.Client, error)
@@ -112,10 +112,10 @@ type Server struct {
 	// MakeTemplate builds VM templates in the appliance with an administrator's session.
 	MakeTemplate MakeTemplate
 	// Releases are the Kubernetes versions RKE2 and k3s publish, the same channels the
-	// controller's automatic upgrades read; nil leaves their version to be typed in.
+	// controller's automatic upgrades read. Nil leaves their version to be typed in.
 	Releases     provisioner.Releases
 	releaseCache releaseCache
-	// TalosReleases lists the Talos releases the Image Factory builds; nil offers only those the
+	// TalosReleases lists the Talos releases the Image Factory builds. Nil offers only those the
 	// template pool has.
 	TalosReleases func(ctx context.Context) ([]string, error)
 	// Headlamp is set when a shared Headlamp server runs beside the interface.
@@ -135,12 +135,12 @@ type Server struct {
 	// SessionMaxAge ends every session this long after sign-in.
 	SessionMaxAge time.Duration
 	// ConnectWorkload reaches a workload cluster's API server with the token of one of Kubehenge's
-	// identities in it; unset, it connects over HTTPS trusting the cluster's CA alone.
+	// identities in it. Unset, it connects over HTTPS trusting the cluster's CA alone.
 	ConnectWorkload func(server string, ca []byte, token string) (*Workload, error)
-	// OpenStore reaches the backup targets clusters' etcd snapshots are in; unset, over HTTPS.
+	// OpenStore reaches the backup targets clusters' etcd snapshots are in. Unset, over HTTPS.
 	OpenStore provisioner.OpenStore
 	// NewClientset reaches the management cluster for what its controller-runtime client cannot
-	// read, the providers' logs a support bundle carries; nil leaves bundles without them.
+	// read, the providers' logs a support bundle carries. Nil leaves bundles without them.
 	NewClientset func() (kubernetes.Interface, error)
 	Log          *slog.Logger
 
@@ -158,7 +158,7 @@ type Server struct {
 	vmLoads    vmLoadCache
 	workloads  workloadConns
 	changes    changes
-	// clock is the health page's time; unset, the system's.
+	// clock is the health page's time. Unset, the system's.
 	clock func() time.Time
 }
 
@@ -174,8 +174,8 @@ const (
 	addressFailuresAllowed = 20
 )
 
-// Run prepares the server and keeps its sessions, upgrades and Headlamp up to date until ctx ends,
-// returning once each of them has stopped.
+// Run prepares the server and keeps its sessions, upgrades and Headlamp up to date until ctx ends.
+// It returns once each of them has stopped.
 func (s *Server) Run(ctx context.Context) {
 	s.init()
 	var wg sync.WaitGroup
@@ -233,7 +233,7 @@ func (s *Server) Handler() http.Handler {
 	return withRequestID(securityHeaders(mux))
 }
 
-// healthz tells a monitor that the interface answers, unauthenticated; it says nothing more, so it
+// healthz tells a monitor that the interface answers, unauthenticated. It says nothing more, so it
 // tells no one else anything about the appliance.
 func healthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -416,7 +416,7 @@ func (s *Server) assets(w http.ResponseWriter, r *http.Request) {
 	if tag, err := s.etag(served); err == nil {
 		h.Set("ETag", tag)
 	}
-	// ServeContent answers a known ETag with 304 and serves ranges; the Content-Type set above
+	// ServeContent answers a known ETag with 304 and serves ranges. The Content-Type set above
 	// keeps it from guessing.
 	http.ServeContent(w, r, "", time.Time{}, rs)
 }
@@ -426,7 +426,7 @@ type assetEncoding struct{ coding, suffix string }
 // precompressed are the forms the build writes beside each text asset, by preference.
 var precompressed = []assetEncoding{{"br", ".br"}, {"gzip", ".gz"}}
 
-// compressed opens the preferred form of an asset the request accepts; not ok when there is none.
+// compressed opens the preferred form of an asset the request accepts. Not ok when there is none.
 func (s *Server) compressed(r *http.Request, name string) (fs.File, assetEncoding, bool) {
 	for _, e := range precompressed {
 		if !accepts(r, e.coding) {
@@ -466,7 +466,7 @@ type etagCache struct {
 // etagBytes of an asset's SHA-256 tell its versions apart.
 const etagBytes = 16
 
-// etag is a strong validator for an asset, from its content; worked out once per file.
+// etag is a strong validator for an asset, from its content. Worked out once per file.
 func (s *Server) etag(name string) (string, error) {
 	c := &s.etags
 	c.mu.Lock()
