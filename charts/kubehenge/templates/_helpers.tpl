@@ -1188,6 +1188,18 @@ gateway:
 {{- end -}}
 
 {{/*
+What the Traefik RKE2 and k3s bring requests of a node, as Kubehenge's own Traefik does: their
+charts request nothing, and on a node every add-on starting at once kept busy, Traefik went
+unscheduled for long enough that its liveness probe restarted it.
+*/}}
+{{- define "kubehenge.traefikResources" -}}
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+{{- end -}}
+
+{{/*
 The Secret in kube-system whose values.yaml Kubehenge's controller keeps in step with the
 cluster's certificates, merged over the HelmChartConfig's own values: the default certificate and
 the Gateway's HTTPS listener. helm-controller upgrades Traefik when it changes, and installs it

@@ -103,8 +103,9 @@ func withImage(values map[string]any, image Image) map[string]any {
 // cluster without workers has no other nodes to answer from.
 func metalLBValues() map[string]any {
 	return map[string]any{
-		"speaker": map[string]any{"ignoreExcludeLB": true},
-		"frrk8s":  map[string]any{"enabled": false},
+		"speaker":    map[string]any{"ignoreExcludeLB": true, "resources": reserved(cpu10m, memory64Mi)},
+		"controller": map[string]any{"resources": reserved(cpu10m, memory64Mi)},
+		"frrk8s":     map[string]any{"enabled": false},
 	}
 }
 

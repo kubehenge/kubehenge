@@ -328,4 +328,7 @@ func checkTraefikValues(t *testing.T, class string, values map[string]any) {
 	if strict, _, _ := unstructured.NestedBool(values, "core", "strictTLSOptions"); !strict {
 		t.Errorf("%s: %s", class, fmt.Sprint(values))
 	}
+	if cpu, _, _ := unstructured.NestedString(values, "resources", "requests", "cpu"); cpu == "" {
+		t.Errorf("%s: Traefik requests no CPU", class)
+	}
 }

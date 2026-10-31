@@ -166,6 +166,7 @@ spec:
                             statusAddress:
                               ip: {{ "{{ .controlPlaneEndpoint | quote }}" }}
                         {{- include "kubehenge.traefikGatewayValues" . | nindent 24 }}
+                        {{- include "kubehenge.traefikResources" . | nindent 24 }}
             - op: add
               path: /spec/template/spec/serverConfig/cni
               valueFrom:

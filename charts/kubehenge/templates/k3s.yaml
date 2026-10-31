@@ -191,6 +191,7 @@ spec:
                         core:
                           strictTLSOptions: true
                         {{- include "kubehenge.traefikGatewayValues" . | nindent 24 }}
+                        {{- include "kubehenge.traefikResources" . | nindent 24 }}
     # The k3s provider takes the ranges only from its own server configuration, never from the
     # Cluster's clusterNetwork, which Kubehenge's range check and every other distribution read.
     {{- range $range := list (dict "name" "pods" "field" "clusterCidr") (dict "name" "services" "field" "serviceCidr") }}
