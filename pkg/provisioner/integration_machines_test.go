@@ -15,7 +15,8 @@ import (
 )
 
 // TestIntegrationInterfaceMarksMachines holds the interface's account to Cluster API's remediation
-// mark on Machines: it sets and takes back that annotation, and changes nothing else of them.
+// and deletion marks on Machines: it sets and takes back those annotations, and changes nothing
+// else of them.
 func TestIntegrationInterfaceMarksMachines(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
 	cfg, admin := startAPIConfig(t)
 	ctx := context.Background()
@@ -31,7 +32,7 @@ func TestIntegrationInterfaceMarksMachines(t *testing.T) { //nolint:paralleltest
 	patch := func(c client.Client, body string) error {
 		return c.Patch(ctx, m.DeepCopy(), client.RawPatch(types.MergePatchType, []byte(body)))
 	}
-	const outside = "changes nothing of a Machine but the " + clusterv1.RemediateMachineAnnotation
+	const outside = "changes nothing of a Machine but the " + clusterv1.RemediateMachineAnnotation + " and " + clusterv1.DeleteMachineAnnotation + " annotations"
 
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
 		err := patch(ui, `{"metadata":{"annotations":{"probe":"x"}}}`)
@@ -49,11 +50,13 @@ func TestIntegrationInterfaceMarksMachines(t *testing.T) { //nolint:paralleltest
 		}
 	}
 
-	if err := patch(ui, `{"metadata":{"annotations":{"`+clusterv1.RemediateMachineAnnotation+`":""}}}`); err != nil {
-		t.Fatalf("marking a machine for replacement: %v", err)
-	}
-	if err := patch(ui, `{"metadata":{"annotations":{"`+clusterv1.RemediateMachineAnnotation+`":null}}}`); err != nil {
-		t.Fatalf("taking the mark back: %v", err)
+	for _, mark := range []string{clusterv1.RemediateMachineAnnotation, clusterv1.DeleteMachineAnnotation} {
+		if err := patch(ui, `{"metadata":{"annotations":{"`+mark+`":""}}}`); err != nil {
+			t.Fatalf("marking a machine with %s: %v", mark, err)
+		}
+		if err := patch(ui, `{"metadata":{"annotations":{"`+mark+`":null}}}`); err != nil {
+			t.Fatalf("taking %s back: %v", mark, err)
+		}
 	}
 
 	for what, body := range map[string]string{
@@ -62,7 +65,7 @@ func TestIntegrationInterfaceMarksMachines(t *testing.T) { //nolint:paralleltest
 		"changing a label":              `{"metadata":{"labels":{"` + clusterv1.ClusterNameLabel + `":"two"}}}`,
 		"adding a finalizer":            `{"metadata":{"finalizers":["kubehenge.dev/held"]}}`,
 		"changing the spec":             `{"spec":{"version":"v1.36.5"}}`,
-		"marking and changing the spec": `{"metadata":{"annotations":{"` + clusterv1.RemediateMachineAnnotation + `":""}},"spec":{"version":"v1.36.5"}}`,
+		"marking and changing the spec": `{"metadata":{"annotations":{"` + clusterv1.DeleteMachineAnnotation + `":""}},"spec":{"version":"v1.36.5"}}`,
 	} {
 		if err := patch(ui, body); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), outside) {
 			t.Errorf("%s: %v, want refused", what, err)

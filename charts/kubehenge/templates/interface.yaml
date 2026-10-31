@@ -314,10 +314,12 @@ spec:
   validationActions: [Deny]
 {{- /*
 RBAC cannot narrow a patch to one annotation, so this policy holds the interface's changes to
-Machines to Cluster API's remediation mark, which a cluster's health check acts on as on a node that
-stays not ready: setting it or taking it back, and nothing else of the Machine.
+Machines to two of Cluster API's marks: remediation, which a cluster's health check acts on as on a
+node that stays not ready, and deletion, which picks the machine a shrinking pool deletes first.
+Setting them or taking them back, and nothing else of the Machine.
 */}}
-{{- $mark := "cluster.x-k8s.io/remediate-machine" }}
+{{- $marks := "['cluster.x-k8s.io/remediate-machine', 'cluster.x-k8s.io/delete-machine']" }}
+{{- $outside := "the interface changes nothing of a Machine but the cluster.x-k8s.io/remediate-machine and cluster.x-k8s.io/delete-machine annotations" }}
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -343,14 +345,14 @@ spec:
         && (!has(object.metadata.finalizers) || object.metadata.finalizers == oldObject.metadata.finalizers)
         && has(object.metadata.ownerReferences) == has(oldObject.metadata.ownerReferences)
         && (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences == oldObject.metadata.ownerReferences)
-      message: the interface changes nothing of a Machine but the {{ $mark }} annotation
+      message: {{ $outside }}
     - expression: >-
-        (!has(object.metadata.annotations) || object.metadata.annotations.all(k, k == '{{ $mark }}'
+        (!has(object.metadata.annotations) || object.metadata.annotations.all(k, k in {{ $marks }}
         || (has(oldObject.metadata.annotations) && k in oldObject.metadata.annotations
         && oldObject.metadata.annotations[k] == object.metadata.annotations[k])))
-        && (!has(oldObject.metadata.annotations) || oldObject.metadata.annotations.all(k, k == '{{ $mark }}'
+        && (!has(oldObject.metadata.annotations) || oldObject.metadata.annotations.all(k, k in {{ $marks }}
         || (has(object.metadata.annotations) && k in object.metadata.annotations)))
-      message: the interface changes nothing of a Machine but the {{ $mark }} annotation
+      message: {{ $outside }}
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
