@@ -296,7 +296,7 @@ func (run *restoreRun) recoverTalosEtcd(ctx context.Context) error {
 		if err != nil || state != talosEtcdPreparing {
 			return false, err //nolint:wrapcheck // onTalos names the machine, and the node's error the call
 		}
-		f, err := os.Open(path)
+		f, err := os.Open(path) //nolint:gosec // the controller's own file of the snapshot
 		if err != nil {
 			return false, fmt.Errorf("reading the fetched snapshot: %w", err)
 		}
