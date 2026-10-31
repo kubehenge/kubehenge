@@ -584,7 +584,7 @@ func (em eventMerge) add(source string, e *corev1.Event, now time.Time) {
 		}
 		return
 	}
-	em[key] = &eventView{Source: source, Type: e.Type, Reason: e.Reason, Message: e.Message, Object: object, Count: count, Last: last}
+	em[key] = &eventView{Source: source, Type: e.Type, Reason: e.Reason, Message: e.Message, Object: object, Count: count, Last: last, Action: e.Action}
 }
 
 // eventsSection merges the events of the last hour: the management cluster's about the cluster's

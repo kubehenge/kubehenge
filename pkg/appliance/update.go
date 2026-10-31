@@ -56,7 +56,21 @@ type UpdateStatus struct {
 	Error string    `json:"error,omitempty"`
 	// RolledBack tells that a failed upgrade had replaced the software and put the old back.
 	RolledBack bool `json:"rolledBack,omitempty"`
+	// Step is the one of UpdateSteps the upgrade is in, or failed in.
+	Step string `json:"step,omitempty"`
 }
+
+// The steps of an upgrade, in the order it takes them.
+const (
+	StepIndex    = "Read the release index"
+	StepDownload = "Download the release"
+	StepInstall  = "Install"
+	StepRestart  = "Restart the interface"
+	StepCheck    = "Check that it serves"
+)
+
+// UpdateSteps are the steps of an upgrade, in order.
+var UpdateSteps = []string{StepIndex, StepDownload, StepInstall, StepRestart, StepCheck}
 
 // Spool is the updater's directory: requests/ (group-writable by the interface) and status.json.
 type Spool string
@@ -114,6 +128,9 @@ type Updater struct {
 	Keys    []ed25519.PublicKey
 	// Healthy tells whether the restarted interface serves; an upgrade it refuses is rolled back.
 	Healthy func(ctx context.Context) error
+
+	// status is the upgrade under way, which each step records as it begins.
+	status *UpdateStatus
 }
 
 // Run takes one request from the spool, if any, and carries it out.
@@ -123,7 +140,9 @@ func (u *Updater) Run(ctx context.Context) error {
 		return err
 	}
 	st := UpdateStatus{State: StateUpdating, From: u.Current, Time: time.Now()}
-	u.write(&st)
+	u.status = &st
+	defer func() { u.status = nil }()
+	u.at(StepIndex)
 	to, err := u.update(ctx, req)
 	st.Time, st.To = time.Now(), to
 	switch {
@@ -172,6 +191,14 @@ func (u *Updater) take() (UpdateRequest, bool, error) {
 		return UpdateRequest{}, false, errors.New("upgrade request: a version or a policy of patch or minor")
 	}
 	return req, true, nil
+}
+
+// at records that the upgrade under way has begun step.
+func (u *Updater) at(step string) {
+	if u.status != nil {
+		u.status.Step = step
+		u.write(u.status)
+	}
 }
 
 // write records st for the interface, which runs as another user and reads it.
@@ -231,6 +258,7 @@ func (u *Updater) update(ctx context.Context, req UpdateRequest) (string, error)
 		return "", fmt.Errorf("preparing the download directory: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(downloads) }()
+	u.at(StepDownload)
 	archive, err := download(ctx, u.HTTP, r.URL, r.SHA256, downloads)
 	if err != nil {
 		return "", err
@@ -266,15 +294,18 @@ func (u *Updater) replace(ctx context.Context, version, archive, tofu string) er
 		return err
 	}
 	defer func() { _ = os.RemoveAll(sw.aside) }()
+	u.at(StepInstall)
 	err = u.install(archive, sw.aside)
 	if err == nil && tofu != "" {
 		err = copyAtomic(tofu, u.binary("tofu"), publicExecutable)
 	}
 	if err == nil {
 		sw.restarted = true
+		u.at(StepRestart)
 		err = u.Restart(ctx)
 	}
 	if err == nil && u.Healthy != nil {
+		u.at(StepCheck)
 		err = u.Healthy(ctx)
 	}
 	if err == nil {

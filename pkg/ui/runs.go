@@ -3,6 +3,7 @@ package ui
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
@@ -69,6 +70,15 @@ type runView struct {
 	Steps []runStep `json:"steps,omitempty"`
 	// Settings are what a change of a cluster sets.
 	Settings []string `json:"settings,omitempty"`
+
+	// What a failed run is started again with. Action is apply, remove or etcd-restore for a run
+	// of the management cluster; Restore and Template are a restore's and a template build's
+	// choices; Snapshot is what an etcd restore restores; Release is what an upgrade upgrades to.
+	Action   string          `json:"action,omitempty"`
+	Restore  *restoreRequest `json:"restore,omitempty"`
+	Template json.RawMessage `json:"template,omitempty"`
+	Snapshot string          `json:"snapshot,omitempty"`
+	Release  string          `json:"release,omitempty"`
 }
 
 // runs answers with the work running or lately finished that the user may see: the appliance's
@@ -172,17 +182,12 @@ func (s *Server) applianceRuns() []runView {
 	var list []runView
 	if a := s.Appliance; a != nil {
 		if j := a.Current(); j != nil {
-			what := "Apply management cluster"
-			switch j.Kind {
-			case "remove":
-				what = "Delete management cluster"
-			case "etcd-restore":
-				what = "Restore management cluster etcd"
-			}
-			list = append(list, jobRun("management-cluster", runManagement, what, j))
+			list = append(list, managementRun(j))
 		}
 		if j := a.TemplateJob(); j != nil {
-			list = append(list, jobRun("template", runTemplate, "Build template", j))
+			v := jobRun("template", runTemplate, "Build template", j)
+			v.Template = j.Request
+			list = append(list, v)
 		}
 	}
 	if up := s.Upgrades; up != nil {
@@ -193,6 +198,24 @@ func (s *Server) applianceRuns() []runView {
 		}
 	}
 	return list
+}
+
+// managementRun is the appliance's last run of the module, with which one it was.
+func managementRun(j *appliance.JobView) runView {
+	what := "Apply management cluster"
+	switch j.Kind {
+	case "remove":
+		what = "Delete management cluster"
+	case "etcd-restore":
+		what = "Restore management cluster etcd"
+	}
+	v := jobRun("management-cluster", runManagement, what, j)
+	v.Action = j.Kind
+	var asked appliance.EtcdRestoreRequest
+	if j.Kind == "etcd-restore" && json.Unmarshal(j.Request, &asked) == nil {
+		v.Snapshot = asked.Snapshot
+	}
+	return v
 }
 
 func jobRun(id, kind, what string, j *appliance.JobView) runView {
@@ -215,7 +238,7 @@ func jobRun(id, kind, what string, j *appliance.JobView) runView {
 // updateRun is the updater's last upgrade of the appliance; finding nothing newer is no run.
 func updateRun(st *appliance.UpdateStatus) (runView, bool) {
 	at := st.Time
-	v := runView{ID: "appliance-upgrade", Kind: runApplianceUpdate, What: "Upgrade appliance to " + st.To, Error: st.Error}
+	v := runView{ID: "appliance-upgrade", Kind: runApplianceUpdate, What: "Upgrade appliance to " + st.To, Error: st.Error, Release: st.To}
 	switch st.State {
 	case "updating":
 		v.State, v.Started = runRunning, &at
@@ -224,7 +247,31 @@ func updateRun(st *appliance.UpdateStatus) (runView, bool) {
 	default:
 		return runView{}, false
 	}
+	v.Steps = updateSteps(st, v.State)
 	return v, true
+}
+
+// updateSteps are an upgrade's steps: those before the one it is in done, that one under way or
+// failed, and putting the old release back where a failure did.
+func updateSteps(st *appliance.UpdateStatus, state string) []runStep {
+	current := slices.Index(appliance.UpdateSteps, st.Step)
+	steps := make([]runStep, 0, len(appliance.UpdateSteps)+1)
+	for i, name := range appliance.UpdateSteps {
+		s := runStep{Name: name, State: stepWaiting}
+		switch {
+		case state == runSucceeded, i < current:
+			s.State = stepDone
+		case i == current && state == runRunning:
+			s.State = stepRunning
+		case i == current && state == runFailed:
+			s.State = stepFailed
+		}
+		steps = append(steps, s)
+	}
+	if st.RolledBack {
+		steps = append(steps, runStep{Name: "Put back " + st.From, State: stepDone})
+	}
+	return steps
 }
 
 // refreshRuns is the template refresh's last run, as the controller records it.
@@ -251,6 +298,7 @@ func etcdRuns(c *clusterv1.Cluster) []runView {
 	if st, ok := provisioner.EtcdRestoreStatusOf(c); ok {
 		v := base
 		v.ID, v.Kind, v.What, v.By = "etcd-restore/"+clusterKey(c.Namespace, c.Name), runEtcdRestore, "Restore etcd from "+st.Snapshot, st.By
+		v.Snapshot = st.Snapshot
 		if st.Reset {
 			v.What = "Recover the control plane on " + st.Machine
 		}
@@ -360,6 +408,11 @@ func (s *Server) readVeleroRuns(ctx context.Context, u user, c *clusterv1.Cluste
 		x := &view.Restores[i]
 		r := base
 		r.ID, r.Kind, r.What, r.By = "restore/"+clusterKey(c.Namespace, c.Name)+"/"+x.Name, runRestore, "Restore from "+x.Backup, x.By
+		volumeData := x.VolumeData
+		r.Restore = &restoreRequest{
+			Backup: x.Backup, Namespaces: x.Namespaces, ExcludedNamespaces: x.ExcludedNamespaces,
+			Resources: x.Resources, ExcludedResources: x.ExcludedResources, VolumeData: &volumeData,
+		}
 		r.Started, r.Finished = x.Started, x.Completed
 		r.State, r.Error = veleroState(x.Phase, x.Failure, x.Errors)
 		switch {

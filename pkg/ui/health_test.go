@@ -131,6 +131,7 @@ func healthCluster(now time.Time) []client.Object {
 		return &corev1.Event{
 			Namespace: "default", Name: name, Type: corev1.EventTypeWarning, Reason: "NodeNotReady", Message: message, Count: 1,
 			InvolvedObject: corev1.ObjectReference{Kind: "Machine", Name: machine}, LastTimestamp: metav1.NewTime(now.Add(-5 * time.Minute)),
+			Action: "WatchNodes",
 		}
 	}
 	worker := machine("one-md-0-a", "one-md-0-a", false, false)
@@ -325,8 +326,13 @@ func checkHealthSections(t *testing.T, v *healthView) {
 	}
 	// Repeats counted once; the other cluster's, the normal and the old events left out.
 	events := map[string]int32{}
-	for _, e := range v.Events.Items {
+	for i := range v.Events.Items {
+		e := &v.Events.Items[i]
 		events[e.Source+" "+e.Object] += e.Count
+		// A run's page picks its own events by what the controller was doing.
+		if e.Source == sourceManagement && e.Action != "WatchNodes" {
+			t.Errorf("event %+v lost its action", e)
+		}
 	}
 	if len(v.Events.Items) != 2 || events["workload Pod web/api-7d9"] != 7 || events["management Machine one-md-0-a"] != 1 {
 		t.Errorf("events = %+v", v.Events.Items)

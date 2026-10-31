@@ -49,7 +49,7 @@ func TestRunsListWhatRunsAndWhatFailedLately(t *testing.T) {
 	h := newHarness(t, one, two)
 	spool := t.TempDir()
 	h.server.Upgrades = &Upgrades{Spool: appliance.Spool(spool), Current: "0.1.0"}
-	failed := appliance.UpdateStatus{State: "failed", From: "0.1.0", To: "0.1.1", Time: now.Add(-time.Hour), Error: "the release's checksum does not match"}
+	failed := appliance.UpdateStatus{State: "failed", From: "0.1.0", To: "0.1.1", Time: now.Add(-time.Hour), Error: "the release's checksum does not match", Step: appliance.StepDownload}
 	if err := os.WriteFile(appliance.Spool(spool).StatusPath(), []byte(stamp(failed)), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,8 @@ func TestRunsListWhatRunsAndWhatFailedLately(t *testing.T) {
 	if got := ids(admin); !slices.Equal(got, want) {
 		t.Fatalf("admin's runs = %q, want %q", got, want)
 	}
-	if r := admin[0]; r.Phase != "Fetching" || r.By != "dev@pve" || r.Cluster != "one" || !r.Started.Equal(now.Add(-2*time.Minute)) {
+	if r := admin[0]; r.Phase != "Fetching" || r.By != "dev@pve" || r.Cluster != "one" || !r.Started.Equal(now.Add(-2*time.Minute)) ||
+		r.Snapshot != "20261012T060000Z-v1.36.5-rke2r1.db.age" {
 		t.Errorf("restore %+v", r)
 	}
 	if got := stepStates(&admin[0]); !slices.Equal(got, []string{
@@ -91,8 +92,13 @@ func TestRunsListWhatRunsAndWhatFailedLately(t *testing.T) {
 	}) {
 		t.Errorf("restore steps %q", got)
 	}
-	if r := admin[1]; r.Error != failed.Error || r.What != "Upgrade appliance to 0.1.1" {
+	if r := admin[1]; r.Error != failed.Error || r.What != "Upgrade appliance to 0.1.1" || r.Release != "0.1.1" {
 		t.Errorf("upgrade %+v", r)
+	}
+	if got := stepStates(&admin[1]); !slices.Equal(got, []string{
+		"Read the release index done ", "Download the release failed ", "Install waiting ", "Restart the interface waiting ", "Check that it serves waiting ",
+	}) {
+		t.Errorf("upgrade steps %q", got)
 	}
 	if r := admin[2]; r.Error != "the target refused the upload" {
 		t.Errorf("snapshot %+v", r)
@@ -107,6 +113,21 @@ func TestRunsListWhatRunsAndWhatFailedLately(t *testing.T) {
 	h.clock = now.Add(26 * time.Hour)
 	if got := ids(runsOf("admin@pve")); !slices.Equal(got, []string{"etcd-restore/default/one running"}) {
 		t.Errorf("a day later = %q", got)
+	}
+}
+
+func TestAnUpgradeThatFailedOnceRestartedPutsTheOldReleaseBack(t *testing.T) {
+	t.Parallel()
+	st := &appliance.UpdateStatus{State: "failed", From: "0.1.0", To: "0.2.0", Step: appliance.StepCheck, RolledBack: true}
+	v, ok := updateRun(st)
+	if !ok {
+		t.Fatal("no run")
+	}
+	if got := stepStates(&v); !slices.Equal(got, []string{
+		"Read the release index done ", "Download the release done ", "Install done ", "Restart the interface done ",
+		"Check that it serves failed ", "Put back 0.1.0 done ",
+	}) {
+		t.Errorf("steps %q", got)
 	}
 }
 

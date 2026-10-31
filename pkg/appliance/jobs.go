@@ -1,6 +1,7 @@
 package appliance
 
 import (
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -25,6 +26,8 @@ type Job struct {
 	// State is running, succeeded or failed.
 	State string `json:"state"`
 	Error string `json:"error,omitempty"`
+	// Request is what the run was started with, with nothing secret in it, for starting it again.
+	Request json.RawMessage `json:"request,omitempty"`
 
 	mu  sync.Mutex
 	log []string
@@ -64,7 +67,7 @@ func (j *Job) view() *JobView {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	shown := j.log[max(0, len(j.log)-shownLines):]
-	v := &JobView{User: j.User, Automatic: j.Automatic, Kind: j.Kind, Started: j.Started, Finished: j.Finished, State: j.State, Error: j.Error, Log: append([]string{}, shown...)}
+	v := &JobView{User: j.User, Automatic: j.Automatic, Kind: j.Kind, Started: j.Started, Finished: j.Finished, State: j.State, Error: j.Error, Request: j.Request, Log: append([]string{}, shown...)}
 	if len(shown) < len(j.log) {
 		v.Lines = len(j.log)
 	}
@@ -80,7 +83,9 @@ type JobView struct {
 	Finished  time.Time `json:"finished,omitzero"`
 	State     string    `json:"state"`
 	Error     string    `json:"error,omitempty"`
-	Log       []string  `json:"log"`
+	// Request is what the run was started with, with nothing secret in it, for starting it again.
+	Request json.RawMessage `json:"request,omitempty"`
+	Log     []string        `json:"log"`
 	// Lines is how many lines the log has in all, where Log holds only the last of them.
 	Lines int `json:"lines,omitempty"`
 }

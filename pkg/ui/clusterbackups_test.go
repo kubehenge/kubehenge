@@ -434,6 +434,38 @@ func TestRestore(t *testing.T) {
 	if x := restoreOf(made, nil); x.VolumeData || len(x.Resources) != 2 || len(x.ExcludedNamespaces) != 1 {
 		t.Errorf("as listed %+v", x)
 	}
+
+	// Its run carries its choices, which start the same restore again.
+	runs := b.do("GET", "/api/runs", "")
+	expect(t, runs, http.StatusOK)
+	var list []runView
+	if err = json.Unmarshal(runs.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(list, func(r runView) bool { return r.Kind == runRestore })
+	if i < 0 || list[i].Restore == nil {
+		t.Fatalf("runs %+v", list)
+	}
+	again, err := json.Marshal(list[i].Restore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = restores.Delete(t.Context(), made.GetName(), metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, b.do("POST", "/api/clusters/default/one/restores", string(again)), http.StatusCreated)
+	made, err = restores.Get(t.Context(), "velero-scheduled-20261012020000-made", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, _, _ = unstructured.NestedMap(made.Object, "spec")
+	second, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(second, got) {
+		t.Errorf("started again as %s, not %s", second, got)
+	}
 }
 
 // Another cluster's backup comes back only for those who see that cluster, and without the volumes'

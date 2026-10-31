@@ -213,7 +213,9 @@ function Snapshots({ running }: { running: boolean }): JSX.Element {
           ))}
         </tbody>
       </table>
-      {restoring !== undefined && <RestoreDialog snapshot={restoring} onClose={() => setRestoring(undefined)} />}
+      {restoring !== undefined && (
+        <ManagementRestoreDialog snapshot={restoring} onClose={() => setRestoring(undefined)} />
+      )}
     </div>
   );
 }
@@ -350,7 +352,16 @@ function SetUpDialog({
   );
 }
 
-function RestoreDialog({ snapshot: s, onClose }: { snapshot: EtcdSnapshot; onClose: () => void }): JSX.Element {
+/** ManagementRestoreDialog restores the management cluster's etcd; onStarted, where given, takes over once it has begun. */
+export function ManagementRestoreDialog({
+  snapshot: s,
+  onClose,
+  onStarted,
+}: {
+  snapshot: EtcdSnapshot;
+  onClose: () => void;
+  onStarted?: () => void;
+}): JSX.Element {
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -364,7 +375,11 @@ function RestoreDialog({ snapshot: s, onClose }: { snapshot: EtcdSnapshot; onClo
     setError(undefined);
     try {
       await api.restoreManagement(s.name, passphrase);
-      setStarted(true);
+      if (onStarted === undefined) {
+        setStarted(true);
+      } else {
+        onStarted();
+      }
     } catch (err) {
       setError(errorMessage(err));
     } finally {

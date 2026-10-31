@@ -518,6 +518,11 @@ func (a *Appliance) ListEtcdSnapshots(ctx context.Context) ([]provisioner.EtcdSn
 	return list, nil
 }
 
+// EtcdRestoreRequest is what a restore of the management cluster's etcd was started with.
+type EtcdRestoreRequest struct {
+	Snapshot string `json:"snapshot"`
+}
+
 // RestoreEtcd restores the management cluster's etcd from a snapshot, on the user's ticket, as a
 // run of its own in the background. The passphrase opens the admin talosconfig and the snapshots'
 // key; neither needs the management cluster's API, which may be down.
@@ -542,7 +547,7 @@ func (a *Appliance) RestoreEtcd(ctx context.Context, name, passphrase string, ti
 	}
 	folder := provisioner.ManagementEtcdFolder(b.target.Prefix)
 	//nolint:contextcheck // the run outlives the request that starts it
-	return a.start(ticket, "etcd-restore", func(ctx context.Context, j *Job) error {
+	return a.startIn(&a.job, sessionRunner(ticket), "etcd-restore", EtcdRestoreRequest{Snapshot: name}, func(ctx context.Context, j *Job) error {
 		j.Add("Restoring the management cluster's etcd from " + name)
 		file, err := a.fetchEtcdSnapshot(ctx, b, folder, name, passphrase)
 		if err != nil {
