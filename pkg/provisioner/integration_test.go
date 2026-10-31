@@ -503,7 +503,7 @@ func checkPoolSizeAdmission(ctx context.Context, t *testing.T, c client.Client, 
 		p.Spec.Topology.Workers.MachineDeployments[0].Variables.Overrides = []clusterv1.ClusterVariable{
 			{Name: "workerMachine", Value: apiextensionsv1.JSON{Raw: []byte(pool)}},
 		}
-		return p
+		return placed(p)
 	}
 	if err := c.Create(ctx, poolSized("pool-room", `{"memoryMiB":1024}`, `{"memoryMiB":4096}`)); err != nil {
 		t.Fatalf("monitoring on a pool of its own larger workers: %v", err)
