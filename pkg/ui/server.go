@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"net/netip"
 	"path"
 	"strconv"
 	"strings"
@@ -43,6 +44,7 @@ type Accounts interface {
 // SignIns are the Proxmox VE sign-ins the interface's sessions rest on.
 type SignIns interface {
 	SignIn(ctx context.Context, username, password string) (*pve.Ticket, *pve.Challenge, error)
+	TokenUser(ctx context.Context, token string) (*pve.Ticket, error)
 	Answer(ctx context.Context, c *pve.Challenge, kind, code string) (*pve.Ticket, error)
 	Renew(ctx context.Context, t *pve.Ticket) (*pve.Ticket, error)
 	Realms(ctx context.Context) ([]pve.Realm, error)
@@ -57,6 +59,7 @@ type Resources interface {
 	Storages(ctx context.Context, t *pve.Ticket) ([]pve.Storage, error)
 	Nodes(ctx context.Context, t *pve.Ticket) ([]pve.Node, error)
 	Bridges(ctx context.Context, t *pve.Ticket, node string) ([]pve.Bridge, error)
+	DNS(ctx context.Context, t *pve.Ticket, node string) ([]string, error)
 	NodeAffinityRules(ctx context.Context, t *pve.Ticket) ([]pve.HARule, error)
 	Zone(ctx context.Context, t *pve.Ticket, bridge string) (string, error)
 }
@@ -73,6 +76,7 @@ type Guests interface {
 // module does not.
 type Removals interface {
 	DeleteVM(ctx context.Context, t *pve.Ticket, node string, vmid int) error
+	RebootVM(ctx context.Context, t *pve.Ticket, node string, vmid int) error
 	ReleaseHA(ctx context.Context, t *pve.Ticket, prefix string) error
 }
 
@@ -83,6 +87,9 @@ type Server struct {
 	// Proxmox VE privileges have been checked. Nil until the appliance has set the management
 	// cluster up.
 	Kube client.Client
+	// Probe tells which of the addresses a host answers on, for the addresses a new cluster is
+	// offered; nil probes them from where the interface runs.
+	Probe func(ctx context.Context, addrs []netip.Addr) map[netip.Addr]bool
 	// Appliance is set when the interface runs in Kubehenge's appliance, which creates and looks
 	// after the management cluster.
 	Appliance *appliance.Appliance
@@ -95,6 +102,9 @@ type Server struct {
 	// ProxmoxInsecure tells administrators that the appliance and the clusters do not verify the
 	// Proxmox VE API's certificate, as it was installed.
 	ProxmoxInsecure bool
+	// ProxmoxURL is the Proxmox VE API's address, whose web interface opens a machine's console;
+	// empty offers no console.
+	ProxmoxURL string
 	// NewKube makes the client for the management cluster from the kubeconfig the appliance wrote.
 	NewKube func(kubeconfig []byte) (client.Client, error)
 	// Upgrades are set in the appliance, which upgrades its own software.
@@ -139,6 +149,7 @@ type Server struct {
 	prepared   sync.Once
 	sessions   *sessions
 	limiter    *limiter
+	tokens     tokenUsers
 	activeKube atomic.Pointer[client.Client]
 	backups    backupCache
 	etags      etagCache
@@ -146,6 +157,7 @@ type Server struct {
 	veleroRuns readCache[[]runView]
 	vmLoads    vmLoadCache
 	workloads  workloadConns
+	changes    changes
 	// clock is the health page's time; unset, the system's.
 	clock func() time.Time
 }
@@ -168,6 +180,7 @@ func (s *Server) Run(ctx context.Context) {
 	s.init()
 	var wg sync.WaitGroup
 	wg.Go(func() { s.autoUpgrade(ctx) })
+	wg.Go(func() { s.watchChanges(ctx) })
 	wg.Go(func() { s.backUpManagementEtcd(ctx) })
 	if s.Headlamp != nil {
 		wg.Go(func() { s.syncHeadlamp(ctx, headlampSyncEvery) })
@@ -193,29 +206,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/proxmox/storages", s.signedIn(s.storages))
 	mux.HandleFunc("GET /api/proxmox/nodes", s.signedIn(s.nodes))
 	mux.HandleFunc("GET /api/proxmox/nodes/{node}/bridges", s.signedIn(s.bridges))
+	mux.HandleFunc("GET /api/proxmox/nodes/{node}/dns", s.signedIn(s.dns))
+	mux.HandleFunc("POST /api/proxmox/nodes/{node}/bridges/{bridge}/free", s.signedIn(s.freeAddresses))
 	mux.HandleFunc("GET /api/proxmox/ha-rules", s.signedIn(s.haRules))
 
-	mux.HandleFunc("GET /api/setup", s.signedIn(s.setupStatus))
-	mux.HandleFunc("POST /api/setup", s.signedIn(s.setup))
-	mux.HandleFunc("POST /api/setup/credential", s.signedIn(s.credential))
-	mux.HandleFunc("POST /api/setup/remove", s.signedIn(s.remove))
-	mux.HandleFunc("GET /api/appliance/upgrades", s.signedIn(s.upgradesStatus))
-	mux.HandleFunc("POST /api/appliance/upgrades", s.signedIn(s.upgrade))
-	mux.HandleFunc("PUT /api/appliance/upgrades/settings", s.signedIn(s.upgradeSettings))
-	mux.HandleFunc("PUT /api/appliance/upgrades/management", s.signedIn(s.keepUnattended))
-	mux.HandleFunc("DELETE /api/appliance/upgrades/management", s.signedIn(s.forgetUnattended))
-	mux.HandleFunc("GET /api/appliance/etcd-backups", s.signedIn(s.managementBackups))
-	mux.HandleFunc("PUT /api/appliance/etcd-backups", s.signedIn(s.configureManagementBackups))
-	mux.HandleFunc("DELETE /api/appliance/etcd-backups", s.signedIn(s.stopManagementBackups))
-	mux.HandleFunc("GET /api/appliance/etcd-backups/snapshots", s.signedIn(s.managementSnapshots))
-	mux.HandleFunc("POST /api/appliance/etcd-backups/snapshots", s.signedIn(s.takeManagementSnapshot))
-	mux.HandleFunc("POST /api/appliance/etcd-backups/snapshots/{name}/restore", s.signedIn(s.restoreManagementEtcd))
-	mux.HandleFunc("GET /api/templates", s.signedIn(s.listTemplates))
-	mux.HandleFunc("POST /api/templates", s.signedIn(s.createTemplate))
-	mux.HandleFunc("DELETE /api/templates/{vmid}", s.signedIn(s.deleteTemplate))
-	mux.HandleFunc("POST /api/templates/refresh", s.signedIn(s.refreshNow))
-	mux.HandleFunc("GET /api/template-builds", s.managed(s.templateBuilds))
-	mux.HandleFunc("POST /api/template-builds", s.managed(s.requestTemplateBuild))
+	s.applianceRoutes(mux)
 
 	mux.HandleFunc("GET /api/classes", s.managed(s.classes))
 	mux.HandleFunc("GET /api/versions/{distribution}", s.signedIn(s.versions))
@@ -223,6 +218,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/clusters", s.managed(s.listClusters))
 	mux.HandleFunc("GET /api/fleet/health", s.managed(s.fleetHealth))
 	mux.HandleFunc("GET /api/runs", s.managed(s.runs))
+	mux.HandleFunc("GET /api/events", s.managed(s.changeStream))
 	mux.HandleFunc("POST /api/clusters", s.managed(s.createCluster))
 	s.clusterRoutes(mux)
 	mux.HandleFunc("GET /api/credentials/{purpose}", s.managed(s.applianceCredential))
@@ -245,6 +241,32 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 	_, _ = io.WriteString(w, "ok\n")
 }
 
+// applianceRoutes are the routes of the appliance, its management cluster and its templates.
+func (s *Server) applianceRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/setup", s.signedIn(s.setupStatus))
+	mux.HandleFunc("POST /api/setup", s.signedIn(s.setup))
+	mux.HandleFunc("POST /api/setup/credential", s.signedIn(s.credential))
+	mux.HandleFunc("POST /api/setup/remove", s.signedIn(s.remove))
+	mux.HandleFunc("GET /api/setup/health", s.signedIn(s.managementHealth))
+	mux.HandleFunc("GET /api/appliance/upgrades", s.signedIn(s.upgradesStatus))
+	mux.HandleFunc("POST /api/appliance/upgrades", s.signedIn(s.upgrade))
+	mux.HandleFunc("PUT /api/appliance/upgrades/settings", s.signedIn(s.upgradeSettings))
+	mux.HandleFunc("PUT /api/appliance/upgrades/management", s.signedIn(s.keepUnattended))
+	mux.HandleFunc("DELETE /api/appliance/upgrades/management", s.signedIn(s.forgetUnattended))
+	mux.HandleFunc("GET /api/appliance/etcd-backups", s.signedIn(s.managementBackups))
+	mux.HandleFunc("PUT /api/appliance/etcd-backups", s.signedIn(s.configureManagementBackups))
+	mux.HandleFunc("DELETE /api/appliance/etcd-backups", s.signedIn(s.stopManagementBackups))
+	mux.HandleFunc("GET /api/appliance/etcd-backups/snapshots", s.signedIn(s.managementSnapshots))
+	mux.HandleFunc("POST /api/appliance/etcd-backups/snapshots", s.signedIn(s.takeManagementSnapshot))
+	mux.HandleFunc("POST /api/appliance/etcd-backups/snapshots/{name}/restore", s.signedIn(s.restoreManagementEtcd))
+	mux.HandleFunc("GET /api/templates", s.signedIn(s.listTemplates))
+	mux.HandleFunc("POST /api/templates", s.signedIn(s.createTemplate))
+	mux.HandleFunc("DELETE /api/templates/{vmid}", s.signedIn(s.deleteTemplate))
+	mux.HandleFunc("POST /api/templates/refresh", s.signedIn(s.refreshNow))
+	mux.HandleFunc("GET /api/template-builds", s.managed(s.templateBuilds))
+	mux.HandleFunc("POST /api/template-builds", s.managed(s.requestTemplateBuild))
+}
+
 // clusterRoutes are the routes of one cluster.
 func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}", s.managed(s.getCluster))
@@ -257,6 +279,12 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/machines/{machine}/boot-log", s.managed(s.bootLog))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/machines/{machine}/boot-log", s.managed(s.askBootLog))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/talos-upgrade-failure", s.managed(s.retryTalosUpgrade))
+	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/machines/{machine}/replacement", s.managed(s.replaceMachine))
+	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/machines/{machine}/replacement", s.managed(s.keepMachine))
+	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/machines/{machine}", s.managed(s.deleteMachine))
+	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/machines/{machine}/cordon", s.managed(s.cordonMachine))
+	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/machines/{machine}/cordon", s.managed(s.uncordonMachine))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/machines/{machine}/reboot", s.managed(s.rebootMachine))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/health", s.managed(s.clusterHealth))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/pods/{podNamespace}/{pod}/logs", s.managed(s.podLogs))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/backups", s.managed(s.clusterBackups))
@@ -495,6 +523,13 @@ func (s *Server) managed(next func(http.ResponseWriter, *http.Request, user)) ht
 // but a read.
 func (s *Server) signedIn(next func(http.ResponseWriter, *http.Request, user)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if token, ok := strings.CutPrefix(r.Header.Get("Authorization"), tokenPrefix); ok {
+			if ticket := s.tokenUser(w, r, token); ticket != nil {
+				w.Header().Set(versionHeader, release.Version)
+				next(w, r, user{ticket: ticket})
+			}
+			return
+		}
 		sess := s.sessions.lookup(r)
 		if sess == nil {
 			writeError(w, http.StatusUnauthorized, "not signed in")

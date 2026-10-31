@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -45,6 +46,10 @@ const (
 	// IdentityAutoscaler is the cluster autoscaler's: it reads what it simulates the scheduler over,
 	// drains and taints the nodes it removes, and reports on itself.
 	IdentityAutoscaler Identity = "autoscaler"
+	// IdentityNodes cordons and uncordons nodes, for those who may change the cluster. An admission
+	// policy in the cluster holds it to that: it may patch nodes, and change nothing of one but
+	// whether pods may be scheduled on it.
+	IdentityNodes Identity = "nodes"
 	// IdentityHeadlampIssuer makes tokens of HeadlampAccount and does nothing else, for the shared
 	// Headlamp to sign those in as who may download the cluster's admin kubeconfig.
 	IdentityHeadlampIssuer Identity = "headlamp-issuer"
@@ -107,10 +112,22 @@ type workloadIdentity struct {
 	// deleteInside has an identity no longer wanted deleted from inside the workload cluster before
 	// its Secret goes, for a namespace that stays.
 	deleteInside bool
+	// policy holds what the identity may change to less than its rules let it, with an admission
+	// policy kept beside it, made before its rights and deleted after them.
+	policy *identityPolicy
 	// mounted keeps the Secret for a pod in the management cluster to mount, in
 	// WorkloadIdentities.MountNamespace, as a pod mounts Secrets of its own namespace alone. It
 	// carries a kubeconfig too, which client-go reads the token through as the token changes.
 	mounted bool
+}
+
+// verbPatch is the RBAC verb of a patch.
+const verbPatch = "patch"
+
+// identityPolicy is a ValidatingAdmissionPolicy on the identity's own requests.
+type identityPolicy struct {
+	match       []admissionregistrationv1.NamedRuleWithOperations
+	validations []admissionregistrationv1.Validation
 }
 
 // issuedAccount is a ServiceAccount bound to a ClusterRole the workload cluster has of its own.
@@ -164,6 +181,28 @@ var workloadIdentities = []workloadIdentity{
 		// removes with the autoscaler.
 		id: IdentityAutoscaler, namespace: metav1.NamespaceSystem, wanted: autoscalesBeside, mounted: true,
 		clusterRules: autoscalerWorkloadRules, rules: autoscalerStatusRules,
+	},
+	{
+		id: IdentityNodes, namespace: metav1.NamespaceSystem, wanted: always,
+		clusterRules: []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"get", verbPatch}}},
+		policy: &identityPolicy{
+			match: []admissionregistrationv1.NamedRuleWithOperations{{
+				Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Update},
+				APIGroups:  []string{""}, APIVersions: []string{"v1"}, Resources: []string{"nodes"},
+			}},
+			// Everything of a node a patch of it may change, but spec.unschedulable.
+			validations: []admissionregistrationv1.Validation{{
+				Expression: "object.metadata.?labels.orValue({}) == oldObject.metadata.?labels.orValue({}) && " +
+					"object.metadata.?annotations.orValue({}) == oldObject.metadata.?annotations.orValue({}) && " +
+					"object.metadata.?finalizers.orValue([]) == oldObject.metadata.?finalizers.orValue([]) && " +
+					"object.metadata.?ownerReferences.orValue([]) == oldObject.metadata.?ownerReferences.orValue([]) && " +
+					"object.spec.?taints.orValue([]) == oldObject.spec.?taints.orValue([]) && " +
+					"object.spec.?providerID.orValue('') == oldObject.spec.?providerID.orValue('') && " +
+					"object.spec.?podCIDRs.orValue([]) == oldObject.spec.?podCIDRs.orValue([]) && " +
+					"object.spec.?configSource == oldObject.spec.?configSource",
+				Message: "Kubehenge's nodes identity cordons and uncordons nodes and changes nothing else of them",
+			}},
+		},
 	},
 	{
 		// Its own token goes beside the Cluster like the others'; the tokens it makes are cluster-admin
@@ -543,6 +582,9 @@ func (w *workloadIdentity) ownObjects() []identityObject {
 	subjects := []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: account, Namespace: w.namespace}}
 	sa := &corev1.ServiceAccount{Namespace: w.namespace, Name: account}
 	objects := []identityObject{{rbacv1.ServiceAccountKind, sa, func() { sa.AutomountServiceAccountToken = new(false) }}}
+	if p := w.policy; p != nil {
+		objects = append(objects, w.policyObjects(p)...)
+	}
 	if len(w.clusterRules) > 0 {
 		role := &rbacv1.ClusterRole{Name: account}
 		binding := &rbacv1.ClusterRoleBinding{Name: account}
@@ -560,6 +602,32 @@ func (w *workloadIdentity) ownObjects() []identityObject {
 			identityObject{"RoleBinding", binding, func() { binding.RoleRef, binding.Subjects = ref, subjects }})
 	}
 	return objects
+}
+
+// policyObjects are the identity's admission policy and its binding, which act on its account's
+// requests alone.
+func (w *workloadIdentity) policyObjects(p *identityPolicy) []identityObject {
+	account := w.account()
+	username := "system:serviceaccount:" + w.namespace + ":" + account
+	policy := &admissionregistrationv1.ValidatingAdmissionPolicy{Name: account}
+	binding := &admissionregistrationv1.ValidatingAdmissionPolicyBinding{Name: account}
+	return []identityObject{
+		{"ValidatingAdmissionPolicy", policy, func() {
+			policy.Spec = admissionregistrationv1.ValidatingAdmissionPolicySpec{
+				FailurePolicy:    new(admissionregistrationv1.Fail),
+				MatchConstraints: &admissionregistrationv1.MatchResources{ResourceRules: p.match},
+				MatchConditions: []admissionregistrationv1.MatchCondition{{
+					Name: "identity", Expression: "request.userInfo.username == '" + username + "'",
+				}},
+				Validations: p.validations,
+			}
+		}},
+		{"ValidatingAdmissionPolicyBinding", binding, func() {
+			binding.Spec = admissionregistrationv1.ValidatingAdmissionPolicyBindingSpec{
+				PolicyName: account, ValidationActions: []admissionregistrationv1.ValidationAction{admissionregistrationv1.Deny},
+			}
+		}},
+	}
 }
 
 // ensure creates the identity in the workload cluster with the account it issues and its roles,

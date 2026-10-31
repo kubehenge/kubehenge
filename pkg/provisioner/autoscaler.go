@@ -728,7 +728,7 @@ var autoscalerWorkloadRules = []rbacv1.PolicyRule{
 	{APIGroups: []string{""}, Resources: []string{"namespaces", "persistentvolumeclaims", "persistentvolumes", "pods", "replicationcontrollers", "services"}, Verbs: []string{"get", "list", "watch"}},
 	{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"get", "list", "watch", verbUpdate}},
 	{APIGroups: []string{""}, Resources: []string{"pods/eviction"}, Verbs: []string{"create"}},
-	{APIGroups: []string{""}, Resources: []string{"events"}, Verbs: []string{"create", "patch"}},
+	{APIGroups: []string{""}, Resources: []string{"events"}, Verbs: []string{"create", verbPatch}},
 	{APIGroups: []string{"policy"}, Resources: []string{"poddisruptionbudgets"}, Verbs: []string{"list", "watch"}},
 	{APIGroups: []string{"storage.k8s.io"}, Resources: []string{"csinodes", "storageclasses", "csidrivers", "csistoragecapacities", "volumeattachments"}, Verbs: []string{"get", "list", "watch"}},
 	{APIGroups: []string{"batch"}, Resources: []string{"jobs"}, Verbs: []string{"list", "watch"}},

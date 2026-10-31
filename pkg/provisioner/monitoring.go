@@ -190,9 +190,10 @@ func monitoringValues(distribution templates.Distribution, proxy Image, addons *
 	return values
 }
 
-// reserved requests a container its share of a node. The chart requests nothing, and its pods then
-// share the least CPU weight a node gives: on a node every add-on starting at once kept busy, the
-// operator went unscheduled for over a minute, and its liveness probe restarted it.
+// reserved requests a container its share of a node. A chart that requests nothing leaves its pods
+// the least CPU weight a node gives: on a node every add-on starting at once kept busy, Prometheus's
+// operator and MetalLB's speakers went unscheduled for long enough that their liveness probes
+// restarted them.
 func reserved(cpu, memory string) map[string]any {
 	return map[string]any{requestsKey: map[string]any{cpuKey: cpu, memoryKey: memory}}
 }

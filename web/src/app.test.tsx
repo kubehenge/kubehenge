@@ -7,6 +7,7 @@ import { App } from "./App";
 import { ClusterList } from "./ClusterList";
 import {
   addonCPU,
+  addonCostMiB,
   addonMemory,
   addonNeedMiB,
   fieldProblems,
@@ -207,18 +208,46 @@ describe("sign-in", () => {
         ],
       }),
     });
-    const user = userEvent.setup({ delay: null });
     render(<App />);
     await expect(screen.findByRole("alert")).resolves.toHaveTextContent(
       "The sign-in through the identity provider failed.",
     );
-    await waitFor(() => expect(screen.getByLabelText("Realm")).toHaveValue("pve"));
-    await user.selectOptions(screen.getByLabelText("Realm"), "sso");
+    // One click away beside the password form, and not among the password realms.
+    const sso = await screen.findByRole("link", { name: "Continue with Company SSO" });
+    expect(sso).toHaveAttribute("href", "/api/openid/start?realm=sso");
+    expect(screen.getByLabelText("Realm")).toHaveValue("pve");
+    expect(screen.queryByRole("option", { name: /sso/u })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("User name")).toHaveFocus();
+  });
+
+  it("offers the identity provider last signed in with first", async () => {
+    localStorage.setItem("kubehenge-realm", "sso");
+    fakeServer({
+      "GET /api/session": () => ({ status: 401 }),
+      "GET /api/realms": () => ({
+        body: [
+          { realm: "pve", type: "pve", default: true },
+          { realm: "sso", type: "openid", comment: "Company SSO" },
+        ],
+      }),
+    });
+    render(<App />);
+    const sso = await screen.findByRole("link", { name: "Continue with Company SSO" });
+    await waitFor(() => expect(sso).toHaveFocus());
+    expect(sso).toHaveClass("primary");
+    expect(screen.getByRole("button", { name: "Sign in" })).not.toHaveClass("primary");
+    localStorage.removeItem("kubehenge-realm");
+  });
+
+  it("asks for no password where every realm is an identity provider", async () => {
+    fakeServer({
+      "GET /api/session": () => ({ status: 401 }),
+      "GET /api/realms": () => ({ body: [{ realm: "sso", type: "openid" }] }),
+    });
+    render(<App />);
+    await expect(screen.findByRole("link", { name: "Continue with sso" })).resolves.toBeInTheDocument();
     expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Continue with Company SSO" })).toHaveAttribute(
-      "href",
-      "/api/openid/start?realm=sso",
-    );
+    expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
   });
 
   it("shows Proxmox VE's refusal", async () => {
@@ -352,10 +381,50 @@ describe("clusters", () => {
     await applyStaged(user);
     await waitFor(() =>
       expect(calls.find((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
-        controlPlaneReplicas: 1,
         workerPools: { "md-0": 4 },
       }),
     );
+  });
+
+  it("offers the newest version it may move to, and says what stands in the way before upgrading", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
+    const old: Cluster = {
+      ...web,
+      version: "v1.32.4+rke2r1",
+      controlPlane: { desired: 1, ready: 1, available: 1, upToDate: 1 },
+      workers: { desired: 2, ready: 2, available: 2, upToDate: 2 },
+      variables: { ...web.variables, network: { gateway: "10.0.0.1", prefix: 24, addresses: ["10.0.0.21-10.0.0.23"] } },
+    };
+    fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": () => ({ body: old }),
+      "GET /api/clusters/default/web/health": () => ({
+        body: {
+          verdict: "degraded",
+          attention: [
+            { severity: "error", section: "nodes", what: "Node web-md-0-a not ready" },
+            { severity: "warning", section: "pods", what: "Pod crash-looping" },
+          ],
+        },
+      }),
+      "POST /api/clusters/default/web/plan": () => ({
+        status: 422,
+        body: { error: "version v1.33.13+rke2r3 has no VM template" },
+      }),
+      "GET /api/versions/rke2": () => ({
+        body: { versions: ["v1.36.5+rke2r1"], older: ["v1.33.12+rke2r1", "v1.33.13+rke2r3", "v1.32.13+rke2r2"] },
+      }),
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Upgrade" }));
+    const dialog = within(screen.getByRole("dialog"));
+    await waitFor(() => expect(dialog.getByLabelText("Kubernetes version")).toHaveValue("v1.33.13+rke2r3"));
+    await waitFor(() => expect(dialog.getByText("version v1.33.13+rke2r3 has no VM template")).toBeInTheDocument());
+    expect(dialog.getByText("None spare. Add one under Options.")).toBeInTheDocument();
+    await waitFor(() => expect(dialog.getByText("2 problems")).toBeInTheDocument());
+    expect(dialog.getByRole("link", { name: "Health" })).toHaveAttribute("href", "/clusters/default/web/health");
+    expect(dialog.getByRole("button", { name: "Upgrade" })).toBeDisabled();
   });
 
   it("upgrades a cluster on a minor version too old for new clusters to the next one", async () => {
@@ -518,6 +587,100 @@ describe("clusters", () => {
     );
   });
 
+  it("replaces a machine after asking, and keeps one marked for replacement", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/machines");
+    const routes: Record<string, Route> = {
+      ...signedIn,
+      "GET /api/clusters/default/web": {
+        body: { ...web, machines: [runningOn("cp-a", "pve1"), runningOn("md-a", "pve1", "worker")] },
+      },
+      "PUT /api/clusters/default/web/machines/md-a/replacement": { status: 204 },
+      "DELETE /api/clusters/default/web/machines/cp-a/replacement": { status: 204 },
+    };
+    const calls = fakeServer(routes);
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Replace md-a" }));
+    const dialog = screen.getByRole("dialog", { name: "Replace md-a" });
+    expect(dialog).toHaveTextContent("Drains the node, deletes the VM and its disks, then adds a new worker.");
+    routes["GET /api/clusters/default/web"] = {
+      body: {
+        ...web,
+        machines: [{ ...runningOn("cp-a", "pve1"), replacing: true }, runningOn("md-a", "pve1", "worker")],
+      },
+    };
+    await user.click(within(dialog).getByRole("button", { name: "Replace" }));
+    await waitFor(() => expect(reads(calls, "PUT /api/clusters/default/web/machines/md-a/replacement")).toBe(1));
+
+    const marked = await screen.findByRole("row", { name: /^cp-a .*Replacing/u });
+    await user.click(within(marked).getByRole("button", { name: "Keep cp-a" }));
+    await waitFor(() => expect(reads(calls, "DELETE /api/clusters/default/web/machines/cp-a/replacement")).toBe(1));
+  });
+
+  it("deletes a worker after asking, and opens a machine's console", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/machines");
+    const console = "https://pve.example.org:8006/?console=kvm&novnc=1&vmid=201&node=pve1";
+    const calls = fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": {
+        body: {
+          ...web,
+          machines: [
+            { ...runningOn("cp-a", "pve1"), console },
+            { ...runningOn("md-a", "pve1", "worker"), pool: "md-0" },
+          ],
+        },
+      },
+      "DELETE /api/clusters/default/web/machines/md-a": { status: 204 },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    const link = await screen.findByRole("link", { name: "Console of cp-a" });
+    expect(link).toHaveAttribute("href", console);
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(screen.queryByRole("link", { name: "Console of md-a" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete cp-a" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Delete md-a" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete md-a" });
+    expect(dialog).toHaveTextContent("Pool md-0 shrinks by one.");
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(reads(calls, "DELETE /api/clusters/default/web/machines/md-a")).toBe(1));
+  });
+
+  it("cordons and uncordons a node as the health read shows it, and reboots after asking", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/machines");
+    const calls = fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": {
+        body: {
+          ...web,
+          machines: [
+            { ...runningOn("cp-a", "pve1"), node: "cp-a", reboot: true },
+            { ...runningOn("md-a", "pve1", "worker"), node: "md-a", pool: "md-0" },
+          ],
+        },
+      },
+      "GET /api/clusters/default/web/health": {
+        body: { verdict: "healthy", nodes: { items: [{ name: "md-a", machine: "md-a", unschedulable: true }] } },
+      },
+      "PUT /api/clusters/default/web/machines/cp-a/cordon": { status: 204 },
+      "DELETE /api/clusters/default/web/machines/md-a/cordon": { status: 204 },
+      "POST /api/clusters/default/web/machines/cp-a/reboot": { status: 202 },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Uncordon md-a" }));
+    await waitFor(() => expect(reads(calls, "DELETE /api/clusters/default/web/machines/md-a/cordon")).toBe(1));
+    expect(screen.getByText("Cordoned")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cordon cp-a" }));
+    await waitFor(() => expect(reads(calls, "PUT /api/clusters/default/web/machines/cp-a/cordon")).toBe(1));
+    expect(screen.queryByRole("button", { name: "Reboot md-a" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Reboot cp-a" }));
+    const dialog = screen.getByRole("dialog", { name: "Reboot cp-a" });
+    await user.click(within(dialog).getByRole("button", { name: "Reboot" }));
+    await waitFor(() => expect(reads(calls, "POST /api/clusters/default/web/machines/cp-a/reboot")).toBe(1));
+  });
+
   it("reads the setup status no more once signed out, even when the last read fails after", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const setup = held();
@@ -542,8 +705,18 @@ describe("clusters", () => {
   });
 });
 
+// The free addresses on vmbr0's network, where a host answers on 10.0.0.33.
+const freeOn: Route = (body) => {
+  const sent = JSON.stringify(body);
+  if (sent.includes('"nodes":0')) {
+    return { body: { network: "10.0.0.0/16", answering: sent.includes("10.0.0.33") ? ["10.0.0.33"] : [] } };
+  }
+  return { body: { network: "10.0.0.0/16", endpoint: "10.0.0.30", addresses: "10.0.0.31-10.0.0.33", answering: [] } };
+};
+
 describe("create", () => {
   const form: Form = {
+    from: "",
     namespace: "",
     name: "web",
     className: "kubehenge-rke2",
@@ -778,6 +951,10 @@ describe("create", () => {
     expect(request(unmonitored, withLogs).variables).not.toHaveProperty("logs");
     expect(Object.fromEntries(summary(unmonitored, withLogs))).toMatchObject({ Logs: "Off" });
     expect(addonMemory(unmonitored, withLogs).mib).toBe(0);
+    // A card's cost is the add-on's own, whether it is chosen or not.
+    expect(addonCostMiB(withLogs, ["logs"])).toBe(512);
+    expect(addonCostMiB(withLogs, ["monitoring", "logs"])).toBe(2048);
+    expect(addonCostMiB(rke2, ["logs"])).toBe(0);
     expect(request(logged, rke2).variables).not.toHaveProperty("logs");
 
     expect(fieldProblems("Add-ons", { ...logged, logs: { ...logged.logs, sizeGiB: 0 } }, withLogs)).toStrictEqual({
@@ -1226,18 +1403,23 @@ describe("create", () => {
       "GET /api/proxmox/nodes": () => ({
         body: [
           { node: "pve1", online: true },
-          { node: "pve2", online: true },
+          { node: "pve2", online: true, memory: 0, maxMemory: 2 ** 32 },
         ],
       }),
       "GET /api/proxmox/nodes/pve1/bridges": () => ({
-        body: [{ bridge: "vmbr0", node: "pve1", vlanAware: false, usable: true }],
+        body: [
+          { bridge: "vmbr0", node: "pve1", vlanAware: false, usable: true, cidr: "10.0.0.5/16", gateway: "10.0.0.1" },
+        ],
       }),
+      "GET /api/proxmox/nodes/pve1/dns": () => ({ body: { servers: ["10.0.0.53"] } }),
+      "POST /api/proxmox/nodes/pve1/bridges/vmbr0/free": freeOn,
       "GET /api/proxmox/ha-rules": () => ({
         body: {
           readable: true,
           rules: [{ rule: "fast", comment: "SSD", nodes: ["pve2"], strict: true, allowed: ["pve2"] }],
         },
       }),
+      "POST /api/clusters?dryRun=All": () => ({ body: { manifest: "kind: Cluster\nmetadata:\n  name: lab\n" } }),
       "POST /api/clusters": () => ({ status: 201, body: { ...web, name: "lab" } }),
       "GET /api/clusters/default/lab": () => ({ body: { ...web, name: "lab" } }),
     });
@@ -1255,10 +1437,32 @@ describe("create", () => {
 
     // The one bridge, like the one usable storage after, is chosen already.
     await waitFor(() => expect(screen.getByLabelText("Bridge")).toHaveValue("vmbr0"));
-    await user.type(screen.getByLabelText("API address"), "10.0.0.20");
-    await user.type(screen.getByLabelText("Node addresses"), "10.0.0.21-10.0.0.29");
-    await user.type(screen.getByLabelText("Gateway"), "10.0.0.1");
-    await user.type(screen.getByLabelText("DNS servers"), "10.0.0.1");
+    // The bridge's network gives the prefix length, gateway and DNS servers, and the examples.
+    await waitFor(() => expect(screen.getByLabelText("DNS servers")).toHaveValue("10.0.0.53"));
+    expect(screen.getByLabelText("Gateway")).toHaveValue("10.0.0.1");
+    expect(screen.getByLabelText("Prefix length")).toHaveValue(16);
+    expect(screen.getByLabelText("API address")).toHaveAttribute("placeholder", "10.0.0.20");
+    expect(screen.getByLabelText("Node addresses")).toHaveAccessibleDescription(
+      "Ranges like 10.0.0.21-10.0.0.29, networks or addresses",
+    );
+    // Free addresses are filled in; one typed that a host answers on is marked until it changes.
+    await waitFor(() => expect(screen.getByLabelText("API address")).toHaveValue("10.0.0.30"));
+    const addresses = screen.getByLabelText("Node addresses");
+    expect(addresses).toHaveValue("10.0.0.31-10.0.0.33");
+    await user.clear(addresses);
+    await user.type(addresses, "10.0.0.33-10.0.0.39");
+    expect(screen.getByLabelText("API address")).toHaveValue("10.0.0.30");
+    await waitFor(() => expect(addresses).toHaveAccessibleDescription("In use: 10.0.0.33"));
+    await user.clear(addresses);
+    await user.type(addresses, "10.0.0.40-10.0.0.46");
+    await waitFor(() => expect(addresses).toHaveAccessibleDescription(/^Ranges like/u));
+    // A VLAN's network is not the bridge's own.
+    await user.type(screen.getByLabelText("VLAN tag"), "10");
+    expect(screen.getByLabelText("Gateway")).toHaveValue("");
+    expect(screen.getByLabelText("API address")).toHaveValue("");
+    await user.clear(screen.getByLabelText("VLAN tag"));
+    expect(screen.getByLabelText("Gateway")).toHaveValue("10.0.0.1");
+    await waitFor(() => expect(screen.getByLabelText("API address")).toHaveValue("10.0.0.30"));
     expect(screen.getByLabelText("Pod network")).toHaveValue("canal");
     await user.click(screen.getByRole("button", { name: "Next" }));
 
@@ -1308,11 +1512,17 @@ describe("create", () => {
     expect(screen.getByRole("button", { name: "Add identity provider" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Remove identity provider 2" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
+    // Confirm has the API server check the cluster, and weighs it against the nodes it may use.
+    const before = screen.getByLabelText("Before creating");
+    await waitFor(() => expect(before).toHaveTextContent("Accepts it"));
+    expect(before).toHaveTextContent(/MemoryNeeds [\d.]+ GiB, 4\.0 GiB free/u);
+    expect(screen.getByLabelText("YAML")).toHaveTextContent("name: lab");
     await user.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(window.location.pathname).toBe("/clusters/default/lab"));
     expect(calls.map((c) => c.key)).toContain("GET /api/clusters/default/lab");
     const created = calls.find((c) => c.key === "POST /api/clusters");
+    expect(calls.find((c) => c.key === "POST /api/clusters?dryRun=All")?.body).toStrictEqual(created?.body);
     expect(created?.headers.get("X-Kubehenge-CSRF")).toBe("c1");
     expect(created?.body).toMatchObject({
       name: "lab",
@@ -1324,7 +1534,14 @@ describe("create", () => {
         cni: "canal",
         workerMachine: { cores: 4 },
         controlPlaneMachine: { cores: 4 },
-        controlPlaneEndpoint: "10.0.0.20",
+        controlPlaneEndpoint: "10.0.0.30",
+        network: {
+          bridge: "vmbr0",
+          prefix: 16,
+          gateway: "10.0.0.1",
+          dnsServers: ["10.0.0.53"],
+          addresses: ["10.0.0.40-10.0.0.46"],
+        },
         oidc: [{ issuerURL: "https://sso.example", clientID: "kubernetes", usernamePrefix: "oidc:" }],
       },
     });

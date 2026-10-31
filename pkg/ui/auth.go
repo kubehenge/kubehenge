@@ -46,7 +46,11 @@ type sessionView struct {
 // to it: a management cluster that does not answer leaves it unknown rather than the user signed
 // out.
 func (s *Server) signedInView(ctx context.Context, username string, sess *session) sessionView {
-	v := sessionView{User: username, CSRF: sess.csrf, Namespace: s.Namespace}
+	v := sessionView{User: username, Namespace: s.Namespace}
+	// An API token's requests have no session, nor a CSRF token to send.
+	if sess != nil {
+		v.CSRF = sess.csrf
+	}
 	if namespaces, err := s.namespaces(ctx, s.currentKube()); err == nil {
 		v.Namespace, v.Namespaces = namespaces[0], namespaces
 	} else {

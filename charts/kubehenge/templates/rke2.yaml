@@ -27,13 +27,14 @@ metadata:
     kubehenge.dev/node-memory: '{"controlPlane":3120,"worker":704}'
     {{- include "kubehenge.addonCPU" . | nindent 4 }}
     # The CPU, in millicores, a node's own pods request besides the add-ons': on a worker RKE2's
-    # kube-proxy and canal's calico-node at 250m each (RKE2's Cilium asks for 100m, its Calico for
-    # none), a CoreDNS replica's 100m, its autoscaler's 25m, the metrics server's 100m, which
-    # tolerates no taint and so moves to a worker once rescheduled, and the CSI plugin's 20m; a
-    # control plane without workers adds the API server's 250m, etcd's and the controller
-    # manager's 200m each, the scheduler's 100m, the CSI controller's 50m and the cloud controller
-    # manager's 10m. Traefik and kube-vip ask for none.
-    kubehenge.dev/node-cpu: '{"controlPlane":1555,"worker":745}'
+    # kube-proxy at 250m and canal at 260m, its calico-node's 250m and flannel's 10m (RKE2's Cilium
+    # asks for 100m, its Calico for 50m), a CoreDNS replica's 100m, its autoscaler's 25m, the
+    # metrics server's 100m, which tolerates no taint and so moves to a worker once rescheduled,
+    # Traefik's 10m and the CSI plugin's 30m; a control plane without workers adds the API server's
+    # 250m, etcd's and the controller manager's 200m each, the scheduler's 100m, the CSI
+    # controller's 50m, and 10m each for the cloud controller manager, kube-vip and the snapshot
+    # controller.
+    kubehenge.dev/node-cpu: '{"controlPlane":1605,"worker":775}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"
@@ -166,6 +167,7 @@ spec:
                             statusAddress:
                               ip: {{ "{{ .controlPlaneEndpoint | quote }}" }}
                         {{- include "kubehenge.traefikGatewayValues" . | nindent 24 }}
+                        {{- include "kubehenge.traefikResources" . | nindent 24 }}
             - op: add
               path: /spec/template/spec/serverConfig/cni
               valueFrom:
@@ -286,6 +288,27 @@ template:
         permissions: "0600"
         content: |
           audit-policy-file: /etc/rancher/rke2/audit-policy.yaml
+      # Requests RKE2's charts leave out, where a container without one gets the least CPU weight a
+      # node gives and fails its liveness probe while the node is busy. helm-controller passes over
+      # the configuration of a chart RKE2 does not install, canal's with another CNI.
+      {{- range $chart, $component := dict "rke2-canal" "flannel" "rke2-snapshot-controller" "controller" }}
+      - path: /var/lib/rancher/rke2/server/manifests/{{ $chart }}-config.yaml
+        owner: root:root
+        permissions: "0600"
+        content: |
+          apiVersion: helm.cattle.io/v1
+          kind: HelmChartConfig
+          metadata:
+            name: {{ $chart }}
+            namespace: kube-system
+          spec:
+            valuesContent: |-
+              {{ $component }}:
+                resources:
+                  requests:
+                    cpu: 10m
+                    memory: 32Mi
+      {{- end }}
     serverConfig:
       # The Proxmox VE cloud controller manager initialises the nodes instead of RKE2's own.
       cloudProviderName: external

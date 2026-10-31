@@ -131,7 +131,7 @@ function runsAddons(c: Cluster): boolean {
 }
 
 /** addressRoom is how many node addresses the cluster's network gives, unknown where it does not read. */
-function addressRoom(c: Cluster): number | undefined {
+export function addressRoom(c: Cluster): number | undefined {
   const n = record(c.variables["network"]);
   const entries = texts(n["addresses"]) ?? [];
   const prefix = quantity(n["prefix"]);
@@ -534,7 +534,7 @@ export function ScaleDialog({ cluster: c, onClose }: { cluster: Cluster; onClose
       title={`Scale ${c.name}`}
       onClose={onClose}
       onSubmit={() => {
-        void send({ controlPlaneReplicas: controlPlane, ...change });
+        void send({ ...(controlPlane !== current && { controlPlaneReplicas: controlPlane }), ...change });
       }}
       actions={
         <>

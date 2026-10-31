@@ -10,7 +10,7 @@ Every cluster gets, whatever its distribution:
 - **A CNI**: the distribution's own, or the one chosen at creation.
 - **An ingress controller**, Traefik, on ports 80 and 443 of every node, the control planes included, so a host name pointing at the cluster's API address or at any node reaches it. RKE2 and k3s bring their own; Kubehenge installs it into kubeadm and Talos clusters, in `kube-system`.
 - **The Gateway API**, so that Gateways and HTTPRoutes work beside Ingresses: its standard channel's CRDs, with the admission policy upstream ships to refuse older or experimental ones over them, and Traefik's Gateway `traefik-gateway` in `kube-system`, which listens for HTTP where Traefik does, and for HTTPS too once the cluster has [certificates](#certificates), and takes routes from every namespace ([below](#routes-through-the-gateway-api)). RKE2 and k3s ship the CRDs with their Traefik in some releases, and all of the Gateway API in a chart of its own in later ones; there they stay the distribution's while it ships them.
-- **Health checks.** A node that stays not ready for five minutes, or does not join within twenty, is replaced; workers one at a time.
+- **Health checks.** A node that stays not ready for five minutes, or does not join within twenty, is replaced; workers one at a time. A machine marked with `kubectl annotate machine <name> cluster.x-k8s.io/remediate-machine=` is replaced the same way, and a control-plane machine only while etcd keeps its majority.
 - **Control-plane nodes kept for the control plane.** Once a worker has joined, the control-plane nodes carry the taint `node-role.kubernetes.io/control-plane:NoSchedule` in every distribution, so workloads run on the workers and leave etcd and the API server their nodes. A cluster scaled to no workers has the taint taken off, and its control-plane nodes run the workloads. A worker that fails leaves the taint in place. Pods that started on a control-plane node before the first worker joined stay there until they are next scheduled.
 - **Its own Proxmox VE user and API token**, with rights on its own pool only, held by the cloud controller manager and the CSI plugin's controller on the control-plane nodes ([architecture.md](architecture.md#each-clusters-own-corner-of-proxmox-ve)).
 
@@ -18,12 +18,13 @@ Before the first cluster, the VM templates for its distribution have to exist ([
 
 ## Create a cluster in the interface
 
-**Create cluster** on the cluster list opens a wizard of six steps: General, Network, Machines, Add-ons, Identity providers and Confirm, which sums up every setting. A field says what is wrong with it once it has been changed, or when **Next** is pressed with something missing, which then moves to the first such field. Choosing another distribution brings its defaults only into what you have not set yet. **Cancel** asks before it discards what was entered. A step in the bar above opens only once the steps before it are complete. Without `VM.Allocate` on the workload pool, **Create cluster** is off and says so.
+**Create cluster** on the cluster list opens a wizard of six steps: General, Network, Machines, Add-ons, Identity providers and Confirm, which sums up every setting. A field says what is wrong with it once it has been changed, or when **Next** is pressed with something missing, which then moves to the first such field. Choosing another distribution brings its defaults only into what you have not set yet. **Cancel** asks before it discards what was entered. A step in the bar above opens only once the steps before it are complete. Without `VM.Allocate` on the workload pool, **Create cluster** is off and says so. Before the first cluster, the list shows which distributions have a VM template, with **Build one** for administrators where none has, and whether you may create clusters.
 
 ### General
 
 | Field | What it is |
 | --- | --- |
+| Start from | Once there is a cluster: the cluster whose settings the new one starts with, the newest that works unless another is chosen, or **Defaults**. It brings the distribution, node OS, node counts and sizes, bridge, VLAN, gateway, DNS servers, load balancer, pod network, storage, placement, Proxmox VE HA, HA group labels, Headlamp, monitoring, logs, Pod Security, CIS hardening, Istio, Rancher registration and identity providers. What each cluster has to itself starts empty: the name, the API and node addresses, the load balancer's addresses, the pod and service ranges, hostnames, credentials, Cluster Mesh peers and the CSI plugin's own storage access. Choosing another replaces all but the name and namespace. |
 | Namespace | Only where an administrator has named [more namespaces for clusters](#more-namespaces-for-clusters): the namespace in the management cluster the cluster goes to, `clusters` unless another is chosen. |
 | Name | Lowercase letters, digits and dashes, starting with a letter and ending with a letter or digit, at most 40 characters. It also names the cluster's Proxmox VE pool and VMs. |
 | Distribution | kubeadm, RKE2, k3s or Talos: one per ClusterClass in the management cluster. A distribution whose VM template is not in the template pool yet says so, and the cluster cannot be created until it is built ([templates.md](templates.md)): by an administrator, or, where the administrator lets cluster creators have missing templates built, with **Build template** right there. |
@@ -37,10 +38,12 @@ Before the first cluster, the VM templates for its distribution have to exist ([
 
 | Field | What it is |
 | --- | --- |
-| Bridge | The bridge the cluster's VMs attach to: one of those chosen for clusters when the management cluster was set up. Bridges you may not use (no `SDN.Use`) are shown but disabled; when only one is left to choose, it is chosen. When the management cluster names none and Proxmox VE lists no bridges to you (no `Sys.Audit` on the nodes), you type the name in. |
-| VLAN tag | Optional, 1 to 4094. |
+| Bridge | The bridge the cluster's VMs attach to: one of those chosen for clusters when the management cluster was set up. Bridges you may not use (no `SDN.Use`) are shown but disabled; when only one is left to choose, it is chosen, and otherwise the first a node reaches its gateway through. The prefix length, gateway and DNS servers start from that node's network on the bridge, and the examples for the API and node addresses come from it; all of them can be changed. When the management cluster names none and Proxmox VE lists no bridges to you (no `Sys.Audit` on the nodes), you type the name in. |
+| VLAN tag | Optional, 1 to 4094. With a tag, nothing is taken from the node's network on the bridge, which is the untagged one. |
 | API address | The control plane's virtual IP: an unused address in the nodes' network, outside the node addresses. |
 | Node addresses | Where the nodes take their addresses from: ranges (`192.0.2.21-192.0.2.29`), networks or single addresses inside the gateway's network, one per line or separated by commas. The wizard asks for at least one address more than there are nodes, for the extra node an upgrade or a replacement adds, counting an autoscaled pool at its most; leave more for scaling up. |
+
+Where a node reports the bridge's network, the wizard fills in the API address and the node addresses with a free run from the network's 20th address on: clear of the gateway, the node, every other cluster's addresses on the bridge, and any address where a host answers ping or a connection on port 22, 80, 443, 6443, 8006 or 50000 from the management cluster. Addresses you type are probed the same way, and those a host answers on are marked In use. A host that ignores all of these looks free, so the probe is advice: the controller refuses only addresses another cluster holds. The interface's pod opens its ping socket without privileges through the `net.ipv4.ping_group_range` sysctl; without it, only the connections are tried.
 | Prefix length | Of the nodes' network. |
 | Gateway | The nodes' default gateway. |
 | DNS servers | IPv4 addresses, one per line or separated by commas. |
@@ -100,26 +103,28 @@ The add-ons need memory and CPU too. Their pods run on the workers, or on the co
 | Add-on | Pods' memory | Each control plane, kubeadm, RKE2 and Talos | Each control plane, k3s | Pods' CPU |
 | --- | --- | --- | --- | --- |
 | Headlamp | 64 MiB | 8 MiB | | 10 millicores |
-| Monitoring | 1536 MiB | 32 MiB | 616 MiB | 20 millicores |
+| Monitoring | 1536 MiB | 32 MiB | 616 MiB | 300 millicores |
 | Logs | 512 MiB | 56 MiB | | 75 millicores |
 | Backups | 384 MiB | 184 MiB | 24 MiB | 70 millicores |
 | Kyverno | 512 MiB | 552 MiB | 520 MiB | 500 millicores |
 | Istio | 384 MiB | 288 MiB | 504 MiB | 400 millicores |
-| Cilium Cluster Mesh | 128 MiB | | | none |
-| Load balancer | 128 MiB | | | 50 millicores |
-| GitOps with Argo CD | 512 MiB | 432 MiB | 360 MiB | none |
+| Cilium Cluster Mesh | 128 MiB | | | 30 millicores |
+| Load balancer | 128 MiB | | | 60 millicores |
+| GitOps with Argo CD | 512 MiB | 432 MiB | 360 MiB | 90 millicores |
 | GitOps with Flux | 384 MiB | | | 50 millicores |
-| cert-manager, with monitoring, Rancher or certificates | 192 MiB | 48 MiB | | none |
-| Rancher | 2048 MiB | 512 MiB | 512 MiB | 10 millicores |
-| Rancher's agent, in every cluster that registers | 512 MiB | | | none |
+| cert-manager, with monitoring, Rancher or certificates | 192 MiB | 48 MiB | | 30 millicores |
+| Rancher | 2048 MiB | 512 MiB | 512 MiB | 120 millicores |
+| Rancher's agent, in every cluster that registers | 512 MiB | | | 30 millicores |
 
 A worker counts 448 MiB for itself on k3s and 704 MiB on kubeadm, RKE2 and Talos. A control plane counts 1848 MiB on k3s, 2392 MiB on Talos, 3120 MiB on RKE2 and 3376 MiB on kubeadm before any add-on; with every add-on but Rancher it needs 3872 MiB on k3s, 3992 MiB on Talos, 4720 MiB on RKE2 and 4976 MiB on kubeadm, above the least of 4096 MiB on RKE2 and kubeadm. A single k3s worker with every add-on but Rancher and GitOps needs 4672 MiB, 4288 MiB without backups, 4160 MiB without logs, or 3776 MiB without either, and GitOps with Argo CD on top takes each 512 MiB further; the default machines hold every add-on but Rancher, logs, backups and GitOps on every distribution, kubeadm's control plane with 4304 MiB, and a second worker makes room for logs and backups too.
 
-For CPU a worker counts what its distribution, its CNI and Kubehenge's own pods request there: 230 millicores on kubeadm, 320 on k3s, 480 on Talos, which keeps 50 of them back for the system and whose flannel asks for 200 with its network policy controller, and 745 on RKE2, whose kube-proxy and canal ask for 250 each. Without workers, a control plane counts 1040 millicores on kubeadm, 380 on k3s, 900 on Talos and 1555 on RKE2. Every add-on but Rancher takes 1075 millicores, so it fits on one worker of the default 2 cores on every distribution. On a worker of a single core, the least kubeadm, k3s and Talos allow, Kyverno and Istio do not fit together, nor on Talos Kyverno with every other add-on but Istio; such a worker needs a second core, or a second worker beside it.
+For CPU a worker counts what its distribution, its CNI and Kubehenge's own pods request there: 250 millicores on kubeadm, 350 on k3s, 490 on Talos, which keeps 50 of them back for the system and whose flannel asks for 200 with its network policy controller, and 775 on RKE2, whose kube-proxy asks for 250 and canal for 260. Without workers, a control plane counts 1080 millicores on kubeadm, 430 on k3s, 910 on Talos and 1605 on RKE2. Every add-on but Rancher takes 1595 millicores with Argo CD, or 1555 with Flux, so it fits on one worker of the default 2 cores on kubeadm and k3s; Talos and RKE2 need a third core for it, or a second worker. On a worker of a single core, the least kubeadm, k3s and Talos allow, Kyverno and Istio do not fit together, nor either of them with every other add-on; such a worker needs a second core, or a second worker beside it.
 
 Kubehenge refuses a cluster short of that room when it is created and when an add-on is switched on or its nodes change. The interface raises the machines to it as add-ons are chosen and shows the add-ons' totals on the Add-ons step.
 
 ### Add-ons
+
+Each add-on the class offers is a card with the memory its pods take by the class's figures, and opens on its settings once chosen; under the cards, the least memory and cores each node that carries them needs.
 
 - **Headlamp**, a web interface inside the cluster, with an optional host name to serve it at through the cluster's ingress controller. It has no rights of its own: everyone signs in with their own token or through OpenID Connect. With **Read-only without sign-in** (off by default), its service account is bound to Kubernetes' built-in `view` ClusterRole and Headlamp uses that account for every request, so anyone who reaches it, at its host name or through a port-forward, sees the workloads, Services, ConfigMaps, events and pod logs of every namespace, and custom resources whose roles add themselves to `view`, without signing in. It shows no Secrets and no nodes, and changes nothing; a token given to it is not used, so changes go through kubectl or the shared Headlamp. Without a host name, reach it with `kubectl -n headlamp port-forward svc/headlamp 8080:80`. Every cluster in the interface's namespaces can also be opened in the appliance's shared Headlamp once it is available, without this add-on ([below](#open-a-cluster-in-headlamp)).
 - **Monitoring**: Prometheus, Alertmanager and Grafana, with kube-prometheus-stack's dashboards and alerts for every node and control-plane component, each scraped over verified, authenticated TLS ([architecture.md](architecture.md#add-ons)). It installs cert-manager too, and takes about 1.5 GiB of the workers' memory ([Machines](#machines)) and a 20 GiB volume. Grafana's `admin` password is in the `kube-prometheus-stack-grafana` Secret of the `monitoring` namespace. With a host name, Grafana is served at it through the cluster's ingress controller; without one, reach it with `kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80`.
@@ -145,7 +150,7 @@ The OpenID Connect providers whose ID tokens the cluster's API server accepts, b
 
 ### Confirm
 
-Sums up every setting by name; **Request** below it shows what the interface sends. **Create** creates the Cluster and opens its page.
+Checks the cluster before it exists: the API server runs every webhook and admission policy on it without creating it (`POST /api/clusters?dryRun=All`, as `kubectl create --dry-run=server` would), and the memory and disk its VMs take at their most are weighed against what the nodes it may use and its storage have free, as advice. Below, every setting by name, and the Cluster as the API server would store it, as YAML: **Copy as YAML** copies it for `kubectl apply` or a Git repository. Credentials typed into the wizard are not in it; they are stored once the cluster exists. **Create** is offered once the API server accepts the cluster, and creates it and opens its page.
 
 Kubehenge's controller first gives the cluster its Proxmox VE pool, user, token and the VM that will own its persistent volumes; only then does Cluster API clone the VMs. The cluster shows **Provisioning** until it is available.
 
@@ -161,19 +166,19 @@ Each entry opens the view that says more: the health page for what it found, the
 
 Down the right side of a wide window, **Runs** follows the work that goes on by itself once started: the same changes to clusters, and each cluster's etcd snapshots and restores and its backups and restores, each with how far it has come. Those who may set up the management cluster also see its applies, the template builds and refreshes, and the appliance's upgrades. A run that failed stays there for a day with the first error it reported; one that went well, for an hour. A change or a creation whose machines are stuck moves under **Stalled**, with the worst its machines report, and back under **Running** once one of them is ready. It folds away with **›** or `R`; in a narrower window **Running** in the top bar shows it.
 
-Each run opens a page of its own: what it does and on which cluster, who started it and how long it has taken, the first error pinned at the top, and its steps, each done, under way or waiting. A change [applied here](#staged-changes) is a run too, kept for a day, in place of the cluster's line under **Running**: accepted by the API server, then the control-plane machines or the workers it replaces, counted as the new ones are ready and the old ones gone, or the machines it adds or removes, then the cluster settling once its topology has taken the change in and it is available. An etcd restore shows its phases; the management cluster's applies and the template builds show the end of their log.
+Each run opens a page of its own: what it does and on which cluster, who started it and how long it has taken, the first error pinned at the top, and its steps, each done, under way or waiting. A failed backup, etcd snapshot or template refresh has **Try again**, which starts it again and opens the view the new run shows on. A change [applied here](#staged-changes) is a run too, kept for a day, in place of the cluster's line under **Running**: accepted by the API server, then the control-plane machines or the workers it replaces, counted as the new ones are ready and the old ones gone, or the machines it adds or removes, then the cluster settling once its topology has taken the change in and it is available. An etcd restore shows its phases; the management cluster's applies and the template builds show the end of their log.
 
-**Go to or run…** in the top bar, or `Ctrl K` (`⌘ K` on a Mac), finds any cluster, any of its views, a page or an action by a few letters of its name: `db opt` finds the options of `db`. Outside fields, single keys work too, and `?` lists them:
+**Go to or run…** in the top bar, or `Ctrl K` (`⌘ K` on a Mac), finds any cluster, any of its views, a page or an action by a few letters of its name: `db opt` finds the options of `db`. A cluster's actions are there too, those you may start: Scale, Upgrade, Delete and its kubeconfig or talosconfig, so `db upg` opens the upgrade of `db` on its page. Each is an address as well, the cluster's page with `?do=scale`, `upgrade`, `delete`, `kubeconfig` or `talosconfig`, which starts it once and then leaves the address. Outside fields, keys work too, and `?` lists them. Those that leave the page or change its layout are two keys pressed one after the other, so a stray key does neither:
 
-| Key | Does |
+| Keys | Does |
 | --- | --- |
 | `/` | the same as `Ctrl K` |
-| `C` | the clusters |
-| `N` | a new cluster |
-| `A` | Administration, for those who may open it |
+| `G` `C` | the clusters |
+| `G` `N` | a new cluster |
+| `G` `A` | Administration, for those who may open it |
 | `[`, `]` | the cluster before or after the open one, in the fleet's order, on the same view |
 | `1` to `5` | the open cluster's Summary, Health, Machines, Backups and Options |
-| `R` | shows or folds away the running work |
+| `T` `R` | shows or folds away the running work |
 
 ## The cluster page
 
@@ -181,11 +186,11 @@ The buttons beside the cluster's name act on the whole cluster: **Scale**, **Upg
 
 - **Summary:** first the cluster's machines laid out by the Proxmox VE node their VMs run on, control planes first, each with its state; the other nodes you may see follow empty, as places new machines may go, and the machines whose node you may not see come last. It carries the Machines view's warning when one node runs more than one control-plane VM. Then its status, distribution, Kubernetes version, API endpoint, pod and service ranges, ready control-plane nodes and workers, with autoscaled pools as `md-0: 2 of 0 to 5, autoscaled`, Proxmox VE pool, namespace, who created it when, the last automatic upgrade, and for kubeadm, RKE2 and k3s which build of their VM template the nodes run, when they next move to a newer one and when they last did ([Node image refresh](#node-image-refresh)), and for Talos the release the nodes run, the one new machines boot first when it differs, the node being upgraded and the last upgrade ([Talos upgrades](#talos-upgrades)).
 - **Health:** whether the cluster is healthy, changing, degraded or unreachable, with tiles for the control plane (and etcd, on kubeadm), workers, node pressure, unwell pods, add-ons and machine health checks; then what needs attention, most serious first, each linking to its details. Below come the nodes (ready, pressure, cordons and taints, what their pods ask for, and the VM's CPU over the last hour and its memory, as far as you may see the VMs), the pods that are not well (crash loops, images that do not pull, pods that cannot be scheduled, containers killed for memory), volume claims still waiting, the add-ons' Helm releases, the worker pools, the control plane's and the health checks' conditions, the last hour's warnings from inside the cluster and from Cluster API, and last the cluster's own conditions. Those with `Sys.Modify` on the cluster's pool also get **Logs** on each unwell pod: the last 60 lines of a container, from its last run when it has not run since. With the shared Headlamp running, each pod also links to its page there. The page reads inside clusters of the interface's namespaces only; for others it shows what Cluster API knows.
-- **Machines:** each node's role, status, phase, version, addresses, age, and the Proxmox VE node its VM runs on, as far as you may see the cluster's VMs. When one Proxmox VE node runs more than one of the control-plane VMs, the page warns and says what losing that node would cost; migrating one of them in Proxmox VE to a node of its own fixes it. Those with `Sys.Modify` on the cluster's pool also get **Boot log** on each machine: what its node logged as it booted, read by the controller, for a node that never joined ([troubleshooting.md](troubleshooting.md#a-nodes-boot-log)).
+- **Machines:** each node's role, status, phase, version, addresses, age, and the Proxmox VE node its VM runs on, as far as you may see the cluster's VMs. When one Proxmox VE node runs more than one of the control-plane VMs, the page warns and says what losing that node would cost; migrating one of them in Proxmox VE to a node of its own fixes it. Those with `VM.Allocate` on the cluster's pool get **Replace** on each machine, which sets that annotation, and **Keep** to take it back before the replacement starts. While the replacement waits, as for a control plane that cannot lose a member, the machine says why. On a worker they also get **Delete**, which drains it and deletes its VM and disks, its pool shrinking by one; as with kubectl, it marks the machine with `cluster.x-k8s.io/delete-machine=` and lowers the pool's `replicas` in the Cluster, so Cluster API deletes that machine before any other. An autoscaled pool's workers are the autoscaler's to delete. **Cordon** keeps new pods off a machine's node and **Uncordon** lets them on again, as `kubectl cordon` and `kubectl uncordon` do; the node shows as cordoned. Those with `VM.PowerMgmt` get **Reboot**, which has Proxmox VE shut the VM down and start it again, and those with `VM.Console` get **Console**, which opens the VM's console in Proxmox VE's web interface, signed in there as it asks. Those with `Sys.Modify` on the cluster's pool also get **Boot log** on each machine: what its node logged as it booted, read by the controller, for a node that never joined ([troubleshooting.md](troubleshooting.md#a-nodes-boot-log)).
 - **Backups:** the cluster's backups and restores, with **Back up now** and **Restore…** ([Back up and restore](#back-up-and-restore)).
 - **Options:** every setting that can change once the cluster exists, each listed with what changing it does [below](#change-add-ons-and-sign-in). Each has **Edit** (**Upgrade** for the Talos release, **Uninstall** for Rancher on the cluster that runs it), disabled for those who may not change the cluster. The pod network and CIS hardening are fixed, so they have none.
 
-The status reads **Provisioning**, **Available**, **Upgrading** or **Reconciling** while a change rolls out, **Deleting**, or **Failed**. A cluster deleted while its page is open says so.
+The status reads **Provisioning**, **Available**, **Upgrading** or **Reconciling** while a change rolls out, **Deleting**, or **Failed**. A cluster deleted while its page is open says so. While Health finds something, every other view shows the most serious of it under the tabs, with how many more there are and the way to Health, as it does when the cluster does not answer. When the interface cannot read the cluster's health or the fleet again, it keeps the last reading greyed out and marked **Stale** until a read succeeds. When it cannot read the clusters at all, as while the management cluster does not answer, the list counts down to its next try, with **Try now**, and gives administrators the way to the management cluster's page in Administration, which works without it.
 
 Above the views, the page shows what Kubehenge's controller reports on the Cluster, as kubectl shows it too ([troubleshooting.md](troubleshooting.md#cluster-api-objects)):
 
@@ -194,11 +199,17 @@ Above the views, the page shows what Kubehenge's controller reports on the Clust
 
 ### Staged changes
 
-A cluster's settings change in two steps. **Save** in a dialog stages the change: the API server checks it with those staged before it, as it would make them, so a change it refuses shows its reason in the dialog, and nothing changes in the cluster yet. A bar above the views then counts what is staged and says what applying it does to the machines, and **Options** shows each staged value under the one in force. A dialog opened again starts from what is staged. **Review plan** lists each setting as it is and as it would be, and whether it replaces no machine, adds or removes machines, or replaces the control-plane machines, the workers or every machine, one at a time; **Apply** makes the changes together, as one change of the cluster. **Discard** drops them. Scaling, upgrading, Talos upgrades and every setting under **Options** are staged this way; deleting the cluster, backups, restores and snapshots run at once.
+A cluster's settings change in two steps. **Save** in a dialog, or a switch under **Options**, stages the change: the API server checks it with those staged before it, as it would make them, so a change it refuses shows its reason in the dialog, and nothing changes in the cluster yet. A bar above the views then counts what is staged and says what applying it does to the machines, and **Options** shows each staged value under the one in force. A dialog opened again starts from what is staged. **Review plan** lists each setting as it is and as it would be, and whether it replaces no machine, adds or removes machines, or replaces the control-plane machines, the workers or every machine, one at a time; **Apply** makes the changes together, as one change of the cluster. **Discard** drops them. Scaling, upgrading, Talos upgrades and every setting under **Options** are staged this way; deleting the cluster, backups, restores and snapshots run at once.
 
 ## Scale
 
 **Scale** sets the control-plane nodes (1, 3, 5 or 7: an odd number, so etcd keeps a majority when one fails) and, for each worker pool, either its workers (0 to 100) or, under **Scaling**, **Autoscaled** between its fewest and most workers ([below](#autoscaling)).
+
+## Pools
+
+**Machines** lists the control plane and each worker pool with its nodes, cores, memory and disk. **Add pool** adds a worker pool with its own name, workers and size; a new cluster starts with one, `md-0`. **Resize** gives the control plane, or one pool, another size, and replaces those nodes one at a time; a pool resized keeps its own size from then on, and the others keep the cluster's. **Delete** drains and deletes a pool's workers and their disks. Each is staged with the cluster's other changes, and the API server holds it to the class's least size and to the room the add-ons need.
+
+A pool's name takes lowercase letters, digits and dashes and starts with a letter; with the cluster's name it takes at most 44 characters, so that its nodes' host names stay within one DNS label.
 
 ## Autoscaling
 
@@ -225,7 +236,7 @@ An autoscaled pool is sized by the [cluster autoscaler](https://github.com/kuber
 
 ## Upgrade
 
-**Upgrade** offers the newer releases of the cluster's minor version and of the next one: Kubernetes upgrades one minor version at a time and never back, and the interface refuses anything else. Cluster API replaces the control-plane nodes one by one first, then the workers. A kubeadm cluster needs the template of the new version first. Automatic upgrades inside a maintenance window are set under **Options**, **Edit** beside Automatic upgrades. Both are described in [upgrading.md](upgrading.md#workload-clusters).
+**Upgrade** offers the newer releases of the cluster's minor version and of the next one: Kubernetes upgrades one minor version at a time and never back, and the interface refuses anything else. Cluster API replaces the control-plane nodes one by one first, then the workers. A kubeadm cluster needs the template of the new version first. The newest version the cluster may move to is chosen already, and under it the dialog checks before you upgrade: the API server's dry run of the change and what it replaces (a refusal disables **Upgrade**), whether the node addresses leave one spare for the extra node a rollout adds, and how many problems the cluster's Health page lists. Automatic upgrades inside a maintenance window are set under **Options**, **Edit** beside Automatic upgrades. Both are described in [upgrading.md](upgrading.md#workload-clusters).
 
 A cluster with one control plane runs on two etcd members while its control plane is replaced, so its API stops if either does. The plan of such a change warns of it, as kubectl does. If the new machine has not become ready after 20 minutes, the cluster's page says the roll stalled, why, and whether the API still answers, and offers **Recover…**, which keeps one control-plane machine and replaces the others ([troubleshooting.md](troubleshooting.md#one-control-plane-its-roll-stalled)).
 
@@ -249,29 +260,27 @@ With **Apply Talos patch releases** on under Automatic upgrades (`upgrades.nodeI
 
 ## Change add-ons and sign-in
 
-**Options** lists every setting that can change once the cluster exists, in this order. Some show only where the cluster or the management cluster offers them.
+**Options** lists every setting that can change once the cluster exists, grouped into Nodes, Network, Storage, Add-ons, Security and Maintenance. Some show only where the cluster or the management cluster offers them. A setting that is only on or off (Proxmox VE HA, HA group labels, the CSI plugin's newest release, volume snapshots, Istio) has a switch in its row, which stages the change as a dialog's **Save** does and says what switching it on brings; one that cannot be switched on says why. The rest have **Edit**.
 
-| Setting | Shown | Changing it |
-| --- | --- | --- |
-| Node OS | kubeadm, RKE2 and k3s | Replaces every node with a clone of the new node OS's template, one at a time as in an upgrade. That template has to be built first ([templates.md](templates.md#node-oses)); a node OS not released yet, or without a template, cannot be chosen. |
-| Talos release | Talos | **Upgrade** upgrades the nodes in place ([Talos upgrades](#talos-upgrades)). |
-| Pod network | always | Fixed for the cluster's life ([Pod network](#pod-network)). |
-| Load balancer | always | See the list below. |
-| CIS hardening | always | Fixed for the cluster's life ([Add-ons](#add-ons)). |
-| Placement | always | Applies to the VMs created after it, by scaling up, an upgrade or a replacement; those running stay where they are. Nodes the cluster has that you cannot see are listed too, and may be kept ([Machines](#machines)). |
-| Proxmox VE HA | where the management cluster has Proxmox VE HA and the storage is shared | Takes the control-plane VMs into HA or out of it ([Machines](#machines)). |
-| CSI plugin | where the management cluster lets clusters choose its newest release, or while the cluster runs it | [Persistent volumes](#persistent-volumes). |
-| Volume snapshots | where the management cluster lets clusters take them, or while they are on | [Volume snapshots](#volume-snapshots). |
-| HA group labels | unless the management cluster switched them off for every cluster, or while they are on | [Machines](#machines). |
-| Headlamp, Monitoring, Logs | always | See the list below. |
-| Backups | where an administrator set a backup target, or while they are on | See the list below. |
-| etcd snapshots | where an administrator set a backup target, or while they are on | [etcd snapshots](#etcd-snapshots). |
-| Autoscaler | always | Its expander, its timing and where it runs ([Autoscaling](#autoscaling)). |
-| Certificates, Pod security, Istio | always | See the list below. |
-| Cluster Mesh | on a cluster that runs Cilium | See the list below. |
-| Rancher, GitOps | always | See the list below. |
-| Automatic upgrades | always | The Kubernetes upgrades, their window and the move to new node images ([upgrading.md](upgrading.md#automatically-inside-a-window), [Node image refresh](#node-image-refresh)). |
-| Identity providers | always | See the list below. |
+| Group | Setting | Shown | Changing it |
+| --- | --- | --- | --- |
+| Nodes | Node OS | kubeadm, RKE2 and k3s | Replaces every node with a clone of the new node OS's template, one at a time as in an upgrade. That template has to be built first ([templates.md](templates.md#node-oses)); a node OS not released yet, or without a template, cannot be chosen. |
+| Nodes | Talos release | Talos | **Upgrade** upgrades the nodes in place ([Talos upgrades](#talos-upgrades)). |
+| Nodes | Placement | always | Applies to the VMs created after it, by scaling up, an upgrade or a replacement; those running stay where they are. Nodes the cluster has that you cannot see are listed too, and may be kept ([Machines](#machines)). |
+| Nodes | Proxmox VE HA | where the management cluster has Proxmox VE HA and the storage is shared | Takes the control-plane VMs into HA or out of it ([Machines](#machines)). |
+| Nodes | HA group labels | unless the management cluster switched them off for every cluster, or while they are on | [Machines](#machines). |
+| Nodes | Autoscaler | always | Its expander, its timing and where it runs ([Autoscaling](#autoscaling)). |
+| Network | Pod network | always | Fixed for the cluster's life ([Pod network](#pod-network)). |
+| Network | Load balancer | always | See the list below. |
+| Network | Cluster Mesh | on a cluster that runs Cilium | See the list below. |
+| Storage | CSI plugin | where the management cluster lets clusters choose its newest release, or while the cluster runs it | [Persistent volumes](#persistent-volumes). |
+| Storage | Volume snapshots | where the management cluster lets clusters take them, or while they are on | [Volume snapshots](#volume-snapshots). |
+| Add-ons | Headlamp, Monitoring, Logs, Certificates, Istio, Rancher, GitOps | always | See the list below. |
+| Security | CIS hardening | always | Fixed for the cluster's life ([Add-ons](#add-ons)). |
+| Security | Pod security, Identity providers | always | See the list below. |
+| Maintenance | Backups | where an administrator set a backup target, or while they are on | See the list below. |
+| Maintenance | etcd snapshots | where an administrator set a backup target, or while they are on | [etcd snapshots](#etcd-snapshots). |
+| Maintenance | Automatic upgrades | always | The Kubernetes upgrades, their window and the move to new node images ([upgrading.md](upgrading.md#automatically-inside-a-window), [Node image refresh](#node-image-refresh)). |
 
 The add-ons and sign-in:
 
@@ -528,6 +537,10 @@ The interface checks the signed-in user's Proxmox VE privileges on each cluster'
 | Have a missing template built, where the administrator allows it | `VM.Allocate` | the workload pool |
 | Use the DNS-01 credential stored for every cluster | `Sys.Modify` | the workload pool when creating, the cluster's pool when changing |
 | Scale, upgrade, change add-ons, automatic upgrades and sign-in, delete | `VM.Allocate` | the cluster's pool |
+| Replace or delete a machine | `VM.Allocate` | the cluster's pool |
+| Cordon or uncordon a machine's node | `VM.Allocate` | the cluster's pool |
+| Reboot a machine | `VM.PowerMgmt` | the cluster's pool |
+| Open a machine's console | `VM.Console` | the cluster's pool |
 | See its backups and restores, and a restore's results | `VM.Audit` | the cluster's pool |
 | Back up now, delete a backup | `VM.Allocate` | the cluster's pool |
 | Restore a backup | `Sys.Modify` | the cluster's pool |
@@ -572,6 +585,29 @@ An administrator can let cluster creators choose among more namespaces than `clu
 - A namespace that does not exist yet is created. One taken off the list keeps its clusters; the interface then shows them read-only, and they are changed with kubectl.
 - Cluster Mesh links clusters of one namespace only.
 - Names Kubernetes, the providers and Kubehenge use themselves are refused: `default`, `cert-manager`, `kube-*` and `*-system`.
+
+## From the command line
+
+`kubehenge cluster` lists, creates, scales and deletes clusters through the interface, signed in with a Proxmox VE API token instead of a password. The token is held to the privileges above as a user is: one with privilege separation holds only what both it and its user are given, one without holds its user's. Proxmox VE is asked about a token at most once a minute, so one revoked there stops working within that minute.
+
+```sh
+export KUBEHENGE_URL=https://kubehenge.example.org
+export KUBEHENGE_PROXMOX_TOKEN='ci@pve!kubehenge=<secret>'
+kubehenge cluster list
+kubehenge cluster create -f web.yaml
+kubehenge cluster scale web --control-planes 3 --workers md-0=5
+kubehenge cluster kubeconfig web > web.kubeconfig
+kubehenge cluster get web
+kubehenge cluster machine cordon web web-md-0-x7k2p
+kubehenge cluster delete web --yes
+```
+
+- The token is read only from `KUBEHENGE_PROXMOX_TOKEN`, so it never shows in a process list. `--ca` (or `KUBEHENGE_CA`) names the CA of the interface's certificate where the system does not trust it.
+- A cluster is found by its name; `-n` names its namespace where more than one has a cluster of that name.
+- `create` takes what the wizard sends, in YAML or JSON: `name`, `class`, `version`, `controlPlaneReplicas`, `workerReplicas` and `variables`, and `namespace` where there are [more namespaces](#more-namespaces-for-clusters). The interface checks it as it checks the wizard's.
+- `machine` takes a machine's name, as `get` lists it: `replace`, `keep`, `delete`, `cordon`, `uncordon` and `reboot` do what a machine's actions in the interface do.
+- `get` and `list -o json` print the interface's own description of a cluster for scripts to read.
+- Any HTTP client can do the same: send `Authorization: PVEAPIToken=<user>@<realm>!<name>=<secret>` to the interface's `/api/clusters`.
 
 ## With kubectl
 
@@ -632,7 +668,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 - **The ClusterClasses** are `kubehenge-kubeadm`, `kubehenge-rke2`, `kubehenge-k3s` and `kubehenge-talos`, in `kubehenge-system`.
 - **The interface's rules hold here too**, checked by the API server as the Cluster is applied: a name of at most 40 characters, a version in the distribution's form, an upgrade of one minor version at most and never back, 1, 3, 5 or 7 control-plane nodes, 0 to 100 workers in each pool, enough node addresses for every machine at once plus one for a rollout, node addresses and a control-plane endpoint on the gateway's network with the endpoint outside the node addresses, and none of another cluster's addresses on the same bridge and VLAN.
 - **The namespace** decides the pool: `<workload pool>/<namespace>.<name>`. Clusters in the interface's namespaces (`clusters`, and any [added for clusters](#more-namespaces-for-clusters)) are also looked after from the interface; any other namespace works, and the interface shows those clusters read-only. The ClusterClasses stay in `kubehenge-system`, which `topology.classRef.namespace` names, so every namespace uses the same ones. Names are held to 40 characters so that the nodes' host names stay within one DNS label.
-- **Worker pools** are machine deployments of the class `worker`; a Cluster may have several. An autoscaled pool has no `replicas` and carries Cluster API's annotations `cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size` and `-max-size` under `metadata.annotations` (at most 100), with the pool's node labels under `metadata.labels`.
+- **Worker pools** are machine deployments of the class `worker`; a Cluster may have several, each named once, and a pool added later is held to the [pool name rule](#pools). A pool's own size is an override of `workerMachine` under `variables.overrides`. An autoscaled pool has no `replicas` and carries Cluster API's annotations `cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size` and `-max-size` under `metadata.annotations` (at most 100), with the pool's node labels under `metadata.labels`.
 - **Ranges** come from `spec.clusterNetwork`; without it, the distribution's own apply (`10.244.0.0/16` and `10.96.0.0/12` for kubeadm and Talos, `10.42.0.0/16` and `10.43.0.0/16` for RKE2 and k3s). Kubehenge refuses to create a cluster whose ranges overlap its nodes' network.
 
 ### Variables

@@ -1,7 +1,7 @@
 import { useState, type JSX } from "react";
 
 import { api } from "./api";
-import { clusterPath, type View } from "./ClusterDetail";
+import { clusterPath, type View } from "./cluster-paths";
 import { Link } from "./router";
 import type {
   AddonRelease,
@@ -31,13 +31,27 @@ import {
   age,
   bytes,
   filled,
+  pollCache,
   pollIdle,
   sentence,
   usePoll,
+  Skeleton,
+  type Poll,
 } from "./ui";
 
 // A cluster that is not healthy is looked at more often, to follow it getting better.
 const pollUnwell = 10_000;
+
+const healthCache = pollCache<ClusterHealth>();
+
+/** useClusterHealth reads a cluster's health page, shared by every view that shows part of it. */
+export function useClusterHealth(c: { namespace: string; name: string }): Poll<ClusterHealth> {
+  return usePoll(
+    () => api.health(c.namespace, c.name),
+    (shown) => (shown?.verdict === "healthy" ? pollIdle : pollUnwell),
+    { cache: healthCache, key: `${c.namespace}/${c.name}` },
+  );
+}
 
 const msPerSecond = 1000;
 const percent = 100;
@@ -109,14 +123,15 @@ function verdictState(h: ClusterHealth): State {
 }
 
 // Verdict carries, behind its state, why nothing from inside the cluster shows when nothing does.
-function Verdict({ health: h }: { health: ClusterHealth }): JSX.Element {
+function Verdict({ health: h, stale }: { health: ClusterHealth; stale: boolean }): JSX.Element {
+  const at = new Date(h.read).toLocaleTimeString();
   return (
     <div className="verdict">
       <Status state={verdictState(h)} text={verdicts[h.verdict]} />
       {filled(h.workload) && <Detail>{h.workload}</Detail>}
       <span className="spacer" />
-      <span className="muted" title={new Date(h.read).toLocaleString()}>
-        Read at {new Date(h.read).toLocaleTimeString()}
+      <span className={stale ? "hint-warning" : "muted"} title={new Date(h.read).toLocaleString()}>
+        {stale ? `Stale, read at ${at}` : `Read at ${at}`}
       </span>
     </div>
   );
@@ -268,10 +283,11 @@ function healthChecksTile(h: ClusterHealth): Tile {
   return { section: "cluster-api", label: "Health checks", value: `${healthy} of ${expected} healthy`, state };
 }
 
-function Tiles({ health: h }: { health: ClusterHealth }): JSX.Element {
+// A stale reading is the last one shown after a later read failed: it may no longer hold.
+function Tiles({ health: h, stale }: { health: ClusterHealth; stale: boolean }): JSX.Element {
   const tiles = [controlPlaneTile(h), workersTile(h), pressureTile(h), podsTile(h), addonsTile(h), healthChecksTile(h)];
   return (
-    <ul className="tiles" aria-label="At a glance">
+    <ul className={stale ? "tiles tiles-stale" : "tiles"} aria-label={stale ? "At a glance, stale" : "At a glance"}>
       {tiles.map((t) => (
         <li key={t.label}>
           <a className={`tile tile-${t.state}`} href={`#${anchor(t.section)}`}>
@@ -985,7 +1001,7 @@ function PodLog({ cluster, pod, container }: { cluster: ClusterRef; pod: UnwellP
   return (
     <>
       <ErrorBox message={error} />
-      {logs === undefined && !filled(error) && <p className="muted">Loading…</p>}
+      {logs === undefined && !filled(error) && <Skeleton rows={8} />}
       {logs?.previous === true && <p className="muted">Previous run</p>}
       {logs !== undefined && (
         <pre className="log pod-log" aria-label={`Log of ${container}`}>
@@ -1002,16 +1018,13 @@ function PodLog({ cluster, pod, container }: { cluster: ClusterRef; pod: UnwellP
  */
 export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlamp?: string | undefined }): JSX.Element {
   const ref = { namespace: c.namespace, name: c.name };
-  const { data: h, error } = usePoll(
-    () => api.health(ref.namespace, ref.name),
-    (shown) => (shown?.verdict === "healthy" ? pollIdle : pollUnwell),
-  );
+  const { data: h, error } = useClusterHealth(ref);
   const [logsOf, setLogsOf] = useState<UnwellPod>();
   if (!h) {
     return (
       <div className="box">
         <ErrorBox message={error} />
-        {!filled(error) && <p className="muted">Loading…</p>}
+        {!filled(error) && <Skeleton rows={6} shape="tiles" />}
       </div>
     );
   }
@@ -1019,9 +1032,9 @@ export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlam
   return (
     <>
       <div className="box">
-        <Verdict health={h} />
+        <Verdict health={h} stale={filled(error)} />
         <ErrorBox message={error} />
-        <Tiles health={h} />
+        <Tiles health={h} stale={filled(error)} />
       </div>
       <NeedsAttention health={h} actions={actions} cluster={ref} />
       <Nodes health={h} />

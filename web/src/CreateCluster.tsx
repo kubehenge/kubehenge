@@ -1,11 +1,12 @@
-import { Fragment, useEffect, useRef, useState, type JSX } from "react";
+import { useEffect, useRef, useState, type JSX } from "react";
 
 import { AddOnsStep } from "./AddOnsStep";
-import { api, bridgesOf } from "./api";
-import { clusterPath } from "./ClusterDetail";
+import { api, bridgesOf, dnsOf } from "./api";
+import { clusterPath } from "./cluster-paths";
 import {
   classBridges,
   classStorages,
+  createRoom,
   csiOffer,
   csiProblems,
   fieldProblems,
@@ -21,7 +22,13 @@ import {
   summary,
   variable,
   versionsNodeOS,
+  addressesOf,
+  bridgeNetwork,
+  bridgeOf,
+  nodesNeeded,
   withBackupChoices,
+  withBridgeNetwork,
+  withFreeAddresses,
   withClass,
   namespaceOf,
   withNamespace,
@@ -31,15 +38,21 @@ import {
   type Form,
   type Step,
 } from "./create-form";
-import { GeneralStep, IdentityStep, MachinesStep, NetworkStep, useClassTalos } from "./CreateSteps";
+import { ConfirmStep, useCreateCheck } from "./CreateCheck";
+import { GeneralStep, IdentityStep, MachinesStep, NetworkStep, useClassTalos, useFreeAddresses } from "./CreateSteps";
+import { useFleet } from "./fleet";
+import { networkOf } from "./network";
 import { offersHA, offersHAGroups, useHARules } from "./Placement";
 import { navigate } from "./router";
+import { clusterKey, fromCluster, startable, startDefault, startKeys } from "./start-from";
 import type { Bridge, Cluster, ClusterClass, PveNode, Storage, Versions } from "./types";
 import { Detail, Dialog, ErrorBox, errorMessage, filled, sole } from "./ui";
 
 // versionsKey is where the versions offered are kept: a distribution's, kubeadm's per node OS.
 const versionsKey = (distribution: string, nodeOS: string | undefined): string =>
   nodeOS === undefined ? distribution : `${distribution} ${nodeOS}`;
+
+const noNetwork: ReturnType<typeof bridgeNetwork> = {};
 
 // The choices that can ask more of the machines, which then grow to it.
 const raising = new Set<keyof Form>([
@@ -67,9 +80,11 @@ export function CreateCluster({
   canTrust?: boolean | undefined;
   namespaces: string[];
 }): JSX.Element {
+  const fleet = useFleet();
   const [classes, setClasses] = useState<ClusterClass[]>([]);
   const [discarding, setDiscarding] = useState(false);
   const [bridgesByNode, setBridgesByNode] = useState<Record<string, Bridge[]>>({});
+  const [dnsByNode, setDNSByNode] = useState<Record<string, string[]>>({});
   const [storages, setStorages] = useState<Storage[]>([]);
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [nodes, setNodes] = useState<PveNode[]>([]);
@@ -86,6 +101,8 @@ export function CreateCluster({
   const [touched, setTouched] = useState<ReadonlySet<string>>(new Set());
   const [attempted, setAttempted] = useState<ReadonlySet<Step>>(new Set());
   const cls = classes.find((c) => c.name === entered.className);
+  // What the user set, and what the cluster started from set, stays when a default would replace it.
+  const kept = (k: keyof Form): boolean => touched.has(k) || (filled(entered.from) && startKeys.has(k));
   const set = <K extends keyof Form>(k: K, v: Form[K]): void => {
     setEntered((f) => (raising.has(k) ? withRoom({ ...f, [k]: v }, cls) : { ...f, [k]: v }));
     setTouched((t) => (t.has(k) ? t : new Set([...t, k])));
@@ -144,8 +161,9 @@ export function CreateCluster({
       }
     }
     async function loadBridges(node: string): Promise<void> {
-      const b = await bridgesOf(node);
+      const [b, d] = await Promise.all([bridgesOf(node), dnsOf(node)]);
       setBridgesByNode((all) => ({ ...all, [node]: b }));
+      setDNSByNode((all) => ({ ...all, [node]: d }));
     }
     async function loadNodes(): Promise<void> {
       try {
@@ -158,7 +176,13 @@ export function CreateCluster({
     }
     async function loadClusters(): Promise<void> {
       try {
-        setClusters(await api.clusters());
+        const listed = await api.clusters();
+        setClusters(listed);
+        // A new cluster starts as the newest working one is, unless a distribution was chosen meanwhile.
+        const last = startDefault(listed);
+        if (last !== undefined) {
+          setEntered((f) => (f.className === "" ? fromCluster(last, f) : f));
+        }
       } catch {
         // The controller refuses a storage another cluster uses in any case; the list only says so sooner.
         setClusters([]);
@@ -175,18 +199,23 @@ export function CreateCluster({
   const bridgeOptions = offeredBridges(bridgesByNode, classBridges(cls));
   const usableStorages = offeredStorages(storages, classStorages(cls));
   // Where there is only one bridge or storage to choose, it is chosen until another is.
-  const form: Form = withBackupChoices(
+  const bridge = bridgeOf(entered.bridge, bridgeOptions, bridgesByNode);
+  // A VLAN's network is not the one a node reports on the bridge.
+  const { net, network, node } = filled(entered.vlan) ? noNetwork : bridgeNetwork(bridge, bridgesByNode, dnsByNode);
+  const chosen: Form = withBackupChoices(
     {
-      ...withTalosRelease(entered, talos, offered),
+      ...withBridgeNetwork(withTalosRelease(entered, talos, offered), net, kept),
       namespace: namespaces.length > 1 ? namespaceOf(entered, namespaces) : "",
-      bridge: filled(entered.bridge)
-        ? entered.bridge
-        : (sole(bridgeOptions.filter((b) => b.usable).map((b) => b.bridge)) ?? ""),
+      bridge,
       storage: filled(entered.storage) ? entered.storage : (sole(usableStorages.map((s) => s.storage)) ?? ""),
     },
     cls,
     canTrust,
   );
+  const probeOn = { node, bridge, vlan: entered.vlan };
+  const free = useFreeAddresses(probeOn, nodesNeeded(chosen), []);
+  const typed = useFreeAddresses(probeOn, 0, addressesOf(entered));
+  const form = withFreeAddresses(chosen, free, (k) => touched.has(k));
   const haOffered = offersHA(cls, usableStorages, form.storage);
   const csi = csiOffer({ cls, storages: usableStorages, storage: form.storage, clusters });
   const snapshots = snapshotsOffer(cls, form.storage);
@@ -194,13 +223,14 @@ export function CreateCluster({
 
   const chooseClass = (name: string): void => {
     const c = classes.find((x) => x.name === name);
-    setEntered((f) =>
-      withRoom(
-        withClass(f, c, (k) => touched.has(k)),
-        c,
-      ),
-    );
+    setEntered((f) => withRoom(withClass(f, c, kept), c));
     setTouched((t) => new Set([...t, "class"]));
+  };
+  // Starting from another cluster, or from none, replaces all but the name and namespace.
+  const chooseFrom = (key: string): void => {
+    const c = clusters.find((x) => clusterKey(x) === key);
+    setEntered((f) => (c === undefined ? { ...newForm(), name: f.name, namespace: f.namespace } : fromCluster(c, f)));
+    setTouched((t) => new Set(["from", ...[...t].filter((k) => k === "name")]));
   };
   const chooseNamespace = (namespace: string): void => {
     setEntered((f) => withNamespace(f, namespace, namespaceOf(f, namespaces)));
@@ -218,11 +248,20 @@ export function CreateCluster({
   const shown = (k: FieldKey): string | undefined => (attempted.has(step) || touched.has(k) ? byField[k] : undefined);
   const wizardRef = useRef<HTMLDivElement>(null);
 
+  // Confirm has the API server check the cluster each time it opens: nothing on it changes the form.
+  const checked = useCreateCheck();
+  const go = (s: Step): void => {
+    setStep(s);
+    if (s === "Confirm" && cls) {
+      checked.run(request(form, cls));
+    }
+  };
+
   // Next on an incomplete step shows every problem of it and puts the cursor on the first.
   const next = (): void => {
     if (open.length === 0) {
       if (following !== undefined) {
-        setStep(following);
+        go(following);
       }
       return;
     }
@@ -245,6 +284,7 @@ export function CreateCluster({
       setBusy(false);
       return;
     }
+    fleet?.show(c);
     const pending = pendingCredentials(form, cls);
     const stored = await Promise.allSettled(
       pending.map(async (p) => api.storeCredential(p.purpose, p.values, { namespace: c.namespace, name: c.name })),
@@ -266,11 +306,11 @@ export function CreateCluster({
       // and the summary says the cluster waits for what was not stored rather than that it is.
       setCreated(c);
       setEntered((f) => {
-        const kept = { ...f };
+        const left = { ...f };
         for (const p of failures) {
-          Object.assign(kept, p.forget);
+          Object.assign(left, p.forget);
         }
-        return kept;
+        return left;
       });
       setError(`Cluster created, but ${failures.map((p) => p.message).join(" Also, ")}`);
       setReasons(failures.map((p) => p.reason));
@@ -294,7 +334,7 @@ export function CreateCluster({
               className={s === step ? "tab active" : "tab"}
               aria-current={s === step ? "step" : undefined}
               disabled={i > index && steps.slice(0, i).some((p) => problems(p, form, cls).length > 0)}
-              onClick={() => setStep(s)}
+              onClick={() => go(s)}
             >
               {s}
             </button>
@@ -313,10 +353,20 @@ export function CreateCluster({
               onChooseClass={chooseClass}
               namespaces={namespaces}
               onChooseNamespace={chooseNamespace}
+              starts={startable(clusters)}
+              onChooseFrom={chooseFrom}
             />
           )}
           {step === "Network" && (
-            <NetworkStep form={form} set={set} shown={shown} cls={cls} bridgeOptions={bridgeOptions} />
+            <NetworkStep
+              form={form}
+              set={set}
+              shown={shown}
+              cls={cls}
+              bridgeOptions={bridgeOptions}
+              network={network ?? networkOf(`${form.gateway}/${form.prefix}`)}
+              checked={typed}
+            />
           )}
           {step === "Machines" && (
             <MachinesStep
@@ -349,27 +399,16 @@ export function CreateCluster({
             <IdentityStep form={form} set={set} canTrust={canTrust} showAll={attempted.has("Identity providers")} />
           )}
           {step === "Confirm" && cls && (
-            <>
-              <dl className="summary" aria-label="Summary">
-                {summary(form, cls, {
-                  ha: haOffered,
-                  csi: csi.offered,
-                  snapshots: snapshots.offered,
-                  haGroups,
-                }).map(([k, v]) => (
-                  <Fragment key={k}>
-                    <dt>{k}</dt>
-                    <dd>{v}</dd>
-                  </Fragment>
-                ))}
-              </dl>
-              <details className="advanced">
-                <summary>Request</summary>
-                <pre className="confirm" aria-label="Request">
-                  {JSON.stringify(request(form, cls), null, 2)}
-                </pre>
-              </details>
-            </>
+            <ConfirmStep
+              read={checked.read}
+              room={createRoom(form, nodes, usableStorages)}
+              summary={summary(form, cls, {
+                ha: haOffered,
+                csi: csi.offered,
+                snapshots: snapshots.offered,
+                haGroups,
+              })}
+            />
           )}
 
           <ErrorBox message={error} />
@@ -395,7 +434,7 @@ export function CreateCluster({
                 <button
                   type="button"
                   className="primary"
-                  disabled={busy || !cls}
+                  disabled={busy || !checked.accepted}
                   onClick={() => {
                     void create();
                   }}

@@ -15,6 +15,11 @@ import (
 // random parts>, stay within one DNS label.
 const MaxClusterName = 40
 
+// MaxPoolNames is how long a cluster's name and a worker pool's may be together, for the same host
+// names <cluster>-<pool>-<three random parts>: a pool of the longest cluster has a name as long as
+// md-0.
+const MaxPoolNames = MaxClusterName + len("md-0")
+
 // MaxWorkers is the most workers a pool of fixed size may have, as many as an autoscaled one may
 // grow to.
 const MaxWorkers = MaxAutoscaledWorkers
@@ -44,7 +49,21 @@ var (
 	ClusterNameRule  = fmt.Sprintf("up to %d lowercase letters, digits and dashes, starting with a letter, not ending with a dash", MaxClusterName)
 	ControlPlaneRule = "control planes: 1, 3, 5 or 7"
 	WorkersRule      = fmt.Sprintf("workers: 0 to %d", MaxWorkers)
+	PoolNameRule     = "Pool names take lowercase letters, digits and dashes, and start with a letter."
+	PoolLengthRule   = fmt.Sprintf("A pool's and its cluster's names take %d characters at most together.", MaxPoolNames)
 )
+
+// PoolNameProblem says what is wrong with pool as the name of a worker pool of the cluster named
+// cluster, or returns "".
+func PoolNameProblem(cluster, pool string) string {
+	switch {
+	case len(validation.IsDNS1035Label(pool)) != 0:
+		return PoolNameRule
+	case len(cluster)+len(pool) > MaxPoolNames:
+		return PoolLengthRule
+	}
+	return ""
+}
 
 // ValidClusterName reports whether name may name a cluster.
 func ValidClusterName(name string) bool {
@@ -103,11 +122,35 @@ func validateTopology(old, c *clusterv1.Cluster) field.ErrorList {
 	if n := c.Spec.Topology.ControlPlane.Replicas; n != nil && !ValidControlPlane(*n) {
 		errs = append(errs, field.Invalid(topology.Child("controlPlane", "replicas"), *n, ControlPlaneRule))
 	}
-	pools := topology.Child("workers", "machineDeployments")
+	return append(errs, validatePools(old, c, topology.Child("workers", "machineDeployments"))...)
+}
+
+// validatePools holds each worker pool's workers and name to the rules; names are held to them as
+// pools are added, as a cluster's is as it is created.
+func validatePools(old, c *clusterv1.Cluster, pools *field.Path) field.ErrorList {
+	var errs field.ErrorList
+	named, had := map[string]bool{}, map[string]bool{}
+	if old != nil {
+		for i := range old.Spec.Topology.Workers.MachineDeployments {
+			had[old.Spec.Topology.Workers.MachineDeployments[i].Name] = true
+		}
+	}
 	for i := range c.Spec.Topology.Workers.MachineDeployments {
-		if n := c.Spec.Topology.Workers.MachineDeployments[i].Replicas; n != nil && !ValidWorkers(*n) {
+		md := &c.Spec.Topology.Workers.MachineDeployments[i]
+		if n := md.Replicas; n != nil && !ValidWorkers(*n) {
 			errs = append(errs, field.Invalid(pools.Index(i).Child("replicas"), *n, WorkersRule+" in each pool"))
 		}
+		problem := ""
+		if !had[md.Name] {
+			problem = PoolNameProblem(c.Name, md.Name)
+		}
+		switch {
+		case problem != "":
+			errs = append(errs, field.Invalid(pools.Index(i).Child("name"), md.Name, problem))
+		case named[md.Name]:
+			errs = append(errs, field.Duplicate(pools.Index(i).Child("name"), md.Name))
+		}
+		named[md.Name] = true
 	}
 	return errs
 }

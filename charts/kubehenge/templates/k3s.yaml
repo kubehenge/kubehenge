@@ -34,11 +34,13 @@ metadata:
     {{- include "kubehenge.addonCPU" . | nindent 4 }}
     # The CPU, in millicores, a node's own pods request besides the add-ons': k3s runs its control
     # plane, kube-proxy and flannel inside its own process, so on a worker the CNI's agent where one
-    # is chosen (Cilium's 100m; Calico's asks for none), CoreDNS's and the metrics server's 100m
-    # each, which may move to a worker, and the CSI plugin's 20m; a control plane without workers
-    # adds the CSI controller's 50m and the cloud controller manager's 10m. Traefik, the local path
-    # provisioner and kube-vip ask for none.
-    kubehenge.dev/node-cpu: '{"controlPlane":380,"worker":320}'
+    # is chosen (Cilium's 100m, what its CNI installer asks for before the agent's 50m, and its
+    # Envoy's 10m; Calico's 50m), CoreDNS's and the metrics server's 100m each, which may move to a
+    # worker, Traefik's 10m and the CSI plugin's 30m; a control plane without workers adds the CSI
+    # controller's 50m, and 10m each for the cloud controller manager, kube-vip and Cilium's
+    # operator, more with Cilium's agent than Calico's other pods come to. k3s's local path
+    # provisioner is off.
+    kubehenge.dev/node-cpu: '{"controlPlane":430,"worker":350}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"
@@ -191,6 +193,7 @@ spec:
                         core:
                           strictTLSOptions: true
                         {{- include "kubehenge.traefikGatewayValues" . | nindent 24 }}
+                        {{- include "kubehenge.traefikResources" . | nindent 24 }}
     # The k3s provider takes the ranges only from its own server configuration, never from the
     # Cluster's clusterNetwork, which Kubehenge's range check and every other distribution read.
     {{- range $range := list (dict "name" "pods" "field" "clusterCidr") (dict "name" "services" "field" "serviceCidr") }}
@@ -275,8 +278,8 @@ spec:
               controlPlane: true
           jsonPatches:
             - op: add
-              path: /spec/template/spec/kthreesConfigSpec/serverConfig/disableComponents
-              value: [servicelb]
+              path: /spec/template/spec/kthreesConfigSpec/serverConfig/disableComponents/-
+              value: servicelb
     # The k3s provider has no setting for etcd snapshots.
     - name: k3s-etcd-upload
       enabledIf: {{ include "kubehenge.etcdUploadEnabled" . }}
@@ -407,6 +410,9 @@ template:
         # The Proxmox VE cloud controller manager initialises the nodes instead of k3s's own.
         disableCloudController: true
         cloudProviderName: external
+        # The Proxmox CSI plugin's StorageClass is every cluster's default, which k3s's local path
+        # provisioner would claim as well, leaving a claim without a class to whichever came last.
+        disableComponents: [local-storage]
         etcdProxyImage: {{ .Values.etcdProxy }}
         kubeControllerManagerArgs:
           {{- include "kubehenge.patientLeaseArgs" . | nindent 10 }}

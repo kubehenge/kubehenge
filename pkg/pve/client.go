@@ -43,9 +43,12 @@ func Connect(cfg Config) (*proxmox.Client, error) {
 	return proxmox.NewClient(base, proxmox.WithHTTPClient(httpClient), proxmox.WithAPIToken(id, secret)), nil
 }
 
-// ConnectSession returns a client for the API that acts with a user's session ticket, for work
-// done on behalf of a signed-in user. It makes no request.
+// ConnectSession returns a client for the API that acts with a user's session ticket, or the API
+// token in its place, for work done on behalf of a signed-in user. It makes no request.
 func ConnectSession(cfg Config, t *Ticket) (*proxmox.Client, error) {
+	if t != nil && t.Token != "" {
+		return Connect(Config{URL: cfg.URL, Token: t.Token, CAFile: cfg.CAFile, Insecure: cfg.Insecure})
+	}
 	if t == nil || t.Ticket == "" || t.CSRF == "" {
 		return nil, errors.New("a Proxmox VE session ticket with its CSRF token is needed")
 	}

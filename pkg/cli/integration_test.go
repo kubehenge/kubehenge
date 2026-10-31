@@ -202,7 +202,8 @@ func TestIntegrationControllerServesWhatTheChartNames(t *testing.T) {
 	o, _ := validControllerOptions(conn.URL, conn.CAFile)
 	o.r.ClassNamespace = integration.ClassNamespace
 	o.leaderElect = false
-	o.healthAddr = freeAddress(t)
+	// Unset, controller-runtime serves the metrics on :8080 of every interface.
+	o.healthAddr, o.metricsAddr = freeAddress(t), freeAddress(t)
 	o.extensionHost, o.port, o.certDir = api.Webhooks.LocalServingHost, api.Webhooks.LocalServingPort, api.Webhooks.LocalServingCertDir
 	o.extensionConfig = "kubehenge"
 	o.classProviders = []string{"kubehenge-k3s=" + strings.Join(k3sProviders, ",")}

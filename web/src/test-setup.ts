@@ -4,6 +4,8 @@ import * as matchers from "@testing-library/jest-dom/matchers";
 import { cleanup, configure } from "@testing-library/react";
 import { afterEach, expect, vi } from "vitest";
 
+import { clearPollCaches } from "./poll-cache";
+
 expect.extend(matchers);
 
 // A page's first render waits on its fake server's answers; with every file at once on a loaded
@@ -20,6 +22,8 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   window.history.replaceState(null, "", "/");
   localStorage.clear();
+  clearPollCaches();
 });

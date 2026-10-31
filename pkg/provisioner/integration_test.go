@@ -484,10 +484,33 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 	if err := c.Create(ctx, placed(small)); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "add-ons (monitoring, cert-manager, Rancher's agent) need 2240 MiB of memory on workers") {
 		t.Fatalf("monitoring on a k3s worker at its least: %v", err)
 	}
+	checkPoolSizeAdmission(ctx, t, c, small)
 
 	hooks.DatastoreAllocate = testDatastoreAllocate
 	checkDatastoreAllocateAdmission(ctx, t, c)
 	checkSysAuditAdmission(ctx, t, c, hooks)
+}
+
+// checkPoolSizeAdmission holds a pool of its own size to the add-ons' room as its workers have it,
+// either way: larger, it makes room the cluster's size lacks; smaller, it lacks room that size has.
+func checkPoolSizeAdmission(ctx context.Context, t *testing.T, c client.Client, base *clusterv1.Cluster) {
+	t.Helper()
+	poolSized := func(name, cluster, pool string) *clusterv1.Cluster {
+		p := base.DeepCopy()
+		p.Name, p.ResourceVersion = name, ""
+		p.Spec.Topology.Variables = nil
+		withAddons(p, map[string]string{"workerMachine": cluster, "monitoring": `{"enabled":true}`})
+		p.Spec.Topology.Workers.MachineDeployments[0].Variables.Overrides = []clusterv1.ClusterVariable{
+			{Name: "workerMachine", Value: apiextensionsv1.JSON{Raw: []byte(pool)}},
+		}
+		return placed(p)
+	}
+	if err := c.Create(ctx, poolSized("pool-room", `{"memoryMiB":1024}`, `{"memoryMiB":4096}`)); err != nil {
+		t.Fatalf("monitoring on a pool of its own larger workers: %v", err)
+	}
+	if err := c.Create(ctx, poolSized("pool-short", `{"memoryMiB":4096}`, `{"memoryMiB":1024}`)); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "need 2240 MiB of memory on workers") {
+		t.Fatalf("monitoring on a pool of its own least workers: %v", err)
+	}
 }
 
 // placed gives a cluster what every class requires and it does not set itself: a storage, and an
@@ -650,9 +673,9 @@ func checkDatastoreAllocateAdmission(ctx context.Context, t *testing.T, c client
 
 // checkClassAddonRoom holds a class's memory and CPU figures: one for every add-on and every node
 // kind; a worker and control plane sized as the end-to-end tests size them from the figures holding
-// every add-on but Rancher, logs and backups, and a MiB less refused; the default worker's CPU
-// holding every add-on but Rancher; and the least control plane Rancher runs on without workers,
-// at the memory its figures ask, holding Rancher.
+// every add-on but Rancher, logs and backups, and a MiB less refused; a worker with the cores the
+// end-to-end tests give it holding every add-on but Rancher, and a core fewer refused; and the least
+// control plane Rancher runs on without workers, at the memory its figures ask, holding Rancher.
 func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker *clusterv1.Cluster, alone controlPlaneSize) {
 	t.Helper()
 	addons, _, err := classFigures(class, AddonMemoryAnnotation)
@@ -667,8 +690,7 @@ func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker 
 		if addons[key] <= 0 {
 			t.Errorf("%s: no memory figure for %s", class.Name, key)
 		}
-		// Some add-ons' pods ask for no CPU at all, so a figure of 0 is one.
-		if _, ok := cpu[key]; !ok {
+		if cpu[key] <= 0 {
 			t.Errorf("%s: no CPU figure for %s", class.Name, key)
 		}
 	}
@@ -682,7 +704,8 @@ func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker 
 	if err != nil {
 		t.Fatal(err)
 	}
-	least := classMinimumSize(class, "workerMachine").MemoryMiB
+	leastWorker := classMinimumSize(class, "workerMachine")
+	least := leastWorker.MemoryMiB
 	_, worker, err := nodeSize(defaults, class, "workerMachine", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -711,8 +734,20 @@ func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker 
 		"logs": `{"enabled":true}`, "backups": `{"enabled":true,"target":"store"}`, "gitops": `{"enabled":true,"engine":"flux"}`,
 		"loadBalancer": `{"enabled":true,"implementation":"kube-vip","addresses":["192.0.2.100-192.0.2.110"]}`,
 	})
-	if err = checkRoomFor(addonCPU, nil, all, class); err != nil {
-		t.Errorf("%s: every add-on but Rancher on the default worker's CPU: %v", class.Name, err)
+	cpuRoom, err := addonRoomOf(addonCPU, all, class)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leastCores := leastWorker.Cores
+	cores := max(leastCores, (cpuRoom.Base+cpuRoom.Need+millicores-1)/millicores)
+	withCores := func(n int) *clusterv1.Cluster {
+		return withAddons(all.DeepCopy(), map[string]string{"workerMachine": fmt.Sprintf(`{"cores":%d}`, n)})
+	}
+	if err = checkRoomFor(addonCPU, nil, withCores(cores), class); err != nil {
+		t.Errorf("%s: every add-on but Rancher on a worker of %d cores: %v", class.Name, cores, err)
+	}
+	if cores > leastCores && checkRoomFor(addonCPU, nil, withCores(cores-1), class) == nil {
+		t.Errorf("%s: every add-on but Rancher on a worker of %d cores, a core short, admitted", class.Name, cores-1)
 	}
 	rancherOn := map[string]string{"rancher": `{"install":true,"hostname":"rancher.example.org"}`}
 	room, err = addonRoomOf(addonMemory, withAddons(&clusterv1.Cluster{}, rancherOn), class)

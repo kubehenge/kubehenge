@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type JSX, type SubmitEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX, type SubmitEvent } from "react";
 
 import { api } from "./api";
 import logo from "./logo.svg";
@@ -44,9 +44,18 @@ export function SignIn({
   const [error, setError] = useState<string | undefined>(
     () => new URLSearchParams(window.location.search).get("signin-error") ?? undefined,
   );
-  const chosen = realms.find((r) => r.realm === realm);
-  const openID = chosen?.type === "openid";
+  const last = useMemo(() => rememberedRealm(), []);
+  // An identity provider signs in with one click; the others take a user name and password.
+  const sso = realms.filter((r) => r.type === "openid");
+  const withPassword = realms.filter((r) => r.type !== "openid");
+  // Shown while the realms load too, so the user name has its focus from the first paint.
+  const passwordForm = realms.length === 0 || withPassword.length > 0;
+  const lastWasSSO = sso.some((r) => r.realm === last);
   const first = useRef<HTMLInputElement>(null);
+  // The identity provider last signed in with takes the focus as its button appears, once.
+  const focusLast = useCallback((a: HTMLAnchorElement | null) => {
+    a?.focus();
+  }, []);
 
   // Before the browser paints, so the form never shows without its focus.
   useLayoutEffect(() => {
@@ -61,15 +70,16 @@ export function SignIn({
       try {
         const r = await api.realms();
         setRealms(r);
-        const last = rememberedRealm();
-        const initial = r.find((x) => x.realm === last) ?? r.find((x) => x.default === true) ?? r[0];
+        const passwords = r.filter((x) => x.type !== "openid");
+        const initial =
+          passwords.find((x) => x.realm === last) ?? passwords.find((x) => x.default === true) ?? passwords[0];
         setRealm((current) => (current === "" ? (initial?.realm ?? "") : current));
       } catch (err) {
         setError(errorMessage(err));
       }
     }
     void loadRealms();
-  }, []);
+  }, [last]);
 
   const submit = async (): Promise<void> => {
     setBusy(true);
@@ -108,7 +118,27 @@ export function SignIn({
             }}
           >
             <p className="muted">Sign in with Proxmox VE</p>
-            {!openID && (
+            {sso.length > 0 && (
+              <div className="sso">
+                {sso.map((r) => (
+                  <a
+                    key={r.realm}
+                    ref={r.realm === last ? focusLast : undefined}
+                    className={`button${r.realm === last ? " primary" : ""}`}
+                    href={`/api/openid/start?realm=${encodeURIComponent(r.realm)}`}
+                    onClick={() => rememberRealm(r.realm)}
+                  >
+                    Continue with {filled(r.comment) ? r.comment : r.realm}
+                  </a>
+                ))}
+              </div>
+            )}
+            {sso.length > 0 && withPassword.length > 0 && (
+              <p className="or" aria-hidden="true">
+                or
+              </p>
+            )}
+            {passwordForm && (
               <>
                 <Field label="User name" hint="or user@realm">
                   {(id) => (
@@ -134,40 +164,32 @@ export function SignIn({
                     />
                   )}
                 </Field>
+                <Field label="Realm" hint={username.includes("@") ? "Set by the user name" : undefined}>
+                  {(id) => (
+                    <select
+                      id={id}
+                      value={realm}
+                      onChange={(e) => setRealm(e.target.value)}
+                      disabled={username.includes("@")}
+                    >
+                      {withPassword.map((r) => (
+                        <option key={r.realm} value={r.realm}>
+                          {filled(r.comment) ? `${r.comment} (${r.realm})` : r.realm}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </Field>
               </>
             )}
-            <Field label="Realm" hint={username.includes("@") ? "Set by the user name" : undefined}>
-              {(id) => (
-                <select
-                  id={id}
-                  value={realm}
-                  onChange={(e) => setRealm(e.target.value)}
-                  disabled={username.includes("@")}
-                >
-                  {realms.map((r) => (
-                    <option key={r.realm} value={r.realm}>
-                      {filled(r.comment) ? `${r.comment} (${r.realm})` : r.realm}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </Field>
             <ErrorBox message={error} />
-            <div className="actions">
-              {openID ? (
-                <a
-                  className="button primary"
-                  href={`/api/openid/start?realm=${encodeURIComponent(realm)}`}
-                  onClick={() => rememberRealm(realm)}
-                >
-                  Continue with {filled(chosen.comment) ? chosen.comment : realm}
-                </a>
-              ) : (
-                <button type="submit" className="primary" disabled={busy}>
+            {passwordForm && (
+              <div className="actions">
+                <button type="submit" className={lastWasSSO ? undefined : "primary"} disabled={busy}>
                   {busy ? "Signing in…" : "Sign in"}
                 </button>
-              )}
-            </div>
+              </div>
+            )}
           </form>
         )}
       </div>

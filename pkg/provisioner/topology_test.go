@@ -34,6 +34,14 @@ func TestClusterValidatorHoldsTopologyToWhatTheInterfaceOffers(t *testing.T) {
 		{"two control planes", func(c *clusterv1.Cluster) { c.Spec.Topology.ControlPlane.Replicas = new(int32(2)) }, "1, 3, 5 or 7"},
 		{"nine control planes", func(c *clusterv1.Cluster) { c.Spec.Topology.ControlPlane.Replicas = new(int32(9)) }, "1, 3, 5 or 7"},
 		{"a pool of 101", func(c *clusterv1.Cluster) { c.Spec.Topology.Workers.MachineDeployments[0].Replicas = new(int32(101)) }, "workers: 0 to 100 in each pool"},
+		{"a pool name too long beside the cluster's", func(c *clusterv1.Cluster) {
+			c.Spec.Topology.Workers.MachineDeployments[0].Name = strings.Repeat("p", MaxPoolNames-len(c.Name)+1)
+		}, PoolLengthRule},
+		{"a pool name with a capital", func(c *clusterv1.Cluster) { c.Spec.Topology.Workers.MachineDeployments[0].Name = "GPU" }, PoolNameRule},
+		{"two pools of one name", func(c *clusterv1.Cluster) {
+			w := &c.Spec.Topology.Workers
+			w.MachineDeployments = append(w.MachineDeployments, w.MachineDeployments[0])
+		}, "Duplicate value"},
 	} {
 		c := base()
 		tc.change(c)
@@ -71,6 +79,14 @@ func TestClusterValidatorHoldsUpgradesToOneMinorUp(t *testing.T) {
 	labelled.Labels = map[string]string{"team": "a"}
 	if _, err := v.ValidateUpdate(context.Background(), long, labelled); err != nil {
 		t.Errorf("an edit of a cluster made before the name rule: %v", err)
+	}
+	pooled := old.DeepCopy()
+	pooled.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{{Class: "worker", Name: "md-0", Replicas: new(int32(1))}}
+	added := pooled.DeepCopy()
+	added.Spec.Topology.Workers.MachineDeployments = append(added.Spec.Topology.Workers.MachineDeployments,
+		clusterv1.MachineDeploymentTopology{Class: "worker", Name: strings.Repeat("p", MaxPoolNames), Replicas: new(int32(1))})
+	if _, err := v.ValidateUpdate(context.Background(), pooled, added); err == nil || !strings.Contains(err.Error(), PoolLengthRule) {
+		t.Errorf("a pool added with too long a name: %v", err)
 	}
 }
 

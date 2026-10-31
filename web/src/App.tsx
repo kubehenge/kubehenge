@@ -7,7 +7,7 @@ import { RoutePage, routeAt } from "./Pages";
 import { usePath } from "./router";
 import { SignIn } from "./SignIn";
 import type { Session, SetupStatus } from "./types";
-import { ErrorBoundary } from "./ui";
+import { ErrorBoundary, Skeleton } from "./ui";
 
 const msPerDay = 86_400_000;
 
@@ -209,10 +209,11 @@ function Shell({
       )}
       {/* Keyed by path: a page that failed recovers by navigating away, the top bar stays. */}
       <ErrorBoundary key={pageKey}>
-        <Suspense fallback={<p className="loading">Loading…</p>}>
+        <Suspense fallback={<Skeleton rows={6} />}>
           <RoutePage
             route={route}
             canCreate={canCreate}
+            canManage={canManage}
             canTrust={canTrust}
             namespaces={namespaces}
             headlamp={headlamp}

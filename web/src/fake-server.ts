@@ -45,7 +45,7 @@ function settingsOf(req: unknown): string[] {
   if (!isRecord(req)) {
     return [];
   }
-  const topology = ["version", "controlPlaneReplicas", "workerPools", "autoscaling"].filter((k) => k in req);
+  const topology = ["version", "controlPlaneReplicas", "workerPools", "pools", "autoscaling"].filter((k) => k in req);
   return [...topology, ...Object.keys(isRecord(req["variables"]) ? req["variables"] : {})];
 }
 
@@ -94,15 +94,20 @@ export function fakeServer(routes: Record<string, Route>, headers: Record<string
   return calls;
 }
 
-/** held is a route whose answer waits until the test fails it, as a request the network loses. */
-export function held(): { route: Route; fail: (err: Error) => void } {
+/**
+ * held is a route whose answer waits until the test gives it or fails it, as a slow request or one
+ * the network loses.
+ */
+export function held(): { route: () => Promise<Answer>; answer: (a: Answer) => void; fail: (err: Error) => void } {
+  let answer: ((a: Answer) => void) | undefined;
   let fail: ((err: Error) => void) | undefined;
   // A promise settled from outside, as Promise.withResolvers makes one from ES2024 on.
   // oxlint-disable-next-line promise/avoid-new -- the only way to it in ES2023
-  const answer = new Promise<Answer>((_resolve, reject) => {
+  const given = new Promise<Answer>((resolve, reject) => {
+    answer = resolve;
     fail = reject;
   });
-  return { route: async () => answer, fail: (err) => fail?.(err) };
+  return { route: async () => given, answer: (a) => answer?.(a), fail: (err) => fail?.(err) };
 }
 
 /** applyStaged reviews the plan of what a cluster's page has staged and applies it. */

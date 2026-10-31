@@ -103,8 +103,9 @@ func withImage(values map[string]any, image Image) map[string]any {
 // cluster without workers has no other nodes to answer from.
 func metalLBValues() map[string]any {
 	return map[string]any{
-		"speaker": map[string]any{"ignoreExcludeLB": true},
-		"frrk8s":  map[string]any{"enabled": false},
+		"speaker":    map[string]any{"ignoreExcludeLB": true, "resources": reserved(cpu10m, memory64Mi)},
+		"controller": map[string]any{"resources": reserved(cpu10m, memory64Mi)},
+		"frrk8s":     map[string]any{"enabled": false},
 	}
 }
 
@@ -118,6 +119,7 @@ func kubeVipValues() map[string]any {
 			"svc_enable": on, "svc_election": on, "vip_leaderelection": off,
 			"prometheus_server": kubeVipMetrics,
 		},
+		"resources": reserved(cpu10m, "32Mi"),
 	}
 }
 
@@ -552,6 +554,37 @@ func (a *clusterAddresses) clashes(name string, theirs *clusterAddresses) []stri
 		}
 	}
 	return problems
+}
+
+// AddressSpans reads addresses as the network and loadBalancer variables write them, each a first
+// and last address.
+func AddressSpans(entries []string) ([][2]netip.Addr, error) {
+	spans, err := parseAddresses(entries)
+	if err != nil {
+		return nil, err
+	}
+	out := make([][2]netip.Addr, 0, len(spans))
+	for _, s := range spans {
+		out = append(out, [2]netip.Addr{s.first, s.last})
+	}
+	return out, nil
+}
+
+// TakenAddresses are the addresses the clusters hold on a bridge and VLAN, each a first and last
+// address: their nodes', their control-plane endpoints and their load-balancer addresses.
+func TakenAddresses(clusters []clusterv1.Cluster, bridge string, vlan int) [][2]netip.Addr {
+	segment := fmt.Sprintf("%s/%d", bridge, vlan)
+	var taken [][2]netip.Addr
+	for i := range clusters {
+		a, err := addressesOf(&clusters[i])
+		if err != nil || a.segment != segment {
+			continue
+		}
+		for _, s := range slices.Concat([]addressSpan{a.endpoint}, a.machines, a.services) {
+			taken = append(taken, [2]netip.Addr{s.first, s.last})
+		}
+	}
+	return taken
 }
 
 // addressesChanged reports whether an update changes what the cluster holds on its nodes' network.

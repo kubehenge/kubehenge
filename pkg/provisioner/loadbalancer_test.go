@@ -207,6 +207,11 @@ func TestMetalLBAnswersFromEveryNodeOnLayer2(t *testing.T) {
 	if !lookup[bool](t, values, "speaker", "ignoreExcludeLB") || lookup[bool](t, values, "frrk8s", "enabled") {
 		t.Errorf("values %v", values)
 	}
+	for _, workload := range []string{"speaker", "controller"} {
+		if lookup[string](t, values, workload, "resources", "requests", "cpu") == "" {
+			t.Errorf("MetalLB's %s requests no CPU", workload)
+		}
+	}
 	if _, _, found := proxyValues(t, proxies, "web-load-balancer-addresses"); found {
 		t.Error("MetalLB got kube-vip's cloud provider")
 	}

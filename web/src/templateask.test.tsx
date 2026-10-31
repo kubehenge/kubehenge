@@ -69,6 +69,8 @@ const step = (cls: ClusterClass, nodeOS = "", releases?: TalosReleases): void =>
       onChooseClass={vi.fn<(name: string) => void>()}
       namespaces={["clusters"]}
       onChooseNamespace={vi.fn<(namespace: string) => void>()}
+      starts={[]}
+      onChooseFrom={vi.fn<(key: string) => void>()}
     />,
   );
 };

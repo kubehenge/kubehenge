@@ -287,6 +287,26 @@ describe("health page", () => {
     vi.useRealTimers();
   });
 
+  it("greys the tiles out while the last read failed, until one succeeds", async () => {
+    const routes: Record<string, Route> = { [healthPath]: { body: degraded } };
+    fakeServer(routes);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<HealthView cluster={cluster} />);
+    await expect(screen.findByRole("list", { name: "At a glance" })).resolves.not.toHaveClass("tiles-stale");
+    expect(screen.queryByText(/^Stale/u)).not.toBeInTheDocument();
+
+    routes[healthPath] = { status: 502, body: { error: "the management cluster does not answer" } };
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    await expect(screen.findByRole("list", { name: "At a glance, stale" })).resolves.toHaveClass("tiles-stale");
+    expect(screen.getByText(/^Stale, read at/u)).toHaveClass("hint-warning");
+    expect(screen.getByText("Degraded")).toBeInTheDocument();
+
+    routes[healthPath] = { body: degraded };
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    await expect(screen.findByRole("list", { name: "At a glance" })).resolves.not.toHaveClass("tiles-stale");
+    vi.useRealTimers();
+  });
+
   it("filters the events by where they come from", async () => {
     fakeServer({ [healthPath]: { body: degraded } });
     const user = userEvent.setup({ delay: null });

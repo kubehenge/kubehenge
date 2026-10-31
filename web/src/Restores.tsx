@@ -16,7 +16,7 @@ import {
   type RestoreField,
   type RestoreFields,
 } from "./backup-runs";
-import { clusterPath } from "./ClusterDetail";
+import { clusterPath } from "./cluster-paths";
 import { Link } from "./router";
 import type { BackupRun, Cluster, ClusterBackups, RestoreMessages, RestoreResults, RestoreRun } from "./types";
 import { Dialog, ErrorBox, Field, Status, errorMessage, filled, sentence } from "./ui";
