@@ -250,10 +250,13 @@ function Clusters({
 // the first draw and every read of the fleet after it stay quick however many clusters there are.
 const tablePage = 100;
 
-// scrollerOf is the element that scrolls el, or null for the page itself.
-function scrollerOf(el: HTMLElement): HTMLElement | null {
+/**
+ * scrollerOf is the element that scrolls el up and down, or null for the page itself. One that
+ * scrolls only sideways reads as auto both ways, so what counts is content taller than the box.
+ */
+export function scrollerOf(el: HTMLElement): HTMLElement | null {
   for (let up = el.parentElement; up !== null; up = up.parentElement) {
-    if (/auto|scroll/u.test(getComputedStyle(up).overflowY)) {
+    if (/auto|scroll/u.test(getComputedStyle(up).overflowY) && up.scrollHeight > up.clientHeight) {
       return up;
     }
   }

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
+import { scrollerOf } from "./ClusterList";
 import { fakeServer, held, type Route } from "./fake-server";
 import { ranked, standing } from "./fleet";
 import { score } from "./Palette";
@@ -511,6 +512,24 @@ describe("the console", () => {
     expect(within(table).getAllByRole("row")).toHaveLength(251);
     expect(within(table).getAllByRole("row").at(-1)).toHaveTextContent("c249");
     expect(screen.queryByRole("button", { name: /^Show \d+ more$/u })).not.toBeInTheDocument();
+  });
+
+  it("watches for the end of the table in the box that scrolls it up and down, not the one beside it", () => {
+    const page = document.createElement("div");
+    page.style.overflowY = "auto";
+    Object.defineProperty(page, "scrollHeight", { value: 4000 });
+    Object.defineProperty(page, "clientHeight", { value: 900 });
+    const sideways = document.createElement("div");
+    sideways.style.overflowX = "auto";
+    sideways.style.overflowY = "auto";
+    Object.defineProperty(sideways, "scrollHeight", { value: 3000 });
+    Object.defineProperty(sideways, "clientHeight", { value: 3000 });
+    const end = document.createElement("div");
+    sideways.append(end);
+    page.append(sideways);
+    document.body.append(page);
+    expect(scrollerOf(end)).toBe(page);
+    page.remove();
   });
 
   it("marks a cluster's tabs that hold something to look at, keeping the tabs' names", async () => {
