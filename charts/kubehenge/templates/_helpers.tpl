@@ -459,8 +459,8 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           description: >-
             Secret in the workload cluster's velero namespace with the store's keys as Velero's
             credentials file, under the key cloud, which never passes through the management
-            cluster; unset, the credential typed into the interface for the cluster, or else the
-            one for every cluster.
+            cluster; unset, the credential typed into the interface for the cluster. The one for
+            every cluster never goes into a cluster.
         readFrom:
           type: array
           maxItems: 10
@@ -524,10 +524,11 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
             RKE2 and k3s only: have the cluster's servers also take snapshots themselves on the same
             schedule, read in UTC, and upload them to the target's <distribution>-etcd folder of the
             cluster, keeping as many, as etcd holds them and not encrypted by Kubehenge. For it the
-            controller puts the target and its access key into the Secret kubehenge-etcd-s3 in the
-            cluster's kube-system, where whoever may read Secrets there reads the key and with it
-            everything the key reaches in the target. Switching it, or changing the schedule or keep
-            while it is on, replaces the control-plane machines.
+            controller puts the target and the cluster's own access key, never the one for every
+            cluster, into the Secret kubehenge-etcd-s3 in the cluster's kube-system, where whoever
+            may read Secrets there reads the key and with it everything the key reaches in the
+            target. Switching it, or changing the schedule or keep while it is on, replaces the
+            control-plane machines.
       x-kubernetes-validations:
         - rule: "!self.enabled || has(self.target)"
           message: etcd snapshots need a target.

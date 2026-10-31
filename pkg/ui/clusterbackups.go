@@ -170,7 +170,7 @@ func (s *Server) velero(ctx context.Context, u user, c *clusterv1.Cluster, id pr
 		return nil, "", err
 	}
 	if !found {
-		return nil, "Velero needs the target's access key. Store one in Options.", nil
+		return nil, "Velero needs the cluster's own access key. Store one in Options.", nil
 	}
 	return nil, "Setting up Velero.", nil
 }
@@ -236,23 +236,22 @@ func (s *Server) clusterBackups(w http.ResponseWriter, r *http.Request, u user) 
 	writeJSON(w, http.StatusOK, view)
 }
 
-// backupCredentialStored tells whether one of the Secrets the controller takes the store's keys from
-// exists; whether it holds the right keys is the controller's to say.
+// backupCredentialStored tells whether the Secret the controller takes Velero's keys for the store
+// from exists; whether it holds the right keys is the controller's to say.
 func backupCredentialStored(ctx context.Context, kube client.Client, c *clusterv1.Cluster) (bool, error) {
 	// A Secret of the owner's own is in the workload cluster, where the interface does not look.
 	if backupsOf(c).ExistingSecret != "" {
 		return true, nil
 	}
-	for _, name := range provisioner.BackupCredentialNames(c.Name) {
-		err := kube.Get(ctx, client.ObjectKey{Namespace: c.Namespace, Name: name}, &corev1.Secret{})
-		if err == nil {
-			return true, nil
-		}
-		if !apierrors.IsNotFound(err) {
-			return false, fmt.Errorf("reading Secret %s: %w", name, err)
-		}
+	name := provisioner.ClusterBackupCredentialName(c.Name)
+	err := kube.Get(ctx, client.ObjectKey{Namespace: c.Namespace, Name: name}, &corev1.Secret{})
+	if apierrors.IsNotFound(err) {
+		return false, nil
 	}
-	return false, nil
+	if err != nil {
+		return false, fmt.Errorf("reading Secret %s: %w", name, err)
+	}
+	return true, nil
 }
 
 // backupsOf reads a cluster's backups variable; unset or unreadable, they are off.

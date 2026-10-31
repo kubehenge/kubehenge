@@ -67,7 +67,7 @@ export interface EtcdSnapshotsValue {
 export const uploadsItself = (distribution: string): boolean => distribution === "rke2" || distribution === "k3s";
 
 /** uploadHint names what the distribution's own upload grants: the target's key, readable in the cluster. */
-export const uploadHint = "Cluster admins can read the target's access key";
+export const uploadHint = "Cluster admins can read the cluster's own access key";
 
 /** etcdSnapshotsOf reads a cluster's etcdSnapshots variable; unset, snapshots are off. */
 export function etcdSnapshotsOf(v: unknown): EtcdSnapshotsValue {

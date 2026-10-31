@@ -165,7 +165,8 @@ export interface Form {
   backups: boolean;
   backupFields: BackupFields;
   /** Whether the cluster gets an access key of its own, stored once it is created. */
-  backupOwnKey: boolean;
+  // storeBackupKey is whether the form stores the cluster's own access key for its backups.
+  storeBackupKey: boolean;
   backupKey: Record<string, string>;
 }
 
@@ -492,7 +493,7 @@ export function withRoom(form: Form, c: ClusterClass | undefined): Form {
 export const withBackupChoices = (f: Form, c: ClusterClass | undefined, canTrust: boolean | undefined): Form => ({
   ...f,
   backupFields: withTarget(f.backupFields, classTargets(c)),
-  backupOwnKey: f.backupOwnKey && canTrust !== false,
+  storeBackupKey: f.storeBackupKey && canTrust !== false,
 });
 
 /**
@@ -626,7 +627,7 @@ export const newForm = (): Form => ({
   upgradeMode: "off",
   backups: false,
   backupFields: newBackupFields(),
-  backupOwnKey: true,
+  storeBackupKey: true,
   backupKey: {},
 });
 
@@ -763,7 +764,7 @@ export interface PendingCredential {
 /** pendingCredentials are the credentials to store for the created cluster that the form holds. */
 export function pendingCredentials(form: Form, c: ClusterClass): PendingCredential[] {
   const pending: PendingCredential[] = [];
-  if (form.backups && form.backupOwnKey && variable(c, "backups")) {
+  if (form.backups && form.storeBackupKey && variable(c, "backups")) {
     pending.push({ purpose: "backup", values: form.backupKey, label: "S3 access key", section: "Backups", forget: {} });
   }
   if (variable(c, "certificates") && needsClusterToken(form.certificates) && filled(form.dns01Token)) {
@@ -1000,7 +1001,7 @@ function addOnRows(form: Form, defined: Set<string>): [string, string][] {
     rows.push(["Rancher", rancherChoice(form)]);
   }
   if (defined.has("backups")) {
-    const key = form.backupOwnKey ? "own access key" : "shared access key";
+    const key = form.storeBackupKey ? "own access key" : "access key to store later";
     rows.push(["Backups", form.backups ? `${backupsText(backupsVariable(form.backupFields))}, ${key}` : "Off"]);
   }
   if (defined.has("certificates")) {
@@ -1295,7 +1296,7 @@ function backupsProblems(form: Form, c: ClusterClass | undefined): Problems {
       p[key] = found;
     }
   }
-  if (form.backupOwnKey && !backupKeys.every((k) => filled(form.backupKey[k.key]))) {
+  if (form.storeBackupKey && !backupKeys.every((k) => filled(form.backupKey[k.key]))) {
     p.backupKey = "Enter both parts of the access key";
   }
   return p;

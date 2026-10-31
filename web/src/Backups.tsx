@@ -53,7 +53,7 @@ export const backupKeys: CredentialKey[] = [
 
 export const backupsHint = "Every namespace but system and add-on ones, with volume data";
 
-export const backupCredentialHint = "Without one, the key for every cluster applies";
+export const backupCredentialHint = "Limit it to this cluster's folder";
 
 export const noTargets = "No backup targets. An administrator adds them in the appliance settings.";
 

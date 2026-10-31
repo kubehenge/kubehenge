@@ -1,6 +1,14 @@
 import type { JSX, ReactNode } from "react";
 
-import { BackupFieldset, BackupSourcesField, backupKeys, backupsHint, classTargets, noTargets } from "./Backups";
+import {
+  BackupFieldset,
+  BackupSourcesField,
+  backupCredentialHint,
+  backupKeys,
+  backupsHint,
+  classTargets,
+  noTargets,
+} from "./Backups";
 import { CertificatesFields } from "./Certificates";
 import { MeshPeersField, meshInfo } from "./ClusterMesh";
 import { ModeSelect } from "./ClusterUpgrades";
@@ -123,7 +131,7 @@ function BackupsChoice({
 }): JSX.Element {
   const targets = classTargets(cls);
   const none = targets.length === 0;
-  const own = form.backupOwnKey && canTrust !== false;
+  const own = form.storeBackupKey && canTrust !== false;
   return (
     <>
       <label className="check">
@@ -166,21 +174,11 @@ function BackupsChoice({
           )}
           <fieldset className="group">
             <legend>Access key</legend>
-            <label className="check">
-              <input
-                type="radio"
-                name="backup-key"
-                checked={own}
-                disabled={canTrust === false}
-                onChange={() => set("backupOwnKey", true)}
-              />{" "}
-              Cluster&apos;s own key
-            </label>
-            {canTrust === false && <p className="hint">Needs Sys.Modify on the workload pool</p>}
-            <label className="check">
-              <input type="radio" name="backup-key" checked={!own} onChange={() => set("backupOwnKey", false)} /> Shared
-              key
-            </label>
+            {canTrust === false ? (
+              <p className="hint">Storing it needs Sys.Modify on the workload pool</p>
+            ) : (
+              <p className="hint">{backupCredentialHint}</p>
+            )}
             {own &&
               backupKeys.map((k, i) => (
                 <Field key={k.key} label={k.label} error={i === backupKeys.length - 1 ? shown("backupKey") : undefined}>
