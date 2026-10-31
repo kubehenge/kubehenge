@@ -275,7 +275,7 @@ describe("health page", () => {
   });
 
   it("says of a node not ready what the machines say: on its way, down, or not reporting", async () => {
-    const worker = degraded.nodes.items[1];
+    const [, worker] = degraded.nodes.items;
     const node = (name: string, how: { down?: boolean; silent?: boolean }) => ({
       ...worker,
       name,
@@ -297,11 +297,14 @@ describe("health page", () => {
       },
     });
     render(<HealthView cluster={cluster} />);
-    const status = async (name: string) =>
-      within(await screen.findByRole("row", { name: new RegExp(`^${name}`, "u") }));
-    expect((await status("web-md-0-b")).getByText("Not ready")).toHaveClass("status-progress");
-    expect((await status("web-md-0-c")).getByText("Not ready")).toHaveClass("status-error");
-    expect((await status("web-md-0-d")).getByText("Not reporting")).toHaveClass("status-error");
+    const starting = within(await screen.findByRole("row", { name: /^web-md-0-b/u }));
+    expect(starting.getByText("Not ready")).toHaveClass("status-progress");
+    expect(within(screen.getByRole("row", { name: /^web-md-0-c/u })).getByText("Not ready")).toHaveClass(
+      "status-error",
+    );
+    expect(within(screen.getByRole("row", { name: /^web-md-0-d/u })).getByText("Not reporting")).toHaveClass(
+      "status-error",
+    );
   });
 
   it("asks again more often while the cluster is not healthy", async () => {
