@@ -262,7 +262,10 @@ type celRule struct {
 	bad, good map[string]string
 }
 
-const repository = `"repository":{"url":"https://git.example.org/team/cluster.git"}`
+const (
+	repository = `"repository":{"url":"https://git.example.org/team/cluster.git"}`
+	knownHosts = `"knownHosts":"git.example.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"`
+)
 
 func certificates(dns01 string) map[string]string {
 	return map[string]string{"certificates": `{"enabled":true,"issuer":"acme-dns01","domain":"example.org","dns01":` + dns01 + `}`}
@@ -364,7 +367,12 @@ var celRules = []celRule{
 	{
 		gitopsVariable, "A deploy key reads the repository over ssh://.",
 		map[string]string{gitopsVariable: `{"enabled":true,"auth":"deployKey",` + repository + `}`},
+		map[string]string{gitopsVariable: `{"enabled":true,"auth":"deployKey","repository":{"url":"ssh://git@git.example.org/team/cluster.git"},` + knownHosts + `}`},
+	},
+	{
+		gitopsVariable, "A repository reached over ssh:// needs its host's keys in knownHosts.",
 		map[string]string{gitopsVariable: `{"enabled":true,"auth":"deployKey","repository":{"url":"ssh://git@git.example.org/team/cluster.git"}}`},
+		map[string]string{gitopsVariable: `{"enabled":true,"auth":"deployKey","repository":{"url":"ssh://git@git.example.org/team/cluster.git"},` + knownHosts + `}`},
 	},
 	{
 		gitopsVariable, "Without a key, the repository is read over https://.",
