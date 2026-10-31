@@ -624,8 +624,8 @@ describe("the console", () => {
         },
       ],
     };
-    const event = (minutes: number, message: string, action: string, source = "management") => ({
-      source,
+    const event = (minutes: number, message: string, action: string) => ({
+      source: "management",
       type: "Normal",
       reason: "EtcdRestore",
       message,
@@ -644,7 +644,7 @@ describe("the console", () => {
             event(2, "restore from s1.db.age: stopping etcd", "RestoreEtcd"),
             event(5, "snapshot taken", "SnapshotEtcd"),
             event(10, "restore from s1.db.age: fetching the snapshot", "RestoreEtcd"),
-            event(3, "restore from s1.db.age: in the cluster", "RestoreEtcd", "workload"),
+            { ...event(3, "restore from s1.db.age: in the cluster", "RestoreEtcd"), source: "workload" },
             event(40, "restore from s0.db.age: done", "RestoreEtcd"),
           ],
         },
@@ -652,7 +652,7 @@ describe("the console", () => {
     };
     render(<App />);
     const log = await screen.findByLabelText("Events");
-    const text = log.textContent ?? "";
+    const text = log.textContent;
     expect(text).toMatch(
       /Cluster web: restore from s1\.db\.age: fetching the snapshot\n.*Cluster web: restore from s1\.db\.age: stopping etcd$/u,
     );
