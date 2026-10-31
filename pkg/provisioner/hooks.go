@@ -140,7 +140,8 @@ func (h *Hooks) BeforeClusterUpgrade(ctx context.Context, req *runtimehooksv1.Be
 // that stays.
 func (h *Hooks) BeforeClusterDelete(ctx context.Context, req *runtimehooksv1.BeforeClusterDeleteRequest, resp *runtimehooksv1.BeforeClusterDeleteResponse) {
 	resp.Status = runtimehooksv1.ResponseStatusSuccess
-	if !Owns(&req.Cluster, h.ClassNamespace) || h.Registrar == nil {
+	// An abandoned deletion waits for Rancher no longer, and leaves the registration behind.
+	if !Owns(&req.Cluster, h.ClassNamespace) || h.Registrar == nil || Abandoned(&req.Cluster) {
 		return
 	}
 	cluster, err := h.storedCluster(ctx, &req.Cluster)

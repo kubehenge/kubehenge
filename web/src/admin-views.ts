@@ -2,6 +2,7 @@
 export const adminViews = [
   { path: "", label: "Management cluster", words: "management settings apply remove" },
   { path: "appliance", label: "Appliance", words: "appliance upgrades repair credentials" },
+  { path: "backups", label: "Backups", words: "backups etcd snapshots restore management" },
   { path: "templates", label: "Templates", words: "templates vm build refresh" },
   { path: "certificates", label: "Certificates", words: "certificates dns-01 token" },
 ] as const;

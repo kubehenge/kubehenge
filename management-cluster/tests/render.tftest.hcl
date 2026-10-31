@@ -239,6 +239,7 @@ run "controller_and_clusters_are_least_privilege" {
         { image = "ghcr.io/siderolabs/*", keyless = { issuer = "https://accounts.google.com", subjectRegex = "^(releasemgr-svc@talos-production\\.iam\\.gserviceaccount\\.com|[^@]+@siderolabs\\.com)$" } },
         { image = "registry.k8s.io/*", keyless = { issuer = "https://accounts.google.com", subject = "krel-trust@k8s-releng-prod.iam.gserviceaccount.com" } },
       ] }
+      watch     = { stallMinutes = 20 }
       interface = { extraNamespaces = [], offerHARules = false, headlampSignIn = false, headlampActions = false }
       clusters  = { storages = ["local-lvm", "ceph"], bridges = ["vmbr0", "vmbr1"] }
       proxmox = {

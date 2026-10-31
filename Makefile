@@ -302,9 +302,10 @@ e2e-templates:
 e2e-interface:
 	go test -tags e2e -timeout 10m -count=1 -v -run TestInterfaceKubeconfigEndToEnd ./pkg/appliance/
 
-# As root on a Proxmox VE node, with two releases from `make dist`; settings in test/e2e/appliance.sh.
+# As root on a Proxmox VE node, with three releases from `make dist` built with a RELEASE_KEY made
+# for the test; settings in test/e2e/appliance.sh.
 e2e-appliance:
-	test/e2e/appliance.sh $(RELEASE) $(NEWER) $(SETTINGS)
+	test/e2e/appliance.sh $(RELEASE) $(NEWER) $(NEWEST) $(SETTINGS)
 
 # Settings come from KUBEHENGE_PROXMOX_* and KUBEHENGE_E2E_*; see pkg/provisioner/e2e_test.go.
 e2e-volumes:

@@ -13,7 +13,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -340,8 +339,7 @@ func proxmoxMachineReport(pm *unstructured.Unstructured) (string, int) {
 
 // proxmoxMachines are a cluster's ProxmoxMachines by name.
 func (r *ProgressReconciler) proxmoxMachines(ctx context.Context, cluster *clusterv1.Cluster) (map[string]*unstructured.Unstructured, error) {
-	list := &unstructured.UnstructuredList{}
-	list.SetGroupVersionKind(schema.GroupVersionKind{Group: "infrastructure.cluster.x-k8s.io", Version: proxmoxMachineVersion, Kind: "ProxmoxMachineList"})
+	list := proxmoxMachineList()
 	if err := r.Client.List(ctx, list, client.InNamespace(cluster.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: cluster.Name}); err != nil {
 		return nil, fmt.Errorf("listing the ProxmoxMachines of cluster %s/%s: %w", cluster.Namespace, cluster.Name, err)
 	}

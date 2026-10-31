@@ -12,7 +12,9 @@ Type=oneshot
 # is checked against the release key built into the binary wherever it comes from.
 EnvironmentFile=/etc/kubehenge/appliance.env
 ExecStart=/usr/local/bin/kubehenge update --spool /var/lib/kubehenge-update
-TimeoutStartSec=15min
+# The download, then up to twice the wait for the interface to serve: once on the new release and,
+# should it not, once more on the old one put back.
+TimeoutStartSec=20min
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=/usr/local/bin /usr/local/share /etc/systemd/system /var/lib/kubehenge-update

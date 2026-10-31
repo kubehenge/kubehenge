@@ -69,6 +69,28 @@ rules:
   - apiGroups: [events.k8s.io]
     resources: [events]
     verbs: [create, patch]
+  # A cluster being deleted is listed for what of it holds the deletion up. Abandoning a deletion,
+  # which an administrator asks for on the Cluster, deletes what of the cluster is left and takes
+  # the finalizers off what does not finish; the controller already deletes a cluster's machines,
+  # and patching its Cluster reaches everything else of it through the topology.
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [machinedeployments, machinesets, machines]
+    verbs: [list, patch, delete]
+  - apiGroups: [controlplane.cluster.x-k8s.io]
+    resources: [kubeadmcontrolplanes, rke2controlplanes, kthreescontrolplanes, taloscontrolplanes]
+    verbs: [list, patch, delete]
+  - apiGroups: [bootstrap.cluster.x-k8s.io]
+    resources: [kubeadmconfigs, rke2configs, kthreesconfigs, talosconfigs]
+    verbs: [list, patch, delete]
+  - apiGroups: [infrastructure.cluster.x-k8s.io]
+    resources: [proxmoxmachines, proxmoxclusters]
+    verbs: [list, patch, delete]
+  - apiGroups: [ipam.cluster.x-k8s.io]
+    resources: [ipaddressclaims, ipaddresses]
+    verbs: [list, patch, delete]
+  - apiGroups: [addons.cluster.x-k8s.io]
+    resources: [helmreleaseproxies]
+    verbs: [list, patch, delete]
   # Marking its own ExtensionConfig has Cluster API rediscover the hooks a new version serves.
   - apiGroups: [runtime.cluster.x-k8s.io]
     resources: [extensionconfigs]
@@ -321,6 +343,7 @@ spec:
             - --offer-ha-rules
             {{- end }}
             - --node-image-soak={{ .Values.templateRefresh.soakHours }}h
+            - --stall-after={{ .Values.watch.stallMinutes }}m
             {{- if .Values.templateRefresh.enabled }}
             - --template-refresh
             {{- end }}
@@ -371,14 +394,19 @@ spec:
               containerPort: 8081
             - name: metrics
               containerPort: 8443
+          # A node that stalls for half a minute, every controller on it busy at once, is no reason
+          # to restart the only replica: its webhooks refuse every Cluster while it starts again.
           readinessProbe:
             httpGet:
               path: /readyz
               port: health
+            timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /healthz
               port: health
+            timeoutSeconds: 5
+            failureThreshold: 6
           resources:
             requests:
               cpu: 10m
@@ -397,7 +425,14 @@ spec:
             - name: tls
               mountPath: /etc/kubehenge/tls
               readOnly: true
+            - name: scratch
+              mountPath: /tmp
       volumes:
+        # A Talos control plane recovered from a stalled roll has its etcd copied off before the
+        # node is wiped, and the copy outgrows the container's memory; etcd's default quota is 2 GiB.
+        - name: scratch
+          emptyDir:
+            sizeLimit: 3Gi
         - name: proxmox
           secret:
             secretName: {{ .Values.proxmox.secret }}
@@ -479,7 +514,8 @@ spec:
 # ClusterValidator), among them the grants a cluster asks for, such as Datastore.Allocate on its
 # storage. While the controller is away no cluster is created or changed: one let through then
 # would keep what the check refuses. Nothing the management cluster needs to come up writes a
-# Cluster, and a cluster being deleted, which the check leaves alone, is never held up by it.
+# Cluster, and a cluster being deleted is never held up by it: the check leaves such a cluster
+# alone but for the name that abandons its deletion, which only the controller carries out anyway.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
@@ -492,8 +528,12 @@ webhooks:
     sideEffects: None
     failurePolicy: Fail
     matchConditions:
-      - name: not-being-deleted
-        expression: "!has(object.metadata.deletionTimestamp)"
+      - name: not-being-deleted-or-abandoned
+        expression: >-
+          !has(object.metadata.deletionTimestamp) ||
+          (has(object.metadata.annotations) && 'kubehenge.dev/abandon-deletion' in object.metadata.annotations &&
+          !(has(oldObject.metadata.annotations) && 'kubehenge.dev/abandon-deletion' in oldObject.metadata.annotations &&
+          oldObject.metadata.annotations['kubehenge.dev/abandon-deletion'] == object.metadata.annotations['kubehenge.dev/abandon-deletion']))
     timeoutSeconds: 5
     clientConfig:
       service:

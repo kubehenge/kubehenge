@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -43,26 +44,25 @@ func planTalosRestore(ctx context.Context, c client.Reader, cluster *clusterv1.C
 		return nil, errors.New("no control-plane machine of the cluster has an address yet")
 	}
 	const (
-		mgmt     = "the management cluster"
-		here     = "the machine the snapshot was downloaded to, which reaches the nodes' Talos API"
+		here     = "the machine with the snapshot, which reaches the nodes' Talos API"
 		talosctl = "talosctl --talosconfig talosconfig --nodes "
 	)
 	patch := fmt.Sprintf("kubectl --namespace %s patch cluster %s --type merge --patch ", cluster.Namespace, cluster.Name)
-	return &EtcdRestorePlan{Snapshot: *snapshot, Distribution: string(templates.Talos), Steps: []RestoreStep{
-		{"Pause the cluster, so that Cluster API replaces no machine meanwhile", mgmt, patch + `'{"spec":{"paused":true}}'`},
+	return &EtcdRestorePlan{Snapshot: snapshot, Distribution: string(templates.Talos), Steps: []RestoreStep{
+		pauseStep(patch),
 		{
-			"Write the cluster's talosconfig beside the snapshot", mgmt,
+			"Write the cluster's talosconfig beside the snapshot", onManagement,
 			fmt.Sprintf("kubectl --namespace %s get secret %s --output jsonpath='{.data.%s}' | base64 --decode > talosconfig",
 				cluster.Namespace, TalosconfigSecret(cluster.Name), TalosconfigKey),
 		},
-		{"Save the downloaded snapshot as db.snapshot, and check it", here, fmt.Sprintf("echo '%s  db.snapshot' | sha256sum -c -", snapshot.SHA256)},
+		{"Save the snapshot as db.snapshot and check it", here, fmt.Sprintf("echo '%s  db.snapshot' | sha256sum -c -", snapshot.SHA256)},
 		{
-			"Wipe etcd on every control-plane node, which reboots each", here,
+			"Wipe etcd on every control-plane node (they reboot)", here,
 			talosctl + strings.Join(addresses, ",") + " reset --graceful=false --reboot --system-labels-to-wipe=EPHEMERAL",
 		},
-		{"Wait until etcd is Preparing, waiting to be bootstrapped", here, talosctl + addresses[0] + " service etcd"},
-		{"Restore etcd from the snapshot; the other nodes join it again by themselves", here, talosctl + addresses[0] + " bootstrap --recover-from=db.snapshot"},
-		{"Let Cluster API look after the cluster again", mgmt, patch + `'{"spec":{"paused":false}}'`},
+		{waitForEtcd, here, talosctl + addresses[0] + " service etcd"},
+		{"Restore etcd from the snapshot", here, talosctl + addresses[0] + " bootstrap --recover-from=db.snapshot"},
+		resumeStep(patch),
 	}}, nil
 }
 
@@ -71,8 +71,10 @@ func (run *restoreRun) prepareTalos(ctx context.Context) error {
 	if err := run.knowTalos(ctx); err != nil {
 		return err
 	}
-	if err := run.readSnapshot(ctx); err != nil {
-		return err
+	if !run.reset() {
+		if err := run.readSnapshot(ctx); err != nil {
+			return err
+		}
 	}
 	nodes, err := controlPlaneMachines(ctx, run.r.Client, run.cluster)
 	if err != nil {
@@ -80,6 +82,11 @@ func (run *restoreRun) prepareTalos(ctx context.Context) error {
 	}
 	for _, n := range nodes {
 		n.Address = machineAddress(n.object)
+		if run.reset() && n.Machine != run.request.Machine {
+			// Wiped, it would join the reset etcd again as the member that stalled the roll.
+			run.status.Replaced = append(run.status.Replaced, n.Machine)
+			continue
+		}
 		if n.Address == "" {
 			return fmt.Errorf("control-plane machine %s has no address yet. Restore once all are running", n.Machine)
 		}
@@ -96,11 +103,67 @@ func (run *restoreRun) prepareTalos(ctx context.Context) error {
 		}
 		run.nodes = append(run.nodes, n)
 	}
+	if err := run.keepFirst(); err != nil {
+		return err
+	}
 	if len(run.nodes) == 0 {
 		return errors.New("no control-plane node of the cluster answers on its Talos API")
 	}
 	run.status.Machine, run.status.Node = run.nodes[0].Machine, run.nodes[0].Node
 	return nil
+}
+
+// ownSnapshot is a copy of a node's own etcd, taken through its Talos API before the node is
+// wiped, kept in a file of the controller's for as long as the reset runs.
+type ownSnapshot struct {
+	path   string
+	sha256 string
+}
+
+// copyOwnTalos copies the etcd of the node a reset keeps into a file, before anything is wiped.
+// Its member answers for a snapshot without a quorum.
+func (run *restoreRun) copyOwnTalos(ctx context.Context) error {
+	f, created := os.CreateTemp("", "kubehenge-etcd-*.db")
+	if created != nil {
+		return fmt.Errorf("making room for a copy of %s's etcd: %w", run.nodes[0].Machine, created)
+	}
+	own := &ownSnapshot{path: f.Name()}
+	run.own = own
+	sum := sha256.New()
+	err := run.waitTalos(ctx, run.nodes[0], "copying its etcd", func(ctx context.Context, t TalosNode) (bool, error) {
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			return false, err //nolint:wrapcheck // waitTalos says what it was doing
+		}
+		if err := f.Truncate(0); err != nil {
+			return false, err //nolint:wrapcheck // as above
+		}
+		sum.Reset()
+		r, _, err := t.EtcdSnapshot(ctx)
+		if err != nil {
+			return false, err //nolint:wrapcheck // onTalos names the machine, and the node's error the call
+		}
+		defer func() { _ = r.Close() }()
+		if _, err := io.Copy(io.MultiWriter(f, sum), r); err != nil {
+			return false, err //nolint:wrapcheck // as above
+		}
+		return true, nil
+	})
+	if cerr := f.Close(); err == nil && cerr != nil {
+		err = fmt.Errorf("keeping the copy of %s's etcd: %w", run.nodes[0].Machine, cerr)
+	}
+	if err != nil {
+		return err
+	}
+	own.sha256 = hex.EncodeToString(sum.Sum(nil))
+	return nil
+}
+
+// dropOwn deletes the copy a Talos reset took, once the reset has ended.
+func (run *restoreRun) dropOwn() {
+	if run.own != nil {
+		_ = os.Remove(run.own.path)
+		run.own = nil
+	}
 }
 
 // knowTalos reads the cluster's talosconfig.
@@ -128,17 +191,28 @@ func (run *restoreRun) checkSnapshot(ctx context.Context) error {
 // withSnapshot hands the snapshot to use, and fails when what it read does not match the
 // snapshot's checksum.
 func (run *restoreRun) withSnapshot(ctx context.Context, use func(io.Reader) error) error {
-	plain, err := run.target.OpenEtcdSnapshot(ctx, run.snapshot.Name)
+	name, want := run.snapshot.Name, run.snapshot.SHA256
+	var plain io.ReadCloser
+	var err error
+	switch {
+	case run.reset() && run.own == nil:
+		return fmt.Errorf("the copy of %s's etcd is gone with a restart of the controller: restore from a snapshot", run.request.Machine)
+	case run.reset():
+		name, want = "the copy of "+run.request.Machine+"'s etcd", run.own.sha256
+		plain, err = os.Open(run.own.path)
+	default:
+		plain, err = run.target.OpenEtcdSnapshot(ctx, run.snapshot.Name)
+	}
 	if err != nil {
 		return err
 	}
 	defer func() { _ = plain.Close() }()
 	sum := sha256.New()
 	if err := use(io.TeeReader(plain, sum)); err != nil {
-		return fmt.Errorf("snapshot %s: %w", run.snapshot.Name, err)
+		return fmt.Errorf("%s: %w", name, err)
 	}
-	if got := hex.EncodeToString(sum.Sum(nil)); got != run.snapshot.SHA256 {
-		return fmt.Errorf("snapshot %s does not match its checksum", run.snapshot.Name)
+	if got := hex.EncodeToString(sum.Sum(nil)); got != want {
+		return fmt.Errorf("%s does not match its checksum", name)
 	}
 	return nil
 }
@@ -240,7 +314,7 @@ func (run *restoreRun) recoverTalos(ctx context.Context, cause error) error {
 
 // check reads the snapshot again for a restore tried once more, the target with it.
 func (run *restoreRun) check(ctx context.Context) error {
-	if run.target == nil {
+	if run.target == nil && !run.reset() {
 		if err := run.readSnapshot(ctx); err != nil {
 			return err
 		}
