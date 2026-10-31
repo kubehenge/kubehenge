@@ -310,7 +310,8 @@ func TestUpdateRollsBack(t *testing.T) {
 		t.Fatalf("update: %v, restarts %d", err, *restarts)
 	}
 	installedIs(t, u, "0.1.0", "")
-	if st := u.Spool.Status(); st == nil || st.State != "failed" || st.From != "0.1.0" || st.To != "0.2.0" || st.Error != want || !st.RolledBack {
+	if st := u.Spool.Status(); st == nil || st.State != "failed" || st.From != "0.1.0" || st.To != "0.2.0" || st.Error != want || !st.RolledBack ||
+		st.Step != StepCheck {
 		t.Fatalf("status = %+v", st)
 	}
 	// Released again, so the interface can start runs.
@@ -340,6 +341,10 @@ func TestUpdateRollsBackAFailedRestart(t *testing.T) {
 	restarts := 0
 	u.Restart = func(context.Context) error {
 		restarts++
+		// Each step is on record as it begins, for the interface to follow.
+		if st := u.Spool.Status(); restarts == 1 && (st == nil || st.State != StateUpdating || st.Step != StepRestart) {
+			t.Errorf("status while restarting = %+v", st)
+		}
 		if restarts == 1 {
 			return errors.New("systemctl restart kubehenge.service: exit status 1")
 		}
@@ -353,6 +358,9 @@ func TestUpdateRollsBackAFailedRestart(t *testing.T) {
 		t.Fatalf("update: %v, restarts %d", err, restarts)
 	}
 	installedIs(t, u, "0.1.0", "tofu 1.13.0")
+	if st := u.Spool.Status(); st == nil || st.Step != StepRestart {
+		t.Errorf("status = %+v, want it failed in %q", st, StepRestart)
+	}
 }
 
 // When the old release does not serve either, the status says both.

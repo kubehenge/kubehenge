@@ -297,6 +297,8 @@ export interface HealthEvent {
   object: string;
   count: number;
   last: string;
+  /** What the reporter was doing, as Kubehenge's controller names its runs. */
+  action?: string;
 }
 
 /** How one cluster stands, as its health page sums it up, for the fleet. */

@@ -606,6 +606,61 @@ describe("the console", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
+  it("shows the controller's events of an etcd restore since it started, oldest first", async () => {
+    window.history.replaceState(null, "", "/runs/etcd-restore/default/web");
+    const routes = serve();
+    routes["GET /api/runs"] = {
+      body: [
+        {
+          id: "etcd-restore/default/web",
+          kind: "etcd-restore",
+          namespace: "default",
+          cluster: "web",
+          what: "Restore etcd from s1.db.age",
+          state: "failed",
+          started: minutesAgo(20),
+          error: "the guest agent did not answer",
+          snapshot: "s1.db.age",
+        },
+      ],
+    };
+    const event = (minutes: number, message: string, action: string, source = "management") => ({
+      source,
+      type: "Normal",
+      reason: "EtcdRestore",
+      message,
+      object: "Cluster web",
+      count: 1,
+      last: minutesAgo(minutes),
+      action,
+    });
+    routes["GET /api/clusters/default/web/health"] = {
+      body: {
+        read: minutesAgo(0),
+        verdict: "degraded",
+        attention: [],
+        events: {
+          items: [
+            event(2, "restore from s1.db.age: stopping etcd", "RestoreEtcd"),
+            event(5, "snapshot taken", "SnapshotEtcd"),
+            event(10, "restore from s1.db.age: fetching the snapshot", "RestoreEtcd"),
+            event(3, "restore from s1.db.age: in the cluster", "RestoreEtcd", "workload"),
+            event(40, "restore from s0.db.age: done", "RestoreEtcd"),
+          ],
+        },
+      },
+    };
+    render(<App />);
+    const log = await screen.findByLabelText("Events");
+    const text = log.textContent ?? "";
+    expect(text).toMatch(
+      /Cluster web: restore from s1\.db\.age: fetching the snapshot\n.*Cluster web: restore from s1\.db\.age: stopping etcd$/u,
+    );
+    expect(text).not.toContain("snapshot taken");
+    expect(text).not.toContain("in the cluster");
+    expect(text).not.toContain("s0.db.age");
+  });
+
   it("shows the end of a finished restore's log to those who may read the cluster's logs", async () => {
     window.history.replaceState(null, "", "/runs/restore/default/web/daily-1-a");
     const routes = serve();

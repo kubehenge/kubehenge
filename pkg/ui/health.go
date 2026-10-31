@@ -241,6 +241,8 @@ type eventView struct {
 	Object  string    `json:"object"`
 	Count   int32     `json:"count"`
 	Last    time.Time `json:"last"`
+	// Action is what the reporter was doing, as Kubehenge's controller names its runs.
+	Action string `json:"action,omitempty"`
 }
 
 // The events' sources.

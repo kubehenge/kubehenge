@@ -247,7 +247,31 @@ func updateRun(st *appliance.UpdateStatus) (runView, bool) {
 	default:
 		return runView{}, false
 	}
+	v.Steps = updateSteps(st, v.State)
 	return v, true
+}
+
+// updateSteps are an upgrade's steps: those before the one it is in done, that one under way or
+// failed, and putting the old release back where a failure did.
+func updateSteps(st *appliance.UpdateStatus, state string) []runStep {
+	current := slices.Index(appliance.UpdateSteps, st.Step)
+	steps := make([]runStep, 0, len(appliance.UpdateSteps)+1)
+	for i, name := range appliance.UpdateSteps {
+		s := runStep{Name: name, State: stepWaiting}
+		switch {
+		case state == runSucceeded, i < current:
+			s.State = stepDone
+		case i == current && state == runRunning:
+			s.State = stepRunning
+		case i == current && state == runFailed:
+			s.State = stepFailed
+		}
+		steps = append(steps, s)
+	}
+	if st.RolledBack {
+		steps = append(steps, runStep{Name: "Put back " + st.From, State: stepDone})
+	}
+	return steps
 }
 
 // refreshRuns is the template refresh's last run, as the controller records it.
