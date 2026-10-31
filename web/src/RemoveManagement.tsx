@@ -35,7 +35,7 @@ export function DangerZone({ running, onStarted }: { running: boolean; onStarted
   );
 }
 
-function RemoveDialog({ onClose, onStarted }: { onClose: () => void; onStarted: () => void }): JSX.Element {
+export function RemoveDialog({ onClose, onStarted }: { onClose: () => void; onStarted: () => void }): JSX.Element {
   const [typed, setTyped] = useState("");
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);

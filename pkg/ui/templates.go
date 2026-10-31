@@ -355,7 +355,7 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request, u user) 
 		s.proxmoxError(w, r, err)
 		return
 	}
-	err = s.Appliance.BuildTemplate(ticket, func(ctx context.Context, j *appliance.Job) error { //nolint:contextcheck // the build outlives the request on purpose
+	err = s.Appliance.BuildTemplate(ticket, req, func(ctx context.Context, j *appliance.Job) error { //nolint:contextcheck // the build outlives the request on purpose
 		j.Add(fmt.Sprintf("Building template %s on node %s", t.Name, b.Node))
 		b.Log = func(format string, a ...any) { j.Add(fmt.Sprintf(format, a...)) }
 		retry := templates.Retry{Log: b.Log}

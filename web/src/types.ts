@@ -340,6 +340,15 @@ export interface RunInfo {
   steps?: RunStep[];
   /** What a change of a cluster sets. */
   settings?: string[];
+  /** For a run of the management cluster, which one it was. */
+  action?: "apply" | "remove" | "etcd-restore";
+  /** A restore's and a template build's choices, for starting it again. */
+  restore?: RestoreRequest;
+  template?: TemplateRequest;
+  /** The snapshot an etcd restore restores. */
+  snapshot?: string;
+  /** The release an upgrade of the appliance upgrades to. */
+  release?: string;
 }
 
 /** A step of a run, and how far it has come. */

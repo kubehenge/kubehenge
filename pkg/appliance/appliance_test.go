@@ -1,6 +1,7 @@
 package appliance
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -503,17 +504,29 @@ func TestRemove(t *testing.T) {
 	}
 }
 
+// compact is raw JSON without the spacing its record on disk has.
+func compact(t *testing.T, raw json.RawMessage) string {
+	t.Helper()
+	var b bytes.Buffer
+	if err := json.Compact(&b, raw); err != nil {
+		t.Fatal(err)
+	}
+	return b.String()
+}
+
 func TestTemplateBuildIsRecorded(t *testing.T) {
 	t.Parallel()
 	a, _ := newAppliance(t)
 	release := make(chan struct{})
-	if err := a.BuildTemplate(ticket(), func(_ context.Context, j *Job) error { j.Add("cloning"); <-release; return errors.New("no storage") }); err != nil {
+	asked := map[string]string{"distribution": "talos", "node": "pve1"}
+	if err := a.BuildTemplate(ticket(), asked, func(_ context.Context, j *Job) error { j.Add("cloning"); <-release; return errors.New("no storage") }); err != nil {
 		t.Fatal(err)
 	}
 	// A restart during the build finds it cut off.
 	cut := &Appliance{Dir: a.Dir}
 	cut.LoadLast()
-	if j := cut.TemplateJob(); j == nil || j.State != "failed" || j.Error != "the appliance stopped during the run" {
+	if j := cut.TemplateJob(); j == nil || j.State != "failed" || j.Error != "the appliance stopped during the run" ||
+		compact(t, j.Request) != `{"distribution":"talos","node":"pve1"}` {
 		t.Fatalf("build cut off by a restart: %+v", j)
 	}
 	close(release)
@@ -526,7 +539,8 @@ func TestTemplateBuildIsRecorded(t *testing.T) {
 	restarted := &Appliance{Dir: a.Dir}
 	restarted.LoadLast()
 	j := restarted.TemplateJob()
-	if j == nil || j.Kind != "template" || j.State != "failed" || j.Error != "no storage" || !slices.Equal(j.Log, []string{"cloning"}) {
+	if j == nil || j.Kind != "template" || j.State != "failed" || j.Error != "no storage" || !slices.Equal(j.Log, []string{"cloning"}) ||
+		compact(t, j.Request) != `{"distribution":"talos","node":"pve1"}` {
 		t.Fatalf("restored build: %+v", j)
 	}
 	if restarted.Current() != nil {

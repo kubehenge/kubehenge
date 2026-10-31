@@ -3,10 +3,11 @@ import { useState, type JSX } from "react";
 import { api } from "./api";
 import { clusterPath } from "./cluster-paths";
 import { useFleet } from "./fleet";
-import { Link, navigate } from "./router";
+import { Link } from "./router";
+import { TryAgain } from "./RunAgain";
 import { runTitle, runView } from "./Runs";
 import type { Job, RunInfo, RunStep } from "./types";
-import { age, ErrorBox, errorMessage, logLines, pollIdle, pollRunning, Skeleton, Status, usePoll } from "./ui";
+import { age, ErrorBox, logLines, pollIdle, pollRunning, Skeleton, Status, usePoll } from "./ui";
 
 const states: Record<RunInfo["state"], { state: "progress" | "warning" | "ok" | "error"; text: string }> = {
   running: { state: "progress", text: "Running" },
@@ -29,53 +30,6 @@ const stepDots: Record<RunStep["state"], string> = {
 };
 
 const msPerMinute = 60_000;
-
-// The runs that can be started again as they were: those that take nothing but the cluster.
-const retries: Partial<Record<RunInfo["kind"], (r: RunInfo) => Promise<unknown>>> = {
-  backup: async (r) => api.backUp(r.namespace ?? "", r.cluster ?? ""),
-  "etcd-snapshot": async (r) => api.takeEtcdSnapshot(r.namespace ?? "", r.cluster ?? ""),
-  "template-refresh": async () => api.refreshTemplates(),
-};
-
-// TryAgain starts a failed run again, where it takes nothing to choose, and goes where the new run shows.
-function TryAgain({
-  run,
-  to,
-  onError,
-}: {
-  run: RunInfo;
-  to: string;
-  onError: (message: string | undefined) => void;
-}): JSX.Element | null {
-  const [busy, setBusy] = useState(false);
-  const again = retries[run.kind];
-  if (run.state !== "failed" || again === undefined) {
-    return null;
-  }
-  const start = async (): Promise<void> => {
-    setBusy(true);
-    onError(undefined);
-    try {
-      await again(run);
-      navigate(to);
-    } catch (err) {
-      onError(errorMessage(err));
-      setBusy(false);
-    }
-  };
-  return (
-    <button
-      type="button"
-      className="primary"
-      disabled={busy}
-      onClick={() => {
-        void start();
-      }}
-    >
-      Try again
-    </button>
-  );
-}
 
 // took says how long a run took, or has taken so far.
 function took(r: RunInfo): string | undefined {

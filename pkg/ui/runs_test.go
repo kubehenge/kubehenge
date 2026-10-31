@@ -83,7 +83,8 @@ func TestRunsListWhatRunsAndWhatFailedLately(t *testing.T) {
 	if got := ids(admin); !slices.Equal(got, want) {
 		t.Fatalf("admin's runs = %q, want %q", got, want)
 	}
-	if r := admin[0]; r.Phase != "Fetching" || r.By != "dev@pve" || r.Cluster != "one" || !r.Started.Equal(now.Add(-2*time.Minute)) {
+	if r := admin[0]; r.Phase != "Fetching" || r.By != "dev@pve" || r.Cluster != "one" || !r.Started.Equal(now.Add(-2*time.Minute)) ||
+		r.Snapshot != "20261012T060000Z-v1.36.5-rke2r1.db.age" {
 		t.Errorf("restore %+v", r)
 	}
 	if got := stepStates(&admin[0]); !slices.Equal(got, []string{
@@ -91,7 +92,7 @@ func TestRunsListWhatRunsAndWhatFailedLately(t *testing.T) {
 	}) {
 		t.Errorf("restore steps %q", got)
 	}
-	if r := admin[1]; r.Error != failed.Error || r.What != "Upgrade appliance to 0.1.1" {
+	if r := admin[1]; r.Error != failed.Error || r.What != "Upgrade appliance to 0.1.1" || r.Release != "0.1.1" {
 		t.Errorf("upgrade %+v", r)
 	}
 	if r := admin[2]; r.Error != "the target refused the upload" {

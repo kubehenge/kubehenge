@@ -353,7 +353,7 @@ describe("the console", () => {
     await expect(screen.findByRole("heading", { name: /^Upgrade appliance to 0\.3\.1/u })).resolves.toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("Errorthe release's checksum does not match");
     expect(screen.getByRole("link", { name: "Open upgrades" })).toHaveAttribute("href", "/administration/appliance");
-    // An appliance upgrade takes a release to choose, so it is not started again from here.
+    // The run does not say which release it was for, so it cannot be started again.
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
   });
 
@@ -386,6 +386,224 @@ describe("the console", () => {
     routes["POST /api/clusters/default/web/backups"] = { status: 202, body: { name: "manual-2" } };
     await user.click(again);
     await waitFor(() => expect(window.location.pathname).toBe("/clusters/default/web/backups"));
+  });
+
+  it("starts a failed restore again with the choices it had, then shows the cluster's backups", async () => {
+    window.history.replaceState(null, "", "/runs/restore/default/web/daily-1-a");
+    const routes = serve();
+    const choices = {
+      backup: "daily-1",
+      excludedNamespaces: ["cache"],
+      resources: ["deployments.apps"],
+      excludedResources: ["pods"],
+      volumeData: false,
+    };
+    routes["GET /api/runs"] = {
+      body: [
+        {
+          id: "restore/default/web/daily-1-a",
+          kind: "restore",
+          namespace: "default",
+          cluster: "web",
+          what: "Restore from daily-1",
+          state: "failed",
+          finished: minutesAgo(3),
+          error: "PartiallyFailed",
+          restore: choices,
+        },
+      ],
+    };
+    const sent: unknown[] = [];
+    routes["POST /api/clusters/default/web/restores"] = (body) => {
+      sent.push(body);
+      return { status: 201, body: { name: "daily-1-b", backup: "daily-1", phase: "New" } };
+    };
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/clusters/default/web/backups"));
+    expect(sent).toStrictEqual([choices]);
+  });
+
+  it("builds a failed template again with its choices and an upgrade again to its release, staying on the run", async () => {
+    window.history.replaceState(null, "", "/runs/template");
+    const routes = serve();
+    const choices = {
+      distribution: "talos",
+      talosVersion: "v1.12.0",
+      node: "pve1",
+      storage: "local-lvm",
+      importStorage: "local",
+      bridge: "vmbr0",
+    };
+    routes["GET /api/runs"] = {
+      body: [
+        {
+          id: "template",
+          kind: "template",
+          what: "Build template",
+          state: "failed",
+          error: "no storage",
+          template: choices,
+        },
+        {
+          id: "appliance-upgrade",
+          kind: "appliance-upgrade",
+          what: "Upgrade appliance to 0.3.1",
+          state: "failed",
+          release: "0.3.1",
+        },
+      ],
+    };
+    const sent: unknown[] = [];
+    routes["POST /api/templates"] = (body) => {
+      sent.push(body);
+      return { status: 202, body: { user: "alice@pve", kind: "template", started: minutesAgo(0), state: "running" } };
+    };
+    routes["POST /api/appliance/upgrades"] = (body) => {
+      sent.push(body);
+      return { status: 202 };
+    };
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(sent).toStrictEqual([choices]));
+    expect(window.location.pathname).toBe("/runs/template");
+
+    window.history.pushState(null, "", "/runs/appliance-upgrade");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await expect(screen.findByRole("heading", { name: /^Upgrade appliance to 0\.3\.1/u })).resolves.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(sent).toStrictEqual([choices, { version: "0.3.1" }]));
+    expect(window.location.pathname).toBe("/runs/appliance-upgrade");
+  });
+
+  it("asks for the passphrase before applying the management cluster again with its saved settings", async () => {
+    window.history.replaceState(null, "", "/runs/management-cluster");
+    const routes = serve();
+    routes["GET /api/runs"] = {
+      body: [
+        {
+          id: "management-cluster",
+          kind: "management-cluster",
+          action: "apply",
+          what: "Apply management cluster",
+          state: "failed",
+          error: "timed out waiting for the API",
+        },
+      ],
+    };
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const again = await screen.findByRole("button", { name: "Try again" });
+    const settings = { nodes: ["pve1"], namespaces: ["default"] };
+    routes["GET /api/setup"] = { body: { settings } };
+    const sent: unknown[] = [];
+    routes["POST /api/setup"] = (body) => {
+      sent.push(body);
+      return { status: 202, body: { user: "alice@pve", kind: "apply", started: minutesAgo(0), state: "running" } };
+    };
+    await user.click(again);
+    const dialog = await screen.findByRole("dialog", { name: "Apply management cluster" });
+    await user.type(within(dialog).getByLabelText("State passphrase"), "correct horse battery staple");
+    await user.click(within(dialog).getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(sent).toStrictEqual([{ settings, passphrase: "correct horse battery staple" }]);
+    expect(window.location.pathname).toBe("/runs/management-cluster");
+  });
+
+  it("says so when the snapshot a failed restore of the management cluster used is gone", async () => {
+    window.history.replaceState(null, "", "/runs/management-cluster");
+    const routes = serve();
+    routes["GET /api/runs"] = {
+      body: [
+        {
+          id: "management-cluster",
+          kind: "management-cluster",
+          action: "etcd-restore",
+          snapshot: "mgmt-20261030.db.age",
+          what: "Restore management cluster etcd",
+          state: "failed",
+        },
+      ],
+    };
+    routes["GET /api/appliance/etcd-backups/snapshots"] = {
+      body: { snapshots: [{ name: "mgmt-20261031.db.age", time: minutesAgo(60) }] },
+    };
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Try again" }));
+    await expect(screen.findByText("Snapshot mgmt-20261030.db.age is no longer there.")).resolves.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    routes["GET /api/appliance/etcd-backups/snapshots"] = {
+      body: { snapshots: [{ name: "mgmt-20261030.db.age", time: minutesAgo(60) }] },
+    };
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    await expect(screen.findByRole("dialog", { name: "Restore etcd snapshot" })).resolves.toBeInTheDocument();
+  });
+
+  it("restores a cluster's etcd again only for those who may, once its name is typed", async () => {
+    window.history.replaceState(null, "", "/runs/etcd-restore/default/web");
+    const routes = serve();
+    const failedRestore: RunInfo = {
+      id: "etcd-restore/default/web",
+      kind: "etcd-restore",
+      namespace: "default",
+      cluster: "web",
+      what: "Restore etcd from s1.db.age",
+      state: "failed",
+      error: "the guest agent did not answer",
+      snapshot: "s1.db.age",
+    };
+    routes["GET /api/runs"] = { body: [failedRestore] };
+    render(<App />);
+    await expect(screen.findByRole("heading", { name: /^Restore etcd from s1/u })).resolves.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+  });
+
+  it("restores a cluster's etcd again from the same snapshot once its name is typed", async () => {
+    window.history.replaceState(null, "", "/runs/etcd-restore/default/web");
+    const routes = serve();
+    const web = { ...base, allowed: { change: true, kubeconfig: true } };
+    routes["GET /api/clusters"] = { body: [web] };
+    routes["GET /api/clusters/default/web"] = { body: web };
+    routes["GET /api/runs"] = {
+      body: [
+        {
+          id: "etcd-restore/default/web",
+          kind: "etcd-restore",
+          namespace: "default",
+          cluster: "web",
+          what: "Restore etcd from s1.db.age",
+          state: "failed",
+          snapshot: "s1.db.age",
+        },
+      ],
+    };
+    routes["GET /api/clusters/default/web/etcd-snapshots"] = {
+      body: {
+        enabled: true,
+        requested: false,
+        automatic: true,
+        snapshots: [{ name: "s1.db.age", time: minutesAgo(90) }],
+      },
+    };
+    const sent: unknown[] = [];
+    routes["POST /api/clusters/default/web/etcd-restores"] = (body) => {
+      sent.push(body);
+      return { status: 202 };
+    };
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Try again" }));
+    const dialog = await screen.findByRole("dialog", { name: /^Restore etcd from/u });
+    const restore = within(dialog).getByRole("button", { name: "Restore" });
+    expect(restore).toBeDisabled();
+    await user.type(within(dialog).getByLabelText("Confirm name"), "web");
+    await user.click(restore);
+    await waitFor(() => expect(sent).toStrictEqual([{ snapshot: "s1.db.age", confirm: "web" }]));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
   it("shows the end of a finished restore's log to those who may read the cluster's logs", async () => {

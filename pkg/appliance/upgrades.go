@@ -307,7 +307,7 @@ func (a *Appliance) ApplyUnattended(ready func(ctx context.Context, kubeconfig [
 	user, _, _ := strings.Cut(u.Token, "!")
 	// As long as a run on an administrator's session may take.
 	by := runner{user: user, automatic: true, until: time.Now().Add(pve.TicketLifetime)}
-	return a.startIn(&a.job, by, "apply", func(ctx context.Context, j *Job) error {
+	return a.startIn(&a.job, by, "apply", nil, func(ctx context.Context, j *Job) error {
 		s := a.SavedSettings()
 		if s == nil || !a.Ready() {
 			return errors.New("there is no management cluster to upgrade")

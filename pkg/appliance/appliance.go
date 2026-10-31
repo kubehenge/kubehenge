@@ -165,9 +165,10 @@ func (a *Appliance) HAReleased() error {
 
 // BuildTemplate starts building a VM template on the user's ticket, as a job of its own kind that
 // holds the same lock as runs of the module: an upgrade's restart would cut it off, and removing
-// the management cluster deletes the templates. It returns at once.
-func (a *Appliance) BuildTemplate(ticket *pve.Ticket, run func(ctx context.Context, j *Job) error) error {
-	return a.startIn(&a.templateJob, sessionRunner(ticket), "template", run)
+// the management cluster deletes the templates. It returns at once. request is what the build was
+// asked for, kept with it so that it can be started again.
+func (a *Appliance) BuildTemplate(ticket *pve.Ticket, request any, run func(ctx context.Context, j *Job) error) error {
+	return a.startIn(&a.templateJob, sessionRunner(ticket), "template", request, run)
 }
 
 // TemplateJob returns the last template build, or nil.
@@ -272,7 +273,7 @@ func (a *Appliance) LoadLast() {
 		if v.State == StateRunning {
 			v.State, v.Error = StateFailed, "the appliance stopped during the run"
 		}
-		*slot = &Job{User: v.User, Automatic: v.Automatic, Kind: v.Kind, Started: v.Started, Finished: v.Finished, State: v.State, Error: v.Error, log: v.Log}
+		*slot = &Job{User: v.User, Automatic: v.Automatic, Kind: v.Kind, Started: v.Started, Finished: v.Finished, State: v.State, Error: v.Error, Request: v.Request, log: v.Log}
 	}
 }
 
@@ -316,7 +317,7 @@ func (a *Appliance) running() error {
 
 // start runs one run of the module in the background, on the user's ticket.
 func (a *Appliance) start(ticket *pve.Ticket, what string, run func(ctx context.Context, j *Job) error) error {
-	return a.startIn(&a.job, sessionRunner(ticket), what, run)
+	return a.startIn(&a.job, sessionRunner(ticket), what, nil, run)
 }
 
 // runner is whom a job acts as, and until when it may run.
@@ -334,7 +335,16 @@ func sessionRunner(t *pve.Ticket) runner {
 // startIn runs one job in the background and keeps it in slot; only one job of any kind runs at a
 // time. The job outlives the request that started it, but not the time its runner allows. It is
 // recorded on disk when it starts and when it ends, so a restart in between shows it as cut off.
-func (a *Appliance) startIn(slot **Job, by runner, what string, run func(ctx context.Context, j *Job) error) error {
+// request, which may be nil, is kept with it.
+func (a *Appliance) startIn(slot **Job, by runner, what string, request any, run func(ctx context.Context, j *Job) error) error {
+	var asked json.RawMessage
+	if request != nil {
+		raw, err := json.Marshal(request)
+		if err != nil {
+			return fmt.Errorf("recording what the run was asked: %w", err)
+		}
+		asked = raw
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if err := a.running(); err != nil {
@@ -347,9 +357,9 @@ func (a *Appliance) startIn(slot **Job, by runner, what string, run func(ctx con
 	case err != nil:
 		return err
 	}
-	j := &Job{User: by.user, Automatic: by.automatic, Kind: what, Started: time.Now(), State: StateRunning}
+	j := &Job{User: by.user, Automatic: by.automatic, Kind: what, Started: time.Now(), State: StateRunning, Request: asked}
 	*slot = j
-	a.saveLog(slot, &JobView{User: j.User, Automatic: j.Automatic, Kind: what, Started: j.Started, State: StateRunning, Log: []string{}})
+	a.saveLog(slot, &JobView{User: j.User, Automatic: j.Automatic, Kind: what, Started: j.Started, State: StateRunning, Request: asked, Log: []string{}})
 	ctx, cancel := context.WithDeadline(context.Background(), by.until)
 	go func() {
 		defer cancel()
@@ -361,7 +371,7 @@ func (a *Appliance) startIn(slot **Job, by runner, what string, run func(ctx con
 		// The record is on disk before the outcome shows, so a restart right after still has it;
 		// from then on an upgrade may restart the service, and a new job may start once the
 		// outcome shows.
-		a.saveLog(slot, &JobView{User: j.User, Automatic: j.Automatic, Kind: what, Started: j.Started, Finished: time.Now(), State: state, Error: errText, Log: j.Log()})
+		a.saveLog(slot, &JobView{User: j.User, Automatic: j.Automatic, Kind: what, Started: j.Started, Finished: time.Now(), State: state, Error: errText, Request: j.Request, Log: j.Log()})
 		unlock()
 		j.mu.Lock()
 		j.Finished, j.State, j.Error = time.Now(), state, errText
