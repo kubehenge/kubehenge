@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/kubehenge/kubehenge/test/integration"
 )
 
 // Each class gives its control planes' API server a Go memory limit out of the control plane's own
@@ -21,7 +23,7 @@ func TestIntegrationClassesLimitTheAPIServersMemory(t *testing.T) {
 		"kubehenge-talos":   {"/spec/template/spec/controlPlaneConfig/controlplane/strategicPatches/-", `"apiVersion: v1alpha1\nkind: KubeAPIServerConfig\nenv:\n  GOMEMLIMIT: 1638MiB"`},
 	}
 	found := map[string]bool{}
-	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
+	for _, o := range integration.RenderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
 		w, ok := want[o.GetName()]
 		if o.GetKind() != "ClusterClass" || !ok {
 			continue

@@ -45,6 +45,8 @@
 # outnumber its CPUs starve each other, whatever their sizes.
 # KUBEHENGE_E2E_NODE_OS is the nodes' operating system as one word, such as rocky-10, whose
 # template has to exist; unset, the class's default applies. Talos nodes run Talos and take none.
+# KUBEHENGE_E2E_CIS=false creates the cluster without CIS hardening, the class's default, and leaves
+# the benchmark out; by default the cluster is hardened and its nodes checked against it.
 # KUBEHENGE_E2E_CNI chooses the CNI (required by kubeadm). KUBEHENGE_E2E_PODS and
 # KUBEHENGE_E2E_SERVICES set the cluster's pod and service ranges, which must not overlap the nodes'
 # network; unset, the distribution's defaults apply.
@@ -124,6 +126,12 @@ ETCD_SHA256=5dfa9cc3b3ce3b4b491fbcc2057d3daa166bcc6676f743fcd20f8e5760cb9775
 # shellcheck source=backups.sh
 . "$(dirname "$0")/backups.sh"
 
+cis=${KUBEHENGE_E2E_CIS:-true}
+case ${cis} in
+    true | false) ;;
+    *) fail "KUBEHENGE_E2E_CIS is true or false, not ${cis}" ;;
+esac
+
 work=$(mktemp -d)
 distribution=$(echo "${class}" | sed 's/^kubehenge-//')
 suffix=$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')
@@ -139,8 +147,46 @@ health_pid=
 ha_rule=''
 ha_vmid=''
 ha_node=''
+# cni_state: what the CNI Kubehenge installed says of a failed test's cluster, which no collected log
+# keeps while it runs without restarts: the Tigera operator's status and last lines for Calico, and
+# the packets each Cilium agent drops in twenty seconds, with why, and Headlamp's last lines.
+cni_state() {
+    case ${KUBEHENGE_E2E_CNI:-} in
+        calico | cilium) ;;
+        *) return 0 ;;
+    esac
+    kubectl -n "${ns}" get secret "${name}-kubeconfig" -o jsonpath='{.data.value}' 2> /dev/null | base64 -d > "${work}/state" || return 0
+    printf '\n%s:\n' "${KUBEHENGE_E2E_CNI}"
+    if [ "${KUBEHENGE_E2E_CNI}" = calico ]; then
+        KUBECONFIG=${work}/state kubectl get tigerastatus -o wide 2>&1 || true
+        KUBECONFIG=${work}/state kubectl -n tigera-operator logs deployment/tigera-operator --tail=40 2>&1 || true
+        return 0
+    fi
+    agents=$(KUBECONFIG=${work}/state kubectl -n kube-system get pods -l k8s-app=cilium -o name 2> /dev/null) || true
+    monitors=
+    for agent in ${agents}; do
+        KUBECONFIG=${work}/state kubectl -n kube-system exec "${agent}" -c cilium-agent -- timeout 20 cilium-dbg monitor --type drop > "${work}/drops-${agent##*/}" 2>&1 &
+        monitors="${monitors} $!"
+    done
+    # Traffic for the monitors to see while they listen: the request Headlamp's checks send, which
+    # crosses from the API server's host network to a pod and from the pod back to the API server.
+    # Talos's machined retries its log stream to the node collector on its own.
+    sleep 3
+    for _ in 1 2 3; do
+        KUBECONFIG=${work}/state kubectl get --raw '/api/v1/namespaces/headlamp/services/http:headlamp:80/proxy/clusters/main/api/v1/pods?limit=1' > /dev/null 2>&1 || true
+        sleep 2
+    done
+    # shellcheck disable=SC2086 # one process ID per word
+    [ -z "${monitors}" ] || wait ${monitors} || true
+    for agent in ${agents}; do
+        printf '%s drops:\n' "${agent}"
+        tail -n 40 "${work}/drops-${agent##*/}" || true
+    done
+    KUBECONFIG=${work}/state kubectl -n headlamp logs deployment/headlamp --tail=30 2>&1 || true
+}
 cleanup() {
     status=$?
+    [ "${status}" -eq 0 ] || cni_state
     [ -z "${issuer_pid}" ] || kill "${issuer_pid}" 2> /dev/null || true
     [ -z "${interface_pid}" ] || kill "${interface_pid}" 2> /dev/null || true
     [ -z "${grafana_pid}" ] || kill "${grafana_pid}" 2> /dev/null || true
@@ -444,7 +490,7 @@ ${talos_variable}
       - name: podSecurity
         value: {admission: restricted}
       - name: cis
-        value: true
+        value: ${cis}
       # The test upgrades the cluster itself. Talos's automatic patch upgrades would start whenever a
       # run reaches the default window, 02:00 to 06:00 UTC, since its nodes start a patch behind.
       - name: upgrades
@@ -780,7 +826,7 @@ kubectl -n kubehenge-system delete serviceaccount "${reader}" > /dev/null
 
 # kube-bench carries no benchmark for Talos, whose components keep their configuration where none
 # of its checks look.
-if [ "${distribution}" != talos ]; then
+if [ "${distribution}" != talos ] && [ "${cis}" = true ]; then
     step "the nodes pass the CIS Kubernetes Benchmark"
     cis_benchmark
 fi
@@ -1882,8 +1928,10 @@ if [ "${part}" != lifecycle ]; then
     headlamp_refuses() {
         # shellcheck disable=SC2310 # the request failing is the answer looked for.
         if answer=$(headlamp_pods); then
+            seen="listed: $(printf '%s' "${answer}" | tr '\n' ' ' | cut -c1-400)"
             return 1
         fi
+        seen="refused: $(printf '%s' "${answer}" | tr '\n' ' ' | cut -c1-400)"
         case ${answer} in
             *Unauthorized* | *Forbidden* | *forbidden*) ;;
             *) return 1 ;;
@@ -2163,7 +2211,7 @@ EOF
     until_true 300 "the short-lived pod's line in Loki" logged '{namespace="e2e-logs", pod="short", container="log", job="pods"}' "${short_line}"
     if [ "${distribution}" = talos ]; then
         # Talos keeps no journal: it sends its services' and the kernel's logs to the collector on its
-        # node's loopback, and its API server's audit log lies in a directory of its own.
+        # node's own link-local address, and its API server's audit log lies in a directory of its own.
         collector=$(wl -n logging-node get daemonset/alloy-node -o json)
         audit_dir=$(printf '%s' "${collector}" | jq -r '.spec.template.spec.volumes[] | select(.name == "audit") | .hostPath.path')
         [ "${audit_dir}" = /var/log/audit/kube ] || fail "the collector reads the audit log from '${audit_dir}', not /var/log/audit/kube"
@@ -3111,15 +3159,28 @@ EOF
     echo "CPU requested with every add-on on:"
     pod_cpu "${work}/workload"
 
+    if [ "${cni}" = calico ]; then
+        step "Calico's operator still reconciles, with every add-on's policies on"
+        calico_healthy() {
+            wl get tigerastatus calico -o json | jq -e '[.status.conditions[] | {(.type): .status}] | add | .Available == "True" and .Degraded == "False"' > /dev/null
+        }
+        until_true 300 "Calico available and not degraded" calico_healthy
+    fi
+
     step "every add-on's image named by digest"
     # Every pod outside kube-system, which only the add-ons, their operators and these tests create,
-    # and in kube-system the workloads of the releases Kubehenge installs.
+    # and in kube-system the workloads of the releases Kubehenge installs. RKE2's own Calico runs outside
+    # kube-system from images of RKE2's release, checked against its checksums as kube-system's are.
     releases=$(kubectl -n "${ns}" get helmreleaseproxies -l "cluster.x-k8s.io/cluster-name=${name}" -o json | jq -c '[.items[].spec.releaseName]')
-    images=$(wl get pods -A -o json | jq -r '.items[] | select(.metadata.namespace != "kube-system") | .metadata as $m |
-    (.spec.initContainers // [])[], .spec.containers[] | "\($m.namespace)/\($m.name) \(.image)"')
+    rke2_calico=false
+    [ "${distribution}" = rke2 ] && [ "${cni}" = calico ] && rke2_calico=true
+    images=$(wl get pods -A -o json | jq -r --argjson rke2_calico "${rke2_calico}" '.items[] | select(.metadata.namespace != "kube-system") | .metadata as $m |
+        (.spec.initContainers // [])[], .spec.containers[] |
+        select(($rke2_calico and ($m.namespace == "tigera-operator" or $m.namespace == "calico-system") and (.image | startswith("docker.io/rancher/mirrored-calico-"))) | not) |
+        "\($m.namespace)/\($m.name) \(.image)"')
     system_images=$(wl -n kube-system get deployments,daemonsets,statefulsets -o json | jq -r --argjson r "${releases}" '.items[] |
-    select(.metadata.annotations["meta.helm.sh/release-name"] as $n | $r | index($n)) | .metadata as $m |
-    (.spec.template.spec.initContainers // [])[], .spec.template.spec.containers[] | "kube-system/\($m.name) \(.image)"')
+        select(.metadata.annotations["meta.helm.sh/release-name"] as $n | $r | index($n)) | .metadata as $m |
+        (.spec.template.spec.initContainers // [])[], .spec.template.spec.containers[] | "kube-system/\($m.name) \(.image)"')
     unpinned=$(printf '%s\n%s\n' "${images}" "${system_images}" | grep -v -e '@sha256:[0-9a-f]\{64\}$' -e '^$' | sort -u)
     [ -z "${unpinned}" ] || fail "images named without a digest (pod, image): ${unpinned}"
 fi

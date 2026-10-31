@@ -25,6 +25,8 @@ const (
 	kyvernoPolicies     = "kyverno-policies"
 	// kyvernoOff is the Kyverno level that leaves Kyverno out of the cluster.
 	kyvernoOff = "off"
+
+	kyvernoAdmissionReplicas = 2
 )
 
 // PodSecurityExempt are the namespaces whose pods neither Pod Security Admission nor Kyverno holds
@@ -49,7 +51,8 @@ type PodSecurityExempt struct {
 	RancherAgent []string `json:"rancherAgent"`
 }
 
-// For is the namespaces a cluster with CNI cni and addons exempts.
+// For is the namespaces a cluster running CNI cni, whether Kubehenge or its distribution installs
+// it, and addons exempts.
 func (e *PodSecurityExempt) For(cni string, addons *Addons) []string {
 	out := slices.Clone(e.Always)
 	for _, by := range []struct {
@@ -106,10 +109,19 @@ func kyvernoPoliciesProxy(cluster *clusterv1.Cluster) string {
 // kyvernoValues let a workload past the policies only through a PolicyException in Kyverno's own
 // namespace, which those who may write there grant, rather than anyone who may create one in a
 // namespace of their own.
+//
+// The admission controller runs two replicas, which the chart then keeps one of through a
+// disruption budget. Its leader shuts down when it cannot renew its lease within 10 s, as when
+// etcd stalls on a compaction, and with the policies failing closed a lone replica would refuse
+// every pod until it is back; the other goes on answering. A third would not fit the least worker
+// beside every other add-on.
 func kyvernoValues() map[string]any {
-	return map[string]any{"features": map[string]any{
-		"policyExceptions": map[string]any{"enabled": true, "namespace": kyvernoAddon},
-	}}
+	return map[string]any{
+		"features": map[string]any{
+			"policyExceptions": map[string]any{"enabled": true, "namespace": kyvernoAddon},
+		},
+		"admissionController": map[string]any{"replicas": kyvernoAdmissionReplicas},
+	}
 }
 
 // kyvernoPolicyValues have Kyverno's Pod Security Standards policies deny a pod short of level,

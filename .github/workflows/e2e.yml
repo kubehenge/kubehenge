@@ -13,7 +13,8 @@ on:
     inputs:
       tests:
         description: >-
-          The tests to run, space-separated as test/e2e/ci/run.sh names them; every test when empty.
+          The tests to run, separated by spaces, as test/e2e/ci/run.sh names them, options
+          included; none runs tonight's nightly set.
         type: string
         default: ''
 
@@ -28,7 +29,10 @@ jobs:
   # A merge group runs the tests its pull requests' changes need together (test/e2e/ci/scope.sh),
   # on the tree that would land on main; a pull request runs none, since the queue runs them on
   # exactly what lands and a second run on the pull request only doubles the wait. The nightly run
-  # runs every test and adds the upgrade of the management cluster and Rancher, the longest.
+  # (test/e2e/ci/nightly.sh) runs every test, adds the upgrade of the management cluster, Rancher,
+  # a control plane of three servers and a Proxmox VE cluster of two nodes, and runs each workload
+  # distribution once more on a CNI
+  # and node OS other than its own and, every other night, without CIS hardening, in turn.
   scope:
     name: scope
     runs-on: ubuntu-26.04
@@ -46,9 +50,6 @@ jobs:
           GROUP_BASE: ${{ github.event.merge_group.base_sha }}
           ASKED: ${{ inputs.tests }}
         run: |
-          all='["management-cluster", "management-cluster-upgrade", "appliance", "kubeadm", "rke2",
-            "k3s", "talos", "kubeadm-addons", "rke2-addons", "k3s-addons", "talos-addons",
-            "rancher", "cluster-mesh", "node-image-refresh", "autoscaler"]'
           case "$EVENT" in
             pull_request) tests='[]' ;;
             # A group holds one commit per pull request on top of main, so its changes are the
@@ -57,13 +58,12 @@ jobs:
               git fetch --no-tags --depth=1 origin "$GROUP_BASE"
               tests=$(git diff --name-only "$GROUP_BASE" HEAD | test/e2e/ci/scope.sh)
               ;;
-            # A run asked for by hand runs the tests it names, those of them all it knows, and every
-            # test when it names none.
+            # run.sh refuses a name it cannot read before anything is built.
             workflow_dispatch)
-              tests=$(jq -cn --arg asked "$ASKED" --argjson all "$all" '$asked | split(" ")
-                | map(select(. != "")) | if length == 0 then $all else map(select(IN($all[]))) end')
+              tests=$(jq -nc --arg t "$ASKED" '$t | split(" ") | map(select(. != ""))')
+              [ "$tests" != '[]' ] || tests=$(test/e2e/ci/nightly.sh)
               ;;
-            *) tests=$all ;;
+            *) tests=$(test/e2e/ci/nightly.sh) ;;
           esac
           echo "tests=$(printf '%s' "$tests" | jq -c .)" >> "$GITHUB_OUTPUT"
 

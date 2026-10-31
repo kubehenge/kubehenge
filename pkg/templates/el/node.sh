@@ -36,9 +36,11 @@ packages="cloud-init qemu-guest-agent NetworkManager container-selinux curl gawk
 case "${distribution}" in
     kubeadm)
         version=${kubernetes#v}
-        packages="${packages} containerd runc kubelet-${version} kubeadm-${version} kubectl-${version} cri-tools"
+        packages="${packages} containerd runc kubelet-${version} kubeadm-${version} kubectl-${version} cri-tools iptables-nft"
         ;;
-    rke2) packages="${packages} rke2-selinux" ;;
+    # The portmap plugin, which Calico's and Canal's host ports go through, runs iptables from the
+    # node's own PATH; k3s brings its own.
+    rke2) packages="${packages} rke2-selinux iptables-nft" ;;
     k3s) packages="${packages} k3s-selinux" ;;
     *)
         echo "node.sh: no such distribution: ${distribution}" >&2
@@ -61,14 +63,19 @@ sed -i "/^FILTER_RPC_ARGS=/s/--allow-rpcs=/--allow-rpcs=${agent_rpcs},/" /etc/sy
 grep -q -- "--allow-rpcs=${agent_rpcs}," /etc/sysconfig/qemu-ga
 install -D -m 0644 "${files}/node/kubehenge-qga.cil" /usr/share/kubehenge/kubehenge-qga.cil
 semodule -i /usr/share/kubehenge/kubehenge-qga.cil
+install -D -m 0644 "${files}/node/kubehenge-calico.cil" /usr/share/kubehenge/kubehenge-calico.cil
+semodule -i /usr/share/kubehenge/kubehenge-calico.cil
+printf 'd /var/lib/calico 0755 root root -\n' > /usr/lib/tmpfiles.d/kubehenge-calico.conf
 install -D -m 0644 "${files}/node/cloud.cfg" /etc/cloud/cloud.cfg.d/90-kubehenge.cfg
 install -D -m 0755 "${files}/node/boot-log.sh" /usr/libexec/kubehenge/boot-log
 install -m 0644 "${files}/node/kubehenge-boot-log.service" "${files}/node/kubehenge-boot-log.timer" /usr/lib/systemd/system/
 
 mkdir -p /usr/lib/bootc/install /usr/lib/bootc/kargs.d
 printf '[install]\nroot-fs-type = "xfs"\n' > /usr/lib/bootc/install/20-kubehenge.toml
-# Proxmox VE's console for Kubehenge's VMs is their serial port.
-printf 'kargs = ["console=tty0", "console=ttyS0,115200n8"]\n' > /usr/lib/bootc/kargs.d/10-kubehenge.toml
+# Proxmox VE's console for Kubehenge's VMs is their serial port. The family's kernels keep pressure
+# stall information off unless asked, which the kubelet's pressure metrics read, and which tells a
+# node short of memory, CPU or IO from a slow one.
+printf 'kargs = ["console=tty0", "console=ttyS0,115200n8", "psi=1"]\n' > /usr/lib/bootc/kargs.d/10-kubehenge.toml
 
 # A clone's first boot, with its new machine ID, applies the presets again, and the family's end in
 # disabling every service they do not name.
@@ -85,6 +92,12 @@ mkdir -p /usr/lib/systemd/journald.conf.d
 printf '[Journal]\nStorage=persistent\n' > /usr/lib/systemd/journald.conf.d/50-kubehenge.conf
 
 if [ "${distribution}" = rke2 ]; then
+    # /opt is in /var on RKE2's images (elimage.go), where RKE2 would make the CNI plugins'
+    # directory itself, with /var/opt's label. Made at every boot before RKE2 starts, it is labelled
+    # for the containers that install the plugins, and what they install there takes its label.
+    install -D -m 0644 "${files}/node/kubehenge-cni.cil" /usr/share/kubehenge/kubehenge-cni.cil
+    semodule -i /usr/share/kubehenge/kubehenge-cni.cil
+    printf 'd /var/opt/cni/bin 0755 root root -\n' > /usr/lib/tmpfiles.d/kubehenge-cni.conf
     # The image keeps its system users in /usr/lib for nss-altfiles, an etcd user among them, while
     # RKE2 looks up the one its CIS profile runs etcd as in /etc alone.
     for db in passwd group; do

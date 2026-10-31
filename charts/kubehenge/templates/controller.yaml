@@ -437,11 +437,11 @@ spec:
             - name: scratch
               mountPath: /tmp
       volumes:
-        # A Talos control plane recovered from a stalled roll has its etcd copied off before the
-        # node is wiped, and the copy outgrows the container's memory; etcd's default quota is 2 GiB.
+        # A Talos etcd restore keeps the snapshot it uploads there, as large as etcd's quota
+        # (2 GiB by default), and a control plane recovered from a stalled roll the copy of its etcd.
         - name: scratch
           emptyDir:
-            sizeLimit: 3Gi
+            sizeLimit: 8Gi
         - name: proxmox
           secret:
             secretName: {{ .Values.proxmox.secret }}
@@ -554,4 +554,33 @@ webhooks:
       - apiGroups: [cluster.x-k8s.io]
         apiVersions: [v1beta2]
         operations: [CREATE, UPDATE]
+        resources: [clusters]
+---
+# The controller gives a new Kubehenge cluster the pod and service ranges it names none of
+# (pkg/provisioner's ClusterDefaulter), as the interface's clusters get them: the distributions read
+# them from the Cluster. Only on creation, since changing a running cluster's ranges replaces its
+# nodes, and the same as the validating webhook while the controller is away.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: kubehenge
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ $extension }}
+webhooks:
+  - name: cluster-defaults.kubehenge.dev
+    admissionReviewVersions: [v1]
+    sideEffects: None
+    failurePolicy: Fail
+    reinvocationPolicy: Never
+    timeoutSeconds: 5
+    clientConfig:
+      service:
+        name: {{ $extension }}
+        namespace: {{ .Release.Namespace }}
+        path: /default-cluster
+        port: 443
+    rules:
+      - apiGroups: [cluster.x-k8s.io]
+        apiVersions: [v1beta2]
+        operations: [CREATE]
         resources: [clusters]

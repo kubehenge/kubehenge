@@ -545,17 +545,17 @@ func calicoResources(cluster *clusterv1.Cluster, cni CNI, images []Image) (*core
 		"calicoNetwork": network,
 		// Calico's CSI driver, for its own volume types, which Kubehenge does not use.
 		"kubeletVolumePluginPath": "None",
+		// Nor its FlexVolume driver, which it would install into /usr, read-only on every node OS:
+		// Talos's and the image-mode templates' alike.
+		"flexVolumePath":  "None",
+		"typhaDeployment": calicoTypha(),
 	}
-	if isTalos(cluster) {
-		// Talos's /usr is read-only, so the FlexVolume driver Calico would install there cannot be.
-		installation["flexVolumePath"] = "None"
-	}
+	// No Goldmane or Whisker, Calico's flow-log aggregator and its viewer: nothing reads their flows,
+	// and on a small node they take CPU the cluster's own work needs.
 	resources := []map[string]any{
 		calicoImageSet(images),
 		{"kind": "Installation", "spec": installation},
 		{"kind": "APIServer", "spec": map[string]any{}},
-		{"kind": "Goldmane", "spec": map[string]any{}},
-		{"kind": "Whisker", "spec": map[string]any{}},
 	}
 	var manifest []byte
 	for _, r := range resources {
@@ -639,35 +639,58 @@ func talosCilium(values map[string]any) {
 	}}
 }
 
+const (
+	rke2CiliumChart = "rke2-cilium"
+	rke2CalicoChart = "rke2-calico"
+)
+
 func rke2CiliumName(cluster *clusterv1.Cluster) string {
-	return cluster.Name + "-rke2-cilium"
+	return cluster.Name + "-" + rke2CiliumChart
 }
 
-// rke2CiliumConfig wraps, for the ClusterResourceSet, the HelmChartConfig through which RKE2's
-// helm-controller merges Kubehenge's values into RKE2's own Cilium chart. A change reaches the
-// running cluster, where a file on the nodes would reach only those created after it.
+func rke2CalicoName(cluster *clusterv1.Cluster) string {
+	return cluster.Name + "-" + rke2CalicoChart
+}
+
+// rke2CiliumConfig is the configuration of RKE2's own Cilium chart (rke2ChartConfig).
 func rke2CiliumConfig(cluster *clusterv1.Cluster, id int, addons *Addons) (*corev1.Secret, error) {
 	values, err := ciliumValues(cluster, id, addons, map[string]any{})
 	if err != nil {
 		return nil, err
 	}
+	return rke2ChartConfig(rke2CiliumName(cluster), cluster, rke2CiliumChart, values)
+}
+
+// rke2CalicoConfig is the configuration of RKE2's own Calico chart (rke2ChartConfig), whose Tigera
+// operator and Typha tolerate every taint as the upstream chart's do.
+func rke2CalicoConfig(cluster *clusterv1.Cluster) (*corev1.Secret, error) {
+	return rke2ChartConfig(rke2CalicoName(cluster), cluster, rke2CalicoChart, map[string]any{
+		tolerationsKey: calicoTolerations(),
+		"installation": map[string]any{"typhaDeployment": calicoTypha()},
+	})
+}
+
+// rke2ChartConfig wraps, for the ClusterResourceSet, the HelmChartConfig through which RKE2's
+// helm-controller merges Kubehenge's values into one of RKE2's own charts. A change reaches the
+// running cluster, where a file on the nodes would reach only those created after it.
+func rke2ChartConfig(name string, cluster *clusterv1.Cluster, chart string, values map[string]any) (*corev1.Secret, error) {
 	content, err := yaml.Marshal(values)
 	if err != nil {
-		return nil, fmt.Errorf("encoding Cilium's values: %w", err)
+		return nil, fmt.Errorf("encoding the values of %s: %w", chart, err)
 	}
 	manifest, err := yaml.Marshal(map[string]any{
 		apiVersionKey: "helm.cattle.io/v1",
 		"kind":        "HelmChartConfig",
-		"metadata":    map[string]any{"name": "rke2-cilium", "namespace": metav1.NamespaceSystem},
+		"metadata":    map[string]any{"name": chart, "namespace": metav1.NamespaceSystem},
 		"spec":        map[string]any{"valuesContent": string(content)},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("encoding RKE2's Cilium configuration: %w", err)
+		return nil, fmt.Errorf("encoding the configuration of %s: %w", chart, err)
 	}
 	return &corev1.Secret{
-		Name: rke2CiliumName(cluster), Namespace: cluster.Namespace,
+		Name: name, Namespace: cluster.Namespace,
 		Type: addonsv1.ClusterResourceSetSecretType,
-		Data: map[string][]byte{"rke2-cilium.yaml": manifest},
+		Data: map[string][]byte{chart + ".yaml": manifest},
 	}, nil
 }
 
@@ -825,6 +848,26 @@ func toleration(key string, effect corev1.TaintEffect) map[string]any {
 	return map[string]any{"key": key, "operator": string(corev1.TolerationOpExists), "effect": string(effect)}
 }
 
+// calicoTolerations are those of the Tigera operator and Calico's Typha, which have to run before
+// any node is ready or initialised, the control planes included. Their charts' own tolerate every
+// taint, a cordoned node's too: the scheduler puts them straight back onto a node being drained,
+// and the drain, and with it every rollout that replaces the node, never ends.
+func calicoTolerations() []any {
+	return []any{
+		toleration(controlPlaneTaint.Key, controlPlaneTaint.Effect),
+		toleration("node-role.kubernetes.io/etcd", corev1.TaintEffectNoExecute),
+		toleration(corev1.TaintNodeNotReady, corev1.TaintEffectNoSchedule),
+		toleration(corev1.TaintNodeNotReady, corev1.TaintEffectNoExecute),
+		toleration(corev1.TaintNodeNetworkUnavailable, corev1.TaintEffectNoSchedule),
+		toleration("node.cloudprovider.kubernetes.io/uninitialized", corev1.TaintEffectNoSchedule),
+	}
+}
+
+// calicoTypha holds the Installation's Typha to calicoTolerations.
+func calicoTypha() map[string]any {
+	return map[string]any{"spec": map[string]any{"template": map[string]any{"spec": map[string]any{tolerationsKey: calicoTolerations()}}}}
+}
+
 // proxmoxValues are the values of the two charts that talk to Proxmox VE: the cloud controller
 // manager's and the CSI plugin's. With volume snapshots, the plugin reaches Proxmox VE through the
 // proxy beside it, runs its snapshot sidecar, and its sidecars wait as long as a copy's call may.
@@ -958,6 +1001,7 @@ func cniChart(cluster *clusterv1.Cluster, charts *Charts, cni CNI, addons *Addon
 		off := map[string]any{"enabled": false}
 		return []chartProxy{{"cni", cniCalico, "tigera-operator", charts.Calico, map[string]any{
 			"manageCRDs": true, "installation": off, "apiServer": off, "goldmane": off, "whisker": off,
+			tolerationsKey: calicoTolerations(),
 		}}}, nil
 	}
 	return nil, fmt.Errorf("cluster %s/%s: no chart for CNI %q", cluster.Namespace, cluster.Name, cni.Name)
@@ -999,9 +1043,15 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 		wanted = append(wanted, chartProxy{veleroRelease, veleroRelease, VeleroNamespace, charts.Velero, veleroValues(charts, &addons.Backups, addons.backupTarget, cluster, addons.backupSources)})
 	}
 	if addons.PodSecurity.kyvernoOn() {
+		// The CNI the cluster runs, not only one Kubehenge installs: RKE2's own Calico has its
+		// operator update calico-node in calico-system as Kubehenge's does.
+		runs, _, cniErr := optionalVariable[string](cluster, "cni")
+		if cniErr != nil {
+			return nil, cniErr
+		}
 		wanted = append(wanted,
 			chartProxy{kyvernoAddon, kyvernoAddon, kyvernoAddon, charts.Kyverno, kyvernoValues()},
-			chartProxy{kyvernoPolicies, kyvernoPolicies, kyvernoAddon, charts.KyvernoPolicies, kyvernoPolicyValues(addons.PodSecurity.Kyverno, charts.PodSecurityExempt.For(cni.Name, addons))},
+			chartProxy{kyvernoPolicies, kyvernoPolicies, kyvernoAddon, charts.KyvernoPolicies, kyvernoPolicyValues(addons.PodSecurity.Kyverno, charts.PodSecurityExempt.For(runs, addons))},
 		)
 	}
 	if addons.Istio.Enabled {

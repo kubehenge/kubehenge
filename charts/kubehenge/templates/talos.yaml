@@ -232,13 +232,19 @@ Both roles:
   streaming sessions after five minutes, and speaks TLS 1.3 only.
 - Talos and the node's container runtime pull the images of Sidero's and Kubernetes' registries only
   with their publishers' keyless signatures (talos.imageSignatures).
-- Talos sends what its services and the kernel log to the logs add-on's node collector, on the
-  node's loopback, where Talos keeps it otherwise only in memory. Without logs nothing listens
-  there, and Talos tries again each second until something does.
+- Talos sends what its services and the kernel log to the logs add-on's node collector, where Talos
+  keeps it otherwise only in memory. Without logs nothing listens there, and Talos tries again each
+  second until something does. It sends to a link-local address of the node's own, on a dummy link,
+  rather than to loopback: the collector's host port carries either to the pod, but a connection
+  from loopback needs its answer, addressed to 127.0.0.1 again, accepted from the pod's interface,
+  which only Calico's and a bridge's allow, so under Cilium the answers were dropped and no line
+  arrived. Talos never takes a link-local address for the node's own.
 */}}
 {{- define "kubehenge.talosCommonPatches" -}}
-{{- $logs := "tcp://127.0.0.1:5170/" }}
+{{- $address := "169.254.51.70" }}
+{{- $logs := printf "tcp://%s:5170/" $address }}
 - {{ dict "cluster" (dict "externalCloudProvider" (dict "enabled" true)) | toJson | quote }}
+- {{ dict "apiVersion" "v1alpha1" "kind" "DummyLinkConfig" "name" "kubehenge-logs" "addresses" (list (dict "address" (printf "%s/32" $address))) | toJson | quote }}
 - {{ dict "machine" (dict "logging" (dict "destinations" (list (dict "endpoint" $logs "format" "json_lines")))) | toJson | quote }}
 - {{ dict "apiVersion" "v1alpha1" "kind" "KmsgLogConfig" "name" "kubehenge-logs" "url" $logs | toJson | quote }}
 - {{ dict "apiVersion" "v1alpha1" "kind" "KubeletConfig" "config" (dict "serverTLSBootstrap" true) | toJson | quote }}

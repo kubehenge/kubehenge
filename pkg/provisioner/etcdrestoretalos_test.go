@@ -1,10 +1,10 @@
 package provisioner
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -31,15 +31,23 @@ func newTalosRestoreFixture(t *testing.T, change func(*clusterv1.Cluster)) (*res
 	if err := f.kube.Create(context.Background(), class); err != nil {
 		t.Fatal(err)
 	}
+	// Talos snapshots are etcd's, whose revision the restore moves on.
+	keys, err := clusterKeys(context.Background(), f.kube, f.cluster(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.data = etcdTestSnapshot(t)
+	f.putSnapshot(restoreSnapshot, string(keys.Data[BackupKeysKeyEtcd]), "v1.37.1")
 	talos := &fakeTalos{down: map[string]bool{}}
-	f.r.Guests, f.r.Talos, f.r.poll = nil, talos.dial, time.Millisecond
+	f.r.Guests, f.r.Talos, f.r.poll, f.r.ScratchDir = nil, talos.dial, time.Millisecond, t.TempDir()
 	return f, talos
 }
 
 var talosWipes = []string{"10.0.0.11 wipe", "10.0.0.12 wipe", "10.0.0.13 wipe"}
 
 // A Talos restore wipes etcd on every control-plane node through the Talos API, bootstraps the first
-// from the snapshot, and replaces no machine: the others join it again.
+// from the snapshot, its revision moved on past what clients saw, and replaces no machine: the
+// others join it again.
 func TestTalosEtcdRestore(t *testing.T) {
 	t.Parallel()
 	f, talos := newTalosRestoreFixture(t, nil)
@@ -55,8 +63,9 @@ func TestTalosEtcdRestore(t *testing.T) {
 	if got := talos.restoreCalls(); !slices.Equal(got, want) {
 		t.Errorf("called %v, want %v", got, want)
 	}
-	if !bytes.Equal(talos.uploaded["10.0.0.11"], f.data) {
-		t.Error("the node was not handed the snapshot")
+	checkBumped(t, talos.uploaded["10.0.0.11"])
+	if left, _ := os.ReadDir(f.r.ScratchDir); len(left) != 0 {
+		t.Errorf("the restore left %v behind", left)
 	}
 	st := f.status()
 	if st.Phase != RestoreSucceeded || st.Machine != "web-cp-0" || len(st.Replaced) != 0 || !st.Paused ||
@@ -182,7 +191,8 @@ func TestPlanTalosEtcdRestore(t *testing.T) {
 		"get secret web-talosconfig --output jsonpath='{.data.talosconfig}'",
 		strings.Repeat("a", 64) + "  db.snapshot",
 		"--nodes 10.0.0.11,10.0.0.12,10.0.0.13 reset --graceful=false --reboot --system-labels-to-wipe=EPHEMERAL",
-		"--nodes 10.0.0.11 bootstrap --recover-from=db.snapshot",
+		"etcdutl snapshot restore db.snapshot --data-dir restored --bump-revision 1000000000 --mark-compacted && mv restored/member/snap/db db.snapshot",
+		"--nodes 10.0.0.11 bootstrap --recover-from=db.snapshot --recover-skip-hash-check",
 		`'{"spec":{"paused":false}}'`,
 	} {
 		if !strings.Contains(joined, want) {

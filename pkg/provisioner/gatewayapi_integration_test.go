@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/kubehenge/kubehenge/pkg/templates"
+	"github.com/kubehenge/kubehenge/test/integration"
 )
 
 // The Gateway API's release as a workload cluster's API server takes it: every CRD established,
@@ -37,7 +38,7 @@ func TestIntegrationGatewayAPI(t *testing.T) { //nolint:paralleltest // starts a
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { stopAPI(t, env) })
+	t.Cleanup(func() { integration.Stop(t, env) })
 	workload, err := client.New(cfg, client.Options{Scheme: remoteScheme})
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +132,7 @@ func TestIntegrationGatewayAPIFindsTheDistributionsChart(t *testing.T) { //nolin
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { stopAPI(t, env) })
+	t.Cleanup(func() { integration.Stop(t, env) })
 	workload, err := client.New(cfg, client.Options{Scheme: remoteScheme})
 	if err != nil {
 		t.Fatal(err)
@@ -201,7 +202,7 @@ func until(t *testing.T, limit time.Duration, what string, cond func() bool) {
 func TestIntegrationClassesConfigureTraefik(t *testing.T) {
 	t.Parallel()
 	found := map[string]bool{}
-	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
+	for _, o := range integration.RenderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
 		if o.GetKind() != "ClusterClass" {
 			continue
 		}

@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/kubehenge/kubehenge/test/integration"
 )
 
 // The k3s class runs kube-proxy in nftables mode on every node while flannel and k3s's network
@@ -20,7 +22,7 @@ func TestIntegrationK3sKubeProxyOwnTable(t *testing.T) {
 		"KThreesConfigTemplate":       "/spec/template/spec/agentConfig/kubeProxyArgs",
 	}
 	var found map[string]any
-	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
+	for _, o := range integration.RenderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
 		if o.GetKind() != "ClusterClass" || o.GetName() != "kubehenge-k3s" {
 			continue
 		}

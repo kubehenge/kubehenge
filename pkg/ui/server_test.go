@@ -933,7 +933,10 @@ func TestCreateChecksProxmoxPrivileges(t *testing.T) {
 	}
 }
 
-func TestCreateChoosesRangesClearOfTheNodes(t *testing.T) {
+// The interface passes the ranges asked for as they are and leaves the others to the controller's
+// admission, which chooses and checks them for kubectl's clusters alike (provisioner's
+// ClusterDefaulter, and the integration tier through a real API server).
+func TestCreateLeavesRangesToTheController(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	b := h.browser()
@@ -946,39 +949,17 @@ func TestCreateChoosesRangesClearOfTheNodes(t *testing.T) {
 		}
 		return c.Spec.ClusterNetwork.Pods.CIDRBlocks, c.Spec.ClusterNetwork.Services.CIDRBlocks
 	}
-	at := func(name, gateway string, prefix int, extra string) string {
+	named := func(name, extra string) string {
 		body := strings.Replace(createBody, `"web"`, `"`+name+`"`, 1)
-		body = strings.Replace(body, `"gateway":"10.0.0.1"`, fmt.Sprintf(`"gateway":%q`, gateway), 1)
-		body = strings.Replace(body, `"prefix":24`, fmt.Sprintf(`"prefix":%d`, prefix), 1)
 		return strings.Replace(body, `"workerReplicas":2,`, `"workerReplicas":2,`+extra, 1)
 	}
-
-	expect(t, b.do("POST", "/api/clusters", at("plain", "10.0.0.1", 24, "")), http.StatusCreated)
-	if pods, services := ranges("plain"); !slices.Equal(pods, []string{"10.42.0.0/16"}) || !slices.Equal(services, []string{"10.43.0.0/16"}) {
-		t.Fatalf("the distribution's own ranges: %v %v", pods, services)
+	expect(t, b.do("POST", "/api/clusters", named("plain", "")), http.StatusCreated)
+	if pods, services := ranges("plain"); pods != nil || services != nil {
+		t.Errorf("ranges the controller chooses: %v %v", pods, services)
 	}
-	// Nodes in 10.42.0.0/15 take both of the distribution's ranges.
-	expect(t, b.do("POST", "/api/clusters", at("crowded", "10.42.0.1", 15, "")), http.StatusCreated)
-	if pods, services := ranges("crowded"); !slices.Equal(pods, []string{"10.244.0.0/16"}) || !slices.Equal(services, []string{"10.96.0.0/16"}) {
-		t.Fatalf("ranges clear of the nodes: %v %v", pods, services)
-	}
-	expect(t, b.do("POST", "/api/clusters", at("asked", "10.0.0.1", 24, `"pods":["172.30.0.0/16"],"services":["172.31.0.0/16"],`)), http.StatusCreated)
+	expect(t, b.do("POST", "/api/clusters", named("asked", `"pods":["172.30.0.0/16"],"services":["172.31.0.0/16"],`)), http.StatusCreated)
 	if pods, services := ranges("asked"); !slices.Equal(pods, []string{"172.30.0.0/16"}) || !slices.Equal(services, []string{"172.31.0.0/16"}) {
-		t.Fatalf("the ranges asked for: %v %v", pods, services)
-	}
-	for name, extra := range map[string]string{
-		"over the nodes":  `"pods":["10.0.0.0/16"],`,
-		"over each other": `"pods":["172.30.0.0/16"],"services":["172.30.128.0/17"],`,
-		"not a network":   `"services":["172.31.0.1/16"],`,
-		"not IPv4":        `"pods":["fd00::/64"],`,
-		"no range":        `"pods":["everywhere"],`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			fresh := newHarness(t).browser()
-			fresh.signIn("admin@pve")
-			expect(t, fresh.do("POST", "/api/clusters", at("refused", "10.0.0.1", 24, extra)), http.StatusUnprocessableEntity)
-		})
+		t.Errorf("the ranges asked for: %v %v", pods, services)
 	}
 }
 

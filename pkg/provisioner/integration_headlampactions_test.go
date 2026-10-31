@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/kubehenge/kubehenge/test/integration"
 )
 
 // The chart tells the interface, in the ConfigMap it reads its namespaces from, that the shared
@@ -14,7 +16,7 @@ func TestIntegrationChartHeadlampActions(t *testing.T) {
 	t.Parallel()
 	actions := func(values ...string) (string, bool) {
 		t.Helper()
-		for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, append([]string{"testdata/integration-values.yaml"}, values...)...) {
+		for _, o := range integration.RenderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, append([]string{"testdata/integration-values.yaml"}, values...)...) {
 			if o.GetKind() == "ConfigMap" && o.GetName() == "kubehenge-interface" {
 				v, found, err := unstructured.NestedString(o.Object, "data", "headlampActions")
 				if err != nil {

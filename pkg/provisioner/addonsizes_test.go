@@ -9,7 +9,7 @@ import (
 )
 
 // addonCPUFigures are the chart's figures for the add-ons' CPU.
-const addonCPUFigures = `{"headlamp":10,"monitoring":20,"logs":75,"backups":70,"kyverno":400,"istio":400,"clusterMesh":0,"loadBalancer":50,"certManager":0,"rancher":10,"rancherAgent":0,"argocd":0,"flux":50}`
+const addonCPUFigures = `{"headlamp":10,"monitoring":20,"logs":75,"backups":70,"kyverno":500,"istio":400,"clusterMesh":0,"loadBalancer":50,"certManager":0,"rancher":10,"rancherAgent":0,"argocd":0,"flux":50}`
 
 // addonClass is the RKE2 class of hooksFor with figures for its add-ons' memory and CPU and its
 // nodes' own, the CPU as the chart gives it.
@@ -161,13 +161,13 @@ func TestWorkersHaveCPUForTheAddons(t *testing.T) {
 		{"every add-on but Rancher on the least worker", class, workerMemory(everyAddonButRancher(sized("", new(int32(1)))), `{"memoryMiB":8192}`), ""},
 		{
 			"Flux's former requests on the least worker", before, workerMemory(everyAddonButRancher(sized("", new(int32(1)))), `{"memoryMiB":8192}`),
-			"add-ons (Headlamp, monitoring, logs, backups, Kyverno, Istio, the load balancer, Flux) need 1525 millicores of CPU on workers, which have 1255 millicores for them",
+			"add-ons (Headlamp, monitoring, logs, backups, Kyverno, Istio, the load balancer, Flux) need 1625 millicores of CPU on workers, which have 1255 millicores for them",
 		},
 		{"Flux's former requests with a core more", before, workerMemory(everyAddonButRancher(sized("", new(int32(1)))), `{"cores":3,"memoryMiB":8192}`), ""},
 		{"Flux's former requests shared over workers", before, workerMemory(everyAddonButRancher(sized("", new(int32(2)))), `{"memoryMiB":8192}`), ""},
 		{
 			"without workers, on two cores", class, withAddons(sized(`{"cores":2,"memoryMiB":16384}`), everyAddon),
-			"need 830 millicores of CPU on control planes without workers, which have 445 millicores",
+			"need 930 millicores of CPU on control planes without workers, which have 445 millicores",
 		},
 		{"without workers, on the least they need", class, withAddons(sized(`{"cores":4,"memoryMiB":16384}`), everyAddon), ""},
 	} {

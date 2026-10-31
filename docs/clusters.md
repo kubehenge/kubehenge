@@ -106,7 +106,7 @@ The add-ons need memory and CPU too. Their pods run on the workers, or on the co
 | Monitoring | 1536 MiB | 32 MiB | 616 MiB | 20 millicores |
 | Logs | 512 MiB | 56 MiB | | 75 millicores |
 | Backups | 384 MiB | 184 MiB | 24 MiB | 70 millicores |
-| Kyverno | 384 MiB | 552 MiB | 520 MiB | 400 millicores |
+| Kyverno | 512 MiB | 552 MiB | 520 MiB | 500 millicores |
 | Istio | 384 MiB | 288 MiB | 504 MiB | 400 millicores |
 | Cilium Cluster Mesh | 128 MiB | | | none |
 | Load balancer | 128 MiB | | | 50 millicores |
@@ -116,7 +116,7 @@ The add-ons need memory and CPU too. Their pods run on the workers, or on the co
 | Rancher | 2048 MiB | 512 MiB | 512 MiB | 10 millicores |
 | Rancher's agent, in every cluster that registers | 512 MiB | | | none |
 
-A worker counts 448 MiB for itself on k3s and 704 MiB on kubeadm, RKE2 and Talos. A control plane counts 1848 MiB on k3s, 2392 MiB on kubeadm and Talos and 3120 MiB on RKE2 before any add-on; with every add-on but Rancher it needs 3872 MiB on k3s, 3992 MiB on kubeadm and Talos and 4720 MiB on RKE2, above RKE2's least of 4096 MiB. A single k3s worker with every add-on but Rancher and GitOps needs 4672 MiB, 4288 MiB without backups, 4160 MiB without logs, or 3776 MiB without either, and GitOps with Argo CD on top takes each 512 MiB further; the default machines hold every add-on but Rancher, logs, backups and GitOps on every distribution, and a second worker makes room for logs and backups too.
+A worker counts 448 MiB for itself on k3s and 704 MiB on kubeadm, RKE2 and Talos. A control plane counts 1848 MiB on k3s, 2392 MiB on Talos, 3120 MiB on RKE2 and 3376 MiB on kubeadm before any add-on; with every add-on but Rancher it needs 3872 MiB on k3s, 3992 MiB on Talos, 4720 MiB on RKE2 and 4976 MiB on kubeadm, above the least of 4096 MiB on RKE2 and kubeadm. A single k3s worker with every add-on but Rancher and GitOps needs 4672 MiB, 4288 MiB without backups, 4160 MiB without logs, or 3776 MiB without either, and GitOps with Argo CD on top takes each 512 MiB further; the default machines hold every add-on but Rancher, logs, backups and GitOps on every distribution, kubeadm's control plane with 4304 MiB, and a second worker makes room for logs and backups too.
 
 For CPU a worker counts what its distribution, its CNI and Kubehenge's own pods request there: 230 millicores on kubeadm, 320 on k3s, 480 on Talos, which keeps 50 of them back for the system and whose flannel asks for 200 with its network policy controller, and 745 on RKE2, whose kube-proxy and canal ask for 250 each. Without workers, a control plane counts 1040 millicores on kubeadm, 380 on k3s, 900 on Talos and 1555 on RKE2. Every add-on but Rancher takes 1075 millicores, so it fits on one worker of the default 2 cores on every distribution. On a worker of a single core, the least kubeadm, k3s and Talos allow, Kyverno and Istio do not fit together, nor on Talos Kyverno with every other add-on but Istio; such a worker needs a second core, or a second worker beside it.
 
@@ -498,7 +498,7 @@ The upload needs etcd snapshots on, and is refused on kubeadm. Switching snapsho
 
 ### Restore etcd
 
-Restoring etcd takes every object of the cluster back to the snapshot: Deployments, Secrets, roles, custom resources and the rest of what its API holds return to how they were, and whatever was created since is gone. The data in volumes is not restored and stays as it is now. It is for a cluster that lost its etcd quorum, or whose state is corrupted or was deleted in bulk; to bring back applications with their data, restore a [Velero backup](#back-up-and-restore). A cluster is restored only from a snapshot of its own distribution and Kubernetes minor version, whose objects its API server reads. A Talos cluster is restored through its nodes' Talos API whether or not the management cluster restores through the guest agent: Kubehenge wipes etcd on every control-plane node, which reboots each, restores it from the snapshot on the first, and the others join it again, so no machine is replaced.
+Restoring etcd takes every object of the cluster back to the snapshot: Deployments, Secrets, roles, custom resources and the rest of what its API holds return to how they were, and whatever was created since is gone. The data in volumes is not restored and stays as it is now. It is for a cluster that lost its etcd quorum, or whose state is corrupted or was deleted in bulk; to bring back applications with their data, restore a [Velero backup](#back-up-and-restore). A cluster is restored only from a snapshot of its own distribution and Kubernetes minor version, whose objects its API server reads. A Talos cluster is restored through its nodes' Talos API whether or not the management cluster restores through the guest agent: Kubehenge wipes etcd on every control-plane node, which reboots each, restores it from the snapshot on the first, its revision moved on and the revisions before marked compacted as on kubeadm, and the others join it again, so no machine is replaced.
 
 A restore:
 

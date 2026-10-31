@@ -1,5 +1,7 @@
 # eth0 and lo belong to the container runtime. vmbr0 is the VMs' bridge, without DHCP: NAT through
-# eth0, and the host reaches the VMs through the container's address (test/e2e/ci/up.sh).
+# eth0, and the host reaches the VMs through the container's address (test/e2e/ci/up.sh). The NAT
+# names iptables-nft: Proxmox VE's firewall points the iptables command at the legacy tables as it
+# starts, which kernels without them refuse.
 # A bridge without a set address takes its lowest port's, so it changes whenever a VM stops,
 # unannounced: the other VMs keep sending to the old one until their ARP entry expires, and the
 # management cluster's API went quiet for 45 seconds that way. hwaddress holds it still.
@@ -14,6 +16,6 @@ iface vmbr0 inet static
 	bridge-stp off
 	bridge-fd 0
 	post-up sysctl -qw net.ipv4.ip_forward=1
-	post-up iptables -t nat -C POSTROUTING -s 172.20.99.0/24 -o eth0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 172.20.99.0/24 -o eth0 -j MASQUERADE
+	post-up iptables-nft -t nat -C POSTROUTING -s 172.20.99.0/24 -o eth0 -j MASQUERADE 2>/dev/null || iptables-nft -t nat -A POSTROUTING -s 172.20.99.0/24 -o eth0 -j MASQUERADE
 
 source /etc/network/interfaces.d/*
