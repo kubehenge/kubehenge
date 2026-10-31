@@ -24,8 +24,7 @@ type GitOps struct {
 	// controller makes, a token stored through the interface, or a Secret of the cluster's owner.
 	Auth           string `json:"auth,omitempty"`
 	ExistingSecret string `json:"existingSecret,omitempty"`
-	// KnownHosts are the repository host's SSH keys; unset, the controller reads them from the host
-	// once and keeps them.
+	// KnownHosts are the repository host's SSH keys, which a repository reached over SSH needs.
 	KnownHosts string `json:"knownHosts,omitempty"`
 	// Hostname serves the engine's web interface through the cluster's ingress controller.
 	Hostname  string `json:"hostname,omitempty"`
@@ -132,6 +131,12 @@ func (g *GitOps) clientSecret() string { return cmp.Or(g.SignIn.ClientSecret, gi
 
 // sshURL reports whether the repository is reached over SSH, which needs its host's keys.
 func (g *GitOps) sshURL() bool { return strings.HasPrefix(g.Repository.URL, "ssh://") }
+
+// knownHostsNeeded reports whether the cluster has to give its repository host's keys: for every
+// repository reached over SSH, but Flux's from a Secret of the owner's, which carries them itself.
+func (g *GitOps) knownHostsNeeded() bool {
+	return g.sshURL() && (g.auth() != gitAuthExisting || g.engine() != flux)
+}
 
 // namespace is the chosen engine's.
 func (g *GitOps) namespace() string {

@@ -64,7 +64,7 @@ func TestIntegrationInterfaceMoreNamespaces(t *testing.T) { //nolint:paralleltes
 		t.Fatalf("namespaces = %q (%v)", listed.Data["namespaces"], err)
 	}
 	other := &corev1.ConfigMap{}
-	if err := ui.Get(ctx, client.ObjectKey{Namespace: classNamespace, Name: "kubehenge-release-checksums"}, other); !apierrors.IsForbidden(err) {
+	if err := ui.Get(ctx, client.ObjectKey{Namespace: classNamespace, Name: "kubehenge-other"}, other); !apierrors.IsForbidden(err) {
 		t.Errorf("the interface reading another ConfigMap of Kubehenge's: %v, want forbidden", err)
 	}
 

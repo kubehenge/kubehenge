@@ -17,9 +17,9 @@ import (
 
 const gitopsVariable = "gitops"
 
-// gitOpsView is what the controller made for the cluster's GitOps that its owner needs to see: the
-// deploy key's public half, to add to the repository, and the fingerprints of the repository host's
-// keys it trusts, to compare with the host's own.
+// gitOpsView is what the cluster's owner needs to see of its GitOps: the deploy key's public half
+// the controller made, to add to the repository, and the fingerprints of the repository host's keys
+// the cluster trusts, to compare with the forge's published ones.
 type gitOpsView struct {
 	DeployKey            string   `json:"deployKey,omitempty"`
 	DeployKeyFingerprint string   `json:"deployKeyFingerprint,omitempty"`
@@ -44,20 +44,25 @@ func (s *Server) allowGitOps(w http.ResponseWriter, r *http.Request, u user, pat
 	return s.require(w, r, u, path, privKubeconfig)
 }
 
-// addGitOps adds what the controller made for the cluster's GitOps to its view, once it has.
+// addGitOps adds the fingerprints of the host keys the cluster gives, and the deploy key the
+// controller made for it once it has, to its view.
 func addGitOps(ctx context.Context, u user, v *clusterView) error {
-	if v.Variables[gitopsVariable] == nil {
+	raw := v.Variables[gitopsVariable]
+	if raw == nil {
 		return nil
 	}
+	var given struct {
+		KnownHosts string `json:"knownHosts"`
+	}
+	if err := json.Unmarshal(raw, &given); err != nil {
+		return fmt.Errorf("reading the cluster's GitOps: %w", err)
+	}
+	g := &gitOpsView{HostKeys: provisioner.HostKeyFingerprints([]byte(given.KnownHosts))}
 	secret := &corev1.Secret{}
 	err := u.kube.Get(ctx, client.ObjectKey{Namespace: v.Namespace, Name: provisioner.GitOpsSecretName(v.Name)}, secret)
-	if apierrors.IsNotFound(err) {
-		return nil
-	}
-	if err != nil {
+	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("reading the cluster's GitOps keys: %w", err)
 	}
-	g := &gitOpsView{HostKeys: provisioner.HostKeyFingerprints(secret.Data["known_hosts"])}
 	if public := strings.TrimSpace(string(secret.Data["identity.pub"])); public != "" {
 		key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(public))
 		if err != nil {

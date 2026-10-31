@@ -94,6 +94,7 @@ kubeconfig. The interface then acts in the management cluster with the kubeconfi
 		"address users reach the interface at, such as https://kubehenge.example, where OpenID identity providers send them back; OpenID sign-in needs it (env KUBEHENGE_PUBLIC_URL)")
 	f.StringVar(&a.Dir, "appliance-dir", "", "run as Kubehenge's appliance, keeping the management cluster's state here and setting it up from the interface; "+
 		"without it the management cluster is the one in KUBECONFIG")
+	f.StringVar(&a.KeyDir, "key-dir", "", "with --appliance-dir, a directory on a volume the appliance's backups leave out, for the key that seals what automatic upgrades of the management cluster keep; empty, they cannot be switched on")
 	f.StringVar(&o.headlampListen, "headlamp-listen", "", "address to serve the shared Headlamp on, behind the interface's sign-in; empty for none")
 	f.StringVar(&o.headlampUpstream, "headlamp-upstream", "", "the Headlamp server, such as http://127.0.0.1:4466")
 	f.StringVar(&o.headlampKubeconfig, "headlamp-kubeconfig", "", "file the Headlamp server reads its clusters from; the interface writes it")
@@ -135,7 +136,9 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 		return newClient(cfg, scheme)
 	}
 	s.Accounts, s.Assets = accounts, ui.Frontend()
-	s.Releases = &provisioner.ChannelServer{HTTP: &http.Client{Timeout: releaseChannelTimeout}, URLs: provisioner.DefaultChannelURLs}
+	s.Releases = &provisioner.ChannelServer{
+		HTTP: &http.Client{Timeout: releaseChannelTimeout}, URLs: provisioner.DefaultChannelURLs, Pins: provisioner.DefaultReleasePins(),
+	}
 	s.TalosReleases = templates.DefaultSources().TalosReleases
 	if s.Log, err = o.logs.slogLogger(os.Stderr); err != nil {
 		return err
@@ -231,7 +234,7 @@ func (o *serveOptions) setUpAppliance(conn *pve.Config) error {
 		SettingsPath: filepath.Join(a.Dir, "upgrades.json"),
 		Now:          time.Now,
 		Current:      release.Version,
-		Key:          release.PublicKey(),
+		Keys:         release.PublicKeys(),
 	}
 	return nil
 }

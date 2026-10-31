@@ -93,9 +93,10 @@ type HAReconciler struct {
 	WorkloadPool   string
 	// Proxmox reads where the VMs run and the storages, with the controller's own token.
 	Proxmox *proxmox.Client
-	// HA writes HA resources and rules with the token that holds Sys.Console on /. Without it the
-	// reconciler only takes back the hooks it set, once capmox knows where each VM is.
-	HA *proxmox.Client
+	// HA writes HA resources and rules with the token that holds Sys.Console on /: HAJobs in the
+	// controller. Without it the reconciler only takes back the hooks it set, once capmox knows
+	// where each VM is.
+	HA HAWriter
 }
 
 // SetupWithManager registers the reconciler for Clusters and their control-plane Machines.
@@ -200,7 +201,8 @@ func (r *HAReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Re
 	return ctrl.Result{RequeueAfter: resync}, nil
 }
 
-// read gathers what the reconcile decides on. Without the HA token it reads only where VMs run.
+// read gathers what the reconcile decides on, with the controller's own token: its Sys.Audit on /
+// reads HA. Without HA it reads only where VMs run.
 func (r *HAReconciler) read(ctx context.Context) (*haState, error) {
 	s := &haState{resources: map[string]haResource{}, rules: map[string]haRuleConfig{}, located: map[int64]string{}}
 	var vms []struct {
@@ -217,21 +219,21 @@ func (r *HAReconciler) read(ctx context.Context) (*haState, error) {
 		return s, nil
 	}
 	var resources []haResource
-	if err := r.HA.Get(ctx, "/cluster/ha/resources", &resources); err != nil {
+	if err := r.Proxmox.Get(ctx, "/cluster/ha/resources", &resources); err != nil {
 		return nil, fmt.Errorf("listing the HA resources: %w", err)
 	}
 	for _, res := range resources {
 		s.resources[res.SID] = res
 	}
 	var rules []haRuleConfig
-	if err := r.HA.Get(ctx, "/cluster/ha/rules", &rules); err != nil {
+	if err := r.Proxmox.Get(ctx, "/cluster/ha/rules", &rules); err != nil {
 		return nil, fmt.Errorf("listing the HA rules: %w", err)
 	}
 	for _, rule := range rules {
 		s.rules[rule.Rule] = rule
 	}
 	var status haStatus
-	if err := r.HA.Get(ctx, "/cluster/ha/status/manager_status", &status); err != nil {
+	if err := r.Proxmox.Get(ctx, "/cluster/ha/status/manager_status", &status); err != nil {
 		return nil, fmt.Errorf("reading the HA manager's status: %w", err)
 	}
 	for n := range status.ManagerStatus.NodeStatus {

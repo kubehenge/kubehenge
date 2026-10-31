@@ -8,7 +8,7 @@ CAPMOX_IMAGE ?= ghcr.io/kubehenge/cluster-api-provider-proxmox
 HELM_ADDON_IMAGE ?= ghcr.io/kubehenge/cluster-api-addon-provider-helm
 KO_FLAGS ?=
 
-.PHONY: build web gateway-api capi-operator-chart website dist index image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance
+.PHONY: build web gateway-api capi-operator-chart website dist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance
 .PHONY: fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker unit-go unit-web unit-tofu unit-shell tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
@@ -76,11 +76,11 @@ website:
 # The appliance's release archive, which appliance/install.sh installs: the binary, the
 # management-cluster module with the charts it installs, the shared Headlamp (its server and
 # frontend, taken from its Linux release) and the service units.
-# The release key the appliance verifies upgrades with is pkg/release/release.pub unless RELEASE_KEY
-# names another (base64 Ed25519 public key).
+# The release keys the appliance verifies upgrades with are the lines of pkg/release/release.pub
+# unless RELEASE_PUBLIC_KEYS names others (base64 Ed25519 public keys, comma-separated).
 VERSION ?= 0.1.0
-RELEASE_KEY ?= $(shell cat pkg/release/release.pub 2>/dev/null)
-RELEASE_LDFLAGS = $(LDFLAGS) -X github.com/kubehenge/kubehenge/pkg/release.Version=$(VERSION) -X github.com/kubehenge/kubehenge/pkg/release.publicKey=$(RELEASE_KEY)
+RELEASE_PUBLIC_KEYS ?= $(shell tr -s '\r\n' ',' < pkg/release/release.pub 2>/dev/null)
+RELEASE_LDFLAGS = $(LDFLAGS) -X github.com/kubehenge/kubehenge/pkg/release.Version=$(VERSION) -X github.com/kubehenge/kubehenge/pkg/release.publicKeys=$(RELEASE_PUBLIC_KEYS)
 # The controller image the release's chart runs, by digest (repository@sha256:...); unset, the chart
 # names none, and the module needs controller_image.
 CONTROLLER_IMAGE ?=
@@ -125,8 +125,13 @@ dist: web gateway-api capi-operator-chart
 		appliance/install.sh > dist/install.sh
 	cd dist && sha256sum install.sh >> kubehenge_$(VERSION)_SHA256SUMS
 
+# Pins the RKE2 and k3s releases published since (pkg/provisioner/releasepins.txt), so that clusters
+# may run them. GH_TOKEN, when set, reads GitHub's API with a higher rate limit.
+release-pins: web gateway-api
+	go run ./cmd/kubehenge release pins pkg/provisioner/releasepins.txt
+
 # The release index to sign: the previous release's (PREVIOUS, its .sig beside it), checked against
-# the release key, with this release added. Run after dist.
+# the release keys, with this release added. Run after dist.
 TOFU_VERSION = $(patsubst v%,%,$(shell sed -n 's/^TOFU_TAG=//p' appliance/install.sh))
 TOFU_SHA256 = $(shell sed -n 's/^TOFU_SHA256=//p' appliance/install.sh)
 index: gateway-api
@@ -311,8 +316,8 @@ e2e-templates:
 e2e-interface:
 	go test -tags e2e -timeout 10m -count=1 -v -run TestInterfaceKubeconfigEndToEnd ./pkg/appliance/
 
-# As root on a Proxmox VE node, with three releases from `make dist` built with a RELEASE_KEY made
-# for the test; settings in test/e2e/appliance.sh.
+# As root on a Proxmox VE node, with three releases from `make dist` built with RELEASE_PUBLIC_KEYS
+# of a key made for the test; settings in test/e2e/appliance.sh.
 e2e-appliance:
 	test/e2e/appliance.sh $(RELEASE) $(NEWER) $(NEWEST) $(SETTINGS)
 

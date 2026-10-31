@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -55,6 +56,44 @@ func (g *ProxmoxGuests) Run(ctx context.Context, vmid int64, script string, time
 		return out, fmt.Errorf("VM %d: exited %d: %s", vmid, status.ExitCode, tail(out, outputTail))
 	}
 	return out, nil
+}
+
+// JobGuests runs each command through a token Job, whose restore token alone may use the guest
+// agent; the controller's own token tells whether a VM runs.
+type JobGuests struct {
+	Jobs    TokenRunner
+	Proxmox *proxmox.Client
+}
+
+var _ Guests = &JobGuests{}
+
+// GuestRequest is one command for a VM's guest agent.
+type GuestRequest struct {
+	VMID    int64         `json:"vmid"`
+	Script  string        `json:"script"`
+	Timeout time.Duration `json:"timeout"`
+}
+
+// Running implements Guests.
+func (g *JobGuests) Running(ctx context.Context, vmid int64) (bool, error) {
+	return (&ProxmoxGuests{Client: g.Proxmox}).Running(ctx, vmid)
+}
+
+// Run implements Guests.
+func (g *JobGuests) Run(ctx context.Context, vmid int64, script string, timeout time.Duration) (string, error) {
+	return g.Jobs.Run(ctx, GuestRequest{VMID: vmid, Script: script, Timeout: timeout}, timeout) //nolint:wrapcheck // as ProxmoxGuests gives it, naming the VM
+}
+
+// ServeGuestRequest runs a GuestRequest with the restore token.
+func ServeGuestRequest(ctx context.Context, restore *proxmox.Client, raw []byte) (string, error) {
+	var req GuestRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return "", fmt.Errorf("the request: %w", err)
+	}
+	if req.VMID <= 0 || req.Timeout <= 0 || req.Timeout > guestStepTimeout {
+		return "", fmt.Errorf("the request: VM %d for %s", req.VMID, req.Timeout)
+	}
+	return (&ProxmoxGuests{Client: restore}).Run(ctx, req.VMID, req.Script, req.Timeout)
 }
 
 func (g *ProxmoxGuests) locate(ctx context.Context, vmid int64) (string, bool, error) {
