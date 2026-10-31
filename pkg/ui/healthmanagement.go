@@ -301,6 +301,7 @@ func fillNode(v *nodeView, n *corev1.Node, sums podSums) {
 	for _, cond := range n.Status.Conditions {
 		if cond.Type == corev1.NodeReady {
 			v.Ready, v.Since = cond.Status == corev1.ConditionTrue, cond.LastTransitionTime.Time
+			v.Silent = cond.Status == corev1.ConditionUnknown
 			if !v.Ready {
 				v.Message = cmp.Or(cond.Message, cond.Reason)
 			}
@@ -329,6 +330,7 @@ func nodeAttention(a *attention, v *nodeView, now time.Time) {
 		if v.leaving || now.Sub(v.Since) < settling {
 			severity = severityProgress
 		}
+		v.Down = severity == severityError
 		a.add(severity, sectionNodes, who+" not ready", v.Message, v.Since)
 	}
 	if len(v.Pressure) > 0 {

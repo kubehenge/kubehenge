@@ -125,8 +125,13 @@ type nodeView struct {
 	Role    string `json:"role"`
 	Pool    string `json:"pool,omitempty"`
 	// Joined tells whether the node was read in the cluster; the fields up to Pods need it.
-	Joined        bool         `json:"joined"`
-	Ready         bool         `json:"ready"`
+	Joined bool `json:"joined"`
+	Ready  bool `json:"ready"`
+	// Down tells a node has been not ready for longer than starting or rebooting takes, while its
+	// machine is not being deleted: a fault, not work under way.
+	Down bool `json:"down,omitempty"`
+	// Silent tells its kubelet stopped reporting, rather than reporting the node unwell.
+	Silent        bool         `json:"silent,omitempty"`
 	Since         time.Time    `json:"since,omitzero"`
 	Message       string       `json:"message,omitempty"`
 	Pressure      []string     `json:"pressure,omitempty"`

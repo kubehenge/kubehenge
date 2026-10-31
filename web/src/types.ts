@@ -215,6 +215,10 @@ export interface HealthNode {
   /** Whether the node was read inside the cluster; the fields up to pods need it. */
   joined: boolean;
   ready: boolean;
+  /** Not ready for longer than starting or rebooting takes: a fault, not work under way. */
+  down?: boolean;
+  /** Its kubelet stopped reporting. */
+  silent?: boolean;
   since?: string;
   message?: string;
   pressure?: string[];

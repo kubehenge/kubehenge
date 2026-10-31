@@ -405,6 +405,7 @@ describe("clusters", () => {
             { severity: "error", section: "nodes", what: "Node web-md-0-a not ready" },
             { severity: "warning", section: "pods", what: "Pod crash-looping" },
           ],
+          nodes: { items: [] },
         },
       }),
       "POST /api/clusters/default/web/plan": () => ({
