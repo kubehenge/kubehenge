@@ -125,6 +125,8 @@ type controllerOptions struct {
 	offerHARules      bool
 	nodeImageSoak     time.Duration
 	templateRefresh   bool
+	proxmoxHA         bool
+	etcdRestore       bool
 	autoscaler        provisioner.AutoscalerReconciler
 	autoscalerImages  []string
 	headlampSignIn    []string
@@ -145,12 +147,12 @@ registers every cluster with the Rancher one of them installs, and runs a cluste
 each cluster with an autoscaled pool. A distribution's Cluster API providers run only while a
 cluster uses it.
 
-The API token is read from KUBEHENGE_PROXMOX_TOKEN. With a second one in KUBEHENGE_PROXMOX_HA_TOKEN,
-holding Sys.Audit and Sys.Console on /, Proxmox VE HA keeps each cluster's control-plane VMs on
-separate nodes. With one in KUBEHENGE_PROXMOX_RESTORE_TOKEN, holding VM.Audit and
-VM.GuestAgent.Unrestricted on the workload pool, it restores clusters' etcd from their snapshots
-through the VMs' guest agents. It reads the boot logs of the nodes asked for through the guest
-agents too, with its own token, which needs VM.GuestAgent.FileRead on the workload pool for that.`,
+The API token is read from KUBEHENGE_PROXMOX_TOKEN. With --proxmox-ha, Proxmox VE HA keeps each
+cluster's control-plane VMs on separate nodes; with --etcd-restore, it restores clusters' etcd from
+their snapshots through the VMs' guest agents. Neither token they take is the controller's: each
+write to HA, and each command through a guest agent, runs as a Job of the chart's PodTemplate, the
+only pod that mounts the token. It reads the boot logs of the nodes asked for through the guest
+agents with its own token, which needs VM.GuestAgent.FileRead on the workload pool for that.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.run(cmd.Context(), conn)
@@ -173,6 +175,8 @@ agents too, with its own token, which needs VM.GuestAgent.FileRead on the worklo
 	f.DurationVar(&o.nodeImageSoak, "node-image-soak", provisioner.DefaultNodeImageSoak, "how old a template build is before clusters move to it; the template refresh's --soak")
 	f.DurationVar(&o.r.StallAfter, "stall-after", provisioner.DefaultStallAfter, "how long the new control plane of a cluster with one may take to become ready, and a cluster's deletion may wait, before either counts as stalled")
 	f.BoolVar(&o.templateRefresh, "template-refresh", false, "start the template refresh CronJob's Job for the builds asked for in the interface")
+	f.BoolVar(&o.proxmoxHA, "proxmox-ha", false, "keep clusters' control-plane VMs on separate nodes with Proxmox VE HA, writing HA through Jobs of the PodTemplate "+provisioner.HAJobTemplate)
+	f.BoolVar(&o.etcdRestore, "etcd-restore", false, "restore clusters' etcd through the VMs' guest agents, through Jobs of the PodTemplate "+provisioner.GuestJobTemplate)
 	f.IntVar(&o.port, "extension-port", defaultExtensionPort, "port of the Runtime Extension server")
 	f.StringVar(&o.extensionConfig, "extension-config", "kubehenge", "ExtensionConfig through which Cluster API calls this controller's hooks")
 	f.StringVar(&o.certDir, "extension-cert-dir", "/etc/kubehenge/tls", "directory with tls.crt and tls.key for the Runtime Extension server")
@@ -296,7 +300,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	if err = o.addReclaimer(mgr, conn, cloud, remotes); err != nil {
 		return err
 	}
-	if err = o.addPlacement(mgr, extensions, scheme, o.newHooks(mgr, registrar, cloud, rancherMinors), conn, cloud); err != nil {
+	if err = o.addPlacement(mgr, extensions, scheme, o.newHooks(mgr, registrar, cloud, rancherMinors), cloud); err != nil {
 		return err
 	}
 	if err = o.addUpgrader(mgr, c, rancherMinors, remotes); err != nil {
@@ -327,12 +331,7 @@ func (o *controllerOptions) newHooks(mgr ctrl.Manager, registrar *provisioner.Re
 		SysAuditGroup:     o.r.SysAuditGroup,
 		VolumeSnapshots:   o.r.VolumeSnapshots,
 		Releases: &provisioner.ReleaseChecksums{
-			Reader:    mgr.GetAPIReader(),
-			Client:    mgr.GetClient(),
-			Namespace: o.r.ClassNamespace,
-			HTTP:      &http.Client{Timeout: time.Minute},
-			GitHub:    "https://github.com",
-			Raw:       "https://raw.githubusercontent.com",
+			Pins: provisioner.DefaultReleasePins(),
 		},
 		Client: mgr.GetClient(),
 		Soak:   o.nodeImageSoak,
@@ -387,7 +386,7 @@ func (o *controllerOptions) newExtensionServer() (*server.Server, error) {
 // addReclaimer adds what deletes the volumes of clusters' released persistent volumes, signed in
 // with each cluster's own token, and what snapshots and restores clusters' etcd.
 func (o *controllerOptions) addReclaimer(mgr manager.Manager, conn *pve.Config, cloud *provisioner.Proxmox, remotes *provisioner.Remotes) error {
-	if err := o.addEtcd(mgr, conn, remotes); err != nil {
+	if err := o.addEtcd(mgr, cloud.Client, remotes); err != nil {
 		return err
 	}
 	if err := o.addBootLogs(mgr, cloud.Client); err != nil {
@@ -666,7 +665,7 @@ func (o *controllerOptions) addAutoscalers(mgr manager.Manager, remotes *provisi
 // addPlacement serves the hooks, among them the patch naming the nodes capmox may use, and adds the
 // Placer that keeps the online nodes those come from recorded on every cluster, and what keeps
 // control-plane VMs apart with Proxmox VE HA.
-func (o *controllerOptions) addPlacement(mgr manager.Manager, extensions *server.Server, scheme *runtime.Scheme, hooks *provisioner.Hooks, conn *pve.Config, cloud *provisioner.Proxmox) error {
+func (o *controllerOptions) addPlacement(mgr manager.Manager, extensions *server.Server, scheme *runtime.Scheme, hooks *provisioner.Hooks, cloud *provisioner.Proxmox) error {
 	if err := addHooks(extensions, scheme, hooks); err != nil {
 		return err
 	}
@@ -685,7 +684,7 @@ func (o *controllerOptions) addPlacement(mgr manager.Manager, extensions *server
 	if err := mgr.Add(rules); err != nil {
 		return fmt.Errorf("the HA rules offered: %w", err)
 	}
-	return o.addHA(mgr, conn, cloud.Client)
+	return o.addHA(mgr, cloud.Client)
 }
 
 // addUpgrader adds what upgrades clusters automatically in their windows, what upgrades Talos
@@ -703,6 +702,7 @@ func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, 
 			HTTP:    &http.Client{Timeout: time.Minute},
 			URLs:    provisioner.DefaultChannelURLs,
 			Proxmox: c,
+			Pins:    provisioner.DefaultReleasePins(),
 		},
 		RancherKubernetes: rancherMinors,
 		Interval:          o.upgradeInterval,
@@ -744,9 +744,9 @@ func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, 
 }
 
 // addEtcd adds what snapshots clusters' etcd into their backup targets, and what restores it from
-// a snapshot through the VMs' guest agents, signed in with KUBEHENGE_PROXMOX_RESTORE_TOKEN. Without
-// that token every restore of kubeadm, RKE2 and k3s is done by hand.
-func (o *controllerOptions) addEtcd(mgr manager.Manager, conn *pve.Config, remotes *provisioner.Remotes) error {
+// a snapshot through the VMs' guest agents, with --etcd-restore, in Jobs that alone hold the restore
+// token. Without it every restore of kubeadm, RKE2 and k3s is done by hand.
+func (o *controllerOptions) addEtcd(mgr manager.Manager, c *proxmox.Client, remotes *provisioner.Remotes) error {
 	targets := &provisioner.ClusterTargets{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, OpenStore: provisioner.OpenTarget}
 	snapshotter := &provisioner.EtcdSnapshotter{
 		Client:         mgr.GetClient(),
@@ -769,12 +769,8 @@ func (o *controllerOptions) addEtcd(mgr manager.Manager, conn *pve.Config, remot
 		APIs:           remotes,
 		Events:         mgr.GetEventRecorder("kubehenge"),
 	}
-	if token := os.Getenv("KUBEHENGE_PROXMOX_RESTORE_TOKEN"); token != "" {
-		c, err := pve.Connect(pve.Config{URL: conn.URL, Token: token, CAFile: conn.CAFile, Insecure: conn.Insecure})
-		if err != nil {
-			return fmt.Errorf("connecting to Proxmox VE for restores: %w", err)
-		}
-		restorer.Guests = &provisioner.ProxmoxGuests{Client: c}
+	if o.etcdRestore {
+		restorer.Guests = &provisioner.JobGuests{Jobs: o.tokenJob(mgr, provisioner.GuestJobTemplate), Proxmox: c}
 	}
 	if err := restorer.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the etcd restorer: %w", err)
@@ -828,9 +824,10 @@ func (o *controllerOptions) addBootLogs(mgr manager.Manager, c *proxmox.Client) 
 	return nil
 }
 
-// addHA adds the reconciler that has Proxmox VE HA keep clusters' control-plane VMs apart, signed
-// in with KUBEHENGE_PROXMOX_HA_TOKEN. Without that token it takes back the hooks it set before.
-func (o *controllerOptions) addHA(mgr manager.Manager, conn *pve.Config, c *proxmox.Client) error {
+// addHA adds the reconciler that has Proxmox VE HA keep clusters' control-plane VMs apart, with
+// --proxmox-ha, writing HA in Jobs that alone hold the HA token. Without it, the reconciler takes
+// back the hooks it set before.
+func (o *controllerOptions) addHA(mgr manager.Manager, c *proxmox.Client) error {
 	r := &provisioner.HAReconciler{
 		Client:         mgr.GetClient(),
 		Machines:       mgr.GetCache(),
@@ -838,17 +835,18 @@ func (o *controllerOptions) addHA(mgr manager.Manager, conn *pve.Config, c *prox
 		WorkloadPool:   o.r.WorkloadPool,
 		Proxmox:        c,
 	}
-	if token := os.Getenv("KUBEHENGE_PROXMOX_HA_TOKEN"); token != "" {
-		ha, err := pve.Connect(pve.Config{URL: conn.URL, Token: token, CAFile: conn.CAFile, Insecure: conn.Insecure})
-		if err != nil {
-			return fmt.Errorf("connecting to Proxmox VE for HA: %w", err)
-		}
-		r.HA = ha
+	if o.proxmoxHA {
+		r.HA = &provisioner.HAJobs{Jobs: o.tokenJob(mgr, provisioner.HAJobTemplate)}
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the Proxmox VE HA reconciler: %w", err)
 	}
 	return nil
+}
+
+// tokenJob runs requests in Jobs of the chart's PodTemplate template, beside the controller.
+func (o *controllerOptions) tokenJob(mgr manager.Manager, template string) *provisioner.TokenJob {
+	return &provisioner.TokenJob{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Namespace: o.r.ClassNamespace, Template: template}
 }
 
 // addHooks serves the Runtime Extension's hooks and the Cluster validation.

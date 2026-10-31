@@ -133,6 +133,7 @@ issuer_pid=
 grafana_pid=
 recorder_pid=
 metrics_pid=
+health_pid=
 # The HA rule the nodes are labelled with, and the guest it needs.
 ha_rule=''
 ha_vmid=''
@@ -144,6 +145,7 @@ cleanup() {
     [ -z "${s3_pid}" ] || kill "${s3_pid}" 2> /dev/null || true
     [ -z "${recorder_pid}" ] || kill "${recorder_pid}" 2> /dev/null || true
     [ -z "${metrics_pid}" ] || kill "${metrics_pid}" 2> /dev/null || true
+    [ -z "${health_pid}" ] || kill "${health_pid}" 2> /dev/null || true
     # shellcheck disable=SC2310 # each removal is tried, whatever happened to those before it
     remove_ha_rule || true
     [ "${status}" -eq 0 ] || seaweedfs_errors "${work}"
@@ -720,10 +722,20 @@ echo "none of the cluster's ${known} secrets the test knows is in the bundle"
 
 step "Kubehenge's controller: its health check, and its metrics for those allowed them alone"
 controller_pod=$(kubectl -n kubehenge-system get pods -l app.kubernetes.io/name=kubehenge-controller -o jsonpath='{.items[0].metadata.name}')
-healthz=$(kubectl get --raw "/api/v1/namespaces/kubehenge-system/pods/${controller_pod}:8081/proxy/healthz")
-[ "${healthz}" = ok ] || fail "the controller's /healthz answers '${healthz}'"
-kubectl -n kubehenge-system get secret kubehenge-extension-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > "${work}/metrics-ca.crt"
 metrics_port=$((20000 + $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % 10000))
+health_port=$((metrics_port + 1))
+# Its NetworkPolicy keeps every other pod, the API server's proxy among them, from the health port;
+# a port-forward reaches it from the pod's own network, as the kubelet's probes do.
+kubectl -n kubehenge-system port-forward "pod/${controller_pod}" "${health_port}:8081" > "${work}/health-forward.log" 2>&1 &
+health_pid=$!
+healthy() {
+    answer=$(curl -sS --max-time 10 "http://127.0.0.1:${health_port}/healthz" 2> /dev/null) || return 1
+    [ "${answer}" = ok ]
+}
+until_true 60 "the controller's /healthz answering ok" healthy
+kill "${health_pid}"
+health_pid=
+kubectl -n kubehenge-system get secret kubehenge-extension-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > "${work}/metrics-ca.crt"
 kubectl -n kubehenge-system port-forward service/kubehenge-controller-metrics "${metrics_port}:8443" > "${work}/metrics-forward.log" 2>&1 &
 metrics_pid=$!
 metrics_host=kubehenge-controller-metrics.kubehenge-system.svc

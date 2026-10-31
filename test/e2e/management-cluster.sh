@@ -32,6 +32,9 @@ check_topology_and_tls
 step "Kubehenge's controller and ClusterClasses"
 check_kubehenge
 
+step "NetworkPolicies hold Kubehenge's pods"
+check_network_policies
+
 step "capmox signs in to Proxmox VE with least privilege"
 check_capmox_privileges
 

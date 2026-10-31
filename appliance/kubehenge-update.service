@@ -9,27 +9,38 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 # The interface's own settings, so that a KUBEHENGE_RELEASE_INDEX mirror applies to both; the index
-# is checked against the release key built into the binary wherever it comes from.
+# is checked against the release keys built into the binary wherever it comes from.
 EnvironmentFile=/etc/kubehenge/appliance.env
 ExecStart=/usr/local/bin/kubehenge update --spool /var/lib/kubehenge-update
 # The download, then up to twice the wait for the interface to serve: once on the new release and,
 # should it not, once more on the old one put back.
 TimeoutStartSec=20min
+# Root writes only files root owns. The one capability it keeps reads what the interface's user
+# owns and nobody else may: the request it takes, and the state directory whose lock it shares.
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
 NoNewPrivileges=yes
+UMask=0022
 ProtectSystem=strict
 ReadWritePaths=/usr/local/bin /usr/local/share /etc/systemd/system /var/lib/kubehenge-update
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
+PrivateIPC=yes
+ProtectProc=invisible
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
+# AF_UNIX reaches systemd, which reloads the units and restarts the interface.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
+MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM

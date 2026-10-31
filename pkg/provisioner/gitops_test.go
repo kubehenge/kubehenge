@@ -3,12 +3,7 @@ package provisioner
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
-	"crypto/rsa"
-	"errors"
 	"fmt"
-	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -242,73 +237,58 @@ func TestDeployKeyIsAnOpenSSHKeyPair(t *testing.T) {
 	}
 }
 
-// sshServer answers SSH handshakes on a local port with the host keys given, and signs nobody in.
-func sshServer(t *testing.T, keys ...ssh.Signer) string {
-	t.Helper()
-	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = l.Close() })
-	config := &ssh.ServerConfig{PasswordCallback: func(ssh.ConnMetadata, []byte) (*ssh.Permissions, error) { return nil, errors.New("no") }}
-	for _, k := range keys {
-		config.AddHostKey(k)
-	}
-	go func() {
-		for {
-			conn, err := l.Accept()
-			if err != nil {
-				return
-			}
-			go func() {
-				defer func() { _ = conn.Close() }()
-				_, _, _, _ = ssh.NewServerConn(conn, config)
-			}()
+func TestKnownHostsHaveToNameTheRepositorysHost(t *testing.T) {
+	t.Parallel()
+	const key = " ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n"
+	const repository, onPort = "ssh://git@git.example.org/a/b.git", "ssh://git@git.example.org:2222/a/b.git"
+	for _, tc := range []struct {
+		name, knownHosts, url string
+		ok                    bool
+	}{
+		{"plain", "git.example.org" + key, repository, true},
+		{"one of several names", "other.example.org,git.example.org,192.0.2.1" + key, repository, true},
+		{"port", "[git.example.org]:2222" + key, onPort, true},
+		{"port 22 written out", "[git.example.org]:22" + key, repository, false},
+		{"another port", "git.example.org" + key, onPort, false},
+		{"wildcard", "*.example.org" + key, repository, true},
+		{"single-character wildcard", "git.example.or?" + key, repository, true},
+		{"wildcard of another domain", "*.example.com" + key, repository, false},
+		{"negated", "*.example.org,!git.example.org" + key, repository, false},
+		{"negated another", "*.example.org,!www.example.org" + key, repository, true},
+		{"hashed", "|1|T0JMWCz6nvC/AFNDT+MLe/Gm8nE=|p46nBNVmER9Hjw+IZX/Ob8vUpKs=" + key, repository, true},
+		{"hashed with its port", "|1|COROazIpRGWVbO0xWrXifrPaZ7w=|CbdyrYIXekfLjUyyIr82IOuIrdI=" + key, onPort, true},
+		{"hashed for another port", "|1|T0JMWCz6nvC/AFNDT+MLe/Gm8nE=|p46nBNVmER9Hjw+IZX/Ob8vUpKs=" + key, onPort, false},
+		{"comments and blank lines", "# the forge\n\ngit.example.org" + key, repository, true},
+		{"certificate authority", "@cert-authority *.example.org" + key, repository, true},
+		{"revoked only", "@revoked git.example.org" + key, repository, false},
+		{"another host", "git.example.com" + key, repository, false},
+		{"no key", "git.example.org\n", repository, false},
+		{"not known_hosts", "SHA256:abc\n", repository, false},
+	} {
+		err := checkKnownHosts(tc.knownHosts, tc.url)
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: %v", tc.name, err)
 		}
-	}()
-	return l.Addr().String()
+	}
 }
 
-func TestScanHostKeysReadsEveryKeyOfTheServer(t *testing.T) {
+func TestValidatorAsksForTheRepositoryHostsKeys(t *testing.T) {
 	t.Parallel()
-	_, edKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keys := []any{edKey, rsaKey}
-	signers := make([]ssh.Signer, len(keys))
-	for i, k := range keys {
-		if signers[i], err = ssh.NewSignerFromKey(k); err != nil {
-			t.Fatal(err)
+	const otherHost = `"knownHosts":"git.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n"`
+	for _, tc := range [][2]string{
+		{`{"enabled":true,"auth":"deployKey","repository":` + testRepository + `}`, "knownHosts: Required value"},
+		{`{"enabled":true,"auth":"existingSecret","existingSecret":"s","repository":` + testRepository + `}`, "knownHosts: Required value"},
+		{`{"enabled":true,"engine":"flux","auth":"existingSecret","existingSecret":"s","repository":` + testRepository + `}`, ""},
+		{`{"enabled":true,"auth":"deployKey",` + testKnownHosts + `,"repository":` + testRepository + `}`, ""},
+		{`{"enabled":true,"auth":"deployKey",` + otherHost + `,"repository":` + testRepository + `}`, "no host key is for git.example.org"},
+		{`{"enabled":true,"auth":"token","repository":{"url":"https://git.example.org/a/b.git"}}`, ""},
+		{`{"enabled":false,"repository":` + testRepository + `}`, ""},
+	} {
+		gitops, want := tc[0], tc[1]
+		errs := validateGitOps(withAddons(storageCluster(), map[string]string{gitopsVariable: gitops}))
+		if got := errs.ToAggregate(); (want == "") != (got == nil) || (got != nil && !strings.Contains(got.Error(), want)) {
+			t.Errorf("%s: %v, want %q", gitops, got, want)
 		}
-	}
-	address := sshServer(t, signers...)
-	hosts, err := scanHostKeys(context.Background(), address)
-	if err != nil {
-		t.Fatal(err)
-	}
-	prints := HostKeyFingerprints([]byte(hosts))
-	want := []string{ssh.KeyAlgoED25519 + " " + ssh.FingerprintSHA256(signers[0].PublicKey()), ssh.KeyAlgoRSA + " " + ssh.FingerprintSHA256(signers[1].PublicKey())}
-	if strings.Join(prints, ",") != strings.Join(want, ",") {
-		t.Errorf("fingerprints %v, want %v", prints, want)
-	}
-	_, port, _ := net.SplitHostPort(address)
-	if !strings.HasPrefix(hosts, "[127.0.0.1]:"+port+" ") {
-		t.Errorf("known_hosts %q names no host and port", hosts)
-	}
-
-	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	closed := l.Addr().String()
-	_ = l.Close()
-	if _, err := scanHostKeys(context.Background(), closed); err == nil {
-		t.Error("read keys from a closed port")
 	}
 }
 
@@ -490,7 +470,6 @@ type gitOpsHarness struct {
 	r        *Reconciler
 	kube     client.Client
 	workload *gitOpsWorkload
-	scanned  int
 }
 
 func newGitOpsHarness(t *testing.T, gitops string) *gitOpsHarness {
@@ -499,13 +478,6 @@ func newGitOpsHarness(t *testing.T, gitops string) *gitOpsHarness {
 	r, kube := newReconciler(t, &fakeCloud{}, c)
 	h := &gitOpsHarness{t: t, c: c, r: r, kube: kube, workload: newGitOpsWorkload(t)}
 	r.Remotes = &Remotes{byCluster: map[string]remote{remoteKey(c): {client: h.workload, until: time.Now().Add(time.Hour)}}}
-	r.HostKeys = func(_ context.Context, address string) (string, error) {
-		h.scanned++
-		if address != "git.example.org:22" {
-			return "", fmt.Errorf("scanned %s", address)
-		}
-		return "git.example.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n", nil
-	}
 	return h
 }
 
@@ -551,11 +523,14 @@ func (h *gitOpsHarness) keys() *corev1.Secret {
 	return keys
 }
 
-const testRepository = `{"url":"ssh://git@git.example.org/a/b.git","revision":"main","path":"clusters/web"}`
+const (
+	testRepository = `{"url":"ssh://git@git.example.org/a/b.git","revision":"main","path":"clusters/web"}`
+	testKnownHosts = `"knownHosts":"git.example.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n"`
+)
 
 func TestReconcileBootstrapsFluxThenSwitchesToArgoCD(t *testing.T) {
 	t.Parallel()
-	h := newGitOpsHarness(t, `{"enabled":true,"engine":"flux","auth":"deployKey","repository":`+testRepository+`}`)
+	h := newGitOpsHarness(t, `{"enabled":true,"engine":"flux","auth":"deployKey",`+testKnownHosts+`,"repository":`+testRepository+`}`)
 	keys := checkFluxBootstrap(t, h)
 	checkSwitchToArgoCD(t, h, keys)
 	checkGitOpsSwitchedOff(t, h)
@@ -578,9 +553,6 @@ func checkFluxBootstrap(t *testing.T, h *gitOpsHarness) *corev1.Secret {
 	h.workload.install()
 	if result := h.run(); result.RequeueAfter != resync {
 		t.Errorf("waits with Flux installed: %v", result)
-	}
-	if h.scanned != 1 {
-		t.Errorf("host keys read %d times", h.scanned)
 	}
 	fi := h.workload.object(fluxInstanceGVK.Kind, fluxNamespace, fluxInstanceName)
 	if fi == nil || lookup[string](t, fi.Object, "spec", "sync", "pullSecret") != fluxPullSecret {
@@ -671,7 +643,6 @@ func TestReconcileWaitsForTheTokenItIsToReadWith(t *testing.T) {
 	workload := newGitOpsWorkload(t)
 	workload.install()
 	r.Remotes = &Remotes{byCluster: map[string]remote{remoteKey(c): {client: workload, until: time.Now().Add(time.Hour)}}}
-	r.HostKeys = func(context.Context, string) (string, error) { return "", errors.New("no SSH for an https:// URL") }
 	result, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(c)})
 	if err != nil || result.RequeueAfter != waitInterval {
 		t.Fatalf("does not wait for the token: %v %v", result, err)

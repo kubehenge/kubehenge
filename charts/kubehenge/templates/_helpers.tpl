@@ -908,9 +908,10 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           type: string
           maxLength: 16384
           description: >-
-            The SSH host keys of the repository's server, as known_hosts lines. When unset,
-            Kubehenge reads them from the server once and trusts them from then on; the interface
-            shows their fingerprints to compare.
+            The SSH host keys of the repository's server, as known_hosts lines (ssh-keygen -F or
+            the forge's published keys), at least one for its host. Required for a repository
+            reached over ssh://, but Flux's with credentials from a Secret of your own, which
+            carries them: Kubehenge never reads them from the network.
         hostname:
           type: string
           format: hostname
@@ -971,6 +972,8 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           message: GitOps needs a repository.
         - rule: "!has(self.repository) || !has(self.auth) || self.auth != 'deployKey' || self.repository.url.startsWith('ssh://')"
           message: A deploy key reads the repository over ssh://.
+        - rule: "!self.enabled || !has(self.repository) || !self.repository.url.startsWith('ssh://') || (has(self.knownHosts) && size(self.knownHosts) > 0) || (has(self.auth) && self.auth == 'existingSecret' && has(self.engine) && self.engine == 'flux')"
+          message: A repository reached over ssh:// needs its host's keys in knownHosts.
         - rule: "!has(self.repository) || !has(self.auth) || !(self.auth in ['none', 'token']) || self.repository.url.startsWith('https://')"
           message: Without a key, the repository is read over https://.
         - rule: "!has(self.auth) || self.auth != 'existingSecret' || has(self.existingSecret)"

@@ -76,6 +76,16 @@
       "pinDigests": false
     },
     {
+      "description": "RKE2's and k3s's releases carry a build number of their own after the Kubernetes version, which semantic versioning would leave out of the comparison.",
+      "matchPackageNames": ["rancher/rke2"],
+      "versioning": "regex:^v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)\\+rke2r(?<build>\\d+)$"
+    },
+    {
+      "description": "k3s's releases, as RKE2's.",
+      "matchPackageNames": ["k3s-io/k3s"],
+      "versioning": "regex:^v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)\\+k3s(?<build>\\d+)$"
+    },
+    {
       "description": "A runner image this datasource knows about is not yet a label GitHub schedules jobs on, and moving to a new image is a decision to take once, not every week.",
       "matchDatasources": ["github-runners"],
       "matchUpdateTypes": ["major"],
@@ -172,7 +182,7 @@
       ]
     },
     {
-      "description": "Any other version named in a comment on the line above it: the tested set in the management-cluster module and its providers' images, the Talos release templates are made from, the add-on charts published as OCI images, the images the add-ons run, the images and registry the end-to-end tests run, and Go, Node, Helm and kubectl in scripts/tools.sh. An image's digest moves with its tag.",
+      "description": "Any other version named in a comment on the line above it: the tested set in the management-cluster module and its providers' images, the Talos release templates are made from, the add-on charts published as OCI images, the images the add-ons run, the images and registry the end-to-end tests run, Go, Node, Helm and kubectl in scripts/tools.sh, and the newest RKE2 and k3s releases, which the release pins have to hold (`make release-pins` on the update's pull request). An image's digest moves with its tag.",
       "customType": "regex",
       "managerFilePatterns": [
         "/^scripts/tools\\.sh$/",
@@ -180,7 +190,8 @@
         "/^pkg/templates/plan\\.go$/",
         "/^charts/kubehenge/values\\.yaml$/",
         "/^test/e2e/[^/]+\\.sh$/",
-        "/^test/e2e/ci/up\\.sh$/"
+        "/^test/e2e/ci/up\\.sh$/",
+        "/^pkg/provisioner/releasepins\\.txt$/"
       ],
       "matchStrings": [
         "(?:#|//) renovate: datasource=(?<datasource>github-releases|docker|golang-version|node-version) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?(?: depType=(?<depType>\\S+))?\\n[^\\n]*?[=:] *\"?(?<currentValue>v?\\d[^\"\\s@]*)\"?(?:@(?<currentDigest>sha256:[0-9a-f]{64}))?"

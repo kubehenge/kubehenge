@@ -217,6 +217,7 @@ func newAppliance(t *testing.T) (*Appliance, chan []byte) {
 	}
 	a := &Appliance{
 		Dir:        t.TempDir(),
+		KeyDir:     t.TempDir(),
 		Module:     module,
 		Tofu:       fakeTofu,
 		ProxmoxURL: "https://pve.example:8006",

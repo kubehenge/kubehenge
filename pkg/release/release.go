@@ -12,27 +12,42 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Version is this build's release, set at link time (-X); "dev" for anything built otherwise.
 var Version = "dev"
 
-// publicKey verifies the release index: an Ed25519 public key, base64, the only one this build
-// trusts, set at link time (-X) from release.pub. Empty in a build without one, which then
-// upgrades nothing. Never configurable at run time: whoever could change it could sign upgrades.
-var publicKey = ""
+// publicKeys verify the release index: Ed25519 public keys, base64 and comma-separated, the only
+// ones this build trusts, set at link time (-X) from release.pub. More than one while the release
+// key is being rotated. Empty in a build without one, which then upgrades nothing. Never
+// configurable at run time: whoever could change them could sign upgrades.
+var publicKeys = ""
 
-// PublicKey returns the key the index has to be signed with, or nil.
-func PublicKey() ed25519.PublicKey {
-	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(publicKey))
-	if err != nil || len(raw) != ed25519.PublicKeySize {
-		return nil
+// PublicKeys returns the keys one of which the index has to be signed with; a malformed one is left
+// out.
+func PublicKeys() []ed25519.PublicKey { return parseKeys(publicKeys) }
+
+func parseKeys(list string) []ed25519.PublicKey {
+	var keys []ed25519.PublicKey
+	for k := range strings.SplitSeq(list, ",") {
+		raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(k))
+		if err == nil && len(raw) == ed25519.PublicKeySize {
+			keys = append(keys, raw)
+		}
 	}
-	return raw
+	return keys
 }
+
+// Validity is how long a signed index is good for. It is signed again every week, and with every
+// release, so that an index held back from an appliance stops being taken within it: whoever
+// serves the appliance an old index can hide newer releases from it for that long at most.
+const Validity = 14 * 24 * time.Hour
 
 // Index lists the published releases.
 type Index struct {
+	// Expires is when the index stops being taken.
+	Expires  time.Time `json:"expires"`
 	Releases []Release `json:"releases"`
 }
 
@@ -53,27 +68,47 @@ type Artefact struct {
 	SHA256  string `json:"sha256"`
 }
 
-// ErrSignature is an index whose signature does not verify.
-var ErrSignature = errors.New("the release index is not signed by Kubehenge's release key")
+var (
+	// ErrSignature is an index whose signature does not verify.
+	ErrSignature = errors.New("the release index is not signed by Kubehenge's release key")
+	// ErrExpired is an index past its expiry.
+	ErrExpired = errors.New("the release index has expired")
+)
 
-// Sign signs an index's bytes; the signature travels beside it, base64.
+// Sign signs an index's bytes. The signatures travel beside it, base64, one line for each key that
+// signed it.
 func Sign(index []byte, key ed25519.PrivateKey) string {
 	return base64.StdEncoding.EncodeToString(ed25519.Sign(key, index))
 }
 
-// Parse verifies an index against key and decodes it. Nothing in it is trusted before the
-// signature is checked.
-func Parse(index []byte, signature string, key ed25519.PublicKey) (*Index, error) {
-	if len(key) != ed25519.PublicKeySize {
+// Parse verifies an index against keys and decodes it, as an appliance takes it: signed by one of
+// them, and not yet expired at now. Nothing in it is trusted before the signature is checked.
+func Parse(index []byte, signatures string, keys []ed25519.PublicKey, now time.Time) (*Index, error) {
+	ix, err := Verify(index, signatures, keys)
+	if err != nil {
+		return nil, err
+	}
+	if !now.Before(ix.Expires) {
+		return nil, fmt.Errorf("%w on %s; the publishers sign it again every week", ErrExpired, ix.Expires.UTC().Format(time.DateOnly))
+	}
+	return ix, nil
+}
+
+// Verify verifies an index against keys and decodes it whatever its expiry, for signing it again:
+// one line of signatures has to verify under one of the keys.
+func Verify(index []byte, signatures string, keys []ed25519.PublicKey) (*Index, error) {
+	if len(keys) == 0 {
 		return nil, errors.New("this build carries no release key, so it upgrades nothing")
 	}
-	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(signature))
-	if err != nil || !ed25519.Verify(key, index, sig) {
+	if !signedBy(index, signatures, keys) {
 		return nil, ErrSignature
 	}
 	var ix Index
 	if err := json.Unmarshal(index, &ix); err != nil {
 		return nil, fmt.Errorf("release index: %w", err)
+	}
+	if ix.Expires.IsZero() {
+		return nil, errors.New("release index: no expiry")
 	}
 	for _, r := range ix.Releases {
 		if err := r.validate(); err != nil {
@@ -81,6 +116,26 @@ func Parse(index []byte, signature string, key ed25519.PublicKey) (*Index, error
 		}
 	}
 	return &ix, nil
+}
+
+func signedBy(index []byte, signatures string, keys []ed25519.PublicKey) bool {
+	for line := range strings.Lines(signatures) {
+		sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(line))
+		if err != nil || len(sig) != ed25519.SignatureSize {
+			continue
+		}
+		for _, k := range keys {
+			if len(k) == ed25519.PublicKeySize && ed25519.Verify(k, index, sig) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Renew sets the index to expire Validity after now.
+func (ix *Index) Renew(now time.Time) {
+	ix.Expires = now.Add(Validity).UTC().Truncate(time.Second)
 }
 
 func (r Release) validate() error {
