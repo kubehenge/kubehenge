@@ -74,7 +74,6 @@ describe("the Scale dialog", () => {
     await applyStaged(user);
     await waitFor(() =>
       expect(calls.findLast((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
-        controlPlaneReplicas: 1,
         autoscaling: { "md-0": { min: 1, max: 4 } },
       }),
     );
@@ -101,7 +100,6 @@ describe("the Scale dialog", () => {
     await applyStaged(user);
     await waitFor(() =>
       expect(calls.findLast((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
-        controlPlaneReplicas: 1,
         autoscaling: { "md-0": null },
       }),
     );

@@ -1,11 +1,11 @@
 import type { JSX } from "react";
 
 import type { AdminView } from "./admin-views";
-import { ApplianceUpgrades } from "./ApplianceUpgrades";
+import { AppliancePage } from "./AppliancePage";
 import { SharedDNS01 } from "./Certificates";
-import { Credentials } from "./Credentials";
 import { ManagementBackups } from "./ManagementBackups";
-import { RemoveManagement } from "./RemoveManagement";
+import { ManagementHealthCard } from "./ManagementHealth";
+import { DangerZone } from "./RemoveManagement";
 import { ManagementCluster } from "./Setup";
 import { Templates } from "./Templates";
 import type { SetupStatus } from "./types";
@@ -24,29 +24,7 @@ export function AdminPage({
 }): JSX.Element {
   switch (view) {
     case "appliance": {
-      return (
-        <>
-          <section className="panel columns">
-            <ApplianceUpgrades />
-            <Credentials running={running} />
-          </section>
-          {status.proxmoxInsecure === true && (
-            <section className="panel">
-              <h3>Proxmox VE API</h3>
-              <dl className="summary">
-                <dt>Certificate check</dt>
-                <dd>Off</dd>
-              </dl>
-              <p>To switch it on, run this on the Proxmox VE node, then apply the management cluster again.</p>
-              <p>
-                <code>
-                  sh install.sh --upgrade --ctid {status.applianceVMID ?? "<appliance ID>"} --proxmox-ca &lt;file&gt;
-                </code>
-              </p>
-            </section>
-          )}
-        </>
-      );
+      return <AppliancePage status={status} running={running} />;
     }
     case "backups": {
       return (
@@ -75,15 +53,18 @@ export function AdminPage({
   }
   return (
     <>
+      {status.ready && !running && (
+        <section className="panel">
+          <ManagementHealthCard />
+        </section>
+      )}
       <ManagementCluster status={status} reload={reload} />
-      <section className="panel">
-        <RemoveManagement
-          running={running}
-          onStarted={() => {
-            void reload();
-          }}
-        />
-      </section>
+      <DangerZone
+        running={running}
+        onStarted={() => {
+          void reload();
+        }}
+      />
     </>
   );
 }

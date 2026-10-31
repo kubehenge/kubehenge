@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { JSX } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -17,8 +17,9 @@ import {
   type FieldKey,
 } from "./create-form";
 import { MachinesStep, type StepProps } from "./CreateSteps";
-import { applyStaged, fakeServer } from "./fake-server";
+import { applyStaged, fakeServer, type Answer } from "./fake-server";
 import type { Cluster, ClusterClass, Storage } from "./types";
+import { record } from "./values";
 
 const k3s: ClusterClass = {
   name: "kubehenge-k3s",
@@ -163,36 +164,37 @@ function openOptions(classes: ClusterClass[], clusters: Cluster[] = [cluster]): 
     "GET /api/clusters": { body: clusters },
     "GET /api/classes": { body: classes },
     "GET /api/proxmox/storages": { body: storages },
-    "PATCH /api/clusters/clusters/web": { body: cluster },
+    "PATCH /api/clusters/clusters/web": changed,
   });
   render(<App />);
   return () => calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body;
 }
 
+// changed answers a change with the cluster as it sets it, as the server plans it.
+const changed = (body: unknown): Answer => ({
+  body: { ...cluster, variables: { ...cluster.variables, ...record(record(body)["variables"]) } },
+});
+
 describe("a cluster's CSI plugin", () => {
   it("is switched to the newest release under Options", async () => {
     const sent = openOptions([k3s]);
     const user = userEvent.setup({ delay: null });
-    const heading = await screen.findByRole("rowheader", { name: "CSI plugin" });
-    expect(heading.closest("tr")).toHaveTextContent("Without Datastore.Allocate");
-    await user.click(screen.getByRole("button", { name: "Edit the CSI plugin" }));
-    const dialog = screen.getByRole("dialog", { name: "Edit CSI plugin" });
-    const save = within(dialog).getByRole("button", { name: "Save" });
-    expect(save).toBeDisabled();
-    await waitFor(() => expect(within(dialog).getByLabelText("Newest CSI plugin release")).toBeEnabled());
-    await user.click(within(dialog).getByLabelText("Newest CSI plugin release"));
-    await user.click(save);
+    const plugin = await screen.findByRole("switch", { name: "CSI plugin" });
+    expect(plugin).not.toBeChecked();
+    expect(plugin.closest("tr")).toHaveTextContent("Without Datastore.Allocate");
+    await waitFor(() => expect(plugin).toBeEnabled());
+    await user.click(plugin);
+    await waitFor(() => expect(plugin).toBeChecked());
+    expect(plugin).toHaveAccessibleDescription("The token gets Datastore.Allocate on the storage");
     await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { csi: { datastoreAllocate: true } } }));
   });
 
   it("says why it cannot be switched on beside another cluster on the storage", async () => {
     openOptions([k3s], [cluster, { ...cluster, namespace: "team-b", name: "api" }]);
-    const user = userEvent.setup({ delay: null });
-    await user.click(await screen.findByRole("button", { name: "Edit the CSI plugin" }));
-    const dialog = screen.getByRole("dialog", { name: "Edit CSI plugin" });
-    await expect(within(dialog).findByText(/which cluster team-b\/api uses too/u)).resolves.toBeInTheDocument();
-    expect(within(dialog).getByLabelText("Newest CSI plugin release")).toBeDisabled();
+    const plugin = await screen.findByRole("switch", { name: "CSI plugin" });
+    await waitFor(() => expect(plugin).toHaveAccessibleDescription(/which cluster team-b\/api uses too/u));
+    expect(plugin).toBeDisabled();
   });
 
   it("is not shown where an administrator has not let clusters choose it", async () => {

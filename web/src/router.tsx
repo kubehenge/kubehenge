@@ -1,4 +1,5 @@
-import { useSyncExternalStore, type JSX, type MouseEvent, type ReactNode } from "react";
+import { useId, useSyncExternalStore, type JSX, type MouseEvent, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 
 // A few routes need no router library: the path lives in the history API and every change is
 // announced with one event.
@@ -14,19 +15,39 @@ function subscribe(listener: () => void) {
   };
 }
 
-export function navigate(path: string, replace = false): void {
-  if (replace) {
-    window.history.replaceState(null, "", path);
-  } else {
-    window.history.pushState(null, "", path);
-  }
+function announce(): void {
   for (const l of listeners) {
     l();
   }
 }
 
+// Going to another page crossfades it in where the browser can; the page is drawn inside the
+// transition, so the old one is what fades out. Only the address's query changing in place
+// (replace) stays a plain update.
+export function navigate(path: string, replace = false): void {
+  if (replace) {
+    window.history.replaceState(null, "", path);
+    announce();
+    return;
+  }
+  window.history.pushState(null, "", path);
+  if (typeof document.startViewTransition === "function") {
+    document.startViewTransition(() => {
+      flushSync(announce);
+    });
+  } else {
+    announce();
+  }
+}
+
 export function usePath(): string {
   return useSyncExternalStore(subscribe, () => window.location.pathname);
+}
+
+/** useQuery is a parameter of the address's query, or null without it. */
+export function useQuery(name: string): string | null {
+  const search = useSyncExternalStore(subscribe, () => window.location.search);
+  return new URLSearchParams(search).get(name);
 }
 
 // match returns the decoded path segments a pattern's :names stand for, or null, also for a
@@ -59,6 +80,7 @@ export function Link({
   className,
   current,
   label,
+  description,
 }: {
   to: string;
   children: ReactNode;
@@ -66,7 +88,10 @@ export function Link({
   current?: boolean;
   /** The link's name, where its content alone does not say it. */
   label?: string;
+  /** Said after the name, such as a tab's badge, without becoming part of it. */
+  description?: string | undefined;
 }): JSX.Element {
+  const describedBy = useId();
   const onClick = (e: MouseEvent<HTMLAnchorElement>) => {
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
       return;
@@ -81,9 +106,15 @@ export function Link({
       className={className}
       aria-current={current === true ? "page" : undefined}
       aria-label={label}
+      aria-describedby={description === undefined ? undefined : describedBy}
       title={label}
     >
       {children}
+      {description !== undefined && (
+        <span id={describedBy} hidden>
+          {description}
+        </span>
+      )}
     </a>
   );
 }

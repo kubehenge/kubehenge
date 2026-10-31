@@ -44,6 +44,7 @@ type fakeAccounts struct {
 	privilegeCalls int
 	backupChecks   int
 	renewals       int
+	tokenChecks    int
 	now            func() time.Time
 	// members are every pool's guests; deleted records the VMs deleted.
 	members []pve.Member
@@ -57,6 +58,7 @@ type fakeAccounts struct {
 	// users are the users made with an administrator token, by ID; usersDeleted counts deletions.
 	users        map[string]string
 	usersDeleted int
+	rebooted     []int
 }
 
 func (f *fakeAccounts) CreateAdministratorToken(_ context.Context, t *pve.Ticket, userid, name, _ string) (string, error) {
@@ -78,6 +80,20 @@ func (f *fakeAccounts) DeleteUser(_ context.Context, _ *pve.Ticket, userid strin
 	delete(f.users, userid)
 	f.usersDeleted++
 	return nil
+}
+
+// TokenUser takes a token whose secret is "secret" for any user with a password, as acting with
+// that user's privileges, a token without privilege separation.
+func (f *fakeAccounts) TokenUser(_ context.Context, token string) (*pve.Ticket, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tokenChecks++
+	id, secret, _ := strings.Cut(token, "=")
+	username, _, _ := strings.Cut(id, "!")
+	if secret != "secret" || f.passwords[username] == "" {
+		return nil, pve.ErrAuthentication
+	}
+	return &pve.Ticket{Username: id, Token: token, Issued: f.now()}, nil
 }
 
 func (f *fakeAccounts) SignIn(_ context.Context, username, password string) (*pve.Ticket, *pve.Challenge, error) {
@@ -193,7 +209,11 @@ func (f *fakeAccounts) ReleaseHA(_ context.Context, t *pve.Ticket, prefix string
 }
 
 func (*fakeAccounts) Bridges(_ context.Context, _ *pve.Ticket, node string) ([]pve.Bridge, error) {
-	return []pve.Bridge{{Bridge: "vmbr0", Node: node}, {Bridge: "vmbr1", Node: node}}, nil
+	return []pve.Bridge{{Bridge: "vmbr0", Node: node, CIDR: "10.0.0.5/24", Gateway: "10.0.0.1"}, {Bridge: "vmbr1", Node: node}}, nil
+}
+
+func (*fakeAccounts) DNS(context.Context, *pve.Ticket, string) ([]string, error) {
+	return []string{"192.0.2.53"}, nil
 }
 
 // PoolMembers answers as Proxmox VE does, without the tags.
@@ -238,6 +258,18 @@ func (f *fakeAccounts) DeleteVM(_ context.Context, _ *pve.Ticket, _ string, vmid
 	return nil
 }
 
+// RebootVM reboots for those with VM.PowerMgmt on the cluster pools, as Proxmox VE checks it on
+// the VM.
+func (f *fakeAccounts) RebootVM(_ context.Context, t *pve.Ticket, _ string, vmid int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.effective(t.Username, "/pool/kubehenge").Has("VM.PowerMgmt") {
+		return pve.ErrForbidden
+	}
+	f.rebooted = append(f.rebooted, vmid)
+	return nil
+}
+
 // BackupCovers knows guest 150 as backed up.
 func (f *fakeAccounts) BackupCovers(_ context.Context, _ *pve.Ticket, vmid int) (bool, error) {
 	f.mu.Lock()
@@ -255,6 +287,7 @@ func (*fakeAccounts) Zone(_ context.Context, _ *pve.Ticket, bridge string) (stri
 }
 
 func (f *fakeAccounts) effective(username, aclPath string) pve.Privileges {
+	username, _, _ = strings.Cut(username, "!")
 	privs := pve.Privileges{}
 	for p, granted := range f.grants[username] {
 		if aclPath == p || strings.HasPrefix(aclPath, p+"/") || p == "/" {
@@ -297,7 +330,7 @@ func newHarness(t *testing.T, objects ...client.Object) *harness {
 		totp:      map[string]string{"otp@pve": "123456"},
 		grants: map[string]map[string][]string{
 			"admin@pve": {"/": {
-				"VM.Audit", "VM.Allocate", "Sys.Modify", "Datastore.AllocateSpace", "SDN.Use",
+				"VM.Audit", "VM.Allocate", "VM.Console", "VM.PowerMgmt", "Sys.Modify", "Datastore.AllocateSpace", "SDN.Use",
 				"Permissions.Modify", "User.Modify", "Group.Allocate", "Realm.AllocateUser", "Pool.Allocate", "Datastore.AllocateTemplate", "Sys.Audit",
 			}},
 			"viewer@pve": {"/pool/kubehenge/default.one": {"VM.Audit"}},
@@ -391,6 +424,8 @@ type browser struct {
 	// generation, when set, is sent with each request as the cluster's generation a change was
 	// made against.
 	generation string
+	// token, when set, is sent with each request as a Proxmox VE API token, as a script would.
+	token string
 }
 
 func (h *harness) browser() *browser { return &browser{h: h} }
@@ -413,6 +448,9 @@ func (b *browser) do(method, path, body string) *httptest.ResponseRecorder {
 	}
 	if b.csrf != "" {
 		req.Header.Set(csrfHeader, b.csrf)
+	}
+	if b.token != "" {
+		req.Header.Set("Authorization", tokenPrefix+b.token)
 	}
 	rec := httptest.NewRecorder()
 	b.h.handler.ServeHTTP(rec, req)
@@ -1322,20 +1360,34 @@ func TestClusterShowsWhereItsVMsRun(t *testing.T) {
 	h := newHarness(t, cluster("default", "one"), cp, worker)
 	// The provider names a VM after its infrastructure machine, not after the Machine.
 	h.accounts.members = []pve.Member{{VMID: 201, Node: "pve2", Type: "qemu", Name: "one-cp-a-x1"}, {VMID: 202, Node: "pve1", Type: "qemu", Name: "one-cp-a"}}
-	b := h.browser()
-	b.signIn("admin@pve")
-	rec := b.do("GET", "/api/clusters/default/one", "")
-	expect(t, rec, http.StatusOK)
-	var view clusterView
-	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
-		t.Fatal(err)
+	h.server.ProxmoxURL = "https://pve.example.org:8006"
+	view := func(username string) clusterView {
+		b := h.browser()
+		b.signIn(username)
+		rec := b.do("GET", "/api/clusters/default/one", "")
+		expect(t, rec, http.StatusOK)
+		var v clusterView
+		if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+			t.Fatal(err)
+		}
+		return v
 	}
-	if len(view.Machines) != 2 || view.Machines[0].ProxmoxNode != "pve2" || view.Machines[1].ProxmoxNode != "" {
-		t.Fatalf("machines = %+v", view.Machines)
+	admin := view("admin@pve")
+	if len(admin.Machines) != 2 || admin.Machines[0].ProxmoxNode != "pve2" || admin.Machines[1].ProxmoxNode != "" {
+		t.Fatalf("machines = %+v", admin.Machines)
 	}
+	// The console opens in Proxmox VE's own web interface, for a VM it named.
+	if c := admin.Machines[0].Console; c != "https://pve.example.org:8006/?cmd=&console=kvm&node=pve2&novnc=1&resize=off&vmid=201&vmname=one-cp-a-x1" || admin.Machines[1].Console != "" {
+		t.Fatalf("consoles = %q, %q", c, admin.Machines[1].Console)
+	}
+	// Without VM.Console there is no console to offer.
+	if viewer := view("viewer@pve"); len(viewer.Machines) != 2 || viewer.Machines[0].Console != "" {
+		t.Fatalf("viewer's machines = %+v", viewer.Machines)
+	}
+	machines := admin.Machines
 	// What keeps a machine waiting is shown, and only while it waits.
-	if !view.Machines[0].Ready || view.Machines[0].Waiting != "" || view.Machines[1].Waiting != waiting {
-		t.Fatalf("waiting = %q, %q", view.Machines[0].Waiting, view.Machines[1].Waiting)
+	if !machines[0].Ready || machines[0].Waiting != "" || machines[1].Waiting != waiting {
+		t.Fatalf("waiting = %q, %q", machines[0].Waiting, machines[1].Waiting)
 	}
 }
 
@@ -1504,6 +1556,11 @@ func TestProxmoxResources(t *testing.T) {
 	var bridges []bridgeView
 	if err := json.Unmarshal(rec.Body.Bytes(), &bridges); err != nil || len(bridges) != 2 || !bridges[0].Usable || bridges[1].Usable {
 		t.Fatalf("bridges = %s", rec.Body)
+	}
+	rec = b.do("GET", "/api/proxmox/nodes/pve1/dns", "")
+	expect(t, rec, http.StatusOK)
+	if got := strings.TrimSpace(rec.Body.String()); got != `{"servers":["192.0.2.53"]}` {
+		t.Fatalf("dns = %s", got)
 	}
 }
 

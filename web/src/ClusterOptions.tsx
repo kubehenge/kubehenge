@@ -4,15 +4,13 @@ import { api } from "./api";
 import { CertificatesDialog, certificatesOf, certificatesText } from "./Certificates";
 import { ClusterMeshDialog, meshText, runsCilium } from "./ClusterMesh";
 import { UpgradesDialog, describe, refreshesNodes, upgradePolicy } from "./ClusterUpgrades";
-import { CSIDialog, SnapshotsDialog, csiOn, snapshotsOn, useCSIOffer, useSnapshotsOffer } from "./CsiPlugin";
+import { csiOn, csiWith, snapshotsOn, useCSIOffer, useSnapshotsOffer } from "./CsiPlugin";
 import { GitOpsDialog, gitOpsOf, gitOpsText } from "./GitOps";
 import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBalancer";
 import { LogsDialog, logsOf, logsText } from "./Logs";
 import { choosable, cpuNote, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
 import { OIDCProviders, cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import {
-  HADialog,
-  HAGroupsDialog,
   PlacementDialog,
   haGroupsOn,
   haOn,
@@ -24,7 +22,7 @@ import {
 } from "./Placement";
 import { PodSecurityFields, cisText, enforced, podSecurityOf, podSecurityText } from "./PodSecurity";
 import { TalosDialog, talosOf } from "./Talos";
-import type { Cluster, NodeOSChoice, OIDCProvider } from "./types";
+import type { ChangeRequest, Cluster, NodeOSChoice, OIDCProvider } from "./types";
 import {
   Dialog,
   ErrorBox,
@@ -46,6 +44,7 @@ import {
   haGroupsText,
   snapshotsText,
   useChange,
+  Skeleton,
 } from "./ui";
 import { flag, record, text, texts } from "./values";
 
@@ -53,15 +52,10 @@ import { flag, record, text, texts } from "./values";
 export type OptionAction =
   | "nodeOS"
   | "placement"
-  | "ha"
-  | "csi"
-  | "snapshots"
-  | "haGroups"
   | "headlamp"
   | "monitoring"
   | "logs"
   | "podSecurity"
-  | "istio"
   | "clusterMesh"
   | "loadBalancer"
   | "rancher"
@@ -75,10 +69,29 @@ export type OptionAction =
 export interface OptionRow<A extends string = OptionAction> {
   label: string;
   value: string;
+  /** The part of the Options view the setting is listed in. */
+  group: OptionGroup;
   action?: A;
   button?: string;
   /** How the row's button names what it changes, for those who hear it out of the grid. */
   name?: string;
+  /** A setting that is on or off, switched in its row instead of through a dialog. */
+  toggle?: Toggle;
+}
+
+/** The parts of the Options view, in their order. */
+export const optionGroups = ["Nodes", "Network", "Storage", "Add-ons", "Security", "Maintenance"] as const;
+export type OptionGroup = (typeof optionGroups)[number];
+
+/** Toggle is a setting switched in its row: it stages the change, as a dialog's Save does. */
+export interface Toggle {
+  on: (c: Cluster) => boolean;
+  /** The change that switches it, from the cluster as staged so far. */
+  request: (c: Cluster, on: boolean) => ChangeRequest;
+  /** What keeps it from being switched on, when it is off. */
+  problem?: string | undefined;
+  /** What switching it on brings, shown while that is staged. */
+  consequence?: string;
 }
 
 export function OptionDialog({
@@ -100,9 +113,6 @@ export function OptionDialog({
     }
     case "podSecurity": {
       return <PodSecurityDialog cluster={c} onClose={onClose} />;
-    }
-    case "istio": {
-      return <IstioDialog cluster={c} onClose={onClose} />;
     }
     case "clusterMesh": {
       return <ClusterMeshDialog cluster={c} onClose={onClose} />;
@@ -127,18 +137,6 @@ export function OptionDialog({
     }
     case "placement": {
       return <PlacementDialog cluster={c} onClose={onClose} />;
-    }
-    case "ha": {
-      return <HADialog cluster={c} onClose={onClose} />;
-    }
-    case "csi": {
-      return <CSIDialog cluster={c} onClose={onClose} />;
-    }
-    case "snapshots": {
-      return <SnapshotsDialog cluster={c} onClose={onClose} />;
-    }
-    case "haGroups": {
-      return <HAGroupsDialog cluster={c} onClose={onClose} />;
     }
     case "talos": {
       return <TalosDialog cluster={c} onClose={onClose} />;
@@ -188,7 +186,7 @@ function rancherText(r: RancherValue): string {
 
 // nodeOSRows is the node OS's row, for every cluster but a Talos one, whose nodes run Talos.
 const nodeOSRows = (c: Cluster): OptionRow[] =>
-  c.nodeOS ? [{ label: "Node OS", value: c.nodeOS.title, action: "nodeOS", name: "the node OS" }] : [];
+  c.nodeOS ? [{ label: "Node OS", value: c.nodeOS.title, group: "Nodes", action: "nodeOS", name: "the node OS" }] : [];
 
 /** Which of the settings that a class or the user's rights offer only at times a cluster offers. */
 export interface Offered {
@@ -196,6 +194,9 @@ export interface Offered {
   csi: boolean;
   snapshots: boolean;
   haGroups: boolean;
+  /** What keeps the CSI plugin's newest release or volume snapshots from being switched on. */
+  csiProblem?: string | undefined;
+  snapshotsProblem?: string | undefined;
 }
 
 /** everything offers every setting, for a list that has to show whatever a change sets. */
@@ -207,8 +208,49 @@ export function useOffered(c: Cluster): Offered {
   const csi = useCSIOffer(c);
   const snapshots = useSnapshotsOffer(c);
   const haGroups = useHAGroupsOffered(c);
-  return { ha, csi: csi.offered, snapshots: snapshots.offered, haGroups };
+  return {
+    ha,
+    csi: csi.offered,
+    snapshots: snapshots.offered,
+    haGroups,
+    csiProblem: csi.problem,
+    snapshotsProblem: snapshots.problem,
+  };
 }
+
+const istioOn = (c: Cluster): boolean => flag(record(c.variables["istio"])["enabled"]) === true;
+
+const haToggle: Toggle = {
+  on: haOn,
+  request: (_, on) => ({ variables: { proxmoxHA: on } }),
+  consequence: "Nodes running HA VMs reboot if they lose quorum",
+};
+
+const haGroupsToggle: Toggle = {
+  on: haGroupsOn,
+  request: (_, on) => ({ variables: { ccm: { haGroups: on } } }),
+  consequence: "The token gets Sys.Audit on /",
+};
+
+const istioToggle: Toggle = {
+  on: istioOn,
+  request: (_, on) => ({ variables: { istio: { enabled: on } } }),
+  consequence: istioHint,
+};
+
+const csiToggle = (problem: string | undefined): Toggle => ({
+  on: csiOn,
+  request: (c, on) => ({ variables: { csi: csiWith(c, "datastoreAllocate", on) } }),
+  problem,
+  consequence: "The token gets Datastore.Allocate on the storage",
+});
+
+const snapshotsToggle = (problem: string | undefined): Toggle => ({
+  on: snapshotsOn,
+  request: (c, on) => ({ variables: { csi: csiWith(c, "volumeSnapshots", on) } }),
+  problem,
+  consequence: "Copies stay on their volume's node",
+});
 
 /**
  * optionRows are what can be set on a cluster after it was created. more are the rows of settings
@@ -227,54 +269,66 @@ export function optionRows<A extends string = never>(
   const podSecurity = enforced(podSecurityOf(c.variables["podSecurity"]), cis);
   const talos: OptionRow[] =
     c.distribution === "talos"
-      ? [{ label: "Talos release", value: talosOf(c), action: "talos", button: "Upgrade", name: "Talos" }]
+      ? [
+          {
+            label: "Talos release",
+            value: talosOf(c),
+            group: "Nodes",
+            action: "talos",
+            button: "Upgrade",
+            name: "Talos",
+          },
+        ]
       : [];
   const rows: OptionRow<OptionAction | A>[] = [
     ...nodeOSRows(c),
     ...talos,
-    { label: "Pod network", value: clusterCNI(text(c.variables["cni"]), c.distribution) },
+    { label: "Pod network", value: clusterCNI(text(c.variables["cni"]), c.distribution), group: "Network" },
     {
       label: "Load balancer",
       value: loadBalancerText(loadBalancerOf(c.variables["loadBalancer"]), c.distribution),
+      group: "Network",
       action: "loadBalancer",
       name: "the load balancer",
     },
-    { label: "CIS hardening", value: cisText(cis) },
+    { label: "CIS hardening", value: cisText(cis), group: "Security" },
     {
       label: "Placement",
       value: placeText(placeOf(texts(c.variables["allowedNodes"]))),
+      group: "Nodes",
       action: "placement",
       name: "placement",
     },
   ];
   if (offered.ha) {
-    rows.push({ label: "Proxmox VE HA", value: haText(haOn(c)), action: "ha", name: "Proxmox VE HA" });
+    rows.push({ label: "Proxmox VE HA", value: haText(haOn(c)), group: "Nodes", toggle: haToggle });
   }
   // A cluster that runs the newest release keeps the row after its administrator withdraws the
   // choice, so that it can be switched back.
   if (offered.csi || csiOn(c)) {
-    rows.push({ label: "CSI plugin", value: csiText(csiOn(c)), action: "csi", name: "the CSI plugin" });
+    rows.push({
+      label: "CSI plugin",
+      value: csiText(csiOn(c)),
+      group: "Storage",
+      toggle: csiToggle(offered.csiProblem),
+    });
   }
   if (offered.snapshots || snapshotsOn(c)) {
     rows.push({
       label: "Volume snapshots",
       value: snapshotsText(snapshotsOn(c)),
-      action: "snapshots",
-      name: "volume snapshots",
+      group: "Storage",
+      toggle: snapshotsToggle(offered.snapshotsProblem),
     });
   }
   if (offered.haGroups || haGroupsOn(c)) {
-    rows.push({
-      label: "HA group labels",
-      value: haGroupsText(haGroupsOn(c)),
-      action: "haGroups",
-      name: "the HA group labels",
-    });
+    rows.push({ label: "HA group labels", value: haGroupsText(haGroupsOn(c)), group: "Nodes", toggle: haGroupsToggle });
   }
   rows.push(
     {
       label: "Headlamp",
       value: headlampText(headlamp.enabled === true, headlamp.hostname, headlamp.access === "view"),
+      group: "Add-ons",
       action: "headlamp",
       name: "Headlamp",
     },
@@ -284,37 +338,42 @@ export function optionRows<A extends string = never>(
         monitoring.enabled === true
           ? `On${filled(monitoring.hostname) ? `, Grafana at ${monitoring.hostname}` : ""}`
           : "Off",
+      group: "Add-ons",
       action: "monitoring",
       name: "monitoring",
     },
-    { label: "Logs", value: logsText(logsOf(c.variables["logs"])), action: "logs", name: "logs" },
+    { label: "Logs", value: logsText(logsOf(c.variables["logs"])), group: "Add-ons", action: "logs", name: "logs" },
     ...more,
     {
       label: "Certificates",
       value: certificatesText(certificatesOf(c.variables["certificates"])),
+      group: "Add-ons",
       action: "certificates",
       name: "certificates",
     },
     {
       label: "Pod security",
       value: podSecurityText(podSecurity),
+      group: "Security",
       action: "podSecurity",
       name: "pod security",
     },
-    {
-      label: "Istio",
-      value: istioText(istioOn(c)),
-      action: "istio",
-      name: "Istio",
-    },
+    { label: "Istio", value: istioText(istioOn(c)), group: "Add-ons", toggle: istioToggle },
   );
   if (runsCilium(c)) {
-    rows.push({ label: "Cluster Mesh", value: meshText(c), action: "clusterMesh", name: "Cluster Mesh" });
+    rows.push({
+      label: "Cluster Mesh",
+      value: meshText(c),
+      group: "Network",
+      action: "clusterMesh",
+      name: "Cluster Mesh",
+    });
   }
   rows.push(
     {
       label: "Rancher",
       value: rancherText(rancher),
+      group: "Add-ons",
       action: "rancher",
       button: rancher.install === true ? "Uninstall" : "Edit",
       name: "Rancher",
@@ -322,12 +381,14 @@ export function optionRows<A extends string = never>(
     {
       label: "GitOps",
       value: gitOpsText(gitOpsOf(c.variables["gitops"])),
+      group: "Add-ons",
       action: "gitops",
       name: "GitOps",
     },
     {
       label: "Automatic upgrades",
       value: describe(upgrades, refreshesNodes(upgrades), c.distribution),
+      group: "Maintenance",
       action: "upgrades",
       name: "automatic upgrades",
     },
@@ -337,6 +398,7 @@ export function optionRows<A extends string = never>(
     rows.push({
       label: "Identity providers",
       value: hosts.length > 0 ? hosts.join(", ") : "None",
+      group: "Security",
       action: "oidc",
       name: "identity providers",
     });
@@ -366,28 +428,132 @@ export function Options<A extends string = never>({
   const rows = optionRows(c, offered, more?.(c));
   const after = staged === undefined ? [] : optionRows(staged, offered, more?.(staged));
   return (
-    <div className="box scroll">
-      <table className="grid options">
-        <tbody>
-          {rows.map(({ label, value, action, button = "Edit", name = label }) => (
-            <tr key={label}>
-              <th scope="row">{label}</th>
-              <td>
-                {value}
-                <StagedValue now={value} after={after.find((r) => r.label === label)?.value} />
-              </td>
-              <td className="row-action">
-                {action !== undefined && (
-                  <button type="button" disabled={!can} aria-label={`${button} ${name}`} onClick={() => onEdit(action)}>
-                    {button}
-                  </button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="option-groups">
+      {optionGroups.map((group) => {
+        const listed = rows.filter((r) => r.group === group);
+        return (
+          listed.length > 0 && (
+            <div key={group} className="box scroll">
+              <table className="grid options">
+                <caption>{group}</caption>
+                <tbody>
+                  {listed.map((row) => (
+                    <OptionLine
+                      key={row.label}
+                      row={row}
+                      after={after.find((r) => r.label === row.label)?.value}
+                      at={{ cluster: c, staged, can, onEdit }}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        );
+      })}
     </div>
+  );
+}
+
+// Where an option's row is shown: the cluster as it is and as staged, and whether the user may change it.
+interface RowAt<A extends string> {
+  cluster: Cluster;
+  staged: Cluster | undefined;
+  can: boolean;
+  onEdit: (a: A) => void;
+}
+
+function OptionLine<A extends string>({
+  row: { label, value, action, button = "Edit", name = label, toggle },
+  after,
+  at,
+}: {
+  row: OptionRow<A>;
+  after: string | undefined;
+  at: RowAt<A>;
+}): JSX.Element {
+  return (
+    <tr>
+      <th scope="row">{label}</th>
+      <td>
+        {toggle === undefined ? (
+          <>
+            {value}
+            <StagedValue now={value} after={after} />
+          </>
+        ) : (
+          <Switch toggle={toggle} label={label} text={after ?? value} at={at} />
+        )}
+      </td>
+      <td className="row-action">
+        {action !== undefined && (
+          <button type="button" disabled={!at.can} aria-label={`${button} ${name}`} onClick={() => at.onEdit(action)}>
+            {button}
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+const stay = (): void => {
+  // A switch has no dialog to close: its row shows what it staged.
+};
+
+// switchNote is what keeps a switch from being turned on, or what turning it on brings.
+function switchNote(toggle: Toggle, on: boolean, was: boolean): string | undefined {
+  if (toggle.problem !== undefined && !on) {
+    return toggle.problem;
+  }
+  return on && !was ? toggle.consequence : undefined;
+}
+
+// Switch turns a setting on or off in its row, staged with the page's other changes.
+function Switch<A extends string>({
+  toggle,
+  label,
+  text: shown,
+  at: { cluster: c, staged, can },
+}: {
+  toggle: Toggle;
+  label: string;
+  text: string;
+  at: RowAt<A>;
+}): JSX.Element {
+  const { busy, error, send } = useChange(c, stay);
+  const hint = useId();
+  const from = staged ?? c;
+  const on = toggle.on(from);
+  const refused = toggle.problem !== undefined && !on;
+  const note = switchNote(toggle, on, toggle.on(c));
+  return (
+    <>
+      <label className={on === toggle.on(c) ? "switch" : "switch switch-staged"}>
+        <input
+          type="checkbox"
+          role="switch"
+          aria-checked={on}
+          aria-label={label}
+          aria-describedby={note === undefined ? undefined : hint}
+          checked={on}
+          disabled={!can || busy || refused}
+          onChange={(e) => {
+            void send(toggle.request(from, e.target.checked));
+          }}
+        />
+        <span>{shown}</span>
+      </label>
+      {note !== undefined && (
+        <span className="hint" id={hint}>
+          {note}
+        </span>
+      )}
+      {error !== undefined && (
+        <span className="field-error" role="alert">
+          {error}
+        </span>
+      )}
+    </>
   );
 }
 
@@ -462,7 +628,7 @@ function NodeOSDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
       }
     >
       <p className="muted">Saving replaces every node, one at a time.</p>
-      {oses === undefined && !filled(loadError) && <p className="muted">Loading…</p>}
+      {oses === undefined && !filled(loadError) && <Skeleton rows={2} />}
       <ErrorBox message={loadError} />
       {oses !== undefined && (
         <div role="radiogroup" aria-label="Node OS">
@@ -562,42 +728,6 @@ function PodSecurityDialog({ cluster: c, onClose }: { cluster: Cluster; onClose:
     >
       {!cis && <p className="muted">Changing admission replaces the control-plane nodes, one at a time.</p>}
       <PodSecurityFields value={value} onChange={setValue} cis={cis} />
-      <ErrorBox message={error} />
-    </Dialog>
-  );
-}
-
-const istioOn = (c: Cluster): boolean => flag(record(c.variables["istio"])["enabled"]) === true;
-
-function IstioDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
-  const [on, setOn] = useState(istioOn(c));
-  const { busy, error, send } = useChange(c, onClose);
-  const hint = useId();
-  return (
-    <Dialog
-      title="Edit Istio"
-      onClose={onClose}
-      onSubmit={() => {
-        void send({ variables: { istio: { enabled: on } } });
-      }}
-      actions={
-        <>
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="primary" disabled={busy || on === istioOn(c)}>
-            Save
-          </button>
-        </>
-      }
-    >
-      <label className="check">
-        <input type="checkbox" checked={on} aria-describedby={hint} onChange={(e) => setOn(e.target.checked)} /> Install
-        Istio
-      </label>
-      <p className="hint" id={hint}>
-        {istioHint}
-      </p>
       <ErrorBox message={error} />
     </Dialog>
   );

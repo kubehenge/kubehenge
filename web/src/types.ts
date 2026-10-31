@@ -130,6 +130,21 @@ export interface WorkerPool {
   /** For an autoscaled pool, the workers it asks for at the moment. */
   replicas: number;
   autoscaling?: Autoscaling;
+  /** The pool's own size; unset, it takes the cluster's workerMachine. */
+  machine?: MachineSize;
+}
+
+/** A machine's size, as the controlPlaneMachine and workerMachine variables give it. */
+export interface MachineSize {
+  cores: number;
+  memoryMiB: number;
+  diskGiB: number;
+}
+
+/** A worker pool to add or change: its workers, and its own size, or the cluster's with null. */
+export interface PoolChange {
+  replicas?: number;
+  machine?: MachineSize | null;
 }
 
 export interface Machine {
@@ -138,15 +153,23 @@ export interface Machine {
   /** The Proxmox VE node its VM runs on, where the user may see the VM. */
   proxmoxNode?: string;
   role: "control-plane" | "worker";
+  /** The worker pool a worker belongs to. */
+  pool?: string;
   version?: string;
   phase: string;
   ready: boolean;
   /** What keeps it from being ready, as Cluster API sums it up. */
   waiting?: string;
+  /** Marked for its health check to replace. */
+  replacing?: boolean;
   addresses?: string[];
   created: string;
   /** The Talos release its node runs, on a Talos cluster. */
   talos?: string;
+  /** Opens its VM's console in Proxmox VE, for a user who may use it. */
+  console?: string;
+  /** Set when the user may reboot its VM. */
+  reboot?: boolean;
 }
 
 /** A section of the health page from one source: what was read, or why it was not. */
@@ -534,7 +557,27 @@ export interface Bridge {
   node: string;
   vlanAware: boolean;
   comment?: string;
+  /** The node's own IPv4 address on the bridge, like 192.0.2.5/24, and its gateway, where it has them. */
+  cidr?: string;
+  gateway?: string;
   usable: boolean;
+}
+
+/**
+ * FreeAddresses are free addresses on a bridge's network for a new cluster, the endpoint's and a
+ * range for its nodes, and which of the addresses checked a host answers on. Network is missing
+ * where nothing was probed.
+ */
+export interface FreeAddresses {
+  network?: string;
+  endpoint?: string;
+  addresses?: string;
+  answering: string[];
+}
+
+/** CreateCheck is a new cluster the API server checked without creating it, as YAML to apply. */
+export interface CreateCheck {
+  manifest: string;
 }
 
 export interface ManagementSettings {
@@ -888,6 +931,16 @@ export interface SetupStatus {
   upgrade?: ManagementUpgrade;
 }
 
+/** How the management cluster itself is doing; for administrators only. */
+export interface ManagementHealth {
+  /** Whether its API answered; error says why not. */
+  answers: boolean;
+  error?: string;
+  nodes?: { name: string; ready: boolean; message?: string; kubelet?: string }[];
+  /** Its deployments: Cluster API's providers, Kubehenge's controller and the cluster's own. */
+  controllers?: { namespace: string; name: string; ready: number; wanted: number }[];
+}
+
 /** A component of the management cluster whose version applying the appliance's release changes. */
 export interface VersionChange {
   /** The module's name for it, such as talos or cluster_api. */
@@ -1056,13 +1109,15 @@ export interface ChangeRequest {
   workerPools?: Record<string, number>;
   /** Switches autoscaling on for pools by name, or off with null. */
   autoscaling?: Record<string, Autoscaling | null>;
+  /** Adds and changes worker pools by name, or deletes one with null. */
+  pools?: Record<string, PoolChange | null>;
   variables?: Record<string, unknown>;
 }
 
 /** What a change does to a cluster's machines. */
 export type Effect = "none" | "scales" | "control-plane" | "workers" | "all";
 
-/** A setting a change sets anew: a variable's name, or version, controlPlaneReplicas, workerPools or autoscaling. */
+/** A setting a change sets anew: a variable's name, or version, controlPlaneReplicas, workerPools, pools or autoscaling. */
 export interface PlannedChange {
   setting: string;
   effect: Effect;

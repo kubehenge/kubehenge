@@ -1,6 +1,6 @@
 import type { JSX } from "react";
 
-import { clusterPath, type View } from "./ClusterDetail";
+import { clusterPath, type View } from "./cluster-paths";
 import { ranked, useFleet, type Standing } from "./fleet";
 import { Link } from "./router";
 import { settingLabel } from "./Staging";

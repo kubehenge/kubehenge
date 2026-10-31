@@ -1,46 +1,81 @@
 import { useState, type JSX } from "react";
 
 import { api } from "./api";
-import { ErrorBox, Field, errorMessage, passphraseShort } from "./ui";
+import { Dialog, ErrorBox, Field, errorMessage, passphraseShort } from "./ui";
 
-// RemoveManagement takes Kubehenge off Proxmox VE: the management cluster, its templates, pools,
-// users and roles. Every cluster has to be deleted first.
-export function RemoveManagement({ running, onStarted }: { running: boolean; onStarted: () => void }): JSX.Element {
+// DangerZone holds what cannot be taken back, apart from the settings above it: removing
+// Kubehenge takes the management cluster, its templates, pools, users and roles off Proxmox VE.
+// Every cluster has to be deleted first.
+export function DangerZone({ running, onStarted }: { running: boolean; onStarted: () => void }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className="panel danger-zone" aria-labelledby="danger-zone">
+      <div className="box">
+        <h3 id="danger-zone">Danger zone</h3>
+        <div className="danger-row">
+          <div>
+            <strong>Remove Kubehenge</strong>
+            <p className="muted">Keeps the appliance</p>
+          </div>
+          <button type="button" className="danger" disabled={running} onClick={() => setOpen(true)}>
+            Remove…
+          </button>
+        </div>
+      </div>
+      {open && (
+        <RemoveDialog
+          onClose={() => setOpen(false)}
+          onStarted={() => {
+            setOpen(false);
+            onStarted();
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
+function RemoveDialog({ onClose, onStarted }: { onClose: () => void; onStarted: () => void }): JSX.Element {
   const [typed, setTyped] = useState("");
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const ready = !busy && typed === "remove" && !passphraseShort(passphrase);
 
   const remove = async () => {
+    if (!ready) {
+      return;
+    }
     setBusy(true);
     setError(undefined);
     try {
       await api.removeManagement(passphrase);
-      setPassphrase("");
-      setTyped("");
       onStarted();
     } catch (err) {
       setError(errorMessage(err));
-    } finally {
       setBusy(false);
     }
   };
 
-  // A form, so that password managers fill in the passphrase. Enter removes only once the button
-  // would: a disabled default button submits nothing.
   return (
-    <form
-      className="box"
-      onSubmit={(e) => {
-        e.preventDefault();
+    <Dialog
+      title="Remove Kubehenge"
+      onClose={onClose}
+      onSubmit={() => {
         void remove();
       }}
+      actions={
+        <>
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="danger" disabled={!ready}>
+            Remove
+          </button>
+        </>
+      }
     >
-      <h3>Remove Kubehenge</h3>
-      <p className="muted">
-        Deletes the management cluster, templates, pools, users and roles, and keeps the appliance. Delete every cluster
-        first.
-      </p>
+      <p>Deletes the management cluster, templates, pools, users and roles. Delete every cluster first.</p>
       <Field label="State passphrase">
         {(id) => (
           <input
@@ -55,17 +90,7 @@ export function RemoveManagement({ running, onStarted }: { running: boolean; onS
       <Field label="Type remove to confirm">
         {(id) => <input id={id} autoComplete="off" value={typed} onChange={(e) => setTyped(e.target.value)} />}
       </Field>
-      {running && <p className="muted">Wait for the current run to finish.</p>}
-      <div className="actions">
-        <button
-          type="submit"
-          className="danger"
-          disabled={busy || running || typed !== "remove" || passphraseShort(passphrase)}
-        >
-          Remove Kubehenge
-        </button>
-      </div>
       <ErrorBox message={error} />
-    </form>
+    </Dialog>
   );
 }

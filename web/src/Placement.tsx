@@ -282,33 +282,6 @@ export function HAField({ checked, onChange }: { checked: boolean; onChange: (on
 /** haOn reads the cluster's proxmoxHA variable, which takes part unless it is false. */
 export const haOn = (c: Cluster): boolean => flag(c.variables["proxmoxHA"]) !== false;
 
-export function HADialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
-  const [on, setOn] = useState(haOn(c));
-  const { busy, error, send } = useChange(c, onClose);
-  return (
-    <Dialog
-      title="Edit Proxmox VE HA"
-      onClose={onClose}
-      onSubmit={() => {
-        void send({ variables: { proxmoxHA: on } });
-      }}
-      actions={
-        <>
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="primary" disabled={busy || on === haOn(c)}>
-            Save
-          </button>
-        </>
-      }
-    >
-      <HAField checked={on} onChange={setOn} />
-      <ErrorBox message={error} />
-    </Dialog>
-  );
-}
-
 export function PlacementDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
   const kept = texts(c.variables["allowedNodes"]);
   const initial = placeOf(kept);
@@ -420,31 +393,4 @@ export function useHAGroupsOffered(c: Cluster): boolean {
     void load();
   }, [className]);
   return offered;
-}
-
-export function HAGroupsDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
-  const [on, setOn] = useState(haGroupsOn(c));
-  const { busy, error, send } = useChange(c, onClose);
-  return (
-    <Dialog
-      title="Edit HA group labels"
-      onClose={onClose}
-      onSubmit={() => {
-        void send({ variables: { ccm: { haGroups: on } } });
-      }}
-      actions={
-        <>
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="primary" disabled={busy || on === haGroupsOn(c)}>
-            Save
-          </button>
-        </>
-      }
-    >
-      <HAGroupsField checked={on} onChange={setOn} />
-      <ErrorBox message={error} />
-    </Dialog>
-  );
 }

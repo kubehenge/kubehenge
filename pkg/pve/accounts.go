@@ -49,13 +49,44 @@ func NewAccounts(cfg Config) (*Accounts, error) {
 	return &Accounts{base: base, http: httpClient}, nil
 }
 
-// Ticket is a signed-in user's session with Proxmox VE.
+// Ticket is a signed-in user's session with Proxmox VE, or an API token acting as one.
 type Ticket struct {
-	// Username is the user ID as Proxmox VE resolved it, user@realm.
+	// Username is the user ID as Proxmox VE resolved it, user@realm, or a token's user@realm!name.
 	Username string
 	Ticket   string
 	CSRF     string
 	Issued   time.Time
+	// Token is an API token, user@realm!name=secret, which Proxmox VE takes in place of the ticket;
+	// it needs no CSRF token and is not renewed.
+	Token string
+}
+
+// authorize lets req act as the ticket's user.
+func (t *Ticket) authorize(req *http.Request) {
+	if t.Token != "" {
+		req.Header.Set("Authorization", "PVEAPIToken="+t.Token)
+		return
+	}
+	req.Header.Set("Cookie", "PVEAuthCookie="+t.Ticket)
+	if req.Method != http.MethodGet {
+		// Go sends every header name in this canonical form; Proxmox VE reads them regardless of case.
+		req.Header.Set("Csrfpreventiontoken", t.CSRF)
+	}
+}
+
+// TokenUser checks an API token, user@realm!name=secret, with Proxmox VE, which takes it only with
+// its own secret, and returns it as a ticket for its user@realm!name.
+func (a *Accounts) TokenUser(ctx context.Context, token string) (*Ticket, error) {
+	id, _, ok := strings.Cut(token, "=")
+	if !ok || !strings.Contains(id, "@") || !strings.Contains(id, "!") {
+		return nil, ErrAuthentication
+	}
+	t := &Ticket{Username: id, Token: token, Issued: time.Now()}
+	var version map[string]any
+	if err := a.get(ctx, t, "/version", &version); err != nil {
+		return nil, err
+	}
+	return t, nil
 }
 
 // Challenge is the second factor Proxmox VE asks of a user after the password.
@@ -165,6 +196,9 @@ func (a *Accounts) OpenIDLogin(ctx context.Context, code, state, redirect string
 // again, so only a disabled or expired user stops it; how long a session lasts is the caller's to
 // limit.
 func (a *Accounts) Renew(ctx context.Context, t *Ticket) (*Ticket, error) {
+	if t.Token != "" {
+		return t, nil
+	}
 	now := time.Now()
 	res, err := a.postTicket(ctx, t.Username, t.Ticket, "")
 	if err != nil {
@@ -247,7 +281,7 @@ func (a *Accounts) get(ctx context.Context, t *Ticket, path string, out any) err
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Cookie", "PVEAuthCookie="+t.Ticket)
+	t.authorize(req)
 	return a.do(req, out)
 }
 

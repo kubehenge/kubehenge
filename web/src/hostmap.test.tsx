@@ -86,4 +86,27 @@ describe("the cluster's summary", () => {
     ]);
     expect(within(map).getByText(/pve1 runs 2 of 3 control-plane VMs/u)).toBeInTheDocument();
   });
+
+  it("shows a machine on an offline node as down, on the map and in the machines", async () => {
+    const stale = { ...web, machines: [machine("web-cp-a", "control-plane", { proxmoxNode: "pve4" })] };
+    fakeServer({
+      "GET /api/session": { body: { user: "alice@pve", csrf: "c1" } },
+      "GET /api/clusters": { body: [stale] },
+      "GET /api/clusters/default/web": { body: stale },
+      "GET /api/runs": { body: [] },
+      "GET /api/proxmox/nodes": { body: [{ node: "pve4", online: false }] },
+    });
+    window.history.replaceState(null, "", "/clusters/default/web");
+    const { unmount } = render(<App />);
+    const map = await screen.findByRole("region", { name: "Placement" });
+    await expect(
+      within(map).findByRole("link", { name: "web-cp-a, control plane, Node offline" }),
+    ).resolves.toBeInTheDocument();
+    unmount();
+
+    window.history.replaceState(null, "", "/clusters/default/web/machines");
+    render(<App />);
+    const row = await screen.findByRole("row", { name: /^web-cp-a/u });
+    await expect(within(row).findByText("Node offline")).resolves.toBeInTheDocument();
+  });
 });

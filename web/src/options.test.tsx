@@ -78,15 +78,10 @@ describe("a cluster's options", () => {
       variables: { podSecurity: { admission: "privileged", kyverno: "restricted" } },
     });
 
-    expect(screen.getByRole("row", { name: /Istio/u })).toHaveTextContent("Off");
-    await user.click(screen.getByRole("button", { name: "Edit Istio" }));
-    dialog = screen.getByRole("dialog", { name: "Edit Istio" });
-    const istio = within(dialog).getByLabelText("Install Istio");
-    expect(istio).toHaveAccessibleDescription(/dataplane-mode=ambient/u);
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    const istio = screen.getByRole("switch", { name: "Istio" });
+    expect(istio).not.toBeChecked();
+    expect(istio.closest("tr")).toHaveTextContent("Off");
     await user.click(istio);
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: { istio: { enabled: true } },

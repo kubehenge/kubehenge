@@ -1,4 +1,4 @@
-import type { JSX } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { BackupFieldset, BackupSourcesField, backupKeys, backupsHint, classTargets, noTargets } from "./Backups";
 import { CertificatesFields } from "./Certificates";
@@ -6,7 +6,9 @@ import { MeshPeersField, meshInfo } from "./ClusterMesh";
 import { ModeSelect } from "./ClusterUpgrades";
 import {
   addonCPU,
+  addonCostMiB,
   addonMemory,
+  type AddonKey,
   addonsProblem,
   logsChosen,
   machineLeast,
@@ -352,23 +354,9 @@ function AddonRoom({ form, cls }: { form: StepProps["form"]; cls: ClusterClass |
   );
 }
 
-export function AddOnsStep({
-  form,
-  set,
-  shown,
-  cls,
-  canTrust,
-  namespace,
-  showAll,
-}: StepProps & {
-  cls: ClusterClass | undefined;
-  canTrust: boolean | undefined;
-  namespace: string | undefined;
-  showAll?: boolean;
-}): JSX.Element {
+function MonitoringAddOn({ form, set }: Pick<StepProps, "form" | "set">): JSX.Element {
   return (
     <>
-      <HeadlampAddOn form={form} set={set} />
       <label className="check">
         <input type="checkbox" checked={form.monitoring} onChange={(e) => set("monitoring", e.target.checked)} />{" "}
         Install monitoring
@@ -388,7 +376,131 @@ export function AddOnsStep({
           )}
         </Field>
       )}
-      {variable(cls, "logs") && <LogsAddOn form={form} set={set} />}
+    </>
+  );
+}
+
+function MeshAddOn({
+  form,
+  set,
+  namespace,
+}: Pick<StepProps, "form" | "set"> & { namespace: string | undefined }): JSX.Element {
+  return (
+    <>
+      <label className="check">
+        <input type="checkbox" checked={form.clusterMesh} onChange={(e) => set("clusterMesh", e.target.checked)} /> Join
+        a Cluster Mesh
+      </label>
+      <Info about="Cluster Mesh">{meshInfo}</Info>
+      {form.clusterMesh && namespace !== undefined && (
+        <MeshPeersField
+          namespace={namespace}
+          self={form.name}
+          value={form.meshPeers}
+          onChange={(p) => set("meshPeers", p)}
+        />
+      )}
+    </>
+  );
+}
+
+const mibPerGiB = 1024;
+
+// memoryText is an amount of memory as it is read at a glance: MiB under a GiB, else GiB to one place.
+const memoryText = (mib: number): string => (mib < mibPerGiB ? `${mib} MiB` : `${(mib / mibPerGiB).toFixed(1)} GiB`);
+
+// AddonCard is one add-on of the wizard: its switch, the memory its pods take, and its settings once chosen.
+// A card that opens on its settings rather than a box to tick keeps its cost on a line of its own.
+function AddonCard({
+  mib,
+  on,
+  children,
+  corner = false,
+}: {
+  mib: number;
+  on: boolean;
+  children: ReactNode;
+  corner?: boolean;
+}): JSX.Element {
+  return (
+    <div className={["addon-card", on && "chosen", corner && "corner"].filter(Boolean).join(" ")}>
+      {mib > 0 && <span className="addon-cost">{`+${memoryText(mib)}`}</span>}
+      {children}
+    </div>
+  );
+}
+
+type AddOnsProps = StepProps & {
+  cls: ClusterClass | undefined;
+  canTrust: boolean | undefined;
+  namespace: string | undefined;
+  showAll?: boolean;
+};
+
+// AddonCards are the add-ons a class offers, each a card with what it costs in memory.
+function AddonCards({
+  step: { form, set, shown, cls, canTrust, namespace, showAll },
+}: {
+  step: AddOnsProps;
+}): JSX.Element {
+  const cost = (key: AddonKey): number => addonCostMiB(cls, [key]);
+  return (
+    <div className="addon-cards">
+      <AddonCard mib={cost("headlamp")} on={form.headlamp}>
+        <HeadlampAddOn form={form} set={set} />
+      </AddonCard>
+      <AddonCard mib={cost("monitoring")} on={form.monitoring}>
+        <MonitoringAddOn form={form} set={set} />
+      </AddonCard>
+      {variable(cls, "logs") && (
+        <AddonCard mib={cost("logs")} on={logsChosen(form)}>
+          <LogsAddOn form={form} set={set} />
+        </AddonCard>
+      )}
+      {variable(cls, "istio") && (
+        <AddonCard mib={cost("istio")} on={form.istio}>
+          <label className="check">
+            <input type="checkbox" checked={form.istio} onChange={(e) => set("istio", e.target.checked)} /> Install
+            Istio
+          </label>
+          <Info about="Istio">{istioHint}</Info>
+        </AddonCard>
+      )}
+      {offersMesh(form, cls) && (
+        <AddonCard mib={cost("clusterMesh")} on={form.clusterMesh}>
+          <MeshAddOn form={form} set={set} namespace={namespace} />
+        </AddonCard>
+      )}
+      <AddonCard
+        mib={cost(form.rancherInstall ? "rancher" : "rancherAgent")}
+        on={form.rancherInstall || form.rancherRegister}
+      >
+        <RancherAddOn form={form} set={set} shown={shown} canTrust={canTrust} />
+      </AddonCard>
+      {variable(cls, "backups") && (
+        <AddonCard mib={cost("backups")} on={form.backups}>
+          <BackupsChoice form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} namespace={namespace} />
+        </AddonCard>
+      )}
+      {variable(cls, "certificates") && (
+        <AddonCard mib={cost("certManager")} on={form.certificates.enabled}>
+          <CertificatesAddOn form={form} set={set} canTrust={canTrust} showAll={showAll} />
+        </AddonCard>
+      )}
+      {variable(cls, "gitops") && (
+        <AddonCard mib={cost(form.gitops.engine === "flux" ? "flux" : "argocd")} on={form.gitops.engine !== ""} corner>
+          <GitOpsChoices form={form} set={set} shown={shown} canTrust={canTrust} />
+        </AddonCard>
+      )}
+    </div>
+  );
+}
+
+export function AddOnsStep(props: AddOnsProps): JSX.Element {
+  const { form, set, cls } = props;
+  return (
+    <>
+      <AddonCards step={props} />
       {variable(cls, "cis") && (
         <>
           <label className="check">
@@ -416,40 +528,6 @@ export function AddOnsStep({
           />
         </fieldset>
       )}
-      {variable(cls, "istio") && (
-        <>
-          <label className="check">
-            <input type="checkbox" checked={form.istio} onChange={(e) => set("istio", e.target.checked)} /> Install
-            Istio
-          </label>
-          <Info about="Istio">{istioHint}</Info>
-        </>
-      )}
-      {offersMesh(form, cls) && (
-        <>
-          <label className="check">
-            <input type="checkbox" checked={form.clusterMesh} onChange={(e) => set("clusterMesh", e.target.checked)} />{" "}
-            Join a Cluster Mesh
-          </label>
-          <Info about="Cluster Mesh">{meshInfo}</Info>
-          {form.clusterMesh && namespace !== undefined && (
-            <MeshPeersField
-              namespace={namespace}
-              self={form.name}
-              value={form.meshPeers}
-              onChange={(p) => set("meshPeers", p)}
-            />
-          )}
-        </>
-      )}
-      <RancherAddOn form={form} set={set} shown={shown} canTrust={canTrust} />
-      {variable(cls, "backups") && (
-        <BackupsChoice form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} namespace={namespace} />
-      )}
-      {variable(cls, "certificates") && (
-        <CertificatesAddOn form={form} set={set} canTrust={canTrust} showAll={showAll} />
-      )}
-      {variable(cls, "gitops") && <GitOpsChoices form={form} set={set} shown={shown} canTrust={canTrust} />}
       <AddonRoom form={form} cls={cls} />
 
       {variable(cls, "upgrades") && (
