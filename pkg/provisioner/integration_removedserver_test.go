@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/kubehenge/kubehenge/test/integration"
 )
 
 // Every RKE2 and k3s server is kept from starting again once its etcd member is removed: the
@@ -22,7 +24,7 @@ func TestIntegrationClassesKeepRemovedServersDown(t *testing.T) {
 		"KThreesControlPlaneTemplate": {[]string{"spec", "template", "spec", "kthreesConfigSpec", "files"}, "k3s", "k3s"},
 	}
 	seen := map[string]bool{}
-	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
+	for _, o := range integration.RenderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
 		if o.GetKind() != "ConfigMap" || o.GetLabels()["kubehenge.dev/class"] == "" {
 			continue
 		}
@@ -30,7 +32,7 @@ func TestIntegrationClassesKeepRemovedServersDown(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, tpl := range decodeAll(t, []byte(data)) {
+		for _, tpl := range integration.Decode(t, []byte(data)) {
 			want, ok := servers[tpl.GetKind()]
 			if !ok {
 				continue

@@ -91,6 +91,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 		errs = append(errs, v.validateRancher(ctx, old, c, class)...)
 	}
 	errs = append(errs, validateClusterMesh(old, c)...)
+	errs = append(errs, validateRanges(old, c, class)...)
 	if err := checkLogs(c); err != nil {
 		errs = append(errs, field.Forbidden(topology.Child("variables").Key(logsAddon), err.Error()))
 	}
@@ -123,6 +124,18 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	// Invalid, not the plain denial a validator's error becomes, so that the interface shows the
 	// reason as it does the API server's own validation.
 	return apierrors.NewInvalid(clusterv1.GroupVersion.WithKind("Cluster").GroupKind(), c.Name, errs) //nolint:wrapcheck // made here, not passed on
+}
+
+// validateRanges holds a new cluster's pod and service ranges to checkRanges. Unset, the network is
+// the class's schema's to refuse.
+func validateRanges(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
+	if _, set, _ := optionalVariable[nodeNetwork](c, "network"); old != nil || !set {
+		return nil
+	}
+	if err := checkRanges(c, class); err != nil {
+		return field.ErrorList{field.Invalid(field.NewPath("spec", "clusterNetwork"), c.Spec.ClusterNetwork, err.Error())}
+	}
+	return nil
 }
 
 // validatePinned holds an RKE2 or k3s cluster to a release this Kubehenge pins, when it is created

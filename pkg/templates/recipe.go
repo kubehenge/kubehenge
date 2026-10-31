@@ -185,6 +185,10 @@ func bakeUserData(files map[string]string, build []string) (string, error) {
 // so that the end of a bake that ran out of time tells a step that hung from one that only crawled.
 const timestamped = `while IFS= read -r line || [ -n "$line" ]; do printf '%s %s\n' "$(date -u +%H:%M:%S)" "$line"; done`
 
+// iptablesCheck finds iptables for the CNI's portmap plugin, which runs it from the node's PATH, on
+// the nftables the kernel has.
+const iptablesCheck = "iptables --version | grep -q nf_tables"
+
 // avcDenied finds no denial of SELinux in the kernel's log or the audit log, whichever has them.
 const avcDenied = `! journalctl -b -k -o cat --no-pager | grep -qF 'avc:  denied' && ! grep -qsF 'avc:  denied' /var/log/audit/audit.log`
 
@@ -205,6 +209,8 @@ func nodeChecks(b Bake) [][]string {
 		{systemctl, "start", "kubehenge-boot-log.service"},
 		{"sh", "-c", `test "$(getenforce)" = Enforcing`},
 		{"sh", "-c", "semodule -l | grep -qx kubehenge-qga"},
+		// The Tigera operator, confined, reads Calico's MTU there.
+		{"sh", "-c", "stat -c %C /var/lib/calico | grep -q ':container_ro_file_t:'"},
 		{"sh", "-c", "! touch /usr/kubehenge 2> /dev/null"},
 		// Every distribution's pod network bridges through it.
 		{"sh", "-c", "modinfo br_netfilter > /dev/null"},
@@ -217,9 +223,16 @@ func nodeChecks(b Bake) [][]string {
 			// The distribution installs itself there when a node boots.
 			[]string{"sh", "-c", "touch /usr/local/.kubehenge && rm /usr/local/.kubehenge"},
 		)
+		if _, r, err := ReleaseOf(b.NodeOS); err == nil && r.Mode == ImageMode && b.Distribution == RKE2 {
+			// A confined container may install CNI plugins into an image-mode node's /opt, in /var.
+			checks = append(checks, []string{"sh", "-c", "stat -L -c %C /opt/cni/bin | grep -q ':container_file_t:'"})
+		}
 		if b.Distribution == RKE2 {
-			// RKE2 looks up the etcd user and group in /etc alone.
-			checks = append(checks, []string{"sh", "-c", "! getent passwd etcd > /dev/null || { grep -q '^etcd:' /etc/passwd && grep -q '^etcd:' /etc/group; }"})
+			checks = append(checks,
+				[]string{"sh", "-c", iptablesCheck},
+				// RKE2 looks up the etcd user and group in /etc alone.
+				[]string{"sh", "-c", "! getent passwd etcd > /dev/null || { grep -q '^etcd:' /etc/passwd && grep -q '^etcd:' /etc/group; }"},
+			)
 		}
 	case Kubeadm:
 		checks = append(checks,
@@ -232,6 +245,7 @@ func nodeChecks(b Bake) [][]string {
 			// The CNI installs its plugins there, beside the image's.
 			[]string{"sh", "-c", "touch /opt/cni/bin/.kubehenge && rm /opt/cni/bin/.kubehenge && test -x /opt/cni/bin/loopback"},
 			active("containerd"),
+			[]string{"sh", "-c", iptablesCheck},
 			// The control-plane images are in containerd, so nodes do not wait on the registry,
 			// and containerd starts pods on kubeadm's pause image among them.
 			[]string{"sh", "-c", "crictl images | grep -q kube-apiserver"},

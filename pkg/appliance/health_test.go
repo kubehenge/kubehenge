@@ -21,15 +21,20 @@ import (
 )
 
 // healthServer serves the health route as the interface does, on a certificate the check is given;
-// status is what it answers.
-func healthServer(t *testing.T, status *atomic.Int32) *ServiceCheck {
+// answer is the status of each request, where 0 holds the request until the check gives it up.
+func healthServer(t *testing.T, answer func() int) *ServiceCheck {
 	t.Helper()
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/health" {
 			http.NotFound(w, r)
 			return
 		}
-		w.WriteHeader(int(status.Load()))
+		status := answer()
+		if status == 0 {
+			<-r.Context().Done()
+			return
+		}
+		w.WriteHeader(status)
 	}))
 	t.Cleanup(srv.Close)
 	cert := filepath.Join(t.TempDir(), "tls.crt")
@@ -37,7 +42,7 @@ func healthServer(t *testing.T, status *atomic.Int32) *ServiceCheck {
 		t.Fatal(err)
 	}
 	return &ServiceCheck{
-		CertFile: cert, Address: srv.Listener.Addr().String(), Wait: time.Second, Settle: 10 * time.Millisecond,
+		CertFile: cert, Address: srv.Listener.Addr().String(), Wait: 5 * time.Second, Settle: 10 * time.Millisecond,
 		Restarts: func(context.Context) (int, error) { return 0, nil },
 	}
 }
@@ -46,13 +51,13 @@ func TestServiceCheck(t *testing.T) {
 	t.Parallel()
 	var status atomic.Int32
 	status.Store(http.StatusNoContent)
-	c := healthServer(t, &status)
+	c := healthServer(t, func() int { return int(status.Load()) })
 	if err := c.Healthy(context.Background()); err != nil {
 		t.Fatalf("serving: %v", err)
 	}
 
 	status.Store(http.StatusBadGateway)
-	if err := c.Healthy(context.Background()); err == nil || !strings.Contains(err.Error(), "did not answer within 1s: the interface answered 502") {
+	if err := c.Healthy(context.Background()); err == nil || !strings.Contains(err.Error(), "did not answer within 5s: the interface answered 502") {
 		t.Errorf("answering 502: %v", err)
 	}
 
@@ -65,12 +70,25 @@ func TestServiceCheck(t *testing.T) {
 	}
 }
 
+// A request the deadline cuts off leaves the answer before it as the reason.
+func TestServiceCheckKeepsTheLastAnswer(t *testing.T) {
+	t.Parallel()
+	var asked atomic.Int32
+	c := healthServer(t, func() int {
+		if asked.Add(1) == 1 {
+			return http.StatusBadGateway
+		}
+		return 0
+	})
+	if err := c.Healthy(context.Background()); err == nil || !strings.Contains(err.Error(), "the interface answered 502") {
+		t.Errorf("answering 502, then nothing: %v", err)
+	}
+}
+
 // Another certificate on the address is not the interface's.
 func TestServiceCheckTrustsOnlyItsCertificate(t *testing.T) {
 	t.Parallel()
-	var status atomic.Int32
-	status.Store(http.StatusNoContent)
-	c := healthServer(t, &status)
+	c := healthServer(t, func() int { return http.StatusNoContent })
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)

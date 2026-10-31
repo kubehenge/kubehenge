@@ -115,14 +115,19 @@ func (c *ServiceCheck) Client() (*http.Client, string, error) {
 func (c *ServiceCheck) untilAnswers(ctx context.Context, client *http.Client, url string) error {
 	ctx, cancel := context.WithTimeout(ctx, c.Wait)
 	defer cancel()
+	var last error
 	for {
 		err := answers(ctx, client, url)
 		if err == nil {
 			return nil
 		}
+		// A request the deadline cut off says less than the answer before it.
+		if last == nil || ctx.Err() == nil {
+			last = err
+		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("the interface did not answer within %s: %w", c.Wait, err)
+			return fmt.Errorf("the interface did not answer within %s: %w", c.Wait, last)
 		case <-time.After(healthPoll):
 		}
 	}

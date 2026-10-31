@@ -97,53 +97,15 @@ func runsCilium(req *createRequest, class *clusterv1.ClusterClass) bool {
 	return raw != nil && json.Unmarshal(raw, &cni) == nil && cni == "cilium"
 }
 
-// newRanges are a new cluster's pod and service ranges, or answers the request. A cluster that runs
-// Cilium may join a Cluster Mesh later, so its name has to be one Cilium takes, and its ranges keep
-// clear of every other cluster's.
-func (s *Server) newRanges(w http.ResponseWriter, r *http.Request, u user, req *createRequest, class *clusterv1.ClusterClass) ([]string, []string, bool) {
-	nodes, err := nodesPrefix(req.Variables["network"])
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
-		return nil, nil, false
+// ciliumNameFits answers the request unless the cluster's name is one Cilium takes, for a cluster
+// that runs it and may join a Cluster Mesh later. The controller's admission holds kubectl's
+// clusters to the same, and picks the ranges of both.
+func ciliumNameFits(w http.ResponseWriter, req *createRequest, class *clusterv1.ClusterClass) bool {
+	if runsCilium(req, class) && len(req.Name) > provisioner.MaxCiliumClusterName {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("name: at most %d characters with Cilium", provisioner.MaxCiliumClusterName))
+		return false
 	}
-	var others *otherRanges
-	if runsCilium(req, class) {
-		if len(req.Name) > provisioner.MaxCiliumClusterName {
-			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("name: at most %d characters with Cilium", provisioner.MaxCiliumClusterName))
-			return nil, nil, false
-		}
-		if others, err = s.otherClusterRanges(r.Context(), u); err != nil {
-			s.kubeError(w, r, err)
-			return nil, nil, false
-		}
-	}
-	pods, services, err := clusterRanges(class, nodes, req.Pods, req.Services, others)
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
-		return nil, nil, false
-	}
-	return pods, services, true
-}
-
-// otherClusterRanges are the pod and service ranges of every Kubehenge cluster.
-func (s *Server) otherClusterRanges(ctx context.Context, u user) (*otherRanges, error) {
-	var list clusterv1.ClusterList
-	if err := u.kube.List(ctx, &list); err != nil {
-		return nil, fmt.Errorf("listing the clusters: %w", err)
-	}
-	var classes clusterv1.ClusterClassList
-	if err := u.kube.List(ctx, &classes, client.InNamespace(s.ClassNamespace)); err != nil {
-		return nil, fmt.Errorf("listing the cluster classes: %w", err)
-	}
-	others := &otherRanges{}
-	for i := range list.Items {
-		if c := &list.Items[i]; provisioner.Owns(c, s.ClassNamespace) {
-			pods, services := provisioner.ClusterRanges(c, classes.Items)
-			others.pods = append(others.pods, parseRanges(pods)...)
-			others.services = append(others.services, parseRanges(services)...)
-		}
-	}
-	return others, nil
+	return true
 }
 
 func visibleKeys(views []clusterView) map[string]bool {

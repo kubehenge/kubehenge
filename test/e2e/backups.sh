@@ -84,7 +84,13 @@ velero_phase() {
         "$4") ;;
         Failed | FailedValidation | PartiallyFailed)
             KUBECONFIG="$1" kubectl -n velero get "$2" "$3" -o yaml >&2
-            KUBECONFIG="$1" kubectl -n velero logs deployment/velero --tail=100 >&2
+            # The Deployment's selector takes in the node agents' pods too, so by the server's own
+            # label; its CLI fetches what went wrong from the store.
+            velero_server=$(KUBECONFIG="$1" kubectl -n velero get pods -l name=velero -o name | head -n 1)
+            # shellcheck disable=SC2310 # what it prints is only for the reader; the test fails below.
+            KUBECONFIG="$1" kubectl -n velero exec "${velero_server}" -c velero -- /velero "$2" describe "$3" --details >&2 || true
+            # shellcheck disable=SC2310 # as above.
+            KUBECONFIG="$1" kubectl -n velero logs "${velero_server}" -c velero --tail=100 >&2 || true
             fail "$2 $3 ended ${phase}"
             ;;
         *) return 1 ;;

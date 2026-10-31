@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"os"
@@ -35,7 +36,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
@@ -73,9 +73,12 @@ const (
 
 // controllerOptions are the controller command's flags.
 type controllerOptions struct {
-	r                 provisioner.Reconciler
-	settings          provisioner.Settings
-	port              int
+	r        provisioner.Reconciler
+	settings provisioner.Settings
+	port     int
+	// extensionHost is the address the Runtime Extension server listens on; empty, as in the pod,
+	// is every interface.
+	extensionHost     string
 	certDir           string
 	healthAddr        string
 	metricsAddr       string
@@ -376,7 +379,7 @@ func (o *controllerOptions) newExtensionServer() (*server.Server, error) {
 	if err := runtimehooksv1.AddToCatalog(catalog); err != nil {
 		return nil, fmt.Errorf("the runtime hooks' catalog: %w", err)
 	}
-	extensions, err := server.New(server.Options{Port: o.port, CertDir: o.certDir, Catalog: catalog})
+	extensions, err := server.New(server.Options{Host: o.extensionHost, Port: o.port, CertDir: o.certDir, Catalog: catalog})
 	if err != nil {
 		return nil, fmt.Errorf("the Runtime Extension server: %w", err)
 	}
@@ -409,13 +412,17 @@ func (o *controllerOptions) addReclaimer(mgr manager.Manager, conn *pve.Config, 
 	return nil
 }
 
-// strictJSON decodes s into v, refusing a key v has no field for: a misspelt key would otherwise
-// leave its namespaces held to the cluster's level without a word.
+// strictJSON decodes s into v, refusing a key v has no field for and anything after the value: a
+// misspelt key, or the keys after a brace closed too early, would otherwise leave their namespaces
+// held to the cluster's level without a word.
 func strictJSON(s string, v any) error {
 	d := json.NewDecoder(strings.NewReader(s))
 	d.DisallowUnknownFields()
 	if err := d.Decode(v); err != nil {
 		return fmt.Errorf("decoding: %w", err)
+	}
+	if _, err := d.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("decoding: more follows after the first JSON value")
 	}
 	return nil
 }
@@ -862,7 +869,9 @@ func addHooks(extensions *server.Server, scheme *runtime.Scheme, hooks *provisio
 			return fmt.Errorf("hook %s: %w", handlers[i].Name, err)
 		}
 	}
-	extensions.Register("/validate-cluster", admission.WithValidator(scheme, &provisioner.ClusterValidator{Hooks: hooks}))
+	for path, h := range provisioner.AdmissionWebhooks(scheme, hooks) {
+		extensions.Register(path, h)
+	}
 	return nil
 }
 

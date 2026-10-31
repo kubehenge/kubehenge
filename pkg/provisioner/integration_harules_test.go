@@ -11,6 +11,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubehenge/kubehenge/test/integration"
 )
 
 // TestIntegrationHARulesOfferedThroughTheChart holds the chart's accounts to the HA rules offered
@@ -47,7 +49,7 @@ func TestIntegrationHARulesOfferedThroughTheChart(t *testing.T) { //nolint:paral
 		t.Fatalf("the interface reads the record without the setting: %v", err)
 	}
 
-	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace,
+	for _, o := range integration.RenderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace,
 		"testdata/integration-values.yaml", "testdata/offer-ha-rules-values.yaml") {
 		if o.GetKind() == "Role" && o.GetName() == "kubehenge-interface" && o.GetNamespace() == classNamespace {
 			if err := admin.Apply(ctx, client.ApplyConfigurationFromUnstructured(o), client.FieldOwner("helm"), client.ForceOwnership); err != nil {
