@@ -193,9 +193,6 @@ type replicas struct {
 	Ready   int32 `json:"ready"`
 }
 
-// columnGap is the room between list's columns.
-const columnGap = 2
-
 func (o *clusterOptions) list(ctx context.Context, out io.Writer) error {
 	body, err := o.call(ctx, http.MethodGet, "/api/clusters", nil)
 	if err != nil {

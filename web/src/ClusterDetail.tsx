@@ -6,12 +6,14 @@ import { BackupsDialog, BackupsView, backupsOf, backupsRows, useClassTargets } f
 import { issuesFromCA, saveCA } from "./Certificates";
 import { clusterActions, clusterPath, headlampURL, views, type Intent, type View } from "./cluster-paths";
 import { OptionDialog, Options, type OptionAction, type OptionRow } from "./ClusterOptions";
+import { Deleting } from "./Deletion";
 import { EtcdSnapshotsDialog, EtcdSnapshotsView, etcdSnapshotsOf, etcdSnapshotsRows } from "./EtcdSnapshots";
 import { ClusterStatus, fleetKey, useFleet } from "./fleet";
 import { useClusterChanges } from "./live";
 import { Machines, Placement } from "./Machines";
 import { nodeOSKey } from "./node-os";
 import { Pools } from "./Pools";
+import { RecoveryState, RollStalled } from "./Recovery";
 import { Link, navigate, useQuery } from "./router";
 import { StagedBar, StagingProvider } from "./Staging";
 import { useStaging } from "./staging-context";
@@ -414,6 +416,19 @@ export function ClusterDetail({
         <HeldUp cluster={c} />
         <ErrorBox message={error} />
         <ErrorBox message={downloadError} />
+        <Deleting
+          cluster={c}
+          onAbandoned={() => {
+            void reload();
+          }}
+        />
+        <RollStalled
+          cluster={c}
+          why={why}
+          onRecovered={() => {
+            void reload();
+          }}
+        />
 
         <ClusterViews cluster={c} view={view} />
         <AttentionStrip cluster={c} view={view} />
@@ -684,6 +699,7 @@ function Summary({
       {filled(c.talos?.failed) && (
         <TalosFailure cluster={c} failed={c.talos.failed} can={can} why={why} onRetried={onChanged} />
       )}
+      <RecoveryState cluster={c} />
     </div>
   );
 }

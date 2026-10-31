@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -29,6 +30,8 @@ type fakePool struct {
 	deleted  []string
 	leftover []string
 	fail     map[string]bool
+	// flaky fails a line's builds this many times before one succeeds.
+	flaky map[string]int
 }
 
 func (p *fakePool) List(context.Context) ([]*proxmox.ClusterResource, error) {
@@ -38,6 +41,10 @@ func (p *fakePool) List(context.Context) ([]*proxmox.ClusterResource, error) {
 func (p *fakePool) Create(_ context.Context, t *templates.Template) (int, error) {
 	if p.fail[t.LineName] {
 		return 0, errors.New("the mirror is down")
+	}
+	if p.flaky[t.LineName] > 0 {
+		p.flaky[t.LineName]--
+		return 0, errors.New("the mirror is being synced")
 	}
 	p.built = append(p.built, t.Name)
 	id := 9100 + len(p.list)
@@ -270,10 +277,41 @@ func TestTemplateRefreshGoesOnPastAFailedLine(t *testing.T) {
 	t.Parallel()
 	pool := &fakePool{fail: map[string]bool{"kubehenge-rke2-almalinux-10": true}}
 	kube := refreshKube(t, kubeadmCluster("api", "v1.36.5", day(20)))
-	r := &TemplateRefresh{Kube: kube, Pool: pool, ClassNamespace: "kubehenge-system", Keep: 2, Now: func() time.Time { return day(22) }}
+	var waits []time.Duration
+	r := &TemplateRefresh{
+		Kube: kube, Pool: pool, ClassNamespace: "kubehenge-system", Keep: 2, Now: func() time.Time { return day(22) },
+		Retry: templates.Retry{Sleep: func(_ context.Context, d time.Duration) error { waits = append(waits, d); return nil }},
+	}
 	err := r.Run(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "kubehenge-rke2-almalinux-10") || len(pool.built) != 1 {
+	if err == nil || !strings.Contains(err.Error(), "kubehenge-rke2-almalinux-10") || !strings.Contains(err.Error(), "after 3 attempts") || len(pool.built) != 1 {
 		t.Errorf("error %v, built %v", err, pool.built)
+	}
+	if !slices.Equal(waits, []time.Duration{2 * time.Minute, 8 * time.Minute}) {
+		t.Errorf("waited %v", waits)
+	}
+}
+
+// A build that fails for a while is tried again, the failures in the run's log.
+func TestTemplateRefreshRetriesABuild(t *testing.T) {
+	t.Parallel()
+	pool := &fakePool{flaky: map[string]int{"kubehenge-rke2-almalinux-10": 1}}
+	kube := refreshKube(t, kubeadmCluster("db", "v1.37.1", day(20)))
+	var log []string
+	r := &TemplateRefresh{
+		Kube: kube, Pool: pool, ClassNamespace: "kubehenge-system", Keep: 2, Now: func() time.Time { return day(22) },
+		Log:   func(format string, args ...any) { log = append(log, fmt.Sprintf(format, args...)) },
+		Retry: templates.Retry{Sleep: func(context.Context, time.Duration) error { return nil }},
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(pool.built) != 2 {
+		t.Errorf("built %v", pool.built)
+	}
+	if !slices.ContainsFunc(log, func(l string) bool {
+		return strings.HasPrefix(l, "building kubehenge-rke2-almalinux-10") && strings.Contains(l, "failed (attempt 1 of 3): the mirror is being synced; trying again in 2m0s")
+	}) {
+		t.Errorf("log %q", log)
 	}
 }
 

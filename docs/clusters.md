@@ -238,6 +238,8 @@ An autoscaled pool is sized by the [cluster autoscaler](https://github.com/kuber
 
 **Upgrade** offers the newer releases of the cluster's minor version and of the next one: Kubernetes upgrades one minor version at a time and never back, and the interface refuses anything else. Cluster API replaces the control-plane nodes one by one first, then the workers. A kubeadm cluster needs the template of the new version first. The newest version the cluster may move to is chosen already, and under it the dialog checks before you upgrade: the API server's dry run of the change and what it replaces (a refusal disables **Upgrade**), whether the node addresses leave one spare for the extra node a rollout adds, and how many problems the cluster's Health page lists. Automatic upgrades inside a maintenance window are set under **Options**, **Edit** beside Automatic upgrades. Both are described in [upgrading.md](upgrading.md#workload-clusters).
 
+A cluster with one control plane runs on two etcd members while its control plane is replaced, so its API stops if either does. The plan of such a change warns of it, as kubectl does. If the new machine has not become ready after 20 minutes, the cluster's page says the roll stalled, why, and whether the API still answers, and offers **Recover…**, which keeps one control-plane machine and replaces the others ([troubleshooting.md](troubleshooting.md#one-control-plane-its-roll-stalled)).
+
 ## Node image refresh
 
 The nodes of kubeadm, RKE2 and k3s clusters are clones of a VM template of their node OS, which the management cluster builds again every week with the node OS's updates ([templates.md](templates.md#the-weekly-build)). Once a new build is a day old, each cluster's nodes are replaced with clones of it inside the cluster's maintenance window, one at a time as in an upgrade, only while the cluster is healthy and nothing else rolls out, whether automatic Kubernetes upgrades are on or not. The day gives a broken build time to be noticed before every cluster takes it; deleting the build stops clusters that have not moved yet. Scaling up or replacing a failed node in between clones the build the other nodes run.
@@ -517,6 +519,8 @@ Otherwise **Restore…** lists the steps for the chosen snapshot, with the comma
 
 Deleting the cluster that runs Rancher first removes every registered cluster from Rancher.
 
+While the cluster is being deleted, its page lists what the deletion waits on: each object whose finalizer holds it, with what that object reports, such as a node drain a disruption budget refuses, or a VM on a node that is offline. A deletion that waits longer than it should is reported stalled, and one that can never finish can be abandoned ([troubleshooting.md](troubleshooting.md#a-cluster-does-not-finish-deleting)).
+
 ## Who may do what
 
 The interface checks the signed-in user's Proxmox VE privileges on each cluster's pool, then acts with its own account in the management cluster. Clusters are shared with the same ACLs as VMs.
@@ -706,6 +710,13 @@ kubectl -n clusters patch cluster prod --type=json \
   -p '[{"op":"replace","path":"/spec/topology/workers/machineDeployments/0/replicas","value":5}]'
 kubectl -n clusters patch cluster prod --type=merge -p '{"spec":{"topology":{"version":"v1.37.1+rke2r1"}}}'
 kubectl -n clusters delete cluster prod
+```
+
+A control plane whose roll stalled is recovered keeping one of its machines, as **Recover…** does; the cluster's conditions and events say how it goes:
+
+```sh
+kubectl -n clusters annotate cluster prod \
+  kubehenge.dev/etcd-restore="{\"machine\":\"prod-cp-abcde\",\"at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
 ```
 
 What Kubehenge's controller reports on a cluster is on the Cluster itself, as in the interface:

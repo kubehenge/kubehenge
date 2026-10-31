@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/kubehenge/kubehenge/pkg/release"
@@ -143,8 +144,20 @@ func newUpdater(t *testing.T, rs *releaseServer) (*Updater, *int) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(root, "usr", "local", "bin", "kubehenge"), []byte("binary 0.1.0"), 0o600); err != nil {
-		t.Fatal(err)
+	installed := map[string]string{
+		"usr/local/bin/kubehenge":                               "binary 0.1.0",
+		"usr/local/share/kubehenge/management-cluster/main.tf":  "module 0.1.0",
+		"usr/local/share/kubehenge/appliance/kubehenge.service": "unit 0.1.0",
+		"etc/systemd/system/kubehenge.service":                  "unit 0.1.0",
+	}
+	for name, body := range installed {
+		p := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := os.MkdirAll(filepath.Join(spool, "requests"), 0o700); err != nil {
 		t.Fatal(err)
@@ -239,6 +252,114 @@ func TestUpdateToAVersion(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(string(u.Spool), "requests", "upgrade.json")); !os.IsNotExist(err) {
 		t.Fatal("the request was left in the spool")
 	}
+}
+
+// installedIs checks that the binary, module, OpenTofu and interface unit in place are version's.
+func installedIs(t *testing.T, u *Updater, version, tofu string) {
+	t.Helper()
+	share := filepath.Join(u.Root, "usr", "local", "share")
+	for path, want := range map[string]string{
+		u.binary("kubehenge"): "binary " + version,
+		filepath.Join(share, "kubehenge", "management-cluster", "main.tf"):     "module " + version,
+		filepath.Join(u.Root, "etc", "systemd", "system", "kubehenge.service"): "unit " + version,
+	} {
+		if got := read(t, path); got != want {
+			t.Errorf("%s = %q, want %q", path, got, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(u.Root, "etc", "systemd", "system", "kubehenge-update.path")); version == "0.1.0" && !os.IsNotExist(err) {
+		t.Errorf("a unit only the new release has is left: %v", err)
+	}
+	if _, err := os.Stat(u.binary("tofu")); tofu == "" && !os.IsNotExist(err) {
+		t.Errorf("OpenTofu the old release did not have is left: %v", err)
+	} else if tofu != "" && read(t, u.binary("tofu")) != tofu {
+		t.Errorf("tofu = %q, want %q", read(t, u.binary("tofu")), tofu)
+	}
+	if left, _ := filepath.Glob(filepath.Join(share, ".kubehenge-*")); len(left) != 0 {
+		t.Errorf("left behind: %v", left)
+	}
+}
+
+// An upgrade whose interface does not serve is undone, and the status says so.
+func TestUpdateRollsBack(t *testing.T) {
+	t.Parallel()
+	rs := newReleaseServer(t)
+	u, restarts := newUpdater(t, rs)
+	serving := func() string { return read(t, u.binary("kubehenge")) }
+	u.Healthy = func(context.Context) error {
+		if serving() == "binary 0.2.0" {
+			return errors.New("the interface did not answer within 2m0s")
+		}
+		return nil
+	}
+	if err := u.Spool.Request(UpdateRequest{Version: "0.2.0"}); err != nil {
+		t.Fatal(err)
+	}
+	err := u.Run(context.Background())
+	want := "release 0.2.0 did not start: the interface did not answer within 2m0s; rolled back to 0.1.0"
+	if err == nil || err.Error() != want || *restarts != 2 {
+		t.Fatalf("update: %v, restarts %d", err, *restarts)
+	}
+	installedIs(t, u, "0.1.0", "")
+	if st := u.Spool.Status(); st == nil || st.State != "failed" || st.From != "0.1.0" || st.To != "0.2.0" || st.Error != want || !st.RolledBack {
+		t.Fatalf("status = %+v", st)
+	}
+	// Released again, so the interface can start runs.
+	unlock, err := LockJobs(u.ApplianceDir)
+	if err != nil {
+		t.Fatalf("lock left held: %v", err)
+	}
+	unlock()
+
+	// One that serves stays, and leaves nothing set aside.
+	if err := u.Spool.Request(UpdateRequest{Version: "0.3.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	installedIs(t, u, "0.3.0", "")
+}
+
+func TestUpdateRollsBackAFailedRestart(t *testing.T) {
+	t.Parallel()
+	rs := newReleaseServer(t)
+	u, _ := newUpdater(t, rs)
+	if err := os.WriteFile(u.binary("tofu"), []byte("tofu 1.13.0"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restarts := 0
+	u.Restart = func(context.Context) error {
+		restarts++
+		if restarts == 1 {
+			return errors.New("systemctl restart kubehenge.service: exit status 1")
+		}
+		return nil
+	}
+	if err := u.Spool.Request(UpdateRequest{Version: "0.2.0"}); err != nil {
+		t.Fatal(err)
+	}
+	err := u.Run(context.Background())
+	if err == nil || !strings.HasSuffix(err.Error(), "; rolled back to 0.1.0") || restarts != 2 {
+		t.Fatalf("update: %v, restarts %d", err, restarts)
+	}
+	installedIs(t, u, "0.1.0", "tofu 1.13.0")
+}
+
+// When the old release does not serve either, the status says both.
+func TestUpdateRollBackFails(t *testing.T) {
+	t.Parallel()
+	rs := newReleaseServer(t)
+	u, _ := newUpdater(t, rs)
+	u.Healthy = func(context.Context) error { return errors.New("the interface answered 502 Bad Gateway") }
+	if err := u.Spool.Request(UpdateRequest{Version: "0.2.0"}); err != nil {
+		t.Fatal(err)
+	}
+	err := u.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "; rolling back to 0.1.0 failed too: the interface answered 502") {
+		t.Fatalf("update: %v", err)
+	}
+	installedIs(t, u, "0.1.0", "")
 }
 
 func TestUpdateByPolicy(t *testing.T) {

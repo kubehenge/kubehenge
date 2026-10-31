@@ -22,6 +22,10 @@ const DefaultIndex = "https://github.com/kubehenge/kubehenge/releases/latest/dow
 const (
 	// updateTimeout bounds the download of a release, the largest file the updater fetches.
 	updateTimeout = 10 * time.Minute
+	// healthWait is how long the restarted interface has to answer, and healthSettle how long it
+	// then has to keep running, with systemd's restarts 5 seconds apart, before an upgrade counts.
+	healthWait   = 2 * time.Minute
+	healthSettle = 20 * time.Second
 	// privateKeyMode keeps the release key to the one who made it.
 	privateKeyMode os.FileMode = 0o600
 	// signatureMode lets anyone read a signature, which is public.
@@ -38,7 +42,12 @@ func releaseIndexDefault() string {
 }
 
 func newUpdateCommand() *cobra.Command {
-	u := appliance.Updater{Root: "/", Restart: appliance.RestartService, Current: release.Version, Key: release.PublicKey()}
+	check := appliance.ServiceCheck{
+		CertFile: "/etc/kubehenge/tls.crt", Address: "127.0.0.1:443", Wait: healthWait, Settle: healthSettle,
+	}
+	u := appliance.Updater{
+		Root: "/", Restart: appliance.RestartService, Healthy: check.Healthy, Current: release.Version, Key: release.PublicKey(),
+	}
 	var spool string
 	cmd := &cobra.Command{
 		Use:   "update",

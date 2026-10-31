@@ -519,6 +519,7 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 	}
 
 	checkInterfaceRulesAdmission(ctx, t, c)
+	checkAbandonAdmission(ctx, t, c)
 
 	workerless := &clusterv1.Cluster{
 		Namespace: "team-a", Name: "workerless",
@@ -643,6 +644,42 @@ func checkInterfaceRulesAdmission(ctx context.Context, t *testing.T, c client.Cl
 	}
 	if err := c.Create(ctx, offered("taker", 1, "10.0.0.20-10.0.0.30", "10.0.0.6")); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "overlap 10.0.0.10-10.0.0.20 of cluster team-a/first") {
 		t.Fatalf("a cluster on another's node addresses: %v", err)
+	}
+}
+
+// checkAbandonAdmission has the API server ask the validator about the name that abandons a
+// cluster's deletion, also once the cluster is being deleted and the validator leaves it alone
+// otherwise.
+func checkAbandonAdmission(ctx context.Context, t *testing.T, c client.Client) {
+	t.Helper()
+	cluster := &clusterv1.Cluster{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: "team-a", Name: "first"}, cluster); err != nil {
+		t.Fatal(err)
+	}
+	patch := func(p string) error {
+		return c.Patch(ctx, cluster, client.RawPatch(types.MergePatchType, []byte(p)))
+	}
+	annotate := func(value string) error {
+		return patch(fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, AbandonAnnotation, value))
+	}
+	if err := annotate("first"); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "only a cluster being deleted") {
+		t.Fatalf("abandoning the deletion of a cluster not being deleted: %v", err)
+	}
+	// A finalizer of the test's own keeps the cluster while it is being deleted.
+	if err := patch(`{"metadata":{"finalizers":["kubehenge.dev/test-hold"]}}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Delete(ctx, cluster); err != nil {
+		t.Fatal(err)
+	}
+	if err := annotate("not-first"); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "must be the cluster's name") {
+		t.Fatalf("abandoning the deletion with another cluster's name: %v", err)
+	}
+	if err := annotate("first"); err != nil {
+		t.Fatalf("abandoning the deletion with the cluster's name: %v", err)
+	}
+	if err := patch(`{"metadata":{"finalizers":null}}`); err != nil {
+		t.Fatalf("releasing the deleted cluster: %v", err)
 	}
 }
 

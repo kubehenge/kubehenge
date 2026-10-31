@@ -177,6 +177,7 @@ func (s *Server) Run(ctx context.Context) {
 	s.init()
 	go s.autoUpgrade(ctx)
 	go s.watchChanges(ctx)
+	go s.backUpManagementEtcd(ctx)
 	if s.Headlamp != nil {
 		go s.syncHeadlamp(ctx, headlampSyncEvery)
 	}
@@ -187,6 +188,8 @@ func (s *Server) Run(ctx context.Context) {
 func (s *Server) Handler() http.Handler {
 	s.init()
 	mux := http.NewServeMux()
+	// The appliance's updater asks it whether the interface serves on the software it installed.
+	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc("GET /api/realms", s.realms)
 	mux.HandleFunc("POST /api/session", s.signIn)
 	mux.HandleFunc("POST /api/session/second-factor", s.secondFactor)
@@ -212,6 +215,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/appliance/upgrades/settings", s.signedIn(s.upgradeSettings))
 	mux.HandleFunc("PUT /api/appliance/upgrades/management", s.signedIn(s.keepUnattended))
 	mux.HandleFunc("DELETE /api/appliance/upgrades/management", s.signedIn(s.forgetUnattended))
+	mux.HandleFunc("GET /api/appliance/etcd-backups", s.signedIn(s.managementBackups))
+	mux.HandleFunc("PUT /api/appliance/etcd-backups", s.signedIn(s.configureManagementBackups))
+	mux.HandleFunc("DELETE /api/appliance/etcd-backups", s.signedIn(s.stopManagementBackups))
+	mux.HandleFunc("GET /api/appliance/etcd-backups/snapshots", s.signedIn(s.managementSnapshots))
+	mux.HandleFunc("POST /api/appliance/etcd-backups/snapshots", s.signedIn(s.takeManagementSnapshot))
+	mux.HandleFunc("POST /api/appliance/etcd-backups/snapshots/{name}/restore", s.signedIn(s.restoreManagementEtcd))
 	mux.HandleFunc("GET /api/templates", s.signedIn(s.listTemplates))
 	mux.HandleFunc("POST /api/templates", s.signedIn(s.createTemplate))
 	mux.HandleFunc("DELETE /api/templates/{vmid}", s.signedIn(s.deleteTemplate))
@@ -279,6 +288,9 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/etcd-snapshots/{snapshot}", s.managed(s.downloadEtcdSnapshot))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/etcd-snapshots/{snapshot}/restore-plan", s.managed(s.etcdRestorePlan))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/etcd-restores", s.managed(s.restoreEtcd))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/control-plane-recovery", s.managed(s.controlPlaneRecovery))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/control-plane-recovery", s.managed(s.recoverControlPlane))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/abandon-deletion", s.managed(s.abandonDeletion))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.clusterCredential))
 	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.storeClusterCredential))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/credentials/{purpose}", s.managed(s.removeClusterCredential))

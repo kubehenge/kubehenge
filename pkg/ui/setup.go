@@ -41,6 +41,9 @@ type setupView struct {
 	// renew it on the node with the installer, naming the appliance by its guest ID.
 	CertificateExpires *time.Time `json:"certificateExpires,omitempty"`
 	ApplianceVMID      int        `json:"applianceVMID,omitempty"`
+	// CredentialsExpire is when the management cluster's admin credentials in the state run out,
+	// which an apply in their last month renews.
+	CredentialsExpire *time.Time `json:"credentialsExpire,omitempty"`
 	// ProxmoxInsecure tells that the Proxmox VE API's certificate goes unverified.
 	ProxmoxInsecure bool `json:"proxmoxInsecure,omitempty"`
 	// Resumes tells that an earlier run left its encrypted state, so the setup takes that run's
@@ -78,6 +81,9 @@ func (s *Server) applianceStatus(w http.ResponseWriter, r *http.Request, u user,
 	v.Resumes = !v.Ready && a.HasState()
 	if v.Ready {
 		v.Upgrade = s.managementUpgrade()
+		if last := a.LastApplied(); last != nil && !last.CredentialsExpire.IsZero() {
+			v.CredentialsExpire = &last.CredentialsExpire
+		}
 	}
 	v.ApplianceVMID, v.ProxmoxInsecure = s.ApplianceVMID, s.ProxmoxInsecure
 	if !s.CertificateExpires.IsZero() {

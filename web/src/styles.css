@@ -2152,6 +2152,88 @@ fieldset.choices .check + .info-toggle + .info-text + .hint {
   margin: 0 0 12px;
 }
 
+/* What to act on before the rest of the page, such as a stalled roll or deletion: its own callout,
+   in the colour of how bad it is, with the way out inside it. */
+.callout {
+  --tone: var(--warning);
+  border: 1px solid color-mix(in srgb, var(--tone) 50%, transparent);
+  border-left-width: 3px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--tone) 8%, var(--surface));
+  padding: 10px 12px;
+  margin: 0 0 12px;
+}
+
+.callout.callout-error {
+  --tone: var(--error);
+}
+
+.callout.callout-run {
+  --tone: var(--run);
+}
+
+.callout p {
+  margin: 0;
+}
+
+.callout-title {
+  font-weight: 700;
+  color: var(--tone);
+}
+
+.callout .callout-said {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.callout ul.callout-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.callout-list li {
+  overflow-wrap: anywhere;
+}
+
+.callout-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-top: 10px;
+}
+
+.callout-actions.callout-end {
+  justify-content: flex-end;
+}
+
+.may-leave p {
+  margin: 0;
+}
+
+.may-leave ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.callout-actions details.advanced {
+  margin: 4px 0 0;
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.callout-actions details[open] {
+  flex-basis: 100%;
+  order: 2;
+}
+
+.callout-actions details .restore-command {
+  margin-top: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* What the controller reports on a cluster keeps its lines, such as a Proxmox VE task's log, in a
    quieter block under the line that says what is wrong. */
 .held-up pre {

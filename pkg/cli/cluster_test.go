@@ -15,14 +15,14 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
-// fakeInterface answers the interface's cluster API for the token dev@pve!ci=secret, and records
+// fakeClusterAPI answers the interface's cluster API for the token dev@pve!ci=secret, and records
 // each change it is sent.
-type fakeInterface struct {
+type fakeClusterAPI struct {
 	mu   sync.Mutex
 	sent []string
 }
 
-func (f *fakeInterface) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (f *fakeClusterAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Authorization") != "PVEAPIToken=dev@pve!ci=secret" {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = io.WriteString(w, `{"error":"Proxmox VE refused the API token"}`)
@@ -77,7 +77,7 @@ func runCluster(t *testing.T, url, token string, args ...string) (string, error)
 
 func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 	t.Parallel()
-	fake := &fakeInterface{}
+	fake := &fakeClusterAPI{}
 	srv := httptest.NewServer(fake)
 	t.Cleanup(srv.Close)
 	const token = "dev@pve!ci=secret" //nolint:gosec // the fake interface's own
@@ -149,7 +149,7 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 
 func TestClusterCommandsSayWhatWentWrong(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(&fakeInterface{})
+	srv := httptest.NewServer(&fakeClusterAPI{})
 	t.Cleanup(srv.Close)
 
 	for _, c := range []struct {
