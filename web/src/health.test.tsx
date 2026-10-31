@@ -274,6 +274,36 @@ describe("health page", () => {
     ).toBeInTheDocument();
   });
 
+  it("says of a node not ready what the machines say: on its way, down, or not reporting", async () => {
+    const worker = degraded.nodes.items[1];
+    const node = (name: string, how: { down?: boolean; silent?: boolean }) => ({
+      ...worker,
+      name,
+      ready: false,
+      ...how,
+    });
+    fakeServer({
+      [healthPath]: {
+        body: {
+          ...degraded,
+          nodes: {
+            items: [
+              node("web-md-0-b", {}),
+              node("web-md-0-c", { down: true }),
+              node("web-md-0-d", { down: true, silent: true }),
+            ],
+          },
+        },
+      },
+    });
+    render(<HealthView cluster={cluster} />);
+    const status = async (name: string) =>
+      within(await screen.findByRole("row", { name: new RegExp(`^${name}`, "u") }));
+    expect((await status("web-md-0-b")).getByText("Not ready")).toHaveClass("status-progress");
+    expect((await status("web-md-0-c")).getByText("Not ready")).toHaveClass("status-error");
+    expect((await status("web-md-0-d")).getByText("Not reporting")).toHaveClass("status-error");
+  });
+
   it("asks again more often while the cluster is not healthy", async () => {
     const routes: Record<string, Route> = { [healthPath]: { body: degraded } };
     const calls = fakeServer(routes);

@@ -450,7 +450,11 @@ function nodeStatus(n: HealthNode, inside: boolean): { state: State; text: strin
     return inside ? { state: "progress", text: "Joining" } : { state: "idle", text: "Unknown" };
   }
   if (!n.ready) {
-    return { state: "error", text: "Not ready" };
+    // As the machines say it: down once it has been not ready for longer than starting takes.
+    if (n.down !== true) {
+      return { state: "progress", text: "Not ready" };
+    }
+    return { state: "error", text: n.silent === true ? "Not reporting" : "Not ready" };
   }
   if ((n.pressure ?? []).length > 0 || n.unschedulable === true) {
     return { state: "warning", text: "Ready" };

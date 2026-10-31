@@ -949,7 +949,8 @@ button.go {
   border-left-color: var(--warning);
 }
 
-.attention-strip > a {
+/* The ways on sit together at the end of the strip. */
+.attention-strip > a:first-of-type {
   margin-left: auto;
 }
 
