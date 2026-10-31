@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/kubehenge/kubehenge/test/integration"
 )
 
 // The Talos class asks Talos's flannel for network policies while it is the cluster's CNI, and
@@ -22,7 +24,7 @@ func TestIntegrationTalosFlannelPolicies(t *testing.T) {
 		"talos-cni":              {"apiVersion": "v1alpha1", "kind": "KubeFlannelCNIConfig", "$patch": "delete"},
 	}
 	seen := map[string]bool{}
-	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
+	for _, o := range integration.RenderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
 		if o.GetKind() != "ClusterClass" || o.GetName() != "kubehenge-talos" {
 			continue
 		}

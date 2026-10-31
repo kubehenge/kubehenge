@@ -11,6 +11,8 @@ import (
 	"github.com/Masterminds/sprig/v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
+
+	"github.com/kubehenge/kubehenge/test/integration"
 )
 
 // capiTemplate runs a patch's template as Cluster API does, with sprig's functions over the
@@ -37,7 +39,7 @@ func TestIntegrationChartEtcdUpload(t *testing.T) {
 		"enabled": true, "target": "store", "schedule": "0 */6 * * *", "keep": 7, "distributionUpload": true,
 	}}
 	found := map[string]bool{}
-	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
+	for _, o := range integration.RenderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
 		if o.GetKind() != "ClusterClass" {
 			continue
 		}

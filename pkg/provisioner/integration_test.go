@@ -9,16 +9,14 @@ package provisioner
 // and scale subresources, finalizers and deletion. Run it with `make integration`.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
+	"hash/fnv"
 	"maps"
+	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"regexp"
 	"slices"
 	"strconv"
@@ -27,7 +25,6 @@ import (
 	"time"
 
 	"github.com/luthermonson/go-proxmox"
-	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -36,7 +33,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/rest"
 	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -44,10 +40,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
-	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	"github.com/kubehenge/kubehenge/test/integration"
 )
 
-const classNamespace = "kubehenge-system"
+const classNamespace = integration.ClassNamespace
 
 // classProviders is testdata/integration-values.yaml's providerNamespaces.
 var classProviders = map[string][]string{
@@ -58,7 +55,7 @@ var classProviders = map[string][]string{
 }
 
 func TestMain(m *testing.M) {
-	if err := ownChildren(); err != nil {
+	if err := integration.OwnChildren(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -71,7 +68,7 @@ func TestMain(m *testing.M) {
 func startAPI(t *testing.T) client.Client {
 	t.Helper()
 	objects, _ := apiObjects(t)
-	_, c, _ := startAPIWith(t, objects, nil)
+	_, c, _ := startAPIWith(t, objects, integration.Webhooks{})
 	return c
 }
 
@@ -89,137 +86,32 @@ func startValidatingAPI(t *testing.T) (client.Client, *envtest.WebhookInstallOpt
 func startAPIConfig(t *testing.T, values ...string) (*rest.Config, client.Client) {
 	t.Helper()
 	objects, _ := apiObjects(t, values...)
-	cfg, c, _ := startAPIWith(t, objects, nil)
+	cfg, c, _ := startAPIWith(t, objects, integration.Webhooks{})
 	return cfg, c
 }
 
 // apiObjects renders the providers' chart and Kubehenge's with the module's values and then those
 // of values, and parts out Kubehenge's webhook configurations.
-func apiObjects(t *testing.T, values ...string) ([]*unstructured.Unstructured, []*admissionregistrationv1.ValidatingWebhookConfiguration) {
+func apiObjects(t *testing.T, values ...string) ([]*unstructured.Unstructured, integration.Webhooks) {
 	t.Helper()
-	// The providers' release comes first, as in the module, and carries no webhooks of its own.
-	objects := renderChart(t, "cluster-api-providers", "../../management-cluster/charts/cluster-api-providers", "capi-operator-system",
-		"testdata/cluster-api-providers-values.yaml")
-	var webhooks []*admissionregistrationv1.ValidatingWebhookConfiguration
-	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, append([]string{"testdata/integration-values.yaml"}, values...)...) {
-		if o.GetKind() != "ValidatingWebhookConfiguration" {
-			objects = append(objects, o)
-			continue
-		}
-		w := &admissionregistrationv1.ValidatingWebhookConfiguration{}
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(o.Object, w); err != nil {
-			t.Fatal(err)
-		}
-		webhooks = append(webhooks, w)
-	}
-	return objects, webhooks
+	return integration.Charts(t, "../..", values...)
 }
 
-func startAPIWith(t *testing.T, objects []*unstructured.Unstructured, webhooks []*admissionregistrationv1.ValidatingWebhookConfiguration) (*rest.Config, client.Client, *envtest.WebhookInstallOptions) {
+// startAPIWith starts an API server with the CRDs and installs objects in it, the namespaces the
+// tests use made first, with webhooks pointing at a local server the test serves.
+func startAPIWith(t *testing.T, objects []*unstructured.Unstructured, webhooks integration.Webhooks) (*rest.Config, client.Client, *envtest.WebhookInstallOptions) {
 	t.Helper()
-	crds := os.Getenv("KUBEHENGE_INTEGRATION_CRDS")
-	if crds == "" || os.Getenv("KUBEBUILDER_ASSETS") == "" {
-		t.Fatal("KUBEBUILDER_ASSETS and KUBEHENGE_INTEGRATION_CRDS are unset: run the tier with `make integration`")
-	}
-	scheme := runtime.NewScheme()
-	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, appsv1.AddToScheme, clusterv1.AddToScheme, addonsv1.AddToScheme} {
-		if err := add(scheme); err != nil {
-			t.Fatal(err)
-		}
-	}
-	env := &envtest.Environment{
-		CRDDirectoryPaths:     []string{crds},
-		ErrorIfCRDPathMissing: true,
-		WebhookInstallOptions: envtest.WebhookInstallOptions{ValidatingWebhooks: webhooks},
-	}
-	cfg, err := env.Start()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { stopAPI(t, env) })
-	c, err := client.New(cfg, client.Options{Scheme: scheme})
-	if err != nil {
-		t.Fatal(err)
-	}
-	installChart(t, c, objects)
-	return cfg, c, &env.WebhookInstallOptions
+	api := integration.Start(t, &integration.Options{Objects: objects, Namespaces: apiNamespaces(), Webhooks: webhooks})
+	return api.Config, api.Client, api.Webhooks
 }
 
-// stopAPI stops the API server and etcd, ending them first where envtest cannot.
-func stopAPI(t *testing.T, env *envtest.Environment) {
-	t.Helper()
-	if err := endChildren(); err != nil {
-		t.Error(err)
-		return
-	}
-	if err := env.Stop(); err != nil && !endsChildrenItself {
-		t.Error(err)
-	}
-}
-
-// renderChart is what `helm template` makes of a chart with the module's values for it, hooks
-// included.
-func renderChart(t *testing.T, release, chart, namespace string, values ...string) []*unstructured.Unstructured {
-	t.Helper()
-	args := make([]string, 0, 5+2*len(values))
-	args = append(args, "template", release, chart, "--namespace", namespace)
-	for _, v := range values {
-		args = append(args, "-f", v)
-	}
-	helm := exec.CommandContext(t.Context(), "helm", args...) //nolint:gosec // the test's own charts and values
-	var stderr bytes.Buffer
-	helm.Stderr = &stderr
-	out, err := helm.Output()
-	if err != nil {
-		t.Fatalf("helm template: %v: %s", err, stderr.String())
-	}
-	return decodeAll(t, out)
-}
-
-// installChart applies the chart's objects, in the namespaces they name.
-func installChart(t *testing.T, c client.Client, objects []*unstructured.Unstructured) {
-	t.Helper()
-	ctx := context.Background()
+// apiNamespaces are the class namespace, a team's and the providers'.
+func apiNamespaces() []string {
 	namespaces := []string{classNamespace, "team-a"}
 	for _, ns := range classProviders {
 		namespaces = append(namespaces, ns...)
 	}
-	for _, o := range objects {
-		if ns := o.GetNamespace(); ns != "" {
-			namespaces = append(namespaces, ns)
-		}
-	}
-	slices.Sort(namespaces)
-	for _, ns := range slices.Compact(namespaces) {
-		if err := c.Create(ctx, &corev1.Namespace{Name: ns}); err != nil && !apierrors.IsAlreadyExists(err) {
-			t.Fatal(err)
-		}
-	}
-	for _, o := range objects {
-		if err := c.Apply(ctx, client.ApplyConfigurationFromUnstructured(o), client.FieldOwner("helm"), client.ForceOwnership); err != nil {
-			t.Errorf("the API server refuses the chart's %s %s: %v", o.GetKind(), o.GetName(), err)
-		}
-	}
-	if t.Failed() {
-		t.FailNow()
-	}
-}
-
-func decodeAll(t *testing.T, data []byte) []*unstructured.Unstructured {
-	t.Helper()
-	dec := utilyaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096)
-	var out []*unstructured.Unstructured
-	for {
-		u := &unstructured.Unstructured{}
-		if err := dec.Decode(&u.Object); errors.Is(err, io.EOF) {
-			return out
-		} else if err != nil {
-			t.Fatal(err)
-		}
-		if len(u.Object) > 0 {
-			out = append(out, u)
-		}
-	}
+	return namespaces
 }
 
 // startProviders creates a class's provider Deployments, scaled to none as the controller leaves them.
@@ -449,41 +341,50 @@ func TestIntegrationClusterLifecycle(t *testing.T) { //nolint:paralleltest // st
 	}
 }
 
-// The API server asks the controller about Kubehenge's clusters through the chart's webhook
-// configuration, and the class's own schema supplies the vCPUs a cluster leaves to its default.
-func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
-	c, w := startValidatingAPI(t)
+// serveAdmission serves the handlers where the chart's webhook configurations call them until the
+// test ends, and returns once the server answers: the chart refuses every cluster until it does.
+func serveAdmission(t *testing.T, w *envtest.WebhookInstallOptions, handlers map[string]http.Handler) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	srv := webhook.NewServer(webhook.Options{Host: w.LocalServingHost, Port: w.LocalServingPort, CertDir: w.LocalServingCertDir})
-	hooks := &Hooks{Reader: c, ClassNamespace: classNamespace, RancherKubernetes: KubernetesMinors{Min: 34, Max: 37}}
-	srv.Register("/validate-cluster", admission.WithValidator[*clusterv1.Cluster](c.Scheme(), &ClusterValidator{Hooks: hooks}))
+	for path, h := range handlers {
+		srv.Register(path, h)
+	}
 	go func() {
 		if err := srv.Start(ctx); err != nil {
 			t.Error(err)
 		}
 	}()
-	// The chart refuses every cluster while nothing answers the webhook, so the test waits until it does.
 	started := srv.StartedChecker()
 	for deadline := time.Now().Add(30 * time.Second); started(nil) != nil; time.Sleep(100 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("the webhook server did not start")
 		}
 	}
+}
+
+// The API server asks the controller about Kubehenge's clusters through the chart's webhook
+// configuration, and the class's own schema supplies the vCPUs a cluster leaves to its default.
+func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
+	c, w := startValidatingAPI(t)
+	ctx := context.Background()
+	hooks := &Hooks{Reader: c, ClassNamespace: classNamespace, RancherKubernetes: KubernetesMinors{Min: 34, Max: 37}}
+	serveAdmission(t, w, AdmissionWebhooks(c.Scheme(), hooks))
 
 	rancherCluster := func(name, controlPlane string) *clusterv1.Cluster {
 		vars := []clusterv1.ClusterVariable{{Name: "rancher", Value: apiextensionsv1.JSON{Raw: []byte(`{"install":true,"hostname":"rancher.example.org"}`)}}}
 		if controlPlane != "" {
 			vars = append(vars, clusterv1.ClusterVariable{Name: "controlPlaneMachine", Value: apiextensionsv1.JSON{Raw: []byte(controlPlane)}})
 		}
-		return &clusterv1.Cluster{
+		return placed(&clusterv1.Cluster{
 			Namespace: "team-a", Name: name,
 			Spec: clusterv1.ClusterSpec{Topology: clusterv1.Topology{
 				ClassRef:  clusterv1.ClusterClassRef{Name: "kubehenge-rke2", Namespace: classNamespace},
 				Version:   "v1.36.5+rke2r1",
 				Variables: vars,
 			}},
-		}
+		})
 	}
 	err := c.Create(ctx, rancherCluster("defaults", ""))
 	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "at least 4 vCPUs") || !strings.Contains(err.Error(), "control planes have 2") {
@@ -514,7 +415,7 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 			}},
 		}},
 	}
-	if err := c.Create(ctx, many); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "with 300 workers, control planes need 4 vCPUs and 8192 MiB") {
+	if err := c.Create(ctx, placed(many)); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "with 300 workers, control planes need 4 vCPUs and 8192 MiB") {
 		t.Fatalf("300 workers on the class's default control planes: %v", err)
 	}
 
@@ -528,7 +429,7 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 			Version:  "v1.36.5+k3s1",
 		}},
 	}
-	if err := c.Create(ctx, workerless); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "without workers, control planes need 3 vCPUs and 5120 MiB") {
+	if err := c.Create(ctx, placed(workerless)); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "without workers, control planes need 3 vCPUs and 5120 MiB") {
 		t.Fatalf("a k3s cluster without workers on the class's default control planes: %v", err)
 	}
 
@@ -580,13 +481,35 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 		}},
 	}
 	withAddons(small, map[string]string{"workerMachine": `{"memoryMiB":1024}`, "monitoring": `{"enabled":true}`})
-	if err := c.Create(ctx, small); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "add-ons (monitoring, cert-manager, Rancher's agent) need 2240 MiB of memory on workers") {
+	if err := c.Create(ctx, placed(small)); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "add-ons (monitoring, cert-manager, Rancher's agent) need 2240 MiB of memory on workers") {
 		t.Fatalf("monitoring on a k3s worker at its least: %v", err)
 	}
 
 	hooks.DatastoreAllocate = testDatastoreAllocate
 	checkDatastoreAllocateAdmission(ctx, t, c)
 	checkSysAuditAdmission(ctx, t, c, hooks)
+}
+
+// placed gives a cluster what every class requires and it does not set itself: a storage, and an
+// endpoint and node addresses on a network of its own, which its name picks.
+func placed(c *clusterv1.Cluster) *clusterv1.Cluster {
+	set := map[string]bool{}
+	for _, v := range c.Spec.Topology.Variables {
+		set[v.Name] = true
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(c.Name))
+	net := fmt.Sprintf("10.%d.%d", h.Sum32()>>8%250, h.Sum32()%250)
+	for name, raw := range map[string]string{
+		"storage":              `"local-lvm"`,
+		"controlPlaneEndpoint": `"` + net + `.5"`,
+		"network":              `{"bridge":"vmbr0","addresses":["` + net + `.10-` + net + `.30"],"prefix":24,"gateway":"` + net + `.1","dnsServers":["` + net + `.1"]}`,
+	} {
+		if !set[name] {
+			withAddons(c, map[string]string{name: raw})
+		}
+	}
+	return c
 }
 
 // checkInterfaceRulesAdmission has the API server refuse what the interface refuses, for a cluster
@@ -605,10 +528,10 @@ func checkInterfaceRulesAdmission(ctx context.Context, t *testing.T, c client.Cl
 				}},
 			}},
 		}
-		return withAddons(cluster, map[string]string{
+		return placed(withAddons(cluster, map[string]string{
 			"network":              `{"bridge":"vmbr0","addresses":["` + addresses + `"],"prefix":24,"gateway":"10.0.0.1","dnsServers":["10.0.0.1"]}`,
 			"controlPlaneEndpoint": `"` + endpoint + `"`,
-		})
+		}))
 	}
 	if err := c.Create(ctx, offered(strings.Repeat("a", MaxClusterName+1), 1, "10.0.0.10-10.0.0.20", "10.0.0.5")); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "up to 40") {
 		t.Fatalf("a name too long for the machines' host names: %v", err)
@@ -681,7 +604,7 @@ func checkSysAuditAdmission(ctx context.Context, t *testing.T, c client.Client, 
 				}},
 			}},
 		}
-		return withAddons(cluster, map[string]string{"storage": `"local-lvm"`, ccmVariable: `{"haGroups":true}`})
+		return placed(withAddons(cluster, map[string]string{"storage": `"local-lvm"`, ccmVariable: `{"haGroups":true}`}))
 	}
 	hooks.SysAuditGroup = ""
 	if err := c.Create(ctx, asking("unaudited")); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "clusters may not hold Sys.Audit on /") {
@@ -712,7 +635,7 @@ func checkDatastoreAllocateAdmission(ctx context.Context, t *testing.T, c client
 		if csi != "" {
 			vars[csiVariable] = csi
 		}
-		return withAddons(cluster, vars)
+		return placed(withAddons(cluster, vars))
 	}
 	if err := c.Create(ctx, onStorage("allocating", "ceph", `{"datastoreAllocate":true}`)); err != nil {
 		t.Fatalf("Datastore.Allocate on a storage of its own: %v", err)
@@ -726,9 +649,10 @@ func checkDatastoreAllocateAdmission(ctx context.Context, t *testing.T, c client
 }
 
 // checkClassAddonRoom holds a class's memory and CPU figures: one for every add-on and every node
-// kind, a cluster at the class's defaults holding every add-on but Rancher, logs and backups, the
-// default worker's CPU holding every add-on but Rancher, as the end-to-end tests have it, and the
-// least cluster Rancher runs on, without workers, holding Rancher.
+// kind; a worker and control plane sized as the end-to-end tests size them from the figures holding
+// every add-on but Rancher, logs and backups, and a MiB less refused; the default worker's CPU
+// holding every add-on but Rancher; and the least control plane Rancher runs on without workers,
+// at the memory its figures ask, holding Rancher.
 func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker *clusterv1.Cluster, alone controlPlaneSize) {
 	t.Helper()
 	addons, _, err := classFigures(class, AddonMemoryAnnotation)
@@ -749,24 +673,55 @@ func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker 
 		}
 	}
 	for _, annotation := range []string{NodeMemoryAnnotation, NodeCPUAnnotation} {
-		if nodes, _, err := classFigures(class, annotation); err != nil || nodes["controlPlane"] <= 0 || nodes["worker"] <= 0 {
-			t.Errorf("%s: %s %v, %v", class.Name, annotation, nodes, err)
+		if nodes, _, figuresErr := classFigures(class, annotation); figuresErr != nil || nodes["controlPlane"] <= 0 || nodes["worker"] <= 0 {
+			t.Errorf("%s: %s %v, %v", class.Name, annotation, nodes, figuresErr)
 		}
 	}
-	if err := checkAddonRoom(nil, withAddons(oneWorker.DeepCopy(), everyAddon), class); err != nil {
-		t.Errorf("%s: every add-on on the default worker: %v", class.Name, err)
+	defaults := withAddons(oneWorker.DeepCopy(), everyAddon)
+	room, err := addonRoomOf(addonMemory, defaults, class)
+	if err != nil {
+		t.Fatal(err)
+	}
+	least := classMinimumSize(class, "workerMachine").MemoryMiB
+	_, worker, err := nodeSize(defaults, class, "workerMachine", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, controlPlane, err := nodeSize(defaults, class, "controlPlaneMachine", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sized := func(workerMiB, controlPlaneMiB int) *clusterv1.Cluster {
+		return withAddons(defaults.DeepCopy(), map[string]string{
+			"workerMachine":       fmt.Sprintf(`{"memoryMiB":%d}`, workerMiB),
+			"controlPlaneMachine": fmt.Sprintf(`{"memoryMiB":%d}`, controlPlaneMiB),
+		})
+	}
+	workerMiB, controlPlaneMiB := max(least, room.Base+room.Need, worker), max(room.ControlPlaneNeed, controlPlane)
+	if err = checkRoomFor(addonMemory, nil, sized(workerMiB, controlPlaneMiB), class); err != nil {
+		t.Errorf("%s: every add-on on a worker of %d MiB and control plane of %d MiB: %v", class.Name, workerMiB, controlPlaneMiB, err)
+	}
+	if workerMiB > max(least, worker) && checkRoomFor(addonMemory, nil, sized(workerMiB-1, controlPlaneMiB), class) == nil {
+		t.Errorf("%s: every add-on on a worker of %d MiB, a MiB short, admitted", class.Name, workerMiB-1)
+	}
+	if controlPlaneMiB > controlPlane && checkRoomFor(addonMemory, nil, sized(workerMiB, controlPlaneMiB-1), class) == nil {
+		t.Errorf("%s: every add-on with a control plane of %d MiB, a MiB short, admitted", class.Name, controlPlaneMiB-1)
 	}
 	all := withAddons(withAddons(oneWorker.DeepCopy(), everyAddon), map[string]string{
 		"logs": `{"enabled":true}`, "backups": `{"enabled":true,"target":"store"}`, "gitops": `{"enabled":true,"engine":"flux"}`,
 		"loadBalancer": `{"enabled":true,"implementation":"kube-vip","addresses":["192.0.2.100-192.0.2.110"]}`,
 	})
-	if err := checkRoomFor(addonCPU, nil, all, class); err != nil {
+	if err = checkRoomFor(addonCPU, nil, all, class); err != nil {
 		t.Errorf("%s: every add-on but Rancher on the default worker's CPU: %v", class.Name, err)
 	}
-	rancher := withAddons(&clusterv1.Cluster{}, map[string]string{
-		"rancher":             `{"install":true,"hostname":"rancher.example.org"}`,
-		"controlPlaneMachine": fmt.Sprintf(`{"cores":%d,"memoryMiB":%d}`, max(alone.Cores, RancherMinimumCores), alone.MemoryMiB),
-	})
+	rancherOn := map[string]string{"rancher": `{"install":true,"hostname":"rancher.example.org"}`}
+	room, err = addonRoomOf(addonMemory, withAddons(&clusterv1.Cluster{}, rancherOn), class)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rancherOn["controlPlaneMachine"] = fmt.Sprintf(`{"cores":%d,"memoryMiB":%d}`,
+		max(alone.Cores, RancherMinimumCores), max(alone.MemoryMiB, room.Base+room.Need))
+	rancher := withAddons(&clusterv1.Cluster{}, rancherOn)
 	if err := checkAddonRoom(nil, rancher, class); err != nil {
 		t.Errorf("%s: Rancher on the least control plane without workers: %v", class.Name, err)
 	}
@@ -786,7 +741,7 @@ func TestIntegrationClassHealthChecks(t *testing.T) {
 		return string(raw)
 	}
 	var classes []string
-	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
+	for _, o := range integration.RenderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
 		if o.GetKind() != "ClusterClass" {
 			continue
 		}
@@ -849,14 +804,14 @@ func TestIntegrationClassArguments(t *testing.T) {
 			}
 		}
 	}
-	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
+	for _, o := range integration.RenderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
 		switch {
 		case o.GetKind() == "ConfigMap" && o.GetLabels()["kubehenge.dev/class"] != "":
 			data, _, err := unstructured.NestedString(o.Object, "data", "templates.yaml")
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, tpl := range decodeAll(t, []byte(data)) {
+			for _, tpl := range integration.Decode(t, []byte(data)) {
 				walk(tpl.GetKind(), tpl.Object)
 			}
 		case o.GetKind() == "ClusterClass":
@@ -947,7 +902,7 @@ func TestIntegrationChartProxmoxHA(t *testing.T) {
 			values = append(values, "testdata/proxmox-ha-values.yaml")
 		}
 		classes := 0
-		objs := renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, values...)
+		objs := integration.RenderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, values...)
 		for _, o := range objs {
 			if o.GetKind() == "ClusterClass" {
 				if got := o.GetAnnotations()["kubehenge.dev/proxmox-ha"] == "true"; got != on {
@@ -974,7 +929,7 @@ func TestIntegrationChartDatastoreAllocate(t *testing.T) {
 		}
 		var args string
 		classes := 0
-		for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, values...) {
+		for _, o := range integration.RenderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, values...) {
 			switch o.GetKind() {
 			case "ClusterClass":
 				annotations := o.GetAnnotations()
@@ -1015,7 +970,7 @@ func TestIntegrationChartSysAudit(t *testing.T) {
 		}
 		var args string
 		classes := 0
-		for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, values...) {
+		for _, o := range integration.RenderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, values...) {
 			switch o.GetKind() {
 			case "ClusterClass":
 				if got := o.GetAnnotations()["kubehenge.dev/sys-audit"] == "true"; got != on {
@@ -1061,7 +1016,7 @@ func TestIntegrationChartSysAudit(t *testing.T) {
 func TestIntegrationChartVolumeSnapshots(t *testing.T) {
 	t.Parallel()
 	var given strings.Builder
-	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
+	for _, o := range integration.RenderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
 		if o.GetKind() != "Deployment" {
 			continue
 		}
@@ -1096,7 +1051,7 @@ func TestIntegrationChartEtcdRestore(t *testing.T) {
 			values = append(values, "testdata/etcd-restore-values.yaml")
 		}
 		classes := 0
-		objs := renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, values...)
+		objs := integration.RenderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, values...)
 		for _, o := range objs {
 			if o.GetKind() == "ClusterClass" {
 				want := on || o.GetName() == "kubehenge-talos"
@@ -1131,7 +1086,7 @@ func TestIntegrationProxmoxHA(t *testing.T) { //nolint:paralleltest // starts an
 	}
 	// The CRD asks for more than the reconciler reads, so the machines are made as a class makes them.
 	var machineSpec map[string]any
-	for _, o := range renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
+	for _, o := range integration.RenderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml") {
 		if o.GetKind() == "ProxmoxMachineTemplate" {
 			machineSpec, _, _ = unstructured.NestedMap(o.Object, "spec", "template", "spec")
 			break

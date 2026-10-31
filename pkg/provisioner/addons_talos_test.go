@@ -58,7 +58,7 @@ func TestCiliumOnTalosLeavesTheCgroupsAndModulesToTalos(t *testing.T) {
 	}
 }
 
-func TestCalicoOnTalosInstallsNoFlexVolumeDriver(t *testing.T) {
+func TestCalicoInstallsNoFlexVolumeDriver(t *testing.T) {
 	t.Parallel()
 	installation := func(class string) map[string]any {
 		c := cluster()
@@ -79,11 +79,10 @@ func TestCalicoOnTalosInstallsNoFlexVolumeDriver(t *testing.T) {
 		t.Fatal("no Installation")
 		return nil
 	}
-	if installation(ClassPrefix + "talos")["flexVolumePath"] != "None" {
-		t.Error("Calico installs its FlexVolume driver into Talos's read-only /usr")
-	}
-	if _, set := installation(ClassPrefix + "kubeadm")["flexVolumePath"]; set {
-		t.Error("Calico goes without its FlexVolume driver on kubeadm")
+	for _, class := range []string{"talos", "kubeadm", "rke2", "k3s"} {
+		if installation(ClassPrefix + class)["flexVolumePath"] != "None" {
+			t.Errorf("Calico installs its FlexVolume driver into the read-only /usr of %s's nodes", class)
+		}
 	}
 }
 

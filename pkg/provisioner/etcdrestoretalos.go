@@ -57,11 +57,15 @@ func planTalosRestore(ctx context.Context, c client.Reader, cluster *clusterv1.C
 		},
 		{"Save the snapshot as db.snapshot and check it", here, fmt.Sprintf("echo '%s  db.snapshot' | sha256sum -c -", snapshot.SHA256)},
 		{
+			"Move the snapshot's revision on, so that the cluster's clients list again", here,
+			fmt.Sprintf("etcdutl snapshot restore db.snapshot --data-dir restored --bump-revision %d --mark-compacted && mv restored/member/snap/db db.snapshot && rm -r restored", etcdRevisionBump),
+		},
+		{
 			"Wipe etcd on every control-plane node (they reboot)", here,
 			talosctl + strings.Join(addresses, ",") + " reset --graceful=false --reboot --system-labels-to-wipe=EPHEMERAL",
 		},
 		{waitForEtcd, here, talosctl + addresses[0] + " service etcd"},
-		{"Restore etcd from the snapshot", here, talosctl + addresses[0] + " bootstrap --recover-from=db.snapshot"},
+		{"Restore etcd from the snapshot", here, talosctl + addresses[0] + " bootstrap --recover-from=db.snapshot --recover-skip-hash-check"},
 		resumeStep(patch),
 	}}, nil
 }
@@ -179,13 +183,40 @@ func (run *restoreRun) knowTalos(ctx context.Context) error {
 	return nil
 }
 
-// checkSnapshot reads the whole snapshot before anything is wiped, and checks it against its
-// checksum.
-func (run *restoreRun) checkSnapshot(ctx context.Context) error {
-	return run.withSnapshot(ctx, func(r io.Reader) error {
-		_, err := io.Copy(io.Discard, r)
-		return err //nolint:wrapcheck // withSnapshot says which snapshot
+// fetchTalosSnapshot reads the whole snapshot before anything is wiped, checks it against its
+// checksum, and keeps it with its revision moved on (bumpedEtcdSnapshot) for the upload. A reset's
+// copy of the kept node's etcd is no older than anything the cluster's clients saw, so it goes up
+// as it is, only checked.
+func (run *restoreRun) fetchTalosSnapshot(ctx context.Context) error {
+	run.dropTalosSnapshot()
+	if run.reset() {
+		return run.withSnapshot(ctx, func(r io.Reader) error {
+			_, err := io.Copy(io.Discard, r)
+			return err //nolint:wrapcheck // withSnapshot names the copy
+		})
+	}
+	var path string
+	err := run.withSnapshot(ctx, func(r io.Reader) error {
+		var err error
+		path, err = bumpedEtcdSnapshot(run.r.ScratchDir, r)
+		return err
 	})
+	if err != nil {
+		if path != "" {
+			_ = os.Remove(path)
+		}
+		return err
+	}
+	run.talosSnapshot = path
+	return nil
+}
+
+// dropTalosSnapshot removes the snapshot fetchTalosSnapshot kept, if any.
+func (run *restoreRun) dropTalosSnapshot() {
+	if run.talosSnapshot != "" {
+		_ = os.Remove(run.talosSnapshot)
+		run.talosSnapshot = ""
+	}
 }
 
 // withSnapshot hands the snapshot to use, and fails when what it read does not match the
@@ -249,16 +280,28 @@ func (run *restoreRun) wipeTalos(ctx context.Context) error {
 	return nil
 }
 
-// recoverTalosEtcd uploads the snapshot to the first node once its etcd waits for one, and
+// recoverTalosEtcd uploads the fetched snapshot to the first node once its etcd waits for one, and
 // bootstraps etcd from it.
 func (run *restoreRun) recoverTalosEtcd(ctx context.Context) error {
+	path := run.talosSnapshot
+	if run.reset() && run.own != nil {
+		path = run.own.path
+	}
+	if path == "" {
+		return errors.New("the snapshot was not fetched")
+	}
 	first := run.nodes[0]
 	err := run.waitTalos(ctx, first, "uploading the snapshot", func(ctx context.Context, t TalosNode) (bool, error) {
 		state, _, err := t.Etcd(ctx)
 		if err != nil || state != talosEtcdPreparing {
 			return false, err //nolint:wrapcheck // onTalos names the machine, and the node's error the call
 		}
-		return true, run.withSnapshot(ctx, func(r io.Reader) error { return t.UploadEtcdSnapshot(ctx, r) })
+		f, err := os.Open(path) //nolint:gosec // the controller's own file of the snapshot
+		if err != nil {
+			return false, fmt.Errorf("reading the fetched snapshot: %w", err)
+		}
+		defer func() { _ = f.Close() }()
+		return true, t.UploadEtcdSnapshot(ctx, f)
 	})
 	if err != nil {
 		return err
@@ -319,7 +362,7 @@ func (run *restoreRun) check(ctx context.Context) error {
 			return err
 		}
 	}
-	return run.checkSnapshot(ctx)
+	return run.fetchTalosSnapshot(ctx)
 }
 
 // knowTalosNodes reads the nodes again for a restore the controller restarted in: the one etcd is

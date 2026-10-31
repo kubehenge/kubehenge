@@ -43,7 +43,8 @@ type TalosNode interface {
 	Etcd(ctx context.Context) (string, bool, error)
 	// UploadEtcdSnapshot hands the node the snapshot BootstrapRecovered restores etcd from.
 	UploadEtcdSnapshot(ctx context.Context, snapshot io.Reader) error
-	// BootstrapRecovered starts etcd on the node as a cluster of one from the uploaded snapshot.
+	// BootstrapRecovered starts etcd on the node as a cluster of one from the uploaded snapshot, a
+	// database without etcd's checksum.
 	BootstrapRecovered(ctx context.Context) error
 	Close() error
 }
@@ -218,7 +219,9 @@ func (n *talosNode) UploadEtcdSnapshot(ctx context.Context, snapshot io.Reader) 
 }
 
 func (n *talosNode) BootstrapRecovered(ctx context.Context) error {
-	if err := n.c.Bootstrap(ctx, &machine.BootstrapRequest{RecoverEtcd: true}); err != nil {
+	// The snapshot is the database without the checksum etcd appended, which its revision moving on
+	// changed; the controller checked the snapshot against it and against the store's.
+	if err := n.c.Bootstrap(ctx, &machine.BootstrapRequest{RecoverEtcd: true, RecoverSkipHashCheck: true}); err != nil {
 		return fmt.Errorf("%s: restoring etcd from the snapshot: %w", n.address, notReady(err))
 	}
 	return nil

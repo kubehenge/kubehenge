@@ -25,9 +25,11 @@ packages="container-selinux curl gawk tar"
 case "${distribution}" in
     kubeadm)
         version=${kubernetes#v}
-        packages="${packages} containerd runc kubelet=${version} kubeadm=${version} kubectl=${version} cri-tools"
+        packages="${packages} containerd runc kubelet=${version} kubeadm=${version} kubectl=${version} cri-tools iptables"
         ;;
-    rke2) packages="${packages} rke2-selinux" ;;
+    # The portmap plugin, which Calico's and Canal's host ports go through, runs iptables from the
+    # node's own PATH; k3s brings its own.
+    rke2) packages="${packages} rke2-selinux iptables" ;;
     k3s) packages="${packages} k3s-selinux" ;;
     *)
         echo "node.sh: no such distribution: ${distribution}" >&2
@@ -47,6 +49,9 @@ if [ -f /etc/sysconfig/qemu-ga ]; then
 fi
 install -D -m 0644 "${files}/node/kubehenge-qga.cil" /usr/share/kubehenge/kubehenge-qga.cil
 semodule -i /usr/share/kubehenge/kubehenge-qga.cil
+install -D -m 0644 "${files}/node/kubehenge-calico.cil" /usr/share/kubehenge/kubehenge-calico.cil
+semodule -i /usr/share/kubehenge/kubehenge-calico.cil
+printf 'd /var/lib/calico 0755 root root -\n' > /usr/lib/tmpfiles.d/kubehenge-calico.conf
 install -D -m 0755 "${files}/node/boot-log.sh" /usr/libexec/kubehenge/boot-log
 install -m 0644 "${files}/node/kubehenge-boot-log.service" "${files}/node/kubehenge-boot-log.timer" /usr/lib/systemd/system/
 

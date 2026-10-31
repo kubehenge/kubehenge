@@ -370,8 +370,12 @@ func checkTalosCommon(t *testing.T, docs map[string]map[string]any) {
 	if got := field(t, docs["HostnameConfig"], "hostname"); got != "demo-worker-abcde" {
 		t.Errorf("hostname = %v", got)
 	}
-	// The node collector's port on loopback (pkg/provisioner, talosLogsPort).
-	const logs = "tcp://127.0.0.1:5170/"
+	// The node collector's port (pkg/provisioner, talosLogsPort) on the node's own link-local address,
+	// which is no loopback one and which Talos never takes for the node's address.
+	const logs = "tcp://169.254.51.70:5170/"
+	if got := asJSON(t, field(t, docs["DummyLinkConfig/kubehenge-logs"], "addresses")); got != `[{"address":"169.254.51.70/32"}]` {
+		t.Errorf("log link addresses = %s", got)
+	}
 	if got := asJSON(t, field(t, docs["v1alpha1"], "machine", "logging", "destinations")); got != `[{"endpoint":"`+logs+`","format":"json_lines"}]` {
 		t.Errorf("log destinations = %s", got)
 	}

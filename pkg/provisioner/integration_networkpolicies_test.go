@@ -15,11 +15,13 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
+
+	"github.com/kubehenge/kubehenge/test/integration"
 )
 
 // TestIntegrationChartNetworkPolicies holds the chart to its NetworkPolicies: nothing reaches a pod
-// of Kubehenge's but the controller's webhook port, and a token Job reaches only DNS and Proxmox
-// VE's API by its port.
+// of Kubehenge's but the controller's webhook and metrics ports, and a token Job reaches only DNS
+// and Proxmox VE's API by its port.
 func TestIntegrationChartNetworkPolicies(t *testing.T) {
 	t.Parallel()
 	for url, port := range map[string]int{
@@ -32,7 +34,7 @@ func TestIntegrationChartNetworkPolicies(t *testing.T) {
 		if err := os.WriteFile(values, []byte(raw), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		policies, pods := chartPolicies(t, renderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml", values))
+		policies, pods := chartPolicies(t, integration.RenderChart(t, "kubehenge", "../../charts/kubehenge", classNamespace, "testdata/integration-values.yaml", values))
 		if len(pods[classNamespace]) < 3 {
 			t.Fatalf("%s: found the pods of %d workloads, want the controller's, the template builds' and the token Jobs'", url, len(pods[classNamespace]))
 		}

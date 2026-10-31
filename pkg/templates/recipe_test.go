@@ -185,7 +185,7 @@ func checkGuestExec(t *testing.T, bootcmd []string) {
 // and repositories that check their packages against those keys.
 func checkFiles(t *testing.T, files map[string]string, dir string, keys []RepositoryKey, names map[string]bool) {
 	t.Helper()
-	for _, name := range []string{dir + "/build.sh", dir + "/node.sh", "node/kubehenge-qga.cil", "node/images.sh", "node/kubeadm.sh", "node/boot-log.sh", "node/kubehenge-boot-log.service", "node/kubehenge-boot-log.timer"} {
+	for _, name := range []string{dir + "/build.sh", dir + "/node.sh", "node/kubehenge-qga.cil", "node/kubehenge-calico.cil", "node/images.sh", "node/kubeadm.sh", "node/boot-log.sh", "node/kubehenge-boot-log.service", "node/kubehenge-boot-log.timer"} {
 		if files[name] == "" {
 			t.Errorf("the bake does not carry %s", name)
 		}
@@ -278,13 +278,13 @@ func distributionChecks(t *testing.T, d Distribution) []string {
 	t.Helper()
 	switch d {
 	case RKE2:
-		return []string{"rpm -q rke2-selinux", "grep -qx rke2", "touch /usr/local/"}
+		return []string{"rpm -q rke2-selinux", "grep -qx rke2", "touch /usr/local/", iptablesCheck}
 	case K3s:
 		return []string{"rpm -q k3s-selinux", "grep -qx k3s", "touch /usr/local/"}
 	case Kubeadm:
 		return []string{
 			"kubeadm version -o short)\" = v1.37.1", "enable_selinux = true", "/sys/module/br_netfilter",
-			"/sys/module/nf_conntrack", "type: spc_t", "crictl images", "enable kubelet.service",
+			"/sys/module/nf_conntrack", "type: spc_t", "crictl images", "enable kubelet.service", iptablesCheck,
 		}
 	case Talos:
 	}
@@ -307,6 +307,69 @@ func TestNodeChecks(t *testing.T) {
 			if !strings.Contains(all, want) {
 				t.Errorf("%s: no check of %s in %q", b.Distribution, want, checks)
 			}
+		}
+	}
+}
+
+// RKE2's Cilium installs portmap into /opt/cni/bin from a confined container, which an image-mode
+// node keeps in /var/opt, where RKE2 would make the directory with /var/opt's label.
+func TestImageModeRKE2NodesLetContainersInstallCNIPlugins(t *testing.T) {
+	t.Parallel()
+	if _, r, err := ReleaseOf(DefaultNodeOS); err != nil || r.Mode != ImageMode {
+		t.Fatalf("the default node OS is not image mode: %+v, %v", r, err)
+	}
+	const check = "stat -L -c %C /opt/cni/bin | grep -q ':container_file_t:'"
+	if all := fmt.Sprint(nodeChecks(Bake{NodeOS: DefaultNodeOS, Distribution: RKE2})); !strings.Contains(all, check) {
+		t.Errorf("no check of /opt/cni/bin's label in %s", all)
+	}
+	for _, b := range []Bake{{Distribution: RKE2}, {NodeOS: DefaultNodeOS, Distribution: K3s}} {
+		if all := fmt.Sprint(nodeChecks(b)); strings.Contains(all, "/opt/cni/bin") {
+			t.Errorf("%s on %v is checked for the label of /opt/cni/bin, which nothing set: %s", b.Distribution, b.NodeOS, all)
+		}
+	}
+	cil, err := recipeFiles.ReadFile("node/kubehenge-cni.cil")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(cil), `(filecon "/var/opt/cni(/.*)?" any (system_u object_r container_file_t`) {
+		t.Errorf("node/kubehenge-cni.cil does not label /var/opt/cni for containers:\n%s", cil)
+	}
+	script, err := recipeFiles.ReadFile("el/node.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"semodule -i /usr/share/kubehenge/kubehenge-cni.cil", "d /var/opt/cni/bin 0755 "} {
+		if !strings.Contains(string(script), want) {
+			t.Errorf("el/node.sh does not hold %q", want)
+		}
+	}
+}
+
+// The Tigera operator runs confined and reads the MTU calico-node writes into /var/lib/calico on
+// the host; every family's node labels it for containers to read before Calico writes there.
+func TestNodesLetTheTigeraOperatorReadCalicosMTU(t *testing.T) {
+	t.Parallel()
+	cil, err := recipeFiles.ReadFile("node/kubehenge-calico.cil")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(cil), `(filecon "/var/lib/calico(/.*)?" any (system_u object_r container_ro_file_t`) {
+		t.Errorf("node/kubehenge-calico.cil does not label /var/lib/calico read-only for containers:\n%s", cil)
+	}
+	for _, name := range []string{"el/node.sh", "leap/node.sh"} {
+		script, err := recipeFiles.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"semodule -i /usr/share/kubehenge/kubehenge-calico.cil", "d /var/lib/calico 0755 "} {
+			if !strings.Contains(string(script), want) {
+				t.Errorf("%s does not hold %q", name, want)
+			}
+		}
+	}
+	for _, d := range []Distribution{RKE2, K3s, Kubeadm} {
+		if all := fmt.Sprint(nodeChecks(Bake{Distribution: d, KubernetesVersion: "v1.37.1"})); !strings.Contains(all, "/var/lib/calico | grep -q ':container_ro_file_t:'") {
+			t.Errorf("%s: no check of /var/lib/calico's label in %s", d, all)
 		}
 	}
 }

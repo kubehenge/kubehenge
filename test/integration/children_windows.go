@@ -1,6 +1,6 @@
 //go:build integration && windows
 
-package provisioner
+package integration
 
 import (
 	"errors"
@@ -10,15 +10,21 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// envtest in the controller-runtime Cluster API builds against stops its API server and etcd with
-// SIGTERM, which Windows cannot send, so they would outlive the tests. The test binary holds them in
-// a job object instead: endChildren ends them before envtest removes their directories, and the job
-// ends them when the binary exits however it ends, a timeout or a panic included.
-const endsChildrenItself = true
+// EndsChildrenItself tells whether the package ends the API server and etcd itself, as here: the
+// envtest controller-runtime builds against stops them with SIGTERM, which Windows cannot send, so
+// they would outlive the tests. The test binary holds them in a job object instead: EndChildren ends them before
+// envtest removes their directories, and the job ends them when the binary exits however it ends, a
+// timeout or a panic included.
+const EndsChildrenItself = true
+
+// endMillis is how long EndChildren waits for each process it ends.
+const endMillis = 30_000
 
 var job windows.Handle
 
-func ownChildren() error {
+// OwnChildren puts the test binary into the job object, and with it every process it starts from
+// then on; a package calls it once, before it starts its first API server.
+func OwnChildren() error {
 	h, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
 		return fmt.Errorf("job object: %w", err)
@@ -42,8 +48,8 @@ type processList struct {
 	ids              [64]uintptr
 }
 
-// endChildren ends every process in the job but the test binary, and waits until they are gone.
-func endChildren() error {
+// EndChildren ends every process in the job but the test binary, and waits until they are gone.
+func EndChildren() error {
 	var list processList
 	if err := windows.QueryInformationJobObject(job, windows.JobObjectBasicProcessIdList, uintptr(unsafe.Pointer(&list)), uint32(unsafe.Sizeof(list)), nil); err != nil { //nolint:gosec // the Win32 call fills the structure by address
 		return fmt.Errorf("listing the job's processes: %w", err)
@@ -63,10 +69,10 @@ func endChildren() error {
 		// Access is denied to a process already ending.
 		if err := windows.TerminateProcess(h, 1); err != nil && !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
 			errs = append(errs, fmt.Errorf("ending process %d: %w", id, err))
-		} else if ev, err := windows.WaitForSingleObject(h, 30_000); err != nil {
+		} else if ev, err := windows.WaitForSingleObject(h, endMillis); err != nil {
 			errs = append(errs, fmt.Errorf("waiting for process %d: %w", id, err))
 		} else if ev != windows.WAIT_OBJECT_0 {
-			errs = append(errs, fmt.Errorf("process %d did not end within 30 s", id))
+			errs = append(errs, fmt.Errorf("process %d did not end within %d ms", id, endMillis))
 		}
 		_ = windows.CloseHandle(h)
 	}
