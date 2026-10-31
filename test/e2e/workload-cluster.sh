@@ -140,6 +140,7 @@ ns=${KUBEHENGE_E2E_NAMESPACE:-${name}}
 issuer_pid=
 grafana_pid=
 recorder_pid=
+interface_pid=
 metrics_pid=
 health_pid=
 # The HA rule the nodes are labelled with, and the guest it needs.
@@ -187,6 +188,7 @@ cleanup() {
     status=$?
     [ "${status}" -eq 0 ] || cni_state
     [ -z "${issuer_pid}" ] || kill "${issuer_pid}" 2> /dev/null || true
+    [ -z "${interface_pid}" ] || kill "${interface_pid}" 2> /dev/null || true
     [ -z "${grafana_pid}" ] || kill "${grafana_pid}" 2> /dev/null || true
     [ -z "${s3_pid}" ] || kill "${s3_pid}" 2> /dev/null || true
     [ -z "${recorder_pid}" ] || kill "${recorder_pid}" 2> /dev/null || true
@@ -784,7 +786,7 @@ health_pid=
 kubectl -n kubehenge-system get secret kubehenge-extension-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > "${work}/metrics-ca.crt"
 kubectl -n kubehenge-system port-forward service/kubehenge-controller-metrics "${metrics_port}:8443" > "${work}/metrics-forward.log" 2>&1 &
 metrics_pid=$!
-metrics_host=kubehenge-controller-metrics.kubehenge-system.svc
+metrics_host='kubehenge-controller-metrics.kubehenge-system.svc'
 # metrics_status [curl options...]: the HTTP status the metrics endpoint answers with, verified
 # against the controller's CA under the Service's name; its body in ${work}/metrics.
 metrics_status() {
@@ -3391,15 +3393,89 @@ if [ "${part}" != addons ]; then
     fi
     wl delete namespace e2e-lb --wait --timeout=5m
 
+    workers_ready() {
+        until_true 1800 "$1 worker nodes ready" sh -c "[ \"\$(KUBECONFIG=${work}/workload kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o json | jq '[.items[] | select(any(.status.conditions[]; .type == \"Ready\" and .status == \"True\"))] | length')\" = $1 ] && [ \"\$(kubectl -n ${ns} get machines -l cluster.x-k8s.io/deployment-name -o name | wc -l)\" = $1 ]"
+    }
     workers() {
         kubectl -n "${ns}" patch "cluster/${name}" --type=json \
             -p "[{\"op\":\"replace\",\"path\":\"/spec/topology/workers/machineDeployments/0/replicas\",\"value\":$1}]"
-        until_true 1800 "$1 worker nodes ready" sh -c "[ \"\$(KUBECONFIG=${work}/workload kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o json | jq '[.items[] | select(any(.status.conditions[]; .type == \"Ready\" and .status == \"True\"))] | length')\" = $1 ] && [ \"\$(kubectl -n ${ns} get machines -l cluster.x-k8s.io/deployment-name -o name | wc -l)\" = $1 ]"
+        workers_ready "$1"
     }
-    step "scale workers to 2"
-    workers 2
-    step "scale workers back to 1"
-    workers 1
+    if [ -n "${creator_config:-}" ]; then
+        # The interface as the appliance runs it, on the interface's own account, and the CLI acting
+        # through it as the test's Proxmox VE API token: every machine action of a cluster's
+        # Machines tab, as kubectl-free automation would take it.
+        step "the interface and kubehenge cluster, as a Proxmox VE API token"
+        kubehenge="$(dirname "$0")/../../dist/kubehenge"
+        [ -x "${kubehenge}" ] || make -s -C "$(dirname "$0")/../.." build
+        openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -subj /CN=127.0.0.1 \
+            -addext subjectAltName=IP:127.0.0.1 -keyout "${work}/interface.key" -out "${work}/interface.crt" 2> /dev/null
+        KUBECONFIG=${creator_config} "${kubehenge}" serve --listen 127.0.0.1:18443 \
+            --tls-cert "${work}/interface.crt" --tls-key "${work}/interface.key" > "${work}/interface.log" 2>&1 &
+        interface_pid=$!
+        kh() { KUBEHENGE_URL=https://127.0.0.1:18443 KUBEHENGE_CA="${work}/interface.crt" "${kubehenge}" cluster -n "${ns}" "$@"; }
+        listed() { kh list -o json | jq -e --arg ns "${ns}" --arg n "${name}" 'any(.[]; .namespace == $ns and .name == $n)' > /dev/null; }
+        until_true 120 "the interface listing ${ns}/${name} to the token" listed
+        kh kubeconfig "${name}" > "${work}/cli.kubeconfig"
+        KUBECONFIG=${work}/cli.kubeconfig kubectl get nodes > /dev/null || fail "the CLI's kubeconfig does not reach the cluster"
+
+        step "scale workers to 2 with kubehenge cluster scale"
+        kh scale "${name}" --workers md-0=2 > /dev/null
+        workers_ready 2
+        machine=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/deployment-name -o jsonpath='{.items[0].metadata.name}')
+        worker_node=$(kubectl -n "${ns}" get machine "${machine}" -o jsonpath='{.status.nodeRef.name}')
+        infra=$(kubectl -n "${ns}" get machine "${machine}" -o jsonpath='{.spec.infrastructureRef.name}')
+        vmid=$(kubectl -n "${ns}" get proxmoxmachine "${infra}" -o jsonpath='{.spec.virtualMachineID}')
+        node=$(kubectl -n "${ns}" get proxmoxmachine "${infra}" -o jsonpath='{.status.proxmoxNode}')
+
+        step "a worker cordoned and uncordoned"
+        unschedulable() {
+            # shellcheck disable=SC2310 # polled; a failed read is a no.
+            cordoned=$(wl get node "${worker_node}" -o jsonpath='{.spec.unschedulable}') || return 1
+            [ "${cordoned}" = "$1" ]
+        }
+        kh machine cordon "${name}" "${machine}"
+        until_true 60 "${worker_node} cordoned" unschedulable true
+        kh machine uncordon "${name}" "${machine}"
+        until_true 60 "${worker_node} uncordoned" unschedulable ''
+
+        step "a worker rebooted"
+        described=$(kh get "${name}")
+        printf '%s' "${described}" | jq -e --arg m "${machine}" 'any(.machines[]; .name == $m and .reboot)' > /dev/null ||
+            fail "the interface offers no reboot of ${machine} to the token"
+        vm_uptime() { pve_get "nodes/${node}/qemu/${vmid}/status/current" | jq -r '.data.uptime'; }
+        up_before=$(vm_uptime)
+        kh machine reboot "${name}" "${machine}"
+        rebooted() {
+            # shellcheck disable=SC2310 # polled; a failed read is a no.
+            up_now=$(vm_uptime) || return 1
+            # shellcheck disable=SC2310 # polled; a failed read is a no.
+            ready=$(wl get node "${worker_node}" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}') || return 1
+            [ "${up_now}" -lt "${up_before}" ] && [ "${ready}" = True ]
+        }
+        until_true 900 "VM ${vmid} up again from the reboot, and ${worker_node} ready" rebooted
+        kubectl -n "${ns}" get machine "${machine}" > /dev/null || fail "the reboot replaced ${machine}"
+
+        step "a worker replaced"
+        kh machine replace "${name}" "${machine}" --yes
+        until_true 1800 "machine ${machine} replaced" absent kubectl -n "${ns}" get machine "${machine}"
+        workers_ready 2
+
+        step "a worker deleted, its pool one smaller"
+        machine=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/deployment-name -o jsonpath='{.items[0].metadata.name}')
+        kh machine delete "${name}" "${machine}" --yes
+        until_true 1800 "machine ${machine} deleted" absent kubectl -n "${ns}" get machine "${machine}"
+        workers_ready 1
+        replicas=$(kubectl -n "${ns}" get "cluster/${name}" -o jsonpath='{.spec.topology.workers.machineDeployments[0].replicas}')
+        [ "${replicas}" = 1 ] || fail "the pool asks for ${replicas} workers after the deletion, not 1"
+        kill "${interface_pid}" 2> /dev/null || true
+        interface_pid=
+    else
+        step "scale workers to 2"
+        workers 2
+        step "scale workers back to 1"
+        workers 1
+    fi
 
     step "upgrade to ${upgrade}"
     if [ "${distribution}" = talos ]; then

@@ -179,8 +179,11 @@ func clusterMeshValues() map[string]any {
 	return map[string]any{
 		"useAPIServer": true,
 		"apiserver": map[string]any{
-			"service": map[string]any{"type": string(corev1.ServiceTypeNodePort), "nodePort": meshPort},
-			"tls":     map[string]any{"authMode": "cluster", "auto": map[string]any{"enabled": false}},
+			"service":     map[string]any{"type": string(corev1.ServiceTypeNodePort), "nodePort": meshPort},
+			"tls":         map[string]any{"authMode": "cluster", "auto": map[string]any{"enabled": false}},
+			"resources":   reserved(cpu10m, "32Mi"),
+			etcdKey:       map[string]any{"resources": reserved(cpu10m, memory64Mi)},
+			"kvstoremesh": map[string]any{"resources": reserved(cpu10m, "32Mi")},
 		},
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -127,7 +128,7 @@ func TestIdentityTokensBesideTheCluster(t *testing.T) {
 	if got := reconcileIdentities(t, w, c); got.RequeueAfter != tokenRenewal {
 		t.Errorf("requeued after %v, want %v", got.RequeueAfter, tokenRenewal)
 	}
-	for _, name := range []string{"web-health", "web-health-logs"} {
+	for _, name := range []string{"web-health", "web-health-logs", "web-nodes"} {
 		s := &corev1.Secret{}
 		if err := kube.Get(context.Background(), client.ObjectKey{Namespace: c.Namespace, Name: name}, s); err != nil {
 			t.Fatal(err)
@@ -142,7 +143,7 @@ func TestIdentityTokensBesideTheCluster(t *testing.T) {
 			t.Errorf("%s is owned by %v, want the Cluster, so it goes with it", name, s.OwnerReferences)
 		}
 	}
-	if issuer.count() != 2 {
+	if issuer.count() != 3 {
 		t.Fatalf("%d tokens made, want one per identity", issuer.count())
 	}
 	if got := secretsBeside(t, kube, c, IdentityBackups, IdentityRestores); len(got) != 0 {
@@ -151,13 +152,13 @@ func TestIdentityTokensBesideTheCluster(t *testing.T) {
 
 	// Looked at again before the renewal is due, nothing is asked of the cluster.
 	clock = clock.Add(5 * time.Minute)
-	if got := reconcileIdentities(t, w, c); got.RequeueAfter != 15*time.Minute || issuer.count() != 2 {
+	if got := reconcileIdentities(t, w, c); got.RequeueAfter != 15*time.Minute || issuer.count() != 3 {
 		t.Errorf("after 5 minutes: requeued after %v with %d tokens, want 15m and no new ones", got.RequeueAfter, issuer.count())
 	}
 	clock = clock.Add(16 * time.Minute)
 	reconcileIdentities(t, w, c)
-	if issuer.count() != 4 {
-		t.Errorf("after 21 minutes, %d tokens, want both renewed", issuer.count())
+	if issuer.count() != 6 {
+		t.Errorf("after 21 minutes, %d tokens, want every one renewed", issuer.count())
 	}
 }
 
@@ -240,6 +241,35 @@ func TestHealthIdentitiesReadOnly(t *testing.T) {
 	}
 }
 
+// The nodes identity may get and patch nodes and nothing else, and its admission policy acts on its
+// own requests alone.
+func TestNodesIdentityPatchesNodesAlone(t *testing.T) {
+	t.Parallel()
+	clock := time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
+	c := initialised(storageCluster())
+	f := newIdentities(t, c, &clock)
+	reconcileIdentities(t, f.w, c)
+
+	got := clusterRights(t, f.workload, "kubehenge-nodes")
+	if len(got) != 1 || !slices.Equal(got[0].Resources, []string{"nodes"}) || !slices.Equal(got[0].Verbs, []string{"get", "patch"}) {
+		t.Errorf("the nodes identity may do %+v, want get and patch nodes alone", got)
+	}
+	policy := &admissionregistrationv1.ValidatingAdmissionPolicy{}
+	binding := &admissionregistrationv1.ValidatingAdmissionPolicyBinding{}
+	for _, o := range []client.Object{policy, binding} {
+		if err := f.workload.Get(context.Background(), client.ObjectKey{Name: "kubehenge-nodes"}, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	conditions := policy.Spec.MatchConditions
+	if len(conditions) != 1 || conditions[0].Expression != "request.userInfo.username == 'system:serviceaccount:kube-system:kubehenge-nodes'" {
+		t.Errorf("the policy acts on %+v", conditions)
+	}
+	if binding.Spec.PolicyName != policy.Name || !slices.Equal(binding.Spec.ValidationActions, []admissionregistrationv1.ValidationAction{admissionregistrationv1.Deny}) {
+		t.Errorf("the policy is bound as %+v", binding.Spec)
+	}
+}
+
 // The backup identities come once the velero namespace is there, may do nothing outside Velero's
 // resources, and go when backups are switched off.
 func TestBackupIdentitiesGoWithBackups(t *testing.T) {
@@ -249,8 +279,8 @@ func TestBackupIdentitiesGoWithBackups(t *testing.T) {
 	f := newIdentities(t, c, &clock)
 	ctx := context.Background()
 
-	if got := reconcileIdentities(t, f.w, c); got.RequeueAfter != waitInterval || f.issuer.count() != 2 {
-		t.Errorf("before Velero's namespace: requeued after %v with %d tokens, want %v and the health identities'", got.RequeueAfter, f.issuer.count(), waitInterval)
+	if got := reconcileIdentities(t, f.w, c); got.RequeueAfter != waitInterval || f.issuer.count() != 3 {
+		t.Errorf("before Velero's namespace: requeued after %v with %d tokens, want %v and those of every cluster", got.RequeueAfter, f.issuer.count(), waitInterval)
 	}
 	if got := secretsBeside(t, f.kube, c, IdentityBackups, IdentityRestores); len(got) != 0 {
 		t.Errorf("%v before Velero's namespace", got)
@@ -258,7 +288,7 @@ func TestBackupIdentitiesGoWithBackups(t *testing.T) {
 	if err := f.workload.Create(ctx, &corev1.Namespace{Name: VeleroNamespace}); err != nil {
 		t.Fatal(err)
 	}
-	if got := reconcileIdentities(t, f.w, c); got.RequeueAfter != tokenRenewal || f.issuer.count() != 4 {
+	if got := reconcileIdentities(t, f.w, c); got.RequeueAfter != tokenRenewal || f.issuer.count() != 5 {
 		t.Errorf("requeued after %v with %d tokens, want %v and the backup identities' besides", got.RequeueAfter, f.issuer.count(), tokenRenewal)
 	}
 	if got := secretsBeside(t, f.kube, c, IdentityBackups, IdentityRestores); len(got) != 2 {

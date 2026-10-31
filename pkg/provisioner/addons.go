@@ -62,6 +62,7 @@ const (
 	regionKey         = "region"
 	defaultKey        = "default"
 	installCRDsKey    = "installCRDs"
+	etcdKey           = "etcd"
 	// The least CPU and memory the small add-on pods ask for.
 	cpu10m     = "10m"
 	memory64Mi = "64Mi"
@@ -282,7 +283,8 @@ func rancherProxy(cluster *clusterv1.Cluster) string {
 // values. Rancher's chart gives a start two minutes, which its first start on one small node can
 // overrun while it registers its CRDs; every kill begins that again, so the window is ten minutes,
 // and liveness keeps its own. The server URL joins the chart's own extraEnv, which a list in these
-// values would replace.
+// values would replace. The webhook's and Fleet's requests reach their charts through Rancher's
+// rancher-config ConfigMap, Fleet's as the default of each of its containers.
 func rancherValues(r Rancher, base map[string]any) map[string]any {
 	const (
 		// A negative count is the chart's "up to": as many replicas as nodes, at most three.
@@ -302,6 +304,9 @@ func rancherValues(r Rancher, base map[string]any) map[string]any {
 		ingressKey:     map[string]any{"tls": map[string]any{"source": "rancher"}},
 		"extraEnv":     append(env, map[string]any{"name": "CATTLE_SERVER_URL", valueKey: "https://" + r.Hostname}),
 		"startupProbe": map[string]any{"timeoutSeconds": probeTimeout, "periodSeconds": probePeriod, "failureThreshold": probeFailures},
+		"resources":    reserved("50m", "128Mi"),
+		"webhook":      map[string]any{"resources": reserved(cpu10m, memory64Mi)},
+		"fleet":        map[string]any{"resources": reserved(cpu10m, memory64Mi)},
 	}
 }
 
@@ -540,22 +545,26 @@ func calicoResources(cluster *clusterv1.Cluster, cni CNI, images []Image) (*core
 	if cni.ContainerForwarding {
 		network["containerIPForwarding"] = "Enabled"
 	}
-	installation := map[string]any{
+	installation := overlay(calicoComponents(), map[string]any{
 		"cni":           map[string]any{"type": "Calico"},
 		"calicoNetwork": network,
 		// Calico's CSI driver, for its own volume types, which Kubehenge does not use.
 		"kubeletVolumePluginPath": "None",
 		// Nor its FlexVolume driver, which it would install into /usr, read-only on every node OS:
 		// Talos's and the image-mode templates' alike.
-		"flexVolumePath":  "None",
-		"typhaDeployment": calicoTypha(),
-	}
+		"flexVolumePath": "None",
+	})
 	// No Goldmane or Whisker, Calico's flow-log aggregator and its viewer: nothing reads their flows,
-	// and on a small node they take CPU the cluster's own work needs.
+	// and on a small node they take CPU the cluster's own work needs. The operator runs the webhooks
+	// only with Calico's v3 CRDs.
+	apiServer := map[string]any{
+		"apiServerDeployment":      calicoPod(calicoContainer("calico-apiserver", cpu10m, memory64Mi)),
+		"calicoWebhooksDeployment": calicoPod(calicoContainer("calico-webhooks", cpu10m, "32Mi")),
+	}
 	resources := []map[string]any{
 		calicoImageSet(images),
 		{"kind": "Installation", "spec": installation},
-		{"kind": "APIServer", "spec": map[string]any{}},
+		{"kind": "APIServer", "spec": apiServer},
 	}
 	var manifest []byte
 	for _, r := range resources {
@@ -609,6 +618,7 @@ func ciliumValues(cluster *clusterv1.Cluster, id int, addons *Addons, operator m
 	operator["rollOutPods"] = true
 	// As arguments rather than in Cilium's ConfigMap, a change to them restarts the operator only.
 	operator[extraArgsKey] = leaseArgs("leader-election")
+	operator["resources"] = reserved(cpu10m, memory64Mi)
 	// Without kube-proxy replacement, Cilium serves host ports, Traefik's on every node, only
 	// through the portmap plugin chained behind it, as RKE2 runs its own Cilium. Not exclusive, with
 	// Istio or without: Cilium would take istio-cni's plugin out of the node's CNI configuration, and
@@ -619,6 +629,9 @@ func ciliumValues(cluster *clusterv1.Cluster, id int, addons *Addons, operator m
 		"rollOutCiliumPods": true,
 		"operator":          operator,
 		"cni":               cni,
+		"resources":         reserved("50m", "128Mi"),
+		// RKE2's chart runs Envoy inside the agent and takes this without running it.
+		"envoy": map[string]any{"resources": reserved(cpu10m, memory64Mi)},
 	}
 	if addons.ClusterMesh.Enabled {
 		values["clustermesh"] = clusterMeshValues()
@@ -666,7 +679,8 @@ func rke2CiliumConfig(cluster *clusterv1.Cluster, id int, addons *Addons) (*core
 func rke2CalicoConfig(cluster *clusterv1.Cluster) (*corev1.Secret, error) {
 	return rke2ChartConfig(rke2CalicoName(cluster), cluster, rke2CalicoChart, map[string]any{
 		tolerationsKey: calicoTolerations(),
-		"installation": map[string]any{"typhaDeployment": calicoTypha()},
+		"resources":    reserved(cpu10m, memory64Mi),
+		"installation": calicoComponents(),
 	})
 }
 
@@ -863,9 +877,28 @@ func calicoTolerations() []any {
 	}
 }
 
-// calicoTypha holds the Installation's Typha to calicoTolerations.
-func calicoTypha() map[string]any {
-	return map[string]any{"spec": map[string]any{"template": map[string]any{"spec": map[string]any{tolerationsKey: calicoTolerations()}}}}
+// calicoComponents are the Installation's settings of the pods the Tigera operator runs Calico in,
+// Kubehenge's or RKE2's: their requests, which the operator leaves out, and Typha held to
+// calicoTolerations.
+func calicoComponents() map[string]any {
+	typha := calicoContainer("calico-typha", cpu10m, memory64Mi)
+	typha[tolerationsKey] = calicoTolerations()
+	return map[string]any{
+		"calicoNodeDaemonSet":             calicoPod(calicoContainer("calico-node", "50m", "128Mi")),
+		"typhaDeployment":                 calicoPod(typha),
+		"calicoKubeControllersDeployment": calicoPod(calicoContainer("calico-kube-controllers", cpu10m, memory64Mi)),
+	}
+}
+
+// calicoContainer is the pod spec of an override of one of the operator's pods that gives its
+// container, by a name the operator accepts, the requests given.
+func calicoContainer(name, cpu, memory string) map[string]any {
+	return map[string]any{"containers": []any{map[string]any{"name": name, "resources": reserved(cpu, memory)}}}
+}
+
+// calicoPod is the override of one of the operator's pods with the pod spec given.
+func calicoPod(spec map[string]any) map[string]any {
+	return map[string]any{"spec": map[string]any{"template": map[string]any{"spec": spec}}}
 }
 
 // proxmoxValues are the values of the two charts that talk to Proxmox VE: the cloud controller
@@ -921,6 +954,8 @@ func proxmoxValues(storage string, addons *Addons) (map[string]any, map[string]a
 			"resizer":     sidecar(),
 			"snapshotter": snapshotter,
 		},
+		// The chart requests CPU for every container but the node plugin's.
+		"node":                    map[string]any{"plugin": map[string]any{"resources": reserved(cpu10m, "32Mi")}},
 		"affinity":                controlPlane,
 		tolerationsKey:            controlPlaneTolerations(),
 		"existingConfigSecretKey": csiConfigKey,
@@ -1002,6 +1037,7 @@ func cniChart(cluster *clusterv1.Cluster, charts *Charts, cni CNI, addons *Addon
 		return []chartProxy{{"cni", cniCalico, "tigera-operator", charts.Calico, map[string]any{
 			"manageCRDs": true, "installation": off, "apiServer": off, "goldmane": off, "whisker": off,
 			tolerationsKey: calicoTolerations(),
+			"resources":    reserved(cpu10m, memory64Mi),
 		}}}, nil
 	}
 	return nil, fmt.Errorf("cluster %s/%s: no chart for CNI %q", cluster.Namespace, cluster.Name, cni.Name)

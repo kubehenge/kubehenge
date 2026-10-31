@@ -67,8 +67,7 @@ func (a *Accounts) send(ctx context.Context, t *Ticket, method, path string, for
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
-	req.Header.Set("Cookie", "PVEAuthCookie="+t.Ticket)
-	req.Header.Set("Csrfpreventiontoken", t.CSRF)
+	t.authorize(req)
 	if out == nil {
 		var ignored any
 		out = &ignored

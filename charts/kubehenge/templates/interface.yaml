@@ -78,6 +78,13 @@ rules:
   - apiGroups: [""]
     resources: [events]
     verbs: [list]
+  # The management cluster's own health on the Administration page.
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [list]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -165,6 +172,10 @@ rules:
   - apiGroups: [cluster.x-k8s.io]
     resources: [clusters]
     verbs: [create, update, patch, delete]
+  # Marking a machine for its health check to replace, which the policy below holds it to.
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [machines]
+    verbs: [patch]
   # Each cluster's <name>-kubeconfig, and a Talos cluster's <name>-talosconfig, handed to users with
   # Sys.Modify on its pool, its health identities' tokens, and the credentials users type in, which
   # the policy below holds every write and deletion to.
@@ -300,4 +311,53 @@ metadata:
   name: {{ $name }}-credentials
 spec:
   policyName: {{ $name }}-credentials
+  validationActions: [Deny]
+{{- /*
+RBAC cannot narrow a patch to one annotation, so this policy holds the interface's changes to
+Machines to two of Cluster API's marks: remediation, which a cluster's health check acts on as on a
+node that stays not ready, and deletion, which picks the machine a shrinking pool deletes first.
+Setting them or taking them back, and nothing else of the Machine.
+*/}}
+{{- $marks := "['cluster.x-k8s.io/remediate-machine', 'cluster.x-k8s.io/delete-machine']" }}
+{{- $outside := "the interface changes nothing of a Machine but the cluster.x-k8s.io/remediate-machine and cluster.x-k8s.io/delete-machine annotations" }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}-machines
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [cluster.x-k8s.io]
+        apiVersions: ["*"]
+        operations: [UPDATE]
+        resources: [machines]
+  matchConditions:
+    - name: interface
+      expression: request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:{{ $name }}'
+  validations:
+    - expression: >-
+        object.spec == oldObject.spec
+        && has(object.metadata.labels) == has(oldObject.metadata.labels)
+        && (!has(object.metadata.labels) || object.metadata.labels == oldObject.metadata.labels)
+        && has(object.metadata.finalizers) == has(oldObject.metadata.finalizers)
+        && (!has(object.metadata.finalizers) || object.metadata.finalizers == oldObject.metadata.finalizers)
+        && has(object.metadata.ownerReferences) == has(oldObject.metadata.ownerReferences)
+        && (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences == oldObject.metadata.ownerReferences)
+      message: {{ $outside }}
+    - expression: >-
+        (!has(object.metadata.annotations) || object.metadata.annotations.all(k, k in {{ $marks }}
+        || (has(oldObject.metadata.annotations) && k in oldObject.metadata.annotations
+        && oldObject.metadata.annotations[k] == object.metadata.annotations[k])))
+        && (!has(oldObject.metadata.annotations) || oldObject.metadata.annotations.all(k, k in {{ $marks }}
+        || (has(object.metadata.annotations) && k in object.metadata.annotations)))
+      message: {{ $outside }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}-machines
+spec:
+  policyName: {{ $name }}-machines
   validationActions: [Deny]

@@ -1,9 +1,10 @@
-import { lazy, type JSX } from "react";
+import { lazy, useEffect, type JSX } from "react";
 
 import { adminPath, adminViews, type AdminView } from "./admin-views";
-import { ClusterDetail, clusterPath, views, type View } from "./ClusterDetail";
+import { clusterPath, views, type View } from "./cluster-paths";
 import { ClusterList } from "./ClusterList";
 import { Link, match } from "./router";
+import { Skeleton } from "./ui";
 
 // Pages only some people open, now and then, load when first opened: whoever only looks at clusters
 // never fetches them.
@@ -18,6 +19,13 @@ const Administration = lazy(async () => {
 const Setup = lazy(async () => {
   const m = await import("./Setup");
   return { default: m.Setup };
+});
+// A cluster's page is what nearly everyone opens next, so its code is fetched as soon as the first
+// page has drawn, and is there by the time a cluster is clicked.
+const loadClusterDetail = async (): Promise<unknown> => import("./ClusterDetail");
+const ClusterDetail = lazy(async () => {
+  const m = await import("./ClusterDetail");
+  return { default: m.ClusterDetail };
 });
 const CreateCluster = lazy(async () => {
   const m = await import("./CreateCluster");
@@ -67,8 +75,9 @@ export function routeAt(path: string, needsSetup: boolean | undefined, canManage
       key: clusterPath(namespace, name),
     };
   }
-  if (path === "/") {
-    return { route: { page: "list" }, title: "Clusters", key: path };
+  // Every cluster's address starts /clusters/, so the bare /clusters is where people look for the list.
+  if (path === "/" || path === "/clusters") {
+    return { route: { page: "list" }, title: "Clusters", key: "/" };
   }
   if (path.startsWith("/runs/") && path.length > "/runs/".length) {
     return { route: { page: "run", id: path.slice("/runs/".length) }, title: "Run", key: path };
@@ -80,6 +89,7 @@ export function routeAt(path: string, needsSetup: boolean | undefined, canManage
 export function RoutePage({
   route,
   canCreate,
+  canManage,
   canTrust,
   namespaces,
   headlamp,
@@ -87,14 +97,18 @@ export function RoutePage({
 }: {
   route: Route;
   canCreate: boolean | undefined;
+  canManage: boolean;
   canTrust: boolean | undefined;
   namespaces: string[];
   headlamp: number | undefined;
   onSetupChanged: () => void;
 }): JSX.Element {
+  useEffect(() => {
+    void loadClusterDetail();
+  }, []);
   switch (route.page) {
     case "loading": {
-      return <p className="loading">Loading…</p>;
+      return <Skeleton rows={6} />;
     }
     case "setup": {
       return <Setup onReady={onSetupChanged} />;
@@ -112,7 +126,7 @@ export function RoutePage({
       return <ClusterDetail namespace={route.namespace} name={route.name} view={route.view} headlamp={headlamp} />;
     }
     case "list": {
-      return <ClusterList canCreate={canCreate} />;
+      return <ClusterList canCreate={canCreate} canManage={canManage} />;
     }
     case "run": {
       return <RunPage id={route.id} />;

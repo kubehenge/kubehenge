@@ -273,14 +273,20 @@ pods that run once and one node's share of those on every node. The scheduler pl
 a node with that much CPU not yet requested, however idle the node is. Kyverno's controllers ask
 for 100m each, the admission controller twice. Istio is istiod's 100m, and a node's CNI agent's 100m and ztunnel's 200m. Logs
 are Loki's 55m with its proxy, and 10m for each Alloy; backups are Velero's server's 50m and a
-node's agent's 20m. Monitoring is its metrics proxies at 5m each, a node's and a control plane's;
-its other pods ask for none. The load balancer is kube-vip's cloud provider at 50m, MetalLB asking
-for none. Flux is its operator and four controllers at 10m each, Headlamp 10m, Rancher its Turtles
-controller. cert-manager, Argo CD, the clustermesh-apiserver, Rancher's own pods and its agent ask
-for none.
+node's agent's 20m. Monitoring is Prometheus's 100m and its operator's 50m, Grafana's 50m with its
+two sidecars, Prometheus's and Alertmanager's reloaders, Alertmanager, kube-state-metrics, and a
+node's node-exporter and its proxy at 10m each, and its metrics proxies at 5m each, a node's and a
+control plane's three. The load balancer is kube-vip's cloud provider at 50m and a node's kube-vip
+at 10m, more than MetalLB's controller and a node's speaker at 10m each. Flux is its operator and
+four controllers at 10m each, Headlamp 10m. cert-manager is its controller, webhook and CA injector
+at 10m each; Argo CD its application controller's 50m and its server, repository server,
+ApplicationSet controller and Redis at 10m each; the clustermesh-apiserver its three containers at
+10m each. Rancher is a node's Rancher at 50m, its webhook, Turtles' controller and Fleet's five
+containers at 10m each; Rancher's agent a node's cluster agent, Fleet's agent and the webhook at
+10m each. The Cluster API controller Turtles runs and the system upgrade controller ask for none.
 */}}
 {{- define "kubehenge.addonCPU" -}}
-kubehenge.dev/addon-cpu: '{"headlamp":10,"monitoring":20,"logs":75,"backups":70,"kyverno":500,"istio":400,"clusterMesh":0,"loadBalancer":50,"certManager":0,"rancher":10,"rancherAgent":0,"argocd":0,"flux":50}'
+kubehenge.dev/addon-cpu: '{"headlamp":10,"monitoring":300,"logs":75,"backups":70,"kyverno":500,"istio":400,"clusterMesh":30,"loadBalancer":60,"certManager":30,"rancher":120,"rancherAgent":30,"argocd":90,"flux":50}'
 {{- end -}}
 
 {{/*
@@ -1189,6 +1195,18 @@ gateway:
 {{- end -}}
 
 {{/*
+What the Traefik RKE2 and k3s bring requests of a node, as Kubehenge's own Traefik does: their
+charts request nothing, and on a node every add-on starting at once kept busy, Traefik went
+unscheduled for long enough that its liveness probe restarted it.
+*/}}
+{{- define "kubehenge.traefikResources" -}}
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+{{- end -}}
+
+{{/*
 The Secret in kube-system whose values.yaml Kubehenge's controller keeps in step with the
 cluster's certificates, merged over the HelmChartConfig's own values: the default certificate and
 the Gateway's HTTPS listener. helm-controller upgrades Traefik when it changes, and installs it
@@ -1646,6 +1664,12 @@ content: |
           capabilities:
             add: [NET_ADMIN, NET_RAW]
             drop: [ALL]
+        # Without a request it would get the least CPU weight a node gives, and on a busy node
+        # miss renewing the lease on the cluster's API address.
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
         volumeMounts:
           - name: kubeconfig
             mountPath: /etc/kubernetes/admin.conf

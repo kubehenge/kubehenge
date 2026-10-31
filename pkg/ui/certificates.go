@@ -8,7 +8,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -71,11 +70,7 @@ func (s *Server) ingressCA(w http.ResponseWriter, r *http.Request, u user) {
 func (s *Server) stampCredentialsStored(r *http.Request, u user, clusters ...*clusterv1.Cluster) {
 	at := time.Now().UTC().Format(time.RFC3339)
 	for _, c := range clusters {
-		patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{provisioner.CredentialsStoredAnnotation: at}}})
-		if err == nil {
-			err = u.kube.Patch(r.Context(), c, client.RawPatch(types.MergePatchType, patch))
-		}
-		if err != nil {
+		if err := annotate(r.Context(), u.kube, c, map[string]any{provisioner.CredentialsStoredAnnotation: at}); err != nil {
 			s.Log.WarnContext(r.Context(), "could not mark a cluster as using a changed credential; it gets it at the controller's next resync",
 				"cluster", c.Namespace+"/"+c.Name, "error", err)
 		}

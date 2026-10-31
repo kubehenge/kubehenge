@@ -373,19 +373,33 @@ type rancherSide struct {
 }
 
 // create makes the cluster's object in Rancher. With no rkeConfig, Rancher imports the cluster
-// rather than provisioning it.
+// rather than provisioning it. Rancher gives its agents in the cluster no requests of their own.
 func (rs *rancherSide) create(ctx context.Context, key client.ObjectKey, cluster *clusterv1.Cluster) (ctrl.Result, error) {
 	rc := &unstructured.Unstructured{}
 	rc.SetGroupVersionKind(provisioningClusterGVK)
 	rc.SetNamespace(key.Namespace)
 	rc.SetName(key.Name)
 	rc.SetAnnotations(map[string]string{rancherClusterAnnotation: cluster.Namespace + "/" + cluster.Name})
-	rc.Object["spec"] = map[string]any{}
+	rc.Object["spec"] = rancherClusterSpec()
 	if err := rs.client.Create(ctx, rc); err != nil {
 		return ctrl.Result{}, fmt.Errorf("creating cluster %s in Rancher: %w", key, err)
 	}
 	ctrl.LoggerFrom(ctx).Info("registered the cluster with Rancher", "name", key.Name)
 	return ctrl.Result{RequeueAfter: registerPoll}, nil
+}
+
+// rancherClusterSpec is the spec of a cluster's object in Rancher: what its cluster agent, its
+// Fleet agent and the Rancher webhook the cluster agent installs beside them request. Rancher hands
+// the webhook's to the cluster through the cluster's own rancher-config ConfigMap.
+func rancherClusterSpec() map[string]any {
+	agent := func() map[string]any {
+		return map[string]any{"overrideResourceRequirements": reserved(cpu10m, memory64Mi)}
+	}
+	return map[string]any{
+		"clusterAgentDeploymentCustomization": agent(),
+		"fleetAgentDeploymentCustomization":   agent(),
+		"webhookDeploymentCustomization":      agent(),
+	}
 }
 
 // agentManifest fetches the manifest of Rancher's agent for a cluster, nil until Rancher has made

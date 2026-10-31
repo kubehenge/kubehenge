@@ -6,7 +6,7 @@ import { api } from "./api";
 import { ManagementBehind } from "./ManagementUpgrade";
 import { Link } from "./router";
 import type { Job } from "./types";
-import { ErrorBox, pollIdle, pollRunning, usePoll, Views } from "./ui";
+import { ErrorBox, Skeleton, pollIdle, pollRunning, usePoll, Views } from "./ui";
 
 // What a run of the management cluster does, other than applying it.
 const runningWhat: Partial<Record<NonNullable<Job["kind"]>, string>> = {
@@ -35,9 +35,7 @@ export function Administration({ view, onGone }: { view: AdminView; onGone: () =
 
   if (!status) {
     return (
-      <section className="panel">
-        {error === undefined ? <p className="loading">Loading…</p> : <ErrorBox message={error} />}
-      </section>
+      <section className="panel">{error === undefined ? <Skeleton rows={6} /> : <ErrorBox message={error} />}</section>
     );
   }
   const running = status.job?.state === "running";

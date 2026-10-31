@@ -229,6 +229,9 @@ func certManagerValues(c *Certificates) map[string]any {
 		// A Secret goes with its Certificate, so that nothing an add-on asked for outlives it.
 		"enableCertificateOwnerRef": true,
 		configKey:                   map[string]any{"gatewayAPI": map[string]any{"enabled": true}},
+		"resources":                 reserved(cpu10m, memory64Mi),
+		"webhook":                   map[string]any{"resources": reserved(cpu10m, "32Mi")},
+		"cainjector":                map[string]any{"resources": reserved(cpu10m, memory64Mi)},
 	}
 	if !c.on() {
 		return values

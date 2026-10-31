@@ -1,10 +1,11 @@
-import { createContext, use, useEffect, useMemo, useRef, type JSX, type ReactNode } from "react";
+import { createContext, use, useCallback, useEffect, useMemo, useRef, type JSX, type ReactNode } from "react";
 
 import { api } from "./api";
-import { clusterPath, type View } from "./ClusterDetail";
+import { clusterPath, type View } from "./cluster-paths";
+import { useClusterChanges } from "./live";
 import { Link } from "./router";
 import type { Cluster, FleetHealth, Replicas, RunInfo } from "./types";
-import { distributionName, ErrorText, filled, pollIdle, settled, usePoll } from "./ui";
+import { Status, distributionName, filled, health, pollIdle, settled, usePoll } from "./ui";
 
 // How often the fleet is read again while any cluster is changing.
 const pollChanging = 10_000;
@@ -22,7 +23,14 @@ export interface Fleet {
   runs: RunInfo[] | undefined;
   error: string | undefined;
   reload: () => Promise<void>;
+  /** When the clusters are next read. */
+  next: () => number;
+  /** show puts a cluster as a request just returned it into the list, before the list is read again. */
+  show: (c: Cluster) => void;
 }
+
+const withCluster = (list: Cluster[] | undefined, c: Cluster): Cluster[] | undefined =>
+  list && [...list.filter((x) => fleetKey(x) !== fleetKey(c)), c];
 
 const FleetContext = createContext<Fleet | null>(null);
 
@@ -36,7 +44,7 @@ const noFleet = (): Promise<undefined> => Promise.resolve(undefined);
  * while it is off, so the page round it is not built again when reading starts.
  */
 export function FleetProvider({ reads = true, children }: { reads?: boolean; children: ReactNode }): JSX.Element {
-  const { data, error, reload } = usePoll<Cluster[] | undefined>(reads ? api.clusters : noFleet, (list) =>
+  const { data, error, reload, next, put } = usePoll<Cluster[] | undefined>(reads ? api.clusters : noFleet, (list) =>
     list?.every((c) => settled(c)) === true ? pollIdle : pollChanging,
   );
   // The clusters show without their health, which only adds why some need someone.
@@ -47,6 +55,10 @@ export function FleetProvider({ reads = true, children }: { reads?: boolean; chi
   const { data: runs, reload: reloadRuns } = usePoll<RunInfo[] | undefined>(reads ? api.runs : noFleet, (list) =>
     list?.some((r) => r.state === "running" || r.state === "stalled") === true ? pollChanging : pollIdle,
   );
+  useClusterChanges(() => {
+    void reload();
+    void reloadRuns();
+  }, reads);
   const first = useRef(true);
   useEffect(() => {
     if (first.current) {
@@ -57,9 +69,26 @@ export function FleetProvider({ reads = true, children }: { reads?: boolean; chi
       void reloadRuns();
     }
   }, [reads, reload, reloadHealth, reloadRuns]);
+  // Not read again at once: the server's view of the clusters may not have the change yet, and the
+  // list polls often while a cluster is not settled anyway.
+  const show = useCallback(
+    (c: Cluster) => {
+      put((list) => withCluster(list, c));
+      void reloadRuns();
+    },
+    [put, reloadRuns],
+  );
   const fleet = useMemo(
-    () => ({ clusters: data, health: read && new Map(read.map((h) => [fleetKey(h), h])), runs, error, reload }),
-    [data, read, runs, error, reload],
+    () => ({
+      clusters: data,
+      health: read && new Map(read.map((h) => [fleetKey(h), h])),
+      runs,
+      error,
+      reload,
+      next,
+      show,
+    }),
+    [data, read, runs, error, reload, next, show],
   );
   return <FleetContext value={fleet}>{children}</FleetContext>;
 }
@@ -79,6 +108,8 @@ export interface Standing {
   reason: string;
   /** The view of the cluster's page that shows more of why. */
   view: View;
+  /** What a badge says of a cluster that needs someone, in place of what Cluster API says of it. */
+  verdict?: string;
 }
 
 export const groups: { group: Group; label: string }[] = [
@@ -104,7 +135,7 @@ function rollout(what: string, r: Replicas): string {
  * standing sums up a cluster for the fleet: from what its own answer says first, then, for one
  * that says nothing is wrong or under way, from what its health page found.
  */
-export function standing(c: Cluster, health?: FleetHealth, now = Date.now()): Standing {
+export function standing(c: Cluster, found?: FleetHealth, now = Date.now()): Standing {
   if (c.deleting) {
     if (
       c.deletion?.abandoned === undefined &&
@@ -117,7 +148,7 @@ export function standing(c: Cluster, health?: FleetHealth, now = Date.now()): St
   return (
     failure(c) ??
     (c.available ? underWay(c) : comingUp(c, now)) ??
-    finding(health) ?? {
+    finding(found) ?? {
       group: "healthy",
       state: "ok",
       reason: c.talos ? `Talos ${c.talos.version}, ${c.version}` : `${distributionName(c.distribution)} ${c.version}`,
@@ -129,7 +160,7 @@ export function standing(c: Cluster, health?: FleetHealth, now = Date.now()): St
 // failure is what has failed in a cluster and waits for someone, if anything has.
 function failure(c: Cluster): Standing | undefined {
   if (c.phase === "Failed") {
-    return { group: "needs", state: "error", reason: "Failed", view: "health" };
+    return { group: "needs", state: "error", reason: "Failed", view: "health", verdict: "Failed" };
   }
   if (filled(c.talos?.failed)) {
     return {
@@ -137,12 +168,13 @@ function failure(c: Cluster): Standing | undefined {
       state: "error",
       reason: `Talos upgrade failed on ${firstWord(c.talos.failed)}`,
       view: "",
+      verdict: "Upgrade failed",
     };
   }
   const failed = (c.machines ?? []).filter((m) => m.phase === "Failed");
   if (failed.length > 0) {
     const reason = failed.length === 1 ? `Machine ${failed[0]?.name ?? ""} failed` : `${failed.length} machines failed`;
-    return { group: "needs", state: "error", reason, view: "machines" };
+    return { group: "needs", state: "error", reason, view: "machines", verdict: "Degraded" };
   }
   if (filled(c.controllerError)) {
     return { group: "needs", state: "error", reason: "Controller error", view: "" };
@@ -173,6 +205,7 @@ function comingUp(c: Cluster, now: number): Standing {
     state: "error",
     reason: filled(why?.reason) ? `Not available: ${why.reason}` : "Not available",
     view: "health",
+    verdict: "Not available",
   };
 }
 
@@ -208,7 +241,7 @@ function finding(h: FleetHealth | undefined): Standing | undefined {
     return undefined;
   }
   if (h.verdict === "unreachable") {
-    return { group: "needs", state: "error", reason: "API server unreachable", view: "health" };
+    return { group: "needs", state: "error", reason: "API server unreachable", view: "health", verdict: "Unreachable" };
   }
   const [worst] = h.attention;
   if (worst === undefined) {
@@ -221,7 +254,19 @@ function finding(h: FleetHealth | undefined): Standing | undefined {
   if (worst.severity === "progress") {
     return { group: "running", state: "progress", reason, view };
   }
-  return { group: "needs", state: worst.severity, reason, view };
+  return { group: "needs", state: worst.severity, reason, view, verdict: "Degraded" };
+}
+
+/** badge is what a cluster's status badge shows: the fleet's verdict where it needs someone. */
+export function badge(c: Cluster, s: Standing): { state: Standing["state"]; text: string } {
+  return s.verdict === undefined ? health(c) : { state: s.state, text: s.verdict };
+}
+
+/** ClusterStatus is a cluster's badge, with what its health page found where the fleet has read it. */
+export function ClusterStatus({ cluster }: { cluster: Cluster }): JSX.Element {
+  const found = useFleet()?.health?.get(fleetKey(cluster));
+  const b = badge(cluster, standing(cluster, found));
+  return <Status state={b.state} text={b.text} />;
 }
 
 const severity: Record<Standing["state"], number> = { error: 0, warning: 1, progress: 2, deleting: 3, ok: 4 };
@@ -229,11 +274,11 @@ const severity: Record<Standing["state"], number> = { error: 0, warning: 1, prog
 /** ranked is the fleet in the rail's order: by group, the worst first within it, then by name. */
 export function ranked(
   clusters: Cluster[],
-  health?: Map<string, FleetHealth>,
+  found?: Map<string, FleetHealth>,
 ): { cluster: Cluster; standing: Standing }[] {
   const order = new Map(groups.map((g, i) => [g.group, i]));
   return clusters
-    .map((cluster) => ({ cluster, standing: standing(cluster, health?.get(fleetKey(cluster))) }))
+    .map((cluster) => ({ cluster, standing: standing(cluster, found?.get(fleetKey(cluster))) }))
     .toSorted(
       (a, b) =>
         (order.get(a.standing.group) ?? 0) - (order.get(b.standing.group) ?? 0) ||
@@ -255,15 +300,17 @@ export function FleetRail({
 }): JSX.Element {
   const fleet = useFleet();
   const list = fleet?.clusters === undefined ? undefined : ranked(fleet.clusters, fleet.health);
+  // A failed read leaves the last list shown, greyed, as it may no longer hold.
+  const stale = fleet?.error !== undefined && list !== undefined;
   return (
-    <nav className="rail" aria-label="Fleet">
+    <nav className={stale ? "rail rail-stale" : "rail"} aria-label="Fleet">
       <div className="rail-head">
         <h2>Fleet {list !== undefined && <span className="count">{list.length}</span>}</h2>
         <button
           type="button"
           className="icon"
           aria-label="New cluster"
-          title={canCreate === false ? "Needs VM.Allocate" : "New cluster (N)"}
+          title={canCreate === false ? "Needs VM.Allocate" : "New cluster (G N)"}
           disabled={canCreate === false}
           onClick={onCreate}
         >
@@ -271,8 +318,13 @@ export function FleetRail({
         </button>
       </div>
       {fleet?.error !== undefined && list === undefined && (
-        <p className="rail-note">
-          <ErrorText message={fleet.error} />
+        <p className="rail-note hint-warning" title={fleet.error}>
+          Not read
+        </p>
+      )}
+      {stale && (
+        <p className="rail-note hint-warning" title={fleet.error}>
+          Stale
         </p>
       )}
       {list?.length === 0 && <p className="rail-note">No clusters yet</p>}

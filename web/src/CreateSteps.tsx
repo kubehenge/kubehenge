@@ -6,21 +6,21 @@ import {
   chosenNodeOS,
   controlPlaneSizes,
   machineLeast,
-  memoryStepMiB,
   templateMissing,
   variable,
   versionExamples,
   versionLabel,
   type FieldKey,
   type Form,
-  type Machine,
 } from "./create-form";
 import { CSIField, SnapshotsField } from "./CsiPlugin";
 import { LoadBalancerFields } from "./LoadBalancer";
-import { addressBits } from "./network";
+import { MachineFields } from "./MachineFields";
+import { addressBits, addressIn } from "./network";
 import { choosable, cpuNote, findNodeOS, macName, nodeOSKey, nodeOSLabel } from "./node-os";
 import { OIDCProviders } from "./OIDCProviders";
 import { HAField, HAGroupsField, PlacementFields, type HARulesRead } from "./Placement";
+import { clusterKey } from "./start-from";
 import {
   TalosReleaseSelect,
   forRelease,
@@ -32,7 +32,9 @@ import {
 } from "./Talos";
 import type {
   Bridge,
+  Cluster,
   ClusterClass,
+  FreeAddresses,
   NodeOSChoice,
   PveNode,
   Storage,
@@ -339,6 +341,73 @@ function NodeOSField({ form, set, shown, cls }: StepProps & { cls: ClusterClass 
 export const useClassTalos = (cls: ClusterClass | undefined): TalosReleases | undefined =>
   useTalosReleases(variable(cls, "talosVersion") !== undefined);
 
+// How long after the network settings last change the wizard probes them.
+const probeAfter = 500;
+
+/** ProbeOn is where addresses are probed: the bridge of a node that reports its network, and the VLAN tag typed. */
+export interface ProbeOn {
+  node: string | undefined;
+  bridge: string;
+  vlan: string;
+}
+
+/**
+ * useFreeAddresses asks, a moment after its inputs last change, for free addresses on a bridge's
+ * network: a run for the API and the nodes where nodes is above 0, and which of check a host
+ * answers on. It is advice, so where the question fails there is none.
+ */
+export function useFreeAddresses(on: ProbeOn, nodes: number, check: string[]): FreeAddresses | undefined {
+  const { node, bridge } = on;
+  const vlan = filled(on.vlan) ? Number(on.vlan) : 0;
+  const checked = check.join("\n");
+  const key = [node, bridge, vlan, nodes, checked].join(" ");
+  const [found, setFound] = useState<{ key: string; free: FreeAddresses }>();
+  useEffect(() => {
+    let current = true;
+    async function probe(n: string): Promise<void> {
+      try {
+        const free = await api.freeAddresses(n, bridge, {
+          vlan,
+          nodes,
+          check: checked === "" ? [] : checked.split("\n"),
+        });
+        if (current) {
+          setFound({ key, free });
+        }
+      } catch {
+        // The fields stay as they are.
+      }
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (node !== undefined && bridge !== "" && Number.isInteger(vlan) && (nodes > 0 || checked !== "")) {
+      timer = setTimeout(() => {
+        void probe(node);
+      }, probeAfter);
+    }
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [node, bridge, vlan, nodes, checked, key]);
+  return found?.key === key ? found.free : undefined;
+}
+
+// At most this many addresses a host answers on are named; the rest are counted.
+const inUseNamed = 3;
+
+function inUse(addresses: string[]): JSX.Element | undefined {
+  if (addresses.length === 0) {
+    return undefined;
+  }
+  const more = addresses.length > inUseNamed ? ` +${addresses.length - inUseNamed}` : "";
+  return (
+    <span className="hint-warning">
+      In use: {addresses.slice(0, inUseNamed).join(", ")}
+      {more}
+    </span>
+  );
+}
+
 // A version is typed in only when none could be listed: the hint gives its format, and why the list
 // is missing sits behind the field's info.
 const typedVersion = (cls: ClusterClass | undefined, offered: Versions | undefined): boolean =>
@@ -390,6 +459,37 @@ export interface StepProps {
   shown: (k: FieldKey) => string | undefined;
 }
 
+// StartFromField chooses the cluster a new one starts as, or none for the class's defaults.
+function StartFromField({
+  from,
+  starts,
+  onChoose,
+  namespaced,
+}: {
+  from: string;
+  starts: Cluster[];
+  onChoose: (key: string) => void;
+  namespaced: boolean;
+}): JSX.Element | null {
+  if (starts.length === 0) {
+    return null;
+  }
+  return (
+    <Field label="Start from">
+      {(id) => (
+        <select id={id} value={from} onChange={(e) => onChoose(e.target.value)}>
+          <option value="">Defaults</option>
+          {starts.map((c) => (
+            <option key={clusterKey(c)} value={clusterKey(c)}>
+              {namespaced ? clusterKey(c) : c.name}
+            </option>
+          ))}
+        </select>
+      )}
+    </Field>
+  );
+}
+
 export function GeneralStep({
   form,
   set,
@@ -401,6 +501,8 @@ export function GeneralStep({
   onChooseClass,
   namespaces,
   onChooseNamespace,
+  starts,
+  onChooseFrom,
 }: StepProps & {
   classes: ClusterClass[];
   cls: ClusterClass | undefined;
@@ -410,12 +512,16 @@ export function GeneralStep({
   onChooseClass: (name: string) => void;
   namespaces: string[];
   onChooseNamespace: (namespace: string) => void;
+  /** The clusters a new one may start from, the newest first. */
+  starts: Cluster[];
+  onChooseFrom: (key: string) => void;
 }): JSX.Element {
   const runs = forRelease(offered, talos, form.talosVersion);
   const typed = typedVersion(cls, runs);
   const unlisted = runs?.error;
   return (
     <>
+      <StartFromField from={form.from} starts={starts} onChoose={onChooseFrom} namespaced={namespaces.length > 1} />
       {namespaces.length > 1 && (
         <Field label="Namespace">
           {(id) => (
@@ -499,14 +605,33 @@ export function GeneralStep({
 // Talos brings Flannel itself; Kubehenge installs the other pod networks its class offers.
 const ownNetworks: Record<string, string> = { talos: "flannel" };
 
+// Where in the bridge's network the examples of the API and node addresses lie.
+const exampleEndpoint = 20;
+const exampleFirst = 21;
+const exampleLast = 29;
+
 export function NetworkStep({
   form,
   set,
   shown,
   cls,
   bridgeOptions,
-}: StepProps & { cls: ClusterClass | undefined; bridgeOptions: Bridge[] }): JSX.Element {
+  network,
+  checked,
+}: StepProps & {
+  cls: ClusterClass | undefined;
+  bridgeOptions: Bridge[];
+  /** The bridge's network, like 192.0.2.0/24, where a node reports it, else the gateway's; the examples are taken from it. */
+  network?: string | undefined;
+  /** What probing the addresses typed found. */
+  checked?: FreeAddresses | undefined;
+}): JSX.Element {
   const cni = variable(cls, "cni");
+  const answering = checked?.answering ?? [];
+  const endpointInUse = inUse(answering.filter((a) => a === form.endpoint));
+  const nodesInUse = inUse(answering.filter((a) => a !== form.endpoint));
+  const example = (offset: number, otherwise: string): string =>
+    (network === undefined ? undefined : addressIn(network, offset)) ?? otherwise;
   // Cilium's ranges also keep clear of the other clusters', so the cluster can join a Cluster Mesh.
   const rangeHint =
     form.cni === "cilium" ? "Leave empty to choose one clear of other clusters" : "Leave empty to choose a free one";
@@ -542,19 +667,26 @@ export function NetworkStep({
           <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
         )}
       </Field>
-      <Field label="API address" hint="A free address outside the node addresses" error={shown("endpoint")}>
+      <Field
+        label="API address"
+        hint={endpointInUse ?? "A free address outside the node addresses"}
+        error={shown("endpoint")}
+      >
         {(id) => (
           <input
             id={id}
             value={form.endpoint}
             onChange={(e) => set("endpoint", e.target.value.trim())}
-            placeholder="10.0.0.20"
+            placeholder={example(exampleEndpoint, "10.0.0.20")}
           />
         )}
       </Field>
       <Field
         label="Node addresses"
-        hint="Ranges like 10.0.0.21-10.0.0.29, networks or addresses"
+        hint={
+          nodesInUse ??
+          `Ranges like ${example(exampleFirst, "10.0.0.21")}-${example(exampleLast, "10.0.0.29")}, networks or addresses`
+        }
         error={shown("addresses")}
       >
         {(id) => (
@@ -734,61 +866,5 @@ export function IdentityStep({
 }): JSX.Element {
   return (
     <OIDCProviders initial={form.oidc} fixed={canTrust === false} showAll={showAll} onChange={(v) => set("oidc", v)} />
-  );
-}
-
-function MachineFields({
-  label,
-  value,
-  min,
-  error,
-  onChange,
-}: {
-  label: string;
-  value: Machine;
-  min: Machine;
-  error?: string | undefined;
-  onChange: (m: Machine) => void;
-}): JSX.Element {
-  // fieldProblems names the first of cores, memory and disk that is wrong.
-  const on = (part: string): string | undefined => (error?.toLowerCase().includes(part) === true ? error : undefined);
-  return (
-    <fieldset className="group">
-      <legend>{label}</legend>
-      <Field label="Cores" error={on("cores")}>
-        {(id) => (
-          <input
-            id={id}
-            type="number"
-            min={min.cores}
-            value={shownNumber(value.cores)}
-            onChange={(e) => onChange({ ...value, cores: typedNumber(e.target.value) })}
-          />
-        )}
-      </Field>
-      <Field label="Memory (MiB)" error={on("memory")}>
-        {(id) => (
-          <input
-            id={id}
-            type="number"
-            min={min.memoryMiB}
-            step={memoryStepMiB}
-            value={shownNumber(value.memoryMiB)}
-            onChange={(e) => onChange({ ...value, memoryMiB: typedNumber(e.target.value) })}
-          />
-        )}
-      </Field>
-      <Field label="Disk (GiB)" error={on("disk")}>
-        {(id) => (
-          <input
-            id={id}
-            type="number"
-            min={min.diskGiB}
-            value={shownNumber(value.diskGiB)}
-            onChange={(e) => onChange({ ...value, diskGiB: typedNumber(e.target.value) })}
-          />
-        )}
-      </Field>
-    </fieldset>
   );
 }

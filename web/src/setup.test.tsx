@@ -61,6 +61,35 @@ const administration = {
 const forClusters = (group: string): BoundFunctions<typeof queries> =>
   within(screen.getByRole("group", { name: group }));
 
+// A one-node Proxmox VE as it answers: local takes every kind of content, local-lvm has more room
+// for disks, and the node reaches its gateway through vmbr0.
+const oneNode = {
+  "GET /api/proxmox/nodes": { body: [{ node: "pve1", online: true }] },
+  "GET /api/proxmox/storages": {
+    body: [
+      {
+        storage: "local",
+        node: "pve1",
+        shared: false,
+        content: ["iso", "import", "images"],
+        avail: 10,
+        total: 100,
+        usable: true,
+      },
+      { storage: "local-lvm", node: "pve1", shared: false, content: ["images"], avail: 90, total: 100, usable: true },
+    ],
+  },
+  "GET /api/proxmox/nodes/pve1/bridges": {
+    body: [
+      { bridge: "vmbr0", node: "pve1", vlanAware: false, usable: true, cidr: "192.0.2.5/24", gateway: "192.0.2.1" },
+      { bridge: "vmbr1", node: "pve1", vlanAware: true, usable: true },
+    ],
+  },
+  "GET /api/proxmox/nodes/pve1/dns": { body: { servers: ["192.0.2.53", "198.51.100.53"] } },
+};
+
+const next = async (user: UserEvent): Promise<void> => user.click(screen.getByRole("button", { name: "Next" }));
+
 // withJob serves a signed-in administrator of an appliance whose last run is job.
 const withJob = (job: unknown): void => {
   fakeServer({
@@ -320,25 +349,8 @@ describe("setup", () => {
     };
     const routes: Record<string, Route> = {
       ...administrator,
+      ...oneNode,
       "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
-      "GET /api/proxmox/nodes": { body: [{ node: "pve1", online: true }] },
-      "GET /api/proxmox/storages": {
-        body: [
-          {
-            storage: "local",
-            node: "pve1",
-            shared: false,
-            content: ["iso", "import", "images"],
-            avail: 0,
-            total: 0,
-            usable: true,
-          },
-          { storage: "local-lvm", node: "pve1", shared: false, content: ["images"], avail: 0, total: 0, usable: true },
-        ],
-      },
-      "GET /api/proxmox/nodes/pve1/bridges": {
-        body: [{ bridge: "vmbr0", node: "pve1", vlanAware: false, usable: true }],
-      },
       "POST /api/setup": () => {
         routes["GET /api/setup"] = { body: { appliance: true, ready: false, allowed: true, job } };
         return { status: 202, body: job };
@@ -348,20 +360,37 @@ describe("setup", () => {
     const user = userEvent.setup({ delay: null });
     render(<App />);
 
-    // Asked of the one select rather than the whole form, whose size makes a page-wide role query
-    // slower than waitFor's interval allows on a busy machine.
+    // The roomiest storage for disks is chosen to start with.
     const disks = await screen.findByLabelText("VM disks");
-    await waitFor(() => expect(within(disks).getByRole("option", { name: "local-lvm" })).toBeInTheDocument());
-    await user.selectOptions(disks, "local-lvm");
-    const bridge = screen.getByLabelText("Bridge");
-    await waitFor(() => expect(within(bridge).getByRole("option", { name: "vmbr0" })).toBeInTheDocument());
-    await user.selectOptions(bridge, "vmbr0");
-    await user.type(screen.getByLabelText("Node addresses"), "192.0.2.11/24");
+    await waitFor(() => expect(disks).toHaveValue("local-lvm"));
+    expect(screen.getByRole("button", { name: "Placement" })).toHaveAttribute("aria-current", "step");
+    await next(user);
+
+    // The bridge the node reaches its gateway through, that gateway and the node's DNS servers.
+    await waitFor(() => expect(screen.getByLabelText("DNS servers")).toHaveValue("192.0.2.53, 198.51.100.53"));
+    expect(screen.getByLabelText("Bridge")).toHaveValue("vmbr0");
+    expect(screen.getByLabelText("Gateway")).toHaveValue("192.0.2.1");
+    const addresses = screen.getByLabelText("Node addresses");
+    expect(addresses).toHaveAccessibleDescription("1 or 3 in 192.0.2.0/24");
+    // Next on a step with something missing stays there, says what, and goes to it.
+    await next(user);
+    expect(screen.getByRole("button", { name: "Network" })).toHaveAttribute("aria-current", "step");
+    expect(addresses).toHaveAccessibleDescription("Enter 1 or 3 addresses. 1 or 3 in 192.0.2.0/24");
+    expect(addresses).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Services" })).toBeDisabled();
+    await user.type(addresses, "192.0.2.11/24");
     await user.type(screen.getByLabelText("API address"), "192.0.2.10");
-    await user.type(screen.getByLabelText("Gateway"), "192.0.2.1");
-    await user.type(screen.getByLabelText("DNS servers"), "192.0.2.1");
-    await user.click(forClusters("Storages").getByRole("checkbox", { name: "local-lvm" }));
-    await user.click(forClusters("Bridges").getByRole("checkbox", { name: "vmbr0" }));
+    await next(user);
+
+    // Clusters are offered what the management cluster runs on.
+    expect(forClusters("Storages").getByRole("checkbox", { name: "local-lvm" })).toBeChecked();
+    expect(forClusters("Storages").getByRole("checkbox", { name: "local" })).not.toBeChecked();
+    expect(forClusters("Bridges").getByRole("checkbox", { name: "vmbr0" })).toBeChecked();
+    // A storage added keeps the one offered to start with.
+    await user.click(forClusters("Storages").getByRole("checkbox", { name: "local" }));
+    expect(forClusters("Storages").getByRole("checkbox", { name: "local-lvm" })).toBeChecked();
+    await next(user);
+
     const signIn = screen.getByLabelText("Sign in as cluster-admin");
     expect(signIn).not.toBeChecked();
     expect(signIn).toHaveAccessibleDescription(/Headlamp as cluster-admin/u);
@@ -370,6 +399,7 @@ describe("setup", () => {
     expect(actions).not.toBeChecked();
     expect(actions).toHaveAccessibleDescription(/own cluster credentials/u);
     await user.click(actions);
+    await next(user);
     await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple");
     await user.type(screen.getByLabelText("Repeat passphrase"), "correct horse battery staple");
     await submit(user);
@@ -385,6 +415,10 @@ describe("setup", () => {
         vmDatastore: "local-lvm",
         imageDatastore: "local",
         bootstrapDatastore: "local",
+        bridge: "vmbr0",
+        gateway: "192.0.2.1",
+        dnsServers: ["192.0.2.53", "198.51.100.53"],
+        workloadDatastores: ["local-lvm", "local"],
         workloadBridges: ["vmbr0"],
         headlampSignIn: true,
         headlampActions: true,
@@ -407,6 +441,24 @@ describe("setup", () => {
           { storage: "local-lvm", node: "pve1", shared: false, content: ["images"], avail: 0, total: 0, usable: true },
           { storage: "local-lvm", node: "pve2", shared: false, content: ["images"], avail: 0, total: 0, usable: true },
           { storage: "fast", node: "pve1", shared: false, content: ["images"], avail: 0, total: 0, usable: true },
+          {
+            storage: "local",
+            node: "pve1",
+            shared: false,
+            content: ["iso", "import"],
+            avail: 0,
+            total: 0,
+            usable: true,
+          },
+          {
+            storage: "local",
+            node: "pve2",
+            shared: false,
+            content: ["iso", "import"],
+            avail: 0,
+            total: 0,
+            usable: true,
+          },
         ],
       },
       "GET /api/proxmox/nodes/pve1/bridges": {
@@ -421,27 +473,39 @@ describe("setup", () => {
     });
     const user = userEvent.setup({ delay: null });
     render(<App />);
-    await waitFor(() =>
-      expect(forClusters("Bridges").getByRole("checkbox", { name: "vmbr1" })).toHaveAccessibleDescription("(on pve1)"),
-    );
+    const disks = await screen.findByLabelText("VM disks");
+    await waitFor(() => expect(within(disks).getByRole("option", { name: "fast" })).toBeInTheDocument());
+    await user.selectOptions(disks, "fast");
+    await next(user);
+    // A node that reaches no gateway through any bridge has no bridge chosen for it.
+    const bridge = screen.getByLabelText("Bridge");
+    await waitFor(() => expect(within(bridge).getByRole("option", { name: "vmbr1" })).toBeInTheDocument());
+    expect(bridge).toHaveValue("");
+    await user.selectOptions(bridge, "vmbr1");
+
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    await user.click(screen.getByRole("checkbox", { name: "pve2" }));
+    expect(screen.queryByRole("option", { name: "fast" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "local-lvm" })).toBeInTheDocument();
+    // What was chosen for pve1 alone is no longer chosen.
+    expect(screen.getByLabelText("VM disks")).toHaveValue("");
+    await user.selectOptions(screen.getByLabelText("VM disks"), "local-lvm");
+    await next(user);
+    expect(screen.queryByRole("option", { name: "vmbr1" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Bridge")).toHaveValue("");
+    await user.selectOptions(screen.getByLabelText("Bridge"), "vmbr0");
+    await user.type(screen.getByLabelText("Node addresses"), "192.0.2.11/24");
+    await user.type(screen.getByLabelText("API address"), "192.0.2.10");
+    await user.type(screen.getByLabelText("Gateway"), "192.0.2.1");
+    await user.type(screen.getByLabelText("DNS servers"), "192.0.2.1");
+    await next(user);
+
+    // Clusters may still use what only one node has.
+    expect(forClusters("Bridges").getByRole("checkbox", { name: "vmbr1" })).toHaveAccessibleDescription("(on pve1)");
     expect(forClusters("Bridges").getByRole("checkbox", { name: "vmbr0" })).toHaveAccessibleDescription(
       "(on pve1, pve2)",
     );
     expect(forClusters("Storages").getByRole("checkbox", { name: "fast" })).toHaveAccessibleDescription("(on pve1)");
-    expect(screen.getByRole("option", { name: "fast" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "vmbr1" })).toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText("VM disks"), "fast");
-    await user.selectOptions(screen.getByLabelText("Bridge"), "vmbr1");
-
-    await user.click(screen.getByRole("checkbox", { name: "pve2" }));
-    expect(screen.queryByRole("option", { name: "fast" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: "vmbr1" })).not.toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "local-lvm" })).toBeInTheDocument();
-    // What was chosen for pve1 alone is no longer chosen.
-    expect(screen.getByLabelText("VM disks")).toHaveValue("");
-    expect(screen.getByLabelText("Bridge")).toHaveValue("");
-    // Clusters may still use what only one node has.
-    expect(forClusters("Storages").getByRole("checkbox", { name: "fast" })).toBeInTheDocument();
   });
 
   it("checks addresses as the appliance does", () => {
@@ -627,6 +691,15 @@ describe("setup", () => {
 
     await user.click(screen.getByRole("button", { name: "Edit settings" }));
     const wizard = within(screen.getByRole("region", { name: "Management cluster" }));
+    // Editing shows every step at once, each a section, with no steps to go through.
+    expect(wizard.getAllByRole("heading", { level: 4 }).map((h) => h.textContent)).toStrictEqual([
+      "Placement",
+      "Network",
+      "Clusters",
+      "Services",
+      "Passphrase",
+    ]);
+    expect(wizard.queryByRole("navigation", { name: "Steps" })).not.toBeInTheDocument();
     expect(wizard.getByLabelText("State passphrase")).toHaveAttribute("autocomplete", "current-password");
     expect(wizard.queryByLabelText("Repeat passphrase")).not.toBeInTheDocument();
     expect(wizard.getByLabelText("API address")).toHaveAttribute("readonly");
@@ -728,15 +801,31 @@ describe("setup", () => {
     expect(screen.getByRole("main")).toHaveFocus();
   });
 
+  it("shows the cluster list at /clusters too", async () => {
+    window.history.replaceState(null, "", "/clusters");
+    fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c1" } },
+      "GET /api/setup": { body: { appliance: true, ready: true, allowed: false } },
+      "GET /api/clusters": { body: [] },
+    });
+    render(<App />);
+    await expect(screen.findByRole("heading", { name: "Clusters" })).resolves.toBeInTheDocument();
+    expect(
+      within(screen.getByRole("navigation", { name: "Pages" })).getByRole("link", { name: "Clusters" }),
+    ).toHaveAttribute("aria-current", "page");
+  });
+
   it("asks for the earlier run's passphrase once when its state is still there", async () => {
     fakeServer({
       ...administrator,
+      ...oneNode,
       "GET /api/setup": {
         body: {
           appliance: true,
           ready: false,
           allowed: true,
           resumes: true,
+          settings: settings(form),
           job: {
             user: "root@pam",
             kind: "apply",
@@ -747,12 +836,14 @@ describe("setup", () => {
           },
         },
       },
-      "GET /api/proxmox/nodes": { body: [{ node: "pve1", online: true }] },
-      "GET /api/proxmox/storages": { body: [] },
-      "GET /api/proxmox/nodes/pve1/bridges": { body: [] },
     });
+    const user = userEvent.setup({ delay: null });
     render(<App />);
-    const passphrase = await screen.findByLabelText("State passphrase");
+    // The earlier run's settings are whole, so every step is open.
+    const step = await screen.findByRole("button", { name: "Passphrase" });
+    await waitFor(() => expect(step).toBeEnabled());
+    await user.click(step);
+    const passphrase = screen.getByLabelText("State passphrase");
     expect(passphrase).toHaveAttribute("autocomplete", "current-password");
     expect(passphrase).toHaveAccessibleDescription(/passphrase of the earlier run/u);
     expect(screen.queryByLabelText("Repeat passphrase")).not.toBeInTheDocument();

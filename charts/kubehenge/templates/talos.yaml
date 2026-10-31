@@ -34,12 +34,12 @@ metadata:
     {{- include "kubehenge.addonCPU" . | nindent 4 }}
     # The CPU, in millicores, a node keeps back or its own pods request besides the add-ons': on a
     # worker the kubelet's 50m reserved for the system, Talos's kube-proxy at 100m, the CNI's agent
-    # (flannel's 200m with its network policy controller, Cilium's 100m; Calico's asks for none), a
-    # CoreDNS replica's 100m, Traefik's 10m and the CSI plugin's 20m; a control plane without
-    # workers adds the API server's 200m, the controller manager's 50m, the scheduler's 10m, the
-    # second CoreDNS replica, the CSI controller's 50m and the cloud controller manager's 10m. etcd
-    # runs outside Kubernetes.
-    kubehenge.dev/node-cpu: '{"controlPlane":900,"worker":480}'
+    # (flannel's 200m with its network policy controller; Cilium's 110m with its Envoy and its
+    # operator's 10m, Calico's 50m and its other pods' 50m come to less), a CoreDNS replica's 100m,
+    # Traefik's 10m and the CSI plugin's 30m; a control plane without workers adds the API server's
+    # 200m, the controller manager's 50m, the scheduler's 10m, the second CoreDNS replica, the CSI
+    # controller's 50m and the cloud controller manager's 10m. etcd runs outside Kubernetes.
+    kubehenge.dev/node-cpu: '{"controlPlane":910,"worker":490}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"

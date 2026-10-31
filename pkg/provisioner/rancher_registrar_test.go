@@ -342,8 +342,14 @@ func TestRegistrarRegistersOnceAndInstallsRanchersAgent(t *testing.T) {
 	if len(got) != 1 || got[0].GetName() != f.registeredKey.Name || got[0].GetAnnotations()[rancherClusterAnnotation] != "team-a/web" {
 		t.Fatalf("in Rancher: %v", got)
 	}
-	if spec, _, _ := unstructured.NestedMap(got[0].Object, "spec"); len(spec) != 0 {
+	spec, _, _ := unstructured.NestedMap(got[0].Object, "spec")
+	if _, provisions := spec["rkeConfig"]; provisions {
 		t.Errorf("Rancher would provision rather than import a cluster of spec %v", spec)
+	}
+	for _, agent := range []string{"clusterAgentDeploymentCustomization", "fleetAgentDeploymentCustomization", "webhookDeploymentCustomization"} {
+		if cpu, _, _ := unstructured.NestedString(spec, agent, "overrideResourceRequirements", "requests", "cpu"); cpu == "" {
+			t.Errorf("Rancher's %s requests no CPU: %v", agent, spec)
+		}
 	}
 
 	// Until Rancher has filled in its cluster, its token and the token's Secret, there is nothing

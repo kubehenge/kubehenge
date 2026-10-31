@@ -2,21 +2,47 @@ import { useState, type JSX } from "react";
 
 import { api } from "./api";
 import { BootLogDialog } from "./BootLog";
-import { clusterPath } from "./ClusterDetail";
+import { clusterPath } from "./cluster-paths";
+import { useClusterHealth } from "./Health";
 import { Link } from "./router";
 import type { Cluster, Machine, PveNode } from "./types";
-import { Status, age, filled, pollIdle, usePoll, type Health } from "./ui";
+import {
+  Detail,
+  Dialog,
+  ErrorBox,
+  RowMenu,
+  Skeleton,
+  Status,
+  age,
+  errorMessage,
+  filled,
+  pollCache,
+  pollIdle,
+  usePoll,
+  type Health,
+} from "./ui";
 
-// machineStatus says how far a machine is, as the cluster list says it of clusters.
-export function machineStatus(m: Machine): { state: Health; text: string } {
+// The Proxmox VE nodes, kept for every view of every cluster that places machines on them.
+const nodesCache = pollCache<PveNode[]>();
+const nodesKept = { cache: nodesCache, key: "nodes" };
+
+// machineStatus says how far a machine is, as the cluster list says it of clusters. A machine on a
+// Proxmox VE node that is offline is down whatever Cluster API last read of it.
+export function machineStatus(m: Machine, offline = false): { state: Health; text: string } {
+  if (offline) {
+    return { state: "error", text: "Node offline" };
+  }
+  if (m.phase === "Deleting") {
+    return { state: "deleting", text: "Deleting" };
+  }
+  if (m.replacing === true) {
+    return { state: "progress", text: filled(m.waiting) ? "Replacement waits" : "Replacing" };
+  }
   if (m.ready) {
     return { state: "ok", text: "Ready" };
   }
   if (m.phase === "Failed") {
     return { state: "error", text: "Failed" };
-  }
-  if (m.phase === "Deleting") {
-    return { state: "deleting", text: "Deleting" };
   }
   return { state: "progress", text: "Not ready" };
 }
@@ -42,77 +68,316 @@ export function crowding(machines: Machine[]): string | undefined {
   return `${node} runs ${count} of ${controlPlane.length} control-plane VMs, so losing it ${cost}. Migrate one to another node.`;
 }
 
-/** Machines is the Machines view: every machine of the cluster with where it runs and how it is. */
-export function Machines({ cluster: c }: { cluster: Cluster }): JSX.Element {
+/**
+ * Machines is the Machines view: every machine of the cluster with where it runs and how it is, and
+ * a machine's replacement for those who may change the cluster.
+ */
+export function Machines({
+  cluster: c,
+  can,
+  why,
+  onChanged,
+}: {
+  cluster: Cluster;
+  can: boolean;
+  why: string | undefined;
+  onChanged: () => void;
+}): JSX.Element {
+  const { data: nodes } = usePoll(api.nodes, pollIdle, nodesKept);
+  const health = useClusterHealth(c);
+  const [replacing, setReplacing] = useState<Machine>();
+  const [deleting, setDeleting] = useState<Machine>();
+  const [rebooting, setRebooting] = useState<Machine>();
+  const [rowError, setRowError] = useState<string>();
+  const cordoned = new Set(
+    (health.data?.nodes.items ?? []).filter((n) => n.unschedulable === true).map((n) => n.machine ?? n.name),
+  );
+  const offline = new Set((nodes ?? []).filter((n) => !n.online).map((n) => n.node));
   const machines = c.machines ?? [];
+  const autoscaled = new Set(c.workerPools.filter((p) => p.autoscaling !== undefined).map((p) => p.name));
   const crowded = crowding(machines);
   const talos = c.distribution === "talos";
+  const act = async (m: Machine, call: (ns: string, name: string, machine: string) => Promise<void>): Promise<void> => {
+    setRowError(undefined);
+    try {
+      await call(c.namespace, c.name, m.name);
+      onChanged();
+      await health.reload();
+    } catch (err) {
+      setRowError(errorMessage(err));
+    }
+  };
   const [bootLog, setBootLog] = useState<Machine>();
   const columns = [
     "Name",
     "Role",
     "Proxmox VE node",
     "Status",
-    "Phase",
     // Beside the Talos release, the version is named for what it is.
     talos ? "Kubernetes" : "Version",
     ...(talos ? ["Talos"] : []),
     "Addresses",
     "Age",
-    // Boot logs carry secrets often enough, so they go to those the admin kubeconfig goes to.
-    ...(c.allowed.kubeconfig ? ["Logs"] : []),
   ];
   return (
     <div className="box scroll">
       {bootLog !== undefined && <BootLogDialog cluster={c} machine={bootLog} onClose={() => setBootLog(undefined)} />}
       {crowded !== undefined && <p className="warning">{crowded}</p>}
+      <ErrorBox message={rowError} />
       <table className="grid">
         <thead>
           <tr>
             {columns.map((h) => (
               <th key={h}>{h}</th>
             ))}
+            <th>
+              <span className="visually-hidden">Actions</span>
+            </th>
           </tr>
         </thead>
         <tbody>
           {machines.length === 0 && (
             <tr>
-              <td colSpan={columns.length} className="muted">
-                No machines yet
+              <td colSpan={columns.length + 1} className="muted">
+                {c.machines === undefined ? <Skeleton /> : "No machines yet"}
               </td>
             </tr>
           )}
           {machines.map((m) => {
-            const s = machineStatus(m);
+            const s = machineStatus(m, offline.has(m.proxmoxNode ?? ""));
             return (
               <tr key={m.name}>
                 <td className="nowrap">
-                  {m.node ?? m.name}
-                  {filled(m.waiting) && <div className="hint message">{m.waiting}</div>}
+                  <span className="nowrap">{m.node ?? m.name}</span>
+                  {m.replacing !== true && filled(m.waiting) && <div className="hint message">{m.waiting}</div>}
                 </td>
-                <td>{m.role === "control-plane" ? "Control plane" : "Worker"}</td>
+                <td className="nowrap">{m.role === "control-plane" ? "Control plane" : "Worker"}</td>
                 <td>{m.proxmoxNode ?? ""}</td>
                 <td className="nowrap">
                   <Status state={s.state} text={s.text} />
+                  {cordoned.has(m.name) && <div className="hint">Cordoned</div>}
+                  {m.replacing === true && filled(m.waiting) && <Detail>{m.waiting}</Detail>}
                 </td>
-                <td>{m.phase}</td>
                 <td>{m.version ?? ""}</td>
                 {talos && <td>{m.talos ?? ""}</td>}
                 <td>{(m.addresses ?? []).join(", ")}</td>
                 <td title={new Date(m.created).toLocaleString()}>{age(m.created)}</td>
-                {c.allowed.kubeconfig && (
-                  <td>
-                    <button type="button" aria-label={`Boot log of ${m.node ?? m.name}`} onClick={() => setBootLog(m)}>
-                      Boot log
-                    </button>
-                  </td>
-                )}
+                <td className="row-action">
+                  <MachineActions
+                    machine={m}
+                    can={can}
+                    why={why}
+                    autoscaled={autoscaled.has(m.pool ?? "")}
+                    cordoned={cordoned.has(m.name)}
+                    onAct={(call) => {
+                      void act(m, call);
+                    }}
+                    onReplace={() => setReplacing(m)}
+                    onDelete={() => setDeleting(m)}
+                    onReboot={() => setRebooting(m)}
+                    // Boot logs carry secrets often enough, so they go to those the admin kubeconfig goes to.
+                    onBootLog={c.allowed.kubeconfig ? () => setBootLog(m) : undefined}
+                  />
+                </td>
               </tr>
             );
           })}
         </tbody>
       </table>
+      {replacing !== undefined && (
+        <MachineDialog
+          cluster={c}
+          machine={replacing}
+          verb="Replace"
+          act={api.replaceMachine}
+          onClose={() => setReplacing(undefined)}
+          onDone={() => {
+            setReplacing(undefined);
+            onChanged();
+          }}
+        >
+          {replacing.role === "control-plane"
+            ? "Deletes the VM and its disks, then adds a new control-plane node. Waits while etcd would lose its majority."
+            : "Drains the node, deletes the VM and its disks, then adds a new worker."}
+        </MachineDialog>
+      )}
+      {deleting !== undefined && (
+        <MachineDialog
+          cluster={c}
+          machine={deleting}
+          verb="Delete"
+          act={api.deleteMachine}
+          onClose={() => setDeleting(undefined)}
+          onDone={() => {
+            setDeleting(undefined);
+            onChanged();
+          }}
+        >
+          {`Drains the node and deletes the VM and its disks. Pool ${deleting.pool ?? ""} shrinks by one.`}
+        </MachineDialog>
+      )}
+      {rebooting !== undefined && (
+        <MachineDialog
+          cluster={c}
+          machine={rebooting}
+          verb="Reboot"
+          act={api.rebootMachine}
+          onClose={() => setRebooting(undefined)}
+          onDone={() => {
+            setRebooting(undefined);
+            onChanged();
+          }}
+        >
+          Shuts the VM down and starts it again. Its pods stop until the node is back.
+        </MachineDialog>
+      )}
     </div>
+  );
+}
+
+function MachineActions({
+  machine: m,
+  can,
+  why,
+  autoscaled,
+  cordoned,
+  onAct,
+  onReplace,
+  onDelete,
+  onReboot,
+  onBootLog,
+}: {
+  machine: Machine;
+  can: boolean;
+  why: string | undefined;
+  autoscaled: boolean;
+  cordoned: boolean;
+  onAct: (call: (ns: string, name: string, machine: string) => Promise<void>) => void;
+  onReplace: () => void;
+  onDelete: () => void;
+  onReboot: () => void;
+  onBootLog: (() => void) | undefined;
+}): JSX.Element {
+  const name = m.node ?? m.name;
+  const going = m.phase === "Deleting";
+  return (
+    <RowMenu label={`Actions for ${name}`}>
+      {m.console !== undefined && (
+        <a className="button" href={m.console} target="_blank" rel="noreferrer" aria-label={`Console of ${name}`}>
+          Console
+        </a>
+      )}
+      {m.node !== undefined && (
+        <button
+          type="button"
+          disabled={!can || going}
+          title={why}
+          aria-label={`${cordoned ? "Uncordon" : "Cordon"} ${name}`}
+          onClick={() => onAct(cordoned ? api.uncordonMachine : api.cordonMachine)}
+        >
+          {cordoned ? "Uncordon" : "Cordon"}
+        </button>
+      )}
+      {onBootLog !== undefined && (
+        <button type="button" aria-label={`Boot log of ${name}`} onClick={onBootLog}>
+          Boot log
+        </button>
+      )}
+      {m.reboot === true && (
+        <button type="button" disabled={going} aria-label={`Reboot ${name}`} onClick={onReboot}>
+          Reboot…
+        </button>
+      )}
+      {m.replacing === true && !going ? (
+        <button
+          type="button"
+          disabled={!can}
+          title={why}
+          aria-label={`Keep ${name}`}
+          onClick={() => onAct(api.keepMachine)}
+        >
+          Keep
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="danger"
+          disabled={!can || going}
+          title={why}
+          aria-label={`Replace ${name}`}
+          onClick={onReplace}
+        >
+          Replace…
+        </button>
+      )}
+      {m.role === "worker" && (
+        <button
+          type="button"
+          className="danger"
+          disabled={!can || going || autoscaled}
+          title={autoscaled ? "Autoscaled pool" : why}
+          aria-label={`Delete ${name}`}
+          onClick={onDelete}
+        >
+          Delete…
+        </button>
+      )}
+    </RowMenu>
+  );
+}
+
+// MachineDialog asks before a machine is replaced or deleted, which takes its VM and disks.
+function MachineDialog({
+  cluster: c,
+  machine: m,
+  verb,
+  act,
+  onClose,
+  onDone,
+  children,
+}: {
+  cluster: Cluster;
+  machine: Machine;
+  verb: string;
+  act: (ns: string, name: string, machine: string) => Promise<void>;
+  onClose: () => void;
+  onDone: () => void;
+  children: string;
+}): JSX.Element {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const run = async (): Promise<void> => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await act(c.namespace, c.name, m.name);
+      onDone();
+    } catch (err) {
+      setError(errorMessage(err));
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog
+      title={`${verb} ${m.node ?? m.name}`}
+      onClose={onClose}
+      onSubmit={() => {
+        void run();
+      }}
+      actions={
+        <>
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="danger" disabled={busy}>
+            {verb}
+          </button>
+        </>
+      }
+    >
+      <p>{children}</p>
+      <ErrorBox message={error} />
+    </Dialog>
   );
 }
 
@@ -176,7 +441,7 @@ function hostState(h: Host): string {
  */
 export function Placement({ cluster: c }: { cluster: Cluster }): JSX.Element {
   // Only those who see the nodes get them; the others see the nodes of their machines alone.
-  const { data: nodes } = usePoll(api.nodes, pollIdle);
+  const { data: nodes } = usePoll(api.nodes, pollIdle, nodesKept);
   const machines = c.machines ?? [];
   const crowded = crowding(machines);
   const list = hosts(machines, nodes);
@@ -184,7 +449,8 @@ export function Placement({ cluster: c }: { cluster: Cluster }): JSX.Element {
     <section className="box placement" aria-label="Placement">
       <h3>Placement</h3>
       {crowded !== undefined && <p className="warning">{crowded}</p>}
-      {machines.length === 0 && <p className="muted">No machines yet</p>}
+      {c.machines === undefined && <Skeleton rows={3} shape="tiles" />}
+      {c.machines?.length === 0 && <p className="muted">No machines yet</p>}
       <ul className="hosts" aria-label="Proxmox VE nodes">
         {list.map((h) => (
           <li
@@ -198,7 +464,7 @@ export function Placement({ cluster: c }: { cluster: Cluster }): JSX.Element {
             {h.machines.length > 0 && (
               <ul className="host-machines">
                 {h.machines.map((m) => {
-                  const s = machineStatus(m);
+                  const s = machineStatus(m, h.online === false);
                   return (
                     <li key={m.name}>
                       <Link

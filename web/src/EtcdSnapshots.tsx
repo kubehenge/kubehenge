@@ -29,6 +29,7 @@ import {
   distributionName,
   errorMessage,
   filled,
+  pollCache,
   pollIdle,
   pollRunning,
   sentence,
@@ -36,9 +37,12 @@ import {
   timeZones,
   useChange,
   usePoll,
+  Skeleton,
   type Health,
 } from "./ui";
 import { quantity, record, text } from "./values";
+
+const snapshotsCache = pollCache<ClusterEtcdSnapshots>();
 
 /** The chart's defaults for a cluster's etcd snapshots. */
 export const defaultEtcdSchedule = "0 */12 * * *";
@@ -159,6 +163,7 @@ export function etcdSnapshotsRows(c: Cluster, offered: boolean): OptionRow<"etcd
     {
       label: "etcd snapshots",
       value: etcdSnapshotsText(v, c.distribution),
+      group: "Maintenance",
       action: "etcdSnapshots",
       name: "etcd snapshots",
     },
@@ -395,6 +400,7 @@ export function EtcdSnapshotsView({
   } = usePoll(
     () => api.etcdSnapshots(c.namespace, c.name),
     (d) => (d !== undefined && (d.requested || d.restoring) ? pollRunning : pollIdle),
+    { cache: snapshotsCache, key: `${c.namespace}/${c.name}` },
   );
   const [restoring, setRestoring] = useState<EtcdSnapshot>();
   const [busy, setBusy] = useState(false);
@@ -405,7 +411,7 @@ export function EtcdSnapshotsView({
       <div className="box">
         <h3>etcd snapshots</h3>
         <ErrorBox message={error} />
-        {!filled(error) && <p className="muted">Loading…</p>}
+        {!filled(error) && <Skeleton />}
       </div>
     );
   }
@@ -740,7 +746,7 @@ function RestoreSteps({ cluster: c, snapshot }: { cluster: Cluster; snapshot: Et
         </span>
       </p>
       <ErrorBox message={error} />
-      {plan === undefined && !filled(error) && <p className="muted">Loading…</p>}
+      {plan === undefined && !filled(error) && <Skeleton rows={2} />}
       {plan !== undefined && <PlanSteps plan={plan} />}
     </div>
   );

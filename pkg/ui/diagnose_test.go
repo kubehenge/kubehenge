@@ -21,10 +21,6 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
-func machineOf(namespace, cluster, name string) *clusterv1.Machine {
-	return &clusterv1.Machine{Namespace: namespace, Name: name, Labels: map[string]string{clusterv1.ClusterNameLabel: cluster}}
-}
-
 func TestSupportBundleIsHandedOutLikeTheKubeconfig(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, cluster("default", "one"), cluster("default", "two"))
@@ -64,7 +60,7 @@ func TestSupportBundleIsHandedOutLikeTheKubeconfig(t *testing.T) {
 
 func TestBootLogIsAskedForAndRead(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t, cluster("default", "one"), machineOf("default", "one", "one-cp-a"), machineOf("default", "two", "two-cp-a"))
+	h := newHarness(t, cluster("default", "one"), clusterMachine("one", "one-cp-a"), clusterMachine("two", "two-cp-a"))
 	dev := h.browser()
 	dev.signIn("dev@pve")
 	expect(t, dev.do("POST", "/api/clusters/default/one/machines/two-cp-a/boot-log", ""), http.StatusNotFound)

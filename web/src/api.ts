@@ -1,3 +1,4 @@
+import { clearPollCaches, keepCache } from "./poll-cache";
 import type {
   BackupRun,
   BootLog,
@@ -9,13 +10,16 @@ import type {
   ClusterHealth,
   ClusterRef,
   ClusterEtcdSnapshots,
+  CreateCheck,
   ControlPlaneRecovery,
   CreateRequest,
   EtcdRestorePlan,
   FleetHealth,
+  FreeAddresses,
   HARules,
   Job,
   ManagementAutomatic,
+  ManagementHealth,
   ManagementBackupRequest,
   ManagementBackups,
   ManagementSettings,
@@ -104,6 +108,42 @@ async function fetchAnswer(path: string, init: RequestInit): Promise<Response> {
   }
 }
 
+// The reads a signed-in page starts with. Each waits on the one before (the session, the setup
+// status, then the fleet), so they are made together as the page loads, and the first read of each
+// takes its answer.
+const firstReads = ["/api/session", "/api/setup", "/api/clusters", "/api/fleet/health", "/api/runs"];
+
+// An answer made before it was asked for is taken only this soon after, when it is still current.
+const primedFor = 10_000;
+
+const primed = keepCache(new Map<string, { at: number; answer: Promise<Response> }>());
+
+/** primeFirstReads makes the first reads of a signed-in page at once, before the page asks. */
+export function primeFirstReads(): void {
+  const at = Date.now();
+  for (const path of firstReads) {
+    const answer = fetchAnswer(path, { method: "GET", credentials: "same-origin" });
+    void unheard(answer);
+    primed.set(path, { at, answer });
+  }
+}
+
+// unheard waits on an answer the page may never ask for, signed out or still setting up, so that
+// its failure goes unreported unless the page takes it.
+async function unheard(answer: Promise<unknown>): Promise<void> {
+  try {
+    await answer;
+  } catch {
+    // The read that takes it reports it.
+  }
+}
+
+function takePrimed(path: string): Promise<Response> | undefined {
+  const p = primed.get(path);
+  primed.delete(path);
+  return p && Date.now() - p.at < primedFor ? p.answer : undefined;
+}
+
 // errorOf is the API's own message in a failed answer's body, or "" when the body is not its JSON
 // error, and the request's id, from the body or else the header.
 async function errorOf(res: Response): Promise<{ message: string; requestId: string }> {
@@ -148,7 +188,7 @@ async function send(method: string, path: string, { body, headers: extra = {} }:
   if (body !== undefined) {
     init.body = JSON.stringify(body);
   }
-  const res = await fetchAnswer(path, init);
+  const res = await ((method === "GET" ? takePrimed(path) : undefined) ?? fetchAnswer(path, init));
   noteRelease(res);
   if (!res.ok) {
     const { message, requestId } = await errorOf(res);
@@ -226,6 +266,8 @@ export interface Api {
   clusters: () => Promise<Cluster[]>;
   cluster: (ns: string, name: string) => Promise<Cluster>;
   create: (req: CreateRequest) => Promise<Cluster>;
+  /** checkCreate has the API server check a cluster without creating it, and gives it as YAML to apply. */
+  checkCreate: (req: CreateRequest) => Promise<CreateCheck>;
   /** change is made against the cluster as its user was shown it; a newer generation refuses it. */
   change: (c: ClusterShown, req: ChangeRequest) => Promise<Cluster>;
   plan: (c: ClusterShown, req: ChangeRequest) => Promise<Plan>;
@@ -265,6 +307,18 @@ export interface Api {
   talosconfig: (ns: string, name: string) => Promise<Blob>;
   /** retryTalosUpgrade takes back the failed node upgrade that holds a Talos cluster's others. */
   retryTalosUpgrade: (ns: string, name: string) => Promise<void>;
+  /** replaceMachine marks a machine for its cluster's health check to replace. */
+  replaceMachine: (ns: string, name: string, machine: string) => Promise<void>;
+  /** keepMachine takes that mark back. */
+  keepMachine: (ns: string, name: string, machine: string) => Promise<void>;
+  /** deleteMachine deletes a worker, its pool shrinking by one. */
+  deleteMachine: (ns: string, name: string, machine: string) => Promise<void>;
+  /** cordonMachine keeps new pods off a machine's node. */
+  cordonMachine: (ns: string, name: string, machine: string) => Promise<void>;
+  /** uncordonMachine lets pods onto a machine's node again. */
+  uncordonMachine: (ns: string, name: string, machine: string) => Promise<void>;
+  /** rebootMachine has Proxmox VE shut a machine's VM down and start it again. */
+  rebootMachine: (ns: string, name: string, machine: string) => Promise<void>;
   /** supportBundle is a cluster's .tar.gz of its objects, events and the logs naming them. */
   supportBundle: (ns: string, name: string) => Promise<Blob>;
   bootLog: (ns: string, name: string, machine: string) => Promise<BootLog>;
@@ -276,6 +330,7 @@ export interface Api {
   removeCredential: (purpose: string, cluster?: ClusterRef) => Promise<void>;
   credential: (name: "kubeconfig" | "talosconfig", passphrase: string) => Promise<Blob>;
   removeManagement: (passphrase: string) => Promise<Job>;
+  managementHealth: () => Promise<ManagementHealth>;
   managementBackups: () => Promise<ManagementBackups>;
   configureManagementBackups: (req: ManagementBackupRequest) => Promise<ManagementBackups>;
   stopManagementBackups: () => Promise<void>;
@@ -306,16 +361,27 @@ export interface Api {
   storages: () => Promise<Storage[]>;
   nodes: () => Promise<PveNode[]>;
   bridges: (node: string) => Promise<Bridge[]>;
+  /** The DNS servers a node resolves with. */
+  dns: (node: string) => Promise<{ servers: string[] }>;
+  /** Free addresses on a bridge's network for a new cluster's API and nodes, where nodes is above 0, and which of check a host answers on. */
+  freeAddresses: (
+    node: string,
+    bridge: string,
+    req: { vlan: number; nodes: number; check: string[] },
+  ) => Promise<FreeAddresses>;
   haRules: () => Promise<HARules>;
 }
 
 export const api: Api = {
   realms: () => request("GET", "/api/realms"),
   session: async () => remember(await request("GET", "/api/session")),
-  signIn: async (username, realm, password) =>
-    remember(await request("POST", "/api/session", { username, realm, password })),
+  signIn: async (username, realm, password) => {
+    clearPollCaches();
+    return remember(await request("POST", "/api/session", { username, realm, password }));
+  },
   secondFactor: async (kind, code) => remember(await request("POST", "/api/session/second-factor", { kind, code })),
   signOut: async () => {
+    clearPollCaches();
     await act("DELETE", "/api/session");
     csrf = "";
   },
@@ -324,6 +390,7 @@ export const api: Api = {
   clusters: () => request("GET", "/api/clusters"),
   cluster: (ns, name) => request("GET", clusterPath(ns, name)),
   create: (req) => request("POST", "/api/clusters", req),
+  checkCreate: (req) => request("POST", "/api/clusters?dryRun=All", req),
   change: (c, req) =>
     requestAgainst("PATCH", clusterPath(c.namespace, c.name), { body: req, generation: c.generation }),
   plan: (c, req) =>
@@ -361,6 +428,18 @@ export const api: Api = {
   kubeconfig: (ns, name) => download("GET", `${clusterPath(ns, name)}/kubeconfig`),
   talosconfig: (ns, name) => download("GET", `${clusterPath(ns, name)}/talosconfig`),
   retryTalosUpgrade: (ns, name) => act("DELETE", `${clusterPath(ns, name)}/talos-upgrade-failure`),
+  replaceMachine: (ns, name, machine) =>
+    act("PUT", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/replacement`),
+  keepMachine: (ns, name, machine) =>
+    act("DELETE", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/replacement`),
+  deleteMachine: (ns, name, machine) =>
+    act("DELETE", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}`),
+  cordonMachine: (ns, name, machine) =>
+    act("PUT", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/cordon`),
+  uncordonMachine: (ns, name, machine) =>
+    act("DELETE", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/cordon`),
+  rebootMachine: (ns, name, machine) =>
+    act("POST", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/reboot`),
   supportBundle: (ns, name) => download("GET", `${clusterPath(ns, name)}/support-bundle`),
   bootLog: (ns, name, machine) =>
     request("GET", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/boot-log`),
@@ -372,6 +451,7 @@ export const api: Api = {
   removeCredential: (purpose, cluster) => act("DELETE", credentialPath(purpose, cluster)),
   credential: (name, passphrase) => download("POST", "/api/setup/credential", { name, passphrase }),
   removeManagement: (passphrase) => request("POST", "/api/setup/remove", { passphrase, confirm: "remove" }),
+  managementHealth: () => request("GET", "/api/setup/health"),
   managementBackups: () => request("GET", "/api/appliance/etcd-backups"),
   configureManagementBackups: (req) => request("PUT", "/api/appliance/etcd-backups", req),
   stopManagementBackups: () => act("DELETE", "/api/appliance/etcd-backups"),
@@ -401,8 +481,21 @@ export const api: Api = {
   storages: () => request("GET", "/api/proxmox/storages"),
   nodes: () => request("GET", "/api/proxmox/nodes"),
   bridges: (node) => request("GET", `/api/proxmox/nodes/${encodeURIComponent(node)}/bridges`),
+  dns: (node) => request("GET", `/api/proxmox/nodes/${encodeURIComponent(node)}/dns`),
+  freeAddresses: (node, bridge, req) =>
+    request("POST", `/api/proxmox/nodes/${encodeURIComponent(node)}/bridges/${encodeURIComponent(bridge)}/free`, req),
   haRules: () => request("GET", "/api/proxmox/ha-rules"),
 };
+
+/** dnsOf lists the DNS servers a node resolves with; a node whose servers cannot be read offers none. */
+export async function dnsOf(node: string): Promise<string[]> {
+  try {
+    const { servers } = await api.dns(node);
+    return servers;
+  } catch {
+    return [];
+  }
+}
 
 /** bridgesOf lists a node's bridges; a node whose bridges cannot be read offers none. */
 export async function bridgesOf(node: string): Promise<Bridge[]> {

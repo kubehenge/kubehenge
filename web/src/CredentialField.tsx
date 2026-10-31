@@ -2,7 +2,7 @@ import { useEffect, useState, type JSX, type KeyboardEvent, type ReactNode } fro
 
 import { api } from "./api";
 import type { ClusterRef, StoredCredential } from "./types";
-import { ErrorBox, Field, errorMessage, filled } from "./ui";
+import { ErrorBox, Field, Skeleton, errorMessage, filled } from "./ui";
 
 /** One value a credential holds. */
 export interface CredentialKey {
@@ -117,7 +117,7 @@ export function CredentialField({
     <fieldset className="group">
       <legend>{label}</legend>
       {hint !== undefined && <p className="hint">{hint}</p>}
-      {stored === undefined && !filled(error) && <p className="muted">Loading…</p>}
+      {stored === undefined && !filled(error) && <Skeleton rows={1} />}
       {stored !== undefined && <p className="muted">{setText(stored)}</p>}
       {values !== undefined && (
         <>

@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { JSX } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -120,14 +120,10 @@ describe("a cluster's Proxmox VE HA", () => {
   it("is switched off and on under Options", async () => {
     const sent = openOptions([rke2]);
     const user = userEvent.setup({ delay: null });
-    const heading = await screen.findByRole("rowheader", { name: "Proxmox VE HA" });
-    expect(heading.closest("tr")).toHaveTextContent("On");
-    await user.click(screen.getByRole("button", { name: "Edit Proxmox VE HA" }));
-    const dialog = screen.getByRole("dialog", { name: "Edit Proxmox VE HA" });
-    const save = within(dialog).getByRole("button", { name: "Save" });
-    expect(save).toBeDisabled();
-    await user.click(within(dialog).getByLabelText("Use Proxmox VE HA"));
-    await user.click(save);
+    const ha = await screen.findByRole("switch", { name: "Proxmox VE HA" });
+    expect(ha).toBeChecked();
+    expect(ha.closest("tr")).toHaveTextContent("On");
+    await user.click(ha);
     await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { proxmoxHA: false } }));
   });

@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -137,15 +137,11 @@ describe("a cluster's volume snapshots", () => {
   it("are switched on under Options, keeping the plugin's release", async () => {
     const sent = openOptions([k3s]);
     const user = userEvent.setup({ delay: null });
-    const heading = await screen.findByRole("rowheader", { name: "Volume snapshots" });
-    expect(heading.closest("tr")).toHaveTextContent("Off");
-    await user.click(screen.getByRole("button", { name: "Edit volume snapshots" }));
-    const dialog = screen.getByRole("dialog", { name: "Edit volume snapshots" });
-    const save = within(dialog).getByRole("button", { name: "Save" });
-    expect(save).toBeDisabled();
-    await waitFor(() => expect(within(dialog).getByLabelText("Take volume snapshots")).toBeEnabled());
-    await user.click(within(dialog).getByLabelText("Take volume snapshots"));
-    await user.click(save);
+    const snapshots = await screen.findByRole("switch", { name: "Volume snapshots" });
+    expect(snapshots).not.toBeChecked();
+    expect(snapshots.closest("tr")).toHaveTextContent("Off");
+    await waitFor(() => expect(snapshots).toBeEnabled());
+    await user.click(snapshots);
     await applyStaged(user);
     await waitFor(() =>
       expect(sent()).toStrictEqual({ variables: { csi: { datastoreAllocate: true, volumeSnapshots: true } } }),
@@ -154,11 +150,9 @@ describe("a cluster's volume snapshots", () => {
 
   it("cannot be switched on where the cluster's storage is shared", async () => {
     openOptions([k3s], { ...cluster, variables: { storage: "ceph", csi: { datastoreAllocate: true } } });
-    const user = userEvent.setup({ delay: null });
-    await user.click(await screen.findByRole("button", { name: "Edit volume snapshots" }));
-    const dialog = screen.getByRole("dialog", { name: "Edit volume snapshots" });
-    await expect(within(dialog).findByText(/Unavailable on ceph/u)).resolves.toBeInTheDocument();
-    expect(within(dialog).getByLabelText("Take volume snapshots")).toBeDisabled();
+    const snapshots = await screen.findByRole("switch", { name: "Volume snapshots" });
+    await waitFor(() => expect(snapshots).toHaveAccessibleDescription(/Unavailable on ceph/u));
+    expect(snapshots).toBeDisabled();
   });
 
   it("stay switchable off where the storage no longer takes them", async () => {
@@ -167,12 +161,9 @@ describe("a cluster's volume snapshots", () => {
       variables: { storage: "local-zfs", csi: { volumeSnapshots: true } },
     });
     const user = userEvent.setup({ delay: null });
-    const heading = await screen.findByRole("rowheader", { name: "Volume snapshots" });
-    expect(heading.closest("tr")).toHaveTextContent("On, with the cluster's token");
-    await user.click(screen.getByRole("button", { name: "Edit volume snapshots" }));
-    const dialog = screen.getByRole("dialog", { name: "Edit volume snapshots" });
-    await user.click(within(dialog).getByLabelText("Take volume snapshots"));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    const snapshots = await screen.findByRole("switch", { name: "Volume snapshots" });
+    expect(snapshots.closest("tr")).toHaveTextContent("On, with the cluster's token");
+    await user.click(snapshots);
     await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { csi: { volumeSnapshots: false } } }));
   });

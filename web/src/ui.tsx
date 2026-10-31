@@ -13,6 +13,7 @@ import {
 } from "react";
 
 import { ApiError, api, referenceMark } from "./api";
+import { keepCache } from "./poll-cache";
 import { useStaging } from "./staging-context";
 import type { ChangeRequest, Cluster } from "./types";
 
@@ -140,22 +141,76 @@ export interface Poll<T> {
   error: string | undefined;
   errorStatus: number | undefined;
   reload: () => Promise<void>;
+  /** When the next read is due, in milliseconds since the epoch; read without drawing the page again. */
+  next: () => number;
+  /**
+   * put shows what is known without reading, such as the cluster a request just created, made from
+   * what is shown; a read asked before it is older and dropped, so it cannot take the change back.
+   */
+  put: (change: (shown: T | undefined) => T | undefined) => void;
 }
 
-export function usePoll<T>(load: () => Promise<T>, every: number | ((data: T | undefined) => number)): Poll<T> {
-  const [data, setData] = useState<T>();
+/**
+ * Kept is where a poll keeps its last answer for the next view that reads the same thing, which
+ * shows it at once while asking again: the cache of one kind of answer, the key of this one, and
+ * what to show before anything is kept, such as the cluster as the fleet list read it.
+ */
+export interface Kept<T> {
+  cache: Map<string, T>;
+  key: string;
+  seed?: T | undefined;
+}
+
+/** pollCache is a cache of one kind of answer, for usePoll's kept. */
+export const pollCache = <T,>(): Map<string, T> => keepCache(new Map<string, T>());
+
+export function usePoll<T>(
+  load: () => Promise<T>,
+  every: number | ((data: T | undefined) => number),
+  kept?: Kept<T>,
+): Poll<T> {
+  const [data, setData] = useState<T | undefined>(() => (kept ? (kept.cache.get(kept.key) ?? kept.seed) : undefined));
   const [error, setError] = useState<string>();
   // The HTTP status of the last failure; 0 when the server did not answer.
   const [errorStatus, setErrorStatus] = useState<number>();
   const loadRef = useRef(load);
+  const keptRef = useRef(kept);
   useLayoutEffect(() => {
     loadRef.current = load;
+    keptRef.current = kept;
   });
   const asked = useRef(0);
   const shown = useRef(0);
   const pending = useRef(0);
   // No answer's JSON is empty, so the first one is always shown.
-  const shownText = useRef("");
+  const shownText = useRef(data === undefined ? "" : JSON.stringify(data));
+  const latest = useRef(data);
+
+  // take takes an answer as the one shown and keeps it, and tells whether it differs from before.
+  const take = useCallback((d: T | undefined): boolean => {
+    const into = keptRef.current;
+    if (d !== undefined) {
+      into?.cache.set(into.key, d);
+    }
+    const text = d === undefined ? "" : JSON.stringify(d);
+    if (text === shownText.current) {
+      return false;
+    }
+    shownText.current = text;
+    latest.current = d;
+    return true;
+  }, []);
+
+  const put = useCallback(
+    (change: (shown: T | undefined) => T | undefined) => {
+      shown.current = asked.current;
+      const d = change(latest.current);
+      if (take(d)) {
+        setData(d);
+      }
+    },
+    [take],
+  );
 
   const reload = useCallback(async () => {
     const n = ++asked.current;
@@ -164,9 +219,7 @@ export function usePoll<T>(load: () => Promise<T>, every: number | ((data: T | u
       const d = await loadRef.current();
       if (n > shown.current) {
         shown.current = n;
-        const text = JSON.stringify(d);
-        if (text !== shownText.current) {
-          shownText.current = text;
+        if (take(d)) {
           setData(d);
         }
         setError(undefined);
@@ -181,7 +234,7 @@ export function usePoll<T>(load: () => Promise<T>, every: number | ((data: T | u
     } finally {
       pending.current--;
     }
-  }, []);
+  }, [take]);
 
   useEffect(() => {
     void reload();
@@ -195,16 +248,22 @@ export function usePoll<T>(load: () => Promise<T>, every: number | ((data: T | u
   }, [reload]);
 
   const intervalMs = typeof every === "function" ? every(data) : every;
+  const ticked = useRef(0);
+  const interval = useRef(intervalMs);
   useEffect(() => {
+    ticked.current = Date.now();
+    interval.current = intervalMs;
     const t = window.setInterval(() => {
+      ticked.current = Date.now();
       if (!document.hidden && pending.current === 0) {
         void reload();
       }
     }, intervalMs);
     return () => window.clearInterval(t);
   }, [reload, intervalMs]);
+  const next = useCallback(() => ticked.current + interval.current, []);
 
-  return { data, error, errorStatus, reload };
+  return { data, error, errorStatus, reload, next, put };
 }
 
 export type Health = "ok" | "progress" | "error" | "deleting";
@@ -257,15 +316,28 @@ export function Status({ state, text }: { state: Health | "idle" | "warning"; te
   return <span className={`status status-${state}`}>{text}</span>;
 }
 
-export function StatusBadge({ cluster }: { cluster: Cluster }): JSX.Element {
-  const h = health(cluster);
-  return <Status state={h.state} text={h.text} />;
-}
-
 const msPerSecond = 1000;
 const secondsPerMinute = 60;
 const secondsPerHour = 3600;
 const secondsPerDay = 86_400;
+
+/** RetryIn counts down to the next read of something that failed to answer, and reads it now on request. */
+export function RetryIn({ next, onRetry }: { next: () => number; onRetry: () => void }): JSX.Element {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), msPerSecond);
+    return () => window.clearInterval(t);
+  }, []);
+  const seconds = Math.ceil((next() - now) / msPerSecond);
+  return (
+    <span className="retry-in">
+      <span className="muted">{seconds > 0 ? `Trying again in ${seconds} s` : "Trying again"}</span>
+      <button type="button" onClick={onRetry}>
+        Try now
+      </button>
+    </span>
+  );
+}
 
 export function age(iso: string, now = Date.now()): string {
   const s = Math.max(0, Math.floor((now - new Date(iso).getTime()) / msPerSecond));
@@ -307,6 +379,24 @@ export function sentence(message: string): string {
   }
   const capital = s.charAt(0).toUpperCase() + s.slice(1);
   return /[.!?…:]$/u.test(capital) ? capital : `${capital}.`;
+}
+
+const skeletonBars = ["a", "b", "c", "d", "e", "f", "g", "h"];
+
+/**
+ * Skeleton stands where something is being read, in about its shape: rows of a table or list, or
+ * the tiles of a glance. It shows only once a read takes long enough to notice, so a quick one
+ * never flashes.
+ */
+export function Skeleton({ rows = 3, shape = "rows" }: { rows?: number; shape?: "rows" | "tiles" }): JSX.Element {
+  return (
+    <output className={`skeleton skeleton-${shape}`}>
+      <span className="visually-hidden">Loading…</span>
+      {skeletonBars.slice(0, rows).map((k) => (
+        <span key={k} className="skeleton-bar" aria-hidden="true" />
+      ))}
+    </output>
+  );
 }
 
 /**
@@ -451,6 +541,68 @@ export function Detail({ children }: { children: ReactNode }): JSX.Element {
       <summary>Details</summary>
       <div className="detail-text">{children}</div>
     </details>
+  );
+}
+
+const rowMenuGap = 4;
+
+/**
+ * RowMenu keeps a table row's actions behind one small button, so the row stays as wide as its data.
+ * Its items are buttons; choosing one closes the menu.
+ */
+export function RowMenu({ label, children }: { label: string; children: ReactNode }): JSX.Element {
+  const id = useId();
+  const toggle = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const m = menu.current;
+    const hide = (): void => {
+      if (m !== null && "hidePopover" in m && m.matches(":popover-open")) {
+        m.hidePopover();
+      }
+    };
+    // Under its button, right edges in line; it is fixed to the window, so scrolling would leave it behind.
+    const place = (e: Event): void => {
+      const r = toggle.current?.getBoundingClientRect();
+      if (m !== null && "newState" in e && e.newState === "open" && r !== undefined) {
+        m.style.top = `${r.bottom + rowMenuGap}px`;
+        m.style.right = `${window.innerWidth - r.right}px`;
+      }
+    };
+    const away = (e: Event): void => {
+      if (!(e.target instanceof Node && m?.contains(e.target) === true)) {
+        hide();
+      }
+    };
+    const chosen = (e: Event): void => {
+      if (e.target instanceof Element && e.target.closest("button, a") !== null) {
+        hide();
+      }
+    };
+    m?.addEventListener("beforetoggle", place);
+    m?.addEventListener("click", chosen);
+    window.addEventListener("scroll", away, true);
+    window.addEventListener("resize", hide);
+    return () => {
+      m?.removeEventListener("beforetoggle", place);
+      m?.removeEventListener("click", chosen);
+      window.removeEventListener("scroll", away, true);
+      window.removeEventListener("resize", hide);
+    };
+  }, []);
+  return (
+    <>
+      <button ref={toggle} type="button" className="icon row-menu-toggle" popoverTarget={id} aria-label={label}>
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="3" cy="8" r="1.4" fill="currentColor" />
+          <circle cx="8" cy="8" r="1.4" fill="currentColor" />
+          <circle cx="13" cy="8" r="1.4" fill="currentColor" />
+        </svg>
+      </button>
+      <div ref={menu} id={id} className="row-menu" popover="auto">
+        {children}
+      </div>
+    </>
   );
 }
 

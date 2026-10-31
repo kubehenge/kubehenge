@@ -36,7 +36,7 @@ import {
 } from "./GitOps";
 import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implementation } from "./LoadBalancer";
 import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
-import { addressBits, addressCount, inList, ipv4, isVLAN, list, rangeProblem, whole } from "./network";
+import { addressBits, addressCount, inList, ipv4, isVLAN, list, networkOf, rangeProblem, whole } from "./network";
 import { choosable, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
@@ -54,8 +54,10 @@ import type {
   Cluster,
   ClusterClass,
   CreateRequest,
+  FreeAddresses,
   NodeOSChoice,
   OIDCProvider,
+  PveNode,
   Schema,
   Storage,
   TalosReleases,
@@ -74,6 +76,7 @@ import {
   maxWorkers,
   registeredWithRancher,
   sentence,
+  sole,
 } from "./ui";
 import { quantity, record, text, texts } from "./values";
 
@@ -101,6 +104,8 @@ const mibPerGiB = 1024;
 export const controlPlaneSizes = [1, 3, 5, 7];
 
 export interface Form {
+  /** The cluster the form started from, as namespace/name; empty for none. */
+  from: string;
   /** Empty while the interface creates clusters in one namespace only. */
   namespace: string;
   name: string;
@@ -276,6 +281,51 @@ export function addonMemory(
   return { names, mib: total, controlPlaneMiB: growth };
 }
 
+const bytesPerMiB = 1_048_576;
+const bytesPerGiB = 1_073_741_824;
+
+/**
+ * Room is what a new cluster's VMs take of memory and disk at their most, in bytes, and what the
+ * nodes it may use and its storage have free; free is missing where Proxmox VE does not say.
+ */
+export interface Room {
+  memory: number;
+  freeMemory?: number | undefined;
+  disk: number;
+  freeDisk?: number | undefined;
+}
+
+/** createRoom weighs a form's VMs against the online nodes it may use and the storage it chose. */
+export function createRoom(form: Form, nodes: PveNode[], storages: Storage[]): Room {
+  const workers = mostWorkers(form);
+  const cp = form.controlPlaneReplicas;
+  const allowed = allowedNodes(form.place);
+  const usable = nodes.filter((n) => n.online && (allowed === undefined || allowed.includes(n.node)));
+  const known = usable.length > 0 && usable.every((n) => n.maxMemory !== undefined);
+  const chosen = storages.filter((s) => s.storage === form.storage && s.total > 0);
+  // A shared storage is listed once per node, holding the same space.
+  const disks = chosen.some((s) => s.shared)
+    ? chosen.slice(0, 1)
+    : chosen.filter((s) => usable.some((n) => n.node === s.node));
+  return {
+    memory: (cp * form.controlPlaneMachine.memoryMiB + workers * form.workerMachine.memoryMiB) * bytesPerMiB,
+    freeMemory: known
+      ? usable.reduce((sum, n) => sum + Math.max(0, (n.maxMemory ?? 0) - (n.memory ?? 0)), 0)
+      : undefined,
+    disk: (cp * form.controlPlaneMachine.diskGiB + workers * form.workerMachine.diskGiB) * bytesPerGiB,
+    freeDisk: disks.length > 0 ? disks.reduce((sum, s) => sum + s.avail, 0) : undefined,
+  };
+}
+
+/** AddonKey names an add-on in a class's figures. */
+export type AddonKey = (typeof addonNames)[number][0];
+
+/** addonCostMiB is the memory, in MiB, a class's figures give the pods of the add-ons named. */
+export function addonCostMiB(c: ClusterClass | undefined, keys: AddonKey[]): number {
+  const figures = classFigures(c, "kubehenge.dev/addon-memory");
+  return keys.reduce((sum, key) => sum + (quantity(figures[key]) ?? 0), 0);
+}
+
 /**
  * addonCPU is the CPU, in millicores, the pods of the add-ons a form chooses request by its class's
  * figures, and which add-ons ask for any, counted as addonMemory counts them.
@@ -329,6 +379,9 @@ function addonTotal(
  * grow keeps the control planes to the control plane's work, whatever its fewest.
  */
 export const mostWorkers = (form: Form): number => (form.workerAutoscale ? form.workerMax : form.workerReplicas);
+
+/** nodesNeeded is how many node addresses a form's cluster takes: a rollout makes each new node before it removes an old one. */
+export const nodesNeeded = (form: Form): number => form.controlPlaneReplicas + mostWorkers(form) + 1;
 
 const plainLeast = (form: Form, c: ClusterClass | undefined, key: "controlPlaneMachine" | "workerMachine"): Machine =>
   key === "controlPlaneMachine" ? controlPlaneMinimums(c, mostWorkers(form)) : machineMinimums(c, key);
@@ -454,8 +507,75 @@ export function withTalosRelease(f: Form, talos: TalosReleases | undefined, offe
   return { ...f, talosVersion, version };
 }
 
+/** BridgeNetwork is what a node says of the network on a bridge: its own address there, its gateway and its DNS servers. */
+export interface BridgeNetwork {
+  cidr?: string | undefined;
+  gateway?: string | undefined;
+  dns: string[];
+}
+
+/**
+ * bridgeNetwork is the network on a bridge, from a node that reaches its gateway through it, that
+ * network written like 192.0.2.0/24, and the node.
+ */
+export function bridgeNetwork(
+  bridge: string,
+  bridgesByNode: Record<string, Bridge[]>,
+  dnsByNode: Record<string, string[]>,
+): { net?: BridgeNetwork; network?: string; node?: string } {
+  const on = Object.values(bridgesByNode)
+    .flat()
+    .find((b) => b.bridge === bridge && filled(b.gateway));
+  if (on === undefined) {
+    return {};
+  }
+  const net = { cidr: on.cidr, gateway: on.gateway, dns: dnsByNode[on.node] ?? [] };
+  const network = on.cidr === undefined ? undefined : networkOf(on.cidr);
+  return network === undefined ? { net, node: on.node } : { net, network, node: on.node };
+}
+
+/** addressesOf are a form's node addresses and API address, as entries to probe. */
+export const addressesOf = (f: Form): string[] => [...list(f.addresses), f.endpoint].filter((a) => filled(a));
+
+/** withFreeAddresses fills the API address and the node addresses with those found free, where the user has given none. */
+export function withFreeAddresses(f: Form, free: FreeAddresses | undefined, touched: (k: keyof Form) => boolean): Form {
+  const filledIn = (k: "endpoint" | "addresses"): string => (f[k] === "" && !touched(k) ? (free?.[k] ?? "") : f[k]);
+  return { ...f, endpoint: filledIn("endpoint"), addresses: filledIn("addresses") };
+}
+
+/**
+ * bridgeOf is the bridge the cluster attaches to: the one chosen, else the only one it may use, else
+ * the first it may use that a node reaches its gateway through.
+ */
+export function bridgeOf(chosen: string, options: Bridge[], bridgesByNode: Record<string, Bridge[]>): string {
+  if (filled(chosen)) {
+    return chosen;
+  }
+  const usable = options.filter((b) => b.usable).map((b) => b.bridge);
+  const uplink = usable.find((name) => bridgeNetwork(name, bridgesByNode, {}).net !== undefined);
+  return sole(usable) ?? uplink ?? "";
+}
+
+/**
+ * withBridgeNetwork fills the prefix length, gateway and DNS servers from the bridge's network,
+ * where the user has given none of their own.
+ */
+export function withBridgeNetwork(f: Form, net: BridgeNetwork | undefined, touched: (k: keyof Form) => boolean): Form {
+  if (net === undefined) {
+    return f;
+  }
+  const bits = Number(net.cidr?.split("/")[1]);
+  return {
+    ...f,
+    prefix: touched("prefix") || !whole(bits, 1, addressBits) ? f.prefix : bits,
+    gateway: f.gateway === "" && !touched("gateway") ? (net.gateway ?? "") : f.gateway,
+    dnsServers: f.dnsServers === "" && !touched("dnsServers") ? net.dns.join(", ") : f.dnsServers,
+  };
+}
+
 /** newForm is the wizard before anything is chosen. */
 export const newForm = (): Form => ({
+  from: "",
   namespace: "",
   name: "",
   className: "",
@@ -1021,8 +1141,7 @@ function addressProblems(form: Form): Problems {
   const p: Problems = {};
   const entries = list(form.addresses);
   const { count, bad } = addressCount(entries, form.gateway, form.prefix);
-  // A rollout makes each new node before it removes an old one.
-  const needed = form.controlPlaneReplicas + mostWorkers(form) + 1;
+  const needed = nodesNeeded(form);
   if (entries.length === 0) {
     p.addresses = "Enter at least one address, range or network";
   } else if (bad !== undefined) {

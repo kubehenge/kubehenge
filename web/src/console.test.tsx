@@ -1,6 +1,6 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 import { fakeServer, type Route } from "./fake-server";
@@ -66,12 +66,14 @@ describe("the fleet", () => {
       state: "error",
       reason: "Talos upgrade failed on edge-w-1",
       view: "",
+      verdict: "Upgrade failed",
     });
     expect(standing(upgrading)).toMatchObject({ group: "running", reason: "Upgrading to v1.36.5+rke2r1" });
     expect(standing(creating)).toMatchObject({ group: "running", reason: "Creating: 1 of 3 control planes" });
     expect(standing({ ...creating, created: minutesAgo(120) })).toMatchObject({
       group: "needs",
       reason: "Not available",
+      verdict: "Not available",
     });
     expect(standing({ ...base, deleting: true })).toMatchObject({ group: "running", state: "deleting" });
     expect(standing({ ...base, workers: { ...steady, upToDate: 1 } })).toMatchObject({
@@ -116,10 +118,12 @@ describe("the fleet", () => {
       state: "error",
       reason: "Pod shop/api: CrashLoopBackOff and 4 more",
       view: "health",
+      verdict: "Degraded",
     });
     expect(standing(base, { ...crashing, verdict: "unreachable", attention: [] })).toMatchObject({
       group: "needs",
       reason: "API server unreachable",
+      verdict: "Unreachable",
     });
     expect(
       standing(base, {
@@ -136,7 +140,13 @@ describe("the fleet", () => {
         attention: [{ severity: "error", section: "backups", what: "Last backup failed" }],
         more: 0,
       }),
-    ).toStrictEqual({ group: "needs", state: "error", reason: "Last backup failed", view: "backups" });
+    ).toStrictEqual({
+      group: "needs",
+      state: "error",
+      reason: "Last backup failed",
+      view: "backups",
+      verdict: "Degraded",
+    });
     // What is under way says more than the errors a rollout passes through.
     expect(standing(upgrading, { ...crashing, name: "db" })).toMatchObject({ group: "running" });
   });
@@ -152,6 +162,12 @@ describe("the fleet", () => {
   });
 });
 
+// names are the clusters the fleet table lists, in its order.
+const names = (): (string | null)[] =>
+  within(screen.getByRole("table"))
+    .getAllByRole("link")
+    .map((l) => l.textContent);
+
 function serve(): Record<string, Route> {
   const routes: Record<string, Route> = {
     "GET /api/session": { body: { user: "alice@pve", csrf: "c1" } },
@@ -166,6 +182,46 @@ function serve(): Record<string, Route> {
 }
 
 describe("the console", () => {
+  it("greys the fleet out while reading it again fails, until a read succeeds", async () => {
+    window.history.replaceState(null, "", "/");
+    const routes = serve();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<App />);
+    const rail = await screen.findByRole("navigation", { name: "Fleet" });
+    await waitFor(() => expect(within(rail).getAllByRole("link")).toHaveLength(4));
+    expect(rail).not.toHaveClass("rail-stale");
+
+    routes["GET /api/clusters"] = { status: 502, body: { error: "the management cluster does not answer" } };
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    await waitFor(() => expect(rail).toHaveClass("rail-stale"));
+    expect(within(rail).getByText("Stale")).toHaveAttribute("title", "the management cluster does not answer");
+    expect(within(rail).getAllByRole("link")).toHaveLength(4);
+
+    routes["GET /api/clusters"] = { body: fleet };
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    await waitFor(() => expect(rail).not.toHaveClass("rail-stale"));
+    vi.useRealTimers();
+  });
+
+  it("says when it reads the clusters again while the management cluster does not answer", async () => {
+    window.history.replaceState(null, "", "/clusters");
+    const routes = serve();
+    routes["GET /api/clusters"] = { status: 502, body: { error: "the management cluster did not answer" } };
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const main = within(await screen.findByRole("main"));
+    await expect(main.findByText("The management cluster did not answer.")).resolves.toBeInTheDocument();
+    expect(main.getByText(/^Trying again in \d+ s$/u)).toBeInTheDocument();
+    expect(main.queryByRole("link", { name: "Management cluster" })).not.toBeInTheDocument();
+    const rail = within(screen.getByRole("navigation", { name: "Fleet" }));
+    expect(rail.getByText("Not read")).toHaveAttribute("title", "the management cluster did not answer");
+
+    routes["GET /api/clusters"] = { body: fleet };
+    await user.click(main.getByRole("button", { name: "Try now" }));
+    await expect(main.findByRole("row", { name: /^web/u })).resolves.toBeInTheDocument();
+    expect(main.queryByText(/^Trying again/u)).not.toBeInTheDocument();
+  });
+
   it("lists the fleet by where each cluster stands, with why, and follows the running work", async () => {
     window.history.replaceState(null, "", "/clusters/default/web");
     serve();
@@ -237,6 +293,39 @@ describe("the console", () => {
     await expect(screen.findByRole("heading", { name: /^Upgrade appliance to 0\.3\.1/u })).resolves.toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("Errorthe release's checksum does not match");
     expect(screen.getByRole("link", { name: "Open Administration" })).toHaveAttribute("href", "/administration");
+    // An appliance upgrade takes a release to choose, so it is not started again from here.
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+  });
+
+  it("starts a failed backup again from its run page, then shows the cluster's backups", async () => {
+    window.history.replaceState(null, "", "/runs/backup/default/web/manual-1");
+    const routes = serve();
+    routes["GET /api/runs"] = {
+      body: [
+        {
+          id: "backup/default/web/manual-1",
+          kind: "backup",
+          namespace: "default",
+          cluster: "web",
+          what: "Back up",
+          state: "failed",
+          started: minutesAgo(9),
+          finished: minutesAgo(8),
+          error: "the bucket refused the upload: access denied",
+        },
+      ],
+    };
+    routes["POST /api/clusters/default/web/backups"] = { status: 403, body: { error: "backing up needs VM.Allocate" } };
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const again = await screen.findByRole("button", { name: "Try again" });
+    await user.click(again);
+    await expect(screen.findByText("Backing up needs VM.Allocate.")).resolves.toBeInTheDocument();
+    expect(window.location.pathname).toBe("/runs/backup/default/web/manual-1");
+
+    routes["POST /api/clusters/default/web/backups"] = { status: 202, body: { name: "manual-2" } };
+    await user.click(again);
+    await waitFor(() => expect(window.location.pathname).toBe("/clusters/default/web/backups"));
   });
 
   it("follows a change made here by its steps, in place of the cluster's standing", async () => {
@@ -283,6 +372,95 @@ describe("the console", () => {
     ).toStrictEqual(["AcceptedDone", "Replace control planesRunning1 of 3 replaced", "SettleWaiting"]);
     expect(screen.getByText("by dev@pve")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open cluster" })).toHaveAttribute("href", "/clusters/default/db");
+  });
+
+  it("filters, groups and sorts the fleet list, and keeps the view in the address", async () => {
+    window.history.replaceState(null, "", "/");
+    serve();
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await waitFor(() => expect(names()).toStrictEqual(["edge", "ci", "db", "web"]));
+
+    await user.click(screen.getByRole("button", { name: "Cluster" }));
+    expect(names()).toStrictEqual(["ci", "db", "edge", "web"]);
+    expect(screen.getByRole("columnheader", { name: /Cluster/u })).toHaveAttribute("aria-sort", "ascending");
+    await user.click(screen.getByRole("button", { name: /Cluster/u }));
+    expect(names()).toStrictEqual(["web", "edge", "db", "ci"]);
+    expect(window.location.search).toBe("?sort=name&order=desc");
+
+    const show = within(screen.getByRole("group", { name: "Show" }));
+    await user.click(show.getByRole("button", { name: "Running 2" }));
+    expect(names()).toStrictEqual(["db", "ci"]);
+
+    await user.click(show.getByRole("button", { name: "All 4" }));
+    await user.type(screen.getByLabelText("Filter"), "dge");
+    expect(names()).toStrictEqual(["edge"]);
+    expect(screen.getByText("1 of 4")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Filter"), "zz");
+    expect(screen.getByText("No clusters match")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Clear filter" }));
+    expect(names()).toHaveLength(4);
+    expect(window.location.search).toBe("?sort=name&order=desc");
+  });
+
+  it("marks a cluster's tabs that hold something to look at, keeping the tabs' names", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
+    const routes = serve();
+    const failing = {
+      ...base,
+      machines: [{ name: "web-w-9", role: "worker" as const, phase: "Failed", ready: false, created: minutesAgo(9) }],
+    };
+    routes["GET /api/clusters/default/web"] = { body: failing };
+    routes["GET /api/fleet/health"] = {
+      body: [
+        {
+          namespace: "default",
+          name: "web",
+          read: minutesAgo(0),
+          verdict: "degraded",
+          attention: [
+            { severity: "warning", section: "addons", what: "Add-on ingress: pending-install" },
+            { severity: "progress", section: "addons", what: "Add-on x installing" },
+          ],
+          more: 1,
+        },
+      ],
+    };
+    render(<App />);
+    const tabs = within(await screen.findByRole("navigation", { name: "web's views" }));
+    await waitFor(() => expect(tabs.getByRole("link", { name: "Health" })).toHaveAccessibleDescription("2 to look at"));
+    expect(tabs.getByRole("link", { name: "Machines" })).toHaveAccessibleDescription("1 failed");
+    expect(tabs.getByRole("link", { name: "Summary" })).not.toHaveAttribute("aria-describedby");
+
+    // The worst of it shows on every view but Health, which lists it all.
+    const strip = within(screen.getByRole("region", { name: "Needs attention" }));
+    expect(strip.getByText("Add-on ingress: pending-install")).toHaveClass("status-warning");
+    expect(strip.getByText("2 more")).toBeInTheDocument();
+    expect(strip.getByRole("link", { name: "Health" })).toHaveAttribute("href", "/clusters/default/web/health");
+    const user = userEvent.setup({ delay: null });
+    await user.click(tabs.getByRole("link", { name: "Health" }));
+    expect(screen.queryByRole("region", { name: "Needs attention" })).not.toBeInTheDocument();
+  });
+
+  it("says on a cluster's page that it does not answer", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/options");
+    const routes = serve();
+    routes["GET /api/fleet/health"] = {
+      body: [
+        {
+          namespace: "default",
+          name: "web",
+          read: minutesAgo(0),
+          verdict: "unreachable",
+          workload: "The API server does not answer.",
+          attention: [],
+        },
+      ],
+    };
+    render(<App />);
+    const strip = within(await screen.findByRole("region", { name: "Needs attention" }));
+    expect(strip.getByText("Unreachable")).toHaveClass("status-error");
+    expect(strip.getByText("The API server does not answer.")).toBeInTheDocument();
   });
 
   it("shows a stalled change with what holds it up, and a stalled creation beside it", async () => {
@@ -374,6 +552,10 @@ describe("the console", () => {
     const web = within(rail).getByRole("link", { name: /^web Pod shop/u });
     expect(web).toHaveAttribute("href", "/clusters/default/web/health");
     expect(within(screen.getByRole("main")).getByText("Pod shop/api: CrashLoopBackOff")).toBeInTheDocument();
+    // The list says what the rail says, not that Cluster API finds the cluster available.
+    const row = within(screen.getByRole("main")).getByRole("row", { name: /^web/u });
+    expect(within(row).getByText("Degraded")).toBeInTheDocument();
+    expect(within(row).queryByText("Available")).not.toBeInTheDocument();
   });
 
   it("goes anywhere from the palette, by a few letters typed", async () => {
@@ -394,6 +576,35 @@ describe("the console", () => {
 
     expect(window.location.pathname).toBe("/clusters/default/db/options");
     expect(screen.queryByRole("dialog", { name: "Go to or run" })).not.toBeInTheDocument();
+  });
+
+  it("starts a cluster's actions from the palette, only those the user may", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
+    serve();
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await screen.findAllByRole("link", { name: /^db/u });
+
+    await user.keyboard("{Control>}k{/Control}");
+    let palette = screen.getByRole("dialog", { name: "Go to or run" });
+    await user.type(within(palette).getByRole("combobox"), "db upgr");
+    expect(within(palette).getAllByRole("option")[0]).toHaveTextContent("db: Upgrade");
+    await user.keyboard("{Enter}");
+    const upgrade = await screen.findByRole("dialog", { name: "Upgrade db" });
+    expect(window.location.pathname).toBe("/clusters/default/db");
+    expect(window.location.search).toBe("");
+    await user.click(within(upgrade).getByRole("button", { name: "Cancel" }));
+
+    // Without the kubeconfig privilege there is no download to offer, nor to start from the address.
+    await user.keyboard("{Control>}k{/Control}");
+    palette = screen.getByRole("dialog", { name: "Go to or run" });
+    await user.type(within(palette).getByRole("combobox"), "kubeconfig");
+    expect(within(palette).queryByRole("option", { name: /Download kubeconfig/u })).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    window.history.replaceState(null, "", "/clusters/default/web?do=kubeconfig");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await waitFor(() => expect(window.location.search).toBe(""));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("opens each of Administration's pages from the palette, for those who may set Kubehenge up", async () => {
@@ -431,9 +642,14 @@ describe("the console", () => {
     await user.keyboard("]");
     expect(window.location.pathname).toBe("/clusters/default/edge/machines");
 
+    // Leaving the page takes two keys, so a stray one does nothing.
+    await user.keyboard("c");
+    expect(window.location.pathname).toBe("/clusters/default/edge/machines");
+
     await user.keyboard("?");
     const keys = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
     expect(within(keys).getByRole("rowheader", { name: "]" })).toBeInTheDocument();
+    expect(within(keys).getByRole("rowheader", { name: "G C" })).toBeInTheDocument();
     // Keys pressed with a dialog open belong to the dialog.
     await user.keyboard("1");
     expect(window.location.pathname).toBe("/clusters/default/edge/machines");
@@ -442,5 +658,20 @@ describe("the console", () => {
     await user.keyboard("{Control>}k{/Control}");
     await user.type(screen.getByRole("combobox"), "c");
     expect(window.location.pathname).toBe("/clusters/default/edge/machines");
+  });
+
+  it("leaves the page only on two-key sequences", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
+    serve();
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await screen.findByRole("heading", { name: /web/u });
+    await user.keyboard("c");
+    expect(window.location.pathname).toBe("/clusters/default/web");
+    // A first key that starts no sequence leaves the next key to itself.
+    await user.keyboard("x3");
+    expect(window.location.pathname).toBe("/clusters/default/web/machines");
+    await user.keyboard("gc");
+    expect(window.location.pathname).toBe("/");
   });
 });

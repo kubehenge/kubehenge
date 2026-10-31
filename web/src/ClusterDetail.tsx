@@ -1,53 +1,90 @@
-import { useEffect, useState, type JSX } from "react";
+import { Suspense, lazy, useEffect, useState, type JSX } from "react";
 
 import { api } from "./api";
 import { AutoscalerDialog, ScaleDialog, autoscalerText, poolText } from "./Autoscaling";
 import { BackupsDialog, BackupsView, backupsOf, backupsRows, useClassTargets } from "./Backups";
 import { issuesFromCA, saveCA } from "./Certificates";
+import { clusterActions, clusterPath, headlampURL, views, type Intent, type View } from "./cluster-paths";
 import { OptionDialog, Options, type OptionAction, type OptionRow } from "./ClusterOptions";
 import { Deleting } from "./Deletion";
 import { EtcdSnapshotsDialog, EtcdSnapshotsView, etcdSnapshotsOf, etcdSnapshotsRows } from "./EtcdSnapshots";
-import { HealthView } from "./Health";
+import { ClusterStatus, fleetKey, useFleet } from "./fleet";
+import { useClusterChanges } from "./live";
 import { Machines, Placement } from "./Machines";
 import { nodeOSKey } from "./node-os";
+import { Pools } from "./Pools";
 import { RecoveryState, RollStalled } from "./Recovery";
-import { Link, navigate } from "./router";
+import { Link, navigate, useQuery } from "./router";
 import { StagedBar, StagingProvider } from "./Staging";
 import { useStaging } from "./staging-context";
 import { TalosFailure, TalosRows, runsKubernetes, useTalosReleases } from "./Talos";
-import type { Cluster, Versions } from "./types";
+import type { Cluster, FleetHealth, Severity, Versions } from "./types";
 import {
+  Detail,
   Dialog,
   ErrorBox,
+  Status,
   Field,
-  StatusBadge,
   distributionName,
   errorMessage,
   filled,
+  pollCache,
   pollIdle,
   saveFile,
   settled,
   useChange,
   usePoll,
+  Skeleton,
   Views,
 } from "./ui";
+import { UpgradeChecks, usePlan } from "./Upgrade";
 
 type Action = "scale" | "upgrade" | "delete" | "backups" | "autoscaler" | "etcdSnapshots" | OptionAction;
+
+const saveConfig = async (c: Cluster, kind: "kubeconfig" | "talosconfig"): Promise<void> => {
+  const file = kind === "kubeconfig" ? api.kubeconfig(c.namespace, c.name) : api.talosconfig(c.namespace, c.name);
+  saveFile(await file, `${c.name}.${kind}`);
+};
+
+/**
+ * useIntent starts what the address asks for once its cluster has loaded, and takes the ask out of
+ * the address, so going back or reloading does not start it again. An action the user may not
+ * start is dropped, and so is the cluster shown until the one the address names has loaded.
+ */
+function useIntent(
+  c: Cluster | undefined,
+  named: { namespace: string; name: string },
+  start: (c: Cluster, intent: Intent) => void,
+): void {
+  const intent = useQuery("do");
+  useEffect(() => {
+    if (c?.namespace !== named.namespace || c.name !== named.name || intent === null) {
+      return;
+    }
+    const rest = new URLSearchParams(window.location.search);
+    rest.delete("do");
+    navigate(rest.size > 0 ? `${window.location.pathname}?${rest.toString()}` : window.location.pathname, true);
+    const offered = clusterActions(c).find((a) => a.intent === intent);
+    if (offered !== undefined) {
+      start(c, offered.intent);
+    }
+  }, [c, named.namespace, named.name, intent, start]);
+}
 
 // A cluster on its way somewhere is looked at more often than a settled one.
 const pollChanging = 5000;
 
 const httpNotFound = 404;
 
-/**
- * headlampURL is a cluster's page in the shared Headlamp, served on its own port of this host.
- * A cluster's goes through the gate's opening of it, which signs in again a session that signed
- * out of the cluster in Headlamp, and leads on to the cluster's page there.
- */
-export function headlampURL(port: number, cluster?: string): string {
-  const host = location.hostname.includes(":") ? `[${location.hostname}]` : location.hostname;
-  return `https://${host}:${port}/${filled(cluster) ? `kubehenge/open/${encodeURIComponent(cluster)}` : ""}`;
-}
+const clusterCache = pollCache<Cluster>();
+
+// The health view is the largest, and fetched once the cluster's page has drawn, so the page does
+// not wait for it and it is there when its tab or a warning is clicked.
+const loadHealth = async (): Promise<unknown> => import("./Health");
+const HealthView = lazy(async () => {
+  const m = await import("./Health");
+  return { default: m.HealthView };
+});
 
 // headlampOf is the cluster's page in the shared Headlamp, when one runs and can reach the cluster.
 function headlampOf(port: number | undefined, c: Cluster): string | undefined {
@@ -58,20 +95,97 @@ function headlampOf(port: number | undefined, c: Cluster): string | undefined {
 
 const poolName = (pool: string): string => pool.replace(/^\/pool\//u, "");
 
-/** The views of a cluster's page, as the last part of its address; the summary has none. */
-export const views = [
-  { path: "", label: "Summary" },
-  { path: "health", label: "Health" },
-  { path: "machines", label: "Machines" },
-  { path: "backups", label: "Backups" },
-  { path: "options", label: "Options" },
-] as const;
+interface TabBadge {
+  shown: string;
+  state: "error" | "warning";
+  /** What a screen reader says after the tab's name. */
+  text: string;
+}
 
-export type View = (typeof views)[number]["path"];
+// tabBadges marks the views that hold something to look at, so it shows from any of them.
+function tabBadges(c: Cluster, found: FleetHealth | undefined): Partial<Record<View, TabBadge>> {
+  const badges: Partial<Record<View, TabBadge>> = {};
+  if (found?.verdict === "unreachable") {
+    badges.health = { shown: "!", state: "error", text: "Unreachable" };
+  } else if (found !== undefined) {
+    const wrong = found.attention.filter((a) => a.severity !== "progress");
+    const count = wrong.length + (found.more ?? 0);
+    if (count > 0) {
+      const state = wrong.some((a) => a.severity === "error") ? "error" : "warning";
+      badges.health = { shown: String(count), state, text: `${count} to look at` };
+    }
+  }
+  const failed = (c.machines ?? []).filter((m) => m.phase === "Failed").length;
+  if (failed > 0) {
+    badges.machines = { shown: String(failed), state: "error", text: `${failed} failed` };
+  }
+  return badges;
+}
 
-/** clusterPath is the address of a cluster's page, or of one of its views. */
-export const clusterPath = (namespace: string, name: string, view: View = ""): string =>
-  `/clusters/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}${view ? `/${view}` : ""}`;
+function ClusterViews({ cluster: c, view }: { cluster: Cluster; view: View }): JSX.Element {
+  const badges = tabBadges(c, useFleet()?.health?.get(fleetKey(c)));
+  return (
+    <Views label={`${c.name}'s views`} open={view}>
+      {views.map((v, i) => {
+        const badge = badges[v.path];
+        return (
+          <Link
+            key={v.path}
+            to={clusterPath(c.namespace, c.name, v.path)}
+            current={view === v.path}
+            description={badge?.text}
+          >
+            {v.label}
+            {badge && (
+              <span className={`tab-badge tab-badge-${badge.state}`} aria-hidden="true">
+                {badge.shown}
+              </span>
+            )}
+            <kbd aria-hidden="true">{i + 1}</kbd>
+          </Link>
+        );
+      })}
+    </Views>
+  );
+}
+
+const severityState: Record<Severity, "error" | "warning" | "progress"> = {
+  error: "error",
+  warning: "warning",
+  progress: "progress",
+};
+
+// AttentionStrip carries the worst thing the cluster's health found onto its other views, with the
+// way to the details, so nobody has to open Health to learn something is wrong. Health lists it all.
+function AttentionStrip({ cluster: c, view }: { cluster: Cluster; view: View }): JSX.Element | null {
+  const found = useFleet()?.health?.get(fleetKey(c));
+  if (found === undefined || view === "health") {
+    return null;
+  }
+  const health = clusterPath(c.namespace, c.name, "health");
+  if (found.verdict === "unreachable") {
+    return (
+      <section className="attention-strip attention-strip-error" aria-label="Needs attention">
+        <Status state="error" text="Unreachable" />
+        {filled(found.workload) && <Detail>{found.workload}</Detail>}
+        <Link to={health}>Health</Link>
+      </section>
+    );
+  }
+  const [first] = found.attention;
+  if (first === undefined) {
+    return null;
+  }
+  const more = found.attention.length - 1 + (found.more ?? 0);
+  return (
+    <section className={`attention-strip attention-strip-${first.severity}`} aria-label="Needs attention">
+      <Status state={severityState[first.severity]} text={first.what} />
+      {filled(first.message) && <Detail>{first.message}</Detail>}
+      {more > 0 && <span className="muted">{more} more</span>}
+      <Link to={health}>Health</Link>
+    </section>
+  );
+}
 
 // autoUpgradeText reads the controller's record of the last automatic upgrade, "from to to at
 // time", with the time in the reader's own terms.
@@ -145,6 +259,18 @@ function whyNot(c: Cluster): string | undefined {
 // pageNote is why the actions are off, under them; a cluster being deleted says so in its status.
 const pageNote = (c: Cluster): string | undefined => (c.deleting ? undefined : whyNot(c));
 
+// The page opens on the cluster as last read, or as the fleet list has it, while it reads it again;
+// after a change the list reads it again too, so the rail does not lag behind the page.
+function useListed(namespace: string, name: string): { listed: Cluster | undefined; relist: () => void } {
+  const fleet = useFleet();
+  return {
+    listed: fleet?.clusters?.find((x) => x.namespace === namespace && x.name === name),
+    relist: () => {
+      void fleet?.reload();
+    },
+  };
+}
+
 export function ClusterDetail({
   namespace,
   name,
@@ -156,6 +282,7 @@ export function ClusterDetail({
   view?: View;
   headlamp?: number | undefined;
 }): JSX.Element {
+  const { listed, relist } = useListed(namespace, name);
   const {
     data: c,
     error,
@@ -164,9 +291,32 @@ export function ClusterDetail({
   } = usePoll(
     () => api.cluster(namespace, name),
     (shown) => (shown && settled(shown) ? pollIdle : pollChanging),
+    { cache: clusterCache, key: `${namespace}/${name}`, seed: listed },
   );
+  useClusterChanges(() => {
+    void reload();
+  });
   const [action, setAction] = useState<Action>();
   const [downloadError, setDownloadError] = useState<string>();
+  useEffect(() => {
+    void loadHealth();
+  }, []);
+  // Fetched rather than linked, so that a refusal shows here instead of as a broken download.
+  const download = async (save: () => Promise<void>): Promise<void> => {
+    setDownloadError(undefined);
+    try {
+      await save();
+    } catch (err) {
+      setDownloadError(errorMessage(err));
+    }
+  };
+  useIntent(c, { namespace, name }, (asked, intent) => {
+    if (intent === "kubeconfig" || intent === "talosconfig") {
+      void download(async () => saveConfig(asked, intent));
+    } else {
+      setAction(intent);
+    }
+  });
 
   if (errorStatus === httpNotFound) {
     return (
@@ -184,7 +334,7 @@ export function ClusterDetail({
     return (
       <section className="panel">
         <ErrorBox message={error} />
-        {!filled(error) && <p className="muted pad">Loading…</p>}
+        {!filled(error) && <Skeleton rows={6} />}
       </section>
     );
   }
@@ -194,15 +344,7 @@ export function ClusterDetail({
   const close = (): void => {
     setAction(undefined);
     void reload();
-  };
-  // Fetched rather than linked, so that a refusal shows here instead of as a broken download.
-  const download = async (save: () => Promise<void>): Promise<void> => {
-    setDownloadError(undefined);
-    try {
-      await save();
-    } catch (err) {
-      setDownloadError(errorMessage(err));
-    }
+    relist();
   };
 
   return (
@@ -217,7 +359,7 @@ export function ClusterDetail({
         <div className="page-head">
           <div className="page-title">
             <h2>
-              <span className="id">{c.name}</span> <StatusBadge cluster={c} />
+              <span className="id">{c.name}</span> <ClusterStatus cluster={c} />
             </h2>
             <Facts cluster={c} />
           </div>
@@ -232,9 +374,7 @@ export function ClusterDetail({
               <button
                 type="button"
                 onClick={() => {
-                  void download(async () => {
-                    saveFile(await api.kubeconfig(c.namespace, c.name), `${c.name}.kubeconfig`);
-                  });
+                  void download(async () => saveConfig(c, "kubeconfig"));
                 }}
               >
                 Kubeconfig
@@ -245,9 +385,7 @@ export function ClusterDetail({
                 type="button"
                 title="For talosctl"
                 onClick={() => {
-                  void download(async () => {
-                    saveFile(await api.talosconfig(c.namespace, c.name), `${c.name}.talosconfig`);
-                  });
+                  void download(async () => saveConfig(c, "talosconfig"));
                 }}
               >
                 Talosconfig
@@ -292,14 +430,8 @@ export function ClusterDetail({
           }}
         />
 
-        <Views label={`${c.name}'s views`} open={view}>
-          {views.map((v, i) => (
-            <Link key={v.path} to={clusterPath(c.namespace, c.name, v.path)} current={view === v.path}>
-              {v.label}
-              <kbd aria-hidden="true">{i + 1}</kbd>
-            </Link>
-          ))}
-        </Views>
+        <ClusterViews cluster={c} view={view} />
+        <AttentionStrip cluster={c} view={view} />
         <StagedBar cluster={c} />
         <div className="object">
           <div className="object-view">
@@ -314,8 +446,24 @@ export function ClusterDetail({
                 }}
               />
             )}
-            {view === "health" && <HealthView cluster={c} headlamp={inHeadlamp} />}
-            {view === "machines" && <Machines cluster={c} />}
+            {view === "health" && (
+              <Suspense fallback={<Skeleton rows={6} shape="tiles" />}>
+                <HealthView cluster={c} headlamp={inHeadlamp} />
+              </Suspense>
+            )}
+            {view === "machines" && (
+              <>
+                <Pools cluster={c} can={can} why={why} />
+                <Machines
+                  cluster={c}
+                  can={can}
+                  why={why}
+                  onChanged={() => {
+                    void reload();
+                  }}
+                />
+              </>
+            )}
             {view === "backups" && (
               <>
                 <BackupsView cluster={c} can={can} onEdit={setAction} />
@@ -465,7 +613,13 @@ function OptionsView({
   const more = (shown: Cluster): OptionRow<"backups" | "etcdSnapshots" | "autoscaler">[] => [
     ...backupsRows(shown, offered),
     ...etcdSnapshotsRows(shown, offered),
-    { label: "Autoscaler", value: autoscalerText(shown), action: "autoscaler", name: "the autoscaler" },
+    {
+      label: "Autoscaler",
+      value: autoscalerText(shown),
+      group: "Nodes",
+      action: "autoscaler",
+      name: "the autoscaler",
+    },
   ];
   return <Options cluster={c} staged={staged} can={can} onEdit={onEdit} more={more} />;
 }
@@ -486,7 +640,7 @@ function Summary({
       <dl className="summary">
         <dt>Status</dt>
         <dd>
-          <StatusBadge cluster={c} />
+          <ClusterStatus cluster={c} />
         </dd>
         <dt>Distribution</dt>
         <dd>{distributionName(c.distribution)}</dd>
@@ -575,8 +729,25 @@ export function upgradeTargets(current: string, offered: string[]): string[] {
   });
 }
 
+function versionKey(v: string): number[] {
+  const p = parse(v);
+  return p ? [p.minor, p.patch, p.build] : [];
+}
+
+// preferredTarget is the newest version the cluster may move to, by minor, patch and build, or the
+// one it runs without any.
+function preferredTarget(targets: string[], held: string[], running: string): string {
+  const open = targets.filter((v) => !held.includes(v));
+  const sorted = open.toSorted((a, b) => {
+    const [x, y] = [versionKey(a), versionKey(b)];
+    return (y[0] ?? 0) - (x[0] ?? 0) || (y[1] ?? 0) - (x[1] ?? 0) || (y[2] ?? 0) - (x[2] ?? 0);
+  });
+  return sorted[0] ?? running;
+}
+
 function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
-  const [version, setVersion] = useState(c.version);
+  // Until one is chosen, the newest the cluster may move to.
+  const [chosen, setChosen] = useState<string>();
   const [offered, setOffered] = useState<Versions>();
   const { busy, error, send } = useChange(c, onClose);
   // A kubeadm cluster moves only to versions with a template on its node OS.
@@ -595,6 +766,8 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
   const talos = useTalosReleases(c.talos !== undefined);
   const running = c.talos?.version ?? "";
   const held = c.talos ? targets.filter((v) => !runsKubernetes(talos, running, v)) : [];
+  const version = chosen ?? preferredTarget(targets, held, c.version);
+  const read = usePlan(c, version);
   return (
     <Dialog
       title={`Upgrade ${c.name}`}
@@ -607,7 +780,11 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="primary" disabled={busy || version === c.version}>
+          <button
+            type="submit"
+            className="primary"
+            disabled={busy || version === c.version || read?.error !== undefined}
+          >
             Upgrade
           </button>
         </>
@@ -616,7 +793,7 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
       <Field label="Kubernetes version" hint="One minor version at a time">
         {(id) =>
           targets.length > 0 ? (
-            <select id={id} value={version} onChange={(e) => setVersion(e.target.value)}>
+            <select id={id} value={version} onChange={(e) => setChosen(e.target.value)}>
               <option value={c.version} disabled>
                 {c.version} (running)
               </option>
@@ -627,7 +804,7 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
               ))}
             </select>
           ) : (
-            <input id={id} value={version} onChange={(e) => setVersion(e.target.value.trim())} />
+            <input id={id} value={version} onChange={(e) => setChosen(e.target.value.trim())} />
           )
         }
       </Field>
@@ -640,6 +817,9 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
         </p>
       )}
       {c.talos && <TalosNote running={running} held={held} upgrading={filled(c.talos.upgrading)} />}
+      {version !== c.version && (
+        <UpgradeChecks cluster={c} read={read} healthPath={clusterPath(c.namespace, c.name, "health")} />
+      )}
       <ErrorBox message={error} />
     </Dialog>
   );
@@ -666,6 +846,7 @@ function TalosNote({
 }
 
 function DeleteDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+  const fleet = useFleet();
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -678,6 +859,7 @@ function DeleteDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
     setBusy(true);
     try {
       await api.remove(c.namespace, c.name, typed);
+      fleet?.show({ ...c, deleting: true });
       navigate("/");
     } catch (err) {
       setError(errorMessage(err));

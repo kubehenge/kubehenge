@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -29,28 +30,40 @@ import (
 )
 
 // The privileges on a cluster's pool, as Proxmox VE uses them for VMs: seeing it, changing it
-// (create, scale, upgrade, add-ons, delete), and taking its admin kubeconfig.
+// (create, scale, upgrade, add-ons, delete), taking its admin kubeconfig, and opening its VMs'
+// consoles and rebooting them.
 const (
 	privSee        = "VM.Audit"
 	privChange     = "VM.Allocate"
 	privKubeconfig = "Sys.Modify"
+	privConsole    = "VM.Console"
+	privPower      = "VM.PowerMgmt"
 )
 
 // createdBy records which Proxmox VE user created a cluster through the interface.
 const createdBy = "kubehenge.dev/created-by"
 
-// workerClass and workerPool name the one worker pool clusters created here get.
+// workerClass is the class of every worker pool, and workerPool names the one clusters created
+// here start with.
 const (
 	workerClass = "worker"
 	workerPool  = "md-0"
+)
+
+// The variables that size machines: the control planes', and the workers' of every pool that does
+// not set its own.
+const (
+	controlPlaneMachineVariable = "controlPlaneMachine"
+	workerMachineVariable       = "workerMachine"
 )
 
 // Variables a cluster may change after creation; the others describe where its VMs live.
 var changeableVariables = map[string]bool{
 	"headlamp": true, "monitoring": true, "logs": true, "backups": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, csiVariable: true, ccmVariable: true,
 	certificatesVariable: true, gitopsVariable: true, autoscalerVariable: true,
-	// A new node OS rolls every node onto its template, as a node image refresh does.
-	provisioner.NodeOSVariable: true,
+	// A new node OS rolls every node onto its template, as a node image refresh does; a new size
+	// rolls the machines it sizes.
+	provisioner.NodeOSVariable: true, controlPlaneMachineVariable: true, workerMachineVariable: true,
 }
 
 // autoUpgraded is where Kubehenge's controller records the last automatic upgrade.
@@ -280,6 +293,8 @@ type workerPoolView struct {
 	// Autoscaling is set for a pool the cluster autoscaler sizes, whose replicas are then the
 	// workers its MachineDeployment asks for at the moment.
 	Autoscaling *poolAutoscaling `json:"autoscaling,omitempty"`
+	// Machine is the pool's own size, where it does not take the cluster's workerMachine.
+	Machine json.RawMessage `json:"machine,omitempty"`
 }
 
 type allowedView struct {
@@ -299,15 +314,23 @@ type machineView struct {
 	// ProxmoxNode is the Proxmox VE node its VM runs on, where the user may see the VM.
 	ProxmoxNode string `json:"proxmoxNode,omitempty"`
 	Role        string `json:"role"`
-	Version     string `json:"version,omitempty"`
+	// Pool is the worker pool a worker belongs to.
+	Pool    string `json:"pool,omitempty"`
+	Version string `json:"version,omitempty"`
 	// Talos is the Talos release a Talos cluster's node runs, as its kubelet reports it.
 	Talos string `json:"talos,omitempty"`
 	Phase string `json:"phase"`
 	Ready bool   `json:"ready"`
 	// Waiting is what keeps a machine that is not ready from it, as Cluster API sums it up.
-	Waiting   string    `json:"waiting,omitempty"`
+	Waiting string `json:"waiting,omitempty"`
+	// Replacing is set while the machine is marked for its health check to replace.
+	Replacing bool      `json:"replacing,omitempty"`
 	Addresses []string  `json:"addresses,omitempty"`
 	Created   time.Time `json:"created"`
+	// Console opens the VM's console in Proxmox VE's web interface, for a user who may use it.
+	Console string `json:"console,omitempty"`
+	// Reboot tells whether the user may reboot the machine's VM.
+	Reboot bool `json:"reboot,omitempty"`
 }
 
 // view describes a cluster to a user with privs on its pool. The interface changes clusters only in
@@ -329,7 +352,6 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 		Phase:        c.Status.Phase,
 		Available:    meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.AvailableCondition),
 		Conditions:   []conditionView{},
-		WorkerPools:  []workerPoolView{},
 		Variables:    map[string]json.RawMessage{},
 		Pool:         pool,
 		Pods:         c.Spec.ClusterNetwork.Pods.CIDRBlocks,
@@ -362,14 +384,7 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 	if ws := c.Status.Workers; ws != nil {
 		v.Workers = replicas(ws.DesiredReplicas, ws.ReadyReplicas, ws.AvailableReplicas, ws.UpToDateReplicas)
 	}
-	for i := range c.Spec.Topology.Workers.MachineDeployments {
-		md := &c.Spec.Topology.Workers.MachineDeployments[i]
-		wp := workerPoolView{Name: md.Name, Class: md.Class, Autoscaling: autoscalingOf(md.Metadata.Annotations)}
-		if md.Replicas != nil {
-			wp.Replicas = *md.Replicas
-		}
-		v.WorkerPools = append(v.WorkerPools, wp)
-	}
+	v.WorkerPools = workerPoolsOf(c)
 	for _, cv := range c.Spec.Topology.Variables {
 		v.Variables[cv.Name] = json.RawMessage(cv.Value.Raw)
 	}
@@ -384,6 +399,23 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 		v.Deletion, v.DeletedAt = &st, c.DeletionTimestamp
 	}
 	return v
+}
+
+// workerPoolsOf describes a cluster's worker pools.
+func workerPoolsOf(c *clusterv1.Cluster) []workerPoolView {
+	pools := make([]workerPoolView, 0, len(c.Spec.Topology.Workers.MachineDeployments))
+	for i := range c.Spec.Topology.Workers.MachineDeployments {
+		md := &c.Spec.Topology.Workers.MachineDeployments[i]
+		wp := workerPoolView{Name: md.Name, Class: md.Class, Autoscaling: autoscalingOf(md.Metadata.Annotations)}
+		if md.Replicas != nil {
+			wp.Replicas = *md.Replicas
+		}
+		if i := poolOverride(md, workerMachineVariable); i >= 0 {
+			wp.Machine = json.RawMessage(md.Variables.Overrides[i].Value.Raw)
+		}
+		pools = append(pools, wp)
+	}
+	return pools
 }
 
 // nodeOSInfo describes the node OS a cluster's nodes run, or nil when its variable cannot be read.
@@ -601,33 +633,20 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 		s.kubeError(w, r, err)
 		return
 	}
-	hosts := s.vmNodes(r, u, c, access.path)
+	vms := s.clusterVMs(r, u, c, access.path)
+	console := access.held.Has(privConsole)
+	reboot := access.held.Has(privPower) && u.namespaces.has(c.Namespace)
 	v.Machines = []machineView{}
 	for i := range machines.Items {
 		m := &machines.Items[i]
-		mv := machineView{
-			Name:        m.Name,
-			Node:        m.Status.NodeRef.Name,
-			ProxmoxNode: hosts[m.Spec.InfrastructureRef.Name],
-			Role:        workerRole,
-			Version:     m.Spec.Version,
-			Phase:       m.Status.Phase,
-			Ready:       meta.IsStatusConditionTrue(m.Status.Conditions, clusterv1.MachineReadyCondition),
-			Created:     m.CreationTimestamp.Time,
+		vm := vms[m.Spec.InfrastructureRef.Name]
+		mv := machineOf(m, vm.Node)
+		if console {
+			mv.Console = consoleURL(s.ProxmoxURL, &vm)
 		}
+		mv.Reboot = reboot && vm.VMID != 0
 		if v.Talos != nil {
 			mv.Talos, _ = provisioner.MachineTalos(m)
-		}
-		if _, cp := m.Labels[clusterv1.MachineControlPlaneLabel]; cp {
-			mv.Role = controlPlaneRole
-		}
-		if ready := meta.FindStatusCondition(m.Status.Conditions, clusterv1.MachineReadyCondition); ready != nil && !mv.Ready {
-			mv.Waiting = ready.Message
-		}
-		for _, a := range m.Status.Addresses {
-			if a.Type == clusterv1.MachineInternalIP || a.Type == clusterv1.MachineExternalIP {
-				mv.Addresses = append(mv.Addresses, a.Address)
-			}
 		}
 		v.Machines = append(v.Machines, mv)
 	}
@@ -644,10 +663,10 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 	writeJSON(w, http.StatusOK, v)
 }
 
-// vmNodes maps the names of the cluster's VMs, which the Proxmox VE provider names after their
-// machines' infrastructure, to the nodes they run on now. The machines show without their nodes
-// when Proxmox VE does not tell: they are the page's subject, the nodes an addition.
-func (s *Server) vmNodes(r *http.Request, u user, c *clusterv1.Cluster, poolPath string) map[string]string {
+// clusterVMs maps the names of the cluster's VMs, which the Proxmox VE provider names after their
+// machines' infrastructure, to the VMs, on the nodes they run on now. The machines show without
+// their nodes when Proxmox VE does not tell: they are the page's subject, the nodes an addition.
+func (s *Server) clusterVMs(r *http.Request, u user, c *clusterv1.Cluster, poolPath string) map[string]pve.Member {
 	members, err := s.Accounts.PoolMembers(r.Context(), u.ticket, strings.TrimPrefix(poolPath, "/pool/"))
 	if err != nil {
 		if !errors.Is(err, pve.ErrForbidden) {
@@ -655,11 +674,24 @@ func (s *Server) vmNodes(r *http.Request, u user, c *clusterv1.Cluster, poolPath
 		}
 		return nil
 	}
-	nodes := make(map[string]string, len(members))
+	vms := make(map[string]pve.Member, len(members))
 	for i := range members {
-		nodes[members[i].Name] = members[i].Node
+		vms[members[i].Name] = members[i]
 	}
-	return nodes
+	return vms
+}
+
+// consoleURL is where Proxmox VE's web interface at base opens the VM's console, as its own
+// Console button does; empty without a base or a VM.
+func consoleURL(base string, vm *pve.Member) string {
+	u, err := url.Parse(base)
+	if base == "" || err != nil || vm.VMID == 0 || vm.Node == "" {
+		return ""
+	}
+	u.Path, u.RawQuery = "/", url.Values{
+		"console": {"kvm"}, "novnc": {"1"}, "vmid": {strconv.Itoa(vm.VMID)}, "vmname": {vm.Name}, "node": {vm.Node}, "resize": {"off"}, "cmd": {""},
+	}.Encode()
+	return u.String()
 }
 
 type createRequest struct {
@@ -710,6 +742,10 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	c := s.newCluster(u, &req)
+	if r.URL.Query().Get("dryRun") == metav1.DryRunAll {
+		s.checkCreate(w, r, u, c)
+		return
+	}
 	if err = u.kube.Create(r.Context(), c); err != nil {
 		s.kubeError(w, r, err)
 		return
@@ -1034,7 +1070,9 @@ type changeRequest struct {
 	WorkerPools map[string]int32 `json:"workerPools"`
 	// Autoscaling switches the cluster autoscaler on for worker pools by name, or off with null.
 	Autoscaling map[string]*poolAutoscaling `json:"autoscaling"`
-	Variables   map[string]json.RawMessage  `json:"variables"`
+	// Pools adds, changes and removes worker pools by name.
+	Pools     map[string]*poolChange     `json:"pools"`
+	Variables map[string]json.RawMessage `json:"variables"`
 }
 
 // changed is a change read and checked, applied to the cluster in memory, with the cluster as it was.
@@ -1072,6 +1110,9 @@ func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user) (
 	}
 	if msg == "" {
 		msg = applyTopology(c, &req)
+	}
+	if msg == "" {
+		msg = applyPools(c, req.Pools)
 	}
 	if msg != "" {
 		writeError(w, http.StatusUnprocessableEntity, msg)
