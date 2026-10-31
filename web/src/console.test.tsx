@@ -60,7 +60,13 @@ const fleet = [base, upgrading, failedTalos, creating];
 
 describe("the fleet", () => {
   it("says where each cluster stands and why", () => {
-    expect(standing(base)).toStrictEqual({ group: "healthy", state: "ok", reason: "RKE2 v1.36.5+rke2r1", view: "" });
+    expect(standing(base)).toStrictEqual({
+      group: "healthy",
+      state: "ok",
+      reason: "RKE2 v1.36.5+rke2r1",
+      view: "",
+      verdict: "Available",
+    });
     expect(standing(failedTalos)).toStrictEqual({
       group: "needs",
       state: "error",
@@ -68,17 +74,32 @@ describe("the fleet", () => {
       view: "",
       verdict: "Upgrade failed",
     });
-    expect(standing(upgrading)).toMatchObject({ group: "running", reason: "Upgrading to v1.36.5+rke2r1" });
-    expect(standing(creating)).toMatchObject({ group: "running", reason: "Creating: 1 of 3 control planes" });
+    expect(standing(upgrading)).toMatchObject({
+      group: "running",
+      reason: "Upgrading to v1.36.5+rke2r1",
+      verdict: "Upgrading",
+    });
+    expect(standing(creating)).toMatchObject({
+      group: "running",
+      reason: "Creating: 1 of 3 control planes",
+      verdict: "Creating",
+    });
     expect(standing({ ...creating, created: minutesAgo(120) })).toMatchObject({
       group: "needs",
       reason: "Not available",
       verdict: "Not available",
     });
-    expect(standing({ ...base, deleting: true })).toMatchObject({ group: "running", state: "deleting" });
+    expect(standing({ ...base, deleting: true })).toMatchObject({
+      group: "running",
+      state: "deleting",
+      verdict: "Deleting",
+    });
+    // An available cluster on its way somewhere is not shown as Available.
     expect(standing({ ...base, workers: { ...steady, upToDate: 1 } })).toMatchObject({
       group: "running",
+      state: "progress",
       reason: "Workers: 1 of 2 updated",
+      verdict: "Updating",
     });
     expect(
       standing({
@@ -91,12 +112,14 @@ describe("the fleet", () => {
       state: "error",
       reason: "Controller error",
       view: "",
+      verdict: "Error",
     });
     expect(standing({ ...creating, stalled: "ci-cp-1: VM template not found" })).toStrictEqual({
       group: "needs",
       state: "warning",
       reason: "Machines stuck for 20 minutes",
       view: "machines",
+      verdict: "Stuck",
     });
   });
 
@@ -556,6 +579,23 @@ describe("the console", () => {
     const row = within(screen.getByRole("main")).getByRole("row", { name: /^web/u });
     expect(within(row).getByText("Degraded")).toBeInTheDocument();
     expect(within(row).queryByText("Available")).not.toBeInTheDocument();
+  });
+
+  it("badges a cluster as the rail places it, also where its controller fails or a change is under way", async () => {
+    window.history.replaceState(null, "", "/");
+    const routes = serve();
+    const rolling = { ...base, name: "shop", workers: { ...base.workers, upToDate: 1 } };
+    routes["GET /api/clusters"] = {
+      body: [{ ...base, controllerError: "Proxmox VE task UPID:pve1 failed: no space" }, rolling],
+    };
+    render(<App />);
+    const main = await screen.findByRole("main");
+    const web = await within(main).findByRole("row", { name: /^web/u });
+    expect(within(web).getByText("Error")).toBeInTheDocument();
+    expect(within(web).queryByText("Available")).not.toBeInTheDocument();
+    const shop = within(main).getByRole("row", { name: /^shop/u });
+    expect(within(shop).getByText("Updating")).toBeInTheDocument();
+    expect(within(shop).queryByText("Available")).not.toBeInTheDocument();
   });
 
   it("goes anywhere from the palette, by a few letters typed", async () => {

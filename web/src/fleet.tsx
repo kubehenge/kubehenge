@@ -5,7 +5,7 @@ import { clusterPath, type View } from "./cluster-paths";
 import { useClusterChanges } from "./live";
 import { Link } from "./router";
 import type { Cluster, FleetHealth, Replicas, RunInfo } from "./types";
-import { Status, distributionName, filled, health, pollIdle, settled, usePoll } from "./ui";
+import { Status, distributionName, filled, pollIdle, settled, usePoll } from "./ui";
 
 // How often the fleet is read again while any cluster is changing.
 const pollChanging = 10_000;
@@ -108,8 +108,8 @@ export interface Standing {
   reason: string;
   /** The view of the cluster's page that shows more of why. */
   view: View;
-  /** What a badge says of a cluster that needs someone, in place of what Cluster API says of it. */
-  verdict?: string;
+  /** What its status badge says, so that the badge, the rail and the header never disagree. */
+  verdict: string;
 }
 
 export const groups: { group: Group; label: string }[] = [
@@ -141,9 +141,9 @@ export function standing(c: Cluster, found?: FleetHealth, now = Date.now()): Sta
       c.deletion?.abandoned === undefined &&
       c.conditions.some((x) => x.type === "DeletionStalled" && x.status === "True")
     ) {
-      return { group: "needs", state: "warning", reason: "Deletion stalled", view: "" };
+      return { group: "needs", state: "warning", reason: "Deletion stalled", view: "", verdict: "Deletion stalled" };
     }
-    return { group: "running", state: "deleting", reason: "Deleting", view: "" };
+    return { group: "running", state: "deleting", reason: "Deleting", view: "", verdict: "Deleting" };
   }
   return (
     failure(c) ??
@@ -153,6 +153,7 @@ export function standing(c: Cluster, found?: FleetHealth, now = Date.now()): Sta
       state: "ok",
       reason: c.talos ? `Talos ${c.talos.version}, ${c.version}` : `${distributionName(c.distribution)} ${c.version}`,
       view: "",
+      verdict: "Available",
     }
   );
 }
@@ -177,10 +178,16 @@ function failure(c: Cluster): Standing | undefined {
     return { group: "needs", state: "error", reason, view: "machines", verdict: "Degraded" };
   }
   if (filled(c.controllerError)) {
-    return { group: "needs", state: "error", reason: "Controller error", view: "" };
+    return { group: "needs", state: "error", reason: "Controller error", view: "", verdict: "Error" };
   }
   if (filled(c.stalled)) {
-    return { group: "needs", state: "warning", reason: "Machines stuck for 20 minutes", view: "machines" };
+    return {
+      group: "needs",
+      state: "warning",
+      reason: "Machines stuck for 20 minutes",
+      view: "machines",
+      verdict: "Stuck",
+    };
   }
   return undefined;
 }
@@ -188,7 +195,7 @@ function failure(c: Cluster): Standing | undefined {
 // comingUp is how far a cluster that is not available yet is, or why it stopped coming up.
 function comingUp(c: Cluster, now: number): Standing {
   if (c.conditions.some((x) => x.type === "TopologyReconciled" && x.reason === "ClusterClassNotReconciled")) {
-    return { group: "running", state: "progress", reason: "Waiting for ClusterClass", view: "" };
+    return { group: "running", state: "progress", reason: "Waiting for ClusterClass", view: "", verdict: "Waiting" };
   }
   if (now - Date.parse(c.created) < provisioningGrace) {
     const cp = c.controlPlane;
@@ -197,6 +204,7 @@ function comingUp(c: Cluster, now: number): Standing {
       state: "progress",
       reason: `Creating: ${cp.ready} of ${cp.desired} control planes`,
       view: "machines",
+      verdict: "Creating",
     };
   }
   const why = c.conditions.find((x) => x.type === "Available" && x.status !== "True");
@@ -209,16 +217,25 @@ function comingUp(c: Cluster, now: number): Standing {
   };
 }
 
-const moving = (reason: string): Standing => ({ group: "running", state: "progress", reason, view: "machines" });
+const moving = (reason: string, verdict = "Updating"): Standing => ({
+  group: "running",
+  state: "progress",
+  reason,
+  view: "machines",
+  verdict,
+});
 
 // underWay is the change going on in an available cluster, if one is.
 function underWay(c: Cluster): Standing | undefined {
   if (filled(c.talos?.upgrading)) {
-    return moving(`Upgrading Talos on ${firstWord(c.talos.upgrading)}`);
+    return moving(`Upgrading Talos on ${firstWord(c.talos.upgrading)}`, "Upgrading");
   }
   const reconciling = c.conditions.find((x) => x.type === "TopologyReconciled" && x.status !== "True");
+  if (reconciling?.reason === "ClusterUpgrading") {
+    return moving(`Upgrading to ${c.version}`, "Upgrading");
+  }
   if (reconciling) {
-    return moving(reconciling.reason === "ClusterUpgrading" ? `Upgrading to ${c.version}` : "Applying changes");
+    return moving("Applying changes");
   }
   if (!steady(c.controlPlane)) {
     return moving(rollout("Control plane", c.controlPlane));
@@ -252,21 +269,16 @@ function finding(h: FleetHealth | undefined): Standing | undefined {
   // The backups view, not the health page, has the details of the cluster's backups.
   const view: View = worst.section === "backups" ? "backups" : "health";
   if (worst.severity === "progress") {
-    return { group: "running", state: "progress", reason, view };
+    return { group: "running", state: "progress", reason, view, verdict: "Updating" };
   }
   return { group: "needs", state: worst.severity, reason, view, verdict: "Degraded" };
-}
-
-/** badge is what a cluster's status badge shows: the fleet's verdict where it needs someone. */
-export function badge(c: Cluster, s: Standing): { state: Standing["state"]; text: string } {
-  return s.verdict === undefined ? health(c) : { state: s.state, text: s.verdict };
 }
 
 /** ClusterStatus is a cluster's badge, with what its health page found where the fleet has read it. */
 export function ClusterStatus({ cluster }: { cluster: Cluster }): JSX.Element {
   const found = useFleet()?.health?.get(fleetKey(cluster));
-  const b = badge(cluster, standing(cluster, found));
-  return <Status state={b.state} text={b.text} />;
+  const s = standing(cluster, found);
+  return <Status state={s.state} text={s.verdict} />;
 }
 
 const severity: Record<Standing["state"], number> = { error: 0, warning: 1, progress: 2, deleting: 3, ok: 4 };

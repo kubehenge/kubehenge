@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { adminPath } from "./admin-views";
 import { clusterPath } from "./cluster-paths";
 import { FirstCluster } from "./FirstCluster";
-import { FleetProvider, badge, fleetKey, groups, ranked, useFleet, type Group, type Standing } from "./fleet";
+import { FleetProvider, fleetKey, groups, ranked, useFleet, type Group, type Standing } from "./fleet";
 import { score } from "./Palette";
 import { Link, navigate } from "./router";
 import type { Cluster, FleetHealth } from "./types";
@@ -271,7 +271,6 @@ function ClusterTable({
         </thead>
         <tbody>
           {rows.map(({ cluster: c, standing: s }) => {
-            const b = badge(c, s);
             const id = `${c.namespace}/${c.name}`;
             return (
               <tr key={id}>
@@ -282,8 +281,8 @@ function ClusterTable({
                   </span>
                 </td>
                 <td className="state fleet-status">
-                  <Status state={b.state} text={b.text} />
-                  {s.group !== "healthy" && s.reason !== b.text && <div className="hint">{s.reason}</div>}
+                  <Status state={s.state} text={s.verdict} />
+                  {s.group !== "healthy" && s.reason !== s.verdict && <div className="hint">{s.reason}</div>}
                 </td>
                 <td className="nowrap fleet-version">
                   <span className="id">{c.version}</span>
