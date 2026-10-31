@@ -2,8 +2,8 @@ import { useState, type JSX } from "react";
 
 import { api } from "./api";
 import { BootLogDialog } from "./BootLog";
+import { useClusterHealth } from "./cluster-health";
 import { clusterPath } from "./cluster-paths";
-import { useClusterHealth } from "./Health";
 import { Link, useQuery } from "./router";
 import type { Cluster, HealthNode, Machine, PveNode } from "./types";
 import {

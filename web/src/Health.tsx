@@ -1,6 +1,7 @@
 import { useState, type JSX } from "react";
 
 import { api } from "./api";
+import { useClusterHealth, pollUnwell } from "./cluster-health";
 import { attentionFix } from "./cluster-paths";
 import { standing } from "./fleet";
 import { Link } from "./router";
@@ -32,27 +33,10 @@ import {
   age,
   bytes,
   filled,
-  pollCache,
-  pollIdle,
   sentence,
   usePoll,
   Skeleton,
-  type Poll,
 } from "./ui";
-
-// A cluster that is not healthy is looked at more often, to follow it getting better.
-const pollUnwell = 10_000;
-
-const healthCache = pollCache<ClusterHealth>();
-
-/** useClusterHealth reads a cluster's health page, shared by every view that shows part of it. */
-export function useClusterHealth(c: { namespace: string; name: string }): Poll<ClusterHealth> {
-  return usePoll(
-    () => api.health(c.namespace, c.name),
-    (shown) => (shown?.verdict === "healthy" ? pollIdle : pollUnwell),
-    { cache: healthCache, key: `${c.namespace}/${c.name}` },
-  );
-}
 
 const msPerSecond = 1000;
 const percent = 100;
