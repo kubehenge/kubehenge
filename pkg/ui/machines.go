@@ -164,11 +164,7 @@ func (s *Server) deleteMachine(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	ctx := r.Context()
 	mark := func(ctx context.Context, v any) error {
-		patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]any{clusterv1.DeleteMachineAnnotation: v}}})
-		if err != nil {
-			return fmt.Errorf("marking the machine: %w", err)
-		}
-		return u.kube.Patch(ctx, m, client.RawPatch(types.MergePatchType, patch))
+		return annotate(ctx, u.kube, m, map[string]any{clusterv1.DeleteMachineAnnotation: v})
 	}
 	// Marked first: a pool that shrank before would delete whichever machine it picks.
 	if err := mark(ctx, ""); err != nil {
@@ -221,4 +217,13 @@ func (s *Server) patchMachine(w http.ResponseWriter, r *http.Request, u user, pa
 	}
 	s.Log.Info("machine changed", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "machine", m.Name, "patch", string(patch))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// annotate sets each of an object's annotations to its value, or removes it where the value is nil.
+func annotate(ctx context.Context, kube client.Client, obj client.Object, values map[string]any) error {
+	raw, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": values}})
+	if err != nil {
+		return fmt.Errorf("encoding the annotations: %w", err)
+	}
+	return kube.Patch(ctx, obj, client.RawPatch(types.MergePatchType, raw)) //nolint:wrapcheck // kubeError answers as the API server did
 }

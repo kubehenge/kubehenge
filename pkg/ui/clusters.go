@@ -352,7 +352,6 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 		Phase:        c.Status.Phase,
 		Available:    meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.AvailableCondition),
 		Conditions:   []conditionView{},
-		WorkerPools:  []workerPoolView{},
 		Variables:    map[string]json.RawMessage{},
 		Pool:         pool,
 		Pods:         c.Spec.ClusterNetwork.Pods.CIDRBlocks,
@@ -385,17 +384,7 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 	if ws := c.Status.Workers; ws != nil {
 		v.Workers = replicas(ws.DesiredReplicas, ws.ReadyReplicas, ws.AvailableReplicas, ws.UpToDateReplicas)
 	}
-	for i := range c.Spec.Topology.Workers.MachineDeployments {
-		md := &c.Spec.Topology.Workers.MachineDeployments[i]
-		wp := workerPoolView{Name: md.Name, Class: md.Class, Autoscaling: autoscalingOf(md.Metadata.Annotations)}
-		if md.Replicas != nil {
-			wp.Replicas = *md.Replicas
-		}
-		if i := poolOverride(md, workerMachineVariable); i >= 0 {
-			wp.Machine = json.RawMessage(md.Variables.Overrides[i].Value.Raw)
-		}
-		v.WorkerPools = append(v.WorkerPools, wp)
-	}
+	v.WorkerPools = workerPoolsOf(c)
 	for _, cv := range c.Spec.Topology.Variables {
 		v.Variables[cv.Name] = json.RawMessage(cv.Value.Raw)
 	}
@@ -410,6 +399,23 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 		v.Deletion, v.DeletedAt = &st, c.DeletionTimestamp
 	}
 	return v
+}
+
+// workerPoolsOf describes a cluster's worker pools.
+func workerPoolsOf(c *clusterv1.Cluster) []workerPoolView {
+	pools := make([]workerPoolView, 0, len(c.Spec.Topology.Workers.MachineDeployments))
+	for i := range c.Spec.Topology.Workers.MachineDeployments {
+		md := &c.Spec.Topology.Workers.MachineDeployments[i]
+		wp := workerPoolView{Name: md.Name, Class: md.Class, Autoscaling: autoscalingOf(md.Metadata.Annotations)}
+		if md.Replicas != nil {
+			wp.Replicas = *md.Replicas
+		}
+		if i := poolOverride(md, workerMachineVariable); i >= 0 {
+			wp.Machine = json.RawMessage(md.Variables.Overrides[i].Value.Raw)
+		}
+		pools = append(pools, wp)
+	}
+	return pools
 }
 
 // nodeOSInfo describes the node OS a cluster's nodes run, or nil when its variable cannot be read.

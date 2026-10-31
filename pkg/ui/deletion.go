@@ -1,10 +1,7 @@
 package ui
 
 import (
-	"encoding/json"
 	"net/http"
-
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
@@ -38,12 +35,7 @@ func (s *Server) abandonDeletion(w http.ResponseWriter, r *http.Request, u user)
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{provisioner.AbandonAnnotation: c.Name}}})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "the request could not be encoded")
-		return
-	}
-	if err := u.kube.Patch(r.Context(), c, client.RawPatch("application/merge-patch+json", patch)); err != nil {
+	if err := annotate(r.Context(), u.kube, c, map[string]any{provisioner.AbandonAnnotation: c.Name}); err != nil {
 		s.kubeError(w, r, err)
 		return
 	}
