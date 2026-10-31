@@ -484,6 +484,42 @@ describe("the console", () => {
     expect(screen.queryByRole("region", { name: "Needs attention" })).not.toBeInTheDocument();
   });
 
+  it("leads from what needs attention to where it is acted on: the machine's row, or the backups", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
+    const routes = serve();
+    const failing = {
+      ...base,
+      machines: [
+        { name: "web-w-1", role: "worker" as const, phase: "Running", ready: true, created: minutesAgo(9) },
+        { name: "web-w-2", role: "worker" as const, phase: "Running", ready: false, created: minutesAgo(9) },
+      ],
+    };
+    routes["GET /api/clusters/default/web"] = { body: failing };
+    const found = (attention: unknown[]) => ({
+      body: [{ namespace: "default", name: "web", read: minutesAgo(0), verdict: "degraded", attention }],
+    });
+    routes["GET /api/fleet/health"] = found([
+      { severity: "error", section: "nodes", what: "Worker web-w-2 failed health check", machine: "web-w-2" },
+    ]);
+    const user = userEvent.setup({ delay: null });
+    const { unmount } = render(<App />);
+    const strip = within(await screen.findByRole("region", { name: "Needs attention" }));
+    expect(strip.getByRole("link", { name: "Health" })).toBeInTheDocument();
+    await user.click(strip.getByRole("link", { name: "Machine" }));
+    expect(window.location.pathname + window.location.search).toBe("/clusters/default/web/machines?machine=web-w-2");
+    const row = await screen.findByRole("row", { name: /^web-w-2/u });
+    expect(row).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("row", { name: /^web-w-1/u })).not.toHaveAttribute("aria-current");
+    unmount();
+
+    window.history.replaceState(null, "", "/clusters/default/web");
+    routes["GET /api/fleet/health"] = found([{ severity: "error", section: "backups", what: "Last backup failed" }]);
+    render(<App />);
+    const backups = within(await screen.findByRole("region", { name: "Needs attention" }));
+    expect(backups.getByRole("link", { name: "Backups" })).toHaveAttribute("href", "/clusters/default/web/backups");
+    expect(backups.queryByRole("link", { name: "Health" })).not.toBeInTheDocument();
+  });
+
   it("says on a cluster's page that it does not answer", async () => {
     window.history.replaceState(null, "", "/clusters/default/web/options");
     const routes = serve();

@@ -190,6 +190,8 @@ export interface Attention {
   message?: string;
   since?: string;
   pod?: { namespace: string; name: string };
+  /** The Cluster API machine the item is about, which the machines view acts on. */
+  machine?: string;
 }
 
 export interface HealthVM {

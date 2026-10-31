@@ -1,7 +1,7 @@
 import { useState, type JSX } from "react";
 
 import { api } from "./api";
-import { clusterPath, type View } from "./cluster-paths";
+import { attentionFix } from "./cluster-paths";
 import { standing } from "./fleet";
 import { Link } from "./router";
 import type {
@@ -317,9 +317,6 @@ function PodButtons({ pod, actions }: { pod: UnwellPod | undefined; actions: Pod
   );
 }
 
-// sectionViews are the sections whose details are another view of the cluster's page.
-const sectionViews: Partial<Record<string, View>> = { backups: "backups" };
-
 function NeedsAttention({
   health: h,
   actions,
@@ -349,17 +346,17 @@ function NeedsAttention({
         </thead>
         <tbody>
           {h.attention.map((a) => {
-            const view = sectionViews[a.section];
+            const fix = attentionFix(cluster, a);
             return (
               <tr key={`${a.section}/${a.what}/${a.message ?? ""}`}>
                 <td>
                   <Status state={severityState[a.severity]} text={severityText[a.severity]} />
                 </td>
                 <td>
-                  {view === undefined ? (
+                  {fix === undefined ? (
                     <a href={`#${anchor(a.section)}`}>{a.what}</a>
                   ) : (
-                    <Link to={clusterPath(cluster.namespace, cluster.name, view)}>{a.what}</Link>
+                    <Link to={fix.to}>{a.what}</Link>
                   )}
                   {filled(a.message) && <div className="hint message">{a.message}</div>}
                 </td>

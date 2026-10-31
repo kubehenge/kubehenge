@@ -1628,6 +1628,14 @@ button.go {
   box-shadow: inset 3px 0 0 var(--warning);
 }
 
+.grid tr.focused td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.grid tr.focused {
+  background: var(--hover);
+}
+
 .grid td.message,
 .grid .hint.message {
   white-space: pre-wrap;

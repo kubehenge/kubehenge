@@ -248,6 +248,9 @@ func TestHealthSaysWhatIsWrong(t *testing.T) {
 	whats := make([]string, 0, len(v.Attention))
 	for _, a := range v.Attention {
 		whats = append(whats, a.Severity+": "+a.What)
+		if strings.HasPrefix(a.What, "Worker ") && a.Machine != "one-md-0-a" {
+			t.Errorf("%q names machine %q, want one-md-0-a, whose row acts on it", a.What, a.Machine)
+		}
 	}
 	for _, want := range []string{
 		"error: Pod web/api-7d9: CrashLoopBackOff, 14 restarts",

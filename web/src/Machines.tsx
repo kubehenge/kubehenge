@@ -4,7 +4,7 @@ import { api } from "./api";
 import { BootLogDialog } from "./BootLog";
 import { clusterPath } from "./cluster-paths";
 import { useClusterHealth } from "./Health";
-import { Link } from "./router";
+import { Link, useQuery } from "./router";
 import type { Cluster, HealthNode, Machine, PveNode } from "./types";
 import {
   Detail,
@@ -21,6 +21,11 @@ import {
   usePoll,
   type Health,
 } from "./ui";
+
+// A link to one machine, as from what the cluster's health found, brings its row into view.
+function intoView(row: HTMLTableRowElement | null): void {
+  row?.scrollIntoView({ block: "center" });
+}
 
 // The Proxmox VE nodes, kept for every view of every cluster that places machines on them.
 const nodesCache = pollCache<PveNode[]>();
@@ -110,6 +115,7 @@ export function Machines({
     }
   };
   const [bootLog, setBootLog] = useState<Machine>();
+  const focused = useQuery("machine");
   const columns = [
     "Name",
     "Role",
@@ -148,7 +154,12 @@ export function Machines({
           {machines.map((m) => {
             const node = nodeOf.get(m.name);
             return (
-              <tr key={m.name}>
+              <tr
+                key={m.name}
+                ref={m.name === focused ? intoView : undefined}
+                className={m.name === focused ? "focused" : undefined}
+                aria-current={m.name === focused ? "true" : undefined}
+              >
                 <td className="nowrap">
                   <span className="nowrap">{m.node ?? m.name}</span>
                   {m.replacing !== true && filled(m.waiting) && <div className="hint message">{m.waiting}</div>}

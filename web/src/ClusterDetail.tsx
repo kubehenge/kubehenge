@@ -4,7 +4,7 @@ import { api } from "./api";
 import { AutoscalerDialog, ScaleDialog, autoscalerText, poolText } from "./Autoscaling";
 import { BackupsDialog, BackupsView, backupsOf, backupsRows, useClassTargets } from "./Backups";
 import { issuesFromCA, saveCA } from "./Certificates";
-import { clusterActions, clusterPath, headlampURL, views, type Intent, type View } from "./cluster-paths";
+import { attentionFix, clusterActions, clusterPath, headlampURL, views, type Intent, type View } from "./cluster-paths";
 import { OptionDialog, Options, type OptionAction, type OptionRow } from "./ClusterOptions";
 import { Deleting } from "./Deletion";
 import { EtcdSnapshotsDialog, EtcdSnapshotsView, etcdSnapshotsOf, etcdSnapshotsRows } from "./EtcdSnapshots";
@@ -177,12 +177,16 @@ function AttentionStrip({ cluster: c, view }: { cluster: Cluster; view: View }):
     return null;
   }
   const more = found.attention.length - 1 + (found.more ?? 0);
+  const fix = attentionFix(c, first);
   return (
     <section className={`attention-strip attention-strip-${first.severity}`} aria-label="Needs attention">
       <Status state={severityState[first.severity]} text={first.what} />
       {filled(first.message) && <Detail>{first.message}</Detail>}
       {more > 0 && <span className="muted">{more} more</span>}
-      <Link to={health}>Health</Link>
+      {fix !== undefined && (fix.view !== view || filled(first.machine)) && (
+        <Link to={fix.to}>{fix.view === "machines" ? "Machine" : "Backups"}</Link>
+      )}
+      {(fix?.view !== "backups" || more > 0) && <Link to={health}>Health</Link>}
     </section>
   );
 }

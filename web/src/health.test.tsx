@@ -54,6 +54,7 @@ const degraded: ClusterHealth = {
     },
     { severity: "warning", section: "addons", what: "Add-on ingress: pending-install", since: minutesAgo(3) },
     { severity: "warning", section: "backups", what: "Backups overdue", message: "No backup has completed yet." },
+    { severity: "warning", section: "nodes", what: "Worker web-md-0-a cordoned", machine: "web-md-0-a" },
   ],
   nodes: {
     items: [
@@ -184,6 +185,11 @@ describe("health page", () => {
     expect(screen.getByRole("link", { name: "Backups overdue" })).toHaveAttribute(
       "href",
       "/clusters/default/web/backups",
+    );
+    // A machine's row is where what holds it up is acted on.
+    expect(screen.getByRole("link", { name: "Worker web-md-0-a cordoned" })).toHaveAttribute(
+      "href",
+      "/clusters/default/web/machines?machine=web-md-0-a",
     );
     expect(screen.getByText("Memory pressure")).toBeInTheDocument();
     expect(screen.getByLabelText("web-cp-a's memory use")).toHaveAttribute("value", "2147483648");

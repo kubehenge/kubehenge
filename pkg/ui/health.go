@@ -111,6 +111,8 @@ type attentionView struct {
 	Since   time.Time `json:"since,omitzero"`
 	// Pod names the pod an item is about, for its links.
 	Pod *podRef `json:"pod,omitempty"`
+	// Machine names the Cluster API machine an item is about, which its own view acts on.
+	Machine string `json:"machine,omitempty"`
 }
 
 type podRef struct {
@@ -252,6 +254,11 @@ type attention []attentionView
 
 func (a *attention) add(severity, where, what, message string, since time.Time) {
 	*a = append(*a, attentionView{Severity: severity, Section: where, What: what, Message: message, Since: since})
+}
+
+// addMachine adds an item about one machine.
+func (a *attention) addMachine(machine, severity, what, message string, since time.Time) {
+	*a = append(*a, attentionView{Severity: severity, Section: sectionNodes, What: what, Message: message, Since: since, Machine: machine})
 }
 
 // sorted puts the worst first, then what has stood longest.
