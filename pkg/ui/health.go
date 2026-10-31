@@ -111,6 +111,8 @@ type attentionView struct {
 	Since   time.Time `json:"since,omitzero"`
 	// Pod names the pod an item is about, for its links.
 	Pod *podRef `json:"pod,omitempty"`
+	// Machine names the Cluster API machine an item is about, which its own view acts on.
+	Machine string `json:"machine,omitempty"`
 }
 
 type podRef struct {
@@ -125,8 +127,13 @@ type nodeView struct {
 	Role    string `json:"role"`
 	Pool    string `json:"pool,omitempty"`
 	// Joined tells whether the node was read in the cluster; the fields up to Pods need it.
-	Joined        bool         `json:"joined"`
-	Ready         bool         `json:"ready"`
+	Joined bool `json:"joined"`
+	Ready  bool `json:"ready"`
+	// Down tells a node has been not ready for longer than starting or rebooting takes, while its
+	// machine is not being deleted: a fault, not work under way.
+	Down bool `json:"down,omitempty"`
+	// Silent tells its kubelet stopped reporting, rather than reporting the node unwell.
+	Silent        bool         `json:"silent,omitempty"`
 	Since         time.Time    `json:"since,omitzero"`
 	Message       string       `json:"message,omitempty"`
 	Pressure      []string     `json:"pressure,omitempty"`
@@ -247,6 +254,11 @@ type attention []attentionView
 
 func (a *attention) add(severity, where, what, message string, since time.Time) {
 	*a = append(*a, attentionView{Severity: severity, Section: where, What: what, Message: message, Since: since})
+}
+
+// addMachine adds an item about one machine.
+func (a *attention) addMachine(machine, severity, what, message string, since time.Time) {
+	*a = append(*a, attentionView{Severity: severity, Section: sectionNodes, What: what, Message: message, Since: since, Machine: machine})
 }
 
 // sorted puts the worst first, then what has stood longest.

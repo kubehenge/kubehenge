@@ -148,6 +148,11 @@ export interface Poll<T> {
    * what is shown; a read asked before it is older and dropped, so it cannot take the change back.
    */
   put: (change: (shown: T | undefined) => T | undefined) => void;
+  /**
+   * stale tells that what is shown may no longer hold: a later read failed, or none has answered
+   * for two of its intervals, as when a request hangs.
+   */
+  stale: boolean;
 }
 
 /**
@@ -185,6 +190,9 @@ export function usePoll<T>(
   // No answer's JSON is empty, so the first one is always shown.
   const shownText = useRef(data === undefined ? "" : JSON.stringify(data));
   const latest = useRef(data);
+  // When the last read answered; the cache's answer counts as one just read.
+  const answered = useRef(0);
+  const [late, setLate] = useState(false);
 
   // take takes an answer as the one shown and keeps it, and tells whether it differs from before.
   const take = useCallback((d: T | undefined): boolean => {
@@ -224,6 +232,8 @@ export function usePoll<T>(
         }
         setError(undefined);
         setErrorStatus(undefined);
+        answered.current = Date.now();
+        setLate(false);
       }
     } catch (err) {
       if (n > shown.current) {
@@ -237,6 +247,7 @@ export function usePoll<T>(
   }, [take]);
 
   useEffect(() => {
+    answered.current = Date.now();
     void reload();
     const shownAgain = () => {
       if (!document.hidden) {
@@ -255,6 +266,7 @@ export function usePoll<T>(
     interval.current = intervalMs;
     const t = window.setInterval(() => {
       ticked.current = Date.now();
+      setLate(ticked.current - answered.current > 2 * intervalMs);
       if (!document.hidden && pending.current === 0) {
         void reload();
       }
@@ -263,7 +275,8 @@ export function usePoll<T>(
   }, [reload, intervalMs]);
   const next = useCallback(() => ticked.current + interval.current, []);
 
-  return { data, error, errorStatus, reload, next, put };
+  const stale = data !== undefined && (filled(error) || late);
+  return { data, error, errorStatus, reload, next, put, stale };
 }
 
 export type Health = "ok" | "progress" | "error" | "deleting";

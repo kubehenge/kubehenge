@@ -949,7 +949,8 @@ button.go {
   border-left-color: var(--warning);
 }
 
-.attention-strip > a {
+/* The ways on sit together at the end of the strip. */
+.attention-strip > a:first-of-type {
   margin-left: auto;
 }
 
@@ -1628,6 +1629,14 @@ button.go {
   box-shadow: inset 3px 0 0 var(--warning);
 }
 
+.grid tr.focused td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.grid tr.focused {
+  background: var(--hover);
+}
+
 .grid td.message,
 .grid .hint.message {
   white-space: pre-wrap;
@@ -1757,6 +1766,12 @@ button.go {
 .fleet-table {
   container: fleet / inline-size;
   overflow-x: auto;
+}
+
+.fleet-more {
+  display: flex;
+  justify-content: center;
+  padding: 12px;
 }
 
 .fleet-name > span {
@@ -2605,7 +2620,9 @@ details.advanced > summary {
   list-style: none;
 }
 
-.tiles-stale .tile {
+.tiles-stale .tile,
+.management-health-stale .summary,
+.management-health-stale .health-short {
   opacity: 0.55;
   filter: grayscale(1);
 }

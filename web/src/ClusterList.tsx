@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 
 import { adminPath } from "./admin-views";
 import { clusterPath } from "./cluster-paths";
 import { FirstCluster } from "./FirstCluster";
-import { FleetProvider, badge, fleetKey, groups, ranked, useFleet, type Group, type Standing } from "./fleet";
+import { FleetProvider, fleetKey, groups, ranked, useFleet, type Group, type Standing } from "./fleet";
 import { score } from "./Palette";
 import { Link, navigate } from "./router";
 import type { Cluster, FleetHealth } from "./types";
@@ -246,6 +246,51 @@ function Clusters({
   );
 }
 
+// A long fleet is drawn a page of rows at a time, the next as the end of the last comes near, so
+// the first draw and every read of the fleet after it stay quick however many clusters there are.
+const tablePage = 100;
+
+/**
+ * scrollerOf is the element that scrolls el up and down, or null for the page itself. One that
+ * scrolls only sideways reads as auto both ways, so what counts is content taller than the box.
+ */
+export function scrollerOf(el: HTMLElement): HTMLElement | null {
+  for (let up = el.parentElement; up !== null; up = up.parentElement) {
+    if (/auto|scroll/u.test(getComputedStyle(up).overflowY) && up.scrollHeight > up.clientHeight) {
+      return up;
+    }
+  }
+  return null;
+}
+
+// useTablePages is how many rows to draw, and the element whose coming into view draws more.
+function useTablePages(total: number): {
+  drawn: number;
+  more: () => void;
+  end: (el: HTMLElement | null) => () => void;
+} {
+  const [drawn, setDrawn] = useState(tablePage);
+  const more = useCallback(() => setDrawn((n) => n + tablePage), []);
+  const end = useCallback(
+    (el: HTMLElement | null) => {
+      const seen = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((e) => e.isIntersecting)) {
+            more();
+          }
+        },
+        { root: el === null ? null : scrollerOf(el), rootMargin: "600px 0px" },
+      );
+      if (el !== null) {
+        seen.observe(el);
+      }
+      return () => seen.disconnect();
+    },
+    [more],
+  );
+  return { drawn: Math.min(drawn, total), more, end };
+}
+
 function ClusterTable({
   rows,
   sort,
@@ -255,6 +300,8 @@ function ClusterTable({
   sort: Sort;
   onSort: (s: Sort) => void;
 }): JSX.Element {
+  const { drawn, more, end } = useTablePages(rows.length);
+  const left = rows.length - drawn;
   return (
     <div className="fleet-table">
       <table className="grid">
@@ -270,8 +317,7 @@ function ClusterTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map(({ cluster: c, standing: s }) => {
-            const b = badge(c, s);
+          {rows.slice(0, drawn).map(({ cluster: c, standing: s }) => {
             const id = `${c.namespace}/${c.name}`;
             return (
               <tr key={id}>
@@ -282,8 +328,8 @@ function ClusterTable({
                   </span>
                 </td>
                 <td className="state fleet-status">
-                  <Status state={b.state} text={b.text} />
-                  {s.group !== "healthy" && s.reason !== b.text && <div className="hint">{s.reason}</div>}
+                  <Status state={s.state} text={s.verdict} />
+                  {s.group !== "healthy" && s.reason !== s.verdict && <div className="hint">{s.reason}</div>}
                 </td>
                 <td className="nowrap fleet-version">
                   <span className="id">{c.version}</span>
@@ -310,6 +356,13 @@ function ClusterTable({
           })}
         </tbody>
       </table>
+      {left > 0 && (
+        <div className="fleet-more" ref={end} key={drawn}>
+          <button type="button" onClick={more}>
+            Show {Math.min(left, tablePage)} more
+          </button>
+        </div>
+      )}
     </div>
   );
 }

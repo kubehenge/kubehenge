@@ -2,7 +2,7 @@ import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { fakeServer, reads, type Route } from "./fake-server";
+import { fakeServer, held, reads, type Route } from "./fake-server";
 import { HealthView } from "./Health";
 import type { Cluster, ClusterHealth, UnwellPod } from "./types";
 
@@ -54,6 +54,7 @@ const degraded: ClusterHealth = {
     },
     { severity: "warning", section: "addons", what: "Add-on ingress: pending-install", since: minutesAgo(3) },
     { severity: "warning", section: "backups", what: "Backups overdue", message: "No backup has completed yet." },
+    { severity: "warning", section: "nodes", what: "Worker web-md-0-a cordoned", machine: "web-md-0-a" },
   ],
   nodes: {
     items: [
@@ -185,6 +186,11 @@ describe("health page", () => {
       "href",
       "/clusters/default/web/backups",
     );
+    // A machine's row is where what holds it up is acted on.
+    expect(screen.getByRole("link", { name: "Worker web-md-0-a cordoned" })).toHaveAttribute(
+      "href",
+      "/clusters/default/web/machines?machine=web-md-0-a",
+    );
     expect(screen.getByText("Memory pressure")).toBeInTheDocument();
     expect(screen.getByLabelText("web-cp-a's memory use")).toHaveAttribute("value", "2147483648");
     expect(screen.getAllByRole("link", { name: "Headlamp" })[0]).toHaveAttribute(
@@ -268,6 +274,39 @@ describe("health page", () => {
     ).toBeInTheDocument();
   });
 
+  it("says of a node not ready what the machines say: on its way, down, or not reporting", async () => {
+    const [, worker] = degraded.nodes.items;
+    const node = (name: string, how: { down?: boolean; silent?: boolean }) => ({
+      ...worker,
+      name,
+      ready: false,
+      ...how,
+    });
+    fakeServer({
+      [healthPath]: {
+        body: {
+          ...degraded,
+          nodes: {
+            items: [
+              node("web-md-0-b", {}),
+              node("web-md-0-c", { down: true }),
+              node("web-md-0-d", { down: true, silent: true }),
+            ],
+          },
+        },
+      },
+    });
+    render(<HealthView cluster={cluster} />);
+    const starting = within(await screen.findByRole("row", { name: /^web-md-0-b/u }));
+    expect(starting.getByText("Not ready")).toHaveClass("status-progress");
+    expect(within(screen.getByRole("row", { name: /^web-md-0-c/u })).getByText("Not ready")).toHaveClass(
+      "status-error",
+    );
+    expect(within(screen.getByRole("row", { name: /^web-md-0-d/u })).getByText("Not reporting")).toHaveClass(
+      "status-error",
+    );
+  });
+
   it("asks again more often while the cluster is not healthy", async () => {
     const routes: Record<string, Route> = { [healthPath]: { body: degraded } };
     const calls = fakeServer(routes);
@@ -279,12 +318,19 @@ describe("health page", () => {
 
     routes[healthPath] = { body: { ...degraded, verdict: "healthy", attention: [] } };
     await act(() => vi.advanceTimersByTimeAsync(10_000));
-    await expect(screen.findByText("Healthy")).resolves.toBeInTheDocument();
+    await expect(screen.findByText("Available", { selector: ".verdict *" })).resolves.toBeInTheDocument();
     await act(() => vi.advanceTimersByTimeAsync(20_000));
     expect(reads(calls, healthPath)).toBe(3);
     await act(() => vi.advanceTimersByTimeAsync(10_000));
     expect(reads(calls, healthPath)).toBe(4);
     vi.useRealTimers();
+  });
+
+  it("gives the verdict the cluster's badge gives, also where only the controller has failed", async () => {
+    fakeServer({ [healthPath]: { body: { ...degraded, verdict: "healthy", attention: [] } } });
+    render(<HealthView cluster={{ ...cluster, controllerError: "Proxmox VE task UPID:pve1 failed: no space" }} />);
+    await expect(screen.findByText("Error", { selector: ".verdict *" })).resolves.toBeInTheDocument();
+    expect(screen.queryByText("Available", { selector: ".verdict *" })).not.toBeInTheDocument();
   });
 
   it("greys the tiles out while the last read failed, until one succeeds", async () => {
@@ -303,6 +349,28 @@ describe("health page", () => {
 
     routes[healthPath] = { body: degraded };
     await act(() => vi.advanceTimersByTimeAsync(10_000));
+    await expect(screen.findByRole("list", { name: "At a glance" })).resolves.not.toHaveClass("tiles-stale");
+    vi.useRealTimers();
+  });
+
+  it("greys the tiles out once a read hangs, and reads again once it is given up", async () => {
+    const routes: Record<string, Route> = { [healthPath]: { body: degraded } };
+    const calls = fakeServer(routes);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<HealthView cluster={cluster} />);
+    await expect(screen.findByRole("list", { name: "At a glance" })).resolves.not.toHaveClass("tiles-stale");
+
+    routes[healthPath] = held().route;
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(screen.getByRole("list", { name: "At a glance" })).not.toHaveClass("tiles-stale");
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(screen.getByRole("list", { name: "At a glance, stale" })).toHaveClass("tiles-stale");
+    expect(screen.getByText(/^Stale, read at/u)).toBeInTheDocument();
+    expect(reads(calls, healthPath)).toBe(2);
+
+    routes[healthPath] = { body: degraded };
+    await act(() => vi.advanceTimersByTimeAsync(20_000));
     await expect(screen.findByRole("list", { name: "At a glance" })).resolves.not.toHaveClass("tiles-stale");
     vi.useRealTimers();
   });

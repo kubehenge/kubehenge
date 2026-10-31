@@ -3,10 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
-import { fakeServer, type Route } from "./fake-server";
+import { scrollerOf } from "./ClusterList";
+import { fakeServer, held, type Route } from "./fake-server";
 import { ranked, standing } from "./fleet";
 import { score } from "./Palette";
-import type { Cluster, FleetHealth } from "./types";
+import { runView } from "./Runs";
+import type { Cluster, FleetHealth, RunInfo } from "./types";
 
 const minutesAgo = (n: number): string => new Date(Date.now() - n * 60_000).toISOString();
 
@@ -60,7 +62,13 @@ const fleet = [base, upgrading, failedTalos, creating];
 
 describe("the fleet", () => {
   it("says where each cluster stands and why", () => {
-    expect(standing(base)).toStrictEqual({ group: "healthy", state: "ok", reason: "RKE2 v1.36.5+rke2r1", view: "" });
+    expect(standing(base)).toStrictEqual({
+      group: "healthy",
+      state: "ok",
+      reason: "RKE2 v1.36.5+rke2r1",
+      view: "",
+      verdict: "Available",
+    });
     expect(standing(failedTalos)).toStrictEqual({
       group: "needs",
       state: "error",
@@ -68,17 +76,32 @@ describe("the fleet", () => {
       view: "",
       verdict: "Upgrade failed",
     });
-    expect(standing(upgrading)).toMatchObject({ group: "running", reason: "Upgrading to v1.36.5+rke2r1" });
-    expect(standing(creating)).toMatchObject({ group: "running", reason: "Creating: 1 of 3 control planes" });
+    expect(standing(upgrading)).toMatchObject({
+      group: "running",
+      reason: "Upgrading to v1.36.5+rke2r1",
+      verdict: "Upgrading",
+    });
+    expect(standing(creating)).toMatchObject({
+      group: "running",
+      reason: "Creating: 1 of 3 control planes",
+      verdict: "Creating",
+    });
     expect(standing({ ...creating, created: minutesAgo(120) })).toMatchObject({
       group: "needs",
       reason: "Not available",
       verdict: "Not available",
     });
-    expect(standing({ ...base, deleting: true })).toMatchObject({ group: "running", state: "deleting" });
+    expect(standing({ ...base, deleting: true })).toMatchObject({
+      group: "running",
+      state: "deleting",
+      verdict: "Deleting",
+    });
+    // An available cluster on its way somewhere is not shown as Available.
     expect(standing({ ...base, workers: { ...steady, upToDate: 1 } })).toMatchObject({
       group: "running",
+      state: "progress",
       reason: "Workers: 1 of 2 updated",
+      verdict: "Updating",
     });
     expect(
       standing({
@@ -91,12 +114,14 @@ describe("the fleet", () => {
       state: "error",
       reason: "Controller error",
       view: "",
+      verdict: "Error",
     });
     expect(standing({ ...creating, stalled: "ci-cp-1: VM template not found" })).toStrictEqual({
       group: "needs",
       state: "warning",
       reason: "Machines stuck for 20 minutes",
       view: "machines",
+      verdict: "Stuck",
     });
   });
 
@@ -151,6 +176,19 @@ describe("the fleet", () => {
     expect(standing(upgrading, { ...crashing, name: "db" })).toMatchObject({ group: "running" });
   });
 
+  it("sends a run's reader to the page where its kind of work is started", () => {
+    expect(runView(run("template"))).toStrictEqual({ to: "/administration/templates", place: "Open templates" });
+    expect(runView(run("template-refresh"))).toStrictEqual({
+      to: "/administration/templates",
+      place: "Open templates",
+    });
+    expect(runView(run("management-cluster"))).toStrictEqual({ to: "/administration", place: "Open Administration" });
+    expect(runView({ ...run("restore"), namespace: "default", cluster: "web" })).toStrictEqual({
+      to: "/clusters/default/web/backups",
+      place: "Open backups",
+    });
+  });
+
   it("ranks those that need someone first, then the running, then the healthy", () => {
     expect(ranked(fleet).map((r) => r.cluster.name)).toStrictEqual(["edge", "ci", "db", "web"]);
   });
@@ -161,6 +199,8 @@ describe("the fleet", () => {
     expect(score("", "anything")).toBe(0);
   });
 });
+
+const run = (kind: RunInfo["kind"]): RunInfo => ({ id: kind, kind, what: kind, state: "failed" });
 
 // names are the clusters the fleet table lists, in its order.
 const names = (): (string | null)[] =>
@@ -195,6 +235,25 @@ describe("the console", () => {
     await act(() => vi.advanceTimersByTimeAsync(30_000));
     await waitFor(() => expect(rail).toHaveClass("rail-stale"));
     expect(within(rail).getByText("Stale")).toHaveAttribute("title", "the management cluster does not answer");
+    expect(within(rail).getAllByRole("link")).toHaveLength(4);
+
+    routes["GET /api/clusters"] = { body: fleet };
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    await waitFor(() => expect(rail).not.toHaveClass("rail-stale"));
+    vi.useRealTimers();
+  });
+
+  it("greys the fleet out once reading it again hangs, until a read answers", async () => {
+    window.history.replaceState(null, "", "/");
+    const routes = serve();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<App />);
+    const rail = await screen.findByRole("navigation", { name: "Fleet" });
+    await waitFor(() => expect(within(rail).getAllByRole("link")).toHaveLength(4));
+
+    routes["GET /api/clusters"] = held().route;
+    await act(() => vi.advanceTimersByTimeAsync(90_000));
+    expect(rail).toHaveClass("rail-stale");
     expect(within(rail).getAllByRole("link")).toHaveLength(4);
 
     routes["GET /api/clusters"] = { body: fleet };
@@ -287,12 +346,13 @@ describe("the console", () => {
       "dbTake etcd snapshot, 12m ago",
     );
     expect(screen.getByRole("button", { name: "Running 3" })).toBeInTheDocument();
+    expect(within(runs).getByRole("button", { name: "Hide runs" })).toHaveAttribute("title", "Hide runs (T R)");
 
     const user = userEvent.setup({ delay: null });
     await user.click(failed);
     await expect(screen.findByRole("heading", { name: /^Upgrade appliance to 0\.3\.1/u })).resolves.toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("Errorthe release's checksum does not match");
-    expect(screen.getByRole("link", { name: "Open Administration" })).toHaveAttribute("href", "/administration");
+    expect(screen.getByRole("link", { name: "Open upgrades" })).toHaveAttribute("href", "/administration/appliance");
     // An appliance upgrade takes a release to choose, so it is not started again from here.
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
   });
@@ -326,6 +386,40 @@ describe("the console", () => {
     routes["POST /api/clusters/default/web/backups"] = { status: 202, body: { name: "manual-2" } };
     await user.click(again);
     await waitFor(() => expect(window.location.pathname).toBe("/clusters/default/web/backups"));
+  });
+
+  it("shows the end of a finished restore's log to those who may read the cluster's logs", async () => {
+    window.history.replaceState(null, "", "/runs/restore/default/web/daily-1-a");
+    const routes = serve();
+    routes["GET /api/runs"] = {
+      body: [
+        {
+          id: "restore/default/web/daily-1-a",
+          kind: "restore",
+          namespace: "default",
+          cluster: "web",
+          what: "Restore from daily-1",
+          state: "failed",
+          finished: minutesAgo(8),
+          error: "Velero could not restore 2 items",
+        },
+      ],
+    };
+    routes["GET /api/clusters/default/web/restores/daily-1-a/log"] = {
+      body: { lines: ['level=info msg="restoring shop"', 'level=error msg="widgets.example.org: no such kind"'] },
+    };
+    const { unmount } = render(<App />);
+    await expect(screen.findByRole("heading", { name: /^Restore from daily-1/u })).resolves.toBeInTheDocument();
+    expect(screen.queryByLabelText("Log")).not.toBeInTheDocument();
+    unmount();
+
+    routes["GET /api/clusters"] = {
+      body: [{ ...base, allowed: { change: true, kubeconfig: true } }, ...fleet.slice(1)],
+    };
+    render(<App />);
+    await expect(screen.findByLabelText("Log")).resolves.toHaveTextContent(
+      'level=info msg="restoring shop" level=error msg="widgets.example.org: no such kind"',
+    );
   });
 
   it("follows a change made here by its steps, in place of the cluster's standing", async () => {
@@ -403,6 +497,41 @@ describe("the console", () => {
     expect(window.location.search).toBe("?sort=name&order=desc");
   });
 
+  it("draws a long fleet a page at a time", async () => {
+    window.history.replaceState(null, "", "/clusters");
+    const routes = serve();
+    const many = Array.from({ length: 250 }, (_, i) => ({ ...base, name: `c${String(i).padStart(3, "0")}` }));
+    routes["GET /api/clusters"] = { body: many };
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const table = await screen.findByRole("table");
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(101));
+    await user.click(screen.getByRole("button", { name: "Show 100 more" }));
+    expect(within(table).getAllByRole("row")).toHaveLength(201);
+    await user.click(screen.getByRole("button", { name: "Show 50 more" }));
+    expect(within(table).getAllByRole("row")).toHaveLength(251);
+    expect(within(table).getAllByRole("row").at(-1)).toHaveTextContent("c249");
+    expect(screen.queryByRole("button", { name: /^Show \d+ more$/u })).not.toBeInTheDocument();
+  });
+
+  it("watches for the end of the table in the box that scrolls it up and down, not the one beside it", () => {
+    const page = document.createElement("div");
+    page.style.overflowY = "auto";
+    Object.defineProperty(page, "scrollHeight", { value: 4000 });
+    Object.defineProperty(page, "clientHeight", { value: 900 });
+    const sideways = document.createElement("div");
+    sideways.style.overflowX = "auto";
+    sideways.style.overflowY = "auto";
+    Object.defineProperty(sideways, "scrollHeight", { value: 3000 });
+    Object.defineProperty(sideways, "clientHeight", { value: 3000 });
+    const end = document.createElement("div");
+    sideways.append(end);
+    page.append(sideways);
+    document.body.append(page);
+    expect(scrollerOf(end)).toBe(page);
+    page.remove();
+  });
+
   it("marks a cluster's tabs that hold something to look at, keeping the tabs' names", async () => {
     window.history.replaceState(null, "", "/clusters/default/web");
     const routes = serve();
@@ -440,6 +569,42 @@ describe("the console", () => {
     const user = userEvent.setup({ delay: null });
     await user.click(tabs.getByRole("link", { name: "Health" }));
     expect(screen.queryByRole("region", { name: "Needs attention" })).not.toBeInTheDocument();
+  });
+
+  it("leads from what needs attention to where it is acted on: the machine's row, or the backups", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
+    const routes = serve();
+    const failing = {
+      ...base,
+      machines: [
+        { name: "web-w-1", role: "worker" as const, phase: "Running", ready: true, created: minutesAgo(9) },
+        { name: "web-w-2", role: "worker" as const, phase: "Running", ready: false, created: minutesAgo(9) },
+      ],
+    };
+    routes["GET /api/clusters/default/web"] = { body: failing };
+    const found = (attention: unknown[]) => ({
+      body: [{ namespace: "default", name: "web", read: minutesAgo(0), verdict: "degraded", attention }],
+    });
+    routes["GET /api/fleet/health"] = found([
+      { severity: "error", section: "nodes", what: "Worker web-w-2 failed health check", machine: "web-w-2" },
+    ]);
+    const user = userEvent.setup({ delay: null });
+    const { unmount } = render(<App />);
+    const strip = within(await screen.findByRole("region", { name: "Needs attention" }));
+    expect(strip.getByRole("link", { name: "Health" })).toBeInTheDocument();
+    await user.click(strip.getByRole("link", { name: "Machine" }));
+    expect(window.location.pathname + window.location.search).toBe("/clusters/default/web/machines?machine=web-w-2");
+    const row = await screen.findByRole("row", { name: /^web-w-2/u });
+    expect(row).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("row", { name: /^web-w-1/u })).not.toHaveAttribute("aria-current");
+    unmount();
+
+    window.history.replaceState(null, "", "/clusters/default/web");
+    routes["GET /api/fleet/health"] = found([{ severity: "error", section: "backups", what: "Last backup failed" }]);
+    render(<App />);
+    const backups = within(await screen.findByRole("region", { name: "Needs attention" }));
+    expect(backups.getByRole("link", { name: "Backups" })).toHaveAttribute("href", "/clusters/default/web/backups");
+    expect(backups.queryByRole("link", { name: "Health" })).not.toBeInTheDocument();
   });
 
   it("says on a cluster's page that it does not answer", async () => {
@@ -556,6 +721,23 @@ describe("the console", () => {
     const row = within(screen.getByRole("main")).getByRole("row", { name: /^web/u });
     expect(within(row).getByText("Degraded")).toBeInTheDocument();
     expect(within(row).queryByText("Available")).not.toBeInTheDocument();
+  });
+
+  it("badges a cluster as the rail places it, also where its controller fails or a change is under way", async () => {
+    window.history.replaceState(null, "", "/");
+    const routes = serve();
+    const rolling = { ...base, name: "shop", workers: { ...base.workers, upToDate: 1 } };
+    routes["GET /api/clusters"] = {
+      body: [{ ...base, controllerError: "Proxmox VE task UPID:pve1 failed: no space" }, rolling],
+    };
+    render(<App />);
+    const main = await screen.findByRole("main");
+    const web = await within(main).findByRole("row", { name: /^web/u });
+    expect(within(web).getByText("Error")).toBeInTheDocument();
+    expect(within(web).queryByText("Available")).not.toBeInTheDocument();
+    const shop = within(main).getByRole("row", { name: /^shop/u });
+    expect(within(shop).getByText("Updating")).toBeInTheDocument();
+    expect(within(shop).queryByText("Available")).not.toBeInTheDocument();
   });
 
   it("goes anywhere from the palette, by a few letters typed", async () => {

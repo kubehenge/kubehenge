@@ -30,6 +30,7 @@ import type {
   Realm,
   RestoreRequest,
   RestoreResults,
+  VeleroLog,
   RestoreRun,
   RunInfo,
   Session,
@@ -108,6 +109,17 @@ async function fetchAnswer(path: string, init: RequestInit): Promise<Response> {
   }
 }
 
+// readDeadline bounds a read: one the network loses would otherwise hold a page's polling, which
+// asks again only once the read before has answered.
+const readDeadline = 30_000;
+
+// deadline is a signal that aborts a request once it has run for readDeadline.
+function deadline(): { signal: AbortSignal; clear: () => void } {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), readDeadline);
+  return { signal: ctl.signal, clear: () => clearTimeout(t) };
+}
+
 // The reads a signed-in page starts with. Each waits on the one before (the session, the setup
 // status, then the fleet), so they are made together as the page loads, and the first read of each
 // takes its answer.
@@ -122,7 +134,7 @@ const primed = keepCache(new Map<string, { at: number; answer: Promise<Response>
 export function primeFirstReads(): void {
   const at = Date.now();
   for (const path of firstReads) {
-    const answer = fetchAnswer(path, { method: "GET", credentials: "same-origin" });
+    const answer = fetchAnswer(path, { method: "GET", credentials: "same-origin", signal: deadline().signal });
     void unheard(answer);
     primed.set(path, { at, answer });
   }
@@ -172,11 +184,12 @@ export type ClusterShown = Pick<Cluster, "namespace" | "name" | "generation">;
 interface Sent {
   body?: unknown;
   headers?: Record<string, string>;
+  signal?: AbortSignal;
 }
 
 // send makes one call of the API and returns its answer when it is a success; otherwise it throws
 // the API's own message, and a lost session returns the interface to sign-in.
-async function send(method: string, path: string, { body, headers: extra = {} }: Sent = {}): Promise<Response> {
+async function send(method: string, path: string, { body, headers: extra = {}, signal }: Sent = {}): Promise<Response> {
   const headers: Record<string, string> = { ...extra };
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
@@ -187,6 +200,9 @@ async function send(method: string, path: string, { body, headers: extra = {} }:
   const init: RequestInit = { method, headers, credentials: "same-origin" };
   if (body !== undefined) {
     init.body = JSON.stringify(body);
+  }
+  if (signal !== undefined) {
+    init.signal = signal;
   }
   const res = await ((method === "GET" ? takePrimed(path) : undefined) ?? fetchAnswer(path, init));
   noteRelease(res);
@@ -203,7 +219,17 @@ async function send(method: string, path: string, { body, headers: extra = {} }:
 // request makes a call whose answer is JSON of type T. The server is the release this frontend came
 // with (noteRelease tells when it no longer is), so its answers have the types it declares.
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  return answerOf<T>(await send(method, path, { body }));
+  if (method !== "GET") {
+    return answerOf<T>(await send(method, path, { body }));
+  }
+  const d = deadline();
+  try {
+    return await answerOf<T>(await send(method, path, { signal: d.signal }));
+  } catch (err) {
+    throw d.signal.aborted ? new ApiError(0, noAnswer) : err;
+  } finally {
+    d.clear();
+  }
 }
 
 // requestAgainst is request for a change to a cluster, made against the generation of the cluster
@@ -280,6 +306,9 @@ export interface Api {
   /** restore brings back a backup into the cluster, whole or what the request picks of it. */
   restore: (ns: string, name: string, req: RestoreRequest) => Promise<RestoreRun>;
   restoreResults: (ns: string, name: string, restore: string) => Promise<RestoreResults>;
+  /** backupLog and restoreLog are the end of a finished backup's or restore's log. */
+  backupLog: (ns: string, name: string, backup: string) => Promise<VeleroLog>;
+  restoreLog: (ns: string, name: string, restore: string) => Promise<VeleroLog>;
   etcdSnapshots: (ns: string, name: string) => Promise<ClusterEtcdSnapshots>;
   takeEtcdSnapshot: (ns: string, name: string) => Promise<void>;
   etcdRestorePlan: (ns: string, name: string, snapshot: string) => Promise<EtcdRestorePlan>;
@@ -403,6 +432,9 @@ export const api: Api = {
   restore: (ns, name, req) => request("POST", `${clusterPath(ns, name)}/restores`, req),
   restoreResults: (ns, name, restore) =>
     request("GET", `${clusterPath(ns, name)}/restores/${encodeURIComponent(restore)}/results`),
+  backupLog: (ns, name, backup) => request("GET", `${clusterPath(ns, name)}/backups/${encodeURIComponent(backup)}/log`),
+  restoreLog: (ns, name, restore) =>
+    request("GET", `${clusterPath(ns, name)}/restores/${encodeURIComponent(restore)}/log`),
   etcdSnapshots: (ns, name) => request("GET", `${clusterPath(ns, name)}/etcd-snapshots`),
   takeEtcdSnapshot: (ns, name) => act("POST", `${clusterPath(ns, name)}/etcd-snapshots`),
   etcdRestorePlan: (ns, name, snapshot) => request("GET", `${etcdSnapshotURL(ns, name, snapshot)}/restore-plan`),

@@ -50,6 +50,16 @@ export default defineConfig({
     assetsInlineLimit: 0,
     // precompress writes the compressed files themselves.
     reportCompressedSize: false,
+    rolldownOptions: {
+      // A module loaded lazily and also imported outright stays in its importer's chunk, so the page
+      // split off to load on its own loads with every view instead.
+      onLog(level, log, handle) {
+        if (log.code === "INEFFECTIVE_DYNAMIC_IMPORT") {
+          throw new Error(log.message);
+        }
+        handle(level, log);
+      },
+    },
   },
   server: {
     // `kubehenge serve` on its default port, for `npm run dev`.

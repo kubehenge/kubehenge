@@ -248,6 +248,9 @@ func TestHealthSaysWhatIsWrong(t *testing.T) {
 	whats := make([]string, 0, len(v.Attention))
 	for _, a := range v.Attention {
 		whats = append(whats, a.Severity+": "+a.What)
+		if strings.HasPrefix(a.What, "Worker ") && a.Machine != "one-md-0-a" {
+			t.Errorf("%q names machine %q, want one-md-0-a, whose row acts on it", a.What, a.Machine)
+		}
 	}
 	for _, want := range []string{
 		"error: Pod web/api-7d9: CrashLoopBackOff, 14 restarts",
@@ -282,13 +285,14 @@ func checkHealthNodes(t *testing.T, h *harness, v *healthView) {
 		t.Fatalf("nodes = %+v", v.Nodes.Items)
 	}
 	cp, worker := v.Nodes.Items[0], v.Nodes.Items[1]
-	if cp.Name != "one-cp-a" || cp.Role != controlPlaneRole || !cp.Ready || len(cp.Taints) != 0 || cp.Pods != 1 || *cp.CPU != (resourceUse{500, 4000}) {
+	if cp.Name != "one-cp-a" || cp.Role != controlPlaneRole || !cp.Ready || cp.Down || cp.Silent || len(cp.Taints) != 0 || cp.Pods != 1 || *cp.CPU != (resourceUse{500, 4000}) {
 		t.Errorf("control plane = %+v", cp)
 	}
 	if cp.VM == nil || cp.VM.ID != 201 || cp.VM.Node != "pve1" || cp.VM.MaxMem != 8<<30 || len(cp.VM.Load) != 2 || cp.VM.Load[0] != nil || *cp.VM.Load[1] != 0.25 {
 		t.Errorf("control plane's VM = %+v", cp.VM)
 	}
-	if worker.Ready || worker.Pool != "md-0" || !slices.Equal(worker.Pressure, []string{"MemoryPressure"}) || worker.Memory.Requested != 2<<30 {
+	// Not ready for ten minutes, its kubelet silent: down, not on its way.
+	if worker.Ready || !worker.Down || !worker.Silent || worker.Pool != "md-0" || !slices.Equal(worker.Pressure, []string{"MemoryPressure"}) || worker.Memory.Requested != 2<<30 {
 		t.Errorf("worker = %+v", worker)
 	}
 	// A stopped VM has no load to read.

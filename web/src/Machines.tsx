@@ -2,10 +2,10 @@ import { useState, type JSX } from "react";
 
 import { api } from "./api";
 import { BootLogDialog } from "./BootLog";
+import { useClusterHealth } from "./cluster-health";
 import { clusterPath } from "./cluster-paths";
-import { useClusterHealth } from "./Health";
-import { Link } from "./router";
-import type { Cluster, Machine, PveNode } from "./types";
+import { Link, useQuery } from "./router";
+import type { Cluster, HealthNode, Machine, PveNode } from "./types";
 import {
   Detail,
   Dialog,
@@ -22,13 +22,19 @@ import {
   type Health,
 } from "./ui";
 
+// A link to one machine, as from what the cluster's health found, brings its row into view.
+function intoView(row: HTMLTableRowElement | null): void {
+  row?.scrollIntoView({ block: "center" });
+}
+
 // The Proxmox VE nodes, kept for every view of every cluster that places machines on them.
 const nodesCache = pollCache<PveNode[]>();
 const nodesKept = { cache: nodesCache, key: "nodes" };
 
 // machineStatus says how far a machine is, as the cluster list says it of clusters. A machine on a
-// Proxmox VE node that is offline is down whatever Cluster API last read of it.
-export function machineStatus(m: Machine, offline = false): { state: Health; text: string } {
+// Proxmox VE node that is offline is down whatever Cluster API last read of it, and so is one whose
+// Kubernetes node has been not ready for longer than a start or a reboot takes.
+export function machineStatus(m: Machine, offline = false, node?: HealthNode): { state: Health; text: string } {
   if (offline) {
     return { state: "error", text: "Node offline" };
   }
@@ -37,6 +43,9 @@ export function machineStatus(m: Machine, offline = false): { state: Health; tex
   }
   if (m.replacing === true) {
     return { state: "progress", text: filled(m.waiting) ? "Replacement waits" : "Replacing" };
+  }
+  if (node?.down === true) {
+    return { state: "error", text: node.silent === true ? "Not reporting" : "Not ready" };
   }
   if (m.ready) {
     return { state: "ok", text: "Ready" };
@@ -89,9 +98,7 @@ export function Machines({
   const [deleting, setDeleting] = useState<Machine>();
   const [rebooting, setRebooting] = useState<Machine>();
   const [rowError, setRowError] = useState<string>();
-  const cordoned = new Set(
-    (health.data?.nodes.items ?? []).filter((n) => n.unschedulable === true).map((n) => n.machine ?? n.name),
-  );
+  const nodeOf = new Map((health.data?.nodes.items ?? []).map((n) => [n.machine ?? n.name, n]));
   const offline = new Set((nodes ?? []).filter((n) => !n.online).map((n) => n.node));
   const machines = c.machines ?? [];
   const autoscaled = new Set(c.workerPools.filter((p) => p.autoscaling !== undefined).map((p) => p.name));
@@ -108,6 +115,7 @@ export function Machines({
     }
   };
   const [bootLog, setBootLog] = useState<Machine>();
+  const focused = useQuery("machine");
   const columns = [
     "Name",
     "Role",
@@ -144,20 +152,21 @@ export function Machines({
             </tr>
           )}
           {machines.map((m) => {
-            const s = machineStatus(m, offline.has(m.proxmoxNode ?? ""));
+            const node = nodeOf.get(m.name);
             return (
-              <tr key={m.name}>
+              <tr
+                key={m.name}
+                ref={m.name === focused ? intoView : undefined}
+                className={m.name === focused ? "focused" : undefined}
+                aria-current={m.name === focused ? "true" : undefined}
+              >
                 <td className="nowrap">
                   <span className="nowrap">{m.node ?? m.name}</span>
                   {m.replacing !== true && filled(m.waiting) && <div className="hint message">{m.waiting}</div>}
                 </td>
                 <td className="nowrap">{m.role === "control-plane" ? "Control plane" : "Worker"}</td>
                 <td>{m.proxmoxNode ?? ""}</td>
-                <td className="nowrap">
-                  <Status state={s.state} text={s.text} />
-                  {cordoned.has(m.name) && <div className="hint">Cordoned</div>}
-                  {m.replacing === true && filled(m.waiting) && <Detail>{m.waiting}</Detail>}
-                </td>
+                <MachineStatusCell machine={m} offline={offline.has(m.proxmoxNode ?? "")} node={node} />
                 <td>{m.version ?? ""}</td>
                 {talos && <td>{m.talos ?? ""}</td>}
                 <td>{(m.addresses ?? []).join(", ")}</td>
@@ -168,7 +177,7 @@ export function Machines({
                     can={can}
                     why={why}
                     autoscaled={autoscaled.has(m.pool ?? "")}
-                    cordoned={cordoned.has(m.name)}
+                    cordoned={node?.unschedulable === true}
                     onAct={(call) => {
                       void act(m, call);
                     }}
@@ -232,6 +241,27 @@ export function Machines({
         </MachineDialog>
       )}
     </div>
+  );
+}
+
+// MachineStatusCell is a machine's state, with whether its node is cordoned and what holds it up.
+function MachineStatusCell({
+  machine: m,
+  offline,
+  node,
+}: {
+  machine: Machine;
+  offline: boolean;
+  node: HealthNode | undefined;
+}): JSX.Element {
+  const s = machineStatus(m, offline, node);
+  return (
+    <td className="nowrap">
+      <Status state={s.state} text={s.text} />
+      {node?.unschedulable === true && <div className="hint">Cordoned</div>}
+      {node?.down === true && filled(node.message) && <Detail>{node.message}</Detail>}
+      {m.replacing === true && filled(m.waiting) && <Detail>{m.waiting}</Detail>}
+    </td>
   );
 }
 
@@ -442,6 +472,8 @@ function hostState(h: Host): string {
 export function Placement({ cluster: c }: { cluster: Cluster }): JSX.Element {
   // Only those who see the nodes get them; the others see the nodes of their machines alone.
   const { data: nodes } = usePoll(api.nodes, pollIdle, nodesKept);
+  const health = useClusterHealth(c);
+  const nodeOf = new Map((health.data?.nodes.items ?? []).map((n) => [n.machine ?? n.name, n]));
   const machines = c.machines ?? [];
   const crowded = crowding(machines);
   const list = hosts(machines, nodes);
@@ -464,7 +496,7 @@ export function Placement({ cluster: c }: { cluster: Cluster }): JSX.Element {
             {h.machines.length > 0 && (
               <ul className="host-machines">
                 {h.machines.map((m) => {
-                  const s = machineStatus(m, h.online === false);
+                  const s = machineStatus(m, h.online === false, nodeOf.get(m.name));
                   return (
                     <li key={m.name}>
                       <Link

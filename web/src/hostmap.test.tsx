@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
 import { fakeServer } from "./fake-server";
-import type { Cluster, Machine } from "./types";
+import type { Cluster, ClusterHealth, Machine } from "./types";
 
 const created = new Date(Date.now() - 3_600_000).toISOString();
 
@@ -108,5 +108,59 @@ describe("the cluster's summary", () => {
     render(<App />);
     const row = await screen.findByRole("row", { name: /^web-cp-a/u });
     await expect(within(row).findByText("Node offline")).resolves.toBeInTheDocument();
+  });
+
+  it("shows a machine whose node stopped reporting as down, not as on its way", async () => {
+    const health: ClusterHealth = {
+      read: created,
+      verdict: "degraded",
+      attention: [{ severity: "error", section: "nodes", what: "Worker web-w-1 not ready", since: created }],
+      nodes: {
+        items: [
+          {
+            name: "web-w-1",
+            machine: "web-w-1",
+            role: "worker",
+            joined: true,
+            ready: false,
+            down: true,
+            silent: true,
+            since: created,
+            message: "Kubelet stopped posting node status.",
+            pods: 3,
+          },
+        ],
+      },
+      pods: { items: [] },
+      volumes: { items: [] },
+      addons: { items: [] },
+      pools: { items: [] },
+      controlPlane: { conditions: [] },
+      healthChecks: { items: [] },
+      events: { items: [] },
+      logs: false,
+    };
+    const silent = { ...web, machines: [machine("web-w-1", "worker", { proxmoxNode: "pve2", ready: false })] };
+    fakeServer({
+      "GET /api/session": { body: { user: "alice@pve", csrf: "c1" } },
+      "GET /api/clusters": { body: [silent] },
+      "GET /api/clusters/default/web": { body: silent },
+      "GET /api/clusters/default/web/health": { body: health },
+      "GET /api/runs": { body: [] },
+      "GET /api/proxmox/nodes": { body: [{ node: "pve2", online: true }] },
+    });
+    window.history.replaceState(null, "", "/clusters/default/web");
+    const { unmount } = render(<App />);
+    const map = await screen.findByRole("region", { name: "Placement" });
+    await expect(
+      within(map).findByRole("link", { name: "web-w-1, worker, Not reporting" }),
+    ).resolves.toBeInTheDocument();
+    unmount();
+
+    window.history.replaceState(null, "", "/clusters/default/web/machines");
+    render(<App />);
+    const row = await screen.findByRole("row", { name: /^web-w-1/u });
+    await expect(within(row).findByText("Not reporting")).resolves.toBeInTheDocument();
+    expect(within(row).queryByText("Not ready")).not.toBeInTheDocument();
   });
 });

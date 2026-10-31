@@ -1,7 +1,9 @@
 import { useState, type JSX } from "react";
 
 import { api } from "./api";
-import { clusterPath, type View } from "./cluster-paths";
+import { useClusterHealth, pollUnwell } from "./cluster-health";
+import { attentionFix } from "./cluster-paths";
+import { standing } from "./fleet";
 import { Link } from "./router";
 import type {
   AddonRelease,
@@ -31,27 +33,10 @@ import {
   age,
   bytes,
   filled,
-  pollCache,
-  pollIdle,
   sentence,
   usePoll,
   Skeleton,
-  type Poll,
 } from "./ui";
-
-// A cluster that is not healthy is looked at more often, to follow it getting better.
-const pollUnwell = 10_000;
-
-const healthCache = pollCache<ClusterHealth>();
-
-/** useClusterHealth reads a cluster's health page, shared by every view that shows part of it. */
-export function useClusterHealth(c: { namespace: string; name: string }): Poll<ClusterHealth> {
-  return usePoll(
-    () => api.health(c.namespace, c.name),
-    (shown) => (shown?.verdict === "healthy" ? pollIdle : pollUnwell),
-    { cache: healthCache, key: `${c.namespace}/${c.name}` },
-  );
-}
 
 const msPerSecond = 1000;
 const percent = 100;
@@ -102,32 +87,22 @@ function SectionNote<T>({ section, what }: { section: HealthSection<T>; what: st
   return null;
 }
 
-const verdicts: Record<ClusterHealth["verdict"], string> = {
-  healthy: "Healthy",
-  changing: "Changing",
-  degraded: "Degraded",
-  unreachable: "Unreachable",
-};
-
-function verdictState(h: ClusterHealth): State {
-  if (h.verdict === "healthy") {
-    return "ok";
-  }
-  if (h.verdict === "changing") {
-    return "progress";
-  }
-  if (h.verdict === "unreachable") {
-    return "error";
-  }
-  return worst(h.attention.map((a) => a.severity));
-}
-
-// Verdict carries, behind its state, why nothing from inside the cluster shows when nothing does.
-function Verdict({ health: h, stale }: { health: ClusterHealth; stale: boolean }): JSX.Element {
+// Verdict is the cluster's verdict as its badge gives it, from this read, and behind it why nothing
+// from inside the cluster shows when nothing does.
+function Verdict({
+  cluster: c,
+  health: h,
+  stale,
+}: {
+  cluster: Cluster;
+  health: ClusterHealth;
+  stale: boolean;
+}): JSX.Element {
   const at = new Date(h.read).toLocaleTimeString();
+  const s = standing(c, { ...h, namespace: c.namespace, name: c.name });
   return (
     <div className="verdict">
-      <Status state={verdictState(h)} text={verdicts[h.verdict]} />
+      <Status state={s.state} text={s.verdict} />
       {filled(h.workload) && <Detail>{h.workload}</Detail>}
       <span className="spacer" />
       <span className={stale ? "hint-warning" : "muted"} title={new Date(h.read).toLocaleString()}>
@@ -283,7 +258,7 @@ function healthChecksTile(h: ClusterHealth): Tile {
   return { section: "cluster-api", label: "Health checks", value: `${healthy} of ${expected} healthy`, state };
 }
 
-// A stale reading is the last one shown after a later read failed: it may no longer hold.
+// A stale reading is the last one shown once a later read failed or none answered in time.
 function Tiles({ health: h, stale }: { health: ClusterHealth; stale: boolean }): JSX.Element {
   const tiles = [controlPlaneTile(h), workersTile(h), pressureTile(h), podsTile(h), addonsTile(h), healthChecksTile(h)];
   return (
@@ -326,9 +301,6 @@ function PodButtons({ pod, actions }: { pod: UnwellPod | undefined; actions: Pod
   );
 }
 
-// sectionViews are the sections whose details are another view of the cluster's page.
-const sectionViews: Partial<Record<string, View>> = { backups: "backups" };
-
 function NeedsAttention({
   health: h,
   actions,
@@ -358,17 +330,17 @@ function NeedsAttention({
         </thead>
         <tbody>
           {h.attention.map((a) => {
-            const view = sectionViews[a.section];
+            const fix = attentionFix(cluster, a);
             return (
               <tr key={`${a.section}/${a.what}/${a.message ?? ""}`}>
                 <td>
                   <Status state={severityState[a.severity]} text={severityText[a.severity]} />
                 </td>
                 <td>
-                  {view === undefined ? (
+                  {fix === undefined ? (
                     <a href={`#${anchor(a.section)}`}>{a.what}</a>
                   ) : (
-                    <Link to={clusterPath(cluster.namespace, cluster.name, view)}>{a.what}</Link>
+                    <Link to={fix.to}>{a.what}</Link>
                   )}
                   {filled(a.message) && <div className="hint message">{a.message}</div>}
                 </td>
@@ -478,7 +450,11 @@ function nodeStatus(n: HealthNode, inside: boolean): { state: State; text: strin
     return inside ? { state: "progress", text: "Joining" } : { state: "idle", text: "Unknown" };
   }
   if (!n.ready) {
-    return { state: "error", text: "Not ready" };
+    // As the machines say it: down once it has been not ready for longer than starting takes.
+    if (n.down !== true) {
+      return { state: "progress", text: "Not ready" };
+    }
+    return { state: "error", text: n.silent === true ? "Not reporting" : "Not ready" };
   }
   if ((n.pressure ?? []).length > 0 || n.unschedulable === true) {
     return { state: "warning", text: "Ready" };
@@ -1018,7 +994,7 @@ function PodLog({ cluster, pod, container }: { cluster: ClusterRef; pod: UnwellP
  */
 export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlamp?: string | undefined }): JSX.Element {
   const ref = { namespace: c.namespace, name: c.name };
-  const { data: h, error } = useClusterHealth(ref);
+  const { data: h, error, stale } = useClusterHealth(ref);
   const [logsOf, setLogsOf] = useState<UnwellPod>();
   if (!h) {
     return (
@@ -1032,9 +1008,9 @@ export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlam
   return (
     <>
       <div className="box">
-        <Verdict health={h} stale={filled(error)} />
+        <Verdict cluster={c} health={h} stale={stale} />
         <ErrorBox message={error} />
-        <Tiles health={h} stale={filled(error)} />
+        <Tiles health={h} stale={stale} />
       </div>
       <NeedsAttention health={h} actions={actions} cluster={ref} />
       <Nodes health={h} />

@@ -6,7 +6,7 @@ import { useFleet } from "./fleet";
 import { Link, navigate } from "./router";
 import { runTitle, runView } from "./Runs";
 import type { Job, RunInfo, RunStep } from "./types";
-import { age, ErrorBox, errorMessage, logLines, pollIdle, pollRunning, Status, usePoll } from "./ui";
+import { age, ErrorBox, errorMessage, logLines, pollIdle, pollRunning, Skeleton, Status, usePoll } from "./ui";
 
 const states: Record<RunInfo["state"], { state: "progress" | "warning" | "ok" | "error"; text: string }> = {
   running: { state: "progress", text: "Running" },
@@ -153,6 +153,7 @@ export function RunPage({ id }: { id: string }): JSX.Element {
       )}
       {run.steps === undefined && run.phase !== undefined && <p className="muted">{run.phase}</p>}
       {(run.kind === "management-cluster" || run.kind === "template") && <JobLog run={run} />}
+      {(run.kind === "backup" || run.kind === "restore") && <BackupLog run={run} />}
     </section>
   );
 }
@@ -178,6 +179,34 @@ async function jobOf(kind: RunInfo["kind"]): Promise<Job | undefined> {
   }
   const status = await api.setupStatus();
   return status.job;
+}
+
+// BackupLog is the end of a finished backup's or restore's log, for those who may read the cluster's
+// logs: Velero writes it to the target once the run is over.
+function BackupLog({ run }: { run: RunInfo }): JSX.Element | null {
+  const cluster = useFleet()?.clusters?.find((c) => c.namespace === run.namespace && c.name === run.cluster);
+  if (cluster?.allowed.kubeconfig !== true || run.state === "running" || run.state === "stalled") {
+    return null;
+  }
+  return <VeleroLogBox run={run} namespace={cluster.namespace} cluster={cluster.name} />;
+}
+
+function VeleroLogBox({ run, namespace, cluster }: { run: RunInfo; namespace: string; cluster: string }): JSX.Element {
+  const name = run.id.split("/").at(-1) ?? "";
+  const read = run.kind === "restore" ? api.restoreLog : api.backupLog;
+  const { data: log, error } = usePoll(async () => read(namespace, cluster, name), pollIdle);
+  return (
+    <section className="box run-log">
+      <h3>Log</h3>
+      <ErrorBox message={error} />
+      {log === undefined && error === undefined && <Skeleton rows={6} />}
+      {log !== undefined && (
+        <pre className="log" aria-label="Log">
+          {log.lines.join("\n")}
+        </pre>
+      )}
+    </section>
+  );
 }
 
 // JobLog is the end of the log the appliance keeps of a run of its own.

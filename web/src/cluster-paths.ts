@@ -1,4 +1,4 @@
-import type { Cluster } from "./types";
+import type { Attention, Cluster } from "./types";
 import { filled } from "./ui";
 
 /** Intent is what a cluster's address asks its page to start, in its do parameter. */
@@ -42,6 +42,23 @@ export type View = (typeof views)[number]["path"];
 /** clusterPath is the address of a cluster's page, or of one of its views. */
 export const clusterPath = (namespace: string, name: string, view: View = ""): string =>
   `/clusters/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}${view ? `/${view}` : ""}`;
+
+/**
+ * attentionFix is where something a cluster's health found is acted on: the machine's row for one
+ * about a machine, the backups view for its backups; undefined where the health page is the place.
+ */
+export function attentionFix(
+  c: { namespace: string; name: string },
+  a: Attention,
+): { view: View; to: string } | undefined {
+  if (filled(a.machine)) {
+    return {
+      view: "machines",
+      to: `${clusterPath(c.namespace, c.name, "machines")}?machine=${encodeURIComponent(a.machine)}`,
+    };
+  }
+  return a.section === "backups" ? { view: "backups", to: clusterPath(c.namespace, c.name, "backups") } : undefined;
+}
 
 /** intentPath is a cluster's page asked to start an action. */
 export const intentPath = (c: Cluster, intent: Intent): string => `${clusterPath(c.namespace, c.name)}?do=${intent}`;

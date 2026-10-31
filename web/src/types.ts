@@ -190,6 +190,8 @@ export interface Attention {
   message?: string;
   since?: string;
   pod?: { namespace: string; name: string };
+  /** The Cluster API machine the item is about, which the machines view acts on. */
+  machine?: string;
 }
 
 export interface HealthVM {
@@ -215,6 +217,10 @@ export interface HealthNode {
   /** Whether the node was read inside the cluster; the fields up to pods need it. */
   joined: boolean;
   ready: boolean;
+  /** Not ready for longer than starting or rebooting takes: a fault, not work under way. */
+  down?: boolean;
+  /** Its kubelet stopped reporting. */
+  silent?: boolean;
   since?: string;
   message?: string;
   pressure?: string[];
@@ -361,6 +367,13 @@ export interface ClusterHealth {
   vms?: string;
   /** Whether the user may read the pods' logs here: Sys.Modify on the cluster's pool. */
   logs: boolean;
+}
+
+/** The end of a finished backup's or restore's log, as Velero keeps it in the target. */
+export interface VeleroLog {
+  lines: string[];
+  /** The log has lines before these. */
+  more?: boolean;
 }
 
 export interface PodLogs {

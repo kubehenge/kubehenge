@@ -1,7 +1,7 @@
-import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, render, screen, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
-import { fakeServer } from "./fake-server";
+import { fakeServer, held, type Route } from "./fake-server";
 import { ManagementHealthCard, healthVerdict } from "./ManagementHealth";
 import type { ManagementHealth } from "./types";
 
@@ -53,6 +53,34 @@ describe("the management cluster's health", () => {
     await expect(screen.findByText("Not answering")).resolves.toBeInTheDocument();
     expect(screen.getByText("Details")).toBeInTheDocument();
     expect(screen.getByText("dial tcp 192.0.2.20:6443: connect: connection refused")).toBeInTheDocument();
+  });
+
+  it("marks the health stale while reading it again fails or hangs", async () => {
+    const healthy = { answers: true, nodes: [ready("mgmt-1")], controllers: [] };
+    const routes: Record<string, Route> = { "GET /api/setup/health": { body: healthy } };
+    fakeServer(routes);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<ManagementHealthCard />);
+    await expect(screen.findByText("Healthy")).resolves.toBeInTheDocument();
+    expect(screen.queryByText("Stale")).not.toBeInTheDocument();
+
+    routes["GET /api/setup/health"] = { status: 502, body: { error: "the management cluster does not answer" } };
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(screen.getByText("Stale")).toHaveAttribute("title", "the management cluster does not answer");
+    expect(screen.getByText("1 of 1 ready")).toBeInTheDocument();
+
+    routes["GET /api/setup/health"] = { body: healthy };
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(screen.queryByText("Stale")).not.toBeInTheDocument();
+
+    routes["GET /api/setup/health"] = held().route;
+    await act(() => vi.advanceTimersByTimeAsync(90_000));
+    expect(screen.getByText("Stale")).toHaveAttribute("title", "No answer from Kubehenge. Check the connection.");
+
+    routes["GET /api/setup/health"] = { body: healthy };
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(screen.queryByText("Stale")).not.toBeInTheDocument();
+    vi.useRealTimers();
   });
 
   it("calls a cluster with no ready node down", () => {

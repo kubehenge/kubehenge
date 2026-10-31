@@ -253,18 +253,18 @@ func machineAttention(a *attention, m *clusterv1.Machine, nodeRead bool, now tim
 		message, since = ready.Message, ready.LastTransitionTime.Time
 	}
 	if check, failed := isFalse(m.Status.Conditions, clusterv1.MachineHealthCheckSucceededCondition); failed {
-		a.add(severityError, sectionNodes, who+" failed health check", check.Message, check.LastTransitionTime.Time)
+		a.addMachine(m.Name, severityError, who+" failed health check", check.Message, check.LastTransitionTime.Time)
 		return
 	}
 	switch {
 	case !m.DeletionTimestamp.IsZero() || m.Status.Phase == string(clusterv1.MachinePhaseDeleting):
-		a.add(severityProgress, sectionNodes, who+" being deleted", message, since)
+		a.addMachine(m.Name, severityProgress, who+" being deleted", message, since)
 	case m.Status.NodeRef.Name == "":
-		a.add(severityProgress, sectionNodes, who+" being created", message, since)
+		a.addMachine(m.Name, severityProgress, who+" being created", message, since)
 	case !nodeRead && now.Sub(since) < settling:
-		a.add(severityProgress, sectionNodes, who+" joining", message, since)
+		a.addMachine(m.Name, severityProgress, who+" joining", message, since)
 	case !nodeRead:
-		a.add(severityWarning, sectionNodes, who+" not ready", message, since)
+		a.addMachine(m.Name, severityWarning, who+" not ready", message, since)
 	}
 }
 
@@ -301,6 +301,7 @@ func fillNode(v *nodeView, n *corev1.Node, sums podSums) {
 	for _, cond := range n.Status.Conditions {
 		if cond.Type == corev1.NodeReady {
 			v.Ready, v.Since = cond.Status == corev1.ConditionTrue, cond.LastTransitionTime.Time
+			v.Silent = cond.Status == corev1.ConditionUnknown
 			if !v.Ready {
 				v.Message = cmp.Or(cond.Message, cond.Reason)
 			}
@@ -329,7 +330,8 @@ func nodeAttention(a *attention, v *nodeView, now time.Time) {
 		if v.leaving || now.Sub(v.Since) < settling {
 			severity = severityProgress
 		}
-		a.add(severity, sectionNodes, who+" not ready", v.Message, v.Since)
+		v.Down = severity == severityError
+		a.addMachine(v.Machine, severity, who+" not ready", v.Message, v.Since)
 	}
 	if len(v.Pressure) > 0 {
 		words := make([]string, 0, len(v.Pressure))
@@ -337,10 +339,10 @@ func nodeAttention(a *attention, v *nodeView, now time.Time) {
 			word, _ := pressureWord(corev1.NodeConditionType(p))
 			words = append(words, word)
 		}
-		a.add(severityWarning, sectionNodes, who+": "+strings.Join(words, ", "), "", time.Time{})
+		a.addMachine(v.Machine, severityWarning, who+": "+strings.Join(words, ", "), "", time.Time{})
 	}
 	if v.Unschedulable && !v.leaving {
-		a.add(severityWarning, sectionNodes, who+" cordoned", "", time.Time{})
+		a.addMachine(v.Machine, severityWarning, who+" cordoned", "", time.Time{})
 	}
 }
 
