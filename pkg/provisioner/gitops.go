@@ -288,6 +288,7 @@ func argoCDValues(certs *Certificates, g *GitOps, state *gitOpsState) (map[strin
 		}
 		rbac["policy.csv"] = csv.String()
 	}
+	server := map[string]any{"resources": reserved(cpu10m, memory64Mi)}
 	values := map[string]any{
 		"crds":          map[string]any{"keep": false},
 		"global":        map[string]any{"networkPolicy": map[string]any{createKey: true}},
@@ -299,6 +300,11 @@ func argoCDValues(certs *Certificates, g *GitOps, state *gitOpsState) (map[strin
 			"rbac":   rbac,
 			"ssh":    map[string]any{"extraHosts": state.knownHosts},
 		},
+		"server":         server,
+		controllerKey:    map[string]any{"resources": reserved("50m", "128Mi")},
+		"repoServer":     map[string]any{"resources": reserved(cpu10m, memory64Mi)},
+		"applicationSet": map[string]any{"resources": reserved(cpu10m, memory64Mi)},
+		"redis":          map[string]any{"resources": reserved(cpu10m, "32Mi")},
 	}
 	if g.Hostname != "" {
 		tls, annotations := addonIngress(certs, argoCD, g.Hostname, g.TLSSecret)
@@ -306,7 +312,7 @@ func argoCDValues(certs *Certificates, g *GitOps, state *gitOpsState) (map[strin
 		if annotations != nil {
 			ingress["annotations"] = annotations
 		}
-		values["server"] = map[string]any{ingressKey: ingress}
+		server[ingressKey] = ingress
 	}
 	return values, nil
 }

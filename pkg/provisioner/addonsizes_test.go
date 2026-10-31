@@ -9,7 +9,7 @@ import (
 )
 
 // addonCPUFigures are the chart's figures for the add-ons' CPU.
-const addonCPUFigures = `{"headlamp":10,"monitoring":20,"logs":75,"backups":70,"kyverno":500,"istio":400,"clusterMesh":0,"loadBalancer":50,"certManager":0,"rancher":10,"rancherAgent":0,"argocd":0,"flux":50}`
+const addonCPUFigures = `{"headlamp":10,"monitoring":300,"logs":75,"backups":70,"kyverno":500,"istio":400,"clusterMesh":30,"loadBalancer":60,"certManager":30,"rancher":120,"rancherAgent":30,"argocd":90,"flux":50}`
 
 // addonClass is the RKE2 class of hooksFor with figures for its add-ons' memory and CPU and its
 // nodes' own, the CPU as the chart gives it.
@@ -21,7 +21,7 @@ func addonClass() *clusterv1.ClusterClass {
 			AddonMemoryAnnotation:       `{"headlamp":50,"monitoring":3000,"kyverno":300,"istio":200,"clusterMesh":100,"certManager":100,"rancher":1500,"rancherAgent":250}`,
 			NodeMemoryAnnotation:        `{"controlPlane":3840,"worker":640}`,
 			AddonCPUAnnotation:          addonCPUFigures,
-			NodeCPUAnnotation:           `{"controlPlane":1555,"worker":745}`,
+			NodeCPUAnnotation:           `{"controlPlane":1605,"worker":775}`,
 		},
 		Spec: clusterv1.ClusterClassSpec{Variables: []clusterv1.ClusterClassVariable{
 			machineVariable("controlPlaneMachine"), machineVariable("workerMachine"),
@@ -65,7 +65,7 @@ func TestWorkersHaveRoomForTheAddons(t *testing.T) {
 		{"Kyverno off", withAddons(sized("", new(int32(1))), map[string]string{
 			"headlamp": `{"enabled":true}`, "monitoring": `{"enabled":true}`, "podSecurity": `{"admission":"restricted","kyverno":"off"}`,
 		}), ""},
-		{"room on one worker", workerMemory(withAddons(sized("", new(int32(1))), everyAddon), `{"memoryMiB":4644}`), ""},
+		{"room on one worker", workerMemory(withAddons(sized("", new(int32(1))), everyAddon), `{"cores":3,"memoryMiB":4644}`), ""},
 		{"room shared over workers", withAddons(sized("", new(int32(2))), everyAddon), ""},
 		{"a pool scaled to none", withAddons(sized("", new(int32(1)), new(int32(0))), everyAddon), "which have 3456 MiB"},
 		{
@@ -95,7 +95,7 @@ func TestControlPlanesHaveRoomForTheAddons(t *testing.T) {
 	class := addonClass()
 	class.Annotations[AddonControlPlaneMemoryAnnotation] = `{"monitoring":768,"kyverno":256,"rancherAgent":512}`
 	every := func(controlPlane string) *clusterv1.Cluster {
-		return workerMemory(withAddons(sized(controlPlane, new(int32(1))), everyAddon), `{"memoryMiB":4644}`)
+		return workerMemory(withAddons(sized(controlPlane, new(int32(1))), everyAddon), `{"cores":3,"memoryMiB":4644}`)
 	}
 	for _, tc := range []struct {
 		name string
@@ -149,29 +149,24 @@ func everyAddonButRancher(c *clusterv1.Cluster) *clusterv1.Cluster {
 func TestWorkersHaveCPUForTheAddons(t *testing.T) {
 	t.Parallel()
 	class := addonClass()
-	// As Flux's pods asked for before Kubehenge gave them 10m each.
-	before := addonClass()
-	before.Annotations[AddonCPUAnnotation] = strings.Replace(addonCPUFigures, `"flux":50`, `"flux":500`, 1)
 	for _, tc := range []struct {
-		name  string
-		class *clusterv1.ClusterClass
-		c     *clusterv1.Cluster
-		want  string
+		name string
+		c    *clusterv1.Cluster
+		want string
 	}{
-		{"every add-on but Rancher on the least worker", class, workerMemory(everyAddonButRancher(sized("", new(int32(1)))), `{"memoryMiB":8192}`), ""},
 		{
-			"Flux's former requests on the least worker", before, workerMemory(everyAddonButRancher(sized("", new(int32(1)))), `{"memoryMiB":8192}`),
-			"add-ons (Headlamp, monitoring, logs, backups, Kyverno, Istio, the load balancer, Flux) need 1625 millicores of CPU on workers, which have 1255 millicores for them",
+			"every add-on but Rancher on the least worker", workerMemory(everyAddonButRancher(sized("", new(int32(1)))), `{"memoryMiB":8192}`),
+			"add-ons (Headlamp, monitoring, logs, backups, Kyverno, Istio, Cluster Mesh, the load balancer, cert-manager, Rancher's agent, Flux) need 1555 millicores of CPU on workers, which have 1225 millicores for them",
 		},
-		{"Flux's former requests with a core more", before, workerMemory(everyAddonButRancher(sized("", new(int32(1)))), `{"cores":3,"memoryMiB":8192}`), ""},
-		{"Flux's former requests shared over workers", before, workerMemory(everyAddonButRancher(sized("", new(int32(2)))), `{"memoryMiB":8192}`), ""},
+		{"every add-on but Rancher with a core more", workerMemory(everyAddonButRancher(sized("", new(int32(1)))), `{"cores":3,"memoryMiB":8192}`), ""},
+		{"every add-on but Rancher shared over workers", workerMemory(everyAddonButRancher(sized("", new(int32(2)))), `{"memoryMiB":8192}`), ""},
 		{
-			"without workers, on two cores", class, withAddons(sized(`{"cores":2,"memoryMiB":16384}`), everyAddon),
-			"need 930 millicores of CPU on control planes without workers, which have 445 millicores",
+			"without workers, on two cores", withAddons(sized(`{"cores":2,"memoryMiB":16384}`), everyAddon),
+			"need 1300 millicores of CPU on control planes without workers, which have 395 millicores",
 		},
-		{"without workers, on the least they need", class, withAddons(sized(`{"cores":4,"memoryMiB":16384}`), everyAddon), ""},
+		{"without workers, on the least they need", withAddons(sized(`{"cores":4,"memoryMiB":16384}`), everyAddon), ""},
 	} {
-		err := checkAddonRoom(nil, tc.c, tc.class)
+		err := checkAddonRoom(nil, tc.c, class)
 		switch {
 		case tc.want == "" && err != nil:
 			t.Errorf("%s: refused: %v", tc.name, err)
@@ -179,9 +174,11 @@ func TestWorkersHaveCPUForTheAddons(t *testing.T) {
 			t.Errorf("%s: %v, want a refusal naming %q", tc.name, err, tc.want)
 		}
 	}
-	// Add-ons whose pods ask for no CPU need no room for it.
+	// Add-ons whose pods ask for no CPU need no room for it: a class without a figure for Cluster
+	// Mesh, cert-manager or Rancher's agent counts none for them.
 	bare := addonClass()
-	bare.Annotations[NodeCPUAnnotation] = `{"controlPlane":1555,"worker":2000}`
+	bare.Annotations[AddonCPUAnnotation] = `{"headlamp":10}`
+	bare.Annotations[NodeCPUAnnotation] = `{"controlPlane":1605,"worker":2000}`
 	if err := checkRoomFor(addonCPU, nil, withAddons(sized("", new(int32(1))), map[string]string{"clusterMesh": `{"enabled":true}`}), bare); err != nil {
 		t.Errorf("only add-ons that request no CPU, on a worker with none to spare: %v", err)
 	}

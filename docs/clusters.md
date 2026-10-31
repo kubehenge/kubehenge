@@ -103,22 +103,22 @@ The add-ons need memory and CPU too. Their pods run on the workers, or on the co
 | Add-on | Pods' memory | Each control plane, kubeadm, RKE2 and Talos | Each control plane, k3s | Pods' CPU |
 | --- | --- | --- | --- | --- |
 | Headlamp | 64 MiB | 8 MiB | | 10 millicores |
-| Monitoring | 1536 MiB | 32 MiB | 616 MiB | 20 millicores |
+| Monitoring | 1536 MiB | 32 MiB | 616 MiB | 300 millicores |
 | Logs | 512 MiB | 56 MiB | | 75 millicores |
 | Backups | 384 MiB | 184 MiB | 24 MiB | 70 millicores |
 | Kyverno | 512 MiB | 552 MiB | 520 MiB | 500 millicores |
 | Istio | 384 MiB | 288 MiB | 504 MiB | 400 millicores |
-| Cilium Cluster Mesh | 128 MiB | | | none |
-| Load balancer | 128 MiB | | | 50 millicores |
-| GitOps with Argo CD | 512 MiB | 432 MiB | 360 MiB | none |
+| Cilium Cluster Mesh | 128 MiB | | | 30 millicores |
+| Load balancer | 128 MiB | | | 60 millicores |
+| GitOps with Argo CD | 512 MiB | 432 MiB | 360 MiB | 90 millicores |
 | GitOps with Flux | 384 MiB | | | 50 millicores |
-| cert-manager, with monitoring, Rancher or certificates | 192 MiB | 48 MiB | | none |
-| Rancher | 2048 MiB | 512 MiB | 512 MiB | 10 millicores |
-| Rancher's agent, in every cluster that registers | 512 MiB | | | none |
+| cert-manager, with monitoring, Rancher or certificates | 192 MiB | 48 MiB | | 30 millicores |
+| Rancher | 2048 MiB | 512 MiB | 512 MiB | 120 millicores |
+| Rancher's agent, in every cluster that registers | 512 MiB | | | 30 millicores |
 
 A worker counts 448 MiB for itself on k3s and 704 MiB on kubeadm, RKE2 and Talos. A control plane counts 1848 MiB on k3s, 2392 MiB on Talos, 3120 MiB on RKE2 and 3376 MiB on kubeadm before any add-on; with every add-on but Rancher it needs 3872 MiB on k3s, 3992 MiB on Talos, 4720 MiB on RKE2 and 4976 MiB on kubeadm, above the least of 4096 MiB on RKE2 and kubeadm. A single k3s worker with every add-on but Rancher and GitOps needs 4672 MiB, 4288 MiB without backups, 4160 MiB without logs, or 3776 MiB without either, and GitOps with Argo CD on top takes each 512 MiB further; the default machines hold every add-on but Rancher, logs, backups and GitOps on every distribution, kubeadm's control plane with 4304 MiB, and a second worker makes room for logs and backups too.
 
-For CPU a worker counts what its distribution, its CNI and Kubehenge's own pods request there: 230 millicores on kubeadm, 320 on k3s, 480 on Talos, which keeps 50 of them back for the system and whose flannel asks for 200 with its network policy controller, and 745 on RKE2, whose kube-proxy and canal ask for 250 each. Without workers, a control plane counts 1040 millicores on kubeadm, 380 on k3s, 900 on Talos and 1555 on RKE2. Every add-on but Rancher takes 1075 millicores, so it fits on one worker of the default 2 cores on every distribution. On a worker of a single core, the least kubeadm, k3s and Talos allow, Kyverno and Istio do not fit together, nor on Talos Kyverno with every other add-on but Istio; such a worker needs a second core, or a second worker beside it.
+For CPU a worker counts what its distribution, its CNI and Kubehenge's own pods request there: 250 millicores on kubeadm, 350 on k3s, 490 on Talos, which keeps 50 of them back for the system and whose flannel asks for 200 with its network policy controller, and 775 on RKE2, whose kube-proxy asks for 250 and canal for 260. Without workers, a control plane counts 1080 millicores on kubeadm, 430 on k3s, 910 on Talos and 1605 on RKE2. Every add-on but Rancher takes 1595 millicores with Argo CD, or 1555 with Flux, so it fits on one worker of the default 2 cores on kubeadm and k3s; Talos and RKE2 need a third core for it, or a second worker. On a worker of a single core, the least kubeadm, k3s and Talos allow, Kyverno and Istio do not fit together, nor either of them with every other add-on; such a worker needs a second core, or a second worker beside it.
 
 Kubehenge refuses a cluster short of that room when it is created and when an add-on is switched on or its nodes change. The interface raises the machines to it as add-ons are chosen and shows the add-ons' totals on the Add-ons step.
 

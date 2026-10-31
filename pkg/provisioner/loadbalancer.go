@@ -119,6 +119,7 @@ func kubeVipValues() map[string]any {
 			"svc_enable": on, "svc_election": on, "vip_leaderelection": off,
 			"prometheus_server": kubeVipMetrics,
 		},
+		"resources": reserved(cpu10m, "32Mi"),
 	}
 }
 
