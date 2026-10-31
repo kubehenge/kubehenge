@@ -2,6 +2,7 @@ import { useState, type JSX } from "react";
 
 import { api } from "./api";
 import { clusterPath, type View } from "./cluster-paths";
+import { standing } from "./fleet";
 import { Link } from "./router";
 import type {
   AddonRelease,
@@ -102,32 +103,22 @@ function SectionNote<T>({ section, what }: { section: HealthSection<T>; what: st
   return null;
 }
 
-const verdicts: Record<ClusterHealth["verdict"], string> = {
-  healthy: "Healthy",
-  changing: "Changing",
-  degraded: "Degraded",
-  unreachable: "Unreachable",
-};
-
-function verdictState(h: ClusterHealth): State {
-  if (h.verdict === "healthy") {
-    return "ok";
-  }
-  if (h.verdict === "changing") {
-    return "progress";
-  }
-  if (h.verdict === "unreachable") {
-    return "error";
-  }
-  return worst(h.attention.map((a) => a.severity));
-}
-
-// Verdict carries, behind its state, why nothing from inside the cluster shows when nothing does.
-function Verdict({ health: h, stale }: { health: ClusterHealth; stale: boolean }): JSX.Element {
+// Verdict is the cluster's verdict as its badge gives it, from this read, and behind it why nothing
+// from inside the cluster shows when nothing does.
+function Verdict({
+  cluster: c,
+  health: h,
+  stale,
+}: {
+  cluster: Cluster;
+  health: ClusterHealth;
+  stale: boolean;
+}): JSX.Element {
   const at = new Date(h.read).toLocaleTimeString();
+  const s = standing(c, { ...h, namespace: c.namespace, name: c.name });
   return (
     <div className="verdict">
-      <Status state={verdictState(h)} text={verdicts[h.verdict]} />
+      <Status state={s.state} text={s.verdict} />
       {filled(h.workload) && <Detail>{h.workload}</Detail>}
       <span className="spacer" />
       <span className={stale ? "hint-warning" : "muted"} title={new Date(h.read).toLocaleString()}>
@@ -1032,7 +1023,7 @@ export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlam
   return (
     <>
       <div className="box">
-        <Verdict health={h} stale={filled(error)} />
+        <Verdict cluster={c} health={h} stale={filled(error)} />
         <ErrorBox message={error} />
         <Tiles health={h} stale={filled(error)} />
       </div>

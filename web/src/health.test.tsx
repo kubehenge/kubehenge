@@ -279,12 +279,19 @@ describe("health page", () => {
 
     routes[healthPath] = { body: { ...degraded, verdict: "healthy", attention: [] } };
     await act(() => vi.advanceTimersByTimeAsync(10_000));
-    await expect(screen.findByText("Healthy")).resolves.toBeInTheDocument();
+    await expect(screen.findByText("Available", { selector: ".verdict *" })).resolves.toBeInTheDocument();
     await act(() => vi.advanceTimersByTimeAsync(20_000));
     expect(reads(calls, healthPath)).toBe(3);
     await act(() => vi.advanceTimersByTimeAsync(10_000));
     expect(reads(calls, healthPath)).toBe(4);
     vi.useRealTimers();
+  });
+
+  it("gives the verdict the cluster's badge gives, also where only the controller has failed", async () => {
+    fakeServer({ [healthPath]: { body: { ...degraded, verdict: "healthy", attention: [] } } });
+    render(<HealthView cluster={{ ...cluster, controllerError: "Proxmox VE task UPID:pve1 failed: no space" }} />);
+    await expect(screen.findByText("Error", { selector: ".verdict *" })).resolves.toBeInTheDocument();
+    expect(screen.queryByText("Available", { selector: ".verdict *" })).not.toBeInTheDocument();
   });
 
   it("greys the tiles out while the last read failed, until one succeeds", async () => {
