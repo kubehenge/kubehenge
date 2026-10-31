@@ -1,7 +1,6 @@
 import { useState, type JSX } from "react";
 
 import { api } from "./api";
-import { useClusterHealth } from "./cluster-health";
 import { clusterPath } from "./cluster-paths";
 import { useFleet } from "./fleet";
 import { Link } from "./router";
@@ -121,10 +120,10 @@ function RunLog({ run }: { run: RunInfo }): JSX.Element | null {
   if (run.kind === "backup" || run.kind === "restore") {
     return <BackupLog run={run} />;
   }
-  if (of === undefined || run.namespace === undefined || run.cluster === undefined) {
+  if (of === undefined || run.eventsSince === undefined || run.namespace === undefined || run.cluster === undefined) {
     return null;
   }
-  return <RunEvents run={run} namespace={run.namespace} cluster={run.cluster} of={of} />;
+  return <RunEvents run={run} since={run.eventsSince} of={of} />;
 }
 
 // PinnedError is what holds a stalled run up, or a run's first error, above its steps.
@@ -185,32 +184,37 @@ const eventsOf: Partial<Record<RunInfo["kind"], (e: HealthEvent) => boolean>> = 
   change: () => true,
 };
 
-/** eventLines are a run's events in the management cluster since it started, oldest first. */
-export function eventLines(events: HealthEvent[], run: RunInfo, of: (e: HealthEvent) => boolean): string[] {
-  const since = run.started === undefined ? 0 : new Date(run.started).getTime();
+// stamp is when an event last happened: the time of day, with the date when it was not today.
+function stamp(iso: string, now = new Date()): string {
+  const at = new Date(iso);
+  return at.toDateString() === now.toDateString() ? at.toLocaleTimeString() : at.toLocaleString();
+}
+
+/** eventLines are those of a run's events its kind reports, oldest first. */
+export function eventLines(events: HealthEvent[], of: (e: HealthEvent) => boolean): string[] {
   return events
-    .filter((e) => e.source === "management" && of(e) && new Date(e.last).getTime() >= since)
-    .toSorted((a, b) => a.last.localeCompare(b.last))
+    .filter((e) => of(e))
     .map((e) => {
       const times = e.count > 1 ? ` (${e.count} times)` : "";
-      return `${new Date(e.last).toLocaleTimeString()} ${e.object}: ${e.message}${times}`;
+      return `${stamp(e.last)} ${e.object}: ${e.message}${times}`;
     });
 }
 
-// RunEvents is what the controller and Cluster API reported of a run, from the last hour's events.
+// RunEvents is what the controller and Cluster API reported of a run since it began.
 function RunEvents({
   run,
-  namespace,
-  cluster,
+  since,
   of,
 }: {
   run: RunInfo;
-  namespace: string;
-  cluster: string;
+  since: string;
   of: (e: HealthEvent) => boolean;
 }): JSX.Element | null {
-  const { data: health } = useClusterHealth({ namespace, name: cluster });
-  const lines = eventLines(health?.events.items ?? [], run, of);
+  const { data: events } = usePoll(
+    async () => api.runEvents(run.namespace ?? "", run.cluster ?? "", since),
+    () => (run.state === "running" ? pollRunning : pollIdle),
+  );
+  const lines = eventLines(events ?? [], of);
   if (lines.length === 0) {
     return null;
   }

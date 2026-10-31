@@ -606,9 +606,10 @@ describe("the console", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
-  it("shows the controller's events of an etcd restore since it started, oldest first", async () => {
+  it("shows the controller's events of an etcd restore since it started", async () => {
     window.history.replaceState(null, "", "/runs/etcd-restore/default/web");
     const routes = serve();
+    const started = minutesAgo(20);
     routes["GET /api/runs"] = {
       body: [
         {
@@ -618,7 +619,8 @@ describe("the console", () => {
           cluster: "web",
           what: "Restore etcd from s1.db.age",
           state: "failed",
-          started: minutesAgo(20),
+          started,
+          eventsSince: started,
           error: "the guest agent did not answer",
           snapshot: "s1.db.age",
         },
@@ -634,21 +636,12 @@ describe("the console", () => {
       last: minutesAgo(minutes),
       action,
     });
-    routes["GET /api/clusters/default/web/health"] = {
-      body: {
-        read: minutesAgo(0),
-        verdict: "degraded",
-        attention: [],
-        events: {
-          items: [
-            event(2, "restore from s1.db.age: stopping etcd", "RestoreEtcd"),
-            event(5, "snapshot taken", "SnapshotEtcd"),
-            event(10, "restore from s1.db.age: fetching the snapshot", "RestoreEtcd"),
-            { ...event(3, "restore from s1.db.age: in the cluster", "RestoreEtcd"), source: "workload" },
-            event(40, "restore from s0.db.age: done", "RestoreEtcd"),
-          ],
-        },
-      },
+    routes[`GET /api/clusters/default/web/events?since=${encodeURIComponent(started)}`] = {
+      body: [
+        event(10, "restore from s1.db.age: fetching the snapshot", "RestoreEtcd"),
+        event(5, "snapshot taken", "SnapshotEtcd"),
+        event(2, "restore from s1.db.age: stopping etcd", "RestoreEtcd"),
+      ],
     };
     render(<App />);
     const log = await screen.findByLabelText("Events");
@@ -657,8 +650,6 @@ describe("the console", () => {
       /Cluster web: restore from s1\.db\.age: fetching the snapshot\n.*Cluster web: restore from s1\.db\.age: stopping etcd$/u,
     );
     expect(text).not.toContain("snapshot taken");
-    expect(text).not.toContain("in the cluster");
-    expect(text).not.toContain("s0.db.age");
   });
 
   it("shows the end of a finished restore's log to those who may read the cluster's logs", async () => {

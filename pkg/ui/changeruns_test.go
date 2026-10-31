@@ -173,6 +173,9 @@ func TestAChangeIsRecordedAndListedAsARun(t *testing.T) {
 	if r := runs[i]; r.State != runRunning || !slices.Equal(stepStates(&r), steps) {
 		t.Errorf("the change's run = %s %q", r.State, stepStates(&r))
 	}
+	if r := runs[i]; r.EventsSince == nil || !r.EventsSince.Equal(h.clock) {
+		t.Errorf("the change's events since %v, want when it was made", r.EventsSince)
+	}
 
 	// A day on it is no run any more.
 	h.clock = h.clock.Add(25 * time.Hour)

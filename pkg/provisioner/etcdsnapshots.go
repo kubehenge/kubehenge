@@ -60,8 +60,8 @@ const (
 	etcdSnapshotJitter = 10 * time.Minute
 	// etcdSnapshotRetry is how soon a snapshot that failed is tried again.
 	etcdSnapshotRetry = 15 * time.Minute
-	// etcdSnapshotTimeout bounds one snapshot: etcd's largest database at a few MB/s.
-	etcdSnapshotTimeout = 20 * time.Minute
+	// EtcdSnapshotTimeout bounds one snapshot: etcd's largest database at a few MB/s.
+	EtcdSnapshotTimeout = 20 * time.Minute
 	// etcdSnapshotWait is how soon a cluster that cannot be snapshotted yet is looked at again.
 	etcdSnapshotWait = time.Minute
 	// etcdTrailerSize is the SHA-256 etcd appends to every snapshot it streams.
@@ -366,7 +366,7 @@ func (s *EtcdSnapshotter) SetupWithManager(mgr ctrl.Manager) error {
 			predicate.AnnotationChangedPredicate{},
 		))).
 		Named("etcd-snapshots").
-		WithOptions(controller.Options{MaxConcurrentReconciles: 1, ReconciliationTimeout: etcdSnapshotTimeout + time.Minute}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 1, ReconciliationTimeout: EtcdSnapshotTimeout + time.Minute}).
 		Complete(s)
 	if err != nil {
 		return fmt.Errorf("setting up the etcd snapshotter: %w", err)
@@ -405,7 +405,7 @@ func (s *EtcdSnapshotter) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if !requested && now.Before(next) {
 		return ctrl.Result{RequeueAfter: next.Sub(now)}, nil
 	}
-	tctx, cancel := context.WithTimeout(ctx, etcdSnapshotTimeout)
+	tctx, cancel := context.WithTimeout(ctx, EtcdSnapshotTimeout)
 	defer cancel()
 	t, err := s.Targets.Open(tctx, cluster, settings.Target, true)
 	var taken EtcdSnapshot

@@ -79,6 +79,8 @@ type runView struct {
 	Template json.RawMessage `json:"template,omitempty"`
 	Snapshot string          `json:"snapshot,omitempty"`
 	Release  string          `json:"release,omitempty"`
+	// EventsSince is where the events of a run that keeps no log of its own begin.
+	EventsSince *time.Time `json:"eventsSince,omitempty"`
 }
 
 // runs answers with the work running or lately finished that the user may see: the appliance's
@@ -317,18 +319,27 @@ func etcdRuns(c *clusterv1.Cluster) []runView {
 			v.State, v.Phase = runRunning, string(st.Phase)
 		}
 		v.Steps = restoreSteps(&st, v.State)
+		v.EventsSince = v.Started
 		list = append(list, v)
 	}
 	snapshot := base
 	snapshot.ID, snapshot.Kind, snapshot.What = "etcd-snapshot/"+clusterKey(c.Namespace, c.Name), runEtcdSnapshot, "Take etcd snapshot"
 	cond := meta.FindStatusCondition(c.Status.Conditions, provisioner.EtcdSnapshotCondition)
-	_, requested := c.Annotations[provisioner.EtcdSnapshotRequestAnnotation]
+	raw, requested := c.Annotations[provisioner.EtcdSnapshotRequestAnnotation]
 	switch {
 	case requested:
 		snapshot.State = runRunning
+		var req provisioner.EtcdSnapshotRequest
+		if json.Unmarshal([]byte(raw), &req) == nil && !req.At.IsZero() {
+			snapshot.Started, snapshot.By = &req.At, req.By
+			snapshot.EventsSince = &req.At
+		}
 	case cond != nil && cond.Status == metav1.ConditionFalse:
 		at := cond.LastTransitionTime.Time
 		snapshot.State, snapshot.Finished, snapshot.Error = runFailed, &at, cond.Message
+		// The attempt that failed began at most a snapshot's time before.
+		from := at.Add(-provisioner.EtcdSnapshotTimeout)
+		snapshot.EventsSince = &from
 	default:
 		last, ok := provisioner.LastEtcdSnapshot(c)
 		if !ok {

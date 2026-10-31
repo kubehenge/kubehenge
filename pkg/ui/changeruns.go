@@ -92,7 +92,7 @@ func (r replaced) step(name string) runStep {
 func changeRun(c *clusterv1.Cluster, machines []clusterv1.Machine, rec changeRecord) runView {
 	v := runView{
 		ID: "change/" + clusterKey(c.Namespace, c.Name), Kind: runChange, Namespace: c.Namespace, Cluster: c.Name,
-		What: "Change cluster", By: rec.By, Started: &rec.At,
+		What: "Change cluster", By: rec.By, Started: &rec.At, EventsSince: &rec.At,
 	}
 	for _, p := range rec.Settings {
 		v.Settings = append(v.Settings, p.Setting)
