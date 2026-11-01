@@ -867,7 +867,7 @@ With `api_audit_log`, the management cluster's API server writes Talos's audit p
 
 - The interface reads the API server pods' logs every minute. It adds each create, change and deletion once, by its audit ID.
 - A GitOps tool's or a script's service account counts as a person.
-- Nodes, the control plane's own users and the service accounts in `kube-*`, `*-system` and `cert-manager` are left out. The interface's account is among them, its changes being in its own record.
+- Nodes, the control plane's own users and the service accounts in the namespaces the module installs are left out. The interface's account is among them, its changes being in its own record.
 - For that it may list pods and read their logs in `kube-system`, and only then.
 
 ### Headlamp in the appliance

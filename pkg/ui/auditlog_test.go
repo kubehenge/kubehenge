@@ -1,6 +1,9 @@
 package ui
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -38,6 +41,8 @@ func TestTheAuditLogReadsTheChangesPeopleMade(t *testing.T) {
 			`,"objectRef":{"resource":"secrets","namespace":"clusters","name":"web"}`),
 		auditLine("a13", "patch", "system:serviceaccount:argocd:argocd-application-controller", "ResponseComplete",
 			`,"objectRef":{"resource":"clusters","namespace":"clusters","name":"db","apiGroup":"cluster.x-k8s.io"}`),
+		auditLine("a14", "patch", "system:serviceaccount:flux-system:kustomize-controller", "ResponseComplete",
+			`,"objectRef":{"resource":"clusters","namespace":"clusters","name":"cache","apiGroup":"cluster.x-k8s.io"}`),
 		auditLine("a7", "patch", "system:node:mgmt-1", "ResponseComplete", `,"objectRef":{"resource":"nodes","name":"mgmt-1"}`),
 		auditLine("a8", "create", "bob", "ResponseComplete",
 			`,"objectRef":{"resource":"selfsubjectaccessreviews","apiGroup":"authorization.k8s.io"}`),
@@ -50,10 +55,10 @@ func TestTheAuditLogReadsTheChangesPeopleMade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 4 {
-		t.Fatalf("entries = %+v, want the four changes that completed", got)
+	if len(got) != 5 {
+		t.Fatalf("entries = %+v, want the five changes that completed", got)
 	}
-	cluster, refused, exec, gitops := got[0], got[1], got[2], got[3]
+	cluster, refused, exec, gitops, flux := got[0], got[1], got[2], got[3], got[4]
 	if cluster.User != "admin" || cluster.What != "changed clusters web" || cluster.Cluster != "clusters/web" ||
 		cluster.Details["address"] != "10.0.0.9" || cluster.Details[auditIDKey] != "a1" || cluster.Details[auditVia] != auditViaAPI {
 		t.Errorf("the Cluster's change = %+v", cluster)
@@ -70,6 +75,36 @@ func TestTheAuditLogReadsTheChangesPeopleMade(t *testing.T) {
 	}
 	if gitops.User != "system:serviceaccount:argocd:argocd-application-controller" || gitops.Cluster != "clusters/db" {
 		t.Errorf("the GitOps change = %+v", gitops)
+	}
+	if flux.User != "system:serviceaccount:flux-system:kustomize-controller" || flux.Cluster != "clusters/cache" {
+		t.Errorf("Flux's change = %+v", flux)
+	}
+}
+
+// Every namespace the management cluster module puts a controller in is among the platform's, so
+// a provider the module gains never shows up in Activity as a person.
+func TestThePlatformNamespacesCoverTheModule(t *testing.T) {
+	t.Parallel()
+	files, err := filepath.Glob("../../management-cluster/*.tf")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("the module's files: %v", err)
+	}
+	namespace := regexp.MustCompile(`\bnamespace\s*=\s*"([a-z0-9-]+)"`)
+	found := 0
+	for _, f := range files {
+		raw, err := os.ReadFile(f) //nolint:gosec // the module's own files
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range namespace.FindAllSubmatch(raw, -1) {
+			found++
+			if !platformNamespaces[string(m[1])] {
+				t.Errorf("%s installs into %s, which Activity would list as a person", filepath.Base(f), m[1])
+			}
+		}
+	}
+	if found < len(platformNamespaces)-1 {
+		t.Errorf("found %d namespaces in the module, fewer than the platform's", found)
 	}
 }
 

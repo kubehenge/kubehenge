@@ -83,17 +83,27 @@ var auditNotChanges = map[string]bool{
 	"/events": true, "events.k8s.io/": true,
 }
 
+// platformNamespaces are the namespaces of the management cluster's controllers: Kubernetes',
+// Kubehenge's (the interface's account among them, its changes being in its record already) and
+// those of the providers the management cluster module installs.
+var platformNamespaces = map[string]bool{
+	"kube-system": true, "kubehenge-system": true, "cert-manager": true, "capi-operator-system": true,
+	"capi-system": true, "proxmox-infrastructure-system": true, "in-cluster-ipam-system": true, "helm-addon-system": true,
+	"kubeadm-bootstrap-system": true, "kubeadm-control-plane-system": true, "rke2-bootstrap-system": true,
+	"rke2-control-plane-system": true, "k3s-bootstrap-system": true, "k3s-control-plane-system": true,
+	"talos-bootstrap-system": true, "talos-control-plane-system": true,
+}
+
 // auditByPeople says whether a user's changes are people's: their own, or a GitOps tool's or a
-// script's through a service account. Nodes, the control plane and the controllers the platform
-// runs in kube-*, *-system and cert-manager are left out. The interface's own service account is
-// among them, its changes being in its record already.
+// script's through a service account. Nodes, the control plane and the platform's controllers are
+// left out.
 func auditByPeople(user string) bool {
 	sa, ok := strings.CutPrefix(user, "system:serviceaccount:")
 	if !ok {
 		return user != "" && !strings.HasPrefix(user, "system:")
 	}
 	ns, _, _ := strings.Cut(sa, ":")
-	return !strings.HasPrefix(ns, "kube-") && !strings.HasSuffix(ns, "-system") && ns != "cert-manager"
+	return !platformNamespaces[ns]
 }
 
 // auditEntry is an audit event as an activity entry, or nil for a line that is none, a stage other
