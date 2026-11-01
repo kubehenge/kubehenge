@@ -15,7 +15,7 @@ Delete every cluster from its page (**Delete**, then type its name), or with kub
 kubectl delete clusters.cluster.x-k8s.io --all --all-namespaces
 ```
 
-Deleting a cluster deletes its VMs and persistent volumes, and takes it out of Rancher where it was registered. Kubehenge's controller then removes its Proxmox VE pool, user, token and volume owner VM ([details](clusters.md#delete)). A cluster is gone when it no longer shows in the list.
+Deleting a cluster deletes its VMs and persistent volumes and takes it out of Rancher where it was registered. Kubehenge's controller then removes its Proxmox VE pool, user, token and volume owner VM ([details](clusters.md#delete)). A cluster is gone when it no longer shows in the list.
 
 Deleting the cluster that runs Rancher takes every cluster registered there out of Rancher first.
 
@@ -23,18 +23,14 @@ Deleting the cluster that runs Rancher takes every cluster registered there out 
 
 ### In the appliance
 
-On the Administration page, **Remove Kubehenge** takes the state passphrase and the word `remove`. It refuses while any cluster exists. It also refuses while a run of the management cluster is going on. Try again once that run has ended. A wrong passphrase stops it before anything is deleted.
-
-#### What it does
-
-It then:
+On the Administration page, **Remove Kubehenge** takes the state passphrase and the word `remove`. It refuses while any cluster exists or a run of the management cluster is going on. A wrong passphrase stops it before anything is deleted. It then:
 
 - deletes the VM templates in the template pool, `kubehenge-templates`.
 - switches automatic upgrades of the management cluster off ([upgrading.md](upgrading.md#automatically-after-kubehenge)). It deletes what the appliance kept for them and the user `kubehenge-upgrader@pve` with its token.
 - destroys the management cluster with OpenTofu, with every Proxmox VE object its module made ([below](#what-the-module-made)).
 - switches the [backups of its etcd](install.md#back-up-the-management-clusters-etcd) off and deletes the access key and talosconfig the appliance kept for them. The snapshots stay in the target.
 
-The page follows the log. The appliance stays, back at its first run with the last settings filled in, ready to set up again. The emptied state is deleted. The next setup chooses a new passphrase. Removal needs the same [privileges](install.md#who-may-set-it-up) on `/` as the setup.
+The page follows the log. The appliance stays, back at its first run with the last settings filled in. The next setup chooses a new passphrase, since the emptied state is deleted. Removal needs the same [privileges](install.md#who-may-set-it-up) on `/` as the setup.
 
 ### With Terraform/OpenTofu
 
@@ -63,7 +59,7 @@ The names below are the defaults. The users, groups and roles start with the man
 
 ## Remove the appliance
 
-Remove the management cluster first. Without the appliance, the management cluster's state is gone. Everything the setup made then has to be found and deleted by hand ([the list](install.md#losing-the-passphrase)).
+Remove the management cluster first. Without the appliance its state is gone. Everything the setup made then has to be found and deleted by hand ([the list](install.md#losing-the-passphrase)).
 
 In the shell of the node the appliance runs on, as root:
 
@@ -82,11 +78,11 @@ On every node where the Kubernetes entry was added (when installing the applianc
 sh /usr/local/sbin/kubehenge-pve-entry --remove
 ```
 
-This takes the line out of Proxmox VE's page template. It removes the entry's script, its setting, the apt hook and the installed copy itself. The node's interface returns to its packaged state. Reload Proxmox VE's interface in the browser afterwards.
+This takes the line out of Proxmox VE's page template and removes the entry's script, its setting, the apt hook and the installed copy itself. Reload Proxmox VE's interface in the browser afterwards.
 
 ## What stays on Proxmox VE
 
-After these steps, Kubehenge leaves behind only what it did not create for itself:
+Kubehenge leaves behind only what it did not create for itself:
 
 - **The Debian container template** the installer downloaded to the `local` storage. `pveam list local` shows it, `pveam remove` deletes it.
 - **Backups of the appliance** in your backup storages. They hold the management cluster's state, encrypted with the state passphrase.

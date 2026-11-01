@@ -1,7 +1,7 @@
 <!-- markdownlint-disable-file MD041 -- the pull request's title is its top-level heading -->
 ## What and why
 
-<!-- What this changes, and the problem it solves. Link the issue it closes. -->
+<!-- What this changes and the problem it solves. Link the issue it closes. -->
 
 ## How it was tested
 
@@ -9,5 +9,4 @@
 
 - [ ] `make test` passes
 - [ ] Documentation updated where behaviour changed
-- [ ] The rules in CONTRIBUTING.md hold
-- [ ] Comments say why, and no secrets are committed
+- [ ] CONTRIBUTING.md's rules hold, comments say why, no secrets committed
