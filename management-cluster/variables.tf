@@ -409,6 +409,13 @@ variable "headlamp_actions" {
   nullable    = false
 }
 
+variable "api_audit_log" {
+  description = "Have the management cluster's API server log each change a person makes, such as with kubectl, so the interface's activity page shows it with its user. The API server then logs only these changes, to its own output instead of a file on the node. The interface reads them as the API server's pod log, so it may list the pods in kube-system and read their logs."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "controller_image" {
   description = "Image of Kubehenge's controller by digest, as repository@sha256:<digest>, instead of the one the chart was released with."
   type        = string

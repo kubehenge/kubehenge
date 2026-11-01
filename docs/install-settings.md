@@ -120,6 +120,16 @@ A node that never joins its cluster says why in its boot log ([troubleshooting.m
   - In a VM cloned from a template of your own, it reaches whatever that VM's agent allows.
 - **Switching it off,** by unticking **Nodes' boot logs** in the setup or setting `node_boot_logs = false`, takes the privilege away. The interface and `kubectl` then offer Talos nodes' boot logs alone.
 
+## kubectl changes
+
+The interface records what people do through it. A change made with kubectl or through the management cluster's API passes it by. With **kubectl changes** on, the management cluster's API server logs each such change, and Activity lists it with its user. The setting is off by default.
+
+- **What the API server logs:** each create, change and deletion a person makes, with its user, address and object, never its content.
+  - Reads are left out, and so are changes by controllers, nodes and the interface itself.
+  - The log goes to the API server's output. Talos's audit log file on the nodes stops.
+- **What it grants:** the interface may list the pods in `kube-system` and read their logs, to read the API server's.
+- **Switching it on or off,** by the setting or `api_audit_log`, restarts the management cluster's API servers one at a time. Changes logged before stay on the Activity page.
+
 ## Headlamp sign-in
 
 Without it, everyone signs in to each cluster in the shared Headlamp with a token or an identity provider of their own. With it, those who hold `Sys.Modify` on a cluster's pool open it signed in as cluster-admin. They may download its admin kubeconfig anyway. Nobody else gets more than before. It needs no Proxmox VE privilege beyond the setup's own.

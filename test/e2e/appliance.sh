@@ -17,7 +17,7 @@
 # Ed25519 key in KUBEHENGE_E2E_RELEASE_KEY, as `kubehenge release keygen` wrote it, which signs the
 # index the test serves the appliance's updater; <settings> is a JSON file of the management
 # cluster's settings as the interface's setup sends them (pkg/appliance/settings.go), with
-# offerHARules and headlampActions on and the default workload pool. The appliance
+# offerHARules, headlampActions and apiAuditLog on and the default workload pool. The appliance
 # is container KUBEHENGE_E2E_APPLIANCE_ID at KUBEHENGE_E2E_APPLIANCE_ADDRESS (with its prefix length)
 # on KUBEHENGE_E2E_BRIDGE (default vmbr0), with the gateway KUBEHENGE_E2E_GATEWAY and the name
 # servers KUBEHENGE_E2E_DNS; its disk goes on KUBEHENGE_E2E_STORAGE when that is set. The S3 store
@@ -489,6 +489,35 @@ body_is "(.offered | not) and any(.rules[]; .rule == \"${ha_rule}\" and .comment
     "the administrator, who holds Sys.Audit on /, does not read the HA rule in full from Proxmox VE"
 pveum acl delete /pool/kubehenge --users "${user}" --roles PVEVMAdmin
 remove_ha_rule
+
+step "a change made with the management cluster's admin kubeconfig, on Activity with its user"
+asked=$(jq -nc --arg p "${passphrase}" '{name: "kubeconfig", passphrase: $p}')
+expect 200 "the management cluster's admin kubeconfig" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup/credential" "${asked}"
+cp "${work}/body" "${work}/management.kubeconfig"
+kubeconfig_field() {
+    sed -n "s/^ *$1: *//p" "${work}/management.kubeconfig" | head -n 1
+}
+kubeconfig_field certificate-authority-data | base64 -d > "${work}/management-ca.crt"
+kubeconfig_field client-certificate-data | base64 -d > "${work}/management.crt"
+kubeconfig_field client-key-data | base64 -d > "${work}/management.key"
+management_api=$(kubeconfig_field server)
+created=$(curl -sS --cacert "${work}/management-ca.crt" --cert "${work}/management.crt" --key "${work}/management.key" \
+    -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+    -d '{"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "kubehenge-e2e-audit"}}' \
+    "${management_api}/api/v1/namespaces/default/configmaps")
+[ "${created}" = 201 ] || fail "creating a ConfigMap with the admin kubeconfig: ${created} instead of 201"
+audited() {
+    request "${work}/admin.jar" "${ui}/api/activity?days=1"
+    jq -e '.entries | any(.what == "created configmaps kubehenge-e2e-audit" and .details.via == "kubectl or the API"
+        and .details.namespace == "default" and .user != "")' "${work}/body" > /dev/null
+}
+# The interface reads the API server's log every minute.
+until_true 300 "the ConfigMap's creation on Activity" audited
+handed="handed out the management cluster's credential"
+# shellcheck disable=SC2016 # jq's variables, not the shell's.
+body_has "the credential's download is not on Activity with the administrator" --arg u "${admin}" --arg w "${handed}" \
+    '.entries | any(.what == $w and .user == $u)'
+expect 403 "the appliance's activity for a user without Sys.Audit on /" request "${work}/user.jar" "${ui}/api/activity"
 
 step "the shared Headlamp behind the interface's sign-in"
 # Its service starts on the first request.

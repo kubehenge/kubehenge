@@ -87,6 +87,7 @@ export interface SetupForm {
   creatorBuilds: boolean;
   clusterSysAudit: boolean;
   nodeBootLogs: boolean;
+  apiAuditLog: boolean;
   moreNamespaces: boolean;
   // Separated by commas or lines.
   extraNamespaces: string;
@@ -221,6 +222,9 @@ export function settings(f: SetupForm): ManagementSettings {
   if (!f.nodeBootLogs) {
     s.nodeBootLogs = false;
   }
+  if (f.apiAuditLog) {
+    s.apiAuditLog = true;
+  }
   if (f.moreNamespaces && list(f.extraNamespaces).length > 0) {
     s.extraClusterNamespaces = list(f.extraNamespaces);
   }
@@ -306,6 +310,7 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     ...refreshFields(saved.templateRefresh),
     clusterSysAudit: saved.clusterSysAudit !== false,
     nodeBootLogs: saved.nodeBootLogs !== false,
+    apiAuditLog: saved.apiAuditLog === true,
     moreNamespaces: (saved.extraClusterNamespaces ?? []).length > 0,
     extraNamespaces: (saved.extraClusterNamespaces ?? []).join(", "),
     headlampSignIn: saved.headlampSignIn === true,
@@ -731,6 +736,7 @@ function optInRows(s: ManagementSettings): [string, string][] {
     ["Newest CSI release", onOff(s.clusterDatastoreAllocate === true)],
     ["HA group labels", onOff(s.clusterSysAudit !== false)],
     ["Nodes' boot logs", onOff(s.nodeBootLogs !== false)],
+    ["kubectl changes", onOff(s.apiAuditLog === true)],
   ];
 }
 
@@ -1357,6 +1363,31 @@ function BootLogsChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element 
       </Info>
       <p className="hint" id={hint}>
         Grants VM.GuestAgent.FileRead on the clusters&apos; pool.
+      </p>
+    </fieldset>
+  );
+}
+
+function AuditLogChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element {
+  const hint = useId();
+  return (
+    <fieldset className="group">
+      <legend>kubectl changes</legend>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={form.apiAuditLog}
+          aria-describedby={hint}
+          onChange={(e) => set("apiAuditLog", e.target.checked)}
+        />{" "}
+        List with their user
+      </label>
+      <Info about="kubectl changes">
+        The management cluster&apos;s API server logs each change a person makes to its output. Its log file on the
+        nodes stops.
+      </Info>
+      <p className="hint" id={hint}>
+        The interface reads pod logs in kube-system.
       </p>
     </fieldset>
   );
@@ -2044,6 +2075,7 @@ function setupFields({
         <RefreshChoice form={effective} set={set} shown={shown} />
         <SysAuditChoice form={form} set={set} />
         <BootLogsChoice form={form} set={set} />
+        <AuditLogChoice form={form} set={set} />
         <NamespacesChoice form={form} set={set} shown={shown} />
       </>
     ),

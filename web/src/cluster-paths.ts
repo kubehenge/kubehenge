@@ -35,6 +35,7 @@ export const views = [
   { path: "machines", label: "Machines" },
   { path: "backups", label: "Backups" },
   { path: "options", label: "Options" },
+  { path: "activity", label: "Activity" },
 ] as const;
 
 export type View = (typeof views)[number]["path"];

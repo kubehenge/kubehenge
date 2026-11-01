@@ -325,6 +325,7 @@ The one exception is automatic upgrades of the management cluster, off by defaul
 | Let creators request builds | Off by default, recommended. When on, anyone with `VM.Allocate` on the workload pool may ask the create wizard for a missing RKE2, k3s or kubeadm template of their node OS. The build runs with the refresh's token, never theirs. |
 | HA group labels | On by default. Each cluster's nodes are labelled with Proxmox VE's HA groups unless the cluster switches them off. Its token then reads the Proxmox VE cluster's configuration. Untick it to give no cluster that read ([details](install-settings.md#ha-group-labels)). |
 | Nodes' boot logs | On by default. The controller reads kubeadm, RKE2 and k3s nodes' boot logs through their guest agents (files only). A node that never joins then shows why. Untick it to take that privilege away ([details](install-settings.md#nodes-boot-logs)). |
+| kubectl changes | Off by default. When on, Activity also lists each change people make to the management cluster with kubectl or its API, with their user ([details](install-settings.md#kubectl-changes)). |
 | Cluster namespaces | Off by default. The interface creates and manages clusters in `clusters` only. When on, cluster creators choose among `clusters` and the namespaces named here, separated by commas, such as one per team ([clusters.md](clusters.md#more-namespaces-for-clusters)). A namespace that does not exist yet is created. One taken off the list keeps its clusters. |
 
 #### Services
@@ -411,6 +412,19 @@ In the management cluster it installs:
 - the `kubehenge` chart, with Kubehenge's ClusterClasses and its controller.
 
 The kubeadm, RKE2, k3s and Talos controllers run only while a cluster uses their distribution ([architecture.md](architecture.md#management-cluster)).
+
+### Activity
+
+**Administration, Activity** lists who did what through the interface, newest first, over the last day to 90 days. That covers sign-ins, refused sign-ins and every change, with the cluster it touched. An action that ended in an error is marked failed. Below it are the management cluster's events of the last day. It needs `Sys.Audit` on `/`.
+
+Each cluster's **Activity** view lists what was done to that cluster, for everyone who sees it ([clusters.md](clusters.md#the-cluster-page)).
+
+The appliance keeps the record in its own folder for 90 days. Changes made with kubectl or through the management cluster's API show only when **kubectl changes** is on ([details](install-settings.md#kubectl-changes)).
+
+| Command | Does |
+| --- | --- |
+| `kubehenge appliance activity` | lists the appliance's activity of the last 7 days. `--days` goes back up to 90 |
+| `kubehenge appliance activity --cluster namespace/name` | lists one cluster's |
 
 ### Back up the appliance
 
@@ -592,6 +606,7 @@ tofu output -raw talosconfig > talosconfig
 | `etcd_restore` | `false` | Have the controller restore clusters' etcd itself through the VMs' guest agents. It uses a token holding `VM.Audit` and `VM.GuestAgent.Unrestricted` on the workload pool that only a short-lived Job per step holds ([details](install-settings.md#etcd-restores)). Without it, the interface shows the steps to restore by hand. |
 | `headlamp_sign_in` | `false` | Have the appliance's shared Headlamp sign those who may download a cluster's admin kubeconfig in as cluster-admin. It does so through two ServiceAccounts the controller keeps in every cluster of the interface's namespaces ([details](install-settings.md#headlamp-sign-in)). Without the appliance it does nothing but keep those accounts. |
 | `headlamp_actions` | `false` | Have the appliance's shared Headlamp offer the Helm app catalog and the Prometheus charts it ships with. They act with each user's own credentials in the cluster ([details](install-settings.md#headlamp-actions)). Without the appliance it does nothing. |
+| `api_audit_log` | `false` | Have the management cluster's API server log each change people make, which the interface's Activity page then lists with its user ([details](install-settings.md#kubectl-changes)). |
 
 #### `template_refresh` fields
 

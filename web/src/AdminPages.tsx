@@ -1,5 +1,6 @@
 import type { JSX } from "react";
 
+import { ApplianceActivity } from "./Activity";
 import type { AdminView } from "./admin-views";
 import { AppliancePage } from "./AppliancePage";
 import { SharedDNS01 } from "./Certificates";
@@ -38,6 +39,13 @@ export function AdminPage({
       return (
         <section className="panel">
           <Templates />
+        </section>
+      );
+    }
+    case "activity": {
+      return (
+        <section className="panel">
+          <ApplianceActivity />
         </section>
       );
     }

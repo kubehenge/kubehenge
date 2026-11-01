@@ -1,5 +1,6 @@
 import { clearPollCaches, keepCache } from "./poll-cache";
 import type {
+  Activity,
   BackupRun,
   BootLog,
   Bridge,
@@ -334,6 +335,9 @@ export interface Api {
   runEvents: (ns: string, name: string, since: string) => Promise<HealthEvent[]>;
   fleetHealth: () => Promise<FleetHealth[]>;
   runs: () => Promise<RunInfo[]>;
+  /** activity is the appliance's, for those with Sys.Audit on /, over the last days. */
+  activity: (days: number) => Promise<Activity>;
+  clusterActivity: (ns: string, name: string, days: number) => Promise<Activity>;
   podLogs: (cluster: ClusterRef, pod: { namespace: string; name: string }, container: string) => Promise<PodLogs>;
   kubeconfig: (ns: string, name: string) => Promise<Blob>;
   /** talosconfig is a Talos cluster's, which signs in to its nodes' Talos API. */
@@ -459,6 +463,8 @@ export const api: Api = {
   runEvents: (ns, name, since) => request("GET", `${clusterPath(ns, name)}/events?since=${encodeURIComponent(since)}`),
   fleetHealth: () => request("GET", "/api/fleet/health"),
   runs: () => request("GET", "/api/runs"),
+  activity: (days) => request("GET", `/api/activity?days=${days}`),
+  clusterActivity: (ns, name, days) => request("GET", `${clusterPath(ns, name)}/activity?days=${days}`),
   podLogs: (cluster, pod, container) =>
     request(
       "GET",
