@@ -87,6 +87,10 @@ func newReleaseCommand() *cobra.Command {
 // pinsTimeout bounds pinning, a few hundred small downloads.
 const pinsTimeout = 30 * time.Minute
 
+// pinsSources are where pinning reads releases: GitHub's API, its release downloads and its raw
+// files. Tests point them at a server of their own.
+var pinsSources = struct{ api, github, raw string }{"https://api.github.com", "https://github.com", "https://raw.githubusercontent.com"}
+
 func newPinsCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "pins <releasepins.txt>",
@@ -107,8 +111,8 @@ GH_TOKEN set, it reads GitHub's API at a higher rate limit.`,
 			}
 			client := &http.Client{Timeout: time.Minute}
 			pinner := &provisioner.ReleasePinner{
-				HTTP: client, API: "https://api.github.com", Token: os.Getenv("GH_TOKEN"),
-				Checksums: &provisioner.ReleaseChecksums{HTTP: client, GitHub: "https://github.com", Raw: "https://raw.githubusercontent.com"},
+				HTTP: client, API: pinsSources.api, Token: os.Getenv("GH_TOKEN"),
+				Checksums: &provisioner.ReleaseChecksums{HTTP: client, GitHub: pinsSources.github, Raw: pinsSources.raw},
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), pinsTimeout)
 			defer cancel()

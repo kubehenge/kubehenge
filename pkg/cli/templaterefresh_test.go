@@ -337,6 +337,49 @@ func TestARefusedRefreshRecordsAnEvent(t *testing.T) {
 	}
 }
 
+// A run's end is its state and time, and a failure also its error and a Warning event.
+func TestARefreshRecordsHowItEnded(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		runErr error
+		state  string
+		events int
+	}{
+		{name: "succeeded", state: "succeeded"},
+		{name: "failed", runErr: errors.New("the build VM never answered"), state: "failed", events: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			status, kube, _ := refreshStatusIn(t, &corev1.ConfigMap{Namespace: refreshNamespace, Name: provisioner.TemplateRefreshName, Data: map[string]string{
+				provisioner.RefreshState: "running", provisioner.RefreshError: "", provisioner.RefreshTrigger: "schedule",
+			}})
+			status.finished(t.Context(), "schedule", tc.runErr)
+			data := statusData(t, kube)
+			wantErr := ""
+			if tc.runErr != nil {
+				wantErr = tc.runErr.Error()
+			}
+			if data[provisioner.RefreshState] != tc.state || data[provisioner.RefreshError] != wantErr {
+				t.Errorf("the status is %v; want state %q and error %q", data, tc.state, wantErr)
+			}
+			if _, err := time.Parse(time.RFC3339, data[provisioner.RefreshFinished]); err != nil {
+				t.Errorf("the finish time %q: %v", data[provisioner.RefreshFinished], err)
+			}
+			var events corev1.EventList
+			if err := kube.List(t.Context(), &events, client.InNamespace(refreshNamespace)); err != nil {
+				t.Fatal(err)
+			}
+			if len(events.Items) != tc.events {
+				t.Fatalf("%d events, want %d: %+v", len(events.Items), tc.events, events.Items)
+			}
+			if tc.events == 1 && !strings.Contains(events.Items[0].Message, "template build (schedule) failed: the build VM never answered") {
+				t.Errorf("event %+v", events.Items[0])
+			}
+		})
+	}
+}
+
 // The status is for showing. A run whose status cannot be written goes on and says so in its log.
 func TestAStatusThatCannotBeWrittenIsLogged(t *testing.T) {
 	t.Parallel()
