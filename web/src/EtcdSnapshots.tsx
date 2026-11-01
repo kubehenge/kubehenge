@@ -69,7 +69,7 @@ export const uploadsItself = (distribution: string): boolean => distribution ===
 /** uploadHint names what the distribution's own upload grants: the target's key, readable in the cluster. */
 export const uploadHint = "Cluster admins can read the cluster's own access key";
 
-/** etcdSnapshotsOf reads a cluster's etcdSnapshots variable; unset, snapshots are off. */
+/** etcdSnapshotsOf reads a cluster's etcdSnapshots variable. Unset, snapshots are off. */
 export function etcdSnapshotsOf(v: unknown): EtcdSnapshotsValue {
   const r = record(v);
   const out: EtcdSnapshotsValue = { enabled: r["enabled"] === true };
@@ -98,7 +98,7 @@ export interface EtcdSnapshotFields {
   upload: boolean;
 }
 
-/** etcdFieldsOf are the fields of a cluster's settings; what it leaves unset is the chart's default. */
+/** etcdFieldsOf are the fields of a cluster's settings. What it leaves unset is the chart's default. */
 export function etcdFieldsOf(v: EtcdSnapshotsValue): EtcdSnapshotFields {
   return {
     target: v.target ?? "",

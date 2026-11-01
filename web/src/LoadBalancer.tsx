@@ -33,7 +33,7 @@ export function loadBalancerOf(v: unknown): LoadBalancer {
   return { implementation: text(r["implementation"]) === "kube-vip" ? "kube-vip" : "metallb", addresses };
 }
 
-/** loadBalancerVariable is the variable a choice sets; undefined for none, which leaves it out. */
+/** loadBalancerVariable is the variable a choice sets. Undefined for none, which leaves it out. */
 export const loadBalancerVariable = (lb: LoadBalancer): Record<string, unknown> | undefined =>
   lb.implementation === "" ? undefined : { enabled: true, implementation: lb.implementation, addresses: lb.addresses };
 
@@ -69,7 +69,7 @@ export function networkOf(c: Cluster): NodesNetwork {
 }
 
 // holdingReserved is the first entry holding the network's own or its broadcast address, which
-// hosts on the network never answer for; a /31 or /32 has neither.
+// hosts on the network never answer for. A /31 or /32 has neither.
 function holdingReserved(entries: string[], network: NodesNetwork): string | undefined {
   const g = toInt(network.gateway);
   if (g === undefined || network.prefix < 1 || network.prefix >= pointToPoint) {

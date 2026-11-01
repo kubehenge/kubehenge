@@ -54,7 +54,7 @@ func checkControlPlaneSize(old, cluster *clusterv1.Cluster, class *clusterv1.Clu
 
 // controlPlaneFit is what the class's sizing guide asks of the cluster's control planes, and what
 // they have, with the cluster's number of workers. A class without a guide asks nothing. The guides
-// size servers whose workloads run on workers; without workers the control planes run them too
+// size servers whose workloads run on workers. Without workers the control planes run them too
 // (TaintReconciler), so they need the class's least worker on top.
 func controlPlaneFit(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) (controlPlaneSize, controlPlaneSize, error) {
 	var need, have controlPlaneSize

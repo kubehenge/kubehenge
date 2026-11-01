@@ -9,7 +9,7 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
-// Certificates being renewed are under way; ones that are not are a warning that says how.
+// Certificates being renewed are under way. Ones that are not are a warning that says how.
 func TestHealthSaysCertificatesExpire(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -31,7 +31,7 @@ func TestHealthSaysCertificatesExpire(t *testing.T) {
 	}
 }
 
-// A VM paused by a disk error and a storage that is full are errors; a VM paused by hand and a
+// A VM paused by a disk error and a storage that is full are errors. A VM paused by hand and a
 // storage nearly full are warnings.
 func TestHealthSaysVMsAndStorage(t *testing.T) {
 	t.Parallel()

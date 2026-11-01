@@ -35,7 +35,7 @@ func (almaLinux) Releases() []Release {
 }
 
 // Image is the GenericCloud image for x86-64-v2, which AlmaLinux 10 still builds so that it runs on
-// Proxmox VE's default CPU type; its packages are those of the node image the bake composes.
+// Proxmox VE's default CPU type. Its packages are those of the node image the bake composes.
 func (almaLinux) Image(ctx context.Context, s *Sources, r Release) (Resolved, error) {
 	dir := "https://repo.almalinux.org/almalinux/10/cloud/x86_64_v2/images"
 	file := fmt.Sprintf("AlmaLinux-10-GenericCloud-%s.x86_64_v2.qcow2", r.Build)
@@ -48,7 +48,7 @@ const AlmaLinuxEPELAltArchKeyFingerprint = "68DD137B7690F4735197C4B1B620C02335D4
 
 var almaLinux10EL = &elFamily{
 	distro: "almalinux10", releasever: "10", repos: []string{"baseos", "appstream"}, reposPackage: "almalinux-repos",
-	// EPEL's own containerd needs x86-64-v3; AlmaLinux rebuilds it for v2, signed with a key of its own.
+	// EPEL's own containerd needs x86-64-v3. AlmaLinux rebuilds it for v2, signed with a key of its own.
 	containerd: containerdRepository("AlmaLinux EPEL 10 for x86-64-v2",
 		"https://epel.repo.almalinux.org/$releasever${releasever_minor:+z}/x86_64_v2/",
 		&RepositoryKey{

@@ -346,7 +346,7 @@ func TestImageModeRKE2NodesLetContainersInstallCNIPlugins(t *testing.T) {
 }
 
 // The Tigera operator runs confined and reads the MTU calico-node writes into /var/lib/calico on
-// the host; every family's node labels it for containers to read before Calico writes there.
+// the host. Every family's node labels it for containers to read before Calico writes there.
 func TestNodesLetTheTigeraOperatorReadCalicosMTU(t *testing.T) {
 	t.Parallel()
 	cil, err := recipeFiles.ReadFile("node/kubehenge-calico.cil")

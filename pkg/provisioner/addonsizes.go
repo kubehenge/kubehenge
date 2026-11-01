@@ -34,7 +34,7 @@ const NodeMemoryAnnotation = "kubehenge.dev/node-memory"
 const AddonCPUAnnotation = "kubehenge.dev/addon-cpu"
 
 // NodeCPUAnnotation on a ClusterClass is the CPU, in millicores, a node of one of its clusters
-// requests besides the add-ons' pods, by kind: controlPlane, without workers; worker. It is what the
+// requests besides the add-ons' pods, by kind: controlPlane (without workers) or worker. It is what the
 // kubelet keeps back and what the pods of the distribution, its CNI and Kubehenge's own ask for. A
 // kind it leaves out counts as the least its machines may have.
 const NodeCPUAnnotation = "kubehenge.dev/node-cpu"
@@ -129,8 +129,8 @@ func (r addonRoom) short() int { return r.Need - r.Have }
 func (r addonRoom) controlPlaneShort() int { return r.ControlPlaneNeed - r.ControlPlaneHave }
 
 // checkAddonRoom refuses a cluster whose workers, beyond what each takes itself, have less memory
-// than its add-ons' pods use, or less CPU than they request; without workers, its control planes,
-// beyond what each takes itself with the add-ons. So a node needs its distribution's least or that,
+// than its add-ons' pods use, or less CPU than they request. Without workers, the same holds for its
+// control planes, beyond what each takes itself with the add-ons. So a node needs its distribution's least or that,
 // whichever is more. With workers, each control plane of a cluster with add-ons needs the memory it
 // uses itself with them. Updating a cluster that was already short is refused only when the update
 // leaves it shorter.
@@ -231,7 +231,7 @@ func addonRoomOf(r *addonResource, cluster *clusterv1.Cluster, class *clusterv1.
 	if room.Base == 0 {
 		room.Base = r.of(classMinimumSize(class, "workerMachine"))
 	}
-	// An autoscaled pool counts with its least workers, the room the add-ons always have; the control
+	// An autoscaled pool counts with its least workers, the room the add-ons always have. The control
 	// planes stay tainted while any pool is autoscaled (TaintReconciler), so the add-ons never move
 	// there.
 	workers, most := int32(0), int32(0)

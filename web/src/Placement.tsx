@@ -19,7 +19,7 @@ export interface Place {
 
 export const anyNode: Place = { placement: "any", haRule: "", nodes: [] };
 
-/** placeOf reads a cluster's allowed nodes as a placement; which rule they came from is not kept. */
+/** placeOf reads a cluster's allowed nodes as a placement. Which rule they came from is not kept. */
 export const placeOf = (allowed: string[] | undefined): Place =>
   allowed === undefined || allowed.length === 0 ? anyNode : { placement: "nodes", haRule: "", nodes: allowed };
 
@@ -74,7 +74,7 @@ export function useHARules(): HARulesRead {
 const ruleLabel = (r: HARule): string =>
   `${r.rule}${filled(r.comment) ? ` (${r.comment})` : ""}: ${r.allowed.join(", ")}${r.strict === true ? ", strict" : ""}`;
 
-// rulesHint says why no HA rule can be chosen; a read failure's message sits behind Detail.
+// rulesHint says why no HA rule can be chosen. A read failure's message sits behind Detail.
 function rulesHint({ haRules, haRulesError }: HARulesRead): JSX.Element | undefined {
   if (filled(haRulesError)) {
     return (
@@ -245,7 +245,7 @@ export function useHAOffered(className: string, storage: string | undefined): bo
           ),
         );
       } catch {
-        // Without the classes or storages the option is not shown; the cluster keeps its setting.
+        // Without the classes or storages the option is not shown. The cluster keeps its setting.
         setOffered(false);
       }
     }
@@ -254,7 +254,7 @@ export function useHAOffered(className: string, storage: string | undefined): bo
   return offered;
 }
 
-/** haText describes a cluster's Proxmox VE HA setting; unset means it takes part. */
+/** haText describes a cluster's Proxmox VE HA setting. Unset means it takes part. */
 export const haText = (on: boolean): string => (on ? "On" : "Off");
 
 /**
@@ -386,7 +386,7 @@ export function useHAGroupsOffered(c: Cluster): boolean {
         const classes = await api.classes();
         setOffered(offersHAGroups(classes.find((x) => x.name === className)));
       } catch {
-        // Without the classes the option is not shown; the cluster keeps its setting.
+        // Without the classes the option is not shown. The cluster keeps its setting.
         setOffered(false);
       }
     }

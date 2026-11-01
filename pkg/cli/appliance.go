@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	// applianceRequestTimeout bounds one request to the interface; setting the backups up writes
+	// applianceRequestTimeout bounds one request to the interface. Setting the backups up writes
 	// to the target before it answers.
 	applianceRequestTimeout = time.Minute
 	// maxApplianceAnswer bounds what is read of one answer.
@@ -65,40 +65,49 @@ func newApplianceCommand() *cobra.Command {
 		Short: "Look after the appliance from its shell, as its Administration pages do",
 		Long: `Look after the appliance from its shell, as its Administration pages do.
 
-Run in the appliance. Each command but health signs in to the interface as a Proxmox VE user, with
-the password from --password-file or KUBEHENGE_PASSWORD, and is held to the same privileges and
-checks as the interface.`,
+Run it in the appliance. Every command except health signs in to the interface as --user, with the
+password from --password-file or KUBEHENGE_PASSWORD. The user's privileges and the interface's
+checks apply as on its pages.`,
 	}
 	f := cmd.PersistentFlags()
-	f.StringVar(&o.check.CertFile, "cert", "/etc/kubehenge/tls.crt", "the certificate the interface serves, the only one trusted")
+	f.StringVar(&o.check.CertFile, "cert", "/etc/kubehenge/tls.crt", "certificate the interface must present")
 	f.StringVar(&o.check.Address, "address", "127.0.0.1:443", "where the interface listens")
-	f.StringVar(&o.user, "user", os.Getenv("KUBEHENGE_USER"), "Proxmox VE user to sign in as, such as root@pam (env KUBEHENGE_USER)")
-	f.StringVar(&o.passwordFile, "password-file", "", "file holding the user's password; default the env KUBEHENGE_PASSWORD")
-	f.StringVar(&o.totp, "totp", "", "a TOTP code, for an account with a second factor")
-	f.BoolVar(&o.json, "json", false, "print the interface's answer as JSON")
 	cmd.AddCommand(o.healthCommand(), o.upgradesCommand(), o.upgradeCommand(), o.etcdBackupsCommand())
 	return cmd
+}
+
+// signInFlags adds the flags of a command that signs in to the interface.
+func (o *applianceOptions) signInFlags(cmd *cobra.Command) {
+	f := cmd.Flags()
+	f.StringVar(&o.user, "user", os.Getenv("KUBEHENGE_USER"), "Proxmox VE user to sign in as, such as root@pam (env KUBEHENGE_USER)")
+	f.StringVar(&o.passwordFile, "password-file", "", "file holding the user's password, else KUBEHENGE_PASSWORD holds it")
+	f.StringVar(&o.totp, "totp", "", "a TOTP code, for an account with a second factor")
+}
+
+// jsonFlag adds --json to a command that prints what the interface answers.
+func (o *applianceOptions) jsonFlag(cmd *cobra.Command) {
+	cmd.Flags().BoolVar(&o.json, "json", false, "print the interface's answer as JSON")
 }
 
 func (o *applianceOptions) healthCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "health",
-		Short: "Check that the interface serves and keeps running; the upgrades' own check",
-		Args:  cobra.NoArgs,
+		Short: "Check that the interface answers and stays up, as after an upgrade",
+		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.check.Healthy(cmd.Context())
 		},
 	}
 	cmd.Flags().DurationVar(&o.check.Wait, "wait", healthWait, "how long the interface has to answer")
-	cmd.Flags().DurationVar(&o.check.Settle, "settle", healthSettle, "how long it then has to keep running")
+	cmd.Flags().DurationVar(&o.check.Settle, "settle", healthSettle, "how long the interface must stay up after it answers")
 	return cmd
 }
 
 func (o *applianceOptions) upgradesCommand() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "upgrades",
 		Short: "Show the installed release, the newer ones and how the last upgrade went",
-		Args:  cobra.NoArgs,
+		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
 				var v struct {
@@ -123,6 +132,9 @@ func (o *applianceOptions) upgradesCommand() *cobra.Command {
 			})
 		},
 	}
+	o.signInFlags(cmd)
+	o.jsonFlag(cmd)
+	return cmd
 }
 
 // upgradeLines says how the updater's last upgrade went.
@@ -150,13 +162,13 @@ func upgradeLines(st *appliance.UpdateStatus) [][2]string {
 }
 
 func (o *applianceOptions) upgradeCommand() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "upgrade <version>",
-		Short: "Have the appliance's updater upgrade it to a newer signed release",
-		Long: `Have the appliance's updater upgrade it to a newer signed release. The interface restarts on
-the new release, and the updater puts the old one back should it not serve; "kubehenge appliance
-upgrades" then tells how it went.`,
-		Args: cobra.ExactArgs(1),
+		Short: "Upgrade the appliance to a newer signed release",
+		Long: `Upgrade the appliance to a newer signed release. The interface restarts on the new release.
+If it does not come up, the updater puts the old release back. "kubehenge appliance upgrades" shows
+how the upgrade went.`,
+		Args: argsSay(cobra.ExactArgs(1), "give the version to upgrade to"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
 				if _, err := s.call(ctx, http.MethodPost, "/api/appliance/upgrades", map[string]string{"version": args[0]}, nil); err != nil {
@@ -166,13 +178,15 @@ upgrades" then tells how it went.`,
 			})
 		},
 	}
+	o.signInFlags(cmd)
+	return cmd
 }
 
 func (o *applianceOptions) etcdBackupsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "etcd-backups",
-		Short: "Show the backups of the management cluster's etcd",
-		Args:  cobra.NoArgs,
+		Short: "Show how the management cluster's etcd is backed up",
+		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
 				var v appliance.EtcdBackupStatus
@@ -183,6 +197,8 @@ func (o *applianceOptions) etcdBackupsCommand() *cobra.Command {
 			})
 		},
 	}
+	o.signInFlags(cmd)
+	o.jsonFlag(cmd)
 	cmd.AddCommand(o.setUpBackupsCommand(), o.backupsOffCommand(), o.snapshotsCommand(), o.takeSnapshotCommand(), o.restoreEtcdCommand())
 	return cmd
 }
@@ -224,9 +240,9 @@ func (o *applianceOptions) setUpBackupsCommand() *cobra.Command {
 		Use:   "set-up",
 		Short: "Back the management cluster's etcd up to a backup target on a schedule",
 		Long: `Back the management cluster's etcd up to a backup target on a schedule. The state passphrase
-comes from --passphrase-file or KUBEHENGE_PASSPHRASE, the target's secret access key from
---secret-access-key-file or KUBEHENGE_SECRET_ACCESS_KEY; without an access key the stored one is kept.`,
-		Args: cobra.NoArgs,
+comes from --passphrase-file or KUBEHENGE_PASSPHRASE. The target's secret access key comes from
+--secret-access-key-file or KUBEHENGE_SECRET_ACCESS_KEY. Without one, the stored key is kept.`,
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var err error
 			if req.Passphrase, err = secretFrom(passphraseFile, "KUBEHENGE_PASSPHRASE"); err != nil {
@@ -248,12 +264,16 @@ comes from --passphrase-file or KUBEHENGE_PASSPHRASE, the target's secret access
 	f.StringVar(&req.Target, "target", "", "the backup target, by its name in the management cluster's settings")
 	f.IntVar(&req.EveryHours, "every-hours", appliance.DefaultEtcdBackupHours, "hours between snapshots")
 	f.IntVar(&req.Keep, "keep", appliance.DefaultEtcdBackupKeep, "how many snapshots to keep")
-	f.StringVar(&req.AccessKeyID, "access-key-id", "", "the target's access key ID; empty keeps the stored key")
-	f.StringVar(&secretFile, "secret-access-key-file", "", "file holding the secret access key; default the env KUBEHENGE_SECRET_ACCESS_KEY")
-	f.StringVar(&passphraseFile, "passphrase-file", "", "file holding the state passphrase; default the env KUBEHENGE_PASSPHRASE")
+	f.StringVar(&req.AccessKeyID, "access-key-id", "", "the target's access key ID, or empty to keep the stored one")
+	f.StringVar(&secretFile, "secret-access-key-file", "", "file holding the secret access key, else KUBEHENGE_SECRET_ACCESS_KEY holds it")
+	f.StringVar(&passphraseFile, "passphrase-file", "", passphraseFileUsage)
 	_ = cmd.MarkFlagRequired("target")
+	o.signInFlags(cmd)
+	o.jsonFlag(cmd)
 	return cmd
 }
+
+const passphraseFileUsage = "file holding the state passphrase, else KUBEHENGE_PASSPHRASE holds it"
 
 func (o *applianceOptions) printBackupsAnswer(cmd *cobra.Command, raw []byte) error {
 	if o.json {
@@ -267,10 +287,10 @@ func (o *applianceOptions) printBackupsAnswer(cmd *cobra.Command, raw []byte) er
 }
 
 func (o *applianceOptions) backupsOffCommand() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "off",
-		Short: "Stop backing the management cluster's etcd up; the snapshots stay in the target",
-		Args:  cobra.NoArgs,
+		Short: "Stop backing the management cluster's etcd up, keeping the snapshots in the target",
+		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
 				if _, err := s.call(ctx, http.MethodDelete, "/api/appliance/etcd-backups", nil, nil); err != nil {
@@ -280,13 +300,15 @@ func (o *applianceOptions) backupsOffCommand() *cobra.Command {
 			})
 		},
 	}
+	o.signInFlags(cmd)
+	return cmd
 }
 
 func (o *applianceOptions) snapshotsCommand() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "snapshots",
 		Short: "List the management cluster's snapshots in the backup target, newest first",
-		Args:  cobra.NoArgs,
+		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
 				var v struct {
@@ -309,6 +331,9 @@ func (o *applianceOptions) snapshotsCommand() *cobra.Command {
 			})
 		},
 	}
+	o.signInFlags(cmd)
+	o.jsonFlag(cmd)
+	return cmd
 }
 
 func (o *applianceOptions) takeSnapshotCommand() *cobra.Command {
@@ -316,7 +341,7 @@ func (o *applianceOptions) takeSnapshotCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "take",
 		Short: "Take a snapshot of the management cluster's etcd now",
-		Args:  cobra.NoArgs,
+		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
 				var before appliance.EtcdBackupStatus
@@ -338,6 +363,7 @@ func (o *applianceOptions) takeSnapshotCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&wait, "wait", true, "wait until the snapshot is stored")
+	o.signInFlags(cmd)
 	return cmd
 }
 
@@ -368,11 +394,11 @@ func (o *applianceOptions) restoreEtcdCommand() *cobra.Command {
 	var passphraseFile string
 	cmd := &cobra.Command{
 		Use:   "restore <snapshot>",
-		Short: "Restore the management cluster's etcd from a snapshot; every change since is lost",
-		Long: `Restore the management cluster's etcd from a snapshot. Wipes etcd on every control-plane node
-and restores it to the snapshot: the clusters and every change since go back to then. The state
-passphrase comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
-		Args: cobra.ExactArgs(1),
+		Short: "Restore the management cluster's etcd from a snapshot, losing every change since",
+		Long: `Restore the management cluster's etcd from a snapshot. It wipes etcd on every control-plane
+node and restores the snapshot. Every cluster and every change made since goes back to how it was
+then. The state passphrase comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
+		Args: argsSay(cobra.ExactArgs(1), "give the snapshot's name"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			passphrase, err := secretFrom(passphraseFile, "KUBEHENGE_PASSPHRASE")
 			if err != nil {
@@ -394,11 +420,12 @@ passphrase comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
 		},
 	}
 	cmd.Flags().BoolVar(&wait, "wait", true, "wait until the restore ends, printing its log")
-	cmd.Flags().StringVar(&passphraseFile, "passphrase-file", "", "file holding the state passphrase; default the env KUBEHENGE_PASSPHRASE")
+	cmd.Flags().StringVar(&passphraseFile, "passphrase-file", "", passphraseFileUsage)
+	o.signInFlags(cmd)
 	return cmd
 }
 
-// untilJobEnds follows the appliance's run until it ends, printing its log as it grows.
+// untilJobEnds follows the appliance's run until it ends. It prints its log as it grows.
 func (s *applianceSession) untilJobEnds(ctx context.Context, out io.Writer) error {
 	ctx, cancel := context.WithTimeout(ctx, restoreWait)
 	defer cancel()
@@ -427,7 +454,7 @@ func (s *applianceSession) untilJobEnds(ctx context.Context, out io.Writer) erro
 }
 
 // printLog prints the lines of the run's log after the first printed, and returns how many there
-// are; the view holds only the last lines of a long log.
+// are. The view holds only the last lines of a long log.
 func printLog(out io.Writer, job *appliance.JobView, printed int) int {
 	total := max(job.Lines, len(job.Log))
 	first := len(job.Log) - (total - printed)

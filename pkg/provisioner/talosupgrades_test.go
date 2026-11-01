@@ -39,7 +39,7 @@ type fakeTalos struct {
 	boots    map[string]int
 	wiped    map[string]bool
 	uploaded map[string][]byte
-	// down are the nodes whose API does not answer; fail decides which calls fail.
+	// down are the nodes whose API does not answer. fail decides which calls fail.
 	down map[string]bool
 	fail func(address, call string) error
 }
@@ -214,7 +214,7 @@ func talosCluster(name, talos string) *clusterv1.Cluster {
 	return c
 }
 
-// talosMachine is a Ready machine of cluster web on a Talos release; those named web-cp-* are of
+// talosMachine is a Ready machine of cluster web on a Talos release. Those named web-cp-* are of
 // the control plane.
 func talosMachine(name, address, release string) *clusterv1.Machine {
 	m := &clusterv1.Machine{

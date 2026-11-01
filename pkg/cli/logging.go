@@ -56,7 +56,7 @@ func (l *logOptions) zapLogger() (logr.Logger, error) {
 	return zap.New(zap.Level(level), zap.JSONEncoder(), func(o *zap.Options) { o.Development = l.development }), nil
 }
 
-// slogLogger is the interface's logger, in JSON; development adds where in the code each line was
+// slogLogger is the interface's logger, in JSON. Development adds where in the code each line was
 // logged.
 func (l *logOptions) slogLogger(w io.Writer) (*slog.Logger, error) {
 	if err := l.check(); err != nil {

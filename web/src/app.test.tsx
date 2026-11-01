@@ -1070,7 +1070,7 @@ describe("create", () => {
     // A pool that may grow keeps the control planes to the control plane's work, even from none.
     const fromNone = { ...scaled, workerReplicas: 0, headlamp: false, monitoring: false };
     expect(fieldProblems("Machines", fromNone, withAutoscaler)).toStrictEqual({});
-    // Rancher's agent alone holds no worker up; the add-ons need a worker that stays.
+    // Rancher's agent alone holds no worker up. The add-ons need a worker that stays.
     expect(fieldProblems("Add-ons", fromNone, withAutoscaler)).toStrictEqual({});
     expect(fieldProblems("Add-ons", { ...fromNone, headlamp: true }, withAutoscaler)).toStrictEqual({
       addons: "The add-ons need a worker. On General, set the fewest workers to 1 or more.",
@@ -1097,7 +1097,7 @@ describe("create", () => {
     const onRocky = { ...form, nodeOS: "rocky-10" };
     expect(request(onRocky, onOS).variables["nodeOS"]).toStrictEqual({ family: "rocky", release: "10" });
     expect(Object.fromEntries(summary(onRocky, onOS))["Node OS"]).toBe("Rocky Linux 10");
-    // The class's own message is for its default node OS; the one chosen has its own.
+    // The class's own message is for its default node OS. The one chosen has its own.
     expect(fieldProblems("General", onRocky, { ...onOS, noTemplate: "for the default" })).toStrictEqual({
       nodeOS:
         "There is no RKE2 VM template on Rocky Linux 10 yet; an administrator builds it on the Administration page.",
@@ -1446,7 +1446,7 @@ describe("create", () => {
     expect(screen.getByLabelText("Node addresses")).toHaveAccessibleDescription(
       "Ranges like 10.0.0.21-10.0.0.29, networks or addresses",
     );
-    // Free addresses are filled in; one typed that a host answers on is marked until it changes.
+    // Free addresses are filled in. One typed that a host answers on is marked until it changes.
     await waitFor(() => expect(screen.getByLabelText("API address")).toHaveValue("10.0.0.30"));
     const addresses = screen.getByLabelText("Node addresses");
     expect(addresses).toHaveValue("10.0.0.31-10.0.0.33");
@@ -1481,7 +1481,7 @@ describe("create", () => {
     await user.type(cores, "4");
     expect(cores).toHaveValue(4);
     await user.click(screen.getByRole("button", { name: "Next" }));
-    // The add-ons' memory shows as they are chosen; Rancher's agent counts while the cluster registers.
+    // The add-ons' memory shows as they are chosen. Rancher's agent counts while the cluster registers.
     expect(screen.getByText(/^Each worker needs at least 4096 MiB/u)).toBeInTheDocument();
     expect(screen.getByText("Add-ons use about 512 MiB of memory: Rancher's agent.")).toBeInTheDocument();
     // Rancher raises the machines to the cores it needs, and they stay raised once it is unticked.
@@ -1496,14 +1496,14 @@ describe("create", () => {
     expect(within(screen.getByRole("group", { name: "Control plane" })).getByLabelText("Cores")).toHaveValue(4);
     await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
-    // The class's default providers come pre-filled; adding one more is checked before going on.
+    // The class's default providers come pre-filled. Adding one more is checked before going on.
     expect(screen.getByLabelText("Issuer URL")).toHaveValue("https://sso.example");
     await user.click(screen.getByRole("button", { name: "Add identity provider" }));
     const added = within(screen.getByRole("group", { name: "Identity provider 2" }));
     expect(added.getByLabelText("Issuer URL")).toHaveFocus();
     expect(added.getByLabelText("Issuer URL")).not.toHaveAttribute("aria-invalid");
     await user.type(added.getByLabelText("Issuer URL"), "http://mine.example");
-    // A field says what is wrong with it once it was edited; the others wait for Next.
+    // A field says what is wrong with it once it was edited. The others wait for Next.
     expect(added.getByLabelText("Issuer URL")).toHaveAccessibleDescription(/^Enter an https:\/\/ URL/u);
     expect(added.getByLabelText("Client ID")).not.toHaveAttribute("aria-invalid");
     await user.click(screen.getByRole("button", { name: "Next" }));

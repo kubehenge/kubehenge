@@ -37,7 +37,7 @@ export const kubernetesMinor = (v: string): string => /^v?(?<minor>\d+\.\d+)/u.e
 
 /**
  * runsKubernetes tells whether a Talos release runs a Kubernetes version, by the table the API
- * hands out; a release the table does not name is left to the server to judge.
+ * hands out. A release the table does not name is left to the server to judge.
  */
 export function runsKubernetes(talos: TalosReleases | undefined, release: string, version: string): boolean {
   const minors = talos?.kubernetes[release];
@@ -77,7 +77,7 @@ export function releaseToMake(r: TalosReleases): string {
 
 /**
  * loadingReleases stands in for a release field while the releases load, so that it is not typed
- * into first; a plain element, so that Field ties its hint to it.
+ * into first. A plain element, so that Field ties its hint to it.
  */
 export const loadingReleases = (id: string): JSX.Element => (
   <select id={id} disabled value="">
@@ -85,7 +85,7 @@ export const loadingReleases = (id: string): JSX.Element => (
   </select>
 );
 
-/** useTalosReleases reads the Talos releases once they are wanted; a failed read offers none and says why. */
+/** useTalosReleases reads the Talos releases once they are wanted. A failed read offers none and says why. */
 export function useTalosReleases(wanted: boolean): TalosReleases | undefined {
   const [releases, setReleases] = useState<TalosReleases>();
   useEffect(() => {

@@ -52,12 +52,12 @@ type bakeHost struct {
 
 	// failing is the type of the task that fails, such as resize or qmtemplate.
 	failing string
-	// agentDown keeps the guest agent from ever answering; keepsRunning ignores a shutdown.
+	// agentDown keeps the guest agent from ever answering. keepsRunning ignores a shutdown.
 	agentDown    bool
 	keepsRunning bool
 	// noISO leaves the node without a storage for ISO images.
 	noISO bool
-	// exit is how each guest command ends, by its words joined with spaces; others exit 0.
+	// exit is how each guest command ends, by its words joined with spaces. Others exit 0.
 	exit map[string]guestResult
 
 	changes []string

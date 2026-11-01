@@ -27,7 +27,7 @@ func digestOf(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// manifestServer serves files by path; the first request for /flaky fails.
+// manifestServer serves files by path. The first request for /flaky fails.
 func manifestServer(t *testing.T, files map[string]string) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 	var (
@@ -152,7 +152,7 @@ type moduleProvider struct {
 	Spec moduleProviderSpec `json:"spec"`
 }
 
-// The module writes each provider's selector itself; the hook must store under the same one.
+// The module writes each provider's selector itself. The hook must store under the same one.
 func TestModuleSelectsTheStoredManifests(t *testing.T) {
 	t.Parallel()
 	raw, err := os.ReadFile("testdata/cluster-api-providers-values.yaml")

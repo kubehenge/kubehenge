@@ -77,7 +77,7 @@ export function setSignedOutHandler(handler: () => void): void {
   onSignedOut = handler;
 }
 
-// The release that served the first answer; a different one later means the appliance was
+// The release that served the first answer. A different one later means the appliance was
 // upgraded under this page, which then runs an old frontend against a new server.
 let release = "";
 let onUpgraded: ((version: string) => void) | undefined;
@@ -188,7 +188,7 @@ interface Sent {
   signal?: AbortSignal;
 }
 
-// send makes one call of the API and returns its answer when it is a success; otherwise it throws
+// send makes one call of the API and returns its answer when it is a success. Otherwise it throws
 // the API's own message, and a lost session returns the interface to sign-in.
 async function send(method: string, path: string, { body, headers: extra = {}, signal }: Sent = {}): Promise<Response> {
   const headers: Record<string, string> = { ...extra };
@@ -295,10 +295,10 @@ export interface Api {
   create: (req: CreateRequest) => Promise<Cluster>;
   /** checkCreate has the API server check a cluster without creating it, and gives it as YAML to apply. */
   checkCreate: (req: CreateRequest) => Promise<CreateCheck>;
-  /** change is made against the cluster as its user was shown it; a newer generation refuses it. */
+  /** change is made against the cluster as its user was shown it. A newer generation refuses it. */
   change: (c: ClusterShown, req: ChangeRequest) => Promise<Cluster>;
   plan: (c: ClusterShown, req: ChangeRequest) => Promise<Plan>;
-  /** remove deletes the cluster; confirm is its name as the user typed it. */
+  /** remove deletes the cluster. confirm is its name as the user typed it. */
   remove: (ns: string, name: string, confirm: string) => Promise<void>;
   backups: (ns: string, name: string) => Promise<ClusterBackups>;
   backUp: (ns: string, name: string) => Promise<BackupRun>;
@@ -314,7 +314,7 @@ export interface Api {
   takeEtcdSnapshot: (ns: string, name: string) => Promise<void>;
   etcdRestorePlan: (ns: string, name: string, snapshot: string) => Promise<EtcdRestorePlan>;
   /**
-   * restoreEtcd asks the controller to take the cluster's etcd back to a snapshot; confirm is the
+   * restoreEtcd asks the controller to take the cluster's etcd back to a snapshot. confirm is the
    * cluster's name as the user typed it.
    */
   restoreEtcd: (ns: string, name: string, req: { snapshot: string; confirm: string }) => Promise<void>;
@@ -523,7 +523,7 @@ export const api: Api = {
   haRules: () => request("GET", "/api/proxmox/ha-rules"),
 };
 
-/** dnsOf lists the DNS servers a node resolves with; a node whose servers cannot be read offers none. */
+/** dnsOf lists the DNS servers a node resolves with. A node whose servers cannot be read offers none. */
 export async function dnsOf(node: string): Promise<string[]> {
   try {
     const { servers } = await api.dns(node);
@@ -533,7 +533,7 @@ export async function dnsOf(node: string): Promise<string[]> {
   }
 }
 
-/** bridgesOf lists a node's bridges; a node whose bridges cannot be read offers none. */
+/** bridgesOf lists a node's bridges. A node whose bridges cannot be read offers none. */
 export async function bridgesOf(node: string): Promise<Bridge[]> {
   try {
     return await api.bridges(node);

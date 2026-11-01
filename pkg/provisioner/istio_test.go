@@ -169,7 +169,7 @@ func TestUnenrolTakesEverythingOutOfTheMesh(t *testing.T) {
 }
 
 // Istio stays while its workloads cannot be taken out of the mesh, as long as the cluster cannot be
-// reached; the cluster's other add-ons do not wait with it.
+// reached. The cluster's other add-ons do not wait with it.
 func TestReconcileKeepsIstioUntilItsWorkloadsLeaveTheMesh(t *testing.T) {
 	t.Parallel()
 	c := storageCluster()

@@ -35,7 +35,7 @@ func TestVersionsFromTheReleaseChannels(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 			t.Fatal(err)
 		}
-		// New clusters start only on the minors Kubernetes still patches; the older ones are
+		// New clusters start only on the minors Kubernetes still patches. The older ones are
 		// there for clusters already on them to upgrade from.
 		if !slices.Equal(got.Versions, []string{"v1.37.1+rke2r1", "v1.36.5+rke2r1", "v1.35.9+rke2r2", "v1.34.12+rke2r1"}) ||
 			!slices.Equal(got.Older, []string{"v1.33.13+rke2r3", "v1.30.14+rke2r4"}) || got.Stable != "v1.36.5+rke2r1" {
@@ -51,7 +51,7 @@ func TestVersionsFromTheReleaseChannels(t *testing.T) {
 	if len(k3s.Versions) != 0 || k3s.Error == "" {
 		t.Fatalf("k3s = %+v", k3s)
 	}
-	// Talos's are Kubernetes' own, read like a channel server's; not configured here either.
+	// Talos's are Kubernetes' own, read like a channel server's. Not configured here either.
 	var talos versionsView
 	_ = json.Unmarshal(d.do("GET", "/api/versions/talos", "").Body.Bytes(), &talos)
 	if len(talos.Versions) != 0 || talos.Error == "" {

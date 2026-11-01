@@ -44,14 +44,14 @@ type Upgrades struct {
 type UpgradeSettings struct {
 	Policy release.Policy `json:"policy"`
 	Hour   int            `json:"hour"`
-	// TimeZone is an IANA time zone; the appliance's own clock has none anyone chose.
+	// TimeZone is an IANA time zone. The appliance's own clock has none anyone chose.
 	TimeZone string `json:"timeZone"`
 }
 
 const (
 	// defaultUpgradeHour is a night hour, when the fewest are at work.
 	defaultUpgradeHour = 3
-	// shownIndexAge is how old an index may be to show what is available; one to act on is always
+	// shownIndexAge is how old an index may be to show what is available. One to act on is always
 	// fetched afresh.
 	shownIndexAge = time.Minute
 	// privateFile is the mode of the files only the interface's own user reads.
@@ -254,10 +254,10 @@ func (s *Server) applying() bool {
 }
 
 // autoUpgrade asks the updater, once a day at the chosen hour, for the newest release the policy
-// allows; the updater decides whether there is one. In the same hour, once the appliance runs a
+// allows. The updater decides whether there is one. In the same hour, once the appliance runs a
 // newer release than the one that applied the management cluster, it applies that too where an
 // administrator switched that on. It sleeps until that hour, then looks once a minute within it, as
-// an apply going on holds the upgrade back, and an upgrade of the appliance the apply; with both
+// an apply going on holds the upgrade back, and an upgrade of the appliance the apply. With both
 // off it sleeps until the settings change.
 func (s *Server) autoUpgrade(ctx context.Context) {
 	up := s.Upgrades
@@ -313,7 +313,7 @@ func (s *Server) unattendedOn() bool {
 	return s.Appliance != nil && s.Appliance.UnattendedOn() != nil
 }
 
-// untilHour is how long until the chosen hour starts, 0 within it; not on while the policy is off,
+// untilHour is how long until the chosen hour starts, 0 within it. Not on while the policy is off,
 // unless the management cluster's automatic upgrades are on (management).
 func (u *Upgrades) untilHour(now time.Time, management bool) (time.Duration, bool) { //nolint:revive // flag-parameter: management is a state the decision reads, not a mode
 	st := u.settings()

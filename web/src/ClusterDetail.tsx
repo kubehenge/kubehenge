@@ -260,11 +260,11 @@ function whyNot(c: Cluster): string | undefined {
   return c.allowed.change ? undefined : `Changes need VM.Allocate on pool ${poolName(c.pool)}`;
 }
 
-// pageNote is why the actions are off, under them; a cluster being deleted says so in its status.
+// pageNote is why the actions are off, under them. A cluster being deleted says so in its status.
 const pageNote = (c: Cluster): string | undefined => (c.deleting ? undefined : whyNot(c));
 
-// The page opens on the cluster as last read, or as the fleet list has it, while it reads it again;
-// after a change the list reads it again too, so the rail does not lag behind the page.
+// The page opens on the cluster as last read, or as the fleet list has it, while it reads it again.
+// After a change the list reads it again too, so the rail does not lag behind the page.
 function useListed(namespace: string, name: string): { listed: Cluster | undefined; relist: () => void } {
   const fleet = useFleet();
   return {

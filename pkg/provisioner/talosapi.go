@@ -118,13 +118,13 @@ var systemContainerd = &common.ContainerdInstance{Driver: common.ContainerDriver
 
 // talosStallTimeout is how long an install goes without a word from the node before it is given
 // up as stalled. A node whose VM is gone cannot end the stream, and while data is unacknowledged
-// TCP's keepalive does not notice either; the kernel gives up only after about 15 minutes.
+// TCP's keepalive does not notice either. The kernel gives up only after about 15 minutes.
 const talosStallTimeout = 3 * time.Minute
 
 // errTalosStalled ends an install the node stopped reporting on.
 var errTalosStalled = fmt.Errorf("no word from the node for %s", talosStallTimeout)
 
-// stallGuard is ctx ended with errTalosStalled once heard has not been called for d; stop ends it.
+// stallGuard is ctx ended with errTalosStalled once heard has not been called for d. stop ends it.
 func stallGuard(ctx context.Context, d time.Duration) (context.Context, func(), func()) {
 	sctx, cancel := context.WithCancelCause(ctx)
 	t := time.AfterFunc(d, func() { cancel(errTalosStalled) })
@@ -220,7 +220,7 @@ func (n *talosNode) UploadEtcdSnapshot(ctx context.Context, snapshot io.Reader) 
 
 func (n *talosNode) BootstrapRecovered(ctx context.Context) error {
 	// The snapshot is the database without the checksum etcd appended, which its revision moving on
-	// changed; the controller checked the snapshot against it and against the store's.
+	// changed. The controller checked the snapshot against it and against the store's.
 	if err := n.c.Bootstrap(ctx, &machine.BootstrapRequest{RecoverEtcd: true, RecoverSkipHashCheck: true}); err != nil {
 		return fmt.Errorf("%s: restoring etcd from the snapshot: %w", n.address, notReady(err))
 	}

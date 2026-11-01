@@ -24,7 +24,7 @@ var releasePinsFile string
 type ReleasePin struct{ File, Script string }
 
 // ReleasePins are the pins of every RKE2 and k3s release a cluster may run, by version. Neither
-// project signs its releases or images, and a tag or an asset can be replaced; a release Kubehenge
+// project signs its releases or images, and a tag or an asset can be replaced. A release Kubehenge
 // pins is installed only as it was when it was pinned, and one it does not pin not at all.
 type ReleasePins map[string]ReleasePin
 
@@ -120,7 +120,7 @@ type ReleasePinner struct {
 	Checksums *ReleaseChecksums
 }
 
-// githubReleases bounds the pages of releases read, a hundred each; RKE2 and k3s publish a few
+// githubReleases bounds the pages of releases read, a hundred each. RKE2 and k3s publish a few
 // hundred over the minors a channel lists.
 const githubReleases = 20
 

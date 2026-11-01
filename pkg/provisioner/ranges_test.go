@@ -107,7 +107,7 @@ func TestDefaulterKeepsCiliumClustersApart(t *testing.T) {
 		}
 		return c
 	}
-	// one has RKE2's own ranges, two Kubernetes' usual ones; neither runs Cilium, and foreign is no
+	// one has RKE2's own ranges, two Kubernetes' usual ones. Neither runs Cilium, and foreign is no
 	// cluster of Kubehenge's.
 	if got := rangesString(create("canal", "")); got != "10.42.0.0/16 10.43.0.0/16" {
 		t.Errorf("a cluster without Cilium got %s, want RKE2's own ranges", got)
@@ -184,7 +184,7 @@ func TestValidatorChecksTheRangesOfNewClusters(t *testing.T) {
 	if _, err := v.ValidateCreate(context.Background(), c); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "overlaps the nodes' network") {
 		t.Errorf("a new cluster's pods over its nodes: %v", err)
 	}
-	// A running cluster's ranges are what they are; changing them is Cluster API's to refuse.
+	// A running cluster's ranges are what they are. Changing them is Cluster API's to refuse.
 	if _, err := v.ValidateUpdate(context.Background(), c, c); err != nil && strings.Contains(err.Error(), "overlaps the nodes' network") {
 		t.Errorf("a running cluster held to its ranges again: %v", err)
 	}

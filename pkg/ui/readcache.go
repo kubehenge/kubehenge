@@ -28,7 +28,7 @@ type cachedRead[T any] struct {
 	at       time.Time
 }
 
-// get answers with a read younger than fresh, waiting for one in flight or starting one. The read
+// get answers with a read younger than fresh. It waits for one in flight or starts one. The read
 // runs on past a viewer who leaves, for the others waiting on it.
 func (rc *readCache[T]) get(ctx context.Context, key string, fresh time.Duration, now func() time.Time, read func(context.Context) T) (T, error) {
 	rc.mu.Lock()

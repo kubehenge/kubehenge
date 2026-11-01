@@ -15,7 +15,7 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
-// meshed is a cluster of the default namespace that runs Cilium with Cluster Mesh on, listing peers.
+// meshed is a cluster of the default namespace that runs Cilium with Cluster Mesh on. It lists peers.
 func meshed(name string, id int, pods string, peers ...string) *clusterv1.Cluster {
 	c := cluster("default", name)
 	c.Annotations = map[string]string{provisioner.CiliumClusterIDAnnotation: strconv.Itoa(id)}

@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	// limitPercent of the memory the process may use is Go's soft limit; the rest is for what the
+	// limitPercent of the memory the process may use is Go's soft limit. The rest is for what the
 	// limit does not count, such as the kernel's buffers for the process.
 	limitPercent = 90
 	kibibyte     = 1024
@@ -17,7 +17,7 @@ const (
 
 // limitMemory sets Go's soft memory limit to 90% of the memory the process may use, unless
 // GOMEMLIMIT is set. Go otherwise lets the heap grow to twice what is live before collecting, past a
-// limit it does not know of, into the kernel's out-of-memory kill; with it, the collector works
+// limit it does not know of, into the kernel's out-of-memory kill. With it, the collector works
 // harder instead.
 func limitMemory() {
 	if os.Getenv("GOMEMLIMIT") != "" {

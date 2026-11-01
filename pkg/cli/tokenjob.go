@@ -46,6 +46,7 @@ KUBEHENGE_JOB names the Job, from the pod's batch.kubernetes.io/job-name label.`
 				})
 		},
 	}
+	proxmoxFlags(cmd.Flags(), conn)
 	cmd.Flags().StringVar(&input, "input", "/etc/kubehenge/input", "directory of the input Secret")
 	cmd.Flags().StringVar(&result, "result", "/dev/termination-log", "file the result is written to")
 	return cmd

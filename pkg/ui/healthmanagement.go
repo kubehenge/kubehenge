@@ -106,7 +106,7 @@ func readControlPlane(ctx context.Context, kube client.Client, c *clusterv1.Clus
 	return u, nil
 }
 
-// Cluster API conditions that are normal when False; while True, something is under way.
+// Cluster API conditions that are normal when False. While True, something is under way.
 var negativePolarity = map[string]string{
 	"Paused": "paused", "Deleting": "being deleted", "RollingOut": "rolling out", "Remediating": "replacing a machine",
 	"ScalingUp": "scaling up", "ScalingDown": "scaling down",

@@ -32,7 +32,7 @@ const releaseScriptPath = "/usr/local/sbin/kubehenge-release"
 // pins, the SHA-256 of its checksum file and of its install script. Without them a node would run
 // whatever its tag names on the day it boots.
 type ReleaseChecksums struct {
-	// Pins are the releases a node may install; DefaultReleasePins in the controller.
+	// Pins are the releases a node may install. DefaultReleasePins in the controller.
 	Pins ReleasePins
 	// HTTP, GitHub and Raw read a release's checksum file and install script when it is pinned:
 	// https://github.com and https://raw.githubusercontent.com, unless a test serves its own.
@@ -85,7 +85,7 @@ const (
 )
 
 // patch has an RKE2 or k3s node install its release from checked files, through its bootstrap
-// provider's air-gapped install; it is nil for any other template.
+// provider's air-gapped install. It is nil for any other template.
 func (r *ReleaseChecksums) patch(item *runtimehooksv1.GeneratePatchesRequestItem, cluster *clusterv1.Cluster) ([]byte, error) {
 	var object metav1.TypeMeta
 	if len(item.Object.Raw) > 0 {

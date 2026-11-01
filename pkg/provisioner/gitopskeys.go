@@ -23,7 +23,7 @@ import (
 )
 
 // The keys of a cluster's GitOps Secret beside it, which Flux's pull Secret shares: the deploy key's
-// two halves and the URL it was made for; and of Flux's pull Secret, the repository host's SSH keys.
+// two halves and the URL it was made for, and of Flux's pull Secret, the repository host's SSH keys.
 const (
 	identityKey      = "identity"
 	identityPubKey   = "identity.pub"
@@ -37,7 +37,7 @@ const (
 )
 
 // GitOpsSecretName is the Secret beside a cluster that holds its deploy key and its repository
-// host's SSH keys; the interface shows their public halves.
+// host's SSH keys. The interface shows their public halves.
 func GitOpsSecretName(cluster string) string { return cluster + "-gitops" }
 
 // gitOpsState reads what the cluster's GitOps needs before its chart's values are written, and

@@ -3413,8 +3413,10 @@ if [ "${part}" != addons ]; then
         KUBECONFIG=${creator_config} "${kubehenge}" serve --listen 127.0.0.1:18443 \
             --tls-cert "${work}/interface.crt" --tls-key "${work}/interface.key" > "${work}/interface.log" 2>&1 &
         interface_pid=$!
-        kh() { KUBEHENGE_URL=https://127.0.0.1:18443 KUBEHENGE_CA="${work}/interface.crt" "${kubehenge}" cluster -n "${ns}" "$@"; }
-        listed() { kh list -o json | jq -e --arg ns "${ns}" --arg n "${name}" 'any(.[]; .namespace == $ns and .name == $n)' > /dev/null; }
+        kh_all() { KUBEHENGE_URL=https://127.0.0.1:18443 KUBEHENGE_CA="${work}/interface.crt" "${kubehenge}" cluster "$@"; }
+        # -n goes last: only the commands that find one cluster by its name take it, never list.
+        kh() { kh_all "$@" -n "${ns}"; }
+        listed() { kh_all list -o json | jq -e --arg ns "${ns}" --arg n "${name}" 'any(.[]; .namespace == $ns and .name == $n)' > /dev/null; }
         until_true 120 "the interface listing ${ns}/${name} to the token" listed
         kh kubeconfig "${name}" > "${work}/cli.kubeconfig"
         KUBECONFIG=${work}/cli.kubeconfig kubectl get nodes > /dev/null || fail "the CLI's kubeconfig does not reach the cluster"

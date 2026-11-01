@@ -108,7 +108,7 @@ func TestTemplateRefreshBuildsWhatClustersRunAndCollectsTheRest(t *testing.T) {
 		pool.add(t, &cloud, at)
 		pool.add(t, &v136, at)
 	}
-	// No cluster runs v1.35.9 and none can upgrade to it; v1.37.1 is a step up from v1.36.5.
+	// No cluster runs v1.35.9 and none can upgrade to it. v1.37.1 is a step up from v1.36.5.
 	pool.add(t, &v135, day(1))
 	pool.add(t, &v135, day(8))
 	pool.add(t, &v137, day(1))

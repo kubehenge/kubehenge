@@ -8,7 +8,7 @@ import (
 )
 
 // finalError is a build failure another attempt would meet again, such as a node whose CPU is too
-// old for the node OS; a retry only delays saying so.
+// old for the node OS. A retry only delays saying so.
 type finalError struct{ err error }
 
 func (e finalError) Error() string { return e.err.Error() }
@@ -34,12 +34,12 @@ const (
 // Retry runs a build again after it fails, waiting longer each time, unless it failed for good
 // (Final) or its context ended.
 type Retry struct {
-	// Attempts is how many times a build runs at most; DefaultBuildAttempts when 0.
+	// Attempts is how many times a build runs at most. It is DefaultBuildAttempts when 0.
 	Attempts int
-	// Backoff is the wait after the first failure; it grows fourfold after each.
+	// Backoff is the wait after the first failure. It grows fourfold after each.
 	Backoff time.Duration
 	Log     func(format string, args ...any)
-	// Sleep waits d or until ctx ends; time's own when nil.
+	// Sleep waits d or until ctx ends. It is time's own when nil.
 	Sleep func(ctx context.Context, d time.Duration) error
 }
 

@@ -223,7 +223,7 @@ func ranchersScheme(t *testing.T) *runtime.Scheme {
 	return scheme
 }
 
-// newRancherFixture builds the fixture around web; funcs, if any, stand between the registrar and
+// newRancherFixture builds the fixture around web. funcs, if any, stand between the registrar and
 // Rancher's cluster.
 func newRancherFixture(t *testing.T, web *clusterv1.Cluster, funcs *interceptor.Funcs, inRancher ...client.Object) *rancherFixture {
 	t.Helper()
@@ -414,7 +414,7 @@ func TestRegistrarRegistersOnceAndInstallsRanchersAgent(t *testing.T) {
 	}
 }
 
-// Rancher makes no manifest URL while its server-url setting is empty; the registrar waits rather
+// Rancher makes no manifest URL while its server-url setting is empty. The registrar waits rather
 // than failing.
 func TestRegistrarWaitsForRanchersManifestURL(t *testing.T) {
 	t.Parallel()
@@ -553,7 +553,7 @@ func TestRegistrarRefusesRanchersClusterOfAnother(t *testing.T) {
 	}
 }
 
-// Before Rancher serves its own API, its kinds are unknown to its cluster; the registrar waits.
+// Before Rancher serves its own API, its kinds are unknown to its cluster. The registrar waits.
 func TestRegistrarWaitsForRanchersAPI(t *testing.T) {
 	t.Parallel()
 	f := newRancherFixture(t, availableNow(clusterWithRancher("web", false)), &interceptor.Funcs{

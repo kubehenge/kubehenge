@@ -126,7 +126,7 @@ func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase str
 	if err = a.recordApplied(CredentialsExpire([]byte(admin), []byte(talos))); err != nil {
 		return nil, err
 	}
-	// The cluster runs as applied either way; the backups' status says why their snapshots fail.
+	// The cluster runs as applied either way. The backups' status says why their snapshots fail.
 	if err = a.renewEtcdBackupCredential(ctx, []byte(talos)); err != nil {
 		j.Add("Renewing the credential of the etcd backups failed: " + err.Error())
 		a.etcdBackupFailed(err)
@@ -279,7 +279,7 @@ func (a *Appliance) tofu(ctx context.Context, j *Job, env []string, message func
 			j.Add(line)
 		}
 	}
-	// Whatever stopped the scan, tofu runs on and its outcome below still counts; the log says what
+	// Whatever stopped the scan, tofu runs on and its outcome below still counts. The log says what
 	// it is missing rather than ending as though tofu had said nothing more.
 	if scanErr := sc.Err(); scanErr != nil {
 		j.Add(fmt.Sprintf("The rest of tofu's output is left out of this log: %v", scanErr))
@@ -306,7 +306,7 @@ func (a *Appliance) output(ctx context.Context, env []string, name string) (stri
 	return string(out), nil
 }
 
-// moduleOIDC names the providers as the module's cluster_oidc does; null takes its default.
+// moduleOIDC names the providers as the module's cluster_oidc does. Null takes its default.
 func moduleOIDC(providers []OIDCProvider) []map[string]any {
 	out := make([]map[string]any, 0, len(providers))
 	for _, p := range providers {

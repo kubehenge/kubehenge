@@ -35,7 +35,7 @@ const (
 	defaultRetentionDays = 7
 	defaultLogsSizeGiB   = 10
 
-	// logsNamespace holds Loki and the Alloy that reads the API; logsNodeNamespace holds the Alloy
+	// logsNamespace holds Loki and the Alloy that reads the API. logsNodeNamespace holds the Alloy
 	// on every node apart from them, as only Pod Security's privileged level allows host paths.
 	logsNamespace     = "logging"
 	logsNodeNamespace = "logging-node"
@@ -107,7 +107,7 @@ func checkLogs(cluster *clusterv1.Cluster) error {
 }
 
 // lokiProxy, alloyProxy and alloyNodeProxy name the cluster's logs proxies, which go again when
-// logs are switched off; alloyNodeProxy goes too when the collector is the API.
+// logs are switched off. alloyNodeProxy goes too when the collector is the API.
 func lokiProxy(cluster *clusterv1.Cluster) string      { return cluster.Name + "-" + lokiRelease }
 func alloyProxy(cluster *clusterv1.Cluster) string     { return cluster.Name + "-" + alloyRelease }
 func alloyNodeProxy(cluster *clusterv1.Cluster) string { return cluster.Name + "-" + alloyNodeRelease }
@@ -192,7 +192,7 @@ func lokiValues(proxy Image, logs Logs) map[string]any {
 			"extraContainers": []any{lokiProxyContainer(proxy)},
 			"extraVolumes":    []any{corev1.Volume{Name: "tls", Secret: &corev1.SecretVolumeSource{SecretName: lokiTLS}}},
 		},
-		// Rules come from no ConfigMaps; and the caches, the gateway, the canary and the scalable
+		// Rules come from no ConfigMaps. The caches, the gateway, the canary and the scalable
 		// targets belong to a Loki of many processes.
 		"sidecar":           map[string]any{"rules": off},
 		"gateway":           off,
@@ -384,7 +384,7 @@ loki.source.kubernetes "pods" {
 `
 
 // alloyNodePods reads the node's container logs from the files the kubelet writes, those of pods
-// gone again within seconds too; the path names the namespace, the pod and the container.
+// gone again within seconds too. The path names the namespace, the pod and the container.
 const alloyNodePods = `local.file_match "pods" {
   path_targets = [{"__path__" = "/var/log/pods/*/*/*.log", "job" = "pods", "node" = sys.env("K8S_NODE_NAME")}]
   sync_period  = "5s"
@@ -465,7 +465,7 @@ const (
 // alloyTalos takes in what a Talos node's services and kernel log, which Talos keeps in memory
 // alone and sends as JSON lines to its log destination, and labels it as alloyJournal labels the
 // journal: the service as the unit, and the kernel's as kernel. otelcol.receiver.tcplog is the one
-// component of Alloy that reads lines off TCP; the OTLP log it makes carries the line as its body.
+// component of Alloy that reads lines off TCP. The OTLP log it makes carries the line as its body.
 const alloyTalos = `otelcol.receiver.tcplog "talos" {
   listen_address = "0.0.0.0:TALOS_LOGS_PORT"
   output {
@@ -543,8 +543,8 @@ func auditLog(distribution templates.Distribution) (string, string) {
 }
 
 // alloyCommon are the values of both Alloys: the image by digest alone, since the chart puts its
-// tag into a label; the configuration in a ConfigMap whose checksum restarts Alloy when it changes,
-// so without a reloader beside it; its interface on loopback only; no Service, CRDs or reporting.
+// tag into a label. The configuration is in a ConfigMap whose checksum restarts Alloy when it changes,
+// so there is no reloader beside it. Its interface is on loopback only. It has no Service, CRDs or reporting.
 // The chart's own rules read far more than either Alloy does, Secrets among them. The second map
 // is the values' alloy section, which each Alloy completes.
 func alloyCommon(image Image, config, namespace string, objects ...any) (map[string]any, map[string]any) {
@@ -634,7 +634,7 @@ func alloyValues(image Image, collector string) map[string]any {
 // alloyNodeValues run Alloy on every node, the control planes too, reading the node's container
 // logs, its journal or on Talos what Talos sends it and, on the control planes, the API server's audit log. It runs as root to read
 // those, which root owns, but with no capability but Talos's one, so it reads nothing else root's
-// alone, and mounts each read-only; it writes only where it keeps how far it has read. It needs nothing of the
+// alone, and mounts each read-only. It writes only where it keeps how far it has read. It needs nothing of the
 // API, so it gets no token. On workers, which have no audit log, its directory is an empty one.
 func alloyNodeValues(image Image, distribution templates.Distribution) map[string]any {
 	audit, auditFile := auditLog(distribution)

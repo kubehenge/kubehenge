@@ -60,7 +60,7 @@ func setAutoscaling(md *clusterv1.MachineDeploymentTopology, a *poolAutoscaling,
 }
 
 // applyAutoscaling sets the autoscaling a change asks for by pool: bounds switch a pool's
-// autoscaling on or move them; null switches it off and fixes the pool at the workers it runs now,
+// autoscaling on or move them. Null switches it off and fixes the pool at the workers it runs now,
 // as its MachineDeployment counts them, so that nothing is added or removed by switching. It says
 // what is wrong with the change, or returns "".
 func applyAutoscaling(ctx context.Context, kube client.Reader, c *clusterv1.Cluster, change map[string]*poolAutoscaling) (string, error) {

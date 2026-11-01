@@ -4,7 +4,7 @@ import { api } from "./api";
 import { ErrorBox, Field, errorMessage, passphraseShort, saveFile } from "./ui";
 
 // Credentials hands an administrator the management cluster's own credentials, for repairs beyond
-// the interface; they come out of the encrypted state, so the passphrase is needed.
+// the interface. They come out of the encrypted state, so the passphrase is needed.
 export function Credentials({ running }: { running: boolean }): JSX.Element {
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
@@ -24,7 +24,7 @@ export function Credentials({ running }: { running: boolean }): JSX.Element {
     }
   };
 
-  // A form, so that password managers fill in the passphrase; it has two actions and no default one.
+  // A form, so that password managers fill in the passphrase. It has two actions and no default one.
   return (
     <form className="box" onSubmit={(e) => e.preventDefault()}>
       <h3>Repair access</h3>

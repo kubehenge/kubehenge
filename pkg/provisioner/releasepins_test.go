@@ -42,7 +42,7 @@ func TestParseReleasePinsRefusesAMalformedFile(t *testing.T) {
 }
 
 // The newest release of each distribution, which Renovate raises in the header, has to be pinned
-// before the change can land; and the file is kept as make release-pins writes it.
+// before the change can land, and the file is kept as make release-pins writes it.
 func TestTheEmbeddedPinsHoldTheNewestReleases(t *testing.T) {
 	t.Parallel()
 	pins := DefaultReleasePins()

@@ -43,7 +43,7 @@ func TestNamesFor(t *testing.T) {
 	if n.VolumeHolders() != strings.TrimSuffix(n.VolumeOwner, "-volumes")+"-copies" {
 		t.Errorf("holder VMs %q beside volume owner %q", n.VolumeHolders(), n.VolumeOwner)
 	}
-	// Removing a cluster deletes its owner's and holders' volumes; ones of the same names elsewhere
+	// Removing a cluster deletes its owner's and holders' volumes. Ones of the same names elsewhere
 	// must never match.
 	if other, _ := NamesFor("kubehenge", "team-b", "web"); other.VolumeOwner == n.VolumeOwner || other.VolumeHolders() == n.VolumeHolders() {
 		t.Errorf("clusters in two namespaces share volume owner %q or holders %q", n.VolumeOwner, n.VolumeHolders())
@@ -640,7 +640,7 @@ func TestHelmChartProxiesHoldNoSecret(t *testing.T) {
 		t.Errorf("CSI values:\n%s", csi)
 	}
 
-	// Both hold the cluster's Proxmox VE token, so both stay on the control plane; the CCM also
+	// Both hold the cluster's Proxmox VE token, so both stay on the control plane. The CCM also
 	// reaches Proxmox VE before any CNI runs.
 	for i, name := range []string{"CCM", "CSI"} {
 		values := map[string]any{}

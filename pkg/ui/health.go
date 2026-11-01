@@ -36,7 +36,7 @@ const (
 	settling = 2 * time.Minute
 	// eventsShown bounds the events listed, newest first.
 	eventsShown = 200
-	// podsNeedingAttention bounds the pods in the needs-attention list; the pods' own section has
+	// podsNeedingAttention bounds the pods in the needs-attention list. The pods' own section has
 	// them all.
 	podsNeedingAttention = 20
 )
@@ -126,7 +126,7 @@ type nodeView struct {
 	Machine string `json:"machine,omitempty"`
 	Role    string `json:"role"`
 	Pool    string `json:"pool,omitempty"`
-	// Joined tells whether the node was read in the cluster; the fields up to Pods need it.
+	// Joined tells whether the node was read in the cluster. The fields up to Pods need it.
 	Joined bool `json:"joined"`
 	Ready  bool `json:"ready"`
 	// Down tells a node has been not ready for longer than starting or rebooting takes, while its
@@ -167,7 +167,7 @@ type vmView struct {
 	Memory int64   `json:"memory"`
 	MaxMem int64   `json:"maxMemory"`
 	Uptime int64   `json:"uptime"`
-	// Load is its CPU load of the last hour, a point a minute; null where it did not run.
+	// Load is its CPU load of the last hour, a point a minute. Null where it did not run.
 	Load []*float64 `json:"load,omitempty"`
 }
 
@@ -226,7 +226,7 @@ type healthCheckView struct {
 	Name     string `json:"name"`
 	Expected int32  `json:"expected"`
 	Healthy  int32  `json:"healthy"`
-	// Allowed tells whether the check may replace machines now; it stops when too many fail.
+	// Allowed tells whether the check may replace machines now. It stops when too many fail.
 	Allowed     bool     `json:"allowed"`
 	Message     string   `json:"message,omitempty"`
 	Remediating []string `json:"remediating,omitempty"`
@@ -319,7 +319,7 @@ func (s *Server) now() time.Time {
 
 // clusterHealth answers the health page. Seeing it needs what seeing the cluster does: VM.Audit on
 // its pool. The VMs' figures are read with the user's own ticket, so Proxmox VE decides who sees
-// them; what Kubehenge reads with its own identities is shared by every viewer.
+// them. What Kubehenge reads with its own identities is shared by every viewer.
 func (s *Server) clusterHealth(w http.ResponseWriter, r *http.Request, u user) {
 	c, access, ok := s.cluster(w, r, u)
 	if !ok {

@@ -13,7 +13,7 @@ import (
 // interface's own account to those Secrets alone, so it can neither write nor delete a cluster's
 // kubeconfig, CA or Proxmox VE token.
 const (
-	// CredentialLabel marks a Secret as a user credential; its value is the credential's purpose.
+	// CredentialLabel marks a Secret as a user credential. Its value is the credential's purpose.
 	CredentialLabel = "kubehenge.dev/user-credential" //nolint:gosec // a label's name, not a credential
 	// CredentialClusterLabel names the cluster a credential belongs to, beside it in its namespace.
 	// A credential without it serves every cluster of the appliance.
@@ -37,7 +37,7 @@ type CredentialPurpose struct {
 	Appliance bool
 }
 
-// credentialPurposes are those the chart's admission policy lets the interface store; the two lists
+// credentialPurposes are those the chart's admission policy lets the interface store. The two lists
 // change together.
 var credentialPurposes = []CredentialPurpose{
 	{Name: "backup", Keys: []string{"accessKeyID", "secretAccessKey"}, Appliance: true},

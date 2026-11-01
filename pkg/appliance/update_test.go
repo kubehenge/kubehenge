@@ -92,7 +92,7 @@ type releaseServer struct {
 	files map[string][]byte
 }
 
-// newReleaseServer publishes 0.1.0 to 0.3.0 with a signed index; the 0.2.5 archive does not
+// newReleaseServer publishes 0.1.0 to 0.3.0 with a signed index. The 0.2.5 archive does not
 // match its checksum.
 func newReleaseServer(t *testing.T) *releaseServer {
 	t.Helper()

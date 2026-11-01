@@ -89,7 +89,7 @@ func (a *Appliance) ModuleVersions() map[string]string {
 }
 
 // The module's versions.tf is held to tofu fmt, so its locals sit at two spaces and their entries
-// at four; the images nested deeper are not versions of their own.
+// at four. The images nested deeper are not versions of their own.
 var (
 	localBlock   = regexp.MustCompile(`^ {2}(\w+) = \{\s*$`)
 	blockEntry   = regexp.MustCompile(`^ {4}(\w+)\s*=\s*"([^"]+)"`)
@@ -123,7 +123,7 @@ func (a *Appliance) unattendedPath() string { return filepath.Join(a.Dir, "unatt
 func (a *Appliance) unattendedKeyPath() string { return filepath.Join(a.KeyDir, "unattended.key") }
 
 // unattendedFile is what the appliance keeps on disk: who switched automatic upgrades on, when, and
-// the Proxmox VE user the runs act as, in the open; the passphrase and token sealed.
+// the Proxmox VE user the runs act as, in the open. The passphrase and token are sealed.
 type unattendedFile struct {
 	By     string    `json:"by"`
 	Since  time.Time `json:"since"`
@@ -179,7 +179,7 @@ func (a *Appliance) KeepUnattended(u Unattended) error {
 	return writeFileAtomic(a.unattendedPath(), raw)
 }
 
-// ForgetUnattended deletes what KeepUnattended kept, and its key; nothing kept is no error.
+// ForgetUnattended deletes what KeepUnattended kept, and its key. Nothing kept is no error.
 func (a *Appliance) ForgetUnattended() error {
 	paths := []string{a.unattendedPath()}
 	if a.KeyDir != "" {
@@ -236,7 +236,7 @@ func sealCipher(key []byte) (cipher.AEAD, error) {
 }
 
 // UnattendedInfo is what may be shown of what KeepUnattended kept: who chose it and when, and the
-// Proxmox VE user the runs act as; never the secrets.
+// Proxmox VE user the runs act as. It never shows the secrets.
 type UnattendedInfo struct {
 	By    string
 	Since time.Time
@@ -296,7 +296,7 @@ func (a *Appliance) unattended() (*Unattended, error) {
 }
 
 // ApplyUnattended starts applying the saved settings again with what KeepUnattended kept, as an
-// automatic run, and returns at once; it fails with ErrNotUnattended while nothing is kept. What
+// automatic run, and returns at once. It fails with ErrNotUnattended while nothing is kept. What
 // keeps the run from going ahead once it has started fails it, so that its record says why. ready
 // is called as for Apply.
 func (a *Appliance) ApplyUnattended(ready func(ctx context.Context, kubeconfig []byte) error) error {

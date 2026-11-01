@@ -24,7 +24,7 @@ type Workload struct {
 	Dynamic dynamic.Interface
 	// Readyz answers the API server's verbose readiness check, with any failed checks.
 	Readyz func(ctx context.Context) (string, error)
-	// Close lets go of its idle connections; may be nil.
+	// Close lets go of its idle connections. It may be nil.
 	Close func()
 }
 
@@ -38,7 +38,7 @@ func (w *Workload) close() {
 // caller gives its requests a deadline of its own, none longer.
 const workloadTimeout = 10 * time.Second
 
-// connectWorkload reaches a workload cluster's API server with a bearer token, trusting its CA alone.
+// connectWorkload reaches a workload cluster's API server with a bearer token. It trusts its CA alone.
 func connectWorkload(server string, ca []byte, token string) (*Workload, error) {
 	cfg := &rest.Config{
 		Host: server, BearerToken: token, CAData: ca,
@@ -108,7 +108,7 @@ func (s *Server) reach(ctx context.Context, kube client.Client, c *clusterv1.Clu
 	}
 	server, ca := string(secret.Data[provisioner.IdentityServerKey]), secret.Data[provisioner.IdentityCAKey]
 	token := string(secret.Data[provisioner.IdentityTokenKey])
-	// The controller writes every token with when it runs out; one without is none of its.
+	// The controller writes every token with when it runs out. One without is none of its.
 	expires, err := time.Parse(time.RFC3339, secret.Annotations[provisioner.IdentityExpiresAnnotation])
 	if server == "" || token == "" || err != nil {
 		return nil, time.Time{}, nil

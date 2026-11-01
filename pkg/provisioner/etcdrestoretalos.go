@@ -412,8 +412,8 @@ func (run *restoreRun) onTalos(ctx context.Context, n RestoreNode, do func(conte
 }
 
 // waitTalos does something through a node's Talos API until it says it is done, for at most
-// guestStepTimeout. A node that does not answer, or is not ready for it yet, is asked again;
-// any other failure ends the wait.
+// guestStepTimeout. A node that does not answer, or is not ready for it yet, is asked again.
+// Any other failure ends the wait.
 func (run *restoreRun) waitTalos(ctx context.Context, n RestoreNode, what string, do func(context.Context, TalosNode) (bool, error)) error {
 	ctx, cancel := context.WithTimeout(ctx, guestStepTimeout)
 	defer cancel()

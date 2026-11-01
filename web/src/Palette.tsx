@@ -15,7 +15,7 @@ export interface Command {
   run: () => void;
 }
 
-// The palette shows this many matches; the rest are a few more letters away.
+// The palette shows this many matches. The rest are a few more letters away.
 const shownMatches = 12;
 
 // What a matched letter counts for: one alone, more for one right after the last, and more again
@@ -180,7 +180,7 @@ function Keys({ keys }: { keys: string }): JSX.Element {
 export interface Shortcut {
   keys: string;
   what: string;
-  /** Whether the key is for this page; a key for another page does nothing here. */
+  /** Whether the key is for this page. A key for another page does nothing here. */
   on?: boolean;
   run: () => void;
 }

@@ -28,7 +28,7 @@ export function clusterActions(c: Cluster): ClusterAction[] {
   return actions;
 }
 
-/** The views of a cluster's page, as the last part of its address; the summary has none. */
+/** The views of a cluster's page, as the last part of its address. The summary has none. */
 export const views = [
   { path: "", label: "Summary" },
   { path: "health", label: "Health" },
@@ -45,7 +45,7 @@ export const clusterPath = (namespace: string, name: string, view: View = ""): s
 
 /**
  * attentionFix is where something a cluster's health found is acted on: the machine's row for one
- * about a machine, the backups view for its backups; undefined where the health page is the place.
+ * about a machine, the backups view for its backups. Undefined where the health page is the place.
  */
 export function attentionFix(
   c: { namespace: string; name: string },

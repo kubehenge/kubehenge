@@ -119,7 +119,7 @@ func TestParseRefusesAnExpiredIndex(t *testing.T) {
 	}
 }
 
-// Every line of release.pub is linked into the builds as a key; one that is not would leave it out
+// Every line of release.pub is linked into the builds as a key. One that is not would leave it out
 // unseen.
 func TestReleasePubHoldsOnlyKeys(t *testing.T) {
 	t.Parallel()

@@ -28,7 +28,7 @@ const (
 	maxEtcdBackupKeep      = 500
 	// etcdBackupRetry is how soon a snapshot that failed is tried again.
 	etcdBackupRetry = 15 * time.Minute
-	// etcdBackupCredentialTTL is how long the talosconfig the snapshots are taken with lasts; every
+	// etcdBackupCredentialTTL is how long the talosconfig the snapshots are taken with lasts. Every
 	// apply and every save of the settings makes a new one.
 	etcdBackupCredentialTTL = 365 * 24 * time.Hour
 	// etcdBackupTimeout bounds one snapshot, taken and stored.
@@ -41,7 +41,7 @@ var ErrNoEtcdBackups = errors.New("backups of the management cluster's etcd are 
 // ErrEtcdSnapshotTaking refuses a snapshot while another is being taken.
 var ErrEtcdSnapshotTaking = errors.New("a snapshot is being taken already")
 
-// TalosAccess reaches the management cluster's control-plane nodes for its etcd backups;
+// TalosAccess reaches the management cluster's control-plane nodes for its etcd backups.
 // provisioner.ManagementTalos is the real one.
 type TalosAccess interface {
 	BackupConfig(ctx context.Context, admin []byte, address string, ttl time.Duration) ([]byte, error)
@@ -168,7 +168,7 @@ func (a *Appliance) EtcdBackupDue(now time.Time) bool {
 
 // ConfigureEtcdBackups sets the backups up, or changes them, with the passphrase, which opens the
 // state's admin talosconfig and encrypts the key the snapshots are encrypted to. Empty access keys
-// keep the ones stored. The target gets that key, encrypted, beside the snapshots; a target that
+// keep the ones stored. The target gets that key, encrypted, beside the snapshots. A target that
 // holds one already keeps it, when the passphrase opens it.
 func (a *Appliance) ConfigureEtcdBackups(ctx context.Context, s EtcdBackupSettings, accessKeyID, secretAccessKey, passphrase string) error {
 	saved := a.SavedSettings()
@@ -264,7 +264,7 @@ func (a *Appliance) EtcdBackupKeysStored() bool {
 	return err == nil
 }
 
-// StopEtcdBackups switches the backups off and forgets the access key; the snapshots stay.
+// StopEtcdBackups switches the backups off and forgets the access key. The snapshots stay.
 func (a *Appliance) StopEtcdBackups() error {
 	var errs []error
 	for _, name := range []string{"settings.json", "keys.json", "talosconfig", "status.json"} {
@@ -525,7 +525,7 @@ type EtcdRestoreRequest struct {
 
 // RestoreEtcd restores the management cluster's etcd from a snapshot, on the user's ticket, as a
 // run of its own in the background. The passphrase opens the admin talosconfig and the snapshots'
-// key; neither needs the management cluster's API, which may be down.
+// key. Neither needs the management cluster's API, which may be down.
 func (a *Appliance) RestoreEtcd(ctx context.Context, name, passphrase string, ticket *pve.Ticket) error {
 	if !provisioner.ValidSnapshotName(name) {
 		return fmt.Errorf("%q is no snapshot's name", name)

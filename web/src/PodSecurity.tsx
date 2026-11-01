@@ -3,11 +3,11 @@ import type { JSX } from "react";
 import { Field } from "./ui";
 import { oneOf, record, text } from "./values";
 
-/** The Pod Security Standard levels Pod Security Admission enforces; baseline is the classes' default. */
+/** The Pod Security Standard levels Pod Security Admission enforces. Baseline is the classes' default. */
 export const admissionLevels = ["privileged", "baseline", "restricted"] as const;
 export type AdmissionLevel = (typeof admissionLevels)[number];
 
-/** The levels Kyverno's policies enforce; off leaves Kyverno out of the cluster. */
+/** The levels Kyverno's policies enforce. Off leaves Kyverno out of the cluster. */
 export const kyvernoLevels = ["off", "baseline", "restricted"] as const;
 export type KyvernoLevel = (typeof kyvernoLevels)[number];
 
@@ -63,7 +63,7 @@ export function podSecurityVariable(p: PodSecurity): Partial<PodSecurity> | unde
 const capitalised = (l: string): string => l.charAt(0).toUpperCase() + l.slice(1);
 
 /**
- * podSecurityText says in a line what holds a cluster's pods to which level; a bare level is Pod
+ * podSecurityText says in a line what holds a cluster's pods to which level. A bare level is Pod
  * Security Admission's.
  */
 export function podSecurityText(p: PodSecurity): string {
@@ -77,7 +77,7 @@ export function podSecurityText(p: PodSecurity): string {
   return parts.length > 0 ? parts.join(", ") : "Not enforced";
 }
 
-/** PodSecurityFields chooses the level Pod Security Admission and Kyverno each enforce; under CIS hardening, Kyverno's alone. */
+/** PodSecurityFields chooses the level Pod Security Admission and Kyverno each enforce. Under CIS hardening, Kyverno's alone. */
 export function PodSecurityFields({
   value,
   onChange,

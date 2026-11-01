@@ -19,7 +19,7 @@ import (
 // MinPassphrase is OpenTofu's minimum for a pbkdf2 passphrase.
 const MinPassphrase = 16
 
-// Settings are the management cluster's inputs the setup wizard collects; the module's other
+// Settings are the management cluster's inputs the setup wizard collects. The module's other
 // variables keep their defaults.
 type Settings struct {
 	// Nodes are the Proxmox VE nodes the management cluster's VMs run on, taken in turn.
@@ -40,7 +40,7 @@ type Settings struct {
 	RegistryMirrors map[string][]string `json:"registryMirrors,omitempty"`
 	// ControllerImage replaces the controller image the chart was released with.
 	ControllerImage string `json:"controllerImage,omitempty"`
-	// PodSubnets and ServiceSubnets are the management cluster's own ranges; when unset, the first
+	// PodSubnets and ServiceSubnets are the management cluster's own ranges. When unset, the first
 	// candidates clear of the nodes' network are taken.
 	PodSubnets     []string `json:"podSubnets,omitempty"`
 	ServiceSubnets []string `json:"serviceSubnets,omitempty"`
@@ -59,7 +59,7 @@ type Settings struct {
 	// kubeconfig in as cluster-admin.
 	HeadlampSignIn bool `json:"headlampSignIn,omitempty"`
 	// HeadlampActions has the shared Headlamp offer the Helm app catalog and the Prometheus charts
-	// it ships with, acting with each user's own credentials in the cluster.
+	// it ships with. It acts with each user's own credentials in the cluster.
 	HeadlampActions bool `json:"headlampActions,omitempty"`
 	// OfferHARules offers Proxmox VE's HA node-affinity rules, their names and nodes only, to those
 	// who may create or change a cluster without Sys.Audit on / of their own.
@@ -67,14 +67,14 @@ type Settings struct {
 	// ClusterDatastoreAllocate lets a cluster choose the CSI plugin's newest release, whose token
 	// then holds Datastore.Allocate on the cluster's storage.
 	ClusterDatastoreAllocate bool `json:"clusterDatastoreAllocate,omitempty"`
-	// TemplateRefresh is the weekly build of the node OS VM templates; unset, it runs with the
+	// TemplateRefresh is the weekly build of the node OS VM templates. Unset, it runs with the
 	// module's defaults.
 	TemplateRefresh *TemplateRefresh `json:"templateRefresh,omitempty"`
 	// ClusterSysAudit gives each cluster the cloud controller manager's HA group labels unless the
-	// cluster switches them off, its token then holding Sys.Audit on /; unset, it is on.
+	// cluster switches them off, its token then holding Sys.Audit on /. Unset, it is on.
 	ClusterSysAudit *bool `json:"clusterSysAudit,omitempty"`
 	// NodeBootLogs has the controller read nodes' boot logs through their guest agents, its token
-	// then holding VM.GuestAgent.FileRead on the workload pool; unset, it is on.
+	// then holding VM.GuestAgent.FileRead on the workload pool. Unset, it is on.
 	NodeBootLogs *bool `json:"nodeBootLogs,omitempty"`
 	// ExtraClusterNamespaces are more namespaces the interface creates and manages clusters in,
 	// beside its own, such as one per team.

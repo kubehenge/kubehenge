@@ -240,7 +240,7 @@ func TestZoneOfABridge(t *testing.T) {
 	if _, err := a.Zone(ctx, alice, "hidden"); !errors.Is(err, ErrForbidden) {
 		t.Errorf("a VNet the user may not see: %v", err)
 	}
-	// Only "does not exist" means a plain bridge; any other failure is no zone at all.
+	// Only "does not exist" means a plain bridge. Any other failure is no zone at all.
 	if zone, err := a.Zone(ctx, alice, "broken"); err == nil {
 		t.Errorf("a failed lookup gave zone %q", zone)
 	}

@@ -28,7 +28,7 @@ import (
 // workload cluster with: a ServiceAccount there named kubehenge-<identity>, whose token is kept in
 // a Secret of the management cluster. Each does one job, so that what serves one purpose cannot do
 // another's whatever the holder does with it, and the workload cluster's audit log tells them
-// apart. None may read a Secret or exec; the tokens IdentityHeadlampIssuer makes are another
+// apart. None may read a Secret or exec. The tokens IdentityHeadlampIssuer makes are another
 // account's.
 type Identity string
 
@@ -96,17 +96,17 @@ const (
 // workloadIdentity is how one identity is kept in the workload clusters.
 type workloadIdentity struct {
 	id Identity
-	// namespace holds the ServiceAccount; the identity waits while it does not exist.
+	// namespace holds the ServiceAccount. The identity waits while it does not exist.
 	namespace string
 	// clusterRules are granted with a ClusterRole, which rules on nodes and the API server's paths
-	// need; rules with a Role in the namespace.
+	// need. Rules are granted with a Role in the namespace.
 	clusterRules []rbacv1.PolicyRule
 	rules        []rbacv1.PolicyRule
 	// issues is an account beside the identity whose tokens it makes: created before the identity,
 	// and deleted before it, which ends every token made of the account.
 	issues *issuedAccount
-	// wanted says whether a cluster has the identity. One that no longer does loses its Secret;
-	// what it is in the workload cluster goes with its namespace, or with what uses it there,
+	// wanted says whether a cluster has the identity. One that no longer does loses its Secret.
+	// What it is in the workload cluster goes with its namespace, or with what uses it there,
 	// unless deleteInside says otherwise.
 	wanted func(*WorkloadIdentities, *clusterv1.Cluster) (bool, error)
 	// deleteInside has an identity no longer wanted deleted from inside the workload cluster before
@@ -267,7 +267,7 @@ type WorkloadIdentities struct {
 	now func() time.Time
 }
 
-// SetupWithManager registers the reconciler for Clusters. Its own requeue renews the tokens; a new
+// SetupWithManager registers the reconciler for Clusters. Its own requeue renews the tokens. A new
 // generation or annotation only has it look sooner, such as once the control plane is up or an
 // add-on is switched on or off.
 func (w *WorkloadIdentities) SetupWithManager(mgr ctrl.Manager) error {

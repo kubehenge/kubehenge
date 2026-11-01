@@ -46,9 +46,9 @@ func TalosEndpoints(raw []byte) ([]string, error) {
 
 // ManagementTalos reaches the management cluster's control-plane nodes for its etcd backups.
 type ManagementTalos struct {
-	// Dial reaches a node for a restore; DialTalos when nil.
+	// Dial reaches a node for a restore. It is DialTalos when nil.
 	Dial TalosDialer
-	// Poll and StepTimeout pace a restore's waits; talosRestorePoll and guestStepTimeout when 0.
+	// Poll and StepTimeout pace a restore's waits. They are talosRestorePoll and guestStepTimeout when 0.
 	Poll, StepTimeout time.Duration
 }
 
@@ -99,7 +99,7 @@ func (m *ManagementTalos) Snapshot(ctx context.Context, raw []byte, nodes []stri
 // Restore restores the management cluster's etcd from a snapshot through the Talos API, as an
 // etcd restore of a Talos cluster does: it wipes etcd on every control-plane node that answers,
 // waits for each to boot again, uploads the snapshot to the first and bootstraps etcd from it,
-// and waits until it runs; the others then join. open hands the plain snapshot, checked already.
+// and waits until it runs. The others then join. open hands the plain snapshot, checked already.
 func (m *ManagementTalos) Restore(ctx context.Context, admin []byte, nodes []string, open func() (io.ReadCloser, error), log func(string)) error {
 	up := m.answering(ctx, admin, nodes, log)
 	if len(up) == 0 {
@@ -173,7 +173,7 @@ func (*ManagementTalos) client(ctx context.Context, raw []byte, address string) 
 	return c, nil
 }
 
-// answering is those of the nodes whose Talos API answers; the others are logged as left out.
+// answering is those of the nodes whose Talos API answers. The others are logged as left out.
 func (m *ManagementTalos) answering(ctx context.Context, admin []byte, nodes []string, log func(string)) []string {
 	var up []string
 	for _, address := range nodes {
@@ -207,7 +207,7 @@ func (m *ManagementTalos) on(ctx context.Context, raw []byte, address string, do
 }
 
 // wait does something on a node until it says it is done. A node that does not answer, or is not
-// ready for it yet, is asked again; any other failure ends the wait.
+// ready for it yet, is asked again. Any other failure ends the wait.
 func (m *ManagementTalos) wait(ctx context.Context, raw []byte, address, what string, do func(context.Context, TalosNode) (bool, error)) error {
 	ctx, cancel := context.WithTimeout(ctx, cmp.Or(m.StepTimeout, guestStepTimeout))
 	defer cancel()

@@ -21,7 +21,7 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
-// MakeTemplate builds a template with a user's session; the builder comes without its client and
+// MakeTemplate builds a template with a user's session. The builder comes without its client and
 // sources, which this adds.
 type MakeTemplate func(ctx context.Context, t *pve.Ticket, b templates.Builder, tpl *templates.Template) (vmid int, err error)
 
@@ -30,7 +30,7 @@ type templateView struct {
 	Node string   `json:"node"`
 	Name string   `json:"name"`
 	Tags []string `json:"tags"`
-	// Line is the template a build is one of, with Build its tag and Built when it was made; a
+	// Line is the template a build is one of, with Build its tag and Built when it was made. A
 	// Talos template has neither.
 	Line  string     `json:"line"`
 	Build string     `json:"build,omitempty"`
@@ -39,7 +39,7 @@ type templateView struct {
 	Newest bool `json:"newest,omitempty"`
 	// InUse names a cluster that clones from it, which keeps it from being deleted.
 	InUse string `json:"inUse,omitempty"`
-	// NodeOS is the operating system its machines run, such as AlmaLinux 10; a Talos template has
+	// NodeOS is the operating system its machines run, such as AlmaLinux 10. A Talos template has
 	// none.
 	NodeOS string `json:"nodeOS,omitempty"`
 }
@@ -224,7 +224,7 @@ type templateRequest struct {
 	Distribution      string `json:"distribution"`
 	KubernetesVersion string `json:"kubernetesVersion,omitempty"`
 	TalosVersion      string `json:"talosVersion,omitempty"`
-	// NodeOS is the node OS as one word, such as almalinux-10; empty means the default. Talos is
+	// NodeOS is the node OS as one word, such as almalinux-10. Empty means the default. Talos is
 	// its own OS and takes none.
 	NodeOS        string   `json:"nodeOS,omitempty"`
 	Node          string   `json:"node"`

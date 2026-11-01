@@ -47,7 +47,7 @@ const TemplateStoragesAnnotation = "kubehenge.dev/template-storages"
 // plugin's newest release. That privilege reaches every volume on the storage and its definition,
 // so the storage has to be the cluster's alone.
 type DatastoreAllocate struct {
-	// Role is what the controller grants a cluster's user on its storage; empty when Kubehenge's
+	// Role is what the controller grants a cluster's user on its storage. It is empty when Kubehenge's
 	// administrator lets no cluster hold Datastore.Allocate.
 	Role string
 	// Management are the storages the management cluster's disks, its disk image and every

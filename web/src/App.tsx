@@ -11,7 +11,7 @@ import { ErrorBoundary, Skeleton } from "./ui";
 
 const msPerDay = 86_400_000;
 
-// Administrators are warned this many days before the certificate runs out; it is renewed on the node.
+// Administrators are warned this many days before the certificate runs out. It is renewed on the node.
 const certificateWarningDays = 30;
 
 // A setup status that could not be read is asked for again after this long.
@@ -145,7 +145,7 @@ function Shell({
     };
   }, []);
 
-  // undefined until known; the appliance's first run sets up the management cluster.
+  // undefined until known. The appliance's first run sets up the management cluster.
   const needsSetup = setup === undefined ? undefined : setup.appliance && !setup.ready;
   // Administrators of an appliance look after it and the management cluster from their own page.
   const canManage = setup?.appliance === true && setup.allowed;

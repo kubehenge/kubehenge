@@ -336,7 +336,7 @@ func scopesOf(p *oidcProvider) []string {
 
 // fluxOperatorValues run the Flux Operator, which installs Flux from the manifests inside its own
 // image, pinned by digest. Its web interface is off unless the cluster asks for it, as it signs in
-// with a client secret; switched on, it is served at the host name with the configuration the
+// with a client secret. Switched on, it is served at the host name with the configuration the
 // controller writes, which the operator reads from the API as it changes, and verifies the
 // provider's certificate with the provider's CA where one is set, beside the image's own.
 func fluxOperatorValues(certs *Certificates, g *GitOps, state *gitOpsState) map[string]any {
@@ -487,7 +487,7 @@ func (g *GitOps) pullSecret() string {
 }
 
 // repositorySecret is the repository's credentials as the engine reads them: Flux's pull Secret
-// with the deploy key and the host's keys, or a token's user name and password; Argo CD's
+// with the deploy key and the host's keys, or a token's user name and password, and Argo CD's
 // repository Secret, which it matches to the Application by the URL.
 func repositorySecret(g *GitOps, creds map[string][]byte) *corev1.Secret {
 	if g.engine() == flux {
@@ -505,7 +505,7 @@ func repositorySecret(g *GitOps, creds map[string][]byte) *corev1.Secret {
 	return opaqueSecret(argoCDNamespace, argoCDRepositorySecret, map[string]string{"argocd.argoproj.io/secret-type": "repository"}, data)
 }
 
-// argoCDClientSecretObject holds the sign-in client's secret where Argo CD's configuration names it;
+// argoCDClientSecretObject holds the sign-in client's secret where Argo CD's configuration names it.
 // Argo CD reads only Secrets labelled as its own.
 func argoCDClientSecretObject(clientSecret []byte) *corev1.Secret {
 	return opaqueSecret(argoCDNamespace, argoCDClientSecret, map[string]string{"app.kubernetes.io/part-of": argoCD},

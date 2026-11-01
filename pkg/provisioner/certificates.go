@@ -65,7 +65,7 @@ const (
 	ingressCASecret  = "kubehenge-ingress-ca"  //nolint:gosec // a Secret's name, not a credential
 	dns01Secret      = "kubehenge-dns01"       //nolint:gosec // a Secret's name, not a credential
 	// traefikValuesSecret in kube-system holds, under traefikValuesKey, the values RKE2's and k3s's
-	// Traefik take from the cluster's certificates; the classes' HelmChartConfig names it.
+	// Traefik take from the cluster's certificates. The classes' HelmChartConfig names it.
 	traefikValuesSecret = "kubehenge-traefik" //nolint:gosec // a Secret's name, not a credential
 	traefikValuesKey    = "values.yaml"
 
@@ -131,14 +131,14 @@ type DNS01 struct {
 	Akamai           Akamai   `json:"akamai,omitzero"`
 }
 
-// Route53 is Amazon Route 53's settings; the secret access key is the credential.
+// Route53 is Amazon Route 53's settings. The secret access key is the credential.
 type Route53 struct {
 	Region       string `json:"region,omitempty"`
 	AccessKeyID  string `json:"accessKeyID,omitempty"`
 	HostedZoneID string `json:"hostedZoneID,omitempty"`
 }
 
-// AzureDNS is Azure DNS's settings; the service principal's client secret is the credential.
+// AzureDNS is Azure DNS's settings. The service principal's client secret is the credential.
 type AzureDNS struct {
 	SubscriptionID    string `json:"subscriptionID,omitempty"`
 	ResourceGroupName string `json:"resourceGroupName,omitempty"`
@@ -148,25 +148,25 @@ type AzureDNS struct {
 	Environment       string `json:"environment,omitempty"`
 }
 
-// CloudDNS is Google Cloud DNS's settings; the service account's JSON key is the credential.
+// CloudDNS is Google Cloud DNS's settings. The service account's JSON key is the credential.
 type CloudDNS struct {
 	Project        string `json:"project,omitempty"`
 	HostedZoneName string `json:"hostedZoneName,omitempty"`
 }
 
-// RFC2136 is a DNS server's that takes dynamic updates; the TSIG secret is the credential.
+// RFC2136 is a DNS server's that takes dynamic updates. The TSIG secret is the credential.
 type RFC2136 struct {
 	Nameserver    string `json:"nameserver,omitempty"`
 	TSIGKeyName   string `json:"tsigKeyName,omitempty"`
 	TSIGAlgorithm string `json:"tsigAlgorithm,omitempty"`
 }
 
-// ACMEDNS is an ACME-DNS server's; the account it registered is the credential.
+// ACMEDNS is an ACME-DNS server's. The account it registered is the credential.
 type ACMEDNS struct {
 	Host string `json:"host,omitempty"`
 }
 
-// Akamai is Akamai Edge DNS's; its three secrets are in an existing Secret.
+// Akamai is Akamai Edge DNS's. Its three secrets are in an existing Secret.
 type Akamai struct {
 	ServiceConsumerDomain string `json:"serviceConsumerDomain,omitempty"`
 }
@@ -219,7 +219,7 @@ func CertificatesOf(cluster *clusterv1.Cluster) (Certificates, error) {
 
 // certManagerValues are cert-manager's, for whichever add-ons need it. It serves the Gateway API, so
 // that an HTTP-01 challenge is answered through Traefik's Gateway and a Gateway's listeners can ask
-// for certificates; the controller holds the chart back until the Gateway API is there, since
+// for certificates. The controller holds the chart back until the Gateway API is there, since
 // cert-manager looks for it only as it starts. With the add-on on, an Ingress that asks for a
 // certificate without naming an issuer gets one from the cluster's, and DNS-01's records are looked
 // up where the cluster says, for a domain whose public answers differ from those inside.
@@ -247,8 +247,8 @@ func certManagerValues(c *Certificates) map[string]any {
 }
 
 // addonIngress is the TLS and the annotations of an add-on's Ingress for hostname. A certificate
-// the cluster names is used as it is; one the default certificate covers is left to Traefik, which
-// serves that one where an Ingress names none; any other is asked of the cluster's issuer.
+// the cluster names is used as it is. One the default certificate covers is left to Traefik, which
+// serves that one where an Ingress names none. Any other is asked of the cluster's issuer.
 func addonIngress(c *Certificates, release, hostname, secret string) (map[string]any, map[string]any) {
 	if secret != "" || !c.on() || c.covers(hostname) {
 		return ingressTLS(hostname, secret), nil
@@ -409,7 +409,7 @@ func issuerIdentity(c *Certificates, ca *corev1.Secret) string {
 }
 
 // reissueNeeded reports whether the issuer in the workload cluster is another than identity, or
-// still has certificates to issue again; not while there is none yet.
+// still has certificates to issue again, but not while there is none yet.
 func reissueNeeded(ctx context.Context, workload client.Client, identity string) (bool, error) {
 	issuer := &metav1.PartialObjectMetadata{}
 	issuer.SetGroupVersionKind(schema.GroupVersionKind{Group: certManagerGroup, Version: "v1", Kind: clusterIssuerKind})
@@ -533,7 +533,7 @@ func newIngressCA(cluster, domain string, now time.Time) ([]byte, []byte, error)
 }
 
 // dns01Credential reads the DNS provider's credential the cluster takes: the one stored for every
-// cluster when it shares that, else its own; and whether anyone has stored it.
+// cluster when it shares that, else its own, and whether anyone has stored it.
 func (r *Reconciler) dns01Credential(ctx context.Context, cluster *clusterv1.Cluster, c *Certificates) (map[string][]byte, bool, error) {
 	name := CredentialName(cluster.Name, dns01Purpose)
 	if c.SharesDNS01Credential() {
@@ -742,7 +742,7 @@ func applyCertificates(ctx context.Context, workload client.Client, objects []*u
 	return false, nil
 }
 
-// certificateKinds are everything certificateObjects can make, as far as deleting it goes; the
+// certificateKinds are everything certificateObjects can make, as far as deleting it goes. The
 // issued certificate's Secret and the ACME account's key go too, which cert-manager leaves.
 func certificateKinds() []*unstructured.Unstructured {
 	object := func(apiVersion, kind, namespace, name string) *unstructured.Unstructured {

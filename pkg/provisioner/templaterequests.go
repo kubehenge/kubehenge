@@ -206,7 +206,7 @@ func (t *TemplateRequests) runOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// Taken off first, so that a Job is never started twice for one request; a request whose Job
+	// Taken off first, so that a Job is never started twice for one request. A request whose Job
 	// cannot be created is put back.
 	requests := cm.Data
 	cm.Data = nil

@@ -38,7 +38,7 @@ const (
 	reportTimeout = 30 * time.Second
 )
 
-// clip shortens s to at most n bytes, on a character boundary, marking that it was cut.
+// clip shortens s to at most n bytes, on a character boundary and marks that it was cut.
 func clip(s string, n int) string {
 	if len(s) <= n {
 		return s

@@ -17,7 +17,7 @@ const outputTail = 1500
 // Guests runs commands inside clusters' VMs.
 type Guests interface {
 	// Run runs a bash script as root in a VM, the script on bash's standard input, and returns
-	// what it printed; a script that exits other than 0 is an error.
+	// what it printed. A script that exits other than 0 is an error.
 	Run(ctx context.Context, vmid int64, script string, timeout time.Duration) (string, error)
 	// Running tells whether a VM is running.
 	Running(ctx context.Context, vmid int64) (bool, error)
@@ -59,7 +59,7 @@ func (g *ProxmoxGuests) Run(ctx context.Context, vmid int64, script string, time
 }
 
 // JobGuests runs each command through a token Job, whose restore token alone may use the guest
-// agent; the controller's own token tells whether a VM runs.
+// agent. The controller's own token tells whether a VM runs.
 type JobGuests struct {
 	Jobs    TokenRunner
 	Proxmox *proxmox.Client

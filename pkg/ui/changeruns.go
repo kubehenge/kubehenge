@@ -194,7 +194,7 @@ func rolesSince(c *clusterv1.Cluster, machines []clusterv1.Machine, at time.Time
 	return controlPlane, workers
 }
 
-// wanted are the control-plane machines and the workers a cluster asks for; an autoscaled pool
+// wanted are the control-plane machines and the workers a cluster asks for. An autoscaled pool
 // asks for those it has.
 func wanted(c *clusterv1.Cluster, machines []clusterv1.Machine) (int, int) {
 	has := map[string]int{}

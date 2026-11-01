@@ -96,7 +96,7 @@ type Release struct {
 // between families lives behind it: where the image comes from and how its signature is checked,
 // how a template is made of it, which CPU type it needs, and what a node enforces.
 type Family interface {
-	// Name is the family in the nodeOS variable and in template tags; it holds no dash.
+	// Name is the family in the nodeOS variable and in template tags. It holds no dash.
 	Name() string
 	// Title is the family as people read it, such as AlmaLinux.
 	Title() string
@@ -119,7 +119,7 @@ type Family interface {
 type Recipe struct {
 	// UserData is the cloud-config of the bake's first boot.
 	UserData string
-	// Checks run through the guest agent once cloud-init has finished; each must exit 0.
+	// Checks run through the guest agent once cloud-init has finished. Each must exit 0.
 	Checks [][]string
 	// Image is set in ImageMode: the bake's first boot built the node image onto the target disk,
 	// which is then booted on its own for its first-boot checks.
@@ -134,7 +134,7 @@ type Recipe struct {
 	DiskGiB int
 	// BuilderDiskGiB is, in ImageMode, the disk of the VM that builds the image.
 	BuilderDiskGiB int
-	// MemoryMiB is what the bake's VM gets; 0 means the builder's default.
+	// MemoryMiB is what the bake's VM gets. 0 means the builder's default.
 	MemoryMiB int
 	// Log is the bake's own log in the guest, whose end a failed check reports.
 	Log string
@@ -175,11 +175,11 @@ func FamilyOf(name string) (Family, bool) {
 func ReleaseOf(o NodeOS) (Family, Release, error) {
 	f, ok := FamilyOf(o.Family)
 	if !ok {
-		return nil, Release{}, fmt.Errorf("unknown node OS family %q, expected one of %v", o.Family, familyNames())
+		return nil, Release{}, fmt.Errorf("unknown node OS family %q: %s", o.Family, orList(familyNames()))
 	}
 	i := slices.IndexFunc(f.Releases(), func(r Release) bool { return r.Name == o.Release })
 	if i < 0 {
-		return nil, Release{}, fmt.Errorf("%s has no release %q Kubehenge builds, expected one of %v", f.Title(), o.Release, releaseNames(f))
+		return nil, Release{}, fmt.Errorf("%s has no release %q Kubehenge builds, only %s", f.Title(), o.Release, orList(releaseNames(f)))
 	}
 	return f, f.Releases()[i], nil
 }
@@ -257,4 +257,13 @@ func releaseNames(f Family) []string {
 		out[i] = r.Name
 	}
 	return out
+}
+
+// orList joins names as "a, b or c".
+func orList(names []string) string {
+	last := len(names) - 1
+	if last <= 0 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:last], ", ") + " or " + names[last]
 }

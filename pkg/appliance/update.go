@@ -25,7 +25,7 @@ import (
 )
 
 // The spool between the interface and the updater. The interface (unprivileged) may only drop
-// requests into Requests; the updater (root) writes Status, which the interface reads.
+// requests into Requests. The updater (root) writes Status, which the interface reads.
 const (
 	maxRequest   = 4 << 10
 	maxIndex     = 1 << 20
@@ -112,21 +112,21 @@ func (s Spool) requests() string { return filepath.Join(string(s), "requests") }
 // trusts nothing the interface wrote beyond a small JSON request.
 type Updater struct {
 	Spool Spool
-	// Index is the release index's URL; its signature is at Index + ".sig".
+	// Index is the release index's URL. Its signature is at Index + ".sig".
 	Index string
 	// Root is the file system root, "/" but for tests.
 	Root string
 	HTTP *http.Client
 	// Restart restarts the interface on the new software.
 	Restart func(ctx context.Context) error
-	// ApplianceDir is the interface's state directory; its job lock keeps a restart from cutting
+	// ApplianceDir is the interface's state directory. Its job lock keeps a restart from cutting
 	// off a run of the management-cluster module.
 	ApplianceDir string
 	// Current is the installed release and Keys the release keys it trusts: release.Version and
 	// release.PublicKeys() of this build.
 	Current string
 	Keys    []ed25519.PublicKey
-	// Healthy tells whether the restarted interface serves; an upgrade it refuses is rolled back.
+	// Healthy tells whether the restarted interface serves. An upgrade it refuses is rolled back.
 	Healthy func(ctx context.Context) error
 
 	// status is the upgrade under way, which each step records as it begins.
@@ -287,7 +287,7 @@ func (u *Updater) binary(name string) string {
 func (u *Updater) share() string { return filepath.Join(u.Root, "usr", "local", "share", "kubehenge") }
 
 // replace installs the archive and OpenTofu's binary at tofu, when not empty, restarts the
-// interface on them and checks that it serves; failing anywhere, it puts the old software back.
+// interface on them and checks that it serves. Failing anywhere, it puts the old software back.
 func (u *Updater) replace(ctx context.Context, version, archive, tofu string) error {
 	sw, err := u.setAside(tofu)
 	if err != nil {
@@ -626,7 +626,7 @@ func unpackEntry(r io.Reader, h *tar.Header, root *os.Root) error {
 	}
 }
 
-// openTarball opens a gzipped tar; the returned function closes it.
+// openTarball opens a gzipped tar. The returned function closes it.
 func openTarball(archive string) (*tar.Reader, func(), error) {
 	f, err := os.Open(archive) //nolint:gosec // the updater's own download
 	if err != nil {
@@ -657,7 +657,7 @@ func get(ctx context.Context, client *http.Client, url string, limit int64) ([]b
 }
 
 // fetch starts a GET of url, which has to be https, and returns the response once its status is
-// OK; the caller closes its body.
+// OK. The caller closes its body.
 func fetch(ctx context.Context, client *http.Client, url string) (*http.Response, error) {
 	if !strings.HasPrefix(url, "https://") {
 		return nil, fmt.Errorf("%s is not https", url)

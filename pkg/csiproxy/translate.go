@@ -11,7 +11,7 @@ import (
 
 // names turns the plugin's volume IDs of the copies into their real ones and back.
 type names struct {
-	// toReal maps each copy's volume ID as the plugin knows it to its real one; toPlugin the other
+	// toReal maps each copy's volume ID as the plugin knows it to its real one. toPlugin maps the other
 	// way.
 	toReal, toPlugin map[string]string
 }
@@ -92,7 +92,7 @@ func (n names) volumePath(storage, volume string) string {
 	return volume
 }
 
-// translateJSON translates a JSON answer of Proxmox VE's, every string in it wherever it is; it
+// translateJSON translates a JSON answer of Proxmox VE's, every string in it wherever it is. It
 // returns the body as it was when it is not JSON.
 func translateJSON(body []byte, m map[string]string) []byte {
 	if len(m) == 0 {

@@ -79,7 +79,7 @@ describe("certificates", () => {
       "Let's Encrypt by DNS-01 through Amazon Route 53, for apps.example.com and *.apps.example.com",
     );
 
-    // HTTP-01 takes neither a domain nor a DNS provider; the CA no ACME account.
+    // HTTP-01 takes neither a domain nor a DNS provider, the CA no ACME account.
     expect(certificatesVariable({ ...f, issuer: "acme-http01", staging: true })).toStrictEqual({
       enabled: true,
       issuer: "acme-http01",

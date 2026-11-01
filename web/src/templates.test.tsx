@@ -238,13 +238,13 @@ describe("vM templates", () => {
       .getAllByRole("option")
       .map((o) => o.textContent);
     expect(distributions).toStrictEqual(["RKE2", "k3s", "kubeadm", "Talos"]);
-    // The default node OS comes chosen; one not released yet is shown but cannot be chosen.
+    // The default node OS comes chosen. One not released yet is shown but cannot be chosen.
     const nodeOS = within(dialog).getByLabelText("Node OS");
     expect(nodeOS).toHaveValue("almalinux-10");
     expect(within(nodeOS).getByRole("option", { name: "openSUSE Leap 16.1: not released yet" })).toBeDisabled();
     await user.selectOptions(nodeOS, "rocky-10");
     expect(nodeOS).toHaveAccessibleDescription("Needs Proxmox VE nodes with x86-64-v3 CPUs");
-    // Talos is its own OS, so it offers none; the choice stays for the others.
+    // Talos is its own OS, so it offers none. The choice stays for the others.
     await user.selectOptions(within(dialog).getByLabelText("Distribution"), "talos");
     expect(within(dialog).queryByLabelText("Node OS")).not.toBeInTheDocument();
     await user.selectOptions(within(dialog).getByLabelText("Distribution"), "kubeadm");

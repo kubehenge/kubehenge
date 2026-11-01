@@ -75,7 +75,7 @@ func TestPickTakesTheNewestBuildOfferedByTheNodeImageTime(t *testing.T) {
 func TestWindowNext(t *testing.T) {
 	t.Parallel()
 	w := &Window{Weekdays: []string{"Sat"}, Start: "02:00", DurationMinutes: 120, TimeZone: "Europe/Zurich"}
-	// Tuesday 13 October 2026; Zurich is two hours ahead of UTC then.
+	// Tuesday 13 October 2026. Zurich is two hours ahead of UTC then.
 	got, err := w.Next(time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC))
 	if err != nil || !got.Equal(time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)) {
 		t.Errorf("Next = %s, %v", got, err)
@@ -166,7 +166,7 @@ func TestUpgraderRefreshesNodeImagesInTheWindow(t *testing.T) {
 		if moved && c.Annotations[NodeImageRefreshedAnnotation] != "build-202610080000 to build-202610150000 at 2026-10-20T03:00:00Z" {
 			t.Errorf("%s: refreshed %q", name, c.Annotations[NodeImageRefreshedAnnotation])
 		}
-		// Only the closed window holds a cluster; one that moves, or does not refresh, is held by
+		// Only the closed window holds a cluster. One that moves, or does not refresh, is held by
 		// nothing. The window has no duration of its own: Sunday the 25th from 02:00.
 		want := map[string]string{"closed": "build-202610150000 at 2026-10-25T02:00:00Z"}[name]
 		if held, ok := c.Annotations[NodeImageHeldAnnotation]; held != want || ok != (want != "") {
@@ -274,7 +274,7 @@ func TestGeneratePatchesSelectTheBuildOfTheNodeImageTime(t *testing.T) {
 		strings.Contains(string(resp.Items[0].Patch), "build-") {
 		t.Errorf("Talos machines: %+v", resp.Items)
 	}
-	// The request carries none of the cluster's own variables; its node OS is the Cluster's.
+	// The request carries none of the cluster's own variables. Its node OS is the Cluster's.
 	if resp := request("rocky"); len(resp.Items) != 1 || !strings.Contains(string(resp.Items[0].Patch), `"os-rocky-10"`) ||
 		!strings.Contains(string(resp.Items[0].Patch), `"build-202610020000"`) {
 		t.Errorf("a cluster on Rocky Linux: %+v", resp.Items)

@@ -45,7 +45,7 @@ const (
 	kubeProxyMetrics    = "kubehenge-kube-proxy-metrics"
 	controllerMetrics   = "kubehenge-kube-controller-manager-metrics"
 	schedulerMetrics    = "kubehenge-kube-scheduler-metrics"
-	// The ports the components serve metrics on, on the loopback interface; their proxies take the
+	// The ports the components serve metrics on, on the loopback interface. Their proxies take the
 	// same port on the node's address.
 	etcdMetricsPort       = 2381
 	kubeProxyMetricsPort  = 10249
@@ -117,7 +117,7 @@ func monitoringValues(distribution templates.Distribution, proxy Image, addons *
 		"prometheus-node-exporter": map[string]any{
 			"fullnameOverride":  nodeExporter,
 			"namespaceOverride": nodeExporterNamespace,
-			// It reads the host's processes and file systems; Helm merges this into the chart's own
+			// It reads the host's processes and file systems. Helm merges this into the chart's own
 			// pod settings.
 			securityKey: map[string]any{seLinuxKey: hostSELinux()},
 			"resources": reserved(cpu10m, "32Mi"),
@@ -134,7 +134,7 @@ func monitoringValues(distribution templates.Distribution, proxy Image, addons *
 				"scheme": schemeHTTPS, "tlsConfig": clientTLS(nodeExporter + "." + nodeExporterNamespace + ".svc"),
 			}},
 		},
-		// cert-manager is there for the proxies already; it renews the webhook's certificate
+		// cert-manager is there for the proxies already. It renews the webhook's certificate
 		// instead of the chart's one-off Jobs.
 		"prometheusOperator": map[string]any{
 			"admissionWebhooks":        map[string]any{"certManager": map[string]any{"enabled": true}},
@@ -162,7 +162,7 @@ func monitoringValues(distribution templates.Distribution, proxy Image, addons *
 		if !addons.talosServing {
 			// Until Talos gives the controller manager and the scheduler a certificate of the
 			// cluster CA, they serve one they sign themselves, which Talos keeps inside their pods
-			// and offers no way to replace, so no proxy could verify them; they go unscraped, their
+			// and offers no way to replace, so no proxy could verify them. They go unscraped, their
 			// alerts with them.
 			off := map[string]any{"enabled": false}
 			values["kubeControllerManager"], values["kubeScheduler"] = off, off
@@ -251,7 +251,7 @@ func clientCertificate(user string) map[string]any {
 
 // metricsManifests are what the chart does not bring: the metrics CA and certificates, the
 // proxies and their rights, and node-exporter's privileged namespace. They are part of the
-// release, so they go when monitoring does; until cert-manager serves, the release fails and the
+// release, so they go when monitoring does. Until cert-manager serves, the release fails and the
 // Add-on Provider for Helm tries it again.
 func metricsManifests(distribution templates.Distribution, proxy Image, addons *Addons) []any {
 	privileged := map[string]string{}

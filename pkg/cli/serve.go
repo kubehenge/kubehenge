@@ -37,7 +37,7 @@ const (
 	// releaseChannelTimeout bounds a read of RKE2's and k3s's release channels, which a wizard
 	// waits on.
 	releaseChannelTimeout = 30 * time.Second
-	// interfaceRequestTimeout bounds the interface's own requests; Headlamp's run on.
+	// interfaceRequestTimeout bounds the interface's own requests. Headlamp's run on.
 	interfaceRequestTimeout = 5 * time.Minute
 	// shutdownTimeout is how long requests under way may take to finish on shutdown.
 	shutdownTimeout = 10 * time.Second
@@ -72,38 +72,39 @@ func newServeCommand(conn *pve.Config) *cobra.Command {
 		Short: "Serve Kubehenge's web interface",
 		Long: `Serve Kubehenge's web interface.
 
-Users sign in with their Proxmox VE accounts, through any realm, and see and manage the clusters
-their Proxmox VE privileges on each cluster's pool allow: VM.Audit to see one, VM.Allocate to create
-(on the workload pool), scale, upgrade, change add-ons and delete, Sys.Modify to download its admin
-kubeconfig. The interface then acts in the management cluster with the kubeconfig it runs with.`,
-		Args: cobra.NoArgs,
+Users sign in with their Proxmox VE accounts, through any realm. Their privileges on each cluster's
+pool decide what they may do. VM.Audit shows a cluster. VM.Allocate creates one (on the workload
+pool), scales, upgrades, changes add-ons and deletes. Sys.Modify downloads its admin kubeconfig.
+The interface acts in the management cluster with its own kubeconfig.`,
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.run(cmd.Context(), conn)
 		},
 	}
 	f := cmd.Flags()
+	proxmoxFlags(f, conn)
 	f.StringVar(&o.listen, "listen", ":8443", "address to serve on")
 	f.StringVar(&o.certFile, "tls-cert", "", "PEM file with the interface's certificate and any intermediates")
 	f.StringVar(&o.keyFile, "tls-key", "", "PEM file with the certificate's private key")
 	f.StringVar(&s.WorkloadPool, "workload-pool", "kubehenge", "Proxmox VE pool the clusters' own pools nest under, as the controller's --workload-pool")
 	f.StringVar(&s.ClassNamespace, "class-namespace", "kubehenge-system", "namespace of Kubehenge's ClusterClasses")
 	f.StringVar(&s.Namespace, "namespace", provisioner.InterfaceNamespace,
-		"namespace clusters are created in, the chart's interface.namespace, unless the chart's ConfigMap kubehenge-interface in --class-namespace lists the namespaces (with interface.extraNamespaces); the interface changes only the clusters there")
+		"namespace clusters are created in, the chart's interface.namespace. A list in the chart's ConfigMap kubehenge-interface in --class-namespace (interface.extraNamespaces) takes its place. The interface changes only the clusters in these namespaces")
 	f.DurationVar(&s.SessionMaxAge, "session-max-age", defaultSessionMaxAge, "how long a sign-in lasts, however active the user")
 	f.StringVar(&s.PublicURL, "public-url", os.Getenv("KUBEHENGE_PUBLIC_URL"),
-		"address users reach the interface at, such as https://kubehenge.example, where OpenID identity providers send them back; OpenID sign-in needs it (env KUBEHENGE_PUBLIC_URL)")
-	f.StringVar(&a.Dir, "appliance-dir", "", "run as Kubehenge's appliance, keeping the management cluster's state here and setting it up from the interface; "+
-		"without it the management cluster is the one in KUBECONFIG")
-	f.StringVar(&a.KeyDir, "key-dir", "", "with --appliance-dir, a directory on a volume the appliance's backups leave out, for the key that seals what automatic upgrades of the management cluster keep; empty, they cannot be switched on")
-	f.StringVar(&o.headlampListen, "headlamp-listen", "", "address to serve the shared Headlamp on, behind the interface's sign-in; empty for none")
+		"address users reach the interface at, such as https://kubehenge.example. OpenID sign-in needs it, for identity providers to send users back (env KUBEHENGE_PUBLIC_URL)")
+	f.StringVar(&a.Dir, "appliance-dir", "", "run as Kubehenge's appliance, keeping the management cluster's state in this directory and setting it up from the interface. "+
+		"Without it, the management cluster is the one in KUBECONFIG")
+	f.StringVar(&a.KeyDir, "key-dir", "", "with --appliance-dir, a directory on a volume the appliance's backups leave out. It holds the key that seals what automatic upgrades of the management cluster keep. Empty, those upgrades cannot be switched on")
+	f.StringVar(&o.headlampListen, "headlamp-listen", "", "address to serve the shared Headlamp on, behind the interface's sign-in, or empty for none")
 	f.StringVar(&o.headlampUpstream, "headlamp-upstream", "", "the Headlamp server, such as http://127.0.0.1:4466")
-	f.StringVar(&o.headlampKubeconfig, "headlamp-kubeconfig", "", "file the Headlamp server reads its clusters from; the interface writes it")
+	f.StringVar(&o.headlampKubeconfig, "headlamp-kubeconfig", "", "file the Headlamp server reads its clusters from, written by the interface")
 	f.IntVar(&s.ApplianceVMID, "appliance-vmid", applianceVMIDDefault(), "the appliance's guest ID in Proxmox VE, for telling administrators whether a backup job includes it (env KUBEHENGE_APPLIANCE_VMID)")
 	f.StringVar(&a.Module, "module", "/usr/share/kubehenge/management-cluster", "the management-cluster module the appliance applies")
 	f.StringVar(&a.Tofu, "tofu", "/usr/local/bin/tofu", "the OpenTofu binary the appliance runs")
 	f.StringVar(&o.updateSpool, "update-spool", "/var/lib/kubehenge-update", "the appliance updater's spool, where upgrades are requested")
 	f.StringVar(&o.releaseIndex, "release-index", releaseIndexDefault(), "URL of the signed index of Kubehenge's releases (env KUBEHENGE_RELEASE_INDEX)")
-	o.logs.addFlags(f, "log in development mode: each line names where in the code it was logged; still in JSON")
+	o.logs.addFlags(f, "log in development mode, naming where in the code each line was logged. Lines stay in JSON")
 	return cmd
 }
 

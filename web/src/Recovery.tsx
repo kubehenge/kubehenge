@@ -8,7 +8,7 @@ import { Dialog, ErrorBox, Field, Status, age, errorMessage, filled, sentence } 
 /** The condition Kubehenge's controller sets on a cluster whose only control plane's roll stalled. */
 export const rollStalledCondition = "ControlPlaneRollStalled";
 
-// The controller's message ends in the kubectl command that does what Recover does; the page
+// The controller's message ends in the kubectl command that does what Recover does. The page
 // offers the button, and the command beside it.
 const recoverOr = " with Recover on the cluster's page or: ";
 

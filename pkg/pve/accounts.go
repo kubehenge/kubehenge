@@ -25,7 +25,7 @@ const TicketLifetime = 2 * time.Hour
 const (
 	// userRequestTimeout bounds each request, as a signed-in user waits on it.
 	userRequestTimeout = 30 * time.Second
-	// maxResponseBytes caps what is read of an answer; Proxmox VE's largest, the cluster's
+	// maxResponseBytes caps what is read of an answer. Proxmox VE's largest, the cluster's
 	// resources, stay far below it.
 	maxResponseBytes = 1 << 20
 	// halfTicketParts are those of PVE:!tfa!<challenge>::<signature> when split at the first two
@@ -39,7 +39,7 @@ type Accounts struct {
 	http *http.Client
 }
 
-// NewAccounts returns Accounts for the API cfg locates; cfg.Token is not used. It makes no request.
+// NewAccounts returns Accounts for the API cfg locates. cfg.Token is not used. It makes no request.
 func NewAccounts(cfg Config) (*Accounts, error) {
 	base, httpClient, err := cfg.transport()
 	if err != nil {
@@ -56,8 +56,8 @@ type Ticket struct {
 	Ticket   string
 	CSRF     string
 	Issued   time.Time
-	// Token is an API token, user@realm!name=secret, which Proxmox VE takes in place of the ticket;
-	// it needs no CSRF token and is not renewed.
+	// Token is an API token, user@realm!name=secret, which Proxmox VE takes in place of the ticket.
+	// It needs no CSRF token and is not renewed.
 	Token string
 }
 
@@ -69,7 +69,7 @@ func (t *Ticket) authorize(req *http.Request) {
 	}
 	req.Header.Set("Cookie", "PVEAuthCookie="+t.Ticket)
 	if req.Method != http.MethodGet {
-		// Go sends every header name in this canonical form; Proxmox VE reads them regardless of case.
+		// Go sends every header name in this canonical form. Proxmox VE reads them regardless of case.
 		req.Header.Set("Csrfpreventiontoken", t.CSRF)
 	}
 }
@@ -97,7 +97,7 @@ type Challenge struct {
 	TOTP     bool
 	Yubico   bool
 	WebAuthn bool
-	// Recovery holds the indices of the recovery keys still unused; nil means none were set up.
+	// Recovery holds the indices of the recovery keys still unused. Nil means none were set up.
 	Recovery []int
 	ticket   string
 	issued   time.Time
@@ -115,7 +115,7 @@ type ticketResponse struct {
 	NeedTFA  int    `json:"NeedTFA"`
 }
 
-// APIError is any other refusal; Proxmox VE puts its reason in the HTTP status line.
+// APIError is any other refusal. Proxmox VE puts its reason in the HTTP status line.
 type APIError struct {
 	Method, Path, Status string
 }
@@ -180,7 +180,7 @@ func (a *Accounts) OpenIDLogin(ctx context.Context, code, state, redirect string
 	var res ticketResponse
 	err := a.postForm(ctx, "/access/openid/login", url.Values{"code": {code}, "state": {state}, "redirect-url": {redirect}}, &res)
 	if apiErr, ok := errors.AsType[*APIError](err); ok {
-		// Proxmox VE's reason is for the log; the user learns no more than with a password.
+		// Proxmox VE's reason is for the log. The user learns no more than with a password.
 		return nil, fmt.Errorf("%w: %s", ErrAuthentication, apiErr.Status)
 	}
 	if err != nil {
@@ -193,7 +193,7 @@ func (a *Accounts) OpenIDLogin(ctx context.Context, code, state, redirect string
 }
 
 // Renew exchanges a ticket for a new one. Proxmox VE neither asks the realm nor a second factor
-// again, so only a disabled or expired user stops it; how long a session lasts is the caller's to
+// again, so only a disabled or expired user stops it. How long a session lasts is the caller's to
 // limit.
 func (a *Accounts) Renew(ctx context.Context, t *Ticket) (*Ticket, error) {
 	if t.Token != "" {

@@ -55,7 +55,7 @@ type Source struct {
 	Clientset kubernetes.Interface
 	// ControllerNamespace is where Kubehenge's controller runs, the chart's namespace.
 	ControllerNamespace string
-	// Journal reads the journals of Kubehenge's units on the appliance; nil, or ErrNotAppliance,
+	// Journal reads the journals of Kubehenge's units on the appliance. A nil value, or ErrNotAppliance,
 	// leaves them out.
 	Journal func(ctx context.Context) ([]byte, error)
 	Now     func() time.Time
@@ -78,7 +78,7 @@ func Name(namespace, cluster string, at time.Time) string {
 }
 
 // Write writes the support bundle of a cluster as a gzipped tar. It fails before writing anything
-// when the cluster cannot be read; whatever else cannot be read the bundle's manifest says.
+// when the cluster cannot be read. Whatever else cannot be read the bundle's manifest says.
 func Write(ctx context.Context, w io.Writer, src *Source, namespace, name string) error {
 	cluster := &unstructured.Unstructured{}
 	cluster.SetGroupVersionKind(clusterv1.GroupVersion.WithKind(clusterv1.ClusterKind))

@@ -18,7 +18,7 @@ import (
 const tokenPrefix = "PVEAPIToken=" //nolint:gosec // the header's scheme, not a credential
 
 // tokenRecheck is how long a token Proxmox VE took is trusted before it is asked again, so that a
-// script's requests do not each make one more; its privileges are asked for on every request.
+// script's requests do not each make one more. Its privileges are asked for on every request.
 const tokenRecheck = time.Minute
 
 // tokenUsers are the API tokens Proxmox VE took a moment ago, by their hash.

@@ -121,7 +121,7 @@ type manifestHead struct {
 	Metadata   manifestMetadata `json:"metadata"`
 }
 
-// manifestObjects splits a manifest into its documents, with what each holds; documents that hold
+// manifestObjects splits a manifest into its documents, with what each holds. Documents that hold
 // only comments are left out.
 func manifestObjects(manifest []byte) ([]manifestHead, [][]byte, error) {
 	reader := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(manifest)))
@@ -387,7 +387,7 @@ func (r *GatewayAPIReconciler) logHolders(ctx context.Context, key types.Namespa
 }
 
 // oldestOf is the older of oldest and what a CRD of the bundle names, which stands for no release
-// Kubehenge can read when it names none; objects other than CRDs leave it as it is.
+// Kubehenge can read when it names none. Objects other than CRDs leave it as it is.
 func oldestOf(oldest, named string, o *gatewayAPIObject) string {
 	if o.gvk != crdGVK {
 		return oldest

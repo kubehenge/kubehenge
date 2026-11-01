@@ -48,7 +48,7 @@ const (
 // Cluster uses them, which on a management cluster with one distribution in use leaves the others'
 // controllers idle. Without a Cluster their Deployments are scaled to none. For the first, they are
 // scaled up and, once they serve, the class's control-plane and bootstrap templates, which their
-// webhooks admit, are applied from the ConfigMap of the class's name; until then Cluster API holds
+// webhooks admit, are applied from the ConfigMap of the class's name. Until then Cluster API holds
 // the Cluster, as it does any Cluster whose class is not ready. Once the last Cluster is gone, the
 // templates go first, while the webhooks still answer, then the providers.
 type Distributions struct {
@@ -87,7 +87,7 @@ func (d *Distributions) Namespaces() []string {
 }
 
 // SetupWithManager registers the reconciler, keyed by ClusterClass. Clusters wake it only when
-// created, deleted, or moved to another class or control plane; Deployments as their pods come up.
+// created, deleted, or moved to another class or control plane, and Deployments as their pods come up.
 func (d *Distributions) SetupWithManager(mgr ctrl.Manager) error {
 	err := ctrl.NewControllerManagedBy(mgr).
 		Named("distributions").
@@ -196,7 +196,7 @@ const (
 )
 
 // templates reads a class's templates from its ConfigMap, labelled for it and with the hash of the
-// lot; none if it has no ConfigMap.
+// lot, or none if it has no ConfigMap.
 func (d *Distributions) templates(ctx context.Context, class string) ([]*unstructured.Unstructured, string, error) {
 	cm := &corev1.ConfigMap{}
 	if err := d.Client.Get(ctx, client.ObjectKey{Namespace: d.ClassNamespace, Name: class}, cm); err != nil {
@@ -353,7 +353,7 @@ func serving(dep *appsv1.Deployment) bool {
 }
 
 // rolledOut reports whether a Deployment's pods all run its current spec and are available, as
-// `kubectl rollout status` does; one scaled to none has rolled out once its pods are gone.
+// `kubectl rollout status` does. One scaled to none has rolled out once its pods are gone.
 func rolledOut(dep *appsv1.Deployment) bool {
 	want := wantedReplicas(dep)
 	s := dep.Status

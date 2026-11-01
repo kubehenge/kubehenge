@@ -18,7 +18,7 @@ import (
 const certificatesVariable = "certificates"
 
 // sharesDNS01 reports whether a certificates value takes the DNS-01 credential stored for every
-// cluster; a value that cannot be read takes nothing.
+// cluster. A value that cannot be read takes nothing.
 func sharesDNS01(raw json.RawMessage) bool {
 	if raw == nil || string(raw) == jsonNull {
 		return false
@@ -28,7 +28,7 @@ func sharesDNS01(raw json.RawMessage) bool {
 }
 
 // checkSharedDNS01 checks a certificates value that switches the credential stored for every
-// cluster on, from current, which held, the user's privileges on path, have to allow; it answers
+// cluster on, from current, which held, the user's privileges on path, have to allow. It answers
 // the request when they do not. That credential can write the zone's records for every cluster that
 // uses it, so handing it to one more cluster needs what trusting another identity provider does.
 func checkSharedDNS01(w http.ResponseWriter, u user, path string, held map[string]bool, raw, current json.RawMessage) bool {
@@ -42,7 +42,7 @@ func checkSharedDNS01(w http.ResponseWriter, u user, path string, held map[strin
 }
 
 // ingressCA hands out the certificate of the CA a cluster's certificates come from with the issuer
-// ca, for its users to trust; never its key. Naming privSee keeps to the interface's namespace,
+// ca, for its users to trust, never its key. Naming privSee keeps to the interface's namespace,
 // whose Secrets alone it may read.
 func (s *Server) ingressCA(w http.ResponseWriter, r *http.Request, u user) {
 	c, _, ok := s.cluster(w, r, u, privSee)

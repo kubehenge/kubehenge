@@ -25,14 +25,14 @@ type Settings struct {
 	// manager, VM.Config.Disk for the CSI plugin.
 	Role string
 	// DatastoreRole is given to the user of a cluster that holds Datastore.Allocate on its storage,
-	// there; it carries the group's privileges on the storage too, which it replaces.
+	// there. It carries the group's privileges on the storage too, which it replaces.
 	DatastoreRole string
-	// SysAuditGroup holds Sys.Audit on /, unpropagated; the user of a cluster whose cloud
+	// SysAuditGroup holds Sys.Audit on /, unpropagated. The user of a cluster whose cloud
 	// controller manager labels nodes with their HA groups joins it. Proxmox VE lets only
 	// Permissions.Modify on / grant anything on /, which would let the controller grant itself every
 	// privilege, so a cluster gets it through the group rather than an ACL of its own.
 	SysAuditGroup string
-	// Node, when set, is where volume owner VMs are created; otherwise the first online node.
+	// Node, when set, is where volume owner VMs are created. Otherwise the first online node.
 	Node string
 	// Region names the Proxmox VE cluster to the clusters (topology.kubernetes.io/region);
 	// empty means the Proxmox VE cluster's name, or the node's when it is not clustered.
@@ -45,7 +45,7 @@ type Settings struct {
 type Credentials struct {
 	TokenID     string
 	TokenSecret string
-	// VolumeOwner is the VMID that owns the cluster's volumes, last seen on VolumeOwnerNode; it
+	// VolumeOwner is the VMID that owns the cluster's volumes, last seen on VolumeOwnerNode. It
 	// moves to the node of a volume on node-local storage to delete it.
 	VolumeOwner     int
 	VolumeOwnerNode string
@@ -57,7 +57,7 @@ type Proxmox struct {
 	Client   *proxmox.Client
 	Settings Settings
 
-	// region is the Proxmox VE cluster's name once read; it does not change while the controller
+	// region is the Proxmox VE cluster's name once read. It does not change while the controller
 	// runs.
 	mu     sync.Mutex
 	region string
@@ -253,7 +253,7 @@ func (p *Proxmox) removeLocalVolumes(ctx context.Context, vmid int, created stri
 
 // removeVolumesOn deletes the owner VM's volumes on one node's storage.
 func (p *Proxmox) removeVolumesOn(ctx context.Context, owner *ownerVM, node pveNode, storage string) error {
-	// A node that has left the Proxmox VE cluster is no longer listed; one that is listed may come
+	// A node that has left the Proxmox VE cluster is no longer listed. One that is listed may come
 	// back with the volumes.
 	if node.Status != nodeOnline {
 		return fmt.Errorf("node %s is %s; the volumes of owner VM %d on its storage %s are deleted once it is online", node.Node, node.Status, owner.vmid, storage)
@@ -314,7 +314,7 @@ func (p *Proxmox) ensurePool(ctx context.Context, pool string) ([]poolMember, er
 
 // ensureUser creates the cluster's user in the clusters' group, and keeps it in the group holding
 // Sys.Audit on / exactly while access asks for that. Proxmox VE shows the token a user of the
-// clusters' group; of one that does not exist it says "no such user", and one of the same name
+// clusters' group. Of one that does not exist it says "no such user", and one of the same name
 // outside the group it refuses to show, whose creation then fails rather than take it over.
 func (p *Proxmox) ensureUser(ctx context.Context, n Names, access Access) error {
 	if access.SysAudit && p.Settings.SysAuditGroup == "" {
@@ -472,7 +472,7 @@ func (p *Proxmox) ensureToken(ctx context.Context, n Names, secret string) (stri
 }
 
 // keepToken ensures the cluster's token. Proxmox VE shows a token's secret only when creating it,
-// and a token without its secret is replaced; kept at once, a failure later in the reconcile does
+// and a token without its secret is replaced. Kept at once, a failure later in the reconcile does
 // not cost a new token each retry.
 func (p *Proxmox) keepToken(ctx context.Context, n Names, c Credentials, record func(Credentials) error) (Credentials, error) {
 	secret, err := p.ensureToken(ctx, n, c.TokenSecret)
@@ -537,7 +537,7 @@ func (p *Proxmox) createVolumeOwner(ctx context.Context, n Names, c Credentials,
 	if err := record(c); err != nil {
 		return c, "", err
 	}
-	// Never started and without disks; it exists so that the cluster's volumes have an owner
+	// Never started and without disks. It exists so that the cluster's volumes have an owner
 	// only this cluster's token may configure. Proxmox VE checks every other setting against the
 	// VM's own path while creating it, before its pool's rights reach it, so the rest comes after.
 	vm := map[string]any{vmidParam: vmid, "name": n.VolumeOwner, "pool": n.Pool}
@@ -683,7 +683,7 @@ func (p *Proxmox) readRegion(ctx context.Context) (string, error) {
 
 // waitTask waits for a task to end. A task can hang, as one stuck on storage that stopped
 // answering does, and the wait holds one of the controller's four reconcile workers, so it gives
-// up after timeout; the next reconcile finds whatever the task did by then. Most tasks end within
+// up after timeout. The next reconcile finds whatever the task did by then. Most tasks end within
 // a fraction of a second, so it asks again soon at first and less often the longer one runs.
 func (p *Proxmox) waitTask(ctx context.Context, node, upid string, timeout time.Duration) error {
 	path := fmt.Sprintf("/nodes/%s/tasks/%s/status", node, url.PathEscape(upid))
@@ -721,7 +721,7 @@ const (
 )
 
 // How long the tasks on a volume owner VM may take. It has no disks of its own, so creating and
-// moving it are quick; deleting it deletes every volume it owns.
+// moving it are quick. Deleting it deletes every volume it owns.
 const (
 	createTaskTimeout = 2 * time.Minute
 	moveTaskTimeout   = 5 * time.Minute

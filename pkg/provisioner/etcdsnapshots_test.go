@@ -464,7 +464,7 @@ func TestEtcdSnapshotterWaits(t *testing.T) {
 	}
 }
 
-// Switched off, a request nobody will answer and the condition go; the last snapshot stays known.
+// Switched off, a request nobody will answer and the condition go. The last snapshot stays known.
 func TestEtcdSnapshotterOff(t *testing.T) {
 	t.Parallel()
 	c := withRequest(etcdCluster(`{"enabled":false,"target":"store"}`))
@@ -516,7 +516,7 @@ func TestCheckEtcdSnapshots(t *testing.T) {
 	}
 }
 
-// The webhook refuses what checkEtcdSnapshots does, naming the variable.
+// The webhook refuses what checkEtcdSnapshots does and names the variable.
 func TestValidatorHoldsEtcdSnapshots(t *testing.T) {
 	t.Parallel()
 	h, _ := hooksFor(t)
@@ -583,7 +583,7 @@ func TestTrailerCheck(t *testing.T) {
 	}
 }
 
-// countingReader is a snapshot of size bytes, generated as it is read, counting what it gave.
+// countingReader is a snapshot of size bytes, generated as it is read and counts what it gave.
 type countingReader struct {
 	rng   *rand.ChaCha8
 	left  int

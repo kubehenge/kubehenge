@@ -33,7 +33,7 @@ type headlampSignIn struct {
 }
 
 const (
-	// headlampTokenLifetime is the longest a sign-in's token lasts; a session that ends sooner
+	// headlampTokenLifetime is the longest a sign-in's token lasts. A session that ends sooner
 	// gets one that ends with it.
 	headlampTokenLifetime = time.Hour
 	// minTokenLifetime is the shortest token the TokenRequest API makes.
@@ -90,7 +90,7 @@ func ownHeadlampToken(r *http.Request, cluster string) bool {
 func signedOutKey(u user, cluster string) string { return u.session.id + "\x00" + cluster }
 
 // headlampToken is the session's token for the cluster Headlamp names, made when there is none or
-// it runs out soon; empty where the user may not have one, signed out of the cluster, or the
+// it runs out soon. Empty where the user may not have one, signed out of the cluster, or the
 // cluster gives none. A token that could not be made again comes with the error while the one
 // before still holds.
 func (s *Server) headlampToken(ctx context.Context, u user, cluster string) (string, error) {
@@ -166,7 +166,7 @@ func (s *Server) mintHeadlampToken(ctx context.Context, u user, c *clusterv1.Clu
 		return "", time.Time{}, errors.New("the cluster made no token")
 	}
 	expires := made.Status.ExpirationTimestamp.Time
-	// The workload cluster's audit log records the account, with the token's ID beside it; this is
+	// The workload cluster's audit log records the account, with the token's ID beside it. This is
 	// where the ID is tied to the Proxmox VE user.
 	s.Log.InfoContext(ctx, "headlamp sign-in", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name,
 		"credentialID", credentialID(made.Status.Token), "expires", expires.UTC().Format(time.RFC3339))

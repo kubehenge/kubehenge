@@ -143,7 +143,7 @@ func TestEnsureVolumeHoldersGivesEachNodeRoom(t *testing.T) {
 		}
 	}
 
-	// Proxmox VE has not listed the new holders yet; they count all the same.
+	// Proxmox VE has not listed the new holders yet. They count all the same.
 	if err := p.EnsureVolumeHolders(ctx, webNames, []string{"pve1", "pve2", "pve3"}); err != nil {
 		t.Fatal(err)
 	}

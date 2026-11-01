@@ -37,7 +37,7 @@ type managementUpgrade struct {
 	Carried string `json:"carried"`
 	Behind  bool   `json:"behind"`
 	// Changes are the components whose versions applying this release changes, in the order the
-	// module lists them; a side the record does not know is left out.
+	// module lists them. A side the record does not know is left out.
 	Changes []versionChange `json:"changes,omitempty"`
 }
 
@@ -68,7 +68,7 @@ func (s *Server) managementUpgrade() *managementUpgrade {
 	return v
 }
 
-// newerRelease tells whether carried is a later release than applied; a build that is no release,
+// newerRelease tells whether carried is a later release than applied. A build that is no release,
 // such as dev, is never.
 func newerRelease(applied, carried string) bool {
 	was, err := release.ParseVersion(applied)
@@ -256,7 +256,7 @@ func (s *Server) applyDueManagement() {
 	err := a.ApplyUnattended(func(_ context.Context, kubeconfig []byte) error { return s.useKubeconfig(kubeconfig) })
 	switch {
 	case jobConflict(err):
-		// Another job took the appliance meanwhile; the next minute looks again.
+		// Another job took the appliance meanwhile. The next minute looks again.
 		return
 	case err != nil:
 		s.Log.Error("automatic management-cluster upgrade", "error", err)

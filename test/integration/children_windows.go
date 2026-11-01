@@ -23,7 +23,7 @@ const endMillis = 30_000
 var job windows.Handle
 
 // OwnChildren puts the test binary into the job object, and with it every process it starts from
-// then on; a package calls it once, before it starts its first API server.
+// then on. A package calls it once, before it starts its first API server.
 func OwnChildren() error {
 	h, err := windows.CreateJobObject(nil, nil)
 	if err != nil {

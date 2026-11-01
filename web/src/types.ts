@@ -73,7 +73,7 @@ export interface ClusterClass {
   versionFormat: { pattern: string };
   /** Why no cluster of the class on its default node OS can be built yet: the template its machines clone is missing. */
   noTemplate?: string;
-  /** The operating systems the class's nodes may run, in the order to offer them; absent for Talos. */
+  /** The operating systems the class's nodes may run, in the order to offer them. Absent for Talos. */
   nodeOSes?: NodeOSChoice[];
 }
 
@@ -87,7 +87,7 @@ export interface NodeOSRef {
 export interface NodeOS extends NodeOSRef {
   /** As people read it, such as AlmaLinux 10. */
   title: string;
-  /** The QEMU CPU type its VMs get, such as x86-64-v2-AES; the Proxmox VE nodes' CPUs have to offer it. */
+  /** The QEMU CPU type its VMs get, such as x86-64-v2-AES. The Proxmox VE nodes' CPUs have to offer it. */
   cpuType: string;
   /** The mandatory access control it enforces, such as selinux. */
   mac: string;
@@ -130,7 +130,7 @@ export interface WorkerPool {
   /** For an autoscaled pool, the workers it asks for at the moment. */
   replicas: number;
   autoscaling?: Autoscaling;
-  /** The pool's own size; unset, it takes the cluster's workerMachine. */
+  /** The pool's own size. Unset, it takes the cluster's workerMachine. */
   machine?: MachineSize;
 }
 
@@ -205,7 +205,7 @@ export interface HealthVM {
   maxMemory: number;
   /** Seconds. */
   uptime: number;
-  /** The CPU load of the last hour, a point a minute; null where it did not run. */
+  /** The CPU load of the last hour, a point a minute. null where it did not run. */
   load?: (number | null)[];
 }
 
@@ -214,7 +214,7 @@ export interface HealthNode {
   machine?: string;
   role: "control-plane" | "worker";
   pool?: string;
-  /** Whether the node was read inside the cluster; the fields up to pods need it. */
+  /** Whether the node was read inside the cluster. The fields up to pods need it. */
   joined: boolean;
   ready: boolean;
   /** Not ready for longer than starting or rebooting takes: a fault, not work under way. */
@@ -283,7 +283,7 @@ export interface HealthCheck {
   name: string;
   expected: number;
   healthy: number;
-  /** Whether it may replace machines now; it stops when too many fail. */
+  /** Whether it may replace machines now. It stops when too many fail. */
   allowed: boolean;
   message?: string;
   remediating?: string[];
@@ -421,7 +421,7 @@ export interface Cluster {
   class: string;
   distribution: string;
   version: string;
-  /** Counts the changes to the cluster's settings; a change is made against the one it was shown. */
+  /** Counts the changes to the cluster's settings. A change is made against the one it was shown. */
   generation: number;
   created: string;
   createdBy?: string;
@@ -448,9 +448,9 @@ export interface Cluster {
   headlamp?: string;
   /** How each peer the cluster lists for Cluster Mesh stands, while it is on. */
   mesh?: MeshPeer[];
-  /** Which template builds the nodes run and when they next move; absent for Talos. */
+  /** Which template builds the nodes run and when they next move. Absent for Talos. */
   nodeImage?: NodeImage;
-  /** The operating system the nodes run; absent for Talos. */
+  /** The operating system the nodes run. Absent for Talos. */
   nodeOS?: NodeOS;
   /** The deploy key and the repository host's keys Kubehenge made for the cluster's GitOps. */
   gitops?: GitOpsKeys;
@@ -521,7 +521,7 @@ export interface GitOpsKeys {
   hostKeys?: string[];
 }
 
-/** A cluster another lists to link with in a Cluster Mesh; refused says why the two are not linked. */
+/** A cluster another lists to link with in a Cluster Mesh. refused says why the two are not linked. */
 export interface MeshPeer {
   name: string;
   refused?: string;
@@ -634,11 +634,11 @@ export interface ManagementSettings {
   backupTargets?: BackupTarget[];
   /** The controller restores clusters' etcd through the Proxmox VE guest agent. */
   etcdRestore?: boolean;
-  /** The weekly build of the node OS VM templates; absent, it runs with its defaults. */
+  /** The weekly build of the node OS VM templates. Absent, it runs with its defaults. */
   templateRefresh?: TemplateRefreshSettings;
-  /** Clusters have the cloud controller manager's HA group labels unless they switch them off, with Sys.Audit on / for their token; absent, they have them. */
+  /** Clusters have the cloud controller manager's HA group labels unless they switch them off, with Sys.Audit on / for their token. Absent, they have them. */
   clusterSysAudit?: boolean;
-  /** Kubehenge's controller reads nodes' boot logs through their guest agents, with VM.GuestAgent.FileRead; absent, it does. */
+  /** Kubehenge's controller reads nodes' boot logs through their guest agents, with VM.GuestAgent.FileRead. Absent, it does. */
   nodeBootLogs?: boolean;
   /** More namespaces the interface creates and manages clusters in, beside its own. */
   extraClusterNamespaces?: string[];
@@ -648,7 +648,7 @@ export interface ManagementSettings {
   headlampActions?: boolean;
 }
 
-/** When and where the node OS VM templates are built again; empty fields take the defaults. */
+/** When and where the node OS VM templates are built again. Empty fields take the defaults. */
 export interface TemplateRefreshSettings {
   enabled: boolean;
   weekday?: string;
@@ -664,7 +664,7 @@ export interface TemplateRefreshSettings {
 /** An S3 store clusters back up to, each under a folder of its own beneath the prefix. */
 export interface BackupTarget {
   name: string;
-  /** The store's https:// URL; none for AWS S3 itself. */
+  /** The store's https:// URL. None for AWS S3 itself. */
   endpoint?: string;
   bucket: string;
   region?: string;
@@ -704,10 +704,10 @@ export interface RestoreRun {
   backup: string;
   phase: string;
   by?: string;
-  /** The namespaces it brings back; none for every one. */
+  /** The namespaces it brings back. None for every one. */
   namespaces?: string[];
   excludedNamespaces?: string[];
-  /** The kinds it brings back; none for every one. */
+  /** The kinds it brings back. None for every one. */
   resources?: string[];
   excludedResources?: string[];
   /** Whether the volumes' data comes back too. */
@@ -771,7 +771,7 @@ export interface RestoreMessages {
   more?: number;
 }
 
-/** What a restore is asked for; the lists left empty bring back every namespace and kind. */
+/** What a restore is asked for. The lists left empty bring back every namespace and kind. */
 export interface RestoreRequest {
   backup: string;
   namespaces?: string[];
@@ -850,7 +850,7 @@ export type EtcdRestorePhase =
 
 /** How a restore of a cluster's etcd went, or is going. */
 export interface EtcdRestoreStatus {
-  /** The snapshot restored; absent when etcd is reset to a control-plane machine's own. */
+  /** The snapshot restored. Absent when etcd is reset to a control-plane machine's own. */
   snapshot?: string;
   by?: string;
   requestedAt: string;
@@ -890,7 +890,7 @@ export interface ClusterEtcdSnapshots {
   message?: string;
   restore?: EtcdRestoreStatus;
   restoring: boolean;
-  /** The controller restores through the guest agent, or a Talos cluster's Talos API; otherwise the steps are done by hand. */
+  /** The controller restores through the guest agent, or a Talos cluster's Talos API. Otherwise the steps are done by hand. */
   automatic: boolean;
   /** VM.Allocate on the cluster's pool. */
   canSnapshot: boolean;
@@ -941,13 +941,13 @@ export interface SetupStatus {
   allowed: boolean;
   job?: Job;
   settings?: ManagementSettings;
-  /** Whether a Proxmox VE backup job includes the appliance; absent when not known. */
+  /** Whether a Proxmox VE backup job includes the appliance. Absent when not known. */
   backup?: boolean;
-  /** When the interface's certificate runs out; for administrators only. */
+  /** When the interface's certificate runs out. For administrators only. */
   certificateExpires?: string;
-  /** When the management cluster's admin credentials run out; an apply renews them. */
+  /** When the management cluster's admin credentials run out. An apply renews them. */
   credentialsExpire?: string;
-  /** The appliance's guest ID in Proxmox VE; for administrators only. */
+  /** The appliance's guest ID in Proxmox VE. For administrators only. */
   applianceVMID?: number;
   /** The Proxmox VE API's certificate goes unverified (--proxmox-insecure); for administrators only. */
   proxmoxInsecure?: boolean;
@@ -957,9 +957,9 @@ export interface SetupStatus {
   upgrade?: ManagementUpgrade;
 }
 
-/** How the management cluster itself is doing; for administrators only. */
+/** How the management cluster itself is doing. For administrators only. */
 export interface ManagementHealth {
-  /** Whether its API answered; error says why not. */
+  /** Whether its API answered. error says why not. */
   answers: boolean;
   error?: string;
   nodes?: { name: string; ready: boolean; message?: string; kubelet?: string }[];
@@ -1005,7 +1005,7 @@ export interface Versions {
   older?: string[];
   /** The one its publisher calls stable. */
   stable?: string;
-  /** Why there are none to offer; the version is then typed in. */
+  /** Why there are none to offer. The version is then typed in. */
   error?: string;
 }
 
@@ -1015,16 +1015,16 @@ export interface VMTemplate {
   node: string;
   name: string;
   tags: string[];
-  /** The template a build is one of; a Talos template's own name. */
+  /** The template a build is one of. A Talos template's own name. */
   line: string;
-  /** The build's tag and when it was made; absent for a Talos template. */
+  /** The build's tag and when it was made. Absent for a Talos template. */
   build?: string;
   built?: string;
   /** The newest build of its template. */
   newest?: boolean;
   /** The cluster that clones from it, which keeps it from being deleted. */
   inUse?: string;
-  /** The operating system its machines run, such as AlmaLinux 10; absent for a Talos template. */
+  /** The operating system its machines run, such as AlmaLinux 10. Absent for a Talos template. */
   nodeOS?: string;
 }
 
@@ -1074,7 +1074,7 @@ export interface TemplateBuildRequest {
   kubernetesVersion?: string;
   /** For Talos, whose templates are of one Talos release each. */
   talosVersion?: string;
-  /** The node OS as one word, such as almalinux-10; absent, the default. Talos is its own OS and takes none. */
+  /** The node OS as one word, such as almalinux-10. Absent, the default. Talos is its own OS and takes none. */
   nodeOS?: string;
 }
 
@@ -1082,7 +1082,7 @@ export interface TemplateRequest {
   distribution: "rke2" | "k3s" | "kubeadm" | "talos";
   kubernetesVersion?: string;
   talosVersion?: string;
-  /** The node OS as one word, such as almalinux-10; absent, the default. Talos is its own OS and takes none. */
+  /** The node OS as one word, such as almalinux-10. Absent, the default. Talos is its own OS and takes none. */
   nodeOS?: string;
   node: string;
   storage: string;
@@ -1115,7 +1115,7 @@ export interface Upgrades {
 }
 
 export interface CreateRequest {
-  /** One of the session's namespaces; unset, its first. */
+  /** One of the session's namespaces. Unset, its first. */
   namespace?: string;
   name: string;
   class: string;
@@ -1153,7 +1153,7 @@ export interface PlannedChange {
 export interface Plan {
   cluster: Cluster;
   changes: PlannedChange[];
-  /** What to know before applying it, such as a roll of the only control plane; kubectl hears the same. */
+  /** What to know before applying it, such as a roll of the only control plane. kubectl hears the same. */
   warnings?: string[];
 }
 

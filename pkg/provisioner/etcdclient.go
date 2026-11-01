@@ -45,7 +45,7 @@ const (
 	etcdServerName = "localhost"
 	// etcdClientName is the common name of the client certificate the controller signs itself.
 	etcdClientName = "kubehenge-etcd-snapshot"
-	// etcdClientLife is how long that certificate is valid; it is signed anew for every snapshot and
+	// etcdClientLife is how long that certificate is valid. It is signed anew for every snapshot and
 	// never stored, so it need not outlive one.
 	etcdClientLife = time.Hour
 	// etcdClockSkew backdates it, for an etcd member whose clock runs behind.
@@ -77,7 +77,7 @@ type EtcdDialer struct {
 	// Reader reads the CA's Secret, past any cache.
 	Reader  client.Reader
 	Remotes *Remotes
-	// Now is the clock the certificate is signed by; unset, the system's.
+	// Now is the clock the certificate is signed by. Unset, the system's.
 	Now func() time.Time
 	// Talos reaches a Talos cluster's control-plane nodes, whose etcd runs as a Talos service, not a
 	// pod: their Talos API streams the snapshot.
@@ -303,7 +303,7 @@ func (c *closing) Close() error {
 // port-forward does, one SPDY connection per dial.
 func portForward(config *rest.Config, namespace, pod string, port int) (net.Conn, error) {
 	config = rest.CopyConfig(config)
-	// The connection carries a whole snapshot; the API's request timeout would cut it off.
+	// The connection carries a whole snapshot. The API's request timeout would cut it off.
 	config.Timeout = 0
 	transport, upgrader, err := spdy.RoundTripperFor(config)
 	if err != nil {
@@ -327,7 +327,7 @@ func portForward(config *rest.Config, namespace, pod string, port int) (net.Conn
 		_ = conn.Close()
 		return nil, fmt.Errorf("port-forward to %s/%s: %w", namespace, pod, err)
 	}
-	// Nothing is sent on the error stream; the kubelet only answers on it.
+	// Nothing is sent on the error stream. The kubelet only answers on it.
 	_ = errStream.Close()
 	headers.Set(corev1.StreamType, corev1.StreamTypeData)
 	data, err := conn.CreateStream(headers)
@@ -361,7 +361,7 @@ func (c *forwardedConn) Close() error {
 func (*forwardedConn) LocalAddr() net.Addr  { return forwardedAddr{} }
 func (*forwardedConn) RemoteAddr() net.Addr { return forwardedAddr{} }
 
-// The stream has no deadlines; the client's context bounds each call instead.
+// The stream has no deadlines. The client's context bounds each call instead.
 func (*forwardedConn) SetDeadline(time.Time) error      { return nil }
 func (*forwardedConn) SetReadDeadline(time.Time) error  { return nil }
 func (*forwardedConn) SetWriteDeadline(time.Time) error { return nil }

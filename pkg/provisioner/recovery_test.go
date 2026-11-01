@@ -22,7 +22,7 @@ func askReset(machine string) func(*clusterv1.Cluster) {
 }
 
 // A reset of a cluster whose API does not answer stops every control plane, resets etcd on the
-// machine kept from its own database, starts it, and replaces the others; nothing is fetched.
+// machine kept from its own database, starts it, and replaces the others. Nothing is fetched.
 func TestControlPlaneReset(t *testing.T) {
 	t.Parallel()
 	f := newRestoreFixture(t, askReset("web-cp-1"))
@@ -63,8 +63,8 @@ func TestControlPlaneResetOnlyReplacesWhileTheAPIAnswers(t *testing.T) {
 	}
 }
 
-// A machine whose guest agent does not answer is not kept, and is replaced without being stopped;
-// one that is kept has to answer.
+// A machine whose guest agent does not answer is not kept, and is replaced without being stopped.
+// One that is kept has to answer.
 func TestControlPlaneResetLeavesOutWhatDoesNotAnswer(t *testing.T) {
 	t.Parallel()
 	f := newRestoreFixture(t, askReset("web-cp-0"))

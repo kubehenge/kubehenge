@@ -21,7 +21,7 @@ function announce(): void {
   }
 }
 
-// Going to another page crossfades it in where the browser can; the page is drawn inside the
+// Going to another page crossfades it in where the browser can. The page is drawn inside the
 // transition, so the old one is what fades out. Only the address's query changing in place
 // (replace) stays a plain update.
 export function navigate(path: string, replace = false): void {

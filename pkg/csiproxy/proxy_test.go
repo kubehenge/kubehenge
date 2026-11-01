@@ -33,7 +33,7 @@ const (
 
 // fakePVE is the Proxmox VE API as a cluster's token sees it: the cluster's volume owner VM 4242,
 // its holder VMs 300 on pve1 and 301 on pve2, a node VM 101, and VM 500 of another pool. Storage
-// local-zfs is a block storage, local a directory; both are each node's own. It copies volumes only
+// local-zfs is a block storage, local a directory. Both are each node's own. It copies volumes only
 // by import-from into a VM's disk, and refuses the storage's own copy and delete, as it does a
 // token without root@pam or Datastore.Allocate.
 type fakePVE struct {
@@ -44,7 +44,7 @@ type fakePVE struct {
 	nodes   map[int]string
 	// tasks are the import tasks by UPID, and whether each has ended.
 	tasks map[string]bool
-	// hold keeps import tasks running until released; failImport has them fail.
+	// hold keeps import tasks running until released. failImport has them fail.
 	hold       chan struct{}
 	failImport bool
 	// calls are those that reached it, as "METHOD path?params".
@@ -92,8 +92,8 @@ func (f *fakePVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/storage":
 		writeData(w, []map[string]any{{"storage": "local", "type": "dir"}, {"storage": "local-zfs", "type": "zfspool", "sparse": 1}})
 	case path == "/cluster/resources":
-		// Proxmox VE names a VM's pool only to Pool.Audit on it, which the cluster's token lacks;
-		// 302 is in a pool whose Pool.Audit it holds.
+		// Proxmox VE names a VM's pool only to Pool.Audit on it, which the cluster's token lacks.
+		// VM 302 is in a pool whose Pool.Audit it holds.
 		list := make([]map[string]any, 0, len(f.nodes))
 		for vmid, node := range f.nodes {
 			vm := map[string]any{"vmid": vmid, "node": node, "name": f.configs[vmid]["name"], "type": "qemu"}
@@ -743,7 +743,7 @@ func TestEveryCallOfThePluginTranslatesTheCopies(t *testing.T) {
 	for _, tc := range []struct {
 		name, method, path string
 		params             url.Values
-		// upstream is the call Proxmox VE must get; answer what the plugin's answer holds, and
+		// upstream is the call Proxmox VE must get. answer is what the plugin's answer holds, and
 		// hidden what it must not.
 		upstream, answer, hidden string
 	}{

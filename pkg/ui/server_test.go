@@ -39,14 +39,14 @@ type fakeAccounts struct {
 	totp      map[string]string
 	grants    map[string]map[string][]string // user -> path -> privileges
 	// acls are paths with ACL entries besides the grants, such as a cluster's pool with its own
-	// user's; privilegeCalls counts the questions about privileges.
+	// user's. privilegeCalls counts the questions about privileges.
 	acls           []string
 	privilegeCalls int
 	backupChecks   int
 	renewals       int
 	tokenChecks    int
 	now            func() time.Time
-	// members are every pool's guests; deleted records the VMs deleted.
+	// members are every pool's guests. deleted records the VMs deleted.
 	members []pve.Member
 	deleted []int
 	// listed, when set, runs after each listing of the templates.
@@ -55,7 +55,7 @@ type fakeAccounts struct {
 	released []string
 	// loadReads records the VMs whose load was read.
 	loadReads []int
-	// users are the users made with an administrator token, by ID; usersDeleted counts deletions.
+	// users are the users made with an administrator token, by ID. usersDeleted counts deletions.
 	users        map[string]string
 	usersDeleted int
 	rebooted     []int
@@ -278,7 +278,7 @@ func (f *fakeAccounts) BackupCovers(_ context.Context, _ *pve.Ticket, vmid int) 
 	return vmid == 150, nil
 }
 
-// Zone knows one SDN VNet, tenants, in zone evpn; everything else is a plain bridge.
+// Zone knows one SDN VNet, tenants, in zone evpn. Everything else is a plain bridge.
 func (*fakeAccounts) Zone(_ context.Context, _ *pve.Ticket, bridge string) (string, error) {
 	if bridge == "tenants" {
 		return "evpn", nil
@@ -419,7 +419,7 @@ type browser struct {
 	h      *harness
 	cookie string
 	csrf   string
-	// address is where the browser connects from; unset, 192.0.2.10.
+	// address is where the browser connects from. Unset, 192.0.2.10.
 	address string
 	// generation, when set, is sent with each request as the cluster's generation a change was
 	// made against.
@@ -1003,8 +1003,8 @@ func TestOIDCNeedsTheKubeconfigRight(t *testing.T) {
 	expect(t, dev.do("PATCH", "/api/clusters/default/two", `{"variables":{"oidc":[]}}`), http.StatusOK)
 	expect(t, dev.do("PATCH", "/api/clusters/default/two", `{"variables":{"oidc":null}}`), http.StatusOK)
 
-	// Dropping one of a cluster's own providers lets nobody new in, so it needs no Sys.Modify;
-	// bringing it back once dropped does.
+	// Dropping one of a cluster's own providers lets nobody new in, so it needs no Sys.Modify.
+	// Bringing it back once dropped does.
 	both := `[{"issuerURL":"https://mine.example","clientID":"k8s","groupsPrefix":""},{"clientID":"lab","issuerURL":"https://lab.example"}]`
 	expect(t, admin.do("PATCH", "/api/clusters/default/two", `{"variables":{"oidc":`+both+`}}`), http.StatusOK)
 	expect(t, dev.do("PATCH", "/api/clusters/default/two", `{"variables":{"oidc":`+own+`}}`), http.StatusOK)
@@ -1418,7 +1418,7 @@ func TestChange(t *testing.T) {
 }
 
 // A change made against a cluster someone has changed since is refused, its plan too, rather than
-// undoing the other change unseen; a change status alone made since goes through.
+// undoing the other change unseen. A change status alone made since goes through.
 func TestChangeAgainstAnOlderGeneration(t *testing.T) {
 	t.Parallel()
 	one := cluster("default", "one")
@@ -1439,7 +1439,7 @@ func TestChangeAgainstAnOlderGeneration(t *testing.T) {
 		}
 		return c
 	}
-	// The fake client leaves the generation to its writers; the API server counts it.
+	// The fake client leaves the generation to its writers. The API server counts it.
 	c := read()
 	c.Generation = 4
 	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: "headlamp", Value: apiextensionsv1.JSON{Raw: []byte(`{"enabled":true}`)}})
@@ -1546,7 +1546,7 @@ func TestProxmoxResources(t *testing.T) {
 	rec := b.do("GET", "/api/proxmox/storages", "")
 	expect(t, rec, http.StatusOK)
 	var storages []storageView
-	// Every storage comes with its content, for the setup's image and ISO storages; only one that
+	// Every storage comes with its content, for the setup's image and ISO storages. Only one that
 	// takes VM disks is usable for a cluster's.
 	if err := json.Unmarshal(rec.Body.Bytes(), &storages); err != nil || len(storages) != 3 || !storages[0].Usable || storages[1].Usable ||
 		storages[2].Storage.Storage != "local" || storages[2].Usable {
@@ -1579,7 +1579,7 @@ func TestClasses(t *testing.T) {
 		c.Annotations["kubehenge.dev/default-pods"] != "10.42.0.0/16" || len(c.NodeOSes) != len(templates.NodeOSes()) {
 		t.Fatalf("class = %s", rec.Body)
 	}
-	// Leap waits for its release; what the interface may offer, the page is told.
+	// Leap waits for its release. What the interface may offer, the page is told.
 	for _, o := range classes[0].NodeOSes {
 		if (o.Unreleased != "") != (o.Family == "leap") || o.Default != (o.NodeOS == templates.DefaultNodeOS) || o.MAC != templates.SELinux {
 			t.Errorf("node OS %+v", o)

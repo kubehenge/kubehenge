@@ -61,7 +61,7 @@ func WaitForProviders(ctx context.Context, c client.Reader, interval time.Durati
 			pending = []string{err.Error()}
 		}
 		if !slices.Equal(pending, last) {
-			// Progress is only for the log; failing to write it does not change the wait.
+			// Progress is only for the log. Failing to write it does not change the wait.
 			_, _ = fmt.Fprintf(progress, "waiting for:\n  %s\n", strings.Join(pending, "\n  "))
 			last = pending
 		}

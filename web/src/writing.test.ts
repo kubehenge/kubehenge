@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { check, gather, gatherSource, type Finding, type UiText } from "./writing";
 
 // The rare text that has to break a rule, each with the reason it must. An entry matches the
-// findings of its rule in its file whose text starts with its text; one that matches nothing fails
+// findings of its rule in its file whose text starts with its text. One that matches nothing fails
 // the test, so the list keeps only what is still needed.
 const exceptions: readonly { file: string; rule: string; text: string; reason: string }[] = [
   {

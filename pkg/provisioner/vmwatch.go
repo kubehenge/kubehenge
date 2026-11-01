@@ -22,7 +22,7 @@ import (
 // node joined: paused or stopped by hand, paused by QEMU after a disk error, or crashed.
 const VMsCondition = "VMsNotRunning"
 
-// The reasons of VMsCondition, worst first; the condition takes the worst a VM is in.
+// The reasons of VMsCondition, worst first. The condition takes the worst a VM is in.
 const (
 	VMsIOError  = "IOError"
 	VMsPanicked = "Panicked"
@@ -40,7 +40,7 @@ const (
 )
 
 const (
-	// A storage counts as nearly full from storageWarnPercent and as full from storageFullPercent;
+	// A storage counts as nearly full from storageWarnPercent and as full from storageFullPercent.
 	// QEMU pauses a VM whose disk write finds no space, which thin storage allows to happen.
 	storageWarnPercent = 85
 	storageFullPercent = 95

@@ -89,7 +89,7 @@ func TestRollWatch(t *testing.T) {
 				t.Error("no event")
 			}
 
-			// Looked at again, nothing new is said; once the cluster is paused for a recovery, the
+			// Looked at again, nothing new is said. Once the cluster is paused for a recovery, the
 			// condition goes.
 			if err := w.watch(context.Background(), f.cluster()); err != nil {
 				t.Fatal(err)

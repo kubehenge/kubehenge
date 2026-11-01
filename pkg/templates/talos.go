@@ -17,15 +17,15 @@ var TalosDefaultKubernetes = "v" + constants.DefaultKubernetesVersion
 // TalosMinor is a Talos release's minor version, such as 14 for v1.14.4.
 func TalosMinor(version string) (int, error) {
 	if !versionRE.MatchString(version) {
-		return 0, fmt.Errorf("talos version %q is not of the form v1.2.3", version)
+		return 0, fmt.Errorf("the Talos version %q is not of the form v1.2.3", version)
 	}
 	parts := strings.Split(strings.TrimPrefix(version, "v"), ".")
 	if parts[0] != "1" {
-		return 0, fmt.Errorf("talos version %q is not a 1.x release", version)
+		return 0, fmt.Errorf("the Talos version %q is not a 1.x release", version)
 	}
 	minor, err := strconv.Atoi(parts[1])
 	if err != nil {
-		return 0, fmt.Errorf("talos version %q: %w", version, err)
+		return 0, fmt.Errorf("the Talos version %q: %w", version, err)
 	}
 	return minor, nil
 }
@@ -46,7 +46,7 @@ func talosRelease(version string) (*compatibility.TalosVersion, error) {
 	}
 	v, err := compatibility.ParseTalosVersion(&machine.VersionInfo{Tag: version})
 	if err != nil {
-		return nil, fmt.Errorf("talos version %q: %w", version, err)
+		return nil, fmt.Errorf("the Talos version %q: %w", version, err)
 	}
 	return v, nil
 }
@@ -59,11 +59,11 @@ func TalosRunsKubernetes(talos, kubernetes string) error {
 		return err
 	}
 	if !versionRE.MatchString(kubernetes) {
-		return fmt.Errorf("kubernetes version %q is not of the form v1.2.3", kubernetes)
+		return fmt.Errorf("the Kubernetes version %q is not of the form v1.2.3", kubernetes)
 	}
 	k, err := compatibility.ParseKubernetesVersion(strings.TrimPrefix(kubernetes, "v"))
 	if err != nil {
-		return fmt.Errorf("kubernetes version %q: %w", kubernetes, err)
+		return fmt.Errorf("the Kubernetes version %q: %w", kubernetes, err)
 	}
 	if err := k.SupportedWith(t); err != nil {
 		return fmt.Errorf("this Talos release %s does not run Kubernetes %s: %w", talos, kubernetes, err)
@@ -77,7 +77,7 @@ func TalosKubernetesMinors(talos string) ([]int, error) {
 		return nil, err
 	}
 	var out []int
-	// Kubernetes 1.x minors well past any release; Talos's table names a few dozen at most.
+	// Kubernetes 1.x minors well past any release. Talos's table names a few dozen at most.
 	for m := 1; m < 100; m++ {
 		if TalosRunsKubernetes(talos, fmt.Sprintf("v1.%d.0", m)) == nil {
 			out = append(out, m)

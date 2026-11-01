@@ -177,7 +177,7 @@ func TestApplianceUpgradesSayARollBackAndWhy(t *testing.T) {
 	if f.signOuts != 1 {
 		t.Errorf("signed out %d times", f.signOuts)
 	}
-	out, err = run(t, f.args("admin@pve", "--json", "upgrades")...)
+	out, err = run(t, f.args("admin@pve", "upgrades", "--json")...)
 	if err != nil || !json.Valid([]byte(out)) || !strings.Contains(out, `"rolledBack":true`) {
 		t.Errorf("--json: %v\n%s", err, out)
 	}

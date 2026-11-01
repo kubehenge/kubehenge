@@ -39,7 +39,7 @@ const (
 	// nodeAgentConfig is the node agents' configuration, which the chart's ConfigMap of that name
 	// carries.
 	nodeAgentConfig = veleroRelease + "-node-agent-config"
-	// VeleroSchedule is the Schedule the chart makes of the cluster's backups variable; a backup
+	// VeleroSchedule is the Schedule the chart makes of the cluster's backups variable. A backup
 	// made at once copies its template.
 	VeleroSchedule = "velero-scheduled"
 	// veleroLocation is the one BackupStorageLocation, the cluster's prefix in its target.
@@ -112,7 +112,7 @@ type Backups struct {
 	ReadFrom []string `json:"readFrom,omitempty"`
 }
 
-// withDefaults fills in what the cluster left to the chart's schema; the controller reads only what
+// withDefaults fills in what the cluster left to the chart's schema. The controller reads only what
 // the Cluster itself holds.
 func (b *Backups) withDefaults() {
 	if b.Schedule == "" {
@@ -200,7 +200,7 @@ func targetFolder(prefix, namespace, cluster, folder string) string {
 // checkBackups holds a cluster's backups variable to what Velero takes: a target of the class, a
 // schedule cron reads and a time zone that exists. A target that is gone stays allowed for a
 // cluster that already names it, so that an administrator taking one away holds no unrelated edit
-// back; the controller then neither installs nor removes Velero.
+// back. The controller then neither installs nor removes Velero.
 func checkBackups(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) error {
 	b, _, err := optionalVariable[Backups](c, backupsVariable)
 	if err != nil || !b.Enabled {
@@ -260,7 +260,7 @@ func veleroProxy(cluster *clusterv1.Cluster) string {
 
 // BackupKeysSecretName is the Secret beside a Cluster with its backups' keys. The Cluster does not
 // own it, so that a cluster made again under the same name, backing up to the same target, reads
-// the backups of the one before; deleting it leaves those backups unreadable for good.
+// the backups of the one before. Deleting it leaves those backups unreadable for good.
 func BackupKeysSecretName(cluster string) string { return cluster + "-backup-keys" }
 
 // backupsExcluded are the namespaces left out of every backup: Kubernetes' own, kube-system above
@@ -307,7 +307,7 @@ volumePolicies:
 // file by file, and one backup location: the cluster's prefix in its target, the store encrypting
 // every object with the cluster's SSE-C key, which the plugin reads from the velero-sse-c Secret.
 // The Secrets themselves are put into the cluster beforehand (backupsWait), never into values. The
-// server runs without root or capabilities; the node agents read every pod's volumes as root. The
+// server runs without root or capabilities. The node agents read every pod's volumes as root. The
 // schedule's backups outlive it, so that switching backups off leaves them in the target. Each
 // cluster it reads the backups of gets a read-only location of its own beside it.
 func veleroValues(charts *Charts, b *Backups, t *BackupTarget, cluster *clusterv1.Cluster, sources []backupSource) map[string]any {

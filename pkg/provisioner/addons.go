@@ -140,11 +140,11 @@ type Charts struct {
 	// KubeRBACProxy is the image of the proxies in front of metrics served without authentication,
 	// and of the one in front of Loki.
 	KubeRBACProxy Image
-	// Loki keeps the logs that Alloy collects; Alloy runs AlloyImage, which its chart takes apart.
+	// Loki keeps the logs that Alloy collects. Alloy runs AlloyImage, which its chart takes apart.
 	Loki       Chart
 	Alloy      Chart
 	AlloyImage Image
-	// Velero is the backups' chart; its server, node agents and volume restores run VeleroImage, with
+	// Velero is the backups' chart. Its server, node agents and volume restores run VeleroImage, with
 	// VeleroPlugin's S3 plugin.
 	Velero          Chart
 	VeleroImage     Image
@@ -199,7 +199,7 @@ type Addons struct {
 	// copyProxy is the proxy the CSI plugin reaches Proxmox VE through: with VolumeSnapshots, and
 	// after them while a copy made for them is left.
 	copyProxy copyProxy
-	// backupTarget is the target the backups name, found in the cluster's class; nil while it is
+	// backupTarget is the target the backups name, found in the cluster's class. Nil while it is
 	// not, when Velero is neither installed nor removed.
 	backupTarget *BackupTarget
 	// backupSources are the clusters whose backups the cluster reads, of those it names, that it may.
@@ -279,9 +279,9 @@ func rancherProxy(cluster *clusterv1.Cluster) string {
 // rancherValues: Rancher makes its own CA through cert-manager and the agents trust only that CA,
 // pinned by its checksum in the manifest each cluster gets. Its server URL is fixed to hostname,
 // without which it makes no registration manifest. Up to three replicas, as many as there are
-// nodes; the admin's first password is generated into the bootstrap-secret Secret, never put into
+// nodes. The admin's first password is generated into the bootstrap-secret Secret, never put into
 // values. Rancher's chart gives a start two minutes, which its first start on one small node can
-// overrun while it registers its CRDs; every kill begins that again, so the window is ten minutes,
+// overrun while it registers its CRDs. Every kill begins that again, so the window is ten minutes,
 // and liveness keeps its own. The server URL joins the chart's own extraEnv, which a list in these
 // values would replace. The webhook's and Fleet's requests reach their charts through Rancher's
 // rancher-config ConfigMap, Fleet's as the default of each of its containers.
@@ -375,7 +375,7 @@ const CNIAnnotation = "kubehenge.dev/cni"
 // whose own components route inside pods, such as k3s's servicelb.
 const CNIForwardingAnnotation = "kubehenge.dev/cni-container-forwarding"
 
-// CNI is the pod network Kubehenge installs into a cluster; the zero value installs none.
+// CNI is the pod network Kubehenge installs into a cluster. The zero value installs none.
 type CNI struct {
 	// Name is cilium or calico.
 	Name string
@@ -451,7 +451,7 @@ func resourceSetSecret(cluster *clusterv1.Cluster, endpoint Endpoint, c Credenti
 	}, nil
 }
 
-// csiConfig is the CSI plugin's configuration, signing in as pve says.
+// csiConfig is the CSI plugin's configuration. It signs in as pve says.
 func csiConfig(c Credentials, pve *proxmoxCluster) (string, error) {
 	csi, err := yaml.Marshal(proxmoxConfig{
 		Features: proxmoxFeatures{Provider: "capmox", ControllerVMID: c.VolumeOwner},
@@ -516,7 +516,7 @@ func ParseCalicoImages(refs []string) ([]Image, error) {
 }
 
 // calicoImageSet pins the images the operator runs Calico from to their digests. The operator
-// takes the ImageSet named for its own release; it names the images by repository, which is the
+// takes the ImageSet named for its own release. It names the images by repository, which is the
 // operator's image path and the image's name.
 func calicoImageSet(images []Image) map[string]any {
 	pinned := make([]any, 0, len(images))
@@ -533,7 +533,7 @@ func calicoImageSet(images []Image) map[string]any {
 // calicoResources wraps, for the ClusterResourceSet, the resources the Tigera operator installs
 // Calico from, as its chart's defaults have them, and the ImageSet that pins its images, which
 // comes first so that the operator never runs one by tag. The chart would render them before the
-// operator has created their CRDs, which a Helm release cannot wait for; a ClusterResourceSet
+// operator has created their CRDs, which a Helm release cannot wait for. A ClusterResourceSet
 // retries until they exist. Nor can Helm install the CRDs first: Calico's CRD chart is larger than
 // the 1 MiB Secret a Helm release is kept in.
 func calicoResources(cluster *clusterv1.Cluster, cni CNI, images []Image) (*corev1.Secret, error) {
@@ -588,7 +588,7 @@ func calicoResources(cluster *clusterv1.Cluster, cni CNI, images []Image) (*core
 // The leader election of every controller Kubehenge installs into a cluster that exits once it
 // misses its lease's renewal: the Cilium operator, the cloud controller managers and the CSI
 // plugin's sidecars. Their defaults give up within 10 s, which a node short of CPU, or an API
-// server waiting on etcd, makes them miss; these are the control planes' controller managers' and
+// server waiting on etcd, makes them miss. These are the control planes' controller managers' and
 // the management cluster's controllers' leases.
 const (
 	leaseDuration = "60s"
@@ -738,7 +738,7 @@ func traefikConfig(cluster *clusterv1.Cluster, certs *Certificates) (*corev1.Sec
 }
 
 // clusterResourceSet applies the cluster's Proxmox VE Secret and the other Secrets given, such as
-// Calico's resources when Kubehenge installs Calico; each is retried on its own until it applies.
+// Calico's resources when Kubehenge installs Calico. Each is retried on its own until it applies.
 func clusterResourceSet(cluster *clusterv1.Cluster, secrets []*corev1.Secret) *addonsv1.ClusterResourceSet {
 	resources := make([]addonsv1.ResourceRef, 0, len(secrets))
 	for _, s := range secrets {
@@ -757,7 +757,7 @@ func clusterResourceSet(cluster *clusterv1.Cluster, secrets []*corev1.Secret) *a
 
 // headlampValues keep Headlamp without rights of its own unless the cluster asks for view access:
 // every user signs in with their own token or through OIDC. Its service account token stays
-// mounted because Headlamp reads the API server's address and CA through it; the account is bound
+// mounted because Headlamp reads the API server's address and CA through it. The account is bound
 // to no role. With view access, the account is bound to the view ClusterRole and Headlamp sends
 // every request with its token, the user's own dropped, so whoever reaches Headlamp reads the
 // cluster without signing in and nobody changes anything through it. Plugins are those in the
@@ -905,7 +905,7 @@ func calicoPod(spec map[string]any) map[string]any {
 // manager's and the CSI plugin's. With volume snapshots, the plugin reaches Proxmox VE through the
 // proxy beside it, runs its snapshot sidecar, and its sidecars wait as long as a copy's call may.
 func proxmoxValues(storage string, addons *Addons) (map[string]any, map[string]any) {
-	// The charts have no CA setting; this replaces the image's trust store with the Proxmox VE CA,
+	// The charts have no CA setting. This replaces the image's trust store with the Proxmox VE CA,
 	// the only server either talks to besides the in-cluster API, which uses its own CA.
 	ca := map[string]any{
 		"extraVolumes": []any{map[string]any{
@@ -1101,7 +1101,7 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 }
 
 // servingCharts are those that bring traffic into the cluster and what it runs from Git: on
-// kubeadm and Talos, which bring no ingress controller, Traefik; the load balancer; the GitOps
+// kubeadm and Talos, which bring no ingress controller, Traefik, the load balancer and the GitOps
 // engine.
 func servingCharts(cluster *clusterv1.Cluster, charts *Charts, distribution templates.Distribution, addons *Addons) ([]chartProxy, error) {
 	var wanted []chartProxy
@@ -1151,7 +1151,7 @@ func chartProxyObjects(cluster *clusterv1.Cluster, wanted []chartProxy) ([]*unst
 			"releaseName":     p.release,
 			"namespace":       p.namespace,
 			"options":         map[string]any{"install": map[string]any{"createNamespace": true}},
-			// Values are plain text in HelmReleaseProxy objects; they hold no secret, only where it is.
+			// Values are plain text in HelmReleaseProxy objects. They hold no secret, only where it is.
 			// The provider renders them as a Go template, which none of them is: what a cluster's
 			// owner typed in, a repository's URL or a group's name, comes through as it is.
 			"valuesTemplate": strings.ReplaceAll(string(values), "{{", `{{"{{"}}`),

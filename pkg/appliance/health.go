@@ -33,7 +33,7 @@ type ServiceCheck struct {
 	Address string
 	Wait    time.Duration
 	Settle  time.Duration
-	// Restarts counts the interface's restarts by systemd; the unit's NRestarts when nil.
+	// Restarts counts the interface's restarts by systemd. It is the unit's NRestarts when nil.
 	Restarts func(ctx context.Context) (int, error)
 }
 

@@ -25,7 +25,7 @@ const (
 	watchReadTimeout = 15 * time.Second
 )
 
-// shorten cuts s to at most n bytes, on a character boundary, marking that it was cut.
+// shorten cuts s to at most n bytes, on a character boundary, and marks that it was cut.
 func shorten(s string, n int) string {
 	if len(s) <= n {
 		return s

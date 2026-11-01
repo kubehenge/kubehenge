@@ -284,7 +284,7 @@ func TestIngressCASignsOnlyItsDomain(t *testing.T) {
 	}
 }
 
-// certWorkload stands in for a workload cluster, holding what is applied to it and deleted from it.
+// certWorkload stands in for a workload cluster. It holds what is applied to it and deleted from it.
 type certWorkload struct {
 	client.WithWatch
 

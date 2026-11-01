@@ -13,7 +13,7 @@ import (
 
 // The k3s class runs kube-proxy in nftables mode on every node while flannel and k3s's network
 // policy controller are the cluster's: the controller writes the iptables filter table back whole,
-// taking kube-proxy's chains with it when they share it.
+// and takes kube-proxy's chains with it when they share it.
 func TestIntegrationK3sKubeProxyOwnTable(t *testing.T) {
 	t.Parallel()
 	const name = "k3s-kube-proxy-nftables"

@@ -82,7 +82,7 @@ export function runView(r: RunInfo): { to: string; place: string } {
   };
 }
 
-// The appliance's runs carry no cluster; each names what it works on.
+// The appliance's runs carry no cluster. Each names what it works on.
 const applianceTitles: Partial<Record<RunInfo["kind"], string>> = {
   "management-cluster": "Management cluster",
   template: "Templates",
@@ -90,7 +90,7 @@ const applianceTitles: Partial<Record<RunInfo["kind"], string>> = {
   "appliance-upgrade": "Appliance",
 };
 
-// described is what a run does and, once it ended, how and when; a failure's message stays on the
+// described is what a run does and, once it ended, how and when. A failure's message stays on the
 // run's page, out of the narrow column.
 function described(r: RunInfo): string {
   const what = runTitle(r);
@@ -139,7 +139,7 @@ function fromServer(r: RunInfo): Run {
 export function useRuns(): Run[] {
   const fleet = useFleet();
   const runs = fleet?.runs ?? [];
-  // A change made here is followed by its own run; the fleet's standing says the same in less.
+  // A change made here is followed by its own run. The fleet's standing says the same in less.
   const followed = new Set(
     runs
       .filter((r) => r.kind === "change" && (r.state === "running" || r.state === "stalled"))

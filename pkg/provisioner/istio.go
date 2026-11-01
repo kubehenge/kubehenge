@@ -25,7 +25,7 @@ const (
 	// network namespaces, which only Pod Security's privileged level allows, and istiod needs none
 	// of it.
 	istioNodeNamespace = "istio-node"
-	// istioDataplaneMode enrols a namespace or pod in the mesh; istioRedirection is istio-cni's
+	// istioDataplaneMode enrols a namespace or pod in the mesh. istioRedirection is istio-cni's
 	// mark on a pod whose traffic it sends through ztunnel.
 	istioDataplaneMode = "istio.io/dataplane-mode"
 	istioRedirection   = "ambient.istio.io/redirection"
@@ -48,7 +48,7 @@ func istioProxies(cluster *clusterv1.Cluster) []string {
 // enrolled pods' traffic over mutual TLS, istio-cni redirects it there, and istiod gives ztunnel
 // its workloads' certificates. Its CRDs come with the base chart, and none of the charts renders
 // a resource of them, so the four install side by side. istiod runs at Pod Security's restricted
-// level, as do waypoints it deploys; on k3s with its own flannel, istio-cni finds the CNI
+// level, as do waypoints it deploys. On k3s with its own flannel, istio-cni finds the CNI
 // configuration where k3s keeps it, and everywhere else in the standard directories.
 func istioCharts(charts *Charts, distribution templates.Distribution, cni CNI) []chartProxy {
 	restricted := runtimeDefault()
@@ -83,7 +83,7 @@ func istioCharts(charts *Charts, distribution templates.Distribution, cni CNI) [
 
 // removeIstio takes every workload out of the mesh, then uninstalls Istio: a pod still enrolled
 // once ztunnel has gone keeps its traffic redirected to a proxy that no longer runs, and reaches
-// nothing. Enrolment is a label, which outlives the charts, so it goes too; istio-cni takes the
+// nothing. Enrolment is a label, which outlives the charts, so it goes too. istio-cni takes the
 // running pods' redirection away once it has. It reports whether the removal waits, as it does
 // while a pod is still redirected or the cluster cannot be reached.
 func (r *Reconciler) removeIstio(ctx context.Context, cluster *clusterv1.Cluster) (bool, error) {

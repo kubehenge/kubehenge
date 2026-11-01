@@ -131,7 +131,7 @@ func releaseOps(t *testing.T, patch []byte) map[string]any {
 		if op.Op != "add" {
 			t.Errorf("%s: op %s", op.Path, op.Op)
 		}
-		// Of the files appended, the first is the release's script; the rest are listed beside it.
+		// Of the files appended, the first is the release's script. The rest are listed beside it.
 		if _, seen := byPath[op.Path]; seen && strings.HasSuffix(op.Path, "/files/-") {
 			more, ok := byPath[op.Path+"+"].([]any)
 			if !ok {

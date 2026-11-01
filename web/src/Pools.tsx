@@ -68,7 +68,7 @@ function useClass(name: string): ClusterClass | undefined {
         const classes = await api.classes();
         setCls(classes.find((x) => x.name === name));
       } catch {
-        // The API server checks every size; without the class the dialog checks only the form.
+        // The API server checks every size. Without the class the dialog checks only the form.
       }
     }
     void load();

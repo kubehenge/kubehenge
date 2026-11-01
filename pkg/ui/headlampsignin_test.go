@@ -181,7 +181,7 @@ func TestHeadlampSignsNobodyInWithoutTheIssuer(t *testing.T) {
 }
 
 // Headlamp's log out of a cluster, as its frontend sends it, signs the session out of the cluster
-// until the session opens the cluster from the interface again; other sessions stay signed in.
+// until the session opens the cluster from the interface again. Other sessions stay signed in.
 func TestHeadlampLogOutSignsTheSessionOut(t *testing.T) {
 	t.Parallel()
 	one := cluster("default", "one")

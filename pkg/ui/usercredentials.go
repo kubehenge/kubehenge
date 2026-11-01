@@ -54,8 +54,8 @@ func (t *credentialTarget) describe() string {
 }
 
 // clusterCredentialTarget finds the request's cluster and credential purpose, checking privs on the
-// cluster's pool; nil when it has answered the request. Seeing a credential needs what seeing the
-// cluster does; changing it needs Sys.Modify on the cluster's pool, as its admin kubeconfig does,
+// cluster's pool. Nil when it has answered the request. Seeing a credential needs what seeing the
+// cluster does. Changing it needs Sys.Modify on the cluster's pool, as its admin kubeconfig does,
 // since a credential reaches as far into what the cluster runs.
 func (s *Server) clusterCredentialTarget(w http.ResponseWriter, r *http.Request, u user, privs ...string) *credentialTarget {
 	c, access, ok := s.cluster(w, r, u, privs...)
@@ -91,7 +91,7 @@ func (s *Server) changedClusterCredential(w http.ResponseWriter, r *http.Request
 }
 
 // applianceCredentialTarget is the request's credential for every cluster, which only an
-// administrator sees and changes, as the appliance's other settings; nil when it has answered the
+// administrator sees and changes, as the appliance's other settings. Nil when it has answered the
 // request.
 func (s *Server) applianceCredentialTarget(w http.ResponseWriter, r *http.Request, u user) *credentialTarget {
 	if !s.require(w, r, u, "/", setupPrivileges...) {
@@ -149,7 +149,7 @@ func (s *Server) removeApplianceCredential(w http.ResponseWriter, r *http.Reques
 
 var errNotCredential = errors.New("another Secret has the credential's name. An administrator has to delete it")
 
-// stored reads a credential's Secret, telling whether there is one. A Secret of its name that is no
+// stored reads a credential's Secret. It tells whether there is one. A Secret of its name that is no
 // credential is an error, as the interface may not touch it.
 func stored(ctx context.Context, kube client.Client, t *credentialTarget) (*corev1.Secret, bool, error) {
 	secret := &corev1.Secret{}

@@ -256,7 +256,7 @@ cli() {
     who=$1
     shift
     cli_ok=true
-    pct exec "${ctid}" -- /usr/local/bin/kubehenge appliance --user "${who}" --password-file /root/e2e-password "$@" \
+    pct exec "${ctid}" -- /usr/local/bin/kubehenge appliance "$@" --user "${who}" --password-file /root/e2e-password \
         > "${work}/cli" 2>&1 < /dev/null || cli_ok=false
 }
 
@@ -585,7 +585,7 @@ expect 403 "the etcd backups for a user without privileges" request "${work}/use
 refusal=$(jq -r .error "${work}/body")
 cli "${user}" etcd-backups
 cli_says false "${refusal}" "the shell showed the backups to a user without privileges, or not in the interface's words"
-cli "${admin}" --json etcd-backups
+cli "${admin}" etcd-backups --json
 cli_says true '"target":"e2e"' "the shell does not show the backups as set up"
 cli "${admin}" etcd-backups snapshots
 cli_says true "${second}" "the shell does not list ${second}"

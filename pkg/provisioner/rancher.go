@@ -33,7 +33,7 @@ import (
 
 // Rancher is a cluster's rancher variable.
 type Rancher struct {
-	// Install puts Rancher into this cluster; Kubehenge then registers its other clusters with it.
+	// Install puts Rancher into this cluster. Kubehenge then registers its other clusters with it.
 	Install  bool   `json:"install"`
 	Hostname string `json:"hostname,omitempty"`
 	// Register is nil when the variable leaves it out, which means yes.
@@ -145,7 +145,7 @@ type Registrar struct {
 }
 
 // SetupWithManager registers the registrar. Of a cluster's status it follows only whether the
-// cluster is available, which registration waits for; when the cluster that installs Rancher
+// cluster is available, which registration waits for. When the cluster that installs Rancher
 // changes, every other cluster is looked at again, as their registration depends on it.
 func (r *Registrar) SetupWithManager(mgr ctrl.Manager) error {
 	err := ctrl.NewControllerManagedBy(mgr).
@@ -219,7 +219,7 @@ func (r *Registrar) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resul
 }
 
 // BeforeDelete removes a cluster from Rancher before its VMs go, while Rancher can still clean up
-// inside it; for Rancher's own cluster, every registered cluster first. Done when there is nothing
+// inside it. For Rancher's own cluster, every registered cluster first. Done when there is nothing
 // to remove, or Rancher cannot be reached to remove it.
 func (r *Registrar) BeforeDelete(ctx context.Context, cluster *clusterv1.Cluster) (bool, error) {
 	// A rancher variable that cannot be read installs no Rancher, as RancherCluster reads it, but
@@ -277,7 +277,7 @@ func (r *Registrar) othersOfRancher(ctx context.Context, o client.Object) []ctrl
 	return reqs
 }
 
-// findRancher finds the cluster Kubehenge installed Rancher into; nil when there is none.
+// findRancher finds the cluster Kubehenge installed Rancher into, or nil when there is none.
 func (r *Registrar) findRancher(ctx context.Context) (*clusterv1.Cluster, error) {
 	clusters := &clusterv1.ClusterList{}
 	// Only read, the Rancher cluster included.
@@ -405,7 +405,7 @@ func rancherClusterSpec() map[string]any {
 // agentManifest fetches the manifest of Rancher's agent for a cluster, nil until Rancher has made
 // it. It goes through the Rancher cluster's API server to Rancher's service, so the management
 // cluster needs neither Rancher's hostname nor its CA. The registration token travels in the
-// path, as with every way Rancher offers the manifest; whoever can read that cluster's audit log
+// path, as with every way Rancher offers the manifest. Whoever can read that cluster's audit log
 // can read the token's Secret too.
 func (rs *rancherSide) agentManifest(ctx context.Context, internal string) ([]byte, error) {
 	token := &unstructured.Unstructured{}
@@ -448,7 +448,7 @@ func (rs *rancherSide) agentManifest(ctx context.Context, internal string) ([]by
 }
 
 // deregister removes a cluster from Rancher, which first runs its clean-up in the cluster through
-// the agent; done once Rancher has let go of it.
+// the agent. Done once Rancher has let go of it.
 func (rs *rancherSide) deregister(ctx context.Context, cluster *clusterv1.Cluster) (bool, error) {
 	rc := &unstructured.Unstructured{}
 	rc.SetGroupVersionKind(provisioningClusterGVK)
@@ -472,7 +472,7 @@ func (rs *rancherSide) deregister(ctx context.Context, cluster *clusterv1.Cluste
 }
 
 // deregisterAll removes every cluster Kubehenge registered from Rancher, as Rancher's own cluster
-// goes; done once none is left.
+// goes. Done once none is left.
 func (rs *rancherSide) deregisterAll(ctx context.Context) (bool, error) {
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(provisioningClusterGVK.GroupVersion().WithKind("ClusterList"))
@@ -500,7 +500,7 @@ func (rs *rancherSide) deregisterAll(ctx context.Context) (bool, error) {
 }
 
 // RancherCluster is the cluster whose Rancher every other registers with: of the clusters built
-// from the ClusterClasses in classNamespace that install it, the one created first; nil if none
+// from the ClusterClasses in classNamespace that install it, the one created first, or nil if none
 // does. Only one may install it, which the hooks and the interface enforce. Should a client set it
 // on a second one anyway, the first keeps the role and the second gets no Rancher, rather than
 // every cluster's registration and deletion stopping on the conflict.

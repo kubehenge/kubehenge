@@ -11,7 +11,7 @@ const transactionalFilesDir = "leap"
 
 var (
 	// RKE2's and k3s's policies for SUSE's immutable systems. k3s's stable channel does not sign
-	// its metadata; its testing channel does, with the key its EL 10 policy comes with.
+	// its metadata. Its testing channel does, with the key its EL 10 policy comes with.
 	rke2SELinuxSUSE = &repository{
 		id: "rke2-selinux", name: "RKE2's SELinux policy", baseURL: "https://rpm.rancher.io/rke2/stable/common/slemicro/noarch",
 		key: rancherKey, signedMetadata: true,

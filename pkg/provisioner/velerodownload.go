@@ -17,7 +17,7 @@ import (
 // VeleroDownload fetches a file Velero signed a link to in a cluster's backup target, such as a
 // restore's results, from the folder of the cluster of: the cluster itself, or one whose backups it
 // reads. The store encrypted the file with that cluster's SSE-C key, which a signed link does not
-// carry and the request has to; it is sent only to the target's own endpoint.
+// carry and the request has to. It is sent only to the target's own endpoint.
 func (ts *ClusterTargets) VeleroDownload(ctx context.Context, cluster *clusterv1.Cluster, of, link string) (io.ReadCloser, error) {
 	b, _, err := optionalVariable[Backups](cluster, backupsVariable)
 	if err != nil {

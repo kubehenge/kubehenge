@@ -90,7 +90,7 @@ func TestIntegrationHeadlampIdentities(t *testing.T) { //nolint:paralleltest // 
 	if err = headlampIssuer.remove(ctx, workload); err != nil {
 		t.Fatal(err)
 	}
-	// Its binding gone, the token has no rights left at once; the API server keeps a token it took
+	// Its binding gone, the token has no rights left at once. The API server keeps a token it took
 	// for up to ten seconds (its token cache) before it finds the account gone.
 	if _, err = headlamp.CoreV1().Namespaces().List(ctx, metav1.ListOptions{}); !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
 		t.Errorf("a token made before the identities were removed still serves: %v", err)

@@ -73,7 +73,7 @@ func startAPI(t *testing.T) client.Client {
 }
 
 // startValidatingAPI is startAPI with the chart's webhook configurations, pointing at a local
-// server whose address and certificates the options hold; the test serves them.
+// server whose address and certificates the options hold. The test serves them.
 func startValidatingAPI(t *testing.T) (client.Client, *envtest.WebhookInstallOptions) {
 	t.Helper()
 	objects, webhooks := apiObjects(t)
@@ -139,7 +139,7 @@ func startProviders(ctx context.Context, t *testing.T, c client.Client, class st
 	return out
 }
 
-// markServing reports a Deployment's pods up, as its controller would; envtest runs none.
+// markServing reports a Deployment's pods up, as its controller would. envtest runs none.
 func markServing(ctx context.Context, t *testing.T, c client.Client, key types.NamespacedName) {
 	t.Helper()
 	dep := &appsv1.Deployment{}
@@ -220,7 +220,7 @@ func TestIntegrationDistributionTemplatesAndScaling(t *testing.T) { //nolint:par
 				}
 				markServing(ctx, t, c, p)
 			}
-			// Every template has to pass its CRD's schema here; in a management cluster the providers'
+			// Every template has to pass its CRD's schema here. In a management cluster the providers'
 			// webhooks check it further.
 			reconcileClass(t, class)
 			want := make([]string, 0, len(templates))
@@ -492,7 +492,7 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 }
 
 // checkPoolSizeAdmission holds a pool of its own size to the add-ons' room as its workers have it,
-// either way: larger, it makes room the cluster's size lacks; smaller, it lacks room that size has.
+// either way: larger, it makes room the cluster's size lacks. Smaller, it lacks room that size has.
 func checkPoolSizeAdmission(ctx context.Context, t *testing.T, c client.Client, base *clusterv1.Cluster) {
 	t.Helper()
 	poolSized := func(name, cluster, pool string) *clusterv1.Cluster {
@@ -672,10 +672,10 @@ func checkDatastoreAllocateAdmission(ctx context.Context, t *testing.T, c client
 }
 
 // checkClassAddonRoom holds a class's memory and CPU figures: one for every add-on and every node
-// kind; a worker and control plane sized as the end-to-end tests size them from the figures holding
-// every add-on but Rancher, logs and backups, and a MiB less refused; a worker with the cores the
-// end-to-end tests give it holding every add-on but Rancher, and a core fewer refused; and the least
-// control plane Rancher runs on without workers, at the memory its figures ask, holding Rancher.
+// kind. A worker and control plane sized as the end-to-end tests size them from the figures hold
+// every add-on but Rancher, logs and backups, and a MiB less is refused. A worker with the cores the
+// end-to-end tests give it holds every add-on but Rancher, and a core fewer is refused. The least
+// control plane Rancher runs on without workers, at the memory its figures ask, holds Rancher.
 func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker *clusterv1.Cluster, alone controlPlaneSize) {
 	t.Helper()
 	addons, _, err := classFigures(class, AddonMemoryAnnotation)

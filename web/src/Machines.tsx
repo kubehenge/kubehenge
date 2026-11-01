@@ -423,7 +423,7 @@ interface Host {
 }
 
 // hosts are the Proxmox VE nodes with the cluster's machines on them, then the others the user
-// sees, empty, as places a new machine may go; machines whose node the user may not see last.
+// sees, empty, as places a new machine may go. Machines whose node the user may not see last.
 function hosts(machines: Machine[], nodes: PveNode[] | undefined): Host[] {
   const byName = new Map<string, Host>();
   for (const n of nodes ?? []) {
@@ -470,7 +470,7 @@ function hostState(h: Host): string {
  * its role and state, so losing a node shows what it takes with it.
  */
 export function Placement({ cluster: c }: { cluster: Cluster }): JSX.Element {
-  // Only those who see the nodes get them; the others see the nodes of their machines alone.
+  // Only those who see the nodes get them. The others see the nodes of their machines alone.
   const { data: nodes } = usePoll(api.nodes, pollIdle, nodesKept);
   const health = useClusterHealth(c);
   const nodeOf = new Map((health.data?.nodes.items ?? []).map((n) => [n.machine ?? n.name, n]));

@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-// maxAnswerBytes caps what is read of an answer of Proxmox VE's; a storage's content, a VM's
+// maxAnswerBytes caps what is read of an answer of Proxmox VE's. A storage's content, a VM's
 // configuration and the list of VMs stay far below it.
 const maxAnswerBytes = 16 << 20
 

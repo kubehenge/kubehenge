@@ -117,7 +117,7 @@ describe("cluster upgrades", () => {
     await user.click(row.getByRole("button", { name: "Upgrade Talos" }));
     const dialog = within(screen.getByRole("dialog", { name: "Upgrade Talos on web" }));
     expect(dialog.getByText("Reboots the nodes one at a time, control planes first.")).toBeInTheDocument();
-    // A newer patch of its minor version or the next minor's newest; not two minors on.
+    // A newer patch of its minor version or the next minor's newest. Not two minors on.
     await waitFor(() =>
       expect(
         within(dialog.getByLabelText("Talos release"))

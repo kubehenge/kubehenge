@@ -17,7 +17,7 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
-// etcdStoreTimeout bounds reading a cluster's snapshots from its target; a download takes as
+// etcdStoreTimeout bounds reading a cluster's snapshots from its target. A download takes as
 // long as it takes.
 const etcdStoreTimeout = 30 * time.Second
 
@@ -36,13 +36,13 @@ type etcdSnapshotsView struct {
 	Condition *conditionView            `json:"condition,omitempty"`
 	// Requested is set while a snapshot asked for has not been taken.
 	Requested bool `json:"requested"`
-	// Snapshots are those in the target, newest first; Message says why they could not be read.
+	// Snapshots are those in the target, newest first. Message says why they could not be read.
 	Snapshots []provisioner.EtcdSnapshot `json:"snapshots"`
 	Message   string                     `json:"message,omitempty"`
 	// Restore is the cluster's last restore, and Restoring is set while one runs.
 	Restore   *provisioner.EtcdRestoreStatus `json:"restore,omitempty"`
 	Restoring bool                           `json:"restoring"`
-	// Automatic is set when the controller restores through the guest agent; otherwise the
+	// Automatic is set when the controller restores through the guest agent. Otherwise the
 	// interface shows the steps to restore by hand.
 	Automatic   bool `json:"automatic"`
 	CanSnapshot bool `json:"canSnapshot"`

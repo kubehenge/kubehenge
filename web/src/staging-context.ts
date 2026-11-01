@@ -8,7 +8,7 @@ export interface Staging {
   staged: { req: ChangeRequest; plan: Plan; generation: number } | undefined;
   /** dropped says why staged changes were dropped, until the next is staged. */
   dropped: string | undefined;
-  /** stage adds a change to those staged and plans them all; it throws what the server refuses. */
+  /** stage adds a change to those staged and plans them all. It throws what the server refuses. */
   stage: (req: ChangeRequest) => Promise<void>;
   discard: () => void;
   apply: () => Promise<void>;

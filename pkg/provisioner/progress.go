@@ -60,9 +60,9 @@ const (
 type ProgressReconciler struct {
 	Client         client.Client
 	ClassNamespace string
-	// Events reports on a Cluster that its machines stalled; may be nil.
+	// Events reports on a Cluster that its machines stalled. It may be nil.
 	Events events.EventRecorder
-	// Now is the time; unset, the system's.
+	// Now is the time. Unset, the system's.
 	Now func() time.Time
 
 	mu sync.Mutex
@@ -79,7 +79,7 @@ type progressMark struct {
 	moving time.Time
 }
 
-// SetupWithManager registers the reconciler. A change of a Cluster's spec starts it at once; while
+// SetupWithManager registers the reconciler. A change of a Cluster's spec starts it at once. While
 // machines are on their way it looks again every progressCheck.
 func (r *ProgressReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	err := ctrl.NewControllerManagedBy(mgr).

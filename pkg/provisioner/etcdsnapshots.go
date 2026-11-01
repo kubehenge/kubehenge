@@ -37,8 +37,8 @@ const (
 	etcdSnapshotsVariable = "etcdSnapshots"
 	// EtcdSnapshotAnnotation on a Cluster records its last etcd snapshot, as an EtcdSnapshot in JSON.
 	EtcdSnapshotAnnotation = "kubehenge.dev/etcd-snapshot"
-	// EtcdSnapshotRequestAnnotation asks for a snapshot at once, as an EtcdSnapshotRequest in JSON;
-	// the controller takes it away once it has tried.
+	// EtcdSnapshotRequestAnnotation asks for a snapshot at once, as an EtcdSnapshotRequest in JSON.
+	// The controller takes it away once it has tried.
 	EtcdSnapshotRequestAnnotation = "kubehenge.dev/etcd-snapshot-requested"
 	// EtcdSnapshotCondition on a Cluster says whether its last etcd snapshot was taken.
 	EtcdSnapshotCondition = "EtcdSnapshotSucceeded"
@@ -50,7 +50,7 @@ const (
 	etcdSnapshotTimeLayout = "20060102T150405Z"
 
 	// The defaults of the etcdSnapshots variable, as the chart's schema has them: twice a day, as
-	// RKE2 and k3s take their own, keeping a week.
+	// RKE2 and k3s take their own. They keep a week.
 	defaultEtcdSnapshotSchedule = "0 */12 * * *"
 	defaultEtcdSnapshotKeep     = 14
 	maxEtcdSnapshotKeep         = 1000
@@ -107,7 +107,7 @@ func (s *EtcdSnapshots) valid() error {
 	return nil
 }
 
-// EtcdSnapshotsOf reads a cluster's etcdSnapshots variable with the chart's defaults; unset, they
+// EtcdSnapshotsOf reads a cluster's etcdSnapshots variable with the chart's defaults. Unset, they
 // are off.
 func EtcdSnapshotsOf(c *clusterv1.Cluster) (EtcdSnapshots, error) {
 	s, _, err := optionalVariable[EtcdSnapshots](c, etcdSnapshotsVariable)
@@ -274,7 +274,7 @@ func (t *trailerCheck) check() error {
 	return nil
 }
 
-// sealed streams a snapshot encrypted to an age recipient, hashing it as it goes. It reads from the
+// sealed streams a snapshot encrypted to an age recipient and hashes it as it goes. It reads from the
 // snapshot only as fast as its reader takes the encrypted bytes, through buffers of fixed size, so
 // a database of any size streams in the same memory.
 type sealed struct {
@@ -338,7 +338,7 @@ func (s *sealed) abort() {
 
 // EtcdSnapshotter snapshots every cluster's etcd on its etcdSnapshots schedule and when asked
 // through EtcdSnapshotRequestAnnotation, into its backup target, encrypted to the age identity in
-// its backup keys, keeping the newest the cluster says. No etcd key or S3 credential enters the
+// its backup keys. It keeps the newest the cluster says. No etcd key or S3 credential enters the
 // workload cluster: the controller signs itself an etcd client certificate for each snapshot,
 // reaches etcd through the cluster's API server, and stores the snapshot itself.
 type EtcdSnapshotter struct {
@@ -349,7 +349,7 @@ type EtcdSnapshotter struct {
 	ClassNamespace string
 	Etcd           EtcdSource
 	Targets        *ClusterTargets
-	// Events reports on a Cluster each snapshot and why one failed; may be nil.
+	// Events reports on a Cluster each snapshot and why one failed. It may be nil.
 	Events events.EventRecorder
 	Now    func() time.Time
 
@@ -443,7 +443,7 @@ func (s *EtcdSnapshotter) succeeded(ctx context.Context, cluster *clusterv1.Clus
 }
 
 // off clears what a cluster that no longer snapshots shows of its snapshots: a request nobody will
-// answer, and the condition; the last snapshot stays recorded.
+// answer, and the condition. The last snapshot stays recorded.
 func (s *EtcdSnapshotter) off(ctx context.Context, cluster *clusterv1.Cluster) error {
 	if _, requested := cluster.Annotations[EtcdSnapshotRequestAnnotation]; requested {
 		patch := client.MergeFrom(cluster.DeepCopy())
@@ -615,7 +615,7 @@ func (t *ClusterTarget) OpenEtcdSnapshot(ctx context.Context, name string) (io.R
 func DecryptEtcdSnapshot(r io.Reader, identity string, w io.Writer) (string, int64, error) {
 	id, err := age.ParseX25519Identity(strings.TrimSpace(identity))
 	if err != nil {
-		return "", 0, fmt.Errorf("the etcd snapshot key: %w", err)
+		return "", 0, errors.New("the identity holds no age secret key (AGE-SECRET-KEY-1...)")
 	}
 	plain, err := age.Decrypt(r, id)
 	if err != nil {
@@ -633,7 +633,7 @@ func DecryptEtcdSnapshot(r io.Reader, identity string, w io.Writer) (string, int
 }
 
 // Open opens the target a cluster's etcd snapshots name, with the credential its backups use, and
-// reads its keys, making them first when create is set.
+// reads its keys. It makes them first when create is set.
 func (ts *ClusterTargets) Open(ctx context.Context, cluster *clusterv1.Cluster, name string, create bool) (*ClusterTarget, error) {
 	target, found, err := classTarget(ctx, ts.Client, ts.ClassNamespace, cluster, name)
 	if err != nil {

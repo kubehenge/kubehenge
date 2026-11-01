@@ -34,28 +34,29 @@ func newCSIProxyCommand(conn *pve.Config) *cobra.Command {
 	var o csiProxyOptions
 	cmd := &cobra.Command{
 		Use:   "csi-proxy",
-		Short: "Stand between a workload cluster's CSI plugin and the Proxmox VE API, for volume snapshots",
-		Long: `Stand between a workload cluster's Proxmox VE CSI plugin and the Proxmox VE API, beside the plugin's
-controller in clusters that take volume snapshots.
+		Short: "Proxy a workload cluster's CSI plugin to the Proxmox VE API, for volume snapshots",
+		Long: `Proxy a workload cluster's Proxmox VE CSI plugin to the Proxmox VE API. It runs in the workload
+cluster beside the plugin's controller, with the plugin's service account, in clusters that take
+volume snapshots.
 
-Every call goes on to the API with the cluster's own token, which it carries. A volume copy, which
-Proxmox VE lets only root@pam make, the proxy makes with that token instead: it imports the volume
-into a new disk of one of the cluster's holder VMs on the volume's node, detaches it as an unused
-disk of the holder, and records in the namespace ` + csiproxy.Namespace + ` which name the plugin
-knows the copy by; it turns that name into the copy's real one in every later call, and back in
-every answer. A copy is deleted through its holder. Runs in the workload cluster, with the plugin's
-service account; POD_NAME and POD_NAMESPACE name the pod its events are about.`,
-		Args: cobra.NoArgs,
+Every call goes on to the API with the cluster's own token, which the call carries. Proxmox VE lets
+only root@pam copy a volume, so the proxy makes the copy with that token instead. It imports the
+volume into a new disk of one of the cluster's holder VMs on the volume's node, then detaches it as
+an unused disk. It records the name the plugin knows the copy by in the namespace ` + csiproxy.Namespace + `.
+Every later call and answer is translated between that name and the real one. A copy is deleted
+through its holder. POD_NAME and POD_NAMESPACE name the pod its events are about.`,
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runCSIProxy(cmd.Context(), conn, &o)
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&o.listen, "listen", "127.0.0.1:8006", "address the CSI plugin reaches the proxy on; keep it on loopback, as the calls carry the cluster's token over plain HTTP")
+	proxmoxFlags(f, conn)
+	f.StringVar(&o.listen, "listen", "127.0.0.1:8006", "address the CSI plugin reaches the proxy on. Keep it on loopback, since calls carry the cluster's token over plain HTTP")
 	f.IntVar(&o.owner, "volume-owner", 0, "VMID of the cluster's volume owner VM, which the plugin names the cluster's volumes after")
 	f.StringVar(&o.pool, "pool", "", "the cluster's Proxmox VE pool, where its holder VMs are")
-	f.StringVar(&o.holders, "holders", "", "the name of the cluster's holder VMs, whose unused disks the copies are")
-	f.BoolVar(&o.copies, "copies", true, "make the copies the plugin asks for; off, only the copies made before are found")
+	f.StringVar(&o.holders, "holders", "", "name of the cluster's holder VMs, which keep the copies as unused disks")
+	f.BoolVar(&o.copies, "copies", true, "make the copies the plugin asks for. Off, the proxy only finds copies made before")
 	return cmd
 }
 

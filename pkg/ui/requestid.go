@@ -65,7 +65,7 @@ func (h requestIDHandler) WithGroup(name string) slog.Handler {
 	return requestIDHandler{h.Handler.WithGroup(name)}
 }
 
-// withRequestIDs is the logger, logging each line with the id of the request it is logged for.
+// withRequestIDs is the logger. It logs each line with the id of the request it is logged for.
 func withRequestIDs(l *slog.Logger) *slog.Logger {
 	if _, done := l.Handler().(requestIDHandler); done {
 		return l

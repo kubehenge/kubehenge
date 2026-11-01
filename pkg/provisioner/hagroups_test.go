@@ -150,7 +150,7 @@ func TestUserJoinsTheSysAuditGroupWhileAccessAsks(t *testing.T) {
 		t.Fatalf("writes %v", f.userWrites)
 	}
 
-	// Out again, keeping the user's other groups.
+	// Out again. The user's other groups stay.
 	f.groups = append(f.groups, "operators")
 	if err := p.ensureUser(ctx, n, Access{}); err != nil {
 		t.Fatal(err)

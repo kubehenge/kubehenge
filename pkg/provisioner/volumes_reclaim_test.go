@@ -55,7 +55,7 @@ func tokenOf(c *clusterv1.Cluster) Credentials {
 	return Credentials{TokenID: webNames.TokenID(), TokenSecret: "secret-of-" + c.Name, VolumeOwner: 4242, VolumeOwnerNode: "a"}
 }
 
-// newReclaimRig makes the rig; workloads fail listing for the clusters named in failing.
+// newReclaimRig makes the rig. workloads fail listing for the clusters named in failing.
 func newReclaimRig(t *testing.T, clusters map[*clusterv1.Cluster]bool, failing ...string) *reclaimRig {
 	t.Helper()
 	scheme := runtime.NewScheme()

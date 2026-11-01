@@ -104,16 +104,16 @@ const mibPerGiB = 1024;
 export const controlPlaneSizes = [1, 3, 5, 7];
 
 export interface Form {
-  /** The cluster the form started from, as namespace/name; empty for none. */
+  /** The cluster the form started from, as namespace/name. Empty for none. */
   from: string;
   /** Empty while the interface creates clusters in one namespace only. */
   namespace: string;
   name: string;
   className: string;
-  /** The node OS as one word, such as almalinux-10; empty while the class offers none. */
+  /** The node OS as one word, such as almalinux-10. Empty while the class offers none. */
   nodeOS: string;
   version: string;
-  /** The Talos release a Talos cluster's nodes run; empty takes the newest with a template. */
+  /** The Talos release a Talos cluster's nodes run. Empty takes the newest with a template. */
   talosVersion: string;
   controlPlaneReplicas: number;
   /** The workers, or with workerAutoscale the fewest the cluster autoscaler keeps. */
@@ -157,7 +157,7 @@ export interface Form {
   rancherHostname: string;
   rancherRegister: boolean;
   certificates: CertificatesForm;
-  // The DNS provider's credential, stored for the cluster once it is created; never in the request.
+  // The DNS provider's credential, stored for the cluster once it is created. Never in the request.
   dns01Token: string;
   gitops: GitOpsChoice;
   oidc: OIDCProvider[];
@@ -286,7 +286,7 @@ const bytesPerGiB = 1_073_741_824;
 
 /**
  * Room is what a new cluster's VMs take of memory and disk at their most, in bytes, and what the
- * nodes it may use and its storage have free; free is missing where Proxmox VE does not say.
+ * nodes it may use and its storage have free. free is missing where Proxmox VE does not say.
  */
 export interface Room {
   memory: number;
@@ -303,7 +303,7 @@ export function createRoom(form: Form, nodes: PveNode[], storages: Storage[]): R
   const usable = nodes.filter((n) => n.online && (allowed === undefined || allowed.includes(n.node)));
   const known = usable.length > 0 && usable.every((n) => n.maxMemory !== undefined);
   const chosen = storages.filter((s) => s.storage === form.storage && s.total > 0);
-  // A shared storage is listed once per node, holding the same space.
+  // A shared storage is listed once per node. It holds the same space.
   const disks = chosen.some((s) => s.shared)
     ? chosen.slice(0, 1)
     : chosen.filter((s) => usable.some((n) => n.node === s.node));
@@ -642,7 +642,7 @@ export function withNamespace(f: Form, namespace: string, current = f.namespace)
   return { ...f, namespace, meshPeers: namespace === current ? f.meshPeers : [] };
 }
 
-/** chosenNodeOS is the node OS a form's nodes run: the one chosen, else the class's default; none for Talos. */
+/** chosenNodeOS is the node OS a form's nodes run: the one chosen, else the class's default. None for Talos. */
 export function chosenNodeOS(f: Form, c: ClusterClass | undefined): NodeOSChoice | undefined {
   return findNodeOS(c?.nodeOSes, f.nodeOS) ?? defaultNodeOS(c?.nodeOSes);
 }
@@ -898,7 +898,7 @@ function releaseRows(form: Form, c: ClusterClass, defined: Set<string>): [string
   return rows;
 }
 
-// summary is what the Confirm step shows: each setting by its name, as the user chose it; Proxmox
+// summary is what the Confirm step shows: each setting by its name, as the user chose it. Proxmox
 // VE HA, the CSI plugin's release and the HA group labels only where they can be chosen.
 export function summary(
   form: Form,
@@ -1019,7 +1019,7 @@ function addOnRows(form: Form, defined: Set<string>): [string, string][] {
   return rows;
 }
 
-// rancherMinimumCores is what Rancher's documentation asks of every node of its cluster; the
+// rancherMinimumCores is what Rancher's documentation asks of every node of its cluster. The
 // controller refuses fewer.
 export const rancherMinimumCores = 4;
 
@@ -1249,7 +1249,7 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
   return p;
 }
 
-// The certificates' fields show their own problems; the step holds them, to keep it from being
+// The certificates' fields show their own problems. The step holds them, to keep it from being
 // complete.
 function addOnProblems(form: Form, c: ClusterClass | undefined): Problems {
   const p: Problems = {};
@@ -1348,7 +1348,7 @@ export function versionLabel(v: string, stable: string | undefined): string {
 
 // offeredBridges are the bridges a cluster may attach to: the class's list when it has one, with
 // what the nodes say of each, else every bridge a node lists. A bridge the user cannot list is
-// still offered; the server checks SDN.Use on it.
+// still offered. The server checks SDN.Use on it.
 export function offeredBridges(byNode: Record<string, Bridge[]>, allowed: string[] | undefined): Bridge[] {
   const seen = new Map<string, Bridge>();
   for (const b of Object.values(byNode).flat()) {
@@ -1490,7 +1490,7 @@ export function offeredStorages(storages: Storage[], allowed: string[] | undefin
   return [...seen.values()].filter((s) => !allowed || allowed.includes(s.storage));
 }
 
-// The class lists the bridges and storages clusters may use; without such a list, what any node
+// The class lists the bridges and storages clusters may use. Without such a list, what any node
 // offers.
 export const classBridges = (c: ClusterClass | undefined): string[] | undefined =>
   texts(variable(c, "network")?.properties?.["bridge"]?.enum);

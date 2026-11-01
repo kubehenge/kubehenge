@@ -332,7 +332,7 @@ func TestWriteMeshSignsEachCertificateWithTheNamespacesCA(t *testing.T) {
 		t.Error("the server's certificate names a peer's endpoint")
 	}
 
-	// Rewritten, a certificate stays until a third of its life is left; then it is renewed.
+	// Rewritten, a certificate stays until a third of its life is left. Then it is renewed.
 	before := m.secret(t, "clustermesh-apiserver-remote-cert").Data["tls.crt"]
 	m.write(t, "10.0.0.10", m.links, m.now.Add(time.Hour))
 	if !bytes.Equal(m.secret(t, "clustermesh-apiserver-remote-cert").Data["tls.crt"], before) {

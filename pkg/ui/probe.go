@@ -16,7 +16,7 @@ import (
 
 // probePorts are ports hosts on a server network commonly listen on: SSH, HTTP, HTTPS, and the
 // Kubernetes, Proxmox VE and Talos APIs. A host that takes or refuses a connection on one, or
-// answers ping, is there; one that ignores them all looks free, to the controller too.
+// answers ping, is there. One that ignores them all looks free, to the controller too.
 var probePorts = []string{"22", "80", "443", "6443", "8006", "50000"}
 
 const (
@@ -78,7 +78,7 @@ func answered(err error) bool {
 
 // echoReplies sends each address an ICMP echo request and returns those that reply before ctx
 // ends. It needs ICMP sockets without privileges (net.ipv4.ping_group_range), which the chart
-// gives the interface's pod; where none opens, it finds no one.
+// gives the interface's pod. Where none opens, it finds no one.
 func echoReplies(ctx context.Context, addrs []netip.Addr, log *slog.Logger) []netip.Addr {
 	conn, err := icmp.ListenPacket("udp4", "0.0.0.0")
 	if err != nil {

@@ -434,7 +434,7 @@ func TestCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, a)
-	// The fake tofu writes no state; the real one does.
+	// The fake tofu writes no state. The real one does.
 	if err := os.WriteFile(filepath.Join(a.Dir, "management", "terraform.tfstate"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}

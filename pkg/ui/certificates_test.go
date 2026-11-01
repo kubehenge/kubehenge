@@ -94,7 +94,7 @@ func TestSharedDNS01NeedsTheKubeconfigRight(t *testing.T) {
 	expect(t, dev.do("PATCH", "/api/clusters/default/two", change), http.StatusForbidden)
 	expect(t, dev.do("PATCH", "/api/clusters/default/two", `{"variables":{"certificates":`+ownDNS01+`}}`), http.StatusOK)
 
-	// Keeping what an administrator gave the cluster, or giving it up, needs nothing more; taking it
+	// Keeping what an administrator gave the cluster, or giving it up, needs nothing more. Taking it
 	// back once given up does.
 	expect(t, admin.do("PATCH", "/api/clusters/default/two", change), http.StatusOK)
 	expect(t, dev.do("PATCH", "/api/clusters/default/two", `{"variables":{"certificates":`+strings.Replace(sharedDNS01, "apps.example", "web.example", 1)+`}}`), http.StatusOK)

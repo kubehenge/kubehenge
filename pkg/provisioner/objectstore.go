@@ -20,10 +20,10 @@ import (
 
 const (
 	// storePartSize is the part a streamed upload is sent in. The client holds one part in memory at
-	// a time, so a snapshot of any size uploads in this much; a part this size allows objects of
+	// a time, so a snapshot of any size uploads in this much. A part this size allows objects of
 	// 80 GiB in the 10,000 parts S3 takes.
 	storePartSize = 8 << 20
-	// storeDialTimeout and storeResponseTimeout bound reaching the store and its first answer; a
+	// storeDialTimeout and storeResponseTimeout bound reaching the store and its first answer. A
 	// transfer itself takes as long as it takes.
 	storeDialTimeout     = 10 * time.Second
 	storeResponseTimeout = time.Minute
@@ -51,7 +51,7 @@ type ObjectStore interface {
 	Stat(ctx context.Context, key string) (StoredObject, error)
 	// Get streams an object.
 	Get(ctx context.Context, key string) (io.ReadCloser, error)
-	// Remove deletes an object; one that is gone already is no error.
+	// Remove deletes an object. One that is gone already is no error.
 	Remove(ctx context.Context, key string) error
 	// PresignGet is a URL anyone may fetch the object with until it expires.
 	PresignGet(ctx context.Context, key string, expires time.Duration) (string, error)
@@ -163,7 +163,7 @@ func (s *s3Store) List(ctx context.Context, prefix string) ([]StoredObject, erro
 		if o.Err != nil {
 			return nil, fmt.Errorf("listing %s: %w", prefix, o.Err)
 		}
-		// A listing carries no user metadata; each object's is read on its own.
+		// A listing carries no user metadata. Each object's is read on its own.
 		st, err := s.Stat(ctx, o.Key)
 		if errors.Is(err, ErrNoObject) {
 			continue

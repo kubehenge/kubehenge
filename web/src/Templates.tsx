@@ -279,7 +279,7 @@ function releaseLabel(r: TalosReleases, v: string): string {
 
 interface BuildForm {
   distribution: (typeof distributions)[number];
-  /** The node OS as one word, such as almalinux-10; empty, the default. */
+  /** The node OS as one word, such as almalinux-10. Empty, the default. */
   nodeOS: string;
   kubernetesVersion: string;
   talosVersion: string;
@@ -471,8 +471,8 @@ function BuildDialog({
   const bridgeNames = bridges.map((b) => b.bridge);
   const talos = entered.distribution === "talos";
   const releases = useTalosReleases(talos);
-  // A lone choice is taken until the user picks; the cloud-init storage is optional, so stays the
-  // node's first; and the Talos release is the one templates are made of by default, unless it has
+  // A lone choice is taken until the user picks. The cloud-init storage is optional, so stays the
+  // node's first. The Talos release is the one templates are made of by default, unless it has
   // one already.
   const releaseOffered = releases ? releaseToMake(releases) : "";
   const form: BuildForm = {

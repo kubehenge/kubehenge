@@ -43,7 +43,7 @@ import (
 )
 
 const (
-	// One replica runs; the lease only hands over during a rollout, which releasing it on shutdown
+	// One replica runs. The lease only hands over during a rollout, which releasing it on shutdown
 	// makes immediate. Renewing every 10 s rather than 2 s spares etcd a write every other second,
 	// and a 40 s deadline rides out a management API server that stalls for some seconds instead of
 	// restarting every controller.
@@ -76,7 +76,7 @@ type controllerOptions struct {
 	r        provisioner.Reconciler
 	settings provisioner.Settings
 	port     int
-	// extensionHost is the address the Runtime Extension server listens on; empty, as in the pod,
+	// extensionHost is the address the Runtime Extension server listens on. Empty, as in the pod,
 	// is every interface.
 	extensionHost     string
 	certDir           string
@@ -142,41 +142,40 @@ func newControllerCommand(conn *pve.Config) *cobra.Command {
 		Short: "Run Kubehenge's controller in the management cluster",
 		Long: `Run Kubehenge's controller in the management cluster.
 
-It gives each cluster built from a Kubehenge ClusterClass its own Proxmox VE pool, and a user and
-API token scoped to that pool for the cluster's cloud controller manager and CSI plugin, before
-Cluster API creates any of its VMs (as the BeforeClusterCreate hook of a Runtime Extension), and
-removes them once the cluster's VMs are gone. It installs the add-ons each cluster switches on, and
-registers every cluster with the Rancher one of them installs, and runs a cluster autoscaler for
-each cluster with an autoscaled pool. A distribution's Cluster API providers run only while a
-cluster uses it.
+It gives each cluster built from a Kubehenge ClusterClass its own Proxmox VE pool. In it, it makes a
+user and API token for the cluster's cloud controller manager and CSI plugin, before Cluster API
+creates any of its VMs (the BeforeClusterCreate hook of a Runtime Extension). It removes them once
+the cluster's VMs are gone. It installs the add-ons each cluster switches on and registers every
+cluster with the Rancher one of them installs. It runs a cluster autoscaler for each cluster with an
+autoscaled pool. A distribution's Cluster API providers run only while a cluster uses it.
 
-The API token is read from KUBEHENGE_PROXMOX_TOKEN. With --proxmox-ha, Proxmox VE HA keeps each
-cluster's control-plane VMs on separate nodes; with --etcd-restore, it restores clusters' etcd from
-their snapshots through the VMs' guest agents. Neither token they take is the controller's: each
-write to HA, and each command through a guest agent, runs as a Job of the chart's PodTemplate, the
-only pod that mounts the token. It reads the boot logs of the nodes asked for through the guest
-agents with its own token, which needs VM.GuestAgent.FileRead on the workload pool for that.`,
-		Args: cobra.NoArgs,
+The API token is read from KUBEHENGE_PROXMOX_TOKEN. --proxmox-ca is required. With --proxmox-ha,
+Proxmox VE HA keeps each cluster's control-plane VMs on separate nodes. With --etcd-restore, the
+controller restores clusters' etcd from their snapshots through the VMs' guest agents. Both use a
+token other than the controller's. Each HA write and each guest-agent command runs as a Job of the
+chart's PodTemplate, the only pod that mounts that token.`,
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.run(cmd.Context(), conn)
 		},
 	}
 	f := cmd.Flags()
+	proxmoxFlags(f, conn)
 	f.StringVar(&o.r.WorkloadPool, "workload-pool", "kubehenge", "Proxmox VE pool the clusters' own pools nest under")
 	f.StringVar(&o.r.ClassNamespace, "class-namespace", os.Getenv("POD_NAMESPACE"), "namespace of Kubehenge's ClusterClasses (env POD_NAMESPACE)")
 	f.StringVar(&o.settings.Group, "cluster-group", "kubehenge-clusters", "Proxmox VE group the clusters' users join")
 	f.StringVar(&o.settings.Role, "cluster-role", "kubehenge-cluster", "Proxmox VE role each cluster's user gets on its own pool")
-	f.StringVar(&o.settings.Node, "volume-owner-node", "", "Proxmox VE node for the VMs that own clusters' volumes; default the first online node")
-	f.StringVar(&o.settings.Region, "region", "", "region the clusters see Proxmox VE as; default the Proxmox VE cluster's name")
+	f.StringVar(&o.settings.Node, "volume-owner-node", "", "Proxmox VE node for the VMs that own clusters' volumes, else the first online node")
+	f.StringVar(&o.settings.Region, "region", "", "region the clusters see Proxmox VE as, else the Proxmox VE cluster's name")
 	o.addonFlags(f)
 	o.addAutoscalerFlags(f)
-	f.StringVar(&o.podSecurityExempt, "pod-security-exempt", "{}", "namespaces Kyverno's pod security policies leave alone, those the ClusterClasses' Pod Security Admission exempts, as a JSON object of lists by what runs there: always, calico, monitoring, logs, backups, istio, metallb, rancher, rancherAgent")
-	f.StringArrayVar(&o.classProviders, "class-providers", nil, "namespaces of the Cluster API providers only one ClusterClass's clusters use, as <class>=<namespace>,<namespace>; they run only while a cluster does (repeatable)")
+	f.StringVar(&o.podSecurityExempt, "pod-security-exempt", "{}", "namespaces exempt from pod security, in Kyverno's policies and the ClusterClasses' Pod Security Admission alike, as a JSON object of lists keyed by what runs there: always, calico, monitoring, logs, backups, istio, metallb, rancher, rancherAgent")
+	f.StringArrayVar(&o.classProviders, "class-providers", nil, "namespaces of the Cluster API providers that only one ClusterClass's clusters use, as <class>=<namespace>,<namespace>. They run only while such a cluster exists (repeatable)")
 	f.BoolVar(&o.offerHARules, "offer-ha-rules", false, "offer Proxmox VE's HA node-affinity rules, their names and nodes only, to those who may create a cluster but not read the rules, through the ConfigMap "+provisioner.HARulesName)
-	f.StringSliceVar(&o.headlampSignIn, "headlamp-sign-in-namespaces", nil, "the interface's namespaces, whose clusters get identities through which the appliance's shared Headlamp signs those who may download a cluster's admin kubeconfig in as cluster-admin (comma-separated); none, nobody is signed in and the identities are removed")
+	f.StringSliceVar(&o.headlampSignIn, "headlamp-sign-in-namespaces", nil, "the interface's namespaces whose clusters the appliance's shared Headlamp signs users in to as cluster-admin, if they may download the admin kubeconfig (comma-separated). Empty signs nobody in and removes the identities")
 	f.DurationVar(&o.upgradeInterval, "upgrade-interval", defaultUpgradeInterval, "how often clusters are checked for an automatic upgrade due in their window")
-	f.DurationVar(&o.nodeImageSoak, "node-image-soak", provisioner.DefaultNodeImageSoak, "how old a template build is before clusters move to it; the template refresh's --soak")
-	f.DurationVar(&o.r.StallAfter, "stall-after", provisioner.DefaultStallAfter, "how long the new control plane of a cluster with one may take to become ready, and a cluster's deletion may wait, before either counts as stalled")
+	f.DurationVar(&o.nodeImageSoak, "node-image-soak", provisioner.DefaultNodeImageSoak, "how old a template build must be before clusters move to it, as the template refresh's --soak")
+	f.DurationVar(&o.r.StallAfter, "stall-after", provisioner.DefaultStallAfter, "how long a cluster's new control plane may take to become ready, and a cluster's deletion may wait, before either counts as stalled")
 	f.BoolVar(&o.templateRefresh, "template-refresh", false, "start the template refresh CronJob's Job for the builds asked for in the interface")
 	f.BoolVar(&o.proxmoxHA, "proxmox-ha", false, "keep clusters' control-plane VMs on separate nodes with Proxmox VE HA, writing HA through Jobs of the PodTemplate "+provisioner.HAJobTemplate)
 	f.BoolVar(&o.etcdRestore, "etcd-restore", false, "restore clusters' etcd through the VMs' guest agents, through Jobs of the PodTemplate "+provisioner.GuestJobTemplate)
@@ -184,8 +183,8 @@ agents with its own token, which needs VM.GuestAgent.FileRead on the workload po
 	f.StringVar(&o.extensionConfig, "extension-config", "kubehenge", "ExtensionConfig through which Cluster API calls this controller's hooks")
 	f.StringVar(&o.certDir, "extension-cert-dir", "/etc/kubehenge/tls", "directory with tls.crt and tls.key for the Runtime Extension server")
 	f.StringVar(&o.healthAddr, "health-address", ":8081", "address of the liveness and readiness probes")
-	f.StringVar(&o.metricsAddr, "metrics-address", ":8443", "address of the Prometheus metrics, over HTTPS for callers the API server authorises to get /metrics; 0 for none")
-	o.logs.addFlags(f, "log in development mode: stack traces from warnings on, and a panic on what should never happen; still in JSON")
+	f.StringVar(&o.metricsAddr, "metrics-address", ":8443", "address of the Prometheus metrics, served over HTTPS to callers the API server authorises for /metrics, or 0 for none")
+	o.logs.addFlags(f, "log in development mode, with stack traces from warnings up and a panic on what should never happen. Lines stay in JSON")
 	f.BoolVar(&o.bootLogs, "boot-logs", true, "read the boot logs of kubeadm, RKE2 and k3s nodes through their guest agents with this controller's token, which then needs VM.GuestAgent.FileRead on the workload pool")
 	f.BoolVar(&o.leaderElect, "leader-elect", true, "elect one active controller among replicas")
 	return cmd
@@ -201,7 +200,7 @@ func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 	f.StringVar(&o.calicoChart, "calico-chart", "", "Calico's operator chart, for distributions without a CNI of their own, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.headlampChart, "headlamp-chart", "", "Headlamp chart, for clusters that switch it on, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringSliceVar(&o.calicoImages, "calico-images", nil, "the images the Tigera operator runs Calico from, all at its release, as <registry>/<repository>:<tag>@sha256:<digest> (comma-separated)")
-	f.StringVar(&o.chartValues, "chart-values", "{}", "values beneath those Kubehenge gives each chart, naming its images by digest, as a JSON object by chart flag without -chart, such as {\"cert-manager\":{...}}")
+	f.StringVar(&o.chartValues, "chart-values", "{}", "Helm values for each chart, beneath Kubehenge's own and naming its images by digest, as a JSON object keyed by the chart flag's name without -chart, such as {\"cert-manager\":{...}}")
 	f.StringVar(&o.certManagerChart, "cert-manager-chart", "", "cert-manager chart, installed with Rancher and with monitoring, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.rancherChart, "rancher-chart", "", "Rancher chart, for the cluster that installs it, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.rancherKubernetes, "rancher-kubernetes", "", "Kubernetes minor versions the Rancher chart runs on, as <min>-<max>, such as 34-36")
@@ -236,22 +235,22 @@ func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 
 // grantFlags are those that let clusters' tokens hold more than their pools: Datastore.Allocate
 // for the CSI plugin's newest release, Sys.Audit on / for the cloud controller manager's HA group
-// labels; and the proxy that copies the volumes of clusters taking volume snapshots.
+// labels, and the proxy that copies the volumes of clusters taking volume snapshots.
 func (o *controllerOptions) grantFlags(f *pflag.FlagSet) {
-	f.StringVar(&o.csiProxyImage, "csi-proxy-image", "", "the image, as <repository>@sha256:<digest>, of the proxy beside the CSI plugin's controller in clusters that take volume snapshots, which runs kubehenge csi-proxy and copies their volumes with their own tokens; empty to let no cluster take them")
+	f.StringVar(&o.csiProxyImage, "csi-proxy-image", "", "image of the proxy beside the CSI plugin's controller in clusters that take volume snapshots, as <repository>@sha256:<digest>. It runs kubehenge csi-proxy and copies volumes with each cluster's own token. Empty, no cluster takes volume snapshots")
 	f.StringVar(&o.snapshotChart, "snapshot-controller-chart", "", "the volume snapshot controller's chart, with its CRDs and the VolumeSnapshotClass, for clusters that take volume snapshots, as <repository>/<name>:<version>@sha256:<digest>")
-	f.StringVar(&o.settings.SysAuditGroup, "sys-audit-group", "", "Proxmox VE group holding Sys.Audit on / that the user of each cluster asking for the cloud controller manager's HA group labels joins; empty to let no cluster join it")
+	f.StringVar(&o.settings.SysAuditGroup, "sys-audit-group", "", "Proxmox VE group holding Sys.Audit on /, joined by the user of each cluster that asks for the cloud controller manager's HA group labels. Empty, no cluster joins it")
 	f.StringVar(&o.csiNewestChart, "csi-newest-chart", "", "the CSI plugin's newest release, for clusters whose token holds Datastore.Allocate on their storage, as <repository>/<name>:<version>@sha256:<digest>")
-	f.StringVar(&o.settings.DatastoreRole, "datastore-allocate-role", "", "Proxmox VE role, holding Datastore.Allocate, each cluster that asks for it gets on its storage; empty to let no cluster hold it")
+	f.StringVar(&o.settings.DatastoreRole, "datastore-allocate-role", "", "Proxmox VE role holding Datastore.Allocate, given on its storage to each cluster that asks for it. Empty, no cluster holds it")
 	f.StringSliceVar(&o.r.DatastoreAllocate.Management, "management-storages", nil, "storages the management cluster uses, on which no cluster may hold Datastore.Allocate (comma-separated)")
 }
 
 // addAutoscalerFlags adds the flags of the cluster autoscalers the controller runs. Their images
 // are required, as the add-ons' are.
 func (o *controllerOptions) addAutoscalerFlags(f *pflag.FlagSet) {
-	f.StringVar(&o.autoscaler.Namespace, "autoscaler-namespace", "kubehenge-autoscaler", "namespace of the cluster autoscalers that run in the management cluster, their accounts, the autoscaler identity's tokens they mount and the admission policy's ConfigMap")
+	f.StringVar(&o.autoscaler.Namespace, "autoscaler-namespace", "kubehenge-autoscaler", "namespace of the cluster autoscalers that run in the management cluster, with their accounts, tokens and the admission policy's ConfigMap")
 	f.StringSliceVar(&o.autoscalerImages, "autoscaler-images", nil, "the cluster autoscaler's images, one for each Kubernetes minor version, as <registry>/<repository>:v1.<minor>.<patch>@sha256:<digest> (comma-separated)")
-	f.StringVar(&o.autoscaler.Management.Server, "management-endpoint", "", "the management cluster's API as workload clusters reach it, such as https://192.0.2.10:6443, for autoscalers that run inside their cluster; none can without it")
+	f.StringVar(&o.autoscaler.Management.Server, "management-endpoint", "", "the management cluster's API as workload clusters reach it, such as https://192.0.2.10:6443. Autoscalers that run inside their cluster need it")
 	_ = cobra.MarkFlagRequired(f, "autoscaler-images")
 }
 
@@ -832,7 +831,7 @@ func (o *controllerOptions) addBootLogs(mgr manager.Manager, c *proxmox.Client) 
 }
 
 // addHA adds the reconciler that has Proxmox VE HA keep clusters' control-plane VMs apart, with
-// --proxmox-ha, writing HA in Jobs that alone hold the HA token. Without it, the reconciler takes
+// --proxmox-ha. It writes HA in Jobs that alone hold the HA token. Without it, the reconciler takes
 // back the hooks it set before.
 func (o *controllerOptions) addHA(mgr manager.Manager, c *proxmox.Client) error {
 	r := &provisioner.HAReconciler{

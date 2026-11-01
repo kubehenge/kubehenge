@@ -148,7 +148,7 @@ func reconcileAutoscaler(t *testing.T, a *AutoscalerReconciler, key client.Objec
 	return result
 }
 
-// present tells whether each object exists, failing the test on any other error.
+// present tells whether each object exists. It fails the test on any other error.
 func present(t *testing.T, c client.Client, objects ...client.Object) []bool {
 	t.Helper()
 	found := make([]bool, len(objects))

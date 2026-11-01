@@ -381,8 +381,8 @@ func discover(t *testing.T, api *integration.API) []string {
 }
 
 // TestIntegrationTemplateRefreshRunsUnderItsLease runs the template refresh's Job as the chart runs
-// it: under its Lease, released once it ends, with how it went in the status the interface shows;
-// a run without its API token says so there instead. It reads which clusters run which builds from
+// it: under its Lease, released once it ends, with how it went in the status the interface shows.
+// A run without its API token says so there instead. It reads which clusters run which builds from
 // the same management cluster, and the Helm hooks' wait gets a client of it.
 func TestIntegrationTemplateRefreshRunsUnderItsLease(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
 	api, _ := startManagementCluster(t)
@@ -433,7 +433,7 @@ func TestIntegrationTemplateRefreshRunsUnderItsLease(t *testing.T) { //nolint:pa
 	noToken := *conn
 	noToken.Token = ""
 	err := refresh(&noToken)
-	if err == nil || !strings.Contains(err.Error(), "Secret kubehenge-proxmox with key token is missing in namespace "+ns) {
+	if err == nil || !strings.Contains(err.Error(), "namespace "+ns+" has no Secret kubehenge-proxmox with the key token") {
 		t.Errorf("a run without its token gave %v", err)
 	}
 	if s = status(); s[provisioner.RefreshState] != "failed" || !strings.Contains(s[provisioner.RefreshError], "Secret kubehenge-proxmox") {

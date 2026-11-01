@@ -120,7 +120,7 @@ export function CreateCluster({
         return;
       }
       setVersionsBy((all) => ({ ...all, [versionsKey(distribution, kubeadmOS)]: v }));
-      // A distribution's stable release, or kubeadm's newest template, unless one was chosen; a
+      // A distribution's stable release, or kubeadm's newest template, unless one was chosen. A
       // kubeadm version without a template on the node OS chosen now is not kept.
       const first = v.stable ?? v.versions[0];
       if (filled(first)) {
@@ -184,7 +184,7 @@ export function CreateCluster({
           setEntered((f) => (f.className === "" ? fromCluster(last, f) : f));
         }
       } catch {
-        // The controller refuses a storage another cluster uses in any case; the list only says so sooner.
+        // The controller refuses a storage another cluster uses in any case. The list only says so sooner.
         setClusters([]);
       }
     }

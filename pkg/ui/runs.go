@@ -237,7 +237,7 @@ func jobRun(id, kind, what string, j *appliance.JobView) runView {
 	return v
 }
 
-// updateRun is the updater's last upgrade of the appliance; finding nothing newer is no run.
+// updateRun is the updater's last upgrade of the appliance. Finding nothing newer is no run.
 func updateRun(st *appliance.UpdateStatus) (runView, bool) {
 	at := st.Time
 	v := runView{ID: "appliance-upgrade", Kind: runApplianceUpdate, What: "Upgrade appliance to " + st.To, Error: st.Error, Release: st.To}
@@ -382,7 +382,7 @@ func restoreSteps(st *provisioner.EtcdRestoreStatus, state string) []runStep {
 	return steps
 }
 
-// readVeleroRuns are the backups and restores Velero keeps in a cluster; one it cannot read has none.
+// readVeleroRuns are the backups and restores Velero keeps in a cluster. One it cannot read has none.
 func (s *Server) readVeleroRuns(ctx context.Context, u user, c *clusterv1.Cluster) []runView {
 	ctx, cancel := context.WithTimeout(ctx, veleroTimeout)
 	defer cancel()

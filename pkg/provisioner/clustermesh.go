@@ -62,7 +62,7 @@ const (
 	meshAPIPort = 2379
 	// meshCASecret holds a namespace's Cluster Mesh CA.
 	meshCASecret = "kubehenge-cluster-mesh-ca" //nolint:gosec // a Secret's name, not a credential
-	// meshCAValidity is how long the CA is valid; meshCertValidity how long what it signs is, renewed
+	// meshCAValidity is how long the CA is valid. meshCertValidity is how long what it signs is, renewed
 	// with 1/meshRenewalShare of it left.
 	meshCAValidity   = 10 * 365 * 24 * time.Hour
 	meshCertValidity = 365 * 24 * time.Hour
@@ -191,7 +191,7 @@ func clusterMeshValues() map[string]any {
 // MeshPeer is a cluster another lists in its clusterMesh variable.
 type MeshPeer struct {
 	Name string `json:"name"`
-	// Refused says why the two are not linked; empty once they are.
+	// Refused says why the two are not linked. It is empty once they are.
 	Refused string `json:"refused,omitempty"`
 }
 
@@ -289,7 +289,7 @@ func meshRefusal(self, peer *meshMember) string {
 	return ""
 }
 
-// overlapping finds a range of a that overlaps one of b; one that is no network overlaps all.
+// overlapping finds a range of a that overlaps one of b. One that is no network overlaps all.
 func overlapping(a, b []string) (string, string, bool) {
 	for _, x := range a {
 		for _, y := range b {
@@ -357,7 +357,7 @@ func (r *Reconciler) meshCluster(ctx context.Context, cluster *clusterv1.Cluster
 	return false, nil
 }
 
-// meshLinks are the peers the cluster is linked with; each it lists and is not linked with is
+// meshLinks are the peers the cluster is linked with. Each it lists and is not linked with is
 // reported on the cluster, with why.
 func (r *Reconciler) meshLinks(ctx context.Context, cluster *clusterv1.Cluster) ([]meshLink, error) {
 	list := &clusterv1.ClusterList{}
@@ -548,8 +548,8 @@ type meshCert struct {
 }
 
 // meshCerts are a cluster's: the server's, for its own agents and for peers, which reach it on the
-// endpoint; admin, which sets up its store; local, which its agents read KVStoreMesh's cache with;
-// and remote, which its KVStoreMesh reads the peers with.
+// endpoint. The admin one sets up its store. The local one is what its agents read KVStoreMesh's cache with.
+// The remote one is what its KVStoreMesh reads the peers with.
 func meshCerts(name, endpoint string) []meshCert {
 	dns := []string{meshServer}
 	ips := []net.IP{net.ParseIP("127.0.0.1"), net.IPv6loopback}
@@ -633,7 +633,7 @@ func meshEndpoint(url, prefix string) ([]byte, error) {
 
 // writeMesh writes a cluster's Cluster Mesh objects into kube-system: its certificates, renewed when
 // due, and its links. The agents reach every peer through the local KVStoreMesh, which reads the
-// peers' clustermesh-apiservers; each peer signs in as its remote user, which may read this
+// peers' clustermesh-apiservers. Each peer signs in as its remote user, which may read this
 // cluster's state and nothing else.
 func writeMesh(ctx context.Context, workload client.Client, name, endpoint string, ca *meshCA, links []meshLink, now time.Time) error {
 	if err := writeMeshCerts(ctx, workload, name, endpoint, ca, now); err != nil {

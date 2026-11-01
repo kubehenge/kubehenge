@@ -30,8 +30,8 @@ type UpgradePolicy struct {
 	// Mode is off, patch or minor.
 	Mode   string `json:"mode"`
 	Window Window `json:"window"`
-	// NodeImages has the nodes move to new template builds inside the window, whatever Mode says;
-	// unset means on.
+	// NodeImages has the nodes move to new template builds inside the window, whatever Mode says.
+	// Unset means on.
 	NodeImages *bool `json:"nodeImages,omitempty"`
 }
 
@@ -129,7 +129,7 @@ type Channels struct {
 
 // supportedMinors is how many minor versions, counted down from the newest, a new cluster may
 // start on. Kubernetes patches its three newest and keeps the one before for a few weeks after a
-// release; the channels list every minor ever released, years past their last fix.
+// release. The channels list every minor ever released, years past their last fix.
 const supportedMinors = 4
 
 // Offer is the newest release of each minor version, newest first.
@@ -169,7 +169,7 @@ const (
 )
 
 // Target is the version an automatic upgrade moves to from current, or "" for none: in patch
-// mode the newest release of the same minor; in minor mode the newest of the next minor once that
+// mode the newest release of the same minor. In minor mode the newest of the next minor once that
 // is stable, else as in patch mode.
 func (ch Channels) Target(current, mode string) string {
 	cur, ok := parseKubeVersion(current)
@@ -193,8 +193,8 @@ type Releases interface {
 }
 
 // ChannelServer reads RKE2's and k3s's release channels (update.rke2.io, update.k3s.io), whatever
-// the node OS; kubeadm's from the templates Kubehenge has built for the node OS, as a kubeadm node
-// needs one for its version; and Talos's from Kubernetes's own, for the minor versions the Talos
+// the node OS. It reads kubeadm's from the templates Kubehenge has built for the node OS, as a
+// kubeadm node needs one for its version. It reads Talos's from Kubernetes's own, for the minor versions the Talos
 // release Kubehenge makes templates of runs. Talos is its own OS, so the node OS plays no part there.
 type ChannelServer struct {
 	HTTP    *http.Client
@@ -304,7 +304,7 @@ func (s *ChannelServer) get(ctx context.Context, url string) ([]byte, bool, erro
 }
 
 // kubernetesChannels are the newest Kubernetes release of each minor version the Talos release
-// Kubehenge makes templates of runs, as Kubernetes names them; stable is the minor of the release
+// Kubehenge makes templates of runs, as Kubernetes names them. Stable is the minor of the release
 // Talos itself installs by default.
 func (s *ChannelServer) kubernetesChannels(ctx context.Context, base string) (Channels, error) {
 	minors, err := templates.TalosKubernetesMinors(templates.DefaultTalosVersion)
@@ -356,7 +356,7 @@ func (s *ChannelServer) templateChannels(ctx context.Context, os templates.NodeO
 }
 
 // poolTemplates is what the token sees of Kubehenge's templates, the controller's being those of
-// the template pool. The ClusterClasses clone from builds of templates of a node OS only; one
+// the template pool. The ClusterClasses clone from builds of templates of a node OS only. One
 // without a build tag, or of an operating system no family names, is a source no machine of theirs
 // could be built from.
 type poolTemplates struct {
@@ -482,7 +482,7 @@ func newerFirst(a, b string) int {
 const autoUpgraded = "kubehenge.dev/auto-upgraded"
 
 // Upgrader starts the automatic upgrades clusters ask for, one step at a time, inside their
-// windows. Cluster API carries each upgrade out; the BeforeClusterUpgrade hook still applies.
+// windows. Cluster API carries each upgrade out. The BeforeClusterUpgrade hook still applies.
 type Upgrader struct {
 	Client         client.Client
 	ClassNamespace string
@@ -539,7 +539,7 @@ func (u *Upgrader) RunOnce(ctx context.Context) {
 			continue
 		}
 		from := c.Spec.Topology.Version
-		// The target was chosen from what was read; a version the user set since, or a cluster that
+		// The target was chosen from what was read. A version the user set since, or a cluster that
 		// stopped being settled, makes the patch fail on the resource version and is looked at anew.
 		base := client.MergeFromWithOptions(c.DeepCopy(), client.MergeFromWithOptimisticLock{})
 		if c.Annotations == nil {
@@ -780,7 +780,7 @@ func (u *Upgrader) waitingBuild(ctx context.Context, c *clusterv1.Cluster, now t
 }
 
 // hold records on the cluster which build it is held from and until when, or with "" that it is
-// held from none; it writes only a change.
+// held from none. It writes only a change.
 func (u *Upgrader) hold(ctx context.Context, c *clusterv1.Cluster, held string) error {
 	if c.Annotations[NodeImageHeldAnnotation] == held {
 		return nil

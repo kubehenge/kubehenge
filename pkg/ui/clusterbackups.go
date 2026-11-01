@@ -45,10 +45,10 @@ const (
 	veleroListLimit = 500
 	// requestedBy on a backup, restore or deletion names the Proxmox VE user who asked for it.
 	requestedBy = "kubehenge.dev/requested-by"
-	// ownLocation is the cluster's own backup location; the others hold the backups of the
+	// ownLocation is the cluster's own backup location. The others hold the backups of the
 	// clusters it reads.
 	ownLocation = "default"
-	// Velero's labels on a deletion, which its CLI sets too, naming the backup it deletes.
+	// Velero's labels on a deletion, which its CLI sets too. They name the backup it deletes.
 	veleroBackupName = "velero.io/backup-name"
 	veleroBackupUID  = "velero.io/backup-uid"
 )
@@ -237,7 +237,7 @@ func (s *Server) clusterBackups(w http.ResponseWriter, r *http.Request, u user) 
 }
 
 // backupCredentialStored tells whether the Secret the controller takes Velero's keys for the store
-// from exists; whether it holds the right keys is the controller's to say.
+// from exists. Whether it holds the right keys is the controller's to say.
 func backupCredentialStored(ctx context.Context, kube client.Client, c *clusterv1.Cluster) (bool, error) {
 	// A Secret of the owner's own is in the workload cluster, where the interface does not look.
 	if backupsOf(c).ExistingSecret != "" {
@@ -254,7 +254,7 @@ func backupCredentialStored(ctx context.Context, kube client.Client, c *clusterv
 	return true, nil
 }
 
-// backupsOf reads a cluster's backups variable; unset or unreadable, they are off.
+// backupsOf reads a cluster's backups variable. Unset or unreadable, they are off.
 func backupsOf(c *clusterv1.Cluster) provisioner.Backups {
 	var b provisioner.Backups
 	if raw := variableValue(c, "backups"); raw != nil && json.Unmarshal(raw, &b) != nil {
@@ -286,7 +286,7 @@ func readBackupRuns(ctx context.Context, v dynamic.Interface) (*unstructured.Uns
 	return schedule, out, nil
 }
 
-// newest orders the newest first, then by name; one not yet started goes first.
+// newest orders the newest first, then by name. One not yet started goes first.
 func newest(a, b *time.Time, an, bn string) int {
 	if c := cmpTime(b, a); c != 0 {
 		return c
@@ -448,7 +448,7 @@ func restoreOf(o *unstructured.Unstructured, volumes []unstructured.Unstructured
 	if len(resources) == 1 && resources[0] == "*" {
 		resources = nil
 	}
-	// Velero restores the volumes unless told otherwise; Kubehenge's restores without them leave the
+	// Velero restores the volumes unless told otherwise. Kubehenge's restores without them leave the
 	// pods out too, for their controllers to start again on empty volumes.
 	excluded := list("spec", "excludedResources")
 	restorePVs, set, _ := unstructured.NestedBool(o.Object, "spec", "restorePVs")
@@ -597,7 +597,7 @@ func (s *Server) deletableBackup(ctx context.Context, w http.ResponseWriter, r *
 }
 
 // deleteBackupRequest is the DeleteBackupRequest that has Velero delete the backup, labelled as
-// Velero's CLI labels one; a name too long for a label's value goes by the backup's UID alone.
+// Velero's CLI labels one. A name too long for a label's value goes by the backup's UID alone.
 func deleteBackupRequest(backup *unstructured.Unstructured, by string) *unstructured.Unstructured {
 	name := backup.GetName()
 	labels := map[string]string{veleroBackupUID: string(backup.GetUID())}
@@ -616,7 +616,7 @@ func deleteBackupRequest(backup *unstructured.Unstructured, by string) *unstruct
 // allowBackupSources checks the rights a cluster's backups variable needs to read the backups of
 // the clusters it newly names in readFrom: Sys.Modify on each one's pool, as the admin kubeconfig
 // does, since the cluster's Velero then holds the key to whatever their backups hold, Secrets
-// among it. It answers the request when they fail; the validator checks the rest.
+// among it. It answers the request when they fail. The validator checks the rest.
 func (s *Server) allowBackupSources(w http.ResponseWriter, r *http.Request, u user, namespace string, value, old json.RawMessage) bool {
 	var now, before provisioner.Backups
 	if json.Unmarshal(value, &now) != nil {

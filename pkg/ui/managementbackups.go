@@ -143,7 +143,7 @@ func (s *Server) stopManagementBackups(w http.ResponseWriter, r *http.Request, u
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// takeManagementSnapshot takes a snapshot now, in the background; the backups' status shows it
+// takeManagementSnapshot takes a snapshot now, in the background. The backups' status shows it
 // being taken and how it went.
 func (s *Server) takeManagementSnapshot(w http.ResponseWriter, r *http.Request, u user) {
 	if !s.mayBackUpManagement(w, r, u) {
@@ -192,7 +192,7 @@ func (s *Server) restoreManagementEtcd(w http.ResponseWriter, r *http.Request, u
 	writeJSON(w, http.StatusAccepted, s.Appliance.Current())
 }
 
-// backUpManagementEtcd takes the management cluster's scheduled snapshots, looking every minute.
+// backUpManagementEtcd takes the management cluster's scheduled snapshots. It looks every minute.
 func (s *Server) backUpManagementEtcd(ctx context.Context) {
 	a := s.Appliance
 	if a == nil {

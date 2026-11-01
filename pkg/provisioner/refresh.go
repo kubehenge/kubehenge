@@ -51,12 +51,12 @@ type TemplateRefresh struct {
 	MissingOnly bool
 	// Planned, if set, is told the lines the run builds before it starts on them.
 	Planned func(lines []templates.Template)
-	// Retry builds a line again after it fails; its Log is the run's.
+	// Retry builds a line again after it fails. Its Log is the run's.
 	Retry templates.Retry
 }
 
 // Run builds, then collects the builds no longer needed. A line that fails to build leaves the
-// others to go on; every failure is in the error.
+// others to go on. Every failure is in the error.
 func (r *TemplateRefresh) Run(ctx context.Context) error {
 	clusters, err := r.clusters(ctx)
 	if err != nil {
@@ -255,7 +255,7 @@ func (r *TemplateRefresh) toBuild(clusters []refreshedCluster, talos []string, b
 }
 
 // refreshedRequests are the lines every run builds: RKE2's on the default node OS, so that a first
-// cluster finds its template; every line a cluster's machines run; and every RKE2 and k3s line the
+// cluster finds its template, every line a cluster's machines run, and every RKE2 and k3s line the
 // pool holds, which someone asked for and no Kubernetes version outdates. A line of a node OS that
 // can no longer be built is left as it is.
 func refreshedRequests(clusters []refreshedCluster, builds map[string][]templates.Built) []templates.Request {
@@ -313,7 +313,7 @@ func (r *TemplateRefresh) build(ctx context.Context, line *templates.Template) e
 // collect deletes the builds nothing needs: of each line, all but the newest Keep and those still
 // in use. In use is the build a cluster's node image time picks for a line its machines run, and
 // one a machine still waiting for its VM selects. A kubeadm line no cluster runs or can upgrade to
-// keeps only its newest; the last build of a line is never deleted here. Talos templates go as
+// keeps only its newest. The last build of a line is never deleted here. Talos templates go as
 // unneededTalos says.
 func (r *TemplateRefresh) collect(ctx context.Context, clusters []refreshedCluster, talos []string) error {
 	list, err := r.Pool.List(ctx)

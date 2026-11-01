@@ -90,7 +90,7 @@ func (f *fakeNodeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // cordon applies a patch of the node's unschedulable field, which the strategic merge patch sets
-// to true, or to null to clear it; false when it refused the patch.
+// to true, or to null to clear it. It returns false when it refused the patch.
 func (f *fakeNodeAPI) cordon(w http.ResponseWriter, r *http.Request) bool {
 	var patch struct {
 		Spec map[string]any `json:"spec"`
@@ -187,7 +187,7 @@ func drainRig(t *testing.T, pods ...*corev1.Pod) (*RemoteDrainer, *fakeNodeAPI, 
 }
 
 // Draining a node cordons it and evicts every pod but the DaemonSets', those no controller owns
-// and those with emptyDir data among them, as kubectl drain --force does; pods elsewhere stay.
+// and those with emptyDir data among them, as kubectl drain --force does. Pods elsewhere stay.
 func TestRemoteDrainerCordonsAndEvictsAllButDaemonSetPods(t *testing.T) {
 	t.Parallel()
 	scratch := nodePod("cache", "ReplicaSet", corev1.PodRunning)
@@ -238,7 +238,7 @@ func TestRemoteDrainerUncordonsAndClearsRejectedDaemonPods(t *testing.T) {
 }
 
 // A node the cluster does not know fails, and the cluster's client is dropped, as its kubeconfig
-// may be stale; a cluster without a kubeconfig fails before anything is done.
+// may be stale. A cluster without a kubeconfig fails before anything is done.
 func TestRemoteDrainerFailsWithoutTheNodeOrTheKubeconfig(t *testing.T) {
 	t.Parallel()
 	d, api, c := drainRig(t)

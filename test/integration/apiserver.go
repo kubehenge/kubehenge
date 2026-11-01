@@ -57,7 +57,7 @@ type Options struct {
 	Objects    []*unstructured.Unstructured
 	Namespaces []string
 	// Webhooks are webhook configurations whose services point at a local server. With ClusterAPI
-	// or Serve, Start serves it; without, nothing does until the test serves it at the address and
+	// or Serve, Start serves it. Without them, nothing does until the test serves it at the address and
 	// with the certificates API.Webhooks holds.
 	Webhooks Webhooks
 	// ClusterAPI serves Cluster API's Cluster and ClusterClass webhooks, from the configurations its
@@ -139,7 +139,7 @@ func Start(t *testing.T, o *Options) *API {
 	return &API{Config: cfg, Client: c, Webhooks: &env.WebhookInstallOptions}
 }
 
-// Stop stops an API server and its etcd, ending them first where envtest cannot.
+// Stop stops an API server and its etcd. It ends them first where envtest cannot.
 func Stop(t *testing.T, env *envtest.Environment) {
 	t.Helper()
 	if err := EndChildren(); err != nil {
@@ -191,7 +191,7 @@ func clusterAPIWebhooks(t *testing.T, components string) ([]*admissionregistrati
 }
 
 // noExtensions stands for Cluster API's Runtime SDK client, which its ClusterClass controller calls
-// only for a class whose patches discover variables; none of Kubehenge's do, so any call panics.
+// only for a class whose patches discover variables. None of Kubehenge's do, so any call panics.
 type noExtensions struct {
 	runtimeclient.Client
 }

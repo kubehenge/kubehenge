@@ -24,7 +24,7 @@ const testPool = "kubehenge-templates"
 
 // fakeCluster serves the parts of the Proxmox VE API the template lookups and Delete read. Its
 // resource view answers with each of views in turn and then keeps to the last, the way Proxmox
-// VE's lagging view can disagree from one request to the next; configs holds each VM's
+// VE's lagging view can disagree from one request to the next. configs holds each VM's
 // configuration by VM ID, which is always current, and a VM without one does not exist.
 type fakeCluster struct {
 	t       *testing.T
@@ -286,7 +286,7 @@ func TestDiskStorage(t *testing.T) {
 }
 
 // The resource view shows a template converted a moment ago as no template at all, and under a
-// name it no longer has; its configuration says what it is.
+// name it no longer has. Its configuration says what it is.
 func TestLookupsTakeATemplateFromItsConfiguration(t *testing.T) {
 	t.Parallel()
 	tmpl, tags := rke2(t)

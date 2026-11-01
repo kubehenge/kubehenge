@@ -380,6 +380,64 @@ func TestServerTimeouts(t *testing.T) {
 	}
 }
 
+func TestGroupsRefuseUnknownCommands(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"cluster", "lsit"}, `unknown command "lsit" for "kubehenge cluster": did you mean list?`},
+		{[]string{"cluster", "everything"}, `unknown command "everything" for "kubehenge cluster": its commands are create, delete, get, kubeconfig, list, machine and scale`},
+		{[]string{"appliance", "etcd-backups", "snapshot"}, `unknown command "snapshot" for "kubehenge appliance etcd-backups": did you mean snapshots?`},
+		{[]string{"completion", "fissh"}, `unknown command "fissh" for "kubehenge completion": did you mean fish?`},
+		{[]string{"completion", "sh"}, `unknown command "sh" for "kubehenge completion": did you mean bash, fish or zsh?`},
+		{[]string{"clustr"}, `unknown command "clustr" for "kubehenge": did you mean cluster?`},
+	} {
+		if _, err := run(t, c.args...); err == nil || err.Error() != c.want {
+			t.Errorf("%q: err = %v, want %q", c.args, err, c.want)
+		}
+	}
+	out, err := run(t, "cluster")
+	if err != nil || !strings.Contains(out, "Available Commands:") {
+		t.Errorf("cluster alone printed %q, %v; want its help", out, err)
+	}
+}
+
+func TestCommandsSayWhatArgumentsTheyTake(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"update", "extra"}, `kubehenge update takes no arguments, not "extra"`},
+		{[]string{"cluster", "list", "a", "b"}, `kubehenge cluster list takes no arguments, not "a" "b"`},
+		{[]string{"cluster", "get"}, "give the cluster's name"},
+		{[]string{"cluster", "machine", "replace", "web"}, `give the cluster's name and the machine's, not "web"`},
+		{[]string{"template", "create"}, "give the distribution: talos, rke2, k3s or kubeadm"},
+		{[]string{"release", "sign", "key"}, `give one or more private key files, then the index, not "key"`},
+	} {
+		if _, err := run(t, c.args...); err == nil || err.Error() != c.want {
+			t.Errorf("%q: err = %v, want %q", c.args, err, c.want)
+		}
+	}
+}
+
+func TestOnlyTheProxmoxCommandsTakeItsFlags(t *testing.T) {
+	t.Parallel()
+	root := NewRoot()
+	for _, path := range [][]string{{"template", "create"}, {"template", "refresh"}, {"controller"}, {"serve"}, {"csi-proxy"}, {"token-job"}} {
+		cmd, _, err := root.Find(path)
+		if err != nil || cmd.Flag("proxmox-url") == nil {
+			t.Errorf("%q has no --proxmox-url: %v", path, err)
+		}
+	}
+	for _, path := range [][]string{{"cluster", "list"}, {"release", "keygen"}, {"update"}, {"appliance", "health"}} {
+		if cmd, _, err := root.Find(path); err != nil || cmd.Flag("proxmox-url") != nil {
+			t.Errorf("%q takes --proxmox-url: %v", path, err)
+		}
+	}
+}
+
 func TestTrimNewline(t *testing.T) {
 	t.Parallel()
 	for in, want := range map[string]string{"key\n": "key", "key\r\n": "key", "key": "key", "\n": ""} {

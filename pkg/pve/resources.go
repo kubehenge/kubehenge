@@ -34,7 +34,7 @@ type Storage struct {
 	Node    string   `json:"node"`
 	Shared  bool     `json:"shared"`
 	Content []string `json:"content"`
-	// Avail and Total are bytes; zero when the storage is not active on the node.
+	// Avail and Total are bytes. They are zero when the storage is not active on the node.
 	Avail int64 `json:"avail"`
 	Total int64 `json:"total"`
 }
@@ -80,10 +80,10 @@ type Member struct {
 	Name string `json:"name"`
 	// Template is 1 for a VM template.
 	Template int `json:"template"`
-	// Tags are separated by semicolons, as Proxmox VE stores them; Templates reads them, PoolMembers
+	// Tags are separated by semicolons, as Proxmox VE stores them. Templates reads them, PoolMembers
 	// cannot.
 	Tags string `json:"tags"`
-	// Status is running or stopped. CPU is the share of its cores in use, from 0 to 1; memory is in
+	// Status is running or stopped. CPU is the share of its cores in use, from 0 to 1. Memory is in
 	// bytes, uptime in seconds. Proxmox VE lists them with a pool's members, from its nodes' last
 	// broadcast.
 	Status string  `json:"status"`
@@ -95,7 +95,7 @@ type Member struct {
 }
 
 // LoadPoint is a VM's average CPU load over one step of Proxmox VE's round-robin data, the share of
-// its cores in use from 0 to 1; nil where the VM did not run.
+// its cores in use from 0 to 1. It is nil where the VM did not run.
 type LoadPoint struct {
 	Time int64    `json:"time"`
 	CPU  *float64 `json:"cpu"`
@@ -179,7 +179,7 @@ func (a *Accounts) Nodes(ctx context.Context, t *Ticket) ([]Node, error) {
 	return nodes, nil
 }
 
-// Bridges lists a node's bridges; Proxmox VE shows them to users with Sys.Audit on the node.
+// Bridges lists a node's bridges. Proxmox VE shows them to users with Sys.Audit on the node.
 func (a *Accounts) Bridges(ctx context.Context, t *Ticket, node string) ([]Bridge, error) {
 	var res []struct {
 		Iface     string `json:"iface"`
@@ -201,7 +201,7 @@ func (a *Accounts) Bridges(ctx context.Context, t *Ticket, node string) ([]Bridg
 	return bridges, nil
 }
 
-// DNS lists the DNS servers a node resolves with, in its order; Proxmox VE shows them to users with
+// DNS lists the DNS servers a node resolves with, in its order. Proxmox VE shows them to users with
 // Sys.Audit on the node.
 func (a *Accounts) DNS(ctx context.Context, t *Ticket, node string) ([]string, error) {
 	var res struct {
@@ -247,7 +247,7 @@ type HARuleEntry struct {
 	Disable  int    `json:"disable"`
 }
 
-// NodeAffinityRules lists the enabled HA node-affinity rules; Proxmox VE shows them to users with
+// NodeAffinityRules lists the enabled HA node-affinity rules. Proxmox VE shows them to users with
 // Sys.Audit on /.
 func (a *Accounts) NodeAffinityRules(ctx context.Context, t *Ticket) ([]HARule, error) {
 	var res []HARuleEntry
@@ -343,8 +343,8 @@ func (a *Accounts) BackupCovers(ctx context.Context, t *Ticket, vmid int) (bool,
 
 // Templates lists the VM templates in a pool, with their tags. The cluster's resource view reads
 // pools and tags afresh, but a VM's name and whether it is a template from the status its node
-// broadcast last, which can be seconds old and can still show a removed VM's under a reused VM ID;
-// each VM's configuration says it for certain, before anything is done to the VM by its ID.
+// broadcast last, which can be seconds old and can still show a removed VM's under a reused VM ID.
+// Each VM's configuration says it for certain, before anything is done to the VM by its ID.
 func (a *Accounts) Templates(ctx context.Context, t *Ticket, pool string) ([]Member, error) {
 	var guests []struct {
 		Member

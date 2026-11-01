@@ -31,16 +31,16 @@ func newDiagnoseCommand() *cobra.Command {
 		Long: `Write a cluster's support bundle, a .tar.gz of what helps find why it is stuck.
 
 It holds the Cluster and every object of Cluster API and its providers that belongs to it, the boot
-logs the controller read for its machines, their events, and the lines of Kubehenge's controller's,
-capmox's and the Add-on Provider for Helm's recent logs that name them; run on Kubehenge's
-appliance, the lines of the interface's journal that name them too. It holds no Secret, and
-passwords and tokens in what it holds are replaced by ` + "[REDACTED]" + `. It reads the management
-cluster through --kubeconfig, or KUBECONFIG.`,
-		Args: cobra.ExactArgs(1),
+logs the controller read for its machines, and their events. It adds the recent lines that name
+them from the logs of Kubehenge's controller, the Cluster API provider for Proxmox VE (capmox) and
+the Add-on Provider for Helm. On Kubehenge's appliance it adds the matching lines of the
+interface's journal. It holds no Secret, and passwords and tokens are replaced by ` + "[REDACTED]" + `.
+It reads the management cluster through --kubeconfig, or KUBECONFIG.`,
+		Args: argsSay(cobra.ExactArgs(1), clusterPathArg),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			namespace, name, ok := strings.Cut(args[0], "/")
 			if !ok || namespace == "" || name == "" {
-				return errors.New("name the cluster as <namespace>/<cluster>")
+				return errors.New(clusterPathArg)
 			}
 			cfg, err := managementConfig(kubeconfig)
 			if err != nil {
@@ -62,11 +62,13 @@ cluster through --kubeconfig, or KUBECONFIG.`,
 		},
 	}
 	f := cmd.Flags()
-	f.StringVarP(&output, "output", "o", "", "file to write; default <namespace>-<cluster>-<UTC time>.tar.gz")
-	f.StringVar(&kubeconfig, "kubeconfig", "", "the management cluster's kubeconfig; default KUBECONFIG, or the cluster the command runs in")
+	f.StringVarP(&output, "output", "o", "", "file to write, else <namespace>-<cluster>-<UTC time>.tar.gz")
+	f.StringVar(&kubeconfig, "kubeconfig", "", "the management cluster's kubeconfig, else KUBECONFIG or the cluster the command runs in")
 	f.StringVar(&classNamespace, "class-namespace", "kubehenge-system", "namespace of Kubehenge's ClusterClasses and controller")
 	return cmd
 }
+
+const clusterPathArg = "name the cluster as <namespace>/<cluster>"
 
 func managementConfig(kubeconfig string) (*rest.Config, error) {
 	if kubeconfig != "" {

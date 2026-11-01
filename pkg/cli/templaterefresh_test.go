@@ -146,7 +146,7 @@ func (a *leaseAPI) start(t *testing.T) *rest.Config {
 	a.read = make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(a.serve))
 	t.Cleanup(srv.Close)
-	// The fake reads JSON alone; an API server takes it as it does protobuf.
+	// The fake reads JSON alone. An API server takes it as it does protobuf.
 	return &rest.Config{Host: srv.URL, ContentType: "application/json"}
 }
 
@@ -179,7 +179,7 @@ func TestARefreshRunsHoldingTheLeaseAndReleasesIt(t *testing.T) {
 	}
 }
 
-// A renewal the run's end cut off may still have moved the Lease on; the release reads it again
+// A renewal the run's end cut off may still have moved the Lease on. The release reads it again
 // rather than leave it held until it runs out, and never takes another run's.
 func TestARefreshReleasesTheLeaseAVersionLater(t *testing.T) {
 	t.Parallel()
@@ -337,7 +337,7 @@ func TestARefusedRefreshRecordsAnEvent(t *testing.T) {
 	}
 }
 
-// The status is for showing: a run whose status cannot be written goes on, saying so in its log.
+// The status is for showing. A run whose status cannot be written goes on and says so in its log.
 func TestAStatusThatCannotBeWrittenIsLogged(t *testing.T) {
 	t.Parallel()
 	status, _, out := refreshStatusIn(t)

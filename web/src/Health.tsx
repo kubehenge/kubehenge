@@ -440,7 +440,7 @@ function MemoryCell({ node: n, vm }: { node: HealthNode; vm: HealthVM | undefine
   );
 }
 
-// nodeStatus says how a node stands; inside is whether the cluster itself was read, without which a
+// nodeStatus says how a node stands. inside is whether the cluster itself was read, without which a
 // node not ready may have joined long ago.
 function nodeStatus(n: HealthNode, inside: boolean): { state: State; text: string } {
   if (!n.joined) {

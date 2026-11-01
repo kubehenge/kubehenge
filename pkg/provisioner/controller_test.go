@@ -27,7 +27,7 @@ type fakeCloud struct {
 	removed         []Names
 	removedHeld     []Credentials
 	access          Access
-	// holderNodes are the nodes the last call asked holder VMs on; emptied counts the calls that
+	// holderNodes are the nodes the last call asked holder VMs on, and emptied counts the calls that
 	// removed the empty ones.
 	holderNodes []string
 	emptied     int
@@ -249,7 +249,7 @@ func TestReconcileSwitchesHeadlampOnAndOff(t *testing.T) {
 }
 
 // Rancher's removal waits until Rancher lets go of its registered clusters, which lasts as long as
-// Rancher's cluster cannot be reached; the cluster's other objects must not wait with it.
+// Rancher's cluster cannot be reached. The cluster's other objects must not wait with it.
 func TestReconcileAppliesTheRestWhileRancherIsBeingRemoved(t *testing.T) {
 	t.Parallel()
 	c := storageCluster()
@@ -395,7 +395,7 @@ func TestReconcileRemovesOnlyAfterTheMachines(t *testing.T) {
 	if len(cloud.removed) != 1 || cloud.removed[0].Pool != "kubehenge/team-a.web" {
 		t.Errorf("removed %+v", cloud.removed)
 	}
-	// Proxmox VE may not list a VM made seconds ago in its pool; the recorded VMID finds it.
+	// Proxmox VE may not list a VM made seconds ago in its pool. The recorded VMID finds it.
 	if len(cloud.removedHeld) != 1 || cloud.removedHeld[0].VolumeOwner != 4242 {
 		t.Errorf("removal was not given the recorded volume owner: %+v", cloud.removedHeld)
 	}

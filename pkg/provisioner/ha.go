@@ -33,7 +33,7 @@ const HAHook = clusterv1.PreTerminateDeleteHookAnnotationPrefix + "/kubehenge-ha
 // recorded, and takes a VM missing from there for one already gone.
 const LocateAnnotation = "kubehenge.dev/proxmox-node"
 
-// proxmoxHAVariable lets a cluster opt out of Proxmox VE HA; unset means it takes part.
+// proxmoxHAVariable lets a cluster opt out of Proxmox VE HA. Unset means it takes part.
 const proxmoxHAVariable = "proxmoxHA"
 
 // haFieldOwner writes the hook: RKE2's and k3s's providers drop the managed fields of "manager".
@@ -87,7 +87,7 @@ type haCluster struct {
 // the nodes the cluster may use, and restart them elsewhere when a node fails.
 type HAReconciler struct {
 	Client client.Client
-	// Machines lists control-plane Machines; the manager's cache holds only those.
+	// Machines lists control-plane Machines. The manager's cache holds only those.
 	Machines       client.Reader
 	ClassNamespace string
 	WorkloadPool   string
@@ -192,7 +192,7 @@ func (r *HAReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Re
 			return ctrl.Result{}, err
 		}
 		// Proxmox VE lists the nodes once its HA manager has started, which the first HA resource
-		// does; the rule keeping VMs apart can be sized only then.
+		// does. The rule keeping VMs apart can be sized only then.
 		waiting = waiting || len(members) > 1 && len(s.nodes) == 0
 	}
 	if waiting {
@@ -437,7 +437,7 @@ func (r *HAReconciler) addResource(ctx context.Context, sid, comment string) err
 	return nil
 }
 
-// removeResource takes a VM out of HA and out of every rule naming it; the VM keeps running.
+// removeResource takes a VM out of HA and out of every rule naming it. The VM keeps running.
 func (r *HAReconciler) removeResource(ctx context.Context, sid string) error {
 	err := r.HA.Delete(ctx, "/cluster/ha/resources/"+url.PathEscape(sid), nil)
 	if err != nil && !isMissing(err) {

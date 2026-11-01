@@ -17,7 +17,7 @@ export function readTheme(): Theme {
   return themes.find((t) => t.theme === stored)?.theme ?? "system";
 }
 
-/** applyTheme sets the page's colour scheme; main applies the stored one before the first paint. */
+/** applyTheme sets the page's colour scheme. main applies the stored one before the first paint. */
 export function applyTheme(theme: Theme): void {
   if (theme === "system") {
     delete document.documentElement.dataset["theme"];

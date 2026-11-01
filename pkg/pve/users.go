@@ -43,7 +43,7 @@ func (a *Accounts) CreateAdministratorToken(ctx context.Context, t *Ticket, user
 	return token.ID + "=" + token.Value, nil
 }
 
-// DeleteUser deletes a Proxmox VE user, which takes its API tokens and ACL entries with it; a user
+// DeleteUser deletes a Proxmox VE user, which takes its API tokens and ACL entries with it. A user
 // that does not exist is no error.
 func (a *Accounts) DeleteUser(ctx context.Context, t *Ticket, userid string) error {
 	err := a.send(ctx, t, http.MethodDelete, "/access/users/"+url.PathEscape(userid), nil, nil)
@@ -57,7 +57,7 @@ func (a *Accounts) DeleteUser(ctx context.Context, t *Ticket, userid string) err
 	return nil
 }
 
-// send makes a change Proxmox VE answers at once, without a task, with the form as its body; out,
+// send makes a change Proxmox VE answers at once, without a task, with the form as its body. out,
 // when set, takes the answer's data.
 func (a *Accounts) send(ctx context.Context, t *Ticket, method, path string, form url.Values, out any) error {
 	req, err := a.newRequest(ctx, method, path, strings.NewReader(form.Encode()))

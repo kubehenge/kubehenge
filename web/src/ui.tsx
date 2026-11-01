@@ -51,7 +51,7 @@ const cniNames: Record<string, string> = { cilium: "Cilium", calico: "Calico", c
 /** cniName is how a pod network is written for people: Cilium, Calico, Canal, Flannel. */
 export const cniName = (n: string): string => cniNames[n] ?? n;
 
-// The classes' own default pod network, for a Cluster that leaves its cni variable to the class;
+// The classes' own default pod network, for a Cluster that leaves its cni variable to the class.
 // kubeadm has none, so its clusters always name one.
 const classCNI: Record<string, string> = { rke2: "canal", k3s: "flannel", talos: "flannel" };
 
@@ -133,19 +133,19 @@ export const pollIdle = 30_000;
 
 // usePoll loads data now and then every `every` milliseconds, which may follow the data, such as
 // often while a job runs and seldom otherwise. It keeps the last good result through errors. A
-// hidden tab is not polled and catches up when shown again; an answer older than one already shown
-// is dropped, so a slow request cannot bring back what a faster, later one replaced; and an answer
+// hidden tab is not polled and catches up when shown again. An answer older than one already shown
+// is dropped, so a slow request cannot bring back what a faster, later one replaced. An answer
 // equal to the one shown changes nothing, so the page is not drawn again.
 export interface Poll<T> {
   data: T | undefined;
   error: string | undefined;
   errorStatus: number | undefined;
   reload: () => Promise<void>;
-  /** When the next read is due, in milliseconds since the epoch; read without drawing the page again. */
+  /** When the next read is due, in milliseconds since the epoch. Read without drawing the page again. */
   next: () => number;
   /**
    * put shows what is known without reading, such as the cluster a request just created, made from
-   * what is shown; a read asked before it is older and dropped, so it cannot take the change back.
+   * what is shown. A read asked before it is older and dropped, so it cannot take the change back.
    */
   put: (change: (shown: T | undefined) => T | undefined) => void;
   /**
@@ -176,7 +176,7 @@ export function usePoll<T>(
 ): Poll<T> {
   const [data, setData] = useState<T | undefined>(() => (kept ? (kept.cache.get(kept.key) ?? kept.seed) : undefined));
   const [error, setError] = useState<string>();
-  // The HTTP status of the last failure; 0 when the server did not answer.
+  // The HTTP status of the last failure, 0 when the server did not answer.
   const [errorStatus, setErrorStatus] = useState<number>();
   const loadRef = useRef(load);
   const keptRef = useRef(kept);
@@ -190,7 +190,7 @@ export function usePoll<T>(
   // No answer's JSON is empty, so the first one is always shown.
   const shownText = useRef(data === undefined ? "" : JSON.stringify(data));
   const latest = useRef(data);
-  // When the last read answered; the cache's answer counts as one just read.
+  // When the last read answered. The cache's answer counts as one just read.
   const answered = useRef(0);
   const [late, setLate] = useState(false);
 
@@ -286,7 +286,7 @@ function steady(r: Cluster["workers"]): boolean {
 }
 
 // settled tells whether nothing is changing in a cluster: available, every machine ready and up to
-// date. Its page then asks again seldom; while anything moves, often.
+// date. Its page then asks again seldom. While anything moves, often.
 export function settled(c: Cluster): boolean {
   return (
     health(c).state === "ok" && steady(c.controlPlane) && steady(c.workers) && (c.machines ?? []).every((m) => m.ready)
@@ -444,7 +444,7 @@ export function ErrorText({ message }: { message: string }): JSX.Element {
   );
 }
 
-// Some browsers read a download's URL only after click returns; revoking it at once can cancel it.
+// Some browsers read a download's URL only after click returns. Revoking it at once can cancel it.
 const revokeDownloadAfterMs = 60_000;
 
 /** saveFile hands a downloaded file to the browser to save under name. */
@@ -489,7 +489,7 @@ export interface FieldAria {
   "aria-describedby"?: string;
 }
 
-// withAria gives a native control the attributes that tie it to its hint and message; the render
+// withAria gives a native control the attributes that tie it to its hint and message. The render
 // prop may pass them on itself for anything else.
 function withAria(control: ReactNode, aria: FieldAria): ReactNode {
   if (isValidElement<FieldAria>(control) && typeof control.type === "string") {
@@ -532,7 +532,7 @@ function InfoToggle({
 
 /**
  * Info holds the rare explanation a choice needs, shown only on request. Fields take theirs as
- * Field's info; Info serves a checkbox, a radio or a heading.
+ * Field's info. Info serves a checkbox, a radio or a heading.
  */
 export function Info({ about, children }: { about: string; children: ReactNode }): JSX.Element {
   const [open, setOpen] = useState(false);
@@ -561,7 +561,7 @@ const rowMenuGap = 4;
 
 /**
  * RowMenu keeps a table row's actions behind one small button, so the row stays as wide as its data.
- * Its items are buttons; choosing one closes the menu.
+ * Its items are buttons. Choosing one closes the menu.
  */
 export function RowMenu({ label, children }: { label: string; children: ReactNode }): JSX.Element {
   const id = useId();
@@ -574,7 +574,7 @@ export function RowMenu({ label, children }: { label: string; children: ReactNod
         m.hidePopover();
       }
     };
-    // Under its button, right edges in line; it is fixed to the window, so scrolling would leave it behind.
+    // Under its button, right edges in line. It is fixed to the window, so scrolling would leave it behind.
     const place = (e: Event): void => {
       const r = toggle.current?.getBoundingClientRect();
       if (m !== null && "newState" in e && e.newState === "open" && r !== undefined) {
@@ -643,9 +643,9 @@ export function Views({ label, open, children }: { label: string; open: string; 
   );
 }
 
-// Field labels one control; the control is the single child and gets the generated id, and with an
+// Field labels one control. The control is the single child and gets the generated id, and with an
 // error the attributes that tie it to the message shown under it. A hint is a few words that stay
-// in view; info is the rare longer explanation, shown on request.
+// in view. info is the rare longer explanation, shown on request.
 export function Field({
   label,
   hint,
@@ -706,7 +706,7 @@ export function Field({
   );
 }
 
-/** Choice picks one of a list, starting at none; an optional one can be left to the default. */
+/** Choice picks one of a list. It starts at none. An optional one can be left to the default. */
 export function Choice({
   id,
   value,
@@ -738,7 +738,7 @@ export function Choice({
 /** How many of a log's last lines show: about a screen of them. */
 export const logLines = 60;
 
-// firstField is the dialog body's first control that takes the focus; of a radio group, the chosen
+// firstField is the dialog body's first control that takes the focus. Of a radio group, the chosen
 // radio, where the arrow keys move from.
 function firstField(d: HTMLDialogElement): HTMLElement | null {
   const first = d.querySelector<HTMLElement>(
@@ -774,7 +774,7 @@ export function Dialog({
     const d = ref.current;
     if (d && !d.open) {
       d.showModal();
-      // showModal focuses the header's close button, the first control; the work starts at the body's.
+      // showModal focuses the header's close button, the first control. The work starts at the body's.
       firstField(d)?.focus();
     }
     return () => opener?.focus();

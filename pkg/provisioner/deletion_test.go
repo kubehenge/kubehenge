@@ -217,7 +217,7 @@ func TestDeletionSaysKubehengesOwnWait(t *testing.T) {
 	}
 }
 
-// An abandoned deletion deletes what is left and lets machines go without a drain; what has not
+// An abandoned deletion deletes what is left and lets machines go without a drain. What has not
 // finished by the grace loses its finalizers, and the Cluster its own last, each leftover named.
 func TestAbandonedDeletion(t *testing.T) {
 	t.Parallel()
