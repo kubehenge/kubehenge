@@ -89,22 +89,24 @@ func TestThePlatformNamespacesCoverTheModule(t *testing.T) {
 	if err != nil || len(files) == 0 {
 		t.Fatalf("the module's files: %v", err)
 	}
-	namespace := regexp.MustCompile(`\bnamespace\s*=\s*"([a-z0-9-]+)"`)
-	found := 0
+	namespace := regexp.MustCompile(`namespace\s*=\s*"([a-z0-9-]+)"`)
+	found := map[string]bool{"kube-system": true}
 	for _, f := range files {
 		raw, err := os.ReadFile(f) //nolint:gosec // the module's own files
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, m := range namespace.FindAllSubmatch(raw, -1) {
-			found++
+			found[string(m[1])] = true
 			if !platformNamespaces[string(m[1])] {
 				t.Errorf("%s installs into %s, which Activity would list as a person", filepath.Base(f), m[1])
 			}
 		}
 	}
-	if found < len(platformNamespaces)-1 {
-		t.Errorf("found %d namespaces in the module, fewer than the platform's", found)
+	for ns := range platformNamespaces {
+		if !found[ns] {
+			t.Errorf("%s is no namespace of the module's, so Activity leaves out whoever uses it", ns)
+		}
 	}
 }
 
