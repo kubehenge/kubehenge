@@ -85,9 +85,14 @@ refresh() {
     request=$(jq -cn --arg at "${asked}" '{data: {refresh: ({by: "e2e", at: $at} | tojson)}}')
     system patch configmap kubehenge-template-requests --type=merge -p "${request}"
     until_true 300 "the controller starts the refresh" started_since "${asked}"
-    until_true 5400 "the refresh finishes" finished
+    # The run's log as it is written, so a slow build shows which step took the time.
+    system logs -f --pod-running-timeout=5m "job/${job}" &
+    follow=$!
+    # A run has taken up to 36 minutes when it passed. 45 leaves both runs a named failure inside the
+    # step's 140 minutes.
+    until_true 2700 "the refresh finishes" finished
+    wait "${follow}" || true
     run_log=$(system logs "job/${job}")
-    printf '%s\n' "${run_log}" | tail -n 20
     state=$(system get configmap kubehenge-template-refresh -o jsonpath='{.data.state}')
     [ "${state}" = succeeded ] || fail "the refresh recorded its run as ${state}"
     # Each new build of k3s's template was seen, through Proxmox VE with the refresh's own token, to

@@ -40,7 +40,7 @@ jobs:
   test:
     name: ${{ inputs.test }}
     runs-on: ubuntu-26.04
-    # node-image-refresh, four template builds from the families' mirrors, has taken from 73 to 109
+    # node-image-refresh, eight template builds from the families' mirrors, has taken from 63 to 112
     # minutes when it passed.
     timeout-minutes: 150
     outputs:
