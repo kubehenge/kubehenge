@@ -9,13 +9,13 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
-	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -49,6 +49,8 @@ const (
 	// node for the restore's duration.
 	restoreObjectFolder = "restore"
 	restoreObjectID     = 12
+	// pausedField is the Cluster's spec.paused, in a patch.
+	pausedField = "paused"
 )
 
 // RestorePhase is where a restore is.
@@ -188,6 +190,10 @@ type EtcdRestorer struct {
 	// Events reports on a Cluster how its restore went. It may be nil.
 	Events events.EventRecorder
 	Now    func() time.Time
+
+	endedMu sync.Mutex
+	// unrecorded are the restores this process ended but could not record yet, by cluster.
+	unrecorded map[client.ObjectKey]EtcdRestoreStatus
 }
 
 // SetupWithManager registers the restorer. One restore runs at a time.
@@ -226,6 +232,10 @@ func (r *EtcdRestorer) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Re
 	}
 	if err != nil {
 		return ctrl.Result{}, run.finish(ctx, err)
+	}
+	if ended, ok := r.unrecordedEnd(run.key); ok && ended.RequestedAt.Equal(request.At) && ended.Snapshot == request.Snapshot {
+		run.status = ended
+		return ctrl.Result{}, run.saveFinal(ctx)
 	}
 	if was, ok := EtcdRestoreStatusOf(cluster); ok && was.RequestedAt.Equal(request.At) && was.Snapshot == request.Snapshot {
 		run.status = was
@@ -505,19 +515,7 @@ func (run *restoreRun) unpause(ctx context.Context) error {
 
 // setPaused sets the cluster's spec.paused, or takes it away when nil.
 func (run *restoreRun) setPaused(ctx context.Context, paused *bool) error {
-	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		c := &clusterv1.Cluster{}
-		if err := run.r.Client.Get(ctx, run.key, c); err != nil {
-			return fmt.Errorf("reading the cluster: %w", err)
-		}
-		before := c.DeepCopy()
-		c.Spec.Paused = paused
-		return run.r.Client.Patch(ctx, c, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))
-	})
-	if err != nil {
-		return fmt.Errorf("pausing or unpausing the cluster: %w", err)
-	}
-	return nil
+	return run.mergePatch(ctx, map[string]any{"spec": map[string]any{pausedField: paused}}, "pausing or unpausing the cluster")
 }
 
 // fetch has the node restored on download the snapshot, transcoded to what openssl decrypts, from
@@ -839,40 +837,94 @@ func (run *restoreRun) succeededMessage() string {
 	return m
 }
 
+// The restorer writes only what it owns of the cluster, with no read first: the status annotation,
+// the request annotation it takes away and spec.paused. A read-then-patch under the resource
+// version would read its own last write back from a cache that may not have it yet. Cluster API
+// writing the cluster as it is unpaused makes that likelier still.
+
 // save records the status on the cluster.
 func (run *restoreRun) save(ctx context.Context) error {
-	return run.patch(ctx, func(*clusterv1.Cluster) {})
+	raw, err := json.Marshal(run.status)
+	if err != nil {
+		return fmt.Errorf("recording the restore: %w", err)
+	}
+	return run.mergePatch(ctx, map[string]any{"metadata": map[string]any{annotationsKey: map[string]string{EtcdRestoreStatusAnnotation: string(raw)}}},
+		"recording the restore")
 }
 
 // saveFinal records the status on the cluster and takes the request away, unless another has
 // taken its place.
 func (run *restoreRun) saveFinal(ctx context.Context) error {
-	return run.patch(ctx, func(c *clusterv1.Cluster) {
-		if still, ok, _ := EtcdRestoreRequestOf(c); ok && still.At.Equal(run.request.At) {
-			delete(c.Annotations, EtcdRestoreAnnotation)
-		}
-	})
-}
-
-func (run *restoreRun) patch(ctx context.Context, change func(*clusterv1.Cluster)) error {
-	raw, merr := json.Marshal(run.status)
-	if merr != nil {
-		return fmt.Errorf("recording the restore: %w", merr)
+	r := run.r
+	r.ended(run.key, &run.status)
+	raw, err := json.Marshal(run.status)
+	if err != nil {
+		return fmt.Errorf("recording the restore: %w", err)
 	}
-	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		c := &clusterv1.Cluster{}
-		if err := run.r.Client.Get(ctx, run.key, c); err != nil {
-			return fmt.Errorf("reading the cluster: %w", err)
-		}
-		before := c.DeepCopy()
-		metav1.SetMetaDataAnnotation(&c.ObjectMeta, EtcdRestoreStatusAnnotation, string(raw))
-		change(c)
-		return run.r.Client.Patch(ctx, c, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))
+	asked := run.cluster.Annotations[EtcdRestoreAnnotation]
+	ops, err := json.Marshal([]map[string]string{
+		{"op": "test", "path": restoreRequestPath, "value": asked},
+		{"op": "remove", "path": restoreRequestPath},
+		{"op": "add", "path": restoreStatusPath, "value": string(raw)},
 	})
 	if err != nil {
 		return fmt.Errorf("recording the restore: %w", err)
 	}
+	if err = r.Client.Patch(ctx, &clusterv1.Cluster{Namespace: run.key.Namespace, Name: run.key.Name}, client.RawPatch(types.JSONPatchType, ops)); err != nil {
+		// The test refuses the patch when another request has taken this one's place, or when it is
+		// gone. The status alone is recorded then. Any other refusal is tried again.
+		now := &clusterv1.Cluster{}
+		if rerr := r.Reader.Get(ctx, run.key, now); rerr != nil || now.Annotations[EtcdRestoreAnnotation] == asked {
+			return fmt.Errorf("recording the restore: %w", err)
+		}
+		if err = run.save(ctx); err != nil {
+			return err
+		}
+	}
+	r.ended(run.key, nil)
 	return nil
+}
+
+// The JSON pointers of the restore's annotations, with the slash in their names escaped.
+var (
+	restoreRequestPath = "/metadata/annotations/" + strings.ReplaceAll(EtcdRestoreAnnotation, "/", "~1")
+	restoreStatusPath  = "/metadata/annotations/" + strings.ReplaceAll(EtcdRestoreStatusAnnotation, "/", "~1")
+)
+
+// mergePatch merges patch into the cluster.
+func (run *restoreRun) mergePatch(ctx context.Context, patch any, doing string) error {
+	raw, err := json.Marshal(patch)
+	if err != nil {
+		return fmt.Errorf("%s: %w", doing, err)
+	}
+	if err = run.r.Client.Patch(ctx, &clusterv1.Cluster{Namespace: run.key.Namespace, Name: run.key.Name}, client.RawPatch(types.MergePatchType, raw)); err != nil {
+		return fmt.Errorf("%s: %w", doing, err)
+	}
+	return nil
+}
+
+// ended keeps how a restore ended until it is recorded, or forgets it when status is nil. A
+// reconcile that finds the request still there then records it again. Without it the
+// reconcile would take the restore for one the controller was stopped in.
+func (r *EtcdRestorer) ended(key client.ObjectKey, status *EtcdRestoreStatus) {
+	r.endedMu.Lock()
+	defer r.endedMu.Unlock()
+	if status == nil {
+		delete(r.unrecorded, key)
+		return
+	}
+	if r.unrecorded == nil {
+		r.unrecorded = map[client.ObjectKey]EtcdRestoreStatus{}
+	}
+	r.unrecorded[key] = *status
+}
+
+// unrecordedEnd is how this process saw the restore of key end, if it could not record it yet.
+func (r *EtcdRestorer) unrecordedEnd(key client.ObjectKey) (EtcdRestoreStatus, bool) {
+	r.endedMu.Lock()
+	defer r.endedMu.Unlock()
+	s, ok := r.unrecorded[key]
+	return s, ok
 }
 
 func (r *EtcdRestorer) now() time.Time {
