@@ -12,7 +12,8 @@
 #                                          from inside each running VM, through its guest agent: its
 #                                          state, the distribution's, the kernel's and cloud-init's
 #                                          logs, the logs of the control plane's static pods and of
-#                                          restarted containers, and its etcd members' view of their
+#                                          restarted containers, the deletes its API server audited,
+#                                          and its etcd members' view of their
 #                                          cluster; from a Talos VM, whose guest agent runs no
 #                                          commands, the same through Talos's API
 #
@@ -159,7 +160,7 @@ guest_script() {
         # them; RKE2's kubelet and the containerd of RKE2 and k3s, which log to files.
         logs)
             echo 'for f in /var/log/pods/kube-system_etcd-*/*/*.log /var/log/pods/kube-system_kube-apiserver-*/*/*.log \
-                    /var/log/pods/kube-system_kube-vip-*/*/*.log; do
+                    /var/log/pods/kube-system_kube-controller-manager-*/*/*.log /var/log/pods/kube-system_kube-vip-*/*/*.log; do
                     [ -f "$f" ] && { echo "== $f"; tail -n 1500 "$f"; }
                 done
                 for d in /var/log/pods/*/*/; do
@@ -169,6 +170,14 @@ guest_script() {
                 done
                 for f in /var/lib/rancher/*/agent/logs/kubelet.log /var/lib/rancher/*/agent/containerd/containerd.log; do
                     [ -f "$f" ] && { echo "== $f"; tail -n 2000 "$f"; }
+                done'
+            ;;
+        # Every delete the API server audited, with who asked, so an object that went missing names
+        # its remover. Each distribution keeps the log in its own place.
+        audit)
+            echo 'for f in /var/lib/rancher/rke2/server/logs/audit.log /var/lib/rancher/k3s/server/logs/audit.log \
+                    /var/log/kubernetes/audit/audit.log; do
+                    [ -f "$f" ] && { echo "== $f"; grep -F "\"verb\":\"delete" "$f" | tail -n 3000; }
                 done'
             ;;
         kernel)
@@ -483,7 +492,7 @@ collect() {
             commands=$(guest_script state)
             in_guest "${vmid}" "${commands}" 2>&1 | redact | head -c 1000000 > "${dir}/state.txt"
             grep -q '^exit code: 0$' "${dir}/state.txt" || continue
-            for part in journal etcd-journal logs kernel cloud-init etcd; do
+            for part in journal etcd-journal logs audit kernel cloud-init etcd; do
                 commands=$(guest_script "${part}")
                 in_guest "${vmid}" "${commands}" 2>&1 | redact | head -c 8000000 > "${dir}/${part}.txt"
             done
