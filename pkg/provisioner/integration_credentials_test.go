@@ -53,15 +53,19 @@ func TestIntegrationInterfaceCredentials(t *testing.T) { //nolint:paralleltest /
 			values[k] = []byte("value of " + k)
 		}
 		c := credential("one", p.Name, values)
-		if err := ui.Create(ctx, c); err != nil {
+		switch err := ui.Create(ctx, c); {
+		case p.ApplianceOnly:
+			refused("a cluster's "+p.Name+" credential", err, "not one for "+p.Name)
+		case err != nil:
 			t.Fatalf("storing one's %s credential: %v", p.Name, err)
-		}
-		c.Data[p.Keys[0]] = []byte("replaced")
-		if err := ui.Update(ctx, c); err != nil {
-			t.Fatalf("replacing one's %s credential: %v", p.Name, err)
-		}
-		if err := ui.Delete(ctx, c); err != nil {
-			t.Fatalf("removing one's %s credential: %v", p.Name, err)
+		default:
+			c.Data[p.Keys[0]] = []byte("replaced")
+			if err := ui.Update(ctx, c); err != nil {
+				t.Fatalf("replacing one's %s credential: %v", p.Name, err)
+			}
+			if err := ui.Delete(ctx, c); err != nil {
+				t.Fatalf("removing one's %s credential: %v", p.Name, err)
+			}
 		}
 		shared := credential("", p.Name, values)
 		err := ui.Create(ctx, shared)

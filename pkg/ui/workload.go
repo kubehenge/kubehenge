@@ -24,6 +24,9 @@ type Workload struct {
 	Dynamic dynamic.Interface
 	// Readyz answers the API server's verbose readiness check, with any failed checks.
 	Readyz func(ctx context.Context) (string, error)
+	// Alerts answers what fires in the monitoring add-on's Alertmanager and is neither silenced nor
+	// inhibited, as its API's JSON.
+	Alerts func(ctx context.Context) ([]byte, error)
 	// Close lets go of its idle connections. It may be nil.
 	Close func()
 }
@@ -66,6 +69,16 @@ func connectWorkload(server string, ca []byte, token string) (*Workload, error) 
 				return "", fmt.Errorf("the API server's readiness: %w", err)
 			}
 			return string(body), nil
+		},
+		Alerts: func(ctx context.Context) ([]byte, error) {
+			body, err := kube.CoreV1().RESTClient().Get().
+				AbsPath("/api/v1/namespaces", provisioner.MonitoringNamespace, "services", provisioner.AlertmanagerProxyName, "proxy/api/v2/alerts").
+				Param("active", "true").Param("silenced", "false").Param("inhibited", "false").
+				DoRaw(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("asking Alertmanager: %w", err)
+			}
+			return body, nil
 		},
 		Close: hc.CloseIdleConnections,
 	}, nil

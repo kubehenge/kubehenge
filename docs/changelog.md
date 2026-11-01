@@ -57,6 +57,10 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - What needs attention leads to where it is acted on: the machine's row in **Machines**, or **Backups**.
 - A finished backup's or restore's run page shows the end of its Velero log.
 - A failed run of the appliance links to the page it is started from.
+- **Notifications** go to a webhook, an ntfy topic or email ([install.md](install.md#notifications)).
+  - They tell a cluster problem that stands 5 minutes and its end, a failed run and the management cluster's own trouble.
+  - **Administration, Notifications** sets the targets and sends a test. `kubehenge appliance notifications` does the same from the appliance's shell.
+- A cluster with the monitoring add-on lists its firing alerts on its Health page, read through a Kubehenge identity that may only read Alertmanager.
 
 ### Operating clusters
 

@@ -822,6 +822,7 @@ It is where Kubehenge starts and what looks after it:
   - its nodes
   - unwell pods
   - waiting volume claims
+  - the alerts firing, for a cluster with the monitoring add-on
   - add-on releases
   - what Cluster API reports
   - the last hour's events
@@ -832,6 +833,7 @@ It is where Kubehenge starts and what looks after it:
     - the events of its namespace
   - **From inside the cluster:** for clusters in the interface's namespaces, as two of the interface's identities in the workload cluster's `kube-system`.
     - `kubehenge-health` may get and list nodes, pods, events and PersistentVolumeClaims and read `/readyz`. `kubehenge-health-logs` may only read pods' logs.
+    - With monitoring on, `kubehenge-alerts` in `monitoring` may only GET through the API server's proxy to Alertmanager's port. It cannot set a silence, which is a POST.
     - Once their tokens run out, the page says since when its view is stale.
   - **Cordons:** `kubehenge-nodes`, a third identity there, may get and patch nodes, for those with `VM.Allocate` on the cluster's pool.
     - A ValidatingAdmissionPolicy of the same name refuses that account any change to a node but `spec.unschedulable`. Labels, annotations, finalizers, owners, taints, provider ID and pod ranges stay as they are.

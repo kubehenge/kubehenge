@@ -17,6 +17,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/kubehenge/kubehenge/pkg/notify"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
@@ -63,7 +64,7 @@ func (s *Server) clusterCredentialTarget(w http.ResponseWriter, r *http.Request,
 		return nil
 	}
 	purpose, known := provisioner.CredentialPurposeNamed(r.PathValue("purpose"))
-	if !known {
+	if !known || purpose.ApplianceOnly {
 		writeError(w, http.StatusNotFound, "no such credential")
 		return nil
 	}
@@ -188,17 +189,21 @@ func (s *Server) showCredential(w http.ResponseWriter, r *http.Request, u user, 
 	writeJSON(w, http.StatusOK, viewOf(t, secret))
 }
 
-// credentialValues checks that a request gives every value of the purpose, and nothing else.
+// credentialValues checks that a request gives every required value of the purpose, and nothing
+// it does not hold. An optional value left empty is not stored.
 func credentialValues(purpose provisioner.CredentialPurpose, values map[string]string) (map[string][]byte, string) {
+	keys := slices.Concat(purpose.Keys, purpose.Optional)
 	for k := range values {
-		if !slices.Contains(purpose.Keys, k) {
-			return nil, fmt.Sprintf("a %s credential holds %s, not %s", purpose.Name, strings.Join(purpose.Keys, " and "), k)
+		if !slices.Contains(keys, k) {
+			return nil, fmt.Sprintf("a %s credential holds %s, not %s", purpose.Name, strings.Join(keys, ", "), k)
 		}
 	}
-	data := make(map[string][]byte, len(purpose.Keys))
-	for _, k := range purpose.Keys {
+	data := make(map[string][]byte, len(keys))
+	for _, k := range keys {
 		v := values[k]
 		switch {
+		case v == "" && slices.Contains(purpose.Optional, k):
+			continue
 		case v == "":
 			return nil, "enter " + k
 		case len(v) > maxCredentialValue:
@@ -207,6 +212,11 @@ func credentialValues(purpose provisioner.CredentialPurpose, values map[string]s
 			return nil, k + ": not valid text"
 		}
 		data[k] = []byte(v)
+	}
+	if slices.Contains(notify.Purposes, purpose.Name) {
+		if _, err := notify.Parse(purpose.Name, data, nil); err != nil {
+			return nil, err.Error()
+		}
 	}
 	return data, ""
 }

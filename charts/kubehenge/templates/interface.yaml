@@ -289,7 +289,7 @@ spec:
       message: the interface changes no Secret but the credentials it stores
     - expression: >-
         variables.cluster == ''
-        ? variables.purpose in ['backup', 'dns01']
+        ? variables.purpose in ['backup', 'dns01', 'notify-webhook', 'notify-ntfy', 'notify-email']
         : variables.purpose in ['backup', 'dns01', 'gitops', 'oidc-client']
       messageExpression: >-
         'the interface writes and deletes only credentials labelled {{ $credential }} with a purpose it knows, not '

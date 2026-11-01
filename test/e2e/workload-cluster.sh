@@ -2177,6 +2177,19 @@ EOF
     esac
     control_plane_use "${work}/workload" monitoring
 
+    # The alerts identity reads Alertmanager's alerts through the API server's proxy, the health
+    # page's way in, and may do nothing else there.
+    until_true 300 "the alerts identity's token beside the cluster" identity_kubeconfig alerts
+    alerts_read() {
+        KUBECONFIG="${work}/alerts" kubectl get --raw \
+            '/api/v1/namespaces/monitoring/services/kube-prometheus-stack-alertmanager:http-web/proxy/api/v2/alerts?active=true' |
+            jq -e 'type == "array"' > /dev/null
+    }
+    until_true 300 "the alerts identity reads Alertmanager's alerts" alerts_read
+    refused alerts create services/kube-prometheus-stack-alertmanager:http-web --subresource=proxy -n monitoring
+    refused alerts get services/kube-prometheus-stack-prometheus:http-web --subresource=proxy -n monitoring
+    refused alerts list pods -n monitoring
+
     step "logs switched on, collected on every node"
     set_variable logs '{"enabled":true,"collector":"node","retentionDays":7,"sizeGiB":10}'
     until_true 900 "Loki installed" sh -c "KUBECONFIG=${work}/workload kubectl -n logging get statefulset/loki >/dev/null 2>&1"

@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -339,6 +340,55 @@ func TestBackupIdentitiesGoWithBackups(t *testing.T) {
 	}
 	if got := secretsBeside(t, f.kube, c, IdentityHealth, IdentityLogs); len(got) != 2 {
 		t.Errorf("only %v kept with backups off, want the health identities'", got)
+	}
+}
+
+// The alerts identity comes with monitoring, once its namespace is there, and may only GET through
+// the proxy to Alertmanager's port.
+func TestAlertsIdentityReadsAlertmanagerAlone(t *testing.T) {
+	t.Parallel()
+	clock := time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
+	c := initialised(withAddons(storageCluster(), map[string]string{monitoringAddon: `{"enabled":true}`}))
+	f := newIdentities(t, c, &clock)
+	ctx := context.Background()
+
+	reconcileIdentities(t, f.w, c)
+	if got := secretsBeside(t, f.kube, c, IdentityAlerts); len(got) != 0 {
+		t.Errorf("%v before the monitoring namespace", got)
+	}
+	if err := f.workload.Create(ctx, &corev1.Namespace{Name: MonitoringNamespace}); err != nil {
+		t.Fatal(err)
+	}
+	reconcileIdentities(t, f.w, c)
+	if got := secretsBeside(t, f.kube, c, IdentityAlerts); len(got) != 1 {
+		t.Fatalf("only %v beside the cluster", got)
+	}
+	want := rbacv1.PolicyRule{
+		APIGroups: []string{""}, Resources: []string{"services/proxy"},
+		ResourceNames: []string{"kube-prometheus-stack-alertmanager:http-web"}, Verbs: []string{"get"},
+	}
+	if got := namespacedRights(t, f.workload, MonitoringNamespace, "kubehenge-alerts"); len(got) != 1 || !reflect.DeepEqual(got[0], want) {
+		t.Errorf("the alerts identity may do %+v, want %+v alone", got, want)
+	}
+
+	current := &clusterv1.Cluster{}
+	if err := f.kube.Get(ctx, client.ObjectKeyFromObject(c), current); err != nil {
+		t.Fatal(err)
+	}
+	for i := range current.Spec.Topology.Variables {
+		if current.Spec.Topology.Variables[i].Name == monitoringAddon {
+			current.Spec.Topology.Variables[i].Value.Raw = []byte(`{"enabled":false}`)
+		}
+	}
+	if err := f.kube.Update(ctx, current); err != nil {
+		t.Fatal(err)
+	}
+	reconcileIdentities(t, f.w, current)
+	if got := secretsBeside(t, f.kube, c, IdentityAlerts); len(got) != 0 {
+		t.Errorf("%v kept with monitoring off", got)
+	}
+	if err := f.workload.Get(ctx, client.ObjectKey{Namespace: MonitoringNamespace, Name: "kubehenge-alerts"}, &rbacv1.Role{}); !apierrors.IsNotFound(err) {
+		t.Errorf("the alerts identity's role kept with monitoring off: %v", err)
 	}
 }
 

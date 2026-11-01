@@ -5,6 +5,7 @@ export const adminViews = [
   { path: "backups", label: "Backups", words: "backups etcd snapshots restore management" },
   { path: "templates", label: "Templates", words: "templates vm build refresh" },
   { path: "certificates", label: "Certificates", words: "certificates dns-01 token" },
+  { path: "notifications", label: "Notifications", words: "notifications alerts webhook ntfy email smtp" },
 ] as const;
 
 export type AdminView = (typeof adminViews)[number]["path"];

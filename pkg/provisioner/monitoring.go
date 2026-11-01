@@ -27,6 +27,14 @@ type Monitoring struct {
 const (
 	monitoringAddon   = "monitoring"
 	monitoringRelease = "kube-prometheus-stack"
+	// alertmanagerPort names Alertmanager's port in its Service, which the chart names
+	// <release>-alertmanager.
+	alertmanagerPort = "http-web"
+	// MonitoringNamespace holds the monitoring add-on in a workload cluster.
+	MonitoringNamespace = monitoringAddon
+	// AlertmanagerProxyName is Alertmanager's Service and port, as the API server's proxy names
+	// them in a request and RBAC matches them.
+	AlertmanagerProxyName = monitoringRelease + "-alertmanager:" + alertmanagerPort
 	// nodeExporterNamespace holds node-exporter apart from the rest: it reads the host's namespaces
 	// and file system, which only Pod Security's privileged level allows.
 	nodeExporterNamespace = "node-exporter"
@@ -149,6 +157,7 @@ func monitoringValues(distribution templates.Distribution, proxy Image, addons *
 		"alertmanager": map[string]any{"alertmanagerSpec": map[string]any{
 			"storage":   claim(alertmanagerStorage),
 			"resources": reserved(cpu10m, "32Mi"),
+			"portName":  alertmanagerPort,
 		}},
 		"kube-state-metrics": map[string]any{"resources": reserved(cpu10m, memory64Mi)},
 		"extraManifests":     metricsManifests(distribution, proxy, addons),

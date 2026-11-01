@@ -232,6 +232,48 @@ describe("health page", () => {
     expect(screen.queryByRole("link", { name: "Headlamp" })).not.toBeInTheDocument();
   });
 
+  it("lists the alerts that fire, and links each from what needs a look", async () => {
+    fakeServer({
+      [healthPath]: {
+        body: {
+          ...degraded,
+          attention: [
+            {
+              severity: "error",
+              section: "alerts",
+              what: "Alert KubeNodeNotReady",
+              message: "Node is not ready.",
+              since: minutesAgo(10),
+            },
+          ],
+          alerts: {
+            items: [
+              { name: "KubeNodeNotReady", severity: "error", summary: "Node is not ready.", since: minutesAgo(10) },
+              { name: "TargetDown", severity: "warning", namespace: "kube-system", since: minutesAgo(30) },
+            ],
+          },
+        },
+      },
+    });
+    render(<HealthView cluster={cluster} headlamp={undefined} />);
+
+    const link = await screen.findByRole("link", { name: "Alert KubeNodeNotReady" });
+    expect(link).toHaveAttribute("href", "#health-alerts");
+    expect(screen.getByRole("heading", { name: "Alerts" })).toBeInTheDocument();
+    const target = screen.getByRole("row", { name: /TargetDown/u });
+    expect(within(target).getByText("in kube-system")).toBeInTheDocument();
+    expect(within(target).getByText("Warning")).toBeInTheDocument();
+    expect(within(screen.getByRole("row", { name: /^KubeNodeNotReady/u })).getByText("Critical")).toBeInTheDocument();
+  });
+
+  it("shows no alerts section for a cluster without monitoring", async () => {
+    fakeServer({ [healthPath]: { body: degraded } });
+    render(<HealthView cluster={cluster} headlamp={undefined} />);
+
+    await expect(screen.findByRole("list", { name: "At a glance" })).resolves.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Alerts" })).not.toBeInTheDocument();
+  });
+
   it("reads no node's readiness off a cluster that does not answer", async () => {
     fakeServer({
       [healthPath]: {

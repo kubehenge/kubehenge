@@ -38,7 +38,10 @@ type fakeWorkloads struct {
 	kube   *fake.Clientset
 	velero dynamic.Interface
 	readyz string
-	tokens []string
+	// alerts is Alertmanager's answer, and alertsBy the token it answers.
+	alerts   string
+	alertsBy string
+	tokens   []string
 }
 
 func (f *fakeWorkloads) connect(server string, ca []byte, token string) (*Workload, error) {
@@ -48,7 +51,13 @@ func (f *fakeWorkloads) connect(server string, ca []byte, token string) (*Worklo
 		return nil, errors.New("connected to the wrong cluster")
 	}
 	f.tokens = append(f.tokens, token)
-	return &Workload{Kube: f.kube, Dynamic: f.velero, Readyz: func(context.Context) (string, error) { return f.readyz, nil }}, nil
+	alerts := func(context.Context) ([]byte, error) {
+		if token != f.alertsBy {
+			return nil, errors.New("403 Forbidden")
+		}
+		return []byte(f.alerts), nil
+	}
+	return &Workload{Kube: f.kube, Dynamic: f.velero, Readyz: func(context.Context) (string, error) { return f.readyz, nil }, Alerts: alerts}, nil
 }
 
 func (f *fakeWorkloads) connected() []string {
@@ -336,6 +345,79 @@ func checkHealthSections(t *testing.T, v *healthView) {
 	}
 	if len(v.Events.Items) != 2 || events["workload Pod web/api-7d9"] != 7 || events["management Machine one-md-0-a"] != 1 {
 		t.Errorf("events = %+v", v.Events.Items)
+	}
+}
+
+// A monitored cluster's firing alerts show, critical and warning ones alone, read as the alerts
+// identity.
+func TestHealthShowsTheAlertsThatFire(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)
+	identity := &corev1.Secret{
+		Namespace: "default", Name: provisioner.IdentitySecretName("one", provisioner.IdentityAlerts),
+		Annotations: map[string]string{provisioner.IdentityExpiresAnnotation: now.Add(time.Hour).Format(time.RFC3339)},
+		Data: map[string][]byte{
+			provisioner.IdentityServerKey: []byte("https://10.0.0.20:6443"), provisioner.IdentityCAKey: []byte("the cluster CA"),
+			provisioner.IdentityTokenKey: []byte("alerts-token"),
+		},
+	}
+	h, workloads := healthHarness(t, identity)
+	c := &clusterv1.Cluster{}
+	if err := h.kube.Get(t.Context(), client.ObjectKey{Namespace: "default", Name: "one"}, c); err != nil {
+		t.Fatal(err)
+	}
+	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{
+		Name: "monitoring", Value: apiextensionsv1.JSON{Raw: []byte(`{"enabled":true}`)},
+	})
+	if err := h.kube.Update(t.Context(), c); err != nil {
+		t.Fatal(err)
+	}
+	at := func(d time.Duration) string { return now.Add(-d).Format(time.RFC3339) }
+	workloads.alertsBy = "alerts-token"
+	workloads.alerts = `[
+		{"labels":{"alertname":"Watchdog","severity":"none"},"annotations":{},"startsAt":"` + at(time.Hour) + `"},
+		{"labels":{"alertname":"KubePodCrashLooping","severity":"warning","namespace":"web"},"annotations":{"description":"Pod web/api is crash looping."},"startsAt":"` + at(20*time.Minute) + `"},
+		{"labels":{"alertname":"TargetDown","severity":"warning","namespace":"kube-system"},"annotations":{"summary":"One or more targets are unreachable."},"startsAt":"` + at(30*time.Minute) + `"},
+		{"labels":{"alertname":"KubeNodeNotReady","severity":"critical"},"annotations":{"summary":"Node is not ready."},"startsAt":"` + at(10*time.Minute) + `"}
+	]`
+	b := h.browser()
+	b.signIn("viewer@pve")
+	v, _ := readHealthView(t, b)
+	if v.Alerts == nil || v.Alerts.Error != "" || len(v.Alerts.Items) != 3 {
+		t.Fatalf("alerts = %+v", v.Alerts)
+	}
+	names := []string{v.Alerts.Items[0].Name, v.Alerts.Items[1].Name, v.Alerts.Items[2].Name}
+	if !slices.Equal(names, []string{"KubeNodeNotReady", "TargetDown", "KubePodCrashLooping"}) || v.Alerts.Items[2].Summary != "Pod web/api is crash looping." {
+		t.Errorf("alerts = %+v, want the worst and oldest first", v.Alerts.Items)
+	}
+	i := slices.IndexFunc(v.Attention, func(a attentionView) bool { return a.What == "Alert KubePodCrashLooping in web" })
+	if i < 0 || v.Attention[i].Section != sectionAlerts || v.Attention[i].Severity != severityWarning {
+		t.Errorf("needs attention %+v", v.Attention)
+	}
+	if !slices.Contains(workloads.connected(), "alerts-token") {
+		t.Errorf("read with %v, not the alerts identity", workloads.connected())
+	}
+}
+
+// A monitored cluster whose alerts cannot be read says why, and has nothing to show without it.
+func TestHealthSaysWhyNoAlertsShow(t *testing.T) {
+	t.Parallel()
+	h, _ := healthHarness(t)
+	c := &clusterv1.Cluster{}
+	if err := h.kube.Get(t.Context(), client.ObjectKey{Namespace: "default", Name: "one"}, c); err != nil {
+		t.Fatal(err)
+	}
+	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{
+		Name: "monitoring", Value: apiextensionsv1.JSON{Raw: []byte(`{"enabled":true}`)},
+	})
+	if err := h.kube.Update(t.Context(), c); err != nil {
+		t.Fatal(err)
+	}
+	b := h.browser()
+	b.signIn("viewer@pve")
+	v, _ := readHealthView(t, b)
+	if v.Alerts == nil || v.Alerts.Error != notSetUp || len(v.Alerts.Items) != 0 {
+		t.Errorf("alerts = %+v, want why none show", v.Alerts)
 	}
 }
 

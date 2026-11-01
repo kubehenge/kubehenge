@@ -10,6 +10,8 @@ export interface CredentialKey {
   label: string;
   /** Shown as typed, as a user name is. The others are masked. */
   plain?: boolean;
+  /** May be left empty. */
+  optional?: boolean;
 }
 
 /** setText tells when and by whom a credential was stored, or that none is. */
@@ -38,12 +40,15 @@ export function CredentialField({
   cluster,
   keys,
   hint,
+  status,
 }: {
   label: string;
   purpose: string;
   cluster?: ClusterRef | undefined;
   keys: CredentialKey[];
   hint?: ReactNode;
+  /** What became of the credential's last use, shown while one is set. */
+  status?: ReactNode;
 }): JSX.Element {
   const namespace = cluster?.namespace;
   const name = cluster?.name;
@@ -74,7 +79,7 @@ export function CredentialField({
     };
   }, [purpose, namespace, name]);
 
-  const complete = values !== undefined && keys.every((k) => filled(values[k.key]));
+  const complete = values !== undefined && keys.every((k) => k.optional === true || filled(values[k.key]));
 
   const run = async (step: () => Promise<StoredCredential>): Promise<void> => {
     setBusy(true);
@@ -119,6 +124,7 @@ export function CredentialField({
       {hint !== undefined && <p className="hint">{hint}</p>}
       {stored === undefined && !filled(error) && <Skeleton rows={1} />}
       {stored !== undefined && <p className="muted">{setText(stored)}</p>}
+      {stored?.set === true && status}
       {values !== undefined && (
         <>
           {keys.map((k) => (

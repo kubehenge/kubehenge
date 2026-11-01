@@ -38,6 +38,9 @@ const (
 	IdentityHealth Identity = "health"
 	// IdentityLogs reads pods' logs and nothing else, for those the interface lets see them.
 	IdentityLogs Identity = "health-logs"
+	// IdentityAlerts reads the alerts firing in the monitoring add-on's Alertmanager, through the
+	// API server's proxy, for the health page and the appliance's notifications.
+	IdentityAlerts Identity = "alerts"
 	// IdentityBackups lists Velero's backups and restores and starts a backup, for those who may
 	// see or change a cluster that backs up.
 	IdentityBackups Identity = "backups"
@@ -154,6 +157,13 @@ var workloadIdentities = []workloadIdentity{
 		clusterRules: []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"pods/log"}, Verbs: []string{"get"}}},
 	},
 	{
+		// GET through the proxy reaches Alertmanager's API to read alone: a silence is a POST.
+		id: IdentityAlerts, namespace: MonitoringNamespace, wanted: monitors, deleteInside: true,
+		rules: []rbacv1.PolicyRule{{
+			APIGroups: []string{""}, Resources: []string{"services/proxy"}, ResourceNames: []string{AlertmanagerProxyName}, Verbs: []string{"get"},
+		}},
+	},
+	{
 		// The provisioner makes the velero namespace before Velero's chart, and removes it with
 		// Velero.
 		// Deleting a backup goes through Velero's DeleteBackupRequest, and a restore's results through
@@ -226,6 +236,11 @@ func identityOf(id Identity) *workloadIdentity {
 }
 
 func always(*WorkloadIdentities, *clusterv1.Cluster) (bool, error) { return true, nil }
+
+func monitors(_ *WorkloadIdentities, cluster *clusterv1.Cluster) (bool, error) {
+	m, _, err := optionalVariable[Monitoring](cluster, monitoringAddon)
+	return m.Enabled, err
+}
 
 func backsUp(_ *WorkloadIdentities, cluster *clusterv1.Cluster) (bool, error) {
 	b, _, err := optionalVariable[Backups](cluster, backupsVariable)

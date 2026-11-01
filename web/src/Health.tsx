@@ -12,6 +12,7 @@ import type {
   ClusterHealth,
   ClusterRef,
   Condition,
+  FiringAlert,
   HealthCheck,
   HealthEvent,
   HealthNode,
@@ -258,9 +259,27 @@ function healthChecksTile(h: ClusterHealth): Tile {
   return { section: "cluster-api", label: "Health checks", value: `${healthy} of ${expected} healthy`, state };
 }
 
+function alertsTile(alerts: HealthSection<FiringAlert>): Tile {
+  if (filled(alerts.error)) {
+    return { section: "alerts", label: "Alerts", ...notRead };
+  }
+  if (alerts.items.length === 0) {
+    return { section: "alerts", label: "Alerts", value: "None", state: "ok" };
+  }
+  return {
+    section: "alerts",
+    label: "Alerts",
+    value: `${alerts.items.length}${alerts.truncated === true ? "+" : ""} firing`,
+    state: worst(alerts.items.map((a) => a.severity)),
+  };
+}
+
 // A stale reading is the last one shown once a later read failed or none answered in time.
 function Tiles({ health: h, stale }: { health: ClusterHealth; stale: boolean }): JSX.Element {
   const tiles = [controlPlaneTile(h), workersTile(h), pressureTile(h), podsTile(h), addonsTile(h), healthChecksTile(h)];
+  if (h.alerts !== undefined) {
+    tiles.push(alertsTile(h.alerts));
+  }
   return (
     <ul className={stale ? "tiles tiles-stale" : "tiles"} aria-label={stale ? "At a glance, stale" : "At a glance"}>
       {tiles.map((t) => (
@@ -694,6 +713,46 @@ function Addons({ health: h }: { health: ClusterHealth }): JSX.Element {
   );
 }
 
+function Alerts({ alerts }: { alerts: HealthSection<FiringAlert> }): JSX.Element {
+  return (
+    <div className="box scroll" id={anchor("alerts")}>
+      <h3>Alerts</h3>
+      <SectionNote section={alerts} what="alerts" />
+      <table className="grid">
+        <thead>
+          <tr>
+            <th>Alert</th>
+            <th>Severity</th>
+            <th>Since</th>
+          </tr>
+        </thead>
+        <tbody>
+          {alerts.items.length === 0 && !filled(alerts.error) && (
+            <tr>
+              <td colSpan={3} className="muted">
+                None firing
+              </td>
+            </tr>
+          )}
+          {alerts.items.map((a) => (
+            <tr key={`${a.name}/${a.namespace ?? ""}/${a.since}`} className="attention">
+              <td>
+                {a.name}
+                {filled(a.namespace) && <span className="muted"> in {a.namespace}</span>}
+                {filled(a.summary) && <div className="hint">{a.summary}</div>}
+              </td>
+              <td>
+                <Status state={a.severity} text={a.severity === "error" ? "Critical" : "Warning"} />
+              </td>
+              <Since at={a.since} />
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function poolStatus(p: PoolState): { state: State; text: string } {
   if (p.rollingOut) {
     return { state: "progress", text: "Rolling out" };
@@ -1016,6 +1075,7 @@ export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlam
       <Nodes health={h} />
       <Pods health={h} actions={actions} />
       <Volumes health={h} />
+      {h.alerts !== undefined && <Alerts alerts={h.alerts} />}
       <Addons health={h} />
       <ClusterAPI health={h} />
       <Events events={h.events} />
