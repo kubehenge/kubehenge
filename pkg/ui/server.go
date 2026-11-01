@@ -158,6 +158,7 @@ type Server struct {
 	vmLoads    vmLoadCache
 	workloads  workloadConns
 	changes    changes
+	notifier   notifier
 	// clock is the health page's time. Unset, the system's.
 	clock func() time.Time
 }
@@ -182,6 +183,7 @@ func (s *Server) Run(ctx context.Context) {
 	wg.Go(func() { s.autoUpgrade(ctx) })
 	wg.Go(func() { s.watchChanges(ctx) })
 	wg.Go(func() { s.backUpManagementEtcd(ctx) })
+	wg.Go(func() { s.notifyLoop(ctx) })
 	if s.Headlamp != nil {
 		wg.Go(func() { s.syncHeadlamp(ctx, headlampSyncEvery) })
 	}
@@ -224,6 +226,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/credentials/{purpose}", s.managed(s.applianceCredential))
 	mux.HandleFunc("PUT /api/credentials/{purpose}", s.managed(s.storeApplianceCredential))
 	mux.HandleFunc("DELETE /api/credentials/{purpose}", s.managed(s.removeApplianceCredential))
+	mux.HandleFunc("GET /api/notifications", s.managed(s.notifications))
+	mux.HandleFunc("POST /api/notifications/test", s.managed(s.testNotifications))
 
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "no such API")

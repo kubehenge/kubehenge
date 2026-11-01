@@ -2421,9 +2421,20 @@ fieldset.choices .check + .info-toggle + .info-text + .hint {
   max-width: var(--form-width);
 }
 
+/* The frame closes round a page of fields too. */
+.panel:has(> .box.fields) {
+  max-width: calc(var(--form-width) + 36px);
+}
+
+/* A notification target's last sending, inside its box. */
+.sent {
+  margin: 0 0 10px;
+}
+
 .field,
 .group,
-form.box > * {
+form.box > *,
+.box.fields > * {
   max-width: var(--form-width);
 }
 

@@ -5,6 +5,7 @@ import { AppliancePage } from "./AppliancePage";
 import { SharedDNS01 } from "./Certificates";
 import { ManagementBackups } from "./ManagementBackups";
 import { ManagementHealthCard } from "./ManagementHealth";
+import { Notifications } from "./Notifications";
 import { DangerZone } from "./RemoveManagement";
 import { ManagementCluster } from "./Setup";
 import { Templates } from "./Templates";
@@ -44,6 +45,13 @@ export function AdminPage({
       return (
         <section className="panel">
           <SharedDNS01 />
+        </section>
+      );
+    }
+    case "notifications": {
+      return (
+        <section className="panel">
+          <Notifications />
         </section>
       );
     }

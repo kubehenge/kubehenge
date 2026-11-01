@@ -59,6 +59,10 @@ type workloadRead struct {
 	velero         bool
 	veleroSchedule *unstructured.Unstructured
 	veleroBackups  []backupView
+	// monitored is set for a cluster with the monitoring add-on, whose alerts are read.
+	monitored bool
+	alerts    []alertmanagerAlert
+	alertsErr error
 }
 
 // unreachable tells whether the cluster was to be read and did not answer.
@@ -147,6 +151,14 @@ func (s *Server) readWorkload(ctx context.Context, kube client.Client, c *cluste
 			}
 			wl.veleroSchedule, wl.veleroBackups, err = readBackupRuns(ctx, bw.Dynamic)
 			wl.velero = err == nil
+			return err
+		})
+	}
+	if monitored(c) {
+		wl.monitored = true
+		read(&wl.alertsErr, func(ctx context.Context) error {
+			var err error
+			wl.alerts, err = s.workloadAlerts(ctx, kube, c)
 			return err
 		})
 	}

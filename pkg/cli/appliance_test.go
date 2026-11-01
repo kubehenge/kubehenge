@@ -72,6 +72,14 @@ func newFakeInterface(t *testing.T) *fakeInterface {
 		}
 		answer(w, http.StatusAccepted, `{}`)
 	}))
+	mux.HandleFunc("GET /api/notifications", f.admin(func(w http.ResponseWriter, _ *http.Request) {
+		answer(w, http.StatusOK, `[{"kind":"notify-webhook","at":"2027-03-01T12:00:00Z","title":"web: VM paused"},{"kind":"notify-ntfy"},
+			{"kind":"notify-email","at":"2027-03-01T12:00:00Z","title":"web: VM paused","error":"signing in: 535 bad credentials"}]`)
+	}))
+	mux.HandleFunc("POST /api/notifications/test", f.admin(func(w http.ResponseWriter, _ *http.Request) {
+		answer(w, http.StatusOK, `[{"kind":"notify-webhook","at":"2027-03-01T12:05:00Z","title":"Kubehenge test"},
+			{"kind":"notify-email","at":"2027-03-01T12:05:00Z","title":"Kubehenge test","error":"signing in: 535 bad credentials"}]`)
+	}))
 	mux.HandleFunc("GET /api/setup", f.admin(func(w http.ResponseWriter, _ *http.Request) {
 		f.setups++
 		if f.setups == 1 {
@@ -240,6 +248,29 @@ func TestApplianceEtcdBackups(t *testing.T) {
 	wantOut := "Restoring\nThe snapshot matches its checksum\netcd runs\nRestored from 20270301T120000Z-v1.37.1.db.age\n"
 	if err != nil || out != wantOut {
 		t.Errorf("restore: %v\n%q\nwant %q", err, out, wantOut)
+	}
+}
+
+// The notification commands show each target's last sending, and a test that a target refused fails.
+func TestApplianceNotifications(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	out, err := run(t, f.args("admin@pve", "notifications")...)
+	for _, want := range []string{
+		"Webhook  sent 2027-03-01T12:00:00Z: web: VM paused",
+		"ntfy     nothing sent",
+		"Email    failed 2027-03-01T12:00:00Z: web: VM paused (signing in: 535 bad credentials)",
+	} {
+		if err != nil || !strings.Contains(out, want) {
+			t.Errorf("notifications: %v, output lacks %q:\n%s", err, want, out)
+		}
+	}
+	out, err = run(t, f.args("admin@pve", "notifications", "test")...)
+	if err == nil || err.Error() != "Email did not take the test" || !strings.Contains(out, "Webhook  sent 2027-03-01T12:05:00Z: Kubehenge test") {
+		t.Errorf("test: %v\n%s", err, out)
+	}
+	if _, err := run(t, f.args("user@pve", "notifications", "test")...); err == nil || err.Error() != "user@pve needs Sys.Modify on /" {
+		t.Errorf("test as user@pve: %v", err)
 	}
 }
 

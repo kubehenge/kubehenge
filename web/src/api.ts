@@ -25,6 +25,7 @@ import type {
   ManagementBackups,
   ManagementSettings,
   ManagementSnapshots,
+  NotificationSent,
   PodLogs,
   Plan,
   PveNode,
@@ -360,6 +361,8 @@ export interface Api {
   storedCredential: (purpose: string, cluster?: ClusterRef) => Promise<StoredCredential>;
   storeCredential: (purpose: string, values: Record<string, string>, cluster?: ClusterRef) => Promise<StoredCredential>;
   removeCredential: (purpose: string, cluster?: ClusterRef) => Promise<void>;
+  notifications: () => Promise<NotificationSent[]>;
+  testNotifications: () => Promise<NotificationSent[]>;
   credential: (name: "kubeconfig" | "talosconfig", passphrase: string) => Promise<Blob>;
   removeManagement: (passphrase: string) => Promise<Job>;
   managementHealth: () => Promise<ManagementHealth>;
@@ -485,6 +488,8 @@ export const api: Api = {
   storedCredential: (purpose, cluster) => request("GET", credentialPath(purpose, cluster)),
   storeCredential: (purpose, values, cluster) => request("PUT", credentialPath(purpose, cluster), { values }),
   removeCredential: (purpose, cluster) => act("DELETE", credentialPath(purpose, cluster)),
+  notifications: () => request("GET", "/api/notifications"),
+  testNotifications: () => request("POST", "/api/notifications/test"),
   credential: (name, passphrase) => download("POST", "/api/setup/credential", { name, passphrase }),
   removeManagement: (passphrase) => request("POST", "/api/setup/remove", { passphrase, confirm: "remove" }),
   managementHealth: () => request("GET", "/api/setup/health"),

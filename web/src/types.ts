@@ -35,6 +35,14 @@ export interface ClusterRef {
   name: string;
 }
 
+/** A notification target's last sending: a notice, or a test. */
+export interface NotificationSent {
+  kind: string;
+  at?: string;
+  title?: string;
+  error?: string;
+}
+
 /** What the interface tells of a credential it stores: never its values. */
 export interface StoredCredential {
   purpose: string;
@@ -362,6 +370,15 @@ export interface RunStep {
   detail?: string;
 }
 
+/** An alert firing in a cluster's Alertmanager, neither silenced nor inhibited. */
+export interface FiringAlert {
+  name: string;
+  severity: "error" | "warning";
+  namespace?: string;
+  summary?: string;
+  since: string;
+}
+
 export interface ClusterHealth {
   read: string;
   verdict: "healthy" | "changing" | "degraded" | "unreachable";
@@ -376,6 +393,8 @@ export interface ClusterHealth {
   controlPlane: { kind?: string; conditions: Condition[]; error?: string };
   healthChecks: HealthSection<HealthCheck>;
   events: HealthSection<HealthEvent>;
+  /** The alerts firing in the cluster, for a cluster with the monitoring add-on. */
+  alerts?: HealthSection<FiringAlert>;
   /** Why the nodes show no figures from Proxmox VE, when they show none. */
   vms?: string;
   /** Whether the user may read the pods' logs here: Sys.Modify on the cluster's pool. */

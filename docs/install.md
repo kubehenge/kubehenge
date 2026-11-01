@@ -441,6 +441,47 @@ The appliance's shell has the same commands, with the page's privileges and refu
 | `kubehenge appliance etcd-backups take` | takes a snapshot and waits until it is stored |
 | `kubehenge appliance etcd-backups restore … --passphrase-file …` | restores a snapshot by name and prints the run's log until it ends |
 
+### Notifications
+
+The appliance tells a webhook, an ntfy topic or an email address when something needs a look:
+
+- an item on a cluster's Health page that has stood for 5 minutes, and again once it clears
+- an alert firing in a cluster with the monitoring add-on, which shows on its Health page too
+- the management cluster not answering, one of its nodes not ready or a controller short of replicas
+- a failed run: a setup, a template build, a backup, an etcd snapshot or an upgrade
+
+**Administration, Notifications** sets each target and shows its last sending. **Send test** sends one to each. Both need `Sys.Modify` on `/`.
+
+| Target | Settings |
+| --- | --- |
+| Webhook | a URL. Each notice is a JSON POST with `key`, `severity` (`error`, `warning`, `resolved` or `info`), `title`, `text`, `cluster`, `link` and `at` |
+| ntfy | the topic's URL, such as `https://ntfy.sh/<topic>`, and an access token for a topic that needs one |
+| Email | the SMTP server as host:port, the sender and the recipients, comma-separated. A user name and password where the server wants them. Port 465 uses TLS, any other STARTTLS where the server offers it |
+
+More than 5 notices at once arrive as one. `link` opens the cluster's Health page once the appliance knows its own address (`--public-url`).
+
+#### Targets in Git
+
+Each target is a Secret in the interface's namespace (`clusters` unless set otherwise):
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kubehenge-notify-ntfy   # kubehenge-notify-webhook, kubehenge-notify-email
+  namespace: clusters
+  labels:
+    kubehenge.dev/user-credential: notify-ntfy
+type: kubehenge.dev/user-credential
+stringData:
+  url: https://ntfy.sh/my-clusters
+  token: tk_example   # optional
+```
+
+The webhook's key is `url`. The email's are `server`, `from`, `to`, and optionally `username` and `password`.
+
+In the appliance's shell, `kubehenge appliance notifications` shows each target's last sending and `kubehenge appliance notifications test` sends a test.
+
 ## Create the VM templates
 
 Every cluster's nodes are clones of a VM template that `kubehenge template create` makes through the Proxmox VE API ([templates.md](templates.md)):

@@ -96,6 +96,8 @@ type healthView struct {
 	ControlPlane controlPlaneView         `json:"controlPlane"`
 	HealthChecks section[healthCheckView] `json:"healthChecks"`
 	Events       section[eventView]       `json:"events"`
+	// Alerts are those firing in the cluster, for a cluster with the monitoring add-on.
+	Alerts *section[alertView] `json:"alerts,omitempty"`
 	// VMs says why the nodes show no figures from Proxmox VE, when they show none.
 	VMs string `json:"vms,omitempty"`
 	// Logs tells whether the user may read the pods' logs on the page.
@@ -369,6 +371,10 @@ func assemble(c *clusterv1.Cluster, m *managementRead, wl *workloadRead, now tim
 		Events:       eventsSection(c, m, wl, now),
 	}
 	readinessAttention(wl, &a)
+	if wl.monitored {
+		alerts := alertsSection(wl, &a)
+		v.Alerts = &alerts
+	}
 	if wl.velero {
 		a = append(a, backupsAttention(wl.veleroSchedule, wl.veleroBackups, now)...)
 	}

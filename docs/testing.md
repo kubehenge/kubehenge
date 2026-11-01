@@ -133,6 +133,7 @@ The CPU figures (`kubehenge.dev/addon-cpu` and `kubehenge.dev/node-cpu`) are the
    - On, the pods of a namespace enrolled in the mesh are redirected through ztunnel. Once mutual TLS is required, a client outside the namespace is refused while one inside reaches the server, its workload identity in ztunnel's logs.
    - Off, the namespace is taken out of the mesh first. Both clients then reach the server again.
 5. Switch monitoring on, then off with its metrics proxies. Every component's job is scraped, each with its server verified. On k3s the controller manager's, scheduler's and kube-proxy's series arrive in the kubelet's. On Talos the controller manager and scheduler are scraped only if the Talos release passes them serving certificates of the cluster CA.
+   - The alerts identity reads Alertmanager's alerts and is refused anything else.
 6. Switch logs on beside monitoring.
    - Grafana's Loki data source is healthy, and Loki refuses a read without credentials.
    - The collector on every node sends a pod's lines, those of a pod ending within seconds, a node's journal and the API server's audit log.

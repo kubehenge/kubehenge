@@ -243,6 +243,32 @@ func TestApplianceCredentials(t *testing.T) {
 	}
 }
 
+func TestNotificationTargetsAreCheckedAndOnlyTheAppliancesOwn(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, cluster("default", "one"))
+	a := h.browser()
+	a.signIn("admin@pve")
+	for _, c := range []struct {
+		purpose, body string
+		want          int
+	}{
+		{"notify-ntfy", `{"values":{"url":"https://ntfy.sh/kh"}}`, http.StatusOK},
+		{"notify-ntfy", `{"values":{"url":"ntfy.sh/kh","token":"tk"}}`, http.StatusUnprocessableEntity},
+		{"notify-email", `{"values":{"server":"smtp.example.com:587","from":"kh@example.com","to":"ops@example.com","username":"","password":""}}`, http.StatusOK},
+		{"notify-email", `{"values":{"server":"smtp.example.com:587","from":"kh@example.com","to":"ops@example.com","username":"kh"}}`, http.StatusUnprocessableEntity},
+		{"notify-webhook", `{"values":{"url":"https://hooks.example.com/s3cret"}}`, http.StatusOK},
+	} {
+		expect(t, a.do("PUT", "/api/credentials/"+c.purpose, c.body), c.want)
+	}
+	if secret, ok := storedSecret(t, h, "kubehenge-notify-ntfy"); !ok || len(secret.Data) != 1 {
+		t.Errorf("ntfy without a token = %+v, want its url alone", secret)
+	}
+	if secret, ok := storedSecret(t, h, "kubehenge-notify-email"); !ok || secret.Data["username"] != nil {
+		t.Errorf("email without signing in = %+v, want no username", secret)
+	}
+	expect(t, a.do("PUT", "/api/clusters/default/one/credentials/notify-webhook", `{"values":{"url":"https://hooks.example.com/x"}}`), http.StatusNotFound)
+}
+
 func TestCredentialNames(t *testing.T) {
 	t.Parallel()
 	seen := map[string]bool{}

@@ -4,6 +4,8 @@ import (
 	"slices"
 
 	corev1 "k8s.io/api/core/v1"
+
+	"github.com/kubehenge/kubehenge/pkg/notify"
 )
 
 // User credentials are the secrets people type into the interface for what reaches a service
@@ -31,10 +33,14 @@ const (
 // CredentialPurpose is what a user credential is for, and the values it holds.
 type CredentialPurpose struct {
 	Name string
-	// Keys are the Secret's data keys, every one of them required.
-	Keys []string
-	// Appliance tells whether an administrator may also store one for every cluster.
-	Appliance bool
+	// Keys are the Secret's data keys, every one of them required, and Optional those it may hold
+	// besides.
+	Keys     []string
+	Optional []string
+	// Appliance tells whether an administrator may also store one for every cluster, and
+	// ApplianceOnly that only such a one exists.
+	Appliance     bool
+	ApplianceOnly bool
 }
 
 // credentialPurposes are those the chart's admission policy lets the interface store. The two lists
@@ -44,6 +50,10 @@ var credentialPurposes = []CredentialPurpose{
 	{Name: "dns01", Keys: []string{"token"}, Appliance: true},
 	{Name: "gitops", Keys: []string{"username", "password"}},
 	{Name: "oidc-client", Keys: []string{"clientSecret"}},
+	// Where the appliance sends what needs a look (pkg/notify).
+	{Name: notify.PurposeWebhook, Keys: []string{urlKey}, Appliance: true, ApplianceOnly: true},
+	{Name: notify.PurposeNtfy, Keys: []string{urlKey}, Optional: []string{"token"}, Appliance: true, ApplianceOnly: true},
+	{Name: notify.PurposeEmail, Keys: []string{"server", "from", "to"}, Optional: []string{usernameKey, passwordKey}, Appliance: true, ApplianceOnly: true},
 }
 
 // CredentialPurposes lists every purpose a user credential may have.
