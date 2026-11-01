@@ -25,6 +25,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 var (
@@ -183,6 +184,55 @@ func TestCertificatesRenewedByReplacing(t *testing.T) {
 	f.look()
 	if got := f.drained(); len(got) != 0 {
 		t.Errorf("events %q on a second look", got)
+	}
+}
+
+// staleCache has the watch's client read the cluster as it was before the look, as a cache that
+// lags behind the watch's own writes does, while its reader reads past it.
+func (f *certFixture) staleCache() {
+	f.t.Helper()
+	kube, ok := f.kube.(client.WithWatch)
+	if !ok {
+		f.t.Fatal("the fixture's client does not watch")
+	}
+	stale := &clusterv1.Cluster{}
+	if err := kube.Get(context.Background(), webKey, stale); err != nil {
+		f.t.Fatal(err)
+	}
+	f.watch.Reader = kube
+	f.watch.Client = interceptor.NewClient(kube, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if cached, isCluster := obj.(*clusterv1.Cluster); isCluster {
+				stale.DeepCopyInto(cached)
+				return nil
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+}
+
+// Workers of two pools due in one look both roll, and the cluster says so, though the cache holds
+// the cluster from before the first roll.
+func TestCertificatesRollTwoPoolsPastAStaleCache(t *testing.T) {
+	t.Parallel()
+	c := certCluster("rke2", 1)
+	c.Spec.Topology.Workers.MachineDeployments = append(c.Spec.Topology.Workers.MachineDeployments,
+		clusterv1.MachineDeploymentTopology{Name: "md-1", Class: "workers"})
+	f := newCertFixture(t, c,
+		[]client.Object{certControlPlane("web-cp-a"), certWorker("web-md-0-a"), certMachine("web-md-1-a", clusterv1.ClusterTopologyMachineDeploymentNameLabel, "md-1")},
+		report("web-md-0-a", 45, time.Minute), report("web-md-1-a", 46, time.Minute))
+	f.staleCache()
+	if cond := f.look(); cond == nil || cond.Reason != CertificatesRenewing {
+		t.Fatalf("condition %+v", cond)
+	}
+	now := &clusterv1.Cluster{}
+	if err := f.kube.Get(context.Background(), webKey, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, md := range now.Spec.Topology.Workers.MachineDeployments {
+		if !md.Rollout.After.Equal(&metav1.Time{Time: certNow}) {
+			t.Errorf("%s rolls after %v", md.Name, md.Rollout.After)
+		}
 	}
 }
 

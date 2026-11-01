@@ -54,13 +54,18 @@ func clip(s string, n int) string {
 // setClusterCondition sets a condition on a cluster, or takes the condition of condType away when
 // cond is nil, beside the conditions Cluster API sets, which a conflict has it read again for. It
 // returns the condition as it was before, nil when there was none.
-func setClusterCondition(ctx context.Context, c client.Client, key client.ObjectKey, condType string, cond *metav1.Condition) (*metav1.Condition, error) {
+//
+// It reads through c first, a cache most often. After a conflict it reads through live, since the
+// cache may not hold yet the write that conflicted, the caller's own just before most likely.
+func setClusterCondition(ctx context.Context, c client.Client, live client.Reader, key client.ObjectKey, condType string, cond *metav1.Condition) (*metav1.Condition, error) {
 	var before *metav1.Condition
+	var read client.Reader = c
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		cluster := &clusterv1.Cluster{}
-		if err := c.Get(ctx, key, cluster); err != nil {
+		if err := read.Get(ctx, key, cluster); err != nil {
 			return fmt.Errorf("reading the cluster: %w", err)
 		}
+		read = liveOr(live, c)
 		if found := meta.FindStatusCondition(cluster.Status.Conditions, condType); found != nil {
 			before = found.DeepCopy()
 		} else {
@@ -86,6 +91,14 @@ func setClusterCondition(ctx context.Context, c client.Client, key client.Object
 	return before, nil
 }
 
+// liveOr is live, or c where no live reader is set.
+func liveOr(live client.Reader, c client.Client) client.Reader { //nolint:ireturn // either reader serves
+	if live == nil {
+		return c
+	}
+	return live
+}
+
 // report records how a reconcile of the cluster ended: KubehengeReadyCondition, and a Warning event
 // for an error, which the event recorder folds into one series while the error repeats.
 func (r *Reconciler) report(ctx context.Context, cluster *clusterv1.Cluster, reconcileErr error) {
@@ -104,7 +117,7 @@ func (r *Reconciler) report(ctx context.Context, cluster *clusterv1.Cluster, rec
 			r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, ReconcileFailedReason, "Reconcile", "%s", clip(message, eventNoteMax))
 		}
 	}
-	if _, err := setClusterCondition(ctx, r.Client, client.ObjectKeyFromObject(cluster), KubehengeReadyCondition, &cond); err != nil && !apierrors.IsNotFound(err) {
+	if _, err := setClusterCondition(ctx, r.Client, r.Reader, client.ObjectKeyFromObject(cluster), KubehengeReadyCondition, &cond); err != nil && !apierrors.IsNotFound(err) {
 		ctrl.LoggerFrom(ctx).Error(err, "recording the outcome of the reconcile")
 	}
 }

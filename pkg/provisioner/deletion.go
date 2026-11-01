@@ -302,7 +302,7 @@ func (r *Reconciler) reportStall(ctx context.Context, cluster *clusterv1.Cluster
 	if cond == nil && meta.FindStatusCondition(cluster.Status.Conditions, DeletionStalledCondition) == nil {
 		return nil
 	}
-	before, err := markCluster(ctx, r.Client, client.ObjectKeyFromObject(cluster), DeletionStalledCondition, cond)
+	before, err := markCluster(ctx, r.Client, r.Reader, client.ObjectKeyFromObject(cluster), DeletionStalledCondition, cond)
 	if apierrors.IsNotFound(err) {
 		return nil
 	}

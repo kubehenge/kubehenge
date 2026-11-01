@@ -101,7 +101,10 @@ type expiry struct {
 // CertificateWatch looks at when the certificates of every cluster run out, renews those a new
 // machine renews, and says so on the Cluster: CertificatesCondition, and an event when it starts.
 type CertificateWatch struct {
-	Client         client.Client
+	Client client.Client
+	// Reader reads a cluster past the cache: before a roll of its workers, which follows the
+	// watch's own roll of another pool, and after a write to it conflicted.
+	Reader         client.Reader
 	ClassNamespace string
 	// Workload reads a workload cluster. found is false until it has a kubeconfig.
 	Workload func(ctx context.Context, c *clusterv1.Cluster) (r client.Reader, found bool, err error)
@@ -148,7 +151,7 @@ func (w *CertificateWatch) mark(ctx context.Context, c *clusterv1.Cluster, cond 
 	if cond == nil && meta.FindStatusCondition(c.Status.Conditions, CertificatesCondition) == nil {
 		return nil
 	}
-	before, err := markCluster(ctx, w.Client, client.ObjectKeyFromObject(c), CertificatesCondition, cond)
+	before, err := markCluster(ctx, w.Client, w.Reader, client.ObjectKeyFromObject(c), CertificatesCondition, cond)
 	if err != nil || w.Events == nil {
 		return err
 	}
@@ -400,7 +403,7 @@ func (w *CertificateWatch) rollWorkers(ctx context.Context, c *clusterv1.Cluster
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		how = replaceUnderWay
 		cluster := &clusterv1.Cluster{}
-		if err := w.Client.Get(ctx, client.ObjectKeyFromObject(c), cluster); err != nil {
+		if err := liveOr(w.Reader, w.Client).Get(ctx, client.ObjectKeyFromObject(c), cluster); err != nil {
 			return fmt.Errorf("reading the cluster: %w", err)
 		}
 		before := cluster.DeepCopy()

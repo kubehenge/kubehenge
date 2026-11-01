@@ -1,15 +1,18 @@
 package provisioner
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func kubehengeReady(t *testing.T, kube client.Client, c *clusterv1.Cluster) *metav1.Condition {
@@ -71,6 +74,50 @@ func TestReportLeavesAClusterLetGoOfAlone(t *testing.T) {
 	r.report(t.Context(), c, nil)
 	if cond := kubehengeReady(t, kube, c); cond != nil {
 		t.Errorf("a deleted cluster was reported on: %+v", cond)
+	}
+}
+
+// A condition set right after a write the cache does not hold yet is set all the same, read again
+// past the cache. Without a reader past it, the conflict stays.
+func TestSetClusterConditionPastAStaleCache(t *testing.T) {
+	t.Parallel()
+	c := storageCluster()
+	_, kube := newReconciler(t, &fakeCloud{}, c)
+	watching, ok := kube.(client.WithWatch)
+	if !ok {
+		t.Fatal("the fixture's client does not watch")
+	}
+	stale := &clusterv1.Cluster{}
+	if err := kube.Get(t.Context(), client.ObjectKeyFromObject(c), stale); err != nil {
+		t.Fatal(err)
+	}
+	cached := interceptor.NewClient(watching, interceptor.Funcs{
+		Get: func(ctx context.Context, w client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if into, isCluster := obj.(*clusterv1.Cluster); isCluster {
+				stale.DeepCopyInto(into)
+				return nil
+			}
+			return w.Get(ctx, key, obj, opts...)
+		},
+	})
+	first := metav1.Condition{Type: VMsCondition, Status: metav1.ConditionFalse, Reason: "Stopped"}
+	if _, err := markCluster(t.Context(), cached, kube, client.ObjectKeyFromObject(c), VMsCondition, &first); err != nil {
+		t.Fatal(err)
+	}
+	second := metav1.Condition{Type: StorageCondition, Status: metav1.ConditionFalse, Reason: "NearlyFull"}
+	if _, err := markCluster(t.Context(), cached, kube, client.ObjectKeyFromObject(c), StorageCondition, &second); err != nil {
+		t.Fatalf("the second condition: %v", err)
+	}
+	now := &clusterv1.Cluster{}
+	if err := kube.Get(t.Context(), client.ObjectKeyFromObject(c), now); err != nil {
+		t.Fatal(err)
+	}
+	if meta.FindStatusCondition(now.Status.Conditions, VMsCondition) == nil || meta.FindStatusCondition(now.Status.Conditions, StorageCondition) == nil {
+		t.Errorf("conditions %+v", now.Status.Conditions)
+	}
+	third := metav1.Condition{Type: KubehengeReadyCondition, Status: metav1.ConditionTrue, Reason: ReconciledReason}
+	if _, err := setClusterCondition(t.Context(), cached, nil, client.ObjectKeyFromObject(c), KubehengeReadyCondition, &third); !apierrors.IsConflict(err) {
+		t.Errorf("with the cache alone: %v, want a conflict", err)
 	}
 }
 

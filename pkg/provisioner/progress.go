@@ -58,7 +58,9 @@ const (
 // ProgressReconciler sets MachinesStalledCondition on the Clusters built from Kubehenge's
 // ClusterClasses.
 type ProgressReconciler struct {
-	Client         client.Client
+	Client client.Client
+	// Reader reads a cluster past the cache, after a write to it conflicted.
+	Reader         client.Reader
 	ClassNamespace string
 	// Events reports on a Cluster that its machines stalled. It may be nil.
 	Events events.EventRecorder
@@ -123,7 +125,7 @@ func (r *ProgressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 		cond.Message = clip(fmt.Sprintf("no machine has become ready since %s; %s", mark.since.UTC().Format("2006-01-02 15:04 UTC"), worst), conditionMessageMax)
 	}
-	before, err := setClusterCondition(ctx, r.Client, req.NamespacedName, MachinesStalledCondition, &cond)
+	before, err := setClusterCondition(ctx, r.Client, r.Reader, req.NamespacedName, MachinesStalledCondition, &cond)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
