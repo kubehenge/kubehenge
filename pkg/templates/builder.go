@@ -905,8 +905,13 @@ func (b *Builder) removeSeed(ctx context.Context, node *proxmox.Node, vm *proxmo
 // alone can be a package manager's list of hundreds of packages, printed in one second.
 const bakeAccount = `awk '$1 != t { t = $1; print }' "$1" | tail -n 60; echo ...; tail -n 20 "$1"`
 
+// bakeProcesses prints what still runs in a failed bake and what each process waits on, and the
+// guest's connections with their timers. A bake that froze, logging nothing while its guest idles,
+// shows there whether it waits on a socket, a lock or a child.
+const bakeProcesses = `ps -eo pid,ppid,etimes,stat,wchan:32,args --forest | cut -c1-220 | tail -n 80; echo; ss -tnpo | cut -c1-220 | head -n 40`
+
 // waitAndCheck waits for the guest agent and runs the checks in the guest. On a failure it adds
-// cloud-init's own account and the bake's log, which the exit code does not carry.
+// cloud-init's own account, the bake's log and what still runs, which the exit code does not carry.
 func (b *Builder) waitAndCheck(ctx context.Context, vm *proxmox.VirtualMachine, checks [][]string, log string) error {
 	if err := vm.WaitForAgent(ctx, int(bakeTimeout.Seconds())); err != nil {
 		return fmt.Errorf("the guest agent did not start: %w", err)
@@ -927,6 +932,9 @@ func (b *Builder) waitAndCheck(ctx context.Context, vm *proxmox.VirtualMachine, 
 		if log != "" {
 			if out, lerr := b.output(ctx, vm, []string{"sh", "-c", bakeAccount, "sh", log}); lerr == nil {
 				err = fmt.Errorf("%w\n%s, the first line of each second, then its end:\n%s", err, log, out)
+			}
+			if out, perr := b.output(ctx, vm, []string{"sh", "-c", bakeProcesses}); perr == nil {
+				err = fmt.Errorf("%w\nthe guest's processes, with what each waits on, and its connections:\n%s", err, out)
 			}
 		}
 		return err
