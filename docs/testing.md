@@ -177,7 +177,7 @@ The CPU figures (`kubehenge.dev/addon-cpu` and `kubehenge.dev/node-cpu`) are the
    - Beside it the store holds only the snapshot the restore took first, encrypted and holding the later ConfigMap.
    - On Talos the control-plane machines are the same afterwards, each a voting member of the restored etcd again.
 5. On RKE2 and k3s, switch the distribution's own upload on. The Secret `kubehenge-etcd-s3` in `kube-system` verifies the store's certificate, and the control planes are replaced. A snapshot the server takes itself is found in the cluster's `<distribution>-etcd` folder. Switching it off with the snapshots removes the Secret and replaces the control planes again.
-6. Scale workers to two and back. On the k3s run it goes through the interface with `kubehenge cluster`, signed in with a Proxmox VE API token. It lists the cluster, fetches its kubeconfig and scales the pool to two. A worker is cordoned and uncordoned, rebooted and still the same machine, replaced, and deleted with its pool one smaller.
+6. Scale workers to two and back. On the k3s run it goes through the interface with `kubehenge cluster`, signed in with a Proxmox VE API token. It lists the cluster, fetches its kubeconfig and scales the pool to two. A worker is cordoned and uncordoned, rebooted and still the same machine, replaced, and deleted with its pool one smaller. Nothing may restart meanwhile, the control planes' distribution service included. The rebooted worker is the one replaced, so its restarts go with it.
 7. Upgrade by one minor version.
    - On RKE2 and k3s the old servers refuse the first new server until its cloud-init has ended. Its first start fails, and the roll survives it.
    - On Talos the new machines are cloned from the template of the release the nodes were upgraded to, and need no upgrade in place.
@@ -204,7 +204,7 @@ CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e
 - It builds Proxmox VE's image afresh and keeps it, with Go's build cache, for the day's runs.
 - A dispatch of the workflow names the tests to run, or runs that night's set.
 
-A machine whose KVM lacks pause-loop exiting hands its test to a fresh one, up to three times. There, guests that outnumber its CPUs starve each other whatever their sizes. The check that nothing restarts with every add-on on would only measure the machine. A test still on such a machine at the fourth try runs there with restarts reported, not failed (`KUBEHENGE_E2E_RESTARTS=report`).
+A machine whose KVM lacks pause-loop exiting hands its test to a fresh one, up to three times. There, guests that outnumber its CPUs starve each other whatever their sizes. The checks that nothing restarts would only measure the machine. A test still on such a machine at the fourth try runs there with restarts reported, not failed (`KUBEHENGE_E2E_RESTARTS=report`).
 
 ### Running them yourself
 
