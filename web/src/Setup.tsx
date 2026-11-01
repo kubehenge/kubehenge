@@ -1383,8 +1383,8 @@ function AuditLogChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element 
         List with their user
       </label>
       <Info about="kubectl changes">
-        The management cluster&apos;s API server writes its audit log to its output rather than to a file on the nodes.
-        The kubelet keeps its last 50 MiB.
+        The API server writes its audit log to its output instead of a file on the nodes. The kubelet keeps its last 50
+        MiB.
       </Info>
       <p className="hint" id={hint}>
         The interface reads pod logs in kube-system.
