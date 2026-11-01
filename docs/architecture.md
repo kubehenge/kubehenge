@@ -516,6 +516,7 @@ etcd snapshots (`etcdSnapshots: {enabled: true, target: …}`) are taken by Kube
   - The snapshot's SHA-256 comes from the store's metadata. It must be 64 lower-case hexadecimal digits, since it goes into commands run as root.
   - The steps run as root scripts through the QEMU guest agent, with the restore token ([install-settings.md](install-settings.md#etcd-restores)) only. Each step runs in a Job ([tokens](#tokens-kept-out-of-the-controller)).
   - The controller decrypts the snapshot and stores it encrypted again as `openssl enc -aes-256-ctr -pbkdf2` reads it, with a random password for that restore.
+  - RKE2's and k3s's restore keeps the snapshot's revision. For them the controller moves it on in a checked copy first, as etcdutl's `--bump-revision 1000000000 --mark-compacted` does.
   - The node fetches it from a presigned link that expires within the hour, with the target's CA where it has one. It checks the snapshot's SHA-256 and deletes the copy.
   - The restore ends once the cluster's API server answers on the cluster's address, not only on the restored node. That address moves by a leader election that lapses while etcd is stopped.
   - Each script reads all of itself before running, so a restart of the API server or the guest agent midway leaves no half-run step. Every step is safe to run again.

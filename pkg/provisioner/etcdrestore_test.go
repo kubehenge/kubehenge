@@ -179,13 +179,13 @@ func newRestoreFixture(t *testing.T, change func(*clusterv1.Cluster)) *restoreFi
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.data = etcdData(64 << 10)
+	f.data = etcdTestSnapshot(t)
 	f.putSnapshot(restoreSnapshot, string(keys.Data[BackupKeysKeyEtcd]), "v1.37.1+rke2r1")
 	f.etcd = &fakeEtcd{data: etcdData(32 << 10)}
 	f.events = events.NewFakeRecorder(10)
 	f.r = &EtcdRestorer{
 		Client: f.kube, Reader: f.kube, ClassNamespace: "kubehenge-system", Targets: f.targets, Etcd: f.etcd, Guests: f.guests,
-		APIs: f.apis, Now: func() time.Time { return etcdNow }, Events: f.events,
+		APIs: f.apis, Now: func() time.Time { return etcdNow }, Events: f.events, ScratchDir: t.TempDir(),
 	}
 	return f
 }
@@ -264,7 +264,42 @@ func (f *restoreFixture) transcoded() []string {
 	return out
 }
 
-var passwordLine = regexp.MustCompile(`(?m)^password='([^']+)'$`)
+var (
+	passwordLine = regexp.MustCompile(`(?m)^password='([^']+)'$`)
+	sha256Line   = regexp.MustCompile(`(?m)^sha256='([0-9a-f]{64})'$`)
+)
+
+// fetched is the snapshot a fetch script downloads, decrypted, and the SHA-256 it checks it by.
+func (f *restoreFixture) fetched(script string) ([]byte, string) {
+	f.t.Helper()
+	objects := f.transcoded()
+	password, sum := passwordLine.FindStringSubmatch(script), sha256Line.FindStringSubmatch(script)
+	if len(objects) != 1 || password == nil || sum == nil {
+		f.t.Fatalf("transcoded %v, password %v, checksum %v", objects, password, sum)
+	}
+	plain, err := opensslOpen(f.store.objects[objects[0]].data, password[1])
+	if err != nil {
+		f.t.Fatalf("the transcoded snapshot does not decrypt: %v", err)
+	}
+	return plain, sum[1]
+}
+
+// checkBumpedForNode checks that plain is the fixture's snapshot with its revision moved on, ending
+// with the checksum RKE2's and k3s's restore checks, and that the node checks it by sum.
+func checkBumpedForNode(t *testing.T, plain []byte, sum string) {
+	t.Helper()
+	if whole := sha256.Sum256(plain); hex.EncodeToString(whole[:]) != sum {
+		t.Errorf("the node checks the snapshot by %s, not its SHA-256", sum)
+	}
+	if len(plain) < sha256.Size {
+		t.Fatalf("the snapshot has %d bytes", len(plain))
+	}
+	db, end := plain[:len(plain)-sha256.Size], plain[len(plain)-sha256.Size:]
+	if got := sha256.Sum256(db); !bytes.Equal(got[:], end) {
+		t.Error("the snapshot does not end with the checksum etcd's restore checks")
+	}
+	checkBumped(t, db)
+}
 
 // A restore pauses the cluster, has the first node fetch and check the snapshot, stops every
 // control plane, restores on the first, starts it, and replaces the others.
@@ -282,24 +317,16 @@ func TestEtcdRestorerRestores(t *testing.T) {
 		if step != stepFetch {
 			return
 		}
-		sum := sha256.Sum256(f.data)
-		if !strings.Contains(script, hex.EncodeToString(sum[:])) || !strings.Contains(script, "X-Amz-Expires=3600") {
-			t.Errorf("the fetch checks no checksum or has no link:\n%s", script)
+		if !strings.Contains(script, "X-Amz-Expires=3600") {
+			t.Errorf("the fetch has no link:\n%s", script)
 		}
 		// The store's certificate is signed by the target's own CA, which the node does not trust.
 		if !strings.Contains(script, "\nca='-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n'\n") ||
 			!strings.Contains(script, `trust=(--cacert "$work/store-ca.pem")`) {
 			t.Errorf("the fetch does not trust the target's CA:\n%s", script)
 		}
-		objects := f.transcoded()
-		password := passwordLine.FindStringSubmatch(script)
-		if len(objects) != 1 || password == nil {
-			t.Fatalf("transcoded %v, password %v", objects, password)
-		}
-		plain, err := opensslOpen(f.store.objects[objects[0]].data, password[1])
-		if err != nil || !bytes.Equal(plain, f.data) {
-			t.Errorf("the transcoded snapshot does not decrypt to it: %v", err)
-		}
+		plain, sum := f.fetched(script)
+		checkBumpedForNode(t, plain, sum)
 	}
 	f.reconcile()
 
@@ -338,6 +365,51 @@ func TestEtcdRestorerRestores(t *testing.T) {
 	f.reconcile()
 	if got := len(f.guests.runs()); got != len(want) {
 		t.Errorf("ran %d steps after the restore", got-len(want))
+	}
+}
+
+// RKE2's and k3s's restore keeps the snapshot's revision, which the clients of the etcd from before
+// have seen. Their node gets the snapshot with its revision moved on, and the controller keeps no
+// copy. kubeadm's restore moves the revision on itself, so its node gets the snapshot as stored.
+func TestEtcdRestoreMovesTheRevisionOn(t *testing.T) {
+	t.Parallel()
+	for _, d := range []templates.Distribution{templates.RKE2, templates.K3s, templates.Kubeadm} {
+		t.Run(string(d), func(t *testing.T) {
+			t.Parallel()
+			f := newRestoreFixture(t, func(c *clusterv1.Cluster) { c.Spec.Topology.ClassRef.Name = ClassPrefix + string(d) })
+			if d != templates.RKE2 {
+				class := &clusterv1.ClusterClass{
+					Name: ClassPrefix + string(d), Namespace: "kubehenge-system",
+					Annotations: map[string]string{BackupTargetsAnnotation: testTargets},
+				}
+				if err := f.kube.Create(context.Background(), class); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fetched := false
+			f.guests.seen = func(_ int64, step, script string) {
+				if step != stepFetch {
+					return
+				}
+				fetched = true
+				plain, sum := f.fetched(script)
+				if d != templates.Kubeadm {
+					checkBumpedForNode(t, plain, sum)
+					return
+				}
+				stored := sha256.Sum256(f.data)
+				if !bytes.Equal(plain, f.data) || sum != hex.EncodeToString(stored[:]) {
+					t.Error("kubeadm's node does not get the snapshot as stored")
+				}
+			}
+			f.reconcile()
+			if st := f.status(); !fetched || st.Phase != RestoreSucceeded {
+				t.Errorf("fetched %v, status %+v", fetched, st)
+			}
+			if left, _ := os.ReadDir(f.r.ScratchDir); len(left) != 0 {
+				t.Errorf("left %v in the scratch directory", left)
+			}
+		})
 	}
 }
 
@@ -669,16 +741,36 @@ func TestPlanEtcdRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Steps) != 7 || !slices.Equal(plan.Replaced, []string{"web-cp-1", "web-cp-2"}) {
+	if len(plan.Steps) != 9 || !slices.Equal(plan.Replaced, []string{"web-cp-1", "web-cp-2"}) {
 		t.Fatalf("plan %+v", plan)
 	}
-	for i, want := range []string{`"paused":true`, "systemctl stop rke2-server", strings.Repeat("a", 64), "--cluster-reset", "systemctl start", "delete machine --wait=false web-cp-1 web-cp-2", `"paused":false`} {
+	for i, want := range []string{
+		`"paused":true`, "systemctl stop rke2-server", strings.Repeat("a", 64) + "  snapshot.db",
+		// RKE2's restore keeps the snapshot's revision and checks the checksum a snapshot ends with.
+		"etcdutl snapshot restore snapshot.db --data-dir restored --bump-revision 1000000000 --mark-compacted && " +
+			"openssl dgst -sha256 -binary restored/member/snap/db | cat restored/member/snap/db - > snapshot.db",
+		"install -D -m 600 snapshot.db " + RestoreSnapshotPath,
+		"--cluster-reset-restore-path", "systemctl start", "delete machine --wait=false web-cp-1 web-cp-2", `"paused":false`,
+	} {
 		if !strings.Contains(plan.Steps[i].Command, want) {
 			t.Errorf("step %d %q has no %q:\n%s", i, plan.Steps[i].Title, want, plan.Steps[i].Command)
 		}
 	}
-	if plan.Steps[1].Where != "web-cp-0, web-cp-1, web-cp-2" || plan.Steps[3].Where != "web-cp-0" {
-		t.Errorf("stopped on %q, restored on %q", plan.Steps[1].Where, plan.Steps[3].Where)
+	if plan.Steps[1].Where != "web-cp-0, web-cp-1, web-cp-2" || plan.Steps[4].Where != "web-cp-0" || plan.Steps[5].Where != "web-cp-0" {
+		t.Errorf("stopped on %q, copied to %q, restored on %q", plan.Steps[1].Where, plan.Steps[4].Where, plan.Steps[5].Where)
+	}
+	kubeadm := f.cluster()
+	kubeadm.Spec.Topology.ClassRef.Name = ClassPrefix + string(templates.Kubeadm)
+	kubeadmSnapshot := *snapshot
+	kubeadmSnapshot.Distribution = string(templates.Kubeadm)
+	plan, err = PlanEtcdRestore(context.Background(), f.kube, kubeadm, &kubeadmSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// kubeadm's restore moves the revision on itself, from the snapshot copied as it is.
+	if len(plan.Steps) != 7 || !strings.Contains(plan.Steps[2].Command, strings.Repeat("a", 64)+"  "+RestoreSnapshotPath) ||
+		!strings.Contains(plan.Steps[3].Command, "--bump-revision 1000000000 --mark-compacted") {
+		t.Errorf("kubeadm's plan %+v", plan)
 	}
 	other := *snapshot
 	other.KubernetesVersion = "v1.36.4+rke2r1"
@@ -743,6 +835,10 @@ func TestRestoreScripts(t *testing.T) {
 		}
 		if d == templates.Kubeadm && (!strings.Contains(s.Reset, "--skip-hash-check") || strings.Contains(s.Restore, "skip=(--skip-hash-check)")) {
 			t.Error("kubeadm checks the snapshot's hash on a reset, or skips it on a restore")
+		}
+		// RKE2's and k3s's restore keeps the snapshot's revision, so the controller moves it on.
+		if s.Bumps != (d == templates.Kubeadm) {
+			t.Errorf("%s says its restore moves the revision on: %v", d, s.Bumps)
 		}
 		if d == templates.Kubeadm {
 			// A client's cache from before the restore holds revisions the restored etcd reuses.
