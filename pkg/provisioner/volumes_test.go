@@ -96,6 +96,8 @@ type fakePVE struct {
 	// VM 4242 makes it the volume owner.
 	nextIDs []int
 	taken   map[int]bool
+	// unstarted are VMIDs whose create task Proxmox VE kills before it runs. The VM stays, locked.
+	unstarted map[int]bool
 	// userMissing has the cluster's user not exist yet. groups are those it is in, and userWrites
 	// the bodies of its creation and changes.
 	userMissing bool
@@ -287,6 +289,9 @@ func (f *fakePVE) create(a answer, node string, body map[string]any) {
 	}
 	vmid := int(id)
 	switch {
+	case f.unstarted[vmid]:
+		f.taken[vmid] = true
+		a.fail("got no worker upid - start worker failed")
 	case f.taken[vmid]:
 		a.fail(fmt.Sprintf("unable to create VM %d - VM %d already exists on node '%s'", vmid, vmid, node))
 	case vmid == 4242:
@@ -733,6 +738,25 @@ func TestVolumeOwnerTakesAnotherVMIDWhenTheOfferedOneIsTaken(t *testing.T) {
 	}
 	if f.destroyed || f.config["name"] != webNames.VolumeOwner {
 		t.Errorf("volume owner VM 4242 is %v, destroyed %v", f.config, f.destroyed)
+	}
+}
+
+// A create whose task Proxmox VE killed before it ran leaves its VMID locked. The owner is created
+// under the next VMID.
+func TestVolumeOwnerTakesAnotherVMIDWhenItsCreateNeverStarted(t *testing.T) {
+	t.Parallel()
+	f := newFakePVE("a", nil)
+	f.destroyed, f.token, f.clusterName = true, true, "lab"
+	f.nextIDs, f.taken, f.unstarted = []int{100, 4242}, map[int]bool{}, map[int]bool{100: true}
+	p := &Proxmox{Client: serve(t, f), Settings: Settings{Role: "kubehenge-cluster"}}
+	var recorded []int
+	record := func(c Credentials) error { recorded = append(recorded, c.VolumeOwner); return nil }
+	c, err := p.Ensure(context.Background(), webNames, Access{}, Credentials{TokenID: webNames.TokenID(), TokenSecret: "s3cret"}, record)
+	if err != nil || c.VolumeOwner != 4242 || c.VolumeOwnerNode != "a" {
+		t.Fatalf("Ensure = %+v, %v; want volume owner 4242 on a", c, err)
+	}
+	if !slices.Equal(recorded, []int{100, 4242}) {
+		t.Errorf("recorded volume owners %v; want 100, then 4242 once 100 never started", recorded)
 	}
 }
 

@@ -36,6 +36,18 @@ func (e *TaskError) Error() string {
 	return msg + "; its log ends:\n" + strings.Join(e.Log, "\n")
 }
 
+// CreateNeverStarted reports Proxmox VE answering a VM create with "got no worker upid". Its task
+// was killed before it ran, after the VM's configuration was written and locked for creation. Only
+// root can remove that VM, so the create is tried again under another VM ID.
+func CreateNeverStarted(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "got no worker upid")
+}
+
+// LockedVMHint tells the reader how to remove a VM a create left locked.
+func LockedVMHint(vmid int) string {
+	return fmt.Sprintf("Proxmox VE left VM %d locked after a create that never started. Remove it as root with `qm unlock %d && qm destroy %d`.", vmid, vmid, vmid)
+}
+
 // Getter reads a path of the Proxmox VE API into out, as go-proxmox's Client.Get does.
 type Getter func(ctx context.Context, path string, out any) error
 
