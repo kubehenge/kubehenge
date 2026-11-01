@@ -523,11 +523,15 @@ func TestAFailedCheckReportsCloudInitAndTheBakeLog(t *testing.T) {
 	h.exit[strings.Join(recipe.Checks[0], " ")] = guestResult{code: 1, out: "status: error"}
 	h.exit["cloud-init status --long"] = guestResult{code: 1, out: "detail: package install failed"}
 	h.exit[strings.Join([]string{"sh", "-c", bakeAccount, "sh", recipe.Log}, " ")] = guestResult{out: "12:00:01 dnf install rke2-selinux"}
+	h.exit[strings.Join([]string{"sh", "-c", bakeProcesses}, " ")] = guestResult{out: "  812     1   1500 S    pipe_read   rpm-ostree compose rootfs"}
 	ctx := t.Context()
 	k := bakeVM(ctx, t, h, recipe)
 
 	err := k.finish(ctx)
-	for _, want := range []string{`"cloud-init status --wait" exited 1: status: error`, "detail: package install failed", recipe.Log + ", the first line of each second", "dnf install rke2-selinux"} {
+	for _, want := range []string{
+		`"cloud-init status --wait" exited 1: status: error`, "detail: package install failed", recipe.Log + ", the first line of each second", "dnf install rke2-selinux",
+		"the guest's processes, with what each waits on", "pipe_read   rpm-ostree compose rootfs",
+	} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("finish gave %v; want it to carry %q", err, want)
 		}

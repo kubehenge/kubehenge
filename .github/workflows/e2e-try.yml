@@ -83,8 +83,8 @@ jobs:
           restore-keys: |
             e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-
             e2e-go-
-      # The image of Proxmox VE as the nightly run last built it, so with packages a day old at
-      # most; the nightly run builds it afresh.
+      # The image of Proxmox VE as the nightly run or a change on main (e2e-image.yml) last built
+      # it. Its packages are a day old at most. The nightly run builds it afresh.
       - id: pve-cache
         if: env.E2E_RUN == 'true' && github.event_name != 'schedule'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

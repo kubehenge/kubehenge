@@ -1843,27 +1843,76 @@ case ${part}-${distribution} in
     *) set_variable etcdSnapshots "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}" ;;
 esac
 
-if [ "${part}" != lifecycle ]; then
-    # restarts: each pod's container restarts, by namespace/name.
-    restarts() {
-        wl get pods -A -o json |
-            jq -c '[.items[] | {key: "\(.metadata.namespace)/\(.metadata.name)", value: ([.status.containerStatuses[]?.restartCount] | add // 0)}] | from_entries'
-    }
-    # server_restarts: how often systemd has restarted the control planes' distribution service. k3s runs
-    # every control-plane component in it, so it is the one place k3s's restarts show. Talos has no
-    # systemd: its control planes' components are the kubelet's static pods, counted with the others.
-    case ${class} in
-        kubehenge-rke2) server_unit=rke2-server ;;
-        kubehenge-k3s) server_unit=k3s ;;
-        kubehenge-talos) server_unit= ;;
-        *) server_unit=kubelet ;;
-    esac
+# restarts: each pod's container restarts, by namespace/name.
+restarts() {
+    wl get pods -A -o json |
+        jq -c '[.items[] | {key: "\(.metadata.namespace)/\(.metadata.name)", value: ([.status.containerStatuses[]?.restartCount] | add // 0)}] | from_entries'
+}
+# server_restarts: how often systemd has restarted the control planes' distribution service. k3s runs
+# every control-plane component in it, so it is the one place k3s's restarts show. Talos has no
+# systemd: its control planes' components are the kubelet's static pods, counted with the others.
+case ${class} in
+    kubehenge-rke2) server_unit=rke2-server ;;
+    kubehenge-k3s) server_unit=k3s ;;
+    kubehenge-talos) server_unit= ;;
+    *) server_unit=kubelet ;;
+esac
+server_restarts() {
+    # shellcheck disable=SC2310 # its failure is returned.
+    counts=$(on_machines "${servers}" "systemctl show -p NRestarts --value ${server_unit}") || return 1
+    printf '%s\n' "${counts}" | awk '{ n += $1 } END { print n + 0 }'
+}
+# restart_baseline: notes the restarts so far, which restarts_since compares with.
+restart_baseline() {
     servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
-    server_restarts() {
-        # shellcheck disable=SC2310 # its failure is returned.
-        counts=$(on_machines "${servers}" "systemctl show -p NRestarts --value ${server_unit}") || return 1
-        printf '%s\n' "${counts}" | awk '{ n += $1 } END { print n + 0 }'
-    }
+    pods_before=$(restarts)
+    if [ -n "${server_unit}" ]; then
+        # shellcheck disable=SC2310 # a failed count fails the step.
+        servers_before=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
+    fi
+}
+# found_restarts: fails with its arguments, or only says them on a host that starves its guests.
+found_restarts() {
+    if [ "${KUBEHENGE_E2E_RESTARTS:-fail}" = report ]; then
+        echo "not failing, on a host that starves its guests: $*"
+    else
+        fail "$*"
+    fi
+}
+# restarts_since: whether anything restarted since restart_baseline, the same control planes still
+# there; $1 says while what. Why each container ended, and how starved each node has been of CPU,
+# memory and IO over the last minutes, tell a component's fault from nodes too small for the load.
+restarts_since() {
+    if [ -n "${server_unit}" ]; then
+        # shellcheck disable=SC2310 # a failed count fails the step.
+        servers_after=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
+        [ "${servers_after}" = "${servers_before}" ] ||
+            found_restarts "${server_unit} restarted $((servers_after - servers_before)) times on the control planes $1"
+    fi
+    pods_after=$(restarts)
+    restarted=$(jq -rn --argjson b "${pods_before}" --argjson a "${pods_after}" '$a | to_entries[] | select(.value > ($b[.key] // 0)) | "\(.key) \(.value - ($b[.key] // 0))"')
+    [ -n "${restarted}" ] || return 0
+    echo "the restarted containers' last ends:"
+    wl get pods -A -o json | jq -r '.items[] | .metadata as $m | .status.containerStatuses[]? |
+        select(.restartCount > 0) | .lastState.terminated // {} |
+        "\($m.namespace)/\($m.name): \(.reason // "?") exit \(.exitCode // "?") at \(.finishedAt // "?")"'
+    for m in $(kubectl -n "${ns}" get machines -o jsonpath='{.items[*].metadata.name}'); do
+        echo "pressure on ${m}:"
+        if [ "${distribution}" = talos ]; then
+            pressure_address=$(machine_address "${m}")
+            # shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
+            talos_read "${pressure_address}" /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io ||
+                echo "  cannot read it"
+        else
+            # shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
+            on_machines "${m}" "grep -H . /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io" ||
+                echo "  cannot read it"
+        fi
+    done
+    found_restarts "containers restarted $1 (pod, restarts): ${restarted}"
+}
+
+if [ "${part}" != lifecycle ]; then
     # A component that could not renew its Lease while the API was away, through the restore or a
     # control plane's replacement, exits only once its renew deadline has passed, which may be after the
     # API is back. Once each Lease renewed before the restore is renewed again after this point, every
@@ -1876,11 +1925,7 @@ if [ "${part}" != lifecycle ]; then
             '. as $now | all($held[]; ($now[.] // "") > ($at[.] // ""))' > /dev/null
     }
     until_true 300 "the components' Leases renewed after the restore" leases_renewed
-    pods_before=$(restarts)
-    if [ -n "${server_unit}" ]; then
-        # shellcheck disable=SC2310 # a failed count fails the step.
-        servers_before=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
-    fi
+    restart_baseline
     echo "memory before the add-ons:"
     pod_memory "${work}/workload"
     echo "CPU requested before the add-ons:"
@@ -3118,43 +3163,7 @@ EOF
 
     # The class's minimum sizes have to carry every add-on at once.
     step "every add-on at once, with nothing restarted"
-    found_restarts() {
-        if [ "${KUBEHENGE_E2E_RESTARTS:-fail}" = report ]; then
-            echo "not failing, on a host that starves its guests: $*"
-        else
-            fail "$*"
-        fi
-    }
-    if [ -n "${server_unit}" ]; then
-        # shellcheck disable=SC2310 # a failed count fails the step.
-        servers_after=$(server_restarts) || fail "cannot read ${server_unit}'s restarts on the control planes"
-        [ "${servers_after}" = "${servers_before}" ] ||
-            found_restarts "${server_unit} restarted $((servers_after - servers_before)) times on the control planes while the add-ons were installed"
-    fi
-    pods_after=$(restarts)
-    restarted=$(jq -rn --argjson b "${pods_before}" --argjson a "${pods_after}" '$a | to_entries[] | select(.value > ($b[.key] // 0)) | "\(.key) \(.value - ($b[.key] // 0))"')
-    if [ -n "${restarted}" ]; then
-        # Why each container ended, and how starved each node has been of CPU, memory and IO over the
-        # last minutes, tell an add-on's fault from nodes too small for them all.
-        echo "the restarted containers' last ends:"
-        wl get pods -A -o json | jq -r '.items[] | .metadata as $m | .status.containerStatuses[]? |
-        select(.restartCount > 0) | .lastState.terminated // {} |
-        "\($m.namespace)/\($m.name): \(.reason // "?") exit \(.exitCode // "?") at \(.finishedAt // "?")"'
-        for m in $(kubectl -n "${ns}" get machines -o jsonpath='{.items[*].metadata.name}'); do
-            echo "pressure on ${m}:"
-            if [ "${distribution}" = talos ]; then
-                pressure_address=$(machine_address "${m}")
-                # shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
-                talos_read "${pressure_address}" /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io ||
-                    echo "  cannot read it"
-            else
-                # shellcheck disable=SC2310 # a node that cannot be read is said so, not fatal here.
-                on_machines "${m}" "grep -H . /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io" ||
-                    echo "  cannot read it"
-            fi
-        done
-        found_restarts "containers restarted while the add-ons were installed (pod, restarts): ${restarted}"
-    fi
+    restarts_since "while the add-ons were installed"
     pod_memory "${work}/workload"
     echo "CPU requested with every add-on on:"
     pod_cpu "${work}/workload"
@@ -3422,6 +3431,7 @@ if [ "${part}" != addons ]; then
         KUBECONFIG=${work}/cli.kubeconfig kubectl get nodes > /dev/null || fail "the CLI's kubeconfig does not reach the cluster"
 
         step "scale workers to 2 with kubehenge cluster scale"
+        restart_baseline
         kh scale "${name}" --workers md-0=2 > /dev/null
         workers_ready 2
         machine=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/deployment-name -o jsonpath='{.items[0].metadata.name}')
@@ -3441,6 +3451,7 @@ if [ "${part}" != addons ]; then
         kh machine uncordon "${name}" "${machine}"
         until_true 60 "${worker_node} uncordoned" unschedulable ''
 
+        # Its containers restart with it, and go when it is replaced next.
         step "a worker rebooted"
         described=$(kh get "${name}")
         printf '%s' "${described}" | jq -e --arg m "${machine}" 'any(.machines[]; .name == $m and .reboot)' > /dev/null ||
@@ -3474,10 +3485,14 @@ if [ "${part}" != addons ]; then
         interface_pid=
     else
         step "scale workers to 2"
+        restart_baseline
         workers 2
         step "scale workers back to 1"
         workers 1
     fi
+    # Outside an upgrade, the second worker and its replacement put the most machines on the host.
+    step "nothing restarted while workers came and went"
+    restarts_since "while workers were added and removed"
 
     step "upgrade to ${upgrade}"
     if [ "${distribution}" = talos ]; then
