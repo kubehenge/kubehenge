@@ -83,16 +83,28 @@ var auditNotChanges = map[string]bool{
 	"/events": true, "events.k8s.io/": true,
 }
 
+// auditByPeople says whether a user's changes are people's: their own, or a GitOps tool's or a
+// script's through a service account. Nodes, the control plane and the controllers the platform
+// runs in kube-*, *-system and cert-manager are left out. The interface's own service account is
+// among them, its changes being in its record already.
+func auditByPeople(user string) bool {
+	sa, ok := strings.CutPrefix(user, "system:serviceaccount:")
+	if !ok {
+		return user != "" && !strings.HasPrefix(user, "system:")
+	}
+	ns, _, _ := strings.Cut(sa, ":")
+	return !strings.HasPrefix(ns, "kube-") && !strings.HasSuffix(ns, "-system") && ns != "cert-manager"
+}
+
 // auditEntry is an audit event as an activity entry, or nil for a line that is none, a stage other
-// than the answer's, or a change made by no person: by a service account (the interface's own
-// included, whose changes its record holds), a node or the control plane.
+// than the answer's, or a change not made by people.
 func auditEntry(line []byte) *activityEntry {
 	var ev auditEvent
 	if len(line) == 0 || line[0] != '{' || json.Unmarshal(line, &ev) != nil || ev.Kind != "Event" || ev.Stage != "ResponseComplete" {
 		return nil
 	}
 	did, ok := auditVerbs[ev.Verb]
-	if !ok || ev.ObjectRef == nil || ev.User.Username == "" || strings.HasPrefix(ev.User.Username, "system:") ||
+	if !ok || ev.ObjectRef == nil || !auditByPeople(ev.User.Username) ||
 		auditNotChanges[ev.ObjectRef.APIGroup+"/"] || auditNotChanges[ev.ObjectRef.APIGroup+"/"+ev.ObjectRef.Resource] {
 		return nil
 	}

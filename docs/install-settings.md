@@ -127,7 +127,8 @@ The interface records what people do through it. A change made with kubectl or t
 - **What the API server logs:** everything Talos's audit policy logs, now to its output rather than Talos's file on the nodes.
   - `kubectl logs -n kube-system -l k8s-app=kube-apiserver` reads it.
   - The kubelet keeps the last 50 MiB of it per API server. Talos's file keeps up to 1.1 GB for 30 days, so ship the pod logs elsewhere to keep more.
-  - Activity lists each create, change and deletion a person made for 90 days, with its user, address and object, never its content.
+  - Activity lists each create, change and deletion for 90 days, with its user, address and object, never its content.
+  - A GitOps tool's or script's service account is listed too. The controllers in `kube-*`, `*-system` and `cert-manager` are not.
 - **What it grants:** the interface may list the pods in `kube-system` and read their logs, to read the API server's.
 - **Switching it on or off,** by the setting or `api_audit_log`, restarts the management cluster's API servers one at a time. Changes logged before stay on the Activity page.
 

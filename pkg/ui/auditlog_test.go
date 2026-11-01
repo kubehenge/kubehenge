@@ -17,7 +17,8 @@ func auditLine(id, verb, user, stage, extra string) string {
 
 // Among the API server's own lines, the audit events of people's changes become entries: a
 // Cluster's with the cluster, an impersonated change as the user acted for, and a refused one
-// marked. Controllers', nodes', access reviews, leases and events are left out.
+// marked. A GitOps tool's service account counts. The platform's controllers, nodes, access
+// reviews, leases and events are left out.
 func TestTheAuditLogReadsTheChangesPeopleMade(t *testing.T) {
 	t.Parallel()
 	log := strings.Join([]string{
@@ -31,6 +32,12 @@ func TestTheAuditLogReadsTheChangesPeopleMade(t *testing.T) {
 		auditLine("a5", "create", "bob", "ResponseComplete", `,"objectRef":{"resource":"pods","namespace":"x","name":"y","subresource":"exec"}`),
 		auditLine("a6", "update", "system:serviceaccount:capi-system:capi-manager", "ResponseComplete",
 			`,"objectRef":{"resource":"clusters","namespace":"clusters","name":"web","apiGroup":"cluster.x-k8s.io"}`),
+		auditLine("a11", "update", "system:serviceaccount:kubehenge-system:kubehenge-interface", "ResponseComplete",
+			`,"objectRef":{"resource":"clusters","namespace":"clusters","name":"web","apiGroup":"cluster.x-k8s.io"}`),
+		auditLine("a12", "update", "system:serviceaccount:kube-system:generic-garbage-collector", "ResponseComplete",
+			`,"objectRef":{"resource":"secrets","namespace":"clusters","name":"web"}`),
+		auditLine("a13", "patch", "system:serviceaccount:argocd:argocd-application-controller", "ResponseComplete",
+			`,"objectRef":{"resource":"clusters","namespace":"clusters","name":"db","apiGroup":"cluster.x-k8s.io"}`),
 		auditLine("a7", "patch", "system:node:mgmt-1", "ResponseComplete", `,"objectRef":{"resource":"nodes","name":"mgmt-1"}`),
 		auditLine("a8", "create", "bob", "ResponseComplete",
 			`,"objectRef":{"resource":"selfsubjectaccessreviews","apiGroup":"authorization.k8s.io"}`),
@@ -43,10 +50,10 @@ func TestTheAuditLogReadsTheChangesPeopleMade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 3 {
-		t.Fatalf("entries = %+v, want the three changes that completed", got)
+	if len(got) != 4 {
+		t.Fatalf("entries = %+v, want the four changes that completed", got)
 	}
-	cluster, refused, exec := got[0], got[1], got[2]
+	cluster, refused, exec, gitops := got[0], got[1], got[2], got[3]
 	if cluster.User != "admin" || cluster.What != "changed clusters web" || cluster.Cluster != "clusters/web" ||
 		cluster.Details["address"] != "10.0.0.9" || cluster.Details[auditIDKey] != "a1" || cluster.Details[auditVia] != auditViaAPI {
 		t.Errorf("the Cluster's change = %+v", cluster)
@@ -60,6 +67,9 @@ func TestTheAuditLogReadsTheChangesPeopleMade(t *testing.T) {
 	}
 	if exec.What != "created pods/exec y" || exec.User != "bob" {
 		t.Errorf("the exec = %+v", exec)
+	}
+	if gitops.User != "system:serviceaccount:argocd:argocd-application-controller" || gitops.Cluster != "clusters/db" {
+		t.Errorf("the GitOps change = %+v", gitops)
 	}
 }
 
