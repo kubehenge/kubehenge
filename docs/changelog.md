@@ -137,6 +137,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Fixes
 
+- Deleting a template build checks that its VM ID still holds that template. Proxmox VE gives a freed ID to the next VM created.
 - The management-cluster module no longer asks the Image Factory for the Talos image's size, a request that held up a Proxmox VE API worker. The download no longer waits for the module's other changes.
 - **Cluster variables checked from the first cluster on.** Cluster API admitted the first cluster of each distribution unchecked, so a later change of its CNI or CIS hardening escaped the rules.
   - Kubehenge's admission now checks every cluster. Where no default was stored, it uses the one the cluster runs on.

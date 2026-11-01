@@ -127,7 +127,12 @@ func (f *fakeCluster) serve(w http.ResponseWriter, r *http.Request) {
 		case m[2] == "/config":
 			data = c
 		case m[2] == "/status/current":
-			data = map[string]any{"vmid": vmid, "name": c["name"], "status": "stopped"}
+			status := map[string]any{"vmid": vmid, "name": c["name"], "status": "stopped"}
+			// Proxmox VE names the flag only for a template.
+			if c["template"] == 1 || c["template"] == float64(1) {
+				status["template"] = 1
+			}
+			data = status
 		default:
 			f.t.Errorf("unexpected %s %s", r.Method, path)
 		}
@@ -410,6 +415,33 @@ func TestCreateFreshTakesAnotherVMIDWhenTheOfferedOneIsTaken(t *testing.T) {
 	}
 	if f.configs[100]["name"] != "kubehenge-k3s-build" {
 		t.Errorf("the other build's VM 100 is now %v", f.configs[100])
+	}
+}
+
+// A listed template whose VM ID another VM has taken since is left alone, and so is the template
+// itself once it is the one under the ID.
+func TestDeleteBuildDeletesOnlyTheTemplateListed(t *testing.T) {
+	t.Parallel()
+	_, tags := rke2(t)
+	listed := &proxmox.ClusterResource{ID: "qemu/100", VMID: 100, Node: "pve1", Name: "kubehenge-rke2-build-1", Type: "qemu", Template: 1}
+	for _, tc := range []struct {
+		name    string
+		now     map[string]any
+		deleted bool
+	}{
+		{"another VM took the ID", shownAs(template(100, "kubehenge-rke2-build-1", tags, testPool), "kubehenge-rke2-build-1", 0), false},
+		{"another template took the ID", template(100, "kubehenge-k3s-build-2", tags, testPool), false},
+		{"the template listed", template(100, "kubehenge-rke2-build-1", tags, testPool), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := &fakeCluster{t: t, views: [][]map[string]any{{tc.now}}, configs: configsOf(tc.now)}
+			b := &Builder{Client: f.client(), Storage: "local-lvm", Pool: testPool}
+			err := b.DeleteBuild(t.Context(), listed)
+			if deleted := slices.Contains(f.deletedVMs(), 100); deleted != tc.deleted || (err == nil) != tc.deleted {
+				t.Errorf("DeleteBuild gave %v, deleted %v; want deleted %v", err, deleted, tc.deleted)
+			}
+		})
 	}
 }
 
