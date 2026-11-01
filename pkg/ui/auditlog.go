@@ -76,15 +76,24 @@ var auditVerbs = map[string]string{
 	"create": "created", "update": "changed", "patch": "changed", "delete": "deleted", "deletecollection": "deleted",
 }
 
-// auditEntry is an audit event as an activity entry, or nil for a line that is none, or a stage
-// other than the answer's.
+// auditNotChanges are the API groups and resources whose creates and updates change nothing a
+// person set: access reviews, leases and events.
+var auditNotChanges = map[string]bool{
+	"authentication.k8s.io/": true, "authorization.k8s.io/": true, "coordination.k8s.io/": true,
+	"/events": true, "events.k8s.io/": true,
+}
+
+// auditEntry is an audit event as an activity entry, or nil for a line that is none, a stage other
+// than the answer's, or a change made by no person: by a service account (the interface's own
+// included, whose changes its record holds), a node or the control plane.
 func auditEntry(line []byte) *activityEntry {
 	var ev auditEvent
 	if len(line) == 0 || line[0] != '{' || json.Unmarshal(line, &ev) != nil || ev.Kind != "Event" || ev.Stage != "ResponseComplete" {
 		return nil
 	}
 	did, ok := auditVerbs[ev.Verb]
-	if !ok || ev.ObjectRef == nil || ev.User.Username == "" {
+	if !ok || ev.ObjectRef == nil || ev.User.Username == "" || strings.HasPrefix(ev.User.Username, "system:") ||
+		auditNotChanges[ev.ObjectRef.APIGroup+"/"] || auditNotChanges[ev.ObjectRef.APIGroup+"/"+ev.ObjectRef.Resource] {
 		return nil
 	}
 	o := ev.ObjectRef

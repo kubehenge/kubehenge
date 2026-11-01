@@ -31,32 +31,6 @@ locals {
     leader-elect-renew-deadline = local.patient_leases.leaderElection.renewDeadline
     leader-elect-retry-period   = local.patient_leases.leaderElection.retryPeriod
   }
-
-  # With api_audit_log, the changes people make, and nothing else, go to the API server's output,
-  # where the interface reads them as its pod log. Its own changes are in its own record already,
-  # and controllers' and nodes' are not a person's.
-  audit_policy = {
-    apiVersion = "audit.k8s.io/v1"
-    kind       = "Policy"
-    omitStages = ["RequestReceived"]
-    rules = [
-      { level = "None", users = ["system:serviceaccount:${local.kubehenge_namespace}:kubehenge-interface"] },
-      { level = "None", userGroups = ["system:serviceaccounts", "system:nodes"] },
-      { level = "None", users = ["system:apiserver", "system:kube-controller-manager", "system:kube-scheduler", "system:kube-proxy"] },
-      { level = "None", verbs = ["get", "list", "watch"] },
-      { level = "None", nonResourceURLs = ["*"] },
-      {
-        level = "None"
-        resources = [
-          { group = "", resources = ["events"] },
-          { group = "coordination.k8s.io" },
-          { group = "authentication.k8s.io" },
-          { group = "authorization.k8s.io" },
-        ]
-      },
-      { level = "Metadata" },
-    ]
-  }
 }
 
 resource "talos_image_factory_schematic" "this" {
@@ -133,7 +107,8 @@ data "talos_machine_configuration" "node" {
       yamlencode({ apiVersion = "v1alpha1", kind = "KubeControllerManagerConfig", extraArgs = local.patient_lease_args }),
       yamlencode({ apiVersion = "v1alpha1", kind = "KubeSchedulerConfig", extraArgs = local.patient_lease_args }),
       # Events kept a day rather than an hour: a failed run stays listed that long, and its events
-      # are its log.
+      # are its log. With api_audit_log, Talos's audit policy logs to the API server's output
+      # instead of its file, where the interface reads the changes people made as a pod log.
       yamlencode({
         apiVersion = "v1alpha1"
         kind       = "KubeAPIServerConfig"
@@ -152,9 +127,6 @@ data "talos_machine_configuration" "node" {
         link       = "lan"
       }),
       yamlencode({ apiVersion = "v1alpha1", kind = "ImageVerificationConfig", rules = concat(local.image_signatures, local.provider_image_signatures) }),
-      ], [
-      for policy in var.api_audit_log ? [local.audit_policy] : [] :
-      yamlencode({ apiVersion = "v1alpha1", kind = "KubeAuditPolicyConfig", configuration = policy })
       ], [
       for registry, endpoints in var.registry_mirrors : yamlencode({
         apiVersion = "v1alpha1"

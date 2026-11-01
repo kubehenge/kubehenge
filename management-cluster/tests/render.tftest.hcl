@@ -786,8 +786,8 @@ run "providers" {
   }
 
   assert {
-    condition     = !strcontains(data.talos_machine_configuration.node[0].config_patches[1], "KubeAuditPolicyConfig")
-    error_message = "without api_audit_log, the API server keeps Talos's own audit policy and log file"
+    condition     = !strcontains(data.talos_machine_configuration.node[0].config_patches[1], "audit-log-path")
+    error_message = "without api_audit_log, the API server keeps Talos's audit log file"
   }
 
   assert {
@@ -976,16 +976,8 @@ run "api_audit_log" {
   }
 
   assert {
-    condition = anytrue([
-      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) :
-      try(
-        yamldecode(d).kind == "KubeAuditPolicyConfig" &&
-        yamldecode(d).configuration.rules[0].users == ["system:serviceaccount:kubehenge-system:kubehenge-interface"] &&
-        contains([for r in yamldecode(d).configuration.rules : try(r.verbs, [])], ["get", "list", "watch"]) &&
-        yamldecode(d).configuration.rules[length(yamldecode(d).configuration.rules) - 1] == { level = "Metadata" },
-      false)
-    ])
-    error_message = "the audit policy logs the changes people make, without reads, controllers, nodes or the interface's own"
+    condition     = !strcontains(data.talos_machine_configuration.node[0].config_patches[1], "KubeAuditPolicyConfig")
+    error_message = "the API server keeps Talos's own audit policy, so nothing it recorded is lost"
   }
 }
 

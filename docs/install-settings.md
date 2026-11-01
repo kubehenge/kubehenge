@@ -124,9 +124,9 @@ A node that never joins its cluster says why in its boot log ([troubleshooting.m
 
 The interface records what people do through it. A change made with kubectl or through the management cluster's API passes it by. With **kubectl changes** on, the management cluster's API server logs each such change, and Activity lists it with its user. The setting is off by default.
 
-- **What the API server logs:** each create, change and deletion a person makes, with its user, address and object, never its content.
-  - Reads are left out, and so are changes by controllers, nodes and the interface itself.
-  - The log goes to the API server's output. Talos's audit log file on the nodes stops.
+- **What the API server logs:** everything Talos's audit policy logs, now to its output rather than Talos's file on the nodes.
+  - `kubectl logs -n kube-system -l k8s-app=kube-apiserver` reads it. The kubelet keeps it only as long as the API server's other container logs.
+  - Activity lists each create, change and deletion a person made, with its user, address and object, never its content.
 - **What it grants:** the interface may list the pods in `kube-system` and read their logs, to read the API server's.
 - **Switching it on or off,** by the setting or `api_audit_log`, restarts the management cluster's API servers one at a time. Changes logged before stay on the Activity page.
 

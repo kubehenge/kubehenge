@@ -15,8 +15,9 @@ func auditLine(id, verb, user, stage, extra string) string {
 		`"stageTimestamp":"2026-10-13T08:30:00.123456Z"` + extra + `}`
 }
 
-// Among the API server's own lines, the audit events of changes become entries: a Cluster's with
-// the cluster, an impersonated change as the user acted for, and a refused one marked.
+// Among the API server's own lines, the audit events of people's changes become entries: a
+// Cluster's with the cluster, an impersonated change as the user acted for, and a refused one
+// marked. Controllers', nodes', access reviews, leases and events are left out.
 func TestTheAuditLogReadsTheChangesPeopleMade(t *testing.T) {
 	t.Parallel()
 	log := strings.Join([]string{
@@ -28,6 +29,14 @@ func TestTheAuditLogReadsTheChangesPeopleMade(t *testing.T) {
 		auditLine("a3", "create", "admin", "ResponseStarted", `,"objectRef":{"resource":"pods","namespace":"x","name":"y"}`),
 		auditLine("a4", "get", "admin", "ResponseComplete", `,"objectRef":{"resource":"pods","namespace":"x","name":"y"}`),
 		auditLine("a5", "create", "bob", "ResponseComplete", `,"objectRef":{"resource":"pods","namespace":"x","name":"y","subresource":"exec"}`),
+		auditLine("a6", "update", "system:serviceaccount:capi-system:capi-manager", "ResponseComplete",
+			`,"objectRef":{"resource":"clusters","namespace":"clusters","name":"web","apiGroup":"cluster.x-k8s.io"}`),
+		auditLine("a7", "patch", "system:node:mgmt-1", "ResponseComplete", `,"objectRef":{"resource":"nodes","name":"mgmt-1"}`),
+		auditLine("a8", "create", "bob", "ResponseComplete",
+			`,"objectRef":{"resource":"selfsubjectaccessreviews","apiGroup":"authorization.k8s.io"}`),
+		auditLine("a9", "update", "bob", "ResponseComplete",
+			`,"objectRef":{"resource":"leases","namespace":"x","name":"y","apiGroup":"coordination.k8s.io"}`),
+		auditLine("a10", "create", "bob", "ResponseComplete", `,"objectRef":{"resource":"events","namespace":"x","name":"y"}`),
 		`{"not":"an event"}`,
 	}, "\n")
 	got, err := auditEntries(strings.NewReader(log))

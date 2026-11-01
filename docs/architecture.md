@@ -863,10 +863,11 @@ A Talos node's log is read through its Talos API with the cluster's talosconfig.
 
 The interface logs each sign-in and change with its user, as it always has. Each such line also goes into `activity.jsonl` in the appliance's folder, which the Activity pages read. It keeps 90 days and stays under 8 MiB by dropping its older half.
 
-With `api_audit_log`, the management cluster's API server writes an audit policy's events to its output instead of Talos's file on the node.
+With `api_audit_log`, the management cluster's API server writes Talos's audit policy's events to its output instead of Talos's file on the node.
 
-- The policy logs creates, changes and deletions at the Metadata level. It leaves out reads, controllers, nodes and the interface's own account.
-- The interface reads the API server pods' logs every minute and adds each event once, by its audit ID. For that it may list pods and read their logs in `kube-system`, and only then.
+- The interface reads the API server pods' logs every minute. It adds each create, change and deletion by a person once, by its audit ID.
+- Service accounts, nodes and the control plane's own users are left out. So is the interface's account, whose changes its own record holds.
+- For that it may list pods and read their logs in `kube-system`, and only then.
 
 ### Headlamp in the appliance
 

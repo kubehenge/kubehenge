@@ -1383,8 +1383,7 @@ function AuditLogChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element 
         List with their user
       </label>
       <Info about="kubectl changes">
-        The management cluster&apos;s API server logs each change a person makes to its output. Its log file on the
-        nodes stops.
+        The management cluster&apos;s API server writes its audit log to its output rather than to a file on the nodes.
       </Info>
       <p className="hint" id={hint}>
         The interface reads pod logs in kube-system.
