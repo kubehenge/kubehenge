@@ -62,7 +62,8 @@ func GuestExec(ctx context.Context, c *proxmox.Client, vm *proxmox.VirtualMachin
 		if status.Exited != 0 {
 			return &status, nil
 		}
-		if time.Now().After(deadline) {
+		// Reached is enough: on a coarse clock a read can end on the deadline's own tick.
+		if !time.Now().Before(deadline) {
 			return nil, fmt.Errorf("still running after %s", timeout)
 		}
 		select {

@@ -24,7 +24,13 @@ REGISTRY_IMAGE=registry:3.1.2@sha256:d4032d4cc323c1731c707931ecada07a53076eac38e
 
 mkdir -p "${work}/vz"
 work=$(readlink -f "${work}")
-[ "${KUBEHENGE_E2E_PVE_BUILT:-}" = 1 ] || docker build -q -t kubehenge-e2e-pve "${here}/../pve" > /dev/null
+if [ "${KUBEHENGE_E2E_PVE_BUILT:-}" != 1 ]; then
+    # A failed apt-get says why only in the build's own output, which -q leaves out.
+    if ! docker build --progress=plain -t kubehenge-e2e-pve "${here}/../pve" > "${work}/pve-build.log" 2>&1; then
+        tail -n 80 "${work}/pve-build.log" >&2
+        exit 1
+    fi
+fi
 docker network create --subnet 172.21.99.0/24 --gateway 172.21.99.1 kubehenge-e2e > /dev/null
 # Privileged for /dev/kvm, /dev/net/tun, /dev/fuse (Proxmox VE's configuration file system) and the
 # bridge and NAT it sets up in its own network namespace. On a kernel with AppArmor, LXC loads a
