@@ -202,6 +202,7 @@ CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e
 - The nightly run (`test/e2e/ci/nightly.sh`) runs every test. It adds the management cluster's upgrade, Rancher, a control plane of three servers and a two-node Proxmox VE cluster.
 - It runs both halves of each workload distribution's test once more on another CNI of its class and another node OS. That run goes without CIS hardening every other night, and the combination moves on so every one comes in turn.
 - It builds Proxmox VE's image afresh and keeps it, with Go's build cache, for the day's runs.
+- A change to the image's files on main builds and keeps it straight away (`e2e-image.yml`).
 - A dispatch of the workflow names the tests to run, or runs that night's set.
 
 A machine whose KVM lacks pause-loop exiting hands its test to a fresh one, up to three times. There, guests that outnumber its CPUs starve each other whatever their sizes. The checks that nothing restarts would only measure the machine. A test still on such a machine at the fourth try runs there with restarts reported, not failed (`KUBEHENGE_E2E_RESTARTS=report`).
