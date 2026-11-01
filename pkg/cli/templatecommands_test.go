@@ -74,7 +74,7 @@ func (p *templatePool) serve(w http.ResponseWriter, r *http.Request) {
 		case m[2] == "/config":
 			data = map[string]any{"name": c["name"], "tags": c["tags"], "template": 1}
 		default:
-			data = map[string]any{"vmid": vmid, "name": c["name"], "status": "stopped"}
+			data = map[string]any{"vmid": vmid, "name": c["name"], "status": "stopped", "template": 1}
 		}
 	default:
 		p.t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
