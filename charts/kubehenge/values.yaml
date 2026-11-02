@@ -236,7 +236,7 @@ autoscaler:
 # The proxy on k3s control planes through which Cluster API reaches each node's etcd; the k3s
 # provider would otherwise pull it by tag alone.
 # renovate: datasource=docker depName=docker.io/alpine/socat
-etcdProxy: docker.io/alpine/socat:1.8.1.3@sha256:603174b77eebaba25ba8f8ebb15e1234d6600409554e95d6fb203fd106150287
+etcdProxy: docker.io/alpine/socat:1.8.1.3@sha256:466c8a0383e16463fabdb7df01008292fb78d07da60224a46cb5d3142ce122ed
 
 # Installed into clusters: the Proxmox VE cloud controller manager and CSI plugin into every one,
 # the CNI chosen for a cluster whose distribution has none of its own (kubeadm), and the add-ons a
@@ -256,7 +256,7 @@ addons:
   rancher:
     repository: https://releases.rancher.com/server-charts/stable
     chart: rancher
-    version: 2.15.2@sha256:855cb9be954f65a31b9a8c77f7aebce125c2d7797425257d21d35e3380816ac8
+    version: 2.15.3@sha256:343888c66421a9f5666b562cdfeca751d63da994edbe7b1b36752f8ffcf5ecd4
     # Kubernetes minor versions this Rancher release runs on (its chart's kubeVersion and support
     # matrix); the cluster that installs it is held within them.
     kubernetes: 34-36
@@ -269,7 +269,7 @@ addons:
     values:
       image:
         # renovate: datasource=docker depName=docker.io/rancher/rancher
-        tag: v2.15.2@sha256:0c3d8e5702555b2bfd2ec3fe7a6e5f95484a28fcb9787c498db3e5b0f62652ea
+        tag: v2.15.3@sha256:3f3a50c6e49c1cf5b4673bef236e0f260f36055de4d073438e38c441dc97aa9b
       # Rancher reads a setting from CATTLE_<NAME> before its own object, and starts the agent and
       # shell images exactly as named here. Imported-cluster version management would upgrade RKE2
       # and k3s beside Cluster API, with images it names by tag alone.
@@ -278,7 +278,7 @@ addons:
           value: "false"
         - name: CATTLE_AGENT_IMAGE
           # renovate: datasource=docker depName=docker.io/rancher/rancher-agent
-          value: rancher/rancher-agent:v2.15.2@sha256:fb006776b7ee42818ed1e2575bc2015e33ec64d6799545ba72e4297e43ce22a3
+          value: rancher/rancher-agent:v2.15.3@sha256:4cf966019a4400a49b113025e490f66c271f93983948d67050a7ef34ca19fc3d
         - name: CATTLE_SHELL_IMAGE
           value: rancher/shell:v0.8.2@sha256:1eeed72d4eda486de13403c4ae6e9d29a0842edc35d0f4a8fb7b0dab79d04be9
       # The webhook's and Fleet's charts, which Rancher installs itself, read these from its
@@ -308,7 +308,7 @@ addons:
   monitoring:
     repository: https://prometheus-community.github.io/helm-charts
     chart: kube-prometheus-stack
-    version: 92.14.1@sha256:99e2d893fdbd4e397fa4fafd6298979f4622c2695a023dfb71615dd93d34a517
+    version: 92.17.0@sha256:f267989be8318f12b37273a075504d4986a2a744383daf7cca0732a8d35d400d
     # In front of the metrics etcd, kube-proxy and node-exporter serve without authentication.
     # renovate: datasource=docker depName=ghcr.io/kube-rbac-proxy/kube-rbac-proxy
     kubeRBACProxy: ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.23.1@sha256:f723251bdd90a806b5331b6e9f9287cc2832d3dd9f9479378cdbbddb9856724f
@@ -354,9 +354,9 @@ addons:
         alertmanagerSpec:
           image:
             # renovate: datasource=docker depName=quay.io/prometheus/alertmanager
-            tag: v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a
+            tag: v0.34.2@sha256:39d8bb3966c694a124428a3a88fbcffd40bd069129ecd47c059f8a3f17c55f3b
           # renovate: datasource=docker depName=quay.io/prometheus/alertmanager depType=version
-          version: v0.34.1
+          version: v0.34.2
       thanosRuler:
         thanosRulerSpec:
           image:
@@ -389,7 +389,7 @@ addons:
   loki:
     repository: https://grafana-community.github.io/helm-charts
     chart: loki
-    version: 20.0.2@sha256:c26acef5f5127f200dedd97be805a35cf11c481e8ec1b2fea79e85d68ac4bbba
+    version: 20.2.1@sha256:97e34e7a30e2fdd13d2da1dcb755d9a203a896f307da4db971e4329d27fdb6a6
     values:
       loki:
         image:
@@ -398,17 +398,17 @@ addons:
   alloy:
     repository: https://grafana.github.io/helm-charts
     chart: alloy
-    version: 1.14.3@sha256:6f14c2c05f3c1b038c61df8ea4a27c7bcb9f1681ece276394a321c3fe4bb08ba
+    version: 1.15.0@sha256:2ecc96c05004cc01a45ab23cb390194ad5259ec9d02b42bf148d4468d013aaa3
     # The whole reference: the chart puts its tag into a label, where a digest cannot go.
     # renovate: datasource=docker depName=docker.io/grafana/alloy
-    image: docker.io/grafana/alloy:v1.21.2@sha256:89a5a320168387336b9ac3c850609c3ba7757eadd4ae5f1d819deb35e9854b18
+    image: docker.io/grafana/alloy:v1.21.3@sha256:8ab871206bd2d8f89277f53abffee5f452a293980788d52f85fa183a87a505a4
   # Velero, for clusters that switch backups on, with its plugin for S3. The chart's own image
   # trails Velero's releases, so the controller names Velero's image itself, which also restores
   # the volumes of the pods it brings back.
   velero:
     repository: https://vmware-tanzu.github.io/helm-charts
     chart: velero
-    version: 12.2.1@sha256:fe4acd70a0123c369e7af7064457b4ffdddebee413e2bb01976a4fe07c471773
+    version: 12.2.2@sha256:28142d37e82d86bf52963848613cafa36092f421f00675f12d458369fc5fafd3
     # renovate: datasource=docker depName=docker.io/velero/velero
     image: docker.io/velero/velero:v1.18.4@sha256:c89fb5b6d1fd6afd368e0f483e6f5555fd62851a1eada8ac5c72482e674ca17b
     # renovate: datasource=docker depName=docker.io/velero/velero-plugin-for-aws
@@ -691,11 +691,11 @@ addons:
   traefik:
     repository: https://traefik.github.io/charts
     chart: traefik
-    version: 42.1.3@sha256:10ec2b032fd7ec9fa04a8816872e20ba0fafc47231f6394b5cb5d522f3b0ef50
+    version: 42.2.0@sha256:03ec772e0caab39f3d265db14014f56832ab420da98d6210f83d3ef908c077e5
     values:
       image:
         # renovate: datasource=docker depName=docker.io/library/traefik
-        tag: v3.7.16@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65
+        tag: v3.7.17@sha256:30ff62491aacdb862ceb8c9edcf2627da638d7deafdd4b6dab32fe34f8aa3e90
   # The load balancers a cluster chooses from for its Services of type LoadBalancer: MetalLB, or
   # kube-vip with its cloud provider, which hands out the addresses. kube-vip runs the image above.
   metallb:
@@ -746,7 +746,7 @@ addons:
           # refuses pulls from busy shared egress.
           repository: docker.io/library/redis
           # renovate: datasource=docker depName=docker.io/library/redis
-          tag: 8.10.3-alpine@sha256:896f241f438ab6a210cfb24f573b84bea721a4cbe67f1b4fd07eb638b3b02a7b
+          tag: 8.10.3-alpine@sha256:21090af93f8324db2f0f0f4f38a7c60369d47d917e000c3423d89d2ae2883537
   fluxOperator:
     repository: oci://ghcr.io/controlplaneio-fluxcd/charts
     chart: flux-operator
