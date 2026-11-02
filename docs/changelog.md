@@ -147,6 +147,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A template refresh releases its Lease when it ends, also when its last renewal was still under way. Before, the next refresh could wait for the Lease to run out.
 - After an etcd restore, a Talos cluster's nodes reach the API server and every other Service as before.
   - The restore now moves etcd's revision on, as a kubeadm, RKE2 or k3s restore does. The by-hand steps do the same with `etcdutl`.
+- An RKE2 or k3s etcd restore moves the revision on by a billion and compacts the older ones, as on kubeadm. Before, clients watching from before the restore could miss changes.
+  - The by-hand steps do the same with `etcdutl` and `openssl`.
 - Talos clusters with Cilium send their services' and kernel's logs to Loki. Talos sends them to the node collector on a link-local address, not loopback.
 - When the interface stops, as on an appliance upgrade, it lets the requests under way finish and stops its Headlamp and token upkeep first.
 - The interface makes one session store, whether its handlers or its session upkeep start first. Before, the upkeep could prune a store the interface no longer used.

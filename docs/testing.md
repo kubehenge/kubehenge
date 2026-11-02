@@ -175,6 +175,7 @@ The CPU figures (`kubehenge.dev/addon-cpu` and `kubehenge.dev/node-cpu`) are the
    - On Talos, whose API does not tell it, it is recorded without a revision.
 4. Restore etcd from it through the guest agent, on Talos through the Talos API.
    - The cluster is available again with the ConfigMap made before the snapshot back and one made after it gone.
+   - An object made after the restore has a resource version past 1,000,000,000, as etcd's revision moved on.
    - Beside it the store holds only the snapshot the restore took first, encrypted and holding the later ConfigMap.
    - On Talos the control-plane machines are the same afterwards, each a voting member of the restored etcd again.
 5. On RKE2 and k3s, switch the distribution's own upload on. The Secret `kubehenge-etcd-s3` in `kube-system` verifies the store's certificate, and the control planes are replaced. A snapshot the server takes itself is found in the cluster's `<distribution>-etcd` folder. Switching it off with the snapshots removes the Secret and replaces the control planes again.

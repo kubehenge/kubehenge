@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -180,8 +182,9 @@ type EtcdRestorer struct {
 	Guests Guests
 	// Talos reaches the nodes of Talos clusters.
 	Talos TalosDialer
-	// ScratchDir holds the snapshot a Talos restore uploads, for as long as the restore runs.
-	// It is the system's temporary directory when empty.
+	// ScratchDir holds a snapshot whose revision a restore moves on: the one a Talos restore uploads,
+	// for as long as the restore runs, and an RKE2 or k3s restore's while it is encrypted for the
+	// node. It is the system's temporary directory when empty.
 	ScratchDir string
 	// APIs asks the restored cluster's API server whether it answers on the cluster's address.
 	APIs ClusterAPIs
@@ -545,7 +548,8 @@ func (run *restoreRun) fetch(ctx context.Context) error {
 		return fmt.Errorf("naming the transcoded snapshot: %w", err)
 	}
 	key := run.target.Folder + "/" + restoreObjectFolder + "/" + hex.EncodeToString(id) + ".enc"
-	if err = run.transcode(ctx, key, password); err != nil {
+	sum, err := run.transcode(ctx, key, password)
+	if err != nil {
 		return err
 	}
 	defer func() { _ = run.target.Store.Remove(context.WithoutCancel(ctx), key) }()
@@ -553,24 +557,64 @@ func (run *restoreRun) fetch(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("signing a link to the transcoded snapshot: %w", err)
 	}
-	return run.on(ctx, run.nodes[0], "fetching the snapshot", fetchScriptFor(link, password, run.snapshot.SHA256, run.target.CACertificate))
+	return run.on(ctx, run.nodes[0], "fetching the snapshot", fetchScriptFor(link, password, sum, run.target.CACertificate))
 }
 
-// transcode stores the snapshot under key encrypted with password, as it is read.
-func (run *restoreRun) transcode(ctx context.Context, key, password string) error {
-	plain, err := run.target.OpenEtcdSnapshot(ctx, run.snapshot.Name)
-	if err != nil {
-		return err
+// transcode stores the snapshot under key encrypted with password, and returns the SHA-256 the
+// node checks it by. Where the node's restore keeps the snapshot's revision, what is stored has its
+// revision moved on (bumpedForNode). Otherwise the snapshot is encrypted as it is read.
+func (run *restoreRun) transcode(ctx context.Context, key, password string) (string, error) {
+	var plain io.ReadCloser
+	sum := run.snapshot.SHA256
+	if run.scripts.Bumps {
+		r, err := run.target.OpenEtcdSnapshot(ctx, run.snapshot.Name)
+		if err != nil {
+			return "", err
+		}
+		plain = r
+	} else {
+		path, bumped, err := run.bumpedForNode(ctx)
+		if err != nil {
+			return "", err
+		}
+		defer func() { _ = os.Remove(path) }()
+		f, err := os.Open(path) //nolint:gosec // the controller's own file of the snapshot
+		if err != nil {
+			return "", fmt.Errorf("reading the snapshot: %w", err)
+		}
+		plain, sum = f, bumped
 	}
 	defer func() { _ = plain.Close() }()
 	body, err := opensslSeal(plain, password)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if _, err := run.target.Store.Put(ctx, key, body, nil); err != nil {
-		return fmt.Errorf("storing the transcoded snapshot: %w", err)
+		return "", fmt.Errorf("storing the transcoded snapshot: %w", err)
 	}
-	return nil
+	return sum, nil
+}
+
+// bumpedForNode keeps the snapshot, checked against its checksum, in a file of ScratchDir with its
+// revision moved on and etcd's checksum at its end, and returns the file and its SHA-256.
+func (run *restoreRun) bumpedForNode(ctx context.Context) (string, string, error) {
+	var path string
+	err := run.withSnapshot(ctx, func(r io.Reader) error {
+		var err error
+		path, err = bumpedEtcdSnapshot(run.r.ScratchDir, r)
+		return err
+	})
+	var sum string
+	if err == nil {
+		sum, err = appendEtcdChecksum(path)
+	}
+	if err != nil {
+		if path != "" {
+			_ = os.Remove(path)
+		}
+		return "", "", err
+	}
+	return path, sum, nil
 }
 
 // stop stops etcd and the API server on every control-plane node.

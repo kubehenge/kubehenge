@@ -133,7 +133,9 @@ echo "k3s is stopped"
 `
 
 	// RKE2 and k3s refuse to reset a server that names another to join, so the server line leaves
-	// the configuration for the reset alone.
+	// the configuration for the reset alone. Their restore keeps the snapshot's revision, so the
+	// snapshot it reads has its revision moved on already (bumpedEtcdSnapshot), and ends with the
+	// checksum the restore checks.
 	rancherRestore = `config=/etc/rancher/%[1]s/config.yaml
 if [ ! -f "$work/config.yaml" ]; then
   cp -p "$config" "$work/config.yaml"
@@ -211,6 +213,9 @@ type RestoreScripts struct {
 	Restored string
 	// Clean removes what a restore that went no further than fetching left on the node.
 	Clean string
+	// Bumps tells that Restore moves etcd's revision on itself. Where it does not, as with RKE2's
+	// and k3s's restore, the node gets the snapshot with its revision moved on already.
+	Bumps bool
 }
 
 // restoreScriptsFor are a distribution's restore scripts.
@@ -242,6 +247,7 @@ func restoreScriptsFor(d templates.Distribution) (RestoreScripts, error) {
 		StartNoWait: script(start + startNoWait),
 		Restored:    script(markerCheck),
 		Clean:       script(cleanScript),
+		Bumps:       d == templates.Kubeadm,
 	}, nil
 }
 
@@ -374,7 +380,8 @@ func controlPlaneNodes(ctx context.Context, c client.Reader, cluster *clusterv1.
 }
 
 // PlanEtcdRestore writes out the steps that restore a cluster's etcd from a snapshot by hand, the
-// snapshot downloaded onto its first control-plane node.
+// snapshot downloaded onto its first control-plane node. Where the node's restore keeps the
+// snapshot's revision, etcdutl moves it on first, as the controller does.
 func PlanEtcdRestore(ctx context.Context, c client.Reader, cluster *clusterv1.Cluster, snapshot *EtcdSnapshot) (*EtcdRestorePlan, error) {
 	if err := Restorable(cluster, snapshot); err != nil {
 		return nil, err
@@ -403,10 +410,26 @@ func PlanEtcdRestore(ctx context.Context, c client.Reader, cluster *clusterv1.Cl
 	plan.Steps = append(plan.Steps,
 		pauseStep(patch),
 		RestoreStep{"Stop etcd and the API server", strings.Join(names, ", "), asRoot(scripts.Stop)},
-		RestoreStep{
+	)
+	if scripts.Bumps {
+		plan.Steps = append(plan.Steps, RestoreStep{
 			"Copy the snapshot to " + RestoreSnapshotPath + " as root and check it", first,
 			fmt.Sprintf("echo '%s  %s' | sudo sha256sum -c -", snapshot.SHA256, RestoreSnapshotPath),
-		},
+		})
+	} else {
+		// The restore checks the checksum the bumped snapshot ends with, so the copy needs no other.
+		const here = "a machine with the snapshot and etcdutl"
+		plan.Steps = append(plan.Steps,
+			RestoreStep{"Save the snapshot as snapshot.db and check it", here, fmt.Sprintf("echo '%s  snapshot.db' | sha256sum -c -", snapshot.SHA256)},
+			RestoreStep{
+				"Move the snapshot's revision on, so that the cluster's clients list again", here,
+				fmt.Sprintf("etcdutl snapshot restore snapshot.db --data-dir restored --bump-revision %d --mark-compacted && "+
+					"openssl dgst -sha256 -binary restored/member/snap/db | cat restored/member/snap/db - > snapshot.db && rm -r restored", etcdRevisionBump),
+			},
+			RestoreStep{"Copy snapshot.db to the node and put it in place as root", first, "sudo install -D -m 600 snapshot.db " + RestoreSnapshotPath},
+		)
+	}
+	plan.Steps = append(plan.Steps,
 		RestoreStep{"Restore etcd from the snapshot", first, asRoot(scripts.Restore)},
 		RestoreStep{startControlPlane, first, asRoot(scripts.Start)},
 	)

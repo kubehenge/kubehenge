@@ -1769,6 +1769,11 @@ until_true 300 "the ConfigMap made before the snapshot back" wl -n default get c
 # shellcheck disable=SC2310 # absent's answer is what is checked.
 absent wl -n default get configmap e2e-after-snapshot || fail "a ConfigMap made after the snapshot outlived the restore"
 wl -n default delete configmap e2e-before-snapshot
+# The revision moves on past any a client of etcd from before saw. Every watch from before then ends
+# and its client lists again.
+restored_revision=$(wl -n default create configmap e2e-after-restore -o jsonpath='{.metadata.resourceVersion}')
+wl -n default delete configmap e2e-after-restore
+[ "${restored_revision}" -gt 1000000000 ] || fail "etcd's revision did not move on with the restore: ${restored_revision}"
 # The restore snapshots etcd as it was first, so that a restore from the wrong snapshot can be undone.
 before_name=$(printf '%s' "${restore}" | jq -r '.before // ""')
 [ -n "${before_name}" ] || fail "the restore took no snapshot of etcd as it was first: ${restore}"

@@ -904,10 +904,9 @@ A restore:
 2. copies the snapshot to the first control-plane node and checks its SHA-256, which must be 64 lower-case hexadecimal digits.
 3. stops etcd and the API server on every control-plane node, on kubeadm with the controller manager and the scheduler.
 4. restores etcd on the first node as a cluster of one member.
-   - On kubeadm, with `etcdutl snapshot restore --bump-revision 1000000000 --mark-compacted`, run from the etcd image the node already runs.
-     - The revision bump ends every client's watch, and each reads the restored objects afresh.
-     - The database from before is kept beside it.
-   - On RKE2, with `rke2 server --cluster-reset --cluster-reset-restore-path=<file> --etcd-s3=false`.
+   - The revision moves on by 1,000,000,000, with the revisions before marked compacted. Every client's watch ends, and each client reads the restored objects afresh.
+   - On kubeadm, with `etcdutl snapshot restore --bump-revision 1000000000 --mark-compacted`, run from the etcd image the node already runs. The database from before is kept beside it.
+   - On RKE2, with `rke2 server --cluster-reset --cluster-reset-restore-path=<file> --etcd-s3=false`. It keeps the snapshot's revision, which the controller moves on in the copy first.
    - On k3s, with `k3s server` the same.
 5. starts its control plane and waits for its API server.
 6. deletes the other control-plane machines, whose etcd still holds the cluster from before, and gives the cluster back to Cluster API.
@@ -919,7 +918,7 @@ Before Kubehenge stops anything, it takes a snapshot of etcd as it is into the s
 
 The controller decrypts the snapshot and encrypts it again for the copy, with a password of its own for that restore. The snapshot reaches the node from a link into the target that expires within the hour. A control-plane VM that is off is replaced with the others. A restore that fails before etcd was restored starts every control plane again as it was. One that fails after finishes the restore.
 
-Otherwise **Restore…** lists the steps for the chosen snapshot, with the commands for the cluster's distribution. Those for the nodes run as root over SSH or the VM's console, after downloading the snapshot to the first node as `/var/lib/kubehenge-restore/snapshot.db`. The `kubectl` ones run with the management cluster's kubeconfig.
+Otherwise **Restore…** lists the steps for the chosen snapshot, with the commands for the cluster's distribution. Those for the nodes run as root over SSH or the VM's console, after downloading the snapshot to the first node as `/var/lib/kubehenge-restore/snapshot.db`. On RKE2 and k3s, `etcdutl` and `openssl` first move the snapshot's revision on, on any machine that has both. The `kubectl` ones run with the management cluster's kubeconfig.
 
 ## Delete
 
