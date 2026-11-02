@@ -26,7 +26,7 @@ locals {
     # renovate: datasource=github-releases depName=siderolabs/talos
     talos = "v1.14.5"
     # renovate: datasource=github-releases depName=kubernetes/kubernetes
-    kubernetes = "v1.37.1"
+    kubernetes = "v1.37.2"
     # renovate: datasource=github-releases depName=kubernetes-sigs/cluster-api
     cluster_api = "v1.14.3"
     # renovate: datasource=github-releases depName=ionos-cloud/cluster-api-provider-proxmox

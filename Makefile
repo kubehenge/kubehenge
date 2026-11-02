@@ -26,8 +26,8 @@ build: web gateway-api
 # and refused unless it matches its SHA-256. Every Go step waits for it, as for the frontend; .keep
 # is what lets Go compile pkg/provisioner before it is there.
 # renovate: datasource=github-release-attachments depName=kubernetes-sigs/gateway-api
-GATEWAY_API_TAG := v1.6.3
-GATEWAY_API_SHA256 := 356c2b8e286a964dc20995435659ad1095386329974793af10bbfe3eff977fe5
+GATEWAY_API_TAG := v1.7.0
+GATEWAY_API_SHA256 := 4e2602c4cbe1afbc394d86f4ac6522e1a5263b01133bba1e40a6d1a549e753a1
 GATEWAY_API := pkg/provisioner/gatewayapi/standard-install-$(GATEWAY_API_TAG).yaml
 $(GATEWAY_API):
 	curl -fsSL --proto '=https' --retry 5 --retry-all-errors -o $@.part \
