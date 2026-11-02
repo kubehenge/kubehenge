@@ -83,7 +83,7 @@ tree go "https://go.dev/dl/go${GO}.linux-amd64.tar.gz" "${GO_SHA256}" bin go gof
 
 # renovate: datasource=node-version depName=node
 NODE=26.13.0
-NODE_SHA256=0fd1eb7770598f52a21995edf6ed35fc690400fa437c2386af329519e9143132
+NODE_SHA256=5848553868b402d3fabb5b09270649977780a390f832155721025a08b5104455
 tree node "https://nodejs.org/dist/v${NODE}/node-v${NODE}-linux-x64.tar.gz" "${NODE_SHA256}" bin node npm npx
 
 # renovate: datasource=github-release-attachments depName=astral-sh/uv
@@ -121,7 +121,7 @@ release ko ko-build/ko "${KO}" "ko_${KO#v}_Linux_x86_64.tar.gz" "${KO_SHA256}" k
 
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
 KUBECTL=v1.37.2
-KUBECTL_SHA256=65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8
+KUBECTL_SHA256=c04487523e7aa7d1493f7808174c899db93d7a9cf57531420cd76b9bd415f8f4
 tool kubectl "https://dl.k8s.io/release/${KUBECTL}/bin/linux/amd64/kubectl" "${KUBECTL_SHA256}"
 
 # The end-to-end tests reach Talos nodes through their API with it.
