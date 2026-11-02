@@ -199,7 +199,7 @@ func (a *Appliance) ConfigureEtcdBackups(ctx context.Context, s EtcdBackupSettin
 	if err != nil {
 		return err
 	}
-	identity, err := etcdIdentity(ctx, store, target.Prefix, passphrase)
+	identity, err := etcdIdentity(ctx, store, target.Prefix, passphrase, a.KeyWorkFactor)
 	if err != nil {
 		return err
 	}
@@ -300,8 +300,9 @@ func (a *Appliance) openEtcdStore(t *BackupTarget, keys *etcdBackupKeys) (provis
 }
 
 // etcdIdentity opens the identity the target keeps for the management cluster's snapshots with the
-// passphrase, or makes one and stores it there, encrypted with the passphrase.
-func etcdIdentity(ctx context.Context, store provisioner.ObjectStore, prefix, passphrase string) (*age.X25519Identity, error) {
+// passphrase, or makes one and stores it there, encrypted with the passphrase at scrypt's work
+// factor, age's own when 0.
+func etcdIdentity(ctx context.Context, store provisioner.ObjectStore, prefix, passphrase string, workFactor int) (*age.X25519Identity, error) {
 	key := provisioner.ManagementEtcdIdentity(prefix)
 	r, err := store.Get(ctx, key)
 	switch {
@@ -318,6 +319,9 @@ func etcdIdentity(ctx context.Context, store provisioner.ObjectStore, prefix, pa
 	to, err := age.NewScryptRecipient(passphrase)
 	if err != nil {
 		return nil, fmt.Errorf("encrypting the snapshots' key: %w", err)
+	}
+	if workFactor > 0 {
+		to.SetWorkFactor(workFactor)
 	}
 	var sealed bytes.Buffer
 	w, err := age.Encrypt(&sealed, to)

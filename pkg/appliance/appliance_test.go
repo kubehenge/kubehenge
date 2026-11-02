@@ -224,6 +224,8 @@ func newAppliance(t *testing.T) (*Appliance, chan []byte) {
 		ProxmoxURL: "https://pve.example:8006",
 		ProxmoxCA:  "-----BEGIN CERTIFICATE-----\n",
 		Log:        slog.New(slog.DiscardHandler),
+		// age's own factor takes seconds per key under the race detector.
+		KeyWorkFactor: 10,
 		InterfaceKubeconfig: func(_ context.Context, admin []byte, endpoint, _ string) ([]byte, error) {
 			return []byte("interface for " + string(admin) + " at " + endpoint), nil
 		},

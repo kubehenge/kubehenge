@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -176,6 +177,15 @@ func backupAppliance(t *testing.T, store *memoryStore) (*Appliance, *fakeManagem
 	return a, talos
 }
 
+// sealedAt checks that age sealed the key at the scrypt work factor, which its header names last on
+// the scrypt stanza's line.
+func sealedAt(t *testing.T, key []byte, workFactor int) {
+	t.Helper()
+	if !regexp.MustCompile(fmt.Sprintf(`(?m)^-> scrypt \S+ %d$`, workFactor)).Match(key) {
+		t.Errorf("the key is not sealed at work factor %d: %q", workFactor, key)
+	}
+}
+
 func TestEtcdBackups(t *testing.T) {
 	t.Parallel()
 	store := newMemoryStore()
@@ -200,9 +210,11 @@ func TestEtcdBackups(t *testing.T) {
 	if !slices.Equal(talos.asked, []string{"10.0.0.11"}) {
 		t.Errorf("asked %v for the backup talosconfig", talos.asked)
 	}
-	if _, ok := store.objects["kubehenge/management/identity.age"]; !ok {
+	key, ok := store.objects["kubehenge/management/identity.age"]
+	if !ok {
 		t.Fatal("the target holds no key")
 	}
+	sealedAt(t, key, a.KeyWorkFactor)
 	if !a.EtcdBackupDue(now) {
 		t.Fatal("the first snapshot is not due at once")
 	}

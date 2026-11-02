@@ -62,6 +62,9 @@ type Appliance struct {
 	Talos     TalosAccess
 	OpenStore provisioner.OpenStore
 	Now       func() time.Time
+	// KeyWorkFactor is the scrypt work factor the passphrase seals the snapshots' key with, age's
+	// own when 0. Opening the key reads it from the sealed key.
+	KeyWorkFactor int
 
 	mu          sync.Mutex
 	job         *Job
