@@ -7,7 +7,8 @@
 # cloud controller manager, ingress controller, Gateway API, load balancer and persistent volumes,
 # what the health page's read-only identities may see in it, that the shared Headlamp's sign-in
 # identities are there for the interface's namespaces alone and do no more than they should, switch
-# Headlamp (and its read-only access for everyone), Kyverno, Istio (a namespace's traffic over mutual TLS), monitoring (every
+# Headlamp (and its read-only access for everyone), Kyverno, Istio (a namespace's traffic over mutual TLS
+# and a waypoint's layer 7 rule), monitoring (every
 # component scraped with its server verified) and logs (a pod's lines, and with the node collector
 # the journal and the audit log, read in Loki through Grafana) on and off, back a namespace with a
 # volume and a Secret up with Velero to an S3 store the test serves, check the store holds the
@@ -2102,6 +2103,47 @@ EOF
     # What ztunnel let through carries the client's workload identity.
     mesh_identity() { wl -n istio-node logs -l app=ztunnel --tail=-1 --prefix=false | grep -q 'spiffe://cluster.local/ns/e2e-mesh/sa/default'; }
     until_true 60 "ztunnel names the client's workload identity" mesh_identity
+
+    # A waypoint, deployed by istiod under the restricted level and Kyverno, holds a layer 7 rule
+    # for the server's Service. It is removed again so that later steps meet the mesh as before.
+    wl -n e2e-mesh expose deployment/server --port=8080
+    wl -n e2e-mesh apply -f - << 'EOF'
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: waypoint
+spec:
+  gatewayClassName: istio-waypoint
+  listeners:
+    - name: mesh
+      port: 15008
+      protocol: HBONE
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: no-echo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: waypoint
+  action: DENY
+  rules:
+    - to:
+        - operation:
+            paths: ["/echo"]
+EOF
+    until_true 300 "the waypoint programmed" wl -n e2e-mesh wait --for=condition=Programmed gateway/waypoint --timeout=10s
+    wl -n e2e-mesh label service server istio.io/use-waypoint=waypoint
+    # status <path>: the HTTP status the mesh's client gets for a path of the server's Service.
+    status() { wl -n e2e-mesh exec deployment/client -- curl -sS --max-time 5 -o /dev/null -w '%{http_code}' "http://server:8080$1" 2>&1; }
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+    waypoint_denies() { denied=$(status '/echo?msg=x') && passed=$(status /hostname) && [ "${denied}" = 403 ] && [ "${passed}" = 200 ]; }
+    until_true 120 "the waypoint refuses /echo and passes /hostname" waypoint_denies
+    wl -n e2e-mesh label service server istio.io/use-waypoint-
+    wl -n e2e-mesh delete authorizationpolicy/no-echo gateway/waypoint
+    until_true 120 "the waypoint's pods gone" absent wl -n e2e-mesh get deployment/waypoint
     control_plane_use "${work}/workload" istio
 
     step "monitoring switched on"
