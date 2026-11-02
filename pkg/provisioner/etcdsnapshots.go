@@ -707,7 +707,7 @@ func (s *EtcdSnapshotter) record(ctx context.Context, cluster *clusterv1.Cluster
 
 // condition sets the snapshot condition on the cluster, or takes it away when cond is nil.
 func (s *EtcdSnapshotter) condition(ctx context.Context, cluster *clusterv1.Cluster, cond *metav1.Condition) error {
-	_, err := setClusterCondition(ctx, s.Client, client.ObjectKeyFromObject(cluster), EtcdSnapshotCondition, cond)
+	_, err := setClusterCondition(ctx, s.Client, s.Reader, client.ObjectKeyFromObject(cluster), EtcdSnapshotCondition, cond)
 	return err
 }
 

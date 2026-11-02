@@ -21,7 +21,9 @@ import (
 
 	"filippo.io/age"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -509,6 +511,101 @@ func TestEtcdRestorerReadsPastTheCache(t *testing.T) {
 	}
 	if st := f.status(); st.Phase != RestoreFailed || st.Message != ended.Message {
 		t.Errorf("the restore that ended %q now says %q", ended.Message, st.Message)
+	}
+}
+
+// staleClusters has f's restorer read every Cluster as it was before the restore, as a cache that
+// lags behind the restorer's own writes does.
+func staleClusters(t *testing.T, f *restoreFixture, patch func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error) {
+	t.Helper()
+	kube, ok := f.kube.(client.WithWatch)
+	if !ok {
+		t.Fatal("the fixture's client does not watch")
+	}
+	stale := f.cluster()
+	f.r.Client = interceptor.NewClient(kube, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if cached, isCluster := obj.(*clusterv1.Cluster); isCluster {
+				stale.DeepCopyInto(cached)
+				return nil
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+		Patch: patch,
+	})
+}
+
+// A cache behind the restorer's own writes, and Cluster API writing the cluster as it is
+// unpaused, leave the restore as it ended: succeeded, with the request taken away.
+func TestEtcdRestorerRecordsPastAStaleCache(t *testing.T) {
+	t.Parallel()
+	f := newRestoreFixture(t, nil)
+	staleClusters(t, f, func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+		if err := c.Patch(ctx, obj, patch, opts...); err != nil {
+			return err
+		}
+		now := &clusterv1.Cluster{}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(obj), now); err != nil {
+			return err
+		}
+		metav1.SetMetaDataLabel(&now.ObjectMeta, "cluster.x-k8s.io/touched", strconv.Itoa(len(f.guests.runs())))
+		return c.Update(ctx, now)
+	})
+	f.reconcile()
+	if st := f.status(); st.Phase != RestoreSucceeded {
+		t.Errorf("status %+v", st)
+	}
+}
+
+// A final record the API server refuses is made again by the next reconcile, as the restore ended.
+// The restore is not taken for one the controller was stopped in, and nothing runs again.
+func TestEtcdRestorerRecordsAgainWhatItCouldNotRecord(t *testing.T) {
+	t.Parallel()
+	f := newRestoreFixture(t, nil)
+	refused := false
+	staleClusters(t, f, func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+		if patch.Type() == types.JSONPatchType && !refused {
+			refused = true
+			return apierrors.NewServiceUnavailable("etcd leader changed")
+		}
+		return c.Patch(ctx, obj, patch, opts...)
+	})
+	if _, err := f.r.Reconcile(context.Background(), ctrl.Request{Namespace: "team-a", Name: "web"}); err == nil || !refused {
+		t.Fatalf("the refused record went unnoticed: %v", err)
+	}
+	ran := len(f.guests.runs())
+	f.reconcile()
+	if got := f.guests.runs(); len(got) != ran {
+		t.Errorf("ran %v after the restore ended", got[ran:])
+	}
+	if st := f.status(); st.Phase != RestoreSucceeded {
+		t.Errorf("status %+v", st)
+	}
+}
+
+// A request that takes the place of the one restored stays, and the status records how the one
+// restored ended.
+func TestEtcdRestorerLeavesTheNextRequest(t *testing.T) {
+	t.Parallel()
+	f := newRestoreFixture(t, nil)
+	next := fmt.Sprintf(`{"snapshot":%q,"target":"store","by":"root@pam","at":%q}`, restoreSnapshot, restoreAsked.Add(time.Hour).Format(time.RFC3339))
+	f.guests.seen = func(_ int64, step, _ string) {
+		if step != stepFetch {
+			return
+		}
+		c := f.cluster()
+		metav1.SetMetaDataAnnotation(&c.ObjectMeta, EtcdRestoreAnnotation, next)
+		if err := f.kube.Update(context.Background(), c); err != nil {
+			t.Error(err)
+		}
+	}
+	f.reconcile()
+	c := f.cluster()
+	if c.Annotations[EtcdRestoreAnnotation] != next {
+		t.Errorf("the next request is %q", c.Annotations[EtcdRestoreAnnotation])
+	}
+	if st, ok := EtcdRestoreStatusOf(c); !ok || st.Phase != RestoreSucceeded || !st.RequestedAt.Equal(restoreAsked) {
+		t.Errorf("status %+v", st)
 	}
 }
 

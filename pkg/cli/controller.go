@@ -593,13 +593,14 @@ func (o *controllerOptions) newManager(scheme *runtime.Scheme, extensions *serve
 // some distribution's providers run only while used, the controller that starts and stops them.
 func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *provisioner.Registrar, distributions *provisioner.Distributions) error {
 	o.r.Client = mgr.GetClient()
+	o.r.Reader = mgr.GetAPIReader()
 	o.r.Registrar = registrar
 	o.r.Remotes = registrar.Remotes
 	o.r.Events = mgr.GetEventRecorder("kubehenge")
 	if err := o.r.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the cluster reconciler: %w", err)
 	}
-	progress := &provisioner.ProgressReconciler{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Events: o.r.Events}
+	progress := &provisioner.ProgressReconciler{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), ClassNamespace: o.r.ClassNamespace, Events: o.r.Events}
 	if err := progress.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the machine progress: %w", err)
 	}
@@ -789,21 +790,21 @@ func (o *controllerOptions) addEtcd(mgr manager.Manager, c *proxmox.Client, remo
 // storage nearly full.
 func (o *controllerOptions) addWatches(mgr manager.Manager, remotes *provisioner.Remotes, c *proxmox.Client) error {
 	rolls := &provisioner.RollWatch{
-		Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, APIs: remotes, Events: mgr.GetEventRecorder("kubehenge"),
+		Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), ClassNamespace: o.r.ClassNamespace, APIs: remotes, Events: mgr.GetEventRecorder("kubehenge"),
 		Interval: time.Minute, StallAfter: o.r.StallAfter,
 	}
 	if err := mgr.Add(rolls); err != nil {
 		return fmt.Errorf("the roll watch: %w", err)
 	}
 	certificates := &provisioner.CertificateWatch{
-		Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Workload: remotes.Workload, Events: mgr.GetEventRecorder("kubehenge"),
+		Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), ClassNamespace: o.r.ClassNamespace, Workload: remotes.Workload, Events: mgr.GetEventRecorder("kubehenge"),
 		Interval: certificateWatchInterval,
 	}
 	if err := mgr.Add(certificates); err != nil {
 		return fmt.Errorf("the certificate watch: %w", err)
 	}
 	vms := &provisioner.VMWatch{
-		Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Proxmox: c, Events: mgr.GetEventRecorder("kubehenge"),
+		Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), ClassNamespace: o.r.ClassNamespace, Proxmox: c, Events: mgr.GetEventRecorder("kubehenge"),
 		Interval: time.Minute,
 	}
 	if err := mgr.Add(vms); err != nil {

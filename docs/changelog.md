@@ -184,6 +184,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A Talos node whose machine is deleted while it is upgraded in place, as when the cluster scales down onto it, has its upgrade dropped.
   - Before, the install failed after 15 minutes on the gone VM and held every Talos upgrade of the cluster until **Try again**.
   - An install that stalls for three minutes or finds the node unreachable is tried again up to four times, a minute, two and four apart.
+- An etcd restore that succeeded is no longer recorded as failed with "the controller restarted during the restore". That happened when Cluster API wrote the Cluster while the restore recorded its end.
+- Conditions, and the certificate watch's roll of a second worker pool, no longer fail on the controller's own write just before them.
 
 ### Recovery, health and upgrades
 

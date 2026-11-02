@@ -2,13 +2,10 @@ package provisioner
 
 import (
 	"context"
-	"fmt"
 	"time"
 	"unicode/utf8"
 
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/util/retry"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -38,40 +35,16 @@ func shorten(s string, n int) string {
 	return s[:cut] + mark
 }
 
-// markCluster sets one of Kubehenge's conditions on a cluster, beside those Cluster API sets, or
-// takes it away when cond is nil, and returns the condition as it was before, nil when there was
-// none. Cluster API's own status writes keep conditions they do not own.
-func markCluster(ctx context.Context, c client.Client, key client.ObjectKey, condType string, cond *metav1.Condition) (*metav1.Condition, error) {
-	var before *metav1.Condition
-	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		cluster := &clusterv1.Cluster{}
-		if err := c.Get(ctx, key, cluster); err != nil {
-			return fmt.Errorf("reading the cluster: %w", err)
-		}
-		before = nil
-		if found := meta.FindStatusCondition(cluster.Status.Conditions, condType); found != nil {
-			before = found.DeepCopy()
-		}
-		unchanged := cluster.DeepCopy()
-		var changed bool
-		if cond == nil {
-			changed = meta.RemoveStatusCondition(&cluster.Status.Conditions, condType)
-		} else {
-			set := *cond
-			set.Type = condType
-			set.Message = shorten(set.Message, watchMessageMax)
-			set.ObservedGeneration = cluster.Generation
-			changed = meta.SetStatusCondition(&cluster.Status.Conditions, set)
-		}
-		if !changed {
-			return nil
-		}
-		return c.Status().Patch(ctx, cluster, client.MergeFromWithOptions(unchanged, client.MergeFromWithOptimisticLock{}))
-	})
-	if err != nil {
-		return before, fmt.Errorf("setting the cluster's %s condition: %w", condType, err)
+// markCluster sets one of the watches' conditions on a cluster, its message shortened, as
+// setClusterCondition does.
+func markCluster(ctx context.Context, c client.Client, live client.Reader, key client.ObjectKey, condType string, cond *metav1.Condition) (*metav1.Condition, error) {
+	if cond != nil {
+		set := *cond
+		set.Type = condType
+		set.Message = shorten(set.Message, watchMessageMax)
+		cond = &set
 	}
-	return before, nil
+	return setClusterCondition(ctx, c, live, key, condType, cond)
 }
 
 // newlyMarked tells whether a condition set now differs from the one before in status or reason,

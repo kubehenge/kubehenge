@@ -98,7 +98,9 @@ type proxmoxReader interface {
 // on, with the controller's own token, and says on the Cluster what does not run and what is
 // nearly full: VMsCondition and StorageCondition, with an event when each starts and ends.
 type VMWatch struct {
-	Client         client.Client
+	Client client.Client
+	// Reader reads a cluster past the cache, after a write to it conflicted.
+	Reader         client.Reader
 	ClassNamespace string
 	Proxmox        proxmoxReader
 	Events         events.EventRecorder
@@ -359,7 +361,7 @@ func (w *VMWatch) mark(ctx context.Context, c *clusterv1.Cluster, condType strin
 	if cond == nil && meta.FindStatusCondition(c.Status.Conditions, condType) == nil {
 		return nil
 	}
-	before, err := markCluster(ctx, w.Client, client.ObjectKeyFromObject(c), condType, cond)
+	before, err := markCluster(ctx, w.Client, w.Reader, client.ObjectKeyFromObject(c), condType, cond)
 	if err != nil || w.Events == nil {
 		return err
 	}

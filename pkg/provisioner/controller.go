@@ -60,6 +60,8 @@ type Cloud interface {
 // Reconciler provisions the Proxmox VE side of Clusters built from Kubehenge's ClusterClasses.
 type Reconciler struct {
 	Client client.Client
+	// Reader reads a cluster past the cache, after a write to it conflicted.
+	Reader client.Reader
 	Cloud  Cloud
 	// WorkloadPool is the pool the clusters' pools nest under.
 	WorkloadPool string
