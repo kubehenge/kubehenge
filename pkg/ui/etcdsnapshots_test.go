@@ -328,7 +328,7 @@ func TestEtcdRestorePlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(h.plain)
-	if len(plan.Steps) != 7 || !strings.Contains(plan.Steps[2].Command, hex.EncodeToString(sum[:])) || !slices.Equal(plan.Replaced, []string{"one-cp-b"}) {
+	if len(plan.Steps) != 9 || !strings.Contains(plan.Steps[2].Command, hex.EncodeToString(sum[:])) || !slices.Equal(plan.Replaced, []string{"one-cp-b"}) {
 		t.Errorf("plan %+v", plan)
 	}
 	// The cluster's API server may not read the objects of another Kubernetes minor.

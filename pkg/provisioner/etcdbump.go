@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -35,9 +36,9 @@ const snapshotFileMode = 0o600
 
 // bumpedEtcdSnapshot writes the snapshot read from r into a new file in dir, without the checksum
 // etcd appends, and moves its revision on by etcdRevisionBump with every revision up to there
-// marked compacted, as etcdutl's restore does with --bump-revision and --mark-compacted. Talos
-// restores a snapshot as it is, so without this the restored revisions repeat ones the clients of
-// the etcd from before have already seen: their watches wait for revisions they think they had,
+// marked compacted, as etcdutl's restore does with --bump-revision and --mark-compacted. Talos,
+// RKE2 and k3s restore a snapshot as it is, so without this the restored revisions repeat ones the
+// clients of the etcd from before have already seen: their watches wait for revisions they think they had,
 // and a node's kube-proxy keeps the Services' endpoints from before. With it, every watch from
 // before ends as compacted, and its client lists again. The file is the caller's to remove.
 func bumpedEtcdSnapshot(dir string, r io.Reader) (string, error) {
@@ -96,6 +97,27 @@ func stripEtcdChecksum(f *os.File) error {
 		return fmt.Errorf("taking the checksum off the snapshot: %w", err)
 	}
 	return nil
+}
+
+// appendEtcdChecksum ends the database at path with its SHA-256, as etcd ends a snapshot it streams,
+// and returns the SHA-256 of the whole file. RKE2's and k3s's restore refuses a snapshot without it.
+func appendEtcdChecksum(path string) (string, error) {
+	f, err := os.OpenFile(path, os.O_RDWR, snapshotFileMode) //nolint:gosec // the controller's own file of the snapshot
+	if err != nil {
+		return "", fmt.Errorf("reading the snapshot: %w", err)
+	}
+	db, whole := sha256.New(), sha256.New()
+	if _, err = io.Copy(io.MultiWriter(db, whole), f); err != nil {
+		_ = f.Close()
+		return "", fmt.Errorf("reading the snapshot: %w", err)
+	}
+	sum := db.Sum(nil)
+	whole.Write(sum)
+	_, err = f.Write(sum)
+	if err = errors.Join(err, f.Close()); err != nil {
+		return "", fmt.Errorf("ending the snapshot with its checksum: %w", err)
+	}
+	return hex.EncodeToString(whole.Sum(nil)), nil
 }
 
 // bumpEtcdRevision adds an empty revision by into the etcd database at path, past its latest, and
