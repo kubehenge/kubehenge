@@ -107,8 +107,13 @@ data "talos_machine_configuration" "node" {
       yamlencode({ apiVersion = "v1alpha1", kind = "KubeControllerManagerConfig", extraArgs = local.patient_lease_args }),
       yamlencode({ apiVersion = "v1alpha1", kind = "KubeSchedulerConfig", extraArgs = local.patient_lease_args }),
       # Events kept a day rather than an hour: a failed run stays listed that long, and its events
-      # are its log.
-      yamlencode({ apiVersion = "v1alpha1", kind = "KubeAPIServerConfig", extraArgs = { event-ttl = "24h" } }),
+      # are its log. With api_audit_log, Talos's audit policy logs to the API server's output
+      # instead of its file, where the interface reads the changes people made as a pod log.
+      yamlencode({
+        apiVersion = "v1alpha1"
+        kind       = "KubeAPIServerConfig"
+        extraArgs  = merge({ event-ttl = "24h" }, var.api_audit_log ? { audit-log-path = "-" } : {})
+      }),
       yamlencode({
         apiVersion = "v1alpha1"
         kind       = "LinkAliasConfig"

@@ -240,7 +240,7 @@ case "${test}" in
             workloadDatastores: ["local"], workloadBridges: ["vmbr0"],
             registryMirrors: {"ghcr.io": ["http://172.21.99.3:5000"]}, controllerImage: $image,
             offerHARules: true, extraClusterNamespaces: ["e2e-team"], headlampSignIn: true,
-            headlampActions: true
+            headlampActions: true, apiAuditLog: true
         }' > "${work}/appliance-settings.json"
         pve=kubehenge-e2e-pve
         docker exec "${pve}" sh -c 'rm -rf /root/kubehenge && mkdir -p /root/kubehenge/test'

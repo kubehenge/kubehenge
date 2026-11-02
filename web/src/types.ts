@@ -309,6 +309,25 @@ export interface HealthEvent {
   action?: string;
 }
 
+/** One thing a user did, or tried, through the interface. */
+export interface ActivityEntry {
+  at: string;
+  user: string;
+  what: string;
+  /** namespace/name */
+  cluster?: string;
+  failed?: boolean;
+  details?: Record<string, string>;
+}
+
+/** Who did what through the interface, and the management cluster's events, newest first. */
+export interface Activity {
+  since: string;
+  entries: ActivityEntry[];
+  error?: string;
+  events: HealthSection<HealthEvent>;
+}
+
 /** How one cluster stands, as its health page sums it up, for the fleet. */
 export interface FleetHealth {
   namespace: string;
@@ -659,6 +678,8 @@ export interface ManagementSettings {
   clusterSysAudit?: boolean;
   /** Kubehenge's controller reads nodes' boot logs through their guest agents, with VM.GuestAgent.FileRead. Absent, it does. */
   nodeBootLogs?: boolean;
+  /** The management cluster's API server logs the changes people make, which the activity page shows. */
+  apiAuditLog?: boolean;
   /** More namespaces the interface creates and manages clusters in, beside its own. */
   extraClusterNamespaces?: string[];
   /** The shared Headlamp signs those who may download a cluster's kubeconfig in as cluster-admin. */

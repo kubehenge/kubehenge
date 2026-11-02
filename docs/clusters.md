@@ -344,7 +344,7 @@ Each is an address as well, the cluster's page with `?do=scale`, `upgrade`, `del
 | `G` `N` | a new cluster |
 | `G` `A` | Administration, for those who may open it |
 | `[`, `]` | the cluster before or after the open one, in the fleet's order, on the same view |
-| `1` to `5` | the open cluster's Summary, Health, Machines, Backups and Options |
+| `1` to `6` | the open cluster's Summary, Health, Machines, Backups, Options and Activity |
 | `T` `R` | shows or folds away the running work |
 
 ## The cluster page
@@ -383,6 +383,7 @@ The buttons beside the cluster's name act on the whole cluster: **Scale**, **Upg
 - **Options:** every setting that can change once the cluster exists, each listed with what changing it does [below](#change-settings).
   - Each has **Edit** (**Upgrade** for the Talos release, **Uninstall** for Rancher on the cluster that runs it). It is disabled for those who may not change the cluster.
   - The pod network and CIS hardening are fixed, so they have none.
+- **Activity:** who did what to the cluster, newest first ([install.md](install.md#activity)). Below it are the management cluster's events of its objects over the last day.
 
 The status reads **Provisioning**, **Available**, **Upgrading**, **Reconciling** (while a change rolls out), **Deleting** or **Failed**. A cluster deleted while its page is open says so. While Health finds something, every other view shows the most serious of it under the tabs. It shows how many more there are and the way to Health, as it does when the cluster does not answer.
 

@@ -20,6 +20,7 @@ VMware ships Kubernetes in vSphere as the vSphere Kubernetes Service, OpenStack 
 - **Proxmox VE built in:** the Proxmox CSI plugin for persistent volumes, its cloud controller manager for node lifecycle, a virtual IP for the control plane.
 - **Clusters kept apart.** Each cluster gets its own Proxmox VE pool, user and API token. The token, held on its control-plane nodes only, has rights on its own VMs and volumes only.
 - **Upgrades without a shell.** Clusters can upgrade Kubernetes on their own inside a maintenance window you set. Kubehenge upgrades itself to signed releases only, from a button or automatically.
+- **Told when something breaks.** A failed run, a management cluster problem or a cluster's health item reaches a webhook, ntfy or email. Activity lists who did what for 90 days.
 
 ## Add-ons and sign-in
 

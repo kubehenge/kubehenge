@@ -80,6 +80,23 @@ func newFakeInterface(t *testing.T) *fakeInterface {
 		answer(w, http.StatusOK, `[{"kind":"notify-webhook","at":"2027-03-01T12:05:00Z","title":"Kubehenge test"},
 			{"kind":"notify-email","at":"2027-03-01T12:05:00Z","title":"Kubehenge test","error":"signing in: 535 bad credentials"}]`)
 	}))
+	mux.HandleFunc("GET /api/activity", f.admin(func(w http.ResponseWriter, r *http.Request) {
+		days := "7"
+		if r.URL.Query().Get("days") == "3" {
+			days = "3"
+		}
+		answer(w, http.StatusOK, `{"entries":[{"at":"2027-03-01T12:00:00Z","user":"admin@pve","what":"changed cluster",
+			"cluster":"default/web","details":{"requestId":"ab12"}},{"at":"2027-03-01T11:00:00Z","user":"mallory@pve",
+			"what":"sign-in refused","details":{"address":"10.0.0.9"}},{"at":"2027-03-01T10:00:00Z","user":"bob@pve",
+			"what":"headlamp sign-in","failed":true}],"days":"`+days+`"}`)
+	}))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/activity", f.signedIn(func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("name") != "web" || r.URL.Query().Get("days") != "30" {
+			answer(w, http.StatusNotFound, `{"error":"no such cluster"}`)
+			return
+		}
+		answer(w, http.StatusOK, `{"entries":[]}`)
+	}))
 	mux.HandleFunc("GET /api/setup", f.admin(func(w http.ResponseWriter, _ *http.Request) {
 		f.setups++
 		if f.setups == 1 {
@@ -271,6 +288,32 @@ func TestApplianceNotifications(t *testing.T) {
 	}
 	if _, err := run(t, f.args("user@pve", "notifications", "test")...); err == nil || err.Error() != "user@pve needs Sys.Modify on /" {
 		t.Errorf("test as user@pve: %v", err)
+	}
+}
+
+func TestApplianceActivity(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	out, err := run(t, f.args("admin@pve", "activity")...)
+	want := "2027-03-01T12:00:00Z  admin@pve    changed cluster            default/web  \n" +
+		"2027-03-01T11:00:00Z  mallory@pve  sign-in refused                         address 10.0.0.9\n" +
+		"2027-03-01T10:00:00Z  bob@pve      headlamp sign-in (failed)               \n"
+	if err != nil || out != want {
+		t.Errorf("activity: %v\n%q\nwant %q", err, out, want)
+	}
+	out, err = run(t, f.args("admin@pve", "activity", "--json", "--days", "3")...)
+	if err != nil || !strings.Contains(out, `"days":"3"`) {
+		t.Errorf("activity --json --days 3: %v\n%s", err, out)
+	}
+	out, err = run(t, f.args("user@pve", "activity", "--cluster", "default/web", "--days", "30")...)
+	if err != nil || out != "Nothing done\n" {
+		t.Errorf("a cluster's activity: %v\n%q", err, out)
+	}
+	if _, err := run(t, f.args("user@pve", "activity", "--cluster", "web")...); err == nil || !strings.Contains(err.Error(), "namespace/name") {
+		t.Errorf("--cluster without a namespace: %v", err)
+	}
+	if _, err := run(t, f.args("user@pve", "activity")...); err == nil {
+		t.Error("the appliance's activity was shown to a user who may not look after it")
 	}
 }
 

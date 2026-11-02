@@ -64,6 +64,10 @@ interface:
   # appliance up (Sys.Modify on / among others) add or remove a repository, as one list serves
   # every user and cluster. The interface reads this from the ConfigMap kubehenge-interface.
   headlampActions: false
+  # Whether the management cluster's API server writes the changes people make to its output, as
+  # the module's api_audit_log sets it up. The interface then reads the API server's pod log in
+  # kube-system and shows each change on its activity page with its user.
+  apiAuditLog: false
 
 # What clusters may use on Proxmox VE: the storages for their disks and volumes, and the bridges
 # their nodes attach to, which the management cluster's Cluster API token has rights on. The

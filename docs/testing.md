@@ -64,17 +64,18 @@ The frontend's packages are installed again only when `web/package-lock.json` ch
 2. Sign in with Proxmox VE users. A wrong password and a user without privileges are refused.
 3. Set the management cluster up from the interface. A second setup and an upgrade from the shell are refused while it runs.
 4. Offer placement by an HA rule to a cluster creator without `Sys.Audit` on `/`, who sees only the rule's name and nodes. An administrator reads it in full.
-5. Reach the shared Headlamp behind the interface's sign-in. With the settings' `headlampActions` it offers the Helm app catalog and the Prometheus charts it ships. It refuses a chart from a path on the appliance, a Helm repository over HTTP and a port forward.
-6. Log out of a cluster in it as its frontend does, which clears the token cookie, then open the cluster again from the interface's link. The logout is refused to those who do not see the cluster and to a request from another origin or none.
-7. Back the management cluster's etcd up into an S3 store served on the node, refused to a user without privileges and with a wrong passphrase. A scheduled snapshot and one asked for are stored encrypted and listed.
-8. Restore the newer snapshot from the appliance's shell with `kubehenge appliance`, which refuses a wrong passphrase as the interface does. A Secret made since is gone and the ClusterClasses are there.
-9. Show the backups, list and take a snapshot and show the upgrades with `kubehenge appliance`. A user without privileges is refused in the interface's words.
-10. Switch automatic upgrades of the management cluster on, refused with a wrong passphrase, which makes their Proxmox VE user. Switch them off, which removes it, then on again.
-11. Have the updater read a release index signed with a key made for the run, served from the S3 store. It upgrades to a release whose interface does not start, rolls that back with the reason, then upgrades to the newer release.
-12. Upgrade the appliance with `install.sh --upgrade`, under the running management cluster, to a release whose interface does not start. It rolls that back with the reason, then upgrades to the newest release and refuses an older one.
-13. See that the management cluster runs what the first release applied, and upgrade it to what the newest one carries. A snapshot is still taken after that.
-14. Remove the management cluster from the interface, refused unconfirmed or with a wrong passphrase. Its automatic upgrades' user goes with it and its etcd backups are switched off.
-15. Remove the appliance and check that Proxmox VE is left exactly as it was.
+5. Create a ConfigMap with the management cluster's admin kubeconfig. With the settings' `apiAuditLog`, Activity lists the creation with its user, and the kubeconfig's download with the administrator.
+6. Reach the shared Headlamp behind the interface's sign-in. With the settings' `headlampActions` it offers the Helm app catalog and the Prometheus charts it ships. It refuses a chart from a path on the appliance, a Helm repository over HTTP and a port forward.
+7. Log out of a cluster in it as its frontend does, which clears the token cookie, then open the cluster again from the interface's link. The logout is refused to those who do not see the cluster and to a request from another origin or none.
+8. Back the management cluster's etcd up into an S3 store served on the node, refused to a user without privileges and with a wrong passphrase. A scheduled snapshot and one asked for are stored encrypted and listed.
+9. Restore the newer snapshot from the appliance's shell with `kubehenge appliance`, which refuses a wrong passphrase as the interface does. A Secret made since is gone and the ClusterClasses are there.
+10. Show the backups, list and take a snapshot and show the upgrades with `kubehenge appliance`. A user without privileges is refused in the interface's words.
+11. Switch automatic upgrades of the management cluster on, refused with a wrong passphrase, which makes their Proxmox VE user. Switch them off, which removes it, then on again.
+12. Have the updater read a release index signed with a key made for the run, served from the S3 store. It upgrades to a release whose interface does not start, rolls that back with the reason, then upgrades to the newer release.
+13. Upgrade the appliance with `install.sh --upgrade`, under the running management cluster, to a release whose interface does not start. It rolls that back with the reason, then upgrades to the newest release and refuses an older one.
+14. See that the management cluster runs what the first release applied, and upgrade it to what the newest one carries. A snapshot is still taken after that.
+15. Remove the management cluster from the interface, refused unconfirmed or with a wrong passphrase. Its automatic upgrades' user goes with it and its etcd backups are switched off.
+16. Remove the appliance and check that Proxmox VE is left exactly as it was.
 
 ### Memory and CPU figures
 

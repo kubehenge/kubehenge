@@ -45,6 +45,10 @@
         "headlampActions": {
           "description": "Whether the shared Headlamp offers its Helm app catalog and Prometheus charts, acting with each user's own credentials in the cluster.",
           "type": "boolean"
+        },
+        "apiAuditLog": {
+          "description": "Whether the interface reads the management cluster's API server pod log in kube-system for the changes people make.",
+          "type": "boolean"
         }
       }
     },
