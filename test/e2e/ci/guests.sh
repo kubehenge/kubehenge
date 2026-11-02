@@ -2,15 +2,18 @@
 # What the VMs of the Proxmox VE that test/e2e/ci/up.sh started take of the machine running it, and
 # what their guests hold when a test fails:
 #
-#   test/e2e/ci/guests.sh record <file>    every 15 s until stopped: each VM's CPU time, memory and swap
+#   test/e2e/ci/guests.sh record <file>    every 15 s until stopped: each VM's CPU time, memory, swap and
+#                                          bytes received
 #   test/e2e/ci/guests.sh now              the same once, to standard output
-#   test/e2e/ci/guests.sh summary <file>   from that record, each minute's CPUs and memory by VM, and
+#   test/e2e/ci/guests.sh summary <file>   from that record, each minute's CPUs, memory and download
+#                                          rate by VM, and
 #                                          each VM's peaks: what a test's steps ask of the machine
 #   test/e2e/ci/guests.sh collect <dir> [<work dir>]
 #                                          from inside each running VM, through its guest agent: its
 #                                          state, the distribution's, the kernel's and cloud-init's
 #                                          logs, the logs of the control plane's static pods and of
-#                                          restarted containers, and its etcd members' view of their
+#                                          restarted containers, the deletes its API server audited,
+#                                          and its etcd members' view of their
 #                                          cluster; from a Talos VM, whose guest agent runs no
 #                                          commands, the same through Talos's API
 #
@@ -33,8 +36,8 @@ qemu_arg() { # pid option
     tr '\0' '\n' < "/proc/$1/cmdline" | sed -n "/^$2\$/{n;s/,.*//;p;q;}"
 }
 
-# sample: one line per running VM: the time, its QEMU process, VM ID and name, CPU ticks, and resident
-# and swapped KiB.
+# sample: one line per running VM: the time, its QEMU process, VM ID and name, CPU ticks, resident
+# and swapped KiB, and the bytes it has received.
 sample() {
     now=$(date -u +%T)
     for pid in $(pgrep -x kvm || true); do
@@ -47,7 +50,10 @@ sample() {
         ticks=$(awk '{ print $14 + $15 }' "/proc/${pid}/stat" 2> /dev/null) || continue
         memory=$(awk '/^VmRSS:/ { r = $2 } /^VmSwap:/ { s = $2 } END { print r + 0, s + 0 }' \
             "/proc/${pid}/status" 2> /dev/null) || continue
-        printf '%s %s %s %s %s %s\n' "${now}" "${pid}" "${vmid}" "${name}" "${ticks}" "${memory}"
+        # What the VM received is what its tap devices sent, in the network namespace QEMU runs in.
+        received=$(awk -F '[: ]+' -v tap="tap${vmid}i" 'index($2, tap) == 1 { b += $11 } END { print b + 0 }' \
+            "/proc/${pid}/net/dev" 2> /dev/null) || continue
+        printf '%s %s %s %s %s %s %s\n' "${now}" "${pid}" "${vmid}" "${name}" "${ticks}" "${memory}" "${received}"
     done
 }
 
@@ -74,17 +80,18 @@ summary() {
             if (mib > top[minute, vm]) { top[minute, vm] = mib; topswap[minute, vm] = swap }
             if (mib > peak[vm]) { peak[vm] = mib; peakswap[vm] = swap; peakat[vm] = $1 }
             vms[minute, vm] = 1
-            # CPU time over the time since the same process was last sampled.
+            # CPU time and bytes received over the time since the same process was last sampled.
             if ((pid in last) && t > lastt[pid]) {
                 cpu[minute, vm] += ($5 - last[pid]) / hz
+                got[minute, vm] += $8 - lastgot[pid]
                 span[minute, vm] += t - lastt[pid]
             }
-            last[pid] = $5; lastt[pid] = t
+            last[pid] = $5; lastgot[pid] = $8; lastt[pid] = t
         }
         END {
             print "VMs:"
             for (vm in names) printf "  %s %s\n", vm, names[vm]
-            print "each minute: CPUs and resident MiB (swapped MiB) of all VMs, then of each VM"
+            print "each minute: CPUs and resident MiB (swapped MiB) of all VMs, then of each VM with the kB/s it received"
             for (i = 1; i <= n; i++) {
                 m = minutes[i]; line = ""; cpus = 0; mem = 0; swapped = 0
                 for (vm in names) {
@@ -92,7 +99,8 @@ summary() {
                     c = span[m, vm] > 0 ? cpu[m, vm] / span[m, vm] : 0
                     if (c > cpupeak[vm]) { cpupeak[vm] = c; cpupeakat[vm] = m }
                     cpus += c; mem += top[m, vm] - topswap[m, vm]; swapped += topswap[m, vm]
-                    line = line sprintf("  %s %.1f %d (%d)", vm, c, top[m, vm] - topswap[m, vm], topswap[m, vm])
+                    rate = span[m, vm] > 0 ? got[m, vm] / span[m, vm] / 1000 : 0
+                    line = line sprintf("  %s %.1f %d (%d) %dkB/s", vm, c, top[m, vm] - topswap[m, vm], topswap[m, vm], rate)
                 }
                 printf "%s  %.1f %d (%d) |%s\n", m, cpus, mem, swapped, line
             }
@@ -152,7 +160,7 @@ guest_script() {
         # them; RKE2's kubelet and the containerd of RKE2 and k3s, which log to files.
         logs)
             echo 'for f in /var/log/pods/kube-system_etcd-*/*/*.log /var/log/pods/kube-system_kube-apiserver-*/*/*.log \
-                    /var/log/pods/kube-system_kube-vip-*/*/*.log; do
+                    /var/log/pods/kube-system_kube-controller-manager-*/*/*.log /var/log/pods/kube-system_kube-vip-*/*/*.log; do
                     [ -f "$f" ] && { echo "== $f"; tail -n 1500 "$f"; }
                 done
                 for d in /var/log/pods/*/*/; do
@@ -162,6 +170,14 @@ guest_script() {
                 done
                 for f in /var/lib/rancher/*/agent/logs/kubelet.log /var/lib/rancher/*/agent/containerd/containerd.log; do
                     [ -f "$f" ] && { echo "== $f"; tail -n 2000 "$f"; }
+                done'
+            ;;
+        # Every delete the API server audited, with who asked, so an object that went missing names
+        # its remover. Each distribution keeps the log in its own place.
+        audit)
+            echo 'for f in /var/lib/rancher/rke2/server/logs/audit.log /var/lib/rancher/k3s/server/logs/audit.log \
+                    /var/log/kubernetes/audit/audit.log; do
+                    [ -f "$f" ] && { echo "== $f"; grep -F "\"verb\":\"delete" "$f" | tail -n 3000; }
                 done'
             ;;
         kernel)
@@ -476,7 +492,7 @@ collect() {
             commands=$(guest_script state)
             in_guest "${vmid}" "${commands}" 2>&1 | redact | head -c 1000000 > "${dir}/state.txt"
             grep -q '^exit code: 0$' "${dir}/state.txt" || continue
-            for part in journal etcd-journal logs kernel cloud-init etcd; do
+            for part in journal etcd-journal logs audit kernel cloud-init etcd; do
                 commands=$(guest_script "${part}")
                 in_guest "${vmid}" "${commands}" 2>&1 | redact | head -c 8000000 > "${dir}/${part}.txt"
             done
