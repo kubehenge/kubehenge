@@ -131,6 +131,7 @@ The CPU figures (`kubehenge.dev/addon-cpu` and `kubehenge.dev/node-cpu`) are the
 3. Pod Security Admission refuses a privileged pod. Once Kyverno is switched on, Kyverno refuses it in a namespace labelled privileged. Once Kyverno is off, it is admitted there again.
 4. Switch Istio on and off before monitoring. That keeps the CNI's roll Istio sets off from landing on a worker already carrying the monitoring stack.
    - On, the pods of a namespace enrolled in the mesh are redirected through ztunnel. Once mutual TLS is required, a client outside the namespace is refused while one inside reaches the server, its workload identity in ztunnel's logs.
+   - A waypoint for the server's Service, under the restricted level and Kyverno, refuses the path a layer 7 rule names and passes the others. It is removed again.
    - Off, the namespace is taken out of the mesh first. Both clients then reach the server again.
 5. Switch monitoring on, then off with its metrics proxies. Every component's job is scraped, each with its server verified. On k3s the controller manager's, scheduler's and kube-proxy's series arrive in the kubelet's. On Talos the controller manager and scheduler are scraped only if the Talos release passes them serving certificates of the cluster CA.
    - The alerts identity reads Alertmanager's alerts and is refused anything else.
