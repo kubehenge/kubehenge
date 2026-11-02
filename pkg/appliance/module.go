@@ -64,6 +64,7 @@ module "management" {
   node_boot_logs             = var.settings.nodeBootLogs
 
   extra_cluster_namespaces = var.settings.extraClusterNamespaces
+  api_audit_log            = var.settings.apiAuditLog
 }
 
 output "kubeconfig" {
@@ -194,6 +195,7 @@ func (a *Appliance) writeConfig(s *Settings) error {
 		"clusterDatastoreAllocate": s.ClusterDatastoreAllocate,
 		"clusterSysAudit":          s.GivesClusterSysAudit(),
 		"nodeBootLogs":             s.ReadsNodeBootLogs(),
+		"apiAuditLog":              s.APIAuditLog,
 		// The module takes no null for a list.
 		"extraClusterNamespaces": append([]string{}, s.ExtraClusterNamespaces...),
 	}}

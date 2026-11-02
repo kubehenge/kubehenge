@@ -144,6 +144,10 @@ type Server struct {
 	NewClientset func() (kubernetes.Interface, error)
 	Log          *slog.Logger
 
+	// activityLog keeps what each user did: the lines logged with a user, and the API server's
+	// changes when it writes them.
+	activityLog *activityLog
+
 	// prepared guards the set-up Run and the handlers each do on first use, in whichever order the
 	// caller starts them.
 	prepared   sync.Once
@@ -187,6 +191,7 @@ func (s *Server) Run(ctx context.Context) {
 	if s.Headlamp != nil {
 		wg.Go(func() { s.syncHeadlamp(ctx, headlampSyncEvery) })
 	}
+	wg.Go(func() { s.followAuditLog(ctx, auditFollowEvery) })
 	s.sessions.pruneEvery(ctx, time.Minute)
 	wg.Wait()
 }
@@ -220,6 +225,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/clusters", s.managed(s.listClusters))
 	mux.HandleFunc("GET /api/fleet/health", s.managed(s.fleetHealth))
 	mux.HandleFunc("GET /api/runs", s.managed(s.runs))
+	mux.HandleFunc("GET /api/activity", s.managed(s.activity))
 	mux.HandleFunc("GET /api/events", s.managed(s.changeStream))
 	mux.HandleFunc("POST /api/clusters", s.managed(s.createCluster))
 	s.clusterRoutes(mux)
@@ -290,6 +296,7 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/machines/{machine}/cordon", s.managed(s.uncordonMachine))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/machines/{machine}/reboot", s.managed(s.rebootMachine))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/health", s.managed(s.clusterHealth))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/activity", s.managed(s.clusterActivity))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/events", s.managed(s.runEvents))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/pods/{podNamespace}/{pod}/logs", s.managed(s.podLogs))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/backups", s.managed(s.clusterBackups))
@@ -323,7 +330,12 @@ func (s *Server) init() {
 		if s.Log == nil {
 			s.Log = slog.New(slog.DiscardHandler)
 		}
-		s.Log = withRequestIDs(s.Log)
+		var dir string
+		if s.Appliance != nil {
+			dir = s.Appliance.Dir
+		}
+		s.activityLog = newActivityLog(dir)
+		s.Log = withActivity(withRequestIDs(s.Log), s.activityLog)
 	})
 }
 

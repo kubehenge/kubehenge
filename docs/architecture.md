@@ -859,6 +859,17 @@ A kubeadm, RKE2 or k3s node's log is two files the controller reads through the 
 
 A Talos node's log is read through its Talos API with the cluster's talosconfig.
 
+### Activity
+
+The interface logs each sign-in and change with its user, as it always has. Each such line also goes into `activity.jsonl` in the appliance's folder, which the Activity pages read. It keeps 90 days and stays under 8 MiB by dropping its older half.
+
+With `api_audit_log`, the management cluster's API server writes Talos's audit policy's events to its output instead of Talos's file on the node.
+
+- The interface reads the API server pods' logs every minute. It adds each create, change and deletion once, by its audit ID.
+- A GitOps tool's or a script's service account counts as a person.
+- Nodes, the control plane's own users and the service accounts in the namespaces the module installs are left out. The interface's account is among them, its changes being in its own record.
+- For that it may list pods and read their logs in `kube-system`, and only then.
+
 ### Headlamp in the appliance
 
 One Headlamp serves the clusters of the interface's namespaces on port 8443, behind the interface's sign-in.

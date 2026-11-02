@@ -72,7 +72,8 @@ checks apply as on its pages.`,
 	f := cmd.PersistentFlags()
 	f.StringVar(&o.check.CertFile, "cert", "/etc/kubehenge/tls.crt", "certificate the interface must present")
 	f.StringVar(&o.check.Address, "address", "127.0.0.1:443", "where the interface listens")
-	cmd.AddCommand(o.healthCommand(), o.upgradesCommand(), o.upgradeCommand(), o.etcdBackupsCommand(), o.notificationsCommand())
+	cmd.AddCommand(o.healthCommand(), o.upgradesCommand(), o.upgradeCommand(), o.etcdBackupsCommand(), o.notificationsCommand(),
+		o.activityCommand())
 	return cmd
 }
 

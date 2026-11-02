@@ -79,6 +79,9 @@ type Settings struct {
 	// ExtraClusterNamespaces are more namespaces the interface creates and manages clusters in,
 	// beside its own, such as one per team.
 	ExtraClusterNamespaces []string `json:"extraClusterNamespaces,omitempty"`
+	// APIAuditLog has the management cluster's API server log the changes people make to its
+	// output, where the interface reads them for its activity page.
+	APIAuditLog bool `json:"apiAuditLog,omitempty"`
 }
 
 // TemplateRefresh is when and where the node OS VM templates are built again. Empty fields take the

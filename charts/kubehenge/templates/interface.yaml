@@ -50,6 +50,9 @@ data:
   {{- if .Values.interface.headlampActions }}
   headlampActions: "true"
   {{- end }}
+  {{- if .Values.interface.apiAuditLog }}
+  apiAuditLog: "true"
+  {{- end }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -213,9 +216,10 @@ subjects:
 {{- end }}
 {{- /*
 The logs of capmox and the Add-on Provider for Helm, of which a cluster's support bundle carries the
-lines naming the cluster's objects.
+lines naming the cluster's objects. With apiAuditLog, the API server's in kube-system too, which
+carry the changes people make.
 */}}
-{{- range list "proxmox-infrastructure-system" "helm-addon-system" }}
+{{- range concat (list "proxmox-infrastructure-system" "helm-addon-system") (ternary (list "kube-system") (list) .Values.interface.apiAuditLog) }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

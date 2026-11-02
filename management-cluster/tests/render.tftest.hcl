@@ -240,7 +240,7 @@ run "controller_and_clusters_are_least_privilege" {
         { image = "registry.k8s.io/*", keyless = { issuer = "https://accounts.google.com", subject = "krel-trust@k8s-releng-prod.iam.gserviceaccount.com" } },
       ] }
       watch     = { stallMinutes = 20 }
-      interface = { extraNamespaces = [], offerHARules = false, headlampSignIn = false, headlampActions = false }
+      interface = { extraNamespaces = [], offerHARules = false, headlampSignIn = false, headlampActions = false, apiAuditLog = false }
       clusters  = { storages = ["local-lvm", "ceph"], bridges = ["vmbr0", "vmbr1"] }
       proxmox = {
         url          = "https://pve.example.org:8006"
@@ -677,7 +677,7 @@ run "extra_cluster_namespaces" {
 
   assert {
     condition = (
-      yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = ["team-a", "team-b"], offerHARules = false, headlampSignIn = false, headlampActions = false } &&
+      yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = ["team-a", "team-b"], offerHARules = false, headlampSignIn = false, headlampActions = false, apiAuditLog = false } &&
       toset(keys(proxmox_acl.provisioner)) == toset([
         "/ kubehenge-audit",
         "/nodes kubehenge-audit",
@@ -783,6 +783,11 @@ run "providers" {
       try(yamldecode(d).kind == "KubeAPIServerConfig" && yamldecode(d).extraArgs == { event-ttl = "24h" }, false)
     ])
     error_message = "the API server keeps events a day, as long as a failed run is listed"
+  }
+
+  assert {
+    condition     = !strcontains(data.talos_machine_configuration.node[0].config_patches[1], "audit-log-path")
+    error_message = "without api_audit_log, the API server keeps Talos's audit log file"
   }
 
   assert {
@@ -932,7 +937,7 @@ run "headlamp_sign_in" {
   }
 
   assert {
-    condition     = yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = [], offerHARules = false, headlampSignIn = true, headlampActions = false }
+    condition     = yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = [], offerHARules = false, headlampSignIn = true, headlampActions = false, apiAuditLog = false }
     error_message = "the chart must be told to have the shared Headlamp sign people in, its namespaces left as they are"
   }
 }
@@ -945,8 +950,34 @@ run "headlamp_actions" {
   }
 
   assert {
-    condition     = yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = [], offerHARules = false, headlampSignIn = false, headlampActions = true }
+    condition     = yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = [], offerHARules = false, headlampSignIn = false, headlampActions = true, apiAuditLog = false }
     error_message = "the chart must be told to have the shared Headlamp offer its actions, nothing else of the interface changed"
+  }
+}
+
+run "api_audit_log" {
+  command = plan
+
+  variables {
+    api_audit_log = true
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).interface == { extraNamespaces = [], offerHARules = false, headlampSignIn = false, headlampActions = false, apiAuditLog = true }
+    error_message = "the chart must be told the API server's audit log is there to read, nothing else of the interface changed"
+  }
+
+  assert {
+    condition = anytrue([
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) :
+      try(yamldecode(d).kind == "KubeAPIServerConfig" && yamldecode(d).extraArgs == { event-ttl = "24h", audit-log-path = "-" }, false)
+    ])
+    error_message = "the API server writes its audit log to its output, and still keeps events a day"
+  }
+
+  assert {
+    condition     = !strcontains(data.talos_machine_configuration.node[0].config_patches[1], "KubeAuditPolicyConfig")
+    error_message = "the API server keeps Talos's own audit policy, so nothing it recorded is lost"
   }
 }
 

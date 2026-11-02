@@ -22,6 +22,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Interface
 
+- **Activity** lists who did what, newest first, in Administration and on each cluster's page, with the management cluster's events of the last day. `kubehenge appliance activity` lists it too.
+  - The setting **kubectl changes** (`api_audit_log`) adds the changes people make with kubectl, through the management cluster's audit log.
 - **A faster interface.** Pages load the session, setup status and fleet together. A change to a cluster or machine shows at once in the fleet, the runs and the cluster's page.
 - **Machines** lists the control plane and the worker pools with their sizes. It adds, resizes and deletes pools and resizes the control plane, staged with the other changes.
   - The API server refuses a new pool whose name cannot be part of its nodes' host names.

@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useState, type JSX } from "react";
 
+import { ClusterActivity } from "./Activity";
 import { api } from "./api";
 import { AutoscalerDialog, ScaleDialog, autoscalerText, poolText } from "./Autoscaling";
 import { BackupsDialog, BackupsView, backupsOf, backupsRows, useClassTargets } from "./Backups";
@@ -439,16 +440,18 @@ export function ClusterDetail({
         <StagedBar cluster={c} />
         <div className="object">
           <div className="object-view">
-            {view === "" && <Placement cluster={c} />}
             {view === "" && (
-              <Summary
-                cluster={c}
-                can={can}
-                why={why}
-                onChanged={() => {
-                  void reload();
-                }}
-              />
+              <>
+                <Placement cluster={c} />
+                <Summary
+                  cluster={c}
+                  can={can}
+                  why={why}
+                  onChanged={() => {
+                    void reload();
+                  }}
+                />
+              </>
             )}
             {view === "health" && (
               <Suspense fallback={<Skeleton rows={6} shape="tiles" />}>
@@ -475,6 +478,7 @@ export function ClusterDetail({
               </>
             )}
             {view === "options" && <OptionsView cluster={c} can={can} onEdit={setAction} />}
+            {view === "activity" && <ClusterActivity cluster={c} />}
           </div>
         </div>
 

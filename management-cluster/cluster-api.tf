@@ -393,6 +393,7 @@ resource "helm_release" "kubehenge" {
         offerHARules    = var.offer_ha_rules
         headlampSignIn  = var.headlamp_sign_in
         headlampActions = var.headlamp_actions
+        apiAuditLog     = var.api_audit_log
       }
       clusters = {
         storages = var.workload_datastores
