@@ -35,6 +35,9 @@ type fakeCluster struct {
 	deleted []int
 	created []map[string]any // the parameters of each VM created, in turn
 	nextIDs []int            // what /cluster/nextid answers, in turn
+	// unstarted are VM IDs whose create task Proxmox VE kills before it runs, leaving the VM
+	// locked for creation.
+	unstarted map[int]bool
 }
 
 var (
@@ -101,6 +104,11 @@ func (f *fakeCluster) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, taken := f.configs[int(vmid)]; taken {
 			f.refuse(w, fmt.Sprintf("unable to create VM %d - VM %d already exists on node 'pve1'", int(vmid), int(vmid)))
+			return
+		}
+		if f.unstarted[int(vmid)] {
+			f.configs[int(vmid)] = map[string]any{"lock": "create"}
+			f.refuse(w, "got no worker upid - start worker failed")
 			return
 		}
 		f.created = append(f.created, params)
@@ -410,6 +418,38 @@ func TestCreateFreshTakesAnotherVMIDWhenTheOfferedOneIsTaken(t *testing.T) {
 	}
 	if f.configs[100]["name"] != "kubehenge-k3s-build" {
 		t.Errorf("the other build's VM 100 is now %v", f.configs[100])
+	}
+}
+
+// A create whose task Proxmox VE killed before it ran leaves its VM ID locked. The build goes on
+// under the next one and names the locked VM.
+func TestCreateFreshTakesAnotherVMIDWhenItsCreateNeverStarted(t *testing.T) {
+	t.Parallel()
+	tmpl, _ := rke2(t)
+	f := &fakeCluster{t: t, views: [][]map[string]any{{}}, configs: map[int]map[string]any{}, nextIDs: []int{100, 101}, unstarted: map[int]bool{100: true}}
+	client := f.client()
+	ctx := t.Context()
+	cluster, err := client.Cluster(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := client.Node(ctx, "pve1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logged []string
+	b := &Builder{Client: client, Storage: "local-lvm", Pool: testPool, Log: func(format string, args ...any) {
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}}
+	vmid, err := b.createFresh(ctx, cluster, node, &tmpl, "local:import/image.qcow2", "x86-64-v2-AES", "https://example.test/image.qcow2", nil)
+	if err != nil || vmid != 101 {
+		t.Fatalf("createFresh gave %d, %v; want VM 101 after the create of 100 never started", vmid, err)
+	}
+	if len(f.created) != 1 || f.created[0]["vmid"] != float64(101) {
+		t.Errorf("created %v; want VM 101 alone", f.created)
+	}
+	if !slices.ContainsFunc(logged, func(l string) bool { return strings.Contains(l, "qm unlock 100 && qm destroy 100") }) {
+		t.Errorf("logged %q; want how to remove the locked VM 100", logged)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/luthermonson/go-proxmox"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
@@ -503,12 +504,16 @@ func (p *Proxmox) ensureVolumeOwner(ctx context.Context, n Names, c Credentials,
 		return c, err
 	}
 	// A VMID Proxmox VE offers is not reserved: another cluster's owner, a machine or a template
-	// build created at the same moment can take it first, and the create is then refused.
+	// build created at the same moment can take it first, and the create is then refused. A create
+	// whose task never started burns its VMID too.
 	for attempt := 1; ; attempt++ {
 		var upid string
 		c, upid, err = p.createVolumeOwner(ctx, n, c, node, record)
 		switch {
 		case isExisting(err) && attempt < volumeOwnerAttempts:
+			continue
+		case pve.CreateNeverStarted(err) && attempt < volumeOwnerAttempts:
+			ctrl.LoggerFrom(ctx).Info(pve.LockedVMHint(c.VolumeOwner))
 			continue
 		case err != nil:
 			return c, err

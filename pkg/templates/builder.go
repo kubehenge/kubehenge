@@ -702,7 +702,8 @@ func (b *Builder) cpuType(ctx context.Context, t *Template) (string, error) {
 }
 
 // createAttempts bounds createFresh: a VM ID Proxmox VE offers is not reserved, so another build or
-// a machine being created at the same moment can take it first, and the create is then refused.
+// a machine being created at the same moment can take it first, and the create is then refused. A
+// create whose task never started burns its VM ID too.
 const createAttempts = 5
 
 // createFresh creates t's VM under the next free VM ID, asking for another while the one offered
@@ -720,10 +721,16 @@ func (b *Builder) createFresh(
 		if err == nil {
 			return vmid, nil
 		}
-		if attempt == createAttempts || !strings.Contains(err.Error(), "already exists") {
+		switch {
+		case attempt == createAttempts:
+			return 0, err
+		case strings.Contains(err.Error(), "already exists"):
+			b.logf("VM %d was taken meanwhile; choosing another VM ID", vmid)
+		case pve.CreateNeverStarted(err):
+			b.logf("%s Choosing another VM ID.", pve.LockedVMHint(vmid))
+		default:
 			return 0, err
 		}
-		b.logf("VM %d was taken meanwhile; choosing another VM ID", vmid)
 	}
 }
 
