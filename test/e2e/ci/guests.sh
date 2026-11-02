@@ -51,7 +51,8 @@ sample() {
         memory=$(awk '/^VmRSS:/ { r = $2 } /^VmSwap:/ { s = $2 } END { print r + 0, s + 0 }' \
             "/proc/${pid}/status" 2> /dev/null) || continue
         # What the VM received is what its tap devices sent, in the network namespace QEMU runs in.
-        received=$(awk -F '[: ]+' -v tap="tap${vmid}i" 'index($2, tap) == 1 { b += $11 } END { print b + 0 }' \
+        # The kernel pads names to six characters, so a tap's name has no space before it.
+        received=$(awk -F '[: ]+' -v tap="tap${vmid}i" '{ sub(/^ +/, "") } index($1, tap) == 1 { b += $10 } END { print b + 0 }' \
             "/proc/${pid}/net/dev" 2> /dev/null) || continue
         printf '%s %s %s %s %s %s %s\n' "${now}" "${pid}" "${vmid}" "${name}" "${ticks}" "${memory}" "${received}"
     done
