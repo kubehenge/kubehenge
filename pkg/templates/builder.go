@@ -368,6 +368,10 @@ func (b *Builder) DeleteBuild(ctx context.Context, r *proxmox.ClusterResource) e
 	if err != nil {
 		return err
 	}
+	// Proxmox VE hands a freed VM ID to the next VM created, so the ID listed may hold another VM by now.
+	if vm.Name != r.Name || !bool(vm.Template) {
+		return fmt.Errorf("VM %d is no longer the template %s; nothing was deleted", id, r.Name)
+	}
 	task, err := vm.Delete(ctx, &proxmox.VirtualMachineDeleteOptions{Purge: true, DestroyUnreferencedDisks: true})
 	return waitTask(ctx, task, err, longTaskTimeout)
 }

@@ -481,6 +481,22 @@ func TestControllersHoldPatientLeases(t *testing.T) {
 		args["leader-elect-lease-duration"] != "60s" || args["leader-elect-retry-period"] != "10s" {
 		t.Errorf("kube-vip's cloud provider's leases: %v", args)
 	}
+
+	proxies, err = helmChartProxies(cluster(), &testCharts, "kubeadm", "local-lvm", CNI{}, &Addons{PodSecurity: PodSecurity{Kyverno: "baseline"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, kyverno, _ := proxyValues(t, proxies, "web-kyverno")
+	for _, path := range [][]any{
+		{"admissionController", "container", "extraArgs"},
+		{"backgroundController", "extraArgs"},
+		{"cleanupController", "extraArgs"},
+		{"reportsController", "extraArgs"},
+	} {
+		if args := lookup[map[string]any](t, kyverno, path...); args["leaderElectionRetryPeriod"] != "10s" {
+			t.Errorf("Kyverno's %s holds leases of %v", path[0], args)
+		}
+	}
 }
 
 func TestIngressControllerOnKubeadmOnly(t *testing.T) {

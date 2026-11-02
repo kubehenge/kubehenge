@@ -110,17 +110,26 @@ func kyvernoPoliciesProxy(cluster *clusterv1.Cluster) string {
 // namespace, which those who may write there grant, rather than anyone who may create one in a
 // namespace of their own.
 //
+// Each controller holds the leases the other add-ons do. Kyverno takes only the retry period and
+// derives the rest from it, a lease of six periods renewed within five.
+//
 // The admission controller runs two replicas, which the chart then keeps one of through a
-// disruption budget. Its leader shuts down when it cannot renew its lease within 10 s, as when
-// etcd stalls on a compaction, and with the policies failing closed a lone replica would refuse
-// every pod until it is back. The other goes on answering. A third would not fit the least worker
-// beside every other add-on.
+// disruption budget. Its leader shuts down when it cannot renew its lease, and with the policies
+// failing closed a lone replica would refuse every pod until it is back. The other goes on
+// answering. A third would not fit the least worker beside every other add-on.
 func kyvernoValues() map[string]any {
+	lease := func() map[string]any { return map[string]any{"leaderElectionRetryPeriod": leaseRetry} }
 	return map[string]any{
 		"features": map[string]any{
 			"policyExceptions": map[string]any{"enabled": true, "namespace": kyvernoAddon},
 		},
-		"admissionController": map[string]any{"replicas": kyvernoAdmissionReplicas},
+		"admissionController": map[string]any{
+			"replicas":  kyvernoAdmissionReplicas,
+			"container": map[string]any{extraArgsKey: lease()},
+		},
+		"backgroundController": map[string]any{extraArgsKey: lease()},
+		"cleanupController":    map[string]any{extraArgsKey: lease()},
+		"reportsController":    map[string]any{extraArgsKey: lease()},
 	}
 }
 
