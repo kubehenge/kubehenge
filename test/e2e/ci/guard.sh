@@ -14,7 +14,9 @@
 #       <record>.fail, and the test ended
 #   test/e2e/ci/guard.sh run <pid file> <record> <command>...
 #       the command in a session of its own, whose ID it leaves in <pid file>, then the report of the
-#       watch that ended it, if one did
+#       watch that ended it, if one did. Every KUBEHENGE_E2E_GUARD_REPORT seconds (60) while it runs,
+#       the record's latest sample too: a runner that is lost uploads no artifacts, and its log up to
+#       then is all that is kept
 #   test/e2e/ci/guard.sh peaks <record>
 #       the least room and the most pressure the record holds, beside the floors
 #   test/e2e/ci/guard.sh crossed <sample>
@@ -31,6 +33,7 @@ set -eu
 here=$(dirname "$0")
 proc=${KUBEHENGE_E2E_GUARD_PROC:-/proc}
 interval=${KUBEHENGE_E2E_GUARD_INTERVAL:-5}
+report_every=${KUBEHENGE_E2E_GUARD_REPORT:-60}
 
 # MiB of memory and swap together. Below it the kernel is about to choose a process to end, and
 # collecting from the guests needs some hundreds of MiB of its own.
@@ -167,9 +170,18 @@ run() {
     # The test's processes are the OOM killer's to choose like any other's: the runner's protection,
     # which they would inherit from its agent, is not theirs.
     { echo 0 > "/proc/$$/oom_score_adj"; } 2> /dev/null || true
+    # The sleep writes nowhere, so the log's pipe closes once this loop is ended.
+    (
+        while sleep "${report_every}" > /dev/null 2>&1; do
+            last=$(tail -n 1 "${record}" 2> /dev/null || true)
+            [ -z "${last}" ] || printf 'runner: %s\n' "${last}"
+        done
+    ) &
+    reporter=$!
     code=0
     # shellcheck disable=SC2016 # the session's own shell expands them.
     setsid --wait sh -c 'echo "$$" > "$0" && exec "$@"' "${pidfile}" "$@" || code=$?
+    kill "${reporter}" 2> /dev/null || true
     if [ -s "${record}.fail" ]; then
         why=$(sed -n '1s/^FAIL: //p' "${record}.fail")
         printf '::error title=The runner ran out of room::%s\n' "${why}"
