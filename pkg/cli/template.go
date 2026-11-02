@@ -375,17 +375,22 @@ The API token is read from KUBEHENGE_PROXMOX_TOKEN.`,
 				return err
 			}
 			now := time.Now()
-			var vmid int
+			makeTemplate := func(ctx context.Context) (int, error) { return builder.Ensure(ctx, &t, now) }
 			if newBuild && t.Refreshed() {
 				build, buildErr := t.Build(now)
 				if buildErr != nil {
 					return fmt.Errorf("naming the build of %s: %w", t.LineName, buildErr)
 				}
 				t = build
-				vmid, err = builder.Create(cmd.Context(), &t)
-			} else {
-				vmid, err = builder.Ensure(cmd.Context(), &t, now)
+				makeTemplate = func(ctx context.Context) (int, error) { return builder.Create(ctx, &t) }
 			}
+			// As the interface and the refresh do: a mirror or a node can fail for a while. A VM kept
+			// for inspection would stop the next attempt, so --keep-on-failure gets one.
+			retry := templates.Retry{Log: builder.Log}
+			if builder.KeepOnFailure {
+				retry.Attempts = 1
+			}
+			vmid, err := retry.Do(cmd.Context(), t.LineName, makeTemplate)
 			if err != nil {
 				return fmt.Errorf("creating template %s: %w", t.LineName, err)
 			}
