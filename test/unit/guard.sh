@@ -150,9 +150,17 @@ if command -v setsid > /dev/null 2>&1; then
     rm -f "${record}"
     memory 4096000 6144000 2.00 3
     code=0
+    start=$(date +%s)
     out=$(sh "${guard}" run "${root}/test.pid" "${record}" sh -c 'exit 3') || code=$?
+    took=$(($(date +%s) - start))
     truth "a test's own failure is its exit code" [ "${code}" = 3 ]
     truth "with no report" [ -z "${out}" ]
+    truth "and the log's pipe closed as it ends" [ "${took}" -lt 10 ]
+
+    echo "12:00:00 available=4000 swap_free=6000 oom_kills=0" > "${record}"
+    out=$(KUBEHENGE_E2E_GUARD_REPORT=1 sh "${guard}" run "${root}/test.pid" "${record}" sleep 3)
+    holds "a running test's log gets the latest sample" "runner: 12:00:00 available=4000 swap_free=6000 oom_kills=0" "${out}"
+    rm -f "${record}"
 
     sh "${guard}" watch "${root}/test.pid" "${record}" "${root}/vmstat.txt" / > "${root}/watch.log" 2>&1 &
     watcher=$!

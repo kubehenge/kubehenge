@@ -245,6 +245,8 @@ A guard (`test/e2e/ci/guard.sh`) keeps the CI agent's own processes out of the O
 
 It reports what held the memory (the VMs by name, the largest other processes, the last samples and the kernel's lines on memory). The test then fails like any other and keeps its artifacts. The log's "The runner's room" step gives how near each run came to these floors. It also gives the least memory available and how much was read back from swap.
 
+A runner that is lost uploads no artifacts. So the test's log also gets the guard's latest sample once a minute, as a `runner:` line.
+
 ### What a failed test leaves
 
 When a test fails, the try's artifact holds the clusters' objects and pods' logs, with the earlier run of every container that restarted. It also holds what each running VM held through its guest agent (`guests.sh collect`):
