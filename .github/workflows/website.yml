@@ -66,7 +66,9 @@ jobs:
             --deny-self-hosted-runners
           tar -xzf "$archive" -C "$RUNNER_TEMP" ./bin/kubehenge
           kubehenge=$RUNNER_TEMP/bin/kubehenge
-          if ! "$kubehenge" release renew --help > /dev/null 2>&1; then
+          # A build without renew prints its group's help for "renew --help" and exits 0, so the
+          # group's list of commands is what says whether it has one.
+          if ! "$kubehenge" release --help | grep -Eq '^ +renew +'; then
             echo "::notice::$tag cannot sign its index again; the next release can."
             exit 0
           fi
