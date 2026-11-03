@@ -10,6 +10,8 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -22,6 +24,15 @@ import (
 var operatorAPI = schema.GroupVersion{Group: "operator.cluster.x-k8s.io", Version: "v1alpha2"}
 
 var providerKinds = []string{"CoreProvider", "BootstrapProvider", "ControlPlaneProvider", "InfrastructureProvider", "IPAMProvider", "AddonProvider"}
+
+// appliedSpecHashAnnotation is where the operator records the hash of what it applied, on a
+// provider and on the Secret it caches the provider's manifests in.
+const appliedSpecHashAnnotation = "operator.cluster.x-k8s.io/applied-spec-hash"
+
+// ProvidersSettle is how long the providers must stay unchanged before they count as installed.
+// Right after an install, the operator can install a provider again from a stale read, which
+// replaces its Deployments for about 15 seconds.
+const ProvidersSettle = 30 * time.Second
 
 // WaitForOperator returns once the Cluster API operator's webhooks admit a provider, which they
 // cannot while the operator's pod or its Service's endpoints are still being replaced: after a node
@@ -46,19 +57,30 @@ func WaitForOperator(ctx context.Context, c client.Client, namespace string, int
 }
 
 // WaitForProviders returns once the Cluster API operator has applied every provider's current
-// spec and each provider's Deployments have rolled out, writing what it still waits for to
-// progress whenever that changes. Neither Helm's own wait nor the providers' Ready condition can
-// tell: Helm sees only the provider objects, and Ready mirrors the Deployments' availability,
-// which their old pods keep up until the operator replaces them.
-func WaitForProviders(ctx context.Context, c client.Reader, interval time.Duration, progress io.Writer) error {
-	var last []string
+// spec, each provider's Deployments have rolled out, and none of that has changed for settle. It
+// writes what it still waits for to progress whenever that changes. Neither Helm's own wait nor
+// the providers' Ready condition can tell: Helm sees only the provider objects, and Ready mirrors
+// the Deployments' availability, which their old pods keep up until the operator replaces them.
+func WaitForProviders(ctx context.Context, c client.Reader, interval, settle time.Duration, progress io.Writer) error {
+	var (
+		last    []string
+		settled map[string]string
+		since   time.Time
+	)
 	for {
-		pending, err := ProvidersPending(ctx, c)
-		if err == nil && len(pending) == 0 {
+		pending, applied, err := providersPending(ctx, c)
+		switch {
+		case err != nil:
+			pending, since = []string{err.Error()}, time.Time{}
+		case len(pending) > 0:
+			since = time.Time{}
+		case since.IsZero() || !maps.Equal(applied, settled):
+			settled, since = applied, time.Now()
+			pending = []string{fmt.Sprintf("the providers to stay unchanged for %s", settle)}
+		case time.Since(since) >= settle:
 			return nil
-		}
-		if err != nil {
-			pending = []string{err.Error()}
+		default:
+			pending = last
 		}
 		if !slices.Equal(pending, last) {
 			// Progress is only for the log. Failing to write it does not change the wait.
@@ -73,41 +95,110 @@ func WaitForProviders(ctx context.Context, c client.Reader, interval time.Durati
 	}
 }
 
-// ProvidersPending lists what keeps the Cluster API operator's providers from running as their
-// specs say: a provider whose current spec the operator has not applied, a provider namespace
-// without a provider Deployment, and a provider Deployment that has not rolled out.
-func ProvidersPending(ctx context.Context, c client.Reader) ([]string, error) {
+// providersPending lists what keeps the Cluster API operator's providers from running as their
+// specs say: a provider whose current spec the operator has not applied or is still applying, a
+// provider namespace without a provider Deployment, and a provider Deployment that has not rolled
+// out. With it comes what the operator has applied: each provider's spec hash, and each provider
+// Deployment's UID and generation, which an install or upgrade of the provider replaces.
+func providersPending(ctx context.Context, c client.Reader) ([]string, map[string]string, error) {
 	var pending []string
+	applied := map[string]string{}
 	namespaces := map[string]bool{}
 	for _, kind := range providerKinds {
 		list := &unstructured.UnstructuredList{}
 		list.SetGroupVersionKind(operatorAPI.WithKind(kind + "List"))
 		if err := c.List(ctx, list); err != nil {
-			return nil, fmt.Errorf("listing %ss: %w", kind, err)
+			return nil, nil, fmt.Errorf("listing %ss: %w", kind, err)
 		}
 		for i := range list.Items {
 			p := &list.Items[i]
 			namespaces[p.GetNamespace()] = true
-			if why := notApplied(p); why != "" {
-				pending = append(pending, fmt.Sprintf("%s %s/%s: %s", kind, p.GetNamespace(), p.GetName(), why))
+			name := fmt.Sprintf("%s %s/%s", kind, p.GetNamespace(), p.GetName())
+			why, err := providerPending(ctx, c, kind, p)
+			if err != nil {
+				return nil, nil, err
 			}
+			if why != "" {
+				pending = append(pending, fmt.Sprintf("%s: %s", name, why))
+			}
+			applied[name] = p.GetAnnotations()[appliedSpecHashAnnotation]
 		}
 	}
 	for _, ns := range slices.Sorted(maps.Keys(namespaces)) {
-		deployments := &appsv1.DeploymentList{}
-		if err := c.List(ctx, deployments, client.InNamespace(ns), client.HasLabels{providerLabel}); err != nil {
-			return nil, fmt.Errorf("listing the provider Deployments in %s: %w", ns, err)
+		waiting, err := deploymentsPending(ctx, c, ns, applied)
+		if err != nil {
+			return nil, nil, err
 		}
-		if len(deployments.Items) == 0 {
-			pending = append(pending, fmt.Sprintf("namespace %s: no provider Deployment", ns))
+		pending = append(pending, waiting...)
+	}
+	return pending, applied, nil
+}
+
+// deploymentsPending lists what keeps the provider Deployments in a namespace from running, and
+// records each one's UID and generation in applied.
+func deploymentsPending(ctx context.Context, c client.Reader, ns string, applied map[string]string) ([]string, error) {
+	deployments := &appsv1.DeploymentList{}
+	if err := c.List(ctx, deployments, client.InNamespace(ns), client.HasLabels{providerLabel}); err != nil {
+		return nil, fmt.Errorf("listing the provider Deployments in %s: %w", ns, err)
+	}
+	if len(deployments.Items) == 0 {
+		return []string{fmt.Sprintf("namespace %s: no provider Deployment", ns)}, nil
+	}
+	var pending []string
+	for i := range deployments.Items {
+		dep := &deployments.Items[i]
+		if !rolledOut(dep) {
+			pending = append(pending, fmt.Sprintf("Deployment %s/%s: rolling out", ns, dep.Name))
 		}
-		for i := range deployments.Items {
-			if dep := &deployments.Items[i]; !rolledOut(dep) {
-				pending = append(pending, fmt.Sprintf("Deployment %s/%s: rolling out", ns, dep.Name))
-			}
-		}
+		applied["Deployment "+ns+"/"+dep.Name] = fmt.Sprintf("%s/%d", dep.UID, dep.Generation)
 	}
 	return pending, nil
+}
+
+// providerPending says why the operator has not finished applying a provider, or returns "".
+func providerPending(ctx context.Context, c client.Reader, kind string, p *unstructured.Unstructured) (string, error) {
+	if why := notApplied(p); why != "" {
+		return why, nil
+	}
+	return stillApplying(ctx, c, kind, p)
+}
+
+// stillApplying says why the operator may still be applying a provider whose conditions say it is
+// done, or returns "" if it is not. The operator records the hash of what it applied on the Secret
+// it caches the provider's manifests in, then on the provider, so the two differ until a pass ends.
+func stillApplying(ctx context.Context, c client.Reader, kind string, p *unstructured.Unstructured) (string, error) {
+	hash := p.GetAnnotations()[appliedSpecHashAnnotation]
+	if hash == "" {
+		return "no applied spec recorded yet", nil
+	}
+	version, _, _ := unstructured.NestedString(p.Object, "spec", "version")
+	cache := &metav1.PartialObjectMetadata{}
+	cache.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
+	key := client.ObjectKey{Namespace: p.GetNamespace(), Name: providerCacheName(kind, p.GetName(), version)}
+	switch err := c.Get(ctx, key, cache); {
+	case apierrors.IsNotFound(err):
+		return fmt.Sprintf("its manifests for %s not cached yet", version), nil
+	case err != nil:
+		return "", fmt.Errorf("reading the cache Secret %s/%s: %w", key.Namespace, key.Name, err)
+	}
+	if cache.GetAnnotations()[appliedSpecHashAnnotation] != hash {
+		return "still being applied", nil
+	}
+	return "", nil
+}
+
+// providerCacheName is the Secret the operator caches a provider's manifests in, as its own
+// ProviderCacheName names it.
+func providerCacheName(kind, name, version string) string {
+	return fmt.Sprintf("%s-%s-%s-cache", providerType(kind), name, version)
+}
+
+// providerType is the operator's own name for a kind of provider, as its GetType gives it.
+func providerType(kind string) string {
+	if kind == "ControlPlaneProvider" {
+		return "control-plane"
+	}
+	return strings.ToLower(strings.TrimSuffix(kind, "Provider"))
 }
 
 // notApplied says why the operator has not applied a provider's current generation, or returns

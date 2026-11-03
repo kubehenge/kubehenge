@@ -59,15 +59,25 @@ installed_version() {
         jq -r --arg n "$1" '.items[] | select(.metadata.name == $n) | .status.installedVersion' | head -n 1
 }
 
+has_clusterclass_crd() { kubectl get crd clusterclasses.cluster.x-k8s.io > /dev/null; }
+
+# provider_runs_with <provider label> <argument>: whether that provider's Deployments run with the
+# argument. Sets seen to the arguments found.
+provider_runs_with() {
+    seen=$(kubectl get deployment --all-namespaces -l "cluster.x-k8s.io/provider=$1" \
+        -o jsonpath='{.items[*].spec.template.spec.containers[0].args}') || return 1
+    case "${seen}" in
+        *"$2"*) ;;
+        *) return 1 ;;
+    esac
+}
+
+# The checks poll: should the operator install a provider again, it replaces the Deployments.
 check_topology_and_tls() {
-    kubectl get crd clusterclasses.cluster.x-k8s.io > /dev/null
-    kubectl get deployment --all-namespaces -l cluster.x-k8s.io/provider=infrastructure-proxmox \
-        -o jsonpath='{.items[0].spec.template.spec.containers[0].args}' | grep -q -- '--proxmox-insecure=false' ||
-        fail 'capmox does not verify the Proxmox VE certificate'
+    until_true 300 "the ClusterClass CRD" has_clusterclass_crd
+    until_true 300 "capmox verifies the Proxmox VE certificate" provider_runs_with infrastructure-proxmox --proxmox-insecure=false
     for provider in cluster-api control-plane-kubeadm infrastructure-proxmox; do
-        kubectl get deployment --all-namespaces -l "cluster.x-k8s.io/provider=${provider}" \
-            -o jsonpath='{.items[0].spec.template.spec.containers[0].args}' | grep -q 'ClusterTopology=true' ||
-            fail "ClusterTopology is not enabled in ${provider}"
+        until_true 300 "ClusterTopology enabled in ${provider}" provider_runs_with "${provider}" ClusterTopology=true
     done
 }
 

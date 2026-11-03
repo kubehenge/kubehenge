@@ -2,9 +2,15 @@
 The operator installs each provider after Helm has created its object, so Helm's own wait returns while
 the providers' webhooks are still starting and anything applied next is refused. This Job holds the
 release until the operator has applied every provider's current spec and each provider's Deployment
-has rolled out (`kubehenge wait providers`).
+has rolled out, and all of it has held for 30 seconds (`kubehenge wait providers`). It reads only the Secrets the operator caches each
+provider's manifests in, named as the operator names them, for the hash of what it applied.
 */ -}}
 {{- $hook := dict "helm.sh/hook" "post-install,post-upgrade" "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded" }}
+{{- $types := dict "CoreProvider" "core" "BootstrapProvider" "bootstrap" "ControlPlaneProvider" "control-plane" "InfrastructureProvider" "infrastructure" "IPAMProvider" "ipam" "AddonProvider" "addon" }}
+{{- $caches := dict }}
+{{- range .Values.providers }}
+{{- $_ := set $caches .namespace (append (get $caches .namespace | default list) (printf "%s-%s-%s-cache" (get $types .kind) .name .spec.version)) }}
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -45,6 +51,39 @@ subjects:
   - kind: ServiceAccount
     name: wait-for-providers
     namespace: {{ .Release.Namespace }}
+{{- range $ns, $names := $caches }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: wait-for-providers
+  namespace: {{ $ns }}
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+    helm.sh/hook-weight: "-1"
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: {{ toJson $names }}
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: wait-for-providers
+  namespace: {{ $ns }}
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+    helm.sh/hook-weight: "-1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: wait-for-providers
+subjects:
+  - kind: ServiceAccount
+    name: wait-for-providers
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
 ---
 apiVersion: batch/v1
 kind: Job
