@@ -3304,6 +3304,11 @@ EOF
         (.spec.template.spec.initContainers // [])[], .spec.template.spec.containers[] | "kube-system/\($m.name) \(.image)"')
     unpinned=$(printf '%s\n%s\n' "${images}" "${system_images}" | grep -v -e '@sha256:[0-9a-f]\{64\}$' -e '^$' | sort -u)
     [ -z "${unpinned}" ] || fail "images named without a digest (pod, image): ${unpinned}"
+else
+    # The figure to set beside the add-on parts' "memory before the add-ons", which a CNI's
+    # kubehenge.dev/cni-control-plane-memory is measured from.
+    echo "memory with no add-on:"
+    pod_memory "${work}/workload"
 fi
 
 if [ "${distribution}" = talos ]; then

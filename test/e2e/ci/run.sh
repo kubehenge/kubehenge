@@ -13,7 +13,8 @@
 # second Proxmox VE node, test/e2e/ci/second-node.sh), which first apply the management cluster and
 # create the templates they need, and leave it up. The workload tests and their add-on halves take
 # options after their name, each after a +: the cluster's CNI, its node OS, or cis-off
-# (test/e2e/ci/variant.sh), as in kubeadm+calico+rocky-10+cis-off.
+# (test/e2e/ci/variant.sh), as in kubeadm+calico+rocky-10+cis-off. Every test but the appliance
+# takes management-<MiB>, the management node's memory, as in management-cluster-upgrade+management-3584.
 #
 # The workload clusters start one minor version behind the management cluster's Kubernetes and are
 # upgraded to it; KUBEHENGE_E2E_FROM names the release they start on. The Talos cluster starts on
@@ -208,6 +209,18 @@ make -s -C "${repo}" capmox-image CAPMOX_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehe
 make -s -C "${repo}" helm-addon-image HELM_ADDON_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-addon-provider-helm" \
     KO_FLAGS=--insecure-registry > /dev/null
 
+# The management node's memory is the module's default, but where the test's name gives another.
+# kubeadm's add-on parts with Calico and RKE2's with Cilium take 3584 MiB, as with 4096 their guests
+# outgrow 12 GiB (docs/testing.md).
+case "${test}+${KUBEHENGE_E2E_CNI:-}" in
+    kubeadm-addons-?+calico | rke2-addons-?+cilium) : "${KUBEHENGE_E2E_MANAGEMENT_MEMORY:=3584}" ;;
+    *) ;;
+esac
+if [ -n "${KUBEHENGE_E2E_MANAGEMENT_MEMORY:-}" ]; then
+    export TF_VAR_node_memory_mb="${KUBEHENGE_E2E_MANAGEMENT_MEMORY}"
+    echo "the management node has ${TF_VAR_node_memory_mb} MiB of memory"
+fi
+
 # The tests' own output is shown as it comes rather than when each make target ends.
 e2e() { make -C "${repo}" OUTPUT_SYNC=none "$@"; }
 
@@ -265,9 +278,9 @@ case "${test}" in
         ;;
     # The other tests run against a management cluster applied here first. The runner has 4 vCPUs,
     # and a workload cluster with every add-on starting starves when the management node holds 4 of
-    # its own beside it; with no provider upgrade to ride out, 2 do. Its memory stays the module's
-    # default: with 3 GiB the node stalled for half a minute while the add-on provider
-    # reconciled every release at once, its probes failing, and the webhooks with them.
+    # its own beside it; with no provider upgrade to ride out, 2 do. Its memory is set above: with
+    # 3 GiB the node stalled for half a minute while the add-on provider reconciled every release
+    # at once, its probes failing, and the webhooks with them.
     *) export TF_VAR_node_cores=2 ;;
 esac
 
@@ -307,6 +320,8 @@ if ! tofu -chdir="${work}/mgmt" apply -input=false -auto-approve -no-color > "${
 fi
 (umask 077 && tofu -chdir="${work}/mgmt" output -raw kubeconfig > "${work}/kubeconfig.yaml")
 export KUBECONFIG="${work}/kubeconfig.yaml"
+# For the guard, which samples the management node's memory from inside it once this is here.
+(umask 077 && tofu -chdir="${work}/mgmt" output -raw talosconfig > "${work}/mgmt/talosconfig")
 
 templates_made
 

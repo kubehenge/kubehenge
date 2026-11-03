@@ -113,6 +113,22 @@ refused 'k3s+cilium;true'
 refused 'k3s+$(true)'
 refused 'k3s++cilium'
 refused 'k3s+Cilium'
+refused appliance+management-3584
+refused management-cluster+management-
+refused management-cluster+management-0
+refused management-cluster+management-035
+refused management-cluster+management-35x
+refused management-cluster+management-3584+calico
+# reads <name> <settings>: the settings the name carries, one per line.
+reads() {
+    # shellcheck disable=SC2310 # a refusal is reported as the failure.
+    if out=$(variant "$1" 2>&1) && [ "${out}" = "$2" ]; then ok; else bad "$1 reads as '${out}', not '$2'"; fi
+}
+reads management-cluster-upgrade+management-3584 'export KUBEHENGE_E2E_MANAGEMENT_MEMORY=3584'
+reads control-plane-ha+management-5120 'export KUBEHENGE_E2E_MANAGEMENT_MEMORY=5120'
+reads kubeadm-addons-a+calico+management-4096 'export KUBEHENGE_E2E_CNI=calico
+export KUBEHENGE_E2E_MANAGEMENT_MEMORY=4096'
+reads rke2+calico 'export KUBEHENGE_E2E_CNI=calico'
 # A test without options carries no settings.
 # shellcheck disable=SC2310 # a refusal is reported as the failure.
 if out=$(variant control-plane-ha 2>&1) && [ -z "${out}" ]; then ok; else bad "control-plane-ha carries settings: ${out}"; fi
