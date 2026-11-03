@@ -1259,13 +1259,19 @@ if [ "${KUBEHENGE_E2E_DATASTORE_ALLOCATE:-}" = 1 ]; then
         printf '%s' "${perms}" | jq -e --argjson want "$1" '([.data[] | has("Datastore.Allocate")] | any) == $want' > /dev/null
     }
     # csi_at <version>: every pod of the CSI plugin runs its images at the version, and is ready.
+    # Until then the plugin's HelmReleaseProxy says why Helm did not install or upgrade it.
     csi_at() {
+        # shellcheck disable=SC2310 # polled; a failed read is a no.
         wl get pods -A -o json | jq -e --arg v "$1" '
             def plugin: .image | test("/proxmox-csi-(controller|node):");
             [.items[] | select(any(.spec.containers[]; plugin))] |
             length > 0 and all(
                 all(.spec.containers[] | select(plugin); .image | split("@")[0] | endswith(":" + $v)) and
-                any(.status.conditions[]?; .type == "Ready" and .status == "True"))' > /dev/null
+                any(.status.conditions[]?; .type == "Ready" and .status == "True"))' > /dev/null && return 0
+        seen=$(kubectl -n "${ns}" get helmreleaseproxies -l "cluster.x-k8s.io/cluster-name=${name}" -o json 2> /dev/null |
+            jq -r '[.items[] | select(.spec.releaseName == "proxmox-csi-plugin") | .status.conditions[]? |
+                select(.type == "Ready" and .status != "True") | .message] | first // empty' | cut -c1-400)
+        return 1
     }
     # refused_with <message> <storage> <csi value>: a second cluster beside this one, on the storage
     # and with the csi variable, is refused for the reason.

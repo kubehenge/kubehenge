@@ -382,7 +382,7 @@ Add-ons are Helm charts installed per cluster by the Cluster API Add-on Provider
 
 Kubehenge's controller turns a cluster's add-on variables into HelmChartProxies beside the cluster. Switching an add-on off deletes its proxy, which uninstalls it. Values never carry a secret, since the Add-on Provider for Helm keeps them in plain text.
 
-Every chart is pinned by its digest, which a proxy's version carries as `<version>@sha256:<digest>`. Kubehenge's build of the Add-on Provider for Helm pulls an OCI chart by its manifest digest and checks that the version's tag points to it. It checks a chart from an HTTP repository against the SHA-256 of its archive that the repository's index lists.
+Every chart is pinned by its digest, which a proxy's version carries as `<version>@sha256:<digest>`. Kubehenge's build of the Add-on Provider for Helm pulls an OCI chart by its manifest digest alone. It checks that the chart is the pinned version. A publisher that moves the version's tag to a new build changes nothing for a cluster. It checks a chart from an HTTP repository against the SHA-256 of its archive that the repository's index lists.
 
 The images are pinned the same way. Each chart's entry in the controller chart's values names every image it runs by tag and digest. The controller merges those values under the ones it sets itself. An ImageSet named for its release, applied with Calico's Installation, pins the images the Tigera operator deploys Calico from.
 

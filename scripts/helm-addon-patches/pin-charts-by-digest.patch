@@ -34,7 +34,7 @@ diff --git a/internal/helm_client.go b/internal/helm_client.go
  	installClient := generateHelmInstallConfig(actionConfig, &spec.Options)
  	installClient.RepoURL = repoURL
 -	installClient.Version = spec.Version
-+	installClient.Version = version
++	installClient.Version = locateVersion(spec.RepoURL, version, digest)
  	installClient.Namespace = spec.ReleaseNamespace
 
  	if spec.ReleaseName == "" {
@@ -42,24 +42,23 @@ diff --git a/internal/helm_client.go b/internal/helm_client.go
  	if err != nil {
  		return nil, err
  	}
-+	if err := verifyChartArchive(cp, repoURL, digest); err != nil {
++	if err := verifyChart(cp, spec.RepoURL, version, digest); err != nil {
 +		return nil, err
 +	}
  	log.V(2).Info("Located chart at path", "path", cp)
 
  	log.V(2).Info("Writing values to file")
-@@ -335,7 +344,9 @@ func certPoolFromFile(filename string) (*x509.CertPool, error) {
+@@ -335,7 +344,8 @@ func certPoolFromFile(filename string) (*x509.CertPool, error) {
 
  // getHelmChartAndRepoName returns chartName, repoURL as per the format requirred in helm install/upgrade config.
  // For OCI charts, chartName needs to have whole URL path. e.g. oci://repo-url/chart-name
 -func getHelmChartAndRepoName(chartName, repoURL string) (string, string, error) {
-+// A digest is appended to it, e.g. oci://repo-url/chart-name@sha256:..., so that Helm pulls the chart by digest
-+// and checks that the version's tag points to it.
++// A digest is appended to it, e.g. oci://repo-url/chart-name@sha256:..., so that Helm pulls the chart by digest.
 +func getHelmChartAndRepoName(chartName, repoURL, digest string) (string, string, error) {
  	if registry.IsOCI(repoURL) {
  		u, err := url.Parse(repoURL)
  		if err != nil {
-@@ -343,6 +354,9 @@ func getHelmChartAndRepoName(chartName, repoURL string) (string, string, error)
+@@ -343,6 +353,9 @@ func getHelmChartAndRepoName(chartName, repoURL string) (string, string, error)
  		}
 
  		u.Path = path.Join(u.Path, chartName)
@@ -69,7 +68,7 @@ diff --git a/internal/helm_client.go b/internal/helm_client.go
  		chartName = u.String()
  		repoURL = ""
  	}
-@@ -350,6 +364,39 @@ func getHelmChartAndRepoName(chartName, repoURL string) (string, string, error)
+@@ -350,6 +363,61 @@ func getHelmChartAndRepoName(chartName, repoURL string) (string, string, error)
  	return chartName, repoURL, nil
  }
 
@@ -80,10 +79,32 @@ diff --git a/internal/helm_client.go b/internal/helm_client.go
 +	return version, digest
 +}
 +
-+// verifyChartArchive checks a chart downloaded from an HTTP repository against its digest, the sha256 of the
-+// archive as the repository index lists it. OCI charts are pulled by digest instead, see getHelmChartAndRepoName.
-+func verifyChartArchive(chartPath, repoURL, digest string) error {
-+	if digest == "" || repoURL == "" {
++// locateVersion is the version Helm locates a chart by. An OCI chart pinned to a digest is pulled by the digest
++// alone: given a version as well, Helm also resolves the version's tag and refuses the chart once a publisher has
++// moved that tag to another digest.
++func locateVersion(repoURL, version, digest string) string {
++	if digest != "" && registry.IsOCI(repoURL) {
++		return ""
++	}
++
++	return version
++}
++
++// verifyChart checks a chart pinned to a digest. An OCI chart, pulled by that digest, must be the pinned version.
++// An archive from an HTTP repository must have the digest, the sha256 of the archive as the repository index lists it.
++func verifyChart(chartPath, repoURL, version, digest string) error {
++	if digest == "" {
++		return nil
++	}
++	if registry.IsOCI(repoURL) {
++		c, err := helmLoader.Load(chartPath)
++		if err != nil {
++			return err
++		}
++		if version != "" && c.Metadata.Version != version {
++			return errors.Errorf("chart %s is version %s, not %s", digest, c.Metadata.Version, version)
++		}
++
 +		return nil
 +	}
 +	want, ok := strings.CutPrefix(digest, "sha256:")
@@ -109,7 +130,7 @@ diff --git a/internal/helm_client.go b/internal/helm_client.go
  // UpgradeHelmReleaseIfChanged upgrades a Helm release. The boolean refers to if an upgrade was attempted.
  func (c *HelmClient) UpgradeHelmReleaseIfChanged(ctx context.Context, restConfig *rest.Config, credentialsPath, caFilePath string, spec addonsv1alpha1.HelmReleaseProxySpec, existing *helmRelease.Release) (*helmRelease.Release, error) {
  	log := ctrl.LoggerFrom(ctx)
-@@ -370,14 +417,15 @@ func (c *HelmClient) UpgradeHelmReleaseIfChanged(ctx context.Context, restConfig
+@@ -370,14 +438,15 @@ func (c *HelmClient) UpgradeHelmReleaseIfChanged(ctx context.Context, restConfig
 
  	actionConfig.RegistryClient = registryClient
 
@@ -123,15 +144,15 @@ diff --git a/internal/helm_client.go b/internal/helm_client.go
  	upgradeClient := generateHelmUpgradeConfig(actionConfig, &spec.Options)
  	upgradeClient.RepoURL = repoURL
 -	upgradeClient.Version = spec.Version
-+	upgradeClient.Version = version
++	upgradeClient.Version = locateVersion(spec.RepoURL, version, digest)
  	upgradeClient.Namespace = spec.ReleaseNamespace
 
  	log.V(2).Info("Locating chart...")
-@@ -385,6 +433,9 @@ func (c *HelmClient) UpgradeHelmReleaseIfChanged(ctx context.Context, restConfig
+@@ -385,6 +454,9 @@ func (c *HelmClient) UpgradeHelmReleaseIfChanged(ctx context.Context, restConfig
  	if err != nil {
  		return nil, err
  	}
-+	if err := verifyChartArchive(cp, repoURL, digest); err != nil {
++	if err := verifyChart(cp, spec.RepoURL, version, digest); err != nil {
 +		return nil, err
 +	}
  	log.V(2).Info("Located chart at path", "path", cp)
@@ -140,16 +161,34 @@ diff --git a/internal/helm_client.go b/internal/helm_client.go
 diff --git a/internal/helm_client_test.go b/internal/helm_client_test.go
 --- a/internal/helm_client_test.go
 +++ b/internal/helm_client_test.go
-@@ -17,6 +17,8 @@ limitations under the License.
+@@ -17,14 +17,26 @@ limitations under the License.
  package internal
 
  import (
 +	"crypto/sha256"
 +	"encoding/hex"
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
  	"os"
  	"path/filepath"
++	"strconv"
++	"strings"
  	"testing"
-@@ -278,3 +280,109 @@ func TestGenerateHelmUpgradeConfig(t *testing.T) {
+ 	"time"
+
+ 	. "github.com/onsi/gomega"
+ 	"github.com/onsi/gomega/types"
+ 	helmAction "helm.sh/helm/v3/pkg/action"
++	"helm.sh/helm/v3/pkg/chart"
++	helmLoader "helm.sh/helm/v3/pkg/chart/loader"
++	"helm.sh/helm/v3/pkg/chartutil"
++	helmCli "helm.sh/helm/v3/pkg/cli"
++	"helm.sh/helm/v3/pkg/registry"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+ 	addonsv1alpha1 "sigs.k8s.io/cluster-api-addon-provider-helm/api/v1alpha1"
+ )
+@@ -278,3 +290,240 @@ func TestGenerateHelmUpgradeConfig(t *testing.T) {
  		})
  	}
  }
@@ -225,32 +264,71 @@ diff --git a/internal/helm_client_test.go b/internal/helm_client_test.go
 +	}
 +}
 +
-+func TestVerifyChartArchive(t *testing.T) {
++func TestLocateVersion(t *testing.T) {
 +	t.Parallel()
-+
-+	chartPath := filepath.Join(t.TempDir(), "nginx-1.2.3.tgz")
-+	NewWithT(t).Expect(os.WriteFile(chartPath, []byte("chart"), 0o600)).To(Succeed())
-+	sum := sha256.Sum256([]byte("chart"))
-+	digest := "sha256:" + hex.EncodeToString(sum[:])
 +
 +	testCases := []struct {
 +		name    string
 +		repoURL string
 +		digest  string
++		want    string
++	}{
++		{name: "HTTP repository", repoURL: "https://charts.example.com", digest: "sha256:abc", want: "1.2.3"},
++		{name: "OCI repository", repoURL: "oci://registry.example.com/charts", want: "1.2.3"},
++		{name: "OCI repository with digest", repoURL: "oci://registry.example.com/charts", digest: "sha256:abc"},
++	}
++
++	for _, tc := range testCases {
++		t.Run(tc.name, func(t *testing.T) {
++			t.Parallel()
++			NewWithT(t).Expect(locateVersion(tc.repoURL, "1.2.3", tc.digest)).To(Equal(tc.want))
++		})
++	}
++}
++
++// savedChart writes a chart named nginx at the version to a new archive and returns its path.
++func savedChart(t *testing.T, version, values string) string {
++	t.Helper()
++	path, err := chartutil.Save(&chart.Chart{
++		Metadata: &chart.Metadata{APIVersion: chart.APIVersionV2, Name: "nginx", Version: version},
++		Raw:      []*chart.File{{Name: "values.yaml", Data: []byte(values)}},
++	}, t.TempDir())
++	NewWithT(t).Expect(err).NotTo(HaveOccurred())
++
++	return path
++}
++
++func TestVerifyChart(t *testing.T) {
++	t.Parallel()
++
++	chartPath := savedChart(t, "1.2.3", "")
++	archive, err := os.ReadFile(chartPath)
++	NewWithT(t).Expect(err).NotTo(HaveOccurred())
++	sum := sha256.Sum256(archive)
++	digest := "sha256:" + hex.EncodeToString(sum[:])
++	const httpRepo, ociRepo = "https://charts.example.com", "oci://registry.example.com/charts"
++
++	testCases := []struct {
++		name    string
++		repoURL string
++		version string
++		digest  string
 +		wantErr bool
 +	}{
-+		{name: "no digest", repoURL: "https://charts.example.com"},
-+		{name: "OCI chart, pulled by digest", digest: "sha256:abc"},
-+		{name: "matching digest", repoURL: "https://charts.example.com", digest: digest},
-+		{name: "other digest", repoURL: "https://charts.example.com", digest: "sha256:abc", wantErr: true},
-+		{name: "other algorithm", repoURL: "https://charts.example.com", digest: "sha512:abc", wantErr: true},
++		{name: "no digest", repoURL: httpRepo, version: "1.2.3"},
++		{name: "matching digest", repoURL: httpRepo, version: "1.2.3", digest: digest},
++		{name: "other digest", repoURL: httpRepo, version: "1.2.3", digest: "sha256:abc", wantErr: true},
++		{name: "other algorithm", repoURL: httpRepo, version: "1.2.3", digest: "sha512:abc", wantErr: true},
++		{name: "OCI chart of the version", repoURL: ociRepo, version: "1.2.3", digest: "sha256:abc"},
++		{name: "OCI chart of another version", repoURL: ociRepo, version: "1.2.4", digest: "sha256:abc", wantErr: true},
++		{name: "OCI chart pinned to a digest alone", repoURL: ociRepo, digest: "sha256:abc"},
 +	}
 +
 +	for _, tc := range testCases {
 +		t.Run(tc.name, func(t *testing.T) {
 +			t.Parallel()
 +			g := NewWithT(t)
-+			err := verifyChartArchive(chartPath, tc.repoURL, tc.digest)
++			err := verifyChart(chartPath, tc.repoURL, tc.version, tc.digest)
 +			if tc.wantErr {
 +				g.Expect(err).To(HaveOccurred())
 +			} else {
@@ -258,4 +336,96 @@ diff --git a/internal/helm_client_test.go b/internal/helm_client_test.go
 +			}
 +		})
 +	}
++}
++
++// ociRegistry serves charts as an OCI registry does, by digest and by tag, and returns each chart's manifest digest.
++// Each chart is tagged with its version, so a later chart of the same version moves the tag from an earlier one.
++func ociRegistry(t *testing.T, charts ...string) (*httptest.Server, []string) {
++	t.Helper()
++	g := NewWithT(t)
++	blobs := map[string][]byte{}
++	manifests := map[string][]byte{}
++	digestOf := func(data []byte) string {
++		sum := sha256.Sum256(data)
++
++		return "sha256:" + hex.EncodeToString(sum[:])
++	}
++	blob := func(mediaType string, data []byte) map[string]any {
++		blobs[digestOf(data)] = data
++
++		return map[string]any{"mediaType": mediaType, "digest": digestOf(data), "size": len(data)}
++	}
++	digests := make([]string, 0, len(charts))
++	for _, chartPath := range charts {
++		c, err := helmLoader.Load(chartPath)
++		g.Expect(err).NotTo(HaveOccurred())
++		archive, err := os.ReadFile(chartPath)
++		g.Expect(err).NotTo(HaveOccurred())
++		config, err := json.Marshal(c.Metadata)
++		g.Expect(err).NotTo(HaveOccurred())
++		manifest, err := json.Marshal(map[string]any{
++			"schemaVersion": 2,
++			"mediaType":     "application/vnd.oci.image.manifest.v1+json",
++			"config":        blob(registry.ConfigMediaType, config),
++			"layers":        []any{blob(registry.ChartLayerMediaType, archive)},
++		})
++		g.Expect(err).NotTo(HaveOccurred())
++		manifests[digestOf(manifest)] = manifest
++		manifests[c.Metadata.Version] = manifest
++		digests = append(digests, digestOf(manifest))
++	}
++
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		var data []byte
++		contentType := "application/octet-stream"
++		if ref, ok := strings.CutPrefix(r.URL.Path, "/v2/charts/nginx/manifests/"); ok {
++			data, contentType = manifests[ref], "application/vnd.oci.image.manifest.v1+json"
++		} else if digest, ok := strings.CutPrefix(r.URL.Path, "/v2/charts/nginx/blobs/"); ok {
++			data = blobs[digest]
++		}
++		if data == nil {
++			http.NotFound(w, r)
++
++			return
++		}
++		w.Header().Set("Content-Type", contentType)
++		w.Header().Set("Docker-Content-Digest", digestOf(data))
++		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
++		if r.Method != http.MethodHead {
++			_, _ = w.Write(data)
++		}
++	}))
++	t.Cleanup(server.Close)
++
++	return server, digests
++}
++
++func TestLocatePinnedOCIChartAfterItsTagMoved(t *testing.T) {
++	t.Parallel()
++	g := NewWithT(t)
++
++	server, digests := ociRegistry(t, savedChart(t, "1.2.3", "pinned: true\n"), savedChart(t, "1.2.3", "pinned: false\n"))
++	registryClient, err := registry.NewClient(registry.ClientOptPlainHTTP())
++	g.Expect(err).NotTo(HaveOccurred())
++	settings := helmCli.New()
++	settings.RepositoryCache = t.TempDir()
++	settings.RepositoryConfig = filepath.Join(t.TempDir(), "repositories.yaml")
++	repoURL := "oci://" + strings.TrimPrefix(server.URL, "http://") + "/charts"
++
++	version, digest := splitChartDigest("1.2.3@" + digests[0])
++	chartName, _, err := getHelmChartAndRepoName("nginx", repoURL, digest)
++	g.Expect(err).NotTo(HaveOccurred())
++	install := helmAction.NewInstall(&helmAction.Configuration{RegistryClient: registryClient})
++
++	install.Version = version
++	_, err = install.LocateChart(chartName, settings)
++	g.Expect(err).To(MatchError(ContainSubstring("chart reference digest mismatch")))
++
++	install.Version = locateVersion(repoURL, version, digest)
++	chartPath, err := install.LocateChart(chartName, settings)
++	g.Expect(err).NotTo(HaveOccurred())
++	g.Expect(verifyChart(chartPath, repoURL, version, digest)).To(Succeed())
++	c, err := helmLoader.Load(chartPath)
++	g.Expect(err).NotTo(HaveOccurred())
++	g.Expect(c.Values).To(HaveKeyWithValue("pinned", true))
 +}
