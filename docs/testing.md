@@ -228,22 +228,54 @@ The two Proxmox VE nodes share the machine, so they test placement, clones and a
 
 ### What the machine records
 
-Each try records what the machine and its VMs take every 15 seconds (`test/e2e/ci/guests.sh record`). That is the machine's memory, swap, disk and CPUs, and per VM the CPU time, resident memory and swap of its QEMU process. The log's "The guests' load" step sums it up per minute and gives each VM's busiest minute and most memory. A step that outgrows the machine shows there as a VM swapped out, or the CPUs of all of them above the machine's.
+Each try records what the machine and its VMs take every 15 seconds (`test/e2e/ci/guests.sh record`). That is the machine's memory, swap, disk and CPUs. Per VM it is the QEMU process's CPU time, resident memory, swap and disk reads. It also records how long the VM's threads waited on CPU, memory and disk (its cgroup's pressure).
+
+The log's "The guests' load" step sums it up per minute. It gives each VM's busiest minute, most memory, fastest reads and longest waits. A VM stalled on the machine's CPUs shows as CPU waits. One stalled on its disk shows as disk waits and reads.
 
 Under pressure the machine keeps its page cache rather than the guests' memory (`vm.swappiness=10`) and starts reclaiming earlier (`vm.watermark_scale_factor=200`). Cloning a template then evicts cached disk blocks instead of a running control plane.
 
-Swap does not count as room for the guests. On a slower machine, a guest read back from swap stalls until its own checks fail, such as a container restarting with every add-on on. Every test's VMs therefore fit the machine's memory with room for its own processes, the management node at the module's default 4 GiB among them. The one exception is the RKE2 test's control-plane replacements. There three machines of RKE2's least 4 GiB beside the management node outgrow the memory by about 2 GiB.
+### How much the guests may take
+
+The runner has 15.6 GiB of memory. Its own processes and the Proxmox VE container keep about 1.6 GiB resident. The guests have room in 12 GiB:
+
+- With 12 GiB of guests the runner kept 1.7 GiB of page cache and read next to nothing from disk.
+- With 13.4 GiB the cache fell to 1 GiB and the runner reread up to 190 MB/s. A control plane's etcd stalled for 6 s.
+
+Swap does not count as room for the guests. Cold pages of the runner's own processes go there harmlessly. A guest read back from swap stalls until its own checks fail.
+
+Every node is at the least Kubehenge allows for what its test switches on. The management node has the module's default 4 GiB. These tests still outgrow 12 GiB, in MiB:
+
+| Test | Steady | Peak | At the peak |
+| --- | --- | --- | --- |
+| `kubeadm-addons` | 14640 | 14640 | every add-on |
+| `rke2-addons` | 14384 | 14384 | every add-on |
+| `k3s-addons` | 13504 | 13504 | every add-on |
+| `talos-addons` | 13760 | 13760 | every add-on |
+| `rke2` | 12288 | 16384 | two workers, or a control plane replaced |
+| `kubeadm` | 10240 | 14336 | a control plane replaced |
+| `k3s` | 9280 | 13376 | a control plane replaced |
+| `talos` | 9536 | 13632 | a control plane replaced |
+| `cluster-mesh`, `rancher` | 14336 | 14336 | two one-node clusters |
+| `node-image-refresh` | 9216 | 14336 | the node replaced |
+| `autoscaler` | 9216 | 13312 | two workers |
+| `control-plane-ha` | 9216 | 17408 | three servers |
+
+The guard names every run whose guests outgrew the memory (below).
 
 ### The guard
 
-A guard (`test/e2e/ci/guard.sh`) keeps the CI agent's own processes out of the OOM killer's choice and their memory out of reclaim. It samples the machine's memory, swap, pressure and free disk every 5 seconds. It ends the test while the machine can still report, once any of these holds:
+A guard (`test/e2e/ci/guard.sh`) keeps the CI agent's own processes out of the OOM killer's choice and their memory out of reclaim. It samples the machine's memory, page cache, swap, free disk and pressure every 5 seconds. Pressure on memory, disk and CPU comes over the last 10 seconds and the last minute. It ends the test while the machine can still report, once any of these holds:
 
 - memory and swap together fall under 1.5 GiB
 - every task has waited on memory for half of the last minute
 - the OOM killer has ended a process
 - a file system has under 2 GiB free
 
-It reports what held the memory (the VMs by name, the largest other processes, the last samples and the kernel's lines on memory). The test then fails like any other and keeps its artifacts. The log's "The runner's room" step gives how near each run came to these floors. It also gives the least memory available and how much was read back from swap.
+It reports what held the memory (the VMs by name, the largest other processes, the last samples and the kernel's lines on memory). The test then fails like any other and keeps its artifacts. The log's "The runner's room" step gives how near each run came to these floors. It also gives the least memory available and page cache, and how much was read back from swap.
+
+#### Memory without swap
+
+Under 1 GiB of memory available for a minute or more, swap not counted, the guests have outgrown the runner. That ends no test, since such guests slow down rather than fail at once. The guard names the stretch when the test ends. Beside a failure such as a lost lease it is an error. When the test passed it is a warning.
 
 ### What a failed test leaves
 

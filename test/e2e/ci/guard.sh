@@ -7,25 +7,26 @@
 #       of the OOM killer's choice, and its agent's memory out of reclaim, so that pressure ends a
 #       guest, which the test reports, and never the runner
 #   test/e2e/ci/guard.sh watch <pid file> <record> [<vmstat record>] [<path>...]
-#       every KUBEHENGE_E2E_GUARD_INTERVAL seconds (5) until stopped: the machine's memory, swap and
-#       pressure, what of the swap zswap holds in memory and the free space of each path's file
-#       system (/ by default) into <record>; once a
-#       sample crosses a floor while the test that <pid file> names runs, its report into
-#       <record>.fail, and the test ended
+#       every KUBEHENGE_E2E_GUARD_INTERVAL seconds (5) until stopped: the machine's memory, page
+#       cache, swap and pressure, what of the swap zswap holds in memory and the free space of each
+#       path's file system (/ by default) into <record>; once a sample crosses a floor while the
+#       test that <pid file> names runs, its report into <record>.fail, and the test ended
 #   test/e2e/ci/guard.sh run <pid file> <record> <command>...
 #       the command in a session of its own, whose ID it leaves in <pid file>, then the report of the
-#       watch that ended it, if one did
+#       watch that ended it, if one did, and the stretches the guests left the machine short of
+#       memory without swap
 #   test/e2e/ci/guard.sh peaks <record>
 #       the least room and the most pressure the record holds, beside the floors
 #   test/e2e/ci/guard.sh crossed <sample>
 #       the floors one line of the record crosses, as watch judges them
+#   test/e2e/ci/guard.sh short <record>
+#       how long the record's memory, swap not counted, stayed under memory_floor, if a minute or more
 #
 # The floors leave the machine room to stop the test, collect from the guests and upload the
-# artifacts, and lie well past what the tests take when they pass: their guests fit the machine's
-# memory beside its own processes, but for the RKE2 test's control-plane replacements, whose third
-# 4 GiB machine the swap takes about 2 GiB of, so that most of the swap's 11 GiB stays free. A
-# record's swapped_in, the MiB read back from swap since the watch began, shows a test that leans on
-# swap where it should not.
+# artifacts, and lie well past what the tests take when they pass. A record's swapped_in, the MiB
+# read back from swap since the watch began, shows a test that leans on swap where it should not.
+# memory_floor ends no test: guests that outgrow the machine's memory slow down rather than fail at
+# once, so run names the stretch beside the test's own failure, or as a warning when it passed.
 set -eu
 
 here=$(dirname "$0")
@@ -35,6 +36,12 @@ interval=${KUBEHENGE_E2E_GUARD_INTERVAL:-5}
 # MiB of memory and swap together. Below it the kernel is about to choose a process to end, and
 # collecting from the guests needs some hundreds of MiB of its own.
 room_floor=1536
+# MiB of memory available, swap not counted, and the seconds under it that name a test whose guests
+# outgrow the machine. With 12 GiB of guests the machine kept 1.7 GiB of page cache, about 1.7 GiB
+# available, and read next to nothing; with 13.4 GiB it kept 1 GiB of cache, 400 MiB available, and
+# reread 50 to 190 MB/s until a control plane's etcd stalled for 6 s.
+memory_floor=1024
+memory_floor_hold=60
 # Percent of the last minute in which every task that could run waited on memory: the machine
 # thrashing, too slow to answer for itself.
 stall_ceiling=50
@@ -50,19 +57,23 @@ counter() {
 }
 
 # sample <OOM kills before the watch> <pages swapped in before it> <path>...: one line of the record:
-# the time, then each value as name=value, in MiB and in percent of the last minute.
+# the time, then each value as name=value, in MiB and in percent of the last minute. cache is the
+# page cache but tmpfs, which swap backs. Each pressure comes twice: over the last minute, which the
+# stall ceiling judges, and over the last 10 seconds as <kind>_<some|full>10, where a stall of a few
+# seconds shows rather than averages away.
 sample() {
     kills_before=$1 swapins_before=$2
     shift 2
     now=$(date -u +%T)
-    line="${now} $(awk '/^MemAvailable:/ { a = $2 } /^SwapFree:/ { s = $2 }
+    line="${now} $(awk '/^MemAvailable:/ { a = $2 } /^SwapFree:/ { s = $2 } /^Cached:/ { c = $2 } /^Shmem:/ { m = $2 }
         /^Zswap:/ { p = $2 } /^Zswapped:/ { z = $2; zswap = 1 }
-        END { printf "available=%d swap_free=%d", a / 1024, s / 1024
+        END { printf "available=%d cache=%d swap_free=%d", a / 1024, (c - m) / 1024, s / 1024
             if (zswap) printf " zswapped=%d zswap_pool=%d", z / 1024, p / 1024 }' "${proc}/meminfo")"
-    for kind in memory io; do
+    for kind in memory io cpu; do
         [ -r "${proc}/pressure/${kind}" ] || continue
-        line="${line} $(awk -v kind="${kind}" '{ for (i = 2; i <= NF; i++) if ($i ~ /^avg60=/) {
-                sub(/^avg60=/, "", $i); printf "%s%s_%s=%s", sep, kind, $1, $i; sep = " " } }' \
+        line="${line} $(awk -v kind="${kind}" '{ for (i = 2; i <= NF; i++) {
+                if ($i ~ /^avg60=/) { sub(/^avg60=/, "", $i); printf "%s%s_%s=%s", sep, kind, $1, $i; sep = " " }
+                else if ($i ~ /^avg10=/) { sub(/^avg10=/, "", $i); printf "%s%s_%s10=%s", sep, kind, $1, $i; sep = " " } } }' \
             "${proc}/pressure/${kind}")"
     done
     kills=$(counter oom_kill)
@@ -93,6 +104,41 @@ crossed() {
                     out = out sprintf("; %d MiB free on %s, under %d", v[k], substr(k, 6), disk)
             if (out != "") print substr(out, 3)
         }'
+}
+
+# short <record>: the stretches the record's available memory stayed under memory_floor for
+# memory_floor_hold seconds or more, in one line: their seconds together, the longest with its start
+# and end, and the least memory available. Nothing when there is none.
+short() {
+    [ -s "$1" ] || return 0
+    awk -v floor="${memory_floor}" -v hold="${memory_floor_hold}" '
+        function seconds(t, p) { split(t, p, ":"); return p[1] * 3600 + p[2] * 60 + p[3] }
+        function close_stretch() {
+            if (start != "" && last - since >= hold) {
+                total += last - since; n++
+                if (last - since > longest) { longest = last - since; from = start; to = end }
+            }
+            start = ""
+        }
+        {
+            available = ""
+            for (i = 2; i <= NF; i++) if ($i ~ /^available=/) available = substr($i, 11) + 0
+            if (available == "") next
+            t = seconds($1)
+            # A record that runs past midnight.
+            if (seen && t < prev) day += 86400
+            seen = 1; prev = t; t += day
+            if (available < floor) {
+                if (start == "") { start = $1; since = t }
+                end = $1; last = t
+                if (least == "" || available < least) least = available
+            } else close_stretch()
+        }
+        END {
+            close_stretch()
+            if (n > 0)
+                printf "%d s with under %d MiB of memory available, swap not counted, in %d stretch%s, the longest %d s from %s to %s; %d MiB at the least\n", total, floor, n, (n > 1 ? "es" : ""), longest, from, to, least
+        }' "$1"
 }
 
 # report <why> <sample> <vmstat record>: what holds the memory when a floor is crossed: the guests by
@@ -176,6 +222,14 @@ run() {
         cat "${record}.fail"
         [ "${code}" -ne 0 ] || code=1
     fi
+    # Guests that outgrow the machine fail later as something else, such as a lost lease; the
+    # stretch names the cause beside it.
+    stretch=$(short "${record}")
+    if [ -n "${stretch}" ]; then
+        level=warning
+        [ "${code}" -eq 0 ] || level=error
+        printf '::%s title=The guests outgrew the runner'\''s memory::%s\n' "${level}" "${stretch}"
+    fi
     return "${code}"
 }
 
@@ -184,15 +238,16 @@ peaks() {
         echo "the guard recorded nothing"
         return 0
     }
-    awk -v room="${room_floor}" -v stall="${stall_ceiling}" -v disk="${disk_floor}" '
+    awk -v room="${room_floor}" -v floor="${memory_floor}" -v stall="${stall_ceiling}" -v disk="${disk_floor}" '
         {
             delete v
             for (i = 2; i <= NF; i++) { eq = index($i, "="); v[substr($i, 1, eq - 1)] = substr($i, eq + 1) }
             left = v["available"] + v["swap_free"]
             if (n == 0 || left < least) { least = left; leastat = $1; available = v["available"]; swap = v["swap_free"] }
             if (n == 0 || v["available"] + 0 < lowmem) { lowmem = v["available"] + 0; lowmemat = $1 }
+            if (("cache" in v) && (cacheat == "" || v["cache"] + 0 < lowcache)) { lowcache = v["cache"] + 0; cacheat = $1 }
             for (k in v) {
-                if (k ~ /_(some|full)$/ && (!(k in most) || v[k] + 0 > most[k])) { most[k] = v[k] + 0; mostat[k] = $1 }
+                if (k ~ /_(some|full)(10)?$/ && (!(k in most) || v[k] + 0 > most[k])) { most[k] = v[k] + 0; mostat[k] = $1 }
                 if (k ~ /^free:/ && (!(k in low) || v[k] + 0 < low[k])) { low[k] = v[k] + 0; lowat[k] = $1 }
             }
             kills = v["oom_kills"] + 0
@@ -203,14 +258,19 @@ peaks() {
         END {
             printf "%d samples from %s to %s\n", n, first, $1
             printf "least memory and swap left: %d MiB (%d available, %d of swap) at %s; the floor is %d\n", least, available, swap, leastat, room
-            printf "least memory available: %d MiB at %s\n", lowmem, lowmemat
+            printf "least memory available: %d MiB at %s; under %d for a minute names the guests as too big\n", lowmem, lowmemat, floor
+            if (cacheat != "") printf "least page cache: %d MiB at %s\n", lowcache, cacheat
             printf "read back from swap: %d MiB\n", swapped
             if (zswappedat != "") printf "most swap held in memory by zswap: %d MiB, compressed to %d MiB, at %s\n", zswapped, pool, zswappedat
-            for (k in most) printf "most %s pressure: %.2f%% of a minute at %s%s\n", k, most[k], mostat[k], (k == "memory_full" ? sprintf("; the ceiling is %d%%", stall) : "")
+            for (k in most) {
+                if (k ~ /10$/) printf "most %s pressure: %.2f%% of 10 seconds at %s\n", substr(k, 1, length(k) - 2), most[k], mostat[k]
+                else printf "most %s pressure: %.2f%% of a minute at %s%s\n", k, most[k], mostat[k], (k == "memory_full" ? sprintf("; the ceiling is %d%%", stall) : "")
+            }
             for (k in low) printf "least free on %s: %d MiB at %s; the floor is %d\n", substr(k, 6), low[k], lowat[k], disk
             printf "OOM kills: %d\n", kills
         }
         NR == 1 { first = $1 }' "$1"
+    short "$1"
 }
 
 protect() {
@@ -252,7 +312,7 @@ protect() {
     done
 }
 
-usage="usage: $0 protect | watch <pid file> <record> [<vmstat record>] [<path>...] | run <pid file> <record> <command>... | peaks <record> | crossed <sample>"
+usage="usage: $0 protect | watch <pid file> <record> [<vmstat record>] [<path>...] | run <pid file> <record> <command>... | peaks <record> | crossed <sample> | short <record>"
 command=${1:-}
 [ "$#" -eq 0 ] || shift
 case ${command} in
@@ -273,6 +333,7 @@ case ${command} in
         ;;
     peaks) peaks "${1:?${usage}}" ;;
     crossed) crossed "${1:?${usage}}" ;;
+    short) short "${1:?${usage}}" ;;
     *)
         echo "${usage}" >&2
         exit 2
