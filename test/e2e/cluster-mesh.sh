@@ -204,8 +204,7 @@ until_true 120 "west's client reaches east's server at its address" fetches "${s
 global_service east
 global_service west
 until_true 120 "west's client reaches east's server through the global service" fetches echo.e2e-mesh.svc.cluster.local
-echo "memory with Cluster Mesh:"
-pod_memory "${work}/east"
+measured "memory with Cluster Mesh" pod_memory "${work}/east"
 for node in $(east get nodes -o jsonpath='{.items[*].metadata.name}'); do
     east get --raw "/api/v1/nodes/${node}/proxy/stats/summary" |
         jq -r '.pods[] | select(.podRef.name | startswith("clustermesh-apiserver")) | "  clustermesh-apiserver: \(.memory.workingSetBytes / 1048576 | floor) MiB"'

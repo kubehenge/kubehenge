@@ -1719,6 +1719,11 @@ lease_times() {
             {key: "\(.metadata.namespace)/\(.metadata.name)", value: (.spec.renewTime // "")}] | from_entries'
 }
 
+# The nodes with their CNI and the add-ons a cluster starts with alone, settled, before etcd is
+# restored, any other add-on, scaling or upgrade: what a class's kubehenge.dev/cni-control-plane-memory
+# figures are measured from, in every part.
+measured "memory with the CNI alone" pod_memory "${work}/workload"
+
 # etcd is taken, restored and uploaded before any add-on runs: replacing a server holds two beside
 # the worker, which the runner has room for only while the cluster is this small, and every add-on
 # after it then runs on a restored cluster.
@@ -2001,10 +2006,8 @@ if [ -n "${addons}" ]; then
     }
     until_true 300 "the components' Leases renewed after the restore" leases_renewed
     restart_baseline
-    echo "memory before the add-ons:"
-    pod_memory "${work}/workload"
-    echo "CPU requested before the add-ons:"
-    pod_cpu "${work}/workload"
+    measured "memory before the add-ons" pod_memory "${work}/workload"
+    measured "CPU requested before the add-ons" pod_cpu "${work}/workload"
     # What the guests are told of the CPU decides which mitigations their kernels run, and those cost
     # the most under nested virtualisation: the figure to read beside a slow run.
     echo "the CPU a control plane sees:"
@@ -2073,7 +2076,7 @@ if [ -n "${addons}" ]; then
             wl auth can-i "$1" "$2" --all-namespaces --as=system:serviceaccount:headlamp:headlamp 2> /dev/null || true
         }
         until_true 120 "Headlamp refuses to list pods without a token" headlamp_refuses
-        control_plane_use "${work}/workload" headlamp
+        measured "" control_plane_use "${work}/workload" headlamp
 
         step "Headlamp read-only for everyone"
         set_variable headlamp '{"enabled":true,"access":"view"}'
@@ -2128,7 +2131,7 @@ if [ -n "${addons}" ]; then
             *violate*) fail "Kyverno's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
             *) ;;
         esac
-        control_plane_use "${work}/workload" kyverno
+        measured "" control_plane_use "${work}/workload" kyverno
     fi
 
     # Before monitoring: on Cilium, switching Istio on restarts Cilium's agents and operator, and with
@@ -2223,7 +2226,7 @@ EOF
         wl -n e2e-mesh label service server istio.io/use-waypoint-
         wl -n e2e-mesh delete authorizationpolicy/no-echo gateway/waypoint
         until_true 120 "the waypoint's pods gone" absent wl -n e2e-mesh get deployment/waypoint
-        control_plane_use "${work}/workload" istio
+        measured "" control_plane_use "${work}/workload" istio
     fi
 
     if on monitoring; then
@@ -2298,7 +2301,7 @@ EOF
             *violate*) fail "monitoring's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
             *) ;;
         esac
-        control_plane_use "${work}/workload" monitoring
+        measured "" control_plane_use "${work}/workload" monitoring
 
         # The alerts identity reads Alertmanager's alerts through the API server's proxy, the health
         # page's way in, and may do nothing else there.
@@ -2413,7 +2416,7 @@ EOF
             *violate*) fail "Loki's and the events collector's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
             *) ;;
         esac
-        control_plane_use "${work}/workload" logs
+        measured "" control_plane_use "${work}/workload" logs
 
         step "logs collected through the Kubernetes API instead"
         set_variable logs '{"enabled":true,"collector":"api","retentionDays":7,"sizeGiB":10}'
@@ -2485,7 +2488,7 @@ EOF
         volume_backups=$(wl -n velero get podvolumebackups -l velero.io/backup-name=e2e -o json |
             jq '[.items[] | select(.spec.pod.namespace == "e2e-backup" and .status.phase == "Completed")] | length')
         [ "${volume_backups}" = 1 ] || fail "the pod's volume was not backed up: ${volume_backups} volume backups"
-        control_plane_use "${work}/workload" backups
+        measured "" control_plane_use "${work}/workload" backups
 
         step "the backup in the S3 store: under the cluster's own prefix, encrypted"
         keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
@@ -2759,7 +2762,7 @@ EOF
         }
         until_true 300 "an Ingress served over HTTPS with the default certificate" https_answers "${work}/ingress-ca.crt" web.e2e.test /hostname '^web$'
         until_true 300 "an HTTPRoute served over HTTPS with the default certificate" https_answers "${work}/ingress-ca.crt" gateway.e2e.test /hostname '^web$'
-        control_plane_use "${work}/workload" certificates
+        measured "" control_plane_use "${work}/workload" certificates
 
         # Pebble, an ACME server made for tests, validates challenges against the DNS server it is given:
         # BIND, which takes the DNS-01 records over RFC 2136 and answers for the HTTP-01 name.
@@ -3269,7 +3272,7 @@ EOF
         until_true 600 "Flux syncs the repository" synced one
         push two
         until_true 300 "Flux syncs a new commit" synced two
-        control_plane_use "${work}/workload" flux
+        measured "" control_plane_use "${work}/workload" flux
         pod_security=$(wl label --dry-run=server --overwrite namespace flux-system pod-security.kubernetes.io/enforce=restricted 2>&1)
         case ${pod_security} in
             *violate*) fail "Flux's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
@@ -3303,15 +3306,14 @@ EOF
             *violate*) fail "Argo CD's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
             *) ;;
         esac
-        control_plane_use "${work}/workload" argocd
+        measured "" control_plane_use "${work}/workload" argocd
     fi
 
     # The class's minimum sizes have to carry the run's add-ons at once.
     step "the run's add-ons at once, with nothing restarted"
     restarts_since "while the add-ons were installed"
-    pod_memory "${work}/workload"
-    echo "CPU requested with every add-on on:"
-    pod_cpu "${work}/workload"
+    measured "memory with every add-on on" pod_memory "${work}/workload"
+    measured "CPU requested with every add-on on" pod_cpu "${work}/workload"
 
     if [ "${cni}" = calico ]; then
         step "Calico's operator still reconciles, with the run's add-ons' policies on"
@@ -3337,11 +3339,6 @@ EOF
         (.spec.template.spec.initContainers // [])[], .spec.template.spec.containers[] | "kube-system/\($m.name) \(.image)"')
     unpinned=$(printf '%s\n%s\n' "${images}" "${system_images}" | grep -v -e '@sha256:[0-9a-f]\{64\}$' -e '^$' | sort -u)
     [ -z "${unpinned}" ] || fail "images named without a digest (pod, image): ${unpinned}"
-else
-    # The figure to set beside the add-on parts' "memory before the add-ons", which a CNI's
-    # kubehenge.dev/cni-control-plane-memory is measured from.
-    echo "memory with no add-on:"
-    pod_memory "${work}/workload"
 fi
 
 if [ "${distribution}" = talos ]; then

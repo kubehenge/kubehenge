@@ -74,15 +74,16 @@ providers_idle() {
 # listed one by one, since its figure is its controller's and one node's share.
 pod_memory() {
     pods='[]'
-    for node in $(KUBECONFIG="$1" kubectl get nodes -o jsonpath='{.items[*].metadata.name}'); do
-        summary=$(KUBECONFIG="$1" kubectl get --raw "/api/v1/nodes/${node}/proxy/stats/summary")
+    nodes=$(KUBECONFIG="$1" kubectl get nodes -o jsonpath='{.items[*].metadata.name}') || return 1
+    for node in ${nodes}; do
+        summary=$(KUBECONFIG="$1" kubectl get --raw "/api/v1/nodes/${node}/proxy/stats/summary") || return 1
         printf '%s' "${summary}" |
-            jq -r --arg n "${node}" '.node.memory | "\($n): \(.workingSetBytes / 1048576 | floor) MiB of memory in use, \(.availableBytes / 1048576 | floor) MiB available"'
+            jq -r --arg n "${node}" '.node.memory | "\($n): \(.workingSetBytes / 1048576 | floor) MiB of memory in use, \(.availableBytes / 1048576 | floor) MiB available"' || return 1
         pods=$(printf '%s' "${summary}" | jq -c --argjson all "${pods}" '$all + [.pods[] | {
             ns: (if .podRef.namespace == "kube-system" and (.podRef.name | startswith("kubehenge-")) then "kube-system (Kubehenge metrics proxies)" else .podRef.namespace end),
-            name: .podRef.name, bytes: (.memory.workingSetBytes // 0)}]')
+            name: .podRef.name, bytes: (.memory.workingSetBytes // 0)}]') || return 1
     done
-    printf '%s' "${pods}" | jq -r 'group_by(.ns)[] | "  \(.[0].ns): \(map(.bytes) | add / 1048576 | floor) MiB in \(length) pods"'
+    printf '%s' "${pods}" | jq -r 'group_by(.ns)[] | "  \(.[0].ns): \(map(.bytes) | add / 1048576 | floor) MiB in \(length) pods"' || return 1
     printf '%s' "${pods}" | jq -r '.[] | select(.ns == "metallb-system" or (.ns == "kube-system" and (.name | startswith("kube-vip")))) |
         "    \(.name): \(.bytes / 1048576 | floor) MiB"'
 }
@@ -91,10 +92,36 @@ pod_memory() {
 # on, from its kubelet's working set. From one add-on to the next it grows by what the class's
 # kubehenge.dev/addon-control-plane-memory figures size.
 control_plane_use() {
-    for node in $(KUBECONFIG="$1" kubectl get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[*].metadata.name}'); do
-        KUBECONFIG="$1" kubectl get --raw "/api/v1/nodes/${node}/proxy/stats/summary" |
-            jq -r --arg n "${node}" --arg a "$2" '"with \($a): \($n) has \(.node.memory.workingSetBytes / 1048576 | floor) MiB of memory in use"'
+    nodes=$(KUBECONFIG="$1" kubectl get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[*].metadata.name}') || return 1
+    for node in ${nodes}; do
+        summary=$(KUBECONFIG="$1" kubectl get --raw "/api/v1/nodes/${node}/proxy/stats/summary") || return 1
+        printf '%s' "${summary}" |
+            jq -r --arg n "${node}" --arg a "$2" '"with \($a): \($n) has \(.node.memory.workingSetBytes / 1048576 | floor) MiB of memory in use"' || return 1
     done
+}
+
+# measured <heading> <command>...: a measurement's figures, under the heading when there is one.
+# A reading that fails is tried again every KUBEHENGE_E2E_MEASURE_EVERY seconds (10) for
+# KUBEHENGE_E2E_MEASURE_TIMEOUT seconds (120), as a kubelet answers only once its serving
+# certificate is back. After that the measurement is named unavailable with the reading's last
+# error, and the test goes on: a measurement never fails a test.
+measured() {
+    measured_heading=$1
+    shift
+    measured_limit=$(($(date +%s) + ${KUBEHENGE_E2E_MEASURE_TIMEOUT:-120}))
+    while :; do
+        # shellcheck disable=SC2310 # a failed reading is only a retry.
+        if measured_out=$("$@" 2>&1); then
+            [ -z "${measured_heading}" ] || printf '%s:\n' "${measured_heading}"
+            printf '%s\n' "${measured_out}"
+            return 0
+        fi
+        measured_now=$(date +%s)
+        [ "${measured_now}" -lt "${measured_limit}" ] || break
+        sleep "${KUBEHENGE_E2E_MEASURE_EVERY:-10}"
+    done
+    measured_why=$(printf '%s\n' "${measured_out}" | grep -v '^ *$' | tail -n 1)
+    printf '%s: unavailable after %d s: %s\n' "${measured_heading:-$1}" "${KUBEHENGE_E2E_MEASURE_TIMEOUT:-120}" "${measured_why:-no output}"
 }
 
 # control_plane_record <kubeconfig>: until killed, every 15 s, each control plane's memory in use
