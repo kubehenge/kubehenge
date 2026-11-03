@@ -191,10 +191,10 @@ A CNI other than the class's default adds to each control plane. This counts onc
 | --- | --- | --- |
 | k3s | 1160 MiB | 1808 MiB |
 | kubeadm | default | 1424 MiB |
-| RKE2 | 504 MiB | 1808 MiB |
+| RKE2 | 504 MiB | 144 MiB |
 | Talos | 1808 MiB | 384 MiB |
 
-RKE2 with Calico and Talos with Cilium have no measurement yet, so they count the largest figure measured. With every add-on but Rancher, a k3s control plane needs 5032 MiB with Cilium and 5680 MiB with Calico.
+Talos with Cilium has no measurement yet, so it counts the largest figure measured. With every add-on but Rancher, a k3s control plane needs 5032 MiB with Cilium and 5680 MiB with Calico.
 
 A single k3s worker with every add-on but Rancher and GitOps needs 4672 MiB. It needs 4288 MiB without backups, 4160 MiB without logs, or 3776 MiB without either. GitOps with Argo CD on top takes each 512 MiB further.
 

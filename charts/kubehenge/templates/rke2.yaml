@@ -27,9 +27,9 @@ metadata:
     kubehenge.dev/node-memory: '{"controlPlane":3120,"worker":704}'
     # What Cilium or Calico adds to a control plane in place of canal, which node-memory's figure
     # runs. Cilium's is the most an idle control plane used with it in the end-to-end tests, less the
-    # least with canal at the same size, with a quarter on top, in steps of 8. Calico has not run on
-    # RKE2 there, so it takes the largest figure measured on any distribution, k3s's.
-    kubehenge.dev/cni-control-plane-memory: '{"cilium":504,"calico":1808}'
+    # least with canal at the same size, with a quarter on top, in steps of 8. Calico's comes from one
+    # run so far, against canal's in the same run: 2043 MiB in use against 1931.
+    kubehenge.dev/cni-control-plane-memory: '{"cilium":504,"calico":144}'
     {{- include "kubehenge.addonCPU" . | nindent 4 }}
     # The CPU, in millicores, a node's own pods request besides the add-ons': on a worker RKE2's
     # kube-proxy at 250m and canal at 260m, its calico-node's 250m and flannel's 10m (RKE2's Cilium

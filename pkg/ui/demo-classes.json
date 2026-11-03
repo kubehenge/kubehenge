@@ -2641,7 +2641,7 @@
         "kubehenge.dev/addon-cpu": "{\"headlamp\":10,\"monitoring\":300,\"logs\":75,\"backups\":70,\"kyverno\":500,\"istio\":400,\"clusterMesh\":30,\"loadBalancer\":60,\"certManager\":30,\"rancher\":120,\"rancherAgent\":30,\"argocd\":90,\"flux\":50}",
         "kubehenge.dev/addon-memory": "{\"headlamp\":64,\"monitoring\":1536,\"logs\":512,\"backups\":384,\"kyverno\":640,\"istio\":384,\"clusterMesh\":128,\"loadBalancer\":128,\"certManager\":192,\"rancher\":2048,\"rancherAgent\":512,\"argocd\":512,\"flux\":384}",
         "kubehenge.dev/backup-targets": "[]",
-        "kubehenge.dev/cni-control-plane-memory": "{\"cilium\":504,\"calico\":1808}",
+        "kubehenge.dev/cni-control-plane-memory": "{\"cilium\":504,\"calico\":144}",
         "kubehenge.dev/control-plane-sizes": "[{\"workers\":0,\"cores\":2,\"memoryMiB\":4096},{\"workers\":226,\"cores\":4,\"memoryMiB\":8192},{\"workers\":451,\"cores\":8,\"memoryMiB\":16384},{\"workers\":1301,\"cores\":16,\"memoryMiB\":32768}]",
         "kubehenge.dev/default-pods": "10.42.0.0/16",
         "kubehenge.dev/default-services": "10.43.0.0/16",

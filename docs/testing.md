@@ -293,23 +293,22 @@ Every node is at the least Kubehenge allows for what its test switches on. The m
 | `kubeadm-addons-a` | 3648 | 11840 | (default) | 12688 |
 | `kubeadm-addons-b` | 2368 | 10576 | (default) | 12000 |
 | `kubeadm-addons-c` | 2240 | 10432 | (default) | 11856 |
-| `rke2-addons-a` | 4096 | 12288 | 12288 | 13264 |
-| `rke2-addons-b` | 4096 | 12288 | 12368 | 13672 |
-| `rke2-addons-c` | 4096 | 12288 | 12288 | 13592 |
-| `rke2-addons-d` | 4096 | 12288 | 12288 | 13552 |
+| `rke2-addons-a` | 4096 | 12288 | 12288 | 12288 |
+| `rke2-addons-b` | 4096 | 12288 | 12368 | 12288 |
+| `rke2-addons-c` | 4096 | 12288 | 12288 | 12288 |
+| `rke2-addons-d` | 4096 | 12288 | 12288 | 12288 |
 | `k3s-addons-a` | 3392 | 11584 | 11584 | 11760 |
 | `k3s-addons-b` | 3008 | 11200 | 11520 | 12168 |
 | `talos-addons-a` | 3648 | 11840 | 12088 | 11840 |
 | `talos-addons-b` | 2368 | 10560 | 11400 | 10560 |
 | `talos-addons-c` | 2240 | 10432 | 11256 | 10432 |
 
-Three kinds of lane outgrow 12 GiB with that management node, all on a CNI the nightly run picks:
+Two lanes outgrow 12 GiB with that management node, both on a CNI the nightly run picks:
 
-- RKE2 with Calico. Its least control plane (3120 MiB) and Calico's figure together pass 4096 MiB with no add-on, beside a worker of at least 4096 MiB.
 - `kubeadm-addons-a` with Calico, by 400 MiB. Logs need monitoring's Grafana, and those two alone pass it by 88 MiB.
 - `rke2-addons-b` with Cilium, by 80 MiB. It holds one add-on.
 
-kubeadm's add-on parts with Calico and RKE2's with Cilium therefore run with a management node of 3584 MiB (`run.sh`). That brings them to 12176 MiB at most. The guard's samples show what the management node itself uses (below).
+Those two run with a management node of 3584 MiB (`run.sh`), which brings them to 12176 and 11856 MiB. At that size `management-cluster-upgrade`, where every provider restarts at once, used 2212 MiB at most on the node. It kept 1181 MiB available, and its memory pressure stayed at 0.18 % of 10 seconds at most. The guard's samples show what the management node uses in every run (below).
 
 These tests outgrow 12 GiB as well:
 
