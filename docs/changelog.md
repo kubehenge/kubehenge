@@ -210,7 +210,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - **Certificates are renewed before they run out.** kubeadm's control plane is replaced 60 days before its certificates run out.
   - For RKE2 and k3s, the controller rolls the workers' pool and k3s's control plane from 60 days before, one machine at a time.
   - It rolls an RKE2 control plane of three or more too. A smaller one says to restart `rke2-server`.
-  - The Cluster gets the condition `CertificatesExpiring` with events, shown on its Health page and in the fleet.
+  - The Cluster gets the condition `CertificatesExpiring` with events, shown on its Health page and in the fleet. It clears within a minute of the last machine's replacement.
   - The kubeconfig and talosconfig kept for each cluster are watched too ([troubleshooting.md](troubleshooting.md#certificates)).
   - The interface warns administrators 30 days before the management cluster's admin credentials run out. An apply renews them.
 - **A template build that fails is tried again**, three times in all, 2 and then 8 minutes apart. This holds from the interface and the weekly build alike.

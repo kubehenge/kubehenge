@@ -64,6 +64,9 @@ const (
 	// certificateWatchInterval is how often the clusters' certificates are looked at, a few reads
 	// each: they are renewed weeks before they run out, and RKE2 and k3s report theirs every half hour.
 	certificateWatchInterval = 5 * time.Minute
+	// certificateRenewingInterval is how soon they are looked at again while a cluster's are being
+	// renewed, so that it shows them renewed within a minute of its machines being replaced.
+	certificateRenewingInterval = time.Minute
 	// templateRequestsInterval is how soon a build asked for in the interface starts.
 	templateRequestsInterval = 15 * time.Second
 	// talosUpgradeInterval is how soon a Talos node's upgrade starts after the one before, or after
@@ -798,7 +801,7 @@ func (o *controllerOptions) addWatches(mgr manager.Manager, remotes *provisioner
 	}
 	certificates := &provisioner.CertificateWatch{
 		Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), ClassNamespace: o.r.ClassNamespace, Workload: remotes.Workload, Events: mgr.GetEventRecorder("kubehenge"),
-		Interval: certificateWatchInterval,
+		Interval: certificateWatchInterval, RenewingInterval: certificateRenewingInterval,
 	}
 	if err := mgr.Add(certificates); err != nil {
 		return fmt.Errorf("the certificate watch: %w", err)
