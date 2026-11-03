@@ -1,0 +1,137 @@
+{
+  "proxmoxNodes": ["pve1", "pve2", "pve3"],
+  "vmStatus": "running",
+  "settings": {
+    "storage": "local-lvm",
+    "cni": "cilium",
+    "controlPlaneMachine": { "cores": 4, "memoryMiB": 8192, "diskGiB": 40 },
+    "workerMachine": { "cores": 4, "memoryMiB": 16384, "diskGiB": 80 },
+    "upgrades": {
+      "mode": "patch",
+      "nodeImages": true,
+      "window": { "weekdays": ["Sat"], "start": "02:00", "durationMinutes": 240, "timeZone": "Europe/London" }
+    }
+  },
+  "nodeOS": { "family": "almalinux", "release": "10" },
+  "addOns": {
+    "headlamp": {
+      "chart": "headlamp",
+      "namespace": "headlamp",
+      "version": "0.40.1",
+      "value": { "enabled": true, "access": "token" }
+    },
+    "monitoring": {
+      "chart": "kube-prometheus-stack",
+      "namespace": "monitoring",
+      "version": "84.3.0",
+      "value": { "enabled": true }
+    },
+    "logs": {
+      "chart": "victoria-logs-single",
+      "namespace": "logs",
+      "version": "0.11.12",
+      "value": { "enabled": true, "collector": "node", "retentionDays": 14, "sizeGiB": 20 }
+    },
+    "backups": {
+      "chart": "velero",
+      "namespace": "velero",
+      "version": "12.0.0",
+      "value": {
+        "enabled": true,
+        "target": "offsite",
+        "schedule": "0 3 * * *",
+        "timeZone": "Europe/London",
+        "retentionDays": 7,
+        "volumes": "annotated"
+      }
+    }
+  },
+  "backupTargets": [{ "name": "offsite", "endpoint": "https://objects.example.net", "bucket": "cluster-backups" }],
+  "clusters": [
+    {
+      "name": "web",
+      "distribution": "rke2",
+      "version": "v1.37.1+rke2r1",
+      "controlPlanes": 3,
+      "workers": 4,
+      "subnet": 10,
+      "ageDays": 96,
+      "addOns": ["headlamp", "monitoring", "logs", "backups"]
+    },
+    {
+      "name": "payments",
+      "distribution": "kubeadm",
+      "version": "v1.37.1",
+      "controlPlanes": 3,
+      "workers": 3,
+      "subnet": 20,
+      "ageDays": 61,
+      "addOns": ["headlamp", "monitoring"],
+      "crashing": "invoice-worker"
+    },
+    {
+      "name": "edge",
+      "distribution": "k3s",
+      "version": "v1.37.1+k3s1",
+      "controlPlanes": 1,
+      "workers": 2,
+      "subnet": 30,
+      "ageDays": 30,
+      "addOns": ["headlamp"],
+      "upgrade": { "from": "v1.36.5+k3s1", "change": [{ "setting": "version", "effect": "all" }] }
+    },
+    {
+      "name": "platform",
+      "distribution": "talos",
+      "version": "v1.37.1",
+      "controlPlanes": 3,
+      "workers": 3,
+      "subnet": 40,
+      "ageDays": 120,
+      "addOns": ["headlamp", "monitoring"]
+    },
+    {
+      "name": "staging",
+      "distribution": "rke2",
+      "version": "v1.36.5+rke2r1",
+      "controlPlanes": 1,
+      "workers": 2,
+      "subnet": 50,
+      "ageDays": 14,
+      "addOns": ["headlamp"]
+    },
+    {
+      "name": "data",
+      "distribution": "kubeadm",
+      "version": "v1.36.5",
+      "controlPlanes": 3,
+      "workers": 5,
+      "subnet": 60,
+      "ageDays": 203,
+      "addOns": ["headlamp", "monitoring", "logs", "backups"]
+    },
+    {
+      "name": "ci",
+      "distribution": "k3s",
+      "version": "v1.37.1+k3s1",
+      "controlPlanes": 1,
+      "workers": 3,
+      "subnet": 70,
+      "ageDays": 9,
+      "addOns": ["headlamp"]
+    }
+  ],
+  "kubeadmTemplates": ["v1.37.1", "v1.36.5", "v1.35.9"],
+  "activity": [
+    { "agoMinutes": 8820, "user": "dana@pve", "what": "created cluster", "cluster": "staging", "details": { "class": "kubehenge-rke2" } },
+    { "agoMinutes": 7320, "user": "admin@pve", "what": "changed cluster", "cluster": "payments" },
+    { "agoMinutes": 3180, "user": "admin@pve", "what": "started a backup", "cluster": "web", "details": { "backup": "before-ingress-change" } },
+    { "agoMinutes": 3120, "user": "admin@pve", "what": "changed cluster", "cluster": "web" },
+    { "agoMinutes": 1560, "user": "lee@pve", "what": "handed out kubeconfig", "cluster": "payments" },
+    { "agoMinutes": 420, "user": "dana@pve", "what": "signed in", "details": { "address": "10.20.0.41" } },
+    { "agoMinutes": 360, "user": "dana@pve", "what": "handed out kubeconfig", "cluster": "staging" },
+    { "agoMinutes": 180, "user": "admin@pve", "what": "asked for an etcd snapshot", "cluster": "platform" },
+    { "agoMinutes": 40, "user": "admin@pve", "what": "signed in", "details": { "address": "10.20.0.17" } },
+    { "agoMinutes": 14, "user": "admin@pve", "what": "changed cluster", "cluster": "edge" }
+  ]
+}

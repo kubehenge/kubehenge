@@ -22,6 +22,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Interface
 
+- `kubehenge serve --demo` serves the interface over seven sample clusters, with a **Demo** mark and every change refused. The docs' screenshots come from it ([testing.md](testing.md#demo-mode)).
 - **Activity** lists who did what, newest first, in Administration and on each cluster's page, with the management cluster's events of the last day. `kubehenge appliance activity` lists it too.
   - The setting **kubectl changes** (`api_audit_log`) adds the changes people make with kubectl, through the management cluster's audit log.
 - **A faster interface.** Pages load the session, setup status and fleet together. A change to a cluster or machine shows at once in the fleet, the runs and the cluster's page.

@@ -8,7 +8,7 @@ CAPMOX_IMAGE ?= ghcr.io/kubehenge/cluster-api-provider-proxmox
 HELM_ADDON_IMAGE ?= ghcr.io/kubehenge/cluster-api-addon-provider-helm
 KO_FLAGS ?=
 
-.PHONY: build web gateway-api capi-operator-chart website dist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance
+.PHONY: build web gateway-api capi-operator-chart website screenshotsdist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance
 .PHONY: fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker unit-go unit-web unit-tofu unit-shell tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
@@ -72,6 +72,13 @@ web: pkg/ui/dist/index.html
 # The website (kubehenge.dev): docs/ with a home page, built into website/.vitepress/dist.
 website:
 	cd website && npm ci --no-audit --no-fund && npm run build
+
+# The interface's screenshots in docs/images: `kubehenge serve --demo` in a headless Chromium, the
+# one Playwright pins in web/package-lock.json.
+screenshots: web gateway-api
+	CGO_ENABLED=0 go build -trimpath -o dist/screenshots/kubehenge$(shell go env GOEXE) ./cmd/kubehenge
+	cd web && npm exec --no -- playwright install --only-shell chromium
+	cd web && node screenshots.ts ../dist/screenshots/kubehenge$(shell go env GOEXE) ../docs/images
 
 # The appliance's release archive, which appliance/install.sh installs: the binary, the
 # management-cluster module with the charts it installs, the shared Headlamp (its server and

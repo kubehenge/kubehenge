@@ -197,6 +197,19 @@ The CPU figures (`kubehenge.dev/addon-cpu` and `kubehenge.dev/node-cpu`) are the
 
 Both run the rest, on Talos the upgrade in place too, and check SELinux at their end.
 
+## Demo mode
+
+`kubehenge serve --demo` serves the real interface over sample clusters held in memory, at `http://127.0.0.1:8443`. It signs in an administrator, refuses every change and reaches no Proxmox VE host or cluster.
+
+```sh
+make web && go run ./cmd/kubehenge serve --demo
+make screenshots   # docs/images, from the demo in a headless Chromium
+```
+
+The sample fleet is in `pkg/ui/demo-fleet.json`. Its ClusterClasses are the chart's, kept in `pkg/ui/demo-classes.json`. After a change to the chart's ClusterClasses, `go test ./pkg/ui -run TestDemoClassesMatchTheChart -update-demo-classes` rewrites the file.
+
+`make screenshots` fixes the window, the colour scheme and both clocks, so a second run gives the same images. Run it after a change to a page the docs show.
+
 ## End to end without a Proxmox VE host
 
 CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e2e.yml`), one test per machine.

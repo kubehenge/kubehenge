@@ -140,6 +140,16 @@
       "rules": {
         "import/no-nodejs-modules": "off"
       }
+    },
+    {
+      // The docs' screenshots: a Node script that takes them one page at a time, in one browser
+      // tab, and says on the console which it wrote.
+      "files": ["screenshots.ts"],
+      "rules": {
+        "import/no-nodejs-modules": "off",
+        "eslint/no-await-in-loop": "off",
+        "eslint/no-console": "off"
+      }
     }
   ],
   "ignorePatterns": ["node_modules"]

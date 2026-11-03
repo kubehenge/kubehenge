@@ -1,6 +1,6 @@
 import { Suspense, useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type JSX } from "react";
 
-import { ApiError, api, setSignedOutHandler, setUpgradedHandler } from "./api";
+import { ApiError, api, isDemo, setSignedOutHandler, setUpgradedHandler } from "./api";
 import { Console } from "./Console";
 import { FleetProvider } from "./fleet";
 import { RoutePage, routeAt } from "./Pages";
@@ -232,6 +232,7 @@ function Shell({
       settingUp={needsSetup !== false}
       path={path}
       here={route.page === "cluster" ? route : undefined}
+      demo={isDemo()}
       main={main}
       onSignOut={() => {
         void signOut();

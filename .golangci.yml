@@ -194,6 +194,10 @@ linters:
           - maintidx
           - mnd
           - wrapcheck
+      # The demo's sample fleet is made up: its sizes, ages and loads are what the demo shows.
+      - path: pkg/ui/demofleet\.go
+        linters:
+          - mnd
 
 issues:
   max-issues-per-linter: 0
