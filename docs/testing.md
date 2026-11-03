@@ -217,6 +217,22 @@ CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e
 
 A machine whose KVM lacks pause-loop exiting hands its test to a fresh one, up to three times. There, guests that outnumber its CPUs starve each other whatever their sizes. The checks that nothing restarts would only measure the machine. A test still on such a machine at the fourth try runs there with restarts reported, not failed (`KUBEHENGE_E2E_RESTARTS=report`).
 
+### The Actions cache
+
+The repository's cache holds 10 GB. Past that, GitHub evicts the entries read least recently. Only runs on main save, and main keeps each family's newest entry alone (`scripts/cache-prune.sh`, run by `cache.yml` and `e2e-image.yml`). A closed pull request's entries are deleted.
+
+| Family | Saved by | Size |
+| --- | --- | --- |
+| `ci-` | `ci.yml` on a push to main | 3.6 GB |
+| `e2e-go-` | the nightly end-to-end run | 2.2 GB |
+| `e2e-pve-` | `e2e-image.yml`, the nightly run | 0.4 GB |
+| `e2e-template-` | `e2e-image.yml`, the nightly run, a dispatch | TEMPLATES |
+| `website-`, `fuzz-` | `website.yml`, `fuzz.yml` | under 0.1 GB |
+
+Together that is TOTAL of 10 GB. A template whose inputs change replaces its entry. One no test needs any more is deleted.
+
+If the cache still outgrows 10 GB, GitHub evicts the entry read longest ago. That is a fuzz target's or the website's first, read once a week. A template evicted next is baked again by the following push to main, and lanes bake it themselves meanwhile.
+
 ### Running them yourself
 
 Any Linux machine with Docker, `/dev/kvm` and about 16 GB of free memory can do the same:

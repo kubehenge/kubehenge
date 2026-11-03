@@ -100,9 +100,16 @@ made() {
     made_slot=$1
     shift
     made_kept=/var/lib/vz/template-${made_slot}
-    if [ "${made_slot}" != 0 ] && [ -s "${work}/vz/template-${made_slot}/template.vma.zst" ]; then
+    # qmrestore reads the archive's format from vzdump's own file name, so the backup keeps it.
+    made_archive=
+    if [ "${made_slot}" != 0 ]; then
+        for made_file in "${work}/vz/template-${made_slot}"/vzdump-qemu-*.vma.zst; do
+            [ ! -s "${made_file}" ] || made_archive=${made_kept}/${made_file##*/}
+        done
+    fi
+    if [ -n "${made_archive}" ]; then
         made_id=$(pve pvesh get /cluster/nextid)
-        pve qmrestore "${made_kept}/template.vma.zst" "${made_id}" --storage "${KUBEHENGE_E2E_SHARED_STORAGE:-local}" \
+        pve qmrestore "${made_archive}" "${made_id}" --storage "${KUBEHENGE_E2E_SHARED_STORAGE:-local}" \
             --pool kubehenge-templates > /dev/null
         echo "template $* restored from the cache as VM ${made_id}"
         template "$@"
@@ -130,8 +137,8 @@ made() {
     pve rm -rf "${made_kept}"
     pve mkdir -p "${made_kept}"
     pve vzdump "${made_id}" --dumpdir "${made_kept}" --compress zstd --quiet 1
-    pve sh -c "mv ${made_kept}/vzdump-qemu-*.vma.zst ${made_kept}/template.vma.zst && rm -f ${made_kept}/vzdump-qemu-*"
-    made_size=$(du -h "${work}/vz/template-${made_slot}/template.vma.zst")
+    pve sh -c "rm -f ${made_kept}/vzdump-qemu-*.log ${made_kept}/vzdump-qemu-*.notes"
+    made_size=$(du -ch "${work}/vz/template-${made_slot}"/vzdump-qemu-*.vma.zst | tail -n 1)
     echo "template $* kept for the cache: ${made_size%%[[:space:]]*}"
 }
 
