@@ -196,9 +196,11 @@ EOF
 chmod +x "${bin}"/*
 
 # collect_into <out> <work directory>: guests.sh collect with the stand-ins, whose exit code it prints.
+# The cut-off ends the node that never answers, which is asked once. It is well above what a
+# stand-in's answer takes on a loaded machine, where a few processes can take seconds to start.
 collect_into() {
     code=0
-    env PATH="${bin}:${PATH}" TMPDIR="${root}/tmp" KUBEHENGE_E2E_TALOSCTL_TIMEOUT=2 \
+    env PATH="${bin}:${PATH}" TMPDIR="${root}/tmp" KUBEHENGE_E2E_TALOSCTL_TIMEOUT=10 \
         sh "${guests}" collect "$1" "$2" > "${root}/collect.log" 2>&1 || code=$?
     echo "${code}"
 }
@@ -252,7 +254,7 @@ has "and is asked nothing more" "${d}/state.txt" "nothing more was asked of it"
 truth "so it has no other parts" [ ! -e "${d}/services.txt" ]
 
 h=${out}/104-talos-hang
-has "a node that never answers is cut off" "${h}/state.txt" "exit code: none, cut off after 2 s"
+has "a node that never answers is cut off" "${h}/state.txt" "exit code: none, cut off after 10 s"
 truth "and has no other parts" [ ! -e "${h}/services.txt" ]
 
 k=${out}/105-kubeadm-cp

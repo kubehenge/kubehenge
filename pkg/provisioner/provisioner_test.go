@@ -857,7 +857,8 @@ func hooksFor(t *testing.T, objs ...client.Object) (*Hooks, client.Client) {
 			machineVariable("controlPlaneMachine"), machineVariable("workerMachine"),
 		}},
 	}
-	reader := fake.NewClientBuilder().WithScheme(scheme).WithObjects(append(objs, class)...).Build()
+	reader := fake.NewClientBuilder().WithScheme(scheme).WithObjects(append(objs, class)...).
+		WithStatusSubresource(&clusterv1.Cluster{}).Build()
 	return &Hooks{Reader: reader, ClassNamespace: "kubehenge-system"}, reader
 }
 

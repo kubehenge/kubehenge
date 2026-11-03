@@ -47,7 +47,9 @@ func (f *fakeClusterAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `[
 			{"namespace":"clusters","name":"web","distribution":"talos","version":"v1.34.1","phase":"Provisioned",
 			 "controlPlane":{"desired":3,"ready":3},"workers":{"desired":2,"ready":1}},
-			{"namespace":"a","name":"twin","phase":"Provisioned"},{"namespace":"b","name":"twin","phase":"Provisioned"}]`)
+			{"namespace":"a","name":"twin","phase":"Provisioned","conditions":[
+			 {"type":"UpgradeHeld","status":"True","reason":"RancherKubernetes","message":"for Rancher, choose Kubernetes 1.34 to 1.36, not v1.37.1+k3s1"}]},
+			{"namespace":"b","name":"twin","phase":"Provisioned"}]`)
 	case "GET /api/clusters/clusters/web":
 		_, _ = io.WriteString(w, `{"namespace":"clusters","name":"web"}`)
 	case "GET /api/clusters/clusters/web/kubeconfig":
@@ -88,7 +90,8 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out, "CONTROL PLANES") || !strings.Contains(out, "web") || !strings.Contains(out, "3/3") ||
-		!strings.Contains(out, "1/2") {
+		!strings.Contains(out, "1/2") || !strings.Contains(out, "Provisioned, upgrade held (RancherKubernetes)") ||
+		strings.Count(out, "upgrade held") != 1 {
 		t.Errorf("list =\n%s", out)
 	}
 	if out, err = runCluster(t, srv.URL, token, "get", "web"); err != nil || !strings.Contains(out, `"name": "web"`) {

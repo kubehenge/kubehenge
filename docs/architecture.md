@@ -67,6 +67,13 @@ The operator's own chart is published only as a release download and in a Helm r
 
 The operator downloads no provider itself. A hook of the providers' release (`kubehenge manifests`) downloads each provider's metadata and components and checks them against the SHA-256s `versions.tf` names. It stores them in the ConfigMap the provider's `fetchConfig` selects.
 
+Another hook (`kubehenge wait providers`) holds the release until the providers run:
+
+- The operator reports each provider's current generation installed or upgraded.
+- The hash of what it applied matches on the provider and on the Secret it caches the manifests in.
+- Every provider Deployment has rolled out.
+- All of that holds for 30 seconds with the same Deployments. Right after an install, the operator can install a provider again from a stale read and recreate its Deployments.
+
 Each provider runs its release's own image, by the digest `versions.tf` names, with two exceptions. Kubehenge's release builds capmox v0.9.1 from a later upstream commit with a fix kubeadm upgrades need. It adds fixes of its own (`capmox_build` in `management-cluster/versions.tf`). It builds the Add-on Provider for Helm v0.6.4 with a fix that keeps it from creating a cluster's release twice (`helm_addon_build`).
 
 Both are built reproducibly, so the published images can be rebuilt from their sources and compared ([releasing.md](releasing.md)). A release of each that carries its fixes replaces the build.
@@ -353,6 +360,7 @@ It deletes the rest.
   - It deletes the DaemonSets' pods the node's kubelet rejected while it shut down. Otherwise they would keep their DaemonSets reading not ready for up to 15 minutes.
   - Talos moves a minor version at a time, so a jump of two goes through the newest release of the minor in between.
   - Progress and the last upgrade are recorded on the Cluster (`kubehenge.dev/talos-upgrading`, `kubehenge.dev/talos-upgraded`) for the interface.
+  - A Kubernetes upgrade waits meanwhile (`BeforeClusterUpgrade`), with the Cluster's condition `UpgradeHeld` at reason `TalosUpgrade`.
 - **A failed upgrade** stops the rest.
   - A node that does not come back Ready, or comes back on its old release because Talos rolled back, is recorded in `kubehenge.dev/talos-upgrade-failed`.
   - The controller upgrades nothing more in the cluster until an operator removes the record (**Try again** on the cluster's page).
@@ -382,7 +390,7 @@ Add-ons are Helm charts installed per cluster by the Cluster API Add-on Provider
 
 Kubehenge's controller turns a cluster's add-on variables into HelmChartProxies beside the cluster. Switching an add-on off deletes its proxy, which uninstalls it. Values never carry a secret, since the Add-on Provider for Helm keeps them in plain text.
 
-Every chart is pinned by its digest, which a proxy's version carries as `<version>@sha256:<digest>`. Kubehenge's build of the Add-on Provider for Helm pulls an OCI chart by its manifest digest and checks that the version's tag points to it. It checks a chart from an HTTP repository against the SHA-256 of its archive that the repository's index lists.
+Every chart is pinned by its digest, which a proxy's version carries as `<version>@sha256:<digest>`. Kubehenge's build of the Add-on Provider for Helm pulls an OCI chart by its manifest digest alone. It checks that the chart is the pinned version. A publisher that moves the version's tag to a new build changes nothing for a cluster. It checks a chart from an HTTP repository against the SHA-256 of its archive that the repository's index lists.
 
 The images are pinned the same way. Each chart's entry in the controller chart's values names every image it runs by tag and digest. The controller merges those values under the ones it sets itself. An ImageSet named for its release, applied with Calico's Installation, pins the images the Tigera operator deploys Calico from.
 
@@ -692,6 +700,8 @@ Rancher (`rancher: {install: true, hostname: …}`) goes into one cluster Kubehe
   - Cluster API does not authenticate itself to the controller's hooks. Each hook therefore reads the Cluster named in a request from the API server, and the delete hook acts only on one being deleted.
 
 Rancher's chart refuses Kubernetes versions its release does not run on. The controller refuses to create the Rancher cluster outside them. It holds back an upgrade beyond them (`BeforeClusterUpgrade`) until a Kubehenge release brings a Rancher that runs there.
+
+The hook records each hold as the Cluster's condition `UpgradeHeld`, whose reason the interface, `kubehenge cluster list` and kubectl read ([troubleshooting.md](troubleshooting.md#upgrades-held-back)). Cluster API's own `TopologyReconciled` carries the hook's message only inside its prose. The controller removes the condition once nothing holds the upgrade, also when the Cluster goes back to the version it runs.
 
 On fewer than 4 vCPUs a node running Rancher starves its own etcd and API server. `BeforeClusterCreate` refuses such a cluster, and a validating webhook refuses switching Rancher on or shrinking its nodes later. Rancher's first admin password is generated into the `bootstrap-secret` Secret in `cattle-system`, never written into values.
 

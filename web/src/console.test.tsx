@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { scrollerOf } from "./ClusterList";
 import { fakeServer, held, type Route } from "./fake-server";
-import { ranked, standing } from "./fleet";
+import { ranked, standing, upgradeHeldCondition } from "./fleet";
 import { score } from "./Palette";
 import { runView } from "./Runs";
 import type { Cluster, FleetHealth, RunInfo } from "./types";
@@ -79,6 +79,28 @@ describe("the fleet", () => {
     expect(standing(upgrading)).toMatchObject({
       group: "running",
       reason: "Upgrading to v1.36.5+rke2r1",
+      verdict: "Upgrading",
+    });
+    const heldBy = (reason: string): Cluster => ({
+      ...upgrading,
+      conditions: [
+        ...upgrading.conditions,
+        { type: upgradeHeldCondition, status: "True", reason, message: "the hold", since: minutesAgo(5) },
+      ],
+    });
+    for (const reason of ["RancherKubernetes", "RancherElsewhere"]) {
+      expect(standing(heldBy(reason))).toStrictEqual({
+        group: "needs",
+        state: "warning",
+        reason: "Upgrade held for Rancher",
+        view: "health",
+        verdict: "Upgrade held",
+      });
+    }
+    expect(standing(heldBy("TalosUpgrade"))).toMatchObject({
+      group: "running",
+      state: "progress",
+      reason: "Upgrade waits for Talos",
       verdict: "Upgrading",
     });
     expect(standing(creating)).toMatchObject({

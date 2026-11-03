@@ -10,7 +10,7 @@ set -eu
 # bootc-base-imagectl and the manifests it composes from are packaged by neither AlmaLinux nor
 # Rocky Linux; both take them from CentOS Stream's bootc image, as AlmaLinux's own image builds do.
 # That image is only unpacked here, never run: it needs x86-64-v3.
-tools=quay.io/centos-bootc/centos-bootc:stream10@sha256:474b191aea04598f3a58ffbd08a1324e9b7638ff8cf2a9fe07a3b2131cb37418
+tools=quay.io/centos-bootc/centos-bootc:stream10@sha256:e04cbdbad713723534cb8eff8ea89bffb0fdafaa029ab4afa798ef5c7e618ea4
 target=/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0
 
 distribution=$1

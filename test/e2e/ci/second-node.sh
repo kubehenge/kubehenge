@@ -14,7 +14,6 @@ set -eu
 work=$(readlink -f "${1:?usage: $0 <work directory>}")
 # shellcheck source=/dev/null
 . "${work}/env"
-: "${KUBEHENGE_E2E_ROOT_PASSWORD:?}"
 
 on() {
     node=$1
@@ -94,9 +93,13 @@ until quorate; do
     sleep 2
 done
 fingerprint=$(on pve openssl x509 -in /etc/pve/nodes/pve/pve-ssl.pem -noout -fingerprint -sha256 | cut -d= -f2)
+# Proxmox VE takes a join only with root@pam's password. It is random, set on pve for this join and
+# kept out of env.
+root_password=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
+printf 'root:%s\n' "${root_password}" | docker exec -i kubehenge-e2e-pve chpasswd
 # The join prints why it aborted, and exits 0 all the same.
 on pve2 pvesh create /cluster/config/join --hostname 172.21.99.2 --fingerprint "${fingerprint}" \
-    --password "${KUBEHENGE_E2E_ROOT_PASSWORD}" --link0 172.21.99.4
+    --password "${root_password}" --link0 172.21.99.4
 # shellcheck disable=SC2310 # the file missing is the failure reported.
 on pve2 test -f /etc/corosync/corosync.conf || {
     echo "pve2 did not join pve's cluster" >&2
