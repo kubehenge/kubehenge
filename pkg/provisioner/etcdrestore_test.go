@@ -836,6 +836,15 @@ func TestRestoreScripts(t *testing.T) {
 		if d == templates.Kubeadm && (!strings.Contains(s.Reset, "--skip-hash-check") || strings.Contains(s.Restore, "skip=(--skip-hash-check)")) {
 			t.Error("kubeadm checks the snapshot's hash on a reset, or skips it on a restore")
 		}
+		// The scripts keep their files to root, while the server they run makes containers, whose mount
+		// points a CIS-hardened etcd running as its own user has to pass, as its service does.
+		if d != templates.Kubeadm {
+			for name, body := range map[string]string{"restore": s.Restore, "reset": s.Reset} {
+				if !strings.Contains(body, "umask 077\n") || !strings.Contains(body, "(umask 022 && "+want) {
+					t.Errorf("%s's %s does not run the server under the service's umask:\n%s", d, name, body)
+				}
+			}
+		}
 		// RKE2's and k3s's restore keeps the snapshot's revision, so the controller moves it on.
 		if s.Bumps != (d == templates.Kubeadm) {
 			t.Errorf("%s says its restore moves the revision on: %v", d, s.Bumps)
