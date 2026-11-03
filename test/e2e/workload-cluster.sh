@@ -434,13 +434,14 @@ worker_cores=${KUBEHENGE_E2E_WORKER_CORES:-$(printf '%s' "${class_json}" | jq -r
         (($node.worker + ([$on[] | if . == "argocd" then ([$addon.argocd, $addon.flux] | max) else $addon[.] end] | add)) / 1000 | ceil)]
     | max')}
 # The control plane's memory likewise: the least the class's sizing guide gives it beside one worker, or what
-# it uses itself with those add-ons, whichever is more.
-control_plane_memory=${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" '
+# it uses itself with those add-ons and its CNI, whichever is more.
+control_plane_memory=${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" --arg cni "${KUBEHENGE_E2E_CNI:-}" '
     (.metadata.annotations["kubehenge.dev/addon-control-plane-memory"] // "{}" | fromjson) as $grows
+    | (.metadata.annotations["kubehenge.dev/cni-control-plane-memory"] // "{}" | fromjson) as $cnis
     | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
     | [(.metadata.annotations["kubehenge.dev/control-plane-sizes"] | fromjson | map(select(.workers <= 1)) | last | .memoryMiB),
         (.spec.variables[] | select(.name == "controlPlaneMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
-        $node.controlPlane + ([$on[] | $grows[.] // 0] | add)]
+        $node.controlPlane + ([$on[] | $grows[.] // 0] | add) + ($cnis[$cni] // 0)]
     | max')}
 echo "workers with ${worker_memory} MiB of memory and ${worker_cores} cores, the control plane with ${control_plane_memory} MiB"
 cat > "${work}/cluster.yaml" << EOF

@@ -16,6 +16,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The API server now refuses Clusters that break the interface's rules (listed under Fixes). Check the Clusters kept in Git first.
 - Fixed pools need one node address more than their machines.
 - A kubeadm control plane counts 3376 MiB for itself, up from 2392 MiB.
+- A k3s control plane with add-ons counts 1112 MiB more with Cilium and 1768 MiB more with Calico. Changes to a cluster that is already short go through only when they leave it no shorter.
 - Boot logs need the kubeadm, RKE2 and k3s templates built again.
 - `install.sh --upgrade` adds the volume that sealed automatic-upgrade secrets need.
 - Applying the management cluster replaces the nodes of Talos clusters, which get a new log target. It also replaces the control planes of kubeadm, RKE2 and k3s clusters, which get a CPU request for kube-vip among other changes ([upgrading.md](upgrading.md#when-a-release-changes-a-clusterclass)).

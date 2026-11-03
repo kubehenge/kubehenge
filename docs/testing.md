@@ -81,7 +81,7 @@ The frontend's packages are installed again only when `web/package-lock.json` ch
 
 The workload and Rancher tests print each node's and namespace's memory and the CPU requested of what each node offers. They print it before the add-ons and with every add-on on. The workload test also prints the control plane's memory after each add-on.
 
-The classes' memory figures come from these prints: the add-ons', what they add to a control plane, and the nodes' own (`kubehenge.dev/addon-memory`, `kubehenge.dev/addon-control-plane-memory` and `kubehenge.dev/node-memory`, [clusters.md](clusters.md#machines)). The workload test gives its control plane and worker the least the figures let them have. A figure a new add-on or release outgrows is raised in `charts/kubehenge/templates`.
+The classes' memory figures come from these prints: the add-ons', what they and a CNI other than the class's own add to a control plane, and the nodes' own (`kubehenge.dev/addon-memory`, `kubehenge.dev/addon-control-plane-memory`, `kubehenge.dev/cni-control-plane-memory` and `kubehenge.dev/node-memory`, [clusters.md](clusters.md#machines)). The workload test gives its control plane and worker the least the figures let them have. A figure a new add-on or release outgrows is raised in `charts/kubehenge/templates`.
 
 The CPU figures (`kubehenge.dev/addon-cpu` and `kubehenge.dev/node-cpu`) are the requests of the pinned charts and distributions as Kubehenge configures them, and move with them. A figure that falls behind shows in the requests the tests print. The test's worker, given the fewest cores the figures allow, then leaves a pod pending.
 
