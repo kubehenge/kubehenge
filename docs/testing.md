@@ -194,8 +194,9 @@ The CPU figures (`kubehenge.dev/addon-cpu` and `kubehenge.dev/node-cpu`) are the
 
 - `lifecycle` (the `kubeadm`, `rke2`, `k3s` and `talos` tests) sizes the nodes at the least the class allows with the add-ons a cluster starts with (the load balancer and Rancher's agent). It switches on no other add-on.
 - `addons-a` (`kubeadm-addons-a` and so on) sizes them for Headlamp, monitoring, logs and certificates, and switches those on. Logs read Loki through monitoring's Grafana, and the certificates serve Headlamp and Grafana.
-- `addons-b` does the same for Kyverno, Istio, backups and GitOps.
-- RKE2's least worker of 4 GiB leaves its control plane no room for all of `addons-b`. On RKE2, `addons-b` has Kyverno and backups, and `addons-c` Istio and GitOps.
+- On k3s, `addons-b` does the same for Kyverno, Istio, backups and GitOps.
+- kubeadm's and Talos's control planes grow more with those four, more still on a CNI other than the class's default. There `addons-b` has Kyverno and backups, and `addons-c` Istio and GitOps.
+- RKE2's least worker of 4 GiB leaves its control plane the least room. There `addons-b` has Kyverno, `addons-c` Istio and backups, and `addons-d` GitOps.
 
 The add-on parts leave out the steps that replace a machine. Those are RKE2's and k3s's own upload, the load balancer off, scaling, the upgrade and the dead worker. Every part runs the rest, on Talos the upgrade in place too, and checks SELinux at its end.
 
@@ -221,7 +222,7 @@ Any Linux machine with Docker, `/dev/kvm` and about 16 GB of free memory can do 
 ```sh
 scripts/tools.sh ~/.local/kubehenge-tools && export PATH=~/.local/kubehenge-tools:$PATH
 test/e2e/ci/up.sh /tmp/e2e          # Proxmox VE in a container, a registry beside it
-test/e2e/ci/run.sh /tmp/e2e rke2    # or management-cluster, management-cluster-upgrade, appliance, kubeadm, k3s, talos, kubeadm-addons-a, kubeadm-addons-b, rke2-addons-a, rke2-addons-b, rke2-addons-c, k3s-addons-a, k3s-addons-b, talos-addons-a, talos-addons-b, rancher, cluster-mesh, node-image-refresh, autoscaler, control-plane-ha, two-nodes
+test/e2e/ci/run.sh /tmp/e2e rke2    # or management-cluster, management-cluster-upgrade, appliance, kubeadm, k3s, talos, kubeadm-addons-a, kubeadm-addons-b, kubeadm-addons-c, rke2-addons-a, rke2-addons-b, rke2-addons-c, rke2-addons-d, k3s-addons-a, k3s-addons-b, talos-addons-a, talos-addons-b, talos-addons-c, rancher, cluster-mesh, node-image-refresh, autoscaler, control-plane-ha, two-nodes
 test/e2e/ci/run.sh /tmp/e2e kubeadm+calico+rocky-10+cis-off   # a workload test or an add-on part with its CNI, node OS or no CIS hardening
 ```
 
@@ -248,19 +249,30 @@ Swap does not count as room for the guests. Cold pages of the runner's own proce
 
 #### Each test's guests
 
-Every node is at the least Kubehenge allows for what its test switches on. The management node has the module's default 4 GiB. The add-on parts stay within 12 GiB, in MiB:
+Every node is at the least Kubehenge allows for what its test switches on. The management node has the module's default 4 GiB. A CNI other than the class's default grows the control plane ([clusters.md](clusters.md#machines)). The guests of each add-on part together, per CNI, in MiB:
 
-| Test | Management node | Control plane | Worker | Together |
+| Test | Worker | Default CNI | Cilium | Calico |
 | --- | --- | --- | --- | --- |
-| `kubeadm-addons-a` | 4096 | 4096 | 3648 | 11840 |
-| `kubeadm-addons-b` | 4096 | 4832 | 3264 | 12192 |
-| `rke2-addons-a`, `-b`, `-c` | 4096 | 4096 | 4096 | 12288 |
-| `k3s-addons-a` | 4096 | 4096 | 3392 | 11584 |
-| `k3s-addons-b` | 4096 | 4096 | 3008 | 11200 |
-| `talos-addons-a` | 4096 | 4096 | 3648 | 11840 |
-| `talos-addons-b` | 4096 | 4096 | 3264 | 11456 |
+| `kubeadm-addons-a` | 3648 | 11840 | (default) | 12688 |
+| `kubeadm-addons-b` | 2368 | 10576 | (default) | 12000 |
+| `kubeadm-addons-c` | 2240 | 10432 | (default) | 11856 |
+| `rke2-addons-a` | 4096 | 12288 | 12288 | 13264 |
+| `rke2-addons-b` | 4096 | 12288 | 12368 | 13672 |
+| `rke2-addons-c` | 4096 | 12288 | 12288 | 13592 |
+| `rke2-addons-d` | 4096 | 12288 | 12288 | 13552 |
+| `k3s-addons-a` | 3392 | 11584 | 11584 | 11760 |
+| `k3s-addons-b` | 3008 | 11200 | 11520 | 12168 |
+| `talos-addons-a` | 3648 | 11840 | 12088 | 11840 |
+| `talos-addons-b` | 2368 | 10560 | 11400 | 10560 |
+| `talos-addons-c` | 2240 | 10432 | 11256 | 10432 |
 
-These tests still outgrow 12 GiB:
+Three kinds of lane outgrow 12 GiB, all on a CNI the nightly run picks:
+
+- RKE2 with Calico. Its least control plane (3120 MiB) and Calico's figure together pass 4096 MiB with no add-on, beside a worker of at least 4096 MiB.
+- `kubeadm-addons-a` with Calico, by 400 MiB. Logs need monitoring's Grafana, and those two alone pass it by 88 MiB.
+- `rke2-addons-b` with Cilium, by 80 MiB. It holds one add-on.
+
+These tests outgrow 12 GiB as well:
 
 | Test | Steady | Peak | At the peak |
 | --- | --- | --- | --- |

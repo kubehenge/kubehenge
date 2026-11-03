@@ -7,8 +7,8 @@
 # <test> is management-cluster (applies the management cluster, runs the templates and volumes tests
 # while it is up, and destroys it), management-cluster-upgrade (applies and destroys it), appliance
 # (installs the appliance, which sets the management cluster up and removes it), or kubeadm, rke2,
-# k3s, talos, their add-on parts kubeadm-addons-a and -b, rke2-addons-a, -b and -c, k3s-addons-a and
-# -b and talos-addons-a and -b, rancher,
+# k3s, talos, their add-on parts kubeadm-addons-a, -b and -c, rke2-addons-a to -d, k3s-addons-a and
+# -b and talos-addons-a, -b and -c, rancher,
 # cluster-mesh, node-image-refresh, autoscaler, control-plane-ha or two-nodes (which first joins a
 # second Proxmox VE node, test/e2e/ci/second-node.sh), which first apply the management cluster and
 # create the templates they need, and leave it up. The workload tests and their add-on halves take
@@ -31,8 +31,9 @@ eval "${settings}"
 test=${test%%+*}
 case "${test}" in
     management-cluster | management-cluster-upgrade | appliance | kubeadm | rke2 | k3s | talos) ;;
-    kubeadm-addons-a | kubeadm-addons-b | rke2-addons-a | rke2-addons-b | rke2-addons-c) ;;
-    k3s-addons-a | k3s-addons-b | talos-addons-a | talos-addons-b) ;;
+    kubeadm-addons-a | kubeadm-addons-b | kubeadm-addons-c) ;;
+    rke2-addons-a | rke2-addons-b | rke2-addons-c | rke2-addons-d) ;;
+    k3s-addons-a | k3s-addons-b | talos-addons-a | talos-addons-b | talos-addons-c) ;;
     rancher | cluster-mesh | node-image-refresh | autoscaler) ;;
     control-plane-ha | two-nodes) ;;
     *)
@@ -314,9 +315,9 @@ templates_made
 export KUBEHENGE_E2E_CONTROL_PLANE_CORES=4
 # Each class's workload test runs in parts, on a machine each, as the whole outgrows one machine's
 # memory: kubeadm, rke2, k3s and talos take a cluster of the least size the class allows with the
-# add-ons it starts with through everything but the other add-ons, and their -addons-a, -addons-b
-# and, on RKE2, -addons-c parts one sized for a group of the add-ons through that group, replacing
-# no machine.
+# add-ons it starts with through everything but the other add-ons, and their -addons-a, -addons-b,
+# -addons-c but on k3s and -addons-d on RKE2 parts one sized for a group of the add-ons through that
+# group, replacing no machine.
 case "${test}" in
     *-addons-?) export KUBEHENGE_E2E_PART="addons-${test##*-}" ;;
     rke2 | k3s | kubeadm | talos) export KUBEHENGE_E2E_PART=lifecycle ;;

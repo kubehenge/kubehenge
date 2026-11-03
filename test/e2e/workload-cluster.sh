@@ -91,8 +91,9 @@
 # cluster's talosconfig, or are left out.
 # KUBEHENGE_E2E_PART runs part of the test, for a machine whose memory holds the guests of only one:
 # lifecycle sizes the nodes at the least the class lets them have with the add-ons a cluster starts
-# with, and switches on no other; addons-a, addons-b and, on RKE2, addons-c each size them for a
-# group of the add-ons, switch on that group alone and leave out every step that replaces machines
+# with, and switches on no other; addons-a, addons-b, addons-c but on k3s and addons-d on RKE2 each
+# size them for a group of the add-ons, switch on that group alone and leave out every step that
+# replaces machines
 # (the distribution's own etcd upload, the load balancer switched off on k3s, scaling, the upgrade
 # and the dead worker). Unset, the test runs whole.
 set -eu
@@ -132,17 +133,22 @@ distribution=$(echo "${class}" | sed 's/^kubehenge-//')
 # The add-ons this run switches on, by their keys in the class's kubehenge.dev/addon-memory; argocd
 # stands for GitOps, Flux and then Argo CD. Logs read Loki through monitoring's Grafana, and the
 # certificates step serves Headlamp and Grafana, so those four share a group. Each group's guests
-# stay within 12 GiB with the management node (docs/testing.md): RKE2's least worker of 4096 MiB
-# leaves its control plane no room for the second group's growth, which RKE2 splits in two.
+# stay within 12 GiB with the management node (docs/testing.md), also with a CNI other than the
+# class's default. k3s's control plane grows least and keeps the other four together. kubeadm and
+# Talos split them in two. RKE2's least worker of 4096 MiB leaves its control plane the least room,
+# so it splits them in three.
 case ${part}-${distribution} in
     all-*) addons='headlamp kyverno istio monitoring logs backups certManager argocd' ;;
     lifecycle-*) addons='' ;;
     addons-a-*) addons='headlamp monitoring logs certManager' ;;
-    addons-b-rke2) addons='kyverno backups' ;;
-    addons-b-*) addons='kyverno istio backups argocd' ;;
-    addons-c-rke2) addons='istio argocd' ;;
+    addons-b-k3s) addons='kyverno istio backups argocd' ;;
+    addons-b-rke2) addons='kyverno' ;;
+    addons-b-*) addons='kyverno backups' ;;
+    addons-c-rke2) addons='istio backups' ;;
+    addons-c-kubeadm | addons-c-talos) addons='istio argocd' ;;
+    addons-d-rke2) addons='argocd' ;;
     *)
-        echo "KUBEHENGE_E2E_PART is lifecycle, addons-a, addons-b or, on RKE2, addons-c, not ${part}" >&2
+        echo "KUBEHENGE_E2E_PART is lifecycle, addons-a or addons-b, addons-c but on k3s, or addons-d on RKE2, not ${part}" >&2
         exit 2
         ;;
 esac
