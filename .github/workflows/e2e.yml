@@ -17,6 +17,10 @@ on:
           included; none runs tonight's nightly set.
         type: string
         default: ''
+      fresh:
+        description: Bake every template from the mirrors, as the nightly run does.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -136,6 +140,7 @@ jobs:
     uses: ./.github/workflows/e2e-lane.yml # zizmor: ignore[self-repository]
     with:
       test: ${{ matrix.test }}
+      fresh: ${{ github.event_name == 'schedule' || inputs.fresh == true }}
 
   # The one check the main branch's ruleset requires: the matrix's tests differ by event, and a pull
   # request, or a merge group of documentation only, skips them.

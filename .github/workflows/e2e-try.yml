@@ -19,6 +19,10 @@ on:
         description: Whether to run the test wherever it lands.
         type: boolean
         default: false
+      fresh:
+        description: Whether to bake every template from the mirrors instead of the cache.
+        type: boolean
+        default: false
     outputs:
       handed-back:
         description: Whether the test was handed back for the next try.
@@ -133,8 +137,9 @@ jobs:
           echo "controller image $(cat "$build/controller-digest")"
       # The templates of kubeadm, RKE2 and k3s the test bakes, each kept in the cache under a hash
       # of its bake's inputs (test/e2e/ci/templates.sh). Kept from a nightly run, on main, every
-      # branch and merge group reads them. The nightly run bakes every template afresh from the
-      # mirrors and only looks the keys up, keeping a template whose key the cache lacks.
+      # branch and merge group reads them. The nightly run, and a dispatch asked to, bakes every
+      # template afresh from the mirrors and only looks the keys up, keeping a template whose key
+      # the cache lacks.
       - name: Template keys
         id: templates
         if: env.E2E_RUN == 'true'
@@ -147,14 +152,14 @@ jobs:
         with:
           path: ${{ runner.temp }}/e2e/vz/template-1
           key: ${{ steps.templates.outputs.key1 }}
-          lookup-only: ${{ github.event_name == 'schedule' }}
+          lookup-only: ${{ inputs.fresh }}
       - id: template-2
         if: env.E2E_RUN == 'true' && steps.templates.outputs.key2 != ''
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/e2e/vz/template-2
           key: ${{ steps.templates.outputs.key2 }}
-          lookup-only: ${{ github.event_name == 'schedule' }}
+          lookup-only: ${{ inputs.fresh }}
       # Only the nightly run and a dispatch keep templates: a merge group's cache would serve no
       # other run.
       - name: Templates to keep
@@ -168,6 +173,7 @@ jobs:
           HIT2: ${{ steps.template-2.outputs.cache-hit }}
         run: |
           keep=
+          echo "templates restored: 1: ${HIT1:-none}, 2: ${HIT2:-none}"
           [ -z "$KEY1" ] || [ "$HIT1" = true ] || keep="$keep 1"
           [ -z "$KEY2" ] || [ "$HIT2" = true ] || keep="$keep 2"
           echo "templates to keep: ${keep:- none}"

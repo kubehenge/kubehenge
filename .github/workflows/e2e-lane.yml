@@ -12,6 +12,10 @@ on:
         description: The test to run, as test/e2e/ci/run.sh names it.
         required: true
         type: string
+      fresh:
+        description: Whether to bake every template from the mirrors instead of the cache.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -22,6 +26,7 @@ jobs:
     uses: ./.github/workflows/e2e-try.yml # zizmor: ignore[self-repository]
     with:
       test: ${{ inputs.test }}
+      fresh: ${{ inputs.fresh }}
   try-2:
     name: try 2
     needs: try-1
@@ -29,6 +34,7 @@ jobs:
     uses: ./.github/workflows/e2e-try.yml # zizmor: ignore[self-repository]
     with:
       test: ${{ inputs.test }}
+      fresh: ${{ inputs.fresh }}
   try-3:
     name: try 3
     needs: try-2
@@ -36,6 +42,7 @@ jobs:
     uses: ./.github/workflows/e2e-try.yml # zizmor: ignore[self-repository]
     with:
       test: ${{ inputs.test }}
+      fresh: ${{ inputs.fresh }}
   try-4:
     name: try 4
     needs: try-3
@@ -43,6 +50,7 @@ jobs:
     uses: ./.github/workflows/e2e-try.yml # zizmor: ignore[self-repository]
     with:
       test: ${{ inputs.test }}
+      fresh: ${{ inputs.fresh }}
       last: true
 
   # A try that hands the test back succeeds without running it, so the lane passes only when every

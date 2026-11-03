@@ -117,56 +117,10 @@ done
 cat "${bundle}" "${KUBEHENGE_PROXMOX_CA}" > "${work}/ca-bundle.pem"
 export SSL_CERT_FILE="${work}/ca-bundle.pem"
 
-# The host's CPU: told of a generic one, the guests' kernels run Meltdown's and MDS's mitigations,
-# which under nested virtualisation slow them on Intel runners until a worker loses its API server.
-template() { # distribution [flags]
-    "${repo}/dist/kubehenge" template create "$@" --cpu-type host --node "${KUBEHENGE_E2E_NODE}" \
-        --storage "${KUBEHENGE_E2E_SHARED_STORAGE:-local}" \
-        --build-address "${KUBEHENGE_E2E_ADDRESS}" --build-gateway "${KUBEHENGE_E2E_GATEWAY}" \
-        --build-dns "${KUBEHENGE_E2E_DNS}"
-}
 # The node OS a test's options chose, for the templates of its distribution.
 node_os=
 [ -z "${KUBEHENGE_E2E_NODE_OS:-}" ] || node_os="--node-os ${KUBEHENGE_E2E_NODE_OS}"
-# A baked template the Actions cache kept (test/e2e/ci/templates.sh) is restored into the pool from
-# ${work}/vz/template-<n>, the n-th baked template of the test, where `kubehenge template create`
-# then finds it. One baked here whose slot KUBEHENGE_E2E_KEEP_TEMPLATES lists (as in "1 2") is backed
-# up there for the cache.
-pve() { docker exec kubehenge-e2e-pve "$@"; }
-# made <slot> <options>: restores the template or makes it.
-made() {
-    made_slot=$1
-    shift
-    made_kept=/var/lib/vz/template-${made_slot}
-    if [ "${made_slot}" != 0 ] && [ -s "${work}/vz/template-${made_slot}/template.vma.zst" ]; then
-        made_id=$(pve pvesh get /cluster/nextid)
-        pve qmrestore "${made_kept}/template.vma.zst" "${made_id}" --storage "${KUBEHENGE_E2E_SHARED_STORAGE:-local}" \
-            --pool kubehenge-templates > /dev/null
-        echo "template $* restored from the cache as VM ${made_id}"
-        template "$@"
-        return
-    fi
-    made_status=0
-    # shellcheck disable=SC2310 # the status is returned below, once the output is shown.
-    made_out=$(template "$@" 2>&1) || made_status=$?
-    printf '%s\n' "${made_out}"
-    [ "${made_status}" = 0 ] || return "${made_status}"
-    case " ${KUBEHENGE_E2E_KEEP_TEMPLATES:-} " in
-        *" ${made_slot} "*) ;;
-        *) return 0 ;;
-    esac
-    made_id=$(printf '%s\n' "${made_out}" | sed -n 's/^template .* is VM \([0-9][0-9]*\)$/\1/p' | tail -n 1)
-    [ -n "${made_id}" ] || {
-        echo "no VM ID for template $* to keep" >&2
-        return 1
-    }
-    pve rm -rf "${made_kept}"
-    pve mkdir -p "${made_kept}"
-    pve vzdump "${made_id}" --dumpdir "${made_kept}" --compress zstd --quiet 1
-    pve sh -c "mv ${made_kept}/vzdump-qemu-*.vma.zst ${made_kept}/template.vma.zst && rm -f ${made_kept}/vzdump-qemu-*"
-    made_size=$(du -h "${work}/vz/template-${made_slot}/template.vma.zst")
-    echo "template $* kept for the cache: ${made_size%%[[:space:]]*}"
-}
+# templates.sh restores a template the Actions cache kept, or makes it (made).
 # A template needs only Proxmox VE and the template pool, which the apply makes in its first seconds,
 # so the ones a test needs are made while the management cluster comes up. One at a time: they share
 # the build address.

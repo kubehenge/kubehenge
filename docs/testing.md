@@ -212,8 +212,8 @@ CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e
 - One job builds the `kubehenge` binary and the controller's, capmox's and the Add-on Provider for Helm's images once per run (`test/e2e/ci/build.sh`). Each lane's registry serves them under the same digests, and capmox's and the Add-on Provider's are checked against `management-cluster/versions.tf` as in a release.
 - A lane restores its kubeadm, RKE2 and k3s templates from the Actions cache, kept under a hash of each bake's inputs (`test/e2e/ci/templates.sh`).
 - The nightly run bakes every template afresh from the mirrors and keeps those whose inputs changed. Talos's templates are only downloaded.
-- A change to the image's files on main builds and keeps it straight away (`e2e-image.yml`).
-- A dispatch of the workflow names the tests to run, or runs that night's set.
+- Each push to main builds the image and bakes the templates whose keys the cache lacks (`e2e-image.yml`). The merge group after a change to their inputs finds them.
+- A dispatch of the workflow names the tests to run, or runs that night's set. With `fresh` it bakes every template from the mirrors, as the nightly run does.
 
 A machine whose KVM lacks pause-loop exiting hands its test to a fresh one, up to three times. There, guests that outnumber its CPUs starve each other whatever their sizes. The checks that nothing restarts would only measure the machine. A test still on such a machine at the fourth try runs there with restarts reported, not failed (`KUBEHENGE_E2E_RESTARTS=report`).
 

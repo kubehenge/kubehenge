@@ -27,6 +27,7 @@ need=
         .github/workflows/release-build.yml | .github/workflows/fuzz.yml | scripts/sbom.sh | scripts/syft.yaml) ;;
         .github/codeql-config.yml | .github/zizmor.yml) ;;
         .github/workflows/website.yml | osv-scanner.toml | scripts/lint/*) ;;
+        .github/workflows/cache.yml | scripts/cache-prune.sh) ;;
         appliance/* | pkg/appliance/* | pkg/ui/* | web/* | test/e2e/appliance.sh) need="${need} appliance" ;;
         *e2e_test.go) need="${need} management-cluster" ;;
         *_test.go | */testdata/* | test/integration/*) ;;
