@@ -685,7 +685,10 @@ CIS hardening (`cis: true`), chosen when a cluster is created and fixed after, a
   - The pods in `kube-system`, `kube-public` and `default` take connections only from their own namespace, DNS and a few of RKE2's own services aside.
   - With monitoring on, Kubehenge's controller lets Prometheus through to CoreDNS's metrics.
 
-The end-to-end tests run [kube-bench](https://github.com/aquasecurity/kube-bench) on a hardened cluster of each distribution. They test against the CIS Kubernetes Benchmark 2.0 for kubeadm and Rancher's own benchmarks for RKE2 and k3s. They fail on every failed check but 1.1.12. kubeadm runs etcd as root and has no supported way to run it as another user.
+The end-to-end tests run [kube-bench](https://github.com/aquasecurity/kube-bench) on a hardened cluster of each distribution. They test against the CIS Kubernetes Benchmark 2.0 for kubeadm and Rancher's own benchmarks for RKE2 and k3s. They fail on every failed check but two exceptions:
+
+- 1.1.12 on kubeadm, which runs etcd as root and has no supported way to run it as another user.
+- 1.1.9 and 1.1.10 on k3s with Cilium or Calico. k3s's benchmark checks CNI files only where flannel keeps its address leases, and these CNIs write none there.
 
 The benchmark's policies section is the cluster owner's, since it judges what runs in the cluster, not how the cluster is built.
 
