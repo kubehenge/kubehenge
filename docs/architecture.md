@@ -709,6 +709,8 @@ Rancher runs with imported-cluster version management off. Otherwise it would up
 
 Rancher also installs Turtles, its own Cluster API, without which it never takes a registered cluster as ready. Rancher reads Turtles' values only from its `rancher-config` ConfigMap, which its chart writes without them. Kubehenge's controller therefore writes that ConfigMap, with Turtles' image and its Cluster API controller by digest, before the chart installs and adopts it.
 
+Rancher installs the chart versions of Turtles, the webhook and Fleet that its settings name. Its image sets them, and Kubehenge sets them again beside the images it pins for each. Rancher takes the charts from the copy of its chart repository inside its image (`useBundledSystemChart`), never from the repository's Git branch, which moves.
+
 ## Cluster autoscaler
 
 A worker pool whose topology entry carries Cluster API's `cluster-api-autoscaler-node-group-min-size` and `-max-size` annotations, and no replicas, is autoscaled. Cluster API copies the annotations to its MachineDeployment and leaves its replicas to whoever scales it. Kubehenge's controller runs one [cluster autoscaler](https://github.com/kubernetes/autoscaler/tree/master/cluster-autoscaler) per cluster with such a pool, with the Cluster API provider discovering that cluster's MachineDeployments alone. It removes the autoscaler once no pool is autoscaled or the cluster goes.
