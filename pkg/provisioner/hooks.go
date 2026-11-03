@@ -2,12 +2,14 @@ package provisioner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -86,9 +88,11 @@ type Hooks struct {
 	VolumeSnapshots VolumeSnapshots
 }
 
-// BeforeClusterUpgrade holds Rancher's cluster at the Kubernetes versions Rancher runs on, and has
+// BeforeClusterUpgrade holds Rancher's cluster at the Kubernetes versions Rancher runs on, holds
+// any cluster while one of its nodes moves to another Talos release, and has
 // every upgrade clone its machines from the newest template builds offered: the upgrade replaces
-// every machine anyway, and a refresh after it would replace them all again.
+// every machine anyway, and a refresh after it would replace them all again. What holds the
+// upgrade is set on the Cluster as its UpgradeHeld condition, for the interface and kubectl alike.
 func (h *Hooks) BeforeClusterUpgrade(ctx context.Context, req *runtimehooksv1.BeforeClusterUpgradeRequest, resp *runtimehooksv1.BeforeClusterUpgradeResponse) {
 	resp.Status = runtimehooksv1.ResponseStatusSuccess
 	if !Owns(&req.Cluster, h.ClassNamespace) {
@@ -110,18 +114,21 @@ func (h *Hooks) BeforeClusterUpgrade(ctx context.Context, req *runtimehooksv1.Be
 		resp.Message = fmt.Sprintf("the cluster is at %s, not %s", cluster.Spec.Topology.Version, req.ToKubernetesVersion)
 		return
 	}
-	if err = h.checkRancher(ctx, cluster, cluster.Spec.Topology.Version); err != nil {
-		// Retried rather than failed: a later Kubehenge release with a newer Rancher lets it through.
-		resp.RetryAfterSeconds = 300
+	// Held rather than failed: a later Kubehenge release with a newer Rancher lets it through, and
+	// a node rebooting into another Talos release would leave the rollout one machine short.
+	hold, held, err := h.upgradeHolds().hold(ctx, cluster, cluster.Spec.Topology.Version)
+	if err != nil {
+		resp.RetryAfterSeconds = rancherHoldRetry
 		resp.Message = err.Error()
 		return
 	}
-	// A node rebooting into another Talos release would leave the rollout one machine short.
-	if upgrading := cluster.Annotations[TalosUpgradingAnnotation]; upgrading != "" {
-		resp.RetryAfterSeconds = 30
-		resp.Message = "waiting for the Talos upgrade of " + upgrading
+	if held {
+		h.markUpgradeHeld(ctx, cluster, &hold)
+		resp.RetryAfterSeconds = upgradeHoldRetry[hold.Reason]
+		resp.Message = hold.Message
 		return
 	}
+	h.markUpgradeHeld(ctx, cluster, nil)
 	moved, err := h.newestNodeImages(ctx, cluster, cluster.Spec.Topology.Version)
 	switch {
 	case err != nil:
@@ -320,26 +327,24 @@ func (h *Hooks) now() time.Time {
 // checkRancher refuses Rancher on a Kubernetes version its release does not run on, and a second
 // cluster with Rancher: every cluster registers with the one.
 func (h *Hooks) checkRancher(ctx context.Context, cluster *clusterv1.Cluster, version string) error {
-	v, err := rancherOf(cluster)
-	if err != nil || !v.Install {
+	reason, message, err := h.RancherKubernetes.hold(ctx, h.Reader, h.ClassNamespace, cluster, version)
+	if err != nil || reason == "" {
 		return err
 	}
-	if !h.RancherKubernetes.Allows(version) {
-		return fmt.Errorf("for Rancher, choose Kubernetes 1.%d to 1.%d, not %s",
-			h.RancherKubernetes.Min, h.RancherKubernetes.Max, version)
+	return errors.New(message)
+}
+
+func (h *Hooks) upgradeHolds() upgradeHolds {
+	return upgradeHolds{reader: h.Reader, classNamespace: h.ClassNamespace, rancher: h.RancherKubernetes}
+}
+
+// markUpgradeHeld records on the cluster what holds its upgrade, or that nothing does. Cluster
+// API asks again, so a write that fails is logged and tried on the next ask.
+func (h *Hooks) markUpgradeHeld(ctx context.Context, cluster *clusterv1.Cluster, cond *metav1.Condition) {
+	if h.Client == nil {
+		return
 	}
-	clusters := &clusterv1.ClusterList{}
-	if err := h.Reader.List(ctx, clusters); err != nil {
-		return fmt.Errorf("listing clusters: %w", err)
+	if err := markUpgradeHeld(ctx, h.Client, h.Reader, cluster, cond); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "recording the held upgrade", "cluster", client.ObjectKeyFromObject(cluster))
 	}
-	for i := range clusters.Items {
-		c := &clusters.Items[i]
-		if c.Namespace == cluster.Namespace && c.Name == cluster.Name || !Owns(c, h.ClassNamespace) {
-			continue
-		}
-		if other, err := rancherOf(c); err == nil && other.Install {
-			return fmt.Errorf("cluster %s/%s already runs Rancher. Only one cluster may run it", c.Namespace, c.Name)
-		}
-	}
-	return nil
 }

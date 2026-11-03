@@ -21,6 +21,7 @@ import (
 	"github.com/spf13/pflag"
 	"sigs.k8s.io/yaml"
 
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
@@ -194,13 +195,30 @@ func (o *clusterOptions) machineCommand() *cobra.Command {
 
 // listedCluster is what list shows of the interface's description of a cluster.
 type listedCluster struct {
-	Namespace    string   `json:"namespace"`
-	Name         string   `json:"name"`
-	Distribution string   `json:"distribution"`
-	Version      string   `json:"version"`
-	Phase        string   `json:"phase"`
-	ControlPlane replicas `json:"controlPlane"`
-	Workers      replicas `json:"workers"`
+	Namespace    string            `json:"namespace"`
+	Name         string            `json:"name"`
+	Distribution string            `json:"distribution"`
+	Version      string            `json:"version"`
+	Phase        string            `json:"phase"`
+	ControlPlane replicas          `json:"controlPlane"`
+	Workers      replicas          `json:"workers"`
+	Conditions   []listedCondition `json:"conditions"`
+}
+
+type listedCondition struct {
+	Type   string `json:"type"`
+	Status string `json:"status"`
+	Reason string `json:"reason"`
+}
+
+// status is the cluster's phase, and the reason its upgrade is held where it is.
+func (c *listedCluster) status() string {
+	for _, cond := range c.Conditions {
+		if cond.Type == provisioner.UpgradeHeldCondition && cond.Status == "True" {
+			return fmt.Sprintf("%s, upgrade held (%s)", c.Phase, cond.Reason)
+		}
+	}
+	return c.Phase
 }
 
 type replicas struct {
@@ -225,8 +243,9 @@ func (o *clusterOptions) list(ctx context.Context, out io.Writer) error {
 	}
 	w := tabwriter.NewWriter(out, 0, 0, columnGap, ' ', 0)
 	_, _ = fmt.Fprintln(w, "NAMESPACE\tNAME\tDISTRIBUTION\tVERSION\tSTATUS\tCONTROL PLANES\tWORKERS")
-	for _, c := range clusters {
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d/%d\t%d/%d\n", c.Namespace, c.Name, c.Distribution, c.Version, c.Phase,
+	for i := range clusters {
+		c := &clusters[i]
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d/%d\t%d/%d\n", c.Namespace, c.Name, c.Distribution, c.Version, c.status(),
 			c.ControlPlane.Ready, c.ControlPlane.Desired, c.Workers.Ready, c.Workers.Desired)
 	}
 	if err := w.Flush(); err != nil {

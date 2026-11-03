@@ -389,7 +389,7 @@ Give the workers more cores (`workerMachine`, or a worker pool's override), add 
 - **"for Rancher, choose Kubernetes 1.x to 1.y, not …":** the Rancher release Kubehenge installs runs only on those versions.
   - A new Rancher cluster at another version is created but gets no VMs. Delete it and create it again at a version within the range.
   - An existing cluster outside the range gets no Rancher, with a `RancherRefused` event.
-  - The Rancher cluster's upgrades beyond the range wait for a Kubehenge release with a newer Rancher.
+  - The Rancher cluster's upgrades beyond the range wait for a Kubehenge release with a newer Rancher ([Upgrades held back](#upgrades-held-back)).
 - **"every node needs at least 4 vCPUs for Rancher: …":** the cluster's control planes or a worker pool with nodes have fewer cores than that. Give them 4 or more (`controlPlaneMachine` and `workerMachine`, or a worker pool's override). A worker pool scaled to 0 is not counted.
 - **Removing Rancher takes long:** it waits until Rancher has let go of every registered cluster, which needs each of them reachable. The Rancher cluster shows `RemovingRancher` events meanwhile, and everything else about it is still applied.
 - **Clusters do not register:** Rancher's host name must resolve, for people and for every registered cluster, to the Rancher cluster's ingress controller. The ingress controller answers on the cluster's API address and on every node.
@@ -463,6 +463,22 @@ Each Proxmox VE HA write and each step of an etcd restore runs in a Job of its o
 - **`TalosInstallRetry`**, "node … to Talos …, try … of 4 at …: …": the installer's pull or install stalled, or the node did not answer. The controller tries again at the time named, and after the fourth try fails as above. Check that the node reaches factory.talos.dev.
 - **`TalosUpgradeAbandoned`**, "node … to Talos …: its machine is being deleted": the cluster scaled down or replaced the node while it was upgraded. Nothing to do. Its successor is upgraded as any other node.
 - **`TalosDrain`**, "node … reboots without all its pods moved: …": the node's pods did not all leave within five minutes, and the node rebooted anyway. A PodDisruptionBudget often holds them, so check the budgets of the workloads named.
+
+### Upgrades held back
+
+A Kubernetes upgrade waits while the Cluster has the condition `UpgradeHeld`. Its reason says why. Cluster API asks again by itself. The condition goes once nothing holds the upgrade.
+
+| Reason | In the fleet and on the Health page | What to do |
+| --- | --- | --- |
+| `RancherKubernetes` | **Upgrade held for Rancher** | Choose a version the condition's message names, or wait for a Kubehenge release with a newer Rancher. |
+| `RancherElsewhere` | **Upgrade held for Rancher** | Another cluster runs Rancher. Switch Rancher off on this one. |
+| `TalosUpgrade` | **Upgrade waits for Talos** | Nothing. The upgrade starts once the node runs its new Talos release. |
+
+`kubehenge cluster list` shows the reason in STATUS. With kubectl:
+
+```sh
+kubectl -n <namespace> get cluster <name> -o jsonpath='{.status.conditions[?(@.type=="UpgradeHeld")].reason}'
+```
 
 ### GitOps
 

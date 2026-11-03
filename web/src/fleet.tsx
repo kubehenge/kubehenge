@@ -229,10 +229,33 @@ const moving = (reason: string, verdict = "Updating"): Standing => ({
   verdict,
 });
 
+/** The condition Kubehenge sets while it holds back the Kubernetes upgrade a cluster asks for. */
+export const upgradeHeldCondition = "UpgradeHeld";
+
+// The reasons of upgradeHeldCondition for which Rancher holds the upgrade.
+const rancherHolds = new Set(["RancherKubernetes", "RancherElsewhere"]);
+
+// held is why the cluster's upgrade is held back, if it is.
+function held(c: Cluster): Standing | undefined {
+  const hold = c.conditions.find((x) => x.type === upgradeHeldCondition && x.status === "True");
+  if (hold === undefined) {
+    return undefined;
+  }
+  if (hold.reason === "TalosUpgrade") {
+    return moving("Upgrade waits for Talos", "Upgrading");
+  }
+  const reason = rancherHolds.has(hold.reason ?? "") ? "Upgrade held for Rancher" : "Upgrade held";
+  return { group: "needs", state: "warning", reason, view: "health", verdict: "Upgrade held" };
+}
+
 // underWay is the change going on in an available cluster, if one is.
 function underWay(c: Cluster): Standing | undefined {
   if (filled(c.talos?.upgrading)) {
     return moving(`Upgrading Talos on ${firstWord(c.talos.upgrading)}`, "Upgrading");
+  }
+  const hold = held(c);
+  if (hold !== undefined) {
+    return hold;
   }
   const reconciling = c.conditions.find((x) => x.type === "TopologyReconciled" && x.status !== "True");
   if (reconciling?.reason === "ClusterUpgrading") {

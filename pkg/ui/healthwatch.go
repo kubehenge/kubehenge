@@ -21,6 +21,16 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 	if cond := trueCondition(c, provisioner.DeletionStalledCondition); cond != nil && !provisioner.Abandoned(c) {
 		a.add(severityWarning, sectionClusterAPI, "Deletion stalled", provisioner.DeletionStallHead(cond.Message), cond.LastTransitionTime.Time)
 	}
+	if cond := trueCondition(c, provisioner.UpgradeHeldCondition); cond != nil {
+		severity, what := severityWarning, "Upgrade held"
+		switch cond.Reason {
+		case provisioner.UpgradeHeldRancherKubernetes, provisioner.UpgradeHeldRancherElsewhere:
+			what = "Upgrade held for Rancher"
+		case provisioner.UpgradeHeldTalosUpgrade:
+			severity, what = severityProgress, "Upgrade waits for Talos"
+		}
+		a.add(severity, sectionClusterAPI, what, cond.Message, cond.LastTransitionTime.Time)
+	}
 	if cond := trueCondition(c, provisioner.CertificatesCondition); cond != nil {
 		if cond.Reason == provisioner.CertificatesRenewing {
 			a.add(severityProgress, sectionNodes, "Renewing certificates", provisioner.CertificatesHead(cond.Message), cond.LastTransitionTime.Time)
