@@ -2,12 +2,12 @@
 # What the VMs of the Proxmox VE that test/e2e/ci/up.sh started take of the machine running it, and
 # what their guests hold when a test fails:
 #
-#   test/e2e/ci/guests.sh record <file>    every 15 s until stopped: each VM's CPU time, memory, swap and
-#                                          bytes received
+#   test/e2e/ci/guests.sh record <file>    every 15 s until stopped: each VM's CPU time, memory, swap,
+#                                          bytes received, bytes read from disk and time stalled
 #   test/e2e/ci/guests.sh now              the same once, to standard output
-#   test/e2e/ci/guests.sh summary <file>   from that record, each minute's CPUs, memory and download
-#                                          rate by VM, and
-#                                          each VM's peaks: what a test's steps ask of the machine
+#   test/e2e/ci/guests.sh summary <file>   from that record, each minute's CPUs, memory, download and
+#                                          disk read rates and stalls by VM, and each VM's peaks:
+#                                          what a test's steps ask of the machine
 #   test/e2e/ci/guests.sh collect <dir> [<work dir>]
 #                                          from inside each running VM, through its guest agent: its
 #                                          state, the distribution's, the kernel's and cloud-init's
@@ -37,7 +37,11 @@ qemu_arg() { # pid option
 }
 
 # sample: one line per running VM: the time, its QEMU process, VM ID and name, CPU ticks, resident
-# and swapped KiB, and the bytes it has received.
+# and swapped KiB, the bytes it has received, the bytes read from disk for it, and the microseconds
+# some of its threads waited on CPU, on memory and on disk, each - where the machine does not say.
+# The bytes read are its disks' and its memory brought back from swap, which the kernel counts to
+# the process that faulted. The waits are its cgroup's pressure stall totals: a guest whose vCPUs
+# wait on the machine's CPUs shows under CPU, one whose disk reads queue under disk.
 sample() {
     now=$(date -u +%T)
     for pid in $(pgrep -x kvm || true); do
@@ -54,7 +58,21 @@ sample() {
         # The kernel pads names to six characters, so a tap's name has no space before it.
         received=$(awk -F '[: ]+' -v tap="tap${vmid}i" '{ sub(/^ +/, "") } index($1, tap) == 1 { b += $10 } END { print b + 0 }' \
             "/proc/${pid}/net/dev" 2> /dev/null) || continue
-        printf '%s %s %s %s %s %s %s\n' "${now}" "${pid}" "${vmid}" "${name}" "${ticks}" "${memory}" "${received}"
+        # Only QEMU's owner and root may read its I/O counts.
+        disk_read=$({ cat "/proc/${pid}/io" 2> /dev/null || sudo -n cat "/proc/${pid}/io" 2> /dev/null; } |
+            awk '$1 == "read_bytes:" { print $2 }')
+        cgroup=$(sed -n 's/^0:://p' "/proc/${pid}/cgroup" 2> /dev/null || true)
+        stalls=''
+        for kind in cpu memory io; do
+            stall=''
+            # The root's totals are the machine's, not the VM's.
+            [ "${cgroup:-/}" = / ] ||
+                stall=$(awk '$1 == "some" { for (i = 2; i <= NF; i++) if ($i ~ /^total=/) print substr($i, 7) }' \
+                    "/sys/fs/cgroup${cgroup}/${kind}.pressure" 2> /dev/null || true)
+            stalls="${stalls} ${stall:--}"
+        done
+        printf '%s %s %s %s %s %s %s %s%s\n' "${now}" "${pid}" "${vmid}" "${name}" "${ticks}" "${memory}" "${received}" \
+            "${disk_read:--}" "${stalls}"
     done
 }
 
@@ -81,18 +99,33 @@ summary() {
             if (mib > top[minute, vm]) { top[minute, vm] = mib; topswap[minute, vm] = swap }
             if (mib > peak[vm]) { peak[vm] = mib; peakswap[vm] = swap; peakat[vm] = $1 }
             vms[minute, vm] = 1
-            # CPU time and bytes received over the time since the same process was last sampled.
+            # CPU time, bytes received and read, and time stalled over the time since the same
+            # process was last sampled; a count the machine did not give stays out.
             if ((pid in last) && t > lastt[pid]) {
                 cpu[minute, vm] += ($5 - last[pid]) / hz
                 got[minute, vm] += $8 - lastgot[pid]
                 span[minute, vm] += t - lastt[pid]
+                for (f = 9; f <= 12; f++)
+                    if ($f ~ /^[0-9]+$/ && lastf[pid, f] ~ /^[0-9]+$/) {
+                        more[minute, vm, f] += $f - lastf[pid, f]
+                        morespan[minute, vm, f] += t - lastt[pid]
+                    }
             }
             last[pid] = $5; lastgot[pid] = $8; lastt[pid] = t
+            for (f = 9; f <= 12; f++) lastf[pid, f] = $f
         }
+        # rate <minute> <vm> <field>: kB/s of bytes read, or the percent of the time some thread
+        # stalled, from microseconds; -1 without counts.
+        function rate(m, vm, f) {
+            if (morespan[m, vm, f] <= 0) return -1
+            return f == 9 ? more[m, vm, f] / morespan[m, vm, f] / 1000 : more[m, vm, f] / morespan[m, vm, f] / 10000
+        }
+        function shown(r, unit) { return r < 0 ? "-" : sprintf("%d%s", r, unit) }
         END {
+            split("read CPU memory disk", what)
             print "VMs:"
             for (vm in names) printf "  %s %s\n", vm, names[vm]
-            print "each minute: CPUs and resident MiB (swapped MiB) of all VMs, then of each VM with the kB/s it received"
+            print "each minute: CPUs and resident MiB (swapped MiB) of all VMs, then of each VM with the kB/s it received and read from disk and the percent of the time it waited on CPU/memory/disk"
             for (i = 1; i <= n; i++) {
                 m = minutes[i]; line = ""; cpus = 0; mem = 0; swapped = 0
                 for (vm in names) {
@@ -100,14 +133,24 @@ summary() {
                     c = span[m, vm] > 0 ? cpu[m, vm] / span[m, vm] : 0
                     if (c > cpupeak[vm]) { cpupeak[vm] = c; cpupeakat[vm] = m }
                     cpus += c; mem += top[m, vm] - topswap[m, vm]; swapped += topswap[m, vm]
-                    rate = span[m, vm] > 0 ? got[m, vm] / span[m, vm] / 1000 : 0
-                    line = line sprintf("  %s %.1f %d (%d) %dkB/s", vm, c, top[m, vm] - topswap[m, vm], topswap[m, vm], rate)
+                    received = span[m, vm] > 0 ? got[m, vm] / span[m, vm] / 1000 : 0
+                    for (f = 9; f <= 12; f++) {
+                        r[f] = rate(m, vm, f)
+                        if (r[f] >= 0 && (!((vm, f) in mostat) || r[f] > mostr[vm, f])) { mostr[vm, f] = r[f]; mostat[vm, f] = m }
+                    }
+                    line = line sprintf("  %s %.1f %d (%d) %dkB/s %s %s/%s/%s", vm, c, top[m, vm] - topswap[m, vm], topswap[m, vm], received,
+                        shown(r[9], "kB/s"), shown(r[10], ""), shown(r[11], ""), shown(r[12], "%"))
                 }
                 printf "%s  %.1f %d (%d) |%s\n", m, cpus, mem, swapped, line
             }
-            print "each VM: its busiest minute, and its most memory, resident and swapped together"
-            for (vm in names)
-                printf "  %s: %.1f CPUs at %s; %d MiB (%d swapped) at %s\n", vm, cpupeak[vm], cpupeakat[vm], peak[vm], peakswap[vm], peakat[vm]
+            print "each VM: its busiest minute, its most memory, resident and swapped together, its fastest disk reads and its longest waits"
+            for (vm in names) {
+                printf "  %s: %.1f CPUs at %s; %d MiB (%d swapped) at %s", vm, cpupeak[vm], cpupeakat[vm], peak[vm], peakswap[vm], peakat[vm]
+                if ((vm, 9) in mostat) printf "; %d kB/s read at %s", mostr[vm, 9], mostat[vm, 9]
+                for (f = 10; f <= 12; f++)
+                    if ((vm, f) in mostat) printf "; waited on %s %d%% at %s", what[f - 8], mostr[vm, f], mostat[vm, f]
+                printf "\n"
+            }
         }' "$1"
 }
 

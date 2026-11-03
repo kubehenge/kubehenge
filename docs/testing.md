@@ -94,7 +94,7 @@ The CPU figures (`kubehenge.dev/addon-cpu` and `kubehenge.dev/node-cpu`) are the
 1. Create a cluster from a ClusterClass:
    - with `KUBEHENGE_E2E_NAMESPACE`, as the interface's account in that one of the interface's namespaces, which the k3s run uses
    - on Talos at the release `KUBEHENGE_E2E_TALOS_VERSION` names, which CI sets by default to the one before the templates' release
-   - with its worker at the least memory and cores the class allows with every add-on but Rancher
+   - with its worker at the least memory and cores the class allows with the add-ons the run switches on
    - trusting an OpenID issuer the test serves
    - hardened to the CIS benchmark, unless `KUBEHENGE_E2E_CIS=false`, the classes' default
    - with Pod Security Admission enforcing the restricted level, so every component Kubehenge installs runs under it.
@@ -188,14 +188,16 @@ The CPU figures (`kubehenge.dev/addon-cpu` and `kubehenge.dev/node-cpu`) are the
 8. Check that every node runs the cluster's node OS (`KUBEHENGE_E2E_NODE_OS`, else the class's default) with SELinux enforcing, a read-only `/usr` and no denial in its logs. Talos, whose nodes run Talos, is skipped.
 9. Replace a stopped worker, delete the cluster and check nothing is left.
 
-#### Running half of it
+#### Running part of it
 
-`KUBEHENGE_E2E_PART` runs half of the test, for a machine whose memory holds the guests of only one half. CI runs each class's test this way, one half per machine.
+`KUBEHENGE_E2E_PART` runs part of the test, for a machine whose memory holds the guests of only one part. CI runs each class's test this way, one part per machine.
 
 - `lifecycle` (the `kubeadm`, `rke2`, `k3s` and `talos` tests) sizes the nodes at the least the class allows with the add-ons a cluster starts with (the load balancer and Rancher's agent). It switches on no other add-on.
-- `addons` (`kubeadm-addons`, `rke2-addons`, `k3s-addons` and `talos-addons`) sizes them for every add-on. It leaves out the steps that replace a machine. Those are RKE2's and k3s's own upload, the load balancer off, scaling, the upgrade and the dead worker.
+- `addons-a` (`kubeadm-addons-a` and so on) sizes them for Headlamp, monitoring, logs and certificates, and switches those on. Logs read Loki through monitoring's Grafana, and the certificates serve Headlamp and Grafana.
+- `addons-b` does the same for Kyverno, Istio, backups and GitOps.
+- RKE2's least worker of 4 GiB leaves its control plane no room for all of `addons-b`. On RKE2, `addons-b` has Kyverno and backups, and `addons-c` Istio and GitOps.
 
-Both run the rest, on Talos the upgrade in place too, and check SELinux at their end.
+The add-on parts leave out the steps that replace a machine. Those are RKE2's and k3s's own upload, the load balancer off, scaling, the upgrade and the dead worker. Every part runs the rest, on Talos the upgrade in place too, and checks SELinux at its end.
 
 ## End to end without a Proxmox VE host
 
@@ -205,7 +207,7 @@ CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e
 - The nightly run's four extra tests join a merge group only for their own scripts and the code only they exercise (`scope.sh` names it).
 - A pull request runs the other tiers and leaves this one to the queue.
 - The nightly run (`test/e2e/ci/nightly.sh`) runs every test. It adds the management cluster's upgrade, Rancher, a control plane of three servers and a two-node Proxmox VE cluster.
-- It runs both halves of each workload distribution's test once more on another CNI of its class and another node OS. That run goes without CIS hardening every other night, and the combination moves on so every one comes in turn.
+- It runs every part of each workload distribution's test once more on another CNI of its class and another node OS. That run goes without CIS hardening every other night, and the combination moves on so every one comes in turn.
 - It builds Proxmox VE's image afresh and keeps it, with Go's build cache, for the day's runs.
 - A change to the image's files on main builds and keeps it straight away (`e2e-image.yml`).
 - A dispatch of the workflow names the tests to run, or runs that night's set.
@@ -219,8 +221,8 @@ Any Linux machine with Docker, `/dev/kvm` and about 16 GB of free memory can do 
 ```sh
 scripts/tools.sh ~/.local/kubehenge-tools && export PATH=~/.local/kubehenge-tools:$PATH
 test/e2e/ci/up.sh /tmp/e2e          # Proxmox VE in a container, a registry beside it
-test/e2e/ci/run.sh /tmp/e2e rke2    # or management-cluster, management-cluster-upgrade, appliance, kubeadm, k3s, talos, kubeadm-addons, rke2-addons, k3s-addons, talos-addons, rancher, cluster-mesh, node-image-refresh, autoscaler, control-plane-ha, two-nodes
-test/e2e/ci/run.sh /tmp/e2e kubeadm+calico+rocky-10+cis-off   # a workload test or its add-on half with its CNI, node OS or no CIS hardening
+test/e2e/ci/run.sh /tmp/e2e rke2    # or management-cluster, management-cluster-upgrade, appliance, kubeadm, k3s, talos, kubeadm-addons-a, kubeadm-addons-b, rke2-addons-a, rke2-addons-b, rke2-addons-c, k3s-addons-a, k3s-addons-b, talos-addons-a, talos-addons-b, rancher, cluster-mesh, node-image-refresh, autoscaler, control-plane-ha, two-nodes
+test/e2e/ci/run.sh /tmp/e2e kubeadm+calico+rocky-10+cis-off   # a workload test or an add-on part with its CNI, node OS or no CIS hardening
 ```
 
 The control plane of three servers stays on k3s. Three k3s servers at the class's least of 4096 MiB fit beside a worker and the management cluster. RKE2's and kubeadm's need bigger workers too. A minor upgrade of three servers needs a fourth beside them while each is replaced, which the machine's memory does not hold.
@@ -229,22 +231,64 @@ The two Proxmox VE nodes share the machine, so they test placement, clones and a
 
 ### What the machine records
 
-Each try records what the machine and its VMs take every 15 seconds (`test/e2e/ci/guests.sh record`). That is the machine's memory, swap, disk and CPUs, and per VM the CPU time, resident memory and swap of its QEMU process. The log's "The guests' load" step sums it up per minute and gives each VM's busiest minute and most memory. A step that outgrows the machine shows there as a VM swapped out, or the CPUs of all of them above the machine's.
+Each try records what the machine and its VMs take every 15 seconds (`test/e2e/ci/guests.sh record`). That is the machine's memory, swap, disk and CPUs. Per VM it is the QEMU process's CPU time, resident memory, swap and disk reads. It also records how long the VM's threads waited on CPU, memory and disk (its cgroup's pressure).
+
+The log's "The guests' load" step sums it up per minute. It gives each VM's busiest minute, most memory, fastest reads and longest waits. A VM stalled on the machine's CPUs shows as CPU waits. One stalled on its disk shows as disk waits and reads.
 
 Under pressure the machine keeps its page cache rather than the guests' memory (`vm.swappiness=10`) and starts reclaiming earlier (`vm.watermark_scale_factor=200`). Cloning a template then evicts cached disk blocks instead of a running control plane.
 
-Swap does not count as room for the guests. On a slower machine, a guest read back from swap stalls until its own checks fail, such as a container restarting with every add-on on. Every test's VMs therefore fit the machine's memory with room for its own processes, the management node at the module's default 4 GiB among them. The one exception is the RKE2 test's control-plane replacements. There three machines of RKE2's least 4 GiB beside the management node outgrow the memory by about 2 GiB.
+### How much the guests may take
+
+The runner has 15.6 GiB of memory. Its own processes and the Proxmox VE container keep about 1.6 GiB resident. The guests have room in 12 GiB:
+
+- With 12 GiB of guests the runner kept 1.7 GiB of page cache and read next to nothing from disk.
+- With 13.4 GiB the cache fell to 1 GiB and the runner reread up to 190 MB/s. A control plane's etcd stalled for 6 s.
+
+Swap does not count as room for the guests. Cold pages of the runner's own processes go there harmlessly. A guest read back from swap stalls until its own checks fail.
+
+#### Each test's guests
+
+Every node is at the least Kubehenge allows for what its test switches on. The management node has the module's default 4 GiB. The add-on parts stay within 12 GiB, in MiB:
+
+| Test | Management node | Control plane | Worker | Together |
+| --- | --- | --- | --- | --- |
+| `kubeadm-addons-a` | 4096 | 4096 | 3648 | 11840 |
+| `kubeadm-addons-b` | 4096 | 4832 | 3264 | 12192 |
+| `rke2-addons-a`, `-b`, `-c` | 4096 | 4096 | 4096 | 12288 |
+| `k3s-addons-a` | 4096 | 4096 | 3392 | 11584 |
+| `k3s-addons-b` | 4096 | 4096 | 3008 | 11200 |
+| `talos-addons-a` | 4096 | 4096 | 3648 | 11840 |
+| `talos-addons-b` | 4096 | 4096 | 3264 | 11456 |
+
+These tests still outgrow 12 GiB:
+
+| Test | Steady | Peak | At the peak |
+| --- | --- | --- | --- |
+| `rke2` | 12288 | 16384 | two workers, or a control plane replaced |
+| `kubeadm` | 10240 | 14336 | a control plane replaced |
+| `k3s` | 9280 | 13376 | a control plane replaced |
+| `talos` | 9536 | 13632 | a control plane replaced |
+| `cluster-mesh`, `rancher` | 14336 | 14336 | two one-node clusters |
+| `node-image-refresh` | 9216 | 14336 | the node replaced |
+| `autoscaler` | 9216 | 13312 | two workers |
+| `control-plane-ha` | 9216 | 17408 | three servers |
+
+The guard names every run whose guests outgrew the memory (below).
 
 ### The guard
 
-A guard (`test/e2e/ci/guard.sh`) keeps the CI agent's own processes out of the OOM killer's choice and their memory out of reclaim. It samples the machine's memory, swap, pressure and free disk every 5 seconds. It ends the test while the machine can still report, once any of these holds:
+A guard (`test/e2e/ci/guard.sh`) keeps the CI agent's own processes out of the OOM killer's choice and their memory out of reclaim. It samples the machine's memory, page cache, swap, free disk and pressure every 5 seconds. Pressure on memory, disk and CPU comes over the last 10 seconds and the last minute. It ends the test while the machine can still report, once any of these holds:
 
 - memory and swap together fall under 1.5 GiB
 - every task has waited on memory for half of the last minute
 - the OOM killer has ended a process
 - a file system has under 2 GiB free
 
-It reports what held the memory (the VMs by name, the largest other processes, the last samples and the kernel's lines on memory). The test then fails like any other and keeps its artifacts. The log's "The runner's room" step gives how near each run came to these floors. It also gives the least memory available and how much was read back from swap.
+It reports what held the memory (the VMs by name, the largest other processes, the last samples and the kernel's lines on memory). The test then fails like any other and keeps its artifacts. The log's "The runner's room" step gives how near each run came to these floors. It also gives the least memory available and page cache, and how much was read back from swap.
+
+#### Memory without swap
+
+Under 1 GiB of memory available for a minute or more, swap not counted, the guests have outgrown the runner. That ends no test, since such guests slow down rather than fail at once. The guard names the stretch when the test ends. Beside a failure such as a lost lease it is an error. When the test passed it is a warning.
 
 A runner that is lost uploads no artifacts. So the test's log also gets the guard's latest sample once a minute, as a `runner:` line.
 

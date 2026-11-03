@@ -7,7 +7,8 @@
 # <test> is management-cluster (applies the management cluster, runs the templates and volumes tests
 # while it is up, and destroys it), management-cluster-upgrade (applies and destroys it), appliance
 # (installs the appliance, which sets the management cluster up and removes it), or kubeadm, rke2,
-# k3s, talos, their add-on halves kubeadm-addons, rke2-addons, k3s-addons and talos-addons, rancher,
+# k3s, talos, their add-on parts kubeadm-addons-a and -b, rke2-addons-a, -b and -c, k3s-addons-a and
+# -b and talos-addons-a and -b, rancher,
 # cluster-mesh, node-image-refresh, autoscaler, control-plane-ha or two-nodes (which first joins a
 # second Proxmox VE node, test/e2e/ci/second-node.sh), which first apply the management cluster and
 # create the templates they need, and leave it up. The workload tests and their add-on halves take
@@ -30,7 +31,9 @@ eval "${settings}"
 test=${test%%+*}
 case "${test}" in
     management-cluster | management-cluster-upgrade | appliance | kubeadm | rke2 | k3s | talos) ;;
-    kubeadm-addons | rke2-addons | k3s-addons | talos-addons | rancher | cluster-mesh | node-image-refresh | autoscaler) ;;
+    kubeadm-addons-a | kubeadm-addons-b | rke2-addons-a | rke2-addons-b | rke2-addons-c) ;;
+    k3s-addons-a | k3s-addons-b | talos-addons-a | talos-addons-b) ;;
+    rancher | cluster-mesh | node-image-refresh | autoscaler) ;;
     control-plane-ha | two-nodes) ;;
     *)
         echo "unknown test ${test}" >&2
@@ -68,7 +71,7 @@ rke2_from=$(pinned rke2 "${from}")
 rke2_to=$(pinned rke2 "${to}")
 k3s_from=$(pinned k3s "${from}")
 k3s_to=$(pinned k3s "${to}")
-if [ "${test%-addons}" = talos ]; then
+if [ "${test%-addons-?}" = talos ]; then
     talos_to=$(sed -n 's/^\(const \)\{0,1\}[[:space:]]*DefaultTalosVersion = "\(v[^"]*\)".*/\2/p' "${repo}/pkg/templates/plan.go")
     [ -n "${talos_to}" ] || {
         echo "pkg/templates/plan.go names no DefaultTalosVersion" >&2
@@ -123,7 +126,7 @@ templates=
 # How many of them are kubeadm's, RKE2's or k3s's, each of whose builds proves, through Proxmox VE,
 # that its guest agent hands out the node's boot log.
 case "${test}" in
-    talos | talos-addons) boot_log_builds=0 ;;
+    talos | talos-addons-?) boot_log_builds=0 ;;
     kubeadm | node-image-refresh) boot_log_builds=2 ;;
     *) boot_log_builds=1 ;;
 esac
@@ -154,8 +157,8 @@ case "${test}" in
                     template kubeadm --kubernetes-version "${from}" ${node_os}
                     template kubeadm --kubernetes-version "${to}" ${node_os}
                     ;;
-                # Its add-on half replaces no machine, so it needs only the one it starts from.
-                kubeadm-addons) template kubeadm --kubernetes-version "${from}" ${node_os} ;;
+                # Its add-on parts replace no machine, so they need only the one they start from.
+                kubeadm-addons-?) template kubeadm --kubernetes-version "${from}" ${node_os} ;;
                 # The release the cluster starts on, and the one its machines boot once the
                 # Kubernetes upgrade replaces them.
                 talos*)
@@ -309,17 +312,18 @@ templates_made
 # Nested vCPUs cost no memory, and with two an RKE2 control plane stopped answering its own lease
 # renewals while everything started.
 export KUBEHENGE_E2E_CONTROL_PLANE_CORES=4
-# Each class's workload test runs in two halves, on a machine each, as the whole outgrows one
-# machine's memory: kubeadm, rke2, k3s and talos take a cluster of the least size the class allows
-# with the add-ons it starts with through everything but the other add-ons, and their -addons halves one sized for every add-on through
-# the add-ons, replacing no machine.
+# Each class's workload test runs in parts, on a machine each, as the whole outgrows one machine's
+# memory: kubeadm, rke2, k3s and talos take a cluster of the least size the class allows with the
+# add-ons it starts with through everything but the other add-ons, and their -addons-a, -addons-b
+# and, on RKE2, -addons-c parts one sized for a group of the add-ons through that group, replacing
+# no machine.
 case "${test}" in
-    *-addons) export KUBEHENGE_E2E_PART=addons ;;
+    *-addons-?) export KUBEHENGE_E2E_PART="addons-${test##*-}" ;;
     rke2 | k3s | kubeadm | talos) export KUBEHENGE_E2E_PART=lifecycle ;;
     *) ;;
 esac
 case "${test}" in
-    rke2 | rke2-addons)
+    rke2 | rke2-addons-?)
         # MetalLB is the default the other distributions run; kube-vip gets a cluster of its own.
         export KUBEHENGE_E2E_LOAD_BALANCER=kube-vip
         # The one cluster that checks its nodes' HA group labels, which every cluster has by default,
@@ -327,7 +331,7 @@ case "${test}" in
         [ "${test}" != rke2 ] || export KUBEHENGE_E2E_HA_GROUPS=1
         e2e e2e-workload-cluster CLASS=kubehenge-rke2 VERSION="${rke2_from}" UPGRADE="${rke2_to}"
         ;;
-    k3s | k3s-addons)
+    k3s | k3s-addons-?)
         # The one cluster on the storage of its own, which switches the CSI plugin's newest release
         # on and off, and volume snapshots, with the copy proxy's image pulled from
         # KUBEHENGE_E2E_REGISTRY, where this build was pushed.
@@ -339,11 +343,11 @@ case "${test}" in
         export KUBEHENGE_E2E_NAMESPACE=e2e-team
         e2e e2e-workload-cluster CLASS=kubehenge-k3s VERSION="${k3s_from}" UPGRADE="${k3s_to}"
         ;;
-    kubeadm | kubeadm-addons)
+    kubeadm | kubeadm-addons-?)
         export KUBEHENGE_E2E_CNI="${KUBEHENGE_E2E_CNI:-cilium}"
         e2e e2e-workload-cluster CLASS=kubehenge-kubeadm VERSION="${from}" UPGRADE="${to}"
         ;;
-    talos | talos-addons)
+    talos | talos-addons-?)
         # Talos's own CNI, flannel, unless an option chose another: the kubeadm run covers Cilium.
         export KUBEHENGE_E2E_TALOS_VERSION="${talos_from}" KUBEHENGE_E2E_TALOS_UPGRADE="${talos_to}"
         e2e e2e-workload-cluster CLASS=kubehenge-talos VERSION="${from}" UPGRADE="${to}"

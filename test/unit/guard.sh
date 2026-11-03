@@ -80,12 +80,14 @@ export PATH="${bin}:${PATH}" KUBEHENGE_E2E_GUARD_PROC="${proc}" KUBEHENGE_E2E_GU
 # memory <available kB> <swap free kB> <memory full avg60> <OOM kills> [<pages swapped in>]: the
 # kernel's files as the guard reads them, with 30 MiB of swap that zswap holds in 10 MiB.
 memory() {
-    printf 'MemTotal: 16366592 kB\nMemFree: 300000 kB\nMemAvailable: %s kB\nSwapTotal: 11533312 kB\nSwapFree: %s kB\nZswap: 10240 kB\nZswapped: 30720 kB\n' \
+    printf 'MemTotal: 16366592 kB\nMemFree: 300000 kB\nMemAvailable: %s kB\nCached: 1126400 kB\nSwapTotal: 11533312 kB\nSwapFree: %s kB\nZswap: 10240 kB\nZswapped: 30720 kB\nShmem: 102400 kB\n' \
         "$1" "$2" > "${proc}/meminfo"
     printf 'some avg10=12.50 avg60=8.25 avg300=2.00 total=1\nfull avg10=4.00 avg60=%s avg300=1.00 total=1\n' \
         "$3" > "${proc}/pressure/memory"
     printf 'some avg10=30.00 avg60=20.75 avg300=9.00 total=1\nfull avg10=10.00 avg60=6.50 avg300=3.00 total=1\n' \
         > "${proc}/pressure/io"
+    printf 'some avg10=97.00 avg60=81.25 avg300=40.00 total=1\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n' \
+        > "${proc}/pressure/cpu"
     printf 'pgfault 1\npswpin %s\npswpout 9\noom_kill %s\npgmajfault 2\n' "${5:-1000}" "$4" > "${proc}/vmstat"
 }
 
@@ -128,8 +130,11 @@ sampled "swapped_in=10"
 kill "${watcher}"
 watcher=''
 line=$(head -n 1 "${record}")
-holds "a sample reads the memory in MiB" "available=100 swap_free=400" "${line}"
-holds "and the pressure over the last minute" "memory_some=8.25 memory_full=75.00 io_some=20.75 io_full=6.50" "${line}"
+holds "a sample reads the memory in MiB, with the page cache but tmpfs" "available=100 cache=1000 swap_free=400" "${line}"
+holds "and the pressure over the last 10 seconds and the last minute" \
+    "memory_some10=12.50 memory_some=8.25 memory_full10=4.00 memory_full=75.00 io_some10=30.00 io_some=20.75 io_full10=10.00 io_full=6.50" "${line}"
+holds "the CPUs' pressure too" "cpu_some10=97.00 cpu_some=81.25" "${line}"
+expect "a 10 seconds' stall is no minute's" "" crossed "12:00:00 available=300 swap_free=6000 memory_full10=90.00 memory_full=12.00 oom_kills=0"
 holds "and the OOM kills and swap-ins since the watch began" "oom_kills=0 swapped_in=0" "${line}"
 holds "and what zswap holds, in MiB" "zswapped=30 zswap_pool=10" "${line}"
 holds "and each path's free space" "free:/=77824 free:${root}/full=1" "${line}"
@@ -139,12 +144,31 @@ truth "no test, nothing ended" [ ! -e "${record}.fail" ]
 
 peaks=$(sh "${guard}" peaks "${record}")
 holds "the peaks give the least room" "least memory and swap left: 500 MiB (100 available, 400 of swap)" "${peaks}"
-holds "and the least memory alone" "least memory available: 100 MiB at " "${peaks}"
+holds "and the least memory alone, beside the floor without swap" "least memory available: 100 MiB at " "${peaks}"
+holds "and the least page cache" "least page cache: 1000 MiB at " "${peaks}"
+holds "and the most stall of 10 seconds" "most cpu_some pressure: 97.00% of 10 seconds at " "${peaks}"
 holds "and what was read back from swap" "read back from swap: 10 MiB" "${peaks}"
 holds "and the most zswap held" "most swap held in memory by zswap: 30 MiB, compressed to 10 MiB, at " "${peaks}"
 holds "and the most stall, beside its ceiling" "most memory_full pressure: 75.00% of a minute" "${peaks}"
 holds "and the least free space" "least free on ${root}/full: 1 MiB" "${peaks}"
 expect "nothing recorded" "the guard recorded nothing" sh "${guard}" peaks "${root}/none.txt"
+
+# Memory without swap: a stretch under 1024 MiB counts from a minute on, whatever swap is left.
+short() { sh "${guard}" short "$1"; }
+printf '%s\n' '10:00:00 available=2000 swap_free=9000' '10:00:05 available=1023 swap_free=9000' \
+    '10:00:35 available=600 swap_free=9000' '10:01:04 available=900 swap_free=9000' \
+    '10:01:09 available=1024 swap_free=9000' > "${root}/brief.txt"
+expect "under the floor for 59 s" "" short "${root}/brief.txt"
+printf '%s\n' '23:59:00 available=2000 swap_free=9000' '23:59:30 available=500 swap_free=9000' \
+    '00:00:30 available=300 swap_free=9000' '00:00:35 available=4000 swap_free=9000' \
+    '00:10:00 available=800 swap_free=9000' '00:11:10 available=700 swap_free=9000' > "${root}/starved.txt"
+expect "stretches of a minute and more, across midnight and to the record's end" \
+    "130 s with under 1024 MiB of memory available, swap not counted, in 2 stretches, the longest 70 s from 00:10:00 to 00:11:10; 300 MiB at the least" \
+    short "${root}/starved.txt"
+starved_peaks=$(sh "${guard}" peaks "${root}/starved.txt")
+holds "the peaks give them too" "130 s with under 1024 MiB" "${starved_peaks}"
+expect "a record without them" "" short "${record}"
+expect "no record" "" short "${root}/none.txt"
 
 if command -v setsid > /dev/null 2>&1; then
     rm -f "${record}"
@@ -160,6 +184,17 @@ if command -v setsid > /dev/null 2>&1; then
     echo "12:00:00 available=4000 swap_free=6000 oom_kills=0" > "${record}"
     out=$(KUBEHENGE_E2E_GUARD_REPORT=1 sh "${guard}" run "${root}/test.pid" "${record}" sleep 3)
     holds "a running test's log gets the latest sample" "runner: 12:00:00 available=4000 swap_free=6000 oom_kills=0" "${out}"
+    rm -f "${record}"
+
+    cp "${root}/starved.txt" "${record}"
+    code=0
+    out=$(sh "${guard}" run "${root}/test.pid" "${record}" sh -c 'exit 3') || code=$?
+    truth "a failed test whose guests outgrew the machine keeps its exit code" [ "${code}" = 3 ]
+    holds "and is named an error beside it" "::error title=The guests outgrew the runner's memory::130 s with under 1024 MiB" "${out}"
+    code=0
+    out=$(sh "${guard}" run "${root}/test.pid" "${record}" true) || code=$?
+    truth "a passed one still passes" [ "${code}" = 0 ]
+    holds "with a warning" "::warning title=The guests outgrew the runner's memory::130 s with under 1024 MiB" "${out}"
     rm -f "${record}"
 
     sh "${guard}" watch "${root}/test.pid" "${record}" "${root}/vmstat.txt" / > "${root}/watch.log" 2>&1 &

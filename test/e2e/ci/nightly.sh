@@ -50,6 +50,8 @@ oses=$(jq -r '(.default | "\(.family)-\(.release)") as $d | .available[] | selec
     exit 1
 }
 
+# jq on Windows ends its lines with CR LF.
+lanes=$("${here}/scope.sh" --all | jq -r '.[]' | tr -d '\r')
 variants=
 i=0
 for distribution in kubeadm rke2 k3s talos; do
@@ -64,7 +66,14 @@ for distribution in kubeadm rke2 k3s talos; do
     # shellcheck disable=SC2086 # one node OS per word
     [ "${distribution}" = talos ] || name=${name}+$(pick $((n / (count * 2))) ${oses})
     [ $((n / count % 2)) = 1 ] || name=${name}+cis-off
-    variants="${variants} ${name} ${distribution}-addons${name#"${distribution}"}"
+    variants="${variants} ${name}"
+    # The same options on each of its add-on parts.
+    for lane in ${lanes}; do
+        case ${lane} in
+            "${distribution}"-addons-?) variants="${variants} ${lane}${name#"${distribution}"}" ;;
+            *) ;;
+        esac
+    done
     i=$((i + 1))
 done
 
