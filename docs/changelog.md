@@ -139,6 +139,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Fixes
 
+- An etcd restore or reset of an RKE2 cluster hardened to the CIS benchmark takes about 2 minutes, not 17. While RKE2 reset etcd, etcd could not read its own data and the reset waited out RKE2's 15-minute limit.
 - Applying the management-cluster module no longer returns while the Cluster API Operator reinstalls core Cluster API right after upgrading it. The providers' release now waits until the providers have stayed unchanged for 30 seconds.
 - A template build or a cluster's storage set-up no longer fails when Proxmox VE kills a VM create before it starts. It goes on under the next VM ID and logs how to remove the VM left locked.
 - `kubehenge template create` tries a failed build again after 2 and 8 minutes, as the interface and the refresh do.
@@ -210,13 +211,13 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - **Certificates are renewed before they run out.** kubeadm's control plane is replaced 60 days before its certificates run out.
   - For RKE2 and k3s, the controller rolls the workers' pool and k3s's control plane from 60 days before, one machine at a time.
   - It rolls an RKE2 control plane of three or more too. A smaller one says to restart `rke2-server`.
-  - The Cluster gets the condition `CertificatesExpiring` with events, shown on its Health page and in the fleet.
+  - The Cluster gets the condition `CertificatesExpiring` with events, shown on its Health page and in the fleet. It clears within a minute of the last machine's replacement.
   - The kubeconfig and talosconfig kept for each cluster are watched too ([troubleshooting.md](troubleshooting.md#certificates)).
   - The interface warns administrators 30 days before the management cluster's admin credentials run out. An apply renews them.
 - **A template build that fails is tried again**, three times in all, 2 and then 8 minutes apart. This holds from the interface and the weekly build alike.
   - A failure that would repeat, such as a node whose CPU is too old, is not tried again.
   - A weekly build that still fails records a `TemplateBuildFailed` warning event on the ConfigMap `kubehenge-template-refresh` ([troubleshooting.md](troubleshooting.md#template-build-fails)).
-- **VMs that do not run and storage nearly full show on the Health page and the fleet.** The controller checks each cluster's VMs and storage every minute.
+- **VMs that do not run and storage nearly full show on the Health page and the fleet.** The controller checks each cluster's VMs and storage every 15 seconds.
   - A VM stopped, paused by hand, paused by QEMU after a disk error, or crashed for 3 minutes sets the condition `VMsNotRunning`.
   - A storage 85% full on a node the cluster runs on sets `StorageNearlyFull`. It turns to an error from 95%.
   - Both record events ([troubleshooting.md](troubleshooting.md#vms-that-do-not-run-storage-nearly-full)).

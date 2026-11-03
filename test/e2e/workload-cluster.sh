@@ -128,6 +128,11 @@ case ${cis} in
 esac
 
 work=$(mktemp -d)
+# The kubehenge command as `make build` makes it, which CI has just run: Go's cache holds its
+# packages built so, while `go run` would build every one again with other flags, minutes on a cold
+# cache.
+make -s -C "$(dirname "$0")/../.." build > /dev/null
+kubehenge="$(dirname "$0")/../../dist/kubehenge"
 distribution=$(echo "${class}" | sed 's/^kubehenge-//')
 # The add-ons this run switches on, by their keys in the class's kubehenge.dev/addon-memory; argocd
 # stands for GitOps, Flux and then Argo CD. Logs read Loki through monitoring's Grafana, and the
@@ -746,7 +751,7 @@ fi
 
 step "the cluster's support bundle: the Cluster, its boot logs, no Secret and no secret"
 bundle=${work}/bundle.tar.gz
-go -C "$(dirname "$0")/../.." run ./cmd/kubehenge diagnose "${ns}/${name}" --output "${bundle}"
+"${kubehenge}" diagnose "${ns}/${name}" --output "${bundle}"
 mkdir "${work}/bundle"
 tar -xzf "${bundle}" -C "${work}/bundle"
 bundled=${work}/bundle/${ns}-${name}
@@ -955,6 +960,10 @@ crash_seen() {
     printf '%s' "${crash_pod}" | jq -e '.status.containerStatuses[0].state.waiting.reason == "CrashLoopBackOff"' > /dev/null
 }
 until_true 300 "the health identity sees the pod crash-looping" crash_seen
+# How long the pod took to start and how often it restarted before it was seen, which is where a slow
+# step lost its time.
+printf '%s' "${crash_pod}" | jq -r '"crash-looping \(now - (.metadata.creationTimestamp | fromdate) | floor) s after the pod was made, after \(.status.containerStatuses[0].restartCount) restarts"'
+wl -n e2e-health get events --sort-by=.lastTimestamp -o custom-columns=AT:.lastTimestamp,REASON:.reason,MESSAGE:.message --no-headers | cut -c1-200
 health_ready=$(KUBECONFIG="${work}/health" kubectl get --raw /readyz) ||
     fail "the health identity cannot read the API server's readiness"
 [ "${health_ready}" = ok ] || fail "the API server is not ready: ${health_ready}"
@@ -1721,8 +1730,7 @@ header=$(head -c 21 "${work}/snapshot.db.age")
 [ "${header}" = age-encryption.org/v1 ] || fail "the etcd snapshot in the store is not encrypted with age"
 grep -r -q -F "${etcd_marker}" "${work}/s3-data" && fail "the store keeps the etcd snapshot unencrypted"
 kubectl -n "${ns}" get secret "${name}-backup-keys" -o jsonpath='{.data.etcd-snapshot-identity}' | base64 -d > "${work}/etcd-identity"
-go -C "$(dirname "$0")/../.." run ./cmd/kubehenge etcd-snapshot decrypt --identity "${work}/etcd-identity" \
-    "${work}/snapshot.db.age" "${work}/snapshot.db"
+"${kubehenge}" etcd-snapshot decrypt --identity "${work}/etcd-identity" "${work}/snapshot.db.age" "${work}/snapshot.db"
 sum=$(sha256sum "${work}/snapshot.db" | cut -d ' ' -f 1)
 taken_sum=$(printf '%s' "${snapshot}" | jq -r .sha256)
 [ "${sum}" = "${taken_sum}" ] || fail "the decrypted snapshot does not have the SHA-256 it was taken with"
@@ -1813,8 +1821,7 @@ s3 -o "${work}/before.db.age" "${s3_endpoint}/${bucket}/${etcd_prefix}/${before_
 header=$(head -c 21 "${work}/before.db.age")
 [ "${header}" = age-encryption.org/v1 ] || fail "the snapshot of etcd as it was is not encrypted with age"
 grep -r -q -F "${after_marker}" "${work}/s3-data" && fail "the store keeps the snapshot of etcd as it was unencrypted"
-go -C "$(dirname "$0")/../.." run ./cmd/kubehenge etcd-snapshot decrypt --identity "${work}/etcd-identity" \
-    "${work}/before.db.age" "${work}/before.db"
+"${kubehenge}" etcd-snapshot decrypt --identity "${work}/etcd-identity" "${work}/before.db.age" "${work}/before.db"
 grep -a -q -F "${after_marker}" "${work}/before.db" ||
     fail "the snapshot of etcd as it was does not hold the ConfigMap made before the restore"
 if [ "${distribution}" = talos ]; then
@@ -3540,8 +3547,6 @@ if [ "${replaces_machines}" = true ]; then
         # through it as the test's Proxmox VE API token: every machine action of a cluster's
         # Machines tab, as kubectl-free automation would take it.
         step "the interface and kubehenge cluster, as a Proxmox VE API token"
-        kubehenge="$(dirname "$0")/../../dist/kubehenge"
-        [ -x "${kubehenge}" ] || make -s -C "$(dirname "$0")/../.." build
         openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -subj /CN=127.0.0.1 \
             -addext subjectAltName=IP:127.0.0.1 -keyout "${work}/interface.key" -out "${work}/interface.crt" 2> /dev/null
         KUBECONFIG=${creator_config} "${kubehenge}" serve --listen 127.0.0.1:18443 \

@@ -36,6 +36,9 @@ const (
 	opensslIterations = 10000
 	opensslKeySize    = 32
 	opensslPassword   = 32
+
+	// serviceUmask is the umask systemd gives RKE2's and k3s's services.
+	serviceUmask = "022"
 )
 
 // The pieces of the restore scripts. Each runs as root under bash, after restoreCommon.
@@ -135,14 +138,16 @@ echo "k3s is stopped"
 	// RKE2 and k3s refuse to reset a server that names another to join, so the server line leaves
 	// the configuration for the reset alone. Their restore keeps the snapshot's revision, so the
 	// snapshot it reads has its revision moved on already (bumpedEtcdSnapshot), and ends with the
-	// checksum the restore checks.
+	// checksum the restore checks. The server runs under the service's umask, not the script's:
+	// its containerd and runc inherit it, and runc makes an etcd container's mount points with it, so
+	// under 077 a CIS-hardened RKE2's etcd, which runs as the etcd user, cannot reach its data.
 	rancherRestore = `config=/etc/rancher/%[1]s/config.yaml
 if [ ! -f "$work/config.yaml" ]; then
   cp -p "$config" "$work/config.yaml"
 fi
 trap 'cp -p "$work/config.yaml" "$config"' EXIT
 sed -i '/^server:/d' "$config"
-%[1]s server --cluster-reset --cluster-reset-restore-path="$work/snapshot.db" --etcd-s3=false
+(umask ` + serviceUmask + ` && %[1]s server --cluster-reset --cluster-reset-restore-path="$work/snapshot.db" --etcd-s3=false)
 touch "$work/restored"
 echo "restored etcd from the snapshot"
 `
@@ -154,7 +159,7 @@ if [ ! -f "$work/config.yaml" ]; then
 fi
 trap 'cp -p "$work/config.yaml" "$config"' EXIT
 sed -i '/^server:/d' "$config"
-%[1]s server --cluster-reset --etcd-s3=false
+(umask ` + serviceUmask + ` && %[1]s server --cluster-reset --etcd-s3=false)
 touch "$work/restored"
 echo "reset etcd to this server alone"
 `
