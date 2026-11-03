@@ -9,7 +9,7 @@ HELM_ADDON_IMAGE ?= ghcr.io/kubehenge/cluster-api-addon-provider-helm
 KO_FLAGS ?=
 
 .PHONY: build web gateway-api capi-operator-chart website screenshotsdist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance
-.PHONY: fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker unit-go unit-web unit-tofu unit-shell tofu-init
+.PHONY: website-check links fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker lint-typos lint-renovate unit-go unit-web unit-tofu unit-shell tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
 # comes, as the end-to-end runs do.
@@ -72,6 +72,21 @@ web: pkg/ui/dist/index.html
 # The website (kubehenge.dev): docs/ with a home page, built into website/.vitepress/dist.
 website:
 	cd website && npm ci --no-audit --no-fund && npm run build
+
+# Lighthouse CI over the built website on loopback, in Playwright's Chromium, for mobile and then
+# desktop: the limits in website/lighthouserc.cjs against the median of 5 runs. The reports go to
+# website/.vitepress/lighthouse.
+website-check: website
+	cd website && npm exec --no -- playwright install chromium
+	set -e; cd website && rm -rf .vitepress/lighthouse; for form in mobile desktop; do \
+		rm -rf .lighthouseci; \
+		KUBEHENGE_LIGHTHOUSE=$$form npm exec --no -- lhci autorun --config=lighthouserc.cjs; \
+	done
+
+# The outside links of the README, docs/ and the built website (lychee.toml). Links between pages
+# are the website build's to check. A dead outside link fails the nightly run, never a pull request.
+links: website
+	lychee --config lychee.toml README.md docs website/index.md 'website/.vitepress/dist/**/*.html'
 
 # The interface's screenshots in docs/images: `kubehenge serve --demo` in a headless Chromium, the
 # one Playwright pins in web/package-lock.json.
@@ -171,9 +186,10 @@ verify-providers:
 	sh scripts/verify-providers.sh
 
 # Lint and static tier: Go, the frontend, Terraform/OpenTofu, Helm charts, shell, the workflows,
-# YAML, Markdown, the e2e image's Dockerfile and the node images' Containerfiles, each at its
-# strictest settings; the files are the repository's own, as git lists them.
-lint: lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker
+# YAML, Markdown, the e2e image's Dockerfile and the node images' Containerfiles, spelling and
+# Renovate's config, each at its strictest settings; the files are the repository's own, as git
+# lists them.
+lint: lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker lint-typos lint-renovate
 
 FILES = git ls-files --cached --others --exclude-standard
 SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh test/integration/*.sh test/unit/*.sh appliance/*.sh appliance/pve-entry/*.sh scripts/*.sh pkg/provisioner/*.sh pkg/templates/*/*.sh charts/kubehenge/files/*.sh
@@ -205,12 +221,25 @@ lint-go: web gateway-api
 
 # oxfmt's check, type-aware oxlint and TypeScript's check; the build leaves the types to this step.
 # The Proxmox VE entry's script is plain JavaScript, checked with the interface's tools, and so is
-# the formatting of the website's own code.
-WEBSITE_CODE := website/prepare.js website/.vitepress/config.mts website/.vitepress/theme
+# the formatting of the website's own code. stylelint checks the interface's and the website's CSS.
+WEBSITE_CODE := website/prepare.js website/.vitepress/config.mts website/.vitepress/theme website/lighthouserc.cjs
 lint-web: web/node_modules/.package-lock.json
 	cd web && npm run lint
 	npm --prefix web exec --no -- oxfmt --check -c web/.oxfmtrc.json appliance/pve-entry $(WEBSITE_CODE)
 	npm --prefix web exec --no -- oxlint -c appliance/pve-entry/.oxlintrc.json --deny-warnings --report-unused-disable-directives appliance/pve-entry
+	npm --prefix web exec --no -- stylelint --config web/stylelint.config.mjs --max-warnings 0 'web/src/**/*.css' 'website/.vitepress/theme/**/*.css'
+
+# Spelling in every file git lists, in British English (.typos.toml).
+lint-typos:
+	typos
+
+# Renovate's own check of renovate.json, failing on a warning or on an option it would migrate.
+scripts/renovate/node_modules/.package-lock.json: scripts/renovate/package-lock.json
+	cd scripts/renovate && npm ci --no-fund --no-audit
+	touch $@
+
+lint-renovate: scripts/renovate/node_modules/.package-lock.json
+	npm --prefix scripts/renovate exec --no -- renovate-config-validator --strict --no-global renovate.json
 
 tofu-init:
 	set -e; for m in $(MODULES); do $(TOFU) -chdir=$$m init -backend=false -input=false -lockfile=readonly >/dev/null; done

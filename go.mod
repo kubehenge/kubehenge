@@ -2,6 +2,13 @@ module github.com/kubehenge/kubehenge
 
 go 1.27.3
 
+// npm's packages may carry Go code of their own, which is not Kubehenge's to build or lint.
+ignore (
+	./scripts/renovate/node_modules
+	./web/node_modules
+	./website/node_modules
+)
+
 require (
 	filippo.io/age v1.3.2
 	github.com/Masterminds/sprig/v3 v3.3.0

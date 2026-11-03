@@ -6,6 +6,8 @@
 
 # The linters' environment, which uv makes from scripts/lint/uv.lock.
 /scripts/lint/.venv/
+# Renovate, whose config validator `make lint` runs, from scripts/renovate/package-lock.json.
+/scripts/renovate/node_modules/
 
 # The frontend's dependencies and build, which `make web` produces; .keep lets Go compile without it.
 /web/node_modules/

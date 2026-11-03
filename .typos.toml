@@ -13,6 +13,8 @@ locale = "en-gb"
 extend-ignore-re = [
   # A line that has to carry a misspelling, such as a test's deliberately misspelt input, says so.
   "(?Rm)^.*(#|//|<!--)\\s*spellchecker:disable-line.*$",
+  # Where the line cannot carry a comment of its own, the one above it says so.
+  "(?m)^\\s*(#|//)\\s*spellchecker:disable-next-line\\s*\\r?\\n.*$",
   # HTTP's Authorization header.
   "\\bAuthorization(:| header|\"|`)",
   # Kubernetes' authorization API groups and the kube-apiserver flag named after them.
