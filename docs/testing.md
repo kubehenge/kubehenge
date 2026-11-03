@@ -30,7 +30,7 @@ The frontend's packages are installed again only when `web/package-lock.json` ch
 | `make e2e-control-plane-ha` | A k3s cluster's control plane grows from one server to three, each a ready etcd member. The server holding the cluster's virtual IP is stopped, and another takes the address within the lease. The API there takes writes on two of three etcd members until the control plane's health check has the dead server replaced and its VM removed. The control plane shrinks back to one server and keeps what was written. Delete, check nothing is left. | a running management cluster (`KUBECONFIG`), the k3s template, six node addresses. Settings in `test/e2e/control-plane-ha.sh`. |
 | `make e2e-two-nodes` | On a Proxmox VE cluster of two nodes sharing a storage. A k3s cluster kept to the second node (`allowedNodes`) is cloned there from a template on the shared storage and comes up across the nodes' network. Kept to the first and rolled out, every machine replaced moves there. With the second node out of the Proxmox VE cluster, Kubehenge leaves it out of the cluster's placement within seconds. The cluster, let onto every node again, keeps to the first and grows there. With the second node back, delete, check nothing is left. | a running management cluster (`KUBECONFIG`) on the first node, the k3s template on the shared storage, commands that take the second node out and back. Settings in `test/e2e/two-nodes.sh`. |
 | `make e2e-interface` | Make the web interface's kubeconfig as the appliance does after setting the management cluster up, and check its rights. It sees clusters, machines and Kubehenge's ClusterClasses everywhere. It reads (without changing) the MachineDeployments, MachineHealthChecks, control planes, add-on releases and events the health page shows. It creates, changes and deletes clusters and reads Secrets only in its own namespaces, and does nothing else. | a running management cluster with an admin kubeconfig in `KUBECONFIG`, its API in `KUBEHENGE_E2E_API_ENDPOINT`. `KUBEHENGE_E2E_NAMESPACE` adds one of the module's `extra_cluster_namespaces` to the check. |
-| `make e2e-node-image-refresh` | A one-node k3s cluster runs the only build of k3s's template on the default node OS. A run of the weekly template build, asked for as the interface's Build now asks, makes a new build. It hands out its boot log through its guest agent. While the maintenance window is closed, the controller holds the cluster on its old build (`kubehenge.dev/node-image-held`). Once it opens, the node is replaced by a clone of the new build. A second run makes a third build and deletes the first, which nothing runs any more. Changing the node OS to Rocky Linux 10 replaces the node with a clone of that template on an `x86-64-v3` CPU type. It runs with SELinux enforcing and nothing denied. The controller reads its boot log (cloud-init's output and the journals of cloud-init and k3s) through its guest agent on request. Nothing is left. | a running management cluster (`KUBECONFIG`) with its template refresh on and no soak (`template_refresh.soak_hours = 0`). k3s's templates on the default node OS and on Rocky Linux 10. Settings in `test/e2e/node-image-refresh.sh`. |
+| `make e2e-node-image-refresh` | A one-node k3s cluster runs the only build of k3s's template on the default node OS. A run of the weekly template build, asked for as the interface's Build now asks, makes a new build. It hands out its boot log through its guest agent. While the maintenance window is closed, the controller holds the cluster on its old build (`kubehenge.dev/node-image-held`). Once it opens, the node is replaced by a clone of the new build. A second run makes a third build and deletes the first, which nothing runs any more. Changing the node OS to Rocky Linux 10 replaces the node with a clone of that template on an `x86-64-v3` CPU type. It runs with SELinux enforcing and nothing denied. The controller reads its boot log (cloud-init's output and the journals of cloud-init and k3s) through its guest agent on request. Nothing is left. | a running management cluster (`KUBECONFIG`) with its template refresh on and no soak (`template_refresh.soak_hours = 0`). k3s's templates on the default node OS and on Rocky Linux 10. CI makes the Rocky Linux one only after the two runs, which then build none of their own. Settings in `test/e2e/node-image-refresh.sh`. |
 | `make e2e-appliance RELEASE=<archive> NEWER=<archive> NEWEST=<archive> SETTINGS=<file>` | The appliance's install, upgrades and removal ([steps](#the-appliance-test)). | root on a Proxmox VE node, jq, curl and openssl. SeaweedFS, which it downloads. Three archives from `make dist` with rising `VERSION`s, built with `RELEASE_PUBLIC_KEYS` set to the public key of a key made with `kubehenge release keygen`, whose file `KUBEHENGE_E2E_RELEASE_KEY` names. The management cluster's settings as a JSON file, as the interface's setup sends them. Settings in `KUBEHENGE_E2E_*` (`test/e2e/appliance.sh`). |
 | `make e2e-volumes` | As Kubehenge's controller, create a cluster's pool, user, token and volume owner VM. Make volumes as the CSI plugin does on every node's local storage. Delete one through the owner VM with the cluster's token, the owner moving to the volume's node. Remove the cluster and check every volume, the owner, the pool and the user are gone. | a Proxmox VE host with the management cluster's Proxmox VE objects (the controller's token). Settings in `KUBEHENGE_PROXMOX_*` and `KUBEHENGE_E2E_*` (`pkg/provisioner/e2e_test.go`). Two or more nodes to check the move. |
 | `make e2e-management-cluster DIR=<dir>` | Apply the management cluster and check every provider is ready. Check that NetworkPolicies let a pod reach the controller only on its webhook and metrics ports, and a token Job only Proxmox VE's API. Check that Cluster API's and the template build's API tokens hold no more than they need. Destroy and check nothing is left. | a Proxmox VE host, kubectl, jq, curl. `<dir>` is a root configuration applying `management-cluster/`, with `TF_VAR_proxmox_api_token` set. |
@@ -192,12 +192,14 @@ The CPU figures (`kubehenge.dev/addon-cpu` and `kubehenge.dev/node-cpu`) are the
 
 `KUBEHENGE_E2E_PART` runs part of the test, for a machine whose memory holds the guests of only one part. CI runs each class's test this way, one part per machine.
 
-- `lifecycle` (the `kubeadm`, `rke2`, `k3s` and `talos` tests) sizes the nodes at the least the class allows with the add-ons a cluster starts with (the load balancer and Rancher's agent). It switches on no other add-on.
-- `addons-a` (`kubeadm-addons-a` and so on) sizes them for Headlamp, monitoring, logs and certificates, and switches those on. Logs read Loki through monitoring's Grafana, and the certificates serve Headlamp and Grafana.
+- `lifecycle` (the `kubeadm` and `talos` tests) sizes the nodes at the least the class allows with the add-ons a cluster starts with (the load balancer and Rancher's agent). It switches on no other add-on.
+- `etcd` (`rke2-etcd`, `k3s-etcd`) is the first half of RKE2's and k3s's `lifecycle`: the snapshot, restore and own upload.
+- `machines` (`rke2-machines`, `k3s-machines`) is the second: the load balancer off, scaling, the upgrade and the paused, expiring and dead workers.
+- `addons-a` (`kubeadm-addons-a` and so on) sizes the nodes for Headlamp, monitoring, logs and certificates, and switches those on. Logs read Loki through monitoring's Grafana, and the certificates serve Headlamp and Grafana.
 - `addons-b` does the same for Kyverno, Istio, backups and GitOps.
 - RKE2's least worker of 4 GiB leaves its control plane no room for all of `addons-b`. On RKE2, `addons-b` has Kyverno and backups, and `addons-c` Istio and GitOps.
 
-The add-on parts leave out the steps that replace a machine. Those are RKE2's and k3s's own upload, the load balancer off, scaling, the upgrade and the dead worker. Every part runs the rest, on Talos the upgrade in place too, and checks SELinux at its end.
+The add-on parts leave out the steps that replace a machine. Those are RKE2's and k3s's own upload, the load balancer off, scaling, the upgrade and the dead worker. Every part but `machines` runs the etcd snapshot and restore. Every part checks SELinux at its end, and on Talos runs the upgrade in place.
 
 ## End to end without a Proxmox VE host
 
@@ -224,12 +226,12 @@ The repository's cache holds 10 GB. Past that, GitHub evicts the entries read le
 | Family | Saved by | Size |
 | --- | --- | --- |
 | `ci-` | `ci.yml` on a push to main | 3.6 GB |
-| `e2e-go-` | the nightly end-to-end run | 2.2 GB |
+| `e2e-go-` | `e2e-image.yml` once `go.sum` or `web/package-lock.json` changes, the nightly run | 2.2 GB |
 | `e2e-pve-` | `e2e-image.yml`, the nightly run | 0.4 GB |
-| `e2e-template-` | `e2e-image.yml`, the nightly run, a dispatch | TEMPLATES |
+| `e2e-template-` | `e2e-image.yml`, the nightly run, a dispatch | 2.8 GB: 0.4 GB for each of RKE2's and k3s's, 0.8 GB for each of kubeadm's two |
 | `website-`, `fuzz-` | `website.yml`, `fuzz.yml` | under 0.1 GB |
 
-Together that is TOTAL of 10 GB. A template whose inputs change replaces its entry. One no test needs any more is deleted.
+Together that is about 9 of the 10 GB. A template whose inputs change replaces its entry. One no test needs any more is deleted.
 
 If the cache still outgrows 10 GB, GitHub evicts the entry read longest ago. That is a fuzz target's or the website's first, read once a week. A template evicted next is baked again by the following push to main, and lanes bake it themselves meanwhile.
 
@@ -240,7 +242,7 @@ Any Linux machine with Docker, `/dev/kvm` and about 16 GB of free memory can do 
 ```sh
 scripts/tools.sh ~/.local/kubehenge-tools && export PATH=~/.local/kubehenge-tools:$PATH
 test/e2e/ci/up.sh /tmp/e2e          # Proxmox VE in a container, a registry beside it
-test/e2e/ci/run.sh /tmp/e2e rke2    # or management-cluster, management-cluster-upgrade, appliance, kubeadm, k3s, talos, kubeadm-addons-a, kubeadm-addons-b, rke2-addons-a, rke2-addons-b, rke2-addons-c, k3s-addons-a, k3s-addons-b, talos-addons-a, talos-addons-b, rancher, cluster-mesh, node-image-refresh, autoscaler, control-plane-ha, two-nodes
+test/e2e/ci/run.sh /tmp/e2e rke2    # or management-cluster, management-cluster-upgrade, appliance, kubeadm, k3s, talos, rke2-etcd, rke2-machines, k3s-etcd, k3s-machines, kubeadm-addons-a, kubeadm-addons-b, rke2-addons-a, rke2-addons-b, rke2-addons-c, k3s-addons-a, k3s-addons-b, talos-addons-a, talos-addons-b, rancher, cluster-mesh, node-image-refresh, autoscaler, control-plane-ha, two-nodes
 test/e2e/ci/run.sh /tmp/e2e kubeadm+calico+rocky-10+cis-off   # a workload test or an add-on part with its CNI, node OS or no CIS hardening
 ```
 
@@ -283,9 +285,10 @@ These tests still outgrow 12 GiB:
 
 | Test | Steady | Peak | At the peak |
 | --- | --- | --- | --- |
-| `rke2` | 12288 | 16384 | two workers, or a control plane replaced |
+| `rke2-etcd` | 12288 | 16384 | a control plane replaced |
+| `rke2-machines` | 12288 | 16384 | two workers, or a control plane replaced |
 | `kubeadm` | 10240 | 14336 | a control plane replaced |
-| `k3s` | 9280 | 13376 | a control plane replaced |
+| `k3s-etcd`, `k3s-machines` | 9280 | 13376 | a control plane replaced |
 | `talos` | 9536 | 13632 | a control plane replaced |
 | `cluster-mesh`, `rancher` | 14336 | 14336 | two one-node clusters |
 | `node-image-refresh` | 9216 | 14336 | the node replaced |

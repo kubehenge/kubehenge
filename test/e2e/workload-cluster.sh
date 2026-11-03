@@ -94,7 +94,10 @@
 # with, and switches on no other; addons-a, addons-b and, on RKE2, addons-c each size them for a
 # group of the add-ons, switch on that group alone and leave out every step that replaces machines
 # (the distribution's own etcd upload, the load balancer switched off on k3s, scaling, the upgrade
-# and the dead worker). Unset, the test runs whole.
+# and the dead worker). On RKE2 and k3s, etcd and machines split lifecycle in two: etcd leaves out
+# the load balancer switched off, scaling, the upgrade and the paused, expiring and dead workers,
+# and machines the etcd snapshot, its restore and the distribution's own upload. Unset, the test runs
+# whole.
 set -eu
 
 class=${1:?usage: $0 <ClusterClass> <version> <upgrade version>}
@@ -141,20 +144,22 @@ distribution=$(echo "${class}" | sed 's/^kubehenge-//')
 # leaves its control plane no room for the second group's growth, which RKE2 splits in two.
 case ${part}-${distribution} in
     all-*) addons='headlamp kyverno istio monitoring logs backups certManager argocd' ;;
-    lifecycle-*) addons='' ;;
+    lifecycle-* | etcd-rke2 | etcd-k3s | machines-rke2 | machines-k3s) addons='' ;;
     addons-a-*) addons='headlamp monitoring logs certManager' ;;
     addons-b-rke2) addons='kyverno backups' ;;
     addons-b-*) addons='kyverno istio backups argocd' ;;
     addons-c-rke2) addons='istio argocd' ;;
     *)
-        echo "KUBEHENGE_E2E_PART is lifecycle, addons-a, addons-b or, on RKE2, addons-c, not ${part}" >&2
+        echo "KUBEHENGE_E2E_PART is lifecycle, addons-a, addons-b or, on RKE2, addons-c, or etcd or machines on RKE2 and k3s, not ${part}" >&2
         exit 2
         ;;
 esac
-# The steps that replace machines run whole and in the lifecycle part only.
+# The steps that replace machines run whole and in the lifecycle and machines parts only, and every
+# part but machines takes, restores and uploads etcd.
 case ${part} in
-    all | lifecycle) replaces_machines=true ;;
-    *) replaces_machines=false ;;
+    all | lifecycle) restores_etcd=true replaces_machines=true ;;
+    machines) restores_etcd=false replaces_machines=true ;;
+    *) restores_etcd=true replaces_machines=false ;;
 esac
 # on <add-on>: whether this run switches the add-on on.
 on() {
@@ -1682,79 +1687,6 @@ if [ "${KUBEHENGE_E2E_HA_GROUPS:-}" = 1 ]; then
     remove_ha_rule
 fi
 
-# etcd is taken, restored and uploaded before any add-on runs: replacing a server holds two beside
-# the worker, which the runner has room for only while the cluster is this small, and every add-on
-# after it then runs on a restored cluster.
-step "an S3 store for the backups and etcd snapshots"
-s3_store "${class_json}"
-# Where the cluster's backups go in the bucket.
-prefix=$(target_folder "${name}" velero)
-backup_credential "${name}"
-
-step "etcd snapshots: one taken into the S3 store, encrypted, and read back"
-# A ConfigMap rather than a Secret, which the cluster encrypts in etcd: the database holds it in
-# plain text, so it is seen there and must not be seen in the store.
-etcd_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-wl -n default create configmap e2e-before-snapshot --from-literal=marker="${etcd_marker}"
-# Once a day, twelve hours from now: the default schedule's slot after the cluster was made can have
-# passed already, and switching snapshots on would then take one of its own beside the one asked for.
-etcd_schedule="0 $((($(date -u +%-H) + 12) % 24)) * * *"
-set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2,\"schedule\":\"${etcd_schedule}\"}"
-# As the interface's Take a snapshot now asks for one.
-now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-kubectl -n "${ns}" annotate cluster "${name}" --overwrite \
-    "kubehenge.dev/etcd-snapshot-requested={\"by\":\"e2e\",\"at\":\"${now}\"}"
-# snapshot_taken: whether the controller has taken the snapshot asked for; one it tried and failed
-# fails the test with why.
-snapshot_taken() {
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-    cluster_json=$(kubectl -n "${ns}" get cluster "${name}" -o json) || return 1
-    if printf '%s' "${cluster_json}" | jq -e '.metadata.annotations["kubehenge.dev/etcd-snapshot-requested"]' > /dev/null; then
-        return 1
-    fi
-    if ! printf '%s' "${cluster_json}" |
-        jq -e '.status.conditions[]? | select(.type == "EtcdSnapshotSucceeded" and .status == "True")' > /dev/null; then
-        printf '%s' "${cluster_json}" | jq '.status.conditions[]? | select(.type == "EtcdSnapshotSucceeded")' >&2
-        kubectl -n kubehenge-system logs deployment/kubehenge-controller --tail=100 >&2
-        fail "the etcd snapshot was not taken"
-    fi
-}
-until_true 900 "an etcd snapshot taken" snapshot_taken
-snapshot=$(kubectl -n "${ns}" get cluster "${name}" -o json | jq -c '.metadata.annotations["kubehenge.dev/etcd-snapshot"] | fromjson')
-snapshot_name=$(printf '%s' "${snapshot}" | jq -r .name)
-etcd_prefix=$(target_folder "${name}" etcd)
-keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
-[ "${keys}" = "${etcd_prefix}/${snapshot_name}" ] || fail "the store's etcd snapshots are not the one taken: ${keys}"
-s3 -o "${work}/snapshot.db.age" "${s3_endpoint}/${bucket}/${etcd_prefix}/${snapshot_name}"
-header=$(head -c 21 "${work}/snapshot.db.age")
-[ "${header}" = age-encryption.org/v1 ] || fail "the etcd snapshot in the store is not encrypted with age"
-grep -r -q -F "${etcd_marker}" "${work}/s3-data" && fail "the store keeps the etcd snapshot unencrypted"
-kubectl -n "${ns}" get secret "${name}-backup-keys" -o jsonpath='{.data.etcd-snapshot-identity}' | base64 -d > "${work}/etcd-identity"
-"${kubehenge}" etcd-snapshot decrypt --identity "${work}/etcd-identity" "${work}/snapshot.db.age" "${work}/snapshot.db"
-sum=$(sha256sum "${work}/snapshot.db" | cut -d ' ' -f 1)
-taken_sum=$(printf '%s' "${snapshot}" | jq -r .sha256)
-[ "${sum}" = "${taken_sum}" ] || fail "the decrypted snapshot does not have the SHA-256 it was taken with"
-curl -sS --fail -L -o "${work}/etcd.tar.gz" \
-    "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz"
-printf '%s  %s\n' "${ETCD_SHA256}" "${work}/etcd.tar.gz" | sha256sum -c - > /dev/null ||
-    fail "etcd's download does not have its SHA-256"
-tar -xzf "${work}/etcd.tar.gz" -C "${work}" --strip-components=1 "etcd-${ETCD_VERSION}-linux-amd64/etcdutl"
-status=$("${work}/etcdutl" snapshot status "${work}/snapshot.db" -w json) || fail "etcdutl cannot read the snapshot"
-if [ "${distribution}" = talos ]; then
-    # Talos's API streams the snapshot without telling the store's revision.
-    printf '%s' "${snapshot}" | jq -e 'has("revision") | not' > /dev/null ||
-        fail "the snapshot records a revision Talos never told: ${snapshot}"
-else
-    # The revision recorded is the member's just before the snapshot began; writes in between add
-    # to the snapshot's.
-    db_revision=$(printf '%s' "${status}" | jq .revision)
-    taken_revision=$(printf '%s' "${snapshot}" | jq '.revision // 0')
-    [ "${taken_revision}" -gt 0 ] || fail "no revision was recorded for the snapshot: ${snapshot}"
-    [ "${db_revision}" -ge "${taken_revision}" ] ||
-        fail "the snapshot is older than the revision recorded for it: ${status}"
-fi
-grep -a -q -F "${etcd_marker}" "${work}/snapshot.db" || fail "the snapshot does not hold the ConfigMap made before it"
-
 # lease_times: each Lease's last renewal, by namespace/name. An API server's identity Lease names one
 # process and outlives it by an hour, and the nodes' Leases go with their nodes, so neither is in.
 lease_times() {
@@ -1762,87 +1694,165 @@ lease_times() {
         jq -c '[.items[] | select(.metadata.namespace != "kube-node-lease") |
             {key: "\(.metadata.namespace)/\(.metadata.name)", value: (.spec.renewTime // "")}] | from_entries'
 }
-# etcd_restore_requested: asks for a restore from the snapshot, as the interface's Restore does,
-# noting first the Leases the cluster's components renew, which the restart baseline waits on.
-etcd_restore_requested() {
-    held_from=$(date +%s)
-    held_since=$(date -u -d "@$((held_from - 60))" +%Y-%m-%dT%H:%M:%SZ)
-    held_leases=$(lease_times | jq -c --arg since "${held_since}" '[to_entries[] | select(.value > $since) | .key]')
+
+# etcd is taken, restored and uploaded before any add-on runs: replacing a server holds two beside
+# the worker, which the runner has room for only while the cluster is this small, and every add-on
+# after it then runs on a restored cluster.
+if [ "${restores_etcd}" = true ]; then
+    step "an S3 store for the backups and etcd snapshots"
+    s3_store "${class_json}"
+    # Where the cluster's backups go in the bucket.
+    prefix=$(target_folder "${name}" velero)
+    backup_credential "${name}"
+
+    step "etcd snapshots: one taken into the S3 store, encrypted, and read back"
+    # A ConfigMap rather than a Secret, which the cluster encrypts in etcd: the database holds it in
+    # plain text, so it is seen there and must not be seen in the store.
+    etcd_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    wl -n default create configmap e2e-before-snapshot --from-literal=marker="${etcd_marker}"
+    # Once a day, twelve hours from now: the default schedule's slot after the cluster was made can
+    # have passed already, and switching snapshots on would then take one of its own beside the one
+    # asked for.
+    etcd_schedule="0 $((($(date -u +%-H) + 12) % 24)) * * *"
+    set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2,\"schedule\":\"${etcd_schedule}\"}"
+    # As the interface's Take a snapshot now asks for one.
     now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    kubectl -n "${ns}" annotate cluster "${name}" \
-        "kubehenge.dev/etcd-restore={\"snapshot\":\"${snapshot_name}\",\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"by\":\"e2e\",\"at\":\"${now}\"}"
-}
-if [ "${distribution}" = talos ]; then
-    step "etcd restored from the snapshot through the Talos API, the control planes wiped and joining it again"
-else
-    step "etcd restored from the snapshot through the guest agent"
-fi
-control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
-wl -n default delete configmap e2e-before-snapshot
-after_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-wl -n default create configmap e2e-after-snapshot --from-literal=marker="${after_marker}"
-etcd_restore_requested
-# etcd_restored: whether the restore has ended and the controller let the cluster go; a failed one
-# fails the test with why.
-etcd_restored() {
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-    cluster_json=$(kubectl -n "${ns}" get cluster "${name}" -o json) || return 1
-    restore=$(printf '%s' "${cluster_json}" | jq -c '.metadata.annotations["kubehenge.dev/etcd-restore-status"] // "{}" | fromjson')
-    case $(printf '%s' "${restore}" | jq -r '.phase // ""') in
-        Succeeded) ;;
-        Failed)
-            kubectl -n kubehenge-system logs deployment/kubehenge-controller --tail=100 >&2
-            fail "the etcd restore failed: ${restore}"
-            ;;
-        *) return 1 ;;
-    esac
-    printf '%s' "${cluster_json}" | jq -e '(.metadata.annotations["kubehenge.dev/etcd-restore"] | not) and (.spec.paused // false | not)' > /dev/null
-}
-until_true 2400 "etcd restored" etcd_restored
-until_true 1200 "cluster ${name} available after the restore" available_or_failed
-wl wait --for=condition=Ready nodes --all --timeout=10m
-until_true 300 "the ConfigMap made before the snapshot back" wl -n default get configmap e2e-before-snapshot
-# shellcheck disable=SC2310 # absent's answer is what is checked.
-absent wl -n default get configmap e2e-after-snapshot || fail "a ConfigMap made after the snapshot outlived the restore"
-wl -n default delete configmap e2e-before-snapshot
-# The revision moves on past any a client of etcd from before saw. Every watch from before then ends
-# and its client lists again.
-restored_revision=$(wl -n default create configmap e2e-after-restore -o jsonpath='{.metadata.resourceVersion}')
-wl -n default delete configmap e2e-after-restore
-[ "${restored_revision}" -gt 1000000000 ] || fail "etcd's revision did not move on with the restore: ${restored_revision}"
-# The restore snapshots etcd as it was first, so that a restore from the wrong snapshot can be undone.
-before_name=$(printf '%s' "${restore}" | jq -r '.before // ""')
-[ -n "${before_name}" ] || fail "the restore took no snapshot of etcd as it was first: ${restore}"
-keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g' | sort)
-expected_keys=$(printf '%s/%s\n' "${etcd_prefix}" "${snapshot_name}" "${etcd_prefix}" "${before_name}" | sort)
-[ "${keys}" = "${expected_keys}" ] ||
-    fail "the store's etcd snapshots after the restore are not the one restored and the one of etcd as it was: ${keys}"
-s3 -o "${work}/before.db.age" "${s3_endpoint}/${bucket}/${etcd_prefix}/${before_name}"
-header=$(head -c 21 "${work}/before.db.age")
-[ "${header}" = age-encryption.org/v1 ] || fail "the snapshot of etcd as it was is not encrypted with age"
-grep -r -q -F "${after_marker}" "${work}/s3-data" && fail "the store keeps the snapshot of etcd as it was unencrypted"
-"${kubehenge}" etcd-snapshot decrypt --identity "${work}/etcd-identity" "${work}/before.db.age" "${work}/before.db"
-grep -a -q -F "${after_marker}" "${work}/before.db" ||
-    fail "the snapshot of etcd as it was does not hold the ConfigMap made before the restore"
-if [ "${distribution}" = talos ]; then
-    # Talos's control planes join the restored etcd again rather than being made anew.
-    restored_control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
-    [ "${restored_control_planes}" = "${control_planes}" ] ||
-        fail "the restore replaced control planes: ${control_planes} became ${restored_control_planes}"
-    first_control_plane=$(machine_address "${control_planes%% *}")
-    # etcd_rejoined: whether every control plane is a voting member of the restored etcd again.
-    etcd_rejoined() {
+    kubectl -n "${ns}" annotate cluster "${name}" --overwrite \
+        "kubehenge.dev/etcd-snapshot-requested={\"by\":\"e2e\",\"at\":\"${now}\"}"
+    # snapshot_taken: whether the controller has taken the snapshot asked for; one it tried and failed
+    # fails the test with why.
+    snapshot_taken() {
         # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-        members=$(talos_api "${first_control_plane}" etcd members) || return 1
-        voting=$(printf '%s\n' "${members}" | awk 'NR > 1 && $NF == "false" { n++ } END { print n + 0 }')
-        wanted=$(printf '%s' "${control_planes}" | wc -w)
-        [ "${voting}" -eq "${wanted}" ]
+        cluster_json=$(kubectl -n "${ns}" get cluster "${name}" -o json) || return 1
+        if printf '%s' "${cluster_json}" | jq -e '.metadata.annotations["kubehenge.dev/etcd-snapshot-requested"]' > /dev/null; then
+            return 1
+        fi
+        if ! printf '%s' "${cluster_json}" |
+            jq -e '.status.conditions[]? | select(.type == "EtcdSnapshotSucceeded" and .status == "True")' > /dev/null; then
+            printf '%s' "${cluster_json}" | jq '.status.conditions[]? | select(.type == "EtcdSnapshotSucceeded")' >&2
+            kubectl -n kubehenge-system logs deployment/kubehenge-controller --tail=100 >&2
+            fail "the etcd snapshot was not taken"
+        fi
     }
-    until_true 900 "every control plane a member of the restored etcd" etcd_rejoined
+    until_true 900 "an etcd snapshot taken" snapshot_taken
+    snapshot=$(kubectl -n "${ns}" get cluster "${name}" -o json | jq -c '.metadata.annotations["kubehenge.dev/etcd-snapshot"] | fromjson')
+    snapshot_name=$(printf '%s' "${snapshot}" | jq -r .name)
+    etcd_prefix=$(target_folder "${name}" etcd)
+    keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
+    [ "${keys}" = "${etcd_prefix}/${snapshot_name}" ] || fail "the store's etcd snapshots are not the one taken: ${keys}"
+    s3 -o "${work}/snapshot.db.age" "${s3_endpoint}/${bucket}/${etcd_prefix}/${snapshot_name}"
+    header=$(head -c 21 "${work}/snapshot.db.age")
+    [ "${header}" = age-encryption.org/v1 ] || fail "the etcd snapshot in the store is not encrypted with age"
+    grep -r -q -F "${etcd_marker}" "${work}/s3-data" && fail "the store keeps the etcd snapshot unencrypted"
+    kubectl -n "${ns}" get secret "${name}-backup-keys" -o jsonpath='{.data.etcd-snapshot-identity}' | base64 -d > "${work}/etcd-identity"
+    "${kubehenge}" etcd-snapshot decrypt --identity "${work}/etcd-identity" "${work}/snapshot.db.age" "${work}/snapshot.db"
+    sum=$(sha256sum "${work}/snapshot.db" | cut -d ' ' -f 1)
+    taken_sum=$(printf '%s' "${snapshot}" | jq -r .sha256)
+    [ "${sum}" = "${taken_sum}" ] || fail "the decrypted snapshot does not have the SHA-256 it was taken with"
+    curl -sS --fail -L -o "${work}/etcd.tar.gz" \
+        "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz"
+    printf '%s  %s\n' "${ETCD_SHA256}" "${work}/etcd.tar.gz" | sha256sum -c - > /dev/null ||
+        fail "etcd's download does not have its SHA-256"
+    tar -xzf "${work}/etcd.tar.gz" -C "${work}" --strip-components=1 "etcd-${ETCD_VERSION}-linux-amd64/etcdutl"
+    status=$("${work}/etcdutl" snapshot status "${work}/snapshot.db" -w json) || fail "etcdutl cannot read the snapshot"
+    if [ "${distribution}" = talos ]; then
+        # Talos's API streams the snapshot without telling the store's revision.
+        printf '%s' "${snapshot}" | jq -e 'has("revision") | not' > /dev/null ||
+            fail "the snapshot records a revision Talos never told: ${snapshot}"
+    else
+        # The revision recorded is the member's just before the snapshot began; writes in between add
+        # to the snapshot's.
+        db_revision=$(printf '%s' "${status}" | jq .revision)
+        taken_revision=$(printf '%s' "${snapshot}" | jq '.revision // 0')
+        [ "${taken_revision}" -gt 0 ] || fail "no revision was recorded for the snapshot: ${snapshot}"
+        [ "${db_revision}" -ge "${taken_revision}" ] ||
+            fail "the snapshot is older than the revision recorded for it: ${status}"
+    fi
+    grep -a -q -F "${etcd_marker}" "${work}/snapshot.db" || fail "the snapshot does not hold the ConfigMap made before it"
+
+    # etcd_restore_requested: asks for a restore from the snapshot, as the interface's Restore does,
+    # noting first the Leases the cluster's components renew, which the restart baseline waits on.
+    etcd_restore_requested() {
+        held_from=$(date +%s)
+        held_since=$(date -u -d "@$((held_from - 60))" +%Y-%m-%dT%H:%M:%SZ)
+        held_leases=$(lease_times | jq -c --arg since "${held_since}" '[to_entries[] | select(.value > $since) | .key]')
+        now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        kubectl -n "${ns}" annotate cluster "${name}" \
+            "kubehenge.dev/etcd-restore={\"snapshot\":\"${snapshot_name}\",\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"by\":\"e2e\",\"at\":\"${now}\"}"
+    }
+    if [ "${distribution}" = talos ]; then
+        step "etcd restored from the snapshot through the Talos API, the control planes wiped and joining it again"
+    else
+        step "etcd restored from the snapshot through the guest agent"
+    fi
+    control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+    wl -n default delete configmap e2e-before-snapshot
+    after_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    wl -n default create configmap e2e-after-snapshot --from-literal=marker="${after_marker}"
+    etcd_restore_requested
+    # etcd_restored: whether the restore has ended and the controller let the cluster go; a failed
+    # one fails the test with why.
+    etcd_restored() {
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+        cluster_json=$(kubectl -n "${ns}" get cluster "${name}" -o json) || return 1
+        restore=$(printf '%s' "${cluster_json}" | jq -c '.metadata.annotations["kubehenge.dev/etcd-restore-status"] // "{}" | fromjson')
+        case $(printf '%s' "${restore}" | jq -r '.phase // ""') in
+            Succeeded) ;;
+            Failed)
+                kubectl -n kubehenge-system logs deployment/kubehenge-controller --tail=100 >&2
+                fail "the etcd restore failed: ${restore}"
+                ;;
+            *) return 1 ;;
+        esac
+        printf '%s' "${cluster_json}" | jq -e '(.metadata.annotations["kubehenge.dev/etcd-restore"] | not) and (.spec.paused // false | not)' > /dev/null
+    }
+    until_true 2400 "etcd restored" etcd_restored
+    until_true 1200 "cluster ${name} available after the restore" available_or_failed
+    wl wait --for=condition=Ready nodes --all --timeout=10m
+    until_true 300 "the ConfigMap made before the snapshot back" wl -n default get configmap e2e-before-snapshot
+    # shellcheck disable=SC2310 # absent's answer is what is checked.
+    absent wl -n default get configmap e2e-after-snapshot || fail "a ConfigMap made after the snapshot outlived the restore"
+    wl -n default delete configmap e2e-before-snapshot
+    # The revision moves on past any a client of etcd from before saw. Every watch from before then
+    # ends and its client lists again.
+    restored_revision=$(wl -n default create configmap e2e-after-restore -o jsonpath='{.metadata.resourceVersion}')
+    wl -n default delete configmap e2e-after-restore
+    [ "${restored_revision}" -gt 1000000000 ] || fail "etcd's revision did not move on with the restore: ${restored_revision}"
+    # The restore snapshots etcd as it was first, so that a restore from the wrong snapshot can be
+    # undone.
+    before_name=$(printf '%s' "${restore}" | jq -r '.before // ""')
+    [ -n "${before_name}" ] || fail "the restore took no snapshot of etcd as it was first: ${restore}"
+    keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g' | sort)
+    expected_keys=$(printf '%s/%s\n' "${etcd_prefix}" "${snapshot_name}" "${etcd_prefix}" "${before_name}" | sort)
+    [ "${keys}" = "${expected_keys}" ] ||
+        fail "the store's etcd snapshots after the restore are not the one restored and the one of etcd as it was: ${keys}"
+    s3 -o "${work}/before.db.age" "${s3_endpoint}/${bucket}/${etcd_prefix}/${before_name}"
+    header=$(head -c 21 "${work}/before.db.age")
+    [ "${header}" = age-encryption.org/v1 ] || fail "the snapshot of etcd as it was is not encrypted with age"
+    grep -r -q -F "${after_marker}" "${work}/s3-data" && fail "the store keeps the snapshot of etcd as it was unencrypted"
+    "${kubehenge}" etcd-snapshot decrypt --identity "${work}/etcd-identity" "${work}/before.db.age" "${work}/before.db"
+    grep -a -q -F "${after_marker}" "${work}/before.db" ||
+        fail "the snapshot of etcd as it was does not hold the ConfigMap made before the restore"
+    if [ "${distribution}" = talos ]; then
+        # Talos's control planes join the restored etcd again rather than being made anew.
+        restored_control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+        [ "${restored_control_planes}" = "${control_planes}" ] ||
+            fail "the restore replaced control planes: ${control_planes} became ${restored_control_planes}"
+        first_control_plane=$(machine_address "${control_planes%% *}")
+        # etcd_rejoined: whether every control plane is a voting member of the restored etcd again.
+        etcd_rejoined() {
+            # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+            members=$(talos_api "${first_control_plane}" etcd members) || return 1
+            voting=$(printf '%s\n' "${members}" | awk 'NR > 1 && $NF == "false" { n++ } END { print n + 0 }')
+            wanted=$(printf '%s' "${control_planes}" | wc -w)
+            [ "${voting}" -eq "${wanted}" ]
+        }
+        until_true 900 "every control plane a member of the restored etcd" etcd_rejoined
+    fi
 fi
 
 case ${part}-${distribution} in
-    all-rke2 | all-k3s | lifecycle-rke2 | lifecycle-k3s)
+    all-rke2 | all-k3s | lifecycle-rke2 | lifecycle-k3s | etcd-rke2 | etcd-k3s)
         step "${distribution}'s own etcd snapshots uploaded to the same store, and switched off"
         # The drop-in is part of the servers' bootstrap, so switching the upload replaces them.
         servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
@@ -3910,9 +3920,13 @@ if [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
         left=$(left_of_cluster) || left='(no answer)'
         fail "still in ${ns}: ${left}"
     fi
-    kubectl -n "${ns}" get "${keys}" > /dev/null || fail "${name}'s backup keys went with it"
-    # A test cluster's keys guard backups of nothing, and the namespace outlives the test.
-    kubectl -n "${ns}" delete "${keys}" > /dev/null
+    # The controller makes them for the first backup or etcd snapshot, which the machines part takes
+    # none of.
+    if [ "${restores_etcd}" = true ]; then
+        kubectl -n "${ns}" get "${keys}" > /dev/null || fail "${name}'s backup keys went with it"
+        # A test cluster's keys guard backups of nothing, and the namespace outlives the test.
+        kubectl -n "${ns}" delete "${keys}" > /dev/null
+    fi
 elif ! kubectl delete namespace "${ns}" --wait --timeout=5m; then
     # Its conditions say what is left in it and whose finalizers hold that.
     left=$(kubectl get namespace "${ns}" -o jsonpath='{range .status.conditions[?(@.status=="True")]}{.message}; {end}' || true)

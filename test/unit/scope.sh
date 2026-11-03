@@ -32,7 +32,10 @@ expect test/e2e/management-cluster-upgrade.sh management-cluster no
 expect test/e2e/lib.sh management-cluster-upgrade yes
 expect test/e2e/management-cluster.sh management-cluster-upgrade yes
 expect pkg/provisioner/rancher.go rancher yes
-expect pkg/provisioner/rancher.go k3s yes
+expect pkg/provisioner/rancher.go k3s-etcd yes
+expect pkg/provisioner/rancher.go k3s-machines yes
+expect test/e2e/workload-cluster.sh rke2-etcd yes
+expect test/e2e/workload-cluster.sh rke2-machines yes
 expect pkg/provisioner/hooks.go rancher yes
 expect pkg/provisioner/placement.go two-nodes yes
 expect pkg/provisioner/placement.go rancher no

@@ -251,6 +251,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 - An end-to-end run builds the binary and the images once for all its lanes.
 - Its lanes restore the kubeadm, RKE2 and k3s templates from the Actions cache instead of baking them ([testing.md](testing.md#end-to-end-without-a-proxmox-ve-host)).
+- RKE2's and k3s's workload tests run in two halves, `etcd` and `machines`, on a machine each ([testing.md](testing.md#running-part-of-it)).
+- The template refresh test makes its Rocky Linux template after the refresh's two runs, which then build one template fewer each.
 
 ## [0.3.1] - 2026-10-28
 

@@ -88,8 +88,9 @@ jobs:
         with:
           persist-credentials: false
       # Go's and npm's caches are e2e's own: the ci workflow's hold race-instrumented test builds,
-      # none of the controller's and capmox's static builds. The nightly run saves them and every
-      # other run reads them, so a pull request never fills the cache with its own.
+      # none of the controller's and capmox's static builds. The nightly run and e2e-image.yml on
+      # main save them and every other run reads them, so a pull request never fills the cache with
+      # its own.
       - id: go-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

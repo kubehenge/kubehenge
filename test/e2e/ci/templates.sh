@@ -6,12 +6,14 @@
 #   test/e2e/ci/templates.sh current           # the keys of the merge queue's tests' templates
 #   test/e2e/ci/templates.sh missing <ref>     # those the cache lacks on <ref>, as JSON
 #   test/e2e/ci/templates.sh bake <work directory> <key> <options>...
+#   test/e2e/ci/templates.sh made <work directory> <slot> <options>...
 #
 # keys prints one key for each template of kubeadm, RKE2 or k3s the test makes, in the order run.sh
 # makes them. Talos's templates are only downloaded, not baked, and get none. missing lists, from
 # every test the merge queue runs, the templates whose keys the repository's cache lacks on <ref>,
 # for e2e-templates.yml (needs the GitHub CLI with actions: read). bake makes one template on the
-# Proxmox VE up.sh started and backs it up to <work directory>/vz/template-1 for the cache.
+# Proxmox VE up.sh started and backs it up to <work directory>/vz/template-1 for the cache. made
+# restores a test's template in the slot or makes it, as run.sh does, during the test.
 #
 # A key is the template's options and a hash of every input of its bake. Those are the code
 # `kubehenge template create` runs (the Go packages pkg/templates imports from this repository, its
@@ -192,6 +194,23 @@ if [ "${0##*/}" = templates.sh ]; then
                 [ "${cli_found}" != 0 ] || jq -nc --arg o "${cli_options}" --arg k "${cli_key}" '{options: $o, key: $k}'
             done | jq -sc .
             ;;
+        made)
+            work=$(readlink -f "${2:?usage: $0 made <work directory> <slot> <options>...}")
+            cli_slot=${3:?usage: $0 made <work directory> <slot> <options>...}
+            shift 3
+            # shellcheck source=/dev/null
+            . "${work}/env"
+            cli_out=$(made "${cli_slot}" "$@")
+            printf '%s\n' "${cli_out}"
+            # A restored template showed its boot log when it was baked.
+            case "${cli_out}" in
+                *"restored from the cache as VM"* | *"hands out its boot log and cloud-init's output through the guest agent"*) ;;
+                *)
+                    echo "template $* never showed its boot log" >&2
+                    exit 1
+                    ;;
+            esac
+            ;;
         bake)
             work=$(readlink -f "${2:?usage: $0 bake <work directory> <key> <options>...}")
             cli_key=${3:?usage: $0 bake <work directory> <key> <options>...}
@@ -211,7 +230,8 @@ if [ "${0##*/}" = templates.sh ]; then
             made 1 "$@"
             ;;
         *)
-            echo "usage: $0 keys <test> | current | missing <ref> | bake <work directory> <key> <options>..." >&2
+            echo "usage: $0 keys <test> | current | missing <ref> | bake <work directory> <key> <options>..." \
+                "| made <work directory> <slot> <options>..." >&2
             exit 2
             ;;
     esac

@@ -7,8 +7,9 @@
 # <test> is management-cluster (applies the management cluster, runs the templates and volumes tests
 # while it is up, and destroys it), management-cluster-upgrade (applies and destroys it), appliance
 # (installs the appliance, which sets the management cluster up and removes it), or kubeadm, rke2,
-# k3s, talos, their add-on parts kubeadm-addons-a and -b, rke2-addons-a, -b and -c, k3s-addons-a and
-# -b and talos-addons-a and -b, rancher,
+# k3s, talos, the halves of rke2 and k3s rke2-etcd, rke2-machines, k3s-etcd and k3s-machines, their
+# add-on parts kubeadm-addons-a and -b, rke2-addons-a, -b and -c, k3s-addons-a and -b and
+# talos-addons-a and -b, rancher,
 # cluster-mesh, node-image-refresh, autoscaler, control-plane-ha or two-nodes (which first joins a
 # second Proxmox VE node, test/e2e/ci/second-node.sh), which first apply the management cluster and
 # create the templates they need, and leave it up. The workload tests and their add-on halves take
@@ -31,6 +32,7 @@ eval "${settings}"
 test=${test%%+*}
 case "${test}" in
     management-cluster | management-cluster-upgrade | appliance | kubeadm | rke2 | k3s | talos) ;;
+    rke2-etcd | rke2-machines | k3s-etcd | k3s-machines) ;;
     kubeadm-addons-a | kubeadm-addons-b | rke2-addons-a | rke2-addons-b | rke2-addons-c) ;;
     k3s-addons-a | k3s-addons-b | talos-addons-a | talos-addons-b) ;;
     rancher | cluster-mesh | node-image-refresh | autoscaler) ;;
@@ -130,9 +132,14 @@ templates=
 # only a template that passed is kept.
 case "${test}" in
     talos | talos-addons-?) boot_log_builds=0 ;;
-    kubeadm | node-image-refresh) boot_log_builds=2 ;;
+    kubeadm) boot_log_builds=2 ;;
     *) boot_log_builds=1 ;;
 esac
+# node-image-refresh's test makes its Rocky Linux template, its second, only once the refresh's runs
+# are done, which then build none of their own: each takes 8 to 9 minutes, and nothing checks them.
+if [ "${test}" = node-image-refresh ]; then
+    export KUBEHENGE_E2E_ROCKY_TEMPLATE="sh '${repo}/test/e2e/ci/templates.sh' made '${work}' 2 k3s --node-os rocky-10"
+fi
 case "${test}" in
     rke2* | k3s* | kubeadm* | talos* | rancher | cluster-mesh | node-image-refresh | autoscaler | control-plane-ha | two-nodes)
         [ "${built}" = true ] || make -s -C "${repo}" build
@@ -156,6 +163,7 @@ case "${test}" in
                         this=${slot}
                         ;;
                 esac
+                [ "${test}-${slot}" != node-image-refresh-2 ] || continue
                 # shellcheck disable=SC2086 # one option or argument per word
                 made "${this}" ${options}
             done < "${work}/templates.txt"
@@ -316,29 +324,41 @@ export KUBEHENGE_E2E_CONTROL_PLANE_CORES=4
 # memory: kubeadm, rke2, k3s and talos take a cluster of the least size the class allows with the
 # add-ons it starts with through everything but the other add-ons, and their -addons-a, -addons-b
 # and, on RKE2, -addons-c parts one sized for a group of the add-ons through that group, replacing
-# no machine.
+# no machine. rke2's and k3s's own test also runs in two halves, -etcd and -machines, on a machine
+# each.
 case "${test}" in
     *-addons-?) export KUBEHENGE_E2E_PART="addons-${test##*-}" ;;
+    *-etcd | *-machines) export KUBEHENGE_E2E_PART="${test#*-}" ;;
     rke2 | k3s | kubeadm | talos) export KUBEHENGE_E2E_PART=lifecycle ;;
     *) ;;
 esac
 case "${test}" in
-    rke2 | rke2-addons-?)
+    rke2 | rke2-*)
         # MetalLB is the default the other distributions run; kube-vip gets a cluster of its own.
         export KUBEHENGE_E2E_LOAD_BALANCER=kube-vip
         # The one cluster that checks its nodes' HA group labels, which every cluster has by default,
         # and switches them off and on again.
-        [ "${test}" != rke2 ] || export KUBEHENGE_E2E_HA_GROUPS=1
+        case "${test}" in
+            rke2 | rke2-etcd) export KUBEHENGE_E2E_HA_GROUPS=1 ;;
+            *) ;;
+        esac
         e2e e2e-workload-cluster CLASS=kubehenge-rke2 VERSION="${rke2_from}" UPGRADE="${rke2_to}"
         ;;
-    k3s | k3s-addons-?)
-        # The one cluster on the storage of its own, which switches the CSI plugin's newest release
-        # on and off, and volume snapshots, with the copy proxy's image pulled from
-        # KUBEHENGE_E2E_REGISTRY, where this build was pushed.
-        if [ "${test}" = k3s ]; then
-            export KUBEHENGE_E2E_STORAGE=own KUBEHENGE_E2E_DATASTORE_ALLOCATE=1 KUBEHENGE_E2E_LOCAL_STORAGE=local
-            export KUBEHENGE_E2E_VOLUME_SNAPSHOTS=1
-        fi
+    k3s | k3s-*)
+        # The one cluster on the storage of its own, whose machines are cloned there. Its etcd half
+        # switches the CSI plugin's newest release on and off, and volume snapshots, with the copy
+        # proxy's image pulled from KUBEHENGE_E2E_REGISTRY, where this build was pushed.
+        case "${test}" in
+            k3s | k3s-etcd | k3s-machines) export KUBEHENGE_E2E_STORAGE=own ;;
+            *) ;;
+        esac
+        case "${test}" in
+            k3s | k3s-etcd)
+                export KUBEHENGE_E2E_DATASTORE_ALLOCATE=1 KUBEHENGE_E2E_LOCAL_STORAGE=local
+                export KUBEHENGE_E2E_VOLUME_SNAPSHOTS=1
+                ;;
+            *) ;;
+        esac
         # In one of main.tf's extra_cluster_namespaces, created with the interface's own account.
         export KUBEHENGE_E2E_NAMESPACE=e2e-team
         e2e e2e-workload-cluster CLASS=kubehenge-k3s VERSION="${k3s_from}" UPGRADE="${k3s_to}"

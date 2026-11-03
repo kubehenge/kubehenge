@@ -6,6 +6,7 @@ name: e2e image
 # finds it. Without this, every lane of every run until the nightly run would build it again.
 # - Proxmox VE's image (test/e2e/pve), under its files' hash. Built in a lane it comes from Proxmox
 #   VE's repository, where one refused connection fails the lane.
+# - Go's and npm's caches, under the hash of go.sum and the frontend's lockfile.
 # - The templates of kubeadm, RKE2 and k3s the merge queue's tests bake, each under a hash of its
 #   bake's inputs (test/e2e/ci/templates.sh). Only those whose keys the cache lacks are baked.
 on:
@@ -54,6 +55,53 @@ jobs:
         with:
           path: ${{ runner.temp }}/pve-image.tar.zst
           key: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-${{ github.run_id }}
+
+  # Go's and npm's caches of e2e.yml's build job, once go.sum or the frontend's lockfile changes or
+  # the entry was evicted. Saved by the nightly run alone, merge groups found none until then.
+  go:
+    name: Go's cache
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: kept
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.npm
+          key: e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-${{ github.run_id }}
+          restore-keys: |
+            e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-
+          lookup-only: true
+      - if: steps.kept.outputs.cache-matched-key == ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.npm
+          key: e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-${{ github.run_id }}
+          restore-keys: e2e-go-
+      - name: Tools
+        if: steps.kept.outputs.cache-matched-key == ''
+        run: |
+          scripts/tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Build
+        if: steps.kept.outputs.cache-matched-key == ''
+        run: test/e2e/ci/build.sh "$RUNNER_TEMP/build"
+      - if: steps.kept.outputs.cache-matched-key == ''
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.npm
+          key: e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-${{ github.run_id }}
 
   # The templates whose keys the cache lacks on this branch.
   templates:
@@ -154,7 +202,7 @@ jobs:
   # older entry go at once: the cache holds 10 GB.
   prune:
     name: Prune
-    needs: [build, templates, bake]
+    needs: [build, go, templates, bake]
     if: >-
       ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.templates.result == 'success'
       && needs.bake.result != 'failure' }}

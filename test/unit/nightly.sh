@@ -44,6 +44,8 @@ while [ "${night}" -lt "${nights}" ]; do
         eval "${settings}"
         test=${name%%+*}
         test=${test%-addons-?}
+        test=${test%-etcd}
+        test=${test%-machines}
         enum=$(awk '/- name: cni$/ { f = 1 } f && /enum:/ { gsub(/.*\[|\].*/, ""); gsub(/,/, " "); print; exit }' "${chart}/templates/${test}.yaml")
         case " ${enum} " in
             *" ${KUBEHENGE_E2E_CNI} "*) ok ;;
@@ -63,7 +65,7 @@ while [ "${night}" -lt "${nights}" ]; do
         parts=0
         for part in ${lanes}; do
             case ${part} in
-                "${test}" | "${test}"-addons-?) ;;
+                "${test}" | "${test}"-etcd | "${test}"-machines | "${test}"-addons-?) ;;
                 *) continue ;;
             esac
             parts=$((parts + 1))
@@ -71,6 +73,20 @@ while [ "${night}" -lt "${nights}" ]; do
             if printf '%s' "${list}" | jq -e --arg t "${twin}" 'index($t) != null' > /dev/null; then ok; else bad "night ${night} runs ${name} without ${twin}"; fi
         done
         if [ "${parts}" -ge 3 ]; then ok; else bad "${test} runs in ${parts} parts, not its lifecycle and at least two add-on parts"; fi
+        # Every step of the lifecycle runs with the options: whole, or as both its halves.
+        lifecycle=no
+        all_lanes=" $(printf '%s' "${lanes}" | tr '\n' ' ') "
+        case ${all_lanes} in
+            *" ${test} "*) lifecycle=yes ;;
+            *" ${test}-etcd "*)
+                case ${all_lanes} in
+                    *" ${test}-machines "*) lifecycle=yes ;;
+                    *) ;;
+                esac
+                ;;
+            *) ;;
+        esac
+        if [ "${lifecycle}" = yes ]; then ok; else bad "${test} runs no lifecycle, whole or in halves"; fi
     done
     night=$((night + 1))
 done
@@ -105,6 +121,8 @@ refused talos-addons-a+rocky-10
 refused appliance-addons-a+calico
 refused k3s-addons+calico
 refused k3s-addons-ab+calico
+refused talos-machines+calico
+refused kubeadm-etcd+calico
 refused appliance+calico
 refused control-plane-ha+calico
 refused k3s+weave
